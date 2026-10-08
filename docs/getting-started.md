@@ -9,7 +9,6 @@ interface Scene {
   meshes: Mesh[];          // geometry + one OpenPBRMaterial per group
   lights: SceneLight[];    // analytic lights, environment and ambient light
   background?: ColorRGBA | Texture | GroundedSkyboxBackground;
-  meshRevision?: number;   // bump after in-place mesh edits
 }
 ```
 
@@ -110,19 +109,31 @@ Emissive materials (`emissionLuminance > 0`) also act as lights.
 
 ## Updating the scene
 
-The renderer compares references, not contents, so updates are cheap:
+The renderer scans object identities, versions and a small set of numeric
+values each frame. You can keep the same scene and arrays while editing:
 
 | Change | What to do |
 | --- | --- |
-| Camera moved or changed | Nothing; checked every frame |
-| Renderer option changed | Nothing; read on the next `render()` |
-| Meshes added or removed | Assign a new `scene.meshes` array |
-| Mesh transform, material or texture edited in place | `renderer.markMeshesDirty()` (or `scene.meshRevision++`) |
-| Many transforms in an animation (WebGPU) | `renderer.markMeshTransformsDirty(meshes)` refits only those instances |
-| Geometry arrays edited | `geometry.markUpdated()` and `renderer.markMeshesDirty()` |
-| Texture pixels edited | `texture.markUpdated()` and `renderer.markMeshesDirty()` |
-| Light added, removed or edited | Assign a new `scene.lights` array |
-| Background changed | Assign a new value |
+| Camera or renderer option changed | Nothing; checked each render |
+| Meshes added, removed or reordered | Edit `scene.meshes` in place or replace the array |
+| Mesh matrix elements changed | Nothing; WebGPU refits changed instances, WebGL rebuilds mesh data |
+| Mesh geometry or material reference replaced | Nothing; detected automatically |
+| Material parameters edited | `material.markUpdated()` |
+| Geometry attributes or arrays edited | `geometry.markUpdated()` |
+| Texture pixels or UV-array elements edited | `texture.markUpdated()` |
+| Texture, image, UV array, flipY or uvChannel assigned | Nothing; detected automatically |
+| Light membership or parameters edited | Nothing; array membership and parameter values are checked |
+| Background assigned or its color/grounded fields edited | Nothing; values are checked (texture pixel edits still need `markUpdated()`) |
+
+```ts
+mesh.matrixWorld[12] += 0.1;
+material.specularRoughness = 0.6;
+material.markUpdated();
+renderer.render(scene, camera);
+```
+
+With Three.js, retain a `THREESceneSync` and call `sync.update()` before rendering
+`sync.scene`; see [Three.js](./threejs.md).
 
 Any change that affects the image restarts accumulation. While things change,
 `interactivePreview` renders a cheaper, lower-resolution image.

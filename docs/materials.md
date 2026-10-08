@@ -21,8 +21,24 @@ const gold = Object.assign(new OpenPBRMaterial(), {
 });
 ```
 
-After editing a material that is already rendering, call
-`renderer.markMeshesDirty()`.
+After editing a material that is already rendering, call `material.markUpdated()`:
+
+```ts
+gold.specularRoughness = 0.4;
+gold.baseColor[1] = 0.7;
+gold.markUpdated();
+```
+
+Both backends update parameter buffers without merging geometry or rebuilding
+BVHs. Emission changes also refresh emission-related sampling state; texture
+changes rebuild the atlas. Displacement geometry settings require a full mesh
+update, as do emission edits on tessellated displacement materials. Shading-only
+`displacementBumpStrength` edits use the textures path.
+
+Materials occupy slots by object identity. Sharing one material shares its slot;
+separate objects with equal values remain separate slots. Referenced textures
+still share atlas layers. Call `texture.markUpdated()` after pixel or UV-array
+element edits; assigning a new texture, image or UV array is detected directly.
 
 ## Inputs
 

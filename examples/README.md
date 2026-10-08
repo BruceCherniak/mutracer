@@ -10,7 +10,7 @@ Then open <http://localhost:3001/examples/>.
 | Example | Shows |
 | --- | --- |
 | [`basic`](./basic.ts) | Minimal setup: `Renderer`, `Mesh`, `OpenPBRMaterial`, `RectLight`, `EnvironmentLight`, `CameraViewControl` and the render loop. |
-| [`three`](./three.ts) | Building the scene in Three.js (`GLTFLoader`, `OrbitControls`, `MeshPhysicalMaterial`) and rendering it with `fromTHREEScene` / `fromTHREECamera`; transform-only updates. |
+| [`three`](./three.ts) | Building the scene in Three.js (`GLTFLoader`, `OrbitControls`, `MeshPhysicalMaterial`) and rendering it with `THREESceneSync` / `fromTHREECamera`; rotation and a roughness slider for incremental material edits. |
 | [`advanced`](./advanced.ts) | Coat, transmission with dispersion, subsurface, fuzz and thin-film materials; a shadow catcher with a transparent background; `setDenoiser()`; `renderOfflineFrame()` and PNG export. |
 
 The examples import `claypt`, which the dev server aliases to `src/`. All

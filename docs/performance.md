@@ -29,11 +29,19 @@
   shares its BVH and GPU buffers.
 - Build BVHs up front with `await renderer.prepareScene(scene)`, or in a
   worker (see [BVH](./bvh.md)).
-- With Three.js, pass a persistent `geometryCache` to `fromTHREEScene` and
-  re-convert only when the scene changed.
-- For animated transforms on WebGPU, use
-  `renderer.markMeshTransformsDirty(meshes)` so only the top-level BVH is
-  refit.
+- With Three.js, keep one `THREESceneSync` and call `update()` before rendering.
+  It preserves mesh, geometry, material, texture and light identities. One-shot
+  conversion creates fresh resources and is intended for static setup.
+- Animate existing mesh matrices while retaining the mesh objects and array.
+  WebGPU automatically refits changed TLAS instances; WebGL transforms rebuild
+  mesh data.
+- Call `material.markUpdated()` after parameter edits. Both backends repack
+  parameters without geometry work. Emission edits also refresh sampling state,
+  and texture edits rebuild the atlas. Displacement geometry settings and
+  tessellated displacement emission edits require full mesh updates.
+- Analytic-light parameter edits retain the environment map. Ambient/environment
+  edits resynthesize it. Rect-light texture edits still require a full mesh
+  update because those textures belong to the material atlas.
 - Textures are packed into a texture atlas bounded by
   `textureAtlasBudgetBytes`; oversized textures are downscaled. Check
   `renderer.getDiagnostics()?.textureAtlas` when you hit limits.

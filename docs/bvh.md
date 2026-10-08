@@ -23,8 +23,8 @@ inside `render()`.
 
 BVHs are stored on the `Geometry` (`geometry.bvh`). Share one geometry between
 meshes to share its BLAS. After editing geometry arrays, call
-`geometry.markUpdated()` and `renderer.markMeshesDirty()`; the BLAS is refit
-or rebuilt.
+`geometry.markUpdated()`; the next render automatically refits or rebuilds
+the BLAS. Replacing `mesh.geometry` is detected automatically.
 
 ## Layouts
 
@@ -45,12 +45,14 @@ const stats = await precomputeTinyBvh(scene.meshes, 'cwbvh');
 ## Animation
 
 On WebGPU, transform-only changes refit the TLAS instead of rebuilding it.
-Either replace `scene.meshes`, or keep the array and call
-`renderer.markMeshTransformsDirty(changedMeshes)`.
+Edit `mesh.matrixWorld` in place while retaining the mesh objects and array;
+the renderer compares matrix values automatically. WebGL transform changes
+rebuild mesh data because that backend has no TLAS refit.
 
 ## Worker precomputation
 
-For large scenes or tessellated displacement, do the work in a Web Worker:
+For large scenes or tessellated displacement, do the work in a Web Worker
+before entering the render loop. Resume rendering after resolving the result:
 
 ```ts
 // main thread
@@ -68,7 +70,8 @@ worker.postMessage(
 );
 worker.onmessage = ({ data }) => {
   resolveFromPrecompute(data, prepared);
-  renderer.markMeshesDirty();
+  // Start rendering after the transferred geometry and BVHs are resolved.
+  requestAnimationFrame(frame);
 };
 
 // worker.ts

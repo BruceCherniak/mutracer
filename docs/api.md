@@ -83,8 +83,6 @@ affects the image restarts accumulation.
 | `setDenoiser(options?)` | Loads and attaches OIDN (WebGPU); `false`/`null` removes it. See [denoising](./denoising.md) |
 | `prepareScene(scene \| meshes)` | Builds missing BVHs ahead of time (otherwise done by `render()`) |
 | `renderOfflineFrame(scene, camera, options)` | Renders a finished frame; see below |
-| `markMeshesDirty()` | After in-place mesh, material, geometry or texture edits |
-| `markMeshTransformsDirty(meshes)` | After transform-only edits; WebGPU refits just those instances |
 | `restartSamples()` | Discards the accumulation |
 | `getTotalSamplesRendered()` | Accumulated spp |
 | `getRawOutput()` | `Promise<{ width, height, data: Float32Array }>` linear RGBA, top row first |
@@ -93,6 +91,12 @@ affects the image restarts accumulation.
 | `getDiagnostics()` | Backend, adapter, shader compilation, BVH, light sampling and timing details |
 | `getGPUDeviceAndAdapter()` | Initializes and returns the WebGPU device/adapter |
 | `dispose()` | Releases GPU resources and the denoiser |
+
+Scene membership, transforms, light parameters and background edits are
+detected on each `render()`, even when their arrays are retained. After editing
+material parameters, geometry attributes or texture pixels/UV-array elements,
+call the edited object's `markUpdated()`. The next render restarts accumulation
+and selects the appropriate update path. An unchanged scene keeps accumulating.
 
 ### `renderOfflineFrame(scene, camera, options)`
 
@@ -129,8 +133,8 @@ If a denoiser is set, the result is denoised before the promise resolves.
 
 | Export | Description |
 | --- | --- |
-| `Scene` | `{ meshes, lights, background?, meshRevision?, overlay? }` |
-| `Mesh` | `new Mesh(geometry, material \| material[])`, `matrixWorld` |
+| `Scene` | `{ meshes, lights, background?, overlay? }` |
+| `Mesh` | `new Mesh(geometry, material \| material[])`, `matrixWorld`; optional `uvProjection` and `displacementUvProjection` override the material per mesh (default: inherit) |
 | `Geometry`, `GeometryAttribute` | Triangle data: `position`, `normal`, `indices`, optional `uv`, `uv1`, `tangent`, `color`, `materialIndex` |
 | `OpenPBRMaterial` | See [materials](./materials.md) |
 | `Texture` | Image, canvas or `{ data, width, height }`; 8-bit is sRGB, float is linear |
@@ -138,6 +142,12 @@ If a denoiser is set, the result is denoised before the promise resolves.
 | `RectLight`, `SphereLight`, `SpotLight`, `DirectionalLight`, `EnvironmentLight`, `AmbientLight` | Lights |
 | `IESProfile`, `parseIESProfile(text)` | Photometric profiles for `SpotLight` |
 | `SceneBackground` | `[r, g, b, a]`, `Texture` or `GroundedSkyboxBackground` |
+
+`Geometry`, `Texture` and `OpenPBRMaterial` expose `version` (initially `0`)
+and `markUpdated(): this`. Versions advance with each call. Replacing geometry
+or material references on a Mesh is detected automatically. Mesh projection
+overrides apply to all its materials and require instance data to be rebuilt;
+WebGPU transform-only edits refit instances, while WebGL transforms rebuild.
 
 ## Helpers
 
@@ -147,7 +157,10 @@ If a denoiser is set, the result is denoised before the promise resolves.
 | `generateVertexNormals`, `generateVertexTangents` | Attribute generation |
 | `computeMeshesBoundingBox(meshes)` | World-space bounds |
 | `loadRGBE(url)`, `parseRGBE(buffer)` | Radiance `.hdr` → float `Texture` |
-| `fromTHREEScene`, `fromTHREECamera` | Three.js conversion; see [Three.js](./threejs.md) |
+| `fromTHREEScene`, `fromTHREECamera` | One-shot Three.js scene and camera conversion; see [Three.js](./threejs.md) |
+| `THREESceneSync` | `new THREESceneSync(threeScene, options?)`; retains `scene` and resources across `update()` calls; `dispose()` releases caches |
+| `THREESceneChanges` | Informational result of `update()`: `transforms`, `membership`, `content`, `lights`, `background`; no forwarding to Renderer needed |
+| `FromTHREESceneOptions` | Optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |
 | `loadGLTF(url)` | Minimal built-in glTF 2.0 loader; prefer Three.js `GLTFLoader` |
 | `CameraViewControl` | Orbit/pan/zoom controller for a ClayPT `Camera` |
 | `precomputeTinyBvh`, `prepareForPrecompute`, `precompute`, `resolveFromPrecompute` | BVH and displacement precomputation; see [BVH](./bvh.md) |

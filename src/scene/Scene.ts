@@ -43,9 +43,11 @@ export interface SceneOverlayDataSource {
   height: number;
 }
 /**
- * Everything the renderer draws. A plain object; the renderer detects changes
- * by array identity, so replace `meshes` or `lights` (or bump `meshRevision`)
- * after editing them.
+ * Everything the renderer draws. A plain object; mesh and light membership,
+ * mesh transforms, resource references, light parameters and background
+ * values are detected automatically, including edits within existing arrays.
+ * Call `markUpdated()` on a material after parameter edits, a Geometry after
+ * attribute edits, and a Texture after pixel or UV-array element edits.
  */
 export interface Scene {
   meshes: Mesh[];

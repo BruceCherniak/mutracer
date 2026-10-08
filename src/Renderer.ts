@@ -1027,10 +1027,13 @@ export default class Renderer {
 
   /**
    * Renders the scene progressively. Call once per animation frame; each call
-   * adds samples until `maxSamples` is reached. Changing the camera, scene
-   * arrays or renderer options restarts accumulation automatically. After
-   * editing meshes or materials in place, call `markMeshesDirty()` (or bump
-   * `scene.meshRevision`).
+   * adds samples until `maxSamples` is reached. Camera, mesh membership,
+   * world matrices, resource references, lights and background changes are
+   * detected automatically and restart accumulation. After editing material
+   * parameters, geometry arrays or texture pixels/UV arrays in place, call
+   * that material's, geometry's or texture's `markUpdated()`.
+   * Unchanged scenes retain their accumulation. WebGPU refits transform-only
+   * changes; WebGL rebuilds mesh data for transforms.
    *
    * @param forceOutput Re-run post-processing (tone mapping, bloom) even if
    *   no new samples are rendered.

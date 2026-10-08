@@ -84,8 +84,9 @@ export default class Geometry {
   }
 
   /**
-   * Call after editing attribute arrays in place. The BVH is refit or rebuilt
-   * on the next frame; also call `renderer.markMeshesDirty()`.
+   * Call after editing attribute arrays or replacing attributes. Increments
+   * version so the next render refits or rebuilds the BVH automatically.
+   * Replacing a mesh's Geometry object is detected without this call.
    */
   markUpdated() {
     this.version++;
