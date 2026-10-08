@@ -40,9 +40,18 @@ export type MaterialTextureName =
  * ```
  *
  * After changing a material that is already being rendered, call
- * `renderer.markMeshesDirty()`.
+ * `material.markUpdated()`.
  */
 export default class OpenPBRMaterial {
+  /** Incremented by markUpdated(). Default `0`. */
+  version = 0;
+
+  /** Call after changing any property of this material in place. */
+  markUpdated(): this {
+    this.version++;
+    return this;
+  }
+
   // Base
   /** Base layer weight. Default `1`. */
   baseWeight = 1;
@@ -257,7 +266,7 @@ export function resolveMaterialAlphaMode(
   return 'opaque';
 }
 
-const materialKeys: (keyof OpenPBRMaterial)[] = [
+export const materialKeys: (keyof OpenPBRMaterial)[] = [
   'baseWeight', 'baseColor', 'baseDiffuseRoughness', 'baseMetalness',
   'specularWeight', 'specularColor', 'specularRoughness', 'specularIor',
   'specularAnisotropy', 'transmissionWeight', 'transmissionColor',
@@ -288,6 +297,18 @@ const materialKeys: (keyof OpenPBRMaterial)[] = [
   'displacementHeightPrefilter',
   'displacementBumpStrength',
 ];
+
+export const materialTextureKeys = [
+  'map', 'alphaMap', 'emissiveMap', 'normalMap', 'metallicRoughnessMap', 'roughnessMap', 'metalnessMap', 'transmissionMap', 'thinFilmMap', 'displacementMap'
+] as const satisfies readonly (keyof OpenPBRMaterial)[];
+
+export const materialGeometryKeys = [
+  'displacementUvProjection', 'displacementUvScale', 'displacementScale', 'displacementStepSize', 'displacementMode', 'displacementBias', 'displacementTessellationMode', 'displacementMinSubdivisionLevel', 'displacementMaxSubdivisionLevel', 'displacementMaxError', 'displacementMaxTriangles', 'displacementEdgeProfile', 'displacementThreshold', 'displacementEdgeWidth', 'displacementHardContourGeometry', 'displacementContourSmoothing', 'displacementContourSubdivisionLevel', 'displacementCreaseAngle', 'displacementHeightFilter', 'displacementHeightPrefilter', 'displacementBumpStrength'
+] as const satisfies readonly (keyof OpenPBRMaterial)[];
+
+export const materialParamKeys = [
+  'baseWeight', 'baseColor', 'baseDiffuseRoughness', 'baseMetalness', 'specularWeight', 'specularColor', 'specularRoughness', 'specularIor', 'specularAnisotropy', 'transmissionWeight', 'transmissionColor', 'transmissionDepth', 'transmissionScatter', 'transmissionScatterAnisotropy', 'transmissionDispersionScale', 'transmissionDispersionAbbeNumber', 'subsurfaceWeight', 'subsurfaceColor', 'subsurfaceRadius', 'subsurfaceRadiusScale', 'subsurfaceAnisotropy', 'fuzzWeight', 'fuzzColor', 'fuzzRoughness', 'coatWeight', 'coatColor', 'coatRoughness', 'coatAnisotropy', 'coatIor', 'coatDarkening', 'thinFilmWeight', 'thinFilmThickness', 'thinFilmIor', 'emissionColor', 'emissionLuminance', 'opacity', 'thinWalled', 'doubleSided', 'alphaMode', 'alphaCutoff', 'normalScale', 'shadowCatcher', 'unlit', 'bevelSize', 'mapAlphaUsage', 'uvProjection', 'uvScale'
+] as const satisfies readonly (keyof OpenPBRMaterial)[];
 
 let textureId = 1;
 const textureWeakMap = new WeakMap<Texture, number>();

@@ -1,10 +1,7 @@
 import { mat4, vec2, vec3 } from '../math';
 import Geometry, { Attribute } from '../scene/Geometry';
 import Mesh from '../scene/Mesh';
-import OpenPBRMaterial, {
-  getMaterialHashKey,
-  resetMaterialTextureId
-} from '../scene/OpenPBRMaterial';
+import OpenPBRMaterial from '../scene/OpenPBRMaterial';
 import { buildBLAS, flattenBvh, TLASInstance } from './bvhAccel';
 import Texture, { isTextureDataSource } from '../scene/Texture';
 import { generateVertexTangents } from '../util/geometry';
@@ -840,7 +837,7 @@ function prepareMeshGeometryBvh(mesh: Mesh) {
 }
 
 export function updateMeshInstances(meshes: Mesh[]) {
-  const materialIndexMap = new Map<string, number>();
+  const materialIndexMap = new Map<OpenPBRMaterial, number>();
   const geometryIndexMap = new Map<Geometry, number>();
   const geometries: Geometry[] = [];
   const materials: OpenPBRMaterial[] = [];
@@ -852,7 +849,6 @@ export function updateMeshInstances(meshes: Mesh[]) {
   }[] = [];
   const instanceBindings: PreparedMeshInstanceBinding[] = [];
 
-  resetMaterialTextureId();
 
   const instances = meshes
     .filter((mesh) => mesh.geometry.position.array.length > 0)
@@ -876,7 +872,7 @@ export function updateMeshInstances(meshes: Mesh[]) {
       }
 
       const materialsIndices = mesh.materials.map((material) => {
-        const key = getMaterialHashKey(material);
+        const key = material;
         if (!materialIndexMap.has(key)) {
           materialIndexMap.set(key, materials.length);
           materials.push(material);

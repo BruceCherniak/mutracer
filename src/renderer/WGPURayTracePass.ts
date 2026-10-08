@@ -49,7 +49,6 @@ import {
 import WGPUMinMaxMap from './WGPUMinMaxMap';
 import Texture, { isTextureDataSource } from '../scene/Texture';
 import OpenPBRMaterial, {
-  getMaterialHashKey,
   resolveMaterialAlphaMode
 } from '../scene/OpenPBRMaterial';
 import {
@@ -301,7 +300,7 @@ class WGPURayTracePass {
     geometry: Geometry;
     bvh?: FlattendBVH;
     materials: OpenPBRMaterial[];
-    materialHashes: string[];
+    materialVersions: number[];
     geometryVersion: number;
     positionArray: Float32Array;
     positionItemSize: number;
@@ -1812,7 +1811,7 @@ ${rayTraceCompute({
       geometry: mesh.geometry,
       bvh: mesh.geometry.bvh,
       materials: mesh.materials.slice(),
-      materialHashes: mesh.materials.map(getMaterialHashKey),
+      materialVersions: mesh.materials.map(material => material.version),
       geometryVersion: mesh.geometry.version,
       positionArray: mesh.geometry.position.array,
       positionItemSize: mesh.geometry.position.itemSize,
@@ -1840,8 +1839,8 @@ ${rayTraceCompute({
           next.materials.every(
             (material, index) => material === resident.materials[index]
           ) &&
-          next.materialHashes.every(
-            (hash, index) => hash === resident.materialHashes[index]
+          next.materialVersions.every(
+            (hash, index) => hash === resident.materialVersions[index]
           ) &&
           next.geometryVersion === resident.geometryVersion &&
           next.positionArray === resident.positionArray &&
@@ -1875,7 +1874,7 @@ ${rayTraceCompute({
           next.bvh !== prev.bvh ||
           next.materials.length !== prev.materials.length ||
           next.materials.some((material, k) => material !== prev.materials[k]) ||
-          next.materialHashes.some((hash, k) => hash !== prev.materialHashes[k]) ||
+          next.materialVersions.some((hash, k) => hash !== prev.materialVersions[k]) ||
           next.positionArray !== prev.positionArray ||
           next.positionArray.length !== prev.positionArray.length ||
           next.positionItemSize !== prev.positionItemSize ||

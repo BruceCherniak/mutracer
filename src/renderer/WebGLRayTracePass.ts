@@ -30,7 +30,6 @@ import MergedMaterialData, {
   materialUsesMedium
 } from './MergedMaterialData';
 import OpenPBRMaterial, {
-  getMaterialHashKey
 } from '../scene/OpenPBRMaterial';
 import { StratifiedSampler } from './StratifiedSampler';
 import { makeStratifiedSamplerCombined } from './StratifiedSamplerCombined';
@@ -125,7 +124,7 @@ class WebGLRayTracePass {
     mesh: Mesh;
     geometry: Mesh['geometry'];
     materials: OpenPBRMaterial[];
-    materialHashes: string[];
+    materialVersions: number[];
     geometryVersion: number;
     matrix: number[];
   }[] = [];
@@ -375,7 +374,7 @@ class WebGLRayTracePass {
       mesh,
       geometry: mesh.geometry,
       materials: mesh.materials.slice(),
-      materialHashes: mesh.materials.map(getMaterialHashKey),
+      materialVersions: mesh.materials.map(material => material.version),
       geometryVersion: mesh.geometry.version,
       matrix: Array.from(mesh.matrixWorld as ArrayLike<number>)
     }));
@@ -389,7 +388,7 @@ class WebGLRayTracePass {
           item.geometry !== prev.geometry ||
           item.materials.length !== prev.materials.length ||
           item.materials.some((material, k) => material !== prev.materials[k]) ||
-          item.materialHashes.some((hash, k) => hash !== prev.materialHashes[k]) ||
+          item.materialVersions.some((hash, k) => hash !== prev.materialVersions[k]) ||
           item.geometryVersion !== prev.geometryVersion ||
           item.matrix.some((value, k) => value !== prev.matrix[k])
         );
