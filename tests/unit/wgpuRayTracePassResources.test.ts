@@ -1,3 +1,4 @@
+import { MaterialChangeTracker } from '../../src/renderer/materialChanges';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WGPURayTracePass from '../../src/renderer/WGPURayTracePass';
 import Geometry, { Attribute } from '../../src/scene/Geometry';
@@ -23,6 +24,7 @@ function makeTriangleMesh() {
 function makeMeshTrackingPass() {
   const pass = Object.create(WGPURayTracePass.prototype) as Pick<WGPURayTracePass, keyof WGPURayTracePass> &
     Record<string, any>;
+  pass._materialChanges = new MaterialChangeTracker();
   pass._meshes = [];
   pass._meshSnapshot = [];
   pass._snapshotByMesh = new WeakMap();
@@ -89,6 +91,7 @@ describe('WGPURayTracePass output resource lifetime', () => {
     const second = makeTriangleMesh();
     pass.setMeshes([first, second]);
     pass._residentPreparedMeshData = {};
+    pass._materialChanges.capture([...first.materials, ...second.materials]);
     pass._residentSnapshotByMesh = new WeakMap(
       pass._meshSnapshot.map((snapshot: { mesh: Mesh }) => [
         snapshot.mesh,

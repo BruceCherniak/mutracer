@@ -314,3 +314,18 @@ describe('MergedMaterialData texture arrays', () => {
     );
   });
 });
+
+it('repacking parameters matches fresh packing while preserving the texture atlas and indices', () => {
+  const a = new OpenPBRMaterial(); const b = new OpenPBRMaterial();
+  a.map = new Texture({ data: new Uint8Array([255,128,0,255]), width: 1, height: 1 });
+  b.normalMap = a.map;
+  const packed = new MergedMaterialData([a,b], []);
+  const atlas = packed.texture; const info = packed.bufferData.mapInfo;
+  const indices = packed.bufferData.diffuseMapIndex;
+  a.baseColor = [0.2,0.4,0.5]; a.coatWeight = 1; a.opacity = 0.6; a.emissionLuminance = 5;
+  b.transmissionWeight = 1; b.transmissionDepth = 2; b.subsurfaceWeight = 0.2;
+  packed.repackParams([a,b]);
+  expect(packed.texture).toBe(atlas); expect(packed.bufferData.mapInfo).toBe(info);
+  expect(packed.bufferData.diffuseMapIndex).toBe(indices);
+  expect(packed.getBufferArray()).toEqual(new MergedMaterialData([a,b], []).getBufferArray());
+});

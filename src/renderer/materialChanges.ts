@@ -1,0 +1,62 @@
+import OpenPBRMaterial, { materialGeometryKeys, materialParamKeys, materialTextureKeys } from '../scene/OpenPBRMaterial';
+import Texture from '../scene/Texture';
+import { colorLuminance } from './lightSampling';
+
+export type MaterialUpdateLevel = 'params' | 'emission' | 'textures' | 'geometry';
+interface MaterialSnapshot {
+  version: number;
+  paramKey: string;
+  textureKey: string;
+  geometryKey: string;
+  emissive: string;
+}
+const textureIds = new WeakMap<object, number>();
+let nextTextureId = 1;
+function textureKey(texture: Texture | undefined) {
+  if (!texture) return '-';
+  if (!textureIds.has(texture)) textureIds.set(texture, nextTextureId++);
+  if (!textureIds.has(texture.image)) textureIds.set(texture.image, nextTextureId++);
+  return [textureIds.get(texture), textureIds.get(texture.image), texture.version, texture.uvScale.join(','),
+    texture.uvOffset.join(','), texture.uvChannel, texture.flipY].join(':');
+}
+function key(material: OpenPBRMaterial, keys: readonly (keyof OpenPBRMaterial)[]) {
+  return JSON.stringify(keys.map(k => material[k]));
+}
+function snapshot(material: OpenPBRMaterial): MaterialSnapshot {
+  return {
+    version: material.version,
+    paramKey: key(material, materialParamKeys),
+    textureKey: materialTextureKeys.map(k => textureKey(material[k])).join('|'),
+    // Height maps affect both tessellated geometry and projective BLAS bounds.
+    geometryKey: key(material, materialGeometryKeys) + '|' + textureKey(material.displacementMap),
+    emissive: key(material, ['emissionColor', 'emissionLuminance', 'unlit', 'shadowCatcher'])
+  };
+}
+export function materialIsEmissive(material: OpenPBRMaterial) {
+  return !material.unlit && !material.shadowCatcher &&
+    colorLuminance(material.emissionColor) * material.emissionLuminance > 1e-8;
+}
+
+/** Expensive field keys are computed only when receiving changed materials. */
+export class MaterialChangeTracker {
+  private _snapshots = new WeakMap<OpenPBRMaterial, MaterialSnapshot>();
+  capture(materials: readonly OpenPBRMaterial[]) {
+    for (const material of materials) this._snapshots.set(material, snapshot(material));
+  }
+  classify(materials: readonly OpenPBRMaterial[]): { level: MaterialUpdateLevel; emission: boolean } {
+    let level: MaterialUpdateLevel = 'params';
+    let emission = false;
+    const ranks = { params: 0, emission: 1, textures: 2, geometry: 3 };
+    for (const material of materials) {
+      const previous = this._snapshots.get(material);
+      const next = snapshot(material);
+      const emissionChanged = !previous || previous.emissive !== next.emissive;
+      emission ||= emissionChanged;
+      const candidate: MaterialUpdateLevel = !previous || next.geometryKey !== previous.geometryKey ||
+        emissionChanged && material.displacementMode === 'tessellated' && !!material.displacementMap
+        ? 'geometry' : next.textureKey !== previous.textureKey ? 'textures' : emissionChanged ? 'emission' : 'params';
+      if (ranks[candidate] > ranks[level]) level = candidate;
+    }
+    return { level, emission };
+  }
+}

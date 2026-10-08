@@ -1,3 +1,4 @@
+import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges';
 import { WGPUShaderCache, retainedShaderCapacity } from './WGPUShaderCache';
 import { WGPU_SCENE_FEATURE_BITS, wgpuSceneFeatureFlags } from './WGPUSceneFeatures';
 import { TexturePixelSource as TexturePixelSource, mat4 } from '../math';
@@ -287,6 +288,8 @@ class WGPURayTracePass {
   private _meshes: Mesh[] = [];
   private _analyticLights: AnalyticLight[] = [];
   private _iesProfileTexelOffsets = new Int32Array(0);
+  private _materialChanges = new MaterialChangeTracker();
+  private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; materials: Set<OpenPBRMaterial> };
   private _materialData: MergedMaterialData | undefined;
   private _maxTextureArrayBytes = DEFAULT_MAX_TEXTURE_ARRAY_BYTES;
   private _needsUpdateMeshData = true;
@@ -302,6 +305,9 @@ class WGPURayTracePass {
     materials: OpenPBRMaterial[];
     materialVersions: number[];
     geometryVersion: number;
+    simplification: Mesh['geometrySimplificationRatio'];
+    faceLevels: Mesh['displacementFaceLevels'];
+    faceHash: number;
     positionArray: Float32Array;
     positionItemSize: number;
     indexArray: Uint16Array | Uint32Array;
@@ -961,6 +967,7 @@ class WGPURayTracePass {
       } else if (this._needsRefitTLAS) {
         this._refitMeshInstances();
       }
+      if (this._pendingMaterialUpdate) this._updateMaterialData();
       if (this._needsUpdateLightSamplingData) {
         this._updateLightSamplingData();
       }
@@ -1775,6 +1782,29 @@ ${rayTraceCompute({
   }
 
   setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; materials?: readonly OpenPBRMaterial[] }) {
+    if (update && this._preparedMeshData && this._materialData &&
+      !this._needsUpdateMeshData && !this._needsUpdateMeshMembership && meshes === this._meshes) {
+      const materialUpdate = this._materialChanges.classify(update.materials ?? []);
+      if (materialUpdate.level !== 'geometry') {
+        if (update.materials?.length) {
+          const pending = this._pendingMaterialUpdate;
+          this._pendingMaterialUpdate = {
+            level: pending?.level === 'textures' ? 'textures' : materialUpdate.level,
+            emission: !!pending?.emission || materialUpdate.emission,
+            materials: new Set([...(pending?.materials ?? []), ...update.materials])
+          };
+          this._meshSnapshot.forEach(item => { item.materialVersions = item.materials.map(m => m.version); });
+        }
+        for (const mesh of update.transforms ?? []) {
+          const item = this._snapshotByMesh.get(mesh);
+          if (!item) continue;
+          item.matrix = Array.from(mesh.matrixWorld);
+          this._dirtyTransformMeshes.add(mesh);
+          this._needsRefitTLAS = true;
+        }
+        return !!update.materials?.length || !!update.transforms?.length;
+      }
+    }
     const transformOnlyMeshes = update?.materials?.length ? undefined : update?.transforms;
     const materialChange = !!update?.materials?.length;
     if (
@@ -1815,6 +1845,9 @@ ${rayTraceCompute({
       materials: mesh.materials.slice(),
       materialVersions: mesh.materials.map(material => material.version),
       geometryVersion: mesh.geometry.version,
+      simplification: mesh.geometrySimplificationRatio,
+      faceLevels: mesh.displacementFaceLevels,
+      faceHash: mesh.displacementFaceLevelsHash,
       positionArray: mesh.geometry.position.array,
       positionItemSize: mesh.geometry.position.itemSize,
       indexArray: mesh.geometry.indices.array,
@@ -1845,6 +1878,9 @@ ${rayTraceCompute({
             (hash, index) => hash === resident.materialVersions[index]
           ) &&
           next.geometryVersion === resident.geometryVersion &&
+          next.simplification === resident.simplification &&
+          next.faceLevels === resident.faceLevels && next.faceHash === resident.faceHash &&
+          this._materialChanges.classify(next.materials).level === 'params' &&
           next.positionArray === resident.positionArray &&
           next.indexArray === resident.indexArray &&
           next.materialIndexArray === resident.materialIndexArray &&
@@ -1874,6 +1910,8 @@ ${rayTraceCompute({
           next.mesh !== prev.mesh ||
           next.geometry !== prev.geometry ||
           next.bvh !== prev.bvh ||
+          next.simplification !== prev.simplification ||
+          next.faceLevels !== prev.faceLevels || next.faceHash !== prev.faceHash ||
           next.materials.length !== prev.materials.length ||
           next.materials.some((material, k) => material !== prev.materials[k]) ||
           next.materialVersions.some((hash, k) => hash !== prev.materialVersions[k]) ||
@@ -2260,6 +2298,51 @@ ${rayTraceCompute({
       384
     );
 
+    const traversalStackSizes = getTraversalStackSizes(tlas, res.blases);
+    const blasLayoutBits = {
+      bvh2: 1,
+      bvh4: 2,
+      'bvh-gpu': 4,
+      cwbvh: 8
+    } as const;
+    this._blasLayoutMask = res.blases.reduce(
+      (mask, blas) => mask | blasLayoutBits[blas.bvh.layout ?? 'bvh2'],
+      0
+    );
+
+    Object.assign(this._constants, {
+      TLAS_STACK_SIZE: retainedShaderCapacity(traversalStackSizes.tlas, Number(this._constants.TLAS_STACK_SIZE ?? 0)),
+      BLAS_STACK_SIZE: retainedShaderCapacity(traversalStackSizes.blas, Number(this._constants.BLAS_STACK_SIZE ?? 0), 32),
+      USE_UV: mergedGeometry.uv != null,
+      USE_VERTEX_COLOR: mergedGeometry.color != null,
+      ATTR_STRIDE: stride / fixedSize,
+      ...offsets.reduce((obj, off, idx) => {
+        obj[attrNames[idx].toUpperCase() + '_OFF'] = off / fixedSize;
+        return obj;
+      }, {} as Record<string, number>)
+    });
+    this._updateMaterialConstants(materials, materialData, mergedGeometry);
+    this._updateTextures(materialData);
+
+    this._needsUpdateBindGroups = true;
+
+    this._rtUniform.views.isEmpty[0] = +isEmpty;
+    this._meshSnapshot.forEach((snapshot) => {
+      snapshot.bvh = snapshot.geometry.bvh;
+    });
+    this._residentPreparedMeshData = res;
+    this._residentSnapshotByMesh = new WeakMap();
+    this._meshSnapshot.forEach((snapshot) => {
+      this._residentSnapshotByMesh.set(snapshot.mesh, snapshot);
+    });
+    this._materialChanges.capture(materials);
+    this._pendingMaterialUpdate = undefined;
+    this._needsUpdateMeshData = false;
+    this._needsUpdateMeshMembership = false;
+    this._needsRefitTLAS = false;
+  }
+
+  private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MergedMaterialData, mergedGeometry: Geometry) {
     const hasTransmission = materials.some((m) => m.transmissionWeight > 0);
     if (hasTransmission !== this._hasTransmission) {
       this._hasTransmission = hasTransmission;
@@ -2278,18 +2361,6 @@ ${rayTraceCompute({
     const SPECTRAL =
       materials.some((m) => m.transmissionDispersionScale > 0);
     const HAS_MEDIUM = materials.some(materialUsesMedium);
-    const traversalStackSizes = getTraversalStackSizes(tlas, res.blases);
-    const blasLayoutBits = {
-      bvh2: 1,
-      bvh4: 2,
-      'bvh-gpu': 4,
-      cwbvh: 8
-    } as const;
-    this._blasLayoutMask = res.blases.reduce(
-      (mask, blas) => mask | blasLayoutBits[blas.bvh.layout ?? 'bvh2'],
-      0
-    );
-
     // Retain the atlas uniform capacity when a stage/material is removed.
     // Shrinking the array would rebuild every pipeline again on the next edit.
     const NUM_MAPS = Math.max(
@@ -2299,17 +2370,9 @@ ${rayTraceCompute({
     );
 
     Object.assign(this._constants, {
-      TLAS_STACK_SIZE: retainedShaderCapacity(
-        traversalStackSizes.tlas, Number(this._constants.TLAS_STACK_SIZE ?? 0)
-      ),
-      BLAS_STACK_SIZE: retainedShaderCapacity(
-        traversalStackSizes.blas, Number(this._constants.BLAS_STACK_SIZE ?? 0), 32
-      ),
-      USE_UV: mergedGeometry.uv != null,
       // Match the atlas UV selector. Keep the second set when any texture
       // needs it; material/texture edits already rebuild these constants.
       USE_UV1: materialData.bufferData.mapUvChannel.some(channel => channel > 0.5),
-      USE_VERTEX_COLOR: mergedGeometry.color != null,
       // Isotropic OpenPBR constructs its own basis. Normal/bump mapping uses
       // triangle UV differentials rather than this vertex tangent.
       USE_TANGENT: mergedGeometry.tangent != null &&
@@ -2342,13 +2405,6 @@ ${rayTraceCompute({
 
       NUM_UNIFORM_LIGHTS: FIXED_LIGHT_COUNT,
 
-      ATTR_STRIDE: stride / fixedSize,
-
-      ...offsets.reduce((obj, off, idx) => {
-        obj[attrNames[idx].toUpperCase() + '_OFF'] = off / fixedSize;
-        return obj;
-      }, {} as any),
-
       ...materialData.defines,
 
       NUM_MAPS,
@@ -2369,22 +2425,34 @@ ${rayTraceCompute({
         +materialData.defines.NUM_BUMP_MAPS > 0
     });
 
-    this._updateTextures(materialData);
+  }
 
+  private _updateMaterialData() {
+    const update = this._pendingMaterialUpdate!;
+    const res = this._preparedMeshData!;
+    let materialData = this._materialData!;
+    if (update.level === 'textures') {
+      materialData = this._materialData = new MergedMaterialData(res.materials, this._analyticLights, {
+        maxTextureArrayBytes: this._maxTextureArrayBytes,
+        maxTextureArrayLayers: this._device.limits.maxTextureArrayLayers,
+        maxTextureDimension2D: this._device.limits.maxTextureDimension2D
+      });
+      this._updateTextures(materialData);
+    } else materialData.repackParams(res.materials);
+    this._materialsBuffer = this._updateGPUBuffer('Materials', this._materialsBuffer, materialData.getBufferArray(), 384);
+    this._updateMaterialConstants(res.materials, materialData, res.geometry);
+    if (update.emission || update.level === 'textures') {
+      const resident = this._residentPreparedMeshData!;
+      resident.emissiveBindings = resident.instanceBindings.filter(binding =>
+        binding.materialIndices.some(index => materialIsEmissive(res.materials[index])));
+      const active = new Set(this._meshes);
+      res.emissiveBindings = resident.emissiveBindings.filter(binding => active.has(binding.mesh));
+      this._emissiveTriangles = collectEmissiveTriangles(res.emissiveBindings, res.materials);
+      this._needsUpdateLightSamplingData = true;
+    }
     this._needsUpdateBindGroups = true;
-
-    this._rtUniform.views.isEmpty[0] = +isEmpty;
-    this._meshSnapshot.forEach((snapshot) => {
-      snapshot.bvh = snapshot.geometry.bvh;
-    });
-    this._residentPreparedMeshData = res;
-    this._residentSnapshotByMesh = new WeakMap();
-    this._meshSnapshot.forEach((snapshot) => {
-      this._residentSnapshotByMesh.set(snapshot.mesh, snapshot);
-    });
-    this._needsUpdateMeshData = false;
-    this._needsUpdateMeshMembership = false;
-    this._needsRefitTLAS = false;
+    this._materialChanges.capture([...update.materials]);
+    this._pendingMaterialUpdate = undefined;
   }
 
   /** Rebuilds only instance acceleration data for a cached mesh subset. */

@@ -679,7 +679,6 @@ class MergedMaterialData {
     lights: SceneLight[],
     options: MergedMaterialDataOptions = {}
   ) {
-    const media = materials.map(openPbrMedium);
     const maps = mergeTexturesFromMaterials(materials, [
       'map',
       'alphaMap',
@@ -711,7 +710,81 @@ class MergedMaterialData {
         })
         .filter((a) => !!a));
 
-    const bufferData = {
+    const bufferData = this._packParams(materials);
+
+    const allTextures = maps.textures.slice();
+    const lightTexturesIndices: number[] = [];
+    for (let i = 0; i < lights.length; i++) {
+      const light = lights[i];
+      if (light.type === 'RectLight' && light.texture) {
+        lightTexturesIndices.push(allTextures.length);
+        allTextures.push(light.texture);
+      } else {
+        lightTexturesIndices.push(-1);
+      }
+    }
+    const { mapInfo, mapTransform, mapUvChannel, stats, texture } = makeTextureArray(
+      allTextures,
+      false,
+      options
+    );
+
+    this.texture = texture;
+    this.textureAtlasStats = stats;
+    bufferData.mapInfo = mapInfo;
+    bufferData.mapTransform = mapTransform;
+    bufferData.mapUvChannel = mapUvChannel;
+    bufferData.diffuseMapIndex = maps.indices.map;
+    bufferData.alphaMapIndex = maps.indices.alphaMap;
+    bufferData.normalMapIndex = maps.indices.normalMap;
+    bufferData.emissiveMapIndex = maps.indices.emissiveMap;
+    bufferData.metallicRoughnessMapIndex = maps.indices.metallicRoughnessMap;
+    bufferData.roughnessMapIndex = maps.indices.roughnessMap;
+    bufferData.metalnessMapIndex = maps.indices.metalnessMap;
+    bufferData.transmissionMapIndex = maps.indices.transmissionMap;
+    bufferData.thinFilmMapIndex = maps.indices.thinFilmMap;
+
+    bufferData.displacementMapIndex = maps.indices.displacementMap;
+    bufferData.bumpMapIndex = bumpMapIndices;
+
+    // min max map for tfdm displacement
+    bufferData.minmaxMapIndex = USE_TFDM_DISPLACEMENT
+        ? materials.map((m) =>
+            m.displacementMap ? displacementMaps.indexOf(m.displacementMap) : -1
+          )
+        : [];
+    bufferData.minmaxMapSize = USE_TFDM_DISPLACEMENT
+        ? materials.map((m) => m.displacementMap?.image.width || 0)
+        : [];
+
+    this.bufferData = bufferData;
+
+    this._lightTexturesIndices = lightTexturesIndices;
+
+    function countMaps(indices: number[]) {
+      return indices.filter((idx) => idx >= 0).length;
+    }
+
+    this.defines = {
+      NUM_MAPS: allTextures.length,
+      NUM_DIFFUSE_MAPS: countMaps(maps.indices.map),
+      NUM_ALPHA_MAPS: countMaps(maps.indices.alphaMap),
+      NUM_NORMAL_MAPS: countMaps(maps.indices.normalMap),
+      NUM_BUMP_MAPS: countMaps(bumpMapIndices),
+      NUM_METALLIC_ROUGHNESS_MAPS: countMaps(maps.indices.metallicRoughnessMap),
+      NUM_ROUGHNESS_MAPS: countMaps(maps.indices.roughnessMap),
+      NUM_METALNESS_MAPS: countMaps(maps.indices.metalnessMap),
+      NUM_TRANSMISSION_MAPS: countMaps(maps.indices.transmissionMap),
+      NUM_EMISSIVE_MAPS: countMaps(maps.indices.emissiveMap),
+      NUM_THIN_FILM_MAPS: countMaps(maps.indices.thinFilmMap)
+    };
+
+    this._updateBuffer();
+  }
+
+  private _packParams(materials: OpenPBRMaterial[]) {
+    const media = materials.map(openPbrMedium);
+    return {
       color: materials.map((m) => m.baseColor.slice(0, 3) as ColorRGB),
       roughness: materials.map((m) => m.specularRoughness),
       emission: materials.map((m) =>
@@ -792,74 +865,12 @@ class MergedMaterialData {
       mediumScattering: media.map((medium) => medium.scattering),
       mediumAnisotropy: media.map((medium) => medium.anisotropy),
 
-      // min max map for tfdm displacement
-      minmaxMapIndex: USE_TFDM_DISPLACEMENT
-        ? materials.map((m) =>
-            m.displacementMap ? displacementMaps.indexOf(m.displacementMap) : -1
-          )
-        : [],
-      minmaxMapSize: USE_TFDM_DISPLACEMENT
-        ? materials.map((m) => m.displacementMap?.image.width || 0)
-        : []
     } as BufferData;
+  }
 
-    const allTextures = maps.textures.slice();
-    const lightTexturesIndices: number[] = [];
-    for (let i = 0; i < lights.length; i++) {
-      const light = lights[i];
-      if (light.type === 'RectLight' && light.texture) {
-        lightTexturesIndices.push(allTextures.length);
-        allTextures.push(light.texture);
-      } else {
-        lightTexturesIndices.push(-1);
-      }
-    }
-    const { mapInfo, mapTransform, mapUvChannel, stats, texture } = makeTextureArray(
-      allTextures,
-      false,
-      options
-    );
-
-    this.texture = texture;
-    this.textureAtlasStats = stats;
-    bufferData.mapInfo = mapInfo;
-    bufferData.mapTransform = mapTransform;
-    bufferData.mapUvChannel = mapUvChannel;
-    bufferData.diffuseMapIndex = maps.indices.map;
-    bufferData.alphaMapIndex = maps.indices.alphaMap;
-    bufferData.normalMapIndex = maps.indices.normalMap;
-    bufferData.emissiveMapIndex = maps.indices.emissiveMap;
-    bufferData.metallicRoughnessMapIndex = maps.indices.metallicRoughnessMap;
-    bufferData.roughnessMapIndex = maps.indices.roughnessMap;
-    bufferData.metalnessMapIndex = maps.indices.metalnessMap;
-    bufferData.transmissionMapIndex = maps.indices.transmissionMap;
-    bufferData.thinFilmMapIndex = maps.indices.thinFilmMap;
-
-    bufferData.displacementMapIndex = maps.indices.displacementMap;
-    bufferData.bumpMapIndex = bumpMapIndices;
-
-    this.bufferData = bufferData;
-
-    this._lightTexturesIndices = lightTexturesIndices;
-
-    function countMaps(indices: number[]) {
-      return indices.filter((idx) => idx >= 0).length;
-    }
-
-    this.defines = {
-      NUM_MAPS: allTextures.length,
-      NUM_DIFFUSE_MAPS: countMaps(maps.indices.map),
-      NUM_ALPHA_MAPS: countMaps(maps.indices.alphaMap),
-      NUM_NORMAL_MAPS: countMaps(maps.indices.normalMap),
-      NUM_BUMP_MAPS: countMaps(bumpMapIndices),
-      NUM_METALLIC_ROUGHNESS_MAPS: countMaps(maps.indices.metallicRoughnessMap),
-      NUM_ROUGHNESS_MAPS: countMaps(maps.indices.roughnessMap),
-      NUM_METALNESS_MAPS: countMaps(maps.indices.metalnessMap),
-      NUM_TRANSMISSION_MAPS: countMaps(maps.indices.transmissionMap),
-      NUM_EMISSIVE_MAPS: countMaps(maps.indices.emissiveMap),
-      NUM_THIN_FILM_MAPS: countMaps(maps.indices.thinFilmMap)
-    };
-
+  /** Repack parameters with the same material slots and unchanged texture metadata. */
+  repackParams(materials: OpenPBRMaterial[]) {
+    Object.assign(this.bufferData, this._packParams(materials));
     this._updateBuffer();
   }
 
