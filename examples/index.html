@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ClayPT examples</title>
+    <style>
+      body {
+        margin: 0 auto;
+        max-width: 640px;
+        padding: 24px 16px;
+        font: 15px/1.5 system-ui, sans-serif;
+        background: #111;
+        color: #eee;
+      }
+      a { color: #8cb4ff; }
+      li { margin: 8px 0; }
+    </style>
+  </head>
+  <body>
+    <h1>ClayPT examples</h1>
+    <ul>
+      <li><a href="./basic.html">Basic</a>: procedural geometry, OpenPBR materials, an area light and an HDR environment.</li>
+      <li><a href="./three.html">Three.js</a>: a Three.js scene with a glTF model, converted with <code>fromTHREEScene</code>.</li>
+      <li><a href="./advanced.html">Advanced</a>: OpenPBR layers, shadow catcher, OIDN denoising and offline PNG export.</li>
+    </ul>
+    <p>ClayPT uses WebGPU when available and falls back to WebGL 2.</p>
+  </body>
+</html>

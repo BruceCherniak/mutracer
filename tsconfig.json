@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ESNext",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "lib": ["ESNext", "DOM"],
+    "moduleResolution": "Node",
+    "strict": true,
+    "noUnusedLocals": true,
+    "sourceMap": true,
+
+    "allowJs": true,
+
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+
+    "removeComments": false,
+    "declaration": true,
+    "declarationMap": false,
+    "pretty": true,
+    "outDir": "lib",
+
+    "types": ["@webgpu/types"]
+  },
+  "include": ["src"],
+  "exclude": ["src/renderer/__glsl"]
+}

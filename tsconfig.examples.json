@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "declaration": false,
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "claypt": ["src/main.ts"],
+      "claypt/oidn": ["src/oidn.ts"]
+    },
+    "types": ["@webgpu/types", "vite/client", "node"]
+  },
+  "include": ["src", "examples", "tests"]
+}

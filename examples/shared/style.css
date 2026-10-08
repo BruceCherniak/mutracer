@@ -1,0 +1,30 @@
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: #111;
+  color: #eee;
+  font: 13px/1.4 system-ui, sans-serif;
+}
+canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.panel {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.panel label {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}

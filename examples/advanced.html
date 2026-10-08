@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ClayPT · Advanced</title>
+    <link rel="stylesheet" href="./shared/style.css" />
+    <style>
+      /* The canvas is transparent where the background is; show a checker. */
+      body {
+        background: repeating-conic-gradient(#2a2a2a 0 25%, #353535 0 50%) 0 0 / 32px 32px;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="main"></canvas>
+    <div class="panel">
+      <span id="status"></span>
+      <label>
+        Denoiser
+        <select id="denoiser">
+          <option value="off">Off</option>
+          <option value="small">small</option>
+          <option value="standard" selected>standard</option>
+          <option value="cleanAuxLarge">cleanAuxLarge</option>
+        </select>
+      </label>
+      <label>
+        Offline samples
+        <input id="samples" type="number" min="1" max="4096" value="256" />
+      </label>
+      <button id="export">Render offline and save PNG</button>
+    </div>
+    <script type="module" src="./advanced.ts"></script>
+  </body>
+</html>

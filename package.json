@@ -1,0 +1,96 @@
+{
+  "name": "claypt",
+  "version": "0.1.0",
+  "description": "ClayPT (Clay Path Tracing): a physically based WebGPU path tracer with WebGL 2 fallback, OpenPBR materials, TinyBVH and OIDN denoising.",
+  "keywords": [
+    "path tracing",
+    "webgpu",
+    "webgl",
+    "raytracing",
+    "pbr",
+    "openpbr",
+    "oidn",
+    "three.js",
+    "renderer"
+  ],
+  "homepage": "https://github.com/pissang/claypt#readme",
+  "bugs": {
+    "url": "https://github.com/pissang/claypt/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/pissang/claypt.git"
+  },
+  "license": "MIT",
+  "author": "Yi Shen",
+  "type": "module",
+  "main": "lib/main.js",
+  "types": "lib/main.d.ts",
+  "unpkg": "dist/claypt.umd.js",
+  "jsdelivr": "dist/claypt.umd.js",
+  "exports": {
+    ".": {
+      "types": "./lib/main.d.ts",
+      "import": "./lib/main.js",
+      "default": "./lib/main.js"
+    },
+    "./oidn": {
+      "types": "./lib/oidn.d.ts",
+      "import": "./lib/oidn.js",
+      "default": "./lib/oidn.js"
+    },
+    "./oidn/weights/*": "./oidn/weights/*",
+    "./package.json": "./package.json"
+  },
+  "sideEffects": false,
+  "files": [
+    "lib",
+    "dist",
+    "oidn/weights",
+    "LICENSE",
+    "LICENSES",
+    "THIRD_PARTY_NOTICES.md",
+    "README.md",
+    "docs",
+    "llms.txt"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build:tinybvh": "./scripts/build-tinybvh.sh",
+    "build:tinybvh:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-tinybvh.ps1",
+    "typecheck:examples": "tsc --noEmit -p tsconfig.examples.json",
+    "watch": "vite build -w",
+    "preview": "vite preview",
+    "prepare": "npm run build:lib",
+    "prepublishOnly": "npm run build && npm run build:lib",
+    "build:lib": "node scripts/build-lib.mjs",
+    "watch:lib": "tsc --watch"
+  },
+  "dependencies": {
+    "gl-matrix": "^3.4.4",
+    "oidn-web": "^0.4.0",
+    "seedrandom": "^3.0.5",
+    "webgpu-utils": "^1.9.3"
+  },
+  "peerDependencies": {
+    "three": ">=0.150.0"
+  },
+  "peerDependenciesMeta": {
+    "three": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.43",
+    "@types/three": "^0.185.4",
+    "@webgpu/types": "^0.1.40",
+    "three": "^0.185.1",
+    "typescript": "^5.8.2",
+    "vite": "^4.1.2",
+    "vitest": "^1.6.1"
+  }
+}

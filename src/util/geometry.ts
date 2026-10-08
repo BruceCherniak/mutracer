@@ -1,0 +1,323 @@
+import { vec3 } from '../math';
+import Geometry, { Attribute } from '../scene/Geometry';
+
+/** Computes smooth, area-weighted vertex normals into `geometry.normal`. */
+export function generateVertexNormals(geometry: Geometry) {
+  if (!Geometry.getVertexCount(geometry)) {
+    return;
+  }
+
+  const indices = geometry.indices?.array;
+  const positions = geometry.position.array!;
+  const normals = new Float32Array(positions.length);
+  geometry.normal = new Attribute(normals, 3);
+
+  const p1 = vec3.create();
+  const p2 = vec3.create();
+  const p3 = vec3.create();
+
+  const v21 = vec3.create();
+  const v32 = vec3.create();
+
+  const n = vec3.create();
+
+  const len = indices ? indices.length : Geometry.getVertexCount(geometry);
+  let i1, i2, i3;
+  for (let f = 0; f < len; ) {
+    if (indices) {
+      i1 = indices[f++];
+      i2 = indices[f++];
+      i3 = indices[f++];
+    } else {
+      i1 = f++;
+      i2 = f++;
+      i3 = f++;
+    }
+
+    vec3.set(
+      p1,
+      positions[i1 * 3],
+      positions[i1 * 3 + 1],
+      positions[i1 * 3 + 2]
+    );
+    vec3.set(
+      p2,
+      positions[i2 * 3],
+      positions[i2 * 3 + 1],
+      positions[i2 * 3 + 2]
+    );
+    vec3.set(
+      p3,
+      positions[i3 * 3],
+      positions[i3 * 3 + 1],
+      positions[i3 * 3 + 2]
+    );
+
+    vec3.sub(v21, p1, p2);
+    vec3.sub(v32, p2, p3);
+    vec3.cross(n, v21, v32);
+    // Already be weighted by the triangle area
+    for (let i = 0; i < 3; i++) {
+      normals[i1 * 3 + i] = normals[i1 * 3 + i] + n[i];
+      normals[i2 * 3 + i] = normals[i2 * 3 + i] + n[i];
+      normals[i3 * 3 + i] = normals[i3 * 3 + i] + n[i];
+    }
+  }
+
+  for (let i = 0; i < normals.length; ) {
+    vec3.set(n, normals[i], normals[i + 1], normals[i + 2]);
+    vec3.normalize(n, n);
+    normals[i++] = n[0];
+    normals[i++] = n[1];
+    normals[i++] = n[2];
+  }
+}
+
+/**
+ * Splits indexed vertices where incident faces exceed the requested dihedral
+ * angle, then generates normals for the resulting smoothing groups. This is
+ * useful after displacement because a single indexed vertex cannot represent
+ * both sides of a hard edge with different normals.
+ */
+export function generateCreasedVertexNormals(
+  geometry: Geometry,
+  creaseAngleDegrees = 180
+) {
+  const indices = geometry.indices?.array;
+  const positions = geometry.position?.array;
+  if (!indices || !positions || !indices.length || !positions.length) {
+    generateVertexNormals(geometry);
+    return;
+  }
+  const creaseAngle = Math.min(Math.max(creaseAngleDegrees, 0), 180);
+  if (creaseAngle >= 179.999) {
+    generateVertexNormals(geometry);
+    return;
+  }
+
+  interface NormalGroup {
+    vertexIndex: number;
+    sumX: number;
+    sumY: number;
+    sumZ: number;
+  }
+  const originalVertexCount = Geometry.getVertexCount(geometry);
+  const groups = Array.from(
+    { length: originalVertexCount },
+    () => [] as NormalGroup[]
+  );
+  const generatedIndices = new Uint32Array(indices.length);
+  const generatedPositions = Array.from(positions);
+  const generatedUvs = geometry.uv ? Array.from(geometry.uv.array) : undefined;
+  const generatedColors = geometry.color
+    ? Array.from(geometry.color.array)
+    : undefined;
+  const generatedMaterialIndices = geometry.materialIndex
+    ? Array.from(geometry.materialIndex.array)
+    : undefined;
+  let generatedVertexCount = originalVertexCount;
+  const cosineThreshold = Math.cos((creaseAngle * Math.PI) / 180);
+
+  const duplicateAttribute = (
+    target: number[] | undefined,
+    sourceIndex: number,
+    itemSize: number
+  ) => {
+    if (!target) return;
+    const offset = sourceIndex * itemSize;
+    for (let component = 0; component < itemSize; component++) {
+      target.push(target[offset + component]);
+    }
+  };
+
+  for (let offset = 0; offset + 2 < indices.length; offset += 3) {
+    const i0 = indices[offset];
+    const i1 = indices[offset + 1];
+    const i2 = indices[offset + 2];
+    const ax = positions[i1 * 3] - positions[i0 * 3];
+    const ay = positions[i1 * 3 + 1] - positions[i0 * 3 + 1];
+    const az = positions[i1 * 3 + 2] - positions[i0 * 3 + 2];
+    const bx = positions[i2 * 3] - positions[i0 * 3];
+    const by = positions[i2 * 3 + 1] - positions[i0 * 3 + 1];
+    const bz = positions[i2 * 3 + 2] - positions[i0 * 3 + 2];
+    const faceX = ay * bz - az * by;
+    const faceY = az * bx - ax * bz;
+    const faceZ = ax * by - ay * bx;
+    const faceLength = Math.hypot(faceX, faceY, faceZ);
+    const unitX = faceLength > 1e-12 ? faceX / faceLength : 0;
+    const unitY = faceLength > 1e-12 ? faceY / faceLength : 0;
+    const unitZ = faceLength > 1e-12 ? faceZ / faceLength : 1;
+
+    [i0, i1, i2].forEach((sourceIndex, corner) => {
+      const vertexGroups = groups[sourceIndex];
+      let selected: NormalGroup | undefined;
+      let selectedDot = -Infinity;
+      for (const group of vertexGroups) {
+        const groupLength = Math.hypot(group.sumX, group.sumY, group.sumZ);
+        const dot = groupLength > 1e-12
+          ? (unitX * group.sumX + unitY * group.sumY + unitZ * group.sumZ) /
+            groupLength
+          : 1;
+        if (dot >= cosineThreshold && dot > selectedDot) {
+          selected = group;
+          selectedDot = dot;
+        }
+      }
+      if (!selected) {
+        const vertexIndex = vertexGroups.length === 0
+          ? sourceIndex
+          : generatedVertexCount++;
+        if (vertexIndex !== sourceIndex) {
+          duplicateAttribute(generatedPositions, sourceIndex, 3);
+          duplicateAttribute(
+            generatedUvs,
+            sourceIndex,
+            geometry.uv?.itemSize ?? 2
+          );
+          duplicateAttribute(
+            generatedColors,
+            sourceIndex,
+            geometry.color?.itemSize ?? 3
+          );
+          duplicateAttribute(
+            generatedMaterialIndices,
+            sourceIndex,
+            geometry.materialIndex?.itemSize ?? 1
+          );
+        }
+        selected = {
+          vertexIndex,
+          sumX: 0,
+          sumY: 0,
+          sumZ: 0
+        };
+        vertexGroups.push(selected);
+      }
+      selected.sumX += faceX;
+      selected.sumY += faceY;
+      selected.sumZ += faceZ;
+      generatedIndices[offset + corner] = selected.vertexIndex;
+    });
+  }
+
+  geometry.position = new Attribute(new Float32Array(generatedPositions), 3);
+  geometry.indices = new Attribute(generatedIndices, 1);
+  geometry.uv = generatedUvs
+    ? new Attribute(new Float32Array(generatedUvs), geometry.uv!.itemSize)
+    : undefined;
+  geometry.color = generatedColors
+    ? new Attribute(new Float32Array(generatedColors), geometry.color!.itemSize)
+    : undefined;
+  geometry.materialIndex = generatedMaterialIndices
+    ? new Attribute(
+        new Int32Array(generatedMaterialIndices),
+        geometry.materialIndex!.itemSize
+      )
+    : undefined;
+  geometry.tangent = undefined;
+  generateVertexNormals(geometry);
+}
+
+/** Generate a UV-aligned tangent for meshes that do not provide one. */
+export function generateVertexTangents(geometry: Geometry) {
+  const uvs = geometry.uv?.array;
+  const normals = geometry.normal?.array;
+  const positions = geometry.position?.array;
+  if (!uvs || !normals || !positions || !Geometry.getVertexCount(geometry)) {
+    return;
+  }
+
+  const vertexCount = Geometry.getVertexCount(geometry);
+  const accumulated = new Float32Array(vertexCount * 3);
+  const indices = geometry.indices?.array;
+  const count = indices?.length ?? vertexCount;
+
+  for (let offset = 0; offset + 2 < count; offset += 3) {
+    const i0 = indices ? indices[offset] : offset;
+    const i1 = indices ? indices[offset + 1] : offset + 1;
+    const i2 = indices ? indices[offset + 2] : offset + 2;
+    const x1 = positions[i1 * 3] - positions[i0 * 3];
+    const y1 = positions[i1 * 3 + 1] - positions[i0 * 3 + 1];
+    const z1 = positions[i1 * 3 + 2] - positions[i0 * 3 + 2];
+    const x2 = positions[i2 * 3] - positions[i0 * 3];
+    const y2 = positions[i2 * 3 + 1] - positions[i0 * 3 + 1];
+    const z2 = positions[i2 * 3 + 2] - positions[i0 * 3 + 2];
+    const s1 = uvs[i1 * 2] - uvs[i0 * 2];
+    const t1 = uvs[i1 * 2 + 1] - uvs[i0 * 2 + 1];
+    const s2 = uvs[i2 * 2] - uvs[i0 * 2];
+    const t2 = uvs[i2 * 2 + 1] - uvs[i0 * 2 + 1];
+    const determinant = s1 * t2 - s2 * t1;
+    if (Math.abs(determinant) < 1e-12) continue;
+    const inverse = 1 / determinant;
+    const tangent = [
+      (x1 * t2 - x2 * t1) * inverse,
+      (y1 * t2 - y2 * t1) * inverse,
+      (z1 * t2 - z2 * t1) * inverse
+    ];
+    for (const index of [i0, i1, i2]) {
+      accumulated[index * 3] += tangent[0];
+      accumulated[index * 3 + 1] += tangent[1];
+      accumulated[index * 3 + 2] += tangent[2];
+    }
+  }
+
+  const tangents = new Float32Array(vertexCount * 3);
+  for (let index = 0; index < vertexCount; index++) {
+    const base = index * 3;
+    const nx = normals[base];
+    const ny = normals[base + 1];
+    const nz = normals[base + 2];
+    const projection = accumulated[base] * nx
+      + accumulated[base + 1] * ny
+      + accumulated[base + 2] * nz;
+    let tx = accumulated[base] - nx * projection;
+    let ty = accumulated[base + 1] - ny * projection;
+    let tz = accumulated[base + 2] - nz * projection;
+    const length = Math.hypot(tx, ty, tz);
+    if (length > 1e-8) {
+      tx /= length;
+      ty /= length;
+      tz /= length;
+    } else {
+      tx = ty = tz = 0;
+    }
+    tangents[base] = tx;
+    tangents[base + 1] = ty;
+    tangents[base + 2] = tz;
+  }
+  geometry.tangent = new Attribute(tangents, 3);
+}
+
+export function updateBoundingBox(geometry: Geometry) {
+  const posArr = geometry.position.array;
+  const min = geometry.boundingBox.min;
+  const max = geometry.boundingBox.max;
+  if (posArr && posArr.length) {
+    vec3.set(min, posArr[0], posArr[1], posArr[2]);
+    vec3.set(max, posArr[0], posArr[1], posArr[2]);
+    for (let i = 3; i < posArr.length; ) {
+      const x = posArr[i++];
+      const y = posArr[i++];
+      const z = posArr[i++];
+      if (x < min[0]) {
+        min[0] = x;
+      }
+      if (y < min[1]) {
+        min[1] = y;
+      }
+      if (z < min[2]) {
+        min[2] = z;
+      }
+
+      if (x > max[0]) {
+        max[0] = x;
+      }
+      if (y > max[1]) {
+        max[1] = y;
+      }
+      if (z > max[2]) {
+        max[2] = z;
+      }
+    }
+  }
+}

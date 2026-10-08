@@ -1,0 +1,192 @@
+import { describe, expect, it } from 'vitest';
+import { mat4 } from '../../src/math';
+import {
+  Box3,
+  buildBLAS,
+  buildTLAS,
+  flattenBvh,
+  getTraversalStackSizes,
+  refitBLAS,
+  refitTLAS,
+  type BLASInstance,
+  type TLASInstance
+} from '../../src/renderer/bvhAccel';
+import Geometry, { Attribute } from '../../src/scene/Geometry';
+
+function bounds(minX: number, maxX: number) {
+  const result = new Box3();
+  result.min = [minX, 0, 0];
+  result.max = [maxX, 1, 1];
+  return result;
+}
+
+describe('mixed BVH layouts', () => {
+  it('packs layout codes without changing the 30-bit BLAS offsets', () => {
+    const blases: BLASInstance[] = [
+      {
+        bvh: { buffer: new ArrayBuffer(64), maxDepth: 1, layout: 'bvh4' },
+        trainglesCount: 1,
+        verticesCount: 3
+      },
+      {
+        bvh: { buffer: new ArrayBuffer(32), maxDepth: 1, layout: 'bvh2' },
+        trainglesCount: 1,
+        verticesCount: 3
+      },
+      {
+        bvh: { buffer: new ArrayBuffer(64), maxDepth: 1, layout: 'bvh-gpu' },
+        trainglesCount: 1,
+        verticesCount: 3
+      },
+      {
+        bvh: { buffer: new ArrayBuffer(80), maxDepth: 1, layout: 'cwbvh' },
+        trainglesCount: 1,
+        verticesCount: 3
+      }
+    ];
+    const instances: TLASInstance[] = blases.map((_, blasIndex) => ({
+      blasIndex,
+      bounds: bounds(blasIndex * 2, blasIndex * 2 + 1),
+      transform: mat4.create(),
+      materialsIndices: [blasIndex]
+    }));
+
+    const flattened = flattenBvh(buildTLAS(instances, blases), true);
+    const instanceWords = new Int32Array(flattened.instancesBuffer!);
+
+    expect(instanceWords[0]).toBe(0x40000000);
+    expect(instanceWords[36]).toBe(4);
+    expect(instanceWords[72]).toBe(-0x80000000 + 6);
+    expect(instanceWords[108]).toBe(-0x40000000 + 10);
+    expect(flattened.layout).toBe('bvh2');
+  });
+});
+
+describe('traversal stack sizing', () => {
+  it('sizes nested TLAS and BLAS stacks independently', () => {
+    const tlas = {
+      buffer: new ArrayBuffer(32),
+      maxDepth: 6,
+      maxLeafPrimitives: 4
+    };
+    const blases: BLASInstance[] = [12, 18].map((maxDepth) => ({
+      bvh: { buffer: new ArrayBuffer(64), maxDepth, layout: 'bvh4' },
+      trainglesCount: 1,
+      verticesCount: 3
+    }));
+
+    expect(getTraversalStackSizes(tlas, blases)).toEqual({
+      tlas: 6,
+      blas: 18
+    });
+  });
+
+  it('keeps TinyBVH stack requirements above the old 50-entry limit', () => {
+    const tlas = { buffer: new ArrayBuffer(32), maxDepth: 7 };
+    const blases: BLASInstance[] = [
+      {
+        bvh: { buffer: new ArrayBuffer(64), maxDepth: 51, layout: 'bvh4' },
+        trainglesCount: 1,
+        verticesCount: 3
+      }
+    ];
+
+    expect(getTraversalStackSizes(tlas, blases)).toEqual({
+      tlas: 7,
+      blas: 51
+    });
+  });
+
+});
+
+describe('BVH refit', () => {
+  it('updates TLAS bounds and instance transforms without rebuilding topology', () => {
+    const blases: BLASInstance[] = [
+      {
+        bvh: { buffer: new ArrayBuffer(48), maxDepth: 1, layout: 'bvh2' },
+        trainglesCount: 1,
+        verticesCount: 3
+      }
+    ];
+    const instances: TLASInstance[] = [0, 1].map((i) => ({
+      blasIndex: 0,
+      bounds: bounds(i * 2, i * 2 + 1),
+      transform: mat4.create(),
+      materialsIndices: [i]
+    }));
+    const flat = flattenBvh(buildTLAS(instances, blases), true);
+    const topology = Array.from(new Int32Array(flat.buffer)).filter(
+      (_, index) => index % 8 === 3 || index % 8 === 7
+    );
+
+    instances[0].bounds = bounds(10, 11);
+    instances[1].bounds = bounds(20, 21);
+    mat4.translate(instances[0].transform, instances[0].transform, [10, 0, 0]);
+    mat4.translate(instances[1].transform, instances[1].transform, [20, 0, 0]);
+    refitTLAS(flat, instances, blases);
+
+    const floats = new Float32Array(flat.buffer);
+    expect(floats[0]).toBe(10);
+    expect(floats[4]).toBe(21);
+    expect(
+      Array.from(new Int32Array(flat.buffer)).filter(
+        (_, index) => index % 8 === 3 || index % 8 === 7
+      )
+    ).toEqual(topology);
+    const instanceData = new Float32Array(flat.instancesBuffer!);
+    expect([instanceData[32], instanceData[68]].sort((a, b) => a - b)).toEqual([
+      10, 20
+    ]);
+  });
+
+  it('updates only dirty instance records and their TLAS ancestry', () => {
+    const blases: BLASInstance[] = [
+      {
+        bvh: { buffer: new ArrayBuffer(48), maxDepth: 1, layout: 'bvh2' },
+        trainglesCount: 1,
+        verticesCount: 3
+      }
+    ];
+    const instances: TLASInstance[] = Array.from({ length: 8 }, (_, index) => ({
+      blasIndex: 0,
+      bounds: bounds(index * 3, index * 3 + 1),
+      transform: mat4.create(),
+      materialsIndices: [index]
+    }));
+    const flat = flattenBvh(buildTLAS(instances, blases), true);
+    const previousInstances = new Float32Array(flat.instancesBuffer!).slice();
+
+    instances[3].bounds = bounds(30, 31);
+    mat4.translate(instances[3].transform, instances[3].transform, [30, 0, 0]);
+    const result = refitTLAS(flat, instances, blases, new Set([3]));
+
+    const nextInstances = new Float32Array(flat.instancesBuffer!);
+    const changedRecords = Array.from({ length: instances.length }, (_, index) =>
+      nextInstances
+        .subarray(index * 36, index * 36 + 36)
+        .some((value, word) => value !== previousInstances[index * 36 + word])
+    ).filter(Boolean);
+    expect(changedRecords).toHaveLength(1);
+    expect(result.instanceRanges).toHaveLength(1);
+    expect(
+      result.tlasRanges.reduce((bytes, range) => bytes + range.size, 0)
+    ).toBeLessThan(flat.buffer.byteLength);
+    expect(new Float32Array(flat.buffer)[4]).toBe(31);
+  });
+
+  it('refits BVH2 leaf and parent bounds after vertex deformation', () => {
+    const geometry = new Geometry({
+      position: new Attribute(
+        new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0, 0, 3, 0, 0, 2, 1, 0]),
+        3
+      ),
+      normal: new Attribute(new Float32Array(18), 3),
+      indices: new Attribute(new Uint32Array([0, 1, 2, 3, 4, 5]), 1)
+    } as never);
+    const flat = flattenBvh(buildBLAS(geometry, 0, undefined), false);
+    geometry.position.array[12] = 8;
+
+    expect(refitBLAS(flat, geometry)).toBe(true);
+    expect(new Float32Array(flat.buffer)[4]).toBe(8);
+  });
+});
