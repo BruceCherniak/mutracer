@@ -581,7 +581,7 @@ export default class Renderer {
   async prepareScene(scene: Pick<Scene, 'meshes'> | Mesh[]) {
     const meshes = Array.isArray(scene) ? scene : scene.meshes;
     if (this.bvhBuilder !== 'tinybvh' || this._tinyBvhUnavailable) return;
-    const pending = meshes.filter(meshNeedsPrecompute);
+    const pending = meshes.filter(mesh => !mesh.geometry.dynamic && meshNeedsPrecompute(mesh));
     if (!pending.length) return;
     try {
       await precomputeTinyBvh(pending, 'bvh2', undefined, { onlyMissing: true });
@@ -606,7 +606,7 @@ export default class Renderer {
       const prepared = this._bvhPreparedGeometry.get(mesh);
       const attempted = prepared?.[0] === mesh.geometry &&
         prepared[1] === mesh.geometry.version;
-      return !attempted && meshNeedsPrecompute(mesh);
+      return !mesh.geometry.dynamic && !attempted && meshNeedsPrecompute(mesh);
     });
   }
 
@@ -1164,7 +1164,7 @@ export default class Renderer {
       }).__clayptMeasureMeshSync === true;
       const meshSyncStartedAt = measureMeshSync ? performance.now() : 0;
       pipeline.setMeshes(scene.meshes, changes.meshes === 'full' || this._forceMeshUpdate
-        ? undefined : { transforms: changes.transforms, materials: changes.materials });
+        ? undefined : { transforms: changes.transforms, materials: changes.materials, geometries: changes.geometries });
       if (measureMeshSync) {
         performance.measure('claypt:setMeshes', { start: meshSyncStartedAt, end: performance.now() });
       }

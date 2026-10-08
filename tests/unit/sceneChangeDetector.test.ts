@@ -23,7 +23,7 @@ const texture = () => new Texture({ data: new Uint8Array(4), width: 1, height: 1
 describe('scene change detection', () => {
   it('is stable after commit, preserves uncommitted edits, and resets for a new pipeline', () => {
     const { scene, detector, mesh } = fixture();
-    expect(detector.detect(scene)).toEqual({ meshes: 'none', transforms: [], materials: [], lights: false, background: false });
+    expect(detector.detect(scene)).toEqual({ meshes: 'none', transforms: [], geometries: [], materials: [], lights: false, background: false });
     mesh.matrixWorld[12] = 3;
     const changes = detector.detect(scene);
     expect(changes.meshes).toBe('incremental');
@@ -37,7 +37,6 @@ describe('scene change detection', () => {
     (s: Scene) => { s.meshes.push(new Mesh(createCubeGeometry(), new OpenPBRMaterial())); },
     (s: Scene) => { s.meshes[0] = new Mesh(createCubeGeometry(), new OpenPBRMaterial()); },
     (s: Scene) => { s.meshes[0].geometry = createCubeGeometry(); },
-    (s: Scene) => { s.meshes[0].geometry.markUpdated(); },
     (s: Scene) => { s.meshes[0].materials.push(new OpenPBRMaterial()); },
     (s: Scene) => { s.meshes[0].materials[0] = new OpenPBRMaterial(); },
     (s: Scene) => { s.meshes[0].geometrySimplificationRatio = 0.5; },
@@ -119,4 +118,18 @@ it('keeps reporting the latest uncommitted pose and material versions throughout
   mesh.matrixWorld[14] = 7;
   expect(detector.detect(scene).transforms).toEqual([mesh]); detector.commit();
   expect(detector.detect(scene).meshes).toBe('none');
+});
+
+
+it('reports shared geometry versions incrementally and storage/schema changes as full', () => {
+  const { scene, detector, mesh } = fixture();
+  scene.meshes.push(new Mesh(mesh.geometry, mesh.materials[0])); detector.detect(scene); detector.commit();
+  mesh.geometry.markUpdated(); const change = detector.detect(scene);
+  expect(change.meshes).toBe('incremental'); expect(change.geometries).toEqual([mesh.geometry]);
+  expect(detector.detect(scene)).toEqual(change); detector.commit();
+  for (const name of ['position', 'normal', 'indices'] as const) {
+    const attribute = mesh.geometry[name]; attribute.array = attribute.array.slice();
+    expect(detector.detect(scene).meshes).toBe('full'); detector.commit();
+  }
+  mesh.geometry.dynamic = true; expect(detector.detect(scene).meshes).toBe('full');
 });

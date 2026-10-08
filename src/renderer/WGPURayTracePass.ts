@@ -1,3 +1,4 @@
+import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged, packVertexAttributes } from './geometryUpdates';
 import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges';
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges';
 import { WGPUShaderCache, retainedShaderCapacity } from './WGPUShaderCache';
@@ -295,6 +296,7 @@ class WGPURayTracePass {
   private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean; materials: Set<OpenPBRMaterial> };
   private _materialData: MergedMaterialData | undefined;
   private _maxTextureArrayBytes = DEFAULT_MAX_TEXTURE_ARRAY_BYTES;
+  private _pendingGeometryUpdates = new Set<Geometry>();
   private _needsUpdateMeshData = true;
   private _needsUpdateMeshMembership = false;
   private _needsRefitTLAS = false;
@@ -346,6 +348,9 @@ class WGPURayTracePass {
   };
   private _rtUniform = makeRayTraceUniform();
   private _mapInfoUniform!: GPUBuffer;
+  private _attributeData?: Float32Array;
+  private _attributeStride = 0;
+  private _attributeOffsets: number[] = [];
   private _attrBuffers?: GPUBuffer;
   private _materialsBuffer?: GPUBuffer;
   private _lightSamplingTexture?: GPUTexture;
@@ -974,9 +979,9 @@ class WGPURayTracePass {
         this._updateMeshData();
       } else if (this._needsUpdateMeshMembership) {
         this._updateMeshMembership();
-      } else if (this._needsRefitTLAS) {
-        this._refitMeshInstances();
       }
+      if (this._pendingGeometryUpdates.size) this._updateGeometryData();
+      if (this._needsRefitTLAS) this._refitMeshInstances();
       if (this._pendingMaterialUpdate) this._updateMaterialData();
       if (this._needsUpdateLightSamplingData) {
         this._updateLightSamplingData();
@@ -1791,11 +1796,11 @@ ${rayTraceCompute({
     this._constants.USE_ENVMAP = !!envImage;
   }
 
-  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; materials?: readonly OpenPBRMaterial[] }) {
+  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[] }) {
     if (update && this._preparedMeshData && this._materialData &&
       !this._needsUpdateMeshData && !this._needsUpdateMeshMembership && meshes === this._meshes) {
       const materialUpdate = this._materialChanges.classify(update.materials ?? []);
-      if (materialUpdate.level !== 'geometry') {
+      if (materialUpdate.level !== 'geometry' && canUpdateGeometries(this._preparedMeshData, update.geometries ?? [])) {
         if (update.materials?.length) {
           const pending = this._pendingMaterialUpdate;
           this._pendingMaterialUpdate = {
@@ -1806,6 +1811,8 @@ ${rayTraceCompute({
           };
           this._meshSnapshot.forEach(item => { item.materialVersions = item.materials.map(m => m.version); });
         }
+        for (const geometry of update.geometries ?? []) this._pendingGeometryUpdates.add(geometry);
+        for (const item of this._meshSnapshot) if (this._pendingGeometryUpdates.has(item.geometry)) item.geometryVersion = item.geometry.version;
         for (const mesh of update.transforms ?? []) {
           const item = this._snapshotByMesh.get(mesh);
           if (!item) continue;
@@ -1813,7 +1820,7 @@ ${rayTraceCompute({
           this._dirtyTransformMeshes.add(mesh);
           this._needsRefitTLAS = true;
         }
-        return !!update.materials?.length || !!update.transforms?.length;
+        return !!update.materials?.length || !!update.transforms?.length || !!update.geometries?.length;
       }
     }
     const transformOnlyMeshes = update?.materials?.length ? undefined : update?.transforms;
@@ -1954,6 +1961,9 @@ ${rayTraceCompute({
     this._meshes = meshes;
     nextSnapshot.forEach((next, i) => {
       const prev = previousSnapshot[i];
+      if (prev?.geometry === next.geometry && (prev.positionArray !== next.positionArray || prev.indexArray !== next.indexArray)) {
+        next.geometry.bvh = undefined; this._geometriesNeedRefit.add(next.geometry);
+      }
       // A mesh can be animated before this renderer sees it for the first
       // time. Its precomputed BLAS may then describe an older pose as well.
       if (next.geometryVersion > 0 && (
@@ -2205,6 +2215,7 @@ ${rayTraceCompute({
   }
 
   private _updateMeshData() {
+    this._pendingGeometryUpdates.clear();
     this._emissiveCache = new EmissiveTriangleCache();
     const meshes = this._meshes;
     for (const geometry of this._geometriesNeedRefit) {
@@ -2214,7 +2225,7 @@ ${rayTraceCompute({
           !!mesh.materials[0]?.displacementMap &&
           Math.abs(mesh.materials[0].displacementScale) > 1e-6
       );
-      if (usesDisplacement || !geometry.bvh || !refitBLAS(geometry.bvh, geometry)) {
+      if (usesDisplacement || geometryTopologyChanged(this._preparedMeshData, geometry) || !geometry.bvh || !refitBLAS(geometry.bvh, geometry)) {
         geometry.bvh = undefined;
       }
     }
@@ -2268,19 +2279,9 @@ ${rayTraceCompute({
     const attrBufferData = new F32(
       Geometry.getVertexCount(mergedGeometry) * stride
     );
-    for (let i = 0; i < Geometry.getVertexCount(mergedGeometry); i++) {
-      for (let k = 0; k < attributes.length; k++) {
-        const attr = attributes[k];
-        if (attr) {
-          // const itemSize = attr.itemSize;
-          for (let m = 0; m < attr.itemSize; m++) {
-            attrBufferData[i * stride + offsets[k] + m] =
-              attr.array[i * attr.itemSize + m];
-          }
-        }
-      }
-    }
+    packVertexAttributes(mergedGeometry, attrBufferData, stride, offsets, 0, Geometry.getVertexCount(mergedGeometry));
 
+    this._attributeData = attrBufferData; this._attributeStride = stride; this._attributeOffsets = offsets;
     this._attrBuffers = this._updateGPUBuffer(
       'Attributes',
       this._attrBuffers,
@@ -2424,6 +2425,37 @@ ${rayTraceCompute({
         +materialData.defines.NUM_BUMP_MAPS > 0
     });
 
+  }
+
+  private _updateGeometryData() {
+    const res = this._preparedMeshData!, tlas = this._tlas!;
+    const update = updatePreparedGeometries(res, this._pendingGeometryUpdates);
+    for (const { first, count } of update.vertices) {
+      packVertexAttributes(res.geometry, this._attributeData!, this._attributeStride, this._attributeOffsets, first, count);
+      const offset = first * this._attributeStride * 4, size = count * this._attributeStride * 4;
+      this._device.queue.writeBuffer(this._attrBuffers!, offset, this._attributeData!.buffer, offset, size);
+    }
+    for (const mesh of update.meshes) this._dirtyTransformMeshes.add(mesh);
+    if (update.relocated) for (const binding of res.instanceBindings) this._dirtyTransformMeshes.add(binding.mesh);
+    // Instance BLAS offsets must be refreshed before uploading a resized BVH.
+    if (update.resized) {
+      res.instances = updateMeshInstanceTransforms(res.instanceBindings);
+      refitTLAS(tlas, res.instances, res.blases);
+      this._uploadBVH(tlas, res.blases);
+    } else {
+      const bytes = new Uint8Array(this._debugBVHBuffer!);
+      for (const { blas, offset } of update.blases) {
+        const target = tlas.buffer.byteLength + offset;
+        bytes.set(new Uint8Array(blas.buffer), target);
+        this._device.queue.writeBuffer(this._bvhBuffer!, target, blas.buffer);
+      }
+    }
+    const bits = { bvh2: 1, bvh4: 2, 'bvh-gpu': 4, cwbvh: 8 };
+    this._blasLayoutMask = res.blases.reduce((mask, b) => mask | bits[b.bvh.layout ?? 'bvh2'], 0);
+    const stacks = getTraversalStackSizes(tlas, res.blases);
+    this._constants.BLAS_STACK_SIZE = retainedShaderCapacity(stacks.blas, Number(this._constants.BLAS_STACK_SIZE ?? 0), 32);
+    this._meshSnapshot.forEach(item => { item.bvh = item.geometry.bvh; });
+    this._needsRefitTLAS = true; this._pendingGeometryUpdates.clear();
   }
 
   private _updateMaterialData() {

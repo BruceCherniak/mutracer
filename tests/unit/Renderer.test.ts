@@ -155,7 +155,7 @@ describe('Renderer sizing', () => {
     renderer.render(scene, {} as Camera);
     renderer.render(scene, {} as Camera);
 
-    expect(pipeline.setMeshes).toHaveBeenNthCalledWith(1, scene.meshes, { transforms: [mesh], materials: [] });
+    expect(pipeline.setMeshes).toHaveBeenNthCalledWith(1, scene.meshes, { transforms: [mesh], materials: [], geometries: [] });
     expect(pipeline.setMeshes).toHaveBeenCalledTimes(1);
   });
 

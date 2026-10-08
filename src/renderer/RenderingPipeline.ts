@@ -1,5 +1,6 @@
 import Camera from '../scene/Camera';
 import Mesh from '../scene/Mesh';
+import Geometry from '../scene/Geometry';
 import OpenPBRMaterial from '../scene/OpenPBRMaterial';
 import { Scene, SceneBackground, SceneLight } from '../scene/Scene';
 import { ColorRGB } from '../types';
@@ -160,6 +161,7 @@ export interface RenderingPipeline {
   /** Returns true when scene geometry, materials, or instance transforms changed. */
   setMeshes(meshes: Mesh[], update?: {
     transforms?: readonly Mesh[];
+    geometries?: readonly Geometry[];
     materials?: readonly OpenPBRMaterial[];
   }): boolean;
   /** Changes the software memory guard used when packing material textures. */

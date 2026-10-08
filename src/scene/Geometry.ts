@@ -52,6 +52,11 @@ export type GeometryData = Record<AttributeName, Attribute<Float32Array>> & {
 export default class Geometry {
   /** Incremented by `markUpdated()`. */
   version = 0;
+  /**
+   * Hint that vertices change often (skinning, morph targets). Keeps a built-in
+   * BVH2 layout that can be refit in place. Default `false`.
+   */
+  dynamic = false;
   position: Attribute<Float32Array>;
   normal: Attribute<Float32Array>;
   tangent?: Attribute<Float32Array>;

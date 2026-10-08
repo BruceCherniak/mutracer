@@ -61,6 +61,7 @@ import {
   estimateEnvironmentPower,
   packIESProfiles
 } from './lightSampling';
+import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged } from './geometryUpdates';
 import Geometry, { Attribute } from '../scene/Geometry';
 import { updateMeshInstances, updateMeshInstanceTransforms } from './prepareMeshBVH';
 import { mergeMeshesToGeometry } from './mergeMeshesToGeometry';
@@ -127,18 +128,22 @@ class WebGLRayTracePass {
   private _preparedMeshData?: ReturnType<typeof updateMeshInstances>;
   private _materialChanges = new MaterialChangeTracker();
   private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean; materials: Set<OpenPBRMaterial> };
+  private _pendingGeometryUpdates = new Set<Geometry>();
   private _needsUpdateMeshData = true;
   private _needsRefitTLAS = false;
   private _dirtyTransformMeshes = new Set<Mesh>();
   private _tlas?: FlattendBVH;
   private _bvhData?: Float32Array;
   private _instancesData?: Float32Array;
+  private _materialIndexData?: Float32Array;
   private _meshSnapshot: {
     mesh: Mesh;
     geometry: Mesh['geometry'];
     materials: OpenPBRMaterial[];
     materialVersions: number[];
     geometryVersion: number;
+    positionArray: Float32Array;
+    indexArray: Geometry['indices']['array'];
     uvProjection: Mesh['uvProjection'];
     displacementUvProjection: Mesh['displacementUvProjection'];
     matrix: number[];
@@ -385,11 +390,11 @@ class WebGLRayTracePass {
     return changed;
   }
 
-  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; materials?: readonly OpenPBRMaterial[] }) {
+  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[] }) {
     if (update && this._preparedMeshData && this._materialData &&
       !this._needsUpdateMeshData && meshes === this._meshes) {
       const change = this._materialChanges.classify(update.materials ?? []);
-      if (change.level !== 'geometry') {
+      if (change.level !== 'geometry' && canUpdateGeometries(this._preparedMeshData, update.geometries ?? [])) {
         if (update.materials?.length) {
           const pending = this._pendingMaterialUpdate;
           this._pendingMaterialUpdate = { level: pending?.level === 'textures' ? 'textures' : change.level,
@@ -398,13 +403,15 @@ class WebGLRayTracePass {
             materials: new Set([...(pending?.materials ?? []), ...update.materials]) };
           this._meshSnapshot.forEach(item => { item.materialVersions = item.materials.map(m => m.version); });
         }
+        for (const geometry of update.geometries ?? []) this._pendingGeometryUpdates.add(geometry);
+        for (const item of this._meshSnapshot) if (this._pendingGeometryUpdates.has(item.geometry)) item.geometryVersion = item.geometry.version;
         for (const mesh of update.transforms ?? []) {
           const item = this._snapshotByMesh.get(mesh);
           if (!item) continue;
           for (let i = 0; i < 16; i++) item.matrix[i] = mesh.matrixWorld[i];
           this._dirtyTransformMeshes.add(mesh); this._needsRefitTLAS = true;
         }
-        return !!update.materials?.length || !!update.transforms?.length;
+        return !!update.materials?.length || !!update.transforms?.length || !!update.geometries?.length;
       }
     }
     const materialChange = !!update?.materials?.length;
@@ -414,6 +421,7 @@ class WebGLRayTracePass {
       materials: mesh.materials.slice(),
       materialVersions: mesh.materials.map(material => material.version),
       geometryVersion: mesh.geometry.version,
+      positionArray: mesh.geometry.position.array, indexArray: mesh.geometry.indices.array,
       uvProjection: mesh.uvProjection,
       displacementUvProjection: mesh.displacementUvProjection,
       matrix: Array.from(mesh.matrixWorld as ArrayLike<number>)
@@ -439,13 +447,13 @@ class WebGLRayTracePass {
       if (
         prev &&
         item.geometry === prev.geometry &&
-        item.geometryVersion !== prev.geometryVersion
+         (item.geometryVersion !== prev.geometryVersion || item.positionArray !== prev.positionArray || item.indexArray !== prev.indexArray)
       ) {
         const usesDisplacement =
           !!item.materials[0]?.displacementMap &&
           Math.abs(item.materials[0].displacementScale) > 1e-6;
         if (
-          usesDisplacement ||
+          usesDisplacement || geometryTopologyChanged(this._preparedMeshData, item.geometry) ||
           !item.geometry.bvh ||
           !refitBLAS(item.geometry.bvh, item.geometry)
         ) {
@@ -490,6 +498,7 @@ class WebGLRayTracePass {
   }
 
   private _updateMeshData() {
+    this._pendingGeometryUpdates.clear();
     this._needsUpdateMeshData = false;
 
     const res = updateMeshInstances(this._meshes);
@@ -521,7 +530,7 @@ class WebGLRayTracePass {
         setDataTexture(
           this._matIndexBufferTex,
           // TODO currently int texture doesn't work
-          new Float32Array(mergedGeometry.materialIndex.array),
+          this._materialIndexData = new Float32Array(mergedGeometry.materialIndex.array),
           4
         );
     }
@@ -629,6 +638,38 @@ class WebGLRayTracePass {
 
       materialData.setToPass(pass);
     });
+  }
+
+  private _updateGeometryData() {
+    const res = this._preparedMeshData!, tlas = this._tlas!;
+    const update = updatePreparedGeometries(res, this._pendingGeometryUpdates);
+    for (const { first, count } of update.vertices) {
+      for (const [attribute, texture] of [
+        [res.geometry.position, this._positionBufferTex], [res.geometry.normal, this._normalBufferTex],
+        [res.geometry.tangent, this._tangentBufferTex], [res.geometry.color, this._colorBufferTex],
+        [res.geometry.uv, this._uvBufferTex], [res.geometry.uv1, this._uv1BufferTex]
+      ] as const) if (attribute) texture.updateDataRange(this._renderer.gl, attribute.array,
+        first * attribute.itemSize * 4, count * attribute.itemSize * 4);
+      const material = this._materialIndexData!;
+      for (let i = first * 4; i < (first + count) * 4; i++) material[i] = res.geometry.materialIndex!.array[i];
+      this._matIndexBufferTex.updateDataRange(this._renderer.gl, material, first * 16, count * 16);
+    }
+    for (const mesh of update.meshes) this._dirtyTransformMeshes.add(mesh);
+    if (update.relocated) for (const binding of res.instanceBindings) this._dirtyTransformMeshes.add(binding.mesh);
+    if (update.resized) {
+      res.instances = updateMeshInstanceTransforms(res.instanceBindings);
+      refitTLAS(tlas, res.instances, res.blases);
+      const blas = new Float32Array(concatBLASBuffers(res.blases));
+      this._bvhData = new Float32Array(tlas.buffer.byteLength / 4 + blas.length);
+      this._bvhData.set(new Float32Array(tlas.buffer)); this._bvhData.set(blas, tlas.buffer.byteLength / 4);
+      setDataTexture(this._bvhBufferTex, this._bvhData, 4);
+      this._tracePasses.forEach(pass => pass.setUniform('bvhColumns', textureDimensionsFromArray(this._bvhData!.length / 4).columnsLog));
+    } else for (const { blas, offset } of update.blases) {
+      const target = tlas.buffer.byteLength + offset;
+      new Uint8Array(this._bvhData!.buffer).set(new Uint8Array(blas.buffer), target);
+      this._bvhBufferTex.updateDataRange(this._renderer.gl, this._bvhData!, target, blas.buffer.byteLength);
+    }
+    this._needsRefitTLAS = true; this._pendingGeometryUpdates.clear(); this._debugBvhData = undefined;
   }
 
   private _refitMeshInstances() {
@@ -877,7 +918,9 @@ class WebGLRayTracePass {
   prepare(): void {
     if (this._needsUpdateMeshData) {
       this._updateMeshData();
-    } else if (this._needsRefitTLAS) this._refitMeshInstances();
+    }
+    if (this._pendingGeometryUpdates.size) this._updateGeometryData();
+    if (this._needsRefitTLAS) this._refitMeshInstances();
 
     if (this._pendingMaterialUpdate) this._updateMaterialData();
 

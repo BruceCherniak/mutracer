@@ -31,7 +31,7 @@ function computeGeometryBounds(geometry: Geometry) {
   return [min, max] as [vec3.Vec3Array, vec3.Vec3Array];
 }
 
-function getBvhBounds(geometry: Geometry) {
+export function getBvhBounds(geometry: Geometry) {
   const bvh = geometry.bvh!;
   const floats = new Float32Array(bvh.buffer);
   if (bvh.layout === 'bvh4') {
@@ -843,6 +843,7 @@ function prepareMeshGeometryBvh(mesh: Mesh) {
   if (!geometry.tangent && geometry.uv) generateVertexTangents(geometry);
   const heightMap = getMeshDisplacementMap(mesh);
   const displacementScale = heightMap ? getMeshDisplacementScale(mesh) : 0;
+  if (geometry.dynamic && geometry.bvh?.builder !== 'builtin') geometry.bvh = undefined;
   if (!geometry.bvh) {
     const trianglesDisplacement =
       Math.abs(displacementScale) > 1e-6
@@ -944,10 +945,13 @@ export function updateMeshInstances(meshes: Mesh[]) {
     })
     .filter((instance) => instance != null) as TLASInstance[];
 
-  const geometry = mergeGeometry(geometries, globalMaterialIndicesMap);
+  const geometryRegions = new Map<Geometry, { vertexOffset: number; indexOffset: number; materialIndices: number[] }>();
+  const geometry = mergeGeometry(geometries, globalMaterialIndicesMap, geometryRegions);
 
   return {
     geometry,
+    geometries,
+    geometryRegions,
     instances,
     materials,
     instanceBindings,
@@ -963,7 +967,8 @@ export function updateMeshInstances(meshes: Mesh[]) {
 
 function mergeGeometry(
   geometries: Geometry[],
-  globalMaterialIndicesMap: number[][]
+  globalMaterialIndicesMap: number[][],
+  regions: Map<Geometry, { vertexOffset: number; indexOffset: number; materialIndices: number[] }>
 ) {
   const totalVertexCount = geometries.reduce(
     (sum, geo) => sum + Geometry.getVertexCount(geo),
@@ -1011,6 +1016,7 @@ function mergeGeometry(
   geometries.forEach((geometry, idx) => {
     const vertexCount = Geometry.getVertexCount(geometry);
     const globalMaterialIndex = globalMaterialIndicesMap[idx];
+    regions.set(geometry, { vertexOffset: currentVertex, indexOffset: currentIndex, materialIndices: globalMaterialIndex });
 
     positionAttrib.array.set(geometry.position!.array, currentVertex * 3);
     normalAttrib.array.set(geometry.normal!.array, currentVertex * 3);

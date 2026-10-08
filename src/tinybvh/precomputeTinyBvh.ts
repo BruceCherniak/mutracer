@@ -39,9 +39,17 @@ export async function precomputeTinyBvh(
   onProgress?: (progress: PrecomputeProgress) => void,
   { onlyMissing = false }: { onlyMissing?: boolean } = {}
 ): Promise<TinyBvhPrecomputeStats> {
-  meshes = meshes.filter((mesh) =>
-    onlyMissing ? meshNeedsPrecompute(mesh) : mesh.geometry.position.array.length > 0
-  );
+  const dynamicMeshes = meshes.filter(mesh => mesh.geometry.dynamic);
+  if (dynamicMeshes.length) {
+    const prepared = prepareForPrecompute(dynamicMeshes);
+    const result = await precompute(prepared.geometries, prepared.displacementScales,
+      prepared.trianglesDisplacements, undefined, prepared.tessellations, onProgress, prepared.projectiveDisplacements);
+    resolveFromPrecompute(result, prepared);
+  }
+  meshes = meshes.filter(mesh => !mesh.geometry.dynamic).filter(mesh =>
+    onlyMissing ? meshNeedsPrecompute(mesh) : mesh.geometry.position.array.length > 0);
+  if (!meshes.length) return { builder: 'tinybvh', requestedLayout, layout: 'bvh2',
+    geometryCount: dynamicMeshes.length, bvhTimeMs: 0, bvhBuildTimeMs: 0, bvhRefitTimeMs: 0, bvhRefitCount: 0 };
   const geometries = new Set(
     meshes.flatMap((mesh) => {
       const prepared = getCachedPreparedMeshGeometry(mesh);

@@ -54,6 +54,7 @@ export type BvhLayout = 'bvh2' | 'bvh4' | 'bvh-gpu' | 'cwbvh';
 export interface FlattendBVH {
   /** CPU builder that produced the GPU traversal data. */
   builder?: 'builtin' | 'tinybvh';
+  buildSurfaceArea?: number;
   maxDepth: number;
   /** Largest leaf fan-out; used with maxDepth to size the traversal stack. */
   maxLeafPrimitives?: number;
@@ -273,6 +274,7 @@ export function flattenBvh(
   const flat: number[] = [];
   const instancesArr: number[] | undefined = isTLAS ? [] : undefined;
 
+  let buildSurfaceArea = 0;
   let maxDepth = 1;
   let maxLeafPrimitives = 1;
   let instanceCount = 0;
@@ -280,6 +282,7 @@ export function flattenBvh(
     maxDepth = Math.max(depth, maxDepth);
 
     const bounds = node.bounds;
+    if (!isTLAS) buildSurfaceArea += surfaceArea(bounds);
     const start = flat.length;
 
     flat.push(
@@ -399,6 +402,7 @@ export function flattenBvh(
   }
   return {
     builder: 'builtin',
+    buildSurfaceArea: isTLAS ? undefined : buildSurfaceArea,
     maxDepth: bvh ? maxDepth : 0,
     maxLeafPrimitives: bvh ? maxLeafPrimitives : 0,
     buffer: floatView.buffer,
@@ -663,10 +667,13 @@ export function refitTLAS(
   };
 }
 
+/** Dynamic BLASes rebuild when their total node surface area doubles. */
+export const DYNAMIC_BLAS_REBUILD_RATIO = 2;
+
 /** Refit a legacy BVH2 BLAS after vertex deformation, preserving topology. */
 export function refitBLAS(
   flattened: FlattendBVH,
-  geometry: Pick<Geometry, 'position'>
+  geometry: Pick<Geometry, 'position'> & Partial<Pick<Geometry, 'dynamic'>>
 ) {
   if ((flattened.layout ?? 'bvh2') !== 'bvh2' || !flattened.buffer.byteLength) {
     return false;
@@ -674,6 +681,7 @@ export function refitBLAS(
   const floats = new Float32Array(flattened.buffer);
   const ints = new Int32Array(flattened.buffer);
   const positions = geometry.position.array;
+  let beforeArea = 0, afterArea = 0;
 
   function addVertex(bounds: Box3, vertexIndex: number) {
     const offset = vertexIndex * geometry.position.itemSize;
@@ -692,6 +700,8 @@ export function refitBLAS(
   function refitNode(index: number): Box3 {
     const base = index * 4;
     const bounds = new Box3();
+    const dx = floats[base + 4] - floats[base], dy = floats[base + 5] - floats[base + 1], dz = floats[base + 6] - floats[base + 2];
+    beforeArea += 2 * (dx * dz + dx * dy + dz * dy);
     const primitiveCountOrChild = ints[base + 3];
     if (primitiveCountOrChild >= 0) {
       unionBounds(
@@ -707,6 +717,7 @@ export function refitBLAS(
         addVertex(bounds, ints[triangleOffset + 2]);
       }
     }
+    afterArea += surfaceArea(bounds);
     floats[base] = bounds.min[0];
     floats[base + 1] = bounds.min[1];
     floats[base + 2] = bounds.min[2];
@@ -717,7 +728,8 @@ export function refitBLAS(
   }
 
   refitNode(0);
-  return true;
+  flattened.buildSurfaceArea ??= beforeArea;
+  return !geometry.dynamic || !(afterArea > flattened.buildSurfaceArea * DYNAMIC_BLAS_REBUILD_RATIO);
 }
 
 function makeBLASPrimitiveInfo(

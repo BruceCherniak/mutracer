@@ -39,6 +39,7 @@ export type GeometryForTransfer = Record<
     }
   | undefined
 > & {
+  dynamic?: boolean;
   bvh?: BVHForTransfer;
   tessellationStats?: DisplacementTessellationStats;
 };
@@ -155,6 +156,7 @@ export function convertGeometryToTransfer(
     outputBuffers.push(geometry.bvh.buffer);
     transferGeometry.bvh = geometry.bvh;
   }
+  transferGeometry.dynamic = geometry.dynamic;
   transferGeometry.tessellationStats =
     getDisplacementTessellationStats(geometry);
   return transferGeometry;
@@ -178,6 +180,7 @@ export function convertGeometryFromTransfer(geometry: GeometryForTransfer) {
         geometry.indices.itemSize
       )
   });
+  ret.dynamic = geometry.dynamic ?? false;
   ret.bvh = geometry.bvh;
   if (geometry.tessellationStats) {
     setDisplacementTessellationStats(ret, geometry.tessellationStats);
@@ -397,7 +400,7 @@ export async function precompute(
       : undefined;
     try {
       const start = typeof performance === 'undefined' ? Date.now() : performance.now();
-      const built = await (buildBVH
+      const built = await (buildBVH && !geo.dynamic
         ? buildBVH(geo, displacementScale, trianglesDisplacement, refitKey)
         : flattenBvh(
             buildBLAS(geo, displacementScale, trianglesDisplacement),

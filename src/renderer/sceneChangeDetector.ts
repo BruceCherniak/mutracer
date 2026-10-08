@@ -1,4 +1,5 @@
 import Mesh from '../scene/Mesh';
+import Geometry from '../scene/Geometry';
 import OpenPBRMaterial, { materialTextureKeys } from '../scene/OpenPBRMaterial';
 import Texture from '../scene/Texture';
 import { Scene, SceneBackground } from '../scene/Scene';
@@ -6,6 +7,7 @@ import { Scene, SceneBackground } from '../scene/Scene';
 export interface SceneChanges {
   meshes: 'none' | 'incremental' | 'full';
   transforms: Mesh[];
+  geometries: Geometry[];
   materials: OpenPBRMaterial[];
   lights: boolean;
   background: boolean;
@@ -67,10 +69,29 @@ function texturesChanged(material: OpenPBRMaterial, previous: readonly unknown[]
   return i !== previous.length;
 }
 
+const geometryAttributes = ['position', 'normal', 'tangent', 'uv', 'uv1', 'color', 'indices', 'materialIndex'] as const;
+function captureGeometryStorage(geometry: Geometry, out: unknown[]) {
+  let i = 0;
+  for (const key of geometryAttributes) {
+    const attribute = geometry[key];
+    out[i++] = attribute?.array; out[i++] = attribute?.array.length; out[i++] = attribute?.itemSize;
+  }
+}
+function geometryStorageMatches(geometry: Geometry, storage: unknown[]) {
+  let i = 0;
+  for (const key of geometryAttributes) {
+    const attribute = geometry[key];
+    if (storage[i++] !== attribute?.array || storage[i++] !== attribute?.array.length || storage[i++] !== attribute?.itemSize) return false;
+  }
+  return true;
+}
+
 interface MeshSnapshot {
   mesh: Mesh;
   geometry: Mesh['geometry'];
   version: number;
+  dynamic: boolean;
+  storage: unknown[];
   materials: OpenPBRMaterial[];
   simplification: Mesh['geometrySimplificationRatio'];
   uvProjection: Mesh['uvProjection'];
@@ -99,6 +120,7 @@ export class SceneChangeDetector {
     const old = this._snapshot;
     let full = !old || old.meshList !== scene.meshes || old.meshes.length !== scene.meshes.length;
     const transforms: Mesh[] = [];
+    const geometries = new Set<Geometry>();
     const materials: OpenPBRMaterial[] = [];
     const seen = this._seen;
     seen.clear();
@@ -106,11 +128,12 @@ export class SceneChangeDetector {
       const mesh = scene.meshes[i];
       const prev = old?.meshes[i];
       if (!prev || prev.mesh !== mesh || prev.geometry !== mesh.geometry ||
-        prev.version !== mesh.geometry.version || prev.materials.length !== mesh.materials.length ||
+        prev.dynamic !== mesh.geometry.dynamic || !geometryStorageMatches(mesh.geometry, prev.storage) || prev.materials.length !== mesh.materials.length ||
         prev.materials.some((m, k) => m !== mesh.materials[k]) ||
         prev.simplification !== mesh.geometrySimplificationRatio ||
         prev.uvProjection !== mesh.uvProjection || prev.displacementUvProjection !== mesh.displacementUvProjection ||
         prev.faceLevels !== mesh.displacementFaceLevels || prev.faceHash !== mesh.displacementFaceLevelsHash) full = true;
+      if (prev?.geometry === mesh.geometry && prev.version !== mesh.geometry.version) geometries.add(mesh.geometry);
       if (prev?.mesh === mesh) {
         for (let k = 0; k < 16; k++) {
           if (!Object.is(mesh.matrixWorld[k], old!.matrices[i * 16 + k])) {
@@ -129,8 +152,8 @@ export class SceneChangeDetector {
     const lights = scene.lights.map(snapshotFields);
     const background = backgroundSnapshot(scene.background);
     const changes: SceneChanges = {
-      meshes: full ? 'full' : transforms.length || materials.length ? 'incremental' : 'none',
-      transforms, materials,
+      meshes: full ? 'full' : transforms.length || materials.length || geometries.size ? 'incremental' : 'none',
+      transforms, materials, geometries: [...geometries],
       lights: !old || old.lightList !== scene.lights || lights.length !== old.lights.length ||
         lights.some((light, i) => !snapshotsEqual(light, old.lights[i])),
       background: !old || !snapshotsEqual(background, old.background)
@@ -147,13 +170,14 @@ export class SceneChangeDetector {
       scene.meshes.forEach((mesh, i) => {
         let item = next!.meshes[i];
         if (!item) {
-          item = { mesh, geometry: mesh.geometry, version: mesh.geometry.version,
+          item = { mesh, geometry: mesh.geometry, version: mesh.geometry.version, dynamic: mesh.geometry.dynamic, storage: [],
             materials: [], uvProjection: mesh.uvProjection, displacementUvProjection: mesh.displacementUvProjection,
             simplification: mesh.geometrySimplificationRatio, faceLevels: mesh.displacementFaceLevels,
             faceHash: mesh.displacementFaceLevelsHash };
           next!.meshes[i] = item;
         }
         item.mesh = mesh; item.geometry = mesh.geometry; item.version = mesh.geometry.version;
+        item.dynamic = mesh.geometry.dynamic; captureGeometryStorage(mesh.geometry, item.storage);
         item.materials.length = mesh.materials.length;
         for (let k = 0; k < mesh.materials.length; k++) item.materials[k] = mesh.materials[k];
         item.uvProjection = mesh.uvProjection; item.displacementUvProjection = mesh.displacementUvProjection;
