@@ -100,3 +100,23 @@ it('detects mesh projection overrides as changes requiring instance data updates
   d.detect(scene); d.commit(); mesh.uvProjection='triplanar'; expect(d.detect(scene).meshes).toBe('full'); d.commit();
   mesh.displacementUvProjection='spherical'; expect(d.detect(scene).meshes).toBe('full');
 });
+
+
+it('keeps reporting the latest uncommitted pose and material versions throughout animation', () => {
+  const { scene, detector, mesh, material } = fixture();
+  for (let frame = 1; frame <= 200; frame++) {
+    mesh.matrixWorld[12] = frame;
+    material.markUpdated();
+    const first = detector.detect(scene);
+    expect(first.transforms).toEqual([mesh]); expect(first.materials).toEqual([material]);
+    mesh.matrixWorld[13] = frame * 2;
+    expect(detector.detect(scene)).toEqual(first);
+    detector.commit();
+    expect(detector.detect(scene).meshes).toBe('none');
+  }
+  scene.meshes.push(new Mesh(mesh.geometry, material));
+  expect(detector.detect(scene).meshes).toBe('full'); detector.commit();
+  mesh.matrixWorld[14] = 7;
+  expect(detector.detect(scene).transforms).toEqual([mesh]); detector.commit();
+  expect(detector.detect(scene).meshes).toBe('none');
+});

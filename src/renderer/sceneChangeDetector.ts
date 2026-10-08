@@ -40,8 +40,17 @@ function backgroundSnapshot(background: SceneBackground | undefined) {
   return background ? snapshotFields(background) : [undefined];
 }
 
-function materialTextures(material: OpenPBRMaterial) {
-  return materialTextureKeys.flatMap(key => { const value = material[key]; return typeof value === 'number' ? [] : snapshotTexture(value); });
+function captureMaterialTextures(material: OpenPBRMaterial, out: unknown[]) {
+  let i = 0;
+  for (const key of materialTextureKeys) {
+    const texture = material[key];
+    if (typeof texture === 'number') continue;
+    if (!texture) { out[i++] = undefined; continue; }
+    out[i++] = texture; out[i++] = texture.version; out[i++] = texture.image;
+    out[i++] = texture.flipY; out[i++] = texture.uvScale; out[i++] = texture.uvOffset;
+    out[i++] = texture.uvChannel;
+  }
+  out.length = i;
 }
 
 function texturesChanged(material: OpenPBRMaterial, previous: readonly unknown[]) {
@@ -83,13 +92,16 @@ interface Snapshot {
 export class SceneChangeDetector {
   private _snapshot?: Snapshot;
   private _pending?: Snapshot;
+  private _spare?: Snapshot;
+  private _seen = new Set<OpenPBRMaterial>();
 
   detect(scene: Scene): SceneChanges {
     const old = this._snapshot;
     let full = !old || old.meshList !== scene.meshes || old.meshes.length !== scene.meshes.length;
     const transforms: Mesh[] = [];
     const materials: OpenPBRMaterial[] = [];
-    const seen = new Set<OpenPBRMaterial>();
+    const seen = this._seen;
+    seen.clear();
     for (let i = 0; i < scene.meshes.length; i++) {
       const mesh = scene.meshes[i];
       const prev = old?.meshes[i];
@@ -124,21 +136,50 @@ export class SceneChangeDetector {
       background: !old || !snapshotsEqual(background, old.background)
     };
     if (changes.meshes !== 'none' || changes.lights || changes.background) {
-      const matrices = new Float64Array(scene.meshes.length * 16);
-      scene.meshes.forEach((mesh, i) => matrices.set(mesh.matrixWorld, i * 16));
-      this._pending = {
-        meshList: scene.meshes,
-        meshes: scene.meshes.map(mesh => ({ mesh, geometry: mesh.geometry, version: mesh.geometry.version,
-          materials: mesh.materials.slice(), uvProjection: mesh.uvProjection, displacementUvProjection: mesh.displacementUvProjection, simplification: mesh.geometrySimplificationRatio,
-          faceLevels: mesh.displacementFaceLevels, faceHash: mesh.displacementFaceLevelsHash })),
-        matrices,
-        materials: new Map([...seen].map(m => [m, { version: m.version, textures: materialTextures(m) }])),
-        lightList: scene.lights, lights, background
-      };
+      // Write into the other buffer: detect never mutates committed state.
+      // Repeated detects without commit overwrite the same pending buffer.
+      let next = this._spare;
+      if (!next || next.meshList !== scene.meshes || next.meshes.length !== scene.meshes.length) {
+        next = { meshList: scene.meshes, meshes: [], matrices: new Float64Array(scene.meshes.length * 16),
+          materials: new Map(), lightList: scene.lights, lights: [], background: [] };
+        this._spare = next;
+      }
+      scene.meshes.forEach((mesh, i) => {
+        let item = next!.meshes[i];
+        if (!item) {
+          item = { mesh, geometry: mesh.geometry, version: mesh.geometry.version,
+            materials: [], uvProjection: mesh.uvProjection, displacementUvProjection: mesh.displacementUvProjection,
+            simplification: mesh.geometrySimplificationRatio, faceLevels: mesh.displacementFaceLevels,
+            faceHash: mesh.displacementFaceLevelsHash };
+          next!.meshes[i] = item;
+        }
+        item.mesh = mesh; item.geometry = mesh.geometry; item.version = mesh.geometry.version;
+        item.materials.length = mesh.materials.length;
+        for (let k = 0; k < mesh.materials.length; k++) item.materials[k] = mesh.materials[k];
+        item.uvProjection = mesh.uvProjection; item.displacementUvProjection = mesh.displacementUvProjection;
+        item.simplification = mesh.geometrySimplificationRatio;
+        item.faceLevels = mesh.displacementFaceLevels; item.faceHash = mesh.displacementFaceLevelsHash;
+        next!.matrices.set(mesh.matrixWorld, i * 16);
+      });
+      for (const material of next.materials.keys()) if (!seen.has(material)) next.materials.delete(material);
+      for (const material of seen) {
+        let item = next.materials.get(material);
+        if (!item) { item = { version: material.version, textures: [] }; next.materials.set(material, item); }
+        item.version = material.version;
+        captureMaterialTextures(material, item.textures);
+      }
+      next.lightList = scene.lights; next.lights = lights; next.background = background;
+      this._pending = next;
     } else this._pending = old;
     return changes;
   }
 
-  commit() { if (this._pending) this._snapshot = this._pending; this._pending = undefined; }
-  reset() { this._snapshot = this._pending = undefined; }
+  commit() {
+    if (this._pending && this._pending !== this._snapshot) {
+      this._spare = this._snapshot;
+      this._snapshot = this._pending;
+    }
+    this._pending = undefined;
+  }
+  reset() { this._snapshot = this._pending = this._spare = undefined; this._seen.clear(); }
 }
