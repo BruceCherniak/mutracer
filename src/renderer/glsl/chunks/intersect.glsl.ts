@@ -1,3 +1,4 @@
+import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel';
 import { createShaderMixin, glsl, Shader } from '../../shader';
 import OpenPBRMaterial from '../../../scene/OpenPBRMaterial';
 
@@ -7,7 +8,7 @@ function getBVHTraverseCode(
   initialTMax = 'RAY_MAX_DISTANCE'
 ) {
   const intersectTriangles = glsl`
-        ivec3 vertexOffset = ivec3(floatBitsToInt(fetchIns(insIdx * 9).y));
+        ivec3 vertexOffset = ivec3(floatBitsToInt(fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE}).y));
         for (int k = 0; k < primitiveCount; k++) {
           int triangleIndex = primitiveOffset + k;
           ${skipTriangleCode}
@@ -26,7 +27,7 @@ function getBVHTraverseCode(
             vec3 e2 = tri.p2 - tri.p0;
             vec3 faceNormal = normalize(cross(e1, e2));
             int sideMaterialIndex = int(unpackMaterialIndex(
-              floatBitsToInt(fetchIns(insIdx * 9).z)
+              floatBitsToInt(fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE}).z)
             ).x);
             bool materialDoubleSided = fetchMatData(
               sideMaterialIndex * MAT_DATA_SIZE + 23
@@ -75,10 +76,10 @@ function getBVHTraverseCode(
       }
       else {
         mat4 w2l = mat4(
-          fetchIns(insIdx * 9 + 1),
-          fetchIns(insIdx * 9 + 2),
-          fetchIns(insIdx * 9 + 3),
-          fetchIns(insIdx * 9 + 4)
+          fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE} + 1),
+          fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE} + 2),
+          fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE} + 3),
+          fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE} + 4)
         );
         o = (w2l * vec4(ray.o, 1.0)).xyz;
         d = (w2l * vec4(ray.d, 0.0)).xyz;
@@ -89,7 +90,7 @@ function getBVHTraverseCode(
     }
 
     int bufferOff = insIdx < 0 ? 0 : blasOffset;
-    uint encodedBlasOffset = insIdx < 0 ? 0u : floatBitsToUint(fetchIns(insIdx * 9).x);
+    uint encodedBlasOffset = insIdx < 0 ? 0u : floatBitsToUint(fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE}).x);
     int blasLayout = int(encodedBlasOffset >> 30u);
     int blasInsOffset = int(encodedBlasOffset & 0x3fffffffu);
     int primitiveCount = 0;
@@ -539,7 +540,10 @@ int randomPickMaterial(ivec4 m0, ivec4 m1, ivec4 m2, vec3 bary) {
 }
 
 
+vec4 fetchIns(int i);
+
 void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric, ivec3 index) {
+  vec2 projectionOverride = fetchIns(si.instanceIndex * ${INSTANCE_VEC4_STRIDE} + 9).xy;
   si.hit = true;
   si.position = barycentric.x * tri.p0 + barycentric.y * tri.p1 + barycentric.z * tri.p2;
   ivec2 i0 = unpackTexel(index.x, vertexColumns);
@@ -608,7 +612,7 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
       + barycentric.z * secondaryUv2;
 
     vec4 uvInfo = fetchMatData(si.materialIndex * MAT_DATA_SIZE + 7);
-    int uvProjection = int(uvInfo.r);
+    int uvProjection = int(projectionOverride.x >= 0.0 ? projectionOverride.x : uvInfo.r);
     if (uvProjection > 0) {
       uv = projectUV(uvProjection, si.position, normal, uvInfo.zw);
       secondaryUv = uv;
@@ -646,7 +650,7 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
     vec2 duv1 = uv0 - uv2;
     vec2 duv2 = uv1 - uv2;
     vec4 displacementInfo = fetchMatData(si.materialIndex * MAT_DATA_SIZE + 8);
-    int bumpProjection = int(displacementInfo.z);
+    int bumpProjection = int(projectionOverride.y >= 0.0 ? projectionOverride.y : displacementInfo.z);
     float bumpUvScale = displacementInfo.w;
     vec2 bumpUv = rawUv;
     if (bumpProjection > 0) {
@@ -811,20 +815,20 @@ ${getBVHTraverseCode(glsl`
 
   if (isHit) {
     si.instanceIndex = hitInsIdx;
-    si.materialIndex = int(unpackMaterialIndex(floatBitsToInt(fetchIns(hitInsIdx * 9).z)).x);
+    si.materialIndex = int(unpackMaterialIndex(floatBitsToInt(fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE}).z)).x);
     // fetchAttributes before transform to world space.
     fetchAttributes(si, hitTri, hitBarycentric, hitIndex);
     mat4 l2w = mat4(
-      fetchIns(hitInsIdx * 9 + 5),
-      fetchIns(hitInsIdx * 9 + 6),
-      fetchIns(hitInsIdx * 9 + 7),
-      fetchIns(hitInsIdx * 9 + 8)
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 5),
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 6),
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 7),
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 8)
     );
     mat4 w2l = mat4(
-      fetchIns(hitInsIdx * 9 + 1),
-      fetchIns(hitInsIdx * 9 + 2),
-      fetchIns(hitInsIdx * 9 + 3),
-      fetchIns(hitInsIdx * 9 + 4)
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 1),
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 2),
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 3),
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 4)
     );
     mat3 normalTransform = transpose(mat3(w2l));
     si.faceNormal = normalize(normalTransform * hitFaceNormal);
@@ -873,19 +877,19 @@ ${getBVHTraverseCode(
 
   if (isHit) {
     si.instanceIndex = hitInsIdx;
-    si.materialIndex = int(unpackMaterialIndex(floatBitsToInt(fetchIns(hitInsIdx * 9).z)).x);
+    si.materialIndex = int(unpackMaterialIndex(floatBitsToInt(fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE}).z)).x);
     fetchAttributes(si, hitTri, hitBarycentric, hitIndex);
     mat4 l2w = mat4(
-      fetchIns(hitInsIdx * 9 + 5),
-      fetchIns(hitInsIdx * 9 + 6),
-      fetchIns(hitInsIdx * 9 + 7),
-      fetchIns(hitInsIdx * 9 + 8)
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 5),
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 6),
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 7),
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 8)
     );
     mat4 w2l = mat4(
-      fetchIns(hitInsIdx * 9 + 1),
-      fetchIns(hitInsIdx * 9 + 2),
-      fetchIns(hitInsIdx * 9 + 3),
-      fetchIns(hitInsIdx * 9 + 4)
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 1),
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 2),
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 3),
+      fetchIns(hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 4)
     );
     mat3 normalTransform = transpose(mat3(w2l));
     si.faceNormal = normalize(normalTransform * hitFaceNormal);
@@ -921,7 +925,7 @@ ${getBVHTraverseCode(
 
   if (isOccluded) {
 #ifdef HAS_ALPHA
-    int materialIndex = int(unpackMaterialIndex(floatBitsToInt(fetchIns(insIdx * 9).z)).x);
+    int materialIndex = int(unpackMaterialIndex(floatBitsToInt(fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE}).z)).x);
     ivec2 i0 = unpackTexel(index.x, vertexColumns);
     ivec2 i1 = unpackTexel(index.y, vertexColumns);
     ivec2 i2 = unpackTexel(index.z, vertexColumns);
@@ -933,6 +937,7 @@ ${getBVHTraverseCode(
       materialIndex = randomPickMaterial(m0, m1, m2, barycentric);
     }
   
+    vec2 projectionOverride = fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE} + 9).xy;
     int ii = materialIndex * MAT_DATA_SIZE;
     // TODO: not hard coded the layout.
     int mapAlphaUsage = int(fetchMatData(ii + 5).a);
@@ -947,7 +952,7 @@ ${getBVHTraverseCode(
         // TODO Other mapping methods.
         vec2 uv = barycentric.x * uv0 + barycentric.y * uv1 + barycentric.z * uv2;
         vec4 uvInfo = fetchMatData(ii + 7);
-        int uvProjection = int(uvInfo.r);
+        int uvProjection = int(projectionOverride.x >= 0.0 ? projectionOverride.x : uvInfo.r);
         if (uvProjection > 0) {
           uv = projectUV(uvProjection, position, hitFaceNormal, uvInfo.zw);
         } else {
@@ -966,7 +971,7 @@ ${getBVHTraverseCode(
       vec2 uv2 = texelFetch(uvBuffer, i2, 0).xy;
       vec2 uv = barycentric.x * uv0 + barycentric.y * uv1 + barycentric.z * uv2;
       vec4 uvInfo = fetchMatData(ii + 7);
-      int uvProjection = int(uvInfo.r);
+      int uvProjection = int(projectionOverride.x >= 0.0 ? projectionOverride.x : uvInfo.r);
       if (uvProjection > 0) {
         uv = projectUV(uvProjection, position, hitFaceNormal, uvInfo.zw);
       } else {

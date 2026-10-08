@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { fromTHREECamera, fromTHREEScene } from '../../src/util/fromTHREE';
+import { fromTHREECamera, fromTHREEScene, THREESceneSync } from '../../src/util/fromTHREE';
 import Camera from '../../src/scene/Camera';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import RectLight from '../../src/scene/RectLight';
@@ -720,7 +720,7 @@ describe('Three.js scene conversion', () => {
     expect(result.background).toBe(environmentLight.map);
   });
 
-  it('reuses a converted environment light and refreshes it by version', () => {
+  it('creates fresh one-shot environment lights and reads the current version', () => {
     const scene = new THREE.Scene();
     const pixels = new Float32Array([1, 0.5, 0.25, 1]);
     const environment = new THREE.DataTexture(
@@ -738,14 +738,14 @@ describe('Three.js scene conversion', () => {
     const second = fromTHREEScene(scene).lights.find(
       (light) => light.type === 'EnvironmentLight'
     );
-    expect(second).toBe(first);
+    expect(second).not.toBe(first);
 
     pixels[0] = 0.25;
     environment.needsUpdate = true;
     const updated = fromTHREEScene(scene).lights.find(
       (light) => light.type === 'EnvironmentLight'
     );
-    expect(updated).toBe(first);
+    expect(updated).not.toBe(first);
     expect(updated?.type).toBe('EnvironmentLight');
     if (!updated || updated.type !== 'EnvironmentLight') return;
     expect(updated.map.version).toBe(environment.version);
@@ -858,7 +858,7 @@ describe('Three.js scene conversion', () => {
     const result = fromTHREEScene(scene);
 
     expect(result.meshes).toHaveLength(2);
-    expect(result.meshes[0].materials[0]).not.toBe(
+    expect(result.meshes[0].materials[0]).toBe(
       result.meshes[1].materials[0]
     );
     expect(result.meshes[0].materials[0].map).toBe(
@@ -866,7 +866,7 @@ describe('Three.js scene conversion', () => {
     );
   });
 
-  it('reuses converted geometry when a caller supplies a cache', () => {
+  it('retains converted geometry and BVH while syncing transforms', () => {
     const scene = new THREE.Scene();
     const sourceGeometry = new THREE.BoxGeometry();
     const mesh = new THREE.Mesh(
@@ -874,18 +874,19 @@ describe('Three.js scene conversion', () => {
       new THREE.MeshStandardMaterial()
     );
     scene.add(mesh);
-    const geometryCache = new WeakMap();
-
-    const first = fromTHREEScene(scene, { geometryCache });
+    const sync = new THREESceneSync(scene);
+    const first = sync.scene;
+    const firstGeometry = first.meshes[0].geometry;
     first.meshes[0].geometry.bvh = {
       buffer: new ArrayBuffer(32),
       maxDepth: 1
     };
     mesh.position.x = 2;
     mesh.updateMatrixWorld(true);
-    const second = fromTHREEScene(scene, { geometryCache });
+    sync.update();
+    const second = sync.scene;
 
-    expect(second.meshes[0].geometry).toBe(first.meshes[0].geometry);
+    expect(second.meshes[0].geometry).toBe(firstGeometry);
     expect(second.meshes[0].geometry.bvh).toBe(first.meshes[0].geometry.bvh);
     expect(second.meshes[0].matrixWorld[12]).toBe(2);
   });
@@ -914,7 +915,7 @@ describe('Three.js scene conversion', () => {
     const converted = fromTHREEScene(scene).meshes[0];
 
     expect(converted.geometry.uv).toBeUndefined();
-    expect(converted.materials[0].displacementUvProjection).toBe('triplanar');
+    expect(converted.displacementUvProjection).toBe('triplanar');
   });
 
   it('uses shared triplanar projection automatically for textures on a UV-less mesh', () => {
@@ -941,7 +942,7 @@ describe('Three.js scene conversion', () => {
     const converted = fromTHREEScene(scene).meshes[0];
 
     expect(converted.geometry.uv).toBeUndefined();
-    expect(converted.materials[0].uvProjection).toBe('triplanar');
+    expect(converted.uvProjection).toBe('triplanar');
   });
 });
 

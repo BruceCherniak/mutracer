@@ -6,9 +6,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
   Renderer,
   fromTHREECamera,
-  fromTHREEScene,
-  type FromTHREEGeometryCache,
-  type Scene
+  THREESceneSync
 } from 'claypt';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
@@ -16,6 +14,7 @@ import { showStatus } from './shared/status';
 const canvas = document.getElementById('main') as HTMLCanvasElement;
 const statusElement = document.getElementById('status')!;
 const rotateInput = document.getElementById('rotate') as HTMLInputElement;
+const roughnessInput = document.getElementById('roughness') as HTMLInputElement;
 
 // --- Three.js scene -------------------------------------------------------
 const threeScene = new THREE.Scene();
@@ -59,18 +58,15 @@ orbit.target.set(0, 0.4, 0);
 orbit.update();
 
 // --- ClayPT ---------------------------------------------------------------
-const renderer = new Renderer({ canvas });
+const renderer = new Renderer({ canvas, preferWebGPU: !new URLSearchParams(location.search).has('webgl') });
 renderer.bounces = 6;
 renderer.maxSamples = 512;
 
-// Reusing the cache keeps converted geometry (and its BVH) between updates.
-const geometryCache: FromTHREEGeometryCache = new WeakMap();
-let scene: Scene;
-function convertScene() {
-  threeScene.updateMatrixWorld();
-  scene = fromTHREEScene(threeScene, { geometryCache });
-}
-convertScene();
+const sync = new THREESceneSync(threeScene);
+roughnessInput.addEventListener('input', () => {
+  board.material.roughness = Number(roughnessInput.value);
+});
+window.addEventListener('pagehide', () => { sync.dispose(); renderer.dispose(); });
 
 function resize() {
   const ratio = Math.min(window.devicePixelRatio, 2);
@@ -86,12 +82,11 @@ function frame(time: number) {
   const delta = (time - lastTime) / 1000;
   lastTime = time;
   if (rotateInput.checked) {
-    // Transform edits produce a new scene description; the renderer only
-    // refits the instance transforms.
+    // WebGPU refits instance transforms; WebGL rebuilds its mesh data.
     pieces.rotation.y += delta * 0.3;
-    convertScene();
   }
-  const status = renderer.render(scene, fromTHREECamera(threeCamera));
+  sync.update();
+  const status = renderer.render(sync.scene, fromTHREECamera(threeCamera));
   showStatus(statusElement, renderer, status);
   requestAnimationFrame(frame);
 }

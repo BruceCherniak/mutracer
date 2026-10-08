@@ -1,3 +1,4 @@
+import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel';
 import { uvProjectionConstants } from '../../MergedMaterialData';
 import OpenPBRMaterial, {
   materialAlphaModeConstants
@@ -11,6 +12,7 @@ import OpenPBRMaterial, {
 const intersectionAlphaWgsl = /* wgsl */ `
 fn intersectionAlphaPasses(
   initialMaterialIndex: i32,
+  instanceIndex: i32,
   index: vec3i,
   hitBarycentric: vec3f,
   hitPosition: vec3f,
@@ -25,7 +27,9 @@ fn intersectionAlphaPasses(
     materialIndex = randomPickMaterial(m0, m1, m2, hitBarycentric);
   }
 
-  let ma = materialsBuffer[materialIndex];
+  var ma = materialsBuffer[materialIndex];
+  let projection = instancesBuffer[instanceIndex * ${INSTANCE_VEC4_STRIDE} + 9].x;
+  if (projection >= 0.0) { ma.uvProjection = projection; }
   var alpha = ma.alpha;
   if (USE_DIFFUSE_MAPS &&
       ma.mapAlphaUsage == ${OpenPBRMaterial.mapAlphaUsageAlpha}) {

@@ -64,6 +64,8 @@ interface MeshSnapshot {
   version: number;
   materials: OpenPBRMaterial[];
   simplification: Mesh['geometrySimplificationRatio'];
+  uvProjection: Mesh['uvProjection'];
+  displacementUvProjection: Mesh['displacementUvProjection'];
   faceLevels: Mesh['displacementFaceLevels'];
   faceHash: Mesh['displacementFaceLevelsHash'];
 }
@@ -95,6 +97,7 @@ export class SceneChangeDetector {
         prev.version !== mesh.geometry.version || prev.materials.length !== mesh.materials.length ||
         prev.materials.some((m, k) => m !== mesh.materials[k]) ||
         prev.simplification !== mesh.geometrySimplificationRatio ||
+        prev.uvProjection !== mesh.uvProjection || prev.displacementUvProjection !== mesh.displacementUvProjection ||
         prev.faceLevels !== mesh.displacementFaceLevels || prev.faceHash !== mesh.displacementFaceLevelsHash) full = true;
       if (prev?.mesh === mesh) {
         for (let k = 0; k < 16; k++) {
@@ -126,7 +129,7 @@ export class SceneChangeDetector {
       this._pending = {
         meshList: scene.meshes,
         meshes: scene.meshes.map(mesh => ({ mesh, geometry: mesh.geometry, version: mesh.geometry.version,
-          materials: mesh.materials.slice(), simplification: mesh.geometrySimplificationRatio,
+          materials: mesh.materials.slice(), uvProjection: mesh.uvProjection, displacementUvProjection: mesh.displacementUvProjection, simplification: mesh.geometrySimplificationRatio,
           faceLevels: mesh.displacementFaceLevels, faceHash: mesh.displacementFaceLevelsHash })),
         matrices,
         materials: new Map([...seen].map(m => [m, { version: m.version, textures: materialTextures(m) }])),

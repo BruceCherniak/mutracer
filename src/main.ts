@@ -90,9 +90,9 @@ export {
 export { load as loadGLTF } from './util/loadGLTF';
 export type { GLTFLoadResult } from './util/loadGLTF';
 export { loadRGBE, parseRGBE } from './util/loadRGBE';
-export { fromTHREECamera, fromTHREEScene } from './util/fromTHREE';
+export { fromTHREECamera, fromTHREEScene, THREESceneSync } from './util/fromTHREE';
 export type {
-  FromTHREEGeometryCache,
+  THREESceneChanges,
   FromTHREESceneOptions
 } from './util/fromTHREE';
 export { default as CameraViewControl } from './util/CameraViewControl';

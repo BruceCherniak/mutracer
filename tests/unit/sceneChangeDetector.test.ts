@@ -89,3 +89,14 @@ describe('scene change detection', () => {
     }
   });
 });
+
+it('detects mesh projection overrides as changes requiring instance data updates', async () => {
+  const { default: Mesh } = await import('../../src/scene/Mesh');
+  const { default: OpenPBRMaterial } = await import('../../src/scene/OpenPBRMaterial');
+  const { createCubeGeometry } = await import('../../src/util/commonGeometry');
+  const { SceneChangeDetector } = await import('../../src/renderer/sceneChangeDetector');
+  const mesh = new Mesh(createCubeGeometry(),new OpenPBRMaterial());
+  const scene = { meshes: [mesh], lights: [] }; const d = new SceneChangeDetector();
+  d.detect(scene); d.commit(); mesh.uvProjection='triplanar'; expect(d.detect(scene).meshes).toBe('full'); d.commit();
+  mesh.displacementUvProjection='spherical'; expect(d.detect(scene).meshes).toBe('full');
+});

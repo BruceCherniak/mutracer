@@ -2,6 +2,7 @@ import { mat4, vec2, vec3 } from '../math';
 import Geometry, { Attribute } from '../scene/Geometry';
 import Mesh from '../scene/Mesh';
 import OpenPBRMaterial from '../scene/OpenPBRMaterial';
+import { uvProjectionConstants } from './MergedMaterialData';
 import { buildBLAS, flattenBvh, TLASInstance } from './bvhAccel';
 import Texture, { isTextureDataSource } from '../scene/Texture';
 import { generateVertexTangents } from '../util/geometry';
@@ -152,7 +153,9 @@ export function updateMeshInstanceTransforms(
       materialsIndices: materialIndices.map((idx) =>
         Geometry.packMaterialIndexAndWeightToInt(idx, 1)
       ),
-      displacementScale
+      displacementScale,
+      uvProjection: mesh.uvProjection == null ? -1 : uvProjectionConstants[mesh.uvProjection],
+      displacementUvProjection: mesh.displacementUvProjection == null ? -1 : uvProjectionConstants[mesh.displacementUvProjection]
     }) satisfies TLASInstance;
   if (!current || !dirtyIndices) return bindings.map(update);
   const next = current.slice();
@@ -163,9 +166,16 @@ export function updateMeshInstanceTransforms(
   return next;
 }
 
+/** Resolves CPU displacement settings without mutating a shared material. */
+export function getMeshDisplacementMaterial(mesh: Mesh) {
+  const material = mesh.materials[0];
+  if (mesh.displacementUvProjection == null || mesh.displacementUvProjection === material.displacementUvProjection) return material;
+  return Object.assign(new OpenPBRMaterial(), material, { displacementUvProjection: mesh.displacementUvProjection });
+}
+
 export function getMeshDisplacementMap(mesh: Mesh) {
   // Not support multiple materials for displacement.
-  const material = mesh.materials[0];
+  const material = getMeshDisplacementMaterial(mesh);
   return material.displacementMode === 'tessellated'
     ? undefined
     : material.displacementMap;
@@ -231,7 +241,7 @@ export function getMeshGeometrySimplificationRatio(mesh: Mesh) {
 
 export function getPreparedMeshGeometryCacheKey(mesh: Mesh) {
   const source = mesh.geometry;
-  const material = mesh.materials[0];
+  const material = getMeshDisplacementMaterial(mesh);
   const texture = material?.displacementMap;
   if (!material) return undefined;
   const simplificationRatio = getMeshGeometrySimplificationRatio(mesh);
@@ -241,6 +251,13 @@ export function getPreparedMeshGeometryCacheKey(mesh: Mesh) {
     (Math.abs(material.displacementScale) > 1e-6 ||
       Math.abs(material.displacementBias) > 1e-6);
   if (!hasTessellatedDisplacement) {
+    // Projective displacement bounds depend on projection, even when the
+    // source attributes are shared. Keep a separate BLAS for each override.
+    if (mesh.displacementUvProjection != null && texture && Math.abs(material.displacementScale) > 1e-6) {
+      return ['projectiveProjection', source.version, getDisplacementTextureDataCacheKey(texture),
+        +texture.flipY, texture.uvScale.join(','), texture.uvOffset.join(','),
+        material.displacementScale, material.displacementUvScale, mesh.displacementUvProjection].join('|');
+    }
     return simplificationRatio < 1
       ? ['meshopt', source.version, simplificationRatio].join('|')
       : undefined;
@@ -279,9 +296,12 @@ export function getPreparedMeshGeometryCacheKey(mesh: Mesh) {
 
 export function getCachedPreparedMeshGeometry(mesh: Mesh) {
   const key = getPreparedMeshGeometryCacheKey(mesh);
-  return key == null
-    ? mesh.geometry
-    : tessellatedGeometryCache.get(mesh.geometry)?.get(key);
+  if (key == null) return mesh.geometry;
+  const cached = tessellatedGeometryCache.get(mesh.geometry)?.get(key);
+  if (!cached && key.startsWith('projectiveProjection|')) {
+    return cachePreparedMeshGeometry(mesh, new Geometry(mesh.geometry));
+  }
+  return cached;
 }
 
 export function cachePreparedMeshGeometry(mesh: Mesh, generated: Geometry) {
@@ -302,7 +322,7 @@ export function cachePreparedMeshGeometry(mesh: Mesh, generated: Geometry) {
 }
 
 export function getMeshDisplacementTessellationOptions(mesh: Mesh) {
-  const material = mesh.materials[0];
+  const material = getMeshDisplacementMaterial(mesh);
   const triangleBudget = displacementTriangleBudget(material);
   return {
     mode: material.displacementTessellationMode,
@@ -357,10 +377,11 @@ export function getPreparedMeshGeometry(
   } = {}
 ) {
   const source = mesh.geometry;
-  const material = mesh.materials[0];
+  const material = getMeshDisplacementMaterial(mesh);
   const texture = material?.displacementMap;
   const key = getPreparedMeshGeometryCacheKey(mesh);
   if (key == null) return source;
+  if (key.startsWith('projectiveProjection|')) return getCachedPreparedMeshGeometry(mesh)!;
   let entries = tessellatedGeometryCache.get(source);
   if (!entries) {
     entries = new Map();
@@ -825,7 +846,7 @@ function prepareMeshGeometryBvh(mesh: Mesh) {
   if (!geometry.bvh) {
     const trianglesDisplacement =
       Math.abs(displacementScale) > 1e-6
-        ? getTrianglesDisplacementRange(geometry, heightMap, mesh.materials[0])
+        ? getTrianglesDisplacementRange(geometry, heightMap, getMeshDisplacementMaterial(mesh))
         : undefined;
     geometry.bvh = flattenBvh(
       buildBLAS(geometry, displacementScale, trianglesDisplacement),
@@ -894,7 +915,9 @@ export function updateMeshInstances(meshes: Mesh[]) {
         materialsIndices: materialsIndices.map((idx) =>
           Geometry.packMaterialIndexAndWeightToInt(idx, 1)
         ),
-        displacementScale
+        displacementScale,
+        uvProjection: mesh.uvProjection == null ? -1 : uvProjectionConstants[mesh.uvProjection],
+        displacementUvProjection: mesh.displacementUvProjection == null ? -1 : uvProjectionConstants[mesh.displacementUvProjection]
       } satisfies TLASInstance;
       if (
         !bounds.min.every(isFinite) ||

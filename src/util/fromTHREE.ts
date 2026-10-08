@@ -1,6 +1,6 @@
 import type * as THREE from 'three';
 import Mesh from '../scene/Mesh';
-import OpenPBRMaterial from '../scene/OpenPBRMaterial';
+import OpenPBRMaterial, { getMaterialHashKey, materialKeys } from '../scene/OpenPBRMaterial';
 import Geometry, { Attribute } from '../scene/Geometry';
 import Texture from '../scene/Texture';
 import DirectionalLight from '../scene/DirectionalLight';
@@ -12,37 +12,38 @@ import SpotLight from '../scene/SpotLight';
 import IESProfile from '../scene/IESProfile';
 import Camera from '../scene/Camera';
 import { ColorRGB, ColorRGBA } from '../types';
-import { GroundedSkyboxBackground, SceneLight } from '../scene/Scene';
+import { GroundedSkyboxBackground, Scene, SceneLight } from '../scene/Scene';
 import { mat4 } from '../math';
 import { generateVertexNormals, updateBoundingBox } from './geometry';
+import { SceneChangeDetector, snapshotsEqual, snapshotFields } from '../renderer/sceneChangeDetector';
 
-const environmentLightCache = new WeakMap<
-  THREE.DataTexture,
-  EnvironmentLight
->();
+interface TextureRecord {
+  texture: Texture;
+  state: unknown[];
+}
+type TextureStore = WeakMap<THREE.Texture, TextureRecord>;
 
 function convertTexture(
   threeTexture: THREE.Texture | null | undefined,
-  textureCache: WeakMap<THREE.Texture, Texture>
+  textureStore: TextureStore
 ) {
-  if (!threeTexture) {
-    return;
-  }
-  const cachedTexture = textureCache.get(threeTexture);
-  if (cachedTexture) {
-    return cachedTexture;
-  }
-  const texture = new Texture(threeTexture.image as Texture['image']);
+  if (!threeTexture) return;
+  const state = [threeTexture.version, threeTexture.image, threeTexture.flipY,
+    threeTexture.repeat.x, threeTexture.repeat.y, threeTexture.offset.x,
+    threeTexture.offset.y, threeTexture.channel];
+  const cached = textureStore.get(threeTexture);
+  if (cached && snapshotsEqual(cached.state, state)) return cached.texture;
+  const image = threeTexture.image as Texture['image'];
+  const texture = cached?.texture ?? new Texture(image);
+  texture.image = image;
   texture.source = threeTexture;
-  texture.version = threeTexture.version;
   texture.flipY = threeTexture.flipY;
   texture.uvScale = [threeTexture.repeat.x, threeTexture.repeat.y];
   texture.uvOffset = [threeTexture.offset.x, threeTexture.offset.y];
-  texture.uvChannel =
-    (threeTexture as THREE.Texture & { channel?: number }).channel === 1
-      ? 1
-      : 0;
-  textureCache.set(threeTexture, texture);
+  texture.uvChannel = threeTexture.channel === 1 ? 1 : 0;
+  if (cached) texture.markUpdated();
+  else texture.version = threeTexture.version;
+  textureStore.set(threeTexture, { texture, state });
   return texture;
 }
 
@@ -59,52 +60,23 @@ function halfFloatToFloat(value: number) {
   return sign * Math.pow(2, exponent - 15) * (1 + fraction / 0x400);
 }
 
-function convertDataTexture(threeTexture?: THREE.DataTexture | null) {
-  if (!threeTexture) return;
-  const image = threeTexture?.image;
-  if (!image?.data || !image.width || !image.height) return;
-
-  const source = image.data as ArrayBufferView;
-  let data: Float32Array | Uint8Array | Int32Array;
-  if (source instanceof Uint16Array) {
-    data = Float32Array.from(source, halfFloatToFloat);
-  } else if (
-    source instanceof Float32Array ||
-    source instanceof Uint8Array ||
-    source instanceof Int32Array
-  ) {
-    data = source;
-  } else {
-    data = Float32Array.from(source as unknown as ArrayLike<number>);
-  }
-
-  const texture = new Texture({
-    data,
-    width: image.width,
-    height: image.height
-  });
-  texture.source = threeTexture;
-  texture.version = threeTexture.version;
+function convertDataTexture(threeTexture: THREE.DataTexture | null | undefined, textureStore: TextureStore) {
+  if (!threeTexture?.image?.data || !threeTexture.image.width || !threeTexture.image.height) return;
+  const previous = textureStore.get(threeTexture);
+  const texture = convertTexture(threeTexture, textureStore)!;
+  if (previous?.state === textureStore.get(threeTexture)?.state) return texture;
+  const source = threeTexture.image.data as ArrayBufferView;
+  const data = source instanceof Uint16Array
+    ? Float32Array.from(source, halfFloatToFloat)
+    : source instanceof Float32Array || source instanceof Uint8Array || source instanceof Int32Array
+      ? source : Float32Array.from(source as unknown as ArrayLike<number>);
+  texture.image = { data, width: threeTexture.image.width, height: threeTexture.image.height };
   return texture;
-}
-
-function convertEnvironmentLight(threeTexture: THREE.DataTexture) {
-  const cached = environmentLightCache.get(threeTexture);
-  if (cached?.map.version === threeTexture.version) return cached;
-  const map = convertDataTexture(threeTexture);
-  if (!map) return;
-  if (cached) {
-    cached.map = map;
-    return cached;
-  }
-  const light = new EnvironmentLight(map);
-  environmentLightCache.set(threeTexture, light);
-  return light;
 }
 
 function convertMaterial(
   threeMaterial: THREE.Material,
-  textureCache: WeakMap<THREE.Texture, Texture>
+  textureCache: TextureStore
 ) {
   const material = new OpenPBRMaterial();
   if (threeMaterial.userData.clayptShadowCatcher === true) {
@@ -650,19 +622,9 @@ function convertGeometry(
   return geometry;
 }
 
-export type FromTHREEGeometryCache = WeakMap<
-  THREE.BufferGeometry,
-  Map<string, Geometry>
->;
-
-/** Options for {@link fromTHREEScene}. */
+/** Options for one-shot conversion and persistent Three.js synchronization. */
 export interface FromTHREESceneOptions {
-  /**
-   * Reuse converted geometry across calls. Pass the same WeakMap when
-   * re-converting an animated or edited scene.
-   */
-  geometryCache?: FromTHREEGeometryCache;
-  /** Receives the source mesh/group for each converted core mesh. */
+  /** Receives each converted mesh/group on every update. Default: no callback. */
   onMeshConverted?(
     mesh: Mesh,
     source: THREE.Mesh,
@@ -671,11 +633,50 @@ export interface FromTHREESceneOptions {
   ): void;
 }
 
+interface ConversionStore {
+  textures: TextureStore;
+  materials: WeakMap<THREE.Material, { material: OpenPBRMaterial; hash: string }>;
+  geometries: WeakMap<THREE.BufferGeometry, { state: unknown[]; groups: Map<string, Geometry> }>;
+  meshes: WeakMap<THREE.Mesh, Map<number, Mesh>>;
+  lights: WeakMap<THREE.Object3D | THREE.Texture, SceneLight>;
+  background?: Scene['background'];
+}
+function createConversionStore(): ConversionStore {
+  return { textures: new WeakMap(), materials: new WeakMap(), geometries: new WeakMap(),
+    meshes: new WeakMap(), lights: new WeakMap() };
+}
+function geometryState(geometry: THREE.BufferGeometry) {
+  return ['position', 'normal', 'tangent', 'uv', 'uv1', 'index'].flatMap(name => {
+    const attribute = name === 'index' ? geometry.index : geometry.getAttribute(name);
+    if (!attribute) return [undefined];
+    const interleaved = attribute as THREE.InterleavedBufferAttribute;
+    const buffer = interleaved.isInterleavedBufferAttribute ? interleaved.data : attribute as THREE.BufferAttribute;
+    return [attribute, buffer, buffer.version, buffer.array, attribute.count, attribute.itemSize,
+      attribute.normalized, interleaved.offset, interleaved.data?.stride];
+  });
+}
+function retainLight(store: ConversionStore, source: THREE.Object3D | THREE.Texture, value: SceneLight) {
+  const cached = store.lights.get(source);
+  if (!cached || cached.type !== value.type) {
+    store.lights.set(source, value);
+    return value;
+  }
+  // Matrix and color arrays are retained when unchanged; light identity always is.
+  for (const key of Object.keys(value)) {
+    const previous = (cached as unknown as Record<string, unknown>)[key];
+    const next = (value as unknown as Record<string, unknown>)[key];
+    if (Array.isArray(previous) && Array.isArray(next) && snapshotsEqual(previous, next)) continue;
+    (cached as unknown as Record<string, unknown>)[key] = next;
+  }
+  return cached;
+}
+
 /**
  * Converts a Three.js scene into a ClayPT {@link Scene}: meshes with
  * `MeshStandardMaterial` / `MeshPhysicalMaterial` (mapped to OpenPBR),
  * directional, ambient, rect-area, point and spot lights, and the scene
- * background / environment. Call `scene.updateMatrixWorld()` first.
+ * background / environment. Calls `scene.updateMatrixWorld()` and creates fresh objects on every call.
+ * For animation and editing, use {@link THREESceneSync}.
  *
  * Renderer-specific material settings can be supplied through
  * `material.userData`, e.g. `userData.clayptShadowCatcher = true` or
@@ -685,13 +686,15 @@ export interface FromTHREESceneOptions {
 export function fromTHREEScene(
   scene: THREE.Scene,
   options: FromTHREESceneOptions = {}
-) {
+) : Scene {
+  return convertScene(scene, options, createConversionStore());
+}
+
+function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store: ConversionStore): Scene {
   const meshes: Mesh[] = [];
   const lights: SceneLight[] = [];
-  // GLTFLoader reuses THREE.Texture instances across materials and meshes.
-  // Keep that sharing when converting the scene so repeated references do not
-  // become duplicate texture-array layers.
-  const textureCache = new WeakMap<THREE.Texture, Texture>();
+  const textureCache = store.textures;
+  const convertedMaterials = new Set<THREE.Material>();
 
   function isMesh(node: THREE.Object3D): node is THREE.Mesh {
     return (node as THREE.Mesh).isMesh;
@@ -759,50 +762,55 @@ export function fromTHREEScene(
             : (child.geometry.getIndex()?.count ??
               child.geometry.getAttribute('position').count);
           const geometryKey = `${group.start}:${count}`;
-          let cachedGeometries = options.geometryCache?.get(child.geometry);
-          if (!cachedGeometries && options.geometryCache) {
-            cachedGeometries = new Map();
-            options.geometryCache.set(child.geometry, cachedGeometries);
+          const state = geometryState(child.geometry);
+          let entry = store.geometries.get(child.geometry);
+          if (!entry || !snapshotsEqual(entry.state, state)) {
+            entry = { state, groups: new Map() };
+            store.geometries.set(child.geometry, entry);
           }
-          let geometry = cachedGeometries?.get(geometryKey);
+          let geometry = entry.groups.get(geometryKey);
           if (!geometry) {
-            const convertedGeometry = convertGeometry(child.geometry, {
-              start: group.start,
-              count
-            });
-            if (!convertedGeometry) return;
-            geometry = convertedGeometry;
-            cachedGeometries?.set(geometryKey, geometry);
+            const converted = convertGeometry(child.geometry, { start: group.start, count });
+            if (!converted) return;
+            geometry = converted;
+            entry.groups.set(geometryKey, geometry);
           }
-          const material = convertMaterial(
-            threeMaterials[group.materialIndex ?? 0],
-            textureCache
-          );
-          if (
-            !geometry.uv &&
-            material.uvProjection === 'none' &&
-            (
-              material.map ||
-              material.normalMap ||
-              material.emissiveMap ||
-              material.metallicRoughnessMap ||
-              material.roughnessMap ||
-              material.metalnessMap ||
-              material.thinFilmMap
-            )
-          ) {
-            material.uvProjection = 'triplanar';
+          const sourceMaterial = threeMaterials[group.materialIndex ?? 0];
+          const cachedMaterial = store.materials.get(sourceMaterial);
+          let material = cachedMaterial?.material ?? convertMaterial(sourceMaterial, textureCache);
+          if (!convertedMaterials.has(sourceMaterial)) {
+            const converted = cachedMaterial ? convertMaterial(sourceMaterial, textureCache) : material;
+            material = converted;
           }
-          if (
-            material.displacementMap &&
-            !geometry.uv &&
-            material.displacementUvProjection === 'none'
-          ) {
-            // Procedural projection keeps displacement usable for vertex-color
-            // and sculpt meshes that intentionally contain no TEXCOORD_0.
-            material.displacementUvProjection = 'triplanar';
+          if (!convertedMaterials.has(sourceMaterial)) {
+            const hash = getMaterialHashKey(material);
+            if (cachedMaterial) {
+              if (cachedMaterial.hash !== hash) {
+                for (const key of materialKeys) (cachedMaterial.material as unknown as Record<string, unknown>)[key] = material[key];
+                cachedMaterial.material.markUpdated();
+                cachedMaterial.hash = hash;
+              }
+              material = cachedMaterial.material;
+            } else store.materials.set(sourceMaterial, { material, hash });
+            convertedMaterials.add(sourceMaterial);
+          } else material = store.materials.get(sourceMaterial)!.material;
+          let meshGroups = store.meshes.get(child);
+          if (!meshGroups) { meshGroups = new Map(); store.meshes.set(child, meshGroups); }
+          let mesh = meshGroups.get(groupIndex);
+          if (!mesh) {
+            mesh = new Mesh(geometry, material);
+            // Three.js matrices use doubles. Retain that precision before CPU
+            // inverse transforms and bounds calculations, as one-shot conversion did.
+            mesh.matrixWorld = child.matrixWorld.elements.slice() as mat4.Mat4Array;
+            meshGroups.set(groupIndex, mesh);
           }
-          const mesh = new Mesh(geometry, material);
+          mesh.geometry = geometry;
+          mesh.uvProjection = !geometry.uv && material.uvProjection === 'none' &&
+            (material.map || material.normalMap || material.emissiveMap || material.metallicRoughnessMap ||
+              material.roughnessMap || material.metalnessMap || material.thinFilmMap) ? 'triplanar' : undefined;
+          mesh.displacementUvProjection = !geometry.uv && material.displacementMap &&
+            material.displacementUvProjection === 'none' ? 'triplanar' : undefined;
+          if (mesh.materials[0] !== material) mesh.materials = [material];
           const simplificationRatio = Number(
             child.userData.clayptMeshoptSimplificationRatio
           );
@@ -814,14 +822,13 @@ export function fromTHREEScene(
           mesh.name =
             child.name ||
             `Mesh ${meshes.length + 1}${groups.length > 1 ? `.${groupIndex + 1}` : ''}`;
-          mesh.matrixWorld =
-            child.matrixWorld.elements.slice() as mat4.Mat4Array;
+          for (let i = 0; i < 16; i++) mesh.matrixWorld[i] = child.matrixWorld.elements[i];
           meshes.push(mesh);
           options.onMeshConverted?.(mesh, child, group, groupIndex);
         });
       }
     } else if (isDirectionalLight(child)) {
-      lights.push(
+      lights.push(retainLight(store, child,
         new DirectionalLight(
           child.getWorldPosition(child.position.clone())
             .sub(child.target.getWorldPosition(child.target.position.clone()))
@@ -829,7 +836,7 @@ export function fromTHREEScene(
           child.color.toArray() as ColorRGB,
           child.intensity
         )
-      );
+      ));
     } else if (isRectAreaLight(child)) {
       const worldMatrix = child.matrixWorld.clone();
       // Shear decomposition can return a non-unit quaternion. The size below
@@ -846,7 +853,7 @@ export function fromTHREEScene(
       );
       worldMatrix.compose(worldPosition, worldRotation, child.scale.clone().set(1, 1, 1));
       light.matrixWorld = worldMatrix.elements.slice() as mat4.Mat4Array;
-      lights.push(light);
+      lights.push(retainLight(store, child, light));
     } else if (isSpotLight(child)) {
       const worldPosition = child.getWorldPosition(child.position.clone());
       const worldTarget = child.target.getWorldPosition(
@@ -860,7 +867,7 @@ export function fromTHREEScene(
           `THREE.SpotLight "${child.name || '<unnamed>'}" has an invalid clayptIesProfile`
         );
       }
-      lights.push(
+      lights.push(retainLight(store, child,
         new SpotLight(
           worldPosition.toArray(),
           direction.toArray(),
@@ -873,7 +880,7 @@ export function fromTHREEScene(
           profile,
           child.userData.clayptIesRotation ?? 0
         )
-      );
+      ));
     } else if (isPointLight(child)) {
       const world = child.matrixWorld.elements;
       const position: [number, number, number] = [
@@ -881,24 +888,25 @@ export function fromTHREEScene(
         world[13],
         world[14]
       ];
-      lights.push(
+      lights.push(retainLight(store, child,
         new SphereLight(
           position,
           child.color.toArray() as ColorRGB,
           child.intensity,
           child.userData.clayptRadius ?? 0.25
         )
-      );
+      ));
     } else if (isAmbientLight(child)) {
-      lights.push(
+      lights.push(retainLight(store, child,
         new AmbientLight(child.color.toArray() as ColorRGB, child.intensity)
-      );
+      ));
     }
   });
 
   const threeEnvironment = scene.environment as THREE.DataTexture | null;
-  const environmentLight = threeEnvironment
-    ? convertEnvironmentLight(threeEnvironment)
+  const environmentMap = convertDataTexture(threeEnvironment, textureCache);
+  const environmentLight = threeEnvironment && environmentMap
+    ? retainLight(store, threeEnvironment, new EnvironmentLight(environmentMap)) as EnvironmentLight
     : undefined;
   if (environmentLight) lights.push(environmentLight);
 
@@ -911,10 +919,10 @@ export function fromTHREEScene(
         center?: [number, number];
       }
     | undefined;
-  const groundedTexture = grounded && convertDataTexture(grounded.texture);
+  const groundedTexture = grounded && convertDataTexture(grounded.texture, textureCache);
   const hideEnvironmentBackground =
     scene.userData.clayptHiddenBackground === true;
-  const background: GroundedSkyboxBackground | ColorRGBA | Texture | undefined =
+  let background: GroundedSkyboxBackground | ColorRGBA | Texture | undefined =
     hideEnvironmentBackground
       ? [0, 0, 0, 0]
       : grounded && groundedTexture
@@ -931,14 +939,70 @@ export function fromTHREEScene(
             ? ([...(scene.background as THREE.Color).toArray(), 1] as ColorRGBA)
             : scene.background === scene.environment && environmentLight
               ? environmentLight.map
-              : convertDataTexture(scene.background as THREE.DataTexture)
+              : convertDataTexture(scene.background as THREE.DataTexture, textureCache)
           : undefined;
 
+  const oldBackground = store.background;
+  if (Array.isArray(background) && Array.isArray(oldBackground) && snapshotsEqual(background, oldBackground)) {
+    background = oldBackground;
+  } else if (background && oldBackground && !Array.isArray(background) && !Array.isArray(oldBackground)
+    && !(background instanceof Texture) && !(oldBackground instanceof Texture)) {
+    // Compare by values, ignoring the newly constructed wrapper's identity.
+    if (snapshotsEqual(snapshotFields(background).slice(1), snapshotFields(oldBackground).slice(1))) background = oldBackground;
+    else { Object.assign(oldBackground, background); background = oldBackground; }
+  }
+  store.background = background;
   return {
     background,
     meshes,
     lights
   };
+}
+
+/** Informational changes; nothing has to be forwarded to the renderer. */
+export interface THREESceneChanges {
+  transforms: number;
+  membership: boolean;
+  content: boolean;
+  lights: boolean;
+  background: boolean;
+}
+
+/** Keeps one ClayPT scene in sync with a Three.js scene, reusing unchanged objects. */
+export class THREESceneSync {
+  readonly scene: Scene;
+  private _store = createConversionStore();
+  private _detector = new SceneChangeDetector();
+  private _disposed = false;
+
+  /** Creates the initial scene. Default options: no conversion callback. */
+  constructor(private _source: THREE.Scene, private _options: FromTHREESceneOptions = {}) {
+    this.scene = convertScene(_source, _options, this._store);
+    this._detector.detect(this.scene);
+    this._detector.commit();
+  }
+
+  /** Calls updateMatrixWorld and updates the scene in place. */
+  update(): THREESceneChanges {
+    if (this._disposed) throw new Error('THREESceneSync has been disposed');
+    const next = convertScene(this._source, this._options, this._store);
+    const membership = !snapshotsEqual(this.scene.meshes, next.meshes);
+    if (membership) this.scene.meshes = next.meshes;
+    if (!snapshotsEqual(this.scene.lights, next.lights)) this.scene.lights = next.lights;
+    this.scene.background = next.background;
+    const changes = this._detector.detect(this.scene);
+    this._detector.commit();
+    return { transforms: changes.transforms.length, membership,
+      content: changes.meshes === 'full' || changes.materials.length > 0,
+      lights: changes.lights, background: changes.background };
+  }
+
+  /** Releases conversion caches. The last scene remains usable; update then throws. */
+  dispose(): void {
+    this._store = createConversionStore();
+    this._detector.reset();
+    this._disposed = true;
+  }
 }
 
 /** Converts a Three.js perspective or orthographic camera. */

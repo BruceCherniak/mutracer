@@ -307,6 +307,8 @@ class WGPURayTracePass {
     materials: OpenPBRMaterial[];
     materialVersions: number[];
     geometryVersion: number;
+    uvProjection: Mesh['uvProjection'];
+    displacementUvProjection: Mesh['displacementUvProjection'];
     simplification: Mesh['geometrySimplificationRatio'];
     faceLevels: Mesh['displacementFaceLevels'];
     faceHash: number;
@@ -1847,6 +1849,8 @@ ${rayTraceCompute({
       materials: mesh.materials.slice(),
       materialVersions: mesh.materials.map(material => material.version),
       geometryVersion: mesh.geometry.version,
+      uvProjection: mesh.uvProjection,
+      displacementUvProjection: mesh.displacementUvProjection,
       simplification: mesh.geometrySimplificationRatio,
       faceLevels: mesh.displacementFaceLevels,
       faceHash: mesh.displacementFaceLevelsHash,
@@ -1880,6 +1884,7 @@ ${rayTraceCompute({
             (hash, index) => hash === resident.materialVersions[index]
           ) &&
           next.geometryVersion === resident.geometryVersion &&
+          next.uvProjection === resident.uvProjection && next.displacementUvProjection === resident.displacementUvProjection &&
           next.simplification === resident.simplification &&
           next.faceLevels === resident.faceLevels && next.faceHash === resident.faceHash &&
           this._materialChanges.classify(next.materials).level === 'params' &&
@@ -1913,6 +1918,7 @@ ${rayTraceCompute({
           next.geometry !== prev.geometry ||
           next.bvh !== prev.bvh ||
           next.simplification !== prev.simplification ||
+          next.uvProjection !== prev.uvProjection || next.displacementUvProjection !== prev.displacementUvProjection ||
           next.faceLevels !== prev.faceLevels || next.faceHash !== prev.faceHash ||
           next.materials.length !== prev.materials.length ||
           next.materials.some((material, k) => material !== prev.materials[k]) ||

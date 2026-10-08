@@ -6,6 +6,7 @@ import {
   getMeshDisplacementTessellationOptions,
   getMeshGeometrySimplificationRatio,
   getTrianglesDisplacementRange,
+  getMeshDisplacementMaterial,
   getMeshDisplacementScale,
   getPreparedMeshGeometryCacheKey,
   getDisplacementTextureDataCacheKey
@@ -274,7 +275,7 @@ export function prepareForPrecompute(meshes: Mesh[]): PrecomputePreparedData {
         if (!geometry.normal) generateVertexNormals(geometry);
         geometries.push(geometry);
         rawMeshes.push(mesh);
-        const material = mesh.materials[0];
+        const material = getMeshDisplacementMaterial(mesh);
         const explicitTexture =
           cacheKey != null &&
           !cached &&

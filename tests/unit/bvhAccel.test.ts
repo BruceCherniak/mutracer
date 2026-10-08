@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { mat4 } from '../../src/math';
 import {
   Box3,
+  INSTANCE_WORD_STRIDE,
   buildBLAS,
   buildTLAS,
   flattenBvh,
@@ -55,9 +56,9 @@ describe('mixed BVH layouts', () => {
     const instanceWords = new Int32Array(flattened.instancesBuffer!);
 
     expect(instanceWords[0]).toBe(0x40000000);
-    expect(instanceWords[36]).toBe(4);
-    expect(instanceWords[72]).toBe(-0x80000000 + 6);
-    expect(instanceWords[108]).toBe(-0x40000000 + 10);
+    expect(instanceWords[INSTANCE_WORD_STRIDE]).toBe(4);
+    expect(instanceWords[INSTANCE_WORD_STRIDE * 2]).toBe(-0x80000000 + 6);
+    expect(instanceWords[INSTANCE_WORD_STRIDE * 3]).toBe(-0x40000000 + 10);
     expect(flattened.layout).toBe('bvh2');
   });
 });
@@ -134,7 +135,7 @@ describe('BVH refit', () => {
       )
     ).toEqual(topology);
     const instanceData = new Float32Array(flat.instancesBuffer!);
-    expect([instanceData[32], instanceData[68]].sort((a, b) => a - b)).toEqual([
+    expect([instanceData[32], instanceData[INSTANCE_WORD_STRIDE + 32]].sort((a, b) => a - b)).toEqual([
       10, 20
     ]);
   });
@@ -163,8 +164,8 @@ describe('BVH refit', () => {
     const nextInstances = new Float32Array(flat.instancesBuffer!);
     const changedRecords = Array.from({ length: instances.length }, (_, index) =>
       nextInstances
-        .subarray(index * 36, index * 36 + 36)
-        .some((value, word) => value !== previousInstances[index * 36 + word])
+        .subarray(index * INSTANCE_WORD_STRIDE, index * INSTANCE_WORD_STRIDE + INSTANCE_WORD_STRIDE)
+        .some((value, word) => value !== previousInstances[index * INSTANCE_WORD_STRIDE + word])
     ).filter(Boolean);
     expect(changedRecords).toHaveLength(1);
     expect(result.instanceRanges).toHaveLength(1);

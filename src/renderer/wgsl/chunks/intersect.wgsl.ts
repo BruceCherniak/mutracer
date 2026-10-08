@@ -1,3 +1,4 @@
+import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel';
 import {
   USE_TFDM_DISPLACEMENT,
   uvProjectionConstants
@@ -135,7 +136,9 @@ if (abs(hScale) > 0.0 && minMaxH > 0) {
   let pF = tri.p2 + n2 * hScale * maxH;
   // TODO not support material blending
   let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
-  let matData = materialsBuffer[materialIndex];
+  var matData = materialsBuffer[materialIndex];
+  let displacementProjection = instancesBuffer[insIdx * ${INSTANCE_VEC4_STRIDE} + 9].y;
+  if (displacementProjection >= 0.0) { matData.displacementUvProjection = displacementProjection; }
   let displacementUvScale = vec2f(matData.displacementUvScale);
   let displacementMapIndex = i32(matData.displacementMapIndex);
 
@@ -286,7 +289,7 @@ function getBVHTraverseCode(
   skipTriangleCode = ''
 ) {
   const intersectTriangles = /* wgsl */ `
-      let insData = instancesBuffer[insIdx * 9];
+      let insData = instancesBuffer[insIdx * ${INSTANCE_VEC4_STRIDE}];
       let vertexOffset = vec3i(bitcast<i32>(insData.y));
       for (var k = 0; k < primitiveCount; k++) {
         let triangleIndex = primitiveOffset + k;
@@ -377,12 +380,12 @@ while (tlasTop >= 0) {
       let instanceRecord = bvhBuffer[tlasNode + 2 + instanceOffset];
       let insIdx = bitcast<i32>(instanceRecord.x);
       let blasRoot = bitcast<i32>(instanceRecord.y);
-      let insData = instancesBuffer[insIdx * 9];
+      let insData = instancesBuffer[insIdx * ${INSTANCE_VEC4_STRIDE}];
       let w2l = mat4x4<f32>(
-        instancesBuffer[insIdx * 9 + 1],
-        instancesBuffer[insIdx * 9 + 2],
-        instancesBuffer[insIdx * 9 + 3],
-        instancesBuffer[insIdx * 9 + 4]
+        instancesBuffer[insIdx * ${INSTANCE_VEC4_STRIDE} + 1],
+        instancesBuffer[insIdx * ${INSTANCE_VEC4_STRIDE} + 2],
+        instancesBuffer[insIdx * ${INSTANCE_VEC4_STRIDE} + 3],
+        instancesBuffer[insIdx * ${INSTANCE_VEC4_STRIDE} + 4]
       );
       o = (w2l * vec4f(ray.o, 1.0)).xyz;
       d = (w2l * vec4f(ray.d, 0.0)).xyz;
@@ -987,7 +990,8 @@ fn fetchAttributes(
   (*si).hit = true;
   // Get projected uv
   let material = materialsBuffer[(*si).materialIndex];
-  let uvProjection = i32(material.uvProjection);
+  let projectionOverride = instancesBuffer[(*si).instanceIndex * ${INSTANCE_VEC4_STRIDE} + 9];
+  let uvProjection = i32(select(material.uvProjection, projectionOverride.x, projectionOverride.x >= 0.0));
 
   let i0 = index.x;
   let i1 = index.y;
@@ -1121,7 +1125,7 @@ fn fetchAttributes(
     let duv2 = uv1 - uv2;
     // TODO
     let normalMaterial = materialsBuffer[(*si).materialIndex];
-    let bumpProjection = i32(normalMaterial.displacementUvProjection);
+    let bumpProjection = i32(select(normalMaterial.displacementUvProjection, projectionOverride.y, projectionOverride.y >= 0.0));
     var bumpUv = rawUv;
     if (bumpProjection > 0) {
       bumpUv = projectUV(bumpProjection, (*si).position, normal);
@@ -1245,7 +1249,7 @@ fn completeSurfaceInteraction(
   (*si).normal = hitNormal;
   (*si).position = hitPosition;
   (*si).materialIndex = i32(unpackMaterialIndex(
-    bitcast<i32>(instancesBuffer[hitInsIdx * 9].z)
+    bitcast<i32>(instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE}].z)
   ).x);
   // NOTE: Must be called before transforming normal/position to world space.
   // UV projection depends on the local position.
@@ -1259,16 +1263,16 @@ fn completeSurfaceInteraction(
   );
 
   let l2w = mat4x4<f32>(
-    instancesBuffer[hitInsIdx * 9 + 5],
-    instancesBuffer[hitInsIdx * 9 + 6],
-    instancesBuffer[hitInsIdx * 9 + 7],
-    instancesBuffer[hitInsIdx * 9 + 8]
+    instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 5],
+    instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 6],
+    instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 7],
+    instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 8]
   );
   let w2l = mat4x4<f32>(
-    instancesBuffer[hitInsIdx * 9 + 1],
-    instancesBuffer[hitInsIdx * 9 + 2],
-    instancesBuffer[hitInsIdx * 9 + 3],
-    instancesBuffer[hitInsIdx * 9 + 4]
+    instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 1],
+    instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 2],
+    instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 3],
+    instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 4]
   );
   let normalTransform = transpose(mat3x3<f32>(
     w2l[0].xyz,
@@ -1376,7 +1380,7 @@ hitInsIdx = insIdx;
     (*si).instanceIndex = hitInsIdx;
     (*si).normal = hitNormal;
     (*si).position = hitPosition;
-    (*si).materialIndex = i32(unpackMaterialIndex(bitcast<i32>(instancesBuffer[hitInsIdx * 9].z)).x);
+    (*si).materialIndex = i32(unpackMaterialIndex(bitcast<i32>(instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE}].z)).x);
     fetchAttributes(
       si,
       hitTri,
@@ -1387,16 +1391,16 @@ hitInsIdx = insIdx;
     );
 
     let l2w = mat4x4<f32>(
-      instancesBuffer[hitInsIdx * 9 + 5],
-      instancesBuffer[hitInsIdx * 9 + 6],
-      instancesBuffer[hitInsIdx * 9 + 7],
-      instancesBuffer[hitInsIdx * 9 + 8]
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 5],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 6],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 7],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 8]
     );
     let w2l = mat4x4<f32>(
-      instancesBuffer[hitInsIdx * 9 + 1],
-      instancesBuffer[hitInsIdx * 9 + 2],
-      instancesBuffer[hitInsIdx * 9 + 3],
-      instancesBuffer[hitInsIdx * 9 + 4]
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 1],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 2],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 3],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 4]
     );
     let normalTransform = transpose(mat3x3<f32>(
       w2l[0].xyz,
@@ -1441,6 +1445,7 @@ if (isOccluded) {
     let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
     if (!intersectionAlphaPasses(
       materialIndex,
+      insIdx,
       index,
       hitBarycentric,
       hitPosition,
