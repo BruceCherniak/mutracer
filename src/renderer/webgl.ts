@@ -128,6 +128,31 @@ export class Texture2D {
     }
   }
 
+  /** Copies a byte range into a data texture's CPU image and uploads its covering rows. */
+  updateDataRange(gl: WebGL2RenderingContext, data: Float32Array | Int32Array | Uint8Array,
+    offset: number, size: number) {
+    if (!size) return;
+    const source = this.source as TexturePixelSource;
+    if (!isPixelSource(source) || offset < 0 || size < 0 ||
+      offset % data.BYTES_PER_ELEMENT || size % data.BYTES_PER_ELEMENT ||
+      offset + size > data.byteLength || offset + size > source.data.byteLength) {
+      throw new RangeError('Invalid data texture byte range');
+    }
+    source.data.set(data.subarray(offset / data.BYTES_PER_ELEMENT, (offset + size) / data.BYTES_PER_ELEMENT),
+      offset / source.data.BYTES_PER_ELEMENT);
+    this._ensureTexture(gl);
+    this._bindAndConfigure(gl);
+    if (this._dirty || !this._allocated) { this._upload(gl); return; }
+    const channels = source.data.length / (source.width * source.height);
+    const rowBytes = source.width * channels * source.data.BYTES_PER_ELEMENT;
+    const first = Math.floor(offset / rowBytes), end = Math.ceil((offset + size) / rowBytes);
+    const { format, type } = this._format(gl, channels);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, this._options.flipY ? 1 : 0);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, this._options.premultiplyAlpha ? 1 : 0);
+    gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, first, source.width, end - first, format, type,
+      source.data.subarray(first * source.width * channels, end * source.width * channels));
+  }
+
   getWebGLTexture(gl: WebGL2RenderingContext) {
     this._ensureTexture(gl);
     return this._texture!;
