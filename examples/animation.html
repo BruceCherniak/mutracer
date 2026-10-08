@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ClayPT · Animation</title>
+    <link rel="stylesheet" href="./shared/style.css" />
+  </head>
+  <body>
+    <canvas id="main"></canvas>
+    <div class="panel">
+      <span id="status"></span>
+      <label><input id="animate" type="checkbox" checked /> Animate bones</label>
+      <label>Morph <input id="morph" type="range" min="0" max="1" step="0.01" value="0.4" /></label>
+    </div>
+    <script type="module" src="./animation.ts"></script>
+  </body>
+</html>

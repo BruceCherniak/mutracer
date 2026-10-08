@@ -15,6 +15,7 @@ import { ColorRGB, ColorRGBA } from '../types';
 import { GroundedSkyboxBackground, Scene, SceneLight } from '../scene/Scene';
 import { mat4 } from '../math';
 import { generateVertexNormals, updateBoundingBox } from './geometry';
+import { THREEDeformation, isDeformingMesh } from './threeDeformation';
 import { SceneChangeDetector, snapshotsEqual, snapshotFields } from '../renderer/sceneChangeDetector';
 
 interface TextureRecord {
@@ -633,25 +634,28 @@ export interface FromTHREESceneOptions {
   ): void;
 }
 
+interface GeometryEntry { state: unknown[]; groups: Map<string, Geometry> }
 interface ConversionStore {
   textures: TextureStore;
   materials: WeakMap<THREE.Material, { material: OpenPBRMaterial; hash: string }>;
-  geometries: WeakMap<THREE.BufferGeometry, { state: unknown[]; groups: Map<string, Geometry> }>;
+  geometries: WeakMap<THREE.BufferGeometry, GeometryEntry>;
+  deformedGeometries: WeakMap<THREE.Mesh, GeometryEntry>;
+  deformations: WeakMap<THREE.Mesh, THREEDeformation>;
   meshes: WeakMap<THREE.Mesh, Map<number, Mesh>>;
   lights: WeakMap<THREE.Object3D | THREE.Texture, SceneLight>;
   background?: Scene['background'];
 }
 function createConversionStore(): ConversionStore {
   return { textures: new WeakMap(), materials: new WeakMap(), geometries: new WeakMap(),
-    meshes: new WeakMap(), lights: new WeakMap() };
+    meshes: new WeakMap(), lights: new WeakMap(), deformedGeometries: new WeakMap(), deformations: new WeakMap() };
 }
-function geometryState(geometry: THREE.BufferGeometry) {
+function geometryState(geometry: THREE.BufferGeometry, deformation = false) {
   return ['position', 'normal', 'tangent', 'uv', 'uv1', 'index'].flatMap(name => {
     const attribute = name === 'index' ? geometry.index : geometry.getAttribute(name);
     if (!attribute) return [undefined];
     const interleaved = attribute as THREE.InterleavedBufferAttribute;
     const buffer = interleaved.isInterleavedBufferAttribute ? interleaved.data : attribute as THREE.BufferAttribute;
-    return [attribute, buffer, buffer.version, buffer.array, attribute.count, attribute.itemSize,
+    return [attribute, buffer, deformation && ['position', 'normal', 'tangent'].includes(name) ? undefined : buffer.version, buffer.array, attribute.count, attribute.itemSize,
       attribute.normalized, interleaved.offset, interleaved.data?.stride];
   });
 }
@@ -751,6 +755,16 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
           'must use MeshStandardMaterial or MeshBasicMaterial in order to be rendered.'
         );
       } else {
+        let deformation: THREEDeformation | undefined;
+        let deformed = false;
+        if (isDeformingMesh(child)) {
+          deformation = store.deformations.get(child);
+          if (!deformation?.matches(child.geometry)) {
+            deformation = new THREEDeformation(child.geometry); store.deformations.set(child, deformation);
+            store.deformedGeometries.delete(child);
+          }
+          deformed = deformation.update(child);
+        }
         const threeMaterials = childMaterials;
         const groups =
           threeMaterials.length > 1 && child.geometry.groups.length
@@ -762,18 +776,28 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             : (child.geometry.getIndex()?.count ??
               child.geometry.getAttribute('position').count);
           const geometryKey = `${group.start}:${count}`;
-          const state = geometryState(child.geometry);
-          let entry = store.geometries.get(child.geometry);
+          const state = geometryState(child.geometry, !!deformation);
+          let entry = deformation ? store.deformedGeometries.get(child) : store.geometries.get(child.geometry);
           if (!entry || !snapshotsEqual(entry.state, state)) {
             entry = { state, groups: new Map() };
-            store.geometries.set(child.geometry, entry);
+            if (deformation) store.deformedGeometries.set(child, entry);
+            else store.geometries.set(child.geometry, entry);
           }
           let geometry = entry.groups.get(geometryKey);
+          const newGeometry = !geometry;
           if (!geometry) {
             const converted = convertGeometry(child.geometry, { start: group.start, count });
             if (!converted) return;
             geometry = converted;
             entry.groups.set(geometryKey, geometry);
+          }
+          if (deformation && (deformed || newGeometry)) {
+            geometry.dynamic = true;
+            geometry.position.array.set(deformation.position);
+            if (deformation.normal) geometry.normal.array.set(deformation.normal);
+            if (deformation.tangent && geometry.tangent) geometry.tangent.array.set(deformation.tangent);
+            updateBoundingBox(geometry);
+            if (!newGeometry) geometry.markUpdated();
           }
           const sourceMaterial = threeMaterials[group.materialIndex ?? 0];
           const cachedMaterial = store.materials.get(sourceMaterial);
@@ -993,7 +1017,7 @@ export class THREESceneSync {
     const changes = this._detector.detect(this.scene);
     this._detector.commit();
     return { transforms: changes.transforms.length, membership,
-      content: changes.meshes === 'full' || changes.materials.length > 0,
+      content: changes.meshes === 'full' || changes.materials.length > 0 || changes.geometries.length > 0,
       lights: changes.lights, background: changes.background };
   }
 
