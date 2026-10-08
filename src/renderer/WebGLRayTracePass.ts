@@ -1,3 +1,4 @@
+import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges';
 import {
   constants,
   Renderer as WebGLRenderer,
@@ -58,7 +59,7 @@ import {
   estimateEnvironmentPower,
   packIESProfiles
 } from './lightSampling';
-import { Attribute } from '../scene/Geometry';
+import Geometry, { Attribute } from '../scene/Geometry';
 import { updateMeshInstances } from './prepareMeshBVH';
 import { mergeMeshesToGeometry } from './mergeMeshesToGeometry';
 import {
@@ -119,6 +120,9 @@ class WebGLRayTracePass {
   private _envLightSelectionPmf = 0;
   private _materialData: MergedMaterialData | undefined;
   private _maxTextureArrayBytes = DEFAULT_MAX_TEXTURE_ARRAY_BYTES;
+  private _preparedMeshData?: ReturnType<typeof updateMeshInstances>;
+  private _materialChanges = new MaterialChangeTracker();
+  private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; materials: Set<OpenPBRMaterial> };
   private _needsUpdateMeshData = true;
   private _meshSnapshot: {
     mesh: Mesh;
@@ -370,6 +374,20 @@ class WebGLRayTracePass {
   }
 
   setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; materials?: readonly OpenPBRMaterial[] }) {
+    if (update && !update.transforms?.length && this._preparedMeshData && this._materialData &&
+      !this._needsUpdateMeshData && meshes === this._meshes) {
+      const change = this._materialChanges.classify(update.materials ?? []);
+      if (change.level !== 'geometry') {
+        if (update.materials?.length) {
+          const pending = this._pendingMaterialUpdate;
+          this._pendingMaterialUpdate = { level: pending?.level === 'textures' ? 'textures' : change.level,
+            emission: !!pending?.emission || change.emission,
+            materials: new Set([...(pending?.materials ?? []), ...update.materials]) };
+          this._meshSnapshot.forEach(item => { item.materialVersions = item.materials.map(m => m.version); });
+        }
+        return !!update.materials?.length;
+      }
+    }
     const materialChange = !!update?.materials?.length;
     const next = meshes.map((mesh) => ({
       mesh,
@@ -450,6 +468,7 @@ class WebGLRayTracePass {
     this._needsUpdateMeshData = false;
 
     const res = updateMeshInstances(this._meshes);
+    this._preparedMeshData = res;
     const mergedGeometry = res.geometry;
     const materials = res.materials;
     const tlas = flattenBvh(buildTLAS(res.instances, res.blases), true);
@@ -484,26 +503,6 @@ class WebGLRayTracePass {
       setDataTexture(this._bvhBufferTex, bvhBuffer, 4);
       setDataTexture(this._instancesBufferTex, instancesBuffer, 4);
     }
-
-    // Avoid too much shader compilation
-    const STACK_SIZE = 50;
-    const hasShadowCatcher = materials.some((m) => m.shadowCatcher);
-    const HAS_BEVEL = materials.some((m) => m.bevelSize > 0);
-    const HAS_MEDIUM = materials.some(materialUsesMedium);
-
-    this._hasShadowCatcher = hasShadowCatcher;
-    this._hasTransmission = materials.some(
-      (m) =>
-        m.transmissionWeight > 0 ||
-        m.mapAlphaUsage === OpenPBRMaterial.mapAlphaUsageTransmission
-    );
-    this._hasAlpha = materials.some(
-      (m) =>
-        m.opacity < 1 || +m.mapAlphaUsage === OpenPBRMaterial.mapAlphaUsageAlpha
-    );
-    this._spectral = materials.some((m) => m.transmissionDispersionScale > 0);
-
-    // this._invalid = mergedGeometry.position.array.length === 0;
 
     this._materialData?.dispose(this._renderer.gl);
     const materialData = new MergedMaterialData(
@@ -544,6 +543,36 @@ class WebGLRayTracePass {
         isEmptyScene: +(res.instances.length === 0)
       });
 
+    });
+    this._updateMaterialConstants(materials, materialData, mergedGeometry);
+    this._materialChanges.capture(materials);
+    this._pendingMaterialUpdate = undefined;
+
+    return bvhBuffer;
+  }
+
+  private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MergedMaterialData, mergedGeometry: Geometry) {
+    // Avoid too much shader compilation
+    const STACK_SIZE = 50;
+    const hasShadowCatcher = materials.some((m) => m.shadowCatcher);
+    const HAS_BEVEL = materials.some((m) => m.bevelSize > 0);
+    const HAS_MEDIUM = materials.some(materialUsesMedium);
+
+    this._hasShadowCatcher = hasShadowCatcher;
+    this._hasTransmission = materials.some(
+      (m) =>
+        m.transmissionWeight > 0 ||
+        m.mapAlphaUsage === OpenPBRMaterial.mapAlphaUsageTransmission
+    );
+    this._hasAlpha = materials.some(
+      (m) =>
+        m.opacity < 1 || +m.mapAlphaUsage === OpenPBRMaterial.mapAlphaUsageAlpha
+    );
+    this._spectral = materials.some((m) => m.transmissionDispersionScale > 0);
+
+    // this._invalid = mergedGeometry.position.array.length === 0;
+
+    this._tracePasses.forEach(pass => {
       pass.setDefines({
         // TODO
         OES_texture_float_linear: true,
@@ -574,8 +603,30 @@ class WebGLRayTracePass {
 
       materialData.setToPass(pass);
     });
+  }
 
-    return bvhBuffer;
+  private _updateMaterialData() {
+    const update = this._pendingMaterialUpdate!;
+    const res = this._preparedMeshData!;
+    let data = this._materialData!;
+    if (update.level === 'textures') {
+      data.dispose(this._renderer.gl);
+      data = this._materialData = new MergedMaterialData(res.materials, this._analyticLights, {
+        maxTextureArrayBytes: this._maxTextureArrayBytes,
+        maxTextureArrayLayers: this._renderer.gl.getParameter(this._renderer.gl.MAX_ARRAY_TEXTURE_LAYERS),
+        maxTextureDimension2D: this._renderer.gl.getParameter(this._renderer.gl.MAX_TEXTURE_SIZE)
+      });
+      this._needsUpdateAnalyticLightsBuffer = true;
+    } else data.repackParams(res.materials);
+    this._updateMaterialConstants(res.materials, data, res.geometry);
+    if (update.emission || update.level === 'textures') {
+      // WebGL currently evaluates mesh emission on path hits; its direct-light
+      // sampler has only analytic/environment sources. Retain that behavior.
+      res.emissiveBindings = res.instanceBindings.filter(binding =>
+        binding.materialIndices.some(index => materialIsEmissive(res.materials[index])));
+    }
+    this._materialChanges.capture([...update.materials]);
+    this._pendingMaterialUpdate = undefined;
   }
 
   setLights(lights: SceneLight[]) {
@@ -808,6 +859,8 @@ class WebGLRayTracePass {
     if (this._needsUpdateMeshData) {
       this._updateMeshData();
     }
+
+    if (this._pendingMaterialUpdate) this._updateMaterialData();
 
     if (this._needsUpdateAnalyticLightsBuffer) {
       const analyticLights = this._analyticLights;
