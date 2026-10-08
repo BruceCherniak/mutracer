@@ -41,13 +41,14 @@ function backgroundSnapshot(background: SceneBackground | undefined) {
 }
 
 function materialTextures(material: OpenPBRMaterial) {
-  return materialTextureKeys.flatMap(key => snapshotTexture(material[key]));
+  return materialTextureKeys.flatMap(key => { const value = material[key]; return typeof value === 'number' ? [] : snapshotTexture(value); });
 }
 
 function texturesChanged(material: OpenPBRMaterial, previous: readonly unknown[]) {
   let i = 0;
   for (const key of materialTextureKeys) {
     const texture = material[key];
+    if (typeof texture === 'number') continue;
     if (!texture) { if (previous[i++] !== undefined) return true; continue; }
     if (previous[i++] !== texture || previous[i++] !== texture.version ||
       previous[i++] !== texture.image || previous[i++] !== texture.flipY ||

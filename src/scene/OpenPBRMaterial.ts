@@ -299,11 +299,11 @@ export const materialKeys: (keyof OpenPBRMaterial)[] = [
 ];
 
 export const materialTextureKeys = [
-  'map', 'alphaMap', 'emissiveMap', 'normalMap', 'metallicRoughnessMap', 'roughnessMap', 'metalnessMap', 'transmissionMap', 'thinFilmMap', 'displacementMap'
+  'map', 'alphaMap', 'emissiveMap', 'normalMap', 'metallicRoughnessMap', 'roughnessMap', 'metalnessMap', 'transmissionMap', 'thinFilmMap', 'displacementMap', 'displacementBumpStrength'
 ] as const satisfies readonly (keyof OpenPBRMaterial)[];
 
 export const materialGeometryKeys = [
-  'displacementUvProjection', 'displacementUvScale', 'displacementScale', 'displacementStepSize', 'displacementMode', 'displacementBias', 'displacementTessellationMode', 'displacementMinSubdivisionLevel', 'displacementMaxSubdivisionLevel', 'displacementMaxError', 'displacementMaxTriangles', 'displacementEdgeProfile', 'displacementThreshold', 'displacementEdgeWidth', 'displacementHardContourGeometry', 'displacementContourSmoothing', 'displacementContourSubdivisionLevel', 'displacementCreaseAngle', 'displacementHeightFilter', 'displacementHeightPrefilter', 'displacementBumpStrength'
+  'displacementUvProjection', 'displacementUvScale', 'displacementScale', 'displacementStepSize', 'displacementMode', 'displacementBias', 'displacementTessellationMode', 'displacementMinSubdivisionLevel', 'displacementMaxSubdivisionLevel', 'displacementMaxError', 'displacementMaxTriangles', 'displacementEdgeProfile', 'displacementThreshold', 'displacementEdgeWidth', 'displacementHardContourGeometry', 'displacementContourSmoothing', 'displacementContourSubdivisionLevel', 'displacementCreaseAngle', 'displacementHeightFilter', 'displacementHeightPrefilter'
 ] as const satisfies readonly (keyof OpenPBRMaterial)[];
 
 export const materialParamKeys = [

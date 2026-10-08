@@ -25,3 +25,12 @@ it('treats tessellated emission and displacement texture edits as geometry chang
   tracker.capture([m]); m.displacementMap.markUpdated();
   expect(tracker.classify([m]).level).toBe('geometry');
 });
+
+it('rebuilds texture indices for displacement bump strength without rebuilding geometry', () => {
+  const m = new OpenPBRMaterial(); m.displacementMap = texture();
+  const tracker = new MaterialChangeTracker(); tracker.capture([m]);
+  m.displacementBumpStrength = 1; m.markUpdated();
+  expect(tracker.classify([m])).toEqual({ level: 'textures', emission: false });
+  tracker.capture([m]); m.displacementBumpStrength = 0; m.markUpdated();
+  expect(tracker.classify([m])).toEqual({ level: 'textures', emission: false });
+});
