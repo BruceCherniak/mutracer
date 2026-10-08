@@ -1,9 +1,13 @@
+import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { describe, expect, it, vi } from 'vitest';
-import Renderer from '../../src/Renderer';
+import Renderer, { RENDER_STATUS_PREPARING } from '../../src/Renderer';
 import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from '../../src/renderer/MergedMaterialData';
 import type { RenderingPipeline } from '../../src/renderer/RenderingPipeline';
 import type { WGPURenderingPipeline } from '../../src/renderer/WGPURenderingPipeline';
 import type Camera from '../../src/scene/Camera';
+import Mesh from '../../src/scene/Mesh';
+import { createCubeGeometry } from '../../src/main';
+import { SceneChangeDetector } from '../../src/renderer/sceneChangeDetector';
 import type { Scene } from '../../src/scene/Scene';
 
 function createPipeline(overrides: Partial<WGPURenderingPipeline> = {}) {
@@ -63,17 +67,15 @@ function attachPipeline(renderer: Renderer, pipeline: RenderingPipeline) {
 }
 
 function markSceneStable(renderer: Renderer, scene: Scene) {
-  (
-    renderer as unknown as {
-      _oldBackground: Scene['background'];
-      _oldLightList: Scene['lights'];
-    }
-  )._oldBackground = scene.background;
-  (
-    renderer as unknown as {
-      _oldLightList: Scene['lights'];
-    }
-  )._oldLightList = scene.lights;
+  const internal = renderer as unknown as {
+    _sceneChangeDetector: SceneChangeDetector; _scenePipeline: RenderingPipeline;
+    _sceneInitialized: boolean; _pipeline: RenderingPipeline; _forceMeshUpdate: boolean;
+  };
+  internal._sceneChangeDetector.detect(scene);
+  internal._sceneChangeDetector.commit();
+  internal._scenePipeline = internal._pipeline;
+  internal._sceneInitialized = true;
+  internal._forceMeshUpdate = true;
 }
 
 describe('Renderer sizing', () => {
@@ -137,32 +139,55 @@ describe('Renderer sizing', () => {
     expect(pipeline.setHDROutputEnabled).toHaveBeenCalledWith(true);
   });
 
-  it('forwards transform-only dirty meshes for one render', () => {
+  it('automatically forwards transform-only edits for one render', () => {
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement
     });
     renderer.bvhBuilder = 'builtin';
     const pipeline = createPipeline();
-    const mesh = {} as Scene['meshes'][number];
+    const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
     const scene = { meshes: [mesh], lights: [] } as unknown as Scene;
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
 
-    renderer.markMeshTransformsDirty([mesh]);
+    (renderer as any)._forceMeshUpdate = false;
+    mesh.matrixWorld[12] = 2;
     renderer.render(scene, {} as Camera);
     renderer.render(scene, {} as Camera);
 
-    expect(pipeline.setMeshes).toHaveBeenNthCalledWith(1, scene.meshes, [mesh]);
+    expect(pipeline.setMeshes).toHaveBeenNthCalledWith(1, scene.meshes, { transforms: [mesh], materials: [] });
     expect(pipeline.setMeshes).toHaveBeenCalledTimes(1);
   });
 
-  it('checks mesh content only when the list, revision, or explicit dirty signal changes', () => {
+  it('does not accept detector edits during asynchronous BVH preparation', async () => {
+    const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
+    const pipeline = createPipeline();
+    const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
+    const scene: Scene = { meshes: [mesh], lights: [] };
+    attachPipeline(renderer, pipeline);
+    markSceneStable(renderer, scene);
+    (renderer as any)._forceMeshUpdate = false;
+    mesh.materials[0].markUpdated();
+    const prepare = vi.spyOn(renderer, 'prepareScene').mockResolvedValue(undefined);
+    const needsPreparation = vi.spyOn(renderer as any, '_needsBVHPreparation').mockReturnValue(true);
+    expect(renderer.render(scene, {} as Camera)).toBe(RENDER_STATUS_PREPARING);
+    expect(pipeline.setMeshes).not.toHaveBeenCalled();
+    await Promise.resolve();
+    needsPreparation.mockReturnValue(false);
+    renderer.render(scene, {} as Camera);
+    expect(pipeline.setMeshes).toHaveBeenCalledOnce();
+    renderer.render(scene, {} as Camera);
+    expect(pipeline.setMeshes).toHaveBeenCalledOnce();
+    expect(prepare).toHaveBeenCalledOnce();
+  });
+
+  it('detects geometry, material and membership edits without explicit renderer signals', () => {
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement
     });
     renderer.bvhBuilder = 'builtin';
     const pipeline = createPipeline();
-    const scene = { meshes: [{} as Scene['meshes'][number]], lights: [] } as Scene;
+    const scene = { meshes: [new Mesh(createCubeGeometry(), new OpenPBRMaterial())], lights: [] } as Scene;
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
 
@@ -170,11 +195,11 @@ describe('Renderer sizing', () => {
     renderer.render(scene, {} as Camera);
     expect(pipeline.setMeshes).toHaveBeenCalledTimes(1);
 
-    renderer.markMeshesDirty();
+    scene.meshes[0].geometry.markUpdated();
     renderer.render(scene, {} as Camera);
     expect(pipeline.setMeshes).toHaveBeenCalledTimes(2);
 
-    scene.meshRevision = 1;
+    scene.meshes[0].materials[0].markUpdated();
     renderer.render(scene, {} as Camera);
     expect(pipeline.setMeshes).toHaveBeenCalledTimes(3);
 
@@ -452,9 +477,9 @@ describe('Renderer realtime OIDN', () => {
       await new Promise<void>(resolve => setTimeout(resolve, 0));
 
       meshChanged = changedPart === 'meshes';
-      if (meshChanged) renderer.markMeshesDirty();
       const editedScene = {
         ...scene,
+        ...(changedPart === 'meshes' ? { meshes: [...scene.meshes] } : {}),
         ...(changedPart === 'lights' ? { lights: [...scene.lights] } : {}),
         ...(changedPart === 'background' ? { background: [0.1, 0.2, 0.3] } : {})
       } as Scene;
@@ -1038,11 +1063,7 @@ describe('Renderer realtime OIDN', () => {
     renderer.oidnRealtime = true;
     (renderer as unknown as { _renderDone: boolean })._renderDone = true;
     (renderer as unknown as { _oidnStatus: number })._oidnStatus = 1;
-    Object.assign(renderer as object, {
-      _oldMeshList: scene.meshes,
-      _oldMeshPipeline: pipeline,
-      _oldMeshRevision: scene.meshRevision
-    });
+    (renderer as any)._forceMeshUpdate = false;
 
     renderer.render(scene, camera);
 
@@ -1096,7 +1117,7 @@ describe('Renderer realtime OIDN', () => {
     expect(pipeline.draw).not.toHaveBeenCalled();
 
     sceneChanged = true;
-    renderer.markMeshesDirty();
+    scene.meshes = [...scene.meshes];
     renderer.render(scene, camera);
     expect(pipeline.needsRestartSample).not.toHaveBeenCalled();
     expect(pipeline.draw).not.toHaveBeenCalled();

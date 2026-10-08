@@ -1213,8 +1213,8 @@ output.color = color;
     outputPass.setSize(screenWidth, screenHeight);
     isFirstFrame = true;
   }
-  function setMeshes(meshes: Mesh[], transformOnlyMeshes?: readonly Mesh[]) {
-    const changed = rayTracePass.setMeshes(meshes, transformOnlyMeshes);
+  function setMeshes(meshes: Mesh[], update?: Parameters<RenderingPipeline['setMeshes']>[1]) {
+    const changed = rayTracePass.setMeshes(meshes, update);
     if (!changed) return false;
     tileTimingGeneration++;
     isFirstFrame = true;

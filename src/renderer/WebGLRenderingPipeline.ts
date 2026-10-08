@@ -391,8 +391,8 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
     },
     draw,
     drawPostProcess: () => drawPostProcess(true),
-    setMeshes(meshes: Mesh[]) {
-      const changed = rayTracePass.setMeshes(meshes);
+    setMeshes(meshes: Mesh[], update?: Parameters<RenderingPipeline['setMeshes']>[1]) {
+      const changed = rayTracePass.setMeshes(meshes, update);
       if (!changed) return false;
       isFirstFrame = true;
       return true;

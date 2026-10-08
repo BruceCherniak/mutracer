@@ -1774,7 +1774,9 @@ ${rayTraceCompute({
     this._constants.USE_ENVMAP = !!envImage;
   }
 
-  setMeshes(meshes: Mesh[], transformOnlyMeshes?: readonly Mesh[]) {
+  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; materials?: readonly OpenPBRMaterial[] }) {
+    const transformOnlyMeshes = update?.materials?.length ? undefined : update?.transforms;
+    const materialChange = !!update?.materials?.length;
     if (
       transformOnlyMeshes &&
       meshes === this._meshes &&
@@ -1931,7 +1933,10 @@ ${rayTraceCompute({
         }
       });
     }
-    return structuralChange || transformChange;
+    if (materialChange || !update && !structuralChange && !transformChange) {
+      this._needsUpdateMeshData = true;
+    }
+    return structuralChange || transformChange || materialChange || !update;
   }
 
   setTextureAtlasBudget(maxBytes: number) {

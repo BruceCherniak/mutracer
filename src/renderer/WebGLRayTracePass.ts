@@ -369,7 +369,8 @@ class WebGLRayTracePass {
     return changed;
   }
 
-  setMeshes(meshes: Mesh[]) {
+  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; materials?: readonly OpenPBRMaterial[] }) {
+    const materialChange = !!update?.materials?.length;
     const next = meshes.map((mesh) => ({
       mesh,
       geometry: mesh.geometry,
@@ -413,7 +414,7 @@ class WebGLRayTracePass {
       }
     });
     this._meshSnapshot = next;
-    if (!changed) return false;
+    if (!changed && update && !materialChange) return false;
     this._meshes = meshes;
     this._needsUpdateMeshData = true;
     this._debugBvhData = undefined;

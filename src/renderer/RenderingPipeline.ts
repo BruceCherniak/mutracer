@@ -1,5 +1,6 @@
 import Camera from '../scene/Camera';
 import Mesh from '../scene/Mesh';
+import OpenPBRMaterial from '../scene/OpenPBRMaterial';
 import { Scene, SceneBackground, SceneLight } from '../scene/Scene';
 import { ColorRGB } from '../types';
 import { TextureAtlasStats } from './MergedMaterialData';
@@ -157,7 +158,10 @@ export interface RenderingPipeline {
   draw(camera: Camera, maxSamples: number): boolean;
   drawPostProcess(): void;
   /** Returns true when scene geometry, materials, or instance transforms changed. */
-  setMeshes(meshes: Mesh[], transformOnlyMeshes?: readonly Mesh[]): boolean;
+  setMeshes(meshes: Mesh[], update?: {
+    transforms?: readonly Mesh[];
+    materials?: readonly OpenPBRMaterial[];
+  }): boolean;
   /** Changes the software memory guard used when packing material textures. */
   setTextureAtlasBudget(maxBytes: number): boolean;
   getDebugBVHData(): Promise<{

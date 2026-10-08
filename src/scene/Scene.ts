@@ -49,8 +49,6 @@ export interface SceneOverlayDataSource {
  */
 export interface Scene {
   meshes: Mesh[];
-  /** Increment after in-place mesh, geometry, or material edits. */
-  meshRevision?: number;
   lights: SceneLight[];
   background?: SceneBackground;
 

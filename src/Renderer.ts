@@ -11,9 +11,9 @@ import {
 import makeWebGLRenderingPipeline from './renderer/WebGLRenderingPipeline';
 import { Renderer as WebGLRenderer } from './renderer/webgl';
 import Mesh from './scene/Mesh';
+import { SceneChangeDetector } from './renderer/sceneChangeDetector';
 import type Geometry from './scene/Geometry';
 import Camera from './scene/Camera';
-import { SceneBackground, SceneLight } from './scene/Scene';
 import { Scene } from './scene/Scene';
 import { ColorRGB } from './types';
 import type { OIDNDenoiser, OIDNModel } from './oidn';
@@ -146,14 +146,7 @@ export interface OfflineFrameRenderResult {
   adaptiveSampling: boolean;
 }
 
-function arrayEqual(arr0: number[], arr1: number[]) {
-  for (let i = 0; i < arr0.length; i++) {
-    if (arr0[i] !== arr1[i]) {
-      return false;
-    }
-  }
-  return arr0.length === arr1.length;
-}
+
 
 /** Not reported by `render()`; reserved as an initial value for callers. */
 export const RENDER_STATUS_UNKNOWN = 0;
@@ -472,16 +465,13 @@ export default class Renderer {
   private _pipelineInitError?: unknown;
   private _lastRenderError?: string;
 
-  private _oldLightList: SceneLight[] = [];
-  private _dirtyTransformMeshes = new Set<Mesh>();
-  private _oldMeshList: Mesh[] | null = null;
-  private _oldMeshRevision: number | undefined;
-  private _oldMeshPipeline: RenderingPipeline | undefined;
-  private _meshContentDirty = false;
+  private _sceneChangeDetector = new SceneChangeDetector();
+  private _scenePipeline: RenderingPipeline | undefined;
+  private _sceneInitialized = false;
+  private _forceMeshUpdate = false;
   // `undefined` is a valid "no background" scene value, so use `null` as the
   // uninitialized sentinel and force the pipeline to receive the initial
   // background state even when the scene starts without one.
-  private _oldBackground: SceneBackground | undefined | null = null;
 
   private _webglRenderer?: WebGLRenderer;
   private _pipeline?: RenderingPipeline;
@@ -629,19 +619,6 @@ export default class Renderer {
     this._renderDone = false;
     this._oidnStatus = 0;
     this._oidnRevision++;
-  }
-
-  /**
-   * Marks known transform-only changes so the WebGPU pipeline can update just
-   * the affected instance records and TLAS branches on the next render.
-   */
-  markMeshTransformsDirty(meshes: Iterable<Mesh>) {
-    for (const mesh of meshes) this._dirtyTransformMeshes.add(mesh);
-  }
-
-  /** Request a content snapshot after in-place material or geometry edits. */
-  markMeshesDirty() {
-    this._meshContentDirty = true;
   }
 
   /**
@@ -1159,74 +1136,42 @@ export default class Renderer {
 
     // Initial scene setup is not an edit. Later updates share one interaction
     // signal so material, transform, lighting and background changes all preview.
-    const sceneInitialized = this._oldBackground !== null;
+    if (this._scenePipeline !== pipeline) {
+      this._sceneChangeDetector.reset();
+      this._scenePipeline = pipeline;
+      this._sceneInitialized = false;
+    }
+    const sceneInitialized = this._sceneInitialized;
     const renderDoneBeforeSceneUpdate = this._renderDone;
-    let sceneChanged = false;
-    if (this._oldBackground !== scene.background) {
-      const oldBackground = this._oldBackground;
-      if (
-        !(
-          Array.isArray(oldBackground) &&
-          Array.isArray(scene.background) &&
-          arrayEqual(oldBackground, scene.background)
-        )
-      ) {
-        this._oldBackground = scene.background;
-        pipeline.setBackground(scene.background);
-        sceneChanged = true;
-        this._renderDone = false;
-      }
-    }
+    const changes = this._sceneChangeDetector.detect(scene);
     const atlasBudgetChanged = pipeline.setTextureAtlasBudget(this.textureAtlasBudgetBytes);
-    if (atlasBudgetChanged) {
-      sceneChanged = true;
-      this._renderDone = false;
-    }
-    const dirtyTransformMeshes = this._dirtyTransformMeshes.size
-      ? [...this._dirtyTransformMeshes]
-      : undefined;
-    const meshContentChanged =
-      this._oldMeshPipeline !== pipeline ||
-      this._oldMeshList !== scene.meshes ||
-      this._oldMeshRevision !== scene.meshRevision ||
-      this._meshContentDirty || atlasBudgetChanged;
+    this._forceMeshUpdate ||= atlasBudgetChanged;
+    const meshContentChanged = changes.meshes !== 'none' || this._forceMeshUpdate;
     if (meshContentChanged && this._needsBVHPreparation(scene.meshes)) {
-      // Build the missing BLAS data asynchronously with TinyBVH. The pipeline
-      // keeps its previous scene until the build completes.
       this._bvhPreparation ??= this.prepareScene(scene.meshes).finally(() => {
         this._bvhPreparation = undefined;
-        this._meshContentDirty = true;
+        this._forceMeshUpdate = true;
       });
       return RENDER_STATUS_PREPARING;
     }
-    if (meshContentChanged || dirtyTransformMeshes) {
+    let sceneChanged = meshContentChanged || changes.lights || changes.background;
+    if (meshContentChanged) {
       const measureMeshSync = (globalThis as typeof globalThis & {
         __clayptMeasureMeshSync?: boolean
       }).__clayptMeasureMeshSync === true;
       const meshSyncStartedAt = measureMeshSync ? performance.now() : 0;
-      const meshesChanged = pipeline.setMeshes(scene.meshes, dirtyTransformMeshes);
+      pipeline.setMeshes(scene.meshes, changes.meshes === 'full' || this._forceMeshUpdate
+        ? undefined : { transforms: changes.transforms, materials: changes.materials });
       if (measureMeshSync) {
-        performance.measure('claypt:setMeshes', {
-          start: meshSyncStartedAt,
-          end: performance.now()
-        });
+        performance.measure('claypt:setMeshes', { start: meshSyncStartedAt, end: performance.now() });
       }
-      if (meshesChanged) {
-        sceneChanged = true;
-        this._renderDone = false;
-      }
-      this._oldMeshPipeline = pipeline;
-      this._oldMeshList = scene.meshes;
-      this._oldMeshRevision = scene.meshRevision;
-      this._meshContentDirty = false;
+      this._forceMeshUpdate = false;
     }
-    this._dirtyTransformMeshes.clear();
-    if (this._oldLightList !== scene.lights) {
-      this._oldLightList = scene.lights;
-      pipeline.setLights(scene.lights);
-      sceneChanged = true;
-      this._renderDone = false;
-    }
+    if (changes.lights) pipeline.setLights(scene.lights);
+    if (changes.background) pipeline.setBackground(scene.background);
+    this._sceneChangeDetector.commit();
+    this._sceneInitialized = true;
+    if (sceneChanged) this._renderDone = false;
 
     const oidn = this.oidn;
     const supportsOIDN = !!(pipeline as WGPURenderingPipeline)
