@@ -63,7 +63,8 @@ import {
 } from './RenderingPipeline';
 import {
   buildLightAliasTable,
-  collectEmissiveTriangles,
+  EmissiveTriangleCache,
+  LightChoiceBuffer,
   EmissiveTriangle,
   estimateAnalyticLightPower,
   estimateEnvironmentPower,
@@ -291,7 +292,7 @@ class WGPURayTracePass {
   private _analyticLights: AnalyticLight[] = [];
   private _iesProfileTexelOffsets = new Int32Array(0);
   private _materialChanges = new MaterialChangeTracker();
-  private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; materials: Set<OpenPBRMaterial> };
+  private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean; materials: Set<OpenPBRMaterial> };
   private _materialData: MergedMaterialData | undefined;
   private _maxTextureArrayBytes = DEFAULT_MAX_TEXTURE_ARRAY_BYTES;
   private _needsUpdateMeshData = true;
@@ -358,6 +359,11 @@ class WGPURayTracePass {
 
   private _bvhBuffer?: GPUBuffer;
   private _instancesBuffer?: GPUBuffer;
+  private _emissiveCache = new EmissiveTriangleCache();
+  private _lightChoices = new LightChoiceBuffer();
+  private _lightSamplingData?: Float32Array;
+  private _lightSamplingScratch?: Float32Array;
+  private _lightSamplingTriangleCount = -1;
   private _emissiveTriangles: EmissiveTriangle[] = [];
   private _analyticLightSelectionPmfs: number[] = [];
   private _needsUpdateLightSamplingData = true;
@@ -1795,6 +1801,7 @@ ${rayTraceCompute({
           this._pendingMaterialUpdate = {
             level: pending?.level === 'textures' ? 'textures' : materialUpdate.level,
             emission: !!pending?.emission || materialUpdate.emission,
+            emissiveMap: !!pending?.emissiveMap || materialUpdate.emissiveMap,
             materials: new Set([...(pending?.materials ?? []), ...update.materials])
           };
           this._meshSnapshot.forEach(item => { item.materialVersions = item.materials.map(m => m.version); });
@@ -2070,45 +2077,12 @@ ${rayTraceCompute({
   }
 
   private _updateLightSamplingData() {
-    const choices = [] as {
-      sourceType: number;
-      sourceIndex: number;
-      weight: number;
-    }[];
-    const environmentWeight = estimateEnvironmentPower(this._envImageSource);
-    if (environmentWeight > 0) {
-      choices.push({
-        sourceType: LIGHT_CHOICE_ENVIRONMENT,
-        sourceIndex: 0,
-        weight: environmentWeight
-      });
-    }
-    this._analyticLights.forEach((light, sourceIndex) => {
-      choices.push({
-        sourceType: LIGHT_CHOICE_ANALYTIC,
-        sourceIndex,
-        weight: estimateAnalyticLightPower(light)
-      });
-    });
-    this._emissiveTriangles.forEach((triangle, sourceIndex) => {
-      choices.push({
-        sourceType: LIGHT_CHOICE_EMISSIVE_TRIANGLE,
-        sourceIndex,
-        weight: triangle.area * triangle.samplingLuminance
-      });
-    });
-
-    const activeChoices = choices.filter(
-      (choice) => choice.weight > 0 && isFinite(choice.weight)
-    );
-    const distribution = buildLightAliasTable(activeChoices);
-    const choiceDomain = (choice: (typeof activeChoices)[number]) =>
-      choice.sourceType === LIGHT_CHOICE_ENVIRONMENT
-        ? LIGHT_DOMAIN_ENVIRONMENT
-        : choice.sourceType === LIGHT_CHOICE_ANALYTIC &&
-            this._analyticLights[choice.sourceIndex]?.type === 'DirectionalLight'
-          ? LIGHT_DOMAIN_INFINITE
-          : LIGHT_DOMAIN_LOCAL_AND_EMISSIVE;
+    const choices = this._lightChoices;
+    choices.reserve(1 + this._analyticLights.length + this._emissiveTriangles.length);
+    choices.push(LIGHT_CHOICE_ENVIRONMENT, 0, estimateEnvironmentPower(this._envImageSource));
+    this._analyticLights.forEach((light, i) => choices.push(LIGHT_CHOICE_ANALYTIC, i, estimateAnalyticLightPower(light)));
+    this._emissiveTriangles.forEach((triangle, i) => choices.push(LIGHT_CHOICE_EMISSIVE_TRIANGLE, i, triangle.area * triangle.samplingLuminance));
+    const distribution = buildLightAliasTable(choices);
     const domainDiagnostics = {
       environment: { count: 0, weight: 0, pmf: 0 },
       infinite: { count: 0, weight: 0, pmf: 0 },
@@ -2118,30 +2092,25 @@ ${rayTraceCompute({
       this._analyticLights.length
     ).fill(0);
     this._rtUniform.views.envLightPmf[0] = 0;
-    activeChoices.forEach((choice, index) => {
-      const pmf = distribution.pmfs[index];
-      const domain = [
-        domainDiagnostics.environment,
-        domainDiagnostics.infinite,
-        domainDiagnostics.localAndEmissive
-      ][choiceDomain(choice)];
-      domain.count++;
-      domain.weight += choice.weight;
-      domain.pmf += pmf;
-      if (choice.sourceType === LIGHT_CHOICE_ENVIRONMENT) {
-        this._rtUniform.views.envLightPmf[0] = pmf;
-      } else if (choice.sourceType === LIGHT_CHOICE_ANALYTIC) {
-        this._analyticLightSelectionPmfs[choice.sourceIndex] = pmf;
-      } else {
-        this._emissiveTriangles[choice.sourceIndex].selectionPmf = pmf;
-      }
-    });
+    const domains = [domainDiagnostics.environment, domainDiagnostics.infinite, domainDiagnostics.localAndEmissive];
+    for (let i = 0; i < choices.count; i++) {
+      const type = choices.sourceTypes[i], source = choices.sourceIndices[i];
+      const pmf = distribution.pmfs[i];
+      const domainIndex = type === LIGHT_CHOICE_ENVIRONMENT ? LIGHT_DOMAIN_ENVIRONMENT :
+        type === LIGHT_CHOICE_ANALYTIC && this._analyticLights[source]?.type === 'DirectionalLight' ?
+          LIGHT_DOMAIN_INFINITE : LIGHT_DOMAIN_LOCAL_AND_EMISSIVE;
+      const domain = domains[domainIndex];
+      domain.count++; domain.weight += choices.weights[i]; domain.pmf += pmf;
+      if (type === LIGHT_CHOICE_ENVIRONMENT) this._rtUniform.views.envLightPmf[0] = pmf;
+      else if (type === LIGHT_CHOICE_ANALYTIC) this._analyticLightSelectionPmfs[source] = pmf;
+      else this._emissiveTriangles[source].selectionPmf = pmf;
+    }
     this._lightDomainDiagnostics = domainDiagnostics;
-    this._rtUniform.views.lightChoiceCount[0] = activeChoices.length;
+    this._rtUniform.views.lightChoiceCount[0] = choices.count;
     this._rtUniform.views.lightWeightTotal[0] = distribution.totalWeight;
 
     const emissiveTexels = this._emissiveTriangles.length * 6;
-    const choiceTexels = Math.max(activeChoices.length, 1);
+    const choiceTexels = Math.max(choices.count, 1);
     const profileStartTexel = emissiveTexels + choiceTexels;
     const packedIES = packIESProfiles(this._analyticLights, profileStartTexel);
     this._iesProfileTexelOffsets = packedIES.offsets;
@@ -2155,6 +2124,7 @@ ${rayTraceCompute({
     if (height > maxDimension) {
       throw new Error('Too many emissive triangles for the light sampling texture.');
     }
+    const resized = !this._lightSamplingTexture || width !== this._lightSamplingTextureSize[0] || height !== this._lightSamplingTextureSize[1];
     if (
       !this._lightSamplingTexture ||
       width !== this._lightSamplingTextureSize[0] ||
@@ -2170,21 +2140,41 @@ ${rayTraceCompute({
       this._lightSamplingTextureSize = [width, height];
       this._needsUpdateBindGroups = true;
     }
-    const textureData = new Float32Array(width * height * 4);
+    const textureData = this._lightSamplingScratch?.length === width * height * 4
+      ? this._lightSamplingScratch : new Float32Array(width * height * 4);
+    textureData.fill(0);
     if (this._emissiveTriangles.length) {
-      textureData.set(packEmissiveTriangles(this._emissiveTriangles));
+      packEmissiveTriangles(this._emissiveTriangles, textureData);
     }
     new Uint32Array(textureData.buffer).set(
       distribution.choices,
       emissiveTexels * 4
     );
     textureData.set(packedIES.data, profileStartTexel * 4);
-    this._device.queue.writeTexture(
-      { texture: this._lightSamplingTexture },
-      textureData,
-      { bytesPerRow: width * 16 },
-      { width, height }
-    );
+    const previous = this._lightSamplingData;
+    const full = resized || !previous || this._lightSamplingTriangleCount !== this._emissiveTriangles.length;
+    const words = new Uint32Array(textureData.buffer);
+    const oldWords = previous && new Uint32Array(previous.buffer);
+    let startRow = -1;
+    for (let row = 0; row <= height; row++) {
+      let changed = row < height && full;
+      if (row < height && !full) {
+        for (let i = row * width * 4; i < (row + 1) * width * 4; i++) {
+          if (words[i] !== oldWords![i]) { changed = true; break; }
+        }
+      }
+      if (changed && startRow < 0) startRow = row;
+      if (!changed && startRow >= 0) {
+        this._device.queue.writeTexture(
+          { texture: this._lightSamplingTexture!, origin: [0, startRow] },
+          textureData.subarray(startRow * width * 4, row * width * 4),
+          { bytesPerRow: width * 16 }, { width, height: row - startRow });
+        startRow = -1;
+      }
+    }
+    this._lightSamplingScratch = previous;
+    this._lightSamplingData = textureData;
+    this._lightSamplingTriangleCount = this._emissiveTriangles.length;
     this._rtUniform.views.lightSamplingTextureWidth[0] = width;
     this._rtUniform.views.lightChoiceTexelOffset[0] = emissiveTexels;
     this._needsUpdateAnalyticLightsBuffer = true;
@@ -2215,6 +2205,7 @@ ${rayTraceCompute({
   }
 
   private _updateMeshData() {
+    this._emissiveCache = new EmissiveTriangleCache();
     const meshes = this._meshes;
     for (const geometry of this._geometriesNeedRefit) {
       const usesDisplacement = meshes.some(
@@ -2247,7 +2238,7 @@ ${rayTraceCompute({
         maxTextureDimension2D: this._device.limits.maxTextureDimension2D
       }
     ));
-    this._emissiveTriangles = collectEmissiveTriangles(
+    this._emissiveTriangles = this._emissiveCache.collect(
       res.emissiveBindings,
       materials
     );
@@ -2449,13 +2440,13 @@ ${rayTraceCompute({
     } else materialData.repackParams(res.materials);
     this._materialsBuffer = this._updateGPUBuffer('Materials', this._materialsBuffer, materialData.getBufferArray(), 384);
     this._updateMaterialConstants(res.materials, materialData, res.geometry);
-    if (update.emission || update.level === 'textures') {
+    if (update.emission || update.emissiveMap) {
       const resident = this._residentPreparedMeshData!;
       resident.emissiveBindings = resident.instanceBindings.filter(binding =>
         binding.materialIndices.some(index => materialIsEmissive(res.materials[index])));
       const active = new Set(this._meshes);
       res.emissiveBindings = resident.emissiveBindings.filter(binding => active.has(binding.mesh));
-      this._emissiveTriangles = collectEmissiveTriangles(res.emissiveBindings, res.materials);
+      this._emissiveTriangles = this._emissiveCache.collect(res.emissiveBindings, res.materials);
       this._needsUpdateLightSamplingData = true;
     }
     this._needsUpdateBindGroups = true;
@@ -2490,7 +2481,7 @@ ${rayTraceCompute({
     this._tlas = tlas;
     this._uploadBVH(tlas, res.blases);
 
-    this._emissiveTriangles = collectEmissiveTriangles(
+    this._emissiveTriangles = this._emissiveCache.collect(
       emissiveBindings,
       res.materials
     );
@@ -2556,7 +2547,7 @@ ${rayTraceCompute({
         this._dirtyTransformMeshes.has(mesh)
       )
     ) {
-      this._emissiveTriangles = collectEmissiveTriangles(
+      this._emissiveTriangles = this._emissiveCache.collect(
         res.emissiveBindings,
         res.materials
       );

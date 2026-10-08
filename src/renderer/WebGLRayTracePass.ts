@@ -124,7 +124,7 @@ class WebGLRayTracePass {
   private _maxTextureArrayBytes = DEFAULT_MAX_TEXTURE_ARRAY_BYTES;
   private _preparedMeshData?: ReturnType<typeof updateMeshInstances>;
   private _materialChanges = new MaterialChangeTracker();
-  private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; materials: Set<OpenPBRMaterial> };
+  private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean; materials: Set<OpenPBRMaterial> };
   private _needsUpdateMeshData = true;
   private _meshSnapshot: {
     mesh: Mesh;
@@ -386,6 +386,7 @@ class WebGLRayTracePass {
           const pending = this._pendingMaterialUpdate;
           this._pendingMaterialUpdate = { level: pending?.level === 'textures' ? 'textures' : change.level,
             emission: !!pending?.emission || change.emission,
+            emissiveMap: !!pending?.emissiveMap || change.emissiveMap,
             materials: new Set([...(pending?.materials ?? []), ...update.materials]) };
           this._meshSnapshot.forEach(item => { item.materialVersions = item.materials.map(m => m.version); });
         }
@@ -626,7 +627,7 @@ class WebGLRayTracePass {
       this._needsUpdateAnalyticLightsBuffer = true;
     } else data.repackParams(res.materials);
     this._updateMaterialConstants(res.materials, data, res.geometry);
-    if (update.emission || update.level === 'textures') {
+    if (update.emission || update.emissiveMap) {
       // WebGL currently evaluates mesh emission on path hits; its direct-light
       // sampler has only analytic/environment sources. Retain that behavior.
       res.emissiveBindings = res.instanceBindings.filter(binding =>

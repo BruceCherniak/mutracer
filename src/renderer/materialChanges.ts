@@ -9,6 +9,7 @@ interface MaterialSnapshot {
   textureKey: string;
   geometryKey: string;
   emissive: string;
+  emissiveMap: string;
 }
 const textureIds = new WeakMap<object, number>();
 let nextTextureId = 1;
@@ -29,7 +30,8 @@ function snapshot(material: OpenPBRMaterial): MaterialSnapshot {
     textureKey: materialTextureKeys.map(k => { const value = material[k]; return typeof value === 'number' ? String(value) : textureKey(value); }).join('|'),
     // Height maps affect both tessellated geometry and projective BLAS bounds.
     geometryKey: key(material, materialGeometryKeys) + '|' + textureKey(material.displacementMap),
-    emissive: key(material, ['emissionColor', 'emissionLuminance', 'unlit', 'shadowCatcher'])
+    emissive: key(material, ['emissionColor', 'emissionLuminance', 'unlit', 'shadowCatcher']),
+    emissiveMap: textureKey(material.emissiveMap)
   };
 }
 export function materialIsEmissive(material: OpenPBRMaterial) {
@@ -43,20 +45,22 @@ export class MaterialChangeTracker {
   capture(materials: readonly OpenPBRMaterial[]) {
     for (const material of materials) this._snapshots.set(material, snapshot(material));
   }
-  classify(materials: readonly OpenPBRMaterial[]): { level: MaterialUpdateLevel; emission: boolean } {
+  classify(materials: readonly OpenPBRMaterial[]): { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean } {
     let level: MaterialUpdateLevel = 'params';
     let emission = false;
+    let emissiveMap = false;
     const ranks = { params: 0, emission: 1, textures: 2, geometry: 3 };
     for (const material of materials) {
       const previous = this._snapshots.get(material);
       const next = snapshot(material);
       const emissionChanged = !previous || previous.emissive !== next.emissive;
       emission ||= emissionChanged;
+      emissiveMap ||= !previous || previous.emissiveMap !== next.emissiveMap;
       const candidate: MaterialUpdateLevel = !previous || next.geometryKey !== previous.geometryKey ||
         emissionChanged && material.displacementMode === 'tessellated' && !!material.displacementMap
         ? 'geometry' : next.textureKey !== previous.textureKey ? 'textures' : emissionChanged ? 'emission' : 'params';
       if (ranks[candidate] > ranks[level]) level = candidate;
     }
-    return { level, emission };
+    return { level, emission, emissiveMap };
   }
 }

@@ -121,8 +121,12 @@ export function packIESProfiles(lights: AnalyticLight[], firstTexel = 0) {
   return { data, offsets, texelCount: data.length / 4 };
 }
 
+const environmentPowers = new WeakMap<TexturePixelSource, number>();
+
 export function estimateEnvironmentPower(image?: TexturePixelSource) {
   if (!image?.data || !image.width || !image.height) return 0;
+  const cached = environmentPowers.get(image);
+  if (cached !== undefined) return cached;
   const { data, width, height } = image;
   const channels = Math.max(Math.floor(data.length / (width * height)), 1);
   let weightedLuminance = 0;
@@ -139,55 +143,64 @@ export function estimateEnvironmentPower(image?: TexturePixelSource) {
         ]) * sinTheta;
     }
   }
-  return weightedLuminance * (2 * Math.PI * Math.PI) / (width * height);
+  const power = weightedLuminance * (2 * Math.PI * Math.PI) / (width * height);
+  environmentPowers.set(image, power);
+  return power;
+}
+
+/** Reusable typed choices; insertion order matches the sampling distribution. */
+export class LightChoiceBuffer {
+  count = 0;
+  sourceTypes = new Uint32Array(0);
+  sourceIndices = new Uint32Array(0);
+  weights = new Float64Array(0);
+  reserve(capacity: number) {
+    this.count = 0;
+    if (this.weights.length < capacity) {
+      this.sourceTypes = new Uint32Array(capacity);
+      this.sourceIndices = new Uint32Array(capacity);
+      this.weights = new Float64Array(capacity);
+    }
+  }
+  push(sourceType: number, sourceIndex: number, weight: number) {
+    if (!(weight > 0) || !isFinite(weight)) return;
+    const i = this.count++;
+    this.sourceTypes[i] = sourceType; this.sourceIndices[i] = sourceIndex; this.weights[i] = weight;
+  }
 }
 
 /** Builds a Walker alias table. Each 16-byte entry is probability/alias/type/index. */
-export function buildLightAliasTable(
-  inputs: LightChoiceInput[]
-): LightSamplingDistribution {
-  const active = inputs.filter((input) => input.weight > 0 && isFinite(input.weight));
-  const totalWeight = active.reduce((sum, input) => sum + input.weight, 0);
-  const count = active.length;
-  if (!count || !(totalWeight > 0)) {
-    return {
-      choices: new Uint32Array(4),
-      pmfs: new Float32Array(0),
-      totalWeight: 0
-    };
+export function buildLightAliasTable(inputs: LightChoiceInput[] | LightChoiceBuffer): LightSamplingDistribution {
+  let active: LightChoiceBuffer;
+  if (inputs instanceof LightChoiceBuffer) active = inputs;
+  else {
+    active = new LightChoiceBuffer(); active.reserve(inputs.length);
+    for (const input of inputs) active.push(input.sourceType, input.sourceIndex, input.weight);
   }
-
-  const pmfs = Float32Array.from(active, (input) => input.weight / totalWeight);
-  const scaled = Array.from(pmfs, (pmf) => pmf * count);
-  const probabilities = new Float32Array(count);
-  const aliases = new Int32Array(count);
-  const small: number[] = [];
-  const large: number[] = [];
-  scaled.forEach((value, index) => (value < 1 ? small : large).push(index));
-
-  while (small.length && large.length) {
-    const low = small.pop()!;
-    const high = large.pop()!;
-    probabilities[low] = scaled[low];
-    aliases[low] = high;
-    scaled[high] = scaled[high] + scaled[low] - 1;
-    (scaled[high] < 1 ? small : large).push(high);
+  const count = active.count;
+  let totalWeight = 0;
+  for (let i = 0; i < count; i++) totalWeight += active.weights[i];
+  if (!count || !(totalWeight > 0)) return { choices: new Uint32Array(4), pmfs: new Float32Array(0), totalWeight: 0 };
+  const pmfs = new Float32Array(count);
+  const scaled = new Float64Array(count);
+  const small = new Uint32Array(count), large = new Uint32Array(count);
+  let smallCount = 0, largeCount = 0;
+  for (let i = 0; i < count; i++) {
+    pmfs[i] = active.weights[i] / totalWeight;
+    scaled[i] = pmfs[i] * count;
+    if (scaled[i] < 1) small[smallCount++] = i; else large[largeCount++] = i;
   }
-  for (const index of [...small, ...large]) {
-    probabilities[index] = 1;
-    aliases[index] = index;
-  }
-
   const buffer = new ArrayBuffer(count * 16);
-  const floatView = new Float32Array(buffer);
-  const intView = new Int32Array(buffer);
-  active.forEach((input, index) => {
-    const offset = index * 4;
-    floatView[offset] = probabilities[index];
-    intView[offset + 1] = aliases[index];
-    intView[offset + 2] = input.sourceType;
-    intView[offset + 3] = input.sourceIndex;
-  });
+  const floats = new Float32Array(buffer), ints = new Int32Array(buffer);
+  while (smallCount && largeCount) {
+    const low = small[--smallCount], high = large[--largeCount];
+    floats[low * 4] = scaled[low]; ints[low * 4 + 1] = high;
+    scaled[high] = scaled[high] + scaled[low] - 1;
+    if (scaled[high] < 1) small[smallCount++] = high; else large[largeCount++] = high;
+  }
+  for (let i = 0; i < smallCount; i++) { const index = small[i]; floats[index * 4] = 1; ints[index * 4 + 1] = index; }
+  for (let i = 0; i < largeCount; i++) { const index = large[i]; floats[index * 4] = 1; ints[index * 4 + 1] = index; }
+  for (let i = 0; i < count; i++) { ints[i * 4 + 2] = active.sourceTypes[i]; ints[i * 4 + 3] = active.sourceIndices[i]; }
   return { choices: new Uint32Array(buffer), pmfs, totalWeight };
 }
 
@@ -293,8 +306,7 @@ export function collectEmissiveTriangles(
   return triangles;
 }
 
-export function packEmissiveTriangles(triangles: EmissiveTriangle[]) {
-  const data = new Float32Array(Math.max(triangles.length, 1) * 24);
+export function packEmissiveTriangles(triangles: EmissiveTriangle[], data: Float32Array = new Float32Array(Math.max(triangles.length, 1) * 24)) {
   triangles.forEach((triangle, index) => {
     const offset = index * 24;
     data.set(triangle.p0, offset);
@@ -311,4 +323,39 @@ export function packEmissiveTriangles(triangles: EmissiveTriangle[]) {
     data.set(triangle.secondaryUv2, offset + 22);
   });
   return data;
+}
+
+
+/** Caches world-space vertices per mesh, independently of emission strength. */
+export class EmissiveTriangleCache {
+  private _bindings = new WeakMap<Mesh, { geometry: Geometry; version: number; matrix: Float64Array;
+    indices: number[]; activity: boolean[]; triangles: EmissiveTriangle[] }>();
+  private _triangles: EmissiveTriangle[] = [];
+  collect(bindings: EmissiveMeshBinding[], materials: OpenPBRMaterial[]) {
+    this._triangles.length = 0;
+    for (const binding of bindings) {
+      const { mesh, geometry, materialIndices } = binding;
+      const isActive = (index: number) => {
+        const m = materials[index];
+        return !!m && !m.unlit && !m.shadowCatcher && colorLuminance(m.emissionColor) * m.emissionLuminance > 1e-8;
+      };
+      let cached = this._bindings.get(mesh);
+      if (!cached || cached.geometry !== geometry || cached.version !== geometry.version ||
+        cached.indices.length !== materialIndices.length || materialIndices.some((index, i) =>
+          cached!.indices[i] !== index || cached!.activity[i] !== isActive(index)) ||
+        mesh.matrixWorld.some((value: number, i: number) => !Object.is(value, cached!.matrix[i]))) {
+        cached = { geometry, version: geometry.version, matrix: Float64Array.from(mesh.matrixWorld),
+          indices: materialIndices.slice(), activity: materialIndices.map(isActive),
+          triangles: collectEmissiveTriangles([binding], materials) };
+        this._bindings.set(mesh, cached);
+      } else {
+        for (const triangle of cached.triangles) {
+          const m = materials[triangle.materialIndex];
+          triangle.samplingLuminance = colorLuminance(m.emissionColor) * m.emissionLuminance;
+        }
+      }
+      for (const triangle of cached.triangles) this._triangles.push(triangle);
+    }
+    return this._triangles;
+  }
 }
