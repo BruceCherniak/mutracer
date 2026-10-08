@@ -1,0 +1,32 @@
+import { expect, it } from 'vitest';
+import { SceneEnvironmentCache, RectLightTextureTracker } from '../../src/renderer/sceneLightChanges';
+import AmbientLight from '../../src/scene/AmbientLight';
+import EnvironmentLight from '../../src/scene/EnvironmentLight';
+import RectLight from '../../src/scene/RectLight';
+import SphereLight from '../../src/scene/SphereLight';
+import Texture from '../../src/scene/Texture';
+it('retains environment synthesis during analytic edits and invalidates ambient/texture pixels', () => {
+  const cache = new SceneEnvironmentCache(); const ambient = new AmbientLight([1,1,1]);
+  const analytic = new SphereLight([0,2,0]);
+  const map = new Texture({data:new Float32Array([1,2,3,1]),width:1,height:1});
+  const environment = new EnvironmentLight(map);
+  const lights = [ambient,analytic,environment];
+  const first = cache.update(lights)!; analytic.intensity++;
+  expect(cache.update(lights)).toBe(first);
+  ambient.intensity=2; const next=cache.update(lights)!;
+  expect(next).not.toBe(first); expect(Array.from(next.data)).toEqual([3,4,5,1]);
+  map.image = {data:new Float32Array([5,4,3,1]),width:1,height:1}; map.markUpdated();
+  expect(Array.from(cache.update(lights)!.data)).toEqual([7,6,5,1]);
+  expect(cache.update([])).toBeUndefined();
+});
+it('tracks RectLight pixel edits and slot order independently of analytic parameters', () => {
+  const tracker = new RectLightTextureTracker(); const rect = new RectLight();
+  const sphere = new SphereLight([0,2,0]);
+  expect(tracker.update([sphere,rect])).toBe(false);
+  rect.texture = new Texture({data:new Uint8Array(4),width:1,height:1});
+  expect(tracker.update([sphere,rect])).toBe(true);
+  rect.intensity++; expect(tracker.update([sphere,rect])).toBe(false);
+  rect.texture.markUpdated(); expect(tracker.update([sphere,rect])).toBe(true);
+  expect(tracker.update([rect,sphere])).toBe(true);
+  rect.texture=undefined; expect(tracker.update([rect,sphere])).toBe(true);
+});

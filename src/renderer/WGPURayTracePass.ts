@@ -1,3 +1,4 @@
+import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges';
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges';
 import { WGPUShaderCache, retainedShaderCapacity } from './WGPUShaderCache';
 import { WGPU_SCENE_FEATURE_BITS, wgpuSceneFeatureFlags } from './WGPUSceneFeatures';
@@ -16,8 +17,7 @@ import { SceneBackground, SceneLight } from '../scene/Scene';
 import { numberArraysEqual } from './util';
 import Camera from '../scene/Camera';
 import {
-  generateBackgroundMapFromSceneBackground,
-  generateEnvMapFromSceneComponents
+  generateBackgroundMapFromSceneBackground
 } from './envMapCreation';
 import { StratifiedSampler } from './StratifiedSampler';
 import { makeStratifiedSamplerCombined } from './StratifiedSamplerCombined';
@@ -286,6 +286,8 @@ class WGPURayTracePass {
   private _height: number = 0;
 
   private _meshes: Mesh[] = [];
+  private _sceneEnvironment = new SceneEnvironmentCache();
+  private _rectLightTextures = new RectLightTextureTracker();
   private _analyticLights: AnalyticLight[] = [];
   private _iesProfileTexelOffsets = new Int32Array(0);
   private _materialChanges = new MaterialChangeTracker();
@@ -2718,35 +2720,15 @@ ${rayTraceCompute({
     const analyticLights = allAnalyticLights.slice(0, FIXED_LIGHT_COUNT);
     const numAnalyticLights = analyticLights.length;
 
-    const ambientLights = lights.filter(
-      (light) => light.type === 'AmbientLight'
-    );
-    const environmentLights = lights.filter(
-      (light) => light.type === 'EnvironmentLight'
-    );
-    const envImage =
-      ambientLights.length > 0 || environmentLights.length > 0
-        ? generateEnvMapFromSceneComponents(ambientLights, environmentLights)
-        : undefined;
+    const envImage = this._sceneEnvironment.update(lights);
 
     this._rtUniform.views.lightsCount[0] = numAnalyticLights;
 
     this._setEnvMap(envImage);
 
-    // Check if the light textures have changed
-    const oldLightTextures = this._analyticLights
-      .filter((l) => l.type === 'RectLight')
-      .map((l) => l.texture);
-    const newLightTextures = analyticLights
-      .filter((l) => l.type === 'RectLight')
-      .map((l) => l.texture);
+    const lightTexturesChanged = this._rectLightTextures.update(analyticLights);
     this._analyticLights = analyticLights;
-    if (
-      oldLightTextures.length !== newLightTextures.length ||
-      oldLightTextures.some((t, idx) => t !== newLightTextures[idx])
-    ) {
-      this._needsUpdateMeshData = true;
-    }
+    if (lightTexturesChanged) this._needsUpdateMeshData = true;
 
     this._needsUpdateAnalyticLightsBuffer = true;
     this._needsUpdateLightSamplingData = true;

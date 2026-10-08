@@ -1,3 +1,4 @@
+import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges';
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges';
 import {
   constants,
@@ -16,8 +17,7 @@ import {
   refitBLAS
 } from './bvhAccel';
 import {
-  generateBackgroundMapFromSceneBackground,
-  generateEnvMapFromSceneComponents
+  generateBackgroundMapFromSceneBackground
 } from './envMapCreation';
 import {
   envMapDistribution,
@@ -114,6 +114,8 @@ function packLightsToTexture(
 class WebGLRayTracePass {
   private readonly _renderer: WebGLRenderer;
   private _meshes: Mesh[] = [];
+  private _sceneEnvironment = new SceneEnvironmentCache();
+  private _rectLightTextures = new RectLightTextureTracker();
   private _analyticLights: AnalyticLight[] = [];
   private _analyticLightSelectionPmfs = new Float32Array(0);
   private _analyticLightSelectionCdfs = new Float32Array(0);
@@ -639,16 +641,7 @@ class WebGLRayTracePass {
     ) as AnalyticLight[];
     const numAnalyticLights = analyticLights.length;
 
-    const ambientLights = lights.filter(
-      (light) => light.type === 'AmbientLight'
-    );
-    const environmentLights = lights.filter(
-      (light) => light.type === 'EnvironmentLight'
-    );
-    const envImage =
-      ambientLights.length > 0 || environmentLights.length > 0
-        ? generateEnvMapFromSceneComponents(ambientLights, environmentLights)
-        : undefined;
+    const envImage = this._sceneEnvironment.update(lights);
 
     const envWeight = estimateEnvironmentPower(envImage);
     const analyticWeights = analyticLights.map(estimateAnalyticLightPower);
@@ -702,13 +695,7 @@ class WebGLRayTracePass {
       });
     });
 
-    // Check if the light textures have changed
-    const oldLightTextures = this._analyticLights
-      .filter((l) => l.type === 'RectLight')
-      .map((l) => l.texture);
-    const newLightTextures = analyticLights
-      .filter((l) => l.type === 'RectLight')
-      .map((l) => l.texture);
+    const lightTexturesChanged = this._rectLightTextures.update(analyticLights);
     this._analyticLights = analyticLights;
     const packedIES = packIESProfiles(analyticLights);
     this._iesProfileTexelOffsets = packedIES.offsets;
@@ -717,12 +704,7 @@ class WebGLRayTracePass {
       packedIES.data.length ? packedIES.data : new Float32Array(4),
       4
     ).columns;
-    if (
-      oldLightTextures.length !== newLightTextures.length ||
-      oldLightTextures.some((t, idx) => t !== newLightTextures[idx])
-    ) {
-      this._needsUpdateMeshData = true;
-    }
+    if (lightTexturesChanged) this._needsUpdateMeshData = true;
 
     this._needsUpdateAnalyticLightsBuffer = true;
 
