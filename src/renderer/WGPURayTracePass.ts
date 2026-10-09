@@ -201,6 +201,9 @@ export function makeRayTraceUniform() {
     bsdfProposalCount: new Uint32Array(RayTraceUniformValues, 148, 1),
     sceneFeatureFlags: new Uint32Array(RayTraceUniformValues, 152, 1)
   };
+  // setSampleCount(0) initially matches _sampleCount and skips its update.
+  // Initialize the full-domain warm-up size just as a restarted sample 0 does.
+  RayTraceUniformViews.strataSize[0] = 1.0;
   // Fixed algorithmic count; a uniform bound keeps DXC from unrolling the
   // complete layered BSDF at every proposal/optical channel.
   RayTraceUniformViews.bsdfProposalCount[0] = 4;

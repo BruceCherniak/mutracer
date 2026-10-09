@@ -1,6 +1,6 @@
 import { MaterialChangeTracker } from '../../src/renderer/materialChanges';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import WGPURayTracePass from '../../src/renderer/WGPURayTracePass';
+import WGPURayTracePass, { makeRayTraceUniform } from '../../src/renderer/WGPURayTracePass';
 import Geometry, { Attribute } from '../../src/scene/Geometry';
 import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
@@ -37,6 +37,7 @@ function makeMeshTrackingPass() {
 describe('WGPURayTracePass output resource lifetime', () => {
   beforeEach(() => {
     vi.stubGlobal('GPUBufferUsage', {
+      UNIFORM: 8,
       STORAGE: 1,
       COPY_DST: 2,
       COPY_SRC: 4
@@ -49,6 +50,27 @@ describe('WGPURayTracePass output resource lifetime', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('initializes the first sample to the same strata size as a restarted sequence', () => {
+    const device = {
+      createBuffer: vi.fn(({ size }: GPUBufferDescriptor) => ({ size, destroy: vi.fn() })),
+      createTexture: vi.fn(() => ({ destroy: vi.fn() })),
+      createSampler: vi.fn(() => ({})),
+      queue: { writeBuffer: vi.fn(), writeTexture: vi.fn() }
+    } as unknown as GPUDevice;
+    const pass = new WGPURayTracePass(device);
+    const uniform = (pass as unknown as { _rtUniform: ReturnType<typeof makeRayTraceUniform> })._rtUniform;
+    try {
+      pass.setSampleCount(0);
+      expect(uniform.views.strataSize[0]).toBe(1.0);
+      pass.setSampleCount(7);
+      expect(uniform.views.strataSize[0]).toBeCloseTo(1 / 6);
+      pass.setSampleCount(0);
+      expect(uniform.views.strataSize[0]).toBe(1.0);
+    } finally {
+      pass.dispose();
+    }
   });
 
   it('grows a stale empty Materials buffer to one WGSL material element', () => {
