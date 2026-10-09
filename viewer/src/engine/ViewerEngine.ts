@@ -404,9 +404,9 @@ export class ViewerEngine {
     r.bloomRadius = s.bloomRadius;
     r.vignette = s.vignette;
     r.output = s.output;
-    // Realtime OIDN denoises preview frames with the small network and lowers
+    // While-converging OIDN denoises preview frames with the small network and lowers
     // their resolution to keep up, so it always previews while interacting.
-    r.interactivePreview = s.interactivePreview || (s.denoise && s.denoiseRealtime);
+    r.interactivePreview = s.interactivePreview || (s.denoise && s.denoiseWhileConverging);
     r.previewResolutionScale = s.previewResolutionScale;
     r.shadowCatcherAlpha = s.groundOpacity;
     this.ground.visible = s.groundShadow;
@@ -421,7 +421,7 @@ export class ViewerEngine {
       this.camera.fov = s.fov;
       this.camera.updateProjectionMatrix();
     }
-    if (changed('denoise') || changed('denoiseModel') || changed('denoiseRealtime')) void this.updateDenoiser();
+    if (changed('denoise') || changed('denoiseModel') || changed('denoiseWhileConverging')) void this.updateDenoiser();
     if (prev && (changed('envId') || changed('envResolution') || changed('envIntensity') || changed('envRotation') || changed('exposure') ||
       changed('toneMapping') || changed('background'))) {
       writeHash(s, get().model?.presetId ?? null);
@@ -432,11 +432,11 @@ export class ViewerEngine {
     if (!this.backendKnown) return;
     const s = this.settings;
     const enabled = s.denoise && this.renderer.isUsingWebGPU();
-    const key = enabled ? `${s.denoiseModel}:${s.denoiseRealtime}` : 'off';
+    const key = enabled ? `${s.denoiseModel}:${s.denoiseWhileConverging}` : 'off';
     if (key === this.denoiserKey) return;
     this.denoiserKey = key;
     try {
-      await this.renderer.setDenoiser(enabled ? { model: s.denoiseModel, realtime: s.denoiseRealtime, weightsBaseUrl: OIDN_WEIGHTS } : false);
+      await this.renderer.setDenoiser(enabled ? { model: s.denoiseModel, whileConverging: s.denoiseWhileConverging, weightsBaseUrl: OIDN_WEIGHTS } : false);
     } catch (error) {
       this.denoiserKey = '';
       showToast(`Denoiser unavailable: ${(error as Error).message}`, 'error');
@@ -787,9 +787,9 @@ export class ViewerEngine {
     }
     if (!this.backendKnown && status !== RENDER_STATUS_PREPARING) this.detectBackend();
     let phase = phaseOf(status);
-    // Realtime OIDN denoises every few samples; report those as rendering so
+    // While-converging OIDN denoises every few samples; report those as rendering so
     // the status does not flicker. Only the final denoise is shown.
-    if (phase === 'denoising' && this.renderer.oidnRealtime &&
+    if (phase === 'denoising' && this.renderer.oidnWhileConverging &&
       (this.renderer.getTotalSamplesRendered() ?? 0) < this.settings.maxSamples) {
       phase = 'rendering';
     }

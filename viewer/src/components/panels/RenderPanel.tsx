@@ -51,18 +51,12 @@ export function RenderPanel() {
         {webgl ? (
           <Hint warn>Intel Open Image Denoise needs WebGPU. This browser is using WebGL 2.</Hint>
         ) : s.denoise ? (
-          <>
-            <Segmented
-              label="Denoiser model"
-              value={s.denoiseModel}
-              options={[{ value: 'standard', label: 'Standard' }, { value: 'small', label: 'Small' }, { value: 'cleanAuxLarge', label: 'Clean aux' }]}
-              onChange={(v) => update({ denoiseModel: v })}
-            />
-            <Switch label="Realtime denoise" checked={s.denoiseRealtime} onChange={(v) => update({ denoiseRealtime: v })}>
-              <span className="field-label">Denoise while converging</span>
-            </Switch>
-            <Hint>{s.denoiseRealtime ? 'Previews are denoised every few samples.' : 'Runs once the sample budget is reached.'}</Hint>
-          </>
+          <Segmented
+            label="Denoiser model"
+            value={s.denoiseModel}
+            options={[{ value: 'standard', label: 'Standard' }, { value: 'small', label: 'Small' }, { value: 'cleanAuxLarge', label: 'Clean aux' }]}
+            onChange={(v) => update({ denoiseModel: v })}
+          />
         ) : null}
       </Section>
 
@@ -128,7 +122,7 @@ export function RenderPanel() {
         {s.interactivePreview && (
           <Scrub label="Max preview scale" title="Preview resolution adapts to render time, up to this scale" value={s.previewResolutionScale} min={0.25} max={1} onChange={(v) => update({ previewResolutionScale: v })} />
         )}
-        {s.denoise && s.denoiseRealtime && <Hint>Denoise while converging always previews while interacting, using the small network at a resolution it can keep up with.</Hint>}
+        {s.denoise && s.denoiseWhileConverging && <Hint>Denoise while converging always previews while interacting, using the small network at a resolution it can keep up with.</Hint>}
         {open.debug && <Diagnostics />}
       </Section>
     </>

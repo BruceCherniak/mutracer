@@ -19,14 +19,14 @@ describe('Renderer.setDenoiser', () => {
     initializeOIDN.mockResolvedValueOnce(denoiser);
     const renderer = createRenderer();
 
-    await renderer.setDenoiser({ model: 'small', realtime: true });
+    await renderer.setDenoiser({ model: 'small', whileConverging: true });
 
     expect(initializeOIDN).toHaveBeenLastCalledWith(renderer, {
       model: 'small',
       attach: false
     });
     expect(renderer.oidn).toBe(denoiser);
-    expect(renderer.oidnRealtime).toBe(true);
+    expect(renderer.oidnWhileConverging).toBe(true);
   });
 
   it('disposes the replaced denoiser and detaches on disable', async () => {
@@ -45,7 +45,7 @@ describe('Renderer.setDenoiser', () => {
     expect(renderer.oidn).toBeUndefined();
   });
 
-  it('loads a faster preview network for realtime denoising', async () => {
+  it('loads a faster preview network for while-converging denoising', async () => {
     initializeOIDN.mockReset();
     const main = fakeDenoiser();
     const preview = fakeDenoiser();
@@ -53,15 +53,15 @@ describe('Renderer.setDenoiser', () => {
       Promise.resolve(model === 'small' ? preview : main));
     const renderer = createRenderer();
 
-    await renderer.setDenoiser({ realtime: true });
+    await renderer.setDenoiser({ whileConverging: true });
     expect(initializeOIDN.mock.calls.map(([, options]) => options.model)).toEqual([undefined, 'small']);
     // The preview network never replaces the attached denoiser.
     expect(renderer.oidn).toBe(main);
 
-    // Without realtime (or with previewModel: false) only the main network loads.
+    // Without while-converging (or with previewModel: false) only the main network loads.
     initializeOIDN.mockClear();
-    await renderer.setDenoiser({ realtime: false });
-    await renderer.setDenoiser({ realtime: true, previewModel: false });
+    await renderer.setDenoiser({ whileConverging: false });
+    await renderer.setDenoiser({ whileConverging: true, previewModel: false });
     expect(initializeOIDN).toHaveBeenCalledTimes(2);
     expect(preview.dispose).toHaveBeenCalledOnce();
 

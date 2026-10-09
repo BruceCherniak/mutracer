@@ -12,7 +12,7 @@ TinyBVH acceleration and Intel Open Image Denoise built in.
   before the first frame; the WebGPU backend refits instance transforms for
   animation.
 - **Denoising**: one call enables OIDN on the WebGPU device, for the final image
-  or realtime previews.
+  or while the image converges.
 - **Three.js friendly**: convert a `THREE.Scene` (loaded with `GLTFLoader` or
   built by hand) with `fromTHREEScene`.
 - **Production output**: AgX, ACES and Tony McMapface tone mapping, color
@@ -105,7 +105,7 @@ await renderer.setDenoiser({ model: 'standard' });
 | [API reference](./docs/api.md) | Renderer options, methods, status codes, scene types |
 | [Materials](./docs/materials.md) | OpenPBR inputs, textures, alpha, bevel, displacement |
 | [Three.js](./docs/threejs.md) | `fromTHREEScene`, supported materials and lights, `userData` keys |
-| [Denoising](./docs/denoising.md) | OIDN models, weights hosting, realtime mode |
+| [Denoising](./docs/denoising.md) | OIDN models, weights hosting, denoising while converging |
 | [BVH](./docs/bvh.md) | TinyBVH builder, layouts, worker precomputation |
 | [Performance](./docs/performance.md) | Tuning checklist |
 | [`llms.txt`](./llms.txt) | Compact usage guide for coding agents |

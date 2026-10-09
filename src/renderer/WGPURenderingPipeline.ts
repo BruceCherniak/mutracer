@@ -135,7 +135,7 @@ export interface WGPURenderingPipeline extends RenderingPipeline {
   performOIDNDenoise(
     denoiser: OIDNWeb,
     denoiserAlpha: OIDNWeb | undefined,
-    realtime?: boolean
+    whileConverging?: boolean
   ): Promise<boolean>;
 }
 
@@ -226,7 +226,7 @@ function makeWGPURenderingPipeline(
   let previewMode = false;
   let previewResolutionScale = 0.5;
   let adaptivePreviewScale = 0.5;
-  // Realtime OIDN runs on every preview frame and usually costs more than the
+  // While-converging OIDN runs on every preview frame and usually costs more than the
   // trace, which the timestamp feedback below does not see. Its measured time
   // sets a separate limit, allowed to go lower than tracing alone.
   const OIDN_PREVIEW_TARGET_MS = 40;
@@ -946,7 +946,7 @@ output.color = color;
       // asynchronous output is available. Keep the completed preview frame
       // on screen through that gap instead of exposing the raw sample.
       previewTransitionDenoisePending && !oidnHDRBuffer;
-    // Realtime preview presents at OIDN throughput: keep the last denoised
+    // While-converging preview presents at OIDN throughput: keep the last denoised
     // frame on the canvas instead of flashing each raw 1spp restart.
     const holdDenoisedFrame =
       previewMode && oidnPreviewActive && output === 'final' &&
@@ -1029,7 +1029,7 @@ output.color = color;
       return true;
     }
 
-    // Keep the last completed denoise visible while a static realtime batch
+    // Keep the last completed denoise visible while a static while-converging batch
     // accumulates, including the incomplete first sample after a scene edit.
     if (!preserveOIDNOutput || isFirstFrame) {
       clearOIDNOutput();
@@ -1441,16 +1441,16 @@ output.color = color;
   function performOIDNDenoise(
     denoiser: OIDNWeb,
     alphaDenoiser: OIDNWeb | undefined,
-    realtime = false
+    whileConverging = false
   ): Promise<boolean> {
     cancelOIDNDenoise();
     const generation = oidnGeneration;
-    const timedPreview = realtime && previewMode;
+    const timedPreview = whileConverging && previewMode;
     const startTime = performance.now();
     const startScale = adaptivePreviewScale;
     const size = { width: renderWidth, height: renderHeight };
-    const realtimeTileOptions = {
-      ...(realtime ? {
+    const convergingTileOptions = {
+      ...(whileConverging ? {
         tileOverlap: 80,
         // Low-resolution interaction must finish as one low-latency frame;
         // otherwise continuous camera updates outrun a multi-tile denoise.
@@ -1461,7 +1461,7 @@ output.color = color;
       // A preview frame is one whole-image pass. Settled images can take many
       // tiles; oidn-web 0.5 runs those back to back by default, which starves
       // the page at 4K, so pace them to display frames instead.
-      scheduling: realtime && previewMode
+      scheduling: whileConverging && previewMode
         ? 'event-loop' as const
         : 'animation-frame' as const
     };
@@ -1503,7 +1503,7 @@ output.color = color;
       let albedoOutput: OIDNWebGPUOutputData | undefined;
       await runOIDNPhase(generation, (finish, fail) =>
         auxiliaryDenoisers.albedo.tileExecute({
-          ...realtimeTileOptions,
+          ...convergingTileOptions,
           color: {
             data: oidnAlbedoEncodePass.getOutput('albedo'),
             ...size
@@ -1529,7 +1529,7 @@ output.color = color;
       let normalOutput: OIDNWebGPUOutputData | undefined;
       await runOIDNPhase(generation, (finish, fail) =>
         auxiliaryDenoisers.normal.tileExecute({
-          ...realtimeTileOptions,
+          ...convergingTileOptions,
           color: {
             data: getFrameInput('normal'),
             ...size
@@ -1581,7 +1581,7 @@ output.color = color;
       }
       return runOIDNPhase(generation, (finish, fail) =>
         alphaDenoiser.tileExecute({
-          ...realtimeTileOptions,
+          ...convergingTileOptions,
           color: {
             data: composePass.getOutput('color'),
             ...size
@@ -1589,11 +1589,11 @@ output.color = color;
           denoiseAlpha: true,
           progress(output, _tileData, _tile, currentIdx, totalIdx) {
             if (generation !== oidnGeneration) return;
-            // Realtime denoising keeps the previous complete frame (or the
+            // While-converging denoising keeps the previous complete frame (or the
             // preview-transition snapshot) visible while tiled inference is
             // running. Publishing the shared output buffer before its final
             // tile would expose uninitialized regions as black rectangles.
-            if (realtime && currentIdx + 1 < totalIdx) return;
+            if (whileConverging && currentIdx + 1 < totalIdx) return;
             const encoder = device.createCommandEncoder();
             oidnComposedBuffer = copyOIDNOutput(
               encoder,
@@ -1619,7 +1619,7 @@ output.color = color;
       device.queue.submit([encoder.finish()]);
       return runOIDNPhase(generation, (finish, fail) =>
         denoiser.tileExecute({
-          ...realtimeTileOptions,
+          ...convergingTileOptions,
           color: {
             data: oidnBeautyInputPass.getOutput('color'),
             ...size
@@ -1628,7 +1628,7 @@ output.color = color;
           normal: guides.normal,
           progress(output, _tileData, _tile, currentIdx, totalIdx) {
             if (generation !== oidnGeneration) return;
-            if (realtime && currentIdx + 1 < totalIdx) return;
+            if (whileConverging && currentIdx + 1 < totalIdx) return;
             const encoder = device.createCommandEncoder();
             oidnHDRBuffer = copyOIDNOutput(encoder, output, oidnHDRBuffer);
             // A preview frame waits for its shadow mask, otherwise the
@@ -1663,7 +1663,7 @@ output.color = color;
 
       return runOIDNPhase(generation, (finish, fail) =>
         denoiser.tileExecute({
-          ...realtimeTileOptions,
+          ...convergingTileOptions,
           color: {
             data: shadowDenoiseInputPass.getOutput('color'),
             ...size
@@ -1672,7 +1672,7 @@ output.color = color;
           normal: guides.normal,
           progress(output, _tileData, _tile, currentIdx, totalIdx) {
             if (generation !== oidnGeneration) return;
-            if (realtime && currentIdx + 1 < totalIdx) return;
+            if (whileConverging && currentIdx + 1 < totalIdx) return;
             const encoder = device.createCommandEncoder();
             oidnShadowBuffer = copyOIDNOutput(
               encoder,

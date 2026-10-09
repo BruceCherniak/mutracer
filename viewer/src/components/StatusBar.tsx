@@ -1,4 +1,4 @@
-import { Check, Pause, Play, Sparkles } from 'lucide-react';
+import { Check, Pause, Play, Sparkles, Zap } from 'lucide-react';
 import { setSettings, useViewer, type RenderPhase } from '../store';
 import { Select } from './ui/controls';
 
@@ -109,6 +109,15 @@ export function StatusBar() {
       >
         <Sparkles size={13} /><span className="dock__label">Denoise</span>
       </button>
+      {denoise && <button
+        className="btn btn--ghost dock__toggle"
+        aria-pressed={settings.denoiseWhileConverging}
+        title="Denoise while converging: previews and every few samples, not only the final image"
+        data-active={settings.denoiseWhileConverging || undefined}
+        onClick={() => setSettings({ denoiseWhileConverging: !settings.denoiseWhileConverging })}
+      >
+        <Zap size={13} /><span className="dock__label">While converging</span>
+      </button>}
     </div>
   );
 }

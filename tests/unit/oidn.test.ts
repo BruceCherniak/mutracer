@@ -21,7 +21,7 @@ function createRenderer(usingWebGPU = true) {
     isUsingWebGPU: vi.fn(() => usingWebGPU),
     getSize: vi.fn(() => ({ width: 1280, height: 720 })),
     oidn: undefined,
-    oidnRealtime: false,
+    oidnWhileConverging: false,
     samplingPattern: 'sobol'
   } as unknown as Renderer;
 }

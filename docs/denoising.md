@@ -28,7 +28,7 @@ is loaded with a dynamic import, so it costs nothing until used.
 | `model` | Weights | Use |
 | --- | --- | --- |
 | `'standard'` (default) | `rt_hdr_alb_nrm.tza` (1.8 MB) | Balanced quality and speed |
-| `'small'` | `rt_hdr_alb_nrm_small.tza` (0.6 MB) | Fastest; realtime previews |
+| `'small'` | `rt_hdr_alb_nrm_small.tza` (0.6 MB) | Fastest; previews while converging |
 | `'cleanAuxLarge'` | `rt_hdr_calb_cnrm_large.tza` + `rt_alb_large.tza` + `rt_nrm_large.tza` (22 MB) | Highest quality; prefilters the albedo/normal guides |
 
 ## Hosting the weights
@@ -50,28 +50,28 @@ await renderer.setDenoiser({ weightsBaseUrl: '/assets/oidn/weights/' });
 
 The weights are licensed under Apache-2.0 (`oidn/weights/LICENSE.txt`).
 
-## Realtime denoising
+## Denoising while converging
 
 ```ts
-await renderer.setDenoiser({ realtime: true });
+await renderer.setDenoiser({ whileConverging: true });
 ```
 
-In realtime mode the interactive preview is denoised while the camera moves,
-with the `previewModel` network (`small` by default) at a resolution lowered
-until the denoiser keeps up. A camera change cancels a settled denoise that is
-still running. The progressive image is re-denoised every
-`oidnRealtimeSampleInterval` samples (a `Renderer` constructor parameter,
-default 8). Set `renderer.oidnRealtimeSceneUpdates = true` for animation
-playback, which coalesces continuous scene changes into the latest frame.
+With `whileConverging` the interactive preview is denoised while the camera
+moves, with the `previewModel` network (`small` by default) at a resolution
+lowered until the denoiser keeps up. A camera change cancels a settled denoise
+that is still running. The accumulating image is re-denoised every
+`oidnSampleInterval` samples (a `Renderer` constructor parameter, default 8).
+Set `renderer.oidnCoalesceSceneUpdates = true` for animation playback, which
+coalesces continuous scene changes into the latest frame.
 
 ## Options
 
 | `DenoiserOptions` | Description |
 | --- | --- |
 | `model` | `'standard'`, `'small'` or `'cleanAuxLarge'` |
-| `previewModel` | Network for realtime preview frames, or `false` to use `model`. Default `'small'` |
+| `previewModel` | Network for while-converging preview frames, or `false` to use `model`. Default `'small'` |
 | `weightsBaseUrl` | Directory containing the `.tza` files |
-| `realtime` | Denoise previews and intermediate frames |
+| `whileConverging` | Denoise previews and intermediate frames, not only the final image. Default `false` |
 | `maxTileSize` | Maximum tile size; chosen by oidn-web by default |
 | `signal` | `AbortSignal` for the download |
 

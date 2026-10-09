@@ -184,7 +184,7 @@ export async function initializeOIDNFromURL(
   try {
     const { width, height } = renderer.getSize();
     if (width > 0 && height > 0) {
-      const tileOverlap = renderer.oidnRealtime ? 80 : undefined;
+      const tileOverlap = renderer.oidnWhileConverging ? 80 : undefined;
       await Promise.all([
         denoiser.prepareForImage?.(width, height, { tileOverlap }),
         denoiser.auxiliaryDenoisers?.albedo.prepareForImage?.(width, height, {

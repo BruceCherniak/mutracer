@@ -194,9 +194,9 @@ export interface RenderingPipeline {
   needsRestartSample(camera: Camera, sceneChanged?: boolean): boolean;
   /** Returns whether the pipeline is currently rendering an interactive preview. */
   isPreviewMode?(): boolean;
-  /** Realtime OIDN denoises preview frames, so their cost also bounds the preview scale. */
+  /** While-converging OIDN denoises preview frames, so their cost also bounds the preview scale. */
   setOIDNPreviewActive?(active: boolean): void;
-  /** Keep the last completed OIDN image visible while static realtime batches accumulate. */
+  /** Keep the last completed OIDN image visible while static while-converging batches accumulate. */
   setPreserveOIDNOutput?(preserve: boolean): void;
   /** Keep the captured preview transition visible until the first settled OIDN output. */
   setPreviewTransitionDenoisePending?(pending: boolean): void;

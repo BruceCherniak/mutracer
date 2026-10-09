@@ -8,7 +8,7 @@ stored in OIDN's `.tza` format and released under the Apache License 2.0
 | File | Used by |
 | --- | --- |
 | `rt_hdr_alb_nrm.tza` | `model: 'standard'` (default): HDR color + albedo + normal |
-| `rt_hdr_alb_nrm_small.tza` | `model: 'small'`: fastest, for realtime denoising |
+| `rt_hdr_alb_nrm_small.tza` | `model: 'small'`: fastest, for denoising while converging |
 | `rt_hdr_calb_cnrm_large.tza` | `model: 'cleanAuxLarge'`: highest quality, with prefiltered guides |
 | `rt_alb_large.tza`, `rt_nrm_large.tza` | Albedo / normal prefilters for `cleanAuxLarge` |
 

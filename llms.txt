@@ -14,7 +14,7 @@
 - Lights: `RectLight(size, color, intensity)` emits along its local -Z; `SphereLight(position, color, intensity, radius)`; `SpotLight(position, direction, color, intensity, radius, innerDeg, outerDeg)`; `DirectionalLight(position, color, intensity)` shines from `position` toward the origin; `EnvironmentLight(texture)` for equirectangular HDR (`await loadRGBE(url)`).
 - Backgrounds: omit to show the environment; `[r, g, b, a]` linear color (`[0,0,0,0]` = transparent canvas, pair with `material.shadowCatcher = true`); a `Texture`; or `{ type: 'GroundedSkybox', map, height, radius }`.
 - Sampling: `renderer.samplingPattern = 'sobol' | 'zsobol' | 'random'`; default `'sobol'`. Choose `'zsobol'` explicitly for low spp without a denoiser. OIDN never changes the pattern. See `docs/sampling.md` for the progressive budget caveat.
-- Denoising (WebGPU only): `await renderer.setDenoiser({ model: 'standard' | 'small' | 'cleanAuxLarge', weightsBaseUrl?, realtime? })`. Weights default to jsDelivr for the installed version; self-host `node_modules/claypt/oidn/weights/` in production.
+- Denoising (WebGPU only): `await renderer.setDenoiser({ model: 'standard' | 'small' | 'cleanAuxLarge', weightsBaseUrl?, whileConverging? })`. Weights default to jsDelivr for the installed version; self-host `node_modules/claypt/oidn/weights/` in production.
 - Final stills: `await renderer.renderOfflineFrame(scene, camera, { samples })`, then `renderer.prepareForExport()` and `canvas.toBlob(...)`. Linear HDR pixels: `await renderer.getRawOutput()`.
 - BVHs build automatically with TinyBVH before the first frame; `await renderer.prepareScene(scene)` builds up front.
 

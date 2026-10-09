@@ -434,7 +434,7 @@ describe('Renderer offline frames', () => {
   });
 });
 
-describe('Renderer realtime OIDN', () => {
+describe('Renderer while-converging OIDN', () => {
   const scene = { meshes: [], lights: [] } as unknown as Scene;
   const camera = {} as Camera;
 
@@ -448,7 +448,7 @@ describe('Renderer realtime OIDN', () => {
         canvas: { width: 1280, height: 720 } as HTMLCanvasElement
       });
       renderer.oidn = {} as never;
-      renderer.oidnRealtime = true;
+      renderer.oidnWhileConverging = true;
       const pipeline = createPipeline({
         setMeshes: vi.fn(() => {
           const changed = meshChanged;
@@ -523,7 +523,7 @@ describe('Renderer realtime OIDN', () => {
     });
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
     renderer.oidn = {} as never;
 
     renderer.render(scene, camera);
@@ -558,7 +558,7 @@ describe('Renderer realtime OIDN', () => {
     });
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
 
     renderer.render(scene, camera);
 
@@ -586,7 +586,7 @@ describe('Renderer realtime OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
 
     renderer.render(scene, camera);
     compiling = false;
@@ -606,7 +606,7 @@ describe('Renderer realtime OIDN', () => {
     expect(pipeline.setPreserveOIDNOutput).toHaveBeenLastCalledWith(true);
   });
 
-  it('denoises the held 1spp frame as soon as the realtime model loads', async () => {
+  it('denoises the held 1spp frame as soon as the while-converging model loads', async () => {
     let samples = 0;
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement
@@ -622,7 +622,7 @@ describe('Renderer realtime OIDN', () => {
     });
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
     renderer.render(scene, camera);
     renderer.render(scene, camera);
     expect(samples).toBe(1);
@@ -659,7 +659,7 @@ describe('Renderer realtime OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
     const logError = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       renderer.render(scene, camera);
@@ -679,7 +679,7 @@ describe('Renderer realtime OIDN', () => {
   });
 
   it(
-    'keeps the realtime settled 1spp target through compilation, tiles and OIDN',
+    'keeps the while-converging settled 1spp target through compilation, tiles and OIDN',
     async () => {
       let samples = 1;
       let previewMode = true;
@@ -690,7 +690,7 @@ describe('Renderer realtime OIDN', () => {
         canvas: { width: 1, height: 1 } as HTMLCanvasElement
       });
       renderer.maxSamples = 30;
-      renderer.oidnRealtime = true;
+      renderer.oidnWhileConverging = true;
       const pipeline = createPipeline({
         needsRestartSample: vi.fn(() => {
           if (!previewMode) return false;
@@ -736,7 +736,7 @@ describe('Renderer realtime OIDN', () => {
     }
   );
 
-  it('uses a one-sample target while the realtime OIDN model is loading', () => {
+  it('uses a one-sample target while the while-converging OIDN model is loading', () => {
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement
     });
@@ -745,14 +745,14 @@ describe('Renderer realtime OIDN', () => {
     });
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
 
     renderer.render(scene, camera);
 
     expect(pipeline.draw).toHaveBeenCalledWith(camera, 1);
   });
 
-  it('selects the low-latency tile policy for realtime denoising', () => {
+  it('selects the low-latency tile policy for while-converging denoising', () => {
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement
     });
@@ -764,7 +764,7 @@ describe('Renderer realtime OIDN', () => {
     const prepareForImage = vi.fn().mockResolvedValue(undefined);
     const denoiser = { prepareForImage } as never;
     renderer.oidn = denoiser;
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
 
     renderer.render(scene, camera);
 
@@ -778,7 +778,7 @@ describe('Renderer realtime OIDN', () => {
     });
   });
 
-  it('uses realtime denoising during an active interactive preview', () => {
+  it('uses while-converging denoising during an active interactive preview', () => {
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement
     });
@@ -790,7 +790,7 @@ describe('Renderer realtime OIDN', () => {
     markSceneStable(renderer, scene);
     const denoiser = {} as never;
     renderer.oidn = denoiser;
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
 
     renderer.render(scene, camera);
 
@@ -802,7 +802,7 @@ describe('Renderer realtime OIDN', () => {
     );
   });
 
-  it('does not denoise a one-sample interactive preview when realtime OIDN is disabled', () => {
+  it('does not denoise a one-sample interactive preview when while-converging OIDN is disabled', () => {
     let samples = 0;
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement
@@ -859,7 +859,7 @@ describe('Renderer realtime OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
 
     renderer.render(scene, camera);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -876,7 +876,7 @@ describe('Renderer realtime OIDN', () => {
     expect(pipeline.drawPostProcess).toHaveBeenCalled();
   });
 
-  it('waits for the final sample target when realtime OIDN is disabled', async () => {
+  it('waits for the final sample target when while-converging OIDN is disabled', async () => {
     let samples = 1;
     let previewMode = true;
     const renderer = new Renderer({
@@ -915,7 +915,7 @@ describe('Renderer realtime OIDN', () => {
     );
   });
 
-  it('continues static realtime accumulation and denoises every eight samples', async () => {
+  it('continues static while-converging accumulation and denoises every eight samples', async () => {
     let samples = 0;
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement
@@ -932,7 +932,7 @@ describe('Renderer realtime OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
 
     renderer.render(scene, camera);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -949,11 +949,11 @@ describe('Renderer realtime OIDN', () => {
     expect(pipeline.performOIDNDenoise).toHaveBeenCalledTimes(3);
   });
 
-  it('accepts a custom realtime OIDN interval that divides maxSamples', async () => {
+  it('accepts a custom while-converging OIDN interval that divides maxSamples', async () => {
     let samples = 0;
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement,
-      oidnRealtimeSampleInterval: 4
+      oidnSampleInterval: 4
     });
     renderer.maxSamples = 32;
     const pipeline = createPipeline({
@@ -968,7 +968,7 @@ describe('Renderer realtime OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
 
     renderer.render(scene, camera);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -978,15 +978,15 @@ describe('Renderer realtime OIDN', () => {
     expect(pipeline.draw).toHaveBeenNthCalledWith(2, camera, 4);
   });
 
-  it('allows a realtime OIDN interval that does not divide maxSamples', () => {
+  it('allows a while-converging OIDN interval that does not divide maxSamples', () => {
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement,
-      oidnRealtimeSampleInterval: 8
+      oidnSampleInterval: 8
     });
     renderer.maxSamples = 30;
 
     expect(() => {
-      renderer.oidnRealtime = true;
+      renderer.oidnWhileConverging = true;
     }).not.toThrow();
   });
 
@@ -1012,7 +1012,7 @@ describe('Renderer realtime OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
 
     renderer.render(scene, camera);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -1044,7 +1044,7 @@ describe('Renderer realtime OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
     (renderer as unknown as { _renderDone: boolean })._renderDone = true;
     (renderer as unknown as { _oidnStatus: number })._oidnStatus = 2;
 
@@ -1054,7 +1054,7 @@ describe('Renderer realtime OIDN', () => {
     expect(pipeline.performOIDNDenoise).toHaveBeenCalledTimes(1);
   });
 
-  it('coalesces camera changes while a realtime preview denoise is in flight', () => {
+  it('coalesces camera changes while a while-converging preview denoise is in flight', () => {
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement
     });
@@ -1062,7 +1062,7 @@ describe('Renderer realtime OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
     (renderer as unknown as { _renderDone: boolean })._renderDone = true;
     (renderer as unknown as { _oidnStatus: number })._oidnStatus = 1;
     (renderer as any)._oidnPreviewInFlight = true;
@@ -1074,7 +1074,7 @@ describe('Renderer realtime OIDN', () => {
     expect(pipeline.draw).not.toHaveBeenCalled();
   });
 
-  it('lets a camera change cancel a settled realtime denoise', () => {
+  it('lets a camera change cancel a settled while-converging denoise', () => {
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement
     });
@@ -1082,7 +1082,7 @@ describe('Renderer realtime OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
     (renderer as unknown as { _renderDone: boolean })._renderDone = true;
     (renderer as unknown as { _oidnStatus: number })._oidnStatus = 1;
     (renderer as any)._oidnPreviewInFlight = false;
@@ -1094,7 +1094,7 @@ describe('Renderer realtime OIDN', () => {
     expect(pipeline.draw).toHaveBeenCalled();
   });
 
-  it('does not defer scene invalidation behind realtime denoising', () => {
+  it('does not defer scene invalidation behind while-converging denoising', () => {
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement
     });
@@ -1102,7 +1102,7 @@ describe('Renderer realtime OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnRealtime = true;
+    renderer.oidnWhileConverging = true;
     (renderer as unknown as { _renderDone: boolean })._renderDone = true;
     (renderer as unknown as { _oidnStatus: number })._oidnStatus = 1;
 
@@ -1129,8 +1129,8 @@ describe('Renderer realtime OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnRealtime = true;
-    renderer.oidnRealtimeSceneUpdates = true;
+    renderer.oidnWhileConverging = true;
+    renderer.oidnCoalesceSceneUpdates = true;
     (renderer as unknown as { _renderDone: boolean })._renderDone = true;
     (renderer as unknown as { _oidnStatus: number })._oidnStatus = 1;
 

@@ -24,7 +24,7 @@ export interface Settings {
   clamping: number;
   denoise: boolean;
   denoiseModel: OIDNModel;
-  denoiseRealtime: boolean;
+  denoiseWhileConverging: boolean;
   toneMapping: ToneMapping;
   exposure: number;
   autoExposure: boolean;
@@ -66,7 +66,7 @@ export const DEFAULT_SETTINGS: Settings = {
   clamping: 0,
   denoise: true,
   denoiseModel: 'standard',
-  denoiseRealtime: false,
+  denoiseWhileConverging: false,
   toneMapping: 'agx',
   exposure: 1,
   autoExposure: false,
@@ -170,7 +170,7 @@ export interface ViewerState {
 const UI_KEY = 'claypt-viewer:ui';
 const RENDER_KEY = 'claypt-viewer:render:v5';
 const RENDER_FIELDS: (keyof Settings)[] = [
-  'envResolution', 'maxSamples', 'bounces', 'resolutionScale', 'samplingPattern', 'denoise', 'denoiseModel', 'denoiseRealtime',
+  'envResolution', 'maxSamples', 'bounces', 'resolutionScale', 'samplingPattern', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
   'toneMapping', 'interactivePreview', 'previewResolutionScale'
 ];
 
