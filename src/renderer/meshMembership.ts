@@ -36,8 +36,10 @@ export class MeshMembershipCache {
         checked.add(mesh.geometry);
       }
     }
-    const materials = res.materials.slice();
-    const materialIndices = new Map(materials.map((material, i) => [material, i]));
+    // Rebuild the active material table as instances acquire new color variants.
+    // Retaining retired slots here would keep pruned conversion variants alive.
+    const materials: Prepared['materials'] = [];
+    const materialIndices = new Map<Prepared['materials'][number], number>();
     const templates = new Map(res.instanceBindings.map(binding => [binding.geometry, binding]));
     const instanceBindings = meshes.filter(mesh => mesh.geometry.position.array.length > 0).map(mesh => {
       const material = mesh.materials[0];

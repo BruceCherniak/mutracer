@@ -646,14 +646,14 @@ interface ConversionStore {
   meshes: WeakMap<THREE.Mesh, Map<number, Mesh>>;
   lights: WeakMap<THREE.Object3D | THREE.Texture, SceneLight>;
   instanceMeshes: WeakMap<THREE.Mesh, Map<number, Mesh[]>>;
-  colorVariants: WeakMap<THREE.Material, Map<string, ColorVariant>>;
+  colorVariants: Map<THREE.Material, Map<string, ColorVariant>>;
   warned: WeakSet<THREE.Object3D>;
   background?: Scene['background'];
 }
 function createConversionStore(): ConversionStore {
   return { textures: new WeakMap(), materials: new WeakMap(), geometries: new WeakMap(),
     meshes: new WeakMap(), lights: new WeakMap(), deformedGeometries: new WeakMap(), deformations: new WeakMap(),
-    instanceMeshes: new WeakMap(), colorVariants: new WeakMap(), warned: new WeakSet() };
+    instanceMeshes: new WeakMap(), colorVariants: new Map(), warned: new WeakSet() };
 }
 function geometryState(geometry: THREE.BufferGeometry, deformation = false) {
   return ['position', 'normal', 'tangent', 'uv', 'uv1', 'index'].flatMap(name => {
@@ -708,7 +708,6 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   const lights: SceneLight[] = [];
   const textureCache = store.textures;
   const convertedMaterials = new Set<THREE.Material>();
-  const refreshedVariants = new Set<THREE.Material>();
   const instanceMatrix = scene.matrixWorld.clone();
   const instanceWorld = scene.matrixWorld.clone();
   const instanceColor: ColorRGB = [1, 1, 1];
@@ -861,11 +860,6 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             } else store.materials.set(sourceMaterial, { material, hash });
             convertedMaterials.add(sourceMaterial);
           } else material = store.materials.get(sourceMaterial)!.material;
-          if (!refreshedVariants.has(sourceMaterial)) {
-            // Update absent colors too, including when the instance count is zero.
-            for (const variant of store.colorVariants.get(sourceMaterial)?.values() ?? []) refreshVariant(variant, material);
-            refreshedVariants.add(sourceMaterial);
-          }
           let instancesByGroup = store.instanceMeshes.get(child);
           if (!instancesByGroup) { instancesByGroup = new Map(); store.instanceMeshes.set(child, instancesByGroup); }
           let instanceMeshes = instancesByGroup.get(groupIndex);
@@ -1048,6 +1042,13 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
     else { Object.assign(oldBackground, background); background = oldBackground; }
   }
   store.background = background;
+  // Inspect the final converted meshes, including onMeshConverted overrides.
+  // Iterate across source materials so removed/hidden objects are pruned too.
+  const usedMaterials = new Set(meshes.flatMap(mesh => mesh.materials));
+  for (const [source, variants] of store.colorVariants) {
+    for (const [key, variant] of variants) if (!usedMaterials.has(variant.material)) variants.delete(key);
+    if (!variants.size) store.colorVariants.delete(source);
+  }
   return {
     background,
     meshes,
@@ -1068,7 +1069,7 @@ export interface THREESceneChanges {
  * Keeps one ClayPT scene in sync with a Three.js scene, reusing unchanged objects.
  * Skinning/morph targets run on the CPU with per-source-mesh dynamic geometry.
  * InstancedMesh retains its prefix on count changes and shares geometry/BLAS;
- * each distinct source-material/RGB pair uses a cached material variant.
+ * each currently used source-material/RGB pair uses a cached material variant.
  */
 export class THREESceneSync {
   readonly scene: Scene;

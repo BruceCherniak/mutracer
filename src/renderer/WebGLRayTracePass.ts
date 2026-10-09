@@ -439,7 +439,8 @@ class WebGLRayTracePass {
     if (membership) {
       const versions = new Map(this._meshSnapshot.flatMap(item => item.materials.map((m, i) => [m, item.materialVersions[i]] as const)));
       const materialsChanged = membership.materials.length !== this._preparedMeshData!.materials.length ||
-        membership.materials.some(m => versions.has(m) && m.version !== versions.get(m));
+        membership.materials.some((m, i) => m !== this._preparedMeshData!.materials[i] ||
+          versions.has(m) && m.version !== versions.get(m));
       this._pendingMembershipData = membership;
       this._meshes = meshes;
       this._meshSnapshot = next;

@@ -72,7 +72,7 @@ it('reuses resident BLAS and vertices across removals, new instances and new col
   const { mesh, sync } = fixture();
   const resident = updateMeshInstances(sync.scene.meshes), cache = new MeshMembershipCache(); cache.capture(resident);
   mesh.count = 0; sync.update(); const empty = cache.update(resident, sync.scene.meshes)!;
-  expect(empty.instances).toHaveLength(0);
+  expect(empty.instances).toHaveLength(0); expect(empty.materials).toHaveLength(0);
   mesh.count = 4; mesh.setColorAt(3, new THREE.Color(.3, .2, .1)); mesh.instanceColor!.needsUpdate = true; sync.update();
   const next = cache.update(empty, sync.scene.meshes)!;
   expect(next.instances).toHaveLength(4); expect(next.blases).toBe(resident.blases);
@@ -89,4 +89,45 @@ it('warns once and falls back to an ordinary mesh for unsupported instanced morp
     mesh.morphTexture = new THREE.DataTexture(); sync.update(); sync.update();
     expect(warning).toHaveBeenCalledOnce(); expect(sync.scene.meshes).toHaveLength(1);
   } finally { warning.mockRestore(); }
+});
+
+function variantCache(sync: THREESceneSync) {
+  return (sync as unknown as { _store: { colorVariants: Map<THREE.Material, Map<string, unknown>> } })._store.colorVariants;
+}
+it('keeps only currently distinct instance colors after 100 consecutive color changes', () => {
+  const {mesh, sync, material} = fixture();
+  let prepared = updateMeshInstances(sync.scene.meshes);
+  const membership = new MeshMembershipCache(); membership.capture(prepared);
+  for (let frame = 0; frame < 100; frame++) {
+    for (let i = 0; i < mesh.count; i++) mesh.setColorAt(i,new THREE.Color((frame+1)/101,i%3/4,.5));
+    mesh.instanceColor!.needsUpdate = true; sync.update();
+    expect(variantCache(sync).get(material)!.size).toBe(3);
+    expect(new Set(sync.scene.meshes.map(mesh=>mesh.materials[0])).size).toBe(3);
+    const next = membership.update(prepared, sync.scene.meshes)!;
+    expect(next.blases).toBe(prepared.blases); expect(next.geometry).toBe(prepared.geometry);
+    expect(next.materials).toHaveLength(3);
+    for (const binding of next.instanceBindings) expect(next.materials[binding.materialIndices[0]]).toBe(binding.mesh.materials[0]);
+    prepared = next;
+  }
+  mesh.count=0;sync.update();expect(variantCache(sync).size).toBe(0);
+  mesh.count=4;sync.update();expect(variantCache(sync).get(material)!.size).toBe(3);
+});
+it('prunes across shared source materials and removed or invisible instances', () => {
+  const {mesh, sync, material, source} = fixture();
+  const second = new THREE.InstancedMesh(mesh.geometry,material,1);
+  second.setColorAt(0,new THREE.Color(.25,.5,.75));source.add(second);sync.update();
+  const retained = sync.scene.meshes.at(-1)!.materials[0];
+  expect(variantCache(sync).get(material)!.size).toBe(3);
+  mesh.visible=false;sync.update();
+  expect(variantCache(sync).get(material)!.size).toBe(1);
+  expect(sync.scene.meshes[0].materials[0]).toBe(retained);
+  source.remove(second);sync.update();expect(variantCache(sync).size).toBe(0);
+  mesh.visible=true;sync.update();expect(variantCache(sync).get(material)!.size).toBe(2);
+});
+it('recreates an unused color with the current source material values', () => {
+  const {mesh, sync, material} = fixture(true), old = sync.scene.meshes[0].materials[0];
+  mesh.count=0;sync.update();material.color.setRGB(.2,.4,.8);sync.update();
+  mesh.count=4;sync.update();const current=sync.scene.meshes[0].materials[0];
+  expect(current).not.toBe(old);expect(current.baseColor).toEqual([.2,.1,.8*.75]);
+  expect(current.emissionColor).toEqual(current.baseColor);
 });
