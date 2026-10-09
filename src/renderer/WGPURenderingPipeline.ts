@@ -232,6 +232,8 @@ function makeWGPURenderingPipeline(
   const OIDN_PREVIEW_TARGET_MS = 40;
   const MIN_OIDN_PREVIEW_SCALE = 0.125;
   let oidnPreviewActive = false;
+  // Whether the canvas currently shows a denoised (or transition) frame.
+  let presentedDenoised = false;
   let oidnPreviewScaleLimit: number | undefined;
   let previewBounces = 2;
   let previewIdleDelayMs = 150;
@@ -944,6 +946,21 @@ output.color = color;
       // asynchronous output is available. Keep the completed preview frame
       // on screen through that gap instead of exposing the raw sample.
       previewTransitionDenoisePending && !oidnHDRBuffer;
+    // Realtime preview presents at OIDN throughput: keep the last denoised
+    // frame on the canvas instead of flashing each raw 1spp restart.
+    const holdDenoisedFrame =
+      previewMode && oidnPreviewActive && output === 'final' &&
+      !oidnHDRBuffer && !oidnComposedBuffer && presentedDenoised;
+    if (holdDenoisedFrame) {
+      device.queue.submit([encoder.finish()]);
+      if (hdrPeakReadbackSubmitted) {
+        void activeHDRPeakMeter?.resolve();
+      }
+      return;
+    }
+    presentedDenoised =
+      output === 'final' &&
+      (!!oidnHDRBuffer || !!oidnComposedBuffer || showPreviewTransition);
     outputPass.setUniform('previewTransitionPercent', +showPreviewTransition);
     outputPass.setUniform(
       'overlayPos',
