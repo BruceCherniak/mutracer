@@ -1054,7 +1054,7 @@ describe('Renderer realtime OIDN', () => {
     expect(pipeline.performOIDNDenoise).toHaveBeenCalledTimes(1);
   });
 
-  it('coalesces camera changes while a realtime denoise is in flight', () => {
+  it('coalesces camera changes while a realtime preview denoise is in flight', () => {
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement
     });
@@ -1065,12 +1065,33 @@ describe('Renderer realtime OIDN', () => {
     renderer.oidnRealtime = true;
     (renderer as unknown as { _renderDone: boolean })._renderDone = true;
     (renderer as unknown as { _oidnStatus: number })._oidnStatus = 1;
+    (renderer as any)._oidnPreviewInFlight = true;
     (renderer as any)._forceMeshUpdate = false;
 
     renderer.render(scene, camera);
 
     expect(pipeline.needsRestartSample).not.toHaveBeenCalled();
     expect(pipeline.draw).not.toHaveBeenCalled();
+  });
+
+  it('lets a camera change cancel a settled realtime denoise', () => {
+    const renderer = new Renderer({
+      canvas: { width: 1, height: 1 } as HTMLCanvasElement
+    });
+    const pipeline = createPipeline({ needsRestartSample: vi.fn(() => true) });
+    attachPipeline(renderer, pipeline);
+    markSceneStable(renderer, scene);
+    renderer.oidn = {} as never;
+    renderer.oidnRealtime = true;
+    (renderer as unknown as { _renderDone: boolean })._renderDone = true;
+    (renderer as unknown as { _oidnStatus: number })._oidnStatus = 1;
+    (renderer as any)._oidnPreviewInFlight = false;
+    (renderer as any)._forceMeshUpdate = false;
+
+    renderer.render(scene, camera);
+
+    expect(pipeline.needsRestartSample).toHaveBeenCalled();
+    expect(pipeline.draw).toHaveBeenCalled();
   });
 
   it('does not defer scene invalidation behind realtime denoising', () => {

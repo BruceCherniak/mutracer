@@ -14,6 +14,10 @@ Then open <http://localhost:3001/examples/>.
 | [`animation`](./animation.ts) | A procedural skinned cylinder, bone animation and a morph slider; pause animation to accumulate a clean image. Both backends support `?webgl`. |
 | [`advanced`](./advanced.ts) | Coat, transmission with dispersion, subsurface, fuzz and thin-film materials; a shadow catcher with a transparent background; `setDenoiser()`; a `samplingPattern` selector (Sobol, ZSobol, random); `renderOfflineFrame()` and PNG export. |
 
+For an interactive app with drag-and-drop glTF/HDR loading, a scene tree,
+material, lighting and render controls, and PNG export, run the
+[viewer](../viewer/README.md) with `npm run viewer`.
+
 The examples import `claypt`, which the dev server aliases to `src/`. All
 assets are procedural or generated: [`assets/chess.glb`](./assets/chess.glb)
 comes from [`scripts/create-example-model.mjs`](../scripts/create-example-model.mjs)

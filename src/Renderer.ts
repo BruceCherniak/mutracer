@@ -51,6 +51,12 @@ export interface DenoiserOptions {
    * samples instead of only when `maxSamples` is reached. Default `false`.
    */
   realtime?: boolean;
+  /**
+   * Network for interactive preview frames when `realtime` is on. Those
+   * frames are replaced as soon as the camera moves again, so the default
+   * trades detail for speed; `false` uses `model`. Default `'small'`.
+   */
+  previewModel?: OIDNModel | false;
   /** Maximum OIDN tile size. By default oidn-web chooses it. */
   maxTileSize?: number;
   /** Abort the weight download. */
@@ -460,6 +466,10 @@ export default class Renderer {
    */
   oidnAlpha?: OIDNWeb;
   private _ownedDenoiser?: OIDNDenoiser;
+  /** Whether the denoise in flight is for an interactive preview frame. */
+  private _oidnPreviewInFlight = false;
+  /** Faster network for realtime interactive preview frames. */
+  private _previewDenoiser?: OIDNDenoiser;
   private _denoiserRevision = 0;
 
   /** Image shown on the canvas, e.g. `albedo` or `normal` for debugging. Default `final`. */
@@ -557,29 +567,38 @@ export default class Renderer {
   async setDenoiser(options: DenoiserOptions | boolean | null = true) {
     const revision = ++this._denoiserRevision;
     const previous = this._ownedDenoiser;
+    const previousPreview = this._previewDenoiser;
     if (!options) {
       this._ownedDenoiser = undefined;
+      this._previewDenoiser = undefined;
       if (previous && this.oidn === previous) this.oidn = undefined;
       this.oidnRealtime = false;
       disposeOIDNDenoiser(previous);
+      disposeOIDNDenoiser(previousPreview);
       return;
     }
-    const { realtime = false, ...loadOptions } =
+    const { realtime = false, previewModel = 'small', ...loadOptions } =
       options === true ? {} : options;
+    const model = loadOptions.model ?? 'standard';
     const { initializeOIDN } = await loadOIDNModule();
-    const denoiser = await initializeOIDN(this, {
-      ...loadOptions,
-      attach: false
-    });
+    const [denoiser, previewDenoiser] = await Promise.all([
+      initializeOIDN(this, { ...loadOptions, attach: false }),
+      realtime && previewModel && previewModel !== model
+        ? initializeOIDN(this, { ...loadOptions, model: previewModel, attach: false })
+        : undefined
+    ]);
     if (revision !== this._denoiserRevision) {
       // A newer setDenoiser() call superseded this one.
       disposeOIDNDenoiser(denoiser);
+      disposeOIDNDenoiser(previewDenoiser);
       return;
     }
     this._ownedDenoiser = denoiser;
+    this._previewDenoiser = previewDenoiser;
     this.oidnRealtime = realtime;
     this.oidn = denoiser;
     if (previous !== denoiser) disposeOIDNDenoiser(previous);
+    disposeOIDNDenoiser(previousPreview);
   }
 
   /**
@@ -1211,9 +1230,13 @@ export default class Renderer {
     const pendingSceneRestart =
       this._oidnRealtimeSceneUpdatePending && !deferSceneRestart;
     if (pendingSceneRestart) this._renderDone = false;
+    // Interaction presents at OIDN throughput: a moving camera waits for the
+    // preview frame being denoised. A settled multi-tile denoise is cancelled
+    // instead, so it never holds up the next gesture.
     const deferRestart = deferSceneRestart || (
       realtimeDenoiseInFlight &&
       this._oidnStatus === OIDN_DENOISING &&
+      this._oidnPreviewInFlight &&
       this._renderDone
     );
     const interactionRestarted = !deferRestart &&
@@ -1309,6 +1332,7 @@ export default class Renderer {
     // Hold the completed denoise through that interval as well as later batches.
     // Animation presents at OIDN throughput, so keep its last completed result
     // visible while the latest coalesced scene state is traced and denoised.
+    pipeline.setOIDNPreviewActive?.(realtimeRequested && canRunOIDN);
     pipeline.setPreserveOIDNOutput?.(
       realtimeRequested && canRunOIDN &&
         (this.oidnRealtimeSceneUpdates || (
@@ -1342,10 +1366,16 @@ export default class Renderer {
 
     if (this._renderDone && !this._oidnStatus && canRunOIDN) {
       this._oidnStatus = OIDN_DENOISING;
+      this._oidnPreviewInFlight = this.interactivePreview &&
+        pipeline.isPreviewMode?.() === true;
       const oidnRevision = ++this._oidnRevision;
+      // Realtime preview frames use the faster preview network when loaded.
+      const previewFrame = realtimeDenoiseActive && this._previewDenoiser &&
+        oidn === this._ownedDenoiser && this.interactivePreview &&
+        pipeline.isPreviewMode?.() === true;
       // Performing denoising
       (pipeline as WGPURenderingPipeline)
-        .performOIDNDenoise(oidn!, this.oidnAlpha, realtimeDenoiseActive)
+        .performOIDNDenoise(previewFrame ? this._previewDenoiser! : oidn!, this.oidnAlpha, realtimeDenoiseActive)
         .then((completed) => {
           if (oidnRevision !== this._oidnRevision) return;
           // The denoiser may finish without a progress callback (for example
@@ -1420,6 +1450,8 @@ export default class Renderer {
     this._denoiserRevision++;
     disposeOIDNDenoiser(this._ownedDenoiser);
     this._ownedDenoiser = undefined;
+    disposeOIDNDenoiser(this._previewDenoiser);
+    this._previewDenoiser = undefined;
     this._webglRenderer?.dispose();
     this._pipeline?.dispose();
     this._pipeline = undefined;

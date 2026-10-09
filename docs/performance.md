@@ -14,7 +14,11 @@
 ## Responsiveness
 
 - Keep `interactivePreview` on for camera controls and editing.
-  `previewResolutionScale` and `previewBounces` control its cost.
+  `previewResolutionScale` and `previewBounces` control its cost. The preview
+  resolution adapts to the measured frame time (aiming for `maxTimePreview`
+  milliseconds) in 1/16 steps between 0.25 and `previewResolutionScale`.
+  With realtime denoising, the measured denoise time also lowers it (down to
+  0.125), and preview frames use the `previewModel` network (`small`).
 - Large frames are split into tiles that target `maxTimePerTile`
   milliseconds of GPU time, which keeps the page responsive. Raise it for
   throughput in a background or export tab.

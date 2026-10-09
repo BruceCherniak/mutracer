@@ -94,19 +94,19 @@ describe('initializeOIDN', () => {
     }
     expect(initUNetFromBuffer).toHaveBeenCalledWith(
       weights,
-      { device: {}, adapterInfo: {} },
+      { device: {} },
       expect.objectContaining({ aux: true, hdr: true, hdrTransfer: 'pu', maxTileSize: 1024 })
     );
     expect(initUNetFromBuffer).toHaveBeenNthCalledWith(
       2,
       weights,
-      { device: {}, adapterInfo: {} },
+      { device: {} },
       expect.objectContaining({ aux: false, hdr: false, maxTileSize: 1024 })
     );
     expect(initUNetFromBuffer).toHaveBeenNthCalledWith(
       3,
       weights,
-      { device: {}, adapterInfo: {} },
+      { device: {} },
       expect.objectContaining({ aux: false, hdr: false, maxTileSize: 1024 })
     );
   });
@@ -134,7 +134,7 @@ describe('initializeOIDN', () => {
     expect(renderer.oidn).toBeUndefined();
     expect(initUNetFromBuffer).toHaveBeenCalledWith(
       expect.any(ArrayBuffer),
-      { device: {}, adapterInfo: {} },
+      { device: {} },
       expect.objectContaining({ aux: false, hdr: true, hdrTransfer: 'log', maxTileSize: undefined })
     );
   });

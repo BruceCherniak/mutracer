@@ -18,6 +18,8 @@ people and coding agents changing the library. For using it, read
 - `src/util/`: loaders, Three.js conversion, geometry helpers, displacement
   tessellation and worker precomputation.
 - `examples/`: Vite examples (`npm run dev`). `tests/`: Vitest.
+- `viewer/`: React test-drive app (`npm run viewer`). Its dependencies are
+  devDependencies and never ship in the npm package.
 - `LICENSES/`, `THIRD_PARTY_NOTICES.md`: third-party attributions.
 
 ## Checks
@@ -27,6 +29,7 @@ Run before committing:
 ```bash
 npm run typecheck
 npm run typecheck:examples
+npm run typecheck:viewer
 npm test
 ```
 

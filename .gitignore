@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-viewer/
 lib/
 .DS_Store
 examples/assets/models/extra/

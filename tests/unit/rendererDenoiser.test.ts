@@ -45,6 +45,31 @@ describe('Renderer.setDenoiser', () => {
     expect(renderer.oidn).toBeUndefined();
   });
 
+  it('loads a faster preview network for realtime denoising', async () => {
+    initializeOIDN.mockReset();
+    const main = fakeDenoiser();
+    const preview = fakeDenoiser();
+    initializeOIDN.mockImplementation((_renderer, { model }) =>
+      Promise.resolve(model === 'small' ? preview : main));
+    const renderer = createRenderer();
+
+    await renderer.setDenoiser({ realtime: true });
+    expect(initializeOIDN.mock.calls.map(([, options]) => options.model)).toEqual([undefined, 'small']);
+    // The preview network never replaces the attached denoiser.
+    expect(renderer.oidn).toBe(main);
+
+    // Without realtime (or with previewModel: false) only the main network loads.
+    initializeOIDN.mockClear();
+    await renderer.setDenoiser({ realtime: false });
+    await renderer.setDenoiser({ realtime: true, previewModel: false });
+    expect(initializeOIDN).toHaveBeenCalledTimes(2);
+    expect(preview.dispose).toHaveBeenCalledOnce();
+
+    await renderer.setDenoiser(false);
+    expect(renderer.oidn).toBeUndefined();
+    initializeOIDN.mockReset();
+  });
+
   it('drops a load that a newer call superseded', async () => {
     let resolveSlow!: (value: unknown) => void;
     const slow = fakeDenoiser();

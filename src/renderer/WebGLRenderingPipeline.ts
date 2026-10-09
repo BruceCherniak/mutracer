@@ -5,6 +5,7 @@ import { Scene, SceneBackground, SceneLight } from '../scene/Scene';
 import { ColorRGB } from '../types';
 import { vec3 } from '../math';
 import halton from './hanton';
+import { nextPreviewScale } from './util';
 import { makeTileRender } from './TileRender';
 import {
   RenderOutput,
@@ -303,14 +304,13 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
         elapsedFrameTime
       );
       if (previewMode && sampleCount > 1) {
-        const rawScale =
-          adaptivePreviewScale *
-          Math.sqrt(maxTimePreview / Math.max(elapsedFrameTime, 1));
-        const nextScale = Math.min(
-          previewResolutionScale,
-          Math.max(0.25, Math.round(rawScale * 8) / 8)
+        const nextScale = nextPreviewScale(
+          adaptivePreviewScale,
+          elapsedFrameTime,
+          maxTimePreview,
+          previewResolutionScale
         );
-        if (Math.abs(nextScale - adaptivePreviewScale) >= 0.12) {
+        if (nextScale !== adaptivePreviewScale) {
           adaptivePreviewScale = nextScale;
           applyRenderResolution();
         }

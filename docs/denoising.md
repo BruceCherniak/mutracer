@@ -53,11 +53,13 @@ The weights are licensed under Apache-2.0 (`oidn/weights/LICENSE.txt`).
 ## Realtime denoising
 
 ```ts
-await renderer.setDenoiser({ model: 'small', realtime: true });
+await renderer.setDenoiser({ realtime: true });
 ```
 
 In realtime mode the interactive preview is denoised while the camera moves,
-and the progressive image is re-denoised every
+with the `previewModel` network (`small` by default) at a resolution lowered
+until the denoiser keeps up. A camera change cancels a settled denoise that is
+still running. The progressive image is re-denoised every
 `oidnRealtimeSampleInterval` samples (a `Renderer` constructor parameter,
 default 8). Set `renderer.oidnRealtimeSceneUpdates = true` for animation
 playback, which coalesces continuous scene changes into the latest frame.
@@ -67,6 +69,7 @@ playback, which coalesces continuous scene changes into the latest frame.
 | `DenoiserOptions` | Description |
 | --- | --- |
 | `model` | `'standard'`, `'small'` or `'cleanAuxLarge'` |
+| `previewModel` | Network for realtime preview frames, or `false` to use `model`. Default `'small'` |
 | `weightsBaseUrl` | Directory containing the `.tza` files |
 | `realtime` | Denoise previews and intermediate frames |
 | `maxTileSize` | Maximum tile size; chosen by oidn-web by default |

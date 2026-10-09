@@ -3,27 +3,34 @@
 
 export default /*wgsl*/ `
 
+// A one-sample binary shadow test leaves scattered fully dark pixels far
+// from the occluder at low sample counts. Averaging a few light samples per
+// primary hit costs only shadow rays and lets the mask settle much sooner.
+const SHADOW_CATCHER_LIGHT_SAMPLES = 4u;
+
 fn sampleShadowCatcher(si: SurfaceInteraction, bounce: i32, path: ptr<function, Path>) {
   let viewDir = -(*path).ray.d;
 
   // The unified table also contains emissive mesh lights.
   if (rtUniform.lightChoiceCount > 0) {
-    var lightSample: LightSampleRec;
-    let lightRnd = vec3f(sample2D(bounceDim(LIGHT_POSITION)), sample1D(bounceDim(LIGHT_SELECT)));
-    sampleLight(si.position, lightRnd, &lightSample, false);
-    let lightDir = lightSample.direction;
     var shadow = 0.0;
-    let cosThetaL = dot(si.normal, lightDir);
-    let orientation = dot(si.normal, viewDir) * cosThetaL;
-    if (lightSample.pdf > 0.0 && orientation >= 0.0) {
-      var ray: Ray;
-      initRay(&ray, si.position + EPS * lightDir, lightDir);
-      if (intersectSceneShadow(ray, lightSample.dist - EPS, si.triangleIndex)) {
-        shadow = 1.0;
+    for (var candidate = 0u; candidate < SHADOW_CATCHER_LIGHT_SAMPLES; candidate++) {
+      var lightSample: LightSampleRec;
+      let lightRnd = vec3f(sample2D(lightDim(candidate, 1u)), sample1D(lightDim(candidate, 0u)));
+      sampleLight(si.position, lightRnd, &lightSample, false);
+      let lightDir = lightSample.direction;
+      let cosThetaL = dot(si.normal, lightDir);
+      let orientation = dot(si.normal, viewDir) * cosThetaL;
+      if (lightSample.pdf > 0.0 && orientation >= 0.0) {
+        var ray: Ray;
+        initRay(&ray, si.position + EPS * lightDir, lightDir);
+        if (intersectSceneShadow(ray, lightSample.dist - EPS, si.triangleIndex)) {
+          shadow += 1.0;
+        }
       }
     }
     // WebGPU's compose pass consumes shadow opacity directly.
-    (*path).alpha = shadow;
+    (*path).alpha = shadow / f32(SHADOW_CATCHER_LIGHT_SAMPLES);
   }
   (*path).fromEye = false;
 }

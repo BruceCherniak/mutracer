@@ -11,6 +11,7 @@ import {
   shadowDenoiseInputMain
 } from './wgsl/compose.frag.wgsl';
 import halton from './hanton';
+import { MIN_PREVIEW_SCALE, nextPreviewScale } from './util';
 import type { RenderingPipeline } from './RenderingPipeline';
 import { makeTileRender, makeTileRenderWithPredict } from './TileRender';
 import { ToneMappingParams } from './RenderingPipeline';
@@ -225,6 +226,13 @@ function makeWGPURenderingPipeline(
   let previewMode = false;
   let previewResolutionScale = 0.5;
   let adaptivePreviewScale = 0.5;
+  // Realtime OIDN runs on every preview frame and usually costs more than the
+  // trace, which the timestamp feedback below does not see. Its measured time
+  // sets a separate limit, allowed to go lower than tracing alone.
+  const OIDN_PREVIEW_TARGET_MS = 40;
+  const MIN_OIDN_PREVIEW_SCALE = 0.125;
+  let oidnPreviewActive = false;
+  let oidnPreviewScaleLimit: number | undefined;
   let previewBounces = 2;
   let previewIdleDelayMs = 150;
   let lastInteractionTime = -Infinity;
@@ -750,15 +758,15 @@ output.color = color;
         activeTimeQuery.resultBuffer.unmap();
 
         if (timingIsCurrent && submittedPreviewMode && previewMode) {
-          const estimatedFullFrameTime = traceTime * submittedTileCount;
-          const rawScale =
-            submittedScale *
-            Math.sqrt(maxTimePreview / Math.max(estimatedFullFrameTime, 0.1));
-          const nextScale = Math.min(
-            previewResolutionScale,
-            Math.max(0.25, Math.round(rawScale * 8) / 8)
+          const nextScale = nextPreviewScale(
+            submittedScale,
+            traceTime * submittedTileCount,
+            maxTimePreview,
+            maxPreviewScale(),
+            adaptivePreviewScale,
+            oidnPreviewActive ? MIN_OIDN_PREVIEW_SCALE : MIN_PREVIEW_SCALE
           );
-          if (Math.abs(nextScale - adaptivePreviewScale) >= 0.12) {
+          if (nextScale !== adaptivePreviewScale) {
             adaptivePreviewScale = nextScale;
             _applyRenderResolution();
             isFirstFrame = true;
@@ -1173,7 +1181,7 @@ output.color = color;
       // same avoidable slow frame before timestamp feedback lowers it again.
       adaptivePreviewScale = Math.min(
         adaptivePreviewScale,
-        previewResolutionScale
+        maxPreviewScale()
       );
     }
     tileRender = previewMode ? previewTileRender : finalTileRender;
@@ -1387,6 +1395,32 @@ output.color = color;
     }
   }
 
+  function maxPreviewScale() {
+    if (!oidnPreviewActive) return previewResolutionScale;
+    // Before the first measurement, start near one megapixel.
+    oidnPreviewScaleLimit ??= Math.min(1, Math.max(
+      MIN_OIDN_PREVIEW_SCALE,
+      Math.sqrt(1e6 / Math.max(screenWidth * screenHeight, 1))
+    ));
+    return Math.min(previewResolutionScale, oidnPreviewScaleLimit);
+  }
+
+  function updateOIDNPreviewScale(elapsedMs: number, measuredScale: number) {
+    oidnPreviewScaleLimit = nextPreviewScale(
+      measuredScale,
+      elapsedMs,
+      OIDN_PREVIEW_TARGET_MS,
+      previewResolutionScale,
+      oidnPreviewScaleLimit ?? measuredScale,
+      MIN_OIDN_PREVIEW_SCALE
+    );
+    if (previewMode && adaptivePreviewScale > oidnPreviewScaleLimit) {
+      adaptivePreviewScale = oidnPreviewScaleLimit;
+      _applyRenderResolution();
+      isFirstFrame = true;
+    }
+  }
+
   function performOIDNDenoise(
     denoiser: OIDNWeb,
     alphaDenoiser: OIDNWeb | undefined,
@@ -1394,18 +1428,26 @@ output.color = color;
   ): Promise<boolean> {
     cancelOIDNDenoise();
     const generation = oidnGeneration;
+    const timedPreview = realtime && previewMode;
+    const startTime = performance.now();
+    const startScale = adaptivePreviewScale;
     const size = { width: renderWidth, height: renderHeight };
-    const realtimeTileOptions = realtime
-      ? {
-          tileOverlap: 80,
-          // Low-resolution interaction must finish as one low-latency frame;
-          // otherwise continuous camera updates outrun a multi-tile denoise.
-          // The settled full-resolution image uses bounded dynamic tiles so
-          // 4K inference cannot allocate a whole-image U-Net activation set.
-          wholeImage: previewMode,
-          scheduling: 'event-loop' as const
-        }
-      : {};
+    const realtimeTileOptions = {
+      ...(realtime ? {
+        tileOverlap: 80,
+        // Low-resolution interaction must finish as one low-latency frame;
+        // otherwise continuous camera updates outrun a multi-tile denoise.
+        // The settled full-resolution image uses bounded dynamic tiles so
+        // 4K inference cannot allocate a whole-image U-Net activation set.
+        wholeImage: previewMode
+      } : {}),
+      // A preview frame is one whole-image pass. Settled images can take many
+      // tiles; oidn-web 0.5 runs those back to back by default, which starves
+      // the page at 4K, so pace them to display frames instead.
+      scheduling: realtime && previewMode
+        ? 'event-loop' as const
+        : 'animation-frame' as const
+    };
     type AuxiliaryGuides = {
       albedo: OIDNWebGPUData;
       normal: OIDNWebGPUData;
@@ -1572,6 +1614,12 @@ output.color = color;
             if (realtime && currentIdx + 1 < totalIdx) return;
             const encoder = device.createCommandEncoder();
             oidnHDRBuffer = copyOIDNOutput(encoder, output, oidnHDRBuffer);
+            // A preview frame waits for its shadow mask, otherwise the
+            // denoised image flashes with the raw one-sample shadow first.
+            if (previewMode && rayTracePass.hasShadowCatcher()) {
+              device.queue.submit([encoder.finish()]);
+              return;
+            }
             drawPostProcess(encoder, false);
           },
           done() {
@@ -1643,7 +1691,13 @@ output.color = color;
           return denoiseComposed();
         }
       })
-      .then(() => generation === oidnGeneration);
+      .then(() => {
+        const completed = generation === oidnGeneration;
+        if (completed && timedPreview && previewMode) {
+          updateOIDNPreviewScale(performance.now() - startTime, startScale);
+        }
+        return completed;
+      });
   }
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', _onPageVisiblilityChange);
@@ -1784,6 +1838,10 @@ output.color = color;
 
     isPreviewMode() {
       return previewMode;
+    },
+
+    setOIDNPreviewActive(active: boolean) {
+      oidnPreviewActive = active;
     },
 
     setPreserveOIDNOutput(preserve: boolean) {

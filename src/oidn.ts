@@ -123,8 +123,8 @@ export async function initializeOIDNFromURL(
   weightsUrl: string | URL,
   options: CustomOIDNModelOptions = {}
 ): Promise<OIDNDenoiser> {
-  const { device, adapterInfo } = await renderer.getGPUDeviceAndAdapter();
-  if (!renderer.isUsingWebGPU() || !device || !adapterInfo) {
+  const { device } = await renderer.getGPUDeviceAndAdapter();
+  if (!renderer.isUsingWebGPU() || !device) {
     throw new Error('OIDN requires a WebGPU renderer.');
   }
 
@@ -138,7 +138,7 @@ export async function initializeOIDNFromURL(
         ]
       : [])
   ]);
-  const backend = { device, adapterInfo };
+  const backend = { device };
   const runtimeOptions = {
     hdrTransfer: options.hdrTransfer ?? 'pu',
     maxTileSize: options.maxTileSize,
