@@ -1,6 +1,9 @@
 node_modules/
 dist/
 dist-viewer/
+.wrangler/
+.dev.vars
+.dev.vars.*
 lib/
 .DS_Store
 examples/assets/models/extra/

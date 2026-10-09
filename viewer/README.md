@@ -14,6 +14,27 @@ npm run typecheck:viewer
 Add `?webgl` to force the WebGL 2 backend. The URL hash keeps the example
 model, environment and its resolution, exposure and tone mapping, so a view can be shared.
 
+## Cloudflare deployment
+
+From the repository root, with Node.js 20 or later:
+
+```bash
+npm ci
+npx wrangler login      # once per machine
+npm run deploy:viewer
+```
+
+`wrangler.jsonc` checks the viewer's types, builds it and deploys `dist-viewer/`
+as static assets for the `claypt-viewer` Worker. Wrangler prints the public
+HTTPS URL after deployment. No server code or runtime secrets are needed.
+The build includes the TinyBVH/Draco WebAssembly files and local OIDN weights.
+Only fingerprinted files under `assets/` receive an immutable browser cache.
+Viewer state uses the URL hash, so missing asset URLs return 404.
+
+For Cloudflare Workers Builds, use `npm run build:viewer` as the build command
+and `npm run deploy:viewer` as the deploy command (the latter also rebuilds
+and checks types).
+
 ## Structure
 
 ```
