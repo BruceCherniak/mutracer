@@ -7,6 +7,7 @@ import {
   prepareForPrecompute,
   precompute,
   resolveFromPrecompute,
+  type PrecomputeTimings,
   type PrecomputeProgress
 } from '../util/workerHelper';
 import {
@@ -16,6 +17,7 @@ import {
 } from './TinyBvhBuilder';
 
 export interface TinyBvhPrecomputeStats {
+  /** Precomputation entry point; dynamic geometries use the built-in builder. */
   builder: 'tinybvh';
   requestedLayout: TinyBvhLayout;
   layout: TinyBvhLayout | 'mixed';
@@ -27,9 +29,10 @@ export interface TinyBvhPrecomputeStats {
 }
 
 /**
- * Builds mesh BLAS data with TinyBVH.
+ * Builds static mesh BLAS data with TinyBVH and dynamic geometry with the built-in builder.
  *
- * By default every geometry is rebuilt. Pass `onlyMissing: true` to build only
+ * By default every static geometry is rebuilt; already prepared dynamic BVHs
+ * are retained. Pass `onlyMissing: true` to build only
  * meshes that do not have a BVH yet, which is what the renderer does
  * automatically before the first frame.
  */
@@ -39,17 +42,20 @@ export async function precomputeTinyBvh(
   onProgress?: (progress: PrecomputeProgress) => void,
   { onlyMissing = false }: { onlyMissing?: boolean } = {}
 ): Promise<TinyBvhPrecomputeStats> {
+  let dynamicResult: Awaited<ReturnType<typeof precompute>> | undefined;
   const dynamicMeshes = meshes.filter(mesh => mesh.geometry.dynamic);
   if (dynamicMeshes.length) {
     const prepared = prepareForPrecompute(dynamicMeshes);
     const result = await precompute(prepared.geometries, prepared.displacementScales,
       prepared.trianglesDisplacements, undefined, prepared.tessellations, onProgress, prepared.projectiveDisplacements);
     resolveFromPrecompute(result, prepared);
+    dynamicResult = result;
   }
   meshes = meshes.filter(mesh => !mesh.geometry.dynamic).filter(mesh =>
     onlyMissing ? meshNeedsPrecompute(mesh) : mesh.geometry.position.array.length > 0);
   if (!meshes.length) return { builder: 'tinybvh', requestedLayout, layout: 'bvh2',
-    geometryCount: dynamicMeshes.length, bvhTimeMs: 0, bvhBuildTimeMs: 0, bvhRefitTimeMs: 0, bvhRefitCount: 0 };
+    geometryCount: dynamicResult?.geometries.length ?? 0,
+    ...mergeTimings(undefined, dynamicResult?.timings) };
   const geometries = new Set(
     meshes.flatMap((mesh) => {
       const prepared = getCachedPreparedMeshGeometry(mesh);
@@ -98,7 +104,8 @@ export async function precomputeTinyBvh(
     }
     resolveFromPrecompute(result, prepared);
 
-    const layouts = new Set(bvhs.map((bvh) => bvh!.layout ?? 'bvh2'));
+    const layouts = new Set([...bvhs, ...(dynamicResult?.geometries.map(g => g.bvh) ?? [])]
+      .map((bvh) => bvh!.layout ?? 'bvh2'));
     return {
       builder: 'tinybvh',
       requestedLayout,
@@ -106,8 +113,8 @@ export async function precomputeTinyBvh(
         layouts.size > 1
           ? 'mixed'
           : (layouts.values().next().value ?? requestedLayout),
-      geometryCount: bvhs.length,
-      ...result.timings
+      geometryCount: bvhs.length + (dynamicResult?.geometries.length ?? 0),
+      ...mergeTimings(result.timings, dynamicResult?.timings)
     };
   } catch (error) {
     geometries.forEach((geometry) => {
@@ -115,4 +122,13 @@ export async function precomputeTinyBvh(
     });
     throw error;
   }
+}
+
+function mergeTimings(a?: PrecomputeTimings, b?: PrecomputeTimings): PrecomputeTimings {
+  return {
+    bvhTimeMs: (a?.bvhTimeMs ?? 0) + (b?.bvhTimeMs ?? 0),
+    bvhBuildTimeMs: (a?.bvhBuildTimeMs ?? 0) + (b?.bvhBuildTimeMs ?? 0),
+    bvhRefitTimeMs: (a?.bvhRefitTimeMs ?? 0) + (b?.bvhRefitTimeMs ?? 0),
+    bvhRefitCount: (a?.bvhRefitCount ?? 0) + (b?.bvhRefitCount ?? 0)
+  };
 }

@@ -42,6 +42,11 @@ import { precomputeTinyBvh } from 'claypt';
 const stats = await precomputeTinyBvh(scene.meshes, 'cwbvh');
 ```
 
+Returned counts and timings cover geometries processed by this call, including
+dynamic geometries built with the built-in builder. Processing multiple layouts
+reports `layout: 'mixed'`; `builder` names the precomputation entry point. Inspect each `geometry.bvh.builder` and
+`geometry.bvh.layout` for its actual builder/layout.
+
 ## Animation
 
 Transform-only changes refit the TLAS on both WebGPU and WebGL 2.
