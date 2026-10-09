@@ -1186,6 +1186,11 @@ output.color = color;
       pass.setUniform('imageSize', oidnImageSize);
     });
     bloomPass?.setSize(renderWidth, renderHeight);
+    // Timestamp and OIDN feedback can resize preview targets between render
+    // calls. Their old sample count must not make Renderer treat the new,
+    // empty targets as a completed frame and start denoising them.
+    sampleCount = 0;
+    previewSamplePending = previewMode;
     isFirstFrame = true;
   }
 
@@ -1464,6 +1469,7 @@ output.color = color;
     whileConverging = false
   ): Promise<boolean> {
     cancelOIDNDenoise();
+    if (isFirstFrame || sampleCount < 1) return Promise.resolve(false);
     const generation = oidnGeneration;
     const timedPreview = whileConverging && previewMode;
     const startTime = performance.now();

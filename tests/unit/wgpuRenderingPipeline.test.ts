@@ -55,14 +55,16 @@ vi.mock('../../src/renderer/WGPUComputePass', () => ({ WGPUComputePass: mocks.Pa
 vi.mock('../../src/renderer/WGPUAutoExposure', () => ({ default: mocks.Pass }));
 vi.mock('../../src/renderer/tonyMcMapfaceLut', () => ({ createTonyMcMapfaceLut: () => ({ destroy() {} }) }));
 
-function createPipeline(timestamps = true) {
+function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) = 1_000_000n) {
   const device = {
     features: new Set(timestamps ? ['timestamp-query'] : []),
     createQuerySet: () => ({ count: 2, destroy() {} }),
     createBuffer: () => ({
       size: 16, mapState: 'unmapped', destroy() {}, unmap() {},
       mapAsync: async () => {},
-      getMappedRange: () => new BigInt64Array([0n, 1_000_000n]).buffer
+      getMappedRange: () => new BigInt64Array([
+        0n, typeof traceTimeNs === 'function' ? traceTimeNs() : traceTimeNs
+      ]).buffer
     }),
     createTexture: (opts: GPUTextureDescriptor) => ({
       ...opts.size, format: opts.format, destroy: vi.fn()
@@ -271,6 +273,7 @@ describe('WebGPU denoised presentation transitions', () => {
       };
       expect(await pipeline.performOIDNDenoise(denoiser, undefined, true)).toBe(true);
       expect(pipeline.isFirstFrame()).toBe(true);
+      expect(pipeline.getTotalSamplesRendered()).toBe(0);
       pipeline.drawPostProcess();
       const snapshot = displayedTexture();
       expect(snapshot).toMatchObject({ width: 160, height: 128 });
@@ -278,6 +281,46 @@ describe('WebGPU denoised presentation transitions', () => {
       expect(displayedTexture()).toBe(snapshot);
       await pipeline.performOIDNDenoise(completedDenoiser(), undefined, true);
       expect(displayedTexture()).toMatchObject({ width: 48, height: 32 });
+      pipeline.dispose();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('invalidates completed samples when asynchronous GPU timing resizes a Toy Car-sized preview', async () => {
+    let now = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    try {
+      let readbacks = 0;
+      const pipeline = createPipeline(true, () =>
+        ++readbacks === 1 ? 20_000_000n : 400_000_000n);
+      pipeline.setSize(2496, 1594);
+      pipeline.setOIDNPreviewActive(true);
+      pipeline.setInteractivePreviewParams({
+        enabled: true, resolutionScale: 1, bounces: 2, idleDelayMs: 150
+      });
+      const camera = new Camera('perspective');
+      pipeline.needsRestartSample(camera, true);
+      pipeline.draw(camera, 1);
+      await pipeline.flushDiagnostics();
+      pipeline.draw(camera, 1);
+      expect(pipeline.getTotalSamplesRendered()).toBe(1);
+      await pipeline.flushDiagnostics();
+      expect(pipeline.isFirstFrame()).toBe(true);
+      expect(pipeline.getTotalSamplesRendered()).toBe(0);
+      const denoiser = completedDenoiser();
+      const execute = vi.spyOn(denoiser, 'tileExecute');
+      expect(await pipeline.performOIDNDenoise(denoiser, undefined, true)).toBe(false);
+      expect(execute).not.toHaveBeenCalled();
+      // Even after the idle deadline, finish a sample at the new preview
+      // resolution before returning to the full-resolution denoise.
+      now = 200;
+      expect(pipeline.needsRestartSample(camera)).toBe(false);
+      expect(pipeline.isPreviewMode()).toBe(true);
+      pipeline.draw(camera, 1);
+      expect(pipeline.getTotalSamplesRendered()).toBe(1);
+      expect(await pipeline.performOIDNDenoise(denoiser, undefined, true)).toBe(true);
+      expect(execute).toHaveBeenCalledOnce();
       pipeline.dispose();
     } finally {
       clock.mockRestore();
