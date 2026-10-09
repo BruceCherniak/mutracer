@@ -1,0 +1,143 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import Camera from '../../src/scene/Camera';
+import makeWGPURenderingPipeline from '../../src/renderer/WGPURenderingPipeline';
+
+// Keep the real pipeline and tile scheduler; replace GPU execution at the pass boundary.
+const mocks = vi.hoisted(() => {
+  class Pass {
+    setSize() {}
+    setUniform() {}
+    setOutputParams() {}
+    setRenderToScreen() {}
+    getOutput() { return {}; }
+    createPass() {}
+    dispose() {}
+  }
+  class TracePass extends Pass {
+    static latest: TracePass;
+    constructor() { super(); TracePass.latest = this; }
+    setSampleCount = vi.fn();
+    setCamera() {}
+    cameraChanged() { return false; }
+    setNoise() {}
+    setJitter() {}
+    setSampleTiles() {}
+    setPreviewMode() {}
+    updatePipeline() {}
+    isCompilingShader() { return false; }
+    isPipelineReady() { return true; }
+    hasShadowCatcher() { return false; }
+    getOutputBuffer() { return {}; }
+    setBounce() { return true; }
+    setClamping() { return true; }
+    setDirectLightCandidates() { return true; }
+    setAlphaBlendStrategy() { return true; }
+    setBevelSamples() { return true; }
+  }
+  class OutputPass extends Pass {
+    setSampleCount() {}
+    setSampleTileGrid() {}
+  }
+  return { Pass, TracePass, OutputPass };
+});
+vi.mock('../../src/renderer/WGPURayTracePass', () => ({ default: mocks.TracePass }));
+vi.mock('../../src/renderer/WGPURayTraceOutput', () => ({ WGPURayTraceOutputPass: mocks.OutputPass }));
+vi.mock('../../src/renderer/WGPUFullQuadPass', () => ({ WGPUFullQuadPass: mocks.Pass }));
+vi.mock('../../src/renderer/WGPUComputePass', () => ({ WGPUComputePass: mocks.Pass }));
+vi.mock('../../src/renderer/WGPUAutoExposure', () => ({ default: mocks.Pass }));
+vi.mock('../../src/renderer/tonyMcMapfaceLut', () => ({ createTonyMcMapfaceLut: () => ({ destroy() {} }) }));
+
+function createPipeline(timestamps = true) {
+  const device = {
+    features: new Set(timestamps ? ['timestamp-query'] : []),
+    createQuerySet: () => ({ count: 2, destroy() {} }),
+    createBuffer: () => ({
+      size: 16, mapState: 'unmapped', destroy() {}, unmap() {},
+      mapAsync: async () => {},
+      getMappedRange: () => new BigInt64Array([0n, 1_000_000n]).buffer
+    }),
+    createTexture: () => ({ destroy() {} }),
+    createSampler: () => ({}),
+    createCommandEncoder: () => ({
+      resolveQuerySet() {}, copyBufferToBuffer() {}, finish() { return {}; }
+    }),
+    queue: { submit() {}, onSubmittedWorkDone: async () => {} }
+  } as unknown as GPUDevice;
+  const canvas = {
+    getContext: () => ({ configure() {}, getCurrentTexture() { return {}; } })
+  } as unknown as HTMLCanvasElement;
+  const pipeline = makeWGPURenderingPipeline(canvas, device);
+  pipeline.setSize(80, 64);
+  return pipeline;
+}
+
+beforeEach(() => {
+  vi.stubGlobal('navigator', { gpu: { getPreferredCanvasFormat: () => 'bgra8unorm' } });
+  vi.stubGlobal('GPUBufferUsage', { QUERY_RESOLVE: 1, COPY_SRC: 2, COPY_DST: 4, MAP_READ: 8 });
+  vi.stubGlobal('GPUTextureUsage', { TEXTURE_BINDING: 1, COPY_DST: 2, COPY_SRC: 4 });
+  vi.stubGlobal('GPUMapMode', { READ: 1 });
+  vi.stubGlobal('requestAnimationFrame', () => 0);
+  vi.stubGlobal('Image', class {
+    src = '';
+    set onload(callback: () => void) { callback(); }
+  });
+});
+afterEach(() => { vi.unstubAllGlobals(); });
+
+describe('WebGPU offline sampling', () => {
+  it.each([true, false])('submits only samples 0..7 after offline settings change (timestamps=%s)', async (timestamps) => {
+    const pipeline = createPipeline(timestamps);
+    pipeline.setOfflineRenderOptions({ samplesPerBatch: 4, deferPostProcess: true, sampleSequenceOffset: 0 });
+    pipeline.restartSamples();
+    // Renderer applies these after configuring the offline batch on its first render.
+    pipeline.setBouncesAndClamping(6, 0);
+    pipeline.setDirectLightCandidates(2);
+    pipeline.setAlphaBlendStrategy('stochastic');
+    pipeline.setBevelSamples(2);
+    pipeline.draw(new Camera('perspective'), 8);
+    expect(pipeline.getTotalSamplesRendered()).toBe(4);
+    pipeline.draw(new Camera('perspective'), 8);
+    expect(pipeline.getTotalSamplesRendered()).toBe(8);
+    expect(mocks.TracePass.latest.setSampleCount.mock.calls.map(([sample]) => sample)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    await pipeline.flushDiagnostics();
+    pipeline.dispose();
+  });
+
+  it('keeps the realtime timing probe and re-enables it after returning from offline mode', async () => {
+    const pipeline = createPipeline();
+    pipeline.setOfflineRenderOptions({ samplesPerBatch: 4, deferPostProcess: true, sampleSequenceOffset: 0 });
+    pipeline.setBouncesAndClamping(6, 0);
+    pipeline.draw(new Camera('perspective'), 8);
+    expect(pipeline.getTotalSamplesRendered()).toBe(4);
+    await pipeline.flushDiagnostics();
+    pipeline.setOfflineRenderOptions({ samplesPerBatch: 0, deferPostProcess: false, sampleSequenceOffset: 0 });
+    pipeline.setBouncesAndClamping(3, 0);
+    mocks.TracePass.latest.setSampleCount.mockClear();
+    pipeline.draw(new Camera('perspective'), 8);
+    expect(pipeline.getTotalSamplesRendered()).toBe(0);
+    await pipeline.flushDiagnostics();
+    pipeline.draw(new Camera('perspective'), 8);
+    expect(pipeline.getTotalSamplesRendered()).toBe(1);
+    expect(mocks.TracePass.latest.setSampleCount.mock.calls.map(([sample]) => sample)).toEqual([0, 0]);
+    await pipeline.flushDiagnostics();
+    pipeline.dispose();
+  });
+
+  it('does not re-enable a probe when offline rendering exits interactive preview', async () => {
+    const pipeline = createPipeline();
+    const camera = new Camera('perspective');
+    pipeline.needsRestartSample(camera, true);
+    expect(pipeline.isPreviewMode()).toBe(true);
+    pipeline.setOfflineRenderOptions({ samplesPerBatch: 4, deferPostProcess: true, sampleSequenceOffset: 0 });
+    pipeline.setInteractivePreviewParams({
+      enabled: false, resolutionScale: 0.5, bounces: 2, idleDelayMs: 150
+    });
+    expect(pipeline.isPreviewMode()).toBe(false);
+    pipeline.draw(camera, 8);
+    pipeline.draw(camera, 8);
+    expect(pipeline.getTotalSamplesRendered()).toBe(8);
+    expect(mocks.TracePass.latest.setSampleCount.mock.calls.map(([sample]) => sample)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    await pipeline.flushDiagnostics();
+    pipeline.dispose();
+  });
+});

@@ -369,7 +369,9 @@ function makeWGPURenderingPipeline(
     tileTimingGeneration++;
     finalTileRenderWithPredict?.needsUpdatePredicting();
     previewTileRenderWithPredict?.needsUpdatePredicting();
-    needsUpdatePredicting = true;
+    // Renderer applies settings after configuring an offline batch. Refresh
+    // its estimator without submitting a hidden probe in that mode.
+    needsUpdatePredicting = offlineSamplesPerBatch === 0;
     isPredictingFrame = false;
   }
 
@@ -1030,6 +1032,7 @@ output.color = color;
     // later frame. The probe itself is also non-blocking: if readback fails or
     // is superseded, the renderer keeps using the conservative tile seed.
     if (
+      offlineSamplesPerBatch === 0 &&
       tileRenderWithPredict &&
       needsUpdatePredicting &&
       timeQuery?.resultBuffer.mapState === 'unmapped'
@@ -1194,6 +1197,7 @@ output.color = color;
     // belongs to that mode's estimator and must not hold up the new one.
     isPredictingFrame = false;
     needsUpdatePredicting =
+      offlineSamplesPerBatch === 0 &&
       tileRenderWithPredict?.getLastTraceTime() === -1;
     rayTracePass.setPreviewMode(previewMode, previewBounces);
     _applyRenderResolution();
@@ -1975,7 +1979,7 @@ output.color = color;
         );
         rayTracePass.setPreviewMode(true, previewBounces);
         previewTileRenderWithPredict?.needsUpdatePredicting();
-        needsUpdatePredicting = true;
+        needsUpdatePredicting = offlineSamplesPerBatch === 0;
         isPredictingFrame = false;
         _applyRenderResolution();
         isFirstFrame = true;
