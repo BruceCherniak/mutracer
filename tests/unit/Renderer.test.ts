@@ -1,3 +1,4 @@
+import { ensureMeshGeometryAttributes } from '../../src/renderer/prepareMeshBVH';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { describe, expect, it, vi } from 'vitest';
 import Renderer, { RENDER_STATUS_PREPARING } from '../../src/Renderer';
@@ -67,6 +68,7 @@ function attachPipeline(renderer: Renderer, pipeline: RenderingPipeline) {
 }
 
 function markSceneStable(renderer: Renderer, scene: Scene) {
+  ensureMeshGeometryAttributes(scene.meshes);
   const internal = renderer as unknown as {
     _sceneChangeDetector: SceneChangeDetector; _scenePipeline: RenderingPipeline;
     _sceneInitialized: boolean; _pipeline: RenderingPipeline; _forceMeshUpdate: boolean;

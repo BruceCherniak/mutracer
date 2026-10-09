@@ -1,3 +1,4 @@
+import { mergeRefitRanges } from './bvhAccel';
 import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged, packVertexAttributes } from './geometryUpdates';
 import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges';
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges';
@@ -2444,10 +2445,14 @@ ${rayTraceCompute({
       this._uploadBVH(tlas, res.blases);
     } else {
       const bytes = new Uint8Array(this._debugBVHBuffer!);
+      const ranges = [];
       for (const { blas, offset } of update.blases) {
         const target = tlas.buffer.byteLength + offset;
         bytes.set(new Uint8Array(blas.buffer), target);
-        this._device.queue.writeBuffer(this._bvhBuffer!, target, blas.buffer);
+        ranges.push({offset: target, size: blas.buffer.byteLength});
+      }
+      for (const { offset, size } of mergeRefitRanges(ranges)) {
+        this._device.queue.writeBuffer(this._bvhBuffer!, offset, this._debugBVHBuffer!, offset, size);
       }
     }
     const bits = { bvh2: 1, bvh4: 2, 'bvh-gpu': 4, cwbvh: 8 };

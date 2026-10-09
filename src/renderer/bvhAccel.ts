@@ -466,7 +466,7 @@ function getTLASRefitMetadata(flattened: FlattendBVH, ints: Int32Array) {
   return metadata;
 }
 
-function mergeRefitRanges(ranges: TLASRefitRange[]) {
+export function mergeRefitRanges(ranges: TLASRefitRange[]) {
   const sorted = ranges
     .filter(({ size }) => size > 0)
     .sort((left, right) => left.offset - right.offset);

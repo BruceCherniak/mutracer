@@ -77,3 +77,13 @@ it('matches mixed bone weights, nonidentity binding matrices and bind edits', ()
   mesh.bindMatrix.makeTranslation(.3,.2,.1);mesh.bindMatrixInverse.copy(mesh.bindMatrix).invert();
   sync.update();compare(mesh,sync);expect(sync.scene.meshes[0].geometry.version).toBe(version+1);
 });
+
+it('initializes generated tangents before rendering and refreshes them in the same arrays', () => {
+  const {mesh,bone} = skin(); const source=new THREE.Scene();source.add(mesh);
+  const sync=new THREESceneSync(source);const geometry=sync.scene.meshes[0].geometry;
+  const tangent=geometry.tangent!, array=tangent.array;
+  expect(tangent).toBeDefined();bone.rotation.z=.8;sync.update();
+  expect(geometry.tangent).toBe(tangent);expect(geometry.tangent!.array).toBe(array);
+  const fresh=fromTHREEScene(source).meshes[0].geometry;
+  expect(new Uint32Array(array.buffer)).toEqual(new Uint32Array(fresh.tangent!.array.buffer));
+});

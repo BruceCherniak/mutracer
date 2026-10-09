@@ -16,6 +16,7 @@ import {
   flattenBvh,
   refitBLAS,
   refitTLAS,
+  mergeRefitRanges,
   type FlattendBVH
 } from './bvhAccel';
 import {
@@ -664,10 +665,14 @@ class WebGLRayTracePass {
       this._bvhData.set(new Float32Array(tlas.buffer)); this._bvhData.set(blas, tlas.buffer.byteLength / 4);
       setDataTexture(this._bvhBufferTex, this._bvhData, 4);
       this._tracePasses.forEach(pass => pass.setUniform('bvhColumns', textureDimensionsFromArray(this._bvhData!.length / 4).columnsLog));
-    } else for (const { blas, offset } of update.blases) {
-      const target = tlas.buffer.byteLength + offset;
-      new Uint8Array(this._bvhData!.buffer).set(new Uint8Array(blas.buffer), target);
-      this._bvhBufferTex.updateDataRange(this._renderer.gl, this._bvhData!, target, blas.buffer.byteLength);
+    } else {
+      const ranges = [];
+      for (const { blas, offset } of update.blases) {
+        const target = tlas.buffer.byteLength + offset;
+        new Uint8Array(this._bvhData!.buffer).set(new Uint8Array(blas.buffer), target);
+        ranges.push({offset: target, size: blas.buffer.byteLength});
+      }
+      for (const { offset, size } of mergeRefitRanges(ranges)) this._bvhBufferTex.updateDataRange(this._renderer.gl, this._bvhData!, offset, size);
     }
     this._needsRefitTLAS = true; this._pendingGeometryUpdates.clear(); this._debugBvhData = undefined;
   }

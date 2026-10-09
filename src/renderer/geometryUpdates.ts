@@ -28,10 +28,11 @@ function copyRegion(source: Geometry, merged: Geometry, region: Prepared['geomet
     else target.array.fill(0, offset, offset + count * target.itemSize);
   }
   const target = merged.materialIndex!.array;
-  for (let i = 0; i < count * 4; i++) {
-    const local = source.materialIndex?.array[i] ?? 0;
-    const [index, weight] = Geometry.unpackMaterialIndexAndWeightFromInt(local);
-    target[vertexOffset * 4 + i] = local > 0 ? Geometry.packMaterialIndexAndWeightToInt(materialIndices[index] ?? 0, weight) : 0;
+  if (!source.materialIndex) target.fill(0, vertexOffset * 4, (vertexOffset + count) * 4);
+  else for (let i = 0; i < count * 4; i++) {
+    const local = source.materialIndex.array[i];
+    target[vertexOffset * 4 + i] = local > 0 ?
+      Geometry.packMaterialIndexAndWeightToInt(materialIndices[local >> 8] ?? 0, (local & 255) / 255) : 0;
   }
   for (let i = 0; i < source.indices.array.length; i++) merged.indices.array[indexOffset + i] = source.indices.array[i] + vertexOffset;
 }
@@ -72,7 +73,9 @@ export function updatePreparedGeometries(prepared: Prepared, changed: ReadonlySe
       resized ||= previous.buffer.byteLength !== bvh.buffer.byteLength;
       relocated ||= previous.buffer.byteLength !== bvh.buffer.byteLength || previous.layout !== bvh.layout;
       copyRegion(source, prepared.geometry, region);
-      vertices.push({first: region.vertexOffset, count: Geometry.getVertexCount(source)});
+      const count = Geometry.getVertexCount(source), previousVertices = vertices[vertices.length - 1];
+      if (previousVertices && previousVertices.first + previousVertices.count === region.vertexOffset) previousVertices.count += count;
+      else vertices.push({first: region.vertexOffset, count});
       blases.push({blas: bvh, offset});
       for (const binding of prepared.instanceBindings) if (binding.geometry === geometry) {
         binding.bvhBounds = getBvhBounds(geometry); meshes.add(binding.mesh);

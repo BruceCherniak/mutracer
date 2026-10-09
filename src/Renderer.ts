@@ -1,3 +1,4 @@
+import { ensureMeshGeometryAttributes } from './renderer/prepareMeshBVH';
 import {
   DEFAULT_BEVEL_SAMPLES,
   DEFAULT_DIRECT_LIGHT_CANDIDATES,
@@ -1146,6 +1147,7 @@ export default class Renderer {
     }
     const sceneInitialized = this._sceneInitialized;
     const renderDoneBeforeSceneUpdate = this._renderDone;
+    ensureMeshGeometryAttributes(scene.meshes);
     const changes = this._sceneChangeDetector.detect(scene);
     const atlasBudgetChanged = pipeline.setTextureAtlasBudget(this.textureAtlasBudgetBytes);
     this._forceMeshUpdate ||= atlasBudgetChanged;

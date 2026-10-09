@@ -14,7 +14,7 @@ import Camera from '../scene/Camera';
 import { ColorRGB, ColorRGBA } from '../types';
 import { GroundedSkyboxBackground, Scene, SceneLight } from '../scene/Scene';
 import { mat4 } from '../math';
-import { generateVertexNormals, updateBoundingBox } from './geometry';
+import { generateVertexNormals, updateBoundingBox, updateDynamicTangents } from './geometry';
 import { THREEDeformation, isDeformingMesh } from './threeDeformation';
 import { SceneChangeDetector, snapshotsEqual, snapshotFields } from '../renderer/sceneChangeDetector';
 
@@ -796,6 +796,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             geometry.position.array.set(deformation.position);
             if (deformation.normal) geometry.normal.array.set(deformation.normal);
             if (deformation.tangent && geometry.tangent) geometry.tangent.array.set(deformation.tangent);
+            if (!child.geometry.getAttribute('tangent')) updateDynamicTangents(geometry);
             updateBoundingBox(geometry);
             if (!newGeometry) geometry.markUpdated();
           }

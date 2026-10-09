@@ -835,6 +835,15 @@ export function getTrianglesDisplacementRange(
   return trianglesDisplacementRange;
 }
 
+/** Prepare auto-generated source attributes before the renderer captures array identities. */
+export function ensureMeshGeometryAttributes(meshes: readonly Mesh[]) {
+  for (const { geometry } of meshes) {
+    if (!geometry.position?.array.length) continue;
+    if (!geometry.normal) computeGeometryNormals(geometry);
+    if (!geometry.tangent && geometry.uv) generateVertexTangents(geometry);
+  }
+}
+
 function prepareMeshGeometryBvh(mesh: Mesh) {
   const geometry = getPreparedMeshGeometry(mesh, {
     allowAsyncTessellationFallback: true

@@ -220,6 +220,29 @@ export function generateCreasedVertexNormals(
 
 /** Generate a UV-aligned tangent for meshes that do not provide one. */
 export function generateVertexTangents(geometry: Geometry) {
+  if (!geometry.position || !geometry.uv || !geometry.normal) return;
+  const count = Geometry.getVertexCount(geometry);
+  if (!count) return;
+  const tangents = new Float32Array(count * 3);
+  computeVertexTangents(geometry, new Float32Array(count * 3), tangents);
+  geometry.tangent = new Attribute(tangents, 3);
+}
+
+const dynamicTangentScratch = new WeakMap<Geometry, Float32Array>();
+/** @internal Refreshes generated tangents while retaining the attribute and scratch arrays. */
+export function updateDynamicTangents(geometry: Geometry) {
+  if (!geometry.position || !geometry.uv || !geometry.normal) return;
+  const count = Geometry.getVertexCount(geometry);
+  if (!count) return;
+  let accumulated = dynamicTangentScratch.get(geometry);
+  if (accumulated?.length !== count * 3) {
+    accumulated = new Float32Array(count * 3); dynamicTangentScratch.set(geometry, accumulated);
+  }
+  if (geometry.tangent?.array.length !== count * 3) geometry.tangent = new Attribute(new Float32Array(count * 3), 3);
+  computeVertexTangents(geometry, accumulated, geometry.tangent.array);
+}
+
+function computeVertexTangents(geometry: Geometry, accumulated: Float32Array, tangents: Float32Array) {
   const uvs = geometry.uv?.array;
   const normals = geometry.normal?.array;
   const positions = geometry.position?.array;
@@ -228,7 +251,7 @@ export function generateVertexTangents(geometry: Geometry) {
   }
 
   const vertexCount = Geometry.getVertexCount(geometry);
-  const accumulated = new Float32Array(vertexCount * 3);
+  accumulated.fill(0);
   const indices = geometry.indices?.array;
   const count = indices?.length ?? vertexCount;
 
@@ -249,19 +272,18 @@ export function generateVertexTangents(geometry: Geometry) {
     const determinant = s1 * t2 - s2 * t1;
     if (Math.abs(determinant) < 1e-12) continue;
     const inverse = 1 / determinant;
-    const tangent = [
-      (x1 * t2 - x2 * t1) * inverse,
-      (y1 * t2 - y2 * t1) * inverse,
-      (z1 * t2 - z2 * t1) * inverse
-    ];
-    for (const index of [i0, i1, i2]) {
-      accumulated[index * 3] += tangent[0];
-      accumulated[index * 3 + 1] += tangent[1];
-      accumulated[index * 3 + 2] += tangent[2];
+    const tx = (x1 * t2 - x2 * t1) * inverse;
+    const ty = (y1 * t2 - y2 * t1) * inverse;
+    const tz = (z1 * t2 - z2 * t1) * inverse;
+    for (let corner = 0; corner < 3; corner++) {
+      const index = corner === 0 ? i0 : corner === 1 ? i1 : i2;
+      accumulated[index * 3] += tx;
+      accumulated[index * 3 + 1] += ty;
+      accumulated[index * 3 + 2] += tz;
     }
   }
 
-  const tangents = new Float32Array(vertexCount * 3);
+
   for (let index = 0; index < vertexCount; index++) {
     const base = index * 3;
     const nx = normals[base];
@@ -285,7 +307,7 @@ export function generateVertexTangents(geometry: Geometry) {
     tangents[base + 1] = ty;
     tangents[base + 2] = tz;
   }
-  geometry.tangent = new Attribute(tangents, 3);
+
 }
 
 export function updateBoundingBox(geometry: Geometry) {
