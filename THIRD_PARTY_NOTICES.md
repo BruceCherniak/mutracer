@@ -84,3 +84,12 @@ Copyright (c) 1998-2020 Matt Pharr, Wenzel Jakob, and Greg Humphreys.
 Apache License 2.0 ([`LICENSES/Apache-2.0.txt`](./LICENSES/Apache-2.0.txt)).
 Modified for 32-bit tiled WGSL and GLSL ES 3.00. The upstream project has no
 NOTICE file. Owen scrambling follows Burley's 2020 paper.
+
+## GitHub Octicons
+
+The GitHub icon in `viewer/src/components/Toolbar.tsx` is adapted from
+[`mark-github-16.svg`](https://github.com/primer/octicons/blob/main/icons/mark-github-16.svg)
+in [GitHub Octicons](https://github.com/primer/octicons).
+
+Copyright (c) 2026 GitHub Inc. MIT License
+([`LICENSES/Octicons-MIT.txt`](./LICENSES/Octicons-MIT.txt)).
