@@ -149,8 +149,6 @@ class WebGLRayTracePass {
     geometryVersion: number;
     positionArray: Float32Array;
     indexArray: Geometry['indices']['array'];
-    uvProjection: Mesh['uvProjection'];
-    displacementUvProjection: Mesh['displacementUvProjection'];
     matrix: number[];
   }[] = [];
   private _snapshotByMesh = new WeakMap<Mesh, (typeof this._meshSnapshot)[number]>();
@@ -427,8 +425,6 @@ class WebGLRayTracePass {
       materialVersions: mesh.materials.map(material => material.version),
       geometryVersion: mesh.geometry.version,
       positionArray: mesh.geometry.position.array, indexArray: mesh.geometry.indices.array,
-      uvProjection: mesh.uvProjection,
-      displacementUvProjection: mesh.displacementUvProjection,
       matrix: Array.from(mesh.matrixWorld as ArrayLike<number>)
     }));
     const membershipChanged = next.length !== this._meshSnapshot.length ||
@@ -465,7 +461,6 @@ class WebGLRayTracePass {
           item.materials.some((material, k) => material !== prev.materials[k]) ||
           item.materialVersions.some((hash, k) => hash !== prev.materialVersions[k]) ||
           item.geometryVersion !== prev.geometryVersion ||
-          item.uvProjection !== prev.uvProjection || item.displacementUvProjection !== prev.displacementUvProjection ||
           item.matrix.some((value, k) => value !== prev.matrix[k])
         );
       });

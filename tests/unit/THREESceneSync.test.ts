@@ -158,19 +158,52 @@ describe('THREESceneSync', () => {
   });
 });
 
-it('shares a source material while retaining mesh-local UV fallback', () => {
+it('retains the converted source material for UV meshes and shares automatic projection variants', () => {
   const source = new THREE.Scene();
   const map = new THREE.Texture({ width: 2, height: 2 });
   const material = new THREE.MeshStandardMaterial({ map, displacementMap: map });
   const uv = new THREE.BoxGeometry(), uvless = new THREE.BoxGeometry(); uvless.deleteAttribute('uv');
-  source.add(new THREE.Mesh(uv, material), new THREE.Mesh(uvless, material));
-  const sync = new THREESceneSync(source); const [a,b] = sync.scene.meshes;
-  expect(a.materials[0]).toBe(b.materials[0]);
-  expect(a.uvProjection).toBeUndefined(); expect(a.displacementUvProjection).toBeUndefined();
-  expect(b.uvProjection).toBe('triplanar'); expect(b.displacementUvProjection).toBe('triplanar');
+  const fallback = new THREE.Mesh(uvless, material), secondFallback = new THREE.Mesh(uvless, material);
+  source.add(new THREE.Mesh(uv, material), fallback, secondFallback, new THREE.Mesh(uv, material));
+  const sync = new THREESceneSync(source); const [a, b, c, d] = sync.scene.meshes;
+  const base = a.materials[0], variant = b.materials[0];
+  expect(base).toBe(d.materials[0]); expect(variant).toBe(c.materials[0]); expect(variant).not.toBe(base);
+  expect(base.uvProjection).toBe('none'); expect(base.displacementUvProjection).toBe('none');
+  expect(variant.uvProjection).toBe('triplanar'); expect(variant.displacementUvProjection).toBe('triplanar');
+  expect(a).not.toHaveProperty('uvProjection'); expect(b).not.toHaveProperty('displacementUvProjection');
   expect(sync.update()).toEqual(unchanged);
+  const baseVersion = base.version, variantVersion = variant.version;
+  material.roughness = .7; material.color.setRGB(.2, .4, .6); material.opacity = .5;
+  sync.update();
+  for (const converted of [base, variant]) {
+    expect(converted.specularRoughness).toBe(.7); expect(converted.baseColor).toEqual([.2, .4, .6]);
+    expect(converted.opacity).toBe(.5); expect(converted.map).toBe(base.map);
+  }
+  expect(a.materials[0]).toBe(base); expect(b.materials[0]).toBe(variant);
+  expect(base.version).toBe(baseVersion + 1); expect(variant.version).toBe(variantVersion + 1);
+  const cache = (sync as unknown as { _store: { colorVariants: Map<THREE.Material, Map<string, unknown>> } })._store.colorVariants;
+  expect(cache.get(material)!.size).toBe(1);
+  source.remove(fallback, secondFallback); sync.update(); expect(cache.size).toBe(0);
+});
+
+it('respects explicit material projections and prunes superseded automatic variants', () => {
+  const source = new THREE.Scene(), map = new THREE.Texture({ width: 2, height: 2 });
+  const material = new THREE.MeshStandardMaterial({ map, displacementMap: map });
+  const uvless = new THREE.BoxGeometry(); uvless.deleteAttribute('uv');
+  source.add(new THREE.Mesh(new THREE.BoxGeometry(), material), new THREE.Mesh(uvless, material));
+  const sync = new THREESceneSync(source), [a, b] = sync.scene.meshes;
+  const cache = (sync as unknown as { _store: { colorVariants: Map<THREE.Material, Map<string, unknown>> } })._store.colorVariants;
+  const initial = b.materials[0];
   material.userData.clayptUvProjection = 'spherical'; sync.update();
-  expect(a.materials[0].uvProjection).toBe('spherical'); expect(b.uvProjection).toBeUndefined();
+  expect(a.materials[0].uvProjection).toBe('spherical'); expect(b.materials[0].uvProjection).toBe('spherical');
+  expect(b.materials[0].displacementUvProjection).toBe('triplanar'); expect(b.materials[0]).not.toBe(initial);
+  expect(cache.get(material)!.size).toBe(1);
+  material.userData.clayptDisplacementUvProjection = 'cylindrical'; sync.update();
+  expect(b.materials[0]).toBe(a.materials[0]); expect(cache.size).toBe(0);
+  material.userData.clayptUvProjection = 'none'; material.userData.clayptDisplacementUvProjection = 'none';
+  sync.update(); expect(cache.get(material)!.size).toBe(1);
+  material.map = material.displacementMap = null; sync.update();
+  expect(b.materials[0]).toBe(a.materials[0]); expect(cache.size).toBe(0);
 });
 
 

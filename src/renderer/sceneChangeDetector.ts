@@ -94,8 +94,6 @@ interface MeshSnapshot {
   storage: unknown[];
   materials: OpenPBRMaterial[];
   simplification: Mesh['geometrySimplificationRatio'];
-  uvProjection: Mesh['uvProjection'];
-  displacementUvProjection: Mesh['displacementUvProjection'];
   faceLevels: Mesh['displacementFaceLevels'];
   faceHash: Mesh['displacementFaceLevelsHash'];
 }
@@ -131,7 +129,6 @@ export class SceneChangeDetector {
         prev.dynamic !== mesh.geometry.dynamic || !geometryStorageMatches(mesh.geometry, prev.storage) || prev.materials.length !== mesh.materials.length ||
         prev.materials.some((m, k) => m !== mesh.materials[k]) ||
         prev.simplification !== mesh.geometrySimplificationRatio ||
-        prev.uvProjection !== mesh.uvProjection || prev.displacementUvProjection !== mesh.displacementUvProjection ||
         prev.faceLevels !== mesh.displacementFaceLevels || prev.faceHash !== mesh.displacementFaceLevelsHash) full = true;
       if (prev?.geometry === mesh.geometry && prev.version !== mesh.geometry.version) geometries.add(mesh.geometry);
       if (prev?.mesh === mesh) {
@@ -171,8 +168,7 @@ export class SceneChangeDetector {
         let item = next!.meshes[i];
         if (!item) {
           item = { mesh, geometry: mesh.geometry, version: mesh.geometry.version, dynamic: mesh.geometry.dynamic, storage: [],
-            materials: [], uvProjection: mesh.uvProjection, displacementUvProjection: mesh.displacementUvProjection,
-            simplification: mesh.geometrySimplificationRatio, faceLevels: mesh.displacementFaceLevels,
+            materials: [], simplification: mesh.geometrySimplificationRatio, faceLevels: mesh.displacementFaceLevels,
             faceHash: mesh.displacementFaceLevelsHash };
           next!.meshes[i] = item;
         }
@@ -180,7 +176,6 @@ export class SceneChangeDetector {
         item.dynamic = mesh.geometry.dynamic; captureGeometryStorage(mesh.geometry, item.storage);
         item.materials.length = mesh.materials.length;
         for (let k = 0; k < mesh.materials.length; k++) item.materials[k] = mesh.materials[k];
-        item.uvProjection = mesh.uvProjection; item.displacementUvProjection = mesh.displacementUvProjection;
         item.simplification = mesh.geometrySimplificationRatio;
         item.faceLevels = mesh.displacementFaceLevels; item.faceHash = mesh.displacementFaceLevelsHash;
         next!.matrices.set(mesh.matrixWorld, i * 16);

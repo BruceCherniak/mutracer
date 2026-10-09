@@ -635,7 +635,13 @@ export interface FromTHREESceneOptions {
   ): void;
 }
 
-interface ColorVariant { material: OpenPBRMaterial; version: number; color: ColorRGB }
+interface MaterialVariant {
+  material: OpenPBRMaterial;
+  version: number;
+  color?: ColorRGB;
+  autoUvProjection: boolean;
+  autoDisplacementUvProjection: boolean;
+}
 interface GeometryEntry { state: unknown[]; groups: Map<string, Geometry> }
 interface ConversionStore {
   textures: TextureStore;
@@ -646,7 +652,8 @@ interface ConversionStore {
   meshes: WeakMap<THREE.Mesh, Map<number, Mesh>>;
   lights: WeakMap<THREE.Object3D | THREE.Texture, SceneLight>;
   instanceMeshes: WeakMap<THREE.Mesh, Map<number, Mesh[]>>;
-  colorVariants: Map<THREE.Material, Map<string, ColorVariant>>;
+  // Combined instance-color and automatic-projection variants, pruned each update.
+  colorVariants: Map<THREE.Material, Map<string, MaterialVariant>>;
   warned: WeakSet<THREE.Object3D>;
   background?: Scene['background'];
 }
@@ -687,7 +694,7 @@ function retainLight(store: ConversionStore, source: THREE.Object3D | THREE.Text
  * directional, ambient, rect-area, point and spot lights, and the scene
  * background / environment. Calls `scene.updateMatrixWorld()` and creates fresh objects on every call.
  * CPU-evaluates skinning/morph targets and expands InstancedMesh instances
- * with shared geometry and cached color material variants. Unsupported batched
+ * with shared geometry and cached color/projection material variants. Unsupported batched
  * or instanced deformation falls back to an ordinary mesh with a warning.
  * For animation and editing, use {@link THREESceneSync}.
  *
@@ -711,22 +718,30 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   const instanceMatrix = scene.matrixWorld.clone();
   const instanceWorld = scene.matrixWorld.clone();
   const instanceColor: ColorRGB = [1, 1, 1];
-  function refreshVariant(entry: ColorVariant, base: OpenPBRMaterial) {
+  function refreshVariant(entry: MaterialVariant, base: OpenPBRMaterial) {
     if (entry.version === base.version) return;
     for (const field of materialKeys) (entry.material as unknown as Record<string, unknown>)[field] = base[field];
-    entry.material.baseColor = base.baseColor.map((value, i) => value * entry.color[i]) as ColorRGB;
-    // Three.js also applies instanceColor to MeshBasicMaterial's unlit color.
-    if (base.unlit) entry.material.emissionColor = base.emissionColor.map((value, i) => value * entry.color[i]) as ColorRGB;
+    if (entry.color) {
+      const color = entry.color;
+      entry.material.baseColor = base.baseColor.map((value, i) => value * color[i]) as ColorRGB;
+      // Three.js also applies instanceColor to MeshBasicMaterial's unlit color.
+      if (base.unlit) entry.material.emissionColor = base.emissionColor.map((value, i) => value * color[i]) as ColorRGB;
+    }
+    if (entry.autoUvProjection) entry.material.uvProjection = 'triplanar';
+    if (entry.autoDisplacementUvProjection) entry.material.displacementUvProjection = 'triplanar';
     entry.material.markUpdated();
     entry.version = base.version;
   }
-  function colorVariant(source: THREE.Material, base: OpenPBRMaterial, color: ColorRGB) {
+  function materialVariant(source: THREE.Material, base: OpenPBRMaterial, color: ColorRGB | undefined,
+    autoUvProjection: boolean, autoDisplacementUvProjection: boolean) {
+    if (!color && !autoUvProjection && !autoDisplacementUvProjection) return base;
     let variants = store.colorVariants.get(source);
     if (!variants) { variants = new Map(); store.colorVariants.set(source, variants); }
-    const key = color.join(':');
+    const key = `${color?.join(':') ?? ''}|${+autoUvProjection}:${+autoDisplacementUvProjection}`;
     let variant = variants.get(key);
     if (!variant) {
-      variant = { material: new OpenPBRMaterial(), version: -1, color: color.slice() as ColorRGB };
+      variant = { material: new OpenPBRMaterial(), version: -1, color: color?.slice() as ColorRGB | undefined,
+        autoUvProjection, autoDisplacementUvProjection };
       variants.set(key, variant);
     }
     refreshVariant(variant, base);
@@ -865,6 +880,11 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
           let instanceMeshes = instancesByGroup.get(groupIndex);
           if (!instanceMeshes) { instanceMeshes = []; instancesByGroup.set(groupIndex, instanceMeshes); }
           const baseMaterial = material;
+          const autoUvProjection = !geometry.uv && baseMaterial.uvProjection === 'none' &&
+            !!(baseMaterial.map || baseMaterial.normalMap || baseMaterial.emissiveMap || baseMaterial.metallicRoughnessMap ||
+              baseMaterial.roughnessMap || baseMaterial.metalnessMap || baseMaterial.thinFilmMap);
+          const autoDisplacementUvProjection = !geometry.uv && !!baseMaterial.displacementMap &&
+            baseMaterial.displacementUvProjection === 'none';
           const instanceCount = expand ? instanced.count : 1;
           // Keep the retained prefix when count shrinks; only the tail is removed.
           if (expand) instanceMeshes.length = Math.min(instanceMeshes.length, instanceCount);
@@ -875,8 +895,10 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
               instanceColor[0] = color.getX(instanceIndex);
               instanceColor[1] = color.getY(instanceIndex);
               instanceColor[2] = color.getZ(instanceIndex);
-              material = colorVariant(sourceMaterial, baseMaterial, instanceColor);
             }
+            material = materialVariant(sourceMaterial, baseMaterial,
+              expand && instanced.instanceColor ? instanceColor : undefined,
+              autoUvProjection, autoDisplacementUvProjection);
             let meshGroups = store.meshes.get(child);
             if (!meshGroups) { meshGroups = new Map(); store.meshes.set(child, meshGroups); }
             let mesh = expand ? instanceMeshes[instanceIndex] : meshGroups.get(groupIndex);
@@ -889,11 +911,6 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
               else meshGroups.set(groupIndex, mesh);
             }
             mesh.geometry = geometry;
-            mesh.uvProjection = !geometry.uv && material.uvProjection === 'none' &&
-              (material.map || material.normalMap || material.emissiveMap || material.metallicRoughnessMap ||
-                material.roughnessMap || material.metalnessMap || material.thinFilmMap) ? 'triplanar' : undefined;
-            mesh.displacementUvProjection = !geometry.uv && material.displacementMap &&
-              material.displacementUvProjection === 'none' ? 'triplanar' : undefined;
             if (mesh.materials[0] !== material) mesh.materials = [material];
             const simplificationRatio = Number(
               child.userData.clayptMeshoptSimplificationRatio
@@ -1069,7 +1086,9 @@ export interface THREESceneChanges {
  * Keeps one ClayPT scene in sync with a Three.js scene, reusing unchanged objects.
  * Skinning/morph targets run on the CPU with per-source-mesh dynamic geometry.
  * InstancedMesh retains its prefix on count changes and shares geometry/BLAS;
- * each currently used source-material/RGB pair uses a cached material variant.
+ * Currently used colors and automatic UV-less projections share cached material
+ * variants per source material. Source edits refresh variants; unused variants
+ * are removed after each update.
  */
 export class THREESceneSync {
   readonly scene: Scene;

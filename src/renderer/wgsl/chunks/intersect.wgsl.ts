@@ -136,9 +136,7 @@ if (abs(hScale) > 0.0 && minMaxH > 0) {
   let pF = tri.p2 + n2 * hScale * maxH;
   // TODO not support material blending
   let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
-  var matData = materialsBuffer[materialIndex];
-  let displacementProjection = instancesBuffer[insIdx * ${INSTANCE_VEC4_STRIDE} + 9].y;
-  if (displacementProjection >= 0.0) { matData.displacementUvProjection = displacementProjection; }
+  let matData = materialsBuffer[materialIndex];
   let displacementUvScale = vec2f(matData.displacementUvScale);
   let displacementMapIndex = i32(matData.displacementMapIndex);
 
@@ -990,8 +988,7 @@ fn fetchAttributes(
   (*si).hit = true;
   // Get projected uv
   let material = materialsBuffer[(*si).materialIndex];
-  let projectionOverride = instancesBuffer[(*si).instanceIndex * ${INSTANCE_VEC4_STRIDE} + 9];
-  let uvProjection = i32(select(material.uvProjection, projectionOverride.x, projectionOverride.x >= 0.0));
+  let uvProjection = i32(material.uvProjection);
 
   let i0 = index.x;
   let i1 = index.y;
@@ -1125,7 +1122,7 @@ fn fetchAttributes(
     let duv2 = uv1 - uv2;
     // TODO
     let normalMaterial = materialsBuffer[(*si).materialIndex];
-    let bumpProjection = i32(select(normalMaterial.displacementUvProjection, projectionOverride.y, projectionOverride.y >= 0.0));
+    let bumpProjection = i32(normalMaterial.displacementUvProjection);
     var bumpUv = rawUv;
     if (bumpProjection > 0) {
       bumpUv = projectUV(bumpProjection, (*si).position, normal);
@@ -1445,7 +1442,6 @@ if (isOccluded) {
     let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
     if (!intersectionAlphaPasses(
       materialIndex,
-      insIdx,
       index,
       hitBarycentric,
       hitPosition,

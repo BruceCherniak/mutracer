@@ -131,3 +131,26 @@ it('recreates an unused color with the current source material values', () => {
   expect(current).not.toBe(old);expect(current.baseColor).toEqual([.2,.1,.8*.75]);
   expect(current.emissionColor).toEqual(current.baseColor);
 });
+
+it('combines instance colors with automatic projection in the variant cache', () => {
+  const source = new THREE.Scene(), map = new THREE.Texture({ width: 2, height: 2 });
+  const material = new THREE.MeshBasicMaterial({ map });
+  const uv = new THREE.BoxGeometry(), uvless = new THREE.BoxGeometry(); uvless.deleteAttribute('uv');
+  const a = new THREE.InstancedMesh(uv, material, 2), b = new THREE.InstancedMesh(uvless, material, 2);
+  for (const mesh of [a, b]) for (let i = 0; i < 2; i++) mesh.setColorAt(i, new THREE.Color(.5, .25, .75));
+  source.add(a, b, new THREE.Mesh(uv, material));
+  const sync = new THREESceneSync(source);
+  const [a0, a1, b0, b1, plain] = sync.scene.meshes;
+  expect(a0.materials[0]).toBe(a1.materials[0]); expect(b0.materials[0]).toBe(b1.materials[0]);
+  expect(a0.materials[0]).not.toBe(b0.materials[0]); expect(a0.materials[0]).not.toBe(plain.materials[0]);
+  expect(a0.materials[0].uvProjection).toBe('none'); expect(b0.materials[0].uvProjection).toBe('triplanar');
+  expect(variantCache(sync).get(material)!.size).toBe(2);
+  material.color.setRGB(.2, .4, .8); sync.update();
+  for (const mesh of [a0, b0]) {
+    expect(mesh.materials[0].baseColor).toEqual([.1, .1, .8 * .75]);
+    expect(mesh.materials[0].emissionColor).toEqual(mesh.materials[0].baseColor);
+  }
+  b.geometry = uv; sync.update();
+  expect(b0.materials[0]).toBe(a0.materials[0]); expect(variantCache(sync).get(material)!.size).toBe(1);
+  a.count = b.count = 0; sync.update(); expect(variantCache(sync).size).toBe(0);
+});

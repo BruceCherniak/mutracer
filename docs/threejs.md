@@ -71,13 +71,14 @@ update.
 Call `sync.dispose()` when finished to release its caches. Its last scene
 remains usable; calling `update()` after disposal throws.
 
-UV-less meshes retain automatic triplanar fallback through `Mesh.uvProjection`
-and `Mesh.displacementUvProjection` overrides. These default to inheriting the
-material. A shared material can therefore render a UV-bearing mesh with its
-UVs and a UV-less mesh with triplanar projection without changing material
-identity. Explicit procedural material projections continue to take precedence
-in the converter. Rotation refits instances on both WebGPU and WebGL 2.
-Material edits use incremental updates on both backends.
+UV-less meshes use cached material variants for automatic triplanar texture and
+displacement projection. A UV-bearing mesh keeps the converted source material;
+a UV-less mesh uses a variant that changes only the required projection fields.
+Explicit procedural material projections take precedence. Instance colors and
+automatic projections are combined in the variant key. Source material edits
+refresh all used variants, and each update removes unused variants. Rotation
+refits instances on both WebGPU and WebGL 2; material edits use incremental
+updates on both backends.
 
 `fromTHREECamera(camera)` is cheap; call it every frame. Call
 `camera.updateProjectionMatrix()` after changing its aspect or fov.

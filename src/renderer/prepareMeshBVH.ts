@@ -2,7 +2,6 @@ import { mat4, vec2, vec3 } from '../math';
 import Geometry, { Attribute } from '../scene/Geometry';
 import Mesh from '../scene/Mesh';
 import OpenPBRMaterial from '../scene/OpenPBRMaterial';
-import { uvProjectionConstants } from './MergedMaterialData';
 import { buildBLAS, flattenBvh, TLASInstance } from './bvhAccel';
 import Texture, { isTextureDataSource } from '../scene/Texture';
 import { generateVertexTangents } from '../util/geometry';
@@ -153,9 +152,7 @@ export function updateMeshInstanceTransforms(
       materialsIndices: materialIndices.map((idx) =>
         Geometry.packMaterialIndexAndWeightToInt(idx, 1)
       ),
-      displacementScale,
-      uvProjection: mesh.uvProjection == null ? -1 : uvProjectionConstants[mesh.uvProjection],
-      displacementUvProjection: mesh.displacementUvProjection == null ? -1 : uvProjectionConstants[mesh.displacementUvProjection]
+      displacementScale
     }) satisfies TLASInstance;
   if (!current || !dirtyIndices) return bindings.map(update);
   const next = current.slice();
@@ -166,11 +163,9 @@ export function updateMeshInstanceTransforms(
   return next;
 }
 
-/** Resolves CPU displacement settings without mutating a shared material. */
+/** Returns the first material used for CPU displacement. */
 export function getMeshDisplacementMaterial(mesh: Mesh) {
-  const material = mesh.materials[0];
-  if (mesh.displacementUvProjection == null || mesh.displacementUvProjection === material.displacementUvProjection) return material;
-  return Object.assign(new OpenPBRMaterial(), material, { displacementUvProjection: mesh.displacementUvProjection });
+  return mesh.materials[0];
 }
 
 export function getMeshDisplacementMap(mesh: Mesh) {
@@ -252,11 +247,11 @@ export function getPreparedMeshGeometryCacheKey(mesh: Mesh) {
       Math.abs(material.displacementBias) > 1e-6);
   if (!hasTessellatedDisplacement) {
     // Projective displacement bounds depend on projection, even when the
-    // source attributes are shared. Keep a separate BLAS for each override.
-    if (mesh.displacementUvProjection != null && texture && Math.abs(material.displacementScale) > 1e-6) {
+    // source attributes are shared. Keep a separate BLAS for each material projection.
+    if (material.displacementUvProjection !== 'none' && texture && Math.abs(material.displacementScale) > 1e-6) {
       return ['projectiveProjection', source.version, getDisplacementTextureDataCacheKey(texture),
         +texture.flipY, texture.uvScale.join(','), texture.uvOffset.join(','),
-        material.displacementScale, material.displacementUvScale, mesh.displacementUvProjection].join('|');
+        material.displacementScale, material.displacementUvScale, material.displacementUvProjection].join('|');
     }
     return simplificationRatio < 1
       ? ['meshopt', source.version, simplificationRatio].join('|')
@@ -925,9 +920,7 @@ export function updateMeshInstances(meshes: Mesh[]) {
         materialsIndices: materialsIndices.map((idx) =>
           Geometry.packMaterialIndexAndWeightToInt(idx, 1)
         ),
-        displacementScale,
-        uvProjection: mesh.uvProjection == null ? -1 : uvProjectionConstants[mesh.uvProjection],
-        displacementUvProjection: mesh.displacementUvProjection == null ? -1 : uvProjectionConstants[mesh.displacementUvProjection]
+        displacementScale
       } satisfies TLASInstance;
       if (
         !bounds.min.every(isFinite) ||

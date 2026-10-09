@@ -915,7 +915,7 @@ describe('Three.js scene conversion', () => {
     const converted = fromTHREEScene(scene).meshes[0];
 
     expect(converted.geometry.uv).toBeUndefined();
-    expect(converted.displacementUvProjection).toBe('triplanar');
+    expect(converted.materials[0].displacementUvProjection).toBe('triplanar');
   });
 
   it('uses shared triplanar projection automatically for textures on a UV-less mesh', () => {
@@ -942,7 +942,7 @@ describe('Three.js scene conversion', () => {
     const converted = fromTHREEScene(scene).meshes[0];
 
     expect(converted.geometry.uv).toBeUndefined();
-    expect(converted.uvProjection).toBe('triplanar');
+    expect(converted.materials[0].uvProjection).toBe('triplanar');
   });
 });
 

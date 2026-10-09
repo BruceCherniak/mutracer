@@ -134,7 +134,7 @@ If a denoiser is set, the result is denoised before the promise resolves.
 | Export | Description |
 | --- | --- |
 | `Scene` | `{ meshes, lights, background?, overlay? }` |
-| `Mesh` | `new Mesh(geometry, material \| material[])`, `matrixWorld`; optional `uvProjection` and `displacementUvProjection` override the material per mesh (default: inherit) |
+| `Mesh` | `new Mesh(geometry, material \| material[])`, `matrixWorld`; texture and displacement projection are configured on the material |
 | `Geometry`, `GeometryAttribute` | Triangle data: `position`, `normal`, `indices`, optional `uv`, `uv1`, `tangent`, `color`, `materialIndex`; `dynamic` (default `false`) selects the built-in refittable BLAS when `true` |
 | `OpenPBRMaterial` | See [materials](./materials.md) |
 | `Texture` | Image, canvas or `{ data, width, height }`; 8-bit is sRGB, float is linear |

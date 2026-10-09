@@ -22,7 +22,7 @@ interface PrimitiveInfo {
 interface BLASPrimitiveInfo extends PrimitiveInfo {
   indices: vec3.Vec3Array;
 }
-export const INSTANCE_VEC4_STRIDE = 10;
+export const INSTANCE_VEC4_STRIDE = 9;
 export const INSTANCE_WORD_STRIDE = INSTANCE_VEC4_STRIDE * 4;
 
 interface TLASPrimitiveInfo extends PrimitiveInfo {
@@ -32,8 +32,6 @@ interface TLASPrimitiveInfo extends PrimitiveInfo {
   vertexOffset: number;
   materialIndex: number;
   displacementScale: number;
-  uvProjection: number;
-  displacementUvProjection: number;
   blasLayout: BvhLayout;
 }
 
@@ -121,8 +119,6 @@ export interface TLASInstance {
   transform: Mat4Array;
   materialsIndices: number[];
   displacementScale?: number;
-  uvProjection?: number;
-  displacementUvProjection?: number;
 }
 
 export interface BLASInstance {
@@ -206,7 +202,7 @@ export function buildTLAS(
 
   const primitives = instances.map(
     (
-      { blasIndex, bounds, transform, materialsIndices, displacementScale, uvProjection, displacementUvProjection },
+      { blasIndex, bounds, transform, materialsIndices, displacementScale },
       i
     ) => {
       const center = vec3.create();
@@ -242,8 +238,6 @@ export function buildTLAS(
         triangleOffset: triangleOffsets[blasIndex],
         materialIndex: materialsIndices[0] || 0,
         displacementScale: displacementScale || 0,
-        uvProjection: uvProjection ?? -1,
-        displacementUvProjection: displacementUvProjection ?? -1,
         blasLayout: blasLayouts[blasIndex]
       } satisfies TLASPrimitiveInfo;
       return ret;
@@ -334,7 +328,6 @@ export function flattenBvh(
           for (let j = 0; j < 16; j++) {
             instancesArr!.push(m[j]);
           }
-          instancesArr!.push(tlas.uvProjection, tlas.displacementUvProjection, 0, 0);
           instanceCount++;
         } else {
           const triangleIndex = p.primitive;
@@ -541,8 +534,6 @@ export function refitTLAS(
     instanceInts[offset + 1] = vertexOffsets[instance.blasIndex];
     instanceInts[offset + 2] = instance.materialsIndices[0] || 0;
     instanceFloats[offset + 3] = instance.displacementScale || 0;
-    instanceFloats[offset + 36] = instance.uvProjection ?? -1;
-    instanceFloats[offset + 37] = instance.displacementUvProjection ?? -1;
     const inverse = mat4.invert(mat4.create(), instance.transform);
     for (let i = 0; i < 16; i++) {
       instanceFloats[offset + 4 + i] = inverse[i];

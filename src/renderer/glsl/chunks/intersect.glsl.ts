@@ -543,7 +543,6 @@ int randomPickMaterial(ivec4 m0, ivec4 m1, ivec4 m2, vec3 bary) {
 vec4 fetchIns(int i);
 
 void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric, ivec3 index) {
-  vec2 projectionOverride = fetchIns(si.instanceIndex * ${INSTANCE_VEC4_STRIDE} + 9).xy;
   si.hit = true;
   si.position = barycentric.x * tri.p0 + barycentric.y * tri.p1 + barycentric.z * tri.p2;
   ivec2 i0 = unpackTexel(index.x, vertexColumns);
@@ -612,7 +611,7 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
       + barycentric.z * secondaryUv2;
 
     vec4 uvInfo = fetchMatData(si.materialIndex * MAT_DATA_SIZE + 7);
-    int uvProjection = int(projectionOverride.x >= 0.0 ? projectionOverride.x : uvInfo.r);
+    int uvProjection = int(uvInfo.r);
     if (uvProjection > 0) {
       uv = projectUV(uvProjection, si.position, normal, uvInfo.zw);
       secondaryUv = uv;
@@ -650,7 +649,7 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
     vec2 duv1 = uv0 - uv2;
     vec2 duv2 = uv1 - uv2;
     vec4 displacementInfo = fetchMatData(si.materialIndex * MAT_DATA_SIZE + 8);
-    int bumpProjection = int(projectionOverride.y >= 0.0 ? projectionOverride.y : displacementInfo.z);
+    int bumpProjection = int(displacementInfo.z);
     float bumpUvScale = displacementInfo.w;
     vec2 bumpUv = rawUv;
     if (bumpProjection > 0) {
@@ -937,7 +936,6 @@ ${getBVHTraverseCode(
       materialIndex = randomPickMaterial(m0, m1, m2, barycentric);
     }
   
-    vec2 projectionOverride = fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE} + 9).xy;
     int ii = materialIndex * MAT_DATA_SIZE;
     // TODO: not hard coded the layout.
     int mapAlphaUsage = int(fetchMatData(ii + 5).a);
@@ -952,7 +950,7 @@ ${getBVHTraverseCode(
         // TODO Other mapping methods.
         vec2 uv = barycentric.x * uv0 + barycentric.y * uv1 + barycentric.z * uv2;
         vec4 uvInfo = fetchMatData(ii + 7);
-        int uvProjection = int(projectionOverride.x >= 0.0 ? projectionOverride.x : uvInfo.r);
+        int uvProjection = int(uvInfo.r);
         if (uvProjection > 0) {
           uv = projectUV(uvProjection, position, hitFaceNormal, uvInfo.zw);
         } else {
@@ -971,7 +969,7 @@ ${getBVHTraverseCode(
       vec2 uv2 = texelFetch(uvBuffer, i2, 0).xy;
       vec2 uv = barycentric.x * uv0 + barycentric.y * uv1 + barycentric.z * uv2;
       vec4 uvInfo = fetchMatData(ii + 7);
-      int uvProjection = int(projectionOverride.x >= 0.0 ? projectionOverride.x : uvInfo.r);
+      int uvProjection = int(uvInfo.r);
       if (uvProjection > 0) {
         uv = projectUV(uvProjection, position, hitFaceNormal, uvInfo.zw);
       } else {

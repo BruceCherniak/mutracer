@@ -9,10 +9,6 @@ import OpenPBRMaterial from './OpenPBRMaterial';
 export default class Mesh extends SceneNode {
   materials: OpenPBRMaterial[];
   geometry: Geometry;
-  /** Mesh-local texture projection override. Default: inherit the material. */
-  uvProjection?: OpenPBRMaterial['uvProjection'];
-  /** Mesh-local displacement and bump projection override. Default: inherit the material. */
-  displacementUvProjection?: OpenPBRMaterial['displacementUvProjection'];
   /** Optional per-source-face OpenSubdiv dicing levels. */
   displacementFaceLevels?: Uint8Array;
   /** Stable hash used to separate camera-dependent tessellation cache entries. */

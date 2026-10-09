@@ -41,32 +41,37 @@ it('assigns material slots by identity and retains them after parameter edits', 
   expect(updateMeshInstances(meshes).instanceBindings.map(b => b.materialIndices)).toEqual([[0],[1],[0]]);
 });
 
-it('packs mesh projection overrides without duplicating shared material slots', async () => {
+it('packs material variants in 144-byte instances and retains material slots during refit', async () => {
   const { createCubeGeometry } = await import('../../src/util/commonGeometry');
-  const { flattenBvh, buildTLAS, INSTANCE_WORD_STRIDE, refitTLAS } = await import('../../src/renderer/bvhAccel');
-  const material = new OpenPBRMaterial(); const geo = createCubeGeometry();
-  const a = new Mesh(geo,material), b = new Mesh(geo,material);
-  b.uvProjection='triplanar'; b.displacementUvProjection='spherical';
-  const prepared = updateMeshInstances([a,b]);
-  expect(prepared.materials).toEqual([material]);
-  const packed = flattenBvh(buildTLAS(prepared.instances,prepared.blases),true);
-  const data = new Float32Array(packed.instancesBuffer!).slice();
-  const projections = [Array.from(data.slice(36,38)), Array.from(data.slice(INSTANCE_WORD_STRIDE+36,INSTANCE_WORD_STRIDE+38))];
-  expect(projections).toEqual(expect.arrayContaining([[-1,-1],[3,1]]));
-  refitTLAS(packed,prepared.instances,prepared.blases);
-  expect(Array.from(new Float32Array(packed.instancesBuffer!))).toEqual(Array.from(data));
+  const { flattenBvh, buildTLAS, INSTANCE_VEC4_STRIDE, INSTANCE_WORD_STRIDE, refitTLAS } = await import('../../src/renderer/bvhAccel');
+  const material = new OpenPBRMaterial(), variant = new OpenPBRMaterial();
+  variant.uvProjection = 'triplanar'; variant.displacementUvProjection = 'spherical';
+  const geo = createCubeGeometry(), a = new Mesh(geo, material), b = new Mesh(geo, variant);
+  b.matrixWorld[12] = 2;
+  const prepared = updateMeshInstances([a, b]);
+  expect(prepared.materials).toEqual([material, variant]);
+  expect(prepared.instanceBindings.map(binding => binding.materialIndices)).toEqual([[0], [1]]);
+  const packed = flattenBvh(buildTLAS(prepared.instances, prepared.blases), true);
+  expect(INSTANCE_VEC4_STRIDE).toBe(9); expect(INSTANCE_WORD_STRIDE).toBe(36);
+  expect(packed.instancesBuffer!.byteLength).toBe(2 * 144);
+  const data = new Uint32Array(packed.instancesBuffer!).slice();
+  refitTLAS(packed, prepared.instances, prepared.blases);
+  expect(new Uint32Array(packed.instancesBuffer!)).toEqual(data);
 });
 
-it('separates projective displacement BLAS caches for different mesh projections', async () => {
+it('separates projective displacement BLAS caches for different material projections', async () => {
   const { createCubeGeometry } = await import('../../src/util/commonGeometry');
   const { getPreparedMeshGeometry, getMeshDisplacementTessellationOptions } = await import('../../src/renderer/prepareMeshBVH');
   const { default: Texture } = await import('../../src/scene/Texture');
-  const material = new OpenPBRMaterial(); material.displacementMap = new Texture({data: new Uint8Array(16),width:2,height:2}); material.displacementScale=0.1;
-  const geo=createCubeGeometry(); const a=new Mesh(geo,material), b=new Mesh(geo,material);
-  a.displacementUvProjection='triplanar'; b.displacementUvProjection='spherical';
-  const ga=getPreparedMeshGeometry(a), gb=getPreparedMeshGeometry(b);
+  const material = new OpenPBRMaterial();
+  material.displacementMap = new Texture({ data: new Uint8Array(16), width: 2, height: 2 }); material.displacementScale = .1;
+  const triplanar = Object.assign(new OpenPBRMaterial(), material, { displacementUvProjection: 'triplanar' as const });
+  const spherical = Object.assign(new OpenPBRMaterial(), material, { displacementUvProjection: 'spherical' as const });
+  const geo = createCubeGeometry(), a = new Mesh(geo, triplanar), b = new Mesh(geo, spherical);
+  const ga = getPreparedMeshGeometry(a), gb = getPreparedMeshGeometry(b);
   expect(ga).not.toBe(gb); expect(ga.position).toBe(geo.position);
   expect(getPreparedMeshGeometry(a)).toBe(ga);
   expect(getMeshDisplacementTessellationOptions(a).uvProjection).toBe('triplanar');
+  expect(getMeshDisplacementTessellationOptions(b).uvProjection).toBe('spherical');
   expect(material.displacementUvProjection).toBe('none');
 });
