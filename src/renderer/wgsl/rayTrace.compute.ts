@@ -69,12 +69,7 @@ fn neeCandidateCount() -> u32 {
 // independent of the path sample stream so the candidate count does not
 // change the dimensions consumed by later bounces.
 fn lightCandidateRandom(salt: u32) -> f32 {
-  var value = s0.x ^ (bounceIndex * 0x9e3779b9u) ^
-    (salt * 0x85ebca6bu) ^ 0xc2b2ae35u;
-  value ^= value >> 16u;
-  value *= 0x7feb352du;
-  value ^= value >> 15u;
-  return f32(value & 0x00ffffffu) / 16777216.0;
+  return sample1D(lightDim(salt, 2u));
 }
 
 // MIS weight of a light-sampled contribution. With several resampled
@@ -238,6 +233,7 @@ fn sampleSpectralSceneBackground(ray: Ray, wavelength: f32) -> vec4f {
 }
 
 fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<function, SurfaceInteraction>, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>) {
+  samplingBounce = u32(max(*depth, 0));
   let matType = (*ma).materialType;
   let isShadowCatcher = matType == SHADOW_CATCHER;
   if (isShadowCatcher) {
@@ -329,7 +325,7 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
     if (alpha < 1.0) {
       // Alpha is stochastic coverage. Keep accepted surface radiance at full
       // weight instead of multiplying it by alpha a second time.
-      if (alpha <= 0.0 || randomSample() > alpha) {
+      if (alpha <= 0.0 || hashedSample(3u) > alpha) {
         sampleIgnored = true;
       }
     }
@@ -377,15 +373,18 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
   if (USE_RR) {
     if (*depth >= RR_MAX && !sampleIgnored) {
       let rouletteBeta = (*path).beta;
-      let q: f32 = max(1.0 - dot(rouletteBeta, luminance), 0.0);
-      // TODO hardcoded index in strafiied sampling.
-      if (randomSample() < q) {
+      // Max-component survival (pbrt-v4) avoids over-amplifying saturated paths.
+      let maxComponent = max(max(rouletteBeta.x, rouletteBeta.y), rouletteBeta.z);
+      let q: f32 = max(0.0, 1.0 - maxComponent);
+      if (sample1D(bounceDim(RUSSIAN_ROULETTE)) < q) {
         // TODO we force use alpha 1.0 here.
         // To avoid the glass pixels is transparent even if it's on an opaque object.
         (*path).alpha = 1.0;
         (*path).abort = true;
       }
-      (*path).beta /= 1.0 - q;
+      else {
+        (*path).beta /= 1.0 - q;
+      }
     }
   }
   if ((*path).abort) {
@@ -413,7 +412,7 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
 
   // Use light if hit the light
   var lightSample: LightSampleRec;
-  let isAlphaOccluded = randomSample() < (*ma).alpha;
+  let isAlphaOccluded = hashedSample(3u) < (*ma).alpha;
   for (var i = 0; i < rtUniform.lightsCount; i++) {
     // Fetch light Data
     let light: Light = analyticLights[i];
@@ -511,8 +510,9 @@ fn getBevelNormal(source: SurfaceInteraction, radius: f32) -> vec3f {
   var normalSum = vec3f(0.0);
 
   for (var sampleIndex = 0; sampleIndex < BEVEL_SAMPLES; sampleIndex++) {
-    var axisSample = randomSample();
-    let radialSample = randomSample();
+    let bevelRnd = sample2D(CAMERA_BEVEL_BASE + u32(sampleIndex));
+    var axisSample = bevelRnd.x;
+    let radialSample = bevelRnd.y;
     var diskNormal = geometricNormal;
     var diskTangent = tangent;
     var diskBitangent = bitangent;
@@ -735,7 +735,7 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
       var si2 = si;
       var ma2 = ma;
       let wavelengthRngState = s0;
-      let wavelengthSampleIndex = sampleIndex;
+      let wavelengthHashedCounter = hashedCounter;
       let preview = rtUniform.previewMode != 0;
       let previewDispersive = si.hit &&
         ma.transmissionWeight > 0.001 &&
@@ -745,17 +745,16 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
       if (preview && previewDispersive) {
         // Stochastic hero wavelength: one RGB channel per pixel keeps the
         // preview spectral at one-third of the full three-path cost.
-        heroWavelengthIndex = min(i32(floor(randomSample() * 3.0)), 2);
+        heroWavelengthIndex = min(i32(floor(sample1D(CAMERA_WAVELENGTH) * 3.0)), 2);
       }
       for (var i = 0; i < wavelengthCount; i++) {
         // Common random numbers keep Monte Carlo error correlated between
         // RGB wavelengths. This removes much of the colored variance that
         // otherwise turns into dirty chromatic patches after OIDN.
         if (!preview) {
-          if (!USE_STRATIFIED_SAMPLING) {
-            s0 = wavelengthRngState;
-          }
-          sampleIndex = wavelengthSampleIndex;
+          s0 = wavelengthRngState;
+          hashedCounter = wavelengthHashedCounter;
+          samplingBounce = 0u;
         }
         si.wavelength = 0.0;
         if (!preview || previewDispersive) {
@@ -814,7 +813,7 @@ fn sampleCircle(ip: vec2f) -> vec2f {
 fn main(@builtin(global_invocation_id) globalId: vec3u) {
   let outputSize = rtUniform.outputSize;
   let scaleOffset = rtUniform.scaleOffset;
-  let jitter = rtUniform.jitter;
+  var jitter = rtUniform.jitter;
   // TODO if outputSize is not multiple of 8?
   let coord = globalId.xy * vec2u(scaleOffset.xy) + vec2u(scaleOffset.zw);
   if (coord.x >= u32(outputSize.x) || coord.y >= u32(outputSize.y)) {
@@ -838,17 +837,17 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
   // shift moves a narrow metal highlight across several pixels.
   let uv = (vec2<f32>(f32(coord.x), f32(coord.y)) + vec2f(0.5)) / outputSize;
 
-  if (USE_STRATIFIED_SAMPLING) {
-    pixelSeed = textureLoad(noiseTex, vec2(coord.x % u32(NOISE_BUFFER_SIZE), coord.y % u32(NOISE_BUFFER_SIZE)), 0).r;
+  samplingPixel = coord;
+  pixelSampleIndex = u32(outNormal[idx].a) + rtUniform.sampleSequenceOffset;
+  samplingBounce = 0u; hashedCounter = 0u;
+  if (SAMPLING_PATTERN == 0 || SAMPLING_PATTERN == 1) {
+    jitter = (sample2D(CAMERA_PIXEL) - 0.5) / outputSize;
   }
-  else {
-    rng_initialize(coord, i32(rtUniform.sampleCount));
-  }
-
+  rng_initialize(coord, i32(pixelSampleIndex ^ sampleHash(rtUniform.sequenceSeed)));
   var cam = initCameraRay(uv + jitter);
 
   if (cameraUniform.aperture > 0.0) {
-    let lensPoint = cameraUniform.aperture * sampleCircle(vec2f(randomSample(), randomSample()));
+    let lensPoint = cameraUniform.aperture * sampleCircle(sample2D(CAMERA_LENS));
     let focusPoint = cam.o + cam.d * cameraUniform.focusDistance; // intersect ray direction with focus plane
     let origin = (cameraUniform.viewInv * vec4f(lensPoint, 0.0, 1.0)).xyz;
     let dir = normalize(focusPoint - origin);

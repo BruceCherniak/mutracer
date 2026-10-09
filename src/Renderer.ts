@@ -1,3 +1,4 @@
+import type { SamplingPattern } from './renderer/sampling';
 import { ensureMeshGeometryAttributes } from './renderer/prepareMeshBVH';
 import {
   DEFAULT_BEVEL_SAMPLES,
@@ -352,8 +353,15 @@ export default class Renderer {
    */
   transmissiveOutputAlphaMin = 1;
 
-  /** Use a stratified low-discrepancy sample sequence instead of white noise. Default `true`. */
-  useStratifiedSampling = true;
+  /**
+   * Sampling pattern. Default `'sobol'` (suited to OIDN). `'zsobol'` uses
+   * blue-noise-first ZSobol for low sample counts; `'random'` is PCG white noise.
+   * The pattern is independent of the denoiser.
+   */
+  samplingPattern: SamplingPattern = 'sobol';
+
+  /** @internal Temporary fixed-seed A/B control. */
+  private _samplingEvidenceSeed = 0;
 
   /** Bloom intensity. `0` disables bloom. Default `0`. */
   bloomIntensity = 0;
@@ -1082,7 +1090,7 @@ export default class Renderer {
     if (pipeline.setBevelSamples(this.bevelSamples)) {
       this._renderDone = false;
     }
-    if (pipeline.setStratifiedSampling(this.useStratifiedSampling)) {
+    if (pipeline.setSamplingPattern(this.samplingPattern, this.maxSamples, this._samplingEvidenceSeed)) {
       this._renderDone = false;
     }
     if (

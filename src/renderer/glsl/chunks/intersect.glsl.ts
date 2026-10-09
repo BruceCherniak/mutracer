@@ -515,7 +515,7 @@ int randomPickMaterial(ivec4 m0, ivec4 m1, ivec4 m2, vec3 bary) {
   w21 = w21 / wTotal + w20;
   w22 = w22 / wTotal + w21;
 
-  float rand = randomSample();
+  float rand = hashedSample(0u);
   float mIdx;
   if (rand < w00) {
     mIdx = m00.x;
@@ -982,7 +982,7 @@ ${getBVHTraverseCode(
     if (alpha < alphaCutoff) {
       alpha = 0.0;
     }
-    if (randomSample() > alpha) {
+    if (hashedSample(0u) > alpha) {
       // Continue after a transparent hit without traversing beyond the light.
       tMax = min(max(lightDistance, 0.0), RAY_MAX_DISTANCE);
       isOccluded = false;

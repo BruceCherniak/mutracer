@@ -938,7 +938,7 @@ fn randomPickMaterial(m0: vec3i, m1: vec3i, m2: vec3i, bary: vec3f) -> i32 {
   w21 = w21 / wTotal + w20;
   w22 = w22 / wTotal + w21;
 
-  let rand = randomSample();
+  let rand = hashedSample(0u);
   var mIdx: f32;
   if (rand < w00) {
     mIdx = m00.x;

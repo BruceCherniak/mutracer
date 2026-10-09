@@ -22,7 +22,7 @@ function createRenderer(usingWebGPU = true) {
     getSize: vi.fn(() => ({ width: 1280, height: 720 })),
     oidn: undefined,
     oidnRealtime: false,
-    useStratifiedSampling: true
+    samplingPattern: 'sobol'
   } as unknown as Renderer;
 }
 
@@ -32,8 +32,9 @@ describe('initializeOIDN', () => {
     vi.unstubAllGlobals();
   });
 
-  it('loads a packaged HDR auxiliary model and attaches the denoiser', async () => {
+  it.each(['sobol', 'zsobol', 'random'] as const)('attaches OIDN without changing %s sampling', async pattern => {
     const renderer = createRenderer();
+    renderer.samplingPattern = pattern;
     const weights = new ArrayBuffer(16);
     const denoiser = {
       dispose: vi.fn(),
@@ -80,7 +81,7 @@ describe('initializeOIDN', () => {
     expect(fetch).toHaveBeenCalledWith('/oidn/weights/rt_nrm_large.tza', {
       signal: undefined
     });
-    expect(renderer.useStratifiedSampling).toBe(true);
+    expect(renderer.samplingPattern).toBe(pattern);
     expect(renderer.oidn).toBe(denoiser);
     expect(renderer.oidn?.auxiliaryDenoisers).toEqual({
       albedo: albedoDenoiser,
@@ -129,7 +130,7 @@ describe('initializeOIDN', () => {
       hdrTransfer: 'log'
     });
 
-    expect(renderer.useStratifiedSampling).toBe(true);
+    expect(renderer.samplingPattern).toBe('sobol');
     expect(renderer.oidn).toBeUndefined();
     expect(initUNetFromBuffer).toHaveBeenCalledWith(
       expect.any(ArrayBuffer),

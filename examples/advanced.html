@@ -26,6 +26,14 @@
         </select>
       </label>
       <label>
+        Sampling
+        <select id="sampling">
+          <option value="sobol" selected>Sobol</option>
+          <option value="zsobol">ZSobol</option>
+          <option value="random">Random</option>
+        </select>
+      </label>
+      <label>
         Offline samples
         <input id="samples" type="number" min="1" max="4096" value="256" />
       </label>

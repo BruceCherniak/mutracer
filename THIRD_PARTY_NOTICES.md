@@ -64,12 +64,6 @@ The bloom prefilter's median filter follows
 Copyright (c) 2015-2017 Keijiro Takahashi. MIT License
 ([`LICENSES/KinoBloom-MIT.txt`](./LICENSES/KinoBloom-MIT.txt)).
 
-## Blue noise texture
-
-`src/renderer/texture/HDR_L_0.png` (embedded in `noise.ts`) is from Christoph
-Peters' [free blue noise textures](http://momentsingraphics.de/BlueNoise.html),
-released under CC0 1.0.
-
 ## Intel Open Image Denoise weights
 
 The `.tza` files in [`oidn/weights/`](./oidn/weights) are trained weights from
@@ -79,3 +73,14 @@ Copyright Intel Corporation. Apache License 2.0
 ([`oidn/weights/LICENSE.txt`](./oidn/weights/LICENSE.txt)). Denoising runs
 through the [`oidn-web`](https://www.npmjs.com/package/oidn-web) package, which
 carries its own license.
+
+## pbrt-v4 ZSobol
+
+The ZSobol digit permutation walk in `src/renderer/{wgsl,glsl}/chunks/sobol.*`,
+its permutation table in `src/renderer/sampling.ts`, and the test reference
+adapt `ZSobolSampler::GetSampleIndex` from
+[pbrt-v4](https://github.com/mmp/pbrt-v4/blob/master/src/pbrt/samplers.h).
+Copyright (c) 1998-2020 Matt Pharr, Wenzel Jakob, and Greg Humphreys.
+Apache License 2.0 ([`LICENSES/Apache-2.0.txt`](./LICENSES/Apache-2.0.txt)).
+Modified for 32-bit tiled WGSL and GLSL ES 3.00. The upstream project has no
+NOTICE file. Owen scrambling follows Burley's 2020 paper.

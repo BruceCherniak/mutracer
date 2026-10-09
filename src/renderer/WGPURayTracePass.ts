@@ -1,3 +1,4 @@
+import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling';
 import { MeshMembershipCache } from './meshMembership';
 import { mergeRefitRanges } from './bvhAccel';
 import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged, packVertexAttributes } from './geometryUpdates';
@@ -22,8 +23,6 @@ import Camera from '../scene/Camera';
 import {
   generateBackgroundMapFromSceneBackground
 } from './envMapCreation';
-import { StratifiedSampler } from './StratifiedSampler';
-import { makeStratifiedSamplerCombined } from './StratifiedSamplerCombined';
 import rayTraceCompute, { WORKGROUP_SIZE } from './wgsl/rayTrace.compute';
 import Geometry from '../scene/Geometry';
 import {
@@ -58,7 +57,6 @@ import OpenPBRMaterial, {
 import {
   DEFAULT_BEVEL_SAMPLES,
   DEFAULT_DIRECT_LIGHT_CANDIDATES,
-  makeBevelSamplingDimensions,
   normalizeBevelSamples,
   normalizeDirectLightCandidates,
   type AlphaBlendStrategy,
@@ -171,11 +169,10 @@ export function isWebGPUPipelineSpecializationFailure(...errors: unknown[]) {
 /** CPU-side views over the `RayTraceUniform` WGSL struct. */
 export function makeRayTraceUniform() {
   // Created from https://webgpufundamentals.org/webgpu/lessons/resources/wgsl-offset-computer.html
-  const RayTraceUniformValues = new ArrayBuffer(160);
+  const RayTraceUniformValues = new ArrayBuffer(176);
   const RayTraceUniformViews = {
     outputSize: new Float32Array(RayTraceUniformValues, 0, 2),
-    strataSize: new Float32Array(RayTraceUniformValues, 8, 1),
-    sampleCount: new Float32Array(RayTraceUniformValues, 12, 1),
+    sampleCount: new Float32Array(RayTraceUniformValues, 8, 1),
     scaleOffset: new Float32Array(RayTraceUniformValues, 16, 4),
     lightsCount: new Int32Array(RayTraceUniformValues, 32, 1),
     transmissiveOutputAlphaMin: new Float32Array(RayTraceUniformValues, 36, 1),
@@ -199,11 +196,11 @@ export function makeRayTraceUniform() {
     directLightCandidates: new Int32Array(RayTraceUniformValues, 140, 1),
     backgroundFlags: new Int32Array(RayTraceUniformValues, 144, 1),
     bsdfProposalCount: new Uint32Array(RayTraceUniformValues, 148, 1),
-    sceneFeatureFlags: new Uint32Array(RayTraceUniformValues, 152, 1)
+    sceneFeatureFlags: new Uint32Array(RayTraceUniformValues, 152, 1),
+    sequenceSeed: new Uint32Array(RayTraceUniformValues, 156, 1),
+    zSobolLogSPP: new Uint32Array(RayTraceUniformValues, 160, 1),
+    sampleSequenceOffset: new Uint32Array(RayTraceUniformValues, 164, 1)
   };
-  // setSampleCount(0) initially matches _sampleCount and skips its update.
-  // Initialize the full-domain warm-up size just as a restarted sample 0 does.
-  RayTraceUniformViews.strataSize[0] = 1.0;
   // Fixed algorithmic count; a uniform bound keeps DXC from unrolling the
   // complete layered BSDF at every proposal/optical channel.
   RayTraceUniformViews.bsdfProposalCount[0] = 4;
@@ -349,7 +346,6 @@ class WGPURayTracePass {
     cameraUniform: GPUBuffer;
     rtUniform: GPUBuffer;
     analyticLights: GPUBuffer;
-    stratifiedSamples: GPUBuffer;
   };
   private _rtUniform = makeRayTraceUniform();
   private _mapInfoUniform!: GPUBuffer;
@@ -378,8 +374,6 @@ class WGPURayTracePass {
   private _analyticLightSelectionPmfs: number[] = [];
   private _needsUpdateLightSamplingData = true;
 
-  private _noiseTex?: GPUTexture;
-  private _noiseIsPlaceholder = false;
   private _adaptiveSamplingTexture: GPUTexture;
   private _adaptiveSamplingTextureSize: [number, number] = [1, 1];
   private _offlineAdaptivePipeline?: GPUComputePipeline;
@@ -410,10 +404,8 @@ class WGPURayTracePass {
     USE_BACKGROUND: false,
     USE_BACKGROUND_MAP: false,
     USE_GROUNDED_BACKGROUND: false,
-    USE_STRATIFIED_SAMPLING: true,
-    BEVEL_SAMPLES: DEFAULT_BEVEL_SAMPLES,
-    SAMPLING_DIMENSIONS: DEFAULT_BEVEL_SAMPLES * 2,
-    STRATIFIED_SIZE: DEFAULT_BEVEL_SAMPLES * 2
+    SAMPLING_PATTERN: 0,
+    BEVEL_SAMPLES: DEFAULT_BEVEL_SAMPLES
   };
   private _prevPipelineConstants: Record<string, boolean | number> = {};
   private _prevDefinesCode = '';
@@ -427,12 +419,7 @@ class WGPURayTracePass {
   private _bevelSamples = DEFAULT_BEVEL_SAMPLES;
   private _directLightCandidates = DEFAULT_DIRECT_LIGHT_CANDIDATES;
   private _clamping?: number;
-  private _strataCount = 6;
   private _transmissiveAlphaMin = 1;
-
-  private _samplingDimensions: number[] = [];
-  private _samples!: StratifiedSampler;
-  private _requestedStratifiedSampling = true;
 
   private _viewProjInv = mat4.create();
   private _cameraWorld = mat4.create();
@@ -440,7 +427,6 @@ class WGPURayTracePass {
   private _focusDistance = 10;
   private _cameraProjection?: Camera['projection'];
 
-  private _sampleCount = 0;
   private _needsUpdateBindGroups = true;
 
   private _computeShaderModule?: GPUShaderModule;
@@ -465,9 +451,7 @@ class WGPURayTracePass {
       rtUniform: this._uniformBuffer(this._rtUniform.buffer.byteLength),
       analyticLights: this._uniformBuffer(
         FIXED_LIGHT_COUNT * PIXELS_PER_LIGHT * 4 * 4
-      ),
-      // TODO
-      stratifiedSamples: this._uniformBuffer(100 * 4)
+      )
     };
     this._mapInfoUniform = this._uniformBuffer(4 * 4);
 
@@ -499,14 +483,6 @@ class WGPURayTracePass {
 
     this._minmaxPass = new WGPUMinMaxMap(device);
     this._setBackgroundMap(undefined);
-    this._noiseTex = device.createTexture({
-      format: 'rgba8unorm',
-      label: 'Noise placeholder',
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-      size: [1, 1]
-    });
-    this._noiseIsPlaceholder = true;
-    this._constants.NOISE_BUFFER_SIZE = 1;
     this._adaptiveSamplingTexture = device.createTexture({
       format: 'r32float',
       label: 'Adaptive sample targets placeholder',
@@ -522,12 +498,6 @@ class WGPURayTracePass {
       { bytesPerRow: 4 },
       [1, 1]
     );
-
-    // Shader compilation can start before the renderer applies its first
-    // frame settings. Initialize the sampler eagerly so compile-time WGSL
-    // constants such as STRATIFIED_SIZE can never serialize as `undefined`.
-    this._updateSamplingDimensions();
-    this._updateStartifiedSampler();
   }
 
   getOutputBuffer() {
@@ -812,13 +782,6 @@ class WGPURayTracePass {
             viewDimension: '2d-array'
           }
         },
-        {
-          binding: 2,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d'
-          }
-        },
         // Map size
         {
           binding: 3,
@@ -1016,7 +979,6 @@ class WGPURayTracePass {
       // TODO hardcoded defines that will be replaced in the code.
       const definesKeys = [
         'NUM_MAPS',
-        'STRATIFIED_SIZE',
         'TLAS_STACK_SIZE',
         'BLAS_STACK_SIZE',
         'NUM_UNIFORM_LIGHTS'
@@ -1386,10 +1348,6 @@ ${rayTraceCompute({
           resource: this._maps!.createView()
         },
         {
-          binding: 2,
-          resource: this._noiseTex!.createView()
-        },
-        {
           binding: 3,
           resource: {
             buffer: this._mapInfoUniform
@@ -1521,79 +1479,6 @@ ${rayTraceCompute({
     pass.end();
   }
 
-  setNoise(noiseImage: HTMLImageElement) {
-    if (this._noiseTex && !this._noiseIsPlaceholder) {
-      console.warn('Noise tex has been created.');
-      return;
-    }
-    const size = [noiseImage.width, noiseImage.height];
-    // TODO copyExternalImageToTexture can't use image element.
-    const canvas = document.createElement('canvas');
-    canvas.width = size[0];
-    canvas.height = size[1];
-    const ctx = canvas.getContext('2d')!;
-    ctx.drawImage(noiseImage, 0, 0);
-    this._noiseTex?.destroy();
-    this._noiseTex = this._device.createTexture({
-      format: 'rgba8unorm',
-      label: 'Noise',
-      usage:
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.RENDER_ATTACHMENT,
-      size: {
-        width: size[0],
-        height: size[1]
-      }
-    });
-    this._device.queue.copyExternalImageToTexture(
-      { source: canvas },
-      { texture: this._noiseTex, origin: [0, 0, 0] },
-      size
-    );
-
-    Object.assign(this._constants, {
-      // TODO use js template string?
-      NOISE_BUFFER_SIZE: size[0]
-    });
-    this._noiseIsPlaceholder = false;
-    this._needsUpdateBindGroups = true;
-  }
-
-  setNoiseData(data: Uint8Array, width: number, height: number) {
-    if (
-      !Number.isInteger(width) ||
-      !Number.isInteger(height) ||
-      width <= 0 ||
-      height <= 0 ||
-      data.byteLength !== width * height * 4
-    ) {
-      throw new Error(
-        'Noise data must contain exactly width * height RGBA8 pixels'
-      );
-    }
-    if (this._noiseTex && !this._noiseIsPlaceholder) {
-      console.warn('Noise tex has been created.');
-      return;
-    }
-    this._noiseTex?.destroy();
-    this._noiseTex = this._device.createTexture({
-      format: 'rgba8unorm',
-      label: 'Noise',
-      usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
-      size: { width, height }
-    });
-    this._device.queue.writeTexture(
-      { texture: this._noiseTex },
-      data,
-      { bytesPerRow: width * 4, rowsPerImage: height },
-      { width, height }
-    );
-    Object.assign(this._constants, { NOISE_BUFFER_SIZE: width });
-    this._noiseIsPlaceholder = false;
-    this._needsUpdateBindGroups = true;
-  }
-
   async getDebugBVHData() {
     if (!this._debugBVHBuffer) {
       throw new Error(
@@ -1676,19 +1561,25 @@ ${rayTraceCompute({
     if (changed) {
       this._bevelSamples = next;
       this._constants.BEVEL_SAMPLES = next;
-      this._updateSamplingDimensions();
-      this._updateStartifiedSampler();
     }
     return changed;
   }
 
-  setStratifiedSampling(enabled: boolean) {
-    const requestedChanged = this._requestedStratifiedSampling !== enabled;
-    this._requestedStratifiedSampling = enabled;
-    const effective = enabled;
-    const changed = this._constants.USE_STRATIFIED_SAMPLING !== effective;
-    this._constants.USE_STRATIFIED_SAMPLING = effective;
-    return changed || requestedChanged;
+  setSamplingPattern(pattern: SamplingPattern, maxSamples: number, sequenceSeed = 0) {
+    const code = samplingPatternCode(pattern);
+    const logSPP = zSobolLog2SPP(code === 1 ? maxSamples - 1 : maxSamples);
+    const views = this._rtUniform.views;
+    const changed = this._constants.SAMPLING_PATTERN !== code ||
+      views.sequenceSeed[0] !== (sequenceSeed >>> 0) ||
+      (code === 1 && views.zSobolLogSPP[0] !== logSPP);
+    this._constants.SAMPLING_PATTERN = code;
+    views.sequenceSeed[0] = sequenceSeed;
+    views.zSobolLogSPP[0] = logSPP;
+    return changed;
+  }
+
+  setSampleSequenceOffset(offset: number) {
+    this._rtUniform.views.sampleSequenceOffset[0] = offset;
   }
 
   setVarianceMoments(enabled: boolean) {
@@ -2423,7 +2314,6 @@ ${rayTraceCompute({
 
       SPECTRAL,
       BEVEL_SAMPLES: this._bevelSamples,
-      SAMPLING_DIMENSIONS: this._samplingDimensions.reduce((a, b) => a + b),
 
       USE_RR: true,
       // Match WebGL: defer roulette for multiple-scattering SSS paths.
@@ -2893,22 +2783,6 @@ ${rayTraceCompute({
   }
 
   setSampleCount(sampleCount: number) {
-    if (sampleCount !== this._sampleCount) {
-      const restartSequence =
-        sampleCount === 0 || sampleCount < this._sampleCount;
-      this._sampleCount = sampleCount;
-      this._rtUniform.views.strataSize[0] =
-        sampleCount < 4 ? 1.0 : 1.0 / this._strataCount;
-      if (restartSequence || !this._samples) {
-        this._updateStartifiedSampler();
-      } else {
-        // Samples 0-3 are an independent full-domain warm-up. Restart before
-        // sample 4 so every following N^D-cell cycle is complete.
-        if (sampleCount === 4) this._samples.restart();
-        this._nextSeed();
-      }
-    }
-
     this._rtUniform.views.sampleCount[0] = sampleCount;
   }
   setTransmissiveOutputAlphaMin(transmissiveAlphaMin: number) {
@@ -2947,7 +2821,6 @@ ${rayTraceCompute({
     ]);
     buffers.forEach((buffer) => buffer?.destroy());
     const textures = new Set<GPUTexture | undefined>([
-      this._noiseTex,
       this._maps,
       this._lightSamplingTexture,
       this._openPbrEnergyLut,
@@ -2962,55 +2835,6 @@ ${rayTraceCompute({
     this._rayTraceBindGroups = undefined;
   }
 
-  private _nextSeed() {
-    const nextSamples = this._samples.next();
-    //TODO
-    const buffer = new F32(nextSamples.length * 4);
-    for (let i = 0; i < nextSamples.length; i++) {
-      buffer[i * 4] = nextSamples[i];
-    }
-
-    const uniforms = this._uniforms;
-    if (uniforms.stratifiedSamples.size < buffer.byteLength) {
-      uniforms.stratifiedSamples.destroy();
-      uniforms.stratifiedSamples = this._uniformBuffer(buffer.byteLength);
-    }
-
-    this._device.queue.writeBuffer(uniforms.stratifiedSamples, 0, buffer);
-    this._constants.STRATIFIED_SIZE = Math.max(nextSamples.length, 1);
-  }
-
-  private _updateStartifiedSampler() {
-    this._samples = makeStratifiedSamplerCombined(
-      this._strataCount,
-      this._samplingDimensions,
-      0
-    );
-
-    this._nextSeed();
-  }
-
-  private _updateSamplingDimensions() {
-    this._samplingDimensions = makeBevelSamplingDimensions(
-      this._bevelSamples
-    );
-    // Keep the sampling layout stable so changing the runtime bounce limit does
-    // not change STRATIFIED_SIZE or require rebuilding the WebGPU shader.
-    for (let i = 1; i <= MAX_BOUNCES; i++) {
-      // specular or diffuse reflection, light importance sampling, next path direction
-      // TODO apply to the new sampling method
-      this._samplingDimensions.push(2, 2, 2);
-      if (i >= 2) {
-        // russian roulette sampling
-        // this step is skipped on the first bounce
-        this._samplingDimensions.push(1);
-      }
-    }
-    this._constants.SAMPLING_DIMENSIONS = this._samplingDimensions.reduce(
-      (sum, dimensions) => sum + dimensions,
-      0
-    );
-  }
 }
 
 export default WGPURayTracePass;

@@ -1,3 +1,4 @@
+import { samplingPatternCode, type SamplingPattern } from '../../src/renderer/sampling';
 import { describe, expect, it, vi } from 'vitest';
 import { makeShaderDataDefinitions } from 'webgpu-utils';
 import { WGPU_SCENE_FEATURE_BITS, wgpuSceneFeatureFlags } from '../../src/renderer/WGPUSceneFeatures';
@@ -16,10 +17,11 @@ describe('WebGPU ray-trace uniforms', () => {
     expect(wgpuSceneFeatureFlags({})).toBe(0);
   });
 
-  it('matches the CPU uniform layout to the generated WGSL struct', () => {
+  it.each(['sobol', 'zsobol', 'random'] as SamplingPattern[])('matches CPU uniforms for the generated %s WGSL shader', pattern => {
     vi.stubGlobal('GPUShaderStage', { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 });
     try {
       const definitions = makeShaderDataDefinitions(
+        `override SAMPLING_PATTERN: u32 = ${samplingPatternCode(pattern)}u;\n` +
         rayTraceCompute({ hasDisplacement: false })
       );
       const struct = definitions.structs.RayTraceUniform;

@@ -311,7 +311,6 @@ struct CameraUniform {
 
 struct RayTraceUniform {
   outputSize: vec2f,
-  strataSize: f32,
   sampleCount: f32,
   scaleOffset: vec4f,
   lightsCount: i32,
@@ -337,6 +336,9 @@ struct RayTraceUniform {
   backgroundFlags: i32,
   bsdfProposalCount: u32,
   sceneFeatureFlags: u32,
+  sequenceSeed: u32,
+  zSobolLogSPP: u32,
+  sampleSequenceOffset: u32,
 }
 
 // Buffers
@@ -348,7 +350,6 @@ struct RayTraceUniform {
 // Textures
 @group(1) @binding(0) var mapSampler: sampler;
 @group(1) @binding(1) var map: texture_2d_array<f32>;
-@group(1) @binding(2) var noiseTex: texture_2d<f32>;
 // The first NUM_MAPS entries contain atlas placement; the second half stores
 // per-texture UV scale/offset; the third block stores the UV channel in x.
 @group(1) @binding(3) var<uniform> mapInfo: array<vec4f, NUM_MAPS * 3>;
@@ -415,7 +416,6 @@ ${
 
 @group(2) @binding(2) var<uniform> analyticLights: array<Light, NUM_UNIFORM_LIGHTS>;
 // TODO uniform must be aligned to 16 bytes.
-@group(2) @binding(3) var<uniform> stratifiedSamples: array<vec4f, STRATIFIED_SIZE>;
 
 fn initRay(ray: ptr<function, Ray>, origin: vec3f, direction: vec3f) {
   (*ray).o = origin;

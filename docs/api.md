@@ -31,7 +31,7 @@ affects the image restarts accumulation.
 | `clamping` | `0` | Per-sample radiance clamp; `0` is unbiased |
 | `directLightCandidates` | `4` | Light candidates resampled per next-event estimate (WebGPU, 1–16) |
 | `bevelSamples` | `8` | Probes per sample for `OpenPBRMaterial.bevelSize` (1–32) |
-| `useStratifiedSampling` | `true` | Low-discrepancy sample sequence |
+| `samplingPattern` | `'sobol'` | `'sobol'`, `'zsobol'` or `'random'`; see [sampling](./sampling.md) |
 | `alphaBlendStrategy` | `'stochastic'` | `'stochastic'` or `'deterministic-source-over'` for glTF `BLEND` materials (WebGPU) |
 | `bvhBuilder` | `'tinybvh'` | `'tinybvh'` (WebAssembly, async) or `'builtin'` (JavaScript, sync) |
 | `textureAtlasBudgetBytes` | 384 MiB | Texture atlas memory budget; larger textures are downscaled |

@@ -28,7 +28,7 @@ fn PrepareDirectLight(
   (*shadowWork).valid = false;
   (*shadowWork).lightSelectionPmf = 0.0;
   (*shadowWork).risTarget = 0.0;
-  let lightRnd = vec3f(randomSample(), randomSample(), randomSample());
+  let lightRnd = vec3f(sample2D(lightDim(candidateIndex, 1u)), sample1D(lightDim(candidateIndex, 0u)));
 
   var lightSample: LightSampleRec;
   sampleLightForNEECandidate(
@@ -257,11 +257,11 @@ fn SampleMaterial(
     if (mediumType > 0 && majorant > 0.0) {
       // Sample one RGB extinction channel and divide by the mixture PDF. This
       // avoids high-variance majorant weights for channel-dependent SSS radii.
-      let mediumChannel = min(i32(randomSample() * 3.0), 2);
+      let mediumChannel = min(i32(sample1D(bounceDim(MEDIUM_CHANNEL)) * 3.0), 2);
       let channelExtinction = extinction[mediumChannel];
       let scatterDist = select(
         d,
-        min(-log(max(randomSample(), 1e-7)) / channelExtinction, d),
+        min(-log(max(sample1D(bounceDim(MEDIUM_DISTANCE)), 1e-7)) / channelExtinction, d),
         channelExtinction > 0.0
       );
       mediumSampled = scatterDist < d;
@@ -299,7 +299,7 @@ fn SampleMaterial(
     scatterDir = sampling_henyey_greenstein(
       -(*path).ray.d,
       (*si).mediumAnisotropy,
-      vec2f(randomSample(), randomSample())
+      sample2D(bounceDim(PHASE_DIRECTION))
     );
     scatteringPdf = sampling_henyey_greenstein_phase(
       dot(scatterDir, -(*path).ray.d),
@@ -314,7 +314,7 @@ fn SampleMaterial(
     var sampledLobeDiffuse = true;
     var sampledLobeIndex = 5u;
     var sampledMarginalPdf = 0.0;
-    let matRnd = vec3f(randomSample(), randomSample(), randomSample());
+    let matRnd = vec3f(sample2D(bounceDim(BSDF_DIRECTION)), sample1D(bounceDim(BSDF_LOBE)));
     let f = openpbr_sample(
       (*si).tangent,
       *ma,

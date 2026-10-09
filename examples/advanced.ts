@@ -10,6 +10,7 @@ import {
   Renderer,
   SphereLight,
   type OIDNModel,
+  type SamplingPattern,
   type Scene,
   createPlaneGeometry,
   createSphereGeometry
@@ -20,6 +21,7 @@ import { showStatus } from './shared/status';
 const canvas = document.getElementById('main') as HTMLCanvasElement;
 const statusElement = document.getElementById('status')!;
 const denoiserSelect = document.getElementById('denoiser') as HTMLSelectElement;
+const samplingSelect = document.getElementById('sampling') as HTMLSelectElement;
 const samplesInput = document.getElementById('samples') as HTMLInputElement;
 const exportButton = document.getElementById('export') as HTMLButtonElement;
 
@@ -95,6 +97,11 @@ denoiserSelect.addEventListener('change', () => {
   updateDenoiser().catch(console.error);
 });
 updateDenoiser().catch(console.error);
+
+// Sobol suits OIDN; ZSobol gives blue-noise error for undenoised previews.
+samplingSelect.addEventListener('change', () => {
+  renderer.samplingPattern = samplingSelect.value as SamplingPattern;
+});
 
 function resize() {
   const ratio = Math.min(window.devicePixelRatio, 2);

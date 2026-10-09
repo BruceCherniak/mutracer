@@ -39,7 +39,7 @@ function createPipeline(overrides: Partial<WGPURenderingPipeline> = {}) {
     needsRestartSample: vi.fn(() => true),
     setBouncesAndClamping: vi.fn(() => false),
     setBevelSamples: vi.fn(() => false),
-    setStratifiedSampling: vi.fn(() => false),
+    setSamplingPattern: vi.fn(() => false),
     getTotalSamplesRendered: vi.fn(() => samples),
     getDiagnostics: vi.fn(() => ({})),
     setShadowCatcherParams: vi.fn(() => false),
@@ -1131,5 +1131,30 @@ describe('Renderer realtime OIDN', () => {
     expect(pipeline.draw).toHaveBeenCalledWith(camera, 1);
     expect(pipeline.performOIDNDenoise).toHaveBeenCalledOnce();
     expect(pipeline.setPreserveOIDNOutput).toHaveBeenLastCalledWith(true);
+  });
+});
+
+describe('sampling pattern', () => {
+  it('defaults to sobol and invalidates a finished render when its pattern changes', () => {
+    const renderer = new Renderer({ canvas: {width:1,height:1} as HTMLCanvasElement });
+    expect(renderer.samplingPattern).toBe('sobol');
+    const pipeline = createPipeline({ needsRestartSample: vi.fn(() => false) });
+    attachPipeline(renderer,pipeline);
+    const scene = {meshes:[],lights:[]};
+    const camera = {} as Camera;
+    renderer.render(scene,camera);
+    const draws = vi.mocked(pipeline.draw).mock.calls.length;
+    renderer.render(scene,camera);
+    expect(pipeline.draw).toHaveBeenCalledTimes(draws);
+    renderer.samplingPattern = 'zsobol';
+    vi.mocked(pipeline.setSamplingPattern).mockReturnValueOnce(true);
+    renderer.render(scene,camera);
+    expect(pipeline.setSamplingPattern).toHaveBeenLastCalledWith('zsobol',2048,0);
+    expect(pipeline.draw).toHaveBeenCalledTimes(draws+1);
+    renderer.oidn = {} as never;
+    expect(renderer.samplingPattern).toBe('zsobol');
+    renderer.oidn = undefined;
+    expect(renderer.samplingPattern).toBe('zsobol');
+    renderer.dispose();
   });
 });

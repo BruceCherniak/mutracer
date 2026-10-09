@@ -16,10 +16,10 @@ const mocks = vi.hoisted(() => {
   class TracePass extends Pass {
     static latest: TracePass;
     constructor() { super(); TracePass.latest = this; }
+    setSampleSequenceOffset = vi.fn();
     setSampleCount = vi.fn();
     setCamera() {}
     cameraChanged() { return false; }
-    setNoise() {}
     setJitter() {}
     setSampleTiles() {}
     setPreviewMode() {}
@@ -33,6 +33,7 @@ const mocks = vi.hoisted(() => {
     setDirectLightCandidates() { return true; }
     setAlphaBlendStrategy() { return true; }
     setBevelSamples() { return true; }
+    setSamplingPattern = vi.fn(() => true);
   }
   class OutputPass extends Pass {
     setSampleCount() {}
@@ -140,4 +141,17 @@ describe('WebGPU offline sampling', () => {
     await pipeline.flushDiagnostics();
     pipeline.dispose();
   });
+});
+
+it('restarts accumulation after changing the sampling pattern', () => {
+  const pipeline = createPipeline(false);
+  const camera = new Camera('perspective', 45, 1, 0.1, 100);
+  pipeline.setOfflineRenderOptions({samplesPerBatch:4,deferPostProcess:true,sampleSequenceOffset:0});
+  pipeline.draw(camera,4);
+  expect(pipeline.getTotalSamplesRendered()).toBe(4);
+  const trace=mocks.TracePass.latest;
+  trace.setSampleCount.mockClear();
+  expect(pipeline.setSamplingPattern('zsobol',4)).toBe(true);
+  pipeline.draw(camera,4);
+  expect(trace.setSampleCount.mock.calls.map(([value])=>value)).toEqual([0,1,2,3]);
 });

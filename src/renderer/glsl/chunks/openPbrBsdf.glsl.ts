@@ -1198,7 +1198,8 @@ vec3 openpbr_sample(
     else if (lobeSample < coatCdf) {
         vec3 halfVector = sampling_ggx_visible_normal(
             viewLocal,
-            vec2(max(0.001, material.coatRoughness * material.coatRoughness)),
+            // The VNDF must use the same alpha as the evaluated coat PDF.
+            vec2(max(ROUGHNESS_MIN * ROUGHNESS_MIN, material.coatRoughness * material.coatRoughness)),
             vec2(randomX, randomY)
         );
         if (halfVector.z < 0.0) {

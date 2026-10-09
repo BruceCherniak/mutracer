@@ -1,9 +1,9 @@
+import type { SamplingPattern } from './sampling';
 import Camera from '../scene/Camera';
 import Mesh from '../scene/Mesh';
 import { Scene, SceneBackground, SceneLight } from '../scene/Scene';
 import { ColorRGB } from '../types';
 import { vec3 } from '../math';
-import noiseBase64 from './texture/noise';
 import halton from './hanton';
 import { makeTileRender } from './TileRender';
 import {
@@ -72,7 +72,6 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
   let vignette = 0;
   let output: RenderOutput = 'final';
   let overlay: Scene['overlay'];
-  let ready = false;
   let pageLeaveTime = performance.now();
   let pageInvisibleTime = 0;
   const shadowCatcherColor = vec3.create();
@@ -128,13 +127,6 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
 
   const rawReadFrameBuffer = new FrameBuffer();
 
-  const noiseImage = new Image();
-  noiseImage.src = noiseBase64;
-  noiseImage.onload = () => {
-    rayTracePass.setNoise(noiseImage);
-    ready = true;
-  };
-
   function updateSeed(useJitter: boolean) {
     const sequenceSample = sampleCount + sampleSequenceOffset;
     const jitterX = useJitter ? halton(sequenceSample, 2) - 0.5 : 0;
@@ -147,6 +139,7 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
     tile: { x: number; y: number; width: number; height: number }
   ) {
     rayTracePass.setSampleCount(sampleCount + sampleSequenceOffset);
+    rayTracePass.setSampleSequenceOffset(sampleSequenceOffset);
     updateSeed(true);
     if (rayTracePass.hasDispersion()) {
       if (previewMode) {
@@ -167,7 +160,7 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
   }
 
   function drawPostProcess(_forceNeedsDenoise = false) {
-    if (!ready || sampleCount === 0) return;
+    if (sampleCount === 0) return;
 
     rayTraceOutputPass.setSampleCount(sampleCount);
     rayTraceOutputPass.createPass(rayTracePass);
@@ -247,7 +240,7 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
   }
 
   function draw(camera: Camera, maxSamples: number) {
-    if (!ready || rayTracePass.isInvalid() || renderFailed) return false;
+    if (rayTracePass.isInvalid() || renderFailed) return false;
     if (!renderer.isAllProgramCompiled()) {
       isFirstFrame = true;
       sampleCount = 0;
@@ -514,8 +507,8 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       if (changed) isFirstFrame = true;
       return changed;
     },
-    setStratifiedSampling(enabled: boolean) {
-      const changed = rayTracePass.setStratifiedSampling(enabled);
+    setSamplingPattern(pattern: SamplingPattern, maxSamples: number, sequenceSeed = 0) {
+      const changed = rayTracePass.setSamplingPattern(pattern, maxSamples, sequenceSeed);
       if (changed) isFirstFrame = true;
       return changed;
     },

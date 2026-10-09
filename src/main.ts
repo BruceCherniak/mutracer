@@ -136,3 +136,5 @@ export type {
   PrecomputeTimings,
   RefinedDisplacementTopology
 } from './util/workerHelper';
+
+export type { SamplingPattern } from './renderer/sampling';

@@ -114,6 +114,7 @@ struct RayTraceAuxiliary {
 };
 
 void bounce(inout Path path, inout int depth, inout SurfaceInteraction si, inout OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
+  samplingBounce = uint(max(depth, 0));
   // The bounce will be doubled on the transmission material.
   // For other materials. We will quite early
   // TODO It is only used on Mac with AMD card. If I enabled it on windows.
@@ -172,7 +173,7 @@ ${isIntelMac ? doubleTransmissionCheckCode : ''}
       outAux.isBlank = bg.a < 0.01;
     }
     else {
-      Ray cam = initCameraRay(v_Texcoord + jitter);
+      Ray cam = initCameraRay(v_Texcoord + pixelJitter());
       bool towardsCam = dot(cam.d, path.ray.d) > 0.0;
       if (transmissiveOutputAlphaMin < 1.0) {
         if (towardsCam) {
@@ -205,7 +206,7 @@ ${isIntelMac ? doubleTransmissionCheckCode : ''}
       // must use full radiance weight; multiplying by alpha again is biased.
       // TODO should set alpha to 0.0?
       path.alpha = max(path.alpha, alpha);
-      if (randomSample() > alpha) {
+      if (hashedSample(3u) > alpha) {
         sampleIgnored = true;
       }
     }
@@ -240,15 +241,18 @@ ${isIntelMac ? doubleTransmissionCheckCode : ''}
   // Russian Roulette sampling
 #ifdef USE_RR
   if (depth >= RR_MAX && !sampleIgnored) {
-    float q = max(1.0 - dot(path.beta, luminance), 0.0);
-    // TODO hardcoded index in strafiied sampling.
-    if (randomSample() < q) {
+    // Max-component survival (pbrt-v4) avoids over-amplifying saturated paths.
+    float maxComponent = max(max(path.beta.x, path.beta.y), path.beta.z);
+    float q = max(0.0, 1.0 - maxComponent);
+    if (sample1D(bounceDim(RUSSIAN_ROULETTE)) < q) {
       // TODO we force use alpha 1.0 here.
       // To avoid the glass pixels is transparent even if it's on an opaque object.
       path.alpha = 1.0;
       path.abort = true;
     }
-    path.beta /= 1.0 - q;
+    else {
+      path.beta /= 1.0 - q;
+    }
   }
 #endif
 
@@ -280,7 +284,7 @@ ${isIntelMac ? doubleTransmissionCheckCode : ''}
     return;
   }
 
-  bool isAlphaOccluded = randomSample() < mat.alpha;
+  bool isAlphaOccluded = hashedSample(3u) < mat.alpha;
 #ifdef NUM_LIGHTS
   // Use light if hit the light
   LightSampleRec lightSample;
@@ -370,8 +374,9 @@ vec3 getBevelNormal(SurfaceInteraction source, float radius) {
   vec3 normalSum = vec3(0.0);
 
   for (int sampleIndex = 0; sampleIndex < BEVEL_SAMPLES; sampleIndex++) {
-    float axisSample = randomSample();
-    float radialSample = randomSample();
+    vec2 bevelRnd = sample2D(CAMERA_BEVEL_BASE + uint(sampleIndex));
+    float axisSample = bevelRnd.x;
+    float radialSample = bevelRnd.y;
     vec3 diskNormal = geometricNormal;
     vec3 diskTangent = tangent;
     vec3 diskBitangent = bitangent;
@@ -559,25 +564,23 @@ vec2 sampleCircle(vec2 p) {
 
 void main() {
 
-#ifdef USE_STRATIFIED_SAMPLING
   initRandom();
-#else
-  rng_initialize(v_Texcoord * viewportSize , int(sampleCount));
-#endif
+  rng_initialize(v_Texcoord * viewportSize, int(uint(sampleCount) ^ sampleHash(uint(sequenceSeed))));
+
 
   pathWavelength = previewMode ? 0.0 : wavelength;
   heroWavelength = wavelength;
   if (previewMode && wavelength > 0.0) {
-    float channel = floor(randomSample() * 3.0);
+    float channel = floor(sample1D(CAMERA_WAVELENGTH) * 3.0);
     heroWavelength = channel < 1.0 ? 650.0 : channel < 2.0 ? 510.0 : 475.0;
   }
 
   // Thin lens model with depth-of-field
   // http://www.pbr-book.org/3ed-2018/Camera_Models/Projective_Camera_Models.html#TheThinLensModelandDepthofField
-  Ray cam = initCameraRay(v_Texcoord + jitter);
+  Ray cam = initCameraRay(v_Texcoord + pixelJitter());
 
   if (cameraAperture > 0.0) {
-    vec2 lensPoint = cameraAperture * sampleCircle(vec2(randomSample(), randomSample()));
+    vec2 lensPoint = cameraAperture * sampleCircle(sample2D(CAMERA_LENS));
     vec3 focusPoint = cam.o + cam.d * cameraFocus; // intersect ray direction with focus plane
     vec3 origin = vec3(lensPoint, 0.0);
     origin = vec3(viewInv * vec4(origin, 1.0));
@@ -619,23 +622,5 @@ void main() {
   out_albedo = vec4(outAux.albedo, outAux.isBlank ? 0.0 : 1.0);
   out_normal = vec4(outAux.normal, 1.0);
 
-  // Stratified Sampling Sample Count Test
-  // ---------------
-  // Uncomment the following code
-  // Then observe the colors of the image
-  // If:
-  // * The resulting image is pure black
-  //   Extra samples are being passed to the shader that aren't being used.
-  // * The resulting image contains red
-  //   Not enough samples are being passed to the shader
-  // * The resulting image contains only white with some black
-  //   All samples are used by the shader. Correct result!
-
-  // out_color = vec4(0, 0, 0, 1);
-  // if (sampleIndex == SAMPLING_DIMENSIONS) {
-  //   out_color = vec4(1, 1, 1, 1);
-  // } else if (sampleIndex > SAMPLING_DIMENSIONS) {
-  //   out_color = vec4(1, 0, 0, 1);
-  // }
 }`
 });

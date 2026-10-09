@@ -73,7 +73,6 @@
   "dependencies": {
     "gl-matrix": "^3.4.4",
     "oidn-web": "^0.4.0",
-    "seedrandom": "^3.0.5",
     "webgpu-utils": "^1.9.3"
   },
   "peerDependencies": {

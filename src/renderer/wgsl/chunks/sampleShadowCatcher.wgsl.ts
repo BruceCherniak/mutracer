@@ -9,7 +9,7 @@ fn sampleShadowCatcher(si: SurfaceInteraction, bounce: i32, path: ptr<function, 
   // The unified table also contains emissive mesh lights.
   if (rtUniform.lightChoiceCount > 0) {
     var lightSample: LightSampleRec;
-    let lightRnd = vec3f(randomSample(), randomSample(), randomSample());
+    let lightRnd = vec3f(sample2D(bounceDim(LIGHT_POSITION)), sample1D(bounceDim(LIGHT_SELECT)));
     sampleLight(si.position, lightRnd, &lightSample, false);
     let lightDir = lightSample.direction;
     var shadow = 0.0;

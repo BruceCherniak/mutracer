@@ -76,7 +76,7 @@ fn intersectionAlphaPasses(
     alpha = select(0.0, 1.0, alpha >= ma.alphaCutoff);
   }
   if (alphaMode == ${materialAlphaModeConstants.blend}) {
-    return randomSample() <= alpha;
+    return hashedSample(1u) <= alpha;
   }
   return alpha >= 1.0;
 }

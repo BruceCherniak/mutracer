@@ -1,11 +1,11 @@
+import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling';
 import { MeshMembershipCache } from './meshMembership';
 import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges';
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges';
 import {
   constants,
   Renderer as WebGLRenderer,
-  Texture2D as WebGLTexture2D,
-  TextureImageSource as WebGLTextureImageSource
+  Texture2D as WebGLTexture2D
 } from './webgl';
 import { WebGLFullQuadPass } from './WebGLFullQuadPass';
 import { mat4 } from '../math';
@@ -36,8 +36,6 @@ import MergedMaterialData, {
 } from './MergedMaterialData';
 import OpenPBRMaterial, {
 } from '../scene/OpenPBRMaterial';
-import { StratifiedSampler } from './StratifiedSampler';
-import { makeStratifiedSamplerCombined } from './StratifiedSamplerCombined';
 
 import DirectionalLight from '../scene/DirectionalLight';
 import SphereLight from '../scene/SphereLight';
@@ -69,7 +67,6 @@ import { updateMeshInstances, updateMeshInstanceTransforms } from './prepareMesh
 import { mergeMeshesToGeometry } from './mergeMeshesToGeometry';
 import {
   DEFAULT_BEVEL_SAMPLES,
-  makeBevelSamplingDimensions,
   normalizeBevelSamples
 } from './RenderingPipeline';
 import {
@@ -157,14 +154,6 @@ class WebGLRayTracePass {
     buffer: ArrayBuffer;
   };
 
-  private _noiseTex = new WebGLTexture2D({
-    wrapS: constants.REPEAT,
-    wrapT: constants.REPEAT,
-    type: constants.HALF_FLOAT,
-    flipY: false,
-    useMipmap: false
-  });
-
   private _lightTex = new WebGLTexture2D(commonNearestFloatProps);
   private _iesProfileTex = new WebGLTexture2D(commonNearestFloatProps);
   private _iesProfileColumns = 1;
@@ -192,13 +181,11 @@ class WebGLRayTracePass {
   private _bevelSamples = DEFAULT_BEVEL_SAMPLES;
   private _clamping?: number;
 
-  // how many partitions of stratified noise should be created
   // higher number results in faster convergence over time, but with lower quality initial samples
-  private _strataCount = 6;
 
-  private _sampleCount = 0;
-  private _samplingDimensions: number[] = [];
-  private _samples!: StratifiedSampler;
+  private _samplingCode = -1;
+  private _sequenceSeed = 0;
+  private _zLogSPP = 0;
 
   private _positionBufferTex = new WebGLTexture2D(commonNearestFloatProps);
   private _normalBufferTex = new WebGLTexture2D(commonNearestFloatProps);
@@ -273,7 +260,6 @@ class WebGLRayTracePass {
           'OES_texture_float_linear'
         )
       });
-      pass.setUniform('noiseTex', this._noiseTex);
     });
     this._mainPass.setUniform('openPbrEnergyLut', this._openPbrEnergyLut);
   }
@@ -305,17 +291,9 @@ class WebGLRayTracePass {
       : this._mainPass.getOutput(label);
   }
 
-  setNoise(noiseImage: WebGLTextureImageSource) {
-    this._noiseTex.source = noiseImage;
-  }
-
   setBounce(bounce: number) {
     const changed = this._bounces !== bounce;
     this._bounces = bounce;
-    if (changed || !this._samplingDimensions.length) {
-      this._updateSamplingDimensions();
-      this._updateStartifiedSampler();
-    }
     return changed;
   }
 
@@ -330,8 +308,6 @@ class WebGLRayTracePass {
     const changed = this._bevelSamples !== next;
     if (changed) {
       this._bevelSamples = next;
-      this._updateSamplingDimensions();
-      this._updateStartifiedSampler();
     }
     return changed;
   }
@@ -646,7 +622,6 @@ class WebGLRayTracePass {
         HAS_ALPHA: this._hasAlpha,
 
         BEVEL_SAMPLES: this._bevelSamples,
-        SAMPLING_DIMENSIONS: this._samplingDimensions.reduce((a, b) => a + b),
 
         RECT_LIGHT: CONSTANT_RECT_LIGHT,
         SPHERE_LIGHT: CONSTANT_SPHERE_LIGHT,
@@ -899,19 +874,6 @@ class WebGLRayTracePass {
   }
 
   setSampleCount(sampleCount: number) {
-    if (sampleCount !== this._sampleCount) {
-      const restartSequence =
-        sampleCount === 0 || sampleCount < this._sampleCount;
-      this._sampleCount = sampleCount;
-      if (restartSequence || !this._samples) {
-        this._updateStartifiedSampler();
-      } else {
-        // The first four samples use a full-domain warm-up for a useful early
-        // preview. Start the actual stratified sequence from its first cell.
-        if (sampleCount === 4) this._samples.restart();
-        this._nextStratifiedSample();
-      }
-    }
     this._tracePasses.forEach((pass) => {
       pass.setUniform('sampleCount', sampleCount);
     });
@@ -927,44 +889,6 @@ class WebGLRayTracePass {
 
   hasDispersion() {
     return this._spectral;
-  }
-
-  private _updateSamplingDimensions() {
-    this._samplingDimensions = makeBevelSamplingDimensions(
-      this._bevelSamples
-    );
-    for (let i = 1; i <= this._bounces; i++) {
-      // specular or diffuse reflection, light importance sampling, next path direction
-      // TODO fix
-      this._samplingDimensions.push(2, 2, 2);
-      if (i >= 2) {
-        // russian roulette sampling
-        // this step is skipped on the first bounce
-        this._samplingDimensions.push(1);
-      }
-    }
-  }
-
-  private _updateStartifiedSampler() {
-    this._samples = makeStratifiedSamplerCombined(
-      this._strataCount,
-      this._samplingDimensions,
-      0
-    );
-    this._nextStratifiedSample();
-  }
-
-  private _nextStratifiedSample() {
-    const nextSamples = this._samples.next();
-
-    this._tracePasses.forEach((pass) => {
-      pass.setUniform('stratifiedSamples', nextSamples);
-      pass.setUniform(
-        'strataSize',
-        // Use a full-domain warm-up before beginning the N-way strata cycle.
-        this._sampleCount < 4 ? 1.0 : 1.0 / this._strataCount
-      );
-    });
   }
 
   prepare(): void {
@@ -1022,23 +946,30 @@ class WebGLRayTracePass {
           : this._bounces,
         CLAMPING: this._clamping || undefined,
         BEVEL_SAMPLES: this._bevelSamples,
-        SAMPLING_DIMENSIONS: this._samplingDimensions.reduce(
-          (sum, dimensions) => sum + dimensions,
-          0
-        ),
         USE_BACKGROUND: this._hasBackground,
         USE_GROUNDED_BACKGROUND: this._groundedBackgroundParams[3] > 0
       });
     });
   }
 
-  setStratifiedSampling(enabled: boolean) {
-    return this._tracePasses.reduce(
-      (changed, pass) =>
-        pass.setDefines({ USE_STRATIFIED_SAMPLING: enabled }) || changed,
-      false
-    );
+  setSamplingPattern(pattern: SamplingPattern, maxSamples: number, sequenceSeed = 0) {
+    const code = samplingPatternCode(pattern);
+    const logSPP = zSobolLog2SPP(code === 1 ? maxSamples - 1 : maxSamples);
+    const changed = this._samplingCode !== code || this._sequenceSeed !== (sequenceSeed >>> 0) ||
+      (code === 1 && this._zLogSPP !== logSPP);
+    this._samplingCode = code;
+    this._sequenceSeed = sequenceSeed >>> 0;
+    this._zLogSPP = logSPP;
+    this._tracePasses.forEach(pass => {
+      pass.setUniform('samplingPattern', code);
+      pass.setUniform('sequenceSeed', this._sequenceSeed);
+      pass.setUniform('zSobolLogSPP', logSPP);
+    });
+    return changed;
   }
+
+  // WebGL has uniform per-pixel counts; setSampleCount already includes offset.
+  setSampleSequenceOffset(_offset: number) {}
 
   dispose() {
     this._materialData?.dispose(this._renderer.gl);
@@ -1046,7 +977,6 @@ class WebGLRayTracePass {
     this._tracePasses.forEach((pass) => pass.dispose());
     const gl = this._renderer.gl;
     [
-      this._noiseTex,
       this._lightTex,
       this._openPbrEnergyLut,
       this._envMap,

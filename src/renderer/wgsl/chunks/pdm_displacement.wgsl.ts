@@ -248,7 +248,7 @@ fn intersectDisplacement(
   }
 
   // TODO dt bias?
-  var t = hitDistMin + dt * randomSample();
+  var t = hitDistMin + dt * hashedSample(2u);
   var s = _rayOrigin + _rayDir * t;
   var hRay = dot(s - _pA, faceN);
   var hSurf = select(0.0, INF, hSign < 0.0);

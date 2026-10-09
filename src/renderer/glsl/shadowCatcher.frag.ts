@@ -78,11 +78,10 @@ vec4 integrator(inout Ray ray) {
 
 void main() {
   initRandom();
-#ifndef USE_STRATIFIED_SAMPLING
   rng_initialize(v_Texcoord / pixelSize, int(sampleCount));
-#endif
 
-  vec2 uvJittered = v_Texcoord + jitter;
+
+  vec2 uvJittered = v_Texcoord + pixelJitter();
 
   vec4 origin = viewProjectionInv * vec4(uvJittered * 2.0 - 1.0, -1.0, 1.0);
   vec4 target = viewProjectionInv * vec4(uvJittered * 2.0 - 1.0, 1.0, 1.0);

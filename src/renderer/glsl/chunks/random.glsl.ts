@@ -1,43 +1,27 @@
-// Noise texture used to generate a different random number for each pixel.
-// We use blue noise in particular, but any type of noise will work.
+import sobol from './sobol.glsl';
 import { createShaderMixin, glsl, Shader } from '../../shader';
 
 export default createShaderMixin({
   uniforms: {
-    noiseTex: Shader.uniform('sampler2D'),
-    strataSize: Shader.uniform('float'),
-
-    stratifiedSamples: Shader.arrayUniform('float', 'SAMPLING_DIMENSIONS')
+    samplingPattern: Shader.uniform('int', 0),
+    sequenceSeed: Shader.uniform('int', 0),
+    zSobolLogSPP: Shader.uniform('int', 0)
   },
   main: glsl`
 
-int sampleIndex = 0;
-float pixelSeed;
+${sobol}
 
 void initRandom() {
-  // IMPORTANT: we must initialize sampleIndex to 0 in the function.
-  // Or in chrome it will be some fixed value(not sure which value it is).
-  sampleIndex = 0;
-  vec2 noiseSize = vec2(textureSize(noiseTex, 0));
-
-  // tile the small noise texture across the entire screen
-  pixelSeed = texture(noiseTex, v_Texcoord / (pixelSize * noiseSize)).r;
+  samplingPixel = uvec2(v_Texcoord / pixelSize);
+  pixelSampleIndex = uint(sampleCount);
+  samplingBounce = 0u; hashedCounter = 0u;
 }
 
-float randomSample() {
-#ifdef USE_STRATIFIED_SAMPLING
-  int i = sampleIndex % SAMPLING_DIMENSIONS;
-  float stratifiedSample = stratifiedSamples[i];
-  float random = fract((stratifiedSample + pixelSeed) * strataSize); // blue noise + stratified samples
-
-  sampleIndex += 1;
-
-  // transform random number between [0, 1] to (0, 1)
-  return EPS + (1.0 - 2.0 * EPS) * random;
-#else
-  return EPS + rand() * (1.0 - 2.0 * EPS);
-#endif
+vec2 pixelJitter() {
+  if (samplingPattern == 0 || samplingPattern == 1) {
+    return (sample2D(CAMERA_PIXEL) - 0.5) * pixelSize;
+  }
+  return jitter;
 }
-
 `
 });

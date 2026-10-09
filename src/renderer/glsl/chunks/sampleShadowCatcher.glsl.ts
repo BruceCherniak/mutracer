@@ -9,7 +9,7 @@ void sampleShadowCatcher(SurfaceInteraction si, int bounce, inout Path path) {
 
 #if defined(NUM_LIGHTS) || defined(USE_ENVMAP)
   LightSampleRec lightSample;
-  vec3 lightRnd = vec3(randomSample(), randomSample(), randomSample());
+  vec3 lightRnd = vec3(sample2D(bounceDim(LIGHT_POSITION)), sample1D(bounceDim(LIGHT_SELECT)));
   sampleLight(si.position, lightRnd, lightSample, false);
 
   vec3 lightDir = lightSample.direction;

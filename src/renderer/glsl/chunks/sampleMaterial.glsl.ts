@@ -5,7 +5,7 @@ import { glsl } from '../../shader';
 export default glsl`
 vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, inout Path path, vec3 ffnormal, float ndv, bool isSurface) {
   float occluded = 1.0;
-  vec3 lightRnd = vec3(randomSample(), randomSample(), randomSample());
+  vec3 lightRnd = vec3(sample2D(bounceDim(LIGHT_POSITION)), sample1D(bounceDim(LIGHT_SELECT)));
 
   LightSampleRec lightSample;
   sampleLight(si.position, lightRnd, lightSample, false);
@@ -88,7 +88,7 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, inout Path 
 }
 
 void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, inout Path path) {
-  vec3 matRnd = vec3(randomSample(), randomSample(), randomSample());
+  vec3 matRnd = vec3(sample2D(bounceDim(BSDF_DIRECTION)), sample1D(bounceDim(BSDF_LOBE)));
 
   // TODO TODO
   float ndv1 = -dot(si.faceNormal, path.ray.d);
@@ -132,10 +132,10 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
     // is the homogeneous-medium estimator used by PBRT and avoids the very
     // large exp((majorant - extinction) * distance) weights produced by
     // majorant tracking when OpenPBR SSS radii differ strongly by channel.
-    int mediumChannel = min(int(randomSample() * 3.0), 2);
+    int mediumChannel = min(int(sample1D(bounceDim(MEDIUM_CHANNEL)) * 3.0), 2);
     float channelExtinction = extinction[mediumChannel];
     float scatterDist = channelExtinction > 0.0
-      ? min(-log(max(randomSample(), 1e-7)) / channelExtinction, d)
+      ? min(-log(max(sample1D(bounceDim(MEDIUM_DISTANCE)), 1e-7)) / channelExtinction, d)
       : d;
     mediumSampled = scatterDist < d;
     vec3 transmittance = exp(-extinction * scatterDist);
@@ -157,7 +157,7 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
       scatterDir = sampling_henyey_greenstein(
         -path.ray.d,
         si.mediumAnisotropy,
-        vec2(randomSample(), randomSample())
+        sample2D(bounceDim(PHASE_DIRECTION))
       );
       scatteringPdf = sampling_henyey_greenstein_phase(
         dot(scatterDir, -path.ray.d),

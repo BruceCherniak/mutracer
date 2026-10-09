@@ -52,7 +52,7 @@ describe('WGPURayTracePass output resource lifetime', () => {
     vi.unstubAllGlobals();
   });
 
-  it('initializes the first sample to the same strata size as a restarted sequence', () => {
+  it('packs and resets sample counts without touching the sequence seed', () => {
     const device = {
       createBuffer: vi.fn(({ size }: GPUBufferDescriptor) => ({ size, destroy: vi.fn() })),
       createTexture: vi.fn(() => ({ destroy: vi.fn() })),
@@ -62,12 +62,14 @@ describe('WGPURayTracePass output resource lifetime', () => {
     const pass = new WGPURayTracePass(device);
     const uniform = (pass as unknown as { _rtUniform: ReturnType<typeof makeRayTraceUniform> })._rtUniform;
     try {
+      uniform.views.sequenceSeed[0] = 12;
       pass.setSampleCount(0);
-      expect(uniform.views.strataSize[0]).toBe(1.0);
+      expect(uniform.views.sampleCount[0]).toBe(0);
       pass.setSampleCount(7);
-      expect(uniform.views.strataSize[0]).toBeCloseTo(1 / 6);
+      expect(uniform.views.sampleCount[0]).toBe(7);
       pass.setSampleCount(0);
-      expect(uniform.views.strataSize[0]).toBe(1.0);
+      expect(uniform.views.sampleCount[0]).toBe(0);
+      expect(uniform.views.sequenceSeed[0]).toBe(12);
     } finally {
       pass.dispose();
     }

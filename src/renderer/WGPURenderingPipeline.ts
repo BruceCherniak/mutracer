@@ -1,3 +1,4 @@
+import type { SamplingPattern } from './sampling';
 import Mesh from '../scene/Mesh';
 import { Scene, SceneBackground, SceneLight } from '../scene/Scene';
 import Camera from '../scene/Camera';
@@ -9,7 +10,6 @@ import {
   composeDefine,
   shadowDenoiseInputMain
 } from './wgsl/compose.frag.wgsl';
-import noiseBase64 from './texture/noise';
 import halton from './hanton';
 import type { RenderingPipeline } from './RenderingPipeline';
 import { makeTileRender, makeTileRenderWithPredict } from './TileRender';
@@ -237,8 +237,6 @@ function makeWGPURenderingPipeline(
   let bloomThreshold = 1;
   let bloomRadius = 0.6;
 
-  let ready = false;
-
   let exposure = 1;
   let autoExposureEnabled = false;
   let toneMappingMode = 0;
@@ -257,7 +255,6 @@ function makeWGPURenderingPipeline(
   let pageInvisibleTime = 0;
 
   let overlay: Scene['overlay'];
-
   let oidnHDRBuffer: GPUBuffer | undefined;
   let oidnHDRTexture: GPUTexture | undefined;
   let oidnComposedBuffer: GPUBuffer | undefined;
@@ -613,13 +610,6 @@ output.color = color;
     }
   });
 
-  const noiseImage = new Image();
-  noiseImage.src = noiseBase64;
-  noiseImage.onload = () => {
-    rayTracePass.setNoise(noiseImage);
-    ready = true;
-  };
-
   let overlayTexture: GPUTexture;
   let previewTransitionTexture: GPUTexture | undefined;
   let hasPreviewTransition = false;
@@ -700,6 +690,7 @@ output.color = color;
   function sample(clear: boolean, tiles: [number, number]) {
     const encoder = device.createCommandEncoder();
     rayTracePass.setSampleCount(sampleCount + sampleSequenceOffset);
+    rayTracePass.setSampleSequenceOffset(sampleSequenceOffset);
     _updateSeed(renderWidth, renderHeight);
     const activeTimeQuery = timeQuery;
     const isUnmapped = activeTimeQuery?.resultBuffer.mapState === 'unmapped';
@@ -979,10 +970,6 @@ output.color = color;
   }
 
   function draw(camera: Camera, maxSamples: number) {
-    if (!ready) {
-      return false;
-    }
-
     // A call to draw means accumulation has been invalidated. Cancel OIDN
     // before checking shader compilation: pipeline-affecting parameter changes
     // otherwise leave the previous asynchronous denoise alive while resources
@@ -1869,8 +1856,8 @@ output.color = color;
       return changed;
     },
 
-    setStratifiedSampling(enabled: boolean) {
-      const changed = rayTracePass.setStratifiedSampling(enabled);
+    setSamplingPattern(pattern: SamplingPattern, maxSamples: number, sequenceSeed = 0) {
+      const changed = rayTracePass.setSamplingPattern(pattern, maxSamples, sequenceSeed);
       if (changed) {
         // Restart accumulation when the sampling sequence changes.
         isFirstFrame = true;

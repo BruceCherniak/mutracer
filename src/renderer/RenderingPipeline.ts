@@ -1,3 +1,4 @@
+import type { SamplingPattern } from './sampling';
 import Camera from '../scene/Camera';
 import Mesh from '../scene/Mesh';
 import Geometry from '../scene/Geometry';
@@ -146,11 +147,6 @@ export function normalizeBevelSamples(samples: number) {
   );
 }
 
-/** One independent 2D stratum supplies the axis and disk samples per probe. */
-export function makeBevelSamplingDimensions(samples: number) {
-  return Array.from({ length: normalizeBevelSamples(samples) }, () => 2);
-}
-
 /** Shared contract implemented by both the WebGL 2.0 and WebGPU pipelines. */
 export interface RenderingPipeline {
   isFirstFrame(): boolean;
@@ -208,7 +204,7 @@ export interface RenderingPipeline {
   /** Selects WebGPU primary-ray handling for glTF BLEND materials. */
   setAlphaBlendStrategy?(strategy: AlphaBlendStrategy): boolean;
   setBevelSamples(samples: number): boolean;
-  setStratifiedSampling(enabled: boolean): boolean;
+  setSamplingPattern(pattern: SamplingPattern, maxSamples: number, sequenceSeed?: number): boolean;
   getTotalSamplesRendered(): number;
   getDiagnostics(): RenderingDiagnostics;
   /** Waits for asynchronous timestamp diagnostics without changing samples. */
