@@ -224,12 +224,21 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 .dock__status b { font-size: 11.5px; font-weight: 600; }
 .dock__status .mono { color: var(--cv-text-3); font-size: 10.5px; }
 .dock__spp { color: var(--cv-text); }
-.dock__toggle { height: 28px; padding: 0 9px; color: var(--cv-text-3); font-weight: 500; }
-.dock__toggle[data-active] { color: var(--cv-accent-hover); }
+.dock__toggle { height: 28px; padding: 0 5px; gap: 7px; border: 0; border-radius: 7px; background: transparent;
+  color: var(--cv-text-2); font-size: 11px; font-weight: 500; white-space: nowrap; cursor: pointer; }
+.dock__toggle:hover:not(:disabled) { background: rgb(255 255 255 / 0.06); }
+.dock__toggle[data-selected] { color: var(--cv-accent-hover); }
+.dock__toggle:disabled { opacity: 0.45; cursor: default; }
 .dock[data-phase='error'] .dock__status b { color: var(--cv-error); }
 /* The viewport narrows when both side panels are open; drop labels first. */
+@container (max-width: 720px) { .dock__toggle--converging .dock__label { display: none; } }
 @container (max-width: 520px) { .dock .select .muted, .dock__label { display: none; } }
-@container (max-width: 400px) { .dock .sep, .dock__pause, .dock__time { display: none; } .dock__status { width: 64px; } }
+@container (max-width: 400px) {
+  .dock .sep, .dock__pause, .dock__time, .dock__toggle > svg { display: none; }
+  .dock { gap: 3px; }
+  .dock__status { width: 48px; }
+  .dock__toggle { padding: 0 3px; }
+}
 
 /* Progress ring */
 .ring { position: relative; display: grid; place-items: center; width: 30px; height: 30px; flex: none; color: var(--cv-success); }

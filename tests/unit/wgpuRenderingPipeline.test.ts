@@ -1,16 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Camera from '../../src/scene/Camera';
 import makeWGPURenderingPipeline from '../../src/renderer/WGPURenderingPipeline';
+import type { OIDNWeb } from '../../src/renderer/WGPURenderingPipeline';
 
 // Keep the real pipeline and tile scheduler; replace GPU execution at the pass boundary.
 const mocks = vi.hoisted(() => {
   class Pass {
-    setSize() {}
-    setUniform() {}
+    static instances = new Map<string, Pass>();
+    texture = { width: 80, height: 64, format: 'rgba8unorm' };
+    constructor(label = '') { Pass.instances.set(label, this); }
+    setSize(width: number, height: number) {
+      this.texture = { ...this.texture, width, height };
+    }
+    setUniform = vi.fn();
     setOutputParams() {}
-    setRenderToScreen() {}
-    getOutput() { return {}; }
-    createPass() {}
+    setRenderToScreen = vi.fn();
+    getOutput() { return this.texture; }
+    createPass = vi.fn();
     dispose() {}
   }
   class TracePass extends Pass {
@@ -27,6 +33,7 @@ const mocks = vi.hoisted(() => {
     isCompilingShader() { return false; }
     isPipelineReady() { return true; }
     hasShadowCatcher() { return false; }
+    needsDenoiseAlpha() { return false; }
     getOutputBuffer() { return {}; }
     setBounce() { return true; }
     setClamping() { return true; }
@@ -57,10 +64,13 @@ function createPipeline(timestamps = true) {
       mapAsync: async () => {},
       getMappedRange: () => new BigInt64Array([0n, 1_000_000n]).buffer
     }),
-    createTexture: () => ({ destroy() {} }),
+    createTexture: (opts: GPUTextureDescriptor) => ({
+      ...opts.size, format: opts.format, destroy: vi.fn()
+    }),
     createSampler: () => ({}),
     createCommandEncoder: () => ({
-      resolveQuerySet() {}, copyBufferToBuffer() {}, finish() { return {}; }
+      resolveQuerySet() {}, copyBufferToBuffer() {}, copyBufferToTexture() {},
+      copyTextureToTexture() {}, finish() { return {}; }
     }),
     queue: { submit() {}, onSubmittedWorkDone: async () => {} }
   } as unknown as GPUDevice;
@@ -154,4 +164,139 @@ it('restarts accumulation after changing the sampling pattern', () => {
   expect(pipeline.setSamplingPattern('zsobol',4)).toBe(true);
   pipeline.draw(camera,4);
   expect(trace.setSampleCount.mock.calls.map(([value])=>value)).toEqual([0,1,2,3]);
+});
+
+function completedDenoiser(): OIDNWeb {
+  return {
+    tileExecute(opts) {
+      const image = {
+        data: { size: opts.color.width * opts.color.height * 16 } as GPUBuffer,
+        width: opts.color.width, height: opts.color.height
+      };
+      opts.progress?.(image, undefined,
+        { x: 0, y: 0, width: image.width, height: image.height }, 0, 1);
+      opts.done(image);
+      return () => {};
+    }
+  };
+}
+
+function displayedTexture() {
+  return mocks.Pass.instances.get('output')!.createPass.mock.lastCall![1].colorTex;
+}
+
+async function denoisedPipeline() {
+  const pipeline = createPipeline(false);
+  pipeline.setOIDNPreviewActive(true);
+  pipeline.draw(new Camera('perspective'), 1);
+  await pipeline.performOIDNDenoise(completedDenoiser(), undefined, true);
+  return pipeline;
+}
+
+describe('WebGPU denoised presentation transitions', () => {
+  it('immediately restores a resized canvas from the completed presentation', async () => {
+    const pipeline = await denoisedPipeline();
+    const completedTexture = displayedTexture();
+    pipeline.setSize(160, 96);
+    const snapshot = displayedTexture();
+    expect(snapshot).not.toBe(completedTexture);
+    expect(snapshot).toMatchObject({ width: 80, height: 64 });
+    expect(mocks.Pass.instances.get('output')!.setRenderToScreen).toHaveBeenCalled();
+    pipeline.drawPostProcess();
+    expect(displayedTexture()).toBe(snapshot);
+    pipeline.dispose();
+  });
+
+  it('cancels an in-flight denoise on resize without losing the completed image', async () => {
+    const pipeline = await denoisedPipeline();
+    const abort = vi.fn();
+    let options: Parameters<OIDNWeb['tileExecute']>[0];
+    let started!: () => void;
+    const ready = new Promise<void>((resolve) => { started = resolve; });
+    const pending = pipeline.performOIDNDenoise({
+      tileExecute(opts) {
+        options = opts;
+        started();
+        return abort;
+      }
+    }, undefined, true);
+    await ready;
+    pipeline.setSize(160, 96);
+    const snapshot = displayedTexture();
+    expect(snapshot).toMatchObject({ width: 80, height: 64 });
+    expect(abort).toHaveBeenCalledOnce();
+    expect(await pending).toBe(false);
+    options!.progress?.({ data: {} as GPUBuffer, width: 80, height: 64 },
+      undefined, { x: 0, y: 0, width: 80, height: 64 }, 0, 1);
+    expect(displayedTexture()).toBe(snapshot);
+    pipeline.dispose();
+  });
+
+  it('re-presents the completed frame when camera preview starts, then settles', async () => {
+    const pipeline = await denoisedPipeline();
+    const camera = new Camera('perspective');
+    pipeline.needsRestartSample(camera, true);
+    expect(pipeline.isPreviewMode()).toBe(true);
+    pipeline.draw(camera, 1);
+    const snapshot = displayedTexture();
+    expect(snapshot).toMatchObject({ width: 80, height: 64 });
+    // Composition is updated with raw samples while the snapshot is held.
+    // Settling must keep the displayed snapshot, not capture those raw samples.
+    pipeline.setPreviewTransitionDenoisePending(true);
+    pipeline.setInteractivePreviewParams({
+      enabled: false, resolutionScale: 0.5, bounces: 2, idleDelayMs: 150
+    });
+    pipeline.draw(camera, 1);
+    expect(displayedTexture()).toBe(snapshot);
+    await pipeline.performOIDNDenoise(completedDenoiser(), undefined, true);
+    expect(displayedTexture()).not.toBe(snapshot);
+    pipeline.dispose();
+  });
+
+  it('holds the completed preview after OIDN lowers its adaptive resolution', async () => {
+    let now = 0;
+    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    try {
+      const pipeline = createPipeline(false);
+      pipeline.setSize(320, 256);
+      pipeline.setOIDNPreviewActive(true);
+      const camera = new Camera('perspective');
+      pipeline.needsRestartSample(camera, true);
+      pipeline.draw(camera, 1);
+      const denoiser = completedDenoiser();
+      const execute = denoiser.tileExecute;
+      denoiser.tileExecute = (opts) => {
+        now += 640;
+        return execute(opts);
+      };
+      expect(await pipeline.performOIDNDenoise(denoiser, undefined, true)).toBe(true);
+      expect(pipeline.isFirstFrame()).toBe(true);
+      pipeline.drawPostProcess();
+      const snapshot = displayedTexture();
+      expect(snapshot).toMatchObject({ width: 160, height: 128 });
+      pipeline.draw(camera, 1);
+      expect(displayedTexture()).toBe(snapshot);
+      await pipeline.performOIDNDenoise(completedDenoiser(), undefined, true);
+      expect(displayedTexture()).toMatchObject({ width: 48, height: 32 });
+      pipeline.dispose();
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it('stops holding the previous denoise when denoising is disabled or samples restart', async () => {
+    const pipeline = await denoisedPipeline();
+    pipeline.setSize(160, 96);
+    const snapshot = displayedTexture();
+    pipeline.restartSamples();
+    pipeline.draw(new Camera('perspective'), 1);
+    expect(displayedTexture()).not.toBe(snapshot);
+    await pipeline.performOIDNDenoise(completedDenoiser(), undefined, true);
+    pipeline.setSize(240, 128);
+    const nextSnapshot = displayedTexture();
+    pipeline.setOIDNPreviewActive(false);
+    pipeline.draw(new Camera('perspective'), 1);
+    expect(displayedTexture()).not.toBe(nextSnapshot);
+    pipeline.dispose();
+  });
 });

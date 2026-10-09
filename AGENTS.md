@@ -74,3 +74,8 @@ sample count) on a real GPU before and after, and compare
   and leave the decision to the maintainer.
 - Keep reusable documentation in `docs/`. Do not commit dated experiment logs
   or scene-specific evidence there.
+
+## Commit messages
+
+- Keep the commit subject concise. Put implementation details, the reason for
+  the change, and validation results in the commit body (description).

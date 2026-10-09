@@ -624,8 +624,10 @@ output.color = color;
   let previewTransitionTexture: GPUTexture | undefined;
   let hasPreviewTransition = false;
 
-  function _capturePreviewTransition() {
-    const source = composePass.getOutput('color');
+  function _capturePresentationSnapshot(
+    source: GPUTexture,
+    encoder: GPUCommandEncoder
+  ) {
     if (!source || !source.width || !source.height) return;
     const copySize: GPUExtent3DDict = {
       width: source.width,
@@ -640,7 +642,7 @@ output.color = color;
     ) {
       const previous = previewTransitionTexture;
       previewTransitionTexture = device.createTexture({
-        label: 'Preview transition snapshot',
+        label: 'Presentation snapshot',
         size: copySize,
         // HDR changes the next compose target lazily. A preview can end in
         // that same render call, before the old target has been replaced.
@@ -655,14 +657,30 @@ output.color = color;
           .then(() => previous.destroy());
       }
     }
-    const encoder = device.createCommandEncoder();
     encoder.copyTextureToTexture(
       { texture: source },
       { texture: previewTransitionTexture },
       copySize
     );
-    device.queue.submit([encoder.finish()]);
-    hasPreviewTransition = true;
+  }
+
+  function _present(encoder: GPUCommandEncoder, texture: GPUTexture) {
+    outputPass.setUniform('previewTransitionPercent', 0);
+    outputPass.setUniform(
+      'overlayPos',
+      overlay
+        ? [overlay.x, overlay.y, overlay.width, overlay.height]
+        : [1e5, 1e5, 0, 0]
+    );
+    outputPass.setRenderToScreen(
+      ctx.getCurrentTexture(),
+      currentPresentationFormat
+    );
+    outputPass.createPass(encoder, {
+      colorTex: texture,
+      overlayTex: overlayTexture,
+      previewTransitionTex: texture
+    });
   }
 
   function _createOverlayTexture(width: number, height: number) {
@@ -949,35 +967,25 @@ output.color = color;
     // While-converging preview presents at OIDN throughput: keep the last denoised
     // frame on the canvas instead of flashing each raw 1spp restart.
     const holdDenoisedFrame =
-      previewMode && oidnPreviewActive && output === 'final' &&
-      !oidnHDRBuffer && !oidnComposedBuffer && presentedDenoised;
-    if (holdDenoisedFrame) {
-      device.queue.submit([encoder.finish()]);
-      if (hdrPeakReadbackSubmitted) {
-        void activeHDRPeakMeter?.resolve();
-      }
-      return;
+      oidnPreviewActive && output === 'final' &&
+      !oidnHDRBuffer && !oidnComposedBuffer && presentedDenoised &&
+      !!previewTransitionTexture;
+    if (showPreviewTransition || holdDenoisedFrame) {
+      // Canvas resizes discard its contents. Re-present the completed image
+      // from independent storage, including across adaptive preview resizes.
+      // Do not blend it with unresolved raw inputs: even a zero-weight NaN
+      // from a newly allocated accumulation texture can spoil the image.
+      displayTexture = previewTransitionTexture!;
+    } else if (
+      oidnPreviewActive && output === 'final' &&
+      (oidnHDRBuffer || oidnComposedBuffer)
+    ) {
+      _capturePresentationSnapshot(displayTexture, encoder);
     }
     presentedDenoised =
       output === 'final' &&
-      (!!oidnHDRBuffer || !!oidnComposedBuffer || showPreviewTransition);
-    outputPass.setUniform('previewTransitionPercent', +showPreviewTransition);
-    outputPass.setUniform(
-      'overlayPos',
-      overlay
-        ? [overlay.x, overlay.y, overlay.width, overlay.height]
-        : [1e5, 1e5, 0, 0]
-    );
-    // current texture will change each frame.
-    outputPass.setRenderToScreen(
-      ctx.getCurrentTexture(),
-      currentPresentationFormat
-    );
-    outputPass.createPass(encoder, {
-      colorTex: displayTexture,
-      overlayTex: overlayTexture,
-      previewTransitionTex: previewTransitionTexture || displayTexture
-    });
+      (!!oidnHDRBuffer || !!oidnComposedBuffer || showPreviewTransition || holdDenoisedFrame);
+    _present(encoder, displayTexture);
     if (
       hasPreviewTransition &&
       !previewMode &&
@@ -1186,7 +1194,12 @@ output.color = color;
     if (previewMode && !nextPreviewMode) {
       // Preserve the last complete preview while the first full-resolution
       // sample is rendered tile by tile.
-      _capturePreviewTransition();
+      if (!oidnPreviewActive || !presentedDenoised || !previewTransitionTexture) {
+        const encoder = device.createCommandEncoder();
+        _capturePresentationSnapshot(composePass.getOutput('color'), encoder);
+        device.queue.submit([encoder.finish()]);
+      }
+      hasPreviewTransition = !!previewTransitionTexture;
     } else if (nextPreviewMode) {
       hasPreviewTransition = false;
     }
@@ -1227,6 +1240,13 @@ output.color = color;
     screenHeight = height;
     _applyRenderResolution();
     outputPass.setSize(screenWidth, screenHeight);
+    if (oidnPreviewActive && presentedDenoised && previewTransitionTexture) {
+      // A resize can happen during an OIDN frame or a hidden timing probe.
+      // Restore the canvas immediately, before either one completes.
+      const encoder = device.createCommandEncoder();
+      _present(encoder, previewTransitionTexture);
+      device.queue.submit([encoder.finish()]);
+    }
     isFirstFrame = true;
   }
   function setMeshes(meshes: Mesh[], update?: Parameters<RenderingPipeline['setMeshes']>[1]) {
@@ -1762,6 +1782,7 @@ output.color = color;
     restartSamples() {
       cancelOIDNDenoise();
       preserveOIDNOutput = false;
+      presentedDenoised = false;
       previewTransitionDenoisePending = false;
       hasPreviewTransition = false;
       (tileRenderWithPredict || tileRender).reset();
@@ -1859,6 +1880,7 @@ output.color = color;
 
     setOIDNPreviewActive(active: boolean) {
       oidnPreviewActive = active;
+      if (!active) presentedDenoised = false;
     },
 
     setPreserveOIDNOutput(preserve: boolean) {

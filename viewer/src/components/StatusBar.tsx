@@ -100,23 +100,31 @@ export function StatusBar() {
         onChange={(v) => setSettings({ resolutionScale: Number(v) })}
       />
       <button
-        className="btn btn--ghost dock__toggle"
-        aria-pressed={denoise}
+        type="button"
+        role="switch"
+        className="switch-field dock__toggle"
+        aria-label="Denoise"
+        aria-checked={denoise}
+        data-selected={denoise || undefined}
         disabled={!webgpu}
         title={webgpu ? 'Intel Open Image Denoise (D)' : 'Denoising requires WebGPU'}
-        data-active={denoise || undefined}
         onClick={() => setSettings({ denoise: !settings.denoise })}
       >
-        <Sparkles size={13} /><span className="dock__label">Denoise</span>
+        <Sparkles size={13} aria-hidden="true" /><span className="dock__label">Denoise</span>
+        <span className="switch" aria-hidden="true"><i /></span>
       </button>
       {denoise && <button
-        className="btn btn--ghost dock__toggle"
-        aria-pressed={settings.denoiseWhileConverging}
+        type="button"
+        role="switch"
+        className="switch-field dock__toggle dock__toggle--converging"
+        aria-label="Live denoise"
+        aria-checked={settings.denoiseWhileConverging}
+        data-selected={settings.denoiseWhileConverging || undefined}
         title="Denoise while converging: previews and every few samples, not only the final image"
-        data-active={settings.denoiseWhileConverging || undefined}
         onClick={() => setSettings({ denoiseWhileConverging: !settings.denoiseWhileConverging })}
       >
-        <Zap size={13} /><span className="dock__label">While converging</span>
+        <Zap size={13} aria-hidden="true" /><span className="dock__label">Live</span>
+        <span className="switch" aria-hidden="true"><i /></span>
       </button>}
     </div>
   );
