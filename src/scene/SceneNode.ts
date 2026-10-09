@@ -6,7 +6,7 @@ export default class SceneNode {
   /**
    * Local-to-world transform (column-major 4x4, gl-matrix layout).
    * Mesh matrix edits, including element edits in place, are detected on the
-   * next render. WebGPU refits changed instances; WebGL rebuilds mesh data.
+   * next render. Both WebGPU and WebGL 2 refit changed instances.
    */
   matrixWorld = mat4.create();
 }

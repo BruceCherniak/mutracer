@@ -44,10 +44,37 @@ const stats = await precomputeTinyBvh(scene.meshes, 'cwbvh');
 
 ## Animation
 
-On WebGPU, transform-only changes refit the TLAS instead of rebuilding it.
-Edit `mesh.matrixWorld` in place while retaining the mesh objects and array;
-the renderer compares matrix values automatically. WebGL transform changes
-rebuild mesh data because that backend has no TLAS refit.
+Transform-only changes refit the TLAS on both WebGPU and WebGL 2.
+Edit `mesh.matrixWorld` in place while retaining mesh objects and the array;
+the renderer compares matrix values automatically. WebGPU uploads changed
+byte ranges; WebGL 2 uploads the texture rows covering those ranges.
+
+For frequent vertex deformation, set `geometry.dynamic = true` (default:
+`false`). Dynamic geometries always use the built-in binary `bvh2` layout,
+including when the renderer otherwise uses TinyBVH or a precomputation request
+selects a different layout. An incompatible precomputed BLAS is rebuilt.
+Three.js skinning and morph conversion sets this hint automatically.
+
+After editing arrays in place, call `geometry.markUpdated()`. If attribute and
+index array identities, lengths and item sizes remain unchanged, both backends
+update only that geometry's merged vertex ranges and BLAS. All instances that
+share the geometry receive refreshed bounds and a TLAS refit. Changes to
+vertex attributes, transforms and materials can be combined in one frame.
+Replaced arrays or changed lengths require full preparation. Changed index
+contents rebuild the affected BLAS. Displaced or simplified geometry also
+requires full preparation because it changes the prepared vertex topology.
+
+Dynamic BLAS refits sum node surface areas and compare the total with the last
+build. When it exceeds twice that build's total, the affected BLAS is rebuilt.
+This limits deterioration during sustained deformation while retaining the
+layout for smaller pose changes. If rebuilding changes a BLAS's size, the
+combined BVH buffer is uploaded again; unchanged geometry buffers are retained.
+Non-dynamic geometries refit supported layouts or rebuild unsupported ones.
+
+Instance membership changes that use resident single-material geometry rebuild
+TLAS and instance data while reusing vertices and BLASes. Structural changes
+involving displacement, simplification or geometry-dependent multi-material
+indices require full preparation.
 
 ## Worker precomputation
 

@@ -116,7 +116,7 @@ values each frame. You can keep the same scene and arrays while editing:
 | --- | --- |
 | Camera or renderer option changed | Nothing; checked each render |
 | Meshes added, removed or reordered | Edit `scene.meshes` in place or replace the array |
-| Mesh matrix elements changed | Nothing; WebGPU refits changed instances, WebGL rebuilds mesh data |
+| Mesh matrix elements changed | Nothing; both WebGPU and WebGL 2 refit changed instances |
 | Mesh geometry or material reference replaced | Nothing; detected automatically |
 | Material parameters edited | `material.markUpdated()` |
 | Geometry attributes or arrays edited | `geometry.markUpdated()` |

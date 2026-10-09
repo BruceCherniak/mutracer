@@ -33,11 +33,26 @@
   It preserves mesh, geometry, material, texture and light identities. One-shot
   conversion creates fresh resources and is intended for static setup.
 - Animate existing mesh matrices while retaining the mesh objects and array.
-  WebGPU automatically refits changed TLAS instances; WebGL transforms rebuild
-  mesh data.
+  Both WebGPU and WebGL 2 refit changed TLAS instances and upload only
+  affected instance/BVH ranges.
+- For vertex animation, retain attribute/index arrays, set `geometry.dynamic =
+  true` (default `false`), then call `geometry.markUpdated()` after edits.
+  Changed geometries update their own vertex/BLAS regions and shared instance
+  bounds. Displacement and simplification need full preparation; replaced
+  arrays or changed lengths also require it.
+- Three.js skinning and morph targets run on the CPU and retain deformation
+  buffers. Cost scales with vertices, influences and material groups. An
+  unchanged pose skips deformation. Dynamic BLASes rebuild when total node
+  surface area exceeds twice the last build's total.
+- InstancedMesh shares vertex data and BLAS but adds one TLAS instance per
+  instance and group. Count edits rebuild instance/TLAS data. Instance colors
+  add a cached material per distinct RGB value and source material; reuse
+  colors to keep material packing and memory bounded.
 - Call `material.markUpdated()` after parameter edits. Both backends repack
   parameters without geometry work. Emission edits also refresh sampling state,
-  and texture edits rebuild the atlas. Displacement geometry settings and
+  and texture edits rebuild the atlas. Non-emissive texture edits skip emissive
+  triangle collection. Emissive bindings cache transformed triangles, and
+  environment power is cached while its image is unchanged. Displacement geometry settings and
   tessellated displacement emission edits require full mesh updates.
 - Analytic-light parameter edits retain the environment map. Ambient/environment
   edits resynthesize it. Rect-light texture edits still require a full mesh

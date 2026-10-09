@@ -40,7 +40,8 @@ renderer.render(sync.scene, fromTHREECamera(threeCamera));
 
 `changes: THREESceneChanges` is informational: `transforms` counts changed mesh
 matrices, `membership` reports mesh membership changes, `content` reports mesh
-structure or material changes, and `lights` / `background` report their edits.
+structure, geometry deformation or material changes, and `lights` /
+`background` report their edits.
 Nothing needs to be forwarded to the renderer. Material edits are converted
 and versioned automatically; Three.js `material.needsUpdate` is not required
 for color or roughness edits.
@@ -49,7 +50,9 @@ After editing attribute/index arrays, set the edited Three.js attribute's
 `needsUpdate = true` (for an interleaved attribute, set
 `attribute.data.needsUpdate = true`). The sync checks the identities and
 versions of position, normal, tangent, uv, uv1 and index buffers, replacing
-converted geometry when they change. After editing texture pixels, set
+converted geometry when they change. Deforming meshes instead update position,
+normal and tangent arrays in place when only deformation inputs change. After
+editing texture pixels, set
 `threeTexture.needsUpdate = true`; the existing ClayPT Texture is refreshed in
 place. Texture image and UV metadata assignments are also detected.
 
@@ -63,7 +66,8 @@ sync.update();
 `fromTHREEScene(threeScene, options?)` is a one-shot conversion: every call
 creates fresh ClayPT objects. Use it for static setup. Both APIs accept an
 optional `onMeshConverted(mesh, source, group, groupIndex)` callback (default:
-none); the sync calls it for each visible group on every update.
+none); the sync calls it for each visible group and expanded instance on every
+update.
 Call `sync.dispose()` when finished to release its caches. Its last scene
 remains usable; calling `update()` after disposal throws.
 
@@ -72,8 +76,8 @@ and `Mesh.displacementUvProjection` overrides. These default to inheriting the
 material. A shared material can therefore render a UV-bearing mesh with its
 UVs and a UV-less mesh with triplanar projection without changing material
 identity. Explicit procedural material projections continue to take precedence
-in the converter. WebGPU rotation refits instances; WebGL rotation rebuilds
-mesh data. Material edits use incremental updates on both backends.
+in the converter. Rotation refits instances on both WebGPU and WebGL 2.
+Material edits use incremental updates on both backends.
 
 `fromTHREECamera(camera)` is cheap; call it every frame. Call
 `camera.updateProjectionMatrix()` after changing its aspect or fov.
@@ -84,6 +88,8 @@ mesh data. Material edits use incremental updates on both backends.
 | --- | --- |
 | `Mesh` with `MeshStandardMaterial` / `MeshPhysicalMaterial` | `Mesh` + `OpenPBRMaterial` (color, metalness, roughness, maps, normal map, emissive, transmission, attenuation, IOR, clearcoat, sheen, iridescence, anisotropy, alpha) |
 | `Mesh` with `MeshBasicMaterial` (glTF `KHR_materials_unlit`) | Unlit emissive material |
+| `SkinnedMesh` / mesh with morph targets | CPU-deformed dynamic geometry |
+| `InstancedMesh` | One mesh per instance, sharing geometry and BLAS; cached color material variants |
 | Multi-material groups | One ClayPT mesh per group |
 | `DirectionalLight` | `DirectionalLight` |
 | `PointLight` | `SphereLight` (radius `userData.clayptRadius`, default 0.25) |
@@ -94,7 +100,61 @@ mesh data. Material edits use incremental updates on both backends.
 | `scene.background` color / texture | Background; the environment itself when `background === environment` |
 
 Invisible objects are skipped. Other material types are skipped with a console
-warning. `InstancedMesh` instances are not expanded.
+warning. `BatchedMesh`, instanced morph targets (`morphTexture`) and skinned
+instancing are unsupported: each source object warns once per converter and is
+converted as an ordinary mesh.
+
+## Skinning and morph targets
+
+The initial conversion and each `sync.update()` evaluate morph targets and
+skinning on the CPU. The sync calls `skeleton.update()` itself, so a preceding
+Three.js render is unnecessary. Relative and absolute morph targets affect
+positions and normals; skinning transforms positions, normals and supplied
+tangents in local space. Missing tangents are generated from the deformed
+positions, normals and UVs. The mesh's world transform remains an instance
+transform.
+
+Each deforming source mesh owns its ClayPT geometry, even when several
+SkinnedMesh objects share a Three.js BufferGeometry. Material groups own
+separate geometries, while deformation is calculated once per source mesh
+and copied to each group. These geometries use `dynamic = true` and the
+built-in binary BLAS; see [BVH animation](./bvh.md#animation).
+
+Pose, binding matrices, morph weights and attribute versions are compared to
+the preceding update. An unchanged pose retains the arrays and geometry
+version. A changed pose updates the arrays in place and versions the geometry.
+Rendering then uploads only the changed geometry and BLAS regions and refits
+its instances on both backends. CPU deformation cost grows with vertices and
+bone influences; repeated groups also add copying and tangent-generation cost.
+Displacement or geometry simplification requires full geometry preparation.
+
+Try the procedural [animation example](../examples/animation.html). Pause the
+animation to accumulate samples; changing a pose restarts accumulation.
+
+## Instanced meshes
+
+`InstancedMesh.count` expands to that many ClayPT meshes per material group.
+Instances share converted geometry and its BLAS. Each world matrix is
+`source.matrixWorld * instanceMatrix[i]`. Editing instance matrices and setting
+`instanceMatrix.needsUpdate = true` updates retained matrix arrays; rendering
+refits the affected TLAS instances without merging geometry.
+
+Changing `count` retains the existing prefix and adds or removes only the
+tail. Both backends rebuild TLAS and instance data while retaining resident
+vertices and BLASes. This also handles removal of every instance and later
+restoration. Introducing geometry that has never been prepared, displacement,
+simplification or geometry-dependent multi-material vertex indices requires
+full mesh preparation instead.
+
+`instanceColor` multiplies `baseColor`, including textured color. For an unlit
+MeshBasicMaterial it also multiplies the converted `emissionColor`. After
+editing colors, set `instanceColor.needsUpdate = true`. Materials are cached
+by source material and exact RGB values: repeated colors share one variant,
+while N distinct colors can add N materials per source material. Source edits
+refresh every cached variant. Historical colors remain cached until
+`sync.dispose()`, so frequently inventing new colors increases memory use.
+A color switch updates instance material indices and, when needed, material
+buffers and the texture atlas; it does not duplicate vertex data.
 
 ## `userData` keys
 

@@ -625,7 +625,7 @@ function convertGeometry(
 
 /** Options for one-shot conversion and persistent Three.js synchronization. */
 export interface FromTHREESceneOptions {
-  /** Receives each converted mesh/group on every update. Default: no callback. */
+  /** Receives each converted mesh/group/instance on every update. Default: no callback. */
   onMeshConverted?(
     mesh: Mesh,
     source: THREE.Mesh,
@@ -685,6 +685,9 @@ function retainLight(store: ConversionStore, source: THREE.Object3D | THREE.Text
  * `MeshStandardMaterial` / `MeshPhysicalMaterial` (mapped to OpenPBR),
  * directional, ambient, rect-area, point and spot lights, and the scene
  * background / environment. Calls `scene.updateMatrixWorld()` and creates fresh objects on every call.
+ * CPU-evaluates skinning/morph targets and expands InstancedMesh instances
+ * with shared geometry and cached color material variants. Unsupported batched
+ * or instanced deformation falls back to an ordinary mesh with a warning.
  * For animation and editing, use {@link THREESceneSync}.
  *
  * Renderer-specific material settings can be supplied through
@@ -1060,7 +1063,12 @@ export interface THREESceneChanges {
   background: boolean;
 }
 
-/** Keeps one ClayPT scene in sync with a Three.js scene, reusing unchanged objects. */
+/**
+ * Keeps one ClayPT scene in sync with a Three.js scene, reusing unchanged objects.
+ * Skinning/morph targets run on the CPU with per-source-mesh dynamic geometry.
+ * InstancedMesh retains its prefix on count changes and shares geometry/BLAS;
+ * each distinct source-material/RGB pair uses a cached material variant.
+ */
 export class THREESceneSync {
   readonly scene: Scene;
   private _store = createConversionStore();
@@ -1074,7 +1082,7 @@ export class THREESceneSync {
     this._detector.commit();
   }
 
-  /** Calls updateMatrixWorld and updates the scene in place. */
+  /** Updates world/bone matrices, changed CPU deformation and retained instances in place. */
   update(): THREESceneChanges {
     if (this._disposed) throw new Error('THREESceneSync has been disposed');
     const next = convertScene(this._source, this._options, this._store);

@@ -82,7 +82,7 @@ function frame(time: number) {
   const delta = (time - lastTime) / 1000;
   lastTime = time;
   if (rotateInput.checked) {
-    // WebGPU refits instance transforms; WebGL rebuilds its mesh data.
+    // Both backends refit the changed instance transforms.
     pieces.rotation.y += delta * 0.3;
   }
   sync.update();

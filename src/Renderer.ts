@@ -1033,8 +1033,8 @@ export default class Renderer {
    * detected automatically and restart accumulation. After editing material
    * parameters, geometry arrays or texture pixels/UV arrays in place, call
    * that material's, geometry's or texture's `markUpdated()`.
-   * Unchanged scenes retain their accumulation. WebGPU refits transform-only
-   * changes; WebGL rebuilds mesh data for transforms.
+   * Unchanged scenes retain their accumulation. Both backends refit transforms
+   * and incrementally upload changed geometry with stable attribute arrays.
    *
    * @param forceOutput Re-run post-processing (tone mapping, bloom) even if
    *   no new samples are rendered.

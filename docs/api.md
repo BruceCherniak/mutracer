@@ -135,7 +135,7 @@ If a denoiser is set, the result is denoised before the promise resolves.
 | --- | --- |
 | `Scene` | `{ meshes, lights, background?, overlay? }` |
 | `Mesh` | `new Mesh(geometry, material \| material[])`, `matrixWorld`; optional `uvProjection` and `displacementUvProjection` override the material per mesh (default: inherit) |
-| `Geometry`, `GeometryAttribute` | Triangle data: `position`, `normal`, `indices`, optional `uv`, `uv1`, `tangent`, `color`, `materialIndex` |
+| `Geometry`, `GeometryAttribute` | Triangle data: `position`, `normal`, `indices`, optional `uv`, `uv1`, `tangent`, `color`, `materialIndex`; `dynamic` (default `false`) selects the built-in refittable BLAS when `true` |
 | `OpenPBRMaterial` | See [materials](./materials.md) |
 | `Texture` | Image, canvas or `{ data, width, height }`; 8-bit is sRGB, float is linear |
 | `Camera` | `'perspective'` or `'orthographic'`; `Camera.lookAt(camera, eye, target, up?)` |
@@ -146,8 +146,11 @@ If a denoiser is set, the result is denoised before the promise resolves.
 `Geometry`, `Texture` and `OpenPBRMaterial` expose `version` (initially `0`)
 and `markUpdated(): this`. Versions advance with each call. Replacing geometry
 or material references on a Mesh is detected automatically. Mesh projection
-overrides apply to all its materials and require instance data to be rebuilt;
-WebGPU transform-only edits refit instances, while WebGL transforms rebuild.
+overrides apply to all its materials and require instance data to be rebuilt.
+Both backends refit transform-only edits. Geometry version changes with stable
+attribute/index arrays update only affected geometry and BLAS regions;
+replaced arrays, displacement and simplification require full preparation.
+Dynamic BLASes rebuild above twice their last build's total node surface area.
 
 ## Helpers
 
@@ -158,7 +161,7 @@ WebGPU transform-only edits refit instances, while WebGL transforms rebuild.
 | `computeMeshesBoundingBox(meshes)` | World-space bounds |
 | `loadRGBE(url)`, `parseRGBE(buffer)` | Radiance `.hdr` → float `Texture` |
 | `fromTHREEScene`, `fromTHREECamera` | One-shot Three.js scene and camera conversion; see [Three.js](./threejs.md) |
-| `THREESceneSync` | `new THREESceneSync(threeScene, options?)`; retains `scene` and resources across `update()` calls; `dispose()` releases caches |
+| `THREESceneSync` | `new THREESceneSync(threeScene, options?)`; retains `scene` and resources across `update()` calls; CPU skinning/morph and shared-geometry instance expansion; `dispose()` releases caches |
 | `THREESceneChanges` | Informational result of `update()`: `transforms`, `membership`, `content`, `lights`, `background`; no forwarding to Renderer needed |
 | `FromTHREESceneOptions` | Optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |
 | `loadGLTF(url)` | Minimal built-in glTF 2.0 loader; prefer Three.js `GLTFLoader` |
