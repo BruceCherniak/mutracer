@@ -961,6 +961,11 @@ export function updateMeshInstances(meshes: Mesh[]) {
     geometry,
     geometries,
     geometryRegions,
+    geometryStates: new Map(instanceBindings.map(binding => {
+      const source = binding.mesh.geometry;
+      return [source, { topologyVersion: source.topologyVersion, indices: source.indices.array,
+        indexCount: source.indices.array.length }];
+    })),
     instances,
     materials,
     instanceBindings,

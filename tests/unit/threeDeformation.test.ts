@@ -87,3 +87,27 @@ it('initializes generated tangents before rendering and refreshes them in the sa
   const fresh=fromTHREEScene(source).meshes[0].geometry;
   expect(new Uint32Array(array.buffer)).toEqual(new Uint32Array(fresh.tangent!.array.buffer));
 });
+
+it('reads normalized interleaved attributes and offsets without component accessors', async () => {
+  const { THREEDeformation } = await import('../../src/util/threeDeformation');
+  const {mesh,bone,geometry} = skin(); const count = geometry.attributes.position.count;
+  const data = new Int16Array(count * 5);
+  const original = geometry.attributes.position;
+  for (let i = 0; i < count; i++) data.set([123, original.getX(i)*32767, original.getY(i)*32767, original.getZ(i)*32767, 456],i*5);
+  const buffer = new THREE.InterleavedBuffer(data,5);
+  const position = new THREE.InterleavedBufferAttribute(buffer,3,1,true);
+  geometry.setAttribute('position',position);
+  const weights = new Uint8Array(count*6); for(let i=0;i<count;i++) weights[i*6+1]=255;
+  geometry.setAttribute('skinWeight',new THREE.InterleavedBufferAttribute(new THREE.InterleavedBuffer(weights,6),4,1,true));
+  bone.rotation.y=.3;mesh.updateMatrixWorld(true);
+  const expected = Array.from({length:count},(_,i)=>mesh.getVertexPosition(i,new THREE.Vector3()).toArray());
+  for (const attr of Object.values(geometry.attributes)) for(const method of ['getX','getY','getZ','getW'] as const) {
+    vi.spyOn(attr,method).mockImplementation(()=>{throw Error('Component accessor used')});
+  }
+  const deformation = new THREEDeformation(geometry);expect(deformation.update(mesh)).toBe(true);
+  expected.forEach((v,i)=>v.forEach((value,c)=>expect(deformation.position[i*3+c]).toBeCloseTo(value,6)));
+  expect(deformation.update(mesh)).toBe(false);
+  // Layout edits count as changes even without replacing the buffer.
+  position.offset = 2;expect(deformation.update(mesh)).toBe(true);
+  buffer.needsUpdate = true;expect(deformation.update(mesh)).toBe(true);
+});

@@ -266,12 +266,17 @@ function packH(minH: number, maxH: number): number {
 // TODO Actually current structure is not fast when each leaf only have one primitive.
 // But it accelerated a lot for the result of https://github.com/madmann91/bvh
 // In which leaf may have multiple primitives.
+// Leaf topology is immutable between BLAS builds. Deduplicate shared triangle
+// corners once so deformation refits read each leaf's vertex only once.
+const blasRefitVertices = new WeakMap<ArrayBuffer, { offsets: Int32Array; vertices: Uint32Array; postorder: Int32Array }>();
+
 export function flattenBvh(
   bvh: InteriorNode | undefined,
   isTLAS: boolean,
   trianglesDisplacement?: Float32Array
 ): FlattendBVH {
   const flat: number[] = [];
+  const postorder: number[] = [];
   const instancesArr: number[] | undefined = isTLAS ? [] : undefined;
 
   let buildSurfaceArea = 0;
@@ -349,6 +354,7 @@ export function flattenBvh(
       flat[start + 3] = flat.length / 4; // pointer to second child
       traverse((node as InteriorNode).child1, depth + 1);
     }
+    if (!isTLAS) postorder.push(start / 4);
   };
 
   bvh && traverse(bvh);
@@ -357,6 +363,9 @@ export function flattenBvh(
   const floatView = new Float32Array(buffer);
   const intView = new Int32Array(buffer);
 
+  const leafOffsets = isTLAS ? undefined : new Int32Array(flat.length / 4);
+  const leafVertices: number[] = [];
+  const uniqueVertices = new Set<number>();
   for (let k = 0; k < flat.length; ) {
     const primCountOrSplitAxis = flat[k + 3];
     intView[k + 3] = primCountOrSplitAxis;
@@ -375,14 +384,23 @@ export function flattenBvh(
       intView[k - 1] = flat[k - 1];
     } else {
       // Is leaf
+      uniqueVertices.clear();
+      const leafIndex = (k - 8) / 4;
       for (let i = 0; i < -primCountOrSplitAxis; i++) {
         for (let j = 0; j < 4; j++) {
           intView[k + j] = flat[k + j];
+          if (leafOffsets && j < 3) uniqueVertices.add(flat[k + j]);
         }
         k += 4;
       }
+      if (leafOffsets) {
+        leafOffsets[leafIndex] = leafVertices.length;
+        leafVertices.push(uniqueVertices.size);
+        for (const vertex of uniqueVertices) leafVertices.push(vertex);
+      }
     }
   }
+  if (leafOffsets) blasRefitVertices.set(buffer, { offsets: leafOffsets, vertices: new Uint32Array(leafVertices), postorder: new Int32Array(postorder) });
 
   let instancesArrBuffer;
   if (instancesArr) {
@@ -678,58 +696,95 @@ export function refitBLAS(
   if ((flattened.layout ?? 'bvh2') !== 'bvh2' || !flattened.buffer.byteLength) {
     return false;
   }
+  const cached = blasRefitVertices.get(flattened.buffer);
+  if (cached) return refitCachedBLAS(flattened, geometry, cached);
   const floats = new Float32Array(flattened.buffer);
   const ints = new Int32Array(flattened.buffer);
   const positions = geometry.position.array;
   let beforeArea = 0, afterArea = 0;
 
-  function addVertex(bounds: Box3, vertexIndex: number) {
-    const offset = vertexIndex * geometry.position.itemSize;
-    const x = positions[offset];
-    const y = positions[offset + 1];
-    const z = positions[offset + 2];
-    if (!isFinite(x) || !isFinite(y) || !isFinite(z)) return;
-    bounds.min[0] = Math.min(bounds.min[0], x);
-    bounds.min[1] = Math.min(bounds.min[1], y);
-    bounds.min[2] = Math.min(bounds.min[2], z);
-    bounds.max[0] = Math.max(bounds.max[0], x);
-    bounds.max[1] = Math.max(bounds.max[1], y);
-    bounds.max[2] = Math.max(bounds.max[2], z);
-  }
-
-  function refitNode(index: number): Box3 {
+  const stride = geometry.position.itemSize;
+  function refitNode(index: number): void {
     const base = index * 4;
-    const bounds = new Box3();
-    const dx = floats[base + 4] - floats[base], dy = floats[base + 5] - floats[base + 1], dz = floats[base + 6] - floats[base + 2];
+    let dx = floats[base + 4] - floats[base], dy = floats[base + 5] - floats[base + 1], dz = floats[base + 6] - floats[base + 2];
     beforeArea += 2 * (dx * dz + dx * dy + dz * dy);
     const primitiveCountOrChild = ints[base + 3];
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
     if (primitiveCountOrChild >= 0) {
-      unionBounds(
-        bounds,
-        refitNode(index + 2),
-        refitNode(primitiveCountOrChild)
-      );
+      refitNode(index + 2);
+      refitNode(primitiveCountOrChild);
+      const left = base + 8, right = primitiveCountOrChild * 4;
+      minX = Math.min(floats[left], floats[right]);
+      minY = Math.min(floats[left + 1], floats[right + 1]);
+      minZ = Math.min(floats[left + 2], floats[right + 2]);
+      maxX = Math.max(floats[left + 4], floats[right + 4]);
+      maxY = Math.max(floats[left + 5], floats[right + 5]);
+      maxZ = Math.max(floats[left + 6], floats[right + 6]);
     } else {
-      for (let i = 0; i < -primitiveCountOrChild; i++) {
-        const triangleOffset = base + 8 + i * 4;
-        addVertex(bounds, ints[triangleOffset]);
-        addVertex(bounds, ints[triangleOffset + 1]);
-        addVertex(bounds, ints[triangleOffset + 2]);
+      const count = -primitiveCountOrChild * 3;
+      for (let i = 0; i < count; i++) {
+        const vertex = ints[base + 8 + Math.floor(i / 3) * 4 + i % 3];
+        const offset = vertex * stride;
+        const x = positions[offset], y = positions[offset + 1], z = positions[offset + 2];
+        if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
+        minX = Math.min(minX, x); minY = Math.min(minY, y); minZ = Math.min(minZ, z);
+        maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); maxZ = Math.max(maxZ, z);
       }
     }
-    afterArea += surfaceArea(bounds);
-    floats[base] = bounds.min[0];
-    floats[base + 1] = bounds.min[1];
-    floats[base + 2] = bounds.min[2];
-    floats[base + 4] = bounds.max[0];
-    floats[base + 5] = bounds.max[1];
-    floats[base + 6] = bounds.max[2];
-    return bounds;
+
+    dx = maxX - minX; dy = maxY - minY; dz = maxZ - minZ;
+    afterArea += 2 * (dx * dz + dx * dy + dz * dy);
+    floats[base] = minX; floats[base + 1] = minY; floats[base + 2] = minZ;
+    floats[base + 4] = maxX; floats[base + 5] = maxY; floats[base + 6] = maxZ;
   }
 
   refitNode(0);
   flattened.buildSurfaceArea ??= beforeArea;
   return !geometry.dynamic || !(afterArea > flattened.buildSurfaceArea * DYNAMIC_BLAS_REBUILD_RATIO);
+}
+
+/** Cached postorder retains the recursive summation order without per-node calls. */
+function refitCachedBLAS(flattened: FlattendBVH,
+  geometry: Pick<Geometry, 'position'> & Partial<Pick<Geometry, 'dynamic'>>,
+  cached: { offsets: Int32Array; vertices: Uint32Array; postorder: Int32Array }) {
+  const floats = new Float32Array(flattened.buffer), ints = new Int32Array(flattened.buffer);
+  const positions = geometry.position.array, stride = geometry.position.itemSize;
+  if (flattened.buildSurfaceArea == null) {
+    let area = 0;
+    const preorder = cached.postorder.slice().sort();
+    for (const index of preorder) {
+      const b = index * 4;
+      const x = floats[b + 4] - floats[b], y = floats[b + 5] - floats[b + 1], z = floats[b + 6] - floats[b + 2];
+      area += 2 * (x * z + x * y + z * y);
+    }
+    flattened.buildSurfaceArea = area;
+  }
+  let area = 0;
+  for (let node = 0; node < cached.postorder.length; node++) {
+    const index = cached.postorder[node], base = index * 4, child = ints[base + 3];
+    let minX = Infinity, minY = Infinity, minZ = Infinity;
+    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+    if (child >= 0) {
+      const left = base + 8, right = child * 4;
+      minX = Math.min(floats[left], floats[right]); minY = Math.min(floats[left + 1], floats[right + 1]); minZ = Math.min(floats[left + 2], floats[right + 2]);
+      maxX = Math.max(floats[left + 4], floats[right + 4]); maxY = Math.max(floats[left + 5], floats[right + 5]); maxZ = Math.max(floats[left + 6], floats[right + 6]);
+    } else {
+      const start = cached.offsets[index], end = start + 1 + cached.vertices[start];
+      for (let i = start + 1; i < end; i++) {
+        const offset = cached.vertices[i] * stride;
+        const x = positions[offset], y = positions[offset + 1], z = positions[offset + 2];
+        if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
+        minX = Math.min(minX, x); minY = Math.min(minY, y); minZ = Math.min(minZ, z);
+        maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); maxZ = Math.max(maxZ, z);
+      }
+    }
+    const x = maxX - minX, y = maxY - minY, z = maxZ - minZ;
+    area += 2 * (x * z + x * y + z * y);
+    floats[base] = minX; floats[base + 1] = minY; floats[base + 2] = minZ;
+    floats[base + 4] = maxX; floats[base + 5] = maxY; floats[base + 6] = maxZ;
+  }
+  return !geometry.dynamic || !(area > flattened.buildSurfaceArea * DYNAMIC_BLAS_REBUILD_RATIO);
 }
 
 function makeBLASPrimitiveInfo(

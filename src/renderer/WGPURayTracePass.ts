@@ -2458,8 +2458,8 @@ ${rayTraceCompute({
   private _updateGeometryData() {
     const res = this._preparedMeshData!, tlas = this._tlas!;
     const update = updatePreparedGeometries(res, this._pendingGeometryUpdates);
-    for (const { first, count } of update.vertices) {
-      packVertexAttributes(res.geometry, this._attributeData!, this._attributeStride, this._attributeOffsets, first, count);
+    for (const { first, count, topologyChanged, deformationOnly } of update.vertices) {
+      packVertexAttributes(res.geometry, this._attributeData!, this._attributeStride, this._attributeOffsets, first, count, topologyChanged, deformationOnly);
       const offset = first * this._attributeStride * 4, size = count * this._attributeStride * 4;
       this._device.queue.writeBuffer(this._attrBuffers!, offset, this._attributeData!.buffer, offset, size);
     }

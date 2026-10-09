@@ -179,3 +179,8 @@ Renderer-specific settings without a Three.js equivalent:
 `loadGLTF(url)` is a minimal built-in loader for glTF 2.0. It is kept for
 dependency-free use; prefer `GLTFLoader` + `fromTHREEScene` for full glTF
 extension support.
+
+For vertex attribute edits that preserve indices and `materialIndex`, call
+`Geometry.markVerticesUpdated()` to reuse topology and upload only vertex data.
+`markUpdated()` also advances the read-only `topologyVersion` (initially `0`)
+and remains the notification for index or material-index edits.

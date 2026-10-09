@@ -1,3 +1,4 @@
+import { markDeformedGeometry } from '../scene/geometryChanges';
 import type * as THREE from 'three';
 import Mesh from '../scene/Mesh';
 import OpenPBRMaterial, { getMaterialHashKey, materialKeys } from '../scene/OpenPBRMaterial';
@@ -839,7 +840,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             if (deformation.tangent && geometry.tangent) geometry.tangent.array.set(deformation.tangent);
             if (!child.geometry.getAttribute('tangent')) updateDynamicTangents(geometry);
             updateBoundingBox(geometry);
-            if (!newGeometry) geometry.markUpdated();
+            if (!newGeometry) markDeformedGeometry(geometry);
           }
           const sourceMaterial = threeMaterials[group.materialIndex ?? 0];
           const cachedMaterial = store.materials.get(sourceMaterial);

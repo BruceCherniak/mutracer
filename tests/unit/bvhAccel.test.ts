@@ -191,3 +191,17 @@ describe('BVH refit', () => {
     expect(new Float32Array(flat.buffer)[4]).toBe(8);
   });
 });
+
+it('matches cached postorder and uncached recursive refits bit for bit, including rebuild decisions', async () => {
+  const {createSphereGeometry} = await import('../../src/util/commonGeometry');
+  const geometry = createSphereGeometry(16,8); geometry.dynamic = true;
+  const cached = flattenBvh(buildBLAS(geometry,0,undefined),false);
+  const recursive = {...cached, buffer:cached.buffer.slice(0)};
+  const original = geometry.position.array.slice();
+  for (const scale of [.99,1.03,1.3,1.6]) {
+    for(let i=0;i<original.length;i++)geometry.position.array[i]=original[i]*scale;
+    expect(refitBLAS(cached,geometry)).toBe(refitBLAS(recursive,geometry));
+    expect(new Uint32Array(cached.buffer)).toEqual(new Uint32Array(recursive.buffer));
+    expect(cached.buildSurfaceArea).toBe(recursive.buildSurfaceArea);
+  }
+});

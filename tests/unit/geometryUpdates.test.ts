@@ -56,3 +56,38 @@ it('regenerates evaluated displacement or simplification instead of uploading so
   const prepared = updateMeshInstances([mesh]); mesh.geometrySimplificationRatio = .5;
   expect(canUpdateGeometries(prepared,[g])).toBe(false);
 });
+
+it('distinguishes vertex edits from index edits and retains material-index packing', () => {
+  const g = createCubeGeometry(), prepared = updateMeshInstances([new Mesh(g, new OpenPBRMaterial())]);
+  const previous = g.bvh, indices = prepared.geometry.indices.array.slice();
+  prepared.geometry.materialIndex!.array.fill(123);
+  g.position.array[0] += .01;
+  expect(g.markVerticesUpdated()).toBe(g);
+  expect(g.version).toBe(1); expect(g.topologyVersion).toBe(0);
+  const update = updatePreparedGeometries(prepared, new Set([g]));
+  expect(g.bvh).toBe(previous); expect(update.vertices[0].topologyChanged).toBe(false);
+  expect(prepared.geometry.indices.array).toEqual(indices);
+  expect(prepared.geometry.materialIndex!.array.every(v => v === 123)).toBe(true);
+  g.indices.array.fill(0); expect(g.markUpdated()).toBe(g);
+  expect(g.version).toBe(2); expect(g.topologyVersion).toBe(1);
+  expect(updatePreparedGeometries(prepared, new Set([g])).vertices[0].topologyChanged).toBe(true);
+  expect(prepared.geometry.materialIndex!.array.every(v => v === 0)).toBe(true);
+  expect(updatePreparedGeometries(prepared, new Set([g])).vertices[0].topologyChanged).toBe(false);
+});
+it('detects replacing an index array even when vertex-only notification was used', () => {
+  const g = createCubeGeometry(), prepared = updateMeshInstances([new Mesh(g, new OpenPBRMaterial())]);
+  g.indices.array = g.indices.array.slice(); g.markVerticesUpdated();
+  expect(updatePreparedGeometries(prepared, new Set([g])).vertices[0].topologyChanged).toBe(true);
+});
+
+it('preserves static vertex attributes during deformation and accepts subsequent UV edits', async () => {
+  const {markDeformedGeometry} = await import('../../src/scene/geometryChanges');
+  const g = createCubeGeometry(), prepared = updateMeshInstances([new Mesh(g, new OpenPBRMaterial())]);
+  const uv = prepared.geometry.uv!.array.slice();
+  g.position.array[0] += .01; markDeformedGeometry(g);
+  expect(updatePreparedGeometries(prepared, new Set([g])).vertices[0].deformationOnly).toBe(true);
+  expect(prepared.geometry.uv!.array).toEqual(uv);
+  g.uv!.array[0] = .75; g.markVerticesUpdated();
+  expect(updatePreparedGeometries(prepared, new Set([g])).vertices[0].deformationOnly).toBe(false);
+  expect(prepared.geometry.uv!.array[0]).toBe(.75);
+});

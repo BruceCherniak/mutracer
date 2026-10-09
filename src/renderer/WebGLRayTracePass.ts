@@ -694,13 +694,14 @@ class WebGLRayTracePass {
   private _updateGeometryData() {
     const res = this._preparedMeshData!, tlas = this._tlas!;
     const update = updatePreparedGeometries(res, this._pendingGeometryUpdates);
-    for (const { first, count } of update.vertices) {
+    for (const { first, count, topologyChanged, deformationOnly } of update.vertices) {
       for (const [attribute, texture] of [
         [res.geometry.position, this._positionBufferTex], [res.geometry.normal, this._normalBufferTex],
         [res.geometry.tangent, this._tangentBufferTex], [res.geometry.color, this._colorBufferTex],
         [res.geometry.uv, this._uvBufferTex], [res.geometry.uv1, this._uv1BufferTex]
-      ] as const) if (attribute) texture.updateDataRange(this._renderer.gl, attribute.array,
+      ] as const) if (attribute && (!deformationOnly || attribute === res.geometry.position || attribute === res.geometry.normal || attribute === res.geometry.tangent)) texture.updateDataRange(this._renderer.gl, attribute.array,
         first * attribute.itemSize * 4, count * attribute.itemSize * 4);
+      if (!topologyChanged) continue;
       const material = this._materialIndexData!;
       for (let i = first * 4; i < (first + count) * 4; i++) material[i] = res.geometry.materialIndex!.array[i];
       this._matIndexBufferTex.updateDataRange(this._renderer.gl, material, first * 16, count * 16);

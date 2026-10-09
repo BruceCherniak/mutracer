@@ -50,8 +50,11 @@ export type GeometryData = Record<AttributeName, Attribute<Float32Array>> & {
  * `normal` can be generated with `generateVertexNormals()`.
  */
 export default class Geometry {
-  /** Incremented by `markUpdated()`. */
+  /** Incremented by either update method. Default `0`. */
   version = 0;
+  private _topologyVersion = 0;
+  /** Index/material-index revision, advanced by markUpdated(). Default `0`. */
+  get topologyVersion() { return this._topologyVersion; }
   /**
    * Hint that vertices change often (skinning, morph targets). Keeps a built-in
    * BVH2 layout that can be refit in place. Default `false`.
@@ -94,6 +97,16 @@ export default class Geometry {
    * Replacing a mesh's Geometry object is detected without this call.
    */
   markUpdated() {
+    this._topologyVersion++;
+    this.version++;
+    return this;
+  }
+
+  /**
+   * Call after editing vertex attributes without changing indices or materialIndex.
+   * Advances version while preserving topologyVersion, allowing vertex-only uploads.
+   */
+  markVerticesUpdated() {
     this.version++;
     return this;
   }
