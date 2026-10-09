@@ -634,6 +634,7 @@ export interface FromTHREESceneOptions {
   ): void;
 }
 
+interface ColorVariant { material: OpenPBRMaterial; version: number; color: ColorRGB }
 interface GeometryEntry { state: unknown[]; groups: Map<string, Geometry> }
 interface ConversionStore {
   textures: TextureStore;
@@ -643,11 +644,15 @@ interface ConversionStore {
   deformations: WeakMap<THREE.Mesh, THREEDeformation>;
   meshes: WeakMap<THREE.Mesh, Map<number, Mesh>>;
   lights: WeakMap<THREE.Object3D | THREE.Texture, SceneLight>;
+  instanceMeshes: WeakMap<THREE.Mesh, Map<number, Mesh[]>>;
+  colorVariants: WeakMap<THREE.Material, Map<string, ColorVariant>>;
+  warned: WeakSet<THREE.Object3D>;
   background?: Scene['background'];
 }
 function createConversionStore(): ConversionStore {
   return { textures: new WeakMap(), materials: new WeakMap(), geometries: new WeakMap(),
-    meshes: new WeakMap(), lights: new WeakMap(), deformedGeometries: new WeakMap(), deformations: new WeakMap() };
+    meshes: new WeakMap(), lights: new WeakMap(), deformedGeometries: new WeakMap(), deformations: new WeakMap(),
+    instanceMeshes: new WeakMap(), colorVariants: new WeakMap(), warned: new WeakSet() };
 }
 function geometryState(geometry: THREE.BufferGeometry, deformation = false) {
   return ['position', 'normal', 'tangent', 'uv', 'uv1', 'index'].flatMap(name => {
@@ -699,6 +704,31 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   const lights: SceneLight[] = [];
   const textureCache = store.textures;
   const convertedMaterials = new Set<THREE.Material>();
+  const refreshedVariants = new Set<THREE.Material>();
+  const instanceMatrix = scene.matrixWorld.clone();
+  const instanceWorld = scene.matrixWorld.clone();
+  const instanceColor: ColorRGB = [1, 1, 1];
+  function refreshVariant(entry: ColorVariant, base: OpenPBRMaterial) {
+    if (entry.version === base.version) return;
+    for (const field of materialKeys) (entry.material as unknown as Record<string, unknown>)[field] = base[field];
+    entry.material.baseColor = base.baseColor.map((value, i) => value * entry.color[i]) as ColorRGB;
+    // Three.js also applies instanceColor to MeshBasicMaterial's unlit color.
+    if (base.unlit) entry.material.emissionColor = base.emissionColor.map((value, i) => value * entry.color[i]) as ColorRGB;
+    entry.material.markUpdated();
+    entry.version = base.version;
+  }
+  function colorVariant(source: THREE.Material, base: OpenPBRMaterial, color: ColorRGB) {
+    let variants = store.colorVariants.get(source);
+    if (!variants) { variants = new Map(); store.colorVariants.set(source, variants); }
+    const key = color.join(':');
+    let variant = variants.get(key);
+    if (!variant) {
+      variant = { material: new OpenPBRMaterial(), version: -1, color: color.slice() as ColorRGB };
+      variants.set(key, variant);
+    }
+    refreshVariant(variant, base);
+    return variant.material;
+  }
 
   function isMesh(node: THREE.Object3D): node is THREE.Mesh {
     return (node as THREE.Mesh).isMesh;
@@ -755,9 +785,17 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
           'must use MeshStandardMaterial or MeshBasicMaterial in order to be rendered.'
         );
       } else {
+        const instanced = child as THREE.InstancedMesh;
+        const unsupported = (child as THREE.Mesh & { isBatchedMesh?: boolean }).isBatchedMesh ||
+          instanced.isInstancedMesh && (!!instanced.morphTexture || (child as THREE.SkinnedMesh).isSkinnedMesh);
+        if (unsupported && !store.warned.has(child)) {
+          console.warn('ClayPT: BatchedMesh, instanced morph targets and skinned instancing are not supported; converting as an ordinary mesh.', child);
+          store.warned.add(child);
+        }
+        const expand = instanced.isInstancedMesh && !unsupported;
         let deformation: THREEDeformation | undefined;
         let deformed = false;
-        if (isDeformingMesh(child)) {
+        if (!unsupported && isDeformingMesh(child)) {
           deformation = store.deformations.get(child);
           if (!deformation?.matches(child.geometry)) {
             deformation = new THREEDeformation(child.geometry); store.deformations.set(child, deformation);
@@ -819,37 +857,66 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             } else store.materials.set(sourceMaterial, { material, hash });
             convertedMaterials.add(sourceMaterial);
           } else material = store.materials.get(sourceMaterial)!.material;
-          let meshGroups = store.meshes.get(child);
-          if (!meshGroups) { meshGroups = new Map(); store.meshes.set(child, meshGroups); }
-          let mesh = meshGroups.get(groupIndex);
-          if (!mesh) {
-            mesh = new Mesh(geometry, material);
-            // Three.js matrices use doubles. Retain that precision before CPU
-            // inverse transforms and bounds calculations, as one-shot conversion did.
-            mesh.matrixWorld = child.matrixWorld.elements.slice() as mat4.Mat4Array;
-            meshGroups.set(groupIndex, mesh);
+          if (!refreshedVariants.has(sourceMaterial)) {
+            // Update absent colors too, including when the instance count is zero.
+            for (const variant of store.colorVariants.get(sourceMaterial)?.values() ?? []) refreshVariant(variant, material);
+            refreshedVariants.add(sourceMaterial);
           }
-          mesh.geometry = geometry;
-          mesh.uvProjection = !geometry.uv && material.uvProjection === 'none' &&
-            (material.map || material.normalMap || material.emissiveMap || material.metallicRoughnessMap ||
-              material.roughnessMap || material.metalnessMap || material.thinFilmMap) ? 'triplanar' : undefined;
-          mesh.displacementUvProjection = !geometry.uv && material.displacementMap &&
-            material.displacementUvProjection === 'none' ? 'triplanar' : undefined;
-          if (mesh.materials[0] !== material) mesh.materials = [material];
-          const simplificationRatio = Number(
-            child.userData.clayptMeshoptSimplificationRatio
-          );
-          mesh.geometrySimplificationRatio = Number.isFinite(
-            simplificationRatio
-          )
-            ? Math.min(Math.max(simplificationRatio, 0), 1)
-            : 1;
-          mesh.name =
-            child.name ||
-            `Mesh ${meshes.length + 1}${groups.length > 1 ? `.${groupIndex + 1}` : ''}`;
-          for (let i = 0; i < 16; i++) mesh.matrixWorld[i] = child.matrixWorld.elements[i];
-          meshes.push(mesh);
-          options.onMeshConverted?.(mesh, child, group, groupIndex);
+          let instancesByGroup = store.instanceMeshes.get(child);
+          if (!instancesByGroup) { instancesByGroup = new Map(); store.instanceMeshes.set(child, instancesByGroup); }
+          let instanceMeshes = instancesByGroup.get(groupIndex);
+          if (!instanceMeshes) { instanceMeshes = []; instancesByGroup.set(groupIndex, instanceMeshes); }
+          const baseMaterial = material;
+          const instanceCount = expand ? instanced.count : 1;
+          // Keep the retained prefix when count shrinks; only the tail is removed.
+          if (expand) instanceMeshes.length = Math.min(instanceMeshes.length, instanceCount);
+          for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex++) {
+            material = baseMaterial;
+            if (expand && instanced.instanceColor) {
+              const color = instanced.instanceColor;
+              instanceColor[0] = color.getX(instanceIndex);
+              instanceColor[1] = color.getY(instanceIndex);
+              instanceColor[2] = color.getZ(instanceIndex);
+              material = colorVariant(sourceMaterial, baseMaterial, instanceColor);
+            }
+            let meshGroups = store.meshes.get(child);
+            if (!meshGroups) { meshGroups = new Map(); store.meshes.set(child, meshGroups); }
+            let mesh = expand ? instanceMeshes[instanceIndex] : meshGroups.get(groupIndex);
+            if (!mesh) {
+              mesh = new Mesh(geometry, material);
+              // Three.js matrices use doubles. Retain that precision before CPU
+              // inverse transforms and bounds calculations, as one-shot conversion did.
+              mesh.matrixWorld = child.matrixWorld.elements.slice() as mat4.Mat4Array;
+              if (expand) instanceMeshes[instanceIndex] = mesh;
+              else meshGroups.set(groupIndex, mesh);
+            }
+            mesh.geometry = geometry;
+            mesh.uvProjection = !geometry.uv && material.uvProjection === 'none' &&
+              (material.map || material.normalMap || material.emissiveMap || material.metallicRoughnessMap ||
+                material.roughnessMap || material.metalnessMap || material.thinFilmMap) ? 'triplanar' : undefined;
+            mesh.displacementUvProjection = !geometry.uv && material.displacementMap &&
+              material.displacementUvProjection === 'none' ? 'triplanar' : undefined;
+            if (mesh.materials[0] !== material) mesh.materials = [material];
+            const simplificationRatio = Number(
+              child.userData.clayptMeshoptSimplificationRatio
+            );
+            mesh.geometrySimplificationRatio = Number.isFinite(
+              simplificationRatio
+            )
+              ? Math.min(Math.max(simplificationRatio, 0), 1)
+              : 1;
+            mesh.name =
+              child.name ||
+              `Mesh ${meshes.length + 1}${groups.length > 1 ? `.${groupIndex + 1}` : ''}`;
+            if (expand) {
+              instanced.getMatrixAt(instanceIndex, instanceMatrix);
+              instanceWorld.multiplyMatrices(child.matrixWorld, instanceMatrix);
+            }
+            const matrix = expand ? instanceWorld.elements : child.matrixWorld.elements;
+            for (let i = 0; i < 16; i++) mesh.matrixWorld[i] = matrix[i];
+            meshes.push(mesh);
+            options.onMeshConverted?.(mesh, child, group, groupIndex);
+          }
         });
       }
     } else if (isDirectionalLight(child)) {

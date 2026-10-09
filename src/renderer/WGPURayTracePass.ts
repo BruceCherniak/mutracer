@@ -1,3 +1,4 @@
+import { MeshMembershipCache } from './meshMembership';
 import { mergeRefitRanges } from './bvhAccel';
 import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged, packVertexAttributes } from './geometryUpdates';
 import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges';
@@ -302,6 +303,8 @@ class WGPURayTracePass {
   private _needsUpdateMeshMembership = false;
   private _needsRefitTLAS = false;
   private _preparedMeshData?: ReturnType<typeof updateMeshInstances>;
+  private _membershipCache = new MeshMembershipCache();
+  private _pendingMembershipData?: ReturnType<typeof updateMeshInstances>;
   private _residentPreparedMeshData?: ReturnType<typeof updateMeshInstances>;
   private _tlas?: FlattendBVH;
   private _meshSnapshot: {
@@ -1877,6 +1880,27 @@ ${rayTraceCompute({
       materialIndexItemSize: mesh.geometry.materialIndex?.itemSize,
       matrix: Array.from(mesh.matrixWorld as ArrayLike<number>)
     }));
+    const membershipChanged = nextSnapshot.length !== previousSnapshot.length ||
+      nextSnapshot.some((item, i) => item.mesh !== previousSnapshot[i]?.mesh ||
+        item.materials.some((material, k) => material !== previousSnapshot[i]?.materials[k]));
+    const membership = !this._needsUpdateMeshData && membershipChanged && this._preparedMeshData
+      ? this._membershipCache.update(this._preparedMeshData, meshes) : undefined;
+    if (membership) {
+      const versions = new Map(previousSnapshot.flatMap(item => item.materials.map((m, i) => [m, item.materialVersions[i]] as const)));
+      const materialsChanged = membership.materials.length !== this._preparedMeshData!.materials.length ||
+        membership.materials.some(m => versions.has(m) && m.version !== versions.get(m));
+      this._pendingMembershipData = membership;
+      this._meshes = meshes;
+      this._meshSnapshot = nextSnapshot;
+      this._snapshotByMesh = new WeakMap();
+      nextSnapshot.forEach(item => this._snapshotByMesh.set(item.mesh, item));
+      this._needsUpdateMeshMembership = true;
+      this._needsRefitTLAS = false;
+      this._dirtyTransformMeshes.clear();
+      if (materialsChanged) this._pendingMaterialUpdate = { level: 'textures', emission: true,
+        emissiveMap: true, materials: new Set(membership.materials) };
+      return true;
+    }
     const membershipOnlyChange =
       !!this._residentPreparedMeshData &&
       (
@@ -2234,6 +2258,9 @@ ${rayTraceCompute({
     // TODO check bvh needs to change
     const res = updateMeshInstances(meshes);
     this._preparedMeshData = res;
+    this._membershipCache.capture(res);
+    this._pendingMembershipData = undefined;
+    this._needsUpdateMeshMembership = false;
     const mergedGeometry = res.geometry;
     const materials = res.materials;
     const isEmpty = meshes.length === 0 || res.instances.length === 0;
@@ -2493,7 +2520,8 @@ ${rayTraceCompute({
 
   /** Rebuilds only instance acceleration data for a cached mesh subset. */
   private _updateMeshMembership() {
-    const resident = this._residentPreparedMeshData;
+    const resident = this._pendingMembershipData ?? this._residentPreparedMeshData;
+    const pending = this._pendingMembershipData;
     if (!resident) {
       this._needsUpdateMeshData = true;
       this._needsUpdateMeshMembership = false;
@@ -2514,6 +2542,8 @@ ${rayTraceCompute({
       emissiveBindings
     };
     this._preparedMeshData = res;
+    if (pending) this._residentPreparedMeshData = res;
+    this._pendingMembershipData = undefined;
     const tlas = flattenBvh(buildTLAS(instances, res.blases), true);
     this._tlas = tlas;
     this._uploadBVH(tlas, res.blases);

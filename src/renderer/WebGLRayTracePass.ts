@@ -1,3 +1,4 @@
+import { MeshMembershipCache } from './meshMembership';
 import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges';
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges';
 import {
@@ -127,10 +128,13 @@ class WebGLRayTracePass {
   private _materialData: MergedMaterialData | undefined;
   private _maxTextureArrayBytes = DEFAULT_MAX_TEXTURE_ARRAY_BYTES;
   private _preparedMeshData?: ReturnType<typeof updateMeshInstances>;
+  private _membershipCache = new MeshMembershipCache();
+  private _pendingMembershipData?: ReturnType<typeof updateMeshInstances>;
   private _materialChanges = new MaterialChangeTracker();
   private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean; materials: Set<OpenPBRMaterial> };
   private _pendingGeometryUpdates = new Set<Geometry>();
   private _needsUpdateMeshData = true;
+  private _needsUpdateMeshMembership = false;
   private _needsRefitTLAS = false;
   private _dirtyTransformMeshes = new Set<Mesh>();
   private _tlas?: FlattendBVH;
@@ -427,6 +431,27 @@ class WebGLRayTracePass {
       displacementUvProjection: mesh.displacementUvProjection,
       matrix: Array.from(mesh.matrixWorld as ArrayLike<number>)
     }));
+    const membershipChanged = next.length !== this._meshSnapshot.length ||
+      next.some((item, i) => item.mesh !== this._meshSnapshot[i]?.mesh ||
+        item.materials.some((material, k) => material !== this._meshSnapshot[i]?.materials[k]));
+    const membership = !this._needsUpdateMeshData && membershipChanged && this._preparedMeshData
+      ? this._membershipCache.update(this._preparedMeshData, meshes) : undefined;
+    if (membership) {
+      const versions = new Map(this._meshSnapshot.flatMap(item => item.materials.map((m, i) => [m, item.materialVersions[i]] as const)));
+      const materialsChanged = membership.materials.length !== this._preparedMeshData!.materials.length ||
+        membership.materials.some(m => versions.has(m) && m.version !== versions.get(m));
+      this._pendingMembershipData = membership;
+      this._meshes = meshes;
+      this._meshSnapshot = next;
+      this._snapshotByMesh = new WeakMap();
+      next.forEach(item => this._snapshotByMesh.set(item.mesh, item));
+      this._needsUpdateMeshMembership = true;
+      this._needsRefitTLAS = false;
+      this._dirtyTransformMeshes.clear();
+      if (materialsChanged) this._pendingMaterialUpdate = { level: 'textures', emission: true,
+        emissiveMap: true, materials: new Set(membership.materials) };
+      return true;
+    }
     const changed =
       next.length !== this._meshSnapshot.length ||
       next.some((item, i) => {
@@ -504,6 +529,9 @@ class WebGLRayTracePass {
 
     const res = updateMeshInstances(this._meshes);
     this._preparedMeshData = res;
+    this._membershipCache.capture(res);
+    this._pendingMembershipData = undefined;
+    this._needsUpdateMeshMembership = false;
     const mergedGeometry = res.geometry;
     const materials = res.materials;
     const tlas = flattenBvh(buildTLAS(res.instances, res.blases), true);
@@ -639,6 +667,28 @@ class WebGLRayTracePass {
 
       materialData.setToPass(pass);
     });
+  }
+
+  private _updateMeshMembership() {
+    const res = this._pendingMembershipData!;
+    this._preparedMeshData = res;
+    const tlas = this._tlas = flattenBvh(buildTLAS(res.instances, res.blases), true);
+    const blas = new Float32Array(concatBLASBuffers(res.blases));
+    const data = this._bvhData = new Float32Array(tlas.buffer.byteLength / 4 + blas.length);
+    data.set(new Float32Array(tlas.buffer));
+    data.set(blas, tlas.buffer.byteLength / 4);
+    this._instancesData = new Float32Array(tlas.instancesBuffer!);
+    setDataTexture(this._bvhBufferTex, data, 4);
+    setDataTexture(this._instancesBufferTex, this._instancesData, 4);
+    this._tracePasses.forEach(pass => pass.setUniforms({
+      bvhColumns: textureDimensionsFromArray(data.length / 4).columnsLog,
+      instancesColumns: textureDimensionsFromArray(this._instancesData!.length / 4).columnsLog,
+      blasOffset: tlas.buffer.byteLength / 16,
+      isEmptyScene: +(res.instances.length === 0)
+    }));
+    this._pendingMembershipData = undefined;
+    this._needsUpdateMeshMembership = false;
+    this._debugBvhData = undefined;
   }
 
   private _updateGeometryData() {
@@ -923,6 +973,8 @@ class WebGLRayTracePass {
   prepare(): void {
     if (this._needsUpdateMeshData) {
       this._updateMeshData();
+    } else if (this._needsUpdateMeshMembership) {
+      this._updateMeshMembership();
     }
     if (this._pendingGeometryUpdates.size) this._updateGeometryData();
     if (this._needsRefitTLAS) this._refitMeshInstances();

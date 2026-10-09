@@ -1,0 +1,61 @@
+import Geometry from '../scene/Geometry';
+import Mesh from '../scene/Mesh';
+import { materialIsEmissive } from './materialChanges';
+import { getBvhBounds, updateMeshInstances, updateMeshInstanceTransforms } from './prepareMeshBVH';
+
+type Prepared = ReturnType<typeof updateMeshInstances>;
+const attributes = ['position', 'normal', 'tangent', 'color', 'uv', 'uv1', 'indices', 'materialIndex'] as const;
+function geometryState(geometry: Geometry): unknown[] {
+  return [geometry.version, geometry.dynamic, geometry.bvh, ...attributes.flatMap(key => {
+    const attribute = geometry[key];
+    return [attribute?.array, attribute?.array.length, attribute?.itemSize];
+  })];
+}
+
+/** Reuses resident vertex/BLAS data when only single-material instances change. */
+export class MeshMembershipCache {
+  private _states = new Map<Geometry, unknown[]>();
+  capture(res: Prepared) {
+    this._states.clear();
+    for (const binding of res.instanceBindings) if (binding.mesh.geometry === binding.geometry) {
+      this._states.set(binding.geometry, geometryState(binding.geometry));
+    }
+  }
+  update(res: Prepared, meshes: readonly Mesh[]): Prepared | undefined {
+    const geometries = new Map(res.geometries.map((geometry, i) => [geometry, i]));
+    // Multiple-material vertex indices, displacement and simplification have
+    // geometry-dependent packing; their structural edits require preparation.
+    const checked = new Set<Geometry>();
+    for (const mesh of meshes) {
+      const previous = this._states.get(mesh.geometry);
+      if (!previous || mesh.materials.length !== 1 || mesh.geometry.materialIndex ||
+        mesh.materials[0].displacementMap || (mesh.geometrySimplificationRatio ?? 1) !== 1) return;
+      if (!checked.has(mesh.geometry)) {
+        const next = geometryState(mesh.geometry);
+        if (next.some((value, i) => value !== previous[i])) return;
+        checked.add(mesh.geometry);
+      }
+    }
+    const materials = res.materials.slice();
+    const materialIndices = new Map(materials.map((material, i) => [material, i]));
+    const templates = new Map(res.instanceBindings.map(binding => [binding.geometry, binding]));
+    const instanceBindings = meshes.filter(mesh => mesh.geometry.position.array.length > 0).map(mesh => {
+      const material = mesh.materials[0];
+      let index = materialIndices.get(material);
+      if (index == null) { index = materials.length; materials.push(material); materialIndices.set(material, index); }
+      const template = templates.get(mesh.geometry);
+      // Bounds remain valid even after every instance of a geometry was removed.
+      // Use the resident geometry bounds for all supported BVH layouts.
+      return { mesh, geometry: mesh.geometry, blasIndex: geometries.get(mesh.geometry)!,
+        materialIndices: [index], displacementScale: 0,
+        bvhBounds: template?.bvhBounds ?? getBvhBounds(mesh.geometry) };
+    });
+    const instances = updateMeshInstanceTransforms(instanceBindings);
+    // Match full preparation's exclusion of invalid transforms/bounds.
+    const valid = instances.map((instance, i) => instance.bounds.min.every(Number.isFinite) &&
+      instance.bounds.max.every(Number.isFinite) && instance.transform.every(Number.isFinite) ? i : -1).filter(i => i >= 0);
+    const bindings = valid.map(i => instanceBindings[i]);
+    return { ...res, materials, instances: valid.map(i => instances[i]), instanceBindings: bindings,
+      emissiveBindings: bindings.filter(binding => materialIsEmissive(materials[binding.materialIndices[0]])) };
+  }
+}
