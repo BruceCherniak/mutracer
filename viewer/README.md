@@ -5,6 +5,11 @@ its .bin and textures) or a Radiance .hdr, browse the scene tree, edit OpenPBR
 materials, lighting, camera and render settings, play glTF animations and
 export PNGs.
 
+The Export dialog can download the current viewport PNG immediately, preserving
+its displayed appearance and pixel size without restarting the render. Render PNG
+instead renders a new image at Viewport, 1080p, 2K (2560 × 1440), 4K, or Square
+resolution using the selected sample count and background settings.
+
 ```bash
 npm run viewer          # http://localhost:3012
 npm run build:viewer    # static site in dist-viewer/

@@ -5,7 +5,7 @@ import { setSettings, setUi, useViewer } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
 import { Field, Scrub, Segmented, Switch } from './ui/controls';
 
-type SizePreset = 'viewport' | '1080p' | '4k' | 'square';
+type SizePreset = 'viewport' | '1080p' | '2k' | '4k' | 'square';
 
 export function ExportDialog() {
   const open = useViewer((s) => s.ui.exportOpen);
@@ -18,6 +18,7 @@ export function ExportDialog() {
   const [size, setSize] = useState<SizePreset>('viewport');
   const [samples, setSamples] = useState(maxSamples);
   const [transparent, setTransparent] = useState(background === 'transparent');
+  const [downloading, setDownloading] = useState(false);
   const preview = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -38,11 +39,11 @@ export function ExportDialog() {
     return () => cancelAnimationFrame(id);
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const dims = size === '1080p' ? [1920, 1080] : size === '4k' ? [3840, 2160] : size === 'square' ? [2048, 2048] : [stats.width, stats.height];
+  const dims = size === '1080p' ? [1920, 1080] : size === '2k' ? [2560, 1440] : size === '4k' ? [3840, 2160] : size === 'square' ? [2048, 2048] : [stats.width, stats.height];
   const estimate = stats.msPerSample > 0 ? (stats.msPerSample * samples * (dims[0] * dims[1])) / Math.max(1, stats.width * stats.height) / 1000 : 0;
-  const busy = progress !== null;
+  const busy = progress !== null || downloading;
   const close = () => {
-    if (busy) getEngine()?.cancelExport();
+    if (progress) getEngine()?.cancelExport();
     setUi({ exportOpen: false });
   };
 
@@ -54,10 +55,21 @@ export function ExportDialog() {
             <button className="icon-btn icon-btn--bare sm" aria-label="Close" onClick={close}><X size={14} /></button>
           </Heading>
           <div className="preview" data-checker={transparent || undefined}><canvas ref={preview} /></div>
+          <button className="btn btn--wide" disabled={busy || stats.samples === 0} onClick={async () => {
+            setDownloading(true);
+            try {
+              await getEngine()?.downloadViewportImage();
+            } finally {
+              setDownloading(false);
+            }
+          }}>
+            <Download size={15} />{downloading ? 'Downloading…' : 'Download viewport PNG'}
+          </button>
+          <p className="hint">Save the current {stats.width} × {stats.height} image as displayed, without re-rendering.</p>
           <Field label="Size">
             <Segmented label="Image size" value={size} disabled={busy} onChange={setSize} options={[
               { value: 'viewport', label: 'Viewport' }, { value: '1080p', label: '1080p' },
-              { value: '4k', label: '4K' }, { value: 'square', label: 'Square' }
+              { value: '2k', label: '2K' }, { value: '4k', label: '4K' }, { value: 'square', label: 'Square' }
             ]} />
           </Field>
           <Scrub label="Samples" value={samples} min={16} max={16384} log disabled={busy} onChange={setSamples} />
@@ -67,7 +79,7 @@ export function ExportDialog() {
           <Switch label="Transparent background" checked={transparent} disabled={busy} onChange={setTransparent}>
             <span className="field-label">Transparent background</span>
           </Switch>
-          {busy && (
+          {progress && (
             <div className="export-progress">
               <div className="progress"><i style={{ width: `${(progress.samples / Math.max(1, progress.target)) * 100}%` }} /></div>
               <span className="mono">{progress.stage === 'denoising' ? 'Denoising…' : `${progress.samples} / ${progress.target} spp`}</span>
@@ -75,12 +87,12 @@ export function ExportDialog() {
           )}
           <div className="actions">
             <span className="est mono">{dims[0]} × {dims[1]}{estimate > 0 && !busy ? ` · ≈ ${Math.max(1, Math.round(estimate))} s` : ''}</span>
-            <button className="btn" onClick={close}>{busy ? 'Cancel render' : 'Cancel'}</button>
+            <button className="btn" onClick={close}>{progress ? 'Cancel render' : 'Cancel'}</button>
             <button className="btn btn--primary" disabled={busy} onClick={async () => {
               await getEngine()?.exportImage({ width: dims[0], height: dims[1], samples, transparent });
               setUi({ exportOpen: false });
             }}>
-              <Download size={15} />{busy ? 'Rendering…' : 'Render PNG'}
+              <Download size={15} />{progress ? 'Rendering…' : 'Render PNG'}
             </button>
           </div>
         </Dialog>

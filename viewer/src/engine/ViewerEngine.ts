@@ -679,20 +679,45 @@ export class ViewerEngine {
 
   // ----------------------------------------------------------------- export
 
+  /** Downloads the displayed viewport at its current size without restarting accumulation. */
+  async downloadViewportImage() {
+    if (this.exporting) return;
+    try {
+      const samples = this.renderer.getTotalSamplesRendered() ?? 0;
+      if (samples === 0) throw new Error('The viewport has not rendered an image yet');
+      const blob = await this.captureImage();
+      this.downloadImage(blob, samples, 'viewport');
+    } catch (error) {
+      showToast(`Export failed: ${(error as Error).message}`, 'error');
+    }
+  }
+
   async exportImage(options: ExportOptions) {
     if (this.exporting) return;
     try {
       const blob = await this.renderImage(options);
-      const link = document.createElement('a');
-      const base = (get().model?.name ?? 'mutracer').replace(/\.[^.]+$/, '');
-      link.download = `mutracer-${base}-${options.samples}spp.png`;
-      link.href = URL.createObjectURL(blob);
-      link.click();
-      setTimeout(() => URL.revokeObjectURL(link.href), 10_000);
-      showToast(`Saved ${link.download}`);
+      this.downloadImage(blob, options.samples);
     } catch (error) {
       if ((error as Error).name !== 'AbortError') showToast(`Export failed: ${(error as Error).message}`, 'error');
     }
+  }
+
+  private downloadImage(blob: Blob, samples: number, suffix?: string) {
+    const link = document.createElement('a');
+    const base = (get().model?.name ?? 'mutracer').replace(/\.[^.]+$/, '');
+    link.download = `mutracer-${base}${suffix ? `-${suffix}` : ''}-${samples}spp.png`;
+    const url = URL.createObjectURL(blob);
+    link.href = url;
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    showToast(`Saved ${link.download}`);
+  }
+
+  private async captureImage(type = 'image/png', quality?: number): Promise<Blob> {
+    this.renderer.prepareForExport();
+    const blob = await new Promise<Blob | null>((resolve) => this.canvas.toBlob(resolve, type, quality));
+    if (!blob) throw new Error('The canvas could not be encoded');
+    return blob;
   }
 
   /** Renders the current view offline at the given size and encodes the canvas. */
@@ -722,10 +747,7 @@ export class ViewerEngine {
         previewIntervalMs: 250,
         onProgress: ({ stage, samples, targetSamples }) => set({ export: { stage, samples, target: targetSamples } })
       });
-      this.renderer.prepareForExport();
-      const blob = await new Promise<Blob | null>((resolve) => this.canvas.toBlob(resolve, type, quality));
-      if (!blob) throw new Error('The canvas could not be encoded');
-      return blob;
+      return await this.captureImage(type, quality);
     } finally {
       this.settings = get().settings;
       this.applyBackground();
