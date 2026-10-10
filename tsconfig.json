@@ -8,6 +8,7 @@
     "strict": true,
     "noUnusedLocals": true,
     "sourceMap": true,
+    "inlineSources": true,
 
     "isolatedModules": true,
     "esModuleInterop": true,
