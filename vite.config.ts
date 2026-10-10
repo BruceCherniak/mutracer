@@ -15,6 +15,9 @@ export default defineConfig(({ command }) => ({
     port: 3001
   },
   build: {
+    rollupOptions: {
+      output: { banner: "/*! MuTracer: third-party license texts are in THIRD_PARTY_NOTICES.md and LICENSES/. */" }
+    },
     lib: {
       entry: path.resolve(__dirname, 'src/main.ts'),
       name: 'MuTracer',

@@ -106,3 +106,23 @@ The adapted files under `src/renderer/` include:
   `glsl/rayTrace.frag.ts`, and `glsl/shadowCatcher.frag.ts`.
 - WGSL ports: `wgsl/chunks/{intersect,envMap,materialBuffer,sampleShadowCatcher}.wgsl.ts`
   and `wgsl/rayTrace.compute.ts`.
+
+## Bundled dependencies (dist/ only)
+
+The standalone `dist/mutracer.{es,umd}.js` builds and their chunks bundle these
+MIT-licensed dependencies. The `lib/` ESM modules keep npm dependency imports.
+
+- [gl-matrix](https://github.com/toji/gl-matrix): Copyright (c) 2015-2025,
+  Brandon Jones, Colin MacKenzie IV.
+  [`LICENSES/GlMatrix-MIT.txt`](./LICENSES/GlMatrix-MIT.txt).
+- [webgpu-utils](https://github.com/greggman/webgpu-utils): Copyright (c) 2022
+  Gregg Tavares.
+  [`LICENSES/WebGPUUtils-MIT.txt`](./LICENSES/WebGPUUtils-MIT.txt).
+- [oidn-web](https://github.com/pissang/oidn-web): Copyright (c) 2024 pissang.
+  [`LICENSES/OIDNWeb-MIT.txt`](./LICENSES/OIDNWeb-MIT.txt).
+
+The optional TinyBVH wasm is inlined in the standalone build. Its copyright
+and MIT license are described in the TinyBVH section above; the full text is
+also included in [`LICENSES/TinyBVH-MIT.txt`](./LICENSES/TinyBVH-MIT.txt).
+These license files are copied without modification from the installed
+packages and the checked-in TinyBVH license.
