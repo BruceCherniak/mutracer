@@ -1623,7 +1623,6 @@ ${rayTraceCompute({
         GPUTextureUsage.TEXTURE_BINDING |
         GPUTextureUsage.COPY_DST |
         GPUTextureUsage.RENDER_ATTACHMENT;
-      // TODO rgba16
       this._envTex = device.createTexture({
         format: 'rgba32float',
         usage,
@@ -2698,7 +2697,6 @@ ${rayTraceCompute({
     );
   }
 
-  // TODO in prepare.
   setSize(width: number, height: number) {
     this._width = width;
     this._height = height;

@@ -155,7 +155,6 @@ if (abs(hScale) > 0.0 && minMaxH > 0) {
       : getPDMDisplacmentCode(anyHit)
   }
 
-  // TODO double sided.
   if (microTriangle.t < tMax) {
     hitNormal = microTriangle.normal;
     // TODO support double sided to improve non watertight triangles.
@@ -1022,7 +1021,6 @@ fn fetchAttributes(
     uv0 = attrBuffers[i0 * ATTR_STRIDE + UV_OFF].xy;
     uv1 = attrBuffers[i1 * ATTR_STRIDE + UV_OFF].xy;
     uv2 = attrBuffers[i2 * ATTR_STRIDE + UV_OFF].xy;
-    // TODO Other mapping methods.
     uv = bary.x * uv0 + bary.y * uv1 + bary.z * uv2;
     rawUv = uv;
     if (USE_UV1) {

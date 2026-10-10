@@ -843,7 +843,6 @@ class WebGLRayTracePass {
     );
   }
 
-  // TODO in prepare.
   setSize(width: number, height: number) {
     this._tracePasses.forEach((pass) => {
       pass.setSize(width, height);

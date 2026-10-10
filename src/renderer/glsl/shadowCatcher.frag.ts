@@ -39,7 +39,6 @@ ${materialBufferGlsl.main}
 ${intersect.main}
 ${envMap.main}
 
-// TODO remove
 ${samplingGlsl}
 ${sampleLight}
 ${sampleShadowCatcher}

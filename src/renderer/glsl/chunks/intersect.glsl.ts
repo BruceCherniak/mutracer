@@ -602,7 +602,6 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
     vec2 uv0 = texelFetch(uvBuffer, i0, 0).xy;
     vec2 uv1 = texelFetch(uvBuffer, i1, 0).xy;
     vec2 uv2 = texelFetch(uvBuffer, i2, 0).xy;
-    // TODO Other mapping methods.
     vec2 uv = barycentric.x * uv0 + barycentric.y * uv1 + barycentric.z * uv2;
     vec2 rawUv = uv;
     vec2 secondaryUv0 = texelFetch(uv1Buffer, i0, 0).xy;
@@ -939,7 +938,6 @@ ${getBVHTraverseCode(
         vec2 uv0 = texelFetch(uvBuffer, i0, 0).xy;
         vec2 uv1 = texelFetch(uvBuffer, i1, 0).xy;
         vec2 uv2 = texelFetch(uvBuffer, i2, 0).xy;
-        // TODO Other mapping methods.
         vec2 uv = barycentric.x * uv0 + barycentric.y * uv1 + barycentric.z * uv2;
         vec4 uvInfo = fetchMatData(ii + 7);
         int uvProjection = int(uvInfo.r);

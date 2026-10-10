@@ -39,7 +39,6 @@ function copyrgbe(s: number[], t: number[]) {
   t[3] = s[3];
 }
 
-// TODO : check
 function oldReadColors(
   scan: number[][],
   buffer: Uint8Array,

@@ -150,7 +150,6 @@ struct LightSampleRec {
 };
 
 struct Light {
-  // TODO tight pack
   position: vec3f,
   litType: f32,
 
@@ -409,7 +408,6 @@ ${
 }
   
 // Uniforms
-// TODO use structs
 @group(2) @binding(0) var<uniform> cameraUniform: CameraUniform;
 @group(2) @binding(1) var<uniform> rtUniform: RayTraceUniform;
 
