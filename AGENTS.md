@@ -20,6 +20,8 @@ people and coding agents changing the library. For using it, read
 - `examples/`: Vite examples (`npm run dev`). `tests/`: Vitest.
 - `viewer/`: React test-drive app (`npm run viewer`). Its dependencies are
   devDependencies and never ship in the npm package.
+- `site/`: home page of the deployed site (`npm run site`). `npm run build:site`
+  builds it with the viewer and the examples into `dist-site/` for Cloudflare.
 - `LICENSES/`, `THIRD_PARTY_NOTICES.md`: third-party attributions.
 
 ## Checks
@@ -30,6 +32,7 @@ Run before committing:
 npm run typecheck
 npm run typecheck:examples
 npm run typecheck:viewer
+npm run typecheck:site
 npm test
 ```
 

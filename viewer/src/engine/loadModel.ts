@@ -4,6 +4,9 @@ import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 // The bundled typings point at the uninstalled meshoptimizer package.
 import * as meshopt from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { fetchWithProgress } from './fetchWithProgress';
+import type { PathedFile } from './droppedFiles';
+
+export { isHDRFile, isModelFile, readDroppedItems, toPathedFiles, type PathedFile } from './droppedFiles';
 
 export interface LoadedModel {
   name: string;
@@ -14,10 +17,6 @@ export interface LoadedModel {
 }
 
 export type LoadProgress = (stage: 'download' | 'parse', loaded?: number, total?: number) => void;
-
-const MODEL_EXTENSIONS = ['.glb', '.gltf'];
-export const isModelFile = (name: string) => MODEL_EXTENSIONS.some((ext) => name.toLowerCase().endsWith(ext));
-export const isHDRFile = (name: string) => name.toLowerCase().endsWith('.hdr');
 
 let draco: DRACOLoader | undefined;
 function createLoader(manager?: THREE.LoadingManager) {
@@ -41,12 +40,6 @@ export async function loadModelFromURL(url: string, onProgress: LoadProgress, si
   const gltf = await parse(createLoader(), buffer, base);
   const name = decodeURIComponent(url.split('?')[0].split('/').pop() || 'model');
   return { name, root: gltf.scene, animations: gltf.animations, revoke() {} };
-}
-
-/** A file with the path it was dropped or picked with (folders keep relative paths). */
-export interface PathedFile {
-  file: File;
-  path: string;
 }
 
 /**
@@ -82,31 +75,6 @@ export async function loadModelFromFiles(files: PathedFile[], onProgress: LoadPr
     animations: gltf.animations,
     revoke: () => created.forEach((url) => URL.revokeObjectURL(url))
   };
-}
-
-/** Reads dropped items, descending into folders. */
-export async function readDroppedItems(items: DataTransferItemList): Promise<PathedFile[]> {
-  const entries = [...items].map((item) => item.webkitGetAsEntry?.()).filter(Boolean) as FileSystemEntry[];
-  const out: PathedFile[] = [];
-  const visit = async (entry: FileSystemEntry, prefix: string): Promise<void> => {
-    if (entry.isFile) {
-      const file = await new Promise<File>((resolve, reject) => (entry as FileSystemFileEntry).file(resolve, reject));
-      out.push({ file, path: prefix + file.name });
-    } else if (entry.isDirectory) {
-      const reader = (entry as FileSystemDirectoryEntry).createReader();
-      for (;;) {
-        const batch = await new Promise<FileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
-        if (!batch.length) break;
-        await Promise.all(batch.map((child) => visit(child, `${prefix}${entry.name}/`)));
-      }
-    }
-  };
-  await Promise.all(entries.map((entry) => visit(entry, '')));
-  return out;
-}
-
-export function toPathedFiles(files: FileList | File[]): PathedFile[] {
-  return [...files].map((file) => ({ file, path: file.webkitRelativePath || file.name }));
 }
 
 /** Default scene: one sphere per OpenPBR feature, readable without a download. */

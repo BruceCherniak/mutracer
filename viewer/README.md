@@ -14,26 +14,10 @@ npm run typecheck:viewer
 Add `?webgl` to force the WebGL 2 backend. The URL hash keeps the example
 model, environment and its resolution, exposure and tone mapping, so a view can be shared.
 
-## Cloudflare deployment
+## Deployment
 
-From the repository root, with Node.js 20 or later:
-
-```bash
-npm ci
-npx wrangler login      # once per machine
-npm run deploy:viewer
-```
-
-`wrangler.jsonc` checks the viewer's types, builds it and deploys `dist-viewer/`
-as static assets for the `mutracer-viewer` Worker. Wrangler prints the public
-HTTPS URL after deployment. No server code or runtime secrets are needed.
-The build includes the TinyBVH/Draco WebAssembly files and local OIDN weights.
-Only fingerprinted files under `assets/` receive an immutable browser cache.
-Viewer state uses the URL hash, so missing asset URLs return 404.
-
-For Cloudflare Workers Builds, use `npm run build:viewer` as the build command
-and `npm run deploy:viewer` as the deploy command (the latter also rebuilds
-and checks types).
+The viewer is deployed under `/viewer/` of the MuTracer site, together with
+the home page and the examples. See [`site/README.md`](../site/README.md).
 
 ## Structure
 
@@ -65,10 +49,12 @@ Notes:
   is not touched, so the scene sync does not overwrite the edit.
 - `EnvironmentLight` has no intensity or rotation, so both are baked into a copy
   of the HDR pixels.
-- OIDN weights are served from the repository's `oidn/weights/` at the server
-  root in development (this also works when the examples server serves the
-  viewer at `/viewer/`) and copied next to `index.html` in the build, because
-  the CDN copy only exists for published versions.
+- OIDN weights are loaded from `/oidn/weights/` at the server root, because
+  the CDN copy only exists for published versions. Development serves the
+  repository's `oidn/weights/` there, `build:viewer` emits them at the root of
+  `dist-viewer/`, and the site build shares one copy with the examples.
+- Opening the viewer with `#open=files` loads files that the home page stashed
+  in IndexedDB (`engine/droppedFiles.ts`).
 - The Examples menu and material preset thumbnails are MuTracer renders. After
   changing a preset, run `await generateThumbnails()` in the browser console
   of `npm run viewer`; the dev server saves them to `src/assets/thumbnails/`.

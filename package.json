@@ -71,8 +71,11 @@
     "watch:lib": "tsc --watch",
     "viewer": "vite --config viewer/vite.config.ts",
     "build:viewer": "vite build --config viewer/vite.config.ts",
-    "deploy:viewer": "wrangler deploy",
-    "typecheck:viewer": "tsc --noEmit -p viewer/tsconfig.json"
+    "typecheck:viewer": "tsc --noEmit -p viewer/tsconfig.json",
+    "site": "vite --config site/vite.config.ts",
+    "build:site": "node scripts/build-site.mjs",
+    "typecheck:site": "tsc --noEmit -p site/tsconfig.json",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "gl-matrix": "^3.4.4",

@@ -1,0 +1,11 @@
+/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/viewer/assets/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/examples/bundle/*
+  Cache-Control: public, max-age=31536000, immutable
+
+/oidn/weights/*
+  Content-Type: application/octet-stream

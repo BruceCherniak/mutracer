@@ -35,10 +35,10 @@ export interface ExportOptions {
   transparent: boolean;
 }
 
-// Development serves the repository's weights at the server root, whether the
-// viewer runs on its own server or under the examples server at /viewer/.
-// Builds copy them next to index.html.
-const OIDN_WEIGHTS = new URL(import.meta.env.DEV ? '/oidn/weights/' : 'oidn/weights/', document.baseURI).href;
+// The weights live at the server root: development serves the repository's
+// copy there, `build:viewer` emits them at the root of dist-viewer/, and the
+// site build (viewer under /viewer/) shares one copy with the examples.
+const OIDN_WEIGHTS = new URL('/oidn/weights/', document.baseURI).href;
 const get = useViewer.getState;
 const set = useViewer.setState;
 

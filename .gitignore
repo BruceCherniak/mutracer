@@ -8,3 +8,4 @@ lib/
 .DS_Store
 examples/assets/models/extra/
 __pycache__/
+dist-site/

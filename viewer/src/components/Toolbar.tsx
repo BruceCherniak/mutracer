@@ -17,8 +17,10 @@ export function Toolbar() {
   return (
     <header className="header">
       <div className="brand">
-        <BrandMark />
-        <div><strong>MuTracer Viewer</strong><small>PATH TRACER</small></div>
+        <a className="brand__home" href="../" title="MuTracer home">
+          <BrandMark />
+          <div><strong>MuTracer Viewer</strong><small>PATH TRACER</small></div>
+        </a>
         <span className="divider hide-m" />
         <button className="icon-btn icon-btn--bare sm hide-m" aria-label="Toggle scene panel" title="Toggle scene panel ([)"
           aria-pressed={ui.left} onClick={() => setUi({ left: !ui.left })}><PanelLeft size={15} /></button>

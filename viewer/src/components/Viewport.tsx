@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, Crosshair, Focus, Pause, Play, Repeat as Loop, Upload } from 'lucide-react';
 import { ViewerEngine, getEngine, setEngine } from '../engine/ViewerEngine';
-import { readDroppedItems } from '../engine/loadModel';
+import { HANDOFF_HASH, readDroppedItems, takeStashedFiles } from '../engine/droppedFiles';
 import { hashModelPreset, useViewer } from '../store';
 import { StatusBar } from './StatusBar';
 import { Select } from './ui/controls';
@@ -15,7 +15,12 @@ export function Viewport() {
   useEffect(() => {
     const engine = new ViewerEngine(canvasRef.current!);
     setEngine(engine);
-    void engine.loadPreset(hashModelPreset() ?? 'spheres');
+    if (location.hash.slice(1).split('&').includes(HANDOFF_HASH)) {
+      // Files dropped on the home page (the hash is rewritten after the first settings change).
+      void takeStashedFiles().then((files) => files ? engine.loadFiles(files) : engine.loadPreset('spheres'));
+    } else {
+      void engine.loadPreset(hashModelPreset() ?? 'spheres');
+    }
     // Our own hash writes use replaceState, so this only fires for edits by the user.
     const onHashChange = () => {
       const id = hashModelPreset();
