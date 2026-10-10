@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: MuTracer documentation
+    url: https://github.com/pissang/mutracer/tree/main/docs
+    about: Read usage guides and API documentation before reporting a problem.

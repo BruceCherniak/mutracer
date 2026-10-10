@@ -1,0 +1,59 @@
+name: Bug report
+description: Report a reproducible rendering or library problem.
+body:
+  - type: input
+    id: browser
+    attributes:
+      label: Browser and version
+      placeholder: Chrome 140
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and version
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: GPU
+      description: Include the GPU model or adapter name if available.
+    validations:
+      required: true
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Rendering backend
+      options:
+        - WebGPU
+        - WebGL 2
+        - Unknown
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: MuTracer version
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Renderer diagnostics
+      description: Paste the output of renderer.getDiagnostics().
+      render: json
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: Provide minimal code or a runnable link, steps, expected result and actual result.
+    validations:
+      required: true
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Attach images showing the problem, if relevant.
