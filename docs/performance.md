@@ -34,7 +34,8 @@
 - For large scenes, set `renderer.bvhBuilder = 'tinybvh'` and build BVHs up
   front with `await renderer.prepareScene(scene)`, or in a worker (see
   [BVH](./bvh.md)).
-- With Three.js, keep one `THREESceneSync` and call `update()` before rendering.
+- With Three.js, keep one `THREESceneSync` and call `sync.update()` before
+  rendering `sync.scene` with `fromTHREECamera(threeCamera)` each frame.
   It preserves mesh, geometry, material, texture and light identities. One-shot
   conversion creates fresh resources and is intended for static setup.
 - Animate existing mesh matrices while retaining the mesh objects and array.

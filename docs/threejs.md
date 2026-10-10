@@ -1,7 +1,9 @@
 # Three.js integration
 
-Build or load a scene with Three.js and render it with MuTracer. Three.js is an
-optional peer dependency (`npm install three`).
+Build or load a scene with Three.js, keep it in sync with `THREESceneSync`, and
+render `sync.scene` with MuTracer. Create the sync once and call `sync.update()`
+before rendering each frame. Three.js is an optional peer dependency
+(`npm install three`).
 
 ```ts
 import * as THREE from 'three';
@@ -63,13 +65,15 @@ texture.needsUpdate = true; // after changing its canvas or pixel data
 sync.update();
 ```
 
-`fromTHREEScene(threeScene, options?)` is a one-shot conversion: every call
-creates fresh MuTracer objects. Use it for static setup. Both APIs accept an
-optional `onMeshConverted(mesh, source, group, groupIndex)` callback (default:
-none); the sync calls it for each visible group and expanded instance on every
-update.
+`new THREESceneSync(threeScene, options?)` accepts an optional
+`onMeshConverted(mesh, source, group, groupIndex)` callback (default: none).
+The sync calls it for each visible group and expanded instance during initial
+conversion and every update.
 Call `sync.dispose()` when finished to release its caches. Its last scene
 remains usable; calling `update()` after disposal throws.
+
+`fromTHREEScene(threeScene, options?)` remains available for one-shot conversion
+with the same options. Every call creates fresh MuTracer objects.
 
 UV-less meshes use cached material variants for automatic triplanar texture and
 displacement projection. A UV-bearing mesh keeps the converted source material;
@@ -178,7 +182,7 @@ Renderer-specific settings without a Three.js equivalent:
 ## glTF without Three.js
 
 `loadGLTF(url)` is a minimal built-in loader for glTF 2.0. It is kept for
-dependency-free use; prefer `GLTFLoader` + `fromTHREEScene` for full glTF
+dependency-free use; prefer `GLTFLoader` + `THREESceneSync` for full glTF
 extension support.
 
 For vertex attribute edits that preserve indices and `materialIndex`, call

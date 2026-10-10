@@ -135,6 +135,19 @@ renderer.render(scene, camera);
 With Three.js, retain a `THREESceneSync` and call `sync.update()` before rendering
 `sync.scene`; see [Three.js](./threejs.md).
 
+```ts
+import { THREESceneSync, fromTHREECamera } from 'mutracer';
+
+const sync = new THREESceneSync(threeScene);
+
+function frame() {
+  sync.update();
+  renderer.render(sync.scene, fromTHREECamera(threeCamera));
+  requestAnimationFrame(frame);
+}
+frame();
+```
+
 Any change that affects the image restarts accumulation. While things change,
 `interactivePreview` renders a cheaper, lower-resolution image.
 
@@ -158,7 +171,8 @@ canvas.toBlob((blob) => { /* save */ }, 'image/png');
 
 ## Cleanup
 
-Call `renderer.dispose()` to release GPU resources and the denoiser.
+Call `renderer.dispose()` to release GPU resources and the denoiser. With
+Three.js, also call `sync.dispose()` to release the conversion caches.
 
 ## Bundler notes
 

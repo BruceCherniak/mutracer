@@ -160,11 +160,12 @@ Dynamic BLASes rebuild above twice their last build's total node surface area.
 | `generateVertexNormals`, `generateVertexTangents` | Attribute generation |
 | `computeMeshesBoundingBox(meshes)` | World-space bounds |
 | `loadRGBE(url)`, `parseRGBE(buffer)` | Radiance `.hdr` → float `Texture` |
-| `fromTHREEScene`, `fromTHREECamera` | One-shot Three.js scene and camera conversion; see [Three.js](./threejs.md) |
-| `THREESceneSync` | `new THREESceneSync(threeScene, options?)`; retains `scene` and resources across `update()` calls; CPU skinning/morph and shared-geometry instance expansion; `dispose()` releases caches |
+| `THREESceneSync` | Recommended Three.js scene integration: create `new THREESceneSync(threeScene, options?)` once, call `sync.update()` before rendering `sync.scene` each frame; retains resources, supports CPU skinning/morph and shared-geometry instance expansion; `dispose()` releases caches; see [Three.js](./threejs.md) |
+| `fromTHREECamera` | Converts a Three.js camera; call each frame alongside `THREESceneSync` |
+| `fromTHREEScene` | One-shot Three.js scene conversion; every call creates fresh MuTracer objects |
 | `THREESceneChanges` | Informational result of `update()`: `transforms`, `membership`, `content`, `lights`, `background`; no forwarding to Renderer needed |
 | `FromTHREESceneOptions` | Optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |
-| `loadGLTF(url)` | Minimal built-in glTF 2.0 loader; prefer Three.js `GLTFLoader` |
+| `loadGLTF(url)` | Minimal built-in glTF 2.0 loader; prefer Three.js `GLTFLoader` + `THREESceneSync` |
 | `CameraViewControl` | Orbit/pan/zoom controller for a MuTracer `Camera` |
 | `precomputeTinyBvh`, `prepareForPrecompute`, `precompute`, `resolveFromPrecompute` | BVH and displacement precomputation; see [BVH](./bvh.md) |
 | `buildOpenSubdivAdaptiveFaceLevels` | Per-face levels for OpenSubdiv displacement |
