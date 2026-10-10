@@ -789,7 +789,7 @@ export class ViewerEngine {
     let phase = phaseOf(status);
     // While-converging OIDN denoises every few samples; report those as rendering so
     // the status does not flicker. Only the final denoise is shown.
-    if (phase === 'denoising' && this.renderer.oidnWhileConverging &&
+    if (phase === 'denoising' && this.settings.denoiseWhileConverging &&
       (this.renderer.getTotalSamplesRendered() ?? 0) < this.settings.maxSamples) {
       phase = 'rendering';
     }

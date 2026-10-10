@@ -9,6 +9,10 @@ function fakeDenoiser() {
   return { dispose: vi.fn(), tileExecute: vi.fn() };
 }
 
+function denoiseMode(renderer: InstanceType<typeof Renderer>) {
+  return (renderer as unknown as { _denoiseMode: Record<string, unknown> })._denoiseMode;
+}
+
 function createRenderer() {
   return new Renderer({ canvas: { width: 0, height: 0 } as HTMLCanvasElement });
 }
@@ -26,7 +30,29 @@ describe('Renderer.setDenoiser', () => {
       attach: false
     });
     expect(renderer.oidn).toBe(denoiser);
-    expect(renderer.oidnWhileConverging).toBe(true);
+    expect(denoiseMode(renderer)).toEqual({
+      whileConverging: true,
+      sampleInterval: 8,
+      coalesceSceneUpdates: false
+    });
+  });
+
+  it('applies the while-converging options and validates the interval', async () => {
+    initializeOIDN.mockResolvedValue(fakeDenoiser());
+    const renderer = createRenderer();
+
+    await renderer.setDenoiser({ whileConverging: true, sampleInterval: 4, coalesceSceneUpdates: true, previewModel: false });
+    expect(denoiseMode(renderer)).toEqual({
+      whileConverging: true,
+      sampleInterval: 4,
+      coalesceSceneUpdates: true
+    });
+    await expect(renderer.setDenoiser({ sampleInterval: 0 })).rejects.toThrow('sampleInterval');
+
+    // Disabling keeps no while-converging work running.
+    await renderer.setDenoiser(false);
+    expect(denoiseMode(renderer).whileConverging).toBe(false);
+    initializeOIDN.mockReset();
   });
 
   it('disposes the replaced denoiser and detaches on disable', async () => {

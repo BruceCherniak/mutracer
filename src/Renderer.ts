@@ -47,10 +47,22 @@ export interface DenoiserOptions {
    */
   weightsBaseUrl?: string | URL;
   /**
-   * Denoise interactive frames and every `oidnSampleInterval`
-   * samples instead of only when `maxSamples` is reached. Default `false`.
+   * Denoise while converging: interactive preview frames and every
+   * `sampleInterval` samples, not only the image at `maxSamples`.
+   * Default `false`.
    */
   whileConverging?: boolean;
+  /**
+   * Samples between denoised updates with `whileConverging`. A positive
+   * integer. Default `8`.
+   */
+  sampleInterval?: number;
+  /**
+   * With `whileConverging`, coalesce continuous scene changes while a denoise
+   * is running and then render the latest scene state, instead of restarting
+   * on every change. Intended for animation playback. Default `false`.
+   */
+  coalesceSceneUpdates?: boolean;
   /**
    * Network for interactive preview frames when `whileConverging` is on. Those
    * frames are replaced as soon as the camera moves again, so the default
@@ -78,11 +90,6 @@ export interface RendererParams {
    * Default `false`.
    */
   denoiser?: boolean | DenoiserOptions;
-  /**
-   * Samples between denoised updates when denoising while converging.
-   * Default `8`.
-   */
-  oidnSampleInterval?: number;
   /** WebGL 2 `preserveDrawingBuffer`, needed to read the canvas back. Default `true`. */
   preserveDrawingBuffer?: boolean;
 }
@@ -183,13 +190,18 @@ export type RenderStatus =
 
 const OIDN_DENOISING = 1;
 const OIDN_DENOISED = 2;
-export const DEFAULT_OIDN_SAMPLE_INTERVAL = 8;
+const DEFAULT_OIDN_SAMPLE_INTERVAL = 8;
 
-function validateOidnSampleInterval(value: number) {
+/** Denoising behavior set by {@link Renderer.setDenoiser}. */
+interface DenoiseMode {
+  whileConverging: boolean;
+  sampleInterval: number;
+  coalesceSceneUpdates: boolean;
+}
+
+function validateSampleInterval(value: number) {
   if (!Number.isInteger(value) || value < 1) {
-    throw new Error(
-      'oidnSampleInterval must be a positive integer'
-    );
+    throw new Error('sampleInterval must be a positive integer');
   }
   return value;
 }
@@ -238,9 +250,6 @@ export default class Renderer {
 
   /** Samples per pixel to accumulate before the image is finished. Default `2048`. */
   maxSamples = 2048;
-
-  /** Samples between denoised updates when denoising while converging. */
-  readonly oidnSampleInterval: number;
 
   private _bevelSamples = DEFAULT_BEVEL_SAMPLES;
 
@@ -385,35 +394,31 @@ export default class Renderer {
    * While a denoise is running, camera-only changes are coalesced so the GPU
    * never accumulates a queue of obsolete OIDN work. Scene changes normally
    * invalidate immediately; animation playback may opt into latest-frame
-   * coalescing with oidnCoalesceSceneUpdates.
+   * coalescing with `coalesceSceneUpdates`.
    */
-  private _oidnWhileConverging = false;
-  /**
-   * Coalesce continuous scene changes while OIDN denoises while converging, then
-   * render and denoise the latest scene state. Intended for animation playback.
-   */
-  oidnCoalesceSceneUpdates = false;
+  private _denoiseMode: DenoiseMode = {
+    whileConverging: false,
+    sampleInterval: DEFAULT_OIDN_SAMPLE_INTERVAL,
+    coalesceSceneUpdates: false
+  };
   private _oidnSceneUpdatePending = false;
   /** Re-denoise the first settled frame after a camera gesture. */
-  private _oidnWhileConvergingStaticDenoisePending = false;
+  private _oidnStaticDenoisePending = false;
   /** Hold the first sample target through compilation, tiling and OIDN. */
   private _oidnFirstFrameDenoisePending = false;
 
-  /**
-   * Denoise interactive frames and every `oidnSampleInterval` samples
-   * instead of only the finished image. Set by `setDenoiser({ whileConverging })`.
-   */
-  get oidnWhileConverging() {
-    return this._oidnWhileConverging;
+  private get _whileConverging() {
+    return this._denoiseMode.whileConverging;
   }
 
-  set oidnWhileConverging(enabled: boolean) {
-    const next = !!enabled;
-    if (this._oidnWhileConverging === next) return;
-    this._oidnWhileConverging = next;
-    this._oidnWhileConvergingStaticDenoisePending = false;
+  private _setDenoiseMode(mode: Partial<DenoiseMode>) {
+    const next = { ...this._denoiseMode, ...mode };
+    const changed = next.whileConverging !== this._denoiseMode.whileConverging;
+    this._denoiseMode = next;
+    if (!changed) return;
+    this._oidnStaticDenoisePending = false;
     this._oidnSceneUpdatePending = false;
-    this._oidnFirstFrameDenoisePending = next;
+    this._oidnFirstFrameDenoisePending = next.whileConverging;
     this._prepareOIDNForCurrentSize();
     this._pipeline?.restartSamples();
     this._renderDone = false;
@@ -423,7 +428,8 @@ export default class Renderer {
 
   /**
    * The attached OIDN denoiser. Prefer {@link Renderer.setDenoiser}; assign
-   * directly only for denoisers loaded with `claypt/oidn` helpers.
+   * directly only for denoisers loaded with `claypt/oidn` helpers. The
+   * `setDenoiser()` mode (`whileConverging` and related options) stays as set.
    */
   get oidn() {
     return this._oidn;
@@ -432,7 +438,7 @@ export default class Renderer {
   set oidn(denoiser: OIDNWeb | undefined) {
     if (this._oidn === denoiser) return;
     this._oidn = denoiser;
-    this._oidnFirstFrameDenoisePending = this.oidnWhileConverging;
+    this._oidnFirstFrameDenoisePending = this._whileConverging;
     // A newly selected network must run against the existing accumulation.
     this._oidnStatus = 0;
     this._oidnRevision++;
@@ -443,7 +449,7 @@ export default class Renderer {
     const denoiser = this._oidn;
     if (!denoiser?.prepareForImage) return;
     if (this.canvas.width <= 0 || this.canvas.height <= 0) return;
-    const options = { tileOverlap: this._oidnWhileConverging ? 80 : undefined };
+    const options = { tileOverlap: this._whileConverging ? 80 : undefined };
     const filters = [
       denoiser,
       denoiser.auxiliaryDenoisers?.albedo,
@@ -505,9 +511,6 @@ export default class Renderer {
   private _oidnRevision = 0;
 
   constructor(params: RendererParams = {}) {
-    this.oidnSampleInterval = validateOidnSampleInterval(
-      params.oidnSampleInterval ?? DEFAULT_OIDN_SAMPLE_INTERVAL
-    );
     this.canvas = params.canvas || document.createElement('canvas');
     this._preserveDrawingBuffer = params.preserveDrawingBuffer ?? true;
     this._preferWebGPU = params.preferWebGPU ?? true;
@@ -572,13 +575,19 @@ export default class Renderer {
       this._ownedDenoiser = undefined;
       this._previewDenoiser = undefined;
       if (previous && this.oidn === previous) this.oidn = undefined;
-      this.oidnWhileConverging = false;
+      this._setDenoiseMode({ whileConverging: false });
       disposeOIDNDenoiser(previous);
       disposeOIDNDenoiser(previousPreview);
       return;
     }
-    const { whileConverging = false, previewModel = 'small', ...loadOptions } =
-      options === true ? {} : options;
+    const {
+      whileConverging = false,
+      sampleInterval = DEFAULT_OIDN_SAMPLE_INTERVAL,
+      coalesceSceneUpdates = false,
+      previewModel = 'small',
+      ...loadOptions
+    } = options === true ? {} : options;
+    validateSampleInterval(sampleInterval);
     const model = loadOptions.model ?? 'standard';
     const { initializeOIDN } = await loadOIDNModule();
     const [denoiser, previewDenoiser] = await Promise.all([
@@ -595,7 +604,7 @@ export default class Renderer {
     }
     this._ownedDenoiser = denoiser;
     this._previewDenoiser = previewDenoiser;
-    this.oidnWhileConverging = whileConverging;
+    this._setDenoiseMode({ whileConverging, sampleInterval, coalesceSceneUpdates });
     this.oidn = denoiser;
     if (previous !== denoiser) disposeOIDNDenoiser(previous);
     disposeOIDNDenoiser(previousPreview);
@@ -641,9 +650,9 @@ export default class Renderer {
   /** Discard the active accumulation without rebuilding persistent scene data. */
   restartSamples() {
     this._pipeline?.restartSamples();
-    this._oidnWhileConvergingStaticDenoisePending = false;
+    this._oidnStaticDenoisePending = false;
     this._oidnSceneUpdatePending = false;
-    this._oidnFirstFrameDenoisePending = this.oidnWhileConverging;
+    this._oidnFirstFrameDenoisePending = this._whileConverging;
     this._renderDone = false;
     this._oidnStatus = 0;
     this._oidnRevision++;
@@ -686,7 +695,7 @@ export default class Renderer {
       allowMultipleSamplesPerFrame: this.allowMultipleSamplesPerFrame,
       interactivePreview: this.interactivePreview,
       oidn: this.oidn,
-      oidnWhileConverging: this.oidnWhileConverging
+      whileConverging: this._whileConverging
     };
     let varianceHistory: OfflineVarianceHistory | undefined;
 
@@ -801,7 +810,7 @@ export default class Renderer {
     try {
       this.allowMultipleSamplesPerFrame = true;
       this.interactivePreview = false;
-      this.oidnWhileConverging = false;
+      this._setDenoiseMode({ whileConverging: false });
 
       const adaptive = options.adaptiveSampling;
       if (adaptive && device) {
@@ -860,7 +869,7 @@ export default class Renderer {
       this.allowMultipleSamplesPerFrame = saved.allowMultipleSamplesPerFrame;
       this.interactivePreview = saved.interactivePreview;
       this.oidn = saved.oidn;
-      this.oidnWhileConverging = saved.oidnWhileConverging;
+      this._setDenoiseMode({ whileConverging: saved.whileConverging });
     }
   }
 
@@ -1210,14 +1219,14 @@ export default class Renderer {
       .performOIDNDenoise;
     const canRunOIDN = !!oidn && this.output === 'final' && supportsOIDN;
     const convergingRequested =
-      this.oidnWhileConverging && this.output === 'final' && supportsOIDN;
+      this._whileConverging && this.output === 'final' && supportsOIDN;
     const samplesBeforeRestart =
       pipeline.getTotalSamplesRendered() ?? 0;
     const previewModeActiveBeforeRestart =
       this.interactivePreview && pipeline.isPreviewMode?.() === true;
     const convergingDenoiseInFlight = convergingRequested && canRunOIDN;
     const deferSceneRestart =
-      this.oidnCoalesceSceneUpdates &&
+      this._denoiseMode.coalesceSceneUpdates &&
       sceneInitialized &&
       sceneChanged &&
       convergingDenoiseInFlight &&
@@ -1255,7 +1264,7 @@ export default class Renderer {
     const previewModeEnded =
       previewModeActiveBeforeRestart && !previewModeActive;
     if (previewModeEnded) {
-      this._oidnWhileConvergingStaticDenoisePending = false;
+      this._oidnStaticDenoisePending = false;
       // The last interactive sample is normally already marked denoised.
       // Invalidate that status so the first settled full-quality frame cannot
       // remain on the raw path-traced output until the next batch completes.
@@ -1273,7 +1282,7 @@ export default class Renderer {
       !previewModeActive &&
       samplesBeforeRestart > 0
     ) {
-      this._oidnWhileConvergingStaticDenoisePending = true;
+      this._oidnStaticDenoisePending = true;
     }
     const convergingDenoiseActive = convergingRequested && canRunOIDN;
     const convergingLowLatency =
@@ -1288,7 +1297,7 @@ export default class Renderer {
       canRunOIDN &&
       !interactionRestarted &&
       !previewModeActive &&
-      this._oidnWhileConvergingStaticDenoisePending;
+      this._oidnStaticDenoisePending;
     const settledFrameDenoise =
       convergingRequested && canRunOIDN && previewModeEnded && !previewModeActive;
     if (
@@ -1305,7 +1314,7 @@ export default class Renderer {
       pipeline.setPreviewTransitionDenoisePending?.(settledFrameDenoise);
     }
     if (staticTransitionDenoise) {
-      this._oidnWhileConvergingStaticDenoisePending = false;
+      this._oidnStaticDenoisePending = false;
       this._oidnStatus = 0;
       this._oidnRevision++;
     }
@@ -1324,8 +1333,8 @@ export default class Renderer {
       : convergingRequested
       ? Math.min(
           this.maxSamples,
-          Math.ceil((renderedSamples + 1) / this.oidnSampleInterval) *
-            this.oidnSampleInterval
+          Math.ceil((renderedSamples + 1) / this._denoiseMode.sampleInterval) *
+            this._denoiseMode.sampleInterval
         )
       : this.maxSamples;
     // A restarted tiled image stays at 0spp until every pixel is sampled.
@@ -1335,7 +1344,7 @@ export default class Renderer {
     pipeline.setOIDNPreviewActive?.(convergingRequested && canRunOIDN);
     pipeline.setPreserveOIDNOutput?.(
       convergingRequested && canRunOIDN &&
-        (this.oidnCoalesceSceneUpdates || (
+        (this._denoiseMode.coalesceSceneUpdates || (
           !interactionRestarted && !previewModeActive
         ))
     );

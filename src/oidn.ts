@@ -184,15 +184,12 @@ export async function initializeOIDNFromURL(
   try {
     const { width, height } = renderer.getSize();
     if (width > 0 && height > 0) {
-      const tileOverlap = renderer.oidnWhileConverging ? 80 : undefined;
+      // Shapes for whole-image tiles. Renderer.setDenoiser() prepares the
+      // overlapped tiles of `whileConverging` itself once it attaches.
       await Promise.all([
-        denoiser.prepareForImage?.(width, height, { tileOverlap }),
-        denoiser.auxiliaryDenoisers?.albedo.prepareForImage?.(width, height, {
-          tileOverlap
-        }),
-        denoiser.auxiliaryDenoisers?.normal.prepareForImage?.(width, height, {
-          tileOverlap
-        })
+        denoiser.prepareForImage?.(width, height),
+        denoiser.auxiliaryDenoisers?.albedo.prepareForImage?.(width, height),
+        denoiser.auxiliaryDenoisers?.normal.prepareForImage?.(width, height)
       ]);
     }
   } catch (error) {

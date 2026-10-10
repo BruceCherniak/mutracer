@@ -60,9 +60,9 @@ With `whileConverging` the interactive preview is denoised while the camera
 moves, with the `previewModel` network (`small` by default) at a resolution
 lowered until the denoiser keeps up. A camera change cancels a settled denoise
 that is still running. The accumulating image is re-denoised every
-`oidnSampleInterval` samples (a `Renderer` constructor parameter, default 8).
-Set `renderer.oidnCoalesceSceneUpdates = true` for animation playback, which
-coalesces continuous scene changes into the latest frame.
+`sampleInterval` samples (default 8). Pass `coalesceSceneUpdates: true` for
+animation playback, which coalesces continuous scene changes into the latest
+frame.
 
 ## Options
 
@@ -72,9 +72,12 @@ coalesces continuous scene changes into the latest frame.
 | `previewModel` | Network for while-converging preview frames, or `false` to use `model`. Default `'small'` |
 | `weightsBaseUrl` | Directory containing the `.tza` files |
 | `whileConverging` | Denoise previews and intermediate frames, not only the final image. Default `false` |
+| `sampleInterval` | Samples between denoised updates with `whileConverging`. Default `8` |
+| `coalesceSceneUpdates` | With `whileConverging`, render the latest scene state after a denoise instead of restarting on every scene change. Default `false` |
 | `maxTileSize` | Maximum tile size; chosen by oidn-web by default |
 | `signal` | `AbortSignal` for the download |
 
 `claypt/oidn` exposes `initializeOIDN(renderer, options)` and
-`initializeOIDNFromURL(renderer, url, options)` for custom weights; assign the
-result to `renderer.oidn`.
+`initializeOIDNFromURL(renderer, url, options)` for custom weights; they
+attach the result to `renderer.oidn`, which denoises with the mode last set by
+`setDenoiser()` (the final image only by default).

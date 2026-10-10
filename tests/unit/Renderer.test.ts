@@ -11,6 +11,12 @@ import { createCubeGeometry } from '../../src/main';
 import { SceneChangeDetector } from '../../src/renderer/sceneChangeDetector';
 import type { Scene } from '../../src/scene/Scene';
 
+type DenoiseMode = { whileConverging?: boolean; sampleInterval?: number; coalesceSceneUpdates?: boolean };
+/** Applies what `setDenoiser()` sets once its network has loaded. */
+function setDenoiseMode(renderer: Renderer, mode: DenoiseMode) {
+  (renderer as unknown as { _setDenoiseMode(mode: DenoiseMode): void })._setDenoiseMode(mode);
+}
+
 function createPipeline(overrides: Partial<WGPURenderingPipeline> = {}) {
   let samples = 1;
   const pipeline = {
@@ -448,7 +454,7 @@ describe('Renderer while-converging OIDN', () => {
         canvas: { width: 1280, height: 720 } as HTMLCanvasElement
       });
       renderer.oidn = {} as never;
-      renderer.oidnWhileConverging = true;
+      setDenoiseMode(renderer, { whileConverging: true });
       const pipeline = createPipeline({
         setMeshes: vi.fn(() => {
           const changed = meshChanged;
@@ -523,7 +529,7 @@ describe('Renderer while-converging OIDN', () => {
     });
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
     renderer.oidn = {} as never;
 
     renderer.render(scene, camera);
@@ -558,7 +564,7 @@ describe('Renderer while-converging OIDN', () => {
     });
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
 
     renderer.render(scene, camera);
 
@@ -586,7 +592,7 @@ describe('Renderer while-converging OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
 
     renderer.render(scene, camera);
     compiling = false;
@@ -622,7 +628,7 @@ describe('Renderer while-converging OIDN', () => {
     });
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
     renderer.render(scene, camera);
     renderer.render(scene, camera);
     expect(samples).toBe(1);
@@ -659,7 +665,7 @@ describe('Renderer while-converging OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
     const logError = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       renderer.render(scene, camera);
@@ -690,7 +696,7 @@ describe('Renderer while-converging OIDN', () => {
         canvas: { width: 1, height: 1 } as HTMLCanvasElement
       });
       renderer.maxSamples = 30;
-      renderer.oidnWhileConverging = true;
+      setDenoiseMode(renderer, { whileConverging: true });
       const pipeline = createPipeline({
         needsRestartSample: vi.fn(() => {
           if (!previewMode) return false;
@@ -745,7 +751,7 @@ describe('Renderer while-converging OIDN', () => {
     });
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
 
     renderer.render(scene, camera);
 
@@ -764,7 +770,7 @@ describe('Renderer while-converging OIDN', () => {
     const prepareForImage = vi.fn().mockResolvedValue(undefined);
     const denoiser = { prepareForImage } as never;
     renderer.oidn = denoiser;
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
 
     renderer.render(scene, camera);
 
@@ -790,7 +796,7 @@ describe('Renderer while-converging OIDN', () => {
     markSceneStable(renderer, scene);
     const denoiser = {} as never;
     renderer.oidn = denoiser;
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
 
     renderer.render(scene, camera);
 
@@ -859,7 +865,7 @@ describe('Renderer while-converging OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
 
     renderer.render(scene, camera);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -932,7 +938,7 @@ describe('Renderer while-converging OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
 
     renderer.render(scene, camera);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -952,9 +958,9 @@ describe('Renderer while-converging OIDN', () => {
   it('accepts a custom while-converging OIDN interval that divides maxSamples', async () => {
     let samples = 0;
     const renderer = new Renderer({
-      canvas: { width: 1, height: 1 } as HTMLCanvasElement,
-      oidnSampleInterval: 4
+      canvas: { width: 1, height: 1 } as HTMLCanvasElement
     });
+    setDenoiseMode(renderer, { sampleInterval: 4 });
     renderer.maxSamples = 32;
     const pipeline = createPipeline({
       needsRestartSample: vi.fn(() => false),
@@ -968,7 +974,7 @@ describe('Renderer while-converging OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
 
     renderer.render(scene, camera);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -980,13 +986,13 @@ describe('Renderer while-converging OIDN', () => {
 
   it('allows a while-converging OIDN interval that does not divide maxSamples', () => {
     const renderer = new Renderer({
-      canvas: { width: 1, height: 1 } as HTMLCanvasElement,
-      oidnSampleInterval: 8
+      canvas: { width: 1, height: 1 } as HTMLCanvasElement
     });
+    setDenoiseMode(renderer, { sampleInterval: 8 });
     renderer.maxSamples = 30;
 
     expect(() => {
-      renderer.oidnWhileConverging = true;
+      setDenoiseMode(renderer, { whileConverging: true });
     }).not.toThrow();
   });
 
@@ -1012,7 +1018,7 @@ describe('Renderer while-converging OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
 
     renderer.render(scene, camera);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -1044,7 +1050,7 @@ describe('Renderer while-converging OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
     (renderer as unknown as { _renderDone: boolean })._renderDone = true;
     (renderer as unknown as { _oidnStatus: number })._oidnStatus = 2;
 
@@ -1062,7 +1068,7 @@ describe('Renderer while-converging OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
     (renderer as unknown as { _renderDone: boolean })._renderDone = true;
     (renderer as unknown as { _oidnStatus: number })._oidnStatus = 1;
     (renderer as any)._oidnPreviewInFlight = true;
@@ -1082,7 +1088,7 @@ describe('Renderer while-converging OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
     (renderer as unknown as { _renderDone: boolean })._renderDone = true;
     (renderer as unknown as { _oidnStatus: number })._oidnStatus = 1;
     (renderer as any)._oidnPreviewInFlight = false;
@@ -1102,7 +1108,7 @@ describe('Renderer while-converging OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnWhileConverging = true;
+    setDenoiseMode(renderer, { whileConverging: true });
     (renderer as unknown as { _renderDone: boolean })._renderDone = true;
     (renderer as unknown as { _oidnStatus: number })._oidnStatus = 1;
 
@@ -1129,8 +1135,8 @@ describe('Renderer while-converging OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    renderer.oidnWhileConverging = true;
-    renderer.oidnCoalesceSceneUpdates = true;
+    setDenoiseMode(renderer, { whileConverging: true });
+    setDenoiseMode(renderer, { coalesceSceneUpdates: true });
     (renderer as unknown as { _renderDone: boolean })._renderDone = true;
     (renderer as unknown as { _oidnStatus: number })._oidnStatus = 1;
 

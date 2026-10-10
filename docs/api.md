@@ -14,7 +14,6 @@ new Renderer(params?: RendererParams)
 | `canvas` | `HTMLCanvasElement` | new canvas | Canvas to draw into (`renderer.canvas`) |
 | `preferWebGPU` | `boolean` | `true` | `false` forces the WebGL 2 backend |
 | `denoiser` | `boolean \| DenoiserOptions` | `false` | Same as calling `setDenoiser()` |
-| `oidnSampleInterval` | `number` | `8` | Samples between denoised updates with `whileConverging` |
 | `preserveDrawingBuffer` | `boolean` | `true` | WebGL 2; needed to read the canvas back |
 
 ### Properties

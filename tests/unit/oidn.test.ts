@@ -21,7 +21,6 @@ function createRenderer(usingWebGPU = true) {
     isUsingWebGPU: vi.fn(() => usingWebGPU),
     getSize: vi.fn(() => ({ width: 1280, height: 720 })),
     oidn: undefined,
-    oidnWhileConverging: false,
     samplingPattern: 'sobol'
   } as unknown as Renderer;
 }
@@ -88,9 +87,7 @@ describe('initializeOIDN', () => {
       normal: normalDenoiser
     });
     for (const filter of [denoiser, albedoDenoiser, normalDenoiser]) {
-      expect(filter.prepareForImage).toHaveBeenCalledWith(1280, 720, {
-        tileOverlap: undefined
-      });
+      expect(filter.prepareForImage).toHaveBeenCalledWith(1280, 720);
     }
     expect(initUNetFromBuffer).toHaveBeenCalledWith(
       weights,
