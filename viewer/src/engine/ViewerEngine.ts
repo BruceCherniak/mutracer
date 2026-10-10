@@ -88,8 +88,6 @@ export class ViewerEngine {
     this.canvas = canvas;
     this.settings = get().settings;
     this.renderer = new Renderer({ canvas, preferWebGPU: !new URLSearchParams(location.search).has('webgl') });
-    // Dropped models can be large; TinyBVH's WebAssembly builder is faster.
-    this.renderer.bvhBuilder = 'tinybvh';
 
     this.scene.add(this.modelGroup);
     this.scene.environment = this.environment.texture;
@@ -390,6 +388,16 @@ export class ViewerEngine {
   private applySettings(s: Settings, prev: Settings | null) {
     const changed = (key: keyof Settings) => !prev || prev[key] !== s[key];
     const r = this.renderer;
+    r.bvhBuilder = s.bvhBuilder;
+    if (prev && changed('bvhBuilder')) {
+      // Builders only apply to missing BVHs. Invalidate retained geometry and
+      // derived displacement caches so the current model uses the new builder.
+      for (const geometry of new Set(this.sync.scene.meshes.map((mesh) => mesh.geometry))) {
+        geometry.bvh = undefined;
+        geometry.markUpdated();
+      }
+      r.restartSamples();
+    }
     r.maxSamples = s.maxSamples;
     r.bounces = s.bounces;
     r.samplingPattern = s.samplingPattern;

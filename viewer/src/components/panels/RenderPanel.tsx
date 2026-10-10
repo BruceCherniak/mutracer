@@ -10,6 +10,7 @@ const WEBGPU_ONLY = 'Requires WebGPU';
 export function RenderPanel() {
   const s = useViewer((state) => state.settings);
   const backend = useViewer((state) => state.backend.name);
+  const bvhBusy = useViewer((state) => state.stats.phase === 'preparing' || state.loading !== null || state.export !== null);
   const webgl = backend === 'WebGL 2';
   const [open, setOpen] = useState({ effects: false, debug: false });
   const update = (patch: Partial<Settings>) => setSettings(patch);
@@ -37,6 +38,15 @@ export function RenderPanel() {
               { value: 'random', label: 'Random' }
             ]}
             onChange={(v) => update({ samplingPattern: v })}
+          />
+        </Field>
+        <Field label="BVH builder">
+          <Segmented
+            label="BVH builder"
+            value={s.bvhBuilder}
+            options={[{ value: 'tinybvh', label: 'tinybvh' }, { value: 'builtin', label: 'builtin' }]}
+            disabled={bvhBusy}
+            onChange={(v) => update({ bvhBuilder: v })}
           />
         </Field>
         <Scrub label="Clamping" value={s.clamping} min={0} max={100} step={1} format={(v) => (v === 0 ? 'Off' : String(v))} onChange={(v) => update({ clamping: v })} />

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { OIDNModel, SamplingPattern, ToneMapping, RenderOutput } from 'mutracer';
+import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, RenderOutput } from 'mutracer';
 import type { MaterialValues } from './engine/materialParams';
 
 export type EnvResolution = '1k' | '2k' | '4k';
@@ -21,6 +21,7 @@ export interface Settings {
   bounces: number;
   resolutionScale: number;
   samplingPattern: SamplingPattern;
+  bvhBuilder: BVHBuilder;
   clamping: number;
   denoise: boolean;
   denoiseModel: OIDNModel;
@@ -63,6 +64,8 @@ export const DEFAULT_SETTINGS: Settings = {
   bounces: 6,
   resolutionScale: 0.5,
   samplingPattern: 'sobol',
+  // Dropped models can be large; TinyBVH's WebAssembly builder is faster.
+  bvhBuilder: 'tinybvh',
   clamping: 0,
   denoise: true,
   denoiseModel: 'standard',
@@ -170,7 +173,7 @@ export interface ViewerState {
 const UI_KEY = 'mutracer-viewer:ui';
 const RENDER_KEY = 'mutracer-viewer:render:v5';
 const RENDER_FIELDS: (keyof Settings)[] = [
-  'envResolution', 'maxSamples', 'bounces', 'resolutionScale', 'samplingPattern', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
+  'envResolution', 'maxSamples', 'bounces', 'resolutionScale', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
   'toneMapping', 'interactivePreview', 'previewResolutionScale'
 ];
 
@@ -216,15 +219,19 @@ export function writeHash(settings: Settings, modelPreset: string | null) {
 
 export const hashModelPreset = () => new URLSearchParams(location.hash.slice(1)).get('model');
 
-function validateToneMapping(settings: Settings): Settings {
+function validateSettings(settings: Settings): Settings {
   const allowed: ToneMapping[] = ['agx', 'aces', 'cineon', 'reinhard', 'linear'];
-  return { ...settings, toneMapping: allowed.includes(settings.toneMapping) ? settings.toneMapping : 'agx' };
+  return {
+    ...settings,
+    toneMapping: allowed.includes(settings.toneMapping) ? settings.toneMapping : 'agx',
+    bvhBuilder: settings.bvhBuilder === 'builtin' ? 'builtin' : 'tinybvh'
+  };
 }
 
 const storedUi = readStorage<ViewerState['ui']>(UI_KEY);
 
 export const useViewer = create<ViewerState>(() => ({
-  settings: validateToneMapping({ ...DEFAULT_SETTINGS, ...readStorage<Settings>(RENDER_KEY), ...readHash() }),
+  settings: validateSettings({ ...DEFAULT_SETTINGS, ...readStorage<Settings>(RENDER_KEY), ...readHash() }),
   stats: { phase: 'starting', samples: 0, elapsed: 0, msPerSample: 0, width: 0, height: 0 },
   backend: { name: null, adapter: '' },
   model: null,

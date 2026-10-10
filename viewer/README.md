@@ -54,6 +54,10 @@ Notes:
   is not touched, so the scene sync does not overwrite the edit.
 - `EnvironmentLight` has no intensity or rotation, so both are baked into a copy
   of the HDR pixels.
+- Downloaded HDR files are cached by URL (including resolution and query string)
+  in the browser's origin private file system (OPFS), and reused across reloads.
+  Invalid cached files are downloaded again; unavailable or full storage falls
+  back to normal loading. Clear the site's browser storage to remove the cache.
 - OIDN weights are loaded from `/oidn/weights/` at the server root via an explicit
   weightsBaseUrl, sharing all five local networks. Development serves the
   repository's `oidn/weights/` there, `build:viewer` emits them at the root of

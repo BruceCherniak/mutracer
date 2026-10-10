@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { parseRGBE } from 'mutracer';
 import { fetchWithProgress } from './fetchWithProgress';
+import { openHDRCache } from './hdrCache';
 
 export interface EquirectData {
   data: Float32Array;
@@ -58,7 +59,25 @@ export function parseHDR(buffer: ArrayBuffer): EquirectData {
 }
 
 export async function loadHDR(url: string, onProgress?: (loaded: number, total: number) => void) {
-  return parseHDR(await fetchWithProgress(url, onProgress));
+  const cache = await openHDRCache(url);
+  const cached = await cache?.read();
+  if (cached) {
+    let data: EquirectData | undefined;
+    try {
+      data = parseHDR(cached);
+    } catch {
+      await cache?.remove();
+    }
+    if (data) {
+      onProgress?.(cached.byteLength, cached.byteLength);
+      return data;
+    }
+  }
+  const buffer = await fetchWithProgress(url, onProgress);
+  const data = parseHDR(buffer);
+  // Validate before persisting so an error response cannot poison future loads.
+  await cache?.write(buffer);
+  return data;
 }
 
 /**
