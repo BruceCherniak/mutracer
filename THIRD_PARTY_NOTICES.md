@@ -98,7 +98,7 @@ npm version 0.10.15. Copyright (c) 2019 HOVER. MIT License
 
 The adapted files under `src/renderer/` include:
 
-- `bvhAccel.ts`, `TileRender.ts`, `envMapDistribution.ts`,
+- `TileRender.ts`, `envMapDistribution.ts`,
   `mergeMeshesToGeometry.ts`, `envMapCreation.ts`, `MergedMaterialData.ts`,
   `texturesFromMaterials.ts`, `util.ts`, and parts of
   `WGPURenderingPipeline.ts` / `WebGLRenderingPipeline.ts`.

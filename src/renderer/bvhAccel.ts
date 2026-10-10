@@ -1,7 +1,3 @@
-// Portions adapted from ray-tracing-renderer@0.10.15
-// (https://github.com/hoverinc/ray-tracing-renderer).
-// Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
-
 // Bounding volume hierarchies of scene geometry (BLAS) and mesh instances
 // (TLAS), built with the binned SAH builder in ./binnedSahBvh and written
 // directly in the BVH2 layout read by the traversal shaders.
