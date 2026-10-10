@@ -27,28 +27,31 @@ is loaded with a dynamic import, so it costs nothing until used.
 
 | `model` | Weights | Use |
 | --- | --- | --- |
-| `'standard'` (default) | `rt_hdr_alb_nrm.tza` (1.8 MB) | Balanced quality and speed |
-| `'small'` | `rt_hdr_alb_nrm_small.tza` (0.6 MB) | Fastest; previews while converging |
-| `'cleanAuxLarge'` | `rt_hdr_calb_cnrm_large.tza` + `rt_alb_large.tza` + `rt_nrm_large.tza` (22 MB) | Highest quality; prefilters the albedo/normal guides |
+| `'standard'` (default) | `rt_hdr_alb_nrm.tza` (1.8 MB) | Balanced quality and speed; bundled with mutracer |
+| `'small'` | `rt_hdr_alb_nrm_small.tza` (0.6 MB) | Fastest; previews while converging; bundled with mutracer |
+| `'cleanAuxLarge'` | `rt_hdr_calb_cnrm_large.tza` + `rt_alb_large.tza` + `rt_nrm_large.tza` (22 MB) | Highest quality; prefilters guides; from oidn-weights@2.3.0 |
 
 ## Hosting the weights
 
-By default the weights are downloaded from jsDelivr, pinned to the installed
-MuTracer version:
+Standard and small load from your application's own build assets by default.
+Vite and webpack 5 copy the package's static weight URLs into the output.
+In Vite development add `optimizeDeps: { exclude: ['mutracer'] }` to avoid
+prebundling asset URLs; otherwise MuTracer warns once and falls back to
+jsDelivr's copy for the installed MuTracer version. The standalone `dist/`
+library bundles use that CDN copy directly.
 
-```
-https://cdn.jsdelivr.net/npm/mutracer@<version>/oidn/weights/
-```
-
-For production, serve them yourself. They ship in the npm package at
-`node_modules/mutracer/oidn/weights/`; copy that folder to your static assets
-and pass its URL:
+The large beauty network and auxiliary prefilters default to
+`https://cdn.jsdelivr.net/npm/oidn-weights@2.3.0/`. To self-host all networks,
+install `oidn-weights@2.3.0` and copy `node_modules/oidn-weights/*.tza` to a
+static directory. If you only use standard/small, copying the two files from
+`node_modules/mutracer/oidn/weights/` is sufficient:
 
 ```ts
 await renderer.setDenoiser({ weightsBaseUrl: '/assets/oidn/weights/' });
 ```
 
-The weights are licensed under Apache-2.0 (`oidn/weights/LICENSE.txt`).
+Explicit URLs never fall back to the CDN. Every download is checked for the
+TZA file signature. The weights use Apache-2.0 (`oidn/weights/LICENSE.txt`).
 
 ## Denoising while converging
 

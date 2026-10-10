@@ -10,7 +10,8 @@ import {
   resolveOIDNAuxiliaryModelUrls,
   resolveOIDNModelUrl
 } from '../../src/oidn';
-import { VERSION } from '../../src/version';
+import { readFileSync } from 'node:fs';
+import { OIDN_WEIGHTS_PACKAGE_VERSION, OIDN_WEIGHTS_PACKAGE, DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL, DEFAULT_OIDN_WEIGHTS_BASE_URL } from '../../src/oidn';
 
 function createRenderer(usingWebGPU = true) {
   return {
@@ -34,7 +35,7 @@ describe('initializeOIDN', () => {
   it.each(['sobol', 'zsobol', 'random'] as const)('attaches OIDN without changing %s sampling', async pattern => {
     const renderer = createRenderer();
     renderer.samplingPattern = pattern;
-    const weights = new ArrayBuffer(16);
+    const weights = new Uint8Array([0xD7, 0x41, 0, 0]).buffer;
     const denoiser = {
       dispose: vi.fn(),
       prepareForImage: vi.fn().mockResolvedValue(undefined),
@@ -115,7 +116,7 @@ describe('initializeOIDN', () => {
       'fetch',
       vi.fn().mockResolvedValue({
         ok: true,
-        arrayBuffer: vi.fn().mockResolvedValue(new ArrayBuffer(1))
+        arrayBuffer: vi.fn().mockResolvedValue(new Uint8Array([0xD7, 0x41]).buffer)
       })
     );
     initUNetFromBuffer.mockResolvedValue(denoiser);
@@ -175,9 +176,62 @@ describe('initializeOIDN', () => {
     });
   });
 
-  it('defaults to the version-pinned CDN weights', () => {
-    expect(resolveOIDNModelUrl('small')).toBe(
-      `https://cdn.jsdelivr.net/npm/mutracer@${VERSION}/oidn/weights/rt_hdr_alb_nrm_small.tza`
-    );
+  it.each(['standard', 'small'] as const)('defaults %s to a bundled asset', model => {
+    expect(resolveOIDNModelUrl(model)).toMatch(new RegExp(`^file:.*?/oidn/weights/${model === 'small' ? 'rt_hdr_alb_nrm_small' : 'rt_hdr_alb_nrm'}\\.tza$`));
+  });
+
+  it('pins the complete networks to the independent weights package', () => {
+    const template = JSON.parse(readFileSync(new URL('../../oidn/package/package.json', import.meta.url), 'utf8'));
+    expect(OIDN_WEIGHTS_PACKAGE_VERSION).toBe(template.version);
+    expect(OIDN_WEIGHTS_PACKAGE).toBe(template.name);
+    expect(resolveOIDNModelUrl('cleanAuxLarge')).toBe(`${DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL}rt_hdr_calb_cnrm_large.tza`);
+    expect(resolveOIDNAuxiliaryModelUrls()).toEqual({
+      albedo: `${DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL}rt_alb_large.tza`,
+      normal: `${DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL}rt_nrm_large.tza`
+    });
+  });
+
+  it('falls back for HTML/non-TZA bundled assets and warns only once', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => ({
+      ok: true,
+      arrayBuffer: async () => url.startsWith('file:')
+        ? new TextEncoder().encode('<html>Vite fallback</html>').buffer
+        : new Uint8Array([0xD7, 0x41]).buffer
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    initUNetFromBuffer.mockResolvedValue({ dispose() {} });
+    try {
+      for (const model of ['standard', 'small'] as const) {
+        await initializeOIDN(createRenderer(), { model });
+        expect(fetchMock).toHaveBeenCalledWith(resolveOIDNModelUrl(model, DEFAULT_OIDN_WEIGHTS_BASE_URL), { signal: undefined });
+      }
+      expect(warning).toHaveBeenCalledOnce();
+      expect(warning.mock.calls[0][0]).toContain('optimizeDeps');
+    } finally { warning.mockRestore(); }
+  });
+
+  it.each(['base', 'custom', 'aux'] as const)('does not fall back for explicit %s URLs', async kind => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 404, statusText: 'Not Found' });
+    vi.stubGlobal('fetch', fetchMock);
+    const renderer = createRenderer();
+    const loading = kind === 'custom'
+      ? initializeOIDNFromURL(renderer, '/custom.tza')
+      : initializeOIDN(renderer, kind === 'base' ? { weightsBaseUrl: '/own' }
+        : { model: 'cleanAuxLarge', auxiliaryModelUrls: { albedo: '/own/albedo', normal: '/own/normal' } });
+    await expect(loading).rejects.toThrow();
+    expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith(DEFAULT_OIDN_WEIGHTS_BASE_URL))).toHaveLength(0);
+  });
+
+  it('rejects HTML from an explicit URL without a fallback', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new TextEncoder().encode('<html>').buffer });
+    vi.stubGlobal('fetch', fetchMock);
+    await expect(initializeOIDNFromURL(createRenderer(), '/own.tza')).rejects.toThrow('expected magic D7 41');
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it('explains how to self-host missing large networks', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404, statusText: 'Not Found' }));
+    await expect(initializeOIDN(createRenderer(), { model: 'cleanAuxLarge' })).rejects.toThrow('Self-host node_modules/oidn-weights/*.tza and pass weightsBaseUrl');
   });
 });

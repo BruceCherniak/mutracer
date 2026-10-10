@@ -159,3 +159,20 @@ canvas.toBlob((blob) => { /* save */ }, 'image/png');
 ## Cleanup
 
 Call `renderer.dispose()` to release GPU resources and the denoiser.
+
+## Bundler notes
+
+Vite development prebundles dependencies and can relocate asset URLs. Exclude
+MuTracer so bundled OIDN standard/small weights and the optional TinyBVH wasm
+load from the package:
+
+```ts
+export default defineConfig({
+  optimizeDeps: { exclude: ['mutracer'] }
+});
+```
+
+Vite production builds and webpack 5 copy these assets without extra
+configuration. Bundlers without asset URL support need self-hosted OIDN weights
+via `weightsBaseUrl`; see [denoising](./denoising.md). The default TS BVH builder
+does not load wasm; the viewer opts into the asynchronous wasm builder.

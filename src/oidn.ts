@@ -1,6 +1,7 @@
 import { initUNetFromBuffer, type UNet } from 'oidn-web';
 import type Renderer from './Renderer';
 import { VERSION } from './version';
+import { standardWeightsUrl, smallWeightsUrl } from './oidnBundledWeights';
 
 export type OIDNEngine = 'auto' | 'wgsl' | 'webnn';
 export type OIDNPrecision = 'auto' | 'fp32' | 'fp16';
@@ -43,9 +44,16 @@ export type OIDNDenoiser = UNet & {
   ) => Promise<void>;
 };
 
+/** Package containing all OIDN RT networks. Default: `oidn-weights`. */
+export const OIDN_WEIGHTS_PACKAGE = 'oidn-weights';
+/** OIDN network version, independent of MuTracer. Default: `2.3.0`. */
+export const OIDN_WEIGHTS_PACKAGE_VERSION = '2.3.0';
+/** Default large-network directory: jsDelivr's `oidn-weights@2.3.0/`. */
+export const DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL =
+  `https://cdn.jsdelivr.net/npm/${OIDN_WEIGHTS_PACKAGE}@${OIDN_WEIGHTS_PACKAGE_VERSION}/`;
 /**
- * Weights published with this package version on jsDelivr. Self-host the
- * `oidn/weights` directory and pass `weightsBaseUrl` for production use.
+ * Fallback for bundled standard/small weights when application assets fail.
+ * Defaults to jsDelivr's `mutracer@VERSION/oidn/weights/` directory.
  */
 export const DEFAULT_OIDN_WEIGHTS_BASE_URL =
   `https://cdn.jsdelivr.net/npm/mutracer@${VERSION}/oidn/weights/`;
@@ -68,7 +76,7 @@ export interface OIDNLoadOptions {
 export interface InitializeOIDNOptions extends OIDNLoadOptions {
   /** Packaged model to load. Defaults to the standard model. */
   model?: OIDNModel;
-  /** Directory containing the packaged weights. Defaults to the jsDelivr copy for this version. */
+  /** Override directory for all weights. Defaults to bundled standard/small assets and the oidn-weights CDN for large networks. */
   weightsBaseUrl?: string | URL;
   /** Override the packaged albedo/normal prefilter weights for a clean-aux model. */
   auxiliaryModelUrls?: OIDNAuxiliaryModelUrls;
@@ -87,14 +95,18 @@ export interface CustomOIDNModelOptions extends OIDNLoadOptions {
 
 export function resolveOIDNModelUrl(
   model: OIDNModel,
-  weightsBaseUrl: string | URL = DEFAULT_OIDN_WEIGHTS_BASE_URL
+  weightsBaseUrl?: string | URL
 ) {
-  const baseUrl = String(weightsBaseUrl);
+  if (weightsBaseUrl === undefined) {
+    if (model === 'standard') return String(standardWeightsUrl);
+    if (model === 'small') return String(smallWeightsUrl);
+  }
+  const baseUrl = String(weightsBaseUrl ?? DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL);
   return `${baseUrl}${baseUrl.endsWith('/') ? '' : '/'}${OIDN_MODEL_FILENAMES[model]}`;
 }
 
 export function resolveOIDNAuxiliaryModelUrls(
-  weightsBaseUrl: string | URL = DEFAULT_OIDN_WEIGHTS_BASE_URL
+  weightsBaseUrl: string | URL = DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL
 ): OIDNAuxiliaryModelUrls {
   const baseUrl = String(weightsBaseUrl);
   const prefix = `${baseUrl}${baseUrl.endsWith('/') ? '' : '/'}`;
@@ -111,17 +123,23 @@ async function fetchOIDNWeights(url: string | URL, signal?: AbortSignal) {
       `Failed to load OIDN weights from ${url}: ${response.status} ${response.statusText}`
     );
   }
-  return response.arrayBuffer();
+  const buffer = await response.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  if (bytes[0] !== 0xD7 || bytes[1] !== 0x41) {
+    throw new Error(`Invalid OIDN TZA weights from ${url}: expected magic D7 41 (received non-TZA content).`);
+  }
+  return buffer;
 }
 
 /**
  * Loads an HDR OIDN model with albedo/normal guides on the renderer's WebGPU
  * device and attaches it to the renderer by default.
  */
-export async function initializeOIDNFromURL(
+async function loadOIDN(
   renderer: Renderer,
   weightsUrl: string | URL,
-  options: CustomOIDNModelOptions = {}
+  options: CustomOIDNModelOptions = {},
+  fetchWeights = fetchOIDNWeights
 ): Promise<OIDNDenoiser> {
   const { device } = await renderer.getGPUDeviceAndAdapter();
   if (!renderer.isUsingWebGPU() || !device) {
@@ -130,11 +148,11 @@ export async function initializeOIDNFromURL(
 
   const auxiliaryUrls = options.auxiliaryModelUrls;
   const weightBuffers = await Promise.all([
-    fetchOIDNWeights(weightsUrl, options.signal),
+    fetchWeights(weightsUrl, options.signal),
     ...(auxiliaryUrls
       ? [
-          fetchOIDNWeights(auxiliaryUrls.albedo, options.signal),
-          fetchOIDNWeights(auxiliaryUrls.normal, options.signal)
+          fetchWeights(auxiliaryUrls.albedo, options.signal),
+          fetchWeights(auxiliaryUrls.normal, options.signal)
         ]
       : [])
   ]);
@@ -202,6 +220,17 @@ export async function initializeOIDNFromURL(
   return denoiser;
 }
 
+/** Loads an explicit HDR network URL; download failures never fall back to a CDN. */
+export function initializeOIDNFromURL(
+  renderer: Renderer,
+  weightsUrl: string | URL,
+  options: CustomOIDNModelOptions = {}
+): Promise<OIDNDenoiser> {
+  return loadOIDN(renderer, weightsUrl, options);
+}
+
+let warnedBundledWeights = false;
+
 /** Loads one of the packaged OIDN models. */
 export function initializeOIDN(
   renderer: Renderer,
@@ -213,15 +242,39 @@ export function initializeOIDN(
     auxiliaryModelUrls,
     ...loadOptions
   } = options;
-  return initializeOIDNFromURL(
+  const mainUrl = resolveOIDNModelUrl(model, weightsBaseUrl);
+  const defaultBundled = weightsBaseUrl === undefined && model !== 'cleanAuxLarge';
+  const defaultLarge = new Set<string>(weightsBaseUrl === undefined && model === 'cleanAuxLarge'
+    ? [mainUrl, ...(!auxiliaryModelUrls ? Object.values(resolveOIDNAuxiliaryModelUrls()).map(String) : [])]
+    : []);
+  const fetchWeights = async (url: string | URL, signal?: AbortSignal) => {
+    try {
+      return await fetchOIDNWeights(url, signal);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      if (defaultBundled && String(url) === mainUrl) {
+        if (!warnedBundledWeights) {
+          warnedBundledWeights = true;
+          console.warn('Bundled OIDN weights failed to load; falling back to jsDelivr. In Vite development add optimizeDeps: { exclude: ["mutracer"] }, or pass weightsBaseUrl to self-host the weights.', error);
+        }
+        return fetchOIDNWeights(resolveOIDNModelUrl(model, DEFAULT_OIDN_WEIGHTS_BASE_URL), signal);
+      }
+      if (defaultLarge.has(String(url))) {
+        throw new Error(`Failed to load ${OIDN_WEIGHTS_PACKAGE} network from ${url}. Self-host node_modules/oidn-weights/*.tza and pass weightsBaseUrl. ${error instanceof Error ? error.message : String(error)}`);
+      }
+      throw error;
+    }
+  };
+  return loadOIDN(
     renderer,
-    resolveOIDNModelUrl(model, weightsBaseUrl),
+    mainUrl,
     {
       ...loadOptions,
       auxiliaryModelUrls:
         model === 'cleanAuxLarge'
           ? auxiliaryModelUrls ?? resolveOIDNAuxiliaryModelUrls(weightsBaseUrl)
           : undefined
-    }
+    },
+    fetchWeights
   );
 }

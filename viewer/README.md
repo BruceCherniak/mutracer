@@ -49,8 +49,8 @@ Notes:
   is not touched, so the scene sync does not overwrite the edit.
 - `EnvironmentLight` has no intensity or rotation, so both are baked into a copy
   of the HDR pixels.
-- OIDN weights are loaded from `/oidn/weights/` at the server root, because
-  the CDN copy only exists for published versions. Development serves the
+- OIDN weights are loaded from `/oidn/weights/` at the server root via an explicit
+  weightsBaseUrl, sharing all five local networks. Development serves the
   repository's `oidn/weights/` there, `build:viewer` emits them at the root of
   `dist-viewer/`, and the site build shares one copy with the examples.
 - Opening the viewer with `#open=files` loads files that the home page stashed

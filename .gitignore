@@ -9,3 +9,5 @@ lib/
 examples/assets/models/extra/
 __pycache__/
 dist-site/
+
+dist-oidn-weights/

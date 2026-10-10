@@ -60,7 +60,8 @@ Copyright (c) 2015-2017 Keijiro Takahashi. MIT License
 
 ## Intel Open Image Denoise weights
 
-The `.tza` files in [`oidn/weights/`](./oidn/weights) are trained weights from
+The `.tza` files in [`oidn/weights/`](./oidn/weights) are also distributed in the separate `oidn-weights@2.3.0` package,
+with standard/small included in mutracer. They are trained weights from
 [Intel Open Image Denoise](https://github.com/OpenImageDenoise/oidn).
 
 Copyright Intel Corporation. Apache License 2.0

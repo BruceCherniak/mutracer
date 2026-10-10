@@ -41,8 +41,8 @@ export interface DenoiserOptions {
    */
   model?: OIDNModel;
   /**
-   * Directory containing the `.tza` weights. Defaults to the jsDelivr copy
-   * published with this package version; self-host for production.
+   * Directory overriding all `.tza` weights. Defaults to bundled standard/small
+   * assets and the oidn-weights CDN for large networks.
    */
   weightsBaseUrl?: string | URL;
   /**

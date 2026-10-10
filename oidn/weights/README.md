@@ -12,26 +12,32 @@ stored in OIDN's `.tza` format and released under the Apache License 2.0
 | `rt_hdr_calb_cnrm_large.tza` | `model: 'cleanAuxLarge'`: highest quality, with prefiltered guides |
 | `rt_alb_large.tza`, `rt_nrm_large.tza` | Albedo / normal prefilters for `cleanAuxLarge` |
 
-The large auxiliary weights come from
-[RenderKit/oidn-weights](https://github.com/RenderKit/oidn-weights) at commit
-[`28883d1769d5930e13cf7f1676dd852bd81ed9e7`](https://github.com/RenderKit/oidn-weights/tree/28883d1769d5930e13cf7f1676dd852bd81ed9e7)
-(OIDN v2.3):
+All five files come from [RenderKit/oidn-weights](https://github.com/RenderKit/oidn-weights/tree/28883d1769d5930e13cf7f1676dd852bd81ed9e7)
+at commit `28883d1769d5930e13cf7f1676dd852bd81ed9e7` (OIDN 2.3).
 
-- `rt_alb_large.tza`: SHA-256 `a8efbe6eed511f41c8f5ff9145923214cefb0703cf91a3b00a1dc131ade1600a`
-- `rt_nrm_large.tza`: SHA-256 `8ac7705ec5ac303116b40ad2f0880cd741ed1f4280828bf2f18f7635c3377257`
+## SHA-256
+
+```text
+e586ef2ff48d7fbb7611986405220ed8fc5c13ca79bfc40be4dc742fbf959e1a  rt_hdr_alb_nrm.tza
+980ea307e7825cae23ed8b1addf8de62ece84b61094795a5631ebf1c91b2e1a7  rt_hdr_alb_nrm_small.tza
+08130cdc4f33b7a513d0073757f089ac830f900613bb5bad72ca42c52b934465  rt_hdr_calb_cnrm_large.tza
+a8efbe6eed511f41c8f5ff9145923214cefb0703cf91a3b00a1dc131ade1600a  rt_alb_large.tza
+8ac7705ec5ac303116b40ad2f0880cd741ed1f4280828bf2f18f7635c3377257  rt_nrm_large.tza
+```
 
 ## Loading
 
-`renderer.setDenoiser()` downloads these files from the jsDelivr copy of the
-installed `mutracer` version. For production, serve this directory yourself and
-pass its URL:
+MuTracer bundles standard and small, loading them from application assets by
+default. Vite development requires `optimizeDeps: { exclude: ['mutracer'] }`;
+otherwise MuTracer warns once and falls back to its version-pinned CDN copy.
+The complete `oidn-weights@2.3.0` package also includes all three large networks:
 
-```ts
-await renderer.setDenoiser({
-  model: 'standard',
-  weightsBaseUrl: '/assets/oidn/weights/'
-});
+```text
+https://cdn.jsdelivr.net/npm/oidn-weights@2.3.0/<filename>.tza
 ```
 
-With npm, the files are at `node_modules/mutracer/oidn/weights/`; copy them into
-your static assets as part of the build.
+To self-host, install `oidn-weights@2.3.0`, copy `node_modules/oidn-weights/*.tza`
+to static assets, then pass `weightsBaseUrl: '/assets/oidn/weights/'` to
+`renderer.setDenoiser()`. When using only standard/small, copy the two `.tza`
+files from `node_modules/mutracer/oidn/weights/` instead. This repository retains
+all five files for examples and viewer builds.

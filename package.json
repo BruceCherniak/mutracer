@@ -46,7 +46,10 @@
   "files": [
     "lib",
     "dist",
-    "oidn/weights",
+    "oidn/weights/rt_hdr_alb_nrm.tza",
+    "oidn/weights/rt_hdr_alb_nrm_small.tza",
+    "oidn/weights/LICENSE.txt",
+    "oidn/weights/README.md",
     "LICENSE",
     "LICENSES",
     "THIRD_PARTY_NOTICES.md",
@@ -75,7 +78,8 @@
     "site": "vite --config site/vite.config.ts",
     "build:site": "node scripts/build-site.mjs",
     "typecheck:site": "tsc --noEmit -p site/tsconfig.json",
-    "deploy": "wrangler deploy"
+    "deploy": "wrangler deploy",
+    "pack:oidn-weights": "node scripts/pack-oidn-weights.mjs"
   },
   "dependencies": {
     "gl-matrix": "^3.4.4",
