@@ -5,7 +5,7 @@
 
 **MuTracer** is a physically based path tracer for the web.
 It renders on WebGPU and falls back to WebGL 2, with OpenPBR materials,
-TinyBVH acceleration and Intel Open Image Denoise built in.
+TinyBVH acceleration and denoising built in.
 
 Try the [online demo](https://mutracer.meimu-studio.com) or open the
 [viewer](https://mutracer.meimu-studio.com/viewer/). MuTracer is a 0.x library;
@@ -18,8 +18,9 @@ APIs may change between minor releases.
 - **Fast scene setup**: a JavaScript port of TinyBVH's binned SAH builder
   builds acceleration structures, with the TinyBVH WebAssembly builder as an
   option; transform-only animation refits the instance hierarchy.
-- **Denoising**: one call enables OIDN on the WebGPU device, for the final image
-  or while the image converges.
+- **Denoising**: one call enables a built-in joint non-local means filter
+  (WebGPU and WebGL 2) or Intel Open Image Denoise (WebGPU), for the final
+  image or while the image converges.
 - **Three.js friendly**: keep a `THREE.Scene` (loaded with `GLTFLoader` or
   built by hand) in sync with `THREESceneSync`.
 - **Production output**: AgX, ACES, Cineon, Reinhard and linear tone mapping, color
@@ -106,10 +107,11 @@ function frame() {
 frame();
 ```
 
-Enable denoising (WebGPU):
+Enable denoising:
 
 ```ts
-await renderer.setDenoiser({ model: 'standard' });
+await renderer.setDenoiser();                  // built-in JNLM filter
+await renderer.setDenoiser({ type: 'oidn' });  // Intel Open Image Denoise
 ```
 
 ## Documentation
@@ -120,7 +122,7 @@ await renderer.setDenoiser({ model: 'standard' });
 | [API reference](./docs/api.md) | Renderer options, methods, status codes, scene types |
 | [Materials](./docs/materials.md) | OpenPBR inputs, textures, alpha, bevel, displacement |
 | [Three.js](./docs/threejs.md) | `THREESceneSync`, supported materials and lights, `userData` keys |
-| [Denoising](./docs/denoising.md) | OIDN models, weights hosting, denoising while converging |
+| [Denoising](./docs/denoising.md) | JNLM and OIDN denoisers, OIDN weights hosting, denoising while converging |
 | [Sampling](./docs/sampling.md) | Patterns, dimensions and progressive budgets |
 | [BVH](./docs/bvh.md) | BVH builders, TinyBVH layouts, worker precomputation |
 | [Performance](./docs/performance.md) | Tuning checklist |

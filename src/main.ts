@@ -26,6 +26,7 @@ export {
 export type {
   BVHBuilder,
   DenoiserOptions,
+  DenoiserType,
   OfflineFrameRenderOptions,
   OfflineFrameRenderResult,
   RenderStatus,

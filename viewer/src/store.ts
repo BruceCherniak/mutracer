@@ -24,7 +24,8 @@ export interface Settings {
   bvhBuilder: BVHBuilder;
   clamping: number;
   denoise: boolean;
-  denoiseModel: OIDNModel;
+  /** `jnlm` is the built-in filter; the others are OIDN networks. */
+  denoiseModel: OIDNModel | 'jnlm';
   denoiseWhileConverging: boolean;
   toneMapping: ToneMapping;
   exposure: number;
@@ -68,7 +69,7 @@ export const DEFAULT_SETTINGS: Settings = {
   bvhBuilder: 'tinybvh',
   clamping: 0,
   denoise: true,
-  denoiseModel: 'standard',
+  denoiseModel: 'jnlm',
   denoiseWhileConverging: false,
   toneMapping: 'agx',
   exposure: 1,

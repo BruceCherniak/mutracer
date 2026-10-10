@@ -486,12 +486,17 @@ export class ViewerEngine {
   private async updateDenoiser() {
     if (!this.backendKnown) return;
     const s = this.settings;
-    const enabled = s.denoise && this.renderer.isUsingWebGPU();
-    const key = enabled ? `${s.denoiseModel}:${s.denoiseWhileConverging}` : 'off';
+    const enabled = s.denoise;
+    // WebGL 2 only runs the built-in JNLM filter.
+    const model = this.renderer.isUsingWebGPU() ? s.denoiseModel : 'jnlm';
+    const key = enabled ? `${model}:${s.denoiseWhileConverging}` : 'off';
     if (key === this.denoiserKey) return;
     this.denoiserKey = key;
     try {
-      await this.renderer.setDenoiser(enabled ? { model: s.denoiseModel, whileConverging: s.denoiseWhileConverging, weightsBaseUrl: OIDN_WEIGHTS } : false);
+      const whileConverging = s.denoiseWhileConverging;
+      await this.renderer.setDenoiser(!enabled ? false : model === 'jnlm'
+        ? { type: 'jnlm', whileConverging }
+        : { type: 'oidn', model, whileConverging, weightsBaseUrl: OIDN_WEIGHTS });
     } catch (error) {
       this.denoiserKey = '';
       showToast(`Denoiser unavailable: ${(error as Error).message}`, 'error');

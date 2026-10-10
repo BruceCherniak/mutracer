@@ -1,29 +1,63 @@
-# Denoising (Intel Open Image Denoise)
+# Denoising
 
-MuTracer runs [Intel Open Image Denoise](https://www.openimagedenoise.org/)
-networks on the renderer's WebGPU device through
-[`oidn-web`](https://www.npmjs.com/package/oidn-web). The denoiser uses the
-complete composed image plus albedo and normal guides, so it works well
-from a few dozen samples. WebGL 2 is not supported.
+MuTracer has two denoisers. Both filter the complete composed image using
+albedo and normal guides.
+
+- **JNLM** (default): a built-in joint non-local means filter, on WebGPU and
+  WebGL 2. It needs no download and takes about 17 ms for a 1080p image.
+- **OIDN**: [Intel Open Image Denoise](https://www.openimagedenoise.org/)
+  networks, run through [`oidn-web`](https://www.npmjs.com/package/oidn-web),
+  WebGPU only. They take longer and need weights, but are cleaner at one or
+  two samples per pixel, for example for denoising while the camera moves.
 
 ```ts
 const renderer = new Renderer({ canvas });
-await renderer.setDenoiser();                     // standard model
-await renderer.setDenoiser({ model: 'small' });   // replace it
-await renderer.setDenoiser(false);                // remove it
+await renderer.setDenoiser();                               // JNLM
+await renderer.setDenoiser({ type: 'oidn' });               // OIDN standard
+await renderer.setDenoiser({ model: 'small' });             // OIDN small
+await renderer.setDenoiser(false);                          // remove it
 ```
 
-or `new Renderer({ canvas, denoiser: true })`.
+or `new Renderer({ canvas, denoiser: true })`. `type` defaults to `'jnlm'`,
+or to `'oidn'` when `model` or `weightsBaseUrl` is given.
 
 With a denoiser attached, when `maxSamples` is reached `render()` returns
 `RENDER_STATUS_DENOISING` and then `RENDER_STATUS_FINISHED` with the denoised
 image. `renderOfflineFrame` denoises before resolving. A lower `maxSamples`
 (e.g. 64–256) is usually enough.
 
-`setDenoiser()` rejects on WebGL or when the weights fail to load. The OIDN code
-is loaded with a dynamic import, so it costs nothing until used.
+For OIDN, `setDenoiser()` rejects on WebGL or when the weights fail to load.
+The OIDN code is loaded with a dynamic import, so it costs nothing until used.
 
-## Models
+## JNLM
+
+The filter follows Rousselle, Manzi and Zwicker, *Robust Denoising using
+Feature and Color Information* (2013). Each pixel becomes a weighted mean of
+its 11 × 11 neighborhood. A neighbor's weight is the smaller of:
+
+- a color weight: the distance between the two pixels' 5 × 5 patches,
+  normalized by their estimated variance, so differences explained by noise
+  are ignored;
+- a feature weight: the albedo, coverage and normal differences, which keep
+  texture and geometric edges.
+
+A second pass filters the result again with every other pixel (à-trous),
+which removes the blotches a single pass leaves at the scale of its window.
+
+The variance comes from per-pixel luminance moments that the path tracer
+accumulates alongside the color. Weights are computed in linear radiance and
+applied to the composed image, including its alpha, so shadow catchers and
+transparent backgrounds are filtered too. Pixels that show the background
+directly are left as rendered.
+
+```ts
+await renderer.setDenoiser({ strength: 1.5 });    // filter more
+```
+
+`strength` (default `1`) scales the color tolerance. Higher values remove
+more noise at low sample counts and more detail at high ones.
+
+## OIDN models
 
 | `model` | Weights | Use |
 | --- | --- | --- |
@@ -60,8 +94,8 @@ await renderer.setDenoiser({ whileConverging: true });
 ```
 
 With `whileConverging` the interactive preview is denoised while the camera
-moves, with the `previewModel` network (`small` by default) at a resolution
-lowered until the denoiser keeps up. A camera change cancels a settled denoise
+moves (with OIDN, by the `previewModel` network, `small` by default), at a
+resolution lowered until the denoiser keeps up. A camera change cancels a settled denoise
 that is still running. The accumulating image is re-denoised on an adaptive
 schedule that doubles the sample count (1, 4, 8, 16, … samples), so the number
 of denoises grows logarithmically and does not depend on resolution. Long
@@ -74,14 +108,16 @@ frame.
 
 | `DenoiserOptions` | Description |
 | --- | --- |
-| `model` | `'standard'`, `'small'` or `'cleanAuxLarge'` |
-| `previewModel` | Network for while-converging preview frames, or `false` to use `model`. Default `'small'` |
-| `weightsBaseUrl` | Directory containing the `.tza` files |
+| `type` | `'jnlm'` or `'oidn'`. Default `'jnlm'`, or `'oidn'` when `model` or `weightsBaseUrl` is given |
+| `strength` | JNLM filter strength. Default `1` |
+| `model` | OIDN network: `'standard'`, `'small'` or `'cleanAuxLarge'` |
+| `previewModel` | OIDN network for while-converging preview frames, or `false` to use `model`. Default `'small'` |
+| `weightsBaseUrl` | Directory containing the OIDN `.tza` files |
 | `whileConverging` | Denoise previews and intermediate frames, not only the final image. Default `false` |
 | `sampleInterval` | Fixed samples between denoised updates with `whileConverging`. Default adaptive (see above) |
 | `coalesceSceneUpdates` | With `whileConverging`, render the latest scene state after a denoise instead of restarting on every scene change. Default `false` |
-| `maxTileSize` | Maximum tile size; chosen by oidn-web by default |
-| `signal` | `AbortSignal` for the download |
+| `maxTileSize` | Maximum OIDN tile size; chosen by oidn-web by default |
+| `signal` | `AbortSignal` for the OIDN weight download |
 
 `mutracer/oidn` exposes `initializeOIDN(renderer, options)` and
 `initializeOIDNFromURL(renderer, url, options)` for custom weights; they

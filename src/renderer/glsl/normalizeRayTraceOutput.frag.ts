@@ -37,10 +37,9 @@ void main() {
   // TODO In some platforms. the output of hit.r is always 0. In this case we use sampleCount instead.
   vec4 light = vec4(lightTexel.rgb / (hit > 0.0 ? hit : sampleCount), lightTexel.a / sampleCount);
 
-  out_normal.rgb = normal * 0.5 + 0.5;
-  // Model id, convert to 0 - 1. Because we will use unsigned byte.
-  // out_normal.a = normal.a / 240.0;
-  out_normal.a = 1.0;
+  // Pixels whose primary rays mostly miss geometry have no normal (alpha 0),
+  // as in the WebGPU output.
+  out_normal = dot(normal, normal) > 0.1 ? vec4(normal * 0.5 + 0.5, 1.0) : vec4(0.0);
   out_albedo = vec4(albedo, 1.0);
   out_shadowCatcher = shadowCatcher;
   out_color = light;

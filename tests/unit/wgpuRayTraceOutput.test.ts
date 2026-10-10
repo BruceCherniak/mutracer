@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   WGPURayTraceOutputPass, createNormalizeRayTraceOutputWGSL
 } from '../../src/renderer/WGPURayTraceOutput';
+import { jnlmGuideWGSL } from '../../src/renderer/WGPUJNLMDenoiser';
 
 describe('WGPURayTraceOutputPass resource lifetime', () => {
   afterEach(() => {
@@ -61,18 +62,20 @@ describe('WGPURayTraceOutputPass resource lifetime', () => {
 
 });
 
-it('matches catcher accumulation layout in tracing and both normalization passes', () => {
+it('matches the auxiliary accumulation layout in tracing, normalization and the JNLM guide', () => {
   vi.stubGlobal('GPUShaderStage', { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 });
   try {
     for (const shader of [
       rayTraceCompute({ hasDisplacement: false }),
       createNormalizeRayTraceOutputWGSL(),
-      createNormalizeRayTraceOutputWGSL(true)
+      createNormalizeRayTraceOutputWGSL(true),
+      jnlmGuideWGSL
     ]) {
       const layout = makeShaderDataDefinitions(shader).structs.ShadowCatcherAccumulation;
       expect(layout.size).toBe(SHADOW_CATCHER_ACCUMULATION_BYTES);
       expect(layout.fields.mask.offset).toBe(0);
       expect(layout.fields.background.offset).toBe(16);
+      expect(layout.fields.moments.offset).toBe(32);
     }
   } finally {
     vi.unstubAllGlobals();

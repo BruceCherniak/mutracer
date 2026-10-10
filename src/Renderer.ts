@@ -19,10 +19,14 @@ import Camera from './scene/Camera.js';
 import { Scene } from './scene/Scene.js';
 import { ColorRGB } from './types.js';
 import type { OIDNDenoiser, OIDNModel } from './oidn.js';
+import {
+  createJNLMDenoiser,
+  isJNLMDenoiser,
+  type JNLMDenoiser
+} from './renderer/jnlm.js';
 import { meshNeedsPrecompute } from './util/workerHelper.js';
 import makeWGPURenderingPipeline, {
-  OIDNWeb,
-  WGPURenderingPipeline
+  OIDNWeb
 } from './renderer/WGPURenderingPipeline.js';
 import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from './renderer/MergedMaterialData.js';
 import {
@@ -32,10 +36,28 @@ import {
 /** BLAS builder for meshes without a precomputed BVH. See {@link Renderer.bvhBuilder}. */
 export type BVHBuilder = 'tinybvh' | 'builtin';
 
+/**
+ * Denoiser implementation. `'jnlm'` is the built-in joint non-local means
+ * filter: no download, tens of milliseconds per image, WebGPU and WebGL 2.
+ * `'oidn'` runs Intel Open Image Denoise networks (WebGPU only), which are
+ * slower but cleaner at very low sample counts.
+ */
+export type DenoiserType = 'oidn' | 'jnlm';
+
 /** Options for {@link Renderer.setDenoiser}. */
 export interface DenoiserOptions {
   /**
-   * OIDN network. `standard` (default) balances quality and speed, `small`
+   * Denoiser implementation. Default `'jnlm'`, or `'oidn'` when `model` or
+   * `weightsBaseUrl` is given.
+   */
+  type?: DenoiserType;
+  /**
+   * Filter strength of the `'jnlm'` denoiser, a positive number. Larger
+   * values remove more noise and more detail. Default `1`.
+   */
+  strength?: number;
+  /**
+   * OIDN network (`'oidn'` only). `standard` (default) balances quality and speed, `small`
    * is fastest, `cleanAuxLarge` prefilters the albedo/normal guides and gives
    * the cleanest result at the highest cost.
    */
@@ -66,9 +88,9 @@ export interface DenoiserOptions {
    */
   coalesceSceneUpdates?: boolean;
   /**
-   * Network for interactive preview frames when `whileConverging` is on. Those
-   * frames are replaced as soon as the camera moves again, so the default
-   * trades detail for speed; `false` uses `model`. Default `'small'`.
+   * OIDN network for interactive preview frames when `whileConverging` is on.
+   * Those frames are replaced as soon as the camera moves again, so the
+   * default trades detail for speed; `false` uses `model`. Default `'small'`.
    */
   previewModel?: OIDNModel | false;
   /** Maximum OIDN tile size. By default oidn-web chooses it. */
@@ -87,9 +109,9 @@ export interface RendererParams {
    */
   preferWebGPU?: boolean;
   /**
-   * Enable OIDN denoising (WebGPU only). `true` uses the default
-   * {@link DenoiserOptions}. Equivalent to calling `setDenoiser()`.
-   * Default `false`.
+   * Enable denoising. `true` uses the default {@link DenoiserOptions} (the
+   * built-in JNLM filter, which also runs on WebGL 2). Equivalent to calling
+   * `setDenoiser()`. Default `false`.
    */
   denoiser?: boolean | DenoiserOptions;
   /** WebGL 2 `preserveDrawingBuffer`, needed to read the canvas back. Default `true`. */
@@ -178,7 +200,7 @@ export const RENDER_STATUS_UNKNOWN = 0;
 export const RENDER_STATUS_COMPILING_SHADER = 1;
 /** Samples were added; `maxSamples` has not been reached yet. */
 export const RENDER_STATUS_RENDERING = 2;
-/** `maxSamples` was reached and OIDN is denoising the result. */
+/** `maxSamples` was reached and the denoiser is running on the result. */
 export const RENDER_STATUS_DENOISING = 3;
 /** The image is complete (and denoised, if a denoiser is set). */
 export const RENDER_STATUS_FINISHED = 4;
@@ -228,7 +250,10 @@ function loadOIDNModule() {
   return (oidnModule ??= import('./oidn.js'));
 }
 
-function disposeOIDNDenoiser(denoiser?: OIDNDenoiser) {
+type AttachedDenoiser = OIDNWeb | JNLMDenoiser;
+
+function disposeOIDNDenoiser(denoiser?: OIDNDenoiser | JNLMDenoiser) {
+  if (isJNLMDenoiser(denoiser)) return denoiser.dispose();
   if (!denoiser) return;
   denoiser.auxiliaryDenoisers?.albedo.dispose();
   denoiser.auxiliaryDenoisers?.normal.dispose();
@@ -407,7 +432,7 @@ export default class Renderer {
   /** Bloom radius (0–1). Default `0.6`. */
   bloomRadius = 0.6;
 
-  private _oidn?: OIDNWeb;
+  private _activeDenoiser?: AttachedDenoiser;
 
   /**
    * Resolve camera changes as one-sample OIDN frames, then accumulate static
@@ -457,13 +482,18 @@ export default class Renderer {
    * {@link Renderer.setDenoiser}; assign directly only for denoisers loaded with `mutracer/oidn` helpers. The
    * `setDenoiser()` mode (`whileConverging` and related options) stays as set.
    */
-  get oidn() {
-    return this._oidn;
+  get oidn(): OIDNWeb | undefined {
+    const denoiser = this._activeDenoiser;
+    return isJNLMDenoiser(denoiser) ? undefined : denoiser;
   }
 
   set oidn(denoiser: OIDNWeb | undefined) {
-    if (this._oidn === denoiser) return;
-    this._oidn = denoiser;
+    this._attachDenoiser(denoiser);
+  }
+
+  private _attachDenoiser(denoiser: AttachedDenoiser | undefined) {
+    if (this._activeDenoiser === denoiser) return;
+    this._activeDenoiser = denoiser;
     this._oidnFirstFrameDenoisePending = this._whileConverging;
     // A newly selected network must run against the existing accumulation.
     this._oidnStatus = 0;
@@ -472,7 +502,7 @@ export default class Renderer {
   }
 
   private _prepareOIDNForCurrentSize() {
-    const denoiser = this._oidn;
+    const denoiser = this.oidn;
     if (!denoiser?.prepareForImage) return;
     if (this.canvas.width <= 0 || this.canvas.height <= 0) return;
     const options = { tileOverlap: this._whileConverging ? 80 : undefined };
@@ -497,7 +527,7 @@ export default class Renderer {
    * (transparent backgrounds and shadow catchers).
    */
   oidnAlpha?: OIDNWeb;
-  private _ownedDenoiser?: OIDNDenoiser;
+  private _ownedDenoiser?: OIDNDenoiser | JNLMDenoiser;
   /** Whether the denoise in flight is for an interactive preview frame. */
   private _oidnPreviewInFlight = false;
   /** Faster network for while-converging interactive preview frames. */
@@ -542,7 +572,7 @@ export default class Renderer {
     this._preferWebGPU = params.preferWebGPU ?? true;
     if (params.denoiser) {
       this.setDenoiser(params.denoiser).catch((error) => {
-        console.warn('OIDN denoiser could not be enabled.', error);
+        console.warn('The denoiser could not be enabled.', error);
       });
     }
 
@@ -590,9 +620,11 @@ export default class Renderer {
   }
 
   /**
-   * Loads an OIDN denoiser on the renderer's WebGPU device and attaches it,
-   * replacing (and disposing) the previous one. Pass `false` or `null` to
-   * disable denoising. Rejects on WebGL or when the weights cannot be loaded.
+   * Attaches a denoiser, replacing (and disposing) the previous one: the
+   * built-in JNLM filter by default (WebGPU and WebGL 2), or an OIDN network
+   * loaded on the renderer's WebGPU device with `type: 'oidn'`. Pass `false`
+   * or `null` to disable denoising. OIDN rejects on WebGL or when its weights
+   * cannot be loaded.
    */
   async setDenoiser(options: DenoiserOptions | boolean | null = true) {
     const revision = ++this._denoiserRevision;
@@ -601,7 +633,7 @@ export default class Renderer {
     if (!options) {
       this._ownedDenoiser = undefined;
       this._previewDenoiser = undefined;
-      if (previous && this.oidn === previous) this.oidn = undefined;
+      if (previous && this._activeDenoiser === previous) this._attachDenoiser(undefined);
       this._setDenoiseMode({ whileConverging: false });
       disposeOIDNDenoiser(previous);
       disposeOIDNDenoiser(previousPreview);
@@ -612,17 +644,28 @@ export default class Renderer {
       sampleInterval,
       coalesceSceneUpdates = false,
       previewModel = 'small',
+      type = options !== true && (options.model || options.weightsBaseUrl)
+        ? 'oidn'
+        : 'jnlm',
+      strength = 1,
       ...loadOptions
     } = options === true ? {} : options;
     validateSampleInterval(sampleInterval);
     const model = loadOptions.model ?? 'standard';
-    const { initializeOIDN } = await loadOIDNModule();
-    const [denoiser, previewDenoiser] = await Promise.all([
-      initializeOIDN(this, { ...loadOptions, attach: false }),
-      whileConverging && previewModel && previewModel !== model
-        ? initializeOIDN(this, { ...loadOptions, model: previewModel, attach: false })
-        : undefined
-    ]);
+    let denoiser: OIDNDenoiser | JNLMDenoiser;
+    let previewDenoiser: OIDNDenoiser | undefined;
+    if (type === 'jnlm') {
+      if (!(strength > 0)) throw new Error('strength must be positive');
+      denoiser = createJNLMDenoiser(strength);
+    } else {
+      const { initializeOIDN } = await loadOIDNModule();
+      [denoiser, previewDenoiser] = await Promise.all([
+        initializeOIDN(this, { ...loadOptions, attach: false }),
+        whileConverging && previewModel && previewModel !== model
+          ? initializeOIDN(this, { ...loadOptions, model: previewModel, attach: false })
+          : undefined
+      ]);
+    }
     if (revision !== this._denoiserRevision) {
       // A newer setDenoiser() call superseded this one.
       disposeOIDNDenoiser(denoiser);
@@ -632,7 +675,7 @@ export default class Renderer {
     this._ownedDenoiser = denoiser;
     this._previewDenoiser = previewDenoiser;
     this._setDenoiseMode({ whileConverging, sampleInterval, coalesceSceneUpdates });
-    this.oidn = denoiser;
+    this._attachDenoiser(denoiser);
     if (previous !== denoiser) disposeOIDNDenoiser(previous);
     disposeOIDNDenoiser(previousPreview);
   }
@@ -729,7 +772,7 @@ export default class Renderer {
       maxSamples: this.maxSamples,
       allowMultipleSamplesPerFrame: this.allowMultipleSamplesPerFrame,
       interactivePreview: this.interactivePreview,
-      oidn: this.oidn,
+      denoiser: this._activeDenoiser,
       whileConverging: this._whileConverging
     };
     let varianceHistory: OfflineVarianceHistory | undefined;
@@ -855,7 +898,7 @@ export default class Renderer {
         );
         // Pilot and final use disjoint deterministic ranges. Temporarily detach
         // OIDN because the pilot normal output stores luminance moments.
-        this.oidn = undefined;
+        this._attachDenoiser(undefined);
         pipeline.setVarianceMoments(true);
         pipeline.setAdaptiveSamplingTargets(undefined);
         await renderStage(pilotSamples, 'pilot', sequenceOffset);
@@ -866,7 +909,7 @@ export default class Renderer {
         if (plan) {
           varianceHistory = plan.history;
           pipeline.setVarianceMoments(false);
-          this.oidn = saved.oidn;
+          this._attachDenoiser(saved.denoiser);
           await renderStage(
             plan.maximumTarget,
             'final',
@@ -884,7 +927,7 @@ export default class Renderer {
 
       pipeline.setVarianceMoments(false);
       pipeline.setAdaptiveSamplingTargets(undefined);
-      this.oidn = saved.oidn;
+      this._attachDenoiser(saved.denoiser);
       await renderStage(samples, 'final', sequenceOffset);
       return {
         samples,
@@ -903,7 +946,7 @@ export default class Renderer {
       this.maxSamples = saved.maxSamples;
       this.allowMultipleSamplesPerFrame = saved.allowMultipleSamplesPerFrame;
       this.interactivePreview = saved.interactivePreview;
-      this.oidn = saved.oidn;
+      this._attachDenoiser(saved.denoiser);
       this._setDenoiseMode({ whileConverging: saved.whileConverging });
     }
   }
@@ -927,10 +970,11 @@ export default class Renderer {
         ) || ''
       );
     }
-    const auxiliaryDenoisers = this._oidn?.auxiliaryDenoisers;
-    const oidn = this._oidn
+    const attachedOIDN = this.oidn;
+    const auxiliaryDenoisers = attachedOIDN?.auxiliaryDenoisers;
+    const oidn = attachedOIDN
       ? {
-          beauty: this._oidn.getRuntimeInfo?.(),
+          beauty: attachedOIDN.getRuntimeInfo?.(),
           albedo: auxiliaryDenoisers?.albedo.getRuntimeInfo?.(),
           normal: auxiliaryDenoisers?.normal.getRuntimeInfo?.()
         }
@@ -1250,9 +1294,8 @@ export default class Renderer {
     this._sceneInitialized = true;
     if (sceneChanged) this._renderDone = false;
 
-    const oidn = this.oidn;
-    const supportsOIDN = !!(pipeline as WGPURenderingPipeline)
-      .performOIDNDenoise;
+    const oidn = this._activeDenoiser;
+    const supportsOIDN = !!pipeline.performOIDNDenoise;
     const canRunOIDN = !!oidn && this.output === 'final' && supportsOIDN;
     const convergingRequested =
       this._whileConverging && this.output === 'final' && supportsOIDN;
@@ -1401,7 +1444,7 @@ export default class Renderer {
     }
 
     if (needsRedrawPostProcess && canRunOIDN) {
-      (pipeline as WGPURenderingPipeline).cancelOIDNDenoise?.();
+      pipeline.cancelOIDNDenoise?.();
       this._oidnStatus = 0;
       this._oidnRevision++;
     }
@@ -1431,8 +1474,8 @@ export default class Renderer {
         this._oidnBatchStartSamples = pipeline.getTotalSamplesRendered();
       }
       // Performing denoising
-      (pipeline as WGPURenderingPipeline)
-        .performOIDNDenoise(previewFrame ? this._previewDenoiser! : oidn!, this.oidnAlpha, convergingDenoiseActive)
+      pipeline
+        .performOIDNDenoise!(previewFrame ? this._previewDenoiser! : oidn!, this.oidnAlpha, convergingDenoiseActive)
         .then((completed) => {
           if (oidnRevision !== this._oidnRevision) return;
           if (settledBatch) this._oidnBatchStartTime = performance.now();

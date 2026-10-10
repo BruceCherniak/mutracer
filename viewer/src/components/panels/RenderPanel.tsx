@@ -55,16 +55,15 @@ export function RenderPanel() {
       <Section
         title="Denoiser"
         icon={<Sparkles size={14} />}
-        value={webgl ? 'WebGPU only' : undefined}
-        actions={<Switch label="Denoiser" checked={s.denoise && !webgl} disabled={webgl} onChange={(v) => update({ denoise: v })} />}
+        actions={<Switch label="Denoiser" checked={s.denoise} onChange={(v) => update({ denoise: v })} />}
       >
         {webgl ? (
-          <Hint warn>Intel Open Image Denoise needs WebGPU. This browser is using WebGL 2.</Hint>
+          <Hint>WebGL 2 uses the built-in JNLM filter. OIDN needs WebGPU.</Hint>
         ) : s.denoise ? (
           <Segmented
             label="Denoiser model"
             value={s.denoiseModel}
-            options={[{ value: 'standard', label: 'Standard' }, { value: 'small', label: 'Small' }, { value: 'cleanAuxLarge', label: 'Clean aux' }]}
+            options={[{ value: 'jnlm', label: 'JNLM' }, { value: 'standard', label: 'OIDN' }, { value: 'small', label: 'OIDN small' }, { value: 'cleanAuxLarge', label: 'OIDN large' }]}
             onChange={(v) => update({ denoiseModel: v })}
           />
         ) : null}

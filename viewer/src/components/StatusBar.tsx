@@ -52,7 +52,6 @@ function ProgressRing({ progress, phase }: { progress: number; phase: RenderPhas
 export function StatusBar() {
   const stats = useViewer((s) => s.stats);
   const settings = useViewer((s) => s.settings);
-  const webgpu = useViewer((s) => s.backend.name === 'WebGPU');
   const paused = useViewer((s) => s.paused);
   const playing = useViewer((s) => s.animation?.playing ?? false);
   const { phase, samples, elapsed, msPerSample, width, height } = stats;
@@ -66,7 +65,7 @@ export function StatusBar() {
   // Render size at 100%, for the pixel hints in the resolution menu.
   const fullWidth = width / resolutionScale;
   const fullHeight = height / resolutionScale;
-  const denoise = settings.denoise && webgpu;
+  const denoise = settings.denoise;
 
   return (
     <div className="float dock" role="status" data-phase={phase}>
@@ -106,8 +105,7 @@ export function StatusBar() {
         aria-label="Denoise"
         aria-checked={denoise}
         data-selected={denoise || undefined}
-        disabled={!webgpu}
-        title={webgpu ? 'Intel Open Image Denoise (D)' : 'Denoising requires WebGPU'}
+        title="Denoise (D)"
         onClick={() => setSettings({ denoise: !settings.denoise })}
       >
         <Sparkles size={13} aria-hidden="true" /><span className="dock__label">Denoise</span>

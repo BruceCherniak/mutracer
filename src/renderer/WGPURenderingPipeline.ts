@@ -32,6 +32,8 @@ import { WGPUComputePass } from './WGPUComputePass.js';
 import { isTextureDataSource } from '../scene/Texture.js';
 import WGPUAutoExposure from './WGPUAutoExposure.js';
 import WGPUHDRPeakMeter from './WGPUHDRPeakMeter.js';
+import { isJNLMDenoiser, type JNLMDenoiser } from './jnlm.js';
+import { WGPUJNLMDenoisePass } from './WGPUJNLMDenoiser.js';
 
 export interface OIDNWebGPUData {
   data: GPUBuffer | GPUTexture;
@@ -139,7 +141,7 @@ out_normal[index] = vec4f(clamp(in_normal[index].rgb, vec3f(0.0), vec3f(1.0)), 1
 export interface WGPURenderingPipeline extends RenderingPipeline {
   cancelOIDNDenoise(): void;
   performOIDNDenoise(
-    denoiser: OIDNWeb,
+    denoiser: OIDNWeb | JNLMDenoiser,
     denoiserAlpha: OIDNWeb | undefined,
     whileConverging?: boolean
   ): Promise<boolean>;
@@ -276,6 +278,7 @@ function makeWGPURenderingPipeline(
   let oidnComposedLinear = false;
   let oidnAlbedoGuideTexture: GPUTexture | undefined;
   let oidnNormalGuideTexture: GPUTexture | undefined;
+  let jnlmPass: WGPUJNLMDenoisePass | undefined;
   let oidnGeneration = 0;
   let preserveOIDNOutput = false;
   let previewTransitionDenoisePending = false;
@@ -482,7 +485,10 @@ output.color = textureLoad(colorTex, uv, 0);
       textureWillBeRead: true,
       fsMain: compositeDenoiseDisplayMain,
       fsDefine: linearToSrgbDefine,
-      uniforms: [{ label: 'hdrOutputEnabled', type: 'f32', data: 0 }],
+      uniforms: [
+        { label: 'hdrOutputEnabled', type: 'f32', data: 0 },
+        { label: 'denoisedAlpha', type: 'f32', data: 0 }
+      ],
       outputs: ['color'], inputs: ['colorTex', 'composedTex']
     }
   );
@@ -1427,13 +1433,63 @@ output.color = color;
     }
   }
 
+  /** Runs the built-in JNLM filter on the current composed image. */
+  function performJNLMDenoise(
+    denoiser: JNLMDenoiser,
+    whileConverging: boolean
+  ): Promise<boolean> {
+    const generation = oidnGeneration;
+    const timedPreview = whileConverging && previewMode;
+    const startTime = performance.now();
+    const startScale = adaptivePreviewScale;
+    jnlmPass ??= new WGPUJNLMDenoisePass(device);
+    const rayBuffers = rayTracePass.getOutputBuffer();
+    const encoder = device.createCommandEncoder({ label: 'JNLM denoise' });
+    const output = jnlmPass.encode(encoder, {
+      width: renderWidth,
+      height: renderHeight,
+      accumulation: rayBuffers.shadowCatcher,
+      normalAccumulation: rayBuffers.normal,
+      color: composePass.getOutput('denoiseColor'),
+      albedo: getFrameInput('albedo'),
+      normal: getFrameInput('normal'),
+      shadowCatcher: getFrameInput('shadowCatcher'),
+      strength: denoiser.strength,
+      shape: denoiser.shape
+    });
+    oidnComposedBuffer = copyOIDNOutput(
+      encoder,
+      { data: output, width: renderWidth, height: renderHeight },
+      oidnComposedBuffer
+    );
+    oidnComposedLinear = true;
+    // The filter also smooths coverage, which carries catcher shadows and
+    // transmissive alpha.
+    compositeDenoiseDisplayPass.setUniform(
+      'denoisedAlpha', +rayTracePass.needsDenoiseAlpha()
+    );
+    drawPostProcess(encoder, false);
+    return device.queue.onSubmittedWorkDone().then(() => {
+      const completed = generation === oidnGeneration;
+      if (completed && timedPreview && previewMode) {
+        updateOIDNPreviewScale(performance.now() - startTime, startScale);
+      }
+      return completed;
+    });
+  }
+
   function performOIDNDenoise(
-    denoiser: OIDNWeb,
+    attachedDenoiser: OIDNWeb | JNLMDenoiser,
     alphaDenoiser: OIDNWeb | undefined,
     whileConverging = false
   ): Promise<boolean> {
     cancelOIDNDenoise();
     if (isFirstFrame || sampleCount < 1) return Promise.resolve(false);
+    if (isJNLMDenoiser(attachedDenoiser)) {
+      return performJNLMDenoise(attachedDenoiser, whileConverging);
+    }
+    const denoiser: OIDNWeb = attachedDenoiser;
+    compositeDenoiseDisplayPass.setUniform('denoisedAlpha', 0);
     const generation = oidnGeneration;
     const timedPreview = whileConverging && previewMode;
     const startTime = performance.now();
@@ -1678,6 +1734,7 @@ output.color = color;
     oidnComposedTexture?.destroy();
     oidnAlbedoGuideTexture?.destroy();
     oidnNormalGuideTexture?.destroy();
+    jnlmPass?.dispose();
     composePass.dispose();
     compositeDenoiseDisplayPass.dispose();
     autoExposurePass.dispose();

@@ -13,7 +13,6 @@ export function ExportDialog() {
   const stats = useViewer((s) => s.stats);
   const maxSamples = useViewer((s) => s.settings.maxSamples);
   const denoise = useViewer((s) => s.settings.denoise);
-  const webgpu = useViewer((s) => s.backend.name === 'WebGPU');
   const background = useViewer((s) => s.settings.background);
   const [size, setSize] = useState<SizePreset>('viewport');
   const [samples, setSamples] = useState(maxSamples);
@@ -73,8 +72,8 @@ export function ExportDialog() {
             ]} />
           </Field>
           <Scrub label="Samples" value={samples} min={16} max={16384} log disabled={busy} onChange={setSamples} />
-          <Switch label="Denoise" checked={denoise && webgpu} disabled={!webgpu || busy} onChange={(v) => setSettings({ denoise: v })}>
-            <span className="field-label">Denoise with OIDN{!webgpu && <small> · Requires WebGPU</small>}</span>
+          <Switch label="Denoise" checked={denoise} disabled={busy} onChange={(v) => setSettings({ denoise: v })}>
+            <span className="field-label">Denoise</span>
           </Switch>
           <Switch label="Transparent background" checked={transparent} disabled={busy} onChange={setTransparent}>
             <span className="field-label">Transparent background</span>

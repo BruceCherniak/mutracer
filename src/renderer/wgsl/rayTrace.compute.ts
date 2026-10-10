@@ -126,6 +126,12 @@ fn accumulateNormalOrVariance(
   }
 }
 
+// Moments of the per-sample value the built-in denoiser compares, used to
+// estimate the variance of each pixel's mean.
+fn accumulateDenoiseMoments(pixelIndex: u32, value: f32) {
+  outShadowCatcher[pixelIndex].moments += vec4f(value, value * value, 0.0, 0.0);
+}
+
 
 struct RayTraceAuxiliary {
   // Denoising guides and auxiliary pixel classification.
@@ -889,11 +895,18 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
     outColor[idx] += backgroundPremultiplied;
     outAlbedo[idx] += vec4f(vec3f(0.0), backgroundHit);
     accumulateNormalOrVariance(idx, backgroundSample.rgb, vec3f(0.0));
+    // The composed catcher is the background darkened by the shadow. Over a
+    // transparent background the shadow is only its opacity.
+    let visibility = 1.0 - liAndAlpha.a;
+    accumulateDenoiseMoments(idx, visibility * select(
+      1.0, dot(backgroundSample.rgb, luminance), backgroundSample.a >= 0.01
+    ));
   }
   else {
     outColor[idx] += liAndAlpha;
     outAlbedo[idx] += vec4f(outAux.albedo, select(1.0, 0.0, outAux.isBlank));
     accumulateNormalOrVariance(idx, liAndAlpha.rgb, outAux.normal);
+    accumulateDenoiseMoments(idx, dot(liAndAlpha.rgb, luminance));
   }
 }
 `;

@@ -59,7 +59,7 @@ export default function createRayTraceFragmentShader() {
   const intelMac = isIntelMac();
   return new FragmentShader({
   name: 'rayTarceFrag',
-  outputs: ['color', 'albedo', 'normal'],
+  outputs: ['color', 'albedo', 'normal', 'moments'],
   defines: {
     BOUNCES: 2
   },
@@ -110,6 +110,8 @@ struct RayTraceAuxiliary {
   vec3 albedo;
   vec3 normal;
   bool isBlank;
+  // The primary ray hit a shadow catcher, whose sample the catcher pass owns.
+  bool isShadowCatcher;
 };
 
 void bounce(inout Path path, inout int depth, inout SurfaceInteraction si, inout OpenPbrResolvedMaterial mat, inout RayTraceAuxiliary outAux) {
@@ -124,6 +126,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
   if (isShadowCatcher) {
     if (path.fromEye) {
       si.hit = false;
+      outAux.isShadowCatcher = true;
     }
     else {
       // The catcher belongs only to the shadow-mask pass. Keep its default
@@ -573,6 +576,7 @@ void main() {
   outAux.albedo = vec3(0.0);
   outAux.normal = vec3(0.0);
   outAux.isBlank = false;
+  outAux.isShadowCatcher = false;
 
   vec4 liAndAlpha = integrator(cam, outAux);
 
@@ -600,6 +604,12 @@ void main() {
   out_color = liAndAlpha;
   out_albedo = vec4(outAux.albedo, outAux.isBlank ? 0.0 : 1.0);
   out_normal = vec4(outAux.normal, 1.0);
+  // Moments and count of the built-in denoiser's guide value. The catcher
+  // pass accumulates its own samples (see shadowCatcher.frag).
+  float guideValue = dot(liAndAlpha.rgb, vec3(0.2126, 0.7152, 0.0722));
+  out_moments = outAux.isShadowCatcher
+    ? vec4(0.0)
+    : vec4(guideValue, guideValue * guideValue, 1.0, 0.0);
 
 }`
   });

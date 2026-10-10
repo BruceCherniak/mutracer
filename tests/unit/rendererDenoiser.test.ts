@@ -41,13 +41,13 @@ describe('Renderer.setDenoiser', () => {
     initializeOIDN.mockResolvedValue(fakeDenoiser());
     const renderer = createRenderer();
 
-    await renderer.setDenoiser({ whileConverging: true, sampleInterval: 4, coalesceSceneUpdates: true, previewModel: false });
+    await renderer.setDenoiser({ type: 'oidn', whileConverging: true, sampleInterval: 4, coalesceSceneUpdates: true, previewModel: false });
     expect(denoiseMode(renderer)).toEqual({
       whileConverging: true,
       sampleInterval: 4,
       coalesceSceneUpdates: true
     });
-    await expect(renderer.setDenoiser({ sampleInterval: 0 })).rejects.toThrow('sampleInterval');
+    await expect(renderer.setDenoiser({ type: 'oidn', sampleInterval: 0 })).rejects.toThrow('sampleInterval');
 
     // Disabling keeps no while-converging work running.
     await renderer.setDenoiser(false);
@@ -61,7 +61,7 @@ describe('Renderer.setDenoiser', () => {
     initializeOIDN.mockResolvedValueOnce(first).mockResolvedValueOnce(second);
     const renderer = createRenderer();
 
-    await renderer.setDenoiser();
+    await renderer.setDenoiser({ type: 'oidn' });
     await renderer.setDenoiser({ model: 'cleanAuxLarge' });
     expect(first.dispose).toHaveBeenCalledOnce();
     expect(renderer.oidn).toBe(second);
@@ -79,15 +79,15 @@ describe('Renderer.setDenoiser', () => {
       Promise.resolve(model === 'small' ? preview : main));
     const renderer = createRenderer();
 
-    await renderer.setDenoiser({ whileConverging: true });
+    await renderer.setDenoiser({ type: 'oidn', whileConverging: true });
     expect(initializeOIDN.mock.calls.map(([, options]) => options.model)).toEqual([undefined, 'small']);
     // The preview network never replaces the attached denoiser.
     expect(renderer.oidn).toBe(main);
 
     // Without while-converging (or with previewModel: false) only the main network loads.
     initializeOIDN.mockClear();
-    await renderer.setDenoiser({ whileConverging: false });
-    await renderer.setDenoiser({ whileConverging: true, previewModel: false });
+    await renderer.setDenoiser({ type: 'oidn', whileConverging: false });
+    await renderer.setDenoiser({ type: 'oidn', whileConverging: true, previewModel: false });
     expect(initializeOIDN).toHaveBeenCalledTimes(2);
     expect(preview.dispose).toHaveBeenCalledOnce();
 
@@ -114,5 +114,37 @@ describe('Renderer.setDenoiser', () => {
 
     expect(renderer.oidn).toBe(fast);
     expect(slow.dispose).toHaveBeenCalledOnce();
+  });
+
+  it('attaches the built-in JNLM filter by default without loading OIDN', async () => {
+    initializeOIDN.mockReset();
+    const renderer = createRenderer();
+
+    await renderer.setDenoiser({ whileConverging: true, strength: 2 });
+    expect(initializeOIDN).not.toHaveBeenCalled();
+    const attached = (renderer as unknown as { _activeDenoiser: { type: string; strength: number } })._activeDenoiser;
+    expect(attached).toMatchObject({ type: 'jnlm', strength: 2 });
+    // `oidn` only reports OIDN networks.
+    expect(renderer.oidn).toBeUndefined();
+    expect(denoiseMode(renderer).whileConverging).toBe(true);
+    await expect(renderer.setDenoiser({ type: 'jnlm', strength: 0 })).rejects.toThrow('strength');
+
+    // OIDN-specific options select OIDN without an explicit type.
+    const oidn = fakeDenoiser();
+    initializeOIDN.mockResolvedValueOnce(oidn);
+    await renderer.setDenoiser({ model: 'small' });
+    expect(renderer.oidn).toBe(oidn);
+
+    await renderer.setDenoiser(true);
+    expect(oidn.dispose).toHaveBeenCalledOnce();
+    expect(renderer.oidn).toBeUndefined();
+  });
+
+  it('attaches JNLM without a WebGPU device', async () => {
+    const renderer = createRenderer();
+    const getDevice = vi.spyOn(renderer, 'getGPUDeviceAndAdapter');
+    await renderer.setDenoiser();
+    expect(getDevice).not.toHaveBeenCalled();
+    expect((renderer as unknown as { _activeDenoiser: { type: string } })._activeDenoiser.type).toBe('jnlm');
   });
 });

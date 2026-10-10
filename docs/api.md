@@ -80,7 +80,7 @@ affects the image restarts accumulation.
 | `render(scene, camera, forceOutput?)` | Adds samples; returns a [status](#status-codes). Call once per frame |
 | `setSize(width, height)` | Resizes the canvas drawing buffer and targets, in pixels |
 | `getSize()` | `{ width, height }` |
-| `setDenoiser(options?)` | Loads and attaches OIDN (WebGPU); `false`/`null` removes it. See [denoising](./denoising.md) |
+| `setDenoiser(options?)` | Attaches the built-in JNLM filter or an OIDN network (WebGPU only); `false`/`null` removes it. See [denoising](./denoising.md) |
 | `prepareScene(scene \| meshes)` | With `bvhBuilder = 'tinybvh'`, builds missing BVHs ahead of time (otherwise done by `render()`) |
 | `renderOfflineFrame(scene, camera, options)` | Renders a finished frame; see below |
 | `restartSamples()` | Discards the accumulation |
@@ -124,7 +124,7 @@ If a denoiser is set, the result is denoised before the promise resolves.
 | `RENDER_STATUS_PREPARING` | 6 | Device initializing or BVHs building |
 | `RENDER_STATUS_COMPILING_SHADER` | 1 | Pipelines compiling; no samples added |
 | `RENDER_STATUS_RENDERING` | 2 | Samples added; `maxSamples` not reached |
-| `RENDER_STATUS_DENOISING` | 3 | `maxSamples` reached; OIDN running |
+| `RENDER_STATUS_DENOISING` | 3 | `maxSamples` reached; the denoiser is running |
 | `RENDER_STATUS_FINISHED` | 4 | Image complete (and denoised if enabled) |
 | `RENDER_STATUS_ERROR` | 5 | Failed; see the console and `getDiagnostics()` |
 | `RENDER_STATUS_UNKNOWN` | 0 | Never returned; an initial value for callers |

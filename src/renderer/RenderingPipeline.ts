@@ -226,6 +226,17 @@ export interface RenderingPipeline {
   isPreviewMode?(): boolean;
   /** While-converging OIDN denoises preview frames, so their cost also bounds the preview scale. */
   setOIDNPreviewActive?(active: boolean): void;
+  /**
+   * Denoises the current image with an OIDN network (WebGPU only) or the
+   * built-in JNLM filter. Resolves whether the result is now displayed.
+   */
+  performOIDNDenoise?(
+    denoiser: unknown,
+    alphaDenoiser?: unknown,
+    whileConverging?: boolean
+  ): Promise<boolean>;
+  /** Drops a denoise in flight; the next draw invalidates its output. */
+  cancelOIDNDenoise?(): void;
   /** Keep the last completed OIDN image visible while static while-converging batches accumulate. */
   setPreserveOIDNOutput?(preserve: boolean): void;
   /** Keep the captured preview transition visible until the first settled OIDN output. */

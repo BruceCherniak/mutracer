@@ -83,13 +83,16 @@ renderer.bounces = 8;
 renderer.maxSamples = 256;
 renderer.toneMapping = 'agx';
 
-// The dev server serves the repository root, so the packaged weights are
-// available locally. Applications can omit weightsBaseUrl to use the CDN copy.
+// The dev server serves the repository root, so the packaged OIDN weights
+// are available locally. Applications can omit weightsBaseUrl to use the
+// CDN copy. The built-in JNLM filter needs no weights.
 async function updateDenoiser() {
   const model = denoiserSelect.value;
   await renderer.setDenoiser(
     model === 'off'
       ? false
+      : model === 'jnlm'
+      ? { type: 'jnlm' }
       : { model: model as OIDNModel, weightsBaseUrl: '/oidn/weights/' }
   );
 }

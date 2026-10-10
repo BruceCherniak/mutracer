@@ -207,9 +207,12 @@ class WebGLRayTracePass {
 
   private _mainPass: WebGLFullQuadPass<
     never,
-    'color' | 'albedo' | 'normal'
+    'color' | 'albedo' | 'normal' | 'moments'
   >;
-  private _shadowCatcherPass: WebGLFullQuadPass<never, 'shadowCatcher' | 'catcherBackground'>;
+  private _shadowCatcherPass: WebGLFullQuadPass<
+    never,
+    'shadowCatcher' | 'catcherBackground' | 'catcherMoments'
+  >;
 
   private _viewProjInv = mat4.create();
   private _aperture = 0;
@@ -234,23 +237,32 @@ class WebGLRayTracePass {
     shadowCatcherFrag.parallelCompile = true;
     this._mainPass = new WebGLFullQuadPass<
       never,
-      'color' | 'albedo' | 'normal'
+      'color' | 'albedo' | 'normal' | 'moments'
     >('rayTrace', renderer, {
       shader: rayTraceFrag,
-      outputs: ['color', 'albedo', 'normal'],
+      // `moments` holds the denoiser's guide value moments and sample count.
+      outputs: ['color', 'albedo', 'normal', 'moments'],
       outputParams: {
         color: accumulationOutput,
         albedo: accumulationOutput,
-        normal: accumulationOutput
+        normal: accumulationOutput,
+        moments: accumulationOutput
       }
     });
-    this._shadowCatcherPass = new WebGLFullQuadPass<never, 'shadowCatcher' | 'catcherBackground'>(
+    this._shadowCatcherPass = new WebGLFullQuadPass<
+      never,
+      'shadowCatcher' | 'catcherBackground' | 'catcherMoments'
+    >(
       'shadowCatcher',
       renderer,
       {
         shader: shadowCatcherFrag,
-        outputs: ['shadowCatcher', 'catcherBackground'],
-        outputParams: { shadowCatcher: accumulationOutput, catcherBackground: accumulationOutput }
+        outputs: ['shadowCatcher', 'catcherBackground', 'catcherMoments'],
+        outputParams: {
+          shadowCatcher: accumulationOutput,
+          catcherBackground: accumulationOutput,
+          catcherMoments: accumulationOutput
+        }
       }
     );
     this._tracePasses = [this._mainPass, this._shadowCatcherPass];
@@ -285,8 +297,12 @@ class WebGLRayTracePass {
     }
   }
 
-  getOutput(label: 'color' | 'albedo' | 'normal' | 'shadowCatcher' | 'catcherBackground') {
-    return label === 'shadowCatcher' || label === 'catcherBackground'
+  getOutput(
+    label: 'color' | 'albedo' | 'normal' | 'moments' |
+      'shadowCatcher' | 'catcherBackground' | 'catcherMoments'
+  ) {
+    return label === 'shadowCatcher' || label === 'catcherBackground' ||
+      label === 'catcherMoments'
       ? this._shadowCatcherPass.getOutput(label)
       : this._mainPass.getOutput(label);
   }

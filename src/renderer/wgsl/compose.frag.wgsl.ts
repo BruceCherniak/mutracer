@@ -218,7 +218,8 @@ export const compositeDenoiseDisplayMain = /* wgsl */ `
 let denoised = textureLoad(colorTex, uv, 0);
 // Keep the original primary coverage, including transparency. OIDN only
 // filters RGB; filtering coverage separately reintroduces silhouette seams.
-let alpha = textureLoad(composedTex, uv, 0).a;
+// The built-in filter weights color and coverage together and may replace it.
+let alpha = select(textureLoad(composedTex, uv, 0).a, clamp(denoised.a, 0.0, 1.0), denoisedAlpha > 0.5);
 let linear = max(denoised.rgb, vec3f(0.0));
 let encoded = select(pow(linear, vec3f(1.0 / 2.2)), linearToSrgb(linear), hdrOutputEnabled > 0.5);
 output.color = vec4f(select(vec3f(0.0), encoded, alpha > 0.0), alpha);

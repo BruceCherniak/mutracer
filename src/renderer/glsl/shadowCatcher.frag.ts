@@ -19,7 +19,7 @@ import uvProjectionGlsl from './chunks/uvProjection.glsl.js';
 
 export default new FragmentShader({
   name: 'shadowCatcher',
-  outputs: ['shadowCatcher', 'catcherBackground'],
+  outputs: ['shadowCatcher', 'catcherBackground', 'catcherMoments'],
   defines: {
     BOUNCES: 2
   },
@@ -106,6 +106,15 @@ void main() {
 
   out_shadowCatcher = liAndAlpha;
   out_catcherBackground = background;
+  // The composed catcher is the background darkened by the shadow (its
+  // visibility in alpha). Over a transparent background the shadow is only
+  // its opacity.
+  float guideValue = liAndAlpha.a * (background.a >= 0.01
+    ? dot(background.rgb / background.a, vec3(0.2126, 0.7152, 0.0722))
+    : 1.0);
+  out_catcherMoments = liAndAlpha.r > 0.0
+    ? vec4(guideValue, guideValue * guideValue, 1.0, 0.0)
+    : vec4(0.0);
 
 }`
 });

@@ -25,6 +25,8 @@ import {
   composeFragment,
   outputFragment
 } from './glsl/webglPipeline.frag.js';
+import { isJNLMDenoiser, type JNLMDenoiser } from './jnlm.js';
+import { WebGLJNLMDenoisePass } from './WebGLJNLMDenoiser.js';
 
 const wavelengths = [650, 510, 475];
 
@@ -132,6 +134,15 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
 
   const rawReadFrameBuffer = new FrameBuffer();
 
+  // Built-in JNLM denoising. WebGL runs it synchronously inside the
+  // post-process, between composition and output.
+  let jnlmPass: WebGLJNLMDenoisePass | undefined;
+  let pendingDenoiser: JNLMDenoiser | undefined;
+  let denoisedTexture: Texture2D | undefined;
+  // Keep the last denoised image visible while while-converging batches
+  // accumulate (see RenderingPipeline.setPreserveOIDNOutput).
+  let preserveDenoisedOutput = false;
+
   function updateSeed(useJitter: boolean) {
     const sequenceSample = sampleCount + sampleSequenceOffset;
     const jitterX = useJitter ? halton(sequenceSample, 2) - 0.5 : 0;
@@ -201,7 +212,27 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
           : renderer.emptyTexture
     });
 
-    let displayTexture = composePass.getOutput('color');
+    if (pendingDenoiser) {
+      jnlmPass ??= new WebGLJNLMDenoisePass(renderer);
+      denoisedTexture = jnlmPass.render({
+        width: renderWidth,
+        height: renderHeight,
+        moments: rayTracePass.getOutput('moments'),
+        catcherMoments: rayTracePass.hasShadowCatcher()
+          ? rayTracePass.getOutput('catcherMoments')
+          : undefined,
+        color: composePass.getOutput('color'),
+        albedo: rayTraceOutputPass.getOutput('albedo'),
+        normal: rayTraceOutputPass.getOutput('normal'),
+        shadowCatcher: rayTraceOutputPass.getOutput('shadowCatcher'),
+        strength: pendingDenoiser.strength,
+        shape: pendingDenoiser.shape
+      });
+      pendingDenoiser = undefined;
+    }
+
+    let displayTexture =
+      (output === 'final' && denoisedTexture) || composePass.getOutput('color');
     if (output === 'normal' || output === 'albedo') {
       displayTexture = rayTraceOutputPass.getOutput(output);
     } else if (output === 'shadowCatcher') {
@@ -268,6 +299,8 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       drawPostProcess(true);
       return false;
     }
+    // New samples make the denoised image stale.
+    if (!preserveDenoisedOutput || resetAccumulation) denoisedTexture = undefined;
 
     // The first draw after an update lazily prepares scene data and shaders.
     // Keep its wall time for reporting, but not for estimating tile throughput.
@@ -387,6 +420,24 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       tileRender.reset();
       isFirstFrame = true;
       sampleCount = 0;
+      denoisedTexture = undefined;
+      preserveDenoisedOutput = false;
+    },
+    /** Denoises the current image. WebGL only supports the built-in JNLM filter. */
+    performOIDNDenoise(denoiser: unknown): Promise<boolean> {
+      if (!isJNLMDenoiser(denoiser)) {
+        return Promise.reject(new Error('OIDN requires a WebGPU renderer.'));
+      }
+      if (isFirstFrame || sampleCount < 1) return Promise.resolve(false);
+      pendingDenoiser = denoiser;
+      drawPostProcess(true);
+      return Promise.resolve(true);
+    },
+    cancelOIDNDenoise() {
+      pendingDenoiser = undefined;
+    },
+    setPreserveOIDNOutput(preserve: boolean) {
+      preserveDenoisedOutput = preserve;
     },
     draw,
     drawPostProcess: () => drawPostProcess(true),
@@ -623,6 +674,7 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       rayTracePass.dispose();
       rayTraceOutputPass.dispose();
       bloomPass?.dispose();
+      jnlmPass?.dispose();
       composePass.dispose();
       outputPass.dispose();
       overlayTexture.dispose(renderer.gl);
