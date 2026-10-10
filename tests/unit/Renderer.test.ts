@@ -955,6 +955,47 @@ describe('Renderer while-converging OIDN', () => {
     expect(pipeline.performOIDNDenoise).toHaveBeenCalledTimes(3);
   });
 
+  it('waits for each asynchronous batch denoise before continuing accumulation', async () => {
+    let samples = 0;
+    let finishDenoise!: (completed: boolean) => void;
+    const renderer = new Renderer({
+      canvas: { width: 1, height: 1 } as HTMLCanvasElement
+    });
+    renderer.maxSamples = 18;
+    const pipeline = createPipeline({
+      needsRestartSample: vi.fn(() => false),
+      draw: vi.fn(() => {
+        samples++;
+        return false;
+      }),
+      getTotalSamplesRendered: vi.fn(() => samples),
+      performOIDNDenoise: vi.fn(() => new Promise<boolean>((resolve) => {
+        finishDenoise = resolve;
+      }))
+    });
+    attachPipeline(renderer, pipeline);
+    markSceneStable(renderer, scene);
+    renderer.oidn = {} as never;
+    setDenoiseMode(renderer, { whileConverging: true });
+
+    for (const [batch, target] of [1, 8, 16, 18].entries()) {
+      while (samples < target) renderer.render(scene, camera);
+      expect(pipeline.performOIDNDenoise).toHaveBeenCalledTimes(batch + 1);
+      const draws = vi.mocked(pipeline.draw).mock.calls.length;
+      // OIDN can take several animation frames, especially with tiled images.
+      for (let frame = 0; frame < 3; frame++) renderer.render(scene, camera);
+      expect(samples).toBe(target);
+      expect(pipeline.draw).toHaveBeenCalledTimes(draws);
+      expect(pipeline.performOIDNDenoise).toHaveBeenCalledTimes(batch + 1);
+      finishDenoise(true);
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      expect(pipeline.drawPostProcess).toHaveBeenCalledTimes(batch + 1);
+    }
+    renderer.render(scene, camera);
+    expect(samples).toBe(18);
+    expect(pipeline.performOIDNDenoise).toHaveBeenCalledTimes(4);
+  });
+
   it('accepts a custom while-converging OIDN interval that divides maxSamples', async () => {
     let samples = 0;
     const renderer = new Renderer({

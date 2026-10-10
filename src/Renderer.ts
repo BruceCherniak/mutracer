@@ -1310,8 +1310,12 @@ export default class Renderer {
     const convergingLowLatency =
       convergingRequested && (interactionRestarted || previewModeActive);
     const renderedSamples = pipeline.getTotalSamplesRendered() ?? 0;
+    // Hold every completed batch until OIDN presents it. Advancing the sample
+    // target here would call draw(), cancelling the asynchronous denoise.
+    // Camera and scene invalidation above still clear _renderDone immediately.
     const denoiseInFlight =
-      deferRestart && this._oidnStatus === OIDN_DENOISING;
+      convergingDenoiseActive && this._renderDone &&
+      this._oidnStatus === OIDN_DENOISING;
     const staticTransitionDenoise =
       this._renderDone &&
       !denoiseInFlight &&
