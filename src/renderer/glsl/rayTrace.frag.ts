@@ -54,7 +54,9 @@ for(int idx = 0; idx < min(BOUNCES * 3, 20); idx++) {
 }
 `;
 
-export default new FragmentShader({
+export default function createRayTraceFragmentShader() {
+  const intelMac = isIntelMac();
+  return new FragmentShader({
   name: 'rayTarceFrag',
   outputs: ['color', 'albedo', 'normal'],
   defines: {
@@ -123,7 +125,7 @@ void bounce(inout Path path, inout int depth, inout SurfaceInteraction si, inout
   // For other materials. We will quite early
   // TODO It is only used on Mac with AMD card. If I enabled it on windows.
   // It will cause shader compilation too slow.
-${isIntelMac ? doubleTransmissionCheckCode : ''}
+${intelMac ? doubleTransmissionCheckCode : ''}
 
   bool isShadowCatcher = mat.materialType == SHADOW_CATCHER;
   if (isShadowCatcher) {
@@ -455,7 +457,7 @@ vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMater
   path.isNextRefraction = false;
   path.abort = false;
   int depth = 0;
-${isIntelMac ? bounceCodeOnIntelMac : bounceCodeOnOther}
+${intelMac ? bounceCodeOnIntelMac : bounceCodeOnOther}
   return vec4(path.li, path.alpha);
 }
 
@@ -624,4 +626,5 @@ void main() {
   out_normal = vec4(outAux.normal, 1.0);
 
 }`
-});
+  });
+}

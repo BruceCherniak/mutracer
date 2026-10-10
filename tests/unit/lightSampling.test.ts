@@ -14,11 +14,12 @@ import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { Attribute } from '../../src/scene/Geometry';
 import { createPlaneGeometry } from '../../src/util/commonGeometry';
-import rayTraceGlsl from '../../src/renderer/glsl/rayTrace.frag';
+import createRayTraceGlsl from '../../src/renderer/glsl/rayTrace.frag';
 import sampleLight from '../../src/renderer/wgsl/chunks/sampleLight.wgsl';
 
 describe('power-weighted light sampling', () => {
   it('does not treat delta directional lights as finite geometry hits', () => {
+    const rayTraceGlsl = createRayTraceGlsl();
     expect(rayTraceGlsl.main).toContain('float d = INF');
     expect(rayTraceGlsl.main).not.toContain('float d;');
   });

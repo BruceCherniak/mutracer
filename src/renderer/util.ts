@@ -34,19 +34,22 @@ export function numberArraysEqual(
 export const isMac =
   typeof navigator !== 'undefined' && navigator.userAgent.match('Macintosh');
 
-let isIntelMac = false;
-if (isMac) {
-  try {
-    const ctx = document.createElement('canvas').getContext('webgl');
-    const d = ctx && ctx.getExtension('WEBGL_debug_renderer_info');
-    const g = (d && ctx.getParameter(d.UNMASKED_RENDERER_WEBGL)) || '';
-    if (!(g.match(/Apple M/) || g.match(/Apple GPU/))) {
-      isIntelMac = true;
-    }
-  } catch (e) {}
-}
+let cachedIntelMac: boolean | undefined;
 
-export { isIntelMac };
+/** Detect the WebGL workaround platform only when the WebGL backend needs it. */
+export function isIntelMac() {
+  if (cachedIntelMac !== undefined) return cachedIntelMac;
+  cachedIntelMac = false;
+  if (isMac) {
+    try {
+      const ctx = document.createElement('canvas').getContext('webgl');
+      const d = ctx && ctx.getExtension('WEBGL_debug_renderer_info');
+      const g = (d && ctx.getParameter(d.UNMASKED_RENDERER_WEBGL)) || '';
+      if (!(g.match(/Apple M/) || g.match(/Apple GPU/))) cachedIntelMac = true;
+    } catch (e) {}
+  }
+  return cachedIntelMac;
+}
 
 /** Lowest resolution scale interactive preview adapts down to. */
 export const MIN_PREVIEW_SCALE = 0.25;

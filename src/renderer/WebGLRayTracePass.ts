@@ -27,7 +27,7 @@ import {
   environmentMapSourcesMatch,
   type EnvironmentMapSource
 } from './envMapDistribution';
-import rayTraceFrag from './glsl/rayTrace.frag';
+import createRayTraceFragmentShader from './glsl/rayTrace.frag';
 import shadowCatcherFrag from './glsl/shadowCatcher.frag';
 import MergedMaterialData, {
   DEFAULT_MAX_TEXTURE_ARRAY_BYTES,
@@ -229,6 +229,7 @@ class WebGLRayTracePass {
       wrapT: constants.CLAMP_TO_EDGE
     };
 
+    const rayTraceFrag = createRayTraceFragmentShader();
     rayTraceFrag.parallelCompile = true;
     shadowCatcherFrag.parallelCompile = true;
     this._mainPass = new WebGLFullQuadPass<
@@ -936,7 +937,7 @@ class WebGLRayTracePass {
       pass.setDefines({
         // Double bounce fix on intel mac
         // Limit the bounce to avoid long compilation time.
-        BOUNCES: isIntelMac
+        BOUNCES: isIntelMac()
           ? Math.min(this._bounces, 3) *
             (this._hasTransmission || this._hasAlpha ? 2 : 1)
           : this._bounces,
