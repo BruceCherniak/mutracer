@@ -1,5 +1,5 @@
-import { vec3 } from '../math';
-import Geometry, { Attribute } from '../scene/Geometry';
+import { vec3 } from '../math.js';
+import Geometry, { Attribute } from '../scene/Geometry.js';
 
 /** Computes smooth, area-weighted vertex normals into `geometry.normal`. */
 export function generateVertexNormals(geometry: Geometry) {

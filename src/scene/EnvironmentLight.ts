@@ -1,4 +1,4 @@
-import Texture from './Texture';
+import Texture from './Texture.js';
 
 /**
  * Image-based lighting from an equirectangular (latitude-longitude) HDR map,

@@ -1,6 +1,6 @@
-import OpenPBRMaterial, { materialGeometryKeys, materialParamKeys, materialTextureKeys } from '../scene/OpenPBRMaterial';
-import Texture from '../scene/Texture';
-import { colorLuminance } from './lightSampling';
+import OpenPBRMaterial, { materialGeometryKeys, materialParamKeys, materialTextureKeys } from '../scene/OpenPBRMaterial.js';
+import Texture from '../scene/Texture.js';
+import { colorLuminance } from './lightSampling.js';
 
 export type MaterialUpdateLevel = 'params' | 'emission' | 'textures' | 'geometry';
 interface MaterialSnapshot {

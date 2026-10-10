@@ -2,8 +2,8 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { createShaderMixin, glsl, Shader } from '../../shader';
-import OpenPBRMaterial from '../../../scene/OpenPBRMaterial';
+import { createShaderMixin, glsl, Shader } from '../../shader.js';
+import OpenPBRMaterial from '../../../scene/OpenPBRMaterial.js';
 
 export default createShaderMixin({
   uniforms: {

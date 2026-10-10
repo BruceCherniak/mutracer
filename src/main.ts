@@ -10,7 +10,7 @@
  *
  * @packageDocumentation
  */
-export { VERSION } from './version';
+export { VERSION } from './version.js';
 
 // Renderer
 export {
@@ -22,7 +22,7 @@ export {
   RENDER_STATUS_FINISHED,
   RENDER_STATUS_ERROR,
   RENDER_STATUS_PREPARING
-} from './Renderer';
+} from './Renderer.js';
 export type {
   BVHBuilder,
   DenoiserOptions,
@@ -32,18 +32,18 @@ export type {
   RendererDiagnostics,
   RendererParams,
   TextureAtlasLimits
-} from './Renderer';
+} from './Renderer.js';
 export type {
   AlphaBlendStrategy,
   RenderOutput,
   ShaderCompilationDiagnostics,
   ToneMapping
-} from './renderer/RenderingPipeline';
+} from './renderer/RenderingPipeline.js';
 export type {
   OfflineAdaptiveSamplingOptions,
   OfflineVarianceHistory
-} from './renderer/OfflineAdaptiveSampling';
-export type { OIDNModel } from './oidn';
+} from './renderer/OfflineAdaptiveSampling.js';
+export type { OIDNModel } from './oidn.js';
 
 // Scene description
 export type {
@@ -53,16 +53,16 @@ export type {
   SceneBackground,
   SceneLight,
   SceneOverlayDataSource
-} from './scene/Scene';
-export { default as Camera } from './scene/Camera';
-export { default as Mesh } from './scene/Mesh';
-export { default as SceneNode } from './scene/SceneNode';
-export { default as HierarchyNode } from './scene/HierarchyNode';
+} from './scene/Scene.js';
+export { default as Camera } from './scene/Camera.js';
+export { default as Mesh } from './scene/Mesh.js';
+export { default as SceneNode } from './scene/SceneNode.js';
+export { default as HierarchyNode } from './scene/HierarchyNode.js';
 export {
   default as Geometry,
   Attribute as GeometryAttribute
-} from './scene/Geometry';
-export { default as OpenPBRMaterial } from './scene/OpenPBRMaterial';
+} from './scene/Geometry.js';
+export { default as OpenPBRMaterial } from './scene/OpenPBRMaterial.js';
 export type {
   DisplacementEdgeProfile,
   DisplacementHeightFilter,
@@ -70,34 +70,34 @@ export type {
   DisplacementTessellationMode,
   MaterialAlphaMode,
   UVProjection
-} from './scene/OpenPBRMaterial';
-export { default as Texture } from './scene/Texture';
-export type { TextureDataSource } from './scene/Texture';
-export type { ColorRGB, ColorRGBA } from './types';
+} from './scene/OpenPBRMaterial.js';
+export { default as Texture } from './scene/Texture.js';
+export type { TextureDataSource } from './scene/Texture.js';
+export type { ColorRGB, ColorRGBA } from './types.js';
 
 // Lights
-export { default as AmbientLight } from './scene/AmbientLight';
-export { default as DirectionalLight } from './scene/DirectionalLight';
-export { default as RectLight } from './scene/RectLight';
-export { default as SphereLight } from './scene/SphereLight';
-export { default as SpotLight } from './scene/SpotLight';
-export { default as EnvironmentLight } from './scene/EnvironmentLight';
+export { default as AmbientLight } from './scene/AmbientLight.js';
+export { default as DirectionalLight } from './scene/DirectionalLight.js';
+export { default as RectLight } from './scene/RectLight.js';
+export { default as SphereLight } from './scene/SphereLight.js';
+export { default as SpotLight } from './scene/SpotLight.js';
+export { default as EnvironmentLight } from './scene/EnvironmentLight.js';
 export {
   default as IESProfile,
   IESParseError,
   parseIESProfile
-} from './scene/IESProfile';
+} from './scene/IESProfile.js';
 
 // Loaders and integrations
-export { load as loadGLTF } from './util/loadGLTF';
-export type { GLTFLoadResult } from './util/loadGLTF';
-export { loadRGBE, parseRGBE } from './util/loadRGBE';
-export { fromTHREECamera, fromTHREEScene, THREESceneSync } from './util/fromTHREE';
+export { load as loadGLTF } from './util/loadGLTF.js';
+export type { GLTFLoadResult } from './util/loadGLTF.js';
+export { loadRGBE, parseRGBE } from './util/loadRGBE.js';
+export { fromTHREECamera, fromTHREEScene, THREESceneSync } from './util/fromTHREE.js';
 export type {
   THREESceneChanges,
   FromTHREESceneOptions
-} from './util/fromTHREE';
-export { default as CameraViewControl } from './util/CameraViewControl';
+} from './util/fromTHREE.js';
+export { default as CameraViewControl } from './util/CameraViewControl.js';
 
 // Geometry helpers
 export {
@@ -105,30 +105,30 @@ export {
   createCurvePlaneGeometry,
   createPlaneGeometry,
   createSphereGeometry
-} from './util/commonGeometry';
+} from './util/commonGeometry.js';
 export {
   generateVertexNormals,
   generateVertexTangents
-} from './util/geometry';
-export { computeMeshesBoundingBox } from './util/mesh';
+} from './util/geometry.js';
+export { computeMeshesBoundingBox } from './util/mesh.js';
 
 // Displacement
-export { buildOpenSubdivAdaptiveFaceLevels } from './util/tessellateDisplacement';
+export { buildOpenSubdivAdaptiveFaceLevels } from './util/tessellateDisplacement.js';
 export type {
   DisplacementTessellationOptions,
   DisplacementTessellationProgress,
   DisplacementTessellationStats
-} from './util/tessellateDisplacement';
+} from './util/tessellateDisplacement.js';
 
 // BVH and worker precomputation
-export { precomputeTinyBvh } from './tinybvh/precomputeTinyBvh';
-export type { TinyBvhPrecomputeOptions, TinyBvhPrecomputeStats } from './tinybvh/precomputeTinyBvh';
-export type { TinyBvhLayout } from './tinybvh/TinyBvhBuilder';
+export { precomputeTinyBvh } from './tinybvh/precomputeTinyBvh.js';
+export type { TinyBvhPrecomputeOptions, TinyBvhPrecomputeStats } from './tinybvh/precomputeTinyBvh.js';
+export type { TinyBvhLayout } from './tinybvh/TinyBvhBuilder.js';
 export {
   prepareForPrecompute,
   precompute,
   resolveFromPrecompute
-} from './util/workerHelper';
+} from './util/workerHelper.js';
 export type {
   DisplacementGeometryPostprocessor,
   DisplacementTopologyRefiner,
@@ -137,6 +137,6 @@ export type {
   PrecomputeResult,
   PrecomputeTimings,
   RefinedDisplacementTopology
-} from './util/workerHelper';
+} from './util/workerHelper.js';
 
-export type { SamplingPattern } from './renderer/sampling';
+export type { SamplingPattern } from './renderer/sampling.js';

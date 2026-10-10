@@ -1,6 +1,6 @@
-import { vec3 } from '../math';
-import type Mesh from '../scene/Mesh';
-import { transformBoundingBox } from './math';
+import { vec3 } from '../math.js';
+import type Mesh from '../scene/Mesh.js';
+import { transformBoundingBox } from './math.js';
 
 /** World-space axis-aligned bounding box `{ min, max }` of the meshes. */
 export function computeMeshesBoundingBox(meshes: Mesh[]) {

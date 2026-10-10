@@ -1,6 +1,6 @@
-import { vec3 } from '../math';
-import { ColorRGB } from '../types';
-import IESProfile from './IESProfile';
+import { vec3 } from '../math.js';
+import { ColorRGB } from '../types.js';
+import IESProfile from './IESProfile.js';
 
 /**
  * Spot light with a spherical emitter, optional IES photometric profile and a

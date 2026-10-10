@@ -4,8 +4,8 @@
 
 import OpenPBRMaterial, {
   MaterialTextureName
-} from '../scene/OpenPBRMaterial';
-import Texture from '../scene/Texture';
+} from '../scene/OpenPBRMaterial.js';
+import Texture from '../scene/Texture.js';
 
 // retrieve textures used by meshes, grouping textures from meshes shared *across all* mesh properties
 export function mergeTexturesFromMaterials<T extends MaterialTextureName>(

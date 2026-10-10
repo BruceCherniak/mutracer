@@ -1,7 +1,7 @@
-import type Mesh from '../scene/Mesh';
+import type Mesh from '../scene/Mesh.js';
 import {
   getCachedPreparedMeshGeometry
-} from '../renderer/prepareMeshBVH';
+} from '../renderer/prepareMeshBVH.js';
 import {
   meshNeedsPrecompute,
   prepareForPrecompute,
@@ -9,12 +9,12 @@ import {
   resolveFromPrecompute,
   type PrecomputeTimings,
   type PrecomputeProgress
-} from '../util/workerHelper';
+} from '../util/workerHelper.js';
 import {
   buildTinyBvh,
   initializeTinyBvh,
   type TinyBvhLayout
-} from './TinyBvhBuilder';
+} from './TinyBvhBuilder.js';
 
 export interface TinyBvhPrecomputeStats {
   /** Precomputation entry point; dynamic geometries use the built-in builder. */

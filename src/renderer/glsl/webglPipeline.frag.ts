@@ -1,4 +1,4 @@
-import { FragmentShader, Shader, glsl } from '../shader';
+import { FragmentShader, Shader, glsl } from '../shader.js';
 
 export const brightFragment = new FragmentShader({
   name: 'bloomBright',

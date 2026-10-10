@@ -1,6 +1,6 @@
-import Geometry from './Geometry';
-import SceneNode from './SceneNode';
-import OpenPBRMaterial from './OpenPBRMaterial';
+import Geometry from './Geometry.js';
+import SceneNode from './SceneNode.js';
+import OpenPBRMaterial from './OpenPBRMaterial.js';
 
 /**
  * A geometry rendered with one or more materials. With several materials,

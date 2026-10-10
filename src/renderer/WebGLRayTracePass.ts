@@ -1,15 +1,15 @@
-import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling';
-import { MeshMembershipCache } from './meshMembership';
-import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges';
-import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges';
+import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling.js';
+import { MeshMembershipCache } from './meshMembership.js';
+import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges.js';
+import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges.js';
 import {
   constants,
   Renderer as WebGLRenderer,
   Texture2D as WebGLTexture2D
-} from './webgl';
-import { WebGLFullQuadPass } from './WebGLFullQuadPass';
-import { mat4 } from '../math';
-import Mesh from '../scene/Mesh';
+} from './webgl.js';
+import { WebGLFullQuadPass } from './WebGLFullQuadPass.js';
+import { mat4 } from '../math.js';
+import Mesh from '../scene/Mesh.js';
 import {
   buildBLAS,
   buildTLAS,
@@ -18,61 +18,61 @@ import {
   refitTLAS,
   mergeRefitRanges,
   type FlattendBVH
-} from './bvhAccel';
+} from './bvhAccel.js';
 import {
   generateBackgroundMapFromSceneBackground
-} from './envMapCreation';
+} from './envMapCreation.js';
 import {
   envMapDistribution,
   environmentMapSourcesMatch,
   type EnvironmentMapSource
-} from './envMapDistribution';
-import createRayTraceFragmentShader from './glsl/rayTrace.frag';
-import shadowCatcherFrag from './glsl/shadowCatcher.frag';
+} from './envMapDistribution.js';
+import createRayTraceFragmentShader from './glsl/rayTrace.frag.js';
+import shadowCatcherFrag from './glsl/shadowCatcher.frag.js';
 import MergedMaterialData, {
   DEFAULT_MAX_TEXTURE_ARRAY_BYTES,
   materialUsesMedium
-} from './MergedMaterialData';
+} from './MergedMaterialData.js';
 import OpenPBRMaterial, {
-} from '../scene/OpenPBRMaterial';
+} from '../scene/OpenPBRMaterial.js';
 
-import DirectionalLight from '../scene/DirectionalLight';
-import SphereLight from '../scene/SphereLight';
-import RectLight from '../scene/RectLight';
-import SpotLight from '../scene/SpotLight';
-import { SceneBackground, SceneLight } from '../scene/Scene';
-import { isIntelMac, numberArraysEqual } from './util';
-import Camera from '../scene/Camera';
+import DirectionalLight from '../scene/DirectionalLight.js';
+import SphereLight from '../scene/SphereLight.js';
+import RectLight from '../scene/RectLight.js';
+import SpotLight from '../scene/SpotLight.js';
+import { SceneBackground, SceneLight } from '../scene/Scene.js';
+import { isIntelMac, numberArraysEqual } from './util.js';
+import Camera from '../scene/Camera.js';
 import {
   commonLinearFloatProps,
   commonNearestFloatProps,
   setDataTexture,
   textureDimensionsFromArray
-} from './dataTextureUtil';
+} from './dataTextureUtil.js';
 import {
   CONSTANT_DIRECTIONAL_LIGHT,
   CONSTANT_RECT_LIGHT,
   CONSTANT_SPHERE_LIGHT,
   packLightsToBuffer
-} from './lightsUtil';
+} from './lightsUtil.js';
 import {
   estimateAnalyticLightPower,
   estimateEnvironmentPower,
   packIESProfiles
-} from './lightSampling';
-import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged } from './geometryUpdates';
-import Geometry, { Attribute } from '../scene/Geometry';
-import { updateMeshInstances, updateMeshInstanceTransforms } from './prepareMeshBVH';
-import { mergeMeshesToGeometry } from './mergeMeshesToGeometry';
+} from './lightSampling.js';
+import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged } from './geometryUpdates.js';
+import Geometry, { Attribute } from '../scene/Geometry.js';
+import { updateMeshInstances, updateMeshInstanceTransforms } from './prepareMeshBVH.js';
+import { mergeMeshesToGeometry } from './mergeMeshesToGeometry.js';
 import {
   DEFAULT_BEVEL_SAMPLES,
   normalizeBevelSamples
-} from './RenderingPipeline';
+} from './RenderingPipeline.js';
 import {
   getOpenPbrEnergyLutData,
   OPENPBR_ENERGY_LUT_HEIGHT,
   OPENPBR_ENERGY_LUT_WIDTH
-} from './openPbrEnergyLut';
+} from './openPbrEnergyLut.js';
 
 type AnalyticLight = DirectionalLight | SphereLight | SpotLight | RectLight;
 // A defensive mixture keeps weak-but-wide lights from being starved by an

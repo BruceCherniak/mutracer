@@ -1,15 +1,15 @@
-import type { SamplingPattern } from './sampling';
-import Camera from '../scene/Camera';
-import Mesh from '../scene/Mesh';
-import Geometry from '../scene/Geometry';
-import OpenPBRMaterial from '../scene/OpenPBRMaterial';
-import { Scene, SceneBackground, SceneLight } from '../scene/Scene';
-import { ColorRGB } from '../types';
-import { TextureAtlasStats } from './MergedMaterialData';
+import type { SamplingPattern } from './sampling.js';
+import Camera from '../scene/Camera.js';
+import Mesh from '../scene/Mesh.js';
+import Geometry from '../scene/Geometry.js';
+import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
+import { Scene, SceneBackground, SceneLight } from '../scene/Scene.js';
+import { ColorRGB } from '../types.js';
+import { TextureAtlasStats } from './MergedMaterialData.js';
 import type {
   OfflineAdaptiveSamplingOptions,
   OfflineAdaptiveSamplingResult
-} from './OfflineAdaptiveSampling';
+} from './OfflineAdaptiveSampling.js';
 
 export type ToneMapping =
   | 'agx'

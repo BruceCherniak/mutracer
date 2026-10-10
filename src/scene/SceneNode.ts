@@ -1,4 +1,4 @@
-import { mat4 } from '../math';
+import { mat4 } from '../math.js';
 
 /** Base class of objects placed in the scene by a world matrix. */
 export default class SceneNode {

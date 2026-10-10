@@ -2,7 +2,7 @@
 // Copyright (c) 2019 Asif Ali, MIT license, which credits Moroz Mykhailo
 // (https://www.shadertoy.com/view/wltcRS).
 
-import { glsl } from '../../shader';
+import { glsl } from '../../shader.js';
 
 export default glsl`
 uvec4 s0;

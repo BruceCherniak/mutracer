@@ -1,5 +1,5 @@
 // TODO output read write buffer
-import { getUniformBuffer, Uniform } from './WGPUFullQuadPass';
+import { getUniformBuffer, Uniform } from './WGPUFullQuadPass.js';
 
 export type { Uniform };
 

@@ -2,25 +2,25 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { ShadowCatcherMaterial, UnlitMaterial } from '../constants';
-import { vec3, vec2 } from '../math';
+import { ShadowCatcherMaterial, UnlitMaterial } from '../constants.js';
+import { vec3, vec2 } from '../math.js';
 import {
   Texture2DArray as WebGLTexture2DArray,
   constants,
   Texture2D
-} from './webgl';
+} from './webgl.js';
 import OpenPBRMaterial, {
   materialAlphaModeConstants,
   resolveMaterialAlphaMode
-} from '../scene/OpenPBRMaterial';
-import { ColorRGB } from '../types';
-import { mergeTexturesFromMaterials } from './texturesFromMaterials';
+} from '../scene/OpenPBRMaterial.js';
+import { ColorRGB } from '../types.js';
+import { mergeTexturesFromMaterials } from './texturesFromMaterials.js';
 import Texture, {
   isTextureDataSource,
   type TextureDataSource
-} from '../scene/Texture';
-import { commonNearestFloatProps, setDataTexture } from './dataTextureUtil';
-import { SceneLight } from '../scene/Scene';
+} from '../scene/Texture.js';
+import { commonNearestFloatProps, setDataTexture } from './dataTextureUtil.js';
+import { SceneLight } from '../scene/Scene.js';
 
 export const DEFAULT_MAX_TEXTURE_ARRAY_BYTES = 384 * 1024 * 1024;
 

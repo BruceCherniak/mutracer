@@ -2,9 +2,9 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { createShaderMixin, glsl, Shader } from '../../shader';
-import { ShadowCatcherMaterial, UnlitMaterial } from '../../../constants';
-import { CONSTANT_SPOT_LIGHT } from '../../lightsUtil';
+import { createShaderMixin, glsl, Shader } from '../../shader.js';
+import { ShadowCatcherMaterial, UnlitMaterial } from '../../../constants.js';
+import { CONSTANT_SPOT_LIGHT } from '../../lightsUtil.js';
 
 export default createShaderMixin({
   uniforms: {

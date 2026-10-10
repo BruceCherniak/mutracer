@@ -1,5 +1,5 @@
-import { vec3 } from '../math';
-import { ColorRGB } from '../types';
+import { vec3 } from '../math.js';
+import { ColorRGB } from '../types.js';
 
 /**
  * Infinitely distant light, such as the sun. Light arrives from `position`

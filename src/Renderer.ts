@@ -1,5 +1,5 @@
-import type { SamplingPattern } from './renderer/sampling';
-import { ensureMeshGeometryAttributes } from './renderer/prepareMeshBVH';
+import type { SamplingPattern } from './renderer/sampling.js';
+import { ensureMeshGeometryAttributes } from './renderer/prepareMeshBVH.js';
 import {
   DEFAULT_BEVEL_SAMPLES,
   DEFAULT_DIRECT_LIGHT_CANDIDATES,
@@ -9,26 +9,26 @@ import {
   RenderingPipeline,
   ToneMapping,
   normalizeBevelSamples
-} from './renderer/RenderingPipeline';
-import makeWebGLRenderingPipeline from './renderer/WebGLRenderingPipeline';
-import { Renderer as WebGLRenderer } from './renderer/webgl';
-import Mesh from './scene/Mesh';
-import { SceneChangeDetector } from './renderer/sceneChangeDetector';
-import type Geometry from './scene/Geometry';
-import Camera from './scene/Camera';
-import { Scene } from './scene/Scene';
-import { ColorRGB } from './types';
-import type { OIDNDenoiser, OIDNModel } from './oidn';
-import { meshNeedsPrecompute } from './util/workerHelper';
+} from './renderer/RenderingPipeline.js';
+import makeWebGLRenderingPipeline from './renderer/WebGLRenderingPipeline.js';
+import { Renderer as WebGLRenderer } from './renderer/webgl.js';
+import Mesh from './scene/Mesh.js';
+import { SceneChangeDetector } from './renderer/sceneChangeDetector.js';
+import type Geometry from './scene/Geometry.js';
+import Camera from './scene/Camera.js';
+import { Scene } from './scene/Scene.js';
+import { ColorRGB } from './types.js';
+import type { OIDNDenoiser, OIDNModel } from './oidn.js';
+import { meshNeedsPrecompute } from './util/workerHelper.js';
 import makeWGPURenderingPipeline, {
   OIDNWeb,
   WGPURenderingPipeline
-} from './renderer/WGPURenderingPipeline';
-import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from './renderer/MergedMaterialData';
+} from './renderer/WGPURenderingPipeline.js';
+import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from './renderer/MergedMaterialData.js';
 import {
   type OfflineAdaptiveSamplingOptions,
   type OfflineVarianceHistory
-} from './renderer/OfflineAdaptiveSampling';
+} from './renderer/OfflineAdaptiveSampling.js';
 /** BLAS builder for meshes without a precomputed BVH. See {@link Renderer.bvhBuilder}. */
 export type BVHBuilder = 'tinybvh' | 'builtin';
 
@@ -212,10 +212,10 @@ function validateSampleInterval(value: number) {
   return value;
 }
 
-let oidnModule: Promise<typeof import('./oidn')> | undefined;
+let oidnModule: Promise<typeof import('./oidn.js')> | undefined;
 /** OIDN (and oidn-web) is only fetched when a denoiser is requested. */
 function loadOIDNModule() {
-  return (oidnModule ??= import('./oidn'));
+  return (oidnModule ??= import('./oidn.js'));
 }
 
 function disposeOIDNDenoiser(denoiser?: OIDNDenoiser) {
@@ -638,7 +638,7 @@ export default class Renderer {
     try {
       // Loaded on demand so applications using the built-in builder do not
       // fetch or bundle the TinyBVH module.
-      const { precomputeTinyBvh } = await import('./tinybvh/precomputeTinyBvh');
+      const { precomputeTinyBvh } = await import('./tinybvh/precomputeTinyBvh.js');
       await precomputeTinyBvh(pending, 'bvh2', undefined, {
         onlyMissing: true,
         spatialSplits: this.bvhSpatialSplits

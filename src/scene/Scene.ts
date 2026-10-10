@@ -1,12 +1,12 @@
-import { ColorRGBA } from '../types';
-import AmbientLight from './AmbientLight';
-import DirectionalLight from './DirectionalLight';
-import EnvironmentLight from './EnvironmentLight';
-import Mesh from './Mesh';
-import RectLight from './RectLight';
-import SphereLight from './SphereLight';
-import SpotLight from './SpotLight';
-import Texture from './Texture';
+import { ColorRGBA } from '../types.js';
+import AmbientLight from './AmbientLight.js';
+import DirectionalLight from './DirectionalLight.js';
+import EnvironmentLight from './EnvironmentLight.js';
+import Mesh from './Mesh.js';
+import RectLight from './RectLight.js';
+import SphereLight from './SphereLight.js';
+import SpotLight from './SpotLight.js';
+import Texture from './Texture.js';
 
 /** Lights with an analytic shape. */
 export type AnalyticLight = RectLight | SphereLight | SpotLight | DirectionalLight;

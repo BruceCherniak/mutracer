@@ -1,4 +1,4 @@
-import { fullScreenQuadVertexShaderWGSL } from './WGPUFullQuadPass';
+import { fullScreenQuadVertexShaderWGSL } from './WGPUFullQuadPass.js';
 
 export function createNormalizeRayTraceOutputWGSL() {
   return /* wgsl */ `

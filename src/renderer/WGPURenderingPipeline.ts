@@ -2,34 +2,34 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import type { SamplingPattern } from './sampling';
-import Mesh from '../scene/Mesh';
-import { Scene, SceneBackground, SceneLight } from '../scene/Scene';
-import Camera from '../scene/Camera';
+import type { SamplingPattern } from './sampling.js';
+import Mesh from '../scene/Mesh.js';
+import { Scene, SceneBackground, SceneLight } from '../scene/Scene.js';
+import Camera from '../scene/Camera.js';
 
-import { WGPUFullQuadPass } from './WGPUFullQuadPass';
-import WGPURayTracePass from './WGPURayTracePass';
+import { WGPUFullQuadPass } from './WGPUFullQuadPass.js';
+import WGPURayTracePass from './WGPURayTracePass.js';
 import {
   composeMain,
   composeDefine,
   shadowDenoiseInputMain
-} from './wgsl/compose.frag.wgsl';
-import halton from './halton';
-import { MIN_PREVIEW_SCALE, nextPreviewScale } from './util';
-import type { RenderingPipeline } from './RenderingPipeline';
-import { makeTileRender, makeTileRenderWithPredict } from './TileRender';
-import { ToneMappingParams } from './RenderingPipeline';
-import type { AlphaBlendStrategy } from './RenderingPipeline';
-import { RenderOutput } from './RenderingPipeline';
-import { ColorRGB } from '../types';
-import { WGPURayTraceOutputPass } from './WGPURayTraceOutput';
-import { vec3 } from '../math';
+} from './wgsl/compose.frag.wgsl.js';
+import halton from './halton.js';
+import { MIN_PREVIEW_SCALE, nextPreviewScale } from './util.js';
+import type { RenderingPipeline } from './RenderingPipeline.js';
+import { makeTileRender, makeTileRenderWithPredict } from './TileRender.js';
+import { ToneMappingParams } from './RenderingPipeline.js';
+import type { AlphaBlendStrategy } from './RenderingPipeline.js';
+import { RenderOutput } from './RenderingPipeline.js';
+import { ColorRGB } from '../types.js';
+import { WGPURayTraceOutputPass } from './WGPURayTraceOutput.js';
+import { vec3 } from '../math.js';
 
-import WGPUBloomPass from './WGPUBloomPass';
-import { WGPUComputePass } from './WGPUComputePass';
-import { isTextureDataSource } from '../scene/Texture';
-import WGPUAutoExposure from './WGPUAutoExposure';
-import WGPUHDRPeakMeter from './WGPUHDRPeakMeter';
+import WGPUBloomPass from './WGPUBloomPass.js';
+import { WGPUComputePass } from './WGPUComputePass.js';
+import { isTextureDataSource } from '../scene/Texture.js';
+import WGPUAutoExposure from './WGPUAutoExposure.js';
+import WGPUHDRPeakMeter from './WGPUHDRPeakMeter.js';
 
 export interface OIDNWebGPUData {
   data: GPUBuffer | GPUTexture;

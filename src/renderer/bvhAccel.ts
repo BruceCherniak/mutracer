@@ -6,10 +6,10 @@
 // (TLAS), built with the binned SAH builder in ./binnedSahBvh and written
 // directly in the BVH2 layout read by the traversal shaders.
 
-import Geometry, { Attribute } from '../scene/Geometry';
-import { mat4, vec3 } from '../math';
-import { Mat4Array } from '../math';
-import { buildBinnedSahBvh, layoutBvh2 } from './binnedSahBvh';
+import Geometry, { Attribute } from '../scene/Geometry.js';
+import { mat4, vec3 } from '../math.js';
+import { Mat4Array } from '../math.js';
+import { buildBinnedSahBvh, layoutBvh2 } from './binnedSahBvh.js';
 
 const vec3Min = vec3.min;
 const vec3Max = vec3.max;

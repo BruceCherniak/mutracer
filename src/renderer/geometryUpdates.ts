@@ -1,8 +1,8 @@
-import { isDeformationUpdate } from '../scene/geometryChanges';
-import Geometry from '../scene/Geometry';
-import { buildBLAS, refitBLAS } from './bvhAccel';
-import { getBvhBounds, updateMeshInstances } from './prepareMeshBVH';
-import Mesh from '../scene/Mesh';
+import { isDeformationUpdate } from '../scene/geometryChanges.js';
+import Geometry from '../scene/Geometry.js';
+import { buildBLAS, refitBLAS } from './bvhAccel.js';
+import { getBvhBounds, updateMeshInstances } from './prepareMeshBVH.js';
+import Mesh from '../scene/Mesh.js';
 
 type Prepared = ReturnType<typeof updateMeshInstances>;
 const vertexAttributes = ['position', 'normal', 'uv', 'uv1', 'color', 'tangent', 'materialIndex'] as const;

@@ -1,5 +1,5 @@
-import { mat4 } from '../math';
-import SceneNode from './SceneNode';
+import { mat4 } from '../math.js';
+import SceneNode from './SceneNode.js';
 
 export default class HierarchyNode {
   // Matrix will be set from outside

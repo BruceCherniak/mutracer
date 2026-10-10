@@ -1,7 +1,7 @@
-import { mat3, vec2, vec3 } from '../math';
-import { ColorRGB } from '../types';
-import SceneNode from './SceneNode';
-import Texture from './Texture';
+import { mat3, vec2, vec3 } from '../math.js';
+import { ColorRGB } from '../types.js';
+import SceneNode from './SceneNode.js';
+import Texture from './Texture.js';
 
 /**
  * Rectangular area light. The rectangle lies on the local XY plane, centered

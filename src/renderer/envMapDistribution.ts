@@ -5,7 +5,7 @@
 // Create a piecewise 2D cumulative distribution function of light intensity from an env map
 // http://www.pbr-book.org/3ed-2018/Monte_Carlo_Integration/2D_Sampling_with_Multidimensional_Transformations.html#Piecewise-Constant2DDistributions
 
-import { TextureDataSource } from '../scene/Texture';
+import { TextureDataSource } from '../scene/Texture.js';
 
 export interface EnvironmentMapSource extends TextureDataSource {
   /** Stable identity shared by adapters that recreate source wrappers. */

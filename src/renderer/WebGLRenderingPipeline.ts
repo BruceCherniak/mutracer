@@ -2,29 +2,29 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import type { SamplingPattern } from './sampling';
-import Camera from '../scene/Camera';
-import Mesh from '../scene/Mesh';
-import { Scene, SceneBackground, SceneLight } from '../scene/Scene';
-import { ColorRGB } from '../types';
-import { vec3 } from '../math';
-import halton from './halton';
-import { nextPreviewScale } from './util';
-import { makeTileRender } from './TileRender';
+import type { SamplingPattern } from './sampling.js';
+import Camera from '../scene/Camera.js';
+import Mesh from '../scene/Mesh.js';
+import { Scene, SceneBackground, SceneLight } from '../scene/Scene.js';
+import { ColorRGB } from '../types.js';
+import { vec3 } from '../math.js';
+import halton from './halton.js';
+import { nextPreviewScale } from './util.js';
+import { makeTileRender } from './TileRender.js';
 import {
   RenderOutput,
   RenderingPipeline,
   ToneMappingParams
-} from './RenderingPipeline';
-import { constants, FrameBuffer, Renderer, Texture2D } from './webgl';
-import { WebGLFullQuadPass } from './WebGLFullQuadPass';
-import WebGLRayTracePass from './WebGLRayTracePass';
-import { WebGLRayTraceOutputPass } from './WebGLRayTraceOutputPass';
-import WebGLBloomPass from './WebGLBloomPass';
+} from './RenderingPipeline.js';
+import { constants, FrameBuffer, Renderer, Texture2D } from './webgl.js';
+import { WebGLFullQuadPass } from './WebGLFullQuadPass.js';
+import WebGLRayTracePass from './WebGLRayTracePass.js';
+import { WebGLRayTraceOutputPass } from './WebGLRayTraceOutputPass.js';
+import WebGLBloomPass from './WebGLBloomPass.js';
 import {
   composeFragment,
   outputFragment
-} from './glsl/webglPipeline.frag';
+} from './glsl/webglPipeline.frag.js';
 
 const wavelengths = [650, 510, 475];
 

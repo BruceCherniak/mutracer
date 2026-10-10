@@ -1,9 +1,9 @@
 import {
   MAX_TRAVERSAL_STACK_SIZE,
   type FlattendBVH
-} from '../renderer/bvhAccel';
-import type Geometry from '../scene/Geometry';
-import { VERSION } from '../version';
+} from '../renderer/bvhAccel.js';
+import type Geometry from '../scene/Geometry.js';
+import { VERSION } from '../version.js';
 
 const wasmUrl = new URL('./tinybvh.wasm', import.meta.url);
 

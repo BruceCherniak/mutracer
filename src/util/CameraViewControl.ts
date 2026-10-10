@@ -1,7 +1,7 @@
-import { mat3, mat4, quat, vec2, vec3 } from '../math';
-import type Mesh from '../scene/Mesh';
-import Camera from '../scene/Camera';
-import { computeMeshesBoundingBox } from './mesh';
+import { mat3, mat4, quat, vec2, vec3 } from '../math.js';
+import type Mesh from '../scene/Mesh.js';
+import Camera from '../scene/Camera.js';
+import { computeMeshesBoundingBox } from './mesh.js';
 
 const MOUSE_BUTTON_KEY_MAP = {
   left: 0,

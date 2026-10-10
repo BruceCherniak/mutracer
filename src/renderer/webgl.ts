@@ -1,6 +1,6 @@
-import { FragmentShader, ShaderDefineValue, ShaderUniform } from './shader';
+import { FragmentShader, ShaderDefineValue, ShaderUniform } from './shader.js';
 
-export { FragmentShader, Shader, createShaderMixin, glsl } from './shader';
+export { FragmentShader, Shader, createShaderMixin, glsl } from './shader.js';
 
 export const constants = {
   FLOAT: 0x1406,

@@ -1,5 +1,5 @@
 import type * as THREE from 'three';
-import { mat4 } from '../math';
+import { mat4 } from '../math.js';
 
 type FloatAttribute = THREE.BufferAttribute | THREE.InterleavedBufferAttribute;
 const attributes = ['position', 'normal', 'tangent', 'skinIndex', 'skinWeight'] as const;

@@ -1,45 +1,45 @@
-import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling';
-import { MeshMembershipCache } from './meshMembership';
-import { mergeRefitRanges } from './bvhAccel';
-import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged, packVertexAttributes } from './geometryUpdates';
-import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges';
-import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges';
-import { WGPUShaderCache, retainedShaderCapacity } from './WGPUShaderCache';
-import { WGPU_SCENE_FEATURE_BITS, wgpuSceneFeatureFlags } from './WGPUSceneFeatures';
-import { TexturePixelSource as TexturePixelSource, mat4 } from '../math';
-import Mesh from '../scene/Mesh';
-import DirectionalLight from '../scene/DirectionalLight';
-import SphereLight from '../scene/SphereLight';
-import RectLight from '../scene/RectLight';
-import SpotLight from '../scene/SpotLight';
+import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling.js';
+import { MeshMembershipCache } from './meshMembership.js';
+import { mergeRefitRanges } from './bvhAccel.js';
+import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged, packVertexAttributes } from './geometryUpdates.js';
+import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges.js';
+import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges.js';
+import { WGPUShaderCache, retainedShaderCapacity } from './WGPUShaderCache.js';
+import { WGPU_SCENE_FEATURE_BITS, wgpuSceneFeatureFlags } from './WGPUSceneFeatures.js';
+import { TexturePixelSource as TexturePixelSource, mat4 } from '../math.js';
+import Mesh from '../scene/Mesh.js';
+import DirectionalLight from '../scene/DirectionalLight.js';
+import SphereLight from '../scene/SphereLight.js';
+import RectLight from '../scene/RectLight.js';
+import SpotLight from '../scene/SpotLight.js';
 import MergedMaterialData, {
   DEFAULT_MAX_TEXTURE_ARRAY_BYTES,
   materialUsesMedium,
   USE_TFDM_DISPLACEMENT
-} from './MergedMaterialData';
-import { SceneBackground, SceneLight } from '../scene/Scene';
-import { numberArraysEqual } from './util';
-import Camera from '../scene/Camera';
+} from './MergedMaterialData.js';
+import { SceneBackground, SceneLight } from '../scene/Scene.js';
+import { numberArraysEqual } from './util.js';
+import Camera from '../scene/Camera.js';
 import {
   generateBackgroundMapFromSceneBackground
-} from './envMapCreation';
-import rayTraceCompute, { WORKGROUP_SIZE } from './wgsl/rayTrace.compute';
-import Geometry from '../scene/Geometry';
+} from './envMapCreation.js';
+import rayTraceCompute, { WORKGROUP_SIZE } from './wgsl/rayTrace.compute.js';
+import Geometry from '../scene/Geometry.js';
 import {
   CONSTANT_DIRECTIONAL_LIGHT,
   CONSTANT_RECT_LIGHT,
   CONSTANT_SPHERE_LIGHT,
   CONSTANT_SPOT_LIGHT
-} from './lightsUtil';
+} from './lightsUtil.js';
 import {
   envMapDistribution,
   environmentMapSourcesMatch,
   type EnvironmentMapSource
-} from './envMapDistribution';
+} from './envMapDistribution.js';
 import {
   updateMeshInstances,
   updateMeshInstanceTransforms
-} from './prepareMeshBVH';
+} from './prepareMeshBVH.js';
 import {
   buildTLAS,
   concatBLASBuffers,
@@ -47,12 +47,12 @@ import {
   getTraversalStackSizes,
   refitBLAS,
   refitTLAS
-} from './bvhAccel';
-import WGPUMinMaxMap from './WGPUMinMaxMap';
-import Texture, { isTextureDataSource } from '../scene/Texture';
+} from './bvhAccel.js';
+import WGPUMinMaxMap from './WGPUMinMaxMap.js';
+import Texture, { isTextureDataSource } from '../scene/Texture.js';
 import OpenPBRMaterial, {
   resolveMaterialAlphaMode
-} from '../scene/OpenPBRMaterial';
+} from '../scene/OpenPBRMaterial.js';
 import {
   DEFAULT_BEVEL_SAMPLES,
   DEFAULT_DIRECT_LIGHT_CANDIDATES,
@@ -60,7 +60,7 @@ import {
   normalizeDirectLightCandidates,
   type AlphaBlendStrategy,
   type ShaderCompilationDiagnostics
-} from './RenderingPipeline';
+} from './RenderingPipeline.js';
 import {
   buildLightAliasTable,
   EmissiveTriangleCache,
@@ -76,19 +76,19 @@ import {
   LIGHT_DOMAIN_LOCAL_AND_EMISSIVE,
   packEmissiveTriangles,
   packIESProfiles
-} from './lightSampling';
+} from './lightSampling.js';
 import {
   getOpenPbrEnergyLutData,
   OPENPBR_ENERGY_LUT_HEIGHT,
   OPENPBR_ENERGY_LUT_WIDTH
-} from './openPbrEnergyLut';
-import { offlineAdaptiveCompute } from './wgsl/offlineAdaptive.compute';
+} from './openPbrEnergyLut.js';
+import { offlineAdaptiveCompute } from './wgsl/offlineAdaptive.compute.js';
 import {
   normalizeOfflineAdaptiveSamplingOptions,
   type OfflineAdaptiveSamplingOptions,
   type OfflineAdaptiveSamplingResult,
   type OfflineVarianceHistory
-} from './OfflineAdaptiveSampling';
+} from './OfflineAdaptiveSampling.js';
 type AnalyticLight = DirectionalLight | SphereLight | SpotLight | RectLight;
 const F32 = Float32Array;
 

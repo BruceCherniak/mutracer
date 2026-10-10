@@ -2,20 +2,20 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import commonWgsl from './chunks/common.wgsl';
-import { WGPU_SCENE_FEATURE_BITS } from '../WGPUSceneFeatures';
-import rayTraceCoreWgsl from './chunks/rayTraceCore.wgsl';
-import { createMaterialBufferWgsl } from './chunks/materialBuffer.wgsl';
-import createIntersectionWgsl from './chunks/intersect.wgsl';
-import randomWgsl from './chunks/random.wgsl';
-import randWgsl from './chunks/rand.wgsl';
-import sampleMaterialWgsl from './chunks/sampleMaterial.wgsl';
-import sampleLightWgsl from './chunks/sampleLight.wgsl';
-import openPbrBsdfWgsl from './chunks/openPbrBsdf.wgsl';
-import samplingWgsl from './chunks/sampling.wgsl';
-import sampleShadowCatcherWgsl from './chunks/sampleShadowCatcher.wgsl';
-import envMapWgsl from './chunks/envMap.wgsl';
-import uvProjectionWgsl from './chunks/uvProjection.wgsl';
+import commonWgsl from './chunks/common.wgsl.js';
+import { WGPU_SCENE_FEATURE_BITS } from '../WGPUSceneFeatures.js';
+import rayTraceCoreWgsl from './chunks/rayTraceCore.wgsl.js';
+import { createMaterialBufferWgsl } from './chunks/materialBuffer.wgsl.js';
+import createIntersectionWgsl from './chunks/intersect.wgsl.js';
+import randomWgsl from './chunks/random.wgsl.js';
+import randWgsl from './chunks/rand.wgsl.js';
+import sampleMaterialWgsl from './chunks/sampleMaterial.wgsl.js';
+import sampleLightWgsl from './chunks/sampleLight.wgsl.js';
+import openPbrBsdfWgsl from './chunks/openPbrBsdf.wgsl.js';
+import samplingWgsl from './chunks/sampling.wgsl.js';
+import sampleShadowCatcherWgsl from './chunks/sampleShadowCatcher.wgsl.js';
+import envMapWgsl from './chunks/envMap.wgsl.js';
+import uvProjectionWgsl from './chunks/uvProjection.wgsl.js';
 export const WORKGROUP_SIZE = 8;
 
 export interface RayTraceShaderOptions {

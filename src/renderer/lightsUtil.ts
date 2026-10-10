@@ -1,7 +1,7 @@
-import DirectionalLight from '../scene/DirectionalLight';
-import SphereLight from '../scene/SphereLight';
-import RectLight from '../scene/RectLight';
-import SpotLight from '../scene/SpotLight';
+import DirectionalLight from '../scene/DirectionalLight.js';
+import SphereLight from '../scene/SphereLight.js';
+import RectLight from '../scene/RectLight.js';
+import SpotLight from '../scene/SpotLight.js';
 
 export const CONSTANT_DIRECTIONAL_LIGHT = 1;
 export const CONSTANT_SPHERE_LIGHT = 2;

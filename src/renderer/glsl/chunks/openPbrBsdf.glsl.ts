@@ -15,7 +15,7 @@
  * integrator. Adobe's opaque-dielectric energy tables are used for the base
  * rough-diffuse/specular coupling; fuzz still uses an analytic approximation.
  */
-import { glsl } from '../../shader';
+import { glsl } from '../../shader.js';
 
 export default glsl`
 const int OPENPBR_LOBE_FUZZ = 0;

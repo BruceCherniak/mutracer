@@ -1,15 +1,15 @@
-import Geometry, { Attribute } from '../scene/Geometry';
-import OpenPBRMaterial from '../scene/OpenPBRMaterial';
+import Geometry, { Attribute } from '../scene/Geometry.js';
+import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
 import type {
   DisplacementEdgeProfile,
   DisplacementHeightFilter
-} from '../scene/OpenPBRMaterial';
-import Texture, { isTextureDataSource } from '../scene/Texture';
+} from '../scene/OpenPBRMaterial.js';
+import Texture, { isTextureDataSource } from '../scene/Texture.js';
 import {
   generateCreasedVertexNormals,
   generateVertexTangents,
   updateBoundingBox
-} from './geometry';
+} from './geometry.js';
 
 export type DisplacementTessellationMode =
   OpenPBRMaterial['displacementTessellationMode'];

@@ -1,7 +1,7 @@
-import Geometry from '../scene/Geometry';
-import Mesh from '../scene/Mesh';
-import { materialIsEmissive } from './materialChanges';
-import { getBvhBounds, updateMeshInstances, updateMeshInstanceTransforms } from './prepareMeshBVH';
+import Geometry from '../scene/Geometry.js';
+import Mesh from '../scene/Mesh.js';
+import { materialIsEmissive } from './materialChanges.js';
+import { getBvhBounds, updateMeshInstances, updateMeshInstanceTransforms } from './prepareMeshBVH.js';
 
 type Prepared = ReturnType<typeof updateMeshInstances>;
 const attributes = ['position', 'normal', 'tangent', 'color', 'uv', 'uv1', 'indices', 'materialIndex'] as const;

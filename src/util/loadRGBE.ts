@@ -1,4 +1,4 @@
-import Texture from '../scene/Texture';
+import Texture from '../scene/Texture.js';
 
 const toChar = String.fromCharCode;
 

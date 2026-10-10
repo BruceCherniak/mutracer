@@ -2,21 +2,21 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import commonGlsl from './chunks/common.glsl';
-import rayTraceCore from './chunks/rayTraceCore.glsl';
-import textureLinear from './chunks/textureLinear.glsl';
-import materialBufferGlsl from './chunks/materialBuffer.glsl';
-import intersect from './chunks/intersect.glsl';
-import randGlsl from './chunks/rand.glsl';
-import random from './chunks/random.glsl';
-import envMap from './chunks/envMap.glsl';
-import sampleMaterialGlsl from './chunks/sampleMaterial.glsl';
-import sampleLightGlsl from './chunks/sampleLight.glsl';
-import { FragmentShader, glsl, Shader } from '../shader';
-import openPbrBsdfGlsl from './chunks/openPbrBsdf.glsl';
-import samplingGlsl from './chunks/sampling.glsl';
-import { isIntelMac } from '../util';
-import uvProjectionGlsl from './chunks/uvProjection.glsl';
+import commonGlsl from './chunks/common.glsl.js';
+import rayTraceCore from './chunks/rayTraceCore.glsl.js';
+import textureLinear from './chunks/textureLinear.glsl.js';
+import materialBufferGlsl from './chunks/materialBuffer.glsl.js';
+import intersect from './chunks/intersect.glsl.js';
+import randGlsl from './chunks/rand.glsl.js';
+import random from './chunks/random.glsl.js';
+import envMap from './chunks/envMap.glsl.js';
+import sampleMaterialGlsl from './chunks/sampleMaterial.glsl.js';
+import sampleLightGlsl from './chunks/sampleLight.glsl.js';
+import { FragmentShader, glsl, Shader } from '../shader.js';
+import openPbrBsdfGlsl from './chunks/openPbrBsdf.glsl.js';
+import samplingGlsl from './chunks/sampling.glsl.js';
+import { isIntelMac } from '../util.js';
+import uvProjectionGlsl from './chunks/uvProjection.glsl.js';
 
 const doubleTransmissionCheckCode = glsl`
 #if defined(HAS_TRANSMISSION) || defined(HAS_ALPHA)

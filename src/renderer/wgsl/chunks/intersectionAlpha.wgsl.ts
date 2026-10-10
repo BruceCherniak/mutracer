@@ -1,7 +1,7 @@
-import { uvProjectionConstants } from '../../MergedMaterialData';
+import { uvProjectionConstants } from '../../MergedMaterialData.js';
 import OpenPBRMaterial, {
   materialAlphaModeConstants
-} from '../../../scene/OpenPBRMaterial';
+} from '../../../scene/OpenPBRMaterial.js';
 
 /**
  * Material coverage shared by software BVH traversal and native RayQuery

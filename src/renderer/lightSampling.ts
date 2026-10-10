@@ -1,12 +1,12 @@
-import { TexturePixelSource, vec3 } from '../math';
-import DirectionalLight from '../scene/DirectionalLight';
-import Geometry from '../scene/Geometry';
-import Mesh from '../scene/Mesh';
-import RectLight from '../scene/RectLight';
-import SphereLight from '../scene/SphereLight';
-import SpotLight from '../scene/SpotLight';
-import IESProfile from '../scene/IESProfile';
-import OpenPBRMaterial from '../scene/OpenPBRMaterial';
+import { TexturePixelSource, vec3 } from '../math.js';
+import DirectionalLight from '../scene/DirectionalLight.js';
+import Geometry from '../scene/Geometry.js';
+import Mesh from '../scene/Mesh.js';
+import RectLight from '../scene/RectLight.js';
+import SphereLight from '../scene/SphereLight.js';
+import SpotLight from '../scene/SpotLight.js';
+import IESProfile from '../scene/IESProfile.js';
+import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
 
 export const LIGHT_CHOICE_ENVIRONMENT = 1;
 export const LIGHT_CHOICE_ANALYTIC = 2;

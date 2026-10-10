@@ -1,7 +1,7 @@
-import { constants, Renderer, Texture2D } from './webgl';
-import normalizeRayTraceOutput from './glsl/normalizeRayTraceOutput.frag';
-import { WebGLFullQuadPass } from './WebGLFullQuadPass';
-import WebGLRayTracePass from './WebGLRayTracePass';
+import { constants, Renderer, Texture2D } from './webgl.js';
+import normalizeRayTraceOutput from './glsl/normalizeRayTraceOutput.frag.js';
+import { WebGLFullQuadPass } from './WebGLFullQuadPass.js';
+import WebGLRayTracePass from './WebGLRayTracePass.js';
 
 type RayTraceInput =
   | 'colorTex'

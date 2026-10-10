@@ -1,4 +1,4 @@
-import { zSobolPackedPermutations, sobolD1Steps } from '../../sampling';
+import { zSobolPackedPermutations, sobolD1Steps } from '../../sampling.js';
 export default /* wgsl */ `
 const CAMERA_PIXEL = 0u;
 const CAMERA_LENS = 1u;

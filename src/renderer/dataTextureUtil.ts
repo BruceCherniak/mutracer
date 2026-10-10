@@ -1,4 +1,4 @@
-import { Texture2D, constants } from './webgl';
+import { Texture2D, constants } from './webgl.js';
 
 export function padArray(
   typedArray: Float32Array | Int32Array,

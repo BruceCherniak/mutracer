@@ -1,11 +1,11 @@
-import { constants, Renderer, Texture2D } from './webgl';
-import { WebGLFullQuadPass } from './WebGLFullQuadPass';
+import { constants, Renderer, Texture2D } from './webgl.js';
+import { WebGLFullQuadPass } from './WebGLFullQuadPass.js';
 import {
   blendCompositeFragment,
   downsampleCompositeFragment,
   gaussianBlurCompositeFragment
-} from './webglShaders';
-import { brightFragment } from './glsl/webglPipeline.frag';
+} from './webglShaders.js';
+import { brightFragment } from './glsl/webglPipeline.frag.js';
 
 const COUNT = 5;
 const outputParams = {

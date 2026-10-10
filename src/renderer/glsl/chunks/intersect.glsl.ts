@@ -2,9 +2,9 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel';
-import { createShaderMixin, glsl, Shader } from '../../shader';
-import OpenPBRMaterial from '../../../scene/OpenPBRMaterial';
+import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
+import { createShaderMixin, glsl, Shader } from '../../shader.js';
+import OpenPBRMaterial from '../../../scene/OpenPBRMaterial.js';
 
 function getBVHTraverseCode(
   handleHitCode: string,

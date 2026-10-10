@@ -1,4 +1,4 @@
-import { zSobolPackedPermutations, sobolD1Steps } from '../../sampling';
+import { zSobolPackedPermutations, sobolD1Steps } from '../../sampling.js';
 export default /* glsl */ `
 uint reverseBits(uint x) {
   x = ((x & 0x55555555u) << 1u) | ((x >> 1u) & 0x55555555u);

@@ -2,13 +2,13 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { mat3, mat4, vec3 } from '../math';
-import Geometry, { Attribute } from '../scene/Geometry';
-import Mesh from '../scene/Mesh';
+import { mat3, mat4, vec3 } from '../math.js';
+import Geometry, { Attribute } from '../scene/Geometry.js';
+import Mesh from '../scene/Mesh.js';
 import OpenPBRMaterial, {
   getMaterialHashKey,
   resetMaterialTextureId
-} from '../scene/OpenPBRMaterial';
+} from '../scene/OpenPBRMaterial.js';
 
 export interface InternalMergedMesh {
   geometry: Geometry;

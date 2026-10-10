@@ -4,7 +4,7 @@
 
 // Manually performs linear filtering if the extension OES_texture_float_linear is not supported
 
-import { glsl } from '../../shader';
+import { glsl } from '../../shader.js';
 
 export default glsl`
 vec4 textureLinear(sampler2D map, vec2 uv) {

@@ -2,19 +2,19 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import common from './chunks/common.glsl';
-import rayTraceCore from './chunks/rayTraceCore.glsl';
-import textureLinear from './chunks/textureLinear.glsl';
-import materialBufferGlsl from './chunks/materialBuffer.glsl';
-import intersect from './chunks/intersect.glsl';
-import randGlsl from './chunks/rand.glsl';
-import random from './chunks/random.glsl';
-import envMap from './chunks/envMap.glsl';
-import sampleShadowCatcher from './chunks/sampleShadowCatcher.glsl';
-import sampleLight from './chunks/sampleLight.glsl';
-import { FragmentShader, glsl, Shader } from '../shader';
-import samplingGlsl from './chunks/sampling.glsl';
-import uvProjectionGlsl from './chunks/uvProjection.glsl';
+import common from './chunks/common.glsl.js';
+import rayTraceCore from './chunks/rayTraceCore.glsl.js';
+import textureLinear from './chunks/textureLinear.glsl.js';
+import materialBufferGlsl from './chunks/materialBuffer.glsl.js';
+import intersect from './chunks/intersect.glsl.js';
+import randGlsl from './chunks/rand.glsl.js';
+import random from './chunks/random.glsl.js';
+import envMap from './chunks/envMap.glsl.js';
+import sampleShadowCatcher from './chunks/sampleShadowCatcher.glsl.js';
+import sampleLight from './chunks/sampleLight.glsl.js';
+import { FragmentShader, glsl, Shader } from '../shader.js';
+import samplingGlsl from './chunks/sampling.glsl.js';
+import uvProjectionGlsl from './chunks/uvProjection.glsl.js';
 
 export default new FragmentShader({
   name: 'rayTarceFrag',

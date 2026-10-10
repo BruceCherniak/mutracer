@@ -1,6 +1,6 @@
-import { vec3 } from '../math';
-import Geometry, { Attribute } from '../scene/Geometry';
-import { generateVertexNormals, updateBoundingBox } from './geometry';
+import { vec3 } from '../math.js';
+import Geometry, { Attribute } from '../scene/Geometry.js';
+import { generateVertexNormals, updateBoundingBox } from './geometry.js';
 
 /** Unit sphere (radius 1) centered at the origin, with normals and UVs. */
 export function createSphereGeometry(

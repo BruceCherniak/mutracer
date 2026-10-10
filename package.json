@@ -79,7 +79,8 @@
     "build:site": "node scripts/build-site.mjs",
     "typecheck:site": "tsc --noEmit -p site/tsconfig.json",
     "deploy": "wrangler deploy",
-    "pack:oidn-weights": "node scripts/pack-oidn-weights.mjs"
+    "pack:oidn-weights": "node scripts/pack-oidn-weights.mjs",
+    "check:lib-esm": "node scripts/check-lib-esm.mjs"
   },
   "dependencies": {
     "gl-matrix": "^3.4.4",

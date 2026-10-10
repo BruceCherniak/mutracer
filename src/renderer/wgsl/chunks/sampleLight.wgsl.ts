@@ -2,7 +2,7 @@ import {
   LIGHT_CHOICE_ANALYTIC,
   LIGHT_CHOICE_EMISSIVE_TRIANGLE,
   LIGHT_CHOICE_ENVIRONMENT
-} from '../../lightSampling';
+} from '../../lightSampling.js';
 
 export default /*wgsl */ `
 fn light_sample_sphere(light: Light, scatterPos: vec3f, randomV2: vec2f, lightSample: ptr<function, LightSampleRec>) {

@@ -2,7 +2,7 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { clamp } from './util';
+import { clamp } from './util.js';
 
 // TileRender is based on the concept of a compute shader's work group.
 

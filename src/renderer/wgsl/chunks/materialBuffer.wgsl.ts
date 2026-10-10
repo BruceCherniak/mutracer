@@ -4,7 +4,7 @@
 
 import OpenPBRMaterial, {
   materialAlphaModeConstants
-} from '../../../scene/OpenPBRMaterial';
+} from '../../../scene/OpenPBRMaterial.js';
 
 export function createMaterialBufferWgsl({
   hasSceneAlpha = true

@@ -1,12 +1,12 @@
-import { mat4, vec2, vec3 } from '../math';
-import Geometry, { Attribute } from '../scene/Geometry';
-import Mesh from '../scene/Mesh';
-import OpenPBRMaterial from '../scene/OpenPBRMaterial';
-import { buildBLAS, TLASInstance } from './bvhAccel';
-import Texture, { isTextureDataSource } from '../scene/Texture';
-import { generateVertexTangents } from '../util/geometry';
-import { tessellateDisplacementGeometry } from '../util/tessellateDisplacement';
-import { colorLuminance } from './lightSampling';
+import { mat4, vec2, vec3 } from '../math.js';
+import Geometry, { Attribute } from '../scene/Geometry.js';
+import Mesh from '../scene/Mesh.js';
+import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
+import { buildBLAS, TLASInstance } from './bvhAccel.js';
+import Texture, { isTextureDataSource } from '../scene/Texture.js';
+import { generateVertexTangents } from '../util/geometry.js';
+import { tessellateDisplacementGeometry } from '../util/tessellateDisplacement.js';
+import { colorLuminance } from './lightSampling.js';
 
 function computeGeometryBounds(geometry: Geometry) {
   const min = vec3.fromValues(Infinity, Infinity, Infinity);

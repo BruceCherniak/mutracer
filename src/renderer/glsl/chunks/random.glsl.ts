@@ -1,5 +1,5 @@
-import sobol from './sobol.glsl';
-import { createShaderMixin, glsl, Shader } from '../../shader';
+import sobol from './sobol.glsl.js';
+import { createShaderMixin, glsl, Shader } from '../../shader.js';
 
 export default createShaderMixin({
   uniforms: {

@@ -1,4 +1,4 @@
-import { WGPUFullQuadPass } from './WGPUFullQuadPass';
+import { WGPUFullQuadPass } from './WGPUFullQuadPass.js';
 
 class WGPUMinMaxMap {
   private _pass;

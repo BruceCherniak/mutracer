@@ -1,6 +1,6 @@
-import { vec2 } from '../math';
-import { ColorRGB } from '../types';
-import Texture from './Texture';
+import { vec2 } from '../math.js';
+import { ColorRGB } from '../types.js';
+import Texture from './Texture.js';
 
 export type UVProjection = 'none' | 'triplanar' | 'spherical' | 'cylindrical';
 export type DisplacementMode = 'projective' | 'tessellated';

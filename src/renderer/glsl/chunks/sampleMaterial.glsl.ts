@@ -1,7 +1,7 @@
 // Estimate the direct lighting integral using multiple importance sampling
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
 
-import { glsl } from '../../shader';
+import { glsl } from '../../shader.js';
 export default glsl`
 vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, inout Path path, vec3 ffnormal, float ndv, bool isSurface) {
   float occluded = 1.0;

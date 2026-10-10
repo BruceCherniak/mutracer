@@ -1,5 +1,5 @@
-import { mat4, vec3 } from '../math';
-import SceneNode from './SceneNode';
+import { mat4, vec3 } from '../math.js';
+import SceneNode from './SceneNode.js';
 
 export type Projection = 'perspective' | 'orthographic';
 

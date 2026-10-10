@@ -1,8 +1,8 @@
-import Mesh from '../scene/Mesh';
-import Geometry from '../scene/Geometry';
-import OpenPBRMaterial, { materialTextureKeys } from '../scene/OpenPBRMaterial';
-import Texture from '../scene/Texture';
-import { Scene, SceneBackground } from '../scene/Scene';
+import Mesh from '../scene/Mesh.js';
+import Geometry from '../scene/Geometry.js';
+import OpenPBRMaterial, { materialTextureKeys } from '../scene/OpenPBRMaterial.js';
+import Texture from '../scene/Texture.js';
+import { Scene, SceneBackground } from '../scene/Scene.js';
 
 export interface SceneChanges {
   meshes: 'none' | 'incremental' | 'full';

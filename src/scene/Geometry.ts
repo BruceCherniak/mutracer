@@ -1,5 +1,5 @@
-import { vec3 } from '../math';
-import { FlattendBVH } from '../renderer/bvhAccel';
+import { vec3 } from '../math.js';
+import { FlattendBVH } from '../renderer/bvhAccel.js';
 
 type AttributeData = Float32Array | Uint16Array | Uint32Array | Int32Array;
 export class Attribute<T extends AttributeData = AttributeData> {

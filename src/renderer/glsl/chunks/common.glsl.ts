@@ -2,7 +2,7 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { glsl } from '../../shader';
+import { glsl } from '../../shader.js';
 
 export default glsl`
 #define PI 3.14159265359

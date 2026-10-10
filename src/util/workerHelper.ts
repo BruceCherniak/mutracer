@@ -1,4 +1,4 @@
-import { buildBLAS, emptyBLAS, FlattendBVH } from '../renderer/bvhAccel';
+import { buildBLAS, emptyBLAS, FlattendBVH } from '../renderer/bvhAccel.js';
 import {
   cachePreparedMeshGeometry,
   getCachedPreparedMeshGeometry,
@@ -10,8 +10,8 @@ import {
   getMeshDisplacementScale,
   getPreparedMeshGeometryCacheKey,
   getDisplacementTextureDataCacheKey
-} from '../renderer/prepareMeshBVH';
-import Texture from '../scene/Texture';
+} from '../renderer/prepareMeshBVH.js';
+import Texture from '../scene/Texture.js';
 import {
   copyDisplacementTextureData,
   getDisplacementTessellationStats,
@@ -20,16 +20,16 @@ import {
   type DisplacementTessellationMode,
   type DisplacementTessellationOptions,
   type DisplacementTessellationStats
-} from './tessellateDisplacement';
-import { generateVertexNormals } from './geometry';
+} from './tessellateDisplacement.js';
+import { generateVertexNormals } from './geometry.js';
 import Geometry, {
   AttributeName,
   Attribute as GeometryAttribute,
   AVAILABLE_ATTRIBUTES,
   GeometryData
-} from '../scene/Geometry';
-import Mesh from '../scene/Mesh';
-import OpenPBRMaterial from '../scene/OpenPBRMaterial';
+} from '../scene/Geometry.js';
+import Mesh from '../scene/Mesh.js';
+import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
 
 export type GeometryForTransfer = Record<
   AttributeName | 'materialIndex' | 'indices',

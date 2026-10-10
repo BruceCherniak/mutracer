@@ -5,7 +5,7 @@
 // Estimate the direct lighting integral using multiple importance sampling
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
 
-import { glsl } from '../../shader';
+import { glsl } from '../../shader.js';
 
 export default glsl`
 // A one-sample binary shadow test leaves scattered fully dark pixels far

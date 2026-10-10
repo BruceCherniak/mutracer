@@ -1,4 +1,4 @@
-import { FragmentShader, glsl, Shader } from '../shader';
+import { FragmentShader, glsl, Shader } from '../shader.js';
 
 /**
  * Normalize

@@ -2,14 +2,14 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel';
+import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
 import {
   USE_TFDM_DISPLACEMENT,
   uvProjectionConstants
-} from '../../MergedMaterialData';
-import tfdm_displacementWgsl from './tfdm_displacement.wgsl';
-import pdm_displacementWgsl from './pdm_displacement.wgsl';
-import intersectionAlphaWgsl from './intersectionAlpha.wgsl';
+} from '../../MergedMaterialData.js';
+import tfdm_displacementWgsl from './tfdm_displacement.wgsl.js';
+import pdm_displacementWgsl from './pdm_displacement.wgsl.js';
+import intersectionAlphaWgsl from './intersectionAlpha.wgsl.js';
 
 const displacementWgsl = USE_TFDM_DISPLACEMENT
   ? tfdm_displacementWgsl

@@ -1,4 +1,4 @@
-import { glsl } from '../../shader';
+import { glsl } from '../../shader.js';
 
 export default glsl`
 // The GGX distribution and spherical-cap VNDF sampler are adapted from

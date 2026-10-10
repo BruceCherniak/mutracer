@@ -1,4 +1,4 @@
-import { displacementCommon } from './pdm_displacement.wgsl';
+import { displacementCommon } from './pdm_displacement.wgsl.js';
 
 /* ----------------------------------------------------- */
 

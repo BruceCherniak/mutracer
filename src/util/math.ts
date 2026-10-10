@@ -1,4 +1,4 @@
-import { mat4, vec3 } from '../math';
+import { mat4, vec3 } from '../math.js';
 
 const xa = vec3.create();
 const xb = vec3.create();

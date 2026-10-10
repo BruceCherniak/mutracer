@@ -1,9 +1,9 @@
 /// <reference types="@webgpu/types" preserve="true" />
 
 import { initUNetFromBuffer, type UNet } from 'oidn-web';
-import type Renderer from './Renderer';
-import { VERSION } from './version';
-import { standardWeightsUrl, smallWeightsUrl } from './oidnBundledWeights';
+import type Renderer from './Renderer.js';
+import { VERSION } from './version.js';
+import { standardWeightsUrl, smallWeightsUrl } from './oidnBundledWeights.js';
 
 export type OIDNEngine = 'auto' | 'wgsl' | 'webnn';
 export type OIDNPrecision = 'auto' | 'fp32' | 'fp16';

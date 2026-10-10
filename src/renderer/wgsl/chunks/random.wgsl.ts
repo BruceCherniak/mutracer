@@ -1,1 +1,1 @@
-export { default } from './sobol.wgsl';
+export { default } from './sobol.wgsl.js';

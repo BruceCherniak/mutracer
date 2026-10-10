@@ -1,4 +1,4 @@
-import { WGPUFullQuadPass } from './WGPUFullQuadPass';
+import { WGPUFullQuadPass } from './WGPUFullQuadPass.js';
 
 const COUNT = 5;
 

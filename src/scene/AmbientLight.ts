@@ -1,4 +1,4 @@
-import { ColorRGB } from '../types';
+import { ColorRGB } from '../types.js';
 
 /** Uniform light from every direction, added to the environment lighting. */
 export default class AmbientLight {

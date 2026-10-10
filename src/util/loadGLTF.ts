@@ -10,14 +10,14 @@
  * Remaining material extensions (transmission and IOR are supported)
  */
 
-import Camera from '../scene/Camera';
-import Texture from '../scene/Texture';
-import OpenPBRMaterial from '../scene/OpenPBRMaterial';
-import Mesh from '../scene/Mesh';
-import Geometry, { Attribute, GeometryData } from '../scene/Geometry';
-import HierarchyNode from '../scene/HierarchyNode';
-import { generateVertexNormals, updateBoundingBox } from './geometry';
-import { mat4, quat, vec3 } from '../math';
+import Camera from '../scene/Camera.js';
+import Texture from '../scene/Texture.js';
+import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
+import Mesh from '../scene/Mesh.js';
+import Geometry, { Attribute, GeometryData } from '../scene/Geometry.js';
+import HierarchyNode from '../scene/HierarchyNode.js';
+import { generateVertexNormals, updateBoundingBox } from './geometry.js';
+import { mat4, quat, vec3 } from '../math.js';
 
 const TEXTURE_2D = 0x0de1;
 

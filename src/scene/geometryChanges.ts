@@ -1,4 +1,4 @@
-import Geometry from './Geometry';
+import Geometry from './Geometry.js';
 
 // A deformation evaluator knows precisely which attributes it has written.
 // Ordinary public notifications still cover every vertex attribute.

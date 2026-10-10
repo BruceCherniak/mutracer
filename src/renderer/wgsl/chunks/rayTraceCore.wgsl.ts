@@ -1,11 +1,11 @@
-import { ShadowCatcherMaterial, UnlitMaterial } from '../../../constants';
+import { ShadowCatcherMaterial, UnlitMaterial } from '../../../constants.js';
 import {
   CONSTANT_DIRECTIONAL_LIGHT,
   CONSTANT_RECT_LIGHT,
   CONSTANT_SPHERE_LIGHT,
   CONSTANT_SPOT_LIGHT
-} from '../../lightsUtil';
-import { USE_TFDM_DISPLACEMENT } from '../../MergedMaterialData';
+} from '../../lightsUtil.js';
+import { USE_TFDM_DISPLACEMENT } from '../../MergedMaterialData.js';
 
 export default function rayTraceCore({
   hasDisplacement,

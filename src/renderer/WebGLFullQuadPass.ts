@@ -1,11 +1,11 @@
-import { FragmentShader, ShaderDefineValue } from './shader';
+import { FragmentShader, ShaderDefineValue } from './shader.js';
 import {
   FrameBuffer,
   Renderer,
   Texture2D,
   TextureOptions,
   WebGLProgramBindings
-} from './webgl';
+} from './webgl.js';
 
 export interface WebGLFullQuadPassOutput extends TextureOptions {}
 
