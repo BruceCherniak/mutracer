@@ -88,3 +88,21 @@ in [GitHub Octicons](https://github.com/primer/octicons).
 
 Copyright (c) 2026 GitHub Inc. MIT License
 ([`LICENSES/Octicons-MIT.txt`](./LICENSES/Octicons-MIT.txt)).
+
+## ray-tracing-renderer
+
+Parts of the original renderer are adapted from
+[hoverinc/ray-tracing-renderer](https://github.com/hoverinc/ray-tracing-renderer),
+npm version 0.10.15. Copyright (c) 2019 HOVER. MIT License
+([`LICENSES/RayTracingRenderer-MIT.txt`](./LICENSES/RayTracingRenderer-MIT.txt)).
+
+The adapted files under `src/renderer/` include:
+
+- `bvhAccel.ts`, `TileRender.ts`, `envMapDistribution.ts`,
+  `mergeMeshesToGeometry.ts`, `envMapCreation.ts`, `MergedMaterialData.ts`,
+  `texturesFromMaterials.ts`, `util.ts`, and parts of
+  `WGPURenderingPipeline.ts` / `WebGLRenderingPipeline.ts`.
+- `glsl/chunks/{intersect,envMap,rayTraceCore,materialBuffer,textureLinear,common,sampleShadowCatcher}.glsl.ts`,
+  `glsl/rayTrace.frag.ts`, and `glsl/shadowCatcher.frag.ts`.
+- WGSL ports: `wgsl/chunks/{intersect,envMap,materialBuffer,sampleShadowCatcher}.wgsl.ts`
+  and `wgsl/rayTrace.compute.ts`.

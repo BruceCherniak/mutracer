@@ -1,3 +1,7 @@
+// Portions adapted from ray-tracing-renderer@0.10.15
+// (https://github.com/hoverinc/ray-tracing-renderer).
+// Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
+
 // Create a piecewise 2D cumulative distribution function of light intensity from an env map
 // http://www.pbr-book.org/3ed-2018/Monte_Carlo_Integration/2D_Sampling_with_Multidimensional_Transformations.html#Piecewise-Constant2DDistributions
 

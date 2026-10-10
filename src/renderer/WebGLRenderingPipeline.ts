@@ -1,3 +1,7 @@
+// Portions adapted from ray-tracing-renderer@0.10.15
+// (https://github.com/hoverinc/ray-tracing-renderer).
+// Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
+
 import type { SamplingPattern } from './sampling';
 import Camera from '../scene/Camera';
 import Mesh from '../scene/Mesh';

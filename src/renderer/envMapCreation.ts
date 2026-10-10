@@ -1,3 +1,7 @@
+// Portions adapted from ray-tracing-renderer@0.10.15
+// (https://github.com/hoverinc/ray-tracing-renderer).
+// Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
+
 // Convert image data from the RGBE format to a 32-bit floating point format
 // See https://www.cg.tuwien.ac.at/research/theses/matkovic/node84.html for a description of the RGBE format
 

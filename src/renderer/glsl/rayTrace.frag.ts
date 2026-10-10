@@ -1,3 +1,7 @@
+// Portions adapted from ray-tracing-renderer@0.10.15
+// (https://github.com/hoverinc/ray-tracing-renderer).
+// Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
+
 import commonGlsl from './chunks/common.glsl';
 import rayTraceCore from './chunks/rayTraceCore.glsl';
 import textureLinear from './chunks/textureLinear.glsl';

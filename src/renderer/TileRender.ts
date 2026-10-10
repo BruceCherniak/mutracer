@@ -1,12 +1,16 @@
+// Portions adapted from ray-tracing-renderer@0.10.15
+// (https://github.com/hoverinc/ray-tracing-renderer).
+// Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
+
 import { clamp } from './util';
 
 // TileRender is based on the concept of a compute shader's work group.
 
-// Sampling the scene with the RayTracingRenderer can be very slow (<1 fps).
+// Path tracing the scene can be very slow (<1 fps).
 // This overworks the GPU and tends to lock up the OS, making it unresponsive.
 
 // To fix this, we can split the screen into smaller tiles, and sample the scene one tile at a time
-// The tile size is set such that each tile takes approximatly a constant amount of time to render.
+// The tile size is set such that each tile takes approximately a constant amount of time to render.
 
 // Since the render time of a tile is dependent on the device, we find the desired tile dimensions by measuring
 // the time it takes to render an arbitrarily-set tile size and adjusting the size according to the benchmark.
