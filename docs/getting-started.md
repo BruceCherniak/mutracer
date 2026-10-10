@@ -176,3 +176,6 @@ Vite production builds and webpack 5 copy these assets without extra
 configuration. Bundlers without asset URL support need self-hosted OIDN weights
 via `weightsBaseUrl`; see [denoising](./denoising.md). The default TS BVH builder
 does not load wasm; the viewer opts into the asynchronous wasm builder.
+If a bundled wasm download fails its HTTP or file-signature check, MuTracer
+warns once and retries the version-pinned jsDelivr copy. If that also fails,
+Renderer falls back to the built-in TS builder.

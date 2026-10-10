@@ -3,6 +3,7 @@ import {
   type FlattendBVH
 } from '../renderer/bvhAccel';
 import type Geometry from '../scene/Geometry';
+import { VERSION } from '../version';
 
 const wasmUrl = new URL('./tinybvh.wasm', import.meta.url);
 
@@ -55,6 +56,19 @@ interface TinyBvhExports extends WebAssembly.Exports {
   _initialize(): void;
 }
 
+let warnedWasmFallback = false;
+
+async function fetchTinyBvhWasm(url: URL | string) {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Unable to load TinyBVH WASM from ${url} (${response.status})`);
+  const buffer = await response.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  if (bytes[0] !== 0 || bytes[1] !== 0x61 || bytes[2] !== 0x73 || bytes[3] !== 0x6d) {
+    throw new Error(`Invalid TinyBVH WASM from ${url}: expected \"\\0asm\" signature (received non-WASM content).`);
+  }
+  return buffer;
+}
+
 let exportsPromise: Promise<TinyBvhExports> | undefined;
 let wasmModulePromise: Promise<WebAssembly.Module> | undefined;
 let buildQueue: Promise<void> = Promise.resolve();
@@ -83,11 +97,17 @@ async function instantiateTinyBvh() {
   };
   if (!wasmModulePromise) {
     wasmModulePromise = (async () => {
-      const response = await fetch(wasmUrl);
-      if (!response.ok) {
-        throw new Error(`Unable to load tinybvh WASM (${response.status})`);
+      let buffer: ArrayBuffer;
+      try {
+        buffer = await fetchTinyBvhWasm(wasmUrl);
+      } catch (error) {
+        if (!warnedWasmFallback) {
+          warnedWasmFallback = true;
+          console.warn('Bundled TinyBVH WASM failed to load; falling back to jsDelivr. In Vite development add optimizeDeps: { exclude: ["mutracer"] }. For OIDN assets you can also pass weightsBaseUrl.', error);
+        }
+        buffer = await fetchTinyBvhWasm(`https://cdn.jsdelivr.net/npm/mutracer@${VERSION}/lib/tinybvh/tinybvh.wasm`);
       }
-      return WebAssembly.compile(await response.arrayBuffer());
+      return WebAssembly.compile(buffer);
     })();
   }
   const instance = await WebAssembly.instantiate(
