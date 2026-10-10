@@ -22,4 +22,4 @@ for (const [name, expected] of Object.entries(hashes)) {
   if (actual !== expected) throw new Error(`SHA-256 mismatch for ${name}: ${actual}`);
   await copyFile(source, new URL(name, output));
 }
-console.log('Prepared oidn-weights@2.3.0 with five verified networks.');
+console.log('Prepared oidn-weights@2.3.0-1 with five verified networks.');

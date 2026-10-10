@@ -1,12 +1,11 @@
 {
   "name": "oidn-weights",
-  "version": "2.3.0",
+  "version": "2.3.0-1",
   "description": "Intel Open Image Denoise 2.3 trained weights (.tza) for oidn-web and MuTracer",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pissang/mutracer.git",
-    "directory": "oidn/package"
+    "url": "git+https://github.com/pissang/oidn-weights.git"
   },
   "keywords": [
     "oidn",

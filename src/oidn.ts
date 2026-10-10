@@ -56,9 +56,9 @@ export type OIDNDenoiser = UNet & {
 
 /** Package containing all OIDN RT networks. Default: `oidn-weights`. */
 export const OIDN_WEIGHTS_PACKAGE = 'oidn-weights';
-/** OIDN network version, independent of MuTracer. Default: `2.3.0`. */
-export const OIDN_WEIGHTS_PACKAGE_VERSION = '2.3.0';
-/** Default large-network directory: jsDelivr's `oidn-weights@2.3.0/`. */
+/** Weights package version for OIDN 2.3.0, independent of MuTracer. Default: `2.3.0-1`. */
+export const OIDN_WEIGHTS_PACKAGE_VERSION = '2.3.0-1';
+/** Default large-network directory: jsDelivr's `oidn-weights@2.3.0-1/`. */
 export const DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL =
   `https://cdn.jsdelivr.net/npm/${OIDN_WEIGHTS_PACKAGE}@${OIDN_WEIGHTS_PACKAGE_VERSION}/`;
 /**
