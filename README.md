@@ -41,8 +41,11 @@ Add `three` only if you use the Three.js helpers:
 npm install mutracer three
 ```
 
-The package is ESM with TypeScript declarations. A UMD build (`MuTracer` global)
-is available at `dist/mutracer.umd.js`.
+The package is ESM with TypeScript declarations via `lib/main.js`. The `dist`
+directory contains only the UMD build (`MuTracer` global) at `dist/mutracer.umd.js`;
+it does not duplicate the ESM distribution.
+The standalone `dist` builds currently support projective displacement only;
+displacement tessellation is not exposed and its implementation is excluded.
 
 ## Quick start
 

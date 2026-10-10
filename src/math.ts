@@ -6,28 +6,80 @@ import {
   vec3 as glVec3
 } from 'gl-matrix';
 // Keep the namespace-shaped type API used by the public scene classes while
-// making the actual math dependency explicit and renderer agnostic.
-export const mat3: any = glMat3;
+// selecting individual functions so bundles can discard unused gl-matrix code.
+export const mat3: any = {
+  create: glMat3.create,
+  fromMat4: glMat3.fromMat4,
+  normalFromMat4: glMat3.normalFromMat4
+};
 export namespace mat3 {
   export type Mat3Array = Float32Array | number[];
 }
 
-export const mat4: any = glMat4;
+export const mat4: any = {
+  copy: glMat4.copy,
+  create: glMat4.create,
+  fromRotationTranslation: glMat4.fromRotationTranslation,
+  invert: glMat4.invert,
+  lookAt: glMat4.lookAt,
+  mul: glMat4.mul,
+  multiply: glMat4.multiply,
+  ortho: glMat4.ortho,
+  perspective: glMat4.perspective,
+  scale: glMat4.scale,
+  fromScaling: glMat4.fromScaling,
+  translate: glMat4.translate
+};
 export namespace mat4 {
   export type Mat4Array = Float32Array | number[];
 }
 
-export const quat: any = glQuat;
+export const quat: any = {
+  create: glQuat.create,
+  fromMat3: glQuat.fromMat3,
+  identity: glQuat.identity,
+  rotateX: glQuat.rotateX,
+  rotateY: glQuat.rotateY
+};
 export namespace quat {
   export type QuatArray = Float32Array | number[];
 }
 
-export const vec2: any = glVec2;
+export const vec2: any = {
+  copy: glVec2.copy,
+  create: glVec2.create,
+  len: glVec2.len,
+  max: glVec2.max,
+  min: glVec2.min,
+  normalize: glVec2.normalize,
+  scale: glVec2.scale,
+  set: glVec2.set,
+  sub: glVec2.sub
+};
 export namespace vec2 {
   export type Vec2Array = Float32Array | number[];
 }
 
-export const vec3: any = glVec3;
+export const vec3: any = {
+  clone: glVec3.clone,
+  copy: glVec3.copy,
+  create: glVec3.create,
+  cross: glVec3.cross,
+  dist: glVec3.dist,
+  forEach: glVec3.forEach,
+  fromValues: glVec3.fromValues,
+  length: glVec3.length,
+  lerp: glVec3.lerp,
+  max: glVec3.max,
+  min: glVec3.min,
+  normalize: glVec3.normalize,
+  scale: glVec3.scale,
+  scaleAndAdd: glVec3.scaleAndAdd,
+  set: glVec3.set,
+  sub: glVec3.sub,
+  transformMat3: glVec3.transformMat3,
+  transformMat4: glVec3.transformMat4
+};
 export namespace vec3 {
   export type Vec3Array = Float32Array | number[];
 }

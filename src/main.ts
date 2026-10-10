@@ -115,14 +115,6 @@ export {
 } from './util/geometry.js';
 export { computeMeshesBoundingBox } from './util/mesh.js';
 
-// Displacement
-export { buildOpenSubdivAdaptiveFaceLevels } from './util/tessellateDisplacement.js';
-export type {
-  DisplacementTessellationOptions,
-  DisplacementTessellationProgress,
-  DisplacementTessellationStats
-} from './util/tessellateDisplacement.js';
-
 // BVH and worker precomputation
 export { precomputeTinyBvh } from './tinybvh/precomputeTinyBvh.js';
 export type { TinyBvhPrecomputeOptions, TinyBvhPrecomputeStats } from './tinybvh/precomputeTinyBvh.js';
@@ -133,13 +125,10 @@ export {
   resolveFromPrecompute
 } from './util/workerHelper.js';
 export type {
-  DisplacementGeometryPostprocessor,
-  DisplacementTopologyRefiner,
   PrecomputePreparedData,
   PrecomputeProgress,
   PrecomputeResult,
-  PrecomputeTimings,
-  RefinedDisplacementTopology
+  PrecomputeTimings
 } from './util/workerHelper.js';
 
 export type { SamplingPattern } from './renderer/sampling.js';

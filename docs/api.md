@@ -154,6 +154,10 @@ Dynamic BLASes rebuild above twice their last build's total node surface area.
 
 ## Helpers
 
+Displacement tessellation helpers are not currently exposed. Standalone `dist`
+builds exclude the tessellator and support `displacementMode: 'projective'` only;
+requesting tessellated displacement reports an error.
+
 | Export | Description |
 | --- | --- |
 | `createPlaneGeometry`, `createCubeGeometry`, `createSphereGeometry`, `createCurvePlaneGeometry` | Procedural geometry (plane is 2×2 in XZ, cube and sphere span −1..1) |
@@ -168,7 +172,6 @@ Dynamic BLASes rebuild above twice their last build's total node surface area.
 | `loadGLTF(url)` | Minimal built-in glTF 2.0 loader; prefer Three.js `GLTFLoader` + `THREESceneSync` |
 | `CameraViewControl` | Orbit/pan/zoom controller for a MuTracer `Camera` |
 | `precomputeTinyBvh`, `prepareForPrecompute`, `precompute`, `resolveFromPrecompute` | BVH and displacement precomputation; see [BVH](./bvh.md) |
-| `buildOpenSubdivAdaptiveFaceLevels` | Per-face levels for OpenSubdiv displacement |
 | `VERSION` | Library version |
 
 `mutracer/oidn` exposes lower-level OIDN loading (`initializeOIDN`,

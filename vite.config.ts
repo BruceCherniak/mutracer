@@ -6,6 +6,11 @@ export default defineConfig(({ command }) => ({
     // Examples import the package by name, exactly like applications do.
     alias: [
       ...(command === 'build' ? [{ find: /^\.\/oidnBundledWeights(?:\.js)?$/, replacement: path.resolve(__dirname, 'src/oidnBundledWeights.cdn.ts') }] : []),
+      // Exclude experimental CPU tessellation from the standalone bundles.
+      ...(command === 'build' ? [{
+        find: /^(?:\.\/|\.\.\/util\/)tessellateDisplacement\.js$/,
+        replacement: path.resolve(__dirname, 'src/util/tessellateDisplacement.disabled.ts')
+      }] : []),
       { find: /^mutracer\/oidn$/, replacement: path.resolve(__dirname, 'src/oidn.ts') },
       { find: /^mutracer$/, replacement: path.resolve(__dirname, 'src/main.ts') }
     ]
@@ -21,6 +26,8 @@ export default defineConfig(({ command }) => ({
     lib: {
       entry: path.resolve(__dirname, 'src/main.ts'),
       name: 'MuTracer',
+      // npm's ESM entry is lib/main.js; dist only supplies the CDN global build.
+      formats: ['umd'],
       fileName: (format: string) => `mutracer.${format}.js`
     }
   }

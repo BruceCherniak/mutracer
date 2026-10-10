@@ -4,7 +4,17 @@ import type {
   DisplacementEdgeProfile,
   DisplacementHeightFilter
 } from '../scene/OpenPBRMaterial.js';
-import Texture, { isTextureDataSource } from '../scene/Texture.js';
+import type Texture from '../scene/Texture.js';
+import {
+  getHeightPixels,
+  setDisplacementTessellationStats,
+  type HeightPixels
+} from './displacementData.js';
+export {
+  copyDisplacementTextureData,
+  getDisplacementTessellationStats,
+  setDisplacementTessellationStats
+} from './displacementData.js';
 import {
   generateCreasedVertexNormals,
   generateVertexTangents,
@@ -53,14 +63,6 @@ export interface DisplacementTessellationProgress {
   mode: DisplacementTessellationMode;
   /** Normalized progress for one geometry. */
   progress: number;
-}
-
-interface HeightPixels {
-  data: Float32Array | Uint8Array | Uint8ClampedArray | Int32Array;
-  width: number;
-  height: number;
-  channels: number;
-  normalized: boolean;
 }
 
 interface HeightRangeLevel {
@@ -129,17 +131,6 @@ type DisplacementSamplingOptions = ResolvedDisplacementOptions & {
 
 const heightAnalysisByTexture = new WeakMap<Texture, HeightAnalysis>();
 const heightAnalysisByCacheKey = new Map<string, HeightAnalysis>();
-const heightPixelCopies = new WeakMap<
-  object,
-  {
-    version: number;
-    image: Texture['image'];
-    data: Float32Array | Uint8Array | Int32Array;
-    width: number;
-    height: number;
-  }
->();
-
 export interface DisplacementTessellationStats {
   sourceTriangles: number;
   generatedTriangles: number;
@@ -167,20 +158,6 @@ export interface DisplacementTessellationStats {
   recoveredQuadCount?: number;
   /** Source triangles that remain triangle faces in the control cage. */
   remainingControlTriangleCount?: number;
-}
-
-const tessellationStats = new WeakMap<Geometry, DisplacementTessellationStats>();
-
-export function getDisplacementTessellationStats(geometry: Geometry) {
-  return tessellationStats.get(geometry);
-}
-
-export function setDisplacementTessellationStats(
-  geometry: Geometry,
-  stats: DisplacementTessellationStats
-) {
-  tessellationStats.set(geometry, stats);
-  return geometry;
 }
 
 interface WorkingVertex {
@@ -268,69 +245,6 @@ function mix3(a: ArrayLike<number>, b: ArrayLike<number>, t = 0.5): [number, num
 function mix2(a: ArrayLike<number>, b: ArrayLike<number>, t = 0.5): [number, number] {
   const s = 1 - t;
   return [a[0] * s + b[0] * t, a[1] * s + b[1] * t];
-}
-
-function getHeightPixels(texture: Texture): HeightPixels | undefined {
-  const image = texture.image;
-  if (!image.width || !image.height) return undefined;
-  if (isTextureDataSource(image)) {
-    const channels = Math.max(
-      Math.floor(image.data.length / (image.width * image.height)),
-      1
-    );
-    return {
-      data: image.data,
-      width: image.width,
-      height: image.height,
-      channels,
-      normalized:
-        image.data instanceof Uint8Array ||
-        image.data instanceof Uint8ClampedArray
-    };
-  }
-  if (typeof document === 'undefined') return undefined;
-  const canvas = document.createElement('canvas');
-  canvas.width = image.width;
-  canvas.height = image.height;
-  const context = canvas.getContext('2d');
-  if (!context) return undefined;
-  context.drawImage(image, 0, 0);
-  return {
-    data: context.getImageData(0, 0, canvas.width, canvas.height).data,
-    width: canvas.width,
-    height: canvas.height,
-    channels: 4,
-    normalized: true
-  };
-}
-
-/** Returns cached CPU pixels suitable for a structured-clone worker message. */
-export function copyDisplacementTextureData(texture: Texture) {
-  const identity = texture.source ?? texture;
-  const cached = heightPixelCopies.get(identity);
-  if (
-    cached &&
-    cached.version === texture.version &&
-    cached.image === texture.image
-  ) {
-    return cached;
-  }
-  const pixels = getHeightPixels(texture);
-  if (!pixels) return undefined;
-  const data = pixels.data instanceof Float32Array
-    ? new Float32Array(pixels.data)
-    : pixels.data instanceof Int32Array
-      ? new Int32Array(pixels.data)
-      : new Uint8Array(pixels.data);
-  const copy = {
-    version: texture.version,
-    image: texture.image,
-    data,
-    width: pixels.width,
-    height: pixels.height
-  };
-  heightPixelCopies.set(identity, copy);
-  return copy;
 }
 
 function buildHeightRangePyramid(pixels: HeightPixels): HeightRangePyramid {
