@@ -161,7 +161,7 @@ function BackendMenu({ name, adapter }: { name: string | null; adapter: string }
           <MenuItem id="webgpu" className="menu-item">WebGPU<kbd>{!webgl && name ? 'active' : ''}</kbd></MenuItem>
           <MenuItem id="webgl" className="menu-item">WebGL 2 fallback<kbd>{webgl ? 'active' : ''}</kbd></MenuItem>
         </Menu>
-        <div className="menu-note">Switching reloads the page. OIDN, auto exposure and Neutral tone mapping need WebGPU.</div>
+        <div className="menu-note">Switching reloads the page. OIDN and auto exposure need WebGPU.</div>
       </Popover>
     </MenuTrigger>
   );

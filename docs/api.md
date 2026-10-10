@@ -53,7 +53,7 @@ affects the image restarts accumulation.
 
 | Property | Default | Description |
 | --- | --- | --- |
-| `toneMapping` | `'agx'` | `'agx'`, `'aces'`, `'cineon'`, `'reinhard'`, `'linear'`, `'neutral'` (Tony McMapface, WebGPU) |
+| `toneMapping` | `'agx'` | `'agx'`, `'aces'`, `'cineon'`, `'reinhard'`, `'linear'` |
 | `toneMappingExposure` | `1` | Linear exposure multiplier |
 | `autoExposure` | `false` | Histogram auto exposure (WebGPU) |
 | `contrast`, `saturation` | `1` | Color grading |

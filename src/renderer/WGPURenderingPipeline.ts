@@ -26,7 +26,6 @@ import { WGPUComputePass } from './WGPUComputePass';
 import { isTextureDataSource } from '../scene/Texture';
 import WGPUAutoExposure from './WGPUAutoExposure';
 import WGPUHDRPeakMeter from './WGPUHDRPeakMeter';
-import { createTonyMcMapfaceLut } from './tonyMcMapfaceLut';
 
 export interface OIDNWebGPUData {
   data: GPUBuffer | GPUTexture;
@@ -400,15 +399,6 @@ output.color = textureLoad(colorTex, uv, 0);
 
   const autoExposurePass = new WGPUAutoExposure(device);
   let hdrPeakMeter: WGPUHDRPeakMeter | undefined;
-  const neutralLutTexture = createTonyMcMapfaceLut(device);
-  const neutralLutSampler = device.createSampler({
-    label: 'Tony McMapface neutral LUT',
-    addressModeU: 'clamp-to-edge',
-    addressModeV: 'clamp-to-edge',
-    addressModeW: 'clamp-to-edge',
-    minFilter: 'linear',
-    magFilter: 'linear'
-  });
   const composePass = new WGPUFullQuadPass('compose', device, {
     textureWillBeRead: true,
     fsMain: composeMain,
@@ -477,15 +467,8 @@ output.color = textureLoad(colorTex, uv, 0);
       'flatBackgroundMaskTex',
       'shadowCatcherTex',
       'bloomTex',
-      'autoExposureTex',
-      'neutralLutTex'
-    ],
-    inputViewDimensions: {
-      neutralLutTex: '3d'
-    },
-    samplers: {
-      neutralLutSampler
-    }
+      'autoExposureTex'
+    ]
   });
   let composeColorFormat: GPUTextureFormat = 'rgba8unorm';
   composePass.setOutputParams({
@@ -932,8 +915,7 @@ output.color = color;
         oidnShadowTexture || getFrameInput('shadowCatcher'),
       // Use color texture as placeholder
       bloomTex: bloomEnabled && bloomPass ? bloomPass.getOutput() : colorTexture,
-      autoExposureTex: autoExposurePass.getOutput(),
-      neutralLutTex: neutralLutTexture
+      autoExposureTex: autoExposurePass.getOutput()
     });
     const activeHDRPeakMeter = hdrOutputActive
       ? (hdrPeakMeter ??= new WGPUHDRPeakMeter(device))
@@ -1285,9 +1267,8 @@ output.color = color;
       aces: 1,
       cineon: 2,
       reinhard: 3,
-      linear: 4,
-      neutral: 5
-    }[params.toneMapping ?? 'agx'];
+      linear: 4
+    }[params.toneMapping ?? 'agx'] ?? 0;
     const newContrast = params.contrast ?? 1;
     const newSaturation = params.saturation ?? 1;
     const newTemperature = params.temperature ?? 0;
@@ -1763,7 +1744,6 @@ output.color = color;
     undefined;
     autoExposurePass.dispose();
     hdrPeakMeter?.dispose();
-    neutralLutTexture.destroy();
     oidnAlbedoEncodePass.dispose();
     oidnAlbedoDecodePass.dispose();
     oidnNormalSanitizePass.dispose();

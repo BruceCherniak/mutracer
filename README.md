@@ -15,7 +15,7 @@ TinyBVH acceleration and Intel Open Image Denoise built in.
   or while the image converges.
 - **Three.js friendly**: keep a `THREE.Scene` (loaded with `GLTFLoader` or
   built by hand) in sync with `THREESceneSync`.
-- **Production output**: AgX, ACES and Tony McMapface tone mapping, color
+- **Production output**: AgX, ACES, Cineon, Reinhard and linear tone mapping, color
   grading, bloom, shadow catchers, transparent backgrounds, depth of field and
   offline rendering with adaptive sampling.
 

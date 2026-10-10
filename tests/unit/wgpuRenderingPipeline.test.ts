@@ -53,7 +53,6 @@ vi.mock('../../src/renderer/WGPURayTraceOutput', () => ({ WGPURayTraceOutputPass
 vi.mock('../../src/renderer/WGPUFullQuadPass', () => ({ WGPUFullQuadPass: mocks.Pass }));
 vi.mock('../../src/renderer/WGPUComputePass', () => ({ WGPUComputePass: mocks.Pass }));
 vi.mock('../../src/renderer/WGPUAutoExposure', () => ({ default: mocks.Pass }));
-vi.mock('../../src/renderer/tonyMcMapfaceLut', () => ({ createTonyMcMapfaceLut: () => ({ destroy() {} }) }));
 
 function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) = 1_000_000n) {
   const device = {
@@ -342,4 +341,15 @@ describe('WebGPU denoised presentation transitions', () => {
     expect(displayedTexture()).not.toBe(nextSnapshot);
     pipeline.dispose();
   });
+});
+
+
+it('falls back to AgX for unknown tone mapping values', () => {
+  const pipeline = createPipeline(false);
+  pipeline.setToneMappingParams({ toneMapping: 'aces' });
+  const compose = mocks.Pass.instances.get('compose')!;
+  compose.setUniform.mockClear();
+  pipeline.setToneMappingParams({ toneMapping: 'removed-mode' as never });
+  expect(compose.setUniform).toHaveBeenCalledWith('toneMappingParams', [0, 0]);
+  pipeline.dispose();
 });

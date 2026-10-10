@@ -67,7 +67,6 @@ export function RenderPanel() {
           value={s.toneMapping}
           options={[
             { value: 'agx', label: 'AgX' },
-            { value: 'neutral', label: 'Neutral', disabled: webgl, hint: webgl ? WEBGPU_ONLY : 'Tony McMapface' },
             { value: 'aces', label: 'ACES' },
             { value: 'cineon', label: 'Cineon' },
             { value: 'reinhard', label: 'Reinhard' },

@@ -16,8 +16,7 @@ export type ToneMapping =
   | 'aces'
   | 'cineon'
   | 'reinhard'
-  | 'linear'
-  | 'neutral';
+  | 'linear';
 
 export interface ToneMappingParams {
   exposure?: number;

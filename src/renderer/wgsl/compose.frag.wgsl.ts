@@ -64,21 +64,12 @@ fn agxToneMapping(inputColor: vec3f) -> vec3f {
   color = pow(max(color, vec3f(0.0)), vec3f(2.2));
   return clamp(linearRec2020ToLinearSrgb * color, vec3f(0.0), vec3f(1.0));
 }
-fn neutralToneMapping(inputColor: vec3f) -> vec3f {
-  let stimulus = max(inputColor, vec3f(0.0));
-  let encoded = stimulus / (stimulus + vec3f(1.0));
-  let lutDimensions = 48.0;
-  let lutUv = encoded * ((lutDimensions - 1.0) / lutDimensions)
-    + vec3f(0.5 / lutDimensions);
-  return textureSampleLevel(neutralLutTex, neutralLutSampler, lutUv, 0.0).rgb;
-}
 fn applyToneMapping(color: vec3f) -> vec3f {
   let toneMappingMode = i32(toneMappingParams.x);
   if (toneMappingMode == 1) { return acesToneMapping(color); }
   if (toneMappingMode == 2) { return cineonToneMapping(color); }
   if (toneMappingMode == 3) { return reinhardToneMapping(color); }
   if (toneMappingMode == 4) { return linearToneMapping(color); }
-  if (toneMappingMode == 5) { return neutralToneMapping(color); }
   return agxToneMapping(color);
 }
 fn linearToSrgb(color: vec3f) -> vec3f {
@@ -128,7 +119,6 @@ let histogramExposure = select(
 var gradedColor = gradeColor(finalColor.rgb * exposure * histogramExposure);
 let vignetteEdge = smoothstep(0.2, 0.72, distance(vec2f(uv) / vec2f(textureDimensions(colorTex)), vec2f(0.5)));
 gradedColor *= 1.0 - toneMappingParams.y * vignetteEdge;
-let toneMappingMode = i32(toneMappingParams.x);
 let hdrOutput = hdrOutputEnabled > 0.5;
 if (!hdrOutput) {
   gradedColor = applyToneMapping(gradedColor);
@@ -136,7 +126,7 @@ if (!hdrOutput) {
 let encodedDisplay = select(
   pow(max(gradedColor, vec3f(0.0)), vec3f(1.0 / 2.2)),
   linearToSrgb(gradedColor),
-  toneMappingMode == 5 || hdrOutput
+  hdrOutput
 );
 var displayColor = encodedDisplay;
 if (flatBackgroundColor.a > 0.5) {
@@ -159,7 +149,7 @@ if (flatBackgroundColor.a > 0.5) {
     let encodedUnbloomed = select(
       pow(max(unbloomedColor, vec3f(0.0)), vec3f(1.0 / 2.2)),
       linearToSrgb(unbloomedColor),
-      toneMappingMode == 5 || hdrOutput
+      hdrOutput
     );
     displayColor += max(encodedDisplay - encodedUnbloomed, vec3f(0.0))
       * (1.0 - surfaceCoverage);

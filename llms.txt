@@ -23,7 +23,7 @@
 - Material parameter, geometry attribute or texture pixel edits require the edited object’s `markUpdated()`. Mesh transforms and scene membership changes need no extra call.
 - `createPlaneGeometry()` is 2×2 in XZ; `createSphereGeometry()` and `createCubeGeometry()` span -1..1. Scale with `matrixWorld`.
 - Rect lights are one-sided; rotate them to face the scene.
-- OIDN, auto exposure, HDR output and the `neutral` tone mapper require WebGPU.
+- OIDN, auto exposure and HDR output require WebGPU.
 - Call `renderer.setSize` with drawing-buffer pixels and update `camera.aspect` on resize.
 
 ## Docs

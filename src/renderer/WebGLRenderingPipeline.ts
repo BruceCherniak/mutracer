@@ -411,11 +411,8 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
         aces: 1,
         cineon: 2,
         reinhard: 3,
-        linear: 4,
-        // Tony McMapface and histogram exposure are WebGPU-only. Preserve a
-        // deterministic fallback for callers that switch rendering backends.
-        neutral: 0
-      }[params.toneMapping ?? 'agx'];
+        linear: 4
+      }[params.toneMapping ?? 'agx'] ?? 0;
       const nextContrast = params.contrast ?? 1;
       const nextSaturation = params.saturation ?? 1;
       const nextTemperature = params.temperature ?? 0;

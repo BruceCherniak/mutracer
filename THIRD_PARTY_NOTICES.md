@@ -49,14 +49,6 @@ adapted from [alipbcs/ZetaRay](https://github.com/alipbcs/ZetaRay).
 Copyright (c) 2023-2024 Ali Behnoudfar. MIT License
 ([`LICENSES/ZetaRay-MIT.txt`](./LICENSES/ZetaRay-MIT.txt)).
 
-## Tony McMapface
-
-The tone-mapping lookup table (`src/renderer/tonyMcMapfaceLutData.ts`) is
-generated from `tony_mc_mapface.dds` in
-[h3r2tic/tony-mc-mapface](https://github.com/h3r2tic/tony-mc-mapface).
-
-Copyright (c) 2023 Tomasz Stachowiak. MIT License
-([`LICENSES/TonyMcMapface-MIT.txt`](./LICENSES/TonyMcMapface-MIT.txt)).
 
 ## KinoBloom
 
