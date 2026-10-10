@@ -62,8 +62,11 @@ await renderer.setDenoiser({ whileConverging: true });
 With `whileConverging` the interactive preview is denoised while the camera
 moves, with the `previewModel` network (`small` by default) at a resolution
 lowered until the denoiser keeps up. A camera change cancels a settled denoise
-that is still running. The accumulating image is re-denoised every
-`sampleInterval` samples (default 8). Pass `coalesceSceneUpdates: true` for
+that is still running. The accumulating image is re-denoised on an adaptive
+schedule that doubles the sample count (1, 4, 8, 16, … samples), so the number
+of denoises grows logarithmically and does not depend on resolution. Long
+batches still update at least every 10 seconds. Pass `sampleInterval` for
+a fixed number of samples between updates instead. Pass `coalesceSceneUpdates: true` for
 animation playback, which coalesces continuous scene changes into the latest
 frame.
 
@@ -75,7 +78,7 @@ frame.
 | `previewModel` | Network for while-converging preview frames, or `false` to use `model`. Default `'small'` |
 | `weightsBaseUrl` | Directory containing the `.tza` files |
 | `whileConverging` | Denoise previews and intermediate frames, not only the final image. Default `false` |
-| `sampleInterval` | Samples between denoised updates with `whileConverging`. Default `8` |
+| `sampleInterval` | Fixed samples between denoised updates with `whileConverging`. Default adaptive (see above) |
 | `coalesceSceneUpdates` | With `whileConverging`, render the latest scene state after a denoise instead of restarting on every scene change. Default `false` |
 | `maxTileSize` | Maximum tile size; chosen by oidn-web by default |
 | `signal` | `AbortSignal` for the download |

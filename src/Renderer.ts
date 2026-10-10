@@ -53,7 +53,10 @@ export interface DenoiserOptions {
   whileConverging?: boolean;
   /**
    * Samples between denoised updates with `whileConverging`. A positive
-   * integer. Default `8`.
+   * integer. By default updates double the sample count (1, 4, 8, 16, …
+   * samples), so the number of denoises grows logarithmically and does not
+   * depend on resolution, with an update at least every 10 seconds.
+   * Default `undefined` (doubling).
    */
   sampleInterval?: number;
   /**
@@ -196,16 +199,23 @@ export type RenderStatus =
 
 const OIDN_DENOISING = 1;
 const OIDN_DENOISED = 2;
-const DEFAULT_OIDN_SAMPLE_INTERVAL = 8;
+/** Default while-converging schedule: sample count of the first batch update. */
+const OIDN_ADAPTIVE_FIRST_SAMPLES = 4;
+/** Sample growth between later updates. */
+const OIDN_ADAPTIVE_SAMPLE_RATIO = 2;
+/** Update at least this often while the doubling batches grow long. */
+const OIDN_ADAPTIVE_MAX_INTERVAL_MS = 10000;
 
 /** Denoising behavior set by {@link Renderer.setDenoiser}. */
 interface DenoiseMode {
   whileConverging: boolean;
-  sampleInterval: number;
+  /** Fixed samples between updates; `undefined` doubles the sample count. */
+  sampleInterval: number | undefined;
   coalesceSceneUpdates: boolean;
 }
 
-function validateSampleInterval(value: number) {
+function validateSampleInterval(value: number | undefined) {
+  if (value === undefined) return value;
   if (!Number.isInteger(value) || value < 1) {
     throw new Error('sampleInterval must be a positive integer');
   }
@@ -410,9 +420,13 @@ export default class Renderer {
    */
   private _denoiseMode: DenoiseMode = {
     whileConverging: false,
-    sampleInterval: DEFAULT_OIDN_SAMPLE_INTERVAL,
+    sampleInterval: undefined,
     coalesceSceneUpdates: false
   };
+  /** Sample count of the last settled while-converging denoise. */
+  private _oidnBatchStartSamples = 0;
+  /** When accumulation resumed after that denoise. */
+  private _oidnBatchStartTime?: number;
   private _oidnSceneUpdatePending = false;
   /** Re-denoise the first settled frame after a camera gesture. */
   private _oidnStaticDenoisePending = false;
@@ -595,7 +609,7 @@ export default class Renderer {
     }
     const {
       whileConverging = false,
-      sampleInterval = DEFAULT_OIDN_SAMPLE_INTERVAL,
+      sampleInterval,
       coalesceSceneUpdates = false,
       previewModel = 'small',
       ...loadOptions
@@ -1357,11 +1371,7 @@ export default class Renderer {
       : convergingLowLatency || (convergingRequested && !canRunOIDN)
       ? 1
       : convergingRequested
-      ? Math.min(
-          this.maxSamples,
-          Math.ceil((renderedSamples + 1) / this._denoiseMode.sampleInterval) *
-            this._denoiseMode.sampleInterval
-        )
+      ? this._convergingSampleTarget(renderedSamples)
       : this.maxSamples;
     // A restarted tiled image stays at 0spp until every pixel is sampled.
     // Hold the completed denoise through that interval as well as later batches.
@@ -1408,11 +1418,18 @@ export default class Renderer {
       const previewFrame = convergingDenoiseActive && this._previewDenoiser &&
         oidn === this._ownedDenoiser && this.interactivePreview &&
         pipeline.isPreviewMode?.() === true;
+      // Settled batches drive the doubling schedule; preview frames are
+      // replaced as soon as the camera moves again.
+      const settledBatch = convergingDenoiseActive && !this._oidnPreviewInFlight;
+      if (settledBatch) {
+        this._oidnBatchStartSamples = pipeline.getTotalSamplesRendered();
+      }
       // Performing denoising
       (pipeline as WGPURenderingPipeline)
         .performOIDNDenoise(previewFrame ? this._previewDenoiser! : oidn!, this.oidnAlpha, convergingDenoiseActive)
         .then((completed) => {
           if (oidnRevision !== this._oidnRevision) return;
+          if (settledBatch) this._oidnBatchStartTime = performance.now();
           // The denoiser may finish without a progress callback (for example
           // a single whole-image execution). Submit the completed OIDN
           // texture explicitly so the first denoised frame reaches the
@@ -1425,6 +1442,7 @@ export default class Renderer {
         })
         .catch((error) => {
           if (oidnRevision !== this._oidnRevision) return;
+          if (settledBatch) this._oidnBatchStartTime = performance.now();
           this._oidnStatus = 0;
           console.error('Failed to denoise WebGPU output.', error);
         });
@@ -1438,6 +1456,37 @@ export default class Renderer {
       : this._renderDone && !needsRedrawPostProcess
       ? RENDER_STATUS_FINISHED
       : RENDER_STATUS_RENDERING;
+  }
+
+  /**
+   * Sample count at which the static while-converging image is denoised next.
+   * Tiled passes can only stop at a pass boundary, so an update that is due
+   * targets the end of the current pass.
+   */
+  private _convergingSampleTarget(renderedSamples: number) {
+    const { maxSamples } = this;
+    const interval = this._denoiseMode.sampleInterval;
+    if (interval !== undefined) {
+      return Math.min(
+        maxSamples,
+        Math.ceil((renderedSamples + 1) / interval) * interval
+      );
+    }
+    if (
+      this._oidnBatchStartTime !== undefined &&
+      performance.now() - this._oidnBatchStartTime >= OIDN_ADAPTIVE_MAX_INTERVAL_MS
+    ) {
+      return Math.min(maxSamples, renderedSamples + 1);
+    }
+    // A restart that has not been denoised yet starts a new sequence.
+    const last = this._oidnBatchStartSamples <= renderedSamples
+      ? this._oidnBatchStartSamples
+      : 0;
+    const next = Math.max(
+      OIDN_ADAPTIVE_FIRST_SAMPLES,
+      Math.ceil(last * OIDN_ADAPTIVE_SAMPLE_RATIO)
+    );
+    return Math.min(maxSamples, Math.max(next, renderedSamples + 1));
   }
 
   /** Redraws post-processing so `canvas.toDataURL()` sees the latest image. */

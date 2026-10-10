@@ -1,6 +1,6 @@
 import { ensureMeshGeometryAttributes } from '../../src/renderer/prepareMeshBVH';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import Renderer, { RENDER_STATUS_PREPARING } from '../../src/Renderer';
 import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from '../../src/renderer/MergedMaterialData';
 import type { RenderingPipeline } from '../../src/renderer/RenderingPipeline';
@@ -12,9 +12,14 @@ import { SceneChangeDetector } from '../../src/renderer/sceneChangeDetector';
 import type { Scene } from '../../src/scene/Scene';
 
 type DenoiseMode = { whileConverging?: boolean; sampleInterval?: number; coalesceSceneUpdates?: boolean };
-/** Applies what `setDenoiser()` sets once its network has loaded. */
+/**
+ * Applies what `setDenoiser()` sets once its network has loaded. Transition
+ * tests use fixed 8-sample batches unless they pass `sampleInterval`.
+ */
 function setDenoiseMode(renderer: Renderer, mode: DenoiseMode) {
-  (renderer as unknown as { _setDenoiseMode(mode: DenoiseMode): void })._setDenoiseMode(mode);
+  (renderer as unknown as { _setDenoiseMode(mode: DenoiseMode): void })._setDenoiseMode(
+    'sampleInterval' in mode ? mode : { sampleInterval: 8, ...mode }
+  );
 }
 
 function createPipeline(overrides: Partial<WGPURenderingPipeline> = {}) {
@@ -1001,7 +1006,6 @@ describe('Renderer while-converging OIDN', () => {
     const renderer = new Renderer({
       canvas: { width: 1, height: 1 } as HTMLCanvasElement
     });
-    setDenoiseMode(renderer, { sampleInterval: 4 });
     renderer.maxSamples = 32;
     const pipeline = createPipeline({
       needsRestartSample: vi.fn(() => false),
@@ -1015,7 +1019,7 @@ describe('Renderer while-converging OIDN', () => {
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
     renderer.oidn = {} as never;
-    setDenoiseMode(renderer, { whileConverging: true });
+    setDenoiseMode(renderer, { whileConverging: true, sampleInterval: 4 });
 
     renderer.render(scene, camera);
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -1023,6 +1027,86 @@ describe('Renderer while-converging OIDN', () => {
 
     expect(pipeline.draw).toHaveBeenNthCalledWith(1, camera, 1);
     expect(pipeline.draw).toHaveBeenNthCalledWith(2, camera, 4);
+  });
+
+  describe('adaptive interval', () => {
+    function setup(denoiseMs: number) {
+      let now = 0;
+      let samples = 0;
+      let finishDenoise!: (completed: boolean) => void;
+      vi.spyOn(performance, 'now').mockImplementation(() => now);
+      const renderer = new Renderer({
+        canvas: { width: 1, height: 1 } as HTMLCanvasElement
+      });
+      renderer.maxSamples = 1000;
+      const pipeline = createPipeline({
+        needsRestartSample: vi.fn(() => false),
+        // One sample per frame, 10 ms each.
+        draw: vi.fn((_camera: Camera, target: number) => {
+          if (samples < target) {
+            samples++;
+            now += 10;
+          }
+          return false;
+        }),
+        getTotalSamplesRendered: vi.fn(() => samples),
+        performOIDNDenoise: vi.fn(() => new Promise<boolean>((resolve) => {
+          finishDenoise = resolve;
+        }))
+      });
+      attachPipeline(renderer, pipeline);
+      markSceneStable(renderer, scene);
+      renderer.oidn = {} as never;
+      setDenoiseMode(renderer, { whileConverging: true, sampleInterval: undefined });
+      /** Renders until OIDN starts, then completes it after `denoiseMs`. */
+      async function nextUpdate() {
+        const calls = pipeline.performOIDNDenoise.mock.calls.length;
+        while (pipeline.performOIDNDenoise.mock.calls.length === calls) {
+          renderer.render(scene, camera);
+        }
+        const denoisedAt = samples;
+        now += denoiseMs;
+        finishDenoise(true);
+        await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        return denoisedAt;
+      }
+      return { nextUpdate, renderer, pipeline };
+    }
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it('doubles the sample count from the fourth sample', async () => {
+      const { nextUpdate } = setup(0);
+      const updates = [];
+      for (let i = 0; i < 7; i++) updates.push(await nextUpdate());
+      expect(updates).toEqual([1, 4, 8, 16, 32, 64, 128]);
+    });
+
+    it('does not skip updates when denoising is slow', async () => {
+      const { nextUpdate } = setup(2000);
+      const updates = [];
+      for (let i = 0; i < 5; i++) updates.push(await nextUpdate());
+      expect(updates).toEqual([1, 4, 8, 16, 32]);
+    });
+
+    it('updates at least every ten seconds', async () => {
+      const { nextUpdate, renderer } = setup(0);
+      renderer.maxSamples = 10000;
+      const updates = [];
+      for (let i = 0; i < 12; i++) updates.push(await nextUpdate());
+      // At 10 ms per sample, 512 -> 1024 would take more than ten seconds.
+      expect(updates.slice(-4)).toEqual([512, 1024, 2025, 3026]);
+    });
+
+    it('denoises the final sample count', async () => {
+      const { nextUpdate, renderer } = setup(0);
+      renderer.maxSamples = 20;
+      const updates = [];
+      for (let i = 0; i < 5; i++) updates.push(await nextUpdate());
+      expect(updates).toEqual([1, 4, 8, 16, 20]);
+    });
   });
 
   it('allows a while-converging OIDN interval that does not divide maxSamples', () => {

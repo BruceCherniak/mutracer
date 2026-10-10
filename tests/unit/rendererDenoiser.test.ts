@@ -32,7 +32,7 @@ describe('Renderer.setDenoiser', () => {
     expect(renderer.oidn).toBe(denoiser);
     expect(denoiseMode(renderer)).toEqual({
       whileConverging: true,
-      sampleInterval: 8,
+      sampleInterval: undefined,
       coalesceSceneUpdates: false
     });
   });
