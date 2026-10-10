@@ -72,7 +72,7 @@ Calling `setDenoiser` applies a fresh configuration to the existing sample
 accumulation, so include the settings you want to retain on each call.
 
 ```ts
-import { DEFAULT_JNLM_OPTIONS } from 'mutracer';
+import { DEFAULT_JNLM_OPTIONS } from '@meimu/mutracer';
 
 await renderer.setDenoiser({
   type: 'jnlm',
@@ -105,7 +105,7 @@ more noise at low sample counts and more detail at high ones.
 
 Standard and small load from your application's own build assets by default.
 Vite and webpack 5 copy the package's static weight URLs into the output.
-In Vite development add `optimizeDeps: { exclude: ['mutracer'] }` to avoid
+In Vite development add `optimizeDeps: { exclude: ['@meimu/mutracer'] }` to avoid
 prebundling asset URLs; otherwise MuTracer warns once and falls back to
 jsDelivr's copy for the installed MuTracer version. The standalone `dist/`
 library bundles use that CDN copy directly.
@@ -114,7 +114,7 @@ The large beauty network and auxiliary prefilters default to
 `https://cdn.jsdelivr.net/npm/oidn-weights@2.3.0-1/`. To self-host all networks,
 install `oidn-weights@2.3.0-1` and copy `node_modules/oidn-weights/*.tza` to a
 static directory. If you only use standard/small, copying the two files from
-`node_modules/mutracer/oidn/weights/` is sufficient:
+`node_modules/@meimu/mutracer/oidn/weights/` is sufficient:
 
 ```ts
 await renderer.setDenoiser({ weightsBaseUrl: '/assets/oidn/weights/' });
@@ -160,7 +160,7 @@ frame.
 | `maxTileSize` | Maximum OIDN tile size; chosen by oidn-web by default |
 | `signal` | `AbortSignal` for the OIDN weight download |
 
-`mutracer/oidn` exposes `initializeOIDN(renderer, options)` and
+`@meimu/mutracer/oidn` exposes `initializeOIDN(renderer, options)` and
 `initializeOIDNFromURL(renderer, url, options)` for custom weights; they
 attach the result to `renderer.oidn`, which denoises with the mode last set by
 `setDenoiser()` (the final image only by default).

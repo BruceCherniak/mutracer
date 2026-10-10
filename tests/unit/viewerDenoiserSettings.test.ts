@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { getDenoiserOptions } from '../../viewer/src/engine/denoiserSettings';
-vi.mock('mutracer', async () => import('../../src/main'));
+vi.mock('@meimu/mutracer', async () => import('../../src/main'));
 
 const renderKey = 'mutracer-viewer:render:v5';
 let values: Map<string, string>;

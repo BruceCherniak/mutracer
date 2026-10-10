@@ -8,7 +8,7 @@ before rendering each frame. Three.js is an optional peer dependency
 ```ts
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { Renderer, THREESceneSync, fromTHREECamera } from 'mutracer';
+import { Renderer, THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
 
 const threeScene = new THREE.Scene();
 threeScene.add((await new GLTFLoader().loadAsync('model.glb')).scene);

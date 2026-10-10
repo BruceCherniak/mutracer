@@ -17,10 +17,10 @@
     ],
     "baseUrl": "..",
     "paths": {
-      "mutracer": [
+      "@meimu/mutracer": [
         "src/main.ts"
       ],
-      "mutracer/oidn": [
+      "@meimu/mutracer/oidn": [
         "src/oidn.ts"
       ]
     }

@@ -7,7 +7,7 @@ import {
   Renderer,
   fromTHREECamera,
   THREESceneSync
-} from 'mutracer';
+} from '@meimu/mutracer';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
 

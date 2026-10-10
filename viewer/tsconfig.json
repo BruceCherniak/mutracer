@@ -9,8 +9,8 @@
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "baseUrl": "..",
     "paths": {
-      "mutracer": ["src/main.ts"],
-      "mutracer/oidn": ["src/oidn.ts"]
+      "@meimu/mutracer": ["src/main.ts"],
+      "@meimu/mutracer/oidn": ["src/oidn.ts"]
     },
     "types": ["@webgpu/types", "vite/client", "node"]
   },

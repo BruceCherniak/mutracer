@@ -475,7 +475,7 @@ export default class Renderer {
 
   /**
    * The attached OIDN denoiser; undefined by default. Prefer
-   * {@link Renderer.setDenoiser}; assign directly only for denoisers loaded with `mutracer/oidn` helpers. The
+   * {@link Renderer.setDenoiser}; assign directly only for denoisers loaded with `@meimu/mutracer/oidn` helpers. The
    * `setDenoiser()` mode (`whileConverging` and related options) stays as set.
    */
   get oidn(): OIDNWeb | undefined {

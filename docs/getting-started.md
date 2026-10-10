@@ -27,7 +27,7 @@ animation frame; it returns a [status](./api.md#status-codes).
 ## A minimal render loop
 
 ```ts
-import { Camera, Renderer, RENDER_STATUS_FINISHED } from 'mutracer';
+import { Camera, Renderer, RENDER_STATUS_FINISHED } from '@meimu/mutracer';
 
 const renderer = new Renderer({ canvas });
 renderer.maxSamples = 1024;
@@ -57,7 +57,7 @@ calls return `RENDER_STATUS_PREPARING` (device setup, BVH builds) and
 ## Geometry from arrays
 
 ```ts
-import { Geometry, GeometryAttribute, generateVertexNormals } from 'mutracer';
+import { Geometry, GeometryAttribute, generateVertexNormals } from '@meimu/mutracer';
 
 const geometry = new Geometry({
   position: new GeometryAttribute(new Float32Array(positions), 3),
@@ -136,7 +136,7 @@ With Three.js, retain a `THREESceneSync` and call `sync.update()` before renderi
 `sync.scene`; see [Three.js](./threejs.md).
 
 ```ts
-import { THREESceneSync, fromTHREECamera } from 'mutracer';
+import { THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
 
 const sync = new THREESceneSync(threeScene);
 
@@ -182,7 +182,7 @@ load from the package:
 
 ```ts
 export default defineConfig({
-  optimizeDeps: { exclude: ['mutracer'] }
+  optimizeDeps: { exclude: ['@meimu/mutracer'] }
 });
 ```
 

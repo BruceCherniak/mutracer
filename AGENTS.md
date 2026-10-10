@@ -1,12 +1,12 @@
 # MuTracer contributor and agent guide
 
-MuTracer is a browser path tracer published to npm as `mutracer`. This file is for
+MuTracer is a browser path tracer published to npm as `@meimu/mutracer`. This file is for
 people and coding agents changing the library. For using it, read
 [`llms.txt`](./llms.txt) and [`docs/`](./docs).
 
 ## Layout
 
-- `src/main.ts`: public API. `src/oidn.ts`: the `mutracer/oidn` entry point.
+- `src/main.ts`: public API. `src/oidn.ts`: the `@meimu/mutracer/oidn` entry point.
 - `src/Renderer.ts`: options, status, scene change detection, denoiser and
   offline rendering.
 - `src/scene/`: scene description classes (`Mesh`, `Geometry`,

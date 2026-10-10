@@ -54,7 +54,7 @@ BLASes explicitly, optionally in another layout or with SBVH:
 | `'cwbvh'` | Compressed 8-wide BVH (WebGPU); experimental, benefit depends on GPU and scene |
 
 ```ts
-import { precomputeTinyBvh } from 'mutracer';
+import { precomputeTinyBvh } from '@meimu/mutracer';
 const stats = await precomputeTinyBvh(scene.meshes, 'cwbvh');
 ```
 
@@ -104,7 +104,7 @@ before entering the render loop. Resume rendering after resolving the result:
 
 ```ts
 // main thread
-import { prepareForPrecompute, resolveFromPrecompute } from 'mutracer';
+import { prepareForPrecompute, resolveFromPrecompute } from '@meimu/mutracer';
 
 const prepared = prepareForPrecompute(scene.meshes);
 const {
@@ -123,7 +123,7 @@ worker.onmessage = ({ data }) => {
 };
 
 // worker.ts
-import { precompute } from 'mutracer';
+import { precompute } from '@meimu/mutracer';
 
 self.onmessage = async ({ data: d }) => {
   const result = await precompute(

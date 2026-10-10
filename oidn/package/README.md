@@ -28,7 +28,7 @@ a8efbe6eed511f41c8f5ff9145923214cefb0703cf91a3b00a1dc131ade1600a  rt_alb_large.t
 ## Loading
 
 MuTracer bundles standard and small, loading them from application assets by
-default. Vite development requires `optimizeDeps: { exclude: ['mutracer'] }`;
+default. Vite development requires `optimizeDeps: { exclude: ['@meimu/mutracer'] }`;
 otherwise MuTracer warns once and falls back to its version-pinned CDN copy.
 The complete `oidn-weights@2.3.0-1` package also includes all three large networks:
 
@@ -39,4 +39,4 @@ https://cdn.jsdelivr.net/npm/oidn-weights@2.3.0-1/<filename>.tza
 To self-host, install `oidn-weights@2.3.0-1`, copy `node_modules/oidn-weights/*.tza`
 to static assets, then pass `weightsBaseUrl: '/assets/oidn/weights/'` to
 `renderer.setDenoiser()`. When using only standard/small, copy the two `.tza`
-files from `node_modules/mutracer/oidn/weights/` instead. This package contains all five files.
+files from `node_modules/@meimu/mutracer/oidn/weights/` instead. This package contains all five files.

@@ -1,4 +1,4 @@
-import { Texture } from 'mutracer';
+import { Texture } from '@meimu/mutracer';
 
 export interface SkyOptions {
   width?: number;

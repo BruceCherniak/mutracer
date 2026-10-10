@@ -1,5 +1,5 @@
 {
-  "name": "mutracer",
+  "name": "@meimu/mutracer",
   "version": "0.1.0",
   "description": "MuTracer: a physically based WebGPU path tracer with WebGL 2 fallback, OpenPBR materials, TinyBVH and OIDN denoising.",
   "keywords": [
@@ -22,6 +22,9 @@
     "url": "git+https://github.com/pissang/mutracer.git"
   },
   "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
   "author": "Yi Shen",
   "type": "module",
   "main": "lib/main.js",

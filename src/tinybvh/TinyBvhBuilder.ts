@@ -103,9 +103,9 @@ async function instantiateTinyBvh() {
       } catch (error) {
         if (!warnedWasmFallback) {
           warnedWasmFallback = true;
-          console.warn('Bundled TinyBVH WASM failed to load; falling back to jsDelivr. In Vite development add optimizeDeps: { exclude: ["mutracer"] }. For OIDN assets you can also pass weightsBaseUrl.', error);
+          console.warn('Bundled TinyBVH WASM failed to load; falling back to jsDelivr. In Vite development add optimizeDeps: { exclude: ["@meimu/mutracer"] }. For OIDN assets you can also pass weightsBaseUrl.', error);
         }
-        buffer = await fetchTinyBvhWasm(`https://cdn.jsdelivr.net/npm/mutracer@${VERSION}/lib/tinybvh/tinybvh.wasm`);
+        buffer = await fetchTinyBvhWasm(`https://cdn.jsdelivr.net/npm/@meimu/mutracer@${VERSION}/lib/tinybvh/tinybvh.wasm`);
       }
       return WebAssembly.compile(buffer);
     })();

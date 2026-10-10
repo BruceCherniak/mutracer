@@ -1,6 +1,6 @@
 # API reference
 
-Everything is exported from `mutracer`. Type declarations carry TSDoc with
+Everything is exported from `@meimu/mutracer`. Type declarations carry TSDoc with
 defaults for every option; this page summarizes them.
 
 ## `Renderer`
@@ -174,6 +174,6 @@ requesting tessellated displacement reports an error.
 | `precomputeTinyBvh`, `prepareForPrecompute`, `precompute`, `resolveFromPrecompute` | BVH and displacement precomputation; see [BVH](./bvh.md) |
 | `VERSION` | Library version |
 
-`mutracer/oidn` exposes lower-level OIDN loading (`initializeOIDN`,
+`@meimu/mutracer/oidn` exposes lower-level OIDN loading (`initializeOIDN`,
 `initializeOIDNFromURL`, `DEFAULT_OIDN_WEIGHTS_BASE_URL`) for custom denoiser
 setups.

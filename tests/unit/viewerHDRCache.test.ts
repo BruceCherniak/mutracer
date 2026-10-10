@@ -2,7 +2,7 @@ import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { loadHDR } from '../../viewer/src/engine/environment';
 
-vi.mock('mutracer', async () => import('../../src/util/loadRGBE'));
+vi.mock('@meimu/mutracer', async () => import('../../src/util/loadRGBE'));
 
 function onePixelHDR() {
   const header = new TextEncoder().encode('#?RADIANCE\n\n-Y 1 +X 1\n');

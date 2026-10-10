@@ -1,6 +1,6 @@
 # MuTracer
 
-[![npm version](https://img.shields.io/npm/v/mutracer)](https://www.npmjs.com/package/mutracer)
+[![npm version](https://img.shields.io/npm/v/@meimu/mutracer)](https://www.npmjs.com/package/@meimu/mutracer)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
 
 **MuTracer** is a physically based path tracer for the web.
@@ -32,13 +32,13 @@ APIs may change between minor releases.
 The quick-start example imports `gl-matrix` directly; install it alongside MuTracer:
 
 ```bash
-npm install mutracer gl-matrix
+npm install @meimu/mutracer gl-matrix
 ```
 
 Add `three` only if you use the Three.js helpers:
 
 ```bash
-npm install mutracer three
+npm install @meimu/mutracer three
 ```
 
 The package is ESM with TypeScript declarations via `lib/main.js`. The `dist`
@@ -54,7 +54,7 @@ import { mat4 } from 'gl-matrix';
 import {
   Camera, EnvironmentLight, Mesh, OpenPBRMaterial, RectLight, Renderer,
   Texture, createPlaneGeometry, createSphereGeometry, type Scene
-} from 'mutracer';
+} from '@meimu/mutracer';
 
 const canvas = document.querySelector('canvas')!;
 
@@ -97,7 +97,7 @@ frame();
 With Three.js:
 
 ```ts
-import { Renderer, THREESceneSync, fromTHREECamera } from 'mutracer';
+import { Renderer, THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
 
 const renderer = new Renderer({ canvas });
 const sync = new THREESceneSync(threeScene);

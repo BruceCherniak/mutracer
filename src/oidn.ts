@@ -63,10 +63,10 @@ export const DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL =
   `https://cdn.jsdelivr.net/npm/${OIDN_WEIGHTS_PACKAGE}@${OIDN_WEIGHTS_PACKAGE_VERSION}/`;
 /**
  * Fallback for bundled standard/small weights when application assets fail.
- * Defaults to jsDelivr's `mutracer@VERSION/oidn/weights/` directory.
+ * Defaults to jsDelivr's `@meimu/mutracer@VERSION/oidn/weights/` directory.
  */
 export const DEFAULT_OIDN_WEIGHTS_BASE_URL =
-  `https://cdn.jsdelivr.net/npm/mutracer@${VERSION}/oidn/weights/`;
+  `https://cdn.jsdelivr.net/npm/@meimu/mutracer@${VERSION}/oidn/weights/`;
 
 export interface OIDNLoadOptions {
   /** Attach the loaded denoiser to the renderer. Defaults to true. */
@@ -265,7 +265,7 @@ export function initializeOIDN(
       if (defaultBundled && String(url) === mainUrl) {
         if (!warnedBundledWeights) {
           warnedBundledWeights = true;
-          console.warn('Bundled OIDN weights failed to load; falling back to jsDelivr. In Vite development add optimizeDeps: { exclude: ["mutracer"] }, or pass weightsBaseUrl to self-host the weights.', error);
+          console.warn('Bundled OIDN weights failed to load; falling back to jsDelivr. In Vite development add optimizeDeps: { exclude: ["@meimu/mutracer"] }, or pass weightsBaseUrl to self-host the weights.', error);
         }
         return fetchOIDNWeights(resolveOIDNModelUrl(model, DEFAULT_OIDN_WEIGHTS_BASE_URL), signal);
       }

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Aperture, Bug, Palette, RotateCcw, Sparkles, Sun } from 'lucide-react';
-import type { OIDNModel, RendererDiagnostics } from 'mutracer';
+import type { OIDNModel, RendererDiagnostics } from '@meimu/mutracer';
 import { DEFAULT_SETTINGS, setSettings, useViewer, type Settings } from '../../store';
 import { getEngine } from '../../engine/ViewerEngine';
 import { Field, Hint, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';

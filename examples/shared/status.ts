@@ -7,7 +7,7 @@ import {
   RENDER_STATUS_RENDERING,
   type Renderer,
   type RenderStatus
-} from 'mutracer';
+} from '@meimu/mutracer';
 
 const labels: Record<number, string> = {
   [RENDER_STATUS_PREPARING]: 'Preparing scene',

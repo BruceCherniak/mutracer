@@ -11,8 +11,8 @@ export default defineConfig(({ command }) => ({
         find: /^(?:\.\/|\.\.\/util\/)tessellateDisplacement\.js$/,
         replacement: path.resolve(__dirname, 'src/util/tessellateDisplacement.disabled.ts')
       }] : []),
-      { find: /^mutracer\/oidn$/, replacement: path.resolve(__dirname, 'src/oidn.ts') },
-      { find: /^mutracer$/, replacement: path.resolve(__dirname, 'src/main.ts') }
+      { find: /^@meimu\/mutracer\/oidn$/, replacement: path.resolve(__dirname, 'src/oidn.ts') },
+      { find: /^@meimu\/mutracer$/, replacement: path.resolve(__dirname, 'src/main.ts') }
     ]
   },
   server: {

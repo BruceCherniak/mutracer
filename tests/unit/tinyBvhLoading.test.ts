@@ -16,7 +16,7 @@ it('rejects an HTML fallback and loads valid wasm from the pinned CDN once', asy
   await initializeTinyBvh();
   await initializeTinyBvh();
   expect(fetchMock).toHaveBeenCalledTimes(2);
-  expect(fetchMock).toHaveBeenLastCalledWith(`https://cdn.jsdelivr.net/npm/mutracer@${VERSION}/lib/tinybvh/tinybvh.wasm`);
+  expect(fetchMock).toHaveBeenLastCalledWith(`https://cdn.jsdelivr.net/npm/@meimu/mutracer@${VERSION}/lib/tinybvh/tinybvh.wasm`);
   expect(warning).toHaveBeenCalledOnce();
   expect(warning.mock.calls[0][0]).toContain('optimizeDeps');
 });

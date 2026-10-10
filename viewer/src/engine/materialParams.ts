@@ -1,4 +1,4 @@
-import type { OpenPBRMaterial } from 'mutracer';
+import type { OpenPBRMaterial } from '@meimu/mutracer';
 
 type NumberKey = {
   [K in keyof OpenPBRMaterial]-?: OpenPBRMaterial[K] extends number ? K : never

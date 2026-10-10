@@ -3,7 +3,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { ViewerEngine as Engine } from '../../viewer/src/engine/ViewerEngine';
 import type { useViewer as Store } from '../../viewer/src/store';
 
-vi.mock('mutracer', async () => import('../../src/main'));
+vi.mock('@meimu/mutracer', async () => import('../../src/main'));
 
 let ViewerEngine: typeof Engine;
 let useViewer: typeof Store;

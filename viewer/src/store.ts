@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import { DEFAULT_JNLM_OPTIONS } from 'mutracer';
-import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, RenderOutput } from 'mutracer';
+import { DEFAULT_JNLM_OPTIONS } from '@meimu/mutracer';
+import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, RenderOutput } from '@meimu/mutracer';
 import type { MaterialValues } from './engine/materialParams';
 import { STUDIO_PRESETS } from './engine/studio';
 

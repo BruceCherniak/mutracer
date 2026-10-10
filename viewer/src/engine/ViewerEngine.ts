@@ -11,7 +11,7 @@ import {
   RENDER_STATUS_PREPARING,
   type OpenPBRMaterial,
   type RenderStatus
-} from 'mutracer';
+} from '@meimu/mutracer';
 import { useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
 import { Environment, createSky, loadHDR, parseHDR } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';

@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { parseRGBE } from 'mutracer';
+import { parseRGBE } from '@meimu/mutracer';
 import { fetchWithProgress } from './fetchWithProgress';
 import { openHDRCache } from './hdrCache';
 

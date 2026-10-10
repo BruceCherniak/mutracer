@@ -1,4 +1,4 @@
-import type { DenoiserOptions } from 'mutracer';
+import type { DenoiserOptions } from '@meimu/mutracer';
 import type { Settings } from '../store';
 
 export const DENOISER_FIELDS = [
