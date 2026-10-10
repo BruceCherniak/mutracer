@@ -1,6 +1,7 @@
 # Contributing
 
-Use Node 20 (see `.nvmrc`) and install dependencies with `npm install`.
+Use Node 22 or later (`.nvmrc` pins 24, the current LTS) and install
+dependencies with `npm install`.
 Run `npm run dev` for examples, `npm run viewer` for the test-drive app, or
 `npm run site` for the home page.
 

@@ -22,7 +22,7 @@ picked files are stored in IndexedDB (same origin) and the viewer opens with
 
 ## Cloudflare deployment
 
-From the repository root, with Node.js 20 or later:
+From the repository root, with Node.js 22 or later:
 
 ```bash
 npm ci
