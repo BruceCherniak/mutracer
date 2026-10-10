@@ -103,61 +103,6 @@ fn findRoots(
 
 ${displacementCommon}
 
-// const SquareOutsideTriangle = 0;
-// const SquareOverlappingTriangle = 1;
-// const SquareInsideTriangle = 2;
-// fn testTriangleSquareIntersection2D(
-//   pA: vec2f, pB: vec2f, pC: vec2f, tcFlipped: bool, triEdgeNormals: array<vec2f, 3>,
-//   triAabbMinP: vec2f, triAabbMaxP: vec2f,
-//   squareCenter: vec2f, squareHalfWidth: f32
-// ) -> i32 {
-//   let relTriPs = array<vec2f, 3>(
-//     pA - squareCenter,
-//     pB - squareCenter, 
-//     pC - squareCenter
-//   );
-
-//   // Test intersection between texel and triangle AABB
-//   if (any(min(vec2f(squareHalfWidth), triAabbMaxP - squareCenter) <= 
-//           max(vec2f(-squareHalfWidth), triAabbMinP - squareCenter))) {
-//     return SquareOutsideTriangle;
-//   }
-
-//   // Texel is outside triangle if in normal direction of any edge
-//   for (var eIdx = 0; eIdx < 3; eIdx++) {
-//     let eNormal = (select(1.0, -1.0, tcFlipped)) * triEdgeNormals[eIdx];
-//     let b = eNormal >= vec2f(0.0);
-//     let pToCorner = vec2f(
-//       select(1.0, -1.0, b.x) * squareHalfWidth,
-//       select(1.0, -1.0, b.y) * squareHalfWidth
-//     ) - relTriPs[eIdx];
-    
-//     if (dot(eNormal, pToCorner) > 0.0) {
-//       return SquareOutsideTriangle;
-//     }
-//   }
-
-//   // Test if texel overlaps triangle edges
-//   for (var i = 0; i < 4; i++) {
-//     let corner = vec2f(
-//       select(1.0, -1.0, (i % 2) == 0) * squareHalfWidth,
-//       select(1.0, -1.0, (i / 2) == 0) * squareHalfWidth
-//     );
-    
-//     for (var eIdx = 0; eIdx < 3; eIdx++) {
-//       let o = relTriPs[eIdx];
-//       let e1 = relTriPs[(eIdx + 1) % 3] - o;
-//       let e2 = corner - o;
-      
-//       if ((select(1.0, -1.0, tcFlipped)) * (e1.x * e2.y - e1.y * e2.x) < 0.0) {
-//         return SquareOverlappingTriangle;
-//       }
-//     }MicroTriangleIntersect
-//   }
-
-//   // Otherwise texel is inside triangle
-//   return SquareInsideTriangle;
-// }
 
 fn upVoxel(voxel: ptr<function, vec3i>) {
   (*voxel).x /= 2;
@@ -206,22 +151,6 @@ fn boxIntersectBox(minA: vec2f, maxA: vec2f, minB: vec2f, maxB: vec2f) -> bool {
   return all(minA <= maxB) && all(maxA >= minB);
 }
 
-// fn getDisplacedNormal(heightMapIndex: i32, tc: vec2i) -> vec3f {
-//   let h00 = textureLoad(map, tc + vec2i(-1, -1), heightMapIndex, 0).r;
-//   let h10 = textureLoad(map, tc + vec2i(1, -1), heightMapIndex, 0).r; 
-//   let h01 = textureLoad(map, tc + vec2i(-1, 1), heightMapIndex, 0).r;
-//   let h11 = textureLoad(map, tc + vec2i(1, 1), heightMapIndex, 0).r;
-  
-//   // Calculate the partial derivatives using Sobel filter
-//   let dx = (h10 + h11 - h00 - h01) * 0.5;
-//   let dy = (h01 + h11 - h00 - h10) * 0.5;
-  
-//   // Return normalized normal vector
-//   // The z component is scaled to control the normal's intensity
-//   return normalize(vec3f(-dx, -dy, 1.0));
-// }
-
-// Main traversal function
 fn intersectDisplacement(
   _rayOrigin: vec3f, _rayDir: vec3f, _tMax: f32,
   _pA: vec3f, _pB: vec3f, _pC: vec3f,
@@ -282,15 +211,6 @@ fn intersectDisplacement(
   var hitBary: vec3f;
   var hitNormal: vec3f;
 
-  // let tcFlipped = triAreaInTex < 0.0;
-  // let texTriEdgeNormals = array<vec2f, 3>(
-  //   vec2f(tcB.y - tcA.y, tcA.x - tcB.x),
-  //   vec2f(tcC.y - tcB.y, tcB.x - tcC.x),
-  //   vec2f(tcA.y - tcC.y, tcC.x - tcA.x)
-  // );
-
-  // Stack is used to store texel offset.
-  // TODO pack x, y to one channel
 
 
   // TODO: configurable root count. for large triangles.
@@ -320,13 +240,6 @@ fn intersectDisplacement(
       }
 
       let texel = vec2f(voxel.xy) * texelScale;
-      // let texelCenter = texel + 0.5 * texelScale;
-      // if (testTriangleSquareIntersection2D(
-      //   tcA, tcB, tcC, tcFlipped, texTriEdgeNormals, texTriAabbMinP, texTriAabbMaxP,
-      //   texelCenter, 0.5 * texelScale) == SquareOutsideTriangle) {
-      //   nextVoxel(&voxel, signX, signY, initialLod);
-      //   continue;
-      // }
 
       if (!boxIntersectBox(texTriAabbMinP, texTriAabbMaxP, texel, texel + texelScale)) {
         nextVoxel(&voxel, signX, signY, initialLod);
@@ -429,11 +342,6 @@ fn intersectDisplacement(
         // No need to calculate normal for shadow ray.
         if (!isShadowHit) {
           hitNormal = cross(hitMicroTri.p1 - hitMicroTri.p0, hitMicroTri.p2 - hitMicroTri.p0);
-          // let microN0 = getDisplacedNormal(heightMapIndex, microTcA);
-          // let microN1 = getDisplacedNormal(heightMapIndex, microTcB);
-          // let microN2 = getDisplacedNormal(heightMapIndex, microTcC);
-          // hitNormal = normalize(hitMicroBary.x * microN0 + hitMicroBary.y * microN1 + hitMicroBary.z * microN2);
-          // hitNormal = vec3f(-hitNormal.xy * hScale, hitNormal.z);
 
           hitNormal = normalize(transpose(matObjToTcTang) * hitNormal);
           let smoothNormal = _nA * hitBary.x + _nB * hitBary.y + _nC * hitBary.z;

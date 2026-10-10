@@ -79,7 +79,6 @@ export default class Geometry {
   };
   constructor(data?: Partial<GeometryData>) {
     data = data || {};
-    // TODO
     this.indices = data.indices!;
     this.position = data.position!;
     this.normal = data.normal!;

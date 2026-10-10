@@ -57,10 +57,8 @@ function getBVHTraverseCode(
   Triangle hitTri;
 
   // TODO not sure why. but do root node check here will cause rendering wrong in windows.
-  // if (intersectBox(o, d, fetchBVH(0).xyz, fetchBVH(1).xyz, tMax) > 0.0) {
     top = 0;
     stack[0] = ivec2(0, -1);
-  // }
 
   int iter = 0;
   while(top >= 0 && iter < 5000) {
@@ -627,22 +625,12 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
   si.uv = uv;
   si.uv1 = secondaryUv;
 
-  // TODO
-  // #ifdef USE_VERTEX_COLOR
-  //   vec3 col0 = texelFetch(colorBuffer, i0, 0).rgb;
-  //   vec3 col1 = texelFetch(colorBuffer, i1, 0).rgb;
-  //   vec3 col2 = texelFetch(colorBuffer, i2, 0).rgb;
-  //   si.color *= barycentric.x * col0 + barycentric.y * col1 + barycentric.z * col2;
-  // #endif
-
   #ifdef USE_TANGENT
     vec3 t0 = texelFetch(tangentBuffer, i0, 0).xyz;
     vec3 t1 = texelFetch(tangentBuffer, i1, 0).xyz;
     vec3 t2 = texelFetch(tangentBuffer, i2, 0).xyz;
     si.tangent = normalize(barycentric.x * t0 + barycentric.y * t1 + barycentric.z * t2);
   #endif
-
-  // TODO
   #if defined(NUM_NORMAL_MAPS) || defined(NUM_BUMP_MAPS)
     vec3 dp1 = tri.p0 - tri.p2;
     vec3 dp2 = tri.p1 - tri.p2;

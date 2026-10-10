@@ -157,15 +157,6 @@ export function isWebGPUPipelineSpecializationFailure(...errors: unknown[]) {
   );
 }
 
-// const shaderCodeMap = new Map<string, boolean>();
-// const createComputePipelineFakeWait = function (device: GPUDevice, args: any) {
-//   return new Promise<GPUComputePipeline>((resolve) => {
-//     setTimeout(async () => {
-//       const pipeline = await device.createComputePipelineAsync(args);
-//       resolve(pipeline);
-//     }, 2000);
-//   });
-// };
 /** CPU-side views over the `RayTraceUniform` WGSL struct. */
 export function makeRayTraceUniform() {
   // Created from https://webgpufundamentals.org/webgpu/lessons/resources/wgsl-offset-computer.html
@@ -990,7 +981,6 @@ class WGPURayTracePass {
         'USE_BACKGROUND',
         'USE_BACKGROUND_MAP',
         'USE_GROUNDED_BACKGROUND',
-        // TODO
         'NUM_NORMAL_MAPS',
         'NUM_BUMP_MAPS',
         'NUM_METALLIC_ROUGHNESS_MAPS',
@@ -2324,7 +2314,6 @@ ${rayTraceCompute({
       ...materialData.defines,
 
       NUM_MAPS,
-      // TODO clean code
       USE_DIFFUSE_MAPS: +materialData.defines.NUM_DIFFUSE_MAPS > 0,
       USE_ALPHA_MAPS: +materialData.defines.NUM_ALPHA_MAPS > 0,
       USE_METALLIC_ROUGHNESS_MAPS:
@@ -2614,7 +2603,6 @@ ${rayTraceCompute({
       return;
     }
 
-    console.log('update minmax texture', displacementMaps.length);
     // TODO Must at least 2 layers.
     const depthOrArrayLayers = Math.max(displacementMaps.length, 2);
 

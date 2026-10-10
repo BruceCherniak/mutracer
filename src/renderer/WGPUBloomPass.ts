@@ -75,21 +75,6 @@ let size = vec2f(textureDimensions(colorTex, 0));
 let d = vec4f(-1.0, -1.0, 1.0, 1.0) / size.xyxy;
 ${
   ''
-  // let s1 = textureSample(colorTex, linearSampler, uv2 + d.xy).rgb;
-  // let s2 = textureSample(colorTex, linearSampler, uv2 + d.zy).rgb;
-  // let s3 = textureSample(colorTex, linearSampler, uv2 + d.xw).rgb;
-  // let s4 = textureSample(colorTex, linearSampler, uv2 + d.zw).rgb;
-
-  // // Karis's luma weighted average (using brightness instead of luma)
-  // let s1w = 1.0 / (brightness(s1) + 1.0);
-  // let s2w = 1.0 / (brightness(s2) + 1.0);
-  // let s3w = 1.0 / (brightness(s3) + 1.0);
-  // let s4w = 1.0 / (brightness(s4) + 1.0);
-  // let divider = 1.0 / (s1w + s2w + s3w + s4w);
-  // output.color = vec4f(
-  //   (s1 * s1w + s2 * s2w + s3 * s3w + s4 * s4w) * divider,
-  //   1.0
-  // );
 }
 output.color = textureSample(colorTex, linearSampler, uv2 + d.xy) * 0.25
   + textureSample(colorTex, linearSampler, uv2 + d.zy) * 0.25
@@ -216,7 +201,6 @@ class WGPUBloomPass {
       blendPass.setUniform(
         'weight',
         // Use weight to control radius
-        // TODO
         1 - Math.max(Math.min(radius ** 0.3 * 0.8, 0.8), 0)
       );
     });

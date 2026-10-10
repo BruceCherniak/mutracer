@@ -789,8 +789,6 @@ function makeBLASPrimitiveInfo(
   const position = geometry.position;
 
   const normal = geometry.normal;
-  // const materialMeshIndex = geometry.materialMeshIndex;
-  // const hasMaterialMeshIndex = materialMeshIndex != null;
 
   const v0 = vec3.create();
   const v1 = vec3.create();
@@ -838,8 +836,6 @@ function makeBLASPrimitiveInfo(
         maxHeight = displacementScale;
       }
 
-      // let minHeight = 0;
-      // let maxHeight = displacementScale;
 
       vec3.normalize(n0, n0);
       vec3.normalize(n1, n1);
@@ -920,15 +916,6 @@ export function recursiveBuild(
     let mid = Math.floor((start + end) / 2);
 
     // middle split method
-    // const dimMid = (centroidBounds.max[dim] + centroidBounds.min[dim]) / 2;
-    // mid = partition(primitiveInfo, p => p.center[dim] < dimMid, start, end);
-
-    // if (mid === start || mid === end) {
-    //   mid = Math.floor((start + end) / 2);
-    //   nthElement(primitiveInfo, (a, b) => a.center[dim] < b.center[dim], start, end, mid);
-    // }
-
-    // surface area heuristic method
     if (nPrimitives <= 4) {
       nthElement(
         primitiveInfo,

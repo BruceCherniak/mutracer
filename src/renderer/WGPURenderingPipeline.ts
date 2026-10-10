@@ -613,7 +613,6 @@ output.color = color;
       'previewTransitionTex'
     ]
   });
-  // TODO
   outputPass.setOutputParams({
     color: {
       format: 'rgba8unorm'
@@ -747,7 +746,7 @@ output.color = color;
       }
     }
 
-    // TODO if encoder is not submmited. The uniform buffer will be replaced
+    // TODO if encoder is not submitted. The uniform buffer will be replaced
     device.queue.submit([encoder.finish()]);
 
     const submittedTileRenderWithPredict = tileRenderWithPredict;
@@ -1125,8 +1124,6 @@ output.color = color;
       const encoder = device.createCommandEncoder();
       drawPostProcess(encoder, sampleCount >= renderSampleTarget);
     }
-
-    // TODO
     if (sampleCount !== frameSampleCount) {
       previewSamplePending = false;
       sampleRenderedCallback(
@@ -1817,7 +1814,6 @@ output.color = color;
     setToneMappingParams,
 
     getRawOutput() {
-      // TODO shadow catcher?
       const outputTexture =
         getFrameInput('color');
       const textureDims = {

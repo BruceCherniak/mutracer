@@ -118,7 +118,7 @@ void bounce(inout Path path, inout int depth, inout SurfaceInteraction si, inout
   // The bounce will be doubled on the transmission material.
   // For other materials. We will quite early
   // TODO It is only used on Mac with AMD card. If I enabled it on windows.
-  // It will cause shader compilation toooo slow.
+  // It will cause shader compilation too slow.
 ${isIntelMac ? doubleTransmissionCheckCode : ''}
 
   bool isShadowCatcher = mat.materialType == SHADOW_CATCHER;
@@ -204,7 +204,6 @@ ${isIntelMac ? doubleTransmissionCheckCode : ''}
     if (alpha < 1.0) {
       // Alpha is sampled as stochastic coverage. An accepted surface branch
       // must use full radiance weight; multiplying by alpha again is biased.
-      // TODO should set alpha to 0.0?
       path.alpha = max(path.alpha, alpha);
       if (hashedSample(3u) > alpha) {
         sampleIgnored = true;
@@ -612,8 +611,6 @@ void main() {
       liAndAlpha.a /= 3.0;
     }
   }
-
-  // TODO
   if (!(liAndAlpha.x < INF && liAndAlpha.x > -EPS)) {
     liAndAlpha = vec4(0, 0, 0, 1);
   }

@@ -79,7 +79,7 @@ export function makeTileRender(gl?: WebGL2RenderingContext) {
     }
 
     if (numTiles > maxNumTiles) {
-      // TODO maxNumTiles is not excat value.
+      // TODO maxNumTiles is not exact value.
       numTiles = maxNumTiles;
       columns = Math.ceil(Math.sqrt(numTiles));
       rows = Math.ceil(numTiles / columns);
@@ -274,16 +274,6 @@ export function makeTileRenderWithPredict() {
         maxNumTiles
       );
 
-      // console.log(
-      //   'GPU Time',
-      //   avgTileTime.toFixed(3) + 'ms',
-      //   'tileSize',
-      //   [tileWidth, tileHeight],
-      //   'tiles',
-      //   [columns, rows],
-      //   'samples',
-      //   samplesPerFrame
-      // );
       lastFrameTotalTraceTime = 0;
       lastFrameTraceTimeValidCount = 0;
       tileWidth = result.tileWidth;

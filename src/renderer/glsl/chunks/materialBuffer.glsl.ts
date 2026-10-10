@@ -265,7 +265,7 @@ vec3 getMatNormal(int materialIndex, vec2 uv, vec2 bumpUv, vec3 normal, vec3 dp1
   float bumpStrength = bump.y;
   if (normalMapIndex >= 0 || bumpMapIndex >= 0) {
     // http://www.thetenthplanet.de/archives/1180
-    // TODO use tangent attribuet
+    // TODO use tangent attribute
     // Compute co-tangent and co-bitangent vectors
     vec3 dp2perp = cross(dp2, normal);
     vec3 dp1perp = cross(normal, dp1);

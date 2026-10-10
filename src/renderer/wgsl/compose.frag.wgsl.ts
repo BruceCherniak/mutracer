@@ -1,8 +1,5 @@
 export const composeDefine = /* wgsl */ `
 
-// TODO
-const outputShadow = false;
-
 fn linearToneMapping(color: vec3f) -> vec3f {
   return clamp(color, vec3f(0.0), vec3f(1.0));
 }
@@ -120,8 +117,6 @@ var finalColor = textureLoad(colorTex, uv, 0);
 var bloomTexel = vec4(0.0);
 if (bloomIntensity > 0.0) {
   bloomTexel = textureLoad(bloomTex, uv, 0) * bloomIntensity;
-  // TODO
-  // let bloomAlpha = colorAdjust(vec3f(bloomTexel.a * exposure)).r;
   finalColor = vec4f(finalColor.rgb + bloomTexel.rgb, finalColor.a);
 }
 
@@ -176,7 +171,6 @@ if (bloomIntensity > 0.0) {
 }
 
 // Use light pixel directly to avoid black pixels on the edge without shadow
-// TODO use constants?
 if (shadowCatcherEnabled > 0.5) {
   let shadowCatcher = textureLoad(shadowCatcherTex, uv, 0);
   var shadowAlpha = min(max(

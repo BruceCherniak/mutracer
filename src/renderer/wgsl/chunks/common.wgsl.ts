@@ -7,7 +7,6 @@ const INVPI2 = 0.10132118364;
 const EPS = 0.0005;
 const INV4PI = 0.07957747154594766;
 const INF = 1.0e+38;
-// TODO
 const ROUGHNESS_MIN = 0.001;
 
 // Ray Tracing Gems, Wachter/Binder: move along the geometric normal by

@@ -6,7 +6,6 @@ struct MicroTriangleIntersect {
   t: f32,
   normal: vec3f,
 
-  // _testData: vec3f,
 }
 
 fn findVT(
@@ -190,7 +189,6 @@ fn intersectDisplacement(
 ) -> MicroTriangleIntersect {
 
   let DT = stepSize;
-  // TODO precision in object space?
   let dt = DT / length(_rayDir);
   let dbx = 0.001;
   let dby = 0.001;
@@ -247,7 +245,6 @@ fn intersectDisplacement(
     hitDistMin = 0.0;
   }
 
-  // TODO dt bias?
   var t = hitDistMin + dt * hashedSample(2u);
   var s = _rayOrigin + _rayDir * t;
   var hRay = dot(s - _pA, faceN);
@@ -257,7 +254,6 @@ fn intersectDisplacement(
   var c1 = _pB + _nB * hRay / dB;
   var c2 = _pC + _nC * hRay / dC;
 
-  // var step = 0;
   var projPos: vec3f;
 
   hRay = abs(hRay);
@@ -268,11 +264,6 @@ fn intersectDisplacement(
 
   while (true) {
     // TODO Avoid too long loop
-    // if (step > 1000) {
-    //   break;
-    // }
-
-    // Barycentric coordinates
     let b = triangleBarycentric(s, c0, c1, c2);
     // Projected point on base triangle
     projPos = _pA * b.x + _pB * b.y + _pC * b.z;
@@ -347,7 +338,6 @@ fn intersectDisplacement(
     let s_b = p_b + hSign * N * sampleMap(heightMapIndex, wrapUv(uv_b)).x * hScale;
     let s_c = p_c + hSign * N * sampleMap(heightMapIndex, wrapUv(uv_c)).x * hScale;
 
-    // TODO why it's inversed
     let N_s = -hSign * normalize(cross(s_c - s_a, s_b - s_a));
 
     result.t = t;

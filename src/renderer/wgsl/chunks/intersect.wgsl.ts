@@ -155,9 +155,6 @@ if (abs(hScale) > 0.0 && minMaxH > 0) {
   if (microTriangle.t < tMax) {
     hitNormal = microTriangle.normal;
     // TODO support double sided to improve non watertight triangles.
-    // if (dot(hitNormal, d) > 0.0) {
-    //   hitNormal = -hitNormal;
-    // }
 
     tMax = microTriangle.t;
     // TODO barycentric is for micro triangle
@@ -799,7 +796,6 @@ fn intersectLight(r: Ray, light: Light, lightSample: ptr<function, LightSampleRe
     else {
       var cosTheta: f32 = dot(-r.d, normal);
       let spread = light.radiusOrSpread;
-      // if (cosTheta >= cos(spread * PI / 2.0)) {
       if (cosTheta >= cos(spread * PI / 2.0)) {
         (*lightSample).direction = r.d;
         (*lightSample).normal = normal;
@@ -1002,7 +998,6 @@ fn fetchAttributes(
   var n2 = vec3f(0.0);
   // Otherwise use the normal from the microtriangle
   // The exception is spherical projection, we need the original normal to project the uv. Or the case like earth has wrong normal.
-  // TODO
   if (!isHitMicroTriangle || isSphericalProj) {
     n0 = attrBuffers[i0 * ATTR_STRIDE + NORMAL_OFF];
     n1 = attrBuffers[i1 * ATTR_STRIDE + NORMAL_OFF];
@@ -1035,14 +1030,6 @@ fn fetchAttributes(
         + bary.z * secondaryUv2;
     }
   }
-
-  // TODO
-  // if (USE_VERTEX_COLOR) {
-  //   let col0 = attrBuffers[i0 * ATTR_STRIDE + COLOR_OFF];
-  //   let col1 = attrBuffers[i1 * ATTR_STRIDE + COLOR_OFF];
-  //   let col2 = attrBuffers[i2 * ATTR_STRIDE + COLOR_OFF];
-  //   (*si).color *= bary.x * col0 + bary.y * col1 + bary.z * col2;
-  // }
 
   if (USE_TANGENT) {
     let t0 = attrBuffers[i0 * ATTR_STRIDE + TANGENT_OFF];
@@ -1113,14 +1100,11 @@ fn fetchAttributes(
   }
   (*si).uv = uv;
   (*si).uv1 = secondaryUv;
-
-  // TODO
   if (USE_NORMAL_MAPS) {
     let dp1 = tri.p0 - tri.p2;
     let dp2 = tri.p1 - tri.p2;
     let duv1 = uv0 - uv2;
     let duv2 = uv1 - uv2;
-    // TODO
     let normalMaterial = materialsBuffer[(*si).materialIndex];
     let bumpProjection = i32(normalMaterial.displacementUvProjection);
     var bumpUv = rawUv;

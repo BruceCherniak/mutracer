@@ -38,7 +38,6 @@ if (isMac) {
     const g = (d && ctx.getParameter(d.UNMASKED_RENDERER_WEBGL)) || '';
     if (!(g.match(/Apple M/) || g.match(/Apple GPU/))) {
       isIntelMac = true;
-      console.log('Is Intel Mac');
     }
   } catch (e) {}
 }

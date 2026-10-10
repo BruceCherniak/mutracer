@@ -89,8 +89,6 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, inout Path 
 
 void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, inout Path path) {
   vec3 matRnd = vec3(sample2D(bounceDim(BSDF_DIRECTION)), sample1D(bounceDim(BSDF_LOBE)));
-
-  // TODO TODO
   float ndv1 = -dot(si.faceNormal, path.ray.d);
   float ndv2 = -dot(si.normal, path.ray.d);
   if ((mat.transmissionWeight > 0.0 || mat.subsurfaceWeight > 0.0) && mat.thinWalled) {

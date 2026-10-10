@@ -232,7 +232,7 @@ fn getMatNormal(materialIndex: i32, uv: vec2f, bumpUv: vec2f, normal: vec3f, dp1
   let bumpMapIndex = i32(matData.bumpMapIndex);
   if (normalMapIndex >= 0 || bumpMapIndex >= 0) {
     // http://www.thetenthplanet.de/archives/1180
-    // TODO use tangent attribuet
+    // TODO use tangent attribute
     // Compute co-tangent and co-bitangent vectors
     let dp2perp = cross(dp2, normal);
     let dp1perp = cross(normal, dp1);

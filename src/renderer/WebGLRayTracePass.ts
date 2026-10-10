@@ -336,7 +336,6 @@ class WebGLRayTracePass {
 
   setBackground(background?: SceneBackground) {
     const backgroundImage =
-      // TODO
       background && generateBackgroundMapFromSceneBackground(background)!;
 
     if (backgroundImage) {
@@ -606,11 +605,9 @@ class WebGLRayTracePass {
     );
     this._spectral = materials.some((m) => m.transmissionDispersionScale > 0);
 
-    // this._invalid = mergedGeometry.position.array.length === 0;
 
     this._tracePasses.forEach(pass => {
       pass.setDefines({
-        // TODO
         OES_texture_float_linear: true,
 
         STACK_SIZE,

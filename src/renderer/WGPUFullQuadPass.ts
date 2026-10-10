@@ -354,8 +354,6 @@ ${this._fsMain}
   private _updateBindGroups() {
     const bindGroups: GPUBindGroup[] = [];
     const device = this._device;
-
-    //TODO
     const uniformBindGroupIndex = this._inputs.length > 0 ? 1 : 0;
     if (this._uniforms.length > 0) {
       bindGroups[uniformBindGroupIndex] = device.createBindGroup({
@@ -392,7 +390,6 @@ ${this._fsMain}
 
     this._updatePipeline();
 
-    // TODO createBindGrou every time?
     const inputsLen = this._inputs.length;
     if (inputsLen > 0) {
       this._bindGroups[0] = this._device.createBindGroup({
@@ -401,7 +398,6 @@ ${this._fsMain}
         entries: [
           ...this._inputs.map((textureName, idx) => ({
             binding: idx,
-            // TODO
             resource: inputs[textureName as I].createView(
               this._inputViewDimensions[textureName as I]
                 ? { dimension: this._inputViewDimensions[textureName as I] }

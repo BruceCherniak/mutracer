@@ -532,7 +532,6 @@ class CameraViewControl {
     );
     const camera = this.camera!;
     const cameraHeight = this._orthoSize;
-    // TODO
     const cameraWidth = cameraHeight * this.aspect;
     camera.left = -cameraWidth / 2;
     camera.right = cameraWidth / 2;

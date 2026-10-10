@@ -286,7 +286,6 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
     );
     if ((*path).fromEye) {
       // Sample from background if first ray not hit anything.
-      // TODO
       (*path).li = (*path).beta * bg.rgb * bg.a;
       (*path).alpha = bg.a;
       // Only treat as blank pixels when the background is transparent
@@ -867,8 +866,6 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
     let clamping = rtUniform.clamping;
     liAndAlpha = vec4(clamp(liAndAlpha.rgb, -vec3f(clamping), vec3f(clamping)), liAndAlpha.a);
   }
-
-  // TODO
   if (!(liAndAlpha.x < INF && liAndAlpha.x > -EPS)) {
     liAndAlpha = vec4f(0.0, 0.0, 0.0, 1.0);
   }

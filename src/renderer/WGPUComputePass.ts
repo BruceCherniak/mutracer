@@ -138,7 +138,6 @@ export class WGPUComputePass<I extends string, O extends string> {
   setOutputParams(outputParams: Record<O, WGPUComputePassOutput>) {
     // TODO lazy update buffers
     this._invalidateChangedOutputBuffers(outputParams);
-    // TODO clone?
     this._outputParams = outputParams;
     this._needsUpdatePipeline = true;
   }
@@ -186,7 +185,6 @@ export class WGPUComputePass<I extends string, O extends string> {
   }
 
   private _createBuffer(label: string, params: WGPUComputePassOutput) {
-    // const byteLength = this._width * this._height * params.channels * 4;
     const channels = params.channels ?? 4;
     const byteLength =
       this._width * this._height * channels * (params.count ?? 1) * 4;
@@ -365,14 +363,12 @@ ${this._csMain}
     this._updatePipeline(inputs, inputTypes);
 
     const groupOffsets = this._groupOffsets;
-    // TODO createBindGroup every time?
     if (this._inputs.length > 0) {
       this._bindGroups[groupOffsets.inputs] = this._device.createBindGroup({
         label: this._label + '.inputs',
         layout: this._pipeline.getBindGroupLayout(groupOffsets.inputs),
         entries: this._inputs.map((inputName, idx) => ({
           binding: idx,
-          // TODO
           resource: inputs[inputName as I].buffer
             ? {
                 buffer: inputs[inputName as I].buffer!

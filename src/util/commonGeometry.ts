@@ -265,7 +265,6 @@ export function createCurvePlaneGeometry(curveSize = 0.2) {
   let mm = 0;
   for (let m = 0; m <= heightSegments; m++) {
     // TODO t is stretched
-    // const t = m / heightSegments;
     let y, z;
     let t = m / heightSegments;
 

@@ -72,7 +72,7 @@ export function mergeMeshesToGeometry(meshes: Mesh[]): InternalMergedMesh {
 
   return {
     geometry,
-    // TODO compress materials. Resuse materials with same props.
+    // TODO compress materials. Reuse materials with same props.
     materials
   };
 }
@@ -145,8 +145,6 @@ function mergeGeometry(
         }
         return;
       }
-
-      // TODO
       mergedGeometry[attr]!.array.set(
         geometry[attr]!.array,
         currentVertex * geometry[attr]!.itemSize
@@ -324,7 +322,6 @@ function transformGeometry(geometry: Geometry, matrix: mat4.Mat4Array) {
     );
     // Try not to normalize the tangent.
     // The anisotropic needs radial tangent. The interpolation inside the triangle will be wrong if we normalize it.
-    // TODO
     // vec3.forEach(newGeometry.tangent.array, 3, 0, undefined, vec3.normalize);
   }
   return newGeometry;

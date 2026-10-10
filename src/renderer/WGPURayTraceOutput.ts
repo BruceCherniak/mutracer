@@ -210,7 +210,6 @@ export class WGPURayTraceOutputPass {
             format: 'rgba8unorm'
           }
         ],
-        // TODO
         constants: {
           outputWidth: this._width,
           outputHeight: this._height

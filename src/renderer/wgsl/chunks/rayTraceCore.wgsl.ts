@@ -63,7 +63,6 @@ struct SurfaceInteraction {
   mediumScattering: vec3f,
   mediumAnisotropy: f32,
 
-  // _testData: vec3f,
 };
 
 // Texture-resolved OpenPBR inputs used by the surface integrator. The storage

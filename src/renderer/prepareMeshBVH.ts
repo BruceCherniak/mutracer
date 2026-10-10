@@ -778,10 +778,6 @@ export function getTrianglesDisplacementRange(
     vec2.scale(uv3, uv3, uvScale);
 
     // TODO PDM don't have zero area triangle issue.
-    // if (triangleArea(uv1, uv2, uv3) === 0) {
-    //   // minHeight and maxHeight will be 0.
-    //   continue;
-    // }
 
     let minHeight = Infinity;
     let maxHeight = -Infinity;
@@ -890,7 +886,7 @@ export function updateMeshInstances(meshes: Mesh[]) {
         geometry.materialIndex
       ) {
         const bvh = geometry.bvh;
-        // TODO geometry with multiple materials donesn't allow sharing between instances.
+        // TODO geometry with multiple materials doesn't allow sharing between instances.
         // Need to clone the geometry.
         geometry = new Geometry(geometry);
         geometry.bvh = bvh;
@@ -969,7 +965,6 @@ export function updateMeshInstances(meshes: Mesh[]) {
       trainglesCount: geo.indices.array.length / 3
     }))
   };
-  // return { instances, geometries, globalMaterialIndicesMap, materials };
 }
 
 function mergeGeometry(

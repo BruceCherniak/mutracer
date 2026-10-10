@@ -7,7 +7,7 @@
  * glTF type definitions
  * Animation
  * Skinning
- * Extensions(Material)
+ * Remaining material extensions (transmission and IOR are supported)
  */
 
 import Camera from '../scene/Camera';
@@ -56,7 +56,6 @@ const semanticAttributeMap = {
   POSITION: 'position',
   TANGENT: 'tangent',
   TEXCOORD_0: 'uv',
-  // TEXCOORD_1: 'texcoord1',
   WEIGHTS_0: 'weight',
   JOINTS_0: 'joint',
   COLOR_0: 'color'
@@ -462,29 +461,8 @@ function parseTextures(
     (json.textures || []).map((textureInfo: GLTFTexture, idx: number) => {
       // TODO wrapS, wrapT
       // samplers is optional
-      // const samplerInfo =
-      //   (json.samplers && json.samplers[textureInfo.sampler]) || {};
-      // const parameters: Partial<TextureOpts> = {};
-      // (['wrapS', 'wrapT', 'magFilter', 'minFilter'] as const).forEach(function (
-      //   name
-      // ) {
-      //   const value = samplerInfo[name];
-      //   if (value != null) {
-      //     parameters[name] = value;
-      //   }
-      // });
-      // util.defaults(parameters, {
-      //   wrapS: constants.REPEAT,
-      //   wrapT: constants.REPEAT,
-      //   flipY: opts.textureFlipY,
-      //   convertToPOT: opts.textureConvertToPOT
-      // });
 
       const target = textureInfo.target || TEXTURE_2D;
-      // const format = textureInfo.format;
-      // if (format != null) {
-      //   parameters.format = format;
-      // }
 
       return new Promise((resolve) => {
         if (target === TEXTURE_2D) {
@@ -611,7 +589,6 @@ function parseMeshes(json: GLTFFormat, lib: ParsedLib) {
     // Geometry
     for (let pp = 0; pp < meshInfo.primitives.length; pp++) {
       const primitiveInfo = meshInfo.primitives[pp];
-      // TODO
       const geometry = new Geometry({} as GeometryData);
       // Parse attributes
       const semantics = Object.keys(primitiveInfo.attributes);
