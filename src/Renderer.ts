@@ -1400,6 +1400,12 @@ export default class Renderer {
       pipeline.drawPostProcess();
     }
 
+    if (needsRedrawPostProcess && canRunOIDN) {
+      (pipeline as WGPURenderingPipeline).cancelOIDNDenoise?.();
+      this._oidnStatus = 0;
+      this._oidnRevision++;
+    }
+
     // Must set before sampled check. In case the render is finished in one frame.
     if (!this._renderDone) {
       // Reset
@@ -1498,8 +1504,8 @@ export default class Renderer {
   }
 
   /**
-   * Reads back the linear HDR image (denoised when available) as RGBA
-   * float32, top row first.
+   * Reads back the linear HDR image as RGBA float32, top row first.
+   * Denoising affects the displayed image; this returns the original HDR samples.
    */
   async getRawOutput() {
     if (!this._pipeline) {

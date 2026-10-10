@@ -1,3 +1,12 @@
+export const linearToSrgbDefine = /* wgsl */ `
+fn linearToSrgb(color: vec3f) -> vec3f {
+  let linear = max(color, vec3f(0.0));
+  let low = linear * 12.92;
+  let high = 1.055 * pow(linear, vec3f(1.0 / 2.4)) - 0.055;
+  return select(high, low, linear <= vec3f(0.0031308));
+}
+`;
+
 export const composeDefine = /* wgsl */ `
 
 fn linearToneMapping(color: vec3f) -> vec3f {
@@ -72,12 +81,7 @@ fn applyToneMapping(color: vec3f) -> vec3f {
   if (toneMappingMode == 4) { return linearToneMapping(color); }
   return agxToneMapping(color);
 }
-fn linearToSrgb(color: vec3f) -> vec3f {
-  let linear = max(color, vec3f(0.0));
-  let low = linear * 12.92;
-  let high = 1.055 * pow(linear, vec3f(1.0 / 2.4)) - 0.055;
-  return select(high, low, linear <= vec3f(0.0031308));
-}
+${linearToSrgbDefine}
 fn gradeColor(inputColor: vec3f) -> vec3f {
   let contrast = colorGradingParams.x;
   let saturation = colorGradingParams.y;
@@ -93,14 +97,6 @@ fn gradeColor(inputColor: vec3f) -> vec3f {
   let luminance = dot(color, vec3f(0.2126, 0.7152, 0.0722));
   return max(mix(vec3f(luminance), color, saturation), vec3f(0.0));
 }
-`;
-
-// Denoise opacity conditional on hitting the catcher. Its primary coverage
-// must stay separate, or silhouette pixels lose their shadow twice.
-export const shadowDenoiseInputMain = /* wgsl */ `
-let shadow = textureLoad(shadowCatcherTex, uv, 0);
-let shadowAlpha = clamp(shadow.a / max(shadow.r, 0.000001), 0.0, 1.0);
-output.color = vec4f(vec3f(shadowAlpha), 1.0);
 `;
 
 export const composeMain = /* wgsl */ `
@@ -163,12 +159,8 @@ if (bloomIntensity > 0.0) {
 
 if (shadowCatcherEnabled > 0.5) {
   let shadowCatcher = textureLoad(shadowCatcherTex, uv, 0);
-  let mask = textureLoad(shadowCatcherMaskTex, uv, 0);
-  let coverage = clamp(mask.r, 0.0, 1.0);
-  let opacity = max(clamp(select(
-    shadowCatcher.a / max(coverage, 0.000001),
-    shadowCatcher.r, shadowCatcherDenoised > 0.5
-  ), 0.0, 1.0) - (1.0 - shadowCatcherAlpha), 0.0);
+  let coverage = clamp(shadowCatcher.r, 0.0, 1.0);
+  let opacity = max(clamp(shadowCatcher.a / max(coverage, 0.000001), 0.0, 1.0) - (1.0 - shadowCatcherAlpha), 0.0);
   if (coverage > 0.0) {
     let foreground = textureLoad(foregroundTex, uv, 0);
     let background = textureLoad(catcherBackgroundTex, uv, 0);
@@ -207,4 +199,27 @@ if (shadowCatcherEnabled > 0.5) {
 output.color = finalColor;
 
 // output.color = textureLoad(bloomTex, uv, 0) * bloomIntensity;
+`;
+
+// Preserve the existing display composition, but give OIDN a floating-point,
+// linear-light image. Alpha is deliberately not used as a second color layer.
+export const compositeDenoiseOutputMain = /* wgsl */ `
+let encoded = max(finalColor.rgb, vec3f(0.0));
+let displayLinear = select(
+  pow(encoded, vec3f(2.2)),
+  select(pow((encoded + 0.055) / 1.055, vec3f(2.4)), encoded / 12.92,
+    encoded <= vec3f(0.04045)),
+  hdrOutput
+);
+output.denoiseColor = vec4f(displayLinear, finalColor.a);
+`;
+
+export const compositeDenoiseDisplayMain = /* wgsl */ `
+let denoised = textureLoad(colorTex, uv, 0);
+// Keep the original primary coverage, including transparency. OIDN only
+// filters RGB; filtering coverage separately reintroduces silhouette seams.
+let alpha = textureLoad(composedTex, uv, 0).a;
+let linear = max(denoised.rgb, vec3f(0.0));
+let encoded = select(pow(linear, vec3f(1.0 / 2.2)), linearToSrgb(linear), hdrOutputEnabled > 0.5);
+output.color = vec4f(select(vec3f(0.0), encoded, alpha > 0.0), alpha);
 `;

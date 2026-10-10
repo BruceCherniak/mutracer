@@ -3,8 +3,8 @@
 MuTracer runs [Intel Open Image Denoise](https://www.openimagedenoise.org/)
 networks on the renderer's WebGPU device through
 [`oidn-web`](https://www.npmjs.com/package/oidn-web). The denoiser uses the
-accumulated color plus albedo and normal guides, so it works well from a few
-dozen samples. WebGL 2 is not supported.
+complete composed image plus albedo and normal guides, so it works well
+from a few dozen samples. WebGL 2 is not supported.
 
 ```ts
 const renderer = new Renderer({ canvas });

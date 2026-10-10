@@ -12,7 +12,9 @@ import WGPURayTracePass from './WGPURayTracePass.js';
 import {
   composeMain,
   composeDefine,
-  shadowDenoiseInputMain
+  compositeDenoiseOutputMain,
+  compositeDenoiseDisplayMain,
+  linearToSrgbDefine
 } from './wgsl/compose.frag.wgsl.js';
 import halton from './halton.js';
 import { MIN_PREVIEW_SCALE, nextPreviewScale } from './util.js';
@@ -135,6 +137,7 @@ let index = globalId.x + globalId.y * u32(imageSize.x);
 out_normal[index] = vec4f(clamp(in_normal[index].rgb, vec3f(0.0), vec3f(1.0)), 1.0);
 `;
 export interface WGPURenderingPipeline extends RenderingPipeline {
+  cancelOIDNDenoise(): void;
   performOIDNDenoise(
     denoiser: OIDNWeb,
     denoiserAlpha: OIDNWeb | undefined,
@@ -268,12 +271,9 @@ function makeWGPURenderingPipeline(
   let pageInvisibleTime = 0;
 
   let overlay: Scene['overlay'];
-  let oidnHDRBuffer: GPUBuffer | undefined;
-  let oidnHDRTexture: GPUTexture | undefined;
   let oidnComposedBuffer: GPUBuffer | undefined;
   let oidnComposedTexture: GPUTexture | undefined;
-  let oidnShadowBuffer: GPUBuffer | undefined;
-  let oidnShadowTexture: GPUTexture | undefined;
+  let oidnComposedLinear = false;
   let oidnAlbedoGuideTexture: GPUTexture | undefined;
   let oidnNormalGuideTexture: GPUTexture | undefined;
   let oidnGeneration = 0;
@@ -401,39 +401,11 @@ output.color = textureLoad(colorTex, uv, 0);
 `
   });
 
-  // Reconstruct the unshadowed linear beauty for bloom, exposure and raw export.
-  const beautyMergePass = new WGPUFullQuadPass('beautyMerge', device, {
-    textureWillBeRead: true,
-    inputs: ['foregroundTex', 'catcherBackgroundTex', 'maskTex', 'albedoTex'],
-    outputs: ['color'], uniforms: [],
-    fsMain: /* wgsl */ `
-let foreground = textureLoad(foregroundTex, uv, 0);
-let background = textureLoad(catcherBackgroundTex, uv, 0);
-let hit = textureLoad(albedoTex, uv, 0).a;
-let backgroundHit = textureLoad(maskTex, uv, 0).b;
-output.color = vec4f(
-  (foreground.rgb * max(hit - backgroundHit, 0.0) + background.rgb)
-    / select(1.0, hit, hit > 0.0),
-  foreground.a + background.a
-);
-`
-  });
-  beautyMergePass.setOutputParams({ color: { format: 'rgba32float' } });
-
-  function mergeBeauty(encoder: GPUCommandEncoder, foreground: GPUTexture) {
-    beautyMergePass.createPass(encoder, {
-      foregroundTex: foreground,
-      catcherBackgroundTex: getFrameInput('catcherBackground'),
-      maskTex: getFrameInput('shadowCatcher'),
-      albedoTex: getFrameInput('albedo')
-    });
-  }
-
   const autoExposurePass = new WGPUAutoExposure(device);
   let hdrPeakMeter: WGPUHDRPeakMeter | undefined;
   const composePass = new WGPUFullQuadPass('compose', device, {
     textureWillBeRead: true,
-    fsMain: composeMain,
+    fsMain: composeMain + compositeDenoiseOutputMain,
     fsDefine: composeDefine,
     uniforms: [
       {
@@ -482,24 +454,18 @@ output.color = vec4f(
         data: 0
       },
       {
-        label: 'shadowCatcherDenoised',
-        type: 'f32',
-        data: 0
-      },
-      {
         label: 'bloomIntensity',
         type: 'f32',
         data: 0.25
       }
     ],
-    outputs: ['color', 'shadowCatcher'],
+    outputs: ['color', 'denoiseColor'],
     inputs: [
       'colorTex',
       'foregroundTex',
       'catcherBackgroundTex',
       'flatBackgroundMaskTex',
       'shadowCatcherTex',
-      'shadowCatcherMaskTex',
       'bloomTex',
       'autoExposureTex'
     ]
@@ -509,39 +475,18 @@ output.color = vec4f(
     color: {
       format: composeColorFormat
     },
-    shadowCatcher: {
-      format: 'rgba8unorm'
-    }
+    denoiseColor: { format: 'rgba32float' }
   });
-  const shadowDenoiseInputPass = new WGPUFullQuadPass(
-    'shadowDenoiseInput',
-    device,
-    {
-      fsMain: shadowDenoiseInputMain,
-      uniforms: [],
-      outputs: ['color'],
-      inputs: ['shadowCatcherTex']
+  const compositeDenoiseDisplayPass = new WGPUFullQuadPass(
+    'OIDN composed display', device, {
+      textureWillBeRead: true,
+      fsMain: compositeDenoiseDisplayMain,
+      fsDefine: linearToSrgbDefine,
+      uniforms: [{ label: 'hdrOutputEnabled', type: 'f32', data: 0 }],
+      outputs: ['color'], inputs: ['colorTex', 'composedTex']
     }
   );
-  shadowDenoiseInputPass.setOutputParams({
-    color: {
-      format: 'rgba16float'
-    }
-  });
-  const oidnBeautyInputPass = new WGPUFullQuadPass(
-    'OIDN nonnegative HDR input', device, {
-      // Signed reconstruction filters can produce negative RGB. OIDN's HDR
-      // transfer sends these outside its training domain and the inverse
-      // transfer can overflow. Preserve the signed raw output; sanitize only
-      // the denoiser's input, without clipping positive HDR or changing alpha.
-      fsMain: /* wgsl */ `
-let raw = textureLoad(colorTex, uv, 0);
-output.color = vec4f(max(raw.rgb, vec3f(0.0)), raw.a);
-`,
-      uniforms: [], outputs: ['color'], inputs: ['colorTex']
-    }
-  );
-  oidnBeautyInputPass.setOutputParams({ color: { format: 'rgba32float' } });
+  compositeDenoiseDisplayPass.setOutputParams({ color: { format: 'rgba8unorm' } });
   const auxiliaryPassUniforms = [
     {
       label: 'imageSize',
@@ -817,18 +762,21 @@ output.color = color;
   }
 
   function clearOIDNOutput() {
-    oidnHDRBuffer?.destroy();
     oidnComposedBuffer?.destroy();
-    oidnShadowBuffer?.destroy();
-    oidnHDRTexture?.destroy();
     oidnComposedTexture?.destroy();
-    oidnShadowTexture?.destroy();
-    oidnHDRBuffer = undefined;
     oidnComposedBuffer = undefined;
-    oidnShadowBuffer = undefined;
-    oidnHDRTexture = undefined;
+    oidnComposedLinear = false;
     oidnComposedTexture = undefined;
-    oidnShadowTexture = undefined;
+  }
+
+  function invalidateCompositeDenoise() {
+    if (!oidnComposedLinear) return;
+    cancelOIDNDenoise();
+    oidnComposedBuffer?.destroy();
+    oidnComposedBuffer = undefined;
+    oidnComposedTexture?.destroy();
+    oidnComposedTexture = undefined;
+    oidnComposedLinear = false;
   }
 
   function prepareOIDNTexture(
@@ -893,18 +841,11 @@ output.color = color;
     encoder: GPUCommandEncoder,
     _forceNeedsDenoise?: boolean
   ) {
-    oidnHDRTexture = prepareOIDNTexture(encoder, oidnHDRBuffer, oidnHDRTexture);
     oidnComposedTexture = prepareOIDNTexture(
       encoder,
       oidnComposedBuffer,
       oidnComposedTexture
     );
-    oidnShadowTexture = prepareOIDNTexture(
-      encoder,
-      oidnShadowBuffer,
-      oidnShadowTexture
-    );
-
     rayTraceOutputPass.setSampleCount(sampleCount);
     rayTraceOutputPass.createPass(encoder, rayTracePass.getOutputBuffer(), rayTracePass.hasShadowCatcher());
 
@@ -912,21 +853,16 @@ output.color = color;
       'shadowCatcherEnabled',
       +(rayTracePass.hasShadowCatcher())
     );
-    composePass.setUniform('shadowCatcherDenoised', +!!oidnShadowTexture);
 
-    const foregroundTexture =
-      (oidnHDRBuffer ? oidnHDRTexture : undefined) ||
-      getFrameInput(rayTracePass.hasShadowCatcher() ? 'foreground' : 'color');
-    let colorTexture = (oidnHDRBuffer ? oidnHDRTexture : undefined) || getFrameInput('color');
-    if (oidnHDRBuffer && rayTracePass.hasShadowCatcher()) {
-      mergeBeauty(encoder, foregroundTexture);
-      colorTexture = beautyMergePass.getOutput('color');
-    }
+    const foregroundTexture = getFrameInput(
+      rayTracePass.hasShadowCatcher() ? 'foreground' : 'color'
+    );
+    const colorTexture = getFrameInput('color');
     const bloomEnabled = bloomIntensity > 0.0;
     // Progressive accumulation refreshes bloom every ten samples.
     const samplesSkipped = sampleCount < 10 || sampleCount % 10 > 0;
     const needsUpdateBloom =
-      bloomEnabled && (!samplesSkipped || oidnHDRTexture);
+      bloomEnabled && !samplesSkipped;
     let bloomIntensityToUpdate = bloomIntensity;
     if (needsUpdateBloom) {
       if (!bloomPass) {
@@ -952,27 +888,32 @@ output.color = color;
       foregroundTex: foregroundTexture,
       catcherBackgroundTex: getFrameInput('catcherBackground'),
       flatBackgroundMaskTex: getFrameInput('albedo'),
-      shadowCatcherTex:
-        oidnShadowTexture || getFrameInput('shadowCatcher'),
-      shadowCatcherMaskTex: getFrameInput('shadowCatcher'),
+      shadowCatcherTex: getFrameInput('shadowCatcher'),
       // Use color texture as placeholder
       bloomTex: bloomEnabled && bloomPass ? bloomPass.getOutput() : colorTexture,
       autoExposureTex: autoExposurePass.getOutput()
     });
+    if (oidnComposedLinear && oidnComposedTexture) {
+      compositeDenoiseDisplayPass.createPass(encoder, {
+        colorTex: oidnComposedTexture,
+        composedTex: composePass.getOutput('denoiseColor')
+      });
+    }
+    let displayTexture =
+      (oidnComposedBuffer ? (oidnComposedLinear
+        ? compositeDenoiseDisplayPass.getOutput('color') : oidnComposedTexture) : undefined) ||
+      composePass.getOutput('color');
     const activeHDRPeakMeter = hdrOutputActive
       ? (hdrPeakMeter ??= new WGPUHDRPeakMeter(device))
       : undefined;
     const hdrPeakReadbackSubmitted =
       activeHDRPeakMeter?.encode(
         encoder,
-        composePass.getOutput('color'),
+        displayTexture,
         renderWidth,
         renderHeight
       ) ?? false;
 
-    let displayTexture =
-      (oidnComposedBuffer ? oidnComposedTexture : undefined) ||
-      composePass.getOutput('color');
     if (output === 'normal' || output === 'albedo') {
       displayTexture = getFrameInput(output);
     } else if (output === 'shadowCatcher') {
@@ -986,12 +927,12 @@ output.color = color;
       // The first settled full-resolution sample is submitted before OIDN's
       // asynchronous output is available. Keep the completed preview frame
       // on screen through that gap instead of exposing the raw sample.
-      previewTransitionDenoisePending && !oidnHDRBuffer;
+      previewTransitionDenoisePending && !oidnComposedBuffer;
     // While-converging preview presents at OIDN throughput: keep the last denoised
     // frame on the canvas instead of flashing each raw 1spp restart.
     const holdDenoisedFrame =
       oidnPreviewActive && output === 'final' &&
-      !oidnHDRBuffer && !oidnComposedBuffer && presentedDenoised &&
+      !oidnComposedBuffer && presentedDenoised &&
       !!previewTransitionTexture;
     if (showPreviewTransition || holdDenoisedFrame) {
       // Canvas resizes discard its contents. Re-present the completed image
@@ -1001,19 +942,19 @@ output.color = color;
       displayTexture = previewTransitionTexture!;
     } else if (
       oidnPreviewActive && output === 'final' &&
-      (oidnHDRBuffer || oidnComposedBuffer)
+      oidnComposedBuffer
     ) {
       _capturePresentationSnapshot(displayTexture, encoder);
     }
     presentedDenoised =
       output === 'final' &&
-      (!!oidnHDRBuffer || !!oidnComposedBuffer || showPreviewTransition || holdDenoisedFrame);
+      (!!oidnComposedBuffer || showPreviewTransition || holdDenoisedFrame);
     _present(encoder, displayTexture);
     if (
       hasPreviewTransition &&
       !previewMode &&
       sampleCount > 0 &&
-      (output !== 'final' || !previewTransitionDenoisePending || !!oidnHDRBuffer)
+      (output !== 'final' || !previewTransitionDenoisePending || !!oidnComposedBuffer)
     ) {
       hasPreviewTransition = false;
     }
@@ -1194,10 +1135,8 @@ output.color = color;
     rayTracePass.setSize(renderWidth, renderHeight);
     rayTraceOutputPass.setSize(renderWidth, renderHeight);
     composePass.setSize(renderWidth, renderHeight);
-    beautyMergePass.setSize(renderWidth, renderHeight);
+    compositeDenoiseDisplayPass.setSize(renderWidth, renderHeight);
     autoExposurePass.setSize(renderWidth, renderHeight);
-    shadowDenoiseInputPass.setSize(renderWidth, renderHeight);
-    oidnBeautyInputPass.setSize(renderWidth, renderHeight);
     const oidnImageSize = new Int32Array([renderWidth, renderHeight]);
     [
       oidnAlbedoEncodePass,
@@ -1327,6 +1266,7 @@ output.color = color;
       newTint === tint &&
       newVignette === vignette
     ) return false;
+    invalidateCompositeDenoise();
     exposure = newExposure;
     autoExposureEnabled = newAutoExposureEnabled;
     toneMappingMode = newToneMappingMode;
@@ -1352,6 +1292,7 @@ output.color = color;
 
   function setHDROutputEnabled(enabled: boolean) {
     if (enabled === hdrOutputRequested) return false;
+    invalidateCompositeDenoise();
     hdrOutputRequested = enabled;
     const wasActive = hdrOutputActive;
 
@@ -1401,7 +1342,7 @@ output.color = color;
       composeColorFormat = nextComposeColorFormat;
       composePass.setOutputParams({
         color: { format: composeColorFormat },
-        shadowCatcher: { format: 'rgba8unorm' }
+        denoiseColor: { format: 'rgba32float' }
       });
       const previousTransitionTexture = previewTransitionTexture;
       previewTransitionTexture = undefined;
@@ -1416,6 +1357,8 @@ output.color = color;
     if (wasActive !== hdrOutputActive) {
       hdrPeakMeter?.reset();
     }
+    compositeDenoiseDisplayPass.setOutputParams({ color: { format: composeColorFormat } });
+    compositeDenoiseDisplayPass.setUniform('hdrOutputEnabled', hdrOutputActive ? 1 : 0);
     composePass.setUniform('hdrOutputEnabled', hdrOutputActive ? 1 : 0);
     return wasActive !== hdrOutputActive;
   }
@@ -1596,7 +1539,7 @@ output.color = color;
       });
       // oidn-web generates one input shader for the resource type of the
       // color input. Convert both filtered guides to textures as well so the
-      // final beauty and shadow-catcher calls never mix textures and buffers.
+      // composed color call never mixes textures and buffers.
       oidnAlbedoGuideTexture = prepareOIDNTexture(
         normalEncoder,
         oidnAlbedoDecodePass.getOutput('albedo'),
@@ -1621,6 +1564,38 @@ output.color = color;
       };
     }
 
+    function denoiseComposite(guides: AuxiliaryGuides): Promise<void> {
+      if (generation !== oidnGeneration) return Promise.resolve();
+      // Snapshot the complete raw composition; never feed a previous denoise
+      // back into the network during progressive updates.
+      return runOIDNPhase(generation, (finish, fail) =>
+        denoiser.tileExecute({
+          ...convergingTileOptions,
+          color: { data: composePass.getOutput('denoiseColor'), ...size },
+          albedo: guides.albedo,
+          normal: guides.normal,
+          progress(output, _tileData, _tile, currentIdx, totalIdx) {
+            if (generation !== oidnGeneration) return;
+            if (whileConverging && currentIdx + 1 < totalIdx) return;
+            const encoder = device.createCommandEncoder();
+            oidnComposedBuffer = copyOIDNOutput(encoder, output, oidnComposedBuffer);
+            oidnComposedLinear = true;
+            drawPostProcess(encoder, false);
+          },
+          done(output) {
+            if (generation === oidnGeneration) {
+              const encoder = device.createCommandEncoder();
+              oidnComposedBuffer = copyOIDNOutput(encoder, output, oidnComposedBuffer);
+              oidnComposedLinear = true;
+              drawPostProcess(encoder, false);
+            }
+            finish();
+          },
+          error: fail
+        })
+      );
+    }
+
     // Denoise alpha channel
     function denoiseComposed(): Promise<void> {
       if (!alphaDenoiser || generation !== oidnGeneration) {
@@ -1630,7 +1605,9 @@ output.color = color;
         alphaDenoiser.tileExecute({
           ...convergingTileOptions,
           color: {
-            data: composePass.getOutput('color'),
+            data: oidnComposedLinear
+              ? compositeDenoiseDisplayPass.getOutput('color')
+              : composePass.getOutput('color'),
             ...size
           },
           denoiseAlpha: true,
@@ -1647,88 +1624,16 @@ output.color = color;
               output,
               oidnComposedBuffer
             );
+            oidnComposedLinear = false;
             drawPostProcess(encoder, false);
           },
-          done() {
-            finish();
-          },
-          error: fail
-        })
-      );
-    }
-
-    function denoiseRayTraced(guides: AuxiliaryGuides): Promise<void> {
-      if (generation !== oidnGeneration) return Promise.resolve();
-      const encoder = device.createCommandEncoder();
-      oidnBeautyInputPass.createPass(encoder, {
-        colorTex: getFrameInput(rayTracePass.hasShadowCatcher() ? 'foreground' : 'color')
-      });
-      device.queue.submit([encoder.finish()]);
-      return runOIDNPhase(generation, (finish, fail) =>
-        denoiser.tileExecute({
-          ...convergingTileOptions,
-          color: {
-            data: oidnBeautyInputPass.getOutput('color'),
-            ...size
-          },
-          albedo: guides.albedo,
-          normal: guides.normal,
-          progress(output, _tileData, _tile, currentIdx, totalIdx) {
-            if (generation !== oidnGeneration) return;
-            if (whileConverging && currentIdx + 1 < totalIdx) return;
-            const encoder = device.createCommandEncoder();
-            oidnHDRBuffer = copyOIDNOutput(encoder, output, oidnHDRBuffer);
-            // A preview frame waits for its shadow mask, otherwise the
-            // denoised image flashes with the raw one-sample shadow first.
-            if (previewMode && rayTracePass.hasShadowCatcher()) {
-              device.queue.submit([encoder.finish()]);
-              return;
+          done(output) {
+            if (generation === oidnGeneration) {
+              const encoder = device.createCommandEncoder();
+              oidnComposedBuffer = copyOIDNOutput(encoder, output, oidnComposedBuffer);
+              oidnComposedLinear = false;
+              drawPostProcess(encoder, false);
             }
-            drawPostProcess(encoder, false);
-          },
-          done() {
-            finish();
-          },
-          error: fail
-        })
-      );
-    }
-
-    function denoiseShadowCatcher(guides: AuxiliaryGuides): Promise<void> {
-      if (
-        !rayTracePass.hasShadowCatcher() ||
-        generation !== oidnGeneration
-      ) {
-        return Promise.resolve();
-      }
-
-      const encoder = device.createCommandEncoder();
-      shadowDenoiseInputPass.createPass(encoder, {
-        shadowCatcherTex: getFrameInput('shadowCatcher')
-      });
-      device.queue.submit([encoder.finish()]);
-
-      return runOIDNPhase(generation, (finish, fail) =>
-        denoiser.tileExecute({
-          ...convergingTileOptions,
-          color: {
-            data: shadowDenoiseInputPass.getOutput('color'),
-            ...size
-          },
-          albedo: guides.albedo,
-          normal: guides.normal,
-          progress(output, _tileData, _tile, currentIdx, totalIdx) {
-            if (generation !== oidnGeneration) return;
-            if (whileConverging && currentIdx + 1 < totalIdx) return;
-            const encoder = device.createCommandEncoder();
-            oidnShadowBuffer = copyOIDNOutput(
-              encoder,
-              output,
-              oidnShadowBuffer
-            );
-            drawPostProcess(encoder, false);
-          },
-          done() {
             finish();
           },
           error: fail
@@ -1738,15 +1643,10 @@ output.color = color;
 
     return denoiseAuxiliaryGuides()
       .then(async (guides) => {
-        if (!guides || generation !== oidnGeneration) return undefined;
-        await denoiseRayTraced(guides);
-        return generation === oidnGeneration ? guides : undefined;
+        if (guides && generation === oidnGeneration) {
+          await denoiseComposite(guides);
+        }
       })
-      .then((guides) =>
-        guides && generation === oidnGeneration
-          ? denoiseShadowCatcher(guides)
-          : undefined
-      )
       .then(() => {
         if (
           generation === oidnGeneration &&
@@ -1774,24 +1674,17 @@ output.color = color;
       );
     }
     cancelOIDNDenoise();
-    oidnHDRBuffer?.destroy();
     oidnComposedBuffer?.destroy();
-    oidnShadowBuffer?.destroy();
-    oidnHDRTexture?.destroy();
     oidnComposedTexture?.destroy();
-    oidnShadowTexture?.destroy();
     oidnAlbedoGuideTexture?.destroy();
     oidnNormalGuideTexture?.destroy();
-    undefined;
-    undefined;
-    undefined;
-    beautyMergePass.dispose();
+    composePass.dispose();
+    compositeDenoiseDisplayPass.dispose();
     autoExposurePass.dispose();
     hdrPeakMeter?.dispose();
     oidnAlbedoEncodePass.dispose();
     oidnAlbedoDecodePass.dispose();
     oidnNormalSanitizePass.dispose();
-    oidnBeautyInputPass.dispose();
     previewTransitionTexture?.destroy();
     // The passes own tracing outputs and adjacent animation pose storage.
     // Keep their resources valid for submissions already queued at disposal.
@@ -1824,6 +1717,7 @@ output.color = color;
       drawPostProcess(encoder, true);
     },
     performOIDNDenoise,
+    cancelOIDNDenoise,
 
     setMeshes,
     setTextureAtlasBudget(maxBytes: number) {
@@ -1850,18 +1744,11 @@ output.color = color;
         usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
       });
       const encoder = device.createCommandEncoder();
-      let rawTexture = oidnHDRTexture || outputTexture;
-      if (oidnHDRTexture && rayTracePass.hasShadowCatcher()) {
-        mergeBeauty(encoder, oidnHDRTexture);
-        rawTexture = beautyMergePass.getOutput('color');
-      }
-      if (!oidnHDRTexture || rayTracePass.hasShadowCatcher()) {
-        copyPass.setSize(renderWidth, renderHeight);
-        copyPass.setOutputParams({ color: { format: 'rgba32float' } });
-        copyPass.createPass(encoder, { colorTex: rawTexture });
-      }
+      copyPass.setSize(renderWidth, renderHeight);
+      copyPass.setOutputParams({ color: { format: 'rgba32float' } });
+      copyPass.createPass(encoder, { colorTex: outputTexture });
       encoder.copyTextureToBuffer(
-        { texture: oidnHDRTexture && !rayTracePass.hasShadowCatcher() ? oidnHDRTexture : copyPass.getOutput('color') },
+        { texture: copyPass.getOutput('color') },
         { buffer, bytesPerRow: 16 * renderWidth },
         textureDims
       );
@@ -2021,6 +1908,7 @@ output.color = color;
         threshold !== bloomThreshold ||
         intensity !== bloomIntensity ||
         radius !== bloomRadius;
+      if (changed) invalidateCompositeDenoise();
       bloomThreshold = threshold;
       bloomIntensity = intensity;
       bloomRadius = radius;

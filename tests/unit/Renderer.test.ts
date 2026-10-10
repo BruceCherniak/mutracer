@@ -446,6 +446,32 @@ describe('Renderer offline frames', () => {
 });
 
 describe('Renderer while-converging OIDN', () => {
+  it.each([true, false])('refreshes post-processing when denoising is enabled (%s)', async (enabled) => {
+    const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
+    renderer.maxSamples = 8;
+    renderer.interactivePreview = false;
+    if (enabled) renderer.oidn = {} as never;
+    setDenoiseMode(renderer, { whileConverging: false });
+    const pipeline = createPipeline({
+      needsRestartSample: vi.fn(() => false),
+      performOIDNDenoise: vi.fn(async () => true),
+      getTotalSamplesRendered: vi.fn(() => 8),
+      cancelOIDNDenoise: vi.fn()
+    });
+    const scene = { meshes: [], lights: [] } as Scene;
+    attachPipeline(renderer, pipeline);
+    markSceneStable(renderer, scene);
+    const camera = {} as Camera;
+    renderer.render(scene, camera);
+    await Promise.resolve();
+    pipeline.performOIDNDenoise.mockClear();
+    vi.mocked(pipeline.draw).mockClear();
+    vi.mocked(pipeline.setToneMappingParams).mockReturnValueOnce(true);
+    renderer.render(scene, camera);
+    expect(pipeline.performOIDNDenoise).toHaveBeenCalledTimes(enabled ? 1 : 0);
+    expect(pipeline.draw).not.toHaveBeenCalled();
+  });
+
   const scene = { meshes: [], lights: [] } as unknown as Scene;
   const camera = {} as Camera;
 

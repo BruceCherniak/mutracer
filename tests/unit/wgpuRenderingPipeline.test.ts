@@ -9,13 +9,18 @@ const mocks = vi.hoisted(() => {
     static instances = new Map<string, Pass>();
     texture = { width: 80, height: 64, format: 'rgba8unorm' };
     constructor(label = '') { Pass.instances.set(label, this); }
+    outputs = new Map<string, Pass['texture']>();
     setSize(width: number, height: number) {
       this.texture = { ...this.texture, width, height };
+      for (const texture of this.outputs.values()) Object.assign(texture, { width, height });
     }
     setUniform = vi.fn();
     setOutputParams() {}
     setRenderToScreen = vi.fn();
-    getOutput() { return this.texture; }
+    getOutput(label = 'color') {
+      if (!this.outputs.has(label)) this.outputs.set(label, { ...this.texture });
+      return this.outputs.get(label)!;
+    }
     createPass = vi.fn();
     dispose() {}
   }
@@ -200,35 +205,57 @@ async function denoisedPipeline() {
 }
 
 describe('WebGPU denoised presentation transitions', () => {
-  it('keeps raw catcher coverage separate from the denoised shadow texture', async () => {
+  it('denoises the whole composition once and keeps raw coverage for presentation', async () => {
     const pipeline = createPipeline(false);
     vi.spyOn(mocks.TracePass.latest, 'hasShadowCatcher').mockReturnValue(true);
     pipeline.draw(new Camera('perspective'), 1);
     const compose = mocks.Pass.instances.get('compose')!;
     const rawInputs = compose.createPass.mock.lastCall![1];
-    expect(rawInputs.shadowCatcherMaskTex).toBe(rawInputs.shadowCatcherTex);
-    const coverage = rawInputs.shadowCatcherMaskTex;
-    const foreground = rawInputs.foregroundTex;
-    const background = rawInputs.catcherBackgroundTex;
-    expect(foreground).not.toBe(rawInputs.colorTex);
-    expect(background).not.toBe(foreground);
-    await pipeline.performOIDNDenoise(completedDenoiser(), undefined, true);
-    const denoisedInputs = compose.createPass.mock.lastCall![1];
-    expect(denoisedInputs.shadowCatcherMaskTex).toBe(coverage);
-    expect(denoisedInputs.catcherBackgroundTex).toBe(background);
-    expect(mocks.Pass.instances.get('OIDN nonnegative HDR input')!.createPass.mock.lastCall![1]).toEqual({ colorTex: foreground });
-    expect(mocks.Pass.instances.get('beautyMerge')!.createPass.mock.lastCall![1])
-      .toMatchObject({ foregroundTex: denoisedInputs.foregroundTex, catcherBackgroundTex: background, maskTex: coverage });
-    expect(denoisedInputs.shadowCatcherTex).not.toBe(coverage);
-    expect(compose.setUniform).toHaveBeenCalledWith('shadowCatcherDenoised', 1);
-    expect(mocks.Pass.instances.get('shadowDenoiseInput')!.createPass.mock.lastCall![1])
-      .toEqual({ shadowCatcherTex: coverage });
-    pipeline.restartSamples();
+    const denoiser = completedDenoiser();
+    const execute = vi.spyOn(denoiser, 'tileExecute');
+    await pipeline.performOIDNDenoise(denoiser, undefined, true);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(compose.createPass.mock.lastCall![1]).toEqual(rawInputs);
+    expect(execute.mock.lastCall![0].color.data).toBe(compose.getOutput('denoiseColor'));
+    const finish = mocks.Pass.instances.get('OIDN composed display')!;
+    expect(finish.createPass.mock.lastCall![1].composedTex).toBe(compose.getOutput('denoiseColor'));
+    expect(displayedTexture()).toBe(finish.getOutput('color'));
+    pipeline.dispose();
+  });
+
+  it('retains the explicitly configured alpha denoiser after composite RGB denoising', async () => {
+    const pipeline = createPipeline(false);
+    vi.spyOn(mocks.TracePass.latest, 'needsDenoiseAlpha').mockReturnValue(true);
     pipeline.draw(new Camera('perspective'), 1);
-    const restartedInputs = compose.createPass.mock.lastCall![1];
-    expect(restartedInputs.shadowCatcherTex).toBe(restartedInputs.shadowCatcherMaskTex);
-    expect(compose.setUniform.mock.calls.filter(([name]) => name === 'shadowCatcherDenoised').at(-1))
-      .toEqual(['shadowCatcherDenoised', 0]);
+    const alpha = completedDenoiser();
+    const execute = vi.spyOn(alpha, 'tileExecute');
+    await pipeline.performOIDNDenoise(completedDenoiser(), alpha);
+    expect(execute).toHaveBeenCalledOnce();
+    expect(execute.mock.lastCall![0]).toMatchObject({
+      color: { data: mocks.Pass.instances.get('OIDN composed display')!.getOutput('color') },
+      denoiseAlpha: true
+    });
+    pipeline.dispose();
+  });
+
+  it('publishes a completed composite when OIDN omits progress callbacks', async () => {
+    const pipeline = createPipeline(false);
+    pipeline.draw(new Camera('perspective'), 1);
+    await pipeline.performOIDNDenoise({ tileExecute(opts) {
+      opts.done({ data: { size: 80 * 64 * 16 } as GPUBuffer, width: 80, height: 64 });
+      return () => {};
+    } }, undefined);
+    expect(displayedTexture()).toBe(mocks.Pass.instances.get('OIDN composed display')!.getOutput('color'));
+    pipeline.dispose();
+  });
+
+  it('invalidates composed denoising when exposure changes without restarting samples', async () => {
+    const pipeline = await denoisedPipeline();
+    pipeline.setOIDNPreviewActive(false);
+    expect(pipeline.setToneMappingParams({ exposure: 2 })).toBe(true);
+    pipeline.drawPostProcess();
+    expect(displayedTexture()).toBe(mocks.Pass.instances.get('compose')!.getOutput('color'));
+    expect(pipeline.getTotalSamplesRendered()).toBe(1);
     pipeline.dispose();
   });
 
