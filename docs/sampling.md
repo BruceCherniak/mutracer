@@ -34,6 +34,4 @@ shading even with identical integer sequence points. Finite-width, very narrow
 specular lobes under directional lights can produce rare, large Monte Carlo
 contributions with any pattern; sampling does not clamp these contributions.
 
-The former `useStratifiedSampling` option and the CPU stratified sampler have
-been removed. Select `samplingPattern` explicitly when migrating; the default
-is `sobol`. ZSobol generates its blue-noise pattern without a texture asset.
+ZSobol generates its blue-noise pattern without a texture asset.

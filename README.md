@@ -1,8 +1,15 @@
 # MuTracer
 
+[![npm version](https://img.shields.io/npm/v/mutracer)](https://www.npmjs.com/package/mutracer)
+[![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
+
 **MuTracer** is a physically based path tracer for the web.
 It renders on WebGPU and falls back to WebGL 2, with OpenPBR materials,
 TinyBVH acceleration and Intel Open Image Denoise built in.
+
+Try the [online demo](https://mutracer.meimu-studio.com) or open the
+[viewer](https://mutracer.meimu-studio.com/viewer/). MuTracer is a 0.x library;
+APIs may change between minor releases.
 
 - **Progressive path tracing**: area, sphere, spot (with IES profiles),
   directional and environment lights, with multiple importance sampling.
@@ -114,6 +121,7 @@ await renderer.setDenoiser({ model: 'standard' });
 | [Materials](./docs/materials.md) | OpenPBR inputs, textures, alpha, bevel, displacement |
 | [Three.js](./docs/threejs.md) | `THREESceneSync`, supported materials and lights, `userData` keys |
 | [Denoising](./docs/denoising.md) | OIDN models, weights hosting, denoising while converging |
+| [Sampling](./docs/sampling.md) | Patterns, dimensions and progressive budgets |
 | [BVH](./docs/bvh.md) | BVH builders, TinyBVH layouts, worker precomputation |
 | [Performance](./docs/performance.md) | Tuning checklist |
 | [`llms.txt`](./llms.txt) | Compact usage guide for coding agents |
@@ -136,6 +144,11 @@ npm run dev
 
 The first frame compiles large shaders, which can take several seconds on some
 platforms; `render()` reports the progress through its return status.
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup, required checks
+and GPU validation.
 
 ## License
 

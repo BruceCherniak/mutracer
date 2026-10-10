@@ -37,4 +37,4 @@
 - [Sampling](docs/sampling.md): patterns, dimensions and progressive budgets
 - [BVH](docs/bvh.md): BVH builders, TinyBVH layouts, worker precomputation
 - [Performance](docs/performance.md): tuning checklist
-- [Examples](examples/README.md): basic, Three.js, advanced
+- [Examples](https://github.com/pissang/mutracer/tree/main/examples): basic, Three.js, advanced
