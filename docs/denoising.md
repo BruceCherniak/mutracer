@@ -31,15 +31,27 @@ The OIDN code is loaded with a dynamic import, so it costs nothing until used.
 
 ## JNLM
 
-The filter follows Rousselle, Manzi and Zwicker, *Robust Denoising using
-Feature and Color Information* (2013). Each pixel becomes a weighted mean of
+The weights follow Rousselle, Manzi and Zwicker, *Robust Denoising using
+Feature and Color Information* (2013). Each pixel starts with a weighted mean of
 its 11 × 11 neighborhood. A neighbor's weight is the smaller of:
 
-- a color weight: the distance between the two pixels' 5 × 5 patches,
+- a color weight: the distance between the two pixels' 3 × 3 patches,
   normalized by their estimated variance, so differences explained by noise
   are ignored;
 - a feature weight: the albedo, coverage and normal differences, which keep
   texture and geometric edges.
+
+Albedo differences are measured relative to each channel's local brightness,
+with a small floor near black. This protects low-contrast dark textures as
+well as brighter ones. Coverage and encoded normals use absolute differences.
+
+The mean is corrected by a local linear fit between each RGB channel and its
+albedo channel, using the same weights. This preserves subtle texture while
+averaging lighting noise. A small regularizer stabilizes nearly constant
+guides, and the fitted response is bounded between zero and multiplicative
+albedo modulation. Constant albedo keeps the weighted mean; unrelated albedo
+does not automatically get transferred into the image. Alpha and the
+luminance matching guide retain their weighted-mean estimates.
 
 A second pass filters the result again with every other pixel (à-trous),
 which removes the blotches a single pass leaves at the scale of its window.
@@ -53,6 +65,30 @@ directly are left as rendered.
 ```ts
 await renderer.setDenoiser({ strength: 1.5 });    // filter more
 ```
+
+JNLM settings are available through `DenoiserOptions`. Omitted settings use
+the exported `DEFAULT_JNLM_OPTIONS`; `JNLMOptions` is the corresponding type.
+Calling `setDenoiser` applies a fresh configuration to the existing sample
+accumulation, so include the settings you want to retain on each call.
+
+```ts
+import { DEFAULT_JNLM_OPTIONS } from 'mutracer';
+
+await renderer.setDenoiser({
+  type: 'jnlm',
+  ...DEFAULT_JNLM_OPTIONS,
+  strength: 1.2,
+  searchRadius: 7,
+  albedoBandwidth: 0.3
+});
+```
+
+Larger search windows cost more but find more matching neighbors. Smaller
+patches preserve small color details. Lower albedo and normal tolerances
+reject more neighbors, protecting detail while retaining more noise. Extra
+passes remove broader noise patches and can soften detail. Invalid parameters
+reject before replacing the active filter. These settings work on both WebGPU
+and WebGL 2; OIDN ignores JNLM settings.
 
 `strength` (default `1`) scales the color tolerance. Higher values remove
 more noise at low sample counts and more detail at high ones.
@@ -110,6 +146,11 @@ frame.
 | --- | --- |
 | `type` | `'jnlm'` or `'oidn'`. Default `'jnlm'`, or `'oidn'` when `model` or `weightsBaseUrl` is given |
 | `strength` | JNLM filter strength. Default `1` |
+| `searchRadius` | JNLM search radius, integer `1–16`. Default `5` (11 × 11 window) |
+| `patchRadius` | JNLM color comparison patch radius, integer `0–3`. Default `1` (3 × 3 patch) |
+| `albedoBandwidth` | JNLM relative albedo tolerance, `0.0001–10`. Default `0.4` |
+| `normalBandwidth` | JNLM encoded normal tolerance, `0.0001–10`. Default `0.05` |
+| `iterations` | JNLM filter passes, integer `1–4`. Default `2` |
 | `model` | OIDN network: `'standard'`, `'small'` or `'cleanAuxLarge'` |
 | `previewModel` | OIDN network for while-converging preview frames, or `false` to use `model`. Default `'small'` |
 | `weightsBaseUrl` | Directory containing the OIDN `.tza` files |

@@ -4,6 +4,8 @@ const { initializeOIDN } = vi.hoisted(() => ({ initializeOIDN: vi.fn() }));
 vi.mock('../../src/oidn', () => ({ initializeOIDN }));
 
 const { default: Renderer } = await import('../../src/Renderer');
+import { DEFAULT_JNLM_OPTIONS, type JNLMOptions } from '../../src/main';
+import type { JNLMDenoiser } from '../../src/renderer/jnlm';
 
 function fakeDenoiser() {
   return { dispose: vi.fn(), tileExecute: vi.fn() };
@@ -146,5 +148,38 @@ describe('Renderer.setDenoiser', () => {
     await renderer.setDenoiser();
     expect(getDevice).not.toHaveBeenCalled();
     expect((renderer as unknown as { _activeDenoiser: { type: string } })._activeDenoiser.type).toBe('jnlm');
+  });
+
+  it('applies public JNLM options and defaults without sharing mutable shapes', async () => {
+    const renderer = createRenderer();
+    const attached = () => (renderer as unknown as { _activeDenoiser: JNLMDenoiser })._activeDenoiser;
+    await renderer.setDenoiser({ type: 'jnlm', searchRadius: 7, patchRadius: 0, albedoBandwidth: 0.2, normalBandwidth: 0.1, iterations: 4, strength: 1.5 });
+    expect(attached()).toMatchObject({ strength: 1.5, shape: { searchRadius: 7, patchRadius: 0, albedoBandwidth: 0.2, normalBandwidth: 0.1, iterations: 4 } });
+    attached().shape.searchRadius = 16;
+    await renderer.setDenoiser({ type: 'jnlm', patchRadius: undefined });
+    const { strength, ...shape } = DEFAULT_JNLM_OPTIONS;
+    expect(attached()).toMatchObject({ strength, shape });
+    renderer.dispose();
+  });
+
+  it.each([
+    ['strength', Infinity], ['strength', NaN], ['searchRadius', 0], ['searchRadius', 17],
+    ['searchRadius', 2.5], ['patchRadius', -1], ['patchRadius', 4], ['iterations', 0], ['iterations', 5],
+    ['albedoBandwidth', 0], ['albedoBandwidth', Infinity], ['normalBandwidth', NaN], ['normalBandwidth', 11]
+  ] as const)('rejects invalid JNLM %s=%s without replacing the active filter', async (key, value) => {
+    const renderer = createRenderer();
+    await renderer.setDenoiser();
+    const previous = (renderer as unknown as { _activeDenoiser: JNLMDenoiser })._activeDenoiser;
+    await expect(renderer.setDenoiser({ type: 'jnlm', [key]: value } as JNLMOptions)).rejects.toThrow(key);
+    expect((renderer as unknown as { _activeDenoiser: JNLMDenoiser })._activeDenoiser).toBe(previous);
+    renderer.dispose();
+  });
+
+  it('passes only OIDN options to its loader', async () => {
+    const renderer = createRenderer();
+    initializeOIDN.mockReset().mockResolvedValue(fakeDenoiser());
+    await renderer.setDenoiser({ type: 'oidn', model: 'small', maxTileSize: 512, searchRadius: 7, patchRadius: 2, albedoBandwidth: 0.2, normalBandwidth: 0.1, iterations: 3 });
+    expect(initializeOIDN).toHaveBeenCalledWith(renderer, { model: 'small', maxTileSize: 512, attach: false });
+    renderer.dispose();
   });
 });

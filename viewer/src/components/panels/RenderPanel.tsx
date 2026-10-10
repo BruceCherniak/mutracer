@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Aperture, Bug, Palette, Sparkles, Sun } from 'lucide-react';
-import type { RendererDiagnostics } from 'mutracer';
-import { setSettings, useViewer, type Settings } from '../../store';
+import { Aperture, Bug, Palette, RotateCcw, Sparkles, Sun } from 'lucide-react';
+import type { OIDNModel, RendererDiagnostics } from 'mutracer';
+import { DEFAULT_SETTINGS, setSettings, useViewer, type Settings } from '../../store';
 import { getEngine } from '../../engine/ViewerEngine';
 import { Field, Hint, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';
 
@@ -12,7 +12,8 @@ export function RenderPanel() {
   const backend = useViewer((state) => state.backend.name);
   const bvhBusy = useViewer((state) => state.stats.phase === 'preparing' || state.loading !== null || state.export !== null);
   const webgl = backend === 'WebGL 2';
-  const [open, setOpen] = useState({ effects: false, debug: false });
+  const jnlm = webgl || s.denoiseModel === 'jnlm';
+  const [open, setOpen] = useState({ effects: false, debug: false, jnlm: false });
   const update = (patch: Partial<Settings>) => setSettings(patch);
 
   return (
@@ -55,18 +56,60 @@ export function RenderPanel() {
       <Section
         title="Denoiser"
         icon={<Sparkles size={14} />}
-        actions={<Switch label="Denoiser" checked={s.denoise} onChange={(v) => update({ denoise: v })} />}
+        actions={<>
+          {s.denoise && <button className="icon-btn sm" title="Reset selected denoiser parameters" aria-label={`Reset ${jnlm ? 'JNLM' : 'OIDN'} settings`} onClick={() => update(jnlm ? {
+            jnlmStrength: DEFAULT_SETTINGS.jnlmStrength,
+            jnlmSearchRadius: DEFAULT_SETTINGS.jnlmSearchRadius,
+            jnlmPatchRadius: DEFAULT_SETTINGS.jnlmPatchRadius,
+            jnlmAlbedoBandwidth: DEFAULT_SETTINGS.jnlmAlbedoBandwidth,
+            jnlmNormalBandwidth: DEFAULT_SETTINGS.jnlmNormalBandwidth,
+            jnlmIterations: DEFAULT_SETTINGS.jnlmIterations
+          } : { denoiseModel: 'standard', oidnModel: 'standard', oidnMaxTileSize: 0 })}>
+            <RotateCcw size={12} />
+          </button>}
+          <Switch label="Denoiser" checked={s.denoise} onChange={(v) => update({ denoise: v })} />
+        </>}
       >
-        {webgl ? (
-          <Hint>WebGL 2 uses the built-in JNLM filter. OIDN needs WebGPU.</Hint>
-        ) : s.denoise ? (
+        {s.denoise && <>
           <Segmented
-            label="Denoiser model"
-            value={s.denoiseModel}
-            options={[{ value: 'jnlm', label: 'JNLM' }, { value: 'standard', label: 'OIDN' }, { value: 'small', label: 'OIDN small' }, { value: 'cleanAuxLarge', label: 'OIDN large' }]}
-            onChange={(v) => update({ denoiseModel: v })}
+            label="Denoiser type"
+            value={jnlm ? 'jnlm' : 'oidn'}
+            options={[{ value: 'jnlm', label: 'JNLM' }, { value: 'oidn', label: 'OIDN', disabled: webgl }]}
+            onChange={(v) => update({ denoiseModel: v === 'jnlm' ? 'jnlm' : s.oidnModel })}
           />
-        ) : null}
+          {webgl && <Hint>OIDN requires WebGPU.</Hint>}
+          {jnlm && <Scrub label="Strength" title="Higher values remove more lighting noise" value={s.jnlmStrength} min={0.1} max={3} step={0.1} onChange={(v) => update({ jnlmStrength: v })} />}
+          {jnlm ? <Section
+            title="More parameters"
+            open={open.jnlm}
+            onOpenChange={(v) => setOpen((o) => ({ ...o, jnlm: v }))}
+          >
+            <Scrub label="Search radius" title="Search a larger neighborhood for similar pixels; higher values cost more" value={s.jnlmSearchRadius} min={1} max={16} step={1} unit="px" onChange={(v) => update({ jnlmSearchRadius: v })} />
+            <Scrub label="Patch radius" title="Radius of the color comparison patch; smaller patches preserve small details" value={s.jnlmPatchRadius} min={0} max={3} step={1} unit="px" onChange={(v) => update({ jnlmPatchRadius: v })} />
+            <Scrub label="Albedo tolerance" title="Lower values protect texture more; higher values smooth more" value={s.jnlmAlbedoBandwidth} min={0.01} max={1} step={0.01} onChange={(v) => update({ jnlmAlbedoBandwidth: v })} />
+            <Scrub label="Normal tolerance" title="Lower values protect geometric detail; higher values smooth across surface changes" value={s.jnlmNormalBandwidth} min={0.005} max={0.5} step={0.005} onChange={(v) => update({ jnlmNormalBandwidth: v })} />
+            <Scrub label="Filter passes" title="More passes remove broader noise patches; may soften detail" value={s.jnlmIterations} min={1} max={4} step={1} onChange={(v) => update({ jnlmIterations: v })} />
+          </Section> : <>
+            <Select<OIDNModel>
+              label="OIDN model"
+              prefix="Model"
+              value={s.oidnModel}
+              options={[
+                { value: 'standard', label: 'Standard', hint: 'Balanced' },
+                { value: 'small', label: 'Small', hint: 'Faster' },
+                { value: 'cleanAuxLarge', label: 'Large', hint: 'Prefilters albedo and normals' }
+              ]}
+              onChange={(v) => update({ denoiseModel: v, oidnModel: v })}
+            />
+            <Select
+              label="OIDN tile size"
+              prefix="Max tile"
+              value={String(s.oidnMaxTileSize)}
+              options={[{ value: '0', label: 'Auto' }, ...[256, 512, 1024, 2048].map((v) => ({ value: String(v), label: `${v} px` }))]}
+              onChange={(v) => update({ oidnMaxTileSize: Number(v) })}
+            />
+          </>}
+        </>}
       </Section>
 
       <Section title="Color" icon={<Palette size={14} />}>
@@ -130,7 +173,7 @@ export function RenderPanel() {
         {s.interactivePreview && (
           <Scrub label="Max preview scale" title="Preview resolution adapts to render time, up to this scale" value={s.previewResolutionScale} min={0.25} max={1} onChange={(v) => update({ previewResolutionScale: v })} />
         )}
-        {s.denoise && s.denoiseWhileConverging && <Hint>Denoise while converging always previews while interacting, using the small network at a resolution it can keep up with.</Hint>}
+        {s.denoise && s.denoiseWhileConverging && <Hint>Live denoise also runs while interacting{jnlm ? '.' : ', using the small preview model.'}</Hint>}
         {open.debug && <Diagnostics />}
       </Section>
     </>

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { DEFAULT_JNLM_OPTIONS } from 'mutracer';
 import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, RenderOutput } from 'mutracer';
 import type { MaterialValues } from './engine/materialParams';
 
@@ -27,6 +28,16 @@ export interface Settings {
   /** `jnlm` is the built-in filter; the others are OIDN networks. */
   denoiseModel: OIDNModel | 'jnlm';
   denoiseWhileConverging: boolean;
+  jnlmStrength: number;
+  jnlmSearchRadius: number;
+  jnlmPatchRadius: number;
+  jnlmAlbedoBandwidth: number;
+  jnlmNormalBandwidth: number;
+  jnlmIterations: number;
+  /** Remember the OIDN model while JNLM is selected. */
+  oidnModel: OIDNModel;
+  /** Zero lets OIDN choose the tile size. */
+  oidnMaxTileSize: number;
   toneMapping: ToneMapping;
   exposure: number;
   autoExposure: boolean;
@@ -71,6 +82,14 @@ export const DEFAULT_SETTINGS: Settings = {
   denoise: true,
   denoiseModel: 'jnlm',
   denoiseWhileConverging: false,
+  jnlmStrength: DEFAULT_JNLM_OPTIONS.strength,
+  jnlmSearchRadius: DEFAULT_JNLM_OPTIONS.searchRadius,
+  jnlmPatchRadius: DEFAULT_JNLM_OPTIONS.patchRadius,
+  jnlmAlbedoBandwidth: DEFAULT_JNLM_OPTIONS.albedoBandwidth,
+  jnlmNormalBandwidth: DEFAULT_JNLM_OPTIONS.normalBandwidth,
+  jnlmIterations: DEFAULT_JNLM_OPTIONS.iterations,
+  oidnModel: 'standard',
+  oidnMaxTileSize: 0,
   toneMapping: 'agx',
   exposure: 1,
   autoExposure: false,
@@ -175,6 +194,8 @@ const UI_KEY = 'mutracer-viewer:ui';
 const RENDER_KEY = 'mutracer-viewer:render:v5';
 const RENDER_FIELDS: (keyof Settings)[] = [
   'envResolution', 'maxSamples', 'bounces', 'resolutionScale', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
+  'jnlmStrength', 'jnlmSearchRadius', 'jnlmPatchRadius', 'jnlmAlbedoBandwidth', 'jnlmNormalBandwidth', 'jnlmIterations',
+  'oidnModel', 'oidnMaxTileSize',
   'toneMapping', 'interactivePreview', 'previewResolutionScale'
 ];
 
@@ -222,10 +243,27 @@ export const hashModelPreset = () => new URLSearchParams(location.hash.slice(1))
 
 function validateSettings(settings: Settings): Settings {
   const allowed: ToneMapping[] = ['agx', 'aces', 'cineon', 'reinhard', 'linear'];
+  const oidnModels: OIDNModel[] = ['standard', 'small', 'cleanAuxLarge'];
+  const denoiseModel = settings.denoiseModel === 'jnlm' || oidnModels.includes(settings.denoiseModel) ? settings.denoiseModel : 'jnlm';
+  const number = (key: keyof Settings, min: number, max: number, integer = false) => {
+    const value = settings[key];
+    if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_SETTINGS[key] as number;
+    const clamped = Math.min(max, Math.max(min, value));
+    return integer ? Math.round(clamped) : clamped;
+  };
   return {
     ...settings,
     toneMapping: allowed.includes(settings.toneMapping) ? settings.toneMapping : 'agx',
-    bvhBuilder: settings.bvhBuilder === 'builtin' ? 'builtin' : 'tinybvh'
+    bvhBuilder: settings.bvhBuilder === 'builtin' ? 'builtin' : 'tinybvh',
+    denoiseModel,
+    oidnModel: denoiseModel !== 'jnlm' ? denoiseModel : oidnModels.includes(settings.oidnModel) ? settings.oidnModel : 'standard',
+    oidnMaxTileSize: [0, 256, 512, 1024, 2048].includes(settings.oidnMaxTileSize) ? settings.oidnMaxTileSize : 0,
+    jnlmStrength: number('jnlmStrength', 0.1, 3),
+    jnlmSearchRadius: number('jnlmSearchRadius', 1, 16, true),
+    jnlmPatchRadius: number('jnlmPatchRadius', 0, 3, true),
+    jnlmAlbedoBandwidth: number('jnlmAlbedoBandwidth', 0.0001, 10),
+    jnlmNormalBandwidth: number('jnlmNormalBandwidth', 0.0001, 10),
+    jnlmIterations: number('jnlmIterations', 1, 4, true)
   };
 }
 
@@ -262,7 +300,7 @@ export const useViewer = create<ViewerState>(() => ({
 }));
 
 export function setSettings(patch: Partial<Settings>) {
-  useViewer.setState((s) => ({ settings: { ...s.settings, ...patch } }));
+  useViewer.setState((s) => ({ settings: validateSettings({ ...s.settings, ...patch }) }));
 }
 
 export function setUi(patch: Partial<ViewerState['ui']>) {

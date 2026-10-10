@@ -3,6 +3,11 @@ import { constants, Renderer, Texture2D } from './webgl.js';
 import { WebGLFullQuadPass } from './WebGLFullQuadPass.js';
 import {
   JNLM_DEFAULT_COLOR_SENSITIVITY,
+  JNLM_ALBEDO_FLOOR,
+  JNLM_ALBEDO_REGULARIZATION,
+  JNLM_DEFAULT_SHAPE,
+  JNLM_COVERAGE_BANDWIDTH,
+  JNLM_MAX_ITERATIONS,
   jnlmPassDilation,
   type JNLMFilterShape
 } from './jnlm.js';
@@ -86,10 +91,10 @@ const filterFragment = new FragmentShader({
   name: 'jnlmFilter',
   outputs: ['color', 'guide'],
   defines: {
-    SEARCH_RADIUS: 5,
-    PATCH_RADIUS: 2,
-    INV_ALBEDO_BANDWIDTH2: '100.0',
-    INV_NORMAL_BANDWIDTH2: '25.0'
+    SEARCH_RADIUS: JNLM_DEFAULT_SHAPE.searchRadius,
+    PATCH_RADIUS: JNLM_DEFAULT_SHAPE.patchRadius,
+    INV_ALBEDO_BANDWIDTH2: (1 / JNLM_DEFAULT_SHAPE.albedoBandwidth ** 2).toFixed(6),
+    INV_NORMAL_BANDWIDTH2: (1 / JNLM_DEFAULT_SHAPE.normalBandwidth ** 2).toFixed(6)
   },
   uniforms: {
     guideTex: Shader.uniform('sampler2D'),
@@ -109,6 +114,7 @@ const filterFragment = new FragmentShader({
 // Lower bound of the center weight, so a pixel unlike all of its neighbors
 // (a thin highlight) is kept rather than replaced by them.
 #define CENTER_WEIGHT_MIN 0.01
+#define INV_COVERAGE_BANDWIDTH2 ${(1 / JNLM_COVERAGE_BANDWIDTH ** 2).toFixed(6)}
 
 ivec2 imageSize;
 
@@ -124,10 +130,16 @@ vec4 loadColor(ivec2 p) {
 }
 
 float featureDistance(ivec2 q, vec4 centerAlbedo, vec3 centerNormal) {
-  vec4 albedoDelta = texelFetch(albedoTex, q, 0) - centerAlbedo;
+  vec4 albedo = texelFetch(albedoTex, q, 0);
+  // Match WebGPU: protect relative RGB contrast, including dark textures,
+  // while keeping coverage differences in absolute units.
+  vec3 albedoScale = max((albedo.rgb + centerAlbedo.rgb) * 0.5, vec3(${JNLM_ALBEDO_FLOOR}));
+  vec3 albedoDelta = (albedo.rgb - centerAlbedo.rgb) / albedoScale;
+  float coverageDelta = albedo.a - centerAlbedo.a;
   vec3 normalDelta = texelFetch(normalTex, q, 0).rgb - centerNormal;
   return max(
-    dot(albedoDelta, albedoDelta) * INV_ALBEDO_BANDWIDTH2,
+    dot(albedoDelta, albedoDelta) * INV_ALBEDO_BANDWIDTH2
+      + coverageDelta * coverageDelta * INV_COVERAGE_BANDWIDTH2,
     dot(normalDelta, normalDelta) * INV_NORMAL_BANDWIDTH2
   );
 }
@@ -160,6 +172,10 @@ void main() {
   float k2 = colorSensitivity * colorSensitivity;
 
   vec4 sum = vec4(0.0);
+  vec3 featureScale = max(centerAlbedo.rgb, vec3(${JNLM_ALBEDO_FLOOR}));
+  vec3 featureSum = vec3(0.0);
+  vec3 featureSquareSum = vec3(0.0);
+  vec3 featureColorSum = vec3(0.0);
   float guideSum = 0.0;
   float guideVarianceSum = 0.0;
   float weightSum = 0.0;
@@ -192,7 +208,12 @@ void main() {
       float weight = exp(-max(max(colorDistance, 0.0), features));
       vec2 g = loadGuide(q);
       // Filter premultiplied color so coverage and color stay consistent.
-      sum += loadColor(q) * weight;
+      vec3 a = (texelFetch(albedoTex, q, 0).rgb - centerAlbedo.rgb) / featureScale;
+      vec4 value = loadColor(q);
+      sum += value * weight;
+      featureSum += a * weight;
+      featureSquareSum += a * a * weight;
+      featureColorSum += a * value.rgb * weight;
       guideSum += g.x * weight;
       guideVarianceSum += g.y * weight * weight;
       weightSum += weight;
@@ -206,7 +227,20 @@ void main() {
   vec2 centerGuide = loadGuide(p);
   float centerWeight = max(maxWeight, CENTER_WEIGHT_MIN);
   float totalWeight = weightSum + centerWeight;
-  vec4 filtered = max(sum + center * centerWeight, vec4(0.0)) / totalWeight;
+  vec4 mean = (sum + center * centerWeight) / totalWeight;
+  // Fit each color channel against relative albedo with the same JNLM weights.
+  // Centering at this pixel avoids cancellation when the feature is constant.
+  vec3 meanFeature = featureSum / totalWeight;
+  vec3 featureVariance = max(featureSquareSum / totalWeight - meanFeature * meanFeature, vec3(0.0));
+  vec3 covariance = featureColorSum / totalWeight - meanFeature * mean.rgb;
+  // A 1% contrast ridge stabilizes flat guides. Bound the response between no
+  // texture dependence and multiplicative albedo modulation; specular color
+  // with an unrelated albedo falls back to the weighted mean.
+  vec3 meanAlbedo = centerAlbedo.rgb + meanFeature * featureScale;
+  vec3 maximumSlope = mean.rgb * featureScale / max(meanAlbedo, vec3(${JNLM_ALBEDO_FLOOR}));
+  vec3 slope = clamp(covariance / (featureVariance + vec3(${JNLM_ALBEDO_REGULARIZATION})), vec3(0.0), maximumSlope);
+  vec3 corrected = mean.rgb - slope * meanFeature;
+  vec4 filtered = vec4(max(corrected, vec3(0.0)), max(mean.a, 0.0));
   vec3 rgb = filtered.a > 1e-6
     ? filtered.rgb / max(filtered.a, 1e-6)
     : center.rgb / max(center.a, 1e-6);
@@ -288,14 +322,15 @@ export class WebGLJNLMDenoisePass {
     this._variancePass.createPass({ rawGuideTex: this._guidePass.getOutput('guide') });
 
     const sensitivity = JNLM_DEFAULT_COLOR_SENSITIVITY * Math.max(inputs.strength, 1e-3);
-    const iterations = Math.max(1, Math.round(shape.iterations));
+    const iterations = Math.min(JNLM_MAX_ITERATIONS, Math.max(1, Math.round(shape.iterations)));
     let guide = this._variancePass.getOutput('guide');
     let color = inputs.color;
     for (let i = 0; i < iterations; i++) {
       const pass = this._filterPasses[i % 2];
       pass.setDefines({
         SEARCH_RADIUS: shape.searchRadius,
-        PATCH_RADIUS: shape.patchRadius,
+        // Numeric zero removes a define in the WebGL shader builder.
+        PATCH_RADIUS: String(shape.patchRadius),
         INV_ALBEDO_BANDWIDTH2: (1 / shape.albedoBandwidth ** 2).toFixed(6),
         INV_NORMAL_BANDWIDTH2: (1 / shape.normalBandwidth ** 2).toFixed(6)
       });

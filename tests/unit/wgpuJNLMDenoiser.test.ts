@@ -18,7 +18,7 @@ describe('JNLM denoiser shaders', () => {
       jnlmGuideWGSL,
       jnlmVarianceWGSL,
       createJNLMFilterWGSL(),
-      createJNLMFilterWGSL({ ...JNLM_DEFAULT_SHAPE, patchRadius: 1, searchRadius: 7 })
+      createJNLMFilterWGSL({ ...JNLM_DEFAULT_SHAPE, patchRadius: 2, searchRadius: 7 })
     ]) {
       const definitions = makeShaderDataDefinitions(shader);
       expect(definitions.uniforms.params.size).toBe(16);

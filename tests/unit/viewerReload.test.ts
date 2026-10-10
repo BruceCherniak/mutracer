@@ -11,7 +11,8 @@ const cache = vi.hoisted(() => ({ model: null as CachedModel | null, read: vi.fn
 vi.mock('../../viewer/src/engine/modelCache', () => ({
   readModelCache: cache.read, saveModelCache: cache.save, clearModelCache: cache.clear
 }));
-vi.mock('mutracer', () => ({
+vi.mock('mutracer', async () => ({
+  DEFAULT_JNLM_OPTIONS: (await import('../../src/renderer/jnlm')).DEFAULT_JNLM_OPTIONS,
   Renderer: class {
     getSize() { return { width: 800, height: 600 }; }
     setSize() {}

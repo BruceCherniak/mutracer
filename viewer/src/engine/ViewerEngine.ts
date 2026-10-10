@@ -22,6 +22,7 @@ import {
 import { readMaterial, textureSlots, writeMaterial, type MaterialValues } from './materialParams';
 import { clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
 import { cameraSettings, readCameraState, writeCameraState } from './cameraState';
+import { DENOISER_FIELDS, getDenoiserOptions } from './denoiserSettings';
 
 interface MaterialEntry {
   name: string;
@@ -83,6 +84,7 @@ export class ViewerEngine {
   private exporting = false;
   private exportAbort: AbortController | null = null;
   private denoiserKey = '';
+  private denoiserUpdateTimer?: ReturnType<typeof setTimeout>;
   private backendKnown = false;
   private pointerDown: { x: number; y: number } | null = null;
   private readonly unsubscribe: () => void;
@@ -133,6 +135,7 @@ export class ViewerEngine {
   }
 
   dispose() {
+    clearTimeout(this.denoiserUpdateTimer);
     this.saveCamera();
     ++this.loadToken;
     ++this.envToken;
@@ -476,7 +479,15 @@ export class ViewerEngine {
       this.camera.fov = s.fov;
       this.camera.updateProjectionMatrix();
     }
-    if (changed('denoise') || changed('denoiseModel') || changed('denoiseWhileConverging')) void this.updateDenoiser();
+    if (DENOISER_FIELDS.some(changed)) {
+      clearTimeout(this.denoiserUpdateTimer);
+      // Shape changes compile a filter shader. Apply the settled slider value.
+      if (prev && !changed('denoise') && !changed('denoiseModel')) {
+        this.denoiserUpdateTimer = setTimeout(() => void this.updateDenoiser(), 180);
+      } else {
+        void this.updateDenoiser();
+      }
+    }
     if (prev && (changed('envId') || changed('envResolution') || changed('envIntensity') || changed('envRotation') || changed('exposure') ||
       changed('toneMapping') || changed('background'))) {
       writeHash(s, get().model?.presetId ?? null);
@@ -485,19 +496,14 @@ export class ViewerEngine {
 
   private async updateDenoiser() {
     if (!this.backendKnown) return;
-    const s = this.settings;
-    const enabled = s.denoise;
-    // WebGL 2 only runs the built-in JNLM filter.
-    const model = this.renderer.isUsingWebGPU() ? s.denoiseModel : 'jnlm';
-    const key = enabled ? `${model}:${s.denoiseWhileConverging}` : 'off';
+    const options = getDenoiserOptions(this.settings, this.renderer.isUsingWebGPU(), OIDN_WEIGHTS);
+    const key = JSON.stringify(options);
     if (key === this.denoiserKey) return;
     this.denoiserKey = key;
     try {
-      const whileConverging = s.denoiseWhileConverging;
-      await this.renderer.setDenoiser(!enabled ? false : model === 'jnlm'
-        ? { type: 'jnlm', whileConverging }
-        : { type: 'oidn', model, whileConverging, weightsBaseUrl: OIDN_WEIGHTS });
+      await this.renderer.setDenoiser(options);
     } catch (error) {
+      if (this.denoiserKey !== key) return;
       this.denoiserKey = '';
       showToast(`Denoiser unavailable: ${(error as Error).message}`, 'error');
     }

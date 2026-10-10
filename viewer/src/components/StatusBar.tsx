@@ -1,4 +1,4 @@
-import { Check, Pause, Play, Sparkles, Zap } from 'lucide-react';
+import { Check, Pause, Play } from 'lucide-react';
 import { setSettings, useViewer, type RenderPhase } from '../store';
 import { Select } from './ui/controls';
 
@@ -98,32 +98,31 @@ export function StatusBar() {
         }))}
         onChange={(v) => setSettings({ resolutionScale: Number(v) })}
       />
-      <button
-        type="button"
-        role="switch"
-        className="switch-field dock__toggle"
-        aria-label="Denoise"
-        aria-checked={denoise}
+      <label
+        className="dock__toggle"
         data-selected={denoise || undefined}
         title="Denoise (D)"
-        onClick={() => setSettings({ denoise: !settings.denoise })}
       >
-        <Sparkles size={13} aria-hidden="true" /><span className="dock__label">Denoise</span>
-        <span className="switch" aria-hidden="true"><i /></span>
-      </button>
-      {denoise && <button
-        type="button"
-        role="switch"
-        className="switch-field dock__toggle dock__toggle--converging"
-        aria-label="Live denoise"
-        aria-checked={settings.denoiseWhileConverging}
+        <input
+          type="checkbox"
+          checked={denoise}
+          onChange={(e) => setSettings({ denoise: e.currentTarget.checked })}
+        />
+        <span className="dock__label">Denoise</span>
+      </label>
+      {denoise && <label
+        className="dock__toggle"
         data-selected={settings.denoiseWhileConverging || undefined}
         title="Denoise while converging: previews and every few samples, not only the final image"
-        onClick={() => setSettings({ denoiseWhileConverging: !settings.denoiseWhileConverging })}
       >
-        <Zap size={13} aria-hidden="true" /><span className="dock__label">Live</span>
-        <span className="switch" aria-hidden="true"><i /></span>
-      </button>}
+        <input
+          type="checkbox"
+          aria-label="Live denoise"
+          checked={settings.denoiseWhileConverging}
+          onChange={(e) => setSettings({ denoiseWhileConverging: e.currentTarget.checked })}
+        />
+        <span className="dock__label">Live</span>
+      </label>}
     </div>
   );
 }

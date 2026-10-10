@@ -22,7 +22,8 @@ import type { OIDNDenoiser, OIDNModel } from './oidn.js';
 import {
   createJNLMDenoiser,
   isJNLMDenoiser,
-  type JNLMDenoiser
+  type JNLMDenoiser,
+  type JNLMOptions
 } from './renderer/jnlm.js';
 import { meshNeedsPrecompute } from './util/workerHelper.js';
 import makeWGPURenderingPipeline, {
@@ -45,17 +46,12 @@ export type BVHBuilder = 'tinybvh' | 'builtin';
 export type DenoiserType = 'oidn' | 'jnlm';
 
 /** Options for {@link Renderer.setDenoiser}. */
-export interface DenoiserOptions {
+export interface DenoiserOptions extends JNLMOptions {
   /**
    * Denoiser implementation. Default `'jnlm'`, or `'oidn'` when `model` or
    * `weightsBaseUrl` is given.
    */
   type?: DenoiserType;
-  /**
-   * Filter strength of the `'jnlm'` denoiser, a positive number. Larger
-   * values remove more noise and more detail. Default `1`.
-   */
-  strength?: number;
   /**
    * OIDN network (`'oidn'` only). `standard` (default) balances quality and speed, `small`
    * is fastest, `cleanAuxLarge` prefilters the albedo/normal guides and gives
@@ -648,6 +644,11 @@ export default class Renderer {
         ? 'oidn'
         : 'jnlm',
       strength = 1,
+      searchRadius,
+      patchRadius,
+      albedoBandwidth,
+      normalBandwidth,
+      iterations,
       ...loadOptions
     } = options === true ? {} : options;
     validateSampleInterval(sampleInterval);
@@ -655,8 +656,7 @@ export default class Renderer {
     let denoiser: OIDNDenoiser | JNLMDenoiser;
     let previewDenoiser: OIDNDenoiser | undefined;
     if (type === 'jnlm') {
-      if (!(strength > 0)) throw new Error('strength must be positive');
-      denoiser = createJNLMDenoiser(strength);
+      denoiser = createJNLMDenoiser({ strength, searchRadius, patchRadius, albedoBandwidth, normalBandwidth, iterations });
     } else {
       const { initializeOIDN } = await loadOIDNModule();
       [denoiser, previewDenoiser] = await Promise.all([

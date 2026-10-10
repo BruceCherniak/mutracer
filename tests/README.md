@@ -15,4 +15,10 @@ quality. Check GPU output separately by rendering the examples, or a fixed
 scene with a fixed sample count, before and after a change (see
 [`AGENTS.md`](../AGENTS.md#checks)).
 
+`npm run dev` also serves [`gpu/jnlm.html`](./gpu/jnlm.html). Open
+`http://localhost:3001/tests/gpu/jnlm.html` in a browser with a real WebGPU
+adapter. It runs the actual WebGPU and WebGL 2 denoising passes on deterministic
+fixtures, checking noise reduction, bright and dark texture contrast, normal
+detail, and coverage edges. These tests are separate from the Node test suite.
+
 Use small generated fixtures; do not commit models or images for tests.
