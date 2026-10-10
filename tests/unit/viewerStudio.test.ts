@@ -40,4 +40,14 @@ describe('viewer studio rigs', () => {
     const irradiance = (light: THREE.RectAreaLight) => light.intensity * light.width * light.height / light.position.lengthSq();
     expect(irradiance(key) / irradiance(fill)).toBeCloseTo(4, 5);
   });
+
+  it('keeps exposure when panels are resized', () => {
+    const sphere = new THREE.Sphere(new THREE.Vector3(0, 1, 0), 1);
+    const base = buildStudioRig(STUDIO_PRESETS[0], sphere, 1, 0);
+    const soft = buildStudioRig(STUDIO_PRESETS[0], sphere, 1, 0, 2);
+    soft.forEach((light, i) => {
+      expect(light.width).toBeCloseTo(base[i].width * 2);
+      expect(light.intensity * light.width * light.height).toBeCloseTo(base[i].intensity * base[i].width * base[i].height);
+    });
+  });
 });

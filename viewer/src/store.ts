@@ -15,8 +15,12 @@ export interface Settings {
   /** Scales every studio light; `1` is the preset as designed. */
   studioIntensity: number;
   studioRotation: number;
+  /** Scales every panel; radiance compensates so exposure stays the same. */
+  studioSize: number;
   /** Radiance of the dim ambient fill around the rig. */
   studioAmbient: number;
+  /** Tint of the ambient fill and the studio backdrop. */
+  studioAmbientColor: string;
   envId: string;
   envIntensity: number;
   envRotation: number;
@@ -78,6 +82,8 @@ export const DEFAULT_SETTINGS: Settings = {
   studioIntensity: 1,
   studioRotation: 0,
   studioAmbient: 0.1,
+  studioAmbientColor: '#ffffff',
+  studioSize: 1,
   envId: 'studio_small_09',
   envIntensity: 1,
   envRotation: 0,
@@ -233,7 +239,7 @@ function writeStorage(key: string, value: unknown) {
 
 /** Shareable settings in the URL hash. */
 const HASH_FIELDS: (keyof Settings)[] = [
-  'lighting', 'studioPreset', 'studioIntensity', 'studioRotation', 'studioAmbient', 'envId', 'envResolution', 'envIntensity', 'envRotation', 'exposure', 'toneMapping', 'background'
+  'lighting', 'studioPreset', 'studioIntensity', 'studioRotation', 'studioSize', 'studioAmbient', 'studioAmbientColor', 'envId', 'envResolution', 'envIntensity', 'envRotation', 'exposure', 'toneMapping', 'background'
 ];
 
 function readHash(): Partial<Settings> {
@@ -275,6 +281,8 @@ function validateSettings(settings: Settings): Settings {
     studioPreset: STUDIO_PRESETS.some((p) => p.id === settings.studioPreset) ? settings.studioPreset : DEFAULT_SETTINGS.studioPreset,
     studioIntensity: number('studioIntensity', 0, 20),
     studioAmbient: number('studioAmbient', 0, 2),
+    studioSize: number('studioSize', 0.1, 4),
+    studioAmbientColor: /^#[0-9a-f]{6}$/i.test(settings.studioAmbientColor) ? settings.studioAmbientColor : DEFAULT_SETTINGS.studioAmbientColor,
     toneMapping: allowed.includes(settings.toneMapping) ? settings.toneMapping : 'agx',
     bvhBuilder: settings.bvhBuilder === 'builtin' ? 'builtin' : 'tinybvh',
     denoiseModel,

@@ -157,16 +157,20 @@ function StudioSection() {
             title={p.tag}
             onClick={() => setSettings({ studioPreset: p.id })}
           >
-            <StudioDiagram preset={p} rotation={s.studioRotation} />
+            <StudioDiagram preset={p} rotation={s.studioRotation} size={s.studioSize} />
             <span><strong>{p.name}</strong><small>{p.tag}</small></span>
           </button>
         ))}
       </div>
       <Scrub label="Intensity" value={s.studioIntensity} min={0} max={4} step={0.01} onChange={(v) => setSettings({ studioIntensity: v })} />
       <Scrub label="Rotation" value={s.studioRotation} min={-180} max={180} step={1} unit="°" onChange={(v) => setSettings({ studioRotation: v })} />
+      <Scrub label="Size" value={s.studioSize} min={0.25} max={3} step={0.01} unit="×"
+        title="Panel size: larger panels give softer shadows and highlights at the same exposure"
+        onChange={(v) => setSettings({ studioSize: v })} />
       <Scrub label="Ambient" value={s.studioAmbient} min={0} max={1} step={0.01}
-        title="Dim fill from the studio walls and ceiling" onChange={(v) => setSettings({ studioAmbient: v })} />
-      <Hint>Rect-light softboxes placed around the model and scaled to its size. The front faces +Z, where the camera starts.</Hint>
+        title="Fill from the studio walls and ceiling" onChange={(v) => setSettings({ studioAmbient: v })} />
+      <ColorField label="Ambient color" value={s.studioAmbientColor} onChange={(hex) => setSettings({ studioAmbientColor: hex })} />
+      <Hint>Softboxes placed around the model and scaled to its size; the front faces +Z, where the camera starts. The ambient fill is the studio's walls: it softens shadows and is the Studio background.</Hint>
     </Section>
   );
 }
@@ -180,23 +184,23 @@ const OVERHEAD_ELEVATION = 60;
  * strength follows the light's power. Low lights sit on an outer ring so a
  * clamshell's two panels stay apart.
  */
-function StudioDiagram({ preset, rotation }: { preset: StudioPreset; rotation: number }) {
+function StudioDiagram({ preset, rotation, size }: { preset: StudioPreset; rotation: number; size: number }) {
   const id = useId();
   const side = preset.lights.filter((light) => light.elevation <= OVERHEAD_ELEVATION);
   const overhead = preset.lights.filter((light) => light.elevation > OVERHEAD_ELEVATION);
   return (
-    <svg className="studio-plan" viewBox="-1.1 -0.9 2.2 1.92" aria-hidden="true">
+    <svg className="studio-plan" viewBox="-1.1 -0.9 2.2 2.04" aria-hidden="true">
       <defs>
         <radialGradient id={`${id}-halo`}>
           <stop offset="0" stopColor="#fff3dc" stopOpacity="0.55" />
           <stop offset="1" stopColor="#fff3dc" stopOpacity="0" />
         </radialGradient>
       </defs>
-      <path d="M0 0.88 L-0.26 0.2 A0.66 0.66 0 0 1 0.26 0.2 Z" className="studio-plan__view" />
+      <path d="M0 0.86 L-0.27 0.2 A0.66 0.66 0 0 1 0.27 0.2 Z" className="studio-plan__view" />
       {side.map((light, i) => {
         const azimuth = ((light.azimuth + rotation) * Math.PI) / 180;
         const radius = light.elevation < 0 ? 0.74 : 0.6;
-        const length = Math.min(0.46, Math.max(0.16, light.width * 0.17));
+        const length = Math.min(0.9, Math.max(0.06, light.width * size * 0.17));
         const strength = Math.min(1, light.power);
         const angle = (-azimuth * 180) / Math.PI;
         return (
@@ -212,13 +216,20 @@ function StudioDiagram({ preset, rotation }: { preset: StudioPreset; rotation: n
         );
       })}
       <circle r="0.15" className="studio-plan__subject" />
-      {overhead.map((light) => (
-        <g key={light.name}>
-          <circle r="0.34" fill={`url(#${id}-halo)`} style={{ opacity: 0.4 + 0.6 * Math.min(1, light.power) }} />
-          <rect x="-0.2" y="-0.14" width="0.4" height="0.28" rx="0.04" className="studio-plan__overhead" />
-        </g>
-      ))}
-      <path d="M-0.08 0.9 h0.16 v0.1 h-0.16 Z M-0.035 0.9 l0.035 -0.045 l0.035 0.045 Z" className="studio-plan__camera" />
+      {overhead.map((light) => {
+        const w = Math.min(1.2, Math.max(0.08, light.width * size * 0.14));
+        const h = Math.min(1.2, Math.max(0.06, light.height * size * 0.14));
+        return (
+          <g key={light.name}>
+            <circle r={Math.max(w, h) * 0.85 + 0.08} fill={`url(#${id}-halo)`} style={{ opacity: 0.4 + 0.6 * Math.min(1, light.power) }} />
+            <rect x={-w / 2} y={-h / 2} width={w} height={h} rx="0.04" className="studio-plan__overhead" />
+          </g>
+        );
+      })}
+      <g className="studio-plan__camera" transform="translate(0 0.95)">
+        <rect x="-0.15" y="-0.03" width="0.3" height="0.17" rx="0.035" />
+        <rect x="-0.075" y="-0.1" width="0.15" height="0.08" rx="0.015" />
+      </g>
     </svg>
   );
 }

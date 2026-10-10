@@ -90,6 +90,7 @@ export class Environment {
   private source: EquirectData;
   private intensity = 1;
   private rotation = 0;
+  private tint: [number, number, number] = [1, 1, 1];
 
   constructor(source: EquirectData) {
     this.source = source;
@@ -116,10 +117,12 @@ export class Environment {
     this.bake();
   }
 
-  set(intensity: number, rotationDegrees: number) {
-    if (intensity === this.intensity && rotationDegrees === this.rotation) return;
+  /** `tint` is a linear RGB multiplier. */
+  set(intensity: number, rotationDegrees: number, tint: [number, number, number] = [1, 1, 1]) {
+    if (intensity === this.intensity && rotationDegrees === this.rotation && tint.every((c, i) => c === this.tint[i])) return;
     this.intensity = intensity;
     this.rotation = rotationDegrees;
+    this.tint = tint;
     this.bake();
   }
 
@@ -127,15 +130,15 @@ export class Environment {
     const { data: src, width, height } = this.source;
     const dst = (this.texture.image as EquirectData).data;
     const shift = Math.round((((this.rotation % 360) + 360) % 360) / 360 * width) % width;
-    const k = this.intensity;
+    const [kr, kg, kb] = this.tint.map((c) => c * this.intensity);
     for (let row = 0; row < height; row++) {
       const rowOffset = row * width;
       for (let col = 0; col < width; col++) {
         const s = (rowOffset + ((col + shift) % width)) * 4;
         const d = (rowOffset + col) * 4;
-        dst[d] = src[s] * k;
-        dst[d + 1] = src[s + 1] * k;
-        dst[d + 2] = src[s + 2] * k;
+        dst[d] = src[s] * kr;
+        dst[d + 1] = src[s + 1] * kg;
+        dst[d + 2] = src[s + 2] * kb;
         dst[d + 3] = 1;
       }
     }

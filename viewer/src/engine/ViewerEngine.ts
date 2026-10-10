@@ -445,13 +445,13 @@ export class ViewerEngine {
 
   /** Rebuilds the studio rect lights around the current model. */
   private applyStudioRig() {
-    const { studioPreset, studioIntensity, studioRotation } = this.settings;
+    const { studioPreset, studioIntensity, studioRotation, studioSize } = this.settings;
     const sphere = this.modelBounds().getBoundingSphere(new THREE.Sphere());
     for (const light of [...this.studioRig.children]) {
       this.studioRig.remove(light);
       (light as THREE.RectAreaLight).dispose();
     }
-    const lights = buildStudioRig(findStudioPreset(studioPreset), sphere, studioIntensity, studioRotation);
+    const lights = buildStudioRig(findStudioPreset(studioPreset), sphere, studioIntensity, studioRotation, studioSize);
     if (lights.length) this.studioRig.add(...lights);
   }
 
@@ -497,8 +497,12 @@ export class ViewerEngine {
 
     if ((changed('envId') || changed('envResolution')) && s.envId !== 'custom') void this.applyEnvironmentPreset(s.envId);
     if (changed('envIntensity') || changed('envRotation')) this.environment.set(s.envIntensity, s.envRotation);
-    if (changed('studioPreset') || changed('studioIntensity') || changed('studioRotation')) this.applyStudioRig();
-    if (changed('studioAmbient')) this.studioAmbient.set(s.studioAmbient, 0);
+    if (changed('studioPreset') || changed('studioIntensity') || changed('studioRotation') || changed('studioSize')) this.applyStudioRig();
+    if (changed('studioAmbient') || changed('studioAmbientColor')) {
+      // THREE.Color converts the sRGB hex to linear RGB.
+      const tint = new THREE.Color(s.studioAmbientColor);
+      this.studioAmbient.set(s.studioAmbient, 0, [tint.r, tint.g, tint.b]);
+    }
     if (changed('lighting') || changed('background') || changed('backgroundColor') || changed('groundedHeight') ||
       changed('groundedRadius')) this.applyBackground();
     if (changed('resolutionScale') || changed('cameraIndex')) this.needsResize = true;
@@ -516,7 +520,7 @@ export class ViewerEngine {
       }
     }
     if (prev && (changed('lighting') || changed('studioPreset') || changed('studioIntensity') || changed('studioRotation') ||
-      changed('studioAmbient') || changed('envId') || changed('envResolution') || changed('envIntensity') || changed('envRotation') || changed('exposure') ||
+      changed('studioSize') || changed('studioAmbient') || changed('studioAmbientColor') || changed('envId') || changed('envResolution') || changed('envIntensity') || changed('envRotation') || changed('exposure') ||
       changed('toneMapping') || changed('background'))) {
       writeHash(s, get().model?.presetId ?? null);
     }
