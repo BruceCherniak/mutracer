@@ -21,8 +21,10 @@ TinyBVH acceleration and Intel Open Image Denoise built in.
 
 ## Install
 
+The quick-start example imports `gl-matrix` directly; install it alongside MuTracer:
+
 ```bash
-npm install mutracer
+npm install mutracer gl-matrix
 ```
 
 Add `three` only if you use the Three.js helpers:
