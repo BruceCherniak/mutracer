@@ -23,6 +23,7 @@ import { readMaterial, textureSlots, writeMaterial, type MaterialValues } from '
 import { clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
 import { cameraSettings, readCameraState, writeCameraState } from './cameraState';
 import { DENOISER_FIELDS, getDenoiserOptions } from './denoiserSettings';
+import { buildStudioRig, createStudioAmbient, findStudioPreset } from './studio';
 
 interface MaterialEntry {
   name: string;
@@ -59,6 +60,8 @@ export class ViewerEngine {
   private readonly ground: THREE.Mesh;
   private readonly modelGroup = new THREE.Group();
   private readonly environment = new Environment(createSky());
+  private readonly studioAmbient = new Environment(createStudioAmbient());
+  private readonly studioRig = new THREE.Group();
   private sync: THREESceneSync;
   private model: LoadedModel | null = null;
   private modelCameras: THREE.PerspectiveCamera[] = [];
@@ -96,6 +99,8 @@ export class ViewerEngine {
     this.renderer = new Renderer({ canvas, preferWebGPU: !new URLSearchParams(location.search).has('webgl') });
 
     this.scene.add(this.modelGroup);
+    this.studioRig.name = 'Studio lights';
+    this.scene.add(this.studioRig);
     this.scene.environment = this.environment.texture;
     const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x808080, roughness: 1 });
     groundMaterial.userData.mutracerShadowCatcher = true;
@@ -149,6 +154,7 @@ export class ViewerEngine {
     this.clearModel();
     this.sync.dispose();
     this.environment.dispose();
+    this.studioAmbient.dispose();
     this.renderer.dispose();
   }
 
@@ -277,6 +283,7 @@ export class ViewerEngine {
     const radius = Math.max(this.modelBounds().getBoundingSphere(new THREE.Sphere()).radius, 1e-3);
     this.ground.scale.setScalar(radius * 12);
     this.modelRadius = radius;
+    this.applyStudioRig();
     this.applyBackground();
 
     this.modelCameras = [];
@@ -412,23 +419,40 @@ export class ViewerEngine {
     this.envToken++;
     set({ envLoading: null });
     this.environment.setSource(data);
-    this.scene.environment = this.environment.texture;
     this.applyBackground();
     if (get().settings.envId !== id) useViewer.setState((s) => ({ settings: { ...s.settings, envId: id } }));
   }
 
+  /** Also selects the lighting: studio mode swaps the HDRI for a dim ambient fill. */
   private applyBackground() {
-    const { background, backgroundColor, groundedHeight, groundedRadius } = this.settings;
+    const { background, backgroundColor, groundedHeight, groundedRadius, lighting } = this.settings;
+    const studio = lighting === 'studio';
+    const environment = studio ? this.studioAmbient.texture : this.environment.texture;
+    this.scene.environment = environment;
+    this.studioRig.visible = studio;
     this.scene.userData.mutracerHiddenBackground = background === 'transparent';
     // Projects the environment onto a ground disc and dome around the model.
-    this.scene.userData.mutracerGroundedSkybox = background === 'grounded' ? {
-      texture: this.environment.texture,
+    // The studio ambient is a plain gradient, so it is shown as a backdrop.
+    this.scene.userData.mutracerGroundedSkybox = background === 'grounded' && !studio ? {
+      texture: environment,
       height: groundedHeight * this.modelRadius,
       radius: groundedRadius * this.modelRadius,
       groundHeight: 0
     } : undefined;
-    this.scene.background = background === 'environment' || background === 'grounded' ? this.environment.texture
+    this.scene.background = background === 'environment' || background === 'grounded' ? environment
       : background === 'color' ? new THREE.Color(backgroundColor) : null;
+  }
+
+  /** Rebuilds the studio rect lights around the current model. */
+  private applyStudioRig() {
+    const { studioPreset, studioIntensity, studioRotation } = this.settings;
+    const sphere = this.modelBounds().getBoundingSphere(new THREE.Sphere());
+    for (const light of [...this.studioRig.children]) {
+      this.studioRig.remove(light);
+      (light as THREE.RectAreaLight).dispose();
+    }
+    const lights = buildStudioRig(findStudioPreset(studioPreset), sphere, studioIntensity, studioRotation);
+    if (lights.length) this.studioRig.add(...lights);
   }
 
   // ---------------------------------------------------------------- settings
@@ -473,7 +497,10 @@ export class ViewerEngine {
 
     if ((changed('envId') || changed('envResolution')) && s.envId !== 'custom') void this.applyEnvironmentPreset(s.envId);
     if (changed('envIntensity') || changed('envRotation')) this.environment.set(s.envIntensity, s.envRotation);
-    if (changed('background') || changed('backgroundColor') || changed('groundedHeight') || changed('groundedRadius')) this.applyBackground();
+    if (changed('studioPreset') || changed('studioIntensity') || changed('studioRotation')) this.applyStudioRig();
+    if (changed('studioAmbient')) this.studioAmbient.set(s.studioAmbient, 0);
+    if (changed('lighting') || changed('background') || changed('backgroundColor') || changed('groundedHeight') ||
+      changed('groundedRadius')) this.applyBackground();
     if (changed('resolutionScale') || changed('cameraIndex')) this.needsResize = true;
     if (changed('fov')) {
       this.camera.fov = s.fov;
@@ -488,7 +515,8 @@ export class ViewerEngine {
         void this.updateDenoiser();
       }
     }
-    if (prev && (changed('envId') || changed('envResolution') || changed('envIntensity') || changed('envRotation') || changed('exposure') ||
+    if (prev && (changed('lighting') || changed('studioPreset') || changed('studioIntensity') || changed('studioRotation') ||
+      changed('studioAmbient') || changed('envId') || changed('envResolution') || changed('envIntensity') || changed('envRotation') || changed('exposure') ||
       changed('toneMapping') || changed('background'))) {
       writeHash(s, get().model?.presetId ?? null);
     }

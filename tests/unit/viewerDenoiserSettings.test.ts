@@ -14,6 +14,14 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('viewer denoiser preferences', () => {
+  it('defaults to OIDN on WebGPU and falls back to JNLM on WebGL', async () => {
+    const { useViewer } = await import('../../viewer/src/store');
+    const settings = useViewer.getState().settings;
+    expect(settings).toMatchObject({ denoise: true, denoiseModel: 'standard', oidnModel: 'standard' });
+    expect(getDenoiserOptions(settings, true, '/weights/')).toMatchObject({ type: 'oidn', model: 'standard' });
+    expect(getDenoiserOptions(settings, false, '/weights/')).toMatchObject({ type: 'jnlm' });
+  });
+
   it('restores legacy OIDN models and remembers both configurations across reloads', async () => {
     values.set(renderKey, JSON.stringify({ denoiseModel: 'small' }));
     const { useViewer, setSettings } = await import('../../viewer/src/store');
@@ -30,7 +38,7 @@ describe('viewer denoiser preferences', () => {
   it('sanitizes invalid stored and edited denoiser values', async () => {
     values.set(renderKey, JSON.stringify({ denoiseModel: 'unknown', jnlmSearchRadius: 90, jnlmPatchRadius: -1, jnlmIterations: 2.3, jnlmNormalBandwidth: null }));
     const { useViewer, setSettings } = await import('../../viewer/src/store');
-    expect(useViewer.getState().settings).toMatchObject({ denoiseModel: 'jnlm', jnlmSearchRadius: 16, jnlmPatchRadius: 0, jnlmIterations: 2, jnlmNormalBandwidth: 0.05 });
+    expect(useViewer.getState().settings).toMatchObject({ denoiseModel: 'standard', jnlmSearchRadius: 16, jnlmPatchRadius: 0, jnlmIterations: 2, jnlmNormalBandwidth: 0.05 });
     setSettings({ jnlmStrength: NaN, jnlmAlbedoBandwidth: Infinity });
     expect(useViewer.getState().settings).toMatchObject({ jnlmStrength: 1, jnlmAlbedoBandwidth: 0.4 });
   });

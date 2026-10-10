@@ -7,7 +7,7 @@ import { RenderPanel } from './panels/RenderPanel';
 import { SceneTree } from './SceneTree';
 
 export const TABS: { id: InspectorTab; label: string; title: string; subtitle: string; Icon: typeof Globe }[] = [
-  { id: 'environment', label: 'Lighting', title: 'Lighting', subtitle: 'Environment map, background and ground', Icon: Globe },
+  { id: 'environment', label: 'Lighting', title: 'Lighting', subtitle: 'Environment or studio lights, background and ground', Icon: Globe },
   { id: 'material', label: 'Material', title: 'Material', subtitle: 'OpenPBR · edits apply instantly', Icon: Palette },
   { id: 'camera', label: 'Camera', title: 'Camera', subtitle: 'Drag to orbit, right-drag to pan, scroll to zoom', Icon: Camera },
   { id: 'render', label: 'Render', title: 'Render', subtitle: 'Path tracing quality and display', Icon: Aperture }

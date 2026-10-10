@@ -2,10 +2,21 @@ import { create } from 'zustand';
 import { DEFAULT_JNLM_OPTIONS } from 'mutracer';
 import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, RenderOutput } from 'mutracer';
 import type { MaterialValues } from './engine/materialParams';
+import { STUDIO_PRESETS } from './engine/studio';
 
 export type EnvResolution = '1k' | '2k' | '4k';
 
+export type LightingMode = 'environment' | 'studio';
+
 export interface Settings {
+  /** Image-based lighting from the HDRI, or rect-light studio rigs. */
+  lighting: LightingMode;
+  studioPreset: string;
+  /** Scales every studio light; `1` is the preset as designed. */
+  studioIntensity: number;
+  studioRotation: number;
+  /** Radiance of the dim ambient fill around the rig. */
+  studioAmbient: number;
   envId: string;
   envIntensity: number;
   envRotation: number;
@@ -62,6 +73,11 @@ export interface Settings {
 }
 
 export const DEFAULT_SETTINGS: Settings = {
+  lighting: 'environment',
+  studioPreset: 'three-point',
+  studioIntensity: 1,
+  studioRotation: 0,
+  studioAmbient: 0.1,
   envId: 'studio_small_09',
   envIntensity: 1,
   envRotation: 0,
@@ -80,7 +96,7 @@ export const DEFAULT_SETTINGS: Settings = {
   bvhBuilder: 'tinybvh',
   clamping: 0,
   denoise: true,
-  denoiseModel: 'jnlm',
+  denoiseModel: 'standard',
   denoiseWhileConverging: false,
   jnlmStrength: DEFAULT_JNLM_OPTIONS.strength,
   jnlmSearchRadius: DEFAULT_JNLM_OPTIONS.searchRadius,
@@ -216,7 +232,9 @@ function writeStorage(key: string, value: unknown) {
 }
 
 /** Shareable settings in the URL hash. */
-const HASH_FIELDS: (keyof Settings)[] = ['envId', 'envResolution', 'envIntensity', 'envRotation', 'exposure', 'toneMapping', 'background'];
+const HASH_FIELDS: (keyof Settings)[] = [
+  'lighting', 'studioPreset', 'studioIntensity', 'studioRotation', 'studioAmbient', 'envId', 'envResolution', 'envIntensity', 'envRotation', 'exposure', 'toneMapping', 'background'
+];
 
 function readHash(): Partial<Settings> {
   const params = new URLSearchParams(location.hash.slice(1));
@@ -244,7 +262,7 @@ export const hashModelPreset = () => new URLSearchParams(location.hash.slice(1))
 function validateSettings(settings: Settings): Settings {
   const allowed: ToneMapping[] = ['agx', 'aces', 'cineon', 'reinhard', 'linear'];
   const oidnModels: OIDNModel[] = ['standard', 'small', 'cleanAuxLarge'];
-  const denoiseModel = settings.denoiseModel === 'jnlm' || oidnModels.includes(settings.denoiseModel) ? settings.denoiseModel : 'jnlm';
+  const denoiseModel = settings.denoiseModel === 'jnlm' || oidnModels.includes(settings.denoiseModel) ? settings.denoiseModel : DEFAULT_SETTINGS.denoiseModel;
   const number = (key: keyof Settings, min: number, max: number, integer = false) => {
     const value = settings[key];
     if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_SETTINGS[key] as number;
@@ -253,6 +271,10 @@ function validateSettings(settings: Settings): Settings {
   };
   return {
     ...settings,
+    lighting: settings.lighting === 'studio' ? 'studio' : 'environment',
+    studioPreset: STUDIO_PRESETS.some((p) => p.id === settings.studioPreset) ? settings.studioPreset : DEFAULT_SETTINGS.studioPreset,
+    studioIntensity: number('studioIntensity', 0, 20),
+    studioAmbient: number('studioAmbient', 0, 2),
     toneMapping: allowed.includes(settings.toneMapping) ? settings.toneMapping : 'agx',
     bvhBuilder: settings.bvhBuilder === 'builtin' ? 'builtin' : 'tinybvh',
     denoiseModel,

@@ -17,7 +17,8 @@ npm run typecheck:viewer
 ```
 
 Add `?webgl` to force the WebGL 2 backend. The URL hash keeps the example
-model, environment and its resolution, exposure and tone mapping, so a view can be shared.
+model, lighting (environment or studio preset), exposure and tone mapping, so a
+view can be shared.
 
 ## Deployment
 
@@ -33,6 +34,8 @@ src/
   engine/loadModel.ts      GLTFLoader for URLs, files and dropped folders;
                            the procedural material-sphere scene
   engine/environment.ts    Procedural sky, HDR loading, baked intensity/rotation
+  engine/studio.ts         Studio lighting presets: rect-light rigs scaled to
+                           the model, and their dim ambient fill
   engine/materialParams.ts Material panel schema, presets, color conversion
   engine/presets.ts        Example models and HDRIs with licenses
   assets/thumbnails/       Example and material preset thumbnails
@@ -64,6 +67,9 @@ Notes:
   target and lens settings are saved locally for the current model and restored
   after loading, including the selected glTF camera. Unavailable/full storage
   does not prevent opening models.
+- Denoising defaults to OIDN on WebGPU and falls back to JNLM on WebGL 2.
+  Switch between OIDN and JNLM in the bottom dock or the Render tab; each keeps
+  its parameters, and the selected filter is saved across reloads.
 - OIDN weights are loaded from `/oidn/weights/` at the server root via an explicit
   weightsBaseUrl, sharing all five local networks. Development serves the
   repository's `oidn/weights/` there, `build:viewer` emits them at the root of

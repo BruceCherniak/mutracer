@@ -54,6 +54,7 @@ export function StatusBar() {
   const settings = useViewer((s) => s.settings);
   const paused = useViewer((s) => s.paused);
   const playing = useViewer((s) => s.animation?.playing ?? false);
+  const webgl = useViewer((s) => s.backend.name === 'WebGL 2');
   const { phase, samples, elapsed, msPerSample, width, height } = stats;
   const { maxSamples, resolutionScale } = settings;
   const progress = Math.min(1, samples / maxSamples);
@@ -110,6 +111,15 @@ export function StatusBar() {
         />
         <span className="dock__label">Denoise</span>
       </label>
+      {denoise && <Select
+        label="Denoiser type"
+        value={webgl || settings.denoiseModel === 'jnlm' ? 'jnlm' : 'oidn'}
+        options={[
+          { value: 'oidn', label: 'OIDN', disabled: webgl, hint: webgl ? 'Requires WebGPU' : undefined },
+          { value: 'jnlm', label: 'JNLM' }
+        ]}
+        onChange={(v) => setSettings({ denoiseModel: v === 'jnlm' ? 'jnlm' : settings.oidnModel })}
+      />}
       {denoise && <label
         className="dock__toggle"
         data-selected={settings.denoiseWhileConverging || undefined}
