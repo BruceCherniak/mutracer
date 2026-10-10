@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { buildBLAS, flattenBvh } from '../../src/renderer/bvhAccel';
+import { buildBLAS } from '../../src/renderer/bvhAccel';
 import { createCubeGeometry } from '../../src/util/commonGeometry';
 import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
@@ -9,7 +9,7 @@ import { precomputeTinyBvh } from '../../src/tinybvh/precomputeTinyBvh';
 vi.mock('../../src/tinybvh/TinyBvhBuilder', () => ({
   initializeTinyBvh: vi.fn(async () => undefined),
   buildTinyBvh: vi.fn((geometry, scale, displacement, layout) => ({
-    ...flattenBvh(buildBLAS(geometry, scale, displacement), false),
+    ...buildBLAS(geometry, scale, displacement),
     builder: 'tinybvh', layout
   }))
 }));

@@ -1,51 +1,17 @@
-// Create a bounding volume hierarchy of scene geometry
-// Uses the surface area heuristic (SAH) algorithm for efficient partitioning
-// http://www.pbr-book.org/3ed-2018/Primitives_and_Intersection_Acceleration/Bounding_Volume_Hierarchies.html
+// Bounding volume hierarchies of scene geometry (BLAS) and mesh instances
+// (TLAS), built with the binned SAH builder in ./binnedSahBvh and written
+// directly in the BVH2 layout read by the traversal shaders.
 
-import { partition, nthElement } from './bvhUtil';
 import Geometry, { Attribute } from '../scene/Geometry';
 import { mat4, vec3 } from '../math';
 import { Mat4Array } from '../math';
+import { buildBinnedSahBvh, layoutBvh2 } from './binnedSahBvh';
 
-// Cache the frequency used methods.
-// In case after build the access brought extra costs.
 const vec3Min = vec3.min;
 const vec3Max = vec3.max;
-const vec3Sub = vec3.sub;
 
-interface PrimitiveInfo {
-  center: vec3.Vec3Array;
-  bounds: Box3;
-  primitive: number;
-}
-
-interface BLASPrimitiveInfo extends PrimitiveInfo {
-  indices: vec3.Vec3Array;
-}
 export const INSTANCE_VEC4_STRIDE = 9;
 export const INSTANCE_WORD_STRIDE = INSTANCE_VEC4_STRIDE * 4;
-
-interface TLASPrimitiveInfo extends PrimitiveInfo {
-  sourceIndex: number;
-  transform: Mat4Array;
-  triangleOffset: number;
-  vertexOffset: number;
-  materialIndex: number;
-  displacementScale: number;
-  blasLayout: BvhLayout;
-}
-
-interface InteriorNode {
-  child0: InteriorNode | LeafNode;
-  child1: InteriorNode | LeafNode;
-  bounds: Box3;
-  splitAxis: 0 | 1 | 2;
-}
-
-interface LeafNode {
-  primitives: (BLASPrimitiveInfo | TLASPrimitiveInfo)[];
-  bounds: Box3;
-}
 
 export type BvhLayout = 'bvh2' | 'bvh4' | 'bvh-gpu' | 'cwbvh';
 
@@ -95,24 +61,6 @@ function unionBounds(bounds: Box3, a: Box3, b: Box3) {
   return bounds;
 }
 
-export function buildBLAS(
-  geometry: Pick<Geometry, 'position' | 'indices' | 'normal'>,
-  displacementScale: number,
-  trianglesDisplacement: Float32Array | undefined
-): InteriorNode | undefined {
-  if (!Attribute.getCount(geometry.position)) {
-    return undefined;
-  }
-  const primitiveInfo = makeBLASPrimitiveInfo(
-    geometry,
-    displacementScale,
-    trianglesDisplacement
-  );
-  const node = recursiveBuild(primitiveInfo, 0, primitiveInfo.length);
-
-  return node as InteriorNode;
-}
-
 export interface TLASInstance {
   blasIndex: number;
   bounds: Box3;
@@ -141,7 +89,7 @@ export interface TraversalStackSizes {
  * Sizes independent TLAS and BLAS stacks for the nested WebGPU traversal.
  * A TLAS leaf is consumed in place, so its instance fan-out no longer needs
  * pending stack entries. TinyBVH converted layouts store their exact stack
- * requirement in maxDepth; legacy BVH2 stores its tree depth.
+ * requirement in maxDepth; BVH2 stores its tree depth.
  */
 export function getTraversalStackSizes(
   tlas: FlattendBVH,
@@ -174,80 +122,6 @@ export function concatBLASBuffers(blases: BLASInstance[]): ArrayBuffer {
   return result.buffer;
 }
 
-export function buildTLAS(
-  instances: TLASInstance[],
-  blases: BLASInstance[]
-): InteriorNode | undefined {
-  if (!instances.length) {
-    return undefined;
-  }
-
-  let vertexOffset = 0;
-  let triangleOffset = 0;
-  let blasOffset = 0;
-  const blasOffsets: number[] = [];
-  const vertexOffsets: number[] = [];
-  const triangleOffsets: number[] = [];
-  const blasLayouts: BvhLayout[] = [];
-
-  blases.forEach((blas) => {
-    blasOffsets.push(blasOffset);
-    vertexOffsets.push(vertexOffset);
-    triangleOffsets.push(triangleOffset);
-    blasLayouts.push(blas.bvh.layout ?? 'bvh2');
-    blasOffset += blas.bvh.buffer.byteLength / 16;
-    vertexOffset += blas.verticesCount;
-    triangleOffset += blas.trainglesCount;
-  });
-
-  const primitives = instances.map(
-    (
-      { blasIndex, bounds, transform, materialsIndices, displacementScale },
-      i
-    ) => {
-      const center = vec3.create();
-      let min = vec3.clone(bounds.min);
-      let max = vec3.clone(bounds.max);
-      const scaleX = vec3.length(
-        vec3.fromValues(transform[0], transform[1], transform[2])
-      );
-      const scaleY = vec3.length(
-        vec3.fromValues(transform[4], transform[5], transform[6])
-      );
-      const scaleZ = vec3.length(
-        vec3.fromValues(transform[8], transform[9], transform[10])
-      );
-      if (displacementScale) {
-        let pad = vec3.fromValues(
-          Math.max(0.0, displacementScale * scaleX),
-          Math.max(0.0, displacementScale * scaleY),
-          Math.max(0.0, displacementScale * scaleZ)
-        );
-        vec3.sub(min, min, pad);
-        vec3.add(max, max, pad);
-      }
-      vec3.add(center, min, max);
-      vec3.scale(center, center, 0.5);
-      const ret = {
-        sourceIndex: i,
-        center,
-        bounds: { min, max },
-        primitive: blasOffsets[blasIndex],
-        transform,
-        vertexOffset: vertexOffsets[blasIndex],
-        triangleOffset: triangleOffsets[blasIndex],
-        materialIndex: materialsIndices[0] || 0,
-        displacementScale: displacementScale || 0,
-        blasLayout: blasLayouts[blasIndex]
-      } satisfies TLASPrimitiveInfo;
-      return ret;
-    }
-  );
-
-  const node = recursiveBuild(primitives, 0, primitives.length);
-  return node as InteriorNode;
-}
-
 function packH(minH: number, maxH: number): number {
   const roundedMinH = Math.min(Math.floor(minH * 255), 255);
   const roundedMaxH =
@@ -257,168 +131,272 @@ function packH(minH: number, maxH: number): number {
   return (roundedMinH << 8) + roundedMaxH;
 }
 
-// TODO Actually current structure is not fast when each leaf only have one primitive.
-// But it accelerated a lot for the result of https://github.com/madmann91/bvh
-// In which leaf may have multiple primitives.
-// Leaf topology is immutable between BLAS builds. Deduplicate shared triangle
-// corners once so deformation refits read each leaf's vertex only once.
-const blasRefitVertices = new WeakMap<ArrayBuffer, { offsets: Int32Array; vertices: Uint32Array; postorder: Int32Array }>();
-
-export function flattenBvh(
-  bvh: InteriorNode | undefined,
-  isTLAS: boolean,
-  trianglesDisplacement?: Float32Array
-): FlattendBVH {
-  const flat: number[] = [];
-  const postorder: number[] = [];
-  const instancesArr: number[] | undefined = isTLAS ? [] : undefined;
-
-  let buildSurfaceArea = 0;
-  let maxDepth = 1;
-  let maxLeafPrimitives = 1;
-  let instanceCount = 0;
-  const traverse = (node: InteriorNode | LeafNode, depth = 1) => {
-    maxDepth = Math.max(depth, maxDepth);
-
-    const bounds = node.bounds;
-    if (!isTLAS) buildSurfaceArea += surfaceArea(bounds);
-    const start = flat.length;
-
-    flat.push(
-      bounds.min[0],
-      bounds.min[1],
-      bounds.min[2],
-      // Pointer to second child
-      // Or num of primitives(negative)
-      0,
-      bounds.max[0],
-      bounds.max[1],
-      bounds.max[2],
-      0
-    );
-
-    if ((node as LeafNode).primitives) {
-      const primitivesLen = (node as LeafNode).primitives.length;
-      maxLeafPrimitives = Math.max(maxLeafPrimitives, primitivesLen);
-      // negative signals to shader that this node is a triangle
-      flat[start + 3] = -primitivesLen;
-      for (let i = 0; i < primitivesLen; i++) {
-        const p = (node as LeafNode).primitives[i];
-        if (isTLAS) {
-          const tlas = p as TLASPrimitiveInfo;
-          const mInv = mat4.create();
-          const m = tlas.transform;
-          mat4.invert(mInv, m);
-          // Keep the source instance index in the otherwise-unused z lane so
-          // the flattened TLAS can be refitted without rebuilding its topology.
-          flat.push(instanceCount, tlas.primitive, tlas.sourceIndex, 0);
-          const encodedBlasOffset = encodeBlasOffset(
-            tlas.primitive,
-            tlas.blasLayout
-          );
-          instancesArr!.push(
-            encodedBlasOffset,
-            tlas.vertexOffset,
-            tlas.materialIndex,
-            tlas.displacementScale || 0
-          );
-          for (let j = 0; j < 16; j++) {
-            instancesArr!.push(mInv[j]);
-          }
-          for (let j = 0; j < 16; j++) {
-            instancesArr!.push(m[j]);
-          }
-          instanceCount++;
-        } else {
-          const triangleIndex = p.primitive;
-          const indices = (p as BLASPrimitiveInfo).indices;
-          let minH = 0;
-          let maxH = 0;
-          if (trianglesDisplacement) {
-            minH = trianglesDisplacement[triangleIndex * 2];
-            maxH = trianglesDisplacement[triangleIndex * 2 + 1];
-          }
-          // Pack minH, maxH to one channel
-          flat.push(indices[0], indices[1], indices[2], packH(minH, maxH));
-        }
+/** Writes min and max of a triangle, or of its displacement prism, to out. */
+function triangleBounds(
+  positions: ArrayLike<number>,
+  stride: number,
+  normals: ArrayLike<number> | undefined,
+  normalStride: number,
+  i0: number,
+  i1: number,
+  i2: number,
+  minHeight: number,
+  maxHeight: number,
+  out: Float32Array,
+  o: number
+) {
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (let corner = 0; corner < 3; corner++) {
+    const vertex = corner === 0 ? i0 : corner === 1 ? i1 : i2;
+    const p = vertex * stride;
+    const x = positions[p], y = positions[p + 1], z = positions[p + 2];
+    if (normals) {
+      const n = vertex * normalStride;
+      let nx = normals[n], ny = normals[n + 1], nz = normals[n + 2];
+      const length = Math.sqrt(nx * nx + ny * ny + nz * nz);
+      if (length > 0) {
+        nx /= length; ny /= length; nz /= length;
+      }
+      for (let side = 0; side < 2; side++) {
+        const h = side === 0 ? minHeight : maxHeight;
+        const px = x + nx * h, py = y + ny * h, pz = z + nz * h;
+        minX = Math.min(minX, px); minY = Math.min(minY, py); minZ = Math.min(minZ, pz);
+        maxX = Math.max(maxX, px); maxY = Math.max(maxY, py); maxZ = Math.max(maxZ, pz);
       }
     } else {
-      traverse((node as InteriorNode).child0, depth + 1);
-      flat[start + 3] = flat.length / 4; // pointer to second child
-      traverse((node as InteriorNode).child1, depth + 1);
-    }
-    if (!isTLAS) postorder.push(start / 4);
-  };
-
-  bvh && traverse(bvh);
-
-  const buffer = new ArrayBuffer(4 * flat.length);
-  const floatView = new Float32Array(buffer);
-  const intView = new Int32Array(buffer);
-
-  const leafOffsets = isTLAS ? undefined : new Int32Array(flat.length / 4);
-  const leafVertices: number[] = [];
-  const uniqueVertices = new Set<number>();
-  for (let k = 0; k < flat.length; ) {
-    const primCountOrSplitAxis = flat[k + 3];
-    intView[k + 3] = primCountOrSplitAxis;
-    // Bounds
-    floatView[k] = flat[k];
-    floatView[k + 1] = flat[k + 1];
-    floatView[k + 2] = flat[k + 2];
-    floatView[k + 4] = flat[k + 4] || 0;
-    floatView[k + 5] = flat[k + 5] || 0;
-    floatView[k + 6] = flat[k + 6] || 0;
-
-    k += 8;
-
-    if (primCountOrSplitAxis >= 0) {
-      // Is internal node
-      intView[k - 1] = flat[k - 1];
-    } else {
-      // Is leaf
-      uniqueVertices.clear();
-      const leafIndex = (k - 8) / 4;
-      for (let i = 0; i < -primCountOrSplitAxis; i++) {
-        for (let j = 0; j < 4; j++) {
-          intView[k + j] = flat[k + j];
-          if (leafOffsets && j < 3) uniqueVertices.add(flat[k + j]);
-        }
-        k += 4;
-      }
-      if (leafOffsets) {
-        leafOffsets[leafIndex] = leafVertices.length;
-        leafVertices.push(uniqueVertices.size);
-        for (const vertex of uniqueVertices) leafVertices.push(vertex);
-      }
+      minX = Math.min(minX, x); minY = Math.min(minY, y); minZ = Math.min(minZ, z);
+      maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); maxZ = Math.max(maxZ, z);
     }
   }
-  if (leafOffsets) blasRefitVertices.set(buffer, { offsets: leafOffsets, vertices: new Uint32Array(leafVertices), postorder: new Int32Array(postorder) });
+  out[o] = minX; out[o + 1] = minY; out[o + 2] = minZ;
+  out[o + 3] = maxX; out[o + 4] = maxY; out[o + 5] = maxZ;
+  return isFinite(minX) && isFinite(minY) && isFinite(minZ) &&
+    isFinite(maxX) && isFinite(maxY) && isFinite(maxZ);
+}
 
-  let instancesArrBuffer;
-  if (instancesArr) {
-    const instancesArrF32 = new Float32Array(instancesArr.length);
-    instancesArrBuffer = instancesArrF32.buffer;
-    const instancesArrI32 = new Int32Array(instancesArrBuffer);
-
-    for (let i = 0; i < instancesArr.length; i += INSTANCE_WORD_STRIDE) {
-      for (let k = 0; k < 3; k++) {
-        instancesArrI32[i + k] = instancesArr[i + k];
-      }
-      instancesArrF32[i + 3] = instancesArr[i + 3];
-      for (let k = 4; k < INSTANCE_WORD_STRIDE; k++) {
-        instancesArrF32[i + k] = instancesArr[i + k];
-      }
-    }
-  }
+function emptyBvh(isTLAS: boolean): FlattendBVH {
   return {
     builder: 'builtin',
-    buildSurfaceArea: isTLAS ? undefined : buildSurfaceArea,
-    maxDepth: bvh ? maxDepth : 0,
-    maxLeafPrimitives: bvh ? maxLeafPrimitives : 0,
-    buffer: floatView.buffer,
+    buildSurfaceArea: isTLAS ? undefined : 0,
+    maxDepth: 0,
+    maxLeafPrimitives: 0,
+    buffer: new ArrayBuffer(0),
     layout: 'bvh2',
-    instancesBuffer: instancesArrBuffer
+    instancesBuffer: isTLAS ? new ArrayBuffer(0) : undefined
+  };
+}
+
+/** BLAS without triangles. */
+export function emptyBLAS() {
+  return emptyBvh(false);
+}
+
+/**
+ * Builds a BVH2 BLAS over the geometry's triangles. Triangles with
+ * non-finite bounds are skipped. With per-triangle displacement ranges
+ * (min, max pairs scaled by displacementScale), leaves bound the
+ * displacement prisms along the vertex normals and store the packed ranges.
+ */
+export function buildBLAS(
+  geometry: Pick<Geometry, 'position' | 'indices' | 'normal'>,
+  displacementScale = 0,
+  trianglesDisplacement?: Float32Array
+): FlattendBVH {
+  const position = geometry.position;
+  const indices = geometry.indices?.array;
+  if (!position || !indices || !Attribute.getCount(position)) {
+    return emptyBvh(false);
+  }
+  const positions = position.array;
+  const stride = position.itemSize;
+  const normal = trianglesDisplacement ? geometry.normal : undefined;
+  const normals = normal?.array;
+  const normalStride = normal?.itemSize ?? 0;
+  const triangleCount = Math.floor(indices.length / 3);
+  const aabbs = new Float32Array(triangleCount * 6);
+  const triangles = new Uint32Array(triangleCount);
+  let count = 0;
+  for (let t = 0; t < triangleCount; t++) {
+    let minHeight = 0, maxHeight = 0;
+    if (normals) {
+      minHeight = trianglesDisplacement![t * 2] * displacementScale;
+      maxHeight = trianglesDisplacement![t * 2 + 1] * displacementScale;
+      if (isNaN(minHeight) || isNaN(maxHeight)) {
+        minHeight = 0;
+        maxHeight = displacementScale;
+      }
+    }
+    if (triangleBounds(
+      positions, stride, normals, normalStride,
+      indices[t * 3], indices[t * 3 + 1], indices[t * 3 + 2],
+      minHeight, maxHeight, aabbs, count * 6
+    )) {
+      triangles[count++] = t;
+    }
+  }
+  if (!count) return emptyBvh(false);
+
+  const bvh = buildBinnedSahBvh(aabbs, count);
+  const { order, offsets, vec4Count, maxDepth, maxLeafPrimitives } = layoutBvh2(bvh);
+  const { bounds, leftFirst, primCount, primIndices } = bvh;
+  const buffer = new ArrayBuffer(vec4Count * 16);
+  const floats = new Float32Array(buffer);
+  const ints = new Int32Array(buffer);
+  let buildSurfaceArea = 0;
+  for (let k = 0; k < order.length; k++) {
+    const node = order[k];
+    const o = offsets[node] * 4, b = node * 6;
+    floats[o] = bounds[b]; floats[o + 1] = bounds[b + 1]; floats[o + 2] = bounds[b + 2];
+    floats[o + 4] = bounds[b + 3]; floats[o + 5] = bounds[b + 4]; floats[o + 6] = bounds[b + 5];
+    const x = bounds[b + 3] - bounds[b], y = bounds[b + 4] - bounds[b + 1], z = bounds[b + 5] - bounds[b + 2];
+    buildSurfaceArea += 2 * (x * z + x * y + z * y);
+    const prims = primCount[node];
+    if (!prims) {
+      // Pointer to the second child.
+      ints[o + 3] = offsets[leftFirst[node] + 1];
+      continue;
+    }
+    // Negative signals to the shader that this node is a leaf.
+    ints[o + 3] = -prims;
+    for (let i = 0; i < prims; i++) {
+      const t = triangles[primIndices[leftFirst[node] + i]];
+      const e = o + 8 + i * 4;
+      ints[e] = indices[t * 3];
+      ints[e + 1] = indices[t * 3 + 1];
+      ints[e + 2] = indices[t * 3 + 2];
+      // Pack minH, maxH to one channel.
+      ints[e + 3] = trianglesDisplacement
+        ? packH(trianglesDisplacement[t * 2], trianglesDisplacement[t * 2 + 1])
+        : 0;
+    }
+  }
+
+  return {
+    builder: 'builtin',
+    buildSurfaceArea,
+    maxDepth,
+    maxLeafPrimitives,
+    buffer,
+    layout: 'bvh2'
+  };
+}
+
+interface BlasPlacement {
+  blasOffsets: number[];
+  vertexOffsets: number[];
+  layouts: BvhLayout[];
+}
+
+function getBlasPlacement(blases: BLASInstance[]): BlasPlacement {
+  let blasOffset = 0;
+  let vertexOffset = 0;
+  const placement: BlasPlacement = { blasOffsets: [], vertexOffsets: [], layouts: [] };
+  blases.forEach((blas) => {
+    placement.blasOffsets.push(blasOffset);
+    placement.vertexOffsets.push(vertexOffset);
+    placement.layouts.push(blas.bvh.layout ?? 'bvh2');
+    blasOffset += blas.bvh.buffer.byteLength / 16;
+    vertexOffset += blas.verticesCount;
+  });
+  return placement;
+}
+
+/** Writes the instance's world bounds, padded by its displacement, to out. */
+function instanceBounds(instance: TLASInstance, out: Float32Array, o: number) {
+  const { min, max } = instance.bounds;
+  let padX = 0, padY = 0, padZ = 0;
+  const displacementScale = instance.displacementScale;
+  if (displacementScale) {
+    const m = instance.transform;
+    padX = Math.max(0, displacementScale * Math.hypot(m[0], m[1], m[2]));
+    padY = Math.max(0, displacementScale * Math.hypot(m[4], m[5], m[6]));
+    padZ = Math.max(0, displacementScale * Math.hypot(m[8], m[9], m[10]));
+  }
+  out[o] = min[0] - padX; out[o + 1] = min[1] - padY; out[o + 2] = min[2] - padZ;
+  out[o + 3] = max[0] + padX; out[o + 4] = max[1] + padY; out[o + 5] = max[2] + padZ;
+}
+
+function writeInstanceRecord(
+  instanceInts: Int32Array,
+  instanceFloats: Float32Array,
+  targetIndex: number,
+  instance: TLASInstance,
+  placement: BlasPlacement
+) {
+  const offset = targetIndex * INSTANCE_WORD_STRIDE;
+  instanceInts[offset] = encodeBlasOffset(
+    placement.blasOffsets[instance.blasIndex],
+    placement.layouts[instance.blasIndex]
+  );
+  instanceInts[offset + 1] = placement.vertexOffsets[instance.blasIndex];
+  instanceInts[offset + 2] = instance.materialsIndices[0] || 0;
+  instanceFloats[offset + 3] = instance.displacementScale || 0;
+  const inverse = mat4.invert(mat4.create(), instance.transform);
+  for (let i = 0; i < 16; i++) {
+    instanceFloats[offset + 4 + i] = inverse[i];
+    instanceFloats[offset + 20 + i] = instance.transform[i];
+  }
+}
+
+/**
+ * Builds a BVH2 TLAS over the instances. Leaves store
+ * (instance record, BLAS offset, source instance index, 0); instance records
+ * are written in leaf order to instancesBuffer.
+ */
+export function buildTLAS(
+  instances: TLASInstance[],
+  blases: BLASInstance[]
+): FlattendBVH {
+  if (!instances.length) return emptyBvh(true);
+  const placement = getBlasPlacement(blases);
+  const aabbs = new Float32Array(instances.length * 6);
+  for (let i = 0; i < instances.length; i++) {
+    instanceBounds(instances[i], aabbs, i * 6);
+  }
+
+  const bvh = buildBinnedSahBvh(aabbs, instances.length);
+  const { order, offsets, vec4Count, maxDepth, maxLeafPrimitives } = layoutBvh2(bvh);
+  const { bounds, leftFirst, primCount, primIndices } = bvh;
+  const buffer = new ArrayBuffer(vec4Count * 16);
+  const floats = new Float32Array(buffer);
+  const ints = new Int32Array(buffer);
+  const instancesBuffer = new ArrayBuffer(instances.length * INSTANCE_WORD_STRIDE * 4);
+  const instanceInts = new Int32Array(instancesBuffer);
+  const instanceFloats = new Float32Array(instancesBuffer);
+  let target = 0;
+  for (let k = 0; k < order.length; k++) {
+    const node = order[k];
+    const o = offsets[node] * 4, b = node * 6;
+    floats[o] = bounds[b]; floats[o + 1] = bounds[b + 1]; floats[o + 2] = bounds[b + 2];
+    floats[o + 4] = bounds[b + 3]; floats[o + 5] = bounds[b + 4]; floats[o + 6] = bounds[b + 5];
+    const prims = primCount[node];
+    if (!prims) {
+      ints[o + 3] = offsets[leftFirst[node] + 1];
+      continue;
+    }
+    ints[o + 3] = -prims;
+    for (let i = 0; i < prims; i++) {
+      const source = primIndices[leftFirst[node] + i];
+      const instance = instances[source];
+      const e = o + 8 + i * 4;
+      ints[e] = target;
+      ints[e + 1] = placement.blasOffsets[instance.blasIndex];
+      // Keep the source instance index in the otherwise-unused z lane so
+      // the TLAS can be refitted without rebuilding its topology.
+      ints[e + 2] = source;
+      writeInstanceRecord(instanceInts, instanceFloats, target, instance, placement);
+      target++;
+    }
+  }
+
+  return {
+    builder: 'builtin',
+    maxDepth,
+    maxLeafPrimitives,
+    buffer,
+    layout: 'bvh2',
+    instancesBuffer
   };
 }
 
@@ -510,61 +488,21 @@ export function refitTLAS(
   const instanceFloats = new Float32Array(flattened.instancesBuffer);
   const instanceInts = new Int32Array(flattened.instancesBuffer);
 
-  let blasOffset = 0;
-  let vertexOffset = 0;
-  const blasOffsets: number[] = [];
-  const vertexOffsets: number[] = [];
-  const layouts: BvhLayout[] = [];
-  blases.forEach((blas) => {
-    blasOffsets.push(blasOffset);
-    vertexOffsets.push(vertexOffset);
-    layouts.push(blas.bvh.layout ?? 'bvh2');
-    blasOffset += blas.bvh.buffer.byteLength / 16;
-    vertexOffset += blas.verticesCount;
-  });
+  const placement = getBlasPlacement(blases);
+  const scratch = new Float32Array(6);
 
   function writeInstance(targetIndex: number, sourceIndex: number) {
-    const instance = instances[sourceIndex];
-    const offset = targetIndex * INSTANCE_WORD_STRIDE;
-    const encodedBlasOffset = encodeBlasOffset(
-      blasOffsets[instance.blasIndex],
-      layouts[instance.blasIndex]
-    );
-    instanceInts[offset] = encodedBlasOffset;
-    instanceInts[offset + 1] = vertexOffsets[instance.blasIndex];
-    instanceInts[offset + 2] = instance.materialsIndices[0] || 0;
-    instanceFloats[offset + 3] = instance.displacementScale || 0;
-    const inverse = mat4.invert(mat4.create(), instance.transform);
-    for (let i = 0; i < 16; i++) {
-      instanceFloats[offset + 4 + i] = inverse[i];
-      instanceFloats[offset + 20 + i] = instance.transform[i];
-    }
+    writeInstanceRecord(instanceInts, instanceFloats, targetIndex, instances[sourceIndex], placement);
   }
 
   function addInstanceBounds(bounds: Box3, instance: TLASInstance) {
-    const min = vec3.clone(instance.bounds.min);
-    const max = vec3.clone(instance.bounds.max);
-    if (instance.displacementScale) {
-      const transform = instance.transform;
-      const scaleX = vec3.length(
-        vec3.fromValues(transform[0], transform[1], transform[2])
-      );
-      const scaleY = vec3.length(
-        vec3.fromValues(transform[4], transform[5], transform[6])
-      );
-      const scaleZ = vec3.length(
-        vec3.fromValues(transform[8], transform[9], transform[10])
-      );
-      const pad = vec3.fromValues(
-        Math.max(0, instance.displacementScale * scaleX),
-        Math.max(0, instance.displacementScale * scaleY),
-        Math.max(0, instance.displacementScale * scaleZ)
-      );
-      vec3.sub(min, min, pad);
-      vec3.add(max, max, pad);
-    }
-    vec3Min(bounds.min, bounds.min, min);
-    vec3Max(bounds.max, bounds.max, max);
+    instanceBounds(instance, scratch, 0);
+    bounds.min[0] = Math.min(bounds.min[0], scratch[0]);
+    bounds.min[1] = Math.min(bounds.min[1], scratch[1]);
+    bounds.min[2] = Math.min(bounds.min[2], scratch[2]);
+    bounds.max[0] = Math.max(bounds.max[0], scratch[3]);
+    bounds.max[1] = Math.max(bounds.max[1], scratch[4]);
+    bounds.max[2] = Math.max(bounds.max[2], scratch[5]);
   }
 
   function writeNodeBounds(index: number, bounds: Box3) {
@@ -679,7 +617,61 @@ export function refitTLAS(
 /** Dynamic BLASes rebuild when their total node surface area doubles. */
 export const DYNAMIC_BLAS_REBUILD_RATIO = 2;
 
-/** Refit a legacy BVH2 BLAS after vertex deformation, preserving topology. */
+interface BlasRefitData {
+  /** Per leaf (vec4 index): offset of its vertex list in vertices. */
+  offsets: Int32Array;
+  /** Per leaf: unique vertex count followed by the vertices. */
+  vertices: Uint32Array;
+  /** Node indices (vec4 units) with descendants before their ancestors. */
+  postorder: Int32Array;
+}
+
+// Leaf topology is immutable between BLAS builds. Deduplicate shared triangle
+// corners once so deformation refits read each leaf's vertex only once.
+const blasRefitData = new WeakMap<ArrayBuffer, BlasRefitData>();
+
+function getBlasRefitData(buffer: ArrayBuffer): BlasRefitData {
+  const cached = blasRefitData.get(buffer);
+  if (cached) return cached;
+  const ints = new Int32Array(buffer);
+  const offsets = new Int32Array(ints.length / 4);
+  const vertices: number[] = [];
+  const preorder: number[] = [];
+  const stack = [0];
+  while (stack.length) {
+    const index = stack.pop()!;
+    preorder.push(index);
+    const base = index * 4;
+    const child = ints[base + 3];
+    if (child >= 0) {
+      stack.push(child, index + 2);
+      continue;
+    }
+    offsets[index] = vertices.length;
+    const countSlot = vertices.length;
+    vertices.push(0);
+    for (let i = 0; i < -child; i++) {
+      for (let j = 0; j < 3; j++) {
+        const vertex = ints[base + 8 + i * 4 + j];
+        let seen = false;
+        for (let k = countSlot + 1; k < vertices.length; k++) {
+          if (vertices[k] === vertex) { seen = true; break; }
+        }
+        if (!seen) vertices.push(vertex);
+      }
+    }
+    vertices[countSlot] = vertices.length - countSlot - 1;
+  }
+  const data = {
+    offsets,
+    vertices: new Uint32Array(vertices),
+    postorder: new Int32Array(preorder.reverse())
+  };
+  blasRefitData.set(buffer, data);
+  return data;
+}
+
+/** Refit a BVH2 BLAS after vertex deformation, preserving topology. */
 export function refitBLAS(
   flattened: FlattendBVH,
   geometry: Pick<Geometry, 'position'> & Partial<Pick<Geometry, 'dynamic'>>
@@ -687,64 +679,12 @@ export function refitBLAS(
   if ((flattened.layout ?? 'bvh2') !== 'bvh2' || !flattened.buffer.byteLength) {
     return false;
   }
-  const cached = blasRefitVertices.get(flattened.buffer);
-  if (cached) return refitCachedBLAS(flattened, geometry, cached);
-  const floats = new Float32Array(flattened.buffer);
-  const ints = new Int32Array(flattened.buffer);
-  const positions = geometry.position.array;
-  let beforeArea = 0, afterArea = 0;
-
-  const stride = geometry.position.itemSize;
-  function refitNode(index: number): void {
-    const base = index * 4;
-    let dx = floats[base + 4] - floats[base], dy = floats[base + 5] - floats[base + 1], dz = floats[base + 6] - floats[base + 2];
-    beforeArea += 2 * (dx * dz + dx * dy + dz * dy);
-    const primitiveCountOrChild = ints[base + 3];
-    let minX = Infinity, minY = Infinity, minZ = Infinity;
-    let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
-    if (primitiveCountOrChild >= 0) {
-      refitNode(index + 2);
-      refitNode(primitiveCountOrChild);
-      const left = base + 8, right = primitiveCountOrChild * 4;
-      minX = Math.min(floats[left], floats[right]);
-      minY = Math.min(floats[left + 1], floats[right + 1]);
-      minZ = Math.min(floats[left + 2], floats[right + 2]);
-      maxX = Math.max(floats[left + 4], floats[right + 4]);
-      maxY = Math.max(floats[left + 5], floats[right + 5]);
-      maxZ = Math.max(floats[left + 6], floats[right + 6]);
-    } else {
-      const count = -primitiveCountOrChild * 3;
-      for (let i = 0; i < count; i++) {
-        const vertex = ints[base + 8 + Math.floor(i / 3) * 4 + i % 3];
-        const offset = vertex * stride;
-        const x = positions[offset], y = positions[offset + 1], z = positions[offset + 2];
-        if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
-        minX = Math.min(minX, x); minY = Math.min(minY, y); minZ = Math.min(minZ, z);
-        maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); maxZ = Math.max(maxZ, z);
-      }
-    }
-
-    dx = maxX - minX; dy = maxY - minY; dz = maxZ - minZ;
-    afterArea += 2 * (dx * dz + dx * dy + dz * dy);
-    floats[base] = minX; floats[base + 1] = minY; floats[base + 2] = minZ;
-    floats[base + 4] = maxX; floats[base + 5] = maxY; floats[base + 6] = maxZ;
-  }
-
-  refitNode(0);
-  flattened.buildSurfaceArea ??= beforeArea;
-  return !geometry.dynamic || !(afterArea > flattened.buildSurfaceArea * DYNAMIC_BLAS_REBUILD_RATIO);
-}
-
-/** Cached postorder retains the recursive summation order without per-node calls. */
-function refitCachedBLAS(flattened: FlattendBVH,
-  geometry: Pick<Geometry, 'position'> & Partial<Pick<Geometry, 'dynamic'>>,
-  cached: { offsets: Int32Array; vertices: Uint32Array; postorder: Int32Array }) {
+  const { offsets, vertices, postorder } = getBlasRefitData(flattened.buffer);
   const floats = new Float32Array(flattened.buffer), ints = new Int32Array(flattened.buffer);
   const positions = geometry.position.array, stride = geometry.position.itemSize;
   if (flattened.buildSurfaceArea == null) {
     let area = 0;
-    const preorder = cached.postorder.slice().sort();
-    for (const index of preorder) {
+    for (const index of postorder) {
       const b = index * 4;
       const x = floats[b + 4] - floats[b], y = floats[b + 5] - floats[b + 1], z = floats[b + 6] - floats[b + 2];
       area += 2 * (x * z + x * y + z * y);
@@ -752,8 +692,8 @@ function refitCachedBLAS(flattened: FlattendBVH,
     flattened.buildSurfaceArea = area;
   }
   let area = 0;
-  for (let node = 0; node < cached.postorder.length; node++) {
-    const index = cached.postorder[node], base = index * 4, child = ints[base + 3];
+  for (let node = 0; node < postorder.length; node++) {
+    const index = postorder[node], base = index * 4, child = ints[base + 3];
     let minX = Infinity, minY = Infinity, minZ = Infinity;
     let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
     if (child >= 0) {
@@ -761,9 +701,9 @@ function refitCachedBLAS(flattened: FlattendBVH,
       minX = Math.min(floats[left], floats[right]); minY = Math.min(floats[left + 1], floats[right + 1]); minZ = Math.min(floats[left + 2], floats[right + 2]);
       maxX = Math.max(floats[left + 4], floats[right + 4]); maxY = Math.max(floats[left + 5], floats[right + 5]); maxZ = Math.max(floats[left + 6], floats[right + 6]);
     } else {
-      const start = cached.offsets[index], end = start + 1 + cached.vertices[start];
+      const start = offsets[index], end = start + 1 + vertices[start];
       for (let i = start + 1; i < end; i++) {
-        const offset = cached.vertices[i] * stride;
+        const offset = vertices[i] * stride;
         const x = positions[offset], y = positions[offset + 1], z = positions[offset + 2];
         if (!isFinite(x) || !isFinite(y) || !isFinite(z)) continue;
         minX = Math.min(minX, x); minY = Math.min(minY, y); minZ = Math.min(minZ, z);
@@ -776,282 +716,4 @@ function refitCachedBLAS(flattened: FlattendBVH,
     floats[base + 4] = maxX; floats[base + 5] = maxY; floats[base + 6] = maxZ;
   }
   return !geometry.dynamic || !(area > flattened.buildSurfaceArea * DYNAMIC_BLAS_REBUILD_RATIO);
-}
-
-function makeBLASPrimitiveInfo(
-  geometry: Pick<Geometry, 'position' | 'indices' | 'normal'>,
-  displacementScale: number,
-  // Displacement scale for each triangle
-  trianglesDisplacement?: Float32Array
-): BLASPrimitiveInfo[] {
-  const primitiveInfo = [];
-  const indices = geometry.indices?.array;
-  const position = geometry.position;
-
-  const normal = geometry.normal;
-
-  const v0 = vec3.create();
-  const v1 = vec3.create();
-  const v2 = vec3.create();
-  const v3 = vec3.create();
-  const v4 = vec3.create();
-  const v5 = vec3.create();
-
-  const e0 = vec3.create();
-  const e1 = vec3.create();
-
-  const n0 = vec3.create();
-  const n1 = vec3.create();
-  const n2 = vec3.create();
-
-  const usePrism = trianglesDisplacement != null && normal != null;
-
-  for (let i = 0; i < indices.length; i += 3) {
-    const i0 = indices[i];
-    const i1 = indices[i + 1];
-    const i2 = indices[i + 2];
-
-    const bounds = new Box3();
-    const min = bounds.min;
-    const max = bounds.max;
-
-    Attribute.getItem(position, v0, i0);
-    Attribute.getItem(position, v1, i1);
-    Attribute.getItem(position, v2, i2);
-
-    vec3Sub(e0, v2, v0);
-    vec3Sub(e1, v1, v0);
-
-    if (usePrism) {
-      Attribute.getItem(normal, n0, i0);
-      Attribute.getItem(normal, n1, i1);
-      Attribute.getItem(normal, n2, i2);
-
-      let minHeight = trianglesDisplacement[(i / 3) * 2] * displacementScale;
-      let maxHeight =
-        trianglesDisplacement[(i / 3) * 2 + 1] * displacementScale;
-
-      if (isNaN(minHeight) || isNaN(maxHeight)) {
-        minHeight = 0;
-        maxHeight = displacementScale;
-      }
-
-
-      vec3.normalize(n0, n0);
-      vec3.normalize(n1, n1);
-      vec3.normalize(n2, n2);
-
-      vec3.scaleAndAdd(v3, v0, n0, maxHeight);
-      vec3.scaleAndAdd(v4, v1, n1, maxHeight);
-      vec3.scaleAndAdd(v5, v2, n2, maxHeight);
-
-      vec3.scaleAndAdd(v0, v0, n0, minHeight);
-      vec3.scaleAndAdd(v1, v1, n1, minHeight);
-      vec3.scaleAndAdd(v2, v2, n2, minHeight);
-
-      vec3Min(min, min, v0);
-      vec3Min(min, min, v1);
-      vec3Min(min, min, v2);
-      vec3Min(min, min, v3);
-      vec3Min(min, min, v4);
-      vec3Min(min, min, v5);
-
-      vec3Max(max, max, v0);
-      vec3Max(max, max, v1);
-      vec3Max(max, max, v2);
-      vec3Max(max, max, v3);
-      vec3Max(max, max, v4);
-      vec3Max(max, max, v5);
-    } else {
-      vec3Min(min, min, v0);
-      vec3Min(min, min, v1);
-      vec3Min(min, min, v2);
-      vec3Max(max, max, v0);
-      vec3Max(max, max, v1);
-      vec3Max(max, max, v2);
-    }
-
-    const center = [
-      (min[0] + max[0]) / 2,
-      (min[1] + max[1]) / 2,
-      (min[2] + max[2]) / 2
-    ] as vec3.Vec3Array;
-    const info: BLASPrimitiveInfo = {
-      bounds,
-      center,
-      primitive: i / 3,
-      indices: [i0, i1, i2]
-    };
-
-    if (!isNaN(center[0]) && !isNaN(center[1]) && !isNaN(center[2])) {
-      primitiveInfo.push(info);
-    }
-  }
-
-  return primitiveInfo;
-}
-
-export function recursiveBuild(
-  primitiveInfo: (BLASPrimitiveInfo | TLASPrimitiveInfo)[],
-  start: number,
-  end: number
-): LeafNode | InteriorNode {
-  const bounds = new Box3();
-  for (let i = start; i < end; i++) {
-    unionBounds(bounds, bounds, primitiveInfo[i].bounds);
-  }
-
-  const nPrimitives = end - start;
-
-  if (nPrimitives === 1) {
-    return makeLeafNode(primitiveInfo.slice(start, end), bounds);
-  } else {
-    const centroidBounds = new Box3();
-    for (let i = start; i < end; i++) {
-      vec3Min(centroidBounds.min, centroidBounds.min, primitiveInfo[i].center);
-      vec3Max(centroidBounds.max, centroidBounds.max, primitiveInfo[i].center);
-    }
-    const dim = maximumExtent(centroidBounds);
-
-    let mid = Math.floor((start + end) / 2);
-
-    // middle split method
-    if (nPrimitives <= 4) {
-      nthElement(
-        primitiveInfo,
-        (a, b) => a.center[dim] < b.center[dim],
-        start,
-        end,
-        mid
-      );
-    } else if (centroidBounds.max[dim] === centroidBounds.min[dim]) {
-      // can't split primitives based on centroid bounds. terminate.
-      return makeLeafNode(primitiveInfo.slice(start, end), bounds);
-    } else {
-      const buckets = [];
-      for (let i = 0; i < 12; i++) {
-        buckets.push({
-          bounds: new Box3(),
-          count: 0
-        });
-      }
-
-      for (let i = start; i < end; i++) {
-        let b = Math.floor(
-          buckets.length *
-            boxOffset(centroidBounds, dim, primitiveInfo[i].center)
-        );
-        if (b === buckets.length) {
-          b = buckets.length - 1;
-        }
-        buckets[b].count++;
-
-        unionBounds(
-          buckets[b].bounds,
-          buckets[b].bounds,
-          primitiveInfo[i].bounds
-        );
-      }
-
-      const cost = [];
-
-      for (let i = 0; i < buckets.length - 1; i++) {
-        const b0 = new Box3();
-        const b1 = new Box3();
-        let count0 = 0;
-        let count1 = 0;
-        for (let j = 0; j <= i; j++) {
-          unionBounds(b0, b0, buckets[j].bounds);
-          count0 += buckets[j].count;
-        }
-        for (let j = i + 1; j < buckets.length; j++) {
-          unionBounds(b1, b1, buckets[j].bounds);
-          count1 += buckets[j].count;
-        }
-        cost.push(
-          0.1 +
-            (count0 * surfaceArea(b0) + count1 * surfaceArea(b1)) /
-              surfaceArea(bounds)
-        );
-      }
-
-      let minCost = cost[0];
-      let minCostSplitBucket = 0;
-      for (let i = 1; i < cost.length; i++) {
-        if (cost[i] < minCost) {
-          minCost = cost[i];
-          minCostSplitBucket = i;
-        }
-      }
-
-      mid = partition(
-        primitiveInfo,
-        (p) => {
-          let b = Math.floor(
-            buckets.length * boxOffset(centroidBounds, dim, p.center)
-          );
-          if (b === buckets.length) {
-            b = buckets.length - 1;
-          }
-          return b <= minCostSplitBucket;
-        },
-        start,
-        end
-      );
-    }
-
-    return makeInteriorNode(
-      dim,
-      recursiveBuild(primitiveInfo, start, mid),
-      recursiveBuild(primitiveInfo, mid, end)
-    );
-  }
-}
-
-function makeLeafNode(
-  primitives: (BLASPrimitiveInfo | TLASPrimitiveInfo)[],
-  bounds: Box3
-): LeafNode {
-  return {
-    primitives,
-    bounds
-  };
-}
-
-function makeInteriorNode(
-  splitAxis: 0 | 1 | 2,
-  child0: InteriorNode | LeafNode,
-  child1: InteriorNode | LeafNode
-): InteriorNode {
-  return {
-    child0,
-    child1,
-    bounds: unionBounds(new Box3(), child0.bounds, child1.bounds),
-    splitAxis
-  };
-}
-const size: vec3.Vec3Array = [0, 0, 0];
-
-function maximumExtent(box3: Box3) {
-  vec3Sub(size, box3.max, box3.min);
-  if (size[0] > size[2]) {
-    return size[0] > size[1] ? 0 : 1;
-  } else {
-    return size[2] > size[1] ? 2 : 1;
-  }
-}
-
-function boxOffset(box3: Box3, dim: number, v: vec3.Vec3Array) {
-  let offset = v[dim] - box3.min[dim];
-
-  if (box3.max[dim] > box3.min[dim]) {
-    offset /= box3.max[dim] - box3.min[dim];
-  }
-
-  return offset;
-}
-
-function surfaceArea(box3: Box3) {
-  vec3Sub(size, box3.max, box3.min);
-  return 2 * (size[0] * size[2] + size[0] * size[1] + size[2] * size[1]);
 }

@@ -43,7 +43,6 @@ import {
 import {
   buildTLAS,
   concatBLASBuffers,
-  flattenBvh,
   FlattendBVH,
   getTraversalStackSizes,
   refitBLAS,
@@ -2143,7 +2142,7 @@ ${rayTraceCompute({
     const mergedGeometry = res.geometry;
     const materials = res.materials;
     const isEmpty = meshes.length === 0 || res.instances.length === 0;
-    const tlas = flattenBvh(buildTLAS(res.instances, res.blases), true);
+    const tlas = buildTLAS(res.instances, res.blases);
     this._tlas = tlas;
     this._uploadBVH(tlas, res.blases);
 
@@ -2421,7 +2420,7 @@ ${rayTraceCompute({
     this._preparedMeshData = res;
     if (pending) this._residentPreparedMeshData = res;
     this._pendingMembershipData = undefined;
-    const tlas = flattenBvh(buildTLAS(instances, res.blases), true);
+    const tlas = buildTLAS(instances, res.blases);
     this._tlas = tlas;
     this._uploadBVH(tlas, res.blases);
 

@@ -14,7 +14,6 @@ import {
   buildBLAS,
   buildTLAS,
   concatBLASBuffers,
-  flattenBvh,
   refitBLAS,
   refitTLAS,
   mergeRefitRanges,
@@ -482,7 +481,7 @@ class WebGLRayTracePass {
   getDebugBVHData() {
     if (!this._debugBvhData) {
       const mergedMesh = mergeMeshesToGeometry(this._meshes);
-      const bvh = flattenBvh(buildBLAS(mergedMesh.geometry, 0, undefined), false);
+      const bvh = buildBLAS(mergedMesh.geometry);
       this._debugBvhData = { buffer: bvh.buffer };
     }
     return this._debugBvhData;
@@ -505,7 +504,7 @@ class WebGLRayTracePass {
     this._needsUpdateMeshMembership = false;
     const mergedGeometry = res.geometry;
     const materials = res.materials;
-    const tlas = flattenBvh(buildTLAS(res.instances, res.blases), true);
+    const tlas = buildTLAS(res.instances, res.blases);
     this._tlas = tlas;
     const tlasBuffer = new Float32Array(tlas.buffer);
     const instancesBuffer = this._instancesData = new Float32Array(tlas.instancesBuffer!);
@@ -640,7 +639,7 @@ class WebGLRayTracePass {
   private _updateMeshMembership() {
     const res = this._pendingMembershipData!;
     this._preparedMeshData = res;
-    const tlas = this._tlas = flattenBvh(buildTLAS(res.instances, res.blases), true);
+    const tlas = this._tlas = buildTLAS(res.instances, res.blases);
     const blas = new Float32Array(concatBLASBuffers(res.blases));
     const data = this._bvhData = new Float32Array(tlas.buffer.byteLength / 4 + blas.length);
     data.set(new Float32Array(tlas.buffer));

@@ -88,6 +88,8 @@ export class ViewerEngine {
     this.canvas = canvas;
     this.settings = get().settings;
     this.renderer = new Renderer({ canvas, preferWebGPU: !new URLSearchParams(location.search).has('webgl') });
+    // Dropped models can be large; TinyBVH's WebAssembly builder is faster.
+    this.renderer.bvhBuilder = 'tinybvh';
 
     this.scene.add(this.modelGroup);
     this.scene.environment = this.environment.texture;

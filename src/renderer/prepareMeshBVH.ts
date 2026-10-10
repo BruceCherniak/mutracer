@@ -2,7 +2,7 @@ import { mat4, vec2, vec3 } from '../math';
 import Geometry, { Attribute } from '../scene/Geometry';
 import Mesh from '../scene/Mesh';
 import OpenPBRMaterial from '../scene/OpenPBRMaterial';
-import { buildBLAS, flattenBvh, TLASInstance } from './bvhAccel';
+import { buildBLAS, TLASInstance } from './bvhAccel';
 import Texture, { isTextureDataSource } from '../scene/Texture';
 import { generateVertexTangents } from '../util/geometry';
 import { tessellateDisplacementGeometry } from '../util/tessellateDisplacement';
@@ -849,11 +849,7 @@ function prepareMeshGeometryBvh(mesh: Mesh) {
       Math.abs(displacementScale) > 1e-6
         ? getTrianglesDisplacementRange(geometry, heightMap, getMeshDisplacementMaterial(mesh))
         : undefined;
-    geometry.bvh = flattenBvh(
-      buildBLAS(geometry, displacementScale, trianglesDisplacement),
-      false,
-      trianglesDisplacement
-    );
+    geometry.bvh = buildBLAS(geometry, displacementScale, trianglesDisplacement);
   }
   return { geometry, displacementScale };
 }

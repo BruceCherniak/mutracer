@@ -5,7 +5,6 @@ import {
   INSTANCE_WORD_STRIDE,
   buildBLAS,
   buildTLAS,
-  flattenBvh,
   getTraversalStackSizes,
   refitBLAS,
   refitTLAS,
@@ -52,7 +51,7 @@ describe('mixed BVH layouts', () => {
       materialsIndices: [blasIndex]
     }));
 
-    const flattened = flattenBvh(buildTLAS(instances, blases), true);
+    const flattened = buildTLAS(instances, blases);
     const instanceWords = new Int32Array(flattened.instancesBuffer!);
 
     expect(instanceWords[0]).toBe(0x40000000);
@@ -115,7 +114,7 @@ describe('BVH refit', () => {
       transform: mat4.create(),
       materialsIndices: [i]
     }));
-    const flat = flattenBvh(buildTLAS(instances, blases), true);
+    const flat = buildTLAS(instances, blases);
     const topology = Array.from(new Int32Array(flat.buffer)).filter(
       (_, index) => index % 8 === 3 || index % 8 === 7
     );
@@ -154,7 +153,7 @@ describe('BVH refit', () => {
       transform: mat4.create(),
       materialsIndices: [index]
     }));
-    const flat = flattenBvh(buildTLAS(instances, blases), true);
+    const flat = buildTLAS(instances, blases);
     const previousInstances = new Float32Array(flat.instancesBuffer!).slice();
 
     instances[3].bounds = bounds(30, 31);
@@ -184,24 +183,10 @@ describe('BVH refit', () => {
       normal: new Attribute(new Float32Array(18), 3),
       indices: new Attribute(new Uint32Array([0, 1, 2, 3, 4, 5]), 1)
     } as never);
-    const flat = flattenBvh(buildBLAS(geometry, 0, undefined), false);
+    const flat = buildBLAS(geometry, 0, undefined);
     geometry.position.array[12] = 8;
 
     expect(refitBLAS(flat, geometry)).toBe(true);
     expect(new Float32Array(flat.buffer)[4]).toBe(8);
   });
-});
-
-it('matches cached postorder and uncached recursive refits bit for bit, including rebuild decisions', async () => {
-  const {createSphereGeometry} = await import('../../src/util/commonGeometry');
-  const geometry = createSphereGeometry(16,8); geometry.dynamic = true;
-  const cached = flattenBvh(buildBLAS(geometry,0,undefined),false);
-  const recursive = {...cached, buffer:cached.buffer.slice(0)};
-  const original = geometry.position.array.slice();
-  for (const scale of [.99,1.03,1.3,1.6]) {
-    for(let i=0;i<original.length;i++)geometry.position.array[i]=original[i]*scale;
-    expect(refitBLAS(cached,geometry)).toBe(refitBLAS(recursive,geometry));
-    expect(new Uint32Array(cached.buffer)).toEqual(new Uint32Array(recursive.buffer));
-    expect(cached.buildSurfaceArea).toBe(recursive.buildSurfaceArea);
-  }
 });

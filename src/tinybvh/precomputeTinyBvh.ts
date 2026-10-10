@@ -28,6 +28,17 @@ export interface TinyBvhPrecomputeStats {
   bvhRefitCount: number;
 }
 
+export interface TinyBvhPrecomputeOptions {
+  /** Build only meshes without a BVH. Default `false`: rebuild every static geometry. */
+  onlyMissing?: boolean;
+  /**
+   * Use spatial splits (SBVH) for static triangle BLASes. Lower traversal
+   * cost on some scenes, several times slower to build. Default `false`
+   * (binned SAH).
+   */
+  spatialSplits?: boolean;
+}
+
 /**
  * Builds static mesh BLAS data with TinyBVH and dynamic geometry with the built-in builder.
  *
@@ -40,7 +51,7 @@ export async function precomputeTinyBvh(
   meshes: Mesh[],
   requestedLayout: TinyBvhLayout = 'bvh2',
   onProgress?: (progress: PrecomputeProgress) => void,
-  { onlyMissing = false }: { onlyMissing?: boolean } = {}
+  { onlyMissing = false, spatialSplits = false }: TinyBvhPrecomputeOptions = {}
 ): Promise<TinyBvhPrecomputeStats> {
   let dynamicResult: Awaited<ReturnType<typeof precompute>> | undefined;
   const dynamicMeshes = meshes.filter(mesh => mesh.geometry.dynamic);
@@ -88,7 +99,8 @@ export async function precomputeTinyBvh(
           displacementScale,
           trianglesDisplacement,
           requestedLayout,
-          refitKey
+          refitKey,
+          spatialSplits
         ),
       prepared.tessellations,
       onProgress,

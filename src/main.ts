@@ -120,7 +120,7 @@ export type {
 
 // BVH and worker precomputation
 export { precomputeTinyBvh } from './tinybvh/precomputeTinyBvh';
-export type { TinyBvhPrecomputeStats } from './tinybvh/precomputeTinyBvh';
+export type { TinyBvhPrecomputeOptions, TinyBvhPrecomputeStats } from './tinybvh/precomputeTinyBvh';
 export type { TinyBvhLayout } from './tinybvh/TinyBvhBuilder';
 export {
   prepareForPrecompute,

@@ -16,7 +16,7 @@
 - Sampling: `renderer.samplingPattern = 'sobol' | 'zsobol' | 'random'`; default `'sobol'`. Choose `'zsobol'` explicitly for low spp without a denoiser. OIDN never changes the pattern. See `docs/sampling.md` for the progressive budget caveat.
 - Denoising (WebGPU only): `await renderer.setDenoiser({ model: 'standard' | 'small' | 'cleanAuxLarge', weightsBaseUrl?, whileConverging? })`. Weights default to jsDelivr for the installed version; self-host `node_modules/mutracer/oidn/weights/` in production.
 - Final stills: `await renderer.renderOfflineFrame(scene, camera, { samples })`, then `renderer.prepareForExport()` and `canvas.toBlob(...)`. Linear HDR pixels: `await renderer.getRawOutput()`.
-- BVHs build automatically with TinyBVH before the first frame; `await renderer.prepareScene(scene)` builds up front.
+- BVHs build automatically inside `render()` with the built-in JavaScript builder (a port of TinyBVH's binned SAH builder). `renderer.bvhBuilder = 'tinybvh'` uses the TinyBVH WebAssembly module instead, loaded on demand and built before the first frame (`await renderer.prepareScene(scene)` builds up front); `renderer.bvhSpatialSplits = true` enables its slower SBVH build.
 
 ## Common pitfalls
 
@@ -35,6 +35,6 @@
 - [Three.js](docs/threejs.md): conversion and `userData` keys
 - [Denoising](docs/denoising.md): OIDN models and weight hosting
 - [Sampling](docs/sampling.md): patterns, dimensions and progressive budgets
-- [BVH](docs/bvh.md): TinyBVH, layouts, worker precomputation
+- [BVH](docs/bvh.md): BVH builders, TinyBVH layouts, worker precomputation
 - [Performance](docs/performance.md): tuning checklist
 - [Examples](examples/README.md): basic, Three.js, advanced

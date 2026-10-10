@@ -749,7 +749,8 @@ BuildResult* tinybvh_build(
   float displacementScale,
   const float* displacement,
   uint32_t requestedLayout,
-  uint32_t retainForRefit
+  uint32_t retainForRefit,
+  uint32_t spatialSplits
 ) {
   auto* result = new BuildResult();
   if (!positions || !sourceIndices || positionStride < 3 || indexCount < 3) return result;
@@ -829,7 +830,9 @@ BuildResult* tinybvh_build(
       buildPositions = refitHandle->positions.data();
       buildIndices = refitHandle->filteredIndices.data();
     } else {
-      bvh->settings.useSpatialSplits = true;
+      // SBVH is opt-in: it lowers SAH cost but builds several times slower
+      // than the default binned SAH builder. Refittable builds stay binned.
+      bvh->settings.useSpatialSplits = spatialSplits != 0;
     }
     tinybvh::bvhvec4slice vertices{
       reinterpret_cast<const tinybvh::bvhvec4*>(buildPositions),

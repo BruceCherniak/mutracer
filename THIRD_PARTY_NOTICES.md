@@ -8,7 +8,9 @@ includes or adapts the following third-party work. License texts are in
 
 The WebAssembly BVH builder (`src/tinybvh/`) wraps
 [jbikker/tinybvh](https://github.com/jbikker/tinybvh) at commit
-`0e4584287823252cf83f0e9cd072848bec5f79c5`.
+`0e4584287823252cf83f0e9cd072848bec5f79c5`. The JavaScript binned SAH builder
+(`src/renderer/binnedSahBvh.ts`) is ported from TinyBVH's reference builder
+(`BVH::Build`) at the same commit.
 
 Copyright (c) 2024-2026 Jacco Bikker / Breda University of Applied Sciences.
 MIT License. The license text is at

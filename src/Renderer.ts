@@ -19,7 +19,6 @@ import Camera from './scene/Camera';
 import { Scene } from './scene/Scene';
 import { ColorRGB } from './types';
 import type { OIDNDenoiser, OIDNModel } from './oidn';
-import { precomputeTinyBvh } from './tinybvh/precomputeTinyBvh';
 import { meshNeedsPrecompute } from './util/workerHelper';
 import makeWGPURenderingPipeline, {
   OIDNWeb,
@@ -303,12 +302,21 @@ export default class Renderer {
   maxTiles = Infinity;
 
   /**
-   * BLAS builder used for meshes without a precomputed BVH. `tinybvh` builds
-   * asynchronously in WebAssembly before the first frame (`render()` returns
-   * `RENDER_STATUS_PREPARING` meanwhile) and falls back to `builtin`
-   * (synchronous JavaScript) if the module cannot be loaded. Default `tinybvh`.
+   * BLAS builder used for meshes without a precomputed BVH. `builtin` builds
+   * synchronously in JavaScript inside `render()` (a port of TinyBVH's binned
+   * SAH builder). `tinybvh` loads the TinyBVH WebAssembly module on first use
+   * and builds asynchronously before the first frame (`render()` returns
+   * `RENDER_STATUS_PREPARING` meanwhile); it falls back to `builtin` if the
+   * module cannot be loaded. Default `builtin`.
    */
-  bvhBuilder: BVHBuilder = 'tinybvh';
+  bvhBuilder: BVHBuilder = 'builtin';
+
+  /**
+   * With `bvhBuilder = 'tinybvh'`, build static BLASes with spatial splits
+   * (SBVH). This lowers traversal cost on some scenes but builds several
+   * times slower. Applies to BLASes built after the change. Default `false`.
+   */
+  bvhSpatialSplits = false;
   private _bvhPreparation?: Promise<void>;
   private _tinyBvhUnavailable = false;
   /** Geometry (and its version) each mesh had when TinyBVH last processed it. */
@@ -611,9 +619,11 @@ export default class Renderer {
   }
 
   /**
-   * Builds BVHs (and displacement tessellation) for every mesh that does not
-   * have one yet. `render()` does this automatically and reports
-   * `RENDER_STATUS_PREPARING` meanwhile; call this to prepare a scene up front.
+   * With `bvhBuilder = 'tinybvh'`, builds BVHs (and displacement
+   * tessellation) for every mesh that does not have one yet. `render()` does
+   * this automatically and reports `RENDER_STATUS_PREPARING` meanwhile; call
+   * this to prepare a scene up front. Does nothing with `builtin`, which
+   * builds inside `render()`.
    */
   async prepareScene(scene: Pick<Scene, 'meshes'> | Mesh[]) {
     const meshes = Array.isArray(scene) ? scene : scene.meshes;
@@ -621,7 +631,13 @@ export default class Renderer {
     const pending = meshes.filter(mesh => !mesh.geometry.dynamic && meshNeedsPrecompute(mesh));
     if (!pending.length) return;
     try {
-      await precomputeTinyBvh(pending, 'bvh2', undefined, { onlyMissing: true });
+      // Loaded on demand so applications using the built-in builder do not
+      // fetch or bundle the TinyBVH module.
+      const { precomputeTinyBvh } = await import('./tinybvh/precomputeTinyBvh');
+      await precomputeTinyBvh(pending, 'bvh2', undefined, {
+        onlyMissing: true,
+        spatialSplits: this.bvhSpatialSplits
+      });
     } catch (error) {
       this._tinyBvhUnavailable = true;
       console.warn(

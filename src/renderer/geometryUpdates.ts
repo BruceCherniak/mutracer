@@ -1,6 +1,6 @@
 import { isDeformationUpdate } from '../scene/geometryChanges';
 import Geometry from '../scene/Geometry';
-import { buildBLAS, flattenBvh, refitBLAS } from './bvhAccel';
+import { buildBLAS, refitBLAS } from './bvhAccel';
 import { getBvhBounds, updateMeshInstances } from './prepareMeshBVH';
 import Mesh from '../scene/Mesh';
 
@@ -81,7 +81,7 @@ export function updatePreparedGeometries(prepared: Prepared, changed: ReadonlySe
       if (!bvh) {
         bvh = source.bvh;
         if (topologyChanged || !bvh || source.dynamic && bvh.builder !== 'builtin' || !refitBLAS(bvh, source)) {
-          bvh = flattenBvh(buildBLAS(source, 0, undefined), false);
+          bvh = buildBLAS(source);
         }
         source.bvh = bvh; updated.set(source, bvh);
       }

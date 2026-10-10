@@ -22,7 +22,8 @@ type TinyBvhExports = WebAssembly.Exports & {
     displacementScale: number,
     displacement: number,
     requestedLayout: number,
-    retainForRefit: number
+    retainForRefit: number,
+    spatialSplits: number
   ): number;
   tinybvh_refit(
     handle: number,
@@ -57,7 +58,8 @@ function build(
   normals?: Float32Array,
   displacement?: Float32Array,
   requestedLayout = 1,
-  retainForRefit = false
+  retainForRefit = false,
+  spatialSplits = false
 ) {
   const pointers = [allocate(positions), allocate(indices)];
   const normalPointer = normals ? allocate(normals) : 0;
@@ -75,7 +77,8 @@ function build(
     displacement ? 2 : 0,
     displacementPointer,
     requestedLayout,
-    +retainForRefit
+    +retainForRefit,
+    +spatialSplits
   );
   const size = tinyBvh.tinybvh_result_size(result);
   const data = tinyBvh.tinybvh_result_data(result);
@@ -176,6 +179,59 @@ beforeAll(async () => {
   });
   tinyBvh = instance.exports as TinyBvhExports;
   tinyBvh._initialize();
+});
+
+/** SAH cost of a BVH2 buffer (C_TRAV = C_INT = 1), relative to the root. */
+function sahCost(buffer: ArrayBuffer) {
+  const floats = new Float32Array(buffer), ints = new Int32Array(buffer);
+  const area = (i: number) => {
+    const b = i * 4, x = floats[b + 4] - floats[b], y = floats[b + 5] - floats[b + 1], z = floats[b + 6] - floats[b + 2];
+    return x * y + y * z + z * x;
+  };
+  let cost = 0;
+  const stack = [0];
+  while (stack.length) {
+    const i = stack.pop()!, child = ints[i * 4 + 3];
+    if (child >= 0) { cost += area(i); stack.push(i + 2, child); } else cost += -child * area(i);
+  }
+  return cost / area(0);
+}
+
+describe('tinybvh WASM builders', () => {
+  // A sphere with long, thin triangles near the poles, where spatial splits apply.
+  async function sphere() {
+    const { createSphereGeometry } = await import('../../src/util/commonGeometry');
+    const geometry = createSphereGeometry(48, 24);
+    const source = geometry.position.array;
+    const positions = new Float32Array((source.length / 3) * 4);
+    for (let i = 0; i < source.length / 3; i++) positions.set(source.subarray(i * 3, i * 3 + 3), i * 4);
+    return { geometry, positions, indices: Uint32Array.from(geometry.indices.array) };
+  }
+
+  it('builds with binned SAH unless spatial splits are requested', async () => {
+    const { geometry, positions, indices } = await sphere();
+    const { buildBLAS } = await import('../../src/renderer/bvhAccel');
+    const binned = build(positions, indices, undefined, undefined, 0);
+    // The JavaScript port matches TinyBVH's binned builder in quality; float64
+    // costs may resolve near-ties differently, so trees need not be identical.
+    const ported = buildBLAS(geometry);
+    expect(Math.abs(sahCost(ported.buffer) / sahCost(binned.buffer) - 1)).toBeLessThan(0.01);
+    expect(Math.abs(ported.buffer.byteLength - binned.buffer.byteLength)).toBeLessThan(binned.buffer.byteLength * 0.01);
+
+    // Long thin triangles crossing the scene in all directions overlap
+    // everywhere, which spatial splits resolve.
+    let seed = 1;
+    const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+    const slivers = new Float32Array(64 * 3 * 4);
+    for (let i = 0; i < 64; i++) {
+      const a = [random(), random(), random()], b = [random(), random(), random()];
+      slivers.set([...a, 0, ...b, 0, b[0] + 0.01, b[1], b[2], 0], i * 12);
+    }
+    const sliverIndices = Uint32Array.from({ length: 64 * 3 }, (_, i) => i);
+    const sliversBinned = build(slivers, sliverIndices, undefined, undefined, 0);
+    const sliversSbvh = build(slivers, sliverIndices, undefined, undefined, 0, false, true);
+    expect(sliversSbvh.buffer.byteLength).toBeGreaterThan(sliversBinned.buffer.byteLength);
+  });
 });
 
 describe('tinybvh WASM layouts', () => {

@@ -3,23 +3,38 @@
 Every geometry needs a bottom-level BVH (BLAS); the renderer combines them
 under a top-level BVH (TLAS) over the mesh instances.
 
-## Default: TinyBVH
+## Default: built-in builder
 
-`renderer.bvhBuilder = 'tinybvh'` (default) builds missing BLASes with
-[TinyBVH](https://github.com/jbikker/tinybvh) compiled to WebAssembly, before
-the first frame that needs them. `render()` returns `RENDER_STATUS_PREPARING`
-while it builds and keeps showing the previous scene. The module (about
-90 KB) is loaded on first use. If it fails to load, the renderer logs a warning
-and falls back to the built-in JavaScript builder.
+`renderer.bvhBuilder = 'builtin'` (default) builds missing BLASes
+synchronously in JavaScript inside `render()`. The builder is a port of
+[TinyBVH](https://github.com/jbikker/tinybvh)'s binned SAH builder
+(`BVH::Build`). It computes in float64, so where split costs nearly tie it
+can choose differently from TinyBVH's float32 build; tree quality is the
+same. The TLAS over mesh instances and the BLASes of dynamic geometries
+always use it.
+
+## Optional: TinyBVH WebAssembly
+
+`renderer.bvhBuilder = 'tinybvh'` builds static BLASes with TinyBVH compiled
+to WebAssembly, about 1.3 times faster than the JavaScript builder. The
+module (about 90 KB) is imported and fetched on first use, so applications
+that keep the default do not load it. BLASes are built
+asynchronously before the first frame that needs them: `render()` returns
+`RENDER_STATUS_PREPARING` meanwhile and keeps showing the previous scene. If
+the module fails to load, the renderer logs a warning and falls back to the
+built-in builder.
 
 To build up front, for example behind a loading screen:
 
 ```ts
+renderer.bvhBuilder = 'tinybvh';
 await renderer.prepareScene(scene);
 ```
 
-`renderer.bvhBuilder = 'builtin'` uses the synchronous JavaScript SAH builder
-inside `render()`.
+`renderer.bvhSpatialSplits = true` (default `false`) makes TinyBVH use spatial
+splits (SBVH). SBVH lowers traversal cost on some scenes, which can make
+rendering noticeably faster, but builds three to five times slower than the
+binned builder.
 
 BVHs are stored on the `Geometry` (`geometry.bvh`). Share one geometry between
 meshes to share its BLAS. After editing geometry arrays, call
@@ -28,7 +43,8 @@ the BLAS. Replacing `mesh.geometry` is detected automatically.
 
 ## Layouts
 
-`precomputeTinyBvh(meshes, layout)` builds BLASes explicitly in another layout:
+`precomputeTinyBvh(meshes, layout, onProgress, { spatialSplits })` builds
+BLASes explicitly, optionally in another layout or with SBVH:
 
 | Layout | Notes |
 | --- | --- |

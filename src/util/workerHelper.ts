@@ -1,4 +1,4 @@
-import { buildBLAS, flattenBvh, FlattendBVH } from '../renderer/bvhAccel';
+import { buildBLAS, emptyBLAS, FlattendBVH } from '../renderer/bvhAccel';
 import {
   cachePreparedMeshGeometry,
   getCachedPreparedMeshGeometry,
@@ -402,10 +402,7 @@ export async function precompute(
       const start = typeof performance === 'undefined' ? Date.now() : performance.now();
       const built = await (buildBVH && !geo.dynamic
         ? buildBVH(geo, displacementScale, trianglesDisplacement, refitKey)
-        : flattenBvh(
-            buildBLAS(geo, displacementScale, trianglesDisplacement),
-            false
-          ));
+        : buildBLAS(geo, displacementScale, trianglesDisplacement));
       const measured = (built as FlattendBVH & { bvhTimeMs?: number }).bvhTimeMs ??
         (typeof performance === 'undefined' ? Date.now() : performance.now()) - start;
       const operation = (built as FlattendBVH & {
@@ -426,7 +423,7 @@ export async function precompute(
       if (buildBVH) throw e;
       console.error(e);
       // In case there are bad data.
-      return flattenBvh(undefined, false);
+      return emptyBLAS();
     }
   }
   const res = {

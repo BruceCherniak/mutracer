@@ -31,8 +31,9 @@
 
 - Reuse `Geometry`, `OpenPBRMaterial` and `Texture` objects. Shared geometry
   shares its BVH and GPU buffers.
-- Build BVHs up front with `await renderer.prepareScene(scene)`, or in a
-  worker (see [BVH](./bvh.md)).
+- For large scenes, set `renderer.bvhBuilder = 'tinybvh'` and build BVHs up
+  front with `await renderer.prepareScene(scene)`, or in a worker (see
+  [BVH](./bvh.md)).
 - With Three.js, keep one `THREESceneSync` and call `update()` before rendering.
   It preserves mesh, geometry, material, texture and light identities. One-shot
   conversion creates fresh resources and is intended for static setup.

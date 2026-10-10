@@ -8,9 +8,9 @@ TinyBVH acceleration and Intel Open Image Denoise built in.
   directional and environment lights, with multiple importance sampling.
 - **OpenPBR 1.1 materials**: metal, dielectric, coat, fuzz, thin film,
   transmission with absorption and scattering, subsurface, emission.
-- **Fast scene setup**: TinyBVH (WebAssembly) builds acceleration structures
-  before the first frame; the WebGPU backend refits instance transforms for
-  animation.
+- **Fast scene setup**: a JavaScript port of TinyBVH's binned SAH builder
+  builds acceleration structures, with the TinyBVH WebAssembly builder as an
+  option; transform-only animation refits the instance hierarchy.
 - **Denoising**: one call enables OIDN on the WebGPU device, for the final image
   or while the image converges.
 - **Three.js friendly**: keep a `THREE.Scene` (loaded with `GLTFLoader` or
@@ -112,7 +112,7 @@ await renderer.setDenoiser({ model: 'standard' });
 | [Materials](./docs/materials.md) | OpenPBR inputs, textures, alpha, bevel, displacement |
 | [Three.js](./docs/threejs.md) | `THREESceneSync`, supported materials and lights, `userData` keys |
 | [Denoising](./docs/denoising.md) | OIDN models, weights hosting, denoising while converging |
-| [BVH](./docs/bvh.md) | TinyBVH builder, layouts, worker precomputation |
+| [BVH](./docs/bvh.md) | BVH builders, TinyBVH layouts, worker precomputation |
 | [Performance](./docs/performance.md) | Tuning checklist |
 | [`llms.txt`](./llms.txt) | Compact usage guide for coding agents |
 

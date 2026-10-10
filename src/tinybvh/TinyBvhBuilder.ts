@@ -36,7 +36,8 @@ interface TinyBvhExports extends WebAssembly.Exports {
     displacementScale: number,
     displacement: number,
     requestedLayout: number,
-    retainForRefit: number
+    retainForRefit: number,
+    spatialSplits: number
   ): number;
   tinybvh_refit(
     handle: number,
@@ -165,13 +166,17 @@ function allocateAndCopy(
   return pointer;
 }
 
-/** Builds a renderer-compatible BLAS with tinybvh's high-quality SAH builder. */
+/**
+ * Builds a renderer-compatible BLAS with TinyBVH's binned SAH builder, or
+ * with spatial splits (SBVH) when requested.
+ */
 async function buildTinyBvhUnlocked(
   geometry: Geometry,
   displacementScale: number,
   trianglesDisplacement?: Float32Array,
   requestedLayout: TinyBvhLayout = 'bvh2',
-  refitKey?: string
+  refitKey?: string,
+  spatialSplits = false
 ): Promise<TinyBvhBuildResult> {
   // CWBVH conversion is recursive and experimental. Isolate each static
   // conversion so a trap in one pathological mesh cannot poison the allocator
@@ -229,7 +234,8 @@ async function buildTinyBvhUnlocked(
         displacementScale,
         displacementPointer,
         tinyBvhLayoutCodes[requestedLayout],
-        refitKey && !trianglesDisplacement ? 1 : 0
+        refitKey && !trianglesDisplacement ? 1 : 0,
+        spatialSplits ? 1 : 0
       );
     }
     if (!result) throw new Error('tinybvh did not return a build result');
@@ -305,14 +311,16 @@ export function buildTinyBvh(
   displacementScale: number,
   trianglesDisplacement?: Float32Array,
   requestedLayout: TinyBvhLayout = 'bvh2',
-  refitKey?: string
+  refitKey?: string,
+  spatialSplits = false
 ): Promise<TinyBvhBuildResult> {
   const task = buildQueue.then(() => buildTinyBvhUnlocked(
     geometry,
     displacementScale,
     trianglesDisplacement,
     requestedLayout,
-    refitKey
+    refitKey,
+    spatialSplits
   ));
   buildQueue = task.then(
     () => undefined,

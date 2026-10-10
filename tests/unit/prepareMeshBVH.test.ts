@@ -43,7 +43,7 @@ it('assigns material slots by identity and retains them after parameter edits', 
 
 it('packs material variants in 144-byte instances and retains material slots during refit', async () => {
   const { createCubeGeometry } = await import('../../src/util/commonGeometry');
-  const { flattenBvh, buildTLAS, INSTANCE_VEC4_STRIDE, INSTANCE_WORD_STRIDE, refitTLAS } = await import('../../src/renderer/bvhAccel');
+  const { buildTLAS, INSTANCE_VEC4_STRIDE, INSTANCE_WORD_STRIDE, refitTLAS } = await import('../../src/renderer/bvhAccel');
   const material = new OpenPBRMaterial(), variant = new OpenPBRMaterial();
   variant.uvProjection = 'triplanar'; variant.displacementUvProjection = 'spherical';
   const geo = createCubeGeometry(), a = new Mesh(geo, material), b = new Mesh(geo, variant);
@@ -51,7 +51,7 @@ it('packs material variants in 144-byte instances and retains material slots dur
   const prepared = updateMeshInstances([a, b]);
   expect(prepared.materials).toEqual([material, variant]);
   expect(prepared.instanceBindings.map(binding => binding.materialIndices)).toEqual([[0], [1]]);
-  const packed = flattenBvh(buildTLAS(prepared.instances, prepared.blases), true);
+  const packed = buildTLAS(prepared.instances, prepared.blases);
   expect(INSTANCE_VEC4_STRIDE).toBe(9); expect(INSTANCE_WORD_STRIDE).toBe(36);
   expect(packed.instancesBuffer!.byteLength).toBe(2 * 144);
   const data = new Uint32Array(packed.instancesBuffer!).slice();
