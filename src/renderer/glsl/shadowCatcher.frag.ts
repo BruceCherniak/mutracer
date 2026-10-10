@@ -2,6 +2,7 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
+import cameraRayGlsl from './chunks/cameraRay.glsl.js';
 import common from './chunks/common.glsl.js';
 import rayTraceCore from './chunks/rayTraceCore.glsl.js';
 import textureLinear from './chunks/textureLinear.glsl.js';
@@ -17,12 +18,19 @@ import samplingGlsl from './chunks/sampling.glsl.js';
 import uvProjectionGlsl from './chunks/uvProjection.glsl.js';
 
 export default new FragmentShader({
-  name: 'rayTarceFrag',
+  name: 'shadowCatcher',
+  outputs: ['shadowCatcher', 'catcherBackground'],
   defines: {
     BOUNCES: 2
   },
   uniforms: {
-    viewProjectionInv: Shader.uniform('mat4')
+    previewMode: Shader.uniform('bool', 0),
+    wavelength: Shader.uniform('float', 0),
+    viewportSize: Shader.uniform('vec2'),
+    viewProjectionInv: Shader.uniform('mat4'),
+    viewInv: Shader.uniform('mat4'),
+    cameraAperture: Shader.uniform('float', 0),
+    cameraFocus: Shader.uniform('float', 10)
   },
   includes: [rayTraceCore, materialBufferGlsl, intersect, random, envMap],
   main: glsl`
@@ -42,10 +50,12 @@ ${envMap.main}
 ${samplingGlsl}
 ${sampleLight}
 ${sampleShadowCatcher}
+${cameraRayGlsl}
 
 // Path tracing integrator as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Path_Tracing.html#
-vec4 integrator(inout Ray ray) {
+vec4 integrator(inout Ray ray, out vec4 background) {
+  background = vec4(0.0);
   Path path;
   path.ray = ray;
   path.li = vec3(0);
@@ -73,32 +83,29 @@ vec4 integrator(inout Ray ray) {
     return vec4(0.0, 0.0, 0.0, 1.0);
   }
 
+  vec4 bg = sampleBackgroundFromRay(ray.o, ray.d);
+  background = vec4(bg.rgb * bg.a, bg.a);
   if (!path.abort) {
     sampleShadowCatcher(si, 0, path);
   }
-  return vec4(vec3(1.0), path.alpha);
+  return vec4(1.0, bg.a, bg.a >= 0.01 ? 1.0 : 0.0, path.alpha);
 }
 
 void main() {
   initRandom();
-  rng_initialize(v_Texcoord / pixelSize, int(sampleCount));
-
-
-  vec2 uvJittered = v_Texcoord + pixelJitter();
-
-  vec4 origin = viewProjectionInv * vec4(uvJittered * 2.0 - 1.0, -1.0, 1.0);
-  vec4 target = viewProjectionInv * vec4(uvJittered * 2.0 - 1.0, 1.0, 1.0);
-
-  Ray cam;
-  initRay(cam, origin.xyz / origin.w, normalize(target.xyz * origin.w - origin.xyz * target.w));
-
-  vec4 liAndAlpha = integrator(cam);
+  rng_initialize(v_Texcoord * viewportSize, int(uint(sampleCount) ^ sampleHash(uint(sequenceSeed))));
+  // Match the beauty pass's random stream in hero-wavelength previews.
+  if (previewMode && wavelength > 0.0) { sample1D(CAMERA_WAVELENGTH); }
+  Ray cam = primaryCameraRay();
+  vec4 background;
+  vec4 liAndAlpha = integrator(cam, background);
 
   if (!(liAndAlpha.x < INF && liAndAlpha.x > -EPS)) {
     liAndAlpha = vec4(0, 0, 0, 1);
   }
 
-  out_color = liAndAlpha;
+  out_shadowCatcher = liAndAlpha;
+  out_catcherBackground = background;
 
 }`
 });

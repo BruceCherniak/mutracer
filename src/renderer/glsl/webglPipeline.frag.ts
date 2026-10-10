@@ -31,6 +31,8 @@ export const composeFragment = new FragmentShader({
   name: 'compose',
   uniforms: {
     colorTex: Shader.uniform('sampler2D'),
+    foregroundTex: Shader.uniform('sampler2D'),
+    catcherBackgroundTex: Shader.uniform('sampler2D'),
     shadowCatcherTex: Shader.uniform('sampler2D'),
     bloomTex: Shader.uniform('sampler2D'),
     exposure: Shader.uniform('float', 1),
@@ -151,20 +153,36 @@ void main() {
   color.a = max(color.a, min(dot(bloom.rgb, vec3(0.2125, 0.7154, 0.0721)), 1.0));
 
   if (shadowCatcherEnabled > 0.5) {
-    float shadowAlpha = clamp(1.0 - shadow.a, 0.0, 1.0);
+    float coverage = clamp(shadow.r, 0.0, 1.0);
+    // Non-catcher samples contribute visibility 1. Undo primary coverage
+    // before adjusting opacity, then apply the coverage exactly once.
+    float shadowAlpha = clamp(
+      (1.0 - shadow.a) / max(coverage, 0.000001), 0.0, 1.0
+    );
     shadowAlpha = max(shadowAlpha - (1.0 - shadowCatcherAlpha), 0.0);
-    // Red is the raw catcher coverage and remains sharp even when the shadow
-    // visibility itself is denoised or filtered.
-    shadowAlpha *= clamp(shadow.r, 0.0, 1.0);
-    if (shadowAlpha > 0.0) {
-      float composedAlpha = color.a + shadowAlpha * (1.0 - color.a);
-      vec3 composedPremultiplied =
-        color.rgb * color.a * (1.0 - shadowAlpha) +
-        shadowCatcherColor * shadowAlpha;
-      color = vec4(
-        composedPremultiplied / max(composedAlpha, 0.000001),
-        composedAlpha
-      );
+    if (coverage > 0.0) {
+      vec4 foreground = texture(foregroundTex, uv);
+      vec4 background = texture(catcherBackgroundTex, uv);
+      vec3 foregroundColor = gradeColor((foreground.rgb + bloom.rgb) * exposure);
+      vec3 backgroundColor = gradeColor((background.rgb / max(background.a, 0.000001) + bloom.rgb) * exposure);
+      if (sRGBOutput) {
+        float edge = smoothstep(0.2, 0.72, distance(uv, vec2(0.5)));
+        foregroundColor *= 1.0 - vignette * edge;
+        backgroundColor *= 1.0 - vignette * edge;
+        foregroundColor = pow(max(applyToneMapping(foregroundColor), 0.0), vec3(1.0 / 2.2));
+        backgroundColor = pow(max(applyToneMapping(backgroundColor), 0.0), vec3(1.0 / 2.2));
+      }
+      // The primary samples belong to disjoint layers. Never shadow the model.
+      float opacity = shadowAlpha;
+      shadowAlpha *= coverage;
+      float bloomAlpha = clamp(dot(bloom.rgb, vec3(0.2125, 0.7154, 0.0721)), 0.0, 1.0);
+      float foregroundAlpha = max(foreground.a, bloomAlpha * (1.0 - coverage));
+      float backgroundAlpha = max(background.a, bloomAlpha * coverage);
+      float alpha = foregroundAlpha + backgroundAlpha * (1.0 - opacity) + shadowAlpha;
+      vec3 premultiplied = foregroundColor * foregroundAlpha
+        + backgroundColor * backgroundAlpha * (1.0 - opacity)
+        + shadowCatcherColor * shadowAlpha;
+      color = vec4(premultiplied / max(alpha, 0.000001), alpha);
     }
   }
   out_color = color;

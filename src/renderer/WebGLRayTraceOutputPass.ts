@@ -1,3 +1,4 @@
+import { FragmentShader, Shader, glsl } from './shader.js';
 import { constants, Renderer, Texture2D } from './webgl.js';
 import normalizeRayTraceOutput from './glsl/normalizeRayTraceOutput.frag.js';
 import { WebGLFullQuadPass } from './WebGLFullQuadPass.js';
@@ -8,12 +9,17 @@ type RayTraceInput =
   | 'albedoTex'
   | 'normalTex'
   | 'shadowCatcherTex';
+type LayerOutput = 'foreground' | 'catcherBackground';
 type RayTraceOutput = 'color' | 'albedo' | 'normal' | 'shadowCatcher';
 
 /** Converts the additive ray tracing buffers into display/denoise textures. */
 export class WebGLRayTraceOutputPass {
   private readonly _renderer: Renderer;
   private readonly _pass: WebGLFullQuadPass<RayTraceInput, RayTraceOutput>;
+
+  private readonly _layersPass: WebGLFullQuadPass<
+    RayTraceInput | 'catcherBackgroundTex', LayerOutput
+  >;
 
   constructor(renderer: Renderer) {
     this._renderer = renderer;
@@ -28,17 +34,54 @@ export class WebGLRayTraceOutputPass {
         },
         albedo: { type: constants.UNSIGNED_BYTE },
         normal: { type: constants.UNSIGNED_BYTE },
-        shadowCatcher: { type: constants.UNSIGNED_BYTE }
+        shadowCatcher: { type: constants.HALF_FLOAT }
+      }
+    });
+    this._layersPass = new WebGLFullQuadPass('rayTraceLayers', renderer, {
+      shader: new FragmentShader({
+        name: 'normalizeRayTraceLayers',
+        outputs: ['foreground', 'catcherBackground'],
+        uniforms: {
+          colorTex: Shader.uniform('sampler2D'),
+          albedoTex: Shader.uniform('sampler2D'),
+          normalTex: Shader.uniform('sampler2D'),
+          shadowCatcherTex: Shader.uniform('sampler2D'),
+          catcherBackgroundTex: Shader.uniform('sampler2D'),
+          sampleCount: Shader.uniform('float', 1)
+        },
+        main: glsl`
+void main() {
+  vec4 light = texture(colorTex, v_Texcoord);
+  vec4 mask = texture(shadowCatcherTex, v_Texcoord);
+  vec4 background = texture(catcherBackgroundTex, v_Texcoord);
+  float hit = texture(albedoTex, v_Texcoord).a;
+  // Full spectral beauty has three wavelength contributions per shadow sample.
+  float contributions = max(texture(normalTex, v_Texcoord).a, 1.0) / sampleCount;
+  float foregroundHit = max(hit - mask.b * contributions, 0.0);
+  out_foreground = vec4(
+    (light.rgb - background.rgb * contributions)
+      / (foregroundHit > 0.0 ? foregroundHit : sampleCount),
+    clamp((light.a - background.a) / sampleCount, 0.0, 1.0)
+  );
+  out_catcherBackground = background / sampleCount;
+}`
+      }),
+      outputs: ['foreground', 'catcherBackground'],
+      outputParams: {
+        foreground: { type: constants.HALF_FLOAT },
+        catcherBackground: { type: constants.HALF_FLOAT }
       }
     });
   }
 
   setSize(width: number, height: number) {
     this._pass.setSize(width, height);
+    this._layersPass.setSize(width, height);
   }
 
   setSampleCount(sampleCount: number) {
     this._pass.setUniform('sampleCount', Math.max(sampleCount, 1));
+    this._layersPass.setUniform('sampleCount', Math.max(sampleCount, 1));
   }
 
   createPass(rayTracePass: WebGLRayTracePass) {
@@ -54,14 +97,25 @@ export class WebGLRayTraceOutputPass {
       undefined,
       { clear: true }
     );
+    if (rayTracePass.hasShadowCatcher()) {
+      this._layersPass.createPass({
+        colorTex: rayTracePass.getOutput('color'),
+        albedoTex: rayTracePass.getOutput('albedo'),
+        normalTex: rayTracePass.getOutput('normal'),
+        shadowCatcherTex: rayTracePass.getOutput('shadowCatcher'),
+        catcherBackgroundTex: rayTracePass.getOutput('catcherBackground')
+      }, undefined, { clear: true });
+    }
   }
 
-  getOutput(label: RayTraceOutput): Texture2D {
-    return this._pass.getOutput(label);
+  getOutput(label: RayTraceOutput | LayerOutput): Texture2D {
+    return label === 'foreground' || label === 'catcherBackground'
+      ? this._layersPass.getOutput(label) : this._pass.getOutput(label);
   }
 
   dispose() {
     this._pass.dispose();
+    this._layersPass.dispose();
   }
 }
 

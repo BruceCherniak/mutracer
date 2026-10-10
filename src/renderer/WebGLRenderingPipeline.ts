@@ -95,7 +95,7 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
   let bloomPass: WebGLBloomPass | undefined;
 
   const composePass = new WebGLFullQuadPass<
-    'colorTex' | 'shadowCatcherTex' | 'bloomTex',
+    'colorTex' | 'foregroundTex' | 'catcherBackgroundTex' | 'shadowCatcherTex' | 'bloomTex',
     'color'
   >('compose', renderer, {
     shader: composeFragment,
@@ -192,6 +192,8 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
     });
     composePass.createPass({
       colorTex: colorTexture,
+      foregroundTex: rayTraceOutputPass.getOutput('foreground'),
+      catcherBackgroundTex: rayTraceOutputPass.getOutput('catcherBackground'),
       shadowCatcherTex: rayTraceOutputPass.getOutput('shadowCatcher'),
       bloomTex:
         bloomEnabled && bloomPass

@@ -1,3 +1,4 @@
+import shadowCatcherAccumulationWGSL from './chunks/shadowCatcherAccumulation.wgsl.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
@@ -107,7 +108,8 @@ ${sampleShadowCatcherWgsl}
 @group(3) @binding(1) var<storage, read_write> outNormal: array<vec4f>;
 @group(3) @binding(2) var<storage, read_write> outAlbedo: array<vec4f>;
 
-@group(3) @binding(3) var<storage, read_write> outShadowCatcher: array<vec4f>;
+${shadowCatcherAccumulationWGSL}
+@group(3) @binding(3) var<storage, read_write> outShadowCatcher: array<ShadowCatcherAccumulation>;
 
 
 fn accumulateNormalOrVariance(
@@ -875,12 +877,17 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
   }
 
   if (outAux.isShadowCatcher) {
-    outShadowCatcher[idx] += liAndAlpha;
     // The catcher is invisible, so the main color at this pixel must still
     // contain whatever the camera ray would have seen behind it.
     let backgroundSample = sampleSceneBackground(cam);
-    outColor[idx] += backgroundSample;
-    outAlbedo[idx] += vec4f(vec3f(0.0), 1.0);
+    let backgroundHit = select(0.0, 1.0, backgroundSample.a >= 0.01);
+    let backgroundPremultiplied = vec4f(backgroundSample.rgb * backgroundSample.a, backgroundSample.a);
+    // Keep the background contribution separate from geometry at silhouettes.
+    // mask: catcher coverage, background alpha, background hits, shadow opacity.
+    outShadowCatcher[idx].mask += vec4f(1.0, backgroundSample.a, backgroundHit, liAndAlpha.a);
+    outShadowCatcher[idx].background += backgroundPremultiplied;
+    outColor[idx] += backgroundPremultiplied;
+    outAlbedo[idx] += vec4f(vec3f(0.0), backgroundHit);
     accumulateNormalOrVariance(idx, backgroundSample.rgb, vec3f(0.0));
   }
   else {

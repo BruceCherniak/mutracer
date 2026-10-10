@@ -209,7 +209,7 @@ class WebGLRayTracePass {
     never,
     'color' | 'albedo' | 'normal'
   >;
-  private _shadowCatcherPass: WebGLFullQuadPass<never, 'shadowCatcher'>;
+  private _shadowCatcherPass: WebGLFullQuadPass<never, 'shadowCatcher' | 'catcherBackground'>;
 
   private _viewProjInv = mat4.create();
   private _aperture = 0;
@@ -244,13 +244,13 @@ class WebGLRayTracePass {
         normal: accumulationOutput
       }
     });
-    this._shadowCatcherPass = new WebGLFullQuadPass<never, 'shadowCatcher'>(
+    this._shadowCatcherPass = new WebGLFullQuadPass<never, 'shadowCatcher' | 'catcherBackground'>(
       'shadowCatcher',
       renderer,
       {
         shader: shadowCatcherFrag,
-        outputs: ['shadowCatcher'],
-        outputParams: { shadowCatcher: accumulationOutput }
+        outputs: ['shadowCatcher', 'catcherBackground'],
+        outputParams: { shadowCatcher: accumulationOutput, catcherBackground: accumulationOutput }
       }
     );
     this._tracePasses = [this._mainPass, this._shadowCatcherPass];
@@ -285,9 +285,9 @@ class WebGLRayTracePass {
     }
   }
 
-  getOutput(label: 'color' | 'albedo' | 'normal' | 'shadowCatcher') {
-    return label === 'shadowCatcher'
-      ? this._shadowCatcherPass.getOutput('shadowCatcher')
+  getOutput(label: 'color' | 'albedo' | 'normal' | 'shadowCatcher' | 'catcherBackground') {
+    return label === 'shadowCatcher' || label === 'catcherBackground'
+      ? this._shadowCatcherPass.getOutput(label)
       : this._mainPass.getOutput(label);
   }
 

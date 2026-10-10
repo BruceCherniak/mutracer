@@ -1,3 +1,4 @@
+import { SHADOW_CATCHER_ACCUMULATION_BYTES } from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
 import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling.js';
 import { MeshMembershipCache } from './meshMembership.js';
 import { mergeRefitRanges } from './bvhAccel.js';
@@ -2723,7 +2724,8 @@ ${rayTraceCompute({
       if (previous) previousBuffers.push(previous);
       this[`_out${target}Buffer`] = this._device.createBuffer({
         label: 'Ray Trace ' + target,
-        size: bufferSize,
+        // The catcher stores its mask and its primary background contribution.
+        size: target === 'ShadowCatcher' ? width * height * SHADOW_CATCHER_ACCUMULATION_BYTES : bufferSize,
         usage:
           GPUBufferUsage.STORAGE |
           GPUBufferUsage.COPY_DST |

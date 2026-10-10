@@ -1,11 +1,13 @@
+import shadowCatcherAccumulationWGSL from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
 import { fullScreenQuadVertexShaderWGSL } from './WGPUFullQuadPass.js';
 
-export function createNormalizeRayTraceOutputWGSL() {
+export function createNormalizeRayTraceOutputWGSL(layers = false) {
   return /* wgsl */ `
 @group(0) @binding(0) var<storage, read> colorBuffer: array<vec4f>;
 @group(0) @binding(1) var<storage, read> normalBuffer: array<vec4f>;
 @group(0) @binding(2) var<storage, read> albedoBuffer: array<vec4f>;
-@group(0) @binding(3) var<storage, read> shadowCatcherBuffer: array<vec4f>;
+${shadowCatcherAccumulationWGSL}
+@group(0) @binding(3) var<storage, read> shadowCatcherBuffer: array<ShadowCatcherAccumulation>;
 
 @group(1) @binding(0) var<uniform> sampleCount: f32;
 @group(1) @binding(1) var<uniform> sampleTileGrid: vec2u;
@@ -14,10 +16,11 @@ override outputWidth: f32;
 override outputHeight: f32;
 
 struct FSOutput {
-  @location(0) color: vec4f,
+  ${layers ? `@location(0) foreground: vec4f,
+  @location(1) catcherBackground: vec4f` : `@location(0) color: vec4f,
   @location(1) normal: vec4f,
   @location(2) albedo: vec4f,
-  @location(3) shadowCatcher: vec4f
+  @location(3) shadowCatcher: vec4f`}
 }
 @fragment
 fn main(@builtin(position) coord: vec4f) -> FSOutput {
@@ -41,10 +44,11 @@ fn main(@builtin(position) coord: vec4f) -> FSOutput {
   }
   var output: FSOutput;
   if (normalBuffer[idx].a <= 0.0) {
-    output.color = vec4f(0.0);
+    ${layers ? `output.foreground = vec4f(0.0);
+    output.catcherBackground = vec4f(0.0);` : `output.color = vec4f(0.0);
     output.normal = vec4f(0.0);
     output.albedo = vec4f(0.0);
-    output.shadowCatcher = vec4f(0.0);
+    output.shadowCatcher = vec4f(0.0);`}
     return output;
   }
   let color = colorBuffer[idx];
@@ -56,7 +60,16 @@ fn main(@builtin(position) coord: vec4f) -> FSOutput {
   // Empty pixels must remain finite: NaN alpha can poison float HDR output
   // even when its canvas uses opaque compositing.
   let total = max(normal.a, 1.0);
-  output.color = vec4f(
+  ${layers ? `
+  let shadow = shadowCatcherBuffer[idx];
+  let foregroundHit = max(hit - shadow.mask.b, 0.0);
+  output.foreground = vec4f(
+    (color.rgb - shadow.background.rgb)
+      / select(total, foregroundHit, foregroundHit > 0.0),
+    clamp((color.a - shadow.mask.g) / total, 0.0, 1.0)
+  );
+  output.catcherBackground = shadow.background / total;
+  ` : `output.color = vec4f(
     // average the color by hit count.
     // So the antialised edge color will be correct when having transparent background
     color.rgb / select(total, hit, hit > 0.0),
@@ -69,16 +82,30 @@ fn main(@builtin(position) coord: vec4f) -> FSOutput {
     output.normal = vec4f(normal.rgb / total * 0.5 + 0.5, 1.0);
   }
   output.albedo = vec4f(albedo.rgb / total, clamp(hit / total, 0.0, 1.0));
-  output.shadowCatcher = shadowCatcherBuffer[idx] / total;
+  output.shadowCatcher = shadowCatcherBuffer[idx].mask / total;
+  `}
   return output;
 }
 `;
 }
 
+type RayTraceOutput = 'color' | 'normal' | 'albedo' | 'shadowCatcher'
+  | 'foreground' | 'catcherBackground';
+type RayTraceBuffers = {
+  color: GPUBuffer;
+  normal: GPUBuffer;
+  albedo: GPUBuffer;
+  shadowCatcher: GPUBuffer;
+  shadowCatcherOffset?: number;
+};
+
 export class WGPURayTraceOutputPass {
   private _device: GPUDevice;
 
   private _pipeline!: GPURenderPipeline;
+  private _layersPipeline!: GPURenderPipeline;
+  private _foregroundTexture!: GPUTexture;
+  private _catcherBackgroundTexture!: GPUTexture;
   private _colorTexture!: GPUTexture;
   private _normalTexture!: GPUTexture;
   private _albedoTexture!: GPUTexture;
@@ -106,14 +133,8 @@ export class WGPURayTraceOutputPass {
     };
   }
 
-  getOutput(label: 'color' | 'normal' | 'albedo' | 'shadowCatcher'): GPUTexture;
-  getOutput(
-    label:
-      | 'color'
-      | 'normal'
-      | 'albedo'
-      | 'shadowCatcher'
-  ): GPUTexture | undefined {
+  getOutput(label: RayTraceOutput): GPUTexture {
+
     return this[`_${label}Texture`];
   }
 
@@ -148,9 +169,20 @@ export class WGPURayTraceOutputPass {
       ...textureDescriptor,
       label: 'Ray Trace Albedo'
     });
+    this._foregroundTexture = device.createTexture({
+      ...textureDescriptor,
+      label: 'Ray Trace Foreground',
+      format: 'rgba16float'
+    });
+    this._catcherBackgroundTexture = device.createTexture({
+      ...textureDescriptor,
+      label: 'Ray Trace Catcher Background',
+      format: 'rgba16float'
+    });
     this._shadowCatcherTexture = device.createTexture({
       ...textureDescriptor,
-      label: 'Ray Trace Shadow Catcher'
+      label: 'Ray Trace Shadow Catcher',
+      format: 'rgba16float'
     });
   }
 
@@ -207,7 +239,7 @@ export class WGPURayTraceOutputPass {
             format: 'rgba8unorm'
           },
           {
-            format: 'rgba8unorm'
+            format: 'rgba16float'
           }
         ],
         constants: {
@@ -217,6 +249,20 @@ export class WGPURayTraceOutputPass {
       }
     });
 
+    this._layersPipeline = device.createRenderPipeline({
+      label: 'rayTraceLayers',
+      layout: 'auto',
+      vertex: {
+        module: device.createShaderModule({ code: fullScreenQuadVertexShaderWGSL }),
+        entryPoint: 'main'
+      },
+      fragment: {
+        module: device.createShaderModule({ code: createNormalizeRayTraceOutputWGSL(true) }),
+        entryPoint: 'main',
+        targets: [{ format: 'rgba16float' }, { format: 'rgba16float' }],
+        constants: { outputWidth: this._width, outputHeight: this._height }
+      }
+    });
     this._updateBindGroups();
   }
 
@@ -251,35 +297,38 @@ export class WGPURayTraceOutputPass {
 
   createPass(
     encoder: GPUCommandEncoder,
-    inputBuffers: {
-      color: GPUBuffer;
-      normal: GPUBuffer;
-      albedo: GPUBuffer;
-      shadowCatcher: GPUBuffer;
-      shadowCatcherOffset?: number;
-    }
+    inputBuffers: RayTraceBuffers,
+    separateCatcher = false
   ) {
     this._updatePipeline();
+    this._createOutputPass(encoder, inputBuffers, false);
+    if (separateCatcher) this._createOutputPass(encoder, inputBuffers, true);
+  }
+
+  private _createOutputPass(
+    encoder: GPUCommandEncoder,
+    inputBuffers: RayTraceBuffers,
+    layers: boolean
+  ) {
+    const pipeline = layers ? this._layersPipeline : this._pipeline;
+    const textures = layers
+      ? [this._foregroundTexture, this._catcherBackgroundTexture]
+      : [this._colorTexture, this._normalTexture, this._albedoTexture, this._shadowCatcherTexture];
     const pass = encoder.beginRenderPass({
-      colorAttachments: [
-        this._colorTexture,
-        this._normalTexture,
-        this._albedoTexture,
-        this._shadowCatcherTexture
-      ].map((texture) => ({
+      colorAttachments: textures.map((texture) => ({
         view: texture.createView(),
         loadValue: { r: 0, g: 0, b: 0, a: 0 },
         storeOp: 'store',
         loadOp: 'clear'
       }))
     });
-    pass.setPipeline(this._pipeline);
+    pass.setPipeline(pipeline);
 
     pass.setBindGroup(
       0,
       this._device.createBindGroup({
         label: 'rayTraceOutput',
-        layout: this._pipeline.getBindGroupLayout(0),
+        layout: pipeline.getBindGroupLayout(0),
         entries: [
           inputBuffers.color,
           inputBuffers.normal,
@@ -294,7 +343,12 @@ export class WGPURayTraceOutputPass {
         }))
       })
     );
-    pass.setBindGroup(1, this._uniformBindGroup);
+    pass.setBindGroup(1, layers ? this._device.createBindGroup({
+      layout: pipeline.getBindGroupLayout(1),
+      entries: Object.values(this._uniformsBuffers).map((buffer, binding) => ({
+        binding, resource: { buffer }
+      }))
+    }) : this._uniformBindGroup);
 
     pass.draw(6, 1, 0, 0);
     pass.end();
@@ -313,7 +367,9 @@ export class WGPURayTraceOutputPass {
       this._colorTexture,
       this._normalTexture,
       this._albedoTexture,
-      this._shadowCatcherTexture
+      this._shadowCatcherTexture,
+      this._foregroundTexture,
+      this._catcherBackgroundTexture
     ].filter((texture): texture is GPUTexture => !!texture);
     void this._device.queue
       .onSubmittedWorkDone()

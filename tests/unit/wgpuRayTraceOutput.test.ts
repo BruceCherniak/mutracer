@@ -1,6 +1,9 @@
+import { makeShaderDataDefinitions } from 'webgpu-utils';
+import rayTraceCompute from '../../src/renderer/wgsl/rayTrace.compute';
+import { SHADOW_CATCHER_ACCUMULATION_BYTES } from '../../src/renderer/wgsl/chunks/shadowCatcherAccumulation.wgsl';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  WGPURayTraceOutputPass
+  WGPURayTraceOutputPass, createNormalizeRayTraceOutputWGSL
 } from '../../src/renderer/WGPURayTraceOutput';
 
 describe('WGPURayTraceOutputPass resource lifetime', () => {
@@ -41,7 +44,7 @@ describe('WGPURayTraceOutputPass resource lifetime', () => {
     const oldTextures = textures.slice();
     pass.setSize(1280, 720);
 
-    expect(oldTextures).toHaveLength(4);
+    expect(oldTextures).toHaveLength(6);
     expect(device.queue.onSubmittedWorkDone).toHaveBeenCalledOnce();
     oldTextures.forEach((texture) => {
       expect(texture.destroy).not.toHaveBeenCalled();
@@ -56,4 +59,22 @@ describe('WGPURayTraceOutputPass resource lifetime', () => {
     });
   });
 
+});
+
+it('matches catcher accumulation layout in tracing and both normalization passes', () => {
+  vi.stubGlobal('GPUShaderStage', { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 });
+  try {
+    for (const shader of [
+      rayTraceCompute({ hasDisplacement: false }),
+      createNormalizeRayTraceOutputWGSL(),
+      createNormalizeRayTraceOutputWGSL(true)
+    ]) {
+      const layout = makeShaderDataDefinitions(shader).structs.ShadowCatcherAccumulation;
+      expect(layout.size).toBe(SHADOW_CATCHER_ACCUMULATION_BYTES);
+      expect(layout.fields.mask.offset).toBe(0);
+      expect(layout.fields.background.offset).toBe(16);
+    }
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

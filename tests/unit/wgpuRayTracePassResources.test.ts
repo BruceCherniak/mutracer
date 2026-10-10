@@ -164,6 +164,8 @@ describe('WGPURayTracePass output resource lifetime', () => {
     pass.setSize(2, 2);
 
     expect(createBuffer).toHaveBeenCalledTimes(4);
+    expect(pass.getOutputBuffer().shadowCatcher.size).toBe(2 * 2 * 32);
+    expect(pass.getOutputBuffer().color.size).toBe(2 * 2 * 16);
     oldBuffers.forEach((buffer) => expect(buffer.destroy).not.toHaveBeenCalled());
 
     completeSubmittedWork();

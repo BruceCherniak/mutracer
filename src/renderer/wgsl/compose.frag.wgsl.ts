@@ -95,10 +95,11 @@ fn gradeColor(inputColor: vec3f) -> vec3f {
 }
 `;
 
-// OIDN denoises RGB. Copy the stochastic shadow opacity into all color
-// channels so the regular HDR + auxiliary-guide model can denoise it too.
+// Denoise opacity conditional on hitting the catcher. Its primary coverage
+// must stay separate, or silhouette pixels lose their shadow twice.
 export const shadowDenoiseInputMain = /* wgsl */ `
-let shadowAlpha = textureLoad(shadowCatcherTex, uv, 0).a;
+let shadow = textureLoad(shadowCatcherTex, uv, 0);
+let shadowAlpha = clamp(shadow.a / max(shadow.r, 0.000001), 0.0, 1.0);
 output.color = vec4f(vec3f(shadowAlpha), 1.0);
 `;
 
@@ -160,26 +161,47 @@ if (bloomIntensity > 0.0) {
   finalColor.a = max(finalColor.a, min(dot(bloomTexel.rgb, vec3f(0.2125, 0.7154, 0.0721)), 1.0));
 }
 
-// Use light pixel directly to avoid black pixels on the edge without shadow
 if (shadowCatcherEnabled > 0.5) {
   let shadowCatcher = textureLoad(shadowCatcherTex, uv, 0);
-  var shadowAlpha = min(max(
-    select(shadowCatcher.a, shadowCatcher.r, shadowCatcherDenoised > 0.5),
-    0.0
-  ), 1.0);
-  shadowAlpha = max((shadowAlpha - (1.0 - shadowCatcherAlpha)), 0.0);
-  // The raw catcher coverage is kept in alpha's companion texture channel;
-  // use it to reject denoiser spill on geometry and translucent silhouettes.
-  shadowAlpha *= clamp(shadowCatcher.r, 0.0, 1.0);
-  let composedAlpha = finalColor.a + shadowAlpha * (1.0 - finalColor.a);
-  let composedPremultiplied =
-    finalColor.rgb * finalColor.a * (1.0 - shadowAlpha)
-    + shadowCatcherColor * shadowAlpha;
-  finalColor = select(
-    vec4f(composedPremultiplied / max(composedAlpha, 0.000001), composedAlpha),
-    finalColor,
-    shadowAlpha == 0.0
-  );
+  let mask = textureLoad(shadowCatcherMaskTex, uv, 0);
+  let coverage = clamp(mask.r, 0.0, 1.0);
+  let opacity = max(clamp(select(
+    shadowCatcher.a / max(coverage, 0.000001),
+    shadowCatcher.r, shadowCatcherDenoised > 0.5
+  ), 0.0, 1.0) - (1.0 - shadowCatcherAlpha), 0.0);
+  if (coverage > 0.0) {
+    let foreground = textureLoad(foregroundTex, uv, 0);
+    let background = textureLoad(catcherBackgroundTex, uv, 0);
+    var foregroundColor = gradeColor((foreground.rgb + bloomTexel.rgb) * exposure * histogramExposure);
+    var backgroundColor = gradeColor((background.rgb / max(background.a, 0.000001) + bloomTexel.rgb) * exposure * histogramExposure);
+    foregroundColor *= 1.0 - toneMappingParams.y * vignetteEdge;
+    backgroundColor *= 1.0 - toneMappingParams.y * vignetteEdge;
+    if (!hdrOutput) {
+      foregroundColor = applyToneMapping(foregroundColor);
+      backgroundColor = applyToneMapping(backgroundColor);
+    }
+    foregroundColor = select(pow(max(foregroundColor, vec3f(0.0)), vec3f(1.0 / 2.2)), linearToSrgb(foregroundColor), hdrOutput);
+    backgroundColor = select(pow(max(backgroundColor, vec3f(0.0)), vec3f(1.0 / 2.2)), linearToSrgb(backgroundColor), hdrOutput);
+    if (flatBackgroundColor.a > 0.5) {
+      var unbloomedBackground = gradeColor(background.rgb / max(background.a, 0.000001) * exposure * histogramExposure);
+      unbloomedBackground *= 1.0 - toneMappingParams.y * vignetteEdge;
+      if (!hdrOutput) { unbloomedBackground = applyToneMapping(unbloomedBackground); }
+      let encodedUnbloomedBackground = select(pow(max(unbloomedBackground, vec3f(0.0)), vec3f(1.0 / 2.2)), linearToSrgb(unbloomedBackground), hdrOutput);
+      let bloomSpill = select(vec3f(0.0), max(backgroundColor - encodedUnbloomedBackground, vec3f(0.0)), bloomIntensity > 0.0);
+      backgroundColor = linearToSrgb(max(flatBackgroundColor.rgb, vec3f(0.0))) + bloomSpill;
+    }
+    // Foreground and catcher are disjoint primary samples, not overlapping
+    // alpha layers. Shadow only the catcher background before averaging.
+    let shadowAlpha = coverage * opacity;
+    let bloomAlpha = clamp(dot(bloomTexel.rgb, vec3f(0.2125, 0.7154, 0.0721)), 0.0, 1.0);
+    let foregroundAlpha = max(foreground.a, bloomAlpha * (1.0 - coverage));
+    let backgroundAlpha = max(background.a, bloomAlpha * coverage);
+    let alpha = foregroundAlpha + backgroundAlpha * (1.0 - opacity) + shadowAlpha;
+    let premultiplied = foregroundColor * foregroundAlpha
+      + backgroundColor * backgroundAlpha * (1.0 - opacity)
+      + shadowCatcherColor * shadowAlpha;
+    finalColor = vec4f(premultiplied / max(alpha, 0.000001), alpha);
+  }
 }
 
 output.color = finalColor;

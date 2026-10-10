@@ -1,3 +1,4 @@
+import cameraRayGlsl from './chunks/cameraRay.glsl.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
@@ -103,15 +104,7 @@ float pathWavelength;
 ${sampleLightGlsl}
 ${sampleMaterialGlsl}
 
-Ray initCameraRay(vec2 coord) {
-  vec4 origin = viewProjectionInv * vec4(coord * 2.0 - 1.0, -1.0, 1.0);
-  vec4 target = viewProjectionInv * vec4(coord * 2.0 - 1.0, 1.0, 1.0);
-  Ray cam;
-  initRay(cam, origin.xyz / origin.w, normalize(target.xyz * origin.w - origin.xyz * target.w));
-
-  return cam;
-}
-
+${cameraRayGlsl}
 struct RayTraceAuxiliary {
   // Denoising guides and auxiliary pixel classification.
   vec3 albedo;
@@ -559,14 +552,6 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
   return integrateOnePath(si, ray, mat, outAux);
 }
 
-vec2 sampleCircle(vec2 p) {
-  p = 2.0 * p - 1.0;
-  bool greater = abs(p.x) > abs(p.y);
-  float r = greater ? p.x : p.y;
-  float theta = greater ? 0.25 * PI * p.y / p.x : PI * (0.5 - 0.25 * p.x / p.y);
-  return r * vec2(cos(theta), sin(theta));
-}
-
 void main() {
 
   initRandom();
@@ -582,16 +567,7 @@ void main() {
 
   // Thin lens model with depth-of-field
   // http://www.pbr-book.org/3ed-2018/Camera_Models/Projective_Camera_Models.html#TheThinLensModelandDepthofField
-  Ray cam = initCameraRay(v_Texcoord + pixelJitter());
-
-  if (cameraAperture > 0.0) {
-    vec2 lensPoint = cameraAperture * sampleCircle(sample2D(CAMERA_LENS));
-    vec3 focusPoint = cam.o + cam.d * cameraFocus; // intersect ray direction with focus plane
-    vec3 origin = vec3(lensPoint, 0.0);
-    origin = vec3(viewInv * vec4(origin, 1.0));
-    vec3 dir = normalize(focusPoint - origin);
-    initRay(cam, origin, dir);
-  }
+  Ray cam = primaryCameraRay();
 
   RayTraceAuxiliary outAux;
   outAux.albedo = vec3(0.0);

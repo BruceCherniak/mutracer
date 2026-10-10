@@ -387,7 +387,7 @@ function makeWGPURenderingPipeline(
 
   const rayTracePass = new WGPURayTracePass(device);
   const rayTraceOutputPass = new WGPURayTraceOutputPass(device);
-  const getFrameInput = (label: 'color' | 'albedo' | 'normal' | 'shadowCatcher') =>
+  const getFrameInput = (label: 'color' | 'albedo' | 'normal' | 'shadowCatcher' | 'foreground' | 'catcherBackground') =>
     rayTraceOutputPass.getOutput(label);
   let bloomPass: WGPUBloomPass | undefined;
 
@@ -400,6 +400,34 @@ function makeWGPURenderingPipeline(
 output.color = textureLoad(colorTex, uv, 0);
 `
   });
+
+  // Reconstruct the unshadowed linear beauty for bloom, exposure and raw export.
+  const beautyMergePass = new WGPUFullQuadPass('beautyMerge', device, {
+    textureWillBeRead: true,
+    inputs: ['foregroundTex', 'catcherBackgroundTex', 'maskTex', 'albedoTex'],
+    outputs: ['color'], uniforms: [],
+    fsMain: /* wgsl */ `
+let foreground = textureLoad(foregroundTex, uv, 0);
+let background = textureLoad(catcherBackgroundTex, uv, 0);
+let hit = textureLoad(albedoTex, uv, 0).a;
+let backgroundHit = textureLoad(maskTex, uv, 0).b;
+output.color = vec4f(
+  (foreground.rgb * max(hit - backgroundHit, 0.0) + background.rgb)
+    / select(1.0, hit, hit > 0.0),
+  foreground.a + background.a
+);
+`
+  });
+  beautyMergePass.setOutputParams({ color: { format: 'rgba32float' } });
+
+  function mergeBeauty(encoder: GPUCommandEncoder, foreground: GPUTexture) {
+    beautyMergePass.createPass(encoder, {
+      foregroundTex: foreground,
+      catcherBackgroundTex: getFrameInput('catcherBackground'),
+      maskTex: getFrameInput('shadowCatcher'),
+      albedoTex: getFrameInput('albedo')
+    });
+  }
 
   const autoExposurePass = new WGPUAutoExposure(device);
   let hdrPeakMeter: WGPUHDRPeakMeter | undefined;
@@ -465,11 +493,13 @@ output.color = textureLoad(colorTex, uv, 0);
       }
     ],
     outputs: ['color', 'shadowCatcher'],
-    // TODO shadow catcher
     inputs: [
       'colorTex',
+      'foregroundTex',
+      'catcherBackgroundTex',
       'flatBackgroundMaskTex',
       'shadowCatcherTex',
+      'shadowCatcherMaskTex',
       'bloomTex',
       'autoExposureTex'
     ]
@@ -876,7 +906,7 @@ output.color = color;
     );
 
     rayTraceOutputPass.setSampleCount(sampleCount);
-    rayTraceOutputPass.createPass(encoder, rayTracePass.getOutputBuffer());
+    rayTraceOutputPass.createPass(encoder, rayTracePass.getOutputBuffer(), rayTracePass.hasShadowCatcher());
 
     composePass.setUniform(
       'shadowCatcherEnabled',
@@ -884,9 +914,14 @@ output.color = color;
     );
     composePass.setUniform('shadowCatcherDenoised', +!!oidnShadowTexture);
 
-    const colorTexture =
+    const foregroundTexture =
       (oidnHDRBuffer ? oidnHDRTexture : undefined) ||
-      getFrameInput('color');
+      getFrameInput(rayTracePass.hasShadowCatcher() ? 'foreground' : 'color');
+    let colorTexture = (oidnHDRBuffer ? oidnHDRTexture : undefined) || getFrameInput('color');
+    if (oidnHDRBuffer && rayTracePass.hasShadowCatcher()) {
+      mergeBeauty(encoder, foregroundTexture);
+      colorTexture = beautyMergePass.getOutput('color');
+    }
     const bloomEnabled = bloomIntensity > 0.0;
     // Progressive accumulation refreshes bloom every ten samples.
     const samplesSkipped = sampleCount < 10 || sampleCount % 10 > 0;
@@ -914,9 +949,12 @@ output.color = color;
     }
     composePass.createPass(encoder, {
       colorTex: colorTexture,
+      foregroundTex: foregroundTexture,
+      catcherBackgroundTex: getFrameInput('catcherBackground'),
       flatBackgroundMaskTex: getFrameInput('albedo'),
       shadowCatcherTex:
         oidnShadowTexture || getFrameInput('shadowCatcher'),
+      shadowCatcherMaskTex: getFrameInput('shadowCatcher'),
       // Use color texture as placeholder
       bloomTex: bloomEnabled && bloomPass ? bloomPass.getOutput() : colorTexture,
       autoExposureTex: autoExposurePass.getOutput()
@@ -1156,6 +1194,7 @@ output.color = color;
     rayTracePass.setSize(renderWidth, renderHeight);
     rayTraceOutputPass.setSize(renderWidth, renderHeight);
     composePass.setSize(renderWidth, renderHeight);
+    beautyMergePass.setSize(renderWidth, renderHeight);
     autoExposurePass.setSize(renderWidth, renderHeight);
     shadowDenoiseInputPass.setSize(renderWidth, renderHeight);
     oidnBeautyInputPass.setSize(renderWidth, renderHeight);
@@ -1622,7 +1661,7 @@ output.color = color;
       if (generation !== oidnGeneration) return Promise.resolve();
       const encoder = device.createCommandEncoder();
       oidnBeautyInputPass.createPass(encoder, {
-        colorTex: getFrameInput('color')
+        colorTex: getFrameInput(rayTracePass.hasShadowCatcher() ? 'foreground' : 'color')
       });
       device.queue.submit([encoder.finish()]);
       return runOIDNPhase(generation, (finish, fail) =>
@@ -1746,6 +1785,7 @@ output.color = color;
     undefined;
     undefined;
     undefined;
+    beautyMergePass.dispose();
     autoExposurePass.dispose();
     hdrPeakMeter?.dispose();
     oidnAlbedoEncodePass.dispose();
@@ -1810,13 +1850,18 @@ output.color = color;
         usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
       });
       const encoder = device.createCommandEncoder();
-      if (!oidnHDRTexture) {
+      let rawTexture = oidnHDRTexture || outputTexture;
+      if (oidnHDRTexture && rayTracePass.hasShadowCatcher()) {
+        mergeBeauty(encoder, oidnHDRTexture);
+        rawTexture = beautyMergePass.getOutput('color');
+      }
+      if (!oidnHDRTexture || rayTracePass.hasShadowCatcher()) {
         copyPass.setSize(renderWidth, renderHeight);
         copyPass.setOutputParams({ color: { format: 'rgba32float' } });
-        copyPass.createPass(encoder, { colorTex: outputTexture });
+        copyPass.createPass(encoder, { colorTex: rawTexture });
       }
       encoder.copyTextureToBuffer(
-        { texture: oidnHDRTexture || copyPass.getOutput('color') },
+        { texture: oidnHDRTexture && !rayTracePass.hasShadowCatcher() ? oidnHDRTexture : copyPass.getOutput('color') },
         { buffer, bytesPerRow: 16 * renderWidth },
         textureDims
       );

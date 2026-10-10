@@ -43,6 +43,11 @@ const mocks = vi.hoisted(() => {
     setSamplingPattern = vi.fn(() => true);
   }
   class OutputPass extends Pass {
+    outputs = new Map<string, Pass['texture']>();
+    getOutput(label = 'color') {
+      if (!this.outputs.has(label)) this.outputs.set(label, { ...this.texture });
+      return this.outputs.get(label)!;
+    }
     setSampleCount() {}
     setSampleTileGrid() {}
   }
@@ -195,6 +200,38 @@ async function denoisedPipeline() {
 }
 
 describe('WebGPU denoised presentation transitions', () => {
+  it('keeps raw catcher coverage separate from the denoised shadow texture', async () => {
+    const pipeline = createPipeline(false);
+    vi.spyOn(mocks.TracePass.latest, 'hasShadowCatcher').mockReturnValue(true);
+    pipeline.draw(new Camera('perspective'), 1);
+    const compose = mocks.Pass.instances.get('compose')!;
+    const rawInputs = compose.createPass.mock.lastCall![1];
+    expect(rawInputs.shadowCatcherMaskTex).toBe(rawInputs.shadowCatcherTex);
+    const coverage = rawInputs.shadowCatcherMaskTex;
+    const foreground = rawInputs.foregroundTex;
+    const background = rawInputs.catcherBackgroundTex;
+    expect(foreground).not.toBe(rawInputs.colorTex);
+    expect(background).not.toBe(foreground);
+    await pipeline.performOIDNDenoise(completedDenoiser(), undefined, true);
+    const denoisedInputs = compose.createPass.mock.lastCall![1];
+    expect(denoisedInputs.shadowCatcherMaskTex).toBe(coverage);
+    expect(denoisedInputs.catcherBackgroundTex).toBe(background);
+    expect(mocks.Pass.instances.get('OIDN nonnegative HDR input')!.createPass.mock.lastCall![1]).toEqual({ colorTex: foreground });
+    expect(mocks.Pass.instances.get('beautyMerge')!.createPass.mock.lastCall![1])
+      .toMatchObject({ foregroundTex: denoisedInputs.foregroundTex, catcherBackgroundTex: background, maskTex: coverage });
+    expect(denoisedInputs.shadowCatcherTex).not.toBe(coverage);
+    expect(compose.setUniform).toHaveBeenCalledWith('shadowCatcherDenoised', 1);
+    expect(mocks.Pass.instances.get('shadowDenoiseInput')!.createPass.mock.lastCall![1])
+      .toEqual({ shadowCatcherTex: coverage });
+    pipeline.restartSamples();
+    pipeline.draw(new Camera('perspective'), 1);
+    const restartedInputs = compose.createPass.mock.lastCall![1];
+    expect(restartedInputs.shadowCatcherTex).toBe(restartedInputs.shadowCatcherMaskTex);
+    expect(compose.setUniform.mock.calls.filter(([name]) => name === 'shadowCatcherDenoised').at(-1))
+      .toEqual(['shadowCatcherDenoised', 0]);
+    pipeline.dispose();
+  });
+
   it('immediately restores a resized canvas from the completed presentation', async () => {
     const pipeline = await denoisedPipeline();
     const completedTexture = displayedTexture();
