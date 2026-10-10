@@ -16,10 +16,12 @@ import { useViewer, showToast, writeHash, type RenderPhase, type Settings, type 
 import { Environment, createSky, loadHDR, parseHDR } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
-  createMaterialSpheres, isHDRFile, loadModelFromFiles, loadModelFromURL,
+  createMaterialSpheres, isHDRFile, loadModelFromFiles, loadModelFromURL, loadModelFromSource,
   type LoadedModel, type PathedFile
 } from './loadModel';
 import { readMaterial, textureSlots, writeMaterial, type MaterialValues } from './materialParams';
+import { clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
+import { cameraSettings, readCameraState, writeCameraState } from './cameraState';
 
 interface MaterialEntry {
   name: string;
@@ -71,6 +73,8 @@ export class ViewerEngine {
   private lastSampleTime = 0;
   private needsResize = true;
   private loadToken = 0;
+  private modelId: string | null = null;
+  private cameraSaveTimer: ReturnType<typeof setTimeout> | undefined;
   private envToken = 0;
   private modelRadius = 1;
   private dragging = false;
@@ -105,6 +109,7 @@ export class ViewerEngine {
       if (get().paused) set({ paused: false });
     });
     this.controls.addEventListener('end', () => { this.dragging = false; });
+    this.controls.addEventListener('change', this.scheduleCameraSave);
     this.camera.position.set(3, 2, 5);
 
     this.sync = this.createSync();
@@ -114,6 +119,7 @@ export class ViewerEngine {
         const before = this.settings;
         this.settings = state.settings;
         this.applySettings(state.settings, before);
+        this.scheduleCameraSave();
       }
     });
 
@@ -121,11 +127,16 @@ export class ViewerEngine {
     this.resizeObserver.observe(canvas);
     canvas.addEventListener('pointerdown', this.onPointerDown);
     canvas.addEventListener('pointerup', this.onPointerUp);
+    window.addEventListener('pagehide', this.saveCamera);
 
     this.raf = requestAnimationFrame(this.frame);
   }
 
   dispose() {
+    this.saveCamera();
+    ++this.loadToken;
+    ++this.envToken;
+    window.removeEventListener('pagehide', this.saveCamera);
     cancelAnimationFrame(this.raf);
     this.unsubscribe();
     this.resizeObserver.disconnect();
@@ -140,12 +151,33 @@ export class ViewerEngine {
 
   // ---------------------------------------------------------------- loading
 
-  async loadPreset(id: string) {
+  /** Explicit links win; otherwise reopen the sole cached model. */
+  async loadInitialModel(presetId: string | null) {
+    const token = ++this.loadToken;
+    const cached = await readModelCache();
+    if (token !== this.loadToken) return;
+    if (cached && (!presetId || cached.meta.presetId === presetId)) {
+      const { meta } = cached;
+      const loaded = await this.load(meta.name, (progress) => cached.source
+        ? loadModelFromSource(cached.source, progress)
+        : Promise.resolve(createMaterialSpheres()), meta, cached, false);
+      if (loaded || token + 1 !== this.loadToken) return;
+      await clearModelCache();
+      if (token + 1 !== this.loadToken) return;
+      if (!meta.presetId && meta.sourceUrl) {
+        return this.load(meta.name, (progress) => loadModelFromURL(meta.sourceUrl!, progress), meta, cached);
+      }
+    }
+    return this.loadPreset(presetId ?? 'spheres', true);
+  }
+
+  async loadPreset(id: string, restoreCamera = false) {
     const preset = MODEL_PRESETS.find((p) => p.id === id) ?? MODEL_PRESETS[0];
     // CC-BY models are credited in the viewport; CC0 ones only in the Examples menu.
     const meta = { presetId: preset.id, credit: preset.license === 'CC-BY 4.0' ? preset.credit : null, sourceUrl: preset.sourceUrl };
-    if (!preset.url) return this.load(preset.name, async () => createMaterialSpheres(), meta);
-    return this.load(preset.name, (progress) => loadModelFromURL(preset.url!, progress), meta);
+    const restored = restoreCamera ? { id: `preset:${preset.id}`, meta: { name: preset.name, ...meta } } : undefined;
+    if (!preset.url) return this.load(preset.name, async () => createMaterialSpheres(), meta, restored);
+    return this.load(preset.name, (progress) => loadModelFromURL(preset.url!, progress), meta, restored);
   }
 
   /** Shows a model built in code (used by the thumbnail generator). */
@@ -181,7 +213,9 @@ export class ViewerEngine {
   private async load(
     name: string,
     loader: (progress: (stage: 'download' | 'parse', loaded?: number, total?: number) => void) => Promise<LoadedModel>,
-    meta: { presetId: string | null; credit: string | null; sourceUrl: string | null }
+    meta: { presetId: string | null; credit: string | null; sourceUrl: string | null },
+    restored?: CachedModel,
+    persist = true
   ) {
     const token = ++this.loadToken;
     set({ loading: { name, stage: 'download', loaded: 0, total: 0 } });
@@ -194,20 +228,31 @@ export class ViewerEngine {
       if (token !== this.loadToken) return;
       set({ loading: null });
       showToast(`Could not load ${name}: ${(error as Error).message}`, 'error');
-      return;
+      return false;
     }
     if (token !== this.loadToken) {
       model.revoke();
-      return;
+      return false;
     }
     model.name = name;
+    this.saveCamera();
+    this.modelId = null; // Fit must not overwrite the saved view before restoration.
     this.setModel(model);
+    const id = restored?.id ?? (meta.presetId ? `preset:${meta.presetId}` : crypto.randomUUID());
+    if (restored) this.restoreCamera(id);
+    this.modelId = id;
     set({
       model: { name, ...meta },
       loading: { name, stage: 'bvh', loaded: 0, total: 0 }
     });
     this.awaitingFirstSample = true;
     writeHash(this.settings, meta.presetId);
+    this.saveCamera();
+    if (persist) {
+      if (model.source || meta.presetId) await saveModelCache({ id, meta: { name, ...meta }, source: model.source });
+      else await clearModelCache();
+    }
+    return true;
   }
 
   private setModel(model: LoadedModel) {
@@ -454,6 +499,47 @@ export class ViewerEngine {
   }
 
   // ----------------------------------------------------------------- camera
+
+  private scheduleCameraSave = () => {
+    if (this.modelId && this.cameraSaveTimer === undefined) this.cameraSaveTimer = setTimeout(this.saveCamera, 200);
+  };
+
+  private saveCamera = () => {
+    clearTimeout(this.cameraSaveTimer);
+    this.cameraSaveTimer = undefined;
+    if (!this.modelId) return;
+    writeCameraState({
+      modelId: this.modelId,
+      position: this.camera.position.toArray(), target: this.controls.target.toArray(), up: this.camera.up.toArray(),
+      near: this.camera.near, far: this.camera.far, zoom: this.camera.zoom,
+      settings: cameraSettings(this.settings)
+    });
+  };
+
+  private restoreCamera(modelId: string) {
+    const saved = readCameraState(modelId);
+    if (!saved) return;
+    // Flush any damping from fitting without rotating the saved view.
+    const autoRotate = this.controls.autoRotate;
+    this.controls.autoRotate = false;
+    this.controls.enableDamping = false;
+    this.controls.update();
+    this.camera.position.fromArray(saved.position);
+    this.camera.up.fromArray(saved.up);
+    this.controls.target.fromArray(saved.target);
+    this.camera.near = saved.near;
+    this.camera.far = saved.far;
+    this.camera.zoom = saved.zoom;
+    this.controls.update();
+    this.controls.enableDamping = true;
+    this.controls.autoRotate = autoRotate;
+    useViewer.setState((s) => ({ settings: {
+      ...s.settings, ...saved.settings,
+      cameraIndex: saved.settings.cameraIndex < this.modelCameras.length ? saved.settings.cameraIndex : -1
+    } }));
+    this.camera.updateProjectionMatrix();
+    this.needsResize = true;
+  }
 
   private activeCamera(): THREE.PerspectiveCamera {
     return this.modelCameras[this.settings.cameraIndex] ?? this.camera;

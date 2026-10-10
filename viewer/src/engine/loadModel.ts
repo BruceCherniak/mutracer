@@ -12,8 +12,16 @@ export interface LoadedModel {
   name: string;
   root: THREE.Object3D;
   animations: THREE.AnimationClip[];
+  /** Original files, including external buffers/textures, for reloads from OPFS. */
+  source?: ModelSource;
   /** Releases blob URLs created for local files. */
   revoke(): void;
+}
+
+export interface ModelSource {
+  files: PathedFile[];
+  mainPath: string;
+  base: string;
 }
 
 export type LoadProgress = (stage: 'download' | 'parse', loaded?: number, total?: number) => void;
@@ -37,9 +45,24 @@ export async function loadModelFromURL(url: string, onProgress: LoadProgress, si
   const buffer = await fetchWithProgress(url, (loaded, total) => onProgress('download', loaded, total), signal);
   onProgress('parse');
   const base = new URL('.', new URL(url, location.href)).href;
-  const gltf = await parse(createLoader(), buffer, base);
   const name = decodeURIComponent(url.split('?')[0].split('/').pop() || 'model');
-  return { name, root: gltf.scene, animations: gltf.animations, revoke() {} };
+  const mainPath = new URL(url, location.href).href;
+  const files: PathedFile[] = [{ path: mainPath, file: new File([buffer], name) }];
+  // glTF/GLB resources can be external even when the main file is binary.
+  let jsonBytes = new Uint8Array(buffer);
+  if (buffer.byteLength >= 20 && new DataView(buffer).getUint32(0, true) === 0x46546c67) {
+    jsonBytes = new Uint8Array(buffer, 20, new DataView(buffer).getUint32(12, true));
+  }
+  const json = JSON.parse(new TextDecoder().decode(jsonBytes));
+  const urls = new Set<string>();
+  for (const resource of [...(json.buffers ?? []), ...(json.images ?? [])]) {
+    if (typeof resource.uri === 'string' && !resource.uri.startsWith('data:')) urls.add(new URL(resource.uri, base).href);
+  }
+  await Promise.all([...urls].map(async (address) => {
+    const bytes = await fetchWithProgress(address, undefined, signal);
+    files.push({ path: address, file: new File([bytes], new URL(address).pathname.split('/').pop() || 'resource') });
+  }));
+  return loadModelFromSource({ files, mainPath, base }, onProgress);
 }
 
 /**
@@ -50,6 +73,14 @@ export async function loadModelFromFiles(files: PathedFile[], onProgress: LoadPr
   const main = files.find((f) => f.path.toLowerCase().endsWith('.glb')) ??
     files.find((f) => f.path.toLowerCase().endsWith('.gltf'));
   if (!main) throw new Error('No .glb or .gltf file found');
+  return loadModelFromSource({ files, mainPath: main.path, base: '' }, onProgress);
+}
+
+/** Parses the same bytes for downloaded, dropped and restored models. */
+export async function loadModelFromSource(source: ModelSource, onProgress: LoadProgress): Promise<LoadedModel> {
+  const { files, mainPath, base } = source;
+  const main = files.find((file) => file.path === mainPath);
+  if (!main) throw new Error('Missing main model file');
   const mainDir = main.path.includes('/') ? main.path.slice(0, main.path.lastIndexOf('/') + 1) : '';
   const blobs = new Map<string, string>();
   const created: string[] = [];
@@ -59,20 +90,29 @@ export async function loadModelFromFiles(files: PathedFile[], onProgress: LoadPr
     created.push(url);
     const relative = path.startsWith(mainDir) ? path.slice(mainDir.length) : path;
     blobs.set(relative, url);
+    blobs.set(path, url);
     if (!blobs.has(file.name)) blobs.set(file.name, url);
   }
   const manager = new THREE.LoadingManager();
   manager.setURLModifier((url) => {
+    if (blobs.has(url)) return blobs.get(url)!;
     if (url.startsWith('data:') || url.startsWith('blob:') || /^https?:/.test(url)) return url;
     const clean = decodeURIComponent(url.replace(/^\.\//, ''));
     return blobs.get(clean) ?? blobs.get(clean.split('/').pop()!) ?? url;
   });
   onProgress('parse');
-  const gltf = await parse(createLoader(manager), await main.file.arrayBuffer(), '');
+  let gltf: Awaited<ReturnType<typeof parse>>;
+  try {
+    gltf = await parse(createLoader(manager), await main.file.arrayBuffer(), base);
+  } catch (error) {
+    created.forEach((url) => URL.revokeObjectURL(url));
+    throw error;
+  }
   return {
     name: main.file.name,
     root: gltf.scene,
     animations: gltf.animations,
+    source,
     revoke: () => created.forEach((url) => URL.revokeObjectURL(url))
   };
 }

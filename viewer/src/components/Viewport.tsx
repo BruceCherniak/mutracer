@@ -17,9 +17,12 @@ export function Viewport() {
     setEngine(engine);
     if (location.hash.slice(1).split('&').includes(HANDOFF_HASH)) {
       // Files dropped on the home page (the hash is rewritten after the first settings change).
-      void takeStashedFiles().then((files) => files ? engine.loadFiles(files) : engine.loadPreset('spheres'));
+      void takeStashedFiles().then((files) => {
+        if (getEngine() !== engine) return;
+        return files ? engine.loadFiles(files) : engine.loadInitialModel(null);
+      });
     } else {
-      void engine.loadPreset(hashModelPreset() ?? 'spheres');
+      void engine.loadInitialModel(hashModelPreset());
     }
     // Our own hash writes use replaceState, so this only fires for edits by the user.
     const onHashChange = () => {

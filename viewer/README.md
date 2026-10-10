@@ -58,6 +58,12 @@ Notes:
   in the browser's origin private file system (OPFS), and reused across reloads.
   Invalid cached files are downloaded again; unavailable or full storage falls
   back to normal loading. Clear the site's browser storage to remove the cache.
+- The current model and its buffers/textures are saved as one OPFS archive,
+  replacing the previous model after a successful load. Reloads reopen that
+  model; an explicit model preset in the URL takes precedence. Orbit position,
+  target and lens settings are saved locally for the current model and restored
+  after loading, including the selected glTF camera. Unavailable/full storage
+  does not prevent opening models.
 - OIDN weights are loaded from `/oidn/weights/` at the server root via an explicit
   weightsBaseUrl, sharing all five local networks. Development serves the
   repository's `oidn/weights/` there, `build:viewer` emits them at the root of

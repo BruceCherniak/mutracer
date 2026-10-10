@@ -1,0 +1,112 @@
+/// <reference lib="dom" />
+import { File } from 'node:buffer';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { clearModelCache, readModelCache, saveModelCache, type CachedModel } from '../../viewer/src/engine/modelCache';
+
+function filesystem() {
+  const files = new Map<string, Blob>();
+  let fail = false;
+  const abort = vi.fn(async () => {});
+  const dir = {
+    getFileHandle: async (name: string, options?: { create?: boolean }) => {
+      if (!files.has(name)) {
+        if (!options?.create) throw new Error('Not found');
+        files.set(name, new Blob());
+      }
+      return {
+        getFile: async () => files.get(name),
+        createWritable: async () => {
+          let pending: Blob;
+          return {
+            write: async (blob: Blob) => { if (fail) throw new Error('Quota'); pending = blob; },
+            close: async () => { files.set(name, pending); }, abort
+          };
+        }
+      };
+    },
+    removeEntry: async (name: string) => { files.delete(name); }
+  };
+  vi.stubGlobal('navigator', { storage: { getDirectory: async () => ({ getDirectoryHandle: async () => dir }) } });
+  return { files, abort, fail: () => { fail = true; } };
+}
+
+function model(id = 'first'): CachedModel {
+  return {
+    id, meta: { name: `${id}.gltf`, presetId: null, credit: null, sourceUrl: null },
+    source: {
+      mainPath: 'folder/scene.gltf', base: '',
+      files: [
+        { path: 'folder/scene.gltf', file: new File(['{"asset":{"version":"2.0"}}'], 'scene.gltf', { lastModified: 42 }) as unknown as globalThis.File },
+        { path: 'folder/mesh.bin', file: new File([new Uint8Array([0, 1, 255])], 'mesh.bin') as unknown as globalThis.File },
+        { path: 'folder/textures/base.png', file: new File(['pixels'], 'base.png', { type: 'image/png' }) as unknown as globalThis.File }
+      ]
+    }
+  };
+}
+
+describe('current model OPFS cache', () => {
+  beforeEach(() => { vi.stubGlobal('File', File); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('restores original model files, paths and metadata from one archive', async () => {
+    const fs = filesystem();
+    const original = model();
+    await saveModelCache(original);
+    expect(fs.files.size).toBe(1);
+    const restored = (await readModelCache())!;
+    expect(restored.id).toBe(original.id);
+    expect(restored.meta).toEqual(original.meta);
+    expect(restored.source?.mainPath).toBe('folder/scene.gltf');
+    for (let i = 0; i < original.source!.files.length; i++) {
+      const before = original.source!.files[i];
+      const after = restored.source!.files[i];
+      expect(after.path).toBe(before.path);
+      expect(after.file.name).toBe(before.file.name);
+      expect(after.file.type).toBe(before.file.type);
+      expect(after.file.lastModified).toBe(before.file.lastModified);
+      expect(await after.file.arrayBuffer()).toEqual(await before.file.arrayBuffer());
+    }
+  });
+
+  it('serializes replacements and keeps only the latest model', async () => {
+    const fs = filesystem();
+    await Promise.all([saveModelCache(model('old')), saveModelCache(model('current'))]);
+    expect(fs.files.size).toBe(1);
+    expect((await readModelCache())?.meta.name).toBe('current.gltf');
+    const procedural = { id: 'preset:spheres', meta: { name: 'Spheres', presetId: 'spheres', credit: null, sourceUrl: null } };
+    await saveModelCache(procedural);
+    expect(await readModelCache()).toEqual({ ...procedural, source: undefined });
+    expect(fs.files.size).toBe(1);
+    await clearModelCache();
+    expect(fs.files.size).toBe(0);
+  });
+
+  it('rejects truncated or malformed archives', async () => {
+    const fs = filesystem();
+    await saveModelCache(model());
+    const blob = fs.files.get('current.model')!;
+    fs.files.set('current.model', blob.slice(0, blob.size - 1));
+    expect(await readModelCache()).toBeNull();
+    fs.files.set('current.model', new Blob(['invalid']));
+    expect(await readModelCache()).toBeNull();
+  });
+
+  it('drops stale data if writing a replacement fails, without rejecting the load', async () => {
+    const fs = filesystem();
+    await saveModelCache(model());
+    fs.fail();
+    await expect(saveModelCache(model('new'))).resolves.toBeUndefined();
+    expect(fs.abort).toHaveBeenCalledOnce();
+    expect(await readModelCache()).toBeNull();
+    expect(fs.files.size).toBe(0);
+  });
+
+  it('degrades gracefully when OPFS is unavailable or denied', async () => {
+    vi.stubGlobal('navigator', {});
+    await expect(saveModelCache(model())).resolves.toBeUndefined();
+    expect(await readModelCache()).toBeNull();
+    vi.stubGlobal('navigator', { storage: { getDirectory: async () => { throw new Error('Denied'); } } });
+    await expect(saveModelCache(model())).resolves.toBeUndefined();
+    expect(await readModelCache()).toBeNull();
+  });
+});
