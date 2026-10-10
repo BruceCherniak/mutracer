@@ -6,6 +6,7 @@ import { ColorRGB } from '../types';
  * towards the origin; only its direction matters.
  */
 export default class DirectionalLight {
+  /** Light discriminator; always `DirectionalLight`. */
   readonly type = 'DirectionalLight' as const;
 
   /** A point on the light's side; the light travels from here towards `[0, 0, 0]`. */

@@ -150,6 +150,6 @@ describe('glTF parser', () => {
   it('rejects glTF 1 binary containers', async () => {
     const buffer = new ArrayBuffer(20);
     new Uint32Array(buffer, 0, 4).set([0x46546c67, 1, 20, 0]);
-    await expect(parseBinary(buffer, {})).rejects.toBe('Only glTF2.0 is supported.');
+    await expect(parseBinary(buffer, {})).rejects.toThrow(new Error('Only glTF2.0 is supported.'));
   });
 });

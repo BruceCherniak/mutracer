@@ -8,6 +8,7 @@ import IESProfile from './IESProfile';
  * degrees).
  */
 export default class SpotLight {
+  /** Light discriminator; always `SpotLight`. */
   readonly type = 'SpotLight' as const;
   /** World-space position. */
   position: vec3.Vec3Array;
@@ -73,10 +74,12 @@ export default class SpotLight {
     this.iesRotation = iesRotation;
   }
 
+  /** @internal */
   static getArea(light: SpotLight) {
     return 4 * Math.PI * light.radius ** 2;
   }
 
+  /** @internal */
   static getRadiance(light: SpotLight) {
     // A zero-radius spot is a point emitter. Its stored emission is luminous
     // intensity (cd), and the shader applies inverse-square attenuation.
@@ -84,6 +87,7 @@ export default class SpotLight {
     return light.intensity / (Math.PI * light.radius ** 2);
   }
 
+  /** @internal */
   static getShapingFluxFactor(light: SpotLight) {
     const cosConeAngle = Math.cos((light.outerAngle * Math.PI) / 180);
     const softness = Math.min(

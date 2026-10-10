@@ -7,9 +7,13 @@ export type OIDNEngine = 'auto' | 'wgsl' | 'webnn';
 export type OIDNPrecision = 'auto' | 'fp32' | 'fp16';
 export type OIDNHDRTransfer = 'pu' | 'log';
 export interface OIDNDynamicTileOptions {
+  /** Smallest output tile edge in pixels. Default `256`, clamped to maxTileSize. */
   minTileSize?: number;
+  /** Initial output tile edge in pixels. Default `432`, clamped to tile limits. */
   initialTileSize?: number;
+  /** Target upper bound for one tile GPU latency in milliseconds. Default `16`. */
   targetTileTimeMs?: number;
+  /** Tile edge adjustment in pixels per completed execution. Default `16`. */
   adjustmentStep?: number;
 }
 export type OIDNDynamicTileSetting = boolean | OIDNDynamicTileOptions;
@@ -26,11 +30,15 @@ export const OIDN_AUXILIARY_MODEL_FILENAMES = {
 
 export type OIDNModel = keyof typeof OIDN_MODEL_FILENAMES;
 export interface OIDNAuxiliaryModelUrls {
+  /** Albedo prefilter weights URL; required when overriding auxiliary networks. */
   albedo: string | URL;
+  /** Normal prefilter weights URL; required when overriding auxiliary networks. */
   normal: string | URL;
 }
 export interface OIDNAuxiliaryDenoisers {
+  /** Loaded albedo prefilter; supplied by the clean-aux loader. */
   albedo: OIDNDenoiser;
+  /** Loaded normal prefilter; supplied by the clean-aux loader. */
   normal: OIDNDenoiser;
 }
 export type OIDNDenoiser = UNet & {

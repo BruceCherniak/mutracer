@@ -97,8 +97,11 @@ export interface RendererParams {
 export interface RendererDiagnostics extends RenderingDiagnostics {
   /** GPU adapter description reported by the browser. */
   adapterName: string;
+  /** Active rendering backend; 'webgpu' or 'webgl'. */
   backend: 'webgpu' | 'webgl';
+  /** Render height in pixels. */
   height: number;
+  /** Render width in pixels. */
   width: number;
   /** Runtime information reported by oidn-web, when a denoiser is attached. */
   oidn?: {
@@ -110,7 +113,9 @@ export interface RendererDiagnostics extends RenderingDiagnostics {
 
 /** Device limits that bound the material texture atlas. */
 export interface TextureAtlasLimits {
+  /** Maximum supported material-atlas layers; device dependent. */
   maxTextureArrayLayers: number;
+  /** Maximum supported atlas edge length in pixels; device dependent. */
   maxTextureDimension2D: number;
 }
 
@@ -156,7 +161,9 @@ export interface OfflineFrameRenderResult {
   averageSamplesPerPixel: number;
   /** Independent pilot work used to choose the final-pass budgets. */
   pilotSamples: number;
+  /** Per-tile pilot variance history; undefined without adaptive sampling. */
   varianceHistory?: OfflineVarianceHistory;
+  /** Whether adaptive allocation was used; false for fixed sampling. */
   adaptiveSampling: boolean;
 }
 
@@ -383,9 +390,6 @@ export default class Renderer {
    */
   samplingPattern: SamplingPattern = 'sobol';
 
-  /** @internal Temporary fixed-seed A/B control. */
-  private _samplingEvidenceSeed = 0;
-
   /** Bloom intensity. `0` disables bloom. Default `0`. */
   bloomIntensity = 0;
   /** Luminance above which pixels contribute to bloom. Default `1`. */
@@ -435,8 +439,8 @@ export default class Renderer {
   }
 
   /**
-   * The attached OIDN denoiser. Prefer {@link Renderer.setDenoiser}; assign
-   * directly only for denoisers loaded with `mutracer/oidn` helpers. The
+   * The attached OIDN denoiser; undefined by default. Prefer
+   * {@link Renderer.setDenoiser}; assign directly only for denoisers loaded with `mutracer/oidn` helpers. The
    * `setDenoiser()` mode (`whileConverging` and related options) stays as set.
    */
   get oidn() {
@@ -550,6 +554,7 @@ export default class Renderer {
     this._renderDone = false;
   }
 
+  /** Returns the current canvas width and height in pixels. */
   getSize() {
     return {
       width: this.canvas.width,
@@ -943,6 +948,7 @@ export default class Renderer {
     }
   }
 
+  /** Underlying WebGL wrapper, undefined before initialization or on WebGPU. @internal */
   getWebGLRenderer() {
     return this._webglRenderer;
   }
@@ -1134,7 +1140,7 @@ export default class Renderer {
     if (pipeline.setBevelSamples(this.bevelSamples)) {
       this._renderDone = false;
     }
-    if (pipeline.setSamplingPattern(this.samplingPattern, this.maxSamples, this._samplingEvidenceSeed)) {
+    if (pipeline.setSamplingPattern(this.samplingPattern, this.maxSamples)) {
       this._renderDone = false;
     }
     if (

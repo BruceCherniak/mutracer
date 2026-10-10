@@ -13,6 +13,7 @@ export type Projection = 'perspective' | 'orthographic';
  * ```
  */
 export default class Camera extends SceneNode {
+  /** Camera projection mode. Default `perspective`. */
   projection: Projection = 'perspective';
 
   /** Distance to the plane in focus when `aperture > 0`. Default `10`. */
@@ -29,10 +30,13 @@ export default class Camera extends SceneNode {
   /** Width / height (perspective). Default `1`. */
   aspect = 1;
 
-  /** Orthographic frustum bounds. */
+  /** Left orthographic frustum bound in scene units. Default `-1`. */
   left = -1;
+  /** Right orthographic frustum bound in scene units. Default `1`. */
   right = 1;
+  /** Top orthographic frustum bound in scene units. Default `1`. */
   top = 1;
+  /** Bottom orthographic frustum bound in scene units. Default `-1`. */
   bottom = -1;
 
   /** Zoom factor applied to the field of view or orthographic bounds. Default `1`. */
@@ -98,6 +102,7 @@ export default class Camera extends SceneNode {
     );
   }
 
+  /** Copies camera parameters and world matrix from source into target. */
   static copy(source: Camera, target: Camera) {
     target.projection = source.projection;
     target.fov = source.fov;
@@ -115,6 +120,7 @@ export default class Camera extends SceneNode {
     mat4.copy(target.matrixWorld, source.matrixWorld);
   }
 
+  /** Returns a new column-major projection matrix including zoom. */
   static getProjectionMatrix(camera: Camera) {
     if (camera.projection === 'perspective') {
       const fov = (camera.fov * Math.PI) / 180;

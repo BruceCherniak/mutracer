@@ -9,8 +9,6 @@
     "noUnusedLocals": true,
     "sourceMap": true,
 
-    "allowJs": true,
-
     "isolatedModules": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
@@ -23,6 +21,5 @@
 
     "types": ["@webgpu/types"]
   },
-  "include": ["src"],
-  "exclude": ["src/renderer/__glsl"]
+  "include": ["src"]
 }

@@ -1075,10 +1075,15 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
 
 /** Informational changes; nothing has to be forwarded to the renderer. */
 export interface THREESceneChanges {
+  /** Number of mesh instances with changed transforms. */
   transforms: number;
+  /** Whether mesh membership changed during the update. */
   membership: boolean;
+  /** Whether geometry or material content changed during the update. */
   content: boolean;
+  /** Whether light membership or parameters changed during the update. */
   lights: boolean;
+  /** Whether the background changed during the update. */
   background: boolean;
 }
 
@@ -1091,6 +1096,7 @@ export interface THREESceneChanges {
  * are removed after each update.
  */
 export class THREESceneSync {
+  /** Retained MuTracer scene initialized from the source scene and updated in place. */
   readonly scene: Scene;
   private _store = createConversionStore();
   private _detector = new SceneChangeDetector();

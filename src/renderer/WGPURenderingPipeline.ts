@@ -14,7 +14,7 @@ import {
   composeDefine,
   shadowDenoiseInputMain
 } from './wgsl/compose.frag.wgsl';
-import halton from './hanton';
+import halton from './halton';
 import { MIN_PREVIEW_SCALE, nextPreviewScale } from './util';
 import type { RenderingPipeline } from './RenderingPipeline';
 import { makeTileRender, makeTileRenderWithPredict } from './TileRender';

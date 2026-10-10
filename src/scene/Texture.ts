@@ -1,7 +1,10 @@
 /** Raw pixel data, RGBA, rows top to bottom. Float data is treated as linear HDR. */
 export interface TextureDataSource {
+  /** Required RGBA pixels in row-major order; float data is linear HDR. */
   data: Float32Array | Uint8Array | Int32Array;
+  /** Required pixel width. */
   width: number;
+  /** Required pixel height. */
   height: number;
 }
 
@@ -10,6 +13,7 @@ export interface TextureDataSource {
  * treated as sRGB; float data as linear.
  */
 export default class Texture {
+  /** Image or raw RGBA pixels supplied to the constructor; no default. */
   image: HTMLImageElement | HTMLCanvasElement | TextureDataSource;
   /** Optional stable identity of the texture in an adapter such as Three.js. */
   source?: object;

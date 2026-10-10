@@ -3,6 +3,7 @@ import { ColorRGB } from '../types';
 
 /** Spherical area light. */
 export default class SphereLight {
+  /** Light discriminator; always `SphereLight`. */
   readonly type = 'SphereLight' as const;
 
   /** World-space center. */
@@ -29,6 +30,7 @@ export default class SphereLight {
     }
   }
 
+  /** @internal */
   static getArea(light: SphereLight) {
     return 4 * Math.PI * light.radius ** 2;
   }

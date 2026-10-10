@@ -19,14 +19,21 @@ export type ToneMapping =
   | 'linear';
 
 export interface ToneMappingParams {
+  /** Linear exposure multiplier. Default `1`. */
   exposure?: number;
-  /** GPU histogram exposure. WebGPU only. */
+  /** GPU histogram exposure. WebGPU only; default `false`. */
   autoExposure?: boolean;
+  /** Display tone mapper. Default `agx`. */
   toneMapping?: ToneMapping;
+  /** Contrast multiplier. Default `1`. */
   contrast?: number;
+  /** Saturation multiplier. Default `1`. */
   saturation?: number;
+  /** Color temperature adjustment in [-1, 1]. Default `0`. */
   temperature?: number;
+  /** Green/magenta adjustment in [-1, 1]. Default `0`. */
   tint?: number;
+  /** Vignette strength in [0, 1]. Default `0`. */
   vignette?: number;
 }
 
@@ -42,16 +49,23 @@ export type AlphaBlendStrategy =
   | 'stochastic'
   | 'deterministic-source-over';
 
+/** Generated source measurements for one shader module. */
 export interface ShaderModuleCompilationDiagnostics {
+  /** Module or pipeline diagnostic label. */
   label: string;
+  /** Generated shader source size in bytes. */
   sourceBytes: number;
+  /** Generated shader source line count. */
   sourceLines: number;
   /** Stable source-level fingerprint for diagnosing cache-key churn. */
   sourceFingerprint: string;
 }
 
+/** Compilation measurements for one compute pipeline. */
 export interface ShaderPipelineCompilationDiagnostics {
+  /** Module or pipeline diagnostic label. */
   label: string;
+  /** Compute entry-point name. */
   entryPoint: string;
   /**
    * Whether this pipeline belongs to the minimum set needed to present a
@@ -59,32 +73,49 @@ export interface ShaderPipelineCompilationDiagnostics {
    * while the current eager compiler still waits for them.
    */
   firstFrameRequired: boolean;
+  /** Current compilation state. */
   status: 'queued' | 'compiling' | 'ready' | 'failed';
   /** Milliseconds from the start of this pipeline compilation batch. */
   startedAtMs?: number;
   /** Milliseconds from the start of this pipeline compilation batch. */
   endedAtMs?: number;
+  /** Pipeline compilation duration in milliseconds; undefined until completed. */
   durationMs?: number;
+  /** Number of pipelines compiling when this one started; undefined before start. */
   concurrentCompilationCount?: number;
+  /** Failure message; undefined without a compilation error. */
   error?: string;
 }
 
+/** Source generation and asynchronous pipeline compilation measurements. */
 export interface ShaderCompilationDiagnostics {
+  /** Current compilation state. */
   status: 'compiling' | 'ready' | 'failed';
+  /** Generated shader source size in bytes. */
   sourceBytes: number;
+  /** Generated shader source line count. */
   sourceLines: number;
+  /** Total pipelines in the batch. */
   pipelineCount: number;
+  /** Number of pipelines successfully completed. */
   completedPipelineCount: number;
+  /** CPU shader source generation time in milliseconds. */
   sourceGenerationTimeMs: number;
+  /** Shader module creation time in milliseconds. */
   moduleCreationTimeMs: number;
+  /** Per-module source measurements. */
   modules: ShaderModuleCompilationDiagnostics[];
+  /** Per-pipeline timing and status measurements. */
   pipelines: ShaderPipelineCompilationDiagnostics[];
   /** Configured pool size, capped to the number of pipelines in this batch. */
   maximumConcurrentPipelineCount: number;
   /** Largest number of createComputePipelineAsync calls active at once. */
   peakConcurrentPipelineCount: number;
+  /** Batch pipeline compilation time in milliseconds; undefined until completed. */
   pipelineCompilationTimeMs?: number;
+  /** Total batch preparation time in milliseconds; undefined until completed. */
   totalTimeMs?: number;
+  /** Failure message; undefined without a compilation error. */
   error?: string;
 }
 

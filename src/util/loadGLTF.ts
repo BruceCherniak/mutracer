@@ -293,10 +293,10 @@ export async function parseBinary(
 ): Promise<GLTFLoadResult> {
   const header = new Uint32Array(buffer, 0, 4);
   if (header[0] !== 0x46546c67) {
-    throw 'Invalid glTF binary format: Invalid header';
+    throw new Error('Invalid glTF binary format: Invalid header');
   }
   if (header[1] < 2) {
-    throw 'Only glTF2.0 is supported.';
+    throw new Error('Only glTF2.0 is supported.');
   }
 
   const dataView = new DataView(buffer, 12);
@@ -318,7 +318,7 @@ export async function parseBinary(
       try {
         json = JSON.parse(str);
       } catch (e) {
-        throw 'JSON Parse error:' + e;
+        throw new Error('JSON Parse error:' + e);
       }
     } else if (chunkType === 0x004e4942) {
       buffers.push(buffer.slice(i + 12, i + 12 + chunkLength));
@@ -327,7 +327,7 @@ export async function parseBinary(
     i += chunkLength;
   }
   if (!json) {
-    throw "Invalid glTF binary format: Can't find JSON.";
+    throw new Error("Invalid glTF binary format: Can't find JSON.");
   }
 
   return parse(json, buffers, opts);
@@ -371,7 +371,7 @@ export async function parse(
 
   // Buffer not load complete.
   if (lib.buffers.length !== json.buffers.length) {
-    throw 'Buffer not load complete.';
+    throw new Error('Buffer not load complete.');
   }
 
   (json.bufferViews || []).forEach(

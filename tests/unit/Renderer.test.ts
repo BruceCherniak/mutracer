@@ -1176,7 +1176,7 @@ describe('sampling pattern', () => {
     renderer.samplingPattern = 'zsobol';
     vi.mocked(pipeline.setSamplingPattern).mockReturnValueOnce(true);
     renderer.render(scene,camera);
-    expect(pipeline.setSamplingPattern).toHaveBeenLastCalledWith('zsobol',2048,0);
+    expect(pipeline.setSamplingPattern).toHaveBeenLastCalledWith('zsobol',2048);
     expect(pipeline.draw).toHaveBeenCalledTimes(draws+1);
     renderer.oidn = {} as never;
     expect(renderer.samplingPattern).toBe('zsobol');

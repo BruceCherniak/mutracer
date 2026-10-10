@@ -8,7 +8,7 @@ import Mesh from '../scene/Mesh';
 import { Scene, SceneBackground, SceneLight } from '../scene/Scene';
 import { ColorRGB } from '../types';
 import { vec3 } from '../math';
-import halton from './hanton';
+import halton from './halton';
 import { nextPreviewScale } from './util';
 import { makeTileRender } from './TileRender';
 import {

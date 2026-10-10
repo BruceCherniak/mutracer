@@ -18,15 +18,17 @@ export type SceneLight = AmbientLight | EnvironmentLight | AnalyticLight;
  * appear to stand on the photographed ground.
  */
 export interface GroundedSkyboxBackground {
+  /** Ground projection discriminator; always `GroundedSkybox`. */
   type: 'GroundedSkybox';
+  /** Required equirectangular environment texture. */
   map: Texture;
-  /** Height of the camera used to capture the environment above the ground. */
+  /** Required capture height above ground in scene units. */
   height: number;
-  /** Radius of the projected sky dome. */
+  /** Required projected sky-dome radius in scene units. */
   radius: number;
-  /** World-space Y coordinate of the ground plane. */
+  /** Ground plane Y in scene units. Default `0`. */
   groundHeight?: number;
-  /** World-space X/Z center of the environment capture. */
+  /** Capture X/Z center in scene units. Default `[0, 0]`. */
   center?: [number, number];
 }
 
@@ -38,8 +40,11 @@ export interface GroundedSkyboxBackground {
 export type SceneBackground = ColorRGBA | Texture | GroundedSkyboxBackground;
 /** RGBA8 pixels for {@link Scene.overlay}. */
 export interface SceneOverlayDataSource {
+  /** Required RGBA8 overlay pixels in row-major order. */
   data: Uint8Array;
+  /** Required overlay pixel width. */
   width: number;
+  /** Required overlay pixel height. */
   height: number;
 }
 /**
@@ -50,8 +55,11 @@ export interface SceneOverlayDataSource {
  * attribute edits, and a Texture after pixel or UV-array element edits.
  */
 export interface Scene {
+  /** Required mesh instances; use an empty array for an empty scene. */
   meshes: Mesh[];
+  /** Required lights; use an empty array for an unlit scene. */
   lights: SceneLight[];
+  /** Camera-ray background; defaults to the environment light when omitted. */
   background?: SceneBackground;
 
   /** Image composited over the final frame, in canvas pixels. */

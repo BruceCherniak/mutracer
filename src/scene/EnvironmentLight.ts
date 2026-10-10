@@ -5,6 +5,7 @@ import Texture from './Texture';
  * for example one loaded with `loadRGBE()`. Importance sampled.
  */
 export default class EnvironmentLight {
+  /** Light discriminator; always `EnvironmentLight`. */
   readonly type = 'EnvironmentLight' as const;
   /** Equirectangular radiance map in linear color. */
   map: Texture;

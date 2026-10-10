@@ -2,6 +2,7 @@ import { ColorRGB } from '../types';
 
 /** Uniform light from every direction, added to the environment lighting. */
 export default class AmbientLight {
+  /** Light discriminator; always `AmbientLight`. */
   readonly type = 'AmbientLight' as const;
 
   /** Linear RGB color. Default `[1, 1, 1]`. */

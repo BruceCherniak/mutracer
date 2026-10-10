@@ -9,6 +9,7 @@ import Texture from './Texture';
  * `matrixWorld`.
  */
 export default class RectLight extends SceneNode {
+  /** Light discriminator; always `RectLight`. */
   readonly type = 'RectLight' as const;
 
   /** Width and height in local units. Default `[1, 1]`. */
@@ -35,6 +36,7 @@ export default class RectLight extends SceneNode {
     this.intensity = intensity ?? 1;
   }
 
+  /** @internal */
   static getUOrV(light: RectLight, uOrV: 0 | 1) {
     // On the xy plane and point to negative z
     const ret = vec3.fromValues(0, 0, 0);
@@ -47,11 +49,13 @@ export default class RectLight extends SceneNode {
     );
   }
 
+  /** @internal */
   static getPosition(light: RectLight) {
     const m = light.matrixWorld;
     return vec3.fromValues(m[12], m[13], m[14]);
   }
 
+  /** @internal */
   static getArea(light: RectLight) {
     return light.size[0] * light.size[1];
   }
