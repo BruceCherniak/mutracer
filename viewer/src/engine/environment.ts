@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { parseRGBE } from 'claypt';
+import { parseRGBE } from 'mutracer';
 import { fetchWithProgress } from './fetchWithProgress';
 
 export interface EquirectData {
@@ -62,9 +62,9 @@ export async function loadHDR(url: string, onProgress?: (loaded: number, total: 
 }
 
 /**
- * Owns the environment DataTexture. ClayPT's EnvironmentLight has no intensity
+ * Owns the environment DataTexture. MuTracer's EnvironmentLight has no intensity
  * or rotation, so both are baked into a copy of the source pixels; the scene
- * sync refreshes the ClayPT texture in place after `needsUpdate`.
+ * sync refreshes the MuTracer texture in place after `needsUpdate`.
  */
 export class Environment {
   texture: THREE.DataTexture;

@@ -428,7 +428,7 @@ export default class Renderer {
 
   /**
    * The attached OIDN denoiser. Prefer {@link Renderer.setDenoiser}; assign
-   * directly only for denoisers loaded with `claypt/oidn` helpers. The
+   * directly only for denoisers loaded with `mutracer/oidn` helpers. The
    * `setDenoiser()` mode (`whileConverging` and related options) stays as set.
    */
   get oidn() {
@@ -1198,13 +1198,13 @@ export default class Renderer {
     let sceneChanged = meshContentChanged || changes.lights || changes.background;
     if (meshContentChanged) {
       const measureMeshSync = (globalThis as typeof globalThis & {
-        __clayptMeasureMeshSync?: boolean
-      }).__clayptMeasureMeshSync === true;
+        __mutracerMeasureMeshSync?: boolean
+      }).__mutracerMeasureMeshSync === true;
       const meshSyncStartedAt = measureMeshSync ? performance.now() : 0;
       pipeline.setMeshes(scene.meshes, changes.meshes === 'full' || this._forceMeshUpdate
         ? undefined : { transforms: changes.transforms, materials: changes.materials, geometries: changes.geometries });
       if (measureMeshSync) {
-        performance.measure('claypt:setMeshes', { start: meshSyncStartedAt, end: performance.now() });
+        performance.measure('mutracer:setMeshes', { start: meshSyncStartedAt, end: performance.now() });
       }
       this._forceMeshUpdate = false;
     }

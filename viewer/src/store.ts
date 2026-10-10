@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { OIDNModel, SamplingPattern, ToneMapping, RenderOutput } from 'claypt';
+import type { OIDNModel, SamplingPattern, ToneMapping, RenderOutput } from 'mutracer';
 import type { MaterialValues } from './engine/materialParams';
 
 export type EnvResolution = '1k' | '2k' | '4k';
@@ -167,8 +167,8 @@ export interface ViewerState {
   export: { stage: 'pilot' | 'final' | 'denoising'; samples: number; target: number } | null;
 }
 
-const UI_KEY = 'claypt-viewer:ui';
-const RENDER_KEY = 'claypt-viewer:render:v5';
+const UI_KEY = 'mutracer-viewer:ui';
+const RENDER_KEY = 'mutracer-viewer:render:v5';
 const RENDER_FIELDS: (keyof Settings)[] = [
   'envResolution', 'maxSamples', 'bounces', 'resolutionScale', 'samplingPattern', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
   'toneMapping', 'interactivePreview', 'previewResolutionScale'

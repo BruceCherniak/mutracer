@@ -5,8 +5,8 @@ export default defineConfig({
   resolve: {
     // Examples import the package by name, exactly like applications do.
     alias: [
-      { find: /^claypt\/oidn$/, replacement: path.resolve(__dirname, 'src/oidn.ts') },
-      { find: /^claypt$/, replacement: path.resolve(__dirname, 'src/main.ts') }
+      { find: /^mutracer\/oidn$/, replacement: path.resolve(__dirname, 'src/oidn.ts') },
+      { find: /^mutracer$/, replacement: path.resolve(__dirname, 'src/main.ts') }
     ]
   },
   server: {
@@ -16,8 +16,8 @@ export default defineConfig({
   build: {
     lib: {
       entry: path.resolve(__dirname, 'src/main.ts'),
-      name: 'ClayPT',
-      fileName: (format: string) => `claypt.${format}.js`
+      name: 'MuTracer',
+      fileName: (format: string) => `mutracer.${format}.js`
     }
   }
 });

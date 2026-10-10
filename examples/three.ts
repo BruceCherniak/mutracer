@@ -1,5 +1,5 @@
 // Build the scene with Three.js (GLTFLoader, OrbitControls, standard and
-// physical materials) and path trace it with ClayPT.
+// physical materials) and path trace it with MuTracer.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
@@ -7,7 +7,7 @@ import {
   Renderer,
   fromTHREECamera,
   THREESceneSync
-} from 'claypt';
+} from 'mutracer';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
 
@@ -57,7 +57,7 @@ const orbit = new OrbitControls(threeCamera, canvas);
 orbit.target.set(0, 0.4, 0);
 orbit.update();
 
-// --- ClayPT ---------------------------------------------------------------
+// --- MuTracer ---------------------------------------------------------------
 const renderer = new Renderer({ canvas, preferWebGPU: !new URLSearchParams(location.search).has('webgl') });
 renderer.bounces = 6;
 renderer.maxSamples = 512;

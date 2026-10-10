@@ -1,4 +1,4 @@
-import type { OpenPBRMaterial } from 'claypt';
+import type { OpenPBRMaterial } from 'mutracer';
 
 type NumberKey = {
   [K in keyof OpenPBRMaterial]-?: OpenPBRMaterial[K] extends number ? K : never

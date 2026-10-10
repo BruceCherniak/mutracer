@@ -18,7 +18,7 @@ For an interactive app with drag-and-drop glTF/HDR loading, a scene tree,
 material, lighting and render controls, and PNG export, run the
 [viewer](../viewer/README.md) with `npm run viewer`.
 
-The examples import `claypt`, which the dev server aliases to `src/`. All
+The examples import `mutracer`, which the dev server aliases to `src/`. All
 assets are procedural or generated: [`assets/chess.glb`](./assets/chess.glb)
 comes from [`scripts/create-example-model.mjs`](../scripts/create-example-model.mjs)
 (CC0) and the sky is built in [`shared/sky.ts`](./shared/sky.ts).

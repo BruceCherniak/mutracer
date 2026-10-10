@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Aperture, Bug, Palette, Sparkles, Sun } from 'lucide-react';
-import type { RendererDiagnostics } from 'claypt';
+import type { RendererDiagnostics } from 'mutracer';
 import { setSettings, useViewer, type Settings } from '../../store';
 import { getEngine } from '../../engine/ViewerEngine';
 import { Field, Hint, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';

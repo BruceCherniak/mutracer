@@ -1,4 +1,4 @@
-// Minimal ClayPT scene: procedural geometry, OpenPBR materials, an area light
+// Minimal MuTracer scene: procedural geometry, OpenPBR materials, an area light
 // and an HDR environment. Drag to orbit, scroll to zoom.
 import { mat4 } from 'gl-matrix';
 import {
@@ -13,7 +13,7 @@ import {
   createCubeGeometry,
   createPlaneGeometry,
   createSphereGeometry
-} from 'claypt';
+} from 'mutracer';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
 

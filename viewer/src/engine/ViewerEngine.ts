@@ -11,7 +11,7 @@ import {
   RENDER_STATUS_PREPARING,
   type OpenPBRMaterial,
   type RenderStatus
-} from 'claypt';
+} from 'mutracer';
 import { useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
 import { Environment, createSky, loadHDR, parseHDR } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
@@ -43,7 +43,7 @@ const get = useViewer.getState;
 const set = useViewer.setState;
 
 /**
- * Owns the ClayPT renderer, the Three.js source scene and the render loop.
+ * Owns the MuTracer renderer, the Three.js source scene and the render loop.
  * Reads settings from the store and publishes stats, tree and selection to it;
  * it does not depend on React.
  */
@@ -92,7 +92,7 @@ export class ViewerEngine {
     this.scene.add(this.modelGroup);
     this.scene.environment = this.environment.texture;
     const groundMaterial = new THREE.MeshStandardMaterial({ color: 0x808080, roughness: 1 });
-    groundMaterial.userData.clayptShadowCatcher = true;
+    groundMaterial.userData.mutracerShadowCatcher = true;
     this.ground = new THREE.Mesh(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), groundMaterial);
     this.ground.name = 'Ground';
     this.scene.add(this.ground);
@@ -371,9 +371,9 @@ export class ViewerEngine {
 
   private applyBackground() {
     const { background, backgroundColor, groundedHeight, groundedRadius } = this.settings;
-    this.scene.userData.clayptHiddenBackground = background === 'transparent';
+    this.scene.userData.mutracerHiddenBackground = background === 'transparent';
     // Projects the environment onto a ground disc and dome around the model.
-    this.scene.userData.clayptGroundedSkybox = background === 'grounded' ? {
+    this.scene.userData.mutracerGroundedSkybox = background === 'grounded' ? {
       texture: this.environment.texture,
       height: groundedHeight * this.modelRadius,
       radius: groundedRadius * this.modelRadius,
@@ -682,8 +682,8 @@ export class ViewerEngine {
     try {
       const blob = await this.renderImage(options);
       const link = document.createElement('a');
-      const base = (get().model?.name ?? 'claypt').replace(/\.[^.]+$/, '');
-      link.download = `claypt-${base}-${options.samples}spp.png`;
+      const base = (get().model?.name ?? 'mutracer').replace(/\.[^.]+$/, '');
+      link.download = `mutracer-${base}-${options.samples}spp.png`;
       link.href = URL.createObjectURL(blob);
       link.click();
       setTimeout(() => URL.revokeObjectURL(link.href), 10_000);

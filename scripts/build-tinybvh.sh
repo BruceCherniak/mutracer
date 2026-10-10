@@ -5,7 +5,7 @@ TINYBVH_REVISION="0e4584287823252cf83f0e9cd072848bec5f79c5"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SOURCE_DIR="$PROJECT_DIR/src/tinybvh"
-TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/claypt-tinybvh.XXXXXX")"
+TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mutracer-tinybvh.XXXXXX")"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
 curl --fail --location --silent --show-error \

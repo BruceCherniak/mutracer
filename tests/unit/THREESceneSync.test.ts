@@ -194,13 +194,13 @@ it('respects explicit material projections and prunes superseded automatic varia
   const sync = new THREESceneSync(source), [a, b] = sync.scene.meshes;
   const cache = (sync as unknown as { _store: { colorVariants: Map<THREE.Material, Map<string, unknown>> } })._store.colorVariants;
   const initial = b.materials[0];
-  material.userData.clayptUvProjection = 'spherical'; sync.update();
+  material.userData.mutracerUvProjection = 'spherical'; sync.update();
   expect(a.materials[0].uvProjection).toBe('spherical'); expect(b.materials[0].uvProjection).toBe('spherical');
   expect(b.materials[0].displacementUvProjection).toBe('triplanar'); expect(b.materials[0]).not.toBe(initial);
   expect(cache.get(material)!.size).toBe(1);
-  material.userData.clayptDisplacementUvProjection = 'cylindrical'; sync.update();
+  material.userData.mutracerDisplacementUvProjection = 'cylindrical'; sync.update();
   expect(b.materials[0]).toBe(a.materials[0]); expect(cache.size).toBe(0);
-  material.userData.clayptUvProjection = 'none'; material.userData.clayptDisplacementUvProjection = 'none';
+  material.userData.mutracerUvProjection = 'none'; material.userData.mutracerDisplacementUvProjection = 'none';
   sync.update(); expect(cache.get(material)!.size).toBe(1);
   material.map = material.displacementMap = null; sync.update();
   expect(b.materials[0]).toBe(a.materials[0]); expect(cache.size).toBe(0);

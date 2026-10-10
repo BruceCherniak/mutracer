@@ -1,6 +1,6 @@
 # Denoising (Intel Open Image Denoise)
 
-ClayPT runs [Intel Open Image Denoise](https://www.openimagedenoise.org/)
+MuTracer runs [Intel Open Image Denoise](https://www.openimagedenoise.org/)
 networks on the renderer's WebGPU device through
 [`oidn-web`](https://www.npmjs.com/package/oidn-web). The denoiser uses the
 accumulated color plus albedo and normal guides, so it works well from a few
@@ -34,14 +34,14 @@ is loaded with a dynamic import, so it costs nothing until used.
 ## Hosting the weights
 
 By default the weights are downloaded from jsDelivr, pinned to the installed
-ClayPT version:
+MuTracer version:
 
 ```
-https://cdn.jsdelivr.net/npm/claypt@<version>/oidn/weights/
+https://cdn.jsdelivr.net/npm/mutracer@<version>/oidn/weights/
 ```
 
 For production, serve them yourself. They ship in the npm package at
-`node_modules/claypt/oidn/weights/`; copy that folder to your static assets
+`node_modules/mutracer/oidn/weights/`; copy that folder to your static assets
 and pass its URL:
 
 ```ts
@@ -77,7 +77,7 @@ frame.
 | `maxTileSize` | Maximum tile size; chosen by oidn-web by default |
 | `signal` | `AbortSignal` for the download |
 
-`claypt/oidn` exposes `initializeOIDN(renderer, options)` and
+`mutracer/oidn` exposes `initializeOIDN(renderer, options)` and
 `initializeOIDNFromURL(renderer, url, options)` for custom weights; they
 attach the result to `renderer.oidn`, which denoises with the mode last set by
 `setDenoiser()` (the final image only by default).

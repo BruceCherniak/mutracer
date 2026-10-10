@@ -1,6 +1,6 @@
 # TinyBVH adapter
 
-ClayPT builds bottom-level BVHs with [TinyBVH](https://github.com/jbikker/tinybvh)
+MuTracer builds bottom-level BVHs with [TinyBVH](https://github.com/jbikker/tinybvh)
 compiled to WebAssembly. `tinybvh_wrapper.cpp` exposes a small C API that writes
 BVH2, BVH4, BVH_GPU or CWBVH nodes in the exact layouts consumed by the WebGL
 and WebGPU traversal shaders. `tinybvh.wasm` is checked in, so building the

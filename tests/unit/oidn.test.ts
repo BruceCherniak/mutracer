@@ -177,7 +177,7 @@ describe('initializeOIDN', () => {
 
   it('defaults to the version-pinned CDN weights', () => {
     expect(resolveOIDNModelUrl('small')).toBe(
-      `https://cdn.jsdelivr.net/npm/claypt@${VERSION}/oidn/weights/rt_hdr_alb_nrm_small.tza`
+      `https://cdn.jsdelivr.net/npm/mutracer@${VERSION}/oidn/weights/rt_hdr_alb_nrm_small.tza`
     );
   });
 });

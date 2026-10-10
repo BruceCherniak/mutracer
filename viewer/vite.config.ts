@@ -12,7 +12,7 @@ const weightsDir = path.join(repoRoot, 'oidn/weights');
  */
 function oidnWeights(): Plugin {
   return {
-    name: 'claypt-viewer-oidn-weights',
+    name: 'mutracer-viewer-oidn-weights',
     configureServer(server) {
       server.middlewares.use('/oidn/weights/', (req, res, next) => {
         const file = path.join(weightsDir, path.basename((req.url ?? '').split('?')[0]));
@@ -37,7 +37,7 @@ function oidnWeights(): Plugin {
 function thumbnailWriter(): Plugin {
   const dir = path.join(__dirname, 'src/assets/thumbnails');
   return {
-    name: 'claypt-viewer-thumbnail-writer',
+    name: 'mutracer-viewer-thumbnail-writer',
     apply: 'serve',
     configureServer(server) {
       server.middlewares.use('/__thumbnails/', (req, res, next) => {
@@ -62,8 +62,8 @@ export default defineConfig({
   plugins: [react(), oidnWeights(), thumbnailWriter()],
   resolve: {
     alias: [
-      { find: /^claypt\/oidn$/, replacement: path.join(repoRoot, 'src/oidn.ts') },
-      { find: /^claypt$/, replacement: path.join(repoRoot, 'src/main.ts') }
+      { find: /^mutracer\/oidn$/, replacement: path.join(repoRoot, 'src/oidn.ts') },
+      { find: /^mutracer$/, replacement: path.join(repoRoot, 'src/main.ts') }
     ]
   },
   server: {

@@ -1,6 +1,6 @@
-# ClayPT
+# MuTracer
 
-**ClayPT** (Clay Path Tracing) is a physically based path tracer for the web.
+**MuTracer** is a physically based path tracer for the web.
 It renders on WebGPU and falls back to WebGL 2, with OpenPBR materials,
 TinyBVH acceleration and Intel Open Image Denoise built in.
 
@@ -22,17 +22,17 @@ TinyBVH acceleration and Intel Open Image Denoise built in.
 ## Install
 
 ```bash
-npm install claypt
+npm install mutracer
 ```
 
 Add `three` only if you use the Three.js helpers:
 
 ```bash
-npm install claypt three
+npm install mutracer three
 ```
 
-The package is ESM with TypeScript declarations. A UMD build (`ClayPT` global)
-is available at `dist/claypt.umd.js`.
+The package is ESM with TypeScript declarations. A UMD build (`MuTracer` global)
+is available at `dist/mutracer.umd.js`.
 
 ## Quick start
 
@@ -41,7 +41,7 @@ import { mat4 } from 'gl-matrix';
 import {
   Camera, EnvironmentLight, Mesh, OpenPBRMaterial, RectLight, Renderer,
   Texture, createPlaneGeometry, createSphereGeometry, type Scene
-} from 'claypt';
+} from 'mutracer';
 
 const canvas = document.querySelector('canvas')!;
 
@@ -84,7 +84,7 @@ frame();
 With Three.js:
 
 ```ts
-import { Renderer, fromTHREEScene, fromTHREECamera } from 'claypt';
+import { Renderer, fromTHREEScene, fromTHREECamera } from 'mutracer';
 
 threeScene.updateMatrixWorld();
 const scene = fromTHREEScene(threeScene);
@@ -131,6 +131,6 @@ platforms; `render()` reports the progress through its return status.
 
 ## License
 
-ClayPT is released under the [MIT License](./LICENSE). It includes third-party
+MuTracer is released under the [MIT License](./LICENSE). It includes third-party
 code and data under MIT, Apache-2.0 and CC0 licenses; see
 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).

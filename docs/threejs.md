@@ -1,12 +1,12 @@
 # Three.js integration
 
-Build or load a scene with Three.js and render it with ClayPT. Three.js is an
+Build or load a scene with Three.js and render it with MuTracer. Three.js is an
 optional peer dependency (`npm install three`).
 
 ```ts
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { Renderer, THREESceneSync, fromTHREECamera } from 'claypt';
+import { Renderer, THREESceneSync, fromTHREECamera } from 'mutracer';
 
 const threeScene = new THREE.Scene();
 threeScene.add((await new GLTFLoader().loadAsync('model.glb')).scene);
@@ -28,7 +28,7 @@ frame();
 calls `updateMatrixWorld()` and re-reads the source scene. Unchanged meshes,
 materials, textures, lights, background and membership arrays retain identity.
 Transforms update the existing matrix arrays. Shared Three.js materials and
-textures stay shared in ClayPT, including within a one-shot conversion.
+textures stay shared in MuTracer, including within a one-shot conversion.
 
 ```ts
 threeMesh.rotation.y += 0.01;
@@ -53,7 +53,7 @@ versions of position, normal, tangent, uv, uv1 and index buffers, replacing
 converted geometry when they change. Deforming meshes instead update position,
 normal and tangent arrays in place when only deformation inputs change. After
 editing texture pixels, set
-`threeTexture.needsUpdate = true`; the existing ClayPT Texture is refreshed in
+`threeTexture.needsUpdate = true`; the existing MuTracer Texture is refreshed in
 place. Texture image and UV metadata assignments are also detected.
 
 ```ts
@@ -64,7 +64,7 @@ sync.update();
 ```
 
 `fromTHREEScene(threeScene, options?)` is a one-shot conversion: every call
-creates fresh ClayPT objects. Use it for static setup. Both APIs accept an
+creates fresh MuTracer objects. Use it for static setup. Both APIs accept an
 optional `onMeshConverted(mesh, source, group, groupIndex)` callback (default:
 none); the sync calls it for each visible group and expanded instance on every
 update.
@@ -85,16 +85,16 @@ updates on both backends.
 
 ## What is converted
 
-| Three.js | ClayPT |
+| Three.js | MuTracer |
 | --- | --- |
 | `Mesh` with `MeshStandardMaterial` / `MeshPhysicalMaterial` | `Mesh` + `OpenPBRMaterial` (color, metalness, roughness, maps, normal map, emissive, transmission, attenuation, IOR, clearcoat, sheen, iridescence, anisotropy, alpha) |
 | `Mesh` with `MeshBasicMaterial` (glTF `KHR_materials_unlit`) | Unlit emissive material |
 | `SkinnedMesh` / mesh with morph targets | CPU-deformed dynamic geometry |
 | `InstancedMesh` | One mesh per instance, sharing geometry and BLAS; cached color material variants |
-| Multi-material groups | One ClayPT mesh per group |
+| Multi-material groups | One MuTracer mesh per group |
 | `DirectionalLight` | `DirectionalLight` |
-| `PointLight` | `SphereLight` (radius `userData.clayptRadius`, default 0.25) |
-| `SpotLight` | `SpotLight` (radius `userData.clayptRadius`, default 0.01; `penumbra` sets the inner angle) |
+| `PointLight` | `SphereLight` (radius `userData.mutracerRadius`, default 0.25) |
+| `SpotLight` | `SpotLight` (radius `userData.mutracerRadius`, default 0.01; `penumbra` sets the inner angle) |
 | `RectAreaLight` | `RectLight` |
 | `AmbientLight` | `AmbientLight` |
 | `scene.environment` (equirectangular float `DataTexture`, e.g. from `HDRLoader`/`RGBELoader`) | `EnvironmentLight` |
@@ -115,7 +115,7 @@ tangents in local space. Missing tangents are generated from the deformed
 positions, normals and UVs. The mesh's world transform remains an instance
 transform.
 
-Each deforming source mesh owns its ClayPT geometry, even when several
+Each deforming source mesh owns its MuTracer geometry, even when several
 SkinnedMesh objects share a Three.js BufferGeometry. Material groups own
 separate geometries, while deformation is calculated once per source mesh
 and copied to each group. These geometries use `dynamic = true` and the
@@ -134,7 +134,7 @@ animation to accumulate samples; changing a pose restarts accumulation.
 
 ## Instanced meshes
 
-`InstancedMesh.count` expands to that many ClayPT meshes per material group.
+`InstancedMesh.count` expands to that many MuTracer meshes per material group.
 Instances share converted geometry and its BLAS. Each world matrix is
 `source.matrixWorld * instanceMatrix[i]`. Editing instance matrices and setting
 `instanceMatrix.needsUpdate = true` updates retained matrix arrays; rendering
@@ -163,17 +163,17 @@ Renderer-specific settings without a Three.js equivalent:
 
 | Key | On | Description |
 | --- | --- | --- |
-| `clayptShadowCatcher: true` | material | Shadow-catcher ground |
-| `clayptOpenPBR: { ... }` | material | OpenPBR inputs without a Three.js equivalent: `baseWeight`, `baseDiffuseRoughness`, `specularWeight`, `specularColor`, `coat*`, `fuzz*`, `thinFilm*`, `thinWalled`, `subsurface*`, `transmissionScatter*`, `transmissionDispersion*` |
-| `clayptBevelSize` | material | Shader bevel radius |
-| `clayptUvProjection`, `clayptUvScale`, `clayptUvReferenceLength` | material | Procedural UV projection |
-| `clayptDisplacementMode`, `clayptDisplacement*` | material | Displacement settings, same names as the `OpenPBRMaterial` fields |
-| `clayptThinFilmMap` | material | Thin-film thickness texture |
-| `clayptMeshoptSimplificationRatio` | mesh | Simplify geometry before rendering (0–1) |
-| `clayptRadius` | point / spot light | Emitter radius |
-| `clayptIesProfile`, `clayptIesRotation` | spot light | `IESProfile` instance and its rotation |
-| `clayptGroundedSkybox: { texture, height, radius, groundHeight?, center? }` | scene | Grounded skybox background |
-| `clayptHiddenBackground: true` | scene | Transparent background while keeping environment lighting |
+| `mutracerShadowCatcher: true` | material | Shadow-catcher ground |
+| `mutracerOpenPBR: { ... }` | material | OpenPBR inputs without a Three.js equivalent: `baseWeight`, `baseDiffuseRoughness`, `specularWeight`, `specularColor`, `coat*`, `fuzz*`, `thinFilm*`, `thinWalled`, `subsurface*`, `transmissionScatter*`, `transmissionDispersion*` |
+| `mutracerBevelSize` | material | Shader bevel radius |
+| `mutracerUvProjection`, `mutracerUvScale`, `mutracerUvReferenceLength` | material | Procedural UV projection |
+| `mutracerDisplacementMode`, `mutracerDisplacement*` | material | Displacement settings, same names as the `OpenPBRMaterial` fields |
+| `mutracerThinFilmMap` | material | Thin-film thickness texture |
+| `mutracerMeshoptSimplificationRatio` | mesh | Simplify geometry before rendering (0–1) |
+| `mutracerRadius` | point / spot light | Emitter radius |
+| `mutracerIesProfile`, `mutracerIesRotation` | spot light | `IESProfile` instance and its rotation |
+| `mutracerGroundedSkybox: { texture, height, radius, groundHeight?, center? }` | scene | Grounded skybox background |
+| `mutracerHiddenBackground: true` | scene | Transparent background while keeping environment lighting |
 
 ## glTF without Three.js
 

@@ -1,5 +1,5 @@
 /**
- * ClayPT (Clay Path Tracing): a physically based WebGPU path tracer with a
+ * MuTracer: a physically based WebGPU path tracer with a
  * WebGL 2 fallback.
  *
  * Build a {@link Scene} from {@link Mesh}es and lights (or convert a Three.js

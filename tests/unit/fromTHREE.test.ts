@@ -211,7 +211,7 @@ describe('Three.js scene conversion', () => {
     };
     physicalMaterial.dispersion = 0.35;
     physicalMaterial.anisotropy = 0.8;
-    material.userData.clayptBevelSize = 0.075;
+    material.userData.mutracerBevelSize = 0.075;
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(), material);
     mesh.name = 'Converted cube';
     mesh.position.set(1, 2, 3);
@@ -260,28 +260,28 @@ describe('Three.js scene conversion', () => {
       displacementScale: 0.25,
       displacementBias: -0.125
     });
-    material.userData.clayptDisplacementMode = 'tessellated';
-    material.userData.clayptUvProjection = 'spherical';
-    material.userData.clayptUvScale = [1.5, 2.5];
-    material.userData.clayptUvReferenceLength = 2;
-    material.userData.clayptDisplacementStepSize = 0.004;
-    material.userData.clayptDisplacementUvProjection = 'cylindrical';
-    material.userData.clayptDisplacementUvScale = 2.5;
-    material.userData.clayptDisplacementTessellationMode = 'uniform';
-    material.userData.clayptDisplacementMaxSubdivisionLevel = 3.8;
-    material.userData.clayptDisplacementResolvedMaxSubdivisionLevel = 2.8;
-    material.userData.clayptDisplacementResolvedMinSubdivisionLevel = 2.8;
-    material.userData.clayptDisplacementMaxError = 0.001;
-    material.userData.clayptDisplacementMaxTriangles = 123_456;
+    material.userData.mutracerDisplacementMode = 'tessellated';
+    material.userData.mutracerUvProjection = 'spherical';
+    material.userData.mutracerUvScale = [1.5, 2.5];
+    material.userData.mutracerUvReferenceLength = 2;
+    material.userData.mutracerDisplacementStepSize = 0.004;
+    material.userData.mutracerDisplacementUvProjection = 'cylindrical';
+    material.userData.mutracerDisplacementUvScale = 2.5;
+    material.userData.mutracerDisplacementTessellationMode = 'uniform';
+    material.userData.mutracerDisplacementMaxSubdivisionLevel = 3.8;
+    material.userData.mutracerDisplacementResolvedMaxSubdivisionLevel = 2.8;
+    material.userData.mutracerDisplacementResolvedMinSubdivisionLevel = 2.8;
+    material.userData.mutracerDisplacementMaxError = 0.001;
+    material.userData.mutracerDisplacementMaxTriangles = 123_456;
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(), material);
-    mesh.userData.clayptMeshoptSimplificationRatio = 0.3;
-    material.userData.clayptDisplacementEdgeProfile = 'beveled';
-    material.userData.clayptDisplacementThreshold = 0.42;
-    material.userData.clayptDisplacementEdgeWidth = 3.5;
-    material.userData.clayptDisplacementCreaseAngle = 48;
-    material.userData.clayptDisplacementHeightFilter = 'nearest';
-    material.userData.clayptDisplacementHeightPrefilter = true;
-    material.userData.clayptDisplacementBumpStrength = 12;
+    mesh.userData.mutracerMeshoptSimplificationRatio = 0.3;
+    material.userData.mutracerDisplacementEdgeProfile = 'beveled';
+    material.userData.mutracerDisplacementThreshold = 0.42;
+    material.userData.mutracerDisplacementEdgeWidth = 3.5;
+    material.userData.mutracerDisplacementCreaseAngle = 48;
+    material.userData.mutracerDisplacementHeightFilter = 'nearest';
+    material.userData.mutracerDisplacementHeightPrefilter = true;
+    material.userData.mutracerDisplacementBumpStrength = 12;
     const scene = new THREE.Scene();
     scene.add(mesh);
 
@@ -318,8 +318,8 @@ describe('Three.js scene conversion', () => {
     'preserves the %s displacement tessellation mode',
     (mode) => {
       const material = new THREE.MeshStandardMaterial();
-      material.userData.clayptDisplacementMode = 'tessellated';
-      material.userData.clayptDisplacementTessellationMode = mode;
+      material.userData.mutracerDisplacementMode = 'tessellated';
+      material.userData.mutracerDisplacementTessellationMode = mode;
       const scene = new THREE.Scene();
       scene.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
 
@@ -332,7 +332,7 @@ describe('Three.js scene conversion', () => {
 
   it('converts viewer thin-film metadata', () => {
     const material = new THREE.MeshPhysicalMaterial({ transmission: 1 });
-    material.userData.clayptOpenPBR = {
+    material.userData.mutracerOpenPBR = {
       thinWalled: true,
       thinFilmWeight: 1,
       thinFilmThickness: 0.52,
@@ -407,7 +407,7 @@ describe('Three.js scene conversion', () => {
       clearcoat: 0.4,
       sheen: 0.3
     });
-    material.userData.clayptOpenPBR = {
+    material.userData.mutracerOpenPBR = {
       baseWeight: 0.8,
       baseDiffuseRoughness: 0.2,
       specularWeight: 0.9,
@@ -532,7 +532,7 @@ describe('Three.js scene conversion', () => {
 
   it('converts a tagged Three shadow material to a shadow catcher', () => {
     const material = new THREE.ShadowMaterial();
-    material.userData.clayptShadowCatcher = true;
+    material.userData.mutracerShadowCatcher = true;
     const scene = new THREE.Scene();
     scene.add(new THREE.Mesh(new THREE.PlaneGeometry(), material));
 
@@ -543,13 +543,13 @@ describe('Three.js scene conversion', () => {
 
   it('clamps invalid shader bevel radii during conversion', () => {
     const material = new THREE.MeshStandardMaterial();
-    material.userData.clayptBevelSize = -2;
+    material.userData.mutracerBevelSize = -2;
     const scene = new THREE.Scene();
     scene.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
 
     expect(fromTHREEScene(scene).meshes[0].materials[0].bevelSize).toBe(0);
 
-    material.userData.clayptBevelSize = Number.NaN;
+    material.userData.mutracerBevelSize = Number.NaN;
     expect(fromTHREEScene(scene).meshes[0].materials[0].bevelSize).toBe(0);
   });
 
@@ -559,7 +559,7 @@ describe('Three.js scene conversion', () => {
     rect.position.set(1, 2, 3);
     const point = new THREE.PointLight(0xff0000, 4);
     point.position.set(4, 5, 6);
-    point.userData.clayptRadius = 0.75;
+    point.userData.mutracerRadius = 0.75;
     const directional = new THREE.DirectionalLight(0x00ff00, 2);
     directional.position.set(3, 4, 5);
     scene.add(rect, point, directional, directional.target);
@@ -762,7 +762,7 @@ describe('Three.js scene conversion', () => {
       THREE.FloatType
     );
     scene.environment = environment;
-    scene.userData.clayptGroundedSkybox = {
+    scene.userData.mutracerGroundedSkybox = {
       texture: environment,
       height: 1.7,
       radius: 40,
@@ -812,7 +812,7 @@ describe('Three.js scene conversion', () => {
     );
     scene.environment = environment;
     scene.background = null;
-    scene.userData.clayptHiddenBackground = true;
+    scene.userData.mutracerHiddenBackground = true;
 
     const result = fromTHREEScene(scene);
 
@@ -967,9 +967,9 @@ describe('Three.js camera conversion', () => {
     const light = new THREE.SpotLight(0xff8040, 12, 20, Math.PI / 3, 0.25);
     light.position.set(1, 3, 2);
     light.target.position.set(1, 1, 2);
-    light.userData.clayptRadius = 0.05;
-    light.userData.clayptIesRotation = 30;
-    light.userData.clayptIesProfile = parseIESProfile([
+    light.userData.mutracerRadius = 0.05;
+    light.userData.mutracerIesRotation = 30;
+    light.userData.mutracerIesProfile = parseIESProfile([
       'IESNA:LM-63-1995', 'TILT=NONE', '1 1 1 2 1 1 1 0 0 0',
       '1 1 1', '0 90', '0', '1 0'
     ].join('\n'));

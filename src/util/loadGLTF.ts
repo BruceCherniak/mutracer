@@ -247,7 +247,7 @@ interface GLTFLoadOpts {
 }
 
 /**
- * Minimal glTF 2.0 loader that produces ClayPT meshes directly. Prefer
+ * Minimal glTF 2.0 loader that produces MuTracer meshes directly. Prefer
  * Three.js `GLTFLoader` with {@link fromTHREEScene} for full glTF support.
  */
 export async function load(

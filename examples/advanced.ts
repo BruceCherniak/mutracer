@@ -14,7 +14,7 @@ import {
   type Scene,
   createPlaneGeometry,
   createSphereGeometry
-} from 'claypt';
+} from 'mutracer';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
 
@@ -133,7 +133,7 @@ exportButton.addEventListener('click', async () => {
     if (blob) {
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
-      link.download = 'claypt.png';
+      link.download = 'mutracer.png';
       link.click();
       URL.revokeObjectURL(link.href);
     }

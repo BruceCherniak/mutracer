@@ -1,4 +1,4 @@
-import { Texture } from 'claypt';
+import { Texture } from 'mutracer';
 
 export interface SkyOptions {
   width?: number;
@@ -37,7 +37,7 @@ export function createSkyTexture({
   const ground = [0.16, 0.15, 0.14];
 
   for (let row = 0; row < height; row++) {
-    // ClayPT maps v = 0 to +Y and u to atan2(-z, -x).
+    // MuTracer maps v = 0 to +Y and u to atan2(-z, -x).
     const theta = ((row + 0.5) / height) * Math.PI;
     const y = Math.cos(theta);
     for (let col = 0; col < width; col++) {

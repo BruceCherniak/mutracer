@@ -23,7 +23,7 @@ The large auxiliary weights come from
 ## Loading
 
 `renderer.setDenoiser()` downloads these files from the jsDelivr copy of the
-installed `claypt` version. For production, serve this directory yourself and
+installed `mutracer` version. For production, serve this directory yourself and
 pass its URL:
 
 ```ts
@@ -33,5 +33,5 @@ await renderer.setDenoiser({
 });
 ```
 
-With npm, the files are at `node_modules/claypt/oidn/weights/`; copy them into
+With npm, the files are at `node_modules/mutracer/oidn/weights/`; copy them into
 your static assets as part of the build.

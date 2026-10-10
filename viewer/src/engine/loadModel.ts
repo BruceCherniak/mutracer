@@ -129,7 +129,7 @@ export function createMaterialSpheres(): LoadedModel {
   const iridescent = new THREE.MeshPhysicalMaterial({ color: 0x15161a, metalness: 0, roughness: 0.15, iridescence: 1, iridescenceIOR: 1.4, iridescenceThicknessRange: [300, 600] });
   add('Soap film', iridescent, -0.475, -1.05);
   const jade = new THREE.MeshPhysicalMaterial({ color: 0x5fae7f, roughness: 0.3 });
-  jade.userData.clayptOpenPBR = { subsurfaceWeight: 1, subsurfaceColor: [0.25, 0.62, 0.38], subsurfaceRadius: 0.25 };
+  jade.userData.mutracerOpenPBR = { subsurfaceWeight: 1, subsurfaceColor: [0.25, 0.62, 0.38], subsurfaceRadius: 0.25 };
   add('Jade', jade, 0.475, -1.05);
   return { name: 'Material spheres', root, animations: [], revoke() {} };
 }

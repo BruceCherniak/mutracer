@@ -1,6 +1,6 @@
 # API reference
 
-Everything is exported from `claypt`. Type declarations carry TSDoc with
+Everything is exported from `mutracer`. Type declarations carry TSDoc with
 defaults for every option; this page summarizes them.
 
 ## `Renderer`
@@ -164,11 +164,11 @@ Dynamic BLASes rebuild above twice their last build's total node surface area.
 | `THREESceneChanges` | Informational result of `update()`: `transforms`, `membership`, `content`, `lights`, `background`; no forwarding to Renderer needed |
 | `FromTHREESceneOptions` | Optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |
 | `loadGLTF(url)` | Minimal built-in glTF 2.0 loader; prefer Three.js `GLTFLoader` |
-| `CameraViewControl` | Orbit/pan/zoom controller for a ClayPT `Camera` |
+| `CameraViewControl` | Orbit/pan/zoom controller for a MuTracer `Camera` |
 | `precomputeTinyBvh`, `prepareForPrecompute`, `precompute`, `resolveFromPrecompute` | BVH and displacement precomputation; see [BVH](./bvh.md) |
 | `buildOpenSubdivAdaptiveFaceLevels` | Per-face levels for OpenSubdiv displacement |
 | `VERSION` | Library version |
 
-`claypt/oidn` exposes lower-level OIDN loading (`initializeOIDN`,
+`mutracer/oidn` exposes lower-level OIDN loading (`initializeOIDN`,
 `initializeOIDNFromURL`, `DEFAULT_OIDN_WEIGHTS_BASE_URL`) for custom denoiser
 setups.

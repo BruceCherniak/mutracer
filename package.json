@@ -1,7 +1,7 @@
 {
-  "name": "claypt",
+  "name": "mutracer",
   "version": "0.1.0",
-  "description": "ClayPT (Clay Path Tracing): a physically based WebGPU path tracer with WebGL 2 fallback, OpenPBR materials, TinyBVH and OIDN denoising.",
+  "description": "MuTracer: a physically based WebGPU path tracer with WebGL 2 fallback, OpenPBR materials, TinyBVH and OIDN denoising.",
   "keywords": [
     "path tracing",
     "webgpu",
@@ -13,21 +13,21 @@
     "three.js",
     "renderer"
   ],
-  "homepage": "https://github.com/pissang/claypt#readme",
+  "homepage": "https://github.com/pissang/mutracer#readme",
   "bugs": {
-    "url": "https://github.com/pissang/claypt/issues"
+    "url": "https://github.com/pissang/mutracer/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/pissang/claypt.git"
+    "url": "git+https://github.com/pissang/mutracer.git"
   },
   "license": "MIT",
   "author": "Yi Shen",
   "type": "module",
   "main": "lib/main.js",
   "types": "lib/main.d.ts",
-  "unpkg": "dist/claypt.umd.js",
-  "jsdelivr": "dist/claypt.umd.js",
+  "unpkg": "dist/mutracer.umd.js",
+  "jsdelivr": "dist/mutracer.umd.js",
   "exports": {
     ".": {
       "types": "./lib/main.d.ts",

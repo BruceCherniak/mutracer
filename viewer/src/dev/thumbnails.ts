@@ -1,6 +1,6 @@
 /**
  * Development tool: renders the Examples menu and material preset thumbnails
- * with ClayPT. Run `await generateThumbnails()` in the console of
+ * with MuTracer. Run `await generateThumbnails()` in the console of
  * `npm run viewer`; the dev server writes them to src/assets/thumbnails/.
  */
 import * as THREE from 'three';

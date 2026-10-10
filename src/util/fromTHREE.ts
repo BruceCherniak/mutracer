@@ -81,7 +81,7 @@ function convertMaterial(
   textureCache: TextureStore
 ) {
   const material = new OpenPBRMaterial();
-  if (threeMaterial.userData.clayptShadowCatcher === true) {
+  if (threeMaterial.userData.mutracerShadowCatcher === true) {
     material.shadowCatcher = true;
     return material;
   }
@@ -124,7 +124,7 @@ function convertMaterial(
     standardMaterial.normalScale && standardMaterial.normalScale.toArray();
 
   const materialUvProjection = standardMaterial.userData
-    .clayptUvProjection;
+    .mutracerUvProjection;
   if (
     materialUvProjection === 'triplanar' ||
     materialUvProjection === 'spherical' ||
@@ -133,10 +133,10 @@ function convertMaterial(
   ) {
     material.uvProjection = materialUvProjection;
   }
-  const materialUvScale = standardMaterial.userData.clayptUvScale;
+  const materialUvScale = standardMaterial.userData.mutracerUvScale;
   if (Array.isArray(materialUvScale) && materialUvScale.length >= 2) {
     const referenceLength = Math.max(
-      Number(standardMaterial.userData.clayptUvReferenceLength) || 1,
+      Number(standardMaterial.userData.mutracerUvReferenceLength) || 1,
       0.000001
     );
     const scaleX = Math.max(
@@ -178,18 +178,18 @@ function convertMaterial(
     ? displacementBias
     : 0;
   const displacementStepSize = Number(
-    standardMaterial.userData.clayptDisplacementStepSize
+    standardMaterial.userData.mutracerDisplacementStepSize
   );
   if (Number.isFinite(displacementStepSize)) {
     material.displacementStepSize = Math.max(0.000001, displacementStepSize);
   }
   const displacementMode = standardMaterial.userData
-    .clayptDisplacementMode;
+    .mutracerDisplacementMode;
   material.displacementMode = displacementMode === 'tessellated'
     ? 'tessellated'
     : 'projective';
   const tessellationMode = standardMaterial.userData
-    .clayptDisplacementTessellationMode;
+    .mutracerDisplacementTessellationMode;
   material.displacementTessellationMode = tessellationMode === 'opensubdiv-adaptive'
     ? 'opensubdiv'
     : [
@@ -200,7 +200,7 @@ function convertMaterial(
       ? tessellationMode
       : 'adaptive';
   const uvProjection = standardMaterial.userData
-    .clayptDisplacementUvProjection;
+    .mutracerDisplacementUvProjection;
   if (
     uvProjection === 'triplanar' ||
     uvProjection === 'spherical' ||
@@ -210,19 +210,19 @@ function convertMaterial(
     material.displacementUvProjection = uvProjection;
   }
   const displacementUvScale = Number(
-    standardMaterial.userData.clayptDisplacementUvScale
+    standardMaterial.userData.mutracerDisplacementUvScale
   );
   if (Number.isFinite(displacementUvScale)) {
     material.displacementUvScale = Math.max(displacementUvScale, 0.000001);
   }
   const resolvedMaxSubdivisionLevel = Number(
     standardMaterial.userData
-      .clayptDisplacementResolvedMaxSubdivisionLevel
+      .mutracerDisplacementResolvedMaxSubdivisionLevel
   );
   const maxSubdivisionLevel = Number.isFinite(resolvedMaxSubdivisionLevel)
     ? resolvedMaxSubdivisionLevel
     : Number(
-        standardMaterial.userData.clayptDisplacementMaxSubdivisionLevel
+        standardMaterial.userData.mutracerDisplacementMaxSubdivisionLevel
       );
   if (Number.isFinite(maxSubdivisionLevel)) {
     material.displacementMaxSubdivisionLevel = Math.min(
@@ -232,7 +232,7 @@ function convertMaterial(
   }
   const resolvedMinSubdivisionLevel = Number(
     standardMaterial.userData
-      .clayptDisplacementResolvedMinSubdivisionLevel
+      .mutracerDisplacementResolvedMinSubdivisionLevel
   );
   if (Number.isFinite(resolvedMinSubdivisionLevel)) {
     material.displacementMinSubdivisionLevel = Math.min(
@@ -241,13 +241,13 @@ function convertMaterial(
     );
   }
   const maxError = Number(
-    standardMaterial.userData.clayptDisplacementMaxError
+    standardMaterial.userData.mutracerDisplacementMaxError
   );
   if (Number.isFinite(maxError)) {
     material.displacementMaxError = Math.max(0, maxError);
   }
   const maxTriangles = Number(
-    standardMaterial.userData.clayptDisplacementMaxTriangles
+    standardMaterial.userData.mutracerDisplacementMaxTriangles
   );
   if (Number.isFinite(maxTriangles)) {
     material.displacementMaxTriangles = Math.min(
@@ -256,7 +256,7 @@ function convertMaterial(
     );
   }
   const edgeProfile = standardMaterial.userData
-    .clayptDisplacementEdgeProfile;
+    .mutracerDisplacementEdgeProfile;
   if (
     edgeProfile === 'smooth' ||
     edgeProfile === 'beveled' ||
@@ -266,24 +266,24 @@ function convertMaterial(
     material.displacementEdgeProfile = edgeProfile;
   }
   const threshold = Number(
-    standardMaterial.userData.clayptDisplacementThreshold
+    standardMaterial.userData.mutracerDisplacementThreshold
   );
   if (Number.isFinite(threshold)) {
     material.displacementThreshold = Math.min(Math.max(threshold, 0), 1);
   }
   const edgeWidth = Number(
-    standardMaterial.userData.clayptDisplacementEdgeWidth
+    standardMaterial.userData.mutracerDisplacementEdgeWidth
   );
   if (Number.isFinite(edgeWidth)) {
     material.displacementEdgeWidth = Math.max(edgeWidth, 0.01);
   }
   const hardContourGeometry = standardMaterial.userData
-    .clayptDisplacementHardContourGeometry;
+    .mutracerDisplacementHardContourGeometry;
   if (typeof hardContourGeometry === 'boolean') {
     material.displacementHardContourGeometry = hardContourGeometry;
   }
   const contourSmoothing = Number(
-    standardMaterial.userData.clayptDisplacementContourSmoothing
+    standardMaterial.userData.mutracerDisplacementContourSmoothing
   );
   if (Number.isFinite(contourSmoothing)) {
     material.displacementContourSmoothing = Math.min(
@@ -292,7 +292,7 @@ function convertMaterial(
     );
   }
   const contourSubdivisionLevel = Number(
-    standardMaterial.userData.clayptDisplacementContourSubdivisionLevel
+    standardMaterial.userData.mutracerDisplacementContourSubdivisionLevel
   );
   if (Number.isFinite(contourSubdivisionLevel)) {
     material.displacementContourSubdivisionLevel = Math.min(
@@ -301,7 +301,7 @@ function convertMaterial(
     );
   }
   const creaseAngle = Number(
-    standardMaterial.userData.clayptDisplacementCreaseAngle
+    standardMaterial.userData.mutracerDisplacementCreaseAngle
   );
   if (Number.isFinite(creaseAngle)) {
     material.displacementCreaseAngle = Math.min(
@@ -310,14 +310,14 @@ function convertMaterial(
     );
   }
   const heightFilter = standardMaterial.userData
-    .clayptDisplacementHeightFilter;
+    .mutracerDisplacementHeightFilter;
   if (heightFilter === 'linear' || heightFilter === 'nearest') {
     material.displacementHeightFilter = heightFilter;
   }
   material.displacementHeightPrefilter =
-    standardMaterial.userData.clayptDisplacementHeightPrefilter === true;
+    standardMaterial.userData.mutracerDisplacementHeightPrefilter === true;
   const bumpStrength = Number(
-    standardMaterial.userData.clayptDisplacementBumpStrength
+    standardMaterial.userData.mutracerDisplacementBumpStrength
   );
   if (Number.isFinite(bumpStrength)) {
     material.displacementBumpStrength = Math.max(0, bumpStrength);
@@ -357,7 +357,7 @@ function convertMaterial(
     material.coatRoughness = physicalMaterial.clearcoatRoughness;
     // MeshPhysicalMaterial's clearcoat BRDF uses the fixed dielectric F0
     // for IOR 1.5. Match that in the OpenPBR path representation; explicit
-    // clayptOpenPBR metadata below may provide a different coat IOR.
+    // mutracerOpenPBR metadata below may provide a different coat IOR.
     material.coatIor = 1.5;
     material.fuzzWeight = physicalMaterial.sheen;
     if (physicalMaterial.sheenColor) {
@@ -399,7 +399,7 @@ function convertMaterial(
   );
   const thinFilmMap =
     (standardMaterial.userData
-      .clayptThinFilmMap as THREE.Texture | undefined) ??
+      .mutracerThinFilmMap as THREE.Texture | undefined) ??
     realtimeIridescence.iridescenceThicknessMap ??
     undefined;
   if (thinFilmMap) {
@@ -409,7 +409,7 @@ function convertMaterial(
   material.specularAnisotropy = Number.isFinite(anisotropy)
     ? Math.min(1, Math.max(0, anisotropy))
     : 0;
-  const openPbr = standardMaterial.userData.clayptOpenPBR as
+  const openPbr = standardMaterial.userData.mutracerOpenPBR as
     | Record<string, unknown>
     | undefined;
   const finite = (
@@ -536,7 +536,7 @@ function convertMaterial(
   // THREE.DoubleSide is the numeric enum value 2. Keep this module's Three.js
   // import type-only while preserving the source material's culling semantics.
   material.doubleSided = standardMaterial.side === 2;
-  const bevelSize = Number(standardMaterial.userData.clayptBevelSize);
+  const bevelSize = Number(standardMaterial.userData.mutracerBevelSize);
   material.bevelSize = Number.isFinite(bevelSize) ? Math.max(0, bevelSize) : 0;
   material.mapAlphaUsage =
     standardMaterial.transparent ||
@@ -689,7 +689,7 @@ function retainLight(store: ConversionStore, source: THREE.Object3D | THREE.Text
 }
 
 /**
- * Converts a Three.js scene into a ClayPT {@link Scene}: meshes with
+ * Converts a Three.js scene into a MuTracer {@link Scene}: meshes with
  * `MeshStandardMaterial` / `MeshPhysicalMaterial` (mapped to OpenPBR),
  * directional, ambient, rect-area, point and spot lights, and the scene
  * background / environment. Calls `scene.updateMatrixWorld()` and creates fresh objects on every call.
@@ -699,8 +699,8 @@ function retainLight(store: ConversionStore, source: THREE.Object3D | THREE.Text
  * For animation and editing, use {@link THREESceneSync}.
  *
  * Renderer-specific material settings can be supplied through
- * `material.userData`, e.g. `userData.clayptShadowCatcher = true` or
- * `userData.clayptOpenPBR = { ... }` for OpenPBR inputs without a Three.js
+ * `material.userData`, e.g. `userData.mutracerShadowCatcher = true` or
+ * `userData.mutracerOpenPBR = { ... }` for OpenPBR inputs without a Three.js
  * equivalent.
  */
 export function fromTHREEScene(
@@ -795,7 +795,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
           (material) =>
             !(material as THREE.MeshStandardMaterial).isMeshStandardMaterial &&
             !(material as THREE.MeshBasicMaterial).isMeshBasicMaterial &&
-            material.userData.clayptShadowCatcher !== true
+            material.userData.mutracerShadowCatcher !== true
         )
       ) {
         console.warn(
@@ -807,7 +807,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
         const unsupported = (child as THREE.Mesh & { isBatchedMesh?: boolean }).isBatchedMesh ||
           instanced.isInstancedMesh && (!!instanced.morphTexture || (child as THREE.SkinnedMesh).isSkinnedMesh);
         if (unsupported && !store.warned.has(child)) {
-          console.warn('ClayPT: BatchedMesh, instanced morph targets and skinned instancing are not supported; converting as an ordinary mesh.', child);
+          console.warn('MuTracer: BatchedMesh, instanced morph targets and skinned instancing are not supported; converting as an ordinary mesh.', child);
           store.warned.add(child);
         }
         const expand = instanced.isInstancedMesh && !unsupported;
@@ -913,7 +913,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             mesh.geometry = geometry;
             if (mesh.materials[0] !== material) mesh.materials = [material];
             const simplificationRatio = Number(
-              child.userData.clayptMeshoptSimplificationRatio
+              child.userData.mutracerMeshoptSimplificationRatio
             );
             mesh.geometrySimplificationRatio = Number.isFinite(
               simplificationRatio
@@ -968,10 +968,10 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
       );
       const direction = worldTarget.sub(worldPosition).normalize();
       const outerAngle = (child.angle * 180) / Math.PI;
-      const profile = child.userData.clayptIesProfile;
+      const profile = child.userData.mutracerIesProfile;
       if (profile != null && !(profile instanceof IESProfile)) {
         throw new Error(
-          `THREE.SpotLight "${child.name || '<unnamed>'}" has an invalid clayptIesProfile`
+          `THREE.SpotLight "${child.name || '<unnamed>'}" has an invalid mutracerIesProfile`
         );
       }
       lights.push(retainLight(store, child,
@@ -980,12 +980,12 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
           direction.toArray(),
           child.color.toArray() as ColorRGB,
           child.intensity,
-          child.userData.clayptRadius ?? 0.01,
+          child.userData.mutracerRadius ?? 0.01,
           outerAngle * (1 - child.penumbra),
           outerAngle,
           child.distance,
           profile,
-          child.userData.clayptIesRotation ?? 0
+          child.userData.mutracerIesRotation ?? 0
         )
       ));
     } else if (isPointLight(child)) {
@@ -1000,7 +1000,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
           position,
           child.color.toArray() as ColorRGB,
           child.intensity,
-          child.userData.clayptRadius ?? 0.25
+          child.userData.mutracerRadius ?? 0.25
         )
       ));
     } else if (isAmbientLight(child)) {
@@ -1017,7 +1017,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
     : undefined;
   if (environmentLight) lights.push(environmentLight);
 
-  const grounded = scene.userData.clayptGroundedSkybox as
+  const grounded = scene.userData.mutracerGroundedSkybox as
     | {
         texture: THREE.DataTexture;
         height: number;
@@ -1028,7 +1028,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
     | undefined;
   const groundedTexture = grounded && convertDataTexture(grounded.texture, textureCache);
   const hideEnvironmentBackground =
-    scene.userData.clayptHiddenBackground === true;
+    scene.userData.mutracerHiddenBackground === true;
   let background: GroundedSkyboxBackground | ColorRGBA | Texture | undefined =
     hideEnvironmentBackground
       ? [0, 0, 0, 0]
@@ -1083,7 +1083,7 @@ export interface THREESceneChanges {
 }
 
 /**
- * Keeps one ClayPT scene in sync with a Three.js scene, reusing unchanged objects.
+ * Keeps one MuTracer scene in sync with a Three.js scene, reusing unchanged objects.
  * Skinning/morph targets run on the CPU with per-source-mesh dynamic geometry.
  * InstancedMesh retains its prefix on count changes and shares geometry/BLAS;
  * Currently used colors and automatic UV-less projections share cached material

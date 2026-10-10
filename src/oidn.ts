@@ -48,7 +48,7 @@ export type OIDNDenoiser = UNet & {
  * `oidn/weights` directory and pass `weightsBaseUrl` for production use.
  */
 export const DEFAULT_OIDN_WEIGHTS_BASE_URL =
-  `https://cdn.jsdelivr.net/npm/claypt@${VERSION}/oidn/weights/`;
+  `https://cdn.jsdelivr.net/npm/mutracer@${VERSION}/oidn/weights/`;
 
 export interface OIDNLoadOptions {
   /** Attach the loaded denoiser to the renderer. Defaults to true. */

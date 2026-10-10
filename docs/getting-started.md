@@ -2,7 +2,7 @@
 
 ## Concepts
 
-ClayPT renders a plain **scene description** with a **camera**:
+MuTracer renders a plain **scene description** with a **camera**:
 
 ```ts
 interface Scene {
@@ -27,7 +27,7 @@ animation frame; it returns a [status](./api.md#status-codes).
 ## A minimal render loop
 
 ```ts
-import { Camera, Renderer, RENDER_STATUS_FINISHED } from 'claypt';
+import { Camera, Renderer, RENDER_STATUS_FINISHED } from 'mutracer';
 
 const renderer = new Renderer({ canvas });
 renderer.maxSamples = 1024;
@@ -57,7 +57,7 @@ calls return `RENDER_STATUS_PREPARING` (device setup, BVH builds) and
 ## Geometry from arrays
 
 ```ts
-import { Geometry, GeometryAttribute, generateVertexNormals } from 'claypt';
+import { Geometry, GeometryAttribute, generateVertexNormals } from 'mutracer';
 
 const geometry = new Geometry({
   position: new GeometryAttribute(new Float32Array(positions), 3),
@@ -80,7 +80,7 @@ camera.aperture = 0.05;      // depth of field, 0 disables
 camera.focusDistance = 6;
 ```
 
-`CameraViewControl` provides orbit/pan/zoom for a ClayPT camera. With Three.js,
+`CameraViewControl` provides orbit/pan/zoom for a MuTracer camera. With Three.js,
 use its controls and convert with `fromTHREECamera` each frame.
 
 ## Lights

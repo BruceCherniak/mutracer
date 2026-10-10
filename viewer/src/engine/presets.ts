@@ -1,6 +1,6 @@
 import type { EnvResolution } from '../store';
 
-// Rendered with ClayPT by the thumbnail generator (see viewer/README.md).
+// Rendered with MuTracer by the thumbnail generator (see viewer/README.md).
 const THUMBNAILS = import.meta.glob<string>('../assets/thumbnails/*.webp', { eager: true, query: '?url', import: 'default' });
 export const thumbnailUrl = (name: string): string | undefined => THUMBNAILS[`../assets/thumbnails/${name}.webp`];
 
@@ -36,7 +36,7 @@ export const MODEL_PRESETS: ModelPreset[] = [
   {
     id: 'spheres', name: 'Material spheres', tag: 'OpenPBR layers', url: null, license: 'CC0',
     thumbnail: thumbnailUrl('model-spheres'),
-    credit: 'Procedural', sourceUrl: 'https://github.com/pissang/claypt'
+    credit: 'Procedural', sourceUrl: 'https://github.com/pissang/mutracer'
   },
   khronos('toycar', 'ToyCar', 'Toy Car', 'Coat · transmission', 'CC0', 5.4),
   khronos('sheenchair', 'SheenChair', 'Sheen Chair', 'Fuzz', 'CC0', 4.1),

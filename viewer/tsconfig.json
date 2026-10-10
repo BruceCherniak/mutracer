@@ -7,8 +7,8 @@
     "lib": ["ESNext", "DOM", "DOM.Iterable"],
     "baseUrl": "..",
     "paths": {
-      "claypt": ["src/main.ts"],
-      "claypt/oidn": ["src/oidn.ts"]
+      "mutracer": ["src/main.ts"],
+      "mutracer/oidn": ["src/oidn.ts"]
     },
     "types": ["@webgpu/types", "vite/client", "node"]
   },

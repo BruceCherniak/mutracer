@@ -1,6 +1,6 @@
 # Third-party notices
 
-ClayPT is released under the MIT License (see [`LICENSE`](./LICENSE)). It
+MuTracer is released under the MIT License (see [`LICENSE`](./LICENSE)). It
 includes or adapts the following third-party work. License texts are in
 [`LICENSES/`](./LICENSES) unless noted otherwise.
 

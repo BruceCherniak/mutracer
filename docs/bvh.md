@@ -38,7 +38,7 @@ the BLAS. Replacing `mesh.geometry` is detected automatically.
 | `'cwbvh'` | Compressed 8-wide BVH (WebGPU); experimental, benefit depends on GPU and scene |
 
 ```ts
-import { precomputeTinyBvh } from 'claypt';
+import { precomputeTinyBvh } from 'mutracer';
 const stats = await precomputeTinyBvh(scene.meshes, 'cwbvh');
 ```
 
@@ -88,7 +88,7 @@ before entering the render loop. Resume rendering after resolving the result:
 
 ```ts
 // main thread
-import { prepareForPrecompute, resolveFromPrecompute } from 'claypt';
+import { prepareForPrecompute, resolveFromPrecompute } from 'mutracer';
 
 const prepared = prepareForPrecompute(scene.meshes);
 const {
@@ -107,7 +107,7 @@ worker.onmessage = ({ data }) => {
 };
 
 // worker.ts
-import { precompute } from 'claypt';
+import { precompute } from 'mutracer';
 
 self.onmessage = async ({ data: d }) => {
   const result = await precompute(

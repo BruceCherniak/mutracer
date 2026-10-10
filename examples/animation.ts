@@ -1,7 +1,7 @@
 // Procedural skinning and a relative morph target, evaluated by THREESceneSync.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Renderer, THREESceneSync, fromTHREECamera } from 'claypt';
+import { Renderer, THREESceneSync, fromTHREECamera } from 'mutracer';
 import { showStatus } from './shared/status';
 
 const canvas = document.getElementById('main') as HTMLCanvasElement;

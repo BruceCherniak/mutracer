@@ -6,7 +6,7 @@ Property names are camel-case spellings of the OpenPBR inputs. Colors are
 linear RGB.
 
 ```ts
-import { OpenPBRMaterial } from 'claypt';
+import { OpenPBRMaterial } from 'mutracer';
 
 const glass = new OpenPBRMaterial();
 glass.transmissionWeight = 1;

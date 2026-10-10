@@ -1,6 +1,6 @@
-# ClayPT Viewer
+# MuTracer Viewer
 
-A browser app for trying ClayPT: drop a glTF/GLB (or a folder with a .gltf,
+A browser app for trying MuTracer: drop a glTF/GLB (or a folder with a .gltf,
 its .bin and textures) or a Radiance .hdr, browse the scene tree, edit OpenPBR
 materials, lighting, camera and render settings, play glTF animations and
 export PNGs.
@@ -25,7 +25,7 @@ npm run deploy:viewer
 ```
 
 `wrangler.jsonc` checks the viewer's types, builds it and deploys `dist-viewer/`
-as static assets for the `claypt-viewer` Worker. Wrangler prints the public
+as static assets for the `mutracer-viewer` Worker. Wrangler prints the public
 HTTPS URL after deployment. No server code or runtime secrets are needed.
 The build includes the TinyBVH/Draco WebAssembly files and local OIDN weights.
 Only fingerprinted files under `assets/` receive an immutable browser cache.
@@ -60,7 +60,7 @@ selection back to the store.
 
 Notes:
 
-- Material edits go to the converted ClayPT `OpenPBRMaterial`s (collected with
+- Material edits go to the converted MuTracer `OpenPBRMaterial`s (collected with
   `onMeshConverted`), followed by `markUpdated()`. The Three.js source material
   is not touched, so the scene sync does not overwrite the edit.
 - `EnvironmentLight` has no intensity or rotation, so both are baked into a copy
@@ -69,7 +69,7 @@ Notes:
   root in development (this also works when the examples server serves the
   viewer at `/viewer/`) and copied next to `index.html` in the build, because
   the CDN copy only exists for published versions.
-- The Examples menu and material preset thumbnails are ClayPT renders. After
+- The Examples menu and material preset thumbnails are MuTracer renders. After
   changing a preset, run `await generateThumbnails()` in the browser console
   of `npm run viewer`; the dev server saves them to `src/assets/thumbnails/`.
   The material stage (checker cyclorama, dimmed studio light) follows
