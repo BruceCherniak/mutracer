@@ -1,3 +1,5 @@
+/// <reference types="@webgpu/types" preserve="true" />
+
 import { initUNetFromBuffer, type UNet } from 'oidn-web';
 import type Renderer from './Renderer';
 import { VERSION } from './version';

@@ -1,3 +1,5 @@
+/// <reference types="@webgpu/types" preserve="true" />
+
 /**
  * MuTracer: a physically based WebGPU path tracer with a
  * WebGL 2 fallback.
