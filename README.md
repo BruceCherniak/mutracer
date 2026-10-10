@@ -13,8 +13,8 @@ TinyBVH acceleration and Intel Open Image Denoise built in.
   animation.
 - **Denoising**: one call enables OIDN on the WebGPU device, for the final image
   or while the image converges.
-- **Three.js friendly**: convert a `THREE.Scene` (loaded with `GLTFLoader` or
-  built by hand) with `fromTHREEScene`.
+- **Three.js friendly**: keep a `THREE.Scene` (loaded with `GLTFLoader` or
+  built by hand) in sync with `THREESceneSync`.
 - **Production output**: AgX, ACES and Tony McMapface tone mapping, color
   grading, bloom, shadow catchers, transparent backgrounds, depth of field and
   offline rendering with adaptive sampling.
@@ -84,11 +84,17 @@ frame();
 With Three.js:
 
 ```ts
-import { Renderer, fromTHREEScene, fromTHREECamera } from 'mutracer';
+import { Renderer, THREESceneSync, fromTHREECamera } from 'mutracer';
 
-threeScene.updateMatrixWorld();
-const scene = fromTHREEScene(threeScene);
-renderer.render(scene, fromTHREECamera(threeCamera));
+const renderer = new Renderer({ canvas });
+const sync = new THREESceneSync(threeScene);
+
+function frame() {
+  sync.update();
+  renderer.render(sync.scene, fromTHREECamera(threeCamera));
+  requestAnimationFrame(frame);
+}
+frame();
 ```
 
 Enable denoising (WebGPU):
@@ -104,7 +110,7 @@ await renderer.setDenoiser({ model: 'standard' });
 | [Getting started](./docs/getting-started.md) | Scene model, render loop, updates, export |
 | [API reference](./docs/api.md) | Renderer options, methods, status codes, scene types |
 | [Materials](./docs/materials.md) | OpenPBR inputs, textures, alpha, bevel, displacement |
-| [Three.js](./docs/threejs.md) | `fromTHREEScene`, supported materials and lights, `userData` keys |
+| [Three.js](./docs/threejs.md) | `THREESceneSync`, supported materials and lights, `userData` keys |
 | [Denoising](./docs/denoising.md) | OIDN models, weights hosting, denoising while converging |
 | [BVH](./docs/bvh.md) | TinyBVH builder, layouts, worker precomputation |
 | [Performance](./docs/performance.md) | Tuning checklist |
