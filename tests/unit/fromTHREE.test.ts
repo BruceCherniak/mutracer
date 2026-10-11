@@ -194,6 +194,107 @@ describe('Three.js scene conversion', () => {
     ]);
   });
 
+  it.each([false, true])('copies float attributes independently (interleaved: %s)', (interleaved) => {
+    const geometry = new THREE.BufferGeometry();
+    const positions = [0, 0, 0, 1, 0, 0, 0, 1, 0];
+    const normals = [0, 0, 1, 0, 0, 1, 0, 0, 1];
+    const tangents = [1, 0, 0, 1, 0, 1, 0, -1, 0, 0, 1, 1];
+    if (interleaved) {
+      const values: number[] = [];
+      for (let vertex = 0; vertex < 3; vertex++) {
+        values.push(99, ...positions.slice(vertex * 3, vertex * 3 + 3),
+          ...normals.slice(vertex * 3, vertex * 3 + 3),
+          ...tangents.slice(vertex * 4, vertex * 4 + 4), 99);
+      }
+      const data = new THREE.InterleavedBuffer(new Float32Array(values), 12);
+      geometry.setAttribute('position', new THREE.InterleavedBufferAttribute(data, 3, 1));
+      geometry.setAttribute('normal', new THREE.InterleavedBufferAttribute(data, 3, 4));
+      geometry.setAttribute('tangent', new THREE.InterleavedBufferAttribute(data, 4, 7));
+    } else {
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+      geometry.setAttribute('tangent', new THREE.Float32BufferAttribute(tangents, 4));
+    }
+    geometry.setIndex([0, 1, 2]);
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial()));
+
+    const converted = fromTHREEScene(scene).meshes[0].geometry;
+    expect(Array.from(converted.position.array)).toEqual(positions);
+    expect(Array.from(converted.normal.array)).toEqual(normals);
+    expect(Array.from(converted.tangent!.array)).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    expect(Array.from(converted.boundingBox.min)).toEqual([0, 0, 0]);
+    expect(Array.from(converted.boundingBox.max)).toEqual([1, 1, 0]);
+
+    geometry.getAttribute('position').setX(0, 10);
+    geometry.getAttribute('tangent').setY(0, 10);
+    geometry.index!.setX(0, 2);
+    expect(converted.position.array[0]).toBe(0);
+    expect(converted.tangent!.array[1]).toBe(0);
+    expect(converted.indices.array[0]).toBe(0);
+    converted.normal.array[2] = -1;
+    expect(geometry.getAttribute('normal').getZ(0)).toBe(1);
+  });
+
+  it('decodes interleaved normalized integers and half-float attributes', () => {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float16BufferAttribute(
+      [0, 0, 0, 0.5, 0, 0, 0, 0.25, 0].map(THREE.DataUtils.toHalfFloat), 3
+    ));
+    const data = new THREE.InterleavedBuffer(new Int8Array([
+      42, 0, 0, 127, 1, 0, 0, -128,
+      42, 0, 127, 0, 0, 1, 0, 127,
+      42, -128, 0, 0, 0, 0, 1, 127
+    ]), 8);
+    geometry.setAttribute('normal', new THREE.InterleavedBufferAttribute(data, 3, 1, true));
+    geometry.setAttribute('tangent', new THREE.InterleavedBufferAttribute(data, 4, 4, true));
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(geometry, new THREE.MeshStandardMaterial()));
+
+    const converted = fromTHREEScene(scene).meshes[0].geometry;
+    expect(Array.from(converted.position.array)).toEqual([0, 0, 0, 0.5, 0, 0, 0, 0.25, 0]);
+    expect(Array.from(converted.normal.array)).toEqual([0, 0, 1, 0, 1, 0, -1, 0, 0]);
+    expect(Array.from(converted.tangent!.array)).toEqual(Array.from(new Float32Array([
+      1 / 127, 0, 0, 0, 1 / 127, 0, 0, 0, 1 / 127
+    ])));
+  });
+
+  it.each([Uint16Array, Uint32Array])('copies only complete grouped triangles from %s indices', (ArrayType) => {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+      0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0, 2, 1, 0
+    ], 3));
+    geometry.setIndex(new THREE.BufferAttribute(new ArrayType([0, 1, 2, 2, 1, 3, 0, 4]), 1));
+    geometry.addGroup(0, 3, 0);
+    geometry.addGroup(3, 10, 1);
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(geometry, [new THREE.MeshStandardMaterial(), new THREE.MeshStandardMaterial()]));
+
+    const converted = fromTHREEScene(scene).meshes;
+    expect(converted).toHaveLength(2);
+    expect(Array.from(converted[0].geometry.indices.array)).toEqual([0, 1, 2]);
+    expect(Array.from(converted[1].geometry.indices.array)).toEqual([2, 1, 3]);
+    expect(converted[1].geometry.indices.array).toBeInstanceOf(Uint32Array);
+    expect(Array.from(geometry.index!.array)).toEqual([0, 1, 2, 2, 1, 3, 0, 4]);
+  });
+
+  it('generates grouped non-indexed triangles at the original vertex offsets', () => {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute([
+      0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0, 0, 3, 0, 0, 2, 1, 0, 4, 0, 0
+    ], 3));
+    geometry.addGroup(0, 3, 0);
+    geometry.addGroup(3, Infinity, 1);
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(geometry, [new THREE.MeshStandardMaterial(), new THREE.MeshStandardMaterial()]));
+
+    const converted = fromTHREEScene(scene).meshes;
+    expect(converted).toHaveLength(2);
+    expect(Array.from(converted[0].geometry.indices.array)).toEqual([0, 1, 2]);
+    expect(Array.from(converted[1].geometry.indices.array)).toEqual([3, 4, 5]);
+    expect(Array.from(converted[1].geometry.normal.array.slice(9, 18))).toEqual([0, 0, 1, 0, 0, 1, 0, 0, 1]);
+  });
+
   it('converts physical materials, transforms and environment data', () => {
     const scene = new THREE.Scene();
     const material = new THREE.MeshPhysicalMaterial({

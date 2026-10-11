@@ -435,9 +435,29 @@ function convertMaterial(
 }
 
 function copyFloatAttribute(
-  attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute
+  attribute: THREE.BufferAttribute | THREE.InterleavedBufferAttribute,
+  itemSize = attribute.itemSize
 ) {
-  const result = new Float32Array(attribute.count * attribute.itemSize);
+  const result = new Float32Array(attribute.count * itemSize);
+  if (attribute.array instanceof Float32Array && !attribute.normalized) {
+    const interleaved = attribute as THREE.InterleavedBufferAttribute;
+    if (!interleaved.isInterleavedBufferAttribute && itemSize === attribute.itemSize) {
+      result.set(attribute.array.subarray(0, result.length));
+    } else {
+      const stride = interleaved.isInterleavedBufferAttribute
+        ? interleaved.data.stride : attribute.itemSize;
+      const offset = interleaved.isInterleavedBufferAttribute ? interleaved.offset : 0;
+      for (let index = 0; index < attribute.count; index++) {
+        const sourceOffset = index * stride + offset;
+        const targetOffset = index * itemSize;
+        for (let component = 0; component < itemSize; component++) {
+          result[targetOffset + component] = attribute.array[sourceOffset + component];
+        }
+      }
+    }
+    return result;
+  }
+  // Getters preserve normalized integer and Float16BufferAttribute decoding.
   const getters = [
     attribute.getX,
     attribute.getY,
@@ -445,8 +465,8 @@ function copyFloatAttribute(
     attribute.getW
   ];
   for (let index = 0; index < attribute.count; index++) {
-    for (let component = 0; component < attribute.itemSize; component++) {
-      result[index * attribute.itemSize + component] = getters[component].call(
+    for (let component = 0; component < itemSize; component++) {
+      result[index * itemSize + component] = getters[component].call(
         attribute,
         index
       );
@@ -465,17 +485,26 @@ function convertGeometry(
   const uvAttrb = threeGeometry.getAttribute('uv');
   const uv1Attrb = threeGeometry.getAttribute('uv1');
   const indexAttrb = threeGeometry.getIndex();
-  const sourceIndices = indexAttrb
-    ? Array.from(indexAttrb.array as ArrayLike<number>)
-    : Array.from({ length: positionAttrb.count }, (_, index) => index);
-  const indices = drawRange
-    ? sourceIndices.slice(drawRange.start, drawRange.start + drawRange.count)
-    : sourceIndices;
+  const sourceCount = indexAttrb ? indexAttrb.array.length : positionAttrb.count;
+  // Match Array.slice range handling without expanding the complete index stream.
+  const clampOffset = (offset: number) => {
+    const integer = Math.trunc(offset) || 0;
+    return integer < 0 ? Math.max(sourceCount + integer, 0) : Math.min(integer, sourceCount);
+  };
+  const start = drawRange ? clampOffset(drawRange.start) : 0;
+  const end = drawRange ? clampOffset(drawRange.start + drawRange.count) : sourceCount;
+  let indexCount = Math.max(end - start, 0);
   // WebGL's TRIANGLES draw mode ignores an incomplete final primitive. Keep
   // path tracing on the same index stream so valid BufferGeometry with a
   // dangling one or two elements cannot produce invalid BLAS input.
-  indices.length -= indices.length % 3;
-  if (indices.length === 0) return null;
+  indexCount -= indexCount % 3;
+  if (indexCount === 0) return null;
+  const indices = new Uint32Array(indexCount);
+  if (indexAttrb) {
+    indices.set(indexAttrb.array.subarray(start, start + indexCount));
+  } else {
+    for (let index = 0; index < indexCount; index++) indices[index] = start + index;
+  }
   const geometry = new Geometry({
     position: new Attribute(
       copyFloatAttribute(positionAttrb),
@@ -485,16 +514,14 @@ function convertGeometry(
       normalAttrb &&
       new Attribute(copyFloatAttribute(normalAttrb), normalAttrb.itemSize),
     tangent: tangentAttrb && new Attribute(
-      copyFloatAttribute(tangentAttrb).filter(
-        (_, component) => component % tangentAttrb.itemSize < 3
-      ),
+      copyFloatAttribute(tangentAttrb, Math.min(3, tangentAttrb.itemSize)),
       3
     ),
     uv: uvAttrb && new Attribute(copyFloatAttribute(uvAttrb), uvAttrb.itemSize),
     uv1:
       uv1Attrb &&
       new Attribute(copyFloatAttribute(uv1Attrb), uv1Attrb.itemSize),
-    indices: new Attribute(new Uint32Array(indices), 1)
+    indices: new Attribute(indices, 1)
   });
   if (!geometry.normal) {
     generateVertexNormals(geometry);
