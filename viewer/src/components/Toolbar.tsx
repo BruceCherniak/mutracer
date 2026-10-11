@@ -169,7 +169,7 @@ function ExamplesMenu() {
                 {MODEL_PRESETS.map((preset) => (
                   <button key={preset.id} className="ex" data-on={current === preset.id || undefined}
                     onClick={() => { void getEngine()?.loadPreset(preset.id); close(); }}>
-                    <img className="thumb" src={preset.thumbnail} alt="" loading="lazy" />
+                    <span className="thumb"><img src={preset.thumbnail} alt="" loading="lazy" /></span>
                     <div>
                       <b>{preset.name}</b>
                       <small><span className="tag">{preset.tag}</span><span>{preset.license}{preset.sizeMB ? ` · ${preset.sizeMB} MB` : ''}</span></small>

@@ -112,3 +112,27 @@ for (const preset of MODEL_PRESETS) {
   }
   cards.append(li);
 }
+
+// Tilt the hovered card toward the pointer; CSS applies it only for hover-capable,
+// motion-tolerant users.
+const tiltQuery = matchMedia('(hover: hover) and (prefers-reduced-motion: no-preference)');
+const MAX_TILT_DEG = 8;
+cards.addEventListener('pointermove', (event) => {
+  const card = (event.target as Element).closest<HTMLElement>('.card');
+  if (!card || !tiltQuery.matches || event.pointerType !== 'mouse') return;
+  const rect = card.getBoundingClientRect();
+  const x = (event.clientX - rect.left) / rect.width;
+  const y = (event.clientY - rect.top) / rect.height;
+  card.classList.add('is-tilting');
+  card.style.setProperty('--rx', `${((0.5 - y) * 2 * MAX_TILT_DEG).toFixed(2)}deg`);
+  card.style.setProperty('--ry', `${((x - 0.5) * 2 * MAX_TILT_DEG).toFixed(2)}deg`);
+  // Pan the thumbnail against the tilt so the image reads as sitting behind the card.
+  card.style.setProperty('--px', ((x - 0.5) * 2).toFixed(3));
+  card.style.setProperty('--py', ((y - 0.5) * 2).toFixed(3));
+});
+cards.addEventListener('pointerout', (event) => {
+  const card = (event.target as Element).closest<HTMLElement>('.card');
+  if (!card || card.contains(event.relatedTarget as Node | null)) return;
+  card.classList.remove('is-tilting');
+  for (const name of ['--rx', '--ry', '--px', '--py']) card.style.removeProperty(name);
+});
