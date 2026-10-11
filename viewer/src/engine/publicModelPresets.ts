@@ -165,33 +165,6 @@ export const PUBLIC_MODEL_PRESETS = [
     }
   },
   {
-    "id": "sci-fi-box",
-    "name": "Sci-fi Box",
-    "tag": "Sci-fi / metal",
-    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/sci-fi-box/model.glb",
-    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/sci-fi-box/thumbnail.webp",
-    "license": "CC-BY 4.0",
-    "credit": "Martin Trafas",
-    "sourceUrl": "https://sketchfab.com/3d-models/sci-fi-box-c42695379c814cbcb0469c41b14f0259",
-    "licenseUrl": "http://creativecommons.org/licenses/by/4.0/",
-    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/sci-fi-box/attribution.json",
-    "sizeMB": 5.63,
-    "camera": {
-      "position": [
-        -3.156733574317115,
-        2.2358894476563917,
-        4.508282761976899
-      ],
-      "target": [
-        0,
-        0.8636885905228607,
-        0
-      ],
-      "fov": 35,
-      "space": "grounded"
-    }
-  },
-  {
     "id": "gelatinous-cube",
     "name": "Gelatinous Cube",
     "tag": "Glass / transmission",
