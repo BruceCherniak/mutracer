@@ -394,13 +394,22 @@ function makeWGPURenderingPipeline(
     rayTraceOutputPass.getOutput(label);
   let bloomPass: WGPUBloomPass | undefined;
 
-  const copyPass = new WGPUFullQuadPass('copy', device, {
+  // Primary misses on a flat colour background are blank: they add the
+  // background radiance but no surface hit, and the normalized colour divides
+  // by hits only. Raw readback restores the per-sample average, as on WebGL.
+  // Fully blank pixels are already divided by the sample count.
+  const rawOutputPass = new WGPUFullQuadPass('raw output', device, {
     textureWillBeRead: true,
-    inputs: ['colorTex'],
+    inputs: ['colorTex', 'coverageTex'],
     outputs: ['color'],
-    uniforms: [],
+    uniforms: [{ label: 'flatBackgroundColor', type: 'vec4f', data: [0, 0, 0, 0] }],
     fsMain: /* wgsl */ `
-output.color = textureLoad(colorTex, uv, 0);
+var color = textureLoad(colorTex, uv, 0);
+let coverage = clamp(textureLoad(coverageTex, uv, 0).a, 0.0, 1.0);
+if (flatBackgroundColor.a > 0.5 && coverage > 0.0) {
+  color = vec4f(color.rgb * coverage, color.a);
+}
+output.color = color;
 `
   });
 
@@ -1241,9 +1250,11 @@ output.color = color;
     const flatColor = Array.isArray(background) && background[3] >= 0.99999
       ? background
       : undefined;
-    composePass.setUniform('flatBackgroundColor', flatColor
+    const flatBackgroundColor = flatColor
       ? [flatColor[0], flatColor[1], flatColor[2], 1]
-      : [0, 0, 0, 0]);
+      : [0, 0, 0, 0];
+    composePass.setUniform('flatBackgroundColor', flatBackgroundColor);
+    rawOutputPass.setUniform('flatBackgroundColor', flatBackgroundColor);
     isFirstFrame = true;
   }
 
@@ -1736,6 +1747,7 @@ output.color = color;
     oidnNormalGuideTexture?.destroy();
     jnlmPass?.dispose();
     composePass.dispose();
+    rawOutputPass.dispose();
     compositeDenoiseDisplayPass.dispose();
     autoExposurePass.dispose();
     hdrPeakMeter?.dispose();
@@ -1801,11 +1813,11 @@ output.color = color;
         usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
       });
       const encoder = device.createCommandEncoder();
-      copyPass.setSize(renderWidth, renderHeight);
-      copyPass.setOutputParams({ color: { format: 'rgba32float' } });
-      copyPass.createPass(encoder, { colorTex: outputTexture });
+      rawOutputPass.setSize(renderWidth, renderHeight);
+      rawOutputPass.setOutputParams({ color: { format: 'rgba32float' } });
+      rawOutputPass.createPass(encoder, { colorTex: outputTexture, coverageTex: getFrameInput('albedo') });
       encoder.copyTextureToBuffer(
-        { texture: copyPass.getOutput('color') },
+        { texture: rawOutputPass.getOutput('color') },
         { buffer, bytesPerRow: 16 * renderWidth },
         textureDims
       );
