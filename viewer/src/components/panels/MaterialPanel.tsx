@@ -48,7 +48,7 @@ export function MaterialPanel() {
       <div className="preset-grid" aria-label="Material presets">
         {MATERIAL_PRESETS.map((preset) => (
           <button key={preset.id} className="preset" title={`Apply ${preset.label}`} onClick={() => set(preset.values, `${preset.label} preset`)}>
-            <img src={thumbnailUrl(`material-${preset.id}`)} alt="" />{preset.label}
+            <img src={thumbnailUrl(`material-${preset.id}`)} alt="" /><span>{preset.label}</span>
           </button>
         ))}
       </div>
