@@ -11,7 +11,7 @@ import {
   RENDER_STATUS_PREPARING,
   type RenderStatus
 } from '@meimu/mutracer';
-import { autoGroundedSkybox, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
+import { autoGroundedSkybox, resetSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
 import { Environment, createSky, loadHDR, parseHDR } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
@@ -23,6 +23,7 @@ import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, ty
 import { MaterialEditor, readPendingEdits, type PendingEdits } from './materialEditor';
 import { cameraSettings, readCameraState, writeCameraState } from './cameraState';
 import { readModelCamera } from './modelCamera';
+import { pushHistory, recordGroup } from '../history';
 import { groundModel } from './modelGrounding';
 import { DENOISER_FIELDS, getDenoiserOptions } from './denoiserSettings';
 import { buildStudioRig, createStudioAmbient, findStudioPreset } from './studio';
@@ -65,6 +66,8 @@ export class ViewerEngine {
   private sync: THREESceneSync;
   private model: LoadedModel | null = null;
   private modelCameras: ViewCamera[] = [];
+  /** Objects hidden in the loaded file, restored by {@link resetAll}. */
+  private hiddenAtLoad = new Set<string>();
   private readonly materials = new MaterialEditor((materialId) => {
     // Show the material an undo or redo changed.
     if (get().selection.materialId === materialId) return;
@@ -290,6 +293,8 @@ export class ViewerEngine {
     groundModel(root);
     this.modelGroup.add(root);
     root.updateMatrixWorld(true);
+    this.hiddenAtLoad.clear();
+    root.traverse((object) => { if (!object.visible) this.hiddenAtLoad.add(object.uuid); });
 
     const radius = Math.max(this.modelBounds().getBoundingSphere(new THREE.Sphere()).radius, 1e-3);
     this.ground.scale.setScalar(radius * 12);
@@ -311,14 +316,7 @@ export class ViewerEngine {
 
     this.sync.dispose();
     this.sync = this.createSync();
-    this.fit();
-    const defaultCamera = readModelCamera(root.userData.mutracerCamera);
-    if (defaultCamera) {
-      useViewer.setState((s) => ({ settings: { ...s.settings, projection: 'perspective', fov: defaultCamera.fov, cameraIndex: -1 } }));
-      this.perspectiveCamera.fov = defaultCamera.fov;
-      this.perspectiveCamera.updateProjectionMatrix();
-      this.lookAt(new THREE.Vector3(...defaultCamera.position), new THREE.Vector3(...defaultCamera.target));
-    }
+    this.resetView();
     const tree = [this.buildTree(root, model.name)];
     let triangles = 0;
     let meshes = 0;
@@ -339,6 +337,44 @@ export class ViewerEngine {
       selectionRect: null
     });
     if (this.settings.cameraIndex >= this.modelCameras.length) useViewer.setState((s) => ({ settings: { ...s.settings, cameraIndex: -1 } }));
+  }
+
+  /** Frames the model, or uses the view stored with it. */
+  private resetView() {
+    this.fit();
+    const defaultCamera = this.model && readModelCamera(this.model.root.userData.mutracerCamera);
+    if (defaultCamera) {
+      useViewer.setState((s) => ({ settings: { ...s.settings, projection: 'perspective', fov: defaultCamera.fov, cameraIndex: -1 } }));
+      this.perspectiveCamera.fov = defaultCamera.fov;
+      this.perspectiveCamera.updateProjectionMatrix();
+      this.lookAt(new THREE.Vector3(...defaultCamera.position), new THREE.Vector3(...defaultCamera.target));
+    }
+  }
+
+  /**
+   * Restores default lighting, render and camera settings, the loaded
+   * materials and object visibility, and the initial view. Everything but
+   * the camera is one undo step.
+   */
+  resetAll() {
+    recordGroup('Reset all', () => {
+      resetSettings();
+      this.materials.resetAll();
+      this.resetVisibility();
+    });
+    this.resetView();
+  }
+
+  private resetVisibility() {
+    const changed: { id: string; visible: boolean }[] = [];
+    this.model?.root.traverse((object) => {
+      const visible = !this.hiddenAtLoad.has(object.uuid);
+      if (object.visible !== visible) changed.push({ id: object.uuid, visible });
+    });
+    if (!changed.length) return;
+    const apply = (show: boolean) => { for (const { id, visible } of changed) this.setVisible(id, show ? visible : !visible); };
+    apply(true);
+    pushHistory({ label: 'Visibility', scope: 'material', undo: () => apply(false), redo: () => apply(true) });
   }
 
   private clearModel() {

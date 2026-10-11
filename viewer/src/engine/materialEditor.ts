@@ -189,6 +189,14 @@ export class MaterialEditor {
     if (initial) this.commit(materialId, initial, 'Reset material');
   }
 
+  /** Resets every material, including stored edits of materials not converted yet. */
+  resetAll() {
+    for (const materialId of this.entries.keys()) this.reset(materialId);
+    if (!this.pending.size) return;
+    this.pending.clear();
+    this.scheduleSave();
+  }
+
   /** Writes pending edits now, e.g. when the page is hidden. */
   flush() {
     if (this.saveTimer === undefined) return;
@@ -246,6 +254,10 @@ export class MaterialEditor {
       const description = this.describe(materialId);
       if (description) set({ material: { ...selected, ...description } });
     }
+    this.scheduleSave();
+  }
+
+  private scheduleSave() {
     if (this.modelId) {
       clearTimeout(this.saveTimer);
       this.saveTimer = setTimeout(() => {

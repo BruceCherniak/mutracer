@@ -404,6 +404,11 @@ export function setSettings(patch: Partial<Settings>, { record = true } = {}) {
   pushHistory(new SettingsEdit(keys, pick(previous), pick(next)));
 }
 
+/** Restores every setting to its default; the lighting and render part is an undo step. */
+export function resetSettings() {
+  setSettings(DEFAULT_SETTINGS);
+}
+
 class SettingsEdit implements HistoryItem {
   readonly scope = 'settings';
   readonly label: string;

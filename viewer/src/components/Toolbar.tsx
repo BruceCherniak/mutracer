@@ -3,7 +3,7 @@ import {
   Button, Dialog, DialogTrigger, Heading, Menu, MenuItem, MenuTrigger, Modal, ModalOverlay, Popover, Separator
 } from 'react-aria-components';
 import {
-  ChevronDown, Download, FileUp, Folder, Globe, HelpCircle, Link, PanelLeft, PanelRight, Redo2, Sparkles, Undo2, Upload, X
+  ChevronDown, Download, FileUp, Folder, Globe, HelpCircle, Link, PanelLeft, PanelRight, Redo2, RotateCcw, Sparkles, Undo2, Upload, X
 } from 'lucide-react';
 import { setUi, useViewer } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
@@ -32,6 +32,8 @@ export function Toolbar() {
       </div>
       <div className="header__right">
         <HistoryButtons />
+        <span className="divider" />
+        <ResetButton />
         <BackendMenu name={backend.name} adapter={backend.adapter} />
         <a className="icon-btn icon-btn--bare" href="https://github.com/pissang/mutracer" target="_blank" rel="noopener noreferrer"
           aria-label="MuTracer on GitHub (opens in a new tab)" title="MuTracer on GitHub">
@@ -60,6 +62,32 @@ function HistoryButtons() {
       <button className="icon-btn icon-btn--bare sm" aria-label="Redo" disabled={!history.redo} onClick={redo}
         title={history.redo ? `Redo ${history.redo} (⇧⌘Z)` : 'Redo (⇧⌘Z)'}><Redo2 size={15} /></button>
     </div>
+  );
+}
+
+function ResetButton() {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button className="icon-btn icon-btn--bare sm" aria-label="Reset all" title="Reset all"
+        onClick={() => setOpen(true)}><RotateCcw size={15} /></button>
+      <ModalOverlay className="scrim" isOpen={open} onOpenChange={setOpen} isDismissable>
+        <Modal className="dialog">
+          <Dialog role="alertdialog" aria-label="Reset all">
+            {({ close }) => (
+              <>
+                <Heading slot="title" className="dialog__title">Reset all?</Heading>
+                <p className="hint">Lighting, render settings, materials and object visibility return to their defaults, and the camera frames the model again. You can undo this, except for the camera.</p>
+                <div className="actions">
+                  <button type="button" className="btn" autoFocus onClick={close}>Cancel</button>
+                  <button type="button" className="btn btn--danger" onClick={() => { getEngine()?.resetAll(); close(); }}>Reset all</button>
+                </div>
+              </>
+            )}
+          </Dialog>
+        </Modal>
+      </ModalOverlay>
+    </>
   );
 }
 

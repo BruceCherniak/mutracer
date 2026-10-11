@@ -102,6 +102,8 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 .btn .chev { color: var(--cv-text-3); margin-right: -3px; }
 .btn--primary { background: var(--cv-surface-accent); color: #fff8f4; }
 .btn--primary:hover, .btn--primary[data-hovered] { background: var(--cv-surface-accent-hover); }
+.btn--danger { background: color-mix(in srgb, var(--cv-error) 22%, transparent); color: var(--cv-error); }
+.btn--danger:hover, .btn--danger[data-hovered] { background: color-mix(in srgb, var(--cv-error) 32%, transparent); }
 .btn--wide { width: 100%; }
 .btn--wide kbd { margin-left: auto; }
 .btn[data-active], .btn[data-pressed][aria-expanded='true'], .btn[aria-expanded='true'] {

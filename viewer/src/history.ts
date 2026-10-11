@@ -4,7 +4,7 @@
 
 export interface HistoryItem {
   label: string;
-  /** Lets a model change discard only the edits that belong to the model. */
+  /** Lets a model change discard only the edits that belong to the model (materials, visibility). */
   scope: 'settings' | 'material';
   /** Consecutive edits with the same key (a slider drag) collapse into one step. */
   mergeKey?: string;
@@ -19,6 +19,8 @@ const LIMIT = 100;
 
 let undoStack: { item: HistoryItem; time: number }[] = [];
 let redoStack: HistoryItem[] = [];
+/** Collects the edits of {@link recordGroup}. */
+let group: HistoryItem[] | null = null;
 const listeners = new Set<() => void>();
 
 function changed() {
@@ -27,6 +29,10 @@ function changed() {
 
 /** Records an edit that has already been applied. */
 export function pushHistory(item: HistoryItem) {
+  if (group) {
+    group.push(item);
+    return;
+  }
   const last = undoStack[undoStack.length - 1];
   const now = performance.now();
   redoStack = [];
@@ -38,6 +44,32 @@ export function pushHistory(item: HistoryItem) {
     if (undoStack.length > LIMIT) undoStack.shift();
   }
   changed();
+}
+
+/** Records the edits that `run` makes as one undo step. */
+export function recordGroup(label: string, run: () => void) {
+  if (group) {
+    run();
+    return;
+  }
+  const items: HistoryItem[] = [];
+  group = items;
+  try {
+    run();
+  } finally {
+    group = null;
+  }
+  if (items.length) pushHistory(new GroupEdit(label, items));
+}
+
+class GroupEdit implements HistoryItem {
+  /** A group with model edits is dropped with the model. */
+  readonly scope: HistoryItem['scope'];
+  constructor(readonly label: string, private readonly items: HistoryItem[]) {
+    this.scope = items.some((item) => item.scope === 'material') ? 'material' : 'settings';
+  }
+  undo() { for (let i = this.items.length - 1; i >= 0; i--) this.items[i].undo(); }
+  redo() { for (const item of this.items) item.redo(); }
 }
 
 export function undo() {
