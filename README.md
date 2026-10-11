@@ -1,4 +1,4 @@
-# MuTracer
+<h1><img src="site/src/assets/mutracer-logo.png" alt="" width="40" align="absmiddle" /> MuTracer</h1>
 
 [![npm version](https://img.shields.io/npm/v/@meimu/mutracer)](https://www.npmjs.com/package/@meimu/mutracer)
 [![MIT license](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
