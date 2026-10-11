@@ -411,9 +411,8 @@ class WGPURayTracePass {
 
   private _viewProjInv = mat4.create();
   private _cameraWorld = mat4.create();
-  private _aperture = 0;
+  private _apertureRadius = 0;
   private _focusDistance = 10;
-  private _cameraProjection?: Camera['projection'];
 
   private _needsUpdateBindGroups = true;
 
@@ -1515,7 +1514,7 @@ ${rayTraceCompute({
   }
 
   hasDepthOfField() {
-    return this._cameraProjection !== 'orthographic' && this._aperture > 0;
+    return this._apertureRadius > 0;
   }
 
 
@@ -2671,9 +2670,8 @@ ${rayTraceCompute({
   // TODO reuse the code of RayTraceNode
   setCamera(camera: Camera) {
     const viewProjectionInvMat = this._viewProjInv;
-    this._aperture = camera.aperture;
+    this._apertureRadius = Camera.getApertureRadius(camera);
     this._focusDistance = camera.focusDistance;
-    this._cameraProjection = camera.projection;
     this._updateViewProjInv(camera, viewProjectionInvMat);
     mat4.copy(this._cameraWorld, camera.matrixWorld);
   }
@@ -2683,7 +2681,7 @@ ${rayTraceCompute({
     this._updateViewProjInv(camera, tmp);
     return (
       !numberArraysEqual(this._viewProjInv, tmp) ||
-      camera.aperture !== this._aperture ||
+      Camera.getApertureRadius(camera) !== this._apertureRadius ||
       camera.focusDistance !== this._focusDistance
     );
   }
@@ -2743,7 +2741,7 @@ ${rayTraceCompute({
       new F32([
         ...this._viewProjInv,
         ...this._cameraWorld,
-        this._cameraProjection === 'orthographic' ? 0 : this._aperture,
+        this._apertureRadius,
         this._focusDistance,
         0,
         0

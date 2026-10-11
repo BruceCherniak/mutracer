@@ -16,10 +16,28 @@ export default class Camera extends SceneNode {
   /** Camera projection mode. Default `perspective`. */
   projection: Projection = 'perspective';
 
-  /** Distance to the plane in focus when `aperture > 0`. Default `10`. */
+  /**
+   * Lens f-number (focal length / aperture diameter) for depth of field.
+   * Smaller values blur more. `0` disables depth of field (pinhole camera).
+   * Orthographic cameras ignore it. Default `0`.
+   */
+  fStop = 0;
+  /**
+   * Distance from the lens to the plane in focus, measured along the view
+   * direction, in scene units. Default `10`.
+   */
   focusDistance = 10;
-  /** Lens radius for depth of field. `0` disables depth of field. Default `0`. */
-  aperture = 0;
+  /**
+   * Sensor height in millimetres. With `fov` and `zoom` it defines the focal
+   * length, and so the aperture size for a given `fStop`. Default `24`
+   * (full-frame 35 mm).
+   */
+  sensorHeight = 24;
+  /**
+   * Length of one scene unit in metres, used to convert the lens size in
+   * millimetres to scene units. glTF scenes are in metres. Default `1`.
+   */
+  metersPerUnit = 1;
 
   /** Vertical field of view in degrees (perspective). Default `45`. */
   fov = 45;
@@ -110,14 +128,43 @@ export default class Camera extends SceneNode {
     target.far = source.far;
     target.aspect = source.aspect;
     target.zoom = source.zoom;
+    target.fStop = source.fStop;
     target.focusDistance = source.focusDistance;
-    target.aperture = source.aperture;
+    target.sensorHeight = source.sensorHeight;
+    target.metersPerUnit = source.metersPerUnit;
     target.left = source.left;
     target.right = source.right;
     target.top = source.top;
     target.bottom = source.bottom;
 
     mat4.copy(target.matrixWorld, source.matrixWorld);
+  }
+
+  /**
+   * Focal length in millimetres of a perspective camera, from `sensorHeight`,
+   * `fov` and `zoom`. Returns `0` for an orthographic camera.
+   */
+  static getFocalLength(camera: Camera) {
+    if (camera.projection !== 'perspective') return 0;
+    const tanHalfFov = Math.tan((camera.fov * Math.PI) / 360);
+    return (
+      (0.5 * camera.sensorHeight * Math.max(camera.zoom, Number.EPSILON)) /
+      tanHalfFov
+    );
+  }
+
+  /**
+   * Lens (aperture) radius in scene units used for depth of field:
+   * `focalLength / (2 * fStop)` converted with `metersPerUnit`. Returns `0`
+   * when depth of field is off, for orthographic cameras and for invalid
+   * parameters.
+   */
+  static getApertureRadius(camera: Camera) {
+    const { fStop, metersPerUnit } = camera;
+    if (!(fStop > 0) || !(metersPerUnit > 0)) return 0;
+    const radius =
+      Camera.getFocalLength(camera) / (2 * fStop) / 1000 / metersPerUnit;
+    return Number.isFinite(radius) && radius > 0 ? radius : 0;
   }
 
   /** Returns a new column-major projection matrix including zoom. */

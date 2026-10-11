@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
+  Camera,
   Renderer,
   THREESceneSync,
   fromTHREECamera,
@@ -11,7 +12,7 @@ import {
   RENDER_STATUS_PREPARING,
   type RenderStatus
 } from '@meimu/mutracer';
-import { autoGroundedSkybox, resetSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
+import { autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
 import { Environment, createSky, loadHDR, parseHDR } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
@@ -27,6 +28,7 @@ import { pushHistory, recordGroup } from '../history';
 import { groundModel } from './modelGrounding';
 import { DENOISER_FIELDS, getDenoiserOptions } from './denoiserSettings';
 import { buildStudioRig, createStudioAmbient, findStudioPreset } from './studio';
+import { FOCUS_AREA_SIZE, focusPull, guessMetersPerUnit, measureAreaDepth } from './areaFocus';
 
 export interface ExportOptions {
   width: number;
@@ -45,6 +47,13 @@ const set = useViewer.setState;
 type ViewCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 const isOrthographic = (camera: THREE.Object3D): camera is THREE.OrthographicCamera =>
   (camera as THREE.OrthographicCamera).isOrthographicCamera === true;
+
+/** f-number used when depth of field is turned on from a focus pick. */
+export const DEFAULT_F_STOP = 2.8;
+/** Autofocus waits this long after the view or the focus area last changed. */
+const AUTOFOCUS_SETTLE_MS = 160;
+/** Interval of continuous autofocus while the scene or the view keeps moving. */
+const AUTOFOCUS_TRACK_MS = 280;
 
 /**
  * Owns the MuTracer renderer, the Three.js source scene and the render loop.
@@ -98,6 +107,13 @@ export class ViewerEngine {
   private denoiserUpdateTimer?: ReturnType<typeof setTimeout>;
   private backendKnown = false;
   private pointerDown: { x: number; y: number } | null = null;
+  /** Focus pull in progress; the settings hold its target only once it ends. */
+  private pull: { from: number; to: number; start: number } | null = null;
+  /** The current focus pull writes its target to the settings. */
+  private writingFocus = false;
+  private autofocusPending = true;
+  private lastViewChange = 0;
+  private lastAutofocus = 0;
   private readonly unsubscribe: () => void;
   private readonly resizeObserver: ResizeObserver;
 
@@ -125,6 +141,7 @@ export class ViewerEngine {
     });
     this.controls.addEventListener('end', () => { this.dragging = false; });
     this.controls.addEventListener('change', this.scheduleCameraSave);
+    this.controls.addEventListener('change', this.requestAutofocus);
     this.camera.position.set(3, 2, 5);
 
     this.sync = this.createSync();
@@ -136,6 +153,7 @@ export class ViewerEngine {
         this.applySettings(state.settings, before);
         this.scheduleCameraSave();
       }
+      if (state.focusArea.x !== prev.focusArea.x || state.focusArea.y !== prev.focusArea.y) this.requestAutofocus();
     });
 
     this.resizeObserver = new ResizeObserver(() => { this.needsResize = true; });
@@ -296,9 +314,13 @@ export class ViewerEngine {
     this.hiddenAtLoad.clear();
     root.traverse((object) => { if (!object.visible) this.hiddenAtLoad.add(object.uuid); });
 
-    const radius = Math.max(this.modelBounds().getBoundingSphere(new THREE.Sphere()).radius, 1e-3);
+    const bounds = this.modelBounds();
+    const radius = Math.max(bounds.getBoundingSphere(new THREE.Sphere()).radius, 1e-3);
     this.ground.scale.setScalar(radius * 12);
-    set({ modelRadius: radius });
+    const extent = bounds.getSize(new THREE.Vector3());
+    set({ modelRadius: radius, lens: { ...get().lens, guessedMetersPerUnit: guessMetersPerUnit(Math.max(extent.x, extent.y, extent.z)) } });
+    this.pull = null;
+    this.requestAutofocus();
     this.applyStudioRig();
     this.applyBackground();
 
@@ -550,6 +572,11 @@ export class ViewerEngine {
     if (changed('lighting') || changed('background') || changed('backgroundColor') || changed('groundedHeight') ||
       changed('groundedRadius')) this.applyBackground();
     if (changed('resolutionScale') || changed('cameraIndex')) this.needsResize = true;
+    // A focus distance set elsewhere (the slider, fitting) ends a running pull.
+    if (prev && changed('focusDistance') && !this.writingFocus) this.pull = null;
+    if (changed('fStop') || changed('autoFocus') || changed('fov') || changed('cameraIndex') || changed('projection')) {
+      this.requestAutofocus();
+    }
     if (changed('fov')) {
       this.perspectiveCamera.fov = s.fov;
       this.perspectiveCamera.updateProjectionMatrix();
@@ -750,6 +777,105 @@ export class ViewerEngine {
     useViewer.setState((s) => ({ settings: { ...s.settings, cameraIndex: -1, focusDistance: Number(distance.toFixed(3)) } }));
   }
 
+  // ------------------------------------------------------------------ focus
+
+  /** The MuTracer camera for a view, with the lens settings applied. */
+  private lensCamera(camera: ViewCamera, focusDistance: number) {
+    return fromTHREECamera(camera, {
+      fStop: this.settings.fStop,
+      focusDistance,
+      metersPerUnit: this.settings.metersPerUnit ?? get().lens.guessedMetersPerUnit
+    });
+  }
+
+  private publishLens(camera: Camera) {
+    const focalLength = Camera.getFocalLength(camera);
+    const lens = get().lens;
+    if (Math.abs(focalLength - lens.focalLength) > 0.05) set({ lens: { ...lens, focalLength } });
+  }
+
+  private requestAutofocus = () => {
+    this.autofocusPending = true;
+    this.lastViewChange = performance.now();
+  };
+
+  /**
+   * Focuses on the point under viewport coordinates `x`, `y` (0..1 from the
+   * top left), turning depth of field on. With autofocus the focus area
+   * moves there; otherwise the focus pulls to that point once.
+   */
+  pickFocus(x: number, y: number) {
+    const camera = this.activeCamera();
+    if (isOrthographic(camera)) return;
+    if (!(this.settings.fStop > 0)) setSettings({ fStop: DEFAULT_F_STOP });
+    if (this.settings.autoFocus) {
+      set({ focusArea: { ...get().focusArea, x, y } });
+      this.requestAutofocus();
+      this.lastViewChange = 0;
+      return;
+    }
+    const depth = measureAreaDepth(this.modelGroup, camera, { x, y, size: 0.004 }, this.viewAspect());
+    if (depth !== null) this.startPull(depth, performance.now());
+  }
+
+  /**
+   * Measures the focus area once the view settles, or periodically while
+   * the view or the animation keeps moving, and pulls focus to it.
+   */
+  private updateAutofocus(now: number) {
+    const camera = this.activeCamera();
+    if (!(this.settings.fStop > 0) || !this.settings.autoFocus || isOrthographic(camera)) return;
+    const tracking = (this.settings.autoRotate && this.settings.cameraIndex < 0) || get().animation?.playing;
+    if (tracking ? now - this.lastAutofocus < AUTOFOCUS_TRACK_MS
+      : !this.autofocusPending || this.dragging || now - this.lastViewChange < AUTOFOCUS_SETTLE_MS) return;
+    this.autofocusPending = false;
+    this.lastAutofocus = now;
+    const area = get().focusArea;
+    const depth = measureAreaDepth(this.modelGroup, camera, { x: area.x, y: area.y, size: FOCUS_AREA_SIZE }, this.viewAspect());
+    if (depth === null) {
+      set({ focusArea: { ...area, status: 'missed', attempt: area.attempt + 1 } });
+      return;
+    }
+    // Tracking keeps the frame steady instead of replaying its animation.
+    this.startPull(depth, now, !tracking);
+  }
+
+  private startPull(target: number, now: number, announce = true) {
+    const current = this.advanceFocus(now);
+    const area = get().focusArea;
+    if (Math.abs(Math.log(target / current)) < 0.004) {
+      this.pull = null;
+      this.commitFocus(target);
+      if (announce || area.status !== 'locked') set({ focusArea: { ...area, status: 'locked', attempt: area.attempt + 1 } });
+      return;
+    }
+    this.pull = { from: current, to: target, start: now };
+    if (announce || area.status !== 'focusing') set({ focusArea: { ...area, status: 'focusing', attempt: area.attempt + (announce ? 1 : 0) } });
+  }
+
+  /** Focus distance of this frame; ends a finished pull. */
+  private advanceFocus(now: number) {
+    if (!this.pull) return this.settings.focusDistance;
+    const { from, to, start } = this.pull;
+    const { distance, done } = focusPull(from, to, now - start);
+    if (done) {
+      this.pull = null;
+      this.commitFocus(to);
+      const area = get().focusArea;
+      if (area.status === 'focusing') set({ focusArea: { ...area, status: 'locked' } });
+    }
+    return distance;
+  }
+
+  private commitFocus(distance: number) {
+    this.writingFocus = true;
+    try {
+      useViewer.setState((s) => ({ settings: { ...s.settings, focusDistance: Number(distance.toPrecision(5)) } }));
+    } finally {
+      this.writingFocus = false;
+    }
+  }
+
   // ---------------------------------------------------------------- picking
 
   private onPointerDown = (event: PointerEvent) => {
@@ -767,15 +893,14 @@ export class ViewerEngine {
     );
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(ndc, this.activeCamera());
-    const hit = raycaster.intersectObject(this.modelGroup, true).find((h) => isVisible(h.object));
     if (get().pickingFocus) {
       set({ pickingFocus: false });
-      if (hit) {
-        const aperture = this.settings.aperture || Number((hit.distance * 0.01).toFixed(4));
-        useViewer.setState((s) => ({ settings: { ...s.settings, focusDistance: Number(hit.distance.toFixed(3)), aperture } }));
-      }
+      const x = (event.clientX - rect.left) / rect.width;
+      const y = (event.clientY - rect.top) / rect.height;
+      this.pickFocus(x, y);
       return;
     }
+    const hit = raycaster.intersectObject(this.modelGroup, true).find((h) => isVisible(h.object));
     if (!hit) return this.select(null);
     const materials = toArray((hit.object as THREE.Mesh).material);
     const material = materials[hit.face?.materialIndex ?? 0] ?? materials[0];
@@ -983,9 +1108,7 @@ export class ViewerEngine {
       }
       this.sync.update();
       this.renderer.setSize(options.width, options.height);
-      const clayCamera = fromTHREECamera(camera);
-      clayCamera.aperture = this.settings.aperture;
-      clayCamera.focusDistance = this.settings.focusDistance;
+      const clayCamera = this.lensCamera(camera, this.pull?.to ?? this.settings.focusDistance);
       await this.renderer.renderOfflineFrame(this.sync.scene, clayCamera, {
         samples: options.samples,
         signal: this.exportAbort.signal,
@@ -1042,9 +1165,9 @@ export class ViewerEngine {
       return;
     }
     this.sync.update();
-    const camera = fromTHREECamera(this.activeCamera());
-    camera.aperture = this.settings.aperture;
-    camera.focusDistance = this.settings.focusDistance;
+    this.updateAutofocus(now);
+    const camera = this.lensCamera(this.activeCamera(), this.advanceFocus(now));
+    this.publishLens(camera);
     let status: RenderStatus;
     try {
       status = this.renderer.render(this.sync.scene, camera);

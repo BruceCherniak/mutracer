@@ -79,7 +79,10 @@ remains usable; calling `update()` after disposal throws.
 with the same options. Every call creates fresh MuTracer objects.
 
 `fromTHREECamera(camera)` is cheap; call it every frame. Call
-`camera.updateProjectionMatrix()` after changing its aspect or fov.
+`camera.updateProjectionMatrix()` after changing its aspect or fov. A
+perspective camera's `focus` and film height (`filmGauge`) become the
+[depth of field](./getting-started.md#depth-of-field) focus distance and sensor
+height; pass `{ fStop }` to enable it, e.g. `fromTHREECamera(camera, { fStop: 2.8 })`.
 
 ## What is converted
 

@@ -1,12 +1,11 @@
-import { Camera, Crosshair, Focus } from 'lucide-react';
+import { Camera, Crosshair, Focus, ScanEye } from 'lucide-react';
 import { setSettings, useViewer } from '../../store';
-import { getEngine } from '../../engine/ViewerEngine';
+import { DEFAULT_F_STOP, getEngine } from '../../engine/ViewerEngine';
 import { Hint, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';
 
 export function CameraPanel() {
   const s = useViewer((state) => state.settings);
   const cameras = useViewer((state) => state.cameras);
-  const picking = useViewer((state) => state.pickingFocus);
   const orbit = s.cameraIndex < 0;
   const orthographic = orbit && s.projection === 'orthographic';
   return (
@@ -44,22 +43,66 @@ export function CameraPanel() {
       <Section
         title="Depth of field"
         icon={<Crosshair size={14} />}
-        actions={<Switch label="Depth of field" checked={s.aperture > 0} disabled={orthographic} onChange={(on) => setSettings({ aperture: on ? Math.max(0.01, Number((s.focusDistance * 0.01).toFixed(4))) : 0 })} />}
+        actions={<Switch label="Depth of field" checked={s.fStop > 0} disabled={orthographic} onChange={(on) => setSettings({ fStop: on ? DEFAULT_F_STOP : 0 })} />}
       >
         {orthographic && <Hint>Orthographic views have no depth of field.</Hint>}
-        {s.aperture > 0 && !orthographic && (
-          <>
-            <Scrub label="Aperture" value={s.aperture} min={0} max={Math.max(0.2, s.focusDistance * 0.05)} step={0.001} onChange={(v) => setSettings({ aperture: v })} />
-            <div className="row-with-button">
-              <Scrub label="Focus" value={s.focusDistance} min={0.01} max={Math.max(10, s.focusDistance * 3)} step={0.01} unit="m" onChange={(v) => setSettings({ focusDistance: v })} />
-              <button className="btn" data-active={picking || undefined} onClick={() => useViewer.setState({ pickingFocus: !picking })}>
-                <Crosshair size={14} />Pick
-              </button>
-            </div>
-            <Hint>{picking ? 'Click the model to focus on that point.' : 'Aperture is the lens radius in scene units.'}</Hint>
-          </>
-        )}
+        {s.fStop > 0 && !orthographic && <DepthOfField />}
       </Section>
+    </>
+  );
+}
+
+const UNITS = [
+  { value: '0.001', label: 'Millimetres' },
+  { value: '0.01', label: 'Centimetres' },
+  { value: '0.0254', label: 'Inches' },
+  { value: '1', label: 'Metres' }
+];
+
+const unitName = (metersPerUnit: number) =>
+  UNITS.find((unit) => Number(unit.value) === metersPerUnit)?.label ?? `${metersPerUnit} m`;
+
+/** Metres as "35 cm" or "2.40 m". */
+const formatMeters = (meters: number) =>
+  meters < 1 ? `${(meters * 100).toPrecision(3).replace(/\.?0+$/, '')} cm` : `${meters.toFixed(meters < 10 ? 2 : 1)} m`;
+
+function DepthOfField() {
+  const s = useViewer((state) => state.settings);
+  const picking = useViewer((state) => state.pickingFocus);
+  const lens = useViewer((state) => state.lens);
+  const radius = useViewer((state) => state.modelRadius);
+  const metersPerUnit = s.metersPerUnit ?? lens.guessedMetersPerUnit;
+  // Focus range follows the model so the slider stays usable at any scale.
+  const focusMin = radius * 0.05 * metersPerUnit;
+  const focusMax = Math.max(radius * 60, s.focusDistance * 2) * metersPerUnit;
+  const aperture = lens.focalLength / s.fStop;
+  return (
+    <>
+      <Scrub label="f-number" value={s.fStop} min={0.7} max={22} step={0.1} log format={(v) => `f/${v}`}
+        onChange={(v) => setSettings({ fStop: v })} />
+      <Switch label="Autofocus" checked={s.autoFocus} onChange={(v) => setSettings({ autoFocus: v })}>
+        <span className="field-label">Area autofocus</span>
+      </Switch>
+      <div className="row-with-button">
+        <Scrub label="Focus" value={s.focusDistance * metersPerUnit} min={focusMin} max={focusMax} step={0.0001} log format={formatMeters}
+          title={s.autoFocus ? 'Dragging turns autofocus off' : undefined}
+          onChange={(v) => setSettings({ focusDistance: v / metersPerUnit, autoFocus: false })} />
+        <button className="btn" data-active={picking || undefined} onClick={() => useViewer.setState({ pickingFocus: !picking })}>
+          {s.autoFocus ? <ScanEye size={14} /> : <Crosshair size={14} />}{s.autoFocus ? 'Place' : 'Pick'}
+        </button>
+      </div>
+      <Select
+        label="Scene unit"
+        prefix="Unit"
+        value={s.metersPerUnit === null ? 'auto' : String(s.metersPerUnit)}
+        options={[{ value: 'auto', label: `Auto · ${unitName(lens.guessedMetersPerUnit)}` }, ...UNITS]}
+        onChange={(v) => setSettings({ metersPerUnit: v === 'auto' ? null : Number(v) })}
+      />
+      <Hint>
+        {picking
+          ? s.autoFocus ? 'Click the view to move the focus area.' : 'Click the model to focus on that point.'
+          : <>{lens.focalLength.toFixed(0)} mm lens, {aperture.toFixed(1)} mm aperture.{s.autoFocus ? ' Drag the frame in the view to move the focus area.' : ''}</>}
+      </Hint>
     </>
   );
 }

@@ -303,7 +303,7 @@ struct MaterialBuffer {
 struct CameraUniform {
   viewProjectionInv: mat4x4<f32>,
   viewInv: mat4x4<f32>,
-  aperture: f32,
+  apertureRadius: f32,
   focusDistance: f32,
 };
 

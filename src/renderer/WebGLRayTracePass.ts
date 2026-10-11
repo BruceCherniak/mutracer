@@ -215,7 +215,7 @@ class WebGLRayTracePass {
   >;
 
   private _viewProjInv = mat4.create();
-  private _aperture = 0;
+  private _apertureRadius = 0;
   private _focusDistance = 10;
 
   private _tracePasses: WebGLFullQuadPass<any, any>[];
@@ -836,16 +836,15 @@ class WebGLRayTracePass {
 
   setCamera(camera: Camera) {
     const viewProjectionInv = this._viewProjInv;
-    this._aperture = camera.aperture;
+    this._apertureRadius = Camera.getApertureRadius(camera);
     this._focusDistance = camera.focusDistance;
     this._getViewProjInv(camera, viewProjectionInv);
-    const isOrtho = camera.projection === 'orthographic';
     this._tracePasses.forEach((pass) => {
       pass.setUniform('viewProjectionInv', viewProjectionInv);
       pass.setUniform('viewInv', camera.matrixWorld);
-      // Not support depth of field in orthographic camera
-      pass.setUniform('cameraAperture', isOrtho ? 0 : camera.aperture);
-      pass.setUniform('cameraFocus', camera.focusDistance);
+      // Zero for orthographic cameras, which have no depth of field.
+      pass.setUniform('cameraApertureRadius', this._apertureRadius);
+      pass.setUniform('cameraFocusDistance', camera.focusDistance);
     });
   }
 
@@ -854,7 +853,7 @@ class WebGLRayTracePass {
     this._getViewProjInv(camera, tmp);
     return (
       !numberArraysEqual(this._viewProjInv, tmp) ||
-      camera.aperture !== this._aperture ||
+      Camera.getApertureRadius(camera) !== this._apertureRadius ||
       camera.focusDistance !== this._focusDistance
     );
   }

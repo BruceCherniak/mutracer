@@ -77,8 +77,14 @@ export interface Settings {
   /** Projection of the orbit camera. */
   projection: 'perspective' | 'orthographic';
   fov: number;
-  aperture: number;
+  /** Lens f-number; `0` turns depth of field off. */
+  fStop: number;
+  /** Distance to the focus plane along the view direction, in scene units. */
   focusDistance: number;
+  /** Follow the subject in the focus area instead of a fixed distance. */
+  autoFocus: boolean;
+  /** Scene unit length in metres; `null` follows the guess from the model size. */
+  metersPerUnit: number | null;
   autoRotate: boolean;
 }
 
@@ -135,8 +141,10 @@ export const DEFAULT_SETTINGS: Settings = {
   cameraIndex: -1,
   projection: 'perspective',
   fov: 35,
-  aperture: 0,
+  fStop: 0,
   focusDistance: 5,
+  autoFocus: true,
+  metersPerUnit: null,
   autoRotate: false
 };
 
@@ -209,6 +217,26 @@ export interface SelectedMaterial {
   maps: Partial<Record<TextureKey, string>>;
 }
 
+/**
+ * Autofocus area in viewport coordinates (0..1 from the top left) and the
+ * state of the last measurement, shown by the focus frame.
+ */
+export interface FocusAreaState {
+  x: number;
+  y: number;
+  status: 'idle' | 'focusing' | 'locked' | 'missed';
+  /** Increments with each measurement so the frame replays its animation. */
+  attempt: number;
+}
+
+/** Lens derived from the active camera, for display. */
+export interface LensInfo {
+  /** Focal length in millimetres; `0` for orthographic views. */
+  focalLength: number;
+  /** Scene unit guessed from the model size, in metres. */
+  guessedMetersPerUnit: number;
+}
+
 export type InspectorTab = 'environment' | 'material' | 'camera' | 'render';
 
 export interface ViewerState {
@@ -232,6 +260,8 @@ export interface ViewerState {
   history: { undo: string | null; redo: string | null };
   selectionRect: { x: number; y: number; w: number; h: number; label: string } | null;
   pickingFocus: boolean;
+  focusArea: FocusAreaState;
+  lens: LensInfo;
   paused: boolean;
   ui: { tab: InspectorTab; left: boolean; right: boolean; hidden: boolean; exportOpen: boolean; helpOpen: boolean; mobileTab: InspectorTab | 'scene' };
   export: { stage: 'pilot' | 'final' | 'denoising'; samples: number; target: number } | null;
@@ -309,6 +339,9 @@ function validateSettings(settings: Settings): Settings {
     studioSize: number('studioSize', 0.1, 4),
     studioAmbientColor: /^#[0-9a-f]{6}$/i.test(settings.studioAmbientColor) ? settings.studioAmbientColor : DEFAULT_SETTINGS.studioAmbientColor,
     toneMapping: allowed.includes(settings.toneMapping) ? settings.toneMapping : 'agx',
+    fStop: settings.fStop > 0 ? number('fStop', 0.5, 64) : 0,
+    metersPerUnit: typeof settings.metersPerUnit === 'number' && settings.metersPerUnit > 0 && Number.isFinite(settings.metersPerUnit)
+      ? settings.metersPerUnit : null,
     bvhBuilder: settings.bvhBuilder === 'builtin' ? 'builtin' : 'tinybvh',
     denoiseModel,
     oidnModel: denoiseModel !== 'jnlm' ? denoiseModel : oidnModels.includes(settings.oidnModel) ? settings.oidnModel : 'standard',
@@ -343,6 +376,8 @@ export const useViewer = create<ViewerState>(() => ({
   history: { undo: null, redo: null },
   selectionRect: null,
   pickingFocus: false,
+  focusArea: { x: 0.5, y: 0.5, status: 'idle', attempt: 0 },
+  lens: { focalLength: 0, guessedMetersPerUnit: 1 },
   paused: false,
   ui: {
     tab: storedUi.tab ?? 'material',
@@ -357,7 +392,7 @@ export const useViewer = create<ViewerState>(() => ({
 }));
 
 /** Camera settings follow the view and are not undoable. */
-const UNDOABLE_EXCLUDED = new Set<keyof Settings>(['cameraIndex', 'projection', 'fov', 'aperture', 'focusDistance', 'autoRotate']);
+const UNDOABLE_EXCLUDED = new Set<keyof Settings>(['cameraIndex', 'projection', 'fov', 'fStop', 'focusDistance', 'autoFocus', 'metersPerUnit', 'autoRotate']);
 
 const SETTING_LABELS: Partial<Record<keyof Settings, string>> = {
   lighting: 'Lighting mode', studioPreset: 'Studio preset', studioIntensity: 'Studio intensity', studioRotation: 'Studio rotation',

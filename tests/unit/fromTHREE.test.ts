@@ -1051,8 +1051,10 @@ describe('Three.js camera conversion', () => {
       })
     );
     const target = new Camera('perspective');
-    source.aperture = 0.12;
+    source.fStop = 2.8;
     source.focusDistance = 6.5;
+    source.sensorHeight = 15.6;
+    source.metersPerUnit = 0.01;
     Camera.copy(source, target);
 
     expect(target).toMatchObject({
@@ -1062,8 +1064,25 @@ describe('Three.js camera conversion', () => {
       top: 4,
       bottom: -2,
       zoom: 1.5,
-      aperture: 0.12,
-      focusDistance: 6.5
+      fStop: 2.8,
+      focusDistance: 6.5,
+      sensorHeight: 15.6,
+      metersPerUnit: 0.01
     });
+  });
+
+  it('converts Three.js focus and film height into lens settings', () => {
+    const three = new THREE.PerspectiveCamera(40, 2, 0.1, 100);
+    three.focus = 3.5;
+    three.filmGauge = 36;
+    const camera = fromTHREECamera(three, { fStop: 4 });
+
+    expect(camera.focusDistance).toBe(3.5);
+    // Three.js applies the film gauge to the larger frame dimension.
+    expect(camera.sensorHeight).toBeCloseTo(18);
+    expect(Camera.getFocalLength(camera)).toBeCloseTo(three.getFocalLength());
+    expect(camera.fStop).toBe(4);
+    expect(fromTHREECamera(three, { focusDistance: 2, metersPerUnit: 0.01 }))
+      .toMatchObject({ focusDistance: 2, metersPerUnit: 0.01, fStop: 0 });
   });
 });

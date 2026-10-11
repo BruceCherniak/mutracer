@@ -1050,10 +1050,27 @@ export class THREESceneSync {
   }
 }
 
-/** Converts a Three.js perspective or orthographic camera. */
+/** Lens settings for {@link fromTHREECamera}. */
+export interface FromTHREECameraOptions {
+  /** Lens f-number; `0` disables depth of field. Default `0`. */
+  fStop?: number;
+  /**
+   * Distance to the plane in focus in scene units. Default: the perspective
+   * camera's `focus` (Three.js default `10`), otherwise `10`.
+   */
+  focusDistance?: number;
+  /** Length of one scene unit in metres. Default `1`. */
+  metersPerUnit?: number;
+}
+
+/**
+ * Converts a Three.js perspective or orthographic camera. A perspective
+ * camera's `focus` and film height (`filmGauge` and `aspect`) become
+ * `focusDistance` and `sensorHeight`.
+ */
 export function fromTHREECamera(
   threeCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
-  aperture?: number
+  options: FromTHREECameraOptions = {}
 ) {
   const camera = (threeCamera as THREE.PerspectiveCamera).fov
     ? new Camera(
@@ -1076,8 +1093,18 @@ export function fromTHREECamera(
   camera.zoom = threeCamera.zoom;
   camera.matrixWorld =
     threeCamera.matrixWorld.elements.slice() as mat4.Mat4Array;
-  if (aperture) {
-    camera.aperture = aperture;
+  const perspective = threeCamera as THREE.PerspectiveCamera;
+  if (perspective.isPerspectiveCamera) {
+    if (perspective.focus > 0) camera.focusDistance = perspective.focus;
+    const filmHeight = perspective.getFilmHeight();
+    if (filmHeight > 0) camera.sensorHeight = filmHeight;
+  }
+  if (options.fStop !== undefined) camera.fStop = options.fStop;
+  if (options.focusDistance !== undefined) {
+    camera.focusDistance = options.focusDistance;
+  }
+  if (options.metersPerUnit !== undefined) {
+    camera.metersPerUnit = options.metersPerUnit;
   }
   return camera;
 }

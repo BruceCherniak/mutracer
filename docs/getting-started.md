@@ -78,12 +78,32 @@ into `mesh.materials` per vertex.
 ```ts
 const camera = new Camera('perspective', 45 /* vertical fov */, aspect, 0.1, 100);
 Camera.lookAt(camera, [0, 2, 6], [0, 0, 0]);
-camera.aperture = 0.05;      // depth of field, 0 disables
-camera.focusDistance = 6;
 ```
 
 `CameraViewControl` provides orbit/pan/zoom for a MuTracer camera. With Three.js,
 use its controls and convert with `fromTHREECamera` each frame.
+
+### Depth of field
+
+Depth of field uses a thin lens described in photographic terms:
+
+```ts
+camera.fStop = 2.8;          // f-number; 0 (default) disables depth of field
+camera.focusDistance = 6;    // lens to focus plane, along the view direction
+camera.sensorHeight = 24;    // mm; with fov it sets the focal length
+camera.metersPerUnit = 1;    // scene unit length in metres (glTF: 1)
+```
+
+The lens radius is `focalLength / (2 * fStop)`, where the focal length follows
+from `sensorHeight`, `fov` and `zoom`. `Camera.getFocalLength(camera)` returns
+it in millimetres and `Camera.getApertureRadius(camera)` returns the lens radius
+in scene units. A narrower field of view or a lower f-number blurs more, as on a
+real camera.
+
+`metersPerUnit` converts the lens size to scene units. When a scene is modelled
+in centimetres set it to `0.01`. For a miniature look, treat the scene as
+smaller than it is (`0.1` turns a 2 m object into a 20 cm one). Orthographic
+cameras have no depth of field.
 
 ## Lights
 

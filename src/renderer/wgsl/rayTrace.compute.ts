@@ -857,9 +857,12 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
   rng_initialize(coord, i32(pixelSampleIndex ^ sampleHash(rtUniform.sequenceSeed)));
   var cam = initCameraRay(uv + jitter);
 
-  if (cameraUniform.aperture > 0.0) {
-    let lensPoint = cameraUniform.aperture * sampleCircle(sample2D(CAMERA_LENS));
-    let focusPoint = cam.o + cam.d * cameraUniform.focusDistance; // intersect ray direction with focus plane
+  if (cameraUniform.apertureRadius > 0.0) {
+    // Thin lens: the focus plane is perpendicular to the view direction.
+    let eye = cameraUniform.viewInv[3].xyz;
+    let forward = -normalize(cameraUniform.viewInv[2].xyz);
+    let focusPoint = eye + cam.d * (cameraUniform.focusDistance / dot(cam.d, forward));
+    let lensPoint = cameraUniform.apertureRadius * sampleCircle(sample2D(CAMERA_LENS));
     let origin = (cameraUniform.viewInv * vec4f(lensPoint, 0.0, 1.0)).xyz;
     let dir = normalize(focusPoint - origin);
     initRay(&cam, origin, dir);

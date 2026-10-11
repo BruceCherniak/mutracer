@@ -286,6 +286,25 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 .selection span { position: absolute; left: 0; top: -24px; max-width: 220px; overflow: hidden; text-overflow: ellipsis; padding: 3px 7px; border-radius: 6px;
   background: rgb(var(--cv-accent-rgb) / 0.92); color: #2b1208; font-size: 10.5px; font-weight: 650; white-space: nowrap; }
 
+.focus-frame { position: absolute; z-index: 1; aspect-ratio: 1; translate: -50% -50%; cursor: grab; touch-action: none; }
+.focus-frame[data-dragging] { cursor: grabbing; }
+.focus-frame__marks { position: absolute; inset: 0; --frame: rgb(255 255 255 / 0.9); opacity: 0.55; transition: opacity 0.3s; }
+.focus-frame:hover .focus-frame__marks, .focus-frame[data-dragging] .focus-frame__marks { opacity: 1; }
+.focus-frame__marks[data-status='focusing'] { opacity: 1; animation: focus-hunt 0.21s ease-in-out infinite alternate; }
+.focus-frame__marks[data-status='locked'] { --frame: var(--cv-success); animation: focus-lock 1.4s ease-out forwards; }
+.focus-frame__marks[data-status='missed'] { --frame: var(--cv-warning); animation: focus-lock 1.4s ease-out forwards; }
+.focus-frame i { position: absolute; width: 26%; height: 26%; border: 0 solid var(--frame); filter: drop-shadow(0 0 1.5px rgb(0 0 0 / 0.6));
+  transition: border-color 0.15s; }
+.focus-frame i:nth-child(1) { left: 0; top: 0; border-width: 1.5px 0 0 1.5px; }
+.focus-frame i:nth-child(2) { right: 0; top: 0; border-width: 1.5px 1.5px 0 0; }
+.focus-frame i:nth-child(3) { left: 0; bottom: 0; border-width: 0 0 1.5px 1.5px; }
+.focus-frame i:nth-child(4) { right: 0; bottom: 0; border-width: 0 1.5px 1.5px 0; }
+.focus-frame b { position: absolute; left: 50%; top: 50%; width: 4px; height: 4px; translate: -50% -50%; border-radius: 50%;
+  background: var(--frame); box-shadow: 0 0 2px rgb(0 0 0 / 0.6); }
+@keyframes focus-hunt { from { scale: 1.06; } to { scale: 0.95; } }
+@keyframes focus-lock { 0% { opacity: 1; scale: 0.9; } 18% { scale: 1; } 70% { opacity: 1; } 100% { opacity: 0.55; } }
+@media (prefers-reduced-motion: reduce) { .focus-frame__marks { animation: none !important; } }
+
 .center-card {
   position: absolute; left: 50%; top: 50%; translate: -50% -50%; width: 340px; z-index: 5;
   padding: 22px 22px 20px; border: 1px solid rgb(255 255 255 / 0.08); border-radius: 20px;

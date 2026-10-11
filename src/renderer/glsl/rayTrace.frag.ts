@@ -64,8 +64,8 @@ export default function createRayTraceFragmentShader() {
     BOUNCES: 2
   },
   uniforms: {
-    cameraAperture: Shader.uniform('float', 0.5),
-    cameraFocus: Shader.uniform('float', 40),
+    cameraApertureRadius: Shader.uniform('float', 0),
+    cameraFocusDistance: Shader.uniform('float', 10),
 
     viewProjectionInv: Shader.uniform('mat4'),
     viewInv: Shader.uniform('mat4'),

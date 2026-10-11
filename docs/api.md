@@ -138,7 +138,7 @@ If a denoiser is set, the result is denoised before the promise resolves.
 | `Geometry`, `GeometryAttribute` | Triangle data: `position`, `normal`, `indices`, optional `uv`, `uv1`, `tangent`, `color`, `materialIndex`; `dynamic` (default `false`) for [deforming geometry](./updates.md#dynamic-geometry) |
 | `OpenPBRMaterial` | See [materials](./materials.md) |
 | `Texture` | Image, canvas or `{ data, width, height }`; 8-bit is sRGB, float is linear |
-| `Camera` | `'perspective'` or `'orthographic'`; `Camera.lookAt(camera, eye, target, up?)` |
+| `Camera` | `'perspective'` or `'orthographic'`; `Camera.lookAt(camera, eye, target, up?)`; depth of field with `fStop`, `focusDistance`, `sensorHeight`, `metersPerUnit` ([details](./getting-started.md#depth-of-field)) |
 | `RectLight`, `SphereLight`, `SpotLight`, `DirectionalLight`, `EnvironmentLight`, `AmbientLight` | Lights |
 | `IESProfile`, `parseIESProfile(text)` | Photometric profiles for `SpotLight` |
 | `SceneBackground` | `[r, g, b, a]`, `Texture` or `GroundedSkyboxBackground` |
@@ -161,7 +161,7 @@ and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 | `computeMeshesBoundingBox(meshes)` | World-space bounds |
 | `loadRGBE(url)`, `parseRGBE(buffer)` | Radiance `.hdr` → float `Texture` |
 | `THREESceneSync` | Keeps a `THREE.Scene` in sync: `new THREESceneSync(threeScene, options?)` once, `sync.update()` before rendering `sync.scene`, `dispose()` when done; see [Three.js](./threejs.md) |
-| `fromTHREECamera` | Converts a Three.js camera; call each frame alongside `THREESceneSync` |
+| `fromTHREECamera(camera, options?)` | Converts a Three.js camera; call each frame alongside `THREESceneSync`. Reads `focus` and the film height; `FromTHREECameraOptions` sets `fStop` (default `0`), `focusDistance` and `metersPerUnit` (default `1`) |
 | `fromTHREEScene` | One-shot Three.js scene conversion; every call creates fresh MuTracer objects |
 | `THREESceneChanges` | Informational result of `update()`: `transforms`, `membership`, `content`, `lights`, `background`; no forwarding to Renderer needed |
 | `FromTHREESceneOptions` | Optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |

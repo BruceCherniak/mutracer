@@ -1,6 +1,6 @@
 import type { Settings } from '../store';
 
-export type CameraSettings = Pick<Settings, 'cameraIndex' | 'projection' | 'fov' | 'aperture' | 'focusDistance' | 'autoRotate'>;
+export type CameraSettings = Pick<Settings, 'cameraIndex' | 'projection' | 'fov' | 'fStop' | 'focusDistance' | 'metersPerUnit' | 'autoRotate'>;
 export interface CameraState {
   modelId: string;
   position: number[];
@@ -17,8 +17,8 @@ export interface CameraState {
 const KEY = 'mutracer-viewer:camera:v1';
 
 export function cameraSettings(settings: Settings): CameraSettings {
-  const { cameraIndex, projection, fov, aperture, focusDistance, autoRotate } = settings;
-  return { cameraIndex, projection, fov, aperture, focusDistance, autoRotate };
+  const { cameraIndex, projection, fov, fStop, focusDistance, metersPerUnit, autoRotate } = settings;
+  return { cameraIndex, projection, fov, fStop, focusDistance, metersPerUnit, autoRotate };
 }
 
 export function readCameraState(modelId: string): CameraState | null {
@@ -29,8 +29,15 @@ export function readCameraState(modelId: string): CameraState | null {
     if (![state.position, state.target, state.up].every(vector)) return null;
     if (![state.near, state.far, state.zoom].every(Number.isFinite) || state.near <= 0 || state.far <= state.near || state.zoom <= 0) return null;
     const s = state.settings;
+    // States saved before the f-number lens have no depth of field.
+    if (s && s.fStop === undefined) {
+      delete (s as Partial<CameraSettings> & { aperture?: number }).aperture;
+      s.fStop = 0;
+    }
+    if (s && s.metersPerUnit === undefined) s.metersPerUnit = null;
     if (!s || !Number.isInteger(s.cameraIndex) || s.cameraIndex < -1 || !Number.isFinite(s.fov) || s.fov <= 0 || s.fov >= 180 ||
-      !Number.isFinite(s.aperture) || s.aperture < 0 || !Number.isFinite(s.focusDistance) || s.focusDistance <= 0 || typeof s.autoRotate !== 'boolean') return null;
+      !Number.isFinite(s.fStop) || s.fStop < 0 ||
+      (s.metersPerUnit !== null && !(Number.isFinite(s.metersPerUnit) && s.metersPerUnit > 0)) || !Number.isFinite(s.focusDistance) || s.focusDistance <= 0 || typeof s.autoRotate !== 'boolean') return null;
     // States saved before the projection setting are perspective.
     s.projection ??= 'perspective';
     if (s.projection !== 'perspective' && s.projection !== 'orthographic') return null;

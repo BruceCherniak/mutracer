@@ -29,8 +29,8 @@ export default new FragmentShader({
     viewportSize: Shader.uniform('vec2'),
     viewProjectionInv: Shader.uniform('mat4'),
     viewInv: Shader.uniform('mat4'),
-    cameraAperture: Shader.uniform('float', 0),
-    cameraFocus: Shader.uniform('float', 10)
+    cameraApertureRadius: Shader.uniform('float', 0),
+    cameraFocusDistance: Shader.uniform('float', 10)
   },
   includes: [rayTraceCore, materialBufferGlsl, intersect, random, envMap],
   main: glsl`

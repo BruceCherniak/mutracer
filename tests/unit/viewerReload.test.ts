@@ -131,7 +131,7 @@ describe('viewer reload lifecycle', () => {
     const first = engine();
     await first.loadPreset('spheres');
     first.lookAt(new THREE.Vector3(7, 3, 11), new THREE.Vector3(1, 0.4, -2));
-    useViewer.setState((s) => ({ settings: { ...s.settings, fov: 47, aperture: 0.04, focusDistance: 8.75 } }));
+    useViewer.setState((s) => ({ settings: { ...s.settings, fov: 47, fStop: 2.8, focusDistance: 8.75, metersPerUnit: 0.01 } }));
     // pagehide flushes even when the scheduled write has not fired.
     window.dispatchEvent(new Event('pagehide'));
     first.dispose();
@@ -143,7 +143,7 @@ describe('viewer reload lifecycle', () => {
     expect(view.camera.position.toArray()).toEqual([7, 3, 11]);
     expect(view.controls.target.toArray()).toEqual([1, 0.4, -2]);
     expect(view.camera.fov).toBe(47);
-    expect(useViewer.getState().settings).toMatchObject({ aperture: 0.04, focusDistance: 8.75, cameraIndex: -1 });
+    expect(useViewer.getState().settings).toMatchObject({ fStop: 2.8, focusDistance: 8.75, metersPerUnit: 0.01, cameraIndex: -1 });
     expect(useViewer.getState().model?.presetId).toBe('spheres');
   });
 
@@ -168,7 +168,7 @@ describe('viewer reload lifecycle', () => {
     const first = engine();
     await first.loadFiles([{ path: 'folder/local.gltf', file: new File([data], 'local.gltf') as unknown as globalThis.File }]);
     const cameras = useViewer.getState().cameras;
-    useViewer.setState((s) => ({ settings: { ...s.settings, cameraIndex: 0, aperture: 0.05, focusDistance: 3 } }));
+    useViewer.setState((s) => ({ settings: { ...s.settings, cameraIndex: 0, fStop: 4, focusDistance: 3 } }));
     window.dispatchEvent(new Event('pagehide'));
     first.dispose();
     engines.splice(engines.indexOf(first), 1);
@@ -177,7 +177,7 @@ describe('viewer reload lifecycle', () => {
     await engine().loadInitialModel(null);
     expect(useViewer.getState().model).toMatchObject({ name: 'local.gltf', presetId: null });
     expect(useViewer.getState().cameras).toEqual(cameras);
-    expect(useViewer.getState().settings).toMatchObject({ cameraIndex: 0, aperture: 0.05, focusDistance: 3 });
+    expect(useViewer.getState().settings).toMatchObject({ cameraIndex: 0, fStop: 4, focusDistance: 3 });
     expect(fetch).not.toHaveBeenCalled();
   });
 

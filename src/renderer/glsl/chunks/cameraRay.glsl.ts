@@ -23,9 +23,12 @@ vec2 sampleCircle(vec2 p) {
 
 Ray primaryCameraRay() {
   Ray cam = initCameraRay(v_Texcoord + pixelJitter());
-  if (cameraAperture > 0.0) {
-    vec2 lensPoint = cameraAperture * sampleCircle(sample2D(CAMERA_LENS));
-    vec3 focusPoint = cam.o + cam.d * cameraFocus;
+  if (cameraApertureRadius > 0.0) {
+    // Thin lens: the focus plane is perpendicular to the view direction.
+    vec3 eye = viewInv[3].xyz;
+    vec3 forward = -normalize(viewInv[2].xyz);
+    vec3 focusPoint = eye + cam.d * (cameraFocusDistance / dot(cam.d, forward));
+    vec2 lensPoint = cameraApertureRadius * sampleCircle(sample2D(CAMERA_LENS));
     vec3 origin = vec3(viewInv * vec4(lensPoint, 0.0, 1.0));
     initRay(cam, origin, normalize(focusPoint - origin));
   }

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, Crosshair, Focus, Pause, Play, Repeat as Loop, Upload } from 'lucide-react';
 import { ViewerEngine, getEngine, setEngine } from '../engine/ViewerEngine';
 import { HANDOFF_HASH, readDroppedItems, takeStashedFiles } from '../engine/droppedFiles';
+import { FOCUS_AREA_SIZE } from '../engine/areaFocus';
 import { hashModelPreset, useViewer } from '../store';
 import { MODEL_PRESETS } from '../engine/presets';
 import { StatusBar } from './StatusBar';
@@ -56,6 +57,7 @@ export function Viewport() {
       {!hidden && (
         <>
           <SelectionBox />
+          <FocusFrame />
           <TopBar />
           <Credit />
           <AnimationBar />
@@ -74,11 +76,49 @@ export function Viewport() {
 
 function TopBar() {
   const picking = useViewer((s) => s.pickingFocus);
+  const autoFocus = useViewer((s) => s.settings.autoFocus);
+  const title = autoFocus ? 'Place focus area' : 'Pick focus point';
   return (
     <div className="float float--top">
       <button className="icon-btn icon-btn--bare" title="Fit to model (F)" aria-label="Fit to model" onClick={() => getEngine()?.fit()}><Focus size={16} /></button>
-      <button className="icon-btn icon-btn--bare" title="Pick focus point" aria-label="Pick focus point" data-active={picking || undefined}
+      <button className="icon-btn icon-btn--bare" title={title} aria-label={title} data-active={picking || undefined}
         onClick={() => useViewer.setState({ pickingFocus: !picking })}><Crosshair size={16} /></button>
+    </div>
+  );
+}
+
+/**
+ * Autofocus area. Drag it to choose what to focus on; it pulses while the
+ * lens focuses and turns green once the subject is sharp.
+ */
+function FocusFrame() {
+  const area = useViewer((s) => s.focusArea);
+  const visible = useViewer((s) => s.settings.fStop > 0 && s.settings.autoFocus &&
+    !(s.settings.cameraIndex < 0 && s.settings.projection === 'orthographic'));
+  const [dragging, setDragging] = useState(false);
+  if (!visible) return null;
+  const move = (event: React.PointerEvent<HTMLDivElement>) => {
+    const rect = event.currentTarget.parentElement!.getBoundingClientRect();
+    const clamp = (v: number) => Math.min(0.98, Math.max(0.02, v));
+    useViewer.setState((s) => ({ focusArea: {
+      ...s.focusArea, x: clamp((event.clientX - rect.left) / rect.width), y: clamp((event.clientY - rect.top) / rect.height)
+    } }));
+  };
+  return (
+    <div
+      className="focus-frame"
+      data-dragging={dragging || undefined}
+      role="slider"
+      aria-label="Focus area"
+      aria-valuetext={`${Math.round(area.x * 100)}% across, ${Math.round(area.y * 100)}% down`}
+      style={{ left: `${area.x * 100}%`, top: `${area.y * 100}%`, height: `${FOCUS_AREA_SIZE * 200}%` }}
+      onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); setDragging(true); }}
+      onPointerMove={(e) => { if (dragging) move(e); }}
+      onPointerUp={() => setDragging(false)}
+      onPointerCancel={() => setDragging(false)}
+    >
+      {/* Remounts per measurement to replay the focus animation. */}
+      <span key={area.attempt} className="focus-frame__marks" data-status={area.status}><i /><i /><i /><i /><b /></span>
     </div>
   );
 }

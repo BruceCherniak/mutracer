@@ -96,7 +96,8 @@ export { loadRGBE, parseRGBE } from './util/loadRGBE.js';
 export { fromTHREECamera, fromTHREEScene, THREESceneSync } from './util/fromTHREE.js';
 export type {
   THREESceneChanges,
-  FromTHREESceneOptions
+  FromTHREESceneOptions,
+  FromTHREECameraOptions
 } from './util/fromTHREE.js';
 export { default as CameraViewControl } from './util/CameraViewControl.js';
 
