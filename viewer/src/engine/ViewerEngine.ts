@@ -23,6 +23,7 @@ import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, ty
 import { MaterialEditor, readPendingEdits, type PendingEdits } from './materialEditor';
 import { cameraSettings, readCameraState, writeCameraState } from './cameraState';
 import { readModelCamera } from './modelCamera';
+import { groundModel } from './modelGrounding';
 import { DENOISER_FIELDS, getDenoiserOptions } from './denoiserSettings';
 import { buildStudioRig, createStudioAmbient, findStudioPreset } from './studio';
 
@@ -285,15 +286,8 @@ export class ViewerEngine {
     this.model = model;
     const root = model.root;
     this.materials.setModel(root, edits);
-    root.updateMatrixWorld(true);
     // Stand the model on the ground at the origin; keep its units.
-    const box = new THREE.Box3().setFromObject(root);
-    if (!box.isEmpty()) {
-      const center = box.getCenter(new THREE.Vector3());
-      root.position.x -= center.x;
-      root.position.z -= center.z;
-      root.position.y -= box.min.y;
-    }
+    groundModel(root);
     this.modelGroup.add(root);
     root.updateMatrixWorld(true);
 
