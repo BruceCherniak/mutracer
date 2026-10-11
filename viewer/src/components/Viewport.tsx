@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Crosshair, Focus, Pause, Play, Repeat as Loop, Upload } from 'lucide-react';
+import { Check, Crosshair, Focus, Maximize, Move, Pause, Play, Repeat as Loop, Upload } from 'lucide-react';
 import { ViewerEngine, getEngine, setEngine } from '../engine/ViewerEngine';
 import { HANDOFF_HASH, readDroppedItems, takeStashedFiles } from '../engine/droppedFiles';
 import { FOCUS_AREA_SIZE } from '../engine/areaFocus';
-import { hashModelPreset, useViewer } from '../store';
+import { hashModelPreset, setUi, useViewer } from '../store';
 import { MODEL_PRESETS } from '../engine/presets';
 import { StatusBar } from './StatusBar';
 import { Select } from './ui/controls';
@@ -77,48 +77,110 @@ export function Viewport() {
 function TopBar() {
   const picking = useViewer((s) => s.pickingFocus);
   const autoFocus = useViewer((s) => s.settings.autoFocus);
-  const title = autoFocus ? 'Place focus area' : 'Pick focus point';
+  const focusFrame = useViewer((s) => s.ui.focusFrame);
+  const depthOfField = useViewer((s) => s.settings.fStop > 0 &&
+    !(s.settings.cameraIndex < 0 && s.settings.projection === 'orthographic'));
+  const canShowFrame = depthOfField && autoFocus;
   return (
-    <div className="float float--top">
-      <button className="icon-btn icon-btn--bare" title="Fit to model (F)" aria-label="Fit to model" onClick={() => getEngine()?.fit()}><Focus size={16} /></button>
-      <button className="icon-btn icon-btn--bare" title={title} aria-label={title} data-active={picking || undefined}
-        onClick={() => useViewer.setState({ pickingFocus: !picking })}><Crosshair size={16} /></button>
+    <div className="float viewport-tools" role="group" aria-label="View controls">
+      {depthOfField && !autoFocus && <button className="icon-btn icon-btn--bare" title="Pick focus point" aria-label="Pick focus point" data-active={picking || undefined}
+        onClick={() => useViewer.setState({ pickingFocus: !picking })}><Crosshair size={16} /></button>}
+      {canShowFrame && <button className="icon-btn icon-btn--bare" aria-label="Show focus frame" aria-pressed={focusFrame}
+        title={focusFrame ? 'Hide focus frame' : 'Show focus frame'} data-active={focusFrame || undefined}
+        onClick={() => setUi({ focusFrame: !focusFrame })}><Focus size={16}>{!focusFrame && <path d="m3 3 18 18" />}</Focus></button>}
+      <button className="icon-btn icon-btn--bare" title="Fit to model (F)" aria-label="Fit to model" onClick={() => getEngine()?.fit()}><Maximize size={16} /></button>
     </div>
   );
 }
 
 /**
- * Autofocus area. Drag it to choose what to focus on; it pulses while the
- * lens focuses and turns green once the subject is sharp.
+ * Autofocus area. Only its center handle intercepts pointer events; the frame
+ * and its interior leave the scene available for selection and orbiting.
  */
 function FocusFrame() {
   const area = useViewer((s) => s.focusArea);
-  const visible = useViewer((s) => s.settings.fStop > 0 && s.settings.autoFocus &&
+  const visible = useViewer((s) => s.ui.focusFrame && s.settings.fStop > 0 && s.settings.autoFocus &&
     !(s.settings.cameraIndex < 0 && s.settings.projection === 'orthographic'));
+  const frameRef = useRef<HTMLDivElement>(null);
+  const drag = useRef<{ pointerId: number; offsetX: number; offsetY: number } | null>(null);
+  const [hovered, setHovered] = useState(false);
   const [dragging, setDragging] = useState(false);
+  useEffect(() => {
+    if (!visible) {
+      drag.current = null;
+      setDragging(false);
+      setHovered(false);
+      return;
+    }
+    const frame = frameRef.current!;
+    const viewport = frame.parentElement!;
+    // The frame itself ignores pointer events. Observe the viewport so moving
+    // over the canvas can reveal the handle without blocking scene picking.
+    const track = (event: PointerEvent) => {
+      if (event.pointerType === 'touch') return;
+      const rect = frame.getBoundingClientRect();
+      setHovered(event.clientX >= rect.left && event.clientX <= rect.right &&
+        event.clientY >= rect.top && event.clientY <= rect.bottom);
+    };
+    const leave = () => setHovered(false);
+    viewport.addEventListener('pointermove', track, { passive: true });
+    viewport.addEventListener('pointerleave', leave);
+    return () => {
+      viewport.removeEventListener('pointermove', track);
+      viewport.removeEventListener('pointerleave', leave);
+    };
+  }, [visible]);
   if (!visible) return null;
-  const move = (event: React.PointerEvent<HTMLDivElement>) => {
-    const rect = event.currentTarget.parentElement!.getBoundingClientRect();
+  const place = (x: number, y: number) => {
     const clamp = (v: number) => Math.min(0.98, Math.max(0.02, v));
     useViewer.setState((s) => ({ focusArea: {
-      ...s.focusArea, x: clamp((event.clientX - rect.left) / rect.width), y: clamp((event.clientY - rect.top) / rect.height)
+      ...s.focusArea, x: clamp(x), y: clamp(y)
     } }));
   };
+  const endDrag = () => { drag.current = null; setDragging(false); };
   return (
     <div
+      ref={frameRef}
       className="focus-frame"
+      data-hovered={hovered || undefined}
       data-dragging={dragging || undefined}
-      role="slider"
-      aria-label="Focus area"
-      aria-valuetext={`${Math.round(area.x * 100)}% across, ${Math.round(area.y * 100)}% down`}
+      data-status={area.status}
       style={{ left: `${area.x * 100}%`, top: `${area.y * 100}%`, height: `${FOCUS_AREA_SIZE * 200}%` }}
-      onPointerDown={(e) => { e.currentTarget.setPointerCapture(e.pointerId); setDragging(true); }}
-      onPointerMove={(e) => { if (dragging) move(e); }}
-      onPointerUp={() => setDragging(false)}
-      onPointerCancel={() => setDragging(false)}
     >
       {/* Remounts per measurement to replay the focus animation. */}
-      <span key={area.attempt} className="focus-frame__marks" data-status={area.status}><i /><i /><i /><i /><b /></span>
+      <span key={area.attempt} className="focus-frame__marks" data-status={area.status}><i /><i /><i /><i /></span>
+      <button
+        type="button"
+        className="focus-frame__handle"
+        aria-label="Move focus area"
+        title="Drag to move focus area. Arrow keys move it; Shift moves faster."
+        onPointerDown={(e) => {
+          if (e.button !== 0) return;
+          e.preventDefault();
+          const rect = frameRef.current!.getBoundingClientRect();
+          drag.current = { pointerId: e.pointerId, offsetX: e.clientX - (rect.left + rect.width / 2), offsetY: e.clientY - (rect.top + rect.height / 2) };
+          e.currentTarget.setPointerCapture(e.pointerId);
+          setDragging(true);
+        }}
+        onPointerMove={(e) => {
+          const active = drag.current;
+          if (!active || e.pointerId !== active.pointerId) return;
+          const rect = frameRef.current!.parentElement!.getBoundingClientRect();
+          place((e.clientX - active.offsetX - rect.left) / rect.width, (e.clientY - active.offsetY - rect.top) / rect.height);
+        }}
+        onPointerUp={(e) => { if (e.pointerId === drag.current?.pointerId) endDrag(); }}
+        onPointerCancel={endDrag}
+        onLostPointerCapture={endDrag}
+        onKeyDown={(e) => {
+          const step = e.shiftKey ? 0.05 : 0.01;
+          const offsets: Record<string, [number, number]> = { ArrowLeft: [-step, 0], ArrowRight: [step, 0], ArrowUp: [0, -step], ArrowDown: [0, step] };
+          const offset = offsets[e.key];
+          if (!offset) return;
+          e.preventDefault();
+          const current = useViewer.getState().focusArea;
+          place(current.x + offset[0], current.y + offset[1]);
+        }}
+      ><Move size={14} aria-hidden="true" /></button>
     </div>
   );
 }

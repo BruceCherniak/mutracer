@@ -263,7 +263,7 @@ export interface ViewerState {
   focusArea: FocusAreaState;
   lens: LensInfo;
   paused: boolean;
-  ui: { tab: InspectorTab; left: boolean; right: boolean; hidden: boolean; exportOpen: boolean; helpOpen: boolean; mobileTab: InspectorTab | 'scene' };
+  ui: { tab: InspectorTab; left: boolean; right: boolean; hidden: boolean; focusFrame: boolean; exportOpen: boolean; helpOpen: boolean; mobileTab: InspectorTab | 'scene' };
   export: { stage: 'pilot' | 'final' | 'denoising'; samples: number; target: number } | null;
 }
 
@@ -384,6 +384,7 @@ export const useViewer = create<ViewerState>(() => ({
     left: storedUi.left ?? true,
     right: storedUi.right ?? true,
     hidden: false,
+    focusFrame: storedUi.focusFrame !== false,
     exportOpen: false,
     helpOpen: false,
     mobileTab: storedUi.tab ?? 'material'
@@ -474,8 +475,8 @@ export function showToast(message: string, tone: 'info' | 'error' = 'info') {
 
 useViewer.subscribe((state, prev) => {
   if (state.ui !== prev.ui) {
-    const { tab, left, right } = state.ui;
-    writeStorage(UI_KEY, { tab, left, right });
+    const { tab, left, right, focusFrame } = state.ui;
+    writeStorage(UI_KEY, { tab, left, right, focusFrame });
   }
   if (state.settings !== prev.settings) {
     writeStorage(RENDER_KEY, Object.fromEntries(RENDER_FIELDS.map((key) => [key, state.settings[key]])));
