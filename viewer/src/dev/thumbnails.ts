@@ -90,7 +90,7 @@ async function generateThumbnails() {
   const shots: [string, Blob][] = [];
 
   // Examples: the default studio look, framed to fill a 16:9 card.
-  setSettings({ ...DEFAULT_SETTINGS, denoise: previous.denoise });
+  setSettings({ ...DEFAULT_SETTINGS, denoise: previous.denoise }, { record: false });
   for (const preset of MODEL_PRESETS) {
     console.log(`Rendering ${preset.name}`);
     await engine.loadPreset(preset.id);
@@ -101,7 +101,7 @@ async function generateThumbnails() {
 
   // Material presets: dimmed studio light, AgX at 0.85 exposure, fixed camera.
   const { model, sphere } = materialStage();
-  setSettings({ groundShadow: false, envIntensity: 0.9, exposure: 0.85, toneMapping: 'agx', fov: 34 });
+  setSettings({ groundShadow: false, envIntensity: 0.9, exposure: 0.85, toneMapping: 'agx', fov: 34 }, { record: false });
   await engine.loadModel(model);
   await ready();
   const center = sphere.getWorldPosition(new THREE.Vector3());
@@ -117,7 +117,7 @@ async function generateThumbnails() {
   for (const [name, blob] of shots) {
     await fetch(`/__thumbnails/${name}.webp`, { method: 'POST', body: blob });
   }
-  setSettings(previous);
+  setSettings(previous, { record: false });
   console.log(`Saved ${shots.length} thumbnails`);
 }
 

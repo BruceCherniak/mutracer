@@ -1,8 +1,9 @@
 import { create } from 'zustand';
 import { DEFAULT_JNLM_OPTIONS } from '@meimu/mutracer';
 import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, RenderOutput } from '@meimu/mutracer';
-import type { MaterialValues } from './engine/materialParams';
+import type { MaterialValues, TextureKey } from './engine/materialParams';
 import { STUDIO_PRESETS } from './engine/studio';
+import { historyLabels, onHistoryChange, pushHistory, type HistoryItem } from './history';
 
 export type EnvResolution = '1k' | '2k' | '4k';
 
@@ -201,6 +202,8 @@ export interface SelectedMaterial {
   users: number;
   values: MaterialValues;
   textures: string[];
+  /** Texture in each slot, as a thumbnail URL; `''` when it cannot be drawn. */
+  maps: Partial<Record<TextureKey, string>>;
 }
 
 export type InspectorTab = 'environment' | 'material' | 'camera' | 'render';
@@ -222,6 +225,8 @@ export interface ViewerState {
   animation: AnimationState | null;
   selection: { objectId: string | null; materialId: string | null };
   material: SelectedMaterial | null;
+  /** Labels of the material edits that undo and redo would apply. */
+  history: { undo: string | null; redo: string | null };
   selectionRect: { x: number; y: number; w: number; h: number; label: string } | null;
   pickingFocus: boolean;
   paused: boolean;
@@ -332,6 +337,7 @@ export const useViewer = create<ViewerState>(() => ({
   animation: null,
   selection: { objectId: null, materialId: null },
   material: null,
+  history: { undo: null, redo: null },
   selectionRect: null,
   pickingFocus: false,
   paused: false,
@@ -347,9 +353,72 @@ export const useViewer = create<ViewerState>(() => ({
   export: null
 }));
 
-export function setSettings(patch: Partial<Settings>) {
+/** Camera settings follow the view and are not undoable. */
+const UNDOABLE_EXCLUDED = new Set<keyof Settings>(['cameraIndex', 'fov', 'aperture', 'focusDistance', 'autoRotate']);
+
+const SETTING_LABELS: Partial<Record<keyof Settings, string>> = {
+  lighting: 'Lighting mode', studioPreset: 'Studio preset', studioIntensity: 'Studio intensity', studioRotation: 'Studio rotation',
+  studioSize: 'Studio light size', studioAmbient: 'Studio ambient', studioAmbientColor: 'Ambient color', envId: 'Environment',
+  envIntensity: 'Environment intensity', envRotation: 'Environment rotation', envResolution: 'Environment resolution',
+  background: 'Background', backgroundColor: 'Background color', groundedHeight: 'Grounded height', groundedRadius: 'Grounded radius',
+  groundShadow: 'Ground shadow', groundOpacity: 'Ground opacity', maxSamples: 'Samples', resolutionScale: 'Resolution',
+  bvhBuilder: 'BVH builder', denoise: 'Denoise', denoiseModel: 'Denoiser', denoiseWhileConverging: 'Denoise while converging',
+  toneMapping: 'Tone mapping', autoExposure: 'Auto exposure', bloomIntensity: 'Bloom intensity', bloomThreshold: 'Bloom threshold',
+  bloomRadius: 'Bloom radius', interactivePreview: 'Interactive preview', previewResolutionScale: 'Preview resolution',
+  samplingPattern: 'Sampling pattern', oidnModel: 'OIDN model', oidnMaxTileSize: 'OIDN tile size', temperature: 'Temperature',
+  jnlmStrength: 'JNLM strength', jnlmSearchRadius: 'JNLM search radius', jnlmPatchRadius: 'JNLM patch radius',
+  jnlmAlbedoBandwidth: 'JNLM albedo tolerance', jnlmNormalBandwidth: 'JNLM normal tolerance', jnlmIterations: 'JNLM passes'
+};
+
+/** Undo label of a settings change; "clamping" -> "Clamping" when no label is defined. */
+function settingLabel(keys: (keyof Settings)[]) {
+  if (keys.length > 1 && keys.every((k) => k === 'groundedHeight' || k === 'groundedRadius')) return 'Grounded projection';
+  if (keys.length > 1 && keys.every((k) => k.startsWith('jnlm'))) return 'JNLM settings';
+  if (keys.includes('oidnMaxTileSize') && keys.length > 1) return 'OIDN settings';
+  const key = keys[0];
+  const label = SETTING_LABELS[key] ?? key.replace(/[A-Z]/g, (c) => ` ${c.toLowerCase()}`);
+  return label[0].toUpperCase() + label.slice(1);
+}
+
+function applySettings(patch: Partial<Settings>) {
   useViewer.setState((s) => ({ settings: validateSettings({ ...s.settings, ...patch }) }));
 }
+
+/**
+ * Changes settings from the UI. Lighting and render changes are undo steps;
+ * pass `record: false` for programmatic changes.
+ */
+export function setSettings(patch: Partial<Settings>, { record = true } = {}) {
+  const previous = useViewer.getState().settings;
+  applySettings(patch);
+  if (!record) return;
+  const next = useViewer.getState().settings;
+  // An uploaded environment ('custom') cannot be restored from settings alone.
+  const keys = (Object.keys(patch) as (keyof Settings)[]).filter((key) => !UNDOABLE_EXCLUDED.has(key) &&
+    previous[key] !== next[key] && !(key === 'envId' && (previous.envId === 'custom' || next.envId === 'custom')));
+  if (!keys.length) return;
+  const pick = (settings: Settings) => Object.fromEntries(keys.map((key) => [key, settings[key]])) as Partial<Settings>;
+  pushHistory(new SettingsEdit(keys, pick(previous), pick(next)));
+}
+
+class SettingsEdit implements HistoryItem {
+  readonly scope = 'settings';
+  readonly label: string;
+  readonly mergeKey: string;
+  constructor(private readonly keys: (keyof Settings)[], private readonly before: Partial<Settings>, private after: Partial<Settings>) {
+    this.label = settingLabel(keys);
+    this.mergeKey = `settings:${[...keys].sort().join(',')}`;
+  }
+  undo() { applySettings(this.before); }
+  redo() { applySettings(this.after); }
+  merge(next: HistoryItem) {
+    if (!(next instanceof SettingsEdit)) return true;
+    this.after = next.after;
+    return this.keys.some((key) => this.before[key] !== this.after[key]);
+  }
+}
+
+onHistoryChange(() => useViewer.setState({ history: historyLabels() }));
 
 export function setUi(patch: Partial<ViewerState['ui']>) {
   useViewer.setState((s) => ({ ui: { ...s.ui, ...patch } }));

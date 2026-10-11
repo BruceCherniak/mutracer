@@ -9,7 +9,6 @@ import {
   RENDER_STATUS_ERROR,
   RENDER_STATUS_FINISHED,
   RENDER_STATUS_PREPARING,
-  type OpenPBRMaterial,
   type RenderStatus
 } from '@meimu/mutracer';
 import { autoGroundedSkybox, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
@@ -19,18 +18,12 @@ import {
   createMaterialSpheres, isHDRFile, loadModelFromFiles, loadModelFromURL, loadModelFromSource,
   type LoadedModel, type PathedFile
 } from './loadModel';
-import { readMaterial, textureSlots, writeMaterial, type MaterialValues } from './materialParams';
-import { clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
+import type { MaterialValues, TextureKey } from './materialParams';
+import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
+import { MaterialEditor, readPendingEdits, type PendingEdits } from './materialEditor';
 import { cameraSettings, readCameraState, writeCameraState } from './cameraState';
 import { DENOISER_FIELDS, getDenoiserOptions } from './denoiserSettings';
 import { buildStudioRig, createStudioAmbient, findStudioPreset } from './studio';
-
-interface MaterialEntry {
-  name: string;
-  converted: Set<OpenPBRMaterial>;
-  meshes: Set<string>;
-  initial?: MaterialValues;
-}
 
 export interface ExportOptions {
   width: number;
@@ -65,7 +58,12 @@ export class ViewerEngine {
   private sync: THREESceneSync;
   private model: LoadedModel | null = null;
   private modelCameras: THREE.PerspectiveCamera[] = [];
-  private materials = new Map<string, MaterialEntry>();
+  private readonly materials = new MaterialEditor((materialId) => {
+    // Show the material an undo or redo changed.
+    if (get().selection.materialId === materialId) return;
+    const meshId = this.materials.firstMesh(materialId);
+    if (meshId) this.select(meshId, materialId);
+  });
   private mixer: THREE.AnimationMixer | null = null;
   private action: THREE.AnimationAction | null = null;
   private settings: Settings;
@@ -134,6 +132,7 @@ export class ViewerEngine {
     canvas.addEventListener('pointerdown', this.onPointerDown);
     canvas.addEventListener('pointerup', this.onPointerUp);
     window.addEventListener('pagehide', this.saveCamera);
+    window.addEventListener('pagehide', this.flushMaterials);
 
     this.raf = requestAnimationFrame(this.frame);
   }
@@ -144,6 +143,8 @@ export class ViewerEngine {
     ++this.loadToken;
     ++this.envToken;
     window.removeEventListener('pagehide', this.saveCamera);
+    window.removeEventListener('pagehide', this.flushMaterials);
+    this.materials.flush();
     cancelAnimationFrame(this.raf);
     this.unsubscribe();
     this.resizeObserver.disconnect();
@@ -239,17 +240,22 @@ export class ViewerEngine {
       showToast(`Could not load ${name}: ${(error as Error).message}`, 'error');
       return false;
     }
+    const id = restored?.id ?? (meta.presetId ? `preset:${meta.presetId}` : crypto.randomUUID());
+    // Material edits survive reloads of the cached model; any other load replaces them.
+    const edits = restored && token === this.loadToken ? await readPendingEdits(id) : null;
     if (token !== this.loadToken) {
       model.revoke();
       return false;
     }
     model.name = name;
     this.saveCamera();
+    this.materials.flush();
     this.modelId = null; // Fit must not overwrite the saved view before restoration.
-    this.setModel(model);
-    const id = restored?.id ?? (meta.presetId ? `preset:${meta.presetId}` : crypto.randomUUID());
+    this.setModel(model, edits);
     if (restored) this.restoreCamera(id);
     this.modelId = id;
+    this.materials.modelId = id;
+    if (!edits) void clearMaterialEdits();
     set({
       model: { name, ...meta },
       loading: { name, stage: 'bvh', loaded: 0, total: 0 }
@@ -264,10 +270,11 @@ export class ViewerEngine {
     return true;
   }
 
-  private setModel(model: LoadedModel) {
+  private setModel(model: LoadedModel, edits: PendingEdits | null = null) {
     this.clearModel();
     this.model = model;
     const root = model.root;
+    this.materials.setModel(root, edits);
     root.updateMatrixWorld(true);
     // Stand the model on the ground at the origin; keep its units.
     const box = new THREE.Box3().setFromObject(root);
@@ -345,27 +352,16 @@ export class ViewerEngine {
     });
     this.model.revoke();
     this.model = null;
-    this.materials.clear();
+    this.materials.setModel(null, null);
   }
 
   private createSync() {
-    this.materials.clear();
+    this.materials.clearConversions();
     return new THREESceneSync(this.scene, {
       onMeshConverted: (mesh, source, group) => {
         if (source === this.ground) return;
         const material = toArray(source.material)[group.materialIndex ?? 0];
-        if (!material) return;
-        let entry = this.materials.get(material.uuid);
-        if (!entry) {
-          entry = { name: material.name || 'Material', converted: new Set(), meshes: new Set() };
-          this.materials.set(material.uuid, entry);
-        }
-        const converted = mesh.materials[0];
-        if (converted && !entry.converted.has(converted)) {
-          entry.converted.add(converted);
-          entry.initial ??= readMaterial(converted);
-        }
-        entry.meshes.add(source.uuid);
+        if (material) this.materials.onConverted(material, mesh.materials[0], source.uuid);
       }
     });
   }
@@ -688,36 +684,32 @@ export class ViewerEngine {
   }
 
   private publishMaterial(materialId: string | null, meshName?: string) {
-    const entry = materialId ? this.materials.get(materialId) : undefined;
-    const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
-    if (!materialId || !entry || !material) {
-      set({ material: null });
-      return;
-    }
-    set({
-      material: {
-        id: materialId,
-        name: entry.name,
-        meshName: meshName ?? '',
-        users: entry.meshes.size,
-        values: readMaterial(material),
-        textures: [...textureSlots(material)]
-      }
-    });
+    const description = materialId ? this.materials.describe(materialId) : null;
+    set({ material: materialId && description ? { id: materialId, meshName: meshName ?? '', ...description } : null });
   }
 
-  setMaterialValues(materialId: string, values: MaterialValues) {
-    const entry = this.materials.get(materialId);
-    if (!entry) return;
-    for (const material of entry.converted) writeMaterial(material, values);
-    const current = get().material;
-    if (current?.id === materialId) set({ material: { ...current, values: { ...current.values, ...values } } });
+  /**
+   * Edits a material; each call is an undo step. Calls with the same
+   * `mergeKey` in quick succession (a slider drag) collapse into one step.
+   */
+  setMaterialValues(materialId: string, values: MaterialValues, label = 'Edit material', mergeKey?: string) {
+    this.materials.setValues(materialId, values, label, mergeKey);
+  }
+
+  /** Replaces the texture in a slot with an image file, or removes it with `null`. */
+  async setMaterialTexture(materialId: string, slot: TextureKey, file: Blob | null, label: string) {
+    try {
+      await this.materials.setTexture(materialId, slot, file, label);
+    } catch (error) {
+      showToast(`Could not read the image: ${(error as Error).message}`, 'error');
+    }
   }
 
   resetMaterial(materialId: string) {
-    const initial = this.materials.get(materialId)?.initial;
-    if (initial) this.setMaterialValues(materialId, initial);
+    this.materials.reset(materialId);
   }
+
+  private flushMaterials = () => this.materials.flush();
 
   setVisible(objectId: string, visible: boolean) {
     const object = this.modelGroup.getObjectByProperty('uuid', objectId);

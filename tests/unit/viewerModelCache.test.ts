@@ -1,7 +1,9 @@
 /// <reference lib="dom" />
 import { File } from 'node:buffer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { clearModelCache, readModelCache, saveModelCache, type CachedModel } from '../../viewer/src/engine/modelCache';
+import {
+  clearMaterialEdits, clearModelCache, readMaterialEdits, readModelCache, saveMaterialEdits, saveModelCache, type CachedModel
+} from '../../viewer/src/engine/modelCache';
 
 function filesystem() {
   const files = new Map<string, Blob>();
@@ -108,5 +110,30 @@ describe('current model OPFS cache', () => {
     vi.stubGlobal('navigator', { storage: { getDirectory: async () => { throw new Error('Denied'); } } });
     await expect(saveModelCache(model())).resolves.toBeUndefined();
     expect(await readModelCache()).toBeNull();
+  });
+
+  it('stores material edits with uploaded texture files beside the model', async () => {
+    const fs = filesystem();
+    await saveModelCache(model());
+    const normal = new Blob([new Uint8Array([1, 2, 3])], { type: 'image/png' });
+    const base = new Blob(['jpeg'], { type: 'image/jpeg' });
+    await saveMaterialEdits({ modelId: 'first', materials: [
+      { index: 0, name: 'Paint', values: { baseColor: [0.1, 0.2, 0.3], specularRoughness: 0.4 }, textures: [{ slot: 'normalMap', file: normal }, { slot: 'map', file: null }] },
+      { index: 3, name: 'Glass', values: {}, textures: [{ slot: 'map', file: base }] }
+    ] });
+    expect(fs.files.size).toBe(2);
+    const edits = (await readMaterialEdits())!;
+    expect(edits.modelId).toBe('first');
+    expect(edits.materials[0].values).toEqual({ baseColor: [0.1, 0.2, 0.3], specularRoughness: 0.4 });
+    expect(edits.materials[0].textures[1]).toEqual({ slot: 'map', file: null });
+    expect([...new Uint8Array(await edits.materials[0].textures[0].file!.arrayBuffer())]).toEqual([1, 2, 3]);
+    expect(edits.materials[0].textures[0].file!.type).toBe('image/png');
+    expect(await edits.materials[1].textures[0].file!.text()).toBe('jpeg');
+    // The model archive is untouched; clearing edits keeps the model.
+    await clearMaterialEdits();
+    expect(await readMaterialEdits()).toBeNull();
+    expect((await readModelCache())?.id).toBe('first');
+    await saveMaterialEdits({ modelId: 'first', materials: [] });
+    expect(fs.files.size).toBe(1);
   });
 });

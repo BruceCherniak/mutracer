@@ -37,6 +37,10 @@ src/
   engine/studio.ts         Studio lighting presets: rect-light rigs scaled to
                            the model, and their dim ambient fill
   engine/materialParams.ts Material panel schema, presets, color conversion
+  engine/materialEditor.ts Material edits, uploaded textures and their
+                           persistence for the cached model
+  history.ts               Shared undo/redo history for material, lighting
+                           and render edits
   engine/presets.ts        Example models and HDRIs with licenses
   assets/thumbnails/       Example and material preset thumbnails
   dev/thumbnails.ts        Renders those thumbnails (development only)
@@ -55,6 +59,19 @@ Notes:
 - Material edits go to the converted MuTracer `OpenPBRMaterial`s (collected with
   `onMeshConverted`), followed by `markUpdated()`. The Three.js source material
   is not touched, so the scene sync does not overwrite the edit.
+- Material edits (values, presets, texture uploads and removals, reset) and
+  lighting and render settings changed through `setSettings` share one undo
+  history; consecutive changes of one slider or color picker collapse into one
+  step. Camera settings, which follow the view, and switches to or from an
+  uploaded .hdr are not recorded. Opening a model drops its material steps and
+  keeps the settings steps.
+  Uploaded images are decoded like GLTFLoader (no premultiplication or color
+  space conversion) and keep the UV transform of the texture they replace.
+- Material edits of the cached model, including the original files of uploaded
+  textures, are saved in a second OPFS archive keyed by the model and by each
+  material's traversal order. Reloads reapply them as materials are converted;
+  opening any model (including choosing the same example again) discards them
+  and the undo history.
 - `EnvironmentLight` has no intensity or rotation, so both are baked into a copy
   of the HDR pixels.
 - Downloaded HDR files are cached by URL (including resolution and query string)

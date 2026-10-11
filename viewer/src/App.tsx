@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
 import { setSettings, setUi, useViewer } from './store';
 import { getEngine } from './engine/ViewerEngine';
+import { redo, undo } from './history';
 import { Toolbar } from './components/Toolbar';
 import { SceneTree } from './components/SceneTree';
 import { Viewport } from './components/Viewport';
@@ -30,6 +31,12 @@ function useShortcuts() {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'o') {
         event.preventDefault();
         document.getElementById('open-files')?.click();
+        return;
+      }
+      if ((event.metaKey || event.ctrlKey) && !event.altKey && (event.key.toLowerCase() === 'z' || event.key.toLowerCase() === 'y')) {
+        event.preventDefault();
+        if (event.key.toLowerCase() === 'y' || event.shiftKey) redo();
+        else undo();
         return;
       }
       if (event.metaKey || event.ctrlKey || event.altKey) return;

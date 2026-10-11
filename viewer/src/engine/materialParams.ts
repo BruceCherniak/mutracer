@@ -15,7 +15,20 @@ export type MaterialParam =
   | { kind: 'color'; key: ColorKey; label: string; texture?: TextureKey }
   | { kind: 'boolean'; key: BooleanKey; label: string };
 
-type TextureKey = 'map' | 'metallicRoughnessMap' | 'roughnessMap' | 'metalnessMap' | 'emissiveMap' | 'transmissionMap' | 'normalMap' | 'thinFilmMap';
+export type TextureKey = 'map' | 'metallicRoughnessMap' | 'roughnessMap' | 'metalnessMap' | 'emissiveMap' | 'transmissionMap' | 'normalMap' | 'thinFilmMap';
+
+/** Texture slots shown in the Textures section, with the channel each slot reads. */
+export const TEXTURE_SLOTS: { key: TextureKey; label: string; hint: string }[] = [
+  { key: 'map', label: 'Base color', hint: 'sRGB, multiplies Color' },
+  { key: 'metallicRoughnessMap', label: 'Metal / rough', hint: 'G roughness, B metalness' },
+  { key: 'roughnessMap', label: 'Roughness', hint: 'Green channel' },
+  { key: 'metalnessMap', label: 'Metalness', hint: 'Blue channel' },
+  { key: 'normalMap', label: 'Normal', hint: 'Tangent space' },
+  { key: 'emissiveMap', label: 'Emission', hint: 'Multiplies emission color' },
+  { key: 'transmissionMap', label: 'Transmission', hint: 'Red channel' },
+  { key: 'thinFilmMap', label: 'Thin film', hint: 'Thickness' }
+];
+export const TEXTURE_KEYS = TEXTURE_SLOTS.map((slot) => slot.key);
 
 export interface MaterialGroup {
   id: string;
@@ -103,6 +116,12 @@ export function readMaterial(material: OpenPBRMaterial): MaterialValues {
   return values;
 }
 
+/** Whether two material values are equal, comparing colors element-wise. */
+export function sameValue(a: MaterialValues[keyof MaterialValues], b: MaterialValues[keyof MaterialValues]) {
+  if (Array.isArray(a) && Array.isArray(b)) return a.length === b.length && a.every((v, i) => v === b[i]);
+  return a === b;
+}
+
 export function writeMaterial(material: OpenPBRMaterial, values: MaterialValues) {
   const record = material as unknown as Record<string, unknown>;
   for (const [key, value] of Object.entries(values)) {
@@ -115,7 +134,7 @@ export function writeMaterial(material: OpenPBRMaterial, values: MaterialValues)
 export function textureSlots(material: OpenPBRMaterial) {
   const record = material as unknown as Record<string, unknown>;
   const slots = new Set<TextureKey>();
-  for (const key of ['map', 'metallicRoughnessMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'transmissionMap', 'normalMap', 'thinFilmMap'] as const) {
+  for (const key of TEXTURE_KEYS) {
     if (record[key]) slots.add(key);
   }
   if (slots.has('roughnessMap') || slots.has('metalnessMap')) slots.add('metallicRoughnessMap');

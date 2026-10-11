@@ -3,12 +3,13 @@ import {
   Button, Dialog, DialogTrigger, Heading, Menu, MenuItem, MenuTrigger, Modal, ModalOverlay, Popover, Separator
 } from 'react-aria-components';
 import {
-  ChevronDown, Download, FileUp, Folder, Globe, HelpCircle, Link, PanelLeft, PanelRight, Sparkles, Upload, X
+  ChevronDown, Download, FileUp, Folder, Globe, HelpCircle, Link, PanelLeft, PanelRight, Redo2, Sparkles, Undo2, Upload, X
 } from 'lucide-react';
 import { setUi, useViewer } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
 import { MODEL_PRESETS } from '../engine/presets';
 import { toPathedFiles } from '../engine/loadModel';
+import { redo, undo } from '../history';
 import { BrandMark } from './BrandMark';
 
 export function Toolbar() {
@@ -30,6 +31,7 @@ export function Toolbar() {
         <ExamplesMenu />
       </div>
       <div className="header__right">
+        <HistoryButtons />
         <BackendMenu name={backend.name} adapter={backend.adapter} />
         <a className="icon-btn icon-btn--bare" href="https://github.com/pissang/mutracer" target="_blank" rel="noopener noreferrer"
           aria-label="MuTracer on GitHub (opens in a new tab)" title="MuTracer on GitHub">
@@ -46,6 +48,18 @@ export function Toolbar() {
           aria-pressed={ui.right} onClick={() => setUi({ right: !ui.right })}><PanelRight size={15} /></button>
       </div>
     </header>
+  );
+}
+
+function HistoryButtons() {
+  const history = useViewer((s) => s.history);
+  return (
+    <div className="history-btns">
+      <button className="icon-btn icon-btn--bare sm" aria-label="Undo" disabled={!history.undo} onClick={undo}
+        title={history.undo ? `Undo ${history.undo} (⌘Z)` : 'Undo (⌘Z)'}><Undo2 size={15} /></button>
+      <button className="icon-btn icon-btn--bare sm" aria-label="Redo" disabled={!history.redo} onClick={redo}
+        title={history.redo ? `Redo ${history.redo} (⇧⌘Z)` : 'Redo (⇧⌘Z)'}><Redo2 size={15} /></button>
+    </div>
   );
 }
 
@@ -177,6 +191,7 @@ const SHORTCUTS: [string, string][] = [
   ['1 – 4', 'Inspector tabs'],
   ['[  ]', 'Scene / inspector panels'],
   ['H', 'Hide interface'],
+  ['⌘Z  ⇧⌘Z', 'Undo / redo material, lighting and render edits'],
   ['⌘O', 'Open files']
 ];
 

@@ -1,4 +1,5 @@
 import type { ModelSource } from './loadModel';
+import { MATERIAL_KEYS, TEXTURE_KEYS, type MaterialValues, type TextureKey } from './materialParams';
 
 export interface ModelMeta {
   name: string;
@@ -100,5 +101,106 @@ export function readModelCache(): Promise<CachedModel | null> {
 export function clearModelCache(): Promise<void> {
   return enqueue(async () => {
     try { await (await directory())?.removeEntry(CURRENT); } catch { /* Best effort. */ }
+  });
+}
+
+/** Material edits of the cached model; uploaded textures keep their original files. */
+export interface MaterialEdit {
+  /** Position of the material in the model's traversal order. */
+  index: number;
+  name: string;
+  values: MaterialValues;
+  /** `null` removes the loaded texture from the slot. */
+  textures: { slot: TextureKey; file: Blob | null }[];
+}
+
+export interface MaterialEdits {
+  modelId: string;
+  materials: MaterialEdit[];
+}
+
+const EDITS = 'materials.edits';
+
+export function saveMaterialEdits(edits: MaterialEdits): Promise<void> {
+  return enqueue(async () => {
+    let dir: FileSystemDirectoryHandle | null = null;
+    let writable: FileSystemWritableFileStream | undefined;
+    try {
+      dir = await directory();
+      if (!dir) return;
+      if (!edits.materials.length) {
+        await dir.removeEntry(EDITS).catch(() => {});
+        return;
+      }
+      const blobs: Blob[] = [];
+      const header = new TextEncoder().encode(JSON.stringify({
+        version: 1, modelId: edits.modelId,
+        materials: edits.materials.map(({ index, name, values, textures }) => ({
+          index, name, values,
+          textures: textures.map(({ slot, file }) => {
+            if (file) blobs.push(file);
+            return { slot, file: file && { type: file.type, size: file.size } };
+          })
+        }))
+      }));
+      const length = new ArrayBuffer(4);
+      new DataView(length).setUint32(0, header.byteLength, true);
+      writable = await (await dir.getFileHandle(EDITS, { create: true })).createWritable();
+      await writable.write(new Blob([length, header, ...blobs]));
+      await writable.close();
+    } catch {
+      await writable?.abort().catch(() => {});
+      await dir?.removeEntry(EDITS).catch(() => {});
+    }
+  });
+}
+
+export function readMaterialEdits(): Promise<MaterialEdits | null> {
+  return enqueue(async () => {
+    try {
+      const dir = await directory();
+      if (!dir) return null;
+      const file = await (await dir.getFileHandle(EDITS)).getFile();
+      const length = new DataView(await file.slice(0, 4).arrayBuffer()).getUint32(0, true);
+      if (length > 4 * 1024 * 1024 || length + 4 > file.size) return null;
+      const header = JSON.parse(await file.slice(4, 4 + length).text());
+      if (header.version !== 1 || typeof header.modelId !== 'string' || !Array.isArray(header.materials)) return null;
+      let offset = 4 + length;
+      const materials: MaterialEdit[] = [];
+      for (const entry of header.materials) {
+        if (!Number.isSafeInteger(entry.index) || typeof entry.name !== 'string' || typeof entry.values !== 'object' ||
+          !Array.isArray(entry.textures)) return null;
+        const values: MaterialValues = {};
+        for (const key of MATERIAL_KEYS) {
+          const value = entry.values?.[key];
+          if (typeof value === 'number' || typeof value === 'boolean' ||
+            (Array.isArray(value) && value.length === 3 && value.every((c) => typeof c === 'number'))) values[key] = value as MaterialValues[typeof key];
+        }
+        const textures: MaterialEdit['textures'] = [];
+        for (const texture of entry.textures) {
+          if (!TEXTURE_KEYS.includes(texture.slot)) return null;
+          if (!texture.file) {
+            textures.push({ slot: texture.slot, file: null });
+            continue;
+          }
+          const { size, type } = texture.file;
+          if (!Number.isSafeInteger(size) || size < 0 || offset + size > file.size || typeof type !== 'string') return null;
+          // Copy into memory: OPFS snapshots become unreadable once the file is rewritten.
+          textures.push({ slot: texture.slot, file: new Blob([await file.slice(offset, offset + size).arrayBuffer()], { type }) });
+          offset += size;
+        }
+        materials.push({ index: entry.index, name: entry.name, values, textures });
+      }
+      if (offset !== file.size) return null;
+      return { modelId: header.modelId, materials };
+    } catch {
+      return null;
+    }
+  });
+}
+
+export function clearMaterialEdits(): Promise<void> {
+  return enqueue(async () => {
+    try { await (await directory())?.removeEntry(EDITS); } catch { /* Best effort. */ }
   });
 }

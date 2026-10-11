@@ -1,11 +1,11 @@
-import { useState } from 'react';
-import { MousePointerClick, RotateCcw } from 'lucide-react';
-import { useViewer } from '../../store';
+import { useRef, useState } from 'react';
+import { ImagePlus, MousePointerClick, RotateCcw, X } from 'lucide-react';
+import { showToast, useViewer, type SelectedMaterial } from '../../store';
 import { getEngine } from '../../engine/ViewerEngine';
 import { thumbnailUrl } from '../../engine/presets';
 import {
-  MATERIAL_GROUPS, MATERIAL_PRESETS, hexToLinear, linearToHex,
-  type MaterialGroup, type MaterialParam, type MaterialValues
+  MATERIAL_GROUPS, MATERIAL_PRESETS, TEXTURE_SLOTS, hexToLinear, linearToHex,
+  type MaterialGroup, type MaterialParam, type MaterialValues, type TextureKey
 } from '../../engine/materialParams';
 import { ColorField, Hint, Scrub, Section, Switch } from '../ui/controls';
 
@@ -23,7 +23,8 @@ export function MaterialPanel() {
     );
   }
 
-  const set = (values: MaterialValues) => getEngine()?.setMaterialValues(material.id, values);
+  const set = (values: MaterialValues, label: string, mergeKey?: string) =>
+    getEngine()?.setMaterialValues(material.id, values, label, mergeKey);
   const textures = new Set(material.textures);
   const base = material.values.baseColor as [number, number, number];
   const isOpen = (group: MaterialGroup) => {
@@ -46,7 +47,7 @@ export function MaterialPanel() {
       </div>
       <div className="preset-grid" aria-label="Material presets">
         {MATERIAL_PRESETS.map((preset) => (
-          <button key={preset.id} className="preset" title={`Apply ${preset.label}`} onClick={() => set(preset.values)}>
+          <button key={preset.id} className="preset" title={`Apply ${preset.label}`} onClick={() => set(preset.values, `${preset.label} preset`)}>
             <img src={thumbnailUrl(`material-${preset.id}`)} alt="" />{preset.label}
           </button>
         ))}
@@ -62,11 +63,20 @@ export function MaterialPanel() {
             onOpenChange={(open) => setOpenGroups((g) => ({ ...g, [group.id]: open }))}
           >
             {group.params.map((param) => (
-              <ParamControl key={param.key} param={param} values={material.values} textures={textures} onChange={set} />
+              <ParamControl key={param.key} param={param} values={material.values} textures={textures}
+                onChange={(values) => set(values, paramLabel(group, param), `${material.id}:${param.key}`)} />
             ))}
           </Section>
         );
       })}
+      <Section
+        title="Textures"
+        value={String(Object.keys(material.maps).length)}
+        open={openGroups.textures ?? Object.keys(material.maps).length > 0}
+        onOpenChange={(open) => setOpenGroups((g) => ({ ...g, textures: open }))}
+      >
+        <TextureSlots material={material} />
+      </Section>
       {material.textures.length > 0 && <Hint>Values marked with a texture swatch multiply the texture.</Hint>}
     </>
   );
@@ -106,5 +116,68 @@ function ParamControl({
     />
   );
 }
+
+function TextureSlots({ material }: { material: SelectedMaterial }) {
+  const input = useRef<HTMLInputElement>(null);
+  const target = useRef<TextureKey | null>(null);
+  const [dropTarget, setDropTarget] = useState<TextureKey | null>(null);
+  const label = (slot: TextureKey) => TEXTURE_SLOTS.find((s) => s.key === slot)!.label;
+  const upload = (slot: TextureKey, file: File | undefined) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return showToast(`${file.name} is not an image`, 'error');
+    void getEngine()?.setMaterialTexture(material.id, slot, file, `${label(slot)} texture`);
+  };
+  return (
+    <div className="tex-slots">
+      {TEXTURE_SLOTS.map(({ key, label, hint }) => {
+        const thumb = material.maps[key];
+        const has = thumb !== undefined;
+        return (
+          <div
+            key={key}
+            className="tex-slot"
+            data-on={has || undefined}
+            data-drop={dropTarget === key || undefined}
+            onDragOver={(e) => {
+              if (!e.dataTransfer.types.includes('Files')) return;
+              e.preventDefault();
+              e.stopPropagation();
+              setDropTarget(key);
+            }}
+            onDragLeave={() => setDropTarget((t) => (t === key ? null : t))}
+            onDrop={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setDropTarget(null);
+              upload(key, e.dataTransfer.files[0]);
+            }}
+          >
+            <button className="tex-slot__thumb" title={has ? `Replace ${label.toLowerCase()} texture` : `Upload ${label.toLowerCase()} texture`}
+              aria-label={has ? `Replace ${label} texture` : `Upload ${label} texture`}
+              onClick={() => { target.current = key; input.current?.click(); }}>
+              {thumb ? <img src={thumb} alt="" /> : has ? <i className="tex" /> : <ImagePlus size={14} />}
+            </button>
+            <span className="tex-slot__label"><b>{label}</b><small>{hint}</small></span>
+            {has && (
+              <button className="icon-btn icon-btn--bare xs" title={`Remove ${label.toLowerCase()} texture`} aria-label={`Remove ${label} texture`}
+                onClick={() => void getEngine()?.setMaterialTexture(material.id, key, null, `Remove ${label.toLowerCase()} texture`)}>
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        );
+      })}
+      <input ref={input} type="file" hidden accept="image/png,image/jpeg,image/webp,image/avif"
+        onChange={(e) => {
+          if (target.current) upload(target.current, e.currentTarget.files?.[0]);
+          e.currentTarget.value = '';
+        }} />
+      <Hint>Drop an image on a slot to replace its texture. Edits are kept for this model until another model is opened.</Hint>
+    </div>
+  );
+}
+
+const paramLabel = (group: MaterialGroup, param: MaterialParam) =>
+  group.id === 'base' || group.id === 'advanced' ? param.label : `${group.label} ${param.label.toLowerCase()}`;
 
 const formatWeight = (w: number) => (w === 0 ? '0' : w.toFixed(2));

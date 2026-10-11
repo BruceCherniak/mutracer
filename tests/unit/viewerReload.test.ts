@@ -9,7 +9,8 @@ import type { CachedModel } from '../../viewer/src/engine/modelCache';
 
 const cache = vi.hoisted(() => ({ model: null as CachedModel | null, read: vi.fn(), save: vi.fn(), clear: vi.fn() }));
 vi.mock('../../viewer/src/engine/modelCache', () => ({
-  readModelCache: cache.read, saveModelCache: cache.save, clearModelCache: cache.clear
+  readModelCache: cache.read, saveModelCache: cache.save, clearModelCache: cache.clear,
+  readMaterialEdits: async () => null, saveMaterialEdits: async () => {}, clearMaterialEdits: async () => {}
 }));
 vi.mock('@meimu/mutracer', async () => ({
   DEFAULT_JNLM_OPTIONS: (await import('../../src/renderer/jnlm')).DEFAULT_JNLM_OPTIONS,

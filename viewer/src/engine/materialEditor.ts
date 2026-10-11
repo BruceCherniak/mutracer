@@ -1,0 +1,350 @@
+import * as THREE from 'three';
+import { Texture, type OpenPBRMaterial } from '@meimu/mutracer';
+import { useViewer } from '../store';
+import {
+  TEXTURE_KEYS, readMaterial, sameValue, textureSlots, writeMaterial,
+  type MaterialValues, type TextureKey
+} from './materialParams';
+import { readMaterialEdits, saveMaterialEdits, type MaterialEdit as StoredEdit } from './modelCache';
+import { discardHistory, pushHistory, type HistoryItem } from '../history';
+
+/** Values and textures to set; `null` empties a texture slot. */
+export interface MaterialPatch {
+  values: MaterialValues;
+  textures: Partial<Record<TextureKey, Texture | null>>;
+}
+
+interface Entry {
+  name: string;
+  /** Traversal order in the model; the persistent identity across reloads. */
+  index: number;
+  converted: Set<OpenPBRMaterial>;
+  meshes: Set<string>;
+  initial?: MaterialPatch;
+}
+
+/** An undo step of one material. */
+class MaterialEdit implements HistoryItem {
+  readonly scope = 'material';
+  constructor(
+    private readonly replay: (materialId: string, patch: MaterialPatch) => void,
+    readonly materialId: string, readonly label: string,
+    private readonly before: MaterialPatch, private after: MaterialPatch, readonly mergeKey?: string
+  ) {}
+  undo() { this.replay(this.materialId, this.before); }
+  redo() { this.replay(this.materialId, this.after); }
+  merge(next: HistoryItem) {
+    if (!(next instanceof MaterialEdit) || next.materialId !== this.materialId) return true;
+    this.after = merge(this.after, next.after);
+    return !isEmpty(diff(this.before, this.after));
+  }
+}
+
+/** A stored edit with its textures decoded, waiting for its material to be converted. */
+interface PendingEdit {
+  name: string;
+  values: MaterialValues;
+  textures: Partial<Record<TextureKey, { image: ImageBitmap; file: Blob } | null>>;
+}
+
+export type PendingEdits = Map<number, PendingEdit>;
+
+const SAVE_DELAY_MS = 300;
+const THUMB_SIZE = 64;
+
+const get = useViewer.getState;
+const set = useViewer.setState;
+
+/** Reads the stored edits of a model and decodes their textures. */
+export async function readPendingEdits(modelId: string): Promise<PendingEdits | null> {
+  const edits = await readMaterialEdits();
+  if (!edits || edits.modelId !== modelId) return null;
+  const pending: PendingEdits = new Map();
+  await Promise.all(edits.materials.map(async (edit) => {
+    const textures: PendingEdit['textures'] = {};
+    await Promise.all(edit.textures.map(async ({ slot, file }) => {
+      if (!file) {
+        textures[slot] = null;
+        return;
+      }
+      try {
+        textures[slot] = { image: await decodeImage(file), file };
+      } catch {
+        // An unreadable image drops only that slot.
+      }
+    }));
+    pending.set(edit.index, { name: edit.name, values: edit.values, textures });
+  }));
+  return pending;
+}
+
+/** Decodes like GLTFLoader: no premultiplication, no color space conversion. */
+function decodeImage(file: Blob) {
+  return createImageBitmap(file, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+}
+
+/**
+ * Edits the converted materials of the loaded model: values, uploaded
+ * textures, undo steps, and persistence of the edits for the cached model.
+ */
+export class MaterialEditor {
+  private entries = new Map<string, Entry>();
+  private order = new Map<string, { index: number; name: string }>();
+  private pending: PendingEdits = new Map();
+  /** Original files of uploaded textures, for persistence. */
+  private uploads = new WeakMap<Texture, Blob>();
+  private thumbs = new WeakMap<Texture, string>();
+  private saveTimer: ReturnType<typeof setTimeout> | undefined;
+  /** Set once the model is identified; edits are only saved for a known model. */
+  modelId: string | null = null;
+
+  constructor(private readonly onHistoryApplied: (materialId: string) => void) {}
+
+  /** Starts editing a new model; drops the history and any unsaved edits of the previous one. */
+  setModel(root: THREE.Object3D | null, pending: PendingEdits | null) {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
+    this.modelId = null;
+    this.entries.clear();
+    this.order.clear();
+    this.pending = pending ?? new Map();
+    discardHistory('material');
+    root?.traverse((object) => {
+      const mesh = object as THREE.Mesh;
+      if (!mesh.isMesh) return;
+      for (const material of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        if (!this.order.has(material.uuid)) this.order.set(material.uuid, { index: this.order.size, name: material.name });
+      }
+    });
+  }
+
+  /** Conversions start over with a new scene sync. */
+  clearConversions() {
+    this.entries.clear();
+  }
+
+  onConverted(source: THREE.Material, converted: OpenPBRMaterial | undefined, meshId: string) {
+    let entry = this.entries.get(source.uuid);
+    if (!entry) {
+      entry = { name: source.name || 'Material', index: this.order.get(source.uuid)?.index ?? -1, converted: new Set(), meshes: new Set() };
+      this.entries.set(source.uuid, entry);
+    }
+    entry.meshes.add(meshId);
+    if (!converted || entry.converted.has(converted)) return;
+    const first = entry.converted.values().next().value as OpenPBRMaterial | undefined;
+    entry.converted.add(converted);
+    if (!entry.initial) {
+      entry.initial = readState(converted);
+      const edit = this.pending.get(entry.index);
+      this.pending.delete(entry.index);
+      if (edit && edit.name === (source.name || '')) this.apply(entry, this.fromPending(edit, converted), [converted]);
+    } else if (first) {
+      // Variants (e.g. instance colors) get the edits made so far, not the full state.
+      this.apply(entry, diff(entry.initial, readState(first)), [converted]);
+    }
+  }
+
+  has(materialId: string) {
+    return !!this.entries.get(materialId)?.converted.size;
+  }
+
+  firstMesh(materialId: string) {
+    return this.entries.get(materialId)?.meshes.values().next().value as string | undefined;
+  }
+
+  describe(materialId: string) {
+    const entry = this.entries.get(materialId);
+    const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
+    if (!entry || !material) return null;
+    const maps: Partial<Record<TextureKey, string>> = {};
+    const record = material as unknown as Record<string, Texture | undefined>;
+    for (const key of TEXTURE_KEYS) {
+      const texture = record[key];
+      if (texture) maps[key] = this.thumbnail(texture);
+    }
+    return { name: entry.name, users: entry.meshes.size, values: readMaterial(material), textures: [...textureSlots(material)], maps };
+  }
+
+  setValues(materialId: string, values: MaterialValues, label: string, mergeKey?: string) {
+    this.commit(materialId, { values, textures: {} }, label, mergeKey);
+  }
+
+  async setTexture(materialId: string, slot: TextureKey, file: Blob | null, label: string) {
+    const entry = this.entries.get(materialId);
+    const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
+    if (!entry || !material) return;
+    let texture: Texture | null = null;
+    if (file) {
+      const image = await decodeImage(file);
+      // The material may have been replaced while decoding.
+      if (this.entries.get(materialId) !== entry) return;
+      texture = createTexture(image, material, slot);
+      this.uploads.set(texture, file);
+    }
+    this.commit(materialId, { values: {}, textures: { [slot]: texture } }, label);
+  }
+
+  reset(materialId: string) {
+    const initial = this.entries.get(materialId)?.initial;
+    if (initial) this.commit(materialId, initial, 'Reset material');
+  }
+
+  /** Writes pending edits now, e.g. when the page is hidden. */
+  flush() {
+    if (this.saveTimer === undefined) return;
+    clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
+    void this.save();
+  }
+
+  private replay = (materialId: string, patch: MaterialPatch) => {
+    const entry = this.entries.get(materialId);
+    if (entry) this.apply(entry, patch);
+    this.changed(materialId);
+    this.onHistoryApplied(materialId);
+  };
+
+  private commit(materialId: string, patch: MaterialPatch, label: string, mergeKey?: string) {
+    const entry = this.entries.get(materialId);
+    const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
+    if (!entry || !material) return;
+    const current = readState(material);
+    const after = diff(current, patch);
+    if (isEmpty(after)) return;
+    const before = pick(current, after);
+    this.apply(entry, after);
+    pushHistory(new MaterialEdit(this.replay, materialId, label, before, after, mergeKey));
+    this.changed(materialId);
+  }
+
+  private apply(entry: Entry, patch: MaterialPatch, targets: Iterable<OpenPBRMaterial> = entry.converted) {
+    for (const material of targets) {
+      const record = material as unknown as Record<string, unknown>;
+      for (const [key, texture] of Object.entries(patch.textures)) record[key] = texture ?? undefined;
+      writeMaterial(material, patch.values);
+    }
+  }
+
+  private fromPending(edit: PendingEdit, material: OpenPBRMaterial): MaterialPatch {
+    const textures: MaterialPatch['textures'] = {};
+    for (const [slot, upload] of Object.entries(edit.textures) as [TextureKey, PendingEdit['textures'][TextureKey]][]) {
+      if (!upload) {
+        textures[slot] = null;
+        continue;
+      }
+      const texture = createTexture(upload.image, material, slot);
+      this.uploads.set(texture, upload.file);
+      textures[slot] = texture;
+    }
+    return { values: edit.values, textures };
+  }
+
+  /** Refreshes the published selection and schedules saving. */
+  private changed(materialId: string) {
+    const selected = get().material;
+    if (selected?.id === materialId) {
+      const description = this.describe(materialId);
+      if (description) set({ material: { ...selected, ...description } });
+    }
+    if (this.modelId) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = setTimeout(() => {
+        this.saveTimer = undefined;
+        void this.save();
+      }, SAVE_DELAY_MS);
+    }
+  }
+
+  private save() {
+    if (!this.modelId) return Promise.resolve();
+    const materials: StoredEdit[] = [];
+    for (const [materialId, entry] of this.entries) {
+      const material = entry.converted.values().next().value as OpenPBRMaterial | undefined;
+      if (!entry.initial || !material || entry.index < 0) continue;
+      const changes = diff(entry.initial, readState(material));
+      if (isEmpty(changes)) continue;
+      const textures: StoredEdit['textures'] = [];
+      for (const [slot, texture] of Object.entries(changes.textures) as [TextureKey, Texture | null][]) {
+        const file = texture ? this.uploads.get(texture) : null;
+        if (file !== undefined) textures.push({ slot, file });
+      }
+      materials.push({ index: entry.index, name: this.order.get(materialId)?.name ?? '', values: changes.values, textures });
+    }
+    // Keep stored edits of materials that have not been converted yet.
+    for (const [index, edit] of this.pending) {
+      materials.push({
+        index, name: edit.name, values: edit.values,
+        textures: Object.entries(edit.textures).map(([slot, upload]) => ({ slot: slot as TextureKey, file: upload?.file ?? null }))
+      });
+    }
+    return saveMaterialEdits({ modelId: this.modelId, materials });
+  }
+
+  private thumbnail(texture: Texture) {
+    const cached = this.thumbs.get(texture);
+    if (cached !== undefined) return cached;
+    let url = '';
+    const image = texture.image as unknown;
+    if (image instanceof ImageBitmap || image instanceof HTMLImageElement || image instanceof HTMLCanvasElement) {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = THUMB_SIZE;
+      const context = canvas.getContext('2d');
+      if (context) {
+        context.drawImage(image, 0, 0, THUMB_SIZE, THUMB_SIZE);
+        url = canvas.toDataURL('image/png');
+      }
+    }
+    this.thumbs.set(texture, url);
+    return url;
+  }
+}
+
+function readState(material: OpenPBRMaterial): MaterialPatch {
+  const record = material as unknown as Record<string, Texture | undefined>;
+  const textures: MaterialPatch['textures'] = {};
+  for (const key of TEXTURE_KEYS) textures[key] = record[key] ?? null;
+  return { values: readMaterial(material), textures };
+}
+
+/** The parts of `next` that differ from `base`. */
+function diff(base: MaterialPatch, next: MaterialPatch): MaterialPatch {
+  const out: MaterialPatch = { values: {}, textures: {} };
+  for (const [key, value] of Object.entries(next.values) as [keyof MaterialValues, MaterialValues[keyof MaterialValues]][]) {
+    if (value !== undefined && !sameValue(base.values[key], value)) out.values[key] = Array.isArray(value) ? [...value] as [number, number, number] : value;
+  }
+  for (const [key, texture] of Object.entries(next.textures) as [TextureKey, Texture | null][]) {
+    if ((base.textures[key] ?? null) !== (texture ?? null)) out.textures[key] = texture ?? null;
+  }
+  return out;
+}
+
+/** The values of `state` for the keys present in `keys`. */
+function pick(state: MaterialPatch, keys: MaterialPatch): MaterialPatch {
+  const out: MaterialPatch = { values: {}, textures: {} };
+  for (const key of Object.keys(keys.values) as (keyof MaterialValues)[]) {
+    const value = state.values[key];
+    out.values[key] = Array.isArray(value) ? [...value] as [number, number, number] : value;
+  }
+  for (const key of Object.keys(keys.textures) as TextureKey[]) out.textures[key] = state.textures[key] ?? null;
+  return out;
+}
+
+function merge(a: MaterialPatch, b: MaterialPatch): MaterialPatch {
+  return { values: { ...a.values, ...b.values }, textures: { ...a.textures, ...b.textures } };
+}
+
+function isEmpty(patch: MaterialPatch) {
+  return !Object.keys(patch.values).length && !Object.keys(patch.textures).length;
+}
+
+/** glTF orientation; keeps the UV transform of the texture it replaces, or of the base color map. */
+function createTexture(image: ImageBitmap, material: OpenPBRMaterial, slot: TextureKey) {
+  const texture = new Texture(image as unknown as HTMLCanvasElement);
+  const reference = (material as unknown as Record<string, Texture | undefined>)[slot] ?? material.map;
+  if (reference) {
+    texture.uvScale = [...reference.uvScale];
+    texture.uvOffset = [...reference.uvOffset];
+    texture.uvChannel = reference.uvChannel;
+  }
+  return texture;
+}
