@@ -7,6 +7,7 @@ import { VERSION } from '../version.js';
 
 const wasmUrl = new URL('./tinybvh.wasm', import.meta.url);
 
+/** Static TinyBVH BLAS layout; supported on WebGPU and WebGL 2. Default `'bvh2'`. */
 export type TinyBvhLayout = 'bvh2' | 'bvh4' | 'bvh-gpu' | 'cwbvh';
 
 const tinyBvhLayoutCodes: Record<TinyBvhLayout, number> = {

@@ -3,7 +3,7 @@ import { BvhWorkerClient, BvhWorkerUnavailableError, type BvhBuildRequest } from
 import { executeBvhBuild } from '../../src/renderer/bvhWorkerBuild';
 import { buildBLAS } from '../../src/renderer/bvhAccel';
 import { createCubeGeometry } from '../../src/util/commonGeometry';
-import { prepareForPrecompute, precompute, resolveFromPrecompute } from '../../src/util/workerHelper';
+import { getPreparedMeshGeometry } from '../../src/renderer/prepareMeshBVH';
 import Geometry, { Attribute } from '../../src/scene/Geometry';
 import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
@@ -79,24 +79,6 @@ it('produces identical built-in BVH bytes for subarray and displaced inputs', as
 it('keeps dynamic meshes in the built-in layout even for a TinyBVH request', async () => {
   const result = await executeBvhBuild({ ...request(), builder: 'tinybvh', dynamic: true, layout: 'cwbvh' });
   expect(result.builder).toBe('builtin'); expect(result.layout).toBe('bvh2');
-});
-
-it('discards results when geometry, revision, or preparation settings change', async () => {
-  for (const change of ['revision', 'geometry', 'settings', 'bvh', 'displacement']) {
-    const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-    mesh.materials[0].displacementMap = new Texture({ data: new Uint8Array(64).fill(128), width: 4, height: 4 });
-    mesh.materials[0].displacementScale = 0.1;
-    const prepared = prepareForPrecompute([mesh]);
-    const result = await precompute(prepared.geometries, prepared.displacementScales, prepared.trianglesDisplacements);
-    if (change === 'revision') mesh.geometry.markUpdated();
-    if (change === 'geometry') mesh.geometry = createCubeGeometry();
-    if (change === 'displacement') mesh.materials[0].displacementScale = 0.3;
-    if (change === 'settings') mesh.materials[0].displacementUvProjection = 'triplanar';
-    const newer = change === 'bvh' ? buildBLAS(mesh.geometry) : undefined;
-    mesh.geometry.bvh = newer;
-    resolveFromPrecompute(result, prepared);
-    expect(mesh.geometry.bvh).toBe(newer);
-  }
 });
 
 it('falls back within the call when Worker construction is blocked', async () => {
@@ -175,4 +157,32 @@ it('classifies postMessage and message decoding failures as Worker unavailabilit
   const assertion = expect(pending).rejects.toBeInstanceOf(BvhWorkerUnavailableError);
   invalid.onmessageerror?.call(invalid as unknown as Worker, {} as MessageEvent);
   await assertion;
+});
+
+it('discards results when geometry, revision, or preparation settings change', async () => {
+  vi.stubGlobal('Worker', TestWorker);
+  let finish!: (bvh: ReturnType<typeof buildBLAS>) => void;
+  const build = vi.spyOn(BvhWorkerClient.prototype, 'build').mockImplementation(() =>
+    new Promise(resolve => { finish = resolve; }));
+  try {
+    for (const change of ['revision', 'geometry', 'settings', 'bvh', 'displacement', 'texture', 'textureVersion']) {
+      const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
+      const material = mesh.materials[0];
+      material.displacementMap = new Texture({ data: new Uint8Array(64).fill(128), width: 4, height: 4 });
+      material.displacementScale = 0.1;
+      const target = getPreparedMeshGeometry(mesh);
+      const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
+      const pending = renderer.prepareScene([mesh]); await Promise.resolve();
+      if (change === 'revision') mesh.geometry.markUpdated();
+      if (change === 'geometry') mesh.geometry = createCubeGeometry();
+      if (change === 'displacement') material.displacementScale = 0.3;
+      if (change === 'settings') material.displacementUvProjection = 'triplanar';
+      if (change === 'texture') material.displacementMap = new Texture({ data: new Uint8Array(64), width: 4, height: 4 });
+      if (change === 'textureVersion') material.displacementMap.markUpdated();
+      const newer = change === 'bvh' ? buildBLAS(target) : undefined;
+      target.bvh = newer;
+      finish(buildBLAS(target)); await pending;
+      expect(target.bvh).toBe(newer);
+    }
+  } finally { build.mockRestore(); }
 });

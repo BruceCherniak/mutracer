@@ -17,8 +17,6 @@ export default class Texture {
   image: HTMLImageElement | HTMLCanvasElement | TextureDataSource;
   /** Optional stable identity of the texture in an adapter such as Three.js. */
   source?: object;
-  /** Internal key used to reuse CPU height analysis inside a worker. */
-  displacementDataCacheKey?: string;
   /** @internal */
   needsUpdate: boolean = true;
   /** Incremented by `markUpdated()`. */

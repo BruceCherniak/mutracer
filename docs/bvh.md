@@ -45,25 +45,38 @@ the BLAS. Replacing `mesh.geometry` is detected automatically.
 
 ## Layouts
 
-`precomputeTinyBvh(meshes, layout, onProgress, { spatialSplits })` builds
-BLASes explicitly, optionally in another layout or with SBVH:
+`renderer.bvhLayout` selects the layout for newly built static TinyBVH BLASes.
+Changing it does not replace existing BVHs; use `rebuild: true` to rebuild them
+with the current builder, layout and spatial-split settings:
+
+```ts
+renderer.bvhBuilder = 'tinybvh';
+renderer.bvhLayout = 'cwbvh';
+const stats = await renderer.prepareScene(scene, {
+  rebuild: true,
+  onProgress: progress => updateLoadingScreen(progress)
+});
+```
 
 | Layout | Notes |
 | --- | --- |
 | `'bvh2'` | Default; binary BVH |
 | `'bvh4'` | 4-wide BVH |
 | `'bvh-gpu'` | TinyBVH's `BVH_GPU` layout |
-| `'cwbvh'` | Compressed 8-wide BVH (WebGPU); experimental, benefit depends on GPU and scene |
+| `'cwbvh'` | Compressed 8-wide BVH; experimental, benefit depends on GPU and scene |
 
-```ts
-import { precomputeTinyBvh } from '@meimu/mutracer';
-const stats = await precomputeTinyBvh(scene.meshes, 'cwbvh');
-```
+All four layouts are supported on WebGPU and WebGL 2. The built-in builder,
+dynamic geometry and TinyBVH displacement bounds use `'bvh2'`. TinyBVH may
+use `'bvh-gpu'` if CWBVH conversion cannot represent a mesh; inspect
+`geometry.bvh.layout` for the actual layout.
 
-Returned counts and timings cover geometries processed by this call, including
-dynamic geometries built with the built-in builder. Processing multiple layouts
-reports `layout: 'mixed'`; `builder` names the precomputation entry point. Inspect each `geometry.bvh.builder` and
-`geometry.bvh.layout` for its actual builder/layout.
+`prepareScene` returns `{ geometryCount, bvhTimeMs }`. The count covers BLASes
+written by this call, with shared geometry counted once. The time sums builder
+work and excludes queueing and WASM loading. Dynamic geometry is skipped.
+Without `rebuild`, already prepared static BLASes are skipped; replacements
+leave the old BLAS available until the new one is ready. `onProgress` receives
+a completed fraction after each build (including failed or discarded results),
+ending at `1`; a call with no builds does not invoke it.
 
 ## Animation
 
@@ -74,8 +87,8 @@ byte ranges; WebGL 2 uploads the texture rows covering those ranges.
 
 For frequent vertex deformation, set `geometry.dynamic = true` (default:
 `false`). Dynamic geometries always use the built-in binary `bvh2` layout,
-including when the renderer otherwise uses TinyBVH or a precomputation request
-selects a different layout. An incompatible precomputed BLAS is rebuilt.
+including when the renderer otherwise uses TinyBVH with a different
+`bvhLayout`. An incompatible precomputed BLAS is rebuilt.
 Three.js skinning and morph conversion sets this hint automatically.
 
 After editing arrays in place, call `geometry.markUpdated()`. If attribute and
@@ -85,7 +98,7 @@ share the geometry receive refreshed bounds and a TLAS refit. Changes to
 vertex attributes, transforms and materials can be combined in one frame.
 Replaced arrays or changed lengths require full preparation. Changed index
 contents rebuild the affected BLAS. Displaced geometry also
-requires full preparation because it changes the prepared vertex topology.
+requires full preparation to refresh its displacement bounds and geometry data.
 
 Dynamic BLAS refits sum node surface areas and compare the total with the last
 build. When it exceeds twice that build's total, the affected BLAS is rebuilt.
@@ -99,58 +112,24 @@ TLAS and instance data while reusing vertices and BLASes. Structural changes
 involving displacement or geometry-dependent multi-material
 indices require full preparation.
 
-## Worker precomputation
+## Worker preparation
 
 Automatic static BLAS preparation uses a module Worker with either builder.
 Inputs are cloned so shared geometry remains usable on the main thread; BVH
 buffers are transferred back. Requests share one Worker, which serializes builds
 and retains TinyBVH's WASM instance. Geometry revisions
 and displacement settings are checked before accepting asynchronous results.
-Worker startup or runtime failures fall back to the built-in main-thread path.
+Input errors affect only the invalid mesh; they do not disable Workers for
+other meshes. Worker startup, messaging or runtime failures retry with the same
+builder on the calling thread within the same `prepareScene` call. TinyBVH
+failures retry with the built-in builder. Both fallbacks log one warning per
+renderer. Concurrent calls on a renderer are queued and check missing BLASes
+when they start, so they do not duplicate completed builds. Invalid inputs are
+reported by the synchronous rendering path.
 The Worker entry is emitted with both the standalone build and npm ESM package;
 serve it from the same origin and allow Workers in your content security policy.
 TLAS construction and per-frame deformation refits/rebuilds remain synchronous.
 Height-map analysis and other geometry preparation still run on the calling thread.
-
-For large scenes, do the work in a Web Worker
-before entering the render loop. Resume rendering after resolving the result:
-
-```ts
-// main thread
-import { prepareForPrecompute, resolveFromPrecompute } from '@meimu/mutracer';
-
-const prepared = prepareForPrecompute(scene.meshes);
-const {
-  geometries, displacementScales, trianglesDisplacements,
-  projectiveDisplacements
-} = prepared;
-worker.postMessage(
-  { geometries, displacementScales, trianglesDisplacements,
-    projectiveDisplacements },
-  prepared.buffers
-);
-worker.onmessage = ({ data }) => {
-  resolveFromPrecompute(data, prepared);
-  // Start rendering after the transferred geometry and BVHs are resolved.
-  requestAnimationFrame(frame);
-};
-
-// worker.ts
-import { precompute } from '@meimu/mutracer';
-
-self.onmessage = async ({ data: d }) => {
-  const result = await precompute(
-    d.geometries, d.displacementScales, d.trianglesDisplacements,
-    undefined,               // buildBVH: defaults to the built-in builder
-    undefined,               // onProgress
-    d.projectiveDisplacements
-  );
-  self.postMessage(result, result.buffers);
-};
-```
-
-`precompute` accepts an optional `buildBVH` function, for example one that
-calls TinyBVH.
 
 ## Rebuilding the WebAssembly module
 

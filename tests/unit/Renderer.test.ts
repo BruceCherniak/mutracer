@@ -184,7 +184,7 @@ describe('Renderer sizing', () => {
     markSceneStable(renderer, scene);
     (renderer as any)._forceMeshUpdate = false;
     mesh.materials[0].markUpdated();
-    const prepare = vi.spyOn(renderer, 'prepareScene').mockResolvedValue(undefined);
+    const prepare = vi.spyOn(renderer, 'prepareScene').mockResolvedValue({geometryCount: 0, bvhTimeMs: 0});
     const needsPreparation = vi.spyOn(renderer as any, '_needsBVHPreparation').mockReturnValue(true);
     expect(renderer.render(scene, {} as Camera)).toBe(RENDER_STATUS_PREPARING);
     expect(pipeline.setMeshes).not.toHaveBeenCalled();

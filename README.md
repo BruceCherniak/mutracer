@@ -126,7 +126,7 @@ await renderer.setDenoiser({ type: 'oidn' });  // Intel Open Image Denoise
 | [Three.js](./docs/threejs.md) | `THREESceneSync`, supported materials and lights, `userData` keys |
 | [Denoising](./docs/denoising.md) | JNLM and OIDN denoisers, OIDN weights hosting, denoising while converging |
 | [Sampling](./docs/sampling.md) | Patterns, dimensions and progressive budgets |
-| [BVH](./docs/bvh.md) | BVH builders, TinyBVH layouts, worker precomputation |
+| [BVH](./docs/bvh.md) | BVH builders, TinyBVH layouts, worker preparation |
 | [Performance](./docs/performance.md) | Tuning checklist |
 | [`llms.txt`](./llms.txt) | Compact usage guide for coding agents |
 

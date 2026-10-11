@@ -6,17 +6,18 @@ import { createCubeGeometry } from '../../src/util/commonGeometry';
 import { updateMeshInstances } from '../../src/renderer/prepareMeshBVH';
 import { canUpdateGeometries, updatePreparedGeometries } from '../../src/renderer/geometryUpdates';
 import { refitBLAS, DYNAMIC_BLAS_REBUILD_RATIO } from '../../src/renderer/bvhAccel';
-import { precomputeTinyBvh } from '../../src/tinybvh/precomputeTinyBvh';
-import { convertGeometryFromTransfer, convertGeometryToTransfer } from '../../src/util/workerHelper';
+import Renderer from '../../src/Renderer';
 
 it('uses builtin BVH2 for dynamic geometry, even with an incompatible precomputed layout', async () => {
   const g = createCubeGeometry(); g.dynamic = true;
   g.bvh = {buffer:new ArrayBuffer(64),maxDepth:1,layout:'bvh4',builder:'tinybvh'};
   const mesh = new Mesh(g, new OpenPBRMaterial()); updateMeshInstances([mesh]);
   expect(g.bvh.layout).toBe('bvh2'); expect(g.bvh.builder).toBe('builtin');
-  await precomputeTinyBvh([mesh], 'cwbvh');
+  const renderer = new Renderer({canvas: {width: 1, height: 1} as HTMLCanvasElement});
+  renderer.bvhBuilder = 'tinybvh'; renderer.bvhLayout = 'cwbvh';
+  await renderer.prepareScene([mesh], {rebuild: true});
+  updateMeshInstances([mesh]);
   expect(g.bvh.layout).toBe('bvh2'); expect(g.bvh.builder).toBe('builtin');
-  expect(convertGeometryFromTransfer(convertGeometryToTransfer(g, [])).dynamic).toBe(true);
 });
 it('rebuilds dynamic BLASes after total node area exceeds the construction baseline', () => {
   const g = createCubeGeometry(); g.dynamic = true;

@@ -33,8 +33,10 @@
   shares its BVH and GPU buffers.
 - For large scenes, set `renderer.bvhBuilder = 'tinybvh'` and build BVHs up
   front with `await renderer.prepareScene(scene)`. Both builders automatically
-  use a Worker for static BLAS construction (see
-  [BVH](./bvh.md)).
+  use a Worker for static BLAS construction. Set `renderer.bvhLayout` to choose
+  a TinyBVH layout; after changing builder settings, use
+  `prepareScene(scene, { rebuild: true })` to replace existing static BLASes
+  (see [BVH](./bvh.md)).
 - With Three.js, keep one `THREESceneSync` and call `sync.update()` before
   rendering `sync.scene` with `fromTHREECamera(threeCamera)` each frame.
   It preserves mesh, geometry, material, texture and light identities. One-shot
@@ -45,7 +47,7 @@
 - For vertex animation, retain attribute/index arrays, set `geometry.dynamic =
   true` (default `false`), then call `geometry.markUpdated()` after edits.
   Changed geometries update their own vertex/BLAS regions and shared instance
-  bounds. Displacement need full preparation; replaced
+  bounds. Displacement needs full preparation; replaced
   arrays or changed lengths also require it.
 - Three.js skinning and morph targets run on the CPU and retain deformation
   buffers. Cost scales with vertices, influences and material groups. An

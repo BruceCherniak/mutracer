@@ -29,6 +29,8 @@ export type {
   DenoiserType,
   OfflineFrameRenderOptions,
   OfflineFrameRenderResult,
+  PrepareSceneOptions,
+  PrepareSceneResult,
   RenderStatus,
   RendererDiagnostics,
   RendererParams,
@@ -111,20 +113,7 @@ export {
 } from './util/geometry.js';
 export { computeMeshesBoundingBox } from './util/mesh.js';
 
-// BVH and worker precomputation
-export { precomputeTinyBvh } from './tinybvh/precomputeTinyBvh.js';
-export type { TinyBvhPrecomputeOptions, TinyBvhPrecomputeStats } from './tinybvh/precomputeTinyBvh.js';
+// BVH
 export type { TinyBvhLayout } from './tinybvh/TinyBvhBuilder.js';
-export {
-  prepareForPrecompute,
-  precompute,
-  resolveFromPrecompute
-} from './util/workerHelper.js';
-export type {
-  PrecomputePreparedData,
-  PrecomputeProgress,
-  PrecomputeResult,
-  PrecomputeTimings
-} from './util/workerHelper.js';
 
 export type { SamplingPattern } from './renderer/sampling.js';

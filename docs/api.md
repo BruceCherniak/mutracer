@@ -33,6 +33,7 @@ affects the image restarts accumulation.
 | `samplingPattern` | `'sobol'` | `'sobol'`, `'zsobol'` or `'random'`; see [sampling](./sampling.md) |
 | `alphaBlendStrategy` | `'stochastic'` | `'stochastic'` or `'deterministic-source-over'` for glTF `BLEND` materials (WebGPU) |
 | `bvhBuilder` | `'builtin'` | `'builtin'` (JavaScript) or `'tinybvh'` (WebAssembly, loaded on demand); static BLASes prepare in a Worker |
+| `bvhLayout` | `'bvh2'` | Static TinyBVH layout: `'bvh2'`, `'bvh4'`, `'bvh-gpu'` or `'cwbvh'` (both backends); builtin and dynamic geometry use `'bvh2'`. Use `prepareScene(scene, { rebuild: true })` to replace existing BLASes |
 | `bvhSpatialSplits` | `false` | With `'tinybvh'`, build static BLASes with spatial splits (SBVH): slower builds, sometimes faster rendering |
 | `textureAtlasBudgetBytes` | 384 MiB | Texture atlas memory budget; larger textures are downscaled |
 
@@ -81,7 +82,7 @@ affects the image restarts accumulation.
 | `setSize(width, height)` | Resizes the canvas drawing buffer and targets, in pixels |
 | `getSize()` | `{ width, height }` |
 | `setDenoiser(options?)` | Attaches the built-in JNLM filter or an OIDN network (WebGPU only); `false`/`null` removes it. See [denoising](./denoising.md) |
-| `prepareScene(scene \| meshes)` | Builds missing static BVHs ahead of time with either builder (otherwise done by `render()`); uses a Worker when available |
+| `prepareScene(scene, options?)` | Builds missing static BLASes; `options.rebuild` (default `false`) replaces existing ones, `options.onProgress` (default none) receives the completed fraction. Returns `Promise<PrepareSceneResult>` with `geometryCount` and `bvhTimeMs`; see [BVH](./bvh.md) |
 | `renderOfflineFrame(scene, camera, options)` | Renders a finished frame; see below |
 | `restartSamples()` | Discards the accumulation |
 | `getTotalSamplesRendered()` | Accumulated spp |
@@ -149,7 +150,7 @@ or material references on a Mesh is detected automatically. Mesh projection
 overrides apply to all its materials and require instance data to be rebuilt.
 Both backends refit transform-only edits. Geometry version changes with stable
 attribute/index arrays update only affected geometry and BLAS regions;
-replaced arrays, displacement require full preparation.
+replaced arrays and displacement require full preparation.
 Dynamic BLASes rebuild above twice their last build's total node surface area.
 
 ## Helpers
@@ -167,7 +168,6 @@ Dynamic BLASes rebuild above twice their last build's total node surface area.
 | `FromTHREESceneOptions` | Optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |
 | `loadGLTF(url)` | Minimal built-in glTF 2.0 loader; prefer Three.js `GLTFLoader` + `THREESceneSync` |
 | `CameraViewControl` | Orbit/pan/zoom controller for a MuTracer `Camera` |
-| `precomputeTinyBvh`, `prepareForPrecompute`, `precompute`, `resolveFromPrecompute` | BVH and displacement precomputation; see [BVH](./bvh.md) |
 | `VERSION` | Library version |
 
 `@meimu/mutracer/oidn` exposes lower-level OIDN loading (`initializeOIDN`,

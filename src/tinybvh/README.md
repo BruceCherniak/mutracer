@@ -7,11 +7,10 @@ and WebGPU traversal shaders. `tinybvh.wasm` is checked in, so building the
 library does not need Emscripten.
 
 With `Renderer.bvhBuilder = 'tinybvh'` the renderer imports this module on
-demand and builds missing BVH2 BLASes before the first frame. Static builds
-use TinyBVH's binned SAH builder; pass `spatialSplits: true` (or set
-`Renderer.bvhSpatialSplits`) to use SBVH. Call
-`precomputeTinyBvh(meshes, layout)` to build ahead of time or to try another
-layout. CWBVH is experimental: its benefit depends on the GPU and the scene.
+demand and builds missing static BLASes before the first frame. Static builds
+use TinyBVH's binned SAH builder; set `renderer.bvhSpatialSplits = true`
+to use SBVH. Set `renderer.bvhLayout` to choose a layout and call
+`renderer.prepareScene(scene, { rebuild: true })` to replace existing BLASes. CWBVH is experimental: its benefit depends on the GPU and the scene.
 
 CWBVH notes. The adapter follows TinyBVH's GPU traversal
 ([`kernels/traverse_cwbvh.cl`](https://github.com/jbikker/tinybvh/blob/0e4584287823252cf83f0e9cd072848bec5f79c5/kernels/traverse_cwbvh.cl)):

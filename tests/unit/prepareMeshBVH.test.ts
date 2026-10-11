@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import Geometry, { Attribute } from '../../src/scene/Geometry';
+import Texture from '../../src/scene/Texture';
 import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import {
-  
+  getTrianglesDisplacementRange,
   updateMeshInstances
 } from '../../src/renderer/prepareMeshBVH';
 
@@ -73,3 +74,46 @@ it('separates projective displacement BLAS caches for different material project
   expect(getPreparedMeshGeometry(a)).toBe(ga);
   expect(material.displacementUvProjection).toBe('none');
 });
+
+it('supports projective range bounds without UVs when using triplanar projection', () => {
+  const geometry = triangleGeometry();
+  geometry.uv = undefined;
+  const material = new OpenPBRMaterial();
+  material.displacementUvProjection = 'triplanar';
+  const range = getTrianglesDisplacementRange(
+    geometry,
+    heightTexture([0, 0.25, 0.5, 1], 2),
+    material
+  );
+
+  expect(range).toBeInstanceOf(Float32Array);
+  expect(range).toHaveLength(2);
+});
+
+it('supports projective range bounds without UVs when using cylindrical projection', () => {
+  const geometry = triangleGeometry();
+  geometry.uv = undefined;
+  const material = new OpenPBRMaterial();
+  material.displacementUvProjection = 'cylindrical';
+  material.displacementUvScale = 2;
+  const range = getTrianglesDisplacementRange(
+    geometry,
+    heightTexture([0, 0.25, 0.5, 1], 2),
+    material
+  );
+
+  expect(range).toBeInstanceOf(Float32Array);
+  expect(range).toHaveLength(2);
+});
+function triangleGeometry() {
+  return new Geometry({
+    position: new Attribute(new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), 3),
+    normal: new Attribute(new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]), 3),
+    uv: new Attribute(new Float32Array([0, 0, 1, 0, 0, 1]), 2),
+    indices: new Attribute(new Uint32Array([0, 1, 2]), 1)
+  });
+}
+
+function heightTexture(values: number[], width: number, height = width) {
+  return new Texture({ data: new Float32Array(values), width, height });
+}

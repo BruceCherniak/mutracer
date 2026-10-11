@@ -15,6 +15,7 @@ import { Renderer as WebGLRenderer } from './renderer/webgl.js';
 import Mesh from './scene/Mesh.js';
 import { SceneChangeDetector } from './renderer/sceneChangeDetector.js';
 import type Geometry from './scene/Geometry.js';
+import type { TinyBvhLayout } from './tinybvh/TinyBvhBuilder.js';
 import Camera from './scene/Camera.js';
 import { Scene } from './scene/Scene.js';
 import { ColorRGB } from './types.js';
@@ -37,6 +38,26 @@ import {
 } from './renderer/OfflineAdaptiveSampling.js';
 /** BLAS builder for meshes without a precomputed BVH. See {@link Renderer.bvhBuilder}. */
 export type BVHBuilder = 'tinybvh' | 'builtin';
+
+/** Options for {@link Renderer.prepareScene}. */
+export interface PrepareSceneOptions {
+  /**
+   * Rebuild every static BLAS with the current `bvhBuilder`, `bvhLayout` and
+   * `bvhSpatialSplits`, not only missing ones. Existing BLASes stay in use
+   * until their replacement is ready. Default `false`.
+   */
+  rebuild?: boolean;
+  /** Called after each BLAS finishes with this call's completed fraction (0–1). Default: none. */
+  onProgress?: (progress: number) => void;
+}
+
+/** Statistics for one {@link Renderer.prepareScene} call. */
+export interface PrepareSceneResult {
+  /** BLASes built by this call; shared geometry counts once. */
+  geometryCount: number;
+  /** Builder-reported build time in milliseconds, excluding queueing and WASM loading. */
+  bvhTimeMs: number;
+}
 
 /**
  * Denoiser implementation. `'jnlm'` is the built-in joint non-local means
@@ -356,7 +377,15 @@ export default class Renderer {
    * times slower. Applies to BLASes built after the change. Default `false`.
    */
   bvhSpatialSplits = false;
-  private _bvhPreparation?: Promise<void>;
+  /**
+   * Layout of static BLASes built with `bvhBuilder = 'tinybvh'`. All layouts
+   * work on WebGPU and WebGL 2. The built-in builder and dynamic geometry
+   * always use `'bvh2'`. Applies to BLASes built after the change; call
+   * `prepareScene(scene, { rebuild: true })` to rebuild existing ones.
+   * Displacement bounds use `'bvh2'`. Default `'bvh2'`.
+   */
+  bvhLayout: TinyBvhLayout = 'bvh2';
+  private _bvhPreparation?: Promise<PrepareSceneResult>;
   private _bvhPreparationTail: Promise<unknown> = Promise.resolve();
   private _tinyBvhUnavailable = false;
   private _bvhWorkerUnavailable = false;
@@ -687,15 +716,19 @@ export default class Renderer {
    * Builds missing static BLASes before rendering, using a Worker when available.
    * `render()` calls this automatically and returns `RENDER_STATUS_PREPARING`
    * meanwhile. Dynamic geometry retains synchronous refit/rebuild behavior.
+   * Default options: build only missing BLASes, without a progress callback.
+   * Returns the number of BLASes written and their total builder time.
    */
-  prepareScene(scene: Pick<Scene, 'meshes'> | Mesh[]): Promise<void> {
+  prepareScene(
+    scene: Pick<Scene, 'meshes'> | Mesh[], options: PrepareSceneOptions = {}
+  ): Promise<PrepareSceneResult> {
     const preparation = this._bvhPreparationTail.then(async () => {
       const meshes = Array.isArray(scene) ? scene : scene.meshes;
       const result = await prepareStaticBvhs(meshes, {
         builder: this.bvhBuilder === 'tinybvh' && !this._tinyBvhUnavailable ? 'tinybvh' : 'builtin',
-        layout: 'bvh2', spatialSplits: this.bvhSpatialSplits,
+        layout: this.bvhLayout, spatialSplits: this.bvhSpatialSplits,
         useWorker: canUseBvhWorker() && !this._bvhWorkerUnavailable,
-        rebuild: false
+        rebuild: options.rebuild ?? false, onProgress: options.onProgress
       });
       if (result.workerUnavailable && !this._bvhWorkerUnavailable) {
         this._bvhWorkerUnavailable = true;
@@ -709,6 +742,7 @@ export default class Renderer {
         this._bvhPreparedGeometry.set(mesh, [mesh.geometry, mesh.geometry.version]);
       });
       if (result.geometryCount > 0) this._forceMeshUpdate = true;
+      return { geometryCount: result.geometryCount, bvhTimeMs: result.bvhTimeMs };
     });
     this._bvhPreparationTail = preparation.catch(() => undefined);
     return preparation;

@@ -21,7 +21,7 @@ describe('standalone library builds', () => {
       .filter((output): output is OutputChunk => output.type === 'chunk');
     const context = createContext({
       URL, Float32Array, Uint32Array, Uint8Array, Int32Array, Uint16Array,
-      console, location: 'https://example.test/mutracer.umd.js'
+      performance, console, location: 'https://example.test/mutracer.umd.js'
     });
     context.self = context;
     runInContext(chunks.find(chunk => chunk.fileName === 'mutracer.umd.js')!.code, context);
@@ -61,18 +61,14 @@ describe('standalone library builds', () => {
   it('builds ordinary and projective BVHs', async () => {
     const material = new api.OpenPBRMaterial();
     const mesh = new api.Mesh(api.createPlaneGeometry(), material);
-    async function precomputeMesh() {
-      const prepared = api.prepareForPrecompute([mesh]);
-      return api.precompute(
-        prepared.geometries, prepared.displacementScales,
-        prepared.trianglesDisplacements, undefined,
-        undefined, prepared.projectiveDisplacements
-      );
-    }
-    expect((await precomputeMesh()).geometries[0].bvh!.buffer.byteLength).toBeGreaterThan(0);
+    const renderer = new api.Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
+    expect((await renderer.prepareScene([mesh])).geometryCount).toBe(1);
+    expect(mesh.geometry.bvh!.buffer.byteLength).toBeGreaterThan(0);
     material.displacementMap = new api.Texture({
       data: new Uint8Array([255, 255, 255, 255]), width: 1, height: 1
     });
-    expect((await precomputeMesh()).geometries[0].bvh!.buffer.byteLength).toBeGreaterThan(0);
+    material.displacementScale = 0.1;
+    material.displacementUvProjection = 'triplanar';
+    expect((await renderer.prepareScene([mesh], {rebuild: true})).geometryCount).toBe(1);
   });
 });

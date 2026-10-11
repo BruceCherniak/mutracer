@@ -509,7 +509,6 @@ export function getTrianglesDisplacementRange(
     return conservative;
   }
   const minmaxCacheKey =
-    heightTexture.displacementDataCacheKey ??
     getDisplacementTextureDataCacheKey(heightTexture);
   let minmaxData = displacementMinmaxCache.get(minmaxCacheKey);
   if (!minmaxData) {
