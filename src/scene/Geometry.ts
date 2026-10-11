@@ -100,8 +100,11 @@ export default class Geometry {
   }
 
   /**
-   * Call after editing attribute arrays or replacing attributes. Increments
-   * version so the next render refits or rebuilds the BVH automatically.
+   * Call after index/material-index edits or a general geometry update.
+   * Advances version and topologyVersion to request topology processing and
+   * BVH rebuilding. For vertex-only edits with unchanged indices
+   * and materialIndex, use markVerticesUpdated() to allow refitting instead.
+   * Neither notification recalculates normals or tangents.
    * Replacing a mesh's Geometry object is detected without this call.
    */
   markUpdated() {
@@ -113,6 +116,9 @@ export default class Geometry {
   /**
    * Call after editing vertex attributes without changing indices or materialIndex.
    * Advances version while preserving topologyVersion, allowing vertex-only uploads.
+   * With stable arrays, lengths and item sizes, the next render refits supported
+   * BVHs or rebuilds when needed. Changed storage or displacement still requires
+   * full scene data preparation. Does not recalculate normals or tangents.
    */
   markVerticesUpdated() {
     this.version++;

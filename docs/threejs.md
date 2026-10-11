@@ -65,6 +65,17 @@ texture.needsUpdate = true; // after changing its canvas or pixel data
 sync.update();
 ```
 
+These `needsUpdate` flags belong to the Three.js source attributes. The sync
+handles update notifications on its converted MuTracer geometries, including
+vertex-only notifications for deformation. If you edit a MuTracer `Geometry`
+directly, use `geometry.markVerticesUpdated()` when only vertex attributes
+change and indices/`materialIndex` stay unchanged. Use `geometry.markUpdated()`
+for index/material-index edits or general updates. The former advances only
+`version`; the latter also advances the read-only `topologyVersion` (initially
+`0`) and requests topology processing and BLAS rebuilding. Neither computes
+normals or tangents. Replaced arrays or changed lengths/item sizes still
+require full scene data preparation; see [BVH animation](./bvh.md#animation).
+
 `new THREESceneSync(threeScene, options?)` accepts an optional
 `onMeshConverted(mesh, source, group, groupIndex)` callback (default: none).
 The sync calls it for each visible group and expanded instance during initial
@@ -183,8 +194,3 @@ Renderer-specific settings without a Three.js equivalent:
 `loadGLTF(url)` is a minimal built-in loader for glTF 2.0. It is kept for
 dependency-free use; prefer `GLTFLoader` + `THREESceneSync` for full glTF
 extension support.
-
-For vertex attribute edits that preserve indices and `materialIndex`, call
-`Geometry.markVerticesUpdated()` to reuse topology and upload only vertex data.
-`markUpdated()` also advances the read-only `topologyVersion` (initially `0`)
-and remains the notification for index or material-index edits.

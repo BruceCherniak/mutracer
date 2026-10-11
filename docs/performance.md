@@ -36,7 +36,10 @@
   use a Worker for static BLAS construction. Set `renderer.bvhLayout` to choose
   a TinyBVH layout; after changing builder settings, use
   `prepareScene(scene, { rebuild: true })` to replace existing static BLASes
-  (see [BVH](./bvh.md)).
+  (see [BVH preparation flows](./bvh.md#choose-a-preparation-flow)). This awaits
+  static BLAS tasks only: TLAS, GPU data uploads and shader compilation still
+  happen in the rendering flow. Height-map analysis and attribute generation
+  run on the calling thread even when BVH construction uses a Worker.
 - With Three.js, keep one `THREESceneSync` and call `sync.update()` before
   rendering `sync.scene` with `fromTHREECamera(threeCamera)` each frame.
   It preserves mesh, geometry, material, texture and light identities. One-shot
@@ -45,10 +48,17 @@
   Both WebGPU and WebGL 2 refit changed TLAS instances and upload only
   affected instance/BVH ranges.
 - For vertex animation, retain attribute/index arrays, set `geometry.dynamic =
-  true` (default `false`), then call `geometry.markUpdated()` after edits.
-  Changed geometries update their own vertex/BLAS regions and shared instance
-  bounds. Displacement needs full preparation; replaced
-  arrays or changed lengths also require it.
+  true` (default `false`), then call `geometry.markVerticesUpdated()` after
+  editing vertex attributes while indices and `materialIndex` stay unchanged.
+  Use `geometry.markUpdated()` for index/material-index edits or general
+  updates; it advances the topology revision and can rebuild the BLAS
+  unnecessarily for vertex-only animation. Update normals/tangents as needed;
+  neither notification computes them. Changed geometries update their own
+  vertex/BLAS regions and shared instance bounds. Displacement needs full
+  scene data preparation; replaced arrays or changed lengths/item sizes also
+  require it regardless of the notification method. Per-frame refits and
+  rebuilds remain synchronous and can use builtin even with
+  `renderer.bvhBuilder = 'tinybvh'`.
 - Three.js skinning and morph targets run on the CPU and retain deformation
   buffers. Cost scales with vertices, influences and material groups. An
   unchanged pose skips deformation. Dynamic BLASes rebuild when total node

@@ -718,6 +718,9 @@ export default class Renderer {
    * meanwhile. Dynamic geometry retains synchronous refit/rebuild behavior.
    * Default options: build only missing BLASes, without a progress callback.
    * Returns the number of BLASes written and their total builder time.
+   * Completion covers static BLAS tasks only, not device initialization, TLAS,
+   * GPU scene uploads, shader compilation or rendering. Keep calling render()
+   * through preparing/compiling statuses, or await renderOfflineFrame() for an image.
    */
   prepareScene(
     scene: Pick<Scene, 'meshes'> | Mesh[], options: PrepareSceneOptions = {}
@@ -1182,8 +1185,9 @@ export default class Renderer {
    * adds samples until `maxSamples` is reached. Camera, mesh membership,
    * world matrices, resource references, lights and background changes are
    * detected automatically and restart accumulation. After editing material
-   * parameters, geometry arrays or texture pixels/UV arrays in place, call
-   * that material's, geometry's or texture's `markUpdated()`.
+   * parameters or texture pixels/UV arrays in place, call that object's markUpdated().
+   * For geometry vertex attributes with unchanged indices/materialIndex, call
+   * markVerticesUpdated(); use markUpdated() for topology or general updates.
    * Unchanged scenes retain their accumulation. Both backends refit transforms
    * and incrementally upload changed geometry with stable attribute arrays.
    *

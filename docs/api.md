@@ -19,7 +19,9 @@ new Renderer(params?: RendererParams)
 ### Properties
 
 Properties are plain fields read on the next `render()`. Changing one that
-affects the image restarts accumulation.
+affects the image restarts accumulation. BVH builder settings apply to future
+builds; use `prepareScene(scene, { rebuild: true })` to replace existing static
+BLASes after changing them.
 
 **Sampling and integration**
 
@@ -82,7 +84,7 @@ affects the image restarts accumulation.
 | `setSize(width, height)` | Resizes the canvas drawing buffer and targets, in pixels |
 | `getSize()` | `{ width, height }` |
 | `setDenoiser(options?)` | Attaches the built-in JNLM filter or an OIDN network (WebGPU only); `false`/`null` removes it. See [denoising](./denoising.md) |
-| `prepareScene(scene, options?)` | Builds missing static BLASes; `options.rebuild` (default `false`) replaces existing ones, `options.onProgress` (default none) receives the completed fraction. Returns `Promise<PrepareSceneResult>` with `geometryCount` and `bvhTimeMs`; see [BVH](./bvh.md) |
+| `prepareScene(scene, options?)` | Builds missing static BLASes; `options.rebuild` (default `false`) replaces existing ones, `options.onProgress` (default none) receives the completed task fraction. Accepts a scene with `meshes` or a `Mesh[]`. Returns `Promise<PrepareSceneResult>` with `geometryCount` and `bvhTimeMs`; see [BVH preparation flows](./bvh.md#choose-a-preparation-flow) |
 | `renderOfflineFrame(scene, camera, options)` | Renders a finished frame; see below |
 | `restartSamples()` | Discards the accumulation |
 | `getTotalSamplesRendered()` | Accumulated spp |
@@ -94,10 +96,21 @@ affects the image restarts accumulation.
 | `dispose()` | Releases GPU resources and the denoiser |
 
 Scene membership, transforms, light parameters and background edits are
-detected on each `render()`, even when their arrays are retained. After editing
-material parameters, geometry attributes or texture pixels/UV-array elements,
-call the edited object's `markUpdated()`. The next render restarts accumulation
-and selects the appropriate update path. An unchanged scene keeps accumulating.
+detected on each `render()`, even when their arrays are retained. Use
+`material.markUpdated()` after editing material parameters and
+`texture.markUpdated()` after editing texture pixels or UV-array elements.
+For geometry, use `markVerticesUpdated()` for vertex attribute edits that leave
+indices and `materialIndex` unchanged; use `markUpdated()` for index,
+material-index or general geometry updates. The next render restarts
+accumulation and selects the appropriate update path. An unchanged scene keeps
+accumulating.
+
+`prepareScene` waits only for static BLAS preparation. It skips dynamic geometry
+and, unless `rebuild: true`, existing BLASes. It does not initialize the device,
+build TLAS, upload GPU scene data, compile shaders or render an image. Keep
+calling `render()` through preparing and shader-compilation statuses after it
+resolves, or await `renderOfflineFrame()` for a finished image. See
+[completion, progress and statistics](./bvh.md#what-preparescene-completes).
 
 ### `renderOfflineFrame(scene, camera, options)`
 
@@ -145,12 +158,19 @@ If a denoiser is set, the result is denoised before the promise resolves.
 | `SceneBackground` | `[r, g, b, a]`, `Texture` or `GroundedSkyboxBackground` |
 
 `Geometry`, `Texture` and `OpenPBRMaterial` expose `version` (initially `0`)
-and `markUpdated(): this`. Versions advance with each call. Replacing geometry
-or material references on a Mesh is detected automatically. Mesh projection
-overrides apply to all its materials and require instance data to be rebuilt.
-Both backends refit transform-only edits. Geometry version changes with stable
-attribute/index arrays update only affected geometry and BLAS regions;
-replaced arrays and displacement require full preparation.
+and `markUpdated(): this`. For Geometry, `markUpdated()` advances both `version`
+and the read-only `topologyVersion` (initially `0`), requesting topology
+processing and BLAS rebuilding. `markVerticesUpdated(): this` advances only
+`version`; use it when indices and `materialIndex` are unchanged to allow
+vertex updates and supported BLAS refits. Neither method recalculates normals
+or tangents. See [geometry updates](./bvh.md#animation).
+
+Replacing geometry or material references on a Mesh is detected automatically.
+Mesh projection overrides apply to all its materials and require instance data
+to be rebuilt. Both backends refit transform-only edits. Geometry updates with
+stable attribute/index arrays update only affected geometry and BLAS regions;
+replaced arrays, changed lengths/item sizes and displacement require full
+scene data preparation, even with `markVerticesUpdated()`.
 Dynamic BLASes rebuild above twice their last build's total node surface area.
 
 ## Helpers
