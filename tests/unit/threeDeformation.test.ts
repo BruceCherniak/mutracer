@@ -51,6 +51,43 @@ it('owns deformation geometry per mesh and calculates once for every material gr
   expect(first.geometry.position.array).not.toEqual(third.geometry.position.array);
   const once=fromTHREEScene(source);expect(once.meshes[0].geometry.dynamic).toBe(true);
 });
+it.each([false, true])('keeps static and per-mesh morph caches independent with shared geometry (staticFirst=%s)', staticFirst => {
+  const geometry = new THREE.BoxGeometry();
+  const target = geometry.attributes.position.clone();
+  for (let i = 0; i < target.count; i++) target.setX(i, target.getX(i) + 0.5);
+  geometry.morphAttributes.position = [target];
+  geometry.clearGroups(); geometry.addGroup(0, 18, 0); geometry.addGroup(18, 18, 1);
+  const materials = [new THREE.MeshStandardMaterial(), new THREE.MeshStandardMaterial()];
+  const plain = new THREE.Mesh(geometry, materials[0]); plain.morphTargetInfluences = undefined;
+  const a = new THREE.Mesh(geometry, materials), b = new THREE.Mesh(geometry, materials);
+  a.morphTargetInfluences![0] = 0.2; b.morphTargetInfluences![0] = 0.8;
+  const source = new THREE.Scene(); source.add(...(staticFirst ? [plain, a, b] : [a, b, plain]));
+  const sync = new THREESceneSync(source);
+  const plainIndex = staticFirst ? 0 : 4, aIndex = staticFirst ? 1 : 0, bIndex = staticFirst ? 3 : 2;
+  const plainGeometry = sync.scene.meshes[plainIndex].geometry;
+  const aGeometry = sync.scene.meshes[aIndex].geometry, bGeometry = sync.scene.meshes[bIndex].geometry;
+  expect(aGeometry).not.toBe(bGeometry); expect(aGeometry).not.toBe(plainGeometry);
+  expect(sync.update().content).toBe(false);
+  a.morphTargetInfluences![0] = 0.6; b.morphTargetInfluences![0] = 0.1;
+  expect(sync.update().content).toBe(true);
+  const position = geometry.getAttribute('position') as THREE.BufferAttribute;
+  position.setX(0, position.getX(0) + 0.25); position.needsUpdate = true;
+  expect(sync.update().content).toBe(true);
+  expect(sync.scene.meshes[plainIndex].geometry).not.toBe(plainGeometry);
+  expect(sync.scene.meshes[aIndex].geometry).toBe(aGeometry);
+  expect(sync.scene.meshes[bIndex].geometry).toBe(bGeometry);
+  const expected = new THREE.Vector3();
+  for (const [mesh, start, groups] of [[plain, plainIndex, 1], [a, aIndex, 2], [b, bIndex, 2]] as const) {
+    for (let group = 0; group < groups; group++) {
+      const converted = sync.scene.meshes[start + group].geometry;
+      for (let i = 0; i < position.count; i++) {
+        mesh.getVertexPosition(i, expected);
+        for (let c = 0; c < 3; c++) expect(converted.position.array[i * 3 + c]).toBeCloseTo(expected.getComponent(c), 6);
+      }
+    }
+  }
+  expect(sync.update().content).toBe(false);
+});
 it('applies morph normals without requiring a skeleton', () => {
   const geometry=new THREE.BoxGeometry();const target=geometry.attributes.normal.clone();
   for(let i=0;i<target.count;i++)target.setXYZ(i,0,1,0);

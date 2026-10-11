@@ -521,8 +521,9 @@ interface MaterialVariant {
   autoUvProjection: boolean;
   autoDisplacementUvProjection: boolean;
 }
-interface GeometryEntry { state: unknown[]; groups: Map<string, Geometry> }
+interface GeometryEntry { state: unknown[]; groups: Map<string, Geometry>; checkedAt: number }
 interface ConversionStore {
+  updateId: number;
   textures: TextureStore;
   materials: WeakMap<THREE.Material, { material: OpenPBRMaterial; hash: string }>;
   geometries: WeakMap<THREE.BufferGeometry, GeometryEntry>;
@@ -537,19 +538,43 @@ interface ConversionStore {
   background?: Scene['background'];
 }
 function createConversionStore(): ConversionStore {
-  return { textures: new WeakMap(), materials: new WeakMap(), geometries: new WeakMap(),
+  return { updateId: 0, textures: new WeakMap(), materials: new WeakMap(), geometries: new WeakMap(),
     meshes: new WeakMap(), lights: new WeakMap(), deformedGeometries: new WeakMap(), deformations: new WeakMap(),
     instanceMeshes: new WeakMap(), colorVariants: new Map(), warned: new WeakSet() };
 }
-function geometryState(geometry: THREE.BufferGeometry, deformation = false) {
-  return ['position', 'normal', 'tangent', 'uv', 'uv1', 'index'].flatMap(name => {
+const geometryAttributeNames = ['position', 'normal', 'tangent', 'uv', 'uv1', 'index'] as const;
+function geometryState(geometry: THREE.BufferGeometry, deformation: boolean) {
+  const state: unknown[] = [];
+  for (let i = 0; i < geometryAttributeNames.length; i++) {
+    const name = geometryAttributeNames[i];
     const attribute = name === 'index' ? geometry.index : geometry.getAttribute(name);
-    if (!attribute) return [undefined];
+    if (!attribute) { state.push(undefined); continue; }
     const interleaved = attribute as THREE.InterleavedBufferAttribute;
     const buffer = interleaved.isInterleavedBufferAttribute ? interleaved.data : attribute as THREE.BufferAttribute;
-    return [attribute, buffer, deformation && ['position', 'normal', 'tangent'].includes(name) ? undefined : buffer.version, buffer.array, attribute.count, attribute.itemSize,
-      attribute.normalized, interleaved.offset, interleaved.data?.stride];
-  });
+    state.push(attribute, buffer, deformation && i < 3 ? undefined : buffer.version, buffer.array, attribute.count, attribute.itemSize,
+      attribute.normalized, interleaved.offset, interleaved.data?.stride);
+  }
+  return state;
+}
+/** Compare cached fields directly; unchanged geometry creates no snapshot arrays. */
+function geometryStateMatches(geometry: THREE.BufferGeometry, state: readonly unknown[], deformation: boolean) {
+  let field = 0;
+  for (let i = 0; i < geometryAttributeNames.length; i++) {
+    const name = geometryAttributeNames[i];
+    const attribute = name === 'index' ? geometry.index : geometry.getAttribute(name);
+    if (!attribute) {
+      if (state[field++] !== undefined) return false;
+      continue;
+    }
+    const interleaved = attribute as THREE.InterleavedBufferAttribute;
+    const buffer = interleaved.isInterleavedBufferAttribute ? interleaved.data : attribute as THREE.BufferAttribute;
+    if (state[field++] !== attribute || state[field++] !== buffer ||
+      !Object.is(state[field++], deformation && i < 3 ? undefined : buffer.version) ||
+      state[field++] !== buffer.array || !Object.is(state[field++], attribute.count) ||
+      !Object.is(state[field++], attribute.itemSize) || !Object.is(state[field++], attribute.normalized) ||
+      !Object.is(state[field++], interleaved.offset) || !Object.is(state[field++], interleaved.data?.stride)) return false;
+  }
+  return field === state.length;
 }
 function retainLight(store: ConversionStore, source: THREE.Object3D | THREE.Texture, value: SceneLight) {
   const cached = store.lights.get(source);
@@ -590,6 +615,7 @@ export function fromTHREEScene(
 }
 
 function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store: ConversionStore): Scene {
+  const updateId = ++store.updateId;
   const meshes: Mesh[] = [];
   const lights: SceneLight[] = [];
   const textureCache = store.textures;
@@ -647,19 +673,8 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   function isSpotLight(node: THREE.Object3D): node is THREE.SpotLight {
     return node.type === 'SpotLight';
   }
-  function isVisibleInHierarchy(node: THREE.Object3D) {
-    let current: THREE.Object3D | null = node;
-    while (current) {
-      if (!current.visible) return false;
-      if (current === scene) break;
-      current = current.parent;
-    }
-    return true;
-  }
-
   scene.updateMatrixWorld(true);
-  scene.traverse((child) => {
-    if (!isVisibleInHierarchy(child)) return;
+  scene.traverseVisible((child) => {
     if (isMesh(child)) {
       if (child.userData.viewerEnvironment) return;
       // Viewer-only proxy geometry is already represented by its source mesh.
@@ -705,26 +720,31 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
           threeMaterials.length > 1 && child.geometry.groups.length
             ? child.geometry.groups
             : [{ start: 0, count: Infinity, materialIndex: 0 }];
+        // Shared static geometry is checked once per update, before its groups.
+        // Deforming meshes keep independent entries for their evaluated geometry.
+        let entry = deformation ? store.deformedGeometries.get(child) : store.geometries.get(child.geometry);
+        if (!entry || entry.checkedAt !== updateId) {
+          if (!entry || !geometryStateMatches(child.geometry, entry.state, !!deformation)) {
+            entry = { state: geometryState(child.geometry, !!deformation), groups: new Map(), checkedAt: updateId };
+            if (deformation) store.deformedGeometries.set(child, entry);
+            else store.geometries.set(child.geometry, entry);
+          }
+          entry.checkedAt = updateId;
+        }
+        const geometryEntry = entry;
         groups.forEach((group, groupIndex) => {
           const count = Number.isFinite(group.count)
             ? group.count
             : (child.geometry.getIndex()?.count ??
               child.geometry.getAttribute('position').count);
           const geometryKey = `${group.start}:${count}`;
-          const state = geometryState(child.geometry, !!deformation);
-          let entry = deformation ? store.deformedGeometries.get(child) : store.geometries.get(child.geometry);
-          if (!entry || !snapshotsEqual(entry.state, state)) {
-            entry = { state, groups: new Map() };
-            if (deformation) store.deformedGeometries.set(child, entry);
-            else store.geometries.set(child.geometry, entry);
-          }
-          let geometry = entry.groups.get(geometryKey);
+          let geometry = geometryEntry.groups.get(geometryKey);
           const newGeometry = !geometry;
           if (!geometry) {
             const converted = convertGeometry(child.geometry, { start: group.start, count });
             if (!converted) return;
             geometry = converted;
-            entry.groups.set(geometryKey, geometry);
+            geometryEntry.groups.set(geometryKey, geometry);
           }
           if (deformation && (deformed || newGeometry)) {
             geometry.dynamic = true;

@@ -104,6 +104,112 @@ describe('THREESceneSync', () => {
     expect(sync.scene.meshes[0].geometry).not.toBe(old);
   });
 
+  it.each(['array', 'count', 'itemSize', 'normalized'] as const)('detects %s edits without an attribute version bump', field => {
+    const { sync, geometry } = fixture();
+    const attribute = geometry.getAttribute('uv') as THREE.BufferAttribute;
+    const old = sync.scene.meshes[0].geometry;
+    const version = attribute.version;
+    if (field === 'array') {
+      attribute.array = new Float32Array(attribute.array);
+      attribute.array[0] = 0.25;
+    } else if (field === 'count') Object.defineProperty(attribute, 'count', { value: attribute.count - 1 });
+    else if (field === 'itemSize') attribute.itemSize = 1;
+    else attribute.normalized = true;
+    expect(attribute.version).toBe(version);
+    expect(sync.update().content).toBe(true);
+    expect(sync.scene.meshes[0].geometry).not.toBe(old);
+    expect(sync.scene.meshes[1].geometry).toBe(sync.scene.meshes[0].geometry);
+    if (field === 'array') expect(sync.scene.meshes[0].geometry.uv!.array[0]).toBe(0.25);
+    if (field === 'itemSize') expect(sync.scene.meshes[0].geometry.uv!.itemSize).toBe(1);
+    expect(sync.update()).toEqual(unchanged);
+  });
+
+  it.each(['offset', 'stride', 'buffer', 'array'] as const)('detects interleaved %s edits without a version bump', field => {
+    const { sync, geometry } = fixture();
+    const original = geometry.getAttribute('uv');
+    const pixels = new Float32Array(original.count * 4);
+    for (let i = 0; i < original.count; i++) pixels.set([original.getX(i), original.getY(i), 0.25, 0.75], i * 4);
+    const data = new THREE.InterleavedBuffer(pixels, 4);
+    const uv = new THREE.InterleavedBufferAttribute(data, 2, 0);
+    geometry.setAttribute('uv', uv);
+    sync.update();
+    const old = sync.scene.meshes[0].geometry;
+    if (field === 'offset') uv.offset = 2;
+    else if (field === 'stride') data.stride = 2;
+    else if (field === 'buffer') uv.data = new THREE.InterleavedBuffer(pixels, 4);
+    else {
+      data.array = new Float32Array(pixels);
+      data.array[0] = 0.5;
+    }
+    expect(uv.data.version).toBe(0);
+    expect(sync.update().content).toBe(true);
+    expect(sync.scene.meshes[0].geometry).not.toBe(old);
+    expect(sync.scene.meshes[1].geometry).toBe(sync.scene.meshes[0].geometry);
+    if (field === 'offset') expect(Array.from(sync.scene.meshes[0].geometry.uv!.array.slice(0, 2))).toEqual([0.25, 0.75]);
+    if (field === 'array') expect(sync.scene.meshes[0].geometry.uv!.array[0]).toBe(0.5);
+    expect(sync.update()).toEqual(unchanged);
+  });
+
+  it('invalidates all shared groups when optional attributes are removed and restored', () => {
+    const { sync, source, geometry, material } = fixture();
+    for (const mesh of source.children.filter((child): child is THREE.Mesh => (child as THREE.Mesh).isMesh)) {
+      mesh.material = [material, new THREE.MeshStandardMaterial()];
+    }
+    geometry.clearGroups(); geometry.addGroup(0, 18, 0); geometry.addGroup(18, 18, 1);
+    sync.update();
+    const uv = geometry.getAttribute('uv');
+    const old = sync.scene.meshes.map(mesh => mesh.geometry);
+    geometry.deleteAttribute('uv');
+    expect(sync.update().content).toBe(true);
+    for (let i = 0; i < 4; i++) {
+      expect(sync.scene.meshes[i].geometry).not.toBe(old[i]);
+      expect(sync.scene.meshes[i].geometry.uv).toBeUndefined();
+      expect(sync.scene.meshes[i].geometry).toBe(sync.scene.meshes[i % 2].geometry);
+    }
+    const removed = sync.scene.meshes.map(mesh => mesh.geometry);
+    geometry.setAttribute('uv', uv);
+    expect(sync.update().content).toBe(true);
+    for (let i = 0; i < 4; i++) {
+      expect(sync.scene.meshes[i].geometry).not.toBe(removed[i]);
+      expect(sync.scene.meshes[i].geometry.uv!.array).toEqual(uv.array);
+    }
+    expect(sync.update()).toEqual(unchanged);
+  });
+
+  it('checks shared geometry once per update across meshes, groups and instances', () => {
+    const source = new THREE.Scene();
+    const geometry = new THREE.BoxGeometry();
+    geometry.clearGroups(); geometry.addGroup(0, 18, 0); geometry.addGroup(18, 18, 1);
+    const materials = [new THREE.MeshStandardMaterial(), new THREE.MeshStandardMaterial()];
+    source.add(new THREE.Mesh(geometry, materials), new THREE.Mesh(geometry, materials),
+      new THREE.InstancedMesh(geometry, materials, 3));
+    const normal = geometry.getAttribute('normal') as THREE.BufferAttribute;
+    let version = normal.version, reads = 0;
+    Object.defineProperty(normal, 'version', {
+      get: () => { reads++; return version; },
+      set: (value: number) => { version = value; }
+    });
+    const sync = new THREESceneSync(source);
+    expect(sync.scene.meshes).toHaveLength(10);
+    for (let i = 0; i < 3; i++) {
+      reads = 0;
+      expect(sync.update()).toEqual(unchanged);
+      expect(reads).toBe(1);
+    }
+    const old = sync.scene.meshes[0].geometry;
+    normal.setXYZ(0, 0, 1, 0); normal.needsUpdate = true;
+    expect(sync.update().content).toBe(true);
+    for (let i = 0; i < 10; i++) {
+      const groupIndex = i < 4 ? i % 2 : i < 7 ? 0 : 1;
+      expect(sync.scene.meshes[i].geometry).toBe(sync.scene.meshes[groupIndex].geometry);
+      expect(sync.scene.meshes[i].geometry.normal.array.slice(0, 3)).toEqual(new Float32Array([0, 1, 0]));
+    }
+    expect(sync.scene.meshes[0].geometry).not.toBe(old);
+    reads = 0;
+    expect(sync.update()).toEqual(unchanged);
+    expect(reads).toBe(1);
+  });
+
   it('reuses meshes when visibility or group membership changes', () => {
     const { sync, mesh } = fixture();
     const first = sync.scene.meshes[0]; mesh.visible = false;
@@ -116,6 +222,35 @@ describe('THREESceneSync', () => {
     expect(sync.scene.meshes[0]).toBe(first);
     mesh.visible = false; sync.update(); mesh.visible = true; sync.update();
     expect(sync.scene.meshes[1]).toBe(group);
+  });
+
+  it('skips hidden subtrees and restores retained meshes and lights with current values', () => {
+    const source = new THREE.Scene();
+    const parent = new THREE.Group(), nested = new THREE.Group();
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial());
+    const light = new THREE.PointLight(0xffffff, 2);
+    nested.add(mesh, light); parent.add(nested); source.add(parent);
+    const convertedSources: THREE.Mesh[] = [];
+    const sync = new THREESceneSync(source, { onMeshConverted: (_, sourceMesh) => convertedSources.push(sourceMesh) });
+    const convertedMesh = sync.scene.meshes[0], convertedLight = sync.scene.lights[0];
+    for (const hiddenRoot of [parent, nested, source]) {
+      convertedSources.length = 0;
+      hiddenRoot.visible = false;
+      expect(sync.update()).toMatchObject({ membership: true, lights: true });
+      expect(sync.scene.meshes).toHaveLength(0); expect(sync.scene.lights).toHaveLength(0);
+      expect(convertedSources).toHaveLength(0);
+      mesh.position.x++; light.intensity++;
+      expect(sync.update()).toEqual(unchanged);
+      expect(convertedSources).toHaveLength(0);
+      hiddenRoot.visible = true;
+      expect(sync.update()).toMatchObject({ membership: true, lights: true });
+      expect(sync.scene.meshes).toEqual([convertedMesh]); expect(sync.scene.lights).toEqual([convertedLight]);
+      expect(sync.scene.meshes[0]).toBe(convertedMesh); expect(sync.scene.lights[0]).toBe(convertedLight);
+      expect(convertedMesh.matrixWorld[12]).toBe(mesh.position.x);
+      expect(convertedLight.type === 'SphereLight' && convertedLight.intensity).toBe(light.intensity);
+      expect(convertedSources).toEqual([mesh]);
+      expect(sync.update()).toEqual(unchanged);
+    }
   });
 
   it('updates lights and background without replacing their unchanged identities', () => {
