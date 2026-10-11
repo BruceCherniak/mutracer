@@ -26,7 +26,27 @@ export class BvhWorkerUnavailableError extends Error {
   }
 }
 
-/** Internal reusable client; cloning inputs keeps renderer-owned arrays attached. */
+/** Explicit pool shutdown; callers must not retry cancelled builds. */
+export class BvhWorkerDisposedError extends Error {
+  constructor() {
+    super('BVH worker pool was disposed.');
+    this.name = 'BvhWorkerDisposedError';
+  }
+}
+
+/** Conservative automatic limit; explicit counts are not capped by CPU count. */
+export function resolveBvhWorkerCount(count: number | 'auto') {
+  if (count !== 'auto') {
+    if (!Number.isSafeInteger(count) || count < 1) {
+      throw new RangeError('bvhWorkerCount must be "auto" or a positive safe integer.');
+    }
+    return count;
+  }
+  const cores = typeof navigator === 'undefined' ? 2 : navigator.hardwareConcurrency;
+  return Number.isFinite(cores) ? Math.max(1, Math.min(4, Math.floor(cores) - 1)) : 1;
+}
+
+/** Internal reusable client; transfer owned copies, keeping source arrays attached. */
 export class BvhWorkerClient {
   private nextId = 0;
   private pending = new Map<number, {
@@ -51,10 +71,16 @@ export class BvhWorkerClient {
   }
 
   private fail(error: Error) {
+    if (this.failed) return;
     this.failed = true;
+    this.worker.onmessage = this.worker.onerror = this.worker.onmessageerror = null;
     this.worker.terminate();
     this.pending.forEach(task => task.reject(error));
     this.pending.clear();
+  }
+
+  dispose() {
+    this.fail(new BvhWorkerDisposedError());
   }
 
   build(request: Omit<BvhBuildRequest, 'id'>): Promise<FlattendBVH> {
@@ -63,9 +89,16 @@ export class BvhWorkerClient {
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
       try {
-        // Structured clone preserves subarray offsets and shared source buffers.
-        // Never transfer source geometry: it may still be rendered or shared.
-        this.worker.postMessage({ ...request, id });
+        // Copy only each view's range: a GLTF accessor may reference a much
+        // larger backing buffer. Transfer these owned copies, never the source.
+        const position = { ...request.position, array: request.position.array.slice() };
+        const indices = { ...request.indices, array: request.indices.array.slice() };
+        const normal = request.normal && { ...request.normal, array: request.normal.array.slice() };
+        const trianglesDisplacement = request.trianglesDisplacement?.slice();
+        const transfers = [position.array.buffer, indices.array.buffer];
+        if (normal) transfers.push(normal.array.buffer);
+        if (trianglesDisplacement) transfers.push(trianglesDisplacement.buffer);
+        this.worker.postMessage({ ...request, id, position, indices, normal, trianglesDisplacement }, transfers);
       } catch (error) {
         this.fail(new BvhWorkerUnavailableError(error instanceof Error ? error.message : String(error)));
       }
@@ -73,7 +106,70 @@ export class BvhWorkerClient {
   }
 }
 
-let client: BvhWorkerClient | undefined;
+type PoolJob = {
+  request: Omit<BvhBuildRequest, 'id'>;
+  resolve: (bvh: FlattendBVH) => void;
+  reject: (error: Error) => void;
+};
+type PoolSlot = { client: BvhWorkerClient; busy: boolean };
+
+/** Lazy reusable pool: at most one cloned input is in flight per Worker. */
+export class BvhWorkerPool {
+  private slots: PoolSlot[] = [];
+  private queue: PoolJob[] = [];
+  private stopped?: Error;
+
+  constructor(readonly size: number) {
+    resolveBvhWorkerCount(size);
+  }
+
+  build(request: Omit<BvhBuildRequest, 'id'>): Promise<FlattendBVH> {
+    if (this.stopped) return Promise.reject(this.stopped);
+    return new Promise((resolve, reject) => {
+      this.queue.push({ request, resolve, reject });
+      this.dispatch();
+    });
+  }
+
+  private stop(error: Error) {
+    this.stopped ??= error;
+    for (const job of this.queue.splice(0)) job.reject(this.stopped);
+  }
+
+  private dispatch() {
+    while (this.queue.length && !this.stopped) {
+      let slot = this.slots.find(slot => !slot.busy);
+      if (!slot) {
+        if (this.slots.length >= this.size) return;
+        try {
+          slot = { client: new BvhWorkerClient(
+            new Worker(new URL('./bvh.worker.ts', import.meta.url), { type: 'module' })
+          ), busy: false };
+          this.slots.push(slot);
+        } catch (error) {
+          this.stop(new BvhWorkerUnavailableError(error instanceof Error ? error.message : String(error)));
+          return;
+        }
+      }
+      const job = this.queue.shift()!;
+      const active = slot;
+      active.busy = true;
+      void active.client.build(job.request).then(job.resolve, error => {
+        if (error instanceof BvhWorkerUnavailableError) this.stop(error);
+        job.reject(error);
+      }).finally(() => {
+        active.busy = false;
+        this.dispatch();
+      });
+    }
+  }
+
+  dispose() {
+    this.stop(new BvhWorkerDisposedError());
+    for (const slot of this.slots) slot.client.dispose();
+    this.slots = [];
+  }
+}
 
 export function canUseBvhWorker() {
   return typeof Worker !== 'undefined';
@@ -85,18 +181,19 @@ export async function buildBvhInWorker(
   trianglesDisplacement?: Float32Array,
   builder: 'builtin' | 'tinybvh' = 'builtin',
   layout: BvhLayout = 'bvh2',
-  spatialSplits = false
+  spatialSplits = false,
+  pool?: BvhWorkerPool
 ) {
+  const activePool = pool ?? new BvhWorkerPool(1);
   try {
-    client ??= new BvhWorkerClient(new Worker(new URL('./bvh.worker.ts', import.meta.url), { type: 'module' }));
-  } catch (error) {
-    throw new BvhWorkerUnavailableError(error instanceof Error ? error.message : String(error));
+    return await activePool.build({
+      position: geometry.position,
+      normal: trianglesDisplacement ? geometry.normal : undefined,
+      indices: geometry.indices,
+      dynamic: geometry.dynamic,
+      builder, layout, displacementScale, trianglesDisplacement, spatialSplits
+    });
+  } finally {
+    if (!pool) activePool.dispose();
   }
-  return client.build({
-    position: geometry.position,
-    normal: trianglesDisplacement ? geometry.normal : undefined,
-    indices: geometry.indices,
-    dynamic: geometry.dynamic,
-    builder, layout, displacementScale, trianglesDisplacement, spatialSplits
-  });
 }

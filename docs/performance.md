@@ -33,7 +33,8 @@ A tuning checklist. Each item links to the page with the details.
 - Share `Geometry`, `OpenPBRMaterial` and `Texture` objects. Shared geometry
   shares its BLAS and GPU buffers.
 - For large scenes, try `renderer.bvhBuilder = 'tinybvh'` and build BVHs up
-  front with `await renderer.prepareScene(scene)`; see [BVH](./bvh.md).
+  front with `await renderer.prepareScene(scene)`. Tune `bvhWorkerCount` for
+  parallel construction across geometries; see [BVH](./bvh.md).
 - With Three.js, keep one `THREESceneSync` for the whole session rather than
   converting again with `fromTHREEScene`.
 - Textures share an atlas bounded by `textureAtlasBudgetBytes`; larger textures

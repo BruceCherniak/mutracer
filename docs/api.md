@@ -33,6 +33,7 @@ affects the image restarts accumulation.
 | `samplingPattern` | `'sobol'` | `'sobol'`, `'zsobol'` or `'random'`; see [sampling](./sampling.md) |
 | `alphaBlendStrategy` | `'stochastic'` | `'stochastic'` or `'deterministic-source-over'` for glTF `BLEND` materials (WebGPU) |
 | `bvhBuilder` | `'builtin'` | `'builtin'` (JavaScript) or `'tinybvh'` (WebAssembly); see [BVH](./bvh.md) |
+| `bvhWorkerCount` | `'auto'` | Maximum static BLAS Workers per renderer: `'auto'` selects 1–4, or set a positive safe integer; see [BVH](./bvh.md#configure-parallel-construction) |
 | `bvhLayout` | `'bvh2'` | Static TinyBVH layout: `'bvh2'`, `'bvh4'`, `'bvh-gpu'` or `'cwbvh'` |
 | `bvhSpatialSplits` | `false` | With `'tinybvh'`, build SBVHs: slower builds, sometimes faster rendering |
 | `textureAtlasBudgetBytes` | 384 MiB | Texture atlas memory budget; larger textures are downscaled |
@@ -91,7 +92,7 @@ affects the image restarts accumulation.
 | `isUsingWebGPU()` | Active backend |
 | `getDiagnostics()` | Backend, adapter, shader compilation, BVH, light sampling and timing details |
 | `getGPUDeviceAndAdapter()` | Initializes and returns the WebGPU device/adapter |
-| `dispose()` | Releases GPU resources and the denoiser |
+| `dispose()` | Releases GPU resources, BVH Workers and the denoiser; cancels pending BVH preparation |
 
 `render()` detects scene edits itself, except material, texture and geometry
 data edits, which need `markUpdated()` or `markVerticesUpdated()`; see

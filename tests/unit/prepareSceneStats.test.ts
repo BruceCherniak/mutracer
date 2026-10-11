@@ -54,7 +54,7 @@ it('keeps builtin geometry and Worker requests in bvh2 regardless of bvhLayout',
   vi.stubGlobal('Worker', class {});
   const build = vi.spyOn(worker, 'buildBvhInWorker').mockImplementation(async (geometry) => buildBLAS(geometry));
   const other = mesh(); await r.prepareScene([other]);
-  expect(build).toHaveBeenCalledWith(other.geometry, 0, undefined, 'builtin', 'bvh2', false);
+  expect(build).toHaveBeenCalledWith(other.geometry, 0, undefined, 'builtin', 'bvh2', false, expect.any(worker.BvhWorkerPool));
   expect(other.geometry.bvh?.layout).toBe('bvh2');
 });
 
@@ -82,7 +82,7 @@ it('reads builder settings when a queued preparation actually starts', async () 
   r.bvhBuilder = 'tinybvh'; r.bvhLayout = 'cwbvh'; r.bvhSpatialSplits = true;
   finish(buildBLAS(a.geometry)); await first; await next;
   expect(build.mock.calls[0][3]).toBe('builtin');
-  expect(build).toHaveBeenLastCalledWith(b.geometry, 0, undefined, 'tinybvh', 'cwbvh', true);
+  expect(build).toHaveBeenLastCalledWith(b.geometry, 0, undefined, 'tinybvh', 'cwbvh', true, expect.any(worker.BvhWorkerPool));
 });
 
 it('rejects invalid TinyBVH output internally and builds builtin during the same call', async () => {

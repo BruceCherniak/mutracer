@@ -2,11 +2,12 @@
 
 Every geometry needs a bottom-level BVH (BLAS); the renderer combines them
 under a top-level BVH (TLAS) over the mesh instances. Static BLASes build
-automatically in a Worker, so most applications need no BVH code at all.
+automatically in a Worker pool, so most applications need no BVH code at all.
 
 | Setting | Default | Description |
 | --- | --- | --- |
 | `renderer.bvhBuilder` | `'builtin'` | `'builtin'` (JavaScript) or `'tinybvh'` (WebAssembly, loaded on first use) |
+| `renderer.bvhWorkerCount` | `'auto'` | Maximum Workers per renderer: `'auto'` or a positive safe integer. Auto uses `hardwareConcurrency - 1`, clamped to 1–4; 1 when unavailable |
 | `renderer.bvhLayout` | `'bvh2'` | Layout of static TinyBVH BLASes: `'bvh2'`, `'bvh4'`, `'bvh-gpu'` or `'cwbvh'` |
 | `renderer.bvhSpatialSplits` | `false` | With `'tinybvh'`, build spatial-split BVHs (SBVH) |
 | `geometry.dynamic` | `false` | Refittable built-in BLAS for deforming geometry; see [dynamic geometry](./updates.md#dynamic-geometry) |
@@ -17,7 +18,7 @@ The examples assume you have created `renderer`, `scene` and `camera`.
 
 ### Automatic (default)
 
-`render()` builds missing static BLASes in a Worker. Keep calling it while it
+`render()` builds missing static BLASes in the Worker pool. Keep calling it while it
 returns `RENDER_STATUS_PREPARING` or `RENDER_STATUS_COMPILING_SHADER`; the
 canvas keeps its previous image meanwhile:
 
@@ -39,6 +40,7 @@ either builder:
 
 ```ts
 renderer.bvhBuilder = 'tinybvh';
+renderer.bvhWorkerCount = 4;
 
 const stats = await renderer.prepareScene(scene, {
   onProgress: progress => console.log(`BVH tasks: ${Math.round(progress * 100)}%`)
@@ -50,6 +52,27 @@ frame(); // start the render loop above
 
 `prepareScene` accepts a scene or a `Mesh[]`. It skips existing BLASes, empty
 geometry and dynamic geometry, and builds shared geometry once.
+
+### Configure parallel construction
+
+`renderer.bvhWorkerCount = 'auto'` (the default) selects up to four Workers,
+leaving one reported CPU thread free where possible. Set a positive safe
+integer to choose the limit explicitly:
+
+```ts
+renderer.bvhWorkerCount = 8;
+await renderer.prepareScene(scene);
+```
+
+Both builders parallelize across independent geometries. A single geometry's
+BLAS still builds on one Worker; `1` uses serial construction. Workers are
+created only when needed, so a scene with two missing BLASes uses at most two
+Workers even with a higher limit. A pool is owned by its renderer and reused
+between preparations. Call `renderer.dispose()` to release it.
+
+Changing the count takes effect when the next preparation starts. Active
+preparations finish with their current pool; existing BLASes need no rebuild.
+Invalid counts (including zero, fractions and infinity) throw `RangeError`.
 
 ### Rebuild after changing builder settings
 
@@ -86,6 +109,16 @@ compile shaders or render. Afterwards, keep calling `render()` through
 - **Stale results**: if a geometry changes during its build, the result is
   discarded. Render the updated scene, or prepare again.
 - **Errors**: invalid inputs are reported by the next `render()`.
+- **Disposal**: `renderer.dispose()` cancels active and queued preparations.
+  Completed BLASes remain on their geometries; cancelled calls resolve with
+  their partial statistics, without further progress callbacks or fallback builds.
+
+More Workers increase simultaneous input copies and, with TinyBVH, the number
+of WASM instances. Increase the limit only with sufficient memory; extra
+Workers do not necessarily improve elapsed time. `bvhTimeMs` adds up work
+across Workers and can exceed elapsed time. Measure wall time around
+`await renderer.prepareScene(scene)` when comparing pool sizes. TLAS
+construction and GPU uploads are separate costs.
 
 ## Builders
 
@@ -138,9 +171,12 @@ jsDelivr copy, then falls back to the built-in builder. See
 
 ## Implementation notes
 
-- One module Worker, shared by all renderers on the page, serves every request,
-  serializes builds and keeps TinyBVH's WASM instance. Inputs are cloned, so shared geometry stays
-  usable on the main thread; BVH buffers are transferred back.
+- Each renderer owns a lazy module Worker pool. Each Worker handles one BLAS
+  at a time and keeps its own TinyBVH WASM instance. Larger geometries start
+  first; preparation lanes generate inputs only when ready to submit work.
+  Only the used ranges of input attribute views are copied, and these owned
+  copies are transferred to the Worker. Source geometry stays usable on the
+  main thread; BVH buffers are transferred back.
 - Geometry revisions and displacement settings are checked before an
   asynchronous result is accepted.
 - An invalid input affects only its mesh. Worker startup, messaging or runtime

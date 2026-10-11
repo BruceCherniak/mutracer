@@ -27,7 +27,7 @@ import {
   type JNLMOptions
 } from './renderer/jnlm.js';
 import { prepareStaticBvhs } from './renderer/staticBvhPreparation.js';
-import { canUseBvhWorker } from './renderer/bvhWorkerClient.js';
+import { canUseBvhWorker, BvhWorkerPool, resolveBvhWorkerCount } from './renderer/bvhWorkerClient.js';
 import makeWGPURenderingPipeline, {
   OIDNWeb
 } from './renderer/WGPURenderingPipeline.js';
@@ -370,6 +370,23 @@ export default class Renderer {
    * thread. TinyBVH failures fall back to `builtin`. Default `builtin`.
    */
   bvhBuilder: BVHBuilder = 'builtin';
+
+  /**
+   * Maximum Workers building independent static BLASes in parallel per renderer.
+   * Default `'auto'`: hardwareConcurrency minus one, clamped to 1–4 (1 if
+   * unavailable). Set a positive safe integer to override; `1` serializes builds.
+   * Workers are created on demand and reused until dispose(). Changes apply
+   * when the next preparation starts; active builds keep their current pool.
+   * Without Worker support, construction stays on the calling thread.
+   */
+  get bvhWorkerCount(): number | 'auto' { return this._bvhWorkerCount; }
+  set bvhWorkerCount(count: number | 'auto') {
+    resolveBvhWorkerCount(count);
+    this._bvhWorkerCount = count;
+  }
+  private _bvhWorkerCount: number | 'auto' = 'auto';
+  private _bvhWorkerPool?: BvhWorkerPool;
+  private _bvhPreparationRevision = 0;
 
   /**
    * With `bvhBuilder = 'tinybvh'`, build static BLASes with spatial splits
@@ -725,16 +742,30 @@ export default class Renderer {
   prepareScene(
     scene: Pick<Scene, 'meshes'> | Mesh[], options: PrepareSceneOptions = {}
   ): Promise<PrepareSceneResult> {
+    const revision = this._bvhPreparationRevision;
     const preparation = this._bvhPreparationTail.then(async () => {
+      const isCancelled = () => revision !== this._bvhPreparationRevision;
+      if (isCancelled()) return { geometryCount: 0, bvhTimeMs: 0 };
       const meshes = Array.isArray(scene) ? scene : scene.meshes;
+      const useWorker = canUseBvhWorker() && !this._bvhWorkerUnavailable;
+      if (useWorker) {
+        const count = resolveBvhWorkerCount(this.bvhWorkerCount);
+        if (this._bvhWorkerPool?.size !== count) {
+          this._bvhWorkerPool?.dispose();
+          this._bvhWorkerPool = new BvhWorkerPool(count);
+        }
+      }
       const result = await prepareStaticBvhs(meshes, {
         builder: this.bvhBuilder === 'tinybvh' && !this._tinyBvhUnavailable ? 'tinybvh' : 'builtin',
         layout: this.bvhLayout, spatialSplits: this.bvhSpatialSplits,
-        useWorker: canUseBvhWorker() && !this._bvhWorkerUnavailable,
+        useWorker, workerPool: this._bvhWorkerPool, isCancelled,
         rebuild: options.rebuild ?? false, onProgress: options.onProgress
       });
+      if (isCancelled()) return { geometryCount: result.geometryCount, bvhTimeMs: result.bvhTimeMs };
       if (result.workerUnavailable && !this._bvhWorkerUnavailable) {
         this._bvhWorkerUnavailable = true;
+        this._bvhWorkerPool?.dispose();
+        this._bvhWorkerPool = undefined;
         console.warn('BVH preparation failed; falling back to the main-thread BVH builder.');
       }
       if (result.tinyBvhUnavailable && !this._tinyBvhUnavailable) {
@@ -1615,8 +1646,11 @@ export default class Renderer {
     return { data, width, height };
   }
 
-  /** Releases GPU resources and the attached denoiser. */
+  /** Releases GPU resources, BVH Workers and the attached denoiser; cancels pending BVH preparation. */
   dispose() {
+    this._bvhPreparationRevision++;
+    this._bvhWorkerPool?.dispose();
+    this._bvhWorkerPool = undefined;
     this._oidnRevision++;
     this._denoiserRevision++;
     disposeOIDNDenoiser(this._ownedDenoiser);

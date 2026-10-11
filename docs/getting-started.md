@@ -149,7 +149,7 @@ canvas.toBlob((blob) => { /* save */ }, 'image/png');
 
 ## Cleanup
 
-Call `renderer.dispose()` to release GPU resources and the denoiser. With
+Call `renderer.dispose()` to release GPU resources, BVH Workers and the denoiser. With
 Three.js, also call `sync.dispose()` to release the conversion caches.
 
 ## Bundler notes

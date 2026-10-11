@@ -2,7 +2,9 @@ import type Mesh from '../scene/Mesh.js';
 import type Geometry from '../scene/Geometry.js';
 import type { TinyBvhLayout } from '../tinybvh/TinyBvhBuilder.js';
 import { buildBLAS, type FlattendBVH } from './bvhAccel.js';
-import { buildBvhInWorker, BvhWorkerUnavailableError } from './bvhWorkerClient.js';
+import {
+  buildBvhInWorker, BvhWorkerPool, BvhWorkerUnavailableError, BvhWorkerDisposedError
+} from './bvhWorkerClient.js';
 import {
   captureMeshBlasSnapshot,
   getMeshBlasInput,
@@ -15,6 +17,8 @@ export interface StaticBvhPreparationOptions {
   layout: TinyBvhLayout;
   spatialSplits: boolean;
   useWorker: boolean;
+  workerPool?: BvhWorkerPool;
+  isCancelled?: () => boolean;
   rebuild: boolean;
   onProgress?: (progress: number) => void;
 }
@@ -37,7 +41,6 @@ export async function prepareStaticBvhs(
   };
   const jobs = new Map<Geometry, {
     mesh: Mesh;
-    input: ReturnType<typeof getMeshBlasInput>;
     snapshot: ReturnType<typeof captureMeshBlasSnapshot>;
   }>();
   for (const mesh of meshes) {
@@ -45,12 +48,12 @@ export async function prepareStaticBvhs(
     const target = getPreparedMeshGeometry(mesh);
     if (jobs.has(target) || (target.bvh && !options.rebuild)) continue;
     try {
-      const input = getMeshBlasInput(mesh);
-      jobs.set(target, { mesh, input, snapshot: captureMeshBlasSnapshot(mesh, target) });
+      jobs.set(target, { mesh, snapshot: captureMeshBlasSnapshot(mesh, target) });
     } catch {
       result.failedMeshes.push(mesh);
     }
   }
+  const pool = options.useWorker ? options.workerPool ?? new BvhWorkerPool(1) : undefined;
 
   async function build(
     input: ReturnType<typeof getMeshBlasInput>, builder: StaticBvhPreparationOptions['builder'], useWorker: boolean
@@ -59,7 +62,7 @@ export async function prepareStaticBvhs(
     let bvh: FlattendBVH & { bvhTimeMs?: number };
     if (useWorker) {
       bvh = await buildBvhInWorker(geometry, displacementScale, trianglesDisplacement,
-        builder, builder === 'tinybvh' ? options.layout : 'bvh2', options.spatialSplits);
+        builder, builder === 'tinybvh' ? options.layout : 'bvh2', options.spatialSplits, pool);
     } else if (builder === 'tinybvh') {
       const { buildTinyBvh } = await import('../tinybvh/TinyBvhBuilder.js');
       bvh = await buildTinyBvh(geometry, displacementScale, trianglesDisplacement,
@@ -80,9 +83,11 @@ export async function prepareStaticBvhs(
     let builder = options.builder;
     let useWorker = options.useWorker && !result.workerUnavailable;
     for (;;) {
+      if (options.isCancelled?.()) throw new BvhWorkerDisposedError();
       try {
         return await build(input, builder, useWorker);
       } catch (error) {
+        if (error instanceof BvhWorkerDisposedError) throw error;
         if (error instanceof BvhWorkerUnavailableError && useWorker) {
           result.workerUnavailable = true;
           useWorker = false;
@@ -98,18 +103,36 @@ export async function prepareStaticBvhs(
   }
 
   let completed = 0;
-  await Promise.allSettled([...jobs].map(async ([target, { mesh, input, snapshot }]) => {
-    try {
-      const bvh = await buildWithFallback(input);
-      if (meshBlasSnapshotIsCurrent(mesh, target, snapshot)) {
-        target.bvh = bvh;
-        result.geometryCount++;
+  // Large BLASes start first to reduce the tail. Only active lanes prepare
+  // attributes/displacement inputs and submit geometry to Workers.
+  const pending = [...jobs].sort(([a], [b]) =>
+    (b.indices?.array.length ?? 0) - (a.indices?.array.length ?? 0));
+  let next = 0;
+  async function runLane() {
+    while (next < pending.length && !options.isCancelled?.()) {
+      const [target, { mesh, snapshot }] = pending[next++];
+      try {
+        if (!meshBlasSnapshotIsCurrent(mesh, target, snapshot)) continue;
+        const input = getMeshBlasInput(mesh);
+        const bvh = await buildWithFallback(input);
+        if (!options.isCancelled?.() && meshBlasSnapshotIsCurrent(mesh, target, snapshot)) {
+          target.bvh = bvh;
+          result.geometryCount++;
+        }
+      } catch (error) {
+        if (!(error instanceof BvhWorkerDisposedError)) result.failedMeshes.push(mesh);
+      } finally {
+        if (!options.isCancelled?.()) {
+          // A loading-screen callback must not stop a lane and strand jobs.
+          try { options.onProgress?.(++completed / jobs.size); } catch { /* Keep building. */ }
+        }
       }
-    } catch {
-      result.failedMeshes.push(mesh);
-    } finally {
-      options.onProgress?.(++completed / jobs.size);
     }
-  }));
+  }
+  try {
+    await Promise.allSettled(Array.from({ length: Math.min(pool?.size ?? 1, jobs.size) }, runLane));
+  } finally {
+    if (!options.workerPool) pool?.dispose();
+  }
   return result;
 }
