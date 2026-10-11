@@ -1,16 +1,14 @@
 /**
- * Development tool: renders the Examples menu and material preset thumbnails
+ * Development tool: renders material preset thumbnails
  * with MuTracer. Run `await generateThumbnails()` in the console of
  * `npm run viewer`; the dev server writes them to src/assets/thumbnails/.
  */
 import * as THREE from 'three';
 import { getEngine } from '../engine/ViewerEngine';
-import { MODEL_PRESETS } from '../engine/presets';
 import { MATERIAL_PRESETS } from '../engine/materialParams';
 import type { LoadedModel } from '../engine/loadModel';
 import { DEFAULT_SETTINGS, setSettings, useViewer, type TreeNode } from '../store';
 
-const MODEL_SIZE = { width: 480, height: 270, samples: 256 };
 const MATERIAL_SIZE = { width: 128, height: 128, samples: 256 };
 
 async function until(test: () => boolean, timeoutMs = 120_000) {
@@ -83,25 +81,23 @@ function materialStage(): { model: LoadedModel; sphere: THREE.Mesh } {
   return { model: { name: 'Material preview', root, animations: [], revoke() {} }, sphere };
 }
 
+async function saveThumbnails(shots: [string, Blob][]) {
+  for (const [name, blob] of shots) {
+    const response = await fetch(`/__thumbnails/${name}.webp`, { method: 'POST', body: blob });
+    if (!response.ok) throw new Error(`Could not save ${name}`);
+  }
+}
+
 async function generateThumbnails() {
   const engine = getEngine();
   if (!engine) throw new Error('The viewer is not running');
   const previous = useViewer.getState().settings;
   const shots: [string, Blob][] = [];
-
-  // Examples: the default studio look, framed to fill a 16:9 card.
   setSettings({ ...DEFAULT_SETTINGS, denoise: previous.denoise }, { record: false });
-  for (const preset of MODEL_PRESETS) {
-    console.log(`Rendering ${preset.name}`);
-    await engine.loadPreset(preset.id);
-    await ready();
-    engine.fit(MODEL_SIZE.width / MODEL_SIZE.height, 1);
-    shots.push([`model-${preset.id}`, await engine.renderImage({ ...MODEL_SIZE, transparent: false }, 'image/webp', 0.88)]);
-  }
 
   // Material presets: dimmed studio light, AgX at 0.85 exposure, fixed camera.
   const { model, sphere } = materialStage();
-  setSettings({ groundShadow: false, envIntensity: 0.9, exposure: 0.85, toneMapping: 'agx', fov: 34 }, { record: false });
+  setSettings({ lighting: 'environment', background: 'environment', groundShadow: false, envIntensity: 0.9, exposure: 0.85, toneMapping: 'agx', fov: 34 }, { record: false });
   await engine.loadModel(model);
   await ready();
   const center = sphere.getWorldPosition(new THREE.Vector3());
@@ -114,9 +110,7 @@ async function generateThumbnails() {
   }
 
   // Save last: new files make Vite reload the page.
-  for (const [name, blob] of shots) {
-    await fetch(`/__thumbnails/${name}.webp`, { method: 'POST', body: blob });
-  }
+  await saveThumbnails(shots);
   setSettings(previous, { record: false });
   console.log(`Saved ${shots.length} thumbnails`);
 }

@@ -1,8 +1,9 @@
 import type { EnvResolution } from '../store';
 import type { ModelCamera } from './modelCamera';
+import { PUBLIC_MODEL_PRESETS } from './publicModelPresets';
 
-// Rendered with MuTracer by the thumbnail generator (see viewer/README.md).
-const THUMBNAILS = import.meta.glob<string>('../assets/thumbnails/*.webp', { eager: true, query: '?url', import: 'default' });
+// Material swatches stay local; all model previews are managed in mutracer-assets.
+const THUMBNAILS = import.meta.glob<string>('../assets/thumbnails/material-*.webp', { eager: true, query: '?url', import: 'default' });
 export const thumbnailUrl = (name: string): string | undefined => THUMBNAILS[`../assets/thumbnails/${name}.webp`];
 
 export interface ModelPreset {
@@ -13,44 +14,20 @@ export interface ModelPreset {
   /** `null` builds the procedural material-sphere scene. */
   url: string | null;
   thumbnail?: string;
-  license: 'CC0' | 'CC-BY 4.0';
-  /** Shown in the viewport for CC-BY assets. */
+  license: 'CC0' | 'CC-BY 4.0' | 'CC-BY-NC 4.0' | 'CC-BY-NC-SA 4.0';
+  licenseUrl?: string;
+  attributionUrl?: string;
+  nonCommercial?: boolean;
+  /** Author attribution shown in the viewport for assets requiring credit. */
   credit: string;
   sourceUrl: string;
   sizeMB?: number;
-  /** Preview camera embedded in the GLB scene extras by the asset pipeline. */
+  /** Default preview view in grounded model coordinates. */
   camera?: ModelCamera;
 }
 
-const KHRONOS = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models';
-const khronos = (
-  id: string, model: string, name: string, tag: string, license: ModelPreset['license'],
-  sizeMB: number
-): ModelPreset => ({
-  id, name, tag, license, sizeMB,
-  url: `${KHRONOS}/${model}/glTF-Binary/${model}.glb`,
-  thumbnail: thumbnailUrl(`model-${id}`),
-  credit: `${name} · Khronos glTF Sample Assets · ${license}`,
-  sourceUrl: `https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/${model}`
-});
-
-// Licenses checked against each model directory's LICENSE.md.
-export const MODEL_PRESETS: ModelPreset[] = [
-  {
-    id: 'spheres', name: 'Material spheres', tag: 'OpenPBR layers', url: null, license: 'CC0',
-    thumbnail: thumbnailUrl('model-spheres'),
-    credit: 'Procedural', sourceUrl: 'https://github.com/pissang/mutracer'
-  },
-  khronos('toycar', 'ToyCar', 'Toy Car', 'Coat · transmission', 'CC0', 5.4),
-  khronos('sheenchair', 'SheenChair', 'Sheen Chair', 'Fuzz', 'CC0', 4.1),
-  khronos('helmet', 'DamagedHelmet', 'Damaged Helmet', 'Textures · emission', 'CC-BY 4.0', 3.8),
-  khronos('candle', 'GlassHurricaneCandleHolder', 'Glass Candle Holder', 'Glass', 'CC-BY 4.0', 2.7),
-  khronos('iridescence', 'IridescenceLamp', 'Iridescence Lamp', 'Thin film', 'CC-BY 4.0', 4.1),
-  khronos('anisotropy', 'AnisotropyBarnLamp', 'Barn Lamp', 'Anisotropy', 'CC-BY 4.0', 7.8),
-  khronos('watch', 'ChronographWatch', 'Chronograph Watch', 'Metals', 'CC-BY 4.0', 7.4),
-  // Fox: model CC0, metadata CC-BY 4.0.
-  khronos('fox', 'Fox', 'Fox', 'Animation', 'CC0', 0.2)
-];
+// Generated from the reviewed public selection in mutracer-assets/presets.json.
+export const MODEL_PRESETS: ModelPreset[] = PUBLIC_MODEL_PRESETS;
 
 export interface EnvironmentPreset {
   id: string;

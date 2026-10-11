@@ -3,6 +3,7 @@ import { Check, Crosshair, Focus, Pause, Play, Repeat as Loop, Upload } from 'lu
 import { ViewerEngine, getEngine, setEngine } from '../engine/ViewerEngine';
 import { HANDOFF_HASH, readDroppedItems, takeStashedFiles } from '../engine/droppedFiles';
 import { hashModelPreset, useViewer } from '../store';
+import { MODEL_PRESETS } from '../engine/presets';
 import { StatusBar } from './StatusBar';
 import { Select } from './ui/controls';
 
@@ -95,9 +96,12 @@ function SelectionBox() {
 function Credit() {
   const model = useViewer((s) => s.model);
   if (!model?.credit) return null;
+  const preset = MODEL_PRESETS.find((p) => p.id === model.presetId);
   return (
     <div className="credit">
       {model.sourceUrl ? <a href={model.sourceUrl} target="_blank" rel="noreferrer">{model.credit}</a> : model.credit}
+      {preset?.licenseUrl && <> · <a href={preset.licenseUrl} target="_blank" rel="noreferrer">{preset.license}</a></>}
+      {preset?.attributionUrl && <> · <a href={preset.attributionUrl} target="_blank" rel="noreferrer">Credits &amp; changes</a></>}
     </div>
   );
 }

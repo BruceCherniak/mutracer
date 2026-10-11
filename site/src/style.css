@@ -84,14 +84,14 @@ a { color: inherit; }
 .examples { margin-top: 48px; }
 .examples h2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0 0 16px; font-size: 18px; font-weight: 650; }
 .examples h2 span { color: var(--text-3); font-size: 13px; font-weight: 400; }
-.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
 .card {
   display: grid; gap: 4px; padding: 8px 8px 12px; border: 1px solid var(--border); border-radius: 12px;
   background: var(--panel); text-decoration: none; transition: border-color 0.15s;
 }
 .card:hover { border-color: var(--border-strong); }
 .card:hover strong { color: var(--accent-hover); }
-.card__thumb { aspect-ratio: 4 / 3; margin-bottom: 6px; overflow: hidden; border-radius: 7px; background: var(--raised); }
+.card__thumb { aspect-ratio: 16 / 9; margin-bottom: 6px; overflow: hidden; border-radius: 7px; background: var(--raised); }
 .card__thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
 .card strong { padding-inline: 4px; font-size: 14px; font-weight: 600; }
 .card small { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 2px 8px; padding-inline: 4px; color: var(--text-3); font-size: 12px; }
@@ -114,3 +114,6 @@ a { color: inherit; }
   .drop { min-height: 280px; }
   .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 }
+
+.card-credits { display: flex; flex-wrap: wrap; gap: 3px 10px; padding: 6px 4px; font-size: 10px; color: var(--text-3); }
+.card-credits a { color: inherit; }

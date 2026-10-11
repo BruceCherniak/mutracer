@@ -86,5 +86,29 @@ for (const preset of MODEL_PRESETS) {
   meta.append(tag, license);
   a.append(thumb, name, meta);
   li.append(a);
+  if (preset.licenseUrl) {
+    const credits = document.createElement('div');
+    credits.className = 'card-credits';
+    const author = document.createElement('a');
+    author.href = preset.sourceUrl;
+    author.textContent = preset.credit;
+    const terms = document.createElement('a');
+    terms.href = preset.licenseUrl;
+    terms.textContent = preset.license;
+    for (const link of [author, terms]) {
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    }
+    credits.append(author, terms);
+    if (preset.attributionUrl) {
+      const details = document.createElement('a');
+      details.href = preset.attributionUrl;
+      details.textContent = 'Credits & changes';
+      details.target = '_blank';
+      details.rel = 'noopener noreferrer';
+      credits.append(details);
+    }
+    li.append(credits);
+  }
   cards.append(li);
 }

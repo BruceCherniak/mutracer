@@ -136,7 +136,7 @@ function ExamplesMenu() {
         <Dialog aria-label="Examples">
           {({ close }) => (
             <>
-              <h4>Examples <span>Khronos glTF Sample Assets · loaded on demand</span></h4>
+              <h4>Examples <span>Khronos &amp; Sketchfab · loaded on demand</span></h4>
               <div className="ex-grid">
                 {MODEL_PRESETS.map((preset) => (
                   <button key={preset.id} className="ex" data-on={current === preset.id || undefined}

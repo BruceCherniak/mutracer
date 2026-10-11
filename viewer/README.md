@@ -93,11 +93,13 @@ Notes:
   `dist-viewer/`, and the site build shares one copy with the examples.
 - Opening the viewer with `#open=files` loads files that the home page stashed
   in IndexedDB (`engine/droppedFiles.ts`).
-- The Examples menu and material preset thumbnails are MuTracer renders. After
-  changing a preset, run `await generateThumbnails()` in the browser console
-  of `npm run viewer`; the dev server saves them to `src/assets/thumbnails/`.
-  The material stage (checker cyclorama, dimmed studio light) follows
-  DropMesh's material previews.
+- All example-model previews are managed in the independent
+  [mutracer-assets](https://github.com/pissang/mutracer-assets) repository, including
+  Material spheres, Toy Car and Sheen Chair. They use 720 × 405 WebP (quality 80%),
+  Studio Light and OIDN standard; their saved cameras also apply on fresh loads.
+  Render and review them through that repository's import pipeline. The viewer's
+  `await generateThumbnails()` console tool only generates local material swatches
+  in `src/assets/thumbnails/` (checker cyclorama, dimmed environment light).
 - The visual language comes from DropMesh (same author).
 
 ## Assets
@@ -108,8 +110,23 @@ in the active glTF scene's `extras.mutracerCamera`: `{position: [x,y,z], target:
 viewer centers X/Z and grounds Y. Fresh loads apply this view; a restored saved
 user view takes precedence. Invalid camera metadata falls back to automatic fit.
 
-Nothing large is committed. Example models are loaded at run time from the
-[Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets)
-(CC0 or CC-BY 4.0, credited in the viewport) and HDRIs from
-[Poly Haven](https://polyhaven.com/hdris) (CC0). The material spheres and the
+Example models are loaded on demand. Material spheres are procedural; Toy Car
+and Sheen Chair come from [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets)
+(CC0). All nine examples use the public selection in
+[mutracer-assets](https://github.com/pissang/mutracer-assets). Their metadata is
+copied from that repository's `presets.json` into `engine/publicModelPresets.ts`;
+Downloaded GLBs and all model previews stay in the assets repository or R2.
+The three original samples share the review list; their procedural/Khronos model
+sources are preserved and only their previews/credits are hosted there. GitHub downloads are
+pinned to `v0.1.0`, published with the resources before deployment.
+When publishing a new asset release, update this metadata and its pinned version
+together. R2 permits browser reads from the production site only.
+
+The sample site is a free, noncommercial technical demonstration. Each Sketchfab
+asset retains its own CC BY, CC BY-NC or CC BY-NC-SA 4.0 license, displayed with
+author, source, license and full credits/change notes; these assets are not
+covered by the library's MIT license. Yamaha and Gelatinous Cube require
+noncommercial use, and Yamaha adaptations retain ShareAlike. Jaguar and the
+octopus remain local previews and are excluded from the public list. HDRIs come
+from [Poly Haven](https://polyhaven.com/hdris) (CC0). The material spheres and the
 procedural sky work offline.

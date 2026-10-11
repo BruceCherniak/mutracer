@@ -190,10 +190,13 @@ export class ViewerEngine {
   async loadPreset(id: string, restoreCamera = false) {
     const preset = MODEL_PRESETS.find((p) => p.id === id) ?? MODEL_PRESETS[0];
     // CC-BY models are credited in the viewport; CC0 ones only in the Examples menu.
-    const meta = { presetId: preset.id, credit: preset.license === 'CC-BY 4.0' ? preset.credit : null, sourceUrl: preset.sourceUrl };
+    const meta = { presetId: preset.id, credit: preset.license !== 'CC0' ? `${preset.name} · ${preset.credit}` : null, sourceUrl: preset.sourceUrl };
     const restored = restoreCamera ? { id: `preset:${preset.id}`, meta: { name: preset.name, ...meta } } : undefined;
-    if (!preset.url) return this.load(preset.name, async () => createMaterialSpheres(), meta, restored);
-    return this.load(preset.name, (progress) => loadModelFromURL(preset.url!, progress), meta, restored);
+    return this.load(preset.name, async (progress) => {
+      const model = preset.url ? await loadModelFromURL(preset.url, progress) : createMaterialSpheres();
+      if (preset.camera) model.root.userData.mutracerCamera = preset.camera;
+      return model;
+    }, meta, restored);
   }
 
   /** Shows a model built in code (used by the thumbnail generator). */
