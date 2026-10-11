@@ -110,9 +110,9 @@ Worker startup or runtime failures fall back to the built-in main-thread path.
 The Worker entry is emitted with both the standalone build and npm ESM package;
 serve it from the same origin and allow Workers in your content security policy.
 TLAS construction and per-frame deformation refits/rebuilds remain synchronous.
-Tessellation and other geometry preparation still run on the calling thread.
+Height-map analysis and other geometry preparation still run on the calling thread.
 
-For large scenes or tessellated displacement, do the work in a Web Worker
+For large scenes, do the work in a Web Worker
 before entering the render loop. Resume rendering after resolving the result:
 
 ```ts
@@ -122,11 +122,11 @@ import { prepareForPrecompute, resolveFromPrecompute } from '@meimu/mutracer';
 const prepared = prepareForPrecompute(scene.meshes);
 const {
   geometries, displacementScales, trianglesDisplacements,
-  tessellations, projectiveDisplacements, geometryPostprocessOptions
+  projectiveDisplacements, geometryPostprocessOptions
 } = prepared;
 worker.postMessage(
   { geometries, displacementScales, trianglesDisplacements,
-    tessellations, projectiveDisplacements, geometryPostprocessOptions },
+    projectiveDisplacements, geometryPostprocessOptions },
   prepared.buffers
 );
 worker.onmessage = ({ data }) => {
@@ -142,11 +142,9 @@ self.onmessage = async ({ data: d }) => {
   const result = await precompute(
     d.geometries, d.displacementScales, d.trianglesDisplacements,
     undefined,               // buildBVH: defaults to the built-in builder
-    d.tessellations,
     undefined,               // onProgress
     d.projectiveDisplacements,
-    undefined,               // refineDisplacementTopology (OpenSubdiv)
-    undefined,               // postprocessDisplacementGeometry
+    undefined,               // postprocessGeometry
     d.geometryPostprocessOptions
   );
   self.postMessage(result, result.buffers);
@@ -154,9 +152,8 @@ self.onmessage = async ({ data: d }) => {
 ```
 
 `precompute` accepts an optional `buildBVH` function (for example one that
-calls TinyBVH) and, for `displacementTessellationMode = 'opensubdiv'`, an
-asynchronous `refineDisplacementTopology` callback that runs an OpenSubdiv
-build supplied by the application.
+calls TinyBVH) and a `postprocessGeometry` callback for mesh simplification
+before BVH construction.
 
 ## Rebuilding the WebAssembly module
 

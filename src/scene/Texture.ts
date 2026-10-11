@@ -18,7 +18,7 @@ export default class Texture {
   /** Optional stable identity of the texture in an adapter such as Three.js. */
   source?: object;
   /** Internal key used to reuse CPU height analysis inside a worker. */
-  tessellationCacheKey?: string;
+  displacementDataCacheKey?: string;
   /** @internal */
   needsUpdate: boolean = true;
   /** Incremented by `markUpdated()`. */

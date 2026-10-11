@@ -3,7 +3,6 @@ import {
   cachePreparedMeshGeometry,
   getCachedPreparedMeshGeometry,
   getMeshDisplacementMap,
-  getMeshDisplacementTessellationOptions,
   getMeshGeometrySimplificationRatio,
   getTrianglesDisplacementRange,
   getMeshDisplacementMaterial,
@@ -12,15 +11,7 @@ import {
   getDisplacementTextureDataCacheKey
 } from '../renderer/prepareMeshBVH.js';
 import Texture from '../scene/Texture.js';
-import {
-  copyDisplacementTextureData,
-  getDisplacementTessellationStats,
-  setDisplacementTessellationStats,
-  tessellateDisplacementGeometry,
-  type DisplacementTessellationMode,
-  type DisplacementTessellationOptions,
-  type DisplacementTessellationStats
-} from './tessellateDisplacement.js';
+import { copyDisplacementTextureData } from './displacementData.js';
 import { generateVertexNormals } from './geometry.js';
 import Geometry, {
   AttributeName,
@@ -41,7 +32,6 @@ export type GeometryForTransfer = Record<
 > & {
   dynamic?: boolean;
   bvh?: BVHForTransfer;
-  tessellationStats?: DisplacementTessellationStats;
 };
 
 export interface DisplacementTextureForTransfer {
@@ -55,11 +45,6 @@ export interface DisplacementTextureForTransfer {
   cacheKey: string;
 }
 
-export interface DisplacementTessellationForTransfer {
-  texture: DisplacementTextureForTransfer;
-  options: DisplacementTessellationOptions;
-}
-
 export interface ProjectiveDisplacementForTransfer {
   texture: DisplacementTextureForTransfer;
   uvProjection: OpenPBRMaterial['displacementUvProjection'];
@@ -67,31 +52,20 @@ export interface ProjectiveDisplacementForTransfer {
 }
 
 export interface PrecomputeProgress {
-  stage: 'tessellation' | 'simplification' | 'bvh';
+  stage: 'simplification' | 'bvh';
   progress: number;
-  mode: DisplacementTessellationMode | 'projective';
+  mode: 'projective';
 }
 
-export interface RefinedDisplacementTopology {
-  geometry: Geometry;
-  postTessellationOptions: DisplacementTessellationOptions;
-  triangleBudgetReached: boolean;
-  adaptiveFaceLevelCounts?: number[];
-  recoveredQuadCount?: number;
-  remainingControlTriangleCount?: number;
+export interface GeometryPostprocessOptions {
+  /** Fraction of source triangles retained by simplification. Default `1`. */
+  simplificationRatio?: number;
 }
 
-/** Viewer or application hook for an optional asynchronous topology backend. */
-export type DisplacementTopologyRefiner = (
+/** Application hook that runs before BVH construction. */
+export type GeometryPostprocessor = (
   geometry: Geometry,
-  texture: Texture,
-  options: DisplacementTessellationOptions
-) => Promise<RefinedDisplacementTopology>;
-
-/** Application hook that runs after optional displacement and before BVH construction. */
-export type DisplacementGeometryPostprocessor = (
-  geometry: Geometry,
-  options: DisplacementTessellationOptions
+  options: GeometryPostprocessOptions
 ) => Geometry | Promise<Geometry>;
 
 interface BVHForTransfer {
@@ -107,9 +81,8 @@ export interface PrecomputePreparedData {
   trianglesDisplacements: (ArrayBuffer | undefined)[];
   rawGeometries: Geometry[];
   rawMeshes: Mesh[];
-  tessellations: (DisplacementTessellationForTransfer | undefined)[];
   geometryPostprocessOptions: (
-    | DisplacementTessellationOptions
+    | GeometryPostprocessOptions
     | undefined
   )[];
   projectiveDisplacements: (ProjectiveDisplacementForTransfer | undefined)[];
@@ -168,8 +141,6 @@ export function convertGeometryToTransfer(
     transferGeometry.bvh = geometry.bvh;
   }
   transferGeometry.dynamic = geometry.dynamic;
-  transferGeometry.tessellationStats =
-    getDisplacementTessellationStats(geometry);
   return transferGeometry;
 }
 
@@ -193,9 +164,6 @@ export function convertGeometryFromTransfer(geometry: GeometryForTransfer) {
   });
   ret.dynamic = geometry.dynamic ?? false;
   ret.bvh = geometry.bvh;
-  if (geometry.tessellationStats) {
-    setDisplacementTessellationStats(ret, geometry.tessellationStats);
-  }
   if (geometry.materialIndex) {
     ret.materialIndex = new GeometryAttribute(
       new Int32Array(geometry.materialIndex.buffer),
@@ -240,13 +208,12 @@ function textureFromTransfer(transferred: DisplacementTextureForTransfer) {
   texture.flipY = transferred.flipY;
   texture.uvScale = transferred.uvScale;
   texture.uvOffset = transferred.uvOffset;
-  texture.tessellationCacheKey = transferred.cacheKey;
+  texture.displacementDataCacheKey = transferred.cacheKey;
   return texture;
 }
 
 /**
- * Whether the mesh still needs a BLAS build (or displacement tessellation)
- * before it can be rendered.
+ * Whether the mesh still needs geometry preparation or a BLAS build.
  */
 export function meshNeedsPrecompute(mesh: Mesh) {
   if (!mesh.geometry.position.array.length) return false;
@@ -262,9 +229,8 @@ export function prepareForPrecompute(meshes: Mesh[]): PrecomputePreparedData {
   const displacementScales: number[] = [];
   const trianglesDisplacements: (ArrayBuffer | undefined)[] = [];
   const rawMeshes: Mesh[] = [];
-  const tessellations: (DisplacementTessellationForTransfer | undefined)[] = [];
   const geometryPostprocessOptions: (
-    | DisplacementTessellationOptions
+    | GeometryPostprocessOptions
     | undefined
   )[] = [];
   const projectiveDisplacements: (
@@ -290,29 +256,11 @@ export function prepareForPrecompute(meshes: Mesh[]): PrecomputePreparedData {
         geometries.push(geometry);
         rawMeshes.push(mesh);
         const material = getMeshDisplacementMaterial(mesh);
-        const explicitTexture =
-          cacheKey != null &&
-          !cached &&
-          material.displacementMode === 'tessellated' &&
-          (Math.abs(material.displacementScale) > 1e-6 ||
-            Math.abs(material.displacementBias) > 1e-6)
-            ? material.displacementMap
-            : undefined;
-        if (explicitTexture) {
-          tessellations.push({
-            texture: textureForTransfer(explicitTexture),
-            options: getMeshDisplacementTessellationOptions(mesh)
-          });
-        } else {
-          tessellations.push(undefined);
-        }
         const simplificationRatio = getMeshGeometrySimplificationRatio(mesh);
         geometryPostprocessOptions.push(
           simplificationRatio < 1 ? { simplificationRatio } : undefined
         );
-        const displacementMap = explicitTexture
-          ? undefined
-          : getMeshDisplacementMap(mesh);
+        const displacementMap = getMeshDisplacementMap(mesh);
         const displacementScale = displacementMap
           ? getMeshDisplacementScale(mesh)
           : 0;
@@ -347,7 +295,6 @@ export function prepareForPrecompute(meshes: Mesh[]): PrecomputePreparedData {
       displacementTextureKey: getMeshDisplacementMap(mesh)
         ? getDisplacementTextureDataCacheKey(getMeshDisplacementMap(mesh)!) : undefined
     })),
-    tessellations,
     geometryPostprocessOptions,
     projectiveDisplacements,
     buffers
@@ -366,16 +313,14 @@ export async function precompute(
     trianglesDisplacement?: Float32Array,
     refitKey?: string
   ) => Promise<FlattendBVH>,
-  tessellations: (DisplacementTessellationForTransfer | undefined)[] = [],
   onProgress?: (progress: PrecomputeProgress) => void,
   projectiveDisplacements: (
     | ProjectiveDisplacementForTransfer
     | undefined
   )[] = [],
-  refineDisplacementTopology?: DisplacementTopologyRefiner,
-  postprocessDisplacementGeometry?: DisplacementGeometryPostprocessor,
+  postprocessGeometry?: GeometryPostprocessor,
   geometryPostprocessOptions: (
-    | DisplacementTessellationOptions
+    | GeometryPostprocessOptions
     | undefined
   )[] = []
 ): Promise<PrecomputeResult> {
@@ -384,22 +329,13 @@ export async function precompute(
     GeometryForTransfer,
     Promise<FlattendBVH>
   >();
-  const tessellationIndices = tessellations.flatMap((entry, index) =>
-    entry ? [index] : []
-  );
-  const tessellationOrdinal = new Map(
-    tessellationIndices.map((index, ordinal) => [index, ordinal])
-  );
   const simplificationIndices = inGeometries.flatMap((_, index) => {
-    const options =
-      tessellations[index]?.options ?? geometryPostprocessOptions[index];
+    const options = geometryPostprocessOptions[index];
     return (options?.simplificationRatio ?? 1) < 1 ? [index] : [];
   });
   const simplificationOrdinal = new Map(
     simplificationIndices.map((index, ordinal) => [index, ordinal])
   );
-  const progressMode =
-    tessellations[tessellationIndices[0]]?.options.mode ?? 'projective';
   let completedBvhs = 0;
   const timings: PrecomputeTimings = {
     bvhTimeMs: 0,
@@ -449,79 +385,9 @@ export async function precompute(
     geometries: await Promise.all(
       inGeometries.map(async (geometry, idx) => {
         let newGeo = convertGeometryFromTransfer(geometry);
-        const tessellation = tessellations[idx];
-        if (tessellation) {
-          const texture = textureFromTransfer(tessellation.texture);
-          const ordinal = tessellationOrdinal.get(idx) ?? 0;
-          const reportTessellationProgress = (progress: number) => {
-            onProgress?.({
-              stage: 'tessellation',
-              progress:
-                (ordinal + Math.min(Math.max(progress, 0), 1)) /
-                Math.max(tessellationIndices.length, 1),
-              mode: tessellation.options.mode ?? 'adaptive'
-            });
-          };
-          if (tessellation.options.mode === 'opensubdiv') {
-            if (!refineDisplacementTopology) {
-              throw new Error(
-                'OpenSubdiv displacement requires an asynchronous topology refiner.'
-              );
-            }
-            const sourceGeometry = newGeo;
-            const sourceStats = {
-              triangles: sourceGeometry.indices.array.length / 3,
-              vertices: Geometry.getVertexCount(sourceGeometry)
-            };
-            const topologyStart = typeof performance === 'undefined'
-              ? Date.now()
-              : performance.now();
-            reportTessellationProgress(0.02);
-            const refined = await refineDisplacementTopology(
-              sourceGeometry,
-              texture,
-              tessellation.options
-            );
-            const topologyTimeMs = (typeof performance === 'undefined'
-              ? Date.now()
-              : performance.now()) - topologyStart;
-            reportTessellationProgress(0.52);
-            newGeo = tessellateDisplacementGeometry(
-              refined.geometry,
-              texture,
-              refined.postTessellationOptions,
-              ({ progress }) => reportTessellationProgress(0.52 + progress * 0.4)
-            );
-            const stats = getDisplacementTessellationStats(newGeo);
-            if (stats) {
-              setDisplacementTessellationStats(newGeo, {
-                ...stats,
-                sourceTriangles: sourceStats.triangles,
-                sourceVertices: sourceStats.vertices,
-                topologyTimeMs: stats.topologyTimeMs + topologyTimeMs,
-                buildTimeMs: stats.buildTimeMs + topologyTimeMs,
-                triangleBudgetReached:
-                  stats.triangleBudgetReached || refined.triangleBudgetReached,
-                adaptiveFaceLevelCounts: refined.adaptiveFaceLevelCounts,
-                recoveredQuadCount: refined.recoveredQuadCount,
-                remainingControlTriangleCount:
-                  refined.remainingControlTriangleCount
-              });
-            }
-          } else {
-            newGeo = tessellateDisplacementGeometry(
-              newGeo,
-              texture,
-              tessellation.options,
-              ({ progress }) => reportTessellationProgress(progress)
-            );
-          }
-          reportTessellationProgress(1);
-        }
-        const postprocessOptions =
-          tessellation?.options ?? geometryPostprocessOptions[idx];
+        const postprocessOptions = geometryPostprocessOptions[idx];
         if (
-          postprocessDisplacementGeometry &&
+          postprocessGeometry &&
           postprocessOptions &&
           (postprocessOptions.simplificationRatio ?? 1) < 1
         ) {
@@ -529,9 +395,9 @@ export async function precompute(
           onProgress?.({
             stage: 'simplification',
             progress: ordinal / Math.max(simplificationIndices.length, 1),
-            mode: progressMode
+            mode: 'projective'
           });
-          newGeo = await postprocessDisplacementGeometry(
+          newGeo = await postprocessGeometry(
             newGeo,
             postprocessOptions
           );
@@ -539,7 +405,7 @@ export async function precompute(
             stage: 'simplification',
             progress:
               (ordinal + 1) / Math.max(simplificationIndices.length, 1),
-            mode: progressMode
+            mode: 'projective'
           });
         }
         const projective = projectiveDisplacements[idx];
@@ -553,7 +419,7 @@ export async function precompute(
             material
           )?.buffer;
         }
-        let bvh = tessellation ? undefined : geometry.bvh;
+        let bvh = newGeo.bvh;
         const displacementScale = displacementScales[idx];
         if (!bvh) {
           const bvhPromise = bvhBuildPromiseMap.get(geometry);
@@ -563,10 +429,7 @@ export async function precompute(
             const promise = createBVH(
               newGeo,
               displacementScale,
-              trianglesDisplacements[idx],
-              tessellation?.options.mode === 'uniform'
-                ? tessellation.options.topologyCacheKey
-                : undefined
+              trianglesDisplacements[idx]
             );
             bvhBuildPromiseMap.set(geometry, promise);
             bvh = await promise;
@@ -577,7 +440,7 @@ export async function precompute(
           onProgress({
             stage: 'bvh',
             progress: completedBvhs / Math.max(inGeometries.length, 1),
-            mode: progressMode
+            mode: 'projective'
           });
         }
         const ret = convertGeometryToTransfer(newGeo, buffers);
@@ -609,7 +472,6 @@ export function resolveFromPrecompute(
           snapshot.displacementTextureKey))) return;
     const resolved = convertGeometryFromTransfer(geo);
     if (
-      preparedData.tessellations[idx] ||
       preparedData.geometryPostprocessOptions[idx]
     ) {
       cachePreparedMeshGeometry(preparedData.rawMeshes[idx], resolved);

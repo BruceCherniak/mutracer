@@ -15,8 +15,8 @@ people and coding agents changing the library. For using it, read
   files and `glsl/` are WebGL 2. Both backends share the CPU-side packing
   (`MergedMaterialData`, `lightSampling`, `bvhAccel`, `prepareMeshBVH`).
 - `src/tinybvh/`: TinyBVH WebAssembly adapter and its checked-in `.wasm`.
-- `src/util/`: loaders, Three.js conversion, geometry helpers, displacement
-  tessellation and worker precomputation.
+- `src/util/`: loaders, Three.js conversion, geometry helpers and worker
+  precomputation.
 - `examples/`: Vite examples (`npm run dev`). `tests/`: Vitest.
 - `viewer/`: React test-drive app (`npm run viewer`). Its dependencies are
   devDependencies and never ship in the npm package.

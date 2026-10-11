@@ -3,13 +3,6 @@ import { ColorRGB } from '../types.js';
 import Texture from './Texture.js';
 
 export type UVProjection = 'none' | 'triplanar' | 'spherical' | 'cylindrical';
-export type DisplacementMode = 'projective' | 'tessellated';
-export type DisplacementTessellationMode =
-  | 'uniform'
-  | 'adaptive'
-  | 'opensubdiv';
-export type DisplacementEdgeProfile = 'smooth' | 'beveled' | 'hard' | 'auto';
-export type DisplacementHeightFilter = 'linear' | 'nearest';
 export type MaterialAlphaMode = 'auto' | 'opaque' | 'mask' | 'blend';
 
 export type MaterialTextureName =
@@ -198,41 +191,6 @@ export default class OpenPBRMaterial {
   displacementScale = 0.1;
   /** Ray-marching step for projective displacement. Default `0.01`. */
   displacementStepSize = 0.01;
-  /**
-   * `projective` ray-marches the height field without new triangles;
-   * `tessellated` generates real geometry before rendering. Default `projective`.
-   */
-  displacementMode: DisplacementMode = 'projective';
-  /** Mesh-local offset applied before the scaled height in tessellated mode. Default `0`. */
-  displacementBias = 0;
-  /** Subdivision strategy for tessellated displacement. Default `adaptive`. */
-  displacementTessellationMode: DisplacementTessellationMode = 'adaptive';
-  /** Minimum OpenSubdiv dicing level assigned to every source face. Default `0`. */
-  displacementMinSubdivisionLevel = 0;
-  /** Maximum subdivision level. Default `3`. */
-  displacementMaxSubdivisionLevel = 3;
-  /** Geometric error target of adaptive tessellation, in local units. Default `0.0025`. */
-  displacementMaxError = 0.0025;
-  /** Upper bound on generated triangles per mesh. Default `1000000`. */
-  displacementMaxTriangles = 1_000_000;
-  /** Shapes thresholded height-map transitions for hard-surface displacement. Default `smooth`. */
-  displacementEdgeProfile: DisplacementEdgeProfile = 'smooth';
-  /** Height threshold used by hard edge profiles. Default `0.5`. */
-  displacementThreshold = 0.5;
-  /** Width of a beveled transition in height-map texels. Default `2`. */
-  displacementEdgeWidth = 2;
-  /** Remeshes hard threshold contours and closes their height jumps with walls. Default `true`. */
-  displacementHardContourGeometry = true;
-  /** UV-corner-preserving relaxation passes for generated hard contours. Default `2`. */
-  displacementContourSmoothing = 2;
-  /** Adds bounded Phong-projected samples along hard contours (2^level segments). Default `0`. */
-  displacementContourSubdivisionLevel = 0;
-  /** Dihedral angle in degrees above which generated normals are split. Default `60`. */
-  displacementCreaseAngle = 60;
-  /** Height-map filtering. Default `linear`. */
-  displacementHeightFilter: DisplacementHeightFilter = 'linear';
-  /** Low-passes geometry height samples to the emitted triangle footprint. Default `false`. */
-  displacementHeightPrefilter = false;
   /** Reuses the displacement height map as a shading-only bump map. Default `0`. */
   displacementBumpStrength = 0;
 
@@ -283,19 +241,7 @@ export const materialKeys: (keyof OpenPBRMaterial)[] = [
   'metalnessMap', 'transmissionMap', 'thinFilmMap',
   'shadowCatcher', 'unlit', 'bevelSize', 'mapAlphaUsage', 'uvProjection', 'uvScale',
   'displacementUvProjection', 'displacementUvScale', 'displacementMap',
-  'displacementScale', 'displacementStepSize', 'displacementMode',
-  'displacementBias', 'displacementTessellationMode',
-  'displacementMinSubdivisionLevel', 'displacementMaxSubdivisionLevel',
-  'displacementMaxError',
-  'displacementMaxTriangles',
-  'displacementEdgeProfile',
-  'displacementThreshold', 'displacementEdgeWidth',
-  'displacementHardContourGeometry',
-  'displacementContourSmoothing',
-  'displacementContourSubdivisionLevel',
-  'displacementCreaseAngle', 'displacementHeightFilter',
-  'displacementHeightPrefilter',
-  'displacementBumpStrength',
+  'displacementScale', 'displacementStepSize', 'displacementBumpStrength',
 ];
 
 export const materialTextureKeys = [
@@ -303,7 +249,7 @@ export const materialTextureKeys = [
 ] as const satisfies readonly (keyof OpenPBRMaterial)[];
 
 export const materialGeometryKeys = [
-  'displacementUvProjection', 'displacementUvScale', 'displacementScale', 'displacementStepSize', 'displacementMode', 'displacementBias', 'displacementTessellationMode', 'displacementMinSubdivisionLevel', 'displacementMaxSubdivisionLevel', 'displacementMaxError', 'displacementMaxTriangles', 'displacementEdgeProfile', 'displacementThreshold', 'displacementEdgeWidth', 'displacementHardContourGeometry', 'displacementContourSmoothing', 'displacementContourSubdivisionLevel', 'displacementCreaseAngle', 'displacementHeightFilter', 'displacementHeightPrefilter'
+  'displacementUvProjection', 'displacementUvScale', 'displacementScale', 'displacementStepSize'
 ] as const satisfies readonly (keyof OpenPBRMaterial)[];
 
 export const materialParamKeys = [

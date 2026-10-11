@@ -94,8 +94,6 @@ interface MeshSnapshot {
   storage: unknown[];
   materials: OpenPBRMaterial[];
   simplification: Mesh['geometrySimplificationRatio'];
-  faceLevels: Mesh['displacementFaceLevels'];
-  faceHash: Mesh['displacementFaceLevelsHash'];
 }
 interface Snapshot {
   meshList: Mesh[];
@@ -128,8 +126,7 @@ export class SceneChangeDetector {
       if (!prev || prev.mesh !== mesh || prev.geometry !== mesh.geometry ||
         prev.dynamic !== mesh.geometry.dynamic || !geometryStorageMatches(mesh.geometry, prev.storage) || prev.materials.length !== mesh.materials.length ||
         prev.materials.some((m, k) => m !== mesh.materials[k]) ||
-        prev.simplification !== mesh.geometrySimplificationRatio ||
-        prev.faceLevels !== mesh.displacementFaceLevels || prev.faceHash !== mesh.displacementFaceLevelsHash) full = true;
+        prev.simplification !== mesh.geometrySimplificationRatio) full = true;
       if (prev?.geometry === mesh.geometry && prev.version !== mesh.geometry.version) geometries.add(mesh.geometry);
       if (prev?.mesh === mesh) {
         for (let k = 0; k < 16; k++) {
@@ -168,8 +165,7 @@ export class SceneChangeDetector {
         let item = next!.meshes[i];
         if (!item) {
           item = { mesh, geometry: mesh.geometry, version: mesh.geometry.version, dynamic: mesh.geometry.dynamic, storage: [],
-            materials: [], simplification: mesh.geometrySimplificationRatio, faceLevels: mesh.displacementFaceLevels,
-            faceHash: mesh.displacementFaceLevelsHash };
+            materials: [], simplification: mesh.geometrySimplificationRatio };
           next!.meshes[i] = item;
         }
         item.mesh = mesh; item.geometry = mesh.geometry; item.version = mesh.geometry.version;
@@ -177,7 +173,6 @@ export class SceneChangeDetector {
         item.materials.length = mesh.materials.length;
         for (let k = 0; k < mesh.materials.length; k++) item.materials[k] = mesh.materials[k];
         item.simplification = mesh.geometrySimplificationRatio;
-        item.faceLevels = mesh.displacementFaceLevels; item.faceHash = mesh.displacementFaceLevelsHash;
         next!.matrices.set(mesh.matrixWorld, i * 16);
       });
       for (const material of next.materials.keys()) if (!seen.has(material)) next.materials.delete(material);

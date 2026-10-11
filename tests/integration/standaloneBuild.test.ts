@@ -58,21 +58,14 @@ describe('standalone library builds', () => {
     expect(geometry.bvh!.buffer.byteLength).toBeGreaterThan(0);
   });
 
-  it('excludes the tessellator implementation and its public helper', () => {
-    for (const chunk of chunks) {
-      expect(Object.keys(chunk.modules).some(id => id.endsWith('/util/tessellateDisplacement.ts'))).toBe(false);
-    }
-    expect('buildOpenSubdivAdaptiveFaceLevels' in api).toBe(false);
-  });
-
-  it('builds ordinary and projective BVHs but rejects tessellation', async () => {
+  it('builds ordinary and projective BVHs', async () => {
     const material = new api.OpenPBRMaterial();
     const mesh = new api.Mesh(api.createPlaneGeometry(), material);
     async function precomputeMesh() {
       const prepared = api.prepareForPrecompute([mesh]);
       return api.precompute(
         prepared.geometries, prepared.displacementScales,
-        prepared.trianglesDisplacements, undefined, prepared.tessellations,
+        prepared.trianglesDisplacements, undefined,
         undefined, prepared.projectiveDisplacements
       );
     }
@@ -81,7 +74,5 @@ describe('standalone library builds', () => {
       data: new Uint8Array([255, 255, 255, 255]), width: 1, height: 1
     });
     expect((await precomputeMesh()).geometries[0].bvh!.buffer.byteLength).toBeGreaterThan(0);
-    material.displacementMode = 'tessellated';
-    await expect(precomputeMesh()).rejects.toThrow('Displacement tessellation is not available');
   });
 });

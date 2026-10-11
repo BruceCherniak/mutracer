@@ -32,7 +32,7 @@ gold.markUpdated();
 Both backends update parameter buffers without merging geometry or rebuilding
 BVHs. Emission changes also refresh emission-related sampling state; texture
 changes rebuild the atlas. Displacement geometry settings require a full mesh
-update, as do emission edits on tessellated displacement materials. Shading-only
+update. Shading-only
 `displacementBumpStrength` edits use the textures path.
 
 Materials occupy slots by object identity. Sharing one material shares its slot;
@@ -109,32 +109,14 @@ start.
 
 ## Displacement
 
-`displacementMap` (red channel) with `displacementScale` (local units) and
-`displacementBias` supports two modes:
+`displacementMap` (red channel) with `displacementScale` (local units)
+ray-marches the height field in the shader. `displacementStepSize` controls the
+ray-marching step (default `0.01`). No extra triangles are generated.
+`displacementUvProjection` (default `'none'`) and `displacementUvScale`
+(default `1`) control height-map coordinates.
 
-- `displacementMode = 'projective'` (default) ray-marches the height field in
-  the shader (`displacementStepSize`). No extra geometry; silhouettes stay flat.
-- `displacementMode = 'tessellated'` generates real triangles before rendering,
-  so silhouettes, shadows and intersections are displaced. The geometry is
-  built automatically with the BVH; for large meshes, run it in a worker with
-  the [precompute helpers](./bvh.md#worker-precomputation).
-
-Tessellation options:
-
-| Property | Default | Description |
-| --- | --- | --- |
-| `displacementTessellationMode` | `'adaptive'` | `'uniform'`, `'adaptive'` or `'opensubdiv'` (needs a topology refiner passed to `precompute`) |
-| `displacementMinSubdivisionLevel`, `displacementMaxSubdivisionLevel` | 0, 3 | Subdivision range |
-| `displacementMaxError` | 0.0025 | Adaptive geometric error target |
-| `displacementMaxTriangles` | 1,000,000 | Hard cap per mesh |
-| `displacementEdgeProfile` | `'smooth'` | `'smooth'`, `'beveled'`, `'hard'`, `'auto'` for thresholded maps |
-| `displacementThreshold`, `displacementEdgeWidth` | 0.5, 2 | Hard-edge threshold and bevel width (texels) |
-| `displacementHardContourGeometry` | `true` | Remesh hard contours with vertical walls |
-| `displacementCreaseAngle` | 60 | Normal split angle (degrees) |
-| `displacementBumpStrength` | 0 | Reuse the height map as bump detail |
-
-The remaining `displacement*` properties are documented in the type
-declarations.
+`displacementBumpStrength` (default `0`) reuses the height map for bump shading.
+The remaining `displacement*` properties are documented in the type declarations.
 
 ## Implementation notes
 

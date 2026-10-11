@@ -59,8 +59,8 @@
   parameters without geometry work. Emission edits also refresh sampling state,
   and texture edits rebuild the atlas. Non-emissive texture edits skip emissive
   triangle collection. Emissive bindings cache transformed triangles, and
-  environment power is cached while its image is unchanged. Displacement geometry settings and
-  tessellated displacement emission edits require full mesh updates.
+  environment power is cached while its image is unchanged. Displacement geometry settings
+  require full mesh updates.
 - Analytic-light parameter edits retain the environment map. Ambient/environment
   edits resynthesize it. Rect-light texture edits still require a full mesh
   update because those textures belong to the material atlas.

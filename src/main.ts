@@ -67,10 +67,6 @@ export {
 } from './scene/Geometry.js';
 export { default as OpenPBRMaterial } from './scene/OpenPBRMaterial.js';
 export type {
-  DisplacementEdgeProfile,
-  DisplacementHeightFilter,
-  DisplacementMode,
-  DisplacementTessellationMode,
   MaterialAlphaMode,
   UVProjection
 } from './scene/OpenPBRMaterial.js';

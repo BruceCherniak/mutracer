@@ -239,10 +239,9 @@ describe('MergedMaterialData texture arrays', () => {
     expect(packed[9 * 4 + 3]).toBe(0);
   });
 
-  it('reuses tessellated displacement as a shading-only bump map', () => {
+  it('reuses the projective displacement height map for bump shading', () => {
     stubCanvas();
     const material = new OpenPBRMaterial();
-    material.displacementMode = 'tessellated';
     material.displacementMap = new Texture({
       width: 32,
       height: 16
@@ -253,7 +252,7 @@ describe('MergedMaterialData texture arrays', () => {
     const packed = materialData.getBufferArray();
 
     expect(materialData.defines.NUM_BUMP_MAPS).toBe(1);
-    expect(materialData.bufferData.displacementMapIndex).toEqual([-1]);
+    expect(materialData.bufferData.displacementMapIndex).toEqual([0]);
     expect(materialData.bufferData.bumpMapIndex).toEqual([0]);
     expect(packed[23 * 4]).toBe(0);
     expect(packed[23 * 4 + 1]).toBe(40);

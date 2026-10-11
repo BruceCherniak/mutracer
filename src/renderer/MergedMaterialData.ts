@@ -698,13 +698,6 @@ class MergedMaterialData {
     const bumpMapIndices = maps.indices.displacementMap.map((index, materialIndex) =>
       materials[materialIndex].displacementBumpStrength > 0 ? index : -1
     );
-    // Explicitly tessellated displacement has already become ordinary
-    // geometry. Do not upload or intersect its height map a second time.
-    materials.forEach((material, index) => {
-      if (material.displacementMode === 'tessellated') {
-        maps.indices.displacementMap[index] = -1;
-      }
-    });
     // Displacement map must have the same width and height.
     // And it must be power of 2.
     const displacementMaps = (this._displacementMaps =

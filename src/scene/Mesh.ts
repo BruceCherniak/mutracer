@@ -11,10 +11,6 @@ export default class Mesh extends SceneNode {
   materials: OpenPBRMaterial[];
   /** Indexed triangle geometry supplied to the constructor; no default. */
   geometry: Geometry;
-  /** Optional per-source-face OpenSubdiv dicing levels. */
-  displacementFaceLevels?: Uint8Array;
-  /** Stable hash used to separate camera-dependent tessellation cache entries. */
-  displacementFaceLevelsHash = 0;
   /** Optional mesh-local ratio retained by geometry simplification. */
   geometrySimplificationRatio?: number;
 

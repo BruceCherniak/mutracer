@@ -18,10 +18,10 @@ it('classifies parameters, emission, textures and geometry with the heaviest lev
   tracker.capture([m]); m.displacementScale++;
   expect(tracker.classify([m]).level).toBe('geometry');
 });
-it('treats tessellated emission and displacement texture edits as geometry changes', () => {
-  const m = new OpenPBRMaterial(); m.displacementMode = 'tessellated'; m.displacementMap = texture();
+it('updates emission sampling and rebuilds projective bounds after height texture edits', () => {
+  const m = new OpenPBRMaterial(); m.displacementMap = texture();
   const tracker = new MaterialChangeTracker(); tracker.capture([m]); m.emissionColor[0] = 0.5;
-  expect(tracker.classify([m]).level).toBe('geometry');
+  expect(tracker.classify([m]).level).toBe('emission');
   tracker.capture([m]); m.displacementMap.markUpdated();
   expect(tracker.classify([m]).level).toBe('geometry');
 });

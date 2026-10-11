@@ -173,32 +173,12 @@ function convertMaterial(
   material.displacementScale = Number.isFinite(displacementScale)
     ? displacementScale
     : material.displacementScale;
-  const displacementBias = Number(standardMaterial.displacementBias);
-  material.displacementBias = Number.isFinite(displacementBias)
-    ? displacementBias
-    : 0;
   const displacementStepSize = Number(
     standardMaterial.userData.mutracerDisplacementStepSize
   );
   if (Number.isFinite(displacementStepSize)) {
     material.displacementStepSize = Math.max(0.000001, displacementStepSize);
   }
-  const displacementMode = standardMaterial.userData
-    .mutracerDisplacementMode;
-  material.displacementMode = displacementMode === 'tessellated'
-    ? 'tessellated'
-    : 'projective';
-  const tessellationMode = standardMaterial.userData
-    .mutracerDisplacementTessellationMode;
-  material.displacementTessellationMode = tessellationMode === 'opensubdiv-adaptive'
-    ? 'opensubdiv'
-    : [
-        'uniform',
-        'adaptive',
-        'opensubdiv'
-      ].includes(tessellationMode)
-      ? tessellationMode
-      : 'adaptive';
   const uvProjection = standardMaterial.userData
     .mutracerDisplacementUvProjection;
   if (
@@ -215,107 +195,6 @@ function convertMaterial(
   if (Number.isFinite(displacementUvScale)) {
     material.displacementUvScale = Math.max(displacementUvScale, 0.000001);
   }
-  const resolvedMaxSubdivisionLevel = Number(
-    standardMaterial.userData
-      .mutracerDisplacementResolvedMaxSubdivisionLevel
-  );
-  const maxSubdivisionLevel = Number.isFinite(resolvedMaxSubdivisionLevel)
-    ? resolvedMaxSubdivisionLevel
-    : Number(
-        standardMaterial.userData.mutracerDisplacementMaxSubdivisionLevel
-      );
-  if (Number.isFinite(maxSubdivisionLevel)) {
-    material.displacementMaxSubdivisionLevel = Math.min(
-      8,
-      Math.max(0, Math.floor(maxSubdivisionLevel))
-    );
-  }
-  const resolvedMinSubdivisionLevel = Number(
-    standardMaterial.userData
-      .mutracerDisplacementResolvedMinSubdivisionLevel
-  );
-  if (Number.isFinite(resolvedMinSubdivisionLevel)) {
-    material.displacementMinSubdivisionLevel = Math.min(
-      material.displacementMaxSubdivisionLevel,
-      Math.max(0, Math.floor(resolvedMinSubdivisionLevel))
-    );
-  }
-  const maxError = Number(
-    standardMaterial.userData.mutracerDisplacementMaxError
-  );
-  if (Number.isFinite(maxError)) {
-    material.displacementMaxError = Math.max(0, maxError);
-  }
-  const maxTriangles = Number(
-    standardMaterial.userData.mutracerDisplacementMaxTriangles
-  );
-  if (Number.isFinite(maxTriangles)) {
-    material.displacementMaxTriangles = Math.min(
-      8_000_000,
-      Math.max(1, Math.floor(maxTriangles))
-    );
-  }
-  const edgeProfile = standardMaterial.userData
-    .mutracerDisplacementEdgeProfile;
-  if (
-    edgeProfile === 'smooth' ||
-    edgeProfile === 'beveled' ||
-    edgeProfile === 'hard' ||
-    edgeProfile === 'auto'
-  ) {
-    material.displacementEdgeProfile = edgeProfile;
-  }
-  const threshold = Number(
-    standardMaterial.userData.mutracerDisplacementThreshold
-  );
-  if (Number.isFinite(threshold)) {
-    material.displacementThreshold = Math.min(Math.max(threshold, 0), 1);
-  }
-  const edgeWidth = Number(
-    standardMaterial.userData.mutracerDisplacementEdgeWidth
-  );
-  if (Number.isFinite(edgeWidth)) {
-    material.displacementEdgeWidth = Math.max(edgeWidth, 0.01);
-  }
-  const hardContourGeometry = standardMaterial.userData
-    .mutracerDisplacementHardContourGeometry;
-  if (typeof hardContourGeometry === 'boolean') {
-    material.displacementHardContourGeometry = hardContourGeometry;
-  }
-  const contourSmoothing = Number(
-    standardMaterial.userData.mutracerDisplacementContourSmoothing
-  );
-  if (Number.isFinite(contourSmoothing)) {
-    material.displacementContourSmoothing = Math.min(
-      Math.max(Math.floor(contourSmoothing), 0),
-      8
-    );
-  }
-  const contourSubdivisionLevel = Number(
-    standardMaterial.userData.mutracerDisplacementContourSubdivisionLevel
-  );
-  if (Number.isFinite(contourSubdivisionLevel)) {
-    material.displacementContourSubdivisionLevel = Math.min(
-      Math.max(Math.floor(contourSubdivisionLevel), 0),
-      3
-    );
-  }
-  const creaseAngle = Number(
-    standardMaterial.userData.mutracerDisplacementCreaseAngle
-  );
-  if (Number.isFinite(creaseAngle)) {
-    material.displacementCreaseAngle = Math.min(
-      Math.max(creaseAngle, 0),
-      180
-    );
-  }
-  const heightFilter = standardMaterial.userData
-    .mutracerDisplacementHeightFilter;
-  if (heightFilter === 'linear' || heightFilter === 'nearest') {
-    material.displacementHeightFilter = heightFilter;
-  }
-  material.displacementHeightPrefilter =
-    standardMaterial.userData.mutracerDisplacementHeightPrefilter === true;
   const bumpStrength = Number(
     standardMaterial.userData.mutracerDisplacementBumpStrength
   );

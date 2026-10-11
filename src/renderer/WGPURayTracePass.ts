@@ -306,8 +306,6 @@ class WGPURayTracePass {
     materialVersions: number[];
     geometryVersion: number;
     simplification: Mesh['geometrySimplificationRatio'];
-    faceLevels: Mesh['displacementFaceLevels'];
-    faceHash: number;
     positionArray: Float32Array;
     positionItemSize: number;
     indexArray: Uint16Array | Uint32Array;
@@ -1749,8 +1747,6 @@ ${rayTraceCompute({
       materialVersions: mesh.materials.map(material => material.version),
       geometryVersion: mesh.geometry.version,
       simplification: mesh.geometrySimplificationRatio,
-      faceLevels: mesh.displacementFaceLevels,
-      faceHash: mesh.displacementFaceLevelsHash,
       positionArray: mesh.geometry.position.array,
       positionItemSize: mesh.geometry.position.itemSize,
       indexArray: mesh.geometry.indices.array,
@@ -1804,7 +1800,6 @@ ${rayTraceCompute({
           ) &&
           next.geometryVersion === resident.geometryVersion &&
           next.simplification === resident.simplification &&
-          next.faceLevels === resident.faceLevels && next.faceHash === resident.faceHash &&
           this._materialChanges.classify(next.materials).level === 'params' &&
           next.positionArray === resident.positionArray &&
           next.indexArray === resident.indexArray &&
@@ -1836,7 +1831,6 @@ ${rayTraceCompute({
           next.geometry !== prev.geometry ||
           next.bvh !== prev.bvh ||
           next.simplification !== prev.simplification ||
-          next.faceLevels !== prev.faceLevels || next.faceHash !== prev.faceHash ||
           next.materials.length !== prev.materials.length ||
           next.materials.some((material, k) => material !== prev.materials[k]) ||
           next.materialVersions.some((hash, k) => hash !== prev.materialVersions[k]) ||

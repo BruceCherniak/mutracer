@@ -41,12 +41,7 @@ function texturesFromMaterials(
   for (const material of materials) {
     const isTextureLoaded =
       material[textureName] &&
-      material[textureName]!.image &&
-      !(
-        textureName === 'displacementMap' &&
-        material.displacementMode === 'tessellated' &&
-        material.displacementBumpStrength <= 0
-      );
+      material[textureName]!.image;
 
     if (!isTextureLoaded) {
       indices.push(-1);

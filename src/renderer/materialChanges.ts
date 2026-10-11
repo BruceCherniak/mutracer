@@ -28,7 +28,7 @@ function snapshot(material: OpenPBRMaterial): MaterialSnapshot {
     version: material.version,
     paramKey: key(material, materialParamKeys),
     textureKey: materialTextureKeys.map(k => { const value = material[k]; return typeof value === 'number' ? String(value) : textureKey(value); }).join('|'),
-    // Height maps affect both tessellated geometry and projective BLAS bounds.
+    // Height maps affect projective BLAS bounds.
     geometryKey: key(material, materialGeometryKeys) + '|' + textureKey(material.displacementMap),
     emissive: key(material, ['emissionColor', 'emissionLuminance', 'unlit', 'shadowCatcher']),
     emissiveMap: textureKey(material.emissiveMap)
@@ -56,8 +56,7 @@ export class MaterialChangeTracker {
       const emissionChanged = !previous || previous.emissive !== next.emissive;
       emission ||= emissionChanged;
       emissiveMap ||= !previous || previous.emissiveMap !== next.emissiveMap;
-      const candidate: MaterialUpdateLevel = !previous || next.geometryKey !== previous.geometryKey ||
-        emissionChanged && material.displacementMode === 'tessellated' && !!material.displacementMap
+      const candidate: MaterialUpdateLevel = !previous || next.geometryKey !== previous.geometryKey
         ? 'geometry' : next.textureKey !== previous.textureKey ? 'textures' : emissionChanged ? 'emission' : 'params';
       if (ranks[candidate] > ranks[level]) level = candidate;
     }

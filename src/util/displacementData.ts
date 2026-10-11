@@ -1,6 +1,4 @@
-import type Geometry from '../scene/Geometry.js';
 import Texture, { isTextureDataSource } from '../scene/Texture.js';
-import type { DisplacementTessellationStats } from './tessellateDisplacement.js';
 
 export interface HeightPixels {
   data: Float32Array | Uint8Array | Uint8ClampedArray | Int32Array;
@@ -20,20 +18,6 @@ const heightPixelCopies = new WeakMap<
     height: number;
   }
 >();
-
-const tessellationStats = new WeakMap<Geometry, DisplacementTessellationStats>();
-
-export function getDisplacementTessellationStats(geometry: Geometry) {
-  return tessellationStats.get(geometry);
-}
-
-export function setDisplacementTessellationStats(
-  geometry: Geometry,
-  stats: DisplacementTessellationStats
-) {
-  tessellationStats.set(geometry, stats);
-  return geometry;
-}
 
 export function getHeightPixels(texture: Texture): HeightPixels | undefined {
   const image = texture.image;

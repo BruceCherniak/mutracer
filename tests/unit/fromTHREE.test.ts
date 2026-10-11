@@ -248,7 +248,7 @@ describe('Three.js scene conversion', () => {
     expect(result.background && !Array.isArray(result.background)).toBe(true);
   });
 
-  it('converts Three.js displacement settings and tessellation metadata', () => {
+  it('converts Three.js projective displacement settings', () => {
     const displacementMap = new THREE.DataTexture(
       new Uint8Array([128]),
       1,
@@ -258,29 +258,15 @@ describe('Three.js scene conversion', () => {
     const material = new THREE.MeshStandardMaterial({
       displacementMap,
       displacementScale: 0.25,
-      displacementBias: -0.125
     });
-    material.userData.mutracerDisplacementMode = 'tessellated';
     material.userData.mutracerUvProjection = 'spherical';
     material.userData.mutracerUvScale = [1.5, 2.5];
     material.userData.mutracerUvReferenceLength = 2;
     material.userData.mutracerDisplacementStepSize = 0.004;
     material.userData.mutracerDisplacementUvProjection = 'cylindrical';
     material.userData.mutracerDisplacementUvScale = 2.5;
-    material.userData.mutracerDisplacementTessellationMode = 'uniform';
-    material.userData.mutracerDisplacementMaxSubdivisionLevel = 3.8;
-    material.userData.mutracerDisplacementResolvedMaxSubdivisionLevel = 2.8;
-    material.userData.mutracerDisplacementResolvedMinSubdivisionLevel = 2.8;
-    material.userData.mutracerDisplacementMaxError = 0.001;
-    material.userData.mutracerDisplacementMaxTriangles = 123_456;
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(), material);
     mesh.userData.mutracerMeshoptSimplificationRatio = 0.3;
-    material.userData.mutracerDisplacementEdgeProfile = 'beveled';
-    material.userData.mutracerDisplacementThreshold = 0.42;
-    material.userData.mutracerDisplacementEdgeWidth = 3.5;
-    material.userData.mutracerDisplacementCreaseAngle = 48;
-    material.userData.mutracerDisplacementHeightFilter = 'nearest';
-    material.userData.mutracerDisplacementHeightPrefilter = true;
     material.userData.mutracerDisplacementBumpStrength = 12;
     const scene = new THREE.Scene();
     scene.add(mesh);
@@ -290,45 +276,16 @@ describe('Three.js scene conversion', () => {
     expect(converted.displacementMap?.image).toBe(displacementMap.image);
     expect(converted).toMatchObject({
       displacementScale: 0.25,
-      displacementBias: -0.125,
       uvProjection: 'spherical',
       uvScale: [1.5, 2.5],
-      displacementMode: 'tessellated',
       displacementStepSize: 0.004,
       displacementUvProjection: 'cylindrical',
       displacementUvScale: 2.5,
-      displacementTessellationMode: 'uniform',
-      displacementMinSubdivisionLevel: 2,
-      displacementMaxSubdivisionLevel: 2,
-      displacementMaxError: 0.001,
-      displacementMaxTriangles: 123_456,
-      displacementEdgeProfile: 'beveled',
-      displacementThreshold: 0.42,
-      displacementEdgeWidth: 3.5,
-      displacementCreaseAngle: 48,
-      displacementHeightFilter: 'nearest',
-      displacementHeightPrefilter: true,
       displacementBumpStrength: 12
     });
     expect(fromTHREEScene(scene).meshes[0].geometrySimplificationRatio)
       .toBe(0.3);
   });
-
-  it.each(['opensubdiv'] as const)(
-    'preserves the %s displacement tessellation mode',
-    (mode) => {
-      const material = new THREE.MeshStandardMaterial();
-      material.userData.mutracerDisplacementMode = 'tessellated';
-      material.userData.mutracerDisplacementTessellationMode = mode;
-      const scene = new THREE.Scene();
-      scene.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
-
-      expect(
-        fromTHREEScene(scene).meshes[0].materials[0]
-          .displacementTessellationMode
-      ).toBe(mode);
-    }
-  );
 
   it('converts viewer thin-film metadata', () => {
     const material = new THREE.MeshPhysicalMaterial({ transmission: 1 });

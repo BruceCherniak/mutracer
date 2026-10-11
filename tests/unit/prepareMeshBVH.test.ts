@@ -61,7 +61,7 @@ it('packs material variants in 144-byte instances and retains material slots dur
 
 it('separates projective displacement BLAS caches for different material projections', async () => {
   const { createCubeGeometry } = await import('../../src/util/commonGeometry');
-  const { getPreparedMeshGeometry, getMeshDisplacementTessellationOptions } = await import('../../src/renderer/prepareMeshBVH');
+  const { getPreparedMeshGeometry } = await import('../../src/renderer/prepareMeshBVH');
   const { default: Texture } = await import('../../src/scene/Texture');
   const material = new OpenPBRMaterial();
   material.displacementMap = new Texture({ data: new Uint8Array(16), width: 2, height: 2 }); material.displacementScale = .1;
@@ -71,7 +71,5 @@ it('separates projective displacement BLAS caches for different material project
   const ga = getPreparedMeshGeometry(a), gb = getPreparedMeshGeometry(b);
   expect(ga).not.toBe(gb); expect(ga.position).toBe(geo.position);
   expect(getPreparedMeshGeometry(a)).toBe(ga);
-  expect(getMeshDisplacementTessellationOptions(a).uvProjection).toBe('triplanar');
-  expect(getMeshDisplacementTessellationOptions(b).uvProjection).toBe('spherical');
   expect(material.displacementUvProjection).toBe('none');
 });

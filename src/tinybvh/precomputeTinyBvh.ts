@@ -61,7 +61,7 @@ export async function precomputeTinyBvh(
   if (dynamicMeshes.length) {
     const prepared = prepareForPrecompute(dynamicMeshes);
     const result = await precompute(prepared.geometries, prepared.displacementScales,
-      prepared.trianglesDisplacements, undefined, prepared.tessellations, onProgress, prepared.projectiveDisplacements);
+      prepared.trianglesDisplacements, undefined, onProgress, prepared.projectiveDisplacements);
     resolveFromPrecompute(result, prepared);
     dynamicResult = result;
   }
@@ -104,7 +104,6 @@ export async function precomputeTinyBvh(
               geometry, displacementScale, trianglesDisplacement,
               requestedLayout, refitKey, spatialSplits
             ),
-      prepared.tessellations,
       onProgress,
       prepared.projectiveDisplacements
     );

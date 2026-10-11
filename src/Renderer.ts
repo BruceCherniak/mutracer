@@ -706,7 +706,7 @@ export default class Renderer {
         const prepared = prepareForPrecompute(pending);
         const result = await precompute(prepared.geometries, prepared.displacementScales,
           prepared.trianglesDisplacements, useWorker ? (geometry, scale, displacement) =>
-            buildBvhInWorker(geometry, scale, displacement) : undefined, prepared.tessellations,
+            buildBvhInWorker(geometry, scale, displacement) : undefined,
           undefined, prepared.projectiveDisplacements);
         resolveFromPrecompute(result, prepared);
       }
