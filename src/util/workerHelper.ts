@@ -1,9 +1,7 @@
 import { buildBLAS, emptyBLAS, FlattendBVH } from '../renderer/bvhAccel.js';
 import {
-  cachePreparedMeshGeometry,
   getCachedPreparedMeshGeometry,
   getMeshDisplacementMap,
-  getMeshGeometrySimplificationRatio,
   getTrianglesDisplacementRange,
   getMeshDisplacementMaterial,
   getMeshDisplacementScale,
@@ -52,21 +50,9 @@ export interface ProjectiveDisplacementForTransfer {
 }
 
 export interface PrecomputeProgress {
-  stage: 'simplification' | 'bvh';
+  stage: 'bvh';
   progress: number;
-  mode: 'projective';
 }
-
-export interface GeometryPostprocessOptions {
-  /** Fraction of source triangles retained by simplification. Default `1`. */
-  simplificationRatio?: number;
-}
-
-/** Application hook that runs before BVH construction. */
-export type GeometryPostprocessor = (
-  geometry: Geometry,
-  options: GeometryPostprocessOptions
-) => Geometry | Promise<Geometry>;
 
 interface BVHForTransfer {
   builder?: 'builtin' | 'tinybvh';
@@ -81,10 +67,6 @@ export interface PrecomputePreparedData {
   trianglesDisplacements: (ArrayBuffer | undefined)[];
   rawGeometries: Geometry[];
   rawMeshes: Mesh[];
-  geometryPostprocessOptions: (
-    | GeometryPostprocessOptions
-    | undefined
-  )[];
   projectiveDisplacements: (ProjectiveDisplacementForTransfer | undefined)[];
   buffers: ArrayBuffer[];
   /** Internal input revisions used to discard results superseded during async work. */
@@ -124,7 +106,7 @@ export function convertGeometryToTransfer(
         : attr.array.byteOffset !== 0 || attr.array.byteLength !== attr.array.buffer.byteLength
           ? attr.array.slice() : attr.array).buffer as ArrayBuffer);
     obj[attrName] = attr && {
-      // Always use Uint32Array to simplify
+      // Use Uint32Array for transferred indices
       buffer: buffer!,
       itemSize: attr.itemSize
     };
@@ -227,10 +209,6 @@ export function prepareForPrecompute(meshes: Mesh[]): PrecomputePreparedData {
   const displacementScales: number[] = [];
   const trianglesDisplacements: (ArrayBuffer | undefined)[] = [];
   const rawMeshes: Mesh[] = [];
-  const geometryPostprocessOptions: (
-    | GeometryPostprocessOptions
-    | undefined
-  )[] = [];
   const projectiveDisplacements: (
     | ProjectiveDisplacementForTransfer
     | undefined
@@ -254,10 +232,6 @@ export function prepareForPrecompute(meshes: Mesh[]): PrecomputePreparedData {
         geometries.push(geometry);
         rawMeshes.push(mesh);
         const material = getMeshDisplacementMaterial(mesh);
-        const simplificationRatio = getMeshGeometrySimplificationRatio(mesh);
-        geometryPostprocessOptions.push(
-          simplificationRatio < 1 ? { simplificationRatio } : undefined
-        );
         const displacementMap = getMeshDisplacementMap(mesh);
         const displacementScale = displacementMap
           ? getMeshDisplacementScale(mesh)
@@ -293,7 +267,6 @@ export function prepareForPrecompute(meshes: Mesh[]): PrecomputePreparedData {
       displacementTextureKey: getMeshDisplacementMap(mesh)
         ? getDisplacementTextureDataCacheKey(getMeshDisplacementMap(mesh)!) : undefined
     })),
-    geometryPostprocessOptions,
     projectiveDisplacements,
     buffers
   };
@@ -314,11 +287,6 @@ export async function precompute(
   projectiveDisplacements: (
     | ProjectiveDisplacementForTransfer
     | undefined
-  )[] = [],
-  postprocessGeometry?: GeometryPostprocessor,
-  geometryPostprocessOptions: (
-    | GeometryPostprocessOptions
-    | undefined
   )[] = []
 ): Promise<PrecomputeResult> {
   const buffers: ArrayBuffer[] = [];
@@ -326,13 +294,6 @@ export async function precompute(
     GeometryForTransfer,
     Promise<FlattendBVH>
   >();
-  const simplificationIndices = inGeometries.flatMap((_, index) => {
-    const options = geometryPostprocessOptions[index];
-    return (options?.simplificationRatio ?? 1) < 1 ? [index] : [];
-  });
-  const simplificationOrdinal = new Map(
-    simplificationIndices.map((index, ordinal) => [index, ordinal])
-  );
   let completedBvhs = 0;
   const timings: PrecomputeTimings = {
     bvhTimeMs: 0,
@@ -370,30 +331,7 @@ export async function precompute(
   const res = {
     geometries: await Promise.all(
       inGeometries.map(async (geometry, idx) => {
-        let newGeo = convertGeometryFromTransfer(geometry);
-        const postprocessOptions = geometryPostprocessOptions[idx];
-        if (
-          postprocessGeometry &&
-          postprocessOptions &&
-          (postprocessOptions.simplificationRatio ?? 1) < 1
-        ) {
-          const ordinal = simplificationOrdinal.get(idx) ?? 0;
-          onProgress?.({
-            stage: 'simplification',
-            progress: ordinal / Math.max(simplificationIndices.length, 1),
-            mode: 'projective'
-          });
-          newGeo = await postprocessGeometry(
-            newGeo,
-            postprocessOptions
-          );
-          onProgress?.({
-            stage: 'simplification',
-            progress:
-              (ordinal + 1) / Math.max(simplificationIndices.length, 1),
-            mode: 'projective'
-          });
-        }
+        const newGeo = convertGeometryFromTransfer(geometry);
         const projective = projectiveDisplacements[idx];
         if (projective) {
           const material = new OpenPBRMaterial();
@@ -426,7 +364,6 @@ export async function precompute(
           onProgress({
             stage: 'bvh',
             progress: completedBvhs / Math.max(inGeometries.length, 1),
-            mode: 'projective'
           });
         }
         const ret = convertGeometryToTransfer(newGeo, buffers);
@@ -456,13 +393,6 @@ export function resolveFromPrecompute(
         getMeshDisplacementScale(mesh) !== snapshot.displacementScale ||
         (snapshot.displacementMap && getDisplacementTextureDataCacheKey(snapshot.displacementMap) !==
           snapshot.displacementTextureKey))) return;
-    const resolved = convertGeometryFromTransfer(geo);
-    if (
-      preparedData.geometryPostprocessOptions[idx]
-    ) {
-      cachePreparedMeshGeometry(preparedData.rawMeshes[idx], resolved);
-    } else {
-      preparedData.rawGeometries[idx].bvh = geo.bvh;
-    }
+    preparedData.rawGeometries[idx].bvh = geo.bvh;
   });
 }

@@ -23,13 +23,13 @@ export class MeshMembershipCache {
   }
   update(res: Prepared, meshes: readonly Mesh[]): Prepared | undefined {
     const geometries = new Map(res.geometries.map((geometry, i) => [geometry, i]));
-    // Multiple-material vertex indices, displacement and simplification have
+    // Multiple-material vertex indices, displacement have
     // geometry-dependent packing; their structural edits require preparation.
     const checked = new Set<Geometry>();
     for (const mesh of meshes) {
       const previous = this._states.get(mesh.geometry);
       if (!previous || mesh.materials.length !== 1 || mesh.geometry.materialIndex ||
-        mesh.materials[0].displacementMap || (mesh.geometrySimplificationRatio ?? 1) !== 1) return;
+        mesh.materials[0].displacementMap) return;
       if (!checked.has(mesh.geometry)) {
         const next = geometryState(mesh.geometry);
         if (next.some((value, i) => value !== previous[i])) return;

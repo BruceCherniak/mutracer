@@ -791,14 +791,6 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             }
             mesh.geometry = geometry;
             if (mesh.materials[0] !== material) mesh.materials = [material];
-            const simplificationRatio = Number(
-              child.userData.mutracerMeshoptSimplificationRatio
-            );
-            mesh.geometrySimplificationRatio = Number.isFinite(
-              simplificationRatio
-            )
-              ? Math.min(Math.max(simplificationRatio, 0), 1)
-              : 1;
             mesh.name =
               child.name ||
               `Mesh ${meshes.length + 1}${groups.length > 1 ? `.${groupIndex + 1}` : ''}`;

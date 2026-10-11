@@ -24,12 +24,12 @@ function indices(prepared: Prepared) {
   return maps;
 }
 
-/** Evaluated displacement and simplified geometry must be regenerated as a whole. */
+/** Displaced geometry must be prepared as a whole. */
 export function canUpdateGeometries(prepared: Prepared, geometries: readonly Geometry[]) {
   return geometries.every(geometry => {
     const bindings = indices(prepared).source.get(geometry) ?? [];
     return bindings.length > 0 && bindings.every(b => !b.mesh.materials.some(m => m.displacementMap) &&
-      (b.mesh.geometrySimplificationRatio ?? 1) === 1 && b.geometry.position.array === geometry.position.array);
+      b.geometry.position.array === geometry.position.array);
   });
 }
 

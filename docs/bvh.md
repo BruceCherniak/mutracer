@@ -84,7 +84,7 @@ update only that geometry's merged vertex ranges and BLAS. All instances that
 share the geometry receive refreshed bounds and a TLAS refit. Changes to
 vertex attributes, transforms and materials can be combined in one frame.
 Replaced arrays or changed lengths require full preparation. Changed index
-contents rebuild the affected BLAS. Displaced or simplified geometry also
+contents rebuild the affected BLAS. Displaced geometry also
 requires full preparation because it changes the prepared vertex topology.
 
 Dynamic BLAS refits sum node surface areas and compare the total with the last
@@ -96,7 +96,7 @@ Non-dynamic geometries refit supported layouts or rebuild unsupported ones.
 
 Instance membership changes that use resident single-material geometry rebuild
 TLAS and instance data while reusing vertices and BLASes. Structural changes
-involving displacement, simplification or geometry-dependent multi-material
+involving displacement or geometry-dependent multi-material
 indices require full preparation.
 
 ## Worker precomputation
@@ -122,11 +122,11 @@ import { prepareForPrecompute, resolveFromPrecompute } from '@meimu/mutracer';
 const prepared = prepareForPrecompute(scene.meshes);
 const {
   geometries, displacementScales, trianglesDisplacements,
-  projectiveDisplacements, geometryPostprocessOptions
+  projectiveDisplacements
 } = prepared;
 worker.postMessage(
   { geometries, displacementScales, trianglesDisplacements,
-    projectiveDisplacements, geometryPostprocessOptions },
+    projectiveDisplacements },
   prepared.buffers
 );
 worker.onmessage = ({ data }) => {
@@ -143,17 +143,14 @@ self.onmessage = async ({ data: d }) => {
     d.geometries, d.displacementScales, d.trianglesDisplacements,
     undefined,               // buildBVH: defaults to the built-in builder
     undefined,               // onProgress
-    d.projectiveDisplacements,
-    undefined,               // postprocessGeometry
-    d.geometryPostprocessOptions
+    d.projectiveDisplacements
   );
   self.postMessage(result, result.buffers);
 };
 ```
 
-`precompute` accepts an optional `buildBVH` function (for example one that
-calls TinyBVH) and a `postprocessGeometry` callback for mesh simplification
-before BVH construction.
+`precompute` accepts an optional `buildBVH` function, for example one that
+calls TinyBVH.
 
 ## Rebuilding the WebAssembly module
 

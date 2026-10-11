@@ -266,7 +266,6 @@ describe('Three.js scene conversion', () => {
     material.userData.mutracerDisplacementUvProjection = 'cylindrical';
     material.userData.mutracerDisplacementUvScale = 2.5;
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(), material);
-    mesh.userData.mutracerMeshoptSimplificationRatio = 0.3;
     material.userData.mutracerDisplacementBumpStrength = 12;
     const scene = new THREE.Scene();
     scene.add(mesh);
@@ -283,8 +282,6 @@ describe('Three.js scene conversion', () => {
       displacementUvScale: 2.5,
       displacementBumpStrength: 12
     });
-    expect(fromTHREEScene(scene).meshes[0].geometrySimplificationRatio)
-      .toBe(0.3);
   });
 
   it('converts viewer thin-film metadata', () => {

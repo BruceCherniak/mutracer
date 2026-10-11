@@ -4,13 +4,11 @@ import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import Texture from '../../src/scene/Texture';
 import {
-  getPreparedMeshGeometry,
   getTrianglesDisplacementRange
 } from '../../src/renderer/prepareMeshBVH';
 import {
   prepareForPrecompute,
-  precompute,
-  resolveFromPrecompute
+  precompute
 } from '../../src/util/workerHelper';
 
 function triangleGeometry() {
@@ -43,44 +41,6 @@ describe('geometry precomputation', () => {
         }
       )
     ).rejects.toBe(error);
-  });
-
-  it('postprocesses original geometry without a displacement map', async () => {
-    const source = triangleGeometry();
-    const mesh = new Mesh(source, new OpenPBRMaterial());
-    mesh.geometrySimplificationRatio = 0.5;
-    const prepared = prepareForPrecompute([mesh]);
-    let postprocessCalls = 0;
-    const simplificationProgress: number[] = [];
-
-    expect(prepared.geometryPostprocessOptions).toEqual([
-      { simplificationRatio: 0.5 }
-    ]);
-
-    const result = await precompute(
-      prepared.geometries,
-      prepared.displacementScales,
-      prepared.trianglesDisplacements,
-      undefined,
-      (progress) => {
-        if (progress.stage === 'simplification') {
-          simplificationProgress.push(progress.progress);
-        }
-      },
-      prepared.projectiveDisplacements,
-      (geometry, options) => {
-        postprocessCalls++;
-        expect(options.simplificationRatio).toBe(0.5);
-        return geometry;
-      },
-      prepared.geometryPostprocessOptions
-    );
-    resolveFromPrecompute(result, prepared);
-
-    expect(postprocessCalls).toBe(1);
-    expect(simplificationProgress).toEqual([0, 1]);
-    expect(getPreparedMeshGeometry(mesh)).not.toBe(source);
-    expect(getPreparedMeshGeometry(mesh).bvh).toBeDefined();
   });
 
   it('defers projective height-range analysis to worker precompute', async () => {

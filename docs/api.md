@@ -149,7 +149,7 @@ or material references on a Mesh is detected automatically. Mesh projection
 overrides apply to all its materials and require instance data to be rebuilt.
 Both backends refit transform-only edits. Geometry version changes with stable
 attribute/index arrays update only affected geometry and BLAS regions;
-replaced arrays, displacement and simplification require full preparation.
+replaced arrays, displacement require full preparation.
 Dynamic BLASes rebuild above twice their last build's total node surface area.
 
 ## Helpers

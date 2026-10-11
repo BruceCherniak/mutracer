@@ -7,6 +7,7 @@ import { prepareForPrecompute, precompute, resolveFromPrecompute } from '../../s
 import Geometry, { Attribute } from '../../src/scene/Geometry';
 import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
+import Texture from '../../src/scene/Texture';
 import Renderer from '../../src/Renderer';
 
 afterEach(() => { vi.unstubAllGlobals(); });
@@ -83,12 +84,14 @@ it('keeps dynamic meshes in the built-in layout even for a TinyBVH request', asy
 it('discards results when geometry, revision, or preparation settings change', async () => {
   for (const change of ['revision', 'geometry', 'settings', 'bvh', 'displacement']) {
     const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
+    mesh.materials[0].displacementMap = new Texture({ data: new Uint8Array(64).fill(128), width: 4, height: 4 });
+    mesh.materials[0].displacementScale = 0.1;
     const prepared = prepareForPrecompute([mesh]);
     const result = await precompute(prepared.geometries, prepared.displacementScales, prepared.trianglesDisplacements);
     if (change === 'revision') mesh.geometry.markUpdated();
     if (change === 'geometry') mesh.geometry = createCubeGeometry();
     if (change === 'displacement') mesh.materials[0].displacementScale = 0.3;
-    if (change === 'settings') mesh.geometrySimplificationRatio = 0.5;
+    if (change === 'settings') mesh.materials[0].displacementUvProjection = 'triplanar';
     const newer = change === 'bvh' ? buildBLAS(mesh.geometry) : undefined;
     mesh.geometry.bvh = newer;
     resolveFromPrecompute(result, prepared);

@@ -45,7 +45,7 @@
 - For vertex animation, retain attribute/index arrays, set `geometry.dynamic =
   true` (default `false`), then call `geometry.markUpdated()` after edits.
   Changed geometries update their own vertex/BLAS regions and shared instance
-  bounds. Displacement and simplification need full preparation; replaced
+  bounds. Displacement need full preparation; replaced
   arrays or changed lengths also require it.
 - Three.js skinning and morph targets run on the CPU and retain deformation
   buffers. Cost scales with vertices, influences and material groups. An

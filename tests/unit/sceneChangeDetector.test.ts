@@ -39,7 +39,6 @@ describe('scene change detection', () => {
     (s: Scene) => { s.meshes[0].geometry = createCubeGeometry(); },
     (s: Scene) => { s.meshes[0].materials.push(new OpenPBRMaterial()); },
     (s: Scene) => { s.meshes[0].materials[0] = new OpenPBRMaterial(); },
-    (s: Scene) => { s.meshes[0].geometrySimplificationRatio = 0.5; },
   ])('detects structural edit %s', edit => {
     const { scene, detector } = fixture(); edit(scene);
     expect(detector.detect(scene).meshes).toBe('full');

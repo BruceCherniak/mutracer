@@ -131,7 +131,7 @@ version. A changed pose updates the arrays in place and versions the geometry.
 Rendering then uploads only the changed geometry and BLAS regions and refits
 its instances on both backends. CPU deformation cost grows with vertices and
 bone influences; repeated groups also add copying and tangent-generation cost.
-Displacement or geometry simplification requires full geometry preparation.
+Displacement requires full geometry preparation.
 
 Try the procedural [animation example](../examples/animation.html). Pause the
 animation to accumulate samples; changing a pose restarts accumulation.
@@ -148,7 +148,7 @@ Changing `count` retains the existing prefix and adds or removes only the
 tail. Both backends rebuild TLAS and instance data while retaining resident
 vertices and BLASes. This also handles removal of every instance and later
 restoration. Introducing geometry that has never been prepared, displacement,
-simplification or geometry-dependent multi-material vertex indices requires
+or geometry-dependent multi-material vertex indices requires
 full mesh preparation instead.
 
 `instanceColor` multiplies `baseColor`, including textured color. For an unlit
@@ -173,7 +173,6 @@ Renderer-specific settings without a Three.js equivalent:
 | `mutracerUvProjection`, `mutracerUvScale`, `mutracerUvReferenceLength` | material | Procedural UV projection |
 | `mutracerDisplacement*` | material | Displacement settings, same names as the `OpenPBRMaterial` fields |
 | `mutracerThinFilmMap` | material | Thin-film thickness texture |
-| `mutracerMeshoptSimplificationRatio` | mesh | Simplify geometry before rendering (0–1) |
 | `mutracerRadius` | point / spot light | Emitter radius |
 | `mutracerIesProfile`, `mutracerIesRotation` | spot light | `IESProfile` instance and its rotation |
 | `mutracerGroundedSkybox: { texture, height, radius, groundHeight?, center? }` | scene | Grounded skybox background |

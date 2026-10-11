@@ -93,7 +93,6 @@ interface MeshSnapshot {
   dynamic: boolean;
   storage: unknown[];
   materials: OpenPBRMaterial[];
-  simplification: Mesh['geometrySimplificationRatio'];
 }
 interface Snapshot {
   meshList: Mesh[];
@@ -125,8 +124,7 @@ export class SceneChangeDetector {
       const prev = old?.meshes[i];
       if (!prev || prev.mesh !== mesh || prev.geometry !== mesh.geometry ||
         prev.dynamic !== mesh.geometry.dynamic || !geometryStorageMatches(mesh.geometry, prev.storage) || prev.materials.length !== mesh.materials.length ||
-        prev.materials.some((m, k) => m !== mesh.materials[k]) ||
-        prev.simplification !== mesh.geometrySimplificationRatio) full = true;
+        prev.materials.some((m, k) => m !== mesh.materials[k])) full = true;
       if (prev?.geometry === mesh.geometry && prev.version !== mesh.geometry.version) geometries.add(mesh.geometry);
       if (prev?.mesh === mesh) {
         for (let k = 0; k < 16; k++) {
@@ -165,14 +163,13 @@ export class SceneChangeDetector {
         let item = next!.meshes[i];
         if (!item) {
           item = { mesh, geometry: mesh.geometry, version: mesh.geometry.version, dynamic: mesh.geometry.dynamic, storage: [],
-            materials: [], simplification: mesh.geometrySimplificationRatio };
+            materials: [] };
           next!.meshes[i] = item;
         }
         item.mesh = mesh; item.geometry = mesh.geometry; item.version = mesh.geometry.version;
         item.dynamic = mesh.geometry.dynamic; captureGeometryStorage(mesh.geometry, item.storage);
         item.materials.length = mesh.materials.length;
         for (let k = 0; k < mesh.materials.length; k++) item.materials[k] = mesh.materials[k];
-        item.simplification = mesh.geometrySimplificationRatio;
         next!.matrices.set(mesh.matrixWorld, i * 16);
       });
       for (const material of next.materials.keys()) if (!seen.has(material)) next.materials.delete(material);

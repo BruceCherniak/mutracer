@@ -204,25 +204,18 @@ export function getDisplacementTextureDataCacheKey(texture: Texture) {
 const detailedProjectiveRangeTriangleLimit = 100_000;
 const displacementMinmaxCache = new Map<string, Uint8Array[]>();
 
-export function getMeshGeometrySimplificationRatio(mesh: Mesh) {
-  return Math.min(Math.max(mesh.geometrySimplificationRatio ?? 1, 0), 1);
-}
-
 export function getPreparedMeshGeometryCacheKey(mesh: Mesh) {
   const source = mesh.geometry;
   const material = getMeshDisplacementMaterial(mesh);
   const texture = material?.displacementMap;
   if (!material) return undefined;
-  const simplificationRatio = getMeshGeometrySimplificationRatio(mesh);
   // Projective bounds depend on the material projection and height texture.
   if (material.displacementUvProjection !== 'none' && texture && Math.abs(material.displacementScale) > 1e-6) {
     return ['projectiveProjection', source.version, getDisplacementTextureDataCacheKey(texture),
       +texture.flipY, texture.uvScale.join(','), texture.uvOffset.join(','),
       material.displacementScale, material.displacementUvScale, material.displacementUvProjection].join('|');
   }
-  return simplificationRatio < 1
-    ? ['meshopt', source.version, simplificationRatio].join('|')
-    : undefined;
+  return undefined;
 }
 
 export function getCachedPreparedMeshGeometry(mesh: Mesh) {

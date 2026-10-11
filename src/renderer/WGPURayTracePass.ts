@@ -305,7 +305,6 @@ class WGPURayTracePass {
     materials: OpenPBRMaterial[];
     materialVersions: number[];
     geometryVersion: number;
-    simplification: Mesh['geometrySimplificationRatio'];
     positionArray: Float32Array;
     positionItemSize: number;
     indexArray: Uint16Array | Uint32Array;
@@ -1746,7 +1745,6 @@ ${rayTraceCompute({
       materials: mesh.materials.slice(),
       materialVersions: mesh.materials.map(material => material.version),
       geometryVersion: mesh.geometry.version,
-      simplification: mesh.geometrySimplificationRatio,
       positionArray: mesh.geometry.position.array,
       positionItemSize: mesh.geometry.position.itemSize,
       indexArray: mesh.geometry.indices.array,
@@ -1799,7 +1797,6 @@ ${rayTraceCompute({
             (hash, index) => hash === resident.materialVersions[index]
           ) &&
           next.geometryVersion === resident.geometryVersion &&
-          next.simplification === resident.simplification &&
           this._materialChanges.classify(next.materials).level === 'params' &&
           next.positionArray === resident.positionArray &&
           next.indexArray === resident.indexArray &&
@@ -1830,7 +1827,6 @@ ${rayTraceCompute({
           next.mesh !== prev.mesh ||
           next.geometry !== prev.geometry ||
           next.bvh !== prev.bvh ||
-          next.simplification !== prev.simplification ||
           next.materials.length !== prev.materials.length ||
           next.materials.some((material, k) => material !== prev.materials[k]) ||
           next.materialVersions.some((hash, k) => hash !== prev.materialVersions[k]) ||

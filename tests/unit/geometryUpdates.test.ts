@@ -1,4 +1,5 @@
 import { expect, it } from 'vitest';
+import Texture from '../../src/scene/Texture';
 import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { createCubeGeometry } from '../../src/util/commonGeometry';
@@ -51,9 +52,10 @@ it('rebuilds an edited index stream and detects BLAS relocation without remergin
   expect(g.bvh).not.toBe(old); expect(update.resized).toBe(true); expect(update.relocated).toBe(true);
   expect(prepared.geometry).toBe(merged); expect(merged.indices.array.every(i => i === 0)).toBe(true);
 });
-it('regenerates evaluated displacement or simplification instead of uploading source vertices into their regions', () => {
+it('requires full preparation when displacement is added', () => {
   const g = createCubeGeometry(), mesh = new Mesh(g,new OpenPBRMaterial());
-  const prepared = updateMeshInstances([mesh]); mesh.geometrySimplificationRatio = .5;
+  const prepared = updateMeshInstances([mesh]);
+  mesh.materials[0].displacementMap = new Texture({data: new Uint8Array(64), width: 4, height: 4});
   expect(canUpdateGeometries(prepared,[g])).toBe(false);
 });
 
