@@ -91,5 +91,7 @@ sample count) on a real GPU before and after, and compare
 
 ## Commit messages
 
+- For viewer changes, include the `viewer` scope in the commit subject, for
+  example `fix(viewer): correct camera controls` or `feat(viewer): add model search`.
 - Keep the commit subject concise. Put implementation details, the reason for
   the change, and validation results in the commit body (description).
