@@ -11,9 +11,9 @@ export async function executeBvhBuild(request: BvhBuildRequest) {
   geometry.dynamic = request.dynamic;
   if (request.builder === 'tinybvh' && !geometry.dynamic) {
     return buildTinyBvh(geometry, request.displacementScale, request.trianglesDisplacement,
-      request.layout, request.refitKey, request.spatialSplits);
+      request.layout, request.spatialSplits);
   }
   const start = performance.now();
   return { ...buildBLAS(geometry, request.displacementScale, request.trianglesDisplacement),
-    bvhTimeMs: performance.now() - start, bvhOperation: 'build' as const };
+    bvhTimeMs: performance.now() - start };
 }

@@ -17,23 +17,11 @@
 
 namespace {
 
-struct RefitHandle {
-  std::vector<float> positions;
-  std::vector<uint32_t> indices;
-  std::vector<uint32_t> filteredIndices;
-  std::vector<uint32_t> triangleMap;
-  tinybvh::BVH bvh;
-  uint32_t vertexCount = 0;
-  uint32_t positionStride = 0;
-  uint32_t requestedLayout = 0;
-};
-
 struct BuildResult {
   uint32_t* data = nullptr;
   uint32_t byteLength = 0;
   uint32_t maxDepth = 0;
   uint32_t layout = 0;
-  RefitHandle* refitHandle = nullptr;
 };
 
 constexpr uint32_t BVH2_LAYOUT = 0;
@@ -749,7 +737,6 @@ BuildResult* tinybvh_build(
   float displacementScale,
   const float* displacement,
   uint32_t requestedLayout,
-  uint32_t retainForRefit,
   uint32_t spatialSplits
 ) {
   auto* result = new BuildResult();
@@ -777,7 +764,6 @@ BuildResult* tinybvh_build(
 
   tinybvh::BVH localBvh;
   tinybvh::BVH* bvh = &localBvh;
-  std::unique_ptr<RefitHandle> refitHandle;
   const bool useDisplacement = normals && normalStride >= 3 && displacement && std::abs(displacementScale) > 1e-6f;
   if (useDisplacement) {
     std::vector<tinybvh::bvhvec4> bounds(triangleMap.size() * 2);
@@ -811,29 +797,11 @@ BuildResult* tinybvh_build(
     }
     bvh->BuildAABB(bounds.data(), static_cast<uint32_t>(triangleMap.size()));
   } else {
-    const bool retain = retainForRefit != 0;
     const float* buildPositions = positions;
     const uint32_t* buildIndices = filteredIndices.data();
-    if (retain) {
-      refitHandle = std::make_unique<RefitHandle>();
-      refitHandle->positions.assign(
-        positions,
-        positions + static_cast<size_t>(vertexCount) * positionStride
-      );
-      refitHandle->indices = indices;
-      refitHandle->filteredIndices = filteredIndices;
-      refitHandle->triangleMap = triangleMap;
-      refitHandle->vertexCount = vertexCount;
-      refitHandle->positionStride = positionStride;
-      refitHandle->requestedLayout = requestedLayout;
-      bvh = &refitHandle->bvh;
-      buildPositions = refitHandle->positions.data();
-      buildIndices = refitHandle->filteredIndices.data();
-    } else {
-      // SBVH is opt-in: it lowers SAH cost but builds several times slower
-      // than the default binned SAH builder. Refittable builds stay binned.
-      bvh->settings.useSpatialSplits = spatialSplits != 0;
-    }
+    // SBVH is opt-in: it lowers SAH cost but builds several times slower
+    // than the default binned SAH builder.
+    bvh->settings.useSpatialSplits = spatialSplits != 0;
     tinybvh::bvhvec4slice vertices{
       reinterpret_cast<const tinybvh::bvhvec4*>(buildPositions),
       vertexCount,
@@ -842,66 +810,16 @@ BuildResult* tinybvh_build(
     bvh->Build(vertices, buildIndices, static_cast<uint32_t>(triangleMap.size()));
   }
 
-  const auto& outputIndices = refitHandle ? refitHandle->indices : indices;
-  const auto& outputTriangleMap = refitHandle ? refitHandle->triangleMap : triangleMap;
   serializeBvh(
     *bvh,
-    outputIndices,
-    outputTriangleMap,
+    indices,
+    triangleMap,
     displacement,
     requestedLayout,
     useDisplacement,
     *result
   );
-  if (result->byteLength && refitHandle) {
-    result->refitHandle = refitHandle.release();
-  }
   return result;
-}
-
-BuildResult* tinybvh_refit(
-  RefitHandle* handle,
-  const float* positions,
-  uint32_t vertexCount,
-  uint32_t positionStride
-) {
-  auto* result = new BuildResult();
-  if (
-    !handle || !positions || vertexCount != handle->vertexCount ||
-    positionStride != handle->positionStride || positionStride < 3
-  ) return result;
-  handle->positions.assign(
-    positions,
-    positions + static_cast<size_t>(vertexCount) * positionStride
-  );
-  handle->bvh.verts = tinybvh::bvhvec4slice{
-    reinterpret_cast<const tinybvh::bvhvec4*>(handle->positions.data()),
-    vertexCount,
-    positionStride * sizeof(float)
-  };
-  handle->bvh.vertIdx = handle->filteredIndices.data();
-  handle->bvh.Refit();
-  serializeBvh(
-    handle->bvh,
-    handle->indices,
-    handle->triangleMap,
-    nullptr,
-    handle->requestedLayout,
-    false,
-    *result
-  );
-  return result;
-}
-
-uint32_t tinybvh_result_take_refit_handle(BuildResult* result) {
-  if (!result) return 0;
-  auto* handle = result->refitHandle;
-  result->refitHandle = nullptr;
-  return static_cast<uint32_t>(reinterpret_cast<uintptr_t>(handle));
-}
-
-void tinybvh_refit_handle_destroy(RefitHandle* handle) {
-  delete handle;
 }
 
 uint32_t tinybvh_result_data(const BuildResult* result) {
@@ -923,7 +841,6 @@ uint32_t tinybvh_result_layout(const BuildResult* result) {
 void tinybvh_result_destroy(BuildResult* result) {
   if (!result) return;
   std::free(result->data);
-  delete result->refitHandle;
   delete result;
 }
 

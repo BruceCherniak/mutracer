@@ -37,17 +37,8 @@ interface TinyBvhExports extends WebAssembly.Exports {
     displacementScale: number,
     displacement: number,
     requestedLayout: number,
-    retainForRefit: number,
     spatialSplits: number
   ): number;
-  tinybvh_refit(
-    handle: number,
-    positions: number,
-    vertexCount: number,
-    positionStride: number
-  ): number;
-  tinybvh_result_take_refit_handle(result: number): number;
-  tinybvh_refit_handle_destroy(handle: number): void;
   tinybvh_result_data(result: number): number;
   tinybvh_result_size(result: number): number;
   tinybvh_result_max_depth(result: number): number;
@@ -72,12 +63,9 @@ async function fetchTinyBvhWasm(url: URL | string) {
 let exportsPromise: Promise<TinyBvhExports> | undefined;
 let wasmModulePromise: Promise<WebAssembly.Module> | undefined;
 let buildQueue: Promise<void> = Promise.resolve();
-const refitHandles = new Map<string, number>();
-const maxRefitHandles = 4;
 
 export interface TinyBvhBuildResult extends FlattendBVH {
   builder: 'tinybvh';
-  bvhOperation: 'build' | 'refit';
   bvhTimeMs: number;
 }
 
@@ -195,13 +183,12 @@ async function buildTinyBvhUnlocked(
   displacementScale: number,
   trianglesDisplacement?: Float32Array,
   requestedLayout: TinyBvhLayout = 'bvh2',
-  refitKey?: string,
   spatialSplits = false
 ): Promise<TinyBvhBuildResult> {
   // CWBVH conversion is recursive and experimental. Isolate each static
   // conversion so a trap in one pathological mesh cannot poison the allocator
   // used by every later BLAS in this worker.
-  const isolated = requestedLayout === 'cwbvh' && !refitKey;
+  const isolated = requestedLayout === 'cwbvh';
   const tinyBvh = isolated ? await instantiateTinyBvh() : await loadTinyBvh();
   const positions = geometry.position.array;
   const normals = geometry.normal?.array;
@@ -212,52 +199,30 @@ async function buildTinyBvhUnlocked(
   const pointers: number[] = [];
   let result = 0;
   let poisoned = false;
-  let operation: TinyBvhBuildResult['bvhOperation'] = 'build';
   const buildStart = performance.now();
 
   try {
     const positionsPointer = allocateAndCopy(tinyBvh, positions);
     pointers.push(positionsPointer);
-    const cachedHandle = refitKey ? refitHandles.get(refitKey) : undefined;
-    if (cachedHandle) {
-      result = tinyBvh.tinybvh_refit(
-        cachedHandle,
-        positionsPointer,
-        positions.length / geometry.position.itemSize,
-        geometry.position.itemSize
-      );
-      if (result && tinyBvh.tinybvh_result_size(result)) {
-        operation = 'refit';
-      } else {
-        if (result) tinyBvh.tinybvh_result_destroy(result);
-        result = 0;
-        tinyBvh.tinybvh_refit_handle_destroy(cachedHandle);
-        refitHandles.delete(refitKey!);
-      }
-    }
-
-    if (!result) {
-      const normalsPointer = allocateAndCopy(tinyBvh, normals);
-      if (normalsPointer) pointers.push(normalsPointer);
-      const indicesPointer = allocateAndCopy(tinyBvh, indices);
-      pointers.push(indicesPointer);
-      const displacementPointer = allocateAndCopy(tinyBvh, trianglesDisplacement);
-      if (displacementPointer) pointers.push(displacementPointer);
-      result = tinyBvh.tinybvh_build(
-        positionsPointer,
-        positions.length / geometry.position.itemSize,
-        geometry.position.itemSize,
-        normalsPointer,
-        geometry.normal?.itemSize ?? 0,
-        indicesPointer,
-        indices.length,
-        displacementScale,
-        displacementPointer,
-        tinyBvhLayoutCodes[requestedLayout],
-        refitKey && !trianglesDisplacement ? 1 : 0,
-        spatialSplits ? 1 : 0
-      );
-    }
+    const normalsPointer = allocateAndCopy(tinyBvh, normals);
+    if (normalsPointer) pointers.push(normalsPointer);
+    const indicesPointer = allocateAndCopy(tinyBvh, indices);
+    pointers.push(indicesPointer);
+    const displacementPointer = allocateAndCopy(tinyBvh, trianglesDisplacement);
+    if (displacementPointer) pointers.push(displacementPointer);
+    result = tinyBvh.tinybvh_build(
+      positionsPointer,
+      positions.length / geometry.position.itemSize,
+      geometry.position.itemSize,
+      normalsPointer,
+      geometry.normal?.itemSize ?? 0,
+      indicesPointer,
+      indices.length,
+      displacementScale,
+      displacementPointer,
+      tinyBvhLayoutCodes[requestedLayout],
+      spatialSplits ? 1 : 0
+    );
     if (!result) throw new Error('tinybvh did not return a build result');
 
     const byteLength = tinyBvh.tinybvh_result_size(result);
@@ -279,28 +244,11 @@ async function buildTinyBvhUnlocked(
           `(${maxDepth} > ${MAX_TRAVERSAL_STACK_SIZE})`
       );
     }
-    if (refitKey && operation === 'build') {
-      const handle = tinyBvh.tinybvh_result_take_refit_handle(result);
-      if (handle) {
-        const existing = refitHandles.get(refitKey);
-        if (existing && existing !== handle) {
-          tinyBvh.tinybvh_refit_handle_destroy(existing);
-        }
-        if (!existing && refitHandles.size >= maxRefitHandles) {
-          const oldestKey = refitHandles.keys().next().value!;
-          tinyBvh.tinybvh_refit_handle_destroy(refitHandles.get(oldestKey)!);
-          refitHandles.delete(oldestKey);
-        }
-        refitHandles.delete(refitKey);
-        refitHandles.set(refitKey, handle);
-      }
-    }
     return {
       builder: 'tinybvh',
       buffer,
       maxDepth,
       layout,
-      bvhOperation: operation,
       bvhTimeMs: performance.now() - buildStart
     };
   } catch (error) {
@@ -314,7 +262,6 @@ async function buildTinyBvhUnlocked(
       poisoned = true;
       if (!isolated) {
         exportsPromise = undefined;
-        refitHandles.clear();
       }
     }
     throw error;
@@ -331,7 +278,6 @@ export function buildTinyBvh(
   displacementScale: number,
   trianglesDisplacement?: Float32Array,
   requestedLayout: TinyBvhLayout = 'bvh2',
-  refitKey?: string,
   spatialSplits = false
 ): Promise<TinyBvhBuildResult> {
   const task = buildQueue.then(() => buildTinyBvhUnlocked(
@@ -339,7 +285,6 @@ export function buildTinyBvh(
     displacementScale,
     trianglesDisplacement,
     requestedLayout,
-    refitKey,
     spatialSplits
   ));
   buildQueue = task.then(

@@ -21,7 +21,7 @@ it('counts shared dynamic geometry once and includes its actual build timings', 
   const built = await precomputeTinyBvh(meshes, 'cwbvh');
   expect(built.geometryCount).toBe(1); expect(built.layout).toBe('bvh2');
   expect(built.bvhBuildTimeMs).toBeGreaterThan(0);
-  expect(built.bvhTimeMs).toBe(built.bvhBuildTimeMs); expect(built.bvhRefitCount).toBe(0);
+  expect(built.bvhTimeMs).toBe(built.bvhBuildTimeMs);
   const cached = await precomputeTinyBvh(meshes);
   expect(cached.geometryCount).toBe(0); expect(cached.bvhTimeMs).toBe(0);
 });
@@ -33,5 +33,5 @@ it('includes static and dynamic geometries in mixed layout statistics', async ()
   expect(result.geometryCount).toBe(2); expect(result.layout).toBe('mixed');
   expect(dynamic.bvh!.builder).toBe('builtin'); expect(dynamic.bvh!.layout).toBe('bvh2');
   expect(result.bvhTimeMs).toBeGreaterThan(0);
-  expect(result.bvhTimeMs).toBe(result.bvhBuildTimeMs + result.bvhRefitTimeMs);
+  expect(result.bvhTimeMs).toBe(result.bvhBuildTimeMs);
 });

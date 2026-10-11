@@ -104,7 +104,7 @@ indices require full preparation.
 Automatic static BLAS preparation uses a module Worker with either builder.
 Inputs are cloned so shared geometry remains usable on the main thread; BVH
 buffers are transferred back. Requests share one Worker, which serializes builds
-and retains TinyBVH's WASM instance and topology refit cache. Geometry revisions
+and retains TinyBVH's WASM instance. Geometry revisions
 and displacement settings are checked before accepting asynchronous results.
 Worker startup or runtime failures fall back to the built-in main-thread path.
 The Worker entry is emitted with both the standalone build and npm ESM package;

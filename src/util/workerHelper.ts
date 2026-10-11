@@ -108,8 +108,6 @@ export interface PrecomputeResult {
 export interface PrecomputeTimings {
   bvhTimeMs: number;
   bvhBuildTimeMs: number;
-  bvhRefitTimeMs: number;
-  bvhRefitCount: number;
 }
 
 export function convertGeometryToTransfer(
@@ -310,8 +308,7 @@ export async function precompute(
   buildBVH?: (
     geometry: Geometry,
     displacementScale: number,
-    trianglesDisplacement?: Float32Array,
-    refitKey?: string
+    trianglesDisplacement?: Float32Array
   ) => Promise<FlattendBVH>,
   onProgress?: (progress: PrecomputeProgress) => void,
   projectiveDisplacements: (
@@ -340,15 +337,12 @@ export async function precompute(
   const timings: PrecomputeTimings = {
     bvhTimeMs: 0,
     bvhBuildTimeMs: 0,
-    bvhRefitTimeMs: 0,
-    bvhRefitCount: 0
   };
 
   async function createBVH(
     geo: Geometry,
     displacementScale: number,
-    trianglesDisplacementBuffer?: ArrayBuffer,
-    refitKey?: string
+    trianglesDisplacementBuffer?: ArrayBuffer
   ) {
     const trianglesDisplacement = trianglesDisplacementBuffer
       ? new Float32Array(trianglesDisplacementBuffer)
@@ -356,20 +350,12 @@ export async function precompute(
     try {
       const start = typeof performance === 'undefined' ? Date.now() : performance.now();
       const built = await (buildBVH && !geo.dynamic
-        ? buildBVH(geo, displacementScale, trianglesDisplacement, refitKey)
+        ? buildBVH(geo, displacementScale, trianglesDisplacement)
         : buildBLAS(geo, displacementScale, trianglesDisplacement));
       const measured = (built as FlattendBVH & { bvhTimeMs?: number }).bvhTimeMs ??
         (typeof performance === 'undefined' ? Date.now() : performance.now()) - start;
-      const operation = (built as FlattendBVH & {
-        bvhOperation?: 'build' | 'refit';
-      }).bvhOperation ?? 'build';
       timings.bvhTimeMs += measured;
-      if (operation === 'refit') {
-        timings.bvhRefitTimeMs += measured;
-        timings.bvhRefitCount++;
-      } else {
-        timings.bvhBuildTimeMs += measured;
-      }
+      timings.bvhBuildTimeMs += measured;
       return built;
     } catch (e) {
       // An application-supplied builder is an explicit acceleration-structure

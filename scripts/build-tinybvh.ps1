@@ -47,7 +47,7 @@ try {
     '-sALLOW_MEMORY_GROWTH=1',
     '-sSTACK_SIZE=1MB',
     '-sMALLOC=emmalloc',
-    '-sEXPORTED_FUNCTIONS=_malloc,_free,_tinybvh_build,_tinybvh_refit,_tinybvh_result_take_refit_handle,_tinybvh_refit_handle_destroy,_tinybvh_result_data,_tinybvh_result_size,_tinybvh_result_max_depth,_tinybvh_result_layout,_tinybvh_result_destroy',
+    '-sEXPORTED_FUNCTIONS=_malloc,_free,_tinybvh_build,_tinybvh_result_data,_tinybvh_result_size,_tinybvh_result_max_depth,_tinybvh_result_layout,_tinybvh_result_destroy',
     '-o',
     $output
   )

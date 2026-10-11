@@ -11,7 +11,6 @@ export interface BvhBuildRequest {
   layout: BvhLayout;
   displacementScale: number;
   trianglesDisplacement?: Float32Array;
-  refitKey?: string;
   spatialSplits: boolean;
 }
 
@@ -79,7 +78,6 @@ export function buildBvhInWorker(
   trianglesDisplacement?: Float32Array,
   builder: 'builtin' | 'tinybvh' = 'builtin',
   layout: BvhLayout = 'bvh2',
-  refitKey?: string,
   spatialSplits = false
 ) {
   client ??= new BvhWorkerClient(new Worker(new URL('./bvh.worker.ts', import.meta.url), { type: 'module' }));
@@ -88,6 +86,6 @@ export function buildBvhInWorker(
     normal: trianglesDisplacement ? geometry.normal : undefined,
     indices: geometry.indices,
     dynamic: geometry.dynamic,
-    builder, layout, displacementScale, trianglesDisplacement, refitKey, spatialSplits
+    builder, layout, displacementScale, trianglesDisplacement, spatialSplits
   });
 }

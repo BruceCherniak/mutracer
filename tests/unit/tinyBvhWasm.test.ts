@@ -22,17 +22,8 @@ type TinyBvhExports = WebAssembly.Exports & {
     displacementScale: number,
     displacement: number,
     requestedLayout: number,
-    retainForRefit: number,
     spatialSplits: number
   ): number;
-  tinybvh_refit(
-    handle: number,
-    positions: number,
-    vertexCount: number,
-    positionStride: number
-  ): number;
-  tinybvh_result_take_refit_handle(result: number): number;
-  tinybvh_refit_handle_destroy(handle: number): void;
   tinybvh_result_data(result: number): number;
   tinybvh_result_size(result: number): number;
   tinybvh_result_max_depth(result: number): number;
@@ -58,7 +49,6 @@ function build(
   normals?: Float32Array,
   displacement?: Float32Array,
   requestedLayout = 1,
-  retainForRefit = false,
   spatialSplits = false
 ) {
   const pointers = [allocate(positions), allocate(indices)];
@@ -77,7 +67,6 @@ function build(
     displacement ? 2 : 0,
     displacementPointer,
     requestedLayout,
-    +retainForRefit,
     +spatialSplits
   );
   const size = tinyBvh.tinybvh_result_size(result);
@@ -85,10 +74,9 @@ function build(
   const buffer = tinyBvh.memory.buffer.slice(data, data + size);
   const layout = tinyBvh.tinybvh_result_layout(result);
   const stackRequirement = tinyBvh.tinybvh_result_max_depth(result);
-  const refitHandle = tinyBvh.tinybvh_result_take_refit_handle(result);
   tinyBvh.tinybvh_result_destroy(result);
   pointers.forEach((pointer) => tinyBvh.free(pointer));
-  return { buffer, layout, stackRequirement, refitHandle };
+  return { buffer, layout, stackRequirement };
 }
 
 function collectCwbvhTriangles(buffer: ArrayBuffer) {
@@ -229,7 +217,7 @@ describe('tinybvh WASM builders', () => {
     }
     const sliverIndices = Uint32Array.from({ length: 64 * 3 }, (_, i) => i);
     const sliversBinned = build(slivers, sliverIndices, undefined, undefined, 0);
-    const sliversSbvh = build(slivers, sliverIndices, undefined, undefined, 0, false, true);
+    const sliversSbvh = build(slivers, sliverIndices, undefined, undefined, 0, true);
     expect(sliversSbvh.buffer.byteLength).toBeGreaterThan(sliversBinned.buffer.byteLength);
   });
 });
@@ -425,29 +413,5 @@ describe('tinybvh WASM layouts', () => {
 
     expect(layout).toBe(3);
     expect(new Set(collectCwbvhTriangles(buffer)).size).toBe(triangleCount);
-  });
-
-  it('refits retained topology after vertex deformation', () => {
-    const initial = build(positions, indices, undefined, undefined, 1, true);
-    const deformed = positions.slice();
-    deformed[2 * 4 + 2] = 2;
-    const positionsPointer = allocate(deformed);
-    const result = tinyBvh.tinybvh_refit(
-      initial.refitHandle,
-      positionsPointer,
-      deformed.length / 4,
-      4
-    );
-    const byteLength = tinyBvh.tinybvh_result_size(result);
-    const data = tinyBvh.tinybvh_result_data(result);
-    const buffer = tinyBvh.memory.buffer.slice(data, data + byteLength);
-
-    expect(initial.refitHandle).toBeGreaterThan(0);
-    expect(tinyBvh.tinybvh_result_layout(result)).toBe(1);
-    expect(new Float32Array(buffer)[5]).toBeGreaterThan(1);
-
-    tinyBvh.tinybvh_result_destroy(result);
-    tinyBvh.free(positionsPointer);
-    tinyBvh.tinybvh_refit_handle_destroy(initial.refitHandle);
   });
 });

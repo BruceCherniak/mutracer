@@ -32,6 +32,13 @@ wrapper with Emscripten's `em++`:
 npm run build:tinybvh
 ```
 
+Alternatively, use the official Emscripten Docker image (the checked-in module
+was built with 6.0.12), including on Apple Silicon:
+
+```bash
+docker run --rm -v "$PWD:/src" -w /src emscripten/emsdk:6.0.12 ./scripts/build-tinybvh.sh
+```
+
 On Windows use the PowerShell builder; pass `-Empp` when `em++` is not on
 `PATH`:
 

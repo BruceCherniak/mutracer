@@ -5,7 +5,7 @@ const scope = self as unknown as {
   onmessage: (event: MessageEvent<BvhBuildRequest>) => void;
   postMessage: (response: BvhBuildResponse, transfers?: Transferable[]) => void;
 };
-// Serialize builds to retain TinyBVH refit handles and bound WASM working memory.
+// Serialize builds to reuse TinyBVH's WASM instance and bound working memory.
 let queue = Promise.resolve();
 scope.onmessage = ({ data }) => {
   queue = queue.then(async () => {

@@ -25,8 +25,6 @@ export interface TinyBvhPrecomputeStats {
   geometryCount: number;
   bvhTimeMs: number;
   bvhBuildTimeMs: number;
-  bvhRefitTimeMs: number;
-  bvhRefitCount: number;
 }
 
 export interface TinyBvhPrecomputeOptions {
@@ -96,13 +94,13 @@ export async function precomputeTinyBvh(
       prepared.geometries,
       prepared.displacementScales,
       prepared.trianglesDisplacements,
-      (geometry, displacementScale, trianglesDisplacement, refitKey) =>
+      (geometry, displacementScale, trianglesDisplacement) =>
         canUseBvhWorker()
           ? buildBvhInWorker(geometry, displacementScale, trianglesDisplacement, 'tinybvh',
-              requestedLayout, refitKey, spatialSplits)
+              requestedLayout, spatialSplits)
           : buildTinyBvh(
               geometry, displacementScale, trianglesDisplacement,
-              requestedLayout, refitKey, spatialSplits
+              requestedLayout, spatialSplits
             ),
       onProgress,
       prepared.projectiveDisplacements
@@ -141,7 +139,5 @@ function mergeTimings(a?: PrecomputeTimings, b?: PrecomputeTimings): PrecomputeT
   return {
     bvhTimeMs: (a?.bvhTimeMs ?? 0) + (b?.bvhTimeMs ?? 0),
     bvhBuildTimeMs: (a?.bvhBuildTimeMs ?? 0) + (b?.bvhBuildTimeMs ?? 0),
-    bvhRefitTimeMs: (a?.bvhRefitTimeMs ?? 0) + (b?.bvhRefitTimeMs ?? 0),
-    bvhRefitCount: (a?.bvhRefitCount ?? 0) + (b?.bvhRefitCount ?? 0)
   };
 }
