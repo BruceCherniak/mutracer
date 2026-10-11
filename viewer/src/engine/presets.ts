@@ -14,7 +14,7 @@ export interface ModelPreset {
   /** `null` builds the procedural material-sphere scene. */
   url: string | null;
   thumbnail?: string;
-  license: 'CC0' | 'CC-BY 4.0' | 'CC-BY-NC 4.0' | 'CC-BY-NC-SA 4.0';
+  license: 'CC0' | 'CC-BY 3.0' | 'CC-BY 4.0' | 'CC-BY-NC 4.0' | 'CC-BY-NC-SA 4.0';
   licenseUrl?: string;
   attributionUrl?: string;
   nonCommercial?: boolean;

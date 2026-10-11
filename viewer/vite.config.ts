@@ -58,6 +58,7 @@ function thumbnailWriter(): Plugin {
 
 export default defineConfig({
   root: __dirname,
+  publicDir: path.join(repoRoot, 'site/public'),
   base: './',
   plugins: [react(), oidnWeights(), thumbnailWriter()],
   resolve: {

@@ -4,6 +4,30 @@ import {
 import { MODEL_PRESETS } from '../../viewer/src/engine/presets';
 import './style.css';
 
+const copyInstall = document.getElementById('copy-install') as HTMLButtonElement;
+const installCommand = document.getElementById('install-command')!;
+const copyStatus = document.getElementById('copy-install-status')!;
+let copyFeedbackTimer: ReturnType<typeof setTimeout> | undefined;
+copyInstall.addEventListener('click', async () => {
+  clearTimeout(copyFeedbackTimer);
+  copyInstall.disabled = true;
+  delete copyInstall.dataset.copied;
+  copyStatus.textContent = '';
+  try {
+    await navigator.clipboard.writeText(installCommand.textContent!.trim());
+    copyInstall.dataset.copied = '';
+    copyStatus.textContent = 'Copied!';
+  } catch {
+    copyStatus.textContent = 'Could not copy. Select the command to copy it manually.';
+  } finally {
+    copyInstall.disabled = false;
+    copyFeedbackTimer = setTimeout(() => {
+      delete copyInstall.dataset.copied;
+      copyStatus.textContent = '';
+    }, 3000);
+  }
+});
+
 const drop = document.getElementById('drop')!;
 const veil = document.getElementById('veil')!;
 const error = document.getElementById('drop-error')!;

@@ -141,13 +141,13 @@ export const PUBLIC_MODEL_PRESETS = [
     "id": "super-human",
     "name": "Super Human",
     "tag": "Character / skin",
-    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/super-human/model.glb",
-    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/super-human/thumbnail.webp",
+    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@ce63b50b22add741be1d7e57d05db614a34565d6/assets/super-human/model.glb",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@ce63b50b22add741be1d7e57d05db614a34565d6/assets/super-human/thumbnail.webp",
     "license": "CC-BY 4.0",
     "credit": "Davyd Vidiger",
     "sourceUrl": "https://sketchfab.com/3d-models/super-human-7aa58e978b9f4357b8e73d8e0440c896",
     "licenseUrl": "http://creativecommons.org/licenses/by/4.0/",
-    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/super-human/attribution.json",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@ce63b50b22add741be1d7e57d05db614a34565d6/assets/super-human/attribution.json",
     "sizeMB": 3.67,
     "camera": {
       "position": [
@@ -223,23 +223,23 @@ export const PUBLIC_MODEL_PRESETS = [
     "id": "dragon",
     "name": "Dragon",
     "tag": "Glass / sculpture",
-    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@59f79d01a12c205b184be018a76e530a9482e2e2/assets/dragon/model.glb",
-    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@59f79d01a12c205b184be018a76e530a9482e2e2/assets/dragon/thumbnail.webp",
+    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@ce63b50b22add741be1d7e57d05db614a34565d6/assets/dragon/model.glb",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@ce63b50b22add741be1d7e57d05db614a34565d6/assets/dragon/thumbnail.webp",
     "license": "CC-BY 3.0",
     "credit": "Delatronic",
     "sourceUrl": "https://benedikt-bitterli.me/resources/",
     "licenseUrl": "https://creativecommons.org/licenses/by/3.0/",
-    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@59f79d01a12c205b184be018a76e530a9482e2/assets/dragon/attribution.json",
-    "sizeMB": 4.76,
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@ce63b50b22add741be1d7e57d05db614a34565d6/assets/dragon/attribution.json",
+    "sizeMB": 4.99,
     "camera": {
       "position": [
-        27.520974852264906,
-        21.61621955462067,
-        39.304025378862
+        18.714262899540138,
+        14.363065172446849,
+        26.726737257626162
       ],
       "target": [
         0,
-        9.653124034404755,
+        9.203124034404755,
         0
       ],
       "fov": 35,

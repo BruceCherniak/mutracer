@@ -6,13 +6,13 @@
     <meta name="color-scheme" content="dark" />
     <meta name="description" content="MuTracer is a physically based WebGPU path tracer for the browser. Drop a glTF model to render it." />
     <title>MuTracer · Path tracing in the browser</title>
-    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="./mutracer-icon.png" type="image/png" />
   </head>
   <body>
     <header class="banner">
       <nav class="nav">
         <a class="brand" href="./">
-          <img class="brand__mark" src="./favicon.svg" alt="" width="30" height="30" />
+          <img class="brand__mark" src="./src/assets/mutracer-logo.png" alt="" width="30" height="30" />
           <strong>MuTracer</strong>
         </a>
         <div class="nav__links">
@@ -27,7 +27,18 @@
           A physically based WebGPU path tracer with a WebGL 2 fallback, OpenPBR materials,
           TinyBVH acceleration and Intel Open Image Denoise.
         </p>
-        <code class="install"><span>$</span> npm install @meimu/mutracer</code>
+        <div class="install">
+          <code><span aria-hidden="true">$</span> <span id="install-command">npm install @meimu/mutracer</span></code>
+          <button class="install__copy" id="copy-install" type="button" aria-label="Copy install command" title="Copy install command">
+            <svg class="install__copy-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="9" y="9" width="12" height="12" rx="2" /><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1" />
+            </svg>
+            <svg class="install__check-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m5 12 4 4L19 6" />
+            </svg>
+          </button>
+          <span class="install__feedback" id="copy-install-status" role="status"></span>
+        </div>
       </div>
     </header>
 

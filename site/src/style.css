@@ -37,6 +37,7 @@ a { color: inherit; }
 .nav, .hero, .main, .footer { width: 100%; max-width: 1120px; margin: 0 auto; padding-inline: 24px; }
 .nav { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: 60px; }
 .brand { display: flex; align-items: center; gap: 10px; text-decoration: none; }
+.brand__mark { display: block; width: 30px; height: 30px; flex: none; border-radius: 9px; }
 .brand strong { font-size: 15px; font-weight: 650; }
 .nav__links { display: flex; gap: 4px; }
 .nav__links a {
@@ -47,10 +48,25 @@ a { color: inherit; }
 .hero h1 { margin: 0; font-size: clamp(28px, 5vw, 42px); line-height: 1.1; font-weight: 650; letter-spacing: -0.02em; }
 .hero p { max-width: 620px; margin: 14px auto 0; color: var(--text-2); }
 .install {
-  display: inline-block; margin-top: 20px; padding: 7px 14px; border: 1px solid var(--border-strong); border-radius: 9px;
-  background: rgb(0 0 0 / 0.25); color: var(--text-2); font: 13px var(--mono); user-select: all;
+  position: relative; display: inline-flex; align-items: center; gap: 12px; max-width: 100%;
+  margin-top: 20px; padding: 4px 6px 4px 14px; border: 1px solid var(--border-strong); border-radius: 9px;
+  background: rgb(0 0 0 / 0.25); color: var(--text-2);
 }
-.install span { color: var(--text-3); user-select: none; }
+.install code { overflow-x: auto; font: 13px var(--mono); white-space: nowrap; }
+#install-command { user-select: all; }
+.install code > span:first-child { color: var(--text-3); user-select: none; }
+.install__copy {
+  display: grid; place-items: center; flex: none; width: 30px; height: 30px; padding: 0;
+  border: 0; border-radius: 5px; background: transparent; color: var(--text-3); cursor: pointer;
+  transition: background-color 0.15s, color 0.15s;
+}
+.install__copy:hover { background: rgb(255 255 255 / 0.08); color: var(--text); }
+.install__copy[data-copied] { color: var(--accent); }
+.install__check-icon, .install__copy[data-copied] .install__copy-icon { display: none; }
+.install__copy[data-copied] .install__check-icon { display: block; }
+.install__feedback {
+  position: absolute; top: calc(100% + 4px); inset-inline: 0; color: var(--text-3); font: 12px/1.4 system-ui, sans-serif;
+}
 
 /* ---------- Drop zone ---------- */
 .main { flex: 1; padding-block: 32px 56px; }
