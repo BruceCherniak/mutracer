@@ -1,4 +1,5 @@
 import type Mesh from '../scene/Mesh.js';
+import { buildBvhInWorker, canUseBvhWorker } from '../renderer/bvhWorkerClient.js';
 import {
   getCachedPreparedMeshGeometry
 } from '../renderer/prepareMeshBVH.js';
@@ -41,6 +42,8 @@ export interface TinyBvhPrecomputeOptions {
 
 /**
  * Builds static mesh BLAS data with TinyBVH and dynamic geometry with the built-in builder.
+ * Static BLAS construction uses a reusable Worker when available; input arrays
+ * remain attached. Without Worker support, construction runs on the calling thread.
  *
  * By default every static geometry is rebuilt; already prepared dynamic BVHs
  * are retained. Pass `onlyMissing: true` to build only
@@ -87,21 +90,20 @@ export async function precomputeTinyBvh(
   try {
     // WASM loading and compilation are intentionally outside the measured
     // TinyBVH build timings returned by precompute().
-    await initializeTinyBvh();
+    if (!canUseBvhWorker()) await initializeTinyBvh();
     const prepared = prepareForPrecompute(meshes);
     const result = await precompute(
       prepared.geometries,
       prepared.displacementScales,
       prepared.trianglesDisplacements,
       (geometry, displacementScale, trianglesDisplacement, refitKey) =>
-        buildTinyBvh(
-          geometry,
-          displacementScale,
-          trianglesDisplacement,
-          requestedLayout,
-          refitKey,
-          spatialSplits
-        ),
+        canUseBvhWorker()
+          ? buildBvhInWorker(geometry, displacementScale, trianglesDisplacement, 'tinybvh',
+              requestedLayout, refitKey, spatialSplits)
+          : buildTinyBvh(
+              geometry, displacementScale, trianglesDisplacement,
+              requestedLayout, refitKey, spatialSplits
+            ),
       prepared.tessellations,
       onProgress,
       prepared.projectiveDisplacements

@@ -25,7 +25,8 @@ import {
   type JNLMDenoiser,
   type JNLMOptions
 } from './renderer/jnlm.js';
-import { meshNeedsPrecompute } from './util/workerHelper.js';
+import { meshNeedsPrecompute, prepareForPrecompute, precompute, resolveFromPrecompute } from './util/workerHelper.js';
+import { buildBvhInWorker, canUseBvhWorker } from './renderer/bvhWorkerClient.js';
 import makeWGPURenderingPipeline, {
   OIDNWeb
 } from './renderer/WGPURenderingPipeline.js';
@@ -341,11 +342,11 @@ export default class Renderer {
 
   /**
    * BLAS builder used for meshes without a precomputed BVH. `builtin` builds
-   * synchronously in JavaScript inside `render()` (a port of TinyBVH's binned
-   * SAH builder). `tinybvh` loads the TinyBVH WebAssembly module on first use
-   * and builds asynchronously before the first frame (`render()` returns
-   * `RENDER_STATUS_PREPARING` meanwhile); it falls back to `builtin` if the
-   * module cannot be loaded. Default `builtin`.
+   * in a Worker using JavaScript (TinyBVH's binned SAH builder). `tinybvh`
+   * loads WebAssembly in the Worker on first use. Both prepare missing static
+   * BLASes before the first frame; `render()` returns `RENDER_STATUS_PREPARING`
+   * meanwhile. If Workers are unavailable, construction runs on the main
+   * thread. TinyBVH failures fall back to `builtin`. Default `builtin`.
    */
   bvhBuilder: BVHBuilder = 'builtin';
 
@@ -357,7 +358,8 @@ export default class Renderer {
   bvhSpatialSplits = false;
   private _bvhPreparation?: Promise<void>;
   private _tinyBvhUnavailable = false;
-  /** Geometry (and its version) each mesh had when TinyBVH last processed it. */
+  private _bvhWorkerUnavailable = false;
+  /** Geometry (and its version) each mesh had when preparation last failed. */
   private _bvhPreparedGeometry = new WeakMap<Mesh, [Geometry, number]>();
 
   /**
@@ -681,43 +683,50 @@ export default class Renderer {
   }
 
   /**
-   * With `bvhBuilder = 'tinybvh'`, builds BVHs (and displacement
-   * tessellation) for every mesh that does not have one yet. `render()` does
-   * this automatically and reports `RENDER_STATUS_PREPARING` meanwhile; call
-   * this to prepare a scene up front. Does nothing with `builtin`, which
-   * builds inside `render()`.
+   * Builds missing static BLASes before rendering, using a Worker when available.
+   * `render()` calls this automatically and returns `RENDER_STATUS_PREPARING`
+   * meanwhile. Dynamic geometry retains synchronous refit/rebuild behavior.
    */
   async prepareScene(scene: Pick<Scene, 'meshes'> | Mesh[]) {
     const meshes = Array.isArray(scene) ? scene : scene.meshes;
-    if (this.bvhBuilder !== 'tinybvh' || this._tinyBvhUnavailable) return;
+    const useTinyBvh = this.bvhBuilder === 'tinybvh' && !this._tinyBvhUnavailable;
+    const useWorker = canUseBvhWorker() && !this._bvhWorkerUnavailable;
     const pending = meshes.filter(mesh => !mesh.geometry.dynamic && meshNeedsPrecompute(mesh));
     if (!pending.length) return;
+    const snapshots = pending.map(mesh => [mesh, mesh.geometry, mesh.geometry.version] as const);
+    let failed = false;
     try {
-      // Loaded on demand so applications using the built-in builder do not
-      // fetch or bundle the TinyBVH module.
-      const { precomputeTinyBvh } = await import('./tinybvh/precomputeTinyBvh.js');
-      await precomputeTinyBvh(pending, 'bvh2', undefined, {
-        onlyMissing: true,
-        spatialSplits: this.bvhSpatialSplits
-      });
+      if (useTinyBvh) {
+        const { precomputeTinyBvh } = await import('./tinybvh/precomputeTinyBvh.js');
+        await precomputeTinyBvh(pending, 'bvh2', undefined, {
+          onlyMissing: true,
+          spatialSplits: this.bvhSpatialSplits
+        });
+      } else {
+        const prepared = prepareForPrecompute(pending);
+        const result = await precompute(prepared.geometries, prepared.displacementScales,
+          prepared.trianglesDisplacements, useWorker ? (geometry, scale, displacement) =>
+            buildBvhInWorker(geometry, scale, displacement) : undefined, prepared.tessellations,
+          undefined, prepared.projectiveDisplacements);
+        resolveFromPrecompute(result, prepared);
+      }
     } catch (error) {
-      this._tinyBvhUnavailable = true;
-      console.warn(
-        'TinyBVH is unavailable; falling back to the built-in BVH builder.',
-        error
-      );
+      failed = true;
+      if (useTinyBvh) this._tinyBvhUnavailable = true;
+      else this._bvhWorkerUnavailable = true;
+      console.warn('BVH preparation failed; falling back to the built-in BVH builder.', error);
     } finally {
-      // Anything TinyBVH could not prepare is built by the pipeline instead
-      // of being retried every frame.
-      pending.forEach((mesh) =>
-        this._bvhPreparedGeometry.set(mesh, [mesh.geometry, mesh.geometry.version])
-      );
+      if (failed) snapshots.forEach(([mesh, geometry, version]) => {
+        this._bvhPreparedGeometry.set(mesh, [geometry, version]);
+      });
     }
   }
 
   private _needsBVHPreparation(meshes: Mesh[]) {
-    if (this.bvhBuilder !== 'tinybvh' || this._tinyBvhUnavailable) return false;
-    return !!this._bvhPreparation || meshes.some((mesh) => {
+    if (this._bvhPreparation) return true;
+    if ((this.bvhBuilder !== 'tinybvh' || this._tinyBvhUnavailable) &&
+        (!canUseBvhWorker() || this._bvhWorkerUnavailable)) return false;
+    return meshes.some((mesh) => {
       const prepared = this._bvhPreparedGeometry.get(mesh);
       const attempted = prepared?.[0] === mesh.geometry &&
         prepared[1] === mesh.geometry.version;
@@ -1268,7 +1277,7 @@ export default class Renderer {
     const atlasBudgetChanged = pipeline.setTextureAtlasBudget(this.textureAtlasBudgetBytes);
     this._forceMeshUpdate ||= atlasBudgetChanged;
     const meshContentChanged = changes.meshes !== 'none' || this._forceMeshUpdate;
-    if (meshContentChanged && this._needsBVHPreparation(scene.meshes)) {
+    if (this._bvhPreparation || (meshContentChanged && this._needsBVHPreparation(scene.meshes))) {
       this._bvhPreparation ??= this.prepareScene(scene.meshes).finally(() => {
         this._bvhPreparation = undefined;
         this._forceMeshUpdate = true;

@@ -14,6 +14,8 @@ vi.mock('../../viewer/src/engine/modelCache', () => ({
 vi.mock('@meimu/mutracer', async () => ({
   DEFAULT_JNLM_OPTIONS: (await import('../../src/renderer/jnlm')).DEFAULT_JNLM_OPTIONS,
   Renderer: class {
+    samples = 0;
+    getTotalSamplesRendered() { return this.samples; }
     getSize() { return { width: 800, height: 600 }; }
     setSize() {}
     dispose() {}
@@ -65,7 +67,7 @@ describe('viewer reload lifecycle', () => {
     cache.read.mockReset().mockImplementation(async () => cache.model);
     cache.save.mockReset().mockImplementation(async (model: CachedModel) => { cache.model = model; });
     cache.clear.mockReset().mockImplementation(async () => { cache.model = null; });
-    useViewer.setState({ settings: { ...defaults, envId: 'sky' }, model: null, toast: null });
+    useViewer.setState({ settings: { ...defaults, envId: 'sky' }, model: null, toast: null, loading: null });
   });
   afterEach(() => {
     for (const engine of engines.splice(0)) engine.dispose();
@@ -79,6 +81,50 @@ describe('viewer reload lifecycle', () => {
     engines.push(instance);
     return instance;
   }
+
+  function publish(viewer: Engine, phase: 'preparing' | 'compiling' | 'rendering' | 'finished' | 'error' | 'paused', samples: number) {
+    const internal = viewer as unknown as {
+      renderer: { samples: number };
+      publishStats(phase: string, now: number, force: boolean): void;
+    };
+    internal.renderer.samples = samples;
+    internal.publishStats(phase, 1000, true);
+  }
+
+  it('keeps the loading stages visible while preparation retains old scene samples', async () => {
+    const viewer = engine();
+    await viewer.loadPreset('spheres');
+    publish(viewer, 'preparing', 64);
+    expect(useViewer.getState().loading?.stage).toBe('bvh');
+    publish(viewer, 'compiling', 64);
+    expect(useViewer.getState().loading?.stage).toBe('shaders');
+    publish(viewer, 'rendering', 0);
+    expect(useViewer.getState().loading?.stage).toBe('shaders');
+    publish(viewer, 'rendering', 1);
+    expect(useViewer.getState().loading).toBeNull();
+  });
+
+  it('does not let the previous model hide or overwrite a new download stage', async () => {
+    const viewer = engine();
+    await viewer.loadPreset('spheres');
+    const loading = viewer.loadPreset('spheres');
+    expect(useViewer.getState().loading?.stage).toBe('download');
+    publish(viewer, 'rendering', 64);
+    expect(useViewer.getState().loading?.stage).toBe('download');
+    await loading;
+    expect(useViewer.getState().loading?.stage).toBe('bvh');
+    publish(viewer, 'preparing', 64);
+    expect(useViewer.getState().loading?.stage).toBe('bvh');
+  });
+
+  it('keeps a paused load visible and dismisses it when rendering fails', async () => {
+    const viewer = engine();
+    await viewer.loadPreset('spheres');
+    publish(viewer, 'paused', 64);
+    expect(useViewer.getState().loading).not.toBeNull();
+    publish(viewer, 'error', 64);
+    expect(useViewer.getState().loading).toBeNull();
+  });
 
   it('restores the orbit and lens after automatic model fitting on reload', async () => {
     const first = engine();

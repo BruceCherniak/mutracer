@@ -6,7 +6,9 @@ under a top-level BVH (TLAS) over the mesh instances.
 ## Default: built-in builder
 
 `renderer.bvhBuilder = 'builtin'` (default) builds missing BLASes
-synchronously in JavaScript inside `render()`. The builder is a port of
+in a reusable Web Worker before rendering. `render()` returns
+`RENDER_STATUS_PREPARING` until preparation finishes; `await renderer.prepareScene(scene)`
+builds up front. Without Worker support, it builds synchronously inside `render()`. The builder is a port of
 [TinyBVH](https://github.com/jbikker/tinybvh)'s binned SAH builder
 (`BVH::Build`). It computes in float64, so where split costs nearly tie it
 can choose differently from TinyBVH's float32 build; tree quality is the
@@ -16,7 +18,7 @@ always use it.
 ## Optional: TinyBVH WebAssembly
 
 `renderer.bvhBuilder = 'tinybvh'` builds static BLASes with TinyBVH compiled
-to WebAssembly, about 1.3 times faster than the JavaScript builder. The
+to WebAssembly inside the same Worker, about 1.3 times faster than the JavaScript builder. The
 module (about 90 KB) is imported and fetched on first use, so applications
 that keep the default do not load it. BLASes are built
 asynchronously before the first frame that needs them: `render()` returns
@@ -98,6 +100,17 @@ involving displacement, simplification or geometry-dependent multi-material
 indices require full preparation.
 
 ## Worker precomputation
+
+Automatic static BLAS preparation uses a module Worker with either builder.
+Inputs are cloned so shared geometry remains usable on the main thread; BVH
+buffers are transferred back. Requests share one Worker, which serializes builds
+and retains TinyBVH's WASM instance and topology refit cache. Geometry revisions
+and displacement settings are checked before accepting asynchronous results.
+Worker startup or runtime failures fall back to the built-in main-thread path.
+The Worker entry is emitted with both the standalone build and npm ESM package;
+serve it from the same origin and allow Workers in your content security policy.
+TLAS construction and per-frame deformation refits/rebuilds remain synchronous.
+Tessellation and other geometry preparation still run on the calling thread.
 
 For large scenes or tessellated displacement, do the work in a Web Worker
 before entering the render loop. Resume rendering after resolving the result:

@@ -226,6 +226,7 @@ export class ViewerEngine {
     persist = true
   ) {
     const token = ++this.loadToken;
+    this.awaitingFirstSample = false;
     set({ loading: { name, stage: 'download', loaded: 0, total: 0 } });
     let model: LoadedModel;
     try {
@@ -992,11 +993,16 @@ export class ViewerEngine {
     this.lastSamples = samples;
     if (this.awaitingFirstSample) {
       const loading = get().loading;
-      if (samples > 0 || phase === 'error') {
+      // Preparation keeps the previous scene's accumulation alive. Only a
+      // rendering phase can confirm that the newly loaded model has a sample.
+      const hasNewSample = samples > 0 &&
+        (phase === 'rendering' || phase === 'denoising' || phase === 'finished');
+      if (hasNewSample || phase === 'error') {
         this.awaitingFirstSample = false;
         set({ loading: null });
       } else if (loading) {
-        const stage = phase === 'compiling' ? 'shaders' : 'bvh';
+        const stage = phase === 'compiling' ? 'shaders'
+          : phase === 'preparing' ? 'bvh' : loading.stage;
         if (loading.stage !== stage) set({ loading: { ...loading, stage } });
       }
     }

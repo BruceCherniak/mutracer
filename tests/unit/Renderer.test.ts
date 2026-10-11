@@ -185,7 +185,7 @@ describe('Renderer sizing', () => {
     const needsPreparation = vi.spyOn(renderer as any, '_needsBVHPreparation').mockReturnValue(true);
     expect(renderer.render(scene, {} as Camera)).toBe(RENDER_STATUS_PREPARING);
     expect(pipeline.setMeshes).not.toHaveBeenCalled();
-    await Promise.resolve();
+    await (renderer as any)._bvhPreparation;
     needsPreparation.mockReturnValue(false);
     renderer.render(scene, {} as Camera);
     expect(pipeline.setMeshes).toHaveBeenCalledOnce();

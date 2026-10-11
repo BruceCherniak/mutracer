@@ -114,6 +114,16 @@ export interface PrecomputePreparedData {
   )[];
   projectiveDisplacements: (ProjectiveDisplacementForTransfer | undefined)[];
   buffers: ArrayBuffer[];
+  /** Internal input revisions used to discard results superseded during async work. */
+  snapshots?: {
+    geometry: Geometry;
+    version: number;
+    cacheKey?: string;
+    bvh?: FlattendBVH;
+    displacementMap?: Texture;
+    displacementScale: number;
+    displacementTextureKey?: string;
+  }[];
 }
 
 export interface PrecomputeResult {
@@ -139,8 +149,9 @@ export function convertGeometryToTransfer(
     const attr = geometry[attrName];
     const buffer =
       attr &&
-      ((attrName === 'indices' ? new Uint32Array(attr.array) : attr.array)
-        .buffer as ArrayBuffer);
+      ((attrName === 'indices' ? new Uint32Array(attr.array)
+        : attr.array.byteOffset !== 0 || attr.array.byteLength !== attr.array.buffer.byteLength
+          ? attr.array.slice() : attr.array).buffer as ArrayBuffer);
     obj[attrName] = attr && {
       // Always use Uint32Array to simplify
       buffer: buffer!,
@@ -328,6 +339,14 @@ export function prepareForPrecompute(meshes: Mesh[]): PrecomputePreparedData {
     trianglesDisplacements,
     rawGeometries: geometries,
     rawMeshes,
+    snapshots: rawMeshes.map((mesh, index) => ({
+      geometry: mesh.geometry, version: mesh.geometry.version,
+      cacheKey: getPreparedMeshGeometryCacheKey(mesh), bvh: geometries[index].bvh,
+      displacementMap: getMeshDisplacementMap(mesh),
+      displacementScale: getMeshDisplacementScale(mesh),
+      displacementTextureKey: getMeshDisplacementMap(mesh)
+        ? getDisplacementTextureDataCacheKey(getMeshDisplacementMap(mesh)!) : undefined
+    })),
     tessellations,
     geometryPostprocessOptions,
     projectiveDisplacements,
@@ -578,6 +597,16 @@ export function resolveFromPrecompute(
   preparedData: PrecomputePreparedData
 ) {
   precomputeData.geometries.forEach((geo, idx) => {
+    const snapshot = preparedData.snapshots?.[idx];
+    const mesh = preparedData.rawMeshes[idx];
+    if (snapshot && (mesh.geometry !== snapshot.geometry ||
+        mesh.geometry.version !== snapshot.version ||
+        getPreparedMeshGeometryCacheKey(mesh) !== snapshot.cacheKey ||
+        preparedData.rawGeometries[idx].bvh !== snapshot.bvh ||
+        getMeshDisplacementMap(mesh) !== snapshot.displacementMap ||
+        getMeshDisplacementScale(mesh) !== snapshot.displacementScale ||
+        (snapshot.displacementMap && getDisplacementTextureDataCacheKey(snapshot.displacementMap) !==
+          snapshot.displacementTextureKey))) return;
     const resolved = convertGeometryFromTransfer(geo);
     if (
       preparedData.tessellations[idx] ||

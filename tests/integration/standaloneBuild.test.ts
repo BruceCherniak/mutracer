@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
 import { build } from 'vite';
 import type { OutputChunk, RollupOutput } from 'rollup';
+import { buildBLAS } from '../../src/renderer/bvhAccel';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 type API = typeof import('../../src/main');
@@ -29,6 +30,32 @@ describe('standalone library builds', () => {
 
   it('ships only the CDN global build, without duplicate ESM or OIDN chunks', () => {
     expect(chunks.map(chunk => chunk.fileName)).toEqual(['mutracer.umd.js']);
+  });
+
+
+  it('loads its Worker relative to the library script after script evaluation completes', async () => {
+    let workerUrl: string | undefined;
+    const document = { currentScript: { src: 'https://cdn.example.test/package/dist/mutracer.umd.js' },
+      baseURI: 'https://app.example.test/viewer/' };
+    class Worker {
+      onmessage?: (event: { data: unknown }) => void;
+      constructor(url: URL) { workerUrl = url.href; }
+      postMessage(data: { id: number; position: any; indices: any }) {
+        const bvh = buildBLAS(data as any);
+        queueMicrotask(() => this.onmessage?.({ data: { id: data.id, bvh } }));
+      }
+    }
+    const context = createContext({ URL, Worker, document, console,
+      Float32Array, Uint32Array, Uint8Array, Int32Array, Uint16Array });
+    context.self = context;
+    runInContext(chunks.find(chunk => chunk.fileName === 'mutracer.umd.js')!.code, context);
+    document.currentScript = null as any;
+    const library = context.MuTracer as API;
+    const renderer = new library.Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
+    const geometry = library.createCubeGeometry();
+    await renderer.prepareScene([new library.Mesh(geometry, new library.OpenPBRMaterial())]);
+    expect(workerUrl).toMatch(/^https:\/\/cdn\.example\.test\/package\/dist\/assets\/bvh\.worker-.+\.js$/);
+    expect(geometry.bvh!.buffer.byteLength).toBeGreaterThan(0);
   });
 
   it('excludes the tessellator implementation and its public helper', () => {

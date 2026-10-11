@@ -2,6 +2,16 @@ import path from 'node:path';
 import { defineConfig } from 'vite';
 
 export default defineConfig(({ command }) => ({
+  // Keep the standalone library's Worker relative to the script on any host.
+  base: './',
+  experimental: {
+    renderBuiltUrl(filename, { hostType }) {
+      if (hostType === 'js' && filename.includes('bvh.worker-')) {
+        return { runtime: `new URL(${JSON.stringify(filename)}, __mutracerLibraryUrl).href` };
+      }
+      return { relative: true };
+    }
+  },
   resolve: {
     // Examples import the package by name, exactly like applications do.
     alias: [
@@ -21,7 +31,9 @@ export default defineConfig(({ command }) => ({
   },
   build: {
     rollupOptions: {
-      output: { banner: "/*! MuTracer: third-party license texts are in THIRD_PARTY_NOTICES.md and LICENSES/. */" }
+      output: {
+        banner: "/*! MuTracer: third-party license texts are in THIRD_PARTY_NOTICES.md and LICENSES/. */\nvar __mutracerLibraryUrl = typeof document !== 'undefined' ? (document.currentScript && document.currentScript.src || document.baseURI) : (typeof location !== 'undefined' ? location.href : undefined);"
+      }
     },
     lib: {
       entry: path.resolve(__dirname, 'src/main.ts'),

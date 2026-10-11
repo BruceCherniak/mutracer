@@ -2,7 +2,9 @@ import { spawnSync } from 'node:child_process';
 import {
   copyFileSync,
   mkdirSync,
-  rmSync
+  rmSync,
+  readFileSync,
+  writeFileSync
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,3 +39,9 @@ copyFileSync(
   path.join(projectRoot, 'src', 'tinybvh', 'LICENSE'),
   path.join(tinyBvhOutput, 'LICENSE')
 );
+
+// Source builds let Vite discover the TypeScript worker; published ESM uses
+// the adjacent compiled JavaScript entry so consumers need no TS loader.
+const workerClientPath = path.join(outputRoot, 'renderer', 'bvhWorkerClient.js');
+writeFileSync(workerClientPath,
+  readFileSync(workerClientPath, 'utf8').replace('./bvh.worker.ts', './bvh.worker.js'));

@@ -32,7 +32,7 @@ affects the image restarts accumulation.
 | `bevelSamples` | `8` | Probes per sample for `OpenPBRMaterial.bevelSize` (1–32) |
 | `samplingPattern` | `'sobol'` | `'sobol'`, `'zsobol'` or `'random'`; see [sampling](./sampling.md) |
 | `alphaBlendStrategy` | `'stochastic'` | `'stochastic'` or `'deterministic-source-over'` for glTF `BLEND` materials (WebGPU) |
-| `bvhBuilder` | `'builtin'` | `'builtin'` (JavaScript, sync) or `'tinybvh'` (WebAssembly, loaded on demand, async) |
+| `bvhBuilder` | `'builtin'` | `'builtin'` (JavaScript) or `'tinybvh'` (WebAssembly, loaded on demand); static BLASes prepare in a Worker |
 | `bvhSpatialSplits` | `false` | With `'tinybvh'`, build static BLASes with spatial splits (SBVH): slower builds, sometimes faster rendering |
 | `textureAtlasBudgetBytes` | 384 MiB | Texture atlas memory budget; larger textures are downscaled |
 
@@ -81,7 +81,7 @@ affects the image restarts accumulation.
 | `setSize(width, height)` | Resizes the canvas drawing buffer and targets, in pixels |
 | `getSize()` | `{ width, height }` |
 | `setDenoiser(options?)` | Attaches the built-in JNLM filter or an OIDN network (WebGPU only); `false`/`null` removes it. See [denoising](./denoising.md) |
-| `prepareScene(scene \| meshes)` | With `bvhBuilder = 'tinybvh'`, builds missing BVHs ahead of time (otherwise done by `render()`) |
+| `prepareScene(scene \| meshes)` | Builds missing static BVHs ahead of time with either builder (otherwise done by `render()`); uses a Worker when available |
 | `renderOfflineFrame(scene, camera, options)` | Renders a finished frame; see below |
 | `restartSamples()` | Discards the accumulation |
 | `getTotalSamplesRendered()` | Accumulated spp |
