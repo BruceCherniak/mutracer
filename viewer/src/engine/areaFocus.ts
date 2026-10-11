@@ -15,15 +15,20 @@ export const FOCUS_AREA_SIZE = 0.07;
 /** Rays per side of the sampling grid. */
 const GRID = 7;
 
+// Reuse the workspace without retaining unloaded models. Positions are filled
+// on every measurement so animation and edited geometry never use stale data.
+const workspaces = new WeakMap<THREE.BufferGeometry, {
+  xs: Float32Array; ys: Float32Array; zs: Float32Array; codes: Uint8Array;
+}>();
+
 /**
  * Depth (distance along the view direction) of the subject in the focus
  * area, or `null` when the area shows no geometry. Casts a grid of rays
  * through the area against the visible meshes under `root`.
  *
- * Plain meshes are culled against the area's frustum per vertex before the
- * remaining triangles are intersected with every ray at once, which keeps a
- * million-triangle model at a few milliseconds. Skinned, morphed and
- * instanced meshes use the Three.js raycaster.
+ * Meshes are culled against the area's frustum per vertex before the remaining
+ * triangles are intersected with all rays at once. Animated vertices are
+ * evaluated once per measurement, rather than once per triangle and ray.
  */
 export function measureAreaDepth(root: THREE.Object3D, camera: THREE.PerspectiveCamera, area: FocusArea, aspect: number): number | null {
   camera.updateMatrixWorld();
@@ -48,33 +53,41 @@ export function measureAreaDepth(root: THREE.Object3D, camera: THREE.Perspective
   if (normals[0].dot(directions[Math.floor(directions.length / 2)]) < 0) normals.forEach((n) => n.negate());
 
   const nearest = new Float64Array(directions.length).fill(Infinity);
-  const raycaster = new THREE.Raycaster();
   const sphere = new THREE.Sphere();
   const inverse = new THREE.Matrix4();
+  const instanceMatrix = new THREE.Matrix4();
+  const instanceWorld = new THREE.Matrix4();
+
+  const measureMesh = (mesh: THREE.Mesh, matrixWorld: THREE.Matrix4, respectMaterialSide: boolean) => {
+    const deformed = (mesh as THREE.SkinnedMesh).isSkinnedMesh || !!mesh.geometry.morphAttributes.position?.length;
+    // Rest-pose bounds can exclude the animated subject. Its evaluated
+    // vertices are culled below instead.
+    if (!deformed) {
+      if (!mesh.geometry.boundingSphere) mesh.geometry.computeBoundingSphere();
+      sphere.copy(mesh.geometry.boundingSphere!).applyMatrix4(matrixWorld);
+      const offset = sphere.center.clone().sub(eye);
+      if (offset.dot(forward) < -sphere.radius || normals.some((n) => n.dot(offset) < -sphere.radius)) return;
+    }
+    inverse.copy(matrixWorld).invert();
+    intersectMesh(mesh, matrixWorld, inverse, eye, directions, normals, forward, nearest, deformed, respectMaterialSide);
+  };
 
   root.traverseVisible((object) => {
     const mesh = object as THREE.Mesh;
     if (!mesh.isMesh || !mesh.geometry?.getAttribute('position')) return;
-    const geometry = mesh.geometry;
-    if (!geometry.boundingSphere) geometry.computeBoundingSphere();
-    sphere.copy(geometry.boundingSphere!).applyMatrix4(mesh.matrixWorld);
-    const instanced = (mesh as THREE.InstancedMesh).isInstancedMesh;
-    if (!instanced) {
-      const offset = sphere.center.clone().sub(eye);
-      if (offset.dot(forward) < -sphere.radius || normals.some((n) => n.dot(offset) < -sphere.radius)) return;
-    }
-    const special = instanced || (mesh as THREE.SkinnedMesh).isSkinnedMesh ||
-      Object.keys(geometry.morphAttributes).length > 0;
-    if (special) {
-      directions.forEach((direction, k) => {
-        raycaster.set(eye, direction);
-        const hit = raycaster.intersectObject(mesh, false)[0];
-        if (hit && hit.distance < nearest[k]) nearest[k] = hit.distance;
-      });
+    if ((mesh as THREE.InstancedMesh).isInstancedMesh) {
+      const instanced = mesh as THREE.InstancedMesh;
+      const proxy = new THREE.Mesh(mesh.geometry, mesh.material);
+      for (let i = 0; i < instanced.count; i++) {
+        instanced.getMatrixAt(i, instanceMatrix);
+        instanceWorld.multiplyMatrices(mesh.matrixWorld, instanceMatrix);
+        if (instanced.morphTexture) instanced.getMorphAt(i, proxy);
+        measureMesh(proxy, instanceWorld, true);
+      }
       return;
     }
-    inverse.copy(mesh.matrixWorld).invert();
-    intersectMesh(mesh, inverse, eye, directions, normals, forward, nearest);
+    const special = (mesh as THREE.SkinnedMesh).isSkinnedMesh || Object.keys(mesh.geometry.morphAttributes).length > 0;
+    measureMesh(mesh, mesh.matrixWorld, !!special);
   });
 
   const depths: number[] = [];
@@ -101,8 +114,8 @@ export function pickFocusDepth(depths: number[], rayCount: number): number | nul
 }
 
 function intersectMesh(
-  mesh: THREE.Mesh, inverse: THREE.Matrix4, eyeWorld: THREE.Vector3, directionsWorld: THREE.Vector3[],
-  normalsWorld: THREE.Vector3[], forwardWorld: THREE.Vector3, nearest: Float64Array
+  mesh: THREE.Mesh, matrixWorld: THREE.Matrix4, inverse: THREE.Matrix4, eyeWorld: THREE.Vector3, directionsWorld: THREE.Vector3[],
+  normalsWorld: THREE.Vector3[], forwardWorld: THREE.Vector3, nearest: Float64Array, deformed: boolean, respectMaterialSide: boolean
 ) {
   const geometry = mesh.geometry;
   const position = geometry.getAttribute('position');
@@ -112,19 +125,25 @@ function intersectMesh(
   const linear = new THREE.Matrix3().setFromMatrix4(inverse);
   const directions = directionsWorld.map((d) => d.clone().applyMatrix3(linear));
   // Planes map with the inverse transpose of the local-to-world transform.
-  const planeMatrix = new THREE.Matrix3().setFromMatrix4(mesh.matrixWorld).transpose();
+  const planeMatrix = new THREE.Matrix3().setFromMatrix4(matrixWorld).transpose();
   const planes = [...normalsWorld, forwardWorld].map((n) => n.clone().applyMatrix3(planeMatrix));
 
   const count = position.count;
-  const xs = new Float32Array(count);
-  const ys = new Float32Array(count);
-  const zs = new Float32Array(count);
-  const codes = new Uint8Array(count);
+  let workspace = workspaces.get(geometry);
+  if (!workspace || workspace.xs.length !== count) {
+    workspace = { xs: new Float32Array(count), ys: new Float32Array(count), zs: new Float32Array(count), codes: new Uint8Array(count) };
+    workspaces.set(geometry, workspace);
+  }
+  const { xs, ys, zs, codes } = workspace;
+  const vertex = new THREE.Vector3();
   const array = (position as THREE.BufferAttribute).array as ArrayLike<number> | undefined;
-  const direct = !(position as THREE.InterleavedBufferAttribute).isInterleavedBufferAttribute && !position.normalized && array;
+  const direct = !deformed && !(position as THREE.InterleavedBufferAttribute).isInterleavedBufferAttribute && !position.normalized && position.itemSize === 3 && array;
   for (let v = 0; v < count; v++) {
     let x: number, y: number, z: number;
-    if (direct) {
+    if (deformed) {
+      mesh.getVertexPosition(v, vertex);
+      x = vertex.x; y = vertex.y; z = vertex.z;
+    } else if (direct) {
       x = array[v * 3]; y = array[v * 3 + 1]; z = array[v * 3 + 2];
     } else {
       x = position.getX(v); y = position.getY(v); z = position.getZ(v);
@@ -139,31 +158,42 @@ function intersectMesh(
     codes[v] = code;
   }
 
-  const start = Math.max(0, geometry.drawRange.start);
-  const end = Math.min(index ? index.count : count, geometry.drawRange.start + geometry.drawRange.count);
   const indices = index?.array;
-  for (let t = start - (start % 3); t + 2 < end; t += 3) {
-    const a = indices ? indices[t] : t;
-    const b = indices ? indices[t + 1] : t + 1;
-    const c = indices ? indices[t + 2] : t + 2;
-    if (codes[a] & codes[b] & codes[c]) continue;
-    const e1x = xs[b] - xs[a], e1y = ys[b] - ys[a], e1z = zs[b] - zs[a];
-    const e2x = xs[c] - xs[a], e2y = ys[c] - ys[a], e2z = zs[c] - zs[a];
-    const sx = eye.x - xs[a], sy = eye.y - ys[a], sz = eye.z - zs[a];
-    // Möller–Trumbore, double sided.
-    for (let k = 0; k < directions.length; k++) {
-      const d = directions[k];
-      const px = d.y * e2z - d.z * e2y, py = d.z * e2x - d.x * e2z, pz = d.x * e2y - d.y * e2x;
-      const det = e1x * px + e1y * py + e1z * pz;
-      if (Math.abs(det) < 1e-12) continue;
-      const inv = 1 / det;
-      const u = (sx * px + sy * py + sz * pz) * inv;
-      if (u < 0 || u > 1) continue;
+  // Preserve the material-side and group rules of the animated/instanced
+  // raycaster path. Plain meshes retain their existing double-sided picking.
+  const ranges = respectMaterialSide && Array.isArray(mesh.material)
+    ? geometry.groups.map((group) => ({ ...group, material: (mesh.material as THREE.Material[])[group.materialIndex ?? 0] }))
+    : [{ start: 0, count: Infinity, material: respectMaterialSide ? mesh.material as THREE.Material : null }];
+  for (const range of ranges) {
+    if (respectMaterialSide && !range.material) continue;
+    const side = range.material?.side ?? THREE.DoubleSide;
+    const start = Math.max(0, geometry.drawRange.start, range.start);
+    const end = Math.min(index ? index.count : count, geometry.drawRange.start + geometry.drawRange.count, range.start + range.count);
+    for (let t = start; t + 2 < end; t += 3) {
+      const a = indices ? indices[t] : t;
+      const b = indices ? indices[t + 1] : t + 1;
+      const c = indices ? indices[t + 2] : t + 2;
+      if (codes[a] & codes[b] & codes[c]) continue;
+      const e1x = xs[b] - xs[a], e1y = ys[b] - ys[a], e1z = zs[b] - zs[a];
+      const e2x = xs[c] - xs[a], e2y = ys[c] - ys[a], e2z = zs[c] - zs[a];
+      const sx = eye.x - xs[a], sy = eye.y - ys[a], sz = eye.z - zs[a];
       const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
-      const w = (d.x * qx + d.y * qy + d.z * qz) * inv;
-      if (w < 0 || u + w > 1) continue;
-      const dist = (e2x * qx + e2y * qy + e2z * qz) * inv;
-      if (dist > 0 && dist < nearest[k]) nearest[k] = dist;
+      const numerator = e2x * qx + e2y * qy + e2z * qz;
+      // Möller–Trumbore with world-space distance preserved.
+      for (let k = 0; k < directions.length; k++) {
+        const d = directions[k];
+        const px = d.y * e2z - d.z * e2y, py = d.z * e2x - d.x * e2z, pz = d.x * e2y - d.y * e2x;
+        const det = e1x * px + e1y * py + e1z * pz;
+        if (Math.abs(det) < 1e-12) continue;
+        if ((side === THREE.FrontSide && det < 0) || (side === THREE.BackSide && det > 0)) continue;
+        const inv = 1 / det;
+        const u = (sx * px + sy * py + sz * pz) * inv;
+        if (u < 0 || u > 1) continue;
+        const w = (d.x * qx + d.y * qy + d.z * qz) * inv;
+        if (w < 0 || u + w > 1) continue;
+        const dist = numerator * inv;
+        if (dist > 0 && dist < nearest[k]) nearest[k] = dist;
+      }
     }
   }
 }

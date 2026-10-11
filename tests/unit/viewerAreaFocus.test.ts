@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { focusPull, guessMetersPerUnit, measureAreaDepth, pickFocusDepth } from '../../viewer/src/engine/areaFocus';
 
 function scene() {
@@ -47,6 +47,79 @@ describe('viewer area focus', () => {
   it('returns null when the area shows nothing', () => {
     const { camera } = scene();
     expect(measureAreaDepth(new THREE.Group(), camera, { x: 0.5, y: 0.5, size: 0.05 }, 1.5)).toBeNull();
+  });
+
+  it('evaluates skinned vertices once and follows bones outside the rest-pose bounds', () => {
+    const { camera } = scene();
+    const geometry = new THREE.PlaneGeometry(2, 2, 8, 8).translate(20, 0, 0);
+    const count = geometry.attributes.position.count;
+    geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(new Uint16Array(count * 4), 4));
+    const weights = new Float32Array(count * 4);
+    for (let i = 0; i < count; i++) weights[i * 4] = 1;
+    geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(weights, 4));
+    const mesh = new THREE.SkinnedMesh(geometry, new THREE.MeshBasicMaterial());
+    const bone = new THREE.Bone();
+    mesh.add(bone);
+    mesh.bind(new THREE.Skeleton([bone]));
+    const root = new THREE.Group().add(mesh);
+    const evaluate = vi.spyOn(mesh, 'getVertexPosition');
+    const measure = (z: number) => {
+      bone.position.set(-20, 0, z);
+      root.updateMatrixWorld(true);
+      mesh.skeleton.update();
+      evaluate.mockClear();
+      const depth = measureAreaDepth(root, camera, { x: 0.5, y: 0.5, size: 0.03 }, 1.5);
+      expect(evaluate).toHaveBeenCalledTimes(count);
+      return depth;
+    };
+    expect(measure(1)).toBeCloseTo(3, 4);
+    expect(measure(2)).toBeCloseTo(2, 4);
+  });
+
+  it('refreshes morph positions and respects material sides, groups and draw range', () => {
+    const { camera } = scene();
+    const geometry = new THREE.PlaneGeometry(2, 2, 8, 8);
+    const morph = geometry.attributes.position.clone();
+    for (let i = 0; i < morph.count; i++) morph.setZ(i, 2);
+    geometry.morphAttributes.position = [morph];
+    const material = new THREE.MeshBasicMaterial();
+    const mesh = new THREE.Mesh(geometry, [material]);
+    geometry.addGroup(0, geometry.index!.count, 0);
+    const root = new THREE.Group().add(mesh);
+    root.updateMatrixWorld(true);
+    const evaluate = vi.spyOn(mesh, 'getVertexPosition');
+    const measure = () => measureAreaDepth(root, camera, { x: 0.5, y: 0.5, size: 0.03 }, 1.5);
+    mesh.morphTargetInfluences![0] = 0.5;
+    expect(measure()).toBeCloseTo(3, 4);
+    expect(evaluate).toHaveBeenCalledTimes(morph.count);
+    mesh.morphTargetInfluences![0] = 1;
+    expect(measure()).toBeCloseTo(2, 4);
+    material.side = THREE.BackSide;
+    expect(measure()).toBeNull();
+    material.side = THREE.DoubleSide;
+    expect(measure()).toBeCloseTo(2, 4);
+    geometry.setDrawRange(0, 0);
+    expect(measure()).toBeNull();
+    geometry.setDrawRange(0, Infinity);
+    geometry.clearGroups();
+    expect(measure()).toBeNull();
+  });
+
+  it('culls each instance and refreshes instance transforms', () => {
+    const { camera } = scene();
+    const mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(2, 2), new THREE.MeshBasicMaterial(), 3);
+    mesh.position.z = 0.5;
+    mesh.setMatrixAt(0, new THREE.Matrix4().makeTranslation(100, 0, 0));
+    mesh.setMatrixAt(1, new THREE.Matrix4().makeTranslation(0, 0, -1));
+    mesh.setMatrixAt(2, new THREE.Matrix4().makeTranslation(0, 0, 1));
+    const root = new THREE.Group().add(mesh);
+    root.updateMatrixWorld(true);
+    const measure = () => measureAreaDepth(root, camera, { x: 0.5, y: 0.5, size: 0.03 }, 1.5);
+    expect(measure()).toBeCloseTo(2.5, 4);
+    mesh.setMatrixAt(2, new THREE.Matrix4().makeTranslation(100, 0, 1));
+    expect(measure()).toBeCloseTo(4.5, 4);
+    mesh.visible = false;
+    expect(measure()).toBeNull();
   });
 
   it('prefers the nearest supported cluster over stray hits', () => {

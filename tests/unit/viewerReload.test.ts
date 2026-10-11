@@ -6,6 +6,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { ViewerEngine as Engine } from '../../viewer/src/engine/ViewerEngine';
 import type { useViewer as Store } from '../../viewer/src/store';
 import type { CachedModel } from '../../viewer/src/engine/modelCache';
+import * as areaFocus from '../../viewer/src/engine/areaFocus';
 
 const cache = vi.hoisted(() => ({ model: null as CachedModel | null, read: vi.fn(), save: vi.fn(), clear: vi.fn() }));
 vi.mock('../../viewer/src/engine/modelCache', () => ({
@@ -103,6 +104,38 @@ describe('viewer reload lifecycle', () => {
     expect(useViewer.getState().loading?.stage).toBe('shaders');
     publish(viewer, 'rendering', 1);
     expect(useViewer.getState().loading).toBeNull();
+  });
+
+  it('keeps focus while scrubbing aperture and measures again when depth of field is re-enabled', async () => {
+    const viewer = engine();
+    await viewer.loadPreset('spheres');
+    const measure = vi.spyOn(areaFocus, 'measureAreaDepth');
+    const internal = viewer as unknown as { lastViewChange: number; updateAutofocus(now: number): void };
+    const update = () => {
+      internal.lastViewChange = 0;
+      internal.updateAutofocus(performance.now() + 1000);
+    };
+    try {
+      useViewer.setState((s) => ({ settings: { ...s.settings, fStop: 2.8, autoFocus: true, autoRotate: false }, animation: null }));
+      update();
+      expect(measure).toHaveBeenCalledTimes(1);
+      for (const fStop of [1.4, 4, 8, 16]) {
+        useViewer.setState((s) => ({ settings: { ...s.settings, fStop } }));
+        update();
+      }
+      expect(measure).toHaveBeenCalledTimes(1);
+      useViewer.setState((s) => ({ settings: { ...s.settings, fStop: 0 } }));
+      update();
+      expect(measure).toHaveBeenCalledTimes(1);
+      useViewer.setState((s) => ({ settings: { ...s.settings, fStop: 2.8 } }));
+      update();
+      expect(measure).toHaveBeenCalledTimes(2);
+      useViewer.setState((s) => ({ settings: { ...s.settings, fov: 45 } }));
+      update();
+      expect(measure).toHaveBeenCalledTimes(3);
+    } finally {
+      measure.mockRestore();
+    }
   });
 
   it('does not let the previous model hide or overwrite a new download stage', async () => {

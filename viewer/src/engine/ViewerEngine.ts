@@ -574,7 +574,9 @@ export class ViewerEngine {
     if (changed('resolutionScale') || changed('cameraIndex')) this.needsResize = true;
     // A focus distance set elsewhere (the slider, fitting) ends a running pull.
     if (prev && changed('focusDistance') && !this.writingFocus) this.pull = null;
-    if (changed('fStop') || changed('autoFocus') || changed('fov') || changed('cameraIndex') || changed('projection')) {
+    // Aperture changes blur, but do not change the subject's depth. Only
+    // enabling the lens needs a new measurement; scrubbing f-number does not.
+    if ((!prev || (prev.fStop <= 0 && s.fStop > 0)) || changed('autoFocus') || changed('fov') || changed('cameraIndex') || changed('projection')) {
       this.requestAutofocus();
     }
     if (changed('fov')) {
