@@ -15,6 +15,7 @@
 - Backgrounds: omit to show the environment; `[r, g, b, a]` linear color (`[0,0,0,0]` = transparent canvas, pair with `material.shadowCatcher = true`); a `Texture`; or `{ type: 'GroundedSkybox', map, height, radius }`.
 - Denoising: `await renderer.setDenoiser()` for JNLM (both backends, no download). `await renderer.setDenoiser({ type: 'oidn', model?: 'standard' | 'small' | 'cleanAuxLarge' })` for OIDN (WebGPU only; cleaner at 1–2 spp). `whileConverging: true` also denoises previews. With a denoiser, `maxSamples` 64–256 is usually enough.
 - Depth of field: `camera.fStop = 2.8` (0 disables), `camera.focusDistance` along the view direction, `camera.metersPerUnit` for non-metre scenes; see [depth of field](./docs/getting-started.md#depth-of-field).
+- Depth: after rendering, `await renderer.readDepthSamples({ x, y, size })` queries GPU pinhole depths for autofocus; see [depth sampling](docs/api.md#depth-sampling).
 - Sampling: `renderer.samplingPattern` is `'sobol'` (default), `'zsobol'` (low spp without a denoiser) or `'random'`.
 - Final stills: `await renderer.renderOfflineFrame(scene, camera, { samples })`, then `renderer.prepareForExport()` and `canvas.toBlob(...)`. Linear HDR pixels: `await renderer.getRawOutput()`.
 - BVH: static BVHs build automatically in a Worker pool; `bvhWorkerCount` defaults to `'auto'` (1–4), or set a positive integer. For a loading screen, `await renderer.prepareScene(scene, { onProgress })`; it builds BVHs only, so keep calling `render()` afterwards. `bvhBuilder = 'tinybvh'` uses WebAssembly; see [BVH](./docs/bvh.md).

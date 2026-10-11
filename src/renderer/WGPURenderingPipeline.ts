@@ -1800,6 +1800,7 @@ output.color = color;
     setHDROutputEnabled,
     setToneMappingParams,
 
+    readDepthSamples: (area) => rayTracePass.readDepthSamples(area),
     getRawOutput() {
       const outputTexture =
         getFrameInput('color');

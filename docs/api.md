@@ -88,6 +88,7 @@ affects the image restarts accumulation.
 | `restartSamples()` | Discards the accumulation |
 | `getTotalSamplesRendered()` | Accumulated spp |
 | `getRawOutput()` | `Promise<{ width, height, data: Float32Array }>` linear RGBA, top row first |
+| `readDepthSamples({ x, y, size })` | Asynchronously queries a 7×7 grid of GPU depths after `render()`; see [depth sampling](#depth-sampling) |
 | `prepareForExport()` | Redraws post-processing before `canvas.toBlob()` / `toDataURL()` |
 | `isUsingWebGPU()` | Active backend |
 | `getDiagnostics()` | Backend, adapter, shader compilation, BVH, light sampling and timing details |
@@ -97,6 +98,28 @@ affects the image restarts accumulation.
 `render()` detects scene edits itself, except material, texture and geometry
 data edits, which need `markUpdated()` or `markVerticesUpdated()`; see
 [scene updates](./updates.md). An unchanged scene keeps accumulating.
+
+### Depth sampling
+
+After rendering the current scene and camera, call
+`await renderer.readDepthSamples({ x: 0.5, y: 0.5, size: 0.07 })`.
+The result is a `Float32Array` of 49 depths, in row order from the top left,
+including the area's edges. It can be used for area autofocus without CPU
+mesh traversal or reading a full-frame image.
+
+`x` and `y` specify the center in viewport coordinates (0..1 from the top
+left). `size` is the square's half height as a fraction of viewport height;
+`0` samples a single point. All three fields are required. Depth is measured
+along the camera's forward axis in scene units, independent of pixel jitter
+and depth of field. Invisible shadow catchers and zero-opacity surfaces are
+skipped; glass and partially transparent surfaces use their front surface.
+
+Missed and out-of-viewport samples are `0`. Before GPU scene preparation
+completes, or while another depth query is in flight, the result is
+`undefined`; retry after a later rendered frame. Queries are asynchronous on
+WebGPU and WebGL 2 and do not change accumulated rendering samples. Callers
+should discard results when their scene, camera or sampling area changes
+while a query is pending. GPU failures reject the promise.
 
 ### `renderOfflineFrame(scene, camera, options)`
 

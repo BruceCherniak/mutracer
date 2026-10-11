@@ -225,15 +225,16 @@ function getBVHTraverseCode(
         vec4 childMaxX = unpackBvh4Bounds(floatBitsToUint(wide3.y));
         vec4 childMaxY = unpackBvh4Bounds(floatBitsToUint(wide3.z));
         vec4 childMaxZ = unpackBvh4Bounds(floatBitsToUint(wide3.w));
-        vec3 invD = 1.0 / d;
+        vec3 invD = traversalInverse(d);
+        vec3 padding = depthSlabPadding(invD, o);
         vec4 tx0 = (nodeMin.x + childMinX * nodeExtent.x - o.x) * invD.x;
         vec4 tx1 = (nodeMin.x + childMaxX * nodeExtent.x - o.x) * invD.x;
         vec4 ty0 = (nodeMin.y + childMinY * nodeExtent.y - o.y) * invD.y;
         vec4 ty1 = (nodeMin.y + childMaxY * nodeExtent.y - o.y) * invD.y;
         vec4 tz0 = (nodeMin.z + childMinZ * nodeExtent.z - o.z) * invD.z;
         vec4 tz1 = (nodeMin.z + childMaxZ * nodeExtent.z - o.z) * invD.z;
-        vec4 tNear = max(max(min(tx0, tx1), min(ty0, ty1)), min(tz0, tz1));
-        vec4 tFar = min(min(max(tx0, tx1), max(ty0, ty1)), max(tz0, tz1));
+        vec4 tNear = max(max((min(tx0, tx1) - vec4(padding.x)), (min(ty0, ty1) - vec4(padding.y))), (min(tz0, tz1) - vec4(padding.z)));
+        vec4 tFar = min(min((max(tx0, tx1) + vec4(padding.x)), (max(ty0, ty1) + vec4(padding.y))), (max(tz0, tz1) + vec4(padding.z)));
         vec4 distance = mix(tFar, tNear, greaterThan(tNear, vec4(0.0)));
         distance = mix(distance, vec4(-1.0), greaterThan(tNear, min(tFar, vec4(tMax))));
         float childDistances[4] = float[4](distance.x, distance.y, distance.z, distance.w);
@@ -723,12 +724,21 @@ TriangleIntersect intersectTriangle(vec3 o, vec3 d, Triangle tri, int maxDim, ve
     p0t.x * p1t.y - p0t.y * p1t.x
   );
 
+#ifdef DEPTH_QUERY_MODE
+  vec3 edgeScale = abs(vec3(p1t.x * p2t.y, p2t.x * p0t.y, p0t.x * p1t.y))
+    + abs(vec3(p1t.y * p2t.x, p2t.y * p0t.x, p0t.y * p1t.x));
+  e = mix(e, vec3(0.0), lessThanEqual(abs(e), edgeScale * 1e-6));
+#endif
+
   // check if intersection is inside triangle
   if (any(lessThan(e, vec3(0))) && any(greaterThan(e, vec3(0)))) {
     return ti;
   }
 
   float det = e.x + e.y + e.z;
+#ifdef DEPTH_QUERY_MODE
+  if (det == 0.0) return ti;
+#endif
 
   p0t.z *= shear.z;
   p1t.z *= shear.z;
@@ -752,13 +762,39 @@ struct Box {
   vec3 max;
 };
 
+// Conservative slabs only for the unjittered depth query shader.
+vec3 traversalInverse(vec3 d) {
+#ifdef DEPTH_QUERY_MODE
+  vec3 denominator = mix(d, mix(vec3(1e-20), vec3(-1e-20), lessThan(d, vec3(0.0))), lessThan(abs(d), vec3(1e-20)));
+  return 1.0 / denominator;
+#else
+  return 1.0 / d;
+#endif
+}
+
+vec3 depthSlabPadding(vec3 invD, vec3 o) {
+#ifdef DEPTH_QUERY_MODE
+  return abs(invD) * max(vec3(1.0), abs(o)) * 1e-6;
+#else
+  return vec3(0.0);
+#endif
+}
+
 // Branchless ray/box intersection
 // https://tavianator.com/fast-branchless-raybounding-box-intersections/
 float intersectBox(vec3 o, vec3 d, vec3 bmin, vec3 bmax, float tMax) {
+#ifdef DEPTH_QUERY_MODE
+  vec3 invD = traversalInverse(d);
+  vec3 tBot = (bmin - o) * invD;
+  vec3 tTop = (bmax - o) * invD;
+  vec3 padding = depthSlabPadding(invD, o);
+#else
   vec3 tBot = (bmin - o) / d;
   vec3 tTop = (bmax - o) / d;
-  vec3 tNear = min(tBot, tTop);
-  vec3 tFar = max(tBot, tTop);
+  vec3 padding = vec3(0.0);
+#endif
+  vec3 tNear = min(tBot, tTop) - padding;
+  vec3 tFar = max(tBot, tTop) + padding;
   float t0 = max(tNear.x, max(tNear.y, tNear.z));
   float t1 = min(tFar.x, min(tFar.y, tFar.z));
 

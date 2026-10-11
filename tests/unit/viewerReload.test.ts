@@ -6,7 +6,6 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vite
 import type { ViewerEngine as Engine } from '../../viewer/src/engine/ViewerEngine';
 import type { useViewer as Store } from '../../viewer/src/store';
 import type { CachedModel } from '../../viewer/src/engine/modelCache';
-import * as areaFocus from '../../viewer/src/engine/areaFocus';
 
 const cache = vi.hoisted(() => ({ model: null as CachedModel | null, read: vi.fn(), save: vi.fn(), clear: vi.fn() }));
 vi.mock('../../viewer/src/engine/modelCache', () => ({
@@ -20,6 +19,7 @@ vi.mock('@meimu/mutracer', async () => ({
     getTotalSamplesRendered() { return this.samples; }
     getSize() { return { width: 800, height: 600 }; }
     setSize() {}
+    readDepthSamples = vi.fn(async () => new Float32Array(49).fill(4));
     dispose() {}
   },
   THREESceneSync: class {
@@ -84,6 +84,10 @@ describe('viewer reload lifecycle', () => {
     return instance;
   }
 
+  async function flushFocus() {
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+  }
+
   function publish(viewer: Engine, phase: 'preparing' | 'compiling' | 'rendering' | 'finished' | 'error' | 'paused', samples: number) {
     const internal = viewer as unknown as {
       renderer: { samples: number };
@@ -109,33 +113,103 @@ describe('viewer reload lifecycle', () => {
   it('keeps focus while scrubbing aperture and measures again when depth of field is re-enabled', async () => {
     const viewer = engine();
     await viewer.loadPreset('spheres');
-    const measure = vi.spyOn(areaFocus, 'measureAreaDepth');
+    const measure = vi.spyOn(viewer.renderer, 'readDepthSamples');
     const internal = viewer as unknown as { lastViewChange: number; updateAutofocus(now: number): void };
-    const update = () => {
+    const update = async () => {
       internal.lastViewChange = 0;
       internal.updateAutofocus(performance.now() + 1000);
+      await flushFocus();
     };
     try {
       useViewer.setState((s) => ({ settings: { ...s.settings, fStop: 2.8, autoFocus: true, autoRotate: false }, animation: null }));
-      update();
+      await update();
       expect(measure).toHaveBeenCalledTimes(1);
       for (const fStop of [1.4, 4, 8, 16]) {
         useViewer.setState((s) => ({ settings: { ...s.settings, fStop } }));
-        update();
+        await update();
       }
       expect(measure).toHaveBeenCalledTimes(1);
       useViewer.setState((s) => ({ settings: { ...s.settings, fStop: 0 } }));
-      update();
+      await update();
       expect(measure).toHaveBeenCalledTimes(1);
       useViewer.setState((s) => ({ settings: { ...s.settings, fStop: 2.8 } }));
-      update();
+      await update();
       expect(measure).toHaveBeenCalledTimes(2);
       useViewer.setState((s) => ({ settings: { ...s.settings, fov: 45 } }));
-      update();
+      await update();
       expect(measure).toHaveBeenCalledTimes(3);
     } finally {
       measure.mockRestore();
     }
+  });
+
+  it('keeps a single GPU focus query in flight and ignores an outdated area', async () => {
+    const viewer = engine();
+    await viewer.loadPreset('spheres');
+    useViewer.setState(s => ({ settings: { ...s.settings, fStop: 2.8, autoFocus: true, autoRotate: false }, animation: null }));
+    const internal = viewer as unknown as { lastViewChange: number; updateAutofocus(now: number): void; startPull: (depth: number, now: number, announce: boolean) => void };
+    const pull = vi.spyOn(internal, 'startPull');
+    let resolve!: (samples: Float32Array) => void;
+    const query = vi.spyOn(viewer.renderer, 'readDepthSamples').mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+    internal.lastViewChange = 0;
+    internal.updateAutofocus(1000);
+    internal.updateAutofocus(2000);
+    expect(query).toHaveBeenCalledTimes(1);
+    useViewer.setState(s => ({ focusArea: { ...s.focusArea, x: 0.8 } }));
+    resolve(new Float32Array(49).fill(9));
+    await flushFocus();
+    expect(pull).not.toHaveBeenCalled();
+    internal.lastViewChange = 0;
+    internal.updateAutofocus(3000);
+    await flushFocus();
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(query).toHaveBeenLastCalledWith({ x: 0.8, y: useViewer.getState().focusArea.y, size: 0.07 });
+    expect(pull).toHaveBeenCalledWith(4, expect.any(Number), true);
+  });
+
+  it('retries unprepared depth queries and accepts delayed continuous tracking results', async () => {
+    const viewer = engine();
+    await viewer.loadPreset('spheres');
+    useViewer.setState(s => ({ settings: { ...s.settings, fStop: 2.8, autoFocus: true, autoRotate: true }, animation: null }));
+    const internal = viewer as unknown as { lastViewChange: number; updateAutofocus(now: number): void; startPull: (depth: number, now: number, announce: boolean) => void };
+    const pull = vi.spyOn(internal, 'startPull');
+    let resolve!: (samples: Float32Array) => void;
+    const query = vi.spyOn(viewer.renderer, 'readDepthSamples')
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(() => new Promise(r => { resolve = r; }));
+    internal.updateAutofocus(1000);
+    await flushFocus();
+    expect(pull).not.toHaveBeenCalled();
+    internal.updateAutofocus(1016);
+    internal.lastViewChange = 1016;
+    resolve(new Float32Array(49).fill(3));
+    await flushFocus();
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(pull).toHaveBeenCalledWith(3, expect.any(Number), false);
+  });
+
+  it('queues manual GPU focus picks and discards them after a slider change or disposal', async () => {
+    const viewer = engine();
+    await viewer.loadPreset('spheres');
+    useViewer.setState(s => ({ settings: { ...s.settings, fStop: 2.8, autoFocus: false } }));
+    const internal = viewer as unknown as { updateAutofocus(now: number): void; startPull: (depth: number, now: number, announce: boolean) => void };
+    const pull = vi.spyOn(internal, 'startPull');
+    let resolve!: (samples: Float32Array) => void;
+    const query = vi.spyOn(viewer.renderer, 'readDepthSamples').mockImplementation(() => new Promise(r => { resolve = r; }));
+    viewer.pickFocus(0.3, 0.4);
+    expect(query).not.toHaveBeenCalled();
+    internal.updateAutofocus(1000);
+    expect(query).toHaveBeenCalledWith({ x: 0.3, y: 0.4, size: 0.004 });
+    useViewer.setState(s => ({ settings: { ...s.settings, focusDistance: 7 } }));
+    resolve(new Float32Array(49).fill(2));
+    await flushFocus();
+    expect(pull).not.toHaveBeenCalled();
+    viewer.pickFocus(0.6, 0.7);
+    internal.updateAutofocus(2000);
+    viewer.dispose();
+    resolve(new Float32Array(49).fill(2));
+    await flushFocus();
+    expect(pull).not.toHaveBeenCalled();
   });
 
   it('does not let the previous model hide or overwrite a new download stage', async () => {

@@ -220,6 +220,7 @@ fn intersectCwbvhInterior(
     bitcast<f32>(u32(exponentY + 127) << 23u),
     bitcast<f32>(u32(exponentZ + 127) << 23u)
   );
+  let padding = depthSlabPadding(invD, o);
   let originTerm = (n0.xyz - o) * invD;
   let adjustedInvD = quantizationScale * invD;
   let minX0 = unpackCwbvhBytes(bitcast<u32>(n2.x));
@@ -242,12 +243,12 @@ fn intersectCwbvhInterior(
   let maxTy0 = maxY0 * adjustedInvD.y + originTerm.y;
   let maxTz0 = maxZ0 * adjustedInvD.z + originTerm.z;
   let near0 = max(
-    max(min(minTx0, maxTx0), min(minTy0, maxTy0)),
-    min(minTz0, maxTz0)
+    max((min(minTx0, maxTx0) - vec4f(padding.x)), (min(minTy0, maxTy0) - vec4f(padding.y))),
+    (min(minTz0, maxTz0) - vec4f(padding.z))
   );
   let far0 = min(
-    min(max(minTx0, maxTx0), max(minTy0, maxTy0)),
-    max(minTz0, maxTz0)
+    min((max(minTx0, maxTx0) + vec4f(padding.x)), (max(minTy0, maxTy0) + vec4f(padding.y))),
+    (max(minTz0, maxTz0) + vec4f(padding.z))
   );
 
   let minTx1 = minX1 * adjustedInvD.x + originTerm.x;
@@ -257,12 +258,12 @@ fn intersectCwbvhInterior(
   let maxTy1 = maxY1 * adjustedInvD.y + originTerm.y;
   let maxTz1 = maxZ1 * adjustedInvD.z + originTerm.z;
   let near1 = max(
-    max(min(minTx1, maxTx1), min(minTy1, maxTy1)),
-    min(minTz1, maxTz1)
+    max((min(minTx1, maxTx1) - vec4f(padding.x)), (min(minTy1, maxTy1) - vec4f(padding.y))),
+    (min(minTz1, maxTz1) - vec4f(padding.z))
   );
   let far1 = min(
-    min(max(minTx1, maxTx1), max(minTy1, maxTy1)),
-    max(minTz1, maxTz1)
+    min((max(minTx1, maxTx1) + vec4f(padding.x)), (max(minTy1, maxTy1) + vec4f(padding.y))),
+    (max(minTz1, maxTz1) + vec4f(padding.z))
   );
 
   let hits0 = (near0 <= min(far0, vec4f(tMax))) & (far0 > vec4f(0.0));
@@ -318,7 +319,7 @@ var d = ray.d;
 var o = ray.o;
 var tlasStack: array<i32, TLAS_STACK_SIZE>;
 var tlasTop = -1;
-var invD = 1.0 / d;
+var invD = traversalInverse(d);
 var isHitMicroTriangle = false;
 var isHit = false;
 var hitPosition: vec3f;
@@ -335,7 +336,7 @@ while (tlasTop >= 0) {
   tlasTop--;
   o = ray.o;
   d = ray.d;
-  invD = 1.0 / d;
+  invD = traversalInverse(d);
 
   let tlasR1 = bvhBuffer[tlasNode];
   let tlasPointerOrPrimitiveCount = bitcast<i32>(tlasR1.w);
@@ -387,7 +388,7 @@ while (tlasTop >= 0) {
       );
       o = (w2l * vec4f(ray.o, 1.0)).xyz;
       d = (w2l * vec4f(ray.d, 0.0)).xyz;
-      invD = 1.0 / d;
+      invD = traversalInverse(d);
       maxDim = maxDimension(abs(d));
       shear = getShear(d, maxDim);
 
@@ -579,13 +580,14 @@ while (tlasTop >= 0) {
             let ty1 = (nodeMin.y + childMaxY * nodeExtent.y - o.y) * invD.y;
             let tz0 = (nodeMin.z + childMinZ * nodeExtent.z - o.z) * invD.z;
             let tz1 = (nodeMin.z + childMaxZ * nodeExtent.z - o.z) * invD.z;
+            let padding = depthSlabPadding(invD, o);
             let tNear = max(
-              max(min(tx0, tx1), min(ty0, ty1)),
-              min(tz0, tz1)
+              max((min(tx0, tx1) - vec4f(padding.x)), (min(ty0, ty1) - vec4f(padding.y))),
+              (min(tz0, tz1) - vec4f(padding.z))
             );
             let tFar = min(
-              min(max(tx0, tx1), max(ty0, ty1)),
-              max(tz0, tz1)
+              min((max(tx0, tx1) + vec4f(padding.x)), (max(ty0, ty1) + vec4f(padding.y))),
+              (max(tz0, tz1) + vec4f(padding.z))
             );
             var distance = select(tFar, tNear, tNear > vec4f(0.0));
             distance = select(
@@ -1158,11 +1160,19 @@ fn intersectTriangle(o: vec3f, d: vec3f, tri: Triangle, maxDim: i32, shear: vec3
   p2t = vec3f(p2t.xy + shear.xy * p2t.z, p2t.z);
 
   // compute edge function coefficients
-  let e = vec3f(
+  var e = vec3f(
     p1t.x * p2t.y - p1t.y * p2t.x,
     p2t.x * p0t.y - p2t.y * p0t.x,
     p0t.x * p1t.y - p0t.y * p1t.x
   );
+
+  if (DEPTH_QUERY_MODE) {
+    // Exact grid rays can land on shared edges. Roundoff in the two edge
+    // products must not turn the edge into a crack between both triangles.
+    let edgeScale = abs(vec3f(p1t.x * p2t.y, p2t.x * p0t.y, p0t.x * p1t.y))
+      + abs(vec3f(p1t.y * p2t.x, p2t.y * p0t.x, p0t.y * p1t.x));
+    e = select(e, vec3f(0.0), abs(e) <= edgeScale * 1e-6);
+  }
 
   // check if intersection is inside triangle
   if (any(e < vec3f(0)) && any(e > vec3f(0))) {
@@ -1170,6 +1180,7 @@ fn intersectTriangle(o: vec3f, d: vec3f, tri: Triangle, maxDim: i32, shear: vec3
   }
 
   let det = e.x + e.y + e.z;
+  if (DEPTH_QUERY_MODE && det == 0.0) { return ti; }
 
   p0t.z *= shear.z;
   p1t.z *= shear.z;
@@ -1188,13 +1199,29 @@ fn intersectTriangle(o: vec3f, d: vec3f, tri: Triangle, maxDim: i32, shear: vec3
   return ti;
 }
 
+// Pinhole depth queries can lie exactly on a grid vertex or a flat slab.
+// Specialize conservative slabs for that entry point; beauty retains its
+// original traversal arithmetic and random streams.
+override DEPTH_QUERY_MODE: bool = false;
+
+fn traversalInverse(d: vec3f) -> vec3f {
+  if (!DEPTH_QUERY_MODE) { return 1.0 / d; }
+  return 1.0 / select(d, select(vec3f(1e-20), vec3f(-1e-20), d < vec3f(0.0)), abs(d) < vec3f(1e-20));
+}
+
+fn depthSlabPadding(invD: vec3f, o: vec3f) -> vec3f {
+  if (!DEPTH_QUERY_MODE) { return vec3f(0.0); }
+  return abs(invD) * max(vec3f(1.0), abs(o)) * 1e-6;
+}
+
 // Branchless ray/box intersection
 // https://tavianator.com/fast-branchless-raybounding-box-intersections/
 fn intersectBox(o: vec3f, bmin: vec3f, bmax: vec3f, invD: vec3f, tMax: f32) -> f32 {
   let tBot = (bmin - o) * invD;
   let tTop = (bmax - o) * invD;
-  let tNear = min(tBot, tTop);
-  let tFar = max(tBot, tTop);
+  let padding = depthSlabPadding(invD, o);
+  let tNear = min(tBot, tTop) - padding;
+  let tFar = max(tBot, tTop) + padding;
   let t0 = max(tNear.x, max(tNear.y, tNear.z));
   let t1 = min(tFar.x, min(tFar.y, tFar.z));
   return select(select(t1, t0, t0 > 0.0), -1.0, (t0 > t1 || t0 > tMax));

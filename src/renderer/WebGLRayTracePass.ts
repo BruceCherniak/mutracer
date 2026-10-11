@@ -1,4 +1,7 @@
 import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling.js';
+import depthQueryFrag from './glsl/depthQuery.frag.js';
+import { readFloatPixelsAsync } from './WebGLReadback.js';
+import { DEPTH_SAMPLE_GRID, packDepthSampleArea, unpackDepthSamples, type DepthSampleArea } from './depthQuery.js';
 import { MeshMembershipCache } from './meshMembership.js';
 import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges.js';
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges.js';
@@ -219,6 +222,9 @@ class WebGLRayTracePass {
   private _focusDistance = 10;
 
   private _tracePasses: WebGLFullQuadPass<any, any>[];
+  private readonly _depthPass: WebGLFullQuadPass<never, 'depth'>;
+  private readonly _depthAbort = new AbortController();
+  private _depthAspect = 1;
   private _hasShadowCatcher = false;
   private _spectral = false;
 
@@ -265,7 +271,11 @@ class WebGLRayTracePass {
         }
       }
     );
-    this._tracePasses = [this._mainPass, this._shadowCatcherPass];
+    this._depthPass = new WebGLFullQuadPass('Depth query', renderer, {
+      shader: depthQueryFrag, outputs: ['depth'],
+      outputParams: { depth: commonNearestFloatProps }
+    });
+    this._tracePasses = [this._mainPass, this._shadowCatcherPass, this._depthPass];
     this._tracePasses.forEach((pass) => {
       pass.setDefines({
         OES_texture_float_linear: !!renderer.gl.getExtension(
@@ -859,8 +869,10 @@ class WebGLRayTracePass {
   }
 
   setSize(width: number, height: number) {
+    this._depthAspect = width / height;
     this._tracePasses.forEach((pass) => {
-      pass.setSize(width, height);
+      pass.setSize(pass === this._depthPass ? DEPTH_SAMPLE_GRID : width,
+        pass === this._depthPass ? DEPTH_SAMPLE_GRID : height);
       pass.setUniform('pixelSize', [1 / width, 1 / height]);
     });
   }
@@ -982,7 +994,19 @@ class WebGLRayTracePass {
   // WebGL has uniform per-pixel counts; setSampleCount already includes offset.
   setSampleSequenceOffset(_offset: number) {}
 
+  async readDepthSamples(area: DepthSampleArea): Promise<Float32Array | undefined> {
+    if (this._depthAbort.signal.aborted || this._invalid || !this._preparedMeshData ||
+      !this._renderer.isAllProgramCompiled()) return;
+    this.prepare();
+    this._depthPass.setUniform('depthArea', packDepthSampleArea(area, this._depthAspect));
+    this._depthPass.createPass({});
+    const rgba = await readFloatPixelsAsync(this._renderer.gl,
+      DEPTH_SAMPLE_GRID, DEPTH_SAMPLE_GRID, this._depthAbort.signal);
+    return unpackDepthSamples(rgba);
+  }
+
   dispose() {
+    this._depthAbort.abort();
     this._materialData?.dispose(this._renderer.gl);
     this._materialData = undefined;
     this._tracePasses.forEach((pass) => pass.dispose());

@@ -28,7 +28,7 @@ import { pushHistory, recordGroup } from '../history';
 import { groundModel } from './modelGrounding';
 import { DENOISER_FIELDS, getDenoiserOptions } from './denoiserSettings';
 import { buildStudioRig, createStudioAmbient, findStudioPreset } from './studio';
-import { FOCUS_AREA_SIZE, focusPull, guessMetersPerUnit, measureAreaDepth } from './areaFocus';
+import { FOCUS_AREA_SIZE, focusPull, guessMetersPerUnit, pickFocusDepth } from './areaFocus';
 
 export interface ExportOptions {
   width: number;
@@ -114,6 +114,10 @@ export class ViewerEngine {
   private autofocusPending = true;
   private lastViewChange = 0;
   private lastAutofocus = 0;
+  private focusQueryInFlight = false;
+  private focusQueryVersion = 0;
+  private manualFocus: { x: number; y: number } | null = null;
+  private disposed = false;
   private readonly unsubscribe: () => void;
   private readonly resizeObserver: ResizeObserver;
 
@@ -167,6 +171,8 @@ export class ViewerEngine {
   }
 
   dispose() {
+    this.disposed = true;
+    ++this.focusQueryVersion;
     clearTimeout(this.denoiserUpdateTimer);
     this.saveCamera();
     ++this.loadToken;
@@ -573,13 +579,18 @@ export class ViewerEngine {
       changed('groundedRadius')) this.applyBackground();
     if (changed('resolutionScale') || changed('cameraIndex')) this.needsResize = true;
     // A focus distance set elsewhere (the slider, fitting) ends a running pull.
-    if (prev && changed('focusDistance') && !this.writingFocus) this.pull = null;
+    if (prev && changed('focusDistance') && !this.writingFocus) {
+      this.pull = null;
+      this.manualFocus = null;
+      ++this.focusQueryVersion;
+    }
     // End manual picking when its controls disappear, so the next scene click
     // selects the object. Autofocus is positioned by dragging its center handle.
     if ((!(s.fStop > 0) || s.autoFocus) && get().pickingFocus) set({ pickingFocus: false });
     // Aperture changes blur, but do not change the subject's depth. Only
     // enabling the lens needs a new measurement; scrubbing f-number does not.
     if ((!prev || (prev.fStop <= 0 && s.fStop > 0)) || changed('autoFocus') || changed('fov') || changed('cameraIndex') || changed('projection')) {
+      ++this.focusQueryVersion;
       this.requestAutofocus();
     }
     if (changed('fov')) {
@@ -819,8 +830,8 @@ export class ViewerEngine {
       this.lastViewChange = 0;
       return;
     }
-    const depth = measureAreaDepth(this.modelGroup, camera, { x, y, size: 0.004 }, this.viewAspect());
-    if (depth !== null) this.startPull(depth, performance.now());
+    this.manualFocus = { x, y };
+    ++this.focusQueryVersion;
   }
 
   /**
@@ -829,20 +840,59 @@ export class ViewerEngine {
    */
   private updateAutofocus(now: number) {
     const camera = this.activeCamera();
-    if (!(this.settings.fStop > 0) || !this.settings.autoFocus || isOrthographic(camera)) return;
+    if (this.disposed || this.focusQueryInFlight || !(this.settings.fStop > 0) || isOrthographic(camera)) return;
+    if (!this.settings.autoFocus) {
+      if (this.manualFocus) this.queryFocus(this.manualFocus, now, false, false);
+      return;
+    }
+    this.manualFocus = null;
     const tracking = (this.settings.autoRotate && this.settings.cameraIndex < 0) || get().animation?.playing;
     if (tracking ? now - this.lastAutofocus < AUTOFOCUS_TRACK_MS
       : !this.autofocusPending || this.dragging || now - this.lastViewChange < AUTOFOCUS_SETTLE_MS) return;
-    this.autofocusPending = false;
-    this.lastAutofocus = now;
     const area = get().focusArea;
-    const depth = measureAreaDepth(this.modelGroup, camera, { x: area.x, y: area.y, size: FOCUS_AREA_SIZE }, this.viewAspect());
-    if (depth === null) {
-      set({ focusArea: { ...area, status: 'missed', attempt: area.attempt + 1 } });
-      return;
-    }
-    // Tracking keeps the frame steady instead of replaying its animation.
-    this.startPull(depth, now, !tracking);
+    this.queryFocus(area, now, true, !!tracking);
+  }
+
+  /** One compact asynchronous GPU query; late results never replace a new target. */
+  private queryFocus(area: { x: number; y: number }, now: number, automatic: boolean, tracking: boolean) {
+    const version = this.focusQueryVersion;
+    const loadToken = this.loadToken;
+    const viewChange = this.lastViewChange;
+    const camera = this.activeCamera();
+    const projection = camera.projectionMatrix.clone();
+    this.focusQueryInFlight = true;
+    void this.renderer.readDepthSamples({ x: area.x, y: area.y, size: automatic ? FOCUS_AREA_SIZE : 0.004 })
+      .then((samples) => {
+        if (this.disposed || version !== this.focusQueryVersion || loadToken !== this.loadToken ||
+          !(this.settings.fStop > 0) || automatic !== this.settings.autoFocus ||
+          camera !== this.activeCamera() || !projection.equals(camera.projectionMatrix)) return;
+        const currentArea = get().focusArea;
+        if (automatic ? currentArea.x !== area.x || currentArea.y !== area.y ||
+          (!tracking && viewChange !== this.lastViewChange) : this.manualFocus !== area) return;
+        // Preparation/compilation or a busy renderer: retry on a later frame.
+        if (!samples) return;
+        if (automatic) {
+          this.autofocusPending = false;
+          this.lastAutofocus = now;
+        } else {
+          this.manualFocus = null;
+        }
+        const depth = pickFocusDepth(Array.from(samples).filter(d => Number.isFinite(d) && d > 0), samples.length);
+        if (depth === null) {
+          if (automatic) set({ focusArea: { ...currentArea, status: 'missed', attempt: currentArea.attempt + 1 } });
+          return;
+        }
+        // Start the pull on completion, so readback latency cannot skip it.
+        this.startPull(depth, performance.now(), !tracking);
+      })
+      .catch((error) => {
+        if (this.disposed || loadToken !== this.loadToken) return;
+        // Retry at the tracking interval without flooding the GPU on failure.
+        this.lastAutofocus = performance.now();
+        this.lastViewChange = this.lastAutofocus;
+        console.warn('Focus depth query failed.', error);
+      })
+      .finally(() => { this.focusQueryInFlight = false; });
   }
 
   private startPull(target: number, now: number, announce = true) {
@@ -1170,7 +1220,6 @@ export class ViewerEngine {
       return;
     }
     this.sync.update();
-    this.updateAutofocus(now);
     const camera = this.lensCamera(this.activeCamera(), this.advanceFocus(now));
     this.publishLens(camera);
     let status: RenderStatus;
@@ -1179,6 +1228,11 @@ export class ViewerEngine {
     } catch (error) {
       console.error(error);
       status = RENDER_STATUS_ERROR;
+    }
+    // Query only after the renderer uploads the current animation pose and
+    // camera. Readback runs alongside subsequent frames.
+    if (status !== RENDER_STATUS_PREPARING && status !== RENDER_STATUS_COMPILING_SHADER && status !== RENDER_STATUS_ERROR) {
+      this.updateAutofocus(now);
     }
     if (!this.backendKnown && status !== RENDER_STATUS_PREPARING) this.detectBackend();
     let phase = phaseOf(status);

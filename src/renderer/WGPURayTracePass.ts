@@ -1,5 +1,6 @@
 import { SHADOW_CATCHER_ACCUMULATION_BYTES } from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
 import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling.js';
+import { DEPTH_SAMPLE_COUNT, packDepthSampleArea, unpackDepthSamples, type DepthSampleArea } from './depthQuery.js';
 import { MeshMembershipCache } from './meshMembership.js';
 import { mergeRefitRanges } from './bvhAccel.js';
 import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged, packVertexAttributes } from './geometryUpdates.js';
@@ -417,6 +418,9 @@ class WGPURayTracePass {
   private _needsUpdateBindGroups = true;
 
   private _computeShaderModule?: GPUShaderModule;
+  private _depthCompute?: GPUProgrammableStage;
+  private _depthTracePipeline?: GPUComputePipeline;
+  private _depthPipeline?: Promise<GPUComputePipeline>;
   private _shaderCache: WGPUShaderCache;
   private _debugBVHBuffer?: ArrayBuffer;
 
@@ -1189,6 +1193,7 @@ ${rayTraceCompute({
             diagnostic.durationMs = diagnostic.endedAtMs;
           }
           this._rayTracePipeline = rayTracePipeline;
+          this._depthCompute = { module: this._computeShaderModule!, constants: pipelineConstants };
           const pipelineError = await device.popErrorScope();
           pipelineScopeOpen = false;
           if (pipelineError) throw pipelineError;
@@ -1278,6 +1283,64 @@ ${rayTraceCompute({
       console.error('Failed to update WebGPU ray tracing pipeline.', error);
     } finally {
       this._isCompilingShader = false;
+    }
+  }
+
+  async readDepthSamples(area: DepthSampleArea): Promise<Float32Array | undefined> {
+    const tracePipeline = this._rayTracePipeline;
+    const groups = this._rayTraceBindGroups;
+    if (!tracePipeline || !groups || !this._depthCompute || this._isCompilingShader) return;
+    const packed = packDepthSampleArea(area, this._width / this._height);
+    if (this._depthTracePipeline !== tracePipeline || !this._depthPipeline) {
+      const outputLayout = this._shaderCache.createBindGroupLayout({
+        label: 'Depth query output',
+        entries: [
+          { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+          { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } }
+        ]
+      });
+      const layout = this._shaderCache.createPipelineLayout({
+        label: 'Depth query layout',
+        bindGroupLayouts: [0, 1, 2].map(i => tracePipeline.getBindGroupLayout(i)).concat(outputLayout)
+      });
+      this._depthTracePipeline = tracePipeline;
+      this._depthPipeline = this._shaderCache.createComputePipelineAsync({
+        label: 'Depth query', layout,
+        compute: { ...this._depthCompute, entryPoint: 'depthQuery',
+          constants: { ...this._depthCompute.constants, DEPTH_QUERY_MODE: 1 } }
+      });
+    }
+    const pipeline = await this._depthPipeline;
+    // Scene uploads can replace the buffers while the small query compiles.
+    if (tracePipeline !== this._rayTracePipeline || groups !== this._rayTraceBindGroups) return;
+    const device = this._device;
+    const bytes = DEPTH_SAMPLE_COUNT * 16;
+    const output = device.createBuffer({ label: 'Depth samples', size: bytes,
+      usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    const readback = device.createBuffer({ label: 'Depth readback', size: bytes,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    const params = device.createBuffer({ label: 'Depth area', size: 16,
+      usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    try {
+      device.queue.writeBuffer(params, 0, packed);
+      const outputGroup = device.createBindGroup({ layout: pipeline.getBindGroupLayout(3), entries: [
+        { binding: 0, resource: { buffer: output } },
+        { binding: 4, resource: { buffer: params } }
+      ] });
+      const encoder = device.createCommandEncoder({ label: 'Depth query' });
+      const pass = encoder.beginComputePass();
+      pass.setPipeline(pipeline);
+      for (let i = 0; i < 3; i++) pass.setBindGroup(i, groups[i]);
+      pass.setBindGroup(3, outputGroup);
+      pass.dispatchWorkgroups(1);
+      pass.end();
+      encoder.copyBufferToBuffer(output, 0, readback, 0, bytes);
+      device.queue.submit([encoder.finish()]);
+      await readback.mapAsync(GPUMapMode.READ);
+      return unpackDepthSamples(new Float32Array(readback.getMappedRange()));
+    } finally {
+      if (readback.mapState === 'mapped') readback.unmap();
+      readback.destroy(); output.destroy(); params.destroy();
     }
   }
 

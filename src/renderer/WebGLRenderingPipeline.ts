@@ -650,6 +650,7 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       if (overlay) overlayTexture.source = overlay.image;
       return true;
     },
+    readDepthSamples: (area) => rayTracePass.readDepthSamples(area),
     async getRawOutput() {
       const texture = rayTraceOutputPass.getOutput('color');
       rawReadFrameBuffer.bind(renderer, [texture]);

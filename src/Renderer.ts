@@ -1,4 +1,5 @@
 import type { SamplingPattern } from './renderer/sampling.js';
+import { packDepthSampleArea, type DepthSampleArea } from './renderer/depthQuery.js';
 import { ensureMeshGeometryAttributes, meshNeedsStaticBvh } from './renderer/prepareMeshBVH.js';
 import {
   DEFAULT_BEVEL_SAMPLES,
@@ -36,6 +37,7 @@ import {
   type OfflineAdaptiveSamplingOptions,
   type OfflineVarianceHistory
 } from './renderer/OfflineAdaptiveSampling.js';
+export type { DepthSampleArea } from './renderer/depthQuery.js';
 /** BLAS builder for meshes without a precomputed BVH. See {@link Renderer.bvhBuilder}. */
 export type BVHBuilder = 'tinybvh' | 'builtin';
 
@@ -608,6 +610,7 @@ export default class Renderer {
 
   private _initing = false;
   private _renderDone = false;
+  private _readingDepth = false;
   private _oidnStatus = 0;
   private _oidnRevision = 0;
 
@@ -1612,6 +1615,29 @@ export default class Renderer {
     if (this.isUsingWebGPU()) {
       // Needs do an extra draw. Or the export will be last frame.
       this._pipeline?.drawPostProcess();
+    }
+  }
+
+  /**
+   * Queries a 7×7 grid of pinhole depths in the last rendered scene and camera,
+   * asynchronously on either GPU backend. Distances are along the camera's
+   * forward axis in scene units; missed or out-of-viewport samples are `0`.
+   * The square area includes its edges, in row order from the top left.
+   * Invisible shadow catchers and zero-opacity surfaces are skipped; glass
+   * measures its front surface. Pixel jitter and depth of field are ignored.
+   * Returns `undefined` before GPU scene preparation completes or while
+   * another depth query is in flight. Call after {@link render}; no defaults.
+   */
+  async readDepthSamples(area: DepthSampleArea): Promise<Float32Array | undefined> {
+    packDepthSampleArea(area, 1);
+    const pipeline = this._pipeline;
+    if (!pipeline || this._readingDepth) return;
+    this._readingDepth = true;
+    try {
+      const data = await pipeline.readDepthSamples(area);
+      return pipeline === this._pipeline ? data : undefined;
+    } finally {
+      this._readingDepth = false;
     }
   }
 

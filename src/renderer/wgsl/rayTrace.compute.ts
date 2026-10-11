@@ -1,4 +1,5 @@
 import shadowCatcherAccumulationWGSL from './chunks/shadowCatcherAccumulation.wgsl.js';
+import depthQueryWGSL from './depthQuery.wgsl.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
@@ -913,9 +914,11 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
   }
 }
 `;
+  // The query entry point shares the exact BVH and material implementation.
+  // It has no effect on the beauty entry point or its bindings.
   // Gate optional material layers on scene-level feature flags so drivers can
   // skip the unused BSDF lobes.
-  let specializedSource = source;
+  let specializedSource = source + depthQueryWGSL;
   specializedSource = specializedSource.replaceAll(
     'material.thinFilmWeight > 0.0',
     'HAS_THIN_FILM && material.thinFilmWeight > 0.0');

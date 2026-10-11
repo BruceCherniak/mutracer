@@ -1,4 +1,5 @@
 import type { SamplingPattern } from './sampling.js';
+import type { DepthSampleArea } from './depthQuery.js';
 import Camera from '../scene/Camera.js';
 import Mesh from '../scene/Mesh.js';
 import Geometry from '../scene/Geometry.js';
@@ -274,6 +275,7 @@ export interface RenderingPipeline {
   setOutput(output: RenderOutput): boolean;
   setOverlay(overlay: Scene['overlay']): boolean;
   dispose(): void;
+  readDepthSamples(area: DepthSampleArea): Promise<Float32Array | undefined>;
   getRawOutput(): Promise<{
     data: Float32Array;
     flipY: boolean;
