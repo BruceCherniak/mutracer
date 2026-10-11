@@ -1,5 +1,5 @@
 import type { SamplingPattern } from './renderer/sampling.js';
-import { ensureMeshGeometryAttributes } from './renderer/prepareMeshBVH.js';
+import { ensureMeshGeometryAttributes, meshNeedsStaticBvh } from './renderer/prepareMeshBVH.js';
 import {
   DEFAULT_BEVEL_SAMPLES,
   DEFAULT_DIRECT_LIGHT_CANDIDATES,
@@ -25,8 +25,8 @@ import {
   type JNLMDenoiser,
   type JNLMOptions
 } from './renderer/jnlm.js';
-import { meshNeedsPrecompute, prepareForPrecompute, precompute, resolveFromPrecompute } from './util/workerHelper.js';
-import { buildBvhInWorker, canUseBvhWorker } from './renderer/bvhWorkerClient.js';
+import { prepareStaticBvhs } from './renderer/staticBvhPreparation.js';
+import { canUseBvhWorker } from './renderer/bvhWorkerClient.js';
 import makeWGPURenderingPipeline, {
   OIDNWeb
 } from './renderer/WGPURenderingPipeline.js';
@@ -357,6 +357,7 @@ export default class Renderer {
    */
   bvhSpatialSplits = false;
   private _bvhPreparation?: Promise<void>;
+  private _bvhPreparationTail: Promise<unknown> = Promise.resolve();
   private _tinyBvhUnavailable = false;
   private _bvhWorkerUnavailable = false;
   /** Geometry (and its version) each mesh had when preparation last failed. */
@@ -687,39 +688,30 @@ export default class Renderer {
    * `render()` calls this automatically and returns `RENDER_STATUS_PREPARING`
    * meanwhile. Dynamic geometry retains synchronous refit/rebuild behavior.
    */
-  async prepareScene(scene: Pick<Scene, 'meshes'> | Mesh[]) {
-    const meshes = Array.isArray(scene) ? scene : scene.meshes;
-    const useTinyBvh = this.bvhBuilder === 'tinybvh' && !this._tinyBvhUnavailable;
-    const useWorker = canUseBvhWorker() && !this._bvhWorkerUnavailable;
-    const pending = meshes.filter(mesh => !mesh.geometry.dynamic && meshNeedsPrecompute(mesh));
-    if (!pending.length) return;
-    const snapshots = pending.map(mesh => [mesh, mesh.geometry, mesh.geometry.version] as const);
-    let failed = false;
-    try {
-      if (useTinyBvh) {
-        const { precomputeTinyBvh } = await import('./tinybvh/precomputeTinyBvh.js');
-        await precomputeTinyBvh(pending, 'bvh2', undefined, {
-          onlyMissing: true,
-          spatialSplits: this.bvhSpatialSplits
-        });
-      } else {
-        const prepared = prepareForPrecompute(pending);
-        const result = await precompute(prepared.geometries, prepared.displacementScales,
-          prepared.trianglesDisplacements, useWorker ? (geometry, scale, displacement) =>
-            buildBvhInWorker(geometry, scale, displacement) : undefined,
-          undefined, prepared.projectiveDisplacements);
-        resolveFromPrecompute(result, prepared);
-      }
-    } catch (error) {
-      failed = true;
-      if (useTinyBvh) this._tinyBvhUnavailable = true;
-      else this._bvhWorkerUnavailable = true;
-      console.warn('BVH preparation failed; falling back to the built-in BVH builder.', error);
-    } finally {
-      if (failed) snapshots.forEach(([mesh, geometry, version]) => {
-        this._bvhPreparedGeometry.set(mesh, [geometry, version]);
+  prepareScene(scene: Pick<Scene, 'meshes'> | Mesh[]): Promise<void> {
+    const preparation = this._bvhPreparationTail.then(async () => {
+      const meshes = Array.isArray(scene) ? scene : scene.meshes;
+      const result = await prepareStaticBvhs(meshes, {
+        builder: this.bvhBuilder === 'tinybvh' && !this._tinyBvhUnavailable ? 'tinybvh' : 'builtin',
+        layout: 'bvh2', spatialSplits: this.bvhSpatialSplits,
+        useWorker: canUseBvhWorker() && !this._bvhWorkerUnavailable,
+        rebuild: false
       });
-    }
+      if (result.workerUnavailable && !this._bvhWorkerUnavailable) {
+        this._bvhWorkerUnavailable = true;
+        console.warn('BVH preparation failed; falling back to the main-thread BVH builder.');
+      }
+      if (result.tinyBvhUnavailable && !this._tinyBvhUnavailable) {
+        this._tinyBvhUnavailable = true;
+        console.warn('BVH preparation failed; falling back to the built-in BVH builder.');
+      }
+      result.failedMeshes.forEach(mesh => {
+        this._bvhPreparedGeometry.set(mesh, [mesh.geometry, mesh.geometry.version]);
+      });
+      if (result.geometryCount > 0) this._forceMeshUpdate = true;
+    });
+    this._bvhPreparationTail = preparation.catch(() => undefined);
+    return preparation;
   }
 
   private _needsBVHPreparation(meshes: Mesh[]) {
@@ -730,7 +722,7 @@ export default class Renderer {
       const prepared = this._bvhPreparedGeometry.get(mesh);
       const attempted = prepared?.[0] === mesh.geometry &&
         prepared[1] === mesh.geometry.version;
-      return !mesh.geometry.dynamic && !attempted && meshNeedsPrecompute(mesh);
+      return !attempted && meshNeedsStaticBvh(mesh);
     });
   }
 
@@ -1280,7 +1272,6 @@ export default class Renderer {
     if (this._bvhPreparation || (meshContentChanged && this._needsBVHPreparation(scene.meshes))) {
       this._bvhPreparation ??= this.prepareScene(scene.meshes).finally(() => {
         this._bvhPreparation = undefined;
-        this._forceMeshUpdate = true;
       });
       return RENDER_STATUS_PREPARING;
     }

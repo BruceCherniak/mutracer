@@ -1,3 +1,6 @@
+import * as bvhWorker from '../../src/renderer/bvhWorkerClient';
+import { buildBLAS } from '../../src/renderer/bvhAccel';
+import { updateMeshInstances } from '../../src/renderer/prepareMeshBVH';
 import { ensureMeshGeometryAttributes } from '../../src/renderer/prepareMeshBVH';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -1335,4 +1338,40 @@ describe('sampling pattern', () => {
     expect(renderer.samplingPattern).toBe('zsobol');
     renderer.dispose();
   });
+});
+
+it('shares preparation between render and a concurrent explicit prepareScene call', async () => {
+  vi.stubGlobal('Worker', class {});
+  let finish!: (bvh: ReturnType<typeof buildBLAS>) => void;
+  const build = vi.spyOn(bvhWorker, 'buildBvhInWorker').mockImplementation(() => new Promise(resolve => {finish = resolve;}));
+  try {
+    const renderer = new Renderer({canvas: {width: 1, height: 1} as HTMLCanvasElement});
+    const pipeline = createPipeline(); attachPipeline(renderer, pipeline);
+    const scene: Scene = {meshes: [new Mesh(createCubeGeometry(), new OpenPBRMaterial())], lights: []};
+    expect(renderer.render(scene, {} as Camera)).toBe(RENDER_STATUS_PREPARING);
+    const explicit = renderer.prepareScene(scene);
+    await Promise.resolve();
+    expect(build).toHaveBeenCalledOnce();
+    finish(buildBLAS(scene.meshes[0].geometry));
+    await explicit;
+    expect(build).toHaveBeenCalledOnce();
+    expect(renderer.render(scene, {} as Camera)).not.toBe(RENDER_STATUS_PREPARING);
+  } finally {build.mockRestore(); vi.unstubAllGlobals();}
+});
+
+it('keeps rendering the current scene during background preparation of another scene', async () => {
+  vi.stubGlobal('Worker', class {});
+  let finish!: (bvh: ReturnType<typeof buildBLAS>) => void;
+  const build = vi.spyOn(bvhWorker, 'buildBvhInWorker').mockImplementation(() => new Promise(resolve => {finish = resolve;}));
+  try {
+    const renderer = new Renderer({canvas: {width: 1, height: 1} as HTMLCanvasElement});
+    const pipeline = createPipeline(); attachPipeline(renderer, pipeline);
+    const current: Scene = {meshes: [new Mesh(createCubeGeometry(), new OpenPBRMaterial())], lights: []};
+    updateMeshInstances(current.meshes); markSceneStable(renderer, current);
+    const background = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
+    const pending = renderer.prepareScene([background]); await Promise.resolve();
+    expect(renderer.render(current, {} as Camera)).not.toBe(RENDER_STATUS_PREPARING);
+    expect(pipeline.draw).toHaveBeenCalledOnce();
+    finish(buildBLAS(background.geometry)); await pending;
+  } finally {build.mockRestore(); vi.unstubAllGlobals();}
 });

@@ -18,6 +18,14 @@ export type BvhBuildResponse =
   | { id: number; bvh: FlattendBVH }
   | { id: number; error: string };
 
+/** Worker transport or startup failure; retry the builder on the calling thread. */
+export class BvhWorkerUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BvhWorkerUnavailableError';
+  }
+}
+
 /** Internal reusable client; cloning inputs keeps renderer-owned arrays attached. */
 export class BvhWorkerClient {
   private nextId = 0;
@@ -37,9 +45,9 @@ export class BvhWorkerClient {
     };
     worker.onerror = (event) => {
       event.preventDefault();
-      this.fail(new Error(event.message || 'BVH worker failed.'));
+      this.fail(new BvhWorkerUnavailableError(event.message || 'BVH worker failed.'));
     };
-    worker.onmessageerror = () => this.fail(new Error('Unable to receive BVH worker result.'));
+    worker.onmessageerror = () => this.fail(new BvhWorkerUnavailableError('Unable to receive BVH worker result.'));
   }
 
   private fail(error: Error) {
@@ -50,7 +58,7 @@ export class BvhWorkerClient {
   }
 
   build(request: Omit<BvhBuildRequest, 'id'>): Promise<FlattendBVH> {
-    if (this.failed) return Promise.reject(new Error('BVH worker is unavailable.'));
+    if (this.failed) return Promise.reject(new BvhWorkerUnavailableError('BVH worker is unavailable.'));
     const id = this.nextId++;
     return new Promise((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
@@ -59,8 +67,7 @@ export class BvhWorkerClient {
         // Never transfer source geometry: it may still be rendered or shared.
         this.worker.postMessage({ ...request, id });
       } catch (error) {
-        this.pending.delete(id);
-        reject(error);
+        this.fail(new BvhWorkerUnavailableError(error instanceof Error ? error.message : String(error)));
       }
     });
   }
@@ -72,7 +79,7 @@ export function canUseBvhWorker() {
   return typeof Worker !== 'undefined';
 }
 
-export function buildBvhInWorker(
+export async function buildBvhInWorker(
   geometry: Geometry,
   displacementScale = 0,
   trianglesDisplacement?: Float32Array,
@@ -80,7 +87,11 @@ export function buildBvhInWorker(
   layout: BvhLayout = 'bvh2',
   spatialSplits = false
 ) {
-  client ??= new BvhWorkerClient(new Worker(new URL('./bvh.worker.ts', import.meta.url), { type: 'module' }));
+  try {
+    client ??= new BvhWorkerClient(new Worker(new URL('./bvh.worker.ts', import.meta.url), { type: 'module' }));
+  } catch (error) {
+    throw new BvhWorkerUnavailableError(error instanceof Error ? error.message : String(error));
+  }
   return client.build({
     position: geometry.position,
     normal: trianglesDisplacement ? geometry.normal : undefined,

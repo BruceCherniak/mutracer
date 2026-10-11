@@ -1,0 +1,115 @@
+import type Mesh from '../scene/Mesh.js';
+import type Geometry from '../scene/Geometry.js';
+import type { TinyBvhLayout } from '../tinybvh/TinyBvhBuilder.js';
+import { buildBLAS, type FlattendBVH } from './bvhAccel.js';
+import { buildBvhInWorker, BvhWorkerUnavailableError } from './bvhWorkerClient.js';
+import {
+  captureMeshBlasSnapshot,
+  getMeshBlasInput,
+  getPreparedMeshGeometry,
+  meshBlasSnapshotIsCurrent
+} from './prepareMeshBVH.js';
+
+export interface StaticBvhPreparationOptions {
+  builder: 'builtin' | 'tinybvh';
+  layout: TinyBvhLayout;
+  spatialSplits: boolean;
+  useWorker: boolean;
+  rebuild: boolean;
+  onProgress?: (progress: number) => void;
+}
+
+export interface StaticBvhPreparationResult {
+  geometryCount: number;
+  bvhTimeMs: number;
+  failedMeshes: Mesh[];
+  workerUnavailable: boolean;
+  tinyBvhUnavailable: boolean;
+}
+
+/** Build static BLASes once per target geometry, preserving old BVHs until writeback. */
+export async function prepareStaticBvhs(
+  meshes: readonly Mesh[], options: StaticBvhPreparationOptions
+): Promise<StaticBvhPreparationResult> {
+  const result: StaticBvhPreparationResult = {
+    geometryCount: 0, bvhTimeMs: 0, failedMeshes: [],
+    workerUnavailable: false, tinyBvhUnavailable: false
+  };
+  const jobs = new Map<Geometry, {
+    mesh: Mesh;
+    input: ReturnType<typeof getMeshBlasInput>;
+    snapshot: ReturnType<typeof captureMeshBlasSnapshot>;
+  }>();
+  for (const mesh of meshes) {
+    if (!mesh.geometry.position?.array.length || mesh.geometry.dynamic) continue;
+    const target = getPreparedMeshGeometry(mesh);
+    if (jobs.has(target) || (target.bvh && !options.rebuild)) continue;
+    try {
+      const input = getMeshBlasInput(mesh);
+      jobs.set(target, { mesh, input, snapshot: captureMeshBlasSnapshot(mesh, target) });
+    } catch {
+      result.failedMeshes.push(mesh);
+    }
+  }
+
+  async function build(
+    input: ReturnType<typeof getMeshBlasInput>, builder: StaticBvhPreparationOptions['builder'], useWorker: boolean
+  ): Promise<FlattendBVH> {
+    const { geometry, displacementScale, trianglesDisplacement } = input;
+    let bvh: FlattendBVH & { bvhTimeMs?: number };
+    if (useWorker) {
+      bvh = await buildBvhInWorker(geometry, displacementScale, trianglesDisplacement,
+        builder, builder === 'tinybvh' ? options.layout : 'bvh2', options.spatialSplits);
+    } else if (builder === 'tinybvh') {
+      const { buildTinyBvh } = await import('../tinybvh/TinyBvhBuilder.js');
+      bvh = await buildTinyBvh(geometry, displacementScale, trianglesDisplacement,
+        options.layout, options.spatialSplits);
+    } else {
+      const start = performance.now();
+      bvh = { ...buildBLAS(geometry, displacementScale, trianglesDisplacement),
+        bvhTimeMs: performance.now() - start };
+    }
+    if (builder === 'tinybvh' && (bvh.builder !== 'tinybvh' || !bvh.buffer.byteLength)) {
+      throw new Error('TinyBVH did not build every scene geometry.');
+    }
+    result.bvhTimeMs += bvh.bvhTimeMs ?? 0;
+    return bvh;
+  }
+
+  async function buildWithFallback(input: ReturnType<typeof getMeshBlasInput>) {
+    let builder = options.builder;
+    let useWorker = options.useWorker && !result.workerUnavailable;
+    for (;;) {
+      try {
+        return await build(input, builder, useWorker);
+      } catch (error) {
+        if (error instanceof BvhWorkerUnavailableError && useWorker) {
+          result.workerUnavailable = true;
+          useWorker = false;
+        } else if (builder === 'tinybvh') {
+          result.tinyBvhUnavailable = true;
+          builder = 'builtin';
+          useWorker = options.useWorker && !result.workerUnavailable;
+        } else {
+          throw error;
+        }
+      }
+    }
+  }
+
+  let completed = 0;
+  await Promise.allSettled([...jobs].map(async ([target, { mesh, input, snapshot }]) => {
+    try {
+      const bvh = await buildWithFallback(input);
+      if (meshBlasSnapshotIsCurrent(mesh, target, snapshot)) {
+        target.bvh = bvh;
+        result.geometryCount++;
+      }
+    } catch {
+      result.failedMeshes.push(mesh);
+    } finally {
+      options.onProgress?.(++completed / jobs.size);
+    }
+  }));
+  return result;
+}

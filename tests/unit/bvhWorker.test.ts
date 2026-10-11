@@ -1,5 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest';
-import { BvhWorkerClient, type BvhBuildRequest } from '../../src/renderer/bvhWorkerClient';
+import { BvhWorkerClient, BvhWorkerUnavailableError, type BvhBuildRequest } from '../../src/renderer/bvhWorkerClient';
 import { executeBvhBuild } from '../../src/renderer/bvhWorkerBuild';
 import { buildBLAS } from '../../src/renderer/bvhAccel';
 import { createCubeGeometry } from '../../src/util/commonGeometry';
@@ -99,6 +99,19 @@ it('discards results when geometry, revision, or preparation settings change', a
   }
 });
 
+it('falls back within the call when Worker construction is blocked', async () => {
+  vi.stubGlobal('Worker', class { constructor() { throw new Error('CSP blocked'); } });
+  const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  try {
+    const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
+    const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
+    await renderer.prepareScene([mesh]);
+    expect(mesh.geometry.bvh?.builder).toBe('builtin');
+    expect((renderer as any)._bvhWorkerUnavailable).toBe(true);
+    expect(warning).toHaveBeenCalledOnce();
+  } finally { warning.mockRestore(); }
+});
+
 it('prepares builtin renderer BLASes asynchronously when Workers are available', async () => {
   class AutoWorker extends TestWorker {
     postMessage(data: BvhBuildRequest) {
@@ -118,13 +131,14 @@ it('prepares builtin renderer BLASes asynchronously when Workers are available',
 
 it('falls back after Worker failure without retrying the same geometry every frame', async () => {
   vi.stubGlobal('Worker', TestWorker);
-  const build = vi.spyOn(BvhWorkerClient.prototype, 'build').mockRejectedValue(new Error('worker blocked'));
+  const build = vi.spyOn(BvhWorkerClient.prototype, 'build').mockRejectedValue(new BvhWorkerUnavailableError('worker blocked'));
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   try {
     const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
     const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
     await renderer.prepareScene([mesh]);
-    expect(mesh.geometry.bvh).toBeUndefined();
+    expect(mesh.geometry.bvh?.builder).toBe('builtin');
+    expect((renderer as any)._bvhWorkerUnavailable).toBe(true);
     expect(warning).toHaveBeenCalledOnce();
     expect((renderer as any)._needsBVHPreparation([mesh])).toBe(false);
   } finally { build.mockRestore(); warning.mockRestore(); }
@@ -139,10 +153,26 @@ it('retries an input changed during Worker preparation instead of accepting the 
     const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
     const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
     const pending = renderer.prepareScene([mesh]);
+    await Promise.resolve();
     mesh.geometry.markUpdated();
     finish(buildBLAS(mesh.geometry));
     await pending;
     expect(mesh.geometry.bvh).toBeUndefined();
     expect((renderer as any)._needsBVHPreparation([mesh])).toBe(true);
   } finally { build.mockRestore(); }
+});
+
+it('classifies postMessage and message decoding failures as Worker unavailability', async () => {
+  const blocked = new TestWorker();
+  blocked.postMessage = () => { throw new Error('clone failed'); };
+  const client = new BvhWorkerClient(blocked as unknown as Worker);
+  await expect(client.build(request())).rejects.toBeInstanceOf(BvhWorkerUnavailableError);
+  await expect(client.build(request())).rejects.toBeInstanceOf(BvhWorkerUnavailableError);
+  expect(blocked.terminate).toHaveBeenCalledOnce();
+  const invalid = new TestWorker();
+  const second = new BvhWorkerClient(invalid as unknown as Worker);
+  const pending = second.build(request());
+  const assertion = expect(pending).rejects.toBeInstanceOf(BvhWorkerUnavailableError);
+  invalid.onmessageerror?.call(invalid as unknown as Worker, {} as MessageEvent);
+  await assertion;
 });

@@ -6,7 +6,9 @@ import {
   getMeshDisplacementMaterial,
   getMeshDisplacementScale,
   getPreparedMeshGeometryCacheKey,
-  getDisplacementTextureDataCacheKey
+  getDisplacementTextureDataCacheKey,
+  captureMeshBlasSnapshot,
+  meshBlasSnapshotIsCurrent
 } from '../renderer/prepareMeshBVH.js';
 import Texture from '../scene/Texture.js';
 import { copyDisplacementTextureData } from './displacementData.js';
@@ -70,15 +72,7 @@ export interface PrecomputePreparedData {
   projectiveDisplacements: (ProjectiveDisplacementForTransfer | undefined)[];
   buffers: ArrayBuffer[];
   /** Internal input revisions used to discard results superseded during async work. */
-  snapshots?: {
-    geometry: Geometry;
-    version: number;
-    cacheKey?: string;
-    bvh?: FlattendBVH;
-    displacementMap?: Texture;
-    displacementScale: number;
-    displacementTextureKey?: string;
-  }[];
+  snapshots?: ReturnType<typeof captureMeshBlasSnapshot>[];
 }
 
 export interface PrecomputeResult {
@@ -259,14 +253,7 @@ export function prepareForPrecompute(meshes: Mesh[]): PrecomputePreparedData {
     trianglesDisplacements,
     rawGeometries: geometries,
     rawMeshes,
-    snapshots: rawMeshes.map((mesh, index) => ({
-      geometry: mesh.geometry, version: mesh.geometry.version,
-      cacheKey: getPreparedMeshGeometryCacheKey(mesh), bvh: geometries[index].bvh,
-      displacementMap: getMeshDisplacementMap(mesh),
-      displacementScale: getMeshDisplacementScale(mesh),
-      displacementTextureKey: getMeshDisplacementMap(mesh)
-        ? getDisplacementTextureDataCacheKey(getMeshDisplacementMap(mesh)!) : undefined
-    })),
+    snapshots: rawMeshes.map((mesh, index) => captureMeshBlasSnapshot(mesh, geometries[index])),
     projectiveDisplacements,
     buffers
   };
@@ -385,14 +372,7 @@ export function resolveFromPrecompute(
   precomputeData.geometries.forEach((geo, idx) => {
     const snapshot = preparedData.snapshots?.[idx];
     const mesh = preparedData.rawMeshes[idx];
-    if (snapshot && (mesh.geometry !== snapshot.geometry ||
-        mesh.geometry.version !== snapshot.version ||
-        getPreparedMeshGeometryCacheKey(mesh) !== snapshot.cacheKey ||
-        preparedData.rawGeometries[idx].bvh !== snapshot.bvh ||
-        getMeshDisplacementMap(mesh) !== snapshot.displacementMap ||
-        getMeshDisplacementScale(mesh) !== snapshot.displacementScale ||
-        (snapshot.displacementMap && getDisplacementTextureDataCacheKey(snapshot.displacementMap) !==
-          snapshot.displacementTextureKey))) return;
+    if (snapshot && !meshBlasSnapshotIsCurrent(mesh, preparedData.rawGeometries[idx], snapshot)) return;
     preparedData.rawGeometries[idx].bvh = geo.bvh;
   });
 }

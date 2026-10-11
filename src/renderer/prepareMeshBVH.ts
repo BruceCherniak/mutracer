@@ -676,18 +676,63 @@ export function ensureMeshGeometryAttributes(meshes: readonly Mesh[]) {
   }
 }
 
-function prepareMeshGeometryBvh(mesh: Mesh) {
+function getMeshBlasGeometry(mesh: Mesh) {
   const geometry = getPreparedMeshGeometry(mesh);
   if (!geometry.normal) computeGeometryNormals(geometry);
   if (!geometry.tangent && geometry.uv) generateVertexTangents(geometry);
+  return geometry;
+}
+
+/** Geometry and displacement inputs shared by synchronous and Worker BLAS builds. */
+export function getMeshBlasInput(mesh: Mesh) {
+  const geometry = getMeshBlasGeometry(mesh);
   const heightMap = getMeshDisplacementMap(mesh);
   const displacementScale = heightMap ? getMeshDisplacementScale(mesh) : 0;
+  const trianglesDisplacement = Math.abs(displacementScale) > 1e-6
+    ? getTrianglesDisplacementRange(geometry, heightMap, getMeshDisplacementMaterial(mesh))
+    : undefined;
+  return { geometry, displacementScale, trianglesDisplacement };
+}
+
+/** Whether a static mesh still needs a BLAS before it can be rendered. */
+export function meshNeedsStaticBvh(mesh: Mesh) {
+  return !!mesh.geometry.position?.array.length && !mesh.geometry.dynamic &&
+    !getPreparedMeshGeometry(mesh).bvh;
+}
+
+/** Capture inputs whose changes invalidate an asynchronous BLAS result. */
+export function captureMeshBlasSnapshot(mesh: Mesh, target: Geometry) {
+  const displacementMap = getMeshDisplacementMap(mesh);
+  return {
+    geometry: mesh.geometry,
+    version: mesh.geometry.version,
+    cacheKey: getPreparedMeshGeometryCacheKey(mesh),
+    bvh: target.bvh,
+    displacementMap,
+    displacementScale: getMeshDisplacementScale(mesh),
+    displacementTextureKey: displacementMap
+      ? getDisplacementTextureDataCacheKey(displacementMap) : undefined
+  };
+}
+
+/** Check that a result still belongs to the captured mesh inputs. */
+export function meshBlasSnapshotIsCurrent(
+  mesh: Mesh, target: Geometry, snapshot: ReturnType<typeof captureMeshBlasSnapshot>
+) {
+  return mesh.geometry === snapshot.geometry && mesh.geometry.version === snapshot.version &&
+    getPreparedMeshGeometryCacheKey(mesh) === snapshot.cacheKey && target.bvh === snapshot.bvh &&
+    getMeshDisplacementMap(mesh) === snapshot.displacementMap &&
+    getMeshDisplacementScale(mesh) === snapshot.displacementScale &&
+    (!snapshot.displacementMap || getDisplacementTextureDataCacheKey(snapshot.displacementMap) ===
+      snapshot.displacementTextureKey);
+}
+
+function prepareMeshGeometryBvh(mesh: Mesh) {
+  const geometry = getMeshBlasGeometry(mesh);
+  const displacementScale = getMeshDisplacementMap(mesh) ? getMeshDisplacementScale(mesh) : 0;
   if (geometry.dynamic && geometry.bvh?.builder !== 'builtin') geometry.bvh = undefined;
   if (!geometry.bvh) {
-    const trianglesDisplacement =
-      Math.abs(displacementScale) > 1e-6
-        ? getTrianglesDisplacementRange(geometry, heightMap, getMeshDisplacementMaterial(mesh))
-        : undefined;
+    const { trianglesDisplacement } = getMeshBlasInput(mesh);
     geometry.bvh = buildBLAS(geometry, displacementScale, trianglesDisplacement);
   }
   return { geometry, displacementScale };
@@ -708,7 +753,7 @@ export function updateMeshInstances(meshes: Mesh[]) {
 
 
   const instances = meshes
-    .filter((mesh) => mesh.geometry.position.array.length > 0)
+    .filter((mesh) => mesh.geometry.position?.array.length > 0)
     .map((mesh) => {
       let { geometry, displacementScale } = prepareMeshGeometryBvh(mesh);
       const bvhBounds = getBvhBounds(geometry);
