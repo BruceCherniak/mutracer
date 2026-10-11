@@ -12,7 +12,7 @@ import {
   type OpenPBRMaterial,
   type RenderStatus
 } from '@meimu/mutracer';
-import { useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
+import { autoGroundedSkybox, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
 import { Environment, createSky, loadHDR, parseHDR } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
@@ -80,7 +80,6 @@ export class ViewerEngine {
   private modelId: string | null = null;
   private cameraSaveTimer: ReturnType<typeof setTimeout> | undefined;
   private envToken = 0;
-  private modelRadius = 1;
   private dragging = false;
   private readonly lastCameraPosition = new THREE.Vector3();
   private awaitingFirstSample = false;
@@ -282,7 +281,7 @@ export class ViewerEngine {
 
     const radius = Math.max(this.modelBounds().getBoundingSphere(new THREE.Sphere()).radius, 1e-3);
     this.ground.scale.setScalar(radius * 12);
-    this.modelRadius = radius;
+    set({ modelRadius: radius });
     this.applyStudioRig();
     this.applyBackground();
 
@@ -433,10 +432,11 @@ export class ViewerEngine {
     this.scene.userData.mutracerHiddenBackground = background === 'transparent';
     // Projects the environment onto a ground disc and dome around the model.
     // The studio ambient is a plain gradient, so it is shown as a backdrop.
+    const grounded = autoGroundedSkybox(get().modelRadius, groundedHeight);
     this.scene.userData.mutracerGroundedSkybox = background === 'grounded' && !studio ? {
       texture: environment,
-      height: groundedHeight * this.modelRadius,
-      radius: groundedRadius * this.modelRadius,
+      height: grounded.height,
+      radius: groundedRadius ?? grounded.radius,
       groundHeight: 0
     } : undefined;
     this.scene.background = background === 'environment' || background === 'grounded' ? environment

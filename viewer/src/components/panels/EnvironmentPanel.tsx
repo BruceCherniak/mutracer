@@ -1,7 +1,7 @@
 import { useId } from 'react';
 import { Button, FileTrigger } from 'react-aria-components';
 import { Globe, Image, Lamp, Square, Upload } from 'lucide-react';
-import { setSettings, useViewer } from '../../store';
+import { autoGroundedSkybox, setSettings, useViewer } from '../../store';
 import { ENVIRONMENT_PRESETS, ENV_RESOLUTIONS } from '../../engine/presets';
 import { STUDIO_PRESETS, findStudioPreset, type StudioPreset } from '../../engine/studio';
 import { getEngine } from '../../engine/ViewerEngine';
@@ -15,6 +15,9 @@ const SKY_SWATCH = 'linear-gradient(180deg,#3c6fc4 0%,#b9c9dc 48%,#5a524b 52%,#2
 export function EnvironmentPanel() {
   const s = useViewer((state) => state.settings);
   const envLoading = useViewer((state) => state.envLoading);
+  const modelRadius = useViewer((state) => state.modelRadius);
+  const grounded = autoGroundedSkybox(modelRadius, s.groundedHeight);
+  const groundedAuto = s.groundedHeight === null && s.groundedRadius === null;
   const loadingFraction = envLoading?.total ? envLoading.loaded / envLoading.total : 0;
   const current = ENVIRONMENT_PRESETS.find((p) => p.id === s.envId);
   const studio = s.lighting === 'studio';
@@ -113,11 +116,15 @@ export function EnvironmentPanel() {
         )}
         {background === 'grounded' && (
           <>
-            <Scrub label="Height" value={s.groundedHeight} min={0.1} max={5} step={0.05}
-              title="Height of the HDRI camera above the ground, in model radii" onChange={(v) => setSettings({ groundedHeight: v })} />
-            <Scrub label="Radius" value={s.groundedRadius} min={2} max={100} step={1}
-              title="Radius of the projected dome, in model radii" onChange={(v) => setSettings({ groundedRadius: v })} />
-            <Hint>Projects the HDRI onto the ground so the model stands in the scene. Match the height to how high the HDRI was shot.</Hint>
+            <Scrub label={s.groundedHeight === null ? 'Height · auto' : 'Height'} value={grounded.height} min={0.1} max={50} step={0.05} unit="m"
+              title="Height of the HDRI camera above the ground, in meters" onChange={(v) => setSettings({ groundedHeight: v })} />
+            <Scrub label={s.groundedRadius === null ? 'Radius · auto' : 'Radius'} value={s.groundedRadius ?? grounded.radius} min={2} max={1000} step={1} unit="m"
+              title="Radius of the projected dome, in meters; roughly the distance to the surroundings" onChange={(v) => setSettings({ groundedRadius: v })} />
+            <Hint>
+              Projects the HDRI onto the ground so the model stands in the scene. A real HDRI is shot about 1.6 m high;
+              raise the height to shrink the model onto the clean ground near the capture point.
+              {!groundedAuto && <> <button className="hint__link" onClick={() => setSettings({ groundedHeight: null, groundedRadius: null })}>Use auto</button></>}
+            </Hint>
           </>
         )}
         {background === 'transparent' && <Hint>The {studio ? 'studio' : 'environment'} still lights the scene. Exported PNGs keep the alpha channel.</Hint>}

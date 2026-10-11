@@ -26,9 +26,12 @@ export interface Settings {
   envRotation: number;
   envResolution: EnvResolution;
   background: 'environment' | 'grounded' | 'color' | 'transparent';
-  /** Grounded skybox capture height and dome radius, in model radii. */
-  groundedHeight: number;
-  groundedRadius: number;
+  /**
+   * Grounded skybox capture height and dome radius in meters (glTF units);
+   * `null` follows {@link autoGroundedSkybox}.
+   */
+  groundedHeight: number | null;
+  groundedRadius: number | null;
   backgroundColor: string;
   groundShadow: boolean;
   groundOpacity: number;
@@ -90,8 +93,8 @@ export const DEFAULT_SETTINGS: Settings = {
   envResolution: '1k',
   background: 'environment',
   backgroundColor: '#2a2b30',
-  groundedHeight: 1,
-  groundedRadius: 20,
+  groundedHeight: null,
+  groundedRadius: null,
   groundShadow: true,
   groundOpacity: 0.8,
   maxSamples: 64,
@@ -132,6 +135,18 @@ export const DEFAULT_SETTINGS: Settings = {
   focusDistance: 5,
   autoRotate: false
 };
+
+/**
+ * Grounded skybox projection for a model of the given bounding radius, with
+ * an optional manual height. Small models keep the typical 1.6 m tripod
+ * height of an HDRI capture. Larger models raise the projection so they stay
+ * on the clean ground near the capture point instead of reaching walls and
+ * furniture, which the projection flattens onto the floor.
+ */
+export function autoGroundedSkybox(modelRadius: number, height: number | null = null) {
+  const h = height ?? Math.max(1.6, 4 * modelRadius);
+  return { height: h, radius: 20 * h };
+}
 
 export type RenderPhase = 'starting' | 'preparing' | 'compiling' | 'rendering' | 'denoising' | 'finished' | 'paused' | 'error';
 
@@ -200,6 +215,8 @@ export interface ViewerState {
   cameras: string[];
   loading: LoadingState | null;
   envLoading: EnvLoadingState | null;
+  /** Bounding radius of the loaded model in scene units. */
+  modelRadius: number;
   error: string | null;
   toast: { id: number; message: string; tone: 'info' | 'error' } | null;
   animation: AnimationState | null;
@@ -309,6 +326,7 @@ export const useViewer = create<ViewerState>(() => ({
   cameras: [],
   loading: null,
   envLoading: null,
+  modelRadius: 1,
   error: null,
   toast: null,
   animation: null,
