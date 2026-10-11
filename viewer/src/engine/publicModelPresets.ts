@@ -218,5 +218,32 @@ export const PUBLIC_MODEL_PRESETS = [
       "fov": 35,
       "space": "grounded"
     }
+  },
+  {
+    "id": "dragon",
+    "name": "Dragon",
+    "tag": "Glass / sculpture",
+    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@59f79d01a12c205b184be018a76e530a9482e2e2/assets/dragon/model.glb",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@59f79d01a12c205b184be018a76e530a9482e2e2/assets/dragon/thumbnail.webp",
+    "license": "CC-BY 3.0",
+    "credit": "Delatronic",
+    "sourceUrl": "https://benedikt-bitterli.me/resources/",
+    "licenseUrl": "https://creativecommons.org/licenses/by/3.0/",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@59f79d01a12c205b184be018a76e530a9482e2/assets/dragon/attribution.json",
+    "sizeMB": 4.76,
+    "camera": {
+      "position": [
+        27.520974852264906,
+        21.61621955462067,
+        39.304025378862
+      ],
+      "target": [
+        0,
+        9.653124034404755,
+        0
+      ],
+      "fov": 35,
+      "space": "grounded"
+    }
   }
 ] satisfies ModelPreset[];
