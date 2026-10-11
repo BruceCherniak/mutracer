@@ -1,13 +1,14 @@
 import { Camera, Crosshair, Focus } from 'lucide-react';
 import { setSettings, useViewer } from '../../store';
 import { getEngine } from '../../engine/ViewerEngine';
-import { Hint, Scrub, Section, Select, Switch } from '../ui/controls';
+import { Hint, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';
 
 export function CameraPanel() {
   const s = useViewer((state) => state.settings);
   const cameras = useViewer((state) => state.cameras);
   const picking = useViewer((state) => state.pickingFocus);
   const orbit = s.cameraIndex < 0;
+  const orthographic = orbit && s.projection === 'orthographic';
   return (
     <>
       <Section title="View" icon={<Camera size={14} />}>
@@ -20,7 +21,17 @@ export function CameraPanel() {
             onChange={(v) => setSettings({ cameraIndex: Number(v) })}
           />
         )}
-        <Scrub label="Field of view" value={s.fov} min={10} max={100} step={1} unit="°" disabled={!orbit} onChange={(v) => setSettings({ fov: v })} />
+        <Segmented
+          label="Projection"
+          value={s.projection}
+          disabled={!orbit}
+          options={[
+            { value: 'perspective', label: 'Perspective' },
+            { value: 'orthographic', label: 'Orthographic' }
+          ]}
+          onChange={(v) => setSettings({ projection: v })}
+        />
+        <Scrub label="Field of view" value={s.fov} min={10} max={100} step={1} unit="°" disabled={!orbit || orthographic} onChange={(v) => setSettings({ fov: v })} />
         <Switch label="Auto-rotate" checked={s.autoRotate} disabled={!orbit} onChange={(v) => setSettings({ autoRotate: v })}>
           <span className="field-label">Auto-rotate</span>
         </Switch>
@@ -33,9 +44,10 @@ export function CameraPanel() {
       <Section
         title="Depth of field"
         icon={<Crosshair size={14} />}
-        actions={<Switch label="Depth of field" checked={s.aperture > 0} onChange={(on) => setSettings({ aperture: on ? Math.max(0.01, Number((s.focusDistance * 0.01).toFixed(4))) : 0 })} />}
+        actions={<Switch label="Depth of field" checked={s.aperture > 0} disabled={orthographic} onChange={(on) => setSettings({ aperture: on ? Math.max(0.01, Number((s.focusDistance * 0.01).toFixed(4))) : 0 })} />}
       >
-        {s.aperture > 0 && (
+        {orthographic && <Hint>Orthographic views have no depth of field.</Hint>}
+        {s.aperture > 0 && !orthographic && (
           <>
             <Scrub label="Aperture" value={s.aperture} min={0} max={Math.max(0.2, s.focusDistance * 0.05)} step={0.001} onChange={(v) => setSettings({ aperture: v })} />
             <div className="row-with-button">

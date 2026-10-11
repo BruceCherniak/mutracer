@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readCameraState, writeCameraState, type CameraState } from '../../viewer/src/engine/cameraState';
 
 const state: CameraState = {
-  modelId: 'current', position: [2, 3, 4], target: [0, 1, 0], up: [0, 1, 0], near: 0.01, far: 1000, zoom: 1.2,
-  settings: { cameraIndex: 2, fov: 42, aperture: 0.02, focusDistance: 6, autoRotate: false }
+  modelId: 'current', position: [2, 3, 4], target: [0, 1, 0], up: [0, 1, 0], near: 0.01, far: 1000, zoom: 1.2, orthoHalfHeight: 1.5,
+  settings: { cameraIndex: 2, projection: 'orthographic', fov: 42, aperture: 0.02, focusDistance: 6, autoRotate: false }
 };
 
 describe('viewer camera persistence', () => {
@@ -25,9 +25,16 @@ describe('viewer camera persistence', () => {
     expect(readCameraState('new')?.settings.cameraIndex).toBe(2);
   });
 
+  it('reads states saved before the projection setting as perspective', () => {
+    const { projection: _, ...settings } = state.settings;
+    writeCameraState({ ...state, settings } as CameraState);
+    expect(readCameraState('current')?.settings.projection).toBe('perspective');
+  });
+
   it.each([
     { position: [1, 2] }, { target: [0, null, 0] }, { up: [0, 0, 0] }, { near: -1 }, { far: 0.001 }, { zoom: 0 },
-    { settings: { ...state.settings, fov: 180 } }, { settings: { ...state.settings, cameraIndex: -2 } }
+    { settings: { ...state.settings, fov: 180 } }, { settings: { ...state.settings, cameraIndex: -2 } },
+    { settings: { ...state.settings, projection: 'fisheye' } }, { orthoHalfHeight: 0 }
   ])('ignores invalid camera data: %j', (patch) => {
     writeCameraState({ ...state, ...patch } as CameraState);
     expect(readCameraState('current')).toBeNull();

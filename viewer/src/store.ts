@@ -74,6 +74,8 @@ export interface Settings {
 
   /** `-1` is the orbit camera; otherwise an index into the model's cameras. */
   cameraIndex: number;
+  /** Projection of the orbit camera. */
+  projection: 'perspective' | 'orthographic';
   fov: number;
   aperture: number;
   focusDistance: number;
@@ -131,6 +133,7 @@ export const DEFAULT_SETTINGS: Settings = {
   interactivePreview: true,
   previewResolutionScale: 1,
   cameraIndex: -1,
+  projection: 'perspective',
   fov: 35,
   aperture: 0,
   focusDistance: 5,
@@ -354,7 +357,7 @@ export const useViewer = create<ViewerState>(() => ({
 }));
 
 /** Camera settings follow the view and are not undoable. */
-const UNDOABLE_EXCLUDED = new Set<keyof Settings>(['cameraIndex', 'fov', 'aperture', 'focusDistance', 'autoRotate']);
+const UNDOABLE_EXCLUDED = new Set<keyof Settings>(['cameraIndex', 'projection', 'fov', 'aperture', 'focusDistance', 'autoRotate']);
 
 const SETTING_LABELS: Partial<Record<keyof Settings, string>> = {
   lighting: 'Lighting mode', studioPreset: 'Studio preset', studioIntensity: 'Studio intensity', studioRotation: 'Studio rotation',

@@ -39,6 +39,10 @@ const OIDN_WEIGHTS = new URL('/oidn/weights/', document.baseURI).href;
 const get = useViewer.getState;
 const set = useViewer.setState;
 
+type ViewCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
+const isOrthographic = (camera: THREE.Object3D): camera is THREE.OrthographicCamera =>
+  (camera as THREE.OrthographicCamera).isOrthographicCamera === true;
+
 /**
  * Owns the MuTracer renderer, the Three.js source scene and the render loop.
  * Reads settings from the store and publishes stats, tree and selection to it;
@@ -48,7 +52,8 @@ export class ViewerEngine {
   readonly renderer: Renderer;
   private readonly canvas: HTMLCanvasElement;
   private readonly scene = new THREE.Scene();
-  private readonly camera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
+  private readonly perspectiveCamera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
+  private readonly orthographicCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 1000);
   private readonly controls: OrbitControls;
   private readonly ground: THREE.Mesh;
   private readonly modelGroup = new THREE.Group();
@@ -57,7 +62,7 @@ export class ViewerEngine {
   private readonly studioRig = new THREE.Group();
   private sync: THREESceneSync;
   private model: LoadedModel | null = null;
-  private modelCameras: THREE.PerspectiveCamera[] = [];
+  private modelCameras: ViewCamera[] = [];
   private readonly materials = new MaterialEditor((materialId) => {
     // Show the material an undo or redo changed.
     if (get().selection.materialId === materialId) return;
@@ -80,6 +85,7 @@ export class ViewerEngine {
   private envToken = 0;
   private dragging = false;
   private readonly lastCameraPosition = new THREE.Vector3();
+  private lastCameraZoom = 1;
   private awaitingFirstSample = false;
   private exporting = false;
   private exportAbort: AbortController | null = null;
@@ -295,7 +301,7 @@ export class ViewerEngine {
 
     this.modelCameras = [];
     root.traverse((object) => {
-      if ((object as THREE.PerspectiveCamera).isPerspectiveCamera) this.modelCameras.push(object as THREE.PerspectiveCamera);
+      if ((object as THREE.PerspectiveCamera).isPerspectiveCamera || isOrthographic(object)) this.modelCameras.push(object as ViewCamera);
     });
 
     if (model.animations.length) {
@@ -504,8 +510,11 @@ export class ViewerEngine {
       changed('groundedRadius')) this.applyBackground();
     if (changed('resolutionScale') || changed('cameraIndex')) this.needsResize = true;
     if (changed('fov')) {
-      this.camera.fov = s.fov;
-      this.camera.updateProjectionMatrix();
+      this.perspectiveCamera.fov = s.fov;
+      this.perspectiveCamera.updateProjectionMatrix();
+    }
+    if (prev && changed('projection')) {
+      this.switchProjection(prev.projection === 'orthographic' ? this.orthographicCamera : this.perspectiveCamera);
     }
     if (DENOISER_FIELDS.some(changed)) {
       clearTimeout(this.denoiserUpdateTimer);
@@ -540,6 +549,55 @@ export class ViewerEngine {
 
   // ----------------------------------------------------------------- camera
 
+  /** The orbit camera for the current projection. */
+  private get camera(): ViewCamera {
+    return this.settings.projection === 'orthographic' ? this.orthographicCamera : this.perspectiveCamera;
+  }
+
+  /**
+   * Hands the orbit controls from `from` to the camera of the current
+   * projection. The orthographic view keeps the size of the perspective
+   * view's focus plane at the orbit target, and back.
+   */
+  private switchProjection(from: ViewCamera) {
+    const to = this.camera;
+    if (from === to) return;
+    // Settle damping on the old camera first.
+    this.controls.enableDamping = false;
+    this.controls.update();
+    this.controls.enableDamping = true;
+
+    const target = this.controls.target;
+    const direction = from.position.clone().sub(target);
+    const distance = direction.length();
+    direction.divideScalar(distance || 1);
+    const tanHalfFov = Math.tan(THREE.MathUtils.degToRad(this.perspectiveCamera.fov) / 2);
+    let toDistance: number;
+    if (isOrthographic(to)) {
+      to.top = (distance * tanHalfFov) / from.zoom;
+      to.bottom = -to.top;
+      // Zooming does not dolly an orthographic camera, so keep it outside the model.
+      const bounds = this.modelBounds().getBoundingSphere(new THREE.Sphere());
+      toDistance = Math.max(distance, target.distanceTo(bounds.center) + bounds.radius * 1.1);
+    } else {
+      toDistance = (from as THREE.OrthographicCamera).top / from.zoom / tanHalfFov;
+    }
+    const scale = toDistance / Math.max(distance, 1e-6);
+    to.position.copy(target).addScaledVector(direction, toDistance);
+    to.up.copy(from.up);
+    to.zoom = 1;
+    to.near = from.near * scale;
+    to.far = from.far * scale;
+    setAspect(to, this.viewAspect());
+    this.controls.object = to;
+    this.controls.update();
+    this.needsResize = true;
+  }
+
+  private viewAspect() {
+    return this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight);
+  }
+
   private scheduleCameraSave = () => {
     if (this.modelId && this.cameraSaveTimer === undefined) this.cameraSaveTimer = setTimeout(this.saveCamera, 200);
   };
@@ -552,6 +610,7 @@ export class ViewerEngine {
       modelId: this.modelId,
       position: this.camera.position.toArray(), target: this.controls.target.toArray(), up: this.camera.up.toArray(),
       near: this.camera.near, far: this.camera.far, zoom: this.camera.zoom,
+      orthoHalfHeight: this.orthographicCamera.top,
       settings: cameraSettings(this.settings)
     });
   };
@@ -560,28 +619,34 @@ export class ViewerEngine {
     const saved = readCameraState(modelId);
     if (!saved) return;
     // Flush any damping from fitting without rotating the saved view.
-    const autoRotate = this.controls.autoRotate;
     this.controls.autoRotate = false;
     this.controls.enableDamping = false;
     this.controls.update();
-    this.camera.position.fromArray(saved.position);
-    this.camera.up.fromArray(saved.up);
-    this.controls.target.fromArray(saved.target);
-    this.camera.near = saved.near;
-    this.camera.far = saved.far;
-    this.camera.zoom = saved.zoom;
-    this.controls.update();
-    this.controls.enableDamping = true;
-    this.controls.autoRotate = autoRotate;
+    // Applying the settings switches the controls to the saved projection.
     useViewer.setState((s) => ({ settings: {
       ...s.settings, ...saved.settings,
       cameraIndex: saved.settings.cameraIndex < this.modelCameras.length ? saved.settings.cameraIndex : -1
     } }));
-    this.camera.updateProjectionMatrix();
+    const camera = this.camera;
+    camera.position.fromArray(saved.position);
+    camera.up.fromArray(saved.up);
+    this.controls.target.fromArray(saved.target);
+    camera.near = saved.near;
+    camera.far = saved.far;
+    camera.zoom = saved.zoom;
+    if (saved.orthoHalfHeight) {
+      this.orthographicCamera.top = saved.orthoHalfHeight;
+      this.orthographicCamera.bottom = -saved.orthoHalfHeight;
+    }
+    setAspect(camera, this.viewAspect());
+    this.controls.enableDamping = false;
+    this.controls.update();
+    this.controls.enableDamping = true;
+    this.controls.autoRotate = this.settings.autoRotate;
     this.needsResize = true;
   }
 
-  private activeCamera(): THREE.PerspectiveCamera {
+  private activeCamera(): ViewCamera {
     return this.modelCameras[this.settings.cameraIndex] ?? this.camera;
   }
 
@@ -606,20 +671,30 @@ export class ViewerEngine {
     const direction = new THREE.Vector3(0.55, 0.38, 1).normalize();
     const right = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), direction).normalize();
     const up = new THREE.Vector3().crossVectors(direction, right);
-    const tanV = Math.tan(THREE.MathUtils.degToRad(this.camera.fov) / 2) * margin;
-    const tanH = tanV * (aspect ?? (this.camera.aspect || 1));
-    // Closest distance at which every box corner projects inside the frame.
+    const frameAspect = aspect ?? (this.viewAspect() || 1);
+    const tanV = Math.tan(THREE.MathUtils.degToRad(this.perspectiveCamera.fov) / 2) * margin;
+    const tanH = tanV * frameAspect;
+    // Closest distance at which every box corner projects inside the frame,
+    // and the orthographic half height that holds every corner.
     let distance = 0;
+    let halfHeight = 0;
     const corner = new THREE.Vector3();
     for (let i = 0; i < 8; i++) {
       corner.set(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).sub(center);
       const depth = corner.dot(direction);
       distance = Math.max(distance, depth + Math.abs(corner.dot(right)) / tanH, depth + Math.abs(corner.dot(up)) / tanV);
+      halfHeight = Math.max(halfHeight, Math.abs(corner.dot(right)) / frameAspect / margin, Math.abs(corner.dot(up)) / margin);
     }
-    this.camera.position.copy(center).addScaledVector(direction, distance);
-    this.camera.near = Math.max((distance - radius) / 20, distance / 1000, 1e-4);
-    this.camera.far = (distance + radius) * 100;
-    this.camera.updateProjectionMatrix();
+    const camera = this.camera;
+    camera.position.copy(center).addScaledVector(direction, distance);
+    camera.near = Math.max((distance - radius) / 20, distance / 1000, 1e-4);
+    camera.far = (distance + radius) * 100;
+    camera.zoom = 1;
+    if (isOrthographic(camera)) {
+      camera.top = halfHeight;
+      camera.bottom = -halfHeight;
+    }
+    setAspect(camera, this.viewAspect());
     this.controls.target.copy(center);
     this.controls.update();
     useViewer.setState((s) => ({ settings: { ...s.settings, focusDistance: Number(distance.toFixed(3)) } }));
@@ -858,8 +933,7 @@ export class ViewerEngine {
     const previous = this.renderer.getSize();
     const background = this.settings.background;
     const camera = this.activeCamera().clone();
-    camera.aspect = options.width / options.height;
-    camera.updateProjectionMatrix();
+    setAspect(camera, options.width / options.height);
     set({ export: { stage: 'final', samples: 0, target: options.samples } });
     try {
       if (options.transparent && background !== 'transparent') {
@@ -901,9 +975,7 @@ export class ViewerEngine {
     const height = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
     const size = this.renderer.getSize();
     if (size.width !== width || size.height !== height) this.renderer.setSize(width, height);
-    const camera = this.activeCamera();
-    camera.aspect = this.canvas.clientWidth / Math.max(1, this.canvas.clientHeight);
-    camera.updateProjectionMatrix();
+    setAspect(this.activeCamera(), this.viewAspect());
   }
 
   private frame = (now: number) => {
@@ -959,9 +1031,12 @@ export class ViewerEngine {
    */
   private updateControls(dt: number) {
     this.lastCameraPosition.copy(this.camera.position);
+    this.lastCameraZoom = this.camera.zoom;
     if (!this.controls.update(dt) || this.dragging || this.settings.autoRotate) return;
     const step = this.lastCameraPosition.distanceTo(this.camera.position);
-    if (step < 5e-4 * this.camera.position.distanceTo(this.controls.target)) {
+    // An orthographic camera zooms without moving.
+    const zoomStep = Math.abs(Math.log(this.camera.zoom / this.lastCameraZoom));
+    if (step < 5e-4 * this.camera.position.distanceTo(this.controls.target) && zoomStep < 5e-4) {
       this.controls.enableDamping = false;
       this.controls.update(0);
       this.controls.enableDamping = true;
@@ -1054,3 +1129,16 @@ let current: ViewerEngine | null = null;
 /** The engine of the mounted viewport, for UI actions. */
 export const getEngine = () => current;
 export const setEngine = (engine: ViewerEngine | null) => { current = engine; };
+
+/** Sets the frame aspect, keeping an orthographic camera's height and center. */
+function setAspect(camera: ViewCamera, aspect: number) {
+  if (isOrthographic(camera)) {
+    const halfWidth = ((camera.top - camera.bottom) / 2) * aspect;
+    const centerX = (camera.left + camera.right) / 2;
+    camera.left = centerX - halfWidth;
+    camera.right = centerX + halfWidth;
+  } else {
+    camera.aspect = aspect;
+  }
+  camera.updateProjectionMatrix();
+}
