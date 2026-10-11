@@ -1,4 +1,5 @@
 import type { EnvResolution } from '../store';
+import type { ModelCamera } from './modelCamera';
 
 // Rendered with MuTracer by the thumbnail generator (see viewer/README.md).
 const THUMBNAILS = import.meta.glob<string>('../assets/thumbnails/*.webp', { eager: true, query: '?url', import: 'default' });
@@ -17,6 +18,8 @@ export interface ModelPreset {
   credit: string;
   sourceUrl: string;
   sizeMB?: number;
+  /** Preview camera embedded in the GLB scene extras by the asset pipeline. */
+  camera?: ModelCamera;
 }
 
 const KHRONOS = 'https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models';

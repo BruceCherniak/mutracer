@@ -22,6 +22,7 @@ import type { MaterialValues, TextureKey } from './materialParams';
 import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
 import { MaterialEditor, readPendingEdits, type PendingEdits } from './materialEditor';
 import { cameraSettings, readCameraState, writeCameraState } from './cameraState';
+import { readModelCamera } from './modelCamera';
 import { DENOISER_FIELDS, getDenoiserOptions } from './denoiserSettings';
 import { buildStudioRig, createStudioAmbient, findStudioPreset } from './studio';
 
@@ -314,6 +315,13 @@ export class ViewerEngine {
     this.sync.dispose();
     this.sync = this.createSync();
     this.fit();
+    const defaultCamera = readModelCamera(root.userData.mutracerCamera);
+    if (defaultCamera) {
+      useViewer.setState((s) => ({ settings: { ...s.settings, projection: 'perspective', fov: defaultCamera.fov, cameraIndex: -1 } }));
+      this.perspectiveCamera.fov = defaultCamera.fov;
+      this.perspectiveCamera.updateProjectionMatrix();
+      this.lookAt(new THREE.Vector3(...defaultCamera.position), new THREE.Vector3(...defaultCamera.target));
+    }
     const tree = [this.buildTree(root, model.name)];
     let triangles = 0;
     let meshes = 0;

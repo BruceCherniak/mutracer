@@ -102,6 +102,12 @@ Notes:
 
 ## Assets
 
+GLBs from the independent assets pipeline may provide a default orbit camera
+in the active glTF scene's `extras.mutracerCamera`: `{position: [x,y,z], target:
+[x,y,z], fov: 45, space: "grounded"}`. Coordinates refer to the model after the
+viewer centers X/Z and grounds Y. Fresh loads apply this view; a restored saved
+user view takes precedence. Invalid camera metadata falls back to automatic fit.
+
 Nothing large is committed. Example models are loaded at run time from the
 [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets)
 (CC0 or CC-BY 4.0, credited in the viewport) and HDRIs from
