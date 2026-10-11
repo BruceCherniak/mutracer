@@ -14,7 +14,8 @@ APIs may change between minor releases.
 - **Progressive path tracing**: area, sphere, spot (with IES profiles),
   directional and environment lights, with multiple importance sampling.
 - **OpenPBR 1.1 materials**: metal, dielectric, coat, fuzz, thin film,
-  transmission with absorption and scattering, subsurface, emission.
+  transmission with absorption and scattering, subsurface, emission, and
+  ray-marched height-field displacement.
 - **Fast scene setup**: a JavaScript port of TinyBVH's binned SAH builder
   builds acceleration structures, with the TinyBVH WebAssembly builder as an
   option; transform-only animation refits the instance hierarchy.
@@ -29,22 +30,15 @@ APIs may change between minor releases.
 
 ## Install
 
-The quick-start example imports `gl-matrix` directly; install it alongside MuTracer:
-
 ```bash
-npm install @meimu/mutracer gl-matrix
+npm install @meimu/mutracer
 ```
 
-Add `three` only if you use the Three.js helpers:
+Add `three` if you use the Three.js helpers. The quick start below also uses
+`gl-matrix` for matrix math.
 
-```bash
-npm install @meimu/mutracer three
-```
-
-The package is ESM with TypeScript declarations via `lib/main.js`. The `dist`
-directory contains only the UMD build (`MuTracer` global) at `dist/mutracer.umd.js`;
-it does not duplicate the ESM distribution.
-Displacement uses projective height-field ray marching.
+The package is ESM with TypeScript declarations (`lib/main.js`). A UMD build
+with a `MuTracer` global is at `dist/mutracer.umd.js`.
 
 ## Quick start
 
@@ -120,7 +114,8 @@ await renderer.setDenoiser({ type: 'oidn' });  // Intel Open Image Denoise
 
 | Guide | Contents |
 | --- | --- |
-| [Getting started](./docs/getting-started.md) | Scene model, render loop, updates, export |
+| [Getting started](./docs/getting-started.md) | Scene model, render loop, lights, export |
+| [Scene updates](./docs/updates.md) | Editing a rendering scene, animation, update costs |
 | [API reference](./docs/api.md) | Renderer options, methods, status codes, scene types |
 | [Materials](./docs/materials.md) | OpenPBR inputs, textures, alpha, bevel, displacement |
 | [Three.js](./docs/threejs.md) | `THREESceneSync`, supported materials and lights, `userData` keys |
@@ -142,7 +137,7 @@ npm run dev
 
 - **WebGPU** (recommended): any browser with WebGPU, such as current Chrome,
   Edge and Safari. Required for OIDN denoising, auto exposure, HDR output and
-  instance-transform refits.
+  the options marked WebGPU in the [API reference](./docs/api.md).
 - **WebGL 2** fallback: requires `EXT_color_buffer_float`. Pass
   `preferWebGPU: false` to force it.
 

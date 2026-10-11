@@ -52,15 +52,9 @@ frame();
 
 `new Renderer()` picks WebGPU when available and WebGL 2 otherwise. The first
 calls return `RENDER_STATUS_PREPARING` (device setup, BVH builds) and
-`RENDER_STATUS_COMPILING_SHADER`; keep calling `render()`.
-
-Static BVHs are prepared automatically; no extra call is needed for this loop.
-For a loading screen, use `await renderer.prepareScene(scene)` before starting
-the loop. It prepares static BLASes only: device initialization, scene TLAS,
-GPU uploads and shader compilation still happen in the rendering flow.
-Changing BVH builder settings does not replace existing BVHs; use
-`prepareScene(scene, { rebuild: true })` for that. See the
-[automatic, up-front and rebuild examples](./bvh.md#choose-a-preparation-flow).
+`RENDER_STATUS_COMPILING_SHADER`; keep calling `render()`. BVHs build
+automatically; for a loading screen, see
+[BVH preparation flows](./bvh.md#choose-a-preparation-flow).
 
 ## Geometry from arrays
 
@@ -103,8 +97,8 @@ use its controls and convert with `fromTHREECamera` each frame.
 | `AmbientLight` | `(color, intensity)` | Uniform environment |
 
 Load `.hdr` environments with `await loadRGBE(url)`, which resolves to a
-float `Texture`.
-Emissive materials (`emissionLuminance > 0`) also act as lights.
+float `Texture`. Emissive materials (`emissionLuminance > 0`) also act as
+lights.
 
 ## Backgrounds
 
@@ -117,60 +111,23 @@ Emissive materials (`emissionLuminance > 0`) also act as lights.
 
 ## Updating the scene
 
-The renderer scans object identities, versions and a small set of numeric
-values each frame. You can keep the same scene and arrays while editing:
-
-| Change | What to do |
-| --- | --- |
-| Camera or image-rendering option changed | Nothing; checked each render |
-| BVH builder, layout or spatial-split setting changed | Affects future builds; `await renderer.prepareScene(scene, { rebuild: true })` replaces existing static BLASes |
-| Meshes added, removed or reordered | Edit `scene.meshes` in place or replace the array |
-| Mesh matrix elements changed | Nothing; both WebGPU and WebGL 2 refit changed instances |
-| Mesh geometry or material reference replaced | Nothing; detected automatically |
-| Material parameters edited | `material.markUpdated()` |
-| Vertex attributes edited, indices and `materialIndex` unchanged | `geometry.markVerticesUpdated()` |
-| Indices, `materialIndex` or general geometry data edited | `geometry.markUpdated()` |
-| Texture pixels or UV-array elements edited | `texture.markUpdated()` |
-| Texture, image, UV array, flipY or uvChannel assigned | Nothing; detected automatically |
-| Light membership or parameters edited | Nothing; array membership and parameter values are checked |
-| Background assigned or its color/grounded fields edited | Nothing; values are checked (texture pixel edits still need `markUpdated()`) |
+Keep the same scene and edit it in place. Scene membership, transforms,
+resource references, lights and backgrounds are detected automatically. Three
+edits need a notification:
 
 ```ts
-mesh.matrixWorld[12] += 0.1;
 material.specularRoughness = 0.6;
-material.markUpdated();
-renderer.render(scene, camera);
+material.markUpdated();               // material parameters
+
+texture.markUpdated();                // texture pixels or UV-array elements
+
+geometry.markVerticesUpdated();       // vertex attributes only
+geometry.markUpdated();               // indices, materialIndex or other geometry data
 ```
 
-`markVerticesUpdated()` advances the geometry's `version` while preserving its
-`topologyVersion`, allowing vertex updates and BLAS refits where supported.
-`markUpdated()` advances both revisions and requests topology processing,
-including BLAS rebuilding. It is valid for vertex edits too, but can cause
-unnecessary rebuilds. Neither method recalculates normals or tangents; update
-them as needed before notifying the renderer. Replacing arrays or changing
-their lengths/item sizes requires full scene data preparation regardless of
-which method you call. Replacing `mesh.geometry` is detected automatically.
-For frequent deformation, set `geometry.dynamic = true` and retain the arrays;
-see [BVH animation](./bvh.md#animation).
-
-With Three.js, retain a `THREESceneSync` and call `sync.update()` before rendering
-`sync.scene`; see [Three.js](./threejs.md).
-
-```ts
-import { THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
-
-const sync = new THREESceneSync(threeScene);
-
-function frame() {
-  sync.update();
-  renderer.render(sync.scene, fromTHREECamera(threeCamera));
-  requestAnimationFrame(frame);
-}
-frame();
-```
-
-Any change that affects the image restarts accumulation. While things change,
-`interactivePreview` renders a cheaper, lower-resolution image.
+See [scene updates](./updates.md) for the full table, vertex animation and
+update costs. With Three.js, call `sync.update()` before each render instead;
+see [Three.js](./threejs.md).
 
 ## Exporting an image
 
@@ -198,8 +155,8 @@ Three.js, also call `sync.dispose()` to release the conversion caches.
 ## Bundler notes
 
 Vite development prebundles dependencies and can relocate asset URLs. Exclude
-MuTracer so bundled OIDN standard/small weights and the optional TinyBVH wasm
-load from the package:
+MuTracer so the bundled OIDN standard/small weights and the optional TinyBVH
+wasm load from the package:
 
 ```ts
 export default defineConfig({
@@ -208,9 +165,5 @@ export default defineConfig({
 ```
 
 Vite production builds and webpack 5 copy these assets without extra
-configuration. Bundlers without asset URL support need self-hosted OIDN weights
-via `weightsBaseUrl`; see [denoising](./denoising.md). The default TS BVH builder
-does not load wasm; the viewer opts into the asynchronous wasm builder.
-If a bundled wasm download fails its HTTP or file-signature check, MuTracer
-warns once and retries the version-pinned jsDelivr copy. If that also fails,
-Renderer falls back to the built-in TS builder.
+configuration. With bundlers that do not support asset URLs, self-host the
+OIDN weights with `weightsBaseUrl` (see [denoising](./denoising.md#hosting-the-weights)).

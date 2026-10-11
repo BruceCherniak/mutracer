@@ -75,6 +75,17 @@ sample count) on a real GPU before and after, and compare
 - Removing a rendering algorithm or image-quality mechanism is a maintainer
   decision. Keep the implementation and the A/B evidence, report regressions,
   and leave the decision to the maintainer.
+
+## Documentation
+
+- `README.md` is the overview, `docs/` holds the guides and `llms.txt` is the
+  compact usage guide for coding agents. Keep `llms.txt` to one or two lines
+  per topic with links into `docs/`.
+- Document each behavior in one place and link to it elsewhere: scene update
+  rules in `docs/updates.md`, BVH preparation in `docs/bvh.md`, options and
+  defaults in TSDoc and `docs/api.md`.
+- Order each guide as usage, options, then caveats. Put implementation details
+  in a trailing "Implementation notes" section.
 - Keep reusable documentation in `docs/`. Do not commit dated experiment logs
   or scene-specific evidence there.
 

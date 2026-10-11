@@ -21,7 +21,8 @@ const gold = Object.assign(new OpenPBRMaterial(), {
 });
 ```
 
-After editing a material that is already rendering, call `material.markUpdated()`:
+After editing a material that is already rendering, call `material.markUpdated()`
+(see [scene updates](./updates.md#materials-textures-and-lights) for costs):
 
 ```ts
 gold.specularRoughness = 0.4;
@@ -29,16 +30,9 @@ gold.baseColor[1] = 0.7;
 gold.markUpdated();
 ```
 
-Both backends update parameter buffers without merging geometry or rebuilding
-BVHs. Emission changes also refresh emission-related sampling state; texture
-changes rebuild the atlas. Displacement geometry settings require a full mesh
-update. Shading-only
-`displacementBumpStrength` edits use the textures path.
-
-Materials occupy slots by object identity. Sharing one material shares its slot;
-separate objects with equal values remain separate slots. Referenced textures
-still share atlas layers. Call `texture.markUpdated()` after pixel or UV-array
-element edits; assigning a new texture, image or UV array is detected directly.
+Materials occupy GPU slots by object identity: share one material object to
+share its slot. Separate objects with equal values take separate slots, but
+the textures they reference still share atlas space.
 
 ## Inputs
 
@@ -83,6 +77,9 @@ wavelengths spectrally.
 `Texture.uvScale`, `uvOffset` and `uvChannel` (0 or 1) transform UVs per
 texture. For geometry without usable UVs, set `uvProjection` to
 `'triplanar'`, `'spherical'` or `'cylindrical'` with `uvScale`.
+
+Call `texture.markUpdated()` after editing pixels or UV-array elements;
+assigning a new texture, image or UV array is detected automatically.
 
 ## Alpha
 

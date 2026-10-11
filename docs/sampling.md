@@ -1,37 +1,45 @@
 # Sampling patterns
 
-`renderer.samplingPattern` selects the sequence independently of OIDN.
-Changing it restarts accumulation. The choices are:
+`renderer.samplingPattern` selects the sample sequence. Changing it restarts
+accumulation. The denoiser never changes it.
 
-- `sobol` (default): Burley Owen-scrambled 2D Sobol sequences, independently
-  scrambled per pixel and domain. It converges within each pixel and produces
-  spatially decorrelated error suited to OIDN.
-- `zsobol`: opt-in Morton-ordered Sobol sampling for spatial blue-noise error,
-  especially useful at low sample counts without a denoiser.
-- `random`: PCG white noise, useful as an independent Monte Carlo reference.
+| Pattern | Use |
+| --- | --- |
+| `'sobol'` (default) | General use, and with any denoiser. Owen-scrambled Sobol; converges well per pixel with spatially decorrelated error |
+| `'zsobol'` | Low sample counts **without** a denoiser. Morton-ordered Sobol with blue-noise error |
+| `'random'` | PCG white noise; an independent Monte Carlo reference |
 
-ZSobol uses **blue-noise-first**: sample zero uses a one-sample ZSobol
-pattern, and later samples use an independent scramble for the remaining
-budget. This preserves blue-noise error in the first preview even when
-`maxSamples` is large. The remaining budget is rounded up to a power of two,
-capped at 65536 samples; unlimited rendering uses that cap. Early prefixes
-still cannot all have exact blue-noise properties. Changing the rounded budget
-restarts accumulation. Independent 256×256 pixel tiles and sample blocks
-keep Morton indices within 32 bits. The structured patterns use per-pixel
-Owen Sobol for variable-count traversal. `random` keeps PCG for these choices.
+```ts
+renderer.samplingPattern = 'zsobol';
+```
 
-Offline sequences are deterministic, including `sampleSequenceOffset`.
-Each WebGPU pixel advances using its own accumulated count, so adaptive
-sampling and interleaved preview tiles cannot skip sequence points. Camera
-jitter and aperture use separate 2D domains; light positions, BSDF directions
-and phase directions likewise have their own pairs. Variable-length alpha,
-displacement and traversal choices use a separate hashed dimension range.
-Spectral wavelengths reuse dimensions and random streams to reduce colored
-noise. Interactive resets retain seed zero for stable screen-relative noise.
+## Caveats
 
-The backends can differ in floating-point rounding during conversion and
-shading even with identical integer sequence points. Finite-width, very narrow
-specular lobes under directional lights can produce rare, large Monte Carlo
-contributions with any pattern; sampling does not clamp these contributions.
+- **ZSobol budget**: ZSobol sizes its pattern from `maxSamples`, rounded up to
+  a power of two and capped at 65536 (unlimited rendering uses the cap).
+  Changing the rounded budget restarts accumulation. The first sample always
+  has blue-noise error; later prefixes of a large budget cannot all keep it.
+- **Determinism**: offline sequences are deterministic, including
+  `sampleSequenceOffset`. Use disjoint offset ranges for animation frames.
+- **Backends**: WebGPU and WebGL 2 can differ in floating-point rounding even
+  with identical sequence points.
+- **Fireflies**: very narrow specular lobes under directional lights can
+  produce rare, large contributions with any pattern. Sampling does not clamp
+  them; use `renderer.clamping` if needed.
 
-ZSobol generates its blue-noise pattern without a texture asset.
+## Implementation notes
+
+- `sobol` uses Burley's Owen-scrambled 2D Sobol sequences, scrambled
+  independently per pixel and domain.
+- ZSobol is blue-noise-first: sample zero uses a one-sample ZSobol pattern,
+  and later samples use an independent scramble for the remaining budget.
+  Independent 256×256 pixel tiles and sample blocks keep Morton indices within
+  32 bits. The pattern is generated without a texture asset.
+- Each WebGPU pixel advances by its own accumulated count, so adaptive
+  sampling and interleaved preview tiles cannot skip sequence points.
+- Camera jitter, aperture, light positions, BSDF directions and phase
+  directions each use their own 2D domain. Variable-length choices (alpha,
+  displacement, traversal) use a separate hashed dimension range: per-pixel
+  Owen Sobol for the structured patterns, PCG for `random`.
+- Spectral wavelengths reuse dimensions and random streams to reduce colored
+  noise. Interactive resets keep seed zero for stable screen-relative noise.

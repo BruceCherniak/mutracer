@@ -19,9 +19,7 @@ new Renderer(params?: RendererParams)
 ### Properties
 
 Properties are plain fields read on the next `render()`. Changing one that
-affects the image restarts accumulation. BVH builder settings apply to future
-builds; use `prepareScene(scene, { rebuild: true })` to replace existing static
-BLASes after changing them.
+affects the image restarts accumulation.
 
 **Sampling and integration**
 
@@ -34,9 +32,9 @@ BLASes after changing them.
 | `bevelSamples` | `8` | Probes per sample for `OpenPBRMaterial.bevelSize` (1–32) |
 | `samplingPattern` | `'sobol'` | `'sobol'`, `'zsobol'` or `'random'`; see [sampling](./sampling.md) |
 | `alphaBlendStrategy` | `'stochastic'` | `'stochastic'` or `'deterministic-source-over'` for glTF `BLEND` materials (WebGPU) |
-| `bvhBuilder` | `'builtin'` | `'builtin'` (JavaScript) or `'tinybvh'` (WebAssembly, loaded on demand); static BLASes prepare in a Worker |
-| `bvhLayout` | `'bvh2'` | Static TinyBVH layout: `'bvh2'`, `'bvh4'`, `'bvh-gpu'` or `'cwbvh'` (both backends); builtin and dynamic geometry use `'bvh2'`. Use `prepareScene(scene, { rebuild: true })` to replace existing BLASes |
-| `bvhSpatialSplits` | `false` | With `'tinybvh'`, build static BLASes with spatial splits (SBVH): slower builds, sometimes faster rendering |
+| `bvhBuilder` | `'builtin'` | `'builtin'` (JavaScript) or `'tinybvh'` (WebAssembly); see [BVH](./bvh.md) |
+| `bvhLayout` | `'bvh2'` | Static TinyBVH layout: `'bvh2'`, `'bvh4'`, `'bvh-gpu'` or `'cwbvh'` |
+| `bvhSpatialSplits` | `false` | With `'tinybvh'`, build SBVHs: slower builds, sometimes faster rendering |
 | `textureAtlasBudgetBytes` | 384 MiB | Texture atlas memory budget; larger textures are downscaled |
 
 **Responsiveness**
@@ -84,7 +82,7 @@ BLASes after changing them.
 | `setSize(width, height)` | Resizes the canvas drawing buffer and targets, in pixels |
 | `getSize()` | `{ width, height }` |
 | `setDenoiser(options?)` | Attaches the built-in JNLM filter or an OIDN network (WebGPU only); `false`/`null` removes it. See [denoising](./denoising.md) |
-| `prepareScene(scene, options?)` | Builds missing static BLASes; `options.rebuild` (default `false`) replaces existing ones, `options.onProgress` (default none) receives the completed task fraction. Accepts a scene with `meshes` or a `Mesh[]`. Returns `Promise<PrepareSceneResult>` with `geometryCount` and `bvhTimeMs`; see [BVH preparation flows](./bvh.md#choose-a-preparation-flow) |
+| `prepareScene(scene, options?)` | Builds missing static BLASes for a scene or `Mesh[]`. `rebuild` (default `false`) replaces existing ones; `onProgress(fraction)` (default none). Resolves to `{ geometryCount, bvhTimeMs }`. Does not compile shaders or render; see [BVH](./bvh.md#what-preparescene-completes) |
 | `renderOfflineFrame(scene, camera, options)` | Renders a finished frame; see below |
 | `restartSamples()` | Discards the accumulation |
 | `getTotalSamplesRendered()` | Accumulated spp |
@@ -95,22 +93,9 @@ BLASes after changing them.
 | `getGPUDeviceAndAdapter()` | Initializes and returns the WebGPU device/adapter |
 | `dispose()` | Releases GPU resources and the denoiser |
 
-Scene membership, transforms, light parameters and background edits are
-detected on each `render()`, even when their arrays are retained. Use
-`material.markUpdated()` after editing material parameters and
-`texture.markUpdated()` after editing texture pixels or UV-array elements.
-For geometry, use `markVerticesUpdated()` for vertex attribute edits that leave
-indices and `materialIndex` unchanged; use `markUpdated()` for index,
-material-index or general geometry updates. The next render restarts
-accumulation and selects the appropriate update path. An unchanged scene keeps
-accumulating.
-
-`prepareScene` waits only for static BLAS preparation. It skips dynamic geometry
-and, unless `rebuild: true`, existing BLASes. It does not initialize the device,
-build TLAS, upload GPU scene data, compile shaders or render an image. Keep
-calling `render()` through preparing and shader-compilation statuses after it
-resolves, or await `renderOfflineFrame()` for a finished image. See
-[completion, progress and statistics](./bvh.md#what-preparescene-completes).
+`render()` detects scene edits itself, except material, texture and geometry
+data edits, which need `markUpdated()` or `markVerticesUpdated()`; see
+[scene updates](./updates.md). An unchanged scene keeps accumulating.
 
 ### `renderOfflineFrame(scene, camera, options)`
 
@@ -147,9 +132,9 @@ If a denoiser is set, the result is denoised before the promise resolves.
 
 | Export | Description |
 | --- | --- |
-| `Scene` | `{ meshes, lights, background?, overlay? }` |
-| `Mesh` | `new Mesh(geometry, material \| material[])`, `matrixWorld`; texture and displacement projection are configured on the material |
-| `Geometry`, `GeometryAttribute` | Triangle data: `position`, `normal`, `indices`, optional `uv`, `uv1`, `tangent`, `color`, `materialIndex`; `dynamic` (default `false`) selects the built-in refittable BLAS when `true` |
+| `Scene` | `{ meshes, lights, background?, overlay? }`; see below |
+| `Mesh` | `new Mesh(geometry, material \| material[])`, `matrixWorld` |
+| `Geometry`, `GeometryAttribute` | Triangle data: `position`, `normal`, `indices`, optional `uv`, `uv1`, `tangent`, `color`, `materialIndex`; `dynamic` (default `false`) for [deforming geometry](./updates.md#dynamic-geometry) |
 | `OpenPBRMaterial` | See [materials](./materials.md) |
 | `Texture` | Image, canvas or `{ data, width, height }`; 8-bit is sRGB, float is linear |
 | `Camera` | `'perspective'` or `'orthographic'`; `Camera.lookAt(camera, eye, target, up?)` |
@@ -157,21 +142,14 @@ If a denoiser is set, the result is denoised before the promise resolves.
 | `IESProfile`, `parseIESProfile(text)` | Photometric profiles for `SpotLight` |
 | `SceneBackground` | `[r, g, b, a]`, `Texture` or `GroundedSkyboxBackground` |
 
-`Geometry`, `Texture` and `OpenPBRMaterial` expose `version` (initially `0`)
-and `markUpdated(): this`. For Geometry, `markUpdated()` advances both `version`
-and the read-only `topologyVersion` (initially `0`), requesting topology
-processing and BLAS rebuilding. `markVerticesUpdated(): this` advances only
-`version`; use it when indices and `materialIndex` are unchanged to allow
-vertex updates and supported BLAS refits. Neither method recalculates normals
-or tangents. See [geometry updates](./bvh.md#animation).
+`scene.overlay` is an optional image composited over the final frame:
+`{ image, x, y, width, height }` in canvas pixels, where `image` is an
+`HTMLImageElement`, an `HTMLCanvasElement` or RGBA8 `{ data, width, height }`.
 
-Replacing geometry or material references on a Mesh is detected automatically.
-Mesh projection overrides apply to all its materials and require instance data
-to be rebuilt. Both backends refit transform-only edits. Geometry updates with
-stable attribute/index arrays update only affected geometry and BLAS regions;
-replaced arrays, changed lengths/item sizes and displacement require full
-scene data preparation, even with `markVerticesUpdated()`.
-Dynamic BLASes rebuild above twice their last build's total node surface area.
+`Geometry`, `Texture` and `OpenPBRMaterial` expose `version` (initially `0`)
+and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
+(initially `0`) and `markVerticesUpdated(): this`, which advances only
+`version`. See [scene updates](./updates.md) for when to call each.
 
 ## Helpers
 
@@ -181,7 +159,7 @@ Dynamic BLASes rebuild above twice their last build's total node surface area.
 | `generateVertexNormals`, `generateVertexTangents` | Attribute generation |
 | `computeMeshesBoundingBox(meshes)` | World-space bounds |
 | `loadRGBE(url)`, `parseRGBE(buffer)` | Radiance `.hdr` → float `Texture` |
-| `THREESceneSync` | Recommended Three.js scene integration: create `new THREESceneSync(threeScene, options?)` once, call `sync.update()` before rendering `sync.scene` each frame; retains resources, supports CPU skinning/morph and shared-geometry instance expansion; `dispose()` releases caches; see [Three.js](./threejs.md) |
+| `THREESceneSync` | Keeps a `THREE.Scene` in sync: `new THREESceneSync(threeScene, options?)` once, `sync.update()` before rendering `sync.scene`, `dispose()` when done; see [Three.js](./threejs.md) |
 | `fromTHREECamera` | Converts a Three.js camera; call each frame alongside `THREESceneSync` |
 | `fromTHREEScene` | One-shot Three.js scene conversion; every call creates fresh MuTracer objects |
 | `THREESceneChanges` | Informational result of `update()`: `transforms`, `membership`, `content`, `lights`, `background`; no forwarding to Renderer needed |

@@ -365,7 +365,7 @@ float bevelCubicPdf(float radius, float distanceToSource) {
   return falloff * falloff * falloff;
 }
 
-// Shader bevel. Design notes: docs/shader-bevel.md
+// Shader bevel. Usage: docs/materials.md (Renderer extensions)
 vec3 getBevelNormal(SurfaceInteraction source, float radius) {
   vec3 geometricNormal = source.faceNormal;
   if (dot(geometricNormal, source.vertexNormal) < 0.0) geometricNormal = -geometricNormal;

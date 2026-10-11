@@ -1,9 +1,11 @@
 # Performance
 
+A tuning checklist. Each item links to the page with the details.
+
 ## Resolution and samples
 
 - Rays per sample scale with pixel count. Cap the device pixel ratio
-  (`Math.min(devicePixelRatio, 2)` or lower on mobile).
+  (`Math.min(devicePixelRatio, 2)`, or lower on mobile).
 - Set `maxSamples` for the quality you need. With a denoiser, 64–256 spp is
   usually enough; without one, 1000+ for clean results.
 - Start with `bounces` 3–5. Raise it for glass, subsurface scattering or
@@ -13,15 +15,14 @@
 
 ## Responsiveness
 
-- Keep `interactivePreview` on for camera controls and editing.
-  `previewResolutionScale` and `previewBounces` control its cost. The preview
-  resolution adapts to the measured frame time (aiming for `maxTimePreview`
-  milliseconds) in 1/16 steps between 0.25 and `previewResolutionScale`.
-  When denoising while converging, the measured denoise time also lowers it (down to
-  0.125), and preview frames use the `previewModel` network (`small`).
-- Large frames are split into tiles that target `maxTimePerTile`
-  milliseconds of GPU time, which keeps the page responsive. Raise it for
-  throughput in a background or export tab.
+- Keep `interactivePreview` on for camera controls and editing. The preview
+  resolution adapts to the measured frame time (target `maxTimePreview` ms)
+  between 0.25 and `previewResolutionScale`; `previewBounces` sets its depth.
+  When [denoising while converging](./denoising.md#denoising-while-converging),
+  denoise time also lowers it, down to 0.125.
+- Large frames are split into tiles that target `maxTimePerTile` ms of GPU
+  time, which keeps the page responsive. Raise it for throughput in a
+  background or export tab.
 - `allowMultipleSamplesPerFrame = true` lets fast GPUs add several samples per
   `render()`.
 - For exports, `renderOfflineFrame` with `targetBatchTimeMs` adapts batch sizes
@@ -29,56 +30,28 @@
 
 ## Scene setup
 
-- Reuse `Geometry`, `OpenPBRMaterial` and `Texture` objects. Shared geometry
-  shares its BVH and GPU buffers.
-- For large scenes, set `renderer.bvhBuilder = 'tinybvh'` and build BVHs up
-  front with `await renderer.prepareScene(scene)`. Both builders automatically
-  use a Worker for static BLAS construction. Set `renderer.bvhLayout` to choose
-  a TinyBVH layout; after changing builder settings, use
-  `prepareScene(scene, { rebuild: true })` to replace existing static BLASes
-  (see [BVH preparation flows](./bvh.md#choose-a-preparation-flow)). This awaits
-  static BLAS tasks only: TLAS, GPU data uploads and shader compilation still
-  happen in the rendering flow. Height-map analysis and attribute generation
-  run on the calling thread even when BVH construction uses a Worker.
-- With Three.js, keep one `THREESceneSync` and call `sync.update()` before
-  rendering `sync.scene` with `fromTHREECamera(threeCamera)` each frame.
-  It preserves mesh, geometry, material, texture and light identities. One-shot
-  conversion creates fresh resources and is intended for static setup.
-- Animate existing mesh matrices while retaining the mesh objects and array.
-  Both WebGPU and WebGL 2 refit changed TLAS instances and upload only
-  affected instance/BVH ranges.
-- For vertex animation, retain attribute/index arrays, set `geometry.dynamic =
-  true` (default `false`), then call `geometry.markVerticesUpdated()` after
-  editing vertex attributes while indices and `materialIndex` stay unchanged.
-  Use `geometry.markUpdated()` for index/material-index edits or general
-  updates; it advances the topology revision and can rebuild the BLAS
-  unnecessarily for vertex-only animation. Update normals/tangents as needed;
-  neither notification computes them. Changed geometries update their own
-  vertex/BLAS regions and shared instance bounds. Displacement needs full
-  scene data preparation; replaced arrays or changed lengths/item sizes also
-  require it regardless of the notification method. Per-frame refits and
-  rebuilds remain synchronous and can use builtin even with
-  `renderer.bvhBuilder = 'tinybvh'`.
-- Three.js skinning and morph targets run on the CPU and retain deformation
-  buffers. Cost scales with vertices, influences and material groups. An
-  unchanged pose skips deformation. Dynamic BLASes rebuild when total node
-  surface area exceeds twice the last build's total.
-- InstancedMesh shares vertex data and BLAS but adds one TLAS instance per
-  instance and group. Count edits rebuild instance/TLAS data. Instance colors
-  add a cached material per distinct RGB value and source material; reuse
-  colors to keep material packing and memory bounded.
-- Call `material.markUpdated()` after parameter edits. Both backends repack
-  parameters without geometry work. Emission edits also refresh sampling state,
-  and texture edits rebuild the atlas. Non-emissive texture edits skip emissive
-  triangle collection. Emissive bindings cache transformed triangles, and
-  environment power is cached while its image is unchanged. Displacement geometry settings
-  require full mesh updates.
-- Analytic-light parameter edits retain the environment map. Ambient/environment
-  edits resynthesize it. Rect-light texture edits still require a full mesh
-  update because those textures belong to the material atlas.
-- Textures are packed into a texture atlas bounded by
-  `textureAtlasBudgetBytes`; oversized textures are downscaled. Check
-  `renderer.getDiagnostics()?.textureAtlas` when you hit limits.
+- Share `Geometry`, `OpenPBRMaterial` and `Texture` objects. Shared geometry
+  shares its BLAS and GPU buffers.
+- For large scenes, try `renderer.bvhBuilder = 'tinybvh'` and build BVHs up
+  front with `await renderer.prepareScene(scene)`; see [BVH](./bvh.md).
+- With Three.js, keep one `THREESceneSync` for the whole session rather than
+  converting again with `fromTHREEScene`.
+- Textures share an atlas bounded by `textureAtlasBudgetBytes`; larger textures
+  are downscaled. Check `renderer.getDiagnostics()?.textureAtlas`.
+
+## Animation and editing
+
+See [scene updates](./updates.md) for the cost of each kind of edit.
+
+- Edit `mesh.matrixWorld` in place: transform changes only refit instances.
+- For vertex animation, keep the arrays, set `geometry.dynamic = true` and call
+  `geometry.markVerticesUpdated()`, not `markUpdated()`.
+- Avoid [full mesh updates](./updates.md#full-mesh-updates) per frame:
+  replacing arrays, changing displacement, or adding new geometry.
+- Three.js skinning and morph targets run on the CPU; cost grows with
+  vertices, bone influences and material groups. An unchanged pose is free.
+- Each `InstancedMesh` instance adds one top-level BVH instance per material
+  group. Each distinct instance color adds a cached material; reuse colors.
 
 ## Lighting
 

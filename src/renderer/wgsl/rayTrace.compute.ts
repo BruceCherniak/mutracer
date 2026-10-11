@@ -509,7 +509,7 @@ fn bevelCubicPdf(radius: f32, distanceToSource: f32) -> f32 {
   return falloff * falloff * falloff;
 }
 
-// Shader bevel. Design notes: docs/shader-bevel.md
+// Shader bevel. Usage: docs/materials.md (Renderer extensions)
 fn getBevelNormal(source: SurfaceInteraction, radius: f32) -> vec3f {
   var geometricNormal = source.faceNormal;
   if (dot(geometricNormal, source.vertexNormal) < 0.0) {

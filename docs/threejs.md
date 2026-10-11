@@ -40,23 +40,16 @@ const changes = sync.update();
 renderer.render(sync.scene, fromTHREECamera(threeCamera));
 ```
 
-`changes: THREESceneChanges` is informational: `transforms` counts changed mesh
-matrices, `membership` reports mesh membership changes, `content` reports mesh
-structure, geometry deformation or material changes, and `lights` /
-`background` report their edits.
-Nothing needs to be forwarded to the renderer. Material edits are converted
-and versioned automatically; Three.js `material.needsUpdate` is not required
-for color or roughness edits.
+Transforms, membership, lights, background and material properties need no
+flag: material edits are converted and versioned automatically, so Three.js
+`material.needsUpdate` is not required for color or roughness edits. Buffer
+and pixel edits need the usual Three.js flags:
 
-After editing attribute/index arrays, set the edited Three.js attribute's
-`needsUpdate = true` (for an interleaved attribute, set
-`attribute.data.needsUpdate = true`). The sync checks the identities and
-versions of position, normal, tangent, uv, uv1 and index buffers, replacing
-converted geometry when they change. Deforming meshes instead update position,
-normal and tangent arrays in place when only deformation inputs change. After
-editing texture pixels, set
-`threeTexture.needsUpdate = true`; the existing MuTracer Texture is refreshed in
-place. Texture image and UV metadata assignments are also detected.
+| Edit | Flag |
+| --- | --- |
+| Attribute or index array elements | `attribute.needsUpdate = true` (`attribute.data.needsUpdate` for interleaved) |
+| Texture pixels or canvas | `texture.needsUpdate = true` |
+| Instance matrices / colors | `instanceMatrix.needsUpdate` / `instanceColor.needsUpdate = true` |
 
 ```ts
 geometry.attributes.position.setX(0, 0.5);
@@ -65,16 +58,15 @@ texture.needsUpdate = true; // after changing its canvas or pixel data
 sync.update();
 ```
 
-These `needsUpdate` flags belong to the Three.js source attributes. The sync
-handles update notifications on its converted MuTracer geometries, including
-vertex-only notifications for deformation. If you edit a MuTracer `Geometry`
-directly, use `geometry.markVerticesUpdated()` when only vertex attributes
-change and indices/`materialIndex` stay unchanged. Use `geometry.markUpdated()`
-for index/material-index edits or general updates. The former advances only
-`version`; the latter also advances the read-only `topologyVersion` (initially
-`0`) and requests topology processing and BLAS rebuilding. Neither computes
-normals or tangents. Replaced arrays or changed lengths/item sizes still
-require full scene data preparation; see [BVH animation](./bvh.md#animation).
+The sync then calls the right MuTracer notification (`markUpdated()` or
+`markVerticesUpdated()`) on its converted resources. Changed position, normal,
+tangent, uv, uv1 or index buffers replace the converted geometry, which costs
+a [full mesh update](./updates.md#full-mesh-updates); skinning and morph
+targets update arrays in place instead.
+
+`update()` returns `THREESceneChanges` for information only: `transforms`
+counts changed mesh matrices; `membership`, `content`, `lights` and
+`background` flag what changed. Nothing needs to be forwarded to the renderer.
 
 `new THREESceneSync(threeScene, options?)` accepts an optional
 `onMeshConverted(mesh, source, group, groupIndex)` callback (default: none).
@@ -85,15 +77,6 @@ remains usable; calling `update()` after disposal throws.
 
 `fromTHREEScene(threeScene, options?)` remains available for one-shot conversion
 with the same options. Every call creates fresh MuTracer objects.
-
-UV-less meshes use cached material variants for automatic triplanar texture and
-displacement projection. A UV-bearing mesh keeps the converted source material;
-a UV-less mesh uses a variant that changes only the required projection fields.
-Explicit procedural material projections take precedence. Instance colors and
-automatic projections are combined in the variant key. Source material edits
-refresh all used variants, and each update removes unused variants. Rotation
-refits instances on both WebGPU and WebGL 2; material edits use incremental
-updates on both backends.
 
 `fromTHREECamera(camera)` is cheap; call it every frame. Call
 `camera.updateProjectionMatrix()` after changing its aspect or fov.
@@ -120,6 +103,10 @@ warning. `BatchedMesh`, instanced morph targets (`morphTexture`) and skinned
 instancing are unsupported: each source object warns once per converter and is
 converted as an ordinary mesh.
 
+Meshes without UVs get automatic triplanar texture and displacement
+projection through a cached copy of their material; explicit
+`mutracerUvProjection` settings take precedence.
+
 ## Skinning and morph targets
 
 The initial conversion and each `sync.update()` evaluate morph targets and
@@ -131,46 +118,34 @@ positions, normals and UVs. The mesh's world transform remains an instance
 transform.
 
 Each deforming source mesh owns its MuTracer geometry, even when several
-SkinnedMesh objects share a Three.js BufferGeometry. Material groups own
-separate geometries, while deformation is calculated once per source mesh
-and copied to each group. These geometries use `dynamic = true` and the
-built-in binary BLAS; see [BVH animation](./bvh.md#animation).
+SkinnedMesh objects share a Three.js BufferGeometry; deformation is computed
+once per source mesh and copied to each material group. These geometries are
+[dynamic](./updates.md#dynamic-geometry).
 
-Pose, binding matrices, morph weights and attribute versions are compared to
-the preceding update. An unchanged pose retains the arrays and geometry
-version. A changed pose updates the arrays in place and versions the geometry.
-Rendering then uploads only the changed geometry and BLAS regions and refits
-its instances on both backends. CPU deformation cost grows with vertices and
-bone influences; repeated groups also add copying and tangent-generation cost.
-Displacement requires full geometry preparation.
+An unchanged pose (bones, binding matrices, morph weights and attribute
+versions) skips deformation. A changed pose updates the arrays in place, and
+rendering refits only that geometry's BLAS and instances. CPU cost grows with
+vertices, bone influences and material groups. Displaced deforming meshes need
+a full mesh update on every pose change.
 
 Try the procedural [animation example](../examples/animation.html). Pause the
 animation to accumulate samples; changing a pose restarts accumulation.
 
 ## Instanced meshes
 
-`InstancedMesh.count` expands to that many MuTracer meshes per material group.
-Instances share converted geometry and its BLAS. Each world matrix is
-`source.matrixWorld * instanceMatrix[i]`. Editing instance matrices and setting
-`instanceMatrix.needsUpdate = true` updates retained matrix arrays; rendering
-refits the affected TLAS instances without merging geometry.
+`InstancedMesh.count` expands to that many MuTracer meshes per material group,
+all sharing the converted geometry and its BLAS. Each world matrix is
+`source.matrixWorld * instanceMatrix[i]`.
 
-Changing `count` retains the existing prefix and adds or removes only the
-tail. Both backends rebuild TLAS and instance data while retaining resident
-vertices and BLASes. This also handles removal of every instance and later
-restoration. Introducing geometry that has never been prepared, displacement,
-or geometry-dependent multi-material vertex indices requires
-full mesh preparation instead.
-
-`instanceColor` multiplies `baseColor`, including textured color. For an unlit
-MeshBasicMaterial it also multiplies the converted `emissionColor`. After
-editing colors, set `instanceColor.needsUpdate = true`. Materials are cached
-by source material and exact RGB values: repeated colors share one variant,
-while N distinct colors can add N materials per source material. Source edits
-refresh every cached variant. Historical colors remain cached until
-`sync.dispose()`, so frequently inventing new colors increases memory use.
-A color switch updates instance material indices and, when needed, material
-buffers and the texture atlas; it does not duplicate vertex data.
+- **Matrices**: after `instanceMatrix.needsUpdate = true`, rendering refits
+  the affected instances.
+- **Count**: changing `count` keeps the existing prefix and adds or removes the
+  tail, which rebuilds the top-level BVH but reuses vertices and BLASes (see
+  [adding and removing meshes](./updates.md#adding-removing-and-reassigning-meshes)).
+- **Colors**: `instanceColor` multiplies `baseColor` (and `emissionColor` for
+  unlit materials); set `instanceColor.needsUpdate = true` after edits. Each
+  distinct RGB value adds a cached material per source material, kept until
+  `sync.dispose()`. Reuse colors to bound material count and memory.
 
 ## `userData` keys
 
