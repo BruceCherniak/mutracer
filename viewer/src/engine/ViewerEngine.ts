@@ -1222,13 +1222,7 @@ export class ViewerEngine {
     this.sync.update();
     const camera = this.lensCamera(this.activeCamera(), this.advanceFocus(now));
     this.publishLens(camera);
-    let status: RenderStatus;
-    try {
-      status = this.renderer.render(this.sync.scene, camera);
-    } catch (error) {
-      console.error(error);
-      status = RENDER_STATUS_ERROR;
-    }
+    const status = this.renderer.render(this.sync.scene, camera);
     // Query only after the renderer uploads the current animation pose and
     // camera. Readback runs alongside subsequent frames.
     if (status !== RENDER_STATUS_PREPARING && status !== RENDER_STATUS_COMPILING_SHADER && status !== RENDER_STATUS_ERROR) {
