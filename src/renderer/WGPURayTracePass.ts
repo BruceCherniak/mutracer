@@ -2235,9 +2235,9 @@ ${rayTraceCompute({
     });
 
     const attrBufferData = new F32(
-      Geometry.getVertexCount(mergedGeometry) * stride
+      mergedGeometry.vertexCount * stride
     );
-    packVertexAttributes(mergedGeometry, attrBufferData, stride, offsets, 0, Geometry.getVertexCount(mergedGeometry));
+    packVertexAttributes(mergedGeometry, attrBufferData, stride, offsets, 0, mergedGeometry.vertexCount);
 
     this._attributeData = attrBufferData; this._attributeStride = stride; this._attributeOffsets = offsets;
     this._attrBuffers = this._updateGPUBuffer(

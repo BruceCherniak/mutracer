@@ -67,3 +67,5 @@ Call `sync.dispose()` and `renderer.dispose()` when finished.
 - Errors: `render()` never throws; inspect `renderer.lastError` and initialized `getDiagnostics().webgpuFallbackReason`. See [API](./docs/api.md).
 
 - Denoise status: intermediate batches stay RENDERING; DENOISING and FINISHED describe the final image at maxSamples. See [denoising](./docs/denoising.md).
+
+- Geometry: `new Geometry({ position })` generates sequential indices and normals; inspect `vertexCount` / `triangleCount`. See [getting started](./docs/getting-started.md).

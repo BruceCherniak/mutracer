@@ -37,7 +37,7 @@ export function canUpdateGeometries(prepared: Prepared, geometries: readonly Geo
 /** Rewrites only a geometry's existing region, preserving global material indices. */
 function copyRegion(source: Geometry, merged: Geometry, region: Prepared['geometryRegions'] extends Map<Geometry, infer R> ? R : never, topologyChanged: boolean, deformationOnly: boolean) {
   const { vertexOffset, indexOffset, materialIndices } = region;
-  const count = Geometry.getVertexCount(source);
+  const count = source.vertexCount;
   for (const name of vertexAttributes) {
     if (name === 'materialIndex' || deformationOnly && name !== 'position' && name !== 'normal' && name !== 'tangent') continue;
     const target = merged[name]; if (!target) continue;
@@ -85,7 +85,7 @@ export function updatePreparedGeometries(prepared: Prepared, changed: ReadonlySe
       resized ||= previous.buffer.byteLength !== bvh.buffer.byteLength;
       relocated ||= previous.buffer.byteLength !== bvh.buffer.byteLength || previous.layout !== bvh.layout;
       copyRegion(source, prepared.geometry, region, topologyChanged, deformationOnly);
-      const count = Geometry.getVertexCount(source), previousVertices = vertices[vertices.length - 1];
+      const count = source.vertexCount, previousVertices = vertices[vertices.length - 1];
       if (previousVertices && previousVertices.first + previousVertices.count === region.vertexOffset && previousVertices.topologyChanged === topologyChanged && previousVertices.deformationOnly === deformationOnly) previousVertices.count += count;
       else vertices.push({first: region.vertexOffset, count, topologyChanged, deformationOnly});
       blases.push({blas: bvh, offset});

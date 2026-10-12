@@ -14,7 +14,7 @@ import Camera from '../scene/Camera.js';
 import Texture from '../scene/Texture.js';
 import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
 import Mesh from '../scene/Mesh.js';
-import Geometry, { Attribute, GeometryData } from '../scene/Geometry.js';
+import Geometry, { Attribute } from '../scene/Geometry.js';
 import HierarchyNode from '../scene/HierarchyNode.js';
 import { generateVertexNormals, updateBoundingBox } from './geometry.js';
 import { mat4, quat, vec3 } from '../math.js';
@@ -589,7 +589,10 @@ function parseMeshes(json: GLTFFormat, lib: ParsedLib) {
     // Geometry
     for (let pp = 0; pp < meshInfo.primitives.length; pp++) {
       const primitiveInfo = meshInfo.primitives[pp];
-      const geometry = new Geometry({} as GeometryData);
+      const geometry = new Geometry({
+        position: new Attribute(new Float32Array(getAccessorData(json, lib, primitiveInfo.attributes.POSITION)), 3),
+        indices: primitiveInfo.indices == null ? undefined : new Attribute(new Uint32Array(getAccessorData(json, lib, primitiveInfo.indices, true)), 1)
+      });
       // Parse attributes
       const semantics = Object.keys(primitiveInfo.attributes);
       let hasBoundingBox = false;
@@ -678,7 +681,7 @@ function parseMeshes(json: GLTFFormat, lib: ParsedLib) {
           1
         );
         if (
-          Geometry.getVertexCount(geometry) <= 0xffff &&
+          geometry.vertexCount <= 0xffff &&
           geometry.indices.array instanceof Uint32Array
         ) {
           geometry.indices.array = new Uint16Array(geometry.indices.array);

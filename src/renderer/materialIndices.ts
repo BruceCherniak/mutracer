@@ -17,7 +17,7 @@ export function localMaterialIndex(geometry: Geometry, vertex: number, materialC
 
 /** Writes the internal four-slot format; public vertices select one material at full weight. */
 export function writeMaterialIndices(geometry: Geometry, globalIndices: number[], target: Int32Array, vertexOffset = 0, packDefault = false) {
-  const count = Geometry.getVertexCount(geometry);
+  const count = geometry.vertexCount;
   target.fill(0, vertexOffset * 4, (vertexOffset + count) * 4);
   // Instanced geometry must retain the per-instance material fallback.
   if (!geometry.materialIndex && !packDefault) return;

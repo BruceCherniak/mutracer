@@ -68,6 +68,7 @@ export {
   default as Geometry,
   Attribute as GeometryAttribute
 } from './scene/Geometry.js';
+export type { GeometryInit } from './scene/Geometry.js';
 export { default as OpenPBRMaterial } from './scene/OpenPBRMaterial.js';
 export type {
   MaterialAlphaMode,

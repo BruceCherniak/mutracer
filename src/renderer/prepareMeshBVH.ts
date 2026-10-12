@@ -841,7 +841,7 @@ export function updateMeshInstances(meshes: Mesh[]) {
     emissiveBindings,
     blases: geometries.map((geo) => ({
       bvh: geo.bvh!,
-      verticesCount: Geometry.getVertexCount(geo),
+      verticesCount: geo.vertexCount,
       trainglesCount: geo.indices.array.length / 3
     }))
   };
@@ -853,7 +853,7 @@ function mergeGeometry(
   regions: Map<Geometry, { vertexOffset: number; indexOffset: number; materialIndices: number[] }>
 ) {
   const totalVertexCount = geometries.reduce(
-    (sum, geo) => sum + Geometry.getVertexCount(geo),
+    (sum, geo) => sum + geo.vertexCount,
     0
   );
   const totalIndexCount = geometries.reduce(
@@ -896,7 +896,7 @@ function mergeGeometry(
   let currentIndex = 0;
 
   geometries.forEach((geometry, idx) => {
-    const vertexCount = Geometry.getVertexCount(geometry);
+    const vertexCount = geometry.vertexCount;
     const globalMaterialIndex = globalMaterialIndicesMap[idx];
     regions.set(geometry, { vertexOffset: currentVertex, indexOffset: currentIndex, materialIndices: globalMaterialIndex });
 
@@ -949,7 +949,7 @@ function computeGeometryNormals(geometry: Geometry) {
 
   const len = indices
     ? indices.array.length
-    : Geometry.getVertexCount(geometry);
+    : geometry.vertexCount;
   let i1, i2, i3;
   for (let f = 0; f < len; ) {
     if (indices) {

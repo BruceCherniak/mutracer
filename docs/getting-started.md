@@ -59,15 +59,16 @@ automatically; for a loading screen, see
 ## Geometry from arrays
 
 ```ts
-import { Geometry, GeometryAttribute, generateVertexNormals } from '@meimu/mutracer';
+import { Geometry, GeometryAttribute } from '@meimu/mutracer';
 
 const geometry = new Geometry({
   position: new GeometryAttribute(new Float32Array(positions), 3),
   indices: new GeometryAttribute(new Uint32Array(indices), 1),
   uv: new GeometryAttribute(new Float32Array(uvs), 2) // optional
 });
-generateVertexNormals(geometry);
 ```
+
+Only `position` is required. Omitting `indices` generates sequential indices; omitting `normal` generates smooth area-weighted normals. Read `geometry.vertexCount` and `geometry.triangleCount` for counts.
 
 For several materials on one geometry, pass an array of materials to `Mesh`
 and set `geometry.materialIndex` to an `Int32Array` attribute with `itemSize: 1` and one raw index

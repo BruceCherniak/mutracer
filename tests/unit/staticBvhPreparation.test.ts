@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import Renderer from '../../src/Renderer';
-import Geometry from '../../src/scene/Geometry';
+import Geometry, { Attribute } from '../../src/scene/Geometry';
 import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import Texture from '../../src/scene/Texture';
@@ -136,7 +136,7 @@ it('retains the old BLAS while rebuilding and after a failed replacement', async
 it('ignores empty and dynamic geometry during static preparation', async () => {
   const build = simulatedWorker();
   const dynamic = mesh(); dynamic.geometry.dynamic = true;
-  const empty = new Mesh(new Geometry({}), new OpenPBRMaterial());
+  const empty = new Mesh(new Geometry({position: new Attribute(new Float32Array(0), 3)}), new OpenPBRMaterial());
   await renderer().prepareScene([dynamic, empty]);
   expect(build).not.toHaveBeenCalled();
   expect(dynamic.geometry.bvh).toBeUndefined();

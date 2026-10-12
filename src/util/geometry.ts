@@ -3,7 +3,7 @@ import Geometry, { Attribute } from '../scene/Geometry.js';
 
 /** Computes smooth, area-weighted vertex normals into `geometry.normal`. */
 export function generateVertexNormals(geometry: Geometry) {
-  if (!Geometry.getVertexCount(geometry)) {
+  if (!geometry.vertexCount) {
     return;
   }
 
@@ -21,7 +21,7 @@ export function generateVertexNormals(geometry: Geometry) {
 
   const n = vec3.create();
 
-  const len = indices ? indices.length : Geometry.getVertexCount(geometry);
+  const len = indices ? indices.length : geometry.vertexCount;
   let i1, i2, i3;
   for (let f = 0; f < len; ) {
     if (indices) {
@@ -101,7 +101,7 @@ export function generateCreasedVertexNormals(
     sumY: number;
     sumZ: number;
   }
-  const originalVertexCount = Geometry.getVertexCount(geometry);
+  const originalVertexCount = geometry.vertexCount;
   const groups = Array.from(
     { length: originalVertexCount },
     () => [] as NormalGroup[]
@@ -221,7 +221,7 @@ export function generateCreasedVertexNormals(
 /** Generate a UV-aligned tangent for meshes that do not provide one. */
 export function generateVertexTangents(geometry: Geometry) {
   if (!geometry.position || !geometry.uv || !geometry.normal) return;
-  const count = Geometry.getVertexCount(geometry);
+  const count = geometry.vertexCount;
   if (!count) return;
   const tangents = new Float32Array(count * 3);
   computeVertexTangents(geometry, new Float32Array(count * 3), tangents);
@@ -232,7 +232,7 @@ const dynamicTangentScratch = new WeakMap<Geometry, Float32Array>();
 /** @internal Refreshes generated tangents while retaining the attribute and scratch arrays. */
 export function updateDynamicTangents(geometry: Geometry) {
   if (!geometry.position || !geometry.uv || !geometry.normal) return;
-  const count = Geometry.getVertexCount(geometry);
+  const count = geometry.vertexCount;
   if (!count) return;
   let accumulated = dynamicTangentScratch.get(geometry);
   if (accumulated?.length !== count * 3) {
@@ -246,11 +246,11 @@ function computeVertexTangents(geometry: Geometry, accumulated: Float32Array, ta
   const uvs = geometry.uv?.array;
   const normals = geometry.normal?.array;
   const positions = geometry.position?.array;
-  if (!uvs || !normals || !positions || !Geometry.getVertexCount(geometry)) {
+  if (!uvs || !normals || !positions || !geometry.vertexCount) {
     return;
   }
 
-  const vertexCount = Geometry.getVertexCount(geometry);
+  const vertexCount = geometry.vertexCount;
   accumulated.fill(0);
   const indices = geometry.indices?.array;
   const count = indices?.length ?? vertexCount;

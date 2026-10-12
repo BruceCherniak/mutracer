@@ -158,7 +158,7 @@ If a denoiser is set, the result is denoised before the promise resolves.
 | --- | --- |
 | `Scene` | `{ meshes, lights, background?, overlay? }`; see below |
 | `Mesh` | `new Mesh(geometry, material \| material[])`, `matrixWorld` |
-| `Geometry`, `GeometryAttribute` | Triangle data: `position`, `normal`, `indices`, optional `uv`, `uv1`, `tangent`, `color`, `materialIndex` (raw per-vertex indices, itemSize 1; all three corners of each triangle must match; invalid indices fall back to material 0 with one warning); `dynamic` (default `false`) for [deforming geometry](./updates.md#dynamic-geometry) |
+| `Geometry`, `GeometryAttribute` | Triangle data: required `position`; optional `normal` and `indices` are generated at construction; `vertexCount` / `triangleCount` getters; optional `uv`, `uv1`, `tangent`, `color`, `materialIndex` (raw per-vertex indices, itemSize 1; all three corners of each triangle must match; invalid indices fall back to material 0 with one warning); `dynamic` (default `false`) for [deforming geometry](./updates.md#dynamic-geometry) |
 | `OpenPBRMaterial` | See [materials](./materials.md) |
 | `Texture` | Image, canvas or `{ data, width, height }`; 8-bit is sRGB, float is linear |
 | `Camera` | `'perspective'` or `'orthographic'`; `Camera.lookAt(camera, eye, target, up?)`; depth of field with `fStop`, `focusDistance`, `sensorHeight`, `metersPerUnit` ([details](./getting-started.md#depth-of-field)) |

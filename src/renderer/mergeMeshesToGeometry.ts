@@ -314,7 +314,7 @@ function computeGeometryNormals(geometry: Geometry) {
 
   const len = indices
     ? indices.array.length
-    : Geometry.getVertexCount(geometry);
+    : geometry.vertexCount;
   let i1, i2, i3;
   for (let f = 0; f < len; ) {
     if (indices) {
