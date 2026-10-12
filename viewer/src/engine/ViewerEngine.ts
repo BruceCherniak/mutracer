@@ -5,12 +5,6 @@ import {
   Renderer,
   THREESceneSync,
   fromTHREECamera,
-  RENDER_STATUS_COMPILING_SHADER,
-  RENDER_STATUS_DENOISING,
-  RENDER_STATUS_ERROR,
-  RENDER_STATUS_FINISHED,
-  RENDER_STATUS_PREPARING,
-  type RenderStatus
 } from '@meimu/mutracer';
 import { autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
 import { Environment, createSky, loadHDR, parseHDR } from './environment';
@@ -1222,10 +1216,10 @@ export class ViewerEngine {
     const status = this.renderer.render(this.sync.scene, camera);
     // Query only after the renderer uploads the current animation pose and
     // camera. Readback runs alongside subsequent frames.
-    if (status !== RENDER_STATUS_PREPARING && status !== RENDER_STATUS_COMPILING_SHADER && status !== RENDER_STATUS_ERROR) {
+    if (status !== 'preparing' && status !== 'compiling' && status !== 'error') {
       this.updateAutofocus(now);
     }
-    const phase = phaseOf(status);
+    const phase = status;
     this.publishStats(phase, now, false);
     this.updateSelectionRect();
   };
@@ -1262,7 +1256,7 @@ export class ViewerEngine {
       // Preparation keeps the previous scene's accumulation alive. Only a
       // rendering phase can confirm that the newly loaded model has a sample.
       const hasNewSample = samples > 0 &&
-        (phase === 'rendering' || phase === 'denoising' || phase === 'finished');
+        (phase === 'converging' || phase === 'denoising' || phase === 'finished');
       if (hasNewSample || phase === 'error') {
         this.awaitingFirstSample = false;
         set({ loading: null });
@@ -1288,17 +1282,6 @@ export class ViewerEngine {
     });
   }
 
-}
-
-function phaseOf(status: RenderStatus): RenderPhase {
-  switch (status) {
-    case RENDER_STATUS_PREPARING: return 'preparing';
-    case RENDER_STATUS_COMPILING_SHADER: return 'compiling';
-    case RENDER_STATUS_DENOISING: return 'denoising';
-    case RENDER_STATUS_FINISHED: return 'finished';
-    case RENDER_STATUS_ERROR: return 'error';
-    default: return 'rendering';
-  }
 }
 
 const toArray = <T>(value: T | T[]): T[] => (Array.isArray(value) ? value : [value]);

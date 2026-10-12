@@ -88,7 +88,7 @@ describe('viewer reload lifecycle', () => {
     for (let i = 0; i < 5; i++) await Promise.resolve();
   }
 
-  function publish(viewer: Engine, phase: 'preparing' | 'compiling' | 'rendering' | 'finished' | 'error' | 'paused', samples: number) {
+  function publish(viewer: Engine, phase: 'preparing' | 'compiling' | 'converging' | 'finished' | 'error' | 'paused', samples: number) {
     const internal = viewer as unknown as {
       renderer: { samples: number };
       publishStats(phase: string, now: number, force: boolean): void;
@@ -104,9 +104,9 @@ describe('viewer reload lifecycle', () => {
     expect(useViewer.getState().loading?.stage).toBe('bvh');
     publish(viewer, 'compiling', 64);
     expect(useViewer.getState().loading?.stage).toBe('shaders');
-    publish(viewer, 'rendering', 0);
+    publish(viewer, 'converging', 0);
     expect(useViewer.getState().loading?.stage).toBe('shaders');
-    publish(viewer, 'rendering', 1);
+    publish(viewer, 'converging', 1);
     expect(useViewer.getState().loading).toBeNull();
   });
 
@@ -217,7 +217,7 @@ describe('viewer reload lifecycle', () => {
     await viewer.loadPreset('spheres');
     const loading = viewer.loadPreset('spheres');
     expect(useViewer.getState().loading?.stage).toBe('download');
-    publish(viewer, 'rendering', 64);
+    publish(viewer, 'converging', 64);
     expect(useViewer.getState().loading?.stage).toBe('download');
     await loading;
     expect(useViewer.getState().loading?.stage).toBe('bvh');

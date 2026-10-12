@@ -158,7 +158,7 @@ export function autoGroundedSkybox(modelRadius: number, height: number | null = 
   return { height: h, radius: 20 * h };
 }
 
-export type RenderPhase = 'starting' | 'preparing' | 'compiling' | 'rendering' | 'denoising' | 'finished' | 'paused' | 'error';
+export type RenderPhase = 'starting' | 'preparing' | 'compiling' | 'converging' | 'denoising' | 'finished' | 'paused' | 'error';
 
 export interface Stats {
   phase: RenderPhase;

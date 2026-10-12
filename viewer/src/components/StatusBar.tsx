@@ -6,7 +6,7 @@ const LABELS: Record<RenderPhase, string> = {
   starting: 'Starting',
   preparing: 'Preparing',
   compiling: 'Compiling',
-  rendering: 'Rendering',
+  converging: 'Rendering',
   denoising: 'Denoising',
   finished: 'Done',
   paused: 'Paused',
@@ -37,7 +37,7 @@ function ProgressRing({ progress, phase }: { progress: number; phase: RenderPhas
           strokeDashoffset={spinning ? c * 0.72 : c * (1 - Math.min(1, progress))}
         />
       </svg>
-      {phase === 'rendering' && <span className="ring__pct">{Math.floor(progress * 100)}</span>}
+      {phase === 'converging' && <span className="ring__pct">{Math.floor(progress * 100)}</span>}
       {phase === 'finished' && <Check size={13} strokeWidth={3.25} />}
       {phase === 'paused' && <Pause size={11} strokeWidth={3} />}
     </span>
@@ -59,7 +59,7 @@ export function StatusBar() {
   const { maxSamples, resolutionScale } = settings;
   const progress = Math.min(1, samples / maxSamples);
   const done = phase === 'finished' || phase === 'paused';
-  const remaining = phase === 'rendering' && samples > 4 ? ((maxSamples - samples) * msPerSample) / 1000 : 0;
+  const remaining = phase === 'converging' && samples > 4 ? ((maxSamples - samples) * msPerSample) / 1000 : 0;
   const time = done ? formatTime(elapsed) : remaining > 0.5 ? `~${formatTime(remaining)}` : '';
   const sampleOptions = [...new Set([...SAMPLE_STEPS, maxSamples])].sort((a, b) => a - b);
   const resolutionOptions = [...new Set([...RESOLUTION_STEPS, resolutionScale])].sort((a, b) => a - b);
@@ -72,7 +72,7 @@ export function StatusBar() {
     <div className="float dock" role="status" data-phase={phase}>
       <ProgressRing progress={progress} phase={phase} />
       <div className="dock__status" title={done && msPerSample ? `${elapsed.toFixed(1)} s · ${msPerSample.toFixed(1)} ms per sample` : undefined}>
-        <b>{playing && phase === 'rendering' ? 'Playing' : LABELS[phase]}</b>
+        <b>{playing && phase === 'converging' ? 'Playing' : LABELS[phase]}</b>
         <span className="mono"><span className="dock__spp">{samples}</span> spp{time && <span className="dock__time"> · {time}</span>}</span>
       </div>
       {phase !== 'finished' && <button className="icon-btn icon-btn--bare dock__pause" aria-label={paused ? 'Resume rendering' : 'Pause rendering'}
