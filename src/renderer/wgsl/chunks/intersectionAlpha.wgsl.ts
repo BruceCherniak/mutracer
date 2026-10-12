@@ -1,5 +1,6 @@
+import { mapAlphaUsageConstants } from '../../materialConstants.js';
 import { uvProjectionConstants } from '../../MergedMaterialData.js';
-import OpenPBRMaterial, {
+import {
   materialAlphaModeConstants
 } from '../../../scene/OpenPBRMaterial.js';
 
@@ -28,7 +29,7 @@ fn intersectionAlphaPasses(
   let ma = materialsBuffer[materialIndex];
   var alpha = ma.alpha;
   if (USE_DIFFUSE_MAPS &&
-      ma.mapAlphaUsage == ${OpenPBRMaterial.mapAlphaUsageAlpha}) {
+      ma.mapAlphaUsage == ${mapAlphaUsageConstants.alpha}) {
     let diffuseMapIndex = i32(ma.diffuseMapIndex);
     if (diffuseMapIndex >= 0) {
       let uvProjection = i32(ma.uvProjection);

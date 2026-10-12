@@ -6,7 +6,7 @@ import {
   CameraViewControl,
   EnvironmentLight,
   Mesh,
-  OpenPBRMaterial,
+  OpenPBRMaterial, type OpenPBRMaterialParams,
   Renderer,
   SphereLight,
   type OIDNModel,
@@ -25,12 +25,8 @@ const samplingSelect = document.getElementById('sampling') as HTMLSelectElement;
 const samplesInput = document.getElementById('samples') as HTMLInputElement;
 const exportButton = document.getElementById('export') as HTMLButtonElement;
 
-function material(props: Partial<OpenPBRMaterial>) {
-  return Object.assign(new OpenPBRMaterial(), props);
-}
-
 // One sphere per OpenPBR layer.
-const gallery: Partial<OpenPBRMaterial>[] = [
+const gallery: OpenPBRMaterialParams[] = [
   // Copper.
   { baseColor: [0.95, 0.64, 0.54], baseMetalness: 1, specularRoughness: 0.3 },
   // Car paint: diffuse base under a clear coat.
@@ -49,7 +45,7 @@ const gallery: Partial<OpenPBRMaterial>[] = [
 ];
 const sphere = createSphereGeometry(64, 32);
 const meshes = gallery.map((props, index) => {
-  const mesh = new Mesh(sphere, material(props));
+  const mesh = new Mesh(sphere, new OpenPBRMaterial(props));
   const x = (index % 3 - 1) * 1.15;
   const z = Math.floor(index / 3) * -1.15 + 0.5;
   mat4.fromTranslation(mesh.transform, [x, 0.45, z]);
@@ -59,7 +55,7 @@ const meshes = gallery.map((props, index) => {
 
 // The shadow catcher is invisible but keeps the shadows, so the render can be
 // composited over any page or photo.
-const floor = new Mesh(createPlaneGeometry(), material({ shadowCatcher: true }));
+const floor = new Mesh(createPlaneGeometry(), new OpenPBRMaterial({ shadowCatcher: true }));
 mat4.fromScaling(floor.transform, [8, 1, 8]);
 
 const keyLight = new SphereLight({ color: [1, 0.85, 0.7], intensity: 30, radius: 0.3 });

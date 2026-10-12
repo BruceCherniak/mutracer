@@ -1,8 +1,9 @@
+import { mapAlphaUsageConstants } from '../../materialConstants.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import OpenPBRMaterial, {
+import {
   materialAlphaModeConstants
 } from '../../../scene/OpenPBRMaterial.js';
 
@@ -150,10 +151,10 @@ fn getMaterial(
       (*ma).baseColor *= sRGBToLinear(diffuse.rgb);
 
       // Map alpha to transmission
-      if (matData.mapAlphaUsage == ${OpenPBRMaterial.mapAlphaUsageTransmission}) {
+      if (matData.mapAlphaUsage == ${mapAlphaUsageConstants.transmission}) {
         (*ma).transmissionWeight = 1.0 - diffuse.a;
       }
-      else if (matData.mapAlphaUsage == ${OpenPBRMaterial.mapAlphaUsageAlpha}) {
+      else if (matData.mapAlphaUsage == ${mapAlphaUsageConstants.alpha}) {
         (*ma).alpha *= diffuse.a;
       }
     }

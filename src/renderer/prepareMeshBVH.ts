@@ -216,7 +216,7 @@ export function getPreparedMeshGeometryCacheKey(mesh: Mesh) {
   if (material.displacementUvProjection !== 'none' && texture && Math.abs(material.displacementScale) > 1e-6) {
     return ['projectiveProjection', source.version, getDisplacementTextureDataCacheKey(texture),
       +texture.flipY, texture.uvScale.join(','), texture.uvOffset.join(','),
-      material.displacementScale, material.displacementUvScale, material.displacementUvProjection].join('|');
+      material.displacementScale, material.displacementUvProjectionScale, material.displacementUvProjection].join('|');
   }
   return undefined;
 }
@@ -544,7 +544,7 @@ export function getTrianglesDisplacementRange(
   const isTriplanar = uvProjection === 'triplanar';
   const isSpherical = uvProjection === 'spherical';
   const isCylindrical = uvProjection === 'cylindrical';
-  const uvScale = material.displacementUvScale;
+  const uvScale = material.displacementUvProjectionScale;
 
   const minUv = vec2.create();
   const maxUv = vec2.create();

@@ -51,9 +51,7 @@ import {
 
 const canvas = document.querySelector('canvas')!;
 
-const red = new OpenPBRMaterial();
-red.baseColor = [0.8, 0.1, 0.1];
-red.specularRoughness = 0.3;
+const red = new OpenPBRMaterial({ baseColor: [0.8, 0.1, 0.1], specularRoughness: 0.3 });
 
 const ball = new Mesh(createSphereGeometry(64, 32), red);
 mat4.fromTranslation(ball.transform, [0, 1, 0]);

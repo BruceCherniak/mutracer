@@ -95,7 +95,7 @@ it('supports projective range bounds without UVs when using cylindrical projecti
   geometry.uv = undefined;
   const material = new OpenPBRMaterial();
   material.displacementUvProjection = 'cylindrical';
-  material.displacementUvScale = 2;
+  material.displacementUvProjectionScale = 2;
   const range = getTrianglesDisplacementRange(
     geometry,
     heightTexture([0, 0.25, 0.5, 1], 2),

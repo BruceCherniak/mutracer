@@ -624,11 +624,11 @@ class WebGLRayTracePass {
     this._hasTransmission = materials.some(
       (m) =>
         m.transmissionWeight > 0 ||
-        m.mapAlphaUsage === OpenPBRMaterial.mapAlphaUsageTransmission
+        m.mapAlphaUsage === "transmission"
     );
     this._hasAlpha = materials.some(
       (m) =>
-        m.opacity < 1 || +m.mapAlphaUsage === OpenPBRMaterial.mapAlphaUsageAlpha
+        m.opacity < 1 || m.mapAlphaUsage === "alpha"
     );
     this._spectral = materials.some((m) => m.transmissionDispersionScale > 0);
 

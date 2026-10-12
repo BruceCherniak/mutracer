@@ -241,7 +241,7 @@ struct MaterialBuffer {
   }
 
   displacementUvProjection: f32,
-  displacementUvScale: f32,
+  displacementUvProjectionScale: f32,
 
   // Alpha
   alpha: f32,

@@ -1,10 +1,10 @@
+import { mapAlphaUsageConstants } from '../../materialConstants.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
 import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
 import { createShaderMixin, glsl, Shader } from '../../shader.js';
-import OpenPBRMaterial from '../../../scene/OpenPBRMaterial.js';
 
 function getBVHTraverseCode(
   handleHitCode: string,
@@ -968,7 +968,7 @@ ${getBVHTraverseCode(
     int mapAlphaUsage = int(fetchMatData(ii + 5).a);
     float alpha = fetchMatData(ii + 9).r;
   #ifdef NUM_DIFFUSE_MAPS
-    if (mapAlphaUsage == ${OpenPBRMaterial.mapAlphaUsageAlpha + ''}) {
+    if (mapAlphaUsage == ${mapAlphaUsageConstants.alpha + ''}) {
       int diffuseMapIndex = int(fetchMatData(ii + 2).z);
       if (diffuseMapIndex >= 0) {
         vec2 uv0 = texelFetch(uvBuffer, i0, 0).xy;

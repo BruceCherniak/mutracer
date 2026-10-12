@@ -26,10 +26,9 @@ export type MaterialTextureName =
  * scene units; `thinFilmThickness` is in micrometres as in OpenPBR.
  *
  * ```ts
- * const gold = new OpenPBRMaterial();
- * gold.baseColor = [1.0, 0.78, 0.34];
- * gold.baseMetalness = 1;
- * gold.specularRoughness = 0.2;
+ * const gold = new OpenPBRMaterial({
+ *   baseColor: [1.0, 0.78, 0.34], baseMetalness: 1, specularRoughness: 0.2
+ * });
  * ```
  *
  * After changing a material that is already being rendered, call
@@ -43,6 +42,13 @@ export default class OpenPBRMaterial {
   markUpdated(): this {
     this.version++;
     return this;
+  }
+
+  /** Creates a material. Omitted properties use their documented defaults. */
+  constructor(params: OpenPBRMaterialParams = {}) {
+    for (const key of materialKeys) {
+      if (params[key] !== undefined) Object.assign(this, { [key]: params[key] });
+    }
   }
 
   // Base
@@ -138,29 +144,29 @@ export default class OpenPBRMaterial {
   doubleSided = false;
 
   // Textures
-  /** Base color texture (sRGB), multiplied with `baseColor`. */
+  /** Base color texture (sRGB), multiplied with `baseColor`. Default `undefined`. */
   map?: Texture;
-  /** Standalone opacity texture sampled from its green channel, matching Three.js. */
+  /** Standalone opacity texture sampled from its green channel, matching Three.js. Default `undefined`. */
   alphaMap?: Texture;
   /** Opacity interpretation; `auto` derives the mode from the alpha inputs. Default `auto`. */
   alphaMode: MaterialAlphaMode = 'auto';
   /** Alpha-test threshold for `mask` mode. Default `0`. */
   alphaCutoff = 0;
-  /** Emission texture multiplied with `emissionColor`. */
+  /** Emission texture multiplied with `emissionColor`. Default `undefined`. */
   emissiveMap?: Texture;
   /** Tangent-space normal map. */
   normalMap?: Texture;
   /** Normal map strength per axis. Default `[1, 1]`. */
   normalScale: Vec2 = [1, 1];
-  /** glTF-compatible B=metalness, G=specular roughness texture. */
+  /** glTF-compatible B=metalness, G=specular roughness texture. Default `undefined`. */
   metallicRoughnessMap?: Texture;
-  /** Standalone roughness texture sampled from its green channel. */
+  /** Standalone roughness texture sampled from its green channel. Default `undefined`. */
   roughnessMap?: Texture;
-  /** Standalone metalness texture sampled from its blue channel. */
+  /** Standalone metalness texture sampled from its blue channel. Default `undefined`. */
   metalnessMap?: Texture;
-  /** Multiplies transmission weight using the texture's red channel. */
+  /** Multiplies transmission weight using the texture's red channel. Default `undefined`. */
   transmissionMap?: Texture;
-  /** Thin-film thickness texture. */
+  /** Thin-film thickness texture. Default `undefined`. */
   thinFilmMap?: Texture;
 
   // Renderer extensions
@@ -173,20 +179,20 @@ export default class OpenPBRMaterial {
   unlit = false;
   /** Radius of rounded-edge shading (shader bevel) in scene units. `0` disables it. Default `0`. */
   bevelSize = 0;
-  /** How `map`'s alpha is used; see the `mapAlphaUsage*` constants. Default opaque. */
-  mapAlphaUsage = 0;
+  /** How map alpha is used: ignored, opacity or transmission. Default `opaque`. */
+  mapAlphaUsage: 'opaque' | 'alpha' | 'transmission' = 'opaque';
   /** Procedural UV projection for textures without (good) UVs. Default `none`. */
   uvProjection: UVProjection = 'none';
   /** UV scale used with `uvProjection`. Default `[1, 1]`. */
-  uvScale: Vec2 = [1, 1];
+  uvProjectionScale: Vec2 = [1, 1];
 
   // Displacement
-  /** Height texture (red channel) for displacement. */
+  /** Height texture (red channel) for displacement. Default `undefined`. */
   displacementMap?: Texture;
   /** Procedural UV projection for the displacement map. Default `none`. */
   displacementUvProjection: UVProjection = 'none';
   /** UV scale used with `displacementUvProjection`. Default `1`. */
-  displacementUvScale = 1;
+  displacementUvProjectionScale = 1;
   /** Height multiplier in mesh-local coordinate units. Default `0.1`. */
   displacementScale = 0.1;
   /** Ray-marching step for projective displacement. Default `0.01`. */
@@ -194,12 +200,6 @@ export default class OpenPBRMaterial {
   /** Reuses the displacement height map as a shading-only bump map. Default `0`. */
   displacementBumpStrength = 0;
 
-  /** `mapAlphaUsage`: ignore the alpha channel of `map`. */
-  static mapAlphaUsageOpaque = 0;
-  /** `mapAlphaUsage`: use the alpha channel of `map` as opacity. */
-  static mapAlphaUsageAlpha = 2;
-  /** `mapAlphaUsage`: use the alpha channel of `map` as transmission. */
-  static mapAlphaUsageTransmission = 3;
 }
 export const materialAlphaModeConstants = {
   opaque: 0,
@@ -216,7 +216,7 @@ export function resolveMaterialAlphaMode(
   if (material.alphaCutoff > 0) return 'mask';
   if (
     material.opacity < 1 ||
-    material.mapAlphaUsage === OpenPBRMaterial.mapAlphaUsageAlpha ||
+    material.mapAlphaUsage === "alpha" ||
     material.alphaMap
   ) {
     return 'blend';
@@ -224,7 +224,7 @@ export function resolveMaterialAlphaMode(
   return 'opaque';
 }
 
-export const materialKeys: (keyof OpenPBRMaterial)[] = [
+export const materialKeys = [
   'baseWeight', 'baseColor', 'baseDiffuseRoughness', 'baseMetalness',
   'specularWeight', 'specularColor', 'specularRoughness', 'specularIor',
   'specularAnisotropy', 'transmissionWeight', 'transmissionColor',
@@ -239,21 +239,24 @@ export const materialKeys: (keyof OpenPBRMaterial)[] = [
   'alphaMode', 'alphaCutoff', 'emissiveMap',
   'normalMap', 'normalScale', 'metallicRoughnessMap', 'roughnessMap',
   'metalnessMap', 'transmissionMap', 'thinFilmMap',
-  'shadowCatcher', 'unlit', 'bevelSize', 'mapAlphaUsage', 'uvProjection', 'uvScale',
-  'displacementUvProjection', 'displacementUvScale', 'displacementMap',
+  'shadowCatcher', 'unlit', 'bevelSize', 'mapAlphaUsage', 'uvProjection', 'uvProjectionScale',
+  'displacementUvProjection', 'displacementUvProjectionScale', 'displacementMap',
   'displacementScale', 'displacementStepSize', 'displacementBumpStrength',
-];
+] as const satisfies readonly (keyof OpenPBRMaterial)[];
+
+/** Optional material properties; defaults are documented on OpenPBRMaterial. */
+export type OpenPBRMaterialParams = Partial<Pick<OpenPBRMaterial, typeof materialKeys[number]>>;
 
 export const materialTextureKeys = [
   'map', 'alphaMap', 'emissiveMap', 'normalMap', 'metallicRoughnessMap', 'roughnessMap', 'metalnessMap', 'transmissionMap', 'thinFilmMap', 'displacementMap', 'displacementBumpStrength'
 ] as const satisfies readonly (keyof OpenPBRMaterial)[];
 
 export const materialGeometryKeys = [
-  'displacementUvProjection', 'displacementUvScale', 'displacementScale', 'displacementStepSize'
+  'displacementUvProjection', 'displacementUvProjectionScale', 'displacementScale', 'displacementStepSize'
 ] as const satisfies readonly (keyof OpenPBRMaterial)[];
 
 export const materialParamKeys = [
-  'baseWeight', 'baseColor', 'baseDiffuseRoughness', 'baseMetalness', 'specularWeight', 'specularColor', 'specularRoughness', 'specularIor', 'specularAnisotropy', 'transmissionWeight', 'transmissionColor', 'transmissionDepth', 'transmissionScatter', 'transmissionScatterAnisotropy', 'transmissionDispersionScale', 'transmissionDispersionAbbeNumber', 'subsurfaceWeight', 'subsurfaceColor', 'subsurfaceRadius', 'subsurfaceRadiusScale', 'subsurfaceAnisotropy', 'fuzzWeight', 'fuzzColor', 'fuzzRoughness', 'coatWeight', 'coatColor', 'coatRoughness', 'coatAnisotropy', 'coatIor', 'coatDarkening', 'thinFilmWeight', 'thinFilmThickness', 'thinFilmIor', 'emissionColor', 'emissionLuminance', 'opacity', 'thinWalled', 'doubleSided', 'alphaMode', 'alphaCutoff', 'normalScale', 'shadowCatcher', 'unlit', 'bevelSize', 'mapAlphaUsage', 'uvProjection', 'uvScale'
+  'baseWeight', 'baseColor', 'baseDiffuseRoughness', 'baseMetalness', 'specularWeight', 'specularColor', 'specularRoughness', 'specularIor', 'specularAnisotropy', 'transmissionWeight', 'transmissionColor', 'transmissionDepth', 'transmissionScatter', 'transmissionScatterAnisotropy', 'transmissionDispersionScale', 'transmissionDispersionAbbeNumber', 'subsurfaceWeight', 'subsurfaceColor', 'subsurfaceRadius', 'subsurfaceRadiusScale', 'subsurfaceAnisotropy', 'fuzzWeight', 'fuzzColor', 'fuzzRoughness', 'coatWeight', 'coatColor', 'coatRoughness', 'coatAnisotropy', 'coatIor', 'coatDarkening', 'thinFilmWeight', 'thinFilmThickness', 'thinFilmIor', 'emissionColor', 'emissionLuminance', 'opacity', 'thinWalled', 'doubleSided', 'alphaMode', 'alphaCutoff', 'normalScale', 'shadowCatcher', 'unlit', 'bevelSize', 'mapAlphaUsage', 'uvProjection', 'uvProjectionScale'
 ] as const satisfies readonly (keyof OpenPBRMaterial)[];
 
 let textureId = 1;

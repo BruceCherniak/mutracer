@@ -106,8 +106,8 @@ function convertMaterial(
         ? 'blend'
         : 'opaque';
     material.mapAlphaUsage = material.alphaMode === 'opaque'
-      ? OpenPBRMaterial.mapAlphaUsageOpaque
-      : OpenPBRMaterial.mapAlphaUsageAlpha;
+      ? "opaque"
+      : "alpha";
     material.doubleSided = basic.side === 2;
     return material;
   }
@@ -133,7 +133,7 @@ function convertMaterial(
   ) {
     material.uvProjection = materialUvProjection;
   }
-  const materialUvScale = standardMaterial.userData.mutracerUvScale;
+  const materialUvScale = standardMaterial.userData.mutracerUvProjectionScale;
   if (Array.isArray(materialUvScale) && materialUvScale.length >= 2) {
     const referenceLength = Math.max(
       Number(standardMaterial.userData.mutracerUvReferenceLength) || 1,
@@ -147,7 +147,7 @@ function convertMaterial(
       Number(materialUvScale[1]) || 0.000001,
       0.000001
     );
-    material.uvScale = material.uvProjection === 'triplanar'
+    material.uvProjectionScale = material.uvProjection === 'triplanar'
       ? [scaleX / referenceLength, scaleY / referenceLength]
       : material.uvProjection === 'cylindrical'
         ? [scaleX, scaleY / referenceLength]
@@ -189,11 +189,11 @@ function convertMaterial(
   ) {
     material.displacementUvProjection = uvProjection;
   }
-  const displacementUvScale = Number(
+  const displacementUvProjectionScale = Number(
     standardMaterial.userData.mutracerDisplacementUvScale
   );
-  if (Number.isFinite(displacementUvScale)) {
-    material.displacementUvScale = Math.max(displacementUvScale, 0.000001);
+  if (Number.isFinite(displacementUvProjectionScale)) {
+    material.displacementUvProjectionScale = Math.max(displacementUvProjectionScale, 0.000001);
   }
   const bumpStrength = Number(
     standardMaterial.userData.mutracerDisplacementBumpStrength
@@ -421,8 +421,8 @@ function convertMaterial(
     standardMaterial.transparent ||
     !!standardMaterial.alphaMap ||
     standardMaterial.alphaTest > 0
-    ? OpenPBRMaterial.mapAlphaUsageAlpha
-    : OpenPBRMaterial.mapAlphaUsageOpaque;
+    ? "alpha"
+    : "opaque";
   material.alphaMode = standardMaterial.alphaTest > 0
     ? 'mask'
     : standardMaterial.transparent ||

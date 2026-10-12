@@ -5,7 +5,6 @@ import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { fromTHREECamera, fromTHREEScene, THREESceneSync } from '../../src/util/fromTHREE';
 import Camera from '../../src/scene/Camera';
-import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { parseIESProfile } from '../../src/scene/IESProfile';
 
 describe('Three.js scene conversion', () => {
@@ -343,7 +342,7 @@ describe('Three.js scene conversion', () => {
       specularAnisotropy: 0.8,
       opacity: 0.8,
       bevelSize: 0.075,
-      mapAlphaUsage: OpenPBRMaterial.mapAlphaUsageAlpha
+      mapAlphaUsage: "alpha"
     });
     expect(
       result.lights.some((light) => light.type === 'EnvironmentLight')
@@ -363,7 +362,7 @@ describe('Three.js scene conversion', () => {
       displacementScale: 0.25,
     });
     material.userData.mutracerUvProjection = 'spherical';
-    material.userData.mutracerUvScale = [1.5, 2.5];
+    material.userData.mutracerUvProjectionScale = [1.5, 2.5];
     material.userData.mutracerUvReferenceLength = 2;
     material.userData.mutracerDisplacementStepSize = 0.004;
     material.userData.mutracerDisplacementUvProjection = 'cylindrical';
@@ -379,10 +378,10 @@ describe('Three.js scene conversion', () => {
     expect(converted).toMatchObject({
       displacementScale: 0.25,
       uvProjection: 'spherical',
-      uvScale: [1.5, 2.5],
+      uvProjectionScale: [1.5, 2.5],
       displacementStepSize: 0.004,
       displacementUvProjection: 'cylindrical',
-      displacementUvScale: 2.5,
+      displacementUvProjectionScale: 2.5,
       displacementBumpStrength: 12
     });
   });
@@ -546,7 +545,7 @@ describe('Three.js scene conversion', () => {
     expect(converted.map?.uvScale).toEqual([2.5, 3]);
     expect(converted.map?.uvOffset).toEqual([0.2, -0.1]);
     expect(converted.mapAlphaUsage).toBe(
-      OpenPBRMaterial.mapAlphaUsageOpaque
+      "opaque"
     );
   });
 
@@ -571,7 +570,7 @@ describe('Three.js scene conversion', () => {
     expect(converted.alphaCutoff).toBe(0.35);
     expect(converted.alphaMode).toBe('mask');
     expect(converted.mapAlphaUsage).toBe(
-      OpenPBRMaterial.mapAlphaUsageAlpha
+      "alpha"
     );
   });
 

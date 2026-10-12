@@ -1,3 +1,4 @@
+import { mapAlphaUsageConstants } from './materialConstants.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
@@ -494,7 +495,7 @@ interface BufferData {
   uvScale: vec2.Vec2Array[];
 
   displacementUvProjection: number[];
-  displacementUvScale: number[];
+  displacementUvProjectionScale: number[];
 
   displacementMapIndex: number[];
 
@@ -798,7 +799,7 @@ class MergedMaterialData {
       thinFilmIor: materials.map((m) => m.thinFilmIor),
       normalScale: materials.map((m) => m.normalScale),
       bumpStrength: materials.map((m) => Math.max(0, m.displacementBumpStrength)),
-      mapAlphaUsage: materials.map((m) => m.mapAlphaUsage),
+      mapAlphaUsage: materials.map((m) => mapAlphaUsageConstants[m.mapAlphaUsage]),
       type: materials.map((m) => {
         if (m.shadowCatcher) {
           return ShadowCatcherMaterial;
@@ -816,12 +817,12 @@ class MergedMaterialData {
       uvProjection: materials.map(
         (m) => uvProjectionConstants[m.uvProjection] || 0
       ),
-      uvScale: materials.map((m) => m.uvScale || [1, 1]),
+      uvScale: materials.map((m) => m.uvProjectionScale || [1, 1]),
 
       displacementUvProjection: materials.map(
         (m) => uvProjectionConstants[m.displacementUvProjection] || 0
       ),
-      displacementUvScale: materials.map((m) => m.displacementUvScale || 1),
+      displacementUvProjectionScale: materials.map((m) => m.displacementUvProjectionScale || 1),
       displacementStepSize: materials.map(
         (m) => m.displacementStepSize || 0.01
       ),
@@ -922,7 +923,7 @@ class MergedMaterialData {
         channels: 1
       },
       { data: bufferData.displacementUvProjection, channels: 1 },
-      { data: bufferData.displacementUvScale, channels: 1 },
+      { data: bufferData.displacementUvProjectionScale, channels: 1 },
 
       // 9: Alpha and thin-film map
       { data: bufferData.alpha, channels: 1 },

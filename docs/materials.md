@@ -3,7 +3,8 @@
 `OpenPBRMaterial` implements the
 [OpenPBR 1.1](https://academysoftwarefoundation.github.io/OpenPBR/) surface.
 Property names are camel-case spellings of the OpenPBR inputs. Colors are
-linear RGB.
+linear RGB. Pass optional properties to `new OpenPBRMaterial(params)`; omitted
+properties use the defaults below and in TSDoc.
 
 ```ts
 import { OpenPBRMaterial } from '@meimu/mutracer';
@@ -14,7 +15,7 @@ glass.specularRoughness = 0;
 glass.transmissionColor = [0.72, 0.9, 1];
 glass.transmissionDepth = 0.5;
 
-const gold = Object.assign(new OpenPBRMaterial(), {
+const gold = new OpenPBRMaterial({
   baseColor: [1.0, 0.78, 0.34],
   baseMetalness: 1,
   specularRoughness: 0.2
@@ -76,7 +77,7 @@ wavelengths spectrally.
 
 `Texture.uvScale`, `uvOffset` and `uvChannel` (0 or 1) transform UVs per
 texture. For geometry without usable UVs, set `uvProjection` to
-`'triplanar'`, `'spherical'` or `'cylindrical'` with `uvScale`.
+`'triplanar'`, `'spherical'` or `'cylindrical'` with `uvProjectionScale` (default `[1, 1]`).
 
 Call `texture.markUpdated()` after editing pixels or UV-array elements;
 assigning a new texture, image or UV array is detected automatically.
@@ -86,8 +87,7 @@ assigning a new texture, image or UV array is detected automatically.
 `alphaMode` is `'auto'` (default; derived from the alpha inputs), `'opaque'`,
 `'mask'` (alpha test against `alphaCutoff`) or `'blend'`. `mapAlphaUsage`
 selects how `map`'s alpha channel is used:
-`OpenPBRMaterial.mapAlphaUsageOpaque`, `mapAlphaUsageAlpha` or
-`mapAlphaUsageTransmission`. Blended primary rays follow
+`'opaque'` (default), `'alpha'` or `'transmission'`. Blended primary rays follow
 `renderer.alphaBlendStrategy`.
 
 ## Renderer extensions
@@ -109,7 +109,7 @@ start.
 `displacementMap` (red channel) with `displacementScale` (local units)
 ray-marches the height field in the shader. `displacementStepSize` controls the
 ray-marching step (default `0.01`). No extra triangles are generated.
-`displacementUvProjection` (default `'none'`) and `displacementUvScale`
+`displacementUvProjection` (default `'none'`) and `displacementUvProjectionScale`
 (default `1`) control height-map coordinates.
 
 `displacementBumpStrength` (default `0`) reuses the height map for bump shading.

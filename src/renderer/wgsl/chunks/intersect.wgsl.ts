@@ -51,7 +51,7 @@ function getPDMDisplacmentCode(anyHit: boolean) {
     hScale,
     matData.displacementStepSize,
     i32(matData.displacementUvProjection),
-    displacementUvScale,
+    displacementUvProjectionScale,
     ${anyHit ? 'true' : 'false'},
     isRefractionRay
   );
@@ -89,9 +89,9 @@ function getTFDMDisplacmentCode(anyHit: boolean) {
       uv2 = projectUV(${uvProjectionConstants.cylindrical}, tri.p2, n2);
     }
 
-    uv0 = uv0 * displacementUvScale;
-    uv1 = uv1 * displacementUvScale;
-    uv2 = uv2 * displacementUvScale;
+    uv0 = uv0 * displacementUvProjectionScale;
+    uv1 = uv1 * displacementUvProjectionScale;
+    uv2 = uv2 * displacementUvProjectionScale;
 
     let e0 = uv1 - uv0;
     let e1 = uv2 - uv0;
@@ -141,7 +141,7 @@ if (abs(hScale) > 0.0 && minMaxH > 0) {
   // TODO not support material blending
   let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
   let matData = materialsBuffer[materialIndex];
-  let displacementUvScale = vec2f(matData.displacementUvScale);
+  let displacementUvProjectionScale = vec2f(matData.displacementUvProjectionScale);
   let displacementMapIndex = i32(matData.displacementMapIndex);
 
   // TODO duplicate reading of normal and uv
@@ -1115,7 +1115,7 @@ fn fetchAttributes(
     if (bumpProjection > 0) {
       bumpUv = projectUV(bumpProjection, (*si).position, normal);
     }
-    bumpUv *= normalMaterial.displacementUvScale;
+    bumpUv *= normalMaterial.displacementUvProjectionScale;
     if (bumpProjection == ${uvProjectionConstants.triplanar}) {
       bumpUv = fract(bumpUv);
     }

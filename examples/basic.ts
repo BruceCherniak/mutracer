@@ -6,7 +6,7 @@ import {
   CameraViewControl,
   EnvironmentLight,
   Mesh,
-  OpenPBRMaterial,
+  OpenPBRMaterial, type OpenPBRMaterialParams,
   RectLight,
   Renderer,
   type Scene,
@@ -20,21 +20,17 @@ import { showStatus } from './shared/status';
 const canvas = document.getElementById('main') as HTMLCanvasElement;
 const statusElement = document.getElementById('status')!;
 
-function material(props: Partial<OpenPBRMaterial>) {
-  return Object.assign(new OpenPBRMaterial(), props);
-}
-
 // Floor: the plane is 2x2 in XZ, so scale it up.
 const floor = new Mesh(
   createPlaneGeometry(),
-  material({ baseColor: [0.55, 0.55, 0.55], specularRoughness: 0.6 })
+  new OpenPBRMaterial({ baseColor: [0.55, 0.55, 0.55], specularRoughness: 0.6 })
 );
 mat4.fromScaling(floor.transform, [6, 1, 6]);
 
 // Unit spheres placed with a translation and scale.
 const sphere = createSphereGeometry(64, 32);
-function addSphere(x: number, props: Partial<OpenPBRMaterial>) {
-  const mesh = new Mesh(sphere, material(props));
+function addSphere(x: number, props: OpenPBRMaterialParams) {
+  const mesh = new Mesh(sphere, new OpenPBRMaterial(props));
   mat4.fromTranslation(mesh.transform, [x, 0.5, 0]);
   mat4.scale(mesh.transform, mesh.transform, [0.5, 0.5, 0.5]);
   return mesh;
@@ -45,7 +41,7 @@ const spheres = [
   addSphere(1.2, { transmissionWeight: 1, specularRoughness: 0 })
 ];
 
-const cube = new Mesh(createCubeGeometry(), material({ baseColor: [0.2, 0.4, 0.8] }));
+const cube = new Mesh(createCubeGeometry(), new OpenPBRMaterial({ baseColor: [0.2, 0.4, 0.8] }));
 mat4.fromTranslation(cube.transform, [-0.6, 0.3, -1.3]);
 mat4.scale(cube.transform, cube.transform, [0.3, 0.3, 0.3]);
 
