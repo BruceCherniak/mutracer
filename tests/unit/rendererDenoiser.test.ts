@@ -20,6 +20,72 @@ function createRenderer() {
 }
 
 describe('Renderer.setDenoiser', () => {
+  it('discards failures from the replaced network while its prewarm is pending', async () => {
+    let rejectPrewarm!: (error: Error) => void;
+    const prewarm = new Promise<void>((_, reject) => { rejectPrewarm = reject; });
+    const old = { ...fakeDenoiser(), prepareForImage: vi.fn(() => prewarm) };
+    const next = fakeDenoiser();
+    initializeOIDN.mockReset().mockResolvedValueOnce(old).mockResolvedValueOnce(next);
+    const renderer = new Renderer({ canvas: { width: 256, height: 256 } as HTMLCanvasElement });
+    const error = vi.fn();
+    renderer.on('error', error);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await renderer.setDenoiser({ type: 'oidn' });
+      expect(old.prepareForImage).toHaveBeenCalledOnce();
+      await renderer.setDenoiser({ type: 'oidn', model: 'small' });
+      expect(old.dispose).toHaveBeenCalledOnce();
+      rejectPrewarm(new Error('Native OIDN executor is disposed'));
+      await prewarm.catch(() => {});
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(error).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+      expect(renderer.oidn).toBe(next);
+    } finally {
+      renderer.dispose();
+      log.mockRestore();
+    }
+  });
+
+  it.each(['disable', 'dispose'] as const)('discards pending auxiliary prewarm after %s', async action => {
+    let rejectPrewarm!: (error: Error) => void;
+    const prewarm = new Promise<void>((_, reject) => { rejectPrewarm = reject; });
+    const auxiliary = { ...fakeDenoiser(), prepareForImage: vi.fn(() => prewarm) };
+    const denoiser = { ...fakeDenoiser(), prepareForImage: vi.fn(async () => {}),
+      auxiliaryDenoisers: { albedo: auxiliary, normal: fakeDenoiser() } };
+    initializeOIDN.mockReset().mockResolvedValueOnce(denoiser);
+    const renderer = new Renderer({ canvas: { width: 256, height: 256 } as HTMLCanvasElement });
+    const error = vi.fn(); renderer.on('error', error);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await renderer.setDenoiser({ type: 'oidn' });
+      expect(auxiliary.prepareForImage).toHaveBeenCalledOnce();
+      if (action === 'disable') await renderer.setDenoiser(null);
+      else renderer.dispose();
+      rejectPrewarm(new Error('Native OIDN executor is disposed'));
+      await prewarm.catch(() => {});
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(error).not.toHaveBeenCalled();
+      expect(log).not.toHaveBeenCalled();
+    } finally { renderer.dispose(); log.mockRestore(); }
+  });
+
+  it('still reports a prewarm failure from the current network', async () => {
+    const failure = new Error('Current OIDN prewarm failed');
+    const denoiser = { ...fakeDenoiser(), prepareForImage: vi.fn(async () => { throw failure; }) };
+    initializeOIDN.mockReset().mockResolvedValueOnce(denoiser);
+    const renderer = new Renderer({ canvas: { width: 256, height: 256 } as HTMLCanvasElement });
+    const error = vi.fn(); renderer.on('error', error);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await renderer.setDenoiser({ type: 'oidn' });
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(error).toHaveBeenCalledOnce();
+      expect(error).toHaveBeenCalledWith(failure);
+      expect(log).toHaveBeenCalledOnce();
+    } finally { renderer.dispose(); log.mockRestore(); }
+  });
+
   it('loads the requested model without letting OIDN attach itself', async () => {
     const denoiser = fakeDenoiser();
     initializeOIDN.mockResolvedValueOnce(denoiser);

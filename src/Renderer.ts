@@ -551,6 +551,7 @@ export default class Renderer {
 
   private _prepareOIDNForCurrentSize() {
     const denoiser = this.oidn;
+    const revision = this._denoiserRevision;
     if (!denoiser?.prepareForImage) return;
     if (this.canvas.width <= 0 || this.canvas.height <= 0) return;
     const options = { tileOverlap: this._whileConverging ? 80 : undefined };
@@ -566,6 +567,9 @@ export default class Renderer {
         this.canvas.height,
         options
       ).catch((error) => {
+        // Replacement/disposal invalidates pending preparation, including
+        // auxiliary networks. Only the current attachment can report errors.
+        if (revision !== this._denoiserRevision || denoiser !== this.oidn) return;
         this._notifyError(error);
       });
     }
