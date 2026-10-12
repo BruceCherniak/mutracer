@@ -142,6 +142,8 @@ export interface RenderingDiagnostics {
   bvh?: {
     tlasTraversalStackSize?: number;
     blasTraversalStackSize?: number;
+    /** Last static preparation statistics, excluding queue and WASM loading time. */
+    lastBuild?: { geometryCount: number; bvhTimeMs: number };
   };
   gpuTraceTiming?: {
     tileTimeMs: number;

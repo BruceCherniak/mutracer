@@ -56,6 +56,19 @@ calls return `'preparing'` (device setup, BVH builds) and
 automatically; for a loading screen, see
 [BVH preparation flows](./bvh.md#choose-a-preparation-flow).
 
+### Optional loading indicator
+
+```ts
+renderer.on('progress', ({ stage, progress }) => loading.update(stage, progress));
+renderer.on('status', ({ status }) => {
+  if (status !== 'preparing' && status !== 'compiling') loading.hide();
+});
+function frame() { renderer.render(scene, camera); requestAnimationFrame(frame); }
+frame();
+```
+
+Preparation is automatic; see [BVH](./bvh.md) for optional early construction.
+
 ## Geometry from arrays
 
 ```ts

@@ -91,7 +91,7 @@ affects the image restarts accumulation.
 | `setSize(width, height)` | Resizes the canvas drawing buffer and targets, in pixels |
 | `getSize()` | `{ width, height }` |
 | `setDenoiser(options?)` | Attaches the built-in JNLM filter or an OIDN network (WebGPU only); `false`/`null` removes it. See [denoising](./denoising.md) |
-| `prepareScene(scene, options?)` | Builds missing static BLASes for a scene or `Mesh[]`. `rebuild` (default `false`) replaces existing ones; `onProgress(fraction)` (default none). Resolves to `{ geometryCount, bvhTimeMs }`. Does not compile shaders or render; see [BVH](./bvh.md#what-preparescene-completes) |
+| `prebuildBVH(scene, options?)` | Optional early static BVH build; resolves void; `onProgress` and `signal` default undefined. Statistics in diagnostics `bvh.lastBuild`; see [BVH](./bvh.md) |
 | `renderOfflineFrame(scene, camera, options)` | Renders a finished frame; see below |
 | `restartSamples()` | Discards the accumulation |
 | `samples` | Accumulated spp; initially 0 |
@@ -99,7 +99,7 @@ affects the image restarts accumulation.
 | `readDepthSamples({ x, y, size })` | Asynchronously queries a 7×7 grid of GPU depths after `render()`; see [depth sampling](#depth-sampling) |
 | `prepareForExport()` | Redraws post-processing before `canvas.toBlob()` / `toDataURL()` |
 | `backend` / `device` | Backend (`'webgpu'` / `'webgl'`), initially undefined; device only on WebGPU |
-| `getDiagnostics()` | Backend, adapter, shader compilation, BVH, light sampling and timing details |
+| `getDiagnostics()` | Available after initialization or a BVH build (backend undefined before init); backend, adapter, shader compilation, BVH, light sampling and timing details |
 | `init()` / `info` | Initializes once and resolves `RendererInfo`; synchronous info is undefined before completion |
 | `dispose()` | Releases GPU resources, BVH Workers and the denoiser; cancels pending BVH preparation |
 

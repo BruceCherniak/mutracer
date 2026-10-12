@@ -1,5 +1,5 @@
 import { packMaterialIndexAndWeightToInt } from './materialIndices.js';
-import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
+import { getGeometryBvh, setGeometryBvh, geometryBvhConfigMatches, type BvhBuildConfig } from './geometryBvh.js';
 import { writeMaterialIndices } from './materialIndices.js';
 import { mat4, vec2, vec3 } from '../math.js';
 import Geometry, { Attribute } from '../scene/Geometry.js';
@@ -697,9 +697,9 @@ export function getMeshBlasInput(mesh: Mesh) {
 }
 
 /** Whether a static mesh still needs a BLAS before it can be rendered. */
-export function meshNeedsStaticBvh(mesh: Mesh) {
+export function meshNeedsStaticBvh(mesh: Mesh, config?: BvhBuildConfig) {
   return !!mesh.geometry.position?.array.length && !mesh.geometry.dynamic &&
-    !getGeometryBvh(getPreparedMeshGeometry(mesh));
+    (!getGeometryBvh(getPreparedMeshGeometry(mesh)) || !!config && !geometryBvhConfigMatches(getPreparedMeshGeometry(mesh), config));
 }
 
 /** Capture inputs whose changes invalidate an asynchronous BLAS result. */

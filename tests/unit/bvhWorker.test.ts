@@ -1,3 +1,4 @@
+import { prebuildStats } from '../helpers/prebuildStats';
 import { getGeometryBvh, setGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import { afterEach, expect, it, vi } from 'vitest';
 import { BvhWorkerClient, BvhWorkerUnavailableError, type BvhBuildRequest } from '../../src/renderer/bvhWorkerClient';
@@ -88,7 +89,7 @@ it('falls back within the call when Worker construction is blocked', async () =>
   try {
     const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
     const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-    await renderer.prepareScene([mesh]);
+    await prebuildStats(renderer, [mesh]);
     expect(getGeometryBvh(mesh.geometry)?.builder).toBe('builtin');
     expect((renderer as any)._bvhWorkerUnavailable).toBe(true);
     expect(warning).toHaveBeenCalledOnce();
@@ -106,7 +107,7 @@ it('prepares builtin renderer BLASes asynchronously when Workers are available',
   vi.stubGlobal('Worker', AutoWorker);
   const geometry = createCubeGeometry();
   const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
-  const build = renderer.prepareScene([new Mesh(geometry, new OpenPBRMaterial())]);
+  const build = prebuildStats(renderer, [new Mesh(geometry, new OpenPBRMaterial())]);
   expect(getGeometryBvh(geometry)).toBeUndefined();
   await build;
   expect(new Uint8Array(getGeometryBvh(geometry)!.buffer)).toEqual(new Uint8Array(buildBLAS(geometry).buffer));
@@ -119,7 +120,7 @@ it('falls back after Worker failure without retrying the same geometry every fra
   try {
     const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
     const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-    await renderer.prepareScene([mesh]);
+    await prebuildStats(renderer, [mesh]);
     expect(getGeometryBvh(mesh.geometry)?.builder).toBe('builtin');
     expect((renderer as any)._bvhWorkerUnavailable).toBe(true);
     expect(warning).toHaveBeenCalledOnce();
@@ -135,7 +136,7 @@ it('retries an input changed during Worker preparation instead of accepting the 
   try {
     const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
     const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-    const pending = renderer.prepareScene([mesh]);
+    const pending = prebuildStats(renderer, [mesh]);
     await Promise.resolve();
     mesh.geometry.markUpdated();
     finish(buildBLAS(mesh.geometry));
@@ -173,7 +174,7 @@ it('discards results when geometry, revision, or preparation settings change', a
       material.displacementScale = 0.1;
       const target = getPreparedMeshGeometry(mesh);
       const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
-      const pending = renderer.prepareScene([mesh]); await Promise.resolve();
+      const pending = prebuildStats(renderer, [mesh]); await Promise.resolve();
       if (change === 'revision') mesh.geometry.markUpdated();
       if (change === 'geometry') mesh.geometry = createCubeGeometry();
       if (change === 'displacement') material.displacementScale = 0.3;

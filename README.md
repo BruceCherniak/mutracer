@@ -77,6 +77,7 @@ camera.position = [0, 2, 6]; camera.lookAt([0, 1, 0]);
 
 const renderer = new Renderer({ canvas });
 renderer.on('error', error => console.error(error));
+// BVH preparation is automatic; optional prebuildBVH(nextScene) builds ahead.
 renderer.setSize(canvas.width, canvas.height);
 // Optional: await renderer.init() to inspect backend, adapter and limits.
 
@@ -95,6 +96,7 @@ import { Renderer, THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
 
 const renderer = new Renderer({ canvas });
 renderer.on('error', error => console.error(error));
+// BVH preparation is automatic; optional prebuildBVH(nextScene) builds ahead.
 const sync = new THREESceneSync(threeScene);
 
 function frame() {

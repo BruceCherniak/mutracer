@@ -1,3 +1,4 @@
+import { prebuildStats } from '../helpers/prebuildStats';
 import { setGeometryBvh, getGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import { expect, it } from 'vitest';
 import Texture from '../../src/scene/Texture';
@@ -16,7 +17,8 @@ it('uses builtin BVH2 for dynamic geometry, even with an incompatible precompute
   expect(getGeometryBvh(g)!.layout).toBe('bvh2'); expect(getGeometryBvh(g)!.builder).toBe('builtin');
   const renderer = new Renderer({canvas: {width: 1, height: 1} as HTMLCanvasElement});
   renderer.bvhBuilder = 'tinybvh'; renderer.bvhLayout = 'cwbvh';
-  await renderer.prepareScene([mesh], {rebuild: true});
+  renderer.bvhSpatialSplits = true;
+  await prebuildStats(renderer, [mesh]);
   updateMeshInstances([mesh]);
   expect(getGeometryBvh(g)!.layout).toBe('bvh2'); expect(getGeometryBvh(g)!.builder).toBe('builtin');
 });

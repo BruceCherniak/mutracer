@@ -1,8 +1,48 @@
 # BVH construction
 
-Every geometry needs a bottom-level BVH (BLAS); the renderer combines them
-under a top-level BVH (TLAS) over the mesh instances. Static BLASes build
-automatically in a Worker pool, so most applications need no BVH code at all.
+`render()` automatically initializes the device, builds BVHs, uploads scene
+resources and compiles shaders. Keep calling it while status is `preparing`
+or `compiling`; the canvas retains its previous image.
+
+```ts
+renderer.on('progress', ({ stage, progress }) => loading.update(stage, progress));
+renderer.on('status', ({ status }) => {
+  if (status !== 'preparing' && status !== 'compiling') loading.hide();
+});
+function frame() { renderer.render(scene, camera); requestAnimationFrame(frame); }
+frame();
+```
+
+| Use case | Action |
+| --- | --- |
+| Normal rendering | Run the render loop |
+| Loading indicator | Listen to `progress` and `status` |
+| Benchmark preparation | Timestamp status events |
+| Offline image | Await `renderOfflineFrame()` |
+| Prepare a future scene while another renders | Optional `await renderer.prebuildBVH(nextScene)` |
+| Change builder, layout or spatial splits | Assign settings; the next render rebuilds automatically |
+
+## Optional early construction
+
+`prebuildBVH(sceneOrMeshes, { onProgress?, signal? })` only builds static
+BLASes. It does not initialize a device, upload resources or compile shaders.
+Both options default to undefined; an aborted call rejects with its abort
+reason. Shared geometry builds once, dynamic/empty geometry is skipped.
+
+```ts
+await renderer.prebuildBVH(nextScene, {
+  onProgress: fraction => console.log(fraction), signal: controller.signal
+});
+console.log(renderer.getDiagnostics()?.bvh?.lastBuild);
+```
+
+`lastBuild` contains `geometryCount` and `bvhTimeMs` (total builder time,
+excluding queueing and WASM loading). It can be read after construction even
+before device initialization; diagnostics `backend` is then undefined.
+The preparation method resolves void. With no work, statistics are zero
+and the callback is not invoked.
+
+## Settings
 
 | Setting | Default | Description |
 | --- | --- | --- |
@@ -12,113 +52,22 @@ automatically in a Worker pool, so most applications need no BVH code at all.
 | `renderer.bvhSpatialSplits` | `false` | With `'tinybvh'`, build spatial-split BVHs (SBVH) |
 | `geometry.dynamic` | `false` | Refittable built-in BLAS for deforming geometry; see [dynamic geometry](./updates.md#dynamic-geometry) |
 
-## Choose a preparation flow
+Changes to builder/layout/spatial splits invalidate cached build configurations.
+Old BLASes stay usable until replacements finish; rendering reports preparing
+through this work. Worker count changes affect the next build, with no BVH
+rebuild required. Both builders parallelize independent geometries, while one
+geometry builds on one Worker. Pools are reused and released by dispose().
 
-The examples assume you have created `renderer`, `scene` and `camera`.
+## Caveats
 
-### Automatic (default)
-
-`render()` builds missing static BLASes in the Worker pool. Keep calling it while it
-returns `'preparing'` or `'compiling'`; the
-canvas keeps its previous image meanwhile:
-
-```ts
-function frame() {
-  renderer.render(scene, camera);
-  requestAnimationFrame(frame);
-}
-frame();
-```
-
-Without Worker support, the built-in builder runs synchronously inside
-`render()` and can pause the page.
-
-### Prepare before the render loop
-
-For a loading screen, await the missing static BLASes first. This works with
-either builder:
-
-```ts
-renderer.bvhBuilder = 'tinybvh';
-renderer.bvhWorkerCount = 4;
-
-const stats = await renderer.prepareScene(scene, {
-  onProgress: progress => console.log(`BVH tasks: ${Math.round(progress * 100)}%`)
-});
-console.log(stats.geometryCount, stats.bvhTimeMs);
-
-frame(); // start the render loop above
-```
-
-`prepareScene` accepts a scene or a `Mesh[]`. It skips existing BLASes, empty
-geometry and dynamic geometry, and builds shared geometry once.
-
-### Configure parallel construction
-
-`renderer.bvhWorkerCount = 'auto'` (the default) selects up to four Workers,
-leaving one reported CPU thread free where possible. Set a positive safe
-integer to choose the limit explicitly:
-
-```ts
-renderer.bvhWorkerCount = 8;
-await renderer.prepareScene(scene);
-```
-
-Both builders parallelize across independent geometries. A single geometry's
-BLAS still builds on one Worker; `1` uses serial construction. Workers are
-created only when needed, so a scene with two missing BLASes uses at most two
-Workers even with a higher limit. A pool is owned by its renderer and reused
-between preparations. Call `renderer.dispose()` to release it.
-
-Changing the count takes effect when the next preparation starts. Active
-preparations finish with their current pool; existing BLASes need no rebuild.
-Invalid counts (including zero, fractions and infinity) throw `RangeError`.
-
-### Rebuild after changing builder settings
-
-Changing `bvhBuilder`, `bvhLayout` or `bvhSpatialSplits` affects future builds
-only. To apply new settings to a prepared scene, rebuild its static BLASes:
-
-```ts
-renderer.bvhBuilder = 'tinybvh';
-renderer.bvhLayout = 'cwbvh';
-renderer.bvhSpatialSplits = true;
-
-await renderer.prepareScene(scene, { rebuild: true });
-// The next render uses the replacement BLASes.
-```
-
-Old BLASes stay in use until their replacements are ready. Dynamic geometry
-keeps the built-in builder.
-
-## What `prepareScene` completes
-
-`await renderer.prepareScene(scene)` waits for static BLAS builds only. It
-does **not** initialize the device, build the TLAS, upload GPU scene data,
-compile shaders or render. Afterwards, keep calling `render()` through
-`'preparing'` and `'compiling'`, or await
-`renderOfflineFrame(scene, camera, { samples })` for a finished image.
-
-- **Result** `{ geometryCount, bvhTimeMs }`: `geometryCount` is the number of
-  BLASes this call wrote, with shared geometry counted once. `bvhTimeMs` sums
-  builder time; it excludes queueing and WASM loading and is not elapsed time.
-- **Progress** `onProgress(fraction)` counts completed build tasks, not
-  triangles or time. Failed and stale tasks count as completed, so reaching
-  `1` does not guarantee every BLAS was written. A call with nothing to build
-  returns zeros and never calls `onProgress`.
-- **Stale results**: if a geometry changes during its build, the result is
-  discarded. Render the updated scene, or prepare again.
-- **Errors**: invalid inputs are reported by the next `render()`.
-- **Disposal**: `renderer.dispose()` cancels active and queued preparations.
-  Completed BLASes remain on their geometries; cancelled calls resolve with
-  their partial statistics, without further progress callbacks or fallback builds.
-
-More Workers increase simultaneous input copies and, with TinyBVH, the number
-of WASM instances. Increase the limit only with sufficient memory; extra
-Workers do not necessarily improve elapsed time. `bvhTimeMs` adds up work
-across Workers and can exceed elapsed time. Measure wall time around
-`await renderer.prepareScene(scene)` when comparing pool sizes. TLAS
-construction and GPU uploads are separate costs.
+Progress counts completed tasks, including failed/stale tasks, rather than
+triangles or elapsed time. Renderer `progress` events cover device (0/1),
+BVH tasks and shader pipelines only during preparing/compiling. Explicit
+background prebuilds use their own `onProgress` callback.
+Stale results are discarded. Without Worker support, construction runs on
+the calling thread. More Workers increase simultaneous memory use, and
+summed builder time can exceed wall time. Disposal cancels active and queued
+preparations without further callbacks; completed CPU BVHs remain cached.
 
 ## Builders
 
@@ -146,7 +95,7 @@ between meshes to share its BLAS.
 
 ## Layouts
 
-`renderer.bvhLayout` applies to newly built static TinyBVH BLASes. All four
+`renderer.bvhLayout` applies to static TinyBVH BLASes, rebuilding them automatically when changed. All four
 layouts work on WebGPU and WebGL 2.
 
 | Layout | Notes |
@@ -181,9 +130,9 @@ jsDelivr copy, then falls back to the built-in builder. See
   asynchronous result is accepted.
 - An invalid input affects only its mesh. Worker startup, messaging or runtime
   failures retry with the same builder on the calling thread within the same
-  `prepareScene` call; TinyBVH failures retry with the built-in builder. Each
+  preparation call; TinyBVH failures retry with the built-in builder. Each
   fallback warns once per renderer.
-- Concurrent `prepareScene` calls on one renderer are queued and check for missing BLASes when
+- Concurrent preparation calls on one renderer are queued and check for missing BLASes when
   they start, so they do not repeat completed builds.
 - Height-map analysis, attribute generation, TLAS construction and per-frame
   refits run on the calling thread.
@@ -193,5 +142,3 @@ jsDelivr copy, then falls back to the built-in builder. See
 `src/tinybvh/tinybvh.wasm` is checked in. To rebuild it, install Emscripten and
 run `npm run build:tinybvh` (or `npm run build:tinybvh:windows`). See
 [`src/tinybvh/README.md`](../src/tinybvh/README.md).
-
-BVH storage is internal. To rebuild using the current construction settings, call `await renderer.prepareScene(scene, { rebuild: true })`; geometry exposes no BVH field.

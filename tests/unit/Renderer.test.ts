@@ -1,3 +1,4 @@
+import { prebuildStats } from '../helpers/prebuildStats';
 import * as bvhWorker from '../../src/renderer/bvhWorkerClient';
 import { buildBLAS } from '../../src/renderer/bvhAccel';
 import { updateMeshInstances } from '../../src/renderer/prepareMeshBVH';
@@ -183,7 +184,7 @@ describe('Renderer sizing', () => {
     markSceneStable(renderer, scene);
     (renderer as any)._forceMeshUpdate = false;
     mesh.materials[0].markUpdated();
-    const prepare = vi.spyOn(renderer, 'prepareScene').mockResolvedValue({geometryCount: 0, bvhTimeMs: 0});
+    const prepare = vi.spyOn(renderer, 'prebuildBVH').mockResolvedValue(undefined);
     const needsPreparation = vi.spyOn(renderer as any, '_needsBVHPreparation').mockReturnValue(true);
     expect(renderer.render(scene, {} as Camera)).toBe('preparing');
     expect(pipeline.setMeshes).not.toHaveBeenCalled();
@@ -1336,7 +1337,7 @@ it('shares preparation between render and a concurrent explicit prepareScene cal
     const pipeline = createPipeline(); attachPipeline(renderer, pipeline);
     const scene: Scene = {meshes: [new Mesh(createCubeGeometry(), new OpenPBRMaterial())], lights: []};
     expect(renderer.render(scene, {} as Camera)).toBe('preparing');
-    const explicit = renderer.prepareScene(scene);
+    const explicit = prebuildStats(renderer, scene);
     await Promise.resolve();
     expect(build).toHaveBeenCalledOnce();
     finish(buildBLAS(scene.meshes[0].geometry));
@@ -1356,7 +1357,7 @@ it('keeps rendering the current scene during background preparation of another s
     const current: Scene = {meshes: [new Mesh(createCubeGeometry(), new OpenPBRMaterial())], lights: []};
     updateMeshInstances(current.meshes); markSceneStable(renderer, current);
     const background = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-    const pending = renderer.prepareScene([background]); await Promise.resolve();
+    const pending = prebuildStats(renderer, [background]); await Promise.resolve();
     expect(renderer.render(current, {} as Camera)).not.toBe('preparing');
     expect(pipeline.draw).toHaveBeenCalledOnce();
     finish(buildBLAS(background.geometry)); await pending;
@@ -1489,4 +1490,19 @@ it('clamps invalid lights and reports a validation event without a synchronous r
  const scene={meshes:[],lights:[light]};renderer.render(scene,{} as Camera);renderer.render(scene,{} as Camera);
  expect(light.intensity).toBe(0);expect(listener).toHaveBeenCalledOnce();expect(renderer.lastError).toBeUndefined();expect(renderer.status).not.toBe('error');
  log.mockRestore();warn.mockRestore();
+});
+
+it('rebuilds cached BLAS after settings change and emits preparation progress in order', async () => {
+ vi.stubGlobal('Worker',class{});const build=vi.spyOn(bvhWorker,'buildBvhInWorker').mockImplementation(async (geometry,_scale,_disp,builder,layout)=>({...buildBLAS(geometry),builder,layout}));
+ const renderer=new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement});renderer.bvhBuilder='tinybvh';
+ const scene={meshes:[new Mesh(createCubeGeometry(),new OpenPBRMaterial())],lights:[]};
+ await renderer.prebuildBVH(scene);const pipeline=createPipeline({getDiagnostics:vi.fn(()=>({shaderCompilation:{pipelineCount:2,completedPipelineCount:1}}))} as never);attachPipeline(renderer,pipeline);
+ const progress=vi.fn();renderer.on('progress',progress);
+ renderer.render(scene,{} as Camera);expect(build).toHaveBeenCalledOnce();
+ renderer.bvhLayout='cwbvh';expect(renderer.render(scene,{} as Camera)).toBe('preparing');
+ await (renderer as any)._bvhPreparation;expect(build).toHaveBeenCalledTimes(2);expect(build.mock.calls[1][4]).toBe('cwbvh');
+ vi.mocked(pipeline.draw).mockReturnValueOnce(true);expect(renderer.render(scene,{} as Camera)).toBe('compiling');
+ const stages=progress.mock.calls.map(([event])=>event.stage);expect(stages).toEqual(['bvh','shaders']);
+ renderer.render(scene,{} as Camera);const count=progress.mock.calls.length;renderer.render(scene,{} as Camera);expect(progress).toHaveBeenCalledTimes(count);
+ build.mockRestore();vi.unstubAllGlobals();
 });

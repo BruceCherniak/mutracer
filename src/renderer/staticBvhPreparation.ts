@@ -1,4 +1,4 @@
-import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
+import { setGeometryBvh, type BvhBuildConfig } from './geometryBvh.js';
 import type Mesh from '../scene/Mesh.js';
 import type Geometry from '../scene/Geometry.js';
 import type { TinyBvhLayout } from '../tinybvh/TinyBvhBuilder.js';
@@ -10,10 +10,12 @@ import {
   captureMeshBlasSnapshot,
   getMeshBlasInput,
   getPreparedMeshGeometry,
+  meshNeedsStaticBvh,
   meshBlasSnapshotIsCurrent
 } from './prepareMeshBVH.js';
 
 export interface StaticBvhPreparationOptions {
+  config?: BvhBuildConfig;
   builder: 'builtin' | 'tinybvh';
   layout: TinyBvhLayout;
   spatialSplits: boolean;
@@ -47,7 +49,7 @@ export async function prepareStaticBvhs(
   for (const mesh of meshes) {
     if (!mesh.geometry.position?.array.length || mesh.geometry.dynamic) continue;
     const target = getPreparedMeshGeometry(mesh);
-    if (jobs.has(target) || (getGeometryBvh(target) && !options.rebuild)) continue;
+    if (jobs.has(target) || (!meshNeedsStaticBvh(mesh, options.config ?? options) && !options.rebuild)) continue;
     try {
       jobs.set(target, { mesh, snapshot: captureMeshBlasSnapshot(mesh, target) });
     } catch {
@@ -117,7 +119,7 @@ export async function prepareStaticBvhs(
         const input = getMeshBlasInput(mesh);
         const bvh = await buildWithFallback(input);
         if (!options.isCancelled?.() && meshBlasSnapshotIsCurrent(mesh, target, snapshot)) {
-          setGeometryBvh(target, bvh);
+          setGeometryBvh(target, bvh, options.config ?? options);
           result.geometryCount++;
         }
       } catch (error) {

@@ -22,7 +22,7 @@ image.
 | Texture pixels or UV-array elements edited | `texture.markUpdated()` |
 | Vertex attributes edited; indices and `materialIndex` unchanged | `geometry.markVerticesUpdated()` |
 | Indices, `materialIndex` or other geometry data edited | `geometry.markUpdated()` |
-| `bvhBuilder`, `bvhLayout` or `bvhSpatialSplits` changed | Affects future builds; `await renderer.prepareScene(scene, { rebuild: true })` replaces existing BLASes ([BVH](./bvh.md#rebuild-after-changing-builder-settings)) |
+| `bvhBuilder`, `bvhLayout` or `bvhSpatialSplits` changed | Automatically rebuilds static BLASes; reports preparing and retains the old image ([BVH](./bvh.md)) |
 
 ```ts
 mesh.transform[12] += 0.1;           // detected automatically

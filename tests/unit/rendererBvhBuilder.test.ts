@@ -1,3 +1,4 @@
+import { prebuildStats } from '../helpers/prebuildStats';
 import { getGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import { beforeEach, expect, it, vi } from 'vitest';
 import Renderer from '../../src/Renderer';
@@ -22,7 +23,7 @@ it('builds with the built-in builder by default without loading TinyBVH', async 
   const renderer = createRenderer();
   expect(renderer.bvhBuilder).toBe('builtin');
   const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-  await renderer.prepareScene([mesh]);
+  await prebuildStats(renderer, [mesh]);
   expect(getGeometryBvh(mesh.geometry)?.builder).toBe('builtin');
   expect(buildTinyBvh).not.toHaveBeenCalled();
 });
@@ -31,10 +32,10 @@ it('passes the spatial split option to TinyBVH preparation', async () => {
   const renderer = createRenderer();
   renderer.bvhBuilder = 'tinybvh';
   const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-  await renderer.prepareScene([mesh]);
+  await prebuildStats(renderer, [mesh]);
   expect(buildTinyBvh).toHaveBeenLastCalledWith(mesh.geometry, 0, undefined, 'bvh2', false);
   renderer.bvhSpatialSplits = true;
   const other = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-  await renderer.prepareScene([other]);
+  await prebuildStats(renderer, [other]);
   expect(buildTinyBvh).toHaveBeenLastCalledWith(other.geometry, 0, undefined, 'bvh2', true);
 });

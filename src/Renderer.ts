@@ -1,3 +1,5 @@
+import { getGeometryBvh, type BvhBuildConfig } from './renderer/geometryBvh.js';
+import { getPreparedMeshGeometry } from './renderer/prepareMeshBVH.js';
 import { Events } from './util/events.js';
 import { validateSceneLights } from './renderer/lightsUtil.js';
 import type { SamplingPattern } from './renderer/sampling.js';
@@ -43,24 +45,10 @@ export type { DepthSampleArea } from './renderer/depthQuery.js';
 /** BLAS builder for meshes without a precomputed BVH. See {@link Renderer.bvhBuilder}. */
 export type BVHBuilder = 'tinybvh' | 'builtin';
 
-/** Options for {@link Renderer.prepareScene}. */
-export interface PrepareSceneOptions {
-  /**
-   * Rebuild every static BLAS with the current `bvhBuilder`, `bvhLayout` and
-   * `bvhSpatialSplits`, not only missing ones. Existing BLASes stay in use
-   * until their replacement is ready. Default `false`.
-   */
-  rebuild?: boolean;
-  /** Called after each BLAS finishes with this call's completed fraction (0–1). Default: none. */
-  onProgress?: (progress: number) => void;
-}
-
-/** Statistics for one {@link Renderer.prepareScene} call. */
-export interface PrepareSceneResult {
-  /** BLASes built by this call; shared geometry counts once. */
-  geometryCount: number;
-  /** Builder-reported build time in milliseconds, excluding queueing and WASM loading. */
-  bvhTimeMs: number;
+/** Optional early BVH construction settings. */
+export interface PrebuildBVHOptions {
+  /** Called after each completed BLAS with a fraction 0–1. Default none. */ onProgress?: (progress: number) => void;
+  /** Cancels this preparation and rejects with its abort reason. Default undefined. */ signal?: AbortSignal;
 }
 
 /**
@@ -155,7 +143,7 @@ export interface RendererDiagnostics extends RenderingDiagnostics {
   /** GPU adapter description reported by the browser. */
   adapterName: string;
   /** Active rendering backend; 'webgpu' or 'webgl'. */
-  backend: 'webgpu' | 'webgl';
+  backend: 'webgpu' | 'webgl' | undefined;
   /** Render height in pixels. */
   height: number;
   /** Render width in pixels. */
@@ -407,18 +395,17 @@ export default class Renderer {
   /**
    * With `bvhBuilder = 'tinybvh'`, build static BLASes with spatial splits
    * (SBVH). This lowers traversal cost on some scenes but builds several
-   * times slower. Applies to BLASes built after the change. Default `false`.
+   * times slower. Existing static BLASes rebuild automatically after the change. Default `false`.
    */
   bvhSpatialSplits = false;
   /**
    * Layout of static BLASes built with `bvhBuilder = 'tinybvh'`. All layouts
    * work on WebGPU and WebGL 2. The built-in builder and dynamic geometry
-   * always use `'bvh2'`. Applies to BLASes built after the change; call
-   * `prepareScene(scene, { rebuild: true })` to rebuild existing ones.
+   * always use `'bvh2'`. Existing static BLASes rebuild automatically.
    * Displacement bounds use `'bvh2'`. Default `'bvh2'`.
    */
   bvhLayout: TinyBvhLayout = 'bvh2';
-  private _bvhPreparation?: Promise<PrepareSceneResult>;
+  private _bvhPreparation?: Promise<void>;
   private _bvhPreparationTail: Promise<unknown> = Promise.resolve();
   private _tinyBvhUnavailable = false;
   private _bvhWorkerUnavailable = false;
@@ -764,23 +751,23 @@ export default class Renderer {
     disposeOIDNDenoiser(previousPreview);
   }
 
+  private _lastBvhBuild?: { geometryCount: number; bvhTimeMs: number };
+  private _lastBvhSettings = 'builtin/bvh2/false';
+  private _bvhConfig(): BvhBuildConfig {
+    return { builder: this.bvhBuilder, layout: this.bvhLayout, spatialSplits: this.bvhSpatialSplits };
+  }
+
   /**
-   * Builds missing static BLASes before rendering, using a Worker when available.
-   * `render()` calls this automatically and returns `'preparing'`
-   * meanwhile. Dynamic geometry retains synchronous refit/rebuild behavior.
-   * Default options: build only missing BLASes, without a progress callback.
-   * Returns the number of BLASes written and their total builder time.
-   * Completion covers static BLAS tasks only, not device initialization, TLAS,
-   * GPU scene uploads, shader compilation or rendering. Keep calling render()
-   * through preparing/compiling statuses, or await renderOfflineFrame() for an image.
+   * Optionally builds static BVHs early for a future scene, without initializing
+   * the device or compiling shaders. render() does this automatically for its
+   * scene. Default options: no progress callback or abort signal. Statistics
+   * are available in getDiagnostics().bvh.lastBuild.
    */
-  prepareScene(
-    scene: Pick<Scene, 'meshes'> | Mesh[], options: PrepareSceneOptions = {}
-  ): Promise<PrepareSceneResult> {
+  prebuildBVH(scene: Pick<Scene, 'meshes'> | Mesh[], options: PrebuildBVHOptions = {}): Promise<void> {
     const revision = this._bvhPreparationRevision;
     const preparation = this._bvhPreparationTail.then(async () => {
-      const isCancelled = () => revision !== this._bvhPreparationRevision;
-      if (isCancelled()) return { geometryCount: 0, bvhTimeMs: 0 };
+      const isCancelled = () => revision !== this._bvhPreparationRevision || options.signal?.aborted === true;
+      if (isCancelled()) return;
       const meshes = Array.isArray(scene) ? scene : scene.meshes;
       const useWorker = canUseBvhWorker() && !this._bvhWorkerUnavailable;
       if (useWorker) {
@@ -790,13 +777,18 @@ export default class Renderer {
           this._bvhWorkerPool = new BvhWorkerPool(count);
         }
       }
+      const config = this._bvhConfig();
       const result = await prepareStaticBvhs(meshes, {
+        config,
         builder: this.bvhBuilder === 'tinybvh' && !this._tinyBvhUnavailable ? 'tinybvh' : 'builtin',
         layout: this.bvhLayout, spatialSplits: this.bvhSpatialSplits,
         useWorker, workerPool: this._bvhWorkerPool, isCancelled,
-        rebuild: options.rebuild ?? false, onProgress: options.onProgress
+        rebuild: false, onProgress: progress => {
+          if (this._bvhPreparation && (this.status === 'preparing' || this.status === 'compiling')) this._events.emit('progress', {stage: 'bvh', progress});
+          options.onProgress?.(progress);
+        }
       });
-      if (isCancelled()) return { geometryCount: result.geometryCount, bvhTimeMs: result.bvhTimeMs };
+      if (isCancelled()) return;
       if (result.workerUnavailable && !this._bvhWorkerUnavailable) {
         this._bvhWorkerUnavailable = true;
         this._bvhWorkerPool?.dispose();
@@ -811,21 +803,30 @@ export default class Renderer {
         this._bvhPreparedGeometry.set(mesh, [mesh.geometry, mesh.geometry.version]);
       });
       if (result.geometryCount > 0) this._forceMeshUpdate = true;
-      return { geometryCount: result.geometryCount, bvhTimeMs: result.bvhTimeMs };
+      this._lastBvhBuild = { geometryCount: result.geometryCount, bvhTimeMs: result.bvhTimeMs };
     });
     this._bvhPreparationTail = preparation.catch(() => undefined);
-    return preparation;
+    const signal = options.signal;
+    if (!signal) return preparation;
+    return new Promise<void>((resolve, reject) => {
+      const aborted = () => reject(signal.reason ?? new DOMException('BVH preparation aborted', 'AbortError'));
+      if (signal.aborted) { aborted(); return; }
+      signal.addEventListener('abort', aborted, { once: true });
+      preparation.then(resolve, reject).finally(() => signal.removeEventListener('abort', aborted));
+    });
   }
 
   private _needsBVHPreparation(meshes: Mesh[]) {
     if (this._bvhPreparation) return true;
     if ((this.bvhBuilder !== 'tinybvh' || this._tinyBvhUnavailable) &&
-        (!canUseBvhWorker() || this._bvhWorkerUnavailable)) return false;
+        (!canUseBvhWorker() || this._bvhWorkerUnavailable)) {
+      return meshes.some(mesh => !!getGeometryBvh(getPreparedMeshGeometry(mesh)) && meshNeedsStaticBvh(mesh, this._bvhConfig()));
+    }
     return meshes.some((mesh) => {
       const prepared = this._bvhPreparedGeometry.get(mesh);
       const attempted = prepared?.[0] === mesh.geometry &&
         prepared[1] === mesh.geometry.version;
-      return !attempted && meshNeedsStaticBvh(mesh);
+      return !attempted && meshNeedsStaticBvh(mesh, this._bvhConfig());
     });
   }
 
@@ -838,6 +839,27 @@ export default class Renderer {
     this._renderDone = false;
     this._oidnStatus = 0;
     this._oidnRevision++;
+  }
+
+  private async _waitUntilReady(scene: Scene, camera: Camera, signal?: AbortSignal): Promise<void> {
+    const saved = { maxSamples: this.maxSamples, denoiser: this._activeDenoiser, preview: this.interactivePreview };
+    // Prepare pipelines without consuming a random sample or denoising a warm-up frame.
+    this.maxSamples = 0;
+    this.interactivePreview = false;
+    this._attachDenoiser(undefined);
+    try {
+      for (;;) {
+        if (signal?.aborted) throw signal.reason ?? new DOMException('Rendering aborted', 'AbortError');
+        const status = this.render(scene, camera);
+        if (status === 'error') throw this.lastError ?? new Error('Path tracing failed');
+        if (status !== 'preparing' && status !== 'compiling') return;
+        await new Promise<void>(resolve => setTimeout(resolve, 0));
+      }
+    } finally {
+      this.maxSamples = saved.maxSamples;
+      this.interactivePreview = saved.preview;
+      this._attachDenoiser(saved.denoiser);
+    }
   }
 
   /**
@@ -871,7 +893,7 @@ export default class Renderer {
     const device = this.device;
     const pipeline = this._pipeline;
     if (!pipeline) throw new Error('The rendering pipeline is not ready.');
-    await this.prepareScene(scene);
+    await this._waitUntilReady(scene, camera, options.signal);
 
     const saved = {
       maxSamples: this.maxSamples,
@@ -1058,7 +1080,7 @@ export default class Renderer {
 
   /** Backend, timing and shader-compilation details, or `undefined` before initialization. */
   getDiagnostics(): RendererDiagnostics | undefined {
-    if (!this._pipeline) return;
+    if (!this._pipeline && !this._lastBvhBuild) return;
     let adapterName = '';
     if (this._gpuAdapterInfo) {
       adapterName =
@@ -1085,9 +1107,10 @@ export default class Renderer {
         }
       : undefined;
     return {
-      ...this._pipeline.getDiagnostics(),
+      ...this._pipeline?.getDiagnostics(),
+      bvh: { ...this._pipeline?.getDiagnostics().bvh, lastBuild: this._lastBvhBuild },
       adapterName,
-      backend: this._gpuDevice ? 'webgpu' : 'webgl',
+      backend: this.backend,
       height: this.canvas.height,
       width: this.canvas.width,
       oidn,
@@ -1100,6 +1123,7 @@ export default class Renderer {
     let gpuCreated = false;
     try {
       this._initing = true;
+      this._events.emit('progress', {stage: 'device', progress: 0});
       this._pipelineInitError = undefined;
       if (preferWebGPU && typeof navigator !== 'undefined' && navigator.gpu) {
         try {
@@ -1200,7 +1224,7 @@ export default class Renderer {
       this._notifyError(this._pipelineInitError);
     } finally {
       this._initing = false;
-
+      this._events.emit('progress', {stage: 'device', progress: 1});
     }
   }
 
@@ -1247,6 +1271,10 @@ export default class Renderer {
       this._status = this._render(scene, camera);
     } catch (error) {
       this._status = this._reportRenderError(error);
+    }
+    if (this._status === 'compiling') {
+      const shaders = this._pipeline?.getDiagnostics().shaderCompilation;
+      if (shaders && shaders.pipelineCount > 0) this._events.emit('progress', {stage:'shaders',progress:shaders.completedPipelineCount / shaders.pipelineCount});
     }
     if (previous !== this._status) this._events.emit('status', { status: this._status, previous });
     return this._status;
@@ -1358,9 +1386,15 @@ export default class Renderer {
     const changes = this._sceneChangeDetector.detect(scene);
     const atlasBudgetChanged = pipeline.setTextureAtlasBudget(this.textureAtlasBudgetBytes);
     this._forceMeshUpdate ||= atlasBudgetChanged;
+    const bvhSettings = `${this.bvhBuilder}/${this.bvhLayout}/${this.bvhSpatialSplits}`;
+    if (bvhSettings !== this._lastBvhSettings) {
+      this._lastBvhSettings = bvhSettings;
+      this._forceMeshUpdate = true;
+      this._bvhPreparedGeometry = new WeakMap();
+    }
     const meshContentChanged = changes.meshes !== 'none' || this._forceMeshUpdate;
     if (this._bvhPreparation || (meshContentChanged && this._needsBVHPreparation(scene.meshes))) {
-      this._bvhPreparation ??= this.prepareScene(scene.meshes).finally(() => {
+      this._bvhPreparation ??= this.prebuildBVH(scene.meshes).catch(error => { this._notifyError(error); }).finally(() => {
         this._bvhPreparation = undefined;
       });
       return 'preparing';

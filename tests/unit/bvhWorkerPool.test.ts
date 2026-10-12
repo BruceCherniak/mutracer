@@ -1,3 +1,4 @@
+import { prebuildStats } from '../helpers/prebuildStats';
 import { getGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Renderer, Mesh, OpenPBRMaterial, createCubeGeometry, createSphereGeometry } from '../../src/main';
@@ -152,7 +153,7 @@ it.each([0, -1, 1.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1])('rejects inval
 it('deduplicates geometry, bounds preparation and reports progress in completion order', async () => {
   const r = renderer(2), meshes = [mesh(), mesh(), mesh(), mesh(), mesh()];
   const progress = vi.fn();
-  const pending = r.prepareScene([...meshes, new Mesh(meshes[0].geometry, new OpenPBRMaterial())], { onProgress: progress });
+  const pending = prebuildStats(r, [...meshes, new Mesh(meshes[0].geometry, new OpenPBRMaterial())], { onProgress: progress });
   await Promise.resolve();
   const [a, b] = ControlledWorker.instances;
   expect([a.sent.length, b.sent.length]).toEqual([1, 1]);
@@ -164,7 +165,7 @@ it('deduplicates geometry, bounds preparation and reports progress in completion
   a.reply(); b.reply();
   expect((await pending).geometryCount).toBe(5);
   expect(progress.mock.calls.map(([p]) => p)).toEqual([0.2, 0.4, 0.6, 0.8, 1]);
-  expect(await r.prepareScene(meshes)).toEqual({ geometryCount: 0, bvhTimeMs: 0 });
+  expect(await prebuildStats(r, meshes)).toEqual({ geometryCount: 0, bvhTimeMs: 0 });
   expect(ControlledWorker.instances).toHaveLength(2);
 });
 
@@ -172,7 +173,7 @@ it('starts large geometry first and prepares queued inputs lazily', async () => 
   const r = renderer(1), small = mesh();
   const large = new Mesh(createSphereGeometry(32, 16), new OpenPBRMaterial());
   small.geometry.normal = undefined!; small.geometry.tangent = undefined;
-  const pending = r.prepareScene([small, large]); await Promise.resolve();
+  const pending = prebuildStats(r, [small, large]); await Promise.resolve();
   const w = ControlledWorker.instances[0];
   expect(w.sent[0].indices.array.length).toBe(large.geometry.indices.array.length);
   expect(small.geometry.normal).toBeUndefined();
@@ -182,7 +183,7 @@ it('starts large geometry first and prepares queued inputs lazily', async () => 
 
 it('skips queued geometry changed before dispatch and discards stale active results', async () => {
   const r = renderer(1), meshes = [mesh(), mesh(), mesh()];
-  const progress = vi.fn(), pending = r.prepareScene(meshes, { onProgress: progress });
+  const progress = vi.fn(), pending = prebuildStats(r, meshes, { onProgress: progress });
   await Promise.resolve();
   meshes[0].geometry.markUpdated(); meshes[1].geometry.markUpdated();
   const w = ControlledWorker.instances[0]; w.reply();
@@ -194,24 +195,24 @@ it('skips queued geometry changed before dispatch and discards stale active resu
 
 it('reuses the pool and resizes only when the next preparation starts', async () => {
   const r = renderer(1), meshes = [mesh(), mesh()];
-  const first = r.prepareScene(meshes); await Promise.resolve();
+  const first = prebuildStats(r, meshes); await Promise.resolve();
   const old = ControlledWorker.instances[0];
   r.bvhWorkerCount = 2;
-  const second = r.prepareScene([mesh(), mesh()]);
+  const second = prebuildStats(r, [mesh(), mesh()]);
   old.reply(); await vi.waitFor(() => expect(old.sent).toHaveLength(2));
   expect(ControlledWorker.instances).toHaveLength(1); expect(old.terminate).not.toHaveBeenCalled();
   old.reply(); await first;
   await vi.waitFor(() => expect(ControlledWorker.instances).toHaveLength(3));
   expect(old.terminate).toHaveBeenCalledOnce();
   ControlledWorker.instances.slice(1).forEach(w => w.reply()); await second;
-  const third = r.prepareScene([mesh()]); await Promise.resolve();
+  const third = prebuildStats(r, [mesh()]); await Promise.resolve();
   expect(ControlledWorker.instances).toHaveLength(3);
   ControlledWorker.instances[1].reply(); await third;
 });
 
 it('keeps pools independent across renderers', async () => {
   const a = renderer(1), b = renderer(1);
-  const first = a.prepareScene([mesh()]), second = b.prepareScene([mesh()]); await Promise.resolve();
+  const first = a.prebuildBVH([mesh()]), second = prebuildStats(b, [mesh()]); await Promise.resolve();
   expect(ControlledWorker.instances).toHaveLength(2);
   a.dispose(); await first;
   expect(ControlledWorker.instances[1].terminate).not.toHaveBeenCalled();
@@ -221,11 +222,11 @@ it('keeps pools independent across renderers', async () => {
 it('cancels active and queued preparations on renderer disposal without fallback or progress', async () => {
   const r = renderer(2), meshes = [mesh(), mesh(), mesh()], progress = vi.fn();
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-  const first = r.prepareScene(meshes, { onProgress: progress }); await Promise.resolve();
-  const queued = r.prepareScene([mesh()]);
+  const first = r.prebuildBVH(meshes, { onProgress: progress }); await Promise.resolve();
+  const queued = r.prebuildBVH([mesh()]);
   r.dispose(); r.dispose();
-  expect(await first).toEqual({ geometryCount: 0, bvhTimeMs: 0 });
-  expect(await queued).toEqual({ geometryCount: 0, bvhTimeMs: 0 });
+  expect(await first).toBeUndefined();
+  expect(await queued).toBeUndefined();
   expect(meshes.every(m => !getGeometryBvh(m.geometry))).toBe(true);
   expect(progress).not.toHaveBeenCalled(); expect(warning).not.toHaveBeenCalled();
   expect(ControlledWorker.instances).toHaveLength(2);
@@ -235,20 +236,20 @@ it('cancels active and queued preparations on renderer disposal without fallback
 it('falls back for unfinished jobs on crash and releases the remaining pool', async () => {
   const r = renderer(2), meshes = [mesh(), mesh(), mesh(), mesh()];
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-  const pending = r.prepareScene(meshes); await Promise.resolve();
+  const pending = prebuildStats(r, meshes); await Promise.resolve();
   ControlledWorker.instances[0].crash(); ControlledWorker.instances[1].reply();
   expect((await pending).geometryCount).toBe(4);
   expect(meshes.every(m => getGeometryBvh(m.geometry)?.builder === 'builtin')).toBe(true);
   expect(warning).toHaveBeenCalledOnce();
   expect(ControlledWorker.instances.map(w => w.sent.length)).toEqual([1, 1]);
   ControlledWorker.instances.forEach(w => expect(w.terminate).toHaveBeenCalledOnce());
-  expect((await r.prepareScene([mesh()])).geometryCount).toBe(1);
+  expect((await prebuildStats(r, [mesh()])).geometryCount).toBe(1);
   expect(ControlledWorker.instances).toHaveLength(2);
 });
 
 it('finishes remaining jobs even when the progress callback throws', async () => {
   const r = renderer(1);
-  const pending = r.prepareScene([mesh(), mesh()], { onProgress: () => { throw new Error('UI error'); } });
+  const pending = prebuildStats(r, [mesh(), mesh()], { onProgress: () => { throw new Error('UI error'); } });
   await Promise.resolve(); const w = ControlledWorker.instances[0]; w.reply();
   await vi.waitFor(() => expect(w.sent).toHaveLength(2));
   w.reply(); expect((await pending).geometryCount).toBe(2);
