@@ -1558,3 +1558,17 @@ it('forces preview while converging and never labels its denoise final even at m
  await new Promise(resolve=>setTimeout(resolve,0));expect(denoised).toHaveBeenCalledWith({samples:1,final:false});
  expect(renderer.render({meshes:[],lights:[]},{} as Camera)).toBe('previewing');
 });
+
+it('does not mix a background prebuild callback into the active scene progress event', async () => {
+ vi.stubGlobal('Worker',class{});const finishes:((value:ReturnType<typeof buildBLAS>)=>void)[]=[];
+ const build=vi.spyOn(bvhWorker,'buildBvhInWorker').mockImplementation(()=>new Promise(resolve=>finishes.push(resolve)));
+ const renderer=new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement});attachPipeline(renderer,createPipeline());
+ const background=new Mesh(createCubeGeometry(),new OpenPBRMaterial()),active=new Mesh(createCubeGeometry(),new OpenPBRMaterial());
+ const progress=vi.fn(),backgroundProgress=vi.fn();renderer.on('progress',progress);
+ const pending=renderer.prebuildBVH([background],{onProgress:backgroundProgress});await Promise.resolve();
+ expect(renderer.render({meshes:[active],lights:[]},{} as Camera)).toBe('preparing');
+ finishes[0](buildBLAS(background.geometry));await pending;await Promise.resolve();
+ expect(backgroundProgress).toHaveBeenCalledOnce();expect(progress).not.toHaveBeenCalled();
+ finishes[1](buildBLAS(active.geometry));await (renderer as any)._bvhPreparation;
+ expect(progress).toHaveBeenCalledWith({stage:'bvh',progress:1});build.mockRestore();vi.unstubAllGlobals();
+});

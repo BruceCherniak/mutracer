@@ -60,7 +60,7 @@ export interface ShaderModuleCompilationDiagnostics {
   sourceFingerprint: string;
 }
 
-/** Compilation measurements for one compute pipeline. */
+/** Compilation measurements for one shader pipeline/program. */
 export interface ShaderPipelineCompilationDiagnostics {
   /** Module or pipeline diagnostic label. */
   label: string;
@@ -126,7 +126,7 @@ export interface RenderingDiagnostics {
     peakDisplayValue?: number;
   };
   textureAtlas?: TextureAtlasStats;
-  /** Latest asynchronous WebGPU shader/pipeline compilation measurement. */
+  /** Shader compilation measurements: current WebGPU batch or cumulative WebGL programs. */
   shaderCompilation?: ShaderCompilationDiagnostics;
   /** Light-selection table summary (WebGPU). */
   lightSampling?: {

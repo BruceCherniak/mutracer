@@ -548,7 +548,7 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       return changed;
     },
     getTotalSamplesRendered: () => sampleCount,
-    getDiagnostics: () => rayTracePass.getDiagnostics(),
+    getDiagnostics: () => ({...rayTracePass.getDiagnostics(), shaderCompilation: renderer.getShaderCompilationDiagnostics()}),
     flushDiagnostics: async () => {},
     setShadowCatcherParams(color: ColorRGB, alpha: number) {
       const changed =

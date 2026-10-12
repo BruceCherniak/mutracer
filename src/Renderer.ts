@@ -786,7 +786,7 @@ export default class Renderer {
         layout: this.bvhLayout, spatialSplits: this.bvhSpatialSplits,
         useWorker, workerPool: this._bvhWorkerPool, isCancelled,
         rebuild: false, onProgress: progress => {
-          if (this._bvhPreparation && (this.status === 'preparing' || this.status === 'compiling')) this._events.emit('progress', {stage: 'bvh', progress});
+          if (this._bvhPreparation === preparation && (this.status === 'preparing' || this.status === 'compiling')) this._events.emit('progress', {stage: 'bvh', progress});
           options.onProgress?.(progress);
         }
       });
@@ -1398,9 +1398,12 @@ export default class Renderer {
     }
     const meshContentChanged = changes.meshes !== 'none' || this._forceMeshUpdate;
     if (this._bvhPreparation || (meshContentChanged && this._needsBVHPreparation(scene.meshes))) {
-      this._bvhPreparation ??= this.prebuildBVH(scene.meshes).catch(error => { this._notifyError(error); }).finally(() => {
-        this._bvhPreparation = undefined;
-      });
+      if (!this._bvhPreparation) {
+        const preparation = this.prebuildBVH(scene.meshes);
+        this._bvhPreparation = preparation;
+        const finish = () => { if (this._bvhPreparation === preparation) this._bvhPreparation = undefined; };
+        void preparation.then(finish, error => { finish(); this._notifyError(error); });
+      }
       return 'preparing';
     }
     let sceneChanged = meshContentChanged || changes.lights || changes.background;

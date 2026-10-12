@@ -63,7 +63,9 @@ geometry builds on one Worker. Pools are reused and released by dispose().
 Progress counts completed tasks, including failed/stale tasks, rather than
 triangles or elapsed time. Renderer `progress` events cover device (0/1),
 BVH tasks and shader pipelines only during preparing/compiling. Explicit
-background prebuilds use their own `onProgress` callback.
+background prebuilds use their own `onProgress` callback. Shader progress is
+measured on both backends; WebGL diagnostics aggregate compiled programs
+for the renderer lifetime.
 Stale results are discarded. Without Worker support, construction runs on
 the calling thread. More Workers increase simultaneous memory use, and
 summed builder time can exceed wall time. Disposal cancels active and queued

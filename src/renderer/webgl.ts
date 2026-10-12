@@ -1,3 +1,4 @@
+import type { ShaderCompilationDiagnostics } from './RenderingPipeline.js';
 import { FragmentShader, ShaderDefineValue, ShaderUniform } from './shader.js';
 
 export { FragmentShader, Shader, createShaderMixin, glsl } from './shader.js';
@@ -576,6 +577,11 @@ export class Renderer {
   private _viewportStack: Array<[number, number, number, number]> = [];
   private _programs = new Set<WebGLProgram>();
   private _parallel?: KHR_parallel_shader_compile;
+  private _compilationStart = 0;
+  private _compilationRecords: {
+    program: WebGLProgram; label: string; bytes: number; lines: number; fingerprint: string;
+    startedAt: number; completedAt?: number; generationMs: number; creationMs: number;
+  }[] = [];
 
   constructor(options: RendererOptions) {
     this.canvas = options.canvas;
@@ -595,6 +601,14 @@ export class Renderer {
     defines: Record<string, ShaderDefineValue>
   ) {
     const gl = this.gl;
+    const startedAt = performance.now();
+    if (!this._compilationRecords.length) this._compilationStart = startedAt;
+    const fragment = composeFragment(shader, defines);
+    const generationMs = performance.now() - startedAt;
+    const source = fullscreenVertex + fragment;
+    let hash = 2166136261;
+    for (let i = 0; i < source.length; i++) hash = Math.imul(hash ^ source.charCodeAt(i), 16777619);
+    const creationStart = performance.now();
     const program = gl.createProgram()!;
     const compile = (type: number, source: string) => {
       const result = gl.createShader(type)!;
@@ -609,7 +623,7 @@ export class Renderer {
       gl.deleteShader(result);
     };
     compile(gl.VERTEX_SHADER, fullscreenVertex);
-    compile(gl.FRAGMENT_SHADER, composeFragment(shader, defines));
+    compile(gl.FRAGMENT_SHADER, fragment);
     gl.linkProgram(program);
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
       throw new Error(
@@ -617,7 +631,46 @@ export class Renderer {
       );
     }
     this._programs.add(program);
+    this._compilationRecords.push({program, label: shader.name || 'WebGL program',
+      bytes: new TextEncoder().encode(source).byteLength, lines: source.split('\n').length,
+      fingerprint: (hash >>> 0).toString(16).padStart(8, '0'), startedAt,
+      generationMs, creationMs: performance.now() - creationStart,
+      completedAt: this._parallel ? undefined : performance.now()});
     return program;
+  }
+
+  /** Cumulative program compilation measurements used by preparation progress. */
+  getShaderCompilationDiagnostics(): ShaderCompilationDiagnostics {
+    const now = performance.now(), records = this._compilationRecords;
+    for (const record of records) {
+      if (record.completedAt === undefined && (!this._parallel || this.gl.getProgramParameter(record.program, this._parallel.COMPLETION_STATUS_KHR))) record.completedAt = now;
+    }
+    const completed = records.filter(record => record.completedAt !== undefined);
+    const duration = completed.length === records.length && records.length > 0
+      ? Math.max(...completed.map(record => record.completedAt!)) - this._compilationStart : undefined;
+    const concurrency = records.flatMap(record => [
+      {time: record.startedAt, change: 1},
+      ...(record.completedAt === undefined ? [] : [{time: record.completedAt, change: -1}])
+    ]).sort((a,b) => a.time - b.time || a.change - b.change);
+    let active = 0, peak = 0;
+    for (const event of concurrency) { active += event.change; peak = Math.max(peak, active); }
+    return {
+      status: completed.length === records.length ? 'ready' : 'compiling',
+      sourceBytes: records.reduce((sum, record) => sum + record.bytes, 0),
+      sourceLines: records.reduce((sum, record) => sum + record.lines, 0),
+      pipelineCount: records.length, completedPipelineCount: completed.length,
+      sourceGenerationTimeMs: records.reduce((sum, record) => sum + record.generationMs, 0),
+      moduleCreationTimeMs: records.reduce((sum, record) => sum + record.creationMs, 0),
+      modules: records.map(record => ({label: record.label, sourceBytes: record.bytes, sourceLines: record.lines, sourceFingerprint: record.fingerprint})),
+      pipelines: records.map(record => ({label: record.label, entryPoint: 'main', firstFrameRequired: true,
+        status: record.completedAt === undefined ? 'compiling' : 'ready',
+        startedAtMs: record.startedAt - this._compilationStart,
+        endedAtMs: record.completedAt === undefined ? undefined : record.completedAt - this._compilationStart,
+        durationMs: record.completedAt === undefined ? undefined : record.completedAt - record.startedAt})),
+      maximumConcurrentPipelineCount: this._parallel ? records.length : Math.min(records.length, 1),
+      peakConcurrentPipelineCount: peak,
+      pipelineCompilationTimeMs: duration, totalTimeMs: duration
+    };
   }
 
   isAllProgramCompiled() {
@@ -657,6 +710,7 @@ export class Renderer {
   dispose() {
     this._programs.forEach((program) => this.gl.deleteProgram(program));
     this._programs.clear();
+    this._compilationRecords = [];
     this.emptyTexture.dispose(this.gl);
   }
 }
