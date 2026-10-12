@@ -80,6 +80,7 @@ camera.focusDistance = 5.4;
 const controls = new CameraViewControl({ camera, domElement: canvas });
 
 const renderer = new Renderer({ canvas });
+renderer.on('error', error => { statusElement.textContent = error.message; });
 renderer.bounces = 8;
 renderer.maxSamples = 256;
 renderer.toneMapping = 'agx';

@@ -70,10 +70,18 @@ affects the image restarts accumulation.
 | `shadowCatcherAlpha` | `1` | Shadow opacity on shadow catchers |
 | `transmissiveOutputAlphaMin` | `1` | Minimum alpha of glass over a transparent background |
 
-**Callbacks**
+**Events**
 
-- `onSampleRendered(sampleCount, isFirstFrame, frameTime)` runs after samples
-  were added.
+`renderer.on(name, listener)` supports multiple listeners and returns an unsubscribe function.
+
+| Event | Payload |
+| --- | --- |
+| `sample` | `{ samples, preview, isFirstFrame, frameTimeMs }` |
+| `status` | `{ status, previous }`; emitted only when status changes |
+| `progress` | `{ stage: 'device' \| 'bvh' \| 'shaders', progress }`; preparing/compiling only |
+| `error` | `Error`; each error object is delivered once |
+| `denoised` | `{ samples, final }`; after completed denoising |
+| `devicelost` | `{ reason, recovering }` |
 
 ### Methods
 
@@ -107,7 +115,14 @@ by `getDiagnostics().hdrPresentation.active`.
 data edits, which need `markUpdated()` or `markVerticesUpdated()`; see
 [scene updates](./updates.md). An unchanged scene keeps accumulating.
 
-Rendering failures return `'error'` without throwing. `renderer.lastError` (default `undefined`) stores the error until the next successful render. Constructor denoiser failures also set it. Initialized diagnostics include `lastError` and `webgpuFallbackReason` messages when applicable.
+Synchronous rendering failures return `'error'` without throwing and emit an `error`
+event. `lastError` (default `undefined`) only describes a synchronous failure during
+the most recent `render()` call. Async denoising and constructor-denoiser failures
+are delivered through `error` events and do not set `lastError`. A later render
+does not repeat these events. Console errors are deduplicated by message. Invalid
+light values are clamped and reported once through `error`, while rendering continues
+with `lastError` undefined. Diagnostics include synchronous `lastError` and
+`webgpuFallbackReason` messages when applicable.
 
 While-converging intermediate denoise batches report `'converging'`. Only denoising the final image at `maxSamples` reports `'denoising'`; `'finished'` means that final image is ready.
 

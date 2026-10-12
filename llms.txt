@@ -21,7 +21,7 @@
 - Final stills: `await renderer.renderOfflineFrame(scene, camera, { samples })`, then `renderer.prepareForExport()` and `canvas.toBlob(...)`. Linear HDR pixels: `await renderer.getRawOutput()`.
 - BVH: static BVHs build automatically in a Worker pool; `bvhWorkerCount` defaults to `'auto'` (1–4), or set a positive integer. For a loading screen, `await renderer.prepareScene(scene, { onProgress })`; it builds BVHs only, so keep calling `render()` afterwards. Caches are internal; explicit rebuilding uses `{ rebuild: true }`. `bvhBuilder = 'tinybvh'` uses WebAssembly; see [BVH](./docs/bvh.md).
 
-- Errors: `render()` never throws; inspect `renderer.lastError` and initialized `getDiagnostics().webgpuFallbackReason`. See [API](./docs/api.md).
+- Events: `renderer.on('sample' | 'status' | 'progress' | 'error' | 'denoised' | 'devicelost', listener)` returns unsubscribe; `lastError` only reflects the latest render's synchronous failure, async errors use `error` ([API](docs/api.md)).
 - Geometry: `new Geometry({ position })` generates indices/normals; `vertexCount` / `triangleCount` are getters. `materialIndex` has itemSize 1 and one raw index per vertex (all triangle corners must match). See [geometry](./docs/getting-started.md#geometry-from-arrays).
 - Spatial types: import `Vec2`, `Vec3` and `Mat4` from the main entry; matrices use 16 column-major elements. See [API](./docs/api.md).
 

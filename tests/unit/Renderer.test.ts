@@ -1380,13 +1380,14 @@ describe('render failures', () => {
       expect(renderer.lastError?.message).toBe('setting failed');
     } finally {log.mockRestore();}
   });
-  it('records constructor denoiser rejection', async () => {
+  it('delivers constructor denoiser rejection through error events', async () => {
     const error = new Error('weights failed');
     const setter = vi.spyOn(Renderer.prototype,'setDenoiser').mockRejectedValueOnce(error);
     const log=vi.spyOn(console,'error').mockImplementation(()=>{});
     try {
       const renderer = new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement,denoiser:{type:'jnlm'}});
-      await new Promise(resolve=>setTimeout(resolve,0)); expect(renderer.lastError).toBe(error);
+      const listener = vi.fn(); renderer.on('error', listener);
+      await new Promise(resolve=>setTimeout(resolve,0)); expect(renderer.lastError).toBeUndefined(); expect(listener).toHaveBeenCalledOnce(); expect(listener).toHaveBeenCalledWith(error);
     } finally {setter.mockRestore();log.mockRestore();}
   });
 });
@@ -1394,6 +1395,7 @@ describe('render failures', () => {
 
 it('reports only final denoising and completion while converging', async () => {
   const renderer = new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement});
+  const denoised = vi.fn(); renderer.on('denoised', denoised);
   renderer.maxSamples = 8;
   let samples = 0;
   let complete: (value:boolean)=>void = ()=>{};
@@ -1415,6 +1417,7 @@ it('reports only final denoising and completion while converging', async () => {
   expect(samples).toBe(8); expect(renderer.render(scene,camera)).toBe('denoising');
   complete(true); await new Promise(resolve=>setTimeout(resolve,0));
   expect(renderer.render(scene,camera)).toBe('finished');
+  expect(denoised.mock.calls.map(([event]) => event)).toEqual([{samples:1,final:false},{samples:4,final:false},{samples:8,final:true}]);
 });
 
 
@@ -1438,4 +1441,52 @@ it('exposes the initial and latest string render status', () => {
  const pipeline = createPipeline();attachPipeline(renderer,pipeline);
  const status = renderer.render({meshes:[],lights:[]}, {} as Camera);
  expect(renderer.status).toBe(status);expect(status).toBe('finished');
+});
+
+it('supports multiple subscriptions, unsubscribe and status transitions', () => {
+ const renderer=new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement});
+ const pipeline=createPipeline();attachPipeline(renderer,pipeline);
+ const status=vi.fn(),first=vi.fn(),second=vi.fn();renderer.on('status',status);
+ const off=renderer.on('sample',first);renderer.on('sample',second);
+ renderer.render({meshes:[],lights:[]},{} as Camera);
+ renderer.render({meshes:[],lights:[]},{} as Camera);
+ expect(status).toHaveBeenCalledOnce(); expect(status).toHaveBeenCalledWith({status:'finished',previous:'preparing'});
+ const sample=vi.mocked(pipeline.setOnSampleRendered).mock.calls.at(-1)![0]!;
+ sample(2,false,3);off();sample(3,false,4);
+ expect(first).toHaveBeenCalledOnce();expect(second).toHaveBeenCalledTimes(2);
+ expect(second).toHaveBeenLastCalledWith({samples:3,preview:false,isFirstFrame:false,frameTimeMs:4});
+});
+
+it('delivers an async denoise rejection once and preserves it across later renders', async () => {
+ const renderer=new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement});renderer.maxSamples=1;
+ const error=new Error('denoise rejected'),listener=vi.fn();renderer.on('error',listener);
+ const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+ const pipeline=createPipeline({needsRestartSample:vi.fn(()=>false),performOIDNDenoise:vi.fn().mockRejectedValueOnce(error).mockResolvedValue(true)});
+ attachPipeline(renderer,pipeline);renderer.oidn={} as never;
+ const scene={meshes:[],lights:[]},camera={} as Camera;
+ renderer.render(scene,camera);await new Promise(resolve=>setTimeout(resolve,0));
+ expect(listener).toHaveBeenCalledOnce(); expect(listener).toHaveBeenCalledWith(error);expect(renderer.lastError).toBeUndefined();
+ renderer.render(scene,camera);await new Promise(resolve=>setTimeout(resolve,0));renderer.render(scene,camera);
+ expect(listener).toHaveBeenCalledOnce(); expect(listener).toHaveBeenCalledWith(error);expect(listener.mock.calls[0][0]).toBe(error);expect(renderer.lastError).toBeUndefined();expect(log).toHaveBeenCalledOnce();log.mockRestore();
+});
+
+it('emits synchronous errors once per object while deduplicating console messages', () => {
+ const renderer=new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement});const error=new Error('same message');
+ const pipeline=createPipeline({draw:vi.fn(()=>{throw error;})});attachPipeline(renderer,pipeline);
+ const listener=vi.fn(),log=vi.spyOn(console,'error').mockImplementation(()=>{});renderer.on('error',listener);
+ const scene={meshes:[],lights:[]},camera={} as Camera;
+ renderer.render(scene,camera);renderer.render(scene,camera);
+ expect(listener).toHaveBeenCalledOnce(); expect(listener).toHaveBeenCalledWith(error);expect(renderer.lastError).toBe(error);
+ vi.mocked(pipeline.draw).mockImplementationOnce(()=>{throw new Error('same message');});renderer.render(scene,camera);
+ expect(listener).toHaveBeenCalledTimes(2);expect(log).toHaveBeenCalledOnce();log.mockRestore();
+});
+
+it('clamps invalid lights and reports a validation event without a synchronous render error', async () => {
+ const {default: SpotLight}=await import('../../src/scene/SpotLight');
+ const renderer=new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement});attachPipeline(renderer,createPipeline());
+ const listener=vi.fn();renderer.on('error',listener);const light=new SpotLight({intensity:-1});
+ const log=vi.spyOn(console,'error').mockImplementation(()=>{}),warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+ const scene={meshes:[],lights:[light]};renderer.render(scene,{} as Camera);renderer.render(scene,{} as Camera);
+ expect(light.intensity).toBe(0);expect(listener).toHaveBeenCalledOnce();expect(renderer.lastError).toBeUndefined();expect(renderer.status).not.toBe('error');
+ log.mockRestore();warn.mockRestore();
 });

@@ -1,3 +1,4 @@
+import { Events } from './util/events.js';
 import { validateSceneLights } from './renderer/lightsUtil.js';
 import type { SamplingPattern } from './renderer/sampling.js';
 import { packDepthSampleArea, type DepthSampleArea } from './renderer/depthQuery.js';
@@ -147,7 +148,7 @@ export interface RendererParams {
 
 /** Snapshot returned by {@link Renderer.getDiagnostics}. */
 export interface RendererDiagnostics extends RenderingDiagnostics {
-  /** Most recent render or constructor-denoiser failure; absent after a successful render. */
+  /** Synchronous failure from the most recent render call. Async failures are delivered through error events. */
   lastError?: string;
   /** Reason WebGPU initialization fell back to WebGL; absent when no fallback occurred. */
   webgpuFallbackReason?: string;
@@ -235,6 +236,15 @@ export interface OfflineFrameRenderResult {
 
 /** Value returned by render(); initial renderer status is preparing. */
 export type RenderStatus = 'preparing' | 'compiling' | 'converging' | 'denoising' | 'finished' | 'error';
+
+interface RendererEvents {
+  sample: { samples: number; preview: boolean; isFirstFrame: boolean; frameTimeMs: number };
+  status: { status: RenderStatus; previous: RenderStatus };
+  progress: { stage: 'device' | 'bvh' | 'shaders'; progress: number };
+  error: Error;
+  denoised: { samples: number; final: boolean };
+  devicelost: { reason: string; recovering: boolean };
+}
 
 const OIDN_DENOISING = 1;
 const OIDN_DENOISED = 2;
@@ -424,12 +434,11 @@ export default class Renderer {
   /** Canvas the renderer draws into. */
   readonly canvas: HTMLCanvasElement;
 
-  /** Called whenever new samples were added to the image. */
-  onSampleRendered?: (
-    sampleCount: number,
-    isFirstFrame: boolean,
-    frameTime: number
-  ) => void;
+  private _events = new Events<RendererEvents>();
+  /** Subscribes to renderer events; returns a function that cancels this subscription. */
+  on<K extends keyof RendererEvents>(event: K, listener: (value: RendererEvents[K]) => void): () => void {
+    return this._events.on(event, listener);
+  }
 
   /** Linear exposure multiplier applied before tone mapping. Default `1`. */
   toneMappingExposure = 1;
@@ -568,7 +577,7 @@ export default class Renderer {
         this.canvas.height,
         options
       ).catch((error) => {
-        console.warn('Failed to prepare OIDN tile shapes.', error);
+        this._notifyError(error);
       });
     }
   }
@@ -589,8 +598,9 @@ export default class Renderer {
   private _preserveDrawingBuffer;
   private _preferWebGPU;
   private _pipelineInitError?: unknown;
-  private _lastRenderError?: string;
-  /** Most recent rendering or constructor-denoiser failure. Default undefined; cleared after a successful render. */
+  private _reportedErrors = new WeakSet<Error>();
+  private _loggedErrorMessages = new Set<string>();
+  /** Synchronous failure during the most recent render() call. Default undefined; cleared by the next render call. Async failures (including denoising) are delivered through the error event. */
   lastError: Error | undefined;
   private _webgpuFallbackReason?: string;
 
@@ -612,7 +622,6 @@ export default class Renderer {
   private _initing = false;
   private _renderDone = false;
   private _readingDepth = false;
-  private _pendingLightErrors: Error[] = [];
   private _oidnStatus = 0;
   private _oidnRevision = 0;
 
@@ -623,7 +632,7 @@ export default class Renderer {
     this._preferWebGPU = params.preferWebGPU ?? true;
     if (params.denoiser) {
       this.setDenoiser(params.denoiser).catch((error) => {
-        this._reportRenderError(error);
+        this._notifyError(error);
       });
     }
 
@@ -934,7 +943,7 @@ export default class Renderer {
           }
         }
         if (status === 'error') {
-          throw new Error(this._lastRenderError ?? 'Path tracing failed.');
+          throw new Error(this.lastError?.message ?? 'Path tracing failed.');
         }
         if (status === 'denoising') {
           options.onProgress?.({
@@ -1187,21 +1196,29 @@ export default class Renderer {
       this._pipeline!.setSize(this.canvas.width, this.canvas.height);
 
     } catch (error) {
-      this._pipelineInitError = error;
-      this._reportRenderError(error);
+      this._pipelineInitError = error instanceof Error ? error : new Error(String(error));
+      this._notifyError(this._pipelineInitError);
     } finally {
       this._initing = false;
 
     }
   }
 
-  private _reportRenderError(error: unknown): RenderStatus {
-    this.lastError = error instanceof Error ? error : new Error(String(error));
-    const message = this.lastError.message;
-    if (message !== this._lastRenderError) {
-      console.error(`Path tracing failed: ${message}`, error);
-      this._lastRenderError = message;
+  private _notifyError(value: unknown): Error {
+    const error = value instanceof Error ? value : new Error(String(value));
+    if (!this._loggedErrorMessages.has(error.message)) {
+      this._loggedErrorMessages.add(error.message);
+      console.error(`Path tracing failed: ${error.message}`, error);
     }
+    if (!this._reportedErrors.has(error)) {
+      this._reportedErrors.add(error);
+      this._events.emit('error', error);
+    }
+    return error;
+  }
+
+  private _reportRenderError(error: unknown): RenderStatus {
+    this.lastError = this._notifyError(error);
     return 'error';
   }
 
@@ -1224,11 +1241,14 @@ export default class Renderer {
    * @returns The current {@link RenderStatus}.
    */
   render(scene: Scene, camera: Camera): RenderStatus {
+    const previous = this._status;
+    this.lastError = undefined;
     try {
       this._status = this._render(scene, camera);
     } catch (error) {
       this._status = this._reportRenderError(error);
     }
+    if (previous !== this._status) this._events.emit('status', { status: this._status, previous });
     return this._status;
   }
 
@@ -1290,10 +1310,8 @@ export default class Renderer {
       this._renderDone = false;
     }
 
-    pipeline.setOnSampleRendered((...args) => {
-      if (this.onSampleRendered) {
-        this.onSampleRendered(...args);
-      }
+    pipeline.setOnSampleRendered((samples, isFirstFrame, frameTimeMs) => {
+      this._events.emit('sample', { samples, isFirstFrame, frameTimeMs, preview: pipeline.isPreviewMode?.() === true });
     });
 
     pipeline.setAllowsMultipleSamplesPerFrame(
@@ -1335,7 +1353,7 @@ export default class Renderer {
     }
     const sceneInitialized = this._sceneInitialized;
     const renderDoneBeforeSceneUpdate = this._renderDone;
-    validateSceneLights(scene.lights, error => this._pendingLightErrors.push(error));
+    validateSceneLights(scene.lights, error => this._notifyError(error));
     ensureMeshGeometryAttributes(scene.meshes);
     const changes = this._sceneChangeDetector.detect(scene);
     const atlasBudgetChanged = pipeline.setTextureAtlasBudget(this.textureAtlasBudgetBytes);
@@ -1541,6 +1559,8 @@ export default class Renderer {
       if (settledBatch) {
         this._oidnBatchStartSamples = pipeline.getTotalSamplesRendered();
       }
+      const denoisedSamples = pipeline.getTotalSamplesRendered();
+      const final = this._denoiseFinalInFlight;
       // Performing denoising
       pipeline
         .performOIDNDenoise!(previewFrame ? this._previewDenoiser! : oidn!, undefined, convergingDenoiseActive)
@@ -1554,19 +1574,18 @@ export default class Renderer {
           if (completed) {
             pipeline.drawPostProcess();
             this._oidnFirstFrameDenoisePending = false;
+            this._events.emit('denoised', { samples: denoisedSamples, final });
           }
           this._oidnStatus = completed ? OIDN_DENOISED : 0;
         })
         .catch((error) => {
+          this._notifyError(error);
           if (oidnRevision !== this._oidnRevision) return;
           if (settledBatch) this._oidnBatchStartTime = performance.now();
           this._oidnStatus = 0;
-          this._reportRenderError(error);
         });
     }
 
-    this._lastRenderError = undefined;
-    this.lastError = undefined;
     return compilingShader
       ? 'compiling'
       : this._oidnStatus === OIDN_DENOISING && this._denoiseFinalInFlight
@@ -1671,6 +1690,7 @@ export default class Renderer {
 
   /** Releases GPU resources, BVH Workers and the attached denoiser; cancels pending BVH preparation. */
   dispose() {
+    this._events.clear();
     this._bvhPreparationRevision++;
     this._bvhWorkerPool?.dispose();
     this._bvhWorkerPool = undefined;

@@ -76,6 +76,7 @@ const camera = new Camera({ projection: 'perspective', fov: 40, near: 0.1, far: 
 camera.position = [0, 2, 6]; camera.lookAt([0, 1, 0]);
 
 const renderer = new Renderer({ canvas });
+renderer.on('error', error => console.error(error));
 renderer.setSize(canvas.width, canvas.height);
 // Optional: await renderer.init() to inspect backend, adapter and limits.
 
@@ -93,6 +94,7 @@ With Three.js:
 import { Renderer, THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
 
 const renderer = new Renderer({ canvas });
+renderer.on('error', error => console.error(error));
 const sync = new THREESceneSync(threeScene);
 
 function frame() {
