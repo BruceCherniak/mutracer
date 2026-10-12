@@ -16,6 +16,7 @@
 
     "removeComments": false,
     "declaration": true,
+    "stripInternal": true,
     "declarationMap": false,
     "pretty": true,
     "outDir": "lib",

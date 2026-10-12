@@ -1,3 +1,4 @@
+import { getGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Renderer, Mesh, OpenPBRMaterial, createCubeGeometry, createSphereGeometry } from '../../src/main';
 import { Attribute } from '../../src/scene/Geometry';
@@ -156,8 +157,8 @@ it('deduplicates geometry, bounds preparation and reports progress in completion
   const [a, b] = ControlledWorker.instances;
   expect([a.sent.length, b.sent.length]).toEqual([1, 1]);
   b.reply(); await vi.waitFor(() => expect(b.sent).toHaveLength(2));
-  expect(meshes[1].geometry.bvh).toBeDefined();
-  expect(meshes[0].geometry.bvh).toBeUndefined();
+  expect(getGeometryBvh(meshes[1].geometry)).toBeDefined();
+  expect(getGeometryBvh(meshes[0].geometry)).toBeUndefined();
   a.reply(); await vi.waitFor(() => expect(a.sent).toHaveLength(2));
   b.reply(); await vi.waitFor(() => expect(b.sent).toHaveLength(3));
   a.reply(); b.reply();
@@ -186,7 +187,7 @@ it('skips queued geometry changed before dispatch and discards stale active resu
   meshes[0].geometry.markUpdated(); meshes[1].geometry.markUpdated();
   const w = ControlledWorker.instances[0]; w.reply();
   await vi.waitFor(() => expect(w.sent).toHaveLength(2));
-  expect(meshes[0].geometry.bvh).toBeUndefined(); expect(meshes[1].geometry.bvh).toBeUndefined();
+  expect(getGeometryBvh(meshes[0].geometry)).toBeUndefined(); expect(getGeometryBvh(meshes[1].geometry)).toBeUndefined();
   w.reply(); expect((await pending).geometryCount).toBe(1);
   expect(progress.mock.calls.map(([p]) => p)).toEqual([1 / 3, 2 / 3, 1]);
 });
@@ -225,7 +226,7 @@ it('cancels active and queued preparations on renderer disposal without fallback
   r.dispose(); r.dispose();
   expect(await first).toEqual({ geometryCount: 0, bvhTimeMs: 0 });
   expect(await queued).toEqual({ geometryCount: 0, bvhTimeMs: 0 });
-  expect(meshes.every(m => !m.geometry.bvh)).toBe(true);
+  expect(meshes.every(m => !getGeometryBvh(m.geometry))).toBe(true);
   expect(progress).not.toHaveBeenCalled(); expect(warning).not.toHaveBeenCalled();
   expect(ControlledWorker.instances).toHaveLength(2);
   ControlledWorker.instances.forEach(w => expect(w.terminate).toHaveBeenCalledOnce());
@@ -237,7 +238,7 @@ it('falls back for unfinished jobs on crash and releases the remaining pool', as
   const pending = r.prepareScene(meshes); await Promise.resolve();
   ControlledWorker.instances[0].crash(); ControlledWorker.instances[1].reply();
   expect((await pending).geometryCount).toBe(4);
-  expect(meshes.every(m => m.geometry.bvh?.builder === 'builtin')).toBe(true);
+  expect(meshes.every(m => getGeometryBvh(m.geometry)?.builder === 'builtin')).toBe(true);
   expect(warning).toHaveBeenCalledOnce();
   expect(ControlledWorker.instances.map(w => w.sent.length)).toEqual([1, 1]);
   ControlledWorker.instances.forEach(w => expect(w.terminate).toHaveBeenCalledOnce());

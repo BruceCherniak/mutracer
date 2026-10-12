@@ -1088,11 +1088,6 @@ export default class Renderer {
     }
   }
 
-  /** Underlying WebGL wrapper, undefined before initialization or on WebGPU. @internal */
-  getWebGLRenderer() {
-    return this._webglRenderer;
-  }
-
   /** Whether the WebGPU backend is active (`false` for WebGL 2 or before initialization). */
   isUsingWebGPU() {
     return !!this._gpuDevice;

@@ -1,3 +1,4 @@
+import { getGeometryBvh } from './geometryBvh.js';
 import Geometry from '../scene/Geometry.js';
 import Mesh from '../scene/Mesh.js';
 import { materialIsEmissive } from './materialChanges.js';
@@ -6,7 +7,7 @@ import { getBvhBounds, updateMeshInstances, updateMeshInstanceTransforms } from 
 type Prepared = ReturnType<typeof updateMeshInstances>;
 const attributes = ['position', 'normal', 'tangent', 'color', 'uv', 'uv1', 'indices', 'materialIndex'] as const;
 function geometryState(geometry: Geometry): unknown[] {
-  return [geometry.version, geometry.dynamic, geometry.bvh, ...attributes.flatMap(key => {
+  return [geometry.version, geometry.dynamic, getGeometryBvh(geometry), ...attributes.flatMap(key => {
     const attribute = geometry[key];
     return [attribute?.array, attribute?.array.length, attribute?.itemSize];
   })];

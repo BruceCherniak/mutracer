@@ -1,3 +1,4 @@
+import { setGeometryBvh, getGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { Renderer, type PrepareSceneOptions, type PrepareSceneResult, type TinyBvhLayout } from '../../src/main';
 import Mesh from '../../src/scene/Mesh';
@@ -28,15 +29,15 @@ it('counts shared static geometry once, reports builder time and skips cached BL
 
 it('rebuilds static BLASes with new buffers while preserving dynamic geometry', async () => {
   const r = renderer(), a = mesh(), dynamic = mesh(); dynamic.geometry.dynamic = true;
-  dynamic.geometry.bvh = buildBLAS(dynamic.geometry);
-  const oldDynamic = dynamic.geometry.bvh;
-  await r.prepareScene([a, dynamic]); const old = a.geometry.bvh;
+  setGeometryBvh(dynamic.geometry, buildBLAS(dynamic.geometry));
+  const oldDynamic = getGeometryBvh(dynamic.geometry);
+  await r.prepareScene([a, dynamic]); const old = getGeometryBvh(a.geometry);
   const options: PrepareSceneOptions = {rebuild: true};
   const rebuilt = await r.prepareScene([a, dynamic], options);
   expect(rebuilt.geometryCount).toBe(1); expect(rebuilt.bvhTimeMs).toBeGreaterThan(0);
-  expect(a.geometry.bvh!.buffer).not.toBe(old!.buffer);
-  expect(dynamic.geometry.bvh).toBe(oldDynamic);
-  expect(new Uint8Array(a.geometry.bvh!.buffer)).toEqual(new Uint8Array(old!.buffer));
+  expect(getGeometryBvh(a.geometry)!.buffer).not.toBe(old!.buffer);
+  expect(getGeometryBvh(dynamic.geometry)).toBe(oldDynamic);
+  expect(new Uint8Array(getGeometryBvh(a.geometry)!.buffer)).toEqual(new Uint8Array(old!.buffer));
 });
 
 it.each(['bvh2', 'bvh4', 'bvh-gpu', 'cwbvh'] as TinyBvhLayout[])('passes %s to TinyBVH', async layout => {
@@ -44,18 +45,18 @@ it.each(['bvh2', 'bvh4', 'bvh-gpu', 'cwbvh'] as TinyBvhLayout[])('passes %s to T
   r.bvhBuilder = 'tinybvh'; r.bvhLayout = layout;
   const m = mesh(); await r.prepareScene([m]);
   expect(buildTinyBvh).toHaveBeenLastCalledWith(m.geometry, 0, undefined, layout, false);
-  expect(m.geometry.bvh?.layout).toBe(layout);
+  expect(getGeometryBvh(m.geometry)?.layout).toBe(layout);
 });
 
 it('keeps builtin geometry and Worker requests in bvh2 regardless of bvhLayout', async () => {
   const r = renderer(); r.bvhLayout = 'cwbvh';
   const main = mesh(); await r.prepareScene([main]);
-  expect(main.geometry.bvh?.layout).toBe('bvh2'); expect(buildTinyBvh).not.toHaveBeenCalled();
+  expect(getGeometryBvh(main.geometry)?.layout).toBe('bvh2'); expect(buildTinyBvh).not.toHaveBeenCalled();
   vi.stubGlobal('Worker', class {});
   const build = vi.spyOn(worker, 'buildBvhInWorker').mockImplementation(async (geometry) => buildBLAS(geometry));
   const other = mesh(); await r.prepareScene([other]);
   expect(build).toHaveBeenCalledWith(other.geometry, 0, undefined, 'builtin', 'bvh2', false, expect.any(worker.BvhWorkerPool));
-  expect(other.geometry.bvh?.layout).toBe('bvh2');
+  expect(getGeometryBvh(other.geometry)?.layout).toBe('bvh2');
 });
 
 it('reports monotonic progress ending at one and no progress for an empty call', async () => {
@@ -90,6 +91,6 @@ it('rejects invalid TinyBVH output internally and builds builtin during the same
   vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   const r = renderer(), m = mesh(); r.bvhBuilder = 'tinybvh';
   expect((await r.prepareScene([m])).geometryCount).toBe(1);
-  expect(m.geometry.bvh?.builder).toBe('builtin');
+  expect(getGeometryBvh(m.geometry)?.builder).toBe('builtin');
   expect((r as any)._tinyBvhUnavailable).toBe(true);
 });

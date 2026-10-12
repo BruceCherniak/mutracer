@@ -1,3 +1,4 @@
+import { getGeometryBvh, setGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import { afterEach, expect, it, vi } from 'vitest';
 import { BvhWorkerClient, BvhWorkerUnavailableError, type BvhBuildRequest } from '../../src/renderer/bvhWorkerClient';
 import { executeBvhBuild } from '../../src/renderer/bvhWorkerBuild';
@@ -88,7 +89,7 @@ it('falls back within the call when Worker construction is blocked', async () =>
     const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
     const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
     await renderer.prepareScene([mesh]);
-    expect(mesh.geometry.bvh?.builder).toBe('builtin');
+    expect(getGeometryBvh(mesh.geometry)?.builder).toBe('builtin');
     expect((renderer as any)._bvhWorkerUnavailable).toBe(true);
     expect(warning).toHaveBeenCalledOnce();
   } finally { warning.mockRestore(); }
@@ -106,9 +107,9 @@ it('prepares builtin renderer BLASes asynchronously when Workers are available',
   const geometry = createCubeGeometry();
   const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
   const build = renderer.prepareScene([new Mesh(geometry, new OpenPBRMaterial())]);
-  expect(geometry.bvh).toBeUndefined();
+  expect(getGeometryBvh(geometry)).toBeUndefined();
   await build;
-  expect(new Uint8Array(geometry.bvh!.buffer)).toEqual(new Uint8Array(buildBLAS(geometry).buffer));
+  expect(new Uint8Array(getGeometryBvh(geometry)!.buffer)).toEqual(new Uint8Array(buildBLAS(geometry).buffer));
 });
 
 it('falls back after Worker failure without retrying the same geometry every frame', async () => {
@@ -119,7 +120,7 @@ it('falls back after Worker failure without retrying the same geometry every fra
     const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
     const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
     await renderer.prepareScene([mesh]);
-    expect(mesh.geometry.bvh?.builder).toBe('builtin');
+    expect(getGeometryBvh(mesh.geometry)?.builder).toBe('builtin');
     expect((renderer as any)._bvhWorkerUnavailable).toBe(true);
     expect(warning).toHaveBeenCalledOnce();
     expect((renderer as any)._needsBVHPreparation([mesh])).toBe(false);
@@ -139,7 +140,7 @@ it('retries an input changed during Worker preparation instead of accepting the 
     mesh.geometry.markUpdated();
     finish(buildBLAS(mesh.geometry));
     await pending;
-    expect(mesh.geometry.bvh).toBeUndefined();
+    expect(getGeometryBvh(mesh.geometry)).toBeUndefined();
     expect((renderer as any)._needsBVHPreparation([mesh])).toBe(true);
   } finally { build.mockRestore(); }
 });
@@ -180,9 +181,9 @@ it('discards results when geometry, revision, or preparation settings change', a
       if (change === 'texture') material.displacementMap = new Texture({ data: new Uint8Array(64), width: 4, height: 4 });
       if (change === 'textureVersion') material.displacementMap.markUpdated();
       const newer = change === 'bvh' ? buildBLAS(target) : undefined;
-      target.bvh = newer;
+      setGeometryBvh(target, newer);
       finish(buildBLAS(target)); await pending;
-      expect(target.bvh).toBe(newer);
+      expect(getGeometryBvh(target)).toBe(newer);
     }
   } finally { build.mockRestore(); }
 });

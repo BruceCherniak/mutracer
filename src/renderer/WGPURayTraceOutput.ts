@@ -138,7 +138,7 @@ export class WGPURayTraceOutputPass {
     return this[`_${label}Texture`];
   }
 
-  _createTextures() {
+  private _createTextures() {
     const { _device: device, _width: width, _height: height } = this;
     const textureDescriptor: GPUTextureDescriptor = {
       size: {
@@ -186,7 +186,7 @@ export class WGPURayTraceOutputPass {
     });
   }
 
-  _updateBindGroups() {
+  private _updateBindGroups() {
     const device = this._device;
     this._uniformBindGroup = device.createBindGroup({
       layout: this._pipeline.getBindGroupLayout(1),
@@ -207,7 +207,7 @@ export class WGPURayTraceOutputPass {
     });
   }
 
-  _updatePipeline() {
+  private _updatePipeline() {
     if (!this._needsUpdatePipeline) {
       return;
     }

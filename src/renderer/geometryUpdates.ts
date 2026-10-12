@@ -1,7 +1,8 @@
+import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
 import { writeMaterialIndices } from './materialIndices.js';
 import { isDeformationUpdate } from '../scene/geometryChanges.js';
 import Geometry from '../scene/Geometry.js';
-import { buildBLAS, refitBLAS } from './bvhAccel.js';
+import { buildBLAS, refitBLAS, type FlattendBVH } from './bvhAccel.js';
 import { getBvhBounds, updateMeshInstances } from './prepareMeshBVH.js';
 import Mesh from '../scene/Mesh.js';
 
@@ -61,10 +62,10 @@ export function geometryTopologyChanged(prepared: Prepared | undefined, source: 
 /** Refits/rebuilds changed BLASes and refreshes all shared instances' cached bounds. */
 export function updatePreparedGeometries(prepared: Prepared, changed: ReadonlySet<Geometry>) {
   const vertices: { first: number; count: number; topologyChanged: boolean; deformationOnly: boolean }[] = [];
-  const blases: { blas: NonNullable<Geometry['bvh']>; offset: number }[] = [];
+  const blases: { blas: FlattendBVH; offset: number }[] = [];
   const meshes = new Set<Mesh>();
   let resized = false, relocated = false, offset = 0;
-  const updated = new Map<Geometry, NonNullable<Geometry['bvh']>>();
+  const updated = new Map<Geometry, FlattendBVH>();
   prepared.geometries.forEach((geometry, i) => {
     const source = indices(prepared).prepared.get(geometry)?.[0].mesh.geometry ?? geometry;
     const previous = prepared.blases[i].bvh;
@@ -74,13 +75,13 @@ export function updatePreparedGeometries(prepared: Prepared, changed: ReadonlySe
       const deformationOnly = !topologyChanged && isDeformationUpdate(source);
       let bvh = updated.get(source);
       if (!bvh) {
-        bvh = source.bvh;
+        bvh = getGeometryBvh(source);
         if (topologyChanged || !bvh || source.dynamic && bvh.builder !== 'builtin' || !refitBLAS(bvh, source)) {
           bvh = buildBLAS(source);
         }
-        source.bvh = bvh; updated.set(source, bvh);
+        setGeometryBvh(source, bvh); updated.set(source, bvh);
       }
-      geometry.bvh = bvh; geometry.version = source.version;
+      setGeometryBvh(geometry, bvh); geometry.version = source.version;
       prepared.blases[i].bvh = bvh;
       resized ||= previous.buffer.byteLength !== bvh.buffer.byteLength;
       relocated ||= previous.buffer.byteLength !== bvh.buffer.byteLength || previous.layout !== bvh.layout;

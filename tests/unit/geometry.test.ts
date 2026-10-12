@@ -1,3 +1,4 @@
+import { packMaterialIndexAndWeightToInt, unpackMaterialIndexAndWeightFromInt } from '../../src/renderer/materialIndices.js';
 import { mat4, vec3 } from '../../src/math';
 import { describe, expect, it } from 'vitest';
 import Geometry, { Attribute } from '../../src/scene/Geometry';
@@ -20,8 +21,8 @@ describe('Geometry attributes', () => {
   });
 
   it('round-trips packed material weights', () => {
-    const packed = Geometry.packMaterialIndexAndWeightToInt(13, 0.4);
-    const [index, weight] = Geometry.unpackMaterialIndexAndWeightFromInt(packed);
+    const packed = packMaterialIndexAndWeightToInt(13, 0.4);
+    const [index, weight] = unpackMaterialIndexAndWeightFromInt(packed);
     expect(index).toBe(13);
     expect(weight).toBeCloseTo(0.4, 2);
   });

@@ -1,4 +1,4 @@
-import { mat3, vec2, vec3 } from '../math.js';
+import type { vec2 } from '../math.js';
 import { ColorRGB } from '../types.js';
 import SceneNode from './SceneNode.js';
 import Texture from './Texture.js';
@@ -36,27 +36,9 @@ export default class RectLight extends SceneNode {
     this.intensity = intensity ?? 1;
   }
 
-  /** @internal */
-  static getUOrV(light: RectLight, uOrV: 0 | 1) {
-    // On the xy plane and point to negative z
-    const ret = vec3.fromValues(0, 0, 0);
-    // Inverse the v
-    ret[uOrV] = (uOrV ? -1 : 1) * light.size[uOrV];
-    return vec3.transformMat3(
-      ret,
-      ret,
-      mat3.fromMat4([] as any as mat3.Mat3Array, light.matrixWorld)
-    );
-  }
 
-  /** @internal */
-  static getPosition(light: RectLight) {
-    const m = light.matrixWorld;
-    return vec3.fromValues(m[12], m[13], m[14]);
-  }
 
-  /** @internal */
-  static getArea(light: RectLight) {
-    return light.size[0] * light.size[1];
-  }
+
+
+
 }

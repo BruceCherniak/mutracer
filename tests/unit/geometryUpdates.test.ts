@@ -1,3 +1,4 @@
+import { setGeometryBvh, getGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import { expect, it } from 'vitest';
 import Texture from '../../src/scene/Texture';
 import Mesh from '../../src/scene/Mesh';
@@ -10,25 +11,25 @@ import Renderer from '../../src/Renderer';
 
 it('uses builtin BVH2 for dynamic geometry, even with an incompatible precomputed layout', async () => {
   const g = createCubeGeometry(); g.dynamic = true;
-  g.bvh = {buffer:new ArrayBuffer(64),maxDepth:1,layout:'bvh4',builder:'tinybvh'};
+  setGeometryBvh(g, {buffer:new ArrayBuffer(64),maxDepth:1,layout:'bvh4',builder:'tinybvh'});
   const mesh = new Mesh(g, new OpenPBRMaterial()); updateMeshInstances([mesh]);
-  expect(g.bvh.layout).toBe('bvh2'); expect(g.bvh.builder).toBe('builtin');
+  expect(getGeometryBvh(g)!.layout).toBe('bvh2'); expect(getGeometryBvh(g)!.builder).toBe('builtin');
   const renderer = new Renderer({canvas: {width: 1, height: 1} as HTMLCanvasElement});
   renderer.bvhBuilder = 'tinybvh'; renderer.bvhLayout = 'cwbvh';
   await renderer.prepareScene([mesh], {rebuild: true});
   updateMeshInstances([mesh]);
-  expect(g.bvh.layout).toBe('bvh2'); expect(g.bvh.builder).toBe('builtin');
+  expect(getGeometryBvh(g)!.layout).toBe('bvh2'); expect(getGeometryBvh(g)!.builder).toBe('builtin');
 });
 it('rebuilds dynamic BLASes after total node area exceeds the construction baseline', () => {
   const g = createCubeGeometry(); g.dynamic = true;
   const prepared = updateMeshInstances([new Mesh(g, new OpenPBRMaterial())]);
-  const old = g.bvh!, baseline = old.buildSurfaceArea!;
+  const old = getGeometryBvh(g)!, baseline = old.buildSurfaceArea!;
   for (let i = 0; i < g.position.array.length; i++) g.position.array[i] *= .99;
   expect(refitBLAS(old, g)).toBe(true); expect(old.buildSurfaceArea).toBe(baseline);
   for (let i = 0; i < g.position.array.length; i++) g.position.array[i] *= Math.sqrt(DYNAMIC_BLAS_REBUILD_RATIO) + .1;
   g.markUpdated(); const update = updatePreparedGeometries(prepared, new Set([g]));
-  expect(g.bvh).not.toBe(old); expect(update.blases).toHaveLength(1);
-  expect(g.bvh!.buildSurfaceArea).toBeGreaterThan(baseline * DYNAMIC_BLAS_REBUILD_RATIO);
+  expect(getGeometryBvh(g)).not.toBe(old); expect(update.blases).toHaveLength(1);
+  expect(getGeometryBvh(g)!.buildSurfaceArea).toBeGreaterThan(baseline * DYNAMIC_BLAS_REBUILD_RATIO);
 });
 it('updates shared geometry regions and every instance bound without merging untouched geometry', () => {
   const g = createCubeGeometry(), other = createCubeGeometry(), m = new OpenPBRMaterial();
@@ -46,11 +47,11 @@ it('updates shared geometry regions and every instance bound without merging unt
 });
 it('rebuilds an edited index stream and detects BLAS relocation without remerging attributes', () => {
   const g = createCubeGeometry(), mesh = new Mesh(g,new OpenPBRMaterial());
-  const prepared = updateMeshInstances([mesh]), old = g.bvh;
+  const prepared = updateMeshInstances([mesh]), old = getGeometryBvh(g);
   const merged = prepared.geometry;
   g.indices.array.fill(0); g.markUpdated();
   const update = updatePreparedGeometries(prepared,new Set([g]));
-  expect(g.bvh).not.toBe(old); expect(update.resized).toBe(true); expect(update.relocated).toBe(true);
+  expect(getGeometryBvh(g)).not.toBe(old); expect(update.resized).toBe(true); expect(update.relocated).toBe(true);
   expect(prepared.geometry).toBe(merged); expect(merged.indices.array.every(i => i === 0)).toBe(true);
 });
 it('requires full preparation when displacement is added', () => {
@@ -62,13 +63,13 @@ it('requires full preparation when displacement is added', () => {
 
 it('distinguishes vertex edits from index edits and retains material-index packing', () => {
   const g = createCubeGeometry(), prepared = updateMeshInstances([new Mesh(g, new OpenPBRMaterial())]);
-  const previous = g.bvh, indices = prepared.geometry.indices.array.slice();
+  const previous = getGeometryBvh(g), indices = prepared.geometry.indices.array.slice();
   prepared.geometry.materialIndex!.array.fill(123);
   g.position.array[0] += .01;
   expect(g.markVerticesUpdated()).toBe(g);
   expect(g.version).toBe(1); expect(g.topologyVersion).toBe(0);
   const update = updatePreparedGeometries(prepared, new Set([g]));
-  expect(g.bvh).toBe(previous); expect(update.vertices[0].topologyChanged).toBe(false);
+  expect(getGeometryBvh(g)).toBe(previous); expect(update.vertices[0].topologyChanged).toBe(false);
   expect(prepared.geometry.indices.array).toEqual(indices);
   expect(prepared.geometry.materialIndex!.array.every(v => v === 123)).toBe(true);
   g.indices.array.fill(0); expect(g.markUpdated()).toBe(g);

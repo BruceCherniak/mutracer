@@ -30,8 +30,5 @@ export default class SphereLight {
     }
   }
 
-  /** @internal */
-  static getArea(light: SphereLight) {
-    return 4 * Math.PI * light.radius ** 2;
-  }
+
 }

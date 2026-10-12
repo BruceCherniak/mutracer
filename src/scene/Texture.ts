@@ -17,8 +17,6 @@ export default class Texture {
   image: HTMLImageElement | HTMLCanvasElement | TextureDataSource;
   /** Optional stable identity of the texture in an adapter such as Three.js. */
   source?: object;
-  /** @internal */
-  needsUpdate: boolean = true;
   /** Incremented by `markUpdated()`. */
   version = 0;
 
@@ -42,7 +40,6 @@ export default class Texture {
    */
   markUpdated() {
     this.version++;
-    this.needsUpdate = true;
     return this;
   }
 }

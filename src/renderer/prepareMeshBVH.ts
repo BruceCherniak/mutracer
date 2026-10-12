@@ -1,3 +1,5 @@
+import { packMaterialIndexAndWeightToInt } from './materialIndices.js';
+import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
 import { writeMaterialIndices } from './materialIndices.js';
 import { mat4, vec2, vec3 } from '../math.js';
 import Geometry, { Attribute } from '../scene/Geometry.js';
@@ -31,7 +33,7 @@ function computeGeometryBounds(geometry: Geometry) {
 }
 
 export function getBvhBounds(geometry: Geometry) {
-  const bvh = geometry.bvh!;
+  const bvh = getGeometryBvh(geometry)!;
   const floats = new Float32Array(bvh.buffer);
   if (bvh.layout === 'bvh4') {
     return [
@@ -150,7 +152,7 @@ export function updateMeshInstanceTransforms(
       blasIndex,
       transform: mesh.matrixWorld,
       materialsIndices: materialIndices.map((idx) =>
-        Geometry.packMaterialIndexAndWeightToInt(idx, 1)
+        packMaterialIndexAndWeightToInt(idx, 1)
       ),
       displacementScale
     }) satisfies TLASInstance;
@@ -697,7 +699,7 @@ export function getMeshBlasInput(mesh: Mesh) {
 /** Whether a static mesh still needs a BLAS before it can be rendered. */
 export function meshNeedsStaticBvh(mesh: Mesh) {
   return !!mesh.geometry.position?.array.length && !mesh.geometry.dynamic &&
-    !getPreparedMeshGeometry(mesh).bvh;
+    !getGeometryBvh(getPreparedMeshGeometry(mesh));
 }
 
 /** Capture inputs whose changes invalidate an asynchronous BLAS result. */
@@ -707,7 +709,7 @@ export function captureMeshBlasSnapshot(mesh: Mesh, target: Geometry) {
     geometry: mesh.geometry,
     version: mesh.geometry.version,
     cacheKey: getPreparedMeshGeometryCacheKey(mesh),
-    bvh: target.bvh,
+    bvh: getGeometryBvh(target),
     displacementMap,
     displacementScale: getMeshDisplacementScale(mesh),
     displacementTextureKey: displacementMap
@@ -720,7 +722,7 @@ export function meshBlasSnapshotIsCurrent(
   mesh: Mesh, target: Geometry, snapshot: ReturnType<typeof captureMeshBlasSnapshot>
 ) {
   return mesh.geometry === snapshot.geometry && mesh.geometry.version === snapshot.version &&
-    getPreparedMeshGeometryCacheKey(mesh) === snapshot.cacheKey && target.bvh === snapshot.bvh &&
+    getPreparedMeshGeometryCacheKey(mesh) === snapshot.cacheKey && getGeometryBvh(target) === snapshot.bvh &&
     getMeshDisplacementMap(mesh) === snapshot.displacementMap &&
     getMeshDisplacementScale(mesh) === snapshot.displacementScale &&
     (!snapshot.displacementMap || getDisplacementTextureDataCacheKey(snapshot.displacementMap) ===
@@ -730,10 +732,10 @@ export function meshBlasSnapshotIsCurrent(
 function prepareMeshGeometryBvh(mesh: Mesh) {
   const geometry = getMeshBlasGeometry(mesh);
   const displacementScale = getMeshDisplacementMap(mesh) ? getMeshDisplacementScale(mesh) : 0;
-  if (geometry.dynamic && geometry.bvh?.builder !== 'builtin') geometry.bvh = undefined;
-  if (!geometry.bvh) {
+  if (geometry.dynamic && getGeometryBvh(geometry)?.builder !== 'builtin') setGeometryBvh(geometry, undefined);
+  if (!getGeometryBvh(geometry)) {
     const { trianglesDisplacement } = getMeshBlasInput(mesh);
-    geometry.bvh = buildBLAS(geometry, displacementScale, trianglesDisplacement);
+    setGeometryBvh(geometry, buildBLAS(geometry, displacementScale, trianglesDisplacement));
   }
   return { geometry, displacementScale };
 }
@@ -765,11 +767,11 @@ export function updateMeshInstances(meshes: Mesh[]) {
         mesh.materials.length > 1 &&
         geometry.materialIndex
       ) {
-        const bvh = geometry.bvh;
+        const bvh = getGeometryBvh(geometry);
         // TODO geometry with multiple materials doesn't allow sharing between instances.
         // Need to clone the geometry.
         geometry = new Geometry(geometry);
-        geometry.bvh = bvh;
+        setGeometryBvh(geometry, bvh);
         geoIdx = undefined;
       }
 
@@ -794,7 +796,7 @@ export function updateMeshInstances(meshes: Mesh[]) {
         blasIndex: geoIdx!,
         transform: mesh.matrixWorld,
         materialsIndices: materialsIndices.map((idx) =>
-          Geometry.packMaterialIndexAndWeightToInt(idx, 1)
+          packMaterialIndexAndWeightToInt(idx, 1)
         ),
         displacementScale
       } satisfies TLASInstance;
@@ -840,7 +842,7 @@ export function updateMeshInstances(meshes: Mesh[]) {
     instanceBindings,
     emissiveBindings,
     blases: geometries.map((geo) => ({
-      bvh: geo.bvh!,
+      bvh: getGeometryBvh(geo)!,
       verticesCount: geo.vertexCount,
       trainglesCount: geo.indices.array.length / 3
     }))

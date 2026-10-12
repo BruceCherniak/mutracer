@@ -69,3 +69,5 @@ Call `sync.dispose()` and `renderer.dispose()` when finished.
 - Denoise status: intermediate batches stay RENDERING; DENOISING and FINISHED describe the final image at maxSamples. See [denoising](./docs/denoising.md).
 
 - Geometry: `new Geometry({ position })` generates sequential indices and normals; inspect `vertexCount` / `triangleCount`. See [getting started](./docs/getting-started.md).
+
+- Internal resources: geometry BVHs and light/material packing are private; use `prepareScene(scene, { rebuild: true })` for explicit BVH rebuilding. See [BVH](./docs/bvh.md).

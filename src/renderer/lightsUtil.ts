@@ -1,3 +1,4 @@
+import { mat3, vec3 } from '../math.js';
 import DirectionalLight from '../scene/DirectionalLight.js';
 import SphereLight from '../scene/SphereLight.js';
 import RectLight from '../scene/RectLight.js';
@@ -32,12 +33,12 @@ export function packLightsToBuffer(
     const off = i * PIXELS_PER_LIGHT;
     packVec3(
       off,
-      light.type === 'RectLight' ? RectLight.getPosition(light) : light.position
+      light.type === 'RectLight' ? getRectLightPosition(light) : light.position
     );
     data[off * 4 + 3] = selectionPmfs[i] ?? 1 / Math.max(numLights, 1);
     // emission
     const emissionScale =
-      light.type === 'SpotLight' ? SpotLight.getRadiance(light) : intensity;
+      light.type === 'SpotLight' ? getSpotLightRadiance(light) : intensity;
     packVec3(off + 1, [
       color[0] * emissionScale,
       color[1] * emissionScale,
@@ -45,19 +46,19 @@ export function packLightsToBuffer(
     ]);
     data[(off + 1) * 4 + 3] = selectionCdfs[i] ?? (i + 1) / numLights;
     if (light.type === 'RectLight') {
-      packVec3(off + 2, RectLight.getUOrV(light, 0));
+      packVec3(off + 2, getRectLightUOrV(light, 0));
       data[(off + 2) * 4 + 3] = light.spread;
-      packVec3(off + 3, RectLight.getUOrV(light, 1));
+      packVec3(off + 3, getRectLightUOrV(light, 1));
       data[(off + 3) * 4 + 3] = texturesIndices[i];
       packVec3(off + 4, [
         light.spread,
-        RectLight.getArea(light),
+        getRectLightArea(light),
         CONSTANT_RECT_LIGHT
       ]);
     } else if (light.type === 'SphereLight') {
       packVec3(off + 4, [
         light.radius,
-        SphereLight.getArea(light),
+        getSphereLightArea(light),
         CONSTANT_SPHERE_LIGHT
       ]);
     } else if (light.type === 'SpotLight') {
@@ -70,7 +71,7 @@ export function packLightsToBuffer(
       data[(off + 3) * 4 + 3] = iesProfileTexelOffsets[i] ?? -1;
       packVec3(off + 4, [
         light.radius,
-        SpotLight.getArea(light),
+        getSpotLightArea(light),
         CONSTANT_SPOT_LIGHT
       ]);
     } else if (light.type === 'DirectionalLight') {
@@ -79,4 +80,49 @@ export function packLightsToBuffer(
   }
 
   return data;
+}
+
+export function getRectLightUOrV(light: RectLight, uOrV: 0 | 1) {
+    // On the xy plane and point to negative z
+    const ret = vec3.fromValues(0, 0, 0);
+    // Inverse the v
+    ret[uOrV] = (uOrV ? -1 : 1) * light.size[uOrV];
+    return vec3.transformMat3(
+      ret,
+      ret,
+      mat3.fromMat4([] as any as mat3.Mat3Array, light.matrixWorld)
+    );
+}
+
+export function getRectLightPosition(light: RectLight) {
+    const m = light.matrixWorld;
+    return vec3.fromValues(m[12], m[13], m[14]);
+}
+
+export function getRectLightArea(light: RectLight) {
+    return light.size[0] * light.size[1];
+}
+
+export function getSphereLightArea(light: SphereLight) {
+    return 4 * Math.PI * light.radius ** 2;
+}
+
+export function getSpotLightArea(light: SpotLight) {
+    return 4 * Math.PI * light.radius ** 2;
+}
+
+export function getSpotLightRadiance(light: SpotLight) {
+    // A zero-radius spot is a point emitter. Its stored emission is luminous
+    // intensity (cd), and the shader applies inverse-square attenuation.
+    if (light.radius === 0) return light.intensity;
+    return light.intensity / (Math.PI * light.radius ** 2);
+}
+
+export function getSpotLightShapingFluxFactor(light: SpotLight) {
+    const cosConeAngle = Math.cos((light.outerAngle * Math.PI) / 180);
+    const softness = Math.min(
+      1,
+      Math.max(0, 1 - light.innerAngle / light.outerAngle)
+    );
+    return (1 - cosConeAngle) * (1 - 0.5 * softness) * 0.5;
 }

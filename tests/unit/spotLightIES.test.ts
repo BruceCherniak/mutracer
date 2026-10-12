@@ -1,3 +1,4 @@
+import { getSpotLightRadiance } from '../../src/renderer/lightsUtil.js';
 import { describe, expect, it } from 'vitest';
 import SpotLight from '../../src/scene/SpotLight';
 import { IESParseError, parseIESProfile } from '../../src/scene/IESProfile';
@@ -79,7 +80,7 @@ describe('spot light and IES semantics', () => {
 
   it('keeps inverse-square far-field behavior and cone shaping power', () => {
     const light = new SpotLight([0, 0, 0], [0, 0, -1], [1, 1, 1], 40, 0.01, 20, 30);
-    const farIrradiance = (distance: number) => SpotLight.getRadiance(light) / sphereSolidAnglePdf(distance, light.radius);
+    const farIrradiance = (distance: number) => getSpotLightRadiance(light) / sphereSolidAnglePdf(distance, light.radius);
     expect(farIrradiance(4) / farIrradiance(8)).toBeCloseTo(4, 3);
     expect(estimateAnalyticLightPower(light)).toBeGreaterThan(0);
     expect(Number.isFinite(estimateAnalyticLightPower(light))).toBe(true);
@@ -95,7 +96,7 @@ describe('spot light and IES semantics', () => {
       20,
       30
     );
-    expect(SpotLight.getRadiance(light)).toBe(40);
+    expect(getSpotLightRadiance(light)).toBe(40);
     const packed = packLightsToBuffer([light], [-1], [1], [1]);
     expect(Array.from(packed.slice(4, 7))).toEqual([40, 40, 40]);
     expect(packed.every(Number.isFinite)).toBe(true);

@@ -1,3 +1,4 @@
+import { getRectLightArea, getSphereLightArea } from '../../src/renderer/lightsUtil.js';
 import { mat4 } from '../../src/math';
 import { describe, expect, it } from 'vitest';
 import DirectionalLight from '../../src/scene/DirectionalLight';
@@ -7,9 +8,9 @@ import { packLightsToBuffer } from '../../src/renderer/lightsUtil';
 
 describe('analytic lights', () => {
   it('computes emitter areas', () => {
-    expect(RectLight.getArea(new RectLight([2, 4]))).toBe(8);
+    expect(getRectLightArea(new RectLight([2, 4]))).toBe(8);
     expect(
-      SphereLight.getArea(new SphereLight([0, 0, 0], undefined, undefined, 2))
+      getSphereLightArea(new SphereLight([0, 0, 0], undefined, undefined, 2))
     ).toBeCloseTo(16 * Math.PI);
   });
 

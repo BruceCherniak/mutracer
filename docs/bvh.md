@@ -141,7 +141,7 @@ built-in builder.
 some scenes, which can make rendering noticeably faster, but build three to
 five times slower.
 
-BLASes are stored on the geometry (`geometry.bvh`): share one `Geometry`
+BLASes are cached internally by geometry: share one `Geometry`
 between meshes to share its BLAS.
 
 ## Layouts
@@ -158,7 +158,7 @@ layouts work on WebGPU and WebGL 2.
 
 The built-in builder, dynamic geometry and TinyBVH displacement bounds use
 `'bvh2'`. TinyBVH falls back to `'bvh-gpu'` when CWBVH cannot represent a
-mesh; `geometry.bvh.layout` reports the actual layout.
+mesh. The geometry BVH cache is internal.
 
 ## Deployment
 
@@ -193,3 +193,5 @@ jsDelivr copy, then falls back to the built-in builder. See
 `src/tinybvh/tinybvh.wasm` is checked in. To rebuild it, install Emscripten and
 run `npm run build:tinybvh` (or `npm run build:tinybvh:windows`). See
 [`src/tinybvh/README.md`](../src/tinybvh/README.md).
+
+BVH storage is internal. To rebuild using the current construction settings, call `await renderer.prepareScene(scene, { rebuild: true })`; geometry exposes no BVH field.

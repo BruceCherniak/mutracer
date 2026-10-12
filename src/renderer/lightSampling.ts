@@ -1,3 +1,4 @@
+import { getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getSpotLightShapingFluxFactor } from './lightsUtil.js';
 import { localMaterialIndex } from './materialIndices.js';
 import { TexturePixelSource, vec3 } from '../math.js';
 import DirectionalLight from '../scene/DirectionalLight.js';
@@ -67,26 +68,26 @@ export function estimateAnalyticLightPower(light: AnalyticLight) {
   const emittedLuminance = colorLuminance(light.color) * light.intensity;
   if (!(emittedLuminance > 0)) return 0;
   if (light.type === 'RectLight') {
-    return emittedLuminance * Math.PI * Math.max(RectLight.getArea(light), 0);
+    return emittedLuminance * Math.PI * Math.max(getRectLightArea(light), 0);
   }
   if (light.type === 'SphereLight') {
     if (light.radius === 0) return emittedLuminance * 4 * Math.PI;
-    return emittedLuminance * Math.PI * Math.max(SphereLight.getArea(light), 0);
+    return emittedLuminance * Math.PI * Math.max(getSphereLightArea(light), 0);
   }
   if (light.type === 'SpotLight') {
     const radianceLuminance =
-      colorLuminance(light.color) * SpotLight.getRadiance(light);
+      colorLuminance(light.color) * getSpotLightRadiance(light);
     // The selection power is an approximation and ignores the IES profile.
     if (light.radius === 0) {
       return emittedLuminance *
         4 * Math.PI *
-        SpotLight.getShapingFluxFactor(light);
+        getSpotLightShapingFluxFactor(light);
     }
     return (
       radianceLuminance *
       Math.PI *
-      SpotLight.getArea(light) *
-      SpotLight.getShapingFluxFactor(light)
+      getSpotLightArea(light) *
+      getSpotLightShapingFluxFactor(light)
     );
   }
   // A directional light has no finite emitting area. 4π keeps its heuristic

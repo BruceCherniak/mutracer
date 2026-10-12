@@ -1,9 +1,10 @@
+import { getRectLightUOrV, getRectLightArea } from '../../src/renderer/lightsUtil.js';
+import { setGeometryBvh, getGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
 import { fromTHREECamera, fromTHREEScene, THREESceneSync } from '../../src/util/fromTHREE';
 import Camera from '../../src/scene/Camera';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
-import RectLight from '../../src/scene/RectLight';
 import { parseIESProfile } from '../../src/scene/IESProfile';
 
 describe('Three.js scene conversion', () => {
@@ -705,9 +706,9 @@ describe('Three.js scene conversion', () => {
       expect(Math.abs(x.clone().cross(y).length() - 1)).toBeLessThanOrEqual(doubleRoundoff);
       // Renderer sampling vectors are packed through Float32Array. Verify the
       // actual packed geometry against the PDF area within float32 roundoff.
-      const u = new THREE.Vector3(...RectLight.getUOrV(result, 0));
-      const v = new THREE.Vector3(...RectLight.getUOrV(result, 1));
-      expect(Math.abs(u.cross(v).length() / RectLight.getArea(result) - 1)).toBeLessThanOrEqual(16 * 2 ** -23);
+      const u = new THREE.Vector3(...getRectLightUOrV(result, 0));
+      const v = new THREE.Vector3(...getRectLightUOrV(result, 1));
+      expect(Math.abs(u.cross(v).length() / getRectLightArea(result) - 1)).toBeLessThanOrEqual(16 * 2 ** -23);
       expect(matrix.slice(12, 15)).toEqual(world.slice(12, 15));
       expect(rect.quaternion.toArray()).toEqual(raw);
       expect(rect.matrix.toArray()).toEqual(local); expect(rect.matrixWorld.toArray()).toEqual(world);
@@ -932,17 +933,17 @@ describe('Three.js scene conversion', () => {
     const sync = new THREESceneSync(scene);
     const first = sync.scene;
     const firstGeometry = first.meshes[0].geometry;
-    first.meshes[0].geometry.bvh = {
+    setGeometryBvh(first.meshes[0].geometry, {
       buffer: new ArrayBuffer(32),
       maxDepth: 1
-    };
+    });
     mesh.position.x = 2;
     mesh.updateMatrixWorld(true);
     sync.update();
     const second = sync.scene;
 
     expect(second.meshes[0].geometry).toBe(firstGeometry);
-    expect(second.meshes[0].geometry.bvh).toBe(first.meshes[0].geometry.bvh);
+    expect(getGeometryBvh(second.meshes[0].geometry)).toBe(getGeometryBvh(first.meshes[0].geometry));
     expect(second.meshes[0].matrixWorld[12]).toBe(2);
   });
 

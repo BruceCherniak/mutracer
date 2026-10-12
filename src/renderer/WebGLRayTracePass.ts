@@ -1,3 +1,4 @@
+import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
 import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling.js';
 import depthQueryFrag from './glsl/depthQuery.frag.js';
 import { readFloatPixelsAsync } from './WebGLReadback.js';
@@ -477,10 +478,10 @@ class WebGLRayTracePass {
           Math.abs(item.materials[0].displacementScale) > 1e-6;
         if (
           usesDisplacement || geometryTopologyChanged(this._preparedMeshData, item.geometry) ||
-          !item.geometry.bvh ||
-          !refitBLAS(item.geometry.bvh, item.geometry)
+          !getGeometryBvh(item.geometry) ||
+          !refitBLAS(getGeometryBvh(item.geometry)!, item.geometry)
         ) {
-          item.geometry.bvh = undefined;
+          setGeometryBvh(item.geometry, undefined);
         }
       }
     });

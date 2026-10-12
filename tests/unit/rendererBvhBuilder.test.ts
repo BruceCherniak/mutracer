@@ -1,3 +1,4 @@
+import { getGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import { beforeEach, expect, it, vi } from 'vitest';
 import Renderer from '../../src/Renderer';
 import Mesh from '../../src/scene/Mesh';
@@ -22,7 +23,7 @@ it('builds with the built-in builder by default without loading TinyBVH', async 
   expect(renderer.bvhBuilder).toBe('builtin');
   const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
   await renderer.prepareScene([mesh]);
-  expect(mesh.geometry.bvh?.builder).toBe('builtin');
+  expect(getGeometryBvh(mesh.geometry)?.builder).toBe('builtin');
   expect(buildTinyBvh).not.toHaveBeenCalled();
 });
 

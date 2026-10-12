@@ -1,3 +1,4 @@
+import { getSphereLightArea, getSpotLightArea, getSpotLightRadiance } from '../../src/renderer/lightsUtil.js';
 import { describe, expect, it } from 'vitest';
 import {
   buildLightAliasTable,
@@ -62,12 +63,12 @@ describe('power-weighted light sampling', () => {
       10,
       30
     );
-    expect(SphereLight.getArea(point)).toBe(0);
-    expect(SpotLight.getArea(spot)).toBe(0);
-    expect(SpotLight.getRadiance(spot)).toBe(12);
+    expect(getSphereLightArea(point)).toBe(0);
+    expect(getSpotLightArea(spot)).toBe(0);
+    expect(getSpotLightRadiance(spot)).toBe(12);
     expect(estimateAnalyticLightPower(point)).toBeGreaterThan(0);
     expect(estimateAnalyticLightPower(spot)).toBeGreaterThan(0);
-    expect(Number.isFinite(SpotLight.getRadiance(spot))).toBe(true);
+    expect(Number.isFinite(getSpotLightRadiance(spot))).toBe(true);
     expect(sampleLight).toContain('light.radiusOrSpread <= 0.0');
     expect(sampleLight).toContain('centerDistance * centerDistance');
   });

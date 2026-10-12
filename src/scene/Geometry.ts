@@ -1,6 +1,5 @@
 import { generateVertexNormals } from '../util/geometry.js';
 import { vec3 } from '../math.js';
-import { FlattendBVH } from '../renderer/bvhAccel.js';
 
 type AttributeData = Float32Array | Uint16Array | Uint32Array | Int32Array;
 export class Attribute<T extends AttributeData = AttributeData> {
@@ -90,9 +89,6 @@ export default class Geometry {
   /** Optional per-vertex raw material indices, itemSize 1. All three triangle corners must match. Default undefined selects material 0. */
   materialIndex?: Attribute<Int32Array>;
 
-  /** Bottom-level BVH, built automatically before rendering. @internal */
-  bvh?: FlattendBVH;
-
   /** Local-space bounds in scene units; initial min/max are `[0, 0, 0]`. */
   boundingBox = {
     min: vec3.create(),
@@ -147,13 +143,7 @@ export default class Geometry {
     return this.indices.array.length / 3;
   }
 
-  /** Packs a material index and 8-bit weight for internal buffers. @internal */
-  static packMaterialIndexAndWeightToInt(index: number, weight: number) {
-    return Math.round(weight * 255) + (index << 8);
-  }
 
-  /** Unpacks an internal material index and weight. @internal */
-  static unpackMaterialIndexAndWeightFromInt(int: number) {
-    return [int >> 8, (int & 0xff) / 255];
-  }
+
+
 }

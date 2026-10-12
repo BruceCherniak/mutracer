@@ -23,6 +23,14 @@ export function writeMaterialIndices(geometry: Geometry, globalIndices: number[]
   if (!geometry.materialIndex && !packDefault) return;
   for (let vertex = 0; vertex < count; vertex++) {
     const local = localMaterialIndex(geometry, vertex, globalIndices.length);
-    target[(vertexOffset + vertex) * 4] = Geometry.packMaterialIndexAndWeightToInt(globalIndices[local] ?? 0, 1);
+    target[(vertexOffset + vertex) * 4] = packMaterialIndexAndWeightToInt(globalIndices[local] ?? 0, 1);
   }
+}
+
+export function packMaterialIndexAndWeightToInt(index: number, weight: number) {
+    return Math.round(weight * 255) + (index << 8);
+}
+
+export function unpackMaterialIndexAndWeightFromInt(int: number) {
+    return [int >> 8, (int & 0xff) / 255];
 }

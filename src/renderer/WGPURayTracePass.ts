@@ -1,3 +1,5 @@
+import { getRectLightUOrV, getRectLightPosition, getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance } from './lightsUtil.js';
+import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
 import { SHADOW_CATCHER_ACCUMULATION_BYTES } from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
 import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling.js';
 import { DEPTH_SAMPLE_COUNT, packDepthSampleArea, unpackDepthSamples, type DepthSampleArea } from './depthQuery.js';
@@ -235,27 +237,27 @@ export function packAnalyticsLightsToBuffer(
     const off = i * PIXELS_PER_LIGHT;
     packVec3(
       off,
-      light.type === 'RectLight' ? RectLight.getPosition(light) : light.position
+      light.type === 'RectLight' ? getRectLightPosition(light) : light.position
     );
     data[off * 4 + 3] = lightTypeConstants[light.type];
     // emission
     const emissionScale =
-      light.type === 'SpotLight' ? SpotLight.getRadiance(light) : intensity;
+      light.type === 'SpotLight' ? getSpotLightRadiance(light) : intensity;
     packVec3(off + 1, [
       color[0] * emissionScale,
       color[1] * emissionScale,
       color[2] * emissionScale
     ]);
     if (light.type === 'RectLight') {
-      data[(off + 1) * 4 + 3] = RectLight.getArea(light);
-      packVec3(off + 2, RectLight.getUOrV(light, 0));
+      data[(off + 1) * 4 + 3] = getRectLightArea(light);
+      packVec3(off + 2, getRectLightUOrV(light, 0));
       data[(off + 2) * 4 + 3] = light.spread;
-      packVec3(off + 3, RectLight.getUOrV(light, 1));
+      packVec3(off + 3, getRectLightUOrV(light, 1));
     } else if (light.type === 'SphereLight') {
-      data[(off + 1) * 4 + 3] = SphereLight.getArea(light);
+      data[(off + 1) * 4 + 3] = getSphereLightArea(light);
       data[(off + 2) * 4 + 3] = light.radius;
     } else if (light.type === 'SpotLight') {
-      data[(off + 1) * 4 + 3] = SpotLight.getArea(light);
+      data[(off + 1) * 4 + 3] = getSpotLightArea(light);
       packVec3(off + 2, light.direction);
       data[(off + 2) * 4 + 3] = light.radius;
       packVec3(off + 3, [
@@ -1776,7 +1778,7 @@ ${rayTraceCompute({
       this._meshSnapshot.every(
         (snapshot) =>
           snapshot.geometryVersion === snapshot.geometry.version &&
-          snapshot.bvh === snapshot.geometry.bvh
+          snapshot.bvh === getGeometryBvh(snapshot.geometry)
       )
     ) {
       let transformChange = false;
@@ -1803,7 +1805,7 @@ ${rayTraceCompute({
     const nextSnapshot = meshes.map((mesh) => ({
       mesh,
       geometry: mesh.geometry,
-      bvh: mesh.geometry.bvh,
+      bvh: getGeometryBvh(mesh.geometry),
       materials: mesh.materials.slice(),
       materialVersions: mesh.materials.map(material => material.version),
       geometryVersion: mesh.geometry.version,
@@ -1917,7 +1919,7 @@ ${rayTraceCompute({
     nextSnapshot.forEach((next, i) => {
       const prev = previousSnapshot[i];
       if (prev?.geometry === next.geometry && (prev.positionArray !== next.positionArray || prev.indexArray !== next.indexArray)) {
-        next.geometry.bvh = undefined; this._geometriesNeedRefit.add(next.geometry);
+        setGeometryBvh(next.geometry, undefined); this._geometriesNeedRefit.add(next.geometry);
       }
       // A mesh can be animated before this renderer sees it for the first
       // time. Its precomputed BLAS may then describe an older pose as well.
@@ -2180,8 +2182,8 @@ ${rayTraceCompute({
           !!mesh.materials[0]?.displacementMap &&
           Math.abs(mesh.materials[0].displacementScale) > 1e-6
       );
-      if (usesDisplacement || geometryTopologyChanged(this._preparedMeshData, geometry) || !geometry.bvh || !refitBLAS(geometry.bvh, geometry)) {
-        geometry.bvh = undefined;
+      if (usesDisplacement || geometryTopologyChanged(this._preparedMeshData, geometry) || !getGeometryBvh(geometry) || !refitBLAS(getGeometryBvh(geometry)!, geometry)) {
+        setGeometryBvh(geometry, undefined);
       }
     }
     this._geometriesNeedRefit.clear();
@@ -2286,7 +2288,7 @@ ${rayTraceCompute({
 
     this._rtUniform.views.isEmpty[0] = +isEmpty;
     this._meshSnapshot.forEach((snapshot) => {
-      snapshot.bvh = snapshot.geometry.bvh;
+      snapshot.bvh = getGeometryBvh(snapshot.geometry);
     });
     this._residentPreparedMeshData = res;
     this._residentSnapshotByMesh = new WeakMap();
@@ -2414,7 +2416,7 @@ ${rayTraceCompute({
     this._blasLayoutMask = res.blases.reduce((mask, b) => mask | bits[b.bvh.layout ?? 'bvh2'], 0);
     const stacks = getTraversalStackSizes(tlas, res.blases);
     this._constants.BLAS_STACK_SIZE = retainedShaderCapacity(stacks.blas, Number(this._constants.BLAS_STACK_SIZE ?? 0), 32);
-    this._meshSnapshot.forEach(item => { item.bvh = item.geometry.bvh; });
+    this._meshSnapshot.forEach(item => { item.bvh = getGeometryBvh(item.geometry); });
     this._needsRefitTLAS = true; this._pendingGeometryUpdates.clear();
   }
 
@@ -2483,7 +2485,7 @@ ${rayTraceCompute({
     this._needsUpdateLightSamplingData = true;
     this._rtUniform.views.isEmpty[0] = +(instances.length === 0);
     this._meshSnapshot.forEach((snapshot) => {
-      snapshot.bvh = snapshot.geometry.bvh;
+      snapshot.bvh = getGeometryBvh(snapshot.geometry);
     });
     this._needsUpdateMeshMembership = false;
   }
@@ -2649,10 +2651,6 @@ ${rayTraceCompute({
     displacementMaps.forEach((m) => {
       size = Math.max(size, (m.image as HTMLCanvasElement).width);
     });
-    const needsUpdate = displacementMaps.some((map) => map.needsUpdate);
-    if (!needsUpdate) {
-      return;
-    }
 
     // TODO Must at least 2 layers.
     const depthOrArrayLayers = Math.max(displacementMaps.length, 2);

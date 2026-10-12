@@ -240,7 +240,7 @@ class CameraViewControl {
    * Initialize.
    * Mouse event binding
    */
-  init() {
+  private init() {
     const dom = this.domElement;
 
     dom.addEventListener('pointerdown', this._mouseDownHandler);
@@ -500,7 +500,7 @@ class CameraViewControl {
     this.setOrthographicSize(fitSize);
   }
 
-  _updateRotate(deltaTime: number) {
+  private _updateRotate(deltaTime: number) {
     const velocity = this._rotateVelocity;
     this._phi = (velocity[1] * deltaTime) / 20 + this._phi;
     this._theta = (velocity[0] * deltaTime) / 20 + this._theta;
@@ -511,21 +511,21 @@ class CameraViewControl {
     this._vectorDamping(velocity, this.damping);
   }
 
-  _updateDistanceOrSize(deltaTime: number) {
+  private _updateDistanceOrSize(deltaTime: number) {
     this._setDistance(this._distance + (this._zoomSpeed * deltaTime) / 50);
     this._setOrthoSize(this._orthoSize! + (this._zoomSpeed * deltaTime) / 50);
 
     this._zoomSpeed *= Math.pow(this.damping, deltaTime / 16);
   }
 
-  _setDistance(distance: number) {
+  private _setDistance(distance: number) {
     this._distance = Math.max(
       Math.min(distance, this.maxDistance),
       this.minDistance
     );
   }
 
-  _setOrthoSize(size: number) {
+  private _setOrthoSize(size: number) {
     this._orthoSize = Math.max(
       Math.min(size, this.maxOrthographicSize),
       this.minOrthographicSize
@@ -539,7 +539,7 @@ class CameraViewControl {
     camera.bottom = -cameraHeight / 2;
   }
 
-  _updatePan() {
+  private _updatePan() {
     const velocity = this._panVelocity;
     const len = this._distance;
 
@@ -568,7 +568,7 @@ class CameraViewControl {
     velocity[0] = velocity[1] = 0;
   }
 
-  _updateTransform() {
+  private _updateTransform() {
     const camera = this.camera;
     if (!camera) {
       return;
@@ -590,7 +590,7 @@ class CameraViewControl {
     quat.rotateX(rot, rot, -this._theta);
   }
 
-  _startCountingStill() {
+  private _startCountingStill() {
     clearTimeout(this._stillTimeout);
 
     const time = this.autoRotateAfterStill;
@@ -602,7 +602,7 @@ class CameraViewControl {
     }
   }
 
-  _vectorDamping(v: vec2.Vec2Array, damping: number) {
+  private _vectorDamping(v: vec2.Vec2Array, damping: number) {
     let speed = vec2.len(v);
     speed = speed * damping;
     if (speed < 1e-4) {
@@ -639,7 +639,7 @@ class CameraViewControl {
     }
   }
 
-  _mouseDownHandler(e: MouseEvent | TouchEvent) {
+  private _mouseDownHandler(e: MouseEvent | TouchEvent) {
     let x = (e as MouseEvent).clientX;
     let y = (e as MouseEvent).clientY;
     // Touch
@@ -688,7 +688,7 @@ class CameraViewControl {
     this._mouseY = y;
   }
 
-  _mouseMoveHandler(e: MouseEvent | TouchEvent) {
+  private _mouseMoveHandler(e: MouseEvent | TouchEvent) {
     let x = (e as MouseEvent).clientX;
     let y = (e as MouseEvent).clientY;
 
@@ -731,7 +731,7 @@ class CameraViewControl {
     e.preventDefault && e.preventDefault();
   }
 
-  _mouseWheelHandler(e: WheelEvent) {
+  private _mouseWheelHandler(e: WheelEvent) {
     const delta = e.deltaY;
     if (delta === 0) {
       return;
@@ -744,7 +744,7 @@ class CameraViewControl {
     }
   }
 
-  _zoomHandler(e: WheelEvent, delta: number) {
+  private _zoomHandler(e: WheelEvent, delta: number) {
     const speed = Math.max(
       Math.max(
         Math.min(
@@ -770,7 +770,7 @@ class CameraViewControl {
     e.preventDefault && e.preventDefault();
   }
 
-  _mouseUpHandler() {
+  private _mouseUpHandler() {
     const dom = this.domElement;
     dom.removeEventListener('pointermove', this._mouseMoveHandler);
     dom.removeEventListener('pointerup', this._mouseUpHandler);
