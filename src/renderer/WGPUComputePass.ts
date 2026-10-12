@@ -1,3 +1,4 @@
+import { getTargetShaderCache } from './WGPUShaderCache.js';
 // TODO output read write buffer
 import { getUniformBuffer, Uniform } from './WGPUFullQuadPass.js';
 
@@ -162,6 +163,11 @@ export class WGPUComputePass<I extends string, O extends string> {
     return outputBuffers[name];
   }
 
+  getMemoryBytes() {
+    return [...Object.values(this._uniformBuffers), ...Object.values(this._outputBuffers)]
+      .reduce((sum, buffer) => sum + buffer.size, 0);
+  }
+
   dispose() {
     Object.keys(this._uniformBuffers).forEach((key) => {
       (this._uniformBuffers as any)[key].destroy();
@@ -231,11 +237,11 @@ export class WGPUComputePass<I extends string, O extends string> {
       return;
     }
     this._csCode = csCode;
-    this._pipeline = device.createComputePipeline({
+    this._pipeline = getTargetShaderCache(device).createComputePipeline({
       label: this._label,
       layout: 'auto',
       compute: {
-        module: device.createShaderModule({
+        module: getTargetShaderCache(device).createShaderModule({
           label: this._label,
           code: csCode
         }),

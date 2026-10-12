@@ -73,3 +73,17 @@ that compile on first use. Show a status while compiling, as the examples do.
 
 `renderer.getDiagnostics()` reports the backend and adapter, shader
 compilation times, BVH statistics, light sampling setup and GPU trace timing.
+`presentedTarget` is `preview` or `final` after the first complete image
+(`undefined` beforehand); `presentedComplete` is initially `false`.
+`targets` lists each resident accumulation's `label`, `width`, `height` and
+allocated GPU payload `bytes`, including its denoise inputs/outputs and bloom
+resources when allocated. It excludes shared scene data, shader/driver overhead
+and resources queued for release.
+
+Preview and final keep independent outputs. Switching uses their complete
+images without reallocating them; final's first tiled sample keeps preview on
+screen until it completes. Adaptive resolution may rebuild only the preview
+target; its previous complete image remains available through the rebuild.
+Both targets remain resident even when preview is disabled. WebGL retains its
+native-resolution preview at one megapixel and below; account for that extra
+memory when choosing the canvas size.

@@ -1,3 +1,5 @@
+import { makeShaderDataDefinitions } from 'webgpu-utils';
+import rayTraceCore from '../../src/renderer/wgsl/chunks/rayTraceCore.wgsl';
 import { MaterialChangeTracker } from '../../src/renderer/materialChanges';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import WGPURayTracePass, { makeRayTraceUniform } from '../../src/renderer/WGPURayTracePass';
@@ -52,6 +54,18 @@ describe('WGPURayTracePass output resource lifetime', () => {
     vi.unstubAllGlobals();
   });
 
+  it('keeps every CPU uniform view aligned with the WGSL target options', () => {
+    vi.stubGlobal('GPUShaderStage', { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 });
+    const uniform = makeRayTraceUniform();
+    const layout = makeShaderDataDefinitions(rayTraceCore({ hasDisplacement: false })).structs.RayTraceUniform;
+    expect(layout.size).toBe(uniform.buffer.byteLength);
+    for (const [key, view] of Object.entries(uniform.views)) {
+      expect(layout.fields[key].offset, key).toBe(view.byteOffset);
+    }
+    expect(uniform.views.bevel[0]).toBe(1);
+    expect(uniform.views.dispersionWavelengths[0]).toBe(3);
+  });
+
   it('packs and resets sample counts without touching the sequence seed', () => {
     const device = {
       createBuffer: vi.fn(({ size }: GPUBufferDescriptor) => ({ size, destroy: vi.fn() })),
@@ -73,6 +87,36 @@ describe('WGPURayTracePass output resource lifetime', () => {
     } finally {
       pass.dispose();
     }
+  });
+
+  it('switches resident accumulation buffers without allocating or retiring either target', async () => {
+    const createBuffer = vi.fn(({ size }: GPUBufferDescriptor) => ({ size, destroy: vi.fn() }));
+    const device = {
+      createBuffer, createTexture: vi.fn(() => ({ destroy: vi.fn() })),
+      createSampler: () => ({}),
+      queue: { writeBuffer() {}, writeTexture() {}, onSubmittedWorkDone: async () => {} }
+    } as unknown as GPUDevice;
+    const pass = new WGPURayTracePass(device);
+    const final = {}, preview = {};
+    pass.useTarget(final); pass.setSize(16, 16);
+    const finalBuffers = pass.getOutputBuffer();
+    pass.useTarget(preview); pass.setSize(8, 8);
+    const previewBuffers = pass.getOutputBuffer();
+    const count = createBuffer.mock.calls.length;
+    for (let i = 0; i < 10; i++) {
+      pass.useTarget(final); pass.setSize(16, 16);
+      expect(pass.getOutputBuffer()).toEqual(finalBuffers);
+      pass.useTarget(preview); pass.setSize(8, 8);
+      expect(pass.getOutputBuffer()).toEqual(previewBuffers);
+    }
+    await Promise.resolve();
+    expect(createBuffer).toHaveBeenCalledTimes(count);
+    expect(pass.getTargetMemoryBytes(final)).toBe(16 * 16 * 96);
+    expect(pass.getTargetMemoryBytes(preview)).toBe(8 * 8 * 96);
+    for (const buffer of [...Object.values(finalBuffers), ...Object.values(previewBuffers)]) {
+      expect(buffer.destroy).not.toHaveBeenCalled();
+    }
+    pass.dispose();
   });
 
   it('grows a stale empty Materials buffer to one WGSL material element', () => {
@@ -156,6 +200,8 @@ describe('WGPURayTracePass output resource lifetime', () => {
         outputSize: new Float32Array(2)
       }
     };
+    pass._targetOutputs = new Map();
+    pass._activeTarget = {};
     pass._outColorBuffer = oldBuffers[0];
     pass._outNormalBuffer = oldBuffers[1];
     pass._outAlbedoBuffer = oldBuffers[2];

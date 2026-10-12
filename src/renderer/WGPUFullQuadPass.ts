@@ -1,3 +1,5 @@
+import { getTargetShaderCache } from './WGPUShaderCache.js';
+import { textureBytes } from './gpuMemory.js';
 export const fullScreenQuadVertexShaderWGSL = /*wgsl */ `
 @vertex
 fn main(
@@ -206,17 +208,31 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
     );
   }
 
+  private readonly _retainedOutputs = new Set<GPUTexture>();
+  retainOutput(texture: GPUTexture) { if (Object.values(this._outputTextures).includes(texture)) this._retainedOutputs.add(texture); }
+  releaseOutput(texture: GPUTexture) {
+    if (!this._retainedOutputs.delete(texture)) return;
+    if (!Object.values(this._outputTextures).includes(texture)) {
+      void this._device.queue.onSubmittedWorkDone().catch(() => undefined).then(() => texture.destroy());
+    }
+  }
+
   getOutput(name: O) {
     return this._outputTextures[name];
+  }
+
+  getMemoryBytes() {
+    return Object.values(this._uniformBuffers).reduce((sum, buffer) => sum + buffer.size, 0)
+      + Array.from(new Set([...Object.values(this._outputTextures), ...this._retainedOutputs]))
+        .reduce((sum, texture) => sum + textureBytes(texture), 0);
   }
 
   dispose() {
     Object.keys(this._uniformBuffers).forEach((key) => {
       (this._uniformBuffers as any)[key].destroy();
     });
-    Object.keys(this._outputTextures).forEach((key) => {
-      this._outputTextures[key].destroy();
-    });
+    new Set([...Object.values(this._outputTextures), ...this._retainedOutputs]).forEach(texture => texture.destroy());
+    this._retainedOutputs.clear();
   }
 
   private _createTexture(params: WGPUFullQuadPassOutput) {
@@ -242,7 +258,7 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
         continue;
       }
       const params = outputParams[key];
-      this._outputTextures[key]?.destroy();
+      if (!this._retainedOutputs.has(this._outputTextures[key])) this._outputTextures[key]?.destroy();
       this._outputTextures[key] = this._createTexture(params);
     }
   }
@@ -261,18 +277,18 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
     }
     const { screenTexture, presentationFormat } = this._renderToScreen || {};
     this._fsCode = fsCode;
-    this._pipeline = device.createRenderPipeline({
+    this._pipeline = getTargetShaderCache(device).createRenderPipeline({
       label: this._label,
       layout: 'auto',
       vertex: {
-        module: device.createShaderModule({
+        module: getTargetShaderCache(device).createShaderModule({
           label: this._label,
           code: fullScreenQuadVertexShaderWGSL
         }),
         entryPoint: 'main'
       },
       fragment: {
-        module: device.createShaderModule({
+        module: getTargetShaderCache(device).createShaderModule({
           label: this._label,
           code: fsCode
         }),
@@ -384,7 +400,7 @@ ${this._fsMain}
      */
     outputs?: Record<O, GPUTexture>
   ) {
-    if (this._needsUpdateOutputTextures) {
+    if (this._needsUpdateOutputTextures && !this._renderToScreen) {
       this._updateOutputTextures(Object.keys(outputs || {}));
       this._needsUpdateOutputTextures = false;
     }

@@ -119,6 +119,12 @@ export interface ShaderCompilationDiagnostics {
 }
 
 export interface RenderingDiagnostics {
+  /** Label of the last complete target presented; undefined before the first image. */
+  presentedTarget?: string;
+  /** Whether the displayed target contains a complete image. Default false. */
+  presentedComplete?: boolean;
+  /** Resident target dimensions and allocated GPU bytes, including denoise resources. */
+  targets?: { label: string; width: number; height: number; bytes: number }[];
   hdrPresentation?: {
     requested: boolean;
     active: boolean;
@@ -240,8 +246,6 @@ export interface RenderingPipeline {
   cancelOIDNDenoise?(): void;
   /** Keep the last completed OIDN image visible while static while-converging batches accumulate. */
   setPreserveOIDNOutput?(preserve: boolean): void;
-  /** Keep the captured preview transition visible until the first settled OIDN output. */
-  setPreviewTransitionDenoisePending?(pending: boolean): void;
   setBouncesAndClamping(bounces: number, clamping: number): boolean;
   /** Sets the WebGPU path tracer's per-vertex light RIS budget. */
   setDirectLightCandidates?(candidates: number): boolean;

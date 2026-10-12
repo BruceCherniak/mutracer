@@ -113,6 +113,11 @@ void main() {
       ? this._layersPass.getOutput(label) : this._pass.getOutput(label);
   }
 
+  retainOutput(texture: Texture2D) { this._pass.retainOutput(texture); this._layersPass.retainOutput(texture); }
+  releaseOutput(texture: Texture2D) { this._pass.releaseOutput(texture); this._layersPass.releaseOutput(texture); }
+
+  getMemoryBytes() { return this._pass.getMemoryBytes() + this._layersPass.getMemoryBytes(); }
+
   dispose() {
     this._pass.dispose();
     this._layersPass.dispose();

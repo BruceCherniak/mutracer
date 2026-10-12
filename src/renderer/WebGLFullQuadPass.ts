@@ -25,7 +25,14 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
   private readonly _bindings: WebGLProgramBindings;
   private readonly _outputs: O[];
   private readonly _frameBuffer = new FrameBuffer();
-  private readonly _outputTextures = {} as Record<O, Texture2D>;
+  private _outputTextures = {} as Record<O, Texture2D>;
+  private readonly _targetOutputs = new Map<object, Record<O, Texture2D>>();
+  useTarget(target: object) {
+    let outputs = this._targetOutputs.get(target);
+    if (!outputs) this._targetOutputs.set(target, outputs = {} as Record<O, Texture2D>);
+    this._outputTextures = outputs;
+  }
+
   private _outputParams = {} as Record<O, WebGLFullQuadPassOutput>;
   private _width = 1;
   private _height = 1;
@@ -102,6 +109,13 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     return changed;
   }
 
+  private readonly _retainedOutputs = new Set<Texture2D>();
+  retainOutput(texture: Texture2D) { if (Object.values(this._outputTextures).includes(texture)) this._retainedOutputs.add(texture); }
+  releaseOutput(texture: Texture2D) {
+    if (!this._retainedOutputs.delete(texture)) return;
+    if (!Object.values(this._outputTextures).includes(texture)) texture.dispose(this._renderer.gl);
+  }
+
   getOutput(name: O) {
     return this._outputTextures[name];
   }
@@ -110,8 +124,12 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     const gl = this._renderer.gl;
     for (const name of this._outputs) {
       const explicit = explicitOutputs?.[name];
+      const current = this._outputTextures[name];
+      const retainedResize = current && this._retainedOutputs.has(current) &&
+        (current.width !== this._width || current.height !== this._height);
       const texture =
         explicit ||
+        (retainedResize ? new Texture2D(this._outputParams[name]) : undefined) ||
         this._outputTextures[name] ||
         new Texture2D(this._outputParams[name]);
       texture.ensureStorage(
@@ -189,11 +207,19 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     gl.disable(gl.SCISSOR_TEST);
   }
 
+  getMemoryBytes(target?: object): number {
+    const outputs = target ? this._targetOutputs.get(target) ?? {} : this._outputTextures;
+    return Array.from(new Set([...Object.values(outputs) as Texture2D[], ...this._retainedOutputs]))
+      .reduce((sum, texture) => sum + texture.getMemoryBytes(), 0);
+  }
+
   dispose() {
     const gl = this._renderer.gl;
-    (Object.values(this._outputTextures) as Texture2D[]).forEach((texture) =>
+    (Array.from(new Set([this._outputTextures, ...this._targetOutputs.values()])).flatMap(outputs => Object.values(outputs)) as Texture2D[]).forEach((texture) =>
       texture.dispose(gl)
     );
+    this._retainedOutputs.forEach(texture => texture.dispose(gl));
+    this._retainedOutputs.clear();
     this._frameBuffer.dispose(this._renderer);
   }
 }

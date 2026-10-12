@@ -65,5 +65,5 @@ Call `sync.dispose()` and `renderer.dispose()` when finished.
 - [Denoising](docs/denoising.md): JNLM and OIDN, options, weight hosting, denoising while converging
 - [Sampling](docs/sampling.md): choosing a sampling pattern
 - [BVH](docs/bvh.md): automatic and up-front preparation, builders, layouts
-- [Performance](docs/performance.md): tuning checklist
+- [Performance](docs/performance.md): tuning checklist; resident target dimensions/bytes and complete-image presentation diagnostics
 - [Examples](https://github.com/pissang/mutracer/tree/main/examples): basic, Three.js, animation, advanced

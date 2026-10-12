@@ -127,6 +127,11 @@ export default class WebGLBloomPass {
     return this._blendPasses[0].getOutput('color');
   }
 
+  getMemoryBytes() {
+    return [this._brightPass, ...this._downsamplePasses, ...this._blurHPasses, ...this._blurVPasses, ...this._blendPasses]
+      .reduce((sum, pass) => sum + pass.getMemoryBytes(), 0);
+  }
+
   dispose() {
     [
       this._brightPass,

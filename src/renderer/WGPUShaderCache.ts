@@ -5,6 +5,8 @@ export class WGPUShaderCache {
   private bindGroupLayouts = new Map<string, GPUBindGroupLayout>();
   private layouts = new Map<string, GPUPipelineLayout>();
   private pipelines = new Map<string, Promise<GPUComputePipeline>>();
+  private renderPipelines = new Map<string, GPURenderPipeline>();
+  private computePipelines = new Map<string, GPUComputePipeline>();
   private ids = new WeakMap<object, number>();
   private nextId = 0;
 
@@ -71,15 +73,41 @@ export class WGPUShaderCache {
     return this.remember(this.pipelines, key, pipeline, 128);
   }
 
+  createRenderPipeline(descriptor: GPURenderPipelineDescriptor) {
+    const { label: _label, vertex, fragment, ...options } = descriptor;
+    const key = JSON.stringify([options,
+      { ...vertex, module: this.id(vertex.module) },
+      fragment && { ...fragment, module: this.id(fragment.module) }]);
+    return this.remember(this.renderPipelines, key,
+      this.renderPipelines.get(key) ?? this.device.createRenderPipeline(descriptor), 128);
+  }
+
+  createComputePipeline(descriptor: GPUComputePipelineDescriptor) {
+    const { label: _label, compute, ...options } = descriptor;
+    const key = JSON.stringify([options, { ...compute, module: this.id(compute.module) }]);
+    return this.remember(this.computePipelines, key,
+      this.computePipelines.get(key) ?? this.device.createComputePipeline(descriptor), 128);
+  }
+
   clear() {
     this.modules.clear();
     this.bindGroupLayouts.clear();
     this.layouts.clear();
     this.pipelines.clear();
+    this.renderPipelines.clear();
+    this.computePipelines.clear();
   }
 }
 
 /** Grow in coarse buckets; scene edits must not shrink a compiled stack. */
 export function retainedShaderCapacity(required: number, previous = 0, minimum = 8) {
   return Math.max(previous, minimum, 2 ** Math.ceil(Math.log2(Math.max(1, required))));
+}
+
+/** Shared by target-local post-process passes; never contains GPU image resources. */
+const targetShaderCaches = new WeakMap<GPUDevice, WGPUShaderCache>();
+export function getTargetShaderCache(device: GPUDevice) {
+  let cache = targetShaderCaches.get(device);
+  if (!cache) targetShaderCaches.set(device, cache = new WGPUShaderCache(device));
+  return cache;
 }

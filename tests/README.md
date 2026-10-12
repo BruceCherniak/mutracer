@@ -21,4 +21,14 @@ adapter. It runs the actual WebGPU and WebGL 2 denoising passes on deterministic
 fixtures, checking noise reduction, bright and dark texture contrast, normal
 detail, and coverage edges. These tests are separate from the Node test suite.
 
+[`gpu/progressiveRendering.html`](./gpu/progressiveRendering.html) measures ten
+preview/final round trips after warming both targets. It counts WebGPU
+`createTexture` / `createBuffer`, or WebGL `createTexture` / `createFramebuffer`
+with `?webgl`, and records `presentedTarget` / `presentedComplete` per frame.
+Preview resolution is held fixed during this probe; adaptive preview rebuilding
+is checked separately. The reusable `measureProgressiveSwitches` helper can also
+be run against each example's scene and camera. HDR equivalence requires a
+separate fixed-resolution, fixed-spp `renderOfflineFrame` / `readPixels('hdr')`
+comparison against pixels captured before a refactor.
+
 Use small generated fixtures; do not commit models or images for tests.

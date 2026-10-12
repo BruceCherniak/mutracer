@@ -1,3 +1,4 @@
+import { makeProgressivePipeline, type AccumulationTargetOptions, type TargetPipeline } from './accumulationTarget.js';
 import { readRgbaPixels } from './WebGLReadback.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
@@ -37,7 +38,7 @@ const wavelengths = [650, 510, 475];
  * The frame is encoded as a fixed pass sequence. Each pass owns explicit
  * textures/FBOs, so no compositor graph or node lifecycle participates here.
  */
-export function makeWebGLRenderingPipeline(renderer: Renderer) {
+function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayTracePass, targetOptions: AccumulationTargetOptions, onComplete: (complete?: boolean) => void) {
   let sampleRenderedCallback = (
     _sampleCount: number,
     _isFirstFrame: boolean,
@@ -57,14 +58,19 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
   let renderHeight = 1;
   let screenWidth = 1;
   let screenHeight = 1;
-  let interactivePreviewEnabled = true;
-  let previewMode = false;
+
+  const previewMode = targetOptions.preview ?? false;
+  const targetKey = {};
+  let qualityBounces = 8;
+  let resolvedSamples = 0;
+  let presentationTexture: Texture2D | undefined;
+  let presentationDenoised = false;
   let previewMaxResolutionScale = 0.5;
   let previewBounces = 2;
   let adaptivePreviewScale = 0.5;
-  let previewIdleDelayMs = 150;
-  let lastInteractionTime = -Infinity;
-  let previewSamplePending = false;
+
+
+
   let maxTimePerTile = 21;
   let previewTargetFrameMs = 20;
   let maxTiles = Infinity;
@@ -87,12 +93,9 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
   // Preview frames have a different resolution, bounce limit, and timing
   // target. Keep their measurements out of the full-resolution estimator so
   // returning from preview does not split a 4K sample into hundreds of tiles.
-  const finalTileRender = makeTileRender(renderer.gl);
-  const previewTileRender = makeTileRender(renderer.gl);
-  let tileRender = finalTileRender;
-  previewTileRender.setDesiredMsPerTile(previewTargetFrameMs);
-  previewTileRender.setMaxTiles(1);
-  const rayTracePass = new WebGLRayTracePass(renderer);
+  const tileRender = makeTileRender(renderer.gl);
+  tileRender.setDesiredMsPerTile(previewMode ? previewTargetFrameMs : maxTimePerTile);
+  if (previewMode) tileRender.setMaxTiles(1);
   const rayTraceOutputPass = new WebGLRayTraceOutputPass(renderer);
   let bloomPass: WebGLBloomPass | undefined;
 
@@ -168,11 +171,13 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
     }
   }
 
-  function drawPostProcess(_forceNeedsDenoise = false) {
-    if (sampleCount === 0) return;
-
-    rayTraceOutputPass.setSampleCount(sampleCount);
-    rayTraceOutputPass.createPass(rayTracePass);
+  function drawPostProcess(_forceNeedsDenoise = false, resolve = false) {
+    if (resolve) resolvedSamples = sampleCount;
+    if (resolvedSamples === 0) return;
+    if (resolve) {
+      rayTraceOutputPass.setSampleCount(sampleCount);
+      rayTraceOutputPass.createPass(rayTracePass);
+    }
 
     const colorTexture = rayTraceOutputPass.getOutput('color');
     const bloomEnabled = bloomIntensity > 0;
@@ -231,11 +236,15 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
     } else if (output === 'shadowCatcher') {
       displayTexture = rayTraceOutputPass.getOutput('shadowCatcher');
     }
-    outputPass.setUniform('denoisedPercent', 0);
-    outputPass.createPass({
-      colorTex: displayTexture,
-      colorDenoisedTex: displayTexture
-    });
+    if (presentationTexture !== displayTexture) {
+      for (const pass of [composePass, rayTraceOutputPass, jnlmPass]) {
+        pass?.retainOutput(displayTexture);
+        if (presentationTexture) pass?.releaseOutput(presentationTexture);
+      }
+    }
+    presentationTexture = displayTexture;
+    presentationDenoised = output === 'final' && !!denoisedTexture;
+
   }
 
   function startRecordFrameTime(collectTileTiming: boolean) {
@@ -307,8 +316,8 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
         });
         if (tile.isLastTile) sampleCount++;
       }
-      if (!deferPostProcess || sampleCount >= maxSamples) {
-        drawPostProcess(sampleCount >= maxSamples);
+      if (sampleCount !== frameSampleCount && (!deferPostProcess || sampleCount >= maxSamples)) {
+        drawPostProcess(sampleCount >= maxSamples, true);
       }
     } catch (error) {
       console.error(error);
@@ -317,7 +326,7 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
     }
 
     if (sampleCount !== frameSampleCount) {
-      if (renderer.isAllProgramCompiled()) previewSamplePending = false;
+      if (renderer.isAllProgramCompiled()) onComplete();
       sampleRenderedCallback(
         sampleCount,
         frameSampleCount === 0,
@@ -340,6 +349,7 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
   }
 
   function applyRenderResolution() {
+    rayTracePass.useTarget(targetKey);
     // At 720p and below, reallocating the whole render graph costs more than
     // reducing the ray count. Keep the native resolution and rely on the
     // preview bounce/bevel reductions instead.
@@ -357,23 +367,9 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
     composePass.setSize(renderWidth, renderHeight);
     bloomPass?.setSize(renderWidth, renderHeight);
     sampleCount = 0;
+    resolvedSamples = 0;
     isFirstFrame = true;
-  }
-
-  function setPreviewMode(nextPreviewMode: boolean) {
-    if (previewMode === nextPreviewMode) return false;
-    previewMode = nextPreviewMode;
-    if (!previewMode) previewSamplePending = false;
-    if (previewMode) adaptivePreviewScale = previewMaxResolutionScale;
-    tileRender = previewMode ? previewTileRender : finalTileRender;
-    rayTracePass.setPreviewMode(previewMode, previewBounces);
-    applyRenderResolution();
-    // applyRenderResolution can be a no-op when the configured preview scale
-    // is 1, but the newly selected controller still needs the current size.
-    tileRender.setSize(renderWidth, renderHeight);
-    sampleCount = 0;
-    isFirstFrame = true;
-    return true;
+    if (previewMode) onComplete(false);
   }
 
   function setSize(width: number, height: number) {
@@ -395,7 +391,38 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
   }
   document.addEventListener('visibilitychange', onVisibilityChange);
 
+  function activate() {
+    rayTracePass.useTarget(targetKey);
+    rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
+    rayTracePass.setQuality({ bounces: previewMode ? Math.min(qualityBounces, previewBounces) : qualityBounces,
+      bevel: !previewMode, dispersionWavelengths: previewMode ? 1 : 3, directLightCandidates: 1 });
+  }
+
   return {
+    activate,
+    invalidate() { isFirstFrame = true; },
+    begin() {
+      if (previewMode) { adaptivePreviewScale = previewMaxResolutionScale; applyRenderResolution(); }
+      tileRender.reset();
+      isFirstFrame = true;
+      sampleCount = 0;
+      resolvedSamples = 0;
+      denoisedTexture = undefined;
+    },
+    canCompleteSampleWithin(timeBudgetMs: number) { return elapsedFrameTime <= timeBudgetMs; },
+    get presentationComplete() { return !!presentationTexture; },
+    get presentationDenoised() { return presentationDenoised; },
+    present() {
+      if (!presentationTexture) return;
+      outputPass.setUniform('denoisedPercent', 0);
+      outputPass.createPass({ colorTex: presentationTexture, colorDenoisedTex: presentationTexture });
+    },
+    getMemory() {
+      return { width: renderWidth, height: renderHeight,
+        bytes: rayTracePass.getTargetMemoryBytes(targetKey)
+          + rayTraceOutputPass.getMemoryBytes() + composePass.getMemoryBytes()
+          + (bloomPass?.getMemoryBytes() ?? 0) + (jnlmPass?.getMemoryBytes() ?? 0) };
+    },
     isFirstFrame: () => isFirstFrame,
     restartSamples(_preserveTemporalHistory = false) {
       tileRender.reset();
@@ -483,31 +510,6 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       });
       return true;
     },
-    needsRestartSample(camera: Camera, sceneChanged = false) {
-      const cameraChanged = rayTracePass.cameraChanged(camera);
-      const now = performance.now();
-      if (cameraChanged || (interactivePreviewEnabled && sceneChanged)) {
-        lastInteractionTime = now;
-        if (interactivePreviewEnabled) {
-          setPreviewMode(true);
-          previewSamplePending = true;
-        }
-        return true;
-      }
-      if (
-        previewMode && !previewSamplePending &&
-        now - lastInteractionTime >= previewIdleDelayMs
-      ) {
-        setPreviewMode(false);
-        return true;
-      }
-      return false;
-    },
-
-    isPreviewMode() {
-      return previewMode;
-    },
-
     setAllowsMultipleSamplesPerFrame(allow: boolean) {
       allowMultipleSamplesPerFrame = allow;
     },
@@ -525,7 +527,9 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       return undefined;
     },
     setBouncesAndClamping(bounces: number, clamping: number) {
-      let changed = rayTracePass.setBounce(Math.max(1, bounces));
+      const qualityChanged = qualityBounces !== bounces;
+      qualityBounces = bounces;
+      let changed = rayTracePass.setBounce(Math.max(1, bounces)) || qualityChanged;
       changed = rayTracePass.setClamping(clamping) || changed;
       if (changed) isFirstFrame = true;
       return changed;
@@ -579,15 +583,15 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
     },
     setMaxTimePerTile(time: number) {
       maxTimePerTile = Math.max(time, 1);
-      finalTileRender.setDesiredMsPerTile(maxTimePerTile);
+      if (!previewMode) tileRender.setDesiredMsPerTile(maxTimePerTile);
     },
     setMaxTiles(nextMaxTiles: number) {
       maxTiles = nextMaxTiles;
-      finalTileRender.setMaxTiles(maxTiles);
+      if (!previewMode) tileRender.setMaxTiles(maxTiles);
     },
     setPreviewTargetFrameMs(time: number) {
       previewTargetFrameMs = Math.max(time, 1);
-      previewTileRender.setDesiredMsPerTile(previewTargetFrameMs);
+      if (previewMode) tileRender.setDesiredMsPerTile(previewTargetFrameMs);
     },
     setPreviewParams({
       enabled,
@@ -600,19 +604,12 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       const settingsChanged =
         previewMaxResolutionScale !== nextScale ||
         previewBounces !== nextBounces;
-      interactivePreviewEnabled = enabled;
       previewMaxResolutionScale = nextScale;
       previewBounces = nextBounces;
-      previewIdleDelayMs = Math.max(0, idleDelayMs);
-      if (!enabled && previewMode) {
-        setPreviewMode(false);
-      } else if (previewMode && settingsChanged) {
-        adaptivePreviewScale = Math.min(
-          adaptivePreviewScale,
-          previewMaxResolutionScale
-        );
-        rayTracePass.setPreviewMode(true, previewBounces);
+      if (previewMode && settingsChanged) {
+        adaptivePreviewScale = Math.min(adaptivePreviewScale, previewMaxResolutionScale);
         applyRenderResolution();
+        isFirstFrame = true;
       }
     },
     setTransmissiveOutputAlphaMin(alphaMin: number) {
@@ -638,7 +635,7 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
     },
     dispose() {
       document.removeEventListener('visibilitychange', onVisibilityChange);
-      rayTracePass.dispose();
+
       rayTraceOutputPass.dispose();
       bloomPass?.dispose();
       jnlmPass?.dispose();
@@ -646,7 +643,15 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       outputPass.dispose();
       rawReadFrameBuffer.dispose(renderer);
     }
-  } satisfies RenderingPipeline;
+  } satisfies TargetPipeline;
+}
+
+export function makeWebGLRenderingPipeline(renderer: Renderer) {
+  const rayTracePass = new WebGLRayTracePass(renderer);
+  return makeProgressivePipeline(
+    (options, onComplete) => makeWebGLAccumulationTarget(renderer, rayTracePass, options, onComplete),
+    camera => rayTracePass.cameraChanged(camera), () => rayTracePass.dispose()
+  );
 }
 
 export default makeWebGLRenderingPipeline;

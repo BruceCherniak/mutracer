@@ -1,3 +1,5 @@
+import { textureBytes } from './gpuMemory.js';
+import { makeProgressivePipeline, type AccumulationTargetOptions, type TargetPipeline, type ResidentRenderingPipeline } from './accumulationTarget.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
@@ -137,6 +139,9 @@ let index = globalId.x + globalId.y * u32(imageSize.x);
 out_normal[index] = vec4f(clamp(in_normal[index].rgb, vec3f(0.0), vec3f(1.0)), 1.0);
 `;
 export interface WGPURenderingPipeline extends RenderingPipeline {
+  setOIDNPreviewActive(active: boolean): void;
+  setDirectLightCandidates(candidates: number): boolean;
+  setAlphaBlendStrategy(strategy: AlphaBlendStrategy): boolean;
   cancelOIDNDenoise(): void;
   performOIDNDenoise(
     denoiser: OIDNWeb | JNLMDenoiser,
@@ -185,12 +190,16 @@ function createTimeQuery(device: GPUDevice) {
   }
 }
 
-function makeWGPURenderingPipeline(
+function makeWGPUAccumulationTarget(
   canvas: HTMLCanvasElement,
   device: GPUDevice,
   {
     presentationFormat = navigator.gpu.getPreferredCanvasFormat()
-  }: WGPURenderingPipelineOptions = {}
+  }: WGPURenderingPipelineOptions,
+  rayTracePass: WGPURayTracePass,
+  targetOptions: AccumulationTargetOptions,
+  onComplete: (complete?: boolean) => void,
+  configureContext: boolean
 ) {
   const presentationAlphaMode: GPUCanvasAlphaMode = 'premultiplied';
   let sampleRenderedCallback: (
@@ -219,6 +228,7 @@ function makeWGPURenderingPipeline(
   let diagnosticsReadbackPromise: Promise<void> = Promise.resolve();
 
   let isFirstFrame = true;
+  let disposed = false;
 
   let needsUpdatePredicting = true;
   let isPredictingFrame = false;
@@ -228,8 +238,16 @@ function makeWGPURenderingPipeline(
   let screenWidth = 0;
   let screenHeight = 0;
 
-  let interactivePreviewEnabled = true;
-  let previewMode = false;
+
+  const previewMode = targetOptions.preview ?? false;
+  const targetKey = {};
+  let qualityBounces = 8;
+  let qualityCandidates = 4;
+  let resolvedSamples = 0;
+  let presentationTexture: GPUTexture | undefined;
+  let presentationDenoised = false;
+  let denoiseValid = false;
+  const retiredDenoiseTextures = new Set<GPUTexture>();
   let previewMaxResolutionScale = 0.5;
   let adaptivePreviewScale = 0.5;
   // While-converging OIDN runs on every preview frame and usually costs more than the
@@ -239,12 +257,12 @@ function makeWGPURenderingPipeline(
   const MIN_OIDN_PREVIEW_SCALE = 0.125;
   let oidnPreviewActive = false;
   // Whether the canvas currently shows a denoised (or transition) frame.
-  let presentedDenoised = false;
+
   let oidnPreviewScaleLimit: number | undefined;
   let previewBounces = 2;
-  let previewIdleDelayMs = 150;
-  let lastInteractionTime = -Infinity;
-  let previewSamplePending = false;
+
+
+
   let maxTimePerTile = 21;
   let previewTargetFrameMs = 20;
 
@@ -277,7 +295,7 @@ function makeWGPURenderingPipeline(
   let jnlmPass: WGPUJNLMDenoisePass | undefined;
   let oidnGeneration = 0;
   let preserveOIDNOutput = false;
-  let previewTransitionDenoisePending = false;
+
   let activeOidnPhase:
     | {
         abort: () => void;
@@ -349,7 +367,7 @@ function makeWGPURenderingPipeline(
   const standardPresentationFormat = presentationFormat;
   let currentPresentationFormat = standardPresentationFormat;
   const ctx = canvas.getContext('webgpu')! as InspectableGPUCanvasContext;
-  ctx.configure({
+  if (configureContext) ctx.configure({
     device,
     format: standardPresentationFormat,
     alphaMode: presentationAlphaMode
@@ -358,33 +376,21 @@ function makeWGPURenderingPipeline(
   const timeQuery = device.features.has('timestamp-query')
     ? createTimeQuery(device)
     : undefined;
-  const finalTileRender = makeTileRender();
-  const previewTileRender = makeTileRender();
-  let tileRender = finalTileRender;
-  type TileRenderWithPredict = ReturnType<typeof makeTileRenderWithPredict>;
-  const finalTileRenderWithPredict: TileRenderWithPredict | undefined = timeQuery
-    ? makeTileRenderWithPredict()
-    : undefined;
-  const previewTileRenderWithPredict: TileRenderWithPredict | undefined = timeQuery
-    ? makeTileRenderWithPredict()
-    : undefined;
-  let tileRenderWithPredict = finalTileRenderWithPredict;
-  finalTileRender.setDesiredMsPerTile(maxTimePerTile);
-  previewTileRender.setDesiredMsPerTile(previewTargetFrameMs);
-  finalTileRenderWithPredict?.setDesiredMsPerTile(maxTimePerTile);
-  previewTileRenderWithPredict?.setDesiredMsPerTile(previewTargetFrameMs);
+  const tileRender = makeTileRender();
+  const tileRenderWithPredict = timeQuery ? makeTileRenderWithPredict() : undefined;
+  tileRender.setDesiredMsPerTile(previewMode ? previewTargetFrameMs : maxTimePerTile);
+  tileRenderWithPredict?.setDesiredMsPerTile(previewMode ? previewTargetFrameMs : maxTimePerTile);
 
   function invalidateTilePrediction() {
     tileTimingGeneration++;
-    finalTileRenderWithPredict?.needsUpdatePredicting();
-    previewTileRenderWithPredict?.needsUpdatePredicting();
+    tileRenderWithPredict?.needsUpdatePredicting();
     // Renderer applies settings after configuring an offline batch. Refresh
     // its estimator without submitting a hidden probe in that mode.
     needsUpdatePredicting = offlineSamplesPerBatch === 0;
     isPredictingFrame = false;
   }
 
-  const rayTracePass = new WGPURayTracePass(device);
+
   const rayTraceOutputPass = new WGPURayTraceOutputPass(device);
   const getFrameInput = (label: 'color' | 'albedo' | 'normal' | 'shadowCatcher' | 'foreground' | 'catcherBackground') =>
     rayTraceOutputPass.getOutput(label);
@@ -545,28 +551,12 @@ let colorUv = min(
   vec2i(uv2 * vec2f(textureDimensions(colorTex))),
   vec2i(textureDimensions(colorTex)) - vec2i(1)
 );
-let transitionUv = min(
-  vec2i(uv2 * vec2f(textureDimensions(previewTransitionTex))),
-  vec2i(textureDimensions(previewTransitionTex)) - vec2i(1)
-);
 var color = textureLoad(colorTex, colorUv, 0);
-color = color * (1.0 - previewTransitionPercent)
-  + textureLoad(previewTransitionTex, transitionUv, 0) * previewTransitionPercent;
 color = vec4(color.rgb * color.a, color.a);
 output.color = color;
 `,
-    uniforms: [
-      {
-        label: 'previewTransitionPercent',
-        type: 'f32',
-        data: 0
-      }
-    ],
     outputs: ['color'],
-    inputs: [
-      'colorTex',
-      'previewTransitionTex'
-    ]
+    inputs: ['colorTex']
   });
   outputPass.setOutputParams({
     color: {
@@ -574,58 +564,13 @@ output.color = color;
     }
   });
 
-  let previewTransitionTexture: GPUTexture | undefined;
-  let hasPreviewTransition = false;
-
-  function _capturePresentationSnapshot(
-    source: GPUTexture,
-    encoder: GPUCommandEncoder
-  ) {
-    if (!source || !source.width || !source.height) return;
-    const copySize: GPUExtent3DDict = {
-      width: source.width,
-      height: source.height,
-      depthOrArrayLayers: 1
-    };
-    if (
-      !previewTransitionTexture ||
-      previewTransitionTexture.width !== copySize.width ||
-      previewTransitionTexture.height !== copySize.height ||
-      previewTransitionTexture.format !== source.format
-    ) {
-      const previous = previewTransitionTexture;
-      previewTransitionTexture = device.createTexture({
-        label: 'Presentation snapshot',
-        size: copySize,
-        // HDR changes the next compose target lazily. A preview can end in
-        // that same render call, before the old target has been replaced.
-        // A texture copy must use the actual source format in either direction.
-        format: source.format,
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST
-      });
-      if (previous) {
-        void device.queue
-          .onSubmittedWorkDone()
-          .catch(() => undefined)
-          .then(() => previous.destroy());
-      }
-    }
-    encoder.copyTextureToTexture(
-      { texture: source },
-      { texture: previewTransitionTexture },
-      copySize
-    );
-  }
-
   function _present(encoder: GPUCommandEncoder, texture: GPUTexture) {
-    outputPass.setUniform('previewTransitionPercent', 0);
     outputPass.setRenderToScreen(
       ctx.getCurrentTexture(),
       currentPresentationFormat
     );
     outputPass.createPass(encoder, {
-      colorTex: texture,
-      previewTransitionTex: texture
+      colorTex: texture
     });
   }
 
@@ -687,7 +632,7 @@ output.color = color;
         // A readback may finish after scene preparation or a mode switch.
         // It must not overwrite throughput learned for the current scene.
         const timingIsCurrent =
-          submittedTimingGeneration === tileTimingGeneration &&
+          !disposed && submittedTimingGeneration === tileTimingGeneration &&
           !isFirstFrame;
         if (timingIsCurrent) {
           lastGpuTraceTiming = {
@@ -723,22 +668,12 @@ output.color = color;
     }
   }
 
-  function clearOIDNOutput() {
-    oidnComposedBuffer?.destroy();
-    oidnComposedTexture?.destroy();
-    oidnComposedBuffer = undefined;
-    oidnComposedLinear = false;
-    oidnComposedTexture = undefined;
-  }
+  function clearOIDNOutput() { denoiseValid = false; }
 
   function invalidateCompositeDenoise() {
     if (!oidnComposedLinear) return;
     cancelOIDNDenoise();
-    oidnComposedBuffer?.destroy();
-    oidnComposedBuffer = undefined;
-    oidnComposedTexture?.destroy();
-    oidnComposedTexture = undefined;
-    oidnComposedLinear = false;
+    denoiseValid = false;
   }
 
   function prepareOIDNTexture(
@@ -754,7 +689,8 @@ output.color = color;
       texture.width !== renderWidth ||
       texture.height !== renderHeight
     ) {
-      texture?.destroy();
+      if (texture && texture !== presentationTexture) texture.destroy();
+      else if (texture) retiredDenoiseTextures.add(texture);
       texture = device.createTexture({
         size: {
           width: renderWidth,
@@ -801,15 +737,20 @@ output.color = color;
 
   function drawPostProcess(
     encoder: GPUCommandEncoder,
-    _forceNeedsDenoise?: boolean
+    _forceNeedsDenoise?: boolean,
+    resolve = false
   ) {
-    oidnComposedTexture = prepareOIDNTexture(
+    if (resolve) resolvedSamples = sampleCount;
+    if (resolvedSamples < 1) return;
+    if (denoiseValid) oidnComposedTexture = prepareOIDNTexture(
       encoder,
       oidnComposedBuffer,
       oidnComposedTexture
     );
-    rayTraceOutputPass.setSampleCount(sampleCount);
-    rayTraceOutputPass.createPass(encoder, rayTracePass.getOutputBuffer(), rayTracePass.hasShadowCatcher());
+    if (resolve) {
+      rayTraceOutputPass.setSampleCount(sampleCount);
+      rayTraceOutputPass.createPass(encoder, rayTracePass.getOutputBuffer(), rayTracePass.hasShadowCatcher());
+    }
 
     composePass.setUniform(
       'shadowCatcherEnabled',
@@ -847,14 +788,14 @@ output.color = color;
       // Use color texture as placeholder
       bloomTex: bloomEnabled && bloomPass ? bloomPass.getOutput() : colorTexture
     });
-    if (oidnComposedLinear && oidnComposedTexture) {
+    if (denoiseValid && oidnComposedLinear && oidnComposedTexture) {
       compositeDenoiseDisplayPass.createPass(encoder, {
         colorTex: oidnComposedTexture,
         composedTex: composePass.getOutput('denoiseColor')
       });
     }
     let displayTexture =
-      (oidnComposedBuffer ? (oidnComposedLinear
+      (denoiseValid && oidnComposedBuffer ? (oidnComposedLinear
         ? compositeDenoiseDisplayPass.getOutput('color') : oidnComposedTexture) : undefined) ||
       composePass.getOutput('color');
     const activeHDRPeakMeter = hdrOutputActive
@@ -874,45 +815,24 @@ output.color = color;
       displayTexture = getFrameInput('shadowCatcher');
     }
 
-    const showPreviewTransition =
-      hasPreviewTransition &&
-      !previewMode &&
-      output === 'final' &&
-      // The first settled full-resolution sample is submitted before OIDN's
-      // asynchronous output is available. Keep the completed preview frame
-      // on screen through that gap instead of exposing the raw sample.
-      previewTransitionDenoisePending && !oidnComposedBuffer;
-    // While-converging preview presents at OIDN throughput: keep the last denoised
-    // frame on the canvas instead of flashing each raw 1spp restart.
-    const holdDenoisedFrame =
-      oidnPreviewActive && output === 'final' &&
-      !oidnComposedBuffer && presentedDenoised &&
-      !!previewTransitionTexture;
-    if (showPreviewTransition || holdDenoisedFrame) {
-      // Canvas resizes discard its contents. Re-present the completed image
-      // from independent storage, including across adaptive preview resizes.
-      // Do not blend it with unresolved raw inputs: even a zero-weight NaN
-      // from a newly allocated accumulation texture can spoil the image.
-      displayTexture = previewTransitionTexture!;
-    } else if (
-      oidnPreviewActive && output === 'final' &&
-      oidnComposedBuffer
-    ) {
-      _capturePresentationSnapshot(displayTexture, encoder);
+    // Keep the completed denoise visible until its replacement is ready.
+    if (!(oidnPreviewActive && output === 'final' && !denoiseValid && presentationDenoised)) {
+      if (presentationTexture !== displayTexture) {
+        const owners = [composePass, compositeDenoiseDisplayPass, rayTraceOutputPass];
+        for (const pass of owners) {
+          pass.retainOutput(displayTexture);
+          if (presentationTexture) pass.releaseOutput(presentationTexture);
+        }
+      }
+      for (const texture of retiredDenoiseTextures) {
+        if (texture !== displayTexture) {
+          void device.queue.onSubmittedWorkDone().catch(() => undefined).then(() => texture.destroy());
+          retiredDenoiseTextures.delete(texture);
+        }
+      }
+      presentationTexture = displayTexture;
+      presentationDenoised = output === 'final' && denoiseValid;
     }
-    presentedDenoised =
-      output === 'final' &&
-      (!!oidnComposedBuffer || showPreviewTransition || holdDenoisedFrame);
-    _present(encoder, displayTexture);
-    if (
-      hasPreviewTransition &&
-      !previewMode &&
-      sampleCount > 0 &&
-      (output !== 'final' || !previewTransitionDenoisePending || !!oidnComposedBuffer)
-    ) {
-      hasPreviewTransition = false;
-    }
-
     const commandBuffer = encoder.finish();
     device.queue.submit([commandBuffer]);
     if (hdrPeakReadbackSubmitted) {
@@ -937,6 +857,7 @@ output.color = color;
     const cameraChanged = rayTracePass.cameraChanged(camera);
     const resetAccumulation = cameraChanged || isFirstFrame;
     if (resetAccumulation) {
+      denoiseValid = false;
       tileTimingGeneration++;
       elapsedTileTime = undefined;
       rayTracePass.setCamera(camera);
@@ -1039,12 +960,12 @@ output.color = color;
       return false;
     }
 
-    if (!deferPostProcess || sampleCount >= renderSampleTarget) {
+    if (sampleCount !== frameSampleCount && (!deferPostProcess || sampleCount >= renderSampleTarget)) {
       const encoder = device.createCommandEncoder();
-      drawPostProcess(encoder, sampleCount >= renderSampleTarget);
+      drawPostProcess(encoder, sampleCount >= renderSampleTarget, true);
     }
     if (sampleCount !== frameSampleCount) {
-      previewSamplePending = false;
+      onComplete();
       sampleRenderedCallback(
         sampleCount,
         frameSampleCount === 0,
@@ -1061,6 +982,7 @@ output.color = color;
 
   function _applyRenderResolution() {
     if (!screenWidth || !screenHeight) return;
+    rayTracePass.useTarget(targetKey);
     const scale = previewMode ? adaptivePreviewScale : 1;
     const nextRenderWidth = roundUp(
       Math.max(1, Math.round(screenWidth * scale)),
@@ -1081,7 +1003,7 @@ output.color = color;
     cancelOIDNDenoise();
     // Completed OIDN buffers use the previous image dimensions. Scene edits
     // may preserve them, but a resize must not copy them with the new stride.
-    // Camera preview transitions retain their separate presentation snapshot.
+    // The target retains its complete presentation texture through the resize.
     clearOIDNOutput();
     tileTimingGeneration++;
     renderWidth = nextRenderWidth;
@@ -1102,55 +1024,14 @@ output.color = color;
       pass.setUniform('imageSize', oidnImageSize);
     });
     bloomPass?.setSize(renderWidth, renderHeight);
+    if (previewMode) onComplete(false);
+    resolvedSamples = 0;
     // Timestamp and OIDN feedback can resize preview targets between render
     // calls. Their old sample count must not make Renderer treat the new,
     // empty targets as a completed frame and start denoising them.
     sampleCount = 0;
-    previewSamplePending = previewMode;
+    resolvedSamples = 0;
     isFirstFrame = true;
-  }
-
-  function _setPreviewMode(nextPreviewMode: boolean) {
-    if (previewMode === nextPreviewMode) return false;
-    if (previewMode && !nextPreviewMode) {
-      // Preserve the last complete preview while the first full-resolution
-      // sample is rendered tile by tile.
-      if (!oidnPreviewActive || !presentedDenoised || !previewTransitionTexture) {
-        const encoder = device.createCommandEncoder();
-        _capturePresentationSnapshot(composePass.getOutput('color'), encoder);
-        device.queue.submit([encoder.finish()]);
-      }
-      hasPreviewTransition = !!previewTransitionTexture;
-    } else if (nextPreviewMode) {
-      hasPreviewTransition = false;
-    }
-    previewMode = nextPreviewMode;
-    if (!previewMode) previewSamplePending = false;
-    if (previewMode) {
-      // Keep the scale learned during the previous camera gesture. Resetting
-      // to the configured maximum here makes every new drag begin with the
-      // same avoidable slow frame before timestamp feedback lowers it again.
-      adaptivePreviewScale = Math.min(
-        adaptivePreviewScale,
-        maxPreviewScale()
-      );
-    }
-    tileRender = previewMode ? previewTileRender : finalTileRender;
-    tileRenderWithPredict = previewMode
-      ? previewTileRenderWithPredict
-      : finalTileRenderWithPredict;
-    // A timestamp request from the previous mode may still finish, but it
-    // belongs to that mode's estimator and must not hold up the new one.
-    isPredictingFrame = false;
-    needsUpdatePredicting =
-      offlineSamplesPerBatch === 0 &&
-      tileRenderWithPredict?.getLastTraceTime() === -1;
-    rayTracePass.setPreviewMode(previewMode, previewBounces);
-    _applyRenderResolution();
-    (tileRenderWithPredict || tileRender).setSize(renderWidth, renderHeight);
-    (tileRenderWithPredict || tileRender).reset();
-    isFirstFrame = true;
-    return true;
   }
 
   function setSize(width: number, height: number) {
@@ -1161,13 +1042,6 @@ output.color = color;
     screenHeight = height;
     _applyRenderResolution();
     outputPass.setSize(screenWidth, screenHeight);
-    if (oidnPreviewActive && presentedDenoised && previewTransitionTexture) {
-      // A resize can happen during an OIDN frame or a hidden timing probe.
-      // Restore the canvas immediately, before either one completes.
-      const encoder = device.createCommandEncoder();
-      _present(encoder, previewTransitionTexture);
-      device.queue.submit([encoder.finish()]);
-    }
     isFirstFrame = true;
   }
   function setMeshes(meshes: Mesh[], update?: Parameters<RenderingPipeline['setMeshes']>[1]) {
@@ -1294,15 +1168,7 @@ output.color = color;
         color: { format: composeColorFormat },
         denoiseColor: { format: 'rgba32float' }
       });
-      const previousTransitionTexture = previewTransitionTexture;
-      previewTransitionTexture = undefined;
-      hasPreviewTransition = false;
-      if (previousTransitionTexture) {
-        void device.queue
-          .onSubmittedWorkDone()
-          .catch(() => undefined)
-          .then(() => previousTransitionTexture.destroy());
-      }
+
     }
     if (wasActive !== hdrOutputActive) {
       hdrPeakMeter?.reset();
@@ -1407,6 +1273,7 @@ output.color = color;
       oidnComposedBuffer
     );
     oidnComposedLinear = true;
+    denoiseValid = true;
     // The filter also smooths coverage, which carries catcher shadows and
     // transmissive alpha.
     compositeDenoiseDisplayPass.setUniform(
@@ -1580,6 +1447,7 @@ output.color = color;
             const encoder = device.createCommandEncoder();
             oidnComposedBuffer = copyOIDNOutput(encoder, output, oidnComposedBuffer);
             oidnComposedLinear = true;
+            denoiseValid = true;
             drawPostProcess(encoder, false);
           },
           done(output) {
@@ -1587,6 +1455,7 @@ output.color = color;
               const encoder = device.createCommandEncoder();
               oidnComposedBuffer = copyOIDNOutput(encoder, output, oidnComposedBuffer);
               oidnComposedLinear = true;
+              denoiseValid = true;
               drawPostProcess(encoder, false);
             }
             finish();
@@ -1614,7 +1483,7 @@ output.color = color;
           progress(output, _tileData, _tile, currentIdx, totalIdx) {
             if (generation !== oidnGeneration) return;
             // While-converging denoising keeps the previous complete frame (or the
-            // preview-transition snapshot) visible while tiled inference is
+            // fallback) visible while tiled inference is
             // running. Publishing the shared output buffer before its final
             // tile would expose uninitialized regions as black rectangles.
             if (whileConverging && currentIdx + 1 < totalIdx) return;
@@ -1625,6 +1494,7 @@ output.color = color;
               oidnComposedBuffer
             );
             oidnComposedLinear = false;
+                    denoiseValid = true;
             drawPostProcess(encoder, false);
           },
           done(output) {
@@ -1632,6 +1502,7 @@ output.color = color;
               const encoder = device.createCommandEncoder();
               oidnComposedBuffer = copyOIDNOutput(encoder, output, oidnComposedBuffer);
               oidnComposedLinear = false;
+                        denoiseValid = true;
               drawPostProcess(encoder, false);
             }
             finish();
@@ -1673,30 +1544,82 @@ output.color = color;
         _onPageVisiblilityChange
       );
     }
+    disposed = true;
+    tileTimingGeneration++;
     cancelOIDNDenoise();
-    oidnComposedBuffer?.destroy();
-    oidnComposedTexture?.destroy();
-    oidnAlbedoGuideTexture?.destroy();
-    oidnNormalGuideTexture?.destroy();
-    jnlmPass?.dispose();
-    composePass.dispose();
-    rawOutputPass.dispose();
-    readbackPass.dispose();
-    compositeDenoiseDisplayPass.dispose();
-    hdrPeakMeter?.dispose();
-    oidnAlbedoEncodePass.dispose();
-    oidnAlbedoDecodePass.dispose();
-    oidnNormalSanitizePass.dispose();
-    previewTransitionTexture?.destroy();
-    // The passes own tracing outputs and adjacent animation pose storage.
-    // Keep their resources valid for submissions already queued at disposal.
-    void device.queue.onSubmittedWorkDone().catch(() => undefined).then(() => {
+    // Target outputs and timestamp readbacks can still be referenced by the
+    // queue. Cancel inference now; retire all GPU-owned target resources after
+    // both submitted work and the pending timestamp mapping have completed.
+    void Promise.all([
+      device.queue.onSubmittedWorkDone().catch(() => undefined),
+      diagnosticsReadbackPromise
+    ]).then(() => {
+      oidnComposedBuffer?.destroy();
+      oidnComposedTexture?.destroy();
+      retiredDenoiseTextures.forEach(texture => texture.destroy());
+      oidnAlbedoGuideTexture?.destroy();
+      oidnNormalGuideTexture?.destroy();
+      jnlmPass?.dispose();
+      outputPass.dispose();
+      bloomPass?.dispose();
+      composePass.dispose();
+      rawOutputPass.dispose();
+      readbackPass.dispose();
+      compositeDenoiseDisplayPass.dispose();
+      hdrPeakMeter?.dispose();
+      oidnAlbedoEncodePass.dispose();
+      oidnAlbedoDecodePass.dispose();
+      oidnNormalSanitizePass.dispose();
       rayTraceOutputPass.dispose();
-      rayTracePass.dispose();
+      timeQuery?.querySet.destroy();
+      timeQuery?.resolveBuffer.destroy();
+      timeQuery?.resultBuffer.destroy();
     });
   }
 
+  function activate() {
+    rayTracePass.useTarget(targetKey);
+    if (renderWidth && renderHeight) rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
+    rayTracePass.setQuality({ bounces: previewMode ? Math.min(qualityBounces, previewBounces) : qualityBounces,
+      bevel: !previewMode, dispersionWavelengths: previewMode ? 1 : 3,
+      directLightCandidates: previewMode ? Math.min(qualityCandidates, 2) : qualityCandidates });
+  }
+
   return {
+    activate,
+    invalidate() { isFirstFrame = true; },
+    begin() {
+      sampleCount = 0;
+      isFirstFrame = true;
+      resolvedSamples = 0;
+      denoiseValid = false;
+      isPredictingFrame = false;
+      needsUpdatePredicting = offlineSamplesPerBatch === 0 && tileRenderWithPredict?.getLastTraceTime() === -1;
+      (tileRenderWithPredict || tileRender).reset();
+    },
+    canCompleteSampleWithin(timeBudgetMs: number) {
+      return (lastGpuTraceTiming?.estimatedFullFrameTimeMs ?? elapsedFrameTime) <= timeBudgetMs;
+    },
+    get presentationComplete() { return !!presentationTexture; },
+    get presentationDenoised() { return presentationDenoised; },
+    present() {
+      if (!presentationTexture) return;
+      const encoder = device.createCommandEncoder();
+      _present(encoder, presentationTexture);
+      device.queue.submit([encoder.finish()]);
+    },
+    getMemory() {
+      const passes = [rayTraceOutputPass, composePass, compositeDenoiseDisplayPass,
+        oidnAlbedoEncodePass, oidnAlbedoDecodePass, oidnNormalSanitizePass,
+        rawOutputPass, readbackPass, outputPass, bloomPass, jnlmPass];
+      return { width: renderWidth, height: renderHeight,
+        bytes: rayTracePass.getTargetMemoryBytes(targetKey)
+          + passes.reduce((sum, pass) => sum + (pass?.getMemoryBytes() ?? 0), 0)
+          + (timeQuery ? timeQuery.resolveBuffer.size + timeQuery.resultBuffer.size : 0)
+          + (oidnComposedBuffer?.size ?? 0)
+          + [oidnComposedTexture, oidnAlbedoGuideTexture, oidnNormalGuideTexture, ...retiredDenoiseTextures]
+            .reduce((sum, texture) => sum + textureBytes(texture), 0) };
+    },
     isFirstFrame() {
       return isFirstFrame;
     },
@@ -1704,9 +1627,9 @@ output.color = color;
     restartSamples() {
       cancelOIDNDenoise();
       preserveOIDNOutput = false;
-      presentedDenoised = false;
-      previewTransitionDenoisePending = false;
-      hasPreviewTransition = false;
+      denoiseValid = false;
+      presentationDenoised = false;
+      resolvedSamples = 0;
       (tileRenderWithPredict || tileRender).reset();
       isPredictingFrame = false;
       isFirstFrame = true;
@@ -1741,7 +1664,7 @@ output.color = color;
         size: bytesPerRow * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
       });
       const encoder = device.createCommandEncoder();
-      const denoised = kind === 'denoised' ? oidnComposedBuffer : undefined;
+      const denoised = kind === 'denoised' && denoiseValid ? oidnComposedBuffer : undefined;
       if (kind === 'denoised' && !denoised) kind = 'hdr';
       const pass = kind === 'hdr' ? rawOutputPass : readbackPass;
       pass.setOutputParams({ color: { format: 'rgba32float' } });
@@ -1765,45 +1688,13 @@ output.color = color;
       } finally { buffer.unmap(); buffer.destroy(); }
     },
 
-    needsRestartSample(camera: Camera, sceneChanged = false) {
-      const cameraChanged = rayTracePass.cameraChanged(camera);
-      const now = performance.now();
-      if (cameraChanged || (interactivePreviewEnabled && sceneChanged)) {
-        lastInteractionTime = now;
-        if (interactivePreviewEnabled) {
-          _setPreviewMode(true);
-          previewSamplePending = true;
-        }
-        return true;
-      }
-      // Preparation or shader compilation can outlast the idle delay. Always
-      // finish one preview sample of the edited scene before restoring quality.
-      if (
-        previewMode && !previewSamplePending &&
-        now - lastInteractionTime >= previewIdleDelayMs
-      ) {
-        _setPreviewMode(false);
-        return true;
-      }
-      return false;
-    },
-
-    isPreviewMode() {
-      return previewMode;
-    },
-
     setOIDNPreviewActive(active: boolean) {
       oidnPreviewActive = active;
-      if (!active) presentedDenoised = false;
+      if (!active) presentationDenoised = false;
     },
 
     setPreserveOIDNOutput(preserve: boolean) {
       preserveOIDNOutput = preserve;
-    },
-
-    setPreviewTransitionDenoisePending(pending: boolean) {
-      previewTransitionDenoisePending = pending;
-      if (!pending) hasPreviewTransition = false;
     },
 
     setAllowsMultipleSamplesPerFrame(allow: boolean) {
@@ -1833,7 +1724,9 @@ output.color = color;
     },
 
     setBouncesAndClamping(bounces: number, clamping: number) {
-      let changed = rayTracePass.setBounce(bounces);
+      const qualityChanged = qualityBounces !== bounces;
+      qualityBounces = bounces;
+      let changed = rayTracePass.setBounce(bounces) || qualityChanged;
       changed = rayTracePass.setClamping(clamping) || changed;
       if (changed) {
         // Restart sample if bounces changed.
@@ -1843,7 +1736,9 @@ output.color = color;
       return changed;
     },
     setDirectLightCandidates(candidates: number) {
-      const changed = rayTracePass.setDirectLightCandidates(candidates);
+      const qualityChanged = qualityCandidates !== candidates;
+      qualityCandidates = candidates;
+      const changed = rayTracePass.setDirectLightCandidates(candidates) || qualityChanged;
       if (changed) {
         invalidateTilePrediction();
         isFirstFrame = true;
@@ -1940,19 +1835,21 @@ output.color = color;
     },
     setMaxTimePerTile(time: number) {
       maxTimePerTile = Math.max(time, 1);
-      finalTileRender.setDesiredMsPerTile(maxTimePerTile);
-      finalTileRenderWithPredict?.setDesiredMsPerTile(maxTimePerTile);
+      if (!previewMode) {
+        tileRender.setDesiredMsPerTile(maxTimePerTile);
+        tileRenderWithPredict?.setDesiredMsPerTile(maxTimePerTile);
+      }
     },
     setMaxTiles(maxTiles: number) {
-      finalTileRender.setMaxTiles(maxTiles);
-      previewTileRender.setMaxTiles(maxTiles);
-      finalTileRenderWithPredict?.setMaxTiles(maxTiles);
-      previewTileRenderWithPredict?.setMaxTiles(maxTiles);
+      tileRender.setMaxTiles(maxTiles);
+      tileRenderWithPredict?.setMaxTiles(maxTiles);
     },
     setPreviewTargetFrameMs(time: number) {
       previewTargetFrameMs = Math.max(time, 1);
-      previewTileRender.setDesiredMsPerTile(previewTargetFrameMs);
-      previewTileRenderWithPredict?.setDesiredMsPerTile(previewTargetFrameMs);
+      if (previewMode) {
+        tileRender.setDesiredMsPerTile(previewTargetFrameMs);
+        tileRenderWithPredict?.setDesiredMsPerTile(previewTargetFrameMs);
+      }
     },
 
     setPreviewParams({
@@ -1965,19 +1862,11 @@ output.color = color;
       const nextBounces = Math.max(1, Math.round(bounces));
       const settingsChanged =
         previewMaxResolutionScale !== nextScale || previewBounces !== nextBounces;
-      interactivePreviewEnabled = enabled;
       previewMaxResolutionScale = nextScale;
       previewBounces = nextBounces;
-      previewIdleDelayMs = Math.max(0, idleDelayMs);
-      if (!enabled && previewMode) {
-        _setPreviewMode(false);
-      } else if (previewMode && settingsChanged) {
-        adaptivePreviewScale = Math.min(
-          adaptivePreviewScale,
-          previewMaxResolutionScale
-        );
-        rayTracePass.setPreviewMode(true, previewBounces);
-        previewTileRenderWithPredict?.needsUpdatePredicting();
+      if (previewMode && settingsChanged) {
+        adaptivePreviewScale = Math.min(adaptivePreviewScale, previewMaxResolutionScale);
+        tileRenderWithPredict?.needsUpdatePredicting();
         needsUpdatePredicting = offlineSamplesPerBatch === 0;
         isPredictingFrame = false;
         _applyRenderResolution();
@@ -2004,7 +1893,21 @@ output.color = color;
     },
 
     dispose
-  } satisfies WGPURenderingPipeline;
+  } satisfies TargetPipeline;
+}
+
+function makeWGPURenderingPipeline(canvas: HTMLCanvasElement, device: GPUDevice, options: WGPURenderingPipelineOptions = {}): WGPURenderingPipeline & ResidentRenderingPipeline {
+  const rayTracePass = new WGPURayTracePass(device);
+  let configureContext = true;
+  return makeProgressivePipeline(
+    (targetOptions, onComplete) => {
+      const target = makeWGPUAccumulationTarget(canvas, device, options, rayTracePass, targetOptions, onComplete, configureContext);
+      configureContext = false;
+      return target;
+    },
+    camera => rayTracePass.cameraChanged(camera),
+    () => { void device.queue.onSubmittedWorkDone().catch(() => undefined).then(() => rayTracePass.dispose()); }
+  ) as WGPURenderingPipeline & ResidentRenderingPipeline;
 }
 
 export default makeWGPURenderingPipeline;

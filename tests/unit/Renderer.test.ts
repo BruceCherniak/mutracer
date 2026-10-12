@@ -43,7 +43,6 @@ function createPipeline(overrides: Partial<WGPURenderingPipeline> = {}) {
     setAllowsMultipleSamplesPerFrame: vi.fn(),
     setOfflineRenderOptions: vi.fn(),
     setPreserveOIDNOutput: vi.fn(),
-    setPreviewTransitionDenoisePending: vi.fn(),
     setVarianceMoments: vi.fn(),
     setAdaptiveSamplingTargets: vi.fn(),
     prepareOfflineAdaptiveSampling: vi.fn(async () => undefined),
@@ -752,7 +751,6 @@ describe('Renderer while-converging OIDN', () => {
       }
       expect(samples).toBe(1);
       expect(pipeline.performOIDNDenoise).toHaveBeenCalledOnce();
-      expect(pipeline.setPreviewTransitionDenoisePending).toHaveBeenCalledWith(true);
 
       renderer.render(scene, camera);
       expect(pipeline.draw).toHaveBeenCalledTimes(3);
@@ -899,9 +897,6 @@ describe('Renderer while-converging OIDN', () => {
     expect(pipeline.draw).toHaveBeenNthCalledWith(1, camera, 1);
     expect(pipeline.draw).toHaveBeenNthCalledWith(2, camera, 1);
     expect(pipeline.performOIDNDenoise).toHaveBeenCalledTimes(2);
-    expect(pipeline.setPreviewTransitionDenoisePending).toHaveBeenCalledWith(
-      true
-    );
     expect(pipeline.drawPostProcess).toHaveBeenCalled();
   });
 
@@ -938,9 +933,6 @@ describe('Renderer while-converging OIDN', () => {
     expect(pipeline.performOIDNDenoise).toHaveBeenCalledOnce();
     expect(pipeline.performOIDNDenoise).toHaveBeenCalledWith(
       renderer.oidn, undefined, false
-    );
-    expect(pipeline.setPreviewTransitionDenoisePending).toHaveBeenCalledWith(
-      false
     );
   });
 

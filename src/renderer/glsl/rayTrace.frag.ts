@@ -43,9 +43,9 @@ for(int _idx_ = 0; _idx_ < BOUNCES; _idx_++) {{
 `;
 const bounceCodeOnOther = glsl`
 bool isOpaque = !si.isTransparency;
-int bounceLimit = previewMode ? min(BOUNCES, previewBounces) : BOUNCES;
+int activeBounceLimit = min(BOUNCES, bounceLimit);
 for(int idx = 0; idx < min(BOUNCES * 3, 20); idx++) {
-  if (isOpaque && idx > bounceLimit) {
+  if (isOpaque && idx > activeBounceLimit) {
     path.abort = true;
   }
   if (path.abort) {
@@ -75,8 +75,9 @@ export default function createRayTraceFragmentShader() {
     viewportSize: Shader.uniform('vec2'),
 
     wavelength: Shader.uniform('float', 0),
-    previewMode: Shader.uniform('bool', false),
-    previewBounces: Shader.uniform('int', 2)
+    bevelEnabled: Shader.uniform('bool', true),
+    dispersionWavelengths: Shader.uniform('int', 3),
+    bounceLimit: Shader.uniform('int', 8)
   },
   includes: [rayTraceCore, materialBufferGlsl, intersect, random, envMap],
   main: glsl`
@@ -269,7 +270,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
   // Dynamic preview only becomes spectral when the primary visible surface
   // actually disperses transmitted light. Direct background and ordinary
   // opaque materials stay full RGB and therefore remain noise-free.
-  if (previewMode && si.hit && mat.transmissionWeight > 0.001 && mat.transmissionDispersionScale > 0.001) {
+  if (dispersionWavelengths == 1 && si.hit && mat.transmissionWeight > 0.001 && mat.transmissionDispersionScale > 0.001) {
     pathWavelength = heroWavelength;
   }
   if (mat.transmissionWeight > 0.001 && pathWavelength > 0.0) {
@@ -527,7 +528,7 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
   si.isTransparency = mat.transmissionWeight > 0.001 || mat.subsurfaceWeight > 0.001 || mat.alpha < 0.999;
 
 #ifdef HAS_BEVEL
-  if (!previewMode && mat.bevel > 0.0) {
+  if (bevelEnabled && mat.bevel > 0.0) {
     si.normal = getBevelNormal(si, mat.bevel);
   }
 #endif
@@ -561,9 +562,9 @@ void main() {
   rng_initialize(v_Texcoord * viewportSize, int(uint(sampleCount) ^ sampleHash(uint(sequenceSeed))));
 
 
-  pathWavelength = previewMode ? 0.0 : wavelength;
+  pathWavelength = dispersionWavelengths == 1 ? 0.0 : wavelength;
   heroWavelength = wavelength;
-  if (previewMode && wavelength > 0.0) {
+  if (dispersionWavelengths == 1 && wavelength > 0.0) {
     float channel = floor(sample1D(CAMERA_WAVELENGTH) * 3.0);
     heroWavelength = channel < 1.0 ? 650.0 : channel < 2.0 ? 510.0 : 475.0;
   }
@@ -591,7 +592,7 @@ void main() {
   if (pathWavelength > 0.0) {
     // RGB will be normalized using accumated hit in out_albedo.a
     liAndAlpha.rgb *= 3.0;
-    if (!previewMode) {
+    if (dispersionWavelengths != 1) {
       // Full spectral samples use three additive passes. Preview only submits
       // one hero wavelength, so its alpha must not be divided.
       liAndAlpha.a /= 3.0;

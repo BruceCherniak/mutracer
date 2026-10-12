@@ -1,3 +1,4 @@
+import { getTargetShaderCache } from './WGPUShaderCache.js';
 import shadowCatcherAccumulationWGSL from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
 
 import {
@@ -330,11 +331,11 @@ export class WGPUJNLMDenoisePass {
   }
 
   private _createPipeline(label: string, code: string) {
-    return this._device.createComputePipeline({
+    return getTargetShaderCache(this._device).createComputePipeline({
       label,
       layout: 'auto',
       compute: {
-        module: this._device.createShaderModule({ label, code }),
+        module: getTargetShaderCache(this._device).createShaderModule({ label, code }),
         entryPoint: 'main'
       }
     });
@@ -446,6 +447,11 @@ export class WGPUJNLMDenoisePass {
     }
     pass.end();
     return colors[0];
+  }
+
+  getMemoryBytes() {
+    return [...this._paramsBuffers, ...this._guides, ...this._colors]
+      .reduce((sum, buffer) => sum + buffer.size, 0);
   }
 
   dispose() {

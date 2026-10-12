@@ -66,6 +66,14 @@ export class Texture2D {
     this.height = options.height || 1;
   }
 
+  /** Allocated 2D render-target payload, excluding driver/FBO overhead. */
+  getMemoryBytes() {
+    if (!this._allocated) return 0;
+    const bytes = this._options.type === constants.FLOAT ? 4 :
+      this._options.type === constants.HALF_FLOAT ? 2 : 1;
+    return this.width * this.height * 4 * bytes;
+  }
+
   get source(): any {
     return this._source;
   }

@@ -63,12 +63,7 @@ var<private> bounceIndex: u32 = 0u;
 // Number of light candidates resampled for each NEE estimate. Interactive
 // preview caps the budget at two.
 fn neeCandidateCount() -> u32 {
-  let configured = u32(max(rtUniform.directLightCandidates, 1));
-  return select(
-    configured,
-    min(configured, 2u),
-    rtUniform.previewMode != 0
-  );
+  return u32(max(rtUniform.directLightCandidates, 1));
 }
 
 // Hash-based random number used to select among light candidates. It is
@@ -602,10 +597,7 @@ fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray:
   path.abort = false;
 
   let isNotTransparent = (*ma).transmissionWeight < 0.001 && (*ma).subsurfaceWeight < 0.001 && (*ma).alpha > 0.99;
-  let bounceLimit = max(select(
-    min(rtUniform.bounces, max(rtUniform.previewBounces, 1)),
-    rtUniform.bounces, rtUniform.previewMode == 0
-  ), 0);
+  let bounceLimit = max(rtUniform.bounces, 0);
   var depth = 0;
   // Transparent paths may take up to three times the configured bounces.
   for (var idx: i32 = 0; idx < min(bounceLimit * 3, 20); idx = idx + 1) {
@@ -710,7 +702,7 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
     return vec4f(vec3f(1.0), path.alpha);
   }
   else {
-    if (HAS_BEVEL && rtUniform.previewMode == 0) {
+    if (HAS_BEVEL && rtUniform.bevel != 0) {
       if (ma.bevel > 0.0) {
         si.normal = getBevelNormal(si, ma.bevel);
       }
@@ -748,13 +740,13 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
       var ma2 = ma;
       let wavelengthRngState = s0;
       let wavelengthHashedCounter = hashedCounter;
-      let preview = rtUniform.previewMode != 0;
-      let previewDispersive = si.hit &&
+      let singleWavelength = rtUniform.dispersionWavelengths == 1;
+      let dispersivePrimary = si.hit &&
         ma.transmissionWeight > 0.001 &&
         ma.transmissionDispersionScale > 0.001;
-      let wavelengthCount = select(3, 1, preview);
+      let wavelengthCount = select(3, 1, singleWavelength);
       var heroWavelengthIndex = 0;
-      if (preview && previewDispersive) {
+      if (singleWavelength && dispersivePrimary) {
         // Stochastic hero wavelength: one RGB channel per pixel keeps the
         // preview spectral at one-third of the full three-path cost.
         heroWavelengthIndex = min(i32(floor(sample1D(CAMERA_WAVELENGTH) * 3.0)), 2);
@@ -763,14 +755,14 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
         // Common random numbers keep Monte Carlo error correlated between
         // RGB wavelengths. This removes much of the colored variance that
         // otherwise turns into dirty chromatic patches after OIDN.
-        if (!preview) {
+        if (!singleWavelength) {
           s0 = wavelengthRngState;
           hashedCounter = wavelengthHashedCounter;
           samplingBounce = 0u;
         }
         si.wavelength = 0.0;
-        if (!preview || previewDispersive) {
-          si.wavelength = rgbWaveLengths[select(i, heroWavelengthIndex, preview)];
+        if (!singleWavelength || dispersivePrimary) {
+          si.wavelength = rgbWaveLengths[select(i, heroWavelengthIndex, singleWavelength)];
           ma.specularIor = sampling_cauchy_ior(
             si.wavelength,
             ma.specularIor,
@@ -779,7 +771,7 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
           );
         }
         var wavelengthAux: RayTraceAuxiliary;
-        if (preview) {
+        if (singleWavelength) {
           wavelengthAux = *outAux;
         } else {
           wavelengthAux.albedo = (*outAux).albedo;
@@ -788,9 +780,9 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
           wavelengthAux.isShadowCatcher = false;
         }
         let res = integrateOnePath(uv, &si, ray, &ma, &wavelengthAux);
-        if (preview) {
+        if (singleWavelength) {
           *outAux = wavelengthAux;
-          let scale = select(1.0, 3.0, previewDispersive);
+          let scale = select(1.0, 3.0, dispersivePrimary);
           return vec4f(res.rgb * scale, res.a);
         }
         colAccum += res.rgb;

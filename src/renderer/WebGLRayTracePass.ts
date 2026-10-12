@@ -885,10 +885,20 @@ class WebGLRayTracePass {
     });
   }
 
-  setPreviewMode(enabled: boolean, bounces: number) {
-    this._tracePasses.forEach((pass) => {
-      pass.setUniform('previewMode', enabled);
-      pass.setUniform('previewBounces', Math.max(1, Math.round(bounces)));
+  getTargetMemoryBytes(target: object) {
+    return this._mainPass.getMemoryBytes(target) + this._shadowCatcherPass.getMemoryBytes(target);
+  }
+
+  useTarget(target: object) {
+    this._mainPass.useTarget(target);
+    this._shadowCatcherPass.useTarget(target);
+  }
+
+  setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number }) {
+    this._tracePasses.forEach(pass => {
+      pass.setUniform('bounceLimit', Math.max(1, Math.round(options.bounces)));
+      pass.setUniform('bevelEnabled', options.bevel);
+      pass.setUniform('dispersionWavelengths', options.dispersionWavelengths);
     });
   }
 

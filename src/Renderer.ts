@@ -1524,9 +1524,6 @@ export default class Renderer {
     }
     const firstFrameDenoise = canRunOIDN &&
       this._oidnFirstFrameDenoisePending;
-    if (previewModeEnded) {
-      pipeline.setPreviewTransitionDenoisePending?.(settledFrameDenoise);
-    }
     if (staticTransitionDenoise) {
       this._oidnStaticDenoisePending = false;
       this._oidnStatus = 0;

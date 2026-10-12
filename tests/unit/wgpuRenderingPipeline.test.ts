@@ -6,14 +6,25 @@ import type { OIDNWeb } from '../../src/renderer/WGPURenderingPipeline';
 // Keep the real pipeline and tile scheduler; replace GPU execution at the pass boundary.
 const mocks = vi.hoisted(() => {
   class Pass {
-    static instances = new Map<string, Pass>();
+    static all = new Map<string, Pass[]>();
+    static instances = {
+      get(label: string) {
+        const passes = Pass.all.get(label) ?? [];
+        return passes.reduce((latest, pass) =>
+          (pass.createPass.mock.invocationCallOrder.at(-1) ?? 0) >
+          (latest.createPass.mock.invocationCallOrder.at(-1) ?? 0) ? pass : latest, passes[0]);
+      }
+    };
     texture = { width: 80, height: 64, format: 'rgba8unorm' };
-    constructor(label = '') { Pass.instances.set(label, this); }
+    constructor(label = '') { const list = Pass.all.get(label) ?? []; list.push(this); Pass.all.set(label, list); }
     outputs = new Map<string, Pass['texture']>();
+    getMemoryBytes() { return 0; }
     setSize(width: number, height: number) {
       this.texture = { ...this.texture, width, height };
-      for (const texture of this.outputs.values()) Object.assign(texture, { width, height });
+      this.outputs.clear();
     }
+    retainOutput() {}
+    releaseOutput() {}
     setUniform = vi.fn();
     setOutputParams() {}
     setRenderToScreen = vi.fn();
@@ -33,7 +44,10 @@ const mocks = vi.hoisted(() => {
     cameraChanged() { return false; }
     setJitter() {}
     setSampleTiles() {}
-    setPreviewMode() {}
+    getDiagnostics() { return {}; }
+    getTargetMemoryBytes() { return 0; }
+    useTarget() {}
+    setQuality() {}
     updatePipeline() {}
     isCompilingShader() { return false; }
     isPipelineReady() { return true; }
@@ -93,6 +107,7 @@ function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) 
 }
 
 beforeEach(() => {
+  mocks.Pass.all.clear();
   vi.stubGlobal('navigator', { gpu: { getPreferredCanvasFormat: () => 'bgra8unorm' } });
   vi.stubGlobal('GPUBufferUsage', { QUERY_RESOLVE: 1, COPY_SRC: 2, COPY_DST: 4, MAP_READ: 8 });
   vi.stubGlobal('GPUTextureUsage', { TEXTURE_BINDING: 1, COPY_DST: 2, COPY_SRC: 4 });
@@ -263,7 +278,7 @@ describe('WebGPU denoised presentation transitions', () => {
     const completedTexture = displayedTexture();
     pipeline.setSize(160, 96);
     const snapshot = displayedTexture();
-    expect(snapshot).not.toBe(completedTexture);
+    expect(snapshot).toBe(completedTexture);
     expect(snapshot).toMatchObject({ width: 80, height: 64 });
     expect(mocks.Pass.instances.get('output')!.setRenderToScreen).toHaveBeenCalled();
     pipeline.drawPostProcess();
@@ -306,14 +321,13 @@ describe('WebGPU denoised presentation transitions', () => {
     expect(snapshot).toMatchObject({ width: 80, height: 64 });
     // Composition is updated with raw samples while the snapshot is held.
     // Settling must keep the displayed snapshot, not capture those raw samples.
-    pipeline.setPreviewTransitionDenoisePending(true);
     pipeline.setPreviewParams({
       enabled: false, resolutionScale: 0.5, bounces: 2, idleDelayMs: 150
     });
     pipeline.draw(camera, 1);
     expect(displayedTexture()).toBe(snapshot);
     await pipeline.performOIDNDenoise(completedDenoiser(), undefined, true);
-    expect(displayedTexture()).not.toBe(snapshot);
+    expect(pipeline.getDiagnostics()).toMatchObject({ presentedTarget: 'final', presentedComplete: true });
     pipeline.dispose();
   });
 
@@ -414,5 +428,38 @@ it('falls back to AgX for unknown tone mapping values', () => {
   compose.setUniform.mockClear();
   pipeline.setToneMappingParams({ toneMapping: 'removed-mode' as never });
   expect(compose.setUniform).toHaveBeenCalledWith('toneMappingParams', [0, 0]);
+  pipeline.dispose();
+});
+
+it('retains two resident outputs and presents preview until a complete final sample', async () => {
+  const pipeline = createPipeline(false);
+  const camera = new Camera({ projection: 'perspective' });
+  pipeline.setPreviewParams({ enabled: true, resolutionScale: 0.5, bounces: 2, idleDelayMs: 0 });
+  expect(pipeline.needsRestartSample(camera, true)).toBe(true);
+  pipeline.draw(camera, 1);
+  expect(pipeline.getDiagnostics()).toMatchObject({ presentedTarget: 'preview', presentedComplete: true });
+  const previewTexture = displayedTexture();
+  expect(pipeline.needsRestartSample(camera)).toBe(true);
+  pipeline.present(pipeline.finalTarget);
+  expect(displayedTexture()).toBe(previewTexture);
+  pipeline.draw(camera, 1);
+  expect(pipeline.getDiagnostics()).toMatchObject({ presentedTarget: 'final', presentedComplete: true });
+  expect(displayedTexture()).not.toBe(previewTexture);
+  pipeline.dispose();
+});
+
+it('can accumulate a third target without changing final samples or presenting it', () => {
+  const pipeline = createPipeline(false);
+  const camera = new Camera({ projection: 'perspective' });
+  pipeline.draw(camera, 2);
+  const finalImage = displayedTexture();
+  const third = pipeline.createTarget({ label: 'third' });
+  pipeline.drawTarget(third, camera, { sampleTarget: 3, timeBudgetMs: 21 });
+  expect(third.pipeline.getTotalSamplesRendered()).toBe(1);
+  pipeline.drawTarget(third, camera, { sampleTarget: 3, timeBudgetMs: 21 });
+  expect(third.pipeline.getTotalSamplesRendered()).toBe(2);
+  expect(pipeline.getTotalSamplesRendered()).toBe(1);
+  expect(displayedTexture()).toBe(finalImage);
+  expect(pipeline.getDiagnostics().targets?.map(target => target.label)).toEqual(['final', 'preview', 'third']);
   pipeline.dispose();
 });

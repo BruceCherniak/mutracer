@@ -24,7 +24,7 @@ export default new FragmentShader({
     BOUNCES: 2
   },
   uniforms: {
-    previewMode: Shader.uniform('bool', 0),
+    dispersionWavelengths: Shader.uniform('int', 3),
     wavelength: Shader.uniform('float', 0),
     viewportSize: Shader.uniform('vec2'),
     viewProjectionInv: Shader.uniform('mat4'),
@@ -95,7 +95,7 @@ void main() {
   initRandom();
   rng_initialize(v_Texcoord * viewportSize, int(uint(sampleCount) ^ sampleHash(uint(sequenceSeed))));
   // Match the beauty pass's random stream in hero-wavelength previews.
-  if (previewMode && wavelength > 0.0) { sample1D(CAMERA_WAVELENGTH); }
+  if (dispersionWavelengths == 1 && wavelength > 0.0) { sample1D(CAMERA_WAVELENGTH); }
   Ray cam = primaryCameraRay();
   vec4 background;
   vec4 liAndAlpha = integrator(cam, background);

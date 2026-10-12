@@ -99,7 +99,7 @@ affects the image restarts accumulation.
 | `readDepthSamples({ x, y, size })` | Asynchronously queries a 7×7 grid of GPU depths after `render()`; see [depth sampling](#depth-sampling) |
 | `toBlob({ type?, quality? } = {})` | Redraws post-processing, waits for GPU work and encodes a Blob; type defaults image/png, quality undefined |
 | `backend` / `device` | Backend (`'webgpu'` / `'webgl'`), initially undefined; device only on WebGPU |
-| `getDiagnostics()` | Available after initialization or a BVH build (backend undefined before init); backend, adapter, shader compilation, BVH, light sampling and timing details |
+| `getDiagnostics()` | Available after initialization or a BVH build (backend undefined before init); backend, adapter, shader compilation, BVH, light sampling, timing and [resident target diagnostics](./performance.md#diagnostics) |
 | `init()` / `info` | Initializes once and resolves `RendererInfo`; synchronous info is undefined before completion |
 | `dispose()` | Releases GPU resources, BVH Workers and the denoiser; cancels pending BVH preparation |
 

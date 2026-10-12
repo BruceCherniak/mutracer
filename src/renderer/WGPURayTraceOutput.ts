@@ -1,3 +1,5 @@
+import { getTargetShaderCache } from './WGPUShaderCache.js';
+import { textureBytes } from './gpuMemory.js';
 import shadowCatcherAccumulationWGSL from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
 import { fullScreenQuadVertexShaderWGSL } from './WGPUFullQuadPass.js';
 
@@ -133,6 +135,19 @@ export class WGPURayTraceOutputPass {
     };
   }
 
+  private readonly _retainedOutputs = new Set<GPUTexture>();
+  retainOutput(texture: GPUTexture) {
+    const owned = ['color', 'normal', 'albedo', 'shadowCatcher', 'foreground', 'catcherBackground'] as const;
+    if (owned.some(label => this.getOutput(label) === texture)) this._retainedOutputs.add(texture);
+  }
+  releaseOutput(texture: GPUTexture) {
+    if (!this._retainedOutputs.delete(texture)) return;
+    const owned = ['color', 'normal', 'albedo', 'shadowCatcher', 'foreground', 'catcherBackground'] as const;
+    if (!owned.some(label => this.getOutput(label) === texture)) {
+      void this._device.queue.onSubmittedWorkDone().catch(() => undefined).then(() => texture.destroy());
+    }
+  }
+
   getOutput(label: RayTraceOutput): GPUTexture {
 
     return this[`_${label}Texture`];
@@ -214,17 +229,17 @@ export class WGPURayTraceOutputPass {
     this._needsUpdatePipeline = false;
     const device = this._device;
 
-    this._pipeline = device.createRenderPipeline({
+    this._pipeline = getTargetShaderCache(device).createRenderPipeline({
       label: 'rayTraceOutput',
       layout: 'auto',
       vertex: {
-        module: device.createShaderModule({
+        module: getTargetShaderCache(device).createShaderModule({
           code: fullScreenQuadVertexShaderWGSL
         }),
         entryPoint: 'main'
       },
       fragment: {
-        module: device.createShaderModule({
+        module: getTargetShaderCache(device).createShaderModule({
           code: createNormalizeRayTraceOutputWGSL()
         }),
         entryPoint: 'main',
@@ -249,15 +264,15 @@ export class WGPURayTraceOutputPass {
       }
     });
 
-    this._layersPipeline = device.createRenderPipeline({
+    this._layersPipeline = getTargetShaderCache(device).createRenderPipeline({
       label: 'rayTraceLayers',
       layout: 'auto',
       vertex: {
-        module: device.createShaderModule({ code: fullScreenQuadVertexShaderWGSL }),
+        module: getTargetShaderCache(device).createShaderModule({ code: fullScreenQuadVertexShaderWGSL }),
         entryPoint: 'main'
       },
       fragment: {
-        module: device.createShaderModule({ code: createNormalizeRayTraceOutputWGSL(true) }),
+        module: getTargetShaderCache(device).createShaderModule({ code: createNormalizeRayTraceOutputWGSL(true) }),
         entryPoint: 'main',
         targets: [{ format: 'rgba16float' }, { format: 'rgba16float' }],
         constants: { outputWidth: this._width, outputHeight: this._height }
@@ -370,15 +385,25 @@ export class WGPURayTraceOutputPass {
       this._shadowCatcherTexture,
       this._foregroundTexture,
       this._catcherBackgroundTexture
-    ].filter((texture): texture is GPUTexture => !!texture);
+    ].filter((texture): texture is GPUTexture => !!texture && !this._retainedOutputs.has(texture));
     void this._device.queue
       .onSubmittedWorkDone()
       .catch(() => undefined)
       .then(() => textures.forEach((texture) => texture.destroy()));
   }
 
+  getMemoryBytes() {
+    const textures = ['color', 'normal', 'albedo', 'shadowCatcher', 'foreground', 'catcherBackground'] as const;
+    return Object.values(this._uniformsBuffers).reduce((sum, buffer) => sum + buffer.size, 0)
+      + Array.from(new Set([...textures.map(label => this.getOutput(label)), ...this._retainedOutputs]))
+        .reduce((sum, texture) => sum + textureBytes(texture), 0);
+  }
+
   dispose() {
+    const retained = Array.from(this._retainedOutputs);
+    void this._device.queue.onSubmittedWorkDone().catch(() => undefined).then(() => retained.forEach(texture => texture.destroy()));
     this._destroyTextures();
+    this._retainedOutputs.clear();
     Object.keys(this._uniformsBuffers).forEach((key) => {
       (this._uniformsBuffers as any)[key].destroy();
     });

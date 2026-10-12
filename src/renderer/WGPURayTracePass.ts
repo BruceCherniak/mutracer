@@ -177,8 +177,8 @@ export function makeRayTraceUniform() {
     groundedBackgroundCenter: new Float32Array(RayTraceUniformValues, 80, 2),
     blasOffset: new Int32Array(RayTraceUniformValues, 88, 1),
     isEmpty: new Int32Array(RayTraceUniformValues, 92, 1),
-    previewMode: new Int32Array(RayTraceUniformValues, 96, 1),
-    previewBounces: new Int32Array(RayTraceUniformValues, 100, 1),
+    bevel: new Int32Array(RayTraceUniformValues, 96, 1),
+    dispersionWavelengths: new Int32Array(RayTraceUniformValues, 100, 1),
     envLightPmf: new Float32Array(RayTraceUniformValues, 104, 1),
     lightChoiceCount: new Int32Array(RayTraceUniformValues, 108, 1),
     lightWeightTotal: new Float32Array(RayTraceUniformValues, 112, 1),
@@ -199,6 +199,8 @@ export function makeRayTraceUniform() {
   // Fixed algorithmic count; a uniform bound keeps DXC from unrolling the
   // complete layered BSDF at every proposal/optical channel.
   RayTraceUniformViews.bsdfProposalCount[0] = 4;
+  RayTraceUniformViews.bevel[0] = 1;
+  RayTraceUniformViews.dispersionWavelengths[0] = 3;
   return {
     buffer: RayTraceUniformValues,
     views: RayTraceUniformViews
@@ -331,6 +333,24 @@ class WGPURayTracePass {
   private _dirtyTransformMeshes = new Set<Mesh>();
   private _geometriesNeedRefit = new Set<Geometry>();
   private _needsUpdateAnalyticLightsBuffer = true;
+
+  private _activeTarget: object = {};
+  private _targetOutputs = new Map<object, { buffers: GPUBuffer[]; bindGroup?: GPUBindGroup; pipeline?: GPUComputePipeline }>();
+
+  getTargetMemoryBytes(target: object) {
+    return this._targetOutputs.get(target)?.buffers.reduce((sum, buffer) => sum + buffer.size, 0) ?? 0;
+  }
+
+  useTarget(target: object) {
+    this._activeTarget = target;
+    const output = this._targetOutputs.get(target);
+    [this._outColorBuffer, this._outNormalBuffer, this._outAlbedoBuffer, this._outShadowCatcherBuffer] = output?.buffers ?? [];
+    if (output?.bindGroup && output.pipeline === this._rayTracePipeline && this._rayTraceBindGroups) {
+      this._rayTraceBindGroups[3] = output.bindGroup;
+    } else {
+      this._needsUpdateBindGroups = true;
+    }
+  }
 
   private _outColorBuffer!: GPUBuffer;
   private _outNormalBuffer!: GPUBuffer;
@@ -1439,7 +1459,8 @@ ${rayTraceCompute({
           }) satisfies GPUBindGroupEntry
       )
     });
-    const outputBindGroup = _device.createBindGroup({
+    const target = this._targetOutputs.get(this._activeTarget)!;
+    const outputBindGroup = target.pipeline === bindGroupPipeline && target.bindGroup || _device.createBindGroup({
       layout: bindGroupPipeline.getBindGroupLayout(3),
       entries: [
         this._outColorBuffer,
@@ -1454,6 +1475,8 @@ ${rayTraceCompute({
       )
     });
 
+    target.bindGroup = outputBindGroup;
+    target.pipeline = bindGroupPipeline;
     this._rayTraceBindGroups = [
       bufferBindGroup,
       texturesBindGroup,
@@ -1661,15 +1684,11 @@ ${rayTraceCompute({
     );
   }
 
-  setPreviewMode(enabled: boolean, bounces: number) {
-    const previewMode = enabled ? 1 : 0;
-    const previewBounces = Math.max(1, Math.round(bounces));
-    const changed =
-      this._rtUniform.views.previewMode[0] !== previewMode ||
-      this._rtUniform.views.previewBounces[0] !== previewBounces;
-    this._rtUniform.views.previewMode[0] = previewMode;
-    this._rtUniform.views.previewBounces[0] = previewBounces;
-    return changed;
+  setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number }) {
+    this._rtUniform.views.bounces[0] = Math.min(MAX_BOUNCES, Math.max(1, Math.round(options.bounces)));
+    this._rtUniform.views.bevel[0] = +options.bevel;
+    this._rtUniform.views.dispersionWavelengths[0] = options.dispersionWavelengths;
+    this._rtUniform.views.directLightCandidates[0] = normalizeDirectLightCandidates(options.directLightCandidates);
   }
 
   private _setEnvMap(envImage: EnvironmentMapSource | undefined) {
@@ -2786,6 +2805,7 @@ ${rayTraceCompute({
           GPUBufferUsage.COPY_SRC
       });
     }
+    this._targetOutputs.set(this._activeTarget, { buffers: [this._outColorBuffer, this._outNormalBuffer, this._outAlbedoBuffer, this._outShadowCatcherBuffer] });
     // A preview-resolution update can replace these buffers immediately after
     // an encoded ray-trace or output command was submitted. Retire every old
     // output only after the queue has completed work already submitted
@@ -2848,10 +2868,7 @@ ${rayTraceCompute({
     this._minmaxPass.dispose();
     this._shaderCache.clear();
     const buffers = new Set<GPUBuffer | undefined>([
-      this._outColorBuffer,
-      this._outNormalBuffer,
-      this._outAlbedoBuffer,
-      this._outShadowCatcherBuffer,
+      ...Array.from(this._targetOutputs.values()).flatMap(target => target.buffers),
       this._mapInfoUniform,
       this._attrBuffers,
       this._materialsBuffer,
