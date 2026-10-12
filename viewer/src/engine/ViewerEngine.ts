@@ -532,9 +532,6 @@ export class ViewerEngine {
     const changed = (key: keyof Settings) => !prev || prev[key] !== s[key];
     const r = this.renderer;
     r.bvhBuilder = s.bvhBuilder;
-    if (prev && changed('bvhBuilder')) {
-      void r.prepareScene(this.sync.scene, { rebuild: true }).then(() => r.restartSamples());
-    }
     r.maxSamples = s.maxSamples;
     r.bounces = s.bounces;
     r.samplingPattern = s.samplingPattern;
