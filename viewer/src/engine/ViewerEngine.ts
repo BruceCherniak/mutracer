@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-  Renderer,
+  Engine, Render,
   THREESceneSync,
   fromTHREECamera,
 } from '@meimu/mutracer';
@@ -54,7 +54,14 @@ const AUTOFOCUS_TRACK_MS = 280;
  * it does not depend on React.
  */
 export class ViewerEngine {
-  readonly renderer: Renderer;
+  readonly engine: Engine;
+  readonly preview: Render;
+  readonly final: Render;
+  private renderCamera?: NonNullable<Engine['camera']>;
+  private displayed?: Render;
+  private previousChanged = false;
+  private previousControlsActive = false;
+  private lastContinuousChange = -Infinity;
   private readonly canvas: HTMLCanvasElement;
   private readonly scene = new THREE.Scene();
   private readonly perspectiveCamera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
@@ -116,12 +123,11 @@ export class ViewerEngine {
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.settings = get().settings;
-    this.renderer = new Renderer({ canvas, preferWebGPU: !new URLSearchParams(location.search).has('webgl') });
-
-    this.renderer.on('sample', ({samples}) => {
-      if (this.awaitingFirstSample && samples > 0) { this.awaitingFirstSample = false; set({loading:null}); }
-    });
-    this.renderer.on('error', error => showToast(`Rendering failed: ${error.message}`, 'error'));
+    this.engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
+    this.preview = new Render(this.engine, {resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}, maxSamples: 1,
+      bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
+    this.final = new Render(this.engine, {fallback: this.preview});
+    this.engine.on('error', error => showToast(`Rendering failed: ${error.message}`, 'error'));
 
     this.scene.add(this.modelGroup);
     this.studioRig.name = 'Studio lights';
@@ -147,7 +153,7 @@ export class ViewerEngine {
 
     this.sync = this.createSync();
     this.applySettings(this.settings, null);
-    void this.renderer.init().then(info => {
+    void this.engine.init().then(info => {
       if (this.disposed) return;
       set({ backend: { name: info.backend === 'webgpu' ? 'WebGPU' : 'WebGL 2', adapter: shortAdapterName(info.adapterName) } });
       return this.updateDenoiser();
@@ -192,7 +198,7 @@ export class ViewerEngine {
     this.sync.dispose();
     this.environment.dispose();
     this.studioAmbient.dispose();
-    this.renderer.dispose();
+    this.engine.dispose();
   }
 
   // ---------------------------------------------------------------- loading
@@ -533,28 +539,18 @@ export class ViewerEngine {
 
   private applySettings(s: Settings, prev: Settings | null) {
     const changed = (key: keyof Settings) => !prev || prev[key] !== s[key];
-    const r = this.renderer;
-    r.bvhBuilder = s.bvhBuilder;
-    r.maxSamples = s.maxSamples;
-    r.bounces = s.bounces;
-    r.samplingPattern = s.samplingPattern;
-    r.clamping = s.clamping;
-    r.toneMapping = s.toneMapping;
-    r.toneMappingExposure = s.exposure;
-    r.contrast = s.contrast;
-    r.saturation = s.saturation;
-    r.temperature = s.temperature;
-    r.tint = s.tint;
-    r.bloomIntensity = s.bloomIntensity;
-    r.bloomThreshold = s.bloomThreshold;
-    r.bloomRadius = s.bloomRadius;
-    r.vignette = s.vignette;
-    r.output = s.output;
-    // While-converging OIDN denoises preview frames with the small network and lowers
-    // their resolution to keep up, so it always previews while interacting.
-    r.previewEnabled = s.previewEnabled;
-    r.previewMaxResolutionScale = s.previewMaxResolutionScale;
-    r.shadowCatcherAlpha = s.groundOpacity;
+    const r = this.final, display = this.engine.display;
+    this.engine.bvhBuilder = s.bvhBuilder;
+    r.maxSamples = s.maxSamples; r.bounces = s.bounces;
+    r.samplingPattern = s.samplingPattern; r.clamping = s.clamping;
+    this.preview.bounces = Math.min(2, s.bounces);
+    this.preview.samplingPattern = s.samplingPattern; this.preview.clamping = s.clamping;
+    r.fallback = s.previewEnabled || s.denoiseWhileConverging ? this.preview : null;
+    display.toneMapping = s.toneMapping; display.toneMappingExposure = s.exposure;
+    display.contrast = s.contrast; display.saturation = s.saturation;
+    display.temperature = s.temperature; display.tint = s.tint;
+    display.bloomIntensity = s.bloomIntensity; display.bloomThreshold = s.bloomThreshold; display.bloomRadius = s.bloomRadius;
+    display.vignette = s.vignette; display.channel = s.output; display.shadowCatcherAlpha = s.groundOpacity;
     this.ground.visible = s.groundShadow;
     this.controls.autoRotate = s.autoRotate;
     this.controls.enabled = s.cameraIndex < 0;
@@ -608,19 +604,14 @@ export class ViewerEngine {
     }
   }
 
-  private async updateDenoiser() {
-    if (!this.renderer.backend) return;
-    const options = getDenoiserOptions(this.settings, this.renderer.backend === 'webgpu', OIDN_WEIGHTS);
-    const key = JSON.stringify(options);
+  private updateDenoiser() {
+    if (!this.engine.backend) return;
+    const final = getDenoiserOptions(this.settings, this.engine.backend === 'webgpu', OIDN_WEIGHTS);
+    const preview = getDenoiserOptions(this.settings, this.engine.backend === 'webgpu', OIDN_WEIGHTS, true);
+    const key = JSON.stringify({final, preview});
     if (key === this.denoiserKey) return;
     this.denoiserKey = key;
-    try {
-      await this.renderer.setDenoiser(options);
-    } catch (error) {
-      if (this.denoiserKey !== key) return;
-      this.denoiserKey = '';
-      showToast(`Denoiser unavailable: ${(error as Error).message}`, 'error');
-    }
+    this.final.denoiser = final; this.preview.denoiser = preview;
   }
 
   // ----------------------------------------------------------------- camera
@@ -853,7 +844,7 @@ export class ViewerEngine {
     const camera = this.activeCamera();
     const projection = camera.projectionMatrix.clone();
     this.focusQueryInFlight = true;
-    void this.renderer.readDepthSamples({ x: area.x, y: area.y, size: automatic ? FOCUS_AREA_SIZE : 0.004 })
+    void this.engine.readDepthSamples({ x: area.x, y: area.y, size: automatic ? FOCUS_AREA_SIZE : 0.004 })
       .then((samples) => {
         if (this.disposed || version !== this.focusQueryVersion || loadToken !== this.loadToken ||
           !(this.settings.fStop > 0) || automatic !== this.settings.autoFocus ||
@@ -1101,7 +1092,7 @@ export class ViewerEngine {
   async downloadViewportImage() {
     if (this.exporting) return;
     try {
-      const samples = this.renderer.samples;
+      const samples = (this.displayed ?? this.final).samples;
       if (samples === 0) throw new Error('The viewport has not rendered an image yet');
       const blob = await this.captureImage();
       this.downloadImage(blob, samples, 'viewport');
@@ -1131,42 +1122,37 @@ export class ViewerEngine {
     showToast(`Saved ${link.download}`);
   }
 
-  private captureImage(type = 'image/png', quality?: number): Promise<Blob> {
-    return this.renderer.toBlob({ type, quality });
+  captureImage(type = 'image/png', quality?: number): Promise<Blob> {
+    return this.engine.display.toBlob(this.displayed ?? this.final, {type, quality});
   }
 
-  /** Renders the current view offline at the given size and encodes the canvas. */
+  /** Renders an independent fixed-size image without resizing the viewport. */
   async renderImage(options: ExportOptions, type = 'image/png', quality?: number): Promise<Blob> {
     if (this.exporting) throw new Error('A render is already running');
-    this.exporting = true;
-    this.exportAbort = new AbortController();
-    const previous = this.renderer.getSize();
+    this.exporting = true; this.exportAbort = new AbortController();
     const background = this.settings.background;
-    const camera = this.activeCamera().clone();
-    setAspect(camera, options.width / options.height);
-    set({ export: { stage: 'final', samples: 0, target: options.samples } });
+    const camera = this.activeCamera().clone(); setAspect(camera, options.width / options.height);
+    let image: Render | undefined;
+    set({export: {stage: 'final', samples: 0, target: options.samples}});
     try {
-      if (options.transparent && background !== 'transparent') {
-        this.settings = { ...this.settings, background: 'transparent' };
-        this.applyBackground();
-      }
-      this.sync.update();
-      this.renderer.setSize(options.width, options.height);
+      if (options.transparent && background !== 'transparent') { this.settings = {...this.settings, background: 'transparent'}; this.applyBackground(); }
+      this.sync.update(); this.engine.scene = this.sync.scene;
+      this.renderCamera ??= this.lensCamera(this.activeCamera(), this.pull?.to ?? this.settings.focusDistance);
+      this.engine.camera = this.renderCamera; this.engine.update();
+      image = new Render(this.engine, {width: options.width, height: options.height,
+        maxSamples: options.samples, bounces: this.final.bounces, clamping: this.final.clamping,
+        samplingPattern: this.final.samplingPattern, bevel: this.final.bevel, bevelSamples: this.final.bevelSamples,
+        dispersionWavelengths: this.final.dispersionWavelengths, directLightCandidates: this.final.directLightCandidates,
+        alphaBlendStrategy: this.final.alphaBlendStrategy, transmissiveOutputAlphaMin: this.final.transmissiveOutputAlphaMin,
+        denoiser: this.final.denoiser ? {...this.final.denoiser, schedule: 'converged'} : null});
       const clayCamera = this.lensCamera(camera, this.pull?.to ?? this.settings.focusDistance);
-      await this.renderer.renderOfflineFrame(this.sync.scene, clayCamera, {
-        samples: options.samples,
-        signal: this.exportAbort.signal,
-        previewIntervalMs: 250,
-        onProgress: ({ stage, samples, targetSamples }) => set({ export: { stage, samples, target: targetSamples } })
-      });
-      return await this.captureImage(type, quality);
+      await image.converge({samples: options.samples, camera: clayCamera, signal: this.exportAbort.signal, previewIntervalMs: 250,
+        onProgress: ({stage, samples, targetSamples}) => set({export: {stage, samples, target: targetSamples}})});
+      return await this.engine.display.toBlob(image, {type, quality});
     } finally {
-      this.settings = get().settings;
-      this.applyBackground();
-      this.renderer.setSize(previous.width, previous.height);
-      this.exporting = false;
-      this.exportAbort = null;
-      set({ export: null });
+      image?.dispose(); this.settings = get().settings; this.applyBackground();
+      this.sync.update(); this.engine.scene = this.sync.scene; this.engine.update();
+      this.exporting = false; this.exportAbort = null; set({export: null});
     }
   }
 
@@ -1181,8 +1167,8 @@ export class ViewerEngine {
     const dpr = Math.min(window.devicePixelRatio || 1, 2) * this.settings.resolutionScale;
     const width = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
     const height = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
-    const size = this.renderer.getSize();
-    if (size.width !== width || size.height !== height) this.renderer.setSize(width, height);
+    const size = this.engine.display.canvas;
+    if (size.width !== width || size.height !== height) this.engine.display.setSize(width, height);
     setAspect(this.activeCamera(), this.viewAspect());
   }
 
@@ -1201,7 +1187,7 @@ export class ViewerEngine {
         set({ animation: { ...anim, time: this.action.time, playing: !finished } });
       }
     }
-    if (this.settings.cameraIndex < 0) this.updateControls(dt);
+    const controlsActive = this.settings.cameraIndex < 0 ? this.updateControls(dt) : false;
 
     if (get().paused) {
       this.publishStats('paused', now, true);
@@ -1211,13 +1197,29 @@ export class ViewerEngine {
     this.sync.update();
     const camera = this.lensCamera(this.activeCamera(), this.advanceFocus(now));
     this.publishLens(this.activeCamera());
-    const status = this.renderer.render(this.sync.scene, camera);
+    this.renderCamera ??= camera;
+    this.renderCamera.copy(camera);
+    this.engine.scene = this.sync.scene; this.engine.camera = this.renderCamera;
+    const continuous = controlsActive || this.dragging || this.settings.autoRotate || !!anim?.playing || this.pull !== null;
+    // First-layer application policy: hold a committed preview through inference,
+    // then accept the latest animation/control state at the next update.
+    const coalescing = this.settings.denoiseWhileConverging && continuous && this.preview.status === 'denoising';
+    const changed = coalescing ? false : this.engine.update();
+    if (changed && this.previousChanged && !controlsActive && !this.previousControlsActive) this.lastContinuousChange = now;
+    this.previousChanged = changed; this.previousControlsActive = controlsActive;
+    const previewEnabled = this.settings.previewEnabled || this.settings.denoiseWhileConverging;
+    const nativeWebGL = this.engine.backend === 'webgl' && this.canvas.width * this.canvas.height <= 1_000_000;
+    this.preview.resolutionScale = nativeWebGL ? 1 : this.settings.previewMaxResolutionScale;
+    this.preview.adaptiveResolution = nativeWebGL ? false : {targetFrameMs: 20, minScale: Math.min(.25, this.preview.resolutionScale)};
+    const current = previewEnabled && (continuous || now - this.lastContinuousChange < 150) ? this.preview : this.final;
+    const status = current.refine();
+    const shown = this.engine.display.present(current); if (shown) this.displayed = shown;
     // Query only after the renderer uploads the current animation pose and
     // camera. Readback runs alongside subsequent frames.
     if (status !== 'preparing' && status !== 'compiling' && status !== 'error') {
       this.updateAutofocus(now);
     }
-    const phase = status;
+    const phase = shown === this.preview ? 'previewing' : status;
     this.publishStats(phase, now, false);
     this.updateSelectionRect();
   };
@@ -1231,7 +1233,9 @@ export class ViewerEngine {
   private updateControls(dt: number) {
     this.lastCameraPosition.copy(this.camera.position);
     this.lastCameraZoom = this.camera.zoom;
-    if (!this.controls.update(dt) || this.dragging || this.settings.autoRotate) return;
+    const changed = this.controls.update(dt);
+    if (this.dragging || this.settings.autoRotate) return true;
+    if (!changed) return false;
     const step = this.lastCameraPosition.distanceTo(this.camera.position);
     // An orthographic camera zooms without moving.
     const zoomStep = Math.abs(Math.log(this.camera.zoom / this.lastCameraZoom));
@@ -1239,11 +1243,13 @@ export class ViewerEngine {
       this.controls.enableDamping = false;
       this.controls.update(0);
       this.controls.enableDamping = true;
+      return false;
     }
+    return true;
   }
 
   private publishStats(phase: RenderPhase, now: number, force: boolean) {
-    const samples = this.renderer.samples;
+    const samples = phase === 'previewing' ? 0 : this.final.samples;
     // Restarted accumulation (an edit, a camera move or an animation frame).
     if (samples < this.lastSamples || samples <= 1) this.sampleStart = now;
     // Time stops at the last added sample, so it freezes once rendering finishes.
@@ -1253,8 +1259,8 @@ export class ViewerEngine {
       const loading = get().loading;
       // Preparation keeps the previous scene's accumulation alive. Only a
       // rendering phase can confirm that the newly loaded model has a sample.
-      const hasNewSample = samples > 0 &&
-        (phase === 'converging' || phase === 'denoising' || phase === 'finished');
+      const hasNewSample = (samples > 0 && (phase === 'converging' || phase === 'denoising' || phase === 'finished')) ||
+        (phase === 'previewing' && (this.displayed?.samples ?? 0) > 0);
       if (hasNewSample || phase === 'error') {
         this.awaitingFirstSample = false;
         set({ loading: null });
@@ -1268,7 +1274,7 @@ export class ViewerEngine {
     if (!force && phase === prev.phase && now - this.lastPublish < 120) return;
     this.lastPublish = now;
     const elapsed = samples > 1 ? Math.max(0, this.lastSampleTime - this.sampleStart) / 1000 : 0;
-    const size = this.renderer.getSize();
+    const size = {width: this.final.width, height: this.final.height};
     if (prev.phase === phase && prev.samples === samples && prev.elapsed === elapsed &&
       prev.width === size.width && prev.height === size.height) return;
     set({

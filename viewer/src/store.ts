@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { DEFAULT_JNLM_OPTIONS } from '@meimu/mutracer';
-import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, RenderOutput } from '@meimu/mutracer';
+import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, DisplayChannel } from '@meimu/mutracer';
 import type { MaterialValues, TextureKey } from './engine/materialParams';
 import { STUDIO_PRESETS } from './engine/studio';
 import { historyLabels, onHistoryChange, pushHistory, type HistoryItem } from './history';
@@ -67,7 +67,7 @@ export interface Settings {
   bloomThreshold: number;
   bloomRadius: number;
   vignette: number;
-  output: RenderOutput;
+  output: DisplayChannel;
   previewEnabled: boolean;
   previewMaxResolutionScale: number;
 

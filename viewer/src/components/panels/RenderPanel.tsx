@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Aperture, Bug, Palette, RotateCcw, Sparkles, Sun } from 'lucide-react';
-import type { OIDNModel, RendererDiagnostics } from '@meimu/mutracer';
+import type { OIDNModel, EngineDiagnostics } from '@meimu/mutracer';
 import { DEFAULT_SETTINGS, setSettings, useViewer, type Settings } from '../../store';
 import { getEngine } from '../../engine/ViewerEngine';
 import { Field, Hint, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';
@@ -177,9 +177,9 @@ export function RenderPanel() {
 }
 
 function Diagnostics() {
-  const [diagnostics, setDiagnostics] = useState<RendererDiagnostics | undefined>();
+  const [diagnostics, setDiagnostics] = useState<EngineDiagnostics | undefined>();
   useEffect(() => {
-    const read = () => setDiagnostics(getEngine()?.renderer.getDiagnostics());
+    const read = () => setDiagnostics(getEngine()?.engine.getDiagnostics());
     read();
     const timer = setInterval(read, 1000);
     return () => clearInterval(timer);

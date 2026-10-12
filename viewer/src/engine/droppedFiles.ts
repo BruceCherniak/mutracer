@@ -12,7 +12,7 @@ export const isHDRFile = (name: string) => name.toLowerCase().endsWith('.hdr');
 
 /** Reads dropped items, descending into folders. */
 export async function readDroppedItems(items: DataTransferItemList): Promise<PathedFile[]> {
-  const entries = [...items].map((item) => item.webkitGetAsEntry?.()).filter(Boolean) as FileSystemEntry[];
+  const entries = Array.from(items).map((item) => item.webkitGetAsEntry?.()).filter(Boolean) as FileSystemEntry[];
   const out: PathedFile[] = [];
   const visit = async (entry: FileSystemEntry, prefix: string): Promise<void> => {
     if (entry.isFile) {
@@ -32,7 +32,7 @@ export async function readDroppedItems(items: DataTransferItemList): Promise<Pat
 }
 
 export function toPathedFiles(files: FileList | File[]): PathedFile[] {
-  return [...files].map((file) => ({ file, path: file.webkitRelativePath || file.name }));
+  return Array.from(files).map((file) => ({ file, path: file.webkitRelativePath || file.name }));
 }
 
 // The home page and the viewer share an origin, so files dropped on the home

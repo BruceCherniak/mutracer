@@ -30,10 +30,10 @@ export function ExportDialog() {
       const engine = getEngine();
       const target = preview.current;
       if (!engine || !target) return;
-      const source = engine.renderer.canvas;
+      const source = engine.engine.display.canvas;
       target.width = 480;
       target.height = Math.round((480 * source.height) / Math.max(1, source.width));
-      void engine.renderer.toBlob().then(createImageBitmap).then(image => {
+      void engine.captureImage().then(createImageBitmap).then(image => {
         if (!cancelled) target.getContext('2d')?.drawImage(image, 0, 0, target.width, target.height);
         image.close();
       }).catch(error => { if (!cancelled) showToast(`Could not capture preview: ${error.message}`, 'error'); });
