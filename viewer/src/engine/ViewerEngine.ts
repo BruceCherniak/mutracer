@@ -798,7 +798,7 @@ export class ViewerEngine {
   }
 
   private publishLens(camera: Camera) {
-    const focalLength = Camera.getFocalLength(camera);
+    const focalLength = camera.focalLength;
     const lens = get().lens;
     if (Math.abs(focalLength - lens.focalLength) > 0.05) set({ lens: { ...lens, focalLength } });
   }
