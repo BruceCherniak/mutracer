@@ -104,6 +104,7 @@ export class ViewerEngine {
   private exporting = false;
   private exportAbort: AbortController | null = null;
   private denoiserKey = '';
+  private previewAwaitingPresentation = false;
   private denoiserUpdateTimer?: ReturnType<typeof setTimeout>;
   private pointerDown: { x: number; y: number } | null = null;
   /** Focus pull in progress; the settings hold its target only once it ends. */
@@ -1202,8 +1203,9 @@ export class ViewerEngine {
     this.engine.scene = this.sync.scene; this.engine.camera = this.renderCamera;
     const continuous = controlsActive || this.dragging || this.settings.autoRotate || !!anim?.playing || this.pull !== null;
     // First-layer application policy: hold a committed preview through inference,
-    // then accept the latest animation/control state at the next update.
-    const coalescing = this.settings.denoiseWhileConverging && continuous && this.preview.status === 'denoising';
+    // Present the completed image once before accepting the next animation state,
+    // including synchronous JNLM jobs that finish between animation frames.
+    const coalescing = this.settings.denoiseWhileConverging && continuous && (this.preview.status === 'denoising' || this.previewAwaitingPresentation);
     const changed = coalescing ? false : this.engine.update();
     if (changed && this.previousChanged && !controlsActive && !this.previousControlsActive) this.lastContinuousChange = now;
     this.previousChanged = changed; this.previousControlsActive = controlsActive;
@@ -1213,7 +1215,9 @@ export class ViewerEngine {
     this.preview.adaptiveResolution = nativeWebGL ? false : {targetFrameMs: 20, minScale: Math.min(.25, this.preview.resolutionScale)};
     const current = previewEnabled && (continuous || now - this.lastContinuousChange < 150) ? this.preview : this.final;
     const status = current.refine();
-    const shown = this.engine.display.present(current); if (shown) this.displayed = shown;
+    this.previewAwaitingPresentation = current === this.preview && status === 'denoising';
+    const shown = this.previewAwaitingPresentation ? this.displayed : this.engine.display.present(current);
+    if (shown) this.displayed = shown;
     // Query only after the renderer uploads the current animation pose and
     // camera. Readback runs alongside subsequent frames.
     if (status !== 'preparing' && status !== 'compiling' && status !== 'error') {
