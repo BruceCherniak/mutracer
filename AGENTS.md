@@ -42,7 +42,7 @@ npm test
 Unit tests do not cover GPU output. For changes to shaders, sampling or
 post-processing, render the examples (or a fixed-seed scene with a fixed
 sample count) on a real GPU before and after, and compare
-`renderer.getRawOutput()` pixels. Test both WebGPU and WebGL 2 (`?webgl`).
+`renderer.readPixels('hdr')` pixels. Test both WebGPU and WebGL 2 (`?webgl`).
 
 ## Rules
 

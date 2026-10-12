@@ -409,6 +409,12 @@ output.color = color;
 `
   });
 
+  const readbackPass = new WGPUFullQuadPass('output readback', device, {
+    textureWillBeRead: true, inputs: ['inputTex'], outputs: ['color'],
+    fsMain: 'output.color = textureLoad(inputTex, uv, 0);'
+  });
+  readbackPass.setOutputParams({color: {format: 'rgba32float'}});
+
   let hdrPeakMeter: WGPUHDRPeakMeter | undefined;
   const composePass = new WGPUFullQuadPass('compose', device, {
     textureWillBeRead: true,
@@ -1673,6 +1679,7 @@ output.color = color;
     jnlmPass?.dispose();
     composePass.dispose();
     rawOutputPass.dispose();
+    readbackPass.dispose();
     compositeDenoiseDisplayPass.dispose();
     hdrPeakMeter?.dispose();
     oidnAlbedoEncodePass.dispose();
@@ -1725,42 +1732,35 @@ output.color = color;
     setToneMappingParams,
 
     readDepthSamples: (area) => rayTracePass.readDepthSamples(area),
-    getRawOutput() {
-      const outputTexture =
-        getFrameInput('color');
-      const textureDims = {
-        width: renderWidth,
-        height: renderHeight,
-        depthOrArrayLayers: 1
-      };
+    async readOutput(kind) {
+      const width = renderWidth, height = renderHeight;
+      const bytesPerRow = Math.ceil(width * 16 / 256) * 256;
       const buffer = device.createBuffer({
-        size: renderWidth * renderHeight * 4 * 4,
-        usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+        size: bytesPerRow * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
       });
       const encoder = device.createCommandEncoder();
-      rawOutputPass.setOutputParams({ color: { format: 'rgba32float' } });
-      rawOutputPass.setSize(renderWidth, renderHeight);
-      rawOutputPass.createPass(encoder, { colorTex: outputTexture, coverageTex: getFrameInput('albedo') });
-      encoder.copyTextureToBuffer(
-        { texture: rawOutputPass.getOutput('color') },
-        { buffer, bytesPerRow: 16 * renderWidth },
-        textureDims
-      );
+      const denoised = kind === 'denoised' ? oidnComposedBuffer : undefined;
+      if (kind === 'denoised' && !denoised) kind = 'hdr';
+      const pass = kind === 'hdr' ? rawOutputPass : readbackPass;
+      pass.setOutputParams({ color: { format: 'rgba32float' } });
+      pass.setSize(width, height);
+      if (denoised) {
+        encoder.copyBufferToBuffer(denoised, 0, buffer, 0, width * height * 16);
+      } else if (kind === 'hdr') {
+        rawOutputPass.createPass(encoder, {colorTex: getFrameInput('color'), coverageTex: getFrameInput('albedo')});
+      } else {
+        readbackPass.createPass(encoder, {inputTex: getFrameInput(kind as 'albedo' | 'normal')});
+      }
+      if (!denoised) encoder.copyTextureToBuffer({texture: pass.getOutput('color')}, {buffer, bytesPerRow}, {width, height, depthOrArrayLayers: 1});
       device.queue.submit([encoder.finish()]);
-      return buffer.mapAsync(GPUMapMode.READ).then(() => {
-        const data = new Float32Array(
-          buffer.getMappedRange(0, buffer.size)
-        ).slice();
-        buffer.unmap();
-        buffer.destroy();
-
-        return {
-          data,
-          flipY: false,
-          width: renderWidth,
-          height: renderHeight
-        };
-      });
+      try {
+        await buffer.mapAsync(GPUMapMode.READ);
+        const mapped = new Float32Array(buffer.getMappedRange());
+        const data = new Float32Array(width * height * 4);
+        const stride = denoised ? width * 4 : bytesPerRow / 4;
+        for (let y = 0; y < height; y++) data.set(mapped.subarray(y * stride, y * stride + width * 4), y * width * 4);
+        return { data, width, height };
+      } finally { buffer.unmap(); buffer.destroy(); }
     },
 
     needsRestartSample(camera: Camera, sceneChanged = false) {

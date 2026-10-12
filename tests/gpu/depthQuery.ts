@@ -31,7 +31,7 @@ async function fixture(webgl: boolean, layout: Renderer['bvhLayout'] = 'bvh2') {
 async function baseline(webgl: boolean) {
   const { renderer, sync, canvas } = await fixture(webgl);
   try {
-    const { data } = await renderer.getRawOutput();
+    const { data } = await renderer.readPixels('hdr');
     const { adapterName: adapterInfo } = await renderer.init();
     return { backend: renderer.backend, adapterInfo, data: Array.from(data) };
   } finally {
@@ -57,7 +57,7 @@ async function run(webgl: boolean, layout: Renderer['bvhLayout'] = 'bvh2') {
     await renderer.renderOfflineFrame(sync.scene, fromTHREECamera(camera), { samples });
   };
   try {
-    const before = (await renderer.getRawOutput()).data;
+    const before = (await renderer.readPixels('hdr')).data;
     for (const area of [{ x: 0.5, y: 0.5, size: 0.03 }, { x: 0.85, y: 0.3, size: 0.05 }]) {
       const samples = await query(area.x, area.y, area.size);
       const depth = pickFocusDepth(Array.from(samples).filter(d => d > 0), 49);
@@ -65,7 +65,7 @@ async function run(webgl: boolean, layout: Renderer['bvhLayout'] = 'bvh2') {
       check(depth !== null && expected !== null && Math.abs(depth - expected) < 0.001,
         `GPU matches CPU: ${depth?.toFixed(5)} vs ${expected?.toFixed(5)}`);
     }
-    const after = (await renderer.getRawOutput()).data;
+    const after = (await renderer.readPixels('hdr')).data;
     check(before.every((v, i) => v === after[i]), 'Query leaves raw beauty pixels unchanged');
     box.position.z = 1;
     sync.update();

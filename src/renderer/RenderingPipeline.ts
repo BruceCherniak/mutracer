@@ -275,9 +275,8 @@ export interface RenderingPipeline {
   setOutput(output: RenderOutput): boolean;
   dispose(): void;
   readDepthSamples(area: DepthSampleArea): Promise<Float32Array | undefined>;
-  getRawOutput(): Promise<{
+  readOutput(kind: 'hdr' | 'denoised' | 'albedo' | 'normal'): Promise<{
     data: Float32Array;
-    flipY: boolean;
     width: number;
     height: number;
   }>;

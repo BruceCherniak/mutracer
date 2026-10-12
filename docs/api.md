@@ -95,7 +95,7 @@ affects the image restarts accumulation.
 | `renderOfflineFrame(scene, camera, options)` | Renders a finished frame; see below |
 | `restartSamples()` | Discards the accumulation |
 | `samples` | Accumulated spp; initially 0 |
-| `getRawOutput()` | `Promise<{ width, height, data: Float32Array }>` linear RGBA, top row first |
+| `readPixels(kind = 'hdr')` | RGBA float32, top row first; hdr, denoised, albedo or normal; see [pixel outputs](#pixel-outputs) |
 | `readDepthSamples({ x, y, size })` | Asynchronously queries a 7×7 grid of GPU depths after `render()`; see [depth sampling](#depth-sampling) |
 | `toBlob({ type?, quality? } = {})` | Redraws post-processing, waits for GPU work and encodes a Blob; type defaults image/png, quality undefined |
 | `backend` / `device` | Backend (`'webgpu'` / `'webgl'`), initially undefined; device only on WebGPU |
@@ -125,6 +125,25 @@ with `lastError` undefined. Diagnostics include synchronous `lastError` and
 `webgpuFallbackReason` messages when applicable.
 
 While-converging intermediate denoise batches report `'converging'`. Only denoising the final image at `maxSamples` reports `'denoising'`; `'finished'` means that final image is ready.
+
+### Pixel outputs
+
+`readPixels(kind = 'hdr')` returns `{ width, height, data: Float32Array }`,
+RGBA with the top row first. Dimensions describe the internal render texture,
+which WebGPU rounds up to multiples of 16. Before a pipeline exists, it returns an empty image.
+
+| Kind | Values |
+| --- | --- |
+| `hdr` | Original linear HDR samples, unchanged by denoising |
+| `denoised` | Native completed denoiser output: WebGPU normally display-linear after composition/tone mapping; WebGL JNLM after tone mapping and display encoding |
+| `albedo` | Native linear albedo guide and coverage alpha |
+| `normal` | Native normal guide: RGB encoded as `normal * 0.5 + 0.5`, alpha indicates valid surface data |
+
+On WebGPU, the optional OIDN alpha postfilter operates on display colors;
+its final native output is also display encoded. Readback preserves these
+existing pipeline semantics. If no denoiser is attached or denoising has not
+completed, `denoised` returns `hdr` and warns once per renderer. The method
+makes a CPU copy and can be costly; avoid calling it every animation frame.
 
 ### Depth sampling
 

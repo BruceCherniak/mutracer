@@ -50,3 +50,14 @@ export async function readFloatPixelsAsync(
     gl.deleteBuffer(buffer);
   }
 }
+
+/** Reads the currently bound RGBA target and returns float32 rows from the top. */
+export function readRgbaPixels(gl: WebGL2RenderingContext, width: number, height: number, byteEncoded: boolean): Float32Array {
+  const source = byteEncoded ? new Uint8Array(width * height * 4) : new Float32Array(width * height * 4);
+  gl.readPixels(0, 0, width, height, gl.RGBA, byteEncoded ? gl.UNSIGNED_BYTE : gl.FLOAT, source);
+  const data = new Float32Array(source.length);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width * 4; x++) data[y * width * 4 + x] = source[(height - y - 1) * width * 4 + x] / (byteEncoded ? 255 : 1);
+  }
+  return data;
+}

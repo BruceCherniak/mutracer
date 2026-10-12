@@ -67,7 +67,7 @@ function createPipeline(overrides: Partial<WGPURenderingPipeline> = {}) {
     setTransmissiveOutputAlphaMin: vi.fn(() => false),
     setOutput: vi.fn(() => false),
     dispose: vi.fn(),
-    getRawOutput: vi.fn(),
+    readOutput: vi.fn(),
     performOIDNDenoise: vi.fn(() => new Promise<boolean>(() => {})),
     ...overrides
   } as RenderingPipeline & {
@@ -1520,4 +1520,14 @@ it('rejects failed encoding and uses convertToBlob when available', async () => 
  const blob=new Blob(['offscreen']);const convertToBlob=vi.fn(async()=>blob);
  const other=new Renderer({canvas:{width:1,height:1,convertToBlob} as unknown as HTMLCanvasElement});
  expect(await other.toBlob({type:'image/jpeg',quality:.8})).toBe(blob);expect(convertToBlob).toHaveBeenCalledWith({type:'image/jpeg',quality:.8});
+});
+
+it('reads named outputs and warns once when denoised output is unavailable', async () => {
+ const renderer=new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement});
+ expect((await renderer.readPixels()).data).toHaveLength(0);
+ const result={width:1,height:1,data:new Float32Array([2,3,4,1])};const readOutput=vi.fn(async()=>result);
+ attachPipeline(renderer,createPipeline({readOutput}));const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+ expect(await renderer.readPixels('denoised')).toBe(result);await renderer.readPixels('denoised');expect(warn).toHaveBeenCalledOnce();expect(readOutput).toHaveBeenLastCalledWith('hdr');
+ await renderer.readPixels('normal');expect(readOutput).toHaveBeenLastCalledWith('normal');
+ renderer.oidn={} as never;(renderer as any)._oidnStatus=2;await renderer.readPixels('denoised');expect(readOutput).toHaveBeenLastCalledWith('denoised');warn.mockRestore();
 });

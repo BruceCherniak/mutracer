@@ -167,15 +167,16 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
 
   setOutputParams(outputParams: Record<O, WGPUFullQuadPassOutput>) {
     this._renderToScreen = undefined;
-    this._needsUpdateOutputTextures = Object.keys(outputParams).some(
+    const outputsChanged = Object.keys(outputParams).some(
       (key) =>
         !isTextureParamsEqual(
           (outputParams as any)[key],
           this._outputParams[key] || ({} as WGPUFullQuadPassOutput)
         )
     );
-    this._needsUpdatePipeline = this._needsUpdateOutputTextures;
-    if (this._needsUpdatePipeline) this._fsCode = '';
+    this._needsUpdateOutputTextures ||= outputsChanged;
+    this._needsUpdatePipeline ||= outputsChanged;
+    if (outputsChanged) this._fsCode = '';
     this._outputParams = outputParams;
   }
 

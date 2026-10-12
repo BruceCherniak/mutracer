@@ -1,3 +1,4 @@
+import { readRgbaPixels } from './WebGLReadback.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
@@ -625,20 +626,11 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       return true;
     },
     readDepthSamples: (area) => rayTracePass.readDepthSamples(area),
-    async getRawOutput() {
-      const texture = rayTraceOutputPass.getOutput('color');
+    async readOutput(kind) {
+      if (kind === 'denoised' && !denoisedTexture) kind = 'hdr';
+      const texture = kind === 'denoised' ? denoisedTexture! : rayTraceOutputPass.getOutput(kind === 'hdr' ? 'color' : kind);
       rawReadFrameBuffer.bind(renderer, [texture]);
-      const data = new Float32Array(renderWidth * renderHeight * 4);
-      renderer.gl.readPixels(
-        0,
-        0,
-        renderWidth,
-        renderHeight,
-        renderer.gl.RGBA,
-        renderer.gl.FLOAT,
-        data
-      );
-      return { data, flipY: true, width: renderWidth, height: renderHeight };
+      return {data: readRgbaPixels(renderer.gl, renderWidth, renderHeight, kind === 'albedo' || kind === 'normal'), width: renderWidth, height: renderHeight};
     },
     getDebugBVHData() {
       const debugData = rayTracePass.getDebugBVHData();

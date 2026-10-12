@@ -189,7 +189,7 @@ await renderer.renderOfflineFrame(scene, camera, {
 const blob = await renderer.toBlob(); // image/png; optionally pass type and quality
 ```
 
-`await renderer.getRawOutput()` returns the linear HDR image as
+`await renderer.readPixels('hdr')` returns the linear HDR image as
 `{ width, height, data: Float32Array }` (RGBA, top row first).
 
 ## Cleanup

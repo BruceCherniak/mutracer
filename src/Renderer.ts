@@ -1705,35 +1705,24 @@ export default class Renderer {
     }
   }
 
+  private _warnedDenoisedReadback = false;
   /**
-   * Reads back the linear HDR image as RGBA float32, top row first.
-   * Denoising affects the displayed image; this returns the original HDR samples.
+   * Reads RGBA float32 pixels, top row first. Default kind hdr.
+   * hdr is linear; albedo is the native linear guide; normal RGB is encoded 0–1.
+   * denoised preserves native output: WebGPU normally display-linear after composition (display encoded
+   * after OIDN alpha postfilter), WebGL after tone mapping/display encoding.
+   * Missing or unfinished denoising falls back to hdr and warns once.
    */
-  async getRawOutput() {
-    if (!this._pipeline) {
-      return {
-        width: 0,
-        height: 0,
-        data: new Float32Array(0)
-      };
-    }
-    const { data, width, height, flipY } = await this._pipeline!.getRawOutput();
-
-    // Flip y pixels
-    if (flipY) {
-      for (let y = 0; y < Math.floor(height / 2); y++) {
-        for (let x = 0; x < width; x++) {
-          for (let c = 0; c < 4; c++) {
-            const i1 = (y * width + x) * 4 + c;
-            const i2 = ((height - y - 1) * width + x) * 4 + c;
-            const temp = data[i1];
-            data[i1] = data[i2];
-            data[i2] = temp;
-          }
-        }
+  async readPixels(kind: 'hdr' | 'denoised' | 'albedo' | 'normal' = 'hdr') {
+    if (!this._pipeline) return {width: 0, height: 0, data: new Float32Array(0)};
+    if (kind === 'denoised' && (!this._activeDenoiser || this._oidnStatus !== OIDN_DENOISED)) {
+      if (!this._warnedDenoisedReadback) {
+        this._warnedDenoisedReadback = true;
+        console.warn('Denoised output is not ready; reading HDR samples instead.');
       }
+      kind = 'hdr';
     }
-    return { data, width, height };
+    return this._pipeline.readOutput(kind);
   }
 
   /** Releases GPU resources, BVH Workers and the attached denoiser; cancels pending BVH preparation. */
