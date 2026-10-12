@@ -99,6 +99,10 @@ affects the image restarts accumulation.
 data edits, which need `markUpdated()` or `markVerticesUpdated()`; see
 [scene updates](./updates.md). An unchanged scene keeps accumulating.
 
+Rendering failures return `RENDER_STATUS_ERROR` without throwing. `renderer.lastError` (default `undefined`) stores the error until the next successful render. Constructor denoiser failures also set it. Initialized diagnostics include `lastError` and `webgpuFallbackReason` messages when applicable.
+
+While-converging intermediate denoise batches report `RENDER_STATUS_RENDERING`. Only denoising the final image at `maxSamples` reports `RENDER_STATUS_DENOISING`; `RENDER_STATUS_FINISHED` means that final image is ready.
+
 ### Depth sampling
 
 After rendering the current scene and camera, call
@@ -154,6 +158,8 @@ If a denoiser is set, the result is denoised before the promise resolves.
 
 ## Scene types
 
+Public spatial values use `Vec2` (`[number, number] | Float32Array`), `Vec3` (`[number, number, number] | Float32Array`) and `Mat4` (`Float32Array | number[]`, column-major, 16 elements), exported from the main entry.
+
 | Export | Description |
 | --- | --- |
 | `Scene` | `{ meshes, lights, background? }`; see below |
@@ -179,10 +185,9 @@ and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 | `generateVertexNormals`, `generateVertexTangents` | Attribute generation |
 | `computeMeshesBoundingBox(meshes)` | World-space bounds |
 | `loadRGBE(url)`, `parseRGBE(buffer)` | Radiance `.hdr` → float `Texture` |
-| `THREESceneSync` | Keeps a `THREE.Scene` in sync: `new THREESceneSync(threeScene, options?)` once, `sync.update()` before rendering `sync.scene`, `dispose()` when done; see [Three.js](./threejs.md) |
+| `THREESceneSync` | Keeps a `THREE.Scene` in sync: `new THREESceneSync(threeScene, options?)` once, `sync.update(): void` before rendering `sync.scene`, `dispose()` when done; see [Three.js](./threejs.md) |
 | `fromTHREECamera(camera, options?)` | Converts a Three.js camera; call each frame alongside `THREESceneSync`. Reads `focus` and the film height; `FromTHREECameraOptions` sets `fStop` (default `0`), `focusDistance` and `metersPerUnit` (default `1`) |
 | `fromTHREEScene` | One-shot Three.js scene conversion; every call creates fresh MuTracer objects |
-| `THREESceneChanges` | Informational result of `update()`: `transforms`, `membership`, `content`, `lights`, `background`; no forwarding to Renderer needed |
 | `FromTHREESceneOptions` | Optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |
 | `CameraViewControl` | Orbit/pan/zoom controller for a MuTracer `Camera` |
 | `VERSION` | Library version |
@@ -191,10 +196,6 @@ and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 `initializeOIDNFromURL`, `DEFAULT_OIDN_WEIGHTS_BASE_URL`) for custom denoiser
 setups.
 
-Rendering failures return `RENDER_STATUS_ERROR` without throwing. `renderer.lastError` (default `undefined`) stores the error until the next successful render. Constructor denoiser failures also set it. Initialized diagnostics include `lastError` and `webgpuFallbackReason` messages when applicable.
-
-While-converging intermediate denoise batches report `RENDER_STATUS_RENDERING`. Only denoising the final image at `maxSamples` reports `RENDER_STATUS_DENOISING`; `RENDER_STATUS_FINISHED` means that final image is ready.
+## Implementation notes
 
 BVH caches, light packing helpers and material-weight packing are renderer internals. `CameraViewControl` initializes itself at construction. Texture upload notifications use `markUpdated()` and `version`.
-
-Public spatial values use `Vec2` (`[number, number] | Float32Array`), `Vec3` (`[number, number, number] | Float32Array`) and `Mat4` (`Float32Array | number[]`, column-major, 16 elements), exported from the main entry.

@@ -17,7 +17,7 @@ import { GroundedSkyboxBackground, Scene, SceneLight } from '../scene/Scene.js';
 import { mat4 } from '../math.js';
 import { generateVertexNormals, updateBoundingBox, updateDynamicTangents } from './geometry.js';
 import { THREEDeformation, isDeformingMesh } from './threeDeformation.js';
-import { SceneChangeDetector, snapshotsEqual, snapshotFields } from '../renderer/sceneChangeDetector.js';
+import { snapshotsEqual, snapshotFields } from '../renderer/sceneChangeDetector.js';
 
 interface TextureRecord {
   texture: Texture;
@@ -991,20 +991,6 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   };
 }
 
-/** Informational changes; nothing has to be forwarded to the renderer. */
-export interface THREESceneChanges {
-  /** Number of mesh instances with changed transforms. */
-  transforms: number;
-  /** Whether mesh membership changed during the update. */
-  membership: boolean;
-  /** Whether geometry or material content changed during the update. */
-  content: boolean;
-  /** Whether light membership or parameters changed during the update. */
-  lights: boolean;
-  /** Whether the background changed during the update. */
-  background: boolean;
-}
-
 /**
  * Keeps one MuTracer scene in sync with a Three.js scene, reusing unchanged objects.
  * Skinning/morph targets run on the CPU with per-source-mesh dynamic geometry.
@@ -1017,35 +1003,26 @@ export class THREESceneSync {
   /** Retained MuTracer scene initialized from the source scene and updated in place. */
   readonly scene: Scene;
   private _store = createConversionStore();
-  private _detector = new SceneChangeDetector();
   private _disposed = false;
 
   /** Creates the initial scene. Default options: no conversion callback. */
   constructor(private _source: THREE.Scene, private _options: FromTHREESceneOptions = {}) {
     this.scene = convertScene(_source, _options, this._store);
-    this._detector.detect(this.scene);
-    this._detector.commit();
   }
 
-  /** Updates world/bone matrices, changed CPU deformation and retained instances in place. */
-  update(): THREESceneChanges {
+  /** Updates world/bone matrices, changed CPU deformation and retained instances in place. Returns void; Renderer detects the converted scene edits. */
+  update(): void {
     if (this._disposed) throw new Error('THREESceneSync has been disposed');
     const next = convertScene(this._source, this._options, this._store);
     const membership = !snapshotsEqual(this.scene.meshes, next.meshes);
     if (membership) this.scene.meshes = next.meshes;
     if (!snapshotsEqual(this.scene.lights, next.lights)) this.scene.lights = next.lights;
     this.scene.background = next.background;
-    const changes = this._detector.detect(this.scene);
-    this._detector.commit();
-    return { transforms: changes.transforms.length, membership,
-      content: changes.meshes === 'full' || changes.materials.length > 0 || changes.geometries.length > 0,
-      lights: changes.lights, background: changes.background };
   }
 
   /** Releases conversion caches. The last scene remains usable; update then throws. */
   dispose(): void {
     this._store = createConversionStore();
-    this._detector.reset();
     this._disposed = true;
   }
 }

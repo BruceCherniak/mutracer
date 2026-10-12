@@ -15,7 +15,6 @@ function fixture() {
   const sync = new THREESceneSync(source);
   return { source, map, material, geometry, mesh, light, sync };
 }
-const unchanged = { transforms: 0, membership: false, content: false, lights: false, background: false };
 
 describe('THREESceneSync', () => {
   it('retains scene, arrays and shared mesh resources on unchanged updates', () => {
@@ -26,7 +25,7 @@ describe('THREESceneSync', () => {
     const material = first.materials[0], texture = material.map;
     expect(second.materials[0]).toBe(material);
     expect(second.geometry).toBe(first.geometry);
-    expect(sync.update()).toEqual(unchanged);
+    expect(sync.update()).toBeUndefined();
     expect(sync.scene).toBe(scene);
     expect(scene.meshes).toBe(meshes); expect(scene.lights).toBe(lights);
     expect(scene.background).toBe(background);
@@ -41,22 +40,22 @@ describe('THREESceneSync', () => {
     const matrix = converted.matrixWorld, geometry = converted.geometry;
     const before = [...matrix];
     mesh.rotation.y = 0.5;
-    expect(sync.update()).toEqual({ ...unchanged, transforms: 1 });
+    sync.update();
     expect(converted.matrixWorld).toBe(matrix);
     expect(matrix).not.toEqual(before); expect(converted.geometry).toBe(geometry);
-    expect(sync.update()).toEqual(unchanged);
+    sync.update();
   });
 
   it('updates a shared material once when editing color without needsUpdate', () => {
     const { sync, material } = fixture();
     const converted = sync.scene.meshes[0].materials[0];
     material.color.setRGB(0.3, 0.4, 0.5);
-    expect(sync.update()).toEqual({ ...unchanged, content: true });
+    sync.update();
     expect(sync.scene.meshes[0].materials[0]).toBe(converted);
     expect(sync.scene.meshes[1].materials[0]).toBe(converted);
     expect(converted.baseColor).toEqual([0.3, 0.4, 0.5]);
     expect(converted.version).toBe(1);
-    expect(sync.update()).toEqual(unchanged); expect(converted.version).toBe(1);
+    sync.update(); expect(converted.version).toBe(1);
   });
 
   it('refreshes a texture in place by version, image and UV metadata', () => {
@@ -64,7 +63,7 @@ describe('THREESceneSync', () => {
     const converted = sync.scene.meshes[0].materials[0].map!;
     const before = converted.version;
     map.needsUpdate = true;
-    expect(sync.update().content).toBe(true);
+    sync.update();
     expect(sync.scene.meshes[0].materials[0].map).toBe(converted);
     expect(converted.version).toBe(before + 1);
     map.image = { width: 4, height: 4 };
@@ -72,7 +71,7 @@ describe('THREESceneSync', () => {
     sync.update();
     expect(converted.image).toBe(map.image); expect(converted.uvScale).toEqual([2, 3]);
     expect(converted.uvOffset).toEqual([0.2, 0.1]); expect(converted.uvChannel).toBe(1);
-    expect(sync.update()).toEqual(unchanged);
+    sync.update();
   });
 
   it.each(['position', 'normal', 'tangent', 'uv', 'uv1', 'index'])('invalidates geometry after %s attribute updates and replacement', name => {
@@ -84,7 +83,7 @@ describe('THREESceneSync', () => {
     const old = sync.scene.meshes[0].geometry;
     const attribute = name === 'index' ? geometry.index! : geometry.getAttribute(name) as THREE.BufferAttribute;
     attribute.setX(0, attribute.getX(0) + 0.2); attribute.needsUpdate = true;
-    expect(sync.update().content).toBe(true);
+    sync.update();
     expect(sync.scene.meshes[0].geometry).not.toBe(old);
     expect(sync.scene.meshes[1].geometry).toBe(sync.scene.meshes[0].geometry);
     const edited = sync.scene.meshes[0].geometry;
@@ -100,7 +99,7 @@ describe('THREESceneSync', () => {
     geometry.setAttribute('position', new THREE.InterleavedBufferAttribute(data, 3, 0));
     sync.update(); const old = sync.scene.meshes[0].geometry;
     data.array[0] += 0.1; data.needsUpdate = true;
-    expect(sync.update().content).toBe(true);
+    sync.update();
     expect(sync.scene.meshes[0].geometry).not.toBe(old);
   });
 
@@ -116,12 +115,12 @@ describe('THREESceneSync', () => {
     else if (field === 'itemSize') attribute.itemSize = 1;
     else attribute.normalized = true;
     expect(attribute.version).toBe(version);
-    expect(sync.update().content).toBe(true);
+    sync.update();
     expect(sync.scene.meshes[0].geometry).not.toBe(old);
     expect(sync.scene.meshes[1].geometry).toBe(sync.scene.meshes[0].geometry);
     if (field === 'array') expect(sync.scene.meshes[0].geometry.uv!.array[0]).toBe(0.25);
     if (field === 'itemSize') expect(sync.scene.meshes[0].geometry.uv!.itemSize).toBe(1);
-    expect(sync.update()).toEqual(unchanged);
+    sync.update();
   });
 
   it.each(['offset', 'stride', 'buffer', 'array'] as const)('detects interleaved %s edits without a version bump', field => {
@@ -142,12 +141,12 @@ describe('THREESceneSync', () => {
       data.array[0] = 0.5;
     }
     expect(uv.data.version).toBe(0);
-    expect(sync.update().content).toBe(true);
+    sync.update();
     expect(sync.scene.meshes[0].geometry).not.toBe(old);
     expect(sync.scene.meshes[1].geometry).toBe(sync.scene.meshes[0].geometry);
     if (field === 'offset') expect(Array.from(sync.scene.meshes[0].geometry.uv!.array.slice(0, 2))).toEqual([0.25, 0.75]);
     if (field === 'array') expect(sync.scene.meshes[0].geometry.uv!.array[0]).toBe(0.5);
-    expect(sync.update()).toEqual(unchanged);
+    sync.update();
   });
 
   it('invalidates all shared groups when optional attributes are removed and restored', () => {
@@ -160,7 +159,7 @@ describe('THREESceneSync', () => {
     const uv = geometry.getAttribute('uv');
     const old = sync.scene.meshes.map(mesh => mesh.geometry);
     geometry.deleteAttribute('uv');
-    expect(sync.update().content).toBe(true);
+    sync.update();
     for (let i = 0; i < 4; i++) {
       expect(sync.scene.meshes[i].geometry).not.toBe(old[i]);
       expect(sync.scene.meshes[i].geometry.uv).toBeUndefined();
@@ -168,12 +167,12 @@ describe('THREESceneSync', () => {
     }
     const removed = sync.scene.meshes.map(mesh => mesh.geometry);
     geometry.setAttribute('uv', uv);
-    expect(sync.update().content).toBe(true);
+    sync.update();
     for (let i = 0; i < 4; i++) {
       expect(sync.scene.meshes[i].geometry).not.toBe(removed[i]);
       expect(sync.scene.meshes[i].geometry.uv!.array).toEqual(uv.array);
     }
-    expect(sync.update()).toEqual(unchanged);
+    sync.update();
   });
 
   it('checks shared geometry once per update across meshes, groups and instances', () => {
@@ -193,12 +192,12 @@ describe('THREESceneSync', () => {
     expect(sync.scene.meshes).toHaveLength(10);
     for (let i = 0; i < 3; i++) {
       reads = 0;
-      expect(sync.update()).toEqual(unchanged);
+      sync.update();
       expect(reads).toBe(1);
     }
     const old = sync.scene.meshes[0].geometry;
     normal.setXYZ(0, 0, 1, 0); normal.needsUpdate = true;
-    expect(sync.update().content).toBe(true);
+    sync.update();
     for (let i = 0; i < 10; i++) {
       const groupIndex = i < 4 ? i % 2 : i < 7 ? 0 : 1;
       expect(sync.scene.meshes[i].geometry).toBe(sync.scene.meshes[groupIndex].geometry);
@@ -206,14 +205,14 @@ describe('THREESceneSync', () => {
     }
     expect(sync.scene.meshes[0].geometry).not.toBe(old);
     reads = 0;
-    expect(sync.update()).toEqual(unchanged);
+    sync.update();
     expect(reads).toBe(1);
   });
 
   it('reuses meshes when visibility or group membership changes', () => {
     const { sync, mesh } = fixture();
     const first = sync.scene.meshes[0]; mesh.visible = false;
-    expect(sync.update().membership).toBe(true);
+    sync.update();
     expect(sync.scene.meshes).not.toContain(first);
     mesh.visible = true; sync.update(); expect(sync.scene.meshes[0]).toBe(first);
     (mesh as THREE.Mesh).material = [mesh.material as THREE.Material, new THREE.MeshStandardMaterial()];
@@ -236,20 +235,20 @@ describe('THREESceneSync', () => {
     for (const hiddenRoot of [parent, nested, source]) {
       convertedSources.length = 0;
       hiddenRoot.visible = false;
-      expect(sync.update()).toMatchObject({ membership: true, lights: true });
+      sync.update();
       expect(sync.scene.meshes).toHaveLength(0); expect(sync.scene.lights).toHaveLength(0);
       expect(convertedSources).toHaveLength(0);
       mesh.position.x++; light.intensity++;
-      expect(sync.update()).toEqual(unchanged);
+      sync.update();
       expect(convertedSources).toHaveLength(0);
       hiddenRoot.visible = true;
-      expect(sync.update()).toMatchObject({ membership: true, lights: true });
+      sync.update();
       expect(sync.scene.meshes).toEqual([convertedMesh]); expect(sync.scene.lights).toEqual([convertedLight]);
       expect(sync.scene.meshes[0]).toBe(convertedMesh); expect(sync.scene.lights[0]).toBe(convertedLight);
       expect(convertedMesh.matrixWorld[12]).toBe(mesh.position.x);
       expect(convertedLight.type === 'SphereLight' && convertedLight.intensity).toBe(light.intensity);
       expect(convertedSources).toEqual([mesh]);
-      expect(sync.update()).toEqual(unchanged);
+      sync.update();
     }
   });
 
@@ -257,11 +256,11 @@ describe('THREESceneSync', () => {
     const { sync, light, source } = fixture();
     const lights = sync.scene.lights, converted = lights[0], background = sync.scene.background;
     light.intensity = 4; light.position.x = 1;
-    expect(sync.update()).toEqual({ ...unchanged, lights: true });
+    sync.update();
     expect(sync.scene.lights).toBe(lights); expect(lights[0]).toBe(converted);
     expect(converted.type === 'SphereLight' && converted.intensity).toBe(4);
     (source.background as THREE.Color).setRGB(0.2, 0.3, 0.4);
-    expect(sync.update().background).toBe(true);
+    sync.update();
     expect(sync.scene.background).not.toBe(background);
     const updated = sync.scene.background; sync.update(); expect(sync.scene.background).toBe(updated);
   });
@@ -274,11 +273,11 @@ describe('THREESceneSync', () => {
     const sync = new THREESceneSync(source);
     const light = sync.scene.lights[0]; const map = sync.scene.background as Texture;
     pixels[0] = 0.7; texture.needsUpdate = true;
-    expect(sync.update()).toEqual({ ...unchanged, lights: true, background: true });
+    sync.update();
     expect(sync.scene.lights[0]).toBe(light); expect(sync.scene.background).toBe(map);
     expect(light.type === 'EnvironmentLight' && light.map).toBe(map);
     expect((map.image as { data: Float32Array }).data[0]).toBe(Math.fround(0.7));
-    expect(sync.update()).toEqual(unchanged);
+    sync.update();
   });
 
   it('creates fresh resources across one-shot calls and supports disposal', () => {
@@ -306,7 +305,7 @@ it('retains the converted source material for UV meshes and shares automatic pro
   expect(base.uvProjection).toBe('none'); expect(base.displacementUvProjection).toBe('none');
   expect(variant.uvProjection).toBe('triplanar'); expect(variant.displacementUvProjection).toBe('triplanar');
   expect(a).not.toHaveProperty('uvProjection'); expect(b).not.toHaveProperty('displacementUvProjection');
-  expect(sync.update()).toEqual(unchanged);
+  sync.update();
   const baseVersion = base.version, variantVersion = variant.version;
   material.roughness = .7; material.color.setRGB(.2, .4, .6); material.opacity = .5;
   sync.update();

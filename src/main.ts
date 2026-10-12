@@ -93,7 +93,6 @@ export {
 export { loadRGBE, parseRGBE } from './util/loadRGBE.js';
 export { fromTHREECamera, fromTHREEScene, THREESceneSync } from './util/fromTHREE.js';
 export type {
-  THREESceneChanges,
   FromTHREESceneOptions,
   FromTHREECameraOptions
 } from './util/fromTHREE.js';

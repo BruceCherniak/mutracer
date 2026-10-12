@@ -36,7 +36,7 @@ textures stay shared in MuTracer, including within a one-shot conversion.
 threeMesh.rotation.y += 0.01;
 threeMaterial.color.setRGB(0.4, 0.2, 0.1);
 threeMaterial.roughness = 0.6;
-const changes = sync.update();
+sync.update();
 renderer.render(sync.scene, fromTHREECamera(threeCamera));
 ```
 
@@ -64,9 +64,8 @@ tangent, uv, uv1 or index buffers replace the converted geometry, which costs
 a [full mesh update](./updates.md#full-mesh-updates); skinning and morph
 targets update arrays in place instead.
 
-`update()` returns `THREESceneChanges` for information only: `transforms`
-counts changed mesh matrices; `membership`, `content`, `lights` and
-`background` flag what changed. Nothing needs to be forwarded to the renderer.
+`update()` returns `void`. Render `sync.scene` afterwards; Renderer detects
+the converted scene changes.
 
 `new THREESceneSync(threeScene, options?)` accepts an optional
 `onMeshConverted(mesh, source, group, groupIndex)` callback (default: none).

@@ -24,11 +24,11 @@ it.each([false,true])('matches Three vertex positions for morph+skinning (relati
   geometry.morphAttributes.position=[target];geometry.morphTargetsRelative=relative;mesh.updateMorphTargets();mesh.morphTargetInfluences![0]=.7;
   const source=new THREE.Scene();source.add(mesh);const sync=new THREESceneSync(source);
   const g=sync.scene.meshes[0].geometry,array=g.position.array;
-  bone.rotation.z=.8;bone.position.set(.2,.1,.3);expect(sync.update().content).toBe(true);compare(mesh,sync);
+  bone.rotation.z=.8;bone.position.set(.2,.1,.3);sync.update();compare(mesh,sync);
   expect(sync.scene.meshes[0].geometry).toBe(g);expect(g.position.array).toBe(array);expect(g.dynamic).toBe(true);
-  const mark=vi.spyOn(g,'markUpdated');expect(sync.update().content).toBe(false);expect(mark).not.toHaveBeenCalled();
+  const version=g.version, mark=vi.spyOn(g,'markVerticesUpdated');sync.update();expect(mark).not.toHaveBeenCalled();expect(g.version).toBe(version);
   (geometry.attributes.position as THREE.BufferAttribute).setX(0,.8);(geometry.attributes.position as THREE.BufferAttribute).needsUpdate=true;
-  expect(sync.update().content).toBe(true);expect(sync.scene.meshes[0].geometry).toBe(g);compare(mesh,sync);
+  sync.update();expect(sync.scene.meshes[0].geometry).toBe(g);compare(mesh,sync);
   target.setY(0,.4);target.needsUpdate=true;sync.update();compare(mesh,sync);
 });
 it('rotates normals and tangents by the skin matrix and normalizes them', () => {
@@ -67,12 +67,14 @@ it.each([false, true])('keeps static and per-mesh morph caches independent with 
   const plainGeometry = sync.scene.meshes[plainIndex].geometry;
   const aGeometry = sync.scene.meshes[aIndex].geometry, bGeometry = sync.scene.meshes[bIndex].geometry;
   expect(aGeometry).not.toBe(bGeometry); expect(aGeometry).not.toBe(plainGeometry);
-  expect(sync.update().content).toBe(false);
+  const initialVersions=[aGeometry.version,bGeometry.version];
+  sync.update();
+  expect([aGeometry.version,bGeometry.version]).toEqual(initialVersions);
   a.morphTargetInfluences![0] = 0.6; b.morphTargetInfluences![0] = 0.1;
-  expect(sync.update().content).toBe(true);
+  sync.update();
   const position = geometry.getAttribute('position') as THREE.BufferAttribute;
   position.setX(0, position.getX(0) + 0.25); position.needsUpdate = true;
-  expect(sync.update().content).toBe(true);
+  sync.update();
   expect(sync.scene.meshes[plainIndex].geometry).not.toBe(plainGeometry);
   expect(sync.scene.meshes[aIndex].geometry).toBe(aGeometry);
   expect(sync.scene.meshes[bIndex].geometry).toBe(bGeometry);
@@ -86,7 +88,9 @@ it.each([false, true])('keeps static and per-mesh morph caches independent with 
       }
     }
   }
-  expect(sync.update().content).toBe(false);
+  const finalVersions=[aGeometry.version,bGeometry.version];
+  sync.update();
+  expect([aGeometry.version,bGeometry.version]).toEqual(finalVersions);
 });
 it('applies morph normals without requiring a skeleton', () => {
   const geometry=new THREE.BoxGeometry();const target=geometry.attributes.normal.clone();

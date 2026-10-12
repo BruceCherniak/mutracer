@@ -31,7 +31,7 @@ it('expands world transforms, shares geometry and deduplicates colors', () => {
   mesh.getMatrixAt(3, local); world.multiplyMatrices(mesh.matrixWorld, local);
   expect([...sync.scene.meshes[3].matrixWorld]).toEqual(world.elements);
   expect(fromTHREEScene(source).meshes).toHaveLength(4);
-  expect(sync.update()).toEqual({ transforms: 0, membership: false, content: false, lights: false, background: false });
+  sync.update();
 });
 
 it('retains the prefix when count changes and reports matrix edits only as transforms', () => {
@@ -40,11 +40,11 @@ it('retains the prefix when count changes and reports matrix edits only as trans
   ensureMeshGeometryAttributes(sync.scene.meshes); sync.update();
   const detector = new SceneChangeDetector(); detector.detect(sync.scene); detector.commit();
   mesh.setMatrixAt(1, new THREE.Matrix4().makeTranslation(8, 0, 0)); mesh.instanceMatrix.needsUpdate = true;
-  expect(sync.update()).toMatchObject({ transforms: 1, content: false, membership: false });
+  sync.update();
   const changes = detector.detect(sync.scene);
   expect(changes.meshes).toBe('incremental'); expect(changes.transforms).toEqual([initial[1]]); expect(changes.geometries).toEqual([]);
   expect(initial[1].matrixWorld).toBe(matrix);
-  mesh.count = 2; expect(sync.update().membership).toBe(true);
+  mesh.count = 2; sync.update();
   expect(sync.scene.meshes).toEqual(initial.slice(0, 2));
   mesh.count = 4; sync.update();
   expect(sync.scene.meshes[0]).toBe(initial[0]); expect(sync.scene.meshes[1]).toBe(initial[1]);
