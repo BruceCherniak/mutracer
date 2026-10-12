@@ -16,6 +16,7 @@ vi.mock('@meimu/mutracer', async () => ({
   DEFAULT_JNLM_OPTIONS: (await import('../../src/renderer/jnlm')).DEFAULT_JNLM_OPTIONS,
   Renderer: class {
     samples = 0;
+    on() { return () => {}; }
     init() { return Promise.resolve({backend:'webgl',adapterName:'mock'}); }
     getSize() { return { width: 800, height: 600 }; }
     setSize() {}

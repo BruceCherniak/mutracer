@@ -119,6 +119,8 @@ export class ViewerEngine {
     this.settings = get().settings;
     this.renderer = new Renderer({ canvas, preferWebGPU: !new URLSearchParams(location.search).has('webgl') });
 
+    this.renderer.on('error', error => showToast(`Rendering failed: ${error.message}`, 'error'));
+
     this.scene.add(this.modelGroup);
     this.studioRig.name = 'Studio lights';
     this.scene.add(this.studioRig);
@@ -147,7 +149,7 @@ export class ViewerEngine {
       if (this.disposed) return;
       set({ backend: { name: info.backend === 'webgpu' ? 'WebGPU' : 'WebGL 2', adapter: shortAdapterName(info.adapterName) } });
       return this.updateDenoiser();
-    }).catch(error => showToast(`Renderer initialization failed: ${error instanceof Error ? error.message : String(error)}`, 'error'));
+    }).catch(() => {});
     this.unsubscribe = useViewer.subscribe((state, prev) => {
       if (state.settings !== prev.settings) {
         const before = this.settings;
