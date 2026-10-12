@@ -1,21 +1,15 @@
 import {
-  RENDER_STATUS_COMPILING_SHADER,
-  RENDER_STATUS_DENOISING,
-  RENDER_STATUS_ERROR,
-  RENDER_STATUS_FINISHED,
-  RENDER_STATUS_PREPARING,
-  RENDER_STATUS_RENDERING,
   type Renderer,
   type RenderStatus
 } from '@meimu/mutracer';
 
-const labels: Record<number, string> = {
-  [RENDER_STATUS_PREPARING]: 'Preparing scene',
-  [RENDER_STATUS_COMPILING_SHADER]: 'Compiling shaders',
-  [RENDER_STATUS_RENDERING]: 'Rendering',
-  [RENDER_STATUS_DENOISING]: 'Denoising',
-  [RENDER_STATUS_FINISHED]: 'Finished',
-  [RENDER_STATUS_ERROR]: 'Error (see console)'
+const labels: Record<RenderStatus, string> = {
+  ['preparing']: 'Preparing scene',
+  ['compiling']: 'Compiling shaders',
+  ['converging']: 'Converging',
+  ['denoising']: 'Denoising',
+  ['finished']: 'Finished',
+  ['error']: 'Error (see console)'
 };
 
 /** Writes the render status and sample count into `element`. */

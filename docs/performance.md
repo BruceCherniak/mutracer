@@ -65,7 +65,7 @@ See [scene updates](./updates.md) for the cost of each kind of edit.
 ## Shader compilation
 
 The path-tracing shaders are large. The first frame can take several seconds
-to compile on some platforms (`RENDER_STATUS_COMPILING_SHADER`). Materials
+to compile on some platforms (`'compiling'`). Materials
 with displacement or alpha, and some renderer options, select shader variants
 that compile on first use. Show a status while compiling, as the examples do.
 

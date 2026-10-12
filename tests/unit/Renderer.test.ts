@@ -4,7 +4,7 @@ import { updateMeshInstances } from '../../src/renderer/prepareMeshBVH';
 import { ensureMeshGeometryAttributes } from '../../src/renderer/prepareMeshBVH';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import Renderer, { RENDER_STATUS_PREPARING, RENDER_STATUS_ERROR, RENDER_STATUS_RENDERING, RENDER_STATUS_DENOISING, RENDER_STATUS_FINISHED } from '../../src/Renderer';
+import Renderer from '../../src/Renderer';
 import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from '../../src/renderer/MergedMaterialData';
 import type { RenderingPipeline } from '../../src/renderer/RenderingPipeline';
 import type { WGPURenderingPipeline } from '../../src/renderer/WGPURenderingPipeline';
@@ -185,7 +185,7 @@ describe('Renderer sizing', () => {
     mesh.materials[0].markUpdated();
     const prepare = vi.spyOn(renderer, 'prepareScene').mockResolvedValue({geometryCount: 0, bvhTimeMs: 0});
     const needsPreparation = vi.spyOn(renderer as any, '_needsBVHPreparation').mockReturnValue(true);
-    expect(renderer.render(scene, {} as Camera)).toBe(RENDER_STATUS_PREPARING);
+    expect(renderer.render(scene, {} as Camera)).toBe('preparing');
     expect(pipeline.setMeshes).not.toHaveBeenCalled();
     await (renderer as any)._bvhPreparation;
     needsPreparation.mockReturnValue(false);
@@ -1335,14 +1335,14 @@ it('shares preparation between render and a concurrent explicit prepareScene cal
     const renderer = new Renderer({canvas: {width: 1, height: 1} as HTMLCanvasElement});
     const pipeline = createPipeline(); attachPipeline(renderer, pipeline);
     const scene: Scene = {meshes: [new Mesh(createCubeGeometry(), new OpenPBRMaterial())], lights: []};
-    expect(renderer.render(scene, {} as Camera)).toBe(RENDER_STATUS_PREPARING);
+    expect(renderer.render(scene, {} as Camera)).toBe('preparing');
     const explicit = renderer.prepareScene(scene);
     await Promise.resolve();
     expect(build).toHaveBeenCalledOnce();
     finish(buildBLAS(scene.meshes[0].geometry));
     await explicit;
     expect(build).toHaveBeenCalledOnce();
-    expect(renderer.render(scene, {} as Camera)).not.toBe(RENDER_STATUS_PREPARING);
+    expect(renderer.render(scene, {} as Camera)).not.toBe('preparing');
   } finally {build.mockRestore(); vi.unstubAllGlobals();}
 });
 
@@ -1357,7 +1357,7 @@ it('keeps rendering the current scene during background preparation of another s
     updateMeshInstances(current.meshes); markSceneStable(renderer, current);
     const background = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
     const pending = renderer.prepareScene([background]); await Promise.resolve();
-    expect(renderer.render(current, {} as Camera)).not.toBe(RENDER_STATUS_PREPARING);
+    expect(renderer.render(current, {} as Camera)).not.toBe('preparing');
     expect(pipeline.draw).toHaveBeenCalledOnce();
     finish(buildBLAS(background.geometry)); await pending;
   } finally {build.mockRestore(); vi.unstubAllGlobals();}
@@ -1371,12 +1371,12 @@ describe('render failures', () => {
     const log=vi.spyOn(console,'error').mockImplementation(()=>{});
     try {
       vi.mocked(pipeline.draw).mockImplementationOnce(()=>{throw error;});
-      expect(renderer.render({meshes:[],lights:[]}, {} as Camera)).toBe(RENDER_STATUS_ERROR);
+      expect(renderer.render({meshes:[],lights:[]}, {} as Camera)).toBe('error');
       expect(renderer.lastError).toBe(error); expect(renderer.getDiagnostics()?.lastError).toBe('draw failed');
       renderer.render({meshes:[],lights:[]}, {} as Camera);
       expect(renderer.lastError).toBeUndefined(); expect(renderer.getDiagnostics()?.lastError).toBeUndefined();
       vi.mocked(pipeline.setOutput).mockImplementationOnce(()=>{throw 'setting failed';});
-      expect(renderer.render({meshes:[],lights:[]}, {} as Camera)).toBe(RENDER_STATUS_ERROR);
+      expect(renderer.render({meshes:[],lights:[]}, {} as Camera)).toBe('error');
       expect(renderer.lastError?.message).toBe('setting failed');
     } finally {log.mockRestore();}
   });
@@ -1405,16 +1405,16 @@ it('reports only final denoising and completion while converging', async () => {
   });
   attachPipeline(renderer,pipeline); const scene={meshes:[],lights:[]}; const camera={} as Camera;
   renderer.oidn = {} as never; setDenoiseMode(renderer,{whileConverging:true,sampleInterval:4});
-  expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_RENDERING);
-  expect(samples).toBe(1); expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_RENDERING);
+  expect(renderer.render(scene,camera)).toBe('converging');
+  expect(samples).toBe(1); expect(renderer.render(scene,camera)).toBe('converging');
   complete(true); await new Promise(resolve=>setTimeout(resolve,0));
-  expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_RENDERING);
-  expect(samples).toBe(4); expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_RENDERING);
+  expect(renderer.render(scene,camera)).toBe('converging');
+  expect(samples).toBe(4); expect(renderer.render(scene,camera)).toBe('converging');
   complete(true); await new Promise(resolve=>setTimeout(resolve,0));
-  expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_DENOISING);
-  expect(samples).toBe(8); expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_DENOISING);
+  expect(renderer.render(scene,camera)).toBe('denoising');
+  expect(samples).toBe(8); expect(renderer.render(scene,camera)).toBe('denoising');
   complete(true); await new Promise(resolve=>setTimeout(resolve,0));
-  expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_FINISHED);
+  expect(renderer.render(scene,camera)).toBe('finished');
 });
 
 
@@ -1430,4 +1430,12 @@ it('honors validateUpdates false and explicit true in production during render',
       expect(warn.mock.calls.length).toBe(enabled===true?1:0);
     }
   } finally {vi.unstubAllEnvs();warn.mockRestore();}
+});
+
+it('exposes the initial and latest string render status', () => {
+ const renderer = new Renderer({canvas: {width: 1, height: 1} as HTMLCanvasElement});
+ expect(renderer.status).toBe('preparing');
+ const pipeline = createPipeline();attachPipeline(renderer,pipeline);
+ const status = renderer.render({meshes:[],lights:[]}, {} as Camera);
+ expect(renderer.status).toBe(status);expect(status).toBe('finished');
 });

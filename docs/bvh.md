@@ -19,7 +19,7 @@ The examples assume you have created `renderer`, `scene` and `camera`.
 ### Automatic (default)
 
 `render()` builds missing static BLASes in the Worker pool. Keep calling it while it
-returns `RENDER_STATUS_PREPARING` or `RENDER_STATUS_COMPILING_SHADER`; the
+returns `'preparing'` or `'compiling'`; the
 canvas keeps its previous image meanwhile:
 
 ```ts
@@ -96,7 +96,7 @@ keeps the built-in builder.
 `await renderer.prepareScene(scene)` waits for static BLAS builds only. It
 does **not** initialize the device, build the TLAS, upload GPU scene data,
 compile shaders or render. Afterwards, keep calling `render()` through
-`RENDER_STATUS_PREPARING` and `RENDER_STATUS_COMPILING_SHADER`, or await
+`'preparing'` and `'compiling'`, or await
 `renderOfflineFrame(scene, camera, { samples })` for a finished image.
 
 - **Result** `{ geometryCount, bvhTimeMs }`: `geometryCount` is the number of

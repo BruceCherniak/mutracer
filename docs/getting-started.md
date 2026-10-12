@@ -27,7 +27,7 @@ animation frame; it returns a [status](./api.md#status-codes).
 ## A minimal render loop
 
 ```ts
-import { Camera, Renderer, RENDER_STATUS_FINISHED } from '@meimu/mutracer';
+import { Camera, Renderer } from '@meimu/mutracer';
 
 const renderer = new Renderer({ canvas });
 renderer.maxSamples = 1024;
@@ -41,8 +41,8 @@ function resize() {
 
 function frame() {
   const status = renderer.render(scene, camera);
-  if (status === RENDER_STATUS_FINISHED) {
-    // The image converged. render() keeps returning FINISHED cheaply.
+  if (status === 'finished') {
+    // The image converged. render() keeps returning finished cheaply.
   }
   requestAnimationFrame(frame);
 }
@@ -51,8 +51,8 @@ frame();
 ```
 
 `new Renderer()` picks WebGPU when available and WebGL 2 otherwise. The first
-calls return `RENDER_STATUS_PREPARING` (device setup, BVH builds) and
-`RENDER_STATUS_COMPILING_SHADER`; keep calling `render()`. BVHs build
+calls return `'preparing'` (device setup, BVH builds) and
+`'compiling'`; keep calling `render()`. BVHs build
 automatically; for a loading screen, see
 [BVH preparation flows](./bvh.md#choose-a-preparation-flow).
 

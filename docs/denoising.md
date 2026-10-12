@@ -22,7 +22,7 @@ or `new Renderer({ canvas, denoiser: true })`. `type` defaults to `'jnlm'`,
 or to `'oidn'` when `model` or `weightsBaseUrl` is given.
 
 With a denoiser attached, when `maxSamples` is reached `render()` returns
-`RENDER_STATUS_DENOISING` and then `RENDER_STATUS_FINISHED` with the denoised
+`'denoising'` and then `'finished'` with the denoised
 image. `renderOfflineFrame` denoises before resolving. A lower `maxSamples`
 (e.g. 64–256) is usually enough.
 
@@ -170,4 +170,4 @@ applied to the composed image, including its alpha, so shadow catchers and
 transparent backgrounds are filtered too. Pixels that show the background
 directly are left as rendered.
 
-While-converging intermediate denoise batches report `RENDER_STATUS_RENDERING`. Only denoising the final image at `maxSamples` reports `RENDER_STATUS_DENOISING`; `RENDER_STATUS_FINISHED` means that final image is ready.
+While-converging intermediate denoise batches report `'converging'`. Only denoising the final image at `maxSamples` reports `'denoising'`; `'finished'` means that final image is ready.

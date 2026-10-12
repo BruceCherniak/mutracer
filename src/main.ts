@@ -14,15 +14,7 @@ export { VERSION } from './version.js';
 
 // Renderer
 export {
-  default as Renderer,
-  RENDER_STATUS_UNKNOWN,
-  RENDER_STATUS_COMPILING_SHADER,
-  RENDER_STATUS_RENDERING,
-  RENDER_STATUS_DENOISING,
-  RENDER_STATUS_FINISHED,
-  RENDER_STATUS_ERROR,
-  RENDER_STATUS_PREPARING
-} from './Renderer.js';
+  default as Renderer} from './Renderer.js';
 export type {
   BVHBuilder,
   DenoiserOptions,

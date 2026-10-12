@@ -233,30 +233,8 @@ export interface OfflineFrameRenderResult {
 
 
 
-/** Not reported by `render()`; reserved as an initial value for callers. */
-export const RENDER_STATUS_UNKNOWN = 0;
-/** Shaders/pipelines are compiling. No new samples were added. */
-export const RENDER_STATUS_COMPILING_SHADER = 1;
-/** Samples were added; `maxSamples` has not been reached yet. */
-export const RENDER_STATUS_RENDERING = 2;
-/** `maxSamples` was reached and the denoiser is running on the result. */
-export const RENDER_STATUS_DENOISING = 3;
-/** The image is complete (and denoised, if a denoiser is set). */
-export const RENDER_STATUS_FINISHED = 4;
-/** Rendering failed. Details are logged and in `getDiagnostics()`. */
-export const RENDER_STATUS_ERROR = 5;
-/** The GPU device is initializing or BVHs are being built. */
-export const RENDER_STATUS_PREPARING = 6;
-
-/** Value returned by {@link Renderer.render}. */
-export type RenderStatus =
-  | typeof RENDER_STATUS_UNKNOWN
-  | typeof RENDER_STATUS_COMPILING_SHADER
-  | typeof RENDER_STATUS_RENDERING
-  | typeof RENDER_STATUS_DENOISING
-  | typeof RENDER_STATUS_FINISHED
-  | typeof RENDER_STATUS_ERROR
-  | typeof RENDER_STATUS_PREPARING;
+/** Value returned by render(); initial renderer status is preparing. */
+export type RenderStatus = 'preparing' | 'compiling' | 'converging' | 'denoising' | 'finished' | 'error';
 
 const OIDN_DENOISING = 1;
 const OIDN_DENOISED = 2;
@@ -393,7 +371,7 @@ export default class Renderer {
    * BLAS builder used for meshes without a precomputed BVH. `builtin` builds
    * in a Worker using JavaScript (TinyBVH's binned SAH builder). `tinybvh`
    * loads WebAssembly in the Worker on first use. Both prepare missing static
-   * BLASes before the first frame; `render()` returns `RENDER_STATUS_PREPARING`
+   * BLASes before the first frame; `render()` returns `'preparing'`
    * meanwhile. If Workers are unavailable, construction runs on the main
    * thread. TinyBVH failures fall back to `builtin`. Default `builtin`.
    */
@@ -779,7 +757,7 @@ export default class Renderer {
 
   /**
    * Builds missing static BLASes before rendering, using a Worker when available.
-   * `render()` calls this automatically and returns `RENDER_STATUS_PREPARING`
+   * `render()` calls this automatically and returns `'preparing'`
    * meanwhile. Dynamic geometry retains synchronous refit/rebuild behavior.
    * Default options: build only missing BLASes, without a progress callback.
    * Returns the number of BLASes written and their total builder time.
@@ -955,17 +933,17 @@ export default class Renderer {
             lastPreviewAt = previewAt;
           }
         }
-        if (status === RENDER_STATUS_ERROR) {
+        if (status === 'error') {
           throw new Error(this._lastRenderError ?? 'Path tracing failed.');
         }
-        if (status === RENDER_STATUS_DENOISING) {
+        if (status === 'denoising') {
           options.onProgress?.({
             stage: 'denoising',
             samples: targetSamples,
             targetSamples
           });
         }
-        if (status === RENDER_STATUS_FINISHED && rendered >= targetSamples) {
+        if (status === 'finished' && rendered >= targetSamples) {
           break;
         }
         await waitForWork(rendered > 0 && madeProgress);
@@ -1224,8 +1202,12 @@ export default class Renderer {
       console.error(`Path tracing failed: ${message}`, error);
       this._lastRenderError = message;
     }
-    return RENDER_STATUS_ERROR;
+    return 'error';
   }
+
+  /** Most recent render result. Default preparing. */
+  get status(): RenderStatus { return this._status; }
+  private _status: RenderStatus = 'preparing';
 
   /**
    * Renders the scene progressively. Call once per animation frame; each call
@@ -1243,10 +1225,11 @@ export default class Renderer {
    */
   render(scene: Scene, camera: Camera): RenderStatus {
     try {
-      return this._render(scene, camera);
+      this._status = this._render(scene, camera);
     } catch (error) {
-      return this._reportRenderError(error);
+      this._status = this._reportRenderError(error);
     }
+    return this._status;
   }
 
   private _render(scene: Scene, camera: Camera): RenderStatus {
@@ -1254,14 +1237,14 @@ export default class Renderer {
       return this._reportRenderError(this._pipelineInitError);
     }
     if (this._initing) {
-      return RENDER_STATUS_PREPARING;
+      return 'preparing';
     }
 
     const pipeline = this._pipeline;
 
     if (!pipeline) {
       void this.init().catch(() => {});
-      return RENDER_STATUS_PREPARING;
+      return 'preparing';
     }
 
     const toneMappingParams = {
@@ -1362,7 +1345,7 @@ export default class Renderer {
       this._bvhPreparation ??= this.prepareScene(scene.meshes).finally(() => {
         this._bvhPreparation = undefined;
       });
-      return RENDER_STATUS_PREPARING;
+      return 'preparing';
     }
     let sceneChanged = meshContentChanged || changes.lights || changes.background;
     if (meshContentChanged) {
@@ -1585,12 +1568,12 @@ export default class Renderer {
     this._lastRenderError = undefined;
     this.lastError = undefined;
     return compilingShader
-      ? RENDER_STATUS_COMPILING_SHADER
+      ? 'compiling'
       : this._oidnStatus === OIDN_DENOISING && this._denoiseFinalInFlight
-      ? RENDER_STATUS_DENOISING
+      ? 'denoising'
       : this._renderDone && pipeline.getTotalSamplesRendered() >= this.maxSamples && !needsRedrawPostProcess
-      ? RENDER_STATUS_FINISHED
-      : RENDER_STATUS_RENDERING;
+      ? 'finished'
+      : 'converging';
   }
 
   /**

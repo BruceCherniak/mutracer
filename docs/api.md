@@ -79,7 +79,7 @@ affects the image restarts accumulation.
 
 | Method | Description |
 | --- | --- |
-| `render(scene, camera)` | Adds samples; returns a [status](#status-codes). Call once per frame |
+| `render(scene, camera)` | Adds samples; returns a [status](#status). Call once per frame |
 | `setSize(width, height)` | Resizes the canvas drawing buffer and targets, in pixels |
 | `getSize()` | `{ width, height }` |
 | `setDenoiser(options?)` | Attaches the built-in JNLM filter or an OIDN network (WebGPU only); `false`/`null` removes it. See [denoising](./denoising.md) |
@@ -107,9 +107,9 @@ by `getDiagnostics().hdrPresentation.active`.
 data edits, which need `markUpdated()` or `markVerticesUpdated()`; see
 [scene updates](./updates.md). An unchanged scene keeps accumulating.
 
-Rendering failures return `RENDER_STATUS_ERROR` without throwing. `renderer.lastError` (default `undefined`) stores the error until the next successful render. Constructor denoiser failures also set it. Initialized diagnostics include `lastError` and `webgpuFallbackReason` messages when applicable.
+Rendering failures return `'error'` without throwing. `renderer.lastError` (default `undefined`) stores the error until the next successful render. Constructor denoiser failures also set it. Initialized diagnostics include `lastError` and `webgpuFallbackReason` messages when applicable.
 
-While-converging intermediate denoise batches report `RENDER_STATUS_RENDERING`. Only denoising the final image at `maxSamples` reports `RENDER_STATUS_DENOISING`; `RENDER_STATUS_FINISHED` means that final image is ready.
+While-converging intermediate denoise batches report `'converging'`. Only denoising the final image at `maxSamples` reports `'denoising'`; `'finished'` means that final image is ready.
 
 ### Depth sampling
 
@@ -150,19 +150,20 @@ while a query is pending. GPU failures reject the promise.
 Resolves to `{ samples, averageSamplesPerPixel, pilotSamples, adaptiveSampling }`.
 If a denoiser is set, the result is denoised before the promise resolves.
 
-## Status codes
+## Status
 
 `render()` returns one of:
 
-| Constant | Value | Meaning |
-| --- | --- | --- |
-| `RENDER_STATUS_PREPARING` | 6 | Device initializing or BVHs building |
-| `RENDER_STATUS_COMPILING_SHADER` | 1 | Pipelines compiling; no samples added |
-| `RENDER_STATUS_RENDERING` | 2 | Samples added; `maxSamples` not reached |
-| `RENDER_STATUS_DENOISING` | 3 | `maxSamples` reached; the denoiser is running |
-| `RENDER_STATUS_FINISHED` | 4 | Image complete (and denoised if enabled) |
-| `RENDER_STATUS_ERROR` | 5 | Failed; see the console and `getDiagnostics()` |
-| `RENDER_STATUS_UNKNOWN` | 0 | Never returned; an initial value for callers |
+| Status | Meaning |
+| --- | --- |
+| `'preparing'` | Device initializing or BVHs building; initial status |
+| `'compiling'` | Pipelines compiling; no samples added |
+| `'converging'` | Samples accumulating toward `maxSamples` |
+| `'denoising'` | `maxSamples` reached; final denoising in progress |
+| `'finished'` | Image complete, including final denoising |
+| `'error'` | Synchronous rendering failed; inspect `lastError` |
+
+Read `renderer.status` for the latest render result (default `'preparing'`).
 
 ## Scene types
 
