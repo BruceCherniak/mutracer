@@ -190,7 +190,7 @@ function convertMaterial(
     material.displacementUvProjection = uvProjection;
   }
   const displacementUvProjectionScale = Number(
-    standardMaterial.userData.mutracerDisplacementUvScale
+    standardMaterial.userData.mutracerDisplacementUvProjectionScale
   );
   if (Number.isFinite(displacementUvProjectionScale)) {
     material.displacementUvProjectionScale = Math.max(displacementUvProjectionScale, 0.000001);

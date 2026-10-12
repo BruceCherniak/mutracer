@@ -366,7 +366,7 @@ describe('Three.js scene conversion', () => {
     material.userData.mutracerUvReferenceLength = 2;
     material.userData.mutracerDisplacementStepSize = 0.004;
     material.userData.mutracerDisplacementUvProjection = 'cylindrical';
-    material.userData.mutracerDisplacementUvScale = 2.5;
+    material.userData.mutracerDisplacementUvProjectionScale = 2.5;
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(), material);
     material.userData.mutracerDisplacementBumpStrength = 12;
     const scene = new THREE.Scene();
@@ -1091,4 +1091,12 @@ describe('Three.js camera conversion', () => {
     expect(fromTHREECamera(three, { focusDistance: 2, metersPerUnit: 0.01 }))
       .toMatchObject({ focusDistance: 2, metersPerUnit: 0.01, fStop: 0 });
   });
+});
+
+it('reads only the renamed displacement projection scale userData key', () => {
+ const material=new THREE.MeshStandardMaterial();material.userData.mutracerDisplacementUvScale=7;
+ const scene=new THREE.Scene();scene.add(new THREE.Mesh(new THREE.BoxGeometry(),material));
+ expect(fromTHREEScene(scene).meshes[0].materials[0].displacementUvProjectionScale).toBe(1);
+ material.userData.mutracerDisplacementUvProjectionScale=3;
+ expect(fromTHREEScene(scene).meshes[0].materials[0].displacementUvProjectionScale).toBe(3);
 });

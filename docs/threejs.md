@@ -161,7 +161,7 @@ Renderer-specific settings without a Three.js equivalent:
 | `mutracerOpenPBR: { ... }` | material | OpenPBR inputs without a Three.js equivalent: `baseWeight`, `baseDiffuseRoughness`, `specularWeight`, `specularColor`, `coat*`, `fuzz*`, `thinFilm*`, `thinWalled`, `subsurface*`, `transmissionScatter*`, `transmissionDispersion*` |
 | `mutracerBevelSize` | material | Shader bevel radius |
 | `mutracerUvProjection`, `mutracerUvProjectionScale`, `mutracerUvReferenceLength` | material | Procedural UV projection |
-| `mutracerDisplacement*` | material | Displacement settings, same names as the `OpenPBRMaterial` fields |
+| `mutracerDisplacement*` | material | Displacement settings, same names as the `OpenPBRMaterial` fields; projection scale is `mutracerDisplacementUvProjectionScale` |
 | `mutracerThinFilmMap` | material | Thin-film thickness texture |
 | `mutracerRadius` | point / spot light | Emitter radius |
 | `mutracerIesProfile`, `mutracerIesRotation` | spot light | `IESProfile` instance; rotation becomes local-Z transform rotation |
