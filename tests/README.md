@@ -32,3 +32,12 @@ separate fixed-resolution, fixed-spp `render.converge` / `render.readPixels('hdr
 comparison against pixels captured before a refactor.
 
 Use small generated fixtures; do not commit models or images for tests.
+
+[`gpu/shaderSource.html`](./gpu/shaderSource.html) exposes
+`shaderSourceTests.capture(layout, postProcess)` for before/after comparisons.
+It uses four OpenPBR layer materials, four background configurations, Sobol
+sampling with sequence offset 17 and 8 samples. Pass `true` for `postProcess`
+to include bloom/JNLM output and 48×32 → 30×20 → 48×32 scratch reuse; append
+`?webgl` to select WebGL 2. Capture results include HDR pixels, denoised pixels,
+depth queries and renderer compilation diagnostics. Compare each backend and
+layout against its own baseline.
