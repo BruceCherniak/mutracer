@@ -108,3 +108,11 @@ export { computeMeshesBoundingBox } from './util/mesh.js';
 export type { TinyBvhLayout } from './tinybvh/TinyBvhBuilder.js';
 
 export type { SamplingPattern } from './renderer/sampling.js';
+
+// Independent rendering mechanisms.
+export { default as Engine } from './Engine.js';
+export type { EngineParams, EngineInfo, EngineDiagnostics, PrepareOptions } from './Engine.js';
+export { default as Display } from './Display.js';
+export type { BlobOptions, DisplayChannel } from './Display.js';
+export { default as Render } from './Render.js';
+export type { RenderOptions, RenderSettings, ConvergeOptions, ConvergeResult } from './Render.js';

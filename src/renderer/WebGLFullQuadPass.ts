@@ -207,6 +207,14 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     gl.disable(gl.SCISSOR_TEST);
   }
 
+  releaseTarget(target: object) {
+    const outputs = this._targetOutputs.get(target);
+    if (!outputs) return;
+    this._targetOutputs.delete(target);
+    for (const texture of (Object.values(outputs) as Texture2D[])) texture.dispose(this._renderer.gl);
+    if (outputs === this._outputTextures) this._outputTextures = {} as Record<O, Texture2D>;
+  }
+
   getMemoryBytes(target?: object): number {
     const outputs = target ? this._targetOutputs.get(target) ?? {} : this._outputTextures;
     return Array.from(new Set([...Object.values(outputs) as Texture2D[], ...this._retainedOutputs]))

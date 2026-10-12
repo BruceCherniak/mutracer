@@ -8,7 +8,7 @@ import {
   Mesh,
   OpenPBRMaterial, type OpenPBRMaterialParams,
   RectLight,
-  Renderer,
+  Engine, Render,
   type Scene,
   createCubeGeometry,
   createPlaneGeometry,
@@ -16,6 +16,7 @@ import {
 } from '@meimu/mutracer';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
+import { exampleSelection } from './shared/progressive';
 
 const canvas = document.getElementById('main') as HTMLCanvasElement;
 const statusElement = document.getElementById('status')!;
@@ -61,16 +62,16 @@ const controls = new CameraViewControl({ camera, domElement: canvas });
 
 // Uses WebGPU when available and WebGL 2 otherwise; add ?webgl to the URL to
 // force the WebGL 2 backend.
-const renderer = new Renderer({
-  canvas,
-  preferWebGPU: !new URLSearchParams(location.search).has('webgl')
-});
-renderer.bounces = 6;
-renderer.maxSamples = 1024;
+const engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
+const preview = new Render(engine, {resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}, bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
+const final = new Render(engine, {fallback: preview, bounces: 6, maxSamples: 1024});
+const select = exampleSelection(engine, preview, final);
+engine.scene = scene; engine.camera = camera;
+
 
 function resize() {
   const ratio = Math.min(window.devicePixelRatio, 2);
-  renderer.setSize(canvas.clientWidth * ratio, canvas.clientHeight * ratio);
+  engine.display.setSize(canvas.clientWidth * ratio, canvas.clientHeight * ratio);
   controls.aspect = canvas.clientWidth / canvas.clientHeight;
 }
 window.addEventListener('resize', resize);
@@ -78,8 +79,9 @@ resize();
 
 function frame() {
   controls.update();
-  const status = renderer.render(scene, camera);
-  showStatus(statusElement, renderer, status);
+  const current = select(engine.update()); const status = current.refine();
+  const shown = engine.display.present(current);
+  showStatus(statusElement, engine, final, shown === preview ? 'previewing' : status);
   requestAnimationFrame(frame);
 }
 frame();

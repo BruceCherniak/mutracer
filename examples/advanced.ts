@@ -7,7 +7,7 @@ import {
   EnvironmentLight,
   Mesh,
   OpenPBRMaterial, type OpenPBRMaterialParams,
-  Renderer,
+  Engine, Render,
   SphereLight,
   type OIDNModel,
   type SamplingPattern,
@@ -17,6 +17,7 @@ import {
 } from '@meimu/mutracer';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
+import { exampleSelection } from './shared/progressive';
 
 const canvas = document.getElementById('main') as HTMLCanvasElement;
 const statusElement = document.getElementById('status')!;
@@ -79,38 +80,39 @@ camera.fStop = 5.6;
 camera.focusDistance = 5.4;
 const controls = new CameraViewControl({ camera, domElement: canvas });
 
-const renderer = new Renderer({ canvas });
-renderer.on('error', error => { statusElement.textContent = error.message; });
-renderer.bounces = 8;
-renderer.maxSamples = 256;
-renderer.toneMapping = 'agx';
+const engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
+const preview = new Render(engine, {resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}, bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
+const final = new Render(engine, {fallback: preview, bounces: 8, maxSamples: 256});
+const select = exampleSelection(engine, preview, final);
+engine.scene = scene; engine.camera = camera;
+engine.on('error', error => {statusElement.textContent = error.message;});
 
 // The dev server serves the repository root, so the packaged OIDN weights
 // are available locally. Applications can omit weightsBaseUrl to use the
 // CDN copy. The built-in JNLM filter needs no weights.
-async function updateDenoiser() {
+function updateDenoiser() {
   const model = denoiserSelect.value;
-  await renderer.setDenoiser(
+  final.denoiser = (
     model === 'off'
-      ? false
+      ? null
       : model === 'jnlm'
       ? { type: 'jnlm' }
-      : { model: model as OIDNModel, weightsBaseUrl: '/oidn/weights/' }
+      : { type: 'oidn', model: model as OIDNModel, weightsBaseUrl: '/oidn/weights/' }
   );
 }
 denoiserSelect.addEventListener('change', () => {
-  updateDenoiser().catch(console.error);
+  updateDenoiser();
 });
-updateDenoiser().catch(console.error);
+updateDenoiser();
 
 // Sobol suits OIDN; ZSobol gives blue-noise error for undenoised previews.
 samplingSelect.addEventListener('change', () => {
-  renderer.samplingPattern = samplingSelect.value as SamplingPattern;
+  final.samplingPattern = samplingSelect.value as SamplingPattern;
 });
 
 function resize() {
   const ratio = Math.min(window.devicePixelRatio, 2);
-  renderer.setSize(canvas.clientWidth * ratio, canvas.clientHeight * ratio);
+  engine.display.setSize(canvas.clientWidth * ratio, canvas.clientHeight * ratio);
   controls.aspect = canvas.clientWidth / canvas.clientHeight;
 }
 window.addEventListener('resize', resize);
@@ -122,7 +124,8 @@ exportButton.addEventListener('click', async () => {
   exportButton.disabled = true;
   try {
     // Deterministic: the same scene and sample count give the same image.
-    await renderer.renderOfflineFrame(scene, camera, {
+    engine.update();
+    await final.converge({
       samples: Number(samplesInput.value) || 256,
       onProgress({ stage, samples, targetSamples }) {
         statusElement.textContent = stage === 'denoising'
@@ -130,7 +133,7 @@ exportButton.addEventListener('click', async () => {
           : `Offline ${samples} / ${targetSamples} spp`;
       }
     });
-    const blob = await renderer.toBlob();
+    const blob = await engine.display.toBlob(final);
     if (blob) {
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
@@ -147,7 +150,9 @@ exportButton.addEventListener('click', async () => {
 function frame() {
   if (!exporting) {
     controls.update();
-    showStatus(statusElement, renderer, renderer.render(scene, camera));
+    const current = select(engine.update()); const status = current.refine();
+    const shown = engine.display.present(current);
+    showStatus(statusElement, engine, final, shown === preview ? 'previewing' : status);
   }
   requestAnimationFrame(frame);
 }

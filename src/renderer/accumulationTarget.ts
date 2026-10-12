@@ -1,4 +1,5 @@
 import Camera from '../scene/Camera.js';
+import type { TraceSettings } from './renderPipeline.js';
 import type { RenderingPipeline } from './RenderingPipeline.js';
 import { ProgressiveScheduler } from './progressiveScheduler.js';
 
@@ -6,15 +7,19 @@ import { ProgressiveScheduler } from './progressiveScheduler.js';
 export interface AccumulationTargetOptions {
   label?: string;
   preview?: boolean;
+  independent?: boolean;
 }
 
 /** Backend-owned execution and output of one resident accumulation. */
 export interface TargetPipeline extends Omit<RenderingPipeline, 'needsRestartSample' | 'isPreviewMode'> {
   activate(): void;
+  configure(settings: TraceSettings): void;
+  synchronizeBackground(background: Parameters<RenderingPipeline['setBackground']>[0]): void;
   invalidate(): void;
   begin(): void;
   canCompleteSampleWithin(timeBudgetMs: number): boolean;
   present(): void;
+  readPresentation(): Promise<{width: number; height: number; data: Float32Array}>;
   readonly presentationComplete: boolean;
   readonly presentationDenoised: boolean;
   getMemory(): { width: number; height: number; bytes: number };

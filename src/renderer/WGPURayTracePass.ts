@@ -337,6 +337,14 @@ class WGPURayTracePass {
   private _activeTarget: object = {};
   private _targetOutputs = new Map<object, { buffers: GPUBuffer[]; bindGroup?: GPUBindGroup; pipeline?: GPUComputePipeline }>();
 
+  releaseTarget(target: object) {
+    const output = this._targetOutputs.get(target);
+    if (!output) return;
+    this._targetOutputs.delete(target);
+    for (const buffer of output.buffers) buffer.destroy();
+    if (this._activeTarget === target) { this._rayTraceBindGroups = undefined; this._needsUpdateBindGroups = true; }
+  }
+
   getTargetMemoryBytes(target: object) {
     return this._targetOutputs.get(target)?.buffers.reduce((sum, buffer) => sum + buffer.size, 0) ?? 0;
   }

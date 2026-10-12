@@ -4,62 +4,41 @@
 
 ## Essentials
 
-- Install: `npm install @meimu/mutracer` (+ `three` for the Three.js helpers). ESM with TypeScript declarations; every option has TSDoc with its default.
-- Scene: a plain object `{ meshes: Mesh[], lights: SceneLight[], background? }`. `new Mesh(geometry, material)` is placed with `mesh.transform` (column-major mat4, gl-matrix compatible).
-- Initialization: optional `await renderer.init()` resolves backend, adapter and limits; `info` / `backend` are undefined before completion, `device` is WebGPU only, `samples` initially 0 ([API](docs/api.md)).
-- Render loop: `const renderer = new Renderer({ canvas }); renderer.setSize(w, h);` then `renderer.render(scene, camera)` once per `requestAnimationFrame`. It accumulates up to `renderer.maxSamples` (default 2048) and returns a status.
-- Statuses: `'preparing'`, `'compiling'`, `'previewing'`, `'converging'`, `'denoising'`, `'finished'`, `'error'`; `renderer.status` initially `'preparing'`. Preview samples keep `renderer.samples` at 0; only formal frames finish. Intermediate denoising stays converging; denoising/finished describe the final image ([API](docs/api.md#status)).
-- Updates: edit the scene in place; membership, transforms, references, lights and background are detected. Call `material.markUpdated()` after parameter edits, `texture.markUpdated()` after pixel edits, `geometry.markVerticesUpdated()` after vertex-only edits, and `geometry.markUpdated()` after index or `materialIndex` edits. For per-frame deformation set `geometry.dynamic = true`.
-- Three.js: `const sync = new THREESceneSync(threeScene)`, then each frame `sync.update(); renderer.render(sync.scene, fromTHREECamera(threeCamera));` (`update()` returns void; Renderer detects edits). Use Three.js `needsUpdate` flags for buffer and texture pixel edits; material property edits need none. Supports MeshStandardMaterial, MeshPhysicalMaterial, MeshBasicMaterial, skinning, morph targets, InstancedMesh, and directional, point, spot, rect-area and ambient lights. Load glTF with Three.js `GLTFLoader` + `THREESceneSync`; calculate world matrices in Three.js or the host application.
-- Materials: `new OpenPBRMaterial(params?)` with OpenPBR names (`baseColor`, `baseMetalness`, `specularRoughness`, `specularIor`, `transmissionWeight`, `coatWeight`, `subsurfaceWeight`, `fuzzWeight`, `thinFilmWeight`, `emissionLuminance`, ...). Colors are linear RGB; 8-bit textures are sRGB. `mapAlphaUsage`: `'opaque'` (default), `'alpha'`, `'transmission'`; material UV projection uses `uvProjectionScale` / `displacementUvProjectionScale` ([details](docs/materials.md)).
-- Lights: parameter objects; analytic lights use `position` / `lookAt()` and rigid `transform` (local -Z emission, +X IES reference); `size` / `radius` set dimensions. `new EnvironmentLight({ map })`; see [lights](./docs/getting-started.md#lights).
-- Backgrounds: omit to show the environment; `[r, g, b, a]` linear color (`[0,0,0,0]` = transparent canvas, pair with `material.shadowCatcher = true`); a `Texture`; or `{ type: 'GroundedSkybox', map, height, radius }`.
-- Denoising: `await renderer.setDenoiser()` for JNLM (both backends, no download). `await renderer.setDenoiser({ type: 'oidn', model?: 'standard' | 'small' | 'cleanAuxLarge' })` for OIDN (WebGPU only; cleaner at 1–2 spp). `whileConverging: true` forces previews and denoises them; previewing never means finished. With a denoiser, `maxSamples` 64–256 is usually enough.
-- Depth of field: `camera.fStop = 2.8` (0 disables), `camera.focusDistance` along the view direction, `camera.metersPerUnit` for non-metre scenes; see [depth of field](./docs/getting-started.md#depth-of-field).
-- Depth: after rendering, `await renderer.readDepthSamples({ x, y, size })` queries GPU pinhole depths for autofocus; see [depth sampling](docs/api.md#depth-sampling).
-- Preview: `previewEnabled` (true), `previewMaxResolutionScale` (0.5), `previewTargetFrameMs` (20), `previewBounces` (2), `previewIdleDelayMs` (150); continuous scene animation stays at preview quality ([updates](docs/updates.md#preview-and-animation)).
-- Sampling: `renderer.samplingPattern` is `'sobol'` (default), `'zsobol'` (low spp without a denoiser) or `'random'`.
-- Final stills: `await renderer.renderOfflineFrame(scene, camera, { samples })`, then `await renderer.toBlob()`. Linear HDR pixels: `await renderer.readPixels('hdr')`.
-- BVH: automatic; optional `prebuildBVH(nextScene, { onProgress?, signal? })` returns void; diagnostics `bvh.lastBuild` holds statistics. Settings changes rebuild automatically. Listen to `progress` / `status` for loading UI ([BVH](docs/bvh.md)).
-
-- Events: `renderer.on('sample' | 'status' | 'progress' | 'error' | 'denoised' | 'devicelost', listener)` returns unsubscribe; `lastError` only reflects the latest render's synchronous failure, async errors use `error` ([API](docs/api.md)).
-- Geometry: `new Geometry({ position })` generates indices/normals; `vertexCount` / `triangleCount` are getters. `materialIndex` has itemSize 1 and one raw index per vertex (all triangle corners must match). See [geometry](./docs/getting-started.md#geometry-from-arrays).
-- Spatial types: import `Vec2`, `Vec3` and `Mat4` from the main entry; matrices use 16 column-major elements. See [API](./docs/api.md).
-
-## Three.js render loop
-
-```ts
-import { Renderer, THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
-
-const renderer = new Renderer({ canvas });
-const sync = new THREESceneSync(threeScene);
-
-function frame() {
-  sync.update();
-  renderer.render(sync.scene, fromTHREECamera(threeCamera));
-  requestAnimationFrame(frame);
-}
-frame();
-```
-
-Call `sync.dispose()` and `renderer.dispose()` when finished.
+- Install: `npm install @meimu/mutracer` (+ `three` for Three.js integration). ESM and TypeScript; [quick start](docs/getting-started.md).
+- First layer: `new Engine({canvas})`, set `engine.scene` / `engine.camera`, then create `new Render(engine, options?)`; [independent renders](docs/progressive-rendering.md).
+- Frame: update controls/source adapters, call `engine.update()` once, `current.refine()`, then `engine.display.present(current)`. Only update detects/commits external edits; rendering compares revisions.
+- Ownership: Engine owns shared scene/device/BVH/atlas; Display owns tone mapping, bloom, HDR and channel; Render owns resolution, quality, samples, fallback and denoiser. `transmissiveOutputAlphaMin` is a Render option; [API](docs/api.md).
+- Initialization: optional `await engine.init()` gives backend, adapter and limits; `backend: 'auto'` defaults to WebGPU with WebGL fallback. `webgpu` requires WebGPU and `webgl` forces WebGL 2.
+- Status: each render exposes `status`, `samples` and `converged`; statuses are preparing, compiling, converging, denoising, finished and error. The first layer leaves frame selection/UI status to the application.
+- Scene: plain `{meshes, lights, background?}`; meshes use world `transform`. Call material/texture `markUpdated()` after parameter/pixel edits and geometry `markVerticesUpdated()` for vertex-only changes; [updates](docs/updates.md).
+- Three.js: keep a `THREESceneSync`, call `sync.update()`, copy `fromTHREECamera(threeCamera)` into a retained camera, then `engine.update()`; use GLTFLoader for glTF. [Three.js](docs/threejs.md).
+- Preview: explicit `new Render(engine, {resolutionScale:.5, adaptiveResolution:{targetFrameMs:20,minScale:.25},bounces:2,bevel:false,dispersionWavelengths:1,directLightCandidates:2})`. Give the final render `fallback: preview`; [fallback rules](docs/progressive-rendering.md#caveats).
+- Denoising: assign `render.denoiser = {type:'jnlm'}` (both backends) or `{type:'oidn',model:'standard'}` (WebGPU, ignored with a warning on WebGL). Schedules: converged (default), progressive, every-sample; [denoising](docs/denoising.md).
+- Sampling: `render.samplingPattern` is sobol (default), zsobol or random; [sampling](docs/sampling.md).
+- Export: `await final.converge({samples:64,sampleSequenceOffset:0,camera?})`, `await final.readPixels('hdr')`, `await engine.display.toBlob(final)`. Fixed width/height are constructor-only; Blob uses render dimensions and leaves canvas unchanged.
+- Concurrency: converge blocks refine only on that render, copies its camera override, and rejects when engine input revisions change. readPixels and present always select the requested result.
+- BVH: automatic CPU preparation; optional `await engine.prepare(nextScene,{onProgress?,signal?})` leaves current GPU scene unchanged. Engine BVH options rebuild at the next update; [BVH](docs/bvh.md).
+- Events: `engine.on('progress'|'error'|'devicelost',listener)` returns unsubscribe; per-render samples/status are polled. Async errors use error events; [API](docs/api.md).
+- Depth: `await engine.readDepthSamples({x,y,size})` uses the committed engine camera; [depth sampling](docs/api.md#depth-sampling).
+- Materials, lights, geometry: OpenPBR constructor parameters, rigid analytic-light transforms and itemSize=1 raw materialIndex; [materials](docs/materials.md), [getting started](docs/getting-started.md).
+- Release resources with `render.dispose()` or `engine.dispose()` for everything; `sync.dispose()` releases adapter caches.
 
 ## Common pitfalls
 
-- Material parameter and texture pixel edits need `markUpdated()`. Development builds warn once per material for missing parameter notifications (at most 200 checks per render); override with `validateUpdates`. See [updates](./docs/updates.md#checking-missing-material-notifications).
+- Material parameter and texture pixel edits need `markUpdated()`. Development builds warn once per material for missing parameter notifications (at most 200 checks per engine.update()); override with `validateUpdates`. See [updates](./docs/updates.md#checking-missing-material-notifications).
 - Use `geometry.markVerticesUpdated()`, not `markUpdated()`, for vertex animation; neither recomputes normals.
 - `createPlaneGeometry()` is 2×2 in XZ; `createSphereGeometry()` and `createCubeGeometry()` span -1..1. Scale with `transform`.
 - Rect lights are one-sided; rotate them to face the scene.
 - OIDN and HDR output require WebGPU; WebGL 2 denoises with JNLM only.
-- Call `renderer.setSize` with drawing-buffer pixels ; camera aspect is automatic unless explicitly set.
-- Changing `bvhBuilder`, `bvhLayout` or `bvhSpatialSplits` automatically rebuilds existing static BVHs on the next render.
+- Call `engine.display.setSize` with drawing-buffer pixels ; camera aspect is automatic unless explicitly set.
+- Changing `bvhBuilder`, `bvhLayout` or `bvhSpatialSplits` automatically rebuilds existing static BVHs on the next engine.update().
 - In Vite development, add `optimizeDeps: { exclude: ['@meimu/mutracer'] }` so bundled assets load.
 
 ## Docs
 
 - [Getting started](docs/getting-started.md): scene model, render loop, geometry, cameras, lights, export, bundlers
 - [Scene updates](docs/updates.md): what to call after each kind of edit, animation, update costs
-- [API reference](docs/api.md): renderer options and defaults, methods, statuses, scene types, helpers
+- [API reference](docs/api.md): Engine, Display and Render options and defaults, methods, statuses, scene types, helpers
 - [Materials](docs/materials.md): OpenPBR inputs, textures, alpha, bevel, displacement
 - [Three.js](docs/threejs.md): `THREESceneSync`, conversions, skinning, instancing, `userData` keys
 - [Denoising](docs/denoising.md): JNLM and OIDN, options, weight hosting, denoising while converging

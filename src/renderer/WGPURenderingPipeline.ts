@@ -1,3 +1,4 @@
+import { makeRenderPipeline, type TraceSettings, type RenderPipeline } from './renderPipeline.js';
 import { textureBytes } from './gpuMemory.js';
 import { makeProgressivePipeline, type AccumulationTargetOptions, type TargetPipeline, type ResidentRenderingPipeline } from './accumulationTarget.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
@@ -241,9 +242,13 @@ function makeWGPUAccumulationTarget(
 
   const previewMode = targetOptions.preview ?? false;
   const targetKey = {};
+  let execution: TraceSettings | undefined;
   let qualityBounces = 8;
   let qualityCandidates = 4;
   let resolvedSamples = 0;
+  let resolvedHasShadowCatcher = false;
+  let pendingFlatBackground = [0, 0, 0, 0];
+  let resolvedFlatBackground = [0, 0, 0, 0];
   let presentationTexture: GPUTexture | undefined;
   let presentationDenoised = false;
   let denoiseValid = false;
@@ -740,7 +745,13 @@ output.color = color;
     _forceNeedsDenoise?: boolean,
     resolve = false
   ) {
-    if (resolve) resolvedSamples = sampleCount;
+    if (resolve) {
+      resolvedSamples = sampleCount;
+      resolvedHasShadowCatcher = rayTracePass.hasShadowCatcher();
+      resolvedFlatBackground = pendingFlatBackground.slice();
+    }
+    composePass.setUniform('flatBackgroundColor', resolvedFlatBackground);
+    rawOutputPass.setUniform('flatBackgroundColor', resolvedFlatBackground);
     if (resolvedSamples < 1) return;
     if (denoiseValid) oidnComposedTexture = prepareOIDNTexture(
       encoder,
@@ -749,16 +760,16 @@ output.color = color;
     );
     if (resolve) {
       rayTraceOutputPass.setSampleCount(sampleCount);
-      rayTraceOutputPass.createPass(encoder, rayTracePass.getOutputBuffer(), rayTracePass.hasShadowCatcher());
+      rayTraceOutputPass.createPass(encoder, rayTracePass.getOutputBuffer(), resolvedHasShadowCatcher);
     }
 
     composePass.setUniform(
       'shadowCatcherEnabled',
-      +(rayTracePass.hasShadowCatcher())
+      +resolvedHasShadowCatcher
     );
 
     const foregroundTexture = getFrameInput(
-      rayTracePass.hasShadowCatcher() ? 'foreground' : 'color'
+      resolvedHasShadowCatcher ? 'foreground' : 'color'
     );
     const colorTexture = getFrameInput('color');
     const bloomEnabled = bloomIntensity > 0.0;
@@ -854,7 +865,8 @@ output.color = color;
     }
 
     // Update the camera before compiling and sampling.
-    const cameraChanged = rayTracePass.cameraChanged(camera);
+    if (targetOptions.independent) rayTracePass.setCamera(camera);
+    const cameraChanged = !targetOptions.independent && rayTracePass.cameraChanged(camera);
     const resetAccumulation = cameraChanged || isFirstFrame;
     if (resetAccumulation) {
       denoiseValid = false;
@@ -1061,15 +1073,18 @@ output.color = color;
   function setBackground(background?: SceneBackground) {
     tileTimingGeneration++;
     rayTracePass.setBackground(background);
+    synchronizeBackground(background);
+    isFirstFrame = true;
+  }
+
+  function synchronizeBackground(background?: SceneBackground) {
     const flatColor = Array.isArray(background) && background[3] >= 0.99999
       ? background
       : undefined;
     const flatBackgroundColor = flatColor
       ? [flatColor[0], flatColor[1], flatColor[2], 1]
       : [0, 0, 0, 0];
-    composePass.setUniform('flatBackgroundColor', flatBackgroundColor);
-    rawOutputPass.setUniform('flatBackgroundColor', flatBackgroundColor);
-    isFirstFrame = true;
+    pendingFlatBackground = flatBackgroundColor;
   }
 
   function setToneMappingParams(params: ToneMappingParams) {
@@ -1554,6 +1569,7 @@ output.color = color;
       device.queue.onSubmittedWorkDone().catch(() => undefined),
       diagnosticsReadbackPromise
     ]).then(() => {
+      if (targetOptions.independent) rayTracePass.releaseTarget(targetKey);
       oidnComposedBuffer?.destroy();
       oidnComposedTexture?.destroy();
       retiredDenoiseTextures.forEach(texture => texture.destroy());
@@ -1580,12 +1596,30 @@ output.color = color;
   function activate() {
     rayTracePass.useTarget(targetKey);
     if (renderWidth && renderHeight) rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
-    rayTracePass.setQuality({ bounces: previewMode ? Math.min(qualityBounces, previewBounces) : qualityBounces,
+    if (execution) {
+      rayTracePass.setQuality(execution);
+      rayTracePass.setClamping(execution.clamping);
+      rayTracePass.setTransmissiveOutputAlphaMin(execution.transmissiveOutputAlphaMin);
+      rayTracePass.setBevelSamples(execution.bevelSamples);
+      rayTracePass.setAlphaBlendStrategy(execution.alphaBlendStrategy);
+      rayTracePass.setSamplingPattern(execution.samplingPattern, execution.maxSamples);
+    } else rayTracePass.setQuality({ bounces: previewMode ? Math.min(qualityBounces, previewBounces) : qualityBounces,
       bevel: !previewMode, dispersionWavelengths: previewMode ? 1 : 3,
       directLightCandidates: previewMode ? Math.min(qualityCandidates, 2) : qualityCandidates });
   }
 
   return {
+    configure(settings: TraceSettings) {
+      execution = { ...settings };
+      qualityBounces = settings.bounces;
+      maxTimePerTile = Math.max(1, settings.timeBudgetMs);
+      allowMultipleSamplesPerFrame = settings.allowMultipleSamplesPerFrame;
+      tileRender.setDesiredMsPerTile(maxTimePerTile);
+      tileRender.setMaxTiles(settings.maxTiles);
+      tileRenderWithPredict?.setDesiredMsPerTile(maxTimePerTile);
+      tileRenderWithPredict?.setMaxTiles(settings.maxTiles);
+    },
+    synchronizeBackground,
     activate,
     invalidate() { isFirstFrame = true; },
     begin() {
@@ -1605,6 +1639,7 @@ output.color = color;
     present() {
       if (!presentationTexture) return;
       const encoder = device.createCommandEncoder();
+      if (targetOptions.independent) outputPass.setSize(canvas.width, canvas.height);
       _present(encoder, presentationTexture);
       device.queue.submit([encoder.finish()]);
     },
@@ -1657,7 +1692,26 @@ output.color = color;
     setToneMappingParams,
 
     readDepthSamples: (area) => rayTracePass.readDepthSamples(area),
+    async readPresentation() {
+      if (!presentationTexture) throw new Error('Render has no complete image.');
+      const width = presentationTexture.width, height = presentationTexture.height;
+      const bytesPerRow = Math.ceil(width * 16 / 256) * 256;
+      const buffer = device.createBuffer({size: bytesPerRow * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
+      const encoder = device.createCommandEncoder();
+      readbackPass.setSize(width, height);
+      readbackPass.createPass(encoder, {inputTex: presentationTexture});
+      encoder.copyTextureToBuffer({texture: readbackPass.getOutput('color')}, {buffer, bytesPerRow}, {width, height});
+      device.queue.submit([encoder.finish()]);
+      try {
+        await buffer.mapAsync(GPUMapMode.READ);
+        const mapped = new Float32Array(buffer.getMappedRange());
+        const data = new Float32Array(width * height * 4);
+        for (let y = 0; y < height; y++) data.set(mapped.subarray(y * bytesPerRow / 4, y * bytesPerRow / 4 + width * 4), y * width * 4);
+        return {width, height, data};
+      } finally { buffer.unmap(); buffer.destroy(); }
+    },
     async readOutput(kind) {
+      rawOutputPass.setUniform('flatBackgroundColor', resolvedFlatBackground);
       const width = renderWidth, height = renderHeight;
       const bytesPerRow = Math.ceil(width * 16 / 256) * 256;
       const buffer = device.createBuffer({
@@ -1911,3 +1965,14 @@ function makeWGPURenderingPipeline(canvas: HTMLCanvasElement, device: GPUDevice,
 }
 
 export default makeWGPURenderingPipeline;
+
+/** Independent render targets, without preview or presentation policy. */
+export function makeWGPURenderTargets(canvas: HTMLCanvasElement, device: GPUDevice, options: WGPURenderingPipelineOptions = {}): RenderPipeline {
+  const rayTracePass = new WGPURayTracePass(device);
+  let configureContext = true;
+  return makeRenderPipeline(rayTracePass, () => {
+    const target = makeWGPUAccumulationTarget(canvas, device, options, rayTracePass, { independent: true }, () => {}, configureContext);
+    configureContext = false;
+    return target;
+  });
+}

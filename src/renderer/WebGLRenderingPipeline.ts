@@ -1,3 +1,4 @@
+import { makeRenderPipeline, type TraceSettings, type RenderPipeline } from './renderPipeline.js';
 import { makeProgressivePipeline, type AccumulationTargetOptions, type TargetPipeline } from './accumulationTarget.js';
 import { readRgbaPixels } from './WebGLReadback.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
@@ -61,8 +62,10 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
 
   const previewMode = targetOptions.preview ?? false;
   const targetKey = {};
+  let execution: TraceSettings | undefined;
   let qualityBounces = 8;
   let resolvedSamples = 0;
+  let resolvedHasShadowCatcher = false;
   let presentationTexture: Texture2D | undefined;
   let presentationDenoised = false;
   let previewMaxResolutionScale = 0.5;
@@ -154,7 +157,7 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
     rayTracePass.setSampleSequenceOffset(sampleSequenceOffset);
     updateSeed(true);
     if (rayTracePass.hasDispersion()) {
-      if (previewMode) {
+      if (execution?.dispersionWavelengths === 1 || previewMode) {
         // A positive wavelength enables stochastic hero-wavelength sampling
         // in the shader. Preview traces one random RGB channel per pixel.
         rayTracePass.setWavelength(wavelengths[0]);
@@ -172,7 +175,7 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
   }
 
   function drawPostProcess(_forceNeedsDenoise = false, resolve = false) {
-    if (resolve) resolvedSamples = sampleCount;
+    if (resolve) { resolvedSamples = sampleCount; resolvedHasShadowCatcher = rayTracePass.hasShadowCatcher(); }
     if (resolvedSamples === 0) return;
     if (resolve) {
       rayTraceOutputPass.setSampleCount(sampleCount);
@@ -196,7 +199,7 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
 
     composePass.setUniforms({
       bloomIntensity: currentBloomIntensity,
-      shadowCatcherEnabled: +rayTracePass.hasShadowCatcher(),
+      shadowCatcherEnabled: +resolvedHasShadowCatcher,
       outputMode: output === 'shadow' ? 1 : 0
     });
     composePass.createPass({
@@ -276,7 +279,8 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
       return true;
     }
 
-    const resetAccumulation = rayTracePass.cameraChanged(camera) || isFirstFrame;
+    if (targetOptions.independent) rayTracePass.setCamera(camera);
+    const resetAccumulation = (!targetOptions.independent && rayTracePass.cameraChanged(camera)) || isFirstFrame;
     if (resetAccumulation) {
       tileTimingGeneration++;
       elapsedTileTime = undefined;
@@ -378,7 +382,7 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
     if (width === screenWidth && height === screenHeight) return;
     screenWidth = width;
     screenHeight = height;
-    renderer.resize(screenWidth, screenHeight);
+    if (!targetOptions.independent) renderer.resize(screenWidth, screenHeight);
     outputPass.setSize(screenWidth, screenHeight);
     applyRenderResolution();
     sampleCount = 0;
@@ -394,11 +398,26 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
   function activate() {
     rayTracePass.useTarget(targetKey);
     rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
-    rayTracePass.setQuality({ bounces: previewMode ? Math.min(qualityBounces, previewBounces) : qualityBounces,
+    if (execution) {
+      rayTracePass.setQuality(execution);
+      rayTracePass.setClamping(execution.clamping);
+      rayTracePass.setTransmissiveOutputAlphaMin(execution.transmissiveOutputAlphaMin);
+      rayTracePass.setBevelSamples(execution.bevelSamples);
+      rayTracePass.setSamplingPattern(execution.samplingPattern, execution.maxSamples);
+    } else rayTracePass.setQuality({ bounces: previewMode ? Math.min(qualityBounces, previewBounces) : qualityBounces,
       bevel: !previewMode, dispersionWavelengths: previewMode ? 1 : 3, directLightCandidates: 1 });
   }
 
   return {
+    synchronizeBackground() {},
+    configure(settings: TraceSettings) {
+      execution = { ...settings };
+      qualityBounces = settings.bounces;
+      maxTimePerTile = Math.max(1, settings.timeBudgetMs);
+      allowMultipleSamplesPerFrame = settings.allowMultipleSamplesPerFrame;
+      tileRender.setDesiredMsPerTile(maxTimePerTile);
+      tileRender.setMaxTiles(settings.maxTiles);
+    },
     activate,
     invalidate() { isFirstFrame = true; },
     begin() {
@@ -414,6 +433,10 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
     get presentationDenoised() { return presentationDenoised; },
     present() {
       if (!presentationTexture) return;
+      if (targetOptions.independent) {
+        renderer.resize(renderer.canvas.width, renderer.canvas.height);
+        outputPass.setSize(renderer.canvas.width, renderer.canvas.height);
+      }
       outputPass.setUniform('denoisedPercent', 0);
       outputPass.createPass({ colorTex: presentationTexture, colorDenoisedTex: presentationTexture });
     },
@@ -623,6 +646,12 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
       return true;
     },
     readDepthSamples: (area) => rayTracePass.readDepthSamples(area),
+    async readPresentation() {
+      if (!presentationTexture) throw new Error('Render has no complete image.');
+      rawReadFrameBuffer.bind(renderer, [presentationTexture]);
+      const width = presentationTexture.width, height = presentationTexture.height;
+      return {width, height, data: readRgbaPixels(renderer.gl, width, height, presentationTexture.isByteEncoded)};
+    },
     async readOutput(kind) {
       if (kind === 'denoised' && !denoisedTexture) kind = 'hdr';
       const texture = kind === 'denoised' ? denoisedTexture! : rayTraceOutputPass.getOutput(kind === 'hdr' ? 'color' : kind);
@@ -636,6 +665,7 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
     dispose() {
       document.removeEventListener('visibilitychange', onVisibilityChange);
 
+      if (targetOptions.independent) rayTracePass.releaseTarget(targetKey);
       rayTraceOutputPass.dispose();
       bloomPass?.dispose();
       jnlmPass?.dispose();
@@ -655,3 +685,9 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
 }
 
 export default makeWebGLRenderingPipeline;
+
+/** Independent render targets, without preview or presentation policy. */
+export function makeWebGLRenderTargets(renderer: Renderer): RenderPipeline {
+  const rayTracePass = new WebGLRayTracePass(renderer);
+  return makeRenderPipeline(rayTracePass, () => makeWebGLAccumulationTarget(renderer, rayTracePass, { independent: true }, () => {}), true);
+}

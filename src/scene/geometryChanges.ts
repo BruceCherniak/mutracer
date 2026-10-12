@@ -10,3 +10,9 @@ export function markDeformedGeometry(geometry: Geometry) {
 export function isDeformationUpdate(geometry: Geometry) {
   return deformationVersions.get(geometry) === geometry.version;
 }
+
+/** Copies internal update provenance to an engine-owned geometry snapshot. */
+export function copyGeometryChangeState(source: Geometry, target: Geometry) {
+  if (isDeformationUpdate(source)) deformationVersions.set(target, target.version);
+  else deformationVersions.delete(target);
+}

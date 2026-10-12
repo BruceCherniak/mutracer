@@ -1,0 +1,66 @@
+import Geometry from '../scene/Geometry.js';
+import Texture from '../scene/Texture.js';
+import { copyGeometryChangeState } from '../scene/geometryChanges.js';
+import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
+import type { Scene } from '../scene/Scene.js';
+import type { SceneChanges } from './sceneChangeDetector.js';
+
+/** Stable engine-owned mirrors isolate deferred GPU uploads from external edits. */
+export class CommittedScene {
+  private readonly copies = new WeakMap<object, any>();
+  private readonly geometryVersions = new WeakMap<Geometry, number>();
+  private value?: Scene;
+  private readonly copying = new WeakSet<object>();
+
+  private copy<T>(value: T): T {
+    if (!value || typeof value !== 'object') return value;
+    const object = value as object;
+    if ((typeof HTMLImageElement !== 'undefined' && object instanceof HTMLImageElement) || (typeof HTMLCanvasElement !== 'undefined' && object instanceof HTMLCanvasElement)) {
+      const source = object as HTMLImageElement | HTMLCanvasElement;
+      let canvas = this.copies.get(object) as HTMLCanvasElement | undefined;
+      if (!canvas) { canvas = document.createElement('canvas'); this.copies.set(object, canvas); }
+      canvas.width = source.width; canvas.height = source.height;
+      canvas.getContext('2d')?.drawImage(source, 0, 0);
+      return canvas as T;
+    }
+    if (typeof Node !== 'undefined' && object instanceof Node) return value;
+    if (typeof ImageBitmap !== 'undefined' && object instanceof ImageBitmap) return value;
+    if (value instanceof Geometry && this.geometryVersions.get(value) === value.version) return this.copies.get(value);
+    if (ArrayBuffer.isView(value)) {
+      const previous = this.copies.get(object);
+      if (previous?.constructor === value.constructor && previous.length === (value as any).length) {
+        previous.set(value); return previous;
+      }
+      const cloned = (value as any).slice(); this.copies.set(object, cloned); return cloned;
+    }
+    if (value instanceof ArrayBuffer) return value.slice(0) as T;
+    let cloned = this.copies.get(object);
+    if (!cloned) { cloned = Array.isArray(value) ? [] : Object.create(Object.getPrototypeOf(value)); this.copies.set(object, cloned); }
+    if (this.copying.has(object)) return cloned;
+    this.copying.add(object);
+    try {
+      for (const key of Object.keys(value)) cloned[key] = value instanceof Texture && key === 'source' ? value.source : this.copy((value as any)[key]);
+    } finally { this.copying.delete(object); }
+    if (Array.isArray(value)) cloned.length = value.length;
+    if (value instanceof Geometry) {
+      this.geometryVersions.set(value, value.version);
+      setGeometryBvh(cloned, getGeometryBvh(value));
+      copyGeometryChangeState(value, cloned);
+    }
+    return cloned;
+  }
+
+  mirror<T extends object>(source: T): T { return this.copies.get(source); }
+
+  capture(scene: Scene, changes: SceneChanges): Scene {
+    if (!this.value || changes.meshes === 'full') this.value = { meshes: this.copy(scene.meshes), lights: this.copy(scene.lights), background: this.copy(scene.background) };
+    else {
+      for (const mesh of changes.transforms) this.copy(mesh.transform);
+      for (const geometry of changes.geometries) this.copy(geometry);
+      for (const material of changes.materials) this.copy(material);
+      if (changes.lights) this.value.lights = this.copy(scene.lights);
+      if (changes.background) this.value.background = this.copy(scene.background);
+    }
+    return this.value;
+  }
+}

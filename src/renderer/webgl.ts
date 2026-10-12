@@ -66,6 +66,8 @@ export class Texture2D {
     this.height = options.height || 1;
   }
 
+  get isByteEncoded() { return (this._options.type ?? constants.UNSIGNED_BYTE) === constants.UNSIGNED_BYTE; }
+
   /** Allocated 2D render-target payload, excluding driver/FBO overhead. */
   getMemoryBytes() {
     if (!this._allocated) return 0;

@@ -45,7 +45,7 @@ with a `MuTracer` global is at `dist/mutracer.umd.js`.
 ```ts
 import { mat4 } from 'gl-matrix';
 import {
-  Camera, EnvironmentLight, Mesh, OpenPBRMaterial, RectLight, Renderer,
+  Camera, EnvironmentLight, Mesh, OpenPBRMaterial, RectLight, Engine, Render,
   Texture, createPlaneGeometry, createSphereGeometry, type Scene
 } from '@meimu/mutracer';
 
@@ -75,15 +75,17 @@ const scene: Scene = {
 const camera = new Camera({ projection: 'perspective', fov: 40, near: 0.1, far: 100 });
 camera.position = [0, 2, 6]; camera.lookAt([0, 1, 0]);
 
-const renderer = new Renderer({ canvas });
-renderer.on('error', error => console.error(error));
-// BVH preparation is automatic; optional prebuildBVH(nextScene) builds ahead.
-renderer.setSize(canvas.width, canvas.height);
-// Optional: await renderer.init() to inspect backend, adapter and limits.
+const engine = new Engine({ canvas });
+engine.on('error', error => console.error(error));
+engine.scene = scene;
+engine.camera = camera;
+const render = new Render(engine);
+engine.display.setSize(canvas.width, canvas.height);
 
 function frame() {
-  const status = renderer.render(scene, camera);
-  // status is preparing, compiling, previewing, converging, denoising, finished or error. // adds samples until renderer.maxSamples
+  engine.update();
+  render.refine();
+  engine.display.present(render);
   requestAnimationFrame(frame);
 }
 frame();
@@ -92,27 +94,35 @@ frame();
 With Three.js:
 
 ```ts
-import { Renderer, THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
+import { Engine, Render, THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
 
-const renderer = new Renderer({ canvas });
-renderer.on('error', error => console.error(error));
-// BVH preparation is automatic; optional prebuildBVH(nextScene) builds ahead.
+const engine = new Engine({ canvas });
 const sync = new THREESceneSync(threeScene);
+const camera = fromTHREECamera(threeCamera);
+engine.scene = sync.scene;
+engine.camera = camera;
+const render = new Render(engine);
 
 function frame() {
   sync.update();
-  renderer.render(sync.scene, fromTHREECamera(threeCamera));
+  camera.copy(fromTHREECamera(threeCamera));
+  engine.update();
+  render.refine();
+  engine.display.present(render);
   requestAnimationFrame(frame);
 }
 frame();
 ```
 
-Enable denoising:
+Enable denoising on an individual result:
 
 ```ts
-await renderer.setDenoiser();                  // built-in JNLM filter
-await renderer.setDenoiser({ type: 'oidn' });  // Intel Open Image Denoise
+render.denoiser = { type: 'jnlm' }; // built-in filter, both backends
+render.denoiser = { type: 'oidn', model: 'standard' }; // WebGPU
 ```
+
+Use separate preview and final renders with a `fallback`, or a fixed-size
+invisible render for export. See [independent render results](./docs/progressive-rendering.md).
 
 ## Documentation
 
@@ -120,7 +130,7 @@ await renderer.setDenoiser({ type: 'oidn' });  // Intel Open Image Denoise
 | --- | --- |
 | [Getting started](./docs/getting-started.md) | Scene model, render loop, lights, export |
 | [Scene updates](./docs/updates.md) | Editing a rendering scene, animation, update costs |
-| [API reference](./docs/api.md) | Renderer options, methods, status codes, scene types |
+| [API reference](./docs/api.md) | Engine, Display and Render options, methods and scene types |
 | [Materials](./docs/materials.md) | OpenPBR inputs, textures, alpha, bevel, displacement |
 | [Three.js](./docs/threejs.md) | `THREESceneSync`, supported materials and lights, `userData` keys |
 | [Denoising](./docs/denoising.md) | JNLM and OIDN denoisers, OIDN weights hosting, denoising while converging |
@@ -143,10 +153,10 @@ npm run dev
   Edge and Safari. Required for OIDN denoising, HDR output and
   the options marked WebGPU in the [API reference](./docs/api.md).
 - **WebGL 2** fallback: requires `EXT_color_buffer_float`. Pass
-  `preferWebGPU: false` to force it.
+  `backend: 'webgl'` to force it.
 
 The first frame compiles large shaders, which can take several seconds on some
-platforms; `render()` reports the progress through its return status.
+platforms; `refine()` reports the progress through its return status.
 
 ## Contributing
 

@@ -885,6 +885,8 @@ class WebGLRayTracePass {
     });
   }
 
+  releaseTarget(target: object) { this._mainPass.releaseTarget(target); this._shadowCatcherPass.releaseTarget(target); }
+
   getTargetMemoryBytes(target: object) {
     return this._mainPass.getMemoryBytes(target) + this._shadowCatcherPass.getMemoryBytes(target);
   }

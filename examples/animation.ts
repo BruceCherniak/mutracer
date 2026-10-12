@@ -1,8 +1,9 @@
 // Procedural skinning and a relative morph target, evaluated by THREESceneSync.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
-import { Renderer, THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
+import { Engine, Render, THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
 import { showStatus } from './shared/status';
+import { exampleSelection } from './shared/progressive';
 
 const canvas = document.getElementById('main') as HTMLCanvasElement;
 const statusElement = document.getElementById('status')!;
@@ -35,20 +36,26 @@ const light = new THREE.PointLight(0xffe8cc,30); light.position.set(2,5,3); sour
 const threeCamera = new THREE.PerspectiveCamera(40,1,.1,100); threeCamera.position.set(4,2.7,6);
 const orbit = new OrbitControls(threeCamera,canvas); orbit.target.set(0,1.5,0); orbit.update();
 const sync = new THREESceneSync(source);
-const renderer = new Renderer({canvas,preferWebGPU:!new URLSearchParams(location.search).has('webgl')});
-renderer.bounces = 4; renderer.maxSamples = 256;
+const engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
+const preview = new Render(engine, {resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}, bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
+const final = new Render(engine, {fallback: preview, bounces: 4, maxSamples: 256});
+const select = exampleSelection(engine, preview, final);
+const camera = fromTHREECamera(threeCamera); engine.camera = camera; engine.scene = sync.scene;
+
 function resize() {
   const ratio = Math.min(devicePixelRatio,2);
-  renderer.setSize(canvas.clientWidth*ratio,canvas.clientHeight*ratio);
+  engine.display.setSize(canvas.clientWidth*ratio,canvas.clientHeight*ratio);
   threeCamera.aspect = canvas.clientWidth/canvas.clientHeight; threeCamera.updateProjectionMatrix();
 }
 window.addEventListener('resize',resize); resize();
-window.addEventListener('pagehide',()=>{sync.dispose();renderer.dispose()});
+window.addEventListener('pagehide',()=>{sync.dispose();engine.dispose()});
 function frame(time: number) {
   if (animateInput.checked) for (let i=1;i<boneCount;i++) bones[i].rotation.z = .15*Math.sin(time/1000+i*.4);
   mesh.morphTargetInfluences![0] = Number(morphInput.value);
   sync.update();
-  const status = renderer.render(sync.scene,fromTHREECamera(threeCamera));
-  showStatus(statusElement,renderer,status); requestAnimationFrame(frame);
+  camera.copy(fromTHREECamera(threeCamera));
+  const current = select(engine.update()); const status = current.refine();
+  const shown = engine.display.present(current);
+  showStatus(statusElement, engine, final, shown === preview ? 'previewing' : status); requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
