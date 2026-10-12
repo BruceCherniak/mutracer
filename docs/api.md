@@ -14,6 +14,7 @@ new Renderer(params?: RendererParams)
 | `canvas` | `HTMLCanvasElement` | new canvas | Canvas to draw into (`renderer.canvas`) |
 | `preferWebGPU` | `boolean` | `true` | `false` forces the WebGL 2 backend |
 | `denoiser` | `boolean \| DenoiserOptions` | `false` | Same as calling `setDenoiser()` |
+| `validateUpdates` | `boolean` | development build | Warn once for missing material notifications; at most 200 checks per render. See [updates](./updates.md#checking-missing-material-notifications) |
 | `preserveDrawingBuffer` | `boolean` | `true` | WebGL 2; needed to read the canvas back |
 
 ### Properties

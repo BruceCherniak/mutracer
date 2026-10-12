@@ -1,6 +1,6 @@
 import Mesh from '../scene/Mesh.js';
 import Geometry from '../scene/Geometry.js';
-import OpenPBRMaterial, { materialTextureKeys } from '../scene/OpenPBRMaterial.js';
+import OpenPBRMaterial, { materialKeys, materialTextureKeys } from '../scene/OpenPBRMaterial.js';
 import Texture from '../scene/Texture.js';
 import { Scene, SceneBackground } from '../scene/Scene.js';
 
@@ -69,6 +69,31 @@ function texturesChanged(material: OpenPBRMaterial, previous: readonly unknown[]
   return i !== previous.length;
 }
 
+const textureFields = new Set<keyof OpenPBRMaterial>(materialTextureKeys);
+// Texture references and metadata are automatic. The texture-category scalar
+// displacementBumpStrength still requires a material version notification.
+const validationKeys = materialKeys.filter(key => !textureFields.has(key) || key === 'displacementBumpStrength');
+
+function snapshotMaterialParameters(material: OpenPBRMaterial) {
+  return validationKeys.map(key => {
+    const value = material[key];
+    return Array.isArray(value) || ArrayBuffer.isView(value)
+      ? Array.from(value as ArrayLike<number>) : value;
+  });
+}
+
+function materialParametersEqual(material: OpenPBRMaterial, values: unknown[]) {
+  for (let index = 0; index < validationKeys.length; index++) {
+    const value = material[validationKeys[index]], previous = values[index];
+    if (Array.isArray(value) || ArrayBuffer.isView(value)) {
+      const array = value as ArrayLike<number>;
+      if (!Array.isArray(previous) || array.length !== previous.length) return false;
+      for (let i = 0; i < array.length; i++) if (!Object.is(array[i], previous[i])) return false;
+    } else if (!Object.is(value, previous)) return false;
+  }
+  return true;
+}
+
 const geometryAttributes = ['position', 'normal', 'tangent', 'uv', 'uv1', 'color', 'indices', 'materialIndex'] as const;
 function captureGeometryStorage(geometry: Geometry, out: unknown[]) {
   let i = 0;
@@ -110,6 +135,32 @@ export class SceneChangeDetector {
   private _pending?: Snapshot;
   private _spare?: Snapshot;
   private _seen = new Set<OpenPBRMaterial>();
+  private _validationMaterials: OpenPBRMaterial[] = [];
+  private _validationCursor = 0;
+  private _validationSnapshots = new WeakMap<OpenPBRMaterial, { version: number; values: unknown[] }>();
+  private _validationWarned = new WeakSet<OpenPBRMaterial>();
+
+  constructor(private _validateUpdates = false) {}
+
+  private _validateMaterials(membershipChanged: boolean) {
+    if (!this._validateUpdates) return;
+    if (membershipChanged) this._validationMaterials = [...this._seen];
+    const materials = this._validationMaterials;
+    const count = Math.min(200, materials.length);
+    for (let checked = 0; checked < count; checked++) {
+      this._validationCursor %= materials.length;
+      const material = materials[this._validationCursor++];
+      const previous = this._validationSnapshots.get(material);
+      const notified = !previous || previous.version !== material.version;
+      if (notified || !materialParametersEqual(material, previous.values)) {
+        if (!notified && !this._validationWarned.has(material)) {
+          this._validationWarned.add(material);
+          console.warn('material changed without markUpdated()', material);
+        }
+        this._validationSnapshots.set(material, { version: material.version, values: snapshotMaterialParameters(material) });
+      }
+    }
+  }
 
   detect(scene: Scene): SceneChanges {
     const old = this._snapshot;
@@ -141,6 +192,7 @@ export class SceneChangeDetector {
           texturesChanged(material, prior.textures)) materials.push(material);
       }
     }
+    this._validateMaterials(full);
     const lights = scene.lights.map(snapshotFields);
     const background = backgroundSnapshot(scene.background);
     const changes: SceneChanges = {
@@ -192,5 +244,5 @@ export class SceneChangeDetector {
     }
     this._pending = undefined;
   }
-  reset() { this._snapshot = this._pending = this._spare = undefined; this._seen.clear(); }
+  reset() { this._snapshot = this._pending = this._spare = undefined; this._seen.clear(); this._validationMaterials = []; this._validationCursor = 0; }
 }

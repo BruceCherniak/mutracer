@@ -35,6 +35,19 @@ With Three.js, edit the Three.js scene and call `sync.update()` before
 rendering; the sync sends these notifications for you. See
 [Three.js](./threejs.md#keeping-scenes-in-sync).
 
+## Checking missing material notifications
+
+Use `new Renderer({ canvas, validateUpdates: true })` to diagnose forgotten
+`material.markUpdated()` calls. The default is on in development builds and off
+in production builds or native browser ESM. Pass `false` to disable it explicitly.
+
+Each render checks up to 200 materials in rotation, comparing parameters and
+vector elements with their previous inspection. A parameter change without a
+material version change warns once per material. It does not update the material
+for you. Automatically detected texture references, versions and metadata do not
+warn. Geometry arrays and texture pixels are not inspected; changes made before
+a material's first inspection have no baseline to compare.
+
 ## Transforms
 
 Edit `mesh.matrixWorld` in place while retaining the mesh objects and the

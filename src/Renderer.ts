@@ -134,6 +134,12 @@ export interface RendererParams {
    * `setDenoiser()`. Default `false`.
    */
   denoiser?: boolean | DenoiserOptions;
+  /**
+   * Warn when material parameters change without markUpdated(), checking at most
+   * 200 materials per render. Texture changes detected automatically are excluded.
+   * Default: enabled in development builds, disabled in production and native browser ESM.
+   */
+  validateUpdates?: boolean;
   /** WebGL 2 `preserveDrawingBuffer`, needed to read the canvas back. Default `true`. */
   preserveDrawingBuffer?: boolean;
 }
@@ -266,6 +272,11 @@ function validateSampleInterval(value: number | undefined) {
     throw new Error('sampleInterval must be a positive integer');
   }
   return value;
+}
+
+declare const process: { env: { NODE_ENV?: string } };
+function isDevelopment() {
+  try { return process.env.NODE_ENV !== 'production'; } catch { return false; }
 }
 
 let oidnModule: Promise<typeof import('./oidn.js')> | undefined;
@@ -594,7 +605,7 @@ export default class Renderer {
   lastError: Error | undefined;
   private _webgpuFallbackReason?: string;
 
-  private _sceneChangeDetector = new SceneChangeDetector();
+  private _sceneChangeDetector: SceneChangeDetector;
   private _scenePipeline: RenderingPipeline | undefined;
   private _sceneInitialized = false;
   private _forceMeshUpdate = false;
@@ -616,6 +627,7 @@ export default class Renderer {
   private _oidnRevision = 0;
 
   constructor(params: RendererParams = {}) {
+    this._sceneChangeDetector = new SceneChangeDetector(params.validateUpdates ?? isDevelopment());
     this.canvas = params.canvas || document.createElement('canvas');
     this._preserveDrawingBuffer = params.preserveDrawingBuffer ?? true;
     this._preferWebGPU = params.preferWebGPU ?? true;

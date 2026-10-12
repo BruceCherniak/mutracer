@@ -40,7 +40,7 @@ Call `sync.dispose()` and `renderer.dispose()` when finished.
 
 ## Common pitfalls
 
-- Material parameter and texture pixel edits are invisible until `markUpdated()`.
+- Material parameter and texture pixel edits need `markUpdated()`. Development builds warn once per material for missing parameter notifications (at most 200 checks per render); override with `validateUpdates`. See [updates](./docs/updates.md#checking-missing-material-notifications).
 - Use `geometry.markVerticesUpdated()`, not `markUpdated()`, for vertex animation; neither recomputes normals.
 - `createPlaneGeometry()` is 2×2 in XZ; `createSphereGeometry()` and `createCubeGeometry()` span -1..1. Scale with `matrixWorld`.
 - Rect lights are one-sided; rotate them to face the scene.

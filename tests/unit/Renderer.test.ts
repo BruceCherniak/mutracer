@@ -1428,3 +1428,18 @@ it('reports only final denoising and completion while converging', async () => {
   complete(true); await new Promise(resolve=>setTimeout(resolve,0));
   expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_FINISHED);
 });
+
+
+it('honors validateUpdates false and explicit true in production during render', () => {
+  vi.stubEnv('NODE_ENV','production');
+  const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
+  try {
+    for(const enabled of [undefined,false,true]) {
+      const renderer=new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement,validateUpdates:enabled});
+      attachPipeline(renderer,createPipeline());
+      const material=new OpenPBRMaterial();const scene={meshes:[new Mesh(createCubeGeometry(),material)],lights:[]};
+      renderer.render(scene,{} as Camera);material.baseColor[0]=.2;renderer.render(scene,{} as Camera);
+      expect(warn.mock.calls.length).toBe(enabled===true?1:0);
+    }
+  } finally {vi.unstubAllEnvs();warn.mockRestore();}
+});
