@@ -283,6 +283,7 @@ export function packAnalyticsLightsToBuffer(
 class WGPURayTracePass {
   private _device!: GPUDevice;
   private _rayTracePipeline?: GPUComputePipeline;
+  private _targetAspect = 1;
   private _width: number = 0;
   private _height: number = 0;
 
@@ -2727,7 +2728,7 @@ ${rayTraceCompute({
   }
 
   private _updateViewProjInv(camera: Camera, viewProjInv: mat4.Mat4Array) {
-    mat4.invert(viewProjInv, camera.getProjectionMatrix(this._width / this._height));
+    mat4.invert(viewProjInv, camera.getProjectionMatrix(this._targetAspect));
     mat4.mul(viewProjInv, camera.transform, viewProjInv);
   }
 
@@ -2750,7 +2751,8 @@ ${rayTraceCompute({
     );
   }
 
-  setSize(width: number, height: number) {
+  setSize(width: number, height: number, targetAspect = width / height) {
+    this._targetAspect = targetAspect;
     this._width = width;
     this._height = height;
 

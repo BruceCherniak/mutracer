@@ -1071,6 +1071,7 @@ output.color = color;
       16
     );
     if (nextRenderWidth === renderWidth && nextRenderHeight === renderHeight) {
+      rayTracePass.setSize(nextRenderWidth, nextRenderHeight, screenWidth / screenHeight);
       return;
     }
 
@@ -1086,7 +1087,8 @@ output.color = color;
     renderWidth = nextRenderWidth;
     renderHeight = nextRenderHeight;
     (tileRenderWithPredict || tileRender).setSize(renderWidth, renderHeight);
-    rayTracePass.setSize(renderWidth, renderHeight);
+    // Projection follows the displayed canvas, independent of preview/texture alignment.
+    rayTracePass.setSize(renderWidth, renderHeight, screenWidth / screenHeight);
     rayTraceOutputPass.setSize(renderWidth, renderHeight);
     composePass.setSize(renderWidth, renderHeight);
     compositeDenoiseDisplayPass.setSize(renderWidth, renderHeight);

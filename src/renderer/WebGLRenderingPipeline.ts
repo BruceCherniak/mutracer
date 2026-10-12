@@ -348,11 +348,11 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
     const scale = useScaledPreview ? adaptivePreviewScale : 1;
     const nextWidth = Math.max(1, Math.round(screenWidth * scale));
     const nextHeight = Math.max(1, Math.round(screenHeight * scale));
+    rayTracePass.setSize(nextWidth, nextHeight, screenWidth / screenHeight);
     if (nextWidth === renderWidth && nextHeight === renderHeight) return;
     renderWidth = nextWidth;
     renderHeight = nextHeight;
     tileRender.setSize(renderWidth, renderHeight);
-    rayTracePass.setSize(renderWidth, renderHeight);
     rayTraceOutputPass.setSize(renderWidth, renderHeight);
     composePass.setSize(renderWidth, renderHeight);
     bloomPass?.setSize(renderWidth, renderHeight);

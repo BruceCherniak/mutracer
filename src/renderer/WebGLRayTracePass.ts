@@ -870,8 +870,8 @@ class WebGLRayTracePass {
     );
   }
 
-  setSize(width: number, height: number) {
-    this._depthAspect = width / height;
+  setSize(width: number, height: number, targetAspect = width / height) {
+    this._depthAspect = targetAspect;
     this._tracePasses.forEach((pass) => {
       pass.setSize(pass === this._depthPass ? DEPTH_SAMPLE_GRID : width,
         pass === this._depthPass ? DEPTH_SAMPLE_GRID : height);

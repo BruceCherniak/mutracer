@@ -22,7 +22,7 @@ interface Scene {
   units relative to them.
 
 The `Renderer` accumulates samples progressively. Call `render()` once per
-animation frame; it returns a [status](./api.md#status-codes).
+animation frame; it returns a [status](./api.md#status).
 
 ## A minimal render loop
 
@@ -36,7 +36,6 @@ renderer.bounces = 5;
 function resize() {
   const ratio = Math.min(devicePixelRatio, 2);
   renderer.setSize(canvas.clientWidth * ratio, canvas.clientHeight * ratio);
-  camera.aspect = canvas.clientWidth / canvas.clientHeight;
 }
 
 function frame() {
@@ -96,7 +95,7 @@ const camera = new Camera({ projection: 'perspective', fov: 45, near: 0.1, far: 
 camera.position = [0, 2, 6]; camera.lookAt([0, 0, 0]);
 ```
 
-`camera.aspect` defaults to undefined, so rendering uses the target width/height.
+`camera.aspect` defaults to undefined, so rendering uses the canvas width/height.
 Explicitly set it to lock a perspective aspect ratio. `copy(source)` and `clone()`
 copy camera settings; `getProjectionMatrix(targetAspect = 1)` includes zoom.
 

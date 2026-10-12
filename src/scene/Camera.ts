@@ -46,7 +46,7 @@ export default class Camera extends SceneNode {
   near;
   /** Far clip distance. Default `2000`. */
   far;
-  /** Width / height (perspective). Default undefined uses the render target. */
+  /** Width / height (perspective). Default undefined uses the renderer canvas aspect. */
   aspect: number | undefined = undefined;
 
   /** Left orthographic frustum bound in scene units. Default `-1`. */
@@ -66,7 +66,7 @@ export default class Camera extends SceneNode {
     | {
         /** Perspective projection. Required. */ projection: 'perspective';
         /** Vertical field of view, in degrees. Default 45. */ fov?: number;
-        /** Width / height. Default undefined uses the rendering target. */ aspect?: number;
+        /** Width / height. Default undefined uses the renderer canvas aspect. */ aspect?: number;
         /** Near clip distance. Default 0.1. */ near?: number;
         /** Far clip distance. Default 2000. */ far?: number;
       }
