@@ -5,7 +5,6 @@ import { DEFAULT_SETTINGS, setSettings, useViewer, type Settings } from '../../s
 import { getEngine } from '../../engine/ViewerEngine';
 import { Field, Hint, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';
 
-const WEBGPU_ONLY = 'Requires WebGPU';
 
 export function RenderPanel() {
   const s = useViewer((state) => state.settings);
@@ -133,9 +132,6 @@ export function RenderPanel() {
           <Scrub label="Temp" title="Temperature" value={s.temperature} min={-1} max={1} onChange={(v) => update({ temperature: v })} />
           <Scrub label="Tint" value={s.tint} min={-1} max={1} onChange={(v) => update({ tint: v })} />
         </div>
-        <Switch label="Auto exposure" checked={s.autoExposure && !webgl} disabled={webgl} onChange={(v) => update({ autoExposure: v })}>
-          <span className="field-label">Auto exposure{webgl && <small> · {WEBGPU_ONLY}</small>}</span>
-        </Switch>
       </Section>
 
       <Section

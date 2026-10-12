@@ -542,7 +542,6 @@ export class ViewerEngine {
     r.clamping = s.clamping;
     r.toneMapping = s.toneMapping;
     r.toneMappingExposure = s.exposure;
-    r.autoExposure = s.autoExposure;
     r.contrast = s.contrast;
     r.saturation = s.saturation;
     r.temperature = s.temperature;

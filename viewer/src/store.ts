@@ -59,7 +59,6 @@ export interface Settings {
   oidnMaxTileSize: number;
   toneMapping: ToneMapping;
   exposure: number;
-  autoExposure: boolean;
   contrast: number;
   saturation: number;
   temperature: number;
@@ -126,7 +125,6 @@ export const DEFAULT_SETTINGS: Settings = {
   oidnMaxTileSize: 0,
   toneMapping: 'agx',
   exposure: 1,
-  autoExposure: false,
   contrast: 1,
   saturation: 1,
   temperature: 0,
@@ -402,7 +400,7 @@ const SETTING_LABELS: Partial<Record<keyof Settings, string>> = {
   background: 'Background', backgroundColor: 'Background color', groundedHeight: 'Grounded height', groundedRadius: 'Grounded radius',
   groundShadow: 'Ground shadow', groundOpacity: 'Ground opacity', maxSamples: 'Samples', resolutionScale: 'Resolution',
   bvhBuilder: 'BVH builder', denoise: 'Denoise', denoiseModel: 'Denoiser', denoiseWhileConverging: 'Denoise while converging',
-  toneMapping: 'Tone mapping', autoExposure: 'Auto exposure', bloomIntensity: 'Bloom intensity', bloomThreshold: 'Bloom threshold',
+  toneMapping: 'Tone mapping', bloomIntensity: 'Bloom intensity', bloomThreshold: 'Bloom threshold',
   bloomRadius: 'Bloom radius', interactivePreview: 'Interactive preview', previewResolutionScale: 'Preview resolution',
   samplingPattern: 'Sampling pattern', oidnModel: 'OIDN model', oidnMaxTileSize: 'OIDN tile size', temperature: 'Temperature',
   jnlmStrength: 'JNLM strength', jnlmSearchRadius: 'JNLM search radius', jnlmPatchRadius: 'JNLM patch radius',
