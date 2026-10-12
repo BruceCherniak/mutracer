@@ -140,6 +140,10 @@ export interface RendererParams {
 
 /** Snapshot returned by {@link Renderer.getDiagnostics}. */
 export interface RendererDiagnostics extends RenderingDiagnostics {
+  /** Most recent render or constructor-denoiser failure; absent after a successful render. */
+  lastError?: string;
+  /** Reason WebGPU initialization fell back to WebGL; absent when no fallback occurred. */
+  webgpuFallbackReason?: string;
   /** GPU adapter description reported by the browser. */
   adapterName: string;
   /** Active rendering backend; 'webgpu' or 'webgl'. */
@@ -592,6 +596,9 @@ export default class Renderer {
   private _preferWebGPU;
   private _pipelineInitError?: unknown;
   private _lastRenderError?: string;
+  /** Most recent rendering or constructor-denoiser failure. Default undefined; cleared after a successful render. */
+  lastError: Error | undefined;
+  private _webgpuFallbackReason?: string;
 
   private _sceneChangeDetector = new SceneChangeDetector();
   private _scenePipeline: RenderingPipeline | undefined;
@@ -620,7 +627,7 @@ export default class Renderer {
     this._preferWebGPU = params.preferWebGPU ?? true;
     if (params.denoiser) {
       this.setDenoiser(params.denoiser).catch((error) => {
-        console.warn('The denoiser could not be enabled.', error);
+        this._reportRenderError(error);
       });
     }
 
@@ -1057,7 +1064,9 @@ export default class Renderer {
       backend: this._gpuDevice ? 'webgpu' : 'webgl',
       height: this.canvas.height,
       width: this.canvas.width,
-      oidn
+      oidn,
+      lastError: this.lastError?.message,
+      webgpuFallbackReason: this._webgpuFallbackReason
     };
   }
 
@@ -1107,106 +1116,118 @@ export default class Renderer {
 
   private async _initPipeline(preferWebGPU: boolean) {
     let gpuCreated = false;
-    this._initing = true;
-    this._pipelineInitError = undefined;
-    if (preferWebGPU && typeof navigator !== 'undefined' && navigator.gpu) {
-      try {
-        const gpu = navigator.gpu;
-        let gpuDevice = globalGPUDevice;
-        let gpuAdapter = globalGPUAdapter;
-        let gpuAdapterInfo = globalGPUAdapterInfo;
-        if (!gpuDevice) {
-          gpuAdapter = await gpu.requestAdapter({
-            powerPreference: 'high-performance'
-          });
-          if (!gpuAdapter) {
-            gpuAdapter = await gpu.requestAdapter();
-          }
-          if (!gpuAdapter) throw new Error('No WebGPU adapter is available');
-          gpuAdapterInfo = (gpuAdapter as GPUAdapter & { info: GPUAdapterInfo }).info;
-
-          // Optional features also benefit OIDN, which shares this device.
-          const requiredFeatures: GPUFeatureName[] = [];
-          for (const feature of [
-            'timestamp-query',
-            'bgra8unorm-storage',
-            'shader-f16',
-            'subgroups',
-            'texture-formats-tier1',
-            'texture-formats-tier2',
-            'float32-filterable'
-          ] as GPUFeatureName[]) {
-            if (gpuAdapter.features.has(feature)) requiredFeatures.push(feature);
-          }
-
-          // Request the adapter limits. The defaults are too small for large
-          // scenes and for OIDN's convolution workgroups.
-          const adapterLimits = gpuAdapter.limits;
-          gpuDevice = await gpuAdapter.requestDevice({
-            requiredFeatures,
-            requiredLimits: {
-              maxComputeWorkgroupStorageSize:
-                adapterLimits.maxComputeWorkgroupStorageSize,
-              maxComputeWorkgroupsPerDimension:
-                adapterLimits.maxComputeWorkgroupsPerDimension,
-              maxStorageBufferBindingSize:
-                adapterLimits.maxStorageBufferBindingSize,
-              maxStorageBuffersPerShaderStage:
-                adapterLimits.maxStorageBuffersPerShaderStage,
-              maxSampledTexturesPerShaderStage:
-                adapterLimits.maxSampledTexturesPerShaderStage,
-              maxStorageTexturesPerShaderStage:
-                adapterLimits.maxStorageTexturesPerShaderStage,
-              maxBufferSize: adapterLimits.maxBufferSize,
-              maxTextureArrayLayers: adapterLimits.maxTextureArrayLayers,
-              maxComputeWorkgroupSizeX: adapterLimits.maxComputeWorkgroupSizeX,
-              maxComputeInvocationsPerWorkgroup:
-                adapterLimits.maxComputeInvocationsPerWorkgroup
+    try {
+      this._initing = true;
+      this._pipelineInitError = undefined;
+      if (preferWebGPU && typeof navigator !== 'undefined' && navigator.gpu) {
+        try {
+          const gpu = navigator.gpu;
+          let gpuDevice = globalGPUDevice;
+          let gpuAdapter = globalGPUAdapter;
+          let gpuAdapterInfo = globalGPUAdapterInfo;
+          if (!gpuDevice) {
+            gpuAdapter = await gpu.requestAdapter({
+              powerPreference: 'high-performance'
+            });
+            if (!gpuAdapter) {
+              gpuAdapter = await gpu.requestAdapter();
             }
+            if (!gpuAdapter) throw new Error('No WebGPU adapter is available');
+            gpuAdapterInfo = (gpuAdapter as GPUAdapter & { info: GPUAdapterInfo }).info;
+
+            // Optional features also benefit OIDN, which shares this device.
+            const requiredFeatures: GPUFeatureName[] = [];
+            for (const feature of [
+              'timestamp-query',
+              'bgra8unorm-storage',
+              'shader-f16',
+              'subgroups',
+              'texture-formats-tier1',
+              'texture-formats-tier2',
+              'float32-filterable'
+            ] as GPUFeatureName[]) {
+              if (gpuAdapter.features.has(feature)) requiredFeatures.push(feature);
+            }
+
+            // Request the adapter limits. The defaults are too small for large
+            // scenes and for OIDN's convolution workgroups.
+            const adapterLimits = gpuAdapter.limits;
+            gpuDevice = await gpuAdapter.requestDevice({
+              requiredFeatures,
+              requiredLimits: {
+                maxComputeWorkgroupStorageSize:
+                  adapterLimits.maxComputeWorkgroupStorageSize,
+                maxComputeWorkgroupsPerDimension:
+                  adapterLimits.maxComputeWorkgroupsPerDimension,
+                maxStorageBufferBindingSize:
+                  adapterLimits.maxStorageBufferBindingSize,
+                maxStorageBuffersPerShaderStage:
+                  adapterLimits.maxStorageBuffersPerShaderStage,
+                maxSampledTexturesPerShaderStage:
+                  adapterLimits.maxSampledTexturesPerShaderStage,
+                maxStorageTexturesPerShaderStage:
+                  adapterLimits.maxStorageTexturesPerShaderStage,
+                maxBufferSize: adapterLimits.maxBufferSize,
+                maxTextureArrayLayers: adapterLimits.maxTextureArrayLayers,
+                maxComputeWorkgroupSizeX: adapterLimits.maxComputeWorkgroupSizeX,
+                maxComputeInvocationsPerWorkgroup:
+                  adapterLimits.maxComputeInvocationsPerWorkgroup
+              }
+            });
+            globalGPUAdapter = gpuAdapter;
+            globalGPUAdapterInfo = gpuAdapterInfo ?? null;
+            globalGPUDevice = gpuDevice;
+          }
+
+          this._gpuAdapter = gpuAdapter;
+          this._gpuAdapterInfo = gpuAdapterInfo ?? undefined;
+          this._gpuDevice = gpuDevice;
+          this._pipeline = makeWGPURenderingPipeline(this.canvas, gpuDevice, {
+            presentationFormat: gpu.getPreferredCanvasFormat()
           });
-          globalGPUAdapter = gpuAdapter;
-          globalGPUAdapterInfo = gpuAdapterInfo ?? null;
-          globalGPUDevice = gpuDevice;
+          gpuCreated = true;
+        } catch (e) {
+          this._webgpuFallbackReason = e instanceof Error ? e.message : String(e);
+          this._gpuDevice = undefined;
+          this._gpuAdapter = undefined;
+          this._gpuAdapterInfo = undefined;
         }
-
-        this._gpuAdapter = gpuAdapter;
-        this._gpuAdapterInfo = gpuAdapterInfo ?? undefined;
-        this._gpuDevice = gpuDevice;
-        this._pipeline = makeWGPURenderingPipeline(this.canvas, gpuDevice, {
-          presentationFormat: gpu.getPreferredCanvasFormat()
-        });
-        gpuCreated = true;
-      } catch (e) {
-        console.error(e);
-        console.error('WebGPU is not supported');
       }
-    }
-    if (!gpuCreated) {
-      this._webglRenderer = new WebGLRenderer({
-        canvas: this.canvas,
-        alpha: true,
-        depth: true,
-        stencil: false,
-        antialias: false,
-        pixelRatio: 1,
-        preserveDrawingBuffer: this._preserveDrawingBuffer,
-        // PENDING
-        premultipliedAlpha: false,
-        parallelShaderCompile: true,
-        powerPreference: 'high-performance'
-      });
+      if (!gpuCreated) {
+        if (preferWebGPU && !this._webgpuFallbackReason) {
+          this._webgpuFallbackReason = 'WebGPU is not available in this environment';
+        }
+        this._webglRenderer = new WebGLRenderer({
+          canvas: this.canvas,
+          alpha: true,
+          depth: true,
+          stencil: false,
+          antialias: false,
+          pixelRatio: 1,
+          preserveDrawingBuffer: this._preserveDrawingBuffer,
+          // PENDING
+          premultipliedAlpha: false,
+          parallelShaderCompile: true,
+          powerPreference: 'high-performance'
+        });
 
-      this._pipeline = makeWebGLRenderingPipeline(this._webglRenderer);
-    }
-    this._pipeline!.setSize(this.canvas.width, this.canvas.height);
+        this._pipeline = makeWebGLRenderingPipeline(this._webglRenderer);
+      }
+      this._pipeline!.setSize(this.canvas.width, this.canvas.height);
 
-    this._initing = false;
-    this._pipelineInited?.();
-    this._pipelineInitedPromise = undefined;
+    } catch (error) {
+      this._pipelineInitError = error;
+      this._reportRenderError(error);
+    } finally {
+      this._initing = false;
+      this._pipelineInited?.();
+      this._pipelineInitedPromise = undefined;
+    }
   }
 
   private _reportRenderError(error: unknown): RenderStatus {
-    const message = error instanceof Error ? error.message : String(error);
+    this.lastError = error instanceof Error ? error : new Error(String(error));
+    const message = this.lastError.message;
     if (message !== this._lastRenderError) {
       console.error(`Path tracing failed: ${message}`, error);
       this._lastRenderError = message;
@@ -1227,9 +1248,18 @@ export default class Renderer {
    *
    * @param forceOutput Re-run post-processing (tone mapping, bloom) even if
    *   no new samples are rendered.
+   * Errors are recorded in lastError and diagnostics; this method never throws.
    * @returns The current {@link RenderStatus}.
    */
   render(scene: Scene, camera: Camera, forceOutput?: boolean): RenderStatus {
+    try {
+      return this._render(scene, camera, forceOutput);
+    } catch (error) {
+      return this._reportRenderError(error);
+    }
+  }
+
+  private _render(scene: Scene, camera: Camera, forceOutput?: boolean): RenderStatus {
     if (this._pipelineInitError) {
       return this._reportRenderError(this._pipelineInitError);
     }
@@ -1505,12 +1535,7 @@ export default class Renderer {
 
     let compilingShader = false;
     if (!this._renderDone) {
-      try {
-        compilingShader = pipeline.draw(camera, sampleTarget);
-      } catch (error) {
-        this._reportRenderError(error);
-        throw error;
-      }
+      compilingShader = pipeline.draw(camera, sampleTarget);
     } else if (needsRedrawPostProcess) {
       pipeline.drawPostProcess();
     }
@@ -1565,11 +1590,12 @@ export default class Renderer {
           if (oidnRevision !== this._oidnRevision) return;
           if (settledBatch) this._oidnBatchStartTime = performance.now();
           this._oidnStatus = 0;
-          console.error('Failed to denoise WebGPU output.', error);
+          this._reportRenderError(error);
         });
     }
 
     this._lastRenderError = undefined;
+    this.lastError = undefined;
     return compilingShader
       ? RENDER_STATUS_COMPILING_SHADER
       : this._oidnStatus === OIDN_DENOISING

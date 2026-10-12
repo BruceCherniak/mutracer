@@ -4,7 +4,7 @@ import { updateMeshInstances } from '../../src/renderer/prepareMeshBVH';
 import { ensureMeshGeometryAttributes } from '../../src/renderer/prepareMeshBVH';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import Renderer, { RENDER_STATUS_PREPARING } from '../../src/Renderer';
+import Renderer, { RENDER_STATUS_PREPARING, RENDER_STATUS_ERROR } from '../../src/Renderer';
 import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from '../../src/renderer/MergedMaterialData';
 import type { RenderingPipeline } from '../../src/renderer/RenderingPipeline';
 import type { WGPURenderingPipeline } from '../../src/renderer/WGPURenderingPipeline';
@@ -1374,4 +1374,32 @@ it('keeps rendering the current scene during background preparation of another s
     expect(pipeline.draw).toHaveBeenCalledOnce();
     finish(buildBLAS(background.geometry)); await pending;
   } finally {build.mockRestore(); vi.unstubAllGlobals();}
+});
+
+describe('render failures', () => {
+  it('returns ERROR for draw and setting failures, records diagnostics and clears after recovery', () => {
+    const renderer = new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement});
+    const pipeline = createPipeline(); attachPipeline(renderer,pipeline);
+    const error = new Error('draw failed');
+    const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+    try {
+      vi.mocked(pipeline.draw).mockImplementationOnce(()=>{throw error;});
+      expect(renderer.render({meshes:[],lights:[]}, {} as Camera)).toBe(RENDER_STATUS_ERROR);
+      expect(renderer.lastError).toBe(error); expect(renderer.getDiagnostics()?.lastError).toBe('draw failed');
+      renderer.render({meshes:[],lights:[]}, {} as Camera);
+      expect(renderer.lastError).toBeUndefined(); expect(renderer.getDiagnostics()?.lastError).toBeUndefined();
+      vi.mocked(pipeline.setOutput).mockImplementationOnce(()=>{throw 'setting failed';});
+      expect(renderer.render({meshes:[],lights:[]}, {} as Camera)).toBe(RENDER_STATUS_ERROR);
+      expect(renderer.lastError?.message).toBe('setting failed');
+    } finally {log.mockRestore();}
+  });
+  it('records constructor denoiser rejection', async () => {
+    const error = new Error('weights failed');
+    const setter = vi.spyOn(Renderer.prototype,'setDenoiser').mockRejectedValueOnce(error);
+    const log=vi.spyOn(console,'error').mockImplementation(()=>{});
+    try {
+      const renderer = new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement,denoiser:{type:'jnlm'}});
+      await new Promise(resolve=>setTimeout(resolve,0)); expect(renderer.lastError).toBe(error);
+    } finally {setter.mockRestore();log.mockRestore();}
+  });
 });

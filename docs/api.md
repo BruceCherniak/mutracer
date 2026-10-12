@@ -195,3 +195,5 @@ and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 `@meimu/mutracer/oidn` exposes lower-level OIDN loading (`initializeOIDN`,
 `initializeOIDNFromURL`, `DEFAULT_OIDN_WEIGHTS_BASE_URL`) for custom denoiser
 setups.
+
+Rendering failures return `RENDER_STATUS_ERROR` without throwing. `renderer.lastError` (default `undefined`) stores the error until the next successful render. Constructor denoiser failures also set it. Initialized diagnostics include `lastError` and `webgpuFallbackReason` messages when applicable.
