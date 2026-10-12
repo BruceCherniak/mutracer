@@ -7,7 +7,7 @@
 It renders on WebGPU and falls back to WebGL 2, with OpenPBR materials,
 TinyBVH acceleration and denoising built in.
 
-Try the [online demo](https://mutracer.meimu-studio.com) or open the
+Try the
 [viewer](https://mutracer.meimu-studio.com/viewer/). MuTracer is a 0.x library;
 APIs may change between minor releases.
 
