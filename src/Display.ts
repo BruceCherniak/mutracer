@@ -1,9 +1,9 @@
 import type Engine from './Engine.js';
 import type Render from './Render.js';
-import type { ToneMapping, RenderOutput } from './renderer/RenderingPipeline.js';
+import type { ToneMapping, DisplayChannel } from './renderer/RenderingPipeline.js';
 import type { ColorRGB } from './types.js';
 /** Display image channels. Default final. */
-export type DisplayChannel = RenderOutput;
+export type {DisplayChannel} from './renderer/RenderingPipeline.js';
 /** Image encoding options for Display.toBlob. */
 export interface BlobOptions {
   /** Browser image MIME type. Default image/png. */ type?: string;
@@ -35,16 +35,29 @@ export default class Display {
     if (this.canvas.width !== width) this.canvas.width = width;
     if (this.canvas.height !== height) this.canvas.height = height;
   }
-  private compose(render: Render) {
+  private readonly settings = new WeakMap<Render, string>();
+  /** @internal */ _configure(render: Render) {
     if (render._engine !== this.engine) throw new Error('Render belongs to another engine.');
     const target = render._output;
-    if (!target?.presentationComplete) return;
+    if (!target) return;
+    const key = JSON.stringify([this.toneMapping, this.toneMappingExposure, this.contrast, this.saturation, this.temperature, this.tint, this.vignette, this.bloomIntensity, this.bloomThreshold, this.bloomRadius, this.hdrOutputEnabled, this.channel, this.shadowCatcherColor, this.shadowCatcherAlpha]);
+    const previous = this.settings.get(render);
+    if (previous !== key) {
+      this.settings.set(render, key);
+      if (previous !== undefined) render._displayChanged();
+    }
     target.activate();
     target.setToneMappingParams({toneMapping: this.toneMapping, exposure: this.toneMappingExposure, contrast: this.contrast, saturation: this.saturation, temperature: this.temperature, tint: this.tint, vignette: this.vignette});
     target.setBloomParams({intensity: this.bloomIntensity, threshold: this.bloomThreshold, radius: this.bloomRadius});
     target.setHDROutputEnabled?.(this.hdrOutputEnabled);
     target.setOutput(this.channel);
     target.setShadowCatcherParams(this.shadowCatcherColor, this.shadowCatcherAlpha);
+  }
+  private compose(render: Render) {
+    if (render._engine !== this.engine) throw new Error('Render belongs to another engine.');
+    const target = render._output;
+    if (!target?.presentationComplete) return;
+    this._configure(render);
     target.drawPostProcess();
     return target;
   }

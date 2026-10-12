@@ -1,7 +1,6 @@
 /// <reference types="@webgpu/types" preserve="true" />
 
 import { initUNetFromBuffer, type UNet } from 'oidn-web';
-import type Renderer from './Renderer.js';
 import type Engine from './Engine.js';
 import { VERSION } from './version.js';
 import { standardWeightsUrl, smallWeightsUrl } from './oidnBundledWeights.js';
@@ -70,8 +69,6 @@ export const DEFAULT_OIDN_WEIGHTS_BASE_URL =
   `https://cdn.jsdelivr.net/npm/@meimu/mutracer@${VERSION}/oidn/weights/`;
 
 export interface OIDNLoadOptions {
-  /** Attach the loaded denoiser to the renderer. Defaults to true. */
-  attach?: boolean;
   /** Maximum OIDN tile size. By default oidn-web chooses the tile size. */
   maxTileSize?: number;
   /** Optional signal used while downloading the weights. */
@@ -143,28 +140,28 @@ async function fetchOIDNWeights(url: string | URL, signal?: AbortSignal) {
 }
 
 /**
- * Loads an HDR OIDN model with albedo/normal guides on the renderer's WebGPU
- * device and attaches it to the renderer by default.
+ * Loads an HDR OIDN model with albedo/normal guides on the engine's WebGPU
+ * device and returns it without attaching it to a render.
  */
 async function loadOIDN(
-  renderer: Renderer | Engine,
+  engine: Engine,
   weightsUrl: string | URL,
   options: CustomOIDNModelOptions = {},
   fetchWeights = fetchOIDNWeights
 ): Promise<OIDNDenoiser> {
-  await renderer.init();
-  const device = renderer.device;
-  if (renderer.backend !== 'webgpu' || !device) {
-    throw new Error('OIDN requires a WebGPU renderer.');
+  await engine.init();
+  const device = engine.device;
+  if (engine.backend !== 'webgpu' || !device) {
+    throw new Error('OIDN requires a WebGPU engine.');
   }
 
   const auxiliaryUrls = options.auxiliaryModelUrls;
   const weightBuffers = await Promise.all([
-    '_getWeights' in renderer ? renderer._getWeights(String(weightsUrl), () => fetchWeights(weightsUrl, options.signal)) : fetchWeights(weightsUrl, options.signal),
+    engine._getWeights(String(weightsUrl), () => fetchWeights(weightsUrl, options.signal)),
     ...(auxiliaryUrls
       ? [
-          '_getWeights' in renderer ? renderer._getWeights(String(auxiliaryUrls.albedo), () => fetchWeights(auxiliaryUrls.albedo, options.signal)) : fetchWeights(auxiliaryUrls.albedo, options.signal),
-          '_getWeights' in renderer ? renderer._getWeights(String(auxiliaryUrls.normal), () => fetchWeights(auxiliaryUrls.normal, options.signal)) : fetchWeights(auxiliaryUrls.normal, options.signal)
+          engine._getWeights(String(auxiliaryUrls.albedo), () => fetchWeights(auxiliaryUrls.albedo, options.signal)),
+          engine._getWeights(String(auxiliaryUrls.normal), () => fetchWeights(auxiliaryUrls.normal, options.signal))
         ]
       : [])
   ]);
@@ -211,41 +208,23 @@ async function loadOIDN(
     denoiser?.dispose();
     throw error;
   }
-  try {
-    const { width, height } = 'getSize' in renderer ? renderer.getSize() : {width: 0, height: 0};
-    if (width > 0 && height > 0) {
-      // Shapes for whole-image tiles. Renderer.setDenoiser() prepares the
-      // overlapped tiles of `whileConverging` itself once it attaches.
-      await Promise.all([
-        denoiser.prepareForImage?.(width, height),
-        denoiser.auxiliaryDenoisers?.albedo.prepareForImage?.(width, height),
-        denoiser.auxiliaryDenoisers?.normal.prepareForImage?.(width, height)
-      ]);
-    }
-  } catch (error) {
-    denoiser.auxiliaryDenoisers?.normal.dispose();
-    denoiser.auxiliaryDenoisers?.albedo.dispose();
-    denoiser.dispose();
-    throw error;
-  }
-  if ('oidn' in renderer && options.attach !== false) renderer.oidn = denoiser;
   return denoiser;
 }
 
 /** Loads an explicit HDR network URL; download failures never fall back to a CDN. */
 export function initializeOIDNFromURL(
-  renderer: Renderer | Engine,
+  engine: Engine,
   weightsUrl: string | URL,
   options: CustomOIDNModelOptions = {}
 ): Promise<OIDNDenoiser> {
-  return loadOIDN(renderer, weightsUrl, options);
+  return loadOIDN(engine, weightsUrl, options);
 }
 
 let warnedBundledWeights = false;
 
 /** Loads one of the packaged OIDN models. */
 export function initializeOIDN(
-  renderer: Renderer | Engine,
+  engine: Engine,
   options: InitializeOIDNOptions = {}
 ) {
   const {
@@ -278,7 +257,7 @@ export function initializeOIDN(
     }
   };
   return loadOIDN(
-    renderer,
+    engine,
     mainUrl,
     {
       ...loadOptions,

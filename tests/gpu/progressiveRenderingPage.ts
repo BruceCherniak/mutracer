@@ -1,8 +1,8 @@
-import { Camera, Mesh, OpenPBRMaterial, Renderer, SphereLight, createSphereGeometry } from '../../src/main.js';
+import { Camera, Mesh, OpenPBRMaterial, Engine, SphereLight, createSphereGeometry } from '../../src/main.js';
 import { measureProgressiveSwitches } from './progressiveRendering.js';
 
-const renderer = new Renderer({ canvas: document.getElementById('main') as HTMLCanvasElement,
-  preferWebGPU: !new URLSearchParams(location.search).has('webgl') });
+const renderer = new Engine({ canvas: document.getElementById('main') as HTMLCanvasElement,
+  backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto' });
 const camera = new Camera({ projection: 'perspective' });
 camera.position = [0, 0, 4]; camera.lookAt([0, 0, 0]);
 const light = new SphereLight({ intensity: 30 });

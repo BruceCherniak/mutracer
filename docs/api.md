@@ -1,130 +1,133 @@
 # API reference
 
-Everything is exported from `@meimu/mutracer`. Type declarations carry TSDoc with
-defaults for every option; this page summarizes them.
+Exports come from `@meimu/mutracer`; declarations carry TSDoc and defaults.
+See [progressive rendering](./progressive-rendering.md) for complete examples.
 
-## `Renderer`
+## Engine
 
-```ts
-new Renderer(params?: RendererParams)
-```
+`new Engine({canvas?, backend?, validateUpdates?})` owns the device and one GPU
+scene. `scene` and `camera` default to undefined. Assign them and call
+`update()` to commit edits before rendering; see [updates](./updates.md).
 
-| Param | Type | Default | Description |
-| --- | --- | --- | --- |
-| `canvas` | `HTMLCanvasElement` | new canvas | Canvas to draw into (`renderer.canvas`) |
-| `preferWebGPU` | `boolean` | `true` | `false` forces the WebGL 2 backend |
-| `denoiser` | `boolean \| DenoiserOptions` | `false` | Same as calling `setDenoiser()` |
-| `validateUpdates` | `boolean` | development build | Warn once for missing material notifications; at most 200 checks per render. See [updates](./updates.md#checking-missing-material-notifications) |
-| `preserveDrawingBuffer` | `boolean` | `true` | WebGL 2; needed to read the canvas back |
-
-### Properties
-
-Properties are plain fields read on the next `render()`. Changing one that
-affects the image restarts accumulation.
-
-**Sampling and integration**
-
-| Property | Default | Description |
+| Setting | Default | Meaning |
 | --- | --- | --- |
-| `maxSamples` | `2048` | Samples per pixel before the image is finished |
-| `bounces` | `3` | Maximum path depth |
-| `clamping` | `0` | Per-sample radiance clamp; `0` is unbiased |
-| `directLightCandidates` | `4` | Light candidates resampled per next-event estimate (WebGPU, 1–16) |
-| `bevelSamples` | `8` | Probes per sample for `OpenPBRMaterial.bevelSize` (1–32) |
-| `samplingPattern` | `'sobol'` | `'sobol'`, `'zsobol'` or `'random'`; see [sampling](./sampling.md) |
-| `alphaBlendStrategy` | `'stochastic'` | `'stochastic'` or `'deterministic-source-over'` for glTF `BLEND` materials (WebGPU) |
-| `bvhBuilder` | `'builtin'` | `'builtin'` (JavaScript) or `'tinybvh'` (WebAssembly); see [BVH](./bvh.md) |
-| `bvhWorkerCount` | `'auto'` | Maximum static BLAS Workers per renderer: `'auto'` selects 1–4, or set a positive safe integer; see [BVH](./bvh.md#configure-parallel-construction) |
-| `bvhLayout` | `'bvh2'` | Static TinyBVH layout: `'bvh2'`, `'bvh4'`, `'bvh-gpu'` or `'cwbvh'` |
-| `bvhSpatialSplits` | `false` | With `'tinybvh'`, build SBVHs: slower builds, sometimes faster rendering |
-| `textureAtlasBudgetBytes` | 384 MiB | Texture atlas memory budget; larger textures are downscaled |
+| `canvas` | new canvas | Default `engine.display.canvas` |
+| `backend` | `'auto'` | Automatic WebGPU/WebGL selection; `'webgpu'` requires WebGPU; `'webgl'` forces WebGL 2 |
+| `validateUpdates` | development build | Warn about missing material notifications |
+| `bvhBuilder` | `'builtin'` | JavaScript or `'tinybvh'` WebAssembly |
+| `bvhWorkerCount` | `'auto'` | Hardware concurrency minus one, clamped 1–4; or positive integer |
+| `bvhLayout` | `'bvh2'` | Static TinyBVH layout; see [BVH](./bvh.md) |
+| `bvhSpatialSplits` | `false` | TinyBVH spatial splits |
+| `textureAtlasBudgetBytes` | 384 MiB | Material texture budget |
 
-**Responsiveness**
-
-| Property | Default | Description |
-| --- | --- | --- |
-| `previewEnabled` | `true` | Cheaper preview while camera/scene changes; whileConverging forces this on |
-| `previewMaxResolutionScale` | `0.5` | Maximum preview resolution scale (0.25–1) |
-| `previewBounces` | `2` | Path depth during preview |
-| `previewIdleDelayMs` | `150` | Idle time before full quality resumes |
-| `maxTimePerTile` | `21` | Target GPU milliseconds per tile |
-| `previewTargetFrameMs` | `20` | Target GPU milliseconds per preview frame |
-| `maxTiles` | `Infinity` | Upper bound on tiles per frame |
-| `allowMultipleSamplesPerFrame` | `false` | Render several samples per `render()` when the GPU has time |
-
-**Display** (post-processing only; does not restart accumulation)
-
-| Property | Default | Description |
-| --- | --- | --- |
-| `toneMapping` | `'agx'` | `'agx'`, `'aces'`, `'cineon'`, `'reinhard'`, `'linear'` |
-| `toneMappingExposure` | `1` | Linear exposure multiplier |
-| `contrast`, `saturation` | `1` | Color grading |
-| `temperature`, `tint` | `0` | White balance, roughly −1 to 1 |
-| `vignette` | `0` | Vignette strength |
-| `bloomIntensity` | `0` | `0` disables bloom |
-| `bloomThreshold` | `1` | Luminance threshold for bloom |
-| `bloomRadius` | `0.6` | Bloom radius (0–1) |
-| `hdrOutputEnabled` | `false` | Extended-range output on HDR displays (WebGPU) |
-| `output` | `'final'` | `'final'`, `'albedo'`, `'normal'`, `'shadow'`, `'shadowCatcher'` |
-| `shadowCatcherColor` | `[0, 0, 0]` | Shadow color on shadow-catcher materials |
-| `shadowCatcherAlpha` | `1` | Shadow opacity on shadow catchers |
-| `transmissiveOutputAlphaMin` | `1` | Minimum alpha of glass over a transparent background |
-
-**Events**
-
-`renderer.on(name, listener)` supports multiple listeners and returns an unsubscribe function.
-
-| Event | Payload |
+| Method / property | Meaning |
 | --- | --- |
-| `sample` | `{ samples, preview, isFirstFrame, frameTimeMs }` |
-| `status` | `{ status, previous }`; emitted only when status changes |
-| `progress` | `{ stage: 'device' \| 'bvh' \| 'shaders', progress }`; preparing/compiling only |
-| `error` | `Error`; each error object is delivered once |
-| `denoised` | `{ samples, final }`; after completed denoising |
-| `devicelost` | `{ reason, recovering }` |
+| `update(): boolean` | Sole scene/camera edit detection point; returns whether inputs changed |
+| `prepare(scene, {onProgress?, signal?})` | Optional CPU preparation for a future scene; options default undefined |
+| `init()` / `info` | Shared initialization promise and `EngineInfo`; info initially undefined |
+| `backend` / `device` | Actual backend; device undefined before init and on WebGL |
+| `lastError` | Most recent synchronous engine/render error; initially undefined |
+| `getDiagnostics()` | Device, scene, compilation, timing, resident-target diagnostics; available after init or CPU preparation |
+| `readDepthSamples(area)` | Depth query using the committed engine camera; see [depth sampling](#depth-sampling) |
+| `on(name, listener)` | Subscribe; returns unsubscribe |
+| `dispose()` | Release renders, GPU resources, Workers and owned denoisers |
 
-### Methods
+`init()` is optional: `update()` and `refine()` initialize lazily. Concurrent
+calls share a promise. `EngineInfo` includes backend, adapterName, optional
+webgpuFallbackReason and limits for texture layers/dimensions.
+Events are `progress` (`{stage: 'device' | 'bvh' | 'shaders', progress}`),
+`error` (`Error`), and `devicelost` (`{reason, recovering}`). Each error object
+is reported once; console errors are deduplicated by message. Invalid light
+values are clamped and reported while rendering continues.
 
-| Method | Description |
+## Render
+
+`new Render(engine, options?)` creates one independent accumulation. All renders
+use the engine's committed scene/camera. Options are mutable except fixed
+constructor dimensions. Image-quality changes restart only this render;
+budget and display changes retain samples.
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `maxSamples` | `2048` | Complete sample budget |
+| `bounces` / `clamping` | `3` / `0` | Path depth / per-sample radiance clamp; 0 disables clamping |
+| `samplingPattern` | `'sobol'` | Sobol, ZSobol or random; see [sampling](./sampling.md) |
+| `directLightCandidates` | `4` | WebGPU light candidates, clamped 1–16; ignored on WebGL |
+| `bevel` / `bevelSamples` | `true` / `8` | Bevel shading / probes, clamped 1–32 |
+| `dispersionWavelengths` | `3` | 3 wavelengths, or one randomly chosen wavelength |
+| `alphaBlendStrategy` | `'stochastic'` | WebGPU primary BLEND policy; ignored on WebGL |
+| `transmissiveOutputAlphaMin` | `1` | Path-depth alpha rule over transparent backgrounds; changes restart this render |
+| `resolutionScale` | `1` | Relative to display canvas; exclusive with fixed width/height |
+| `width` / `height` | undefined | Paired fixed constructor dimensions; getters report actual output dimensions |
+| `adaptiveResolution` | `false` | `{targetFrameMs, minScale}` for scale-based renders; both required, positive, minScale ≤ resolutionScale |
+| `timeBudgetMs` / `maxTiles` | `21` / `Infinity` | Tile time budget / tiles per call |
+| `allowMultipleSamplesPerFrame` | `false` | Add multiple samples when time permits |
+| `fallback` | `null` | Single-level Render on the same engine |
+| `denoiser` | `null` | Per-render configuration; see [denoising](./denoising.md) |
+
+| Method / property | Meaning |
 | --- | --- |
-| `render(scene, camera)` | Adds samples; returns a [status](#status). Call once per frame |
-| `setSize(width, height)` | Resizes the canvas drawing buffer and targets, in pixels |
-| `getSize()` | `{ width, height }` |
-| `setDenoiser(options?)` | Attaches the built-in JNLM filter or an OIDN network (WebGPU only); `false`/`null` removes it. See [denoising](./denoising.md) |
-| `prebuildBVH(scene, options?)` | Optional early static BVH build; resolves void; `onProgress` and `signal` default undefined. Statistics in diagnostics `bvh.lastBuild`; see [BVH](./bvh.md) |
-| `renderOfflineFrame(scene, camera, options)` | Renders a finished frame; see below |
-| `restartSamples()` | Discards the accumulation |
-| `samples` | Formal accumulated spp; 0 initially and while previewing |
-| `readPixels(kind = 'hdr')` | RGBA float32, top row first; hdr, denoised, albedo or normal; see [pixel outputs](#pixel-outputs) |
-| `readDepthSamples({ x, y, size })` | Asynchronously queries a 7×7 grid of GPU depths after `render()`; see [depth sampling](#depth-sampling) |
-| `toBlob({ type?, quality? } = {})` | Redraws post-processing, waits for GPU work and encodes a Blob; type defaults image/png, quality undefined |
-| `backend` / `device` | Backend (`'webgpu'` / `'webgl'`), initially undefined; device only on WebGPU |
-| `getDiagnostics()` | Available after initialization or a BVH build (backend undefined before init); backend, adapter, shader compilation, BVH, light sampling, timing and [resident target diagnostics](./performance.md#diagnostics) |
-| `init()` / `info` | Initializes once and resolves `RendererInfo`; synchronous info is undefined before completion |
-| `dispose()` | Releases GPU resources, BVH Workers and the denoiser; cancels pending BVH preparation |
+| `refine()` | Trace within this render's budget; returns status |
+| `converge(options)` | Deterministic offline image; see below |
+| `readPixels(kind = 'hdr')` | Read this render; see [pixel outputs](#pixel-outputs) |
+| `samples` | Complete samples since restart; stale engine inputs report 0 |
+| `converged` | `samples >= maxSamples`, independently of filtering |
+| `status` | Preparing, compiling, converging, denoising, finished or error |
+| `restart()` | Discard this accumulation |
+| `dispose()` | Release this render and its denoiser lease |
 
-`await renderer.init()` is optional: `render()` initializes lazily. Concurrent
-initializations share one promise. `info` contains `backend`, `adapterName`,
-optional `webgpuFallbackReason`, and `limits.maxTextureArrayLayers` /
-`limits.maxTextureDimension2D`. Use `backend === 'webgpu'` for OIDN, direct
-light candidates, alpha blend strategy, HDR output and offline adaptive
-sampling. WebGL ignores those settings; actual HDR presentation is reported
-by `getDiagnostics().hdrPresentation.active`.
+`refine()` returns `'preparing'` during device/BVH setup and `'compiling'`
+during shader compilation. Intermediate progressive denoising stays
+`'converging'`; final denoising reports `'denoising'`. `'finished'` includes
+completed filtering. Synchronous execution failures return `'error'` and set
+engine.lastError. Invalid lifecycle operations (disposed render or refine during
+converge) throw.
 
-`render()` detects scene edits itself, except material, texture and geometry
-data edits, which need `markUpdated()` or `markVerticesUpdated()`; see
-[scene updates](./updates.md). An unchanged scene keeps accumulating.
+A fallback gets one sample when the requested render cannot finish its first
+sample within budget and the fallback has no current complete image. A ready
+fallback is not traced again. Fallback chains and cycles are rejected.
 
-Synchronous rendering failures return `'error'` without throwing and emit an `error`
-event. `lastError` (default `undefined`) only describes a synchronous failure during
-the most recent `render()` call. Async denoising and constructor-denoiser failures
-are delivered through `error` events and do not set `lastError`. A later render
-does not repeat these events. Console errors are deduplicated by message. Invalid
-light values are clamped and reported once through `error`, while rendering continues
-with `lastError` undefined. Diagnostics include synchronous `lastError` and
-`webgpuFallbackReason` messages when applicable.
+### converge(options)
 
-While-converging intermediate denoise batches report `'converging'`. Only denoising the final image at `maxSamples` reports `'denoising'`; `'finished'` means that final image is ready.
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `samples` | required | Fixed spp, or adaptive cap |
+| `camera` | committed camera | Copied override for this call; does not change engine.camera |
+| `samplesPerBatch` | `8` | Samples per submission |
+| `targetBatchTimeMs` | undefined | Adapt batch sizes on WebGPU |
+| `adaptiveSampling` | undefined | Two-stage variance allocation on WebGPU; WebGL falls back to fixed spp |
+| `sampleSequenceOffset` | `0` | Sequence base; disjoint ranges for independent frames |
+| `previewIntervalMs` | undefined | Minimum delay between intermediate resolved images; never implicitly presents |
+| `onProgress` | undefined | `{stage: 'pilot' | 'final' | 'denoising', samples, targetSamples}` |
+| `signal` | undefined | Cancellation signal |
+| `timeoutMs` | `600000` | Timeout per stage |
+
+Resolves `{samples, averageSamplesPerPixel, pilotSamples, adaptiveSampling,
+varianceHistory?}` after filtering. It rejects if engine input revisions change.
+The same render cannot refine concurrently; other renders remain usable.
+
+## Display
+
+Use `engine.display`; creation of additional displays is outside this API.
+`setSize(width, height)` changes canvas pixels. Scale-based renders resize on
+their next refine; fixed renders retain their dimensions.
+`present(render)` only presents: it returns the render or its ready fallback,
+or undefined without changing the canvas when neither is ready.
+`toBlob(render, {type?, quality?})` composes that render at its actual dimensions,
+without resizing or changing the current canvas. MIME defaults to image/png;
+quality defaults to the browser encoder value.
+
+| Setting | Default |
+| --- | --- |
+| `toneMapping` | `'agx'` (`aces`, `cineon`, `reinhard`, `linear` also supported) |
+| `toneMappingExposure`, `contrast`, `saturation` | `1` |
+| `temperature`, `tint`, `vignette` | `0` |
+| `bloomIntensity`, `bloomThreshold`, `bloomRadius` | `0`, `1`, `0.6` |
+| `hdrOutputEnabled` | `false`; WebGPU only |
+| `channel: DisplayChannel` | `'final'`; also albedo, normal, shadow, shadowCatcher |
+| `shadowCatcherColor`, `shadowCatcherAlpha` | `[0, 0, 0]`, `1` |
+
+All display settings apply at composition and retain accumulated samples.
 
 ### Pixel outputs
 
@@ -142,13 +145,13 @@ which WebGPU rounds up to multiples of 16. Before a pipeline exists, it returns 
 On WebGPU, the optional OIDN alpha postfilter operates on display colors;
 its final native output is also display encoded. Readback preserves these
 existing pipeline semantics. If no denoiser is attached or denoising has not
-completed, `denoised` returns `hdr` and warns once per renderer. The method
+completed, `denoised` returns `hdr` and warns once per render. The method
 makes a CPU copy and can be costly; avoid calling it every animation frame.
 
 ### Depth sampling
 
 After rendering the current scene and camera, call
-`await renderer.readDepthSamples({ x: 0.5, y: 0.5, size: 0.07 })`.
+`await engine.readDepthSamples({ x: 0.5, y: 0.5, size: 0.07 })`.
 The result is a `Float32Array` of 49 depths, in row order from the top left,
 including the area's edges. It can be used for area autofocus without CPU
 mesh traversal or reading a full-frame image.
@@ -167,41 +170,6 @@ WebGPU and WebGL 2 and do not change accumulated rendering samples. Callers
 should discard results when their scene, camera or sampling area changes
 while a query is pending. GPU failures reject the promise.
 
-### `renderOfflineFrame(scene, camera, options)`
-
-| Option | Description |
-| --- | --- |
-| `samples` | Fixed spp, or the cap when `adaptiveSampling` is set |
-| `samplesPerBatch` | Samples submitted before yielding to the page |
-| `targetBatchTimeMs` | Adapt batch size to this GPU time (WebGPU) |
-| `adaptiveSampling` | Two-stage variance-driven allocation (`OfflineAdaptiveSamplingOptions`) |
-| `sampleSequenceOffset` | Sequence base; use disjoint ranges per animation frame |
-| `previewIntervalMs` | Minimum delay between canvas updates; omit for maximum throughput |
-| `onProgress({ stage, samples, targetSamples })` | `stage` is `'pilot'`, `'final'` or `'denoising'` |
-| `signal` | `AbortSignal` |
-| `timeoutMs` | Per-stage timeout, default 10 minutes |
-
-Resolves to `{ samples, averageSamplesPerPixel, pilotSamples, adaptiveSampling }`.
-If a denoiser is set, the result is denoised before the promise resolves.
-
-## Status
-
-`render()` returns one of:
-
-| Status | Meaning |
-| --- | --- |
-| `'preparing'` | Device initializing or BVHs building; initial status |
-| `'compiling'` | Pipelines compiling; no samples added |
-| `'previewing'` | Reduced quality during interaction; never final |
-| `'converging'` | Samples accumulating toward `maxSamples` |
-| `'denoising'` | `maxSamples` reached; final denoising in progress |
-| `'finished'` | Image complete, including final denoising |
-| `'error'` | Synchronous rendering failed; inspect `lastError` |
-
-Previewing never reports finished or starts final denoising, even at low
-maxSamples. `sample` events report their frame's count and `preview` flag;
-`renderer.samples` only counts formal samples and stays zero during preview.
-Read `renderer.status` for the latest render result (default `'preparing'`).
 
 ## Scene types
 

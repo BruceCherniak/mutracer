@@ -1,4 +1,4 @@
-import { prebuildStats } from '../helpers/prebuildStats';
+import { prepareStats } from '../helpers/prepareStats';
 import { fileURLToPath } from 'node:url';
 import { createContext, runInContext } from 'node:vm';
 import { build } from 'vite';
@@ -52,27 +52,27 @@ describe('standalone library builds', () => {
     runInContext(chunks.find(chunk => chunk.fileName === 'mutracer.umd.js')!.code, context);
     document.currentScript = null as any;
     const library = context.MuTracer as API;
-    const renderer = new library.Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
+    const renderer = new library.Engine({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
     const geometry = library.createCubeGeometry();
-    await prebuildStats(renderer, [new library.Mesh(geometry, new library.OpenPBRMaterial())]);
+    await prepareStats(renderer, [new library.Mesh(geometry, new library.OpenPBRMaterial())]);
     expect(workerUrl).toMatch(/^https:\/\/cdn\.example\.test\/package\/dist\/assets\/bvh\.worker-.+\.js$/);
     expect('bvh' in geometry).toBe(false);
-    expect((await prebuildStats(renderer, [new library.Mesh(geometry, new library.OpenPBRMaterial())])).geometryCount).toBe(0);
+    expect((await prepareStats(renderer, [new library.Mesh(geometry, new library.OpenPBRMaterial())])).geometryCount).toBe(0);
   });
 
   it('builds ordinary and projective BVHs', async () => {
     const material = new api.OpenPBRMaterial();
     const mesh = new api.Mesh(api.createPlaneGeometry(), material);
-    const renderer = new api.Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
-    expect((await prebuildStats(renderer, [mesh])).geometryCount).toBe(1);
+    const renderer = new api.Engine({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
+    expect((await prepareStats(renderer, [mesh])).geometryCount).toBe(1);
     expect('bvh' in mesh.geometry).toBe(false);
-    expect((await prebuildStats(renderer, [mesh])).geometryCount).toBe(0);
+    expect((await prepareStats(renderer, [mesh])).geometryCount).toBe(0);
     material.displacementMap = new api.Texture({
       data: new Uint8Array([255, 255, 255, 255]), width: 1, height: 1
     });
     material.displacementScale = 0.1;
     material.displacementUvProjection = 'triplanar';
     renderer.bvhSpatialSplits = true;
-    expect((await prebuildStats(renderer, [mesh])).geometryCount).toBe(1);
+    expect((await prepareStats(renderer, [mesh])).geometryCount).toBe(1);
   });
 });

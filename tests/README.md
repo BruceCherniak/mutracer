@@ -28,7 +28,7 @@ with `?webgl`, and records `presentedTarget` / `presentedComplete` per frame.
 Preview resolution is held fixed during this probe; adaptive preview rebuilding
 is checked separately. The reusable `measureProgressiveSwitches` helper can also
 be run against each example's scene and camera. HDR equivalence requires a
-separate fixed-resolution, fixed-spp `renderOfflineFrame` / `readPixels('hdr')`
+separate fixed-resolution, fixed-spp `render.converge` / `render.readPixels('hdr')`
 comparison against pixels captured before a refactor.
 
 Use small generated fixtures; do not commit models or images for tests.

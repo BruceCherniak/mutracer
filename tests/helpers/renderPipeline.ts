@@ -16,13 +16,12 @@ export function renderFixture(options: {tiles?: number; fits?: boolean; backend?
       let sequenceOffset = 0, variance = false;
       let callback = (_count: number, _first: boolean, _time: number) => {};
       const target = {
-        label, configure: vi.fn((_settings: TraceSettings) => {}), synchronizeBackground: vi.fn(),
+        label, invalidateDenoisedOutput: vi.fn(), configure: vi.fn((_settings: TraceSettings) => {}), synchronizeBackground: vi.fn(),
         activate: vi.fn(() => { active = label; operations.push({id: label, kind: 'activate'}); }),
-        begin: vi.fn(), invalidate: vi.fn(() => {first = true;}),
         isFirstFrame: () => first, getTotalSamplesRendered: () => samples,
         get presentationComplete() { return complete; }, get presentationDenoised() { return false; },
         canCompleteSampleWithin: vi.fn(() => options.fits ?? true),
-        draw: vi.fn((camera: Camera, cap: number) => {
+        trace: vi.fn((camera: Camera, cap: number) => {
           if (active !== label) throw new Error('Wrong active target');
           operations.push({id: label, kind: 'draw', camera: camera.clone(), cap});
           first = false;
@@ -47,7 +46,7 @@ export function renderFixture(options: {tiles?: number; fits?: boolean; backend?
         setVarianceMoments: vi.fn((value: boolean) => {variance = value;}), setAdaptiveSamplingTargets: vi.fn(),
         cancelOIDNDenoise: vi.fn(), performOIDNDenoise: vi.fn(async () => true), setPreserveOIDNOutput: vi.fn(),
         setToneMappingParams: vi.fn(() => false), setBloomParams: vi.fn(() => false), setHDROutputEnabled: vi.fn(() => false),
-        setOutput: vi.fn(() => false), setShadowCatcherParams: vi.fn(() => false), setTransmissiveOutputAlphaMin: vi.fn(() => false),
+        setOutput: vi.fn(() => false), setShadowCatcherParams: vi.fn(() => false),
         drawPostProcess: vi.fn(), dispose: vi.fn(),
       } as unknown as RenderTarget;
       targets.push(target); return target;

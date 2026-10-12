@@ -1,23 +1,24 @@
 # Scene updates and animation
 
 This page is the reference for editing a scene that is already rendering.
-Keep the same `scene` object, arrays and resources between frames and edit
-them in place. Each `render()` compares the scene with the previous call and
-picks the cheapest update path. Any change that affects the image restarts
-accumulation; while changes continue, `previewEnabled` renders a cheaper
-image.
+Keep the same scene, arrays and resources and edit them in place. Call
+`engine.update()` once per frame to detect and commit changes. Every Render
+uses that committed snapshot until the next update; editing or replacing the
+external scene/camera without calling update has no effect on tracing.
+Changes restart each render at its next refine. See
+[progressive rendering](./progressive-rendering.md) for preview selection.
 
 ## What to do after a change
 
 | Change | What to do |
 | --- | --- |
-| Camera or renderer option changed | Nothing; checked on each render |
-| Meshes added, removed or reordered | Nothing; edit `scene.meshes` in place or replace the array |
-| `mesh.transform` elements edited | Nothing |
-| `mesh.geometry` or a mesh material replaced | Nothing |
-| Lights added, removed or their parameters edited | Nothing |
-| Background assigned, or its color or grounded-skybox fields edited | Nothing |
-| Texture, image, UV array, `flipY` or `uvChannel` assigned | Nothing |
+| Camera changed | Call engine.update before refining |
+| Meshes added, removed or reordered | Edit `scene.meshes`, then engine.update |
+| `mesh.transform` elements edited | Call engine.update |
+| `mesh.geometry` or a mesh material replaced | Call engine.update |
+| Lights added, removed or their parameters edited | Call engine.update |
+| Background assigned, or its color or grounded-skybox fields edited | Call engine.update |
+| Texture, image, UV array, `flipY` or `uvChannel` assigned | Call engine.update |
 | Material parameters edited | `material.markUpdated()` |
 | Texture pixels or UV-array elements edited | `texture.markUpdated()` |
 | Vertex attributes edited; indices and `materialIndex` unchanged | `geometry.markVerticesUpdated()` |
@@ -28,7 +29,7 @@ image.
 mesh.transform[12] += 0.1;           // detected automatically
 material.specularRoughness = 0.6;
 material.markUpdated();
-renderer.render(scene, camera);
+engine.update(); final.refine(); engine.display.present(final);
 ```
 
 With Three.js, edit the Three.js scene and call `sync.update()` before
@@ -37,11 +38,11 @@ rendering; the sync sends these notifications for you. See
 
 ## Checking missing material notifications
 
-Use `new Renderer({ canvas, validateUpdates: true })` to diagnose forgotten
+Use `new Engine({ canvas, validateUpdates: true })` to diagnose forgotten
 `material.markUpdated()` calls. The default is on in development builds and off
 in production builds or native browser ESM. Pass `false` to disable it explicitly.
 
-Each render checks up to 200 materials in rotation, comparing parameters and
+Each engine.update checks up to 200 materials in rotation, comparing parameters and
 vector elements with their previous inspection. A parameter change without a
 material version change warns once per material. It does not update the material
 for you. Automatically detected texture references, versions and metadata do not
@@ -79,7 +80,7 @@ Choose the notification that matches the edit:
 geometry.dynamic = true;               // for frequent deformation
 geometry.position.array[0] += 0.1;
 geometry.markVerticesUpdated();
-// The next render updates this geometry and every mesh that uses it.
+// The next engine.update commits this geometry and every mesh that uses it.
 ```
 
 - Neither method recalculates normals or tangents. Update them before
@@ -97,13 +98,13 @@ geometry.markVerticesUpdated();
 
 Set `geometry.dynamic = true` (default `false`) for geometry that deforms
 every frame. Dynamic geometry always uses the built-in builder and the binary
-`'bvh2'` layout, whatever `renderer.bvhBuilder` and `renderer.bvhLayout` say,
+`'bvh2'` layout, whatever `engine.bvhBuilder` and `engine.bvhLayout` say,
 so its BLAS can be refitted. A refitted BLAS is rebuilt once its total node
 surface area exceeds twice the total of its last build, which limits quality
 loss during long deformations. Non-dynamic geometry refits layouts that
 support it and rebuilds the others.
 
-Refits and rebuilds run synchronously during `render()`. Three.js skinning
+Refits and rebuilds run synchronously during committed GPU uploads. Three.js skinning
 and morph targets set `dynamic` automatically; try the
 [animation example](../examples/animation.html).
 
@@ -130,14 +131,9 @@ Avoid these in per-frame animation.
 
 ## Preview and animation
 
-Camera and scene edits enter `previewing`: the renderer uses at most
-`previewMaxResolutionScale` resolution and `previewBounces` path depth,
-adapting resolution toward `previewTargetFrameMs`. After `previewIdleDelayMs`
-without changes, it starts formal full-quality accumulation again.
-Preview frames never finish the image or start final denoising; `samples`
-is zero and sample events carry `preview: true`.
-
-Continuous animation stays at preview quality. Disable `previewEnabled`
-for full-quality animation, or use `renderOfflineFrame()` for each frame.
-`whileConverging` forces preview on regardless of `previewEnabled`; turn off
-whileConverging too when full-quality interactive frames are required.
+Create a cheaper preview Render and use it during motion. Give the final render
+`fallback: preview`; it transitions when its first complete sample is ready.
+Selection and coalescing of continuous animation changes belong to the
+application. Render.refine only executes the chosen settings, and samples
+always count that render's complete samples. For fixed-quality animation, use
+converge on each frame with disjoint sequence offsets.

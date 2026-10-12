@@ -1,6 +1,6 @@
 # Sampling patterns
 
-`renderer.samplingPattern` selects the sample sequence. Changing it restarts
+`render.samplingPattern` selects the sample sequence. Changing it restarts
 accumulation. The denoiser never changes it.
 
 | Pattern | Use |
@@ -10,7 +10,7 @@ accumulation. The denoiser never changes it.
 | `'random'` | PCG white noise; an independent Monte Carlo reference |
 
 ```ts
-renderer.samplingPattern = 'zsobol';
+render.samplingPattern = 'zsobol';
 ```
 
 ## Caveats
@@ -25,7 +25,7 @@ renderer.samplingPattern = 'zsobol';
   with identical sequence points.
 - **Fireflies**: very narrow specular lobes under directional lights can
   produce rare, large contributions with any pattern. Sampling does not clamp
-  them; use `renderer.clamping` if needed.
+  them; use `render.clamping` if needed.
 
 ## Implementation notes
 

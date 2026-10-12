@@ -1,5 +1,5 @@
 import { FragmentShader, Shader, glsl } from './shader.js';
-import { constants, Renderer, Texture2D } from './webgl.js';
+import { constants, WebGLDevice, Texture2D } from './webgl.js';
 import normalizeRayTraceOutput from './glsl/normalizeRayTraceOutput.frag.js';
 import { WebGLFullQuadPass } from './WebGLFullQuadPass.js';
 import WebGLRayTracePass from './WebGLRayTracePass.js';
@@ -14,14 +14,14 @@ type RayTraceOutput = 'color' | 'albedo' | 'normal' | 'shadowCatcher';
 
 /** Converts the additive ray tracing buffers into display/denoise textures. */
 export class WebGLRayTraceOutputPass {
-  private readonly _renderer: Renderer;
+  private readonly _renderer: WebGLDevice;
   private readonly _pass: WebGLFullQuadPass<RayTraceInput, RayTraceOutput>;
 
   private readonly _layersPass: WebGLFullQuadPass<
     RayTraceInput | 'catcherBackgroundTex', LayerOutput
   >;
 
-  constructor(renderer: Renderer) {
+  constructor(renderer: WebGLDevice) {
     this._renderer = renderer;
     this._pass = new WebGLFullQuadPass('rayTraceOutput', renderer, {
       shader: normalizeRayTraceOutput,

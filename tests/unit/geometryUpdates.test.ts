@@ -1,4 +1,4 @@
-import { prebuildStats } from '../helpers/prebuildStats';
+import { prepareStats } from '../helpers/prepareStats';
 import { setGeometryBvh, getGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import { expect, it } from 'vitest';
 import Texture from '../../src/scene/Texture';
@@ -8,17 +8,17 @@ import { createCubeGeometry } from '../../src/util/commonGeometry';
 import { updateMeshInstances } from '../../src/renderer/prepareMeshBVH';
 import { canUpdateGeometries, updatePreparedGeometries } from '../../src/renderer/geometryUpdates';
 import { refitBLAS, DYNAMIC_BLAS_REBUILD_RATIO } from '../../src/renderer/bvhAccel';
-import Renderer from '../../src/Renderer';
+import Engine from '../../src/Engine';
 
 it('uses builtin BVH2 for dynamic geometry, even with an incompatible precomputed layout', async () => {
   const g = createCubeGeometry(); g.dynamic = true;
   setGeometryBvh(g, {buffer:new ArrayBuffer(64),maxDepth:1,layout:'bvh4',builder:'tinybvh'});
   const mesh = new Mesh(g, new OpenPBRMaterial()); updateMeshInstances([mesh]);
   expect(getGeometryBvh(g)!.layout).toBe('bvh2'); expect(getGeometryBvh(g)!.builder).toBe('builtin');
-  const renderer = new Renderer({canvas: {width: 1, height: 1} as HTMLCanvasElement});
+  const renderer = new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement});
   renderer.bvhBuilder = 'tinybvh'; renderer.bvhLayout = 'cwbvh';
   renderer.bvhSpatialSplits = true;
-  await prebuildStats(renderer, [mesh]);
+  await prepareStats(renderer, [mesh]);
   updateMeshInstances([mesh]);
   expect(getGeometryBvh(g)!.layout).toBe('bvh2'); expect(getGeometryBvh(g)!.builder).toBe('builtin');
 });

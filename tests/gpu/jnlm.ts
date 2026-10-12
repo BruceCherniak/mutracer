@@ -3,7 +3,7 @@
 import { WGPUJNLMDenoisePass } from '../../src/renderer/WGPUJNLMDenoiser.js';
 import { WebGLJNLMDenoisePass } from '../../src/renderer/WebGLJNLMDenoiser.js';
 import { createJNLMDenoiser, type JNLMOptions } from '../../src/renderer/jnlm.js';
-import { FrameBuffer, Renderer, Texture2D, constants } from '../../src/renderer/webgl.js';
+import { FrameBuffer, WebGLDevice, Texture2D, constants } from '../../src/renderer/webgl.js';
 
 const width = 64;
 const height = 48;
@@ -94,7 +94,7 @@ async function webgpu(device: GPUDevice, input: Fixture, options: JNLMOptions = 
 function webgl(input: Fixture, options: JNLMOptions = {}) {
   const denoiser = createJNLMDenoiser(options);
   const canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
-  const renderer = new Renderer({ canvas });
+  const renderer = new WebGLDevice({ canvas });
   const resources: Texture2D[] = [];
   const texture = (data: Float32Array) => {
     const t = new Texture2D({ source: { data, width, height }, type: constants.FLOAT, minFilter: constants.NEAREST, magFilter: constants.NEAREST });

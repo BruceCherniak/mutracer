@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import Renderer from '../../src/Renderer';
-import type { RenderingPipeline } from '../../src/renderer/RenderingPipeline';
+import { renderFixture } from '../helpers/renderPipeline';
 import { packDepthSampleArea, unpackDepthSamples } from '../../src/renderer/depthQuery';
 import { readFloatPixelsAsync } from '../../src/renderer/WebGLReadback';
 
@@ -23,15 +22,15 @@ describe('GPU depth query contract', () => {
   });
 
   it('returns no result before preparation, limits concurrent reads and discards disposed results', async () => {
-    const renderer = new Renderer({ canvas: {} as HTMLCanvasElement });
+    const {engine: renderer, pipeline} = renderFixture();
     const area = { x: 0.5, y: 0.5, size: 0.07 };
+    renderer.camera = undefined; renderer.update();
     expect(await renderer.readDepthSamples(area)).toBeUndefined();
+    const Camera = (await import('../../src/scene/Camera')).default; renderer.camera = new Camera({projection: 'perspective'}); renderer.update();
     let resolve!: (samples: Float32Array) => void;
     const read = vi.fn(() => new Promise<Float32Array>(r => { resolve = r; }));
     const dispose = vi.fn();
-    (renderer as unknown as { _pipeline: RenderingPipeline })._pipeline = {
-      readDepthSamples: read, dispose
-    } as unknown as RenderingPipeline;
+    pipeline.readDepthSamples = read; pipeline.dispose = dispose;
     const first = renderer.readDepthSamples(area);
     expect(await renderer.readDepthSamples(area)).toBeUndefined();
     expect(read).toHaveBeenCalledOnce();
@@ -45,12 +44,10 @@ describe('GPU depth query contract', () => {
   });
 
   it('releases the read guard after a GPU failure', async () => {
-    const renderer = new Renderer({ canvas: {} as HTMLCanvasElement });
+    const {engine: renderer, pipeline} = renderFixture();
     const read = vi.fn().mockRejectedValueOnce(new Error('device lost'))
       .mockResolvedValueOnce(new Float32Array(49));
-    (renderer as unknown as { _pipeline: RenderingPipeline })._pipeline = {
-      readDepthSamples: read
-    } as unknown as RenderingPipeline;
+    pipeline.readDepthSamples = read;
     const area = { x: 0.5, y: 0.5, size: 0.07 };
     await expect(renderer.readDepthSamples(area)).rejects.toThrow('device lost');
     expect(await renderer.readDepthSamples(area)).toHaveLength(49);

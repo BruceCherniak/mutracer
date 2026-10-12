@@ -197,8 +197,10 @@ export default class Render {
     this._engine.lastError = undefined;
     try { return this._refine(); }
     catch (error) { this._engine.lastError = this._engine._notifyError(error); return this._status = 'error'; }
+    finally { this._engine._reportShaderProgress(); }
   }
   private _refine(): RenderStatus {
+    if (this._engine._initializationError) throw this._engine._initializationError;
     this._refreshDenoiser();
     if (!this._engine._ready) { void this._engine.init().catch(error => { if (!this._disposed) this._status = 'error'; this._engine._notifyError(error); }); return this._status = 'preparing'; }
     const target = this._synchronize();
@@ -209,7 +211,7 @@ export default class Render {
     target.setPreserveOIDNOutput?.(!!this._filter && this._schedule() === 'progressive');
     const limit = this._nextSampleTarget();
     if (this.samples < limit) {
-      if (target.draw(this._engine._inputs.value!, limit)) return this._status = 'compiling';
+      if (target.trace(this._engine._inputs.value!, limit)) return this._status = 'compiling';
     }
     this._maybeDenoise();
     if (this._denoisePending) return this._status = this.converged ? 'denoising' : 'converging';
@@ -222,7 +224,7 @@ export default class Render {
     this._refreshDenoiser(); const target = this._synchronize();
     if (!target) return;
     target.activate();
-    if (this.samples < 1) this._status = target.draw(this._engine._inputs.value!, 1) ? 'compiling' : 'converging';
+    if (this.samples < 1) this._status = target.trace(this._engine._inputs.value!, 1) ? 'compiling' : 'converging';
     this._maybeDenoise();
   }
   private _schedule() { return this._denoiserOptions?.schedule ?? 'converged'; }
@@ -242,6 +244,7 @@ export default class Render {
     this._filterKey = key; const revision = ++this._filterRevision;
     this._cancelDenoise();
     if (this._filter) this._engine._releaseDenoiser(this._filter);
+    this._target?.invalidateDenoisedOutput();
     this._filter = undefined; this._filterPending = undefined;
     if (!options) return;
     const type = options.type ?? (options.model || options.weightsBaseUrl ? 'oidn' : 'jnlm');
@@ -271,18 +274,20 @@ export default class Render {
   }
   private _cancelDenoise() { this._denoiseRevision++; this._target?.cancelOIDNDenoise?.(); this._denoisePending = undefined; this._denoisedSamples = 0; }
   /** @internal */ _inputsChanged() { this._cancelDenoise(); }
-  /** @internal */ _displayChanged() { this._cancelDenoise(); }
+  /** @internal */ _displayChanged() { this._cancelDenoise(); this._target?.invalidateDenoisedOutput(); }
   private _maybeDenoise(force = false) {
     const target = this._target, filter = this._filter;
     if (!target || !filter || this._denoisePending || this.samples < 1 || this._denoisedSamples === this.samples) return;
     if (!force && this._schedule() === 'converged' && !this.converged) return;
     if (!force && this._schedule() === 'progressive' && this.samples < this._nextSampleTarget()) return;
+    this._engine.display._configure(this);
+    target.activate(); target.drawPostProcess();
     const revision = ++this._denoiseRevision, samples = this.samples;
     // One shared scratch lease across all renders; queued stale jobs do no GPU work.
     const task = this._engine._enqueueDenoise(async () => {
       if (revision !== this._denoiseRevision || this._disposed) return;
       target.activate();
-      const complete = await target.performOIDNDenoise?.(filter, undefined, this._schedule() !== 'converged');
+      const complete = await target.performOIDNDenoise?.(filter, undefined, this._schedule());
       if (revision !== this._denoiseRevision || this._disposed) return;
       if (complete) { target.activate(); target.drawPostProcess(); this._denoisedSamples = samples; this._lastDenoiseTime = performance.now(); }
     });
@@ -351,7 +356,7 @@ export default class Render {
           check(); if (performance.now() - started > timeout) throw new Error(`Timed out rendering the offline ${name} pass.`);
           target!.activate(); target!.setOfflineRenderOptions({samplesPerBatch: batch, deferPostProcess: true, sampleSequenceOffset: offset});
           const before = target!.getTotalSamplesRendered(), batchStarted = performance.now();
-          this._status = target!.draw(camera, cap) ? 'compiling' : 'converging';
+          this._status = target!.trace(camera, cap) ? 'compiling' : 'converging';
           const count = target!.getTotalSamplesRendered();
           if (count !== previous) {
             previous = count; options.onProgress?.({stage: name, samples: Math.min(count, cap), targetSamples: cap});

@@ -12,7 +12,7 @@ describe('Engine commits inputs', () => {
     const {engine, camera, targets} = renderFixture();
     camera.transform = Array.from(camera.transform); camera.transform[12] = .123456789012345;
     engine.update(); const render = new Render(engine); render.refine();
-    const submitted = vi.mocked(targets[0].draw).mock.calls[0][0];
+    const submitted = vi.mocked(targets[0].trace).mock.calls[0][0];
     expect(submitted.transform[12]).toBe(.123456789012345);
     camera.transform[12] = 2; expect(submitted.transform[12]).toBe(.123456789012345); engine.dispose();
   });
@@ -59,4 +59,13 @@ describe('Engine commits inputs', () => {
     expect(pipeline.setMeshes).toHaveBeenCalledOnce(); render.refine(); expect(render.samples).toBe(2);
     expect(progress).toHaveBeenCalled(); engine.dispose();
   });
+});
+
+it('reports shared shader progress only when compilation advances', () => {
+  const {engine, pipeline} = renderFixture(); const progress = vi.fn(); engine.on('progress', progress);
+  const compilation = {status: 'compiling' as const, completedPipelineCount: 1, pipelineCount: 2};
+  vi.mocked(pipeline.getDiagnostics).mockReturnValue({shaderCompilation: compilation} as ReturnType<typeof pipeline.getDiagnostics>);
+  const render = new Render(engine); render.refine(); render.refine();
+  expect(progress).toHaveBeenCalledOnce(); expect(progress).toHaveBeenCalledWith({stage: 'shaders', progress: .5});
+  compilation.completedPipelineCount = 2; render.refine(); expect(progress).toHaveBeenLastCalledWith({stage: 'shaders', progress: 1}); engine.dispose();
 });

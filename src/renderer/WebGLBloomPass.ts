@@ -1,4 +1,4 @@
-import { constants, Renderer, Texture2D } from './webgl.js';
+import { constants, WebGLDevice, Texture2D } from './webgl.js';
 import { WebGLFullQuadPass } from './WebGLFullQuadPass.js';
 import {
   blendCompositeFragment,
@@ -27,7 +27,7 @@ export default class WebGLBloomPass {
     'color'
   >[] = [];
 
-  constructor(renderer: Renderer) {
+  constructor(renderer: WebGLDevice) {
     this._brightPass = new WebGLFullQuadPass('bloomBright', renderer, {
       shader: brightFragment,
       outputs: ['color'],

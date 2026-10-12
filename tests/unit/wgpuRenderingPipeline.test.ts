@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Camera from '../../src/scene/Camera';
-import makeWGPURenderingPipeline from '../../src/renderer/WGPURenderingPipeline';
+import {makeWGPURenderTargets} from '../../src/renderer/WGPURenderingPipeline';
 import type { OIDNWeb } from '../../src/renderer/WGPURenderingPipeline';
 
 // Keep the real pipeline and tile scheduler; replace GPU execution at the pass boundary.
@@ -46,6 +46,8 @@ const mocks = vi.hoisted(() => {
     setSampleTiles() {}
     getDiagnostics() { return {}; }
     getTargetMemoryBytes() { return 0; }
+    releaseTarget() {}
+    setTransmissiveOutputAlphaMin() {}
     useTarget() {}
     setQuality() {}
     updatePipeline() {}
@@ -101,7 +103,10 @@ function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) 
   const canvas = {
     getContext: () => ({ configure() {}, getCurrentTexture() { return {}; } })
   } as unknown as HTMLCanvasElement;
-  const pipeline = makeWGPURenderingPipeline(canvas, device);
+  const manager = makeWGPURenderTargets(canvas, device);
+  const pipeline = manager.createTarget('test');
+  pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'sobol', maxSamples: 2048, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, allowMultipleSamplesPerFrame: false});
+  pipeline.activate();
   pipeline.setSize(80, 64);
   return pipeline;
 }
@@ -126,13 +131,9 @@ describe('WebGPU offline sampling', () => {
     pipeline.setOfflineRenderOptions({ samplesPerBatch: 4, deferPostProcess: true, sampleSequenceOffset: 0 });
     pipeline.restartSamples();
     // Renderer applies these after configuring the offline batch on its first render.
-    pipeline.setBouncesAndClamping(6, 0);
-    pipeline.setDirectLightCandidates(2);
-    pipeline.setAlphaBlendStrategy('stochastic');
-    pipeline.setBevelSamples(2);
-    pipeline.draw(new Camera({projection: 'perspective'}), 8);
+    pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 8); pipeline.present();
     expect(pipeline.getTotalSamplesRendered()).toBe(4);
-    pipeline.draw(new Camera({projection: 'perspective'}), 8);
+    pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 8); pipeline.present();
     expect(pipeline.getTotalSamplesRendered()).toBe(8);
     expect(mocks.TracePass.latest.setSampleCount.mock.calls.map(([sample]) => sample)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     await pipeline.flushDiagnostics();
@@ -142,37 +143,18 @@ describe('WebGPU offline sampling', () => {
   it('keeps the realtime timing probe and re-enables it after returning from offline mode', async () => {
     const pipeline = createPipeline();
     pipeline.setOfflineRenderOptions({ samplesPerBatch: 4, deferPostProcess: true, sampleSequenceOffset: 0 });
-    pipeline.setBouncesAndClamping(6, 0);
-    pipeline.draw(new Camera({projection: 'perspective'}), 8);
+    pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 8); pipeline.present();
     expect(pipeline.getTotalSamplesRendered()).toBe(4);
     await pipeline.flushDiagnostics();
     pipeline.setOfflineRenderOptions({ samplesPerBatch: 0, deferPostProcess: false, sampleSequenceOffset: 0 });
-    pipeline.setBouncesAndClamping(3, 0);
+    pipeline.restartSamples();
     mocks.TracePass.latest.setSampleCount.mockClear();
-    pipeline.draw(new Camera({projection: 'perspective'}), 8);
+    pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 8); pipeline.present();
     expect(pipeline.getTotalSamplesRendered()).toBe(0);
     await pipeline.flushDiagnostics();
-    pipeline.draw(new Camera({projection: 'perspective'}), 8);
+    pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 8); pipeline.present();
     expect(pipeline.getTotalSamplesRendered()).toBe(1);
     expect(mocks.TracePass.latest.setSampleCount.mock.calls.map(([sample]) => sample)).toEqual([0, 0]);
-    await pipeline.flushDiagnostics();
-    pipeline.dispose();
-  });
-
-  it('does not re-enable a probe when offline rendering exits interactive preview', async () => {
-    const pipeline = createPipeline();
-    const camera = new Camera({projection: 'perspective'});
-    pipeline.needsRestartSample(camera, true);
-    expect(pipeline.isPreviewMode()).toBe(true);
-    pipeline.setOfflineRenderOptions({ samplesPerBatch: 4, deferPostProcess: true, sampleSequenceOffset: 0 });
-    pipeline.setPreviewParams({
-      enabled: false, resolutionScale: 0.5, bounces: 2, idleDelayMs: 150
-    });
-    expect(pipeline.isPreviewMode()).toBe(false);
-    pipeline.draw(camera, 8);
-    pipeline.draw(camera, 8);
-    expect(pipeline.getTotalSamplesRendered()).toBe(8);
-    expect(mocks.TracePass.latest.setSampleCount.mock.calls.map(([sample]) => sample)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     await pipeline.flushDiagnostics();
     pipeline.dispose();
   });
@@ -182,18 +164,18 @@ it('restarts accumulation after changing the sampling pattern', () => {
   const pipeline = createPipeline(false);
   const camera = new Camera({projection: 'perspective', fov: 45, aspect: 1, near: 0.1, far: 100});
   pipeline.setOfflineRenderOptions({samplesPerBatch:4,deferPostProcess:true,sampleSequenceOffset:0});
-  pipeline.draw(camera,4);
+  pipeline.activate(); pipeline.trace(camera,4); pipeline.present();
   expect(pipeline.getTotalSamplesRendered()).toBe(4);
   const trace=mocks.TracePass.latest;
   trace.setSampleCount.mockClear();
-  expect(pipeline.setSamplingPattern('zsobol',4)).toBe(true);
-  pipeline.draw(camera,4);
+  pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'zsobol', maxSamples: 4, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, allowMultipleSamplesPerFrame: false}); pipeline.activate(); pipeline.restartSamples();
+  pipeline.activate(); pipeline.trace(camera,4); pipeline.present();
   expect(trace.setSampleCount.mock.calls.map(([value])=>value)).toEqual([0,1,2,3]);
 });
 
 function completedDenoiser(): OIDNWeb {
   return {
-    tileExecute(opts) {
+    tileExecute(opts: Parameters<OIDNWeb['tileExecute']>[0]) {
       const image = {
         data: { size: opts.color.width * opts.color.height * 16 } as GPUBuffer,
         width: opts.color.width, height: opts.color.height
@@ -212,9 +194,8 @@ function displayedTexture() {
 
 async function denoisedPipeline() {
   const pipeline = createPipeline(false);
-  pipeline.setOIDNPreviewActive(true);
-  pipeline.draw(new Camera({projection: 'perspective'}), 1);
-  await pipeline.performOIDNDenoise(completedDenoiser(), undefined, true);
+  pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
+  await pipeline.performOIDNDenoise!(completedDenoiser(), undefined, 'progressive'); pipeline.present();
   return pipeline;
 }
 
@@ -222,17 +203,18 @@ describe('WebGPU denoised presentation transitions', () => {
   it('denoises the whole composition once and keeps raw coverage for presentation', async () => {
     const pipeline = createPipeline(false);
     vi.spyOn(mocks.TracePass.latest, 'hasShadowCatcher').mockReturnValue(true);
-    pipeline.draw(new Camera({projection: 'perspective'}), 1);
+    pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
     const compose = mocks.Pass.instances.get('compose')!;
     const rawInputs = compose.createPass.mock.lastCall![1];
     const denoiser = completedDenoiser();
     const execute = vi.spyOn(denoiser, 'tileExecute');
-    await pipeline.performOIDNDenoise(denoiser, undefined, true);
+    await pipeline.performOIDNDenoise!(denoiser, undefined, 'progressive');
     expect(execute).toHaveBeenCalledTimes(1);
     expect(compose.createPass.mock.lastCall![1]).toEqual(rawInputs);
     expect(execute.mock.lastCall![0].color.data).toBe(compose.getOutput('denoiseColor'));
     const finish = mocks.Pass.instances.get('OIDN composed display')!;
     expect(finish.createPass.mock.lastCall![1].composedTex).toBe(compose.getOutput('denoiseColor'));
+    pipeline.present();
     expect(displayedTexture()).toBe(finish.getOutput('color'));
     pipeline.dispose();
   });
@@ -240,10 +222,10 @@ describe('WebGPU denoised presentation transitions', () => {
   it('retains the explicitly configured alpha denoiser after composite RGB denoising', async () => {
     const pipeline = createPipeline(false);
     vi.spyOn(mocks.TracePass.latest, 'needsDenoiseAlpha').mockReturnValue(true);
-    pipeline.draw(new Camera({projection: 'perspective'}), 1);
+    pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
     const alpha = completedDenoiser();
     const execute = vi.spyOn(alpha, 'tileExecute');
-    await pipeline.performOIDNDenoise(completedDenoiser(), alpha);
+    await pipeline.performOIDNDenoise!(completedDenoiser(), alpha);
     expect(execute).toHaveBeenCalledOnce();
     expect(execute.mock.lastCall![0]).toMatchObject({
       color: { data: mocks.Pass.instances.get('OIDN composed display')!.getOutput('color') },
@@ -254,20 +236,20 @@ describe('WebGPU denoised presentation transitions', () => {
 
   it('publishes a completed composite when OIDN omits progress callbacks', async () => {
     const pipeline = createPipeline(false);
-    pipeline.draw(new Camera({projection: 'perspective'}), 1);
-    await pipeline.performOIDNDenoise({ tileExecute(opts) {
+    pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
+    await pipeline.performOIDNDenoise!({ tileExecute(opts: Parameters<OIDNWeb['tileExecute']>[0]) {
       opts.done({ data: { size: 80 * 64 * 16 } as GPUBuffer, width: 80, height: 64 });
       return () => {};
     } }, undefined);
+    pipeline.present();
     expect(displayedTexture()).toBe(mocks.Pass.instances.get('OIDN composed display')!.getOutput('color'));
     pipeline.dispose();
   });
 
   it('invalidates composed denoising when exposure changes without restarting samples', async () => {
     const pipeline = await denoisedPipeline();
-    pipeline.setOIDNPreviewActive(false);
     expect(pipeline.setToneMappingParams({ exposure: 2 })).toBe(true);
-    pipeline.drawPostProcess();
+    pipeline.drawPostProcess(); pipeline.present();
     expect(displayedTexture()).toBe(mocks.Pass.instances.get('compose')!.getOutput('color'));
     expect(pipeline.getTotalSamplesRendered()).toBe(1);
     pipeline.dispose();
@@ -275,8 +257,9 @@ describe('WebGPU denoised presentation transitions', () => {
 
   it('immediately restores a resized canvas from the completed presentation', async () => {
     const pipeline = await denoisedPipeline();
+    pipeline.present();
     const completedTexture = displayedTexture();
-    pipeline.setSize(160, 96);
+    pipeline.setSize(160, 96); pipeline.present();
     const snapshot = displayedTexture();
     expect(snapshot).toBe(completedTexture);
     expect(snapshot).toMatchObject({ width: 80, height: 64 });
@@ -292,15 +275,15 @@ describe('WebGPU denoised presentation transitions', () => {
     let options: Parameters<OIDNWeb['tileExecute']>[0];
     let started!: () => void;
     const ready = new Promise<void>((resolve) => { started = resolve; });
-    const pending = pipeline.performOIDNDenoise({
-      tileExecute(opts) {
+    const pending = pipeline.performOIDNDenoise!({
+      tileExecute(opts: Parameters<OIDNWeb['tileExecute']>[0]) {
         options = opts;
         started();
         return abort;
       }
-    }, undefined, true);
+    }, undefined, 'progressive');
     await ready;
-    pipeline.setSize(160, 96);
+    pipeline.setSize(160, 96); pipeline.present();
     const snapshot = displayedTexture();
     expect(snapshot).toMatchObject({ width: 80, height: 64 });
     expect(abort).toHaveBeenCalledOnce();
@@ -311,110 +294,17 @@ describe('WebGPU denoised presentation transitions', () => {
     pipeline.dispose();
   });
 
-  it('re-presents the completed frame when camera preview starts, then settles', async () => {
-    const pipeline = await denoisedPipeline();
-    const camera = new Camera({projection: 'perspective'});
-    pipeline.needsRestartSample(camera, true);
-    expect(pipeline.isPreviewMode()).toBe(true);
-    pipeline.draw(camera, 1);
-    const snapshot = displayedTexture();
-    expect(snapshot).toMatchObject({ width: 80, height: 64 });
-    // Composition is updated with raw samples while the snapshot is held.
-    // Settling must keep the displayed snapshot, not capture those raw samples.
-    pipeline.setPreviewParams({
-      enabled: false, resolutionScale: 0.5, bounces: 2, idleDelayMs: 150
-    });
-    pipeline.draw(camera, 1);
-    expect(displayedTexture()).toBe(snapshot);
-    await pipeline.performOIDNDenoise(completedDenoiser(), undefined, true);
-    expect(pipeline.getDiagnostics()).toMatchObject({ presentedTarget: 'final', presentedComplete: true });
-    pipeline.dispose();
-  });
-
-  it('holds the completed preview after OIDN lowers its adaptive resolution', async () => {
-    let now = 0;
-    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
-    try {
-      const pipeline = createPipeline(false);
-      pipeline.setSize(320, 256);
-      pipeline.setOIDNPreviewActive(true);
-      const camera = new Camera({projection: 'perspective'});
-      pipeline.needsRestartSample(camera, true);
-      pipeline.draw(camera, 1);
-      const denoiser = completedDenoiser();
-      const execute = denoiser.tileExecute;
-      denoiser.tileExecute = (opts) => {
-        now += 640;
-        return execute(opts);
-      };
-      expect(await pipeline.performOIDNDenoise(denoiser, undefined, true)).toBe(true);
-      expect(pipeline.isFirstFrame()).toBe(true);
-      expect(pipeline.getTotalSamplesRendered()).toBe(0);
-      pipeline.drawPostProcess();
-      const snapshot = displayedTexture();
-      expect(snapshot).toMatchObject({ width: 160, height: 128 });
-      pipeline.draw(camera, 1);
-      expect(displayedTexture()).toBe(snapshot);
-      await pipeline.performOIDNDenoise(completedDenoiser(), undefined, true);
-      expect(displayedTexture()).toMatchObject({ width: 48, height: 32 });
-      pipeline.dispose();
-    } finally {
-      clock.mockRestore();
-    }
-  });
-
-  it('invalidates completed samples when asynchronous GPU timing resizes a Toy Car-sized preview', async () => {
-    let now = 0;
-    const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
-    try {
-      let readbacks = 0;
-      const pipeline = createPipeline(true, () =>
-        ++readbacks === 1 ? 20_000_000n : 400_000_000n);
-      pipeline.setSize(2496, 1594);
-      pipeline.setOIDNPreviewActive(true);
-      pipeline.setPreviewParams({
-        enabled: true, resolutionScale: 1, bounces: 2, idleDelayMs: 150
-      });
-      const camera = new Camera({projection: 'perspective'});
-      pipeline.needsRestartSample(camera, true);
-      pipeline.draw(camera, 1);
-      await pipeline.flushDiagnostics();
-      pipeline.draw(camera, 1);
-      expect(pipeline.getTotalSamplesRendered()).toBe(1);
-      await pipeline.flushDiagnostics();
-      expect(pipeline.isFirstFrame()).toBe(true);
-      expect(pipeline.getTotalSamplesRendered()).toBe(0);
-      const denoiser = completedDenoiser();
-      const execute = vi.spyOn(denoiser, 'tileExecute');
-      expect(await pipeline.performOIDNDenoise(denoiser, undefined, true)).toBe(false);
-      expect(execute).not.toHaveBeenCalled();
-      // Even after the idle deadline, finish a sample at the new preview
-      // resolution before returning to the full-resolution denoise.
-      now = 200;
-      expect(pipeline.needsRestartSample(camera)).toBe(false);
-      expect(pipeline.isPreviewMode()).toBe(true);
-      pipeline.draw(camera, 1);
-      expect(pipeline.getTotalSamplesRendered()).toBe(1);
-      expect(await pipeline.performOIDNDenoise(denoiser, undefined, true)).toBe(true);
-      expect(execute).toHaveBeenCalledOnce();
-      pipeline.dispose();
-    } finally {
-      clock.mockRestore();
-    }
-  });
-
   it('stops holding the previous denoise when denoising is disabled or samples restart', async () => {
     const pipeline = await denoisedPipeline();
-    pipeline.setSize(160, 96);
+    pipeline.setSize(160, 96); pipeline.present();
     const snapshot = displayedTexture();
     pipeline.restartSamples();
-    pipeline.draw(new Camera({projection: 'perspective'}), 1);
+    pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
     expect(displayedTexture()).not.toBe(snapshot);
-    await pipeline.performOIDNDenoise(completedDenoiser(), undefined, true);
-    pipeline.setSize(240, 128);
+    await pipeline.performOIDNDenoise!(completedDenoiser(), undefined, 'progressive');
+    pipeline.setSize(240, 128); pipeline.present();
     const nextSnapshot = displayedTexture();
-    pipeline.setOIDNPreviewActive(false);
-    pipeline.draw(new Camera({projection: 'perspective'}), 1);
+    pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
     expect(displayedTexture()).not.toBe(nextSnapshot);
     pipeline.dispose();
   });
@@ -428,38 +318,5 @@ it('falls back to AgX for unknown tone mapping values', () => {
   compose.setUniform.mockClear();
   pipeline.setToneMappingParams({ toneMapping: 'removed-mode' as never });
   expect(compose.setUniform).toHaveBeenCalledWith('toneMappingParams', [0, 0]);
-  pipeline.dispose();
-});
-
-it('retains two resident outputs and presents preview until a complete final sample', async () => {
-  const pipeline = createPipeline(false);
-  const camera = new Camera({ projection: 'perspective' });
-  pipeline.setPreviewParams({ enabled: true, resolutionScale: 0.5, bounces: 2, idleDelayMs: 0 });
-  expect(pipeline.needsRestartSample(camera, true)).toBe(true);
-  pipeline.draw(camera, 1);
-  expect(pipeline.getDiagnostics()).toMatchObject({ presentedTarget: 'preview', presentedComplete: true });
-  const previewTexture = displayedTexture();
-  expect(pipeline.needsRestartSample(camera)).toBe(true);
-  pipeline.present(pipeline.finalTarget);
-  expect(displayedTexture()).toBe(previewTexture);
-  pipeline.draw(camera, 1);
-  expect(pipeline.getDiagnostics()).toMatchObject({ presentedTarget: 'final', presentedComplete: true });
-  expect(displayedTexture()).not.toBe(previewTexture);
-  pipeline.dispose();
-});
-
-it('can accumulate a third target without changing final samples or presenting it', () => {
-  const pipeline = createPipeline(false);
-  const camera = new Camera({ projection: 'perspective' });
-  pipeline.draw(camera, 2);
-  const finalImage = displayedTexture();
-  const third = pipeline.createTarget({ label: 'third' });
-  pipeline.drawTarget(third, camera, { sampleTarget: 3, timeBudgetMs: 21 });
-  expect(third.pipeline.getTotalSamplesRendered()).toBe(1);
-  pipeline.drawTarget(third, camera, { sampleTarget: 3, timeBudgetMs: 21 });
-  expect(third.pipeline.getTotalSamplesRendered()).toBe(2);
-  expect(pipeline.getTotalSamplesRendered()).toBe(1);
-  expect(displayedTexture()).toBe(finalImage);
-  expect(pipeline.getDiagnostics().targets?.map(target => target.label)).toEqual(['final', 'preview', 'third']);
   pipeline.dispose();
 });

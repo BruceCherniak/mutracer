@@ -1320,11 +1320,11 @@ ${rayTraceCompute({
     }
   }
 
-  async readDepthSamples(area: DepthSampleArea): Promise<Float32Array | undefined> {
+  async readDepthSamples(area: DepthSampleArea, aspect?: number): Promise<Float32Array | undefined> {
     const tracePipeline = this._rayTracePipeline;
     const groups = this._rayTraceBindGroups;
     if (!tracePipeline || !groups || !this._depthCompute || this._isCompilingShader) return;
-    const packed = packDepthSampleArea(area, this._width / this._height);
+    const packed = packDepthSampleArea(area, aspect ?? this._width / this._height);
     if (this._depthTracePipeline !== tracePipeline || !this._depthPipeline) {
       const outputLayout = this._shaderCache.createBindGroupLayout({
         label: 'Depth query output',

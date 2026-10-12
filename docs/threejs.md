@@ -8,17 +8,19 @@ before rendering each frame. Three.js is an optional peer dependency
 ```ts
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { Renderer, THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
+import { Engine, Render, THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
 
 const threeScene = new THREE.Scene();
 threeScene.add((await new GLTFLoader().loadAsync('model.glb')).scene);
 
-const renderer = new Renderer({ canvas });
+const engine = new Engine({canvas});
+const final = new Render(engine);
 const sync = new THREESceneSync(threeScene);
 
 function frame() {
   sync.update();
-  renderer.render(sync.scene, fromTHREECamera(threeCamera));
+  engine.scene = sync.scene; engine.camera = fromTHREECamera(threeCamera);
+  engine.update(); final.refine(); engine.display.present(final);
   requestAnimationFrame(frame);
 }
 frame();
@@ -39,7 +41,8 @@ threeMesh.rotation.y += 0.01;
 threeMaterial.color.setRGB(0.4, 0.2, 0.1);
 threeMaterial.roughness = 0.6;
 sync.update();
-renderer.render(sync.scene, fromTHREECamera(threeCamera));
+engine.scene = sync.scene; engine.camera = fromTHREECamera(threeCamera);
+  engine.update(); final.refine(); engine.display.present(final);
 ```
 
 Transforms, membership, lights, background and material properties need no
@@ -66,7 +69,7 @@ tangent, uv, uv1 or index buffers replace the converted geometry, which costs
 a [full mesh update](./updates.md#full-mesh-updates); skinning and morph
 targets update arrays in place instead.
 
-`update()` returns `void`. Render `sync.scene` afterwards; Renderer detects
+`update()` returns `void`. Render `sync.scene` afterwards; Engine.update detects
 the converted scene changes.
 
 `new THREESceneSync(threeScene, options?)` accepts an optional

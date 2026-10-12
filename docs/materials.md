@@ -88,7 +88,7 @@ assigning a new texture, image or UV array is detected automatically.
 `'mask'` (alpha test against `alphaCutoff`) or `'blend'`. `mapAlphaUsage`
 selects how `map`'s alpha channel is used:
 `'opaque'` (default), `'alpha'` or `'transmission'`. Blended primary rays follow
-`renderer.alphaBlendStrategy`.
+`render.alphaBlendStrategy`.
 
 ## Renderer extensions
 
@@ -100,7 +100,7 @@ selects how `map`'s alpha channel is used:
 
 **Shader bevel.** `bevelSize > 0` rounds hard edges in shading only, without
 changing geometry or silhouettes. It samples nearby surface normals of the same
-instance, similar to Blender Cycles' Bevel node. `renderer.bevelSamples`
+instance, similar to Blender Cycles' Bevel node. `render.bevelSamples`
 trades noise for speed. A radius of 0.5–2% of the model size is a reasonable
 start.
 

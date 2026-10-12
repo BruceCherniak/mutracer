@@ -1,16 +1,15 @@
 // Run npm run dev and open /tests/gpu/depthQuery.html on a real GPU.
 import * as THREE from 'three';
-import { Renderer, THREESceneSync, fromTHREECamera } from '../../src/main.js';
+import { Engine, Render, THREESceneSync, fromTHREECamera } from '../../src/main.js';
 import { measureAreaDepth, pickFocusDepth } from '../../viewer/src/engine/areaFocus.js';
 
-async function fixture(webgl: boolean, layout: Renderer['bvhLayout'] = 'bvh2') {
+async function fixture(webgl: boolean, layout: Engine['bvhLayout'] = 'bvh2') {
   const canvas = document.createElement('canvas');
   document.body.append(canvas);
-  const renderer = new Renderer({ canvas, preferWebGPU: !webgl });
+  const renderer = new Engine({ canvas, backend: webgl ? 'webgl' : 'auto' });
   renderer.bvhLayout = layout;
-  renderer.previewEnabled = false;
-  renderer.setDenoiser(false);
-  renderer.setSize(48, 32);
+  renderer.display.setSize(48, 32);
+  const final = new Render(renderer);
   const root = new THREE.Scene();
   root.add(new THREE.AmbientLight(0xffffff, 1));
   const material = new THREE.MeshStandardMaterial({ color: 0x7799aa });
@@ -24,14 +23,15 @@ async function fixture(webgl: boolean, layout: Renderer['bvhLayout'] = 'bvh2') {
   camera.updateMatrixWorld();
   const sync = new THREESceneSync(root);
   sync.update();
-  await renderer.renderOfflineFrame(sync.scene, fromTHREECamera(camera), { samples: 8 });
-  return { renderer, sync, camera, box, root, material, canvas };
+  renderer.scene = sync.scene; renderer.camera = fromTHREECamera(camera); renderer.update();
+  await final.converge({samples: 8});
+  return { renderer, final, sync, camera, box, root, material, canvas };
 }
 
 async function baseline(webgl: boolean) {
-  const { renderer, sync, canvas } = await fixture(webgl);
+  const { renderer, final, sync, canvas } = await fixture(webgl);
   try {
-    const { data } = await renderer.readPixels('hdr');
+    const { data } = await final.readPixels('hdr');
     const { adapterName: adapterInfo } = await renderer.init();
     return { backend: renderer.backend, adapterInfo, data: Array.from(data) };
   } finally {
@@ -39,8 +39,8 @@ async function baseline(webgl: boolean) {
   }
 }
 
-async function run(webgl: boolean, layout: Renderer['bvhLayout'] = 'bvh2') {
-  const { renderer, sync, canvas, root, camera, box } = await fixture(webgl, layout);
+async function run(webgl: boolean, layout: Engine['bvhLayout'] = 'bvh2') {
+  const { renderer, final, sync, canvas, root, camera, box } = await fixture(webgl, layout);
   const lines: string[] = [];
   const check = (condition: boolean, message: string) => {
     if (!condition) throw new Error(message);
@@ -54,10 +54,10 @@ async function run(webgl: boolean, layout: Renderer['bvhLayout'] = 'bvh2') {
   };
   const render = async (samples = 1) => {
     sync.update();
-    await renderer.renderOfflineFrame(sync.scene, fromTHREECamera(camera), { samples });
+    renderer.scene = sync.scene; renderer.camera = fromTHREECamera(camera); renderer.update(); await final.converge({samples});
   };
   try {
-    const before = (await renderer.readPixels('hdr')).data;
+    const before = (await final.readPixels('hdr')).data;
     for (const area of [{ x: 0.5, y: 0.5, size: 0.03 }, { x: 0.85, y: 0.3, size: 0.05 }]) {
       const samples = await query(area.x, area.y, area.size);
       const depth = pickFocusDepth(Array.from(samples).filter(d => d > 0), 49);
@@ -65,11 +65,12 @@ async function run(webgl: boolean, layout: Renderer['bvhLayout'] = 'bvh2') {
       check(depth !== null && expected !== null && Math.abs(depth - expected) < 0.001,
         `GPU matches CPU: ${depth?.toFixed(5)} vs ${expected?.toFixed(5)}`);
     }
-    const after = (await renderer.readPixels('hdr')).data;
+    const after = (await final.readPixels('hdr')).data;
     check(before.every((v, i) => v === after[i]), 'Query leaves raw beauty pixels unchanged');
     box.position.z = 1;
     sync.update();
-    await renderer.renderOfflineFrame(sync.scene, fromTHREECamera(camera), { samples: 8 });
+    renderer.scene = sync.scene; renderer.camera = fromTHREECamera(camera); renderer.update();
+  await final.converge({samples: 8});
     const moved = await query(0.5, 0.5, 0.03);
     check(Math.abs(moved[24] - 2.8) < 0.001, 'Updated GPU transforms: 2.8');
     root.remove(...root.children);

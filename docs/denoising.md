@@ -4,30 +4,29 @@ MuTracer has two denoisers. Both filter the complete composed image using
 albedo and normal guides.
 
 - **JNLM** (default): a built-in joint non-local means filter, on WebGPU and
-  WebGL 2. It needs no download and takes about 17 ms for a 1080p image.
+  WebGL 2. It needs no weight download.
 - **OIDN**: [Intel Open Image Denoise](https://www.openimagedenoise.org/)
   networks, run through [`oidn-web`](https://www.npmjs.com/package/oidn-web),
   WebGPU only. They take longer and need weights, but are cleaner at one or
   two samples per pixel, for example for denoising while the camera moves.
 
 ```ts
-const renderer = new Renderer({ canvas });
-await renderer.setDenoiser();                               // JNLM
-await renderer.setDenoiser({ type: 'oidn' });               // OIDN standard
-await renderer.setDenoiser({ model: 'small' });             // OIDN small
-await renderer.setDenoiser(false);                          // remove it
+const engine = new Engine({canvas});
+const final = new Render(engine, {denoiser: {type: 'jnlm'}});
+final.denoiser = {type: 'oidn', model: 'standard'};
+final.denoiser = null; // disable
 ```
 
-or `new Renderer({ canvas, denoiser: true })`. `type` defaults to `'jnlm'`,
-or to `'oidn'` when `model` or `weightsBaseUrl` is given.
+`type` defaults to jnlm, or oidn when model or weightsBaseUrl is supplied.
+Each render has its own configuration and scheduling. Converge waits for its
+configured filter; intermediate progressive inference reports converging and
+final inference reports denoising. Engine caches equal network configurations
+and weights, releasing the network after its last render lease is released.
 
-With a denoiser attached, when `maxSamples` is reached `render()` returns
-`'denoising'` and then `'finished'` with the denoised
-image. `renderOfflineFrame` denoises before resolving. A lower `maxSamples`
-(e.g. 64–256) is usually enough.
-
-For OIDN, `setDenoiser()` rejects on WebGL or when the weights fail to load.
-The OIDN code is loaded with a dynamic import, so it costs nothing until used.
+OIDN is loaded lazily. On WebGL its configuration warns and leaves this render
+unfiltered; JNLM works on both backends. Current loading and inference failures
+are reported through engine error events. Replaced/disposed network prewarm
+results are discarded.
 
 ## Options
 
@@ -41,11 +40,8 @@ The OIDN code is loaded with a dynamic import, so it costs nothing until used.
 | `normalBandwidth` | JNLM encoded normal tolerance, `0.0001–10`. Default `0.05` |
 | `iterations` | JNLM filter passes, integer `1–4`. Default `2` |
 | `model` | OIDN network: `'standard'`, `'small'` or `'cleanAuxLarge'` |
-| `previewModel` | OIDN network for while-converging preview frames, or `false` to use `model`. Default `'small'` |
 | `weightsBaseUrl` | Directory containing the OIDN `.tza` files |
-| `whileConverging` | Denoise previews and intermediate frames, not only the final image. Default `false` |
-| `sampleInterval` | Fixed samples between denoised updates with `whileConverging`. Default adaptive; see [denoising while converging](#denoising-while-converging) |
-| `coalesceSceneUpdates` | With `whileConverging`, render the latest scene state after a denoise instead of restarting on every scene change. Default `false` |
+| `schedule` | `'converged'` (default), `'progressive'`, or `'every-sample'` |
 | `maxTileSize` | Maximum OIDN tile size; chosen by oidn-web by default |
 | `signal` | `AbortSignal` for the OIDN weight download |
 
@@ -73,29 +69,24 @@ static directory. If you only use standard/small, copying the two files from
 `node_modules/@meimu/mutracer/oidn/weights/` is sufficient:
 
 ```ts
-await renderer.setDenoiser({ weightsBaseUrl: '/assets/oidn/weights/' });
+final.denoiser = {type: 'oidn', weightsBaseUrl: '/assets/oidn/weights/'};
 ```
 
 Explicit URLs never fall back to the CDN. Every download is checked for the
 TZA file signature. The weights use Apache-2.0 (`oidn/weights/LICENSE.txt`).
 
-## Denoising while converging
+## Scheduling
 
 ```ts
-await renderer.setDenoiser({ whileConverging: true });
+final.denoiser = {type: 'oidn', model: 'standard', schedule: 'progressive'};
+preview.denoiser = {type: 'oidn', model: 'small', schedule: 'every-sample'};
 ```
 
-- **While the camera moves**, the interactive preview is denoised (with OIDN,
-  by the `previewModel` network, `small` by default) at a resolution lowered
-  until the denoiser keeps up. A camera change cancels a settled denoise that
-  is still running.
-- **While accumulating**, the image is re-denoised each time the sample count
-  doubles (1, 4, 8, 16, …), so the number of denoises grows logarithmically
-  and does not depend on resolution. Long batches still update at least every
-  10 seconds. Pass `sampleInterval` for a fixed number of samples between
-  updates instead.
-- **For animation playback**, pass `coalesceSceneUpdates: true` to render the
-  latest scene state after each denoise instead of restarting on every change.
+Converged filters the final sample budget. Progressive filters sample 1,
+then 4, 8, 16, … and the final budget, with a ten-second limit between
+updates. Every-sample filters every complete sample of its render. Coalescing
+continuous scene/camera edits is application loop policy; the engine accepts
+edits only when update is called. See [progressive rendering](./progressive-rendering.md).
 
 ## Tuning JNLM
 
@@ -103,24 +94,24 @@ await renderer.setDenoiser({ whileConverging: true });
 more noise at low sample counts and more detail at high ones.
 
 ```ts
-await renderer.setDenoiser({ strength: 1.5 });    // filter more
+final.denoiser = {type: 'jnlm', strength: 1.5};    // filter more
 ```
 
 JNLM settings are available through `DenoiserOptions`. Omitted settings use
 the exported `DEFAULT_JNLM_OPTIONS`; `JNLMOptions` is the corresponding type.
-Calling `setDenoiser` applies a fresh configuration to the existing sample
+Assigning `render.denoiser` applies a fresh configuration to the existing sample
 accumulation, so include the settings you want to retain on each call.
 
 ```ts
 import { DEFAULT_JNLM_OPTIONS } from '@meimu/mutracer';
 
-await renderer.setDenoiser({
+final.denoiser = {
   type: 'jnlm',
   ...DEFAULT_JNLM_OPTIONS,
   strength: 1.2,
   searchRadius: 7,
   albedoBandwidth: 0.3
-});
+};
 ```
 
 Larger search windows cost more but find more matching neighbors. Smaller
@@ -130,14 +121,16 @@ passes remove broader noise patches and can soften detail. Invalid parameters
 reject before replacing the active filter. These settings work on both WebGPU
 and WebGL 2; OIDN ignores JNLM settings.
 
-## Custom OIDN setups
+## Lower-level OIDN loading
 
-`@meimu/mutracer/oidn` exposes `initializeOIDN(renderer, options)` and
-`initializeOIDNFromURL(renderer, url, options)` for custom weights; they
-attach the result to `renderer.oidn`, which denoises with the mode last set by
-`setDenoiser()` (the final image only by default).
+The `/oidn` entry exposes initializeOIDN(engine, options) and
+initializeOIDNFromURL(engine, url, options). They initialize the engine, create
+and return a network without attaching it. The caller owns disposal. They
+require WebGPU. Render.denoiser currently accepts built-in configurations.
 
-## How JNLM works
+## Implementation notes
+
+### How JNLM works
 
 The weights follow Rousselle, Manzi and Zwicker, *Robust Denoising using
 Feature and Color Information* (2013). Each pixel starts with a weighted mean of
@@ -171,5 +164,3 @@ transparent backgrounds are filtered too. Pixels that show the background
 directly are left as rendered.
 
 While-converging intermediate denoise batches report `'converging'`. Only denoising the final image at `maxSamples` reports `'denoising'`; `'finished'` means that final image is ready.
-
-`whileConverging` enables preview automatically even when `previewEnabled` is false. Preview denoising reports `previewing`; only formal final denoising reports `denoising`. See [preview and animation](./updates.md#preview-and-animation).

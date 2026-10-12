@@ -5,33 +5,15 @@
  * WebGL 2 fallback.
  *
  * Build a {@link Scene} from {@link Mesh}es and lights (or convert a Three.js
- * scene with {@link fromTHREEScene}), then call {@link Renderer.render} once
+ * scene with {@link fromTHREEScene}), then call {@link Engine.update} and {@link Render.refine} once
  * per animation frame.
  *
  * @packageDocumentation
  */
 export { VERSION } from './version.js';
 
-// Renderer
-export {
-  default as Renderer} from './Renderer.js';
-export type {
-  BVHBuilder,
-  DenoiserOptions,
-  DenoiserType,
-  DepthSampleArea,
-  OfflineFrameRenderOptions,
-  OfflineFrameRenderResult,
-  PrebuildBVHOptions,
-  RenderStatus,
-  RendererDiagnostics,
-  RendererInfo,
-  RendererParams,
-  TextureAtlasLimits
-} from './Renderer.js';
 export type {
   AlphaBlendStrategy,
-  RenderOutput,
   ShaderCompilationDiagnostics,
   ToneMapping
 } from './renderer/RenderingPipeline.js';
@@ -111,8 +93,8 @@ export type { SamplingPattern } from './renderer/sampling.js';
 
 // Independent rendering mechanisms.
 export { default as Engine } from './Engine.js';
-export type { EngineParams, EngineInfo, EngineDiagnostics, PrepareOptions } from './Engine.js';
+export type { EngineParams, EngineInfo, EngineDiagnostics, PrepareOptions, BVHBuilder, DepthSampleArea, TextureAtlasLimits } from './Engine.js';
 export { default as Display } from './Display.js';
 export type { BlobOptions, DisplayChannel } from './Display.js';
 export { default as Render } from './Render.js';
-export type { RenderOptions, RenderSettings, ConvergeOptions, ConvergeResult } from './Render.js';
+export type { RenderOptions, RenderSettings, ConvergeOptions, ConvergeResult, DenoiserOptions, DenoiserType, RenderStatus } from './Render.js';

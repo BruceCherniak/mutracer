@@ -1,39 +1,38 @@
 # BVH construction
 
-`render()` automatically initializes the device, builds BVHs, uploads scene
-resources and compiles shaders. Keep calling it while status is `preparing`
-or `compiling`; the canvas retains its previous image.
+`engine.update()` and `render.refine()` initialize and prepare the current
+scene automatically. Refinement returns preparing during CPU construction and
+compiling during shader compilation; the canvas retains its previous image.
 
 ```ts
-renderer.on('progress', ({ stage, progress }) => loading.update(stage, progress));
-renderer.on('status', ({ status }) => {
+engine.on('progress', ({stage, progress}) => loading.update(stage, progress));
+function frame() {
+  engine.update(); const status = final.refine(); engine.display.present(final);
   if (status !== 'preparing' && status !== 'compiling') loading.hide();
-});
-function frame() { renderer.render(scene, camera); requestAnimationFrame(frame); }
-frame();
+  requestAnimationFrame(frame);
+}
 ```
 
 | Use case | Action |
 | --- | --- |
-| Normal rendering | Run the render loop |
-| Loading indicator | Listen to `progress` and `status` |
-| Benchmark preparation | Timestamp status events |
-| Offline image | Await `renderOfflineFrame()` |
-| Prepare a future scene while another renders | Optional `await renderer.prebuildBVH(nextScene)` |
-| Change builder, layout or spatial splits | Assign settings; the next render rebuilds automatically |
+| Normal rendering | Commit updates and refine the chosen render |
+| Loading indicator | Listen to engine progress and inspect render.status |
+| Offline image | Await render.converge |
+| Future scene | Optional engine.prepare(nextScene) |
+| Change BVH settings | Assign engine settings and call engine.update |
 
 ## Optional early construction
 
-`prebuildBVH(sceneOrMeshes, { onProgress?, signal? })` only builds static
+`prepare(scene, { onProgress?, signal? })` only builds static
 BLASes. It does not initialize a device, upload resources or compile shaders.
 Both options default to undefined; an aborted call rejects with its abort
 reason. Shared geometry builds once, dynamic/empty geometry is skipped.
 
 ```ts
-await renderer.prebuildBVH(nextScene, {
+await engine.prepare(nextScene, {
   onProgress: fraction => console.log(fraction), signal: controller.signal
 });
-console.log(renderer.getDiagnostics()?.bvh?.lastBuild);
+console.log(engine.getDiagnostics()?.bvh?.lastBuild);
 ```
 
 `lastBuild` contains `geometryCount` and `bvhTimeMs` (total builder time,
@@ -46,10 +45,10 @@ and the callback is not invoked.
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `renderer.bvhBuilder` | `'builtin'` | `'builtin'` (JavaScript) or `'tinybvh'` (WebAssembly, loaded on first use) |
-| `renderer.bvhWorkerCount` | `'auto'` | Maximum Workers per renderer: `'auto'` or a positive safe integer. Auto uses `hardwareConcurrency - 1`, clamped to 1–4; 1 when unavailable |
-| `renderer.bvhLayout` | `'bvh2'` | Layout of static TinyBVH BLASes: `'bvh2'`, `'bvh4'`, `'bvh-gpu'` or `'cwbvh'` |
-| `renderer.bvhSpatialSplits` | `false` | With `'tinybvh'`, build spatial-split BVHs (SBVH) |
+| `engine.bvhBuilder` | `'builtin'` | `'builtin'` (JavaScript) or `'tinybvh'` (WebAssembly, loaded on first use) |
+| `engine.bvhWorkerCount` | `'auto'` | Maximum Workers per engine: `'auto'` or a positive safe integer. Auto uses `hardwareConcurrency - 1`, clamped to 1–4; 1 when unavailable |
+| `engine.bvhLayout` | `'bvh2'` | Layout of static TinyBVH BLASes: `'bvh2'`, `'bvh4'`, `'bvh-gpu'` or `'cwbvh'` |
+| `engine.bvhSpatialSplits` | `false` | With `'tinybvh'`, build spatial-split BVHs (SBVH) |
 | `geometry.dynamic` | `false` | Refittable built-in BLAS for deforming geometry; see [dynamic geometry](./updates.md#dynamic-geometry) |
 
 Changes to builder/layout/spatial splits invalidate cached build configurations.
@@ -61,11 +60,11 @@ geometry builds on one Worker. Pools are reused and released by dispose().
 ## Caveats
 
 Progress counts completed tasks, including failed/stale tasks, rather than
-triangles or elapsed time. Renderer `progress` events cover device (0/1),
+triangles or elapsed time. Engine `progress` events cover device (0/1),
 BVH tasks and shader pipelines only during preparing/compiling. Explicit
 background prebuilds use their own `onProgress` callback. Shader progress is
 measured on both backends; WebGL diagnostics aggregate compiled programs
-for the renderer lifetime.
+for the engine lifetime.
 Stale results are discarded. Without Worker support, construction runs on
 the calling thread. More Workers increase simultaneous memory use, and
 summed builder time can exceed wall time. Disposal cancels active and queued
@@ -82,13 +81,13 @@ quality is the same. The TLAS and dynamic BLASes always use it.
 
 ### TinyBVH WebAssembly
 
-`renderer.bvhBuilder = 'tinybvh'` builds static BLASes with TinyBVH compiled
+`engine.bvhBuilder = 'tinybvh'` builds static BLASes with TinyBVH compiled
 to WebAssembly, about 1.3 times faster than the built-in builder. The module
 (about 90 KB) is fetched on first use, so applications that keep the default
 never load it. If it fails to load, the renderer warns and falls back to the
 built-in builder.
 
-`renderer.bvhSpatialSplits = true` builds SBVHs. They lower traversal cost on
+`engine.bvhSpatialSplits = true` builds SBVHs. They lower traversal cost on
 some scenes, which can make rendering noticeably faster, but build three to
 five times slower.
 
@@ -97,7 +96,7 @@ between meshes to share its BLAS.
 
 ## Layouts
 
-`renderer.bvhLayout` applies to static TinyBVH BLASes, rebuilding them automatically when changed. All four
+`engine.bvhLayout` applies to static TinyBVH BLASes, rebuilding them automatically when changed. All four
 layouts work on WebGPU and WebGL 2.
 
 | Layout | Notes |
@@ -133,7 +132,7 @@ jsDelivr copy, then falls back to the built-in builder. See
 - An invalid input affects only its mesh. Worker startup, messaging or runtime
   failures retry with the same builder on the calling thread within the same
   preparation call; TinyBVH failures retry with the built-in builder. Each
-  fallback warns once per renderer.
+  fallback warns once per engine.
 - Concurrent preparation calls on one renderer are queued and check for missing BLASes when
   they start, so they do not repeat completed builds.
 - Height-map analysis, attribute generation, TLAS construction and per-frame

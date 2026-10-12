@@ -17,7 +17,7 @@ import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from './renderer/MergedMaterialData.j
 import { packDepthSampleArea, type DepthSampleArea } from './renderer/depthQuery.js';
 import { makeWGPURenderTargets } from './renderer/WGPURenderingPipeline.js';
 import { makeWebGLRenderTargets } from './renderer/WebGLRenderingPipeline.js';
-import { Renderer as WebGLRenderer } from './renderer/webgl.js';
+import { WebGLDevice as WebGLRenderer } from './renderer/webgl.js';
 import type { RenderPipeline, RenderTarget } from './renderer/renderPipeline.js';
 import type { RenderingDiagnostics } from './renderer/RenderingPipeline.js';
 import type { TinyBvhLayout } from './tinybvh/TinyBvhBuilder.js';
@@ -84,6 +84,7 @@ export default class Engine {
   private _lastBvhBuild?: { geometryCount: number; bvhTimeMs: number };
   private _lastBvhSettings = '';
   private _lastBudget = -1;
+  private _shaderProgress = '';
   private _events = new Events<EngineEvents>();
   private _pipeline?: RenderPipeline;
   private _webglRenderer?: WebGLRenderer;
@@ -205,6 +206,7 @@ export default class Engine {
     this._uploadedRevision = this._sceneRevision;
   }
   private _bvhConfig(): BvhBuildConfig { return {builder: this.bvhBuilder, layout: this.bvhLayout, spatialSplits: this.bvhSpatialSplits}; }
+  /** Builds static CPU BVHs for this scene without replacing GPU inputs. Options default undefined. */
   prepare(scene: Scene, options: PrepareOptions = {}): Promise<void> {
     const revision = this._bvhPreparationRevision;
     const preparation = this._bvhPreparationTail.then(async () => {
@@ -388,6 +390,14 @@ export default class Engine {
     const gl = this._webglRenderer?.gl, extension = gl?.getExtension('WEBGL_debug_renderer_info');
     return extension && gl ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : this._webglRenderer ? 'WebGL 2' : '';
   }
+  /** @internal */ _reportShaderProgress() {
+    const compilation = this._pipeline?.getDiagnostics().shaderCompilation;
+    if (!compilation) return;
+    const key = `${compilation.status}/${compilation.completedPipelineCount}/${compilation.pipelineCount}`;
+    if (key === this._shaderProgress) return;
+    this._shaderProgress = key;
+    this._events.emit('progress', {stage: 'shaders', progress: compilation.pipelineCount ? compilation.completedPipelineCount / compilation.pipelineCount : 1});
+  }
   /** Current shared preparation and resident target statistics. Default undefined before any work. */
   getDiagnostics(): EngineDiagnostics | undefined {
     if (!this._pipeline && !this._lastBvhBuild) return;
@@ -401,7 +411,12 @@ export default class Engine {
     packDepthSampleArea(area, 1);
     if (!this._ready || !this._committedCamera || this._readingDepth) return;
     this._readingDepth = true;
-    try { return await this._pipeline!.readDepthSamples(this._committedCamera, area); }
+    try {
+      const camera = cameraSnapshot(this._committedCamera);
+      camera.aspect ??= this.display.canvas.width / this.display.canvas.height;
+      const result = await this._pipeline!.readDepthSamples(camera, area);
+      return this._disposed ? undefined : result;
+    }
     finally { this._readingDepth = false; }
   }
   /** Releases all renders, shared resources, CPU workers and owned denoisers. */
@@ -414,6 +429,7 @@ export default class Engine {
     this._denoiserCache.clear();
     this._weights.clear(); this._events.clear();
   }
+  /** @internal */ get _initializationError() { return this._pipelineInitError; }
   /** @internal */ get _ready() { return !!this._pipeline && this._uploadedRevision === this._sceneRevision && !!this._committedScene && !!this._committedCamera && !this._disposed; }
   /** @internal */ get _inputs() { return {scene: this._sceneRevision, camera: this._cameraRevision, value: this._committedCamera}; }
   /** @internal */ _register(render: Render) { if (this._disposed) throw new Error('Engine is disposed.'); this._renders.add(render); }

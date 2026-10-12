@@ -58,13 +58,13 @@ describe('fallback', () => {
     const {engine, targets} = renderFixture({tiles: 3, fits: false});
     const preview = new Render(engine), final = new Render(engine, {fallback: preview});
     final.refine(); final.refine(); final.refine();
-    expect(targets[1].draw).toHaveBeenCalledTimes(3); expect(final.samples).toBe(1); expect(preview.samples).toBe(1);
-    final.refine(); expect(targets[1].draw).toHaveBeenCalledTimes(3); engine.dispose();
+    expect(targets[1].trace).toHaveBeenCalledTimes(3); expect(final.samples).toBe(1); expect(preview.samples).toBe(1);
+    final.refine(); expect(targets[1].trace).toHaveBeenCalledTimes(3); engine.dispose();
   });
   it('does not refine a current fallback or one unnecessary for a fast final', () => {
     const {engine, targets} = renderFixture({fits: false});
     const preview = new Render(engine), final = new Render(engine, {fallback: preview});
-    preview.refine(); final.refine(); expect(targets[0].draw).toHaveBeenCalledOnce(); engine.dispose();
+    preview.refine(); final.refine(); expect(targets[0].trace).toHaveBeenCalledOnce(); engine.dispose();
     const f = renderFixture(); const p = new Render(f.engine), r = new Render(f.engine, {fallback: p}); r.refine();
     expect(p.samples).toBe(0); f.engine.dispose();
   });

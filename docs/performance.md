@@ -15,30 +15,25 @@ A tuning checklist. Each item links to the page with the details.
 
 ## Responsiveness
 
-- Keep `previewEnabled` on for camera controls and editing. The preview
-  resolution adapts to the measured frame time (target `previewTargetFrameMs` ms)
-  between 0.25 and `previewMaxResolutionScale`; `previewBounces` sets its depth.
-  When [denoising while converging](./denoising.md#denoising-while-converging),
-  denoise time also lowers it, down to 0.125.
-- Large frames are split into tiles that target `maxTimePerTile` ms of GPU
-  time, which keeps the page responsive. Raise it for throughput in a
-  background or export tab.
-- `allowMultipleSamplesPerFrame = true` lets fast GPUs add several samples per
-  `render()`.
-- For exports, `renderOfflineFrame` with `targetBatchTimeMs` adapts batch sizes
+- Use a preview Render with cheaper quality and optional adaptiveResolution:
+  `{targetFrameMs: 20, minScale: .25}`, plus resolutionScale .5. Choose it during
+  motion and configure final.fallback once; see [progressive rendering](./progressive-rendering.md).
+- timeBudgetMs (default 21) bounds each render's tile cost. Raise it for exports.
+- allowMultipleSamplesPerFrame adds several samples per refine when time permits.
+- For exports, `render.converge` with `targetBatchTimeMs` adapts batch sizes
   to the GPU; omit `previewIntervalMs` for maximum throughput.
 
 ## Scene setup
 
 - Share `Geometry`, `OpenPBRMaterial` and `Texture` objects. Shared geometry
   shares its BLAS and GPU buffers.
-- For large scenes, try `renderer.bvhBuilder = 'tinybvh'` and build BVHs up
-  front with optional `await renderer.prebuildBVH(nextScene)`. Tune `bvhWorkerCount` for
+- For large scenes, try `engine.bvhBuilder = 'tinybvh'` and build BVHs up
+  front with optional `await engine.prepare(nextScene)`. Tune `bvhWorkerCount` for
   parallel construction across geometries; see [BVH](./bvh.md).
 - With Three.js, keep one `THREESceneSync` for the whole session rather than
   converting again with `fromTHREEScene`.
 - Textures share an atlas bounded by `textureAtlasBudgetBytes`; larger textures
-  are downscaled. Check `renderer.getDiagnostics()?.textureAtlas`.
+  are downscaled. Check `engine.getDiagnostics()?.textureAtlas`.
 
 ## Animation and editing
 
@@ -71,19 +66,17 @@ that compile on first use. Show a status while compiling, as the examples do.
 
 ## Diagnostics
 
-`renderer.getDiagnostics()` reports the backend and adapter, shader
+`engine.getDiagnostics()` reports the backend and adapter, shader
 compilation times, BVH statistics, light sampling setup and GPU trace timing.
-`presentedTarget` is `preview` or `final` after the first complete image
+`presentedTarget` is the presented render label after the first complete image
 (`undefined` beforehand); `presentedComplete` is initially `false`.
 `targets` lists each resident accumulation's `label`, `width`, `height` and
-allocated GPU payload `bytes`, including its denoise inputs/outputs and bloom
-resources when allocated. It excludes shared scene data, shader/driver overhead
+allocated GPU payload `bytes`, including its retained outputs. It excludes shared scene data, shader/driver overhead
 and resources queued for release.
 
 Preview and final keep independent outputs. Switching uses their complete
 images without reallocating them; final's first tiled sample keeps preview on
 screen until it completes. Adaptive resolution may rebuild only the preview
 target; its previous complete image remains available through the rebuild.
-Both targets remain resident even when preview is disabled. WebGL retains its
-native-resolution preview at one megapixel and below; account for that extra
-memory when choosing the canvas size.
+Targets are created lazily and remain resident until disposed. Resolution,
+quality and interaction exceptions are explicit application choices.

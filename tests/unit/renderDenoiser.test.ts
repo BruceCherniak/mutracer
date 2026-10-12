@@ -59,3 +59,25 @@ describe('per-render denoising', () => {
     finally {engine.dispose(); warn.mockRestore();}
   });
 });
+
+it('composes an invisible render with current display settings before convergence denoising', async () => {
+  const {engine, targets} = renderFixture(); engine.display.toneMappingExposure = 2;
+  const render = new Render(engine, {width: 256, height: 256, denoiser: {type: 'jnlm'}});
+  await render.converge({samples: 2});
+  expect(targets[0].setToneMappingParams).toHaveBeenCalledWith(expect.objectContaining({exposure: 2}));
+  expect(vi.mocked(targets[0].setToneMappingParams).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(targets[0].performOIDNDenoise!).mock.invocationCallOrder[0]);
+  expect(targets[0].present).not.toHaveBeenCalled(); engine.dispose();
+});
+it('invalidates a completed filter when disabled without discarding samples', async () => {
+  const {engine, targets} = renderFixture(); const render = new Render(engine, {maxSamples: 1, denoiser: {type: 'jnlm'}});
+  render.refine(); await settle(); vi.mocked(targets[0].invalidateDenoisedOutput).mockClear();
+  render.denoiser = null; render.refine();
+  expect(render.samples).toBe(1); expect(targets[0].invalidateDenoisedOutput).toHaveBeenCalledOnce(); engine.dispose();
+});
+it('denoises again after display settings change without tracing another sample', async () => {
+  const {engine, targets} = renderFixture(); const render = new Render(engine, {maxSamples: 1, denoiser: {type: 'jnlm'}});
+  render.refine(); await settle(); engine.display.present(render);
+  engine.display.shadowCatcherAlpha = .5; engine.display.present(render); render.refine(); await settle();
+  expect(render.samples).toBe(1); expect(targets[0].trace).toHaveBeenCalledOnce();
+  expect(targets[0].performOIDNDenoise).toHaveBeenCalledTimes(2); engine.dispose();
+});

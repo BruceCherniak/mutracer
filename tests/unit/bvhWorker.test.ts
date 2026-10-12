@@ -1,4 +1,4 @@
-import { prebuildStats } from '../helpers/prebuildStats';
+import { prepareStats } from '../helpers/prepareStats';
 import { getGeometryBvh, setGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import { afterEach, expect, it, vi } from 'vitest';
 import { BvhWorkerClient, BvhWorkerUnavailableError, type BvhBuildRequest } from '../../src/renderer/bvhWorkerClient';
@@ -10,7 +10,7 @@ import Geometry, { Attribute } from '../../src/scene/Geometry';
 import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import Texture from '../../src/scene/Texture';
-import Renderer from '../../src/Renderer';
+import Engine from '../../src/Engine';
 
 afterEach(() => { vi.unstubAllGlobals(); });
 
@@ -87,9 +87,9 @@ it('falls back within the call when Worker construction is blocked', async () =>
   vi.stubGlobal('Worker', class { constructor() { throw new Error('CSP blocked'); } });
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   try {
-    const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
+    const renderer = new Engine({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
     const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-    await prebuildStats(renderer, [mesh]);
+    await prepareStats(renderer, [mesh]);
     expect(getGeometryBvh(mesh.geometry)?.builder).toBe('builtin');
     expect((renderer as any)._bvhWorkerUnavailable).toBe(true);
     expect(warning).toHaveBeenCalledOnce();
@@ -106,8 +106,8 @@ it('prepares builtin renderer BLASes asynchronously when Workers are available',
   }
   vi.stubGlobal('Worker', AutoWorker);
   const geometry = createCubeGeometry();
-  const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
-  const build = prebuildStats(renderer, [new Mesh(geometry, new OpenPBRMaterial())]);
+  const renderer = new Engine({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
+  const build = prepareStats(renderer, [new Mesh(geometry, new OpenPBRMaterial())]);
   expect(getGeometryBvh(geometry)).toBeUndefined();
   await build;
   expect(new Uint8Array(getGeometryBvh(geometry)!.buffer)).toEqual(new Uint8Array(buildBLAS(geometry).buffer));
@@ -118,9 +118,9 @@ it('falls back after Worker failure without retrying the same geometry every fra
   const build = vi.spyOn(BvhWorkerClient.prototype, 'build').mockRejectedValue(new BvhWorkerUnavailableError('worker blocked'));
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   try {
-    const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
+    const renderer = new Engine({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
     const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-    await prebuildStats(renderer, [mesh]);
+    await prepareStats(renderer, [mesh]);
     expect(getGeometryBvh(mesh.geometry)?.builder).toBe('builtin');
     expect((renderer as any)._bvhWorkerUnavailable).toBe(true);
     expect(warning).toHaveBeenCalledOnce();
@@ -134,9 +134,9 @@ it('retries an input changed during Worker preparation instead of accepting the 
   const build = vi.spyOn(BvhWorkerClient.prototype, 'build').mockImplementation(() =>
     new Promise(resolve => { finish = resolve; }));
   try {
-    const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
+    const renderer = new Engine({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
     const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-    const pending = prebuildStats(renderer, [mesh]);
+    const pending = prepareStats(renderer, [mesh]);
     await Promise.resolve();
     mesh.geometry.markUpdated();
     finish(buildBLAS(mesh.geometry));
@@ -173,8 +173,8 @@ it('discards results when geometry, revision, or preparation settings change', a
       material.displacementMap = new Texture({ data: new Uint8Array(64).fill(128), width: 4, height: 4 });
       material.displacementScale = 0.1;
       const target = getPreparedMeshGeometry(mesh);
-      const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
-      const pending = prebuildStats(renderer, [mesh]); await Promise.resolve();
+      const renderer = new Engine({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
+      const pending = prepareStats(renderer, [mesh]); await Promise.resolve();
       if (change === 'revision') mesh.geometry.markUpdated();
       if (change === 'geometry') mesh.geometry = createCubeGeometry();
       if (change === 'displacement') material.displacementScale = 0.3;

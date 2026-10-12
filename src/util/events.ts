@@ -9,7 +9,7 @@ export class Events<T extends object> {
   }
   emit<K extends keyof T>(name: K, event: T[K]): void {
     for (const listener of [...this.listeners.get(name) ?? []]) {
-      try { listener(event); } catch (error) { console.error('Renderer event listener failed.', error); }
+      try { listener(event); } catch (error) { console.error('Event listener failed.', error); }
     }
   }
   clear(): void { this.listeners.clear(); }

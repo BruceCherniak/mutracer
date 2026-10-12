@@ -1,7 +1,7 @@
-import { prebuildStats } from '../helpers/prebuildStats';
+import { prepareStats } from '../helpers/prepareStats';
 import { getGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import { beforeEach, expect, it, vi } from 'vitest';
-import Renderer from '../../src/Renderer';
+import Engine from '../../src/Engine';
 import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { createCubeGeometry } from '../../src/util/commonGeometry';
@@ -15,27 +15,27 @@ vi.mock('../../src/tinybvh/TinyBvhBuilder', () => ({
 }));
 beforeEach(() => { vi.mocked(buildTinyBvh).mockClear(); });
 
-function createRenderer() {
-  return new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
+function createEngine() {
+  return new Engine({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
 }
 
 it('builds with the built-in builder by default without loading TinyBVH', async () => {
-  const renderer = createRenderer();
+  const renderer = createEngine();
   expect(renderer.bvhBuilder).toBe('builtin');
   const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-  await prebuildStats(renderer, [mesh]);
+  await prepareStats(renderer, [mesh]);
   expect(getGeometryBvh(mesh.geometry)?.builder).toBe('builtin');
   expect(buildTinyBvh).not.toHaveBeenCalled();
 });
 
 it('passes the spatial split option to TinyBVH preparation', async () => {
-  const renderer = createRenderer();
+  const renderer = createEngine();
   renderer.bvhBuilder = 'tinybvh';
   const mesh = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-  await prebuildStats(renderer, [mesh]);
+  await prepareStats(renderer, [mesh]);
   expect(buildTinyBvh).toHaveBeenLastCalledWith(mesh.geometry, 0, undefined, 'bvh2', false);
   renderer.bvhSpatialSplits = true;
   const other = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-  await prebuildStats(renderer, [other]);
+  await prepareStats(renderer, [other]);
   expect(buildTinyBvh).toHaveBeenLastCalledWith(other.geometry, 0, undefined, 'bvh2', true);
 });

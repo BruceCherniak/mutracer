@@ -1,4 +1,3 @@
-import type { SamplingPattern } from './sampling.js';
 import type { DepthSampleArea } from './depthQuery.js';
 import Camera from '../scene/Camera.js';
 import Mesh from '../scene/Mesh.js';
@@ -36,7 +35,7 @@ export interface ToneMappingParams {
   vignette?: number;
 }
 
-export type RenderOutput =
+export type DisplayChannel =
   | 'final'
   | 'shadow'
   | 'albedo'
@@ -183,14 +182,8 @@ export function normalizeBevelSamples(samples: number) {
     Math.max(MIN_BEVEL_SAMPLES, Math.round(samples))
   );
 }
-
-/** Shared contract implemented by both the WebGL 2.0 and WebGPU pipelines. */
-export interface RenderingPipeline {
-  isFirstFrame(): boolean;
-  /** Discard accumulated samples and any asynchronous denoise output. */
-  restartSamples(): void;
-  draw(camera: Camera, maxSamples: number): boolean;
-  drawPostProcess(): void;
+/** Shared scene resources; uploaded once per committed revision. */
+export interface SceneResources {
   /** Returns true when scene geometry, materials, or instance transforms changed. */
   setMeshes(meshes: Mesh[], update?: {
     transforms?: readonly Mesh[];
@@ -199,10 +192,19 @@ export interface RenderingPipeline {
   }): boolean;
   /** Changes the software memory guard used when packing material textures. */
   setTextureAtlasBudget(maxBytes: number): boolean;
-  getDebugBVHData(): Promise<{
-    buffer: ArrayBuffer;
-  }>;
-  setAllowsMultipleSamplesPerFrame(allow: boolean): void;
+  setLights(lights: SceneLight[]): void;
+  setBackground(background?: SceneBackground): void;
+  getDiagnostics(): RenderingDiagnostics;
+  dispose(): void;
+  readDepthSamples(area: DepthSampleArea): Promise<Float32Array | undefined>;
+}
+/** Explicit execution and composition for one accumulation. */
+export interface RenderPasses {
+  isFirstFrame(): boolean;
+  /** Discard accumulated samples and any asynchronous denoise output. */
+  restartSamples(): void;
+  trace(camera: Camera, maxSamples: number): boolean;
+  drawPostProcess(): void;
   /** Configure deterministic headless batches used by offline frame export. */
   setOfflineRenderOptions(options: {
     samplesPerBatch: number;
@@ -221,18 +223,10 @@ export interface RenderingPipeline {
   prepareOfflineAdaptiveSampling(
     options: OfflineAdaptiveSamplingOptions
   ): Promise<OfflineAdaptiveSamplingResult | undefined>;
-  setLights(lights: SceneLight[]): void;
-  setBackground(background?: SceneBackground): void;
   /** Enables extended-range float canvas presentation when the host supports it. */
   setHDROutputEnabled?(enabled: boolean): boolean;
   setToneMappingParams(params: ToneMappingParams): boolean;
   setSize(width: number, height: number): void;
-  /** Scene edits share the camera's preview/idle lifecycle when enabled. */
-  needsRestartSample(camera: Camera, sceneChanged?: boolean): boolean;
-  /** Returns whether the pipeline is currently rendering an interactive preview. */
-  isPreviewMode(): boolean;
-  /** While-converging OIDN denoises preview frames, so their cost also bounds the preview scale. */
-  setOIDNPreviewActive?(active: boolean): void;
   /**
    * Denoises the current image with an OIDN network (WebGPU only) or the
    * built-in JNLM filter. Resolves whether the result is now displayed.
@@ -240,19 +234,12 @@ export interface RenderingPipeline {
   performOIDNDenoise?(
     denoiser: unknown,
     alphaDenoiser?: unknown,
-    whileConverging?: boolean
+    schedule?: 'converged' | 'progressive' | 'every-sample'
   ): Promise<boolean>;
   /** Drops a denoise in flight; the next draw invalidates its output. */
   cancelOIDNDenoise?(): void;
   /** Keep the last completed OIDN image visible while static while-converging batches accumulate. */
   setPreserveOIDNOutput?(preserve: boolean): void;
-  setBouncesAndClamping(bounces: number, clamping: number): boolean;
-  /** Sets the WebGPU path tracer's per-vertex light RIS budget. */
-  setDirectLightCandidates?(candidates: number): boolean;
-  /** Selects WebGPU primary-ray handling for glTF BLEND materials. */
-  setAlphaBlendStrategy?(strategy: AlphaBlendStrategy): boolean;
-  setBevelSamples(samples: number): boolean;
-  setSamplingPattern(pattern: SamplingPattern, maxSamples: number, sequenceSeed?: number): boolean;
   getTotalSamplesRendered(): number;
   getDiagnostics(): RenderingDiagnostics;
   /** Waits for asynchronous timestamp diagnostics without changing samples. */
@@ -266,23 +253,11 @@ export interface RenderingPipeline {
   setOnSampleRendered(
     cb: (sampleCount: number, isFirstFrame: boolean, frameTime: number) => void
   ): void;
-  setMaxTimePerTile(time: number): void;
-  setMaxTiles(maxTiles: number): void;
-  setPreviewTargetFrameMs(time: number): void;
-  setPreviewParams(params: {
-    enabled: boolean;
-    resolutionScale: number;
-    bounces: number;
-    idleDelayMs: number;
-  }): void;
-  setTransmissiveOutputAlphaMin(alphaMin: number): boolean;
-  setOutput(output: RenderOutput): boolean;
+  setOutput(output: DisplayChannel): boolean;
   dispose(): void;
-  readDepthSamples(area: DepthSampleArea): Promise<Float32Array | undefined>;
   readOutput(kind: 'hdr' | 'denoised' | 'albedo' | 'normal'): Promise<{
     data: Float32Array;
     width: number;
     height: number;
   }>;
-
 }

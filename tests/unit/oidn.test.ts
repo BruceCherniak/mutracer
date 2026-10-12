@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type Renderer from '../../src/Renderer';
+import type Engine from '../../src/Engine';
 
 const initUNetFromBuffer = vi.hoisted(() => vi.fn());
 vi.mock('oidn-web', () => ({ initUNetFromBuffer }));
@@ -13,15 +13,15 @@ import {
 import { readFileSync } from 'node:fs';
 import { OIDN_WEIGHTS_PACKAGE_VERSION, OIDN_WEIGHTS_PACKAGE, DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL, DEFAULT_OIDN_WEIGHTS_BASE_URL } from '../../src/oidn';
 
-function createRenderer(usingWebGPU = true) {
+function createEngine(usingWebGPU = true) {
   return {
     init: vi.fn().mockResolvedValue({ backend: usingWebGPU ? 'webgpu' : 'webgl' }),
     device: usingWebGPU ? ({} as GPUDevice) : undefined,
     backend: usingWebGPU ? 'webgpu' : 'webgl',
-    getSize: vi.fn(() => ({ width: 1280, height: 720 })),
+    _getWeights: (_key: string, load: () => Promise<ArrayBuffer>) => load(),
     oidn: undefined,
     samplingPattern: 'sobol'
-  } as unknown as Renderer;
+  } as unknown as Engine & {samplingPattern: string; oidn?: import('../../src/oidn').OIDNDenoiser};
 }
 
 describe('initializeOIDN', () => {
@@ -30,11 +30,12 @@ describe('initializeOIDN', () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(['sobol', 'zsobol', 'random'] as const)('attaches OIDN without changing %s sampling', async pattern => {
-    const renderer = createRenderer();
-    renderer.samplingPattern = pattern;
+  it.each(['sobol', 'zsobol', 'random'] as const)('returns an unattached OIDN instance without changing %s sampling', async pattern => {
+    const engine = createEngine();
+    engine.samplingPattern = pattern;
     const weights = new Uint8Array([0xD7, 0x41, 0, 0]).buffer;
     const denoiser = {
+      auxiliaryDenoisers: undefined as import('../../src/oidn').OIDNDenoiser['auxiliaryDenoisers'],
       dispose: vi.fn(),
       prepareForImage: vi.fn().mockResolvedValue(undefined),
       tileExecute: vi.fn()
@@ -62,7 +63,7 @@ describe('initializeOIDN', () => {
       .mockResolvedValueOnce(normalDenoiser);
 
     await expect(
-      initializeOIDN(renderer, {
+      initializeOIDN(engine, {
         model: 'cleanAuxLarge',
         maxTileSize: 1024,
         weightsBaseUrl: '/oidn/weights/'
@@ -79,14 +80,14 @@ describe('initializeOIDN', () => {
     expect(fetch).toHaveBeenCalledWith('/oidn/weights/rt_nrm_large.tza', {
       signal: undefined
     });
-    expect(renderer.samplingPattern).toBe(pattern);
-    expect(renderer.oidn).toBe(denoiser);
-    expect(renderer.oidn?.auxiliaryDenoisers).toEqual({
+    expect(engine.samplingPattern).toBe(pattern);
+    expect(engine.oidn).toBeUndefined();
+    expect(denoiser.auxiliaryDenoisers).toEqual({
       albedo: albedoDenoiser,
       normal: normalDenoiser
     });
     for (const filter of [denoiser, albedoDenoiser, normalDenoiser]) {
-      expect(filter.prepareForImage).toHaveBeenCalledWith(1280, 720);
+      expect(filter.prepareForImage).not.toHaveBeenCalled();
     }
     expect(initUNetFromBuffer).toHaveBeenCalledWith(
       weights,
@@ -108,7 +109,7 @@ describe('initializeOIDN', () => {
   });
 
   it('can load a custom model URL without attaching it', async () => {
-    const renderer = createRenderer();
+    const engine = createEngine();
     const denoiser = { dispose: vi.fn(), tileExecute: vi.fn() };
     vi.stubGlobal(
       'fetch',
@@ -119,15 +120,14 @@ describe('initializeOIDN', () => {
     );
     initUNetFromBuffer.mockResolvedValue(denoiser);
 
-    await initializeOIDNFromURL(renderer, '/custom/model.tza', {
-      attach: false,
+    await initializeOIDNFromURL(engine, '/custom/model.tza', {
       aux: false,
       hdr: true,
       hdrTransfer: 'log'
     });
 
-    expect(renderer.samplingPattern).toBe('sobol');
-    expect(renderer.oidn).toBeUndefined();
+    expect(engine.samplingPattern).toBe('sobol');
+    expect(engine.oidn).toBeUndefined();
     expect(initUNetFromBuffer).toHaveBeenCalledWith(
       expect.any(ArrayBuffer),
       { device: {} },
@@ -142,23 +142,23 @@ describe('initializeOIDN', () => {
   });
 
   it('reports WebGPU and HTTP failures clearly', async () => {
-    const webglRenderer = createRenderer(false);
+    const webglEngine = createEngine(false);
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      initializeOIDN(webglRenderer)
-    ).rejects.toThrow('OIDN requires a WebGPU renderer.');
+      initializeOIDN(webglEngine)
+    ).rejects.toThrow('OIDN requires a WebGPU engine.');
     expect(fetchMock).not.toHaveBeenCalled();
 
-    const webgpuRenderer = createRenderer();
+    const webgpuEngine = createEngine();
     fetchMock.mockResolvedValue({
       ok: false,
       status: 404,
       statusText: 'Not Found'
     });
     await expect(
-      initializeOIDNFromURL(webgpuRenderer, '/custom/missing.tza')
+      initializeOIDNFromURL(webgpuEngine, '/custom/missing.tza')
     ).rejects.toThrow(
       'Failed to load OIDN weights from /custom/missing.tza: 404 Not Found'
     );
@@ -201,7 +201,7 @@ describe('initializeOIDN', () => {
     initUNetFromBuffer.mockResolvedValue({ dispose() {} });
     try {
       for (const model of ['standard', 'small'] as const) {
-        await initializeOIDN(createRenderer(), { model });
+        await initializeOIDN(createEngine(), { model });
         expect(fetchMock).toHaveBeenCalledWith(resolveOIDNModelUrl(model, DEFAULT_OIDN_WEIGHTS_BASE_URL), { signal: undefined });
       }
       expect(warning).toHaveBeenCalledOnce();
@@ -212,10 +212,10 @@ describe('initializeOIDN', () => {
   it.each(['base', 'custom', 'aux'] as const)('does not fall back for explicit %s URLs', async kind => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: false, status: 404, statusText: 'Not Found' });
     vi.stubGlobal('fetch', fetchMock);
-    const renderer = createRenderer();
+    const engine = createEngine();
     const loading = kind === 'custom'
-      ? initializeOIDNFromURL(renderer, '/custom.tza')
-      : initializeOIDN(renderer, kind === 'base' ? { weightsBaseUrl: '/own' }
+      ? initializeOIDNFromURL(engine, '/custom.tza')
+      : initializeOIDN(engine, kind === 'base' ? { weightsBaseUrl: '/own' }
         : { model: 'cleanAuxLarge', auxiliaryModelUrls: { albedo: '/own/albedo', normal: '/own/normal' } });
     await expect(loading).rejects.toThrow();
     expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith(DEFAULT_OIDN_WEIGHTS_BASE_URL))).toHaveLength(0);
@@ -224,12 +224,12 @@ describe('initializeOIDN', () => {
   it('rejects HTML from an explicit URL without a fallback', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new TextEncoder().encode('<html>').buffer });
     vi.stubGlobal('fetch', fetchMock);
-    await expect(initializeOIDNFromURL(createRenderer(), '/own.tza')).rejects.toThrow('expected magic D7 41');
+    await expect(initializeOIDNFromURL(createEngine(), '/own.tza')).rejects.toThrow('expected magic D7 41');
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it('explains how to self-host missing large networks', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404, statusText: 'Not Found' }));
-    await expect(initializeOIDN(createRenderer(), { model: 'cleanAuxLarge' })).rejects.toThrow('Self-host node_modules/oidn-weights/*.tza and pass weightsBaseUrl');
+    await expect(initializeOIDN(createEngine(), { model: 'cleanAuxLarge' })).rejects.toThrow('Self-host node_modules/oidn-weights/*.tza and pass weightsBaseUrl');
   });
 });

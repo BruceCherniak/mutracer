@@ -1,25 +1,20 @@
 import { makeRenderPipeline, type TraceSettings, type RenderPipeline } from './renderPipeline.js';
-import { makeProgressivePipeline, type AccumulationTargetOptions, type TargetPipeline } from './accumulationTarget.js';
+import type { TargetPipeline } from './accumulationTarget.js';
 import { readRgbaPixels } from './WebGLReadback.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import type { SamplingPattern } from './sampling.js';
 import Camera from '../scene/Camera.js';
-import Mesh from '../scene/Mesh.js';
-import { SceneBackground, SceneLight } from '../scene/Scene.js';
 import { ColorRGB } from '../types.js';
 import { vec3 } from '../math.js';
 import halton from './halton.js';
-import { nextPreviewScale } from './util.js';
 import { makeTileRender } from './TileRender.js';
 import {
-  RenderOutput,
-  RenderingPipeline,
+  DisplayChannel,
   ToneMappingParams
 } from './RenderingPipeline.js';
-import { constants, FrameBuffer, Renderer, Texture2D } from './webgl.js';
+import { constants, FrameBuffer, WebGLDevice, Texture2D } from './webgl.js';
 import { WebGLFullQuadPass } from './WebGLFullQuadPass.js';
 import WebGLRayTracePass from './WebGLRayTracePass.js';
 import { WebGLRayTraceOutputPass } from './WebGLRayTraceOutputPass.js';
@@ -39,12 +34,12 @@ const wavelengths = [650, 510, 475];
  * The frame is encoded as a fixed pass sequence. Each pass owns explicit
  * textures/FBOs, so no compositor graph or node lifecycle participates here.
  */
-function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayTracePass, targetOptions: AccumulationTargetOptions, onComplete: (complete?: boolean) => void) {
+function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLRayTracePass) {
   let sampleRenderedCallback = (
     _sampleCount: number,
     _isFirstFrame: boolean,
     _frameTime: number
-  ) => {};
+  ) => { };
   let allowMultipleSamplesPerFrame = false;
   let offlineSamplesPerBatch = 0;
   let deferPostProcess = false;
@@ -60,23 +55,16 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
   let screenWidth = 1;
   let screenHeight = 1;
 
-  const previewMode = targetOptions.preview ?? false;
   const targetKey = {};
   let execution: TraceSettings | undefined;
-  let qualityBounces = 8;
+
   let resolvedSamples = 0;
   let resolvedHasShadowCatcher = false;
   let presentationTexture: Texture2D | undefined;
   let presentationDenoised = false;
-  let previewMaxResolutionScale = 0.5;
-  let previewBounces = 2;
-  let adaptivePreviewScale = 0.5;
-
-
 
   let maxTimePerTile = 21;
-  let previewTargetFrameMs = 20;
-  let maxTiles = Infinity;
+
   let bloomIntensity = 0;
   let bloomThreshold = 1;
   let bloomRadius = 0.6;
@@ -87,7 +75,7 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
   let temperature = 0;
   let tint = 0;
   let vignette = 0;
-  let output: RenderOutput = 'final';
+  let output: DisplayChannel = 'final';
   let pageLeaveTime = performance.now();
   let pageInvisibleTime = 0;
   const shadowCatcherColor = vec3.create();
@@ -97,8 +85,8 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
   // target. Keep their measurements out of the full-resolution estimator so
   // returning from preview does not split a 4K sample into hundreds of tiles.
   const tileRender = makeTileRender(renderer.gl);
-  tileRender.setDesiredMsPerTile(previewMode ? previewTargetFrameMs : maxTimePerTile);
-  if (previewMode) tileRender.setMaxTiles(1);
+  tileRender.setDesiredMsPerTile(maxTimePerTile);
+
   const rayTraceOutputPass = new WebGLRayTraceOutputPass(renderer);
   let bloomPass: WebGLBloomPass | undefined;
 
@@ -157,7 +145,7 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
     rayTracePass.setSampleSequenceOffset(sampleSequenceOffset);
     updateSeed(true);
     if (rayTracePass.hasDispersion()) {
-      if (execution?.dispersionWavelengths === 1 || previewMode) {
+      if (execution?.dispersionWavelengths === 1) {
         // A positive wavelength enables stochastic hero-wavelength sampling
         // in the shader. Preview traces one random RGB channel per pixel.
         rayTracePass.setWavelength(wavelengths[0]);
@@ -270,7 +258,7 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
     });
   }
 
-  function draw(camera: Camera, maxSamples: number) {
+  function trace(camera: Camera, maxSamples: number) {
     if (rayTracePass.isInvalid() || renderFailed) return false;
     if (!renderer.isAllProgramCompiled()) {
       isFirstFrame = true;
@@ -279,8 +267,8 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
       return true;
     }
 
-    if (targetOptions.independent) rayTracePass.setCamera(camera);
-    const resetAccumulation = (!targetOptions.independent && rayTracePass.cameraChanged(camera)) || isFirstFrame;
+    rayTracePass.setCamera(camera);
+    const resetAccumulation = isFirstFrame;
     if (resetAccumulation) {
       tileTimingGeneration++;
       elapsedTileTime = undefined;
@@ -311,7 +299,7 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
     }
 
     try {
-      for (let i = 0; i < tile.samplesPerFrame && sampleCount < maxSamples; i++) {
+      for (let i = 0;i < tile.samplesPerFrame && sampleCount < maxSamples;i++) {
         traceSample(sampleCount === 0 && tile.isFirstTile, {
           x: tile.x,
           y: tile.y,
@@ -330,36 +318,19 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
     }
 
     if (sampleCount !== frameSampleCount) {
-      if (renderer.isAllProgramCompiled()) onComplete();
       sampleRenderedCallback(
         sampleCount,
         frameSampleCount === 0,
         elapsedFrameTime
       );
-      if (previewMode && sampleCount > 1) {
-        const nextScale = nextPreviewScale(
-          adaptivePreviewScale,
-          elapsedFrameTime,
-          previewTargetFrameMs,
-          previewMaxResolutionScale
-        );
-        if (nextScale !== adaptivePreviewScale) {
-          adaptivePreviewScale = nextScale;
-          applyRenderResolution();
-        }
-      }
+
     }
     return !renderer.isAllProgramCompiled();
   }
 
   function applyRenderResolution() {
     rayTracePass.useTarget(targetKey);
-    // At 720p and below, reallocating the whole render graph costs more than
-    // reducing the ray count. Keep the native resolution and rely on the
-    // preview bounce/bevel reductions instead.
-    const useScaledPreview =
-      previewMode && screenWidth * screenHeight > 1000000;
-    const scale = useScaledPreview ? adaptivePreviewScale : 1;
+    const scale = 1;
     const nextWidth = Math.max(1, Math.round(screenWidth * scale));
     const nextHeight = Math.max(1, Math.round(screenHeight * scale));
     rayTracePass.setSize(nextWidth, nextHeight, screenWidth / screenHeight);
@@ -373,7 +344,7 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
     sampleCount = 0;
     resolvedSamples = 0;
     isFirstFrame = true;
-    if (previewMode) onComplete(false);
+
   }
 
   function setSize(width: number, height: number) {
@@ -382,7 +353,7 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
     if (width === screenWidth && height === screenHeight) return;
     screenWidth = width;
     screenHeight = height;
-    if (!targetOptions.independent) renderer.resize(screenWidth, screenHeight);
+
     outputPass.setSize(screenWidth, screenHeight);
     applyRenderResolution();
     sampleCount = 0;
@@ -404,47 +375,39 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
       rayTracePass.setTransmissiveOutputAlphaMin(execution.transmissiveOutputAlphaMin);
       rayTracePass.setBevelSamples(execution.bevelSamples);
       rayTracePass.setSamplingPattern(execution.samplingPattern, execution.maxSamples);
-    } else rayTracePass.setQuality({ bounces: previewMode ? Math.min(qualityBounces, previewBounces) : qualityBounces,
-      bevel: !previewMode, dispersionWavelengths: previewMode ? 1 : 3, directLightCandidates: 1 });
+    }
   }
 
   return {
-    synchronizeBackground() {},
+    invalidateDenoisedOutput() { pendingDenoiser = undefined; denoisedTexture = undefined; preserveDenoisedOutput = false; },
+    synchronizeBackground() { },
     configure(settings: TraceSettings) {
       execution = { ...settings };
-      qualityBounces = settings.bounces;
       maxTimePerTile = Math.max(1, settings.timeBudgetMs);
       allowMultipleSamplesPerFrame = settings.allowMultipleSamplesPerFrame;
       tileRender.setDesiredMsPerTile(maxTimePerTile);
       tileRender.setMaxTiles(settings.maxTiles);
     },
     activate,
-    invalidate() { isFirstFrame = true; },
-    begin() {
-      if (previewMode) { adaptivePreviewScale = previewMaxResolutionScale; applyRenderResolution(); }
-      tileRender.reset();
-      isFirstFrame = true;
-      sampleCount = 0;
-      resolvedSamples = 0;
-      denoisedTexture = undefined;
-    },
     canCompleteSampleWithin(timeBudgetMs: number) { return elapsedFrameTime <= timeBudgetMs; },
     get presentationComplete() { return !!presentationTexture; },
     get presentationDenoised() { return presentationDenoised; },
     present() {
       if (!presentationTexture) return;
-      if (targetOptions.independent) {
-        renderer.resize(renderer.canvas.width, renderer.canvas.height);
+      {
+
         outputPass.setSize(renderer.canvas.width, renderer.canvas.height);
       }
       outputPass.setUniform('denoisedPercent', 0);
       outputPass.createPass({ colorTex: presentationTexture, colorDenoisedTex: presentationTexture });
     },
     getMemory() {
-      return { width: renderWidth, height: renderHeight,
+      return {
+        width: renderWidth, height: renderHeight,
         bytes: rayTracePass.getTargetMemoryBytes(targetKey)
           + rayTraceOutputPass.getMemoryBytes() + composePass.getMemoryBytes()
-          + (bloomPass?.getMemoryBytes() ?? 0) + (jnlmPass?.getMemoryBytes() ?? 0) };
+          + (bloomPass?.getMemoryBytes() ?? 0) + (jnlmPass?.getMemoryBytes() ?? 0)
+      };
     },
     isFirstFrame: () => isFirstFrame,
     restartSamples(_preserveTemporalHistory = false) {
@@ -470,27 +433,8 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
     setPreserveOIDNOutput(preserve: boolean) {
       preserveDenoisedOutput = preserve;
     },
-    draw,
+    trace,
     drawPostProcess: () => drawPostProcess(true),
-    setMeshes(meshes: Mesh[], update?: Parameters<RenderingPipeline['setMeshes']>[1]) {
-      const changed = rayTracePass.setMeshes(meshes, update);
-      if (!changed) return false;
-      isFirstFrame = true;
-      return true;
-    },
-    setTextureAtlasBudget(maxBytes: number) {
-      const changed = rayTracePass.setTextureAtlasBudget(maxBytes);
-      if (changed) isFirstFrame = true;
-      return changed;
-    },
-    setLights(lights: SceneLight[]) {
-      rayTracePass.setLights(lights);
-      isFirstFrame = true;
-    },
-    setBackground(background?: SceneBackground) {
-      rayTracePass.setBackground(background);
-      isFirstFrame = true;
-    },
     setSize,
     setToneMappingParams(params: ToneMappingParams) {
       const nextExposure = params.exposure ?? 1;
@@ -533,9 +477,6 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
       });
       return true;
     },
-    setAllowsMultipleSamplesPerFrame(allow: boolean) {
-      allowMultipleSamplesPerFrame = allow;
-    },
     setOfflineRenderOptions(options) {
       offlineSamplesPerBatch = Math.max(0, Math.round(options.samplesPerBatch));
       deferPostProcess = options.deferPostProcess;
@@ -544,39 +485,14 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
         Math.round(options.sampleSequenceOffset)
       );
     },
-    setVarianceMoments(_enabled: boolean) {},
-    setAdaptiveSamplingTargets(_targets) {},
+    setVarianceMoments(_enabled: boolean) { },
+    setAdaptiveSamplingTargets(_targets) { },
     async prepareOfflineAdaptiveSampling(_options) {
       return undefined;
     },
-    setBouncesAndClamping(bounces: number, clamping: number) {
-      const qualityChanged = qualityBounces !== bounces;
-      qualityBounces = bounces;
-      let changed = rayTracePass.setBounce(Math.max(1, bounces)) || qualityChanged;
-      changed = rayTracePass.setClamping(clamping) || changed;
-      if (changed) isFirstFrame = true;
-      return changed;
-    },
-    // Multi-candidate light RIS is currently a WebGPU path-tracing feature.
-    setDirectLightCandidates(_candidates: number) {
-      return false;
-    },
-    setAlphaBlendStrategy(_strategy) {
-      return false;
-    },
-    setBevelSamples(samples: number) {
-      const changed = rayTracePass.setBevelSamples(samples);
-      if (changed) isFirstFrame = true;
-      return changed;
-    },
-    setSamplingPattern(pattern: SamplingPattern, maxSamples: number, sequenceSeed = 0) {
-      const changed = rayTracePass.setSamplingPattern(pattern, maxSamples, sequenceSeed);
-      if (changed) isFirstFrame = true;
-      return changed;
-    },
     getTotalSamplesRendered: () => sampleCount,
-    getDiagnostics: () => ({...rayTracePass.getDiagnostics(), shaderCompilation: renderer.getShaderCompilationDiagnostics()}),
-    flushDiagnostics: async () => {},
+    getDiagnostics: () => ({ ...rayTracePass.getDiagnostics(), shaderCompilation: renderer.getShaderCompilationDiagnostics() }),
+    flushDiagnostics: async () => { },
     setShadowCatcherParams(color: ColorRGB, alpha: number) {
       const changed =
         color[0] !== shadowCatcherColor[0] ||
@@ -604,68 +520,28 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
     setOnSampleRendered(cb) {
       sampleRenderedCallback = cb;
     },
-    setMaxTimePerTile(time: number) {
-      maxTimePerTile = Math.max(time, 1);
-      if (!previewMode) tileRender.setDesiredMsPerTile(maxTimePerTile);
-    },
-    setMaxTiles(nextMaxTiles: number) {
-      maxTiles = nextMaxTiles;
-      if (!previewMode) tileRender.setMaxTiles(maxTiles);
-    },
-    setPreviewTargetFrameMs(time: number) {
-      previewTargetFrameMs = Math.max(time, 1);
-      if (previewMode) tileRender.setDesiredMsPerTile(previewTargetFrameMs);
-    },
-    setPreviewParams({
-      enabled,
-      resolutionScale,
-      bounces,
-      idleDelayMs
-    }) {
-      const nextScale = Math.min(Math.max(resolutionScale, 0.25), 1);
-      const nextBounces = Math.max(1, Math.round(bounces));
-      const settingsChanged =
-        previewMaxResolutionScale !== nextScale ||
-        previewBounces !== nextBounces;
-      previewMaxResolutionScale = nextScale;
-      previewBounces = nextBounces;
-      if (previewMode && settingsChanged) {
-        adaptivePreviewScale = Math.min(adaptivePreviewScale, previewMaxResolutionScale);
-        applyRenderResolution();
-        isFirstFrame = true;
-      }
-    },
-    setTransmissiveOutputAlphaMin(alphaMin: number) {
-      const changed = rayTracePass.setTransmissiveOutputAlphaMin(alphaMin);
-      if (changed) isFirstFrame = true;
-      return changed;
-    },
-    setOutput(nextOutput: RenderOutput) {
+
+    setOutput(nextOutput: DisplayChannel) {
       if (output === nextOutput) return false;
       output = nextOutput;
       return true;
     },
-    readDepthSamples: (area) => rayTracePass.readDepthSamples(area),
     async readPresentation() {
       if (!presentationTexture) throw new Error('Render has no complete image.');
       rawReadFrameBuffer.bind(renderer, [presentationTexture]);
       const width = presentationTexture.width, height = presentationTexture.height;
-      return {width, height, data: readRgbaPixels(renderer.gl, width, height, presentationTexture.isByteEncoded)};
+      return { width, height, data: readRgbaPixels(renderer.gl, width, height, presentationTexture.isByteEncoded) };
     },
     async readOutput(kind) {
       if (kind === 'denoised' && !denoisedTexture) kind = 'hdr';
       const texture = kind === 'denoised' ? denoisedTexture! : rayTraceOutputPass.getOutput(kind === 'hdr' ? 'color' : kind);
       rawReadFrameBuffer.bind(renderer, [texture]);
-      return {data: readRgbaPixels(renderer.gl, renderWidth, renderHeight, kind === 'albedo' || kind === 'normal'), width: renderWidth, height: renderHeight};
-    },
-    getDebugBVHData() {
-      const debugData = rayTracePass.getDebugBVHData();
-      return Promise.resolve(debugData);
+      return { data: readRgbaPixels(renderer.gl, renderWidth, renderHeight, kind === 'albedo' || kind === 'normal'), width: renderWidth, height: renderHeight };
     },
     dispose() {
       document.removeEventListener('visibilitychange', onVisibilityChange);
 
-      if (targetOptions.independent) rayTracePass.releaseTarget(targetKey);
+      rayTracePass.releaseTarget(targetKey);
       rayTraceOutputPass.dispose();
       bloomPass?.dispose();
       jnlmPass?.dispose();
@@ -676,18 +552,8 @@ function makeWebGLAccumulationTarget(renderer: Renderer, rayTracePass: WebGLRayT
   } satisfies TargetPipeline;
 }
 
-export function makeWebGLRenderingPipeline(renderer: Renderer) {
-  const rayTracePass = new WebGLRayTracePass(renderer);
-  return makeProgressivePipeline(
-    (options, onComplete) => makeWebGLAccumulationTarget(renderer, rayTracePass, options, onComplete),
-    camera => rayTracePass.cameraChanged(camera), () => rayTracePass.dispose()
-  );
-}
-
-export default makeWebGLRenderingPipeline;
-
 /** Independent render targets, without preview or presentation policy. */
-export function makeWebGLRenderTargets(renderer: Renderer): RenderPipeline {
+export function makeWebGLRenderTargets(renderer: WebGLDevice): RenderPipeline {
   const rayTracePass = new WebGLRayTracePass(renderer);
-  return makeRenderPipeline(rayTracePass, () => makeWebGLAccumulationTarget(renderer, rayTracePass, { independent: true }, () => {}), true);
+  return makeRenderPipeline(rayTracePass, () => makeWebGLAccumulationTarget(renderer, rayTracePass), true);
 }

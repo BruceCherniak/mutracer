@@ -1,7 +1,7 @@
 import { FragmentShader, ShaderDefineValue } from './shader.js';
 import {
   FrameBuffer,
-  Renderer,
+  WebGLDevice,
   Texture2D,
   TextureOptions,
   WebGLProgramBindings
@@ -21,7 +21,7 @@ export interface WebGLPassOptions {
  * It owns its output textures and framebuffer; there is no render graph.
  */
 export class WebGLFullQuadPass<I extends string, O extends string> {
-  private readonly _renderer: Renderer;
+  private readonly _renderer: WebGLDevice;
   private readonly _bindings: WebGLProgramBindings;
   private readonly _outputs: O[];
   private readonly _frameBuffer = new FrameBuffer();
@@ -40,7 +40,7 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
 
   constructor(
     _label: string,
-    renderer: Renderer,
+    renderer: WebGLDevice,
     options: {
       shader: FragmentShader;
       outputs?: O[];

@@ -425,7 +425,7 @@ export class WebGLProgramBindings {
     delete this.defines[name];
   }
 
-  getProgram(renderer: Renderer) {
+  getProgram(renderer: WebGLDevice) {
     const textureDefines: Record<string, null> = {};
     for (const [name, uniform] of Object.entries(this.uniforms)) {
       if (isSampler(uniform.type) && uniform.value) {
@@ -442,7 +442,7 @@ export class WebGLProgramBindings {
     return program;
   }
 
-  bind(renderer: Renderer) {
+  bind(renderer: WebGLDevice) {
     const gl = renderer.gl;
     const program = this.getProgram(renderer);
     gl.useProgram(program);
@@ -579,7 +579,7 @@ export interface RendererOptions extends WebGLContextAttributes {
   parallelShaderCompile?: boolean;
 }
 
-export class Renderer {
+export class WebGLDevice {
   readonly canvas: HTMLCanvasElement;
   readonly gl: WebGL2RenderingContext;
   readonly emptyTexture = new Texture2D();
@@ -731,7 +731,7 @@ export class FrameBuffer {
   attach(texture: Texture2D) {
     this._attachments = [texture];
   }
-  bind(renderer: Renderer, textures?: Texture2D[]) {
+  bind(renderer: WebGLDevice, textures?: Texture2D[]) {
     const gl = renderer.gl;
     if (textures) this._attachments = textures;
     textures = this._attachments;
@@ -749,7 +749,7 @@ export class FrameBuffer {
     });
     gl.drawBuffers(textures.map((_, index) => gl.COLOR_ATTACHMENT0 + index));
   }
-  dispose(renderer: Renderer) {
+  dispose(renderer: WebGLDevice) {
     if (this._frameBuffer) renderer.gl.deleteFramebuffer(this._frameBuffer);
     this._frameBuffer = undefined;
   }

@@ -126,7 +126,7 @@ interface CameraViewControl
 
 /**
  * Orbit camera controller: drag to rotate, middle-drag to pan, wheel to zoom.
- * Call `update()` every frame before `renderer.render()`.
+ * Call `update()` every frame before `engine.update()`.
  *
  * ```ts
  * const controls = new CameraViewControl({ camera, domElement: canvas });

@@ -1,7 +1,7 @@
-import { prebuildStats } from '../helpers/prebuildStats';
+import { prepareStats } from '../helpers/prepareStats';
 import { getGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import { afterEach, expect, it, vi } from 'vitest';
-import Renderer from '../../src/Renderer';
+import Engine from '../../src/Engine';
 import Geometry, { Attribute } from '../../src/scene/Geometry';
 import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
@@ -21,7 +21,7 @@ vi.mock('../../src/tinybvh/TinyBvhBuilder', () => ({
 }));
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); vi.mocked(buildTinyBvh).mockClear(); });
-function renderer() { return new Renderer({canvas: {width: 1, height: 1} as HTMLCanvasElement}); }
+function renderer() { return new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement}); }
 function mesh() { return new Mesh(createCubeGeometry(), new OpenPBRMaterial()); }
 function simulatedWorker() {
   vi.stubGlobal('Worker', class {});
@@ -46,7 +46,7 @@ it.each(['ordinary', 'none', 'triplanar'] as const)('matches synchronous BVH byt
   };
   const asynchronous = makeMesh(), synchronous = makeMesh();
   const positions = asynchronous.geometry.position.array.slice();
-  await prebuildStats(renderer(), [asynchronous]);
+  await prepareStats(renderer(), [asynchronous]);
   updateMeshInstances([synchronous]);
   const target = getPreparedMeshGeometry(asynchronous);
   expect(new Uint8Array(getGeometryBvh(target)!.buffer)).toEqual(new Uint8Array(getGeometryBvh(getPreparedMeshGeometry(synchronous))!.buffer));
@@ -61,7 +61,7 @@ it('isolates invalid UV displacement without disabling Workers or retrying each 
   bad.materials[0].displacementMap = new Texture({data: new Uint8Array(64), width: 4, height: 4});
   bad.materials[0].displacementScale = 0.1;
   const r = renderer();
-  await prebuildStats(r, [bad, good]);
+  await prepareStats(r, [bad, good]);
   expect(getGeometryBvh(good.geometry)?.builder).toBe('builtin');
   expect(getGeometryBvh(bad.geometry)).toBeUndefined();
   expect(build).toHaveBeenCalledOnce();
@@ -75,12 +75,12 @@ it('retries TinyBVH on the main thread when the Worker is unavailable', async ()
   vi.spyOn(worker, 'buildBvhInWorker').mockRejectedValue(new worker.BvhWorkerUnavailableError('worker failed'));
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   const r = renderer(); r.bvhBuilder = 'tinybvh';
-  const first = mesh(); await prebuildStats(r, [first]);
+  const first = mesh(); await prepareStats(r, [first]);
   expect(getGeometryBvh(first.geometry)?.builder).toBe('tinybvh');
   expect(buildTinyBvh).toHaveBeenCalledOnce();
   expect((r as any)._bvhWorkerUnavailable).toBe(true);
   expect((r as any)._tinyBvhUnavailable).toBe(false);
-  await prebuildStats(r, [mesh()]);
+  await prepareStats(r, [mesh()]);
   expect(warning).toHaveBeenCalledOnce();
 });
 
@@ -92,12 +92,12 @@ it('retries TinyBVH failures with builtin in the same Worker and warns once', as
   });
   const warning = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
   const r = renderer(); r.bvhBuilder = 'tinybvh';
-  const first = mesh(); await prebuildStats(r, [first]);
+  const first = mesh(); await prepareStats(r, [first]);
   expect(getGeometryBvh(first.geometry)?.builder).toBe('builtin');
   expect(build.mock.calls.map(c => c[3])).toEqual(['tinybvh', 'builtin']);
   expect((r as any)._tinyBvhUnavailable).toBe(true);
   expect((r as any)._bvhWorkerUnavailable).toBe(false);
-  await prebuildStats(r, [mesh()]);
+  await prepareStats(r, [mesh()]);
   expect(warning).toHaveBeenCalledOnce();
 });
 
@@ -106,7 +106,7 @@ it('serializes concurrent calls and builds shared geometry once', async () => {
   const shared = createCubeGeometry();
   const a = new Mesh(shared, new OpenPBRMaterial()), b = new Mesh(shared, new OpenPBRMaterial()), c = mesh();
   const r = renderer();
-  await Promise.all([prebuildStats(r, [a, b]), prebuildStats(r, [a, b, c])]);
+  await Promise.all([prepareStats(r, [a, b]), prepareStats(r, [a, b, c])]);
   expect(build).toHaveBeenCalledTimes(2);
   expect(getGeometryBvh(shared)).toBeDefined(); expect(getGeometryBvh(c.geometry)).toBeDefined();
 });
@@ -114,7 +114,7 @@ it('serializes concurrent calls and builds shared geometry once', async () => {
 it('does not mark builtin build errors as Worker failures', async () => {
   simulatedWorker().mockRejectedValue(new Error('invalid geometry'));
   const r = renderer(), bad = mesh();
-  await prebuildStats(r, [bad]);
+  await prepareStats(r, [bad]);
   expect((r as any)._bvhWorkerUnavailable).toBe(false);
   expect((r as any)._needsBVHPreparation([bad])).toBe(false);
 });
@@ -139,7 +139,7 @@ it('ignores empty and dynamic geometry during static preparation', async () => {
   const build = simulatedWorker();
   const dynamic = mesh(); dynamic.geometry.dynamic = true;
   const empty = new Mesh(new Geometry({position: new Attribute(new Float32Array(0), 3)}), new OpenPBRMaterial());
-  await prebuildStats(renderer(), [dynamic, empty]);
+  await prepareStats(renderer(), [dynamic, empty]);
   expect(build).not.toHaveBeenCalled();
   expect(getGeometryBvh(dynamic.geometry)).toBeUndefined();
 });

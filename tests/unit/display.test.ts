@@ -8,7 +8,7 @@ describe('Display', () => {
     const {engine, targets} = renderFixture({tiles: 3}); const preview = new Render(engine), final = new Render(engine, {fallback: preview});
     expect(engine.display.present(final)).toBeUndefined(); preview.refine(); preview.refine(); preview.refine();
     final.refine(); expect(engine.display.present(final)).toBe(preview); expect(targets[0].present).toHaveBeenCalledOnce();
-    const drawCalls = vi.mocked(targets[0].draw).mock.calls.length; engine.display.present(final); expect(targets[0].draw).toHaveBeenCalledTimes(drawCalls);
+    const drawCalls = vi.mocked(targets[0].trace).mock.calls.length; engine.display.present(final); expect(targets[0].trace).toHaveBeenCalledTimes(drawCalls);
     final.refine(); final.refine(); expect(engine.display.present(final)).toBe(final); engine.dispose();
   });
   it('applies display settings only to the specified output without restarting traces', () => {

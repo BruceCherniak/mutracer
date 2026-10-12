@@ -9,7 +9,7 @@ import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChan
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges.js';
 import {
   constants,
-  Renderer as WebGLRenderer,
+  WebGLDevice as WebGLRenderer,
   Texture2D as WebGLTexture2D
 } from './webgl.js';
 import { WebGLFullQuadPass } from './WebGLFullQuadPass.js';
@@ -1008,11 +1008,11 @@ class WebGLRayTracePass {
   // WebGL has uniform per-pixel counts; setSampleCount already includes offset.
   setSampleSequenceOffset(_offset: number) {}
 
-  async readDepthSamples(area: DepthSampleArea): Promise<Float32Array | undefined> {
+  async readDepthSamples(area: DepthSampleArea, aspect?: number): Promise<Float32Array | undefined> {
     if (this._depthAbort.signal.aborted || this._invalid || !this._preparedMeshData ||
       !this._renderer.isAllProgramCompiled()) return;
     this.prepare();
-    this._depthPass.setUniform('depthArea', packDepthSampleArea(area, this._depthAspect));
+    this._depthPass.setUniform('depthArea', packDepthSampleArea(area, aspect ?? this._depthAspect));
     this._depthPass.createPass({});
     const rgba = await readFloatPixelsAsync(this._renderer.gl,
       DEPTH_SAMPLE_GRID, DEPTH_SAMPLE_GRID, this._depthAbort.signal);

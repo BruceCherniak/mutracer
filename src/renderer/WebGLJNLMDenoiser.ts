@@ -1,5 +1,5 @@
 import { FragmentShader, glsl, Shader } from './shader.js';
-import { constants, Renderer, Texture2D } from './webgl.js';
+import { constants, WebGLDevice, Texture2D } from './webgl.js';
 import { WebGLFullQuadPass } from './WebGLFullQuadPass.js';
 import {
   JNLM_DEFAULT_COLOR_SENSITIVITY,
@@ -280,7 +280,7 @@ const floatOutput = {
 };
 
 export class WebGLJNLMDenoisePass {
-  private _renderer: Renderer;
+  private _renderer: WebGLDevice;
   private _guidePass: WebGLFullQuadPass<'momentsTex' | 'catcherMomentsTex', 'guide'>;
   private _variancePass: WebGLFullQuadPass<'rawGuideTex', 'guide'>;
   // Two instances so consecutive passes ping-pong between their outputs.
@@ -289,7 +289,7 @@ export class WebGLJNLMDenoisePass {
     'color' | 'guide'
   >[];
 
-  constructor(renderer: Renderer) {
+  constructor(renderer: WebGLDevice) {
     this._renderer = renderer;
     this._guidePass = new WebGLFullQuadPass('jnlmGuide', renderer, {
       shader: guideFragment,

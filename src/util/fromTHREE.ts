@@ -1004,7 +1004,7 @@ export class THREESceneSync {
     this.scene = convertScene(_source, _options, this._store);
   }
 
-  /** Updates world/bone matrices, changed CPU deformation and retained instances in place. Returns void; Renderer detects the converted scene edits. */
+  /** Updates world/bone matrices, changed CPU deformation and retained instances in place. Returns void; Engine.update detects the converted scene edits. */
   update(): void {
     if (this._disposed) throw new Error('THREESceneSync has been disposed');
     const next = convertScene(this._source, this._options, this._store);

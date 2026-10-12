@@ -1,6 +1,6 @@
 import type Camera from '../scene/Camera.js';
 import type { Scene } from '../scene/Scene.js';
-import type { RenderingPipeline, AlphaBlendStrategy, ToneMappingParams, RenderOutput } from './RenderingPipeline.js';
+import type { SceneResources, AlphaBlendStrategy, ToneMappingParams, DisplayChannel } from './RenderingPipeline.js';
 import type { SamplingPattern } from './sampling.js';
 import type { TargetPipeline } from './accumulationTarget.js';
 
@@ -15,7 +15,7 @@ export interface TraceSettings {
 export interface DisplaySettings {
   toneMapping: ToneMappingParams;
   bloom: { intensity: number; threshold: number; radius: number };
-  hdrOutputEnabled: boolean; channel: RenderOutput;
+  hdrOutputEnabled: boolean; channel: DisplayChannel;
   shadowCatcherColor: [number, number, number]; shadowCatcherAlpha: number;
 }
 export interface RenderTarget extends TargetPipeline {
@@ -26,12 +26,12 @@ export interface RenderTarget extends TargetPipeline {
 export interface RenderPipeline {
   createTarget(label: string): RenderTarget;
   releaseTarget(target: RenderTarget): void;
-  setMeshes: RenderingPipeline['setMeshes'];
-  setLights: RenderingPipeline['setLights'];
-  setBackground: RenderingPipeline['setBackground'];
-  setTextureAtlasBudget: RenderingPipeline['setTextureAtlasBudget'];
-  readDepthSamples(camera: Camera, area: Parameters<RenderingPipeline['readDepthSamples']>[0]): ReturnType<RenderingPipeline['readDepthSamples']>;
-  getDiagnostics(): ReturnType<RenderingPipeline['getDiagnostics']>;
+  setMeshes: SceneResources['setMeshes'];
+  setLights: SceneResources['setLights'];
+  setBackground: SceneResources['setBackground'];
+  setTextureAtlasBudget: SceneResources['setTextureAtlasBudget'];
+  readDepthSamples(camera: Camera, area: Parameters<SceneResources['readDepthSamples']>[0], aspect?: number): ReturnType<SceneResources['readDepthSamples']>;
+  getDiagnostics(): ReturnType<SceneResources['getDiagnostics']>;
   dispose(): void;
 }
 
@@ -39,7 +39,7 @@ export interface RenderPipeline {
 export function makeRenderPipeline(
   scene: Pick<RenderPipeline, 'setMeshes' | 'setLights' | 'setBackground' | 'setTextureAtlasBudget' | 'getDiagnostics' | 'dispose'> & {
     setCamera(camera: Camera): void;
-    readDepthSamples(area: Parameters<RenderingPipeline['readDepthSamples']>[0]): ReturnType<RenderingPipeline['readDepthSamples']>;
+    readDepthSamples(area: Parameters<SceneResources['readDepthSamples']>[0], aspect?: number): ReturnType<SceneResources['readDepthSamples']>;
     setBounce(bounces: number): boolean;
   },
   create: () => TargetPipeline,
@@ -47,6 +47,7 @@ export function makeRenderPipeline(
 ): RenderPipeline {
   const targets = new Set<RenderTarget>();
   const settings = new Map<RenderTarget, TraceSettings>();
+  let latest: RenderTarget | undefined;
   let background: Scene['background'];
   return {
     createTarget(label) {
@@ -58,6 +59,7 @@ export function makeRenderPipeline(
         label,
         configure(options) { settings.set(target, { ...options }); backend.configure(options); },
         activate() {
+          latest = target;
           if (webgl) scene.setBounce(Math.max(1, ...Array.from(settings.values(), s => s.bounces)));
           backend.activate();
         }
@@ -74,9 +76,9 @@ export function makeRenderPipeline(
       for (const target of targets) target.synchronizeBackground(value);
     },
     setTextureAtlasBudget: bytes => scene.setTextureAtlasBudget(bytes),
-    async readDepthSamples(camera, area) { scene.setCamera(camera); return scene.readDepthSamples(area); },
+    async readDepthSamples(camera, area) { scene.setCamera(camera); return scene.readDepthSamples(area, camera.aspect); },
     getDiagnostics() {
-      return { ...scene.getDiagnostics(), targets: Array.from(targets, t => ({label: t.label, ...t.getMemory()})) };
+      return { ...scene.getDiagnostics(), ...latest?.getDiagnostics(), targets: Array.from(targets, t => ({label: t.label, ...t.getMemory()})) };
     },
     dispose() { for (const target of targets) target.dispose(); targets.clear(); settings.clear(); scene.dispose(); }
   };

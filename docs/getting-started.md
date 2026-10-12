@@ -21,52 +21,35 @@ interface Scene {
 - Units are arbitrary but consistent; light intensities are in radiometric
   units relative to them.
 
-The `Renderer` accumulates samples progressively. Call `render()` once per
-animation frame; it returns a [status](./api.md#status).
+`Engine` commits scene and camera changes, `Render` accumulates samples, and
+`Display` presents an image. See [independent render results](./progressive-rendering.md).
 
 ## A minimal render loop
 
 ```ts
-import { Camera, Renderer } from '@meimu/mutracer';
-
-const renderer = new Renderer({ canvas });
-renderer.maxSamples = 1024;
-renderer.bounces = 5;
-
+import { Camera, Engine, Render } from '@meimu/mutracer';
+const engine = new Engine({canvas});
+engine.scene = scene;
+engine.camera = camera;
+const final = new Render(engine, {maxSamples: 1024, bounces: 5});
 function resize() {
   const ratio = Math.min(devicePixelRatio, 2);
-  renderer.setSize(canvas.clientWidth * ratio, canvas.clientHeight * ratio);
+  engine.display.setSize(canvas.clientWidth * ratio, canvas.clientHeight * ratio);
 }
-
 function frame() {
-  const status = renderer.render(scene, camera);
-  if (status === 'finished') {
-    // The image converged. render() keeps returning finished cheaply.
-  }
+  engine.update();
+  const status = final.refine();
+  engine.display.present(final);
+  if (status === 'finished') { /* this image is ready */ }
   requestAnimationFrame(frame);
 }
-resize();
-frame();
+resize(); frame();
 ```
 
-`new Renderer()` picks WebGPU when available and WebGL 2 otherwise. The first
-calls return `'preparing'` (device setup, BVH builds) and
-`'compiling'`; keep calling `render()`. BVHs build
-automatically; for a loading screen, see
-[BVH preparation flows](./bvh.md#choose-a-preparation-flow).
-
-### Optional loading indicator
-
-```ts
-renderer.on('progress', ({ stage, progress }) => loading.update(stage, progress));
-renderer.on('status', ({ status }) => {
-  if (status !== 'preparing' && status !== 'compiling') loading.hide();
-});
-function frame() { renderer.render(scene, camera); requestAnimationFrame(frame); }
-frame();
-```
-
-Preparation is automatic; see [BVH](./bvh.md) for optional early construction.
+Engine chooses WebGPU with WebGL 2 fallback by default. Initial refinement
+returns preparing during device/BVH setup, then compiling while shaders build.
+For loading UI, subscribe to engine progress and inspect render.status.
+Preparation is automatic; see [BVH](./bvh.md) for optional CPU preparation.
 
 ## Geometry from arrays
 
@@ -176,24 +159,19 @@ see [Three.js](./threejs.md).
 
 ## Exporting an image
 
-For a final-quality still, use `renderOfflineFrame`, which renders a fixed
-number of samples (optionally adaptive), denoises when a denoiser is set, and
-resolves when finished:
+For a final-quality still, use a render's deterministic convergence:
 
 ```ts
-await renderer.renderOfflineFrame(scene, camera, {
-  samples: 1024,
-  onProgress: ({ stage, samples, targetSamples }) => console.log(stage, samples, targetSamples)
-});
-const blob = await renderer.toBlob(); // image/png; optionally pass type and quality
+await final.converge({samples: 1024, sampleSequenceOffset: 0});
+const blob = await engine.display.toBlob(final);
+const hdr = await final.readPixels('hdr');
 ```
 
-`await renderer.readPixels('hdr')` returns the linear HDR image as
-`{ width, height, data: Float32Array }` (RGBA, top row first).
+Readback returns RGBA Float32Array values, top row first. A separate fixed-size
+Render can export another resolution or a copied camera override without
+changing the canvas. See [exporting](./progressive-rendering.md#reading-and-exporting).
 
-## Cleanup
-
-Call `renderer.dispose()` to release GPU resources, BVH Workers and the denoiser. With
+Call `engine.dispose()` to release GPU resources, BVH Workers and the denoiser. With
 Three.js, also call `sync.dispose()` to release the conversion caches.
 
 ## Bundler notes
