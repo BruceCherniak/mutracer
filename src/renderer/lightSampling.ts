@@ -1,3 +1,4 @@
+import { localMaterialIndex } from './materialIndices.js';
 import { TexturePixelSource, vec3 } from '../math.js';
 import DirectionalLight from '../scene/DirectionalLight.js';
 import Geometry from '../scene/Geometry.js';
@@ -204,30 +205,9 @@ export function buildLightAliasTable(inputs: LightChoiceInput[] | LightChoiceBuf
   return { choices: new Uint32Array(buffer), pmfs, totalWeight };
 }
 
-function dominantLocalMaterial(geometry: Geometry, triangleOffset: number) {
-  const attribute = geometry.materialIndex;
-  if (!attribute) return 0;
-  const indices = geometry.indices.array;
-  const weights = new Map<number, number>();
-  for (let corner = 0; corner < 3; corner++) {
-    const vertex = indices[triangleOffset + corner];
-    for (let slot = 0; slot < 4; slot++) {
-      const packed = attribute.array[vertex * 4 + slot];
-      if (packed <= 0) continue;
-      const [materialIndex, weight] =
-        Geometry.unpackMaterialIndexAndWeightFromInt(packed);
-      weights.set(materialIndex, (weights.get(materialIndex) ?? 0) + weight);
-    }
-  }
-  let selected = 0;
-  let selectedWeight = -1;
-  weights.forEach((weight, materialIndex) => {
-    if (weight > selectedWeight) {
-      selected = materialIndex;
-      selectedWeight = weight;
-    }
-  });
-  return selected;
+function dominantLocalMaterial(geometry: Geometry, triangleOffset: number, materialCount: number) {
+  // Public triangles have the same raw material index on all three corners.
+  return localMaterialIndex(geometry, geometry.indices.array[triangleOffset], materialCount);
 }
 
 export function collectEmissiveTriangles(
@@ -247,7 +227,7 @@ export function collectEmissiveTriangles(
     const uvs = geometry.uv?.array;
     const secondaryUvs = geometry.uv1?.array ?? uvs;
     for (let triangleOffset = 0; triangleOffset < indices.length; triangleOffset += 3) {
-      const localMaterialIndex = dominantLocalMaterial(geometry, triangleOffset);
+      const localMaterialIndex = dominantLocalMaterial(geometry, triangleOffset, materialIndices.length);
       const materialIndex = materialIndices[localMaterialIndex] ?? materialIndices[0] ?? 0;
       const material = materials[materialIndex];
       if (!material || material.shadowCatcher || material.unlit) continue;

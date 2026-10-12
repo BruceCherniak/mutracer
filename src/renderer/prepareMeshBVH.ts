@@ -1,3 +1,4 @@
+import { writeMaterialIndices } from './materialIndices.js';
 import { mat4, vec2, vec3 } from '../math.js';
 import Geometry, { Attribute } from '../scene/Geometry.js';
 import Mesh from '../scene/Mesh.js';
@@ -918,32 +919,7 @@ function mergeGeometry(
       );
     }
 
-    const mergedMaterialIndex = materialIndexAttrib.array;
-    if (geometry.materialIndex) {
-      const values = geometry.materialIndex.array;
-      for (let i = 0; i < vertexCount; i++) {
-        for (let k = 0; k < 4; k++) {
-          let hasMaterial = false;
-          const localIdx = values[i * 4 + k];
-          const off = (currentVertex + i) * 4 + k;
-          if (localIdx > 0) {
-            const res = Geometry.unpackMaterialIndexAndWeightFromInt(localIdx);
-            // TODO handle invalid
-            const globalIndex = globalMaterialIndex[res[0]] ?? 0;
-
-            // TODO normalize weight to 1.
-            if (globalIndex >= 0) {
-              mergedMaterialIndex[off] =
-                Geometry.packMaterialIndexAndWeightToInt(globalIndex, res[1]);
-              hasMaterial = true;
-            }
-          }
-          if (!hasMaterial) {
-            mergedMaterialIndex[off] = 0;
-          }
-        }
-      }
-    }
+    writeMaterialIndices(geometry, globalMaterialIndex, materialIndexAttrib.array, currentVertex);
 
     const meshIndices = geometry.indices.array;
     for (let i = 0; i < meshIndices.length; i++) {

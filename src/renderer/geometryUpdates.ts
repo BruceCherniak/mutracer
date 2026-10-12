@@ -1,3 +1,4 @@
+import { writeMaterialIndices } from './materialIndices.js';
 import { isDeformationUpdate } from '../scene/geometryChanges.js';
 import Geometry from '../scene/Geometry.js';
 import { buildBLAS, refitBLAS } from './bvhAccel.js';
@@ -46,13 +47,7 @@ function copyRegion(source: Geometry, merged: Geometry, region: Prepared['geomet
     else target.array.fill(0, offset, offset + count * target.itemSize);
   }
   if (!topologyChanged) return;
-  const target = merged.materialIndex!.array;
-  if (!source.materialIndex) target.fill(0, vertexOffset * 4, (vertexOffset + count) * 4);
-  else for (let i = 0; i < count * 4; i++) {
-    const local = source.materialIndex.array[i];
-    target[vertexOffset * 4 + i] = local > 0 ?
-      Geometry.packMaterialIndexAndWeightToInt(materialIndices[local >> 8] ?? 0, (local & 255) / 255) : 0;
-  }
+  writeMaterialIndices(source, materialIndices, merged.materialIndex!.array, vertexOffset);
   for (let i = 0; i < source.indices.array.length; i++) merged.indices.array[indexOffset + i] = source.indices.array[i] + vertexOffset;
 }
 

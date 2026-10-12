@@ -61,3 +61,5 @@ Call `sync.dispose()` and `renderer.dispose()` when finished.
 - [BVH](docs/bvh.md): automatic and up-front preparation, builders, layouts
 - [Performance](docs/performance.md): tuning checklist
 - [Examples](https://github.com/pissang/mutracer/tree/main/examples): basic, Three.js, animation, advanced
+
+- Multiple materials: `geometry.materialIndex` is an Int32 attribute with itemSize 1 and one raw index per vertex; all three triangle corners must match. See [geometry](./docs/getting-started.md).

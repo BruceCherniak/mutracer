@@ -75,7 +75,7 @@ export default class Geometry {
   color?: Attribute<Float32Array>;
   /** Required triangle vertex indices; three entries per triangle. */
   indices: Attribute<Uint16Array | Uint32Array>;
-  /** Optional per-triangle material indices; default undefined selects material 0. */
+  /** Optional per-vertex raw material indices, itemSize 1. All three triangle corners must match. Default undefined selects material 0. */
   materialIndex?: Attribute<Int32Array>;
 
   /** Bottom-level BVH, built automatically before rendering. @internal */

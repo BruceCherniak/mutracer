@@ -70,7 +70,7 @@ generateVertexNormals(geometry);
 ```
 
 For several materials on one geometry, pass an array of materials to `Mesh`
-and set `geometry.materialIndex` to an `Int32Array` attribute with one index
+and set `geometry.materialIndex` to an `Int32Array` attribute with `itemSize: 1` and one raw index
 into `mesh.materials` per vertex.
 
 ## Cameras

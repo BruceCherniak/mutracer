@@ -1,3 +1,4 @@
+import { writeMaterialIndices } from './materialIndices.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
@@ -193,42 +194,7 @@ function mergeGeometry(
       indexAttrib.array[currentIndex + i] = currentVertex + meshIndices[i];
     }
 
-    const mergedMaterialIndex = materialIndexAttrib.array;
-    if (geometry.materialIndex) {
-      const values = geometry.materialIndex.array;
-      for (let i = 0; i < vertexCount; i++) {
-        for (let k = 0; k < 4; k++) {
-          let hasMaterial = false;
-          const localIdx = values[i * 4 + k];
-          const off = (currentVertex + i) * 4 + k;
-          if (localIdx > 0) {
-            const res = Geometry.unpackMaterialIndexAndWeightFromInt(localIdx);
-            // TODO handle invalid
-            const globalIndex = globalMaterialIndex[res[0]] ?? 0;
-
-            // TODO normalize weight to 1.
-            if (globalIndex >= 0) {
-              mergedMaterialIndex[off] =
-                Geometry.packMaterialIndexAndWeightToInt(globalIndex, res[1]);
-              hasMaterial = true;
-            }
-          }
-          if (!hasMaterial) {
-            mergedMaterialIndex[off] = 0;
-          }
-        }
-      }
-    } else {
-      // Use the first material
-      for (let i = 0; i < vertexCount; i++) {
-        mergedMaterialIndex[(currentVertex + i) * 4] =
-          Geometry.packMaterialIndexAndWeightToInt(
-            // TODO handle invalid
-            globalMaterialIndex[0] ?? 0,
-            1
-          );
-      }
-    }
+    writeMaterialIndices(geometry, globalMaterialIndex, materialIndexAttrib.array, currentVertex, true);
 
     currentVertex += vertexCount;
     currentIndex += meshIndices.length;
@@ -282,7 +248,7 @@ function transformGeometry(geometry: Geometry, matrix: mat4.Mat4Array) {
     tangent:
       tangent &&
       new Attribute(new Float32Array(tangent), geometry.tangent!.itemSize),
-    materialIndex: materialIndex && new Attribute(materialIndex, 4),
+    materialIndex: materialIndex && new Attribute(materialIndex, geometry.materialIndex!.itemSize),
     indices: indices && new Attribute(indices, geometry.indices.itemSize)
   });
 

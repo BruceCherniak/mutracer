@@ -7,7 +7,7 @@ import OpenPBRMaterial from './OpenPBRMaterial.js';
  * `geometry.materialIndex` selects the material of each triangle.
  */
 export default class Mesh extends SceneNode {
-  /** Materials supplied to the constructor, indexed by triangle materialIndex. */
+  /** Materials supplied to the constructor, indexed by per-vertex materialIndex. */
   materials: OpenPBRMaterial[];
   /** Indexed triangle geometry supplied to the constructor; no default. */
   geometry: Geometry;
