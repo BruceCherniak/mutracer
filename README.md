@@ -34,8 +34,8 @@ APIs may change between minor releases.
 npm install @meimu/mutracer
 ```
 
-Add `three` if you use the Three.js helpers. The quick start below also uses
-`gl-matrix` for matrix math.
+Install `three` to load glTF with `GLTFLoader` + `THREESceneSync` or to use
+the Three.js helpers. The quick start below also uses `gl-matrix` for matrix math.
 
 The package is ESM with TypeScript declarations (`lib/main.js`). A UMD build
 with a `MuTracer` global is at `dist/mutracer.umd.js`.

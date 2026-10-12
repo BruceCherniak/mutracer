@@ -166,9 +166,3 @@ Renderer-specific settings without a Three.js equivalent:
 | `mutracerIesProfile`, `mutracerIesRotation` | spot light | `IESProfile` instance and its rotation |
 | `mutracerGroundedSkybox: { texture, height, radius, groundHeight?, center? }` | scene | Grounded skybox background |
 | `mutracerHiddenBackground: true` | scene | Transparent background while keeping environment lighting |
-
-## glTF without Three.js
-
-`loadGLTF(url)` is a minimal built-in loader for glTF 2.0. It is kept for
-dependency-free use; prefer `GLTFLoader` + `THREESceneSync` for full glTF
-extension support.

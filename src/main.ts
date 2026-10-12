@@ -63,7 +63,6 @@ export type {
 export { default as Camera } from './scene/Camera.js';
 export { default as Mesh } from './scene/Mesh.js';
 export { default as SceneNode } from './scene/SceneNode.js';
-export { default as HierarchyNode } from './scene/HierarchyNode.js';
 export {
   default as Geometry,
   Attribute as GeometryAttribute
@@ -92,8 +91,6 @@ export {
 } from './scene/IESProfile.js';
 
 // Loaders and integrations
-export { load as loadGLTF } from './util/loadGLTF.js';
-export type { GLTFLoadResult } from './util/loadGLTF.js';
 export { loadRGBE, parseRGBE } from './util/loadRGBE.js';
 export { fromTHREECamera, fromTHREEScene, THREESceneSync } from './util/fromTHREE.js';
 export type {

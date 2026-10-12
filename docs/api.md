@@ -79,7 +79,7 @@ affects the image restarts accumulation.
 
 | Method | Description |
 | --- | --- |
-| `render(scene, camera, forceOutput?)` | Adds samples; returns a [status](#status-codes). Call once per frame |
+| `render(scene, camera)` | Adds samples; returns a [status](#status-codes). Call once per frame |
 | `setSize(width, height)` | Resizes the canvas drawing buffer and targets, in pixels |
 | `getSize()` | `{ width, height }` |
 | `setDenoiser(options?)` | Attaches the built-in JNLM filter or an OIDN network (WebGPU only); `false`/`null` removes it. See [denoising](./denoising.md) |
@@ -188,7 +188,6 @@ and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 | `fromTHREEScene` | One-shot Three.js scene conversion; every call creates fresh MuTracer objects |
 | `THREESceneChanges` | Informational result of `update()`: `transforms`, `membership`, `content`, `lights`, `background`; no forwarding to Renderer needed |
 | `FromTHREESceneOptions` | Optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |
-| `loadGLTF(url)` | Minimal built-in glTF 2.0 loader; prefer Three.js `GLTFLoader` + `THREESceneSync` |
 | `CameraViewControl` | Orbit/pan/zoom controller for a MuTracer `Camera` |
 | `VERSION` | Library version |
 

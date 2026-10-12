@@ -573,11 +573,6 @@ export default class Renderer {
       });
     }
   }
-  /**
-   * Optional LDR denoiser applied to the composed image's alpha channel
-   * (transparent backgrounds and shadow catchers).
-   */
-  oidnAlpha?: OIDNWeb;
   private _ownedDenoiser?: OIDNDenoiser | JNLMDenoiser;
   /** Whether the denoise in flight is for an interactive preview frame. */
   private _oidnPreviewInFlight = false;
@@ -1242,20 +1237,18 @@ export default class Renderer {
    * Unchanged scenes retain their accumulation. Both backends refit transforms
    * and incrementally upload changed geometry with stable attribute arrays.
    *
-   * @param forceOutput Re-run post-processing (tone mapping, bloom) even if
-   *   no new samples are rendered.
    * Errors are recorded in lastError and diagnostics; this method never throws.
    * @returns The current {@link RenderStatus}.
    */
-  render(scene: Scene, camera: Camera, forceOutput?: boolean): RenderStatus {
+  render(scene: Scene, camera: Camera): RenderStatus {
     try {
-      return this._render(scene, camera, forceOutput);
+      return this._render(scene, camera);
     } catch (error) {
       return this._reportRenderError(error);
     }
   }
 
-  private _render(scene: Scene, camera: Camera, forceOutput?: boolean): RenderStatus {
+  private _render(scene: Scene, camera: Camera): RenderStatus {
     if (this._pipelineInitError) {
       return this._reportRenderError(this._pipelineInitError);
     }
@@ -1333,7 +1326,7 @@ export default class Renderer {
     });
     pipeline.setMaxTiles(this.maxTiles);
 
-    let needsRedrawPostProcess = forceOutput;
+    let needsRedrawPostProcess = false;
     if (pipeline.setHDROutputEnabled?.(this.hdrOutputEnabled)) {
       needsRedrawPostProcess = true;
     }
@@ -1569,7 +1562,7 @@ export default class Renderer {
       }
       // Performing denoising
       pipeline
-        .performOIDNDenoise!(previewFrame ? this._previewDenoiser! : oidn!, this.oidnAlpha, convergingDenoiseActive)
+        .performOIDNDenoise!(previewFrame ? this._previewDenoiser! : oidn!, undefined, convergingDenoiseActive)
         .then((completed) => {
           if (oidnRevision !== this._oidnRevision) return;
           if (settledBatch) this._oidnBatchStartTime = performance.now();
