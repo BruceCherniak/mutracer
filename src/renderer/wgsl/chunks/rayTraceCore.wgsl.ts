@@ -334,7 +334,8 @@ struct RayTraceUniform {
   clamping: f32,
   directLightCandidates: i32,
   backgroundFlags: i32,
-  bsdfProposalCount: u32,
+  // Fixed at 4: runtime trip bounds discourage thin-film loop unrolling.
+  loopUnrollGuard: u32,
   sceneFeatureFlags: u32,
   sequenceSeed: u32,
   zSobolLogSPP: u32,

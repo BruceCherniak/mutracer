@@ -190,15 +190,15 @@ export function makeRayTraceUniform() {
     clamping: new Float32Array(RayTraceUniformValues, 136, 1),
     directLightCandidates: new Int32Array(RayTraceUniformValues, 140, 1),
     backgroundFlags: new Int32Array(RayTraceUniformValues, 144, 1),
-    bsdfProposalCount: new Uint32Array(RayTraceUniformValues, 148, 1),
+    loopUnrollGuard: new Uint32Array(RayTraceUniformValues, 148, 1),
     sceneFeatureFlags: new Uint32Array(RayTraceUniformValues, 152, 1),
     sequenceSeed: new Uint32Array(RayTraceUniformValues, 156, 1),
     zSobolLogSPP: new Uint32Array(RayTraceUniformValues, 160, 1),
     sampleSequenceOffset: new Uint32Array(RayTraceUniformValues, 164, 1)
   };
-  // Fixed algorithmic count; a uniform bound keeps DXC from unrolling the
-  // complete layered BSDF at every proposal/optical channel.
-  RayTraceUniformViews.bsdfProposalCount[0] = 4;
+  // Fixed runtime trip bounds discourage thin-film loop unrolling. Keep 4 for
+  // 2 polarizations/substrates and 3 channels, independent of BSDF budgets.
+  RayTraceUniformViews.loopUnrollGuard[0] = 4;
   RayTraceUniformViews.bevel[0] = 1;
   RayTraceUniformViews.dispersionWavelengths[0] = 3;
   return {

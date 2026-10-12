@@ -359,7 +359,7 @@ fn openpbr_thin_film_reflectance_channel(
     let phase = 2.0 * PI * (2.0 * filmIor * thickness * filmCosine) / wavelength;
     var reflectance = 0.0;
     // Both polarizations share Snell's complex solve and the Airy graph.
-    for (var polarization = 0u; polarization < 2u; polarization++) {
+    for (var polarization = 0u; polarization < (rtUniform.loopUnrollGuard >> 1u); polarization++) {
         let reflection12 = select(reflection12S, reflection12P, polarization == 1u);
         let transmission12 = select(transmission12S, transmission12P, polarization == 1u);
         let reflection23 = openpbr_complex_fresnel_reflection(
@@ -797,11 +797,11 @@ fn openpbr_eval_prepared_lobe(
     if (material.thinFilmWeight > 0.0) {
         let wavelengths = vec3f(620.0, 540.0, 450.0);
         // Dielectric and conductor substrates share one complete optical graph.
-        for (var substrate = 0u; substrate < 2u; substrate++) {
+        for (var substrate = 0u; substrate < (rtUniform.loopUnrollGuard >> 1u); substrate++) {
             if (!select(evaluateDielectric, evaluateMetal, substrate == 1u)) { continue; }
             var film = vec3f(0.0);
             let incidentCosine = select(dielectricViewHalf, viewHalf, substrate == 1u);
-            for (var channel = 0u; channel < 3u; channel++) {
+            for (var channel = 0u; channel + 1u < rtUniform.loopUnrollGuard; channel++) {
                 var ior = vec2f(prepared.specularEtaTOverEtaI, 0.0);
                 if (substrate == 1u) {
                     ior = openpbr_metal_complex_ior(material.baseColor[channel], material.specularColor[channel]);

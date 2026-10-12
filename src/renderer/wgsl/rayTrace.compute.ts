@@ -924,10 +924,6 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
     specializedSource = specializedSource.replaceAll(
       weight, `select(0.0, ${weight}, ${feature})`);
   }
-  specializedSource = specializedSource
-    .replaceAll('polarization < 2u', 'polarization < (rtUniform.bsdfProposalCount >> 1u)')
-    .replaceAll('substrate < 2u', 'substrate < (rtUniform.bsdfProposalCount >> 1u)')
-    .replaceAll('channel < 3u', 'channel + 1u < rtUniform.bsdfProposalCount');
   const backgroundBits: Record<string, number> = {
     USE_BACKGROUND: 1,
     USE_BACKGROUND_MAP: 2,
