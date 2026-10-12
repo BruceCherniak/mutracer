@@ -144,7 +144,7 @@ describe('Renderer.setDenoiser', () => {
 
   it('attaches JNLM without a WebGPU device', async () => {
     const renderer = createRenderer();
-    const getDevice = vi.spyOn(renderer, 'getGPUDeviceAndAdapter');
+    const getDevice = vi.spyOn(renderer, 'init');
     await renderer.setDenoiser();
     expect(getDevice).not.toHaveBeenCalled();
     expect((renderer as unknown as { _activeDenoiser: { type: string } })._activeDenoiser.type).toBe('jnlm');

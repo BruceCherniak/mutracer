@@ -34,6 +34,7 @@ export type {
   PrepareSceneResult,
   RenderStatus,
   RendererDiagnostics,
+  RendererInfo,
   RendererParams,
   TextureAtlasLimits
 } from './Renderer.js';

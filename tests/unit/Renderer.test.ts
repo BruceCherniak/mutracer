@@ -246,11 +246,8 @@ describe('Renderer offline frames', () => {
     const camera = {} as Camera;
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
-    vi.spyOn(renderer, 'getGPUDeviceAndAdapter').mockResolvedValue({
-      device: undefined,
-      adapter: undefined,
-      adapterInfo: undefined
-    });
+    Object.defineProperty(renderer, 'device', { value: undefined });
+    vi.spyOn(renderer, 'init').mockResolvedValue({backend: 'webgpu', adapterName: 'mock', limits: {maxTextureArrayLayers: 256, maxTextureDimension2D: 8192}});
 
     const result = await renderer.renderOfflineFrame(scene, camera, {
       samples: 12,
@@ -295,13 +292,10 @@ describe('Renderer offline frames', () => {
     const camera = {} as Camera;
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
-    vi.spyOn(renderer, 'getGPUDeviceAndAdapter').mockResolvedValue({
-      device: {
+    Object.defineProperty(renderer, 'device', { value: {
         queue: { onSubmittedWorkDone: vi.fn(async () => undefined) }
-      } as unknown as GPUDevice,
-      adapter: undefined,
-      adapterInfo: undefined
-    });
+      } as unknown as GPUDevice });
+    vi.spyOn(renderer, 'init').mockResolvedValue({backend: 'webgpu', adapterName: 'mock', limits: {maxTextureArrayLayers: 256, maxTextureDimension2D: 8192}});
 
     await renderer.renderOfflineFrame(scene, camera, {
       samples: 12,
@@ -338,17 +332,14 @@ describe('Renderer offline frames', () => {
     markSceneStable(renderer, scene);
     vi.spyOn(performance, 'now').mockImplementation(() => clock);
     const queueDurations = [5, 10, 80, 20];
-    vi.spyOn(renderer, 'getGPUDeviceAndAdapter').mockResolvedValue({
-      device: {
+    Object.defineProperty(renderer, 'device', { value: {
         queue: {
           onSubmittedWorkDone: vi.fn(async () => {
             clock += queueDurations.shift() ?? 0;
           })
         }
-      } as unknown as GPUDevice,
-      adapter: undefined,
-      adapterInfo: undefined
-    });
+      } as unknown as GPUDevice });
+    vi.spyOn(renderer, 'init').mockResolvedValue({backend: 'webgpu', adapterName: 'mock', limits: {maxTextureArrayLayers: 256, maxTextureDimension2D: 8192}});
 
     await renderer.renderOfflineFrame(scene, camera, {
       samples: 9,
@@ -417,13 +408,10 @@ describe('Renderer offline frames', () => {
     const camera = {} as Camera;
     attachPipeline(renderer, pipeline);
     markSceneStable(renderer, scene);
-    vi.spyOn(renderer, 'getGPUDeviceAndAdapter').mockResolvedValue({
-      device: {
+    Object.defineProperty(renderer, 'device', { value: {
         queue: { onSubmittedWorkDone: vi.fn(async () => undefined) }
-      } as unknown as GPUDevice,
-      adapter: undefined,
-      adapterInfo: undefined
-    });
+      } as unknown as GPUDevice });
+    vi.spyOn(renderer, 'init').mockResolvedValue({backend: 'webgpu', adapterName: 'mock', limits: {maxTextureArrayLayers: 256, maxTextureDimension2D: 8192}});
 
     const result = await renderer.renderOfflineFrame(scene, camera, {
       samples: 32,

@@ -167,6 +167,14 @@ export interface RendererDiagnostics extends RenderingDiagnostics {
   };
 }
 
+/** Backend information resolved by init(). */
+export interface RendererInfo {
+  /** Active backend. */ backend: 'webgpu' | 'webgl';
+  /** Browser-reported adapter description. */ adapterName: string;
+  /** WebGPU fallback reason; absent without fallback. */ webgpuFallbackReason?: string;
+  /** Device-dependent texture atlas limits. */ limits: TextureAtlasLimits;
+}
+
 /** Device limits that bound the material texture atlas. */
 export interface TextureAtlasLimits {
   /** Maximum supported material-atlas layers; device dependent. */
@@ -190,7 +198,7 @@ export interface OfflineFrameRenderOptions {
   targetBatchTimeMs?: number;
   /** Deterministic sequence base. Use a disjoint range for every animation frame. */
   sampleSequenceOffset?: number;
-  /** Two-stage variance allocation. Unsupported WebGL backends fall back to fixed spp. */
+  /** Two-stage variance allocation. Default undefined. WebGPU only; ignored on WebGL (fixed spp). */
   adaptiveSampling?: Omit<OfflineAdaptiveSamplingOptions, 'maxSamples'>;
   /**
    * Minimum delay between intermediate final-pass canvas updates. Omit to
@@ -354,6 +362,7 @@ export default class Renderer {
    * Light candidates resampled for each next-event estimate (WebGPU). More
    * candidates reduce noise in scenes with many lights at a higher cost per
    * sample. Interactive preview uses at most two. Clamped to 1–16. Default `4`.
+   * WebGPU only; ignored on WebGL.
    */
   directLightCandidates = DEFAULT_DIRECT_LIGHT_CANDIDATES;
 
@@ -361,6 +370,7 @@ export default class Renderer {
    * Primary-ray handling of alpha-blended (glTF `BLEND`) materials on WebGPU.
    * `stochastic` treats alpha as coverage per sample; `deterministic-source-over`
    * splits the primary ray and blends both sides every sample. Default `stochastic`.
+   * WebGPU only; ignored on WebGL.
    */
   alphaBlendStrategy: AlphaBlendStrategy = 'stochastic';
 
@@ -450,6 +460,7 @@ export default class Renderer {
   /**
    * Present extended-range (HDR) values on displays and browsers that support
    * WebGPU HDR canvases, without display-referred tone mapping. Default `false`.
+   * WebGPU only; ignored on WebGL.
    */
   hdrOutputEnabled = false;
   /** Color grading contrast multiplier. Default `1`. */
@@ -595,7 +606,6 @@ export default class Renderer {
   output: RenderOutput = 'final';
 
   private _gpuDevice?: GPUDevice;
-  private _gpuAdapter?: GPUAdapter | null;
   private _gpuAdapterInfo?: GPUAdapterInfo;
 
   private _preserveDrawingBuffer;
@@ -618,8 +628,8 @@ export default class Renderer {
   private _pipeline?: RenderingPipeline;
 
   // Some status
-  private _pipelineInitedPromise?: Promise<void>;
-  private _pipelineInited?: () => void;
+  private _initPromise?: Promise<RendererInfo>;
+  private _info?: RendererInfo;
 
   private _initing = false;
   private _renderDone = false;
@@ -639,9 +649,6 @@ export default class Renderer {
       });
     }
 
-    this._pipelineInitedPromise = new Promise((resolve) => {
-      this._pipelineInited = resolve;
-    });
   }
 
   /** Resizes the canvas drawing buffer and the render targets, in pixels. */
@@ -669,16 +676,39 @@ export default class Renderer {
     };
   }
 
-  /** Samples per pixel accumulated so far, or `undefined` before initialization. */
-  getTotalSamplesRendered() {
-    if (this._pipeline) {
-      return this._pipeline.getTotalSamplesRendered();
-    }
+  /** Initialization result. Default undefined until init() resolves. */
+  get info(): RendererInfo | undefined { return this._info; }
+  /** Active backend. Default undefined until initialization completes. */
+  get backend(): RendererInfo['backend'] | undefined { return this._info?.backend; }
+  /** WebGPU device. Default undefined before initialization and on WebGL. */
+  get device(): GPUDevice | undefined { return this._gpuDevice; }
+  /** Accumulated samples per pixel. Default 0 before initialization. */
+  get samples(): number { return this._pipeline?.getTotalSamplesRendered() ?? 0; }
+
+  /** Initializes the backend once; concurrent and repeated calls share the result. render() also initializes lazily. */
+  init(): Promise<RendererInfo> {
+    return this._initPromise ??= (async () => {
+      if (!this._pipeline) await this._initPipeline(this._preferWebGPU);
+      if (this._pipelineInitError) throw this._pipelineInitError;
+      const diagnostics = this.getDiagnostics()!;
+      const gl = this._webglRenderer?.gl;
+      const limits = this._gpuDevice?.limits;
+      this._info = {
+        backend: this._gpuDevice ? 'webgpu' : 'webgl',
+        adapterName: diagnostics.adapterName,
+        webgpuFallbackReason: this._webgpuFallbackReason,
+        limits: {
+          maxTextureArrayLayers: limits?.maxTextureArrayLayers ?? gl?.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS),
+          maxTextureDimension2D: limits?.maxTextureDimension2D ?? gl?.getParameter(gl.MAX_TEXTURE_SIZE)
+        }
+      };
+      return this._info;
+    })();
   }
 
   /** Completes pending GPU timestamp readback used by diagnostics. */
   async flushDiagnostics() {
-    await this._pipelineInitedPromise;
+    await this.init();
     await this._pipeline?.flushDiagnostics();
   }
 
@@ -850,7 +880,8 @@ export default class Renderer {
     const previewIntervalMs = Number.isFinite(options.previewIntervalMs)
       ? Math.max(0, options.previewIntervalMs!)
       : undefined;
-    const { device } = await this.getGPUDeviceAndAdapter();
+    await this.init();
+    const device = this.device;
     const pipeline = this._pipeline;
     if (!pipeline) throw new Error('The rendering pipeline is not ready.');
     await this.prepareScene(scene);
@@ -903,7 +934,7 @@ export default class Renderer {
         const batchStartedAt = performance.now();
         const samplesBeforeBatch = Math.max(lastSamples, 0);
         const status = this.render(scene, camera);
-        const rendered = this.getTotalSamplesRendered() ?? 0;
+        const rendered = this.samples;
         const madeProgress = rendered !== lastSamples;
         if (madeProgress) {
           lastSamples = rendered;
@@ -1078,45 +1109,6 @@ export default class Renderer {
     };
   }
 
-  /** Device limits for the material texture atlas, or `undefined` before initialization. */
-  getTextureAtlasLimits(): TextureAtlasLimits | undefined {
-    if (this._gpuDevice) {
-      return {
-        maxTextureArrayLayers: this._gpuDevice.limits.maxTextureArrayLayers,
-        maxTextureDimension2D: this._gpuDevice.limits.maxTextureDimension2D
-      };
-    }
-    if (this._webglRenderer) {
-      const gl = this._webglRenderer.gl;
-      return {
-        maxTextureArrayLayers: gl.getParameter(gl.MAX_ARRAY_TEXTURE_LAYERS),
-        maxTextureDimension2D: gl.getParameter(gl.MAX_TEXTURE_SIZE)
-      };
-    }
-  }
-
-  /** Whether the WebGPU backend is active (`false` for WebGL 2 or before initialization). */
-  isUsingWebGPU() {
-    return !!this._gpuDevice;
-  }
-
-  /**
-   * Initializes the backend if needed and resolves the WebGPU device, adapter
-   * and adapter info. The device is `undefined` on the WebGL 2 backend.
-   */
-  async getGPUDeviceAndAdapter() {
-    if (!this._pipeline && !this._initing) {
-      void this._initPipeline(this._preferWebGPU);
-    }
-    await this._pipelineInitedPromise;
-    if (this._pipelineInitError) throw this._pipelineInitError;
-    return {
-      device: this._gpuDevice,
-      adapter: this._gpuAdapter,
-      adapterInfo: this._gpuAdapterInfo
-    };
-  }
-
   private async _initPipeline(preferWebGPU: boolean) {
     let gpuCreated = false;
     try {
@@ -1182,7 +1174,6 @@ export default class Renderer {
             globalGPUDevice = gpuDevice;
           }
 
-          this._gpuAdapter = gpuAdapter;
           this._gpuAdapterInfo = gpuAdapterInfo ?? undefined;
           this._gpuDevice = gpuDevice;
           this._pipeline = makeWGPURenderingPipeline(this.canvas, gpuDevice, {
@@ -1192,7 +1183,6 @@ export default class Renderer {
         } catch (e) {
           this._webgpuFallbackReason = e instanceof Error ? e.message : String(e);
           this._gpuDevice = undefined;
-          this._gpuAdapter = undefined;
           this._gpuAdapterInfo = undefined;
         }
       }
@@ -1223,8 +1213,7 @@ export default class Renderer {
       this._reportRenderError(error);
     } finally {
       this._initing = false;
-      this._pipelineInited?.();
-      this._pipelineInitedPromise = undefined;
+
     }
   }
 
@@ -1271,7 +1260,7 @@ export default class Renderer {
     const pipeline = this._pipeline;
 
     if (!pipeline) {
-      this._initPipeline(this._preferWebGPU);
+      void this.init().catch(() => {});
       return RENDER_STATUS_PREPARING;
     }
 
@@ -1637,7 +1626,7 @@ export default class Renderer {
 
   /** Redraws post-processing so `canvas.toDataURL()` sees the latest image. */
   prepareForExport() {
-    if (this.isUsingWebGPU()) {
+    if (this.backend === 'webgpu') {
       // Needs do an extra draw. Or the export will be last frame.
       this._pipeline?.drawPostProcess();
     }

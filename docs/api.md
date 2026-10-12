@@ -86,14 +86,22 @@ affects the image restarts accumulation.
 | `prepareScene(scene, options?)` | Builds missing static BLASes for a scene or `Mesh[]`. `rebuild` (default `false`) replaces existing ones; `onProgress(fraction)` (default none). Resolves to `{ geometryCount, bvhTimeMs }`. Does not compile shaders or render; see [BVH](./bvh.md#what-preparescene-completes) |
 | `renderOfflineFrame(scene, camera, options)` | Renders a finished frame; see below |
 | `restartSamples()` | Discards the accumulation |
-| `getTotalSamplesRendered()` | Accumulated spp |
+| `samples` | Accumulated spp; initially 0 |
 | `getRawOutput()` | `Promise<{ width, height, data: Float32Array }>` linear RGBA, top row first |
 | `readDepthSamples({ x, y, size })` | Asynchronously queries a 7×7 grid of GPU depths after `render()`; see [depth sampling](#depth-sampling) |
 | `prepareForExport()` | Redraws post-processing before `canvas.toBlob()` / `toDataURL()` |
-| `isUsingWebGPU()` | Active backend |
+| `backend` / `device` | Backend (`'webgpu'` / `'webgl'`), initially undefined; device only on WebGPU |
 | `getDiagnostics()` | Backend, adapter, shader compilation, BVH, light sampling and timing details |
-| `getGPUDeviceAndAdapter()` | Initializes and returns the WebGPU device/adapter |
+| `init()` / `info` | Initializes once and resolves `RendererInfo`; synchronous info is undefined before completion |
 | `dispose()` | Releases GPU resources, BVH Workers and the denoiser; cancels pending BVH preparation |
+
+`await renderer.init()` is optional: `render()` initializes lazily. Concurrent
+initializations share one promise. `info` contains `backend`, `adapterName`,
+optional `webgpuFallbackReason`, and `limits.maxTextureArrayLayers` /
+`limits.maxTextureDimension2D`. Use `backend === 'webgpu'` for OIDN, direct
+light candidates, alpha blend strategy, HDR output and offline adaptive
+sampling. WebGL ignores those settings; actual HDR presentation is reported
+by `getDiagnostics().hdrPresentation.active`.
 
 `render()` detects scene edits itself, except material, texture and geometry
 data edits, which need `markUpdated()` or `markVerticesUpdated()`; see

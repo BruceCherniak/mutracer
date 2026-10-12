@@ -15,11 +15,9 @@ import { OIDN_WEIGHTS_PACKAGE_VERSION, OIDN_WEIGHTS_PACKAGE, DEFAULT_OIDN_WEIGHT
 
 function createRenderer(usingWebGPU = true) {
   return {
-    getGPUDeviceAndAdapter: vi.fn().mockResolvedValue({
-      device: usingWebGPU ? ({} as GPUDevice) : undefined,
-      adapterInfo: usingWebGPU ? ({} as GPUAdapterInfo) : undefined
-    }),
-    isUsingWebGPU: vi.fn(() => usingWebGPU),
+    init: vi.fn().mockResolvedValue({ backend: usingWebGPU ? 'webgpu' : 'webgl' }),
+    device: usingWebGPU ? ({} as GPUDevice) : undefined,
+    backend: usingWebGPU ? 'webgpu' : 'webgl',
     getSize: vi.fn(() => ({ width: 1280, height: 720 })),
     oidn: undefined,
     samplingPattern: 'sobol'

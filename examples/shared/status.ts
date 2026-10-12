@@ -24,8 +24,8 @@ export function showStatus(
   renderer: Renderer,
   status: RenderStatus
 ) {
-  const samples = renderer.getTotalSamplesRendered() ?? 0;
-  const backend = renderer.isUsingWebGPU() ? 'WebGPU' : 'WebGL 2';
+  const samples = renderer.samples;
+  const backend = renderer.backend === 'webgpu' ? 'WebGPU' : renderer.backend === 'webgl' ? 'WebGL 2' : 'Initializing';
   element.textContent =
     `${labels[status] ?? ''} · ${samples} / ${renderer.maxSamples} spp · ${backend}`;
 }

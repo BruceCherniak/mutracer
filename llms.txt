@@ -6,6 +6,7 @@
 
 - Install: `npm install @meimu/mutracer` (+ `three` for the Three.js helpers). ESM with TypeScript declarations; every option has TSDoc with its default.
 - Scene: a plain object `{ meshes: Mesh[], lights: SceneLight[], background? }`. `new Mesh(geometry, material)` is placed with `mesh.transform` (column-major mat4, gl-matrix compatible).
+- Initialization: optional `await renderer.init()` resolves backend, adapter and limits; `info` / `backend` are undefined before completion, `device` is WebGPU only, `samples` initially 0 ([API](docs/api.md)).
 - Render loop: `const renderer = new Renderer({ canvas }); renderer.setSize(w, h);` then `renderer.render(scene, camera)` once per `requestAnimationFrame`. It accumulates up to `renderer.maxSamples` (default 2048) and returns a status.
 - Statuses: PREPARING (6), COMPILING_SHADER (1), RENDERING (2), DENOISING (3), FINISHED (4), ERROR (5). Keep rendering through preparation/compilation. Intermediate denoise batches stay RENDERING; DENOISING/FINISHED describe the final image. See [API](./docs/api.md).
 - Updates: edit the scene in place; membership, transforms, references, lights and background are detected. Call `material.markUpdated()` after parameter edits, `texture.markUpdated()` after pixel edits, `geometry.markVerticesUpdated()` after vertex-only edits, and `geometry.markUpdated()` after index or `materialIndex` edits. For per-frame deformation set `geometry.dynamic = true`.

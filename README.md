@@ -77,6 +77,7 @@ camera.position = [0, 2, 6]; camera.lookAt([0, 1, 0]);
 
 const renderer = new Renderer({ canvas });
 renderer.setSize(canvas.width, canvas.height);
+// Optional: await renderer.init() to inspect backend, adapter and limits.
 
 function frame() {
   renderer.render(scene, camera); // adds samples until renderer.maxSamples

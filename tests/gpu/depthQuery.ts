@@ -32,8 +32,8 @@ async function baseline(webgl: boolean) {
   const { renderer, sync, canvas } = await fixture(webgl);
   try {
     const { data } = await renderer.getRawOutput();
-    const { adapterInfo } = await renderer.getGPUDeviceAndAdapter();
-    return { backend: renderer.isUsingWebGPU() ? 'webgpu' : 'webgl', adapterInfo, data: Array.from(data) };
+    const { adapterName: adapterInfo } = await renderer.init();
+    return { backend: renderer.backend, adapterInfo, data: Array.from(data) };
   } finally {
     renderer.dispose(); sync.dispose(); canvas.remove();
   }
@@ -141,10 +141,9 @@ async function run(webgl: boolean, layout: Renderer['bvhLayout'] = 'bvh2') {
       'Detailed mesh GPU depth matches CPU');
     lines.push(`${detailed.geometry.index!.count / 3} triangles: CPU ${cpuMs.toFixed(2)} ms, GPU call ${gpuCallMs.toFixed(2)} ms, asynchronous completion ${gpuWallMs.toFixed(2)} ms`);
     document.querySelector('#result')!.textContent = lines.join('\n');
-    const { adapterInfo } = await renderer.getGPUDeviceAndAdapter();
-    return { backend: renderer.isUsingWebGPU() ? 'webgpu' : 'webgl', layout,
-      adapter: adapterInfo ? { vendor: adapterInfo.vendor, architecture: adapterInfo.architecture,
-        device: adapterInfo.device, description: adapterInfo.description } : undefined, lines };
+    const { adapterName: adapterInfo } = await renderer.init();
+    return { backend: renderer.backend, layout,
+      adapter: adapterInfo, lines };
   } finally {
     renderer.dispose(); sync.dispose(); canvas.remove();
   }

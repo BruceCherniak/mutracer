@@ -151,8 +151,9 @@ async function loadOIDN(
   options: CustomOIDNModelOptions = {},
   fetchWeights = fetchOIDNWeights
 ): Promise<OIDNDenoiser> {
-  const { device } = await renderer.getGPUDeviceAndAdapter();
-  if (!renderer.isUsingWebGPU() || !device) {
+  await renderer.init();
+  const device = renderer.device;
+  if (renderer.backend !== 'webgpu' || !device) {
     throw new Error('OIDN requires a WebGPU renderer.');
   }
 

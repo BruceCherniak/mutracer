@@ -9,7 +9,7 @@ it('records a WebGPU initialization rejection when falling back to WebGL',async(
   vi.stubGlobal('navigator',{gpu:{requestAdapter:vi.fn().mockRejectedValue(new Error('adapter unavailable'))}});
   const renderer=new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement});
   expect(renderer.render({meshes:[],lights:[]},{} as Camera)).toBe(RENDER_STATUS_PREPARING);
-  await renderer.getGPUDeviceAndAdapter();
+  await renderer.init();
   expect(renderer.getDiagnostics()?.backend).toBe('webgl');
   expect(renderer.getDiagnostics()?.webgpuFallbackReason).toBe('adapter unavailable');
 });
@@ -18,7 +18,16 @@ it('records a failed fallback initialization and returns ERROR without an unhand
   vi.spyOn(console,'error').mockImplementation(()=>{});
   const renderer=new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement,preferWebGPU:false});
   renderer.render({meshes:[],lights:[]},{} as Camera);
-  await expect(renderer.getGPUDeviceAndAdapter()).rejects.toThrow('context failed');
+  await expect(renderer.init()).rejects.toThrow('context failed');
   expect(renderer.render({meshes:[],lights:[]},{} as Camera)).toBe(RENDER_STATUS_ERROR);
   expect(renderer.lastError?.message).toBe('context failed');
+});
+it('shares concurrent initialization and exposes no backend before completion', async () => {
+  const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement, preferWebGPU: false });
+  expect(renderer.info).toBeUndefined(); expect(renderer.backend).toBeUndefined(); expect(renderer.device).toBeUndefined(); expect(renderer.samples).toBe(0);
+  const first = renderer.init(), second = renderer.init();
+  expect(first).toBe(second);
+  const info = await first;
+  expect(info).toBe(renderer.info); expect(renderer.backend).toBe('webgl');
+  expect(await renderer.init()).toBe(info);
 });
