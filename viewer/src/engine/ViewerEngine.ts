@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-  Camera,
   Renderer,
   THREESceneSync,
   fromTHREECamera,
@@ -797,8 +796,8 @@ export class ViewerEngine {
     });
   }
 
-  private publishLens(camera: Camera) {
-    const focalLength = camera.focalLength;
+  private publishLens(camera: ViewCamera) {
+    const focalLength = isOrthographic(camera) ? 0 : camera.getFocalLength() * camera.zoom;
     const lens = get().lens;
     if (Math.abs(focalLength - lens.focalLength) > 0.05) set({ lens: { ...lens, focalLength } });
   }
@@ -1214,7 +1213,7 @@ export class ViewerEngine {
     }
     this.sync.update();
     const camera = this.lensCamera(this.activeCamera(), this.advanceFocus(now));
-    this.publishLens(camera);
+    this.publishLens(this.activeCamera());
     const status = this.renderer.render(this.sync.scene, camera);
     // Query only after the renderer uploads the current animation pose and
     // camera. Readback runs alongside subsequent frames.
