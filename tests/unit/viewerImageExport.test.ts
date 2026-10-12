@@ -34,7 +34,7 @@ describe('viewer viewport image download', () => {
     const createURL = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:viewport');
     const revokeURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
     const renderer = {
-      prepareForExport: vi.fn(),
+      toBlob: vi.fn(async () => { if (!blob) throw new Error('The canvas could not be encoded'); return blob; }),
       samples: 32,
       restartSamples: vi.fn(),
       setSize: vi.fn(),
@@ -42,10 +42,7 @@ describe('viewer viewport image download', () => {
     };
     const canvas = {
       width: 800, height: 600,
-      toBlob: vi.fn((resolve: BlobCallback) => {
-        expect(renderer.prepareForExport).toHaveBeenCalledOnce();
-        resolve(blob);
-      })
+      toBlob: vi.fn()
     };
     // Exercise export behavior without constructing a GPU or starting the render loop.
     const engine: Engine = Object.assign(Object.create(ViewerEngine.prototype), {
@@ -60,7 +57,7 @@ describe('viewer viewport image download', () => {
     const settings = useViewer.getState().settings;
     await engine.downloadViewportImage();
 
-    expect(canvas.toBlob).toHaveBeenCalledWith(expect.any(Function), 'image/png', undefined);
+    expect(renderer.toBlob).toHaveBeenCalledWith({type:'image/png',quality:undefined});
     expect([canvas.width, canvas.height]).toEqual([800, 600]);
     expect(renderer.restartSamples).not.toHaveBeenCalled();
     expect(renderer.setSize).not.toHaveBeenCalled();
@@ -85,10 +82,10 @@ describe('viewer viewport image download', () => {
   });
 
   it('does not capture an unrendered viewport', async () => {
-    const { engine, renderer, canvas } = fixture();
+    const { engine, renderer } = fixture();
     renderer.samples = 0;
     await engine.downloadViewportImage();
-    expect(canvas.toBlob).not.toHaveBeenCalled();
+    expect(renderer.toBlob).not.toHaveBeenCalled();
     expect(useViewer.getState().toast?.tone).toBe('error');
   });
 

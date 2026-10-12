@@ -1128,11 +1128,8 @@ export class ViewerEngine {
     showToast(`Saved ${link.download}`);
   }
 
-  private async captureImage(type = 'image/png', quality?: number): Promise<Blob> {
-    this.renderer.prepareForExport();
-    const blob = await new Promise<Blob | null>((resolve) => this.canvas.toBlob(resolve, type, quality));
-    if (!blob) throw new Error('The canvas could not be encoded');
-    return blob;
+  private captureImage(type = 'image/png', quality?: number): Promise<Blob> {
+    return this.renderer.toBlob({ type, quality });
   }
 
   /** Renders the current view offline at the given size and encodes the canvas. */

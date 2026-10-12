@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Dialog, Heading, Modal, ModalOverlay } from 'react-aria-components';
 import { Download, X } from 'lucide-react';
-import { setSettings, setUi, useViewer } from '../store';
+import { setSettings, setUi, useViewer, showToast } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
 import { Field, Scrub, Segmented, Switch } from './ui/controls';
 
@@ -25,6 +25,7 @@ export function ExportDialog() {
     setSamples(maxSamples);
     setTransparent(background === 'transparent');
     // Snapshot the current frame for the preview.
+    let cancelled = false;
     const id = requestAnimationFrame(() => {
       const engine = getEngine();
       const target = preview.current;
@@ -32,10 +33,12 @@ export function ExportDialog() {
       const source = engine.renderer.canvas;
       target.width = 480;
       target.height = Math.round((480 * source.height) / Math.max(1, source.width));
-      engine.renderer.prepareForExport();
-      target.getContext('2d')?.drawImage(source, 0, 0, target.width, target.height);
+      void engine.renderer.toBlob().then(createImageBitmap).then(image => {
+        if (!cancelled) target.getContext('2d')?.drawImage(image, 0, 0, target.width, target.height);
+        image.close();
+      }).catch(error => { if (!cancelled) showToast(`Could not capture preview: ${error.message}`, 'error'); });
     });
-    return () => cancelAnimationFrame(id);
+    return () => { cancelled = true; cancelAnimationFrame(id); };
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const dims = size === '1080p' ? [1920, 1080] : size === '2k' ? [2560, 1440] : size === '4k' ? [3840, 2160] : size === 'square' ? [2048, 2048] : [stats.width, stats.height];
