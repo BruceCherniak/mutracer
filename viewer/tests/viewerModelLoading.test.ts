@@ -2,7 +2,7 @@
 import { File } from 'node:buffer';
 import * as THREE from 'three';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadModelFromFiles, loadModelFromSource, loadModelFromURL } from '../../viewer/src/engine/loadModel';
+import { loadModelFromFiles, loadModelFromSource, loadModelFromURL } from '../src/engine/loadModel';
 
 const nativeFetch = globalThis.fetch;
 const vertices = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);

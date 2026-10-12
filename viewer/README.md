@@ -14,6 +14,7 @@ resolution using the selected sample count and background settings.
 npm run viewer          # http://localhost:3012
 npm run build:viewer    # static site in dist-viewer/
 npm run typecheck:viewer
+npm run test:viewer       # source aliases; no prior build:lib needed
 ```
 
 Add `?webgl` to force the WebGL 2 backend. The URL hash keeps the example
@@ -29,7 +30,7 @@ the home page and the examples. See [`site/README.md`](../site/README.md).
 
 ```
 src/
-  engine/ViewerEngine.ts   Renderer, render loop, THREESceneSync, picking,
+  engine/ViewerEngine.ts   Engine/Display/Render, THREESceneSync, picking,
                            animation, export. No React.
   engine/loadModel.ts      GLTFLoader for URLs, files and dropped folders;
                            the procedural material-sphere scene

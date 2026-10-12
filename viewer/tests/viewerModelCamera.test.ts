@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { readModelCamera } from '../viewer/src/engine/modelCamera';
+import { readModelCamera } from '../src/engine/modelCamera';
 
 describe('asset default camera', () => {
   const camera = { position: [3, 1, 4], target: [0, 1, 0], fov: 45, space: 'grounded' };

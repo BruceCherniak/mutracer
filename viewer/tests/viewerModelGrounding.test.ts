@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { groundModel } from '../viewer/src/engine/modelGrounding';
+import { groundModel } from '../src/engine/modelGrounding';
 
 describe('viewer model grounding', () => {
   it('grounds actual geometry when rotated local bounds extend below it', () => {

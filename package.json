@@ -83,7 +83,8 @@
     "typecheck:site": "tsc --noEmit -p site/tsconfig.json",
     "deploy": "wrangler deploy",
     "pack:oidn-weights": "node scripts/pack-oidn-weights.mjs",
-    "check:lib-esm": "node scripts/check-lib-esm.mjs"
+    "check:lib-esm": "node scripts/check-lib-esm.mjs",
+    "test:viewer": "vitest run --config viewer/vitest.config.ts"
   },
   "dependencies": {
     "gl-matrix": "^3.4.4",

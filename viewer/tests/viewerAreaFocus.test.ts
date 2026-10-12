@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
-import { focusPull, guessMetersPerUnit, measureAreaDepth, pickFocusDepth } from '../../viewer/src/engine/areaFocus';
+import { focusPull, guessMetersPerUnit, measureAreaDepth, pickFocusDepth } from '../src/engine/areaFocus';
 
 function scene() {
   const root = new THREE.Group();

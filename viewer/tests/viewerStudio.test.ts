@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { STUDIO_PRESETS, buildStudioRig } from '../../viewer/src/engine/studio';
+import { STUDIO_PRESETS, buildStudioRig } from '../src/engine/studio';
 
 const facing = (light: THREE.RectAreaLight) => new THREE.Vector3(0, 0, -1).applyQuaternion(light.quaternion);
 

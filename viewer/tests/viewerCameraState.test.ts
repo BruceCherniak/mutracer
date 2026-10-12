@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { readCameraState, writeCameraState, type CameraState } from '../../viewer/src/engine/cameraState';
+import { readCameraState, writeCameraState, type CameraState } from '../src/engine/cameraState';
 
 const state: CameraState = {
   modelId: 'current', position: [2, 3, 4], target: [0, 1, 0], up: [0, 1, 0], near: 0.01, far: 1000, zoom: 1.2, orthoHalfHeight: 1.5,

@@ -1,6 +1,6 @@
 import { webcrypto } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { loadHDR } from '../../viewer/src/engine/environment';
+import { loadHDR } from '../src/engine/environment';
 
 vi.mock('@meimu/mutracer', async () => import('../../src/util/loadRGBE'));
 

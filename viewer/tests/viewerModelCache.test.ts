@@ -3,7 +3,7 @@ import { File } from 'node:buffer';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearMaterialEdits, clearModelCache, readMaterialEdits, readModelCache, saveMaterialEdits, saveModelCache, type CachedModel
-} from '../../viewer/src/engine/modelCache';
+} from '../src/engine/modelCache';
 
 function filesystem() {
   const files = new Map<string, Blob>();

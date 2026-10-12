@@ -7,8 +7,9 @@ people and coding agents changing the library. For using it, read
 ## Layout
 
 - `src/main.ts`: public API. `src/oidn.ts`: the `@meimu/mutracer/oidn` entry point.
-- `src/Renderer.ts`: options, status, scene change detection, denoiser and
-  offline rendering.
+- `src/Engine.ts`: device, committed scene/camera and shared resources.
+- `src/Display.ts`: canvas, display settings and image export.
+- `src/Render.ts`: independent accumulation, denoising and convergence.
 - `src/scene/`: scene description classes (`Mesh`, `Geometry`,
   `OpenPBRMaterial`, lights, `Camera`, `Texture`).
 - `src/renderer/`: backends. `WGPU*` files and `wgsl/` are WebGPU; `WebGL*`
@@ -36,13 +37,17 @@ npm run typecheck:site
 npm test
 ```
 
+`npm test` runs only library tests. For viewer changes, also run
+`npm run test:viewer` (the independent suite in `viewer/tests/`, using source aliases
+without requiring a prior library build).
+
 `npm run build` checks the bundled distribution; `npm run build:lib` builds
 `lib/` (the npm entry points) and copies the WebAssembly module.
 
 Unit tests do not cover GPU output. For changes to shaders, sampling or
 post-processing, render the examples (or a fixed-seed scene with a fixed
 sample count) on a real GPU before and after, and compare
-`renderer.readPixels('hdr')` pixels. Test both WebGPU and WebGL 2 (`?webgl`).
+`render.readPixels('hdr')` pixels. Test both WebGPU and WebGL 2 (`?webgl`).
 
 ## Rules
 
