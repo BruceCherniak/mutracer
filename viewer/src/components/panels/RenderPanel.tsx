@@ -163,11 +163,11 @@ export function RenderPanel() {
             onChange={(v) => update({ output: v })}
           />
         </Field>
-        <Switch label="Interactive preview" checked={s.interactivePreview} onChange={(v) => update({ interactivePreview: v })}>
+        <Switch label="Interactive preview" checked={s.previewEnabled} onChange={(v) => update({ previewEnabled: v })}>
           <span className="field-label">Interactive preview</span>
         </Switch>
-        {s.interactivePreview && (
-          <Scrub label="Max preview scale" title="Preview resolution adapts to render time, up to this scale" value={s.previewResolutionScale} min={0.25} max={1} onChange={(v) => update({ previewResolutionScale: v })} />
+        {s.previewEnabled && (
+          <Scrub label="Max preview scale" title="Preview resolution adapts to render time, up to this scale" value={s.previewMaxResolutionScale} min={0.25} max={1} onChange={(v) => update({ previewMaxResolutionScale: v })} />
         )}
         {s.denoise && s.denoiseWhileConverging && <Hint>Live denoise also runs while interacting{jnlm ? '.' : ', using the small preview model.'}</Hint>}
         {open.debug && <Diagnostics />}

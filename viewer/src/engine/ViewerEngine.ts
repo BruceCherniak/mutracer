@@ -118,6 +118,9 @@ export class ViewerEngine {
     this.settings = get().settings;
     this.renderer = new Renderer({ canvas, preferWebGPU: !new URLSearchParams(location.search).has('webgl') });
 
+    this.renderer.on('sample', ({samples}) => {
+      if (this.awaitingFirstSample && samples > 0) { this.awaitingFirstSample = false; set({loading:null}); }
+    });
     this.renderer.on('error', error => showToast(`Rendering failed: ${error.message}`, 'error'));
 
     this.scene.add(this.modelGroup);
@@ -549,8 +552,8 @@ export class ViewerEngine {
     r.output = s.output;
     // While-converging OIDN denoises preview frames with the small network and lowers
     // their resolution to keep up, so it always previews while interacting.
-    r.interactivePreview = s.interactivePreview || (s.denoise && s.denoiseWhileConverging);
-    r.previewResolutionScale = s.previewResolutionScale;
+    r.previewEnabled = s.previewEnabled;
+    r.previewMaxResolutionScale = s.previewMaxResolutionScale;
     r.shadowCatcherAlpha = s.groundOpacity;
     this.ground.visible = s.groundShadow;
     this.controls.autoRotate = s.autoRotate;

@@ -16,7 +16,8 @@ vi.mock('@meimu/mutracer', async () => ({
   DEFAULT_JNLM_OPTIONS: (await import('../../src/renderer/jnlm')).DEFAULT_JNLM_OPTIONS,
   Renderer: class {
     samples = 0;
-    on() { return () => {}; }
+    listeners = new Map<string, (event: any) => void>();
+    on(name: string, listener: (event: any) => void) { this.listeners.set(name, listener); return () => { this.listeners.delete(name); }; }
     init() { return Promise.resolve({backend:'webgl',adapterName:'mock'}); }
     getSize() { return { width: 800, height: 600 }; }
     setSize() {}
@@ -89,7 +90,7 @@ describe('viewer reload lifecycle', () => {
     for (let i = 0; i < 5; i++) await Promise.resolve();
   }
 
-  function publish(viewer: Engine, phase: 'preparing' | 'compiling' | 'converging' | 'finished' | 'error' | 'paused', samples: number) {
+  function publish(viewer: Engine, phase: 'preparing' | 'compiling' | 'previewing' | 'converging' | 'finished' | 'error' | 'paused', samples: number) {
     const internal = viewer as unknown as {
       renderer: { samples: number };
       publishStats(phase: string, now: number, force: boolean): void;
@@ -97,6 +98,14 @@ describe('viewer reload lifecycle', () => {
     internal.renderer.samples = samples;
     internal.publishStats(phase, 1000, true);
   }
+
+  it('dismisses model loading after a preview sample while formal samples remain zero', async () => {
+    const viewer = engine(); await viewer.loadPreset('spheres');
+    publish(viewer, 'previewing', 0); expect(useViewer.getState().loading).not.toBeNull();
+    const renderer = viewer.renderer as unknown as { listeners: Map<string, (event: unknown) => void> };
+    renderer.listeners.get('sample')!({ samples: 1, preview: true, isFirstFrame: true, frameTimeMs: 2 });
+    expect(useViewer.getState().loading).toBeNull(); expect(useViewer.getState().stats.samples).toBe(0);
+  });
 
   it('keeps the loading stages visible while preparation retains old scene samples', async () => {
     const viewer = engine();

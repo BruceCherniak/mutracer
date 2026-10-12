@@ -6,7 +6,8 @@ const LABELS: Record<RenderPhase, string> = {
   starting: 'Starting',
   preparing: 'Preparing',
   compiling: 'Compiling',
-  converging: 'Rendering',
+  previewing: 'Preview',
+  converging: 'Converging',
   denoising: 'Denoising',
   finished: 'Done',
   paused: 'Paused',
@@ -25,7 +26,7 @@ function formatTime(seconds: number) {
 function ProgressRing({ progress, phase }: { progress: number; phase: RenderPhase }) {
   const r = 10;
   const c = 2 * Math.PI * r;
-  const spinning = phase === 'denoising' || phase === 'preparing' || phase === 'compiling' || phase === 'starting';
+  const spinning = phase === 'previewing' || phase === 'denoising' || phase === 'preparing' || phase === 'compiling' || phase === 'starting';
   return (
     <span className="ring" data-phase={phase} data-spinning={spinning || undefined}
       role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(progress * 100)} aria-label="Sample progress">
@@ -72,7 +73,7 @@ export function StatusBar() {
     <div className="float dock" role="status" data-phase={phase}>
       <ProgressRing progress={progress} phase={phase} />
       <div className="dock__status" title={done && msPerSample ? `${elapsed.toFixed(1)} s · ${msPerSample.toFixed(1)} ms per sample` : undefined}>
-        <b>{playing && phase === 'converging' ? 'Playing' : LABELS[phase]}</b>
+        <b>{playing && (phase === 'previewing' || phase === 'converging') ? 'Playing' : LABELS[phase]}</b>
         <span className="mono"><span className="dock__spp">{samples}</span> spp{time && <span className="dock__time"> · {time}</span>}</span>
       </div>
       {phase !== 'finished' && <button className="icon-btn icon-btn--bare dock__pause" aria-label={paused ? 'Resume rendering' : 'Pause rendering'}

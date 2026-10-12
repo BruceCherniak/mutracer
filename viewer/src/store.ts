@@ -68,8 +68,8 @@ export interface Settings {
   bloomRadius: number;
   vignette: number;
   output: RenderOutput;
-  interactivePreview: boolean;
-  previewResolutionScale: number;
+  previewEnabled: boolean;
+  previewMaxResolutionScale: number;
 
   /** `-1` is the orbit camera; otherwise an index into the model's cameras. */
   cameraIndex: number;
@@ -134,8 +134,8 @@ export const DEFAULT_SETTINGS: Settings = {
   bloomRadius: 0.6,
   vignette: 0,
   output: 'final',
-  interactivePreview: true,
-  previewResolutionScale: 1,
+  previewEnabled: true,
+  previewMaxResolutionScale: 1,
   cameraIndex: -1,
   projection: 'perspective',
   fov: 35,
@@ -158,7 +158,7 @@ export function autoGroundedSkybox(modelRadius: number, height: number | null = 
   return { height: h, radius: 20 * h };
 }
 
-export type RenderPhase = 'starting' | 'preparing' | 'compiling' | 'converging' | 'denoising' | 'finished' | 'paused' | 'error';
+export type RenderPhase = 'starting' | 'preparing' | 'compiling' | 'previewing' | 'converging' | 'denoising' | 'finished' | 'paused' | 'error';
 
 export interface Stats {
   phase: RenderPhase;
@@ -271,7 +271,7 @@ const RENDER_FIELDS: (keyof Settings)[] = [
   'envResolution', 'maxSamples', 'bounces', 'resolutionScale', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
   'jnlmStrength', 'jnlmSearchRadius', 'jnlmPatchRadius', 'jnlmAlbedoBandwidth', 'jnlmNormalBandwidth', 'jnlmIterations',
   'oidnModel', 'oidnMaxTileSize',
-  'toneMapping', 'interactivePreview', 'previewResolutionScale'
+  'toneMapping', 'previewEnabled', 'previewMaxResolutionScale'
 ];
 
 function readStorage<T>(key: string): Partial<T> {
@@ -401,7 +401,7 @@ const SETTING_LABELS: Partial<Record<keyof Settings, string>> = {
   groundShadow: 'Ground shadow', groundOpacity: 'Ground opacity', maxSamples: 'Samples', resolutionScale: 'Resolution',
   bvhBuilder: 'BVH builder', denoise: 'Denoise', denoiseModel: 'Denoiser', denoiseWhileConverging: 'Denoise while converging',
   toneMapping: 'Tone mapping', bloomIntensity: 'Bloom intensity', bloomThreshold: 'Bloom threshold',
-  bloomRadius: 'Bloom radius', interactivePreview: 'Interactive preview', previewResolutionScale: 'Preview resolution',
+  bloomRadius: 'Bloom radius', previewEnabled: 'Interactive preview', previewMaxResolutionScale: 'Preview resolution',
   samplingPattern: 'Sampling pattern', oidnModel: 'OIDN model', oidnMaxTileSize: 'OIDN tile size', temperature: 'Temperature',
   jnlmStrength: 'JNLM strength', jnlmSearchRadius: 'JNLM search radius', jnlmPatchRadius: 'JNLM patch radius',
   jnlmAlbedoBandwidth: 'JNLM albedo tolerance', jnlmNormalBandwidth: 'JNLM normal tolerance', jnlmIterations: 'JNLM passes'
