@@ -925,9 +925,6 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
       weight, `select(0.0, ${weight}, ${feature})`);
   }
   specializedSource = specializedSource
-    .replaceAll('proposal < 4u', 'proposal < rtUniform.bsdfProposalCount')
-    .replaceAll('candidate < 5u', 'candidate < rtUniform.bsdfProposalCount + 1u')
-    .replaceAll('proposal < 3u', 'proposal + 1u < rtUniform.bsdfProposalCount')
     .replaceAll('polarization < 2u', 'polarization < (rtUniform.bsdfProposalCount >> 1u)')
     .replaceAll('substrate < 2u', 'substrate < (rtUniform.bsdfProposalCount >> 1u)')
     .replaceAll('channel < 3u', 'channel + 1u < rtUniform.bsdfProposalCount');
