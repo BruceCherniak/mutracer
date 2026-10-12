@@ -1572,3 +1572,12 @@ it('does not mix a background prebuild callback into the active scene progress e
  finishes[1](buildBLAS(active.geometry));await (renderer as any)._bvhPreparation;
  expect(progress).toHaveBeenCalledWith({stage:'bvh',progress:1});build.mockRestore();vi.unstubAllGlobals();
 });
+
+it('makes completed pixels readable inside a denoised event listener', async () => {
+ const renderer=new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement});renderer.maxSamples=1;renderer.previewEnabled=false;renderer.oidn={} as never;
+ const result={width:1,height:1,data:new Float32Array([1,2,3,1])},readOutput=vi.fn(async()=>result);
+ const pipeline=createPipeline({needsRestartSample:vi.fn(()=>false),performOIDNDenoise:vi.fn(async()=>true),readOutput});attachPipeline(renderer,pipeline);
+ let read:ReturnType<Renderer['readPixels']>|undefined;renderer.on('denoised',()=>{read=renderer.readPixels('denoised');});
+ renderer.render({meshes:[],lights:[]},{} as Camera);await new Promise(resolve=>setTimeout(resolve,0));
+ expect(await read).toBe(result);expect(readOutput).toHaveBeenCalledWith('denoised');
+});

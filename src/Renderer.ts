@@ -1610,12 +1610,12 @@ export default class Renderer {
           // a single whole-image execution). Submit the completed OIDN
           // texture explicitly so the first denoised frame reaches the
           // presentation surface.
+          this._oidnStatus = completed ? OIDN_DENOISED : 0;
           if (completed) {
             pipeline.drawPostProcess();
             this._oidnFirstFrameDenoisePending = false;
             this._events.emit('denoised', { samples: denoisedSamples, final });
           }
-          this._oidnStatus = completed ? OIDN_DENOISED : 0;
         })
         .catch((error) => {
           this._notifyError(error);
