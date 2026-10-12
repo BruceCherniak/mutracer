@@ -5,11 +5,10 @@ const initUNetFromBuffer = vi.hoisted(() => vi.fn());
 vi.mock('oidn-web', () => ({ initUNetFromBuffer }));
 
 import {
-  initializeOIDN,
-  initializeOIDNFromURL,
   resolveOIDNAuxiliaryModelUrls,
   resolveOIDNModelUrl
 } from '../../src/oidn';
+import { loadOIDNNetwork } from '../../src/renderer/oidnNetwork';
 import { readFileSync } from 'node:fs';
 import { OIDN_WEIGHTS_PACKAGE_VERSION, OIDN_WEIGHTS_PACKAGE, DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL, DEFAULT_OIDN_WEIGHTS_BASE_URL } from '../../src/oidn';
 
@@ -21,10 +20,10 @@ function createEngine(usingWebGPU = true) {
     _getWeights: (_key: string, load: () => Promise<ArrayBuffer>) => load(),
     oidn: undefined,
     samplingPattern: 'sobol'
-  } as unknown as Engine & {samplingPattern: string; oidn?: import('../../src/oidn').OIDNDenoiser};
+  } as unknown as Engine & {samplingPattern: string; oidn?: import('../../src/renderer/oidnNetwork').OIDNDenoiser};
 }
 
-describe('initializeOIDN', () => {
+describe('OIDN option loading', () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();
@@ -35,7 +34,7 @@ describe('initializeOIDN', () => {
     engine.samplingPattern = pattern;
     const weights = new Uint8Array([0xD7, 0x41, 0, 0]).buffer;
     const denoiser = {
-      auxiliaryDenoisers: undefined as import('../../src/oidn').OIDNDenoiser['auxiliaryDenoisers'],
+      auxiliaryDenoisers: undefined as import('../../src/renderer/oidnNetwork').OIDNDenoiser['auxiliaryDenoisers'],
       dispose: vi.fn(),
       prepareForImage: vi.fn().mockResolvedValue(undefined),
       tileExecute: vi.fn()
@@ -63,7 +62,8 @@ describe('initializeOIDN', () => {
       .mockResolvedValueOnce(normalDenoiser);
 
     await expect(
-      initializeOIDN(engine, {
+      loadOIDNNetwork(engine, {
+        type: 'oidn',
         model: 'cleanAuxLarge',
         maxTileSize: 1024,
         weightsBaseUrl: '/oidn/weights/'
@@ -120,7 +120,8 @@ describe('initializeOIDN', () => {
     );
     initUNetFromBuffer.mockResolvedValue(denoiser);
 
-    await initializeOIDNFromURL(engine, '/custom/model.tza', {
+    await loadOIDNNetwork(engine, {
+      type: 'oidn', weightsUrl: '/custom/model.tza',
       aux: false,
       hdr: true,
       hdrTransfer: 'log'
@@ -147,7 +148,7 @@ describe('initializeOIDN', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(
-      initializeOIDN(webglEngine)
+      loadOIDNNetwork(webglEngine, {type: 'oidn'})
     ).rejects.toThrow('OIDN requires a WebGPU engine.');
     expect(fetchMock).not.toHaveBeenCalled();
 
@@ -158,7 +159,7 @@ describe('initializeOIDN', () => {
       statusText: 'Not Found'
     });
     await expect(
-      initializeOIDNFromURL(webgpuEngine, '/custom/missing.tza')
+      loadOIDNNetwork(webgpuEngine, {type: 'oidn', weightsUrl: '/custom/missing.tza'})
     ).rejects.toThrow(
       'Failed to load OIDN weights from /custom/missing.tza: 404 Not Found'
     );
@@ -201,7 +202,7 @@ describe('initializeOIDN', () => {
     initUNetFromBuffer.mockResolvedValue({ dispose() {} });
     try {
       for (const model of ['standard', 'small'] as const) {
-        await initializeOIDN(createEngine(), { model });
+        await loadOIDNNetwork(createEngine(), {type: 'oidn', model});
         expect(fetchMock).toHaveBeenCalledWith(resolveOIDNModelUrl(model, DEFAULT_OIDN_WEIGHTS_BASE_URL), { signal: undefined });
       }
       expect(warning).toHaveBeenCalledOnce();
@@ -214,9 +215,9 @@ describe('initializeOIDN', () => {
     vi.stubGlobal('fetch', fetchMock);
     const engine = createEngine();
     const loading = kind === 'custom'
-      ? initializeOIDNFromURL(engine, '/custom.tza')
-      : initializeOIDN(engine, kind === 'base' ? { weightsBaseUrl: '/own' }
-        : { model: 'cleanAuxLarge', auxiliaryModelUrls: { albedo: '/own/albedo', normal: '/own/normal' } });
+      ? loadOIDNNetwork(engine, {type: 'oidn', weightsUrl: '/custom.tza'})
+      : loadOIDNNetwork(engine, kind === 'base' ? {type: 'oidn', weightsBaseUrl: '/own' }
+        : {type: 'oidn', model: 'cleanAuxLarge', auxiliaryModelUrls: { albedo: '/own/albedo', normal: '/own/normal' } });
     await expect(loading).rejects.toThrow();
     expect(fetchMock.mock.calls.filter(([url]) => String(url).startsWith(DEFAULT_OIDN_WEIGHTS_BASE_URL))).toHaveLength(0);
   });
@@ -224,12 +225,24 @@ describe('initializeOIDN', () => {
   it('rejects HTML from an explicit URL without a fallback', async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true, arrayBuffer: async () => new TextEncoder().encode('<html>').buffer });
     vi.stubGlobal('fetch', fetchMock);
-    await expect(initializeOIDNFromURL(createEngine(), '/own.tza')).rejects.toThrow('expected magic D7 41');
+    await expect(loadOIDNNetwork(createEngine(), {type: 'oidn', weightsUrl: '/own.tza'})).rejects.toThrow('expected magic D7 41');
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it('explains how to self-host missing large networks', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 404, statusText: 'Not Found' }));
-    await expect(initializeOIDN(createEngine(), { model: 'cleanAuxLarge' })).rejects.toThrow('Self-host node_modules/oidn-weights/*.tza and pass weightsBaseUrl');
+    await expect(loadOIDNNetwork(createEngine(), {type: 'oidn', model: 'cleanAuxLarge'})).rejects.toThrow('Self-host node_modules/oidn-weights/*.tza and pass weightsBaseUrl');
   });
+});
+
+it('passes all custom network execution settings and cleans partially loaded prefilters', async () => {
+  const engine = createEngine(), network = {dispose: vi.fn()}, albedo = {dispose: vi.fn()};
+  const weights = new Uint8Array([0xD7, 0x41]).buffer;
+  vi.stubGlobal('fetch', vi.fn(async () => ({ok: true, arrayBuffer: async () => weights})));
+  initUNetFromBuffer.mockReset().mockResolvedValueOnce(network).mockResolvedValueOnce(albedo).mockRejectedValueOnce(new Error('normal failed'));
+  try {
+    await expect(loadOIDNNetwork(engine, {type: 'oidn', weightsUrl: '/custom.tza', auxiliaryModelUrls: {albedo: '/a.tza', normal: '/n.tza'}, engine: 'webnn', precision: 'fp16', dynamicTile: false, maxTileSize: 1024})).rejects.toThrow('normal failed');
+    expect(initUNetFromBuffer).toHaveBeenNthCalledWith(1, weights, {device: {}}, {aux: true, hdr: true, hdrTransfer: 'pu', engine: 'webnn', precision: 'fp16', dynamicTile: false, maxTileSize: 1024});
+    expect(network.dispose).toHaveBeenCalledOnce(); expect(albedo.dispose).toHaveBeenCalledOnce();
+  } finally {vi.unstubAllGlobals();}
 });

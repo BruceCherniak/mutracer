@@ -90,7 +90,8 @@ engine.on('error', error => {statusElement.textContent = error.message;});
 
 // The dev server serves the repository root, so the packaged OIDN weights
 // are available locally. Applications can omit weightsBaseUrl to use the
-// CDN copy. The built-in JNLM filter needs no weights.
+// CDN copy. Custom networks use { type: 'oidn', weightsUrl: '/assets/custom.tza' }
+// on the same Render. The built-in JNLM filter needs no weights.
 function updateDenoiser() {
   const model = denoiserSelect.value;
   final.denoiser = (

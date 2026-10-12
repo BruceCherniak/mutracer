@@ -244,9 +244,15 @@ and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 | `FromTHREESceneOptions` | Optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |
 | `VERSION` | Library version |
 
-`@meimu/mutracer/oidn` exposes lower-level OIDN loading (`initializeOIDN`,
-`initializeOIDNFromURL`, `DEFAULT_OIDN_WEIGHTS_BASE_URL`) for custom denoiser
-setups.
+`@meimu/mutracer/oidn` exports weight constants (`OIDN_MODEL_FILENAMES`,
+`OIDN_AUXILIARY_MODEL_FILENAMES`, `OIDN_WEIGHTS_PACKAGE`,
+`OIDN_WEIGHTS_PACKAGE_VERSION`, `DEFAULT_OIDN_WEIGHTS_BASE_URL`,
+`DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL`) and `resolveOIDNModelUrl` /
+`resolveOIDNAuxiliaryModelUrls`. Configure packaged/custom OIDN networks,
+execution engines, precision and dynamic tiles through `render.denoiser`;
+see [denoising](./denoising.md#custom-oidn-networks). The main entry exports
+`OIDNEngine`, `OIDNPrecision`, `OIDNHDRTransfer`, `OIDNDynamicTileOptions`,
+`OIDNDynamicTileSetting` and `OIDNAuxiliaryModelUrls` as types.
 
 ## Implementation notes
 

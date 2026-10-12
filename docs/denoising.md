@@ -52,7 +52,11 @@ results are discarded.
 | `weightsBaseUrl` | Directory containing the OIDN `.tza` files |
 | `schedule` | `'converged'` (default), `'progressive'`, or `'every-sample'` |
 | `maxTileSize` | Maximum OIDN tile size; chosen by oidn-web by default |
-| `signal` | `AbortSignal` for the OIDN weight download |
+| `signal` | `AbortSignal` for the OIDN weight download; default undefined |
+| `weightsUrl` | Explicit custom network; mutually exclusive with model/base directory |
+| `aux`, `hdr`, `hdrTransfer` | Custom network metadata only; defaults true, true, `'pu'` |
+| `auxiliaryModelUrls` | Both prefilter URLs; defaults to packaged cleanAuxLarge filters, otherwise none |
+| `engine`, `precision`, `dynamicTile` | Defaults `'auto'`, `'auto'`, true; see custom networks below |
 
 ## OIDN models
 
@@ -130,12 +134,43 @@ passes remove broader noise patches and can soften detail. Invalid parameters
 reject before replacing the active filter. These settings work on both WebGPU
 and WebGL 2; OIDN rejects JNLM fields.
 
-## Lower-level OIDN loading
+## Custom OIDN networks
 
-The `/oidn` entry exposes initializeOIDN(engine, options) and
-initializeOIDNFromURL(engine, url, options). They initialize the engine, create
-and return a network without attaching it. The caller owns disposal. They
-require WebGPU. Render.denoiser currently accepts built-in configurations.
+Load an explicit network file through the same built-in OIDN path:
+
+```ts
+final.denoiser = {
+  type: 'oidn', weightsUrl: '/assets/custom.tza',
+  aux: true, hdr: true, hdrTransfer: 'pu',
+  engine: 'wgsl', precision: 'auto', dynamicTile: true
+};
+```
+
+`weightsUrl` is mutually exclusive with `model` and `weightsBaseUrl`. The
+custom network metadata defaults to `aux: true`, `hdr: true`,
+`hdrTransfer: 'pu'`; those fields require `weightsUrl`. Explicit downloads
+never fall back to a CDN. `auxiliaryModelUrls: {albedo, normal}` optionally
+loads prefilters for either source; cleanAuxLarge supplies its packaged filters
+by default. Override both auxiliary URLs together.
+
+Execution settings are available for every OIDN configuration. `engine`
+defaults to `'auto'`; `'wgsl'` selects native GPU inference and `'webnn'` the
+experimental WebNN path. `precision` defaults to `'auto'` (FP16 when
+shader-f16 is available), with `'fp32'` and `'fp16'` overrides. `dynamicTile`
+defaults to `true`; use `false` for fixed tiles or an object with
+`minTileSize` (256), `initialTileSize` (432), `targetTileTimeMs` (16) and
+`adjustmentStep` (16). Tile sizes are clamped/aligned by oidn-web.
+
+All implementation settings participate in the network cache key; `schedule`
+and download `signal` do not. Renders with different signals share a pending
+load; its initial request's signal controls that download. Loading failures
+report an engine error and can be retried by disabling and reassigning the
+configuration. Nested tile/URL settings are copied and frozen too.
+
+`@meimu/mutracer/oidn` contains only weight constants and the
+`resolveOIDNModelUrl` / `resolveOIDNAuxiliaryModelUrls` URL helpers. Loading
+functions and network handles are internal; configure them through Render.
+OIDN option types are exported from the main entry.
 
 ## Implementation notes
 

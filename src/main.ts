@@ -21,7 +21,7 @@ export type {
   OfflineAdaptiveSamplingOptions,
   OfflineVarianceHistory
 } from './renderer/OfflineAdaptiveSampling.js';
-export type { OIDNModel } from './oidn.js';
+export type { OIDNModel, OIDNEngine, OIDNPrecision, OIDNHDRTransfer, OIDNDynamicTileOptions, OIDNDynamicTileSetting, OIDNAuxiliaryModelUrls } from './oidn.js';
 export { DEFAULT_JNLM_OPTIONS } from './renderer/jnlm.js';
 export type { JNLMOptions } from './renderer/jnlm.js';
 

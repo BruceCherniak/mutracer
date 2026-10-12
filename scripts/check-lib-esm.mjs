@@ -34,3 +34,30 @@ function checkDeclarations(directory) {
 }
 checkDeclarations(declarationsRoot);
 console.log('Library declarations contain no @internal or public underscore members.');
+
+const oidn = await import('../lib/oidn.js');
+const oidnExports = ['OIDN_MODEL_FILENAMES', 'OIDN_AUXILIARY_MODEL_FILENAMES',
+  'OIDN_WEIGHTS_PACKAGE', 'OIDN_WEIGHTS_PACKAGE_VERSION',
+  'DEFAULT_OIDN_WEIGHTS_BASE_URL', 'DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL',
+  'resolveOIDNModelUrl', 'resolveOIDNAuxiliaryModelUrls'].sort();
+if (JSON.stringify(Object.keys(oidn).sort()) !== JSON.stringify(oidnExports)) throw new Error('Unexpected OIDN runtime exports.');
+console.log('OIDN ESM resolves in Node with only constants and URL helpers.');
+
+// Follow static dependencies only: Render intentionally loads OIDN with import().
+const visited = new Set();
+function checkStaticDependencies(file) {
+  if (visited.has(file)) return;
+  visited.add(file);
+  const source = readFileSync(file, 'utf8');
+  const ast = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true);
+  for (const statement of ast.statements) {
+    if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) continue;
+    const specifier = statement.moduleSpecifier;
+    if (!specifier || !ts.isStringLiteral(specifier)) continue;
+    const name = specifier.text;
+    if (name === 'oidn-web' || name.startsWith('oidn-web/')) throw new Error(`Static OIDN dependency in ${file}.`);
+    if (name.startsWith('.') && name.endsWith('.js')) checkStaticDependencies(path.resolve(path.dirname(file), name));
+  }
+}
+checkStaticDependencies(path.join(declarationsRoot, 'main.js'));
+console.log('Main ESM static dependency graph does not import oidn-web.');
