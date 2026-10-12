@@ -123,7 +123,10 @@ export default class Engine {
   private _denoiserEntries = new WeakMap<OIDNDenoiser | JNLMDenoiser, {key: string; references: number; value?: OIDNDenoiser | JNLMDenoiser; pending?: Promise<OIDNDenoiser | JNLMDenoiser>}>();
   private _weights = new Map<string, Promise<ArrayBuffer>>();
   private _denoiseTail: Promise<unknown> = Promise.resolve();
-  /** Most recent synchronous engine/render failure. Default undefined. */ lastError: Error | undefined;
+  private _lastError: Error | undefined;
+  /** Most recent synchronous engine/render failure. Default undefined. */
+  get lastError() { return this._lastError; }
+  /** @internal */ _setRenderError(error?: Error) { this._lastError = error; }
 
   constructor(params: EngineParams = {}) {
     this._backendChoice = params.backend ?? 'auto';
@@ -153,7 +156,7 @@ export default class Engine {
   /** The sole external edit detection/commit point. Returns whether inputs changed. */
   update(): boolean {
     if (this._disposed) throw new Error('Engine is disposed.');
-    this.lastError = undefined;
+    this._lastError = undefined;
     let changed = false;
     const cameraFields = this.camera ? snapshotFields(this.camera) : [];
     if (this.camera !== this._sourceCamera || !snapshotsEqual(cameraFields, this._cameraFields)) {

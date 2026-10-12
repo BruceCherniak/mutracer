@@ -194,9 +194,9 @@ export default class Render {
   refine(): RenderStatus {
     if (this._busy) throw new Error('Cannot refine a render while converge is running.');
     if (this._disposed) throw new Error('Render is disposed.');
-    this._engine.lastError = undefined;
+    this._engine._setRenderError();
     try { return this._refine(); }
-    catch (error) { this._engine.lastError = this._engine._notifyError(error); return this._status = 'error'; }
+    catch (error) { this._engine._setRenderError(this._engine._notifyError(error)); return this._status = 'error'; }
     finally { this._engine._reportShaderProgress(); }
   }
   private _refine(): RenderStatus {
