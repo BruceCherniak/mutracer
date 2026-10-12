@@ -65,3 +65,5 @@ Call `sync.dispose()` and `renderer.dispose()` when finished.
 - Multiple materials: `geometry.materialIndex` is an Int32 attribute with itemSize 1 and one raw index per vertex; all three triangle corners must match. See [geometry](./docs/getting-started.md).
 
 - Errors: `render()` never throws; inspect `renderer.lastError` and initialized `getDiagnostics().webgpuFallbackReason`. See [API](./docs/api.md).
+
+- Denoise status: intermediate batches stay RENDERING; DENOISING and FINISHED describe the final image at maxSamples. See [denoising](./docs/denoising.md).

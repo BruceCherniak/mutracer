@@ -4,7 +4,7 @@ import { updateMeshInstances } from '../../src/renderer/prepareMeshBVH';
 import { ensureMeshGeometryAttributes } from '../../src/renderer/prepareMeshBVH';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import Renderer, { RENDER_STATUS_PREPARING, RENDER_STATUS_ERROR } from '../../src/Renderer';
+import Renderer, { RENDER_STATUS_PREPARING, RENDER_STATUS_ERROR, RENDER_STATUS_RENDERING, RENDER_STATUS_DENOISING, RENDER_STATUS_FINISHED } from '../../src/Renderer';
 import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from '../../src/renderer/MergedMaterialData';
 import type { RenderingPipeline } from '../../src/renderer/RenderingPipeline';
 import type { WGPURenderingPipeline } from '../../src/renderer/WGPURenderingPipeline';
@@ -1402,4 +1402,30 @@ describe('render failures', () => {
       await new Promise(resolve=>setTimeout(resolve,0)); expect(renderer.lastError).toBe(error);
     } finally {setter.mockRestore();log.mockRestore();}
   });
+});
+
+
+it('reports only final denoising and completion while converging', async () => {
+  const renderer = new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement});
+  renderer.maxSamples = 8;
+  let samples = 0;
+  let complete: (value:boolean)=>void = ()=>{};
+  const pipeline = createPipeline({
+    needsRestartSample:vi.fn(()=>false),
+    getTotalSamplesRendered:vi.fn(()=>samples),
+    draw:vi.fn((_camera:Camera,target:number)=>{samples=target;return false;}),
+    performOIDNDenoise:vi.fn(()=>new Promise<boolean>(resolve=>{complete=resolve;}))
+  });
+  attachPipeline(renderer,pipeline); const scene={meshes:[],lights:[]}; const camera={} as Camera;
+  renderer.oidn = {} as never; setDenoiseMode(renderer,{whileConverging:true,sampleInterval:4});
+  expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_RENDERING);
+  expect(samples).toBe(1); expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_RENDERING);
+  complete(true); await new Promise(resolve=>setTimeout(resolve,0));
+  expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_RENDERING);
+  expect(samples).toBe(4); expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_RENDERING);
+  complete(true); await new Promise(resolve=>setTimeout(resolve,0));
+  expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_DENOISING);
+  expect(samples).toBe(8); expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_DENOISING);
+  complete(true); await new Promise(resolve=>setTimeout(resolve,0));
+  expect(renderer.render(scene,camera)).toBe(RENDER_STATUS_FINISHED);
 });

@@ -581,6 +581,7 @@ export default class Renderer {
   private _ownedDenoiser?: OIDNDenoiser | JNLMDenoiser;
   /** Whether the denoise in flight is for an interactive preview frame. */
   private _oidnPreviewInFlight = false;
+  private _denoiseFinalInFlight = false;
   /** Faster network for while-converging interactive preview frames. */
   private _previewDenoiser?: OIDNDenoiser;
   private _denoiserRevision = 0;
@@ -1557,6 +1558,7 @@ export default class Renderer {
 
     if (this._renderDone && !this._oidnStatus && canRunOIDN) {
       this._oidnStatus = OIDN_DENOISING;
+      this._denoiseFinalInFlight = sampleTarget >= this.maxSamples;
       this._oidnPreviewInFlight = this.interactivePreview &&
         pipeline.isPreviewMode?.() === true;
       const oidnRevision = ++this._oidnRevision;
@@ -1598,9 +1600,9 @@ export default class Renderer {
     this.lastError = undefined;
     return compilingShader
       ? RENDER_STATUS_COMPILING_SHADER
-      : this._oidnStatus === OIDN_DENOISING
+      : this._oidnStatus === OIDN_DENOISING && this._denoiseFinalInFlight
       ? RENDER_STATUS_DENOISING
-      : this._renderDone && !needsRedrawPostProcess
+      : this._renderDone && pipeline.getTotalSamplesRendered() >= this.maxSamples && !needsRedrawPostProcess
       ? RENDER_STATUS_FINISHED
       : RENDER_STATUS_RENDERING;
   }

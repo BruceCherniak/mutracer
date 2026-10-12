@@ -197,3 +197,5 @@ and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 setups.
 
 Rendering failures return `RENDER_STATUS_ERROR` without throwing. `renderer.lastError` (default `undefined`) stores the error until the next successful render. Constructor denoiser failures also set it. Initialized diagnostics include `lastError` and `webgpuFallbackReason` messages when applicable.
+
+While-converging intermediate denoise batches report `RENDER_STATUS_RENDERING`. Only denoising the final image at `maxSamples` reports `RENDER_STATUS_DENOISING`; `RENDER_STATUS_FINISHED` means that final image is ready.
