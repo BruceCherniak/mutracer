@@ -4,7 +4,7 @@ This page is the reference for editing a scene that is already rendering.
 Keep the same `scene` object, arrays and resources between frames and edit
 them in place. Each `render()` compares the scene with the previous call and
 picks the cheapest update path. Any change that affects the image restarts
-accumulation; while changes continue, `interactivePreview` renders a cheaper
+accumulation; while changes continue, `previewEnabled` renders a cheaper
 image.
 
 ## What to do after a change
@@ -127,3 +127,17 @@ the whole scene rather than with the edit. It happens when:
   or multi-material geometry are added, removed or reassigned.
 
 Avoid these in per-frame animation.
+
+## Preview and animation
+
+Camera and scene edits enter `previewing`: the renderer uses at most
+`previewMaxResolutionScale` resolution and `previewBounces` path depth,
+adapting resolution toward `previewTargetFrameMs`. After `previewIdleDelayMs`
+without changes, it starts formal full-quality accumulation again.
+Preview frames never finish the image or start final denoising; `samples`
+is zero and sample events carry `preview: true`.
+
+Continuous animation stays at preview quality. Disable `previewEnabled`
+for full-quality animation, or use `renderOfflineFrame()` for each frame.
+`whileConverging` forces preview on regardless of `previewEnabled`; turn off
+whileConverging too when full-quality interactive frames are required.

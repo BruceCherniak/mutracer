@@ -224,7 +224,7 @@ export interface RenderingPipeline {
   /** Scene edits share the camera's preview/idle lifecycle when enabled. */
   needsRestartSample(camera: Camera, sceneChanged?: boolean): boolean;
   /** Returns whether the pipeline is currently rendering an interactive preview. */
-  isPreviewMode?(): boolean;
+  isPreviewMode(): boolean;
   /** While-converging OIDN denoises preview frames, so their cost also bounds the preview scale. */
   setOIDNPreviewActive?(active: boolean): void;
   /**
@@ -264,8 +264,8 @@ export interface RenderingPipeline {
   ): void;
   setMaxTimePerTile(time: number): void;
   setMaxTiles(maxTiles: number): void;
-  setMaxTimePreview(time: number): void;
-  setInteractivePreviewParams(params: {
+  setPreviewTargetFrameMs(time: number): void;
+  setPreviewParams(params: {
     enabled: boolean;
     resolutionScale: number;
     bounces: number;

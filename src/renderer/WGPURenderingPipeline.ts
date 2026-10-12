@@ -230,7 +230,7 @@ function makeWGPURenderingPipeline(
 
   let interactivePreviewEnabled = true;
   let previewMode = false;
-  let previewResolutionScale = 0.5;
+  let previewMaxResolutionScale = 0.5;
   let adaptivePreviewScale = 0.5;
   // While-converging OIDN runs on every preview frame and usually costs more than the
   // trace, which the timestamp feedback below does not see. Its measured time
@@ -246,7 +246,7 @@ function makeWGPURenderingPipeline(
   let lastInteractionTime = -Infinity;
   let previewSamplePending = false;
   let maxTimePerTile = 21;
-  let maxTimePreview = 20;
+  let previewTargetFrameMs = 20;
 
 
   let bloomIntensity = 0;
@@ -370,9 +370,9 @@ function makeWGPURenderingPipeline(
     : undefined;
   let tileRenderWithPredict = finalTileRenderWithPredict;
   finalTileRender.setDesiredMsPerTile(maxTimePerTile);
-  previewTileRender.setDesiredMsPerTile(maxTimePreview);
+  previewTileRender.setDesiredMsPerTile(previewTargetFrameMs);
   finalTileRenderWithPredict?.setDesiredMsPerTile(maxTimePerTile);
-  previewTileRenderWithPredict?.setDesiredMsPerTile(maxTimePreview);
+  previewTileRenderWithPredict?.setDesiredMsPerTile(previewTargetFrameMs);
 
   function invalidateTilePrediction() {
     tileTimingGeneration++;
@@ -704,7 +704,7 @@ output.color = color;
           const nextScale = nextPreviewScale(
             submittedScale,
             traceTime * submittedTileCount,
-            maxTimePreview,
+            previewTargetFrameMs,
             maxPreviewScale(),
             adaptivePreviewScale,
             oidnPreviewActive ? MIN_OIDN_PREVIEW_SCALE : MIN_PREVIEW_SCALE
@@ -1352,13 +1352,13 @@ output.color = color;
   }
 
   function maxPreviewScale() {
-    if (!oidnPreviewActive) return previewResolutionScale;
+    if (!oidnPreviewActive) return previewMaxResolutionScale;
     // Before the first measurement, start near one megapixel.
     oidnPreviewScaleLimit ??= Math.min(1, Math.max(
       MIN_OIDN_PREVIEW_SCALE,
       Math.sqrt(1e6 / Math.max(screenWidth * screenHeight, 1))
     ));
-    return Math.min(previewResolutionScale, oidnPreviewScaleLimit);
+    return Math.min(previewMaxResolutionScale, oidnPreviewScaleLimit);
   }
 
   function updateOIDNPreviewScale(elapsedMs: number, measuredScale: number) {
@@ -1366,7 +1366,7 @@ output.color = color;
       measuredScale,
       elapsedMs,
       OIDN_PREVIEW_TARGET_MS,
-      previewResolutionScale,
+      previewMaxResolutionScale,
       oidnPreviewScaleLimit ?? measuredScale,
       MIN_OIDN_PREVIEW_SCALE
     );
@@ -1949,13 +1949,13 @@ output.color = color;
       finalTileRenderWithPredict?.setMaxTiles(maxTiles);
       previewTileRenderWithPredict?.setMaxTiles(maxTiles);
     },
-    setMaxTimePreview(time: number) {
-      maxTimePreview = Math.max(time, 1);
-      previewTileRender.setDesiredMsPerTile(maxTimePreview);
-      previewTileRenderWithPredict?.setDesiredMsPerTile(maxTimePreview);
+    setPreviewTargetFrameMs(time: number) {
+      previewTargetFrameMs = Math.max(time, 1);
+      previewTileRender.setDesiredMsPerTile(previewTargetFrameMs);
+      previewTileRenderWithPredict?.setDesiredMsPerTile(previewTargetFrameMs);
     },
 
-    setInteractivePreviewParams({
+    setPreviewParams({
       enabled,
       resolutionScale,
       bounces,
@@ -1964,9 +1964,9 @@ output.color = color;
       const nextScale = Math.min(Math.max(resolutionScale, 0.25), 1);
       const nextBounces = Math.max(1, Math.round(bounces));
       const settingsChanged =
-        previewResolutionScale !== nextScale || previewBounces !== nextBounces;
+        previewMaxResolutionScale !== nextScale || previewBounces !== nextBounces;
       interactivePreviewEnabled = enabled;
-      previewResolutionScale = nextScale;
+      previewMaxResolutionScale = nextScale;
       previewBounces = nextBounces;
       previewIdleDelayMs = Math.max(0, idleDelayMs);
       if (!enabled && previewMode) {
@@ -1974,7 +1974,7 @@ output.color = color;
       } else if (previewMode && settingsChanged) {
         adaptivePreviewScale = Math.min(
           adaptivePreviewScale,
-          previewResolutionScale
+          previewMaxResolutionScale
         );
         rayTracePass.setPreviewMode(true, previewBounces);
         previewTileRenderWithPredict?.needsUpdatePredicting();

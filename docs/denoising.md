@@ -171,3 +171,5 @@ transparent backgrounds are filtered too. Pixels that show the background
 directly are left as rendered.
 
 While-converging intermediate denoise batches report `'converging'`. Only denoising the final image at `maxSamples` reports `'denoising'`; `'finished'` means that final image is ready.
+
+`whileConverging` enables preview automatically even when `previewEnabled` is false. Preview denoising reports `previewing`; only formal final denoising reports `denoising`. See [preview and animation](./updates.md#preview-and-animation).

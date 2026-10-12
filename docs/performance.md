@@ -15,9 +15,9 @@ A tuning checklist. Each item links to the page with the details.
 
 ## Responsiveness
 
-- Keep `interactivePreview` on for camera controls and editing. The preview
-  resolution adapts to the measured frame time (target `maxTimePreview` ms)
-  between 0.25 and `previewResolutionScale`; `previewBounces` sets its depth.
+- Keep `previewEnabled` on for camera controls and editing. The preview
+  resolution adapts to the measured frame time (target `previewTargetFrameMs` ms)
+  between 0.25 and `previewMaxResolutionScale`; `previewBounces` sets its depth.
   When [denoising while converging](./denoising.md#denoising-while-converging),
   denoise time also lowers it, down to 0.125.
 - Large frames are split into tiles that target `maxTimePerTile` ms of GPU

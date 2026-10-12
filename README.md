@@ -83,7 +83,7 @@ renderer.setSize(canvas.width, canvas.height);
 
 function frame() {
   const status = renderer.render(scene, camera);
-  // status is preparing, compiling, converging, denoising, finished or error. // adds samples until renderer.maxSamples
+  // status is preparing, compiling, previewing, converging, denoising, finished or error. // adds samples until renderer.maxSamples
   requestAnimationFrame(frame);
 }
 frame();

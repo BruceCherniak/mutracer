@@ -43,12 +43,12 @@ affects the image restarts accumulation.
 
 | Property | Default | Description |
 | --- | --- | --- |
-| `interactivePreview` | `true` | Cheaper preview while the camera or scene changes |
-| `previewResolutionScale` | `0.5` | Maximum preview resolution scale (0.25–1) |
+| `previewEnabled` | `true` | Cheaper preview while camera/scene changes; whileConverging forces this on |
+| `previewMaxResolutionScale` | `0.5` | Maximum preview resolution scale (0.25–1) |
 | `previewBounces` | `2` | Path depth during preview |
 | `previewIdleDelayMs` | `150` | Idle time before full quality resumes |
 | `maxTimePerTile` | `21` | Target GPU milliseconds per tile |
-| `maxTimePreview` | `20` | Target GPU milliseconds per preview frame |
+| `previewTargetFrameMs` | `20` | Target GPU milliseconds per preview frame |
 | `maxTiles` | `Infinity` | Upper bound on tiles per frame |
 | `allowMultipleSamplesPerFrame` | `false` | Render several samples per `render()` when the GPU has time |
 
@@ -94,7 +94,7 @@ affects the image restarts accumulation.
 | `prebuildBVH(scene, options?)` | Optional early static BVH build; resolves void; `onProgress` and `signal` default undefined. Statistics in diagnostics `bvh.lastBuild`; see [BVH](./bvh.md) |
 | `renderOfflineFrame(scene, camera, options)` | Renders a finished frame; see below |
 | `restartSamples()` | Discards the accumulation |
-| `samples` | Accumulated spp; initially 0 |
+| `samples` | Formal accumulated spp; 0 initially and while previewing |
 | `readPixels(kind = 'hdr')` | RGBA float32, top row first; hdr, denoised, albedo or normal; see [pixel outputs](#pixel-outputs) |
 | `readDepthSamples({ x, y, size })` | Asynchronously queries a 7×7 grid of GPU depths after `render()`; see [depth sampling](#depth-sampling) |
 | `toBlob({ type?, quality? } = {})` | Redraws post-processing, waits for GPU work and encodes a Blob; type defaults image/png, quality undefined |
@@ -192,11 +192,15 @@ If a denoiser is set, the result is denoised before the promise resolves.
 | --- | --- |
 | `'preparing'` | Device initializing or BVHs building; initial status |
 | `'compiling'` | Pipelines compiling; no samples added |
+| `'previewing'` | Reduced quality during interaction; never final |
 | `'converging'` | Samples accumulating toward `maxSamples` |
 | `'denoising'` | `maxSamples` reached; final denoising in progress |
 | `'finished'` | Image complete, including final denoising |
 | `'error'` | Synchronous rendering failed; inspect `lastError` |
 
+Previewing never reports finished or starts final denoising, even at low
+maxSamples. `sample` events report their frame's count and `preview` flag;
+`renderer.samples` only counts formal samples and stays zero during preview.
 Read `renderer.status` for the latest render result (default `'preparing'`).
 
 ## Scene types

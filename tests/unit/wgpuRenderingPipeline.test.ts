@@ -150,7 +150,7 @@ describe('WebGPU offline sampling', () => {
     pipeline.needsRestartSample(camera, true);
     expect(pipeline.isPreviewMode()).toBe(true);
     pipeline.setOfflineRenderOptions({ samplesPerBatch: 4, deferPostProcess: true, sampleSequenceOffset: 0 });
-    pipeline.setInteractivePreviewParams({
+    pipeline.setPreviewParams({
       enabled: false, resolutionScale: 0.5, bounces: 2, idleDelayMs: 150
     });
     expect(pipeline.isPreviewMode()).toBe(false);
@@ -307,7 +307,7 @@ describe('WebGPU denoised presentation transitions', () => {
     // Composition is updated with raw samples while the snapshot is held.
     // Settling must keep the displayed snapshot, not capture those raw samples.
     pipeline.setPreviewTransitionDenoisePending(true);
-    pipeline.setInteractivePreviewParams({
+    pipeline.setPreviewParams({
       enabled: false, resolutionScale: 0.5, bounces: 2, idleDelayMs: 150
     });
     pipeline.draw(camera, 1);
@@ -358,7 +358,7 @@ describe('WebGPU denoised presentation transitions', () => {
         ++readbacks === 1 ? 20_000_000n : 400_000_000n);
       pipeline.setSize(2496, 1594);
       pipeline.setOIDNPreviewActive(true);
-      pipeline.setInteractivePreviewParams({
+      pipeline.setPreviewParams({
         enabled: true, resolutionScale: 1, bounces: 2, idleDelayMs: 150
       });
       const camera = new Camera({projection: 'perspective'});

@@ -59,14 +59,14 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
   let screenHeight = 1;
   let interactivePreviewEnabled = true;
   let previewMode = false;
-  let previewResolutionScale = 0.5;
+  let previewMaxResolutionScale = 0.5;
   let previewBounces = 2;
   let adaptivePreviewScale = 0.5;
   let previewIdleDelayMs = 150;
   let lastInteractionTime = -Infinity;
   let previewSamplePending = false;
   let maxTimePerTile = 21;
-  let maxTimePreview = 20;
+  let previewTargetFrameMs = 20;
   let maxTiles = Infinity;
   let bloomIntensity = 0;
   let bloomThreshold = 1;
@@ -90,7 +90,7 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
   const finalTileRender = makeTileRender(renderer.gl);
   const previewTileRender = makeTileRender(renderer.gl);
   let tileRender = finalTileRender;
-  previewTileRender.setDesiredMsPerTile(maxTimePreview);
+  previewTileRender.setDesiredMsPerTile(previewTargetFrameMs);
   previewTileRender.setMaxTiles(1);
   const rayTracePass = new WebGLRayTracePass(renderer);
   const rayTraceOutputPass = new WebGLRayTraceOutputPass(renderer);
@@ -327,8 +327,8 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
         const nextScale = nextPreviewScale(
           adaptivePreviewScale,
           elapsedFrameTime,
-          maxTimePreview,
-          previewResolutionScale
+          previewTargetFrameMs,
+          previewMaxResolutionScale
         );
         if (nextScale !== adaptivePreviewScale) {
           adaptivePreviewScale = nextScale;
@@ -364,7 +364,7 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
     if (previewMode === nextPreviewMode) return false;
     previewMode = nextPreviewMode;
     if (!previewMode) previewSamplePending = false;
-    if (previewMode) adaptivePreviewScale = previewResolutionScale;
+    if (previewMode) adaptivePreviewScale = previewMaxResolutionScale;
     tileRender = previewMode ? previewTileRender : finalTileRender;
     rayTracePass.setPreviewMode(previewMode, previewBounces);
     applyRenderResolution();
@@ -585,11 +585,11 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       maxTiles = nextMaxTiles;
       finalTileRender.setMaxTiles(maxTiles);
     },
-    setMaxTimePreview(time: number) {
-      maxTimePreview = Math.max(time, 1);
-      previewTileRender.setDesiredMsPerTile(maxTimePreview);
+    setPreviewTargetFrameMs(time: number) {
+      previewTargetFrameMs = Math.max(time, 1);
+      previewTileRender.setDesiredMsPerTile(previewTargetFrameMs);
     },
-    setInteractivePreviewParams({
+    setPreviewParams({
       enabled,
       resolutionScale,
       bounces,
@@ -598,10 +598,10 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       const nextScale = Math.min(Math.max(resolutionScale, 0.25), 1);
       const nextBounces = Math.max(1, Math.round(bounces));
       const settingsChanged =
-        previewResolutionScale !== nextScale ||
+        previewMaxResolutionScale !== nextScale ||
         previewBounces !== nextBounces;
       interactivePreviewEnabled = enabled;
-      previewResolutionScale = nextScale;
+      previewMaxResolutionScale = nextScale;
       previewBounces = nextBounces;
       previewIdleDelayMs = Math.max(0, idleDelayMs);
       if (!enabled && previewMode) {
@@ -609,7 +609,7 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       } else if (previewMode && settingsChanged) {
         adaptivePreviewScale = Math.min(
           adaptivePreviewScale,
-          previewResolutionScale
+          previewMaxResolutionScale
         );
         rayTracePass.setPreviewMode(true, previewBounces);
         applyRenderResolution();

@@ -8,7 +8,7 @@ async function fixture(webgl: boolean, layout: Renderer['bvhLayout'] = 'bvh2') {
   document.body.append(canvas);
   const renderer = new Renderer({ canvas, preferWebGPU: !webgl });
   renderer.bvhLayout = layout;
-  renderer.interactivePreview = false;
+  renderer.previewEnabled = false;
   renderer.setDenoiser(false);
   renderer.setSize(48, 32);
   const root = new THREE.Scene();

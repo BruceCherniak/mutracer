@@ -30,6 +30,7 @@ function createPipeline(overrides: Partial<WGPURenderingPipeline> = {}) {
   let samples = 1;
   const pipeline = {
     isFirstFrame: vi.fn(() => false),
+    isPreviewMode: vi.fn(() => false),
     restartSamples: vi.fn(),
     draw: vi.fn((_camera: Camera, maxSamples: number) => {
       samples = Math.max(samples, maxSamples);
@@ -62,8 +63,8 @@ function createPipeline(overrides: Partial<WGPURenderingPipeline> = {}) {
     setOnSampleRendered: vi.fn(),
     setMaxTimePerTile: vi.fn(),
     setMaxTiles: vi.fn(),
-    setMaxTimePreview: vi.fn(),
-    setInteractivePreviewParams: vi.fn(),
+    setPreviewTargetFrameMs: vi.fn(),
+    setPreviewParams: vi.fn(),
     setTransmissiveOutputAlphaMin: vi.fn(() => false),
     setOutput: vi.fn(() => false),
     dispose: vi.fn(),
@@ -440,7 +441,7 @@ describe('Renderer while-converging OIDN', () => {
   it.each([true, false])('refreshes post-processing when denoising is enabled (%s)', async (enabled) => {
     const renderer = new Renderer({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
     renderer.maxSamples = 8;
-    renderer.interactivePreview = false;
+    renderer.previewEnabled = false;
     if (enabled) renderer.oidn = {} as never;
     setDenoiseMode(renderer, { whileConverging: false });
     const pipeline = createPipeline({
@@ -1328,7 +1329,7 @@ describe('sampling pattern', () => {
   });
 });
 
-it('shares preparation between render and a concurrent explicit prepareScene call', async () => {
+it('shares preparation between render and a concurrent explicit prebuildBVH call', async () => {
   vi.stubGlobal('Worker', class {});
   let finish!: (bvh: ReturnType<typeof buildBLAS>) => void;
   const build = vi.spyOn(bvhWorker, 'buildBvhInWorker').mockImplementation(() => new Promise(resolve => {finish = resolve;}));
@@ -1530,4 +1531,30 @@ it('reads named outputs and warns once when denoised output is unavailable', asy
  expect(await renderer.readPixels('denoised')).toBe(result);await renderer.readPixels('denoised');expect(warn).toHaveBeenCalledOnce();expect(readOutput).toHaveBeenLastCalledWith('hdr');
  await renderer.readPixels('normal');expect(readOutput).toHaveBeenLastCalledWith('normal');
  renderer.oidn={} as never;(renderer as any)._oidnStatus=2;await renderer.readPixels('denoised');expect(readOutput).toHaveBeenLastCalledWith('denoised');warn.mockRestore();
+});
+
+it('keeps preview sampling separate from completion and final denoising', async () => {
+ const renderer=new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement});renderer.maxSamples=2;renderer.oidn={} as never;
+ let preview=true,samples=0;
+ const pipeline=createPipeline({isPreviewMode:vi.fn(()=>preview),needsRestartSample:vi.fn(()=>false),getTotalSamplesRendered:vi.fn(()=>samples),draw:vi.fn((_camera,target)=>{samples=Math.min(target,samples+1);return false;}),performOIDNDenoise:vi.fn(async()=>true)});
+ attachPipeline(renderer,pipeline);const scene={meshes:[],lights:[]},camera={} as Camera;
+ const listener=vi.fn();renderer.on('sample',listener);
+ for(let i=0;i<4;i++){expect(renderer.render(scene,camera)).toBe('previewing');expect(renderer.samples).toBe(0);}
+ expect(pipeline.performOIDNDenoise).not.toHaveBeenCalled();
+ vi.mocked(pipeline.setOnSampleRendered).mock.calls.at(-1)![0](2,false,4);
+ expect(listener).toHaveBeenCalledWith({samples:2,preview:true,isFirstFrame:false,frameTimeMs:4});
+ preview=false;samples=0;vi.mocked(pipeline.needsRestartSample).mockReturnValueOnce(true);
+ expect(renderer.render(scene,camera)).toBe('converging');expect(renderer.samples).toBe(1);
+ expect(renderer.render(scene,camera)).toBe('denoising');await new Promise(resolve=>setTimeout(resolve,0));
+ expect(renderer.render(scene,camera)).toBe('finished');expect(renderer.samples).toBe(2);
+});
+
+it('forces preview while converging and never labels its denoise final even at maxSamples', async () => {
+ const renderer=new Renderer({canvas:{width:1,height:1} as HTMLCanvasElement});renderer.previewEnabled=false;renderer.maxSamples=1;renderer.oidn={} as never;setDenoiseMode(renderer,{whileConverging:true});
+ const pipeline=createPipeline({isPreviewMode:vi.fn(()=>true),needsRestartSample:vi.fn(()=>false),performOIDNDenoise:vi.fn(async()=>true)});attachPipeline(renderer,pipeline);
+ const denoised=vi.fn();renderer.on('denoised',denoised);
+ expect(renderer.render({meshes:[],lights:[]},{} as Camera)).toBe('previewing');
+ expect(pipeline.setPreviewParams).toHaveBeenCalledWith(expect.objectContaining({enabled:true}));expect(renderer.samples).toBe(0);
+ await new Promise(resolve=>setTimeout(resolve,0));expect(denoised).toHaveBeenCalledWith({samples:1,final:false});
+ expect(renderer.render({meshes:[],lights:[]},{} as Camera)).toBe('previewing');
 });

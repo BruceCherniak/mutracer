@@ -223,7 +223,7 @@ export interface OfflineFrameRenderResult {
 
 
 /** Value returned by render(); initial renderer status is preparing. */
-export type RenderStatus = 'preparing' | 'compiling' | 'converging' | 'denoising' | 'finished' | 'error';
+export type RenderStatus = 'preparing' | 'compiling' | 'previewing' | 'converging' | 'denoising' | 'finished' | 'error';
 
 interface RendererEvents {
   sample: { samples: number; preview: boolean; isFirstFrame: boolean; frameTimeMs: number };
@@ -332,7 +332,7 @@ export default class Renderer {
    */
   maxTimePerTile = 21;
   /** Target GPU time in milliseconds per interactive preview frame. Default `20`. */
-  maxTimePreview = 20;
+  previewTargetFrameMs = 20;
 
   /**
    * Light candidates resampled for each next-event estimate (WebGPU). More
@@ -352,11 +352,13 @@ export default class Renderer {
 
   /**
    * Render a cheaper, lower-resolution image while the camera or scene is
-   * changing, then resume full quality. Default `true`.
+   * changing, then resume full quality. whileConverging forces preview on
+   * regardless of this setting. Animation stays at preview quality until edits
+   * stop. Default `true`.
    */
-  interactivePreview = true;
+  previewEnabled = true;
   /** Maximum resolution scale used by interactive preview (0.25–1). Default `0.5`. */
-  previewResolutionScale = 0.5;
+  previewMaxResolutionScale = 0.5;
   /** Path depth used by interactive preview. Default `2`. */
   previewBounces = 2;
   /** Milliseconds without changes before full-quality rendering resumes. Default `150`. */
@@ -656,8 +658,8 @@ export default class Renderer {
   get backend(): RendererInfo['backend'] | undefined { return this._info?.backend; }
   /** WebGPU device. Default undefined before initialization and on WebGL. */
   get device(): GPUDevice | undefined { return this._gpuDevice; }
-  /** Accumulated samples per pixel. Default 0 before initialization. */
-  get samples(): number { return this._pipeline?.getTotalSamplesRendered() ?? 0; }
+  /** Formal (non-preview) samples per pixel. Default 0 before initialization and during preview. */
+  get samples(): number { return this._pipeline?.isPreviewMode() ? 0 : this._pipeline?.getTotalSamplesRendered() ?? 0; }
 
   /** Initializes the backend once; concurrent and repeated calls share the result. render() also initializes lazily. */
   init(): Promise<RendererInfo> {
@@ -842,10 +844,11 @@ export default class Renderer {
   }
 
   private async _waitUntilReady(scene: Scene, camera: Camera, signal?: AbortSignal): Promise<void> {
-    const saved = { maxSamples: this.maxSamples, denoiser: this._activeDenoiser, preview: this.interactivePreview };
+    const saved = { maxSamples: this.maxSamples, denoiser: this._activeDenoiser, preview: this.previewEnabled, whileConverging: this._whileConverging };
     // Prepare pipelines without consuming a random sample or denoising a warm-up frame.
     this.maxSamples = 0;
-    this.interactivePreview = false;
+    this.previewEnabled = false;
+    this._setDenoiseMode({ whileConverging: false });
     this._attachDenoiser(undefined);
     try {
       for (;;) {
@@ -857,7 +860,8 @@ export default class Renderer {
       }
     } finally {
       this.maxSamples = saved.maxSamples;
-      this.interactivePreview = saved.preview;
+      this.previewEnabled = saved.preview;
+      this._setDenoiseMode({ whileConverging: saved.whileConverging });
       this._attachDenoiser(saved.denoiser);
     }
   }
@@ -898,7 +902,7 @@ export default class Renderer {
     const saved = {
       maxSamples: this.maxSamples,
       allowMultipleSamplesPerFrame: this.allowMultipleSamplesPerFrame,
-      interactivePreview: this.interactivePreview,
+      previewEnabled: this.previewEnabled,
       denoiser: this._activeDenoiser,
       whileConverging: this._whileConverging
     };
@@ -1014,7 +1018,7 @@ export default class Renderer {
 
     try {
       this.allowMultipleSamplesPerFrame = true;
-      this.interactivePreview = false;
+      this.previewEnabled = false;
       this._setDenoiseMode({ whileConverging: false });
 
       const adaptive = options.adaptiveSampling;
@@ -1072,7 +1076,7 @@ export default class Renderer {
       });
       this.maxSamples = saved.maxSamples;
       this.allowMultipleSamplesPerFrame = saved.allowMultipleSamplesPerFrame;
-      this.interactivePreview = saved.interactivePreview;
+      this.previewEnabled = saved.previewEnabled;
       this._attachDenoiser(saved.denoiser);
       this._setDenoiseMode({ whileConverging: saved.whileConverging });
     }
@@ -1339,17 +1343,17 @@ export default class Renderer {
     }
 
     pipeline.setOnSampleRendered((samples, isFirstFrame, frameTimeMs) => {
-      this._events.emit('sample', { samples, isFirstFrame, frameTimeMs, preview: pipeline.isPreviewMode?.() === true });
+      this._events.emit('sample', { samples, isFirstFrame, frameTimeMs, preview: pipeline.isPreviewMode() });
     });
 
     pipeline.setAllowsMultipleSamplesPerFrame(
       this.allowMultipleSamplesPerFrame
     );
     pipeline.setMaxTimePerTile(this.maxTimePerTile);
-    pipeline.setMaxTimePreview(this.maxTimePreview);
-    pipeline.setInteractivePreviewParams({
-      enabled: this.interactivePreview,
-      resolutionScale: this.previewResolutionScale,
+    pipeline.setPreviewTargetFrameMs(this.previewTargetFrameMs);
+    pipeline.setPreviewParams({
+      enabled: this.previewEnabled || this._whileConverging,
+      resolutionScale: this.previewMaxResolutionScale,
       bounces: this.previewBounces,
       idleDelayMs: this.previewIdleDelayMs
     });
@@ -1426,7 +1430,7 @@ export default class Renderer {
     const samplesBeforeRestart =
       pipeline.getTotalSamplesRendered() ?? 0;
     const previewModeActiveBeforeRestart =
-      this.interactivePreview && pipeline.isPreviewMode?.() === true;
+      pipeline.isPreviewMode();
     const convergingDenoiseInFlight = convergingRequested && canRunOIDN;
     const deferSceneRestart =
       this._denoiseMode.coalesceSceneUpdates &&
@@ -1463,7 +1467,7 @@ export default class Renderer {
       this._renderDone = false;
     }
     const previewModeActive =
-      this.interactivePreview && pipeline.isPreviewMode?.() === true;
+      pipeline.isPreviewMode();
     const previewModeEnded =
       previewModeActiveBeforeRestart && !previewModeActive;
     if (previewModeEnded) {
@@ -1577,16 +1581,14 @@ export default class Renderer {
 
     this._renderDone = pipeline.getTotalSamplesRendered() >= sampleTarget;
 
-    if (this._renderDone && !this._oidnStatus && canRunOIDN) {
+    if (this._renderDone && !this._oidnStatus && canRunOIDN && (!previewModeActive || convergingRequested)) {
       this._oidnStatus = OIDN_DENOISING;
-      this._denoiseFinalInFlight = sampleTarget >= this.maxSamples;
-      this._oidnPreviewInFlight = this.interactivePreview &&
-        pipeline.isPreviewMode?.() === true;
+      this._denoiseFinalInFlight = !previewModeActive && sampleTarget >= this.maxSamples;
+      this._oidnPreviewInFlight = pipeline.isPreviewMode();
       const oidnRevision = ++this._oidnRevision;
       // While-converging preview frames use the faster preview network when loaded.
       const previewFrame = convergingDenoiseActive && this._previewDenoiser &&
-        oidn === this._ownedDenoiser && this.interactivePreview &&
-        pipeline.isPreviewMode?.() === true;
+        oidn === this._ownedDenoiser && pipeline.isPreviewMode();
       // Settled batches drive the doubling schedule; preview frames are
       // replaced as soon as the camera moves again.
       const settledBatch = convergingDenoiseActive && !this._oidnPreviewInFlight;
@@ -1622,6 +1624,8 @@ export default class Renderer {
 
     return compilingShader
       ? 'compiling'
+      : previewModeActive
+      ? 'previewing'
       : this._oidnStatus === OIDN_DENOISING && this._denoiseFinalInFlight
       ? 'denoising'
       : this._renderDone && pipeline.getTotalSamplesRendered() >= this.maxSamples && !needsRedrawPostProcess

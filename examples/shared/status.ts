@@ -6,6 +6,7 @@ import {
 const labels: Record<RenderStatus, string> = {
   ['preparing']: 'Preparing scene',
   ['compiling']: 'Compiling shaders',
+  ['previewing']: 'Previewing',
   ['converging']: 'Converging',
   ['denoising']: 'Denoising',
   ['finished']: 'Finished',
