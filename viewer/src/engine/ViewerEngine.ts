@@ -534,13 +534,7 @@ export class ViewerEngine {
     const r = this.renderer;
     r.bvhBuilder = s.bvhBuilder;
     if (prev && changed('bvhBuilder')) {
-      // Builders only apply to missing BVHs. Invalidate retained geometry and
-      // derived displacement caches so the current model uses the new builder.
-      for (const geometry of new Set(this.sync.scene.meshes.map((mesh) => mesh.geometry))) {
-        geometry.bvh = undefined;
-        geometry.markUpdated();
-      }
-      r.restartSamples();
+      void r.prepareScene(this.sync.scene, { rebuild: true }).then(() => r.restartSamples());
     }
     r.maxSamples = s.maxSamples;
     r.bounces = s.bounces;
