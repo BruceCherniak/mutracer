@@ -4,13 +4,11 @@ import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-  Engine, Render,
-  fromTHREECamera,
-  THREESceneSync
+  Engine, RenderLoop,
+    THREESync
 } from '@meimu/mutracer';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
-import { exampleSelection } from './shared/progressive';
 
 const canvas = document.getElementById('main') as HTMLCanvasElement;
 const statusElement = document.getElementById('status')!;
@@ -60,17 +58,14 @@ orbit.update();
 
 // --- MuTracer ---------------------------------------------------------------
 const engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
-const preview = new Render(engine, {resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}, bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
-const final = new Render(engine, {fallback: preview, bounces: 6, maxSamples: 512});
-const select = exampleSelection(engine, preview, final);
-const camera = fromTHREECamera(threeCamera); engine.camera = camera;
+const sync = new THREESync(engine, {scene: threeScene, camera: threeCamera, controls: orbit});
+const loop = new RenderLoop(engine, {sync, final: {bounces: 6, maxSamples: 512}});
+const final = loop.final;
 
-const sync = new THREESceneSync(threeScene);
-engine.scene = sync.scene;
 roughnessInput.addEventListener('input', () => {
   board.material.roughness = Number(roughnessInput.value);
 });
-window.addEventListener('pagehide', () => { sync.dispose(); engine.dispose(); });
+window.addEventListener('pagehide', () => { loop.dispose(); sync.dispose(); orbit.dispose(); engine.dispose(); });
 
 function resize() {
   const ratio = Math.min(window.devicePixelRatio, 2);
@@ -89,11 +84,7 @@ function frame(time: number) {
     // Both backends refit the changed instance transforms.
     pieces.rotation.y += delta * 0.3;
   }
-  sync.update();
-  camera.copy(fromTHREECamera(threeCamera));
-  const current = select(engine.update()); const status = current.refine();
-  const shown = engine.display.present(current);
-  showStatus(statusElement, engine, final, shown === preview ? 'previewing' : status);
+  showStatus(statusElement, engine, final, loop.tick());
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

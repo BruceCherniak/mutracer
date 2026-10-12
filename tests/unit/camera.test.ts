@@ -1,7 +1,6 @@
 import { cameraFocalLength, cameraApertureRadius } from '../../src/renderer/cameraLens';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import Camera from '../../src/scene/Camera';
-import CameraViewControl from '../../src/util/CameraViewControl';
 
 describe('Camera', () => {
   it('uses valid perspective defaults', () => {
@@ -50,24 +49,6 @@ describe('Camera', () => {
     const ortho = new Camera({projection: 'orthographic'});
     ortho.fStop = 2;
     expect(cameraApertureRadius(ortho)).toBe(0);
-  });
-});
-
-describe('CameraViewControl lifecycle', () => {
-  it('removes its DOM listeners when disposed', () => {
-    const dom = {
-      addEventListener: vi.fn(),
-      removeEventListener: vi.fn(),
-      clientWidth: 800,
-      clientHeight: 600
-    } as unknown as HTMLElement;
-    const control = new CameraViewControl({ camera: new Camera({projection: 'perspective'}), domElement: dom });
-
-    control.dispose();
-
-    expect(dom.removeEventListener).toHaveBeenCalledTimes(5);
-    expect(dom.removeEventListener).toHaveBeenCalledWith('pointerdown', expect.any(Function));
-    expect(dom.removeEventListener).toHaveBeenCalledWith('wheel', expect.any(Function));
   });
 });
 

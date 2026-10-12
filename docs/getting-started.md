@@ -27,29 +27,35 @@ interface Scene {
 ## A minimal render loop
 
 ```ts
-import { Camera, Engine, Render } from '@meimu/mutracer';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { Engine, RenderLoop, THREESync } from '@meimu/mutracer';
 const engine = new Engine({canvas});
 engine.scene = scene;
-engine.camera = camera;
-const final = new Render(engine, {maxSamples: 1024, bounces: 5});
+const camera = new THREE.PerspectiveCamera(40, 1, .1, 100);
+camera.position.set(0, 2, 6);
+const controls = new OrbitControls(camera, canvas);
+controls.target.set(0, 1, 0);
+const sync = new THREESync(engine, {camera, controls});
+const loop = new RenderLoop(engine, {sync, final: {maxSamples: 1024, bounces: 5}});
 function resize() {
   const ratio = Math.min(devicePixelRatio, 2);
   engine.display.setSize(canvas.clientWidth * ratio, canvas.clientHeight * ratio);
+  camera.aspect = canvas.clientWidth / canvas.clientHeight;
+  camera.updateProjectionMatrix();
 }
-function frame() {
-  engine.update();
-  const status = final.refine();
-  engine.display.present(final);
-  if (status === 'finished') { /* this image is ready */ }
-  requestAnimationFrame(frame);
-}
-resize(); frame();
+window.addEventListener('resize', resize);
+resize(); loop.start();
 ```
 
-Engine chooses WebGPU with WebGL 2 fallback by default. Initial refinement
-returns preparing during device/BVH setup, then compiling while shaders build.
-For loading UI, subscribe to engine progress and inspect render.status.
+RenderLoop synchronizes sources, commits changes and presents preview or final.
+Subscribe to `loop.on('status', ...)` for UI and `engine.on('progress', ...)`
+for preparation progress. Engine chooses WebGPU with WebGL 2 fallback.
 Preparation is automatic; see [BVH](./bvh.md) for optional CPU preparation.
+
+For custom frame control, use `loop.tick()` in your own animation frame instead
+of `start()`. For explicit rendering without the built-in policy, use
+[Engine / Render / Display directly](./progressive-rendering.md#explicit-frame-control).
 
 ## Geometry from arrays
 
@@ -82,8 +88,8 @@ camera.position = [0, 2, 6]; camera.lookAt([0, 0, 0]);
 Explicitly set it to lock a perspective aspect ratio. `copy(source)` and `clone()`
 copy camera settings; `getProjectionMatrix(targetAspect = 1)` includes zoom.
 
-`CameraViewControl` provides orbit/pan/zoom for a MuTracer camera. With Three.js,
-use its controls and convert with `fromTHREECamera` each frame.
+For orbit/pan/zoom, use Three.js OrbitControls with THREESync as above.
+`fromTHREECamera` remains available for one-shot camera conversion.
 
 ### Depth of field
 
@@ -154,7 +160,7 @@ geometry.markUpdated();               // indices, materialIndex or other geometr
 ```
 
 See [scene updates](./updates.md) for the full table, vertex animation and
-update costs. With Three.js, call `sync.update()` before each render instead;
+update costs. RenderLoop calls its syncs automatically. With explicit frame control, call `sync.update()` before engine.update;
 see [Three.js](./threejs.md).
 
 ## Exporting an image
@@ -162,17 +168,17 @@ see [Three.js](./threejs.md).
 For a final-quality still, use a render's deterministic convergence:
 
 ```ts
-await final.converge({samples: 1024, sampleSequenceOffset: 0});
-const blob = await engine.display.toBlob(final);
-const hdr = await final.readPixels('hdr');
+await loop.converge({samples: 1024, sampleSequenceOffset: 0});
+const blob = await engine.display.toBlob(loop.final);
+const hdr = await loop.final.readPixels('hdr');
 ```
 
 Readback returns RGBA Float32Array values, top row first. A separate fixed-size
 Render can export another resolution or a copied camera override without
 changing the canvas. See [exporting](./progressive-rendering.md#reading-and-exporting).
 
-Call `engine.dispose()` to release GPU resources, BVH Workers and the denoiser. With
-Three.js, also call `sync.dispose()` to release the conversion caches.
+Call `loop.dispose()`, `sync.dispose()`, `controls.dispose()` and `engine.dispose()`
+when finished. See [ownership](./progressive-rendering.md#options-and-ownership).
 
 ## Bundler notes
 

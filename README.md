@@ -23,7 +23,7 @@ APIs may change between minor releases.
   (WebGPU and WebGL 2) or Intel Open Image Denoise (WebGPU), for the final
   image or while the image converges.
 - **Three.js friendly**: keep a `THREE.Scene` (loaded with `GLTFLoader` or
-  built by hand) in sync with `THREESceneSync`.
+  built by hand) in sync with `THREESync`.
 - **Production output**: AgX, ACES, Cineon, Reinhard and linear tone mapping, color
   grading, bloom, shadow catchers, transparent backgrounds, depth of field and
   offline rendering with adaptive sampling.
@@ -34,7 +34,7 @@ APIs may change between minor releases.
 npm install @meimu/mutracer
 ```
 
-Install `three` to load glTF with `GLTFLoader` + `THREESceneSync` or to use
+Install `three` to load glTF with `GLTFLoader` + `THREESync` or to use
 the Three.js helpers. The quick start below also uses `gl-matrix` for matrix math.
 
 The package is ESM with TypeScript declarations (`lib/main.js`). A UMD build
@@ -44,8 +44,10 @@ with a `MuTracer` global is at `dist/mutracer.umd.js`.
 
 ```ts
 import { mat4 } from 'gl-matrix';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-  Camera, EnvironmentLight, Mesh, OpenPBRMaterial, RectLight, Engine, Render,
+  EnvironmentLight, Mesh, OpenPBRMaterial, RectLight, Engine, RenderLoop, THREESync,
   Texture, createPlaneGeometry, createSphereGeometry, type Scene
 } from '@meimu/mutracer';
 
@@ -72,56 +74,38 @@ const scene: Scene = {
   lights: [light, new EnvironmentLight({ map: sky })]
 };
 
-const camera = new Camera({ projection: 'perspective', fov: 40, near: 0.1, far: 100 });
-camera.position = [0, 2, 6]; camera.lookAt([0, 1, 0]);
+const camera = new THREE.PerspectiveCamera(40, canvas.width / canvas.height, .1, 100);
+camera.position.set(0, 2, 6);
+const controls = new OrbitControls(camera, canvas);
+controls.target.set(0, 1, 0);
 
 const engine = new Engine({ canvas });
 engine.on('error', error => console.error(error));
 engine.scene = scene;
-engine.camera = camera;
-const render = new Render(engine);
-engine.display.setSize(canvas.width, canvas.height);
-
-function frame() {
-  engine.update();
-  render.refine();
-  engine.display.present(render);
-  requestAnimationFrame(frame);
-}
-frame();
+const sync = new THREESync(engine, {camera, controls});
+const loop = new RenderLoop(engine, {sync});
+loop.start();
 ```
 
 With Three.js:
 
 ```ts
-import { Engine, Render, THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
-
-const engine = new Engine({ canvas });
-const sync = new THREESceneSync(threeScene);
-const camera = fromTHREECamera(threeCamera);
-engine.scene = sync.scene;
-engine.camera = camera;
-const render = new Render(engine);
-
-function frame() {
-  sync.update();
-  camera.copy(fromTHREECamera(threeCamera));
-  engine.update();
-  render.refine();
-  engine.display.present(render);
-  requestAnimationFrame(frame);
-}
-frame();
+import { Engine, RenderLoop, THREESync } from '@meimu/mutracer';
+const engine = new Engine({canvas});
+const sync = new THREESync(engine, {scene: threeScene, camera: threeCamera, controls});
+const loop = new RenderLoop(engine, {sync});
+loop.start();
 ```
 
 Enable denoising on an individual result:
 
 ```ts
-render.denoiser = { type: 'jnlm' }; // built-in filter, both backends
-render.denoiser = { type: 'oidn', model: 'standard' }; // WebGPU
+loop.final.denoiser = { type: 'jnlm' }; // built-in filter, both backends
+loop.final.denoiser = { type: 'oidn', model: 'standard' }; // WebGPU
 ```
 
-Use separate preview and final renders with a `fallback`, or a fixed-size
+RenderLoop provides preview and final results. For custom frame control, use
+Engine / Render / Display directly with a fallback, or a fixed-size
 invisible render for export. See [independent render results](./docs/progressive-rendering.md).
 
 ## Documentation
@@ -132,7 +116,7 @@ invisible render for export. See [independent render results](./docs/progressive
 | [Scene updates](./docs/updates.md) | Editing a rendering scene, animation, update costs |
 | [API reference](./docs/api.md) | Engine, Display and Render options, methods and scene types |
 | [Materials](./docs/materials.md) | OpenPBR inputs, textures, alpha, bevel, displacement |
-| [Three.js](./docs/threejs.md) | `THREESceneSync`, supported materials and lights, `userData` keys |
+| [Three.js](./docs/threejs.md) | `THREESync`, supported materials and lights, `userData` keys |
 | [Denoising](./docs/denoising.md) | JNLM and OIDN denoisers, OIDN weights hosting, denoising while converging |
 | [Sampling](./docs/sampling.md) | Patterns, dimensions and progressive budgets |
 | [BVH](./docs/bvh.md) | BVH builders, TinyBVH layouts, worker preparation |

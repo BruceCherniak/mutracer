@@ -1,4 +1,47 @@
-# Independent render results
+# Progressive rendering
+
+Use RenderLoop for interactive preview and final rendering; use the first layer
+when your application needs explicit selection and frame budgets.
+
+```ts
+const sync = new THREESync(engine, {scene: threeScene, camera: threeCamera, controls});
+const loop = new RenderLoop(engine, {sync});
+loop.start();
+```
+
+## Loop policy
+
+Each tick updates syncs and commits engine inputs, then calls select, refines the
+selected render and presents it. Active syncs select preview by default. Isolated
+edits start final immediately; consecutive changes without explicit sync activity
+hold preview for idleMs (default 150 ms). When interaction ends, final starts in
+that tick and its ready fallback remains visible until final completes a sample.
+
+```ts
+loop.select = ({changing}) => changing || slider.dragging ? 'preview' : 'final';
+loop.on('status', ({status, previous}) => updateStatus(status));
+loop.on('sample', ({samples, frameTimeMs}) => updateSamples(samples));
+```
+
+Loop status is previewing when the displayed target is preview, including fallback
+presentation. Preview samples never emit loop sample events or count toward loop
+samples. Intermediate final filtering reports converging; only terminal filtering
+reports denoising. After finishing, unchanged ticks update syncs and the engine
+without GPU submissions. Display or render settings edits resume necessary work.
+
+start pauses on hidden pages; stop preserves images. Use tick with your own frame
+loop, or start, which ignores manual tick calls with one warning. loop.converge
+pauses interactive ticks, converges/presents final and resumes if still started.
+
+coalesceSceneUpdates defaults to false. When enabled, preview inference defers
+engine commits while syncs keep collecting edits. Completed inference is presented
+before the latest camera/scene is committed together. Interaction ending during
+inference waits for that result before final starts. With it disabled, changes
+immediately invalidate old inference. Render.denoising includes intermediate
+inference without changing status semantics. Denoising does not enable preview;
+preview: false always disables it.
+
+## Explicit frame control
 
 Create one `Engine` for a scene and camera, then one `Render` per output. The
 engine owns shared GPU scene data; a render owns its image and complete sample
@@ -55,12 +98,20 @@ usable.
 
 ## Options and ownership
 
+- RenderLoop: preview/final selection, syncs, idleMs and coalesceSceneUpdates.
 - Engine: backend, scene/camera, BVH preparation and texture atlas budget.
 - Display: size, tone mapping, color grading, bloom, HDR output, channel and
   shadow-catcher color/opacity. Editing these does not restart accumulation.
 - Render: resolution, samples, path quality, alpha handling, execution budget,
   fallback and denoiser. `transmissiveOutputAlphaMin` belongs to Render because
   it is evaluated along individual paths, so changing it restarts that render.
+
+RenderLoop creates a half-resolution preview with adaptive scale .25–.5,
+20 ms target, 2 bounces, no bevel, one wavelength and two light candidates;
+other settings use Render defaults. Pass preview settings, a Render or false.
+Pass final settings or a Render; newly created finals use preview as fallback.
+Supplied Render/Sync objects must belong to this engine. loop.dispose releases
+only renders it created; dispose supplied renders, syncs and controls yourself.
 
 The default render scale is 1 and adaptive resolution is disabled. Alternatively,
 provide both fixed width and height at construction; fixed dimensions cannot be

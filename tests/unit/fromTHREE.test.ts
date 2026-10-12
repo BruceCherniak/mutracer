@@ -1,9 +1,10 @@
+import Engine from '../../src/Engine';
 import { getLightDirection } from '../../src/renderer/lightsUtil';
 import { getRectLightUOrV, getRectLightArea } from '../../src/renderer/lightsUtil.js';
 import { setGeometryBvh, getGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import * as THREE from 'three';
 import { describe, expect, it } from 'vitest';
-import { fromTHREECamera, fromTHREEScene, THREESceneSync } from '../../src/util/fromTHREE';
+import { fromTHREECamera, fromTHREEScene, THREESync } from '../../src/util/fromTHREE';
 import Camera from '../../src/scene/Camera';
 import { parseIESProfile } from '../../src/scene/IESProfile';
 
@@ -935,7 +936,7 @@ describe('Three.js scene conversion', () => {
       new THREE.MeshStandardMaterial()
     );
     scene.add(mesh);
-    const sync = new THREESceneSync(scene);
+    const sync = initializedSync(scene);
     const first = sync.scene;
     const firstGeometry = first.meshes[0].geometry;
     setGeometryBvh(first.meshes[0].geometry, {
@@ -1100,3 +1101,8 @@ it('reads only the renamed displacement projection scale userData key', () => {
  material.userData.mutracerDisplacementUvProjectionScale=3;
  expect(fromTHREEScene(scene).meshes[0].materials[0].displacementUvProjectionScale).toBe(3);
 });
+
+function initializedSync(scene: THREE.Scene, options: import('../../src/util/fromTHREE').FromTHREESceneOptions = {}) {
+  const sync = new THREESync(new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement}), {scene, ...options});
+  sync.update(); return sync as THREESync & {scene: NonNullable<THREESync['scene']>};
+}

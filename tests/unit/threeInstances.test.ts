@@ -1,6 +1,7 @@
+import Engine from '../../src/Engine';
 import * as THREE from 'three';
 import { expect, it, vi } from 'vitest';
-import { fromTHREEScene, THREESceneSync } from '../../src/util/fromTHREE';
+import { fromTHREEScene, THREESync } from '../../src/util/fromTHREE';
 import { SceneChangeDetector } from '../../src/renderer/sceneChangeDetector';
 import { ensureMeshGeometryAttributes, updateMeshInstances } from '../../src/renderer/prepareMeshBVH';
 import { MeshMembershipCache } from '../../src/renderer/meshMembership';
@@ -15,7 +16,7 @@ function fixture(basic = false) {
   }
   mesh.position.set(2, 3, 4);
   source.add(mesh);
-  const sync = new THREESceneSync(source);
+  const sync = initializedSync(source);
   return { source, material, mesh, sync };
 }
 
@@ -91,7 +92,7 @@ it('warns once and falls back to an ordinary mesh for unsupported instanced morp
   } finally { warning.mockRestore(); }
 });
 
-function variantCache(sync: THREESceneSync) {
+function variantCache(sync: THREESync & {scene: NonNullable<THREESync['scene']>}) {
   return (sync as unknown as { _store: { colorVariants: Map<THREE.Material, Map<string, unknown>> } })._store.colorVariants;
 }
 it('keeps only currently distinct instance colors after 100 consecutive color changes', () => {
@@ -139,7 +140,7 @@ it('combines instance colors with automatic projection in the variant cache', ()
   const a = new THREE.InstancedMesh(uv, material, 2), b = new THREE.InstancedMesh(uvless, material, 2);
   for (const mesh of [a, b]) for (let i = 0; i < 2; i++) mesh.setColorAt(i, new THREE.Color(.5, .25, .75));
   source.add(a, b, new THREE.Mesh(uv, material));
-  const sync = new THREESceneSync(source);
+  const sync = initializedSync(source);
   const [a0, a1, b0, b1, plain] = sync.scene.meshes;
   expect(a0.materials[0]).toBe(a1.materials[0]); expect(b0.materials[0]).toBe(b1.materials[0]);
   expect(a0.materials[0]).not.toBe(b0.materials[0]); expect(a0.materials[0]).not.toBe(plain.materials[0]);
@@ -154,3 +155,8 @@ it('combines instance colors with automatic projection in the variant cache', ()
   expect(b0.materials[0]).toBe(a0.materials[0]); expect(variantCache(sync).get(material)!.size).toBe(1);
   a.count = b.count = 0; sync.update(); expect(variantCache(sync).size).toBe(0);
 });
+
+function initializedSync(scene: THREE.Scene, options: import('../../src/util/fromTHREE').FromTHREESceneOptions = {}) {
+  const sync = new THREESync(new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement}), {scene, ...options});
+  sync.update(); return sync as THREESync & {scene: NonNullable<THREESync['scene']>};
+}

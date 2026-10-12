@@ -70,6 +70,9 @@ budget and display changes retain samples.
 | `refine()` | Trace within this render's budget; returns status |
 | `converge(options)` | Deterministic offline image; see below |
 | `readPixels(kind = 'hdr')` | Read this render; see [pixel outputs](#pixel-outputs) |
+| `engine` | Owning engine |
+| `denoising` | Queued/running inference, including intermediate updates; default false |
+| `on('sample', listener)` | Complete samples: `{samples, isFirstFrame, frameTimeMs}`; returns unsubscribe |
 | `samples` | Complete samples since restart; stale engine inputs report 0 |
 | `converged` | `samples >= maxSamples`, independently of filtering |
 | `status` | Preparing, compiling, converging, denoising, finished or error |
@@ -105,6 +108,36 @@ fallback is not traced again. Fallback chains and cycles are rejected.
 Resolves `{samples, averageSamplesPerPixel, pilotSamples, adaptiveSampling,
 varianceHistory?}` after filtering. It rejects if engine input revisions change.
 The same render cannot refine concurrently; other renders remain usable.
+
+## RenderLoop and Sync
+
+`new RenderLoop(engine, options?)` provides the interactive policy described in
+[progressive rendering](./progressive-rendering.md#loop-policy).
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `display` | engine.display | Display used for presentation |
+| `preview` | half-resolution adaptive Render | Render, RenderOptions or false; default quality in [ownership](./progressive-rendering.md#options-and-ownership) |
+| `final` | new Render with preview fallback | Render or RenderOptions |
+| `sync` | none | Sync or ordered Sync array on this engine |
+| `idleMs` | 150 | Consecutive-edit idle deadline in milliseconds |
+| `coalesceSceneUpdates` | false | Defer commits during preview inference, then commit latest camera/scene |
+
+`engine`, `display`, `preview` (possibly undefined) and `final` are read-only.
+`changing` defaults false; `samples` counts final only and reports 0 during preview; `status` starts preparing.
+`select({changing})` defaults to changing ? preview : final. `addSync`/`removeSync`
+manage integrations without disposing them. `tick` executes a manual frame;
+`start`/`stop` manage animation frames. `converge` accepts the same options as
+Render.converge and resumes a started loop. `dispose` releases owned renders.
+
+Events: `status` carries `{status, previous}` only on transitions; `sample`
+carries `{samples, preview: false, isFirstFrame, frameTimeMs}` for final only.
+`on` returns unsubscribe and supports multiple listeners.
+
+Extend `Sync` with `constructor(engine)` and `update(): void`. `engine` is readonly;
+`active` defaults false. Integrations can use protected `setActive(boolean)` or
+`activateFor(ms)`; `dispose()` clears base activity. Construction must not write
+to the engine. Three.js integration uses [THREESync](./threejs.md#options).
 
 ## Display
 
@@ -200,11 +233,10 @@ and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 | `generateVertexNormals`, `generateVertexTangents` | Attribute generation |
 | `computeMeshesBoundingBox(meshes)` | World-space bounds |
 | `loadRGBE(url)`, `parseRGBE(buffer)` | Radiance `.hdr` → float `Texture` |
-| `THREESceneSync` | Keeps a `THREE.Scene` in sync: `new THREESceneSync(threeScene, options?)` once, `sync.update(): void` before rendering `sync.scene`, `dispose()` when done; see [Three.js](./threejs.md) |
-| `fromTHREECamera(camera, options?)` | Converts a Three.js camera; call each frame alongside `THREESceneSync`. Reads `focus` and the film height; `FromTHREECameraOptions` sets `fStop` (default `0`), `focusDistance` and `metersPerUnit` (default `1`) |
+| `THREESync` | Keeps a `THREE.Scene` in sync: `new THREESync(engine, {scene?, camera?, controls?, updateControls?})`; RenderLoop calls update; dispose when done; see [Three.js](./threejs.md) |
+| `fromTHREECamera(camera, options?)` | Converts a Three.js camera; one-shot conversion; THREESync retains and updates cameras. Reads `focus` and the film height; `FromTHREECameraOptions` sets `fStop` (default `0`), `focusDistance` and `metersPerUnit` (default `1`) |
 | `fromTHREEScene` | One-shot Three.js scene conversion; every call creates fresh MuTracer objects |
 | `FromTHREESceneOptions` | Optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |
-| `CameraViewControl` | Orbit/pan/zoom controller for a MuTracer `Camera` |
 | `VERSION` | Library version |
 
 `@meimu/mutracer/oidn` exposes lower-level OIDN loading (`initializeOIDN`,
@@ -213,4 +245,4 @@ setups.
 
 ## Implementation notes
 
-BVH caches, light packing helpers and material-weight packing are renderer internals. `CameraViewControl` initializes itself at construction. Texture upload notifications use `markUpdated()` and `version`.
+BVH caches, light packing helpers and material-weight packing are renderer internals. Texture upload notifications use `markUpdated()` and `version`.

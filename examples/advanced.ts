@@ -1,13 +1,13 @@
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 // OpenPBR material gallery on a shadow catcher with a transparent background,
 // OIDN denoising and deterministic offline rendering to a PNG.
 import { mat4 } from 'gl-matrix';
 import {
-  Camera,
-  CameraViewControl,
   EnvironmentLight,
   Mesh,
   OpenPBRMaterial, type OpenPBRMaterialParams,
-  Engine, Render,
+  Engine, RenderLoop, THREESync, Sync,
   SphereLight,
   type OIDNModel,
   type SamplingPattern,
@@ -17,7 +17,6 @@ import {
 } from '@meimu/mutracer';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
-import { exampleSelection } from './shared/progressive';
 
 const canvas = document.getElementById('main') as HTMLCanvasElement;
 const statusElement = document.getElementById('status')!;
@@ -72,19 +71,21 @@ const scene: Scene = {
   background: [0, 0, 0, 0]
 };
 
-const camera = new Camera({projection: 'perspective', fov: 35, near: 0.1, far: 100});
-camera.position = [0, 2.6, 5.2]; camera.lookAt([0, 0.3, -0.3]);
+const camera = new THREE.PerspectiveCamera(35, 1, .1, 100);
+camera.position.set(0, 2.6, 5.2); camera.lookAt(0, 0.3, -0.3);
 // Treat the scene as a tabletop: one unit is 10 cm.
-camera.metersPerUnit = 0.1;
-camera.fStop = 5.6;
-camera.focusDistance = 5.4;
-const controls = new CameraViewControl({ camera, domElement: canvas });
+
+
+camera.focus = 5.4;
+const controls = new OrbitControls(camera, canvas);
+controls.target.set(0, .3, -.3); controls.update();
 
 const engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
-const preview = new Render(engine, {resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}, bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
-const final = new Render(engine, {fallback: preview, bounces: 8, maxSamples: 256});
-const select = exampleSelection(engine, preview, final);
-engine.scene = scene; engine.camera = camera;
+const sync = new THREESync(engine, {camera, controls});
+class LensSync extends Sync { update() { if (this.engine.camera) { this.engine.camera.sensorHeight = 24; this.engine.camera.fStop = 5.6; this.engine.camera.metersPerUnit = .1; this.engine.camera.focusDistance = 5.4; } } }
+const loop = new RenderLoop(engine, {sync: [sync, new LensSync(engine)], final: {bounces: 8, maxSamples: 256}});
+const final = loop.final;
+engine.scene = scene;
 engine.on('error', error => {statusElement.textContent = error.message;});
 
 // The dev server serves the repository root, so the packaged OIDN weights
@@ -113,7 +114,8 @@ samplingSelect.addEventListener('change', () => {
 function resize() {
   const ratio = Math.min(window.devicePixelRatio, 2);
   engine.display.setSize(canvas.clientWidth * ratio, canvas.clientHeight * ratio);
-  controls.aspect = canvas.clientWidth / canvas.clientHeight;
+  camera.aspect = canvas.clientWidth / canvas.clientHeight;
+  camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize);
 resize();
@@ -124,8 +126,7 @@ exportButton.addEventListener('click', async () => {
   exportButton.disabled = true;
   try {
     // Deterministic: the same scene and sample count give the same image.
-    engine.update();
-    await final.converge({
+    await loop.converge({
       samples: Number(samplesInput.value) || 256,
       onProgress({ stage, samples, targetSamples }) {
         statusElement.textContent = stage === 'denoising'
@@ -149,11 +150,10 @@ exportButton.addEventListener('click', async () => {
 
 function frame() {
   if (!exporting) {
-    controls.update();
-    const current = select(engine.update()); const status = current.refine();
-    const shown = engine.display.present(current);
-    showStatus(statusElement, engine, final, shown === preview ? 'previewing' : status);
+    showStatus(statusElement, engine, final, loop.tick());
   }
   requestAnimationFrame(frame);
 }
 frame();
+
+window.addEventListener('pagehide', () => {loop.dispose(); sync.dispose(); controls.dispose(); engine.dispose();});

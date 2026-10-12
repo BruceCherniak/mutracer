@@ -9,8 +9,8 @@ Then open <http://localhost:3001/examples/>.
 
 | Example | Shows |
 | --- | --- |
-| [`basic`](./basic.ts) | Minimal setup: `Engine`, `Render`, `Mesh`, `OpenPBRMaterial`, `RectLight`, `EnvironmentLight`, `CameraViewControl` and the first-layer frame loop. |
-| [`three`](./three.ts) | Building the scene in Three.js (`GLTFLoader`, `OrbitControls`, `MeshPhysicalMaterial`) and rendering it with `THREESceneSync` / `fromTHREECamera`; rotation and a roughness slider for incremental material edits. |
+| [`basic`](./basic.ts) | Minimal setup: `Engine`, `Render`, `Mesh`, `OpenPBRMaterial`, `RectLight`, `EnvironmentLight`, `THREESync`, `OrbitControls` and `RenderLoop`. |
+| [`three`](./three.ts) | Building the scene in Three.js (`GLTFLoader`, `OrbitControls`, `MeshPhysicalMaterial`) and rendering it with `THREESync` / `RenderLoop`; rotation and a roughness slider for incremental material edits. |
 | [`animation`](./animation.ts) | A procedural skinned cylinder, bone animation and a morph slider; pause animation to accumulate a clean image. Both backends support `?webgl`. |
 | [`advanced`](./advanced.ts) | Coat, transmission with dispersion, subsurface, fuzz and thin-film materials; a shadow catcher with a transparent background; `render.denoiser`; a `samplingPattern` selector (Sobol, ZSobol, random); `render.converge()` and PNG export. |
 

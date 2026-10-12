@@ -1,6 +1,9 @@
+import RenderLoop from '../../src/RenderLoop';
+import { renderFixture } from '../helpers/renderPipeline';
+import Engine from '../../src/Engine';
 import * as THREE from 'three';
-import { describe, expect, it } from 'vitest';
-import { THREESceneSync, fromTHREEScene } from '../../src/util/fromTHREE';
+import { describe, expect, it, vi } from 'vitest';
+import { THREESync, fromTHREEScene } from '../../src/util/fromTHREE';
 import Texture from '../../src/scene/Texture';
 
 function fixture() {
@@ -12,11 +15,11 @@ function fixture() {
   const light = new THREE.PointLight(0xffffff, 2);
   source.add(mesh, new THREE.Mesh(geometry, material), light);
   source.background = new THREE.Color(0x102030);
-  const sync = new THREESceneSync(source);
+  const sync = initializedSync(source);
   return { source, map, material, geometry, mesh, light, sync };
 }
 
-describe('THREESceneSync', () => {
+describe('THREESync', () => {
   it('retains scene, arrays and shared mesh resources on unchanged updates', () => {
     const { sync } = fixture();
     const scene = sync.scene;
@@ -188,7 +191,7 @@ describe('THREESceneSync', () => {
       get: () => { reads++; return version; },
       set: (value: number) => { version = value; }
     });
-    const sync = new THREESceneSync(source);
+    const sync = initializedSync(source);
     expect(sync.scene.meshes).toHaveLength(10);
     for (let i = 0; i < 3; i++) {
       reads = 0;
@@ -230,7 +233,7 @@ describe('THREESceneSync', () => {
     const light = new THREE.PointLight(0xffffff, 2);
     nested.add(mesh, light); parent.add(nested); source.add(parent);
     const convertedSources: THREE.Mesh[] = [];
-    const sync = new THREESceneSync(source, { onMeshConverted: (_, sourceMesh) => convertedSources.push(sourceMesh) });
+    const sync = initializedSync(source, { onMeshConverted: (_, sourceMesh) => convertedSources.push(sourceMesh) });
     const convertedMesh = sync.scene.meshes[0], convertedLight = sync.scene.lights[0];
     for (const hiddenRoot of [parent, nested, source]) {
       convertedSources.length = 0;
@@ -270,7 +273,7 @@ describe('THREESceneSync', () => {
     const pixels = new Float32Array([0.2, 0.3, 0.4, 1]);
     const texture = new THREE.DataTexture(pixels, 1, 1, THREE.RGBAFormat, THREE.FloatType);
     source.environment = source.background = texture;
-    const sync = new THREESceneSync(source);
+    const sync = initializedSync(source);
     const light = sync.scene.lights[0]; const map = sync.scene.background as Texture;
     pixels[0] = 0.7; texture.needsUpdate = true;
     sync.update();
@@ -299,7 +302,7 @@ it('retains the converted source material for UV meshes and shares automatic pro
   const uv = new THREE.BoxGeometry(), uvless = new THREE.BoxGeometry(); uvless.deleteAttribute('uv');
   const fallback = new THREE.Mesh(uvless, material), secondFallback = new THREE.Mesh(uvless, material);
   source.add(new THREE.Mesh(uv, material), fallback, secondFallback, new THREE.Mesh(uv, material));
-  const sync = new THREESceneSync(source); const [a, b, c, d] = sync.scene.meshes;
+  const sync = initializedSync(source); const [a, b, c, d] = sync.scene.meshes;
   const base = a.materials[0], variant = b.materials[0];
   expect(base).toBe(d.materials[0]); expect(variant).toBe(c.materials[0]); expect(variant).not.toBe(base);
   expect(base.uvProjection).toBe('none'); expect(base.displacementUvProjection).toBe('none');
@@ -325,7 +328,7 @@ it('respects explicit material projections and prunes superseded automatic varia
   const material = new THREE.MeshStandardMaterial({ map, displacementMap: map });
   const uvless = new THREE.BoxGeometry(); uvless.deleteAttribute('uv');
   source.add(new THREE.Mesh(new THREE.BoxGeometry(), material), new THREE.Mesh(uvless, material));
-  const sync = new THREESceneSync(source), [a, b] = sync.scene.meshes;
+  const sync = initializedSync(source), [a, b] = sync.scene.meshes;
   const cache = (sync as unknown as { _store: { colorVariants: Map<THREE.Material, Map<string, unknown>> } })._store.colorVariants;
   const initial = b.materials[0];
   material.userData.mutracerUvProjection = 'spherical'; sync.update();
@@ -351,4 +354,68 @@ it('retains Three.js matrix precision before CPU inverse transforms', () => {
   expect(sync.scene.meshes[0].transform).toBe(matrix);
   expect(Array.from(matrix)).toEqual(mesh.matrixWorld.elements);
   expect(matrix[12]).not.toBe(Math.fround(mesh.matrixWorld.elements[12]));
+});
+
+function initializedSync(scene: THREE.Scene, options: import('../../src/util/fromTHREE').FromTHREESceneOptions = {}) {
+  const sync = new THREESync(new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement}), {scene, ...options});
+  sync.update(); return sync as THREESync & {scene: NonNullable<THREESync['scene']>};
+}
+
+describe('THREESync engine and interaction contract', () => {
+  function controls(camera: THREE.PerspectiveCamera | THREE.OrthographicCamera) {
+    const listeners = new Map<string, () => void>();
+    return {target: new THREE.Vector3(), enableDamping: true, autoRotate: false,
+      update: vi.fn(() => false),
+      addEventListener: vi.fn((name: 'start' | 'end', listener: () => void) => listeners.set(name, listener)),
+      removeEventListener: vi.fn((name: 'start' | 'end', listener: () => void) => {if (listeners.get(name) === listener) listeners.delete(name);}),
+      fire(name: string) {listeners.get(name)!();}, camera};
+  }
+  it('subscribes at construction and writes sources only on the first update', () => {
+    const engine = new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement});
+    const source = new THREE.Scene(), camera = new THREE.PerspectiveCamera(); const control = controls(camera);
+    const sync = new THREESync(engine, {scene: source, camera, controls: control});
+    expect(engine.scene).toBeUndefined(); expect(engine.camera).toBeUndefined(); expect(control.update).not.toHaveBeenCalled();
+    sync.update(); const converted = engine.camera;
+    expect(engine.scene).toBe(sync.scene); expect(converted).toBeDefined(); expect(sync.active).toBe(false);
+    camera.position.x = 1; sync.update(); expect(sync.active).toBe(true); expect(engine.camera).toBe(converted);
+    sync.update(); expect(sync.active).toBe(false);
+    sync.dispose(); sync.dispose(); expect(control.removeEventListener).toHaveBeenCalledTimes(2); engine.dispose();
+  });
+  it('supports camera-only and empty sources without replacing the engine scene', () => {
+    const engine = new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement}); const scene = {meshes: [], lights: []}; engine.scene = scene;
+    const sync = new THREESync(engine, {camera: new THREE.PerspectiveCamera()}); sync.update(); expect(engine.scene).toBe(scene);
+    const camera = engine.camera; new THREESync(engine).update(); expect(engine.camera).toBe(camera); expect(engine.scene).toBe(scene); sync.dispose(); engine.dispose();
+  });
+  it('respects start/end and terminates a small damping tail in the ending tick', () => {
+    const {engine, targets} = renderFixture({tiles: 2, fits: false}); const camera = new THREE.PerspectiveCamera(); camera.position.z = 5;
+    const control = controls(camera); const sync = new THREESync(engine, {camera, controls: control});
+    const loop = new RenderLoop(engine, {sync}); control.fire('start'); loop.tick();
+    const trace = vi.mocked(targets[0].trace).getMockImplementation()!;
+    vi.mocked(targets[0].trace).mockImplementation((camera, cap) => {trace(camera, cap); return trace(camera, cap);});
+    loop.tick(); expect(loop.status).toBe('previewing');
+    control.fire('end'); control.update.mockImplementation(() => {if (control.enableDamping) camera.position.x += .01; return true;});
+    loop.tick(); expect(loop.changing).toBe(true);
+    control.update.mockImplementation(() => {if (control.enableDamping) camera.position.x += .0001; return true;});
+    expect(loop.tick()).toBe('previewing'); expect(loop.changing).toBe(false); expect(control.enableDamping).toBe(true);
+    expect(targets[1].trace).toHaveBeenCalledOnce();
+    control.update.mockReturnValue(false); expect(loop.tick()).toBe('converging'); loop.dispose(); sync.dispose(); engine.dispose();
+  });
+  it('ends orthographic zoom damping as well as positional movement', () => {
+    const engine = new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement}); const camera = new THREE.OrthographicCamera(); camera.position.z = 5;
+    const control = controls(camera); const sync = new THREESync(engine, {camera, controls: control}); sync.update();
+    control.update.mockImplementation(() => {if (control.enableDamping) camera.zoom *= 1.01; return true;}); sync.update(); expect(sync.active).toBe(true);
+    control.update.mockImplementation(() => {if (control.enableDamping) camera.zoom *= 1.0001; return true;}); sync.update(); expect(sync.active).toBe(false); sync.dispose(); engine.dispose();
+  });
+  it('does not call controls.update when updateControls is false', () => {
+    const engine = new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement}); const camera = new THREE.PerspectiveCamera(); const control = controls(camera);
+    const sync = new THREESync(engine, {camera, controls: control, updateControls: false}); control.fire('start'); expect(sync.active).toBe(true); sync.update(); expect(sync.active).toBe(true);
+    control.fire('end'); sync.update(); expect(sync.active).toBe(false); expect(control.update).not.toHaveBeenCalled(); sync.dispose(); engine.dispose();
+  });
+  it('marks changed morph poses active for just that update', () => {
+    const engine = new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement}); const source = new THREE.Scene();
+    const geometry = new THREE.BoxGeometry(); geometry.morphAttributes.position = [geometry.attributes.position.clone()]; geometry.morphTargetsRelative = true;
+    const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial()); source.add(mesh);
+    const sync = new THREESync(engine, {scene: source}); sync.update(); sync.update(); expect(sync.active).toBe(false);
+    mesh.morphTargetInfluences![0] = .5; sync.update(); expect(sync.active).toBe(true); sync.update(); expect(sync.active).toBe(false); sync.dispose(); engine.dispose();
+  });
 });

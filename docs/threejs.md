@@ -1,54 +1,31 @@
 # Three.js integration
 
-Build or load a scene with Three.js, keep it in sync with `THREESceneSync`, and
-render `sync.scene` with MuTracer. Create the sync once and call `sync.update()`
-before rendering each frame. Three.js is an optional peer dependency
+Build or load a Three.js scene, then bind it and its camera with THREESync.
+RenderLoop calls the sync automatically. Three.js is an optional peer dependency
 (`npm install three`).
 
 ```ts
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { Engine, Render, THREESceneSync, fromTHREECamera } from '@meimu/mutracer';
-
-const threeScene = new THREE.Scene();
-threeScene.add((await new GLTFLoader().loadAsync('model.glb')).scene);
-
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { Engine, RenderLoop, THREESync } from '@meimu/mutracer';
+const scene = new THREE.Scene();
+scene.add((await new GLTFLoader().loadAsync('model.glb')).scene);
+const camera = new THREE.PerspectiveCamera(40, canvas.width / canvas.height, .1, 100);
+camera.position.set(0, 2, 6);
+const controls = new OrbitControls(camera, canvas);
 const engine = new Engine({canvas});
-const final = new Render(engine);
-const sync = new THREESceneSync(threeScene);
-
-function frame() {
-  sync.update();
-  engine.scene = sync.scene; engine.camera = fromTHREECamera(threeCamera);
-  engine.update(); final.refine(); engine.display.present(final);
-  requestAnimationFrame(frame);
-}
-frame();
+const sync = new THREESync(engine, {scene, camera, controls});
+const loop = new RenderLoop(engine, {sync});
+loop.start();
 ```
-
-MuTracer `transform` receives the Three.js `matrixWorld` (world transform), not its local `matrix`.
 
 ## Keeping scenes in sync
 
-`THREESceneSync` constructs its initial `scene` immediately. Each `update()`
-calls `updateMatrixWorld()` and re-reads the source scene. Unchanged meshes,
-materials, textures, lights, background and membership arrays retain identity.
-Transforms update the existing matrix arrays. Shared Three.js materials and
-textures stay shared in MuTracer, including within a one-shot conversion.
-
-```ts
-threeMesh.rotation.y += 0.01;
-threeMaterial.color.setRGB(0.4, 0.2, 0.1);
-threeMaterial.roughness = 0.6;
-sync.update();
-engine.scene = sync.scene; engine.camera = fromTHREECamera(threeCamera);
-  engine.update(); final.refine(); engine.display.present(final);
-```
-
-Transforms, membership, lights, background and material properties need no
-flag: material edits are converted and versioned automatically, so Three.js
-`material.needsUpdate` is not required for color or roughness edits. Buffer
-and pixel edits need the usual Three.js flags:
+Edit Three.js transforms, membership, lights, backgrounds and materials directly.
+Material edits are converted and versioned automatically; color and roughness
+edits do not require `material.needsUpdate`. Buffer and pixel edits need the
+usual flags:
 
 | Edit | Flag |
 | --- | --- |
@@ -57,36 +34,16 @@ and pixel edits need the usual Three.js flags:
 | Instance matrices / colors | `instanceMatrix.needsUpdate` / `instanceColor.needsUpdate = true` |
 
 ```ts
-geometry.attributes.position.setX(0, 0.5);
+threeMesh.rotation.y += .01;
+threeMaterial.roughness = .6;
+geometry.attributes.position.setX(0, .5);
 geometry.attributes.position.needsUpdate = true;
-texture.needsUpdate = true; // after changing its canvas or pixel data
-sync.update();
+// The next loop tick synchronizes and commits these edits.
 ```
 
-The sync then calls the right MuTracer notification (`markUpdated()` or
-`markVerticesUpdated()`) on its converted resources. Changed position, normal,
-tangent, uv, uv1 or index buffers replace the converted geometry, which costs
-a [full mesh update](./updates.md#full-mesh-updates); skinning and morph
-targets update arrays in place instead.
-
-`update()` returns `void`. Render `sync.scene` afterwards; Engine.update detects
-the converted scene changes.
-
-`new THREESceneSync(threeScene, options?)` accepts an optional
-`onMeshConverted(mesh, source, group, groupIndex)` callback (default: none).
-The sync calls it for each visible group and expanded instance during initial
-conversion and every update.
-Call `sync.dispose()` when finished to release its caches. Its last scene
-remains usable; calling `update()` after disposal throws.
-
-`fromTHREEScene(threeScene, options?)` remains available for one-shot conversion
-with the same options. Every call creates fresh MuTracer objects.
-
-`fromTHREECamera(camera)` is cheap; call it every frame. Call
-`camera.updateProjectionMatrix()` after changing its aspect or fov. A
-perspective camera's `focus` and film height (`filmGauge`) become the
-[depth of field](./getting-started.md#depth-of-field) focus distance and sensor
-height; pass `{ fStop }` to enable it, e.g. `fromTHREECamera(camera, { fStop: 2.8 })`.
+For an application-owned animation frame, update the animation mixer first,
+then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
+`engine.update()`, `render.refine()` and `engine.display.present(render)` in order.
 
 ## What is converted
 
@@ -173,3 +130,41 @@ Renderer-specific settings without a Three.js equivalent:
 
 Directional and spot lights use their world position and target to build a
 MuTracer transform; source rotation alone does not specify their direction.
+
+## Options
+
+`new THREESync(engine, options?)` accepts these optional sources and settings:
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `scene` | undefined | Three.js scene; omitted leaves engine.scene untouched |
+| `camera` | undefined | Perspective or orthographic camera; omitted leaves engine.camera untouched |
+| `controls` | undefined | Controls with update and start/end events, such as OrbitControls |
+| `updateControls` | true | Calls controls.update; false leaves updating to the application |
+| `onMeshConverted` | undefined | `(mesh, source, group, groupIndex)` on every visible group/expanded instance during update |
+
+Construction subscribes to control events. The first update converts and writes
+sources to the engine. `scene` exposes the retained converted scene, or undefined
+when no source was supplied. A camera-only sync preserves a MuTracer-built scene.
+`active` covers start/end interaction, camera movement, damping and changing
+skinned/morph poses. The damping tail ends when movement and zoom fall below
+0.05% of view distance, allowing final refinement in that same tick.
+
+`fromTHREEScene(scene, options?)` and `fromTHREECamera(camera, options?)` remain
+available for one-shot conversions. Every scene conversion creates fresh objects.
+Call `camera.updateProjectionMatrix()` after changing aspect or fov. A perspective
+camera's focus and film height become MuTracer focus distance and sensor height;
+pass `{fStop: 2.8}` to `fromTHREECamera` to enable depth of field.
+
+## Caveats
+
+THREESync updates world/bone matrices and retains unchanged meshes, materials,
+textures, lights, backgrounds and membership arrays. MuTracer transforms use
+Three.js matrixWorld, preserving double precision. Skinning and morphs run on the
+CPU, updating retained geometry in place. Other changed buffers replace geometry
+and require a [full mesh update](./updates.md#full-mesh-updates).
+
+`sync.dispose()` removes control subscriptions and conversion caches; it leaves
+the last converted scene usable. Updating a disposed sync throws. RenderLoop does
+not dispose supplied syncs or renders; see [ownership](./progressive-rendering.md#options-and-ownership).
+

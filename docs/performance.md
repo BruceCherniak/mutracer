@@ -30,7 +30,7 @@ A tuning checklist. Each item links to the page with the details.
 - For large scenes, try `engine.bvhBuilder = 'tinybvh'` and build BVHs up
   front with optional `await engine.prepare(nextScene)`. Tune `bvhWorkerCount` for
   parallel construction across geometries; see [BVH](./bvh.md).
-- With Three.js, keep one `THREESceneSync` for the whole session rather than
+- With Three.js, keep one `THREESync(engine, {scene, camera, controls})` for the whole session rather than
   converting again with `fromTHREEScene`.
 - Textures share an atlas bounded by `textureAtlasBudgetBytes`; larger textures
   are downscaled. Check `engine.getDiagnostics()?.textureAtlas`.

@@ -1,7 +1,6 @@
 import {
   mat3 as glMat3,
   mat4 as glMat4,
-  quat as glQuat,
   vec2 as glVec2,
   vec3 as glVec3
 } from 'gl-matrix';
@@ -19,7 +18,6 @@ export namespace mat3 {
 export const mat4: any = {
   copy: glMat4.copy,
   create: glMat4.create,
-  fromRotationTranslation: glMat4.fromRotationTranslation,
   invert: glMat4.invert,
   lookAt: glMat4.lookAt,
   targetTo: glMat4.targetTo,
@@ -35,17 +33,6 @@ export const mat4: any = {
 };
 export namespace mat4 {
   export type Mat4Array = Float32Array | number[];
-}
-
-export const quat: any = {
-  create: glQuat.create,
-  fromMat3: glQuat.fromMat3,
-  identity: glQuat.identity,
-  rotateX: glQuat.rotateX,
-  rotateY: glQuat.rotateY
-};
-export namespace quat {
-  export type QuatArray = Float32Array | number[];
 }
 
 export const vec2: any = {

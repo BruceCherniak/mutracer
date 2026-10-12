@@ -1,3 +1,5 @@
+import Sync from '../Sync.js';
+import type Engine from '../Engine.js';
 import { markDeformedGeometry } from '../scene/geometryChanges.js';
 import type * as THREE from 'three';
 import Mesh from '../scene/Mesh.js';
@@ -556,6 +558,7 @@ interface ConversionStore {
   geometries: WeakMap<THREE.BufferGeometry, GeometryEntry>;
   deformedGeometries: WeakMap<THREE.Mesh, GeometryEntry>;
   deformations: WeakMap<THREE.Mesh, THREEDeformation>;
+  poseChanged: boolean;
   meshes: WeakMap<THREE.Mesh, Map<number, Mesh>>;
   lights: WeakMap<THREE.Object3D | THREE.Texture, SceneLight>;
   instanceMeshes: WeakMap<THREE.Mesh, Map<number, Mesh[]>>;
@@ -566,7 +569,7 @@ interface ConversionStore {
 }
 function createConversionStore(): ConversionStore {
   return { updateId: 0, textures: new WeakMap(), materials: new WeakMap(), geometries: new WeakMap(),
-    meshes: new WeakMap(), lights: new WeakMap(), deformedGeometries: new WeakMap(), deformations: new WeakMap(),
+    poseChanged: false, meshes: new WeakMap(), lights: new WeakMap(), deformedGeometries: new WeakMap(), deformations: new WeakMap(),
     instanceMeshes: new WeakMap(), colorVariants: new Map(), warned: new WeakSet() };
 }
 const geometryAttributeNames = ['position', 'normal', 'tangent', 'uv', 'uv1', 'index'] as const;
@@ -627,7 +630,7 @@ function retainLight(store: ConversionStore, source: THREE.Object3D | THREE.Text
  * CPU-evaluates skinning/morph targets and expands InstancedMesh instances
  * with shared geometry and cached color/projection material variants. Unsupported batched
  * or instanced deformation falls back to an ordinary mesh with a warning.
- * For animation and editing, use {@link THREESceneSync}.
+ * For animation and editing, use {@link THREESync}.
  *
  * Renderer-specific material settings can be supplied through
  * `material.userData`, e.g. `userData.mutracerShadowCatcher = true` or
@@ -741,6 +744,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             store.deformedGeometries.delete(child);
           }
           deformed = deformation.update(child);
+          store.poseChanged ||= deformed;
         }
         const threeMaterials = childMaterials;
         const groups =
@@ -985,6 +989,23 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   };
 }
 
+/** Structural control interface; no Three.js imports are needed in core APIs. */
+export interface THREEControls {
+  update(deltaTime?: number): boolean | void;
+  addEventListener(type: 'start' | 'end', listener: () => void): void;
+  removeEventListener(type: 'start' | 'end', listener: () => void): void;
+  target?: THREE.Vector3;
+  enableDamping?: boolean;
+  autoRotate?: boolean;
+  enabled?: boolean;
+}
+/** Three.js sources synchronized on each tick. */
+export interface THREESyncOptions extends FromTHREESceneOptions {
+  /** Scene source. Default undefined (engine.scene is untouched). */ scene?: THREE.Scene;
+  /** Camera source. Default undefined (engine.camera is untouched). */ camera?: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+  /** Camera controls. Default undefined. */ controls?: THREEControls;
+  /** Call controls.update during synchronization. Default true. */ updateControls?: boolean;
+}
 /**
  * Keeps one MuTracer scene in sync with a Three.js scene, reusing unchanged objects.
  * Skinning/morph targets run on the CPU with per-source-mesh dynamic geometry.
@@ -993,31 +1014,71 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
  * variants per source material. Source edits refresh variants; unused variants
  * are removed after each update.
  */
-export class THREESceneSync {
-  /** Retained MuTracer scene initialized from the source scene and updated in place. */
-  readonly scene: Scene;
+export class THREESync extends Sync {
+  /** Retained converted scene; absent when no scene source was supplied. */
+  readonly scene: Scene | undefined;
+  /** Retained converted camera; absent until the first camera update. */
+  private _camera?: Camera;
   private _store = createConversionStore();
   private _disposed = false;
-
-  /** Creates the initial scene. Default options: no conversion callback. */
-  constructor(private _source: THREE.Scene, private _options: FromTHREESceneOptions = {}) {
-    this.scene = convertScene(_source, _options, this._store);
+  private _started = false;
+  private _cameraState: unknown[] = [];
+  private _lastUpdate?: number;
+  private _start = () => {this._started = true; this.setActive(true);};
+  private _end = () => {this._started = false;};
+  /** Subscribes to controls without converting sources or modifying the engine. */
+  constructor(engine: Engine, private _options: THREESyncOptions = {}) {
+    super(engine);
+    if (_options.scene) this.scene = {meshes: [], lights: []};
+    _options.controls?.addEventListener('start', this._start);
+    _options.controls?.addEventListener('end', this._end);
   }
-
-  /** Updates world/bone matrices, changed CPU deformation and retained instances in place. Returns void; Engine.update detects the converted scene edits. */
+  /** Updates controls, world matrices, retained instances and camera before engine.update. */
   update(): void {
-    if (this._disposed) throw new Error('THREESceneSync has been disposed');
-    const next = convertScene(this._source, this._options, this._store);
-    const membership = !snapshotsEqual(this.scene.meshes, next.meshes);
-    if (membership) this.scene.meshes = next.meshes;
-    if (!snapshotsEqual(this.scene.lights, next.lights)) this.scene.lights = next.lights;
-    this.scene.background = next.background;
+    if (this._disposed) throw new Error('THREESync has been disposed');
+    const now = performance.now(), controls = this._options.controls, sourceCamera = this._options.camera;
+    const dt = this._lastUpdate === undefined ? 0 : Math.min(.1, Math.max(0, (now - this._lastUpdate) / 1000));
+    this._lastUpdate = now;
+    let moving = false, settled = false;
+    if (controls && this._options.updateControls !== false) {
+      const position = sourceCamera?.position.clone(), zoom = sourceCamera?.zoom;
+      moving = !!controls.update(dt);
+      if (moving && !this._started && !controls.autoRotate && controls.enableDamping && position && sourceCamera && controls.target) {
+        const step = position.distanceTo(sourceCamera.position);
+        const zoomStep = Math.abs(Math.log(sourceCamera.zoom / zoom!));
+        if (step < 5e-4 * sourceCamera.position.distanceTo(controls.target) && zoomStep < 5e-4) {
+          controls.enableDamping = false;
+          try {controls.update(0);} finally {controls.enableDamping = true;}
+          moving = false; settled = true;
+        }
+      }
+    }
+    this._store.poseChanged = false;
+    if (this._options.scene && this.scene) {
+      const next = convertScene(this._options.scene, this._options, this._store);
+      if (!snapshotsEqual(this.scene.meshes, next.meshes)) this.scene.meshes = next.meshes;
+      if (!snapshotsEqual(this.scene.lights, next.lights)) this.scene.lights = next.lights;
+      this.scene.background = next.background;
+      this.engine.scene = this.scene;
+    }
+    let cameraChanged = false;
+    if (sourceCamera) {
+      sourceCamera.updateWorldMatrix(true, false);
+      const next = fromTHREECamera(sourceCamera);
+      const state = snapshotFields(next).slice(1);
+      cameraChanged = this._cameraState.length > 0 && !snapshotsEqual(state, this._cameraState);
+      this._cameraState = state;
+      if (!this._camera) this._camera = next; else this._camera.copy(next);
+      this.engine.camera = this._camera;
+    }
+    this.setActive(this._started || moving || this._store.poseChanged || (cameraChanged && !settled));
   }
-
-  /** Releases conversion caches. The last scene remains usable; update then throws. */
+  /** Removes control subscriptions and caches. The last converted objects remain usable. */
   dispose(): void {
-    this._store = createConversionStore();
-    this._disposed = true;
+    if (this._disposed) return;
+    this._options.controls?.removeEventListener('start', this._start);
+    this._options.controls?.removeEventListener('end', this._end);
+    this._store = createConversionStore(); this._disposed = true; super.dispose();
   }
 }
 

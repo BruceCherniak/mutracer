@@ -66,12 +66,12 @@ export {
 
 // Loaders and integrations
 export { loadRGBE, parseRGBE } from './util/loadRGBE.js';
-export { fromTHREECamera, fromTHREEScene, THREESceneSync } from './util/fromTHREE.js';
+export { fromTHREECamera, fromTHREEScene, THREESync } from './util/fromTHREE.js';
 export type {
   FromTHREESceneOptions,
+  THREESyncOptions, THREEControls,
   FromTHREECameraOptions
 } from './util/fromTHREE.js';
-export { default as CameraViewControl } from './util/CameraViewControl.js';
 
 // Geometry helpers
 export {
@@ -97,4 +97,8 @@ export type { EngineParams, EngineInfo, EngineDiagnostics, PrepareOptions, BVHBu
 export { default as Display } from './Display.js';
 export type { BlobOptions, DisplayChannel } from './Display.js';
 export { default as Render } from './Render.js';
-export type { RenderOptions, RenderSettings, ConvergeOptions, ConvergeResult, DenoiserOptions, DenoiserType, RenderStatus } from './Render.js';
+export type { RenderOptions, RenderSettings, ConvergeOptions, ConvergeResult, DenoiserOptions, DenoiserType, RenderStatus, SampleEvent } from './Render.js';
+
+export { default as Sync } from './Sync.js';
+export { default as RenderLoop } from './RenderLoop.js';
+export type { RenderLoopOptions, RenderLoopStatus } from './RenderLoop.js';

@@ -1,3 +1,4 @@
+import { Events } from './util/events.js';
 import type Engine from './Engine.js';
 import type Camera from './scene/Camera.js';
 import { cameraSnapshot } from './renderer/cameraSnapshot.js';
@@ -10,6 +11,8 @@ import { createJNLMDenoiser, isJNLMDenoiser, type JNLMDenoiser, type JNLMOptions
 import type { OfflineAdaptiveSamplingOptions, OfflineVarianceHistory } from './renderer/OfflineAdaptiveSampling.js';
 import { nextPreviewScale } from './renderer/util.js';
 
+/** Complete-sample notification, including the backend's measured sample time. */
+export interface SampleEvent { samples: number; isFirstFrame: boolean; frameTimeMs: number; }
 /** State of one independent accumulation. Default preparing. */
 export type RenderStatus = 'preparing' | 'compiling' | 'converging' | 'denoising' | 'finished' | 'error';
 /** Built-in filter implementation. Default jnlm, or oidn when model/weightsBaseUrl is given. */
@@ -120,6 +123,11 @@ export default class Render {
   private _adaptiveScale = 1;
   private _lastScale = 1;
   private _frameTime = 0;
+  private _events = new Events<{sample: SampleEvent}>();
+  /** Owning engine. */ get engine(): Engine { return this._engine; }
+  /** Whether inference is queued or running, including intermediate updates. Default false. */ get denoising(): boolean { return !!this._denoisePending; }
+  /** Subscribes to every complete sample on this render; returns unsubscribe. */
+  on(event: 'sample', listener: (value: SampleEvent) => void): () => void { return this._events.on(event, listener); }
   private _filter?: OIDNDenoiser | JNLMDenoiser;
   private _filterKey = '';
   private _filterRevision = 0;
@@ -187,7 +195,7 @@ export default class Render {
       target.setSize(size.width, size.height);
       this._input = {scene: inputs.scene, camera: inputs.camera, settings: key};
     }
-    target.setOnSampleRendered((_samples, _first, time) => { this._frameTime = time; });
+    target.setOnSampleRendered((samples, isFirstFrame, frameTimeMs) => { this._frameTime = frameTimeMs; this._events.emit('sample', {samples, isFirstFrame, frameTimeMs}); });
     return target;
   }
   /** Accumulates within this frame's budget. Rejects calls during converge or after disposal. */
@@ -315,7 +323,7 @@ export default class Render {
   /** Releases only this render's image resources and denoiser. */
   dispose() {
     if (this._disposed) return;
-    this._disposed = true; this._filterRevision++; this._cancelDenoise();
+    this._disposed = true; this._events.clear(); this._filterRevision++; this._cancelDenoise();
     if (this._target) this._engine._releaseTarget(this._target);
     if (this._filter) this._engine._releaseDenoiser(this._filter);
     this._target = undefined; this._filter = undefined; this._engine._unregister(this);

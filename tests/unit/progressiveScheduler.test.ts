@@ -1,41 +1,34 @@
 import { describe, expect, it } from 'vitest';
-import { ProgressiveScheduler } from '../../src/renderer/progressiveScheduler';
+import { updateProgressiveState, type ProgressiveState } from '../../src/renderer/progressiveScheduler';
 
-describe('legacy progressive scheduling', () => {
-  it('keeps preview through preparation and compilation until one sample completes', () => {
-    const scheduler = new ProgressiveScheduler();
-    expect(scheduler.update(false, true, 0)).toBe(true);
-    expect(scheduler.preview).toBe(true);
-    expect(scheduler.update(false, false, 200)).toBe(false);
-    expect(scheduler.preview).toBe(true);
-    scheduler.completeSample();
-    expect(scheduler.update(false, false, 201)).toBe(true);
-    expect(scheduler.preview).toBe(false);
+describe('consecutive-edit heuristic', () => {
+  it('leaves isolated edits immediate and holds consecutive edits until idle', () => {
+    const policy = policyFixture();
+    expect(policy.update(true, false, 0, 150)).toBe(false);
+    expect(policy.update(false, false, 16, 150)).toBe(false);
+    expect(policy.update(true, false, 32, 150)).toBe(false);
+    expect(policy.update(true, false, 48, 150)).toBe(true);
+    expect(policy.update(false, false, 197, 150)).toBe(true);
+    expect(policy.update(false, false, 198, 150)).toBe(false);
   });
-
-  it('extends the idle deadline for camera and scene edits', () => {
-    const scheduler = new ProgressiveScheduler();
-    scheduler.update(true, false, 0);
-    scheduler.completeSample();
-    scheduler.update(false, true, 100);
-    scheduler.completeSample();
-    expect(scheduler.update(false, false, 249)).toBe(false);
-    expect(scheduler.update(false, false, 250)).toBe(true);
+  it('lets an explicit interaction end without an idle tail', () => {
+    const policy = policyFixture();
+    policy.update(true, false, 0, 150); policy.update(true, false, 16, 150);
+    expect(policy.update(true, true, 32, 150)).toBe(true);
+    expect(policy.update(true, false, 48, 150)).toBe(false);
   });
-
-  it('restarts the camera without preview when preview is disabled', () => {
-    const scheduler = new ProgressiveScheduler();
-    scheduler.configure(false, 150);
-    expect(scheduler.update(true, false, 0)).toBe(true);
-    expect(scheduler.preview).toBe(false);
-    expect(scheduler.update(false, true, 1)).toBe(false);
-  });
-
-  it('immediately leaves preview when disabled', () => {
-    const scheduler = new ProgressiveScheduler();
-    scheduler.update(true, false, 0);
-    scheduler.configure(false, 0);
-    expect(scheduler.preview).toBe(false);
-    expect(scheduler.previewSamplePending).toBe(false);
+  it('resets stale heuristic state', () => {
+    let policy = policyFixture();
+    policy.update(true, false, 0, 150); policy.update(true, false, 16, 150); policy = policyFixture();
+    expect(policy.update(false, false, 32, 150)).toBe(false);
   });
 });
+
+function policyFixture() {
+  let state: ProgressiveState = {previousChanged: false, lastContinuousChange: -Infinity, changing: false};
+  return {update(changed: boolean, active: boolean, now: number, idleMs: number) {
+    const before = {...state};
+    const next = updateProgressiveState(state, changed, active, now, idleMs);
+    expect(state).toEqual(before); state = next; return state.changing;
+  }};
+}

@@ -61,7 +61,7 @@ sample count) on a real GPU before and after, and compare
   structs; update both and run the contract tests.
 - Write tests for behavior and public contracts (packing, parsing, lifecycle,
   generated shader validity). Do not add tests that only restate source text.
-- Use Three.js `GLTFLoader` with `THREESceneSync` in examples and comparisons.
+- Use Three.js `GLTFLoader` with `THREESync` in examples and comparisons.
 - Keep examples small: procedural or CC0 assets only, no large models.
 - Code adapted from another project needs a compatible license, a source
   comment, an entry in `THIRD_PARTY_NOTICES.md` and the license text in

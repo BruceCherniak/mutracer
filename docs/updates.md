@@ -32,8 +32,8 @@ material.markUpdated();
 engine.update(); final.refine(); engine.display.present(final);
 ```
 
-With Three.js, edit the Three.js scene and call `sync.update()` before
-rendering; the sync sends these notifications for you. See
+With RenderLoop, edit sources before the next tick; the loop calls sync.update
+and engine.update. THREESync sends resource notifications for you. See
 [Three.js](./threejs.md#keeping-scenes-in-sync).
 
 ## Checking missing material notifications

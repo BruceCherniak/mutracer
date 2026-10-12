@@ -1,14 +1,14 @@
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 // Minimal MuTracer scene: procedural geometry, OpenPBR materials, an area light
 // and an HDR environment. Drag to orbit, scroll to zoom.
 import { mat4 } from 'gl-matrix';
 import {
-  Camera,
-  CameraViewControl,
   EnvironmentLight,
   Mesh,
   OpenPBRMaterial, type OpenPBRMaterialParams,
   RectLight,
-  Engine, Render,
+  Engine, RenderLoop, THREESync,
   type Scene,
   createCubeGeometry,
   createPlaneGeometry,
@@ -16,7 +16,6 @@ import {
 } from '@meimu/mutracer';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
-import { exampleSelection } from './shared/progressive';
 
 const canvas = document.getElementById('main') as HTMLCanvasElement;
 const statusElement = document.getElementById('status')!;
@@ -56,32 +55,33 @@ const scene: Scene = {
   lights: [light, new EnvironmentLight({map: createSkyTexture()})]
 };
 
-const camera = new Camera({projection: 'perspective', fov: 40, near: 0.1, far: 100});
-camera.position = [0, 2.4, 6]; camera.lookAt([0, 0.3, -0.3]);
-const controls = new CameraViewControl({ camera, domElement: canvas });
+const camera = new THREE.PerspectiveCamera(40, 1, .1, 100);
+camera.position.set(0, 2.4, 6); camera.lookAt(0, 0.3, -0.3);
+const controls = new OrbitControls(camera, canvas);
+controls.target.set(0, .3, -.3); controls.update();
 
 // Uses WebGPU when available and WebGL 2 otherwise; add ?webgl to the URL to
 // force the WebGL 2 backend.
 const engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
-const preview = new Render(engine, {resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}, bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
-const final = new Render(engine, {fallback: preview, bounces: 6, maxSamples: 1024});
-const select = exampleSelection(engine, preview, final);
-engine.scene = scene; engine.camera = camera;
+const sync = new THREESync(engine, {camera, controls});
+const loop = new RenderLoop(engine, {sync, final: {bounces: 6, maxSamples: 1024}});
+const final = loop.final;
+engine.scene = scene;
 
 
 function resize() {
   const ratio = Math.min(window.devicePixelRatio, 2);
   engine.display.setSize(canvas.clientWidth * ratio, canvas.clientHeight * ratio);
-  controls.aspect = canvas.clientWidth / canvas.clientHeight;
+  camera.aspect = canvas.clientWidth / canvas.clientHeight;
+  camera.updateProjectionMatrix();
 }
 window.addEventListener('resize', resize);
 resize();
 
 function frame() {
-  controls.update();
-  const current = select(engine.update()); const status = current.refine();
-  const shown = engine.display.present(current);
-  showStatus(statusElement, engine, final, shown === preview ? 'previewing' : status);
+  showStatus(statusElement, engine, final, loop.tick());
   requestAnimationFrame(frame);
 }
 frame();
+
+window.addEventListener('pagehide', () => {loop.dispose(); sync.dispose(); controls.dispose(); engine.dispose();});

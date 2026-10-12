@@ -1,5 +1,5 @@
 import { Camera, Mesh, OpenPBRMaterial, Engine, SphereLight, createSphereGeometry } from '../../src/main.js';
-import { measureProgressiveSwitches } from './progressiveRendering.js';
+import { measureProgressiveSwitches, measureRenderLoopSwitches } from './progressiveRendering.js';
 
 const renderer = new Engine({ canvas: document.getElementById('main') as HTMLCanvasElement,
   backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto' });
@@ -11,12 +11,20 @@ const scene = { meshes: [new Mesh(createSphereGeometry(32, 16), new OpenPBRMater
   lights: [light] };
 const button = document.getElementById('run') as HTMLButtonElement;
 button.onclick = async () => {
-  button.disabled = true;
+  button.disabled = loopButton.disabled = true;
   try {
     const report = await measureProgressiveSwitches(renderer, scene, camera);
     document.getElementById('result')!.textContent = JSON.stringify(report, null, 2);
   } catch (error) {
     document.getElementById('result')!.textContent = String(error);
-  } finally { button.disabled = false; }
+  } finally { button.disabled = loopButton.disabled = false; }
 };
 window.addEventListener('pagehide', () => renderer.dispose());
+
+const loopButton = document.createElement('button'); loopButton.textContent = 'Measure RenderLoop switches'; document.body.append(loopButton);
+loopButton.onclick = async () => {
+  button.disabled = loopButton.disabled = true;
+  try {document.getElementById('result')!.textContent = JSON.stringify(await measureRenderLoopSwitches(renderer, scene, camera), null, 2);}
+  catch (error) {document.getElementById('result')!.textContent = String(error);}
+  finally {button.disabled = loopButton.disabled = false;}
+};
