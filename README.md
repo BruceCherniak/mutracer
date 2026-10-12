@@ -100,7 +100,7 @@ loop.start();
 Enable denoising on an individual result:
 
 ```ts
-loop.final.denoiser = { type: 'jnlm' }; // built-in filter, both backends
+loop.final.denoiser = { type: 'jnlm' }; // required type; reassign the frozen configuration to edit
 loop.final.denoiser = { type: 'oidn', model: 'standard' }; // WebGPU
 ```
 

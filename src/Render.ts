@@ -7,7 +7,7 @@ import { normalizeBevelSamples, normalizeDirectLightCandidates } from './rendere
 import type { SamplingPattern } from './renderer/sampling.js';
 import type { RenderTarget, TraceSettings } from './renderer/renderPipeline.js';
 import type { OIDNDenoiser, OIDNModel } from './oidn.js';
-import { createJNLMDenoiser, isJNLMDenoiser, type JNLMDenoiser, type JNLMOptions } from './renderer/jnlm.js';
+import { DEFAULT_JNLM_OPTIONS, createJNLMDenoiser, isJNLMDenoiser, type JNLMDenoiser, type JNLMOptions } from './renderer/jnlm.js';
 import type { OfflineAdaptiveSamplingOptions, OfflineVarianceHistory } from './renderer/OfflineAdaptiveSampling.js';
 import { nextPreviewScale } from './renderer/util.js';
 
@@ -15,17 +15,25 @@ import { nextPreviewScale } from './renderer/util.js';
 export interface SampleEvent { samples: number; isFirstFrame: boolean; frameTimeMs: number; }
 /** State of one independent accumulation. Default preparing. */
 export type RenderStatus = 'preparing' | 'compiling' | 'converging' | 'denoising' | 'finished' | 'error';
-/** Built-in filter implementation. Default jnlm, or oidn when model/weightsBaseUrl is given. */
-export type DenoiserType = 'jnlm' | 'oidn';
-/** Denoising configuration of one render. Assign null to disable. */
-export interface DenoiserOptions extends JNLMOptions {
-  /** Filter implementation. Default jnlm, or oidn when model/weightsBaseUrl is supplied. */ type?: DenoiserType;
-  /** OIDN network. Default standard. */ model?: OIDNModel;
+/** When a render filters its complete samples. Default converged. */
+export type DenoiseSchedule = 'converged' | 'progressive' | 'every-sample';
+/** Built-in joint non-local means filter on both backends. */
+export interface JNLMDenoiserOptions extends JNLMOptions {
+  /** Required implementation selector. */ type: 'jnlm';
+  /** When to filter complete samples. Default converged. */ schedule?: DenoiseSchedule;
+}
+/** Built-in OIDN network on WebGPU. */
+export interface OIDNDenoiserOptions {
+  /** Required implementation selector. */ type: 'oidn';
+  /** When to filter complete samples. Default converged. */ schedule?: DenoiseSchedule;
+  /** Packaged network. Default standard. */ model?: OIDNModel;
   /** Weight directory override. Default bundled standard/small assets and CDN large weights. */ weightsBaseUrl?: string | URL;
-  /** Denoise at convergence, doubling sample batches, or every complete sample. Default converged. */ schedule?: 'converged' | 'progressive' | 'every-sample';
   /** Maximum OIDN tile size. Default chosen by oidn-web. */ maxTileSize?: number;
   /** Abort weight downloads. Default undefined. */ signal?: AbortSignal;
 }
+/** Assign a complete configuration, or null to disable denoising. The type selector is required. */
+export type DenoiserOptions = JNLMDenoiserOptions | OIDNDenoiserOptions;
+
 /** Optional per-render execution and image-quality settings. */
 export interface RenderSettings {
   /** Maximum complete samples. Default 2048. */ maxSamples?: number;
@@ -72,6 +80,25 @@ export interface ConvergeResult {
 let oidnModule: Promise<typeof import('./oidn.js')> | undefined;
 const loadOIDN = () => oidnModule ??= import('./oidn.js');
 
+function validateDenoiserOptions(options: DenoiserOptions) {
+  if (!options || typeof options !== 'object' || (options.type !== 'jnlm' && options.type !== 'oidn')) throw new Error('Denoiser type must be jnlm or oidn.');
+  const allowed = options.type === 'jnlm'
+    ? ['type', 'schedule', ...Object.keys(DEFAULT_JNLM_OPTIONS)]
+    : ['type', 'schedule', 'model', 'weightsBaseUrl', 'maxTileSize', 'signal'];
+  for (const key of Object.keys(options)) if (!allowed.includes(key)) throw new Error(`Denoiser field ${key} does not belong to ${options.type}.`);
+  if (options.schedule !== undefined && !['converged', 'progressive', 'every-sample'].includes(options.schedule)) throw new Error('Unknown denoise schedule.');
+  if (options.type === 'jnlm') createJNLMDenoiser(options);
+  else {
+    if (options.model !== undefined && !['standard', 'small', 'cleanAuxLarge'].includes(options.model)) throw new Error('Unknown OIDN model.');
+    if (options.maxTileSize !== undefined && (!Number.isInteger(options.maxTileSize) || options.maxTileSize < 1)) throw new Error('maxTileSize must be a positive integer.');
+  }
+}
+
+function denoiserKey(options: Readonly<DenoiserOptions>) {
+  if (options.type === 'jnlm') return JSON.stringify({type: 'jnlm', ...Object.fromEntries(Object.entries(DEFAULT_JNLM_OPTIONS).map(([key, value]) => [key, options[key as keyof JNLMOptions] ?? value]))});
+  return JSON.stringify({type: 'oidn', model: options.model ?? 'standard', weightsBaseUrl: options.weightsBaseUrl?.toString(), maxTileSize: options.maxTileSize});
+}
+
 /** One independently configured image and its accumulation, owned by an engine. */
 export default class Render {
   /** Maximum complete samples. Default 2048. */ maxSamples = 2048;
@@ -106,11 +133,17 @@ export default class Render {
     this._fallback = value; value?._dependents.add(this);
   }
   private _dependents = new Set<Render>();
-  private _denoiserOptions: DenoiserOptions | null = null;
-  /** Filter and schedule for this render. Default null. Loading is asynchronous and reported through status/errors. */
+  private _denoiserOptions: Readonly<DenoiserOptions> | null = null;
+  /** Frozen configuration snapshot. Default null. Reassign to edit; invalid options throw before replacing any state. Loading errors are asynchronous. */
   get denoiser() { return this._denoiserOptions; }
   set denoiser(options: DenoiserOptions | null) {
-    this._denoiserOptions = options ? { ...options } : null;
+    if (options !== null) validateDenoiserOptions(options);
+    const next = options ? Object.freeze({...options}) : null;
+    if (this._denoiserOptions === null && next === null) return;
+    if (next && this._denoiserOptions && denoiserKey(next) === denoiserKey(this._denoiserOptions)
+      && next.schedule === this._denoiserOptions.schedule && (next.type !== 'oidn' ||
+        (this._denoiserOptions.type === 'oidn' && next.signal === this._denoiserOptions.signal))) return;
+    this._denoiserOptions = next;
     this._refreshDenoiser();
   }
   private _fixed?: {width: number; height: number};
@@ -141,6 +174,7 @@ export default class Render {
 
   constructor(engine: Engine, options: RenderOptions = {}) {
     this._engine = engine;
+    if (options.denoiser != null) validateDenoiserOptions(options.denoiser);
     if ('width' in options || 'height' in options) {
       if ('resolutionScale' in options || !Number.isInteger(options.width) || !Number.isInteger(options.height) || options.width! < 1 || options.height! < 1) throw new Error('Provide positive integer width and height, or resolutionScale, exclusively.');
       this._fixed = {width: options.width!, height: options.height!};
@@ -247,7 +281,7 @@ export default class Render {
   private _refreshDenoiser() {
     if (this._disposed) return;
     const options = this._denoiserOptions;
-    const key = options ? JSON.stringify({...options, schedule: undefined, signal: undefined, weightsBaseUrl: options.weightsBaseUrl?.toString()}) : '';
+    const key = options ? denoiserKey(options) : '';
     if (key === this._filterKey) return;
     this._filterKey = key; const revision = ++this._filterRevision;
     this._cancelDenoise();
@@ -255,8 +289,7 @@ export default class Render {
     this._target?.invalidateDenoisedOutput();
     this._filter = undefined; this._filterPending = undefined;
     if (!options) return;
-    const type = options.type ?? (options.model || options.weightsBaseUrl ? 'oidn' : 'jnlm');
-    if (type === 'jnlm') { this._filter = this._engine._retainDenoiser(`jnlm:${key}`, () => createJNLMDenoiser(options)); return; }
+    if (options.type === 'jnlm') { this._filter = this._engine._retainDenoiser(`jnlm:${key}`, () => createJNLMDenoiser(options)); return; }
     const task = (async () => {
       await this._engine.init();
       if (this._engine.backend !== 'webgpu') { if (revision === this._filterRevision) console.warn('OIDN requires WebGPU; denoising is disabled for this render.'); return; }

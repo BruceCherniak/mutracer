@@ -162,6 +162,11 @@ quality defaults to the browser encoder value.
 
 All display settings apply at composition and retain accumulated samples.
 
+`DenoiserOptions` is a union of `JNLMDenoiserOptions` and `OIDNDenoiserOptions`,
+with required `type`. The getter is frozen; reassign to edit. Invalid types,
+foreign fields and invalid JNLM settings preserve the previous filter and
+result. Schedule-only edits keep inference running. See [denoising](./denoising.md).
+
 ### Pixel outputs
 
 `readPixels(kind = 'hdr')` returns `{ width, height, data: Float32Array }`,

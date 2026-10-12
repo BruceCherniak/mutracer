@@ -3,7 +3,7 @@
 MuTracer has two denoisers. Both filter the complete composed image using
 albedo and normal guides.
 
-- **JNLM** (default): a built-in joint non-local means filter, on WebGPU and
+- **JNLM**: a built-in joint non-local means filter, on WebGPU and
   WebGL 2. It needs no weight download.
 - **OIDN**: [Intel Open Image Denoise](https://www.openimagedenoise.org/)
   networks, run through [`oidn-web`](https://www.npmjs.com/package/oidn-web),
@@ -17,7 +17,11 @@ final.denoiser = {type: 'oidn', model: 'standard'};
 final.denoiser = null; // disable
 ```
 
-`type` defaults to jnlm, or oidn when model or weightsBaseUrl is supplied.
+`type` is required: use `jnlm` or `oidn`. The getter returns a frozen copy;
+reassign the configuration to edit it. Unknown types, foreign fields and invalid
+JNLM settings throw synchronously, preserving the active network and output.
+Equal implementation settings share the network; changing only `schedule`
+preserves active inference, and assigning an identical configuration does nothing.
 Each render has its own configuration and scheduling. Converge waits for its
 configured filter; intermediate progressive inference reports converging and
 final inference reports denoising. Engine caches equal network configurations
@@ -30,16 +34,21 @@ results are discarded.
 
 ## Options
 
-| `DenoiserOptions` | Description |
+| `JNLMDenoiserOptions` | Description |
 | --- | --- |
-| `type` | `'jnlm'` or `'oidn'`. Default `'jnlm'`, or `'oidn'` when `model` or `weightsBaseUrl` is given |
+| `type` | Required: `'jnlm'` |
+| `schedule` | `'converged'` (default), `'progressive'`, or `'every-sample'` |
 | `strength` | JNLM filter strength. Default `1` |
 | `searchRadius` | JNLM search radius, integer `1–16`. Default `5` (11 × 11 window) |
 | `patchRadius` | JNLM color comparison patch radius, integer `0–3`. Default `1` (3 × 3 patch) |
 | `albedoBandwidth` | JNLM relative albedo tolerance, `0.0001–10`. Default `0.4` |
 | `normalBandwidth` | JNLM encoded normal tolerance, `0.0001–10`. Default `0.05` |
 | `iterations` | JNLM filter passes, integer `1–4`. Default `2` |
-| `model` | OIDN network: `'standard'`, `'small'` or `'cleanAuxLarge'` |
+
+| `OIDNDenoiserOptions` | Description |
+| --- | --- |
+| `type` | Required: `'oidn'` |
+| `model` | OIDN network: `'standard'` (default), `'small'` or `'cleanAuxLarge'` |
 | `weightsBaseUrl` | Directory containing the OIDN `.tza` files |
 | `schedule` | `'converged'` (default), `'progressive'`, or `'every-sample'` |
 | `maxTileSize` | Maximum OIDN tile size; chosen by oidn-web by default |
@@ -119,7 +128,7 @@ patches preserve small color details. Lower albedo and normal tolerances
 reject more neighbors, protecting detail while retaining more noise. Extra
 passes remove broader noise patches and can soften detail. Invalid parameters
 reject before replacing the active filter. These settings work on both WebGPU
-and WebGL 2; OIDN ignores JNLM settings.
+and WebGL 2; OIDN rejects JNLM fields.
 
 ## Lower-level OIDN loading
 

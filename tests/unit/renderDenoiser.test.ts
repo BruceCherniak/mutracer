@@ -158,3 +158,41 @@ describe('progressive denoiser schedule', () => {
     expect(render.status).toBe('finished'); engine.dispose();
   });
 });
+
+it('keeps equal OIDN assignments and schedule edits on the current in-flight inference', async () => {
+  const {engine, targets} = renderFixture(); const network = filter(); initializeOIDN.mockResolvedValue(network);
+  const render = new Render(engine, {maxSamples: 1, denoiser: {type: 'oidn'}}); await settle();
+  render.refine(); let finish!: (value: boolean) => void;
+  vi.mocked(targets[0].performOIDNDenoise!).mockImplementation(() => new Promise(resolve => {finish = resolve;}));
+  await settle(); vi.mocked(targets[0].cancelOIDNDenoise!).mockClear(); vi.mocked(targets[0].invalidateDenoisedOutput).mockClear();
+  const configuration = render.denoiser;
+  render.denoiser = {type: 'oidn'}; expect(render.denoiser).toBe(configuration);
+  render.denoiser = {type: 'oidn', model: 'standard', schedule: 'progressive'};
+  expect(render.denoising).toBe(true); expect(initializeOIDN).toHaveBeenCalledOnce();
+  expect(targets[0].cancelOIDNDenoise).not.toHaveBeenCalled(); expect(targets[0].invalidateDenoisedOutput).not.toHaveBeenCalled();
+  finish(true); await settle(); expect(render.status).toBe('finished'); engine.dispose();
+});
+
+it.each([
+  {}, {type: 'missing'}, {type: 'oidn', strength: 1}, {type: 'jnlm', model: 'small'},
+  {type: 'jnlm', strength: 0}, {type: 'jnlm', searchRadius: 17}, {type: 'jnlm', patchRadius: -1},
+  {type: 'jnlm', iterations: 5}, {type: 'jnlm', albedoBandwidth: NaN},
+  {type: 'jnlm', normalBandwidth: 11}, {type: 'oidn', schedule: 'unknown'}
+])('rejects %j before changing a completed filter and output', async invalid => {
+  const {engine, targets} = renderFixture(); const network = filter(); initializeOIDN.mockResolvedValue(network);
+  const render = new Render(engine, {maxSamples: 1, denoiser: {type: 'oidn'}}); await settle();
+  render.refine(); await settle(); const configuration = render.denoiser;
+  vi.mocked(targets[0].cancelOIDNDenoise!).mockClear(); vi.mocked(targets[0].invalidateDenoisedOutput).mockClear();
+  expect(() => {render.denoiser = invalid as unknown as import('../../src/main').DenoiserOptions;}).toThrow();
+  expect(render.denoiser).toBe(configuration); expect(network.dispose).not.toHaveBeenCalled();
+  expect(targets[0].cancelOIDNDenoise).not.toHaveBeenCalled(); expect(targets[0].invalidateDenoisedOutput).not.toHaveBeenCalled();
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => {}); await render.readPixels('denoised'); expect(warn).not.toHaveBeenCalled();
+  engine.dispose();
+});
+
+it('returns a frozen snapshot independent of the assigned object', () => {
+  const {engine} = renderFixture(); const options = {type: 'jnlm' as const, strength: 2};
+  const render = new Render(engine, {denoiser: options}); options.strength = 3;
+  expect(render.denoiser).toEqual({type: 'jnlm', strength: 2}); expect(Object.isFrozen(render.denoiser)).toBe(true);
+  expect(() => Object.assign(render.denoiser!, {strength: 4})).toThrow(); engine.dispose();
+});
