@@ -115,9 +115,9 @@ describe('WebGPU offline sampling', () => {
     pipeline.setDirectLightCandidates(2);
     pipeline.setAlphaBlendStrategy('stochastic');
     pipeline.setBevelSamples(2);
-    pipeline.draw(new Camera('perspective'), 8);
+    pipeline.draw(new Camera({projection: 'perspective'}), 8);
     expect(pipeline.getTotalSamplesRendered()).toBe(4);
-    pipeline.draw(new Camera('perspective'), 8);
+    pipeline.draw(new Camera({projection: 'perspective'}), 8);
     expect(pipeline.getTotalSamplesRendered()).toBe(8);
     expect(mocks.TracePass.latest.setSampleCount.mock.calls.map(([sample]) => sample)).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     await pipeline.flushDiagnostics();
@@ -128,16 +128,16 @@ describe('WebGPU offline sampling', () => {
     const pipeline = createPipeline();
     pipeline.setOfflineRenderOptions({ samplesPerBatch: 4, deferPostProcess: true, sampleSequenceOffset: 0 });
     pipeline.setBouncesAndClamping(6, 0);
-    pipeline.draw(new Camera('perspective'), 8);
+    pipeline.draw(new Camera({projection: 'perspective'}), 8);
     expect(pipeline.getTotalSamplesRendered()).toBe(4);
     await pipeline.flushDiagnostics();
     pipeline.setOfflineRenderOptions({ samplesPerBatch: 0, deferPostProcess: false, sampleSequenceOffset: 0 });
     pipeline.setBouncesAndClamping(3, 0);
     mocks.TracePass.latest.setSampleCount.mockClear();
-    pipeline.draw(new Camera('perspective'), 8);
+    pipeline.draw(new Camera({projection: 'perspective'}), 8);
     expect(pipeline.getTotalSamplesRendered()).toBe(0);
     await pipeline.flushDiagnostics();
-    pipeline.draw(new Camera('perspective'), 8);
+    pipeline.draw(new Camera({projection: 'perspective'}), 8);
     expect(pipeline.getTotalSamplesRendered()).toBe(1);
     expect(mocks.TracePass.latest.setSampleCount.mock.calls.map(([sample]) => sample)).toEqual([0, 0]);
     await pipeline.flushDiagnostics();
@@ -146,7 +146,7 @@ describe('WebGPU offline sampling', () => {
 
   it('does not re-enable a probe when offline rendering exits interactive preview', async () => {
     const pipeline = createPipeline();
-    const camera = new Camera('perspective');
+    const camera = new Camera({projection: 'perspective'});
     pipeline.needsRestartSample(camera, true);
     expect(pipeline.isPreviewMode()).toBe(true);
     pipeline.setOfflineRenderOptions({ samplesPerBatch: 4, deferPostProcess: true, sampleSequenceOffset: 0 });
@@ -165,7 +165,7 @@ describe('WebGPU offline sampling', () => {
 
 it('restarts accumulation after changing the sampling pattern', () => {
   const pipeline = createPipeline(false);
-  const camera = new Camera('perspective', 45, 1, 0.1, 100);
+  const camera = new Camera({projection: 'perspective', fov: 45, aspect: 1, near: 0.1, far: 100});
   pipeline.setOfflineRenderOptions({samplesPerBatch:4,deferPostProcess:true,sampleSequenceOffset:0});
   pipeline.draw(camera,4);
   expect(pipeline.getTotalSamplesRendered()).toBe(4);
@@ -198,7 +198,7 @@ function displayedTexture() {
 async function denoisedPipeline() {
   const pipeline = createPipeline(false);
   pipeline.setOIDNPreviewActive(true);
-  pipeline.draw(new Camera('perspective'), 1);
+  pipeline.draw(new Camera({projection: 'perspective'}), 1);
   await pipeline.performOIDNDenoise(completedDenoiser(), undefined, true);
   return pipeline;
 }
@@ -207,7 +207,7 @@ describe('WebGPU denoised presentation transitions', () => {
   it('denoises the whole composition once and keeps raw coverage for presentation', async () => {
     const pipeline = createPipeline(false);
     vi.spyOn(mocks.TracePass.latest, 'hasShadowCatcher').mockReturnValue(true);
-    pipeline.draw(new Camera('perspective'), 1);
+    pipeline.draw(new Camera({projection: 'perspective'}), 1);
     const compose = mocks.Pass.instances.get('compose')!;
     const rawInputs = compose.createPass.mock.lastCall![1];
     const denoiser = completedDenoiser();
@@ -225,7 +225,7 @@ describe('WebGPU denoised presentation transitions', () => {
   it('retains the explicitly configured alpha denoiser after composite RGB denoising', async () => {
     const pipeline = createPipeline(false);
     vi.spyOn(mocks.TracePass.latest, 'needsDenoiseAlpha').mockReturnValue(true);
-    pipeline.draw(new Camera('perspective'), 1);
+    pipeline.draw(new Camera({projection: 'perspective'}), 1);
     const alpha = completedDenoiser();
     const execute = vi.spyOn(alpha, 'tileExecute');
     await pipeline.performOIDNDenoise(completedDenoiser(), alpha);
@@ -239,7 +239,7 @@ describe('WebGPU denoised presentation transitions', () => {
 
   it('publishes a completed composite when OIDN omits progress callbacks', async () => {
     const pipeline = createPipeline(false);
-    pipeline.draw(new Camera('perspective'), 1);
+    pipeline.draw(new Camera({projection: 'perspective'}), 1);
     await pipeline.performOIDNDenoise({ tileExecute(opts) {
       opts.done({ data: { size: 80 * 64 * 16 } as GPUBuffer, width: 80, height: 64 });
       return () => {};
@@ -298,7 +298,7 @@ describe('WebGPU denoised presentation transitions', () => {
 
   it('re-presents the completed frame when camera preview starts, then settles', async () => {
     const pipeline = await denoisedPipeline();
-    const camera = new Camera('perspective');
+    const camera = new Camera({projection: 'perspective'});
     pipeline.needsRestartSample(camera, true);
     expect(pipeline.isPreviewMode()).toBe(true);
     pipeline.draw(camera, 1);
@@ -324,7 +324,7 @@ describe('WebGPU denoised presentation transitions', () => {
       const pipeline = createPipeline(false);
       pipeline.setSize(320, 256);
       pipeline.setOIDNPreviewActive(true);
-      const camera = new Camera('perspective');
+      const camera = new Camera({projection: 'perspective'});
       pipeline.needsRestartSample(camera, true);
       pipeline.draw(camera, 1);
       const denoiser = completedDenoiser();
@@ -361,7 +361,7 @@ describe('WebGPU denoised presentation transitions', () => {
       pipeline.setInteractivePreviewParams({
         enabled: true, resolutionScale: 1, bounces: 2, idleDelayMs: 150
       });
-      const camera = new Camera('perspective');
+      const camera = new Camera({projection: 'perspective'});
       pipeline.needsRestartSample(camera, true);
       pipeline.draw(camera, 1);
       await pipeline.flushDiagnostics();
@@ -394,13 +394,13 @@ describe('WebGPU denoised presentation transitions', () => {
     pipeline.setSize(160, 96);
     const snapshot = displayedTexture();
     pipeline.restartSamples();
-    pipeline.draw(new Camera('perspective'), 1);
+    pipeline.draw(new Camera({projection: 'perspective'}), 1);
     expect(displayedTexture()).not.toBe(snapshot);
     await pipeline.performOIDNDenoise(completedDenoiser(), undefined, true);
     pipeline.setSize(240, 128);
     const nextSnapshot = displayedTexture();
     pipeline.setOIDNPreviewActive(false);
-    pipeline.draw(new Camera('perspective'), 1);
+    pipeline.draw(new Camera({projection: 'perspective'}), 1);
     expect(displayedTexture()).not.toBe(nextSnapshot);
     pipeline.dispose();
   });

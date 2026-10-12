@@ -233,7 +233,7 @@ class CameraViewControl {
 
   set camera(val: Camera | undefined) {
     this._camera = val;
-    this.aspect = val?.aspect || 1;
+    this.aspect = val?.aspect ?? this.aspect;
     this.decomposeTransform();
   }
 
@@ -446,7 +446,7 @@ class CameraViewControl {
     }
 
     // Fixed deltaTime
-    this._camera && (this._camera.aspect = this.aspect);
+    if (this._camera && this._camera.aspect !== undefined) this._camera.aspect = this.aspect;
 
     this._updateDistanceOrSize(Math.min(deltaTime, 50));
     this._updatePan();

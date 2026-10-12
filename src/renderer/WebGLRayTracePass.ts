@@ -841,13 +841,13 @@ class WebGLRayTracePass {
   }
 
   private _getViewProjInv(camera: Camera, viewProjInv: mat4.Mat4Array) {
-    mat4.invert(viewProjInv, Camera.getProjectionMatrix(camera));
+    mat4.invert(viewProjInv, camera.getProjectionMatrix(this._depthAspect));
     mat4.mul(viewProjInv, camera.transform, viewProjInv);
   }
 
   setCamera(camera: Camera) {
     const viewProjectionInv = this._viewProjInv;
-    this._apertureRadius = Camera.getApertureRadius(camera);
+    this._apertureRadius = camera.apertureRadius;
     this._focusDistance = camera.focusDistance;
     this._getViewProjInv(camera, viewProjectionInv);
     this._tracePasses.forEach((pass) => {
@@ -864,7 +864,7 @@ class WebGLRayTracePass {
     this._getViewProjInv(camera, tmp);
     return (
       !numberArraysEqual(this._viewProjInv, tmp) ||
-      Camera.getApertureRadius(camera) !== this._apertureRadius ||
+      camera.apertureRadius !== this._apertureRadius ||
       camera.focusDistance !== this._focusDistance
     );
   }

@@ -59,8 +59,8 @@ const scene: Scene = {
   lights: [light, new EnvironmentLight({map: createSkyTexture()})]
 };
 
-const camera = new Camera('perspective', 40, 1, 0.1, 100);
-Camera.lookAt(camera, [0, 2.4, 6], [0, 0.3, -0.3]);
+const camera = new Camera({projection: 'perspective', fov: 40, near: 0.1, far: 100});
+camera.position = [0, 2.4, 6]; camera.lookAt([0, 0.3, -0.3]);
 const controls = new CameraViewControl({ camera, domElement: canvas });
 
 // Uses WebGPU when available and WebGL 2 otherwise; add ?webgl to the URL to
@@ -75,8 +75,7 @@ renderer.maxSamples = 1024;
 function resize() {
   const ratio = Math.min(window.devicePixelRatio, 2);
   renderer.setSize(canvas.clientWidth * ratio, canvas.clientHeight * ratio);
-  camera.aspect = canvas.clientWidth / canvas.clientHeight;
-  controls.aspect = camera.aspect;
+  controls.aspect = canvas.clientWidth / canvas.clientHeight;
 }
 window.addEventListener('resize', resize);
 resize();

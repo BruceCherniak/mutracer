@@ -75,8 +75,8 @@ const scene: Scene = {
   background: [0, 0, 0, 0]
 };
 
-const camera = new Camera('perspective', 35, 1, 0.1, 100);
-Camera.lookAt(camera, [0, 2.6, 5.2], [0, 0.3, -0.3]);
+const camera = new Camera({projection: 'perspective', fov: 35, near: 0.1, far: 100});
+camera.position = [0, 2.6, 5.2]; camera.lookAt([0, 0.3, -0.3]);
 // Treat the scene as a tabletop: one unit is 10 cm.
 camera.metersPerUnit = 0.1;
 camera.fStop = 5.6;
@@ -114,8 +114,7 @@ samplingSelect.addEventListener('change', () => {
 function resize() {
   const ratio = Math.min(window.devicePixelRatio, 2);
   renderer.setSize(canvas.clientWidth * ratio, canvas.clientHeight * ratio);
-  camera.aspect = canvas.clientWidth / canvas.clientHeight;
-  controls.aspect = camera.aspect;
+  controls.aspect = canvas.clientWidth / canvas.clientHeight;
 }
 window.addEventListener('resize', resize);
 resize();

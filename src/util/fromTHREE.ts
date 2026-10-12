@@ -1044,22 +1044,8 @@ export function fromTHREECamera(
   options: FromTHREECameraOptions = {}
 ) {
   const camera = (threeCamera as THREE.PerspectiveCamera).fov
-    ? new Camera(
-        'perspective',
-        (threeCamera as THREE.PerspectiveCamera).fov,
-        (threeCamera as THREE.PerspectiveCamera).aspect,
-        (threeCamera as THREE.PerspectiveCamera).near,
-        (threeCamera as THREE.PerspectiveCamera).far
-      )
-    : new Camera(
-        'orthographic',
-        (threeCamera as THREE.OrthographicCamera).left,
-        (threeCamera as THREE.OrthographicCamera).right,
-        (threeCamera as THREE.OrthographicCamera).bottom,
-        (threeCamera as THREE.OrthographicCamera).top,
-        (threeCamera as THREE.OrthographicCamera).near,
-        (threeCamera as THREE.OrthographicCamera).far
-      );
+    ? new Camera({projection: 'perspective', fov: (threeCamera as THREE.PerspectiveCamera).fov, aspect: (threeCamera as THREE.PerspectiveCamera).aspect, near: (threeCamera as THREE.PerspectiveCamera).near, far: (threeCamera as THREE.PerspectiveCamera).far})
+    : new Camera({projection: 'orthographic', left: (threeCamera as THREE.OrthographicCamera).left, right: (threeCamera as THREE.OrthographicCamera).right, bottom: (threeCamera as THREE.OrthographicCamera).bottom, top: (threeCamera as THREE.OrthographicCamera).top, near: (threeCamera as THREE.OrthographicCamera).near, far: (threeCamera as THREE.OrthographicCamera).far});
   threeCamera.updateWorldMatrix(true, false);
   camera.zoom = threeCamera.zoom;
   camera.transform =

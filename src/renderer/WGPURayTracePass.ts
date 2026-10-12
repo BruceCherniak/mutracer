@@ -2726,14 +2726,14 @@ ${rayTraceCompute({
   }
 
   private _updateViewProjInv(camera: Camera, viewProjInv: mat4.Mat4Array) {
-    mat4.invert(viewProjInv, Camera.getProjectionMatrix(camera));
+    mat4.invert(viewProjInv, camera.getProjectionMatrix(this._width / this._height));
     mat4.mul(viewProjInv, camera.transform, viewProjInv);
   }
 
   // TODO reuse the code of RayTraceNode
   setCamera(camera: Camera) {
     const viewProjectionInvMat = this._viewProjInv;
-    this._apertureRadius = Camera.getApertureRadius(camera);
+    this._apertureRadius = camera.apertureRadius;
     this._focusDistance = camera.focusDistance;
     this._updateViewProjInv(camera, viewProjectionInvMat);
     mat4.copy(this._cameraWorld, camera.transform);
@@ -2744,7 +2744,7 @@ ${rayTraceCompute({
     this._updateViewProjInv(camera, tmp);
     return (
       !numberArraysEqual(this._viewProjInv, tmp) ||
-      Camera.getApertureRadius(camera) !== this._apertureRadius ||
+      camera.apertureRadius !== this._apertureRadius ||
       camera.focusDistance !== this._focusDistance
     );
   }

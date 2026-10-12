@@ -79,9 +79,13 @@ Place nodes by assigning `node.position = [x, y, z]` and calling `node.lookAt(ta
 ## Cameras
 
 ```ts
-const camera = new Camera('perspective', 45 /* vertical fov */, aspect, 0.1, 100);
-Camera.lookAt(camera, [0, 2, 6], [0, 0, 0]);
+const camera = new Camera({ projection: 'perspective', fov: 45, near: 0.1, far: 100 });
+camera.position = [0, 2, 6]; camera.lookAt([0, 0, 0]);
 ```
+
+`camera.aspect` defaults to undefined, so rendering uses the target width/height.
+Explicitly set it to lock a perspective aspect ratio. `copy(source)` and `clone()`
+copy camera settings; `getProjectionMatrix(targetAspect = 1)` includes zoom.
 
 `CameraViewControl` provides orbit/pan/zoom for a MuTracer camera. With Three.js,
 use its controls and convert with `fromTHREECamera` each frame.
@@ -98,8 +102,8 @@ camera.metersPerUnit = 1;    // scene unit length in metres (glTF: 1)
 ```
 
 The lens radius is `focalLength / (2 * fStop)`, where the focal length follows
-from `sensorHeight`, `fov` and `zoom`. `Camera.getFocalLength(camera)` returns
-it in millimetres and `Camera.getApertureRadius(camera)` returns the lens radius
+from `sensorHeight`, `fov` and `zoom`. `camera.focalLength` returns
+it in millimetres and `camera.apertureRadius` returns the lens radius
 in scene units. A narrower field of view or a lower f-number blurs more, as on a
 real camera.
 

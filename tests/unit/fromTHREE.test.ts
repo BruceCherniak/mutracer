@@ -1056,12 +1056,12 @@ describe('Three.js camera conversion', () => {
         zoom: 1.5
       })
     );
-    const target = new Camera('perspective');
+    const target = new Camera({projection: 'perspective'});
     source.fStop = 2.8;
     source.focusDistance = 6.5;
     source.sensorHeight = 15.6;
     source.metersPerUnit = 0.01;
-    Camera.copy(source, target);
+    target.copy(source);
 
     expect(target).toMatchObject({
       projection: 'orthographic',
@@ -1086,7 +1086,7 @@ describe('Three.js camera conversion', () => {
     expect(camera.focusDistance).toBe(3.5);
     // Three.js applies the film gauge to the larger frame dimension.
     expect(camera.sensorHeight).toBeCloseTo(18);
-    expect(Camera.getFocalLength(camera)).toBeCloseTo(three.getFocalLength());
+    expect(camera.focalLength).toBeCloseTo(three.getFocalLength());
     expect(camera.fStop).toBe(4);
     expect(fromTHREECamera(three, { focusDistance: 2, metersPerUnit: 0.01 }))
       .toMatchObject({ focusDistance: 2, metersPerUnit: 0.01, fStop: 0 });

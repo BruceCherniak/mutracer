@@ -49,7 +49,7 @@ Call `sync.dispose()` and `renderer.dispose()` when finished.
 - `createPlaneGeometry()` is 2×2 in XZ; `createSphereGeometry()` and `createCubeGeometry()` span -1..1. Scale with `transform`.
 - Rect lights are one-sided; rotate them to face the scene.
 - OIDN and HDR output require WebGPU; WebGL 2 denoises with JNLM only.
-- Call `renderer.setSize` with drawing-buffer pixels and update `camera.aspect` on resize.
+- Call `renderer.setSize` with drawing-buffer pixels ; camera aspect is automatic unless explicitly set.
 - Changing `bvhBuilder`, `bvhLayout` or `bvhSpatialSplits` does not rebuild existing BVHs; use `prepareScene(scene, { rebuild: true })`.
 - In Vite development, add `optimizeDeps: { exclude: ['@meimu/mutracer'] }` so bundled assets load.
 

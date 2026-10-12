@@ -1,16 +1,16 @@
-import type { Mat4, Vec3 } from '../types.js';
-import { mat4, vec3 } from '../math.js';
+import type { Mat4 } from '../types.js';
+import { mat4 } from '../math.js';
 import SceneNode from './SceneNode.js';
 
 export type Projection = 'perspective' | 'orthographic';
 
 /**
  * Perspective or orthographic camera. Position and orient it with
- * `transform` (camera-to-world), e.g. via `Camera.lookAt()`.
+ * `transform` (camera-to-world), via `position` and `lookAt()`.
  *
  * ```ts
- * const camera = new Camera('perspective', 45, width / height, 0.1, 100);
- * Camera.lookAt(camera, [0, 1, 5], [0, 0, 0]);
+ * const camera = new Camera({ projection: 'perspective', fov: 45, near: 0.1, far: 100 });
+ * camera.position = [0, 1, 5]; camera.lookAt([0, 0, 0]);
  * ```
  */
 export default class Camera extends SceneNode {
@@ -46,8 +46,8 @@ export default class Camera extends SceneNode {
   near;
   /** Far clip distance. Default `2000`. */
   far;
-  /** Width / height (perspective). Default `1`. */
-  aspect = 1;
+  /** Width / height (perspective). Default undefined uses the render target. */
+  aspect: number | undefined = undefined;
 
   /** Left orthographic frustum bound in scene units. Default `-1`. */
   left = -1;
@@ -61,68 +61,41 @@ export default class Camera extends SceneNode {
   /** Zoom factor applied to the field of view or orthographic bounds. Default `1`. */
   zoom = 1;
 
-  constructor(
-    projection: 'orthographic',
-    left?: number,
-    right?: number,
-    bottom?: number,
-    top?: number,
-    near?: number,
-    far?: number
-  );
-  constructor(
-    projection: 'perspective',
-    fov?: number,
-    aspect?: number,
-    near?: number,
-    far?: number
-  );
-  constructor(
-    projection: Projection,
-    a?: number,
-    b?: number,
-    c?: number,
-    d?: number,
-    e?: number,
-    f?: number
+  /** Creates a camera; projection is required and other options use the documented defaults. */
+  constructor(params:
+    | {
+        /** Perspective projection. Required. */ projection: 'perspective';
+        /** Vertical field of view, in degrees. Default 45. */ fov?: number;
+        /** Width / height. Default undefined uses the rendering target. */ aspect?: number;
+        /** Near clip distance. Default 0.1. */ near?: number;
+        /** Far clip distance. Default 2000. */ far?: number;
+      }
+    | {
+        /** Orthographic projection. Required. */ projection: 'orthographic';
+        /** Left bound. Default -1. */ left?: number;
+        /** Right bound. Default 1. */ right?: number;
+        /** Bottom bound. Default -1. */ bottom?: number;
+        /** Top bound. Default 1. */ top?: number;
+        /** Near clip distance. Default 0.1. */ near?: number;
+        /** Far clip distance. Default 2000. */ far?: number;
+      }
   ) {
     super();
-    this.projection = projection ?? 'perspective';
-    if (projection === 'orthographic') {
-      this.left = a ?? -1;
-      this.right = b ?? 1;
-      this.bottom = c ?? -1;
-      this.top = d ?? 1;
-      this.near = e ?? 0.1;
-      this.far = f ?? 2000;
+    this.projection = params.projection;
+    this.near = params.near ?? .1;
+    this.far = params.far ?? 2000;
+    if(params.projection === 'perspective') {
+      this.fov = params.fov ?? 45;
+      this.aspect = params.aspect;
     } else {
-      this.fov = a ?? 45;
-      this.aspect = b ?? 1;
-      this.near = c ?? 0.1;
-      this.far = d ?? 2000;
+      this.left = params.left ?? -1; this.right = params.right ?? 1;
+      this.bottom = params.bottom ?? -1; this.top = params.top ?? 1;
     }
   }
 
-  /** Places the camera at `eye` looking at `center`. */
-  static lookAt(
-    camera: Camera,
-    eye: Vec3,
-    center: Vec3,
-    up?: Vec3
-  ) {
-    mat4.invert(
-      camera.transform,
-      mat4.lookAt(
-        camera.transform,
-        eye,
-        center,
-        up || vec3.fromValues(0, 1, 0)
-      )
-    );
-  }
-
   /** Copies camera parameters and world matrix from source into target. */
-  static copy(source: Camera, target: Camera) {
+  copy(source: Camera): this {
+    const target = this;
     target.projection = source.projection;
     target.fov = source.fov;
     target.near = source.near;
@@ -139,13 +112,20 @@ export default class Camera extends SceneNode {
     target.bottom = source.bottom;
 
     mat4.copy(target.transform, source.transform);
+    return this;
+  }
+
+  /** Creates an independent camera with copied settings and transform. */
+  clone(): Camera {
+    return new Camera({ projection: this.projection }).copy(this);
   }
 
   /**
    * Focal length in millimetres of a perspective camera, from `sensorHeight`,
    * `fov` and `zoom`. Returns `0` for an orthographic camera.
    */
-  static getFocalLength(camera: Camera) {
+  get focalLength() {
+    const camera = this;
     if (camera.projection !== 'perspective') return 0;
     const tanHalfFov = Math.tan((camera.fov * Math.PI) / 360);
     return (
@@ -160,16 +140,18 @@ export default class Camera extends SceneNode {
    * when depth of field is off, for orthographic cameras and for invalid
    * parameters.
    */
-  static getApertureRadius(camera: Camera) {
+  get apertureRadius() {
+    const camera = this;
     const { fStop, metersPerUnit } = camera;
     if (!(fStop > 0) || !(metersPerUnit > 0)) return 0;
     const radius =
-      Camera.getFocalLength(camera) / (2 * fStop) / 1000 / metersPerUnit;
+      camera.focalLength / (2 * fStop) / 1000 / metersPerUnit;
     return Number.isFinite(radius) && radius > 0 ? radius : 0;
   }
 
-  /** Returns a new column-major projection matrix including zoom. */
-  static getProjectionMatrix(camera: Camera): Mat4 {
+  /** Returns a new column-major projection matrix including zoom. Default targetAspect 1, used only when aspect is undefined. */
+  getProjectionMatrix(targetAspect = 1): Mat4 {
+    const camera = this;
     if (camera.projection === 'perspective') {
       const fov = (camera.fov * Math.PI) / 180;
       const effectiveFov =
@@ -177,7 +159,7 @@ export default class Camera extends SceneNode {
       return mat4.perspective(
         [] as any as Mat4,
         effectiveFov,
-        camera.aspect,
+        camera.aspect ?? targetAspect,
         camera.near,
         camera.far
       );

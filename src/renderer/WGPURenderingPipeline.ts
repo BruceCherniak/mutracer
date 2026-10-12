@@ -1738,8 +1738,8 @@ output.color = color;
         usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
       });
       const encoder = device.createCommandEncoder();
-      rawOutputPass.setSize(renderWidth, renderHeight);
       rawOutputPass.setOutputParams({ color: { format: 'rgba32float' } });
+      rawOutputPass.setSize(renderWidth, renderHeight);
       rawOutputPass.createPass(encoder, { colorTex: outputTexture, coverageTex: getFrameInput('albedo') });
       encoder.copyTextureToBuffer(
         { texture: rawOutputPass.getOutput('color') },

@@ -74,8 +74,8 @@ const scene: Scene = {
   lights: [light, new EnvironmentLight({ map: sky })]
 };
 
-const camera = new Camera('perspective', 40, canvas.width / canvas.height, 0.1, 100);
-Camera.lookAt(camera, [0, 2, 6], [0, 1, 0]);
+const camera = new Camera({ projection: 'perspective', fov: 40, near: 0.1, far: 100 });
+camera.position = [0, 2, 6]; camera.lookAt([0, 1, 0]);
 
 const renderer = new Renderer({ canvas });
 renderer.setSize(canvas.width, canvas.height);
