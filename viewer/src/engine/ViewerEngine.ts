@@ -105,7 +105,6 @@ export class ViewerEngine {
   private exportAbort: AbortController | null = null;
   private denoiserKey = '';
   private denoiserUpdateTimer?: ReturnType<typeof setTimeout>;
-  private backendKnown = false;
   private pointerDown: { x: number; y: number } | null = null;
   /** Focus pull in progress; the settings hold its target only once it ends. */
   private pull: { from: number; to: number; start: number } | null = null;
@@ -150,6 +149,11 @@ export class ViewerEngine {
 
     this.sync = this.createSync();
     this.applySettings(this.settings, null);
+    void this.renderer.init().then(info => {
+      if (this.disposed) return;
+      set({ backend: { name: info.backend === 'webgpu' ? 'WebGPU' : 'WebGL 2', adapter: shortAdapterName(info.adapterName) } });
+      return this.updateDenoiser();
+    }).catch(error => showToast(`Renderer initialization failed: ${error instanceof Error ? error.message : String(error)}`, 'error'));
     this.unsubscribe = useViewer.subscribe((state, prev) => {
       if (state.settings !== prev.settings) {
         const before = this.settings;
@@ -610,8 +614,8 @@ export class ViewerEngine {
   }
 
   private async updateDenoiser() {
-    if (!this.backendKnown) return;
-    const options = getDenoiserOptions(this.settings, this.renderer.isUsingWebGPU(), OIDN_WEIGHTS);
+    if (!this.renderer.backend) return;
+    const options = getDenoiserOptions(this.settings, this.renderer.backend === 'webgpu', OIDN_WEIGHTS);
     const key = JSON.stringify(options);
     if (key === this.denoiserKey) return;
     this.denoiserKey = key;
@@ -1102,7 +1106,7 @@ export class ViewerEngine {
   async downloadViewportImage() {
     if (this.exporting) return;
     try {
-      const samples = this.renderer.getTotalSamplesRendered() ?? 0;
+      const samples = this.renderer.samples;
       if (samples === 0) throw new Error('The viewport has not rendered an image yet');
       const blob = await this.captureImage();
       this.downloadImage(blob, samples, 'viewport');
@@ -1221,7 +1225,6 @@ export class ViewerEngine {
     if (status !== RENDER_STATUS_PREPARING && status !== RENDER_STATUS_COMPILING_SHADER && status !== RENDER_STATUS_ERROR) {
       this.updateAutofocus(now);
     }
-    if (!this.backendKnown && status !== RENDER_STATUS_PREPARING) this.detectBackend();
     const phase = phaseOf(status);
     this.publishStats(phase, now, false);
     this.updateSelectionRect();
@@ -1247,16 +1250,8 @@ export class ViewerEngine {
     }
   }
 
-  private detectBackend() {
-    const diagnostics = this.renderer.getDiagnostics();
-    if (!diagnostics) return;
-    this.backendKnown = true;
-    set({ backend: { name: diagnostics.backend === 'webgpu' ? 'WebGPU' : 'WebGL 2', adapter: shortAdapterName(diagnostics.adapterName) } });
-    void this.updateDenoiser();
-  }
-
   private publishStats(phase: RenderPhase, now: number, force: boolean) {
-    const samples = this.renderer.getTotalSamplesRendered() ?? 0;
+    const samples = this.renderer.samples;
     // Restarted accumulation (an edit, a camera move or an animation frame).
     if (samples < this.lastSamples || samples <= 1) this.sampleStart = now;
     // Time stops at the last added sample, so it freezes once rendering finishes.

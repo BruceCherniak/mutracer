@@ -35,7 +35,7 @@ describe('viewer viewport image download', () => {
     const revokeURL = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
     const renderer = {
       prepareForExport: vi.fn(),
-      getTotalSamplesRendered: vi.fn(() => 32),
+      samples: 32,
       restartSamples: vi.fn(),
       setSize: vi.fn(),
       renderOfflineFrame: vi.fn()
@@ -86,7 +86,7 @@ describe('viewer viewport image download', () => {
 
   it('does not capture an unrendered viewport', async () => {
     const { engine, renderer, canvas } = fixture();
-    renderer.getTotalSamplesRendered.mockReturnValue(0);
+    renderer.samples = 0;
     await engine.downloadViewportImage();
     expect(canvas.toBlob).not.toHaveBeenCalled();
     expect(useViewer.getState().toast?.tone).toBe('error');
