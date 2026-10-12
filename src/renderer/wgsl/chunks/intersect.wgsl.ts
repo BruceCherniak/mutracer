@@ -314,7 +314,7 @@ function getBVHTraverseCode(
         }
       }
 `;
-  let code = /* wgsl */ `
+  return /* wgsl */ `
 var d = ray.d;
 var o = ray.o;
 var tlasStack: array<i32, TLAS_STACK_SIZE>;
@@ -397,7 +397,7 @@ while (tlasTop >= 0) {
       let blasOffset = i32(encodedBlasOffset & 0x3fffffffu);
       let bufferOff = rtUniform.blasOffset;
 
-      // __BLAS_CWBVH_BEGIN__
+      ${(blasLayoutMask & 8) !== 0 ? /* wgsl */ `
       if (blasLayout == 3u) {
         // TinyBVH's official CWBVH traversal keeps compact node groups on the
         // stack. The upper 8 bits identify intersected interior slots and the
@@ -491,7 +491,7 @@ while (tlasTop >= 0) {
           else { break; }
         }
       }
-      // __BLAS_CWBVH_END__
+      ` : ''}
 
       var blasStack: array<i32, BLAS_STACK_SIZE>;
       var blasTop = -1;
@@ -508,7 +508,7 @@ while (tlasTop >= 0) {
         var primitiveCount = 0;
         var primitiveOffset = 0;
 
-        // __BLAS_GPU_BEGIN__
+        ${(blasLayoutMask & 4) !== 0 ? /* wgsl */ `
         if (blasLayout == 2u) {
           let i = node + bufferOff;
           let gpu0 = bvhBuffer[i];
@@ -547,8 +547,8 @@ while (tlasTop >= 0) {
             }
           }
         }
-        // __BLAS_GPU_END__
-        // __BLAS_BVH4_BEGIN__
+        ` : ''}
+        ${(blasLayoutMask & 2) !== 0 ? /* wgsl */ `
         if (blasLayout == 1u) {
           let nodeInfo = bitcast<u32>(node);
           if ((nodeInfo & 0x80000000u) != 0u) {
@@ -628,8 +628,8 @@ while (tlasTop >= 0) {
             }
           }
         }
-        // __BLAS_BVH4_END__
-        // __BLAS_BVH2_BEGIN__
+        ` : ''}
+        ${(blasLayoutMask & 1) !== 0 ? /* wgsl */ `
         if (blasLayout == 0u) {
           let i = node + bufferOff;
           let r1 = bvhBuffer[i];
@@ -679,7 +679,7 @@ while (tlasTop >= 0) {
             primitiveOffset = i + 2;
           }
         }
-        // __BLAS_BVH2_END__
+        ` : ''}
         if (primitiveCount > 0) {
           ${intersectTriangles}
         }
@@ -689,20 +689,6 @@ while (tlasTop >= 0) {
 }
 
 `;
-  const layoutSections = [
-    ['BVH2', 1],
-    ['BVH4', 2],
-    ['GPU', 4],
-    ['CWBVH', 8]
-  ] as const;
-  for (const [name, bit] of layoutSections) {
-    const section = new RegExp(
-      `\\s*// __BLAS_${name}_BEGIN__[\\s\\S]*?// __BLAS_${name}_END__`,
-      'g'
-    );
-    if ((blasLayoutMask & bit) === 0) code = code.replace(section, '');
-  }
-  return code.replace(/\s*\/\/ __BLAS_(?:BVH2|BVH4|GPU|CWBVH)_(?:BEGIN|END)__/g, '');
 }
 export default function getIntersectCode({
   hasDisplacement,
