@@ -276,7 +276,7 @@ export default class Render {
   }
 
   private _cancelDenoise() { this._denoiseRevision++; this._target?.cancelOIDNDenoise?.(); this._denoisePending = undefined; this._denoisedSamples = 0; }
-  /** @internal */ _inputsChanged() { this._cancelDenoise(); }
+  /** @internal */ _inputsChanged(resetTiming = false) { this._cancelDenoise(); if (resetTiming) this._target?.invalidateTiming?.(); }
   /** @internal */ _displayChanged() { this._cancelDenoise(); this._target?.invalidateDenoisedOutput(); }
   private _maybeDenoise(force = false, sampleTarget = this._nextSampleTarget()) {
     const target = this._target, filter = this._filter;

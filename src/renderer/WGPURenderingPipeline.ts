@@ -338,6 +338,7 @@ query, getMemoryBytes: () => query ? query.resolveBuffer.size + query.resultBuff
   function invalidateTilePrediction() {
     tileTimingGeneration++;
     tileRenderWithPredict?.needsUpdatePredicting();
+    lastGpuTraceTiming = undefined;
     // A changed render configuration needs fresh timing. Refresh
     // its estimator without submitting a hidden probe in that mode.
     needsUpdatePredicting = offlineSamplesPerBatch === 0;
@@ -994,6 +995,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     }
     screenWidth = width;
     screenHeight = height;
+    invalidateTilePrediction();
     _applyRenderResolution();
     outputPass.setSize(screenWidth, screenHeight);
     isFirstFrame = true;
@@ -1432,8 +1434,11 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   }
 
   return {
+    invalidateTiming: invalidateTilePrediction,
     invalidateDenoisedOutput() { cancelOIDNDenoise(); denoiseValid = false; preserveOIDNOutput = false; },
     configure(settings: TraceSettings) {
+      const timingKeys = ['bounces', 'bevel', 'bevelSamples', 'directLightCandidates', 'dispersionWavelengths', 'alphaBlendStrategy', 'samplingPattern', 'clamping', 'transmissiveOutputAlphaMin'] as const;
+      if (!execution || timingKeys.some(key => execution![key] !== settings[key])) invalidateTilePrediction();
       execution = { ...settings };
       maxTimePerTile = Math.max(1, settings.timeBudgetMs);
       allowMultipleSamplesPerFrame = settings.allowMultipleSamplesPerFrame;
@@ -1468,7 +1473,9 @@ width: renderWidth, height: renderHeight,
     },
 
     restartSamples() {
-      invalidateTilePrediction();
+      // Input edits reset accumulation, not learned throughput. Re-arming a
+      // hidden probe here starves continuously changing scenes of visible samples.
+      tileTimingGeneration++;
       cancelOIDNDenoise();
       preserveOIDNOutput = false;
       denoiseValid = false;
@@ -1544,6 +1551,7 @@ width: renderWidth, height: renderHeight,
       preserveOIDNOutput = preserve;
     },
     setOfflineRenderOptions(options) {
+      const wasOffline = offlineSamplesPerBatch > 0;
       offlineSamplesPerBatch = Math.max(0, Math.round(options.samplesPerBatch));
       deferPostProcess = options.deferPostProcess;
       sampleSequenceOffset = Math.max(
@@ -1555,6 +1563,7 @@ width: renderWidth, height: renderHeight,
         isPredictingFrame = false;
       }
       if (offlineSamplesPerBatch > 0) needsUpdatePredicting = false;
+      else if (wasOffline) invalidateTilePrediction();
     },
     setVarianceMoments(enabled: boolean) {
       rayTracePass.setVarianceMoments(enabled);

@@ -6,6 +6,8 @@ import type { RenderPasses } from './RenderingPipeline.js';
 export interface TargetPipeline extends RenderPasses {
   activate(): void;
   invalidateDenoisedOutput(): void;
+  /** Refreshes backend timing after structural scene changes; optional without GPU timestamps. */
+  invalidateTiming?(): void;
   configure(settings: TraceSettings): void;
   synchronizeBackground(background: Scene['background']): void;
   canCompleteSampleWithin(timeBudgetMs: number): boolean;

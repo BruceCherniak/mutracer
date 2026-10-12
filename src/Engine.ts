@@ -157,7 +157,7 @@ export default class Engine {
   update(): boolean {
     if (this._disposed) throw new Error('Engine is disposed.');
     this._lastError = undefined;
-    let changed = false;
+    let changed = false, resetTiming = false;
     const cameraFields = this.camera ? snapshotFields(this.camera) : [];
     if (this.camera !== this._sourceCamera || !snapshotsEqual(cameraFields, this._cameraFields)) {
       this._sourceCamera = this.camera; this._cameraFields = cameraFields;
@@ -170,6 +170,7 @@ export default class Engine {
       validateSceneLights(this.scene.lights, error => this._notifyError(error));
       ensureMeshGeometryAttributes(this.scene.meshes);
       const changes = this._sceneChangeDetector.detect(this.scene);
+      resetTiming = changes.meshes === 'full' || this.scene !== this._sourceScene || force;
       if (changes.meshes !== 'none' || changes.lights || changes.background || this.scene !== this._sourceScene || force) {
         this._committedScene = this._snapshot.capture(this.scene, changes);
         if (changes.meshes === 'full' || force || this.scene !== this._sourceScene) this._pendingMeshes = 'full';
@@ -185,7 +186,7 @@ export default class Engine {
     } else if (this._sourceScene) { this._committedScene = undefined; this._pendingMeshes = 'full'; this._pendingLights = true; this._pendingBackground = true; this._sceneRevision++; changed = true; }
     this._sourceScene = this.scene; this._lastBvhSettings = bvhSettings; this._lastBudget = this.textureAtlasBudgetBytes;
     if (!this._pipeline) void this.init().catch(() => {});
-    if (changed) for (const render of this._renders) render._inputsChanged();
+    if (changed) for (const render of this._renders) render._inputsChanged(resetTiming);
     this._upload();
     return changed;
   }

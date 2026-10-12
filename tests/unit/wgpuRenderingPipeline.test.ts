@@ -322,3 +322,21 @@ it('falls back to AgX for unknown tone mapping values', () => {
   expect(compose.setUniform).toHaveBeenCalledWith('toneMappingParams', [0, 0]);
   pipeline.dispose();
 });
+
+it('completes samples during continuous input restarts after the initial timing probe', async () => {
+  const pipeline = createPipeline(); const camera = new Camera({projection: 'perspective'});
+  pipeline.activate(); pipeline.trace(camera, 1); expect(pipeline.getTotalSamplesRendered()).toBe(0);
+  await pipeline.flushDiagnostics();
+  const sample = vi.fn(); pipeline.setOnSampleRendered(sample);
+  for (let frame = 0; frame < 4; frame++) {
+    camera.position = [frame, 0, 0]; pipeline.restartSamples(); pipeline.activate(); pipeline.trace(camera, 1);
+    expect(pipeline.getTotalSamplesRendered()).toBe(1); await pipeline.flushDiagnostics();
+  }
+  expect(sample).toHaveBeenCalledTimes(4); pipeline.dispose();
+});
+it('refreshes the hidden timing probe for structural scene changes', async () => {
+  const pipeline = createPipeline(); const camera = new Camera({projection: 'perspective'});
+  pipeline.trace(camera, 1); await pipeline.flushDiagnostics(); pipeline.trace(camera, 1); expect(pipeline.getTotalSamplesRendered()).toBe(1); await pipeline.flushDiagnostics();
+  pipeline.invalidateTiming!(); pipeline.restartSamples(); pipeline.trace(camera, 1); expect(pipeline.getTotalSamplesRendered()).toBe(0);
+  await pipeline.flushDiagnostics(); pipeline.restartSamples(); pipeline.trace(camera, 1); expect(pipeline.getTotalSamplesRendered()).toBe(1); await pipeline.flushDiagnostics(); pipeline.dispose();
+});
