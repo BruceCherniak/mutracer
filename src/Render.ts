@@ -213,7 +213,7 @@ export default class Render {
     if (this.samples < limit) {
       if (target.trace(this._engine._inputs.value!, limit)) return this._status = 'compiling';
     }
-    this._maybeDenoise();
+    this._maybeDenoise(false, limit);
     if (this._denoisePending) return this._status = this.converged ? 'denoising' : 'converging';
     if (this._filterPending && this.converged) return this._status = 'preparing';
     if (this.adaptiveResolution && this._frameTime > 0 && this.samples > 0) this._adaptiveScale = nextPreviewScale(this._adaptiveScale, this._frameTime, this.adaptiveResolution.targetFrameMs, this._resolutionScale, this.adaptiveResolution.minScale);
@@ -278,11 +278,11 @@ export default class Render {
   private _cancelDenoise() { this._denoiseRevision++; this._target?.cancelOIDNDenoise?.(); this._denoisePending = undefined; this._denoisedSamples = 0; }
   /** @internal */ _inputsChanged() { this._cancelDenoise(); }
   /** @internal */ _displayChanged() { this._cancelDenoise(); this._target?.invalidateDenoisedOutput(); }
-  private _maybeDenoise(force = false) {
+  private _maybeDenoise(force = false, sampleTarget = this._nextSampleTarget()) {
     const target = this._target, filter = this._filter;
     if (!target || !filter || this._denoisePending || this.samples < 1 || this._denoisedSamples === this.samples) return;
     if (!force && this._schedule() === 'converged' && !this.converged) return;
-    if (!force && this._schedule() === 'progressive' && this.samples < this._nextSampleTarget()) return;
+    if (!force && this._schedule() === 'progressive' && this.samples < sampleTarget) return;
     this._engine.display._configure(this);
     target.activate(); target.drawPostProcess();
     const revision = ++this._denoiseRevision, samples = this.samples;
