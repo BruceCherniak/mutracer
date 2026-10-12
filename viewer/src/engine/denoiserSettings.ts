@@ -2,7 +2,7 @@ import type { RenderSettings } from '@meimu/mutracer';
 import type { Settings } from '../store';
 type DenoiserOptions = NonNullable<RenderSettings['denoiser']>;
 export const DENOISER_FIELDS = [
-  'denoise', 'denoiseModel', 'denoiseWhileConverging',
+  'denoise', 'denoiseModel', 'denoiseWhileConverging', 'previewEnabled',
   'jnlmStrength', 'jnlmSearchRadius', 'jnlmPatchRadius', 'jnlmAlbedoBandwidth', 'jnlmNormalBandwidth', 'jnlmIterations',
   'oidnModel', 'oidnMaxTileSize'
 ] as const satisfies readonly (keyof Settings)[];

@@ -135,7 +135,7 @@ export const DEFAULT_SETTINGS: Settings = {
   vignette: 0,
   output: 'final',
   previewEnabled: true,
-  previewMaxResolutionScale: 1,
+  previewMaxResolutionScale: 0.5,
   cameraIndex: -1,
   projection: 'perspective',
   fov: 35,

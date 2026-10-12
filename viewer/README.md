@@ -30,7 +30,7 @@ the home page and the examples. See [`site/README.md`](../site/README.md).
 
 ```
 src/
-  engine/ViewerEngine.ts   Engine/Display/Render, THREESceneSync, picking,
+  engine/ViewerEngine.ts   Engine/Display/RenderLoop, THREESync, picking,
                            animation, export. No React.
   engine/loadModel.ts      GLTFLoader for URLs, files and dropped folders;
                            the procedural material-sphere scene

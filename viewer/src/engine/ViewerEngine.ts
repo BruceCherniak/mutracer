@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-  Engine, Render,
-  THREESceneSync,
+  Engine, Render, RenderLoop, Sync,
+  THREESync,
   fromTHREECamera,
 } from '@meimu/mutracer';
 import { autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
@@ -57,11 +57,9 @@ export class ViewerEngine {
   readonly engine: Engine;
   readonly preview: Render;
   readonly final: Render;
-  private renderCamera?: NonNullable<Engine['camera']>;
+  readonly loop: RenderLoop;
+  private readonly viewSync: Sync;
   private displayed?: Render;
-  private previousChanged = false;
-  private previousControlsActive = false;
-  private lastContinuousChange = -Infinity;
   private readonly canvas: HTMLCanvasElement;
   private readonly scene = new THREE.Scene();
   private readonly perspectiveCamera = new THREE.PerspectiveCamera(35, 1, 0.01, 1000);
@@ -72,7 +70,7 @@ export class ViewerEngine {
   private readonly environment = new Environment(createSky());
   private readonly studioAmbient = new Environment(createStudioAmbient());
   private readonly studioRig = new THREE.Group();
-  private sync: THREESceneSync;
+  private sync: THREESync;
   private model: LoadedModel | null = null;
   private modelCameras: ViewCamera[] = [];
   /** Objects hidden in the loaded file, restored by {@link resetAll}. */
@@ -98,13 +96,10 @@ export class ViewerEngine {
   private cameraSaveTimer: ReturnType<typeof setTimeout> | undefined;
   private envToken = 0;
   private dragging = false;
-  private readonly lastCameraPosition = new THREE.Vector3();
-  private lastCameraZoom = 1;
   private awaitingFirstSample = false;
   private exporting = false;
   private exportAbort: AbortController | null = null;
   private denoiserKey = '';
-  private previewAwaitingPresentation = false;
   private denoiserUpdateTimer?: ReturnType<typeof setTimeout>;
   private pointerDown: { x: number; y: number } | null = null;
   /** Focus pull in progress; the settings hold its target only once it ends. */
@@ -153,6 +148,15 @@ export class ViewerEngine {
     this.camera.position.set(3, 2, 5);
 
     this.sync = this.createSync();
+    const owner = this;
+    this.viewSync = new class extends Sync {
+      update() {
+        if (this.engine.camera) this.engine.camera.copy(owner.lensCamera(owner.activeCamera(), owner.advanceFocus(performance.now())));
+      }
+      get active() { return !!get().animation?.playing || owner.pull !== null; }
+    }(this.engine);
+    this.loop = new RenderLoop(this.engine, {preview: this.preview, final: this.final, sync: [this.sync, this.viewSync]});
+    this.loop.select = ({changing}) => this.settings.previewEnabled && changing ? 'preview' : 'final';
     this.applySettings(this.settings, null);
     void this.engine.init().then(info => {
       if (this.disposed) return;
@@ -196,7 +200,7 @@ export class ViewerEngine {
     this.canvas.removeEventListener('pointerup', this.onPointerUp);
     this.controls.dispose();
     this.clearModel();
-    this.sync.dispose();
+    this.loop.dispose(); this.sync.dispose(); this.viewSync.dispose();
     this.environment.dispose();
     this.studioAmbient.dispose();
     this.engine.dispose();
@@ -351,8 +355,9 @@ export class ViewerEngine {
       set({ animation: null });
     }
 
-    this.sync.dispose();
-    this.sync = this.createSync();
+    this.loop.removeSync(this.sync); this.sync.dispose();
+    this.sync = this.createSync(); this.loop.addSync(this.sync);
+    this.loop.removeSync(this.viewSync); this.loop.addSync(this.viewSync);
     this.resetView();
     const tree = [this.buildTree(root, model.name)];
     let triangles = 0;
@@ -441,7 +446,10 @@ export class ViewerEngine {
 
   private createSync() {
     this.materials.clearConversions();
-    return new THREESceneSync(this.scene, {
+    const owner = this;
+    return new THREESync(this.engine, {
+      scene: this.scene, get camera() {return owner.activeCamera();}, controls: this.controls,
+      get updateControls() {return owner.settings.cameraIndex < 0;},
       onMeshConverted: (mesh, source, group) => {
         if (source === this.ground) return;
         const material = toArray(source.material)[group.materialIndex ?? 0];
@@ -546,7 +554,10 @@ export class ViewerEngine {
     r.samplingPattern = s.samplingPattern; r.clamping = s.clamping;
     this.preview.bounces = Math.min(2, s.bounces);
     this.preview.samplingPattern = s.samplingPattern; this.preview.clamping = s.clamping;
-    r.fallback = s.previewEnabled || s.denoiseWhileConverging ? this.preview : null;
+    r.fallback = s.previewEnabled ? this.preview : null;
+    this.loop.coalesceSceneUpdates = s.previewEnabled && s.denoiseWhileConverging;
+    this.preview.resolutionScale = s.previewMaxResolutionScale;
+    this.preview.adaptiveResolution = {targetFrameMs: 20, minScale: Math.min(.25, s.previewMaxResolutionScale)};
     display.toneMapping = s.toneMapping; display.toneMappingExposure = s.exposure;
     display.contrast = s.contrast; display.saturation = s.saturation;
     display.temperature = s.temperature; display.tint = s.tint;
@@ -608,7 +619,7 @@ export class ViewerEngine {
   private updateDenoiser() {
     if (!this.engine.backend) return;
     const final = getDenoiserOptions(this.settings, this.engine.backend === 'webgpu', OIDN_WEIGHTS);
-    const preview = getDenoiserOptions(this.settings, this.engine.backend === 'webgpu', OIDN_WEIGHTS, true);
+    const preview = this.settings.previewEnabled ? getDenoiserOptions(this.settings, this.engine.backend === 'webgpu', OIDN_WEIGHTS, true) : null;
     const key = JSON.stringify({final, preview});
     if (key === this.denoiserKey) return;
     this.denoiserKey = key;
@@ -1137,9 +1148,7 @@ export class ViewerEngine {
     set({export: {stage: 'final', samples: 0, target: options.samples}});
     try {
       if (options.transparent && background !== 'transparent') { this.settings = {...this.settings, background: 'transparent'}; this.applyBackground(); }
-      this.sync.update(); this.engine.scene = this.sync.scene;
-      this.renderCamera ??= this.lensCamera(this.activeCamera(), this.pull?.to ?? this.settings.focusDistance);
-      this.engine.camera = this.renderCamera; this.engine.update();
+      this.sync.update(); this.viewSync.update(); this.engine.update();
       image = new Render(this.engine, {width: options.width, height: options.height,
         maxSamples: options.samples, bounces: this.final.bounces, clamping: this.final.clamping,
         samplingPattern: this.final.samplingPattern, bevel: this.final.bevel, bevelSamples: this.final.bevelSamples,
@@ -1152,7 +1161,7 @@ export class ViewerEngine {
       return await this.engine.display.toBlob(image, {type, quality});
     } finally {
       image?.dispose(); this.settings = get().settings; this.applyBackground();
-      this.sync.update(); this.engine.scene = this.sync.scene; this.engine.update();
+      this.sync.update(); this.viewSync.update(); this.engine.update();
       this.exporting = false; this.exportAbort = null; set({export: null});
     }
   }
@@ -1188,69 +1197,24 @@ export class ViewerEngine {
         set({ animation: { ...anim, time: this.action.time, playing: !finished } });
       }
     }
-    const controlsActive = this.settings.cameraIndex < 0 ? this.updateControls(dt) : false;
 
     if (get().paused) {
       this.publishStats('paused', now, true);
       this.updateSelectionRect();
       return;
     }
-    this.sync.update();
-    const camera = this.lensCamera(this.activeCamera(), this.advanceFocus(now));
+    const phase = this.loop.tick();
     this.publishLens(this.activeCamera());
-    this.renderCamera ??= camera;
-    this.renderCamera.copy(camera);
-    this.engine.scene = this.sync.scene; this.engine.camera = this.renderCamera;
-    const continuous = controlsActive || this.dragging || this.settings.autoRotate || !!anim?.playing || this.pull !== null;
-    // First-layer application policy: hold a committed preview through inference,
-    // Present the completed image once before accepting the next animation state,
-    // including synchronous JNLM jobs that finish between animation frames.
-    const coalescing = this.settings.denoiseWhileConverging && continuous && (this.preview.status === 'denoising' || this.previewAwaitingPresentation);
-    const changed = coalescing ? false : this.engine.update();
-    if (changed && this.previousChanged && !controlsActive && !this.previousControlsActive) this.lastContinuousChange = now;
-    this.previousChanged = changed; this.previousControlsActive = controlsActive;
-    const previewEnabled = this.settings.previewEnabled || this.settings.denoiseWhileConverging;
-    const nativeWebGL = this.engine.backend === 'webgl' && this.canvas.width * this.canvas.height <= 1_000_000;
-    this.preview.resolutionScale = nativeWebGL ? 1 : this.settings.previewMaxResolutionScale;
-    this.preview.adaptiveResolution = nativeWebGL ? false : {targetFrameMs: 20, minScale: Math.min(.25, this.preview.resolutionScale)};
-    const current = previewEnabled && (continuous || now - this.lastContinuousChange < 150) ? this.preview : this.final;
-    const status = current.refine();
-    this.previewAwaitingPresentation = current === this.preview && status === 'denoising';
-    const shown = this.previewAwaitingPresentation ? this.displayed : this.engine.display.present(current);
-    if (shown) this.displayed = shown;
+    const shown = phase === 'previewing' ? this.preview : this.final;
+    if (shown.samples > 0) this.displayed = shown;
     // Query only after the renderer uploads the current animation pose and
     // camera. Readback runs alongside subsequent frames.
-    if (status !== 'preparing' && status !== 'compiling' && status !== 'error') {
+    if (phase !== 'preparing' && phase !== 'compiling' && phase !== 'error') {
       this.updateAutofocus(now);
     }
-    const phase = shown === this.preview ? 'previewing' : status;
     this.publishStats(phase, now, false);
     this.updateSelectionRect();
   };
-
-  /**
-   * Damping eases the camera out for a second or more after release. The
-   * renderer restarts whenever the accumulated motion crosses its threshold,
-   * so the tail would flick between preview and full quality several times.
-   * End it once a frame moves less than 0.05% of the view distance.
-   */
-  private updateControls(dt: number) {
-    this.lastCameraPosition.copy(this.camera.position);
-    this.lastCameraZoom = this.camera.zoom;
-    const changed = this.controls.update(dt);
-    if (this.dragging || this.settings.autoRotate) return true;
-    if (!changed) return false;
-    const step = this.lastCameraPosition.distanceTo(this.camera.position);
-    // An orthographic camera zooms without moving.
-    const zoomStep = Math.abs(Math.log(this.camera.zoom / this.lastCameraZoom));
-    if (step < 5e-4 * this.camera.position.distanceTo(this.controls.target) && zoomStep < 5e-4) {
-      this.controls.enableDamping = false;
-      this.controls.update(0);
-      this.controls.enableDamping = true;
-      return false;
-    }
-    return true;
-  }
 
   private publishStats(phase: RenderPhase, now: number, force: boolean) {
     const samples = phase === 'previewing' ? 0 : this.final.samples;
