@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import Render from '../../src/Render';
 import { renderFixture } from '../helpers/renderPipeline';
 
@@ -111,5 +111,52 @@ describe('converge selects one render', () => {
     const result = await render.converge({samples: 8, adaptiveSampling: {pilotSamples: 2}, sampleSequenceOffset: 10});
     expect(result).toMatchObject({samples: 3, averageSamplesPerPixel: 2, pilotSamples: 2, adaptiveSampling: true});
     expect(targets[0].setOfflineRenderOptions).toHaveBeenCalledWith(expect.objectContaining({sampleSequenceOffset: 12})); engine.dispose();
+  });
+});
+
+
+describe('converge batches', () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
+  it('runs deterministic fixed-spp batches without animation-frame waits', async () => {
+    const raf = vi.fn(() => {throw new Error('Unexpected animation-frame wait');});
+    vi.stubGlobal('requestAnimationFrame', raf);
+    const {engine, targets} = renderFixture(); const render = new Render(engine);
+    expect(await render.converge({samples: 12, samplesPerBatch: 4, sampleSequenceOffset: 37})).toEqual({
+      samples: 12, averageSamplesPerPixel: 12, pilotSamples: 0, adaptiveSampling: false,
+    });
+    expect(targets[0].trace).toHaveBeenCalledTimes(3);
+    expect(targets[0].setOfflineRenderOptions).toHaveBeenNthCalledWith(1, {samplesPerBatch: 4, deferPostProcess: true, sampleSequenceOffset: 37});
+    expect(targets[0].setOfflineRenderOptions).toHaveBeenLastCalledWith({samplesPerBatch: 0, deferPostProcess: false, sampleSequenceOffset: 0});
+    expect(raf).not.toHaveBeenCalled(); engine.dispose();
+  });
+  it.each([[undefined, 0], [0, 3], [100, 1], [500, 0]] as const)('throttles intermediate resolves at previewIntervalMs=%s', async (previewIntervalMs, resolves) => {
+    let clock = 0; vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    const {engine, targets} = renderFixture(); const render = new Render(engine);
+    vi.spyOn(engine.device!.queue, 'onSubmittedWorkDone').mockImplementation(async () => {clock += 60;});
+    await render.converge({samples: 16, samplesPerBatch: 4, previewIntervalMs});
+    expect(targets[0].drawPostProcess).toHaveBeenCalledTimes(resolves);
+    expect(targets[0].present).not.toHaveBeenCalled(); engine.dispose();
+  });
+  it('adapts WebGPU batch size from measured queue completion time', async () => {
+    let clock = 0; vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    const {engine, targets} = renderFixture(); const render = new Render(engine);
+    const durations = [5, 10, 80, 20];
+    vi.spyOn(engine.device!.queue, 'onSubmittedWorkDone').mockImplementation(async () => {clock += durations.shift() ?? 0;});
+    await render.converge({samples: 9, samplesPerBatch: 8, targetBatchTimeMs: 30});
+    expect(vi.mocked(targets[0].setOfflineRenderOptions).mock.calls.map(([options]) => options.samplesPerBatch)).toEqual([1, 2, 4, 2, 0]);
+    engine.dispose();
+  });
+  it('uses GPU-generated adaptive targets without full pilot readback', async () => {
+    const {engine, targets} = renderFixture(); const render = new Render(engine); render.refine();
+    const history = {width: 1, height: 1, tileSize: 1, columns: 1, rows: 1,
+      meanLuminance: new Float32Array([.5]), variance: new Float32Array([.01]), sampleTargets: new Uint32Array([18])};
+    vi.mocked(targets[0].prepareOfflineAdaptiveSampling).mockResolvedValue({maximumTarget: 18, averageTarget: 12.5, history});
+    expect(await render.converge({samples: 32, samplesPerBatch: 8, sampleSequenceOffset: 100, adaptiveSampling: {pilotSamples: 4, tileSize: 8}})).toEqual({
+      samples: 18, averageSamplesPerPixel: 12.5, pilotSamples: 4, varianceHistory: history, adaptiveSampling: true,
+    });
+    expect(targets[0].prepareOfflineAdaptiveSampling).toHaveBeenCalledWith({pilotSamples: 4, tileSize: 8, maxSamples: 32});
+    expect(targets[0].setVarianceMoments).toHaveBeenCalledWith(true);
+    expect(targets[0].setOfflineRenderOptions).toHaveBeenCalledWith({samplesPerBatch: 8, deferPostProcess: true, sampleSequenceOffset: 104});
+    expect(targets[0].readOutput).not.toHaveBeenCalled(); engine.dispose();
   });
 });

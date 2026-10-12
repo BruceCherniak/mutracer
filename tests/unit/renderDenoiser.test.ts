@@ -5,7 +5,7 @@ import Render from '../../src/Render';
 import { renderFixture } from '../helpers/renderPipeline';
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 function filter() { return {tileExecute: vi.fn(), dispose: vi.fn(), prepareForImage: vi.fn(async () => {})}; }
-afterEach(() => { initializeOIDN.mockReset(); });
+afterEach(() => { initializeOIDN.mockReset(); vi.restoreAllMocks(); });
 
 describe('per-render denoising', () => {
   it('shares identical networks, preserving the other render when one replaces its filter', async () => {
@@ -101,4 +101,60 @@ it('waits for active shared inference before prewarming the same network for ano
   const b = new Render(engine, {width: 256, height: 256, denoiser: {type: 'oidn'}}); await settle();
   expect(network.prepareForImage).toHaveBeenCalledTimes(warmCalls);
   done(true); await settle(); expect(network.prepareForImage).toHaveBeenCalledTimes(warmCalls + 1); b.dispose(); engine.dispose();
+});
+
+
+describe('progressive denoiser schedule', () => {
+  function setup(denoiseMs = 0, maxSamples = 10000) {
+    let clock = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => clock);
+    const {engine, targets} = renderFixture();
+    const render = new Render(engine, {maxSamples, denoiser: {type: 'jnlm', schedule: 'progressive'}});
+    render.refine();
+    const target = targets[0], trace = vi.mocked(target.trace).getMockImplementation()!;
+    vi.mocked(target.trace).mockImplementation((camera, cap) => { clock += 10; return trace(camera, cap); });
+    let finish!: (complete: boolean) => void;
+    vi.mocked(target.performOIDNDenoise!).mockImplementation(() => new Promise(resolve => {finish = resolve;}));
+    async function nextUpdate() {
+      const calls = vi.mocked(target.performOIDNDenoise!).mock.calls.length;
+      for (let frames = 0; frames < 20000; frames++) {
+        render.refine(); await Promise.resolve();
+        if (vi.mocked(target.performOIDNDenoise!).mock.calls.length > calls) {
+          const count = render.samples;
+          // Pending inference holds the sample target even if inference takes many frames.
+          clock += denoiseMs; render.refine(); expect(render.samples).toBe(count);
+          finish(true); await settle(); return count;
+        }
+      }
+      throw new Error('Denoiser update did not start');
+    }
+    return {engine, render, nextUpdate};
+  }
+  it.each([0, 2000])('doubles from sample four without skipping updates with %i ms inference', async duration => {
+    const {engine, nextUpdate} = setup(duration);
+    const updates = [];
+    for (let i = 0; i < 7; i++) updates.push(await nextUpdate());
+    expect(updates).toEqual([1, 4, 8, 16, 32, 64, 128]); engine.dispose();
+  });
+  it('updates at least every ten seconds', async () => {
+    const {engine, nextUpdate} = setup(); const updates = [];
+    for (let i = 0; i < 12; i++) updates.push(await nextUpdate());
+    expect(updates.slice(-4)).toEqual([512, 1024, 2025, 3026]); engine.dispose();
+  });
+  it('denoises the final sample count between doubling thresholds', async () => {
+    const {engine, render, nextUpdate} = setup(0, 20); const updates = [];
+    for (let i = 0; i < 5; i++) updates.push(await nextUpdate());
+    expect(updates).toEqual([1, 4, 8, 16, 20]); expect(render.status).toBe('finished'); engine.dispose();
+  });
+  it.each([undefined, 'every-sample'] as const)('uses the default converged or explicit every-sample schedule: %s', async schedule => {
+    const {engine, targets} = renderFixture();
+    const render = new Render(engine, {maxSamples: 4, denoiser: {type: 'jnlm', schedule}});
+    const filtered: number[] = [];
+    render.refine();
+    vi.mocked(targets[0].performOIDNDenoise!).mockImplementation(async () => {filtered.push(render.samples); return true;});
+    await settle();
+    for (let i = 0; i < 3; i++) {render.refine(); await settle();}
+    expect(filtered).toEqual(schedule === 'every-sample' ? [1, 2, 3, 4] : [4]);
+    expect(render.status).toBe('finished'); engine.dispose();
+  });
 });

@@ -1,8 +1,9 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import Render from '../../src/Render';
 import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import Texture from '../../src/scene/Texture';
+import SpotLight from '../../src/scene/SpotLight';
 import AmbientLight from '../../src/scene/AmbientLight';
 import { createCubeGeometry } from '../../src/util/commonGeometry';
 import { renderFixture } from '../helpers/renderPipeline';
@@ -68,4 +69,40 @@ it('reports shared shader progress only when compilation advances', () => {
   const render = new Render(engine); render.refine(); render.refine();
   expect(progress).toHaveBeenCalledOnce(); expect(progress).toHaveBeenCalledWith({stage: 'shaders', progress: .5});
   compilation.completedPipelineCount = 2; render.refine(); expect(progress).toHaveBeenLastCalledWith({stage: 'shaders', progress: 1}); engine.dispose();
+});
+
+
+describe('Engine validation', () => {
+  afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
+  it.each([
+    ['development', undefined, true], ['production', undefined, false],
+    ['development', false, false], ['production', false, false],
+    ['development', true, true], ['production', true, true],
+  ] as const)('honors validateUpdates=%s/%s when committing edits', (environment, validateUpdates, expected) => {
+    vi.stubEnv('NODE_ENV', environment);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const {engine} = renderFixture({validateUpdates});
+    const material = new OpenPBRMaterial();
+    engine.scene = {meshes: [new Mesh(createCubeGeometry(), material)], lights: []};
+    engine.update(); material.baseColor[0] = .2;
+    engine.update(); engine.update();
+    expect(warn).toHaveBeenCalledTimes(expected ? 1 : 0);
+    if (expected) expect(warn).toHaveBeenCalledWith(expect.stringContaining('markUpdated'), material);
+    engine.dispose();
+  });
+  it('clamps invalid lights and emits one error without failing refinement', () => {
+    const {engine, pipeline} = renderFixture();
+    const error = vi.fn(); engine.on('error', error);
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const light = new SpotLight({intensity: -1});
+    engine.scene = {meshes: [], lights: [light]};
+    const render = new Render(engine, {maxSamples: 1});
+    engine.update(); expect(render.refine()).toBe('finished');
+    engine.update(); expect(render.refine()).toBe('finished');
+    expect(light.intensity).toBe(0);
+    expect(pipeline.setLights).toHaveBeenLastCalledWith([expect.objectContaining({intensity: 0})]);
+    expect(error).toHaveBeenCalledOnce(); expect(error.mock.calls[0][0]).toBeInstanceOf(Error);
+    expect(engine.lastError).toBeUndefined(); engine.dispose();
+  });
 });

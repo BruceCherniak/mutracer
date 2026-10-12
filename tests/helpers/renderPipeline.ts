@@ -4,7 +4,7 @@ import Camera from '../../src/scene/Camera';
 import type { Scene } from '../../src/scene/Scene';
 import type { RenderPipeline, RenderTarget, TraceSettings } from '../../src/renderer/renderPipeline';
 
-export function renderFixture(options: {tiles?: number; fits?: boolean; backend?: 'webgpu' | 'webgl'} = {}) {
+export function renderFixture(options: {tiles?: number; fits?: boolean; backend?: 'webgpu' | 'webgl'; validateUpdates?: boolean} = {}) {
   const operations: {id: string; kind: string; camera?: Camera; cap?: number}[] = [];
   const targets: RenderTarget[] = [];
   let active = '';
@@ -14,7 +14,7 @@ export function renderFixture(options: {tiles?: number; fits?: boolean; backend?
     readDepthSamples: vi.fn(async () => new Float32Array([1])), getDiagnostics: vi.fn(() => ({targets: targets.map(t => ({label: t.label, ...t.getMemory()}))})), dispose: vi.fn(),
     createTarget(label) {
       let samples = 0, first = true, partial = 0, complete = false, width = 1, height = 1;
-      let sequenceOffset = 0, variance = false;
+      let sequenceOffset = 0, variance = false, samplesPerBatch = 0;
       let callback = (_count: number, _first: boolean, _time: number) => {};
       const target = {
         label, invalidateDenoisedOutput: vi.fn(), configure: vi.fn((_settings: TraceSettings) => {}), synchronizeBackground: vi.fn(),
@@ -27,7 +27,7 @@ export function renderFixture(options: {tiles?: number; fits?: boolean; backend?
           operations.push({id: label, kind: 'draw', camera: camera.clone(), cap});
           first = false;
           if (samples < cap && ++partial >= (options.tiles ?? 1)) {
-            partial = 0; samples++; complete = true; callback(samples, samples === 1, 20);
+            partial = 0; samples = Math.min(cap, samples + (samplesPerBatch || 1)); complete = true; callback(samples, samples === 1, 20);
           }
           return false;
         }),
@@ -37,7 +37,7 @@ export function renderFixture(options: {tiles?: number; fits?: boolean; backend?
         setSize: vi.fn((w: number, h: number) => {width = w; height = h;}),
         getMemory: () => ({width, height, bytes: width * height * 16}),
         setOnSampleRendered: vi.fn((fn: typeof callback) => {callback = fn;}),
-        setOfflineRenderOptions: vi.fn((value: {sampleSequenceOffset: number}) => {sequenceOffset = value.sampleSequenceOffset;}),
+        setOfflineRenderOptions: vi.fn((value: {sampleSequenceOffset: number; samplesPerBatch: number}) => {sequenceOffset = value.sampleSequenceOffset; samplesPerBatch = value.samplesPerBatch;}),
         readOutput: vi.fn(async () => {
           if (active !== label) throw new Error('Wrong read target');
           operations.push({id: label, kind: 'read'});
@@ -55,7 +55,7 @@ export function renderFixture(options: {tiles?: number; fits?: boolean; backend?
     releaseTarget: vi.fn(target => {target.dispose();}),
   };
   const canvas = {width: 800, height: 600} as HTMLCanvasElement;
-  const engine = new Engine({canvas, validateUpdates: false});
+  const engine = new Engine({canvas, validateUpdates: 'validateUpdates' in options ? options.validateUpdates : false});
   const state = engine as unknown as {_pipeline: RenderPipeline; _info: {backend: 'webgpu' | 'webgl'}; _gpuDevice?: GPUDevice};
   state._pipeline = pipeline; state._info = {backend: options.backend ?? 'webgpu'};
   if (state._info.backend === 'webgpu') state._gpuDevice = {queue: {onSubmittedWorkDone: async () => {}}} as GPUDevice;
