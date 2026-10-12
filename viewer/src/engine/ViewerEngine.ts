@@ -99,7 +99,6 @@ export class ViewerEngine {
   private awaitingFirstSample = false;
   private exporting = false;
   private exportAbort: AbortController | null = null;
-  private denoiserKey = '';
   private denoiserUpdateTimer?: ReturnType<typeof setTimeout>;
   private pointerDown: { x: number; y: number } | null = null;
   /** Focus pull in progress; the settings hold its target only once it ends. */
@@ -620,9 +619,6 @@ export class ViewerEngine {
     if (!this.engine.backend) return;
     const final = getDenoiserOptions(this.settings, this.engine.backend === 'webgpu', OIDN_WEIGHTS);
     const preview = this.settings.previewEnabled ? getDenoiserOptions(this.settings, this.engine.backend === 'webgpu', OIDN_WEIGHTS, true) : null;
-    const key = JSON.stringify({final, preview});
-    if (key === this.denoiserKey) return;
-    this.denoiserKey = key;
     this.final.denoiser = final; this.preview.denoiser = preview;
   }
 
