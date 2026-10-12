@@ -112,12 +112,18 @@ cameras have no depth of field.
 
 | Class | Constructor | Notes |
 | --- | --- | --- |
-| `RectLight` | `(size, color, intensity)` | One-sided, emits along local -Z of `transform` |
-| `SphereLight` | `(position, color, intensity, radius)` | `radius = 0` is a point light |
-| `SpotLight` | `(position, direction, color, intensity, radius, innerAngle, outerAngle, range, iesProfile?, iesRotation?)` | Angles in degrees; `parseIESProfile(text)` for IES files |
-| `DirectionalLight` | `(position, color, intensity)` | Direction from `position` towards the origin |
-| `EnvironmentLight` | `(texture)` | Equirectangular map; importance sampled |
-| `AmbientLight` | `(color, intensity)` | Uniform environment |
+| `RectLight` | `{ size?, color?, intensity?, texture?, spread? }` | One-sided, emits along local -Z |
+| `SphereLight` | `{ radius?, color?, intensity? }` | Spherical emitter; radius 0 is a point |
+| `SpotLight` | `{ color?, intensity?, radius?, innerAngle?, outerAngle?, iesProfile? }` | Cone, optional IES emission |
+| `DirectionalLight` | `{ color?, intensity? }` | Emits along local -Z |
+| `AmbientLight` | `{ color?, intensity? }` | Uniform environment radiance |
+| `EnvironmentLight` | `{ map }` | Equirectangular HDR illumination |
+
+Place analytic lights with `light.position = [x, y, z]` and `light.lookAt(target)`.
+Their transform scale is ignored; `size` and `radius` set emitter dimensions.
+Local +X is the IES azimuth reference; rotate the transform around local Z to
+orient a profile. Invalid mutable values are clamped and reported once without
+failing the render (through `error` events when attached).
 
 Load `.hdr` environments with `await loadRGBE(url)`, which resolves to a
 float `Texture`. Emissive materials (`emissionLuminance > 0`) also act as

@@ -853,15 +853,11 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
         });
       }
     } else if (isDirectionalLight(child)) {
-      lights.push(retainLight(store, child,
-        new DirectionalLight(
-          child.getWorldPosition(child.position.clone())
-            .sub(child.target.getWorldPosition(child.target.position.clone()))
-            .toArray(),
-          child.color.toArray() as ColorRGB,
-          child.intensity
-        )
-      ));
+      const light = new DirectionalLight({color: child.color.toArray() as ColorRGB, intensity: child.intensity});
+      light.transform = Array.from(light.transform);
+      light.position = child.getWorldPosition(child.position.clone()).toArray();
+      light.lookAt(child.target.getWorldPosition(child.target.position.clone()).toArray());
+      lights.push(retainLight(store, child, light));
     } else if (isRectAreaLight(child)) {
       const worldMatrix = child.matrixWorld.clone();
       // Shear decomposition can return a non-unit quaternion. The size below
@@ -871,11 +867,11 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
       const elements = worldMatrix.elements;
       const widthScale = Math.hypot(elements[0], elements[1], elements[2]);
       const heightScale = Math.hypot(elements[4], elements[5], elements[6]);
-      const light = new RectLight(
-        [child.width * widthScale, child.height * heightScale],
-        child.color.toArray() as ColorRGB,
-        child.intensity
-      );
+      const light = new RectLight({
+        size: [child.width * widthScale, child.height * heightScale],
+        color: child.color.toArray() as ColorRGB,
+        intensity: child.intensity
+      });
       worldMatrix.compose(worldPosition, worldRotation, child.scale.clone().set(1, 1, 1));
       light.transform = worldMatrix.elements.slice() as mat4.Mat4Array;
       lights.push(retainLight(store, child, light));
@@ -884,7 +880,6 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
       const worldTarget = child.target.getWorldPosition(
         child.target.position.clone()
       );
-      const direction = worldTarget.sub(worldPosition).normalize();
       const outerAngle = (child.angle * 180) / Math.PI;
       const profile = child.userData.mutracerIesProfile;
       if (profile != null && !(profile instanceof IESProfile)) {
@@ -892,20 +887,20 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
           `THREE.SpotLight "${child.name || '<unnamed>'}" has an invalid mutracerIesProfile`
         );
       }
-      lights.push(retainLight(store, child,
-        new SpotLight(
-          worldPosition.toArray(),
-          direction.toArray(),
-          child.color.toArray() as ColorRGB,
-          child.intensity,
-          child.userData.mutracerRadius ?? 0.01,
-          outerAngle * (1 - child.penumbra),
-          outerAngle,
-          child.distance,
-          profile,
-          child.userData.mutracerIesRotation ?? 0
-        )
-      ));
+      const light = new SpotLight({
+        color: child.color.toArray() as ColorRGB,
+        intensity: child.intensity,
+        radius: child.userData.mutracerRadius ?? 0.01,
+        innerAngle: outerAngle * (1 - child.penumbra),
+        outerAngle,
+        iesProfile: profile
+      });
+      light.transform = Array.from(light.transform);
+      light.position = worldPosition.toArray();
+      light.lookAt(worldTarget.toArray());
+      const rotation = -(child.userData.mutracerIesRotation ?? 0) * Math.PI / 180;
+      if (rotation) mat4.rotateZ(light.transform, light.transform, rotation);
+      lights.push(retainLight(store, child, light));
     } else if (isPointLight(child)) {
       const world = child.matrixWorld.elements;
       const position: [number, number, number] = [
@@ -914,16 +909,15 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
         world[14]
       ];
       lights.push(retainLight(store, child,
-        new SphereLight(
-          position,
-          child.color.toArray() as ColorRGB,
-          child.intensity,
-          child.userData.mutracerRadius ?? 0.25
-        )
+        Object.assign(new SphereLight({
+          color: child.color.toArray() as ColorRGB,
+          intensity: child.intensity,
+          radius: child.userData.mutracerRadius ?? 0.25
+        }), { transform: [1,0,0,0, 0,1,0,0, 0,0,1,0, ...position,1] })
       ));
     } else if (isAmbientLight(child)) {
       lights.push(retainLight(store, child,
-        new AmbientLight(child.color.toArray() as ColorRGB, child.intensity)
+        new AmbientLight({color: child.color.toArray() as ColorRGB, intensity: child.intensity})
       ));
     }
   });
@@ -931,7 +925,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   const threeEnvironment = scene.environment as THREE.DataTexture | null;
   const environmentMap = convertDataTexture(threeEnvironment, textureCache);
   const environmentLight = threeEnvironment && environmentMap
-    ? retainLight(store, threeEnvironment, new EnvironmentLight(environmentMap)) as EnvironmentLight
+    ? retainLight(store, threeEnvironment, new EnvironmentLight({map: environmentMap})) as EnvironmentLight
     : undefined;
   if (environmentLight) lights.push(environmentLight);
 

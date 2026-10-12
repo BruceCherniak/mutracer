@@ -1,44 +1,40 @@
-import type { Vec2 } from '../types.js';
-import { ColorRGB } from '../types.js';
+import type { ColorRGB, Vec2 } from '../types.js';
 import SceneNode from './SceneNode.js';
-import Texture from './Texture.js';
+import type Texture from './Texture.js';
 
-/**
- * Rectangular area light. The rectangle lies on the local XY plane, centered
- * at the origin, and emits towards local -Z. Position and orient it with
- * `transform`.
- */
+/** Analytic light placed with transform; local -Z is the emission direction and local +X is the IES reference. */
 export default class RectLight extends SceneNode {
-  /** Light discriminator; always `RectLight`. */
+  /** Light discriminator. */
   readonly type = 'RectLight' as const;
-
-  /** Width and height in local units. Default `[1, 1]`. */
-  size: Vec2;
+  /** Width and height; transform scale is ignored. Default `[1, 1]`. */
+  size: Vec2 = [1, 1];
   /** Linear RGB color. Default `[1, 1, 1]`. */
-  color: ColorRGB;
-  /** Emitted radiance is `color * intensity`. Default `1`. */
-  intensity: number;
+  color: ColorRGB = [1, 1, 1];
+  /** Emitted radiance multiplier. Default `1`. */
+  intensity: number = 1;
+  /** Emission texture. Default `undefined`. */
+  texture: Texture | undefined = undefined;
+  /** Angular spread from 0 (collimated) to 1 (hemisphere). Default `1`. */
+  spread: number = 1;
 
-  /** Optional emission texture multiplied with `color`. */
-  texture?: Texture;
-
-  /**
-   * Angular spread of the emission, from `0` (a collimated beam) to `1`
-   * (a full hemisphere, like a diffuse panel). Default `1`.
-   */
-  spread = 1;
-
-  constructor(size?: Vec2, color?: ColorRGB, intensity?: number) {
+  /** Creates a light; omitted options retain the field defaults. */
+  constructor(params: {
+    /** Width and height; transform scale is ignored. Default `[1, 1]`. */
+    size?: Vec2;
+    /** Linear RGB color. Default `[1, 1, 1]`. */
+    color?: ColorRGB;
+    /** Emitted radiance multiplier. Default `1`. */
+    intensity?: number;
+    /** Emission texture. Default `undefined`. */
+    texture?: Texture | undefined;
+    /** Angular spread from 0 (collimated) to 1 (hemisphere). Default `1`. */
+    spread?: number;
+  } = {}) {
     super();
-
-    this.size = size || [1, 1];
-    this.color = color || [1, 1, 1];
-    this.intensity = intensity ?? 1;
+    this.size = params.size ?? [1, 1];
+    this.color = params.color ?? [1, 1, 1];
+    this.intensity = params.intensity ?? 1;
+    this.texture = params.texture ?? undefined;
+    this.spread = params.spread ?? 1;
   }
-
-
-
-
-
-
 }

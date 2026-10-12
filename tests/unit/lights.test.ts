@@ -8,27 +8,27 @@ import { packLightsToBuffer } from '../../src/renderer/lightsUtil';
 
 describe('analytic lights', () => {
   it('computes emitter areas', () => {
-    expect(getRectLightArea(new RectLight([2, 4]))).toBe(8);
+    expect(getRectLightArea(new RectLight({size: [2, 4]}))).toBe(8);
     expect(
-      getSphereLightArea(new SphereLight([0, 0, 0], undefined, undefined, 2))
+      getSphereLightArea(Object.assign(new SphereLight({color: undefined, intensity: undefined, radius: 2}), {position: [0, 0, 0]}))
     ).toBeCloseTo(16 * Math.PI);
   });
 
   it('packs position, emission and type for the renderer', () => {
-    const rect = new RectLight([2, 3], [0.5, 1, 0.25], 4);
+    const rect = new RectLight({size: [2, 3], color: [0.5, 1, 0.25], intensity: 4});
     mat4.translate(rect.transform, rect.transform, [1, 2, 3]);
-    const directional = new DirectionalLight([4, 5, 6], [1, 1, 1], 2);
+    const directional = Object.assign(new DirectionalLight({color: [1, 1, 1], intensity: 2}), {position: [4, 5, 6]}).lookAt([0, 0, 0]);
     const buffer = packLightsToBuffer([rect, directional], [-1, -1]);
 
     expect(Array.from(buffer.slice(0, 3))).toEqual([1, 2, 3]);
     expect(Array.from(buffer.slice(4, 7))).toEqual([2, 4, 1]);
-    expect(buffer).toHaveLength(40);
+    expect(buffer).toHaveLength(48);
   });
 
   it('packs light-selection PMFs and CDFs for MIS', () => {
     const lights = [
-      new DirectionalLight([0, 1, 0]),
-      new DirectionalLight([1, 0, 0])
+      Object.assign(new DirectionalLight({}), {position: [0, 1, 0]}).lookAt([0, 0, 0]),
+      Object.assign(new DirectionalLight({}), {position: [1, 0, 0]}).lookAt([0, 0, 0])
     ];
     const buffer = packLightsToBuffer(
       lights,
@@ -39,7 +39,7 @@ describe('analytic lights', () => {
 
     expect(buffer[3]).toBeCloseTo(0.25);
     expect(buffer[7]).toBeCloseTo(0.25);
-    expect(buffer[23]).toBeCloseTo(0.75);
-    expect(buffer[27]).toBeCloseTo(1);
+    expect(buffer[27]).toBeCloseTo(0.75);
+    expect(buffer[31]).toBeCloseTo(1);
   });
 });

@@ -134,6 +134,7 @@ struct Light {
   float spread;
   float selectionPmf;
   float selectionCdf;
+  vec3 iesReference;
 };
 
 void initRay(inout Ray ray, vec3 origin, vec3 direction) {
@@ -180,7 +181,7 @@ struct LightSampleRec {
 
 
 Light fetchLight(int i) {
-  int firstTexel = i * 5;
+  int firstTexel = i * 6;
   vec4 positionAndPmf = texelFetch(
     lightsTex,
     ivec2(firstTexel, 0),
@@ -217,7 +218,8 @@ Light fetchLight(int i) {
     int(bitangentAndTexture.w),
     tangentAndSpread.w,
     positionAndPmf.w,
-    emissionAndCdf.w
+    emissionAndCdf.w,
+    texelFetch(lightsTex, ivec2(firstTexel + 5, 0), 0).xyz
   );
 }
 
@@ -254,13 +256,10 @@ float evaluateSpotEmissionMultiplier(Light light, vec3 lightToSurface) {
     ? smoothstep(light.v.x, light.v.x + light.v.y, cosTheta)
     : step(light.v.x, cosTheta);
   if (cone <= 0.0 || light.textureIndex < 0) return cone;
-  float signZ = axis.z >= 0.0 ? 1.0 : -1.0;
-  float a0 = -1.0 / (signZ + axis.z);
-  float b0 = axis.x * axis.y * a0;
-  vec3 xAxis = vec3(1.0 + signZ * axis.x * axis.x * a0, signZ * b0, -signZ * axis.x);
-  vec3 yAxis = vec3(b0, signZ + axis.y * axis.y * a0, -axis.y);
+  vec3 xAxis = light.iesReference;
+  vec3 yAxis = cross(axis, xAxis);
   float vertical = acos(clamp(cosTheta, -1.0, 1.0));
-  float horizontal = atan(dot(lightToSurface, yAxis), dot(lightToSurface, xAxis)) - light.v.z;
+  float horizontal = atan(dot(lightToSurface, yAxis), dot(lightToSurface, xAxis));
   return cone * sampleIESProfile(light.textureIndex, vec2(vertical / PI, horizontal / TWOPI + 0.5));
 }
 `

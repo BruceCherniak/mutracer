@@ -62,7 +62,7 @@ const floor = new Mesh(createPlaneGeometry(), new OpenPBRMaterial());
 mat4.fromScaling(floor.transform, [5, 1, 5]);
 
 // Rect lights emit along their local -Z axis.
-const light = new RectLight([2, 2], [1, 1, 1], 5);
+const light = new RectLight({ size: [2, 2], color: [1, 1, 1], intensity: 5 });
 mat4.fromTranslation(light.transform, [0, 4, 0]);
 mat4.rotateX(light.transform, light.transform, -Math.PI / 2);
 
@@ -71,7 +71,7 @@ const sky = new Texture({ data: new Float32Array([0.3, 0.3, 0.3, 1]), width: 1, 
 
 const scene: Scene = {
   meshes: [ball, floor],
-  lights: [light, new EnvironmentLight(sky)]
+  lights: [light, new EnvironmentLight({ map: sky })]
 };
 
 const camera = new Camera('perspective', 40, canvas.width / canvas.height, 0.1, 100);

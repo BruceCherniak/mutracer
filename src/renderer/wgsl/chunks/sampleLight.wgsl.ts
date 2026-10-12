@@ -158,7 +158,7 @@ fn light_sample_directional(
   light: Light,
   result: ptr<function, LightSampleRec>
 ) {
-  (*result).direction = normalize(light.position);
+  (*result).direction = normalize(-light.u);
   (*result).normal = -(*result).direction;
   (*result).emission = light.emission;
   (*result).dist = INF;

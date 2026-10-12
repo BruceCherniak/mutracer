@@ -1,34 +1,29 @@
-import type { Vec3 } from '../types.js';
-import { ColorRGB } from '../types.js';
+import type { ColorRGB } from '../types.js';
+import SceneNode from './SceneNode.js';
 
-/** Spherical area light. */
-export default class SphereLight {
-  /** Light discriminator; always `SphereLight`. */
+/** Analytic light placed with transform; local -Z is the emission direction and local +X is the IES reference. */
+export default class SphereLight extends SceneNode {
+  /** Light discriminator. */
   readonly type = 'SphereLight' as const;
-
-  /** World-space center. */
-  position: Vec3;
   /** Linear RGB color. Default `[1, 1, 1]`. */
-  color: ColorRGB;
-  /** Emitted radiance is `color * intensity`. Default `1`. */
-  intensity: number;
-  /** Sphere radius in scene units. `0` makes a point light. Default `1`. */
-  radius: number;
+  color: ColorRGB = [1, 1, 1];
+  /** Emitted radiance multiplier. Default `1`. */
+  intensity: number = 1;
+  /** Emitter radius in scene units; 0 is a point light. Default `1`. */
+  radius: number = 1;
 
-  constructor(
-    position: Vec3,
-    color?: ColorRGB,
-    intensity?: number,
-    radius?: number
-  ) {
-    this.position = position || [1, 1, 1];
-    this.color = color || [1, 1, 1];
-    this.intensity = intensity == null ? 1 : intensity;
-    this.radius = radius ?? 1;
-    if (!(this.radius >= 0)) {
-      throw new Error('SphereLight radius must be non-negative');
-    }
+  /** Creates a light; omitted options retain the field defaults. */
+  constructor(params: {
+    /** Linear RGB color. Default `[1, 1, 1]`. */
+    color?: ColorRGB;
+    /** Emitted radiance multiplier. Default `1`. */
+    intensity?: number;
+    /** Emitter radius in scene units; 0 is a point light. Default `1`. */
+    radius?: number;
+  } = {}) {
+    super();
+    this.color = params.color ?? [1, 1, 1];
+    this.intensity = params.intensity ?? 1;
+    this.radius = params.radius ?? 1;
   }
-
-
 }

@@ -168,7 +168,7 @@ Public spatial values use `Vec2` (`[number, number] | Float32Array`), `Vec3` (`[
 | `OpenPBRMaterial` | See [materials](./materials.md) |
 | `Texture` | Image, canvas or `{ data, width, height }`; 8-bit is sRGB, float is linear |
 | `Camera` | `'perspective'` or `'orthographic'`; `Camera.lookAt(camera, eye, target, up?)`; depth of field with `fStop`, `focusDistance`, `sensorHeight`, `metersPerUnit` ([details](./getting-started.md#depth-of-field)) |
-| `RectLight`, `SphereLight`, `SpotLight`, `DirectionalLight`, `EnvironmentLight`, `AmbientLight` | Lights |
+| `RectLight`, `SphereLight`, `SpotLight`, `DirectionalLight`, `EnvironmentLight`, `AmbientLight` | Parameter-object constructors; analytic lights use `transform`, `position`, `lookAt()` and rigid axes. See [lights](./getting-started.md#lights) |
 | `IESProfile`, `parseIESProfile(text)` | Photometric profiles for `SpotLight` |
 | `SceneBackground` | `[r, g, b, a]`, `Texture` or `GroundedSkyboxBackground` |
 

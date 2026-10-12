@@ -1,24 +1,24 @@
-import type { Vec3 } from '../types.js';
-import { ColorRGB } from '../types.js';
+import type { ColorRGB } from '../types.js';
+import SceneNode from './SceneNode.js';
 
-/**
- * Infinitely distant light, such as the sun. Light arrives from `position`
- * towards the origin; only its direction matters.
- */
-export default class DirectionalLight {
-  /** Light discriminator; always `DirectionalLight`. */
+/** Analytic light placed with transform; local -Z is the emission direction and local +X is the IES reference. */
+export default class DirectionalLight extends SceneNode {
+  /** Light discriminator. */
   readonly type = 'DirectionalLight' as const;
-
-  /** A point on the light's side; the light travels from here towards `[0, 0, 0]`. */
-  position: Vec3;
   /** Linear RGB color. Default `[1, 1, 1]`. */
-  color: ColorRGB;
-  /** Irradiance on a surface facing the light is `color * intensity`. Default `1`. */
-  intensity: number;
+  color: ColorRGB = [1, 1, 1];
+  /** Irradiance on a surface facing the light. Default `1`. */
+  intensity: number = 1;
 
-  constructor(position: Vec3, color?: ColorRGB, intensity?: number) {
-    this.position = position || [1, 1, 1];
-    this.color = color || [1, 1, 1];
-    this.intensity = intensity ?? 1;
+  /** Creates a light; omitted options retain the field defaults. */
+  constructor(params: {
+    /** Linear RGB color. Default `[1, 1, 1]`. */
+    color?: ColorRGB;
+    /** Irradiance on a surface facing the light. Default `1`. */
+    intensity?: number;
+  } = {}) {
+    super();
+    this.color = params.color ?? [1, 1, 1];
+    this.intensity = params.intensity ?? 1;
   }
 }

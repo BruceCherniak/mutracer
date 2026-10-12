@@ -1,4 +1,4 @@
-import { getRectLightUOrV, getRectLightPosition, getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance } from './lightsUtil.js';
+import { getRectLightUOrV, getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getLightDirection, getRigidLightFrame, validateSceneLights } from './lightsUtil.js';
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
 import { SHADOW_CATCHER_ACCUMULATION_BYTES } from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
 import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling.js';
@@ -97,7 +97,7 @@ type AnalyticLight = DirectionalLight | SphereLight | SpotLight | RectLight;
 const F32 = Float32Array;
 
 const FIXED_LIGHT_COUNT = 64;
-const PIXELS_PER_LIGHT = 5;
+const PIXELS_PER_LIGHT = 6;
 const MAX_BOUNCES = 20;
 
 export interface WGPURayTraceTimingCapture {
@@ -209,6 +209,7 @@ export function packAnalyticsLightsToBuffer(
   selectionPmfs: number[],
   iesProfileTexelOffsets: ArrayLike<number> = []
 ) {
+  validateSceneLights(lights);
   const numLights = lights.length;
   if (numLights > FIXED_LIGHT_COUNT) {
     console.warn(
@@ -218,7 +219,7 @@ export function packAnalyticsLightsToBuffer(
   const data = new Float32Array(numLights * PIXELS_PER_LIGHT * 4);
 
   function packVec3(idx: number, v: number[] | Float32Array) {
-    for (let i = 0; i < 4; i++) {
+    for (let i = 0; i < 3; i++) {
       data[i + idx * 4] = v[i];
     }
   }
@@ -237,7 +238,7 @@ export function packAnalyticsLightsToBuffer(
     const off = i * PIXELS_PER_LIGHT;
     packVec3(
       off,
-      light.type === 'RectLight' ? getRectLightPosition(light) : light.position
+      light.position
     );
     data[off * 4 + 3] = lightTypeConstants[light.type];
     // emission
@@ -258,20 +259,21 @@ export function packAnalyticsLightsToBuffer(
       data[(off + 2) * 4 + 3] = light.radius;
     } else if (light.type === 'SpotLight') {
       data[(off + 1) * 4 + 3] = getSpotLightArea(light);
-      packVec3(off + 2, light.direction);
+      packVec3(off + 2, getLightDirection(light));
       data[(off + 2) * 4 + 3] = light.radius;
       packVec3(off + 3, [
         Math.cos((light.outerAngle * Math.PI) / 180),
         Math.min(1, Math.max(0, 1 - light.innerAngle / light.outerAngle)),
-        (light.iesRotation * Math.PI) / 180
+        0
       ]);
     } else if (light.type === 'DirectionalLight') {
-      // None
+      packVec3(off + 2, getLightDirection(light));
     }
     data[(off + 3) * 4 + 3] = light.type === 'SpotLight'
       ? iesProfileTexelOffsets[i] ?? -1
       : texturesIndices[i];
     data[(off + 4) * 4] = selectionPmfs[i] ?? 0;
+    packVec3(off + 5, getRigidLightFrame(light).x);
   }
 
   return data;

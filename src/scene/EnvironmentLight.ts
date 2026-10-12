@@ -9,7 +9,7 @@ export default class EnvironmentLight {
   readonly type = 'EnvironmentLight' as const;
   /** Equirectangular radiance map in linear color. */
   map: Texture;
-  constructor(map: Texture) {
-    this.map = map;
+  constructor(params: { /** Required equirectangular radiance map; no default. */ map: Texture }) {
+    this.map = params.map;
   }
 }

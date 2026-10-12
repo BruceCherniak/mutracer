@@ -167,6 +167,8 @@ struct Light {
   _samplingPadding0: f32,
   _samplingPadding1: f32,
   _samplingPadding2: f32,
+  iesReference: vec3f,
+  _iesPadding: f32,
 };
 
 struct EmissiveTriangle {
@@ -391,13 +393,10 @@ fn evaluateSpotEmissionMultiplier(light: Light, lightToSurface: vec3f) -> f32 {
     cone = smoothstep(light.v.x, light.v.x + light.v.y, cosTheta);
   }
   if (cone <= 0.0 || light.textureIndex < 0.0) { return cone; }
-  let signZ = select(-1.0, 1.0, axis.z >= 0.0);
-  let a = -1.0 / (signZ + axis.z);
-  let b = axis.x * axis.y * a;
-  let xAxis = vec3f(1.0 + signZ * axis.x * axis.x * a, signZ * b, -signZ * axis.x);
-  let yAxis = vec3f(b, signZ + axis.y * axis.y * a, -axis.y);
+  let xAxis = light.iesReference;
+  let yAxis = cross(axis, xAxis);
   let vertical = acos(clamp(cosTheta, -1.0, 1.0));
-  let horizontal = atan2(dot(lightToSurface, yAxis), dot(lightToSurface, xAxis)) - light.v.z;
+  let horizontal = atan2(dot(lightToSurface, yAxis), dot(lightToSurface, xAxis));
   return cone * sampleIESProfile(i32(light.textureIndex), vec2f(vertical / PI, horizontal / TWOPI + 0.5));
 }
 

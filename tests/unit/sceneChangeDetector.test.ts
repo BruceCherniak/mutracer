@@ -58,9 +58,9 @@ describe('scene change detection', () => {
   });
   it('scans light membership, numeric fields, array values, textures and IES identity', () => {
     const { scene, detector } = fixture();
-    const spot = new SpotLight([0,1,0], [0,-1,0]);
+    const spot = (() => { const light = new SpotLight({}); const p = [0,1,0], d = [0,-1,0]; light.position = [p[0], p[1], p[2]]; light.lookAt([p[0]+d[0], p[1]+d[1], p[2]+d[2]]); return light; })();
     const rect = new RectLight(); rect.texture = texture();
-    const env = new EnvironmentLight(texture());
+    const env = new EnvironmentLight({map: texture()});
     scene.lights.push(spot, rect, env);
     expect(detector.detect(scene).lights).toBe(true); detector.commit();
     for (const edit of [() => { spot.intensity++; }, () => { spot.color[0] = 0.5; },

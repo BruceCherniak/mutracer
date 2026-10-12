@@ -1,3 +1,4 @@
+import { validateSceneLights } from './renderer/lightsUtil.js';
 import type { SamplingPattern } from './renderer/sampling.js';
 import { packDepthSampleArea, type DepthSampleArea } from './renderer/depthQuery.js';
 import { ensureMeshGeometryAttributes, meshNeedsStaticBvh } from './renderer/prepareMeshBVH.js';
@@ -623,6 +624,7 @@ export default class Renderer {
   private _initing = false;
   private _renderDone = false;
   private _readingDepth = false;
+  private _pendingLightErrors: Error[] = [];
   private _oidnStatus = 0;
   private _oidnRevision = 0;
 
@@ -1361,6 +1363,7 @@ export default class Renderer {
     }
     const sceneInitialized = this._sceneInitialized;
     const renderDoneBeforeSceneUpdate = this._renderDone;
+    validateSceneLights(scene.lights, error => this._pendingLightErrors.push(error));
     ensureMeshGeometryAttributes(scene.meshes);
     const changes = this._sceneChangeDetector.detect(scene);
     const atlasBudgetChanged = pipeline.setTextureAtlasBudget(this.textureAtlasBudgetBytes);

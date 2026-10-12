@@ -48,21 +48,13 @@ describe('power-weighted light sampling', () => {
   });
 
   it('weights an area light by luminance and area', () => {
-    const light = new RectLight([2, 3], [1, 1, 1], 4);
+    const light = new RectLight({size: [2, 3], color: [1, 1, 1], intensity: 4});
     expect(estimateAnalyticLightPower(light)).toBeCloseTo(24 * Math.PI);
   });
 
   it('keeps zero-radius sphere and spot emitters finite, weighted, and delta', () => {
-    const point = new SphereLight([0, 0, 0], [1, 0.5, 0.25], 12, 0);
-    const spot = new SpotLight(
-      [0, 0, 0],
-      [0, 0, -1],
-      [1, 0.5, 0.25],
-      12,
-      0,
-      10,
-      30
-    );
+    const point = Object.assign(new SphereLight({color: [1, 0.5, 0.25], intensity: 12, radius: 0}), {position: [0, 0, 0]});
+    const spot = (() => { const light = new SpotLight({color: [1, 0.5, 0.25], intensity: 12, radius: 0, innerAngle: 10, outerAngle: 30}); const p = [0, 0, 0], d = [0, 0, -1]; light.position = [p[0], p[1], p[2]]; light.lookAt([p[0]+d[0], p[1]+d[1], p[2]+d[2]]); return light; })();
     expect(getSphereLightArea(point)).toBe(0);
     expect(getSpotLightArea(spot)).toBe(0);
     expect(getSpotLightRadiance(spot)).toBe(12);

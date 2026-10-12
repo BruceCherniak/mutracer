@@ -152,7 +152,7 @@ void light_sample_directional(
   in vec3 shadingPoint,
   inout LightSampleRec result
 ) {
-  result.direction = normalize(light.position);
+  result.direction = normalize(-light.u);
   result.normal = -result.direction;
   result.emission = light.emission;
   result.dist = INF;

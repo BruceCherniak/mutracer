@@ -50,13 +50,13 @@ mat4.fromTranslation(cube.transform, [-0.6, 0.3, -1.3]);
 mat4.scale(cube.transform, cube.transform, [0.3, 0.3, 0.3]);
 
 // A rect light emits towards its local -Z; rotate it to face down.
-const light = new RectLight([1.5, 1.5], [1, 0.9, 0.8], 6);
+const light = new RectLight({size: [1.5, 1.5], color: [1, 0.9, 0.8], intensity: 6});
 mat4.fromTranslation(light.transform, [-1.5, 3, 1.5]);
 mat4.rotateX(light.transform, light.transform, -Math.PI / 2);
 
 const scene: Scene = {
   meshes: [floor, ...spheres, cube],
-  lights: [light, new EnvironmentLight(createSkyTexture())]
+  lights: [light, new EnvironmentLight({map: createSkyTexture()})]
 };
 
 const camera = new Camera('perspective', 40, 1, 0.1, 100);

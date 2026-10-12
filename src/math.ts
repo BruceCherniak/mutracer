@@ -29,6 +29,7 @@ export const mat4: any = {
   ortho: glMat4.ortho,
   perspective: glMat4.perspective,
   scale: glMat4.scale,
+  rotateZ: glMat4.rotateZ,
   fromScaling: glMat4.fromScaling,
   translate: glMat4.translate
 };

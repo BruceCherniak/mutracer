@@ -62,11 +62,14 @@ const meshes = gallery.map((props, index) => {
 const floor = new Mesh(createPlaneGeometry(), material({ shadowCatcher: true }));
 mat4.fromScaling(floor.transform, [8, 1, 8]);
 
+const keyLight = new SphereLight({ color: [1, 0.85, 0.7], intensity: 30, radius: 0.3 });
+keyLight.position = [-2, 3, 2];
+
 const scene: Scene = {
   meshes: [floor, ...meshes],
   lights: [
-    new EnvironmentLight(createSkyTexture({ sunIntensity: 800 })),
-    new SphereLight([-2, 3, 2], [1, 0.85, 0.7], 30, 0.3)
+    new EnvironmentLight({map: createSkyTexture({ sunIntensity: 800 })}),
+    keyLight
   ],
   // Fully transparent background.
   background: [0, 0, 0, 0]

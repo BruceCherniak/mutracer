@@ -60,14 +60,15 @@ describe('spot light and IES semantics', () => {
 
   it('packs sphere radiance, cone shaping, profile index, and finite PDFs', () => {
     const profile = parseIESProfile(makeIES());
-    const light = new SpotLight([1, 2, 3], [0, -2, 0], [1, 0.5, 0.25], 20, 0.5, 30, 45, 10, profile, 90);
+    const light = (() => { const light = new SpotLight({color: [1, 0.5, 0.25], intensity: 20, radius: 0.5, innerAngle: 30, outerAngle: 45, iesProfile: profile}); const p = [1, 2, 3], d = [0, -2, 0]; light.position = [p[0], p[1], p[2]]; light.lookAt([p[0]+d[0], p[1]+d[1], p[2]+d[2]]); const angle = -(90) * Math.PI / 180; const m = light.transform, x = Array.from(m.slice(0,3)), y = Array.from(m.slice(4,7)); for(let i=0;i<3;i++){m[i]=x[i]*Math.cos(angle)+y[i]*Math.sin(angle);m[4+i]=y[i]*Math.cos(angle)-x[i]*Math.sin(angle);}return light; })();
     const packedProfiles = packIESProfiles([light]);
     const data = packLightsToBuffer([light], [-1], [1], [1], packedProfiles.offsets);
     expect(data[4]).toBeCloseTo(20 / (Math.PI * 0.25));
     expect(Array.from(data.slice(8, 11))).toEqual([0, -1, 0]);
     expect(data[12]).toBeCloseTo(Math.cos(Math.PI / 4));
     expect(data[13]).toBeCloseTo(1 - 30 / 45);
-    expect(data[14]).toBeCloseTo(Math.PI / 2);
+    expect(data[14]).toBe(0);
+    expect(data[20]).toBeCloseTo(0); expect(data[21]).toBeCloseTo(0); expect(data[22]).toBeCloseTo(1);
     expect(data[15]).toBe(0);
     expect(data[16]).toBeCloseTo(0.5);
     expect(data[17]).toBeCloseTo(Math.PI);
@@ -79,7 +80,7 @@ describe('spot light and IES semantics', () => {
   });
 
   it('keeps inverse-square far-field behavior and cone shaping power', () => {
-    const light = new SpotLight([0, 0, 0], [0, 0, -1], [1, 1, 1], 40, 0.01, 20, 30);
+    const light = (() => { const light = new SpotLight({color: [1, 1, 1], intensity: 40, radius: 0.01, innerAngle: 20, outerAngle: 30}); const p = [0, 0, 0], d = [0, 0, -1]; light.position = [p[0], p[1], p[2]]; light.lookAt([p[0]+d[0], p[1]+d[1], p[2]+d[2]]); return light; })();
     const farIrradiance = (distance: number) => getSpotLightRadiance(light) / sphereSolidAnglePdf(distance, light.radius);
     expect(farIrradiance(4) / farIrradiance(8)).toBeCloseTo(4, 3);
     expect(estimateAnalyticLightPower(light)).toBeGreaterThan(0);
@@ -87,15 +88,7 @@ describe('spot light and IES semantics', () => {
   });
 
   it('supports point-spot delta units and preserves angular shader shaping', () => {
-    const light = new SpotLight(
-      [0, 0, 0],
-      [0, 0, -1],
-      [1, 1, 1],
-      40,
-      0,
-      20,
-      30
-    );
+    const light = (() => { const light = new SpotLight({color: [1, 1, 1], intensity: 40, radius: 0, innerAngle: 20, outerAngle: 30}); const p = [0, 0, 0], d = [0, 0, -1]; light.position = [p[0], p[1], p[2]]; light.lookAt([p[0]+d[0], p[1]+d[1], p[2]+d[2]]); return light; })();
     expect(getSpotLightRadiance(light)).toBe(40);
     const packed = packLightsToBuffer([light], [-1], [1], [1]);
     expect(Array.from(packed.slice(4, 7))).toEqual([40, 40, 40]);

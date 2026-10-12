@@ -1,3 +1,4 @@
+import { getLightDirection } from '../../src/renderer/lightsUtil';
 import { getRectLightUOrV, getRectLightArea } from '../../src/renderer/lightsUtil.js';
 import { setGeometryBvh, getGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import * as THREE from 'three';
@@ -635,9 +636,10 @@ describe('Three.js scene conversion', () => {
     light.position.set(3, 4, 5);
     light.target.position.set(-1, 2, 0);
     scene.add(light, light.target);
-    expect(fromTHREEScene(scene).lights[0]).toMatchObject({
-      type: 'DirectionalLight', position: [4, 2, 5]
-    });
+    const converted = fromTHREEScene(scene).lights[0];
+    if(converted.type !== 'DirectionalLight') throw Error('missing sun');
+    expect(converted.position).toEqual([3,4,5]);
+    getLightDirection(converted).forEach((value,i)=>expect(value).toBeCloseTo([-4,-2,-5][i]/Math.hypot(4,2,5)));
   });
 
   it('resolves directional light and independently parented target in world coordinates', () => {
@@ -652,9 +654,10 @@ describe('Three.js scene conversion', () => {
     light.position.set(1, 0, 0); light.target.position.set(0, 0, 1);
     parent.add(light); targetParent.add(light.target); scene.add(parent);
     // The target's parent need not be part of the rendered scene.
-    expect(fromTHREEScene(scene).lights[0]).toMatchObject({
-      type: 'DirectionalLight', position: [7, 17, 36]
-    });
+    const converted = fromTHREEScene(scene).lights[0];
+    if(converted.type !== 'DirectionalLight') throw Error('missing sun');
+    expect(converted.position).toEqual([10,22,30]);
+    getLightDirection(converted).forEach((value,i)=>expect(value).toBeCloseTo([-7,-17,-36][i]/Math.hypot(7,17,36)));
   });
 
   it('preserves a rotated source sun with a child target under a nonuniform parent', () => {
@@ -672,8 +675,11 @@ describe('Three.js scene conversion', () => {
     const endpoint = new THREE.Vector3(0, 0, -1).applyMatrix4(light.matrixWorld);
     const expected = origin.sub(endpoint).toArray();
     const converted = fromTHREEScene(scene).lights[0];
-    expect(converted).toMatchObject({ type: 'DirectionalLight', position: expected,
+    expect(converted).toMatchObject({ type: 'DirectionalLight',
       color: light.color.toArray(), intensity: light.intensity });
+    if(converted.type !== 'DirectionalLight') throw Error('missing sun');
+    expect(converted.position).toEqual(light.getWorldPosition(new THREE.Vector3()).toArray());
+    getLightDirection(converted).forEach((value,i)=>expect(value).toBeCloseTo(-expected[i]/Math.hypot(...expected)));
     expect(light.quaternion.toArray()).toEqual(raw);
     expect(light.target.position.toArray()).toEqual([0, 0, -1]);
   });
@@ -1033,14 +1039,13 @@ describe('Three.js camera conversion', () => {
     const converted = fromTHREEScene(scene).lights.find((item) => item.type === 'SpotLight');
     expect(converted).toMatchObject({
       type: 'SpotLight',
-      position: [1, 3, 2],
-      direction: [0, -1, 0],
       intensity: 12,
-      radius: 0.05,
-      range: 20,
-      iesRotation: 30
+      radius: 0.05
     });
     if (converted?.type !== 'SpotLight') throw new Error('missing converted spot light');
+    expect(converted.position).toEqual([1,3,2]);
+    expect(getLightDirection(converted)).toEqual([0,-1,0]);
+    expect(converted).not.toHaveProperty('range'); expect(converted).not.toHaveProperty('iesRotation');
     expect(converted.innerAngle).toBeCloseTo(45);
     expect(converted.outerAngle).toBeCloseTo(60);
   });

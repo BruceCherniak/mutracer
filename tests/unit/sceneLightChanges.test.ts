@@ -6,10 +6,10 @@ import RectLight from '../../src/scene/RectLight';
 import SphereLight from '../../src/scene/SphereLight';
 import Texture from '../../src/scene/Texture';
 it('retains environment synthesis during analytic edits and invalidates ambient/texture pixels', () => {
-  const cache = new SceneEnvironmentCache(); const ambient = new AmbientLight([1,1,1]);
-  const analytic = new SphereLight([0,2,0]);
+  const cache = new SceneEnvironmentCache(); const ambient = new AmbientLight({color: [1,1,1]});
+  const analytic = Object.assign(new SphereLight({}), {position: [0,2,0]});
   const map = new Texture({data:new Float32Array([1,2,3,1]),width:1,height:1});
-  const environment = new EnvironmentLight(map);
+  const environment = new EnvironmentLight({map: map});
   const lights = [ambient,analytic,environment];
   const first = cache.update(lights)!; analytic.intensity++;
   expect(cache.update(lights)).toBe(first);
@@ -21,7 +21,7 @@ it('retains environment synthesis during analytic edits and invalidates ambient/
 });
 it('tracks RectLight pixel edits and slot order independently of analytic parameters', () => {
   const tracker = new RectLightTextureTracker(); const rect = new RectLight();
-  const sphere = new SphereLight([0,2,0]);
+  const sphere = Object.assign(new SphereLight({}), {position: [0,2,0]});
   expect(tracker.update([sphere,rect])).toBe(false);
   rect.texture = new Texture({data:new Uint8Array(4),width:1,height:1});
   expect(tracker.update([sphere,rect])).toBe(true);

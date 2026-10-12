@@ -164,6 +164,9 @@ Renderer-specific settings without a Three.js equivalent:
 | `mutracerDisplacement*` | material | Displacement settings, same names as the `OpenPBRMaterial` fields |
 | `mutracerThinFilmMap` | material | Thin-film thickness texture |
 | `mutracerRadius` | point / spot light | Emitter radius |
-| `mutracerIesProfile`, `mutracerIesRotation` | spot light | `IESProfile` instance and its rotation |
+| `mutracerIesProfile`, `mutracerIesRotation` | spot light | `IESProfile` instance; rotation becomes local-Z transform rotation |
 | `mutracerGroundedSkybox: { texture, height, radius, groundHeight?, center? }` | scene | Grounded skybox background |
 | `mutracerHiddenBackground: true` | scene | Transparent background while keeping environment lighting |
+
+Directional and spot lights use their world position and target to build a
+MuTracer transform; source rotation alone does not specify their direction.
