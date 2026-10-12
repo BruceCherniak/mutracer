@@ -57,7 +57,6 @@ affects the image restarts accumulation.
 | --- | --- | --- |
 | `toneMapping` | `'agx'` | `'agx'`, `'aces'`, `'cineon'`, `'reinhard'`, `'linear'` |
 | `toneMappingExposure` | `1` | Linear exposure multiplier |
-| `autoExposure` | `false` | Histogram auto exposure (WebGPU) |
 | `contrast`, `saturation` | `1` | Color grading |
 | `temperature`, `tint` | `0` | White balance, roughly −1 to 1 |
 | `vignette` | `0` | Vignette strength |

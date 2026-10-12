@@ -44,7 +44,7 @@ Call `sync.dispose()` and `renderer.dispose()` when finished.
 - Use `geometry.markVerticesUpdated()`, not `markUpdated()`, for vertex animation; neither recomputes normals.
 - `createPlaneGeometry()` is 2×2 in XZ; `createSphereGeometry()` and `createCubeGeometry()` span -1..1. Scale with `matrixWorld`.
 - Rect lights are one-sided; rotate them to face the scene.
-- OIDN, auto exposure and HDR output require WebGPU; WebGL 2 denoises with JNLM only.
+- OIDN and HDR output require WebGPU; WebGL 2 denoises with JNLM only.
 - Call `renderer.setSize` with drawing-buffer pixels and update `camera.aspect` on resize.
 - Changing `bvhBuilder`, `bvhLayout` or `bvhSpatialSplits` does not rebuild existing BVHs; use `prepareScene(scene, { rebuild: true })`.
 - In Vite development, add `optimizeDeps: { exclude: ['@meimu/mutracer'] }` so bundled assets load.

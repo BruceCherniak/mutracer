@@ -440,8 +440,6 @@ export default class Renderer {
    * WebGPU HDR canvases, without display-referred tone mapping. Default `false`.
    */
   hdrOutputEnabled = false;
-  /** Adapt exposure from a GPU luminance histogram (WebGPU). Default `false`. */
-  autoExposure = false;
   /** Color grading contrast multiplier. Default `1`. */
   contrast = 1;
   /** Color grading saturation multiplier. Default `1`. */
@@ -1265,7 +1263,6 @@ export default class Renderer {
 
     const toneMappingParams = {
       exposure: this.toneMappingExposure,
-      autoExposure: this.autoExposure,
       toneMapping: this.toneMapping,
       contrast: this.contrast,
       saturation: this.saturation,

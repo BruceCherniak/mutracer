@@ -62,7 +62,6 @@ vi.mock('../../src/renderer/WGPURayTracePass', () => ({ default: mocks.TracePass
 vi.mock('../../src/renderer/WGPURayTraceOutput', () => ({ WGPURayTraceOutputPass: mocks.OutputPass }));
 vi.mock('../../src/renderer/WGPUFullQuadPass', () => ({ WGPUFullQuadPass: mocks.Pass }));
 vi.mock('../../src/renderer/WGPUComputePass', () => ({ WGPUComputePass: mocks.Pass }));
-vi.mock('../../src/renderer/WGPUAutoExposure', () => ({ default: mocks.Pass }));
 
 function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) = 1_000_000n) {
   const device = {

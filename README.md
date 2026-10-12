@@ -136,7 +136,7 @@ npm run dev
 ## Browser support
 
 - **WebGPU** (recommended): any browser with WebGPU, such as current Chrome,
-  Edge and Safari. Required for OIDN denoising, auto exposure, HDR output and
+  Edge and Safari. Required for OIDN denoising, HDR output and
   the options marked WebGPU in the [API reference](./docs/api.md).
 - **WebGL 2** fallback: requires `EXT_color_buffer_float`. Pass
   `preferWebGPU: false` to force it.

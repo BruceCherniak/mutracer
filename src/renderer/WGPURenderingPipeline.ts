@@ -30,7 +30,6 @@ import { vec3 } from '../math.js';
 import WGPUBloomPass from './WGPUBloomPass.js';
 import { WGPUComputePass } from './WGPUComputePass.js';
 import { isTextureDataSource } from '../scene/Texture.js';
-import WGPUAutoExposure from './WGPUAutoExposure.js';
 import WGPUHDRPeakMeter from './WGPUHDRPeakMeter.js';
 import { isJNLMDenoiser, type JNLMDenoiser } from './jnlm.js';
 import { WGPUJNLMDenoisePass } from './WGPUJNLMDenoiser.js';
@@ -256,7 +255,6 @@ function makeWGPURenderingPipeline(
   let bloomRadius = 0.6;
 
   let exposure = 1;
-  let autoExposureEnabled = false;
   let toneMappingMode = 0;
   let contrast = 1;
   let saturation = 1;
@@ -413,7 +411,6 @@ output.color = color;
 `
   });
 
-  const autoExposurePass = new WGPUAutoExposure(device);
   let hdrPeakMeter: WGPUHDRPeakMeter | undefined;
   const composePass = new WGPUFullQuadPass('compose', device, {
     textureWillBeRead: true,
@@ -424,11 +421,6 @@ output.color = color;
         label: 'exposure',
         type: 'f32',
         data: exposure
-      },
-      {
-        label: 'autoExposureEnabled',
-        type: 'f32',
-        data: 0
       },
       {
         label: 'toneMappingParams',
@@ -478,8 +470,7 @@ output.color = color;
       'catcherBackgroundTex',
       'flatBackgroundMaskTex',
       'shadowCatcherTex',
-      'bloomTex',
-      'autoExposureTex'
+      'bloomTex'
     ]
   });
   let composeColorFormat: GPUTextureFormat = 'rgba8unorm';
@@ -891,13 +882,6 @@ output.color = color;
       bloomIntensityToUpdate = 0;
     }
     composePass.setUniform('bloomIntensity', bloomIntensityToUpdate);
-    if (autoExposureEnabled) {
-      autoExposurePass.createPass(
-        encoder,
-        colorTexture,
-        elapsedFrameTime / 1000
-      );
-    }
     composePass.createPass(encoder, {
       colorTex: colorTexture,
       foregroundTex: foregroundTexture,
@@ -905,8 +889,7 @@ output.color = color;
       flatBackgroundMaskTex: getFrameInput('albedo'),
       shadowCatcherTex: getFrameInput('shadowCatcher'),
       // Use color texture as placeholder
-      bloomTex: bloomEnabled && bloomPass ? bloomPass.getOutput() : colorTexture,
-      autoExposureTex: autoExposurePass.getOutput()
+      bloomTex: bloomEnabled && bloomPass ? bloomPass.getOutput() : colorTexture
     });
     if (oidnComposedLinear && oidnComposedTexture) {
       compositeDenoiseDisplayPass.createPass(encoder, {
@@ -1151,7 +1134,6 @@ output.color = color;
     rayTraceOutputPass.setSize(renderWidth, renderHeight);
     composePass.setSize(renderWidth, renderHeight);
     compositeDenoiseDisplayPass.setSize(renderWidth, renderHeight);
-    autoExposurePass.setSize(renderWidth, renderHeight);
     const oidnImageSize = new Int32Array([renderWidth, renderHeight]);
     [
       oidnAlbedoEncodePass,
@@ -1260,7 +1242,6 @@ output.color = color;
 
   function setToneMappingParams(params: ToneMappingParams) {
     const newExposure = params.exposure ?? 1;
-    const newAutoExposureEnabled = params.autoExposure ?? false;
     const newToneMappingMode = {
       agx: 0,
       aces: 1,
@@ -1275,7 +1256,6 @@ output.color = color;
     const newVignette = params.vignette ?? 0;
     if (
       newExposure === exposure &&
-      newAutoExposureEnabled === autoExposureEnabled &&
       newToneMappingMode === toneMappingMode &&
       newContrast === contrast &&
       newSaturation === saturation &&
@@ -1285,7 +1265,6 @@ output.color = color;
     ) return false;
     invalidateCompositeDenoise();
     exposure = newExposure;
-    autoExposureEnabled = newAutoExposureEnabled;
     toneMappingMode = newToneMappingMode;
     contrast = newContrast;
     saturation = newSaturation;
@@ -1293,10 +1272,6 @@ output.color = color;
     tint = newTint;
     vignette = newVignette;
     composePass.setUniform('exposure', exposure);
-    composePass.setUniform(
-      'autoExposureEnabled',
-      autoExposureEnabled ? 1 : 0
-    );
     composePass.setUniform('toneMappingParams', [toneMappingMode, vignette]);
     composePass.setUniform('colorGradingParams', [
       contrast,
@@ -1749,7 +1724,6 @@ output.color = color;
     composePass.dispose();
     rawOutputPass.dispose();
     compositeDenoiseDisplayPass.dispose();
-    autoExposurePass.dispose();
     hdrPeakMeter?.dispose();
     oidnAlbedoEncodePass.dispose();
     oidnAlbedoDecodePass.dispose();

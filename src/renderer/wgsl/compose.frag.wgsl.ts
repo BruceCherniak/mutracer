@@ -108,12 +108,7 @@ if (bloomIntensity > 0.0) {
   finalColor = vec4f(finalColor.rgb + bloomTexel.rgb, finalColor.a);
 }
 
-let histogramExposure = select(
-  1.0,
-  textureLoad(autoExposureTex, vec2i(0), 0).x,
-  autoExposureEnabled > 0.5
-);
-var gradedColor = gradeColor(finalColor.rgb * exposure * histogramExposure);
+var gradedColor = gradeColor(finalColor.rgb * exposure);
 let vignetteEdge = smoothstep(0.2, 0.72, distance(vec2f(uv) / vec2f(textureDimensions(colorTex)), vec2f(0.5)));
 gradedColor *= 1.0 - toneMappingParams.y * vignetteEdge;
 let hdrOutput = hdrOutputEnabled > 0.5;
@@ -137,7 +132,7 @@ if (flatBackgroundColor.a > 0.5) {
   if (bloomIntensity > 0.0) {
     var unbloomedColor = gradeColor(
       max(finalColor.rgb - bloomTexel.rgb, vec3f(0.0))
-        * exposure * histogramExposure
+        * exposure
     );
     unbloomedColor *= 1.0 - toneMappingParams.y * vignetteEdge;
     if (!hdrOutput) {
@@ -164,8 +159,8 @@ if (shadowCatcherEnabled > 0.5) {
   if (coverage > 0.0) {
     let foreground = textureLoad(foregroundTex, uv, 0);
     let background = textureLoad(catcherBackgroundTex, uv, 0);
-    var foregroundColor = gradeColor((foreground.rgb + bloomTexel.rgb) * exposure * histogramExposure);
-    var backgroundColor = gradeColor((background.rgb / max(background.a, 0.000001) + bloomTexel.rgb) * exposure * histogramExposure);
+    var foregroundColor = gradeColor((foreground.rgb + bloomTexel.rgb) * exposure);
+    var backgroundColor = gradeColor((background.rgb / max(background.a, 0.000001) + bloomTexel.rgb) * exposure);
     foregroundColor *= 1.0 - toneMappingParams.y * vignetteEdge;
     backgroundColor *= 1.0 - toneMappingParams.y * vignetteEdge;
     if (!hdrOutput) {
@@ -175,7 +170,7 @@ if (shadowCatcherEnabled > 0.5) {
     foregroundColor = select(pow(max(foregroundColor, vec3f(0.0)), vec3f(1.0 / 2.2)), linearToSrgb(foregroundColor), hdrOutput);
     backgroundColor = select(pow(max(backgroundColor, vec3f(0.0)), vec3f(1.0 / 2.2)), linearToSrgb(backgroundColor), hdrOutput);
     if (flatBackgroundColor.a > 0.5) {
-      var unbloomedBackground = gradeColor(background.rgb / max(background.a, 0.000001) * exposure * histogramExposure);
+      var unbloomedBackground = gradeColor(background.rgb / max(background.a, 0.000001) * exposure);
       unbloomedBackground *= 1.0 - toneMappingParams.y * vignetteEdge;
       if (!hdrOutput) { unbloomedBackground = applyToneMapping(unbloomedBackground); }
       let encodedUnbloomedBackground = select(pow(max(unbloomedBackground, vec3f(0.0)), vec3f(1.0 / 2.2)), linearToSrgb(unbloomedBackground), hdrOutput);

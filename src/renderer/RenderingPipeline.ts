@@ -22,8 +22,6 @@ export type ToneMapping =
 export interface ToneMappingParams {
   /** Linear exposure multiplier. Default `1`. */
   exposure?: number;
-  /** GPU histogram exposure. WebGPU only; default `false`. */
-  autoExposure?: boolean;
   /** Display tone mapper. Default `agx`. */
   toneMapping?: ToneMapping;
   /** Contrast multiplier. Default `1`. */
