@@ -1085,7 +1085,8 @@ describe('Three.js camera conversion', () => {
     expect(camera.focusDistance).toBe(3.5);
     // Three.js applies the film gauge to the larger frame dimension.
     expect(camera.sensorHeight).toBeCloseTo(18);
-    expect(camera.focalLength).toBeCloseTo(three.getFocalLength());
+    expect(camera.sensorHeight).toBeCloseTo(three.getFilmHeight());
+    expect(camera.fov).toBe(three.fov);
     expect(camera.fStop).toBe(4);
     expect(fromTHREECamera(three, { focusDistance: 2, metersPerUnit: 0.01 }))
       .toMatchObject({ focusDistance: 2, metersPerUnit: 0.01, fStop: 0 });

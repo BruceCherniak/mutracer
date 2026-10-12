@@ -1,3 +1,4 @@
+import { cameraApertureRadius } from './cameraLens.js';
 import { getRectLightUOrV, getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getLightDirection, getRigidLightFrame, validateSceneLights } from './lightsUtil.js';
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
 import { SHADOW_CATCHER_ACCUMULATION_BYTES } from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
@@ -2733,7 +2734,7 @@ ${rayTraceCompute({
   // TODO reuse the code of RayTraceNode
   setCamera(camera: Camera) {
     const viewProjectionInvMat = this._viewProjInv;
-    this._apertureRadius = camera.apertureRadius;
+    this._apertureRadius = cameraApertureRadius(camera);
     this._focusDistance = camera.focusDistance;
     this._updateViewProjInv(camera, viewProjectionInvMat);
     mat4.copy(this._cameraWorld, camera.transform);
@@ -2744,7 +2745,7 @@ ${rayTraceCompute({
     this._updateViewProjInv(camera, tmp);
     return (
       !numberArraysEqual(this._viewProjInv, tmp) ||
-      camera.apertureRadius !== this._apertureRadius ||
+      cameraApertureRadius(camera) !== this._apertureRadius ||
       camera.focusDistance !== this._focusDistance
     );
   }

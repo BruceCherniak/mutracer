@@ -120,35 +120,6 @@ export default class Camera extends SceneNode {
     return new Camera({ projection: this.projection }).copy(this);
   }
 
-  /**
-   * Focal length in millimetres of a perspective camera, from `sensorHeight`,
-   * `fov` and `zoom`. Returns `0` for an orthographic camera.
-   */
-  get focalLength() {
-    const camera = this;
-    if (camera.projection !== 'perspective') return 0;
-    const tanHalfFov = Math.tan((camera.fov * Math.PI) / 360);
-    return (
-      (0.5 * camera.sensorHeight * Math.max(camera.zoom, Number.EPSILON)) /
-      tanHalfFov
-    );
-  }
-
-  /**
-   * Lens (aperture) radius in scene units used for depth of field:
-   * `focalLength / (2 * fStop)` converted with `metersPerUnit`. Returns `0`
-   * when depth of field is off, for orthographic cameras and for invalid
-   * parameters.
-   */
-  get apertureRadius() {
-    const camera = this;
-    const { fStop, metersPerUnit } = camera;
-    if (!(fStop > 0) || !(metersPerUnit > 0)) return 0;
-    const radius =
-      camera.focalLength / (2 * fStop) / 1000 / metersPerUnit;
-    return Number.isFinite(radius) && radius > 0 ? radius : 0;
-  }
-
   /** Returns a new column-major projection matrix including zoom. Default targetAspect 1, used only when aspect is undefined. */
   getProjectionMatrix(targetAspect = 1): Mat4 {
     const camera = this;

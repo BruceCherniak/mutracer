@@ -1,3 +1,4 @@
+import { cameraApertureRadius } from './cameraLens.js';
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
 import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling.js';
 import depthQueryFrag from './glsl/depthQuery.frag.js';
@@ -847,7 +848,7 @@ class WebGLRayTracePass {
 
   setCamera(camera: Camera) {
     const viewProjectionInv = this._viewProjInv;
-    this._apertureRadius = camera.apertureRadius;
+    this._apertureRadius = cameraApertureRadius(camera);
     this._focusDistance = camera.focusDistance;
     this._getViewProjInv(camera, viewProjectionInv);
     this._tracePasses.forEach((pass) => {
@@ -864,7 +865,7 @@ class WebGLRayTracePass {
     this._getViewProjInv(camera, tmp);
     return (
       !numberArraysEqual(this._viewProjInv, tmp) ||
-      camera.apertureRadius !== this._apertureRadius ||
+      cameraApertureRadius(camera) !== this._apertureRadius ||
       camera.focusDistance !== this._focusDistance
     );
   }

@@ -1,3 +1,4 @@
+import { cameraFocalLength, cameraApertureRadius } from '../../src/renderer/cameraLens';
 import { describe, expect, it, vi } from 'vitest';
 import Camera from '../../src/scene/Camera';
 import CameraViewControl from '../../src/util/CameraViewControl';
@@ -30,25 +31,25 @@ describe('Camera', () => {
 
   it('derives the lens radius from f-number, focal length and scene units', () => {
     const camera = new Camera({projection: 'perspective', fov: 45});
-    expect(camera.apertureRadius).toBe(0);
+    expect(cameraApertureRadius(camera)).toBe(0);
 
     // 24 mm sensor at a 45° vertical field of view: f ≈ 28.97 mm.
     const focalLength = 12 / Math.tan(Math.PI / 8);
-    expect(camera.focalLength).toBeCloseTo(focalLength);
+    expect(cameraFocalLength(camera)).toBeCloseTo(focalLength);
     camera.fStop = 2;
-    expect(camera.apertureRadius).toBeCloseTo(focalLength / 4 / 1000);
+    expect(cameraApertureRadius(camera)).toBeCloseTo(focalLength / 4 / 1000);
     camera.metersPerUnit = 0.01;
-    expect(camera.apertureRadius).toBeCloseTo(focalLength / 4 / 10);
+    expect(cameraApertureRadius(camera)).toBeCloseTo(focalLength / 4 / 10);
 
     // Zoom lengthens the focal length and so the aperture at the same f-number.
     camera.zoom = 2;
-    expect(camera.focalLength).toBeCloseTo(focalLength * 2);
+    expect(cameraFocalLength(camera)).toBeCloseTo(focalLength * 2);
 
     camera.metersPerUnit = 0;
-    expect(camera.apertureRadius).toBe(0);
+    expect(cameraApertureRadius(camera)).toBe(0);
     const ortho = new Camera({projection: 'orthographic'});
     ortho.fStop = 2;
-    expect(ortho.apertureRadius).toBe(0);
+    expect(cameraApertureRadius(ortho)).toBe(0);
   });
 });
 

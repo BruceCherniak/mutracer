@@ -101,11 +101,11 @@ camera.sensorHeight = 24;    // mm; with fov it sets the focal length
 camera.metersPerUnit = 1;    // scene unit length in metres (glTF: 1)
 ```
 
-The lens radius is `focalLength / (2 * fStop)`, where the focal length follows
-from `sensorHeight`, `fov` and `zoom`. `camera.focalLength` returns
-it in millimetres and `camera.apertureRadius` returns the lens radius
-in scene units. A narrower field of view or a lower f-number blurs more, as on a
-real camera.
+The focal length is `0.5 * sensorHeight * zoom / tan(fov / 2)` in millimetres
+(convert `fov` from degrees to radians). The aperture radius is
+`focalLength / (2 * fStop)` in millimetres, then divided by
+`1000 * metersPerUnit` to obtain scene units. A narrower field of view or a
+lower f-number blurs more, as on a real camera.
 
 `metersPerUnit` converts the lens size to scene units. When a scene is modelled
 in centimetres set it to `0.01`. For a miniature look, treat the scene as
