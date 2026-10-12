@@ -249,7 +249,7 @@ export function collectEmissiveTriangles(
           positions[vertex * geometry.position.itemSize + 1],
           positions[vertex * geometry.position.itemSize + 2]
         );
-        vec3.transformMat4(world[corner], local[corner], mesh.matrixWorld);
+        vec3.transformMat4(world[corner], local[corner], mesh.transform);
       }
       vec3.sub(edge0, world[1], world[0]);
       vec3.sub(edge1, world[2], world[0]);
@@ -324,8 +324,8 @@ export class EmissiveTriangleCache {
       if (!cached || cached.geometry !== geometry || cached.version !== geometry.version ||
         cached.indices.length !== materialIndices.length || materialIndices.some((index, i) =>
           cached!.indices[i] !== index || cached!.activity[i] !== isActive(index)) ||
-        mesh.matrixWorld.some((value: number, i: number) => !Object.is(value, cached!.matrix[i]))) {
-        cached = { geometry, version: geometry.version, matrix: Float64Array.from(mesh.matrixWorld),
+        mesh.transform.some((value: number, i: number) => !Object.is(value, cached!.matrix[i]))) {
+        cached = { geometry, version: geometry.version, matrix: Float64Array.from(mesh.transform),
           indices: materialIndices.slice(), activity: materialIndices.map(isActive),
           triangles: collectEmissiveTriangles([binding], materials) };
         this._bindings.set(mesh, cached);

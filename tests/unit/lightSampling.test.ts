@@ -83,7 +83,7 @@ describe('power-weighted light sampling', () => {
       2
     );
     const mesh = new Mesh(geometry, material);
-    mesh.matrixWorld[12] = 5;
+    mesh.transform[12] = 5;
     const triangles = collectEmissiveTriangles(
       [{ mesh, geometry: mesh.geometry, materialIndices: [0] }],
       [material]

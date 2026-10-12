@@ -6,7 +6,7 @@ export type Projection = 'perspective' | 'orthographic';
 
 /**
  * Perspective or orthographic camera. Position and orient it with
- * `matrixWorld` (camera-to-world), e.g. via `Camera.lookAt()`.
+ * `transform` (camera-to-world), e.g. via `Camera.lookAt()`.
  *
  * ```ts
  * const camera = new Camera('perspective', 45, width / height, 0.1, 100);
@@ -111,9 +111,9 @@ export default class Camera extends SceneNode {
     up?: Vec3
   ) {
     mat4.invert(
-      camera.matrixWorld,
+      camera.transform,
       mat4.lookAt(
-        camera.matrixWorld,
+        camera.transform,
         eye,
         center,
         up || vec3.fromValues(0, 1, 0)
@@ -138,7 +138,7 @@ export default class Camera extends SceneNode {
     target.top = source.top;
     target.bottom = source.bottom;
 
-    mat4.copy(target.matrixWorld, source.matrixWorld);
+    mat4.copy(target.transform, source.transform);
   }
 
   /**

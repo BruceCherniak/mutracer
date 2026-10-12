@@ -16,7 +16,7 @@ describe('analytic lights', () => {
 
   it('packs position, emission and type for the renderer', () => {
     const rect = new RectLight([2, 3], [0.5, 1, 0.25], 4);
-    mat4.translate(rect.matrixWorld, rect.matrixWorld, [1, 2, 3]);
+    mat4.translate(rect.transform, rect.transform, [1, 2, 3]);
     const directional = new DirectionalLight([4, 5, 6], [1, 1, 1], 2);
     const buffer = packLightsToBuffer([rect, directional], [-1, -1]);
 

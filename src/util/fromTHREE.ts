@@ -832,7 +832,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
               mesh = new Mesh(geometry, material);
               // Three.js matrices use doubles. Retain that precision before CPU
               // inverse transforms and bounds calculations, as one-shot conversion did.
-              mesh.matrixWorld = child.matrixWorld.elements.slice() as mat4.Mat4Array;
+              mesh.transform = child.matrixWorld.elements.slice() as mat4.Mat4Array;
               if (expand) instanceMeshes[instanceIndex] = mesh;
               else meshGroups.set(groupIndex, mesh);
             }
@@ -846,7 +846,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
               instanceWorld.multiplyMatrices(child.matrixWorld, instanceMatrix);
             }
             const matrix = expand ? instanceWorld.elements : child.matrixWorld.elements;
-            for (let i = 0; i < 16; i++) mesh.matrixWorld[i] = matrix[i];
+            for (let i = 0; i < 16; i++) mesh.transform[i] = matrix[i];
             meshes.push(mesh);
             options.onMeshConverted?.(mesh, child, group, groupIndex);
           }
@@ -877,7 +877,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
         child.intensity
       );
       worldMatrix.compose(worldPosition, worldRotation, child.scale.clone().set(1, 1, 1));
-      light.matrixWorld = worldMatrix.elements.slice() as mat4.Mat4Array;
+      light.transform = worldMatrix.elements.slice() as mat4.Mat4Array;
       lights.push(retainLight(store, child, light));
     } else if (isSpotLight(child)) {
       const worldPosition = child.getWorldPosition(child.position.clone());
@@ -1068,7 +1068,7 @@ export function fromTHREECamera(
       );
   threeCamera.updateWorldMatrix(true, false);
   camera.zoom = threeCamera.zoom;
-  camera.matrixWorld =
+  camera.transform =
     threeCamera.matrixWorld.elements.slice() as mat4.Mat4Array;
   const perspective = threeCamera as THREE.PerspectiveCamera;
   if (perspective.isPerspectiveCamera) {

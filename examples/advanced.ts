@@ -52,15 +52,15 @@ const meshes = gallery.map((props, index) => {
   const mesh = new Mesh(sphere, material(props));
   const x = (index % 3 - 1) * 1.15;
   const z = Math.floor(index / 3) * -1.15 + 0.5;
-  mat4.fromTranslation(mesh.matrixWorld, [x, 0.45, z]);
-  mat4.scale(mesh.matrixWorld, mesh.matrixWorld, [0.45, 0.45, 0.45]);
+  mat4.fromTranslation(mesh.transform, [x, 0.45, z]);
+  mat4.scale(mesh.transform, mesh.transform, [0.45, 0.45, 0.45]);
   return mesh;
 });
 
 // The shadow catcher is invisible but keeps the shadows, so the render can be
 // composited over any page or photo.
 const floor = new Mesh(createPlaneGeometry(), material({ shadowCatcher: true }));
-mat4.fromScaling(floor.matrixWorld, [8, 1, 8]);
+mat4.fromScaling(floor.transform, [8, 1, 8]);
 
 const scene: Scene = {
   meshes: [floor, ...meshes],

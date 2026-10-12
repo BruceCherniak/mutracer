@@ -34,7 +34,7 @@ export function mergeMeshesToGeometry(meshes: Mesh[]): InternalMergedMesh {
       addFlatGeometryIndices(geometry);
     }
 
-    geometry = transformGeometry(geometry, mesh.matrixWorld);
+    geometry = transformGeometry(geometry, mesh.transform);
 
     if (!geometry.normal) {
       computeGeometryNormals(geometry);

@@ -5,7 +5,7 @@
 ## Essentials
 
 - Install: `npm install @meimu/mutracer` (+ `three` for the Three.js helpers). ESM with TypeScript declarations; every option has TSDoc with its default.
-- Scene: a plain object `{ meshes: Mesh[], lights: SceneLight[], background? }`. `new Mesh(geometry, material)` is placed with `mesh.matrixWorld` (column-major mat4, gl-matrix compatible).
+- Scene: a plain object `{ meshes: Mesh[], lights: SceneLight[], background? }`. `new Mesh(geometry, material)` is placed with `mesh.transform` (column-major mat4, gl-matrix compatible).
 - Render loop: `const renderer = new Renderer({ canvas }); renderer.setSize(w, h);` then `renderer.render(scene, camera)` once per `requestAnimationFrame`. It accumulates up to `renderer.maxSamples` (default 2048) and returns a status.
 - Statuses: PREPARING (6), COMPILING_SHADER (1), RENDERING (2), DENOISING (3), FINISHED (4), ERROR (5). Keep rendering through preparation/compilation. Intermediate denoise batches stay RENDERING; DENOISING/FINISHED describe the final image. See [API](./docs/api.md).
 - Updates: edit the scene in place; membership, transforms, references, lights and background are detected. Call `material.markUpdated()` after parameter edits, `texture.markUpdated()` after pixel edits, `geometry.markVerticesUpdated()` after vertex-only edits, and `geometry.markUpdated()` after index or `materialIndex` edits. For per-frame deformation set `geometry.dynamic = true`.
@@ -46,7 +46,7 @@ Call `sync.dispose()` and `renderer.dispose()` when finished.
 
 - Material parameter and texture pixel edits need `markUpdated()`. Development builds warn once per material for missing parameter notifications (at most 200 checks per render); override with `validateUpdates`. See [updates](./docs/updates.md#checking-missing-material-notifications).
 - Use `geometry.markVerticesUpdated()`, not `markUpdated()`, for vertex animation; neither recomputes normals.
-- `createPlaneGeometry()` is 2×2 in XZ; `createSphereGeometry()` and `createCubeGeometry()` span -1..1. Scale with `matrixWorld`.
+- `createPlaneGeometry()` is 2×2 in XZ; `createSphereGeometry()` and `createCubeGeometry()` span -1..1. Scale with `transform`.
 - Rect lights are one-sided; rotate them to face the scene.
 - OIDN and HDR output require WebGPU; WebGL 2 denoises with JNLM only.
 - Call `renderer.setSize` with drawing-buffer pixels and update `camera.aspect` on resize.

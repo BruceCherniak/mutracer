@@ -332,7 +332,7 @@ describe('Three.js scene conversion', () => {
     const result = fromTHREEScene(scene);
     expect(result.meshes).toHaveLength(1);
     expect(result.meshes[0].name).toBe('Converted cube');
-    expect(Array.from(result.meshes[0].matrixWorld.slice(12, 15))).toEqual([1, 2, 3]);
+    expect(Array.from(result.meshes[0].transform.slice(12, 15))).toEqual([1, 2, 3]);
     expect(result.meshes[0].materials[0]).toMatchObject({
       specularRoughness: 0.35,
       baseMetalness: 0.7,
@@ -696,7 +696,7 @@ describe('Three.js scene conversion', () => {
         rect.height * Math.hypot(world[4], world[5], world[6])
       ]);
       expect(result.color).toEqual(rect.color.toArray()); expect(result.intensity).toBe(4);
-      const matrix = result.matrixWorld;
+      const matrix = result.transform;
       const x = new THREE.Vector3(matrix[0], matrix[1], matrix[2]);
       const y = new THREE.Vector3(matrix[4], matrix[5], matrix[6]);
       const doubleRoundoff = 64 * Number.EPSILON;
@@ -735,7 +735,7 @@ describe('Three.js scene conversion', () => {
       if (converted.type !== 'RectLight') return;
       expect(converted.size[0]).toBeCloseTo(width);
       expect(converted.size[1]).toBeCloseTo(height);
-      const convertedMatrix = converted.matrixWorld;
+      const convertedMatrix = converted.transform;
       expect(Math.hypot(convertedMatrix[0], convertedMatrix[1], convertedMatrix[2]))
         .toBeCloseTo(1);
       expect(Math.hypot(convertedMatrix[4], convertedMatrix[5], convertedMatrix[6]))
@@ -944,7 +944,7 @@ describe('Three.js scene conversion', () => {
 
     expect(second.meshes[0].geometry).toBe(firstGeometry);
     expect(getGeometryBvh(second.meshes[0].geometry)).toBe(getGeometryBvh(first.meshes[0].geometry));
-    expect(second.meshes[0].matrixWorld[12]).toBe(2);
+    expect(second.meshes[0].transform[12]).toBe(2);
   });
 
   it('uses triplanar displacement automatically for a UV-less mesh', () => {

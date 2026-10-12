@@ -179,7 +179,7 @@ export class SceneChangeDetector {
       if (prev?.geometry === mesh.geometry && prev.version !== mesh.geometry.version) geometries.add(mesh.geometry);
       if (prev?.mesh === mesh) {
         for (let k = 0; k < 16; k++) {
-          if (!Object.is(mesh.matrixWorld[k], old!.matrices[i * 16 + k])) {
+          if (!Object.is(mesh.transform[k], old!.matrices[i * 16 + k])) {
             transforms.push(mesh); break;
           }
         }
@@ -222,7 +222,7 @@ export class SceneChangeDetector {
         item.dynamic = mesh.geometry.dynamic; captureGeometryStorage(mesh.geometry, item.storage);
         item.materials.length = mesh.materials.length;
         for (let k = 0; k < mesh.materials.length; k++) item.materials[k] = mesh.materials[k];
-        next!.matrices.set(mesh.matrixWorld, i * 16);
+        next!.matrices.set(mesh.transform, i * 16);
       });
       for (const material of next.materials.keys()) if (!seen.has(material)) next.materials.delete(material);
       for (const material of seen) {

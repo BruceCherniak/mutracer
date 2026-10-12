@@ -6,7 +6,7 @@ import Texture from './Texture.js';
 /**
  * Rectangular area light. The rectangle lies on the local XY plane, centered
  * at the origin, and emits towards local -Z. Position and orient it with
- * `matrixWorld`.
+ * `transform`.
  */
 export default class RectLight extends SceneNode {
   /** Light discriminator; always `RectLight`. */

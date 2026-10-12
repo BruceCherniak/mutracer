@@ -166,7 +166,7 @@ describe('Renderer sizing', () => {
     markSceneStable(renderer, scene);
 
     (renderer as any)._forceMeshUpdate = false;
-    mesh.matrixWorld[12] = 2;
+    mesh.transform[12] = 2;
     renderer.render(scene, {} as Camera);
     renderer.render(scene, {} as Camera);
 

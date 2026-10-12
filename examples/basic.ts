@@ -29,14 +29,14 @@ const floor = new Mesh(
   createPlaneGeometry(),
   material({ baseColor: [0.55, 0.55, 0.55], specularRoughness: 0.6 })
 );
-mat4.fromScaling(floor.matrixWorld, [6, 1, 6]);
+mat4.fromScaling(floor.transform, [6, 1, 6]);
 
 // Unit spheres placed with a translation and scale.
 const sphere = createSphereGeometry(64, 32);
 function addSphere(x: number, props: Partial<OpenPBRMaterial>) {
   const mesh = new Mesh(sphere, material(props));
-  mat4.fromTranslation(mesh.matrixWorld, [x, 0.5, 0]);
-  mat4.scale(mesh.matrixWorld, mesh.matrixWorld, [0.5, 0.5, 0.5]);
+  mat4.fromTranslation(mesh.transform, [x, 0.5, 0]);
+  mat4.scale(mesh.transform, mesh.transform, [0.5, 0.5, 0.5]);
   return mesh;
 }
 const spheres = [
@@ -46,13 +46,13 @@ const spheres = [
 ];
 
 const cube = new Mesh(createCubeGeometry(), material({ baseColor: [0.2, 0.4, 0.8] }));
-mat4.fromTranslation(cube.matrixWorld, [-0.6, 0.3, -1.3]);
-mat4.scale(cube.matrixWorld, cube.matrixWorld, [0.3, 0.3, 0.3]);
+mat4.fromTranslation(cube.transform, [-0.6, 0.3, -1.3]);
+mat4.scale(cube.transform, cube.transform, [0.3, 0.3, 0.3]);
 
 // A rect light emits towards its local -Z; rotate it to face down.
 const light = new RectLight([1.5, 1.5], [1, 0.9, 0.8], 6);
-mat4.fromTranslation(light.matrixWorld, [-1.5, 3, 1.5]);
-mat4.rotateX(light.matrixWorld, light.matrixWorld, -Math.PI / 2);
+mat4.fromTranslation(light.transform, [-1.5, 3, 1.5]);
+mat4.rotateX(light.transform, light.transform, -Math.PI / 2);
 
 const scene: Scene = {
   meshes: [floor, ...spheres, cube],

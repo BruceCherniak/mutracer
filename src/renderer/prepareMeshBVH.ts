@@ -148,9 +148,9 @@ export function updateMeshInstanceTransforms(
     }: PreparedMeshInstanceBinding
   ) =>
     ({
-      bounds: computeBounds(geometry, mesh.matrixWorld, bvhBounds),
+      bounds: computeBounds(geometry, mesh.transform, bvhBounds),
       blasIndex,
-      transform: mesh.matrixWorld,
+      transform: mesh.transform,
       materialsIndices: materialIndices.map((idx) =>
         packMaterialIndexAndWeightToInt(idx, 1)
       ),
@@ -759,7 +759,7 @@ export function updateMeshInstances(meshes: Mesh[]) {
     .map((mesh) => {
       let { geometry, displacementScale } = prepareMeshGeometryBvh(mesh);
       const bvhBounds = getBvhBounds(geometry);
-      const bounds = computeBounds(geometry, mesh.matrixWorld, bvhBounds);
+      const bounds = computeBounds(geometry, mesh.transform, bvhBounds);
 
       let geoIdx = geometryIndexMap.get(geometry);
       if (
@@ -794,7 +794,7 @@ export function updateMeshInstances(meshes: Mesh[]) {
       const instance = {
         bounds,
         blasIndex: geoIdx!,
-        transform: mesh.matrixWorld,
+        transform: mesh.transform,
         materialsIndices: materialsIndices.map((idx) =>
           packMaterialIndexAndWeightToInt(idx, 1)
         ),
@@ -803,7 +803,7 @@ export function updateMeshInstances(meshes: Mesh[]) {
       if (
         !bounds.min.every(isFinite) ||
         !bounds.max.every(isFinite) ||
-        !mesh.matrixWorld.every(isFinite)
+        !mesh.transform.every(isFinite)
       ) {
         return undefined;
       }

@@ -24,6 +24,8 @@ function frame() {
 frame();
 ```
 
+MuTracer `transform` receives the Three.js `matrixWorld` (world transform), not its local `matrix`.
+
 ## Keeping scenes in sync
 
 `THREESceneSync` constructs its initial `scene` immediately. Each `update()`

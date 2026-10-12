@@ -48,7 +48,7 @@ it('packs material variants in 144-byte instances and retains material slots dur
   const material = new OpenPBRMaterial(), variant = new OpenPBRMaterial();
   variant.uvProjection = 'triplanar'; variant.displacementUvProjection = 'spherical';
   const geo = createCubeGeometry(), a = new Mesh(geo, material), b = new Mesh(geo, variant);
-  b.matrixWorld[12] = 2;
+  b.transform[12] = 2;
   const prepared = updateMeshInstances([a, b]);
   expect(prepared.materials).toEqual([material, variant]);
   expect(prepared.instanceBindings.map(binding => binding.materialIndices)).toEqual([[0], [1]]);

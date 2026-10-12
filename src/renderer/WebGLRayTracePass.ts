@@ -413,7 +413,7 @@ class WebGLRayTracePass {
         for (const mesh of update.transforms ?? []) {
           const item = this._snapshotByMesh.get(mesh);
           if (!item) continue;
-          for (let i = 0; i < 16; i++) item.matrix[i] = mesh.matrixWorld[i];
+          for (let i = 0; i < 16; i++) item.matrix[i] = mesh.transform[i];
           this._dirtyTransformMeshes.add(mesh); this._needsRefitTLAS = true;
         }
         return !!update.materials?.length || !!update.transforms?.length || !!update.geometries?.length;
@@ -427,7 +427,7 @@ class WebGLRayTracePass {
       materialVersions: mesh.materials.map(material => material.version),
       geometryVersion: mesh.geometry.version,
       positionArray: mesh.geometry.position.array, indexArray: mesh.geometry.indices.array,
-      matrix: Array.from(mesh.matrixWorld as ArrayLike<number>)
+      matrix: Array.from(mesh.transform as ArrayLike<number>)
     }));
     const membershipChanged = next.length !== this._meshSnapshot.length ||
       next.some((item, i) => item.mesh !== this._meshSnapshot[i]?.mesh ||
@@ -842,7 +842,7 @@ class WebGLRayTracePass {
 
   private _getViewProjInv(camera: Camera, viewProjInv: mat4.Mat4Array) {
     mat4.invert(viewProjInv, Camera.getProjectionMatrix(camera));
-    mat4.mul(viewProjInv, camera.matrixWorld, viewProjInv);
+    mat4.mul(viewProjInv, camera.transform, viewProjInv);
   }
 
   setCamera(camera: Camera) {
@@ -852,7 +852,7 @@ class WebGLRayTracePass {
     this._getViewProjInv(camera, viewProjectionInv);
     this._tracePasses.forEach((pass) => {
       pass.setUniform('viewProjectionInv', viewProjectionInv);
-      pass.setUniform('viewInv', camera.matrixWorld);
+      pass.setUniform('viewInv', camera.transform);
       // Zero for orthographic cameras, which have no depth of field.
       pass.setUniform('cameraApertureRadius', this._apertureRadius);
       pass.setUniform('cameraFocusDistance', camera.focusDistance);

@@ -44,7 +44,7 @@ A tuning checklist. Each item links to the page with the details.
 
 See [scene updates](./updates.md) for the cost of each kind of edit.
 
-- Edit `mesh.matrixWorld` in place: transform changes only refit instances.
+- Edit `mesh.transform` in place: transform changes only refit instances.
 - For vertex animation, keep the arrays, set `geometry.dynamic = true` and call
   `geometry.markVerticesUpdated()`, not `markUpdated()`.
 - Avoid [full mesh updates](./updates.md#full-mesh-updates) per frame:

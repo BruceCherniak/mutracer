@@ -24,7 +24,7 @@ describe('scene change detection', () => {
   it('is stable after commit, preserves uncommitted edits, and resets for a new pipeline', () => {
     const { scene, detector, mesh } = fixture();
     expect(detector.detect(scene)).toEqual({ meshes: 'none', transforms: [], geometries: [], materials: [], lights: false, background: false });
-    mesh.matrixWorld[12] = 3;
+    mesh.transform[12] = 3;
     const changes = detector.detect(scene);
     expect(changes.meshes).toBe('incremental');
     expect(changes.transforms).toEqual([mesh]);
@@ -64,7 +64,7 @@ describe('scene change detection', () => {
     scene.lights.push(spot, rect, env);
     expect(detector.detect(scene).lights).toBe(true); detector.commit();
     for (const edit of [() => { spot.intensity++; }, () => { spot.color[0] = 0.5; },
-      () => { rect.matrixWorld[12]++; }, () => { rect.texture!.markUpdated(); },
+      () => { rect.transform[12]++; }, () => { rect.texture!.markUpdated(); },
       () => { env.map.markUpdated(); }, () => { spot.iesProfile = {} as IESProfile; },
       () => { scene.lights = [...scene.lights]; }]) {
       edit(); expect(detector.detect(scene).lights).toBe(true); detector.commit();
@@ -101,18 +101,18 @@ it('reports projection edits through the material without changing mesh structur
 it('keeps reporting the latest uncommitted pose and material versions throughout animation', () => {
   const { scene, detector, mesh, material } = fixture();
   for (let frame = 1; frame <= 200; frame++) {
-    mesh.matrixWorld[12] = frame;
+    mesh.transform[12] = frame;
     material.markUpdated();
     const first = detector.detect(scene);
     expect(first.transforms).toEqual([mesh]); expect(first.materials).toEqual([material]);
-    mesh.matrixWorld[13] = frame * 2;
+    mesh.transform[13] = frame * 2;
     expect(detector.detect(scene)).toEqual(first);
     detector.commit();
     expect(detector.detect(scene).meshes).toBe('none');
   }
   scene.meshes.push(new Mesh(mesh.geometry, material));
   expect(detector.detect(scene).meshes).toBe('full'); detector.commit();
-  mesh.matrixWorld[14] = 7;
+  mesh.transform[14] = 7;
   expect(detector.detect(scene).transforms).toEqual([mesh]); detector.commit();
   expect(detector.detect(scene).meshes).toBe('none');
 });

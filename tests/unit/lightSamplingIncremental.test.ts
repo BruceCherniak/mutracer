@@ -72,12 +72,12 @@ it('matches the previous alias table bit for bit over seeded distributions', () 
 });
 it('retains world vertices for strength edits and recollects only the changed binding', () => {
   const materials = Array.from({length: 3}, (_, i) => Object.assign(new OpenPBRMaterial(), {emissionLuminance: i + 1}));
-  const bindings = materials.map((m, i) => { const mesh = new Mesh(createPlaneGeometry(), m); mesh.matrixWorld[12] = i * 3; return {mesh, geometry: mesh.geometry, materialIndices: [i]}; });
+  const bindings = materials.map((m, i) => { const mesh = new Mesh(createPlaneGeometry(), m); mesh.transform[12] = i * 3; return {mesh, geometry: mesh.geometry, materialIndices: [i]}; });
   const cache = new EmissiveTriangleCache();
   const first = cache.collect(bindings, materials).slice();
   for (let frame = 0; frame < 20; frame++) {
     materials[1].emissionLuminance += .17;
-    if (frame % 4 === 0) bindings[0].mesh.matrixWorld[13] += .1;
+    if (frame % 4 === 0) bindings[0].mesh.transform[13] += .1;
     if (frame % 7 === 0) { bindings[2].geometry.position.array[0] += .01; bindings[2].geometry.markUpdated(); }
     const expected = collectEmissiveTriangles(bindings, materials), actual = cache.collect(bindings, materials);
     expect(actual[2].p0).toBe(first[2].p0);

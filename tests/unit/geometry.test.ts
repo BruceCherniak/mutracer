@@ -65,8 +65,8 @@ describe('geometry utilities', () => {
   it('merges transformed mesh bounds in world space', () => {
     const left = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
     const right = new Mesh(createCubeGeometry(), new OpenPBRMaterial());
-    mat4.translate(left.matrixWorld, left.matrixWorld, [-3, 0, 0]);
-    mat4.translate(right.matrixWorld, right.matrixWorld, [2, 4, 0]);
+    mat4.translate(left.transform, left.transform, [-3, 0, 0]);
+    mat4.translate(right.transform, right.transform, [2, 4, 0]);
 
     const bounds = computeMeshesBoundingBox([left, right]);
     expect(Array.from(bounds.min)).toEqual([-4, -1, -1]);

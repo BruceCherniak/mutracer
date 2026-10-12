@@ -56,15 +56,15 @@ red.baseColor = [0.8, 0.1, 0.1];
 red.specularRoughness = 0.3;
 
 const ball = new Mesh(createSphereGeometry(64, 32), red);
-mat4.fromTranslation(ball.matrixWorld, [0, 1, 0]);
+mat4.fromTranslation(ball.transform, [0, 1, 0]);
 
 const floor = new Mesh(createPlaneGeometry(), new OpenPBRMaterial());
-mat4.fromScaling(floor.matrixWorld, [5, 1, 5]);
+mat4.fromScaling(floor.transform, [5, 1, 5]);
 
 // Rect lights emit along their local -Z axis.
 const light = new RectLight([2, 2], [1, 1, 1], 5);
-mat4.fromTranslation(light.matrixWorld, [0, 4, 0]);
-mat4.rotateX(light.matrixWorld, light.matrixWorld, -Math.PI / 2);
+mat4.fromTranslation(light.transform, [0, 4, 0]);
+mat4.rotateX(light.transform, light.transform, -Math.PI / 2);
 
 // A constant grey sky as a 1x1 float environment map.
 const sky = new Texture({ data: new Float32Array([0.3, 0.3, 0.3, 1]), width: 1, height: 1 });

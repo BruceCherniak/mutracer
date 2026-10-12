@@ -1762,7 +1762,7 @@ ${rayTraceCompute({
         for (const mesh of update.transforms ?? []) {
           const item = this._snapshotByMesh.get(mesh);
           if (!item) continue;
-          item.matrix = Array.from(mesh.matrixWorld);
+          item.matrix = Array.from(mesh.transform);
           this._dirtyTransformMeshes.add(mesh);
           this._needsRefitTLAS = true;
         }
@@ -1785,7 +1785,7 @@ ${rayTraceCompute({
       for (const mesh of transformOnlyMeshes) {
         const snapshot = this._snapshotByMesh.get(mesh);
         if (!snapshot) continue;
-        const matrix = mesh.matrixWorld;
+        const matrix = mesh.transform;
         if (
           snapshot.matrix.length === matrix.length &&
           snapshot.matrix.every((value, index) => value === matrix[index])
@@ -1815,7 +1815,7 @@ ${rayTraceCompute({
       indexItemSize: mesh.geometry.indices.itemSize,
       materialIndexArray: mesh.geometry.materialIndex?.array,
       materialIndexItemSize: mesh.geometry.materialIndex?.itemSize,
-      matrix: Array.from(mesh.matrixWorld as ArrayLike<number>)
+      matrix: Array.from(mesh.transform as ArrayLike<number>)
     }));
     const membershipChanged = nextSnapshot.length !== previousSnapshot.length ||
       nextSnapshot.some((item, i) => item.mesh !== previousSnapshot[i]?.mesh ||
@@ -2725,7 +2725,7 @@ ${rayTraceCompute({
 
   private _updateViewProjInv(camera: Camera, viewProjInv: mat4.Mat4Array) {
     mat4.invert(viewProjInv, Camera.getProjectionMatrix(camera));
-    mat4.mul(viewProjInv, camera.matrixWorld, viewProjInv);
+    mat4.mul(viewProjInv, camera.transform, viewProjInv);
   }
 
   // TODO reuse the code of RayTraceNode
@@ -2734,7 +2734,7 @@ ${rayTraceCompute({
     this._apertureRadius = Camera.getApertureRadius(camera);
     this._focusDistance = camera.focusDistance;
     this._updateViewProjInv(camera, viewProjectionInvMat);
-    mat4.copy(this._cameraWorld, camera.matrixWorld);
+    mat4.copy(this._cameraWorld, camera.transform);
   }
 
   cameraChanged(camera: Camera) {

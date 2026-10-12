@@ -37,11 +37,11 @@ describe('THREESceneSync', () => {
   it('updates only the existing matrix when rotating a mesh', () => {
     const { sync, mesh } = fixture();
     const converted = sync.scene.meshes[0];
-    const matrix = converted.matrixWorld, geometry = converted.geometry;
+    const matrix = converted.transform, geometry = converted.geometry;
     const before = [...matrix];
     mesh.rotation.y = 0.5;
     sync.update();
-    expect(converted.matrixWorld).toBe(matrix);
+    expect(converted.transform).toBe(matrix);
     expect(matrix).not.toEqual(before); expect(converted.geometry).toBe(geometry);
     sync.update();
   });
@@ -245,7 +245,7 @@ describe('THREESceneSync', () => {
       sync.update();
       expect(sync.scene.meshes).toEqual([convertedMesh]); expect(sync.scene.lights).toEqual([convertedLight]);
       expect(sync.scene.meshes[0]).toBe(convertedMesh); expect(sync.scene.lights[0]).toBe(convertedLight);
-      expect(convertedMesh.matrixWorld[12]).toBe(mesh.position.x);
+      expect(convertedMesh.transform[12]).toBe(mesh.position.x);
       expect(convertedLight.type === 'SphereLight' && convertedLight.intensity).toBe(light.intensity);
       expect(convertedSources).toEqual([mesh]);
       sync.update();
@@ -343,12 +343,12 @@ it('respects explicit material projections and prunes superseded automatic varia
 
 it('retains Three.js matrix precision before CPU inverse transforms', () => {
   const { mesh, sync } = fixture();
-  const matrix = sync.scene.meshes[0].matrixWorld;
+  const matrix = sync.scene.meshes[0].transform;
   mesh.position.set(0.123456789123, 0.234567891234, 0.345678912345);
   mesh.rotation.set(0.123456789123, 0.234567891234, 0.345678912345);
   mesh.scale.set(0.123456789123, 0.234567891234, 0.345678912345);
   sync.update();
-  expect(sync.scene.meshes[0].matrixWorld).toBe(matrix);
+  expect(sync.scene.meshes[0].transform).toBe(matrix);
   expect(Array.from(matrix)).toEqual(mesh.matrixWorld.elements);
   expect(matrix[12]).not.toBe(Math.fround(mesh.matrixWorld.elements[12]));
 });

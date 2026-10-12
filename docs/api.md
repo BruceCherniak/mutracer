@@ -163,7 +163,7 @@ Public spatial values use `Vec2` (`[number, number] | Float32Array`), `Vec3` (`[
 | Export | Description |
 | --- | --- |
 | `Scene` | `{ meshes, lights, background? }`; see below |
-| `Mesh` | `new Mesh(geometry, material \| material[])`, `matrixWorld` |
+| `Mesh` | `new Mesh(geometry, material \| material[])`, `transform` |
 | `Geometry`, `GeometryAttribute` | Triangle data: required `position`; optional `normal` and `indices` are generated at construction; `vertexCount` / `triangleCount` getters; optional `uv`, `uv1`, `tangent`, `color`, `materialIndex` (raw per-vertex indices, itemSize 1; all three corners of each triangle must match; invalid indices fall back to material 0 with one warning); `dynamic` (default `false`) for [deforming geometry](./updates.md#dynamic-geometry) |
 | `OpenPBRMaterial` | See [materials](./materials.md) |
 | `Texture` | Image, canvas or `{ data, width, height }`; 8-bit is sRGB, float is linear |

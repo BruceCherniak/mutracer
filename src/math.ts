@@ -22,6 +22,8 @@ export const mat4: any = {
   fromRotationTranslation: glMat4.fromRotationTranslation,
   invert: glMat4.invert,
   lookAt: glMat4.lookAt,
+  targetTo: glMat4.targetTo,
+  getScaling: glMat4.getScaling,
   mul: glMat4.mul,
   multiply: glMat4.multiply,
   ortho: glMat4.ortho,

@@ -90,12 +90,12 @@ export function getRectLightUOrV(light: RectLight, uOrV: 0 | 1) {
     return vec3.transformMat3(
       ret,
       ret,
-      mat3.fromMat4([] as any as mat3.Mat3Array, light.matrixWorld)
+      mat3.fromMat4([] as any as mat3.Mat3Array, light.transform)
     );
 }
 
 export function getRectLightPosition(light: RectLight) {
-    const m = light.matrixWorld;
+    const m = light.transform;
     return vec3.fromValues(m[12], m[13], m[14]);
 }
 

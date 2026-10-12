@@ -18,7 +18,7 @@ export function computeMeshesBoundingBox(meshes: Mesh[]): { min: Vec3; max: Vec3
     transformBoundingBox(
       worldBoundingBox,
       mesh.geometry.boundingBox,
-      mesh.matrixWorld
+      mesh.transform
     );
     vec3.min(totalBoundingBox.min, totalBoundingBox.min, worldBoundingBox.min);
     vec3.max(totalBoundingBox.max, totalBoundingBox.max, worldBoundingBox.max);

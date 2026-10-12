@@ -13,7 +13,7 @@ interface Scene {
 ```
 
 - `Mesh(geometry, material)` places a `Geometry` in the world with
-  `mesh.matrixWorld` (a column-major `mat4`, compatible with `gl-matrix`).
+  `mesh.transform` (a column-major `mat4`, compatible with `gl-matrix`).
 - `Geometry` holds indexed or non-indexed triangle attributes. Use the helpers
   `createPlaneGeometry`, `createCubeGeometry`, `createSphereGeometry` or build
   one from arrays (see below).
@@ -74,6 +74,8 @@ For several materials on one geometry, pass an array of materials to `Mesh`
 and set `geometry.materialIndex` to an `Int32Array` attribute with `itemSize: 1` and one raw index
 into `mesh.materials` per vertex.
 
+Place nodes by assigning `node.position = [x, y, z]` and calling `node.lookAt(target, up?)`. `position` reads a copy; assign it back to move the node.
+
 ## Cameras
 
 ```ts
@@ -110,7 +112,7 @@ cameras have no depth of field.
 
 | Class | Constructor | Notes |
 | --- | --- | --- |
-| `RectLight` | `(size, color, intensity)` | One-sided, emits along local -Z of `matrixWorld` |
+| `RectLight` | `(size, color, intensity)` | One-sided, emits along local -Z of `transform` |
 | `SphereLight` | `(position, color, intensity, radius)` | `radius = 0` is a point light |
 | `SpotLight` | `(position, direction, color, intensity, radius, innerAngle, outerAngle, range, iesProfile?, iesRotation?)` | Angles in degrees; `parseIESProfile(text)` for IES files |
 | `DirectionalLight` | `(position, color, intensity)` | Direction from `position` towards the origin |

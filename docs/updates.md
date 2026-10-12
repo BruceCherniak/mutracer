@@ -13,7 +13,7 @@ image.
 | --- | --- |
 | Camera or renderer option changed | Nothing; checked on each render |
 | Meshes added, removed or reordered | Nothing; edit `scene.meshes` in place or replace the array |
-| `mesh.matrixWorld` elements edited | Nothing |
+| `mesh.transform` elements edited | Nothing |
 | `mesh.geometry` or a mesh material replaced | Nothing |
 | Lights added, removed or their parameters edited | Nothing |
 | Background assigned, or its color or grounded-skybox fields edited | Nothing |
@@ -25,7 +25,7 @@ image.
 | `bvhBuilder`, `bvhLayout` or `bvhSpatialSplits` changed | Affects future builds; `await renderer.prepareScene(scene, { rebuild: true })` replaces existing BLASes ([BVH](./bvh.md#rebuild-after-changing-builder-settings)) |
 
 ```ts
-mesh.matrixWorld[12] += 0.1;           // detected automatically
+mesh.transform[12] += 0.1;           // detected automatically
 material.specularRoughness = 0.6;
 material.markUpdated();
 renderer.render(scene, camera);
@@ -50,7 +50,7 @@ a material's first inspection have no baseline to compare.
 
 ## Transforms
 
-Edit `mesh.matrixWorld` in place while retaining the mesh objects and the
+Edit `mesh.transform` in place while retaining the mesh objects and the
 `scene.meshes` array. Both WebGPU and WebGL 2 refit the top-level BVH over the
 changed instances and upload only the affected ranges.
 

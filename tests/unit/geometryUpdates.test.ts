@@ -33,7 +33,7 @@ it('rebuilds dynamic BLASes after total node area exceeds the construction basel
 });
 it('updates shared geometry regions and every instance bound without merging untouched geometry', () => {
   const g = createCubeGeometry(), other = createCubeGeometry(), m = new OpenPBRMaterial();
-  const a = new Mesh(g,m), b = new Mesh(g,m), c = new Mesh(other,m); b.matrixWorld[12] = 5;
+  const a = new Mesh(g,m), b = new Mesh(g,m), c = new Mesh(other,m); b.transform[12] = 5;
   const prepared = updateMeshInstances([a,b,c]);
   const merged = prepared.geometry, old = merged.position.array.slice();
   g.position.array[0] += .1; g.normal.array[0] = .25; g.uv!.array[0] = .3; g.markUpdated();

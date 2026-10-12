@@ -412,7 +412,7 @@ class CameraViewControl {
 
     if (this.camera) {
       mat4.fromRotationTranslation(
-        this.camera.matrixWorld,
+        this.camera.transform,
         this._rot,
         this._pos
       );
@@ -457,7 +457,7 @@ class CameraViewControl {
 
     if (this.camera) {
       mat4.fromRotationTranslation(
-        this.camera.matrixWorld,
+        this.camera.transform,
         this._rot,
         this._pos
       );
@@ -548,7 +548,7 @@ class CameraViewControl {
     if (!target) {
       return;
     }
-    const matrixWorld = target.matrixWorld;
+    const matrixWorld = target.transform;
     const yAxis = [
       matrixWorld[4],
       matrixWorld[5],
@@ -618,7 +618,7 @@ class CameraViewControl {
       return;
     }
 
-    const m4 = this.camera.matrixWorld;
+    const m4 = this.camera.transform;
     const m3 = mat3.create();
     mat3.fromMat4(m3, m4);
     quat.fromMat3(this._rot, m3);
