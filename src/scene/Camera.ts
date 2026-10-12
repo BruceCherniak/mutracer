@@ -1,3 +1,4 @@
+import type { Mat4, Vec3 } from '../types.js';
 import { mat4, vec3 } from '../math.js';
 import SceneNode from './SceneNode.js';
 
@@ -105,9 +106,9 @@ export default class Camera extends SceneNode {
   /** Places the camera at `eye` looking at `center`. */
   static lookAt(
     camera: Camera,
-    eye: vec3.Vec3Array,
-    center: vec3.Vec3Array,
-    up?: vec3.Vec3Array
+    eye: Vec3,
+    center: Vec3,
+    up?: Vec3
   ) {
     mat4.invert(
       camera.matrixWorld,
@@ -168,13 +169,13 @@ export default class Camera extends SceneNode {
   }
 
   /** Returns a new column-major projection matrix including zoom. */
-  static getProjectionMatrix(camera: Camera) {
+  static getProjectionMatrix(camera: Camera): Mat4 {
     if (camera.projection === 'perspective') {
       const fov = (camera.fov * Math.PI) / 180;
       const effectiveFov =
         2 * Math.atan(Math.tan(fov / 2) / Math.max(camera.zoom, Number.EPSILON));
       return mat4.perspective(
-        [] as any as mat4.Mat4Array,
+        [] as any as Mat4,
         effectiveFov,
         camera.aspect,
         camera.near,
@@ -182,7 +183,7 @@ export default class Camera extends SceneNode {
       );
     }
     return mat4.ortho(
-      [] as any as mat4.Mat4Array,
+      [] as any as Mat4,
       (camera.left + camera.right) / 2 -
         (camera.right - camera.left) / (2 * camera.zoom),
       (camera.left + camera.right) / 2 +

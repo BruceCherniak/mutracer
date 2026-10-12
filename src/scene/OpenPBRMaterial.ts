@@ -1,4 +1,4 @@
-import { vec2 } from '../math.js';
+import type { Vec2 } from '../types.js';
 import { ColorRGB } from '../types.js';
 import Texture from './Texture.js';
 
@@ -151,7 +151,7 @@ export default class OpenPBRMaterial {
   /** Tangent-space normal map. */
   normalMap?: Texture;
   /** Normal map strength per axis. Default `[1, 1]`. */
-  normalScale: vec2.Vec2Array = [1, 1];
+  normalScale: Vec2 = [1, 1];
   /** glTF-compatible B=metalness, G=specular roughness texture. */
   metallicRoughnessMap?: Texture;
   /** Standalone roughness texture sampled from its green channel. */
@@ -178,7 +178,7 @@ export default class OpenPBRMaterial {
   /** Procedural UV projection for textures without (good) UVs. Default `none`. */
   uvProjection: UVProjection = 'none';
   /** UV scale used with `uvProjection`. Default `[1, 1]`. */
-  uvScale: vec2.Vec2Array = [1, 1];
+  uvScale: Vec2 = [1, 1];
 
   // Displacement
   /** Height texture (red channel) for displacement. */

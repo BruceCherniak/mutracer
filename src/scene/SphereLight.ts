@@ -1,4 +1,4 @@
-import { vec3 } from '../math.js';
+import type { Vec3 } from '../types.js';
 import { ColorRGB } from '../types.js';
 
 /** Spherical area light. */
@@ -7,7 +7,7 @@ export default class SphereLight {
   readonly type = 'SphereLight' as const;
 
   /** World-space center. */
-  position: vec3.Vec3Array;
+  position: Vec3;
   /** Linear RGB color. Default `[1, 1, 1]`. */
   color: ColorRGB;
   /** Emitted radiance is `color * intensity`. Default `1`. */
@@ -16,7 +16,7 @@ export default class SphereLight {
   radius: number;
 
   constructor(
-    position: vec3.Vec3Array,
+    position: Vec3,
     color?: ColorRGB,
     intensity?: number,
     radius?: number

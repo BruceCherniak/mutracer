@@ -71,3 +71,5 @@ Call `sync.dispose()` and `renderer.dispose()` when finished.
 - Geometry: `new Geometry({ position })` generates sequential indices and normals; inspect `vertexCount` / `triangleCount`. See [getting started](./docs/getting-started.md).
 
 - Internal resources: geometry BVHs and light/material packing are private; use `prepareScene(scene, { rebuild: true })` for explicit BVH rebuilding. See [BVH](./docs/bvh.md).
+
+- Spatial types: import `Vec2`, `Vec3` and `Mat4` from the main entry; matrices use 16 column-major elements. See [API](./docs/api.md).

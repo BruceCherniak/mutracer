@@ -1,3 +1,4 @@
+import type { Vec2, Vec3 } from '../types.js';
 import { mat3, mat4, quat, vec2, vec3 } from '../math.js';
 import type Mesh from '../scene/Mesh.js';
 import Camera from '../scene/Camera.js';
@@ -27,7 +28,7 @@ interface OrbitControlOpts {
   orthographicSize: number;
   alpha: number;
   beta: number;
-  center: vec3.Vec3Array;
+  center: Vec3;
 
   /**
    * Minimum distance to the center
@@ -323,7 +324,7 @@ class CameraViewControl {
    * Get control center
    * @return {Array.<number>}
    */
-  getCenter() {
+  getCenter(): Vec3 {
     return this._center.slice();
   }
 
@@ -353,7 +354,7 @@ class CameraViewControl {
    * Set control center
    * @param {Array.<number>} center
    */
-  setCenter(centerArr: vec3.Vec3Array) {
+  setCenter(centerArr: Vec3) {
     vec3.copy(this._center, centerArr);
   }
 
@@ -469,7 +470,7 @@ class CameraViewControl {
     this.fitToBoundingBox(computeMeshesBoundingBox(meshes));
   }
 
-  fitToBoundingBox(bbox: { min: vec3.Vec3Array; max: vec3.Vec3Array }) {
+  fitToBoundingBox(bbox: { min: Vec3; max: Vec3 }) {
     const camera = this.camera;
     if (!camera) {
       return;
@@ -486,7 +487,7 @@ class CameraViewControl {
     this._innerZoomScale = Math.sqrt(maxSize) / 5;
 
     const center = vec3.lerp(
-      [] as any as vec3.Vec3Array,
+      [] as any as Vec3,
       bbox.min,
       bbox.max,
       0.5
@@ -552,12 +553,12 @@ class CameraViewControl {
       matrixWorld[4],
       matrixWorld[5],
       matrixWorld[6]
-    ] as vec3.Vec3Array;
+    ] as Vec3;
     const xAxis = [
       matrixWorld[0],
       matrixWorld[1],
       matrixWorld[2]
-    ] as vec3.Vec3Array;
+    ] as Vec3;
     const center = this._center;
     // PENDING
     vec3.scaleAndAdd(center, center, xAxis, (-velocity[0] * len) / 200);
@@ -602,7 +603,7 @@ class CameraViewControl {
     }
   }
 
-  private _vectorDamping(v: vec2.Vec2Array, damping: number) {
+  private _vectorDamping(v: Vec2, damping: number) {
     let speed = vec2.len(v);
     speed = speed * damping;
     if (speed < 1e-4) {

@@ -1,9 +1,10 @@
+import type { Vec3 } from '../types.js';
 import { vec3 } from '../math.js';
 import type Mesh from '../scene/Mesh.js';
 import { transformBoundingBox } from './math.js';
 
 /** World-space axis-aligned bounding box `{ min, max }` of the meshes. */
-export function computeMeshesBoundingBox(meshes: Mesh[]) {
+export function computeMeshesBoundingBox(meshes: Mesh[]): { min: Vec3; max: Vec3 } {
   const totalBoundingBox = {
     min: vec3.fromValues(Infinity, Infinity, Infinity),
     max: vec3.fromValues(-Infinity, -Infinity, -Infinity)

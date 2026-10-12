@@ -1,15 +1,16 @@
+import type { Mat4 } from '../types.js';
 import { mat4 } from '../math.js';
 import SceneNode from './SceneNode.js';
 
 export default class HierarchyNode {
   // Matrix will be set from outside
-  matrix = mat4.create();
-  matrixWorld = mat4.create();
+  matrix: Mat4 = mat4.create();
+  matrixWorld: Mat4 = mat4.create();
   sceneNodes?: SceneNode[];
   children: HierarchyNode[] = [];
 
-  updateMatrixWorld(parentMatrixWorld?: mat4.Mat4Array) {
-    const matrixWorld = this.matrixWorld;
+  updateMatrixWorld(parentMatrixWorld?: Mat4) {
+    const matrixWorld: Mat4 = this.matrixWorld;
     const sceneNode = this.sceneNodes;
     if (!parentMatrixWorld) {
       mat4.copy(matrixWorld, this.matrix);

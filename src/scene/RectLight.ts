@@ -1,4 +1,4 @@
-import type { vec2 } from '../math.js';
+import type { Vec2 } from '../types.js';
 import { ColorRGB } from '../types.js';
 import SceneNode from './SceneNode.js';
 import Texture from './Texture.js';
@@ -13,7 +13,7 @@ export default class RectLight extends SceneNode {
   readonly type = 'RectLight' as const;
 
   /** Width and height in local units. Default `[1, 1]`. */
-  size: vec2.Vec2Array;
+  size: Vec2;
   /** Linear RGB color. Default `[1, 1, 1]`. */
   color: ColorRGB;
   /** Emitted radiance is `color * intensity`. Default `1`. */
@@ -28,7 +28,7 @@ export default class RectLight extends SceneNode {
    */
   spread = 1;
 
-  constructor(size?: vec2.Vec2Array, color?: ColorRGB, intensity?: number) {
+  constructor(size?: Vec2, color?: ColorRGB, intensity?: number) {
     super();
 
     this.size = size || [1, 1];

@@ -1,3 +1,4 @@
+import type { Vec3 } from '../types.js';
 import { generateVertexNormals } from '../util/geometry.js';
 import { vec3 } from '../math.js';
 
@@ -90,7 +91,7 @@ export default class Geometry {
   materialIndex?: Attribute<Int32Array>;
 
   /** Local-space bounds in scene units; initial min/max are `[0, 0, 0]`. */
-  boundingBox = {
+  boundingBox: { min: Vec3; max: Vec3 } = {
     min: vec3.create(),
     max: vec3.create()
   };

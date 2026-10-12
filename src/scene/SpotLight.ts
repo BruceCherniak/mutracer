@@ -1,4 +1,4 @@
-import { vec3 } from '../math.js';
+import type { Vec3 } from '../types.js';
 import { ColorRGB } from '../types.js';
 import IESProfile from './IESProfile.js';
 
@@ -11,9 +11,9 @@ export default class SpotLight {
   /** Light discriminator; always `SpotLight`. */
   readonly type = 'SpotLight' as const;
   /** World-space position. */
-  position: vec3.Vec3Array;
+  position: Vec3;
   /** Normalized world-space direction of the cone axis. */
-  direction: vec3.Vec3Array;
+  direction: Vec3;
   /** Linear RGB color. Default `[1, 1, 1]`. */
   color: ColorRGB;
   /** Intensity along the axis in candela (lm/sr), multiplied by `color`. Default `1`. */
@@ -32,8 +32,8 @@ export default class SpotLight {
   iesRotation: number;
 
   constructor(
-    position: vec3.Vec3Array,
-    direction: vec3.Vec3Array,
+    position: Vec3,
+    direction: Vec3,
     color: ColorRGB = [1, 1, 1],
     intensity = 1,
     radius = 0.01,

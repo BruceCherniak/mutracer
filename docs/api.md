@@ -201,3 +201,5 @@ Rendering failures return `RENDER_STATUS_ERROR` without throwing. `renderer.last
 While-converging intermediate denoise batches report `RENDER_STATUS_RENDERING`. Only denoising the final image at `maxSamples` reports `RENDER_STATUS_DENOISING`; `RENDER_STATUS_FINISHED` means that final image is ready.
 
 BVH caches, light packing helpers and material-weight packing are renderer internals. `CameraViewControl` initializes itself at construction. Texture upload notifications use `markUpdated()` and `version`.
+
+Public spatial values use `Vec2` (`[number, number] | Float32Array`), `Vec3` (`[number, number, number] | Float32Array`) and `Mat4` (`Float32Array | number[]`, column-major, 16 elements), exported from the main entry.
