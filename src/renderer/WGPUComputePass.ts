@@ -50,6 +50,9 @@ export class WGPUComputePass<I extends string, O extends string> {
   private _uniformsMap: Record<string, Uniform> = {};
   private _uniformBuffers: Record<string, GPUBuffer> = {};
 
+  private _capacityWidth = 0;
+  private _capacityHeight = 0;
+  private _reserveCapacity = false;
   private _width = 10;
   private _height = 10;
 
@@ -113,14 +116,19 @@ export class WGPUComputePass<I extends string, O extends string> {
     this._needsUpdatePipeline = true;
   }
 
+  reserveCapacity() { this._reserveCapacity = true; this._capacityWidth = this._width; this._capacityHeight = this._height; }
   setSize(width: number, height: number) {
-    width = Math.ceil(width);
-    height = Math.ceil(height);
+    width = Math.max(1, Math.ceil(width));
+    height = Math.max(1, Math.ceil(height));
     const sizeChanged = width !== this._width || height !== this._height;
     this._width = width;
     this._height = height;
     if (sizeChanged) {
       this._needsUpdatePipeline = true;
+      const nextWidth = Math.max(this._capacityWidth, width), nextHeight = Math.max(this._capacityHeight, height);
+      const capacityChanged = nextWidth !== this._capacityWidth || nextHeight !== this._capacityHeight;
+      this._capacityWidth = nextWidth; this._capacityHeight = nextHeight;
+      if (this._reserveCapacity && !capacityChanged) return;
       // Invalidate all buffers
       for (const key in this._outputBuffers) {
         this._outputBuffers[key].destroy();
@@ -130,8 +138,8 @@ export class WGPUComputePass<I extends string, O extends string> {
   }
 
   setExecuteSize(width: number, height: number) {
-    width = Math.ceil(width);
-    height = Math.ceil(height);
+    width = Math.max(1, Math.ceil(width));
+    height = Math.max(1, Math.ceil(height));
     this._execWidth = width;
     this._execHeight = height;
   }
@@ -193,7 +201,7 @@ export class WGPUComputePass<I extends string, O extends string> {
   private _createBuffer(label: string, params: WGPUComputePassOutput) {
     const channels = params.channels ?? 4;
     const byteLength =
-      this._width * this._height * channels * (params.count ?? 1) * 4;
+      (this._reserveCapacity ? this._capacityWidth * this._capacityHeight : this._width * this._height) * channels * (params.count ?? 1) * 4;
     return this._device.createBuffer({
       label: this._label + '.' + label,
       // webgpu needs buffer at least 80 bytes.

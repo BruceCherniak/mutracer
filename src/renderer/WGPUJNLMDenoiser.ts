@@ -350,8 +350,10 @@ export class WGPUJNLMDenoisePass {
     return this._filterPipeline;
   }
 
+  reserveCapacity() {}
   private _ensureBuffers(width: number, height: number) {
-    if (width === this._width && height === this._height && this._colors.length) return;
+    if (width <= this._width && height <= this._height && this._colors.length) return;
+    width = Math.max(width, this._width); height = Math.max(height, this._height);
     this._destroyBuffers();
     const pixels = width * height;
     const createBuffer = (label: string, bytes: number) =>

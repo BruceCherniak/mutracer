@@ -3,7 +3,7 @@ import { textureBytes } from './gpuMemory.js';
 import shadowCatcherAccumulationWGSL from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
 import { fullScreenQuadVertexShaderWGSL } from './WGPUFullQuadPass.js';
 
-export function createNormalizeRayTraceOutputWGSL(layers = false) {
+export function createNormalizeRayTraceOutputWGSL(layers = false, catcher = true) {
   return /* wgsl */ `
 @group(0) @binding(0) var<storage, read> colorBuffer: array<vec4f>;
 @group(0) @binding(1) var<storage, read> normalBuffer: array<vec4f>;
@@ -21,8 +21,7 @@ struct FSOutput {
   ${layers ? `@location(0) foreground: vec4f,
   @location(1) catcherBackground: vec4f` : `@location(0) color: vec4f,
   @location(1) normal: vec4f,
-  @location(2) albedo: vec4f,
-  @location(3) shadowCatcher: vec4f`}
+  @location(2) albedo: vec4f${catcher ? ',\n  @location(3) shadowCatcher: vec4f' : ''}`}
 }
 @fragment
 fn main(@builtin(position) coord: vec4f) -> FSOutput {
@@ -50,7 +49,7 @@ fn main(@builtin(position) coord: vec4f) -> FSOutput {
     output.catcherBackground = vec4f(0.0);` : `output.color = vec4f(0.0);
     output.normal = vec4f(0.0);
     output.albedo = vec4f(0.0);
-    output.shadowCatcher = vec4f(0.0);`}
+    ${catcher ? 'output.shadowCatcher = vec4f(0.0);' : ''}`}
     return output;
   }
   let color = colorBuffer[idx];
@@ -84,7 +83,7 @@ fn main(@builtin(position) coord: vec4f) -> FSOutput {
     output.normal = vec4f(normal.rgb / total * 0.5 + 0.5, 1.0);
   }
   output.albedo = vec4f(albedo.rgb / total, clamp(hit / total, 0.0, 1.0));
-  output.shadowCatcher = shadowCatcherBuffer[idx].mask / total;
+  ${catcher ? 'output.shadowCatcher = shadowCatcherBuffer[idx].mask / total;' : ''}
   `}
   return output;
 }
@@ -119,9 +118,10 @@ export class WGPURayTraceOutputPass {
   private _width = 1;
   private _height = 1;
 
+  private _hasCatcher = false;
   private _needsUpdatePipeline = true;
 
-  constructor(device: GPUDevice) {
+  constructor(device: GPUDevice, private readonly zeroTexture?: GPUTexture) {
     this._device = device;
     this._uniformsBuffers = {
       sampleCount: device.createBuffer({
@@ -150,7 +150,7 @@ export class WGPURayTraceOutputPass {
 
   getOutput(label: RayTraceOutput): GPUTexture {
 
-    return this[`_${label}Texture`];
+    return this[`_${label}Texture`] ?? this.zeroTexture!;
   }
 
   private _createTextures() {
@@ -184,6 +184,7 @@ export class WGPURayTraceOutputPass {
       ...textureDescriptor,
       label: 'Ray Trace Albedo'
     });
+    if (this._hasCatcher) {
     this._foregroundTexture = device.createTexture({
       ...textureDescriptor,
       label: 'Ray Trace Foreground',
@@ -199,6 +200,9 @@ export class WGPURayTraceOutputPass {
       label: 'Ray Trace Shadow Catcher',
       format: 'rgba16float'
     });
+    } else {
+      this._foregroundTexture = this._catcherBackgroundTexture = this._shadowCatcherTexture = undefined!;
+    }
   }
 
   private _updateBindGroups() {
@@ -240,7 +244,7 @@ export class WGPURayTraceOutputPass {
       },
       fragment: {
         module: getTargetShaderCache(device).createShaderModule({
-          code: createNormalizeRayTraceOutputWGSL()
+          code: createNormalizeRayTraceOutputWGSL(false, this._hasCatcher)
         }),
         entryPoint: 'main',
         targets: [
@@ -253,9 +257,7 @@ export class WGPURayTraceOutputPass {
           {
             format: 'rgba8unorm'
           },
-          {
-            format: 'rgba16float'
-          }
+          ...(this._hasCatcher ? [{format: 'rgba16float' as const}] : [])
         ],
         constants: {
           outputWidth: this._width,
@@ -264,7 +266,7 @@ export class WGPURayTraceOutputPass {
       }
     });
 
-    this._layersPipeline = getTargetShaderCache(device).createRenderPipeline({
+    if (this._hasCatcher) this._layersPipeline = getTargetShaderCache(device).createRenderPipeline({
       label: 'rayTraceLayers',
       layout: 'auto',
       vertex: {
@@ -315,6 +317,9 @@ export class WGPURayTraceOutputPass {
     inputBuffers: RayTraceBuffers,
     separateCatcher = false
   ) {
+    if (this._hasCatcher !== separateCatcher) {
+      this._hasCatcher = separateCatcher; this._createTextures(); this._needsUpdatePipeline = true;
+    }
     this._updatePipeline();
     this._createOutputPass(encoder, inputBuffers, false);
     if (separateCatcher) this._createOutputPass(encoder, inputBuffers, true);
@@ -328,7 +333,7 @@ export class WGPURayTraceOutputPass {
     const pipeline = layers ? this._layersPipeline : this._pipeline;
     const textures = layers
       ? [this._foregroundTexture, this._catcherBackgroundTexture]
-      : [this._colorTexture, this._normalTexture, this._albedoTexture, this._shadowCatcherTexture];
+      : [this._colorTexture, this._normalTexture, this._albedoTexture, ...(this._hasCatcher ? [this._shadowCatcherTexture] : [])];
     const pass = encoder.beginRenderPass({
       colorAttachments: textures.map((texture) => ({
         view: texture.createView(),
@@ -355,7 +360,7 @@ export class WGPURayTraceOutputPass {
             buffer,
             ...(idx === 3 ? { offset: inputBuffers.shadowCatcherOffset ?? 0 } : {})
           }
-        }))
+        })).filter(entry => entry.binding < 3 || this._hasCatcher || layers)
       })
     );
     pass.setBindGroup(1, layers ? this._device.createBindGroup({
@@ -395,7 +400,7 @@ export class WGPURayTraceOutputPass {
   getMemoryBytes() {
     const textures = ['color', 'normal', 'albedo', 'shadowCatcher', 'foreground', 'catcherBackground'] as const;
     return Object.values(this._uniformsBuffers).reduce((sum, buffer) => sum + buffer.size, 0)
-      + Array.from(new Set([...textures.map(label => this.getOutput(label)), ...this._retainedOutputs]))
+      + Array.from(new Set([...textures.map(label => this[`_${label}Texture`]), ...this._retainedOutputs]))
         .reduce((sum, texture) => sum + textureBytes(texture), 0);
   }
 

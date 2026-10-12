@@ -180,6 +180,10 @@ class WGPUBloomPass {
     }
   }
 
+  reserveCapacity() {
+    [this._brightPass, ...this._downsamplePasses, ...this._blurHPasses, ...this._blurVPasses, ...this._blendPasses].forEach(pass => pass.reserveCapacity());
+  }
+
   setSize(width: number, height: number) {
     this._brightPass.setSize(width, height);
     for (let i = 0; i <= COUNT; i++) {

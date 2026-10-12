@@ -85,6 +85,7 @@ void main() {
   }
 
   createPass(rayTracePass: WebGLRayTracePass) {
+    this._pass.setOutputs(rayTracePass.hasShadowCatcher() ? ['color', 'albedo', 'normal', 'shadowCatcher'] : ['color', 'albedo', 'normal']);
     this._pass.createPass(
       {
         colorTex: rayTracePass.getOutput('color'),
@@ -98,6 +99,7 @@ void main() {
       { clear: true }
     );
     if (rayTracePass.hasShadowCatcher()) {
+      this._layersPass.setOutputs(['foreground', 'catcherBackground']);
       this._layersPass.createPass({
         colorTex: rayTracePass.getOutput('color'),
         albedoTex: rayTracePass.getOutput('albedo'),
@@ -105,12 +107,14 @@ void main() {
         shadowCatcherTex: rayTracePass.getOutput('shadowCatcher'),
         catcherBackgroundTex: rayTracePass.getOutput('catcherBackground')
       }, undefined, { clear: true });
+    } else {
+      this._layersPass.setOutputs([]);
     }
   }
 
   getOutput(label: RayTraceOutput | LayerOutput): Texture2D {
     return label === 'foreground' || label === 'catcherBackground'
-      ? this._layersPass.getOutput(label) : this._pass.getOutput(label);
+      ? this._layersPass.getOutput(label) ?? this._renderer.emptyTexture : this._pass.getOutput(label) ?? this._renderer.emptyTexture;
   }
 
   retainOutput(texture: Texture2D) { this._pass.retainOutput(texture); this._layersPass.retainOutput(texture); }

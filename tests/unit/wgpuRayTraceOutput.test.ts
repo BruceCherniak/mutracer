@@ -45,7 +45,7 @@ describe('WGPURayTraceOutputPass resource lifetime', () => {
     const oldTextures = textures.slice();
     pass.setSize(1280, 720);
 
-    expect(oldTextures).toHaveLength(6);
+    expect(oldTextures).toHaveLength(3);
     expect(device.queue.onSubmittedWorkDone).toHaveBeenCalledOnce();
     oldTextures.forEach((texture) => {
       expect(texture.destroy).not.toHaveBeenCalled();

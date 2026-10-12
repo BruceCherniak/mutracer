@@ -66,6 +66,7 @@ export class Texture2D {
     this.height = options.height || 1;
   }
 
+  get storageType() {return this._options.type ?? constants.UNSIGNED_BYTE;}
   get isByteEncoded() { return (this._options.type ?? constants.UNSIGNED_BYTE) === constants.UNSIGNED_BYTE; }
 
   /** Allocated 2D render-target payload, excluding driver/FBO overhead. */
@@ -107,7 +108,10 @@ export class Texture2D {
     height: number,
     options: TextureOptions = this._options
   ) {
+    const storageChanged = (this._options.type ?? constants.UNSIGNED_BYTE) !== (options.type ?? this._options.type ?? constants.UNSIGNED_BYTE) ||
+      this._options.sRGB !== (options.sRGB ?? this._options.sRGB);
     this._options = { ...this._options, ...options };
+    if (storageChanged) {this._dirty = true; this._allocated = false;}
     this.resize(Math.max(1, width), Math.max(1, height));
     this._ensureTexture(gl);
     if (!this._allocated || this._dirty) {
@@ -171,7 +175,7 @@ export class Texture2D {
 
   dispose(gl: WebGL2RenderingContext) {
     if (this._texture) gl.deleteTexture(this._texture);
-    this._texture = undefined;
+    this._texture = undefined; this._allocated = false; this._dirty = true;
   }
 
   protected _ensureTexture(gl: WebGL2RenderingContext) {
@@ -731,23 +735,25 @@ export class FrameBuffer {
   attach(texture: Texture2D) {
     this._attachments = [texture];
   }
-  bind(renderer: WebGLDevice, textures?: Texture2D[]) {
+  bind(renderer: WebGLDevice, textures?: Texture2D[], target: number = renderer.gl.FRAMEBUFFER) {
     const gl = renderer.gl;
+    const previousCount = this._attachments.length;
     if (textures) this._attachments = textures;
     textures = this._attachments;
     this._frameBuffer ||= gl.createFramebuffer()!;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this._frameBuffer);
+    gl.bindFramebuffer(target, this._frameBuffer);
+    for (let index = textures.length; index < previousCount; index++) gl.framebufferTexture2D(target, gl.COLOR_ATTACHMENT0 + index, gl.TEXTURE_2D, null, 0);
     textures.forEach((texture, index) => {
       texture.bind(gl, 0);
       gl.framebufferTexture2D(
-        gl.FRAMEBUFFER,
+        target,
         gl.COLOR_ATTACHMENT0 + index,
         gl.TEXTURE_2D,
         texture.getWebGLTexture(gl),
         0
       );
     });
-    gl.drawBuffers(textures.map((_, index) => gl.COLOR_ATTACHMENT0 + index));
+    if (target !== gl.READ_FRAMEBUFFER) gl.drawBuffers(textures.map((_, index) => gl.COLOR_ATTACHMENT0 + index));
   }
   dispose(renderer: WebGLDevice) {
     if (this._frameBuffer) renderer.gl.deleteFramebuffer(this._frameBuffer);

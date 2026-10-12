@@ -1,3 +1,5 @@
+import {scratchGLSL, scratchGLSLFunctions} from './scratchSampling.js';
+import {setTextureRegion, textureRegion} from './textureRegion.js';
 import { FragmentShader, ShaderDefineValue } from './shader.js';
 import {
   FrameBuffer,
@@ -22,7 +24,7 @@ export interface WebGLPassOptions {
  */
 export class WebGLFullQuadPass<I extends string, O extends string> {
   private readonly _renderer: WebGLDevice;
-  private readonly _bindings: WebGLProgramBindings;
+  private _bindings: WebGLProgramBindings;
   private readonly _outputs: O[];
   private readonly _frameBuffer = new FrameBuffer();
   private _outputTextures = {} as Record<O, Texture2D>;
@@ -34,6 +36,9 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
   }
 
   private _outputParams = {} as Record<O, WebGLFullQuadPassOutput>;
+  private _reserveCapacity = false;
+  private _capacityWidth = 1;
+  private _capacityHeight = 1;
   private _width = 1;
   private _height = 1;
   private _renderToScreen = false;
@@ -60,13 +65,34 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     );
   }
 
+  reserveCapacity() {
+    if (this._reserveCapacity) return;
+    this._reserveCapacity = true;
+    const shader = this._bindings.shader;
+    const textures = Object.keys(shader.uniforms).filter(name => shader.uniforms[name].type === 'sampler2D');
+    const uniforms = {...this._bindings.uniforms};
+    for (const name of textures) uniforms[`${name}Region`] = {type: 'ivec2', value: [1, 1]};
+    const transformed = new FragmentShader({name: shader.name, outputs: shader.outputs, defines: this._bindings.defines, uniforms,
+      includes: [{defines: {}, uniforms: {}, main: '', functions: [() => scratchGLSLFunctions(textures), ...shader.functions.map(fn => () => scratchGLSL(fn(), textures))]}],
+      main: scratchGLSL(shader.main, textures)});
+    transformed.parallelCompile = shader.parallelCompile;
+    this._bindings = new WebGLProgramBindings(transformed);
+  }
   setSize(width: number, height: number) {
     if (this._width === width && this._height === height) return;
     this._width = Math.max(1, width);
     this._height = Math.max(1, height);
+    this._capacityWidth = Math.max(this._capacityWidth, this._width);
+    this._capacityHeight = Math.max(this._capacityHeight, this._height);
     this.setUniform('viewportSize', [this._width, this._height]);
   }
 
+  setOutputs(outputs: readonly O[]) {
+    for (const name of this._outputs) if (!outputs.includes(name)) {
+      this._outputTextures[name]?.dispose(this._renderer.gl); delete this._outputTextures[name];
+    }
+    this._outputs.splice(0, this._outputs.length, ...outputs);
+  }
   setOutputParams(params: Record<O, WebGLFullQuadPassOutput>) {
     this._outputParams = params;
   }
@@ -134,11 +160,12 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
         new Texture2D(this._outputParams[name]);
       texture.ensureStorage(
         gl,
-        this._width,
-        this._height,
+        this._reserveCapacity ? this._capacityWidth : this._width,
+        this._reserveCapacity ? this._capacityHeight : this._height,
         this._outputParams[name]
       );
       this._outputTextures[name] = texture;
+      setTextureRegion(texture, this._width, this._height);
     }
   }
 
@@ -193,6 +220,10 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
       gl.disable(gl.SCISSOR_TEST);
     }
 
+    if (this._reserveCapacity) for (const [name, texture] of Object.entries(inputs) as [string, Texture2D][]) {
+      const region = textureRegion(texture);
+      this.setUniform(`${name}Region`, [region.width, region.height]);
+    }
     this._bindings.setUniforms(inputs);
     this._bindings.bind(renderer);
     gl.disable(gl.DEPTH_TEST);

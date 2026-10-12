@@ -1,3 +1,5 @@
+import {scratchWGSL, scratchWGSLFunctions} from './scratchSampling.js';
+import {setTextureRegion, textureRegion} from './textureRegion.js';
 import { getTargetShaderCache } from './WGPUShaderCache.js';
 import { textureBytes } from './gpuMemory.js';
 export const fullScreenQuadVertexShaderWGSL = /*wgsl */ `
@@ -49,6 +51,7 @@ export function getUniformBuffer(
 export interface Uniform {
   label: string;
   type:
+    | `array<vec4u, ${number}>`
     | 'f32'
     | 'i32'
     | 'u32'
@@ -96,6 +99,10 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
 
   private _samplers: Record<string, GPUSampler> = {};
 
+  private _capacityWidth = 0;
+  private _capacityHeight = 0;
+  private _reserveCapacity = false;
+  private _regionNames: string[] = [];
   private _width = 10;
   private _height = 10;
 
@@ -153,14 +160,39 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
     });
   }
 
+  /** Keep physical outputs large enough for every render while varying the logical viewport. */
+  reserveCapacity() {
+    if (this._reserveCapacity) return;
+    this._reserveCapacity = true;
+    this._capacityWidth = this._width; this._capacityHeight = this._height;
+    const textures = this._inputs.filter(name => !this._inputViewDimensions[name as I] || this._inputViewDimensions[name as I] === '2d');
+    const samplers = Object.keys(this._samplers);
+    this._fsMain = scratchWGSL(this._fsMain, textures, samplers);
+    this._fsDefine = scratchWGSL(this._fsDefine ?? '', textures, samplers) + scratchWGSLFunctions(textures, samplers);
+    this._regionNames = textures;
+    for (const [index, name] of textures.entries()) {
+      const expression = `imageRegions[${index}].xy`;
+      this._fsMain = this._fsMain.replace(new RegExp(`${name}Region`, 'g'), expression);
+      this._fsDefine = this._fsDefine.replace(new RegExp(`${name}Region`, 'g'), expression);
+    }
+    if (textures.length) {
+      const uniform: Uniform = {label: 'imageRegions', type: `array<vec4u, ${textures.length}>`, data: new Uint32Array(textures.length * 4)};
+      this._uniforms.push(uniform); this._uniformsMap[uniform.label] = uniform;
+      this._uniformBuffers[uniform.label] = this._device.createBuffer({label: `${this._label}.${uniform.label}`, size: textures.length * 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST});
+    }
+    this._needsUpdatePipeline = true; this._fsCode = '';
+  }
   setSize(width: number, height: number) {
-    width = Math.ceil(width);
-    height = Math.ceil(height);
+    width = Math.max(1, Math.ceil(width));
+    height = Math.max(1, Math.ceil(height));
     const sizeChanged = width !== this._width || height !== this._height;
     this._width = width;
     this._height = height;
     if (sizeChanged) {
-      this._needsUpdateOutputTextures = true;
+      const nextWidth = Math.max(this._capacityWidth, width);
+      const nextHeight = Math.max(this._capacityHeight, height);
+      this._needsUpdateOutputTextures ||= !this._reserveCapacity || nextWidth !== this._capacityWidth || nextHeight !== this._capacityHeight;
+      this._capacityWidth = nextWidth; this._capacityHeight = nextHeight;
       this._needsUpdatePipeline = true;
 
       this.setUniform('viewportSize', [width, height]);
@@ -239,8 +271,8 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
     return this._device.createTexture({
       label: this._label,
       size: {
-        width: this._width,
-        height: this._height,
+        width: this._reserveCapacity ? this._capacityWidth : this._width,
+        height: this._reserveCapacity ? this._capacityHeight : this._height,
         depthOrArrayLayers: 1
       },
       format: params.format,
@@ -405,6 +437,15 @@ ${this._fsMain}
       this._needsUpdateOutputTextures = false;
     }
 
+    if (this._regionNames.length) {
+      const values = new Uint32Array(this._regionNames.length * 4);
+      for (const [index, name] of this._regionNames.entries()) {
+        const region = textureRegion(inputs[name as I]);
+        values.set([region.width, region.height], index * 4);
+      }
+      this.setUniform('imageRegions', values);
+    }
+    for (const texture of Object.values(this._outputTextures)) setTextureRegion(texture, this._width, this._height);
     this._updatePipeline();
 
     const inputsLen = this._inputs.length;
@@ -457,6 +498,8 @@ ${this._fsMain}
     });
 
     // Draw a full quad
+    renderPass.setViewport(0, 0, this._width, this._height, 0, 1);
+    renderPass.setScissorRect(0, 0, this._width, this._height);
     renderPass.setPipeline(this._pipeline);
     // Bind groups
     this._bindGroups.forEach((bindGroup, idx) => {

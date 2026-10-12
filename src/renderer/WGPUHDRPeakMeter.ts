@@ -113,6 +113,8 @@ export class WGPUHDRPeakMeter {
     this.lastSubmissionTime = -Infinity;
   }
 
+  getMemoryBytes() {return this.peakBuffer.size + this.readbackBuffer.size;}
+
   dispose() {
     this.disposed = true;
     void this.device.queue.onSubmittedWorkDone().catch(() => undefined).then(() => {

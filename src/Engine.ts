@@ -45,7 +45,7 @@ export interface TextureAtlasLimits { maxTextureArrayLayers: number; maxTextureD
 export interface EngineInfo {
   backend: 'webgpu' | 'webgl'; adapterName: string; webgpuFallbackReason?: string; limits: TextureAtlasLimits;
 }
-/** Device and target diagnostics; GPU bytes exclude shared scene/driver costs. */
+/** Device and target diagnostics; Per-target GPU bytes exclude shared scene, temporary passes and driver costs. */
 export interface EngineDiagnostics extends RenderingDiagnostics {
   backend: 'webgpu' | 'webgl' | undefined; adapterName: string;
   width: number; height: number; lastError?: string; webgpuFallbackReason?: string;

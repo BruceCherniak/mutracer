@@ -265,13 +265,16 @@ export default class Render {
     const filter = this._filter, revision = this._filterRevision;
     if (!filter || isJNLMDenoiser(filter)) return;
     const filters = [filter, filter.auxiliaryDenoisers?.albedo, filter.auxiliaryDenoisers?.normal];
-    for (const network of filters) {
-      if (!network?.prepareForImage) continue;
-      void network.prepareForImage(this.width, this.height, {tileOverlap: this._schedule() === 'converged' ? undefined : 80}).catch((error: unknown) => {
-        if (revision === this._filterRevision && filter === this._filter && !this._disposed) this._engine._notifyError(error);
-      });
-    }
+    const width = this.width, height = this.height;
+    const task = this._engine._enqueueDenoise(async () => {
+      if (revision !== this._filterRevision || filter !== this._filter || this._disposed) return;
+      await Promise.all(filters.map(network => network?.prepareForImage?.(width, height, {tileOverlap: this._schedule() === 'converged' ? undefined : 80})));
+    });
+    void task.catch(error => {
+      if (revision === this._filterRevision && filter === this._filter && !this._disposed) this._engine._notifyError(error);
+    });
   }
+
   private _cancelDenoise() { this._denoiseRevision++; this._target?.cancelOIDNDenoise?.(); this._denoisePending = undefined; this._denoisedSamples = 0; }
   /** @internal */ _inputsChanged() { this._cancelDenoise(); }
   /** @internal */ _displayChanged() { this._cancelDenoise(); this._target?.invalidateDenoisedOutput(); }
@@ -286,7 +289,9 @@ export default class Render {
     // One shared scratch lease across all renders; queued stale jobs do no GPU work.
     const task = this._engine._enqueueDenoise(async () => {
       if (revision !== this._denoiseRevision || this._disposed) return;
-      target.activate();
+      target.activate(); this._engine.display._configure(this);
+      if (revision !== this._denoiseRevision || this._disposed) return;
+      target.drawPostProcess();
       const complete = await target.performOIDNDenoise?.(filter, undefined, this._schedule());
       if (revision !== this._denoiseRevision || this._disposed) return;
       if (complete) { target.activate(); target.drawPostProcess(); this._denoisedSamples = samples; this._lastDenoiseTime = performance.now(); }

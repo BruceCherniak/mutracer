@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => {
     outputs = new Map<string, Pass['texture']>();
     getMemoryBytes() { return 0; }
     setSize(width: number, height: number) {
+      if (width === this.texture.width && height === this.texture.height) return;
       this.texture = { ...this.texture, width, height };
       this.outputs.clear();
     }
@@ -83,8 +84,8 @@ function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) 
   const device = {
     features: new Set(timestamps ? ['timestamp-query'] : []),
     createQuerySet: () => ({ count: 2, destroy() {} }),
-    createBuffer: () => ({
-      size: 16, mapState: 'unmapped', destroy() {}, unmap() {},
+    createBuffer: (opts: GPUBufferDescriptor) => ({
+      size: opts.size, mapState: 'unmapped', destroy() {}, unmap() {},
       mapAsync: async () => {},
       getMappedRange: () => new BigInt64Array([
         0n, typeof traceTimeNs === 'function' ? traceTimeNs() : traceTimeNs
@@ -96,7 +97,8 @@ function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) 
     createSampler: () => ({}),
     createCommandEncoder: () => ({
       resolveQuerySet() {}, copyBufferToBuffer() {}, copyBufferToTexture() {},
-      copyTextureToTexture() {}, finish() { return {}; }
+      copyTextureToBuffer() {},
+      copyTextureToTexture(source: {texture: object}, target: {texture: {copiedFrom?: object}}) {target.texture.copiedFrom = source.texture;}, finish() { return {}; }
     }),
     queue: { submit() {}, onSubmittedWorkDone: async () => {} }
   } as unknown as GPUDevice;
@@ -108,7 +110,7 @@ function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) 
   pipeline.configure({bounces: 3, clamping: 0, bevel: true, bevelSamples: 8, directLightCandidates: 4, dispersionWavelengths: 3, alphaBlendStrategy: 'stochastic', samplingPattern: 'sobol', maxSamples: 2048, transmissiveOutputAlphaMin: 1, timeBudgetMs: 21, maxTiles: Infinity, allowMultipleSamplesPerFrame: false});
   pipeline.activate();
   pipeline.setSize(80, 64);
-  return pipeline;
+  return Object.assign(pipeline, {manager});
 }
 
 beforeEach(() => {
@@ -189,7 +191,7 @@ function completedDenoiser(): OIDNWeb {
 }
 
 function displayedTexture() {
-  return mocks.Pass.instances.get('output')!.createPass.mock.lastCall![1].colorTex;
+  const texture = mocks.Pass.instances.get('output')!.createPass.mock.lastCall![1].colorTex; return texture.copiedFrom ?? texture;
 }
 
 async function denoisedPipeline() {
@@ -211,7 +213,7 @@ describe('WebGPU denoised presentation transitions', () => {
     await pipeline.performOIDNDenoise!(denoiser, undefined, 'progressive');
     expect(execute).toHaveBeenCalledTimes(1);
     expect(compose.createPass.mock.lastCall![1]).toEqual(rawInputs);
-    expect(execute.mock.lastCall![0].color.data).toBe(compose.getOutput('denoiseColor'));
+    expect(execute.mock.lastCall![0].color.data).toMatchObject({size: 80 * 64 * 16});
     const finish = mocks.Pass.instances.get('OIDN composed display')!;
     expect(finish.createPass.mock.lastCall![1].composedTex).toBe(compose.getOutput('denoiseColor'));
     pipeline.present();
@@ -228,7 +230,7 @@ describe('WebGPU denoised presentation transitions', () => {
     await pipeline.performOIDNDenoise!(completedDenoiser(), alpha);
     expect(execute).toHaveBeenCalledOnce();
     expect(execute.mock.lastCall![0]).toMatchObject({
-      color: { data: mocks.Pass.instances.get('OIDN composed display')!.getOutput('color') },
+      color: {data: expect.objectContaining({size: 80 * 64 * 16})},
       denoiseAlpha: true
     });
     pipeline.dispose();

@@ -1,3 +1,7 @@
+import { WGPUCanvasSurface } from './WGPUCanvasSurface.js';
+import { WGPUScratchBuffer } from './WGPUScratchBuffer.js';
+import { WGPUScratchTexture } from './WGPUScratchTexture.js';
+import { ScratchPool } from './ScratchPool.js';
 import { makeRenderPipeline, type TraceSettings, type RenderPipeline } from './renderPipeline.js';
 import { textureBytes } from './gpuMemory.js';
 import type { TargetPipeline } from './accumulationTarget.js';
@@ -139,16 +143,6 @@ export interface WGPURenderingPipelineOptions {
   presentationFormat?: GPUTextureFormat;
 }
 
-type HDRCanvasConfiguration = GPUCanvasConfiguration & {
-  toneMapping: { mode: 'extended' };
-};
-
-type InspectableGPUCanvasContext = GPUCanvasContext & {
-  getConfiguration?: () => GPUCanvasConfiguration & {
-    toneMapping?: { mode?: 'standard' | 'extended' };
-  };
-};
-
 function createTimeQuery(device: GPUDevice) {
   try {
     const querySet = device.createQuerySet({
@@ -177,13 +171,10 @@ function createTimeQuery(device: GPUDevice) {
 function makeWGPUAccumulationTarget(
   canvas: HTMLCanvasElement,
   device: GPUDevice,
-  {
-    presentationFormat = navigator.gpu.getPreferredCanvasFormat()
-  }: WGPURenderingPipelineOptions,
   rayTracePass: WGPURayTracePass,
-  configureContext: boolean
+  surface: WGPUCanvasSurface,
+  scratch: ScratchPool
 ) {
-  const presentationAlphaMode: GPUCanvasAlphaMode = 'premultiplied';
   let sampleRenderedCallback: (
     sampleCount: number,
     isFirstFrame: boolean,
@@ -230,7 +221,6 @@ function makeWGPUAccumulationTarget(
   let presentationTexture: GPUTexture | undefined;
   let presentationDenoised = false;
   let denoiseValid = false;
-  const retiredDenoiseTextures = new Set<GPUTexture>();
 
   let maxTimePerTile = 21;
 
@@ -257,8 +247,6 @@ function makeWGPUAccumulationTarget(
   let oidnComposedBuffer: GPUBuffer | undefined;
   let oidnComposedTexture: GPUTexture | undefined;
   let oidnComposedLinear = false;
-  let oidnAlbedoGuideTexture: GPUTexture | undefined;
-  let oidnNormalGuideTexture: GPUTexture | undefined;
   let jnlmPass: WGPUJNLMDenoisePass | undefined;
   let oidnGeneration = 0;
   let preserveOIDNOutput = false;
@@ -331,17 +319,16 @@ function makeWGPUAccumulationTarget(
     });
   }
 
-  const standardPresentationFormat = presentationFormat;
-  let currentPresentationFormat = standardPresentationFormat;
-  const ctx = canvas.getContext('webgpu')! as InspectableGPUCanvasContext;
-  if (configureContext) ctx.configure({
-    device,
-    format: standardPresentationFormat,
-    alphaMode: presentationAlphaMode
-  });
+  const ctx = surface.context;
 
   const timeQuery = device.features.has('timestamp-query')
-    ? createTimeQuery(device)
+    ? scratch.get('trace timing', () => {
+      const query = createTimeQuery(device);
+      return {
+query, getMemoryBytes: () => query ? query.resolveBuffer.size + query.resultBuffer.size : 0,
+        dispose() { query?.querySet.destroy(); query?.resolveBuffer.destroy(); query?.resultBuffer.destroy(); }
+};
+    }).query
     : undefined;
   const tileRender = makeTileRender();
   const tileRenderWithPredict = timeQuery ? makeTileRenderWithPredict() : undefined;
@@ -357,7 +344,11 @@ function makeWGPUAccumulationTarget(
     isPredictingFrame = false;
   }
 
-  const rayTraceOutputPass = new WGPURayTraceOutputPass(device);
+  const zero = scratch.get('empty texture', () => {
+    const texture = device.createTexture({ label: 'Shared empty image', size: { width: 1, height: 1 }, format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING });
+    return { texture, getMemoryBytes: () => 4, dispose: () => texture.destroy() };
+  }).texture;
+  const rayTraceOutputPass = new WGPURayTraceOutputPass(device, zero);
   const getFrameInput = (label: 'color' | 'albedo' | 'normal' | 'shadowCatcher' | 'foreground' | 'catcherBackground') =>
     rayTraceOutputPass.getOutput(label);
   let bloomPass: WGPUBloomPass | undefined;
@@ -366,7 +357,7 @@ function makeWGPUAccumulationTarget(
   // background radiance but no surface hit, and the normalized colour divides
   // by hits only. Raw readback restores the per-sample average, as on WebGL.
   // Fully blank pixels are already divided by the sample count.
-  const rawOutputPass = new WGPUFullQuadPass('raw output', device, {
+  const rawOutputPass = scratch.get('rawOutputPass', () => new WGPUFullQuadPass('raw output', device, {
     textureWillBeRead: true,
     inputs: ['colorTex', 'coverageTex'],
     outputs: ['color'],
@@ -379,16 +370,16 @@ if (flatBackgroundColor.a > 0.5 && coverage > 0.0) {
 }
 output.color = color;
 `
-  });
+  }));
 
-  const readbackPass = new WGPUFullQuadPass('output readback', device, {
+  const readbackPass = scratch.get('readbackPass', () => new WGPUFullQuadPass('output readback', device, {
     textureWillBeRead: true, inputs: ['inputTex'], outputs: ['color'],
     fsMain: 'output.color = textureLoad(inputTex, uv, 0);'
-  });
+  }));
   readbackPass.setOutputParams({ color: { format: 'rgba32float' } });
 
   let hdrPeakMeter: WGPUHDRPeakMeter | undefined;
-  const composePass = new WGPUFullQuadPass('compose', device, {
+  const composePass = scratch.get('composePass', () => new WGPUFullQuadPass('compose', device, {
     textureWillBeRead: true,
     fsMain: composeMain + compositeDenoiseOutputMain,
     fsDefine: composeDefine,
@@ -448,7 +439,7 @@ output.color = color;
       'shadowCatcherTex',
       'bloomTex'
     ]
-  });
+  }));
   let composeColorFormat: GPUTextureFormat = 'rgba8unorm';
   composePass.setOutputParams({
     color: {
@@ -456,7 +447,7 @@ output.color = color;
     },
     denoiseColor: { format: 'rgba32float' }
   });
-  const compositeDenoiseDisplayPass = new WGPUFullQuadPass(
+  const compositeDenoiseDisplayPass = scratch.get('compositeDenoiseDisplayPass', () => new WGPUFullQuadPass(
     'OIDN composed display', device, {
     textureWillBeRead: true,
     fsMain: compositeDenoiseDisplayMain,
@@ -467,7 +458,7 @@ output.color = color;
     ],
     outputs: ['color'], inputs: ['colorTex', 'composedTex']
   }
-  );
+  ));
   compositeDenoiseDisplayPass.setOutputParams({ color: { format: 'rgba8unorm' } });
   const auxiliaryPassUniforms = [
     {
@@ -476,7 +467,7 @@ output.color = color;
       data: new Int32Array([1, 1])
     }
   ];
-  const oidnAlbedoEncodePass = new WGPUComputePass<'albedo', 'albedo'>(
+  const oidnAlbedoEncodePass = scratch.get('oidnAlbedoEncodePass', () => new WGPUComputePass<'albedo', 'albedo'>(
     'OIDN albedo sRGB encode',
     device,
     {
@@ -485,8 +476,8 @@ output.color = color;
       uniforms: auxiliaryPassUniforms,
       csMain: oidnAlbedoSrgbEncodeMain
     }
-  );
-  const oidnAlbedoDecodePass = new WGPUComputePass<'albedo' | 'rawAlbedo' | 'rawNormal', 'albedo'>(
+  ));
+  const oidnAlbedoDecodePass = scratch.get('oidnAlbedoDecodePass', () => new WGPUComputePass<'albedo' | 'rawAlbedo' | 'rawNormal', 'albedo'>(
     'OIDN albedo sRGB decode',
     device,
     {
@@ -497,8 +488,8 @@ output.color = color;
       }],
       csMain: oidnAlbedoSrgbDecodeMain
     }
-  );
-  const oidnNormalSanitizePass = new WGPUComputePass<'normal', 'normal'>(
+  ));
+  const oidnNormalSanitizePass = scratch.get('oidnNormalSanitizePass', () => new WGPUComputePass<'normal', 'normal'>(
     'OIDN normal sanitize',
     device,
     {
@@ -507,11 +498,11 @@ output.color = color;
       uniforms: auxiliaryPassUniforms,
       csMain: oidnNormalSanitizeMain
     }
-  );
+  ));
   oidnAlbedoEncodePass.setOutputParams({ albedo: { channels: 4 } });
   oidnAlbedoDecodePass.setOutputParams({ albedo: { channels: 4 } });
   oidnNormalSanitizePass.setOutputParams({ normal: { channels: 4 } });
-  const outputPass = new WGPUFullQuadPass('output', device, {
+  const outputPass = scratch.get('outputPass', () => new WGPUFullQuadPass('output', device, {
     fsMain: /* wgsl */ `
 let colorUv = min(
   vec2i(uv2 * vec2f(textureDimensions(colorTex))),
@@ -523,7 +514,7 @@ output.color = color;
 `,
     outputs: ['color'],
     inputs: ['colorTex']
-  });
+  }));
   outputPass.setOutputParams({
     color: {
       format: 'rgba8unorm'
@@ -533,7 +524,7 @@ output.color = color;
   function _present(encoder: GPUCommandEncoder, texture: GPUTexture) {
     outputPass.setRenderToScreen(
       ctx.getCurrentTexture(),
-      currentPresentationFormat
+      surface.format
     );
     outputPass.createPass(encoder, {
       colorTex: texture
@@ -634,26 +625,8 @@ output.color = color;
     if (!buffer) {
       return undefined;
     }
-    if (
-      !texture ||
-      texture.width !== renderWidth ||
-      texture.height !== renderHeight
-    ) {
-      if (texture && texture !== presentationTexture) texture.destroy();
-      else if (texture) retiredDenoiseTextures.add(texture);
-      texture = device.createTexture({
-        size: {
-          width: renderWidth,
-          height: renderHeight,
-          depthOrArrayLayers: 1
-        },
-        format: 'rgba32float',
-        usage:
-          GPUTextureUsage.TEXTURE_BINDING |
-          GPUTextureUsage.COPY_DST |
-          GPUTextureUsage.COPY_SRC
-      });
-    }
+    const conversion = scratch.get('denoised conversion', () => new WGPUScratchTexture(device));
+    texture = conversion.get(renderWidth, renderHeight); conversion.setRegion(renderWidth, renderHeight);
     encoder.copyBufferToTexture(
       { buffer: buffer!, bytesPerRow: 16 * renderWidth },
       {
@@ -673,16 +646,47 @@ output.color = color;
     output: OIDNWebGPUOutputData,
     target: GPUBuffer | undefined
   ) {
-    if (!target || target.size !== output.data.size) {
+    const byteLength = output.width * output.height * 16;
+    if (!target || target.size !== byteLength) {
       target?.destroy();
       target = device.createBuffer({
         label: 'OIDN persistent output',
-        size: output.data.size,
+        size: byteLength,
         usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
       });
     }
-    encoder.copyBufferToBuffer(output.data, 0, target, 0, output.data.size);
+    encoder.copyBufferToBuffer(output.data, 0, target, 0, byteLength);
     return target;
+  }
+
+  function prepareComposition() {
+    composePass.setSize(renderWidth, renderHeight);
+    composePass.setOutputParams({ color: { format: composeColorFormat }, denoiseColor: { format: 'rgba32float' } });
+    composePass.setUniform('exposure', exposure);
+    composePass.setUniform('toneMappingParams', [toneMappingMode, vignette]);
+    composePass.setUniform('colorGradingParams', [contrast, saturation, temperature, tint]);
+    composePass.setUniform('hdrOutputEnabled', +hdrOutputActive);
+    composePass.setUniform('shadowCatcherColor', shadowCatcherColor);
+    composePass.setUniform('shadowCatcherAlpha', shadowCatcherAlpha);
+    compositeDenoiseDisplayPass.setSize(renderWidth, renderHeight);
+    compositeDenoiseDisplayPass.setOutputParams({ color: { format: composeColorFormat } });
+    compositeDenoiseDisplayPass.setUniform('hdrOutputEnabled', +hdrOutputActive);
+    compositeDenoiseDisplayPass.setUniform('denoisedAlpha', denoiseValid && oidnComposedLinear ? +rayTracePass.needsDenoiseAlpha() : 0);
+  }
+  function snapshotInput(encoder: GPUCommandEncoder, key: string, texture: GPUTexture) {
+    const buffer = scratch.get(key, () => new WGPUScratchBuffer(device)).get(renderWidth * renderHeight * 16);
+    encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow: renderWidth * 16 }, { width: renderWidth, height: renderHeight });
+    return buffer;
+  }
+  function copyGuide(key: string, input: GPUTexture) {
+    const pass = scratch.get(key, () => new WGPUComputePass('OIDN guide copy', device, {
+      inputs: ['guide'], outputs: ['color'], uniforms: auxiliaryPassUniforms,
+      csMain: 'if (globalId.x >= u32(imageSize.x) || globalId.y >= u32(imageSize.y)) {return;} out_color[globalId.x + globalId.y * u32(imageSize.x)] = textureLoad(in_guide, vec2i(globalId.xy), 0);'
+    }));
+    pass.setOutputParams({ color: { channels: 4 } });
+    pass.setSize(renderWidth, renderHeight); pass.setUniform('imageSize', [renderWidth, renderHeight]);
+    const encoder = device.createCommandEncoder(); pass.createPass(encoder, { guide: { texture: input, channels: 4 } }); device.queue.submit([encoder.finish()]);
+    return pass.getOutput('color');
   }
 
   function drawPostProcess(
@@ -698,6 +702,7 @@ output.color = color;
     composePass.setUniform('flatBackgroundColor', resolvedFlatBackground);
     rawOutputPass.setUniform('flatBackgroundColor', resolvedFlatBackground);
     if (resolvedSamples < 1) return;
+    prepareComposition();
     if (denoiseValid) oidnComposedTexture = prepareOIDNTexture(
       encoder,
       oidnComposedBuffer,
@@ -720,14 +725,17 @@ output.color = color;
     const bloomEnabled = bloomIntensity > 0.0;
     // Progressive accumulation refreshes bloom every ten samples.
     const samplesSkipped = sampleCount < 10 || sampleCount % 10 > 0;
-    const needsUpdateBloom =
-      bloomEnabled && !samplesSkipped;
+    const bloomState = scratch.get('bloom state', () => ({ owner: undefined as object | undefined, settings: '', dispose() { } }));
+    const bloomSettings = `${bloomThreshold}/${bloomRadius}`;
+    const needsUpdateBloom = bloomEnabled && sampleCount >= 10 && (!samplesSkipped || bloomState.owner !== targetKey || bloomState.settings !== bloomSettings);
     let bloomIntensityToUpdate = bloomIntensity;
     if (needsUpdateBloom) {
       if (!bloomPass) {
-        bloomPass = new WGPUBloomPass(device);
+        bloomPass = scratch.get('bloom', () => new WGPUBloomPass(device));
         bloomPass.setSize(renderWidth, renderHeight);
       }
+      bloomPass.setSize(renderWidth, renderHeight);
+      bloomState.owner = targetKey; bloomState.settings = bloomSettings;
       bloomPass.setBrightThreshold(bloomThreshold);
       bloomPass.setRadius(bloomRadius);
       bloomPass.createPass(encoder, colorTexture);
@@ -755,7 +763,7 @@ output.color = color;
         ? compositeDenoiseDisplayPass.getOutput('color') : oidnComposedTexture) : undefined) ||
       composePass.getOutput('color');
     const activeHDRPeakMeter = hdrOutputActive
-      ? (hdrPeakMeter ??= new WGPUHDRPeakMeter(device))
+      ? (hdrPeakMeter ??= scratch.get('hdrPeak', () => new WGPUHDRPeakMeter(device)))
       : undefined;
     const hdrPeakReadbackSubmitted =
       activeHDRPeakMeter?.encode(
@@ -771,22 +779,23 @@ output.color = color;
       displayTexture = getFrameInput('shadowCatcher');
     }
 
+    if (displayTexture.width < renderWidth || displayTexture.height < renderHeight) {
+      readbackPass.setSize(renderWidth, renderHeight);
+      readbackPass.createPass(encoder, { inputTex: displayTexture });
+      displayTexture = readbackPass.getOutput('color');
+    }
     // Keep the completed denoise visible until its replacement is ready.
     if (!(preserveOIDNOutput && output === 'final' && !denoiseValid && presentationDenoised)) {
-      if (presentationTexture !== displayTexture) {
-        const owners = [composePass, compositeDenoiseDisplayPass, rayTraceOutputPass];
-        for (const pass of owners) {
-          pass.retainOutput(displayTexture);
-          if (presentationTexture) pass.releaseOutput(presentationTexture);
-        }
+      const width = renderWidth, height = renderHeight;
+      if (!presentationTexture || presentationTexture.width !== width || presentationTexture.height !== height || presentationTexture.format !== displayTexture.format) {
+        const previous = presentationTexture;
+        presentationTexture = device.createTexture({
+label: 'Render complete image', size: { width, height }, format: displayTexture.format,
+          usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC
+});
+        if (previous) void device.queue.onSubmittedWorkDone().catch(() => { }).then(() => previous.destroy());
       }
-      for (const texture of retiredDenoiseTextures) {
-        if (texture !== displayTexture) {
-          void device.queue.onSubmittedWorkDone().catch(() => undefined).then(() => texture.destroy());
-          retiredDenoiseTextures.delete(texture);
-        }
-      }
-      presentationTexture = displayTexture;
+      encoder.copyTextureToTexture({ texture: displayTexture }, { texture: presentationTexture }, { width, height });
       presentationDenoised = output === 'final' && denoiseValid;
     }
     const commandBuffer = encoder.finish();
@@ -970,15 +979,6 @@ output.color = color;
     rayTraceOutputPass.setSize(renderWidth, renderHeight);
     composePass.setSize(renderWidth, renderHeight);
     compositeDenoiseDisplayPass.setSize(renderWidth, renderHeight);
-    const oidnImageSize = new Int32Array([renderWidth, renderHeight]);
-    [
-      oidnAlbedoEncodePass,
-      oidnAlbedoDecodePass,
-      oidnNormalSanitizePass
-    ].forEach((pass) => {
-      pass.setSize(renderWidth, renderHeight);
-      pass.setUniform('imageSize', oidnImageSize);
-    });
     bloomPass?.setSize(renderWidth, renderHeight);
 
     resolvedSamples = 0;
@@ -1057,45 +1057,8 @@ output.color = color;
     hdrOutputRequested = enabled;
     const wasActive = hdrOutputActive;
 
-    if (enabled) {
-      try {
-        const configuration: HDRCanvasConfiguration = {
-          device,
-          format: 'rgba16float',
-          alphaMode: presentationAlphaMode,
-          colorSpace: 'srgb',
-          toneMapping: { mode: 'extended' }
-        };
-        ctx.configure(configuration);
-        const applied = ctx.getConfiguration?.();
-        hdrOutputActive =
-          applied?.format === 'rgba16float' &&
-          applied.toneMapping?.mode === 'extended';
-      } catch {
-        hdrOutputActive = false;
-      }
-    } else {
-      hdrOutputActive = false;
-    }
+    hdrOutputActive = enabled && surface.supportsHDR;
 
-    if (!hdrOutputActive && wasActive) {
-      ctx.configure({
-        device,
-        format: standardPresentationFormat,
-        alphaMode: presentationAlphaMode
-      });
-    } else if (enabled && !hdrOutputActive) {
-      // Restore the regular surface after an ignored or rejected HDR request.
-      ctx.configure({
-        device,
-        format: standardPresentationFormat,
-        alphaMode: presentationAlphaMode
-      });
-    }
-
-    currentPresentationFormat = hdrOutputActive
-      ? 'rgba16float'
-      : standardPresentationFormat;
     const nextComposeColorFormat: GPUTextureFormat = hdrOutputActive
       ? 'rgba16float'
       : 'rgba8unorm';
@@ -1160,7 +1123,7 @@ output.color = color;
   ): Promise<boolean> {
     const generation = oidnGeneration;
 
-    jnlmPass ??= new WGPUJNLMDenoisePass(device);
+    jnlmPass ??= scratch.get('jnlm', () => new WGPUJNLMDenoisePass(device));
     const rayBuffers = rayTracePass.getOutputBuffer();
     const encoder = device.createCommandEncoder({ label: 'JNLM denoise' });
     const output = jnlmPass.encode(encoder, {
@@ -1210,6 +1173,12 @@ output.color = color;
     const generation = oidnGeneration;
 
     const size = { width: renderWidth, height: renderHeight };
+    const snapshotEncoder = device.createCommandEncoder();
+    const colorInput = snapshotInput(snapshotEncoder, 'OIDN color input', composePass.getOutput('denoiseColor'));
+    device.queue.submit([snapshotEncoder.finish()]);
+    for (const pass of [oidnAlbedoEncodePass, oidnAlbedoDecodePass, oidnNormalSanitizePass]) {
+      pass.setSize(renderWidth, renderHeight); pass.setUniform('imageSize', [renderWidth, renderHeight]);
+    }
     const convergingTileOptions = {
       ...(denoiseSchedule !== 'converged' ? {
         tileOverlap: 80,
@@ -1222,7 +1191,7 @@ output.color = color;
       // A preview frame is one whole-image pass. Settled images can take many
       // tiles; oidn-web 0.5 runs those back to back by default, which starves
       // the page at 4K, so pace them to display frames instead.
-      scheduling: 'animation-frame' as const
+      scheduling: denoiseSchedule === 'every-sample' ? 'event-loop' as const : 'animation-frame' as const
     };
     type AuxiliaryGuides = {
       albedo: OIDNWebGPUData;
@@ -1239,11 +1208,11 @@ output.color = color;
       if (!auxiliaryDenoisers) {
         return {
           albedo: {
-            data: getFrameInput('albedo'),
+            data: copyGuide('OIDN raw albedo', getFrameInput('albedo')),
             ...size
           },
           normal: {
-            data: getFrameInput('normal'),
+            data: copyGuide('OIDN raw normal', getFrameInput('normal')),
             ...size
           }
         };
@@ -1290,7 +1259,7 @@ output.color = color;
         auxiliaryDenoisers.normal.tileExecute({
           ...convergingTileOptions,
           color: {
-            data: getFrameInput('normal'),
+            data: copyGuide('OIDN raw normal', getFrameInput('normal')),
             ...size
           },
           done(output) {
@@ -1306,28 +1275,15 @@ output.color = color;
       oidnNormalSanitizePass.createPass(normalEncoder, {
         normal: { buffer: normalOutput.data, channels: 4 }
       });
-      // oidn-web generates one input shader for the resource type of the
-      // color input. Convert both filtered guides to textures as well so the
-      // composed color call never mixes textures and buffers.
-      oidnAlbedoGuideTexture = prepareOIDNTexture(
-        normalEncoder,
-        oidnAlbedoDecodePass.getOutput('albedo'),
-        oidnAlbedoGuideTexture
-      );
-      oidnNormalGuideTexture = prepareOIDNTexture(
-        normalEncoder,
-        oidnNormalSanitizePass.getOutput('normal'),
-        oidnNormalGuideTexture
-      );
       device.queue.submit([normalEncoder.finish()]);
 
       return {
         albedo: {
-          data: oidnAlbedoGuideTexture!,
+          data: oidnAlbedoDecodePass.getOutput('albedo'),
           ...size
         },
         normal: {
-          data: oidnNormalGuideTexture!,
+          data: oidnNormalSanitizePass.getOutput('normal'),
           ...size
         }
       };
@@ -1340,7 +1296,7 @@ output.color = color;
       return runOIDNPhase(generation, (finish, fail) =>
         denoiser.tileExecute({
           ...convergingTileOptions,
-          color: { data: composePass.getOutput('denoiseColor'), ...size },
+          color: { data: colorInput, ...size },
           albedo: guides.albedo,
           normal: guides.normal,
           progress(output, _tileData, _tile, currentIdx, totalIdx) {
@@ -1372,15 +1328,15 @@ output.color = color;
       if (!alphaDenoiser || generation !== oidnGeneration) {
         return Promise.resolve();
       }
+      const encoder = device.createCommandEncoder();
+      readbackPass.setSize(renderWidth, renderHeight);
+      readbackPass.createPass(encoder, { inputTex: oidnComposedLinear ? compositeDenoiseDisplayPass.getOutput('color') : composePass.getOutput('color') });
+      const alphaInput = snapshotInput(encoder, 'OIDN alpha input', readbackPass.getOutput('color'));
+      device.queue.submit([encoder.finish()]);
       return runOIDNPhase(generation, (finish, fail) =>
         alphaDenoiser.tileExecute({
           ...convergingTileOptions,
-          color: {
-            data: oidnComposedLinear
-              ? compositeDenoiseDisplayPass.getOutput('color')
-              : composePass.getOutput('color'),
-            ...size
-          },
+          color: { data: alphaInput, ...size },
           denoiseAlpha: true,
           progress(output, _tileData, _tile, currentIdx, totalIdx) {
             if (generation !== oidnGeneration) return;
@@ -1438,6 +1394,7 @@ output.color = color;
     document.addEventListener('visibilitychange', _onPageVisiblilityChange);
   }
   function dispose() {
+    if (disposed) return;
     if (typeof document !== 'undefined') {
       document.removeEventListener(
         'visibilitychange',
@@ -1456,25 +1413,8 @@ output.color = color;
     ]).then(() => {
       rayTracePass.releaseTarget(targetKey);
       oidnComposedBuffer?.destroy();
-      oidnComposedTexture?.destroy();
-      retiredDenoiseTextures.forEach(texture => texture.destroy());
-      oidnAlbedoGuideTexture?.destroy();
-      oidnNormalGuideTexture?.destroy();
-      jnlmPass?.dispose();
-      outputPass.dispose();
-      bloomPass?.dispose();
-      composePass.dispose();
-      rawOutputPass.dispose();
-      readbackPass.dispose();
-      compositeDenoiseDisplayPass.dispose();
-      hdrPeakMeter?.dispose();
-      oidnAlbedoEncodePass.dispose();
-      oidnAlbedoDecodePass.dispose();
-      oidnNormalSanitizePass.dispose();
+      presentationTexture?.destroy();
       rayTraceOutputPass.dispose();
-      timeQuery?.querySet.destroy();
-      timeQuery?.resolveBuffer.destroy();
-      timeQuery?.resultBuffer.destroy();
     });
   }
 
@@ -1511,24 +1451,17 @@ output.color = color;
     get presentationDenoised() { return presentationDenoised; },
     present() {
       if (!presentationTexture) return;
+      surface.configure(hdrOutputActive);
       const encoder = device.createCommandEncoder();
       outputPass.setSize(canvas.width, canvas.height);
       _present(encoder, presentationTexture);
       device.queue.submit([encoder.finish()]);
     },
     getMemory() {
-      const passes = [rayTraceOutputPass, composePass, compositeDenoiseDisplayPass,
-        oidnAlbedoEncodePass, oidnAlbedoDecodePass, oidnNormalSanitizePass,
-        rawOutputPass, readbackPass, outputPass, bloomPass, jnlmPass];
       return {
-        width: renderWidth, height: renderHeight,
-        bytes: rayTracePass.getTargetMemoryBytes(targetKey)
-          + passes.reduce((sum, pass) => sum + (pass?.getMemoryBytes() ?? 0), 0)
-          + (timeQuery ? timeQuery.resolveBuffer.size + timeQuery.resultBuffer.size : 0)
-          + (oidnComposedBuffer?.size ?? 0)
-          + [oidnComposedTexture, oidnAlbedoGuideTexture, oidnNormalGuideTexture, ...retiredDenoiseTextures]
-            .reduce((sum, texture) => sum + textureBytes(texture), 0)
-      };
+width: renderWidth, height: renderHeight,
+        bytes: rayTracePass.getTargetMemoryBytes(targetKey) + rayTraceOutputPass.getMemoryBytes() + textureBytes(presentationTexture) + (oidnComposedBuffer?.size ?? 0)
+};
     },
     isFirstFrame() {
       return isFirstFrame;
@@ -1642,8 +1575,8 @@ output.color = color;
         ...rayTracePass.getDiagnostics(),
         hdrPresentation: {
           requested: hdrOutputRequested,
-          active: hdrOutputActive,
-          peakDisplayValue: hdrOutputActive
+          active: surface.hdr,
+          peakDisplayValue: surface.hdr
             ? hdrPeakMeter?.getPeakDisplayValue()
             : undefined
         },
@@ -1709,10 +1642,10 @@ output.color = color;
 /** Independent render targets, without preview or presentation policy. */
 export function makeWGPURenderTargets(canvas: HTMLCanvasElement, device: GPUDevice, options: WGPURenderingPipelineOptions = {}): RenderPipeline {
   const rayTracePass = new WGPURayTracePass(device);
-  let configureContext = true;
+  const scratch = new ScratchPool(work => { void device.queue.onSubmittedWorkDone().catch(() => { }).then(work); });
+  const surface = scratch.get('canvas', () => new WGPUCanvasSurface(canvas, device, options.presentationFormat ?? navigator.gpu.getPreferredCanvasFormat()));
   return makeRenderPipeline(rayTracePass, () => {
-    const target = makeWGPUAccumulationTarget(canvas, device, options, rayTracePass, configureContext);
-    configureContext = false;
+    const target = makeWGPUAccumulationTarget(canvas, device, rayTracePass, surface, scratch);
     return target;
-  });
+  }, false, scratch);
 }

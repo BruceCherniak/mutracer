@@ -81,3 +81,24 @@ it('denoises again after display settings change without tracing another sample'
   expect(render.samples).toBe(1); expect(targets[0].trace).toHaveBeenCalledOnce();
   expect(targets[0].performOIDNDenoise).toHaveBeenCalledTimes(2); engine.dispose();
 });
+
+it('recomposes the requested render after waiting for the shared inference lease', async () => {
+  const {engine, targets} = renderFixture(); let composed = ''; const filtered: string[] = [];
+  const a = new Render(engine, {maxSamples: 1, denoiser: {type: 'jnlm'}}), b = new Render(engine, {maxSamples: 1, denoiser: {type: 'jnlm'}});
+  a.refine(); b.refine();
+  for (const target of targets) {
+    vi.mocked(target.drawPostProcess).mockImplementation(() => {composed = target.label;});
+    vi.mocked(target.performOIDNDenoise!).mockImplementation(async () => {filtered.push(composed); return true;});
+  }
+  await settle(); expect(filtered).toEqual(targets.map(target => target.label)); engine.dispose();
+});
+
+it('waits for active shared inference before prewarming the same network for another size', async () => {
+  const {engine, targets} = renderFixture(); const network = filter(); initializeOIDN.mockResolvedValue(network);
+  const a = new Render(engine, {maxSamples: 1, denoiser: {type: 'oidn'}}); await settle(); a.refine();
+  let done!: (value: boolean) => void; vi.mocked(targets[0].performOIDNDenoise!).mockImplementation(() => new Promise(resolve => {done = resolve;}));
+  await settle(); const warmCalls = network.prepareForImage.mock.calls.length;
+  const b = new Render(engine, {width: 256, height: 256, denoiser: {type: 'oidn'}}); await settle();
+  expect(network.prepareForImage).toHaveBeenCalledTimes(warmCalls);
+  done(true); await settle(); expect(network.prepareForImage).toHaveBeenCalledTimes(warmCalls + 1); b.dispose(); engine.dispose();
+});

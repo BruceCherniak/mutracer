@@ -1,3 +1,5 @@
+import { WebGLScratchCopy } from './WebGLScratchCopy.js';
+import { ScratchPool } from './ScratchPool.js';
 import { makeRenderPipeline, type TraceSettings, type RenderPipeline } from './renderPipeline.js';
 import type { TargetPipeline } from './accumulationTarget.js';
 import { readRgbaPixels } from './WebGLReadback.js';
@@ -14,7 +16,7 @@ import {
   DisplayChannel,
   ToneMappingParams
 } from './RenderingPipeline.js';
-import { constants, FrameBuffer, WebGLDevice, Texture2D } from './webgl.js';
+import { constants, WebGLDevice, Texture2D } from './webgl.js';
 import { WebGLFullQuadPass } from './WebGLFullQuadPass.js';
 import WebGLRayTracePass from './WebGLRayTracePass.js';
 import { WebGLRayTraceOutputPass } from './WebGLRayTraceOutputPass.js';
@@ -34,7 +36,7 @@ const wavelengths = [650, 510, 475];
  * The frame is encoded as a fixed pass sequence. Each pass owns explicit
  * textures/FBOs, so no compositor graph or node lifecycle participates here.
  */
-function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLRayTracePass) {
+function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLRayTracePass, scratch: ScratchPool) {
   let sampleRenderedCallback = (
     _sampleCount: number,
     _isFirstFrame: boolean,
@@ -50,6 +52,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
   let tileTimingGeneration = 0;
   let isFirstFrame = true;
   let renderFailed = false;
+  let disposed = false;
   let renderWidth = 1;
   let renderHeight = 1;
   let screenWidth = 1;
@@ -90,14 +93,14 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
   const rayTraceOutputPass = new WebGLRayTraceOutputPass(renderer);
   let bloomPass: WebGLBloomPass | undefined;
 
-  const composePass = new WebGLFullQuadPass<
+  const composePass = scratch.get('composePass', () => new WebGLFullQuadPass<
     'colorTex' | 'foregroundTex' | 'catcherBackgroundTex' | 'shadowCatcherTex' | 'bloomTex',
     'color'
   >('compose', renderer, {
     shader: composeFragment,
     outputs: ['color'],
     outputParams: { color: { type: constants.UNSIGNED_BYTE } }
-  });
+  }));
   composePass.setUniforms({
     exposure,
     shadowCatcherColor,
@@ -114,18 +117,20 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     sRGBOutput: 1
   });
 
-  const outputPass = new WebGLFullQuadPass<
+  const outputPass = scratch.get('outputPass', () => new WebGLFullQuadPass<
     'colorTex' | 'colorDenoisedTex',
     'color'
-  >('output', renderer, { shader: outputFragment, outputs: ['color'] });
+  >('output', renderer, { shader: outputFragment, outputs: ['color'] }));
   outputPass.setRenderToScreen();
-  const rawReadFrameBuffer = new FrameBuffer();
+  const copy = scratch.get('image copy', () => new WebGLScratchCopy(renderer));
+  const rawReadFrameBuffer = copy.readFrameBuffer;
 
   // Built-in JNLM denoising. WebGL runs it synchronously inside the
   // post-process, between composition and output.
   let jnlmPass: WebGLJNLMDenoisePass | undefined;
   let pendingDenoiser: JNLMDenoiser | undefined;
   let denoisedTexture: Texture2D | undefined;
+  let denoiseValid = false;
   // Keep the last denoised image visible while while-converging batches
   // accumulate (see RenderingPipeline.setPreserveOIDNOutput).
   let preserveDenoisedOutput = false;
@@ -170,14 +175,19 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       rayTraceOutputPass.createPass(rayTracePass);
     }
 
+    composePass.setSize(renderWidth, renderHeight);
+    composePass.setUniforms({ exposure, toneMappingMode, contrast, saturation, temperature, tint, vignette, shadowCatcherColor, shadowCatcherAlpha });
     const colorTexture = rayTraceOutputPass.getOutput('color');
     const bloomEnabled = bloomIntensity > 0;
     const samplesSkipped = sampleCount < 10 || sampleCount % 10 > 0;
-    const needsUpdateBloom = bloomEnabled && !samplesSkipped;
+    const bloomState = scratch.get('bloom state', () => ({ owner: undefined as object | undefined, settings: '', dispose() { } }));
+    const bloomSettings = `${bloomThreshold}/${bloomRadius}`;
+    const needsUpdateBloom = bloomEnabled && sampleCount >= 10 && (!samplesSkipped || bloomState.owner !== targetKey || bloomState.settings !== bloomSettings);
     let currentBloomIntensity = bloomIntensity;
     if (needsUpdateBloom) {
-      bloomPass ||= new WebGLBloomPass(renderer);
+      bloomPass ||= scratch.get('bloom', () => new WebGLBloomPass(renderer));
       bloomPass.setSize(renderWidth, renderHeight);
+      bloomState.owner = targetKey; bloomState.settings = bloomSettings;
       bloomPass.setBrightThreshold(bloomThreshold);
       bloomPass.setRadius(bloomRadius);
       bloomPass.createPass(colorTexture);
@@ -202,8 +212,8 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     });
 
     if (pendingDenoiser) {
-      jnlmPass ??= new WebGLJNLMDenoisePass(renderer);
-      denoisedTexture = jnlmPass.render({
+      jnlmPass ??= scratch.get('jnlm', () => new WebGLJNLMDenoisePass(renderer));
+      const filtered = jnlmPass.render({
         width: renderWidth,
         height: renderHeight,
         moments: rayTracePass.getOutput('moments'),
@@ -217,24 +227,19 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
         strength: pendingDenoiser.strength,
         shape: pendingDenoiser.shape
       });
+      denoisedTexture = copy.copy(filtered, renderWidth, renderHeight, denoisedTexture); denoiseValid = true;
       pendingDenoiser = undefined;
     }
 
     let displayTexture =
-      (output === 'final' && denoisedTexture) || composePass.getOutput('color');
+      (output === 'final' && denoiseValid && denoisedTexture) || composePass.getOutput('color');
     if (output === 'normal' || output === 'albedo') {
       displayTexture = rayTraceOutputPass.getOutput(output);
     } else if (output === 'shadowCatcher') {
       displayTexture = rayTraceOutputPass.getOutput('shadowCatcher');
     }
-    if (presentationTexture !== displayTexture) {
-      for (const pass of [composePass, rayTraceOutputPass, jnlmPass]) {
-        pass?.retainOutput(displayTexture);
-        if (presentationTexture) pass?.releaseOutput(presentationTexture);
-      }
-    }
-    presentationTexture = displayTexture;
-    presentationDenoised = output === 'final' && !!denoisedTexture;
+    presentationTexture = copy.copy(displayTexture, renderWidth, renderHeight, presentationTexture);
+    presentationDenoised = output === 'final' && denoiseValid && !!denoisedTexture;
 
   }
 
@@ -282,7 +287,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       return false;
     }
     // New samples make the denoised image stale.
-    if (!preserveDenoisedOutput || resetAccumulation) denoisedTexture = undefined;
+    if (!preserveDenoisedOutput || resetAccumulation) denoiseValid = false;
 
     // The first draw after an update lazily prepares scene data and shaders.
     // Keep its wall time for reporting, but not for estimating tile throughput.
@@ -379,7 +384,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
   }
 
   return {
-    invalidateDenoisedOutput() { pendingDenoiser = undefined; denoisedTexture = undefined; preserveDenoisedOutput = false; },
+    invalidateDenoisedOutput() { pendingDenoiser = undefined; denoiseValid = false; preserveDenoisedOutput = false; },
     synchronizeBackground() { },
     configure(settings: TraceSettings) {
       execution = { ...settings };
@@ -405,8 +410,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       return {
         width: renderWidth, height: renderHeight,
         bytes: rayTracePass.getTargetMemoryBytes(targetKey)
-          + rayTraceOutputPass.getMemoryBytes() + composePass.getMemoryBytes()
-          + (bloomPass?.getMemoryBytes() ?? 0) + (jnlmPass?.getMemoryBytes() ?? 0)
+          + rayTraceOutputPass.getMemoryBytes() + (presentationTexture?.getMemoryBytes() ?? 0) + (denoisedTexture?.getMemoryBytes() ?? 0)
       };
     },
     isFirstFrame: () => isFirstFrame,
@@ -414,7 +418,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       tileRender.reset();
       isFirstFrame = true;
       sampleCount = 0;
-      denoisedTexture = undefined;
+      denoiseValid = false;
       preserveDenoisedOutput = false;
     },
     /** Denoises the current image. WebGL only supports the built-in JNLM filter. */
@@ -533,21 +537,19 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       return { width, height, data: readRgbaPixels(renderer.gl, width, height, presentationTexture.isByteEncoded) };
     },
     async readOutput(kind) {
-      if (kind === 'denoised' && !denoisedTexture) kind = 'hdr';
+      if (kind === 'denoised' && (!denoisedTexture || !denoiseValid)) kind = 'hdr';
       const texture = kind === 'denoised' ? denoisedTexture! : rayTraceOutputPass.getOutput(kind === 'hdr' ? 'color' : kind);
       rawReadFrameBuffer.bind(renderer, [texture]);
       return { data: readRgbaPixels(renderer.gl, renderWidth, renderHeight, kind === 'albedo' || kind === 'normal'), width: renderWidth, height: renderHeight };
     },
     dispose() {
+      if (disposed) return; disposed = true;
       document.removeEventListener('visibilitychange', onVisibilityChange);
 
       rayTracePass.releaseTarget(targetKey);
       rayTraceOutputPass.dispose();
-      bloomPass?.dispose();
-      jnlmPass?.dispose();
-      composePass.dispose();
-      outputPass.dispose();
-      rawReadFrameBuffer.dispose(renderer);
+      presentationTexture?.dispose(renderer.gl);
+      denoisedTexture?.dispose(renderer.gl);
     }
   } satisfies TargetPipeline;
 }
@@ -555,5 +557,6 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
 /** Independent render targets, without preview or presentation policy. */
 export function makeWebGLRenderTargets(renderer: WebGLDevice): RenderPipeline {
   const rayTracePass = new WebGLRayTracePass(renderer);
-  return makeRenderPipeline(rayTracePass, () => makeWebGLAccumulationTarget(renderer, rayTracePass), true);
+  const scratch = new ScratchPool();
+  return makeRenderPipeline(rayTracePass, () => makeWebGLAccumulationTarget(renderer, rayTracePass, scratch), true, scratch);
 }

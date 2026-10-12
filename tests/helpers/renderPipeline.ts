@@ -9,6 +9,7 @@ export function renderFixture(options: {tiles?: number; fits?: boolean; backend?
   const targets: RenderTarget[] = [];
   let active = '';
   const pipeline: RenderPipeline = {
+    getSharedMemoryBytes: () => 0,
     setMeshes: vi.fn(() => true), setLights: vi.fn(), setBackground: vi.fn(), setTextureAtlasBudget: vi.fn(() => false),
     readDepthSamples: vi.fn(async () => new Float32Array([1])), getDiagnostics: vi.fn(() => ({targets: targets.map(t => ({label: t.label, ...t.getMemory()}))})), dispose: vi.fn(),
     createTarget(label) {

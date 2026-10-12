@@ -353,6 +353,10 @@ export class WebGLJNLMDenoisePass {
     return color;
   }
 
+  reserveCapacity() {
+    [this._guidePass, this._variancePass, ...this._filterPasses].forEach(pass => pass.reserveCapacity());
+  }
+
   retainOutput(texture: Texture2D) { this._filterPasses.forEach(pass => pass.retainOutput(texture)); }
   releaseOutput(texture: Texture2D) { this._filterPasses.forEach(pass => pass.releaseOutput(texture)); }
 

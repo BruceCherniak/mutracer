@@ -1,3 +1,4 @@
+import type {ScratchPool} from './ScratchPool.js';
 import type Camera from '../scene/Camera.js';
 import type { Scene } from '../scene/Scene.js';
 import type { SceneResources, AlphaBlendStrategy, ToneMappingParams, DisplayChannel } from './RenderingPipeline.js';
@@ -24,6 +25,7 @@ export interface RenderTarget extends TargetPipeline {
   synchronizeBackground(background: Scene['background']): void;
 }
 export interface RenderPipeline {
+  getSharedMemoryBytes(): number;
   createTarget(label: string): RenderTarget;
   releaseTarget(target: RenderTarget): void;
   setMeshes: SceneResources['setMeshes'];
@@ -43,13 +45,15 @@ export function makeRenderPipeline(
     setBounce(bounces: number): boolean;
   },
   create: () => TargetPipeline,
-  webgl = false
+  webgl = false,
+  scratch?: ScratchPool
 ): RenderPipeline {
   const targets = new Set<RenderTarget>();
   const settings = new Map<RenderTarget, TraceSettings>();
   let latest: RenderTarget | undefined;
   let background: Scene['background'];
   return {
+    getSharedMemoryBytes: () => scratch?.getMemoryBytes() ?? 0,
     createTarget(label) {
       const backend = create();
       const target: RenderTarget = {
@@ -80,6 +84,6 @@ export function makeRenderPipeline(
     getDiagnostics() {
       return { ...scene.getDiagnostics(), ...latest?.getDiagnostics(), targets: Array.from(targets, t => ({label: t.label, ...t.getMemory()})) };
     },
-    dispose() { for (const target of targets) target.dispose(); targets.clear(); settings.clear(); scene.dispose(); }
+    dispose() { for (const target of targets) target.dispose(); targets.clear(); settings.clear(); scene.dispose(); scratch?.dispose(); }
   };
 }

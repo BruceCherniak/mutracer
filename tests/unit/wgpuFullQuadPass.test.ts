@@ -7,7 +7,7 @@ it('keeps initial pipeline creation and resized outputs pending when formats are
  const device={createBuffer:()=>({}),queue:{writeBuffer(){}},createShaderModule:()=>({}),createRenderPipeline,createBindGroup:()=>({}),createTexture:(options:any)=>({...options.size,createView:()=>({}),destroy(){}})} as unknown as GPUDevice;
  const pass=new WGPUFullQuadPass('readback',device,{inputs:['input'],outputs:['color'],fsMain:'output.color=textureLoad(input,uv,0);'});
  const input={createView:()=>({})} as GPUTexture;
- const encoder={beginRenderPass:()=>({setPipeline(){},setBindGroup(){},draw(){},end(){}})} as unknown as GPUCommandEncoder;
+ const encoder={beginRenderPass:()=>({setViewport(){},setScissorRect(){},setPipeline(){},setBindGroup(){},draw(){},end(){}})} as unknown as GPUCommandEncoder;
  pass.setOutputParams({color:{format:'rgba32float'}});pass.setSize(64,64);pass.setOutputParams({color:{format:'rgba32float'}});pass.createPass(encoder,{input});
  expect(createRenderPipeline).toHaveBeenCalledOnce();expect(pass.getOutput('color').width).toBe(64);
  pass.setSize(128,64);pass.setOutputParams({color:{format:'rgba32float'}});pass.createPass(encoder,{input});
