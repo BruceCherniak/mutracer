@@ -38,15 +38,6 @@ export interface GroundedSkyboxBackground {
  * skybox. When omitted, the environment light is shown.
  */
 export type SceneBackground = ColorRGBA | Texture | GroundedSkyboxBackground;
-/** RGBA8 pixels for {@link Scene.overlay}. */
-export interface SceneOverlayDataSource {
-  /** Required RGBA8 overlay pixels in row-major order. */
-  data: Uint8Array;
-  /** Required overlay pixel width. */
-  width: number;
-  /** Required overlay pixel height. */
-  height: number;
-}
 /**
  * Everything the renderer draws. A plain object; mesh and light membership,
  * mesh transforms, resource references, light parameters and background
@@ -62,12 +53,4 @@ export interface Scene {
   /** Camera-ray background; defaults to the environment light when omitted. */
   background?: SceneBackground;
 
-  /** Image composited over the final frame, in canvas pixels. */
-  overlay?: {
-    image: HTMLImageElement | HTMLCanvasElement | SceneOverlayDataSource;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
 }

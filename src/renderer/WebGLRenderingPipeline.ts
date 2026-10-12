@@ -5,7 +5,7 @@
 import type { SamplingPattern } from './sampling.js';
 import Camera from '../scene/Camera.js';
 import Mesh from '../scene/Mesh.js';
-import { Scene, SceneBackground, SceneLight } from '../scene/Scene.js';
+import { SceneBackground, SceneLight } from '../scene/Scene.js';
 import { ColorRGB } from '../types.js';
 import { vec3 } from '../math.js';
 import halton from './halton.js';
@@ -78,7 +78,6 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
   let tint = 0;
   let vignette = 0;
   let output: RenderOutput = 'final';
-  let overlay: Scene['overlay'];
   let pageLeaveTime = performance.now();
   let pageInvisibleTime = 0;
   const shadowCatcherColor = vec3.create();
@@ -121,17 +120,10 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
   });
 
   const outputPass = new WebGLFullQuadPass<
-    'colorTex' | 'colorDenoisedTex' | 'overlayTex',
+    'colorTex' | 'colorDenoisedTex',
     'color'
   >('output', renderer, { shader: outputFragment, outputs: ['color'] });
   outputPass.setRenderToScreen();
-  const overlayTexture = new Texture2D({
-    premultiplyAlpha: false,
-    flipY: true,
-    minFilter: constants.LINEAR,
-    magFilter: constants.LINEAR
-  });
-
   const rawReadFrameBuffer = new FrameBuffer();
 
   // Built-in JNLM denoising. WebGL runs it synchronously inside the
@@ -239,21 +231,9 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       displayTexture = rayTraceOutputPass.getOutput('shadowCatcher');
     }
     outputPass.setUniform('denoisedPercent', 0);
-    outputPass.setUniform(
-      'overlayPos',
-      overlay
-        ? [
-            overlay.x / screenWidth,
-            (screenHeight - overlay.y - overlay.height) / screenHeight,
-            overlay.width / screenWidth,
-            overlay.height / screenHeight
-          ]
-        : [1e5, 1e5, 0, 0]
-    );
     outputPass.createPass({
       colorTex: displayTexture,
-      colorDenoisedTex: displayTexture,
-      overlayTex: overlay ? overlayTexture : renderer.emptyTexture
+      colorDenoisedTex: displayTexture
     });
   }
 
@@ -644,12 +624,6 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       output = nextOutput;
       return true;
     },
-    setOverlay(nextOverlay: Scene['overlay']) {
-      if (overlay === nextOverlay) return false;
-      overlay = nextOverlay;
-      if (overlay) overlayTexture.source = overlay.image;
-      return true;
-    },
     readDepthSamples: (area) => rayTracePass.readDepthSamples(area),
     async getRawOutput() {
       const texture = rayTraceOutputPass.getOutput('color');
@@ -678,7 +652,6 @@ export function makeWebGLRenderingPipeline(renderer: Renderer) {
       jnlmPass?.dispose();
       composePass.dispose();
       outputPass.dispose();
-      overlayTexture.dispose(renderer.gl);
       rawReadFrameBuffer.dispose(renderer);
     }
   } satisfies RenderingPipeline;

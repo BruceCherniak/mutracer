@@ -4,7 +4,7 @@
 
 import type { SamplingPattern } from './sampling.js';
 import Mesh from '../scene/Mesh.js';
-import { Scene, SceneBackground, SceneLight } from '../scene/Scene.js';
+import { SceneBackground, SceneLight } from '../scene/Scene.js';
 import Camera from '../scene/Camera.js';
 
 import { WGPUFullQuadPass } from './WGPUFullQuadPass.js';
@@ -29,7 +29,6 @@ import { vec3 } from '../math.js';
 
 import WGPUBloomPass from './WGPUBloomPass.js';
 import { WGPUComputePass } from './WGPUComputePass.js';
-import { isTextureDataSource } from '../scene/Texture.js';
 import WGPUHDRPeakMeter from './WGPUHDRPeakMeter.js';
 import { isJNLMDenoiser, type JNLMDenoiser } from './jnlm.js';
 import { WGPUJNLMDenoisePass } from './WGPUJNLMDenoiser.js';
@@ -270,7 +269,6 @@ function makeWGPURenderingPipeline(
   let pageLeaveTime = performance.now();
   let pageInvisibleTime = 0;
 
-  let overlay: Scene['overlay'];
   let oidnComposedBuffer: GPUBuffer | undefined;
   let oidnComposedTexture: GPUTexture | undefined;
   let oidnComposedLinear = false;
@@ -549,17 +547,6 @@ var color = textureLoad(colorTex, colorUv, 0);
 color = color * (1.0 - previewTransitionPercent)
   + textureLoad(previewTransitionTex, transitionUv, 0) * previewTransitionPercent;
 color = vec4(color.rgb * color.a, color.a);
-if (all(uv > overlayPos.xy) && all(uv < overlayPos.xy + overlayPos.zw)) {
-  let overlayTexSize = vec2f(textureDimensions(overlayTex));
-  let overlayUv = vec2i(vec2f(uv - overlayPos.xy) / vec2f(overlayPos.zw) * vec2f(overlayTexSize));
-  // Blend overlay texture
-  let overlayTexel = textureLoad(overlayTex, overlayUv, 0);
-  let oa = overlayTexel.a;
-  color = vec4(
-    color.rgb * (1.0 - oa) + overlayTexel.rgb * oa,
-    oa + color.a * (1.0 - oa)
-  );
-}
 output.color = color;
 `,
     uniforms: [
@@ -567,17 +554,11 @@ output.color = color;
         label: 'previewTransitionPercent',
         type: 'f32',
         data: 0
-      },
-      {
-        label: 'overlayPos',
-        type: 'vec4i',
-        data: [1e5, 1e5, 0, 0]
       }
     ],
     outputs: ['color'],
     inputs: [
       'colorTex',
-      'overlayTex',
       'previewTransitionTex'
     ]
   });
@@ -587,7 +568,6 @@ output.color = color;
     }
   });
 
-  let overlayTexture: GPUTexture;
   let previewTransitionTexture: GPUTexture | undefined;
   let hasPreviewTransition = false;
 
@@ -633,45 +613,15 @@ output.color = color;
 
   function _present(encoder: GPUCommandEncoder, texture: GPUTexture) {
     outputPass.setUniform('previewTransitionPercent', 0);
-    outputPass.setUniform(
-      'overlayPos',
-      overlay
-        ? [overlay.x, overlay.y, overlay.width, overlay.height]
-        : [1e5, 1e5, 0, 0]
-    );
     outputPass.setRenderToScreen(
       ctx.getCurrentTexture(),
       currentPresentationFormat
     );
     outputPass.createPass(encoder, {
       colorTex: texture,
-      overlayTex: overlayTexture,
       previewTransitionTex: texture
     });
   }
-
-  function _createOverlayTexture(width: number, height: number) {
-    if (
-      overlayTexture &&
-      overlayTexture.width === width &&
-      overlayTexture.height === height
-    ) {
-      return;
-    }
-    overlayTexture = device.createTexture({
-      size: {
-        width,
-        height,
-        depthOrArrayLayers: 1
-      },
-      format: 'rgba8unorm',
-      usage:
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.RENDER_ATTACHMENT
-    });
-  }
-  _createOverlayTexture(1, 1);
 
   function _updateSeed(width: number, height: number) {
     const sequenceSample = sampleCount + sampleSequenceOffset;
@@ -2044,54 +1994,6 @@ output.color = color;
     setOutput(nextOutput: RenderOutput) {
       if (output === nextOutput) return false;
       output = nextOutput;
-      return true;
-    },
-
-    setOverlay(_overlay: Scene['overlay']) {
-      if (overlay === _overlay) {
-        return false;
-      }
-
-      overlay = _overlay;
-      if (overlay) {
-        _createOverlayTexture(overlay.image.width, overlay.image.height);
-        if (isTextureDataSource(overlay.image)) {
-          const expectedBytes = overlay.image.width * overlay.image.height * 4;
-          if (
-            !(overlay.image.data instanceof Uint8Array) ||
-            overlay.image.data.byteLength !== expectedBytes
-          ) {
-            throw new Error('Overlay data must contain RGBA8 pixels');
-          }
-          device.queue.writeTexture(
-            { texture: overlayTexture },
-            overlay.image.data,
-            {
-              bytesPerRow: overlay.image.width * 4,
-              rowsPerImage: overlay.image.height
-            },
-            {
-              width: overlay.image.width,
-              height: overlay.image.height,
-              depthOrArrayLayers: 1
-            }
-          );
-        } else {
-          device.queue.copyExternalImageToTexture(
-            {
-              source: overlay.image
-            },
-            {
-              texture: overlayTexture
-            },
-            {
-              width: overlay.image.width,
-              height: overlay.image.height,
-              depthOrArrayLayers: 1
-            }
-          );
-        }
-      }
       return true;
     },
 

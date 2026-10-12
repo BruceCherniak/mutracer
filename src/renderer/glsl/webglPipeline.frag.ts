@@ -194,9 +194,7 @@ export const outputFragment = new FragmentShader({
   uniforms: {
     colorTex: Shader.uniform('sampler2D'),
     colorDenoisedTex: Shader.uniform('sampler2D'),
-    overlayTex: Shader.uniform('sampler2D'),
-    denoisedPercent: Shader.uniform('float', 0),
-    overlayPos: Shader.uniform('vec4', [1e5, 1e5, 0, 0])
+    denoisedPercent: Shader.uniform('float', 0)
   },
   main: glsl`
 void main() {
@@ -207,15 +205,6 @@ void main() {
     denoisedPercent
   );
   color = vec4(color.rgb * color.a, color.a);
-  if (all(greaterThanEqual(uv, overlayPos.xy)) &&
-      all(lessThan(uv, overlayPos.xy + overlayPos.zw))) {
-    vec2 overlayUv = (uv - overlayPos.xy) / overlayPos.zw;
-    vec4 overlay = texture(overlayTex, overlayUv);
-    color = vec4(
-      mix(color.rgb, overlay.rgb, overlay.a),
-      overlay.a + color.a * (1.0 - overlay.a)
-    );
-  }
   out_color = color;
 }`
 });

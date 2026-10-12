@@ -65,7 +65,6 @@ function createPipeline(overrides: Partial<WGPURenderingPipeline> = {}) {
     setInteractivePreviewParams: vi.fn(),
     setTransmissiveOutputAlphaMin: vi.fn(() => false),
     setOutput: vi.fn(() => false),
-    setOverlay: vi.fn(() => false),
     dispose: vi.fn(),
     getRawOutput: vi.fn(),
     performOIDNDenoise: vi.fn(() => new Promise<boolean>(() => {})),

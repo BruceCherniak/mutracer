@@ -4,7 +4,7 @@ import Camera from '../scene/Camera.js';
 import Mesh from '../scene/Mesh.js';
 import Geometry from '../scene/Geometry.js';
 import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
-import { Scene, SceneBackground, SceneLight } from '../scene/Scene.js';
+import { SceneBackground, SceneLight } from '../scene/Scene.js';
 import { ColorRGB } from '../types.js';
 import { TextureAtlasStats } from './MergedMaterialData.js';
 import type {
@@ -271,7 +271,6 @@ export interface RenderingPipeline {
   }): void;
   setTransmissiveOutputAlphaMin(alphaMin: number): boolean;
   setOutput(output: RenderOutput): boolean;
-  setOverlay(overlay: Scene['overlay']): boolean;
   dispose(): void;
   readDepthSamples(area: DepthSampleArea): Promise<Float32Array | undefined>;
   getRawOutput(): Promise<{

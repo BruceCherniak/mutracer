@@ -1339,9 +1339,6 @@ export default class Renderer {
     if (pipeline.setToneMappingParams(toneMappingParams)) {
       needsRedrawPostProcess = true;
     }
-    if (pipeline.setOverlay(scene.overlay)) {
-      needsRedrawPostProcess = true;
-    }
 
     // Initial scene setup is not an edit. Later updates share one interaction
     // signal so material, transform, lighting and background changes all preview.

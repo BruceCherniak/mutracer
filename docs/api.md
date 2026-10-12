@@ -155,7 +155,7 @@ If a denoiser is set, the result is denoised before the promise resolves.
 
 | Export | Description |
 | --- | --- |
-| `Scene` | `{ meshes, lights, background?, overlay? }`; see below |
+| `Scene` | `{ meshes, lights, background? }`; see below |
 | `Mesh` | `new Mesh(geometry, material \| material[])`, `matrixWorld` |
 | `Geometry`, `GeometryAttribute` | Triangle data: required `position`; optional `normal` and `indices` are generated at construction; `vertexCount` / `triangleCount` getters; optional `uv`, `uv1`, `tangent`, `color`, `materialIndex` (raw per-vertex indices, itemSize 1; all three corners of each triangle must match; invalid indices fall back to material 0 with one warning); `dynamic` (default `false`) for [deforming geometry](./updates.md#dynamic-geometry) |
 | `OpenPBRMaterial` | See [materials](./materials.md) |
@@ -164,10 +164,6 @@ If a denoiser is set, the result is denoised before the promise resolves.
 | `RectLight`, `SphereLight`, `SpotLight`, `DirectionalLight`, `EnvironmentLight`, `AmbientLight` | Lights |
 | `IESProfile`, `parseIESProfile(text)` | Photometric profiles for `SpotLight` |
 | `SceneBackground` | `[r, g, b, a]`, `Texture` or `GroundedSkyboxBackground` |
-
-`scene.overlay` is an optional image composited over the final frame:
-`{ image, x, y, width, height }` in canvas pixels, where `image` is an
-`HTMLImageElement`, an `HTMLCanvasElement` or RGBA8 `{ data, width, height }`.
 
 `Geometry`, `Texture` and `OpenPBRMaterial` expose `version` (initially `0`)
 and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`

@@ -57,8 +57,7 @@ export type {
   GroundedSkyboxBackground,
   Scene,
   SceneBackground,
-  SceneLight,
-  SceneOverlayDataSource
+  SceneLight
 } from './scene/Scene.js';
 export { default as Camera } from './scene/Camera.js';
 export { default as Mesh } from './scene/Mesh.js';
