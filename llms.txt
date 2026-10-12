@@ -18,7 +18,7 @@
 - Depth of field: `camera.fStop = 2.8` (0 disables), `camera.focusDistance` along the view direction, `camera.metersPerUnit` for non-metre scenes; see [depth of field](./docs/getting-started.md#depth-of-field).
 - Depth: after rendering, `await renderer.readDepthSamples({ x, y, size })` queries GPU pinhole depths for autofocus; see [depth sampling](docs/api.md#depth-sampling).
 - Sampling: `renderer.samplingPattern` is `'sobol'` (default), `'zsobol'` (low spp without a denoiser) or `'random'`.
-- Final stills: `await renderer.renderOfflineFrame(scene, camera, { samples })`, then `renderer.prepareForExport()` and `canvas.toBlob(...)`. Linear HDR pixels: `await renderer.getRawOutput()`.
+- Final stills: `await renderer.renderOfflineFrame(scene, camera, { samples })`, then `await renderer.toBlob()`. Linear HDR pixels: `await renderer.getRawOutput()`.
 - BVH: automatic; optional `prebuildBVH(nextScene, { onProgress?, signal? })` returns void; diagnostics `bvh.lastBuild` holds statistics. Settings changes rebuild automatically. Listen to `progress` / `status` for loading UI ([BVH](docs/bvh.md)).
 
 - Events: `renderer.on('sample' | 'status' | 'progress' | 'error' | 'denoised' | 'devicelost', listener)` returns unsubscribe; `lastError` only reflects the latest render's synchronous failure, async errors use `error` ([API](docs/api.md)).

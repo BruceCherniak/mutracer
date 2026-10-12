@@ -1660,12 +1660,26 @@ export default class Renderer {
     return Math.min(maxSamples, Math.max(next, renderedSamples + 1));
   }
 
-  /** Redraws post-processing so `canvas.toDataURL()` sees the latest image. */
-  prepareForExport() {
-    if (this.backend === 'webgpu') {
-      // Needs do an extra draw. Or the export will be last frame.
-      this._pipeline?.drawPostProcess();
+  /**
+   * Redraws the current image, waits for queued GPU work and encodes it.
+   * Default type image/png; quality undefined lets the browser choose.
+   */
+  async toBlob(options: {
+    /** Browser image MIME type. Default image/png. */ type?: string;
+    /** Encoder quality from 0 to 1. Default undefined uses the browser default. */ quality?: number;
+  } = {}): Promise<Blob> {
+    this._pipeline?.drawPostProcess();
+    await this.device?.queue.onSubmittedWorkDone();
+    const type = options.type ?? 'image/png';
+    const canvas = this.canvas;
+    if ('convertToBlob' in canvas) {
+      return (canvas as unknown as OffscreenCanvas).convertToBlob({ type, quality: options.quality });
     }
+    return new Promise<Blob>((resolve, reject) => {
+      canvas.toBlob(blob => {
+        if (blob) resolve(blob); else reject(new Error('The canvas could not be encoded'));
+      }, type, options.quality);
+    });
   }
 
   /**

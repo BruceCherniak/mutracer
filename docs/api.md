@@ -97,7 +97,7 @@ affects the image restarts accumulation.
 | `samples` | Accumulated spp; initially 0 |
 | `getRawOutput()` | `Promise<{ width, height, data: Float32Array }>` linear RGBA, top row first |
 | `readDepthSamples({ x, y, size })` | Asynchronously queries a 7×7 grid of GPU depths after `render()`; see [depth sampling](#depth-sampling) |
-| `prepareForExport()` | Redraws post-processing before `canvas.toBlob()` / `toDataURL()` |
+| `toBlob({ type?, quality? } = {})` | Redraws post-processing, waits for GPU work and encodes a Blob; type defaults image/png, quality undefined |
 | `backend` / `device` | Backend (`'webgpu'` / `'webgl'`), initially undefined; device only on WebGPU |
 | `getDiagnostics()` | Available after initialization or a BVH build (backend undefined before init); backend, adapter, shader compilation, BVH, light sampling and timing details |
 | `init()` / `info` | Initializes once and resolves `RendererInfo`; synchronous info is undefined before completion |

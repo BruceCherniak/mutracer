@@ -130,10 +130,7 @@ exportButton.addEventListener('click', async () => {
           : `Offline ${samples} / ${targetSamples} spp`;
       }
     });
-    renderer.prepareForExport();
-    const blob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, 'image/png')
-    );
+    const blob = await renderer.toBlob();
     if (blob) {
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);

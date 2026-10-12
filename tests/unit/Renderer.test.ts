@@ -1506,3 +1506,18 @@ it('rebuilds cached BLAS after settings change and emits preparation progress in
  renderer.render(scene,{} as Camera);const count=progress.mock.calls.length;renderer.render(scene,{} as Camera);expect(progress).toHaveBeenCalledTimes(count);
  build.mockRestore();vi.unstubAllGlobals();
 });
+
+it('redraws and waits for GPU completion before encoding a Blob', async () => {
+ const order:string[]=[],blob=new Blob(['image']);
+ const canvas={width:1,height:1,toBlob:vi.fn((callback:BlobCallback)=>{order.push('encode');callback(blob);})} as unknown as HTMLCanvasElement;
+ const renderer=new Renderer({canvas});attachPipeline(renderer,createPipeline({drawPostProcess:vi.fn(()=>{order.push('draw');})}));
+ Object.defineProperty(renderer,'device',{value:{queue:{onSubmittedWorkDone:async()=>{order.push('wait');}}}});
+ expect(await renderer.toBlob()).toBe(blob);expect(order).toEqual(['draw','wait','encode']);expect(canvas.toBlob).toHaveBeenCalledWith(expect.any(Function),'image/png',undefined);
+});
+it('rejects failed encoding and uses convertToBlob when available', async () => {
+ const renderer=new Renderer({canvas:{width:1,height:1,toBlob:(callback:BlobCallback)=>callback(null)} as HTMLCanvasElement});
+ await expect(renderer.toBlob()).rejects.toThrow('The canvas could not be encoded');
+ const blob=new Blob(['offscreen']);const convertToBlob=vi.fn(async()=>blob);
+ const other=new Renderer({canvas:{width:1,height:1,convertToBlob} as unknown as HTMLCanvasElement});
+ expect(await other.toBlob({type:'image/jpeg',quality:.8})).toBe(blob);expect(convertToBlob).toHaveBeenCalledWith({type:'image/jpeg',quality:.8});
+});

@@ -186,8 +186,7 @@ await renderer.renderOfflineFrame(scene, camera, {
   samples: 1024,
   onProgress: ({ stage, samples, targetSamples }) => console.log(stage, samples, targetSamples)
 });
-renderer.prepareForExport();
-canvas.toBlob((blob) => { /* save */ }, 'image/png');
+const blob = await renderer.toBlob(); // image/png; optionally pass type and quality
 ```
 
 `await renderer.getRawOutput()` returns the linear HDR image as
