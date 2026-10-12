@@ -21,7 +21,7 @@ function gpu() {
 }
 it('reuses a large texture for smaller images and keeps the active viewport bounded', () => {
   const {device, calls, render, encoder} = gpu();
-  const pass = new WGPUFullQuadPass('scratch', device, {inputs: ['input'], outputs: ['color'], fsMain: 'output.color = textureLoad(input, uv, 0);'});
+  const pass = new WGPUFullQuadPass('scratch', device, {inputs: ['input'], outputs: ['color'], fsMain: 'output.color = load_input(uv, 0);'});
   pass.reserveCapacity(); pass.setOutputParams({color: {format: 'rgba32float'}});
   const input = {width: 64, height: 64, createView: () => ({})} as GPUTexture;
   pass.setSize(64, 64); pass.createPass(encoder, {input}); const allocated = pass.getOutput('color');
@@ -35,7 +35,7 @@ it('packs texture regions into one uniform binding within minimum device limits'
   const {device, calls, encoder} = gpu();
   const pass = new WGPUFullQuadPass('six inputs', device, {inputs: ['a', 'b', 'c', 'd', 'e', 'f'], outputs: ['color'],
     uniforms: Array.from({length: 9}, (_, i) => ({label: `value${i}`, type: 'f32' as const, data: 0})),
-    fsMain: 'output.color = textureLoad(a, uv, 0) + textureLoad(b, uv, 0) + textureLoad(c, uv, 0) + textureLoad(d, uv, 0) + textureLoad(e, uv, 0) + textureLoad(f, uv, 0);'});
+    fsMain: 'output.color = load_a(uv, 0) + load_b(uv, 0) + load_c(uv, 0) + load_d(uv, 0) + load_e(uv, 0) + load_f(uv, 0);'});
   pass.reserveCapacity(); pass.setSize(32, 32); pass.setOutputParams({color: {format: 'rgba8unorm'}});
   const texture = {width: 64, height: 64, createView: () => ({})} as GPUTexture; setTextureRegion(texture, 32, 16);
   pass.createPass(encoder, {a: texture, b: texture, c: texture, d: texture, e: texture, f: texture});

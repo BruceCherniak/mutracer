@@ -1,4 +1,4 @@
-import {scratchGLSL, scratchGLSLFunctions} from './scratchSampling.js';
+import {scratchGLSLFunctions} from './scratchSampling.js';
 import {setTextureRegion, textureRegion} from './textureRegion.js';
 import { FragmentShader, ShaderDefineValue } from './shader.js';
 import {
@@ -25,6 +25,7 @@ export interface WebGLPassOptions {
 export class WebGLFullQuadPass<I extends string, O extends string> {
   private readonly _renderer: WebGLDevice;
   private _bindings: WebGLProgramBindings;
+  private readonly _sourceShader: FragmentShader;
   private readonly _outputs: O[];
   private readonly _frameBuffer = new FrameBuffer();
   private _outputTextures = {} as Record<O, Texture2D>;
@@ -53,7 +54,8 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     }
   ) {
     this._renderer = renderer;
-    this._bindings = new WebGLProgramBindings(options.shader);
+    this._sourceShader = options.shader;
+    this._bindings = new WebGLProgramBindings(this._samplingShader(options.shader));
     this._outputs = options.outputs || (options.shader.outputs as O[]);
     this.setOutputParams(
       Object.fromEntries(
@@ -68,16 +70,27 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
   reserveCapacity() {
     if (this._reserveCapacity) return;
     this._reserveCapacity = true;
-    const shader = this._bindings.shader;
-    const textures = Object.keys(shader.uniforms).filter(name => shader.uniforms[name].type === 'sampler2D');
-    const uniforms = {...this._bindings.uniforms};
-    for (const name of textures) uniforms[`${name}Region`] = {type: 'ivec2', value: [1, 1]};
-    const transformed = new FragmentShader({name: shader.name, outputs: shader.outputs, defines: this._bindings.defines, uniforms,
-      includes: [{defines: {}, uniforms: {}, main: '', functions: [() => scratchGLSLFunctions(textures), ...shader.functions.map(fn => () => scratchGLSL(fn(), textures))]}],
-      main: scratchGLSL(shader.main, textures)});
-    transformed.parallelCompile = shader.parallelCompile;
-    this._bindings = new WebGLProgramBindings(transformed);
+    this._bindings = new WebGLProgramBindings(this._samplingShader(
+      this._sourceShader, true, this._bindings.uniforms, this._bindings.defines
+    ));
   }
+
+  private _samplingShader(
+    shader: FragmentShader,
+    scratch = false,
+    uniforms = shader.uniforms,
+    defines = shader.defines
+  ) {
+    const textures = Object.keys(shader.uniforms).filter(name => shader.uniforms[name].type === 'sampler2D');
+    uniforms = {...uniforms};
+    if (scratch) for (const name of textures) uniforms[`${name}RegionSize`] = {type: 'ivec2', value: [1, 1]};
+    const sampled = new FragmentShader({name: shader.name, outputs: shader.outputs, defines, uniforms,
+      includes: [{defines: {}, uniforms: {}, main: '', functions: [() => scratchGLSLFunctions(textures, scratch), ...shader.functions]}],
+      main: shader.main});
+    sampled.parallelCompile = shader.parallelCompile;
+    return sampled;
+  }
+
   setSize(width: number, height: number) {
     if (this._width === width && this._height === height) return;
     this._width = Math.max(1, width);
@@ -222,7 +235,7 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
 
     if (this._reserveCapacity) for (const [name, texture] of Object.entries(inputs) as [string, Texture2D][]) {
       const region = textureRegion(texture);
-      this.setUniform(`${name}Region`, [region.width, region.height]);
+      this.setUniform(`${name}RegionSize`, [region.width, region.height]);
     }
     this._bindings.setUniforms(inputs);
     this._bindings.bind(renderer);

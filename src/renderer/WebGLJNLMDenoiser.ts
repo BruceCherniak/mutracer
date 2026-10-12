@@ -31,7 +31,7 @@ const guideFragment = new FragmentShader({
   main: glsl`
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
-  vec4 moments = texelFetch(momentsTex, p, 0) + texelFetch(catcherMomentsTex, p, 0);
+  vec4 moments = load_momentsTex(p, 0) + load_catcherMomentsTex(p, 0);
   float n = moments.z;
   float mean = moments.x / max(n, 1.0);
   // Variance of the mean, or -1 when one sample cannot estimate it.
@@ -55,15 +55,15 @@ const varianceFragment = new FragmentShader({
   main: glsl`
 void main() {
   ivec2 p = ivec2(gl_FragCoord.xy);
-  ivec2 size = textureSize(rawGuideTex, 0);
-  vec2 center = texelFetch(rawGuideTex, p, 0).xy;
+  ivec2 size = rawGuideTexRegion();
+  vec2 center = load_rawGuideTex(p, 0).xy;
   float varianceSum = 0.0;
   float varianceCount = 0.0;
   float meanSum = 0.0;
   float meanSquareSum = 0.0;
   for (int dy = -1; dy <= 1; dy++) {
     for (int dx = -1; dx <= 1; dx++) {
-      vec2 value = texelFetch(rawGuideTex, clamp(p + ivec2(dx, dy), ivec2(0), size - 1), 0).xy;
+      vec2 value = load_rawGuideTex(clamp(p + ivec2(dx, dy), ivec2(0), size - 1), 0).xy;
       meanSum += value.x;
       meanSquareSum += value.x * value.x;
       if (value.y >= 0.0) {
@@ -119,24 +119,24 @@ const filterFragment = new FragmentShader({
 ivec2 imageSize;
 
 vec2 loadGuide(ivec2 p) {
-  return texelFetch(guideTex, clamp(p, ivec2(0), imageSize - 1), 0).xy;
+  return load_guideTex(clamp(p, ivec2(0), imageSize - 1), 0).xy;
 }
 
 // Premultiplied linear color.
 vec4 loadColor(ivec2 p) {
-  vec4 c = texelFetch(colorTex, p, 0);
+  vec4 c = load_colorTex(p, 0);
   if (decodeInput) c.rgb = pow(max(c.rgb, 0.0), vec3(2.2));
   return vec4(c.rgb * c.a, c.a);
 }
 
 float featureDistance(ivec2 q, vec4 centerAlbedo, vec3 centerNormal) {
-  vec4 albedo = texelFetch(albedoTex, q, 0);
+  vec4 albedo = load_albedoTex(q, 0);
   // Match WebGPU: protect relative RGB contrast, including dark textures,
   // while keeping coverage differences in absolute units.
   vec3 albedoScale = max((albedo.rgb + centerAlbedo.rgb) * 0.5, vec3(${JNLM_ALBEDO_FLOOR}));
   vec3 albedoDelta = (albedo.rgb - centerAlbedo.rgb) / albedoScale;
   float coverageDelta = albedo.a - centerAlbedo.a;
-  vec3 normalDelta = texelFetch(normalTex, q, 0).rgb - centerNormal;
+  vec3 normalDelta = load_normalTex(q, 0).rgb - centerNormal;
   return max(
     dot(albedoDelta, albedoDelta) * INV_ALBEDO_BANDWIDTH2
       + coverageDelta * coverageDelta * INV_COVERAGE_BANDWIDTH2,
@@ -145,14 +145,14 @@ float featureDistance(ivec2 q, vec4 centerAlbedo, vec3 centerNormal) {
 }
 
 void main() {
-  imageSize = textureSize(guideTex, 0);
+  imageSize = guideTexRegion();
   ivec2 p = ivec2(gl_FragCoord.xy);
-  vec4 centerAlbedo = texelFetch(albedoTex, p, 0);
-  vec4 centerNormalTexel = texelFetch(normalTex, p, 0);
+  vec4 centerAlbedo = load_albedoTex(p, 0);
+  vec4 centerNormalTexel = load_normalTex(p, 0);
   vec3 centerNormal = centerNormalTexel.rgb;
   // Primary misses show the background directly. It has no features that
   // protect its detail and no noise beyond antialiasing, so keep it.
-  if (centerNormalTexel.a <= 0.0 && texelFetch(shadowCatcherTex, p, 0).r <= 0.0) {
+  if (centerNormalTexel.a <= 0.0 && load_shadowCatcherTex(p, 0).r <= 0.0) {
     vec4 c = loadColor(p);
     vec3 rgb = c.rgb / max(c.a, 1e-6);
     if (encodeOutput) rgb = pow(max(rgb, 0.0), vec3(1.0 / 2.2));
@@ -208,7 +208,7 @@ void main() {
       float weight = exp(-max(max(colorDistance, 0.0), features));
       vec2 g = loadGuide(q);
       // Filter premultiplied color so coverage and color stay consistent.
-      vec3 a = (texelFetch(albedoTex, q, 0).rgb - centerAlbedo.rgb) / featureScale;
+      vec3 a = (load_albedoTex(q, 0).rgb - centerAlbedo.rgb) / featureScale;
       vec4 value = loadColor(q);
       sum += value * weight;
       featureSum += a * weight;

@@ -19,10 +19,10 @@ class WGPUMinMaxMap {
       ],
       fsMain: /*wgsl*/ `
 let pUv = select(uv, uv * 2, lod > 0);
-let h0 = textureLoad(in_minmax, pUv, 0).rg;
-let h1 = textureLoad(in_minmax, pUv + vec2i(1, 0), 0).rg;
-let h2 = textureLoad(in_minmax, pUv + vec2i(0, 1), 0).rg;
-let h3 = textureLoad(in_minmax, pUv + vec2i(1, 1), 0).rg;
+let h0 = load_in_minmax(pUv, 0).rg;
+let h1 = load_in_minmax(pUv + vec2i(1, 0), 0).rg;
+let h2 = load_in_minmax(pUv + vec2i(0, 1), 0).rg;
+let h3 = load_in_minmax(pUv + vec2i(1, 1), 0).rg;
 var minmax = vec2f(min(min(h0.x, h1.x), min(h2.x, h3.x)), max(max(h0.y, h1.y), max(h2.y, h3.y)));
 
 

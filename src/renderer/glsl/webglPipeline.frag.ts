@@ -13,12 +13,12 @@ vec4 median(vec4 a, vec4 b, vec4 c) {
   return a + b + c - min(min(a, b), c) - max(max(a, b), c);
 }
 void main() {
-  vec2 d = 1.0 / vec2(textureSize(colorTex, 0));
-  vec4 texel = texture(colorTex, v_Texcoord);
-  vec4 s1 = texture(colorTex, v_Texcoord - vec2(d.x, 0.0));
-  vec4 s2 = texture(colorTex, v_Texcoord + vec2(d.x, 0.0));
-  vec4 s3 = texture(colorTex, v_Texcoord - vec2(0.0, d.y));
-  vec4 s4 = texture(colorTex, v_Texcoord + vec2(0.0, d.y));
+  vec2 d = 1.0 / vec2(colorTexRegion());
+  vec4 texel = sample_colorTex(v_Texcoord);
+  vec4 s1 = sample_colorTex(v_Texcoord - vec2(d.x, 0.0));
+  vec4 s2 = sample_colorTex(v_Texcoord + vec2(d.x, 0.0));
+  vec4 s3 = sample_colorTex(v_Texcoord - vec2(0.0, d.y));
+  vec4 s4 = sample_colorTex(v_Texcoord + vec2(0.0, d.y));
   texel = median(median(texel, s1, s2), s3, s4);
   float lum = dot(texel.rgb, lumWeight);
   out_color = lum > threshold && texel.a > 0.0
@@ -134,14 +134,14 @@ vec3 gradeColor(vec3 color) {
 }
 void main() {
   vec2 uv = v_Texcoord;
-  vec4 shadow = texture(shadowCatcherTex, uv);
+  vec4 shadow = sample_shadowCatcherTex(uv);
   if (outputMode == 1) {
     out_color = vec4(vec3(shadow.a), 1.0);
     return;
   }
 
-  vec4 color = texture(colorTex, uv);
-  vec4 bloom = texture(bloomTex, uv) * bloomIntensity;
+  vec4 color = sample_colorTex(uv);
+  vec4 bloom = sample_bloomTex(uv) * bloomIntensity;
   color.rgb += bloom.rgb;
   color.rgb = gradeColor(color.rgb * exposure);
   if (sRGBOutput) {
@@ -161,8 +161,8 @@ void main() {
     );
     shadowAlpha = max(shadowAlpha - (1.0 - shadowCatcherAlpha), 0.0);
     if (coverage > 0.0) {
-      vec4 foreground = texture(foregroundTex, uv);
-      vec4 background = texture(catcherBackgroundTex, uv);
+      vec4 foreground = sample_foregroundTex(uv);
+      vec4 background = sample_catcherBackgroundTex(uv);
       vec3 foregroundColor = gradeColor((foreground.rgb + bloom.rgb) * exposure);
       vec3 backgroundColor = gradeColor((background.rgb / max(background.a, 0.000001) + bloom.rgb) * exposure);
       if (sRGBOutput) {
@@ -200,8 +200,8 @@ export const outputFragment = new FragmentShader({
 void main() {
   vec2 uv = v_Texcoord;
   vec4 color = mix(
-    texture(colorTex, uv),
-    texture(colorDenoisedTex, uv),
+    sample_colorTex(uv),
+    sample_colorDenoisedTex(uv),
     denoisedPercent
   );
   color = vec4(color.rgb * color.a, color.a);

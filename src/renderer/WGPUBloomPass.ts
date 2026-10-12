@@ -36,11 +36,11 @@ ${
 }
 let d = vec3i(1, 1, 0);
 
-var texel = textureLoad(colorTex, uv, 0);
-let s1 = textureLoad(colorTex, uv - d.xz, 0);
-let s2 = textureLoad(colorTex, uv + d.xz, 0);
-let s3 = textureLoad(colorTex, uv - d.zy, 0);
-let s4 = textureLoad(colorTex, uv + d.zy, 0);
+var texel = load_colorTex(uv, 0);
+let s1 = load_colorTex(uv - d.xz, 0);
+let s2 = load_colorTex(uv + d.xz, 0);
+let s3 = load_colorTex(uv - d.zy, 0);
+let s4 = load_colorTex(uv + d.zy, 0);
 texel = median(median(texel, s1, s2), s3, s4);
 
 // Premultiplied Alpha
@@ -71,15 +71,15 @@ fn brightness(c: vec3f) -> f32 {
 }
 `,
     fsMain: /*wgsl*/ `
-let size = vec2f(textureDimensions(colorTex, 0));
+let size = vec2f(colorTexRegion());
 let d = vec4f(-1.0, -1.0, 1.0, 1.0) / size.xyxy;
 ${
   ''
 }
-output.color = textureSample(colorTex, linearSampler, uv2 + d.xy) * 0.25
-  + textureSample(colorTex, linearSampler, uv2 + d.zy) * 0.25
-  + textureSample(colorTex, linearSampler, uv2 + d.xw) * 0.25
-  + textureSample(colorTex, linearSampler, uv2 + d.zw) * 0.25;
+output.color = sample_colorTex_linearSampler(uv2 + d.xy) * 0.25
+  + sample_colorTex_linearSampler(uv2 + d.zy) * 0.25
+  + sample_colorTex_linearSampler(uv2 + d.xw) * 0.25
+  + sample_colorTex_linearSampler(uv2 + d.zw) * 0.25;
 `
   });
 }
@@ -107,14 +107,14 @@ function createGaussianPass(device: GPUDevice) {
 const kernel = array<f32, 9>(0.07, 0.09, 0.12, 0.14, 0.16, 0.14, 0.12, 0.09, 0.07);
 `,
     fsMain: /*wgsl*/ `
-let texSize = vec2f(textureDimensions(colorTex, 0));
+let texSize = vec2f(colorTexRegion());
 let off = direction / texSize * size;
 
 var sum = vec4f(0.0);
 var weightAll = 0.0;
 for (var i = 0; i < 9; i++) {
   let w = kernel[i];
-  sum += textureSample(colorTex, linearSampler, uv2 + off * f32(i - 4)) * w;
+  sum += sample_colorTex_linearSampler(uv2 + off * f32(i - 4)) * w;
   weightAll += w;
 }
 output.color = sum / max(weightAll, 0.01);
@@ -138,8 +138,8 @@ function createBlendPass(device: GPUDevice) {
       linearSampler: device.createSampler(linearSamplerDescriptor)
     },
     fsMain: /*wgsl*/ `
-let color1 = textureSample(colorTex1, linearSampler, uv2);
-let color2 = textureSample(colorTex2, linearSampler, uv2);
+let color1 = sample_colorTex1_linearSampler(uv2);
+let color2 = sample_colorTex2_linearSampler(uv2);
 output.color = mix(color1, color2, weight);
 `
   });

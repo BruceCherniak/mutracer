@@ -364,8 +364,8 @@ query, getMemoryBytes: () => query ? query.resolveBuffer.size + query.resultBuff
     outputs: ['color'],
     uniforms: [{ label: 'flatBackgroundColor', type: 'vec4f', data: [0, 0, 0, 0] }],
     fsMain: /* wgsl */ `
-var color = textureLoad(colorTex, uv, 0);
-let coverage = clamp(textureLoad(coverageTex, uv, 0).a, 0.0, 1.0);
+var color = load_colorTex(uv, 0);
+let coverage = clamp(load_coverageTex(uv, 0).a, 0.0, 1.0);
 if (flatBackgroundColor.a > 0.5 && coverage > 0.0) {
   color = vec4f(color.rgb * coverage, color.a);
 }
@@ -375,7 +375,7 @@ output.color = color;
 
   const readbackPass = scratch.get('readbackPass', () => new WGPUFullQuadPass('output readback', device, {
     textureWillBeRead: true, inputs: ['inputTex'], outputs: ['color'],
-    fsMain: 'output.color = textureLoad(inputTex, uv, 0);'
+    fsMain: 'output.color = load_inputTex(uv, 0);'
   }));
   readbackPass.setOutputParams({ color: { format: 'rgba32float' } });
 
@@ -506,10 +506,10 @@ output.color = color;
   const outputPass = scratch.get('outputPass', () => new WGPUFullQuadPass('output', device, {
     fsMain: /* wgsl */ `
 let colorUv = min(
-  vec2i(uv2 * vec2f(textureDimensions(colorTex))),
-  vec2i(textureDimensions(colorTex)) - vec2i(1)
+  vec2i(uv2 * vec2f(colorTexRegion())),
+  vec2i(colorTexRegion()) - vec2i(1)
 );
-var color = textureLoad(colorTex, colorUv, 0);
+var color = load_colorTex(colorUv, 0);
 color = vec4(color.rgb * color.a, color.a);
 output.color = color;
 `,

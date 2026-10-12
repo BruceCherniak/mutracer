@@ -1,4 +1,4 @@
-import {scratchWGSL, scratchWGSLFunctions} from './scratchSampling.js';
+import {scratchWGSLFunctions} from './scratchSampling.js';
 import {setTextureRegion, textureRegion} from './textureRegion.js';
 import { getTargetShaderCache } from './WGPUShaderCache.js';
 import { textureBytes } from './gpuMemory.js';
@@ -107,8 +107,8 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
   private _height = 10;
 
   private _fsCode = '';
-  private _fsMain;
-  private _fsDefine;
+  private readonly _fsMain;
+  private readonly _fsDefine;
 
   private _textureWillBeRead;
 
@@ -166,15 +166,7 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
     this._reserveCapacity = true;
     this._capacityWidth = this._width; this._capacityHeight = this._height;
     const textures = this._inputs.filter(name => !this._inputViewDimensions[name as I] || this._inputViewDimensions[name as I] === '2d');
-    const samplers = Object.keys(this._samplers);
-    this._fsMain = scratchWGSL(this._fsMain, textures, samplers);
-    this._fsDefine = scratchWGSL(this._fsDefine ?? '', textures, samplers) + scratchWGSLFunctions(textures, samplers);
     this._regionNames = textures;
-    for (const [index, name] of textures.entries()) {
-      const expression = `imageRegions[${index}].xy`;
-      this._fsMain = this._fsMain.replace(new RegExp(`${name}Region`, 'g'), expression);
-      this._fsDefine = this._fsDefine.replace(new RegExp(`${name}Region`, 'g'), expression);
-    }
     if (textures.length) {
       const uniform: Uniform = {label: 'imageRegions', type: `array<vec4u, ${textures.length}>`, data: new Uint32Array(textures.length * 4)};
       this._uniforms.push(uniform); this._uniformsMap[uniform.label] = uniform;
@@ -384,6 +376,11 @@ ${this._outputs
   .map((name, idx) => `@location(${idx}) ${name}: vec4f,`)
   .join('\n')}
 }
+${scratchWGSLFunctions(
+  this._reserveCapacity ? this._regionNames : inputs.filter(name =>
+    !this._inputViewDimensions[name as I] || this._inputViewDimensions[name as I] === '2d'),
+  Object.keys(this._samplers), this._reserveCapacity
+)}
 ${this._fsDefine ?? ''}
 @fragment
 fn main(

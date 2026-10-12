@@ -101,15 +101,15 @@ fn gradeColor(inputColor: vec3f) -> vec3f {
 
 export const composeMain = /* wgsl */ `
 
-var finalColor = textureLoad(colorTex, uv, 0);
+var finalColor = load_colorTex(uv, 0);
 var bloomTexel = vec4(0.0);
 if (bloomIntensity > 0.0) {
-  bloomTexel = textureLoad(bloomTex, uv, 0) * bloomIntensity;
+  bloomTexel = load_bloomTex(uv, 0) * bloomIntensity;
   finalColor = vec4f(finalColor.rgb + bloomTexel.rgb, finalColor.a);
 }
 
 var gradedColor = gradeColor(finalColor.rgb * exposure);
-let vignetteEdge = smoothstep(0.2, 0.72, distance(vec2f(uv) / vec2f(textureDimensions(colorTex)), vec2f(0.5)));
+let vignetteEdge = smoothstep(0.2, 0.72, distance(vec2f(uv) / vec2f(colorTexRegion()), vec2f(0.5)));
 gradedColor *= 1.0 - toneMappingParams.y * vignetteEdge;
 let hdrOutput = hdrOutputEnabled > 0.5;
 if (!hdrOutput) {
@@ -123,7 +123,7 @@ let encodedDisplay = select(
 var displayColor = encodedDisplay;
 if (flatBackgroundColor.a > 0.5) {
   let surfaceCoverage = clamp(
-    textureLoad(flatBackgroundMaskTex, uv, 0).a,
+    load_flatBackgroundMaskTex(uv, 0).a,
     0.0,
     1.0
   );
@@ -153,12 +153,12 @@ if (bloomIntensity > 0.0) {
 }
 
 if (shadowCatcherEnabled > 0.5) {
-  let shadowCatcher = textureLoad(shadowCatcherTex, uv, 0);
+  let shadowCatcher = load_shadowCatcherTex(uv, 0);
   let coverage = clamp(shadowCatcher.r, 0.0, 1.0);
   let opacity = max(clamp(shadowCatcher.a / max(coverage, 0.000001), 0.0, 1.0) - (1.0 - shadowCatcherAlpha), 0.0);
   if (coverage > 0.0) {
-    let foreground = textureLoad(foregroundTex, uv, 0);
-    let background = textureLoad(catcherBackgroundTex, uv, 0);
+    let foreground = load_foregroundTex(uv, 0);
+    let background = load_catcherBackgroundTex(uv, 0);
     var foregroundColor = gradeColor((foreground.rgb + bloomTexel.rgb) * exposure);
     var backgroundColor = gradeColor((background.rgb / max(background.a, 0.000001) + bloomTexel.rgb) * exposure);
     foregroundColor *= 1.0 - toneMappingParams.y * vignetteEdge;
@@ -193,7 +193,7 @@ if (shadowCatcherEnabled > 0.5) {
 
 output.color = finalColor;
 
-// output.color = textureLoad(bloomTex, uv, 0) * bloomIntensity;
+// output.color = load_bloomTex(uv, 0) * bloomIntensity;
 `;
 
 // Preserve the existing display composition, but give OIDN a floating-point,
@@ -210,11 +210,11 @@ output.denoiseColor = vec4f(displayLinear, finalColor.a);
 `;
 
 export const compositeDenoiseDisplayMain = /* wgsl */ `
-let denoised = textureLoad(colorTex, uv, 0);
+let denoised = load_colorTex(uv, 0);
 // Keep the original primary coverage, including transparency. OIDN only
 // filters RGB; filtering coverage separately reintroduces silhouette seams.
 // The built-in filter weights color and coverage together and may replace it.
-let alpha = select(textureLoad(composedTex, uv, 0).a, clamp(denoised.a, 0.0, 1.0), denoisedAlpha > 0.5);
+let alpha = select(load_composedTex(uv, 0).a, clamp(denoised.a, 0.0, 1.0), denoisedAlpha > 0.5);
 let linear = max(denoised.rgb, vec3f(0.0));
 let encoded = select(pow(linear, vec3f(1.0 / 2.2)), linearToSrgb(linear), hdrOutputEnabled > 0.5);
 output.color = vec4f(select(vec3f(0.0), encoded, alpha > 0.0), alpha);

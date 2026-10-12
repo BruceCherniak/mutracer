@@ -51,12 +51,12 @@ export class WebGLRayTraceOutputPass {
         },
         main: glsl`
 void main() {
-  vec4 light = texture(colorTex, v_Texcoord);
-  vec4 mask = texture(shadowCatcherTex, v_Texcoord);
-  vec4 background = texture(catcherBackgroundTex, v_Texcoord);
-  float hit = texture(albedoTex, v_Texcoord).a;
+  vec4 light = sample_colorTex(v_Texcoord);
+  vec4 mask = sample_shadowCatcherTex(v_Texcoord);
+  vec4 background = sample_catcherBackgroundTex(v_Texcoord);
+  float hit = sample_albedoTex(v_Texcoord).a;
   // Full spectral beauty has three wavelength contributions per shadow sample.
-  float contributions = max(texture(normalTex, v_Texcoord).a, 1.0) / sampleCount;
+  float contributions = max(sample_normalTex(v_Texcoord).a, 1.0) / sampleCount;
   float foregroundHit = max(hit - mask.b * contributions, 0.0);
   out_foreground = vec4(
     (light.rgb - background.rgb * contributions)
