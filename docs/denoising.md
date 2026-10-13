@@ -199,10 +199,10 @@ render sizes is prepared again. `DenoiseInput` contains these buffers:
 
 | Buffer | Data |
 | --- | --- |
-| `color` | Linear HDR composition with background and catcher coverage; before exposure, color grading, tone mapping, vignette and bloom |
+| `color` | Native resolved linear HDR ray color; before exposure, grading, tone mapping, vignette, bloom and display background/catcher composition |
 | `albedo` | Linear RGB albedo averaged over complete samples; alpha is primary-hit coverage |
 | `normal` | Resolved world-space normal averaged and encoded as `normal*.5+.5`, without renormalization; alpha 1 for valid surface data, otherwise zero RGBA |
-| `output` | Write all linear HDR RGB; output alpha is ignored and the input composition's coverage is preserved |
+| `output` | Write all linear HDR RGB; output alpha is ignored and the input path coverage is preserved |
 
 All four are tightly packed RGBA float32, top row first, exactly
 `width * height * 16` bytes, with STORAGE, COPY_SRC and COPY_DST usages.
@@ -210,10 +210,18 @@ Dimensions describe the actual internal image (WebGPU rounds up to 16).
 Input buffers are read-only. Buffers are borrowed until the promise settles;
 do not retain or destroy them. Resolve after submitting every output write;
 MuTracer copies the result, waits for GPU work, then releases its queue lease.
-Custom `readPixels('denoised')` returns this linear HDR composition. Display
-settings apply afterward to the complete filtered image, including its
-background. For a shadow catcher this composition can differ from the raw
-radiance returned by `readPixels('hdr')`.
+Custom `readPixels('denoised')` returns the filtered native HDR ray color,
+with input path coverage. Display settings then follow the ordinary compose
+path: flat backgrounds retain their display-space treatment and catcher
+layers are combined after tone mapping. An identity filter preserves the
+unfiltered display, including bloom and partially transparent catchers.
+
+The resolved ray color uses native hit-count normalization; fully blank
+pixels use sample-count normalization. Flat primary misses can contribute
+background radiance, but this buffer has not yet undergone display background
+or catcher composition. `readPixels('hdr')` separately restores a per-sample
+average for mixed flat-background pixels, so do not assume it equals the
+custom input at those edges.
 
 Render and Engine never dispose the supplied instance. Its object identity
 selects it; identical assignment and schedule-only edits preserve running
@@ -234,6 +242,16 @@ resources when it changes; `prepare` is called again. Dispose caller-owned
 resources yourself after outstanding work has settled.
 
 ## Implementation notes
+
+### Custom HDR layers
+
+Custom filters operate on the resolved beauty RGB. On a catcher, the filtered
+RGB correction is applied proportionally to the original foreground and
+premultiplied background HDR layers before they enter the common compose
+shader. Near zero source channels, an additive correction is used. Layer
+coverage and shadow masks remain unchanged. The layers are not independently
+filtered; the original display-space background and catcher composition is
+shared with the unfiltered path.
 
 ### How JNLM works
 

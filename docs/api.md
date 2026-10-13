@@ -243,7 +243,7 @@ which WebGPU rounds up to multiples of 16. Before a pipeline exists, it returns 
 | Kind | Values |
 | --- | --- |
 | `hdr` | Original linear HDR samples, unchanged by denoising |
-| `denoised` | Completed output: custom WebGPU filters return linear HDR composition; built-in WebGPU filters normally return display-linear after composition/tone mapping; WebGL JNLM returns tone mapped, display encoded colors |
+| `denoised` | Completed output: custom WebGPU filters return native resolved HDR ray color before display background/catcher composition; built-in WebGPU filters normally return display-linear after composition/tone mapping; WebGL JNLM returns tone mapped, display encoded colors |
 | `albedo` | Native linear albedo guide and coverage alpha |
 | `normal` | Native normal guide: RGB encoded as `normal * 0.5 + 0.5`, alpha indicates valid surface data |
 

@@ -30,10 +30,10 @@ export interface DenoiseInput {
   /** Engine WebGPU device; may change after device loss/recovery. */ device: GPUDevice;
   /** Actual internal width, including backend alignment. */ width: number;
   /** Actual internal height, including backend alignment. */ height: number;
-  /** Read-only linear HDR composition, including background/catcher coverage, before exposure, grading, tone mapping, vignette and bloom. Usage STORAGE | COPY_SRC | COPY_DST. */ color: GPUBuffer;
+  /** Read-only native resolved linear HDR ray color, before exposure, grading, tone mapping, vignette, bloom and display background/catcher composition. RGB uses native hit-count normalization (flat primary misses are averaged by samples); alpha is raw path coverage. Usage STORAGE | COPY_SRC | COPY_DST. */ color: GPUBuffer;
   /** Read-only resolved linear RGB albedo averaged over complete samples; alpha is primary-hit coverage. Same packing/usage as color. */ albedo: GPUBuffer;
   /** Read-only resolved world-space RGB normal encoded as averaged normal*.5+.5, without renormalizing; alpha 1 for a valid surface, otherwise zero RGBA. Same packing/usage as albedo. */ normal: GPUBuffer;
-  /** Write linear HDR RGB here. Same packing/usage as color; alpha is ignored and original composition coverage is retained. */ output: GPUBuffer;
+  /** Write linear HDR RGB here. Same packing/usage as color; alpha is ignored and original path coverage is retained. */ output: GPUBuffer;
 }
 /** Third-party WebGPU filter; ignored with one warning on WebGL. */
 export interface CustomDenoiserOptions {
@@ -447,7 +447,7 @@ export default class Render {
     this._denoisePending = task;
     void task.catch(error => { if (revision === this._denoiseRevision && !this._disposed) this._engine._notifyError(error); }).finally(() => { if (this._denoisePending === task) { this._denoiseController = undefined; this._denoisePending = undefined; this._status = this.converged ? 'finished' : 'converging'; } });
   }
-  /** Reads this target's native RGBA float32 output, top row first. Default hdr; unavailable denoised output falls back to hdr. */
+  /** Reads native RGBA float32, top row first. Default hdr. Custom denoised output is resolved linear HDR ray color before display background/catcher composition; built-ins retain their native display-space output. Unavailable denoised output falls back to hdr. */
   async readPixels(kind: 'hdr' | 'denoised' | 'albedo' | 'normal' = 'hdr') {
     if (this._disposed) throw new Error('Render is disposed.');
     const target = this._target;

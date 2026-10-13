@@ -350,7 +350,7 @@ it('supplies HDR buffers to a custom filter and applies display settings after i
   await pipeline.performDenoise!({kind: 'custom', denoiser: {denoise}}, undefined, 'every-sample');
   const input = denoise.mock.calls[0][0];
   expect(input).toMatchObject({width: 80, height: 64, color: {size: 80 * 64 * 16}, albedo: {size: 80 * 64 * 16}, normal: {size: 80 * 64 * 16}, output: {size: 80 * 64 * 16}});
-  expect(mocks.Pass.instances.get('Custom HDR composition')!.createPass.mock.lastCall![1].colorTex).toBe(raw);
+  expect(mocks.Pass.instances.get('Custom HDR input copy')!.createPass.mock.lastCall![1].guide.texture).toBe(raw);
   const compose = mocks.Pass.instances.get('compose')!;
   expect(compose.createPass.mock.lastCall![1].colorTex).not.toBe(raw);
   expect(compose.setUniform).toHaveBeenCalledWith('exposure', 2);
@@ -375,7 +375,7 @@ it('keeps borrowed scratch resources alive until a cancelled custom promise sett
   const pending = pipeline.performDenoise!({kind: 'custom', denoiser: {denoise(_input, context) {
     signal = context.signal; return new Promise(resolve => {finish = resolve;});
   }}});
-  const scratchPass = mocks.Pass.instances.get('Custom HDR composition')!;
+  const scratchPass = mocks.Pass.instances.get('Custom HDR input copy')!;
   const release = vi.spyOn(scratchPass, 'dispose'); pipeline.manager.dispose();
   await Promise.resolve(); await Promise.resolve(); expect(signal.aborted).toBe(true); expect(release).not.toHaveBeenCalled();
   finish(); expect(await pending).toBe(false); await new Promise(resolve => setTimeout(resolve, 0));
@@ -389,7 +389,7 @@ it('keeps borrowed scratch alive when custom denoise disposes synchronously', as
   let signal!: AbortSignal;
   const pending = pipeline.performDenoise!({kind: 'custom', denoiser: {denoise(_input, context) {
     signal = context.signal;
-    vi.spyOn(mocks.Pass.instances.get('Custom HDR composition')!, 'dispose').mockImplementation(() => {released = true;});
+    vi.spyOn(mocks.Pass.instances.get('Custom HDR input copy')!, 'dispose').mockImplementation(() => {released = true;});
     pipeline.manager.dispose();
     return new Promise(resolve => {finish = resolve;});
   }}});
@@ -398,4 +398,24 @@ it('keeps borrowed scratch alive when custom denoise disposes synchronously', as
   expect(released).toBe(false);
   finish(); expect(await pending).toBe(false);
   await new Promise(resolve => setTimeout(resolve, 0)); expect(released).toBe(true);
+});
+
+it('keeps flat background and catcher composition on the ordinary display path for custom HDR', async () => {
+  const pipeline = createPipeline(false);
+  vi.spyOn(mocks.TracePass.latest, 'hasShadowCatcher').mockReturnValue(true);
+  pipeline.synchronizeBackground([1, 1, 1, 1]);
+  pipeline.setShadowCatcherParams([.1, .2, .3], .4);
+  pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.drawPostProcess();
+  const compose = mocks.Pass.instances.get('compose')!;
+  const original = compose.createPass.mock.lastCall![1];
+  await pipeline.performDenoise!({kind: 'custom', denoiser: {denoise: async () => {}}});
+  const layers = mocks.Pass.instances.get('Custom HDR layers')!;
+  expect(layers.createPass.mock.lastCall![1]).toMatchObject({originalTex: original.colorTex,
+    foregroundTex: original.foregroundTex, backgroundTex: original.catcherBackgroundTex});
+  expect(compose.createPass.mock.lastCall![1]).toMatchObject({foregroundTex: layers.getOutput('foreground'),
+    catcherBackgroundTex: layers.getOutput('background'), shadowCatcherTex: original.shadowCatcherTex});
+  expect(compose.setUniform).toHaveBeenCalledWith('flatBackgroundColor', [1, 1, 1, 1]);
+  expect(compose.setUniform).toHaveBeenCalledWith('shadowCatcherEnabled', 1);
+  expect(compose.setUniform).toHaveBeenCalledWith('shadowCatcherAlpha', .4);
+  pipeline.manager.dispose();
 });

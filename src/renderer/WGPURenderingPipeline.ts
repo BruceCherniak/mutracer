@@ -1,4 +1,4 @@
-import {customDenoiseCompositionMain, customDenoiseCoverageMain} from './wgsl/customDenoise.wgsl.js';
+import {customDenoiseLayersMain, customDenoiseCoverageMain} from './wgsl/customDenoise.wgsl.js';
 import { WGPUCanvasSurface } from './WGPUCanvasSurface.js';
 import { WGPUScratchBuffer } from './WGPUScratchBuffer.js';
 import { WGPUScratchTexture } from './WGPUScratchTexture.js';
@@ -638,7 +638,7 @@ output.color = color;
     return buffer;
   }
   function copyGuide(key: string, input: GPUTexture, exact = false) {
-    const pass = scratch.get(key, () => new WGPUComputePass('OIDN guide copy', device, {
+    const pass = scratch.get(key, () => new WGPUComputePass(`${key} copy`, device, {
       inputs: ['guide'], outputs: ['color'], uniforms: auxiliaryPassUniforms,
       csMain: 'if (globalId.x >= u32(imageSize.x) || globalId.y >= u32(imageSize.y)) {return;} out_color[globalId.x + globalId.y * u32(imageSize.x)] = textureLoad(in_guide, vec2i(globalId.xy), 0);'
     }));
@@ -659,7 +659,7 @@ output.color = color;
       resolvedHasShadowCatcher = rayTracePass.hasShadowCatcher();
       resolvedFlatBackground = pendingFlatBackground.slice();
     }
-    composePass.setUniform('flatBackgroundColor', denoiseValid && denoisedHDR ? [0, 0, 0, 0] : resolvedFlatBackground);
+    composePass.setUniform('flatBackgroundColor', resolvedFlatBackground);
     rawOutputPass.setUniform('flatBackgroundColor', resolvedFlatBackground);
     if (resolvedSamples < 1) return;
     prepareComposition();
@@ -675,13 +675,27 @@ output.color = color;
 
     composePass.setUniform(
       'shadowCatcherEnabled',
-      +(resolvedHasShadowCatcher && !(denoiseValid && denoisedHDR))
+      +resolvedHasShadowCatcher
     );
 
-    const foregroundTexture = getFrameInput(
+    let foregroundTexture = getFrameInput(
       resolvedHasShadowCatcher ? 'foreground' : 'color'
     );
     const colorTexture = denoiseValid && denoisedHDR && denoisedTexture ? denoisedTexture : getFrameInput('color');
+    let catcherBackgroundTexture = getFrameInput('catcherBackground');
+    if (denoiseValid && denoisedHDR && denoisedTexture && resolvedHasShadowCatcher) {
+      const layers = scratch.get('custom HDR layers', () => new WGPUFullQuadPass('Custom HDR layers', device, {
+        textureWillBeRead: true,
+        inputs: ['originalTex', 'filteredTex', 'foregroundTex', 'backgroundTex'],
+        outputs: ['foreground', 'background'], fsMain: customDenoiseLayersMain
+      }));
+      layers.setOutputParams({foreground: {format: 'rgba32float'}, background: {format: 'rgba32float'}});
+      layers.setSize(renderWidth, renderHeight);
+      layers.createPass(encoder, {originalTex: getFrameInput('color'), filteredTex: denoisedTexture,
+        foregroundTex: foregroundTexture, backgroundTex: catcherBackgroundTexture});
+      foregroundTexture = layers.getOutput('foreground');
+      catcherBackgroundTexture = layers.getOutput('background');
+    }
     const bloomEnabled = bloomIntensity > 0.0;
     // Progressive accumulation refreshes bloom every ten samples.
     const samplesSkipped = sampleCount < 10 || sampleCount % 10 > 0;
@@ -706,7 +720,7 @@ output.color = color;
     composePass.createPass(encoder, {
       colorTex: colorTexture,
       foregroundTex: foregroundTexture,
-      catcherBackgroundTex: getFrameInput('catcherBackground'),
+      catcherBackgroundTex: catcherBackgroundTexture,
       flatBackgroundMaskTex: getFrameInput('albedo'),
       shadowCatcherTex: getFrameInput('shadowCatcher'),
       // Use color texture as placeholder
@@ -1131,30 +1145,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     if (signal?.aborted) abort();
     const task = (async () => {
       if (controller.signal.aborted) return false;
-      const compose = scratch.get('custom HDR composition', () => new WGPUFullQuadPass('Custom HDR composition', device, {
-        textureWillBeRead: true,
-        inputs: ['colorTex', 'albedoTex', 'foregroundTex', 'catcherBackgroundTex', 'shadowCatcherTex'], outputs: ['color'],
-        uniforms: [
-          {label: 'flatBackgroundColor', type: 'vec4f', data: [0, 0, 0, 0]},
-          {label: 'shadowCatcherColor', type: 'vec3f', data: [0, 0, 0]},
-          {label: 'shadowCatcherAlpha', type: 'f32', data: 1},
-          {label: 'shadowCatcherEnabled', type: 'f32', data: 0}
-        ], fsMain: customDenoiseCompositionMain
-      }));
-      compose.setOutputParams({color: {format: 'rgba32float'}});
-      compose.setSize(renderWidth, renderHeight);
-      compose.setUniform('flatBackgroundColor', resolvedFlatBackground);
-      compose.setUniform('shadowCatcherColor', shadowCatcherColor);
-      compose.setUniform('shadowCatcherAlpha', shadowCatcherAlpha);
-      compose.setUniform('shadowCatcherEnabled', +resolvedHasShadowCatcher);
-      const encoder = device.createCommandEncoder({label: 'Custom HDR input'});
-      compose.createPass(encoder, {
-        colorTex: getFrameInput('color'), albedoTex: getFrameInput('albedo'),
-        foregroundTex: getFrameInput(resolvedHasShadowCatcher ? 'foreground' : 'color'),
-        catcherBackgroundTex: getFrameInput('catcherBackground'), shadowCatcherTex: getFrameInput('shadowCatcher')
-      });
-      const color = snapshotInput(encoder, 'Custom HDR input', compose.getOutput('color'), true);
-      device.queue.submit([encoder.finish()]);
+      const color = copyGuide('Custom HDR input', getFrameInput('color'), true);
       const width = renderWidth, height = renderHeight;
       const albedo = copyGuide('Custom albedo', getFrameInput('albedo'), true);
       const normal = copyGuide('Custom normal', getFrameInput('normal'), true);
