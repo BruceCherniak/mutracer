@@ -2662,7 +2662,7 @@ ${rayTraceCompute({
       }
       this._device.queue.copyExternalImageToTexture(
         {
-          source: img as HTMLImageElement,
+          source: img as HTMLImageElement | HTMLCanvasElement | OffscreenCanvas | ImageBitmap,
           // @ts-ignore WebGPU support different flipY for each layer.
           flipY: texture.flipYArray[idx]
         },
@@ -2680,7 +2680,7 @@ ${rayTraceCompute({
   private _updateMinmaxTexture(displacementMaps: Texture[]) {
     let size = 0;
     displacementMaps.forEach((m) => {
-      size = Math.max(size, (m.image as HTMLCanvasElement).width);
+      size = Math.max(size, m.image.width);
     });
 
     // TODO Must at least 2 layers.
@@ -2717,7 +2717,7 @@ ${rayTraceCompute({
     displacementMaps.forEach((m, idx) => {
       this._minmaxPass.createMinmaxMipmap(
         this._minmaxTexture!,
-        m.image as HTMLCanvasElement,
+        m.image as HTMLCanvasElement | OffscreenCanvas | ImageBitmap,
         m.flipY,
         idx
       );

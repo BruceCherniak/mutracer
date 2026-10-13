@@ -1,3 +1,4 @@
+import {scheduleFrame} from './util/frame.js';
 import type Engine from './Engine.js';
 import type Display from './Display.js';
 import Render, { type RenderOptions, type RenderStatus, type ConvergeOptions, type ConvergeResult, type SampleEvent } from './Render.js';
@@ -38,7 +39,7 @@ export default class RenderLoop {
   private _running = false;
   private _busy = false;
   private _disposed = false;
-  private _raf?: number;
+  private _cancelScheduled?: () => void;
   private _warnedTick = false;
   private _previewDenoising = false;
   private _finishedImage?: string;
@@ -120,14 +121,14 @@ export default class RenderLoop {
     return this._setStatus(next);
   }
   private _schedule(): void {
-    if (!this._running || this._busy || this._raf !== undefined || (typeof document !== 'undefined' && document.hidden)) return;
-    this._raf = requestAnimationFrame(() => { this._raf = undefined; try {this._tick();} finally {this._schedule();} });
+    if (!this._running || this._busy || this._cancelScheduled !== undefined || (typeof document !== 'undefined' && document.hidden)) return;
+    this._cancelScheduled = scheduleFrame(() => { this._cancelScheduled = undefined; try {this._tick();} finally {this._schedule();} });
   }
   private _visibility = (): void => {
     if (document.hidden) this._cancelFrame(); else this._schedule();
   };
-  private _cancelFrame(): void { if (this._raf !== undefined) cancelAnimationFrame(this._raf); this._raf = undefined; }
-  /** Starts an idempotent animation-frame loop; hidden pages pause automatically. */ start(): void { this._assertAlive(); this._running = true; this._schedule(); }
+  private _cancelFrame(): void { this._cancelScheduled?.(); this._cancelScheduled = undefined; }
+  /** Starts an idempotent loop; uses a 16 ms timer without rAF. Hidden pages pause automatically. */ start(): void { this._assertAlive(); this._running = true; this._schedule(); }
   /** Stops scheduling without discarding accumulated images. */ stop(): void { this._running = false; this._cancelFrame(); }
   /** Pauses ticks, converges final, presents it, and resumes a previously running loop. */
   async converge(options: ConvergeOptions): Promise<ConvergeResult> {

@@ -48,7 +48,7 @@ output.out_minmax = vec4f(minmax, 0.0, 1.0);
    */
   createMinmaxMipmap(
     targetTexture: GPUTexture,
-    image: HTMLImageElement | HTMLCanvasElement,
+    image: HTMLImageElement | HTMLCanvasElement | ImageBitmap | OffscreenCanvas,
     flipY: boolean,
     textureIndex: number
   ) {

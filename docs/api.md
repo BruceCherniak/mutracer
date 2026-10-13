@@ -5,13 +5,14 @@ See [progressive rendering](./progressive-rendering.md) for complete examples.
 
 ## Engine
 
-`new Engine({canvas?, backend?, validateUpdates?})` owns the device and one GPU
+`new Engine({canvas?, backend?, device?, validateUpdates?})` manages the device and one GPU
 scene. `scene` and `camera` default to undefined. Assign them and call
 `update()` to commit edits before rendering; see [updates](./updates.md).
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `canvas` | new canvas | Default `engine.display.canvas` |
+| `canvas` | new HTML canvas, or OffscreenCanvas without document | Accepts either canvas type; default `engine.display.canvas` |
+| `device` | undefined | Caller-owned WebGPU device; see [requirements](#device-requirements) |
 | `backend` | `'auto'` | Automatic WebGPU/WebGL selection; `'webgpu'` requires WebGPU; `'webgl'` forces WebGL 2 |
 | `validateUpdates` | development build | Warn about missing material notifications |
 | `bvhBuilder` | `'builtin'` | JavaScript or `'tinybvh'` WebAssembly |
@@ -25,6 +26,7 @@ scene. `scene` and `camera` default to undefined. Assign them and call
 | `update(): boolean` | Sole scene/camera edit detection point; returns whether inputs changed |
 | `prepare(scene, {onProgress?, signal?})` | Optional CPU preparation for a future scene; options default undefined |
 | `init()` / `info` | Shared initialization promise and `EngineInfo`; info initially undefined |
+| `setDevice(device)` | Replace a caller-owned device; see [device loss](#device-loss) |
 | `backend` / `device` | Actual backend; device undefined before init and on WebGL |
 | `lastError` | Most recent synchronous engine/render error; initially undefined |
 | `getDiagnostics()` | Device, scene, compilation, timing, resident-target diagnostics; available after init or CPU preparation |
@@ -39,6 +41,56 @@ Events are `progress` (`{stage: 'device' | 'bvh' | 'shaders', progress}`),
 `error` (`Error`), and `devicelost` (`{reason, recovering}`). Each error object
 is reported once; console errors are deduplicated by message. Invalid light
 values are clamped and reported while rendering continues.
+
+### Device requirements
+
+`EngineParams.device` defaults to undefined (the library's shared device). A
+supplied device implies WebGPU, even with `backend: 'auto'`, and cannot be
+combined with `backend: 'webgl'`. `init()` rejects unsupported limits through
+`lastError` and the `error` event, listing each required and actual value. The
+device is caller-owned; `dispose()` does not destroy it or share it with other
+engines implicitly. Adapter name uses `device.adapterInfo` when available,
+otherwise `WebGPU`.
+
+`getRecommendedDeviceDescriptor(adapter)` requests supported optional features
+and the adapter limits used by the default engine path. Core rendering needs
+no optional features: timestamp-query falls back to wall-clock timing; core
+shaders use f32 and manual float texture filtering. shader-f16 and subgroups
+are OIDN optimizations; its automatic precision falls back to FP32 and its
+non-subgroup kernels remain available. Texture-format tier features and
+bgra8unorm-storage are not prerequisites for the core render-attachment path.
+Explicit OIDN FP16 or WebNN options can require shader-f16.
+
+The core floor is 8 storage buffers, 8 sampled textures, 1 storage texture,
+4 bind groups, workgroup X 64 / Y 16 / 256 invocations, and 12288 bytes for
+buffer size and storage-buffer binding size (one aligned 16×16 target block).
+Core kernels need 0 bytes of workgroup shared memory. Actual scene, image and
+texture sizes impose larger buffer and texture limits. OIDN shares this same
+device and can require more buffer capacity and workgroup shared memory for
+its convolution tiles; the recommended descriptor requests adapter maxima.
+Use smaller OIDN tiles or automatic precision when appropriate; network
+initialization reports incompatible configurations.
+
+### Device loss
+
+`engine.on('devicelost', ({reason, recovering}) => ...)` reports loss, including
+an externally destroyed shared device. Shared devices recover on the next
+`update()` or `refine()`; renders report `preparing`, discard their samples,
+and upload the committed scene again. CPU BVHs, decoded textures and downloaded
+OIDN weights remain cached. Device-bound networks reload. Multiple engines
+share the new device. Active `converge()` rejects with a device-loss error.
+RenderLoop keeps ticking during recovery.
+
+For caller-owned devices, `recovering` is false, renders report `error`, and
+`lastError` explains the loss. Call `await engine.setDevice(replacement)` and
+then `engine.update()` to resume. It uses the same limit validation as init;
+only engines originally constructed with `device` accept setDevice. The
+replacement is also caller-owned. Custom denoisers detect changes in
+`input.device` / `prepare({device})` and rebuild their own resources.
+
+WebGL context loss also reports `devicelost` with reason `webglcontextlost` and
+`recovering: true`. Rendering waits in `preparing` until the browser dispatches
+`webglcontextrestored`, then rebuilds resources and restarts all renders.
 
 ## Render
 
@@ -111,6 +163,10 @@ The same render cannot refine concurrently; other renders remain usable.
 
 ## RenderLoop and Sync
 
+`start()` uses requestAnimationFrame when available and a 16 ms setTimeout
+otherwise. Worker visibility and control forwarding are described in
+[worker integration](./getting-started.md#running-in-a-worker).
+
 `new RenderLoop(engine, options?)` provides the interactive policy described in
 [progressive rendering](./progressive-rendering.md#loop-policy).
 
@@ -140,6 +196,10 @@ Extend `Sync` with `constructor(engine)` and `update(): void`. `engine` is reado
 to the engine. Three.js integration uses [THREESync](./threejs.md#options).
 
 ## Display
+
+`Display.canvas` is `HTMLCanvasElement | OffscreenCanvas`. `toBlob()` uses
+OffscreenCanvas.convertToBlob in a worker or for an offscreen display. See
+[worker integration](./getting-started.md#running-in-a-worker).
 
 Use `engine.display`; creation of additional displays is outside this API.
 `setSize(width, height)` changes canvas pixels. Scale-based renders resize on
@@ -226,7 +286,7 @@ Public spatial values use `Vec2` (`[number, number] | Float32Array`), `Vec3` (`[
 | `Mesh` | `new Mesh(geometry, material \| material[])`, `transform` |
 | `Geometry`, `GeometryAttribute` | Triangle data: required `position`; optional `normal` and `indices` are generated at construction; `vertexCount` / `triangleCount` getters; optional `uv`, `uv1`, `tangent`, `color`, `materialIndex` (raw per-vertex indices, itemSize 1; all three corners of each triangle must match; invalid indices fall back to material 0 with one warning); `dynamic` (default `false`) for [deforming geometry](./updates.md#dynamic-geometry) |
 | `OpenPBRMaterial` | `new OpenPBRMaterial(params?)`; see [materials](./materials.md) |
-| `Texture` | Image, canvas or `{ data, width, height }`; 8-bit is sRGB, float is linear |
+| `Texture` | HTMLImageElement, HTMLCanvasElement, ImageBitmap, OffscreenCanvas or `{ data, width, height }`; 8-bit is sRGB, float is linear |
 | `Camera` | `new Camera({ projection: 'perspective', ... })` or orthographic; `position`, `lookAt()`, `copy(source)`, `clone()`; aspect defaults to automatic; depth of field with `fStop`, `focusDistance`, `sensorHeight`, `metersPerUnit` ([details](./getting-started.md#depth-of-field)) |
 | `RectLight`, `SphereLight`, `SpotLight`, `DirectionalLight`, `EnvironmentLight`, `AmbientLight` | Parameter-object constructors; analytic lights use `transform`, `position`, `lookAt()` and rigid axes. See [lights](./getting-started.md#lights) |
 | `IESProfile`, `parseIESProfile(text)` | Photometric profiles for `SpotLight` |
@@ -264,53 +324,3 @@ see [denoising](./denoising.md#custom-oidn-networks). The main entry exports
 ## Implementation notes
 
 BVH caches, light packing helpers and material-weight packing are renderer internals. Texture upload notifications use `markUpdated()` and `version`.
-
-### Device requirements
-
-`EngineParams.device` defaults to undefined (the library's shared device). A
-supplied device implies WebGPU, even with `backend: 'auto'`, and cannot be
-combined with `backend: 'webgl'`. `init()` rejects unsupported limits through
-`lastError` and the `error` event, listing each required and actual value. The
-device is caller-owned; `dispose()` does not destroy it or share it with other
-engines implicitly. Adapter name uses `device.adapterInfo` when available,
-otherwise `WebGPU`.
-
-`getRecommendedDeviceDescriptor(adapter)` requests supported optional features
-and the adapter limits used by the default engine path. Core rendering needs
-no optional features: timestamp-query falls back to wall-clock timing; core
-shaders use f32 and manual float texture filtering. shader-f16 and subgroups
-are OIDN optimizations; its automatic precision falls back to FP32 and its
-non-subgroup kernels remain available. Texture-format tier features and
-bgra8unorm-storage are not prerequisites for the core render-attachment path.
-Explicit OIDN FP16 or WebNN options can require shader-f16.
-
-The core floor is 8 storage buffers, 8 sampled textures, 1 storage texture,
-4 bind groups, workgroup X 64 / Y 16 / 256 invocations, and 12288 bytes for
-buffer size and storage-buffer binding size (one aligned 16×16 target block).
-Core kernels need 0 bytes of workgroup shared memory. Actual scene, image and
-texture sizes impose larger buffer and texture limits. OIDN shares this same
-device and can require more buffer capacity and workgroup shared memory for
-its convolution tiles; the recommended descriptor requests adapter maxima.
-Use smaller OIDN tiles or automatic precision when appropriate; network
-initialization reports incompatible configurations.
-
-### Device loss
-
-`engine.on('devicelost', ({reason, recovering}) => ...)` reports loss, including
-an externally destroyed shared device. Shared devices recover on the next
-`update()` or `refine()`; renders report `preparing`, discard their samples,
-and upload the committed scene again. CPU BVHs, decoded textures and downloaded
-OIDN weights remain cached. Device-bound networks reload. Multiple engines
-share the new device. Active `converge()` rejects with a device-loss error.
-RenderLoop keeps ticking during recovery.
-
-For caller-owned devices, `recovering` is false, renders report `error`, and
-`lastError` explains the loss. Call `await engine.setDevice(replacement)` and
-then `engine.update()` to resume. It uses the same limit validation as init;
-only engines originally constructed with `device` accept setDevice. The
-replacement is also caller-owned. Custom denoisers detect changes in
-`input.device` / `prepare({device})` and rebuild their own resources.
-
-WebGL context loss also reports `devicelost` with reason `webglcontextlost` and
-`recovering: true`. Rendering waits in `preparing` until the browser dispatches
-`webglcontextrestored`, then rebuilds resources and restarts all renders.

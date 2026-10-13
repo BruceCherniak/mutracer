@@ -1,3 +1,4 @@
+import {createCanvas} from '../util/canvas.js';
 import Geometry from '../scene/Geometry.js';
 import Texture from '../scene/Texture.js';
 import { copyGeometryChangeState } from '../scene/geometryChanges.js';
@@ -15,16 +16,19 @@ export class CommittedScene {
   private copy<T>(value: T): T {
     if (!value || typeof value !== 'object') return value;
     const object = value as object;
-    if ((typeof HTMLImageElement !== 'undefined' && object instanceof HTMLImageElement) || (typeof HTMLCanvasElement !== 'undefined' && object instanceof HTMLCanvasElement)) {
-      const source = object as HTMLImageElement | HTMLCanvasElement;
-      let canvas = this.copies.get(object) as HTMLCanvasElement | undefined;
-      if (!canvas) { canvas = document.createElement('canvas'); this.copies.set(object, canvas); }
+    if ((typeof HTMLImageElement !== 'undefined' && object instanceof HTMLImageElement) || (typeof HTMLCanvasElement !== 'undefined' && object instanceof HTMLCanvasElement) ||
+        (typeof OffscreenCanvas !== 'undefined' && object instanceof OffscreenCanvas) ||
+        (typeof ImageBitmap !== 'undefined' && object instanceof ImageBitmap)) {
+      const source = object as HTMLImageElement | HTMLCanvasElement | OffscreenCanvas | ImageBitmap;
+      let canvas = this.copies.get(object) as HTMLCanvasElement | OffscreenCanvas | undefined;
+      if (!canvas) { canvas = createCanvas(source.width, source.height); this.copies.set(object, canvas); }
       canvas.width = source.width; canvas.height = source.height;
-      canvas.getContext('2d')?.drawImage(source, 0, 0);
+      const context = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
+      if (!context) throw new Error('Texture snapshot context is not available.');
+      context.drawImage(source, 0, 0);
       return canvas as T;
     }
     if (typeof Node !== 'undefined' && object instanceof Node) return value;
-    if (typeof ImageBitmap !== 'undefined' && object instanceof ImageBitmap) return value;
     if (value instanceof Geometry && this.geometryVersions.get(value) === value.version) return this.copies.get(value);
     if (ArrayBuffer.isView(value)) {
       const previous = this.copies.get(object);

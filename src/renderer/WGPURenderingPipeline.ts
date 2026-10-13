@@ -123,7 +123,7 @@ function createTimeQuery(device: GPUDevice) {
 }
 
 function makeWGPUAccumulationTarget(
-  canvas: HTMLCanvasElement,
+  canvas: HTMLCanvasElement | OffscreenCanvas,
   device: GPUDevice,
   rayTracePass: WGPURayTracePass,
   surface: WGPUCanvasSurface,
@@ -1673,7 +1673,7 @@ width: renderWidth, height: renderHeight,
 }
 
 /** Independent render targets, without preview or presentation policy. */
-export function makeWGPURenderTargets(canvas: HTMLCanvasElement, device: GPUDevice, options: WGPURenderingPipelineOptions = {}): RenderPipeline {
+export function makeWGPURenderTargets(canvas: HTMLCanvasElement | OffscreenCanvas, device: GPUDevice, options: WGPURenderingPipelineOptions = {}): RenderPipeline {
   const rayTracePass = new WGPURayTracePass(device);
   const customJobs = new Set<Promise<unknown>>();
   const scratch = new ScratchPool(work => {

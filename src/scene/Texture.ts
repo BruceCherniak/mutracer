@@ -14,7 +14,7 @@ export interface TextureDataSource {
  */
 export default class Texture {
   /** Image or raw RGBA pixels supplied to the constructor; no default. */
-  image: HTMLImageElement | HTMLCanvasElement | TextureDataSource;
+  image: HTMLImageElement | HTMLCanvasElement | ImageBitmap | OffscreenCanvas | TextureDataSource;
   /** Optional stable identity of the texture in an adapter such as Three.js. */
   source?: object;
   /** Incremented by `markUpdated()`. */
@@ -28,7 +28,7 @@ export default class Texture {
   uvOffset: [number, number] = [0, 0];
   /** Geometry UV set used by this texture (Three.js Texture.channel). Default `0`. */
   uvChannel: 0 | 1 = 0;
-  constructor(image: HTMLImageElement | HTMLCanvasElement | TextureDataSource) {
+  constructor(image: HTMLImageElement | HTMLCanvasElement | ImageBitmap | OffscreenCanvas | TextureDataSource) {
     this.image = image;
   }
 

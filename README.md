@@ -155,3 +155,5 @@ code and data under MIT, Apache-2.0 and CC0 licenses; see
 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
 
 For host WebGPU integration, [supply your own GPUDevice](docs/getting-started.md#using-your-own-gpudevice).
+
+Render on an OffscreenCanvas in a Worker with the [worker integration guide](docs/getting-started.md#running-in-a-worker).

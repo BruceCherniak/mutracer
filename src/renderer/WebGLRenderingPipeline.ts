@@ -1,3 +1,4 @@
+import {scheduleFrame} from '../util/frame.js';
 import type {DenoiserHandle} from './denoiser.js';
 import { WebGLScratchCopy } from './WebGLScratchCopy.js';
 import { ScratchPool } from './ScratchPool.js';
@@ -248,7 +249,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     const start = performance.now();
     const generation = tileTimingGeneration;
     const timedTileRender = tileRender;
-    requestAnimationFrame(() => {
+    scheduleFrame(() => {
       elapsedFrameTime = Math.max(
         performance.now() - start - pageInvisibleTime,
         pageInvisibleTime > 0 ? 16 : 8
@@ -370,7 +371,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     if (document.hidden) pageLeaveTime = performance.now();
     else pageInvisibleTime = performance.now() - pageLeaveTime;
   }
-  document.addEventListener('visibilitychange', onVisibilityChange);
+  if (typeof document !== 'undefined') document.addEventListener('visibilitychange', onVisibilityChange);
 
   function activate() {
     rayTracePass.useTarget(targetKey);
@@ -545,7 +546,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     },
     dispose() {
       if (disposed) return; disposed = true;
-      document.removeEventListener('visibilitychange', onVisibilityChange);
+      if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibilityChange);
 
       rayTracePass.releaseTarget(targetKey);
       rayTraceOutputPass.dispose();

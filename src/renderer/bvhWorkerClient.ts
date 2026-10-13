@@ -171,6 +171,7 @@ export class BvhWorkerPool {
   }
 }
 
+/** Supports nested workers too; startup/transport failures use the existing calling-thread fallback. */
 export function canUseBvhWorker() {
   return typeof Worker !== 'undefined';
 }

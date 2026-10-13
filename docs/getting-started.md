@@ -180,6 +180,74 @@ changing the canvas. See [exporting](./progressive-rendering.md#reading-and-expo
 Call `loop.dispose()`, `sync.dispose()`, `controls.dispose()` and `engine.dispose()`
 when finished. See [ownership](./progressive-rendering.md#options-and-ownership).
 
+## Using your own GPUDevice
+
+```ts
+import { Engine, getRecommendedDeviceDescriptor } from '@meimu/mutracer';
+const adapter = await navigator.gpu.requestAdapter();
+if (!adapter) throw new Error('WebGPU unavailable');
+const device = await adapter.requestDevice(getRecommendedDeviceDescriptor(adapter));
+const engine = new Engine({ canvas, device });
+await engine.init();
+```
+
+The caller owns the device and releases it after all engines using it have been
+disposed. Supplying a device selects WebGPU; `backend: 'webgl'` is rejected.
+See [device requirements](./api.md#device-requirements) for limits and OIDN.
+
+## Running in a worker
+
+Transfer the display canvas once from the main thread:
+
+```ts
+const worker = new Worker(new URL('./render.worker.ts', import.meta.url), {type: 'module'});
+const offscreen = canvas.transferControlToOffscreen();
+worker.postMessage({canvas: offscreen, width: 800, height: 600}, [offscreen]);
+```
+
+In `render.worker.ts`, construct the scene and camera in the worker:
+
+```ts
+import {Engine, RenderLoop, Camera, Mesh, OpenPBRMaterial,
+  AmbientLight, createSphereGeometry} from '@meimu/mutracer';
+self.onmessage = ({data}) => {
+  const engine = new Engine({canvas: data.canvas});
+  engine.display.setSize(data.width, data.height);
+  engine.scene = {
+    meshes: [new Mesh(createSphereGeometry(), new OpenPBRMaterial())],
+    lights: [new AmbientLight({intensity: 1})],
+  };
+  engine.camera = new Camera({projection: 'perspective'});
+  engine.camera.position = [0, 0, 4]; engine.camera.lookAt([0, 0, 0]);
+  const loop = new RenderLoop(engine);
+  loop.start();
+  self.onmessage = ({data}) => {
+    if (data.type === 'stop') loop.stop();
+    if (data.type === 'start') loop.start();
+    if (data.type === 'resize') engine.display.setSize(data.width, data.height);
+    if (data.type === 'dispose') {loop.dispose(); engine.dispose();}
+  };
+};
+```
+
+Engine accepts HTMLCanvasElement or OffscreenCanvas. Without `document`, the
+omitted canvas defaults to a new OffscreenCanvas. Texture accepts ImageBitmap
+and OffscreenCanvas as well as HTML images/canvases and raw pixels. Export with
+`await engine.display.toBlob(render)` as on the main thread; offscreen displays
+use `convertToBlob`. Worker-created caller-owned GPUDevice instances use the
+same [host integration](#using-your-own-gpudevice) options.
+
+Workers have no page visibility event, so the loop keeps running until stopped.
+Forward visibility decisions from the main thread using stop/start messages.
+Without requestAnimationFrame, the loop uses a 16 ms timer. THREESync can
+synchronize a Three.js scene and camera in the worker; DOM-based controls
+remain on the main thread and their interaction/camera changes must be forwarded.
+
+BVH preparation creates nested workers when Worker is available. If startup or
+transport fails, it falls back to building in the calling thread (the render
+worker here). Asset URLs stay relative to the library/module, as on the main
+thread. Browser support for OffscreenCanvas and each GPU backend is required.
+
 ## Bundler notes
 
 Vite development prebundles dependencies and can relocate asset URLs. Exclude
@@ -195,18 +263,3 @@ export default defineConfig({
 Vite production builds and webpack 5 copy these assets without extra
 configuration. With bundlers that do not support asset URLs, self-host the
 OIDN weights with `weightsBaseUrl` (see [denoising](./denoising.md#hosting-the-weights)).
-
-## Using your own GPUDevice
-
-```ts
-import { Engine, getRecommendedDeviceDescriptor } from '@meimu/mutracer';
-const adapter = await navigator.gpu.requestAdapter();
-if (!adapter) throw new Error('WebGPU unavailable');
-const device = await adapter.requestDevice(getRecommendedDeviceDescriptor(adapter));
-const engine = new Engine({ canvas, device });
-await engine.init();
-```
-
-The caller owns the device and releases it after all engines using it have been
-disposed. Supplying a device selects WebGPU; `backend: 'webgl'` is rejected.
-See [device requirements](./api.md#device-requirements) for limits and OIDN.

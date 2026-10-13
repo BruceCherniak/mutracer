@@ -578,13 +578,13 @@ ${shader.main}`;
 }
 
 export interface RendererOptions extends WebGLContextAttributes {
-  canvas: HTMLCanvasElement;
+  canvas: HTMLCanvasElement | OffscreenCanvas;
   pixelRatio?: number;
   parallelShaderCompile?: boolean;
 }
 
 export class WebGLDevice {
-  readonly canvas: HTMLCanvasElement;
+  readonly canvas: HTMLCanvasElement | OffscreenCanvas;
   readonly gl: WebGL2RenderingContext;
   readonly emptyTexture = new Texture2D();
   private _viewport: [number, number, number, number] = [0, 0, 1, 1];

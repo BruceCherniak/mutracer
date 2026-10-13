@@ -1,3 +1,4 @@
+import {createCanvas} from '../util/canvas.js';
 type HDRConfiguration = GPUCanvasConfiguration & {toneMapping: {mode: 'extended'}};
 type InspectableContext = GPUCanvasContext & {getConfiguration?: () => GPUCanvasConfiguration & {toneMapping?: {mode?: string}}};
 /** One canvas surface; composing or exporting an image never reconfigures it. */
@@ -5,7 +6,7 @@ export class WGPUCanvasSurface {
   readonly context: InspectableContext;
   hdr = false;
   private compatibleHDR?: boolean;
-  constructor(canvas: HTMLCanvasElement, private readonly device: GPUDevice, private readonly standardFormat: GPUTextureFormat) {
+  constructor(canvas: HTMLCanvasElement | OffscreenCanvas, private readonly device: GPUDevice, private readonly standardFormat: GPUTextureFormat) {
     this.context = canvas.getContext('webgpu')! as InspectableContext;
     this.context.configure({device, format: standardFormat, alphaMode: 'premultiplied'});
   }
@@ -15,7 +16,7 @@ export class WGPUCanvasSurface {
     this.compatibleHDR = false;
     let probe: InspectableContext | null = null;
     try {
-      probe = document.createElement('canvas').getContext('webgpu') as InspectableContext | null;
+      probe = createCanvas().getContext('webgpu') as InspectableContext | null;
       if (!probe) return false;
       probe.configure({device: this.device, format: 'rgba16float', alphaMode: 'premultiplied', colorSpace: 'srgb', toneMapping: {mode: 'extended'}} as HDRConfiguration);
       const applied = probe.getConfiguration?.();

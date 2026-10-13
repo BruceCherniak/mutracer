@@ -1,3 +1,4 @@
+import {createCanvas} from './util/canvas.js';
 import type Engine from './Engine.js';
 import type Render from './Render.js';
 import type { ToneMapping, DisplayChannel } from './renderer/RenderingPipeline.js';
@@ -11,7 +12,7 @@ export interface BlobOptions {
 }
 /** Canvas presentation and shared display settings; obtained from engine.display. */
 export default class Display {
-  /** Display canvas, supplied to Engine or newly created by default. */ readonly canvas: HTMLCanvasElement;
+  /** Display canvas. Default the supplied Engine canvas, or a new canvas (OffscreenCanvas without document). */ readonly canvas: HTMLCanvasElement | OffscreenCanvas;
   /** Tone mapping transform. Default agx. */ toneMapping: ToneMapping = 'agx';
   /** Linear exposure multiplier. Default 1. */ toneMappingExposure = 1;
   /** Contrast multiplier. Default 1. */ contrast = 1;
@@ -26,8 +27,8 @@ export default class Display {
   /** Display image channel. Default final. */ channel: DisplayChannel = 'final';
   /** Linear shadow-catcher color. Default black. */ shadowCatcherColor: ColorRGB = [0, 0, 0];
   /** Shadow-catcher opacity multiplier. Default 1. */ shadowCatcherAlpha = 1;
-  private constructor(private readonly engine: Engine, canvas: HTMLCanvasElement) { this.canvas = canvas; }
-  /** @internal */ static _create(engine: Engine, canvas: HTMLCanvasElement) { return new Display(engine, canvas); }
+  private constructor(private readonly engine: Engine, canvas: HTMLCanvasElement | OffscreenCanvas) { this.canvas = canvas; }
+  /** @internal */ static _create(engine: Engine, canvas: HTMLCanvasElement | OffscreenCanvas) { return new Display(engine, canvas); }
   /** Resizes the drawing buffer; scale-based renders resize at their next refine. */
   setSize(width: number, height: number) {
     if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) throw new Error('Display dimensions must be positive.');
@@ -76,12 +77,13 @@ export default class Display {
     const target = this.compose(render);
     if (!target) throw new Error('Render has no complete image.');
     const image = await target.readPresentation();
-    const canvas = document.createElement('canvas'); canvas.width = image.width; canvas.height = image.height;
-    const context = canvas.getContext('2d');
+    const canvas = createCanvas(image.width, image.height, 'convertToBlob' in this.canvas);
+    const context = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
     if (!context) throw new Error('The image encoding context is not available.');
     const bytes = new Uint8ClampedArray(image.data.length);
     for (let i = 0; i < bytes.length; i++) bytes[i] = Math.round(Math.min(1, Math.max(0, image.data[i])) * 255);
     context.putImageData(new ImageData(bytes, image.width, image.height), 0, 0);
+    if ('convertToBlob' in canvas) return canvas.convertToBlob({type: options.type ?? 'image/png', quality: options.quality});
     return new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('The image could not be encoded')), options.type ?? 'image/png', options.quality));
   }
 }

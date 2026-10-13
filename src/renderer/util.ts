@@ -1,3 +1,4 @@
+import {createCanvas} from '../util/canvas.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
@@ -42,7 +43,7 @@ export function isIntelMac() {
   cachedIntelMac = false;
   if (isMac) {
     try {
-      const ctx = document.createElement('canvas').getContext('webgl');
+      const ctx = createCanvas().getContext('webgl') as WebGLRenderingContext | null;
       const d = ctx && ctx.getExtension('WEBGL_debug_renderer_info');
       const g = (d && ctx.getParameter(d.UNMASKED_RENDERER_WEBGL)) || '';
       if (!(g.match(/Apple M/) || g.match(/Apple GPU/))) cachedIntelMac = true;

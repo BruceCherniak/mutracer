@@ -1,3 +1,4 @@
+import {createCanvas} from '../util/canvas.js';
 import { packMaterialIndexAndWeightToInt } from './materialIndices.js';
 import { getGeometryBvh, setGeometryBvh, geometryBvhConfigMatches, type BvhBuildConfig } from './geometryBvh.js';
 import { writeMaterialIndices } from './materialIndices.js';
@@ -272,11 +273,9 @@ export function computeMinmaxCPU(
       ? (value) => value
       : (value) => Math.round(Math.min(Math.max(value, 0), 1) * 255);
   } else {
-    if (typeof document === 'undefined') {
-      throw new Error('The displacement texture is not CPU-readable.');
-    }
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d')!;
+    const canvas = createCanvas();
+    const ctx = canvas.getContext('2d') as CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D | null;
+    if (!ctx) throw new Error('The displacement texture is not CPU-readable.');
     canvas.width = w;
     canvas.height = w;
     ctx.drawImage(heightImage, 0, 0, w, w);

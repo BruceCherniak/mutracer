@@ -1,3 +1,4 @@
+import {createCanvas} from '../util/canvas.js';
 import { mapAlphaUsageConstants } from './materialConstants.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
@@ -187,13 +188,7 @@ function packTextureAtlas(
 }
 
 function createAtlasCanvas(width: number, height: number) {
-  const canvas =
-    typeof document !== 'undefined'
-      ? document.createElement('canvas')
-      : new OffscreenCanvas(width, height);
-  canvas.width = width;
-  canvas.height = height;
-  return canvas;
+  return createCanvas(width, height);
 }
 
 function createDataAtlasPage(

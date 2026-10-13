@@ -38,6 +38,12 @@
 - Changing `bvhBuilder`, `bvhLayout` or `bvhSpatialSplits` automatically rebuilds existing static BVHs on the next engine.update().
 - In Vite development, add `optimizeDeps: { exclude: ['@meimu/mutracer'] }` so bundled assets load.
 
+## Host integration
+
+- Caller-owned GPUDevice: pass `device` to Engine; obtain a descriptor with `getRecommendedDeviceDescriptor(adapter)`. Ownership and limits: [API](docs/api.md#device-requirements).
+- Device loss: shared WebGPU devices recover lazily; caller-owned devices require `await engine.setDevice(replacement)` then update. Active convergence rejects. [API](docs/api.md#device-loss).
+- OffscreenCanvas/Worker: Engine defaults to OffscreenCanvas without document; textures accept ImageBitmap/OffscreenCanvas. Forward visibility and controls; [worker guide](docs/getting-started.md#running-in-a-worker).
+
 ## Docs
 
 - [Getting started](docs/getting-started.md): scene model, render loop, geometry, cameras, lights, export, bundlers
@@ -50,6 +56,3 @@
 - [BVH](docs/bvh.md): automatic and up-front preparation, builders, layouts
 - [Performance](docs/performance.md): tuning checklist; resident target dimensions/bytes and complete-image presentation diagnostics
 - [Examples](https://github.com/pissang/mutracer/tree/main/examples): basic, Three.js, animation, advanced
-
-- Caller-owned GPUDevice: pass `device` to Engine; obtain a descriptor with `getRecommendedDeviceDescriptor(adapter)`. Ownership and limits: [API](docs/api.md#device-requirements).
-- Device loss: shared WebGPU devices recover lazily; caller-owned devices require `await engine.setDevice(replacement)` then update. Active convergence rejects. [API](docs/api.md#device-loss).

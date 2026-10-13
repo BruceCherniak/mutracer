@@ -1,3 +1,4 @@
+import {createCanvas} from './util/canvas.js';
 import Camera from './scene/Camera.js';
 import {getRecommendedDeviceDescriptor, validateDevice} from './renderer/deviceRequirements.js';
 import { cameraSnapshot } from './renderer/cameraSnapshot.js';
@@ -35,7 +36,7 @@ export interface PrepareOptions {
 }
 /** Engine construction settings. */
 export interface EngineParams {
-  /** Default display canvas. Default a newly created canvas. */ canvas?: HTMLCanvasElement;
+  /** Default display canvas. Default a new HTML canvas, or OffscreenCanvas without document. */ canvas?: HTMLCanvasElement | OffscreenCanvas;
   /** Backend selection. Default auto, with WebGL fallback. webgpu requires WebGPU. */ backend?: 'auto' | 'webgpu' | 'webgl';
   /** Caller-owned WebGPU device. Default undefined uses a shared device. Implies webgpu; incompatible with webgl. */ device?: GPUDevice;
   /** Warn about unmarked material edits. Default true in development, false in production. */ validateUpdates?: boolean;
@@ -162,7 +163,7 @@ export default class Engine {
     this._ownsDeviceSelection = !params.device;
     this._backendChoice = params.device ? 'webgpu' : params.backend ?? 'auto';
     this._sceneChangeDetector = new SceneChangeDetector(params.validateUpdates ?? isDevelopment());
-    this.display = Display._create(this, params.canvas ?? document.createElement('canvas'));
+    this.display = Display._create(this, params.canvas ?? createCanvas());
   }
   /** Initializes once; concurrent/repeated calls share the result. */
   init(): Promise<EngineInfo> {
@@ -277,7 +278,7 @@ export default class Engine {
         this._bvhWorkerUnavailable = true;
         this._bvhWorkerPool?.dispose();
         this._bvhWorkerPool = undefined;
-        console.warn('BVH preparation failed; falling back to the main-thread BVH builder.');
+        console.warn('BVH preparation failed; falling back to the calling-thread BVH builder.');
       }
       if (result.tinyBvhUnavailable && !this._tinyBvhUnavailable) {
         this._tinyBvhUnavailable = true;
