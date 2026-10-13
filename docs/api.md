@@ -105,7 +105,7 @@ other sequences retain their completed samples.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `maxSamples` | `2048` | Complete sample budget |
-| `bounces` / `clamping` | `3` / `0` | Path depth / per-sample radiance clamp; 0 disables clamping |
+| `bounces` / `clamping` | `3` / `0` | Scattering depth / per-sample radiance clamp; 0 disables clamping |
 | `samplingPattern` | `'sobol'` | Sobol, ZSobol or random; see [sampling](./sampling.md) |
 | `directLightCandidates` | `4` | WebGPU light candidates, clamped 1–16; ignored on WebGL |
 | `bevel` / `bevelSamples` | `true` / `8` | Bevel shading / probes, clamped 1–32 |
@@ -119,6 +119,14 @@ other sequences retain their completed samples.
 | `allowMultipleSamplesPerFrame` | `false` | Add multiple samples when time permits |
 | `fallback` | `null` | Single-level Render on the same engine |
 | `denoiser` | `null` | Per-render configuration; see [denoising](./denoising.md) |
+
+`bounces` is rounded and clamped to [1, 20] in both backends; NaN becomes 1.
+The path loop allows at most `min(bounces * 3, 20)` events, including transmission,
+alpha skips and escape checks. Opaque paths also have their own scattering-depth
+termination. This event budget can truncate deep transparent paths even when
+the requested scattering depth is larger. Intel Mac WebGL retains its driver
+workaround: `min(bounces, 3)` loop events, doubled for scenes with transmission
+or alpha, plus its existing early depth termination.
 
 | Method / property | Meaning |
 | --- | --- |

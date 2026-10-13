@@ -1,3 +1,4 @@
+import { normalizeBounces } from './pathLimits.js';
 import { sameInstanceMembership } from './meshInstances.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
 import { dirtyMeshInstanceIndices } from './prepareMeshBVH.js';
@@ -327,8 +328,9 @@ class WebGLRayTracePass {
   }
 
   setBounce(bounce: number) {
-    const changed = this._bounces !== bounce;
-    this._bounces = bounce;
+    const next = normalizeBounces(bounce);
+    const changed = this._bounces !== next;
+    this._bounces = next;
     return changed;
   }
 
@@ -913,7 +915,7 @@ class WebGLRayTracePass {
 
   setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number }) {
     this._tracePasses.forEach(pass => {
-      pass.setUniform('bounceLimit', Math.max(1, Math.round(options.bounces)));
+      pass.setUniform('bounceLimit', normalizeBounces(options.bounces));
       pass.setUniform('bevelEnabled', options.bevel);
       pass.setUniform('dispersionWavelengths', options.dispersionWavelengths);
     });

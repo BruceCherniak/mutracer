@@ -78,7 +78,13 @@ export type DenoiserOptions = JNLMDenoiserOptions | OIDNDenoiserOptions | Custom
 /** Optional per-render execution and image-quality settings. */
 export interface RenderSettings {
   /** Maximum complete samples. Default 2048. */ maxSamples?: number;
-  /** Maximum path depth. Default 3. */ bounces?: number;
+  /**
+   * Maximum scattering depth, rounded and clamped to [1, 20] (NaN becomes 1).
+   * Total path events, including transmission and alpha skips, are capped at 20
+   * and at three times this depth. Intel Mac WebGL uses min(depth, 3), doubled
+   * for scenes with transmission or alpha, with its existing early termination.
+   * Default 3.
+   */ bounces?: number;
   /** Radiance clamp; 0 disables it. Default 0. */ clamping?: number;
   /** Sampling sequence. Default sobol. */ samplingPattern?: SamplingPattern;
   /** Light candidates per vertex; WebGPU only, ignored on WebGL. Default 4. */ directLightCandidates?: number;
@@ -187,7 +193,13 @@ function denoiserKey(options: Readonly<DenoiserOptions>): string | Denoiser {
 /** One independently configured image and its accumulation, owned by an engine. */
 export default class Render {
   /** Maximum complete samples. Default 2048. */ maxSamples = 2048;
-  /** Maximum path depth. Default 3. */ bounces = 3;
+  /**
+   * Maximum scattering depth, rounded and clamped to [1, 20] (NaN becomes 1).
+   * Total path events, including transmission and alpha skips, are capped at 20
+   * and at three times this depth. Intel Mac WebGL uses min(depth, 3), doubled
+   * for scenes with transmission or alpha, with its existing early termination.
+   * Default 3.
+   */ bounces = 3;
   /** Per-sample radiance clamp; 0 disables it. Default 0. */ clamping = 0;
   /** Sampling sequence. Default sobol. */ samplingPattern: SamplingPattern = 'sobol';
   /** WebGPU light candidates per vertex; ignored on WebGL. Default 4. */ directLightCandidates = 4;

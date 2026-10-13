@@ -1,3 +1,4 @@
+import { MAX_PATH_EVENTS } from '../pathLimits.js';
 import shadowCatcherAccumulationWGSL from './chunks/shadowCatcherAccumulation.wgsl.js';
 import depthQueryWGSL from './depthQuery.wgsl.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
@@ -607,7 +608,7 @@ fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray:
   let bounceLimit = max(rtUniform.bounces, 0);
   var depth = 0;
   // Transparent paths may take up to three times the configured bounces.
-  for (var idx: i32 = 0; idx < min(bounceLimit * 3, 20); idx = idx + 1) {
+  for (var idx: i32 = 0; idx < min(bounceLimit * 3, ${MAX_PATH_EVENTS}); idx = idx + 1) {
     if (isNotTransparent && idx > bounceLimit) {
       path.abort = true;
     }

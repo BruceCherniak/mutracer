@@ -1,3 +1,4 @@
+import { normalizeBounces } from './pathLimits.js';
 import { MATERIAL_TEXTURE_DEFINES, materialTextureFeatures } from './materialTextureSlots.js';
 import { sameInstanceMembership } from './meshInstances.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
@@ -103,7 +104,6 @@ const F32 = Float32Array;
 
 const FIXED_LIGHT_COUNT = 64;
 const PIXELS_PER_LIGHT = 6;
-const MAX_BOUNCES = 20;
 
 export interface WGPURayTraceTimingCapture {
   querySet: GPUQuerySet;
@@ -1618,7 +1618,7 @@ ${rayTraceCompute({
 
 
   setBounce(bounce: number) {
-    const next = Math.min(Math.max(Math.round(bounce), 1), MAX_BOUNCES);
+    const next = normalizeBounces(bounce);
     const changed = this._bounces !== next;
     this._bounces = next;
     this._rtUniform.views.bounces[0] = next;
@@ -1692,7 +1692,7 @@ ${rayTraceCompute({
   }
 
   setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number }) {
-    this._rtUniform.views.bounces[0] = Math.min(MAX_BOUNCES, Math.max(1, Math.round(options.bounces)));
+    this._rtUniform.views.bounces[0] = normalizeBounces(options.bounces);
     this._rtUniform.views.bevel[0] = +options.bevel;
     this._rtUniform.views.dispersionWavelengths[0] = options.dispersionWavelengths;
     this._rtUniform.views.directLightCandidates[0] = normalizeDirectLightCandidates(options.directLightCandidates);

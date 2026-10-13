@@ -1,3 +1,4 @@
+import { MAX_PATH_EVENTS } from '../pathLimits.js';
 import cameraRayGlsl from './chunks/cameraRay.glsl.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
@@ -44,7 +45,7 @@ for(int _idx_ = 0; _idx_ < BOUNCES; _idx_++) {{
 const bounceCodeOnOther = glsl`
 bool isOpaque = !si.isTransparency;
 int activeBounceLimit = min(BOUNCES, bounceLimit);
-for(int idx = 0; idx < min(BOUNCES * 3, 20); idx++) {
+for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS}); idx++) {
   if (isOpaque && idx > activeBounceLimit) {
     path.abort = true;
   }
