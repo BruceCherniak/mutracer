@@ -1,7 +1,9 @@
 import path from 'node:path';
 import { defineConfig } from 'vite';
+import { shaderFormattingPlugin } from './scripts/shader-formatting.mjs';
 
 export default defineConfig(({ command }) => ({
+  plugins: [shaderFormattingPlugin()],
   // Keep the standalone library's Worker relative to the script on any host.
   base: './',
   experimental: {

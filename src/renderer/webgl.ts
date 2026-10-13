@@ -531,7 +531,7 @@ function setUniform(
   }
 }
 
-const fullscreenVertex = `#version 300 es
+const fullscreenVertex = /* glsl */ `#version 300 es
 precision highp float;
 out vec2 v_Texcoord;
 void main() {
@@ -564,7 +564,7 @@ function composeFragment(
   const outputCode = shader.outputs
     .map((name, index) => `layout(location=${index}) out highp vec4 out_${name};`)
     .join('\n');
-  return `#version 300 es
+  return /* glsl */ `#version 300 es
 precision highp float;
 precision highp int;
 precision highp sampler2D;

@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { defineConfig } from 'vite';
+import { shaderFormattingPlugin } from '../scripts/shader-formatting.mjs';
 
 const repoRoot = path.resolve(__dirname, '..');
 const pages = ['index', 'basic', 'three', 'animation', 'advanced', 'instancing'];
@@ -9,6 +10,7 @@ const pages = ['index', 'basic', 'three', 'animation', 'advanced', 'instancing']
  * development `npm run dev` serves them from the repository root instead.
  */
 export default defineConfig({
+  plugins: [shaderFormattingPlugin()],
   root: __dirname,
   base: './',
   // assets/ holds the runtime-loaded chess.glb; the build script copies it.

@@ -290,7 +290,7 @@ export class WGPUComputePass<I extends string, O extends string> {
       return code;
     }
     groupOffsets.outputs = offset;
-    const cs = `
+    const cs = /* wgsl */ `
 ${inputs
   .sort()
   .map((inputName, idx) => {

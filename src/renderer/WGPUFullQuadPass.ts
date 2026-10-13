@@ -338,7 +338,7 @@ export class WGPUFullQuadPass<I extends string, O extends string> {
     const inputs = this._inputs;
     const inputsLen = inputs.length;
     const hasInputs = inputsLen > 0;
-    const fs = `
+    const fs = /* wgsl */ `
 ${inputs
   .sort()
   .map(

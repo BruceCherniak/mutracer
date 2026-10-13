@@ -1,4 +1,5 @@
-import { spawnSync } from 'node:child_process';
+import ts from 'typescript';
+import { createShaderFormattingTransformer } from './shader-formatting.mjs';
 import {
   copyFileSync,
   mkdirSync,
@@ -14,20 +15,25 @@ const outputRoot = path.join(projectRoot, 'lib');
 
 rmSync(outputRoot, { recursive: true, force: true });
 
-const tscPath = path.join(
-  projectRoot,
-  'node_modules',
-  'typescript',
-  'bin',
-  'tsc'
-);
-const result = spawnSync(process.execPath, [tscPath], {
-  cwd: projectRoot,
-  stdio: 'inherit'
-});
-
-if (result.error) throw result.error;
-if (result.status !== 0) process.exit(result.status ?? 1);
+const configPath = path.join(projectRoot, 'tsconfig.json');
+const config = ts.readConfigFile(configPath, ts.sys.readFile);
+const parsed = ts.parseJsonConfigFileContent(config.config ?? {}, ts.sys, projectRoot);
+const program = ts.createProgram(parsed.fileNames, parsed.options);
+const diagnostics = [...(config.error ? [config.error] : []), ...parsed.errors,
+  ...ts.getPreEmitDiagnostics(program)];
+if (!diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error)) {
+  diagnostics.push(...program.emit(undefined, undefined, undefined, undefined, {
+    before: [createShaderFormattingTransformer()]
+  }).diagnostics);
+}
+if (diagnostics.length) {
+  process.stderr.write(ts.formatDiagnosticsWithColorAndContext(diagnostics, {
+    getCurrentDirectory: () => projectRoot,
+    getCanonicalFileName: filename => filename,
+    getNewLine: () => '\n'
+  }));
+}
+if (diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error)) process.exit(1);
 
 const tinyBvhOutput = path.join(outputRoot, 'tinybvh');
 mkdirSync(tinyBvhOutput, { recursive: true });

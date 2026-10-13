@@ -2,6 +2,7 @@ import { createReadStream, existsSync, mkdirSync, readdirSync, readFileSync, wri
 import path from 'node:path';
 import { defineConfig, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
+import { shaderFormattingPlugin } from '../scripts/shader-formatting.mjs';
 
 const repoRoot = path.resolve(__dirname, '..');
 const weightsDir = path.join(repoRoot, 'oidn/weights');
@@ -60,7 +61,7 @@ export default defineConfig({
   root: __dirname,
   publicDir: path.join(repoRoot, 'site/public'),
   base: './',
-  plugins: [react(), oidnWeights(), thumbnailWriter()],
+  plugins: [react(), shaderFormattingPlugin(), oidnWeights(), thumbnailWriter()],
   resolve: {
     alias: [
       { find: /^@meimu\/mutracer\/oidn$/, replacement: path.join(repoRoot, 'src/oidn.ts') },
