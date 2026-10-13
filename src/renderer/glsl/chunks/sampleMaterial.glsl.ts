@@ -3,7 +3,7 @@
 
 import { glsl } from '../../shader.js';
 export default glsl`
-vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, inout Path path, vec3 ffnormal, float ndv, bool isSurface) {
+vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPreparedBsdf prepared, inout Path path, vec3 ffnormal, bool isSurface) {
   float occluded = 1.0;
   vec3 lightRnd = vec3(sample2D(bounceDim(LIGHT_POSITION)), sample1D(bounceDim(LIGHT_SELECT)));
 
@@ -30,18 +30,7 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, inout Path 
     if (cosThetaL <= 0.0 && mat.transmissionWeight <= 0.0 && mat.subsurfaceWeight <= 0.0) {
       return vec3(0.0);
     }
-    vec3 surfaceTangent = vec3(0.0);
-#ifdef USE_TANGENT
-    surfaceTangent = si.tangent;
-#endif
-    f = openpbr_eval(
-      surfaceTangent,
-      mat,
-      viewDir,
-      ffnormal,
-      lightDir,
-      scatteringPdf
-    );
+    f = openpbr_eval_prepared(prepared, lightDir, scatteringPdf);
   }
   else {
     scatteringPdf = sampling_henyey_greenstein_phase(
@@ -118,6 +107,7 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
   vec3 scatterDir;
   bool mediumSampled = false;
   bool crossedBoundary = false;
+  OpenPbrPreparedBsdf prepared;
 
 #ifdef HAS_MEDIUM
   int mediumType = si.mediumType;
@@ -150,7 +140,7 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
       // Move from the start of the segment, not from its end surface.
       path.ray.o = segmentOrigin + scatterDist * path.ray.d;
       si.position = path.ray.o;
-      path.li += DirectLight(si, mat, path, ffnormal, ndv, false) * path.beta;
+      path.li += DirectLight(si, mat, prepared, path, ffnormal, false) * path.beta;
 
       // Pick a new direction based on the phase function
       scatterDir = sampling_henyey_greenstein(
@@ -176,19 +166,17 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
       path.abort = true;
       return;
     }
-    path.li += DirectLight(si, mat, path, ffnormal, ndv, true) * path.beta;
-    // Sample BSDF for color and outgoing direction
-    bool isNextRefraction;
     vec3 surfaceTangent = vec3(0.0);
 #ifdef USE_TANGENT
     surfaceTangent = si.tangent;
 #endif
-    vec3 f = openpbr_sample(
-      surfaceTangent,
-      mat,
+    prepared = openpbr_prepare(surfaceTangent, mat, -path.ray.d, ffnormal);
+    path.li += DirectLight(si, mat, prepared, path, ffnormal, true) * path.beta;
+    // Sample BSDF for color and outgoing direction
+    bool isNextRefraction;
+    vec3 f = openpbr_sample_prepared(
+      prepared,
       matRnd,
-      -path.ray.d,
-      ffnormal,
       scatterDir,
       scatteringPdf,
       isNextRefraction

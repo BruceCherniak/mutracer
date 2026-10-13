@@ -1291,29 +1291,21 @@ float openpbr_pdf(
     return pdf;
 }
 
-vec3 openpbr_sample(
-    vec3 tangent,
-    OpenPbrResolvedMaterial material,
+vec3 openpbr_sample_prepared(
+    OpenPbrPreparedBsdf prepared,
     vec3 randomSamples,
-    vec3 viewDirection,
-    vec3 normal,
     out vec3 lightDirection,
     out float pdf,
     out bool isTransmissionEvent
 ) {
-    OpenPbrPreparedBsdf prepared = openpbr_prepare(
-        tangent,
-        material,
-        viewDirection,
-        normal
-    );
+    OpenPbrResolvedMaterial material = prepared.material;
     vec3 viewLocal = prepared.viewLocal;
     float randomX = randomSamples.x;
     float randomY = randomSamples.y;
     float lobeSample = randomSamples.z;
     pdf = 0.0;
     isTransmissionEvent = false;
-    lightDirection = normal;
+    lightDirection = prepared.basis.normal;
 
     // At eta=1 the solid-refraction half vector is the zero vector. Treat the
     // physically null interface as straight, unit-throughput transmission.
@@ -1437,4 +1429,18 @@ vec3 openpbr_sample(
         return vec3(0.0);
     }
     return openpbr_eval_prepared(prepared, lightDirection, pdf);
+}
+
+vec3 openpbr_sample(
+    vec3 tangent,
+    OpenPbrResolvedMaterial material,
+    vec3 randomSamples,
+    vec3 viewDirection,
+    vec3 normal,
+    out vec3 lightDirection,
+    out float pdf,
+    out bool isTransmissionEvent
+) {
+    OpenPbrPreparedBsdf prepared = openpbr_prepare(tangent, material, viewDirection, normal);
+    return openpbr_sample_prepared(prepared, randomSamples, lightDirection, pdf, isTransmissionEvent);
 }`;

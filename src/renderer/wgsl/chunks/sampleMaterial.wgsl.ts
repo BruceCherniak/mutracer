@@ -18,6 +18,7 @@ struct ShadowRayWork {
 fn PrepareDirectLight(
   si: ptr<function, SurfaceInteraction>,
   ma: OpenPbrResolvedMaterial,
+  prepared: OpenPbrPreparedBsdf,
   path: ptr<function, Path>,
   ffnormal: vec3f,
   isSurface: bool,
@@ -61,7 +62,7 @@ fn PrepareDirectLight(
     if (cosThetaL <= 0.0 && ma.transmissionWeight <= 0.0 && ma.subsurfaceWeight <= 0.0) {
       return false;
     }
-    f = openpbr_eval((*si).tangent, ma, viewDir, ffnormal, lightDir, &scatteringPdf);
+    f = openpbr_eval_prepared(prepared, lightDir, &scatteringPdf);
   }
   else {
     scatteringPdf = sampling_henyey_greenstein_phase(
@@ -146,6 +147,7 @@ fn PrepareDirectLight(
 fn DirectLight(
   si: ptr<function, SurfaceInteraction>,
   ma: OpenPbrResolvedMaterial,
+  prepared: OpenPbrPreparedBsdf,
   path: ptr<function, Path>,
   ffnormal: vec3f,
   isSurface: bool
@@ -159,15 +161,15 @@ fn DirectLight(
   // selected candidate traces a shadow ray.
   for (var candidateIndex = 0u; candidateIndex < candidateCount; candidateIndex++) {
     var candidate: ShadowRayWork;
-    let prepared = PrepareDirectLight(
-      si, ma, path, ffnormal, isSurface,
+    let candidateValid = PrepareDirectLight(
+      si, ma, prepared, path, ffnormal, isSurface,
       candidateIndex, candidateCount, &candidate);
     if (candidateCount == 1u) {
-      if (!prepared) { return; }
+      if (!candidateValid) { return; }
       selected = candidate;
       break;
     }
-    if (!prepared) { continue; }
+    if (!candidateValid) { continue; }
     let scalarWeight = candidate.risTarget / max(candidate.lightSelectionPmf, 1e-20);
     if (!(scalarWeight > 0.0) || scalarWeight != scalarWeight) { continue; }
     scalarWeightSum += scalarWeight;
@@ -294,7 +296,11 @@ fn SampleMaterial(
   }
   // Surface and medium events share the light estimator. Emission is added
   // before NEE, then the continuation direction is sampled.
-  DirectLight(si, *ma, path, ffnormal, !mediumSampled);
+  var prepared: OpenPbrPreparedBsdf;
+  if (!mediumSampled) {
+    prepared = openpbr_prepare((*si).tangent, *ma, -(*path).ray.d, ffnormal);
+  }
+  DirectLight(si, *ma, prepared, path, ffnormal, !mediumSampled);
   if (mediumSampled) {
     // Pick a new direction based on the phase function.
     scatterDir = sampling_henyey_greenstein(
@@ -316,12 +322,10 @@ fn SampleMaterial(
     var sampledLobeIndex = 5u;
     var sampledMarginalPdf = 0.0;
     let matRnd = vec3f(sample2D(bounceDim(BSDF_DIRECTION)), sample1D(bounceDim(BSDF_LOBE)));
-    let f = openpbr_sample(
-      (*si).tangent,
-      *ma,
+    var fullResponse = vec3f(0.0);
+    let f = openpbr_sample_prepared(
+      prepared,
       matRnd,
-      -(*path).ray.d,
-      ffnormal,
       &scatterDir,
       &scatteringPdf,
       &isNextRefraction,
@@ -329,7 +333,8 @@ fn SampleMaterial(
       &sampledLobeSpecular,
       &sampledLobeDiffuse,
       &sampledLobeIndex,
-      &sampledMarginalPdf
+      &sampledMarginalPdf,
+      &fullResponse
     );
     // A rejected microfacet proposal (including failed refraction), or a
     // material with no scattering lobes, has no continuation. Keep emission
