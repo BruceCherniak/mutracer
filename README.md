@@ -42,13 +42,39 @@ with a `MuTracer` global is at `dist/mutracer.umd.js`.
 
 ## Quick start
 
-Borrow WebGPU output with `render.getOutputTexture('hdr')` or `render.getOutputTexture('display')`, or add
-a display overlay through `engine.display.addPostProcess(pass)`. Passes also
-run during PNG export; see the [overlay example and texture lifetime](./docs/post-processing.md).
+### With Three.js
 
-For many copies of one geometry, use [`InstancedMesh`](./docs/updates.md#instanced-meshes)
-with shared materials and a Float32 matrix array. `THREESync` converts Three.js
-instancing into the same batches automatically. See the [instancing example](./examples/instancing.ts).
+Build or load a Three.js scene as usual and let `THREESync` keep MuTracer in
+sync with it. `RenderLoop` renders progressively and calls the sync each frame.
+
+```ts
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
+import { Engine, RenderLoop, THREESync } from '@meimu/mutracer';
+
+const canvas = document.querySelector('canvas')!;
+
+const scene = new THREE.Scene();
+scene.add((await new GLTFLoader().loadAsync('model.glb')).scene);
+
+const camera = new THREE.PerspectiveCamera(40, canvas.width / canvas.height, .1, 100);
+camera.position.set(0, 2, 6);
+const controls = new OrbitControls(camera, canvas);
+
+const engine = new Engine({ canvas });
+const sync = new THREESync(engine, { scene, camera, controls });
+const loop = new RenderLoop(engine, { sync });
+loop.start();
+```
+
+Custom Three.js materials and lights can use `convertMaterial` / `convertLight`
+in the same sync options; see [Three.js integration](./docs/threejs.md).
+
+### With MuTracer scene classes
+
+Without a Three.js scene, describe meshes, materials and lights directly. Here
+Three.js only supplies the camera and orbit controls.
 
 ```ts
 import { mat4 } from 'gl-matrix';
@@ -95,18 +121,11 @@ const loop = new RenderLoop(engine, {sync});
 loop.start();
 ```
 
-With Three.js:
+For many copies of one geometry, use [`InstancedMesh`](./docs/updates.md#instanced-meshes)
+with shared materials and a Float32 matrix array. `THREESync` converts Three.js
+instancing into the same batches automatically. See the [instancing example](./examples/instancing.ts).
 
-```ts
-import { Engine, RenderLoop, THREESync } from '@meimu/mutracer';
-const engine = new Engine({canvas});
-const sync = new THREESync(engine, {scene: threeScene, camera: threeCamera, controls});
-const loop = new RenderLoop(engine, {sync});
-loop.start();
-```
-
-Custom Three.js materials and lights can use `convertMaterial` / `convertLight`
-in the same sync options; see [conversion hooks](./docs/threejs.md#custom-conversion).
+### Rendering options
 
 Enable denoising on an individual result:
 
@@ -115,6 +134,10 @@ loop.final.denoiser = { type: 'jnlm' }; // required type; reassign the frozen co
 loop.final.denoiser = { type: 'oidn', model: 'standard' }; // WebGPU; custom weightsUrl also supported
 // Third-party WebGPU filters: { type: 'custom', denoiser: yourCallerOwnedDenoiser }.
 ```
+
+Borrow WebGPU output with `render.getOutputTexture('hdr')` or `render.getOutputTexture('display')`, or add
+a display overlay through `engine.display.addPostProcess(pass)`. Passes also
+run during PNG export; see the [overlay example and texture lifetime](./docs/post-processing.md).
 
 Batch quality or display edits use `Object.assign(loop.final, settings)` or
 `Object.assign(engine.display, settings)`, typed with `RenderSettings` or
