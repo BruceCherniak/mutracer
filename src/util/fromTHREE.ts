@@ -1,3 +1,4 @@
+import { normalizeMaterialParams } from '../scene/openPbrSchema.js';
 import { thinFilmMapChannelIndex } from '../scene/thinFilmParameters.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
 import Sync from '../Sync.js';
@@ -102,7 +103,7 @@ function convertMaterial(
     material.map = convertTexture(basic.map, textureCache);
     material.emissiveMap = material.map;
     material.alphaMap = convertTexture(basic.alphaMap, textureCache);
-    material.opacity = basic.opacity;
+    material.geometryOpacity = basic.opacity;
     material.alphaCutoff = Math.max(0, basic.alphaTest);
     material.alphaMode = basic.alphaTest > 0
       ? 'mask'
@@ -298,12 +299,11 @@ function convertMaterial(
     }
   }
   const anisotropy = Number(physicalMaterial.anisotropy);
-  material.specularAnisotropy = Number.isFinite(anisotropy)
+  material.specularRoughnessAnisotropy = Number.isFinite(anisotropy)
     ? Math.min(1, Math.max(0, anisotropy))
     : 0;
-  const openPbr = standardMaterial.userData.mutracerOpenPBR as
-    | Record<string, unknown>
-    | undefined;
+  const sourceOpenPbr = standardMaterial.userData.mutracerOpenPBR as Record<string, unknown> | undefined;
+  const openPbr = sourceOpenPbr ? normalizeMaterialParams(sourceOpenPbr) : undefined;
   const finite = (
     value: unknown,
     fallback: number,
@@ -377,7 +377,7 @@ function convertMaterial(
       openPbr.subsurfaceRadiusScale,
       material.subsurfaceRadiusScale
     );
-    material.subsurfaceAnisotropy = finite(
+    material.subsurfaceScatterAnisotropy = finite(
       openPbr.subsurfaceAnisotropy,
       material.subsurfaceAnisotropy,
       -0.95,
@@ -389,7 +389,7 @@ function convertMaterial(
       openPbr.coatRoughness,
       material.coatRoughness
     );
-    material.coatAnisotropy = finite(
+    material.coatRoughnessAnisotropy = finite(
       openPbr.coatAnisotropy,
       material.coatAnisotropy
     );
@@ -405,7 +405,7 @@ function convertMaterial(
       material.fuzzRoughness
     );
     if ('thinWalled' in openPbr) {
-      material.thinWalled = openPbr.thinWalled === true;
+      material.geometryThinWalled = openPbr.thinWalled === true;
     }
     material.thinFilmWeight = finite(
       openPbr.thinFilmWeight,
@@ -434,10 +434,14 @@ function convertMaterial(
       2.5
     );
   }
-  material.opacity = standardMaterial.opacity;
+  material.geometryOpacity = standardMaterial.opacity;
   // THREE.DoubleSide is the numeric enum value 2. Keep this module's Three.js
   // import type-only while preserving the source material's culling semantics.
   material.doubleSided = standardMaterial.side === 2;
+  if (openPbr) {
+    material.specularRoughnessAnisotropy = finite(openPbr.specularAnisotropy, material.specularRoughnessAnisotropy);
+    material.geometryOpacity = finite(openPbr.opacity, material.geometryOpacity);
+  }
   const bevelSize = Number(standardMaterial.userData.mutracerBevelSize);
   material.bevelSize = Number.isFinite(bevelSize) ? Math.max(0, bevelSize) : 0;
   material.mapAlphaUsage =
@@ -449,7 +453,7 @@ function convertMaterial(
   material.alphaMode = standardMaterial.alphaTest > 0
     ? 'mask'
     : standardMaterial.transparent ||
-        standardMaterial.opacity < 1 ||
+        material.geometryOpacity < 1 ||
         !!standardMaterial.alphaMap
       ? 'blend'
       : 'opaque';

@@ -2,7 +2,7 @@
 
 `OpenPBRMaterial` implements the
 [OpenPBR 1.1](https://academysoftwarefoundation.github.io/OpenPBR/) surface.
-Property names are camel-case spellings of the OpenPBR inputs. Colors are
+Property names use camelCase OpenPBR inputs plus compatibility names. Colors are
 linear RGB. Pass optional properties to `new OpenPBRMaterial(params)`; omitted
 properties use the defaults below and in TSDoc.
 
@@ -40,14 +40,14 @@ the textures they reference still share atlas space.
 | Layer | Inputs (default) |
 | --- | --- |
 | Base | `baseWeight` (1), `baseColor` (0.8), `baseDiffuseRoughness` (0), `baseMetalness` (0) |
-| Specular | `specularWeight` (1), `specularColor` (1), `specularRoughness` (0.3), `specularIor` (1.5), `specularAnisotropy` (0) |
+| Specular | `specularWeight` (1), `specularColor` (1), `specularRoughness` (0.3), `specularIor` (1.5), `specularRoughnessAnisotropy` (0) |
 | Transmission | `transmissionWeight` (0), `transmissionColor` (1), `transmissionDepth` (0), `transmissionScatter` (0), `transmissionScatterAnisotropy` (0), `transmissionDispersionScale` (0), `transmissionDispersionAbbeNumber` (20) |
-| Subsurface | `subsurfaceWeight` (0), `subsurfaceColor` (0.8), `subsurfaceRadius` (1), `subsurfaceRadiusScale` ([1, 0.5, 0.25]), `subsurfaceAnisotropy` (0) |
+| Subsurface | `subsurfaceWeight` (0), `subsurfaceColor` (0.8), `subsurfaceRadius` (1), `subsurfaceRadiusScale` ([1, 0.5, 0.25]), `subsurfaceScatterAnisotropy` (0) |
 | Fuzz | `fuzzWeight` (0), `fuzzColor` (1), `fuzzRoughness` (0.5) |
-| Coat | `coatWeight` (0), `coatColor` (1), `coatRoughness` (0), `coatAnisotropy` (0), `coatIor` (1.6), `coatDarkening` (1) |
+| Coat | `coatWeight` (0), `coatColor` (1), `coatRoughness` (0), `coatRoughnessAnisotropy` (0), `coatIor` (1.6), `coatDarkening` (1) |
 | Thin film | `thinFilmWeight` (0), `thinFilmThickness` (0.5 µm), `thinFilmIor` (1.4), `thinFilmThicknessMinimum` (0 µm), `thinFilmMapChannel` (`r`) |
 | Emission | `emissionColor` (1), `emissionLuminance` (0) |
-| Geometry | `opacity` (1), `thinWalled` (false), `doubleSided` (false) |
+| Geometry | `geometryOpacity` (1), `geometryThinWalled` (false), `doubleSided` (false) |
 
 Units: `transmissionDepth` and `subsurfaceRadius` are in scene units;
 `thinFilmThickness` is in micrometres (`0.45` = 450 nm).
@@ -58,7 +58,7 @@ retain their own strengths. For metals, `specularColor` tints the F82 Fresnel
 curve near grazing angles and `specularWeight` scales the entire reflection,
 including thin-film reflection. At their default values, F82 reduces to Schlick.
 
-`specularAnisotropy` and `coatAnisotropy` use the OpenPBR GGX mapping:
+`specularRoughnessAnisotropy` and `coatRoughnessAnisotropy` use the OpenPBR GGX mapping:
 `alphaT = roughness² * sqrt(2 / (1 + (1 - anisotropy)²))` and
 `alphaB = (1 - anisotropy) * alphaT`, with the renderer's minimum alpha.
 Both layers use the geometry tangent; a separate coat tangent is not available.
@@ -101,6 +101,26 @@ the tint is applied at the surface. Subsurface is a separate layer driven by its
 color and per-channel radius. When both are active, their coefficients combine
 into one volume. Dispersion (`transmissionDispersionScale > 0`) samples
 wavelengths spectrally.
+
+## Compatibility names
+
+The canonical names below share storage with the deprecated names. Both work in
+constructor parameters, property reads/writes and Three.js metadata. If both
+are supplied together, equal values are accepted and conflicting values throw.
+Calling `markUpdated()` after either spelling has the same update cost.
+
+| Canonical name | Deprecated compatibility name | Default |
+| --- | --- | --- |
+| `specularRoughnessAnisotropy` | `specularAnisotropy` | `0` |
+| `coatRoughnessAnisotropy` | `coatAnisotropy` | `0` |
+| `subsurfaceScatterAnisotropy` | `subsurfaceAnisotropy` | `0` |
+| `geometryOpacity` | `opacity` | `1` |
+| `geometryThinWalled` | `thinWalled` | `false` |
+
+`materialKeys`, `materialParamKeys`, hashes and snapshots keep the compatibility
+storage names and order; aliases add no GPU fields. `Object.keys()` and JSON
+include the stored compatibility names only. The canonical accessors are not
+an alternate serialization format.
 
 ## Textures
 

@@ -316,6 +316,12 @@ Public spatial values use `Vec2` (`[number, number] | Float32Array`), `Vec3` (`[
 | `IESProfile`, `parseIESProfile(text)` | Photometric profiles for `SpotLight` |
 | `SceneBackground` | `[r, g, b, a]`, `Texture` or `GroundedSkyboxBackground` |
 
+`OpenPBRMaterial` accepts canonical `specularRoughnessAnisotropy` (default `0`),
+`coatRoughnessAnisotropy` (`0`), `subsurfaceScatterAnisotropy` (`0`),
+`geometryOpacity` (`1`) and `geometryThinWalled` (`false`). The old names are
+deprecated aliases sharing storage; conflicting constructor values throw.
+See [compatibility names](./materials.md#compatibility-names).
+
 `OpenPBRMaterial` also accepts `thinFilmThicknessMinimum` (default `0` µm)
 and `thinFilmMapChannel` (default `r`, one of `r/g/b/a`). `thinFilmThickness`
 (default `0.5` µm) is the maximum endpoint with a map and the constant without

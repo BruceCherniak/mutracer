@@ -12,7 +12,7 @@ export type { MaterialTextureName } from '../renderer/materialTextureSlots.js';
 /**
  * OpenPBR 1.1 surface material.
  *
- * Property names are camel-case spellings of the OpenPBR inputs
+ * Property names are camelCase OpenPBR inputs plus documented compatibility names
  * (https://academysoftwarefoundation.github.io/OpenPBR/). Colors are linear
  * RGB. Length-valued inputs (`transmissionDepth`, `subsurfaceRadius`) use
  * scene units; `thinFilmThickness` is in micrometres as in OpenPBR.
@@ -60,7 +60,10 @@ export default class OpenPBRMaterial {
   specularRoughness: number = materialDefault('specularRoughness');
   /** Index of refraction. Default `1.5`. */
   specularIor: number = materialDefault('specularIor');
-  /** OpenPBR GGX anisotropy, 0 to 1 (requires tangents). Default `0`. */
+  /**
+   * OpenPBR GGX anisotropy, 0 to 1 (requires tangents). Default `0`.
+   * @deprecated Use specularRoughnessAnisotropy.
+   */
   specularAnisotropy: number = materialDefault('specularAnisotropy');
 
   // Transmission
@@ -88,7 +91,10 @@ export default class OpenPBRMaterial {
   subsurfaceRadius: number = materialDefault('subsurfaceRadius');
   /** Per-channel multiplier of `subsurfaceRadius`. Default `[1, 0.5, 0.25]`. */
   subsurfaceRadiusScale: ColorRGB = materialDefault('subsurfaceRadiusScale');
-  /** Scattering anisotropy, -1 to 1. Default `0`. */
+  /**
+   * Scattering anisotropy, -1 to 1. Default `0`.
+   * @deprecated Use subsurfaceScatterAnisotropy.
+   */
   subsurfaceAnisotropy: number = materialDefault('subsurfaceAnisotropy');
 
   // Fuzz (sheen)
@@ -106,7 +112,10 @@ export default class OpenPBRMaterial {
   coatColor: ColorRGB = materialDefault('coatColor');
   /** Coat roughness. Default `0`. */
   coatRoughness: number = materialDefault('coatRoughness');
-  /** OpenPBR GGX coat anisotropy, 0 to 1; uses the base geometry tangent. Default `0`. */
+  /**
+   * OpenPBR GGX coat anisotropy, 0 to 1; uses the base geometry tangent. Default `0`.
+   * @deprecated Use coatRoughnessAnisotropy.
+   */
   coatAnisotropy: number = materialDefault('coatAnisotropy');
   /** Coat index of refraction. Default `1.6`. */
   coatIor: number = materialDefault('coatIor');
@@ -131,9 +140,15 @@ export default class OpenPBRMaterial {
   emissionColor: ColorRGB = materialDefault('emissionColor');
   /** Emitted radiance scale; `0` disables emission. Default `0`. */
   emissionLuminance: number = materialDefault('emissionLuminance');
-  /** Coverage, `1` opaque. See `alphaMode`. Default `1`. */
+  /**
+   * Coverage, `1` opaque. See `alphaMode`. Default `1`.
+   * @deprecated Use geometryOpacity.
+   */
   opacity: number = materialDefault('opacity');
-  /** Treat the surface as an infinitely thin shell (leaves, paper). Default `false`. */
+  /**
+   * Treat the surface as an infinitely thin shell (leaves, paper). Default `false`.
+   * @deprecated Use geometryThinWalled.
+   */
   thinWalled: boolean = materialDefault('thinWalled');
   /** Disables geometric back-face culling for this material. Default `false`. */
   doubleSided: boolean = materialDefault('doubleSided');
@@ -167,6 +182,26 @@ export default class OpenPBRMaterial {
   transmissionMap?: Texture;
   /** Linear thickness-range texture; R and zero minimum preserve multiplication semantics. Default `undefined`. */
   thinFilmMap?: Texture;
+
+  /** OpenPBR GGX roughness anisotropy in [0, 1]; requires tangents. Default `0`. */
+  get specularRoughnessAnisotropy(): number { return this.specularAnisotropy; }
+  set specularRoughnessAnisotropy(value: number) { this.specularAnisotropy = value; }
+
+  /** OpenPBR coat GGX roughness anisotropy in [0, 1]. Default `0`. */
+  get coatRoughnessAnisotropy(): number { return this.coatAnisotropy; }
+  set coatRoughnessAnisotropy(value: number) { this.coatAnisotropy = value; }
+
+  /** Subsurface scattering anisotropy in [-1, 1]. Default `0`. */
+  get subsurfaceScatterAnisotropy(): number { return this.subsurfaceAnisotropy; }
+  set subsurfaceScatterAnisotropy(value: number) { this.subsurfaceAnisotropy = value; }
+
+  /** Surface coverage; alphaMode controls testing and blending. Default `1`. */
+  get geometryOpacity(): number { return this.opacity; }
+  set geometryOpacity(value: number) { this.opacity = value; }
+
+  /** Treat the surface as an infinitely thin shell. Default `false`. */
+  get geometryThinWalled(): boolean { return this.thinWalled; }
+  set geometryThinWalled(value: boolean) { this.thinWalled = value; }
 
   // Renderer extensions
   /**

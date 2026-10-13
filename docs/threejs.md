@@ -65,6 +65,13 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | `scene.environment` (equirectangular float `DataTexture`, e.g. from `HDRLoader`/`RGBELoader`) | `EnvironmentLight` |
 | `scene.background` color / texture | Background; the environment itself when `background === environment` |
 
+Three.js `opacity` maps to `geometryOpacity`; thin-shell choices map to
+`geometryThinWalled`. Metadata accepts the five [canonical and compatibility
+names](./materials.md#compatibility-names), using the constructor's equal-value
+or conflict rule. These overrides apply after standard conversion; alpha mode
+still follows the source material flags and resolved coverage. Naming does not
+change transmission, volume or anisotropy conversion semantics.
+
 Thin-film ranges keep their endpoint order, including minimum greater than
 maximum, and retain the converter's 0–20 µm endpoint clamp. The converter uses
 Three.js's actual range defaults. `mutracerOpenPBR` may explicitly override the

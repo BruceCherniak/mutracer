@@ -1,8 +1,29 @@
-import type OpenPBRMaterial from './OpenPBRMaterial.js';
+import type { default as OpenPBRMaterial, OpenPBRMaterialParams } from './OpenPBRMaterial.js';
 import Texture from './Texture.js';
 import { thinFilmMapChannelIndex } from './thinFilmParameters.js';
 
-type MaterialKey = Exclude<keyof OpenPBRMaterial, 'version' | 'markUpdated'>;
+export const materialAliases = {
+  specularRoughnessAnisotropy: 'specularAnisotropy',
+  coatRoughnessAnisotropy: 'coatAnisotropy',
+  subsurfaceScatterAnisotropy: 'subsurfaceAnisotropy',
+  geometryOpacity: 'opacity',
+  geometryThinWalled: 'thinWalled'
+} as const;
+type MaterialKey = Exclude<keyof OpenPBRMaterial, 'version' | 'markUpdated' | keyof typeof materialAliases>;
+// Constructor and Three.js metadata share conflict handling before either mutates storage.
+export function normalizeMaterialParams(params: OpenPBRMaterialParams | Record<string, unknown>): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {...params};
+  for (const alias of Object.keys(materialAliases) as (keyof typeof materialAliases)[]) {
+    const old = materialAliases[alias];
+    if (params[alias] === undefined) continue;
+    if (params[old] !== undefined && params[old] !== params[alias]) {
+      throw new Error(`Conflicting OpenPBR material parameters: ${alias} and ${old}`);
+    }
+    Object.assign(normalized, {[old]: params[alias]});
+    delete normalized[alias];
+  }
+  return normalized;
+}
 type Field = {[K in MaterialKey]: {key: K; type: 'float' | 'color' | 'bool' | 'enum' | 'vec2' | 'texture'; default: OpenPBRMaterial[K]; category: 'param' | 'texture' | 'geometry'}}[MaterialKey];
 // Order is part of the existing deduplication hash contract.
 // displacementBumpStrength belongs to texture invalidation although its value is a float.
@@ -88,7 +109,8 @@ export function materialDefault<K extends MaterialKey>(key: K): OpenPBRMaterial[
   const value = defaults.get(key);
   return (Array.isArray(value) ? value.slice() : value) as OpenPBRMaterial[K];
 }
-export function applyMaterialParams(material: OpenPBRMaterial, params: Partial<Pick<OpenPBRMaterial, MaterialKey>>) {
+export function applyMaterialParams(material: OpenPBRMaterial, input: OpenPBRMaterialParams) {
+  const params = normalizeMaterialParams(input);
   if (params.thinFilmMapChannel !== undefined) thinFilmMapChannelIndex(params.thinFilmMapChannel);
   for (const {key} of openPbrSchema) {
     if (params[key] !== undefined) Object.assign(material, {[key]: params[key]});
