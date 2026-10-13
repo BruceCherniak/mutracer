@@ -23,7 +23,7 @@ export function createMaterialBufferWgsl({
   else if ((*ma).alphaMode == ${materialAlphaModeConstants.mask}) {
     (*ma).alpha = select(0.0, 1.0, (*ma).alpha >= matData.alphaCutoff);
   }`
-    : '';
+    : '(*ma).alpha = 1.0;';
 
   return /* wgsl */ `
 
