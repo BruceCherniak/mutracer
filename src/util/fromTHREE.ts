@@ -242,6 +242,7 @@ function convertMaterial(
     // mutracerOpenPBR metadata below may provide a different coat IOR.
     material.coatIor = 1.5;
     material.fuzzWeight = physicalMaterial.sheen;
+    material.fuzzRoughness = physicalMaterial.sheenRoughness;
     if (physicalMaterial.sheenColor) {
       material.fuzzColor = physicalMaterial.sheenColor.toArray() as ColorRGB;
     }

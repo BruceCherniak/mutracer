@@ -458,13 +458,37 @@ describe('Three.js scene conversion', () => {
     expect(converted.metalnessMap?.image).toBe(metalnessMap.image);
   });
 
+  it.each([0, 0.2, 0.5, 0.9, 1])('maps sheenRoughness %s to fuzzRoughness', (sheenRoughness) => {
+    const material = new THREE.MeshPhysicalMaterial({
+      sheen: 0.8, sheenRoughness, sheenColor: new THREE.Color(0.2, 0.4, 1)
+    });
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(new THREE.SphereGeometry(), material));
+
+    const converted = fromTHREEScene(scene).meshes[0].materials[0];
+
+    expect(converted.fuzzRoughness).toBe(sheenRoughness);
+    expect(converted.fuzzWeight).toBe(0.8);
+    expect(converted.fuzzColor).toEqual([0.2, 0.4, 1]);
+  });
+
+  it('preserves physical sheen roughness even when the sheen layer is disabled', () => {
+    const material = new THREE.MeshPhysicalMaterial({sheen: 0, sheenRoughness: 0.2});
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(new THREE.SphereGeometry(), material));
+    const converted = fromTHREEScene(scene).meshes[0].materials[0];
+    expect(converted.fuzzWeight).toBe(0);
+    expect(converted.fuzzRoughness).toBe(0.2);
+  });
+
   it('converts canonical viewer OpenPBR metadata', () => {
     const material = new THREE.MeshPhysicalMaterial({
       transmission: 0.7,
       attenuationColor: new THREE.Color(0x80a0c0),
       attenuationDistance: 2.5,
       clearcoat: 0.4,
-      sheen: 0.3
+      sheen: 0.3,
+      sheenRoughness: 0.2
     });
     material.userData.mutracerOpenPBR = {
       baseWeight: 0.8,

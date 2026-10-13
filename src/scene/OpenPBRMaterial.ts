@@ -105,7 +105,7 @@ export default class OpenPBRMaterial {
   fuzzWeight: number = materialDefault('fuzzWeight');
   /** Fuzz color. Default `[1, 1, 1]`. */
   fuzzColor: ColorRGB = materialDefault('fuzzColor');
-  /** Fuzz roughness. Default `0.5`. */
+  /** Fuzz roughness; imported from Three.js `sheenRoughness`. Default `0.5`. */
   fuzzRoughness: number = materialDefault('fuzzRoughness');
 
   // Coat

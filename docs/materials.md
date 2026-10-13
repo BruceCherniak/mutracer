@@ -52,6 +52,11 @@ the textures they reference still share atlas space.
 Units: `transmissionDepth` and `subsurfaceRadius` are in scene units;
 `thinFilmThickness` is in micrometres (`0.45` = 450 nm).
 
+Three.js `MeshPhysicalMaterial` imports `sheen`, `sheenColor` and
+`sheenRoughness` as `fuzzWeight`, `fuzzColor` and `fuzzRoughness` respectively.
+Explicit `userData.mutracerOpenPBR.fuzzRoughness` takes precedence over the
+imported roughness (see [Three.js integration](./threejs.md)).
+
 **Interior media.** Transmission describes a homogeneous volume:
 `transmissionColor` is the color that survives one `transmissionDepth`, and
 `transmissionScatter` is the scattering albedo. With `transmissionDepth = 0`
