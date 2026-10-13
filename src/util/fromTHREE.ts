@@ -534,6 +534,10 @@ function convertGeometry(
 
 /** Options for one-shot conversion and persistent Three.js synchronization. */
 export interface FromTHREESceneOptions {
+  /** Custom material conversion. Default undefined uses built-in conversion; returning null skips the whole mesh. THREESync invokes once per source material identity/version, with the first encountered mesh. Returned materials are caller-owned; call markUpdated after edits. */
+  convertMaterial?(material: THREE.Material, mesh: THREE.Mesh): OpenPBRMaterial | null | undefined;
+  /** Custom light conversion. Default undefined uses built-in conversion; returning null skips this light. THREESync invokes once per source light identity/version (an absent version stays unchanged). Returned lights are retained by identity and remain caller-owned. */
+  convertLight?(light: THREE.Light): SceneLight | null | undefined;
   /** Receives each converted mesh/group/instance on every update. Default: no callback. */
   onMeshConverted?(
     mesh: Mesh,
@@ -546,6 +550,7 @@ export interface FromTHREESceneOptions {
 interface MaterialVariant {
   material: OpenPBRMaterial;
   version: number;
+  base?: OpenPBRMaterial;
   color?: ColorRGB;
   autoUvProjection: boolean;
   autoDisplacementUvProjection: boolean;
@@ -555,6 +560,8 @@ interface ConversionStore {
   updateId: number;
   textures: TextureStore;
   materials: WeakMap<THREE.Material, { material: OpenPBRMaterial; hash: string }>;
+  materialHooks: WeakMap<THREE.Material, {version: number; value: OpenPBRMaterial | null | undefined}>;
+  lightHooks: WeakMap<THREE.Light, {version: number | undefined; value: SceneLight | null | undefined}>;
   geometries: WeakMap<THREE.BufferGeometry, GeometryEntry>;
   deformedGeometries: WeakMap<THREE.Mesh, GeometryEntry>;
   deformations: WeakMap<THREE.Mesh, THREEDeformation>;
@@ -569,6 +576,7 @@ interface ConversionStore {
 }
 function createConversionStore(): ConversionStore {
   return { updateId: 0, textures: new WeakMap(), materials: new WeakMap(), geometries: new WeakMap(),
+    materialHooks: new WeakMap(), lightHooks: new WeakMap(),
     poseChanged: false, meshes: new WeakMap(), lights: new WeakMap(), deformedGeometries: new WeakMap(), deformations: new WeakMap(),
     instanceMeshes: new WeakMap(), colorVariants: new Map(), warned: new WeakSet() };
 }
@@ -654,7 +662,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   const instanceWorld = scene.matrixWorld.clone();
   const instanceColor: ColorRGB = [1, 1, 1];
   function refreshVariant(entry: MaterialVariant, base: OpenPBRMaterial) {
-    if (entry.version === base.version) return;
+    if (entry.base === base && entry.version === base.version) return;
     for (const field of materialKeys) (entry.material as unknown as Record<string, unknown>)[field] = base[field];
     if (entry.color) {
       const color = entry.color;
@@ -665,7 +673,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
     if (entry.autoUvProjection) entry.material.uvProjection = 'triplanar';
     if (entry.autoDisplacementUvProjection) entry.material.displacementUvProjection = 'triplanar';
     entry.material.markUpdated();
-    entry.version = base.version;
+    entry.version = base.version; entry.base = base;
   }
   function materialVariant(source: THREE.Material, base: OpenPBRMaterial, color: ColorRGB | undefined,
     autoUvProjection: boolean, autoDisplacementUvProjection: boolean) {
@@ -681,6 +689,45 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
     }
     refreshVariant(variant, base);
     return variant.material;
+  }
+
+  function materialHook(source: THREE.Material, mesh: THREE.Mesh) {
+    if (!options.convertMaterial) return undefined;
+    let entry = store.materialHooks.get(source);
+    if (!entry || entry.version !== source.version) {
+      entry = {version: source.version, value: options.convertMaterial(source, mesh)};
+      store.materialHooks.set(source, entry);
+    }
+    return entry.value;
+  }
+  function lightHook(source: THREE.Light) {
+    if (!options.convertLight) return undefined;
+    // Three.js Light has no built-in version. Custom integrations may supply one.
+    const version = (source as THREE.Light & {version?: number}).version;
+    let entry = store.lightHooks.get(source);
+    if (!entry || entry.version !== version) {
+      entry = {version, value: options.convertLight(source)};
+      store.lightHooks.set(source, entry);
+    }
+    return entry.value;
+  }
+  function resolveMaterial(source: THREE.Material, mesh: THREE.Mesh) {
+    const custom = materialHook(source, mesh);
+    if (custom !== undefined) return custom;
+    const cached = store.materials.get(source);
+    if (convertedMaterials.has(source)) return cached!.material;
+    const converted = convertMaterial(source, textureCache);
+    const hash = getMaterialHashKey(converted);
+    let material = converted;
+    if (cached) {
+      if (cached.hash !== hash) {
+        for (const key of materialKeys) (cached.material as unknown as Record<string, unknown>)[key] = converted[key];
+        cached.material.markUpdated(); cached.hash = hash;
+      }
+      material = cached.material;
+    } else store.materials.set(source, {material, hash});
+    convertedMaterials.add(source);
+    return material;
   }
 
   function isMesh(node: THREE.Object3D): node is THREE.Mesh {
@@ -705,6 +752,13 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   }
   scene.updateMatrixWorld(true);
   scene.traverseVisible((child) => {
+    if ((child as THREE.Light).isLight) {
+      const custom = lightHook(child as THREE.Light);
+      if (custom !== undefined) {
+        if (custom !== null) lights.push(custom);
+        return;
+      }
+    }
     if (isMesh(child)) {
       if (child.userData.viewerEnvironment) return;
       // Viewer-only proxy geometry is already represented by its source mesh.
@@ -712,11 +766,14 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
       const childMaterials = Array.isArray(child.material)
         ? child.material
         : [child.material];
+      // A null result rejects the source mesh, including all of its groups/instances.
+      if (childMaterials.some(material => materialHook(material, child) === null)) return;
       if (!child.geometry) {
         console.warn(child, 'must have a geometry property');
       } else if (
         childMaterials.some(
           (material) =>
+            materialHook(material, child) === undefined &&
             !(material as THREE.MeshStandardMaterial).isMeshStandardMaterial &&
             !(material as THREE.MeshBasicMaterial).isMeshBasicMaterial &&
             material.userData.mutracerShadowCatcher !== true
@@ -787,24 +844,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             if (!newGeometry) markDeformedGeometry(geometry);
           }
           const sourceMaterial = threeMaterials[group.materialIndex ?? 0];
-          const cachedMaterial = store.materials.get(sourceMaterial);
-          let material = cachedMaterial?.material ?? convertMaterial(sourceMaterial, textureCache);
-          if (!convertedMaterials.has(sourceMaterial)) {
-            const converted = cachedMaterial ? convertMaterial(sourceMaterial, textureCache) : material;
-            material = converted;
-          }
-          if (!convertedMaterials.has(sourceMaterial)) {
-            const hash = getMaterialHashKey(material);
-            if (cachedMaterial) {
-              if (cachedMaterial.hash !== hash) {
-                for (const key of materialKeys) (cachedMaterial.material as unknown as Record<string, unknown>)[key] = material[key];
-                cachedMaterial.material.markUpdated();
-                cachedMaterial.hash = hash;
-              }
-              material = cachedMaterial.material;
-            } else store.materials.set(sourceMaterial, { material, hash });
-            convertedMaterials.add(sourceMaterial);
-          } else material = store.materials.get(sourceMaterial)!.material;
+          let material = resolveMaterial(sourceMaterial, child)!;
           let instancesByGroup = store.instanceMeshes.get(child);
           if (!instancesByGroup) { instancesByGroup = new Map(); store.instanceMeshes.set(child, instancesByGroup); }
           let instanceMeshes = instancesByGroup.get(groupIndex);

@@ -97,6 +97,9 @@ const loop = new RenderLoop(engine, {sync});
 loop.start();
 ```
 
+Custom Three.js materials and lights can use `convertMaterial` / `convertLight`
+in the same sync options; see [conversion hooks](./docs/threejs.md#custom-conversion).
+
 Enable denoising on an individual result:
 
 ```ts

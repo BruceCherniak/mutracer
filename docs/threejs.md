@@ -63,7 +63,7 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | `scene.background` color / texture | Background; the environment itself when `background === environment` |
 
 Invisible objects are skipped. Other material types are skipped with a console
-warning. `BatchedMesh`, instanced morph targets (`morphTexture`) and skinned
+warning unless `convertMaterial` supplies an OpenPBR material. `BatchedMesh`, instanced morph targets (`morphTexture`) and skinned
 instancing are unsupported: each source object warns once per converter and is
 converted as an ordinary mesh.
 
@@ -141,6 +141,8 @@ MuTracer transform; source rotation alone does not specify their direction.
 | `camera` | undefined | Perspective or orthographic camera; omitted leaves engine.camera untouched |
 | `controls` | undefined | Controls with update and start/end events, such as OrbitControls |
 | `updateControls` | true | Calls controls.update; false leaves updating to the application |
+| `convertMaterial` | undefined | `(sourceMaterial, sourceMesh)` → OpenPBRMaterial, null to skip the whole mesh, undefined for built-in conversion |
+| `convertLight` | undefined | `(sourceLight)` → SceneLight, null to skip the light, undefined for built-in conversion |
 | `onMeshConverted` | undefined | `(mesh, source, group, groupIndex)` on every visible group/expanded instance during update |
 
 Construction subscribes to control events. The first update converts and writes
@@ -151,10 +153,54 @@ skinned/morph poses. The damping tail ends when movement and zoom fall below
 0.05% of view distance, allowing final refinement in that same tick.
 
 `fromTHREEScene(scene, options?)` and `fromTHREECamera(camera, options?)` remain
-available for one-shot conversions. Every scene conversion creates fresh objects.
+available for one-shot conversions. Each call reruns conversion hooks and creates fresh default objects; custom
+objects are kept by identity.
 Call `camera.updateProjectionMatrix()` after changing aspect or fov. A perspective
 camera's focus and film height become MuTracer focus distance and sensor height;
 pass `{fStop: 2.8}` to `fromTHREECamera` to enable depth of field.
+
+### Custom conversion
+
+Both `fromTHREEScene` and `THREESync` accept the conversion hooks:
+
+```ts
+import { OpenPBRMaterial, SphereLight } from '@meimu/mutracer';
+const customMaterial = new OpenPBRMaterial({baseColor: [0.2, 0.4, 0.8]});
+const customLight = new SphereLight({radius: 0.1, intensity: 3});
+const sync = new THREESync(engine, {
+  scene,
+  convertMaterial(source, mesh) {
+    if (source.type === 'ShaderMaterial') return customMaterial;
+    if (mesh.userData.skipPathTracing) return null;
+    return undefined;
+  },
+  convertLight(source) {
+    if (source.userData.customEmitter) return customLight;
+    return undefined;
+  },
+});
+// Edit the returned MuTracer material directly after initial conversion.
+customMaterial.baseColor = [0.8, 0.4, 0.2];
+customMaterial.markUpdated();
+```
+
+The sync caches each hook result (including null and undefined) by source
+identity and `version`. A shared source material calls the hook with the first
+visible mesh that encounters it; use distinct source materials for per-mesh
+conversion. Set `threeMaterial.needsUpdate = true` to advance its version and
+rerun the hook. Returned objects are used by identity and are caller-owned:
+material edits need `markUpdated()`, while returned light parameter/transform
+edits are detected by `engine.update()`. Instance colors and automatic UV
+projection derive retained variants from the returned material; these refresh
+when its identity or MuTracer version changes.
+
+Three.js lights have no built-in `version`. Without one their hook runs once;
+to rerun it, use a source light with an application-owned numeric `version` and
+increment it. An undefined hook result keeps normal built-in material/light
+synchronization, including parameter edits that do not change the source
+version. A null material result skips every group/instance of its mesh.
+The environment texture follows the built-in conversion and is not a
+`THREE.Light` hook source.
 
 ## Caveats
 

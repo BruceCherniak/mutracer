@@ -320,9 +320,9 @@ and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 | `generateVertexNormals`, `generateVertexTangents` | Attribute generation |
 | `computeMeshesBoundingBox(meshes)` | World-space bounds |
 | `loadRGBE(url)`, `parseRGBE(buffer)` | Radiance `.hdr` → float `Texture` |
-| `THREESync` | Keeps a `THREE.Scene` in sync: `new THREESync(engine, {scene?, camera?, controls?, updateControls?})`; RenderLoop calls update; dispose when done; see [Three.js](./threejs.md) |
+| `THREESync` | Keeps a `THREE.Scene` in sync: `new THREESync(engine, {scene?, camera?, controls?, updateControls?})`; RenderLoop calls update; dispose when done; conversion hooks `convertMaterial` / `convertLight`; see [Three.js](./threejs.md#custom-conversion) |
 | `fromTHREECamera(camera, options?)` | Converts a Three.js camera; one-shot conversion; THREESync retains and updates cameras. Reads `focus` and the film height; `FromTHREECameraOptions` sets `fStop` (default `0`), `focusDistance` and `metersPerUnit` (default `1`) |
-| `fromTHREEScene` | One-shot Three.js scene conversion; every call creates fresh MuTracer objects |
+| `fromTHREEScene` | One-shot Three.js scene conversion with FromTHREESceneOptions conversion hooks; every call reruns hooks and creates fresh default objects |
 | `FromTHREESceneOptions` | Optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |
 | `VERSION` | Library version |
 

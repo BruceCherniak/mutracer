@@ -5,6 +5,8 @@ import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { THREESync, fromTHREEScene } from '../../src/util/fromTHREE';
 import Texture from '../../src/scene/Texture';
+import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
+import SphereLight from '../../src/scene/SphereLight';
 
 function fixture() {
   const source = new THREE.Scene();
@@ -417,5 +419,77 @@ describe('THREESync engine and interaction contract', () => {
     const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial()); source.add(mesh);
     const sync = new THREESync(engine, {scene: source}); sync.update(); sync.update(); expect(sync.active).toBe(false);
     mesh.morphTargetInfluences![0] = .5; sync.update(); expect(sync.active).toBe(true); sync.update(); expect(sync.active).toBe(false); sync.dispose(); engine.dispose();
+  });
+});
+
+describe('persistent conversion hooks', () => {
+  it('caches shared custom materials by source identity/version and retains caller edits', () => {
+    const source = new THREE.Scene(); const material = new THREE.ShaderMaterial(); const geometry = new THREE.BoxGeometry();
+    const mesh = new THREE.Mesh(geometry, material); source.add(mesh, new THREE.Mesh(geometry, material));
+    const custom = new OpenPBRMaterial(); const hook = vi.fn(() => custom);
+    const engine = new Engine({canvas: {width: 10,height: 10} as HTMLCanvasElement});
+    const sync = new THREESync(engine, {scene: source, convertMaterial: hook});
+    expect(hook).not.toHaveBeenCalled(); sync.update(); sync.update();
+    expect(hook).toHaveBeenCalledOnce(); expect(hook).toHaveBeenCalledWith(material, mesh);
+    expect(sync.scene!.meshes.map(m => m.materials[0])).toEqual([custom,custom]);
+    custom.baseColor = [.2,.3,.4]; custom.markUpdated(); sync.update();
+    expect(hook).toHaveBeenCalledOnce(); expect(sync.scene!.meshes[0].materials[0]).toBe(custom);
+    expect(custom.baseColor).toEqual([.2,.3,.4]); expect(custom.version).toBe(1);
+    material.needsUpdate = true; sync.update(); expect(hook).toHaveBeenCalledTimes(2);
+    source.remove(mesh); sync.update(); source.add(mesh); sync.update(); expect(hook).toHaveBeenCalledTimes(2);
+    sync.dispose(); engine.dispose();
+  });
+  it('caches undefined results but continues default parameter conversion without needsUpdate', () => {
+    const source = new THREE.Scene(); const material = new THREE.MeshStandardMaterial(); source.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
+    const hook = vi.fn(() => undefined); const engine = new Engine({canvas: {width: 10,height: 10} as HTMLCanvasElement});
+    const sync = new THREESync(engine, {scene: source, convertMaterial: hook}); sync.update();
+    const converted = sync.scene!.meshes[0].materials[0]; material.roughness = .2; sync.update();
+    expect(hook).toHaveBeenCalledOnce(); expect(sync.scene!.meshes[0].materials[0]).toBe(converted); expect(converted.specularRoughness).toBe(.2);
+    material.needsUpdate = true; sync.update(); expect(hook).toHaveBeenCalledTimes(2); sync.dispose(); engine.dispose();
+  });
+  it('caches null materials and allows conversion to resume after a version change', () => {
+    const source = new THREE.Scene(); const material = new THREE.MeshStandardMaterial(); source.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
+    const custom = new OpenPBRMaterial(); let result: OpenPBRMaterial | null = null; const hook = vi.fn(() => result);
+    const engine = new Engine({canvas: {width: 10,height: 10} as HTMLCanvasElement});
+    const sync = new THREESync(engine, {scene: source, convertMaterial: hook}); sync.update(); sync.update();
+    expect(sync.scene!.meshes).toEqual([]); expect(hook).toHaveBeenCalledOnce();
+    result = custom; material.needsUpdate = true; sync.update(); expect(sync.scene!.meshes[0].materials[0]).toBe(custom);
+    result = null; material.needsUpdate = true; sync.update(); expect(sync.scene!.meshes).toEqual([]); expect(hook).toHaveBeenCalledTimes(3);
+    sync.dispose(); engine.dispose();
+  });
+  it('refreshes color and automatic-projection variants on custom edits and equal-version replacement', () => {
+    const source = new THREE.Scene(); const material = new THREE.ShaderMaterial(); const geometry = new THREE.BoxGeometry(); geometry.deleteAttribute('uv');
+    const mesh = new THREE.InstancedMesh(geometry, material, 2); mesh.setColorAt(0, new THREE.Color(.5,1,1)); mesh.setColorAt(1, new THREE.Color(.5,1,1)); source.add(mesh);
+    const map = new Texture({width: 1,height: 1,data: new Uint8Array(4)});
+    let custom = new OpenPBRMaterial({baseColor: [.8,.6,.4], map});
+    const engine = new Engine({canvas: {width: 10,height: 10} as HTMLCanvasElement});
+    const sync = new THREESync(engine, {scene: source, convertMaterial: () => custom}); sync.update();
+    const variant = sync.scene!.meshes[0].materials[0];
+    expect(variant).not.toBe(custom); expect(sync.scene!.meshes[1].materials[0]).toBe(variant);
+    expect(variant.baseColor).toEqual([.4,.6,.4]); expect(variant.uvProjection).toBe('triplanar');
+    custom.baseColor = [.4,.3,.2]; custom.markUpdated(); sync.update(); expect(variant.baseColor).toEqual([.2,.3,.2]);
+    custom = new OpenPBRMaterial({baseColor: [.2,.1,.6], map}); custom.markUpdated();
+    material.needsUpdate = true; sync.update(); expect(sync.scene!.meshes[0].materials[0]).toBe(variant);
+    expect(variant.baseColor).toEqual([.1,.1,.6]); expect(variant.uvProjection).toBe('triplanar');
+    sync.dispose(); engine.dispose();
+  });
+  it('caches lights without a native version, handles explicit revisions and keeps returned identity', () => {
+    const source = new THREE.Scene(); const light = new THREE.HemisphereLight() as THREE.HemisphereLight & {version?: number}; source.add(light);
+    const custom = new SphereLight({intensity: 2}); let result: SphereLight | null | undefined = custom;
+    const hook = vi.fn(() => result); const engine = new Engine({canvas: {width: 10,height: 10} as HTMLCanvasElement});
+    const sync = new THREESync(engine, {scene: source, convertLight: hook}); sync.update(); sync.update();
+    expect(hook).toHaveBeenCalledOnce(); expect(sync.scene!.lights[0]).toBe(custom);
+    custom.intensity = 5; light.intensity = 10; sync.update(); expect(custom.intensity).toBe(5); expect(hook).toHaveBeenCalledOnce();
+    result = null; light.version = 1; sync.update(); sync.update(); expect(sync.scene!.lights).toEqual([]); expect(hook).toHaveBeenCalledTimes(2);
+    result = custom; light.version = 2; sync.update(); expect(sync.scene!.lights[0]).toBe(custom); expect(hook).toHaveBeenCalledTimes(3);
+    sync.dispose(); engine.dispose();
+  });
+  it('caches light fallback decisions while continuing built-in light edits', () => {
+    const source = new THREE.Scene(); const light = new THREE.PointLight() as THREE.PointLight & {version?: number}; source.add(light);
+    const hook = vi.fn(() => undefined); const engine = new Engine({canvas: {width: 10,height: 10} as HTMLCanvasElement});
+    const sync = new THREESync(engine, {scene: source, convertLight: hook}); sync.update();
+    const converted = sync.scene!.lights[0]; light.intensity = 7; sync.update();
+    expect(hook).toHaveBeenCalledOnce(); expect(sync.scene!.lights[0]).toBe(converted); expect(converted).toMatchObject({intensity: 7});
+    light.version = 1; sync.update(); expect(hook).toHaveBeenCalledTimes(2); sync.dispose(); engine.dispose();
   });
 });

@@ -3,7 +3,9 @@ import { getLightDirection } from '../../src/renderer/lightsUtil';
 import { getRectLightUOrV, getRectLightArea } from '../../src/renderer/lightsUtil.js';
 import { setGeometryBvh, getGeometryBvh } from '../../src/renderer/geometryBvh.js';
 import * as THREE from 'three';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
+import SphereLight from '../../src/scene/SphereLight';
 import { fromTHREECamera, fromTHREEScene, THREESync } from '../../src/util/fromTHREE';
 import Camera from '../../src/scene/Camera';
 import { parseIESProfile } from '../../src/scene/IESProfile';
@@ -1106,3 +1108,33 @@ function initializedSync(scene: THREE.Scene, options: import('../../src/util/fro
   const sync = new THREESync(new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement}), {scene, ...options});
   sync.update(); return sync as THREESync & {scene: NonNullable<THREESync['scene']>};
 }
+
+describe('one-shot conversion hooks', () => {
+  it('uses default material and light conversion when hooks return undefined', () => {
+    const source = new THREE.Scene();
+    source.add(new THREE.Mesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial({color: 0x123456})), new THREE.PointLight(0xffffff, 3));
+    const ordinary = fromTHREEScene(source);
+    const fallback = fromTHREEScene(source, {convertMaterial: () => undefined, convertLight: () => undefined});
+    expect(fallback).toEqual(ordinary);
+  });
+  it('supports custom shaders/lights, skips null sources and reruns on each conversion', () => {
+    const source = new THREE.Scene(); const material = new THREE.ShaderMaterial();
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(), material);
+    const light = new THREE.HemisphereLight(); source.add(mesh, light);
+    const customMaterial = new OpenPBRMaterial({baseColor: [.1,.2,.3]});
+    const customLight = new SphereLight({radius: .4});
+    const convertMaterial = vi.fn(() => customMaterial); const convertLight = vi.fn(() => customLight);
+    const a = fromTHREEScene(source, {convertMaterial, convertLight});
+    const b = fromTHREEScene(source, {convertMaterial, convertLight});
+    expect(a.meshes[0].materials[0]).toBe(customMaterial); expect(b.meshes[0].materials[0]).toBe(customMaterial);
+    expect(a.lights[0]).toBe(customLight); expect(b.lights[0]).toBe(customLight);
+    expect(convertMaterial).toHaveBeenCalledTimes(2); expect(convertMaterial).toHaveBeenCalledWith(material, mesh);
+    expect(convertLight).toHaveBeenCalledTimes(2); expect(convertLight).toHaveBeenCalledWith(light);
+    expect(fromTHREEScene(source, {convertMaterial: () => null, convertLight: () => null})).toMatchObject({meshes: [], lights: []});
+  });
+  it('skips all groups and instances when any material hook returns null', () => {
+    const source = new THREE.Scene(); const materials = [new THREE.MeshStandardMaterial(), new THREE.ShaderMaterial()];
+    source.add(new THREE.InstancedMesh(new THREE.BoxGeometry(), materials, 2));
+    expect(fromTHREEScene(source, {convertMaterial: m => m === materials[1] ? null : undefined}).meshes).toEqual([]);
+  });
+});

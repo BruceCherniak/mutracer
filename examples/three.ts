@@ -58,6 +58,8 @@ orbit.update();
 
 // --- MuTracer ---------------------------------------------------------------
 const engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
+// For ShaderMaterial or custom lights, supply convertMaterial / convertLight here.
+// Hook results are cached by source identity/version; see docs/threejs.md.
 const sync = new THREESync(engine, {scene: threeScene, camera: threeCamera, controls: orbit});
 const loop = new RenderLoop(engine, {sync, final: {bounces: 6, maxSamples: 512}});
 const final = loop.final;
