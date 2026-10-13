@@ -481,6 +481,28 @@ describe('Three.js scene conversion', () => {
     expect(converted.fuzzRoughness).toBe(0.2);
   });
 
+  it.each([0, 0.4, 1])('imports clearcoat %s without internal-reflection darkening', (clearcoat) => {
+    const material = new THREE.MeshPhysicalMaterial({clearcoat, clearcoatRoughness: 0.2});
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(new THREE.SphereGeometry(), material));
+
+    expect(fromTHREEScene(scene).meshes[0].materials[0]).toMatchObject({
+      coatWeight: clearcoat,
+      coatRoughness: 0.2,
+      coatIor: 1.5,
+      coatDarkening: 0
+    });
+  });
+
+  it.each([0, 0.8, 1])('lets OpenPBR metadata override imported coatDarkening with %s', (coatDarkening) => {
+    const material = new THREE.MeshPhysicalMaterial({clearcoat: 1});
+    material.userData.mutracerOpenPBR = {coatDarkening};
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(new THREE.SphereGeometry(), material));
+
+    expect(fromTHREEScene(scene).meshes[0].materials[0].coatDarkening).toBe(coatDarkening);
+  });
+
   it('converts canonical viewer OpenPBR metadata', () => {
     const material = new THREE.MeshPhysicalMaterial({
       transmission: 0.7,

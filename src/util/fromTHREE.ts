@@ -241,6 +241,8 @@ function convertMaterial(
     // for IOR 1.5. Match that in the OpenPBR path representation; explicit
     // mutracerOpenPBR metadata below may provide a different coat IOR.
     material.coatIor = 1.5;
+    // Three.js/glTF clearcoat does not model internal-reflection darkening.
+    material.coatDarkening = 0;
     material.fuzzWeight = physicalMaterial.sheen;
     material.fuzzRoughness = physicalMaterial.sheenRoughness;
     if (physicalMaterial.sheenColor) {
