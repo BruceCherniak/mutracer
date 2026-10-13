@@ -230,6 +230,14 @@ fn getMaterial(
     }
   }
 
+  // OpenPBR 1.1.1: coat refraction broadens all base microfacet lobes.
+  // Keep the zero-coat / smooth-coat paths byte-identical.
+  if ((*ma).coatWeight > 0.0 && (*ma).coatRoughness > 0.0) {
+    let baseRoughness2 = (*ma).specularRoughness * (*ma).specularRoughness;
+    let coatRoughness2 = (*ma).coatRoughness * (*ma).coatRoughness;
+    (*ma).specularRoughness = mix((*ma).specularRoughness,
+      pow(min(1.0, baseRoughness2 * baseRoughness2 + 2.0 * coatRoughness2 * coatRoughness2), 0.25), (*ma).coatWeight);
+  }
   (*ma).specularRoughness = clamp((*ma).specularRoughness, ROUGHNESS_MIN, 1.0);
   (*ma).baseMetalness = clamp((*ma).baseMetalness, 0.0, 1.0);
   let specularAlpha = openpbr_roughness_to_alpha((*ma).specularRoughness, (*ma).specularAnisotropy);
