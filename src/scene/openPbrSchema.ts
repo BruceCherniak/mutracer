@@ -1,5 +1,6 @@
 import type OpenPBRMaterial from './OpenPBRMaterial.js';
 import Texture from './Texture.js';
+import { thinFilmMapChannelIndex } from './thinFilmParameters.js';
 
 type MaterialKey = Exclude<keyof OpenPBRMaterial, 'version' | 'markUpdated'>;
 type Field = {[K in MaterialKey]: {key: K; type: 'float' | 'color' | 'bool' | 'enum' | 'vec2' | 'texture'; default: OpenPBRMaterial[K]; category: 'param' | 'texture' | 'geometry'}}[MaterialKey];
@@ -68,6 +69,8 @@ export const openPbrSchema = [
   {key: 'displacementScale', type: 'float', default: 0.1, category: 'geometry'},
   {key: 'displacementStepSize', type: 'float', default: 0.01, category: 'geometry'},
   {key: 'displacementBumpStrength', type: 'float', default: 0, category: 'texture'},
+  {key: 'thinFilmThicknessMinimum', type: 'float', default: 0, category: 'param'},
+  {key: 'thinFilmMapChannel', type: 'enum', default: 'r', category: 'param'},
 ] as const satisfies readonly Field[];
 type Keys<T extends readonly {key: PropertyKey}[]> = {readonly [I in keyof T]: T[I]['key']};
 type CategoryKeys<T extends readonly Field[], C extends Field['category'], R extends readonly MaterialKey[] = []> =
@@ -86,6 +89,7 @@ export function materialDefault<K extends MaterialKey>(key: K): OpenPBRMaterial[
   return (Array.isArray(value) ? value.slice() : value) as OpenPBRMaterial[K];
 }
 export function applyMaterialParams(material: OpenPBRMaterial, params: Partial<Pick<OpenPBRMaterial, MaterialKey>>) {
+  if (params.thinFilmMapChannel !== undefined) thinFilmMapChannelIndex(params.thinFilmMapChannel);
   for (const {key} of openPbrSchema) {
     if (params[key] !== undefined) Object.assign(material, {[key]: params[key]});
   }

@@ -139,6 +139,13 @@ export const MATERIAL_LAYOUT = [
     field('doubleSided', 'doubleSided', 'f32'),
     field('alphaMode', 'alphaMode', 'f32')
   ] },
+  // C5 temporary row24; C1 moves this named row to row25 in its 416-byte migration.
+  { name: 'FILM_TEXTURE', fields: [
+    field('_padding8', null, 'f32', true),
+    field('_padding9', null, 'f32', true),
+    field('thinFilmThicknessMinimum', 'thinFilmThicknessMinimum', 'f32'),
+    field('thinFilmMapChannel', 'thinFilmMapChannel', 'f32')
+  ] },
 ] as const;
 
 export const MATERIAL_ROW_COUNT = MATERIAL_LAYOUT.length;

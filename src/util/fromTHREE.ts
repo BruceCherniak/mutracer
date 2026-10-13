@@ -1,3 +1,4 @@
+import { thinFilmMapChannelIndex } from '../scene/thinFilmParameters.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
 import Sync from '../Sync.js';
 import type Engine from '../Engine.js';
@@ -282,6 +283,7 @@ function convertMaterial(
   material.thinFilmIor = Math.min(
     2.5, Math.max(1, realtimeIridescence.iridescenceIOR ?? 1.4)
   );
+  const nativeThinFilmMap = standardMaterial.userData.mutracerThinFilmMap as THREE.Texture | undefined;
   const thinFilmMap =
     (standardMaterial.userData
       .mutracerThinFilmMap as THREE.Texture | undefined) ??
@@ -289,6 +291,11 @@ function convertMaterial(
     undefined;
   if (thinFilmMap) {
     material.thinFilmMap = convertTexture(thinFilmMap, textureCache);
+    if (!nativeThinFilmMap) {
+      material.thinFilmThicknessMinimum = Math.min(20, Math.max(0,
+        (realtimeIridescence.iridescenceThicknessRange?.[0] ?? 0) / 1000));
+      material.thinFilmMapChannel = 'g';
+    }
   }
   const anisotropy = Number(physicalMaterial.anisotropy);
   material.specularAnisotropy = Number.isFinite(anisotropy)
@@ -410,6 +417,16 @@ function convertMaterial(
       0,
       20
     );
+    material.thinFilmThicknessMinimum = finite(
+      openPbr.thinFilmThicknessMinimum, material.thinFilmThicknessMinimum, 0, 20
+    );
+    if (openPbr.thinFilmMapChannel !== undefined) {
+      material.thinFilmMapChannel = ['r', 'g', 'b', 'a'][thinFilmMapChannelIndex(openPbr.thinFilmMapChannel)] as OpenPBRMaterial['thinFilmMapChannel'];
+    }
+    if (openPbr.thinFilmMap instanceof Texture) material.thinFilmMap = openPbr.thinFilmMap;
+    else if (openPbr.thinFilmMap && (openPbr.thinFilmMap as THREE.Texture).isTexture) {
+      material.thinFilmMap = convertTexture(openPbr.thinFilmMap as THREE.Texture, textureCache);
+    }
     material.thinFilmIor = finite(
       openPbr.thinFilmIor,
       material.thinFilmIor,

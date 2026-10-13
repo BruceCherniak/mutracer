@@ -1,6 +1,7 @@
 import type { Vec2 } from '../types.js';
 import { ColorRGB } from '../types.js';
 import type Texture from './Texture.js';
+import type { ThinFilmMapChannel } from './thinFilmParameters.js';
 import { materialDefault, applyMaterialParams } from './openPbrSchema.js';
 
 export type UVProjection = 'none' | 'triplanar' | 'spherical' | 'cylindrical';
@@ -115,10 +116,15 @@ export default class OpenPBRMaterial {
   // Thin film
   /** Thin-film interference weight (iridescence). Default `0`. */
   thinFilmWeight: number = materialDefault('thinFilmWeight');
-  /** Film thickness in micrometres. Default `0.5`. */
+  /** Film thickness in micrometres; maximum endpoint when thinFilmMap is present. Default `0.5`. */
   thinFilmThickness: number = materialDefault('thinFilmThickness');
   /** Film index of refraction. Default `1.4`. */
   thinFilmIor: number = materialDefault('thinFilmIor');
+
+  /** Thickness at a thinFilmMap sample of zero, in micrometres; ignored without a map. May exceed thinFilmThickness. Default `0`. */
+  thinFilmThicknessMinimum: number = materialDefault('thinFilmThicknessMinimum');
+  /** Linear channel sampled by thinFilmMap. Default `r`. */
+  thinFilmMapChannel: ThinFilmMapChannel = materialDefault('thinFilmMapChannel');
 
   // Emission and geometry
   /** Emission color. Default `[1, 1, 1]`. */
@@ -159,7 +165,7 @@ export default class OpenPBRMaterial {
   metalnessMap?: Texture;
   /** Multiplies transmission weight using the texture's red channel. Default `undefined`. */
   transmissionMap?: Texture;
-  /** Thin-film thickness texture. Default `undefined`. */
+  /** Linear thickness-range texture; R and zero minimum preserve multiplication semantics. Default `undefined`. */
   thinFilmMap?: Texture;
 
   // Renderer extensions

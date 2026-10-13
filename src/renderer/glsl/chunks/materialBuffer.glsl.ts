@@ -1,4 +1,4 @@
-import { simpleTextureSample } from '../../materialTextureSlots.js';
+import { simpleTextureSample, thinFilmTextureSample } from '../../materialTextureSlots.js';
 import { materialRowsGlsl } from '../../materialLayout.js';
 import { materialAlphaModeConstants } from '../../../scene/OpenPBRMaterial.js';
 import { mapAlphaUsageConstants } from '../../materialConstants.js';
@@ -236,7 +236,7 @@ void getMaterial(
     }
   #endif
 
-  ${simpleTextureSample('thinFilmMap', 'glsl')}
+  ${thinFilmTextureSample('glsl')}
 
   // OpenPBR 1.1.1: coat refraction broadens all base microfacet lobes.
   // Keep the zero-coat / smooth-coat paths byte-identical.

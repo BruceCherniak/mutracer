@@ -61,10 +61,10 @@ const slots = [
   },
   {
     property: 'thinFilmMap', index: 'thinFilmMapIndex',
-    target: 'thinFilmThickness', channel: 'r',
-    colorSpace: 'linear', operation: 'multiply',
+    target: 'thinFilmThickness', channel: 'per-material',
+    colorSpace: 'linear', operation: 'custom',
     define: 'NUM_THIN_FILM_MAPS', feature: 'USE_THIN_FILM_MAPS', featureBit: 2 ** 8,
-    sampling: 'multiply'
+    sampling: 'manual'
   },
   {
     property: 'displacementMap', index: 'displacementMapIndex',
@@ -99,7 +99,7 @@ export function materialTextureFeatures(defines: Record<string, string | number>
 }
 
 // Call at each original sample site: alpha resolution and combined maps must
-// keep their existing order. The five scalar factors use raw linear channels.
+// keep their existing order. The scalar factors use raw linear channels; film ranges resolve explicitly.
 export function simpleTextureSample(property: MaterialTextureName, backend: 'wgsl' | 'glsl'): string {
   const slot = MATERIAL_TEXTURE_SLOTS.find(slot => slot.property === property);
   if (!slot || slot.sampling !== 'multiply') throw new Error(`Handwritten texture slot: ${property}`);
@@ -123,6 +123,41 @@ export function simpleTextureSample(property: MaterialTextureName, backend: 'wgs
       mat.${slot.target} *= sampleMap(
         ${index}, getMapUvSet(${index}, uv, uv1)
       ).${slot.channel};
+    }
+  #endif
+`;
+}
+
+// Multi-parameter slots retain explicit resolution and their original sample site.
+export function thinFilmTextureSample(backend: 'wgsl' | 'glsl'): string {
+  const slot = MATERIAL_TEXTURE_SLOTS.find(slot => slot.property === 'thinFilmMap')!;
+  if (backend === 'wgsl') return `
+  if (${slot.feature}) {
+    let thinFilmMapIndex = i32(matData.${slot.packed.wgslField});
+    if (thinFilmMapIndex >= 0) {
+      let filmTexel = sampleMap(thinFilmMapIndex, getMapUvSet(thinFilmMapIndex, uv, uv1));
+      // Preserve the legacy nm conversion followed by R multiplication exactly.
+      if (matData.thinFilmThicknessMinimum == 0.0 && matData.thinFilmMapChannel == 0.0) {
+        (*ma).thinFilmThickness *= filmTexel.r;
+      } else {
+        (*ma).thinFilmThickness = mix(matData.thinFilmThicknessMinimum,
+          matData.thinFilmThickness, filmTexel[i32(matData.thinFilmMapChannel)]) * 1000.0;
+      }
+    }
+  }
+`;
+  return `
+  #ifdef ${slot.define}
+    int thinFilmMapIndex = int(fetchMatData(i + ${slot.packed.glslRow}).${slot.packed.glslComponent});
+    if (thinFilmMapIndex >= 0) {
+      vec4 filmTexel = sampleMap(thinFilmMapIndex, getMapUvSet(thinFilmMapIndex, uv, uv1));
+      vec4 filmTextureParams = fetchMatData(i + MAT_ROW_FILM_TEXTURE);
+      if (filmTextureParams.z == 0.0 && filmTextureParams.w == 0.0) {
+        mat.thinFilmThickness *= filmTexel.r;
+      } else {
+        mat.thinFilmThickness = mix(filmTextureParams.z, misc.b,
+          filmTexel[int(filmTextureParams.w)]) * 1000.0;
+      }
     }
   #endif
 `;

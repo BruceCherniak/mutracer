@@ -1,3 +1,4 @@
+import { MATERIAL_FLOAT_COUNT } from './materialLayout.js';
 import { normalizeBounces } from './pathLimits.js';
 import { MATERIAL_TEXTURE_DEFINES, materialTextureFeatures } from './materialTextureSlots.js';
 import { sameInstanceMembership } from './meshInstances.js';
@@ -2289,9 +2290,9 @@ ${rayTraceCompute({
       this._materialsBuffer,
       materialData.getBufferArray(),
       // WGSL requires a runtime array binding to contain at least one
-      // MaterialBuffer element (24 vec4s = 384 bytes), including while a
+      // MaterialBuffer element, including while a
       // scene reload temporarily has no material payload.
-      384
+      MATERIAL_FLOAT_COUNT * 4
     );
 
     const traversalStackSizes = getTraversalStackSizes(tlas, res.blases);
@@ -2458,7 +2459,7 @@ ${rayTraceCompute({
       });
       this._updateTextures(materialData);
     } else materialData.repackParams(res.materials);
-    this._materialsBuffer = this._updateGPUBuffer('Materials', this._materialsBuffer, materialData.getBufferArray(), 384);
+    this._materialsBuffer = this._updateGPUBuffer('Materials', this._materialsBuffer, materialData.getBufferArray(), MATERIAL_FLOAT_COUNT * 4);
     this._updateMaterialConstants(res.materials, materialData, res.geometry);
     if (update.emission || update.emissiveMap) {
       const resident = this._residentPreparedMeshData!;

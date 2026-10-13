@@ -1,4 +1,4 @@
-import { simpleTextureSample } from '../../materialTextureSlots.js';
+import { simpleTextureSample, thinFilmTextureSample } from '../../materialTextureSlots.js';
 import { mapAlphaUsageConstants } from '../../materialConstants.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
@@ -195,7 +195,7 @@ fn getMaterial(
 
   ${simpleTextureSample('metalnessMap', 'wgsl')}
 
-  ${simpleTextureSample('thinFilmMap', 'wgsl')}
+  ${thinFilmTextureSample('wgsl')}
 
   // OpenPBR 1.1.1: coat refraction broadens all base microfacet lobes.
   // Keep the zero-coat / smooth-coat paths byte-identical.

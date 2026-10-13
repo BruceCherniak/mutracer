@@ -45,7 +45,7 @@ the textures they reference still share atlas space.
 | Subsurface | `subsurfaceWeight` (0), `subsurfaceColor` (0.8), `subsurfaceRadius` (1), `subsurfaceRadiusScale` ([1, 0.5, 0.25]), `subsurfaceAnisotropy` (0) |
 | Fuzz | `fuzzWeight` (0), `fuzzColor` (1), `fuzzRoughness` (0.5) |
 | Coat | `coatWeight` (0), `coatColor` (1), `coatRoughness` (0), `coatAnisotropy` (0), `coatIor` (1.6), `coatDarkening` (1) |
-| Thin film | `thinFilmWeight` (0), `thinFilmThickness` (0.5 µm), `thinFilmIor` (1.4) |
+| Thin film | `thinFilmWeight` (0), `thinFilmThickness` (0.5 µm), `thinFilmIor` (1.4), `thinFilmThicknessMinimum` (0 µm), `thinFilmMapChannel` (`r`) |
 | Emission | `emissionColor` (1), `emissionLuminance` (0) |
 | Geometry | `opacity` (1), `thinWalled` (false), `doubleSided` (false) |
 
@@ -114,12 +114,19 @@ wavelengths spectrally.
 | `metalnessMap` | B | |
 | `emissiveMap` | RGB | Multiplies `emissionColor` |
 | `transmissionMap` | R | Multiplies `transmissionWeight` |
-| `thinFilmMap` | | Thin-film thickness |
+| `thinFilmMap` | R by default; selectable R/G/B/A | Linear thickness range |
 | `displacementMap` | R | See [displacement](#displacement) |
 
 `Texture.uvScale`, `uvOffset` and `uvChannel` (0 or 1) transform UVs per
 texture. For geometry without usable UVs, set `uvProjection` to
 `'triplanar'`, `'spherical'` or `'cylindrical'` with `uvProjectionScale` (default `[1, 1]`).
+
+With `thinFilmMap`, thickness interpolates from `thinFilmThicknessMinimum` to
+`thinFilmThickness` using the linear `thinFilmMapChannel`. The default minimum
+0 and channel `r` keep the original R-times-thickness behavior. Without a map,
+only `thinFilmThickness` is used. Endpoints are nonnegative and may be reversed,
+including a positive minimum and zero maximum. Nonfinite endpoints use their
+defaults; invalid channels throw during construction or packing.
 
 Call `texture.markUpdated()` after editing pixels or UV-array elements;
 assigning a new texture, image or UV array is detected automatically.
@@ -163,6 +170,10 @@ ray-marching step (default `0.01`). No extra triangles are generated.
 The remaining `displacement*` properties are documented in the type declarations.
 
 ## Known limitations
+
+Data-backed material atlases require RGBA8 `Uint8Array` sources. WebGL 2 can
+currently resolve zero for data-backed material maps; use DOM image or canvas
+sources on that backend. Float data remains supported for environments.
 
 Rough thin-wall glass can appear too dark because its reflection/transmission
 model includes only single microfacet scattering. Adobe's reference has no

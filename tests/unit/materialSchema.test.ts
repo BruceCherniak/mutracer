@@ -37,17 +37,20 @@ describe('OpenPBR schema', () => {
   it('retains the fixed packing bytes and hash order including coat emission', () => {
     const materials = fixedMaterials(); const data = new MaterialTable(materials, []);
     const bytes = Buffer.from(data.getBufferArray().buffer);
-    expect(materialKeys).toEqual(baseline.keys);
-    expect(materials.map(getMaterialHashKey)).toEqual(baseline.hashes);
-    expect(bytes).toEqual(Buffer.from(baseline.packedBase64, 'base64'));
-    expect(createHash('sha256').update(bytes).digest('hex')).toBe(baseline.sha256);
+    expect(materialKeys.slice(0, baseline.keys.length)).toEqual(baseline.keys);
+    expect(materialKeys.slice(baseline.keys.length)).toEqual(['thinFilmThicknessMinimum', 'thinFilmMapChannel']);
+    expect(materials.map(getMaterialHashKey)).toEqual(baseline.hashes.map(hash => `${hash}_0_r`));
+    const legacyBytes = Buffer.concat(materials.map((_m, i) => bytes.subarray(i * 400, i * 400 + 384)));
+    expect(legacyBytes).toEqual(Buffer.from(baseline.packedBase64, 'base64'));
+    expect(createHash('sha256').update(legacyBytes).digest('hex')).toBe(baseline.sha256);
+    for (let i = 0; i < materials.length; i++) expect(bytes.subarray(i * 400 + 384, (i + 1) * 400)).toEqual(Buffer.alloc(16));
   });
   for (const field of openPbrSchema.filter(field => field.category === 'param')) {
     it(`packs ${field.key}`, () => {
       const material = new Material({emissionLuminance: 1, transmissionWeight: 1, transmissionDepth: 1});
       const before = new MaterialTable([material], []).getBufferArray();
       const value = field.default;
-      const enums: Record<string, string> = {alphaMode: 'blend', mapAlphaUsage: 'transmission', uvProjection: 'triplanar'};
+      const enums: Record<string, string> = {alphaMode: 'blend', mapAlphaUsage: 'transmission', uvProjection: 'triplanar', thinFilmMapChannel: 'g'};
       const changed = field.type === 'enum' ? enums[field.key] : Array.isArray(value) ? value.map(v => v * .3 + .1) :
         typeof value === 'boolean' ? !value : (material[field.key] as number) + .2;
       Object.assign(material, {[field.key]: changed});

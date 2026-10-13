@@ -53,6 +53,7 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | `Mesh` with `MeshBasicMaterial` (glTF `KHR_materials_unlit`) | Unlit emissive material |
 | `MeshPhysicalMaterial.clearcoat`, `.clearcoatRoughness` (glTF `KHR_materials_clearcoat`) | `coatWeight`, `coatRoughness`, with `coatIor = 1.5` and `coatDarkening = 0` for Three.js compatibility; explicit `userData.mutracerOpenPBR.coatDarkening` overrides the imported value |
 | `MeshPhysicalMaterial.sheen`, `.sheenColor`, `.sheenRoughness` | `fuzzWeight`, `fuzzColor`, `fuzzRoughness`; explicit `userData.mutracerOpenPBR.fuzzRoughness` overrides imported roughness |
+| `MeshPhysicalMaterial.iridescenceThicknessMap`, `.iridescenceThicknessRange` | `thinFilmMap` with `thinFilmMapChannel = 'g'`; both nm endpoints are divided by 1000 into `thinFilmThicknessMinimum` / `thinFilmThickness`; without a map only the maximum is used |
 | `SkinnedMesh` / mesh with morph targets | CPU-deformed dynamic geometry |
 | `InstancedMesh` | One InstancedMesh per group/color variant, sharing geometry and BLAS |
 | Multi-material groups | One MuTracer mesh per group |
@@ -63,6 +64,14 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | `AmbientLight` | `AmbientLight` |
 | `scene.environment` (equirectangular float `DataTexture`, e.g. from `HDRLoader`/`RGBELoader`) | `EnvironmentLight` |
 | `scene.background` color / texture | Background; the environment itself when `background === environment` |
+
+Thin-film ranges keep their endpoint order, including minimum greater than
+maximum, and retain the converter's 0–20 µm endpoint clamp. The converter uses
+Three.js's actual range defaults. `mutracerOpenPBR` may explicitly override the
+range, channel and map after conversion; its map accepts a MuTracer `Texture`
+or a source `THREE.Texture`. `THREESync` converts parameter edits without
+rewriting texture pixels. The iridescence strength texture is not supported;
+`thinFilmMap` represents thickness only.
 
 Invisible objects are skipped. Other material types are skipped with a console
 warning unless `convertMaterial` supplies an OpenPBR material. `BatchedMesh`, instanced morph targets (`morphTexture`) and skinned
@@ -135,7 +144,7 @@ Renderer-specific settings without a Three.js equivalent:
 | `mutracerBevelSize` | material | Shader bevel radius |
 | `mutracerUvProjection`, `mutracerUvProjectionScale`, `mutracerUvReferenceLength` | material | Procedural UV projection |
 | `mutracerDisplacement*` | material | Displacement settings, same names as the `OpenPBRMaterial` fields; projection scale is `mutracerDisplacementUvProjectionScale` |
-| `mutracerThinFilmMap` | material | Thin-film thickness texture |
+| `mutracerThinFilmMap` | material | Native R thickness texture with minimum 0; takes precedence over `iridescenceThicknessMap` |
 | `mutracerRadius` | point / spot light | Emitter radius |
 | `mutracerIesProfile`, `mutracerIesRotation` | spot light | `IESProfile` instance; rotation becomes local-Z transform rotation |
 | `mutracerGroundedSkybox: { texture, height, radius, groundHeight?, center? }` | scene | Grounded skybox background |

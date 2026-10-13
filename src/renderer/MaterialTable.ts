@@ -1,3 +1,4 @@
+import { finiteFilmThickness, thinFilmMapChannelIndex } from '../scene/thinFilmParameters.js';
 import { MATERIAL_TEXTURE_NAMES, MATERIAL_TEXTURE_SLOTS, type MaterialTextureIndex } from './materialTextureSlots.js';
 import { packMaterialBuffer } from './materialLayout.js';
 import {createCanvas} from '../util/canvas.js';
@@ -438,6 +439,8 @@ export interface BufferData extends Record<MaterialTextureIndex, number[]> {
   transmission: number[];
   dispersion: number[];
   thinFilmThickness: number[];
+  thinFilmThicknessMinimum: number[];
+  thinFilmMapChannel: number[];
   thinFilmIor: number[];
   anisotropy: number[];
   thin: number[];
@@ -733,7 +736,9 @@ class MaterialTable {
       bevelSize: materials.map((m) => m.bevelSize),
       transmission: materials.map((m) => m.transmissionWeight),
       anisotropy: materials.map((m) => m.specularAnisotropy),
-      thinFilmThickness: materials.map((m) => m.thinFilmThickness),
+      thinFilmThickness: materials.map((m) => finiteFilmThickness(m.thinFilmThickness, 0.5)),
+      thinFilmThicknessMinimum: materials.map((m) => finiteFilmThickness(m.thinFilmThicknessMinimum, 0)),
+      thinFilmMapChannel: materials.map((m) => thinFilmMapChannelIndex(m.thinFilmMapChannel)),
       thinFilmIor: materials.map((m) => m.thinFilmIor),
       normalScale: materials.map((m) => m.normalScale),
       bumpStrength: materials.map((m) => Math.max(0, m.displacementBumpStrength)),
