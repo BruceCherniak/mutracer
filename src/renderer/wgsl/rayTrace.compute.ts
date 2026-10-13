@@ -71,7 +71,15 @@ fn neeCandidateCount() -> u32 {
 // independent of the path sample stream so the candidate count does not
 // change the dimensions consumed by later bounces.
 fn lightCandidateRandom(salt: u32) -> f32 {
-  return sample1D(lightDim(salt, 2u));
+  // Reservoir replacement needs the full [0, 1) interval: sample1D's EPS
+  // remapping makes small positive replacement probabilities unreachable.
+  // Preserve the legacy sequential RNG draw in the random sampling mode so
+  // subsequent path samples retain their stream; selection uses the hash.
+  if (SAMPLING_PATTERN == 2) { _ = rand(); }
+  let pixelID = samplingPixel.x + samplingPixel.y * u32(rtUniform.outputSize.x);
+  let key = sampleSeed(sampleSeed(pixelID, pixelSampleIndex), rtUniform.sequenceSeed);
+  let dimension = sampleSeed(samplingBounce, salt) ^ 0xa511e9b3u;
+  return f32(sampleHash(key ^ dimension) >> 8u) * (1.0 / 16777216.0);
 }
 
 // MIS weight of a light-sampled contribution. With several resampled
