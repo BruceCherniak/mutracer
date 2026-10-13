@@ -430,7 +430,7 @@ describe('persistent conversion hooks', () => {
     const engine = new Engine({canvas: {width: 10,height: 10} as HTMLCanvasElement});
     const sync = new THREESync(engine, {scene: source, convertMaterial: hook});
     expect(hook).not.toHaveBeenCalled(); sync.update(); sync.update();
-    expect(hook).toHaveBeenCalledOnce(); expect(hook).toHaveBeenCalledWith(material, mesh);
+    expect(hook).toHaveBeenCalledOnce(); expect(hook).toHaveBeenCalledWith(material);
     expect(sync.scene!.meshes.map(m => m.materials[0])).toEqual([custom,custom]);
     custom.baseColor = [.2,.3,.4]; custom.markUpdated(); sync.update();
     expect(hook).toHaveBeenCalledOnce(); expect(sync.scene!.meshes[0].materials[0]).toBe(custom);
@@ -475,22 +475,22 @@ describe('persistent conversion hooks', () => {
     sync.dispose(); engine.dispose();
   });
   it('caches lights without a native version, handles explicit revisions and keeps returned identity', () => {
-    const source = new THREE.Scene(); const light = new THREE.HemisphereLight() as THREE.HemisphereLight & {version?: number}; source.add(light);
+    const source = new THREE.Scene(); const light = new THREE.HemisphereLight(); source.add(light);
     const custom = new SphereLight({intensity: 2}); let result: SphereLight | null | undefined = custom;
     const hook = vi.fn(() => result); const engine = new Engine({canvas: {width: 10,height: 10} as HTMLCanvasElement});
     const sync = new THREESync(engine, {scene: source, convertLight: hook}); sync.update(); sync.update();
     expect(hook).toHaveBeenCalledOnce(); expect(sync.scene!.lights[0]).toBe(custom);
     custom.intensity = 5; light.intensity = 10; sync.update(); expect(custom.intensity).toBe(5); expect(hook).toHaveBeenCalledOnce();
-    result = null; light.version = 1; sync.update(); sync.update(); expect(sync.scene!.lights).toEqual([]); expect(hook).toHaveBeenCalledTimes(2);
-    result = custom; light.version = 2; sync.update(); expect(sync.scene!.lights[0]).toBe(custom); expect(hook).toHaveBeenCalledTimes(3);
+    result = null; light.userData.mutracerVersion = 1; sync.update(); sync.update(); expect(sync.scene!.lights).toEqual([]); expect(hook).toHaveBeenCalledTimes(2);
+    result = custom; light.userData.mutracerVersion = 2; sync.update(); expect(sync.scene!.lights[0]).toBe(custom); expect(hook).toHaveBeenCalledTimes(3);
     sync.dispose(); engine.dispose();
   });
   it('caches light fallback decisions while continuing built-in light edits', () => {
-    const source = new THREE.Scene(); const light = new THREE.PointLight() as THREE.PointLight & {version?: number}; source.add(light);
+    const source = new THREE.Scene(); const light = new THREE.PointLight(); source.add(light);
     const hook = vi.fn(() => undefined); const engine = new Engine({canvas: {width: 10,height: 10} as HTMLCanvasElement});
     const sync = new THREESync(engine, {scene: source, convertLight: hook}); sync.update();
     const converted = sync.scene!.lights[0]; light.intensity = 7; sync.update();
     expect(hook).toHaveBeenCalledOnce(); expect(sync.scene!.lights[0]).toBe(converted); expect(converted).toMatchObject({intensity: 7});
-    light.version = 1; sync.update(); expect(hook).toHaveBeenCalledTimes(2); sync.dispose(); engine.dispose();
+    light.userData.mutracerVersion = 1; sync.update(); expect(hook).toHaveBeenCalledTimes(2); sync.dispose(); engine.dispose();
   });
 });

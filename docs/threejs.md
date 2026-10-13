@@ -152,7 +152,7 @@ MuTracer transform; source rotation alone does not specify their direction.
 | `camera` | undefined | Perspective or orthographic camera; omitted leaves engine.camera untouched |
 | `controls` | undefined | Controls with update and start/end events, such as OrbitControls |
 | `updateControls` | true | Calls controls.update; false leaves updating to the application |
-| `convertMaterial` | undefined | `(sourceMaterial, sourceMesh)` → OpenPBRMaterial, null to skip the whole mesh, undefined for built-in conversion |
+| `convertMaterial` | undefined | `(sourceMaterial)` → OpenPBRMaterial, null to skip every mesh using it, undefined for built-in conversion |
 | `convertLight` | undefined | `(sourceLight)` → SceneLight, null to skip the light, undefined for built-in conversion |
 | `onMeshConverted` | undefined | `(mesh, source, group, groupIndex)` on every visible mesh/group/color batch during update |
 
@@ -180,9 +180,9 @@ const customMaterial = new OpenPBRMaterial({baseColor: [0.2, 0.4, 0.8]});
 const customLight = new SphereLight({radius: 0.1, intensity: 3});
 const sync = new THREESync(engine, {
   scene,
-  convertMaterial(source, mesh) {
+  convertMaterial(source) {
     if (source.type === 'ShaderMaterial') return customMaterial;
-    if (mesh.userData.skipPathTracing) return null;
+    if (source.userData.skipPathTracing) return null;
     return undefined;
   },
   convertLight(source) {
@@ -196,18 +196,17 @@ customMaterial.markUpdated();
 ```
 
 The sync caches each hook result (including null and undefined) by source
-identity and `version`. A shared source material calls the hook with the first
-visible mesh that encounters it; use distinct source materials for per-mesh
-conversion. Set `threeMaterial.needsUpdate = true` to advance its version and
+identity and `version`. The material hook receives only the source material,
+so a shared material converts once for every mesh using it; use distinct
+source materials for per-mesh conversion. Set `threeMaterial.needsUpdate = true` to advance its version and
 rerun the hook. Returned objects are used by identity and are caller-owned:
 material edits need `markUpdated()`, while returned light parameter/transform
 edits are detected by `engine.update()`. Instance colors and automatic UV
 projection derive retained variants from the returned material; these refresh
 when its identity or MuTracer version changes.
 
-Three.js lights have no built-in `version`. Without one their hook runs once;
-to rerun it, use a source light with an application-owned numeric `version` and
-increment it. An undefined hook result keeps normal built-in material/light
+Three.js lights have no built-in `version`, so the light hook runs once. To
+rerun it, set a numeric `light.userData.mutracerVersion` and increment it. An undefined hook result keeps normal built-in material/light
 synchronization, including parameter edits that do not change the source
 version. A null material result skips every group/instance of its mesh.
 The environment texture follows the built-in conversion and is not a

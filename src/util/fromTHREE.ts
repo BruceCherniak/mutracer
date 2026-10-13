@@ -535,9 +535,9 @@ function convertGeometry(
 
 /** Options for one-shot conversion and persistent Three.js synchronization. */
 export interface FromTHREESceneOptions {
-  /** Custom material conversion. Default undefined uses built-in conversion; returning null skips the whole mesh. THREESync invokes once per source material identity/version, with the first encountered mesh. Returned materials are caller-owned; call markUpdated after edits. */
-  convertMaterial?(material: THREE.Material, mesh: THREE.Mesh): OpenPBRMaterial | null | undefined;
-  /** Custom light conversion. Default undefined uses built-in conversion; returning null skips this light. THREESync invokes once per source light identity/version (an absent version stays unchanged). Returned lights are retained by identity and remain caller-owned. */
+  /** Custom material conversion. Default undefined uses built-in conversion; returning null skips every mesh using this material. THREESync invokes once per source material identity/version, so the result cannot depend on a particular mesh. Returned materials are caller-owned; call markUpdated after edits. */
+  convertMaterial?(material: THREE.Material): OpenPBRMaterial | null | undefined;
+  /** Custom light conversion. Default undefined uses built-in conversion; returning null skips this light. THREESync invokes once per source light identity and numeric userData.mutracerVersion (default undefined, never rerun). Returned lights are retained by identity and remain caller-owned. */
   convertLight?(light: THREE.Light): SceneLight | null | undefined;
   /** Receives each converted mesh/group/color batch on every update. Default: no callback. */
   onMeshConverted?(
@@ -690,19 +690,20 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
     return variant.material;
   }
 
-  function materialHook(source: THREE.Material, mesh: THREE.Mesh) {
+  function materialHook(source: THREE.Material) {
     if (!options.convertMaterial) return undefined;
     let entry = store.materialHooks.get(source);
     if (!entry || entry.version !== source.version) {
-      entry = {version: source.version, value: options.convertMaterial(source, mesh)};
+      entry = {version: source.version, value: options.convertMaterial(source)};
       store.materialHooks.set(source, entry);
     }
     return entry.value;
   }
   function lightHook(source: THREE.Light) {
     if (!options.convertLight) return undefined;
-    // Three.js Light has no built-in version. Custom integrations may supply one.
-    const version = (source as THREE.Light & {version?: number}).version;
+    // Three.js Light has no built-in version; applications revise it through userData.
+    const revision = source.userData.mutracerVersion;
+    const version = typeof revision === 'number' ? revision : undefined;
     let entry = store.lightHooks.get(source);
     if (!entry || entry.version !== version) {
       entry = {version, value: options.convertLight(source)};
@@ -710,8 +711,8 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
     }
     return entry.value;
   }
-  function resolveMaterial(source: THREE.Material, mesh: THREE.Mesh) {
-    const custom = materialHook(source, mesh);
+  function resolveMaterial(source: THREE.Material) {
+    const custom = materialHook(source);
     if (custom !== undefined) return custom;
     const cached = store.materials.get(source);
     if (convertedMaterials.has(source)) return cached!.material;
@@ -766,13 +767,13 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
         ? child.material
         : [child.material];
       // A null result rejects the source mesh, including all of its groups/instances.
-      if (childMaterials.some(material => materialHook(material, child) === null)) return;
+      if (childMaterials.some(material => materialHook(material) === null)) return;
       if (!child.geometry) {
         console.warn(child, 'must have a geometry property');
       } else if (
         childMaterials.some(
           (material) =>
-            materialHook(material, child) === undefined &&
+            materialHook(material) === undefined &&
             !(material as THREE.MeshStandardMaterial).isMeshStandardMaterial &&
             !(material as THREE.MeshBasicMaterial).isMeshBasicMaterial &&
             material.userData.mutracerShadowCatcher !== true
@@ -843,7 +844,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             if (!newGeometry) markDeformedGeometry(geometry);
           }
           const sourceMaterial = threeMaterials[group.materialIndex ?? 0];
-          let material = resolveMaterial(sourceMaterial, child)!;
+          let material = resolveMaterial(sourceMaterial)!;
           const baseMaterial = material;
           const autoUvProjection = !geometry.uv && baseMaterial.uvProjection === 'none' &&
             !!(baseMaterial.map || baseMaterial.normalMap || baseMaterial.emissiveMap || baseMaterial.metallicRoughnessMap ||

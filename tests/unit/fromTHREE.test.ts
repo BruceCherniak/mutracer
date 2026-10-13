@@ -1128,7 +1128,7 @@ describe('one-shot conversion hooks', () => {
     const b = fromTHREEScene(source, {convertMaterial, convertLight});
     expect(a.meshes[0].materials[0]).toBe(customMaterial); expect(b.meshes[0].materials[0]).toBe(customMaterial);
     expect(a.lights[0]).toBe(customLight); expect(b.lights[0]).toBe(customLight);
-    expect(convertMaterial).toHaveBeenCalledTimes(2); expect(convertMaterial).toHaveBeenCalledWith(material, mesh);
+    expect(convertMaterial).toHaveBeenCalledTimes(2); expect(convertMaterial).toHaveBeenCalledWith(material);
     expect(convertLight).toHaveBeenCalledTimes(2); expect(convertLight).toHaveBeenCalledWith(light);
     expect(fromTHREEScene(source, {convertMaterial: () => null, convertLight: () => null})).toMatchObject({meshes: [], lights: []});
   });
