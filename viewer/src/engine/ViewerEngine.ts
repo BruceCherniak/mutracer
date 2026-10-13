@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
   Engine, Render, RenderLoop, Sync,
-  THREESync,
+  THREESync, type DisplaySettings,
   fromTHREECamera,
 } from '@meimu/mutracer';
 import { autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
@@ -557,11 +557,14 @@ export class ViewerEngine {
     this.loop.coalesceSceneUpdates = s.previewEnabled && s.denoiseWhileConverging;
     this.preview.resolutionScale = s.previewMaxResolutionScale;
     this.preview.adaptiveResolution = {targetFrameMs: 20, minScale: Math.min(.25, s.previewMaxResolutionScale)};
-    display.toneMapping = s.toneMapping; display.toneMappingExposure = s.exposure;
-    display.contrast = s.contrast; display.saturation = s.saturation;
-    display.temperature = s.temperature; display.tint = s.tint;
-    display.bloomIntensity = s.bloomIntensity; display.bloomThreshold = s.bloomThreshold; display.bloomRadius = s.bloomRadius;
-    display.vignette = s.vignette; display.channel = s.output; display.shadowCatcherAlpha = s.groundOpacity;
+    const displaySettings: DisplaySettings = {
+      toneMapping: s.toneMapping, toneMappingExposure: s.exposure,
+      contrast: s.contrast, saturation: s.saturation,
+      temperature: s.temperature, tint: s.tint,
+      bloomIntensity: s.bloomIntensity, bloomThreshold: s.bloomThreshold, bloomRadius: s.bloomRadius,
+      vignette: s.vignette, channel: s.output, shadowCatcherAlpha: s.groundOpacity,
+    };
+    Object.assign(display, displaySettings);
     this.ground.visible = s.groundShadow;
     this.controls.autoRotate = s.autoRotate;
     this.controls.enabled = s.cameraIndex < 0;
