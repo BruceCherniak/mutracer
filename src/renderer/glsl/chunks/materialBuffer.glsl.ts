@@ -131,6 +131,7 @@ void getMaterial(
   mat.baseMetalness = metallicAndMapIndex.x;
   mat.specularAnisotropy = clamp(metallicAndMapIndex.y, 0.0, 1.0);
   mat.emission = emissionAndEmissiveMapIndex.rgb;
+  mat.inside = false;
   mat.specularIor = iorAndTransmission.x;
   mat.transmissionWeight = iorAndTransmission.y;
 #ifdef HAS_MEDIUM

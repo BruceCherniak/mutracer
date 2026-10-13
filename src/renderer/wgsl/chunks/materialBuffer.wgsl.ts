@@ -117,6 +117,7 @@ fn getMaterial(
   (*ma).baseMetalness = matData.metallic;
   (*ma).specularAnisotropy = clamp(matData.anisotropy, 0.0, 1.0);
   (*ma).emission = getMaterialEmission(materialIndex, uv, uv1);
+  (*ma).inside = false;
   (*ma).specularIor = matData.ior;
   (*ma).transmissionWeight = matData.transmission;
   (*ma).thinWalled = matData.thin > 0.5;

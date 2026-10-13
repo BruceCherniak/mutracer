@@ -108,6 +108,7 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
   float ndv = useFaceN ? ndv1 : ndv2;
   vec3 normal = useFaceN ? si.faceNormal : si.normal;
 
+  mat.inside = ndv <= 0.0 && !mat.thinWalled;
   // In or out
   mat.relativeIor = ndv > 0.0 ? (1.0 / mat.specularIor) : mat.specularIor;
   vec3 ffnormal = ndv >= 0.0 ? normal : -normal;

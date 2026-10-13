@@ -38,6 +38,8 @@ struct OpenPbrPreparedBsdf {
     vec3 viewLocal;
     vec3 diffuseColor;
     float specularEtaTOverEtaI;
+    float refractionEtaTOverEtaI;
+    float transmissionReflectionIor;
     float specularAlpha;
     float diffuseSpecularEnergyCompensation;
 
@@ -786,12 +788,35 @@ OpenPbrPreparedBsdf openpbr_prepare(
         material.specularWeight
     );
     prepared.material.relativeIor = 1.0 / prepared.specularEtaTOverEtaI;
+    prepared.refractionEtaTOverEtaI = prepared.specularEtaTOverEtaI;
+    prepared.transmissionReflectionIor = prepared.material.relativeIor;
+    // Adobe openpbr_bsdf.h::openpbr_prepare_lobes: reflect relative to
+    // the weighted coat, refract relative to ambient air. Inside ignores coat.
+    if (material.coatWeight > 0.0) {
+        float weightedCoatIor = 1.0;
+        if (!material.inside) { weightedCoatIor = mix(1.0, material.coatIor, material.coatWeight); }
+        float weightedBaseIor = weightedCoatIor * openpbr_apply_specular_weight_to_ior(
+            material.specularIor / weightedCoatIor, material.specularWeight);
+        float reflectionEta = weightedBaseIor / weightedCoatIor;
+        if (weightedCoatIor > weightedBaseIor && weightedBaseIor >= 1.0) {
+            reflectionEta = 1.0 / reflectionEta;
+        }
+        prepared.specularEtaTOverEtaI = reflectionEta;
+        prepared.transmissionReflectionIor = 1.0 / reflectionEta;
+        prepared.refractionEtaTOverEtaI = weightedBaseIor;
+        if (material.inside) {
+            prepared.refractionEtaTOverEtaI = 1.0 / weightedBaseIor;
+            prepared.transmissionReflectionIor = weightedBaseIor;
+        }
+        prepared.material.relativeIor = 1.0 / prepared.refractionEtaTOverEtaI;
+    }
+
     prepared.specularAlpha = material.specularRoughness
         * material.specularRoughness;
     float viewCosine = abs(prepared.viewLocal.z);
     float singleInterfaceFresnel = openpbr_dielectric_fresnel(
         viewCosine,
-        prepared.material.relativeIor
+        1.0 / prepared.specularEtaTOverEtaI
     );
     vec3 dielectricFresnelEstimate = material.specularColor * (
         material.thinWalled
@@ -808,12 +833,12 @@ OpenPbrPreparedBsdf openpbr_prepare(
         material.specularColor
     );
     float transmissionFresnel = material.thinWalled
-        ? openpbr_thin_wall_fresnel(singleInterfaceFresnel)
-        : singleInterfaceFresnel;
+        ? openpbr_thin_wall_fresnel(openpbr_dielectric_fresnel(viewCosine, prepared.transmissionReflectionIor))
+        : openpbr_dielectric_fresnel(viewCosine, prepared.transmissionReflectionIor);
     vec3 transmissionTint = openpbr_final_transmission_tint(
         material,
         viewCosine,
-        prepared.specularEtaTOverEtaI
+        prepared.refractionEtaTOverEtaI
     );
     float viewEnergyComplement = openpbr_opaque_energy_complement(
         prepared.specularEtaTOverEtaI,
@@ -851,6 +876,17 @@ OpenPbrPreparedBsdf openpbr_prepare(
         * prepared.diffuseSpecularEnergyCompensation;
     openpbr_normalize_probabilities(prepared);
     return prepared;
+}
+
+float openpbr_substrate_fresnel(OpenPbrPreparedBsdf prepared, float cosine, bool reflection) {
+    if (prepared.material.coatWeight <= 0.0) {
+        return openpbr_dielectric_fresnel(cosine, prepared.material.relativeIor);
+    }
+    float transFresnel = openpbr_dielectric_fresnel(cosine, prepared.transmissionReflectionIor);
+    if (!reflection) { return transFresnel; }
+    float opaqueFresnel = openpbr_dielectric_fresnel(cosine, 1.0 / prepared.specularEtaTOverEtaI);
+    float nonOpaque = prepared.material.transmissionWeight + (1.0 - prepared.material.transmissionWeight) * prepared.material.subsurfaceWeight;
+    return mix(opaqueFresnel, transFresnel, nonOpaque);
 }
 
 vec3 openpbr_eval_prepared(
@@ -912,10 +948,7 @@ vec3 openpbr_eval_prepared(
         }
 
         if (prepared.specularWeight > 0.0) {
-            vec3 dielectricFresnel = vec3(openpbr_dielectric_fresnel(
-                viewHalf,
-                material.relativeIor
-            ));
+            vec3 dielectricFresnel = vec3(openpbr_substrate_fresnel(prepared, viewHalf, true));
             if (material.thinFilmWeight > 0.0) {
                 dielectricFresnel = openpbr_apply_dielectric_thin_film(
                     dielectricFresnel,
@@ -974,10 +1007,7 @@ vec3 openpbr_eval_prepared(
         }
     }
     else {
-        vec3 fresnel = vec3(sampling_dielectric_fresnel(
-            viewHalf,
-            material.relativeIor
-        ));
+        vec3 fresnel = vec3(openpbr_substrate_fresnel(prepared, viewHalf, false));
         if (material.thinFilmWeight > 0.0) {
             fresnel = openpbr_apply_dielectric_thin_film(
                 fresnel,
@@ -996,10 +1026,7 @@ vec3 openpbr_eval_prepared(
                     thinWallHalf = -thinWallHalf;
                 }
                 float thinWallViewHalf = abs(dot(viewLocal, thinWallHalf));
-                vec3 thinWallFresnel = vec3(openpbr_dielectric_fresnel(
-                    thinWallViewHalf,
-                    prepared.material.relativeIor
-                ));
+                vec3 thinWallFresnel = vec3(openpbr_substrate_fresnel(prepared, thinWallViewHalf, false));
                 if (material.thinFilmWeight > 0.0) {
                     thinWallFresnel = openpbr_apply_dielectric_thin_film(
                         thinWallFresnel,
@@ -1017,7 +1044,7 @@ vec3 openpbr_eval_prepared(
                 vec3 tint = openpbr_final_transmission_tint(
                     material,
                     abs(viewLocal.z),
-                    prepared.specularEtaTOverEtaI
+                    prepared.refractionEtaTOverEtaI
                 );
                 response += prepared.transmissionWeight
                     * openpbr_eval_microfacet_reflection(

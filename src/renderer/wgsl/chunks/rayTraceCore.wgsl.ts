@@ -117,6 +117,7 @@ struct OpenPbrResolvedMaterial {
   bevel: f32,
 
   relativeIor: f32,
+  inside: bool,
 
   alphaX: f32,
   alphaY: f32,

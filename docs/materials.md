@@ -65,6 +65,14 @@ Both layers use the geometry tangent; a separate coat tangent is not available.
 A rough coat broadens the underlying metal, dielectric reflection and transmission
 using `mix(rB, min(1, rB^4 + 2*rC^4)^0.25, coatWeight)` before the GGX mapping.
 
+The base reflection beneath a coat uses the surrounding IOR
+`mix(1, coatIor, coatWeight)`. `specularWeight` adjusts the base IOR relative
+to that medium; refraction uses the resulting absolute base IOR relative to air.
+Solid back-face exits ignore the coat IOR; thin walls use the exterior rule
+on either side. Reflection inverts a coat-to-base ratio below one when the
+base IOR is at least one, avoiding false total internal reflection caused by
+the approximate coat model. Dispersion adjusts the base IOR before these rules.
+
 `fuzzColor` colors the fuzz reflection only. Fuzz attenuates the underlying
 material using its white directional albedo, so colored fuzz does not tint
 the substrate through the attenuation term.

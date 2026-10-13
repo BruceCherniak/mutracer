@@ -37,6 +37,8 @@ struct OpenPbrPreparedBsdf {
     viewLocal: vec3f,
     diffuseColor: vec3f,
     specularEtaTOverEtaI: f32,
+    refractionEtaTOverEtaI: f32,
+    transmissionReflectionIor: f32,
     specularAlpha: f32,
     diffuseSpecularEnergyCompensation: f32,
 
@@ -679,12 +681,35 @@ fn openpbr_prepare(
         material.specularWeight
     );
     prepared.material.relativeIor = 1.0 / prepared.specularEtaTOverEtaI;
+    prepared.refractionEtaTOverEtaI = prepared.specularEtaTOverEtaI;
+    prepared.transmissionReflectionIor = prepared.material.relativeIor;
+    // Adobe openpbr_bsdf.h::openpbr_prepare_lobes: reflect relative to
+    // the weighted coat, refract relative to ambient air. Inside ignores coat.
+    if (material.coatWeight > 0.0) {
+        var weightedCoatIor = 1.0;
+        if (!material.inside) { weightedCoatIor = mix(1.0, material.coatIor, material.coatWeight); }
+        let weightedBaseIor = weightedCoatIor * openpbr_apply_specular_weight_to_ior(
+            material.specularIor / weightedCoatIor, material.specularWeight);
+        var reflectionEta = weightedBaseIor / weightedCoatIor;
+        if (weightedCoatIor > weightedBaseIor && weightedBaseIor >= 1.0) {
+            reflectionEta = 1.0 / reflectionEta;
+        }
+        prepared.specularEtaTOverEtaI = reflectionEta;
+        prepared.transmissionReflectionIor = 1.0 / reflectionEta;
+        prepared.refractionEtaTOverEtaI = weightedBaseIor;
+        if (material.inside) {
+            prepared.refractionEtaTOverEtaI = 1.0 / weightedBaseIor;
+            prepared.transmissionReflectionIor = weightedBaseIor;
+        }
+        prepared.material.relativeIor = 1.0 / prepared.refractionEtaTOverEtaI;
+    }
+
     prepared.specularAlpha = material.specularRoughness
         * material.specularRoughness;
     let viewCosine = abs(prepared.viewLocal.z);
     let singleInterfaceFresnel = openpbr_dielectric_fresnel(
         viewCosine,
-        prepared.material.relativeIor
+        1.0 / prepared.specularEtaTOverEtaI
     );
     let dielectricFresnelEstimate = material.specularColor * select(
         singleInterfaceFresnel,
@@ -701,14 +726,14 @@ fn openpbr_prepare(
         material.specularColor
     );
     let transmissionFresnel = select(
-        singleInterfaceFresnel,
-        openpbr_thin_wall_fresnel(singleInterfaceFresnel),
+        openpbr_dielectric_fresnel(viewCosine, prepared.transmissionReflectionIor),
+        openpbr_thin_wall_fresnel(openpbr_dielectric_fresnel(viewCosine, prepared.transmissionReflectionIor)),
         material.thinWalled
     );
     let transmissionTint = openpbr_final_transmission_tint(
         material,
         viewCosine,
-        prepared.specularEtaTOverEtaI
+        prepared.refractionEtaTOverEtaI
     );
     let viewEnergyComplement = openpbr_opaque_energy_complement(
         prepared.specularEtaTOverEtaI,
@@ -748,6 +773,17 @@ fn openpbr_prepare(
     return prepared;
 }
 
+
+fn openpbr_substrate_fresnel(prepared: OpenPbrPreparedBsdf, cosine: f32, reflection: bool) -> f32 {
+    if (prepared.material.coatWeight <= 0.0) {
+        return openpbr_dielectric_fresnel(cosine, prepared.material.relativeIor);
+    }
+    let transFresnel = openpbr_dielectric_fresnel(cosine, prepared.transmissionReflectionIor);
+    if (!reflection) { return transFresnel; }
+    let opaqueFresnel = openpbr_dielectric_fresnel(cosine, 1.0 / prepared.specularEtaTOverEtaI);
+    let nonOpaque = prepared.material.transmissionWeight + (1.0 - prepared.material.transmissionWeight) * prepared.material.subsurfaceWeight;
+    return mix(opaqueFresnel, transFresnel, nonOpaque);
+}
 
 fn openpbr_eval_prepared_lobe(
     prepared: OpenPbrPreparedBsdf,
@@ -801,7 +837,7 @@ fn openpbr_eval_prepared_lobe(
     let evaluateMetal = reflection && prepared.metalWeight > 0.0 && allowMetal;
     var fresnels: array<vec3f, 2>;
     if (evaluateDielectric) {
-        fresnels[0] = vec3f(openpbr_dielectric_fresnel(dielectricViewHalf, material.relativeIor));
+        fresnels[0] = vec3f(openpbr_substrate_fresnel(prepared, dielectricViewHalf, reflection));
     }
     if (evaluateMetal) {
         fresnels[1] = openpbr_metal_fresnel(viewHalf, material.baseWeight * material.baseColor, material.specularColor);
@@ -905,7 +941,7 @@ fn openpbr_eval_prepared_lobe(
                 let tint = openpbr_final_transmission_tint(
                     material,
                     abs(viewLocal.z),
-                    prepared.specularEtaTOverEtaI
+                    prepared.refractionEtaTOverEtaI
                 );
                 response += prepared.transmissionWeight
                     * openpbr_eval_microfacet_reflection(

@@ -237,6 +237,7 @@ fn SampleMaterial(
   var ndv: f32 = select(ndv2, ndv1, useFaceN);
   var N: vec3f = select((*si).normal, (*si).faceNormal, useFaceN);
 
+  (*ma).inside = ndv <= 0.0 && !(*ma).thinWalled;
   // In or out
   (*ma).relativeIor = select((*ma).specularIor, (1.0 / (*ma).specularIor), ndv > 0.0);
   var ffnormal = select(-N, N, ndv >= 0.0);

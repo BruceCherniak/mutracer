@@ -118,6 +118,7 @@ struct OpenPbrResolvedMaterial {
 
   // Calculated
   float relativeIor;
+  bool inside;
   float alphaX;
   float alphaY;
 };
