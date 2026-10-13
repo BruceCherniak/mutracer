@@ -112,6 +112,10 @@ export default class Engine {
   private _deviceRevision = 0;
   private _lossController?: AbortController;
   private _deviceLossError?: Error;
+  private _webglListening = false;
+  private _webglLost = false;
+  private _recoverWebGL = false;
+  private _contextRestore?: {promise: Promise<void>; resolve: () => void; reject: (error: Error) => void};
   private _gpuAdapterInfo?: GPUAdapterInfo;
   private _backendChoice: NonNullable<EngineParams['backend']>;
   private _initPromise?: Promise<EngineInfo>;
@@ -166,7 +170,9 @@ export default class Engine {
       if (this._disposed) throw new Error('Engine is disposed.');
       if (this._pipelineInitError && !this._ownsDeviceSelection) throw this._pipelineInitError;
       const revision = this._deviceRevision;
-      await this._initPipeline(this._backendChoice !== 'webgl');
+      if (this._contextRestore) await this._contextRestore.promise;
+      if (this._disposed) throw new Error('Engine is disposed.');
+      await this._initPipeline(this._backendChoice !== 'webgl' && !this._recoverWebGL);
       if (revision !== this._deviceRevision) throw this._deviceLossError;
       if (this._pipelineInitError) throw this._pipelineInitError;
       if (this._disposed) { this._pipeline?.dispose(); throw new Error('Engine is disposed.'); }
@@ -356,6 +362,12 @@ export default class Engine {
         });
 
         this._pipeline = makeWebGLRenderTargets(this._webglRenderer);
+        if (!this._webglListening) {
+          this._webglListening = true;
+          this.display.canvas.addEventListener('webglcontextlost', this._onContextLost);
+          this.display.canvas.addEventListener('webglcontextrestored', this._onContextRestored);
+        }
+        this._recoverWebGL = false;
       }
 
 
@@ -369,6 +381,23 @@ export default class Engine {
     }
   }
 
+  private _onContextLost = (event: Event) => {
+    event.preventDefault();
+    if (this._disposed || this._webglLost) return;
+    this._webglLost = true; this._recoverWebGL = true;
+    let resolve!: () => void, reject!: (error: Error) => void;
+    const promise = new Promise<void>((done, fail) => {resolve = done; reject = fail;});
+    void promise.catch(() => {});
+    this._contextRestore = {promise, resolve, reject};
+    const error = new Error(`WebGL context lost: ${(event as WebGLContextEvent).statusMessage || 'context is unavailable'}`);
+    this._invalidateDevice(error, true);
+    this._events.emit('devicelost', {reason: 'webglcontextlost', recovering: true});
+  };
+  private _onContextRestored = () => {
+    if (this._disposed || !this._webglLost) return;
+    this._webglLost = false;
+    const restore = this._contextRestore; this._contextRestore = undefined; restore?.resolve();
+  };
   private _watchDevice(device: GPUDevice) {
     void device.lost.then(info => {
       if (this._disposed || this._gpuDevice !== device) return;
@@ -461,6 +490,11 @@ export default class Engine {
   dispose() {
     if (this._disposed) return;
     this._disposed = true; this._bvhPreparationRevision++;
+    this._contextRestore?.reject(new Error('Engine is disposed.')); this._contextRestore = undefined;
+    if (this._webglListening) {
+      this.display.canvas.removeEventListener('webglcontextlost', this._onContextLost);
+      this.display.canvas.removeEventListener('webglcontextrestored', this._onContextRestored);
+    }
     for (const render of [...this._renders]) render.dispose();
     this._pipeline?.dispose(); this._pipeline = undefined; this._webglRenderer?.dispose(); this._bvhWorkerPool?.dispose();
     for (const denoiser of [...this._denoisers]) { const entry = this._denoiserEntries.get(denoiser); if (entry) entry.references = 1; this._releaseDenoiser(denoiser); }

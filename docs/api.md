@@ -310,3 +310,7 @@ then `engine.update()` to resume. It uses the same limit validation as init;
 only engines originally constructed with `device` accept setDevice. The
 replacement is also caller-owned. Custom denoisers detect changes in
 `input.device` / `prepare({device})` and rebuild their own resources.
+
+WebGL context loss also reports `devicelost` with reason `webglcontextlost` and
+`recovering: true`. Rendering waits in `preparing` until the browser dispatches
+`webglcontextrestored`, then rebuilds resources and restarts all renders.

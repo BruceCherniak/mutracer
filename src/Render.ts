@@ -331,7 +331,14 @@ export default class Render {
   private _refine(): RenderStatus {
     if (this._engine._initializationError) throw this._engine._initializationError;
     this._refreshDenoiser();
-    if (!this._engine._ready) { void this._engine.init().catch(error => { if (!this._disposed) this._status = 'error'; this._engine._notifyError(error); }); return this._status = 'preparing'; }
+    if (!this._engine._ready) {
+      const generation = this._engine._deviceGeneration;
+      void this._engine.init().catch(error => {
+        if (this._disposed || generation !== this._engine._deviceGeneration) return;
+        this._status = 'error'; this._engine._notifyError(error);
+      });
+      return this._status = 'preparing';
+    }
     const target = this._synchronize();
     if (!target) return this._status = 'preparing';
     if (this._fallback && this.samples === 0 && !target.canCompleteSampleWithin(this.timeBudgetMs) && !this._fallback._complete) this._fallback._refineOne();

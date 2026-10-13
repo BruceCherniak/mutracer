@@ -8,14 +8,14 @@ import Render from '../../src/Render';
 afterEach(() => {vi.unstubAllGlobals(); vi.restoreAllMocks();});
 it('records a WebGPU initialization rejection when falling back to WebGL', async () => {
   vi.stubGlobal('navigator', {gpu: {requestAdapter: vi.fn().mockRejectedValue(new Error('adapter unavailable'))}});
-  const engine = new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement});
+  const engine = new Engine({canvas: Object.assign(new EventTarget(), {width: 1, height: 1}) as HTMLCanvasElement});
   await engine.init();
   expect(engine.getDiagnostics()).toMatchObject({backend: 'webgl', webgpuFallbackReason: 'adapter unavailable'});
 });
 it('records failed initialization and keeps render errors synchronous after rejection', async () => {
   vi.stubGlobal('navigator', {}); create.mockImplementationOnce(() => {throw new Error('context failed');});
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  const engine = new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement, backend: 'webgl'});
+  const engine = new Engine({canvas: Object.assign(new EventTarget(), {width: 1, height: 1}) as HTMLCanvasElement, backend: 'webgl'});
   const errors = vi.fn(); engine.on('error', errors);
   await expect(engine.init()).rejects.toThrow('context failed');
   expect(new Render(engine).refine()).toBe('error'); expect(engine.lastError?.message).toBe('context failed');
@@ -23,7 +23,7 @@ it('records failed initialization and keeps render errors synchronous after reje
 });
 it('shares concurrent initialization and exposes no backend before completion', async () => {
   vi.stubGlobal('navigator', {});
-  const engine = new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement, backend: 'webgl'});
+  const engine = new Engine({canvas: Object.assign(new EventTarget(), {width: 1, height: 1}) as HTMLCanvasElement, backend: 'webgl'});
   expect(engine.info).toBeUndefined(); expect(engine.backend).toBeUndefined(); expect(engine.device).toBeUndefined();
   const first = engine.init(), second = engine.init(); expect(first).toBe(second);
   const info = await first; expect(info).toBe(engine.info); expect(await engine.init()).toBe(info);
