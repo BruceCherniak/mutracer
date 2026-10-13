@@ -9,7 +9,7 @@ import Geometry from '../scene/Geometry.js';
 import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
 import { SceneBackground, SceneLight } from '../scene/Scene.js';
 import { ColorRGB } from '../types.js';
-import { TextureAtlasStats } from './MergedMaterialData.js';
+import { TextureAtlasStats } from './MaterialTable.js';
 import type {
   OfflineAdaptiveSamplingOptions,
   OfflineAdaptiveSamplingResult

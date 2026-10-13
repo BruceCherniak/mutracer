@@ -286,7 +286,7 @@ fn intersectDisplacement(
         continue;
       }
 
-      // Size will minus 1. See MergedMaterialData#65
+      // Size will minus 1. See MaterialTable#65
       let hSize = vec2f(textureDimensions(map)) * heightMapSize + 1.0;
       let hSizei = vec2i(hSize);
       // TODO height map size should be put in a single texture object.

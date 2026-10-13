@@ -16,7 +16,7 @@ import { ensureMeshGeometryAttributes, meshNeedsStaticBvh, getPreparedMeshGeomet
 import { getGeometryBvh, type BvhBuildConfig } from './renderer/geometryBvh.js';
 import { prepareStaticBvhs } from './renderer/staticBvhPreparation.js';
 import { canUseBvhWorker, BvhWorkerPool, resolveBvhWorkerCount } from './renderer/bvhWorkerClient.js';
-import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from './renderer/MergedMaterialData.js';
+import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from './renderer/MaterialTable.js';
 import { packDepthSampleArea, type DepthSampleArea } from './renderer/depthQuery.js';
 import { makeWGPURenderTargets } from './renderer/WGPURenderingPipeline.js';
 import { makeWebGLRenderTargets } from './renderer/WebGLRenderingPipeline.js';

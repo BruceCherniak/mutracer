@@ -1,4 +1,4 @@
-import { uvProjectionConstants } from '../../MergedMaterialData.js';
+import { uvProjectionConstants } from '../../MaterialTable.js';
 
 export default /* wgsl */ `
 

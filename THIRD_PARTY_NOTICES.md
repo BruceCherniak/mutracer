@@ -99,7 +99,7 @@ npm version 0.10.15. Copyright (c) 2019 HOVER. MIT License
 The adapted files under `src/renderer/` include:
 
 - `TileRender.ts`, `envMapDistribution.ts`,
-  `mergeMeshesToGeometry.ts`, `envMapCreation.ts`, `MergedMaterialData.ts`,
+  `mergeMeshesToGeometry.ts`, `envMapCreation.ts`, `MaterialTable.ts`,
   `texturesFromMaterials.ts`, `util.ts`, and parts of
   `WGPURenderingPipeline.ts` / `WebGLRenderingPipeline.ts`.
 - `glsl/chunks/{intersect,envMap,rayTraceCore,materialBuffer,textureLinear,common,sampleShadowCatcher}.glsl.ts`,

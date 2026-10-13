@@ -5,7 +5,7 @@ import {
   CONSTANT_SPHERE_LIGHT,
   CONSTANT_SPOT_LIGHT
 } from '../../lightsUtil.js';
-import { USE_TFDM_DISPLACEMENT } from '../../MergedMaterialData.js';
+import { USE_TFDM_DISPLACEMENT } from '../../MaterialTable.js';
 
 export default function rayTraceCore({
   hasDisplacement,

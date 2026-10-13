@@ -1,7 +1,7 @@
 import type Engine from '../Engine.js';
 import type { EngineParams } from '../Engine.js';
 import type { BvhBuildConfig } from '../renderer/geometryBvh.js';
-import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from '../renderer/MergedMaterialData.js';
+import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from '../renderer/MaterialTable.js';
 import { resolveBvhWorkerCount } from '../renderer/bvhWorkerClient.js';
 
 declare const process: { env: { NODE_ENV?: string } };

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import Material, { getMaterialHashKey, materialKeys } from '../../src/scene/OpenPBRMaterial';
 import { openPbrSchema } from '../../src/scene/openPbrSchema';
 import Texture from '../../src/scene/Texture';
-import Merged from '../../src/renderer/MergedMaterialData';
+import MaterialTable from '../../src/renderer/MaterialTable';
 import baseline from '../fixtures/material-schema-baseline.json';
 
 function fixedMaterials() {
@@ -35,7 +35,7 @@ describe('OpenPBR schema', () => {
     }
   });
   it('retains the fixed pre-refactor packing bytes and hash order', () => {
-    const materials = fixedMaterials(); const data = new Merged(materials, []);
+    const materials = fixedMaterials(); const data = new MaterialTable(materials, []);
     const bytes = Buffer.from(data.getBufferArray().buffer);
     expect(materialKeys).toEqual(baseline.keys);
     expect(materials.map(getMaterialHashKey)).toEqual(baseline.hashes);
@@ -45,13 +45,13 @@ describe('OpenPBR schema', () => {
   for (const field of openPbrSchema.filter(field => field.category === 'param')) {
     it(`packs ${field.key}`, () => {
       const material = new Material({emissionLuminance: 1, transmissionWeight: 1, transmissionDepth: 1});
-      const before = new Merged([material], []).getBufferArray();
+      const before = new MaterialTable([material], []).getBufferArray();
       const value = field.default;
       const enums: Record<string, string> = {alphaMode: 'blend', mapAlphaUsage: 'transmission', uvProjection: 'triplanar'};
       const changed = field.type === 'enum' ? enums[field.key] : Array.isArray(value) ? value.map(v => v * .3 + .1) :
         typeof value === 'boolean' ? !value : (material[field.key] as number) + .2;
       Object.assign(material, {[field.key]: changed});
-      const packed = new Merged([material], []);
+      const packed = new MaterialTable([material], []);
       expect(packed.getBufferArray()).not.toEqual(before);
       const fresh = packed.getBufferArray();
       Object.assign(material, {[field.key]: field.default});

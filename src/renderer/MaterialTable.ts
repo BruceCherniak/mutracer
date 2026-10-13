@@ -26,7 +26,7 @@ import { SceneLight } from '../scene/Scene.js';
 
 export const DEFAULT_MAX_TEXTURE_ARRAY_BYTES = 384 * 1024 * 1024;
 
-export interface MergedMaterialDataOptions {
+export interface MaterialTableOptions {
   maxTextureArrayBytes?: number;
   maxTextureArrayLayers?: number;
   maxTextureDimension2D?: number;
@@ -236,7 +236,7 @@ function createDataAtlasPage(
 function makeTextureArray(
   textures: Texture[],
   sRGB = false,
-  options: MergedMaterialDataOptions = {}
+  options: MaterialTableOptions = {}
 ) {
   const packStart = performance.now();
   if (!textures.length) {
@@ -660,7 +660,7 @@ function openPbrMedium(material: OpenPBRMaterial) {
   return volume ?? emptyOpenPbrMedium();
 }
 
-class MergedMaterialData {
+class MaterialTable {
   texture: WebGLTexture2DArray | undefined;
   textureAtlasStats: TextureAtlasStats;
 
@@ -677,7 +677,7 @@ class MergedMaterialData {
   constructor(
     materials: OpenPBRMaterial[],
     lights: SceneLight[],
-    options: MergedMaterialDataOptions = {}
+    options: MaterialTableOptions = {}
   ) {
     const maps = mergeTexturesFromMaterials(materials, [
       'map',
@@ -1025,4 +1025,4 @@ class MergedMaterialData {
   }
 }
 
-export default MergedMaterialData;
+export default MaterialTable;

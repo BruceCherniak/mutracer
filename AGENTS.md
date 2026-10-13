@@ -14,7 +14,7 @@ people and coding agents changing the library. For using it, read
   `OpenPBRMaterial`, lights, `Camera`, `Texture`).
 - `src/renderer/`: backends. `WGPU*` files and `wgsl/` are WebGPU; `WebGL*`
   files and `glsl/` are WebGL 2. Both backends share the CPU-side packing
-  (`MergedMaterialData`, `lightSampling`, `bvhAccel`, `prepareMeshBVH`).
+  (`MaterialTable`, `lightSampling`, `bvhAccel`, `prepareMeshBVH`).
   `bvh.worker.ts` and `staticBvhPreparation.ts` prepare static BLASes.
 - `src/tinybvh/`: TinyBVH WebAssembly adapter and its checked-in `.wasm`.
 - `src/util/`: loaders, Three.js conversion, geometry helpers.

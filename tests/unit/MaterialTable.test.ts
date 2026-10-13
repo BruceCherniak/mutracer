@@ -1,19 +1,19 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import MergedMaterialData, {
+import MaterialTable, {
   
   
-} from '../../src/renderer/MergedMaterialData';
+} from '../../src/renderer/MaterialTable';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import Texture from '../../src/scene/Texture';
 import { UnlitMaterial } from '../../src/constants';
 
-describe('MergedMaterialData texture arrays', () => {
+describe('MaterialTable texture arrays', () => {
   it('encodes unlit surfaces distinctly from lit and shadow-catching materials', () => {
     const unlit = new OpenPBRMaterial();
     unlit.unlit = true;
     unlit.emissionColor = [0.8, 0.2, 0.1];
     unlit.emissionLuminance = 1;
-    const packed = new MergedMaterialData([unlit], []);
+    const packed = new MaterialTable([unlit], []);
     expect(packed.bufferData.type).toEqual([UnlitMaterial]);
     expect(packed.getBufferArray()[3]).toBe(UnlitMaterial);
   });
@@ -55,7 +55,7 @@ describe('MergedMaterialData texture arrays', () => {
       return material;
     });
     const maxTextureArrayBytes = 2 * 128 * 128 * 4;
-    const materialData = new MergedMaterialData(materials, [], {
+    const materialData = new MaterialTable(materials, [], {
       maxTextureArrayBytes,
       maxTextureArrayLayers: 256,
       maxTextureDimension2D: 4096
@@ -78,7 +78,7 @@ describe('MergedMaterialData texture arrays', () => {
       return material;
     });
 
-    const materialData = new MergedMaterialData(materials, [], {
+    const materialData = new MaterialTable(materials, [], {
       maxTextureArrayLayers: 256,
       maxTextureDimension2D: 4096
     });
@@ -105,7 +105,7 @@ describe('MergedMaterialData texture arrays', () => {
     material.map.uvOffset = [0.25, -0.5];
     material.map.uvChannel = 1;
 
-    const materialData = new MergedMaterialData([material], []);
+    const materialData = new MaterialTable([material], []);
 
     expect(materialData.bufferData.mapTransform).toEqual([
       3, 2, 0.25, -0.5
@@ -127,7 +127,7 @@ describe('MergedMaterialData texture arrays', () => {
     });
     material.map.flipY = true;
 
-    const materialData = new MergedMaterialData([material], []);
+    const materialData = new MaterialTable([material], []);
     const page = materialData.texture!.source[0];
 
     expect(page).toMatchObject({ width: 2, height: 2 });
@@ -154,7 +154,7 @@ describe('MergedMaterialData texture arrays', () => {
 
     expect(
       () =>
-        new MergedMaterialData(materials, [], {
+        new MaterialTable(materials, [], {
           maxTextureArrayBytes: 8,
           maxTextureArrayLayers: 2,
           maxTextureDimension2D: 1
@@ -170,7 +170,7 @@ describe('MergedMaterialData texture arrays', () => {
       height: 4
     } as HTMLImageElement);
 
-    const materialData = new MergedMaterialData([material], []);
+    const materialData = new MaterialTable([material], []);
     const packed = materialData.getBufferArray();
 
     expect(materialData.defines.NUM_THIN_FILM_MAPS).toBe(1);
@@ -191,7 +191,7 @@ describe('MergedMaterialData texture arrays', () => {
       height: 8
     } as HTMLImageElement);
 
-    const materialData = new MergedMaterialData([material], []);
+    const materialData = new MaterialTable([material], []);
     const packed = materialData.getBufferArray();
 
     expect(materialData.defines.NUM_ROUGHNESS_MAPS).toBe(1);
@@ -211,7 +211,7 @@ describe('MergedMaterialData texture arrays', () => {
     } as HTMLImageElement);
     material.alphaCutoff = 0.4;
 
-    const materialData = new MergedMaterialData([material], []);
+    const materialData = new MaterialTable([material], []);
     const packed = materialData.getBufferArray();
 
     expect(materialData.defines.NUM_ALPHA_MAPS).toBe(1);
@@ -231,7 +231,7 @@ describe('MergedMaterialData texture arrays', () => {
       height: 4
     } as HTMLImageElement);
 
-    const materialData = new MergedMaterialData([material], []);
+    const materialData = new MaterialTable([material], []);
     const packed = materialData.getBufferArray();
 
     expect(materialData.defines.NUM_TRANSMISSION_MAPS).toBe(1);
@@ -248,7 +248,7 @@ describe('MergedMaterialData texture arrays', () => {
     } as HTMLImageElement);
     material.displacementBumpStrength = 40;
 
-    const materialData = new MergedMaterialData([material], []);
+    const materialData = new MaterialTable([material], []);
     const packed = materialData.getBufferArray();
 
     expect(materialData.defines.NUM_BUMP_MAPS).toBe(1);
@@ -263,7 +263,7 @@ describe('MergedMaterialData texture arrays', () => {
     const material = new OpenPBRMaterial();
     material.doubleSided = true;
 
-    const materialData = new MergedMaterialData([material], []);
+    const materialData = new MaterialTable([material], []);
     const packed = materialData.getBufferArray();
 
     expect(materialData.bufferData.doubleSided).toEqual([1]);
@@ -279,7 +279,7 @@ describe('MergedMaterialData texture arrays', () => {
     material.transmissionScatter = [0.25, 0.5, 0];
     material.transmissionScatterAnisotropy = 0.4;
 
-    const materialData = new MergedMaterialData([material], []);
+    const materialData = new MaterialTable([material], []);
     const packed = materialData.getBufferArray();
 
     expect(Array.from(packed.slice(20 * 4, 20 * 4 + 3))).toEqual([
@@ -300,7 +300,7 @@ describe('MergedMaterialData texture arrays', () => {
     material.subsurfaceRadiusScale = [1, 0.5, 0.25];
     material.subsurfaceAnisotropy = 0.3;
 
-    const materialData = new MergedMaterialData([material], []);
+    const materialData = new MaterialTable([material], []);
     const packed = materialData.getBufferArray();
     const extinction = Array.from(packed.slice(20 * 4, 20 * 4 + 3));
     const scattering = Array.from(packed.slice(21 * 4, 21 * 4 + 3));
@@ -318,7 +318,7 @@ it('repacking parameters matches fresh packing while preserving the texture atla
   const a = new OpenPBRMaterial(); const b = new OpenPBRMaterial();
   a.map = new Texture({ data: new Uint8Array([255,128,0,255]), width: 1, height: 1 });
   b.normalMap = a.map;
-  const packed = new MergedMaterialData([a,b], []);
+  const packed = new MaterialTable([a,b], []);
   const atlas = packed.texture; const info = packed.bufferData.mapInfo;
   const indices = packed.bufferData.diffuseMapIndex;
   a.baseColor = [0.2,0.4,0.5]; a.coatWeight = 1; a.opacity = 0.6; a.emissionLuminance = 5;
@@ -326,14 +326,14 @@ it('repacking parameters matches fresh packing while preserving the texture atla
   packed.repackParams([a,b]);
   expect(packed.texture).toBe(atlas); expect(packed.bufferData.mapInfo).toBe(info);
   expect(packed.bufferData.diffuseMapIndex).toBe(indices);
-  expect(packed.getBufferArray()).toEqual(new MergedMaterialData([a,b], []).getBufferArray());
+  expect(packed.getBufferArray()).toEqual(new MaterialTable([a,b], []).getBufferArray());
 });
 
 it('constructs material properties and packs public alpha strings without exposing numeric constants', () => {
   const materials = (['opaque', 'alpha', 'transmission'] as const).map(mapAlphaUsage =>
     new OpenPBRMaterial({ mapAlphaUsage, baseColor: [0.1, 0.2, 0.3], uvProjectionScale: [2, 3], displacementUvProjectionScale: 4 }));
   expect(materials[0]).toMatchObject({ version: 0, specularRoughness: .3, baseColor: [.1, .2, .3] });
-  const packed = new MergedMaterialData(materials, []);
+  const packed = new MaterialTable(materials, []);
   expect(packed.bufferData.mapAlphaUsage).toEqual([0, 2, 3]);
   expect(packed.bufferData.uvScale).toEqual([[2, 3], [2, 3], [2, 3]]);
   expect(packed.bufferData.displacementUvProjectionScale).toEqual([4, 4, 4]);

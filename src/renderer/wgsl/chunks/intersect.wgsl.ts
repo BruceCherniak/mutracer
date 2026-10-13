@@ -6,7 +6,7 @@ import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
 import {
   USE_TFDM_DISPLACEMENT,
   uvProjectionConstants
-} from '../../MergedMaterialData.js';
+} from '../../MaterialTable.js';
 import tfdm_displacementWgsl from './tfdm_displacement.wgsl.js';
 import pdm_displacementWgsl from './pdm_displacement.wgsl.js';
 import intersectionAlphaWgsl from './intersectionAlpha.wgsl.js';

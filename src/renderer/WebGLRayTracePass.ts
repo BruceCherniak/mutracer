@@ -37,10 +37,10 @@ import {
 } from './envMapDistribution.js';
 import createRayTraceFragmentShader from './glsl/rayTrace.frag.js';
 import shadowCatcherFrag from './glsl/shadowCatcher.frag.js';
-import MergedMaterialData, {
+import MaterialTable, {
   DEFAULT_MAX_TEXTURE_ARRAY_BYTES,
   materialUsesMedium
-} from './MergedMaterialData.js';
+} from './MaterialTable.js';
 import OpenPBRMaterial, {
 } from '../scene/OpenPBRMaterial.js';
 
@@ -129,7 +129,7 @@ class WebGLRayTracePass {
   private _analyticLightSelectionPmfs = new Float32Array(0);
   private _analyticLightSelectionCdfs = new Float32Array(0);
   private _envLightSelectionPmf = 0;
-  private _materialData: MergedMaterialData | undefined;
+  private _materialData: MaterialTable | undefined;
   private _maxTextureArrayBytes = DEFAULT_MAX_TEXTURE_ARRAY_BYTES;
   private _preparedMeshData?: ReturnType<typeof updateMeshInstances>;
   private _membershipCache = new MeshMembershipCache();
@@ -577,7 +577,7 @@ class WebGLRayTracePass {
     }
 
     this._materialData?.dispose(this._renderer.gl);
-    const materialData = new MergedMaterialData(
+    const materialData = new MaterialTable(
       materials,
       this._analyticLights,
       {
@@ -623,7 +623,7 @@ class WebGLRayTracePass {
     return bvhBuffer;
   }
 
-  private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MergedMaterialData, mergedGeometry: Geometry) {
+  private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MaterialTable, mergedGeometry: Geometry) {
     // Avoid too much shader compilation
     const STACK_SIZE = 50;
     const hasShadowCatcher = materials.some((m) => m.shadowCatcher);
@@ -758,7 +758,7 @@ class WebGLRayTracePass {
     let data = this._materialData!;
     if (update.level === 'textures') {
       data.dispose(this._renderer.gl);
-      data = this._materialData = new MergedMaterialData(res.materials, this._analyticLights, {
+      data = this._materialData = new MaterialTable(res.materials, this._analyticLights, {
         maxTextureArrayBytes: this._maxTextureArrayBytes,
         maxTextureArrayLayers: this._renderer.gl.getParameter(this._renderer.gl.MAX_ARRAY_TEXTURE_LAYERS),
         maxTextureDimension2D: this._renderer.gl.getParameter(this._renderer.gl.MAX_TEXTURE_SIZE)

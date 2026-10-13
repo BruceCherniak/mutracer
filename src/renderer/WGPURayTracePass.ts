@@ -20,11 +20,11 @@ import DirectionalLight from '../scene/DirectionalLight.js';
 import SphereLight from '../scene/SphereLight.js';
 import RectLight from '../scene/RectLight.js';
 import SpotLight from '../scene/SpotLight.js';
-import MergedMaterialData, {
+import MaterialTable, {
   DEFAULT_MAX_TEXTURE_ARRAY_BYTES,
   materialUsesMedium,
   USE_TFDM_DISPLACEMENT
-} from './MergedMaterialData.js';
+} from './MaterialTable.js';
 import { SceneBackground, SceneLight } from '../scene/Scene.js';
 import { numberArraysEqual } from './util.js';
 import Camera from '../scene/Camera.js';
@@ -299,7 +299,7 @@ class WGPURayTracePass {
   private _iesProfileTexelOffsets = new Int32Array(0);
   private _materialChanges = new MaterialChangeTracker();
   private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean; materials: Set<OpenPBRMaterial> };
-  private _materialData: MergedMaterialData | undefined;
+  private _materialData: MaterialTable | undefined;
   private _maxTextureArrayBytes = DEFAULT_MAX_TEXTURE_ARRAY_BYTES;
   private _pendingGeometryUpdates = new Set<Geometry>();
   private _needsUpdateMeshData = true;
@@ -2243,7 +2243,7 @@ ${rayTraceCompute({
     this._tlas = tlas;
     this._uploadBVH(tlas, res.blases);
 
-    const materialData = (this._materialData = new MergedMaterialData(
+    const materialData = (this._materialData = new MaterialTable(
       materials,
       this._analyticLights,
       {
@@ -2345,7 +2345,7 @@ ${rayTraceCompute({
     this._needsRefitTLAS = false;
   }
 
-  private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MergedMaterialData, mergedGeometry: Geometry) {
+  private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MaterialTable, mergedGeometry: Geometry) {
     const hasTransmission = materials.some((m) => m.transmissionWeight > 0);
     if (hasTransmission !== this._hasTransmission) {
       this._hasTransmission = hasTransmission;
@@ -2468,7 +2468,7 @@ ${rayTraceCompute({
     const res = this._preparedMeshData!;
     let materialData = this._materialData!;
     if (update.level === 'textures') {
-      materialData = this._materialData = new MergedMaterialData(res.materials, this._analyticLights, {
+      materialData = this._materialData = new MaterialTable(res.materials, this._analyticLights, {
         maxTextureArrayBytes: this._maxTextureArrayBytes,
         maxTextureArrayLayers: this._device.limits.maxTextureArrayLayers,
         maxTextureDimension2D: this._device.limits.maxTextureDimension2D
@@ -2604,7 +2604,7 @@ ${rayTraceCompute({
     this._needsRefitTLAS = false;
   }
 
-  private _updateTextures(materialData: MergedMaterialData) {
+  private _updateTextures(materialData: MaterialTable) {
     // Textures
     // TODO Avoid zero length array.
     const mapInfo = materialData.bufferData.mapInfo ?? [0, 0, 0, 0];
