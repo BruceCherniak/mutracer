@@ -248,7 +248,56 @@ transport fails, it falls back to building in the calling thread (the render
 worker here). Asset URLs stay relative to the library/module, as on the main
 thread. Browser support for OffscreenCanvas and each GPU backend is required.
 
+## Loading and deployment
+
+With npm, import the public API as usual:
+
+```ts
+import { Engine, Render } from '@meimu/mutracer';
+
+const engine = new Engine({canvas});
+const render = new Render(engine);
+render.denoiser = {type: 'oidn'};
+```
+
+MuTracer initializes OIDN and loads its model weights automatically when a
+render first prepares its OIDN denoiser on WebGPU. With code splitting enabled,
+its runtime code is also fetched only at that point; importing the package,
+initializing an engine, or using JNLM does not fetch it. Selecting
+`engine.bvhBuilder = 'tinybvh'` loads its WASM when a BVH is first built; the
+calling thread and BVH workers use the same asset URL. No separate runtime
+imports or asset-loading calls are needed. See [denoising](./denoising.md#hosting-the-weights)
+for model hosting.
+
+For the standalone UMD build, copy the entire `dist/` directory to your hosting
+location, keeping this layout:
+
+```text
+mutracer.umd.js
+assets/
+  bvh.worker.js
+  tinybvh.wasm
+  oidn-runtime.js
+```
+
+For example, after copying it to `/vendor/mutracer/`, load
+`/vendor/mutracer/mutracer.umd.js` in a script tag to use the `MuTracer` global.
+Optional runtime URLs resolve relative to that script, even when the page is
+hosted in a different directory. The OIDN runtime is an ES module loaded with
+dynamic import. Serve it with a JavaScript MIME type and allow CORS when hosted
+on a different origin. The UMD build uses CDN-hosted model weights by default.
+
+Standalone asset names are stable. Deploy the script and assets together; use
+a versioned directory or package-version URL when caching them for a long time.
+Application bundlers may give their own output assets hashed names.
+
 ## Bundler notes
+
+The npm ESM entry preserves the dynamic import of the OIDN module. Vite and
+webpack builds with code splitting enabled emit it and its dependencies as an
+async chunk, fetched on first use. Configuring a single-file build or inlining
+dynamic imports can include that code in the main bundle instead; initialization
+is still deferred, but its download is no longer deferred.
 
 Vite development prebundles dependencies and can relocate asset URLs. Exclude
 MuTracer so the bundled OIDN standard/small weights and the optional TinyBVH

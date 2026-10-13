@@ -22,14 +22,14 @@ describe('standalone library builds', () => {
       .filter((output): output is OutputChunk => output.type === 'chunk');
     const context = createContext({
       URL, Float32Array, Uint32Array, Uint8Array, Int32Array, Uint16Array,
-      performance, console, location: 'https://example.test/mutracer.umd.js'
+      performance, console, location: {href: 'https://example.test/mutracer.umd.js'}
     });
     context.self = context;
     runInContext(chunks.find(chunk => chunk.fileName === 'mutracer.umd.js')!.code, context);
     api = context.MuTracer;
   }, 20_000);
 
-  it('ships only the CDN global build, without duplicate ESM or OIDN chunks', () => {
+  it('ships one UMD entry with optional runtime assets', () => {
     expect(chunks.map(chunk => chunk.fileName)).toEqual(['mutracer.umd.js']);
   });
 
@@ -55,7 +55,7 @@ describe('standalone library builds', () => {
     const renderer = new library.Engine({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
     const geometry = library.createCubeGeometry();
     await prepareStats(renderer, [new library.Mesh(geometry, new library.OpenPBRMaterial())]);
-    expect(workerUrl).toMatch(/^https:\/\/cdn\.example\.test\/package\/dist\/assets\/bvh\.worker-.+\.js$/);
+    expect(workerUrl).toBe('https://cdn.example.test/package/dist/assets/bvh.worker.js');
     expect('bvh' in geometry).toBe(false);
     expect((await prepareStats(renderer, [new library.Mesh(geometry, new library.OpenPBRMaterial())])).geometryCount).toBe(0);
   });
