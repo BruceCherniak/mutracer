@@ -25,5 +25,6 @@ jobs:
           npm run typecheck:viewer
           npm run typecheck:site
       - run: npm test
+      - run: npm run test:viewer
       - run: npm run build
       - run: npm run check:lib-esm
