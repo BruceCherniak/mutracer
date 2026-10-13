@@ -59,8 +59,25 @@ interface EngineEvents {
 declare const process: { env: { NODE_ENV?: string } };
 function isDevelopment() { try { return process.env.NODE_ENV !== 'production'; } catch { return false; } }
 let globalGPUDevice: GPUDevice | null = null;
-let globalGPUAdapter: GPUAdapter | null = null;
 let globalGPUAdapterInfo: GPUAdapterInfo | null = null;
+let globalGPURequest: Promise<GPUDevice> | undefined;
+async function sharedDevice(gpu: GPU): Promise<GPUDevice> {
+  if (globalGPUDevice) return globalGPUDevice;
+  if (!globalGPURequest) {
+    const request = (async () => {
+      const adapter = await gpu.requestAdapter({powerPreference: 'high-performance'}) ?? await gpu.requestAdapter();
+      if (!adapter) throw new Error('No WebGPU adapter is available');
+      const device = await adapter.requestDevice(getRecommendedDeviceDescriptor(adapter));
+      globalGPUAdapterInfo = (adapter as GPUAdapter & {info?: GPUAdapterInfo}).info ?? null;
+      globalGPUDevice = device;
+      void device.lost.then(() => { if (globalGPUDevice === device) globalGPUDevice = null; });
+      return device;
+    })();
+    globalGPURequest = request;
+    void request.finally(() => { if (globalGPURequest === request) globalGPURequest = undefined; }).catch(() => {});
+  }
+  return globalGPURequest;
+}
 
 /** Shared device, committed scene/camera, CPU preparation and denoiser ownership. */
 export default class Engine {
@@ -91,6 +108,10 @@ export default class Engine {
   private _webglRenderer?: WebGLRenderer;
   private _gpuDevice?: GPUDevice;
   private _suppliedDevice?: GPUDevice;
+  private readonly _ownsDeviceSelection: boolean;
+  private _deviceRevision = 0;
+  private _lossController?: AbortController;
+  private _deviceLossError?: Error;
   private _gpuAdapterInfo?: GPUAdapterInfo;
   private _backendChoice: NonNullable<EngineParams['backend']>;
   private _initPromise?: Promise<EngineInfo>;
@@ -129,11 +150,12 @@ export default class Engine {
   private _lastError: Error | undefined;
   /** Most recent synchronous engine/render failure. Default undefined. */
   get lastError() { return this._lastError; }
-  /** @internal */ _setRenderError(error?: Error) { this._lastError = error; }
+  /** @internal */ _setRenderError(error?: Error) { this._lastError = error ?? this._pipelineInitError; }
 
   constructor(params: EngineParams = {}) {
     if (params.device && params.backend === 'webgl') throw new Error('A supplied GPUDevice cannot use the webgl backend.');
     this._suppliedDevice = params.device;
+    this._ownsDeviceSelection = !params.device;
     this._backendChoice = params.device ? 'webgpu' : params.backend ?? 'auto';
     this._sceneChangeDetector = new SceneChangeDetector(params.validateUpdates ?? isDevelopment());
     this.display = Display._create(this, params.canvas ?? document.createElement('canvas'));
@@ -142,7 +164,10 @@ export default class Engine {
   init(): Promise<EngineInfo> {
     return this._initPromise ??= (async () => {
       if (this._disposed) throw new Error('Engine is disposed.');
+      if (this._pipelineInitError && !this._ownsDeviceSelection) throw this._pipelineInitError;
+      const revision = this._deviceRevision;
       await this._initPipeline(this._backendChoice !== 'webgl');
+      if (revision !== this._deviceRevision) throw this._deviceLossError;
       if (this._pipelineInitError) throw this._pipelineInitError;
       if (this._disposed) { this._pipeline?.dispose(); throw new Error('Engine is disposed.'); }
       const gl = this._webglRenderer?.gl, limits = this._gpuDevice?.limits;
@@ -161,7 +186,7 @@ export default class Engine {
   /** The sole external edit detection/commit point. Returns whether inputs changed. */
   update(): boolean {
     if (this._disposed) throw new Error('Engine is disposed.');
-    this._lastError = undefined;
+    this._lastError = this._pipelineInitError;
     let changed = false, resetTiming = false;
     const cameraFields = this.camera ? snapshotFields(this.camera) : [];
     if (this.camera !== this._sourceCamera || !snapshotsEqual(cameraFields, this._cameraFields)) {
@@ -292,31 +317,17 @@ export default class Engine {
       if (preferWebGPU && (this._suppliedDevice || (typeof navigator !== 'undefined' && navigator.gpu))) {
         try {
           const gpu = typeof navigator !== 'undefined' ? navigator.gpu : undefined;
-          let gpuDevice = this._suppliedDevice ?? globalGPUDevice;
-          let gpuAdapter = globalGPUAdapter;
-          let gpuAdapterInfo = this._suppliedDevice ? (this._suppliedDevice as GPUDevice & {adapterInfo?: GPUAdapterInfo}).adapterInfo : globalGPUAdapterInfo;
-          if (!gpuDevice) {
-            gpuAdapter = await gpu!.requestAdapter({
-              powerPreference: 'high-performance'
-            });
-            if (!gpuAdapter) {
-              gpuAdapter = await gpu!.requestAdapter();
-            }
-            if (!gpuAdapter) throw new Error('No WebGPU adapter is available');
-            gpuAdapterInfo = (gpuAdapter as GPUAdapter & { info: GPUAdapterInfo }).info;
-
-            gpuDevice = await gpuAdapter.requestDevice(getRecommendedDeviceDescriptor(gpuAdapter));
-            globalGPUAdapter = gpuAdapter;
-            globalGPUAdapterInfo = gpuAdapterInfo ?? null;
-            globalGPUDevice = gpuDevice;
-          }
-
+          const gpuDevice = this._suppliedDevice ?? await sharedDevice(gpu!);
+          const gpuAdapterInfo = this._suppliedDevice
+            ? (gpuDevice as GPUDevice & {adapterInfo?: GPUAdapterInfo}).adapterInfo : globalGPUAdapterInfo;
+          if (this._disposed) return;
           validateDevice(gpuDevice);
           this._gpuAdapterInfo = gpuAdapterInfo ?? undefined;
           this._gpuDevice = gpuDevice;
           this._pipeline = makeWGPURenderTargets(this.display.canvas, gpuDevice, {
             presentationFormat: gpu?.getPreferredCanvasFormat() ?? 'bgra8unorm'
           });
+          this._watchDevice(gpuDevice);
           gpuCreated = true;
         } catch (e) {
           if (this._backendChoice === 'webgpu') throw e;
@@ -357,6 +368,60 @@ export default class Engine {
       this._events.emit('progress', {stage: 'device', progress: 1});
     }
   }
+
+  private _watchDevice(device: GPUDevice) {
+    void device.lost.then(info => {
+      if (this._disposed || this._gpuDevice !== device) return;
+      if (globalGPUDevice === device) globalGPUDevice = null;
+      const recovering = this._ownsDeviceSelection;
+      const error = new Error(`WebGPU device lost (${info.reason}): ${info.message || 'device is unavailable'}`);
+      this._invalidateDevice(error, recovering);
+      this._events.emit('devicelost', {reason: info.reason, recovering});
+      if (!recovering) this._notifyError(error);
+    });
+  }
+  private _invalidateDevice(error: Error, recovering: boolean) {
+    this._deviceLossError = error; this._deviceRevision++;
+    this._lossController?.abort(error); this._lossController = undefined;
+    for (const render of this._renders) render._deviceLost(recovering);
+    this._pipeline?.dispose(); this._pipeline = undefined;
+    this._webglRenderer?.dispose(); this._webglRenderer = undefined;
+    this._gpuDevice = undefined; this._gpuAdapterInfo = undefined;
+    this._info = undefined; this._initPromise = undefined;
+    this._pipelineInitError = recovering ? undefined : error; this._lastError = error;
+    this._presented = undefined; this._shaderProgress = '';
+    this._uploadedRevision = -1; this._pendingMeshes = 'full'; this._pendingLights = true; this._pendingBackground = true;
+    this._sceneRevision++;
+    this._customPrepared = new WeakMap();
+    for (const filter of [...this._denoisers]) {
+      const entry = this._denoiserEntries.get(filter); if (entry) entry.references = 1;
+      this._releaseDenoiser(filter);
+    }
+    this._denoiserCache.clear();
+  }
+  /** Replaces a caller-owned device after validation. Only available on engines
+   * constructed with device; the next update/refine uploads the committed scene.
+   */
+  async setDevice(device: GPUDevice): Promise<void> {
+    if (this._disposed) throw new Error('Engine is disposed.');
+    if (this._ownsDeviceSelection) throw new Error('setDevice requires an engine constructed with device.');
+    try { validateDevice(device); }
+    catch (error) {this._lastError = this._notifyError(error); throw error;}
+    if (this._gpuDevice === device && !this._pipelineInitError) return;
+    this._invalidateDevice(new Error('WebGPU device replaced during converge.'), true);
+    this._suppliedDevice = device;
+  }
+  /** @internal Device loss rejects pending waits without relying on driver completion. */
+  _awaitDevice<T>(work: Promise<T>): Promise<T> {
+    const signal = (this._lossController ??= new AbortController()).signal;
+    return new Promise((resolve, reject) => {
+      const lost = () => reject(signal.reason);
+      signal.addEventListener('abort', lost, {once: true});
+      work.then(resolve, reject).finally(() => signal.removeEventListener('abort', lost));
+    });
+  }
+  /** @internal */ get _deviceGeneration() { return this._deviceRevision; }
+  /** @internal */ get _lostError() { return this._deviceLossError; }
 
   private _adapterName() {
     if (this._gpuAdapterInfo) return this._gpuAdapterInfo.description || this._gpuAdapterInfo.vendor || 'WebGPU';
@@ -434,7 +499,10 @@ export default class Engine {
     let entry = this._denoiserCache.get(key);
     if (!entry) {
       const next: {key: string; references: number; value?: OwnedDenoiser; pending?: Promise<OwnedDenoiser>} = {key, references: 0};
-      next.pending = create().then(filter => { next.value = this._ownDenoiser(filter); this._denoiserEntries.set(filter, next); return filter; });
+      const revision = this._deviceRevision;
+      next.pending = create().then(filter => {
+        if (revision !== this._deviceRevision) { this._disposeDenoiser(filter); throw this._deviceLossError; }
+        next.value = this._ownDenoiser(filter); this._denoiserEntries.set(filter, next); return filter; });
       this._denoiserCache.set(key, next); entry = next;
     }
     entry.references++;

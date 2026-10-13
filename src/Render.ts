@@ -407,6 +407,12 @@ export default class Render {
 
   private _cancelDenoise() { this._denoiseController?.abort(); this._denoiseController = undefined; this._denoiseRevision++; this._target?.cancelDenoise?.(); this._denoisePending = undefined; this._denoisedSamples = 0; }
   /** @internal */ _inputsChanged(resetTiming = false) { this._cancelDenoise(); if (resetTiming) this._target?.invalidateTiming?.(); }
+  /** @internal */ _deviceLost(recovering: boolean) {
+    this._cancelDenoise(); this._filterRevision++;
+    this._filter = undefined; this._filterPending = undefined; this._filterKey = '';
+    this._target = undefined; this._input = {scene: -1, camera: -1, settings: ''};
+    this._status = recovering ? 'preparing' : 'error';
+  }
   /** @internal */ _displayChanged() { this._cancelDenoise(); this._target?.invalidateDenoisedOutput(); }
   private _maybeDenoise(force = false, sampleTarget = this._nextSampleTarget()) {
     const target = this._target, filter = this._filter;
@@ -463,6 +469,7 @@ export default class Render {
     if (this._busy) throw new Error('Converge is already running on this render.');
     if (this._disposed) throw new Error('Render is disposed.');
     const inputs = this._engine._inputs;
+    const deviceGeneration = this._engine._deviceGeneration;
     if (!inputs.value) throw new Error('Commit engine.scene and engine.camera with engine.update() before converge.');
     const camera = cameraSnapshot(options.camera ?? inputs.value);
     const samples = Math.max(1, Math.round(options.samples));
@@ -472,6 +479,7 @@ export default class Render {
     const timeout = Math.max(1, options.timeoutMs ?? 600000);
     const check = () => {
       if (this._disposed) throw new Error('Render is disposed.');
+      if (this._engine._deviceGeneration !== deviceGeneration) throw this._engine._lostError;
       if (options.signal?.aborted) throw options.signal.reason ?? new DOMException('Convergence aborted', 'AbortError');
       const current = this._engine._inputs;
       if (current.scene !== inputs.scene || current.camera !== inputs.camera) throw new Error('Engine inputs changed during converge.');
@@ -482,13 +490,14 @@ export default class Render {
     let target: RenderTarget | undefined;
     const start = performance.now();
     try {
-      await this._engine.init();
+      await this._engine._awaitDevice(this._engine.init());
+      check();
       while (!this._engine._ready) { check(); if (performance.now() - start > timeout) throw new Error('Timed out preparing convergence.'); await new Promise(resolve => setTimeout(resolve, 0)); }
       target = this._synchronize(samples, true);
       this._offlineCamera = !!options.camera;
       if (!target) throw new Error('The render target is not ready.');
       this._cancelDenoise(); target.restartSamples();
-      this._refreshDenoiser(); await this._filterPending;
+      this._refreshDenoiser(); await this._engine._awaitDevice(Promise.resolve(this._filterPending)); check();
       const stage = async (cap: number, name: 'pilot' | 'final', offset: number) => {
         check(); this._cancelDenoise(); target!.activate(); target!.restartSamples();
         target!.configure({...this._settings(cap), allowMultipleSamplesPerFrame: true});
@@ -505,21 +514,21 @@ export default class Render {
             if (name === 'final' && options.previewIntervalMs !== undefined && count > 0 && count < cap && performance.now() - lastPreview >= options.previewIntervalMs) { target!.drawPostProcess(); lastPreview = performance.now(); }
           }
           if (count >= cap) break;
-          if (count > before && this._engine.device) await this._engine.device.queue.onSubmittedWorkDone();
+          if (count > before && this._engine.device) await this._engine._awaitDevice(this._engine.device.queue.onSubmittedWorkDone());
           else await new Promise(resolve => setTimeout(resolve, 0));
           if (options.targetBatchTimeMs && this._engine.device && count > before) {
             const desired = Math.max(1, Math.min(batchLimit, Math.round(options.targetBatchTimeMs * (count - before) / Math.max(1, performance.now() - batchStarted))));
             batch = desired > batch ? Math.min(desired, batch * 2) : desired;
           }
         }
-        await this._engine.device?.queue.onSubmittedWorkDone(); check();
+        await this._engine._awaitDevice(Promise.resolve(this._engine.device?.queue.onSubmittedWorkDone())); check();
       };
       let result: ConvergeResult = {samples, averageSamplesPerPixel: samples, pilotSamples: 0, adaptiveSampling: false};
       if (options.adaptiveSampling && this._engine.device) {
         const pilotSamples = Math.min(samples, Math.max(2, Math.round(options.adaptiveSampling.pilotSamples ?? 8)));
         target.activate(); target.setVarianceMoments(true); target.setAdaptiveSamplingTargets(undefined);
         await stage(pilotSamples, 'pilot', sequenceOffset);
-        target.activate(); const plan = await target.prepareOfflineAdaptiveSampling({...options.adaptiveSampling, maxSamples: samples});
+        target.activate(); const plan = await this._engine._awaitDevice(target.prepareOfflineAdaptiveSampling({...options.adaptiveSampling, maxSamples: samples}));
         if (plan) {
           target.activate(); target.setVarianceMoments(false);
           await stage(plan.maximumTarget, 'final', sequenceOffset + pilotSamples);
@@ -528,12 +537,12 @@ export default class Render {
       } else { target.activate(); target.setVarianceMoments(false); target.setAdaptiveSamplingTargets(undefined); await stage(samples, 'final', sequenceOffset); }
       if (this._filter) {
         options.onProgress?.({stage: 'denoising', samples: result.samples, targetSamples: result.samples});
-        this._status = 'denoising'; this._maybeDenoise(true); await this._denoisePending; check();
+        this._status = 'denoising'; this._maybeDenoise(true); await this._engine._awaitDevice(Promise.resolve(this._denoisePending)); check();
       }
       this._status = 'finished'; return result;
-    } catch (error) { this._status = 'error'; throw error; }
+    } catch (error) { if (this._engine._deviceGeneration === deviceGeneration) this._status = 'error'; throw error; }
     finally {
-      if (target && !this._disposed) { target.activate(); target.setVarianceMoments(false); target.setAdaptiveSamplingTargets(undefined); target.setOfflineRenderOptions({samplesPerBatch: 0, deferPostProcess: false, sampleSequenceOffset: 0}); }
+      if (target && !this._disposed && this._engine._deviceGeneration === deviceGeneration) { target.activate(); target.setVarianceMoments(false); target.setAdaptiveSamplingTargets(undefined); target.setOfflineRenderOptions({samplesPerBatch: 0, deferPostProcess: false, sampleSequenceOffset: 0}); }
       options.signal?.removeEventListener('abort', abortConverge);
       this._busy = false;
     }

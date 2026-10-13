@@ -293,3 +293,20 @@ device and can require more buffer capacity and workgroup shared memory for
 its convolution tiles; the recommended descriptor requests adapter maxima.
 Use smaller OIDN tiles or automatic precision when appropriate; network
 initialization reports incompatible configurations.
+
+### Device loss
+
+`engine.on('devicelost', ({reason, recovering}) => ...)` reports loss, including
+an externally destroyed shared device. Shared devices recover on the next
+`update()` or `refine()`; renders report `preparing`, discard their samples,
+and upload the committed scene again. CPU BVHs, decoded textures and downloaded
+OIDN weights remain cached. Device-bound networks reload. Multiple engines
+share the new device. Active `converge()` rejects with a device-loss error.
+RenderLoop keeps ticking during recovery.
+
+For caller-owned devices, `recovering` is false, renders report `error`, and
+`lastError` explains the loss. Call `await engine.setDevice(replacement)` and
+then `engine.update()` to resume. It uses the same limit validation as init;
+only engines originally constructed with `device` accept setDevice. The
+replacement is also caller-owned. Custom denoisers detect changes in
+`input.device` / `prepare({device})` and rebuild their own resources.

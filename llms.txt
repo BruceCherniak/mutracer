@@ -52,3 +52,4 @@
 - [Examples](https://github.com/pissang/mutracer/tree/main/examples): basic, Three.js, animation, advanced
 
 - Caller-owned GPUDevice: pass `device` to Engine; obtain a descriptor with `getRecommendedDeviceDescriptor(adapter)`. Ownership and limits: [API](docs/api.md#device-requirements).
+- Device loss: shared WebGPU devices recover lazily; caller-owned devices require `await engine.setDevice(replacement)` then update. Active convergence rejects. [API](docs/api.md#device-loss).
