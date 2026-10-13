@@ -111,7 +111,7 @@ export default class OpenPBRMaterial {
   // Coat
   /** Clear coat weight. Default `0`. */
   coatWeight: number = materialDefault('coatWeight');
-  /** Squared coat transmittance at normal incidence; colors the base, not coat reflection. Default `[1, 1, 1]`. */
+  /** Squared coat transmittance at normal incidence; colors the base and emission, not coat reflection. Default `[1, 1, 1]`. */
   coatColor: ColorRGB = materialDefault('coatColor');
   /** Coat roughness. Default `0`. */
   coatRoughness: number = materialDefault('coatRoughness');

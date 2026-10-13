@@ -1,3 +1,4 @@
+import { materialEmission } from './materialEmission.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
 import { meshInstanceCount, meshInstanceTransform } from './meshInstances.js';
 import { getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getSpotLightShapingFluxFactor } from './lightsUtil.js';
@@ -238,7 +239,7 @@ export function collectEmissiveTriangles(
         const material = materials[materialIndex];
         if (!material || material.shadowCatcher || material.unlit) continue;
         const samplingLuminance =
-          colorLuminance(material.emissionColor) * material.emissionLuminance;
+          colorLuminance(materialEmission(material));
         if (!(samplingLuminance > 1e-8)) continue;
 
         const triangleIndices = [
@@ -324,7 +325,7 @@ export class EmissiveTriangleCache {
       const { mesh, geometry, materialIndices } = binding;
       const isActive = (index: number) => {
         const m = materials[index];
-        return !!m && !m.unlit && !m.shadowCatcher && colorLuminance(m.emissionColor) * m.emissionLuminance > 1e-8;
+        return !!m && !m.unlit && !m.shadowCatcher && colorLuminance(materialEmission(m)) > 1e-8;
       };
       const instanceVersion = mesh instanceof InstancedMesh ? mesh.version : 0;
       const instanceCount = meshInstanceCount(mesh);
@@ -341,7 +342,7 @@ export class EmissiveTriangleCache {
       } else {
         for (const triangle of cached.triangles) {
           const m = materials[triangle.materialIndex];
-          triangle.samplingLuminance = colorLuminance(m.emissionColor) * m.emissionLuminance;
+          triangle.samplingLuminance = colorLuminance(materialEmission(m));
         }
       }
       for (const triangle of cached.triangles) this._triangles.push(triangle);

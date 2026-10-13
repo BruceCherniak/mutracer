@@ -43,3 +43,14 @@ it('reports emissive map edits separately from unrelated texture edits', () => {
   tracker.capture([m]); m.emissiveMap.markUpdated(); expect(tracker.classify([m]).emissiveMap).toBe(true);
   tracker.capture([m]); m.emissiveMap.uvChannel = 1; expect(tracker.classify([m]).emissiveMap).toBe(true);
 });
+
+it('rebuilds emissive selection after coat coverage or in-place color edits', () => {
+  const m = new OpenPBRMaterial({emissionLuminance: 2, coatWeight: 0.5});
+  const tracker = new MaterialChangeTracker(); tracker.capture([m]);
+  m.coatColor[1] = 0.25;
+  expect(tracker.classify([m])).toEqual({level: 'emission', emission: true, emissiveMap: false});
+  tracker.capture([m]); m.coatWeight = 1;
+  expect(tracker.classify([m]).emission).toBe(true);
+  tracker.capture([m]); m.coatDarkening = 0;
+  expect(tracker.classify([m]).emission).toBe(false);
+});

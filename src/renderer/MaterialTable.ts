@@ -5,7 +5,8 @@ import { mapAlphaUsageConstants } from './materialConstants.js';
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
 import { ShadowCatcherMaterial, UnlitMaterial } from '../constants.js';
-import { vec3, vec2 } from '../math.js';
+import { vec2 } from '../math.js';
+import { materialEmission } from './materialEmission.js';
 import {
   Texture2DArray as WebGLTexture2DArray,
   constants,
@@ -780,9 +781,7 @@ class MaterialTable {
     return {
       color: materials.map((m) => m.baseColor.slice(0, 3) as ColorRGB),
       roughness: materials.map((m) => m.specularRoughness),
-      emission: materials.map((m) =>
-        vec3.scale([0, 0, 0], m.emissionColor, m.emissionLuminance)
-      ),
+      emission: materials.map(materialEmission),
       metallic: materials.map((m) => m.baseMetalness),
       ior: materials.map((m) => m.specularIor),
       dispersion: materials.map((m) => m.transmissionDispersionScale),

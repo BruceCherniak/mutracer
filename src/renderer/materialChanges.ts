@@ -1,6 +1,7 @@
 import OpenPBRMaterial, { materialGeometryKeys, materialParamKeys, materialTextureKeys } from '../scene/OpenPBRMaterial.js';
 import Texture from '../scene/Texture.js';
 import { colorLuminance } from './lightSampling.js';
+import { materialEmission } from './materialEmission.js';
 
 export type MaterialUpdateLevel = 'params' | 'emission' | 'textures' | 'geometry';
 interface MaterialSnapshot {
@@ -30,13 +31,13 @@ function snapshot(material: OpenPBRMaterial): MaterialSnapshot {
     textureKey: materialTextureKeys.map(k => { const value = material[k]; return typeof value === 'number' ? String(value) : textureKey(value); }).join('|'),
     // Height maps affect projective BLAS bounds.
     geometryKey: key(material, materialGeometryKeys) + '|' + textureKey(material.displacementMap),
-    emissive: key(material, ['emissionColor', 'emissionLuminance', 'unlit', 'shadowCatcher']),
+    emissive: key(material, ['emissionColor', 'emissionLuminance', 'coatWeight', 'coatColor', 'unlit', 'shadowCatcher']),
     emissiveMap: textureKey(material.emissiveMap)
   };
 }
 export function materialIsEmissive(material: OpenPBRMaterial) {
   return !material.unlit && !material.shadowCatcher &&
-    colorLuminance(material.emissionColor) * material.emissionLuminance > 1e-8;
+    colorLuminance(materialEmission(material)) > 1e-8;
 }
 
 /** Expensive field keys are computed only when receiving changed materials. */

@@ -34,7 +34,7 @@ describe('OpenPBR schema', () => {
       }
     }
   });
-  it('retains the fixed pre-refactor packing bytes and hash order', () => {
+  it('retains the fixed packing bytes and hash order including coat emission', () => {
     const materials = fixedMaterials(); const data = new MaterialTable(materials, []);
     const bytes = Buffer.from(data.getBufferArray().buffer);
     expect(materialKeys).toEqual(baseline.keys);

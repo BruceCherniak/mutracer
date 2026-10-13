@@ -73,6 +73,11 @@ extra darkening from internal reflections, while absorption remains active at
 zero. The base is attenuated by the coat directional albedo on the view side
 and by an internal-reflection factor estimated from the base slab albedos.
 Partial coat coverage is mixed independently for each passage.
+Emission uses a normal-incidence single passage: it is multiplied by
+`mix(1, sqrt(coatColor), coatWeight)`. The same attenuated emission determines
+emissive-light selection and hit MIS weights. This approximation has no angular
+dependence and does not apply coat darkening or fuzz attenuation to emission.
+Unlit and shadow-catching materials keep their existing emission behavior.
 
 The base reflection beneath a coat uses the surrounding IOR
 `mix(1, coatIor, coatWeight)`. `specularWeight` adjusts the base IOR relative
