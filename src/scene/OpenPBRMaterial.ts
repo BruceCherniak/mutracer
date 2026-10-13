@@ -147,9 +147,13 @@ export default class OpenPBRMaterial {
   map?: Texture;
   /** Standalone opacity texture sampled from its green channel, matching Three.js. Default `undefined`. */
   alphaMap?: Texture;
-  /** Opacity interpretation; `auto` derives the mode from the alpha inputs. Default `auto`. */
+  /**
+   * Coverage for surface and shadow rays: `opaque` ignores alpha inputs,
+   * `mask` uses binary alpha testing, `blend` retains fractional coverage.
+   * `auto` derives the mode from the alpha inputs. Default `auto`.
+   */
   alphaMode: MaterialAlphaMode = materialDefault('alphaMode');
-  /** Alpha-test threshold for `mask` mode. Default `0`. */
+  /** Alpha-test threshold for `mask` mode; equality is fully covered. Default `0`. */
   alphaCutoff: number = materialDefault('alphaCutoff');
   /** Emission texture multiplied with `emissionColor`. Default `undefined`. */
   emissiveMap?: Texture;

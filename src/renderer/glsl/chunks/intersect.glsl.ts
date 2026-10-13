@@ -1005,9 +1005,9 @@ ${getBVHTraverseCode(
     }
   #endif
     float alphaCutoff = fetchMatData(ii + 22).a;
-    if (alpha < alphaCutoff) {
-      alpha = 0.0;
-    }
+    alpha = resolveMaterialAlpha(
+      alpha, int(fetchMatData(ii + 23).w), alphaCutoff
+    );
     if (hashedSample(0u) > alpha) {
       // Continue after a transparent hit without traversing beyond the light.
       tMax = min(max(lightDistance, 0.0), RAY_MAX_DISTANCE);

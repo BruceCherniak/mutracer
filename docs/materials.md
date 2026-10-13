@@ -88,7 +88,12 @@ assigning a new texture, image or UV array is detected automatically.
 `'mask'` (alpha test against `alphaCutoff`) or `'blend'`. `mapAlphaUsage`
 selects how `map`'s alpha channel is used:
 `'opaque'` (default), `'alpha'` or `'transmission'`. Blended primary rays follow
-`render.alphaBlendStrategy`.
+`render.alphaBlendStrategy`. Both WebGPU and WebGL 2 apply these modes to
+surface hits and shadow rays: `opaque` ignores opacity and alpha textures;
+`mask` resolves coverage to 0 below `alphaCutoff` and 1 at or above it;
+`blend` retains fractional coverage. In `auto`, a positive cutoff selects
+`mask`; otherwise opacity below 1, alpha use of `map`, or an `alphaMap`
+selects `blend`. With none of these inputs, `auto` selects `opaque`.
 
 ## Renderer extensions
 

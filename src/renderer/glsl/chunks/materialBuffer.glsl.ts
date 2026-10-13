@@ -1,3 +1,4 @@
+import { materialAlphaModeConstants } from '../../../scene/OpenPBRMaterial.js';
 import { mapAlphaUsageConstants } from '../../materialConstants.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
@@ -24,6 +25,17 @@ vec3 sRGBToLinear(vec3 c) {
 }
 vec4 fetchMatData(int i) {
   return fetchData(materialBuffer, i, materialBufferColumns);
+}
+
+// Shared by surface evaluation and shadow occlusion, after texture factors.
+float resolveMaterialAlpha(float alpha, int alphaMode, float alphaCutoff) {
+  if (alphaMode == ${materialAlphaModeConstants.opaque}) {
+    return 1.0;
+  }
+  if (alphaMode == ${materialAlphaModeConstants.mask}) {
+    return alpha >= alphaCutoff ? 1.0 : 0.0;
+  }
+  return alpha;
 }
 
 float getMatType(int idx) {
@@ -185,9 +197,9 @@ void getMaterial(
     }
   #endif
 
-  if (mat.alpha < standaloneMetalRoughMaps.w) {
-    mat.alpha = 0.0;
-  }
+  mat.alpha = resolveMaterialAlpha(
+    mat.alpha, int(fetchMatData(i + 23).w), standaloneMetalRoughMaps.w
+  );
 
   #ifdef NUM_TRANSMISSION_MAPS
     int transmissionMapIndex = int(alphaAndThinFilm.w);

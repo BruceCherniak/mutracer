@@ -42,6 +42,7 @@ import MaterialTable, {
   materialUsesMedium
 } from './MaterialTable.js';
 import OpenPBRMaterial, {
+  resolveMaterialAlphaMode
 } from '../scene/OpenPBRMaterial.js';
 
 import DirectionalLight from '../scene/DirectionalLight.js';
@@ -637,8 +638,7 @@ class WebGLRayTracePass {
         m.mapAlphaUsage === "transmission"
     );
     this._hasAlpha = materials.some(
-      (m) =>
-        m.opacity < 1 || m.mapAlphaUsage === "alpha"
+      (m) => resolveMaterialAlphaMode(m) !== 'opaque'
     );
     this._spectral = materials.some((m) => m.transmissionDispersionScale > 0);
 
