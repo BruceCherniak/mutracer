@@ -40,6 +40,8 @@ struct OpenPbrPreparedBsdf {
     float specularEtaTOverEtaI;
     float refractionEtaTOverEtaI;
     float transmissionReflectionIor;
+    float thinFilmExteriorIor;
+    float thinFilmBaseIor;
     float specularAlpha;
     float diffuseSpecularEnergyCompensation;
     vec3 coatBaseScale;
@@ -390,17 +392,18 @@ vec3 openpbr_thin_film_dielectric_reflectance(
     float incidentCosine,
     float thickness,
     float filmIor,
-    float substrateIor
+    float substrateIor,
+    float exteriorIor
 ) {
     return vec3(
         openpbr_thin_film_reflectance_channel(
-            incidentCosine, 620.0, thickness, 1.0, filmIor, vec2(substrateIor, 0.0)
+            incidentCosine, 620.0, thickness, exteriorIor, filmIor, vec2(substrateIor, 0.0)
         ),
         openpbr_thin_film_reflectance_channel(
-            incidentCosine, 540.0, thickness, 1.0, filmIor, vec2(substrateIor, 0.0)
+            incidentCosine, 540.0, thickness, exteriorIor, filmIor, vec2(substrateIor, 0.0)
         ),
         openpbr_thin_film_reflectance_channel(
-            incidentCosine, 450.0, thickness, 1.0, filmIor, vec2(substrateIor, 0.0)
+            incidentCosine, 450.0, thickness, exteriorIor, filmIor, vec2(substrateIor, 0.0)
         )
     );
 }
@@ -437,14 +440,15 @@ vec3 openpbr_thin_film_metal_reflectance(
     float thickness,
     float filmIor,
     vec3 metalF0,
-    vec3 metalF82Tint
+    vec3 metalF82Tint,
+    float exteriorIor
 ) {
     return vec3(
         openpbr_thin_film_reflectance_channel(
             incidentCosine,
             620.0,
             thickness,
-            1.0,
+            exteriorIor,
             filmIor,
             openpbr_metal_complex_ior(metalF0.r, metalF82Tint.r)
         ),
@@ -452,7 +456,7 @@ vec3 openpbr_thin_film_metal_reflectance(
             incidentCosine,
             540.0,
             thickness,
-            1.0,
+            exteriorIor,
             filmIor,
             openpbr_metal_complex_ior(metalF0.g, metalF82Tint.g)
         ),
@@ -460,7 +464,7 @@ vec3 openpbr_thin_film_metal_reflectance(
             incidentCosine,
             450.0,
             thickness,
-            1.0,
+            exteriorIor,
             filmIor,
             openpbr_metal_complex_ior(metalF0.b, metalF82Tint.b)
         )
@@ -477,13 +481,15 @@ vec3 openpbr_apply_dielectric_thin_film(
     float thickness,
     float filmIor,
     float substrateIor,
-    float weight
+    float weight,
+    float exteriorIor
 ) {
     vec3 filmFresnel = openpbr_thin_film_dielectric_reflectance(
         incidentCosine,
         thickness,
         filmIor,
-        substrateIor
+        substrateIor,
+        exteriorIor
     );
     return mix(
         substrateFresnel,
@@ -499,14 +505,16 @@ vec3 openpbr_apply_metal_thin_film(
     float filmIor,
     vec3 metalF0,
     vec3 metalF82Tint,
-    float weight
+    float weight,
+    float exteriorIor
 ) {
     vec3 filmFresnel = openpbr_thin_film_metal_reflectance(
         incidentCosine,
         thickness,
         filmIor,
         metalF0,
-        metalF82Tint
+        metalF82Tint,
+        exteriorIor
     );
     return mix(
         substrateFresnel,
@@ -877,6 +885,20 @@ OpenPbrPreparedBsdf openpbr_prepare(
         prepared.material.relativeIor = 1.0 / prepared.refractionEtaTOverEtaI;
     }
 
+    // Adobe openpbr_bsdf.h::openpbr_prepare_lobes: absolute thin-film media.
+    // Preserve the existing optical solve for uncoated materials.
+    prepared.thinFilmExteriorIor = 1.0;
+    prepared.thinFilmBaseIor = prepared.specularEtaTOverEtaI;
+    if (material.coatWeight > 0.0) {
+        if (material.inside) {
+            prepared.thinFilmExteriorIor = 1.0 / prepared.refractionEtaTOverEtaI;
+            prepared.thinFilmBaseIor = 1.0;
+        }
+        else {
+            prepared.thinFilmExteriorIor = mix(1.0, material.coatIor, material.coatWeight);
+            prepared.thinFilmBaseIor = prepared.refractionEtaTOverEtaI;
+        }
+    }
     prepared.specularAlpha = material.specularRoughness
         * material.specularRoughness;
     float viewCosine = abs(prepared.viewLocal.z);
@@ -946,6 +968,13 @@ OpenPbrPreparedBsdf openpbr_prepare(
         * (1.0 - transmissionFresnel)
         * openpbr_luminance(material.subsurfaceColor)
         * prepared.diffuseSpecularEnergyCompensation;
+    // Index-matched base interfaces can still reflect through thin film.
+    // Keep proposal support without duplicating the Airy optical solve here.
+    if (material.coatWeight > 0.0 && material.thinFilmWeight > 0.0) {
+        float filmSupport = 0.02 * openpbr_thin_film_presence(material.thinFilmThickness, material.thinFilmWeight);
+        prepared.specularProbability = max(prepared.specularProbability, prepared.specularWeight * filmSupport);
+        prepared.metalProbability = max(prepared.metalProbability, prepared.metalWeight * material.specularWeight * filmSupport);
+    }
     if (material.coatWeight > 0.0 && !material.inside) {
         float baseScale = max(max(prepared.coatBaseScale.x, prepared.coatBaseScale.y), prepared.coatBaseScale.z);
         prepared.metalProbability *= baseScale;
@@ -1035,8 +1064,9 @@ vec3 openpbr_eval_prepared(
                     viewHalf,
                     material.thinFilmThickness,
                     material.thinFilmIor,
-                    prepared.specularEtaTOverEtaI,
-                    material.thinFilmWeight
+                    prepared.thinFilmBaseIor,
+                    material.thinFilmWeight,
+                    prepared.thinFilmExteriorIor
                 );
             }
             if (material.thinWalled) {
@@ -1071,7 +1101,8 @@ vec3 openpbr_eval_prepared(
                     material.thinFilmIor,
                     material.baseWeight * material.baseColor,
                     material.specularColor,
-                    material.thinFilmWeight
+                    material.thinFilmWeight,
+                    prepared.thinFilmExteriorIor
                 );
             }
             fresnel *= material.specularWeight;
@@ -1094,8 +1125,9 @@ vec3 openpbr_eval_prepared(
                 viewHalf,
                 material.thinFilmThickness,
                 material.thinFilmIor,
-                prepared.specularEtaTOverEtaI,
-                material.thinFilmWeight
+                prepared.thinFilmBaseIor,
+                material.thinFilmWeight,
+                prepared.thinFilmExteriorIor
             );
         }
         if (prepared.transmissionWeight > 0.0) {
@@ -1113,8 +1145,9 @@ vec3 openpbr_eval_prepared(
                         thinWallViewHalf,
                         material.thinFilmThickness,
                         material.thinFilmIor,
-                        prepared.specularEtaTOverEtaI,
-                        material.thinFilmWeight
+                        prepared.thinFilmBaseIor,
+                        material.thinFilmWeight,
+                        prepared.thinFilmExteriorIor
                     );
                 }
                 vec3 windowFresnel = openpbr_thin_wall_reflection_coefficient(
@@ -1354,8 +1387,9 @@ vec3 openpbr_sample(
                 viewHalf,
                 material.thinFilmThickness,
                 material.thinFilmIor,
-                prepared.specularEtaTOverEtaI,
-                material.thinFilmWeight
+                prepared.thinFilmBaseIor,
+                material.thinFilmWeight,
+                prepared.thinFilmExteriorIor
             );
         }
         if (material.thinWalled) {

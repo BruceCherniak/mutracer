@@ -39,6 +39,8 @@ struct OpenPbrPreparedBsdf {
     specularEtaTOverEtaI: f32,
     refractionEtaTOverEtaI: f32,
     transmissionReflectionIor: f32,
+    thinFilmExteriorIor: f32,
+    thinFilmBaseIor: f32,
     specularAlpha: f32,
     diffuseSpecularEnergyCompensation: f32,
     coatBaseScale: vec3f,
@@ -770,6 +772,20 @@ fn openpbr_prepare(
         prepared.material.relativeIor = 1.0 / prepared.refractionEtaTOverEtaI;
     }
 
+    // Adobe openpbr_bsdf.h::openpbr_prepare_lobes: absolute thin-film media.
+    // Preserve the existing optical solve for uncoated materials.
+    prepared.thinFilmExteriorIor = 1.0;
+    prepared.thinFilmBaseIor = prepared.specularEtaTOverEtaI;
+    if (material.coatWeight > 0.0) {
+        if (material.inside) {
+            prepared.thinFilmExteriorIor = 1.0 / prepared.refractionEtaTOverEtaI;
+            prepared.thinFilmBaseIor = 1.0;
+        }
+        else {
+            prepared.thinFilmExteriorIor = mix(1.0, material.coatIor, material.coatWeight);
+            prepared.thinFilmBaseIor = prepared.refractionEtaTOverEtaI;
+        }
+    }
     prepared.specularAlpha = material.specularRoughness
         * material.specularRoughness;
     let viewCosine = abs(prepared.viewLocal.z);
@@ -841,6 +857,13 @@ fn openpbr_prepare(
         * (1.0 - transmissionFresnel)
         * openpbr_luminance(material.subsurfaceColor)
         * prepared.diffuseSpecularEnergyCompensation;
+    // Index-matched base interfaces can still reflect through thin film.
+    // Keep proposal support without duplicating the Airy optical solve here.
+    if (material.coatWeight > 0.0 && material.thinFilmWeight > 0.0) {
+        let filmSupport = 0.02 * openpbr_thin_film_presence(material.thinFilmThickness, material.thinFilmWeight);
+        prepared.specularProbability = max(prepared.specularProbability, prepared.specularWeight * filmSupport);
+        prepared.metalProbability = max(prepared.metalProbability, prepared.metalWeight * material.specularWeight * filmSupport);
+    }
     if (material.coatWeight > 0.0 && !material.inside) {
         let baseScale = max(max(prepared.coatBaseScale.x, prepared.coatBaseScale.y), prepared.coatBaseScale.z);
         prepared.metalProbability *= baseScale;
@@ -930,12 +953,12 @@ fn openpbr_eval_prepared_lobe(
             var film = vec3f(0.0);
             let incidentCosine = select(dielectricViewHalf, viewHalf, substrate == 1u);
             for (var channel = 0u; channel + 1u < rtUniform.loopUnrollGuard; channel++) {
-                var ior = vec2f(prepared.specularEtaTOverEtaI, 0.0);
+                var ior = vec2f(prepared.thinFilmBaseIor, 0.0);
                 if (substrate == 1u) {
                     ior = openpbr_metal_complex_ior(material.baseWeight * material.baseColor[channel], material.specularColor[channel]);
                 }
                 film[channel] = openpbr_thin_film_reflectance_channel(incidentCosine,
-                    wavelengths[channel], material.thinFilmThickness, 1.0, material.thinFilmIor, ior);
+                    wavelengths[channel], material.thinFilmThickness, prepared.thinFilmExteriorIor, material.thinFilmIor, ior);
             }
             fresnels[substrate] = mix(fresnels[substrate], film,
                 openpbr_thin_film_presence(material.thinFilmThickness, material.thinFilmWeight));

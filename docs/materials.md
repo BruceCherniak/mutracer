@@ -73,6 +73,9 @@ extra darkening from internal reflections, while absorption remains active at
 zero. The base is attenuated by the coat directional albedo on the view side
 and by an internal-reflection factor estimated from the base slab albedos.
 Partial coat coverage is mixed independently for each passage.
+Thin film lies below the coat: its exterior IOR is `mix(1, coatIor, coatWeight)`
+and its dielectric substrate uses the adjusted absolute base IOR. A solid
+inside hit exchanges these media; uncoated films retain their existing behavior.
 Emission uses a normal-incidence single passage: it is multiplied by
 `mix(1, sqrt(coatColor), coatWeight)`. The same attenuated emission determines
 emissive-light selection and hit MIS weights. This approximation has no angular
