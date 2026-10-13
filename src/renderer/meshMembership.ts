@@ -1,3 +1,4 @@
+import InstancedMesh from '../scene/InstancedMesh.js';
 import { getGeometryBvh } from './geometryBvh.js';
 import Geometry from '../scene/Geometry.js';
 import Mesh from '../scene/Mesh.js';
@@ -54,11 +55,14 @@ export class MeshMembershipCache {
         bvhBounds: template?.bvhBounds ?? getBvhBounds(mesh.geometry) };
     });
     const instances = updateMeshInstanceTransforms(instanceBindings);
+    if (meshes.some(mesh => mesh instanceof InstancedMesh)) return {...res, materials, instances, instanceBindings,
+      emissiveBindings: instanceBindings.filter(binding => materialIsEmissive(materials[binding.materialIndices[0]]))};
+    const ordinary = instances as import('./bvhAccel.js').TLASInstance[];
     // Match full preparation's exclusion of invalid transforms/bounds.
-    const valid = instances.map((instance, i) => instance.bounds.min.every(Number.isFinite) &&
+    const valid = ordinary.map((instance, i) => instance.bounds.min.every(Number.isFinite) &&
       instance.bounds.max.every(Number.isFinite) && instance.transform.every(Number.isFinite) ? i : -1).filter(i => i >= 0);
     const bindings = valid.map(i => instanceBindings[i]);
-    return { ...res, materials, instances: valid.map(i => instances[i]), instanceBindings: bindings,
+    return { ...res, materials, instances: valid.map(i => ordinary[i]), instanceBindings: bindings,
       emissiveBindings: bindings.filter(binding => materialIsEmissive(materials[binding.materialIndices[0]])) };
   }
 }

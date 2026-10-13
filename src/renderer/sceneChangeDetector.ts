@@ -1,4 +1,5 @@
 import Mesh from '../scene/Mesh.js';
+import InstancedMesh from '../scene/InstancedMesh.js';
 import Geometry from '../scene/Geometry.js';
 import OpenPBRMaterial, { materialKeys, materialTextureKeys } from '../scene/OpenPBRMaterial.js';
 import Texture from '../scene/Texture.js';
@@ -115,6 +116,9 @@ interface MeshSnapshot {
   mesh: Mesh;
   geometry: Mesh['geometry'];
   version: number;
+  instanceVersion?: number;
+  instanceCount?: number;
+  instanceTransforms?: Float32Array;
   dynamic: boolean;
   storage: unknown[];
   materials: OpenPBRMaterial[];
@@ -173,6 +177,14 @@ export class SceneChangeDetector {
     for (let i = 0; i < scene.meshes.length; i++) {
       const mesh = scene.meshes[i];
       const prev = old?.meshes[i];
+      let instanceChanged = false;
+      if (mesh instanceof InstancedMesh) {
+        mesh.validate();
+        if (prev?.instanceCount !== mesh.count) full = true;
+        if (prev?.mesh === mesh && (prev.instanceVersion !== mesh.version || prev.instanceTransforms !== mesh.transforms)) {
+          transforms.push(mesh); instanceChanged = true;
+        }
+      }
       if (!prev || prev.mesh !== mesh || prev.geometry !== mesh.geometry ||
         prev.dynamic !== mesh.geometry.dynamic || !geometryStorageMatches(mesh.geometry, prev.storage) || prev.materials.length !== mesh.materials.length ||
         prev.materials.some((m, k) => m !== mesh.materials[k])) full = true;
@@ -180,7 +192,8 @@ export class SceneChangeDetector {
       if (prev?.mesh === mesh) {
         for (let k = 0; k < 16; k++) {
           if (!Object.is(mesh.transform[k], old!.matrices[i * 16 + k])) {
-            transforms.push(mesh); break;
+            if (!instanceChanged) transforms.push(mesh);
+            break;
           }
         }
       }
@@ -219,6 +232,9 @@ export class SceneChangeDetector {
           next!.meshes[i] = item;
         }
         item.mesh = mesh; item.geometry = mesh.geometry; item.version = mesh.geometry.version;
+        item.instanceVersion = mesh instanceof InstancedMesh ? mesh.version : undefined;
+        item.instanceCount = mesh instanceof InstancedMesh ? mesh.count : undefined;
+        item.instanceTransforms = mesh instanceof InstancedMesh ? mesh.transforms : undefined;
         item.dynamic = mesh.geometry.dynamic; captureGeometryStorage(mesh.geometry, item.storage);
         item.materials.length = mesh.materials.length;
         for (let k = 0; k < mesh.materials.length; k++) item.materials[k] = mesh.materials[k];

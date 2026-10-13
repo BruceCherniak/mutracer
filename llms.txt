@@ -52,6 +52,7 @@
 - [Scene updates](docs/updates.md): what to call after each kind of edit, animation, update costs
 - [API reference](docs/api.md): Engine, Display, Render, RenderLoop and Sync options and defaults, methods, statuses, scene types, helpers
 - [Materials](docs/materials.md): OpenPBR inputs, textures, alpha, bevel, displacement
+- [InstancedMesh](docs/updates.md#instanced-meshes): shared geometry/materials, active count, local Float32 transforms; notify element edits with markTransformsUpdated, then engine.update.
 - [Three.js](docs/threejs.md): `THREESync`, conversions, skinning, instancing, `userData` keys
 - [Denoising](docs/denoising.md): JNLM and OIDN, options, weight hosting, denoising while converging
 - [Sampling](docs/sampling.md): choosing a sampling pattern

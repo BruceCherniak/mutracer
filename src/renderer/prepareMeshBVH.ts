@@ -1,3 +1,5 @@
+import InstancedMesh from '../scene/InstancedMesh.js';
+import { meshInstanceCount, meshInstanceTransform, PackedMeshInstances, type MeshInstances } from './meshInstances.js';
 import {createCanvas} from '../util/canvas.js';
 import { packMaterialIndexAndWeightToInt } from './materialIndices.js';
 import { getGeometryBvh, setGeometryBvh, geometryBvhConfigMatches, type BvhBuildConfig } from './geometryBvh.js';
@@ -93,15 +95,16 @@ export function getBvhBounds(geometry: Geometry) {
   ] as [vec3.Vec3Array, vec3.Vec3Array];
 }
 
-// TODO ignore root node transform.
 export function computeBounds(
   _geometry: Geometry,
   m: mat4.Mat4Array,
-  bvhBounds: [vec3.Vec3Array, vec3.Vec3Array]
+  bvhBounds: [vec3.Vec3Array, vec3.Vec3Array],
+  result = {min: vec3.create(), max: vec3.create()},
+  p = vec3.create()
 ) {
-  const min = vec3.fromValues(Infinity, Infinity, Infinity);
-  const max = vec3.fromValues(-Infinity, -Infinity, -Infinity);
-  const p = vec3.create();
+  const {min, max} = result;
+  vec3.set(min, Infinity, Infinity, Infinity);
+  vec3.set(max, -Infinity, -Infinity, -Infinity);
   // Transforming the eight BLAS AABB corners is exact for an affine transform
   // and independent of mesh vertex count. The previous rotated path scanned
   // every vertex on every instance update.
@@ -118,10 +121,7 @@ export function computeBounds(
     vec3.max(max, max, p);
   }
 
-  return {
-    min,
-    max
-  };
+  return result;
 }
 
 export interface PreparedMeshInstanceBinding {
@@ -135,9 +135,30 @@ export interface PreparedMeshInstanceBinding {
 
 export function updateMeshInstanceTransforms(
   bindings: PreparedMeshInstanceBinding[],
-  current?: TLASInstance[],
+  current?: MeshInstances,
   dirtyIndices?: ReadonlySet<number>
 ) {
+  if (bindings.some(binding => binding.mesh instanceof InstancedMesh)) {
+    const packed = new PackedMeshInstances(bindings.reduce((count, binding) => count + meshInstanceCount(binding.mesh), 0));
+    const matrix = Array(16).fill(0) as mat4.Mat4Array;
+    const boundsScratch = {min: vec3.create(), max: vec3.create()}, pointScratch = vec3.create();
+    let sourceIndex = 0;
+    for (const binding of bindings) {
+      const {mesh, geometry, bvhBounds, blasIndex, materialIndices, displacementScale} = binding;
+      for (let i = 0; i < meshInstanceCount(mesh); i++, sourceIndex++) {
+        meshInstanceTransform(mesh, i, matrix);
+        const bounds = computeBounds(geometry, matrix, bvhBounds, boundsScratch, pointScratch);
+        if (!bounds.min.every(Number.isFinite) || !bounds.max.every(Number.isFinite) || !matrix.every(Number.isFinite)) continue;
+        const index = packed.length++;
+        packed.sourceIndices[index] = sourceIndex;
+        packed.transforms.set(matrix, index * 16);
+        packed.bounds.set(bounds.min, index * 6); packed.bounds.set(bounds.max, index * 6 + 3);
+        packed.blasIndices[index] = blasIndex; packed.materials[index] = packMaterialIndexAndWeightToInt(materialIndices[0], 1);
+        packed.displacement[index] = displacementScale;
+      }
+    }
+    return packed;
+  }
   const update = (
     {
       mesh,
@@ -158,7 +179,7 @@ export function updateMeshInstanceTransforms(
       displacementScale
     }) satisfies TLASInstance;
   if (!current || !dirtyIndices) return bindings.map(update);
-  const next = current.slice();
+  const next = (current as TLASInstance[]).slice();
   dirtyIndices.forEach((index) => {
     const binding = bindings[index];
     if (binding) next[index] = update(binding);
@@ -761,19 +782,6 @@ export function updateMeshInstances(meshes: Mesh[]) {
       const bounds = computeBounds(geometry, mesh.transform, bvhBounds);
 
       let geoIdx = geometryIndexMap.get(geometry);
-      if (
-        geoIdx != null &&
-        mesh.materials.length > 1 &&
-        geometry.materialIndex
-      ) {
-        const bvh = getGeometryBvh(geometry);
-        // TODO geometry with multiple materials doesn't allow sharing between instances.
-        // Need to clone the geometry.
-        geometry = new Geometry(geometry);
-        setGeometryBvh(geometry, bvh);
-        geoIdx = undefined;
-      }
-
       const materialsIndices = mesh.materials.map((material) => {
         const key = material;
         if (!materialIndexMap.has(key)) {
@@ -782,6 +790,18 @@ export function updateMeshInstances(meshes: Mesh[]) {
         }
         return materialIndexMap.get(key)!;
       });
+
+      // Explicit vertex indices are global after merging. Batches with a
+      // different material table need their own vertex region, even when the
+      // table contains just one material. Equal tables can share the region.
+      if (geoIdx != null && geometry.materialIndex &&
+        (materialsIndices.length !== globalMaterialIndicesMap[geoIdx].length ||
+          materialsIndices.some((index, i) => index !== globalMaterialIndicesMap[geoIdx!][i]))) {
+        const bvh = getGeometryBvh(geometry);
+        geometry = new Geometry(geometry);
+        setGeometryBvh(geometry, bvh);
+        geoIdx = undefined;
+      }
 
       if (geoIdx == null) {
         geoIdx = geometries.length;
@@ -799,11 +819,11 @@ export function updateMeshInstances(meshes: Mesh[]) {
         ),
         displacementScale
       } satisfies TLASInstance;
-      if (
+      if (!(mesh instanceof InstancedMesh) && (
         !bounds.min.every(isFinite) ||
         !bounds.max.every(isFinite) ||
         !mesh.transform.every(isFinite)
-      ) {
+      )) {
         return undefined;
       }
       if (mesh.materials.some((material) =>
@@ -836,7 +856,7 @@ export function updateMeshInstances(meshes: Mesh[]) {
       return [source, { topologyVersion: source.topologyVersion, indices: source.indices.array,
         indexCount: source.indices.array.length }];
     })),
-    instances,
+    instances: meshes.some(mesh => mesh instanceof InstancedMesh) ? updateMeshInstanceTransforms(instanceBindings) : instances,
     materials,
     instanceBindings,
     emissiveBindings,
@@ -1000,4 +1020,10 @@ function computeGeometryNormals(geometry: Geometry) {
     normals[i++] = n[1];
     normals[i++] = n[2];
   }
+}
+
+/** Batch records are regenerated together; refit all numeric source slots. */
+export function dirtyMeshInstanceIndices(bindings: PreparedMeshInstanceBinding[], meshes: ReadonlySet<Mesh>, instances: MeshInstances) {
+  if (instances instanceof PackedMeshInstances) return new Set(Array.from({length: instances.length}, (_, i) => i));
+  return new Set(bindings.flatMap((binding, i) => meshes.has(binding.mesh) ? [i] : []));
 }

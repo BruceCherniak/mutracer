@@ -1,3 +1,4 @@
+import { readMeshInstance, type MeshInstances } from './meshInstances.js';
 // Bounding volume hierarchies of scene geometry (BLAS) and mesh instances
 // (TLAS), built with the binned SAH builder in ./binnedSahBvh and written
 // directly in the BVH2 layout read by the traversal shaders.
@@ -345,14 +346,14 @@ function writeInstanceRecord(
  * are written in leaf order to instancesBuffer.
  */
 export function buildTLAS(
-  instances: TLASInstance[],
+  instances: MeshInstances,
   blases: BLASInstance[]
 ): FlattendBVH {
   if (!instances.length) return emptyBvh(true);
   const placement = getBlasPlacement(blases);
   const aabbs = new Float32Array(instances.length * 6);
   for (let i = 0; i < instances.length; i++) {
-    instanceBounds(instances[i], aabbs, i * 6);
+    instanceBounds(readMeshInstance(instances, i), aabbs, i * 6);
   }
 
   const bvh = buildBinnedSahBvh(aabbs, instances.length);
@@ -378,7 +379,7 @@ export function buildTLAS(
     ints[o + 3] = -prims;
     for (let i = 0; i < prims; i++) {
       const source = primIndices[leftFirst[node] + i];
-      const instance = instances[source];
+      const instance = readMeshInstance(instances, source);
       const e = o + 8 + i * 4;
       ints[e] = target;
       ints[e + 1] = placement.blasOffsets[instance.blasIndex];
@@ -476,7 +477,7 @@ export function mergeRefitRanges(ranges: TLASRefitRange[]) {
 
 export function refitTLAS(
   flattened: FlattendBVH,
-  instances: TLASInstance[],
+  instances: MeshInstances,
   blases: BLASInstance[],
   dirtySourceIndices?: ReadonlySet<number>
 ): TLASRefitResult {
@@ -492,7 +493,7 @@ export function refitTLAS(
   const scratch = new Float32Array(6);
 
   function writeInstance(targetIndex: number, sourceIndex: number) {
-    writeInstanceRecord(instanceInts, instanceFloats, targetIndex, instances[sourceIndex], placement);
+    writeInstanceRecord(instanceInts, instanceFloats, targetIndex, readMeshInstance(instances, sourceIndex), placement);
   }
 
   function addInstanceBounds(bounds: Box3, instance: TLASInstance) {
@@ -541,7 +542,7 @@ export function refitTLAS(
         const primitiveOffset = base + 8 + i * 4;
         const targetInstance = ints[primitiveOffset];
         const sourceInstance = ints[primitiveOffset + 2];
-        const instance = instances[sourceInstance];
+        const instance = readMeshInstance(instances, sourceInstance);
         if (!instance) continue;
         addInstanceBounds(bounds, instance);
         writeInstance(targetInstance, sourceInstance);
@@ -581,7 +582,7 @@ export function refitTLAS(
   for (const leaf of dirtyLeaves) {
     const bounds = new Box3();
     for (const { source } of metadata.instancesByLeaf.get(leaf) ?? []) {
-      const instance = instances[source];
+      const instance = readMeshInstance(instances, source);
       if (instance) addInstanceBounds(bounds, instance);
     }
     writeNodeBounds(leaf, bounds);

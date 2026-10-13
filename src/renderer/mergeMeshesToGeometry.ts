@@ -1,3 +1,4 @@
+import { meshInstanceCount, meshInstanceTransform } from './meshInstances.js';
 import { writeMaterialIndices } from './materialIndices.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
@@ -27,46 +28,48 @@ export function mergeMeshesToGeometry(meshes: Mesh[]): InternalMergedMesh {
   resetMaterialTextureId();
 
   for (const mesh of meshes) {
-    let geometry = mesh.geometry;
+    for (let instance = 0; instance < meshInstanceCount(mesh); instance++) {
+      let geometry = mesh.geometry;
 
-    const index = geometry.indices;
-    if (!index) {
-      addFlatGeometryIndices(geometry);
-    }
-
-    geometry = transformGeometry(geometry, mesh.transform);
-
-    if (!geometry.normal) {
-      computeGeometryNormals(geometry);
-    } else {
-      vec3.forEach(
-        geometry.normal.array,
-        3,
-        0,
-        undefined,
-        vec3.normalize,
-        undefined
-      );
-    }
-
-    vertexCount += Attribute.getCount(geometry.position);
-    indexCount += Attribute.getCount(geometry.indices);
-
-    const materialIndices = mesh.materials.map((material) => {
-      const key = getMaterialHashKey(material);
-      let materialIndex = materialIndexMap.get(key);
-      if (materialIndex === undefined) {
-        materialIndex = materialIndexMap.size;
-        materialIndexMap.set(key, materialIndex);
-        materials.push(material);
+      const index = geometry.indices;
+      if (!index) {
+        addFlatGeometryIndices(geometry);
       }
-      return materialIndex;
-    });
 
-    geometryAndMaterialIndex.push({
-      geometry,
-      materialIndex: materialIndices
-    });
+      geometry = transformGeometry(geometry, meshInstanceTransform(mesh, instance, Array(16).fill(0)));
+
+      if (!geometry.normal) {
+        computeGeometryNormals(geometry);
+      } else {
+        vec3.forEach(
+          geometry.normal.array,
+          3,
+          0,
+          undefined,
+          vec3.normalize,
+          undefined
+        );
+      }
+
+      vertexCount += Attribute.getCount(geometry.position);
+      indexCount += Attribute.getCount(geometry.indices);
+
+      const materialIndices = mesh.materials.map((material) => {
+        const key = getMaterialHashKey(material);
+        let materialIndex = materialIndexMap.get(key);
+        if (materialIndex === undefined) {
+          materialIndex = materialIndexMap.size;
+          materialIndexMap.set(key, materialIndex);
+          materials.push(material);
+        }
+        return materialIndex;
+      });
+
+      geometryAndMaterialIndex.push({
+        geometry,
+        materialIndex: materialIndices
+      });
+    }
   }
 
   const geometry = mergeGeometry(

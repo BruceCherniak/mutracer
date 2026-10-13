@@ -15,6 +15,8 @@ Changes restart each render at its next refine. See
 | Camera changed | Call engine.update before refining |
 | Meshes added, removed or reordered | Edit `scene.meshes`, then engine.update |
 | `mesh.transform` elements edited | Call engine.update |
+| `instancedMesh.transforms` elements edited | `markTransformsUpdated(start?, count?)`, then engine.update |
+| `instancedMesh.count` or transforms array replaced | Call engine.update; count must fit the array |
 | `mesh.geometry` or a mesh material replaced | Call engine.update |
 | Lights added, removed or their parameters edited | Call engine.update |
 | Background assigned, or its color or grounded-skybox fields edited | Call engine.update |
@@ -54,6 +56,48 @@ a material's first inspection have no baseline to compare.
 Edit `mesh.transform` in place while retaining the mesh objects and the
 `scene.meshes` array. Both WebGPU and WebGL 2 refit the top-level BVH over the
 changed instances and upload only the affected ranges.
+
+## Instanced meshes
+
+Use `InstancedMesh` for many copies of the same geometry and materials:
+
+```ts
+const batch = new InstancedMesh(geometry, material, {count: 1000});
+// Omitted transforms initialize every local matrix to identity.
+for (let i = 0; i < batch.count; i++) batch.transforms[i * 16 + 12] = i * 2;
+batch.markTransformsUpdated();
+scene.meshes.push(batch);
+engine.update();
+
+batch.transforms[16 + 12] += 1;
+batch.markTransformsUpdated(1, 1); // start/count are in instances, not floats
+engine.update();
+```
+
+`transforms` contains column-major Float32 matrices; the constructor retains a
+supplied array. Each world matrix is `batch.transform * transforms[i]`, so the
+inherited `position` and `lookAt` move the whole batch. Every instance uses the
+same material list, selected by the geometry's `materialIndex` exactly as for Mesh.
+
+`count` selects an active prefix and must be a nonnegative integer within the
+array capacity. Shrinking it retains the stored matrices; increase it again to
+reactivate that prefix. To grow beyond capacity, assign a larger Float32Array
+with the previous prefix copied. The default count and capacity come from the
+constructor. Empty batches are supported.
+
+Element edits require `markTransformsUpdated` (default range: all active
+instances). The notification advances the read-only `version`, initially zero.
+Replacing the array and changing count are detected automatically. Matrices are
+copied into the engine snapshot on a version or storage change; unnotified
+edits remain uncommitted even when another scene resource changes. Call
+`engine.update()` before refining or converging.
+
+Caveats: individual instances have no names, transforms or materials as JS
+objects. Use separate batches for distinct material sets. Nonfinite world
+matrices are excluded, as with Mesh. Per-instance shader colors are not supported;
+[Three.js conversion](./threejs.md#instancing) groups instanceColor variants.
+The notification range is validated; see the implementation notes below for
+the current upload granularity.
 
 ## Materials, textures and lights
 
@@ -137,3 +181,16 @@ Selection and coalescing of continuous animation changes belong to the
 application. Render.refine only executes the chosen settings, and samples
 always count that render's complete samples. For fixed-quality animation, use
 converge on each frame with disjoint sequence offsets.
+
+
+## Implementation notes
+
+Instance detection checks version, count and storage identity instead of matrix
+elements. On a version or storage change, the engine copies the full transforms
+array; start/count validation does not limit the copied elements. In scenes containing batches, a transform update regenerates all numeric
+instance records and refits the TLAS. Individual dirty
+instance uploads are deferred; ordinary Mesh transform updates retain their
+existing partial upload path. The numeric world matrices keep double precision
+until GPU packing, preserving Three.js world-matrix multiplication and inverse
+transform calculations. BLAS and vertices are shared unless explicit
+materialIndex packing or displacement requires a distinct vertex region.

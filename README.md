@@ -42,6 +42,10 @@ with a `MuTracer` global is at `dist/mutracer.umd.js`.
 
 ## Quick start
 
+For many copies of one geometry, use [`InstancedMesh`](./docs/updates.md#instanced-meshes)
+with shared materials and a Float32 matrix array. `THREESync` converts Three.js
+instancing into the same batches automatically. See the [instancing example](./examples/instancing.ts).
+
 ```ts
 import { mat4 } from 'gl-matrix';
 import * as THREE from 'three';

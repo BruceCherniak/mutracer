@@ -1,3 +1,6 @@
+import InstancedMesh from '../../src/scene/InstancedMesh';
+import type OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
+import { meshInstanceTransform } from '../../src/renderer/meshInstances';
 import Engine from '../../src/Engine';
 import * as THREE from 'three';
 import { expect, it, vi } from 'vitest';
@@ -20,36 +23,39 @@ function fixture(basic = false) {
   return { source, material, mesh, sync };
 }
 
-it('expands world transforms, shares geometry and deduplicates colors', () => {
+it('batches world transforms, shares geometry and deduplicates colors', () => {
   const { source, mesh, sync } = fixture();
-  expect(sync.scene.meshes).toHaveLength(4);
-  const [a, b, c] = sync.scene.meshes;
+  expect(sync.scene.meshes).toHaveLength(2);
+  const [a, b] = sync.scene.meshes as InstancedMesh[];
+  expect(a).toBeInstanceOf(InstancedMesh); expect(a.count).toBe(2); expect(b.count).toBe(2);
   expect(a.geometry).toBe(b.geometry);
-  expect(a.materials[0]).toBe(c.materials[0]);
   expect(a.materials[0]).not.toBe(b.materials[0]);
   expect(b.materials[0].baseColor).toEqual([.5, .25, .75]);
   const local = new THREE.Matrix4(), world = new THREE.Matrix4();
   mesh.getMatrixAt(3, local); world.multiplyMatrices(mesh.matrixWorld, local);
-  expect([...sync.scene.meshes[3].transform]).toEqual(world.elements);
-  expect(fromTHREEScene(source).meshes).toHaveLength(4);
+  expect([...meshInstanceTransform(b, 1, Array(16).fill(0))]).toEqual(world.elements);
+  expect(fromTHREEScene(source).meshes).toHaveLength(2);
   sync.update();
 });
 
 it('retains the prefix when count changes and reports matrix edits only as transforms', () => {
   const { mesh, sync } = fixture();
-  const initial = sync.scene.meshes.slice(), matrix = initial[1].transform;
+  const initial = sync.scene.meshes.slice() as InstancedMesh[], matrix = initial[1].transforms;
   ensureMeshGeometryAttributes(sync.scene.meshes); sync.update();
   const detector = new SceneChangeDetector(); detector.detect(sync.scene); detector.commit();
   mesh.setMatrixAt(1, new THREE.Matrix4().makeTranslation(8, 0, 0)); mesh.instanceMatrix.needsUpdate = true;
   sync.update();
   const changes = detector.detect(sync.scene);
   expect(changes.meshes).toBe('incremental'); expect(changes.transforms).toEqual([initial[1]]); expect(changes.geometries).toEqual([]);
-  expect(initial[1].transform).toBe(matrix);
+  expect(initial[1].transforms).toBe(matrix);
   mesh.count = 2; sync.update();
-  expect(sync.scene.meshes).toEqual(initial.slice(0, 2));
+  expect(sync.scene.meshes).toEqual(initial);
+  expect(initial.map(batch => batch.count)).toEqual([1, 1]);
+  expect([...initial[0].transforms.slice(0, 16)]).toEqual([...matrix.slice(0, 16)].map((value, i) => i === 12 ? 0 : value));
   mesh.count = 4; sync.update();
   expect(sync.scene.meshes[0]).toBe(initial[0]); expect(sync.scene.meshes[1]).toBe(initial[1]);
-  expect(sync.scene.meshes[2].geometry).toBe(initial[0].geometry);
+  expect(initial.map(batch => batch.count)).toEqual([2, 2]);
+  expect(initial[1].transforms[12]).toBe(8);
 });
 
 it.each([false, true])('propagates source edits to color variants, including unlit=%s', basic => {
@@ -141,8 +147,8 @@ it('combines instance colors with automatic projection in the variant cache', ()
   for (const mesh of [a, b]) for (let i = 0; i < 2; i++) mesh.setColorAt(i, new THREE.Color(.5, .25, .75));
   source.add(a, b, new THREE.Mesh(uv, material));
   const sync = initializedSync(source);
-  const [a0, a1, b0, b1, plain] = sync.scene.meshes;
-  expect(a0.materials[0]).toBe(a1.materials[0]); expect(b0.materials[0]).toBe(b1.materials[0]);
+  const [a0, b0, plain] = sync.scene.meshes;
+  expect((a0 as InstancedMesh).count).toBe(2); expect((b0 as InstancedMesh).count).toBe(2);
   expect(a0.materials[0]).not.toBe(b0.materials[0]); expect(a0.materials[0]).not.toBe(plain.materials[0]);
   expect(a0.materials[0].uvProjection).toBe('none'); expect(b0.materials[0].uvProjection).toBe('triplanar');
   expect(variantCache(sync).get(material)!.size).toBe(2);
@@ -152,7 +158,7 @@ it('combines instance colors with automatic projection in the variant cache', ()
     expect(mesh.materials[0].emissionColor).toEqual(mesh.materials[0].baseColor);
   }
   b.geometry = uv; sync.update();
-  expect(b0.materials[0]).toBe(a0.materials[0]); expect(variantCache(sync).get(material)!.size).toBe(1);
+  expect(sync.scene.meshes[1].materials[0]).toBe(a0.materials[0]); expect(variantCache(sync).get(material)!.size).toBe(1);
   a.count = b.count = 0; sync.update(); expect(variantCache(sync).size).toBe(0);
 });
 
@@ -160,3 +166,15 @@ function initializedSync(scene: THREE.Scene, options: import('../../src/util/fro
   const sync = new THREESync(new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement}), {scene, ...options});
   sync.update(); return sync as THREESync & {scene: NonNullable<THREESync['scene']>};
 }
+
+it('retains an uncolored batch prefix and drops retired material identities', () => {
+  const source = new THREE.Scene(), mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(), new THREE.MeshStandardMaterial(), 4);
+  source.add(mesh); const sync = initializedSync(source);
+  const first = sync.scene.meshes[0] as InstancedMesh, storage = first.transforms;
+  mesh.count = 2; sync.update(); expect(sync.scene.meshes[0]).toBe(first); expect(first.transforms).toBe(storage);
+  mesh.count = 4; sync.update(); expect(sync.scene.meshes[0]).toBe(first); expect(first.count).toBe(4);
+  for (let i = 0; i < 10; i++) {mesh.material = new THREE.MeshStandardMaterial();sync.update();}
+  const groups = (sync as unknown as {_store: {instanceMeshes: WeakMap<THREE.Mesh, Map<number, Map<OpenPBRMaterial, InstancedMesh>>>}})._store.instanceMeshes;
+  expect(groups.get(mesh)!.get(0)!.size).toBe(1);
+  mesh.count = 0; sync.update(); expect(groups.get(mesh)!.get(0)!.size).toBe(0);
+});

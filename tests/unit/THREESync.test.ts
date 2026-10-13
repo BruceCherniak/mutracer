@@ -194,7 +194,7 @@ describe('THREESync', () => {
       set: (value: number) => { version = value; }
     });
     const sync = initializedSync(source);
-    expect(sync.scene.meshes).toHaveLength(10);
+    expect(sync.scene.meshes).toHaveLength(6);
     for (let i = 0; i < 3; i++) {
       reads = 0;
       sync.update();
@@ -203,8 +203,8 @@ describe('THREESync', () => {
     const old = sync.scene.meshes[0].geometry;
     normal.setXYZ(0, 0, 1, 0); normal.needsUpdate = true;
     sync.update();
-    for (let i = 0; i < 10; i++) {
-      const groupIndex = i < 4 ? i % 2 : i < 7 ? 0 : 1;
+    for (let i = 0; i < 6; i++) {
+      const groupIndex = i % 2;
       expect(sync.scene.meshes[i].geometry).toBe(sync.scene.meshes[groupIndex].geometry);
       expect(sync.scene.meshes[i].geometry.normal.array.slice(0, 3)).toEqual(new Float32Array([0, 1, 0]));
     }
@@ -465,7 +465,8 @@ describe('persistent conversion hooks', () => {
     const engine = new Engine({canvas: {width: 10,height: 10} as HTMLCanvasElement});
     const sync = new THREESync(engine, {scene: source, convertMaterial: () => custom}); sync.update();
     const variant = sync.scene!.meshes[0].materials[0];
-    expect(variant).not.toBe(custom); expect(sync.scene!.meshes[1].materials[0]).toBe(variant);
+    expect(variant).not.toBe(custom); expect(sync.scene!.meshes).toHaveLength(1);
+    expect((sync.scene!.meshes[0] as import('../../src/scene/InstancedMesh').default).count).toBe(2);
     expect(variant.baseColor).toEqual([.4,.6,.4]); expect(variant.uvProjection).toBe('triplanar');
     custom.baseColor = [.4,.3,.2]; custom.markUpdated(); sync.update(); expect(variant.baseColor).toEqual([.2,.3,.2]);
     custom = new OpenPBRMaterial({baseColor: [.2,.1,.6], map}); custom.markUpdated();

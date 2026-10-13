@@ -52,7 +52,7 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | `Mesh` with `MeshStandardMaterial` / `MeshPhysicalMaterial` | `Mesh` + `OpenPBRMaterial` (color, metalness, roughness, maps, normal map, emissive, transmission, attenuation, IOR, clearcoat, sheen, iridescence, anisotropy, alpha) |
 | `Mesh` with `MeshBasicMaterial` (glTF `KHR_materials_unlit`) | Unlit emissive material |
 | `SkinnedMesh` / mesh with morph targets | CPU-deformed dynamic geometry |
-| `InstancedMesh` | One mesh per instance, sharing geometry and BLAS; cached color material variants |
+| `InstancedMesh` | One InstancedMesh per group/color variant, sharing geometry and BLAS |
 | Multi-material groups | One MuTracer mesh per group |
 | `DirectionalLight` | `DirectionalLight` |
 | `PointLight` | `SphereLight` (radius `userData.mutracerRadius`, default 0.25) |
@@ -97,19 +97,30 @@ animation to accumulate samples; changing a pose restarts accumulation.
 
 ## Instanced meshes
 
-`InstancedMesh.count` expands to that many MuTracer meshes per material group,
-all sharing the converted geometry and its BLAS. Each world matrix is
-`source.matrixWorld * instanceMatrix[i]`.
+`THREE.InstancedMesh.count` converts to a MuTracer `InstancedMesh` per material
+group and distinct color variant. Local Float32 matrices are copied in source
+index order within each batch; the retained double-precision `source.matrixWorld`
+is the batch transform. Each world matrix remains `source.matrixWorld * instanceMatrix[i]`.
 
-- **Matrices**: after `instanceMatrix.needsUpdate = true`, rendering refits
-  the affected instances.
-- **Count**: changing `count` keeps the existing prefix and adds or removes the
-  tail, which rebuilds the top-level BVH but reuses vertices and BLASes (see
-  [adding and removing meshes](./updates.md#adding-removing-and-reassigning-meshes)).
+- **Matrices**: set `instanceMatrix.needsUpdate = true` after edits. The converter
+  checks values and notifies changed batches; unchanged batches retain their
+  matrix arrays and versions. Both backends refit the instance hierarchy.
+- **Count**: the surviving source prefix retains its transforms and batch
+  identities. Shrinking removes the tail; increasing reads it again from the
+  source buffer. Membership changes rebuild the top-level BVH and reuse vertices
+  and BLASes where packing permits ([scene updates](./updates.md#adding-removing-and-reassigning-meshes)).
 - **Colors**: `instanceColor` multiplies `baseColor` (and `emissionColor` for
-  unlit materials); set `instanceColor.needsUpdate = true` after edits. Each
-  distinct RGB value adds a cached material per source material, kept until
-  `sync.dispose()`. Reuse colors to bound material count and memory.
+  unlit materials). Set `instanceColor.needsUpdate = true` after edits. Instances
+  with the same variant form one batch, ordered by their source indices. Source
+  material edits refresh variants; variants absent from the converted scene are
+  pruned each update. Reuse colors to bound material count and memory.
+- **Callbacks**: `onMeshConverted` runs once per batch on each update. It receives
+  `Mesh | InstancedMesh`; edit shared materials as usual, or the batch's local
+  matrices with `markTransformsUpdated`. It no longer runs per individual instance.
+
+Unsupported instanced deformation keeps the ordinary-mesh fallback described
+above. [Native instancing](./updates.md#instanced-meshes) uses the same primitive
+without Three.js.
 
 ## `userData` keys
 
@@ -143,7 +154,7 @@ MuTracer transform; source rotation alone does not specify their direction.
 | `updateControls` | true | Calls controls.update; false leaves updating to the application |
 | `convertMaterial` | undefined | `(sourceMaterial, sourceMesh)` → OpenPBRMaterial, null to skip the whole mesh, undefined for built-in conversion |
 | `convertLight` | undefined | `(sourceLight)` → SceneLight, null to skip the light, undefined for built-in conversion |
-| `onMeshConverted` | undefined | `(mesh, source, group, groupIndex)` on every visible group/expanded instance during update |
+| `onMeshConverted` | undefined | `(mesh, source, group, groupIndex)` on every visible mesh/group/color batch during update |
 
 Construction subscribes to control events. The first update converts and writes
 sources to the engine. `scene` exposes the retained converted scene, or undefined

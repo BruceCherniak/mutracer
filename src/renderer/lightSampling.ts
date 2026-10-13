@@ -1,3 +1,5 @@
+import InstancedMesh from '../scene/InstancedMesh.js';
+import { meshInstanceCount, meshInstanceTransform } from './meshInstances.js';
 import { getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getSpotLightShapingFluxFactor } from './lightsUtil.js';
 import { localMaterialIndex } from './materialIndices.js';
 import { TexturePixelSource, vec3 } from '../math.js';
@@ -223,65 +225,69 @@ export function collectEmissiveTriangles(
   const cross = vec3.create();
 
   for (const { mesh, geometry, materialIndices } of bindings) {
-    const indices = geometry.indices.array;
-    const positions = geometry.position.array;
-    const uvs = geometry.uv?.array;
-    const secondaryUvs = geometry.uv1?.array ?? uvs;
-    for (let triangleOffset = 0; triangleOffset < indices.length; triangleOffset += 3) {
-      const localMaterialIndex = dominantLocalMaterial(geometry, triangleOffset, materialIndices.length);
-      const materialIndex = materialIndices[localMaterialIndex] ?? materialIndices[0] ?? 0;
-      const material = materials[materialIndex];
-      if (!material || material.shadowCatcher || material.unlit) continue;
-      const samplingLuminance =
-        colorLuminance(material.emissionColor) * material.emissionLuminance;
-      if (!(samplingLuminance > 1e-8)) continue;
+    const matrix = Array(16).fill(0);
+    for (let instance = 0; instance < meshInstanceCount(mesh); instance++) {
+      meshInstanceTransform(mesh, instance, matrix);
+      const indices = geometry.indices.array;
+      const positions = geometry.position.array;
+      const uvs = geometry.uv?.array;
+      const secondaryUvs = geometry.uv1?.array ?? uvs;
+      for (let triangleOffset = 0; triangleOffset < indices.length; triangleOffset += 3) {
+        const localMaterialIndex = dominantLocalMaterial(geometry, triangleOffset, materialIndices.length);
+        const materialIndex = materialIndices[localMaterialIndex] ?? materialIndices[0] ?? 0;
+        const material = materials[materialIndex];
+        if (!material || material.shadowCatcher || material.unlit) continue;
+        const samplingLuminance =
+          colorLuminance(material.emissionColor) * material.emissionLuminance;
+        if (!(samplingLuminance > 1e-8)) continue;
 
-      const triangleIndices = [
-        indices[triangleOffset],
-        indices[triangleOffset + 1],
-        indices[triangleOffset + 2]
-      ];
-      for (let corner = 0; corner < 3; corner++) {
-        const vertex = triangleIndices[corner];
-        vec3.set(
-          local[corner],
-          positions[vertex * geometry.position.itemSize],
-          positions[vertex * geometry.position.itemSize + 1],
-          positions[vertex * geometry.position.itemSize + 2]
+        const triangleIndices = [
+          indices[triangleOffset],
+          indices[triangleOffset + 1],
+          indices[triangleOffset + 2]
+        ];
+        for (let corner = 0; corner < 3; corner++) {
+          const vertex = triangleIndices[corner];
+          vec3.set(
+            local[corner],
+            positions[vertex * geometry.position.itemSize],
+            positions[vertex * geometry.position.itemSize + 1],
+            positions[vertex * geometry.position.itemSize + 2]
+          );
+          vec3.transformMat4(world[corner], local[corner], matrix);
+        }
+        vec3.sub(edge0, world[1], world[0]);
+        vec3.sub(edge1, world[2], world[0]);
+        vec3.cross(cross, edge0, edge1);
+        const area = 0.5 * vec3.length(cross);
+        if (!(area > 1e-10) || !isFinite(area)) continue;
+
+        const triangleUvs = triangleIndices.map((vertex) =>
+          uvs
+            ? [uvs[vertex * 2], uvs[vertex * 2 + 1]] as [number, number]
+            : [0, 0] as [number, number]
         );
-        vec3.transformMat4(world[corner], local[corner], mesh.transform);
+        const triangleSecondaryUvs = triangleIndices.map((vertex) =>
+          secondaryUvs
+            ? [secondaryUvs[vertex * 2], secondaryUvs[vertex * 2 + 1]] as [number, number]
+            : [0, 0] as [number, number]
+        );
+        triangles.push({
+          p0: vec3.clone(world[0]),
+          p1: vec3.clone(world[1]),
+          p2: vec3.clone(world[2]),
+          uv0: triangleUvs[0],
+          uv1: triangleUvs[1],
+          uv2: triangleUvs[2],
+          secondaryUv0: triangleSecondaryUvs[0],
+          secondaryUv1: triangleSecondaryUvs[1],
+          secondaryUv2: triangleSecondaryUvs[2],
+          materialIndex,
+          area,
+          samplingLuminance,
+          selectionPmf: 0
+        });
       }
-      vec3.sub(edge0, world[1], world[0]);
-      vec3.sub(edge1, world[2], world[0]);
-      vec3.cross(cross, edge0, edge1);
-      const area = 0.5 * vec3.length(cross);
-      if (!(area > 1e-10) || !isFinite(area)) continue;
-
-      const triangleUvs = triangleIndices.map((vertex) =>
-        uvs
-          ? [uvs[vertex * 2], uvs[vertex * 2 + 1]] as [number, number]
-          : [0, 0] as [number, number]
-      );
-      const triangleSecondaryUvs = triangleIndices.map((vertex) =>
-        secondaryUvs
-          ? [secondaryUvs[vertex * 2], secondaryUvs[vertex * 2 + 1]] as [number, number]
-          : [0, 0] as [number, number]
-      );
-      triangles.push({
-        p0: vec3.clone(world[0]),
-        p1: vec3.clone(world[1]),
-        p2: vec3.clone(world[2]),
-        uv0: triangleUvs[0],
-        uv1: triangleUvs[1],
-        uv2: triangleUvs[2],
-        secondaryUv0: triangleSecondaryUvs[0],
-        secondaryUv1: triangleSecondaryUvs[1],
-        secondaryUv2: triangleSecondaryUvs[2],
-        materialIndex,
-        area,
-        samplingLuminance,
-        selectionPmf: 0
-      });
     }
   }
   return triangles;
@@ -309,7 +315,7 @@ export function packEmissiveTriangles(triangles: EmissiveTriangle[], data: Float
 
 /** Caches world-space vertices per mesh, independently of emission strength. */
 export class EmissiveTriangleCache {
-  private _bindings = new WeakMap<Mesh, { geometry: Geometry; version: number; matrix: Float64Array;
+  private _bindings = new WeakMap<Mesh, { geometry: Geometry; version: number; instanceVersion: number; instanceCount: number; instanceTransforms?: Float32Array; matrix: Float64Array;
     indices: number[]; activity: boolean[]; triangles: EmissiveTriangle[] }>();
   private _triangles: EmissiveTriangle[] = [];
   collect(bindings: EmissiveMeshBinding[], materials: OpenPBRMaterial[]) {
@@ -320,12 +326,15 @@ export class EmissiveTriangleCache {
         const m = materials[index];
         return !!m && !m.unlit && !m.shadowCatcher && colorLuminance(m.emissionColor) * m.emissionLuminance > 1e-8;
       };
+      const instanceVersion = mesh instanceof InstancedMesh ? mesh.version : 0;
+      const instanceCount = meshInstanceCount(mesh);
+      const instanceTransforms = mesh instanceof InstancedMesh ? mesh.transforms : undefined;
       let cached = this._bindings.get(mesh);
-      if (!cached || cached.geometry !== geometry || cached.version !== geometry.version ||
+      if (!cached || cached.geometry !== geometry || cached.version !== geometry.version || cached.instanceVersion !== instanceVersion || cached.instanceCount !== instanceCount || cached.instanceTransforms !== instanceTransforms ||
         cached.indices.length !== materialIndices.length || materialIndices.some((index, i) =>
           cached!.indices[i] !== index || cached!.activity[i] !== isActive(index)) ||
         mesh.transform.some((value: number, i: number) => !Object.is(value, cached!.matrix[i]))) {
-        cached = { geometry, version: geometry.version, matrix: Float64Array.from(mesh.transform),
+        cached = { geometry, version: geometry.version, instanceVersion, instanceCount, instanceTransforms, matrix: Float64Array.from(mesh.transform),
           indices: materialIndices.slice(), activity: materialIndices.map(isActive),
           triangles: collectEmissiveTriangles([binding], materials) };
         this._bindings.set(mesh, cached);

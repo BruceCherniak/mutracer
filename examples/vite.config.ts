@@ -2,7 +2,7 @@ import path from 'node:path';
 import { defineConfig } from 'vite';
 
 const repoRoot = path.resolve(__dirname, '..');
-const pages = ['index', 'basic', 'three', 'animation', 'advanced'];
+const pages = ['index', 'basic', 'three', 'animation', 'advanced', 'instancing'];
 
 /**
  * Static build of the examples for the site (`npm run build:site`). During

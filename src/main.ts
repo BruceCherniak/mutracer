@@ -35,6 +35,8 @@ export type {
 } from './scene/Scene.js';
 export { default as Camera } from './scene/Camera.js';
 export { default as Mesh } from './scene/Mesh.js';
+export { default as InstancedMesh } from './scene/InstancedMesh.js';
+export type { InstancedMeshOptions } from './scene/InstancedMesh.js';
 export { default as SceneNode } from './scene/SceneNode.js';
 export {
   default as Geometry,

@@ -1,5 +1,6 @@
 import {createCanvas} from '../util/canvas.js';
 import Geometry from '../scene/Geometry.js';
+import InstancedMesh from '../scene/InstancedMesh.js';
 import Texture from '../scene/Texture.js';
 import { copyGeometryChangeState } from '../scene/geometryChanges.js';
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
@@ -10,6 +11,7 @@ import type { SceneChanges } from './sceneChangeDetector.js';
 export class CommittedScene {
   private readonly copies = new WeakMap<object, any>();
   private readonly geometryVersions = new WeakMap<Geometry, number>();
+  private readonly instanceVersions = new WeakMap<InstancedMesh, {version: number; transforms: Float32Array}>();
   private value?: Scene;
   private readonly copying = new WeakSet<object>();
 
@@ -43,7 +45,18 @@ export class CommittedScene {
     if (this.copying.has(object)) return cloned;
     this.copying.add(object);
     try {
-      for (const key of Object.keys(value)) cloned[key] = value instanceof Texture && key === 'source' ? value.source : this.copy((value as any)[key]);
+      for (const key of Object.keys(value)) {
+        if (value instanceof InstancedMesh && key === 'transforms') {
+          const previous = this.instanceVersions.get(value);
+          if (!previous || previous.version !== value.version || previous.transforms !== value.transforms) {
+            // Each batch owns its snapshot even if external batches share a
+            // mutable source array and notify at different times.
+            if (cloned.transforms?.length === value.transforms.length) cloned.transforms.set(value.transforms);
+            else cloned.transforms = value.transforms.slice();
+            this.instanceVersions.set(value, {version: value.version, transforms: value.transforms});
+          }
+        } else cloned[key] = value instanceof Texture && key === 'source' ? value.source : this.copy((value as any)[key]);
+      }
     } finally { this.copying.delete(object); }
     if (Array.isArray(value)) cloned.length = value.length;
     if (value instanceof Geometry) {
@@ -59,7 +72,10 @@ export class CommittedScene {
   capture(scene: Scene, changes: SceneChanges): Scene {
     if (!this.value || changes.meshes === 'full') this.value = { meshes: this.copy(scene.meshes), lights: this.copy(scene.lights), background: this.copy(scene.background) };
     else {
-      for (const mesh of changes.transforms) this.copy(mesh.transform);
+      for (const mesh of changes.transforms) {
+        this.copy(mesh.transform);
+        if (mesh instanceof InstancedMesh) this.copy(mesh);
+      }
       for (const geometry of changes.geometries) this.copy(geometry);
       for (const material of changes.materials) this.copy(material);
       if (changes.lights) this.value.lights = this.copy(scene.lights);

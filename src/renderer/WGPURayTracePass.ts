@@ -1,3 +1,6 @@
+import { sameInstanceMembership } from './meshInstances.js';
+import InstancedMesh from '../scene/InstancedMesh.js';
+import { dirtyMeshInstanceIndices } from './prepareMeshBVH.js';
 import { cameraApertureRadius } from './cameraLens.js';
 import { getRectLightUOrV, getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getLightDirection, getRigidLightFrame, validateSceneLights } from './lightsUtil.js';
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
@@ -309,6 +312,9 @@ class WGPURayTracePass {
   private _tlas?: FlattendBVH;
   private _meshSnapshot: {
     mesh: Mesh;
+    instanceCount: number;
+    instanceVersion: number;
+    instanceTransforms?: Float32Array;
     geometry: Geometry;
     bvh?: FlattendBVH;
     materials: OpenPBRMaterial[];
@@ -1803,7 +1809,7 @@ ${rayTraceCompute({
     const transformOnlyMeshes = update?.materials?.length ? undefined : update?.transforms;
     const materialChange = !!update?.materials?.length;
     if (
-      transformOnlyMeshes &&
+      transformOnlyMeshes && !transformOnlyMeshes.some(mesh => mesh instanceof InstancedMesh) &&
       meshes === this._meshes &&
       this._meshSnapshot.length === meshes.length &&
       this._meshSnapshot.every(
@@ -1835,6 +1841,9 @@ ${rayTraceCompute({
     const previousSnapshot = this._meshSnapshot;
     const nextSnapshot = meshes.map((mesh) => ({
       mesh,
+      instanceCount: mesh instanceof InstancedMesh ? mesh.count : 1,
+      instanceVersion: mesh instanceof InstancedMesh ? mesh.version : 0,
+      instanceTransforms: mesh instanceof InstancedMesh ? mesh.transforms : undefined,
       geometry: mesh.geometry,
       bvh: getGeometryBvh(mesh.geometry),
       materials: mesh.materials.slice(),
@@ -1849,7 +1858,7 @@ ${rayTraceCompute({
       matrix: Array.from(mesh.transform as ArrayLike<number>)
     }));
     const membershipChanged = nextSnapshot.length !== previousSnapshot.length ||
-      nextSnapshot.some((item, i) => item.mesh !== previousSnapshot[i]?.mesh ||
+      nextSnapshot.some((item, i) => item.mesh !== previousSnapshot[i]?.mesh || item.instanceCount !== previousSnapshot[i]?.instanceCount ||
         item.materials.some((material, k) => material !== previousSnapshot[i]?.materials[k]));
     const membership = !this._needsUpdateMeshData && membershipChanged && this._preparedMeshData
       ? this._membershipCache.update(this._preparedMeshData, meshes) : undefined;
@@ -1919,7 +1928,7 @@ ${rayTraceCompute({
         const prev = previousSnapshot[i];
         return (
           !prev ||
-          next.mesh !== prev.mesh ||
+          next.mesh !== prev.mesh || next.instanceCount !== prev.instanceCount ||
           next.geometry !== prev.geometry ||
           next.bvh !== prev.bvh ||
           next.materials.length !== prev.materials.length ||
@@ -1944,7 +1953,7 @@ ${rayTraceCompute({
     const transformChange =
       !topologyOrMaterialChange &&
       nextSnapshot.some((next, i) =>
-        next.matrix.some((value, k) => value !== previousSnapshot[i].matrix[k])
+        next.instanceVersion !== previousSnapshot[i].instanceVersion || next.instanceTransforms !== previousSnapshot[i].instanceTransforms || next.matrix.some((value, k) => value !== previousSnapshot[i].matrix[k])
       );
     this._meshes = meshes;
     nextSnapshot.forEach((next, i) => {
@@ -1975,7 +1984,7 @@ ${rayTraceCompute({
       this._needsRefitTLAS = true;
       nextSnapshot.forEach((next, index) => {
         if (
-          next.matrix.some(
+          next.instanceVersion !== previousSnapshot[index].instanceVersion || next.instanceTransforms !== previousSnapshot[index].instanceTransforms || next.matrix.some(
             (value, matrixIndex) =>
               value !== previousSnapshot[index]?.matrix[matrixIndex]
           )
@@ -2181,6 +2190,9 @@ ${rayTraceCompute({
 
   /** Uploads the combined TLAS/BLAS buffer and the instance records. */
   private _uploadBVH(tlas: FlattendBVH, blases: Parameters<typeof concatBLASBuffers>[0]) {
+    const stacks = getTraversalStackSizes(tlas, blases);
+    this._constants.TLAS_STACK_SIZE = retainedShaderCapacity(stacks.tlas, Number(this._constants.TLAS_STACK_SIZE ?? 0));
+    this._constants.BLAS_STACK_SIZE = retainedShaderCapacity(stacks.blas, Number(this._constants.BLAS_STACK_SIZE ?? 0), 32);
     const tlasBuffer = new Float32Array(tlas.buffer);
     const blasBuffer = new Float32Array(concatBLASBuffers(blases));
     const bvhData = new Float32Array(tlasBuffer.length + blasBuffer.length);
@@ -2530,16 +2542,23 @@ ${rayTraceCompute({
       return;
     }
 
-    const dirtyIndices = new Set<number>();
-    res.instanceBindings.forEach((binding, index) => {
-      if (this._dirtyTransformMeshes.has(binding.mesh)) dirtyIndices.add(index);
-    });
+    const dirtyIndices = dirtyMeshInstanceIndices(res.instanceBindings, this._dirtyTransformMeshes, res.instances);
     const incremental = dirtyIndices.size > 0;
+    const previousInstances = res.instances;
     res.instances = updateMeshInstanceTransforms(
       res.instanceBindings,
       incremental ? res.instances : undefined,
       incremental ? dirtyIndices : undefined
     );
+    if (!sameInstanceMembership(previousInstances, res.instances)) {
+      this._tlas = buildTLAS(res.instances, res.blases);
+      this._uploadBVH(this._tlas, res.blases);
+      this._emissiveTriangles = this._emissiveCache.collect(res.emissiveBindings, res.materials);
+      this._needsUpdateLightSamplingData = true;
+      this._rtUniform.views.isEmpty[0] = +(res.instances.length === 0);
+      this._dirtyTransformMeshes.clear(); this._needsRefitTLAS = false;
+      return;
+    }
     const ranges = refitTLAS(
       tlas,
       res.instances,

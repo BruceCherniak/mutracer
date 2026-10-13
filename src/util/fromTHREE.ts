@@ -1,3 +1,4 @@
+import InstancedMesh from '../scene/InstancedMesh.js';
 import Sync from '../Sync.js';
 import type Engine from '../Engine.js';
 import { markDeformedGeometry } from '../scene/geometryChanges.js';
@@ -538,9 +539,9 @@ export interface FromTHREESceneOptions {
   convertMaterial?(material: THREE.Material, mesh: THREE.Mesh): OpenPBRMaterial | null | undefined;
   /** Custom light conversion. Default undefined uses built-in conversion; returning null skips this light. THREESync invokes once per source light identity/version (an absent version stays unchanged). Returned lights are retained by identity and remain caller-owned. */
   convertLight?(light: THREE.Light): SceneLight | null | undefined;
-  /** Receives each converted mesh/group/instance on every update. Default: no callback. */
+  /** Receives each converted mesh/group/color batch on every update. Default: no callback. */
   onMeshConverted?(
-    mesh: Mesh,
+    mesh: Mesh | InstancedMesh,
     source: THREE.Mesh,
     group: { start: number; count: number; materialIndex?: number },
     groupIndex: number
@@ -568,7 +569,7 @@ interface ConversionStore {
   poseChanged: boolean;
   meshes: WeakMap<THREE.Mesh, Map<number, Mesh>>;
   lights: WeakMap<THREE.Object3D | THREE.Texture, SceneLight>;
-  instanceMeshes: WeakMap<THREE.Mesh, Map<number, Mesh[]>>;
+  instanceMeshes: WeakMap<THREE.Mesh, Map<number, Map<OpenPBRMaterial, InstancedMesh>>>;
   // Combined instance-color and automatic-projection variants, pruned each update.
   colorVariants: Map<THREE.Material, Map<string, MaterialVariant>>;
   warned: WeakSet<THREE.Object3D>;
@@ -635,7 +636,7 @@ function retainLight(store: ConversionStore, source: THREE.Object3D | THREE.Text
  * `MeshStandardMaterial` / `MeshPhysicalMaterial` (mapped to OpenPBR),
  * directional, ambient, rect-area, point and spot lights, and the scene
  * background / environment. Calls `scene.updateMatrixWorld()` and creates fresh objects on every call.
- * CPU-evaluates skinning/morph targets and expands InstancedMesh instances
+ * CPU-evaluates skinning/morph targets and batches InstancedMesh instances
  * with shared geometry and cached color/projection material variants. Unsupported batched
  * or instanced deformation falls back to an ordinary mesh with a warning.
  * For animation and editing, use {@link THREESync}.
@@ -658,8 +659,6 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   const lights: SceneLight[] = [];
   const textureCache = store.textures;
   const convertedMaterials = new Set<THREE.Material>();
-  const instanceMatrix = scene.matrixWorld.clone();
-  const instanceWorld = scene.matrixWorld.clone();
   const instanceColor: ColorRGB = [1, 1, 1];
   function refreshVariant(entry: MaterialVariant, base: OpenPBRMaterial) {
     if (entry.base === base && entry.version === base.version) return;
@@ -845,10 +844,6 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
           }
           const sourceMaterial = threeMaterials[group.materialIndex ?? 0];
           let material = resolveMaterial(sourceMaterial, child)!;
-          let instancesByGroup = store.instanceMeshes.get(child);
-          if (!instancesByGroup) { instancesByGroup = new Map(); store.instanceMeshes.set(child, instancesByGroup); }
-          let instanceMeshes = instancesByGroup.get(groupIndex);
-          if (!instanceMeshes) { instanceMeshes = []; instancesByGroup.set(groupIndex, instanceMeshes); }
           const baseMaterial = material;
           const autoUvProjection = !geometry.uv && baseMaterial.uvProjection === 'none' &&
             !!(baseMaterial.map || baseMaterial.normalMap || baseMaterial.emissiveMap || baseMaterial.metallicRoughnessMap ||
@@ -856,43 +851,68 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
           const autoDisplacementUvProjection = !geometry.uv && !!baseMaterial.displacementMap &&
             baseMaterial.displacementUvProjection === 'none';
           const instanceCount = expand ? instanced.count : 1;
-          // Keep the retained prefix when count shrinks; only the tail is removed.
-          if (expand) instanceMeshes.length = Math.min(instanceMeshes.length, instanceCount);
-          for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex++) {
-            material = baseMaterial;
-            if (expand && instanced.instanceColor) {
-              const color = instanced.instanceColor;
-              instanceColor[0] = color.getX(instanceIndex);
-              instanceColor[1] = color.getY(instanceIndex);
-              instanceColor[2] = color.getZ(instanceIndex);
+          if (expand) {
+            let batchesByGroup = store.instanceMeshes.get(child);
+            if (!batchesByGroup) { batchesByGroup = new Map(); store.instanceMeshes.set(child, batchesByGroup); }
+            let retained = batchesByGroup.get(groupIndex);
+            if (!retained) { retained = new Map(); batchesByGroup.set(groupIndex, retained); }
+            const indicesByMaterial = new Map<OpenPBRMaterial, number[]>();
+            for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex++) {
+              if (instanced.instanceColor) {
+                instanceColor[0] = instanced.instanceColor.getX(instanceIndex);
+                instanceColor[1] = instanced.instanceColor.getY(instanceIndex);
+                instanceColor[2] = instanced.instanceColor.getZ(instanceIndex);
+              }
+              const variant = materialVariant(sourceMaterial, baseMaterial, instanced.instanceColor ? instanceColor : undefined,
+                autoUvProjection, autoDisplacementUvProjection);
+              let indices = indicesByMaterial.get(variant);
+              if (!indices) indicesByMaterial.set(variant, indices = []);
+              indices.push(instanceIndex);
             }
-            material = materialVariant(sourceMaterial, baseMaterial,
-              expand && instanced.instanceColor ? instanceColor : undefined,
-              autoUvProjection, autoDisplacementUvProjection);
+            for (const [variant, indices] of indicesByMaterial) {
+              let batch = retained.get(variant);
+              if (!batch) {
+                batch = new InstancedMesh(geometry, variant, {count: indices.length});
+                batch.transform = child.matrixWorld.elements.slice() as mat4.Mat4Array;
+                retained.set(variant, batch);
+              }
+              batch.geometry = geometry;
+              let changed = batch.count !== indices.length;
+              if (batch.transforms.length < indices.length * 16) {
+                batch.transforms = new Float32Array(indices.length * 16); changed = true;
+              }
+              batch.count = indices.length;
+              const matrices = instanced.instanceMatrix;
+              for (let i = 0; i < indices.length; i++) for (let k = 0; k < 16; k++) {
+                const value = matrices.array[indices[i] * matrices.itemSize + k];
+                if (!Object.is(batch.transforms[i * 16 + k], value)) { batch.transforms[i * 16 + k] = value; changed = true; }
+              }
+              for (let i = 0; i < 16; i++) batch.transform[i] = child.matrixWorld.elements[i];
+              if (changed) batch.markTransformsUpdated();
+              batch.name = child.name || `Mesh ${meshes.length + 1}${groups.length > 1 ? `.${groupIndex + 1}` : ''}`;
+              meshes.push(batch); options.onMeshConverted?.(batch, child, group, groupIndex);
+            }
+            // Keep surviving prefixes; discard retired variant identities.
+            // A zero active count has no prefix to retain.
+            for (const [variant, batch] of retained) if (!indicesByMaterial.has(variant)) {
+              batch.count = 0;
+              retained.delete(variant);
+            }
+          } else {
+            material = materialVariant(sourceMaterial, baseMaterial, undefined, autoUvProjection, autoDisplacementUvProjection);
             let meshGroups = store.meshes.get(child);
             if (!meshGroups) { meshGroups = new Map(); store.meshes.set(child, meshGroups); }
-            let mesh = expand ? instanceMeshes[instanceIndex] : meshGroups.get(groupIndex);
+            let mesh = meshGroups.get(groupIndex);
             if (!mesh) {
               mesh = new Mesh(geometry, material);
-              // Three.js matrices use doubles. Retain that precision before CPU
-              // inverse transforms and bounds calculations, as one-shot conversion did.
               mesh.transform = child.matrixWorld.elements.slice() as mat4.Mat4Array;
-              if (expand) instanceMeshes[instanceIndex] = mesh;
-              else meshGroups.set(groupIndex, mesh);
+              meshGroups.set(groupIndex, mesh);
             }
             mesh.geometry = geometry;
             if (mesh.materials[0] !== material) mesh.materials = [material];
-            mesh.name =
-              child.name ||
-              `Mesh ${meshes.length + 1}${groups.length > 1 ? `.${groupIndex + 1}` : ''}`;
-            if (expand) {
-              instanced.getMatrixAt(instanceIndex, instanceMatrix);
-              instanceWorld.multiplyMatrices(child.matrixWorld, instanceMatrix);
-            }
-            const matrix = expand ? instanceWorld.elements : child.matrixWorld.elements;
-            for (let i = 0; i < 16; i++) mesh.transform[i] = matrix[i];
-            meshes.push(mesh);
-            options.onMeshConverted?.(mesh, child, group, groupIndex);
+            mesh.name = child.name || `Mesh ${meshes.length + 1}${groups.length > 1 ? `.${groupIndex + 1}` : ''}`;
+            for (let i = 0; i < 16; i++) mesh.transform[i] = child.matrixWorld.elements[i];
+            meshes.push(mesh); options.onMeshConverted?.(mesh, child, group, groupIndex);
           }
         });
       }

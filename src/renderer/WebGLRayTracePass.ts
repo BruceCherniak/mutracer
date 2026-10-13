@@ -1,3 +1,6 @@
+import { sameInstanceMembership } from './meshInstances.js';
+import InstancedMesh from '../scene/InstancedMesh.js';
+import { dirtyMeshInstanceIndices } from './prepareMeshBVH.js';
 import { cameraApertureRadius } from './cameraLens.js';
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
 import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling.js';
@@ -144,6 +147,9 @@ class WebGLRayTracePass {
   private _materialIndexData?: Float32Array;
   private _meshSnapshot: {
     mesh: Mesh;
+    instanceCount: number;
+    instanceVersion: number;
+    instanceTransforms?: Float32Array;
     geometry: Mesh['geometry'];
     materials: OpenPBRMaterial[];
     materialVersions: number[];
@@ -423,6 +429,9 @@ class WebGLRayTracePass {
     const materialChange = !!update?.materials?.length;
     const next = meshes.map((mesh) => ({
       mesh,
+      instanceCount: mesh instanceof InstancedMesh ? mesh.count : 1,
+      instanceVersion: mesh instanceof InstancedMesh ? mesh.version : 0,
+      instanceTransforms: mesh instanceof InstancedMesh ? mesh.transforms : undefined,
       geometry: mesh.geometry,
       materials: mesh.materials.slice(),
       materialVersions: mesh.materials.map(material => material.version),
@@ -431,7 +440,7 @@ class WebGLRayTracePass {
       matrix: Array.from(mesh.transform as ArrayLike<number>)
     }));
     const membershipChanged = next.length !== this._meshSnapshot.length ||
-      next.some((item, i) => item.mesh !== this._meshSnapshot[i]?.mesh ||
+      next.some((item, i) => item.mesh !== this._meshSnapshot[i]?.mesh || item.instanceCount !== this._meshSnapshot[i]?.instanceCount ||
         item.materials.some((material, k) => material !== this._meshSnapshot[i]?.materials[k]));
     const membership = !this._needsUpdateMeshData && membershipChanged && this._preparedMeshData
       ? this._membershipCache.update(this._preparedMeshData, meshes) : undefined;
@@ -458,7 +467,7 @@ class WebGLRayTracePass {
         const prev = this._meshSnapshot[i];
         return (
           !prev ||
-          item.mesh !== prev.mesh ||
+          item.mesh !== prev.mesh || item.instanceCount !== prev.instanceCount || item.instanceVersion !== prev.instanceVersion || item.instanceTransforms !== prev.instanceTransforms ||
           item.geometry !== prev.geometry ||
           item.materials.length !== prev.materials.length ||
           item.materials.some((material, k) => material !== prev.materials[k]) ||
@@ -726,9 +735,15 @@ class WebGLRayTracePass {
 
   private _refitMeshInstances() {
     const res = this._preparedMeshData!, tlas = this._tlas!;
-    const dirty = new Set<number>();
-    res.instanceBindings.forEach((binding, i) => { if (this._dirtyTransformMeshes.has(binding.mesh)) dirty.add(i); });
+    const dirty = dirtyMeshInstanceIndices(res.instanceBindings, this._dirtyTransformMeshes, res.instances);
+    const previousInstances = res.instances;
     res.instances = updateMeshInstanceTransforms(res.instanceBindings, res.instances, dirty);
+    if (!sameInstanceMembership(previousInstances, res.instances)) {
+      this._pendingMembershipData = res;
+      this._updateMeshMembership();
+      this._dirtyTransformMeshes.clear(); this._needsRefitTLAS = false;
+      return;
+    }
     const ranges = refitTLAS(tlas, res.instances, res.blases, dirty);
     this._bvhData!.set(new Float32Array(tlas.buffer));
     for (const { offset, size } of ranges.tlasRanges) this._bvhBufferTex.updateDataRange(this._renderer.gl, this._bvhData!, offset, size);

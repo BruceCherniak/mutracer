@@ -12,6 +12,7 @@ Then open <http://localhost:3001/examples/>.
 | [`basic`](./basic.ts) | Minimal setup: `Engine`, `Render`, `Mesh`, `OpenPBRMaterial`, `RectLight`, `EnvironmentLight`, `THREESync`, `OrbitControls` and `RenderLoop`. |
 | [`three`](./three.ts) | Building the scene in Three.js (`GLTFLoader`, `OrbitControls`, `MeshPhysicalMaterial`) and rendering it with `THREESync` / `RenderLoop`; rotation and a roughness slider for incremental material edits. |
 | [`animation`](./animation.ts) | A procedural skinned cylinder, bone animation and a morph slider; pause animation to accumulate a clean image. Both backends support `?webgl`. |
+| [`instancing`](./instancing.ts) | Native InstancedMesh, shared geometry/materials and markTransformsUpdated. |
 | [`advanced`](./advanced.ts) | Coat, transmission with dispersion, subsurface, fuzz and thin-film materials; a shadow catcher with a transparent background; `render.denoiser`; a `samplingPattern` selector (Sobol, ZSobol, random); `render.converge()` and PNG export. |
 
 For an interactive app with drag-and-drop glTF/HDR loading, a scene tree,

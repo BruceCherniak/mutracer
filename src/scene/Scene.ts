@@ -3,6 +3,7 @@ import AmbientLight from './AmbientLight.js';
 import DirectionalLight from './DirectionalLight.js';
 import EnvironmentLight from './EnvironmentLight.js';
 import Mesh from './Mesh.js';
+import InstancedMesh from './InstancedMesh.js';
 import RectLight from './RectLight.js';
 import SphereLight from './SphereLight.js';
 import SpotLight from './SpotLight.js';
@@ -44,10 +45,11 @@ export type SceneBackground = ColorRGBA | Texture | GroundedSkyboxBackground;
  * values are detected automatically, including edits within existing arrays.
  * Call `markUpdated()` on a material after parameter edits, a Geometry after
  * attribute edits, and a Texture after pixel or UV-array element edits.
+ * InstancedMesh matrix elements require markTransformsUpdated().
  */
 export interface Scene {
   /** Required mesh instances; use an empty array for an empty scene. */
-  meshes: Mesh[];
+  meshes: (Mesh | InstancedMesh)[];
   /** Required lights; use an empty array for an unlit scene. */
   lights: SceneLight[];
   /** Camera-ray background; defaults to the environment light when omitted. */
