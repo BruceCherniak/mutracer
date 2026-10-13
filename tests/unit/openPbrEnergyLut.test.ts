@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
 import {
   getOpenPbrEnergyLutData,
   OPENPBR_ENERGY_LUT_AVERAGE_ROW,
@@ -9,6 +10,22 @@ import {
 } from '../../src/renderer/openPbrEnergyLut';
 
 describe('OpenPBR opaque dielectric energy LUT', () => {
+  it('preserves every decoded float from the original row-normalized tables', () => {
+    const data = getOpenPbrEnergyLutData();
+    const bytes = new Uint8Array(data.length * 4);
+    const view = new DataView(bytes.buffer);
+    data.forEach((value, index) => view.setFloat32(index * 4, value, true));
+    // Pre-delta reference in little-endian Float32, covering every sample and
+    // the joins between dielectric, metal and average-energy rows.
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(
+      '3ecf8fc60aa1c16c521d7b4b53737ff2d4d5d95241f8fe984384bcc1456b55c2'
+    );
+  });
+
+  it('reuses the decoded table on subsequent calls', () => {
+    expect(getOpenPbrEnergyLutData()).toBe(getOpenPbrEnergyLutData());
+  });
+
   it('decodes the complete Adobe 32^3 and 32^2 tables', () => {
     const data = getOpenPbrEnergyLutData();
     expect(data).toHaveLength(
