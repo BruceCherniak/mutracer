@@ -1,6 +1,7 @@
 import type { Vec2 } from '../types.js';
 import { ColorRGB } from '../types.js';
-import Texture from './Texture.js';
+import type Texture from './Texture.js';
+import { materialDefault, applyMaterialParams } from './openPbrSchema.js';
 
 export type UVProjection = 'none' | 'triplanar' | 'spherical' | 'cylindrical';
 export type MaterialAlphaMode = 'auto' | 'opaque' | 'mask' | 'blend';
@@ -46,102 +47,100 @@ export default class OpenPBRMaterial {
 
   /** Creates a material. Omitted properties use their documented defaults. */
   constructor(params: OpenPBRMaterialParams = {}) {
-    for (const key of materialKeys) {
-      if (params[key] !== undefined) Object.assign(this, { [key]: params[key] });
-    }
+    applyMaterialParams(this, params);
   }
 
   // Base
   /** Base layer weight. Default `1`. */
-  baseWeight = 1;
+  baseWeight: number = materialDefault('baseWeight');
   /** Diffuse/metal color. Default `[0.8, 0.8, 0.8]`. */
-  baseColor: ColorRGB = [0.8, 0.8, 0.8];
+  baseColor: ColorRGB = materialDefault('baseColor');
   /** Oren-Nayar style roughness of the diffuse lobe. Default `0`. */
-  baseDiffuseRoughness = 0;
+  baseDiffuseRoughness: number = materialDefault('baseDiffuseRoughness');
   /** `0` dielectric, `1` metal. Default `0`. */
-  baseMetalness = 0;
+  baseMetalness: number = materialDefault('baseMetalness');
 
   // Specular
   /** Specular reflection weight. Default `1`. */
-  specularWeight = 1;
+  specularWeight: number = materialDefault('specularWeight');
   /** Specular tint. Default `[1, 1, 1]`. */
-  specularColor: ColorRGB = [1, 1, 1];
+  specularColor: ColorRGB = materialDefault('specularColor');
   /** Microfacet roughness, `0` mirror to `1` rough. Default `0.3`. */
-  specularRoughness = 0.3;
+  specularRoughness: number = materialDefault('specularRoughness');
   /** Index of refraction. Default `1.5`. */
-  specularIor = 1.5;
+  specularIor: number = materialDefault('specularIor');
   /** Specular anisotropy (requires tangents). Default `0`. */
-  specularAnisotropy = 0;
+  specularAnisotropy: number = materialDefault('specularAnisotropy');
 
   // Transmission
   /** `1` makes the dielectric base fully transmissive (glass). Default `0`. */
-  transmissionWeight = 0;
+  transmissionWeight: number = materialDefault('transmissionWeight');
   /** Transmission tint, or the medium color at `transmissionDepth`. Default `[1, 1, 1]`. */
-  transmissionColor: ColorRGB = [1, 1, 1];
+  transmissionColor: ColorRGB = materialDefault('transmissionColor');
   /** Depth at which `transmissionColor` is reached; `0` tints at the surface. Default `0`. */
-  transmissionDepth = 0;
+  transmissionDepth: number = materialDefault('transmissionDepth');
   /** Volume scattering color of the transmissive medium. Default `[0, 0, 0]`. */
-  transmissionScatter: ColorRGB = [0, 0, 0];
+  transmissionScatter: ColorRGB = materialDefault('transmissionScatter');
   /** Henyey-Greenstein anisotropy of the medium, -1 to 1. Default `0`. */
-  transmissionScatterAnisotropy = 0;
+  transmissionScatterAnisotropy: number = materialDefault('transmissionScatterAnisotropy');
   /** Dispersion strength; `> 0` enables spectral rendering. Default `0`. */
-  transmissionDispersionScale = 0;
+  transmissionDispersionScale: number = materialDefault('transmissionDispersionScale');
   /** Abbe number controlling dispersion. Default `20`. */
-  transmissionDispersionAbbeNumber = 20;
+  transmissionDispersionAbbeNumber: number = materialDefault('transmissionDispersionAbbeNumber');
 
   // Subsurface
   /** Subsurface scattering weight. Default `0`. */
-  subsurfaceWeight = 0;
+  subsurfaceWeight: number = materialDefault('subsurfaceWeight');
   /** Subsurface color. Default `[0.8, 0.8, 0.8]`. */
-  subsurfaceColor: ColorRGB = [0.8, 0.8, 0.8];
+  subsurfaceColor: ColorRGB = materialDefault('subsurfaceColor');
   /** Mean free path in scene units. Default `1`. */
-  subsurfaceRadius = 1;
+  subsurfaceRadius: number = materialDefault('subsurfaceRadius');
   /** Per-channel multiplier of `subsurfaceRadius`. Default `[1, 0.5, 0.25]`. */
-  subsurfaceRadiusScale: ColorRGB = [1, 0.5, 0.25];
+  subsurfaceRadiusScale: ColorRGB = materialDefault('subsurfaceRadiusScale');
   /** Scattering anisotropy, -1 to 1. Default `0`. */
-  subsurfaceAnisotropy = 0;
+  subsurfaceAnisotropy: number = materialDefault('subsurfaceAnisotropy');
 
   // Fuzz (sheen)
   /** Fuzz (sheen) layer weight. Default `0`. */
-  fuzzWeight = 0;
+  fuzzWeight: number = materialDefault('fuzzWeight');
   /** Fuzz color. Default `[1, 1, 1]`. */
-  fuzzColor: ColorRGB = [1, 1, 1];
+  fuzzColor: ColorRGB = materialDefault('fuzzColor');
   /** Fuzz roughness. Default `0.5`. */
-  fuzzRoughness = 0.5;
+  fuzzRoughness: number = materialDefault('fuzzRoughness');
 
   // Coat
   /** Clear coat weight. Default `0`. */
-  coatWeight = 0;
+  coatWeight: number = materialDefault('coatWeight');
   /** Coat absorption color. Default `[1, 1, 1]`. */
-  coatColor: ColorRGB = [1, 1, 1];
+  coatColor: ColorRGB = materialDefault('coatColor');
   /** Coat roughness. Default `0`. */
-  coatRoughness = 0;
+  coatRoughness: number = materialDefault('coatRoughness');
   /** Coat anisotropy. Default `0`. */
-  coatAnisotropy = 0;
+  coatAnisotropy: number = materialDefault('coatAnisotropy');
   /** Coat index of refraction. Default `1.6`. */
-  coatIor = 1.6;
+  coatIor: number = materialDefault('coatIor');
   /** How much the coat darkens and saturates the base. Default `1`. */
-  coatDarkening = 1;
+  coatDarkening: number = materialDefault('coatDarkening');
 
   // Thin film
   /** Thin-film interference weight (iridescence). Default `0`. */
-  thinFilmWeight = 0;
+  thinFilmWeight: number = materialDefault('thinFilmWeight');
   /** Film thickness in micrometres. Default `0.5`. */
-  thinFilmThickness = 0.5;
+  thinFilmThickness: number = materialDefault('thinFilmThickness');
   /** Film index of refraction. Default `1.4`. */
-  thinFilmIor = 1.4;
+  thinFilmIor: number = materialDefault('thinFilmIor');
 
   // Emission and geometry
   /** Emission color. Default `[1, 1, 1]`. */
-  emissionColor: ColorRGB = [1, 1, 1];
+  emissionColor: ColorRGB = materialDefault('emissionColor');
   /** Emitted radiance scale; `0` disables emission. Default `0`. */
-  emissionLuminance = 0;
+  emissionLuminance: number = materialDefault('emissionLuminance');
   /** Coverage, `1` opaque. See `alphaMode`. Default `1`. */
-  opacity = 1;
+  opacity: number = materialDefault('opacity');
   /** Treat the surface as an infinitely thin shell (leaves, paper). Default `false`. */
-  thinWalled = false;
+  thinWalled: boolean = materialDefault('thinWalled');
   /** Disables geometric back-face culling for this material. Default `false`. */
-  doubleSided = false;
+  doubleSided: boolean = materialDefault('doubleSided');
 
   // Textures
   /** Base color texture (sRGB), multiplied with `baseColor`. Default `undefined`. */
@@ -149,15 +148,15 @@ export default class OpenPBRMaterial {
   /** Standalone opacity texture sampled from its green channel, matching Three.js. Default `undefined`. */
   alphaMap?: Texture;
   /** Opacity interpretation; `auto` derives the mode from the alpha inputs. Default `auto`. */
-  alphaMode: MaterialAlphaMode = 'auto';
+  alphaMode: MaterialAlphaMode = materialDefault('alphaMode');
   /** Alpha-test threshold for `mask` mode. Default `0`. */
-  alphaCutoff = 0;
+  alphaCutoff: number = materialDefault('alphaCutoff');
   /** Emission texture multiplied with `emissionColor`. Default `undefined`. */
   emissiveMap?: Texture;
   /** Tangent-space normal map. */
   normalMap?: Texture;
   /** Normal map strength per axis. Default `[1, 1]`. */
-  normalScale: Vec2 = [1, 1];
+  normalScale: Vec2 = materialDefault('normalScale');
   /** glTF-compatible B=metalness, G=specular roughness texture. Default `undefined`. */
   metallicRoughnessMap?: Texture;
   /** Standalone roughness texture sampled from its green channel. Default `undefined`. */
@@ -174,31 +173,31 @@ export default class OpenPBRMaterial {
    * Invisible ground that only receives shadows, composited over the
    * background. Default `false`.
    */
-  shadowCatcher = false;
+  shadowCatcher: boolean = materialDefault('shadowCatcher');
   /** Displays emission without scattering or illuminating other surfaces. Default `false`. */
-  unlit = false;
+  unlit: boolean = materialDefault('unlit');
   /** Radius of rounded-edge shading (shader bevel) in scene units. `0` disables it. Default `0`. */
-  bevelSize = 0;
+  bevelSize: number = materialDefault('bevelSize');
   /** How map alpha is used: ignored, opacity or transmission. Default `opaque`. */
-  mapAlphaUsage: 'opaque' | 'alpha' | 'transmission' = 'opaque';
+  mapAlphaUsage: 'opaque' | 'alpha' | 'transmission' = materialDefault('mapAlphaUsage');
   /** Procedural UV projection for textures without (good) UVs. Default `none`. */
-  uvProjection: UVProjection = 'none';
+  uvProjection: UVProjection = materialDefault('uvProjection');
   /** UV scale used with `uvProjection`. Default `[1, 1]`. */
-  uvProjectionScale: Vec2 = [1, 1];
+  uvProjectionScale: Vec2 = materialDefault('uvProjectionScale');
 
   // Displacement
   /** Height texture (red channel) for displacement. Default `undefined`. */
   displacementMap?: Texture;
   /** Procedural UV projection for the displacement map. Default `none`. */
-  displacementUvProjection: UVProjection = 'none';
+  displacementUvProjection: UVProjection = materialDefault('displacementUvProjection');
   /** UV scale used with `displacementUvProjection`. Default `1`. */
-  displacementUvProjectionScale = 1;
+  displacementUvProjectionScale: number = materialDefault('displacementUvProjectionScale');
   /** Height multiplier in mesh-local coordinate units. Default `0.1`. */
-  displacementScale = 0.1;
+  displacementScale: number = materialDefault('displacementScale');
   /** Ray-marching step for projective displacement. Default `0.01`. */
-  displacementStepSize = 0.01;
+  displacementStepSize: number = materialDefault('displacementStepSize');
   /** Reuses the displacement height map as a shading-only bump map. Default `0`. */
-  displacementBumpStrength = 0;
+  displacementBumpStrength: number = materialDefault('displacementBumpStrength');
 
 }
 export const materialAlphaModeConstants = {
@@ -224,58 +223,7 @@ export function resolveMaterialAlphaMode(
   return 'opaque';
 }
 
-export const materialKeys = [
-  'baseWeight', 'baseColor', 'baseDiffuseRoughness', 'baseMetalness',
-  'specularWeight', 'specularColor', 'specularRoughness', 'specularIor',
-  'specularAnisotropy', 'transmissionWeight', 'transmissionColor',
-  'transmissionDepth', 'transmissionScatter',
-  'transmissionScatterAnisotropy', 'transmissionDispersionScale',
-  'transmissionDispersionAbbeNumber', 'subsurfaceWeight', 'subsurfaceColor',
-  'subsurfaceRadius', 'subsurfaceRadiusScale', 'subsurfaceAnisotropy',
-  'fuzzWeight', 'fuzzColor', 'fuzzRoughness', 'coatWeight', 'coatColor',
-  'coatRoughness', 'coatAnisotropy', 'coatIor', 'coatDarkening',
-  'thinFilmWeight', 'thinFilmThickness', 'thinFilmIor', 'emissionColor',
-  'emissionLuminance', 'opacity', 'thinWalled', 'doubleSided', 'map', 'alphaMap',
-  'alphaMode', 'alphaCutoff', 'emissiveMap',
-  'normalMap', 'normalScale', 'metallicRoughnessMap', 'roughnessMap',
-  'metalnessMap', 'transmissionMap', 'thinFilmMap',
-  'shadowCatcher', 'unlit', 'bevelSize', 'mapAlphaUsage', 'uvProjection', 'uvProjectionScale',
-  'displacementUvProjection', 'displacementUvProjectionScale', 'displacementMap',
-  'displacementScale', 'displacementStepSize', 'displacementBumpStrength',
-] as const satisfies readonly (keyof OpenPBRMaterial)[];
+export { materialKeys, materialTextureKeys, materialGeometryKeys, materialParamKeys, getMaterialHashKey, resetMaterialTextureId } from './openPbrSchema.js';
 
 /** Optional material properties; defaults are documented on OpenPBRMaterial. */
-export type OpenPBRMaterialParams = Partial<Pick<OpenPBRMaterial, typeof materialKeys[number]>>;
-
-export const materialTextureKeys = [
-  'map', 'alphaMap', 'emissiveMap', 'normalMap', 'metallicRoughnessMap', 'roughnessMap', 'metalnessMap', 'transmissionMap', 'thinFilmMap', 'displacementMap', 'displacementBumpStrength'
-] as const satisfies readonly (keyof OpenPBRMaterial)[];
-
-export const materialGeometryKeys = [
-  'displacementUvProjection', 'displacementUvProjectionScale', 'displacementScale', 'displacementStepSize'
-] as const satisfies readonly (keyof OpenPBRMaterial)[];
-
-export const materialParamKeys = [
-  'baseWeight', 'baseColor', 'baseDiffuseRoughness', 'baseMetalness', 'specularWeight', 'specularColor', 'specularRoughness', 'specularIor', 'specularAnisotropy', 'transmissionWeight', 'transmissionColor', 'transmissionDepth', 'transmissionScatter', 'transmissionScatterAnisotropy', 'transmissionDispersionScale', 'transmissionDispersionAbbeNumber', 'subsurfaceWeight', 'subsurfaceColor', 'subsurfaceRadius', 'subsurfaceRadiusScale', 'subsurfaceAnisotropy', 'fuzzWeight', 'fuzzColor', 'fuzzRoughness', 'coatWeight', 'coatColor', 'coatRoughness', 'coatAnisotropy', 'coatIor', 'coatDarkening', 'thinFilmWeight', 'thinFilmThickness', 'thinFilmIor', 'emissionColor', 'emissionLuminance', 'opacity', 'thinWalled', 'doubleSided', 'alphaMode', 'alphaCutoff', 'normalScale', 'shadowCatcher', 'unlit', 'bevelSize', 'mapAlphaUsage', 'uvProjection', 'uvProjectionScale'
-] as const satisfies readonly (keyof OpenPBRMaterial)[];
-
-let textureId = 1;
-const textureWeakMap = new WeakMap<Texture, number>();
-
-export function resetMaterialTextureId() { textureId = 1; }
-
-export function getMaterialHashKey(material: OpenPBRMaterial) {
-  return materialKeys.map((key) => {
-    const value = material[key];
-    if (value == null) return '$';
-    if (value instanceof Texture) {
-      if (!textureWeakMap.has(value)) textureWeakMap.set(value, textureId++);
-      return `${textureWeakMap.get(value)!}@${value.version}`;
-    }
-    if (typeof value === 'string') return value;
-    if (typeof value === 'object' && 'length' in value) {
-      return Array.from(value as ArrayLike<number>).join('_');
-    }
-    return value;
-  }).join('_');
-}
+export type OpenPBRMaterialParams = Partial<Pick<OpenPBRMaterial, Exclude<keyof OpenPBRMaterial, 'version' | 'markUpdated'>>>;
