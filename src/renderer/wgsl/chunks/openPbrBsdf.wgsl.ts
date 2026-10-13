@@ -206,10 +206,10 @@ fn openpbr_ideal_average_bilinear(exactIor: f32, exactAlpha: f32) -> f32 {
     let alpha1 = min(alpha0 + 1, 31);
     let iorMix = iorIndex - f32(ior0);
     let alphaMix = alphaIndex - f32(alpha0);
-    let v00 = openpbr_energy_fetch(0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior0 * 32 + alpha0);
-    let v01 = openpbr_energy_fetch(0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior0 * 32 + alpha1);
-    let v10 = openpbr_energy_fetch(0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior1 * 32 + alpha0);
-    let v11 = openpbr_energy_fetch(0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior1 * 32 + alpha1);
+    let v00 = openpbr_energy_fetch(alpha0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior0);
+    let v01 = openpbr_energy_fetch(alpha1, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior0);
+    let v10 = openpbr_energy_fetch(alpha0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior1);
+    let v11 = openpbr_energy_fetch(alpha1, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior1);
     return mix(
         mix(v00, v10, iorMix),
         mix(v01, v11, iorMix),
@@ -265,8 +265,8 @@ fn openpbr_metal_energy_complement(alpha: f32, cosine: f32) -> f32 {
 fn openpbr_metal_average_energy_complement(alpha: f32) -> f32 {
     let index = clamp(sqrt(alpha) * 31.0, 0.0, 31.0);
     let i0 = i32(floor(index));
-    return mix(openpbr_energy_fetch(0, ${OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW} + i0),
-        openpbr_energy_fetch(0, ${OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW} + min(i0 + 1, 31)), fract(index));
+    return mix(openpbr_energy_fetch(i0, ${OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW}),
+        openpbr_energy_fetch(min(i0 + 1, 31), ${OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW}), fract(index));
 }
 
 fn openpbr_extrapolate_energy_complement(value: f32, ior: f32) -> f32 {

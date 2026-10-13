@@ -14,7 +14,13 @@ import {
 
 describe('OpenPBR opaque dielectric energy LUT', () => {
   it('preserves every decoded float from the original row-normalized tables', () => {
-    const data = getOpenPbrEnergyLutData().subarray(0, 1120 * 32);
+    const compact = getOpenPbrEnergyLutData();
+    const data = new Float32Array(1120 * 32);
+    data.set(compact.subarray(0, OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW * 32));
+    for (let r = 0; r < 32; r++) {
+      data.fill(compact[OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW * 32 + r]!,
+        (1088 + r) * 32, (1089 + r) * 32);
+    }
     const bytes = new Uint8Array(data.length * 4);
     const view = new DataView(bytes.buffer);
     data.forEach((value, index) => view.setFloat32(index * 4, value, true));
@@ -92,9 +98,9 @@ describe('ideal-metal multiple-scattering table contract', () => {
   it('preserves tiny average losses and their cosine-weighted normalization', () => {
     const data = getOpenPbrEnergyLutData();
     // These small u16 values would disappear if all 32 averages shared one
-    // normalized row. Degenerate rows preserve them and keep the divisor finite.
+    // normalized row. Exact u16 storage keeps the divisor finite.
     for (const [r, value] of [[2, 7], [3, 30], [31, 40831]]) {
-      expect(data[(OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW + r!) * 32]!).toBeCloseTo(value! / 65535, 7);
+      expect(data[OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW * 32 + r!]!).toBeCloseTo(value! / 65535, 7);
     }
     for (const roughness of [.3, .6, .9]) {
       let average = 0;
@@ -104,8 +110,8 @@ describe('ideal-metal multiple-scattering table contract', () => {
         average += 2 * cosine * metalLoss(roughness, cosine) / n;
       }
       const index = roughness * 31, i0 = Math.floor(index);
-      const a = data[(OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW + i0) * 32]!;
-      const b = data[(OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW + i0 + 1) * 32]!;
+      const a = data[OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW * 32 + i0]!;
+      const b = data[OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW * 32 + i0 + 1]!;
       expect(Math.abs(average - (a + (b - a) * (index - i0)))).toBeLessThan(.002);
     }
   });
@@ -163,12 +169,11 @@ describe('ideal-dielectric multiple-scattering table contract', () => {
     expect(Math.abs(idealDielectricSingleEnergy(eta!, roughness!, cosine!) + idealDielectricLoss(eta!, roughness!, cosine!) - 1)).toBeLessThan(.004);
   });
 
-  it('preserves every u16 average as a degenerate row and its cosine-weighted meaning', () => {
+  it('preserves compact u16 averages and their cosine-weighted meaning', () => {
     const data = getOpenPbrEnergyLutData();
     for (const iorIndex of [0, 5, 10, 20, 25, 31]) for (const roughnessIndex of [10, 19, 31]) {
-      const row = OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW + iorIndex * 32 + roughnessIndex;
-      const average = data[row * 32]!;
-      expect(Array.from(data.subarray(row * 32, (row + 1) * 32))).toEqual(Array(32).fill(average));
+      const offset = (OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW + iorIndex) * 32 + roughnessIndex;
+      const average = data[offset]!;
       expect(Math.abs(average * 65535 - Math.round(average * 65535))).toBeLessThan(.003);
       const eta = iorIndex < 16 ? 1 / (1 + (15 - iorIndex) / 10) : 1 + (iorIndex - 16) / 10;
       let integral = 0;
@@ -188,5 +193,18 @@ describe('ideal-dielectric multiple-scattering table contract', () => {
     expect(Math.max(...ratios)).toBeLessThanOrEqual(1);
     // Upstream even retains a small tabulation residual at exactly eta=1.
     expect(ratios[16 * 32 + 31]).toBeCloseTo(142 / 65535, 7);
+  });
+});
+
+describe('compact average storage Float32 contract', () => {
+  it.each([
+    [OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW, 32, 'edb15276a4de01a89a4b9a881d8e5cfb8d13322f486f59c545bce7b000a1bbd9'],
+    [OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW, 1024, '26bb5452686e4a99d5c15c0bcf622a85bc6691d33b160bd340d4bb1124951cf3']
+  ] as const)('preserves every pre-compact average bit (row=%s)', (row, length, hash) => {
+    const values = getOpenPbrEnergyLutData().subarray(row * 32, row * 32 + length);
+    const bytes = new Uint8Array(length * 4);
+    const view = new DataView(bytes.buffer);
+    values.forEach((v, i) => view.setFloat32(i * 4, v, true));
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(hash);
   });
 });

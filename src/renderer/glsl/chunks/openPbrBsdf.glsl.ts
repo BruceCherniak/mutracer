@@ -207,10 +207,10 @@ float openpbr_ideal_average_bilinear(float exactIor, float exactAlpha) {
     int alpha1 = min(alpha0 + 1, 31);
     float iorMix = iorIndex - float(ior0);
     float alphaMix = alphaIndex - float(alpha0);
-    float v00 = openpbr_energy_fetch(0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior0 * 32 + alpha0);
-    float v01 = openpbr_energy_fetch(0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior0 * 32 + alpha1);
-    float v10 = openpbr_energy_fetch(0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior1 * 32 + alpha0);
-    float v11 = openpbr_energy_fetch(0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior1 * 32 + alpha1);
+    float v00 = openpbr_energy_fetch(alpha0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior0);
+    float v01 = openpbr_energy_fetch(alpha1, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior0);
+    float v10 = openpbr_energy_fetch(alpha0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior1);
+    float v11 = openpbr_energy_fetch(alpha1, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior1);
     return mix(
         mix(v00, v10, iorMix),
         mix(v01, v11, iorMix),
@@ -265,8 +265,8 @@ float openpbr_metal_energy_complement(float alpha, float cosine) {
 float openpbr_metal_average_energy_complement(float alpha) {
     float index = clamp(sqrt(alpha) * 31.0, 0.0, 31.0);
     int i0 = int(floor(index));
-    return mix(openpbr_energy_fetch(0, ${OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW} + i0),
-        openpbr_energy_fetch(0, ${OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW} + min(i0 + 1, 31)), fract(index));
+    return mix(openpbr_energy_fetch(i0, ${OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW}),
+        openpbr_energy_fetch(min(i0 + 1, 31), ${OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW}), fract(index));
 }
 
 float openpbr_extrapolate_energy_complement(float value, float ior) {
