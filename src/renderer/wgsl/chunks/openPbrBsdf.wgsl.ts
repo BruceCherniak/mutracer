@@ -41,6 +41,7 @@ struct OpenPbrPreparedBsdf {
     transmissionReflectionIor: f32,
     specularAlpha: f32,
     diffuseSpecularEnergyCompensation: f32,
+    coatBaseScale: vec3f,
 
     fuzzWeight: f32,
     coatWeight: f32,
@@ -646,6 +647,70 @@ fn openpbr_normalize_probabilities(prepared: ptr<function, OpenPbrPreparedBsdf>)
     (*prepared).subsurfaceProbability *= inverseTotal;
 }
 
+// Adapted from Adobe c91aad1 impl/openpbr_lobe_utils.h and
+// impl/openpbr_bsdf.h::openpbr_prepare_lobes (Apache-2.0).
+fn openpbr_average_fresnel(eta: f32) -> f32 {
+    if (abs(eta - 1.0) < 1e-6) { return 0.0; }
+    if (eta > 1.0) { return (eta - 1.0) / (4.08567 + 1.00071 * eta); }
+    return 0.997118 + 0.1014 * eta - 0.965241 * eta * eta - 0.130607 * eta * eta * eta;
+}
+
+fn openpbr_metal_average_fresnel(f0: vec3f, tint: vec3f) -> vec3f {
+    let edgeCosine = 1.0 / 7.0;
+    let edgeFresnel = mix(f0, vec3f(1.0), sampling_schlick_fifth_power(edgeCosine));
+    let b = edgeFresnel * (vec3f(1.0) - tint) / (edgeCosine * pow(1.0 - edgeCosine, 6.0));
+    return clamp(f0 + (vec3f(1.0) - f0) / 21.0 - b / 126.0, vec3f(0.0), vec3f(1.0));
+}
+
+// Adobe openpbr_coating_lobe.h: one passage, using the refracted cosine.
+// Partial coverage is mixed separately for each passage, as in the reference.
+fn openpbr_coat_passage(material: OpenPbrResolvedMaterial, cosine: f32) -> vec3f {
+    if (cosine <= 0.0) { return vec3f(1.0); }
+    let refractedCosine = sqrt(max(0.0, 1.0 - (1.0 - cosine * cosine) / (material.coatIor * material.coatIor)));
+    let passage = pow(max(material.coatColor, vec3f(0.0)), vec3f(0.5 / max(refractedCosine, 1e-5)));
+    return mix(vec3f(1.0), passage, material.coatWeight);
+}
+
+fn openpbr_coat_energy(material: OpenPbrResolvedMaterial, cosine: f32) -> f32 {
+    if (material.coatRoughness <= ROUGHNESS_MIN) {
+        return openpbr_dielectric_fresnel(cosine, 1.0 / material.coatIor);
+    }
+    // The opaque-dielectric table is the complement of coat directional albedo.
+    // Adobe uses the original isotropic alpha (r^2) even for anisotropic GGX.
+    return clamp(1.0 - openpbr_opaque_energy_complement(material.coatIor,
+        material.coatRoughness * material.coatRoughness, cosine), 0.0, 1.0);
+}
+
+fn openpbr_coat_darkening(prepared: OpenPbrPreparedBsdf) -> vec3f {
+    let material = prepared.material;
+    let dielectric = 1.0 - material.baseMetalness;
+    let opaque = dielectric * (1.0 - material.transmissionWeight) * (1.0 - material.subsurfaceWeight);
+    let sss = dielectric * (1.0 - material.transmissionWeight) * material.subsurfaceWeight;
+    let trans = dielectric * material.transmissionWeight;
+    let opaqueSpecularity = openpbr_average_fresnel(prepared.specularEtaTOverEtaI);
+    let transSpecularity = openpbr_average_fresnel(1.0 / prepared.transmissionReflectionIor);
+    let specularity = clamp(opaque * opaqueSpecularity + (sss + trans) * transSpecularity + material.baseMetalness, 0.0, 1.0);
+    let effectiveRoughness = mix(1.0, material.specularRoughness, specularity);
+    let ks = openpbr_average_fresnel(material.coatIor);
+    let kr = 1.0 - (1.0 - ks) / (material.coatIor * material.coatIor);
+    let k = mix(ks, kr, effectiveRoughness);
+    let eb = material.baseMetalness * material.specularWeight * openpbr_metal_average_fresnel(material.baseWeight * material.baseColor, material.specularColor)
+        + opaque * mix(material.baseWeight * material.baseColor, vec3f(1.0), opaqueSpecularity)
+        + sss * material.subsurfaceColor + vec3f(trans);
+    let delta = vec3f(1.0 - k) / max(vec3f(1.0) - eb * k, vec3f(1e-6));
+    return mix(vec3f(1.0), delta, material.coatWeight * material.coatDarkening);
+}
+
+fn openpbr_coat_base_scale(prepared: OpenPbrPreparedBsdf, lightCosine: f32) -> vec3f {
+    if (prepared.material.coatWeight <= 0.0) { return vec3f(1.0); }
+    if (prepared.material.inside) {
+        // Inside only outgoing transmission crosses the coat; no coat reflection.
+        return openpbr_coat_passage(prepared.material, -lightCosine);
+    }
+    // Default reference mode applies energy partition on the view side only.
+    return prepared.coatBaseScale * openpbr_coat_passage(prepared.material, lightCosine);
+}
+
 fn openpbr_prepare(
     tangent: vec3f,
     material: OpenPbrResolvedMaterial,
@@ -667,6 +732,7 @@ fn openpbr_prepare(
         * (1.0 - material.transmissionWeight);
     prepared.fuzzWeight = material.fuzzWeight;
     prepared.coatWeight = material.coatWeight;
+    if (material.inside) { prepared.coatWeight = 0.0; }
     prepared.metalWeight = material.baseMetalness;
     prepared.specularWeight = dielectricBaseWeight;
     prepared.transmissionWeight = dielectricBaseWeight
@@ -753,8 +819,14 @@ fn openpbr_prepare(
             viewCosine,
             material.fuzzRoughness
         ), 0.02);
-    prepared.coatProbability = prepared.coatWeight
-        * sampling_dielectric_fresnel(viewCosine, 1.0 / material.coatIor);
+    prepared.coatProbability = 0.0;
+    prepared.coatBaseScale = vec3f(1.0);
+    if (material.coatWeight > 0.0 && !material.inside) {
+        let coatEnergy = openpbr_coat_energy(material, viewCosine);
+        prepared.coatProbability = prepared.coatWeight * coatEnergy;
+        prepared.coatBaseScale = openpbr_coat_passage(material, viewCosine)
+            * (1.0 - prepared.coatWeight * coatEnergy) * openpbr_coat_darkening(prepared);
+    }
     prepared.metalProbability = prepared.metalWeight
         * openpbr_luminance(metalFresnelEstimate);
     prepared.specularProbability = prepared.specularWeight
@@ -769,6 +841,14 @@ fn openpbr_prepare(
         * (1.0 - transmissionFresnel)
         * openpbr_luminance(material.subsurfaceColor)
         * prepared.diffuseSpecularEnergyCompensation;
+    if (material.coatWeight > 0.0 && !material.inside) {
+        let baseScale = max(max(prepared.coatBaseScale.x, prepared.coatBaseScale.y), prepared.coatBaseScale.z);
+        prepared.metalProbability *= baseScale;
+        prepared.specularProbability *= baseScale;
+        prepared.transmissionProbability *= baseScale;
+        prepared.diffuseProbability *= baseScale;
+        prepared.subsurfaceProbability *= baseScale;
+    }
     openpbr_normalize_probabilities(&prepared);
     return prepared;
 }
@@ -994,23 +1074,19 @@ fn openpbr_eval_prepared_lobe(
         }
     }
 
+    if (material.coatWeight > 0.0) {
+        response *= openpbr_coat_base_scale(prepared, lightLocal.z);
+    }
+
     if (reflection && prepared.coatWeight > 0.0) {
-        let coatFresnel = vec3f(sampling_dielectric_fresnel(
+        let coatFresnel = vec3f(openpbr_dielectric_fresnel(
             viewHalf,
             1.0 / material.coatIor
-        )) * material.coatColor;
+        ));
         var coatMaterial = material;
         let coatAlpha = openpbr_roughness_to_alpha(material.coatRoughness, material.coatAnisotropy);
         coatMaterial.alphaX = coatAlpha.x;
         coatMaterial.alphaY = coatAlpha.y;
-        var attenuation = vec3f(1.0)
-            - coatFresnel * prepared.coatWeight;
-        attenuation *= mix(
-            vec3f(1.0),
-            material.coatColor,
-            prepared.coatWeight * material.coatDarkening
-        );
-        response *= attenuation;
         if (allowCoat) {
             response += prepared.coatWeight * openpbr_eval_microfacet_reflection(
                 coatMaterial,
@@ -1254,7 +1330,8 @@ fn openpbr_sample_prepared(
             prepared.basis,
             -prepared.viewLocal
         );
-        let nullBoundaryTint = openpbr_transmission_tint(prepared.material);
+        let nullBoundaryTint = openpbr_transmission_tint(prepared.material)
+            * openpbr_coat_base_scale(prepared, -prepared.viewLocal.z);
         *pdf = 1.0;
         *marginalPdf = 1.0;
         *fullResponse = nullBoundaryTint;

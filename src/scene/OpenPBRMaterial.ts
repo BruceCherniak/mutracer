@@ -111,7 +111,7 @@ export default class OpenPBRMaterial {
   // Coat
   /** Clear coat weight. Default `0`. */
   coatWeight: number = materialDefault('coatWeight');
-  /** Coat absorption color. Default `[1, 1, 1]`. */
+  /** Squared coat transmittance at normal incidence; colors the base, not coat reflection. Default `[1, 1, 1]`. */
   coatColor: ColorRGB = materialDefault('coatColor');
   /** Coat roughness. Default `0`. */
   coatRoughness: number = materialDefault('coatRoughness');
@@ -119,7 +119,7 @@ export default class OpenPBRMaterial {
   coatAnisotropy: number = materialDefault('coatAnisotropy');
   /** Coat index of refraction. Default `1.6`. */
   coatIor: number = materialDefault('coatIor');
-  /** How much the coat darkens and saturates the base. Default `1`. */
+  /** Internal-reflection darkening: 0 compensates darkening, 1 is physical; absorption remains at 0. Default `1`. */
   coatDarkening: number = materialDefault('coatDarkening');
 
   // Thin film

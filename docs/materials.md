@@ -65,6 +65,15 @@ Both layers use the geometry tangent; a separate coat tangent is not available.
 A rough coat broadens the underlying metal, dielectric reflection and transmission
 using `mix(rB, min(1, rB^4 + 2*rC^4)^0.25, coatWeight)` before the GGX mapping.
 
+`coatColor` is the squared transmittance at normal incidence. Each passage
+through the coat applies `sqrt(coatColor)` raised to the inverse refracted
+cosine. Coat reflection stays uncolored; reflection from the base crosses the
+coat twice, and transmission crosses it once. `coatDarkening` controls the
+extra darkening from internal reflections, while absorption remains active at
+zero. The base is attenuated by the coat directional albedo on the view side
+and by an internal-reflection factor estimated from the base slab albedos.
+Partial coat coverage is mixed independently for each passage.
+
 The base reflection beneath a coat uses the surrounding IOR
 `mix(1, coatIor, coatWeight)`. `specularWeight` adjusts the base IOR relative
 to that medium; refraction uses the resulting absolute base IOR relative to air.
