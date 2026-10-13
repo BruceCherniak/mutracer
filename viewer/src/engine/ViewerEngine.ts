@@ -5,7 +5,7 @@ import {
   THREESync, type DisplaySettings,
   fromTHREECamera,
 } from '@meimu/mutracer';
-import { autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
+import { DEFAULT_SETTINGS, autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
 import { Environment, createSky, loadHDR, parseHDR } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
@@ -22,6 +22,7 @@ import { groundModel } from './modelGrounding';
 import { DENOISER_FIELDS, getDenoiserOptions } from './denoiserSettings';
 import { buildStudioRig, createStudioAmbient, findStudioPreset } from './studio';
 import { FOCUS_AREA_SIZE, focusPull, guessMetersPerUnit, pickFocusDepth } from './areaFocus';
+import { formatForAgent, generateCode } from './codeSnippet';
 
 export interface ExportOptions {
   width: number;
@@ -1169,6 +1170,59 @@ export class ViewerEngine {
     this.exportAbort?.abort();
   }
 
+  /** The current scene and settings as a standalone MuTracer program. */
+  code() {
+    const s = this.settings, state = get();
+    const camera = this.activeCamera();
+    camera.updateWorldMatrix(true, false);
+    const position = new THREE.Vector3().setFromMatrixPosition(camera.matrixWorld);
+    const focusDistance = this.pull?.to ?? s.focusDistance;
+    // Model cameras have no orbit target; aim at the focus plane.
+    const target = s.cameraIndex < 0 ? this.controls.target.clone()
+      : camera.getWorldDirection(new THREE.Vector3()).multiplyScalar(focusDistance).add(position);
+    const preset = state.model?.presetId ? MODEL_PRESETS.find((p) => p.id === state.model!.presetId) : undefined;
+    const env = ENVIRONMENT_PRESETS.find((p) => p.id === s.envId);
+    const grounded = autoGroundedSkybox(state.modelRadius, s.groundedHeight);
+    const anim = state.animation;
+    return generateCode({
+      settings: s,
+      webgpu: this.engine.backend === 'webgpu',
+      modelUrl: preset ? preset.url : state.model?.sourceUrl ?? null,
+      environmentUrl: env ? environmentUrl(env, s.envResolution) : null,
+      camera: {
+        projection: isOrthographic(camera) ? 'orthographic' : 'perspective',
+        fov: isOrthographic(camera) ? 0 : camera.fov,
+        halfHeight: isOrthographic(camera) ? (camera.top - camera.bottom) / 2 : 0,
+        zoom: camera.zoom, near: camera.near, far: camera.far,
+        position: position.toArray(), target: target.toArray(), up: camera.up.toArray()
+      },
+      focusDistance,
+      metersPerUnit: s.metersPerUnit ?? state.lens.guessedMetersPerUnit,
+      groundSize: this.ground.scale.x,
+      grounded: { height: grounded.height, radius: s.groundedRadius ?? grounded.radius },
+      studioLights: (this.studioRig.children as THREE.RectAreaLight[]).map((light) => ({
+        name: light.name, intensity: light.intensity, width: light.width, height: light.height,
+        position: light.position.toArray(), quaternion: light.quaternion.toArray() as [number, number, number, number]
+      })),
+      animation: anim?.playing ? { clip: anim.clip, speed: anim.speed, loop: anim.loop } : null
+    });
+  }
+
+  /** {@link code} as Markdown with the viewer state, for coding agents. */
+  agentMarkdown() {
+    const s = this.settings, model = get().model;
+    // The view fit rewrites the focus distance; it only matters with depth of field.
+    const changed = Object.fromEntries((Object.keys(s) as (keyof Settings)[])
+      .filter((key) => s[key] !== DEFAULT_SETTINGS[key] && !(key === 'focusDistance' && !(s.fStop > 0)))
+      .map((key) => [key, s[key]]));
+    return formatForAgent(this.code(), {
+      modelName: model?.name ?? null,
+      credit: model?.credit ?? null,
+      viewerUrl: model?.presetId ? location.href : null,
+      changedSettings: changed
+    });
+  }
+
   // ------------------------------------------------------------ render loop
 
   private resize() {
@@ -1282,6 +1336,14 @@ let current: ViewerEngine | null = null;
 /** The engine of the mounted viewport, for UI actions. */
 export const getEngine = () => current;
 export const setEngine = (engine: ViewerEngine | null) => { current = engine; };
+
+declare global {
+  interface Window {
+    /** Scripting entry point for coding agents and the console. */
+    mutracerViewer?: { code(): string | null; agentMarkdown(): string | null };
+  }
+}
+window.mutracerViewer = { code: () => current?.code() ?? null, agentMarkdown: () => current?.agentMarkdown() ?? null };
 
 /** Sets the frame aspect, keeping an orthographic camera's height and center. */
 function setAspect(camera: ViewCamera, aspect: number) {

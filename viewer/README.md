@@ -10,6 +10,17 @@ its displayed appearance and pixel size without restarting the render. Render PN
 instead renders a new image at Viewport, 1080p, 2K (2560 × 1440), 4K, or Square
 resolution using the selected sample count and background settings.
 
+The Code button next to Export shows the least `@meimu/mutracer` + Three.js
+code that renders the current view: model, lighting, background, ground,
+camera, and the render, denoiser and display settings that differ from the
+library defaults. Material edits and hidden objects are not included. A header
+comment states the library version, backend, omissions and placeholders, so
+the code can be handed to a coding agent as is. Scripts and agents driving the
+viewer in a browser can read the same code with `window.mutracerViewer.code()`.
+Copy for agent (or `window.mutracerViewer.agentMarkdown()`) wraps the code in
+Markdown with the model, a viewer link, the changed viewer settings and links
+to the usage guide.
+
 ```bash
 npm run viewer          # http://localhost:3012
 npm run build:viewer    # static site in dist-viewer/
@@ -35,6 +46,7 @@ src/
   engine/loadModel.ts      GLTFLoader for URLs, files and dropped folders;
                            the procedural material-sphere scene
   engine/environment.ts    Procedural sky, HDR loading, baked intensity/rotation
+  engine/codeSnippet.ts    Standalone program generated from the current view
   engine/studio.ts         Studio lighting presets: rect-light rigs scaled to
                            the model, and their dim ambient fill
   engine/materialParams.ts Material panel schema, presets, color conversion

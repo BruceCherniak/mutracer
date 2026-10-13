@@ -3,7 +3,7 @@ import {
   Button, Dialog, DialogTrigger, Heading, Menu, MenuItem, MenuTrigger, Modal, ModalOverlay, Popover, Separator
 } from 'react-aria-components';
 import {
-  ChevronDown, Download, FileUp, Folder, Globe, HelpCircle, Link, PanelLeft, PanelRight, Redo2, RotateCcw, Sparkles, Undo2, Upload, X
+  ChevronDown, Code2, Download, FileUp, Folder, Globe, HelpCircle, Link, PanelLeft, PanelRight, Redo2, RotateCcw, Sparkles, Undo2, Upload, X
 } from 'lucide-react';
 import { setUi, useViewer } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
@@ -43,6 +43,9 @@ export function Toolbar() {
           </svg>
         </a>
         <HelpButton />
+        <button className="btn" aria-label="Show code" title="Show code" onClick={() => setUi({ codeOpen: true })}>
+          <Code2 size={15} /><span className="hide-xs">Code</span>
+        </button>
         <button className="btn btn--primary" aria-label="Export image" onClick={() => setUi({ exportOpen: true })}>
           <Download size={15} /><span className="hide-xs">Export</span>
         </button>

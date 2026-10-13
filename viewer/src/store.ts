@@ -114,7 +114,7 @@ export const DEFAULT_SETTINGS: Settings = {
   clamping: 0,
   denoise: true,
   denoiseModel: 'standard',
-  denoiseWhileConverging: false,
+  denoiseWhileConverging: true,
   jnlmStrength: DEFAULT_JNLM_OPTIONS.strength,
   jnlmSearchRadius: DEFAULT_JNLM_OPTIONS.searchRadius,
   jnlmPatchRadius: DEFAULT_JNLM_OPTIONS.patchRadius,
@@ -261,12 +261,12 @@ export interface ViewerState {
   focusArea: FocusAreaState;
   lens: LensInfo;
   paused: boolean;
-  ui: { tab: InspectorTab; left: boolean; right: boolean; hidden: boolean; focusFrame: boolean; exportOpen: boolean; helpOpen: boolean; mobileTab: InspectorTab | 'scene' };
+  ui: { tab: InspectorTab; left: boolean; right: boolean; hidden: boolean; focusFrame: boolean; exportOpen: boolean; codeOpen: boolean; helpOpen: boolean; mobileTab: InspectorTab | 'scene' };
   export: { stage: 'pilot' | 'final' | 'denoising'; samples: number; target: number } | null;
 }
 
 const UI_KEY = 'mutracer-viewer:ui';
-const RENDER_KEY = 'mutracer-viewer:render:v5';
+const RENDER_KEY = 'mutracer-viewer:render:v6';
 const RENDER_FIELDS: (keyof Settings)[] = [
   'envResolution', 'maxSamples', 'bounces', 'resolutionScale', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
   'jnlmStrength', 'jnlmSearchRadius', 'jnlmPatchRadius', 'jnlmAlbedoBandwidth', 'jnlmNormalBandwidth', 'jnlmIterations',
@@ -384,6 +384,7 @@ export const useViewer = create<ViewerState>(() => ({
     hidden: false,
     focusFrame: storedUi.focusFrame !== false,
     exportOpen: false,
+    codeOpen: false,
     helpOpen: false,
     mobileTab: storedUi.tab ?? 'material'
   },

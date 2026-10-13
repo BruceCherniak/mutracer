@@ -8,6 +8,7 @@ import { SceneTree } from './components/SceneTree';
 import { Viewport } from './components/Viewport';
 import { Inspector, InspectorRail, TABS } from './components/Inspector';
 import { ExportDialog } from './components/ExportDialog';
+import { CodeDialog } from './components/CodeDialog';
 
 const MOBILE_QUERY = '(max-width: 768px)';
 
@@ -83,6 +84,7 @@ export function App() {
         {mobile && !ui.hidden && <Inspector mobile />}
       </main>
       <ExportDialog />
+      <CodeDialog />
       <Toast />
     </div>
   );
