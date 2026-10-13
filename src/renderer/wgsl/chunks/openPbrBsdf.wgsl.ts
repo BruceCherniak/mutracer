@@ -372,6 +372,7 @@ fn openpbr_thin_film_reflectance_channel(
 
 
 // OpenPBR 1.1.1 Metal: analytic F82-tint correction to Schlick.
+// Saturation follows Adobe impl/openpbr_lobe_utils.h, openpbr_metal_schlick_with_f82_tint.
 fn openpbr_metal_fresnel(cosine: f32, f0: vec3f, tint: vec3f) -> vec3f {
     let schlick = mix(f0, vec3f(1.0), sampling_schlick_fifth_power(cosine));
     if (all(tint == vec3f(1.0))) { return schlick; }
@@ -381,7 +382,7 @@ fn openpbr_metal_fresnel(cosine: f32, f0: vec3f, tint: vec3f) -> vec3f {
     let complement = 1.0 - cosine;
     let correction = cosine * sampling_schlick_fifth_power(cosine) * complement
         / (edgeCosine * pow(edgeComplement, 6.0));
-    return schlick - correction * (edgeFresnel - tint * edgeFresnel);
+    return clamp(schlick - correction * (edgeFresnel - tint * edgeFresnel), vec3f(0.0), vec3f(1.0));
 }
 
 fn openpbr_metal_complex_ior(f0: f32, f82Tint: f32) -> vec2f {

@@ -403,6 +403,7 @@ vec3 openpbr_thin_film_dielectric_reflectance(
 }
 
 // OpenPBR 1.1.1 Metal: analytic F82-tint correction to Schlick.
+// Saturation follows Adobe impl/openpbr_lobe_utils.h, openpbr_metal_schlick_with_f82_tint.
 vec3 openpbr_metal_fresnel(float cosine, vec3 f0, vec3 tint) {
     vec3 schlick = mix(f0, vec3(1.0), sampling_schlick_fifth_power(cosine));
     if (all(equal(tint, vec3(1.0)))) { return schlick; }
@@ -412,7 +413,7 @@ vec3 openpbr_metal_fresnel(float cosine, vec3 f0, vec3 tint) {
     float complement = 1.0 - cosine;
     float correction = cosine * sampling_schlick_fifth_power(cosine) * complement
         / (edgeCosine * pow(edgeComplement, 6.0));
-    return schlick - correction * (edgeFresnel - tint * edgeFresnel);
+    return clamp(schlick - correction * (edgeFresnel - tint * edgeFresnel), vec3(0.0), vec3(1.0));
 }
 
 vec2 openpbr_metal_complex_ior(float f0, float f82Tint) {
