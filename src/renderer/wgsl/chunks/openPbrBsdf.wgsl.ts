@@ -530,6 +530,11 @@ fn openpbr_eval_microfacet_refraction(
 
     let lightHalf = dot(lightLocal, halfVector);
     let viewHalf = dot(viewLocal, halfVector);
+    // A refracting microfacet must face the view and the opposite side of the
+    // light. Backfacing configurations have no support in the VNDF proposal.
+    if (viewHalf <= 0.0 || lightHalf >= 0.0) {
+        return vec3f(0.0);
+    }
     let alpha = vec2f(material.alphaX, material.alphaY);
     let distribution = sampling_ggx_ndf(halfVector, alpha);
     let masking = sampling_ggx_smith_g1(viewLocal, alpha);

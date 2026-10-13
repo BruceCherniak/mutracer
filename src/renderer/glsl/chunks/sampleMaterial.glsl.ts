@@ -195,9 +195,16 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
     path.scatteringIsDelta = !prepared.material.thinWalled &&
       abs(prepared.material.relativeIor - 1.0) <= 1e-6 &&
       prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] >= 1.0 - 1e-6;
-    if (scatteringPdf > 0.0) {
-      path.beta *= f / scatteringPdf;
+    // Match WebGPU: rejected VNDF/refraction proposals have no continuation.
+    // Tracing their fallback direction with the incoming throughput invents
+    // light paths, especially after total internal reflection inside glass.
+    if (!(scatteringPdf > 0.0) || any(isnan(f)) || any(isinf(f)) ||
+        dot(scatterDir, scatterDir) < 0.5) {
+      path.scatteringPdf = 0.0;
+      path.abort = true;
+      return;
     }
+    path.beta *= f / scatteringPdf;
     crossedBoundary = !mat.thinWalled &&
       isNextRefraction;
     path.isNextRefraction = isNextRefraction;
