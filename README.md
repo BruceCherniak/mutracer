@@ -38,7 +38,8 @@ Install `three` to load glTF with `GLTFLoader` + `THREESync` or to use
 the Three.js helpers. The quick start below also uses `gl-matrix` for matrix math.
 
 The package is ESM with TypeScript declarations (`lib/main.js`). A UMD build
-with a `MuTracer` global is at `dist/mutracer.umd.js`.
+with a `MuTracer` global is at `dist/mutracer.umd.js`; deploy its `dist/assets/`
+alongside it. See [loading and deployment](./docs/getting-started.md#loading-and-deployment).
 
 ## Quick start
 

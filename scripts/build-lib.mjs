@@ -1,5 +1,6 @@
 import ts from 'typescript';
 import { createShaderFormattingTransformer } from './shader-formatting.mjs';
+import { loadShaderIdentifierMap } from './shader-identifiers.mjs';
 import {
   copyFileSync,
   mkdirSync,
@@ -23,7 +24,7 @@ const diagnostics = [...(config.error ? [config.error] : []), ...parsed.errors,
   ...ts.getPreEmitDiagnostics(program)];
 if (!diagnostics.some(diagnostic => diagnostic.category === ts.DiagnosticCategory.Error)) {
   diagnostics.push(...program.emit(undefined, undefined, undefined, undefined, {
-    before: [createShaderFormattingTransformer()]
+    before: [createShaderFormattingTransformer(loadShaderIdentifierMap())]
   }).diagnostics);
 }
 if (diagnostics.length) {

@@ -1,14 +1,19 @@
 import path from 'node:path';
 import { defineConfig } from 'vite';
 import { shaderFormattingPlugin } from './scripts/shader-formatting.mjs';
+import { oidnRuntimePlugin, tinyBvhAssetPlugin } from './scripts/standalone-assets.mjs';
 
 export default defineConfig(({ command }) => ({
-  plugins: [shaderFormattingPlugin()],
+  plugins: [shaderFormattingPlugin(), tinyBvhAssetPlugin(), oidnRuntimePlugin()],
+  worker: {
+    plugins: [tinyBvhAssetPlugin({ worker: true })],
+    rollupOptions: { output: { entryFileNames: 'assets/bvh.worker.js' } }
+  },
   // Keep the standalone library's Worker relative to the script on any host.
   base: './',
   experimental: {
     renderBuiltUrl(filename, { hostType }) {
-      if (hostType === 'js' && filename.includes('bvh.worker-')) {
+      if (hostType === 'js' && filename === 'assets/bvh.worker.js') {
         return { runtime: `new URL(${JSON.stringify(filename)}, __mutracerLibraryUrl).href` };
       }
       return { relative: true };

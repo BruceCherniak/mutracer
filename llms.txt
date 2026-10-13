@@ -39,7 +39,7 @@
 - OIDN: packaged `model` or custom `weightsUrl` through `render.denoiser`; `/oidn` only exports weight constants/URL helpers. OIDN and HDR output require WebGPU; [options](docs/denoising.md#custom-oidn-networks).
 - Call `engine.display.setSize` with drawing-buffer pixels ; camera aspect is automatic unless explicitly set.
 - Changing `bvhBuilder`, `bvhLayout` or `bvhSpatialSplits` automatically rebuilds existing static BVHs on the next engine.update().
-- In Vite development, add `optimizeDeps: { exclude: ['@meimu/mutracer'] }` so bundled assets load.
+- OIDN and TinyBVH load on demand; deploy UMD with its `dist/assets/`. In Vite development exclude `@meimu/mutracer` from prebundling; see [loading and bundlers](docs/getting-started.md#loading-and-deployment).
 
 ## Host integration
 
