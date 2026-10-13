@@ -1,12 +1,10 @@
 import path from 'node:path';
 import { defineConfig } from 'vite';
 import { shaderFormattingPlugin } from './scripts/shader-formatting.mjs';
-import { oidnRuntimePlugin, tinyBvhAssetPlugin } from './scripts/standalone-assets.mjs';
 
 export default defineConfig(({ command }) => ({
-  plugins: [shaderFormattingPlugin(), tinyBvhAssetPlugin(), oidnRuntimePlugin()],
+  plugins: [shaderFormattingPlugin()],
   worker: {
-    plugins: [tinyBvhAssetPlugin({ worker: true })],
     rollupOptions: { output: { entryFileNames: 'assets/bvh.worker.js' } }
   },
   // Keep the standalone library's Worker relative to the script on any host.
@@ -34,6 +32,8 @@ export default defineConfig(({ command }) => ({
   build: {
     rollupOptions: {
       output: {
+        // Keep OIDN in the UMD bundle; npm's ESM entry retains dynamic imports.
+        inlineDynamicImports: true,
         banner: "/*! MuTracer: third-party license texts are in THIRD_PARTY_NOTICES.md and LICENSES/. */\nvar __mutracerLibraryUrl = typeof document !== 'undefined' ? (document.currentScript && document.currentScript.src || document.baseURI) : (typeof location !== 'undefined' ? location.href : undefined);"
       }
     },

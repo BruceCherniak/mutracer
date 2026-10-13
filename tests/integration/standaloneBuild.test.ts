@@ -22,15 +22,16 @@ describe('standalone library builds', () => {
       .filter((output): output is OutputChunk => output.type === 'chunk');
     const context = createContext({
       URL, Float32Array, Uint32Array, Uint8Array, Int32Array, Uint16Array,
-      performance, console, location: {href: 'https://example.test/mutracer.umd.js'}
+      performance, console, location: new URL('https://example.test/mutracer.umd.js')
     });
     context.self = context;
     runInContext(chunks.find(chunk => chunk.fileName === 'mutracer.umd.js')!.code, context);
     api = context.MuTracer;
   }, 20_000);
 
-  it('ships one UMD entry with optional runtime assets', () => {
+  it('ships one UMD entry with OIDN included', () => {
     expect(chunks.map(chunk => chunk.fileName)).toEqual(['mutracer.umd.js']);
+    expect(chunks[0].dynamicImports).toEqual([]);
   });
 
 

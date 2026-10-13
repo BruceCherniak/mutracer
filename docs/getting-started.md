@@ -276,16 +276,11 @@ location, keeping this layout:
 mutracer.umd.js
 assets/
   bvh.worker.js
-  tinybvh.wasm
-  oidn-runtime.js
 ```
 
 For example, after copying it to `/vendor/mutracer/`, load
 `/vendor/mutracer/mutracer.umd.js` in a script tag to use the `MuTracer` global.
-Optional runtime URLs resolve relative to that script, even when the page is
-hosted in a different directory. The OIDN runtime is an ES module loaded with
-dynamic import. Serve it with a JavaScript MIME type and allow CORS when hosted
-on a different origin. The UMD build uses CDN-hosted model weights by default.
+The BVH worker URL resolves relative to the library script.
 
 Standalone asset names are stable. Deploy the script and assets together; use
 a versioned directory or package-version URL when caching them for a long time.
