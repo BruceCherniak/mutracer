@@ -125,10 +125,6 @@ export function createJNLMDenoiser(options: JNLMOptions = {}): JNLMDenoiser {
   return { type: 'jnlm', strength, shape, dispose() {} };
 }
 
-export function isJNLMDenoiser(denoiser: unknown): denoiser is JNLMDenoiser {
-  return (denoiser as JNLMDenoiser | undefined)?.type === 'jnlm';
-}
-
 /** Pixel spacing of filter pass `index` (from 0): 1, 2, 4, ... */
 export function jnlmPassDilation(index: number) {
   return 2 ** index;

@@ -1,3 +1,4 @@
+import {customDenoiseCompositionMain, customDenoiseCoverageMain} from './wgsl/customDenoise.wgsl.js';
 import { WGPUCanvasSurface } from './WGPUCanvasSurface.js';
 import { WGPUScratchBuffer } from './WGPUScratchBuffer.js';
 import { WGPUScratchTexture } from './WGPUScratchTexture.js';
@@ -32,56 +33,9 @@ import { vec3 } from '../math.js';
 import WGPUBloomPass from './WGPUBloomPass.js';
 import { WGPUComputePass } from './WGPUComputePass.js';
 import WGPUHDRPeakMeter from './WGPUHDRPeakMeter.js';
-import { isJNLMDenoiser, type JNLMDenoiser } from './jnlm.js';
+import { type JNLMDenoiser } from './jnlm.js';
+import type { DenoiserHandle, OIDNWeb, OIDNWebGPUData, OIDNWebGPUOutputData } from './denoiser.js';
 import { WGPUJNLMDenoisePass } from './WGPUJNLMDenoiser.js';
-
-export interface OIDNWebGPUData {
-  data: GPUBuffer | GPUTexture;
-  width: number;
-  height: number;
-}
-interface OIDNWebGPUOutputData {
-  data: GPUBuffer;
-  width: number;
-  height: number;
-}
-
-export interface OIDNWeb {
-  auxiliaryDenoisers?: {
-    albedo: OIDNWeb;
-    normal: OIDNWeb;
-  };
-  /** Optional serializable execution details exposed by native oidn-web. */
-  getRuntimeInfo?: () => unknown;
-  /** Optional shape preparation supported by newer oidn-web runtimes. */
-  prepareForImage?: (
-    width: number,
-    height: number,
-    options?: { tileOverlap?: number }
-  ) => Promise<void>;
-  tileExecute: (opts: {
-    color: OIDNWebGPUData;
-    albedo?: OIDNWebGPUData;
-    normal?: OIDNWebGPUData;
-    denoiseAlpha?: boolean;
-    wholeImage?: boolean;
-    tileOverlap?: number;
-    scheduling?: 'animation-frame' | 'event-loop';
-    done: (outputData: {
-      data: GPUBuffer;
-      width: number;
-      height: number;
-    }) => void;
-    error?: (reason: unknown) => void;
-    progress?: (
-      outputData: OIDNWebGPUOutputData,
-      tileData: OIDNWebGPUOutputData | undefined,
-      tile: { x: number; y: number; width: number; height: number },
-      currentIdx: number,
-      totalIdx: number
-    ) => void;
-  }) => () => void;
-}
 
 export const oidnAlbedoSrgbEncodeMain = /* wgsl */ `
 if (globalId.x >= u32(imageSize.x) || globalId.y >= u32(imageSize.y)) { return; }
@@ -173,7 +127,8 @@ function makeWGPUAccumulationTarget(
   device: GPUDevice,
   rayTracePass: WGPURayTracePass,
   surface: WGPUCanvasSurface,
-  scratch: ScratchPool
+  scratch: ScratchPool,
+  customJobs: Set<Promise<unknown>>
 ) {
   let sampleRenderedCallback: (
     sampleCount: number,
@@ -244,12 +199,14 @@ function makeWGPUAccumulationTarget(
   let pageLeaveTime = performance.now();
   let pageInvisibleTime = 0;
 
-  let oidnComposedBuffer: GPUBuffer | undefined;
-  let oidnComposedTexture: GPUTexture | undefined;
-  let oidnComposedLinear = false;
+  let denoisedBuffer: GPUBuffer | undefined;
+  let denoisedTexture: GPUTexture | undefined;
+  let denoisedDisplayLinear = false;
+  let denoisedHDR = false;
+  let activeCustomController: AbortController | undefined;
   let jnlmPass: WGPUJNLMDenoisePass | undefined;
-  let oidnGeneration = 0;
-  let preserveOIDNOutput = false;
+  let denoiseGeneration = 0;
+  let preserveDenoisedOutput = false;
 
   let activeOidnPhase:
     | {
@@ -258,8 +215,9 @@ function makeWGPUAccumulationTarget(
     }
     | undefined;
 
-  function cancelOIDNDenoise() {
-    oidnGeneration++;
+  function cancelDenoise() {
+    activeCustomController?.abort(); activeCustomController = undefined;
+    denoiseGeneration++;
     const activePhase = activeOidnPhase;
     activeOidnPhase = undefined;
     if (activePhase) {
@@ -278,7 +236,7 @@ function makeWGPUAccumulationTarget(
       fail: (reason: unknown) => void
     ) => () => void
   ): Promise<void> {
-    if (generation !== oidnGeneration) return Promise.resolve();
+    if (generation !== denoiseGeneration) return Promise.resolve();
 
     return new Promise((resolve, reject) => {
       let settled = false;
@@ -305,7 +263,7 @@ function makeWGPUAccumulationTarget(
         const abort = execute(finish, fail);
         phase = { abort, finish };
         if (settled) return;
-        if (generation !== oidnGeneration) {
+        if (generation !== denoiseGeneration) {
           abort();
           finish();
           return;
@@ -610,15 +568,15 @@ output.color = color;
     }
   }
 
-  function clearOIDNOutput() { denoiseValid = false; }
+  function clearDenoisedOutput() { denoiseValid = false; }
 
   function invalidateCompositeDenoise() {
-    if (!oidnComposedLinear) return;
-    cancelOIDNDenoise();
+    if (!denoisedDisplayLinear) return;
+    cancelDenoise();
     denoiseValid = false;
   }
 
-  function prepareOIDNTexture(
+  function prepareDenoisedTexture(
     encoder: GPUCommandEncoder,
     buffer: GPUBuffer | undefined,
     texture: GPUTexture | undefined
@@ -642,7 +600,7 @@ output.color = color;
     return texture;
   }
 
-  function copyOIDNOutput(
+  function copyDenoisedOutput(
     encoder: GPUCommandEncoder,
     output: OIDNWebGPUOutputData,
     target: GPUBuffer | undefined
@@ -651,7 +609,7 @@ output.color = color;
     if (!target || target.size !== byteLength) {
       target?.destroy();
       target = device.createBuffer({
-        label: 'OIDN persistent output',
+        label: 'Persistent denoised output',
         size: byteLength,
         usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
       });
@@ -672,22 +630,23 @@ output.color = color;
     compositeDenoiseDisplayPass.setSize(renderWidth, renderHeight);
     compositeDenoiseDisplayPass.setOutputParams({ color: { format: composeColorFormat } });
     compositeDenoiseDisplayPass.setUniform('hdrOutputEnabled', +hdrOutputActive);
-    compositeDenoiseDisplayPass.setUniform('denoisedAlpha', denoiseValid && oidnComposedLinear ? +rayTracePass.needsDenoiseAlpha() : 0);
+    compositeDenoiseDisplayPass.setUniform('denoisedAlpha', denoiseValid && denoisedDisplayLinear ? +rayTracePass.needsDenoiseAlpha() : 0);
   }
-  function snapshotInput(encoder: GPUCommandEncoder, key: string, texture: GPUTexture) {
-    const buffer = scratch.get(key, () => new WGPUScratchBuffer(device)).get(renderWidth * renderHeight * 16);
+  function snapshotInput(encoder: GPUCommandEncoder, key: string, texture: GPUTexture, exact = false) {
+    const buffer = scratch.get(key, () => new WGPUScratchBuffer(device)).get(renderWidth * renderHeight * 16, exact);
     encoder.copyTextureToBuffer({ texture }, { buffer, bytesPerRow: renderWidth * 16 }, { width: renderWidth, height: renderHeight });
     return buffer;
   }
-  function copyGuide(key: string, input: GPUTexture) {
+  function copyGuide(key: string, input: GPUTexture, exact = false) {
     const pass = scratch.get(key, () => new WGPUComputePass('OIDN guide copy', device, {
       inputs: ['guide'], outputs: ['color'], uniforms: auxiliaryPassUniforms,
       csMain: 'if (globalId.x >= u32(imageSize.x) || globalId.y >= u32(imageSize.y)) {return;} out_color[globalId.x + globalId.y * u32(imageSize.x)] = textureLoad(in_guide, vec2i(globalId.xy), 0);'
     }));
     pass.setOutputParams({ color: { channels: 4 } });
     pass.setSize(renderWidth, renderHeight); pass.setUniform('imageSize', [renderWidth, renderHeight]);
-    const encoder = device.createCommandEncoder(); pass.createPass(encoder, { guide: { texture: input, channels: 4 } }); device.queue.submit([encoder.finish()]);
-    return pass.getOutput('color');
+    const output = exact ? scratch.get(`${key} buffer`, () => new WGPUScratchBuffer(device)).get(renderWidth * renderHeight * 16, true) : undefined;
+    const encoder = device.createCommandEncoder(); pass.createPass(encoder, { guide: { texture: input, channels: 4 } }, output ? {color: output} : undefined); device.queue.submit([encoder.finish()]);
+    return output ?? pass.getOutput('color');
   }
 
   function drawPostProcess(
@@ -700,14 +659,14 @@ output.color = color;
       resolvedHasShadowCatcher = rayTracePass.hasShadowCatcher();
       resolvedFlatBackground = pendingFlatBackground.slice();
     }
-    composePass.setUniform('flatBackgroundColor', resolvedFlatBackground);
+    composePass.setUniform('flatBackgroundColor', denoiseValid && denoisedHDR ? [0, 0, 0, 0] : resolvedFlatBackground);
     rawOutputPass.setUniform('flatBackgroundColor', resolvedFlatBackground);
     if (resolvedSamples < 1) return;
     prepareComposition();
-    if (denoiseValid) oidnComposedTexture = prepareOIDNTexture(
+    if (denoiseValid) denoisedTexture = prepareDenoisedTexture(
       encoder,
-      oidnComposedBuffer,
-      oidnComposedTexture
+      denoisedBuffer,
+      denoisedTexture
     );
     if (resolve) {
       rayTraceOutputPass.setSampleCount(sampleCount);
@@ -716,18 +675,18 @@ output.color = color;
 
     composePass.setUniform(
       'shadowCatcherEnabled',
-      +resolvedHasShadowCatcher
+      +(resolvedHasShadowCatcher && !(denoiseValid && denoisedHDR))
     );
 
     const foregroundTexture = getFrameInput(
       resolvedHasShadowCatcher ? 'foreground' : 'color'
     );
-    const colorTexture = getFrameInput('color');
+    const colorTexture = denoiseValid && denoisedHDR && denoisedTexture ? denoisedTexture : getFrameInput('color');
     const bloomEnabled = bloomIntensity > 0.0;
     // Progressive accumulation refreshes bloom every ten samples.
     const samplesSkipped = sampleCount < 10 || sampleCount % 10 > 0;
     const bloomState = scratch.get('bloom state', () => ({ owner: undefined as object | undefined, settings: '', dispose() { } }));
-    const bloomSettings = `${bloomThreshold}/${bloomRadius}`;
+    const bloomSettings = `${bloomThreshold}/${bloomRadius}/${+(denoiseValid && denoisedHDR)}`;
     const needsUpdateBloom = bloomEnabled && sampleCount >= 10 && (!samplesSkipped || bloomState.owner !== targetKey || bloomState.settings !== bloomSettings);
     let bloomIntensityToUpdate = bloomIntensity;
     if (needsUpdateBloom) {
@@ -753,15 +712,15 @@ output.color = color;
       // Use color texture as placeholder
       bloomTex: bloomEnabled && bloomPass ? bloomPass.getOutput() : colorTexture
     });
-    if (denoiseValid && oidnComposedLinear && oidnComposedTexture) {
+    if (denoiseValid && !denoisedHDR && denoisedDisplayLinear && denoisedTexture) {
       compositeDenoiseDisplayPass.createPass(encoder, {
-        colorTex: oidnComposedTexture,
+        colorTex: denoisedTexture,
         composedTex: composePass.getOutput('denoiseColor')
       });
     }
     let displayTexture =
-      (denoiseValid && oidnComposedBuffer ? (oidnComposedLinear
-        ? compositeDenoiseDisplayPass.getOutput('color') : oidnComposedTexture) : undefined) ||
+      (denoiseValid && denoisedBuffer ? (denoisedHDR ? composePass.getOutput('color') : denoisedDisplayLinear
+        ? compositeDenoiseDisplayPass.getOutput('color') : denoisedTexture) : undefined) ||
       composePass.getOutput('color');
     const activeHDRPeakMeter = hdrOutputActive
       ? (hdrPeakMeter ??= scratch.get('hdrPeak', () => new WGPUHDRPeakMeter(device)))
@@ -786,7 +745,7 @@ output.color = color;
       displayTexture = readbackPass.getOutput('color');
     }
     // Keep the completed denoise visible until its replacement is ready.
-    if (!(preserveOIDNOutput && output === 'final' && !denoiseValid && presentationDenoised)) {
+    if (!(preserveDenoisedOutput && output === 'final' && !denoiseValid && presentationDenoised)) {
       const width = renderWidth, height = renderHeight;
       if (!presentationTexture || presentationTexture.width !== width || presentationTexture.height !== height || presentationTexture.format !== displayTexture.format) {
         const previous = presentationTexture;
@@ -811,7 +770,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     // before checking shader compilation: pipeline-affecting parameter changes
     // otherwise leave the previous asynchronous denoise alive while resources
     // and bind groups are being replaced.
-    cancelOIDNDenoise();
+    cancelDenoise();
 
     if (rayTracePass.isCompilingShader()) {
       isFirstFrame = true;
@@ -844,8 +803,8 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
 
     // Keep the last completed denoise visible while a static while-converging batch
     // accumulates, including the incomplete first sample after a scene edit.
-    if (!preserveOIDNOutput || isFirstFrame) {
-      clearOIDNOutput();
+    if (!preserveDenoisedOutput || isFirstFrame) {
+      clearDenoisedOutput();
     }
     if (isPredictingFrame) {
       (tileRenderWithPredict || tileRender).reset();
@@ -966,11 +925,11 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     // OIDN retains the ray-trace output textures supplied at the start of a
     // tile sequence. Stop every phase (including Promise-chained follow-ups)
     // before those textures are replaced below.
-    cancelOIDNDenoise();
+    cancelDenoise();
     // Completed OIDN buffers use the previous image dimensions. Scene edits
     // may preserve them, but a resize must not copy them with the new stride.
     // The target retains its complete presentation texture through the resize.
-    clearOIDNOutput();
+    clearDenoisedOutput();
     tileTimingGeneration++;
     renderWidth = nextRenderWidth;
     renderHeight = nextRenderHeight;
@@ -1123,7 +1082,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   function performJNLMDenoise(
     denoiser: JNLMDenoiser
   ): Promise<boolean> {
-    const generation = oidnGeneration;
+    const generation = denoiseGeneration;
 
     jnlmPass ??= scratch.get('jnlm', () => new WGPUJNLMDenoisePass(device));
     const rayBuffers = rayTracePass.getOutputBuffer();
@@ -1140,12 +1099,12 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       strength: denoiser.strength,
       shape: denoiser.shape
     });
-    oidnComposedBuffer = copyOIDNOutput(
+    denoisedBuffer = copyDenoisedOutput(
       encoder,
       { data: output, width: renderWidth, height: renderHeight },
-      oidnComposedBuffer
+      denoisedBuffer
     );
-    oidnComposedLinear = true;
+    denoisedDisplayLinear = true;
     denoiseValid = true;
     // The filter also smooths coverage, which carries catcher shadows and
     // transmissive alpha.
@@ -1154,25 +1113,90 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     );
     drawPostProcess(encoder, false);
     return device.queue.onSubmittedWorkDone().then(() => {
-      const completed = generation === oidnGeneration;
+      const completed = generation === denoiseGeneration;
 
       return completed;
     });
   }
 
-  function performOIDNDenoise(
-    attachedDenoiser: OIDNWeb | JNLMDenoiser,
-    alphaDenoiser: OIDNWeb | undefined,
-    denoiseSchedule: 'converged' | 'progressive' | 'every-sample' = 'converged'
+  function performCustomDenoise(
+    denoiser: import('../Render.js').Denoiser,
+    schedule: import('../Render.js').DenoiseSchedule,
+    signal?: AbortSignal
   ): Promise<boolean> {
-    cancelOIDNDenoise();
+    const generation = denoiseGeneration;
+    const controller = activeCustomController = new AbortController();
+    const abort = () => controller.abort();
+    signal?.addEventListener('abort', abort, {once: true});
+    if (signal?.aborted) abort();
+    const task = (async () => {
+      if (controller.signal.aborted) return false;
+      const compose = scratch.get('custom HDR composition', () => new WGPUFullQuadPass('Custom HDR composition', device, {
+        textureWillBeRead: true,
+        inputs: ['colorTex', 'albedoTex', 'foregroundTex', 'catcherBackgroundTex', 'shadowCatcherTex'], outputs: ['color'],
+        uniforms: [
+          {label: 'flatBackgroundColor', type: 'vec4f', data: [0, 0, 0, 0]},
+          {label: 'shadowCatcherColor', type: 'vec3f', data: [0, 0, 0]},
+          {label: 'shadowCatcherAlpha', type: 'f32', data: 1},
+          {label: 'shadowCatcherEnabled', type: 'f32', data: 0}
+        ], fsMain: customDenoiseCompositionMain
+      }));
+      compose.setOutputParams({color: {format: 'rgba32float'}});
+      compose.setSize(renderWidth, renderHeight);
+      compose.setUniform('flatBackgroundColor', resolvedFlatBackground);
+      compose.setUniform('shadowCatcherColor', shadowCatcherColor);
+      compose.setUniform('shadowCatcherAlpha', shadowCatcherAlpha);
+      compose.setUniform('shadowCatcherEnabled', +resolvedHasShadowCatcher);
+      const encoder = device.createCommandEncoder({label: 'Custom HDR input'});
+      compose.createPass(encoder, {
+        colorTex: getFrameInput('color'), albedoTex: getFrameInput('albedo'),
+        foregroundTex: getFrameInput(resolvedHasShadowCatcher ? 'foreground' : 'color'),
+        catcherBackgroundTex: getFrameInput('catcherBackground'), shadowCatcherTex: getFrameInput('shadowCatcher')
+      });
+      const color = snapshotInput(encoder, 'Custom HDR input', compose.getOutput('color'), true);
+      device.queue.submit([encoder.finish()]);
+      const width = renderWidth, height = renderHeight;
+      const albedo = copyGuide('Custom albedo', getFrameInput('albedo'), true);
+      const normal = copyGuide('Custom normal', getFrameInput('normal'), true);
+      const output = scratch.get('Custom output', () => new WGPUScratchBuffer(device)).get(width * height * 16, true);
+      await denoiser.denoise({device, width, height, color, albedo, normal, output}, {signal: controller.signal, schedule});
+      if (controller.signal.aborted || disposed || generation !== denoiseGeneration) return false;
+      const coverage = scratch.get('custom coverage', () => new WGPUComputePass('Custom coverage', device, {
+        inputs: ['filtered', 'original'], outputs: ['color'], uniforms: auxiliaryPassUniforms,
+        csMain: customDenoiseCoverageMain
+      }));
+      coverage.setOutputParams({color: {channels: 4}});
+      coverage.setSize(width, height); coverage.setUniform('imageSize', [width, height]);
+      const finish = device.createCommandEncoder({label: 'Custom HDR result'});
+      coverage.createPass(finish, {filtered: {buffer: output, channels: 4}, original: {buffer: color, channels: 4}});
+      denoisedBuffer = copyDenoisedOutput(finish, {data: coverage.getOutput('color'), width, height}, denoisedBuffer);
+      denoisedHDR = true; denoisedDisplayLinear = false; denoiseValid = true;
+      drawPostProcess(finish, false);
+      await device.queue.onSubmittedWorkDone();
+      return !controller.signal.aborted && !disposed && generation === denoiseGeneration;
+    })();
+    customJobs.add(task);
+    void task.finally(() => {
+      customJobs.delete(task); signal?.removeEventListener('abort', abort);
+      if (activeCustomController === controller) activeCustomController = undefined;
+    }).catch(() => {});
+    return task;
+  }
+
+  function performDenoise(
+    attachedDenoiser: DenoiserHandle,
+    alphaDenoiser: OIDNWeb | undefined,
+    denoiseSchedule: 'converged' | 'progressive' | 'every-sample' = 'converged',
+    signal?: AbortSignal
+  ): Promise<boolean> {
+    cancelDenoise();
     if (isFirstFrame || sampleCount < 1) return Promise.resolve(false);
-    if (isJNLMDenoiser(attachedDenoiser)) {
-      return performJNLMDenoise(attachedDenoiser);
-    }
-    const denoiser: OIDNWeb = attachedDenoiser;
+    if (attachedDenoiser.kind === 'custom') return performCustomDenoise(attachedDenoiser.denoiser, denoiseSchedule, signal);
+    denoisedHDR = false;
+    if (attachedDenoiser.kind === 'jnlm') return performJNLMDenoise(attachedDenoiser.denoiser);
+    const denoiser: OIDNWeb = attachedDenoiser.denoiser;
     compositeDenoiseDisplayPass.setUniform('denoisedAlpha', 0);
-    const generation = oidnGeneration;
+    const generation = denoiseGeneration;
 
     const size = { width: renderWidth, height: renderHeight };
     const snapshotEncoder = device.createCommandEncoder();
@@ -1219,7 +1243,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
           }
         };
       }
-      if (generation !== oidnGeneration) return undefined;
+      if (generation !== denoiseGeneration) return undefined;
 
       const encodeEncoder = device.createCommandEncoder();
       oidnAlbedoEncodePass.createPass(encodeEncoder, {
@@ -1245,7 +1269,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
           error: fail
         })
       );
-      if (generation !== oidnGeneration || !albedoOutput) return undefined;
+      if (generation !== denoiseGeneration || !albedoOutput) return undefined;
 
       const decodeEncoder = device.createCommandEncoder();
       oidnAlbedoDecodePass.setUniform('preserveSurfaceTexture', +false);
@@ -1271,7 +1295,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
           error: fail
         })
       );
-      if (generation !== oidnGeneration || !normalOutput) return undefined;
+      if (generation !== denoiseGeneration || !normalOutput) return undefined;
 
       const normalEncoder = device.createCommandEncoder();
       oidnNormalSanitizePass.createPass(normalEncoder, {
@@ -1292,7 +1316,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     }
 
     function denoiseComposite(guides: AuxiliaryGuides): Promise<void> {
-      if (generation !== oidnGeneration) return Promise.resolve();
+      if (generation !== denoiseGeneration) return Promise.resolve();
       // Snapshot the complete raw composition; never feed a previous denoise
       // back into the network during progressive updates.
       return runOIDNPhase(generation, (finish, fail) =>
@@ -1302,19 +1326,19 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
           albedo: guides.albedo,
           normal: guides.normal,
           progress(output, _tileData, _tile, currentIdx, totalIdx) {
-            if (generation !== oidnGeneration) return;
+            if (generation !== denoiseGeneration) return;
             if (denoiseSchedule !== 'converged' && currentIdx + 1 < totalIdx) return;
             const encoder = device.createCommandEncoder();
-            oidnComposedBuffer = copyOIDNOutput(encoder, output, oidnComposedBuffer);
-            oidnComposedLinear = true;
+            denoisedBuffer = copyDenoisedOutput(encoder, output, denoisedBuffer);
+            denoisedDisplayLinear = true;
             denoiseValid = true;
             drawPostProcess(encoder, false);
           },
           done(output) {
-            if (generation === oidnGeneration) {
+            if (generation === denoiseGeneration) {
               const encoder = device.createCommandEncoder();
-              oidnComposedBuffer = copyOIDNOutput(encoder, output, oidnComposedBuffer);
-              oidnComposedLinear = true;
+              denoisedBuffer = copyDenoisedOutput(encoder, output, denoisedBuffer);
+              denoisedDisplayLinear = true;
               denoiseValid = true;
               drawPostProcess(encoder, false);
             }
@@ -1327,12 +1351,12 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
 
     // Denoise alpha channel
     function denoiseComposed(): Promise<void> {
-      if (!alphaDenoiser || generation !== oidnGeneration) {
+      if (!alphaDenoiser || generation !== denoiseGeneration) {
         return Promise.resolve();
       }
       const encoder = device.createCommandEncoder();
       readbackPass.setSize(renderWidth, renderHeight);
-      readbackPass.createPass(encoder, { inputTex: oidnComposedLinear ? compositeDenoiseDisplayPass.getOutput('color') : composePass.getOutput('color') });
+      readbackPass.createPass(encoder, { inputTex: denoisedDisplayLinear ? compositeDenoiseDisplayPass.getOutput('color') : composePass.getOutput('color') });
       const alphaInput = snapshotInput(encoder, 'OIDN alpha input', readbackPass.getOutput('color'));
       device.queue.submit([encoder.finish()]);
       return runOIDNPhase(generation, (finish, fail) =>
@@ -1341,27 +1365,27 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
           color: { data: alphaInput, ...size },
           denoiseAlpha: true,
           progress(output, _tileData, _tile, currentIdx, totalIdx) {
-            if (generation !== oidnGeneration) return;
+            if (generation !== denoiseGeneration) return;
             // While-converging denoising keeps the previous complete frame (or the
             // fallback) visible while tiled inference is
             // running. Publishing the shared output buffer before its final
             // tile would expose uninitialized regions as black rectangles.
             if (denoiseSchedule !== 'converged' && currentIdx + 1 < totalIdx) return;
             const encoder = device.createCommandEncoder();
-            oidnComposedBuffer = copyOIDNOutput(
+            denoisedBuffer = copyDenoisedOutput(
               encoder,
               output,
-              oidnComposedBuffer
+              denoisedBuffer
             );
-            oidnComposedLinear = false;
+            denoisedDisplayLinear = false;
             denoiseValid = true;
             drawPostProcess(encoder, false);
           },
           done(output) {
-            if (generation === oidnGeneration) {
+            if (generation === denoiseGeneration) {
               const encoder = device.createCommandEncoder();
-              oidnComposedBuffer = copyOIDNOutput(encoder, output, oidnComposedBuffer);
-              oidnComposedLinear = false;
+              denoisedBuffer = copyDenoisedOutput(encoder, output, denoisedBuffer);
+              denoisedDisplayLinear = false;
               denoiseValid = true;
               drawPostProcess(encoder, false);
             }
@@ -1374,20 +1398,20 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
 
     return denoiseAuxiliaryGuides()
       .then(async (guides) => {
-        if (guides && generation === oidnGeneration) {
+        if (guides && generation === denoiseGeneration) {
           await denoiseComposite(guides);
         }
       })
       .then(() => {
         if (
-          generation === oidnGeneration &&
+          generation === denoiseGeneration &&
           rayTracePass.needsDenoiseAlpha()
         ) {
           return denoiseComposed();
         }
       })
       .then(() => {
-        const completed = generation === oidnGeneration;
+        const completed = generation === denoiseGeneration;
 
         return completed;
       });
@@ -1405,7 +1429,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     }
     disposed = true;
     tileTimingGeneration++;
-    cancelOIDNDenoise();
+    cancelDenoise();
     // Target outputs and timestamp readbacks can still be referenced by the
     // queue. Cancel inference now; retire all GPU-owned target resources after
     // both submitted work and the pending timestamp mapping have completed.
@@ -1414,7 +1438,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       diagnosticsReadbackPromise
     ]).then(() => {
       rayTracePass.releaseTarget(targetKey);
-      oidnComposedBuffer?.destroy();
+      denoisedBuffer?.destroy();
       presentationTexture?.destroy();
       rayTraceOutputPass.dispose();
     });
@@ -1435,7 +1459,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
 
   return {
     invalidateTiming: invalidateTilePrediction,
-    invalidateDenoisedOutput() { cancelOIDNDenoise(); denoiseValid = false; preserveOIDNOutput = false; },
+    invalidateDenoisedOutput() { cancelDenoise(); denoiseValid = false; preserveDenoisedOutput = false; },
     configure(settings: TraceSettings) {
       const timingKeys = ['bounces', 'bevel', 'bevelSamples', 'directLightCandidates', 'dispersionWavelengths', 'alphaBlendStrategy', 'samplingPattern', 'clamping', 'transmissiveOutputAlphaMin'] as const;
       if (!execution || timingKeys.some(key => execution![key] !== settings[key])) invalidateTilePrediction();
@@ -1465,7 +1489,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     getMemory() {
       return {
 width: renderWidth, height: renderHeight,
-        bytes: rayTracePass.getTargetMemoryBytes(targetKey) + rayTraceOutputPass.getMemoryBytes() + textureBytes(presentationTexture) + (oidnComposedBuffer?.size ?? 0)
+        bytes: rayTracePass.getTargetMemoryBytes(targetKey) + rayTraceOutputPass.getMemoryBytes() + textureBytes(presentationTexture) + (denoisedBuffer?.size ?? 0)
 };
     },
     isFirstFrame() {
@@ -1476,8 +1500,8 @@ width: renderWidth, height: renderHeight,
       // Input edits reset accumulation, not learned throughput. Re-arming a
       // hidden probe here starves continuously changing scenes of visible samples.
       tileTimingGeneration++;
-      cancelOIDNDenoise();
-      preserveOIDNOutput = false;
+      cancelDenoise();
+      preserveDenoisedOutput = false;
       denoiseValid = false;
       presentationDenoised = false;
       resolvedSamples = 0;
@@ -1492,8 +1516,8 @@ width: renderWidth, height: renderHeight,
       const encoder = device.createCommandEncoder();
       drawPostProcess(encoder, true);
     },
-    performOIDNDenoise,
-    cancelOIDNDenoise,
+    performDenoise,
+    cancelDenoise,
     setSize,
     setHDROutputEnabled,
     setToneMappingParams,
@@ -1523,7 +1547,7 @@ width: renderWidth, height: renderHeight,
         size: bytesPerRow * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
       });
       const encoder = device.createCommandEncoder();
-      const denoised = kind === 'denoised' && denoiseValid ? oidnComposedBuffer : undefined;
+      const denoised = kind === 'denoised' && denoiseValid ? denoisedBuffer : undefined;
       if (kind === 'denoised' && !denoised) kind = 'hdr';
       const pass = kind === 'hdr' ? rawOutputPass : readbackPass;
       pass.setOutputParams({ color: { format: 'rgba32float' } });
@@ -1547,8 +1571,8 @@ width: renderWidth, height: renderHeight,
       } finally { buffer.unmap(); buffer.destroy(); }
     },
 
-    setPreserveOIDNOutput(preserve: boolean) {
-      preserveOIDNOutput = preserve;
+    setPreserveDenoisedOutput(preserve: boolean) {
+      preserveDenoisedOutput = preserve;
     },
     setOfflineRenderOptions(options) {
       const wasOffline = offlineSamplesPerBatch > 0;
@@ -1651,10 +1675,14 @@ width: renderWidth, height: renderHeight,
 /** Independent render targets, without preview or presentation policy. */
 export function makeWGPURenderTargets(canvas: HTMLCanvasElement, device: GPUDevice, options: WGPURenderingPipelineOptions = {}): RenderPipeline {
   const rayTracePass = new WGPURayTracePass(device);
-  const scratch = new ScratchPool(work => { void device.queue.onSubmittedWorkDone().catch(() => { }).then(work); });
+  const customJobs = new Set<Promise<unknown>>();
+  const scratch = new ScratchPool(work => {
+    // A cancelled custom filter can keep submitting GPU work until its promise settles.
+    void Promise.allSettled([...customJobs]).then(() => device.queue.onSubmittedWorkDone()).catch(() => {}).then(work);
+  });
   const surface = scratch.get('canvas', () => new WGPUCanvasSurface(canvas, device, options.presentationFormat ?? navigator.gpu.getPreferredCanvasFormat()));
   return makeRenderPipeline(rayTracePass, () => {
-    const target = makeWGPUAccumulationTarget(canvas, device, rayTracePass, surface, scratch);
+    const target = makeWGPUAccumulationTarget(canvas, device, rayTracePass, surface, scratch, customJobs);
     return target;
   }, false, scratch);
 }

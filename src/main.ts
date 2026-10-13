@@ -97,7 +97,7 @@ export type { EngineParams, EngineInfo, EngineDiagnostics, PrepareOptions, BVHBu
 export { default as Display } from './Display.js';
 export type { BlobOptions, DisplayChannel } from './Display.js';
 export { default as Render } from './Render.js';
-export type { RenderOptions, RenderSettings, ConvergeOptions, ConvergeResult, DenoiserOptions, DenoiseSchedule, JNLMDenoiserOptions, OIDNDenoiserOptions, RenderStatus, SampleEvent } from './Render.js';
+export type { RenderOptions, RenderSettings, ConvergeOptions, ConvergeResult, DenoiserOptions, Denoiser, DenoiseInput, CustomDenoiserOptions, DenoiseSchedule, JNLMDenoiserOptions, OIDNDenoiserOptions, RenderStatus, SampleEvent } from './Render.js';
 
 export { default as Sync } from './Sync.js';
 export { default as RenderLoop } from './RenderLoop.js';

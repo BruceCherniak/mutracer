@@ -102,6 +102,7 @@ Enable denoising on an individual result:
 ```ts
 loop.final.denoiser = { type: 'jnlm' }; // required type; reassign the frozen configuration to edit
 loop.final.denoiser = { type: 'oidn', model: 'standard' }; // WebGPU; custom weightsUrl also supported
+// Third-party WebGPU filters: { type: 'custom', denoiser: yourCallerOwnedDenoiser }.
 ```
 
 RenderLoop provides preview and final results. For custom frame control, use

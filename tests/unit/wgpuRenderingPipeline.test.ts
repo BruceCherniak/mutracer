@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Camera from '../../src/scene/Camera';
 import {makeWGPURenderTargets} from '../../src/renderer/WGPURenderingPipeline';
-import type { OIDNWeb } from '../../src/renderer/WGPURenderingPipeline';
+import type { OIDNWeb } from '../../src/renderer/denoiser';
 
 // Keep the real pipeline and tile scheduler; replace GPU execution at the pass boundary.
 const mocks = vi.hoisted(() => {
@@ -197,7 +197,7 @@ function displayedTexture() {
 async function denoisedPipeline() {
   const pipeline = createPipeline(false);
   pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
-  await pipeline.performOIDNDenoise!(completedDenoiser(), undefined, 'progressive'); pipeline.present();
+  await pipeline.performDenoise!({kind: 'oidn', denoiser: completedDenoiser()}, undefined, 'progressive'); pipeline.present();
   return pipeline;
 }
 
@@ -210,7 +210,7 @@ describe('WebGPU denoised presentation transitions', () => {
     const rawInputs = compose.createPass.mock.lastCall![1];
     const denoiser = completedDenoiser();
     const execute = vi.spyOn(denoiser, 'tileExecute');
-    await pipeline.performOIDNDenoise!(denoiser, undefined, 'progressive');
+    await pipeline.performDenoise!({kind: 'oidn', denoiser}, undefined, 'progressive');
     expect(execute).toHaveBeenCalledTimes(1);
     expect(compose.createPass.mock.lastCall![1]).toEqual(rawInputs);
     expect(execute.mock.lastCall![0].color.data).toMatchObject({size: 80 * 64 * 16});
@@ -227,7 +227,7 @@ describe('WebGPU denoised presentation transitions', () => {
     pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
     const alpha = completedDenoiser();
     const execute = vi.spyOn(alpha, 'tileExecute');
-    await pipeline.performOIDNDenoise!(completedDenoiser(), alpha);
+    await pipeline.performDenoise!({kind: 'oidn', denoiser: completedDenoiser()}, alpha);
     expect(execute).toHaveBeenCalledOnce();
     expect(execute.mock.lastCall![0]).toMatchObject({
       color: {data: expect.objectContaining({size: 80 * 64 * 16})},
@@ -239,10 +239,10 @@ describe('WebGPU denoised presentation transitions', () => {
   it('publishes a completed composite when OIDN omits progress callbacks', async () => {
     const pipeline = createPipeline(false);
     pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
-    await pipeline.performOIDNDenoise!({ tileExecute(opts: Parameters<OIDNWeb['tileExecute']>[0]) {
+    await pipeline.performDenoise!({kind: 'oidn', denoiser: { tileExecute(opts: Parameters<OIDNWeb['tileExecute']>[0]) {
       opts.done({ data: { size: 80 * 64 * 16 } as GPUBuffer, width: 80, height: 64 });
       return () => {};
-    } }, undefined);
+    } }}, undefined);
     pipeline.present();
     expect(displayedTexture()).toBe(mocks.Pass.instances.get('OIDN composed display')!.getOutput('color'));
     pipeline.dispose();
@@ -277,13 +277,13 @@ describe('WebGPU denoised presentation transitions', () => {
     let options: Parameters<OIDNWeb['tileExecute']>[0];
     let started!: () => void;
     const ready = new Promise<void>((resolve) => { started = resolve; });
-    const pending = pipeline.performOIDNDenoise!({
+    const pending = pipeline.performDenoise!({kind: 'oidn', denoiser: {
       tileExecute(opts: Parameters<OIDNWeb['tileExecute']>[0]) {
         options = opts;
         started();
         return abort;
       }
-    }, undefined, 'progressive');
+    }}, undefined, 'progressive');
     await ready;
     pipeline.setSize(160, 96); pipeline.present();
     const snapshot = displayedTexture();
@@ -303,7 +303,7 @@ describe('WebGPU denoised presentation transitions', () => {
     pipeline.restartSamples();
     pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
     expect(displayedTexture()).not.toBe(snapshot);
-    await pipeline.performOIDNDenoise!(completedDenoiser(), undefined, 'progressive');
+    await pipeline.performDenoise!({kind: 'oidn', denoiser: completedDenoiser()}, undefined, 'progressive');
     pipeline.setSize(240, 128); pipeline.present();
     const nextSnapshot = displayedTexture();
     pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
@@ -339,4 +339,45 @@ it('refreshes the hidden timing probe for structural scene changes', async () =>
   pipeline.trace(camera, 1); await pipeline.flushDiagnostics(); pipeline.trace(camera, 1); expect(pipeline.getTotalSamplesRendered()).toBe(1); await pipeline.flushDiagnostics();
   pipeline.invalidateTiming!(); pipeline.restartSamples(); pipeline.trace(camera, 1); expect(pipeline.getTotalSamplesRendered()).toBe(0);
   await pipeline.flushDiagnostics(); pipeline.restartSamples(); pipeline.trace(camera, 1); expect(pipeline.getTotalSamplesRendered()).toBe(1); await pipeline.flushDiagnostics(); pipeline.dispose();
+});
+
+it('supplies HDR buffers to a custom filter and applies display settings after it', async () => {
+  const pipeline = createPipeline(false);
+  pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1);
+  pipeline.setToneMappingParams({exposure: 2}); pipeline.drawPostProcess();
+  const raw = mocks.Pass.instances.get('compose')!.createPass.mock.lastCall![1].colorTex;
+  const denoise = vi.fn(async (_input: import('../../src/Render').DenoiseInput) => {});
+  await pipeline.performDenoise!({kind: 'custom', denoiser: {denoise}}, undefined, 'every-sample');
+  const input = denoise.mock.calls[0][0];
+  expect(input).toMatchObject({width: 80, height: 64, color: {size: 80 * 64 * 16}, albedo: {size: 80 * 64 * 16}, normal: {size: 80 * 64 * 16}, output: {size: 80 * 64 * 16}});
+  expect(mocks.Pass.instances.get('Custom HDR composition')!.createPass.mock.lastCall![1].colorTex).toBe(raw);
+  const compose = mocks.Pass.instances.get('compose')!;
+  expect(compose.createPass.mock.lastCall![1].colorTex).not.toBe(raw);
+  expect(compose.setUniform).toHaveBeenCalledWith('exposure', 2);
+  expect(compose.setUniform).toHaveBeenLastCalledWith('bloomIntensity', 0);
+  pipeline.present(); expect(displayedTexture()).toBe(compose.getOutput('color')); pipeline.manager.dispose();
+});
+
+it('aborts custom inference on resize without publishing a late result', async () => {
+  const pipeline = createPipeline(false); pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.drawPostProcess();
+  let finish!: () => void; let signal!: AbortSignal;
+  const pending = pipeline.performDenoise!({kind: 'custom', denoiser: {denoise(_input, context) {
+    signal = context.signal; return new Promise(resolve => {finish = resolve;});
+  }}});
+  expect(signal.aborted).toBe(false); pipeline.setSize(160, 96); expect(signal.aborted).toBe(true);
+  finish(); expect(await pending).toBe(false); expect(pipeline.presentationDenoised).toBe(false);
+  expect(mocks.Pass.instances.get('Custom coverage')).toBeUndefined(); pipeline.manager.dispose();
+});
+
+it('keeps borrowed scratch resources alive until a cancelled custom promise settles', async () => {
+  const pipeline = createPipeline(false); pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.drawPostProcess();
+  let finish!: () => void; let signal!: AbortSignal;
+  const pending = pipeline.performDenoise!({kind: 'custom', denoiser: {denoise(_input, context) {
+    signal = context.signal; return new Promise(resolve => {finish = resolve;});
+  }}});
+  const scratchPass = mocks.Pass.instances.get('Custom HDR composition')!;
+  const release = vi.spyOn(scratchPass, 'dispose'); pipeline.manager.dispose();
+  await Promise.resolve(); await Promise.resolve(); expect(signal.aborted).toBe(true); expect(release).not.toHaveBeenCalled();
+  finish(); expect(await pending).toBe(false); await new Promise(resolve => setTimeout(resolve, 0));
+  expect(release).toHaveBeenCalledOnce();
 });

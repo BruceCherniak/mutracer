@@ -1,3 +1,4 @@
+import type {DenoiserHandle} from './denoiser.js';
 import { WebGLScratchCopy } from './WebGLScratchCopy.js';
 import { ScratchPool } from './ScratchPool.js';
 import { makeRenderPipeline, type TraceSettings, type RenderPipeline } from './renderPipeline.js';
@@ -25,7 +26,7 @@ import {
   composeFragment,
   outputFragment
 } from './glsl/webglPipeline.frag.js';
-import { isJNLMDenoiser, type JNLMDenoiser } from './jnlm.js';
+import { type JNLMDenoiser } from './jnlm.js';
 import { WebGLJNLMDenoisePass } from './WebGLJNLMDenoiser.js';
 
 const wavelengths = [650, 510, 475];
@@ -132,7 +133,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
   let denoisedTexture: Texture2D | undefined;
   let denoiseValid = false;
   // Keep the last denoised image visible while while-converging batches
-  // accumulate (see RenderingPipeline.setPreserveOIDNOutput).
+  // accumulate (see RenderingPipeline.setPreserveDenoisedOutput).
   let preserveDenoisedOutput = false;
 
   function updateSeed(useJitter: boolean) {
@@ -422,19 +423,19 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       preserveDenoisedOutput = false;
     },
     /** Denoises the current image. WebGL only supports the built-in JNLM filter. */
-    performOIDNDenoise(denoiser: unknown): Promise<boolean> {
-      if (!isJNLMDenoiser(denoiser)) {
-        return Promise.reject(new Error('OIDN requires a WebGPU renderer.'));
+    performDenoise(filter: DenoiserHandle): Promise<boolean> {
+      if (filter.kind !== 'jnlm') {
+        return Promise.reject(new Error('This denoiser requires WebGPU.'));
       }
       if (isFirstFrame || sampleCount < 1) return Promise.resolve(false);
-      pendingDenoiser = denoiser;
+      pendingDenoiser = filter.denoiser;
       drawPostProcess(true);
       return Promise.resolve(true);
     },
-    cancelOIDNDenoise() {
+    cancelDenoise() {
       pendingDenoiser = undefined;
     },
-    setPreserveOIDNOutput(preserve: boolean) {
+    setPreserveDenoisedOutput(preserve: boolean) {
       preserveDenoisedOutput = preserve;
     },
     trace,

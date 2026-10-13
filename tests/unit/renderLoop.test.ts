@@ -19,7 +19,7 @@ describe('RenderLoop selection and presentation', () => {
     const sample = vi.fn(); loop.on('sample', sample);
     for (let i = 0; i < 4; i++) {expect(loop.tick()).toBe('previewing'); expect(loop.samples).toBe(0);}
     expect(loop.preview!.samples).toBe(2); expect(sample).not.toHaveBeenCalled();
-    expect(targets[0].performOIDNDenoise).not.toHaveBeenCalled();
+    expect(targets[0].performDenoise).not.toHaveBeenCalled();
     sync.moving = false;
     expect(loop.tick()).toBe('converging'); expect(loop.samples).toBe(1);
     expect(loop.tick()).toBe('denoising'); await settle();
@@ -80,7 +80,7 @@ describe('RenderLoop events and inference', () => {
     const {engine, targets} = renderFixture(); const loop = new RenderLoop(engine, {preview: false, final: {maxSamples: 8, denoiser: {type: 'jnlm', schedule: 'progressive'}}});
     const statuses = vi.fn(); loop.on('status', statuses);
     let complete!: (value: boolean) => void;
-    loop.tick(); vi.mocked(targets[0].performOIDNDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;}));
+    loop.tick(); vi.mocked(targets[0].performDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;}));
     await settle(); expect(loop.final.denoising).toBe(true); expect(loop.status).toBe('converging');
     complete(true); await settle();
     while (loop.samples < 4) loop.tick(); await settle(); expect(loop.status).toBe('converging');
@@ -105,7 +105,7 @@ describe('RenderLoop events and inference', () => {
     let frame = 0; sync.update.mockImplementation(() => {scene.background = [++frame, 0, 0, 1];});
     const loop = new RenderLoop(engine, {sync, coalesceSceneUpdates: true, preview: {maxSamples: 1, denoiser: {type: 'jnlm', schedule: 'every-sample'}}});
     loop.tick(); let complete!: (value: boolean) => void;
-    vi.mocked(targets[0].performOIDNDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;}));
+    vi.mocked(targets[0].performDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;}));
     await settle(); const update = vi.spyOn(engine, 'update');
     loop.tick(); loop.tick(); expect(update).not.toHaveBeenCalled(); expect(targets[0].trace).toHaveBeenCalledOnce();
     complete(true); await settle(); const count = operations.length;
@@ -113,14 +113,14 @@ describe('RenderLoop events and inference', () => {
     expect(update).toHaveBeenCalledOnce(); expect(frame).toBe(4); expect(engine.scene!.background).toEqual([4, 0, 0, 1]);
     expect(pipeline.setBackground).toHaveBeenLastCalledWith([4, 0, 0, 1]);
     expect(operations.slice(count).find(operation => operation.kind === 'present')?.id).toBe(targets[0].label);
-    expect(targets[0].performOIDNDenoise).toHaveBeenCalledTimes(2); expect(targets[0].trace).toHaveBeenCalledTimes(2);
+    expect(targets[0].performDenoise).toHaveBeenCalledTimes(2); expect(targets[0].trace).toHaveBeenCalledTimes(2);
     complete(true); await settle(); loop.dispose(); engine.dispose();
   });
   it('coalesces camera movement during preview inference and commits the latest camera', async () => {
     const {engine, camera, targets, operations} = renderFixture(); const sync = new Source(engine); sync.moving = true;
     const loop = new RenderLoop(engine, {sync, coalesceSceneUpdates: true, preview: {maxSamples: 1, denoiser: {type: 'jnlm'}}});
     loop.tick(); let complete!: (value: boolean) => void;
-    vi.mocked(targets[0].performOIDNDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;})); await settle();
+    vi.mocked(targets[0].performDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;})); await settle();
     camera.position = [1, 0, 0]; loop.tick(); camera.position = [2, 0, 0]; loop.tick();
     expect(targets[0].trace).toHaveBeenCalledOnce(); complete(true); await settle(); loop.tick(); await settle();
     expect(operations.filter(operation => operation.kind === 'draw').at(-1)?.camera?.position).toEqual([2, 0, 0]);
@@ -130,17 +130,17 @@ describe('RenderLoop events and inference', () => {
     const {engine, camera, targets} = renderFixture(); const sync = new Source(engine);
     const loop = new RenderLoop(engine, {sync, final: {maxSamples: 1, denoiser: {type: 'jnlm'}}});
     loop.tick(); let complete!: (value: boolean) => void;
-    vi.mocked(targets[0].performOIDNDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;})); await settle();
-    const cancellations = vi.mocked(targets[0].cancelOIDNDenoise!).mock.calls.length;
+    vi.mocked(targets[0].performDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;})); await settle();
+    const cancellations = vi.mocked(targets[0].cancelDenoise!).mock.calls.length;
     camera.position = [2, 0, 0]; sync.moving = true; expect(loop.tick()).toBe('previewing');
-    expect(targets[0].cancelOIDNDenoise).toHaveBeenCalledTimes(cancellations + 1); expect(loop.samples).toBe(0);
+    expect(targets[0].cancelDenoise).toHaveBeenCalledTimes(cancellations + 1); expect(loop.samples).toBe(0);
     complete(true); await settle(); loop.dispose(); engine.dispose();
   });
   it('does not defer scene invalidation behind inference by default', async () => {
     const {engine, scene, targets, pipeline} = renderFixture(); const source = new Source(engine); source.moving = true;
     const loop = new RenderLoop(engine, {sync: source, preview: {maxSamples: 1, denoiser: {type: 'jnlm'}}});
     loop.tick(); let complete!: (value: boolean) => void;
-    vi.mocked(targets[0].performOIDNDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;})); await settle();
+    vi.mocked(targets[0].performDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;})); await settle();
     scene.background = [.2, .3, .4, 1]; loop.tick();
     expect(pipeline.setBackground).toHaveBeenLastCalledWith([.2, .3, .4, 1]); expect(targets[0].trace).toHaveBeenCalledTimes(2);
     complete(true); await settle(); loop.dispose(); engine.dispose();
@@ -150,7 +150,7 @@ describe('RenderLoop events and inference', () => {
     const loop = new RenderLoop(engine, {sync: source, preview: {maxSamples: 1, denoiser: {type: 'jnlm'}}, final: {maxSamples: 1, denoiser: {type: 'jnlm'}}});
     expect(loop.tick()).toBe('previewing'); await settle();
     source.moving = false; expect(loop.tick()).toBe('denoising'); await settle(); expect(loop.tick()).toBe('finished');
-    expect(targets.map(target => vi.mocked(target.performOIDNDenoise!).mock.calls.length)).toEqual([1, 1]);
+    expect(targets.map(target => vi.mocked(target.performDenoise!).mock.calls.length)).toEqual([1, 1]);
     loop.dispose(); engine.dispose();
   });
 });
@@ -205,7 +205,7 @@ it('holds pending preview inference through interaction end, then starts final w
   const {engine, camera, targets, operations} = renderFixture(); const sync = new Source(engine); sync.moving = true;
   const loop = new RenderLoop(engine, {sync, coalesceSceneUpdates: true, preview: {maxSamples: 1, denoiser: {type: 'jnlm'}}});
   loop.tick(); let complete!: (value: boolean) => void;
-  vi.mocked(targets[0].performOIDNDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;})); await settle();
+  vi.mocked(targets[0].performDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;})); await settle();
   camera.position = [3, 0, 0]; sync.moving = false; expect(loop.tick()).toBe('previewing'); expect(loop.changing).toBe(false); expect(loop.final.samples).toBe(0);
   expect(targets).toHaveLength(1); complete(true); await settle(); expect(loop.tick()).toBe('converging');
   expect(operations.filter(operation => operation.kind === 'draw').at(-1)?.camera?.position).toEqual([3, 0, 0]); loop.dispose(); engine.dispose();
@@ -215,7 +215,7 @@ it('reports preview inference as previewing even when its own sample budget is c
   const {engine, targets} = renderFixture(); const sync = new Source(engine); sync.moving = true;
   const loop = new RenderLoop(engine, {sync, preview: {maxSamples: 1, denoiser: {type: 'jnlm', schedule: 'every-sample'}}, final: {maxSamples: 1}});
   const sample = vi.fn(); loop.on('sample', sample); expect(loop.tick()).toBe('previewing');
-  let complete!: (value: boolean) => void; vi.mocked(targets[0].performOIDNDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;})); await settle();
+  let complete!: (value: boolean) => void; vi.mocked(targets[0].performDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;})); await settle();
   expect(loop.preview!.status).toBe('denoising'); expect(loop.tick()).toBe('previewing'); expect(loop.samples).toBe(0); expect(sample).not.toHaveBeenCalled();
   complete(true); await settle(); expect(loop.tick()).toBe('previewing'); sync.moving = false; expect(loop.tick()).toBe('finished'); expect(sample).toHaveBeenCalledOnce(); loop.dispose(); engine.dispose();
 });

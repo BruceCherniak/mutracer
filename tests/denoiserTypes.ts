@@ -10,3 +10,8 @@ const mixedSource: DenoiserOptions = {type: 'oidn', weightsUrl: '/network.tza', 
 // @ts-expect-error Custom metadata requires an explicit URL.
 const missingURL: DenoiserOptions = {type: 'oidn', hdr: false};
 void mixedSource; void missingURL;
+// @ts-expect-error Packaged network fields do not belong to custom denoisers.
+const mixedCustom: DenoiserOptions = {type: 'custom', denoiser: {denoise: async () => {}}, model: 'small'};
+// @ts-expect-error Third-party filters must implement denoise.
+const invalidCustom: DenoiserOptions = {type: 'custom', denoiser: {}};
+void mixedCustom; void invalidCustom;

@@ -1,3 +1,5 @@
+import type {DenoiserHandle, OIDNWeb} from './denoiser.js';
+import type {DenoiseSchedule} from '../Render.js';
 import type { DepthSampleArea } from './depthQuery.js';
 import Camera from '../scene/Camera.js';
 import Mesh from '../scene/Mesh.js';
@@ -228,18 +230,18 @@ export interface RenderPasses {
   setToneMappingParams(params: ToneMappingParams): boolean;
   setSize(width: number, height: number): void;
   /**
-   * Denoises the current image with an OIDN network (WebGPU only) or the
-   * built-in JNLM filter. Resolves whether the result is now displayed.
+   * Denoises the current image with an explicitly selected built-in or custom filter. Resolves whether the result is now displayed.
    */
-  performOIDNDenoise?(
-    denoiser: unknown,
-    alphaDenoiser?: unknown,
-    schedule?: 'converged' | 'progressive' | 'every-sample'
+  performDenoise?(
+    denoiser: DenoiserHandle,
+    alphaDenoiser?: OIDNWeb,
+    schedule?: DenoiseSchedule,
+    signal?: AbortSignal
   ): Promise<boolean>;
   /** Drops a denoise in flight; the next draw invalidates its output. */
-  cancelOIDNDenoise?(): void;
+  cancelDenoise?(): void;
   /** Keep the last completed OIDN image visible while static while-converging batches accumulate. */
-  setPreserveOIDNOutput?(preserve: boolean): void;
+  setPreserveDenoisedOutput?(preserve: boolean): void;
   getTotalSamplesRendered(): number;
   getDiagnostics(): RenderingDiagnostics;
   /** Waits for asynchronous timestamp diagnostics without changing samples. */

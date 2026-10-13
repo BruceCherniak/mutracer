@@ -21,9 +21,8 @@ import { WebGLDevice as WebGLRenderer } from './renderer/webgl.js';
 import type { RenderPipeline, RenderTarget } from './renderer/renderPipeline.js';
 import type { RenderingDiagnostics } from './renderer/RenderingPipeline.js';
 import type { TinyBvhLayout } from './tinybvh/TinyBvhBuilder.js';
-import type { OIDNDenoiser } from './renderer/oidnNetwork.js';
-import type { JNLMDenoiser } from './renderer/jnlm.js';
-import { isJNLMDenoiser } from './renderer/jnlm.js';
+import type {OwnedDenoiser} from './renderer/denoiser.js';
+import type {Denoiser} from './Render.js';
 export type { DepthSampleArea } from './renderer/depthQuery.js';
 
 /** BLAS implementation; default builtin. */
@@ -118,10 +117,11 @@ export default class Engine {
   private _renders = new Set<Render>();
   private _targetCounter = 0;
   private _presented?: RenderTarget;
-  private _denoisers = new Set<OIDNDenoiser | JNLMDenoiser>();
-  private _denoiserCache = new Map<string, {references: number; value?: OIDNDenoiser | JNLMDenoiser; pending?: Promise<OIDNDenoiser | JNLMDenoiser>}>();
-  private _denoiserEntries = new WeakMap<OIDNDenoiser | JNLMDenoiser, {key: string; references: number; value?: OIDNDenoiser | JNLMDenoiser; pending?: Promise<OIDNDenoiser | JNLMDenoiser>}>();
+  private _denoisers = new Set<OwnedDenoiser>();
+  private _denoiserCache = new Map<string, {references: number; value?: OwnedDenoiser; pending?: Promise<OwnedDenoiser>}>();
+  private _denoiserEntries = new WeakMap<OwnedDenoiser, {key: string; references: number; value?: OwnedDenoiser; pending?: Promise<OwnedDenoiser>}>();
   private _weights = new Map<string, Promise<ArrayBuffer>>();
+  private _customPrepared = new WeakMap<Denoiser, {device: GPUDevice; width: number; height: number}>();
   private _denoiseTail: Promise<unknown> = Promise.resolve();
   private _lastError: Error | undefined;
   /** Most recent synchronous engine/render failure. Default undefined. */
@@ -452,7 +452,7 @@ export default class Engine {
     if (!pending) { pending = load(); this._weights.set(url, pending); void pending.catch(() => { if (this._weights.get(url) === pending) this._weights.delete(url); }); }
     return pending;
   }
-  /** @internal */ _retainDenoiser<T extends OIDNDenoiser | JNLMDenoiser>(key: string, create: () => T): T {
+  /** @internal */ _retainDenoiser<T extends OwnedDenoiser>(key: string, create: () => T): T {
     let entry = this._denoiserCache.get(key);
     if (!entry?.value) {
       const value = this._ownDenoiser(create());
@@ -461,22 +461,22 @@ export default class Engine {
     }
     entry.references++; return entry.value as T;
   }
-  /** @internal */ async _acquireDenoiser(key: string, create: () => Promise<OIDNDenoiser>): Promise<OIDNDenoiser> {
+  /** @internal */ async _acquireDenoiser(key: string, create: () => Promise<Extract<OwnedDenoiser, {kind: 'oidn'}>>): Promise<Extract<OwnedDenoiser, {kind: 'oidn'}>> {
     let entry = this._denoiserCache.get(key);
     if (!entry) {
-      const next: {key: string; references: number; value?: OIDNDenoiser | JNLMDenoiser; pending?: Promise<OIDNDenoiser | JNLMDenoiser>} = {key, references: 0};
+      const next: {key: string; references: number; value?: OwnedDenoiser; pending?: Promise<OwnedDenoiser>} = {key, references: 0};
       next.pending = create().then(filter => { next.value = this._ownDenoiser(filter); this._denoiserEntries.set(filter, next); return filter; });
       this._denoiserCache.set(key, next); entry = next;
     }
     entry.references++;
-    try { return (entry.value ?? await entry.pending!) as OIDNDenoiser; }
+    try { return (entry.value ?? await entry.pending!) as Extract<OwnedDenoiser, {kind: 'oidn'}>; }
     catch (error) { entry.references--; if (this._denoiserCache.get(key) === entry) this._denoiserCache.delete(key); throw error; }
   }
-  /** @internal */ _ownDenoiser<T extends OIDNDenoiser | JNLMDenoiser>(denoiser: T): T {
+  /** @internal */ _ownDenoiser<T extends OwnedDenoiser>(denoiser: T): T {
     if (this._disposed) { this._disposeDenoiser(denoiser); throw new Error('Engine is disposed.'); }
     this._denoisers.add(denoiser); return denoiser;
   }
-  /** @internal */ _releaseDenoiser(denoiser: OIDNDenoiser | JNLMDenoiser) {
+  /** @internal */ _releaseDenoiser(denoiser: OwnedDenoiser) {
     const entry = this._denoiserEntries.get(denoiser);
     if (entry && --entry.references > 0) return;
     if (entry && this._denoiserCache.get(entry.key) === entry) this._denoiserCache.delete(entry.key);
@@ -484,9 +484,18 @@ export default class Engine {
     if (!this._denoisers.delete(denoiser)) return;
     this._disposeDenoiser(denoiser);
   }
-  private _disposeDenoiser(denoiser: OIDNDenoiser | JNLMDenoiser) {
-    if (!isJNLMDenoiser(denoiser)) { denoiser.auxiliaryDenoisers?.albedo.dispose(); denoiser.auxiliaryDenoisers?.normal.dispose(); }
-    denoiser.dispose();
+  private _disposeDenoiser(denoiser: OwnedDenoiser) {
+    if (denoiser.kind === 'oidn') { denoiser.denoiser.auxiliaryDenoisers?.albedo.dispose(); denoiser.denoiser.auxiliaryDenoisers?.normal.dispose(); }
+    denoiser.denoiser.dispose();
+  }
+  /** @internal Called only while holding the shared inference lease. */
+  async _prepareCustomDenoiser(denoiser: Denoiser, width: number, height: number) {
+    const device = this.device;
+    if (!device) throw new Error('Custom denoising requires WebGPU.');
+    const previous = this._customPrepared.get(denoiser);
+    if (previous?.device === device && previous.width === width && previous.height === height) return;
+    await denoiser.prepare?.({device, width, height});
+    this._customPrepared.set(denoiser, {device, width, height});
   }
   /** @internal */ _enqueueDenoise<T>(work: () => Promise<T>): Promise<T> {
     const task = this._denoiseTail.then(work); this._denoiseTail = task.catch(() => {}); return task;

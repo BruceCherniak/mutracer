@@ -6,9 +6,9 @@ import type { AlphaBlendStrategy } from './renderer/RenderingPipeline.js';
 import { normalizeBevelSamples, normalizeDirectLightCandidates } from './renderer/RenderingPipeline.js';
 import type { SamplingPattern } from './renderer/sampling.js';
 import type { RenderTarget, TraceSettings } from './renderer/renderPipeline.js';
-import type { OIDNDenoiser } from './renderer/oidnNetwork.js';
+import type {DenoiserHandle, OwnedDenoiser} from './renderer/denoiser.js';
 import type { OIDNModel, OIDNEngine, OIDNPrecision, OIDNHDRTransfer, OIDNDynamicTileSetting, OIDNAuxiliaryModelUrls } from './oidn.js';
-import { DEFAULT_JNLM_OPTIONS, createJNLMDenoiser, isJNLMDenoiser, type JNLMDenoiser, type JNLMOptions } from './renderer/jnlm.js';
+import { DEFAULT_JNLM_OPTIONS, createJNLMDenoiser, type JNLMOptions } from './renderer/jnlm.js';
 import type { OfflineAdaptiveSamplingOptions, OfflineVarianceHistory } from './renderer/OfflineAdaptiveSampling.js';
 import { nextPreviewScale } from './renderer/util.js';
 
@@ -18,6 +18,29 @@ export interface SampleEvent { samples: number; isFirstFrame: boolean; frameTime
 export type RenderStatus = 'preparing' | 'compiling' | 'converging' | 'denoising' | 'finished' | 'error';
 /** When a render filters its complete samples. Default converged. */
 export type DenoiseSchedule = 'converged' | 'progressive' | 'every-sample';
+/** Caller-owned WebGPU filter. Render/Engine never dispose it; calls on one engine are serialized. */
+export interface Denoiser {
+  /** Optional preallocation before first use or after device/dimension changes. Default undefined. The device may change after recovery; recreate device-owned resources then. */
+  prepare?(input: {device: GPUDevice; width: number; height: number}): Promise<void>;
+  /** Write all output RGB, then resolve after submitting GPU work. Abort on input changes, restart, replacement or disposal; aborted results are discarded even if this resolves. Buffers are borrowed until settlement; do not retain or destroy them. */
+  denoise(input: DenoiseInput, context: {signal: AbortSignal; schedule: DenoiseSchedule}): Promise<void>;
+}
+/** Borrowed, tightly packed rgba32float buffers, top row first, width*height*16 bytes of image data. */
+export interface DenoiseInput {
+  /** Engine WebGPU device; may change after device loss/recovery. */ device: GPUDevice;
+  /** Actual internal width, including backend alignment. */ width: number;
+  /** Actual internal height, including backend alignment. */ height: number;
+  /** Read-only linear HDR composition, including background/catcher coverage, before exposure, grading, tone mapping, vignette and bloom. Usage STORAGE | COPY_SRC | COPY_DST. */ color: GPUBuffer;
+  /** Read-only resolved linear RGB albedo averaged over complete samples; alpha is primary-hit coverage. Same packing/usage as color. */ albedo: GPUBuffer;
+  /** Read-only resolved world-space RGB normal encoded as averaged normal*.5+.5, without renormalizing; alpha 1 for a valid surface, otherwise zero RGBA. Same packing/usage as albedo. */ normal: GPUBuffer;
+  /** Write linear HDR RGB here. Same packing/usage as color; alpha is ignored and original composition coverage is retained. */ output: GPUBuffer;
+}
+/** Third-party WebGPU filter; ignored with one warning on WebGL. */
+export interface CustomDenoiserOptions {
+  /** Required implementation selector. */ type: 'custom';
+  /** Required caller-owned instance, keyed by object identity; never serialized or released by Render/Engine. */ denoiser: Denoiser;
+  /** When to filter complete samples. Default converged. */ schedule?: DenoiseSchedule;
+}
 /** Built-in joint non-local means filter on both backends. */
 export interface JNLMDenoiserOptions extends JNLMOptions {
   /** Required implementation selector. */ type: 'jnlm';
@@ -50,7 +73,7 @@ export type OIDNDenoiserOptions = OIDNSettings & (
   }
 );
 /** Assign a complete configuration, or null to disable denoising. The type selector is required. */
-export type DenoiserOptions = JNLMDenoiserOptions | OIDNDenoiserOptions;
+export type DenoiserOptions = JNLMDenoiserOptions | OIDNDenoiserOptions | CustomDenoiserOptions;
 
 /** Optional per-render execution and image-quality settings. */
 export interface RenderSettings {
@@ -99,14 +122,17 @@ let oidnModule: Promise<typeof import('./renderer/oidnNetwork.js')> | undefined;
 const loadOIDN = () => oidnModule ??= import('./renderer/oidnNetwork.js');
 
 function validateDenoiserOptions(options: DenoiserOptions) {
-  if (!options || typeof options !== 'object' || (options.type !== 'jnlm' && options.type !== 'oidn')) throw new Error('Denoiser type must be jnlm or oidn.');
+  if (!options || typeof options !== 'object' || (options.type !== 'jnlm' && options.type !== 'oidn' && options.type !== 'custom')) throw new Error('Denoiser type must be jnlm, oidn or custom.');
   const allowed = options.type === 'jnlm'
     ? ['type', 'schedule', ...Object.keys(DEFAULT_JNLM_OPTIONS)]
+    : options.type === 'custom' ? ['type', 'schedule', 'denoiser']
     : ['type', 'schedule', 'model', 'weightsBaseUrl', 'weightsUrl', 'aux', 'hdr', 'hdrTransfer', 'auxiliaryModelUrls', 'engine', 'precision', 'dynamicTile', 'maxTileSize', 'signal'];
   for (const key of Object.keys(options)) if (!allowed.includes(key)) throw new Error(`Denoiser field ${key} does not belong to ${options.type}.`);
   if (options.schedule !== undefined && !['converged', 'progressive', 'every-sample'].includes(options.schedule)) throw new Error('Unknown denoise schedule.');
   if (options.type === 'jnlm') createJNLMDenoiser(options);
-  else {
+  else if (options.type === 'custom') {
+    if (!options.denoiser || typeof options.denoiser !== 'object' || typeof options.denoiser.denoise !== 'function' || (options.denoiser.prepare !== undefined && typeof options.denoiser.prepare !== 'function')) throw new Error('Custom denoiser must implement denoise and optional prepare.');
+  } else {
     if (options.weightsUrl !== undefined) {
       if (options.model !== undefined || options.weightsBaseUrl !== undefined) throw new Error('weightsUrl is mutually exclusive with model and weightsBaseUrl.');
     } else if (options.aux !== undefined || options.hdr !== undefined || options.hdrTransfer !== undefined) throw new Error('aux, hdr and hdrTransfer require weightsUrl.');
@@ -134,7 +160,7 @@ function isURL(value: unknown): value is string | URL { return (typeof value ===
 
 // Snapshot nested values too, so application edits cannot silently change a cache key.
 function snapshotDenoiserOptions(options: DenoiserOptions): Readonly<DenoiserOptions> {
-  if (options.type === 'jnlm') return Object.freeze({...options});
+  if (options.type !== 'oidn') return Object.freeze({...options});
   const next: OIDNDenoiserOptions = {...options};
   if (options.weightsBaseUrl !== undefined) next.weightsBaseUrl = String(options.weightsBaseUrl);
   if (options.weightsUrl !== undefined) next.weightsUrl = String(options.weightsUrl);
@@ -143,7 +169,8 @@ function snapshotDenoiserOptions(options: DenoiserOptions): Readonly<DenoiserOpt
   return Object.freeze(next);
 }
 
-function denoiserKey(options: Readonly<DenoiserOptions>) {
+function denoiserKey(options: Readonly<DenoiserOptions>): string | Denoiser {
+  if (options.type === 'custom') return options.denoiser;
   if (options.type === 'jnlm') return JSON.stringify({type: 'jnlm', ...Object.fromEntries(Object.entries(DEFAULT_JNLM_OPTIONS).map(([key, value]) => [key, options[key as keyof JNLMOptions] ?? value]))});
   const tile = options.dynamicTile;
   return JSON.stringify({type: 'oidn',
@@ -219,8 +246,10 @@ export default class Render {
   /** Whether inference is queued or running, including intermediate updates. Default false. */ get denoising(): boolean { return !!this._denoisePending; }
   /** Subscribes to every complete sample on this render; returns unsubscribe. */
   on(event: 'sample', listener: (value: SampleEvent) => void): () => void { return this._events.on(event, listener); }
-  private _filter?: OIDNDenoiser | JNLMDenoiser;
-  private _filterKey = '';
+  private _filter?: OwnedDenoiser | Extract<DenoiserHandle, {kind: 'custom'}>;
+  private _filterKey: string | Denoiser = '';
+  private _warnedWebGPUFilter = false;
+  private _denoiseController?: AbortController;
   private _filterRevision = 0;
   private _filterPending?: Promise<void>;
   private _denoiseRevision = 0;
@@ -308,7 +337,7 @@ export default class Render {
     if (this._fallback && this.samples === 0 && !target.canCompleteSampleWithin(this.timeBudgetMs) && !this._fallback._complete) this._fallback._refineOne();
     target.activate();
     if (this._denoisePending) return this._status = this.converged ? 'denoising' : 'converging';
-    target.setPreserveOIDNOutput?.(!!this._filter && this._schedule() === 'progressive');
+    target.setPreserveDenoisedOutput?.(!!this._filter && this._schedule() === 'progressive');
     const limit = this._nextSampleTarget();
     if (this.samples < limit) {
       if (target.trace(this._engine._inputs.value!, limit)) return this._status = 'compiling';
@@ -343,16 +372,18 @@ export default class Render {
     if (key === this._filterKey) return;
     this._filterKey = key; const revision = ++this._filterRevision;
     this._cancelDenoise();
-    if (this._filter) this._engine._releaseDenoiser(this._filter);
+    if (this._filter && this._filter.kind !== 'custom') this._engine._releaseDenoiser(this._filter);
     this._target?.invalidateDenoisedOutput();
     this._filter = undefined; this._filterPending = undefined;
     if (!options) return;
-    if (options.type === 'jnlm') { this._filter = this._engine._retainDenoiser(`jnlm:${key}`, () => createJNLMDenoiser(options)); return; }
+    if (options.type === 'jnlm') { this._filter = this._engine._retainDenoiser(`jnlm:${key}`, () => ({kind: 'jnlm', denoiser: createJNLMDenoiser(options)})); return; }
     const task = (async () => {
       await this._engine.init();
-      if (this._engine.backend !== 'webgpu') { if (revision === this._filterRevision) console.warn('OIDN requires WebGPU; denoising is disabled for this render.'); return; }
+      if (this._engine.backend !== 'webgpu') { if (revision === this._filterRevision && !this._warnedWebGPUFilter) { this._warnedWebGPUFilter = true; console.warn('This denoiser requires WebGPU; denoising is disabled for this render.'); } return; }
+      if (revision !== this._filterRevision || this._disposed) return;
+      if (options.type === 'custom') { this._filter = {kind: 'custom', denoiser: options.denoiser}; return; }
       const {loadOIDNNetwork} = await loadOIDN();
-      const filter = await this._engine._acquireDenoiser(key, () => loadOIDNNetwork(this._engine, options));
+      const filter = await this._engine._acquireDenoiser(key as string, async () => ({kind: 'oidn', denoiser: await loadOIDNNetwork(this._engine, options)}));
       if (revision !== this._filterRevision || this._disposed) { this._engine._releaseDenoiser(filter); return; }
       this._filter = filter; this._warmDenoiser();
     })();
@@ -361,8 +392,9 @@ export default class Render {
   }
   private _warmDenoiser() {
     const filter = this._filter, revision = this._filterRevision;
-    if (!filter || isJNLMDenoiser(filter)) return;
-    const filters = [filter, filter.auxiliaryDenoisers?.albedo, filter.auxiliaryDenoisers?.normal];
+    if (!filter || filter.kind !== 'oidn') return;
+    const network = filter.denoiser;
+    const filters = [network, network.auxiliaryDenoisers?.albedo, network.auxiliaryDenoisers?.normal];
     const width = this.width, height = this.height;
     const task = this._engine._enqueueDenoise(async () => {
       if (revision !== this._filterRevision || filter !== this._filter || this._disposed) return;
@@ -373,7 +405,7 @@ export default class Render {
     });
   }
 
-  private _cancelDenoise() { this._denoiseRevision++; this._target?.cancelOIDNDenoise?.(); this._denoisePending = undefined; this._denoisedSamples = 0; }
+  private _cancelDenoise() { this._denoiseController?.abort(); this._denoiseController = undefined; this._denoiseRevision++; this._target?.cancelDenoise?.(); this._denoisePending = undefined; this._denoisedSamples = 0; }
   /** @internal */ _inputsChanged(resetTiming = false) { this._cancelDenoise(); if (resetTiming) this._target?.invalidateTiming?.(); }
   /** @internal */ _displayChanged() { this._cancelDenoise(); this._target?.invalidateDenoisedOutput(); }
   private _maybeDenoise(force = false, sampleTarget = this._nextSampleTarget()) {
@@ -384,18 +416,23 @@ export default class Render {
     this._engine.display._configure(this);
     target.activate(); target.drawPostProcess();
     const revision = ++this._denoiseRevision, samples = this.samples;
+    const controller = this._denoiseController = new AbortController();
     // One shared scratch lease across all renders; queued stale jobs do no GPU work.
     const task = this._engine._enqueueDenoise(async () => {
       if (revision !== this._denoiseRevision || this._disposed) return;
       target.activate(); this._engine.display._configure(this);
       if (revision !== this._denoiseRevision || this._disposed) return;
       target.drawPostProcess();
-      const complete = await target.performOIDNDenoise?.(filter, undefined, this._schedule());
+      if (filter.kind === 'custom') {
+        await this._engine._prepareCustomDenoiser(filter.denoiser, this.width, this.height);
+        if (controller.signal.aborted || revision !== this._denoiseRevision || this._disposed) return;
+      }
+      const complete = await target.performDenoise?.(filter, undefined, this._schedule(), controller.signal);
       if (revision !== this._denoiseRevision || this._disposed) return;
       if (complete) { target.activate(); target.drawPostProcess(); this._denoisedSamples = samples; this._lastDenoiseTime = performance.now(); }
     });
     this._denoisePending = task;
-    void task.catch(error => { if (revision === this._denoiseRevision && !this._disposed) this._engine._notifyError(error); }).finally(() => { if (this._denoisePending === task) { this._denoisePending = undefined; this._status = this.converged ? 'finished' : 'converging'; } });
+    void task.catch(error => { if (revision === this._denoiseRevision && !this._disposed) this._engine._notifyError(error); }).finally(() => { if (this._denoisePending === task) { this._denoiseController = undefined; this._denoisePending = undefined; this._status = this.converged ? 'finished' : 'converging'; } });
   }
   /** Reads this target's native RGBA float32 output, top row first. Default hdr; unavailable denoised output falls back to hdr. */
   async readPixels(kind: 'hdr' | 'denoised' | 'albedo' | 'normal' = 'hdr') {
@@ -415,7 +452,7 @@ export default class Render {
     if (this._disposed) return;
     this._disposed = true; this._events.clear(); this._filterRevision++; this._cancelDenoise();
     if (this._target) this._engine._releaseTarget(this._target);
-    if (this._filter) this._engine._releaseDenoiser(this._filter);
+    if (this._filter && this._filter.kind !== 'custom') this._engine._releaseDenoiser(this._filter);
     this._target = undefined; this._filter = undefined; this._engine._unregister(this);
     this._fallback?._dependents.delete(this);
     for (const dependent of this._dependents) dependent._fallback = null;
@@ -440,6 +477,8 @@ export default class Render {
       if (current.scene !== inputs.scene || current.camera !== inputs.camera) throw new Error('Engine inputs changed during converge.');
     };
     this._busy = true;
+    const abortConverge = () => this._cancelDenoise();
+    options.signal?.addEventListener('abort', abortConverge, {once: true});
     let target: RenderTarget | undefined;
     const start = performance.now();
     try {
@@ -495,6 +534,7 @@ export default class Render {
     } catch (error) { this._status = 'error'; throw error; }
     finally {
       if (target && !this._disposed) { target.activate(); target.setVarianceMoments(false); target.setAdaptiveSamplingTargets(undefined); target.setOfflineRenderOptions({samplesPerBatch: 0, deferPostProcess: false, sampleSequenceOffset: 0}); }
+      options.signal?.removeEventListener('abort', abortConverge);
       this._busy = false;
     }
   }

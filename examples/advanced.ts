@@ -17,6 +17,7 @@ import {
 } from '@meimu/mutracer';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
+import { copyDenoiser } from './shared/copyDenoiser';
 
 const canvas = document.getElementById('main') as HTMLCanvasElement;
 const statusElement = document.getElementById('status')!;
@@ -97,6 +98,8 @@ function updateDenoiser() {
   final.denoiser = (
     model === 'off'
       ? null
+      : model === 'custom-copy'
+      ? {type: 'custom', denoiser: copyDenoiser}
       : model === 'jnlm'
       ? { type: 'jnlm' }
       : { type: 'oidn', model: model as OIDNModel, weightsBaseUrl: '/oidn/weights/' }

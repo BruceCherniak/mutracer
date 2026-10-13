@@ -42,15 +42,15 @@ describe('per-render denoising', () => {
     const {engine, targets} = renderFixture(); const render = new Render(engine, {maxSamples: 8, denoiser: {type: 'jnlm', schedule}});
     for (let i = 0; i < 8; i++) {render.refine(); await settle();}
     expect(render.samples).toBe(8);
-    expect(targets[0].performOIDNDenoise).toHaveBeenCalledTimes(schedule === 'converged' ? 1 : schedule === 'progressive' ? 3 : 8); engine.dispose();
+    expect(targets[0].performDenoise).toHaveBeenCalledTimes(schedule === 'converged' ? 1 : schedule === 'progressive' ? 3 : 8); engine.dispose();
   });
   it('serializes inference and discards queued jobs invalidated by engine input changes', async () => {
     const {engine, targets, camera} = renderFixture(); const a = new Render(engine, {maxSamples: 1, denoiser: {type: 'jnlm'}}), b = new Render(engine, {maxSamples: 1, denoiser: {type: 'jnlm'}});
     a.refine(); let done!: (value: boolean) => void;
-    vi.mocked(targets[0].performOIDNDenoise!).mockImplementation(() => new Promise(resolve => {done = resolve;}));
-    await settle(); b.refine(); await settle(); expect(targets[1].performOIDNDenoise).not.toHaveBeenCalled();
+    vi.mocked(targets[0].performDenoise!).mockImplementation(() => new Promise(resolve => {done = resolve;}));
+    await settle(); b.refine(); await settle(); expect(targets[1].performDenoise).not.toHaveBeenCalled();
     camera.position = [1, 0, 0]; engine.update(); done(true); await settle();
-    expect(targets[1].performOIDNDenoise).not.toHaveBeenCalled(); engine.dispose();
+    expect(targets[1].performDenoise).not.toHaveBeenCalled(); engine.dispose();
   });
   it('fails soft for OIDN on WebGL', async () => {
     const {engine} = renderFixture({backend: 'webgl'}); const error = vi.fn(); engine.on('error', error);
@@ -65,7 +65,7 @@ it('composes an invisible render with current display settings before convergenc
   const render = new Render(engine, {width: 256, height: 256, denoiser: {type: 'jnlm'}});
   await render.converge({samples: 2});
   expect(targets[0].setToneMappingParams).toHaveBeenCalledWith(expect.objectContaining({exposure: 2}));
-  expect(vi.mocked(targets[0].setToneMappingParams).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(targets[0].performOIDNDenoise!).mock.invocationCallOrder[0]);
+  expect(vi.mocked(targets[0].setToneMappingParams).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(targets[0].performDenoise!).mock.invocationCallOrder[0]);
   expect(targets[0].present).not.toHaveBeenCalled(); engine.dispose();
 });
 it('invalidates a completed filter when disabled without discarding samples', async () => {
@@ -79,7 +79,7 @@ it('denoises again after display settings change without tracing another sample'
   render.refine(); await settle(); engine.display.present(render);
   engine.display.shadowCatcherAlpha = .5; engine.display.present(render); render.refine(); await settle();
   expect(render.samples).toBe(1); expect(targets[0].trace).toHaveBeenCalledOnce();
-  expect(targets[0].performOIDNDenoise).toHaveBeenCalledTimes(2); engine.dispose();
+  expect(targets[0].performDenoise).toHaveBeenCalledTimes(2); engine.dispose();
 });
 
 it('recomposes the requested render after waiting for the shared inference lease', async () => {
@@ -88,7 +88,7 @@ it('recomposes the requested render after waiting for the shared inference lease
   a.refine(); b.refine();
   for (const target of targets) {
     vi.mocked(target.drawPostProcess).mockImplementation(() => {composed = target.label;});
-    vi.mocked(target.performOIDNDenoise!).mockImplementation(async () => {filtered.push(composed); return true;});
+    vi.mocked(target.performDenoise!).mockImplementation(async () => {filtered.push(composed); return true;});
   }
   await settle(); expect(filtered).toEqual(targets.map(target => target.label)); engine.dispose();
 });
@@ -96,7 +96,7 @@ it('recomposes the requested render after waiting for the shared inference lease
 it('waits for active shared inference before prewarming the same network for another size', async () => {
   const {engine, targets} = renderFixture(); const network = filter(); loadOIDNNetwork.mockResolvedValue(network);
   const a = new Render(engine, {maxSamples: 1, denoiser: {type: 'oidn'}}); await settle(); a.refine();
-  let done!: (value: boolean) => void; vi.mocked(targets[0].performOIDNDenoise!).mockImplementation(() => new Promise(resolve => {done = resolve;}));
+  let done!: (value: boolean) => void; vi.mocked(targets[0].performDenoise!).mockImplementation(() => new Promise(resolve => {done = resolve;}));
   await settle(); const warmCalls = network.prepareForImage.mock.calls.length;
   const b = new Render(engine, {width: 256, height: 256, denoiser: {type: 'oidn'}}); await settle();
   expect(network.prepareForImage).toHaveBeenCalledTimes(warmCalls);
@@ -114,12 +114,12 @@ describe('progressive denoiser schedule', () => {
     const target = targets[0], trace = vi.mocked(target.trace).getMockImplementation()!;
     vi.mocked(target.trace).mockImplementation((camera, cap) => { clock += 10; return trace(camera, cap); });
     let finish!: (complete: boolean) => void;
-    vi.mocked(target.performOIDNDenoise!).mockImplementation(() => new Promise(resolve => {finish = resolve;}));
+    vi.mocked(target.performDenoise!).mockImplementation(() => new Promise(resolve => {finish = resolve;}));
     async function nextUpdate() {
-      const calls = vi.mocked(target.performOIDNDenoise!).mock.calls.length;
+      const calls = vi.mocked(target.performDenoise!).mock.calls.length;
       for (let frames = 0; frames < 20000; frames++) {
         render.refine(); await Promise.resolve();
-        if (vi.mocked(target.performOIDNDenoise!).mock.calls.length > calls) {
+        if (vi.mocked(target.performDenoise!).mock.calls.length > calls) {
           const count = render.samples;
           // Pending inference holds the sample target even if inference takes many frames.
           clock += denoiseMs; render.refine(); expect(render.samples).toBe(count);
@@ -151,7 +151,7 @@ describe('progressive denoiser schedule', () => {
     const render = new Render(engine, {maxSamples: 4, denoiser: {type: 'jnlm', schedule}});
     const filtered: number[] = [];
     render.refine();
-    vi.mocked(targets[0].performOIDNDenoise!).mockImplementation(async () => {filtered.push(render.samples); return true;});
+    vi.mocked(targets[0].performDenoise!).mockImplementation(async () => {filtered.push(render.samples); return true;});
     await settle();
     for (let i = 0; i < 3; i++) {render.refine(); await settle();}
     expect(filtered).toEqual(schedule === 'every-sample' ? [1, 2, 3, 4] : [4]);
@@ -163,13 +163,13 @@ it('keeps equal OIDN assignments and schedule edits on the current in-flight inf
   const {engine, targets} = renderFixture(); const network = filter(); loadOIDNNetwork.mockResolvedValue(network);
   const render = new Render(engine, {maxSamples: 1, denoiser: {type: 'oidn'}}); await settle();
   render.refine(); let finish!: (value: boolean) => void;
-  vi.mocked(targets[0].performOIDNDenoise!).mockImplementation(() => new Promise(resolve => {finish = resolve;}));
-  await settle(); vi.mocked(targets[0].cancelOIDNDenoise!).mockClear(); vi.mocked(targets[0].invalidateDenoisedOutput).mockClear();
+  vi.mocked(targets[0].performDenoise!).mockImplementation(() => new Promise(resolve => {finish = resolve;}));
+  await settle(); vi.mocked(targets[0].cancelDenoise!).mockClear(); vi.mocked(targets[0].invalidateDenoisedOutput).mockClear();
   const configuration = render.denoiser;
   render.denoiser = {type: 'oidn'}; expect(render.denoiser).toBe(configuration);
   render.denoiser = {type: 'oidn', model: 'standard', schedule: 'progressive'};
   expect(render.denoising).toBe(true); expect(loadOIDNNetwork).toHaveBeenCalledOnce();
-  expect(targets[0].cancelOIDNDenoise).not.toHaveBeenCalled(); expect(targets[0].invalidateDenoisedOutput).not.toHaveBeenCalled();
+  expect(targets[0].cancelDenoise).not.toHaveBeenCalled(); expect(targets[0].invalidateDenoisedOutput).not.toHaveBeenCalled();
   finish(true); await settle(); expect(render.status).toBe('finished'); engine.dispose();
 });
 
@@ -182,10 +182,10 @@ it.each([
   const {engine, targets} = renderFixture(); const network = filter(); loadOIDNNetwork.mockResolvedValue(network);
   const render = new Render(engine, {maxSamples: 1, denoiser: {type: 'oidn'}}); await settle();
   render.refine(); await settle(); const configuration = render.denoiser;
-  vi.mocked(targets[0].cancelOIDNDenoise!).mockClear(); vi.mocked(targets[0].invalidateDenoisedOutput).mockClear();
+  vi.mocked(targets[0].cancelDenoise!).mockClear(); vi.mocked(targets[0].invalidateDenoisedOutput).mockClear();
   expect(() => {render.denoiser = invalid as unknown as import('../../src/main').DenoiserOptions;}).toThrow();
   expect(render.denoiser).toBe(configuration); expect(network.dispose).not.toHaveBeenCalled();
-  expect(targets[0].cancelOIDNDenoise).not.toHaveBeenCalled(); expect(targets[0].invalidateDenoisedOutput).not.toHaveBeenCalled();
+  expect(targets[0].cancelDenoise).not.toHaveBeenCalled(); expect(targets[0].invalidateDenoisedOutput).not.toHaveBeenCalled();
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {}); await render.readPixels('denoised'); expect(warn).not.toHaveBeenCalled();
   engine.dispose();
 });

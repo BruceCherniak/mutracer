@@ -1,6 +1,6 @@
 # Denoising
 
-MuTracer has two denoisers. Both filter the complete composed image using
+MuTracer has two built-in denoisers. Both filter the complete composed image using
 albedo and normal guides.
 
 - **JNLM**: a built-in joint non-local means filter, on WebGPU and
@@ -171,6 +171,67 @@ configuration. Nested tile/URL settings are copied and frozen too.
 `resolveOIDNModelUrl` / `resolveOIDNAuxiliaryModelUrls` URL helpers. Loading
 functions and network handles are internal; configure them through Render.
 OIDN option types are exported from the main entry.
+
+## Custom denoisers
+
+Provide a caller-owned `Denoiser` on WebGPU. Built-in JNLM and OIDN retain
+their specialized paths. This identity filter illustrates the buffer contract:
+
+```ts
+import type {Denoiser} from '@meimu/mutracer';
+
+const copy: Denoiser = {
+  async denoise({device, width, height, color, output}, {signal}) {
+    if (signal.aborted) return;
+    const encoder = device.createCommandEncoder();
+    encoder.copyBufferToBuffer(color, 0, output, 0, width * height * 16);
+    device.queue.submit([encoder.finish()]);
+  }
+};
+final.denoiser = {type: 'custom', denoiser: copy, schedule: 'converged'};
+```
+
+The required `type` and `denoiser` choose this branch; `schedule` defaults to
+`converged`. Optional `prepare({device, width, height})` runs before the first
+inference and whenever the instance's last prepared device or dimensions
+change. It can preallocate resources. A shared instance switching between
+render sizes is prepared again. `DenoiseInput` contains these buffers:
+
+| Buffer | Data |
+| --- | --- |
+| `color` | Linear HDR composition with background and catcher coverage; before exposure, color grading, tone mapping, vignette and bloom |
+| `albedo` | Linear RGB albedo averaged over complete samples; alpha is primary-hit coverage |
+| `normal` | Resolved world-space normal averaged and encoded as `normal*.5+.5`, without renormalization; alpha 1 for valid surface data, otherwise zero RGBA |
+| `output` | Write all linear HDR RGB; output alpha is ignored and the input composition's coverage is preserved |
+
+All four are tightly packed RGBA float32, top row first, exactly
+`width * height * 16` bytes, with STORAGE, COPY_SRC and COPY_DST usages.
+Dimensions describe the actual internal image (WebGPU rounds up to 16).
+Input buffers are read-only. Buffers are borrowed until the promise settles;
+do not retain or destroy them. Resolve after submitting every output write;
+MuTracer copies the result, waits for GPU work, then releases its queue lease.
+Custom `readPixels('denoised')` returns this linear HDR composition. Display
+settings apply afterward to the complete filtered image, including its
+background. For a shadow catcher this composition can differ from the raw
+radiance returned by `readPixels('hdr')`.
+
+Render and Engine never dispose the supplied instance. Its object identity
+selects it; identical assignment and schedule-only edits preserve running
+inference. One engine serializes preparation and denoising across all renders,
+so an instance can share resources between them. Sharing across separate
+engines needs caller-managed coordination.
+
+The context signal aborts on committed input changes, restart, replacement,
+Render/Engine disposal or cancellation of convergence. Results resolving after
+abort are discarded. The queue still waits for that promise to settle before
+lending shared buffers again, so respond promptly to abort. Current preparation
+and inference failures report through `engine.on('error', ...)`; stale jobs do
+not report obsolete failures. WebGL warns once per render and leaves it
+unfiltered.
+
+A recovered engine may provide a new `input.device`. Rebuild device-owned
+resources when it changes; `prepare` is called again. Dispose caller-owned
+resources yourself after outstanding work has settled.
 
 ## Implementation notes
 

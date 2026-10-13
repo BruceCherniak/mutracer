@@ -162,10 +162,17 @@ quality defaults to the browser encoder value.
 
 All display settings apply at composition and retain accumulated samples.
 
-`DenoiserOptions` is a union of `JNLMDenoiserOptions` and `OIDNDenoiserOptions`,
+`DenoiserOptions` is a union of `JNLMDenoiserOptions`, `OIDNDenoiserOptions`
+and `CustomDenoiserOptions`,
 with required `type`. The getter is frozen; reassign to edit. Invalid types,
 foreign fields and invalid JNLM settings preserve the previous filter and
 result. Schedule-only edits keep inference running. See [denoising](./denoising.md).
+
+`Denoiser` is the caller-owned third-party WebGPU interface. Its optional
+`prepare` receives device/dimensions, and `denoise` receives `DenoiseInput`
+plus abort signal/schedule. Built-ins use internal specialized implementations.
+The packed buffer formats, ownership, cancellation, device changes and display
+semantics are documented in [Custom denoisers](./denoising.md#custom-denoisers).
 
 ### Pixel outputs
 
@@ -176,7 +183,7 @@ which WebGPU rounds up to multiples of 16. Before a pipeline exists, it returns 
 | Kind | Values |
 | --- | --- |
 | `hdr` | Original linear HDR samples, unchanged by denoising |
-| `denoised` | Native completed denoiser output: WebGPU normally display-linear after composition/tone mapping; WebGL JNLM after tone mapping and display encoding |
+| `denoised` | Completed output: custom WebGPU filters return linear HDR composition; built-in WebGPU filters normally return display-linear after composition/tone mapping; WebGL JNLM returns tone mapped, display encoded colors |
 | `albedo` | Native linear albedo guide and coverage alpha |
 | `normal` | Native normal guide: RGB encoded as `normal * 0.5 + 0.5`, alpha indicates valid surface data |
 

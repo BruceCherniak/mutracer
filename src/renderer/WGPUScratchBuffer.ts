@@ -2,8 +2,8 @@
 export class WGPUScratchBuffer {
   private buffer?: GPUBuffer;
   constructor(private readonly device: GPUDevice) {}
-  get(bytes: number) {
-    if (!this.buffer || this.buffer.size < bytes) {
+  get(bytes: number, exact = false) {
+    if (!this.buffer || (exact ? this.buffer.size !== bytes : this.buffer.size < bytes)) {
       const previous = this.buffer;
       this.buffer = this.device.createBuffer({label: 'Shared inference input', size: bytes,
         usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC});
