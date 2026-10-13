@@ -153,3 +153,5 @@ and GPU validation.
 MuTracer is released under the [MIT License](./LICENSE). It includes third-party
 code and data under MIT, Apache-2.0 and CC0 licenses; see
 [THIRD_PARTY_NOTICES.md](./THIRD_PARTY_NOTICES.md).
+
+For host WebGPU integration, [supply your own GPUDevice](docs/getting-started.md#using-your-own-gpudevice).

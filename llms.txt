@@ -50,3 +50,5 @@
 - [BVH](docs/bvh.md): automatic and up-front preparation, builders, layouts
 - [Performance](docs/performance.md): tuning checklist; resident target dimensions/bytes and complete-image presentation diagnostics
 - [Examples](https://github.com/pissang/mutracer/tree/main/examples): basic, Three.js, animation, advanced
+
+- Caller-owned GPUDevice: pass `device` to Engine; obtain a descriptor with `getRecommendedDeviceDescriptor(adapter)`. Ownership and limits: [API](docs/api.md#device-requirements).

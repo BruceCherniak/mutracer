@@ -195,3 +195,18 @@ export default defineConfig({
 Vite production builds and webpack 5 copy these assets without extra
 configuration. With bundlers that do not support asset URLs, self-host the
 OIDN weights with `weightsBaseUrl` (see [denoising](./denoising.md#hosting-the-weights)).
+
+## Using your own GPUDevice
+
+```ts
+import { Engine, getRecommendedDeviceDescriptor } from '@meimu/mutracer';
+const adapter = await navigator.gpu.requestAdapter();
+if (!adapter) throw new Error('WebGPU unavailable');
+const device = await adapter.requestDevice(getRecommendedDeviceDescriptor(adapter));
+const engine = new Engine({ canvas, device });
+await engine.init();
+```
+
+The caller owns the device and releases it after all engines using it have been
+disposed. Supplying a device selects WebGPU; `backend: 'webgl'` is rejected.
+See [device requirements](./api.md#device-requirements) for limits and OIDN.

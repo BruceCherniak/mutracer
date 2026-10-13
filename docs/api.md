@@ -264,3 +264,32 @@ see [denoising](./denoising.md#custom-oidn-networks). The main entry exports
 ## Implementation notes
 
 BVH caches, light packing helpers and material-weight packing are renderer internals. Texture upload notifications use `markUpdated()` and `version`.
+
+### Device requirements
+
+`EngineParams.device` defaults to undefined (the library's shared device). A
+supplied device implies WebGPU, even with `backend: 'auto'`, and cannot be
+combined with `backend: 'webgl'`. `init()` rejects unsupported limits through
+`lastError` and the `error` event, listing each required and actual value. The
+device is caller-owned; `dispose()` does not destroy it or share it with other
+engines implicitly. Adapter name uses `device.adapterInfo` when available,
+otherwise `WebGPU`.
+
+`getRecommendedDeviceDescriptor(adapter)` requests supported optional features
+and the adapter limits used by the default engine path. Core rendering needs
+no optional features: timestamp-query falls back to wall-clock timing; core
+shaders use f32 and manual float texture filtering. shader-f16 and subgroups
+are OIDN optimizations; its automatic precision falls back to FP32 and its
+non-subgroup kernels remain available. Texture-format tier features and
+bgra8unorm-storage are not prerequisites for the core render-attachment path.
+Explicit OIDN FP16 or WebNN options can require shader-f16.
+
+The core floor is 8 storage buffers, 8 sampled textures, 1 storage texture,
+4 bind groups, workgroup X 64 / Y 16 / 256 invocations, and 12288 bytes for
+buffer size and storage-buffer binding size (one aligned 16×16 target block).
+Core kernels need 0 bytes of workgroup shared memory. Actual scene, image and
+texture sizes impose larger buffer and texture limits. OIDN shares this same
+device and can require more buffer capacity and workgroup shared memory for
+its convolution tiles; the recommended descriptor requests adapter maxima.
+Use smaller OIDN tiles or automatic precision when appropriate; network
+initialization reports incompatible configurations.

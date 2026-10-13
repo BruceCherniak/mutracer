@@ -102,3 +102,5 @@ export type { RenderOptions, RenderSettings, ConvergeOptions, ConvergeResult, De
 export { default as Sync } from './Sync.js';
 export { default as RenderLoop } from './RenderLoop.js';
 export type { RenderLoopOptions, RenderLoopStatus } from './RenderLoop.js';
+
+export {getRecommendedDeviceDescriptor} from './renderer/deviceRequirements.js';

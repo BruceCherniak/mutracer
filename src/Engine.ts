@@ -1,4 +1,5 @@
 import Camera from './scene/Camera.js';
+import {getRecommendedDeviceDescriptor, validateDevice} from './renderer/deviceRequirements.js';
 import { cameraSnapshot } from './renderer/cameraSnapshot.js';
 import type { Scene } from './scene/Scene.js';
 import type Mesh from './scene/Mesh.js';
@@ -36,6 +37,7 @@ export interface PrepareOptions {
 export interface EngineParams {
   /** Default display canvas. Default a newly created canvas. */ canvas?: HTMLCanvasElement;
   /** Backend selection. Default auto, with WebGL fallback. webgpu requires WebGPU. */ backend?: 'auto' | 'webgpu' | 'webgl';
+  /** Caller-owned WebGPU device. Default undefined uses a shared device. Implies webgpu; incompatible with webgl. */ device?: GPUDevice;
   /** Warn about unmarked material edits. Default true in development, false in production. */ validateUpdates?: boolean;
 }
 /** Material-atlas device limits. */
@@ -88,6 +90,7 @@ export default class Engine {
   private _pipeline?: RenderPipeline;
   private _webglRenderer?: WebGLRenderer;
   private _gpuDevice?: GPUDevice;
+  private _suppliedDevice?: GPUDevice;
   private _gpuAdapterInfo?: GPUAdapterInfo;
   private _backendChoice: NonNullable<EngineParams['backend']>;
   private _initPromise?: Promise<EngineInfo>;
@@ -129,7 +132,9 @@ export default class Engine {
   /** @internal */ _setRenderError(error?: Error) { this._lastError = error; }
 
   constructor(params: EngineParams = {}) {
-    this._backendChoice = params.backend ?? 'auto';
+    if (params.device && params.backend === 'webgl') throw new Error('A supplied GPUDevice cannot use the webgl backend.');
+    this._suppliedDevice = params.device;
+    this._backendChoice = params.device ? 'webgpu' : params.backend ?? 'auto';
     this._sceneChangeDetector = new SceneChangeDetector(params.validateUpdates ?? isDevelopment());
     this.display = Display._create(this, params.canvas ?? document.createElement('canvas'));
   }
@@ -284,70 +289,33 @@ export default class Engine {
 
       this._events.emit('progress', {stage: 'device', progress: 0});
       this._pipelineInitError = undefined;
-      if (preferWebGPU && typeof navigator !== 'undefined' && navigator.gpu) {
+      if (preferWebGPU && (this._suppliedDevice || (typeof navigator !== 'undefined' && navigator.gpu))) {
         try {
-          const gpu = navigator.gpu;
-          let gpuDevice = globalGPUDevice;
+          const gpu = typeof navigator !== 'undefined' ? navigator.gpu : undefined;
+          let gpuDevice = this._suppliedDevice ?? globalGPUDevice;
           let gpuAdapter = globalGPUAdapter;
-          let gpuAdapterInfo = globalGPUAdapterInfo;
+          let gpuAdapterInfo = this._suppliedDevice ? (this._suppliedDevice as GPUDevice & {adapterInfo?: GPUAdapterInfo}).adapterInfo : globalGPUAdapterInfo;
           if (!gpuDevice) {
-            gpuAdapter = await gpu.requestAdapter({
+            gpuAdapter = await gpu!.requestAdapter({
               powerPreference: 'high-performance'
             });
             if (!gpuAdapter) {
-              gpuAdapter = await gpu.requestAdapter();
+              gpuAdapter = await gpu!.requestAdapter();
             }
             if (!gpuAdapter) throw new Error('No WebGPU adapter is available');
             gpuAdapterInfo = (gpuAdapter as GPUAdapter & { info: GPUAdapterInfo }).info;
 
-            // Optional features also benefit OIDN, which shares this device.
-            const requiredFeatures: GPUFeatureName[] = [];
-            for (const feature of [
-              'timestamp-query',
-              'bgra8unorm-storage',
-              'shader-f16',
-              'subgroups',
-              'texture-formats-tier1',
-              'texture-formats-tier2',
-              'float32-filterable'
-            ] as GPUFeatureName[]) {
-              if (gpuAdapter.features.has(feature)) requiredFeatures.push(feature);
-            }
-
-            // Request the adapter limits. The defaults are too small for large
-            // scenes and for OIDN's convolution workgroups.
-            const adapterLimits = gpuAdapter.limits;
-            gpuDevice = await gpuAdapter.requestDevice({
-              requiredFeatures,
-              requiredLimits: {
-                maxComputeWorkgroupStorageSize:
-                  adapterLimits.maxComputeWorkgroupStorageSize,
-                maxComputeWorkgroupsPerDimension:
-                  adapterLimits.maxComputeWorkgroupsPerDimension,
-                maxStorageBufferBindingSize:
-                  adapterLimits.maxStorageBufferBindingSize,
-                maxStorageBuffersPerShaderStage:
-                  adapterLimits.maxStorageBuffersPerShaderStage,
-                maxSampledTexturesPerShaderStage:
-                  adapterLimits.maxSampledTexturesPerShaderStage,
-                maxStorageTexturesPerShaderStage:
-                  adapterLimits.maxStorageTexturesPerShaderStage,
-                maxBufferSize: adapterLimits.maxBufferSize,
-                maxTextureArrayLayers: adapterLimits.maxTextureArrayLayers,
-                maxComputeWorkgroupSizeX: adapterLimits.maxComputeWorkgroupSizeX,
-                maxComputeInvocationsPerWorkgroup:
-                  adapterLimits.maxComputeInvocationsPerWorkgroup
-              }
-            });
+            gpuDevice = await gpuAdapter.requestDevice(getRecommendedDeviceDescriptor(gpuAdapter));
             globalGPUAdapter = gpuAdapter;
             globalGPUAdapterInfo = gpuAdapterInfo ?? null;
             globalGPUDevice = gpuDevice;
           }
 
+          validateDevice(gpuDevice);
           this._gpuAdapterInfo = gpuAdapterInfo ?? undefined;
           this._gpuDevice = gpuDevice;
           this._pipeline = makeWGPURenderTargets(this.display.canvas, gpuDevice, {
-            presentationFormat: gpu.getPreferredCanvasFormat()
+            presentationFormat: gpu?.getPreferredCanvasFormat() ?? 'bgra8unorm'
           });
           gpuCreated = true;
         } catch (e) {
@@ -382,6 +350,7 @@ export default class Engine {
 
     } catch (error) {
       this._pipelineInitError = error instanceof Error ? error : new Error(String(error));
+      this._lastError = this._pipelineInitError;
       this._notifyError(this._pipelineInitError);
     } finally {
 
@@ -392,7 +361,7 @@ export default class Engine {
   private _adapterName() {
     if (this._gpuAdapterInfo) return this._gpuAdapterInfo.description || this._gpuAdapterInfo.vendor || 'WebGPU';
     const gl = this._webglRenderer?.gl, extension = gl?.getExtension('WEBGL_debug_renderer_info');
-    return extension && gl ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : this._webglRenderer ? 'WebGL 2' : '';
+    return extension && gl ? gl.getParameter(extension.UNMASKED_RENDERER_WEBGL) : this._webglRenderer ? 'WebGL 2' : this._gpuDevice ? 'WebGPU' : '';
   }
   /** @internal */ _reportShaderProgress() {
     const compilation = this._pipeline?.getDiagnostics().shaderCompilation;
