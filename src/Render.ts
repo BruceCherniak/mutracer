@@ -457,6 +457,11 @@ export default class Render {
     }
     target.activate(); return target.readOutput(kind);
   }
+  /** Borrows a read-only WebGPU texture; undefined on WebGL or before a complete sample. Kind is required. HDR is native resolved linear ray color before denoising/display composition, with DenoiseInput.color normalization and coverage. Display is the latest compose, including filters and display passes. Valid only until this render's next refine/converge, display present/setSize, restart/dispose or device loss; never retain, write or destroy it. */
+  getOutputTexture(kind: 'hdr' | 'display'): GPUTexture | undefined {
+    if (!this._complete || this._engine.backend !== 'webgpu') return;
+    return this._target?.getOutputTexture?.(kind);
+  }
   /** Discards only this render's accumulation and pending denoising. */
   restart() { if (this._disposed) throw new Error('Render is disposed.'); this._cancelDenoise(); this._target?.restartSamples(); this._status = 'converging'; }
   /** Releases only this render's image resources and denoiser. */

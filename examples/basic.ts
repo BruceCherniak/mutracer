@@ -16,6 +16,7 @@ import {
 } from '@meimu/mutracer';
 import { createSkyTexture } from './shared/sky';
 import { showStatus } from './shared/status';
+import { createCrosshairPass } from './shared/crosshairPass';
 
 const canvas = document.getElementById('main') as HTMLCanvasElement;
 const statusElement = document.getElementById('status')!;
@@ -65,6 +66,8 @@ controls.target.set(0, .3, -.3); controls.update();
 const engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
 const displaySettings: DisplaySettings = {toneMapping: 'agx', toneMappingExposure: 1};
 Object.assign(engine.display, displaySettings);
+// Add ?overlay to see a display-only GPU crosshair, also included in PNG export.
+if (new URLSearchParams(location.search).has('overlay')) engine.display.addPostProcess(createCrosshairPass());
 const sync = new THREESync(engine, {camera, controls});
 const loop = new RenderLoop(engine, {sync, final: {bounces: 6, maxSamples: 1024}});
 const final = loop.final;

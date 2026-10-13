@@ -20,6 +20,7 @@
 - Preview: explicit `new Render(engine, {resolutionScale:.5, adaptiveResolution:{targetFrameMs:20,minScale:.25},bounces:2,bevel:false,dispersionWavelengths:1,directLightCandidates:2})`. Give the final render `fallback: preview`; [fallback rules](docs/progressive-rendering.md#caveats).
 - Denoising: required `type`, frozen getter, reassign to edit; assign `render.denoiser = {type:'jnlm'}` (both backends) or `{type:'oidn',model:'standard'}` (WebGPU, ignored with a warning on WebGL). Schedules: converged (default), progressive, every-sample; [denoising](docs/denoising.md).
 - Sampling: `render.samplingPattern` is sobol (default), zsobol or random; [sampling](docs/sampling.md).
+- GPU output/overlays: `render.getOutputTexture('hdr'|'display')` and `display.addPostProcess(pass)` are WebGPU-only; present/export run display passes, raw readbacks do not. [Formats and lifetime](docs/post-processing.md).
 - Export: `await final.converge({samples:64,sampleSequenceOffset:0,camera?})`, `await final.readPixels('hdr')`, `await engine.display.toBlob(final)`. Fixed width/height are constructor-only; Blob uses render dimensions and leaves canvas unchanged.
 - Concurrency: converge blocks refine only on that render, copies its camera override, and rejects when engine input revisions change. readPixels and present always select the requested result.
 - BVH: automatic CPU preparation; optional `await engine.prepare(nextScene,{onProgress?,signal?})` leaves current GPU scene unchanged. Engine BVH options rebuild at the next update; [BVH](docs/bvh.md).

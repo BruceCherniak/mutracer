@@ -28,6 +28,18 @@ export interface DisplaySettings {
   /** Linear shadow-catcher color. Default black. */ shadowCatcherColor?: ColorRGB;
   /** Shadow-catcher opacity multiplier. Default 1. */ shadowCatcherAlpha?: number;
 }
+/** Borrowed WebGPU images for one synchronous display pass. */
+export interface PostProcessContext {
+  /** Engine device; may change after recovery. */ device: GPUDevice;
+  /** Record commands here; the library finishes and submits it. */ encoder: GPUCommandEncoder;
+  /** Read-only composed display image, top row first; no additional color conversion. */ input: GPUTexture;
+  /** Fully write this image. Same format and dimensions as input; supports render, storage and copy writes. */ output: GPUTexture;
+  /** Actual render width. */ width: number;
+  /** Actual render height. */ height: number;
+  /** Selected complete render, including a selected fallback. */ render: Render;
+}
+/** Synchronous display pass. Images and encoder are borrowed only during the call; do not retain or destroy them. */
+export type PostProcess = (context: PostProcessContext) => void;
 /** Canvas presentation and shared display settings; obtained from engine.display. */
 export default class Display {
   /** Display canvas. Default the supplied Engine canvas, or a new canvas (OffscreenCanvas without document). */ readonly canvas: HTMLCanvasElement | OffscreenCanvas;
@@ -68,12 +80,27 @@ export default class Display {
     target.activate();
     applyDisplaySettings(this, target);
   }
+  private readonly _postProcesses: {pass: PostProcess}[] = [];
+  private _warnedPostProcess = false;
+  /** Registers a display pass in order and returns an idempotent removal function. Default no passes. WebGPU only; WebGL skips passes with one warning. Runs after composition on every present/toBlob, without tracing or invalidating denoising. A thrown error discards the whole chain, presents the original image and emits engine error. */
+  addPostProcess(pass: PostProcess): () => void {
+    const entry = {pass};
+    this._postProcesses.push(entry);
+    if (this.engine.backend === 'webgl') this.warnPostProcess();
+    return () => { const index = this._postProcesses.indexOf(entry); if (index >= 0) this._postProcesses.splice(index, 1); };
+  }
+  private warnPostProcess() {
+    if (!this._warnedPostProcess) { this._warnedPostProcess = true; console.warn('Display post-processing requires WebGPU; passes are ignored on WebGL.'); }
+  }
   private compose(render: Render) {
     if (render._engine !== this.engine) throw new Error('Render belongs to another engine.');
     const target = render._output;
     if (!target?.presentationComplete) return;
     this._configure(render);
     target.drawPostProcess();
+    if (this._postProcesses.length && this.engine.backend === 'webgl') this.warnPostProcess();
+    try { target.applyPostProcesses?.(this._postProcesses.map(entry => entry.pass), render); }
+    catch (error) { this.engine._notifyError(error); }
     return target;
   }
   /** Presents a complete render or its fallback. Does not trace; leaves canvas unchanged if neither is ready. */

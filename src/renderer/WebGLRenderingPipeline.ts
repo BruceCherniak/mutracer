@@ -397,6 +397,8 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     },
     activate,
     canCompleteSampleWithin(timeBudgetMs: number) { return elapsedFrameTime <= timeBudgetMs; },
+    getOutputTexture() { return undefined; },
+    applyPostProcesses() {},
     get presentationComplete() { return !!presentationTexture; },
     get presentationDenoised() { return presentationDenoised; },
     present() {

@@ -340,3 +340,9 @@ see [denoising](./denoising.md#custom-oidn-networks). The main entry exports
 ## Implementation notes
 
 BVH caches, light packing helpers and material-weight packing are renderer internals. Texture upload notifications use `markUpdated()` and `version`.
+
+## GPU output and display passes
+
+`render.getOutputTexture(kind)` borrows native HDR or the latest display image;
+`display.addPostProcess(pass)` returns unregister and runs on every present/export.
+Both are WebGPU-only. See [formats, lifecycle and overlay example](./post-processing.md).

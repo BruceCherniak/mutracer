@@ -1,3 +1,4 @@
+import {DisplayPostProcess} from './DisplayPostProcess.js';
 import {customDenoiseLayersMain, customDenoiseCoverageMain} from './wgsl/customDenoise.wgsl.js';
 import { WGPUCanvasSurface } from './WGPUCanvasSurface.js';
 import { WGPUScratchBuffer } from './WGPUScratchBuffer.js';
@@ -175,6 +176,7 @@ function makeWGPUAccumulationTarget(
   let resolvedFlatBackground = [0, 0, 0, 0];
   let presentationTexture: GPUTexture | undefined;
   let presentationDenoised = false;
+  const displayPostProcess = new DisplayPostProcess(device);
   let denoiseValid = false;
 
   let maxTimePerTile = 21;
@@ -654,6 +656,7 @@ output.color = color;
     _forceNeedsDenoise?: boolean,
     resolve = false
   ) {
+    displayPostProcess.reset();
     if (resolve) {
       resolvedSamples = sampleCount;
       resolvedHasShadowCatcher = rayTracePass.hasShadowCatcher();
@@ -1431,6 +1434,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       rayTracePass.releaseTarget(targetKey);
       denoisedBuffer?.destroy();
       presentationTexture?.destroy();
+      displayPostProcess.dispose();
       rayTraceOutputPass.dispose();
     });
   }
@@ -1474,13 +1478,13 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       surface.configure(hdrOutputActive);
       const encoder = device.createCommandEncoder();
       outputPass.setSize(canvas.width, canvas.height);
-      _present(encoder, presentationTexture);
+      _present(encoder, displayPostProcess.output ?? presentationTexture);
       device.queue.submit([encoder.finish()]);
     },
     getMemory() {
       return {
 width: renderWidth, height: renderHeight,
-        bytes: rayTracePass.getTargetMemoryBytes(targetKey) + rayTraceOutputPass.getMemoryBytes() + textureBytes(presentationTexture) + (denoisedBuffer?.size ?? 0)
+        bytes: rayTracePass.getTargetMemoryBytes(targetKey) + rayTraceOutputPass.getMemoryBytes() + textureBytes(presentationTexture) + displayPostProcess.getMemoryBytes() + (denoisedBuffer?.size ?? 0)
 };
     },
     isFirstFrame() {
@@ -1502,6 +1506,14 @@ width: renderWidth, height: renderHeight,
       sampleCount = 0;
     },
 
+    getOutputTexture(kind) {
+      if (resolvedSamples < 1) return;
+      if (kind === 'hdr') return getFrameInput('color');
+      return displayPostProcess.output ?? presentationTexture;
+    },
+    applyPostProcesses(passes, render) {
+      if (presentationTexture) displayPostProcess.run(presentationTexture, passes, render);
+    },
     trace,
     drawPostProcess() {
       const encoder = device.createCommandEncoder();
@@ -1514,12 +1526,13 @@ width: renderWidth, height: renderHeight,
     setToneMappingParams,
     async readPresentation() {
       if (!presentationTexture) throw new Error('Render has no complete image.');
-      const width = presentationTexture.width, height = presentationTexture.height;
+      const image = displayPostProcess.output ?? presentationTexture;
+      const width = image.width, height = image.height;
       const bytesPerRow = Math.ceil(width * 16 / 256) * 256;
       const buffer = device.createBuffer({ size: bytesPerRow * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
       const encoder = device.createCommandEncoder();
       readbackPass.setSize(width, height);
-      readbackPass.createPass(encoder, { inputTex: presentationTexture });
+      readbackPass.createPass(encoder, { inputTex: image });
       encoder.copyTextureToBuffer({ texture: readbackPass.getOutput('color') }, { buffer, bytesPerRow }, { width, height });
       device.queue.submit([encoder.finish()]);
       try {

@@ -42,6 +42,10 @@ with a `MuTracer` global is at `dist/mutracer.umd.js`.
 
 ## Quick start
 
+Borrow WebGPU output with `render.getOutputTexture('hdr')` or `render.getOutputTexture('display')`, or add
+a display overlay through `engine.display.addPostProcess(pass)`. Passes also
+run during PNG export; see the [overlay example and texture lifetime](./docs/post-processing.md).
+
 For many copies of one geometry, use [`InstancedMesh`](./docs/updates.md#instanced-meshes)
 with shared materials and a Float32 matrix array. `THREESync` converts Three.js
 instancing into the same batches automatically. See the [instancing example](./examples/instancing.ts).

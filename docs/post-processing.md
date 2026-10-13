@@ -1,0 +1,89 @@
+# GPU output and display passes
+
+After a render has a complete sample, borrow its WebGPU textures with
+`render.getOutputTexture('hdr')` or `render.getOutputTexture('display')`.
+To add an overlay or another display effect, register a synchronous pass:
+
+```ts
+const remove = engine.display.addPostProcess(ctx => {
+  // Record a render or compute pass on ctx.encoder.
+  // Read ctx.input and fully write ctx.output, including alpha.
+  // Use ctx.output.format when creating the pipeline.
+  drawOverlay(ctx);
+});
+engine.display.present(final);
+const png = await engine.display.toBlob(final);
+remove(); // Safe to call again.
+```
+
+Passes run in registration order on every `present()` and `toBlob()`, after
+composition and denoising. They receive the selected complete render, including
+fallbacks, at its actual dimensions. Export uses the same chain without resizing
+or changing the display canvas. `readPixels()` never runs these passes.
+
+For a complete overlay implementation, see
+[`createCrosshairPass`](../examples/shared/crosshairPass.ts). It loads the input
+with `textureLoad`, draws a white crosshair in display space and writes every
+output pixel. The [basic example](../examples/basic.ts) enables it with `?overlay`:
+
+```ts
+import { createCrosshairPass } from './shared/crosshairPass';
+const removeCrosshair = engine.display.addPostProcess(createCrosshairPass());
+```
+
+A changing overlay can read application state in its callback. `RenderLoop`
+stops presenting after convergence, so explicitly call `display.present(final)`
+when that state changes. This refreshes the overlay without tracing more samples.
+
+## Options and image semantics
+
+`getOutputTexture(kind)` requires `'hdr'` or `'display'`; both return undefined
+on WebGL, before a complete sample or after disposal. There are no passes by
+default. `addPostProcess(pass)` returns an idempotent unregister function.
+`PostProcess` and `PostProcessContext` are exported types.
+
+| Image | Meaning |
+| --- | --- |
+| HDR | Native resolved linear ray RGB, before denoising, exposure, grading, tone mapping, vignette, bloom or display background/catcher composition. Same normalization and raw path-coverage alpha as `DenoiseInput.color` |
+| Display | Latest composed display channel, including denoising and the display pass chain; encoded display RGB and straight alpha (diagnostic channels retain their native values) |
+
+Images have their first row at the top. HDR currently uses `rgba16float`;
+ordinary display uses `rgba8unorm`, extended-range output uses `rgba16float`,
+and diagnostic channels may use their native format. Inspect `texture.format`
+and dimensions rather than assuming a format. Extended-range display RGB is
+still encoded for presentation; it is not the original HDR ray color.
+
+HDR RGB divides by primary hits when there are hits, otherwise by sample count.
+For an opaque flat background, `readPixels('hdr')` additionally multiplies RGB
+by primary-hit coverage for partially hit pixels, restoring the per-sample
+average. Thus that CPU readback can differ from the borrowed native HDR texture.
+See [custom denoiser image semantics](./denoising.md#custom-denoisers).
+
+## Caveats
+
+Textures are borrowed and read-only. Do not retain, write or destroy returned
+textures. Their validity ends at the render's next `refine()`/`converge()`, or
+the display's next `present()`/`setSize()`; restart, disposal and device loss
+also invalidate them. Fully transparent PNG pixels have no preserved RGB
+value after the browser canvas encoding/decoding round trip. Submit your reads before that boundary. Callback images
+and encoder are borrowed only during the synchronous callback; record all work
+there and let MuTracer finish and submit the encoder. Do not submit separate
+work, mutate input or retain the output. Device recovery may replace the device,
+so cache pipelines by both device and output format.
+
+The output supports `RENDER_ATTACHMENT`, `STORAGE_BINDING`, `TEXTURE_BINDING`
+and copy usage. Each pass must fully write it; previous contents are unspecified.
+The input and output never alias. WebGL skips all registered passes and warns
+once per display. A synchronous callback exception skips the remaining passes,
+discards the chain's recorded commands, displays the original composed image
+and emits the engine `error` event. GPU validation errors remain WebGPU errors;
+the callback must record valid commands.
+
+## Implementation notes
+
+Two target-owned intermediate textures provide ping-pong storage. They are
+allocated only when passes run and reused until dimensions/format change;
+retired images are destroyed after submitted work completes. The composed image
+is kept separately, so a thrown callback cannot leave a partly processed result.
+Display passes do not enter denoiser inputs, change samples or invalidate cached
+filter results. HDR-stage callbacks are outside this API.

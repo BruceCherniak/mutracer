@@ -1,3 +1,5 @@
+import type {PostProcess} from '../Display.js';
+import type Render from '../Render.js';
 import type {DenoiserHandle, OIDNWeb} from './denoiser.js';
 import type {DenoiseSchedule} from '../Render.js';
 import type { DepthSampleArea } from './depthQuery.js';
@@ -207,6 +209,9 @@ export interface RenderPasses {
   restartSamples(): void;
   trace(camera: Camera, maxSamples: number): boolean;
   drawPostProcess(): void;
+  /** Apply display-only passes to the last composed image; absent on WebGL. */
+  applyPostProcesses?(passes: readonly PostProcess[], render: Render): void;
+  getOutputTexture?(kind: 'hdr' | 'display'): GPUTexture | undefined;
   /** Configure deterministic headless batches used by offline frame export. */
   setOfflineRenderOptions(options: {
     samplesPerBatch: number;
