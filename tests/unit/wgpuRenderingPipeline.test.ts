@@ -381,3 +381,21 @@ it('keeps borrowed scratch resources alive until a cancelled custom promise sett
   finish(); expect(await pending).toBe(false); await new Promise(resolve => setTimeout(resolve, 0));
   expect(release).toHaveBeenCalledOnce();
 });
+
+it('keeps borrowed scratch alive when custom denoise disposes synchronously', async () => {
+  const pipeline = createPipeline(false); pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.drawPostProcess();
+  let finish!: () => void;
+  let released = false;
+  let signal!: AbortSignal;
+  const pending = pipeline.performDenoise!({kind: 'custom', denoiser: {denoise(_input, context) {
+    signal = context.signal;
+    vi.spyOn(mocks.Pass.instances.get('Custom HDR composition')!, 'dispose').mockImplementation(() => {released = true;});
+    pipeline.manager.dispose();
+    return new Promise(resolve => {finish = resolve;});
+  }}});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(signal.aborted).toBe(true);
+  expect(released).toBe(false);
+  finish(); expect(await pending).toBe(false);
+  await new Promise(resolve => setTimeout(resolve, 0)); expect(released).toBe(true);
+});

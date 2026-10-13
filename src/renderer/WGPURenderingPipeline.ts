@@ -1678,7 +1678,10 @@ export function makeWGPURenderTargets(canvas: HTMLCanvasElement | OffscreenCanva
   const customJobs = new Set<Promise<unknown>>();
   const scratch = new ScratchPool(work => {
     // A cancelled custom filter can keep submitting GPU work until its promise settles.
-    void Promise.allSettled([...customJobs]).then(() => device.queue.onSubmittedWorkDone()).catch(() => {}).then(work);
+    // A custom callback can dispose synchronously, before its promise is recorded.
+    // Observe leases after that callback returns so its borrowed inputs stay alive.
+    void Promise.resolve().then(() => Promise.allSettled([...customJobs]))
+      .then(() => device.queue.onSubmittedWorkDone()).catch(() => {}).then(work);
   });
   const surface = scratch.get('canvas', () => new WGPUCanvasSurface(canvas, device, options.presentationFormat ?? navigator.gpu.getPreferredCanvasFormat()));
   return makeRenderPipeline(rayTracePass, () => {
