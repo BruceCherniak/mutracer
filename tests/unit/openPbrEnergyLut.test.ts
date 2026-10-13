@@ -17,13 +17,13 @@ describe('OpenPBR opaque dielectric energy LUT', () => {
     expect(Math.max(...data)).toBeLessThanOrEqual(1);
   });
 
-  it('preserves representative Uint16 UNORM source values', () => {
+  it('stays within 0.002 of representative Uint16 UNORM source values', () => {
     const data = getOpenPbrEnergyLutData();
     const averageOffset = OPENPBR_ENERGY_LUT_AVERAGE_ROW
       * OPENPBR_ENERGY_LUT_WIDTH;
-    expect(data[29]).toBeCloseTo(50582 / 65535, 7);
-    expect(data[32 * 32 * 32 - 1]).toBeCloseTo(61816 / 65535, 7);
-    expect(data[averageOffset]).toBeCloseTo(8159 / 65535, 7);
-    expect(data.at(-1)).toBeCloseTo(60821 / 65535, 7);
+    expect(Math.abs(data[29]! - 50582 / 65535)).toBeLessThanOrEqual(0.002);
+    expect(Math.abs(data[32 * 32 * 32 - 1]! - 61816 / 65535)).toBeLessThanOrEqual(0.002);
+    expect(Math.abs(data[averageOffset]! - 8159 / 65535)).toBeLessThanOrEqual(0.002);
+    expect(Math.abs(data.at(-1)! - 60821 / 65535)).toBeLessThanOrEqual(0.002);
   });
 });

@@ -34,7 +34,9 @@ helpers additionally adapt
 
 Copyright 2026 Adobe. Apache License 2.0
 ([`LICENSES/Apache-2.0.txt`](./LICENSES/Apache-2.0.txt)). Modified for WGSL and
-GLSL; the upstream project has no NOTICE file.
+GLSL; this repository re-quantized the Adobe energy lookup data to 8-bit
+row-normalized values with 16-bit row minimum/maximum headers. The upstream
+project has no NOTICE file.
 
 ## GLSL-PathTracer
 
