@@ -40,6 +40,19 @@ additionally adapt `impl/openpbr_microfacet_multiple_scattering_lobes.h`,
 row-normalized encoding; the uniform-hemisphere proposal is mixed within
 the existing metal sampling lobe.
 
+The ideal-dielectric reflection/transmission multiple-scattering lobe and
+three additional tables adapt the same commit's
+`impl/openpbr_microfacet_multiple_scattering_lobes.h`,
+`impl/openpbr_microfacet_multiple_scattering_data.h`, and
+`impl/data/openpbr_ideal_dielectric_{energy_complement,avg_energy_complement,reflection_ratio}_data.h`.
+They are translated to WGSL/GLSL and appended to the shared row-normalized
+texture; each average uses a repeated degenerate row to retain small u16
+values. The reference hemisphere-ratio proposal shares the existing
+transmission-lobe interval and direction random dimensions; the combined
+response and PDF are evaluated together. This addition is restricted to
+solid transmissive materials, preserves the renderer's exact null boundary,
+and retains the reference's isotropic alpha and scale factors.
+
 Copyright 2026 Adobe. Apache License 2.0
 ([`LICENSES/Apache-2.0.txt`](./LICENSES/Apache-2.0.txt)). Modified for WGSL and
 GLSL; this repository re-quantized the Adobe energy lookup data to 8-bit

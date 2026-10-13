@@ -162,6 +162,13 @@ ray-marching step (default `0.01`). No extra triangles are generated.
 `displacementBumpStrength` (default `0`) reuses the height map for bump shading.
 The remaining `displacement*` properties are documented in the type declarations.
 
+## Known limitations
+
+Rough thin-wall glass can appear too dark because its reflection/transmission
+model includes only single microfacet scattering. Adobe's reference has no
+thin-wall transmission multiple-scattering compensation; this approximation
+is exact for smooth windows but loses energy as roughness increases.
+
 ## Implementation notes
 
 The BSDF evaluates fuzz, coat, metal, dielectric specular, transmission,
@@ -174,5 +181,10 @@ thin-film evaluation and texture filtering.
 Metal reflection includes the reference's additional microfacet multiple
 scattering, scaled by the square of the average F82 reflectance. Its energy
 tables use the original isotropic roughness, also for anisotropic materials,
-so strong anisotropy can retain a small energy error. Rough solid and thin-wall
-transmission currently use single microfacet scattering and can lose energy.
+so strong anisotropy can retain a small energy error. Solid transmission also
+includes the reference dielectric multiple-scattering lobe, using its
+refraction IOR for both reflected and transmitted compensation. It uses the
+original isotropic alpha and turns off below roughness 0.04. Its transmission
+scale follows the reference; single refraction retains the renderer's existing
+radiance IOR scaling. The combined model can retain an energy error, including
+with coat, and the finite path-event budget can truncate deep glass paths.

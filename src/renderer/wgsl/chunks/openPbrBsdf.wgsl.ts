@@ -16,7 +16,7 @@
  * rough-diffuse/specular coupling; fuzz still uses an analytic approximation.
  */
 
-import { OPENPBR_METAL_ENERGY_LUT_ROW, OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW } from '../../openPbrEnergyLut.js';
+import { OPENPBR_METAL_ENERGY_LUT_ROW, OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW, OPENPBR_DIELECTRIC_ENERGY_LUT_ROW, OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW, OPENPBR_DIELECTRIC_REFLECTION_RATIO_LUT_ROW } from '../../openPbrEnergyLut.js';
 
 export default /* wgsl */ `
 const OPENPBR_LOBE_FUZZ: i32 = 0;
@@ -50,6 +50,12 @@ struct OpenPbrPreparedBsdf {
     metalMsScale: vec3f,
     metalMsFactor: f32,
     metalMsProbability: f32,
+
+    dielectricMsReflectionScale: vec3f,
+    dielectricMsTransmissionScale: vec3f,
+    dielectricMsViewLoss: f32,
+    dielectricMsReflectionRatio: f32,
+    dielectricMsProbability: f32,
 
     weights: array<f32, OPENPBR_LOBE_COUNT>,
     probabilities: array<f32, OPENPBR_LOBE_COUNT>,
@@ -150,6 +156,95 @@ fn openpbr_energy_bilinear(exactIor: f32, exactAlpha: f32) -> f32 {
         mix(v01, v11, iorMix),
         alphaMix
     );
+}
+
+// Adobe c91aad1 ideal dielectric tables clamp IOR indices; unlike opaque
+// dielectric data they do not extrapolate outside [0.4, 2.5].
+fn openpbr_ideal_energy_trilinear(
+    exactIor: f32,
+    exactAlpha: f32,
+    exactCosine: f32
+) -> f32 {
+    let iorIndex = clamp(exactIor, 0.0, 31.0);
+    let alphaIndex = clamp(exactAlpha, 0.0, 31.0);
+    let cosineIndex = clamp(exactCosine, 0.0, 31.0);
+    let ior0 = i32(floor(iorIndex));
+    let alpha0 = i32(floor(alphaIndex));
+    let cosine0 = i32(floor(cosineIndex));
+    let ior1 = min(ior0 + 1, 31);
+    let alpha1 = min(alpha0 + 1, 31);
+    let cosine1 = min(cosine0 + 1, 31);
+    let iorMix = iorIndex - f32(ior0);
+    let alphaMix = alphaIndex - f32(alpha0);
+    let cosineMix = cosineIndex - f32(cosine0);
+
+    let v000 = openpbr_energy_fetch(cosine0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_ROW} + ior0 * 32 + alpha0);
+    let v001 = openpbr_energy_fetch(cosine1, ${OPENPBR_DIELECTRIC_ENERGY_LUT_ROW} + ior0 * 32 + alpha0);
+    let v010 = openpbr_energy_fetch(cosine0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_ROW} + ior0 * 32 + alpha1);
+    let v011 = openpbr_energy_fetch(cosine1, ${OPENPBR_DIELECTRIC_ENERGY_LUT_ROW} + ior0 * 32 + alpha1);
+    let v100 = openpbr_energy_fetch(cosine0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_ROW} + ior1 * 32 + alpha0);
+    let v101 = openpbr_energy_fetch(cosine1, ${OPENPBR_DIELECTRIC_ENERGY_LUT_ROW} + ior1 * 32 + alpha0);
+    let v110 = openpbr_energy_fetch(cosine0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_ROW} + ior1 * 32 + alpha1);
+    let v111 = openpbr_energy_fetch(cosine1, ${OPENPBR_DIELECTRIC_ENERGY_LUT_ROW} + ior1 * 32 + alpha1);
+    let v00 = mix(v000, v100, iorMix);
+    let v01 = mix(v001, v101, iorMix);
+    let v10 = mix(v010, v110, iorMix);
+    let v11 = mix(v011, v111, iorMix);
+    return mix(
+        mix(v00, v10, alphaMix),
+        mix(v01, v11, alphaMix),
+        cosineMix
+    );
+}
+
+fn openpbr_ideal_average_bilinear(exactIor: f32, exactAlpha: f32) -> f32 {
+    let iorIndex = clamp(exactIor, 0.0, 31.0);
+    let alphaIndex = clamp(exactAlpha, 0.0, 31.0);
+    let ior0 = i32(floor(iorIndex));
+    let alpha0 = i32(floor(alphaIndex));
+    let ior1 = min(ior0 + 1, 31);
+    let alpha1 = min(alpha0 + 1, 31);
+    let iorMix = iorIndex - f32(ior0);
+    let alphaMix = alphaIndex - f32(alpha0);
+    let v00 = openpbr_energy_fetch(0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior0 * 32 + alpha0);
+    let v01 = openpbr_energy_fetch(0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior0 * 32 + alpha1);
+    let v10 = openpbr_energy_fetch(0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior1 * 32 + alpha0);
+    let v11 = openpbr_energy_fetch(0, ${OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW} + ior1 * 32 + alpha1);
+    return mix(
+        mix(v00, v10, iorMix),
+        mix(v01, v11, iorMix),
+        alphaMix
+    );
+}
+
+fn openpbr_ideal_ratio_bilinear(exactIor: f32, exactAlpha: f32) -> f32 {
+    let iorIndex = clamp(exactIor, 0.0, 31.0);
+    let alphaIndex = clamp(exactAlpha, 0.0, 31.0);
+    let ior0 = i32(floor(iorIndex));
+    let alpha0 = i32(floor(alphaIndex));
+    let ior1 = min(ior0 + 1, 31);
+    let alpha1 = min(alpha0 + 1, 31);
+    let iorMix = iorIndex - f32(ior0);
+    let alphaMix = alphaIndex - f32(alpha0);
+    let v00 = openpbr_energy_fetch(alpha0, ${OPENPBR_DIELECTRIC_REFLECTION_RATIO_LUT_ROW} + ior0);
+    let v01 = openpbr_energy_fetch(alpha1, ${OPENPBR_DIELECTRIC_REFLECTION_RATIO_LUT_ROW} + ior0);
+    let v10 = openpbr_energy_fetch(alpha0, ${OPENPBR_DIELECTRIC_REFLECTION_RATIO_LUT_ROW} + ior1);
+    let v11 = openpbr_energy_fetch(alpha1, ${OPENPBR_DIELECTRIC_REFLECTION_RATIO_LUT_ROW} + ior1);
+    return mix(
+        mix(v00, v10, iorMix),
+        mix(v01, v11, iorMix),
+        alphaMix
+    );
+}
+
+fn openpbr_ideal_dielectric_loss(ior: f32, alpha: f32, cosine: f32) -> f32 {
+    return openpbr_ideal_energy_trilinear(openpbr_energy_ior_index(ior), sqrt(alpha) * 31.0, cosine * 31.0);
+}
+fn openpbr_ideal_dielectric_average_loss(ior: f32, alpha: f32) -> f32 {
+    return openpbr_ideal_average_bilinear(openpbr_energy_ior_index(ior), sqrt(alpha) * 31.0);
+}
+fn openpbr_ideal_dielectric_reflection_ratio(ior: f32, alpha: f32) -> f32 {
+    return openpbr_ideal_ratio_bilinear(openpbr_energy_ior_index(ior), sqrt(alpha) * 31.0);
 }
 
 // Adobe openpbr_microfacet_multiple_scattering_{data,lobes}.h (c91aad1):
@@ -876,6 +971,31 @@ fn openpbr_prepare(
     prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] = prepared.weights[OPENPBR_LOBE_TRANSMISSION]
         * (1.0 - transmissionFresnel)
         * openpbr_luminance(transmissionTint);
+    // OpenPBR_DielectricMicrofacetMultipleScatteringLobe, Adobe c91aad1
+    // (Apache-2.0). Use the refraction IOR even when coat reflection uses a
+    // different ratio. Restrict this addition to solid transmissive materials;
+    // opaque/subsurface-only and thin-wall paths retain their existing model.
+    // Keep the renderer's exact null boundary discrete: upstream avoids eta=1
+    // for refraction, and its tabulation has small nonzero loss there.
+    prepared.dielectricMsReflectionScale = vec3f(0.0);
+    prepared.dielectricMsTransmissionScale = vec3f(0.0);
+    prepared.dielectricMsViewLoss = 0.0;
+    prepared.dielectricMsReflectionRatio = 0.0;
+    prepared.dielectricMsProbability = 0.0;
+    if (!material.thinWalled && material.transmissionWeight > 0.0 &&
+        prepared.specularAlpha >= 0.0016 && prepared.weights[OPENPBR_LOBE_TRANSMISSION] > 0.0 &&
+        abs(prepared.refractionEtaTOverEtaI - 1.0) > 1e-6) {
+        let nonOpaqueWeight = prepared.weights[OPENPBR_LOBE_TRANSMISSION] + prepared.weights[OPENPBR_LOBE_SUBSURFACE];
+        prepared.dielectricMsReflectionScale = select(material.specularColor, vec3f(1.0), material.inside) * nonOpaqueWeight;
+        prepared.dielectricMsTransmissionScale = transmissionTint * prepared.weights[OPENPBR_LOBE_TRANSMISSION]
+            + vec3f(prepared.weights[OPENPBR_LOBE_SUBSURFACE]);
+        prepared.dielectricMsReflectionRatio = openpbr_ideal_dielectric_reflection_ratio(prepared.refractionEtaTOverEtaI, prepared.specularAlpha);
+        prepared.dielectricMsViewLoss = openpbr_ideal_dielectric_loss(prepared.refractionEtaTOverEtaI, prepared.specularAlpha, viewCosine);
+        let averageScale = mix(prepared.dielectricMsTransmissionScale, prepared.dielectricMsReflectionScale, prepared.dielectricMsReflectionRatio);
+        let msEstimate = openpbr_luminance(averageScale) * prepared.dielectricMsViewLoss;
+        prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] += msEstimate;
+        prepared.dielectricMsProbability = msEstimate / max(prepared.probabilities[OPENPBR_LOBE_TRANSMISSION], 1e-12);
+    }
     prepared.probabilities[OPENPBR_LOBE_DIFFUSE] = prepared.weights[OPENPBR_LOBE_DIFFUSE]
         * openpbr_luminance(prepared.diffuseColor)
         * prepared.diffuseSpecularEnergyCompensation;
@@ -1100,6 +1220,9 @@ fn openpbr_eval_prepared_lobe(
                         &lobePdf
                     );
             }
+            if (prepared.dielectricMsProbability > 0.0) {
+                lobePdf *= 1.0 - prepared.dielectricMsProbability;
+            }
             *pdf += prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] * lobePdf;
         }
         if (prepared.weights[OPENPBR_LOBE_SUBSURFACE] > 0.0 && allowSubsurface) {
@@ -1125,6 +1248,23 @@ fn openpbr_eval_prepared_lobe(
                 );
             }
             *pdf += prepared.probabilities[OPENPBR_LOBE_SUBSURFACE] * lobePdf;
+        }
+    }
+
+    // Reference value includes the hemisphere ratio before the grazing clamp.
+    // Reference scale_trans has no extra eta^2 factor; single refraction keeps
+    // its existing radiance Jacobian. Both proposals share the aggregate PDF.
+    if (prepared.dielectricMsProbability > 0.0 && allowTransmission) {
+        let cosine = abs(lightLocal.z);
+        if (cosine > 0.0) {
+            let ior = select(1.0 / prepared.refractionEtaTOverEtaI, prepared.refractionEtaTOverEtaI, reflection);
+            let ratio = select(1.0 - prepared.dielectricMsReflectionRatio, prepared.dielectricMsReflectionRatio, reflection);
+            let factors = prepared.dielectricMsViewLoss * openpbr_ideal_dielectric_loss(ior, prepared.specularAlpha, cosine)
+                / max(openpbr_ideal_dielectric_average_loss(ior, prepared.specularAlpha), 1e-12);
+            let factor = min(factors * ratio, 1.0 / cosine);
+            let scale = select(prepared.dielectricMsTransmissionScale, prepared.dielectricMsReflectionScale, reflection);
+            response += scale * factor * INVPI;
+            *pdf += prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] * prepared.dielectricMsProbability * ratio * 0.5 * INVPI;
         }
     }
 
@@ -1304,29 +1444,46 @@ fn openpbr_sample_direction(
         *sampledLobeSpecular = true;
         *isTransmissionEvent = true;
         *sampledLobeIndex = u32(OPENPBR_LOBE_TRANSMISSION);
-        var halfVector = sampling_ggx_visible_normal(
-            viewLocal,
-            vec2f(material.alphaX, material.alphaY),
-            vec2f(randomX, randomY)
-        );
-        if (halfVector.z < 0.0) {
-            halfVector = -halfVector;
-        }
-        if (material.thinWalled) {
-            let reflectedLocal = normalize(reflect(-viewLocal, halfVector));
-            lightLocal = vec3f(reflectedLocal.xy, -reflectedLocal.z);
+        // Split the existing BSDF_LOBE interval. BSDF_DIRECTION retains its
+        // two dimensions; rand.x selects and remaps the reference hemisphere.
+        let msDraw = (lobeSample - cdf[OPENPBR_LOBE_SPECULAR]) / max(prepared.probabilities[OPENPBR_LOBE_TRANSMISSION], 1e-12);
+        if (prepared.dielectricMsProbability > 0.0 && msDraw < prepared.dielectricMsProbability) {
+            let ratio = prepared.dielectricMsReflectionRatio;
+            let reflectMs = randomX < ratio;
+            var z: f32;
+            if (reflectMs) { z = min(randomX / ratio, 0.99999994); }
+            else { z = -min((randomX - ratio) / (1.0 - ratio), 0.99999994); }
+            let radial = sqrt(max(0.0, 1.0 - z * z));
+            let azimuth = TWOPI * randomY;
+            lightLocal = vec3f(radial * cos(azimuth), radial * sin(azimuth), z);
+            *isTransmissionEvent = !reflectMs;
+            *sampledLobeIndex = select(u32(OPENPBR_LOBE_TRANSMISSION), u32(OPENPBR_LOBE_SPECULAR), reflectMs);
         }
         else {
-            lightLocal = refract(
-                -viewLocal,
-                halfVector,
-                prepared.material.relativeIor
+            var halfVector = sampling_ggx_visible_normal(
+                viewLocal,
+                vec2f(material.alphaX, material.alphaY),
+                vec2f(randomX, randomY)
             );
-            if (dot(lightLocal, lightLocal) <= 1e-8) {
-                *isTransmissionEvent = false;
-                return false;
+            if (halfVector.z < 0.0) {
+                halfVector = -halfVector;
             }
-            lightLocal = normalize(lightLocal);
+            if (material.thinWalled) {
+                let reflectedLocal = normalize(reflect(-viewLocal, halfVector));
+                lightLocal = vec3f(reflectedLocal.xy, -reflectedLocal.z);
+            }
+            else {
+                lightLocal = refract(
+                    -viewLocal,
+                    halfVector,
+                    prepared.material.relativeIor
+                );
+                if (dot(lightLocal, lightLocal) <= 1e-8) {
+                    *isTransmissionEvent = false;
+                    return false;
+                }
+                lightLocal = normalize(lightLocal);
+            }
         }
     }
     else {

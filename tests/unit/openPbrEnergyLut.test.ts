@@ -6,12 +6,15 @@ import {
   OPENPBR_ENERGY_LUT_HEIGHT,
   OPENPBR_ENERGY_LUT_WIDTH,
   OPENPBR_METAL_ENERGY_LUT_ROW,
-  OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW
+  OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW,
+  OPENPBR_DIELECTRIC_ENERGY_LUT_ROW,
+  OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW,
+  OPENPBR_DIELECTRIC_REFLECTION_RATIO_LUT_ROW
 } from '../../src/renderer/openPbrEnergyLut';
 
 describe('OpenPBR opaque dielectric energy LUT', () => {
   it('preserves every decoded float from the original row-normalized tables', () => {
-    const data = getOpenPbrEnergyLutData();
+    const data = getOpenPbrEnergyLutData().subarray(0, 1120 * 32);
     const bytes = new Uint8Array(data.length * 4);
     const view = new DataView(bytes.buffer);
     data.forEach((value, index) => view.setFloat32(index * 4, value, true));
@@ -105,5 +108,85 @@ describe('ideal-metal multiple-scattering table contract', () => {
       const b = data[(OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW + i0 + 1) * 32]!;
       expect(Math.abs(average - (a + (b - a) * (index - i0)))).toBeLessThan(.002);
     }
+  });
+});
+
+function idealDielectricLoss(eta: number, roughness: number, cosine: number): number {
+  const index = Math.max(0, Math.min(31, eta < 1 ? 15 - (1 / eta - 1) * 10 : 16 + (eta - 1) * 10));
+  const r = roughness * 31, c = cosine * 31;
+  const data = getOpenPbrEnergyLutData();
+  let value = 0;
+  for (let i = 0; i < 2; i++) for (let j = 0; j < 2; j++) for (let k = 0; k < 2; k++) {
+    const row = OPENPBR_DIELECTRIC_ENERGY_LUT_ROW + Math.min(31, Math.floor(index) + i) * 32 + Math.min(31, Math.floor(r) + j);
+    value += data[row * 32 + Math.min(31, Math.floor(c) + k)]!
+      * (i ? index % 1 : 1 - index % 1) * (j ? r % 1 : 1 - r % 1) * (k ? c % 1 : 1 - c % 1);
+  }
+  return value;
+}
+
+// Integrate visible microfacet normals. Reflection/refraction weights include
+// their Smith shadowing and Fresnel partition, without a radiance eta factor:
+// this is the ideal-dielectric loss table's definition in Adobe's reference.
+function idealDielectricSingleEnergy(eta: number, roughness: number, mu: number): number {
+  const alpha = roughness * roughness, a2 = alpha * alpha;
+  const vx = Math.sqrt(1 - mu * mu), n = 256;
+  const g1 = (z: number) => 2 / (1 + Math.sqrt(1 + a2 * (1 - z * z) / (z * z)));
+  let sum = 0;
+  for (let j = 0; j < n; j++) {
+    const hz = (j + .5) / n, radial = Math.sqrt(1 - hz * hz);
+    const denom = 1 + hz * hz * (a2 - 1);
+    const D = a2 / (Math.PI * denom * denom);
+    for (let i = 0; i < n; i++) {
+      const hx = radial * Math.cos((i + .5) * 2 * Math.PI / n);
+      const vh = vx * hx + mu * hz;
+      if (vh <= 0) continue;
+      const k = 1 - (1 - vh * vh) / (eta * eta);
+      let F = 1;
+      if (k > 0) {
+        const ct = Math.sqrt(k);
+        F = .5 * (((vh - eta * ct) / (vh + eta * ct)) ** 2 + ((eta * vh - ct) / (eta * vh + ct)) ** 2);
+      }
+      const rz = 2 * vh * hz - mu;
+      let weight = rz > 0 ? F * g1(rz) : 0;
+      if (k > 0) {
+        const tz = -mu / eta + (vh / eta - Math.sqrt(k)) * hz;
+        if (tz < 0) weight += (1 - F) * g1(tz);
+      }
+      sum += D * g1(mu) * vh / mu * weight;
+    }
+  }
+  return sum * 2 * Math.PI / (n * n);
+}
+
+describe('ideal-dielectric multiple-scattering table contract', () => {
+  it.each([[1.5, .6, .3], [1.5, .6, .9], [2 / 3, .6, .3], [2 / 3, .6, .9]])('completes single GGX reflection and transmission (%s, %s, %s)', (eta, roughness, cosine) => {
+    expect(Math.abs(idealDielectricSingleEnergy(eta!, roughness!, cosine!) + idealDielectricLoss(eta!, roughness!, cosine!) - 1)).toBeLessThan(.004);
+  });
+
+  it('preserves every u16 average as a degenerate row and its cosine-weighted meaning', () => {
+    const data = getOpenPbrEnergyLutData();
+    for (const iorIndex of [0, 5, 10, 20, 25, 31]) for (const roughnessIndex of [10, 19, 31]) {
+      const row = OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW + iorIndex * 32 + roughnessIndex;
+      const average = data[row * 32]!;
+      expect(Array.from(data.subarray(row * 32, (row + 1) * 32))).toEqual(Array(32).fill(average));
+      expect(Math.abs(average * 65535 - Math.round(average * 65535))).toBeLessThan(.003);
+      const eta = iorIndex < 16 ? 1 / (1 + (15 - iorIndex) / 10) : 1 + (iorIndex - 16) / 10;
+      let integral = 0;
+      for (let j = 0; j < 1024; j++) {
+        const mu = (j + .5) / 1024;
+        integral += 2 * mu * idealDielectricLoss(eta, roughnessIndex / 31, mu) / 1024;
+      }
+      expect(Math.abs(integral - average)).toBeLessThan(.0025);
+    }
+  });
+
+  it('keeps the reference hemisphere ratio bounded, including eta=1 and reciprocal IOR endpoints', () => {
+    const data = getOpenPbrEnergyLutData();
+    expect(OPENPBR_DIELECTRIC_REFLECTION_RATIO_LUT_ROW + 32).toBe(OPENPBR_ENERGY_LUT_HEIGHT);
+    const ratios = data.subarray(OPENPBR_DIELECTRIC_REFLECTION_RATIO_LUT_ROW * 32);
+    expect(Math.min(...ratios)).toBeGreaterThanOrEqual(0);
+    expect(Math.max(...ratios)).toBeLessThanOrEqual(1);
+    // Upstream even retains a small tabulation residual at exactly eta=1.
+    expect(ratios[16 * 32 + 31]).toBeCloseTo(142 / 65535, 7);
   });
 });
