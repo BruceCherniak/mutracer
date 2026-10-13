@@ -1,3 +1,4 @@
+import { packMaterialBuffer } from './materialLayout.js';
 import {createCanvas} from '../util/canvas.js';
 import { mapAlphaUsageConstants } from './materialConstants.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
@@ -60,27 +61,6 @@ export const uvProjectionConstants = {
   cylindrical: 2,
   triplanar: 3
 };
-
-function interleave(...arrays: { data: any[]; channels: number }[]) {
-  let maxLength = 0;
-  for (let i = 0; i < arrays.length; i++) {
-    const a = arrays[i];
-    const l = a.data ? a.data.length / a.channels : 0;
-    maxLength = Math.max(maxLength, l);
-  }
-
-  const interleaved = [];
-  for (let i = 0; i < maxLength; i++) {
-    for (let j = 0; j < arrays.length; j++) {
-      const { data = [], channels } = arrays[j];
-      for (let c = 0; c < channels; c++) {
-        interleaved.push(data[i * channels + c]);
-      }
-    }
-  }
-
-  return interleaved;
-}
 
 interface AtlasPlacement {
   height: number;
@@ -448,7 +428,7 @@ function makeTextureArray(
   };
 }
 
-interface BufferData {
+export interface BufferData {
   color: ColorRGB[];
   roughness: number[];
   metallic: number[];
@@ -867,125 +847,7 @@ class MaterialTable {
   }
 
   getBufferArray() {
-    const bufferData = this.bufferData;
-
-    const placeholder = bufferData.type.map(() => 0);
-
-    const matTexData = interleave(
-      // 0: colorAndMaterialType
-      { data: bufferData.color.flat(), channels: 3 },
-      { data: bufferData.type, channels: 1 },
-      // 1: roughnessAndNormal
-      { data: bufferData.roughness, channels: 1 },
-      { data: bufferData.normalMapIndex, channels: 1 },
-      { data: bufferData.normalScale.flat(), channels: 2 },
-      // 2: metallicAndMapIndex, anisotropy
-      { data: bufferData.metallic, channels: 1 },
-      { data: bufferData.anisotropy, channels: 1 },
-      { data: bufferData.diffuseMapIndex, channels: 1 },
-      { data: bufferData.metallicRoughnessMapIndex, channels: 1 },
-      // 3: emission and emissiveMapIndex
-      { data: bufferData.emission.flat(), channels: 3 },
-      { data: bufferData.emissiveMapIndex, channels: 1 },
-      // 4: ior, transmission, mediumType
-      { data: bufferData.ior, channels: 1 },
-      { data: bufferData.transmission, channels: 1 },
-      { data: bufferData.mediumType, channels: 1 },
-      { data: bufferData.thin, channels: 1 },
-      // 5: bevel size
-      { data: bufferData.bevelSize, channels: 1 },
-      { data: bufferData.dispersion, channels: 1 },
-      { data: bufferData.thinFilmThickness, channels: 1 },
-      { data: bufferData.mapAlphaUsage, channels: 1 },
-      // 6: mediumColor
-      { data: bufferData.mediumColor.flat(), channels: 3 },
-      { data: bufferData.mediumDensity, channels: 1 },
-
-      // 7: UV
-      { data: bufferData.uvProjection, channels: 1 },
-      { data: bufferData.displacementMapIndex, channels: 1 },
-      { data: bufferData.uvScale.flat(), channels: 2 },
-      // 8: Displacement
-      {
-        data: USE_TFDM_DISPLACEMENT
-          ? bufferData.minmaxMapIndex
-          : bufferData.displacementStepSize,
-        channels: 1
-      },
-      {
-        data: USE_TFDM_DISPLACEMENT ? bufferData.minmaxMapSize : placeholder,
-        channels: 1
-      },
-      { data: bufferData.displacementUvProjection, channels: 1 },
-      { data: bufferData.displacementUvProjectionScale, channels: 1 },
-
-      // 9: Alpha and thin-film map
-      { data: bufferData.alpha, channels: 1 },
-      { data: bufferData.thinFilmMapIndex, channels: 1 },
-      { data: bufferData.thinFilmIor, channels: 1 },
-      { data: bufferData.transmissionMapIndex, channels: 1 }
-
-      ,// 10: base controls
-      { data: bufferData.baseWeight, channels: 1 },
-      { data: bufferData.baseDiffuseRoughness, channels: 1 },
-      { data: bufferData.specularWeight, channels: 1 },
-      { data: bufferData.subsurfaceWeight, channels: 1 },
-      // 11: specular/fuzz
-      { data: bufferData.specularColor.flat(), channels: 3 },
-      { data: bufferData.fuzzWeight, channels: 1 },
-      // 12: transmission color/depth
-      { data: bufferData.transmissionColor.flat(), channels: 3 },
-      { data: bufferData.transmissionDepth, channels: 1 },
-      // 13: transmission scatter
-      { data: bufferData.transmissionScatter.flat(), channels: 3 },
-      { data: bufferData.transmissionScatterAnisotropy, channels: 1 },
-      // 14: subsurface
-      { data: bufferData.subsurfaceColor.flat(), channels: 3 },
-      { data: bufferData.subsurfaceRadius, channels: 1 },
-      // 15: fuzz
-      { data: bufferData.fuzzColor.flat(), channels: 3 },
-      { data: bufferData.fuzzRoughness, channels: 1 },
-      // 16: coat
-      { data: bufferData.coatColor.flat(), channels: 3 },
-      { data: bufferData.coatWeight, channels: 1 },
-      // 17: coat controls
-      { data: bufferData.coatRoughness, channels: 1 },
-      { data: bufferData.coatAnisotropy, channels: 1 },
-      { data: bufferData.coatIor, channels: 1 },
-      { data: bufferData.coatDarkening, channels: 1 },
-      // 18: film, dispersion and SSS anisotropy
-      { data: bufferData.thinFilmWeight, channels: 1 },
-      { data: bufferData.dispersionAbbeNumber, channels: 1 },
-      { data: bufferData.subsurfaceScatterAnisotropy, channels: 1 },
-      { data: placeholder, channels: 1 },
-      // 19: SSS radius scale
-      { data: bufferData.subsurfaceRadiusScale.flat(), channels: 3 },
-      { data: placeholder, channels: 1 },
-      // 20-21: derived OpenPBR volume coefficients
-      { data: bufferData.mediumExtinction.flat(), channels: 3 },
-      { data: bufferData.mediumAnisotropy, channels: 1 },
-      { data: bufferData.mediumScattering.flat(), channels: 3 },
-      { data: placeholder, channels: 1 },
-      // 22: standalone metalness and roughness maps
-      { data: bufferData.roughnessMapIndex, channels: 1 },
-      { data: bufferData.metalnessMapIndex, channels: 1 },
-      { data: bufferData.alphaMapIndex, channels: 1 },
-      { data: bufferData.alphaCutoff, channels: 1 },
-      // 23: shading-only bump from the displacement height map
-      { data: bufferData.bumpMapIndex, channels: 1 },
-      { data: bufferData.bumpStrength, channels: 1 },
-      { data: bufferData.doubleSided, channels: 1 },
-      { data: bufferData.alphaMode, channels: 1 }
-    );
-
-    for (let i = 0; i < matTexData.length; i++) {
-      if (matTexData[i] == null) {
-        // Index may be undefined. Set it to -1
-        matTexData[i] = -1;
-      }
-    }
-
-    return new Float32Array(matTexData);
+    return packMaterialBuffer(this.bufferData, USE_TFDM_DISPLACEMENT);
   }
 
   getDisplacementMaps() {

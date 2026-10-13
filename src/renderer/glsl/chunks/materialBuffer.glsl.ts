@@ -1,3 +1,4 @@
+import { materialRowsGlsl } from '../../materialLayout.js';
 import { materialAlphaModeConstants } from '../../../scene/OpenPBRMaterial.js';
 import { mapAlphaUsageConstants } from '../../materialConstants.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
@@ -19,7 +20,7 @@ export default createShaderMixin({
     NUM_MATERIALS: 1
   },
   main: glsl`
-const int MAT_DATA_SIZE = 24;
+${materialRowsGlsl()}
 vec3 sRGBToLinear(vec3 c) {
   return mix(pow(c * 0.9478672986 + 0.0521327014, vec3(2.4)), c * 0.0773993808, vec3(lessThan(c, vec3(0.04045))));
 }
@@ -39,7 +40,7 @@ float resolveMaterialAlpha(float alpha, int alphaMode, float alphaCutoff) {
 }
 
 float getMatType(int idx) {
-  return fetchMatData(idx * MAT_DATA_SIZE).w;
+  return fetchMatData(idx * MAT_DATA_SIZE + MAT_ROW_COLOR).w;
 }
 
 vec2 unpackMaterialIndex(int val) {
@@ -108,21 +109,21 @@ void getMaterial(
   vec2 uv1
 ) {
   int i = materialIndex * MAT_DATA_SIZE;
-  vec4 colorAndMatType = fetchMatData(i);
-  vec4 roughnessAndNormal = fetchMatData(i + 1);
-  vec4 metallicAndMapIndex = fetchMatData(i + 2);
-  vec4 emissionAndEmissiveMapIndex = fetchMatData(i + 3);
-  vec4 iorAndTransmission = fetchMatData(i + 4);
-  vec4 misc = fetchMatData(i + 5);
-  vec4 alphaAndThinFilm = fetchMatData(i + 9);
-  vec4 baseControls = fetchMatData(i + 10);
-  vec4 specularAndFuzz = fetchMatData(i + 11);
-  vec4 subsurface = fetchMatData(i + 14);
-  vec4 fuzz = fetchMatData(i + 15);
-  vec4 coat = fetchMatData(i + 16);
-  vec4 coatControls = fetchMatData(i + 17);
-  vec4 filmAndDispersion = fetchMatData(i + 18);
-  vec4 standaloneMetalRoughMaps = fetchMatData(i + 22);
+  vec4 colorAndMatType = fetchMatData(i + MAT_ROW_COLOR);
+  vec4 roughnessAndNormal = fetchMatData(i + MAT_ROW_ROUGHNESS_NORMAL);
+  vec4 metallicAndMapIndex = fetchMatData(i + MAT_ROW_METALLIC_MAPS);
+  vec4 emissionAndEmissiveMapIndex = fetchMatData(i + MAT_ROW_EMISSION);
+  vec4 iorAndTransmission = fetchMatData(i + MAT_ROW_IOR_TRANSMISSION);
+  vec4 misc = fetchMatData(i + MAT_ROW_MISC);
+  vec4 alphaAndThinFilm = fetchMatData(i + MAT_ROW_ALPHA_FILM);
+  vec4 baseControls = fetchMatData(i + MAT_ROW_BASE_CONTROLS);
+  vec4 specularAndFuzz = fetchMatData(i + MAT_ROW_SPECULAR_FUZZ);
+  vec4 subsurface = fetchMatData(i + MAT_ROW_SUBSURFACE);
+  vec4 fuzz = fetchMatData(i + MAT_ROW_FUZZ);
+  vec4 coat = fetchMatData(i + MAT_ROW_COAT);
+  vec4 coatControls = fetchMatData(i + MAT_ROW_COAT_CONTROLS);
+  vec4 filmAndDispersion = fetchMatData(i + MAT_ROW_FILM_DISPERSION);
+  vec4 standaloneMetalRoughMaps = fetchMatData(i + MAT_ROW_STANDALONE_MAPS);
   int mapAlphaUsage = int(misc.a);
 
   mat.baseColor = colorAndMatType.rgb;
@@ -155,7 +156,7 @@ void getMaterial(
   mat.specularColor = max(specularAndFuzz.rgb, vec3(0.0));
   mat.fuzzWeight = clamp(specularAndFuzz.w, 0.0, 1.0);
   mat.subsurfaceColor = max(subsurface.rgb, vec3(0.0));
-  mat.transmissionColor = max(fetchMatData(i + 12).rgb, vec3(0.0));
+  mat.transmissionColor = max(fetchMatData(i + MAT_ROW_TRANSMISSION_COLOR).rgb, vec3(0.0));
   mat.fuzzColor = max(fuzz.rgb, vec3(0.0));
   mat.fuzzRoughness = clamp(fuzz.w, 0.0, 1.0);
   mat.coatColor = max(coat.rgb, vec3(0.0));
@@ -166,10 +167,10 @@ void getMaterial(
   mat.coatDarkening = clamp(coatControls.w, 0.0, 1.0);
 
 #ifdef HAS_MEDIUM
-  vec4 medium = fetchMatData(i + 6);
-  mat.mediumExtinction = max(fetchMatData(i + 20).rgb, vec3(0.0));
-  mat.mediumAnisotropy = clamp(fetchMatData(i + 20).a, -1.0, 1.0);
-  mat.mediumScattering = max(fetchMatData(i + 21).rgb, vec3(0.0));
+  vec4 medium = fetchMatData(i + MAT_ROW_LEGACY_MEDIUM);
+  mat.mediumExtinction = max(fetchMatData(i + MAT_ROW_MEDIUM_EXTINCTION).rgb, vec3(0.0));
+  mat.mediumAnisotropy = clamp(fetchMatData(i + MAT_ROW_MEDIUM_EXTINCTION).a, -1.0, 1.0);
+  mat.mediumScattering = max(fetchMatData(i + MAT_ROW_MEDIUM_SCATTERING).rgb, vec3(0.0));
   mat.mediumType = max(max(mat.mediumExtinction.x, mat.mediumExtinction.y), mat.mediumExtinction.z) > 0.0 ? 1 : 0;
 #endif
 
@@ -210,7 +211,7 @@ void getMaterial(
   #endif
 
   mat.alpha = resolveMaterialAlpha(
-    mat.alpha, int(fetchMatData(i + 23).w), standaloneMetalRoughMaps.w
+    mat.alpha, int(fetchMatData(i + MAT_ROW_BUMP_ALPHA).w), standaloneMetalRoughMaps.w
   );
 
   #ifdef NUM_TRANSMISSION_MAPS
@@ -289,9 +290,9 @@ void getMaterial(
 #if defined(NUM_NORMAL_MAPS) || defined(NUM_BUMP_MAPS)
 vec3 getMatNormal(int materialIndex, vec2 uv, vec2 bumpUv, vec3 normal, vec3 dp1, vec3 dp2, vec2 duv1, vec2 duv2) {
   int i = materialIndex * MAT_DATA_SIZE;
-  vec4 roughnessAndNormal = fetchMatData(i + 1);
+  vec4 roughnessAndNormal = fetchMatData(i + MAT_ROW_ROUGHNESS_NORMAL);
   int normalMapIndex = int(roughnessAndNormal.y);
-  vec4 bump = fetchMatData(i + 23);
+  vec4 bump = fetchMatData(i + MAT_ROW_BUMP_ALPHA);
   int bumpMapIndex = int(bump.x);
   float bumpStrength = bump.y;
   if (normalMapIndex >= 0 || bumpMapIndex >= 0) {

@@ -1,0 +1,197 @@
+import type { vec2 } from '../math.js';
+import type { BufferData } from './MaterialTable.js';
+
+// Internal GPU contract. Each row occupies one vec4 (16 bytes). Reserved fields
+// retain their legacy sources/zero bytes; reuse requires an intentional migration.
+type FieldType = 'f32' | 'vec2f' | 'vec3f';
+type Source<T extends FieldType> = {
+  [K in keyof BufferData]: BufferData[K] extends (T extends 'f32' ? number[] :
+    T extends 'vec2f' ? vec2.Vec2Array[] : [number, number, number][]) ? K : never
+}[keyof BufferData];
+export interface MaterialLayoutField {
+  name: string;
+  source: keyof BufferData | null;
+  type: FieldType;
+  reserved: boolean;
+  tfdm?: MaterialLayoutField;
+}
+function field<T extends FieldType>(name: string, source: Source<T> | null,
+  type: T, reserved = false, tfdm?: MaterialLayoutField): MaterialLayoutField {
+  return { name, source, type, reserved, tfdm };
+}
+
+export const MATERIAL_LAYOUT = [
+  { name: 'COLOR', fields: [
+    field('color', 'color', 'vec3f'),
+    field('matType', 'type', 'f32')
+  ] },
+  { name: 'ROUGHNESS_NORMAL', fields: [
+    field('roughness', 'roughness', 'f32'),
+    field('normalMapIndex', 'normalMapIndex', 'f32'),
+    field('normalMapScale', 'normalScale', 'vec2f')
+  ] },
+  { name: 'METALLIC_MAPS', fields: [
+    field('metallic', 'metallic', 'f32'),
+    field('anisotropy', 'anisotropy', 'f32'),
+    field('diffuseMapIndex', 'diffuseMapIndex', 'f32'),
+    field('mrtMapIndex', 'metallicRoughnessMapIndex', 'f32')
+  ] },
+  { name: 'EMISSION', fields: [
+    field('emission', 'emission', 'vec3f'),
+    field('emissiveMapIndex', 'emissiveMapIndex', 'f32')
+  ] },
+  { name: 'IOR_TRANSMISSION', fields: [
+    field('ior', 'ior', 'f32'),
+    field('transmission', 'transmission', 'f32'),
+    field('mediumType', 'mediumType', 'f32', true),
+    field('thin', 'thin', 'f32')
+  ] },
+  { name: 'MISC', fields: [
+    field('bevel', 'bevelSize', 'f32'),
+    field('dispersion', 'dispersion', 'f32'),
+    field('thinFilmThickness', 'thinFilmThickness', 'f32'),
+    field('mapAlphaUsage', 'mapAlphaUsage', 'f32')
+  ] },
+  { name: 'LEGACY_MEDIUM', fields: [
+    field('mediumColor', 'mediumColor', 'vec3f', true),
+    field('mediumDensity', 'mediumDensity', 'f32', true)
+  ] },
+  { name: 'UV', fields: [
+    field('uvProjection', 'uvProjection', 'f32'),
+    field('displacementMapIndex', 'displacementMapIndex', 'f32'),
+    field('uvScale', 'uvScale', 'vec2f')
+  ] },
+  { name: 'DISPLACEMENT', fields: [
+    field('displacementStepSize', 'displacementStepSize', 'f32', false, field('minmaxMapIndex', 'minmaxMapIndex', 'f32')),
+    field('_padding', null, 'f32', true, field('minmaxMapSize', 'minmaxMapSize', 'f32')),
+    field('displacementUvProjection', 'displacementUvProjection', 'f32'),
+    field('displacementUvProjectionScale', 'displacementUvProjectionScale', 'f32')
+  ] },
+  { name: 'ALPHA_FILM', fields: [
+    field('alpha', 'alpha', 'f32'),
+    field('thinFilmMapIndex', 'thinFilmMapIndex', 'f32'),
+    field('thinFilmIor', 'thinFilmIor', 'f32'),
+    field('transmissionMapIndex', 'transmissionMapIndex', 'f32')
+  ] },
+  { name: 'BASE_CONTROLS', fields: [
+    field('baseWeight', 'baseWeight', 'f32'),
+    field('baseDiffuseRoughness', 'baseDiffuseRoughness', 'f32'),
+    field('specularWeight', 'specularWeight', 'f32'),
+    field('subsurfaceWeight', 'subsurfaceWeight', 'f32')
+  ] },
+  { name: 'SPECULAR_FUZZ', fields: [
+    field('specularColor', 'specularColor', 'vec3f'),
+    field('fuzzWeight', 'fuzzWeight', 'f32')
+  ] },
+  { name: 'TRANSMISSION_COLOR', fields: [
+    field('transmissionColor', 'transmissionColor', 'vec3f'),
+    field('transmissionDepth', 'transmissionDepth', 'f32')
+  ] },
+  { name: 'TRANSMISSION_SCATTER', fields: [
+    field('transmissionScatter', 'transmissionScatter', 'vec3f'),
+    field('transmissionScatterAnisotropy', 'transmissionScatterAnisotropy', 'f32')
+  ] },
+  { name: 'SUBSURFACE', fields: [
+    field('subsurfaceColor', 'subsurfaceColor', 'vec3f'),
+    field('subsurfaceRadius', 'subsurfaceRadius', 'f32')
+  ] },
+  { name: 'FUZZ', fields: [
+    field('fuzzColor', 'fuzzColor', 'vec3f'),
+    field('fuzzRoughness', 'fuzzRoughness', 'f32')
+  ] },
+  { name: 'COAT', fields: [
+    field('coatColor', 'coatColor', 'vec3f'),
+    field('coatWeight', 'coatWeight', 'f32')
+  ] },
+  { name: 'COAT_CONTROLS', fields: [
+    field('coatRoughness', 'coatRoughness', 'f32'),
+    field('coatAnisotropy', 'coatAnisotropy', 'f32'),
+    field('coatIor', 'coatIor', 'f32'),
+    field('coatDarkening', 'coatDarkening', 'f32')
+  ] },
+  { name: 'FILM_DISPERSION', fields: [
+    field('thinFilmWeight', 'thinFilmWeight', 'f32'),
+    field('dispersionAbbeNumber', 'dispersionAbbeNumber', 'f32'),
+    field('subsurfaceScatterAnisotropy', 'subsurfaceScatterAnisotropy', 'f32'),
+    field('_padding5', null, 'f32', true)
+  ] },
+  { name: 'SUBSURFACE_RADIUS', fields: [
+    field('subsurfaceRadiusScale', 'subsurfaceRadiusScale', 'vec3f'),
+    field('_padding6', null, 'f32', true)
+  ] },
+  { name: 'MEDIUM_EXTINCTION', fields: [
+    field('mediumExtinction', 'mediumExtinction', 'vec3f'),
+    field('mediumAnisotropy', 'mediumAnisotropy', 'f32')
+  ] },
+  { name: 'MEDIUM_SCATTERING', fields: [
+    field('mediumScattering', 'mediumScattering', 'vec3f'),
+    field('_padding7', null, 'f32', true)
+  ] },
+  { name: 'STANDALONE_MAPS', fields: [
+    field('roughnessMapIndex', 'roughnessMapIndex', 'f32'),
+    field('metalnessMapIndex', 'metalnessMapIndex', 'f32'),
+    field('alphaMapIndex', 'alphaMapIndex', 'f32'),
+    field('alphaCutoff', 'alphaCutoff', 'f32')
+  ] },
+  { name: 'BUMP_ALPHA', fields: [
+    field('bumpMapIndex', 'bumpMapIndex', 'f32'),
+    field('bumpStrength', 'bumpStrength', 'f32'),
+    field('doubleSided', 'doubleSided', 'f32'),
+    field('alphaMode', 'alphaMode', 'f32')
+  ] },
+] as const;
+
+export const MATERIAL_ROW_COUNT = MATERIAL_LAYOUT.length;
+export const MATERIAL_FLOAT_COUNT = MATERIAL_ROW_COUNT * 4;
+const components = { f32: 1, vec2f: 2, vec3f: 3 } as const;
+export function materialLayoutFields(tfdm = false) {
+  return MATERIAL_LAYOUT.flatMap((row, rowIndex) => {
+    let component = 0;
+    return row.fields.map(original => {
+      const field = tfdm && original.tfdm ? original.tfdm : original;
+      const offset = rowIndex * 16 + component * 4;
+      component += components[field.type];
+      return { ...field, row: rowIndex, component: offset % 16 / 4, offset };
+    });
+  });
+}
+
+export function packMaterialBuffer(data: BufferData, tfdm = false): Float32Array {
+  const fields = materialLayoutFields(tfdm).map(field => ({
+    ...field,
+    // Flatten exactly as the legacy interleave did (including missing indices).
+    values: field.source === null ? data.type.map(() => 0) : data[field.source]?.flat() ?? []
+  }));
+  const packed = new Float32Array(data.type.length * MATERIAL_FLOAT_COUNT);
+  for (let material = 0; material < data.type.length; material++) {
+    for (const field of fields) {
+      const width = components[field.type];
+      for (let c = 0; c < width; c++) {
+        packed[material * MATERIAL_FLOAT_COUNT + field.offset / 4 + c] =
+          Number(field.values[material * width + c] ?? -1);
+      }
+    }
+  }
+  return packed;
+}
+
+export function materialBufferWgsl(tfdm = false): string {
+  let end = 0;
+  const declarations = materialLayoutFields(tfdm).map(field => {
+    const alignment = field.type === 'vec3f' ? 16 : components[field.type] * 4;
+    const aligned = Math.ceil(end / alignment) * alignment;
+    if (aligned !== field.offset) throw new Error(`Misaligned material field: ${field.name}`);
+    end = aligned + components[field.type] * 4;
+    return `  ${field.name}: ${field.type},`;
+  });
+  if (Math.ceil(end / 16) * 16 !== MATERIAL_ROW_COUNT * 16) {
+    throw new Error('Invalid material buffer size');
+  }
+  return `struct MaterialBuffer {\n${declarations.join('\n')}\n};`;
+}
+
+export function materialRowsGlsl(): string {
+  return [`const int MAT_DATA_SIZE = ${MATERIAL_ROW_COUNT};`,
+    ...MATERIAL_LAYOUT.map((row, index) => `const int MAT_ROW_${row.name} = ${index};`)
+  ].join('\n');
+}

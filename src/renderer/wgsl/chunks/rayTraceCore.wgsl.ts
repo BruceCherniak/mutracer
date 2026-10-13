@@ -1,3 +1,4 @@
+import { materialBufferWgsl } from '../../materialLayout.js';
 import { ShadowCatcherMaterial, UnlitMaterial } from '../../../constants.js';
 import {
   CONSTANT_DIRECTIONAL_LIGHT,
@@ -195,114 +196,7 @@ struct LightChoice {
   sourceIndex: i32,
 };
 
-struct MaterialBuffer {
-  color: vec3f,
-  matType: f32,
-
-  roughness: f32,
-  normalMapIndex: f32,
-  normalMapScale: vec2f,
-
-  metallic: f32,
-  anisotropy: f32,
-  diffuseMapIndex: f32,
-  // Metallic roughness transmission map index
-  mrtMapIndex: f32,
-
-  emission: vec3f,
-  emissiveMapIndex: f32,
-
-  ior: f32,
-  transmission: f32,
-  mediumType: f32,
-  thin: f32,
-
-  bevel: f32,
-  dispersion: f32,
-  thinFilmThickness: f32,
-  mapAlphaUsage: f32,
-
-  // Medium
-  mediumColor: vec3f,
-  mediumDensity: f32,
-
-  // UV
-  uvProjection: f32,
-  displacementMapIndex: f32,
-  uvScale: vec2f,
-
-  // Displacement
-  ${
-    USE_TFDM_DISPLACEMENT
-      ? /*wgsl*/ `
-  minmaxMapIndex: f32,
-  minmaxMapSize: f32,`
-      : /*wgsl*/ `
-  displacementStepSize: f32,
-  _padding: f32,`
-  }
-
-  displacementUvProjection: f32,
-  displacementUvProjectionScale: f32,
-
-  // Alpha
-  alpha: f32,
-  thinFilmMapIndex: f32,
-  thinFilmIor: f32,
-  transmissionMapIndex: f32,
-
-  baseWeight: f32,
-  baseDiffuseRoughness: f32,
-  specularWeight: f32,
-  subsurfaceWeight: f32,
-
-  specularColor: vec3f,
-  fuzzWeight: f32,
-
-  transmissionColor: vec3f,
-  transmissionDepth: f32,
-
-  transmissionScatter: vec3f,
-  transmissionScatterAnisotropy: f32,
-
-  subsurfaceColor: vec3f,
-  subsurfaceRadius: f32,
-
-  fuzzColor: vec3f,
-  fuzzRoughness: f32,
-
-  coatColor: vec3f,
-  coatWeight: f32,
-
-  coatRoughness: f32,
-  coatAnisotropy: f32,
-  coatIor: f32,
-  coatDarkening: f32,
-
-  thinFilmWeight: f32,
-  dispersionAbbeNumber: f32,
-  subsurfaceScatterAnisotropy: f32,
-  _padding5: f32,
-
-  subsurfaceRadiusScale: vec3f,
-  _padding6: f32,
-
-  mediumExtinction: vec3f,
-  mediumAnisotropy: f32,
-
-  mediumScattering: vec3f,
-  _padding7: f32,
-
-  roughnessMapIndex: f32,
-  metalnessMapIndex: f32,
-  alphaMapIndex: f32,
-  alphaCutoff: f32,
-
-  bumpMapIndex: f32,
-  bumpStrength: f32,
-  doubleSided: f32,
-  alphaMode: f32,
-};
+${materialBufferWgsl(USE_TFDM_DISPLACEMENT)}
 
 struct CameraUniform {
   viewProjectionInv: mat4x4<f32>,
