@@ -32,6 +32,14 @@ helpers additionally adapt
 `impl/openpbr_lobe_utils.h`, `impl/openpbr_coating_lobe.h`, and
 `impl/openpbr_bsdf.h` at commit `c91aad1d1ce1693e803f039d7c92c2965c4eb013`.
 
+The ideal-metal direction/average energy tables and multiple-scattering lobe
+additionally adapt `impl/openpbr_microfacet_multiple_scattering_lobes.h`,
+`impl/openpbr_microfacet_multiple_scattering_data.h`, and
+`impl/data/openpbr_ideal_metal_{,avg_}energy_complement_data.h` at the same
+`c91aad1d1ce1693e803f039d7c92c2965c4eb013` commit. Metal tables use the same
+row-normalized encoding; the uniform-hemisphere proposal is mixed within
+the existing metal sampling lobe.
+
 Copyright 2026 Adobe. Apache License 2.0
 ([`LICENSES/Apache-2.0.txt`](./LICENSES/Apache-2.0.txt)). Modified for WGSL and
 GLSL; this repository re-quantized the Adobe energy lookup data to 8-bit

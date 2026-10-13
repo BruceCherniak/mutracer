@@ -17,6 +17,8 @@
  */
 import { glsl } from '../../shader.js';
 
+import { OPENPBR_METAL_ENERGY_LUT_ROW, OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW } from '../../openPbrEnergyLut.js';
+
 export default glsl`
 const int OPENPBR_LOBE_FUZZ = 0;
 const int OPENPBR_LOBE_COAT = 1;
@@ -46,6 +48,9 @@ struct OpenPbrPreparedBsdf {
     float specularAlpha;
     float diffuseSpecularEnergyCompensation;
     vec3 coatBaseScale;
+    vec3 metalMsScale;
+    float metalMsFactor;
+    float metalMsProbability;
 
     float weights[OPENPBR_LOBE_COUNT];
     float probabilities[OPENPBR_LOBE_COUNT];
@@ -146,6 +151,27 @@ float openpbr_energy_bilinear(float exactIor, float exactAlpha) {
         mix(v01, v11, iorMix),
         alphaMix
     );
+}
+
+// Adobe openpbr_microfacet_multiple_scattering_{data,lobes}.h (c91aad1).
+float openpbr_metal_energy_complement(float alpha, float cosine) {
+    float roughnessIndex = clamp(sqrt(alpha) * 31.0, 0.0, 31.0);
+    float cosineIndex = clamp(cosine * 31.0, 0.0, 31.0);
+    int r0 = int(floor(roughnessIndex));
+    int c0 = int(floor(cosineIndex));
+    int r1 = min(r0 + 1, 31);
+    int c1 = min(c0 + 1, 31);
+    return mix(
+        mix(openpbr_energy_fetch(c0, ${OPENPBR_METAL_ENERGY_LUT_ROW} + r0), openpbr_energy_fetch(c1, ${OPENPBR_METAL_ENERGY_LUT_ROW} + r0), fract(cosineIndex)),
+        mix(openpbr_energy_fetch(c0, ${OPENPBR_METAL_ENERGY_LUT_ROW} + r1), openpbr_energy_fetch(c1, ${OPENPBR_METAL_ENERGY_LUT_ROW} + r1), fract(cosineIndex)),
+        fract(roughnessIndex));
+}
+
+float openpbr_metal_average_energy_complement(float alpha) {
+    float index = clamp(sqrt(alpha) * 31.0, 0.0, 31.0);
+    int i0 = int(floor(index));
+    return mix(openpbr_energy_fetch(0, ${OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW} + i0),
+        openpbr_energy_fetch(0, ${OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW} + min(i0 + 1, 31)), fract(index));
 }
 
 float openpbr_extrapolate_energy_complement(float value, float ior) {
@@ -938,6 +964,18 @@ OpenPbrPreparedBsdf openpbr_prepare(
     }
     prepared.probabilities[OPENPBR_LOBE_METAL] = prepared.weights[OPENPBR_LOBE_METAL]
         * openpbr_luminance(metalFresnelEstimate);
+    prepared.metalMsScale = vec3(0.0);
+    prepared.metalMsFactor = 0.0;
+    prepared.metalMsProbability = 0.0;
+    if (material.specularRoughness >= 0.04 && prepared.weights[OPENPBR_LOBE_METAL] > 0.0) {
+        vec3 averageFresnel = openpbr_metal_average_fresnel(material.baseWeight * material.baseColor, material.specularColor);
+        prepared.metalMsScale = material.specularWeight * averageFresnel * averageFresnel;
+        float viewLoss = openpbr_metal_energy_complement(prepared.specularAlpha, viewCosine);
+        prepared.metalMsFactor = viewLoss / max(openpbr_metal_average_energy_complement(prepared.specularAlpha), 1e-12);
+        float msEstimate = prepared.weights[OPENPBR_LOBE_METAL] * openpbr_luminance(prepared.metalMsScale) * viewLoss;
+        prepared.probabilities[OPENPBR_LOBE_METAL] += msEstimate;
+        prepared.metalMsProbability = msEstimate / max(prepared.probabilities[OPENPBR_LOBE_METAL], 1e-12);
+    }
     prepared.probabilities[OPENPBR_LOBE_SPECULAR] = prepared.weights[OPENPBR_LOBE_SPECULAR]
         * openpbr_luminance(dielectricFresnelEstimate);
     prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] = prepared.weights[OPENPBR_LOBE_TRANSMISSION]
@@ -1096,6 +1134,11 @@ vec3 openpbr_eval_prepared(
                 fresnel,
                 lobePdf
             );
+            if (prepared.metalMsFactor > 0.0) {
+                float factor = min(prepared.metalMsFactor * openpbr_metal_energy_complement(prepared.specularAlpha, lightLocal.z), 1.0 / max(lightLocal.z, 1e-8));
+                response += prepared.weights[OPENPBR_LOBE_METAL] * prepared.metalMsScale * factor * INVPI;
+                lobePdf = mix(lobePdf, 0.5 * INVPI, prepared.metalMsProbability);
+            }
             pdf += prepared.probabilities[OPENPBR_LOBE_METAL] * lobePdf;
         }
     }
@@ -1328,15 +1371,25 @@ vec3 openpbr_sample_prepared(
         lightLocal = normalize(reflect(-viewLocal, halfVector));
     }
     else if (lobeSample < cdf[OPENPBR_LOBE_SPECULAR]) {
-        vec3 halfVector = sampling_ggx_visible_normal(
-            viewLocal,
-            vec2(material.alphaX, material.alphaY),
-            vec2(randomX, randomY)
-        );
-        if (halfVector.z < 0.0) {
-            halfVector = -halfVector;
+        bool isMetal = lobeSample < cdf[OPENPBR_LOBE_METAL];
+        float metalDraw = (lobeSample - cdf[OPENPBR_LOBE_COAT]) / max(prepared.probabilities[OPENPBR_LOBE_METAL], 1e-12);
+        if (isMetal && metalDraw < prepared.metalMsProbability) {
+            float z = randomX;
+            float radial = sqrt(max(0.0, 1.0 - z * z));
+            float azimuth = TWOPI * randomY;
+            lightLocal = vec3(radial * cos(azimuth), radial * sin(azimuth), z);
         }
-        lightLocal = normalize(reflect(-viewLocal, halfVector));
+        else {
+            vec3 halfVector = sampling_ggx_visible_normal(
+                viewLocal,
+                vec2(material.alphaX, material.alphaY),
+                vec2(randomX, randomY)
+            );
+            if (halfVector.z < 0.0) {
+                halfVector = -halfVector;
+            }
+            lightLocal = normalize(reflect(-viewLocal, halfVector));
+        }
     }
     else if (lobeSample < cdf[OPENPBR_LOBE_TRANSMISSION]) {
         isTransmissionEvent = true;

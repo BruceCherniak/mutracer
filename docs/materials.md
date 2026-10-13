@@ -170,3 +170,9 @@ thin-film interference adapted from
 [Adobe's OpenPBR BSDF](https://github.com/adobe/openpbr-bsdf). Small
 differences from offline references remain, from finite path depth, RGB
 thin-film evaluation and texture filtering.
+
+Metal reflection includes the reference's additional microfacet multiple
+scattering, scaled by the square of the average F82 reflectance. Its energy
+tables use the original isotropic roughness, also for anisotropic materials,
+so strong anisotropy can retain a small energy error. Rough solid and thin-wall
+transmission currently use single microfacet scattering and can lose energy.
