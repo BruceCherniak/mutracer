@@ -260,7 +260,10 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
             (*path).ray,
             (*si).wavelength
           );
-          (*path).li += (*path).beta * bg.rgb * bg.a;
+          let backgroundMisWeight = select(bsdfMISWeight((*path).scatteringPdf,
+            envMapPdf(cartesianToEquirect((*path).ray.d)) * rtUniform.envLightPmf),
+            1.0, (*path).scatteringIsDelta);
+          (*path).li += backgroundMisWeight * (*path).beta * bg.rgb * bg.a;
           (*path).alpha = max((*path).alpha, bg.a);
         }
         else {
@@ -447,7 +450,10 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
           (*path).ray,
           (*si).wavelength
         );
-        (*path).li += (*path).beta * bg.rgb * bg.a;
+        let backgroundMisWeight = select(bsdfMISWeight((*path).scatteringPdf,
+            envMapPdf(cartesianToEquirect((*path).ray.d)) * rtUniform.envLightPmf),
+            1.0, (*path).scatteringIsDelta);
+          (*path).li += backgroundMisWeight * (*path).beta * bg.rgb * bg.a;
         (*path).alpha = max((*path).alpha, bg.a);
         (*path).abort = true;
         return;
@@ -593,6 +599,7 @@ fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray:
   path.beta = vec3f(1.0);
   path.fromEye = true;
   path.scatteringPdf = 0.0;
+  path.scatteringIsDelta = false;
   path.isNextRefraction = false;
   path.abort = false;
 

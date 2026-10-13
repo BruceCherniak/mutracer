@@ -66,6 +66,15 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPrep
     return vec3(0.0);
   }
 
+#ifdef USE_ENVMAP
+  // Match the endpoint used by a BSDF-sampled surface transmission, including
+  // a separately displayed or grounded background and its coverage.
+  if (isSurface && cosThetaL < 0.0 && lightRnd.z < envLightSelectionPmf) {
+    vec4 background = sampleBackgroundFromRay(lightRay.o, lightDir);
+    lightSample.emission = sampling_spectral_rgb_filter(background.rgb * background.a, pathWavelength);
+  }
+#endif
+
   // Delta lights cannot be sampled by the BSDF strategy, so their MIS weight
   // is exactly one even when their light-selection PMF is small.
   float misWeight = lightSample.isDelta
@@ -105,6 +114,7 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
 
   float scatteringPdf;
   vec3 scatterDir;
+  path.scatteringIsDelta = false;
   bool mediumSampled = false;
   bool crossedBoundary = false;
   OpenPbrPreparedBsdf prepared;
@@ -181,6 +191,10 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
       scatteringPdf,
       isNextRefraction
     );
+    // Null-boundary transmission is discrete and has no NEE competitor.
+    path.scatteringIsDelta = !prepared.material.thinWalled &&
+      abs(prepared.material.relativeIor - 1.0) <= 1e-6 &&
+      prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] >= 1.0 - 1e-6;
     if (scatteringPdf > 0.0) {
       path.beta *= f / scatteringPdf;
     }

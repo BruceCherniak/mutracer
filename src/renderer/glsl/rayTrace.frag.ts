@@ -139,7 +139,10 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
         // terminating early with the raw lighting environment.
         vec4 bg = sampleBackgroundFromRay(path.ray.o, path.ray.d);
         bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathWavelength);
-        path.li += path.beta * bg.rgb * bg.a;
+        float backgroundMisWeight = path.scatteringIsDelta ? 1.0
+          : sampling_power_heuristic(path.scatteringPdf,
+              envMapPdf(cartesianToEquirect(path.ray.d)) * envLightSelectionPmf);
+        path.li += backgroundMisWeight * path.beta * bg.rgb * bg.a;
         path.alpha = max(path.alpha, bg.a);
       }
       else {
@@ -314,7 +317,10 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
       // raw environment remains the lighting source for non-transmission rays.
       vec4 bg = sampleBackgroundFromRay(path.ray.o, path.ray.d);
       bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathWavelength);
-      path.li += path.beta * bg.rgb * bg.a;
+      float backgroundMisWeight = path.scatteringIsDelta ? 1.0
+          : sampling_power_heuristic(path.scatteringPdf,
+              envMapPdf(cartesianToEquirect(path.ray.d)) * envLightSelectionPmf);
+        path.li += backgroundMisWeight * path.beta * bg.rgb * bg.a;
       path.alpha = max(path.alpha, bg.a);
       path.abort = true;
       return;
@@ -451,6 +457,7 @@ vec4 integrateOnePathSample(SurfaceInteraction si, Ray ray, OpenPbrResolvedMater
   path.beta = vec3(1.0);
   path.fromEye = true;
   path.scatteringPdf = 0.0;
+  path.scatteringIsDelta = false;
   path.isNextRefraction = false;
   path.abort = false;
   int depth = 0;

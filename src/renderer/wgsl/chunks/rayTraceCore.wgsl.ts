@@ -133,6 +133,7 @@ struct Path {
   fromEye: bool,
   abort: bool,
   scatteringPdf: f32,
+  scatteringIsDelta: bool,
   isNextRefraction: bool,
 };
 

@@ -169,6 +169,7 @@ struct Path {
   bool fromEye;
   bool abort;
   float scatteringPdf;
+  bool scatteringIsDelta;
   bool isNextRefraction;
 };
 

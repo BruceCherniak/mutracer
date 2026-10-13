@@ -116,6 +116,13 @@ fn PrepareDirectLight(
   }
   initRay(&lightRay, shadowOrigin, visibilityDirection);
 
+  // The continuation of a surface transmission sees the displayed background.
+  // Evaluate that same endpoint for the environment proposal, so both MIS
+  // strategies estimate the same radiance even for a separate/grounded skybox.
+  if (isSurface && cosThetaL < 0.0 && lightSample.sourceType == 0u) {
+    let background = sampleSceneBackground(lightRay);
+    Li = background.rgb * background.a;
+  }
   if (SPECTRAL) {
     Li = sampling_spectral_rgb_filter(Li, (*si).wavelength);
   }
@@ -244,6 +251,7 @@ fn SampleMaterial(
   (*ma).relativeIor = select((*ma).specularIor, (1.0 / (*ma).specularIor), ndv > 0.0);
   var ffnormal = select(-N, N, ndv >= 0.0);
 
+  (*path).scatteringIsDelta = false;
   var mediumSampled = false;
   var crossedBoundary = false;
   let mediumType = (*si).mediumType;
@@ -347,6 +355,11 @@ fn SampleMaterial(
       (*path).abort = true;
       return;
     }
+    // Exactly index-matched solid transmission is a discrete null boundary;
+    // environment NEE has no competing density for that event.
+    (*path).scatteringIsDelta = !prepared.material.thinWalled &&
+      abs(prepared.material.relativeIor - 1.0) <= 1e-6 &&
+      prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] >= 1.0 - 1e-6;
     (*path).beta *= f / scatteringPdf;
 
     crossedBoundary = isNextRefraction && !(*ma).thinWalled;
