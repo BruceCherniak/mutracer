@@ -134,18 +134,18 @@ fn getMaterial(
 
   (*ma).thinFilmThickness = matData.thinFilmThickness * 1000.0;
   (*ma).thinFilmIor = matData.thinFilmIor;
-  (*ma).thinFilmWeight = clamp(matData.thinFilmWeight, 0.0, 1.0);
+  (*ma).thinFilmWeight = select(0.0, clamp(matData.thinFilmWeight, 0.0, 1.0), HAS_THIN_FILM);
   (*ma).baseWeight = clamp(matData.baseWeight, 0.0, 1.0);
   (*ma).diffuseRoughness = clamp(matData.baseDiffuseRoughness, 0.0, 1.0);
   (*ma).specularWeight = max(matData.specularWeight, 0.0);
   (*ma).specularColor = max(matData.specularColor, vec3f(0.0));
-  (*ma).subsurfaceWeight = clamp(matData.subsurfaceWeight, 0.0, 1.0);
+  (*ma).subsurfaceWeight = select(0.0, clamp(matData.subsurfaceWeight, 0.0, 1.0), HAS_SUBSURFACE);
   (*ma).subsurfaceColor = max(matData.subsurfaceColor, vec3f(0.0));
   (*ma).transmissionColor = max(matData.transmissionColor, vec3f(0.0));
-  (*ma).fuzzWeight = clamp(matData.fuzzWeight, 0.0, 1.0);
+  (*ma).fuzzWeight = select(0.0, clamp(matData.fuzzWeight, 0.0, 1.0), HAS_FUZZ);
   (*ma).fuzzColor = max(matData.fuzzColor, vec3f(0.0));
   (*ma).fuzzRoughness = clamp(matData.fuzzRoughness, 0.0, 1.0);
-  (*ma).coatWeight = clamp(matData.coatWeight, 0.0, 1.0);
+  (*ma).coatWeight = select(0.0, clamp(matData.coatWeight, 0.0, 1.0), HAS_COAT);
   (*ma).coatColor = max(matData.coatColor, vec3f(0.0));
   (*ma).coatRoughness = clamp(matData.coatRoughness, ROUGHNESS_MIN, 1.0);
   (*ma).coatAnisotropy = clamp(matData.coatAnisotropy, 0.0, 1.0);

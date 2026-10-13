@@ -911,19 +911,6 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
   // Gate optional material layers on scene-level feature flags so drivers can
   // skip the unused BSDF lobes.
   let specializedSource = source + depthQueryWGSL;
-  specializedSource = specializedSource.replaceAll(
-    'material.thinFilmWeight > 0.0',
-    'HAS_THIN_FILM && material.thinFilmWeight > 0.0');
-  for (const [field, feature] of [
-    ['thinFilmWeight', 'HAS_THIN_FILM'],
-    ['coatWeight', 'HAS_COAT'],
-    ['fuzzWeight', 'HAS_FUZZ'],
-    ['subsurfaceWeight', 'HAS_SUBSURFACE']
-  ]) {
-    const weight = `clamp(matData.${field}, 0.0, 1.0)`;
-    specializedSource = specializedSource.replaceAll(
-      weight, `select(0.0, ${weight}, ${feature})`);
-  }
   const backgroundBits: Record<string, number> = {
     USE_BACKGROUND: 1,
     USE_BACKGROUND_MAP: 2,

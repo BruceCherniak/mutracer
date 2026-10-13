@@ -859,7 +859,7 @@ fn openpbr_prepare(
         * prepared.diffuseSpecularEnergyCompensation;
     // Index-matched base interfaces can still reflect through thin film.
     // Keep proposal support without duplicating the Airy optical solve here.
-    if (material.coatWeight > 0.0 && material.thinFilmWeight > 0.0) {
+    if (material.coatWeight > 0.0 && HAS_THIN_FILM && material.thinFilmWeight > 0.0) {
         let filmSupport = 0.02 * openpbr_thin_film_presence(material.thinFilmThickness, material.thinFilmWeight);
         prepared.specularProbability = max(prepared.specularProbability, prepared.specularWeight * filmSupport);
         prepared.metalProbability = max(prepared.metalProbability, prepared.metalWeight * material.specularWeight * filmSupport);
@@ -945,7 +945,7 @@ fn openpbr_eval_prepared_lobe(
     if (evaluateMetal) {
         fresnels[1] = openpbr_metal_fresnel(viewHalf, material.baseWeight * material.baseColor, material.specularColor);
     }
-    if (material.thinFilmWeight > 0.0) {
+    if (HAS_THIN_FILM && material.thinFilmWeight > 0.0) {
         let wavelengths = vec3f(620.0, 540.0, 450.0);
         // Dielectric and conductor substrates share one complete optical graph.
         for (var substrate = 0u; substrate < (rtUniform.loopUnrollGuard >> 1u); substrate++) {
