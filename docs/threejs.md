@@ -51,6 +51,7 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | --- | --- |
 | `Mesh` with `MeshStandardMaterial` / `MeshPhysicalMaterial` | `Mesh` + `OpenPBRMaterial` (color, metalness, roughness, maps, normal map, emissive, transmission, attenuation, IOR, clearcoat, sheen, iridescence, anisotropy, alpha) |
 | `Mesh` with `MeshBasicMaterial` (glTF `KHR_materials_unlit`) | Unlit emissive material |
+| `MeshPhysicalMaterial.sheen`, `.sheenColor`, `.sheenRoughness` | `fuzzWeight`, `fuzzColor`, `fuzzRoughness`; explicit `userData.mutracerOpenPBR.fuzzRoughness` overrides imported roughness |
 | `SkinnedMesh` / mesh with morph targets | CPU-deformed dynamic geometry |
 | `InstancedMesh` | One InstancedMesh per group/color variant, sharing geometry and BLAS |
 | Multi-material groups | One MuTracer mesh per group |
