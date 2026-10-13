@@ -994,7 +994,7 @@ fn openpbr_eval_prepared_lobe(
         );
         response *= max(
             vec3f(0.0),
-            vec3f(1.0) - prepared.fuzzWeight * fuzzAlbedo * material.fuzzColor
+            vec3f(1.0 - prepared.fuzzWeight * fuzzAlbedo)
         );
         if (allowFuzz) {
             response += prepared.fuzzWeight * openpbr_eval_fuzz(

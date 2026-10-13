@@ -1104,7 +1104,7 @@ vec3 openpbr_eval_prepared(
         );
         response *= max(
             vec3(0.0),
-            vec3(1.0) - prepared.fuzzWeight * fuzzAlbedo * material.fuzzColor
+            vec3(1.0 - prepared.fuzzWeight * fuzzAlbedo)
         );
         response += prepared.fuzzWeight * openpbr_eval_fuzz(
             material,

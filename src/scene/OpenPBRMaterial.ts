@@ -103,7 +103,7 @@ export default class OpenPBRMaterial {
   // Fuzz (sheen)
   /** Fuzz (sheen) layer weight. Default `0`. */
   fuzzWeight: number = materialDefault('fuzzWeight');
-  /** Fuzz color. Default `[1, 1, 1]`. */
+  /** Fuzz reflection color; substrate attenuation uses white fuzz albedo. Default `[1, 1, 1]`. */
   fuzzColor: ColorRGB = materialDefault('fuzzColor');
   /** Fuzz roughness; imported from Three.js `sheenRoughness`. Default `0.5`. */
   fuzzRoughness: number = materialDefault('fuzzRoughness');

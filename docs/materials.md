@@ -63,6 +63,10 @@ including thin-film reflection. At their default values, F82 reduces to Schlick.
 `alphaB = (1 - anisotropy) * alphaT`, with the renderer's minimum alpha.
 Both layers use the geometry tangent; a separate coat tangent is not available.
 
+`fuzzColor` colors the fuzz reflection only. Fuzz attenuates the underlying
+material using its white directional albedo, so colored fuzz does not tint
+the substrate through the attenuation term.
+
 **Interior media.** Transmission describes a homogeneous volume:
 `transmissionColor` is the color that survives one `transmissionDepth`, and
 `transmissionScatter` is the scattering albedo. With `transmissionDepth = 0`
