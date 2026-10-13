@@ -1,3 +1,4 @@
+import { simpleTextureSample } from '../../materialTextureSlots.js';
 import { mapAlphaUsageConstants } from '../../materialConstants.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
@@ -172,25 +173,11 @@ fn getMaterial(
     }
   }
 
-  if (USE_ALPHA_MAPS) {
-    let alphaMapIndex = i32(matData.alphaMapIndex);
-    if (alphaMapIndex >= 0) {
-      (*ma).alpha *= sampleMap(
-        alphaMapIndex, getMapUvSet(alphaMapIndex, uv, uv1)
-      ).g;
-    }
-  }
+  ${simpleTextureSample('alphaMap', 'wgsl')}
 
   ${alphaModeResolution}
 
-  if (USE_TRANSMISSION_MAPS) {
-    let transmissionMapIndex = i32(matData.transmissionMapIndex);
-    if (transmissionMapIndex >= 0) {
-      (*ma).transmissionWeight *= sampleMap(
-        transmissionMapIndex, getMapUvSet(transmissionMapIndex, uv, uv1)
-      ).r;
-    }
-  }
+  ${simpleTextureSample('transmissionMap', 'wgsl')}
 
   if (USE_METALLIC_ROUGHNESS_MAPS) {
     // Metallic roughness transmission map index
@@ -204,32 +191,11 @@ fn getMaterial(
     }
   }
 
-  if (USE_ROUGHNESS_MAPS) {
-    let roughnessMapIndex = i32(matData.roughnessMapIndex);
-    if (roughnessMapIndex >= 0) {
-      (*ma).specularRoughness *= sampleMap(
-        roughnessMapIndex, getMapUvSet(roughnessMapIndex, uv, uv1)
-      ).g;
-    }
-  }
+  ${simpleTextureSample('roughnessMap', 'wgsl')}
 
-  if (USE_METALNESS_MAPS) {
-    let metalnessMapIndex = i32(matData.metalnessMapIndex);
-    if (metalnessMapIndex >= 0) {
-      (*ma).baseMetalness *= sampleMap(
-        metalnessMapIndex, getMapUvSet(metalnessMapIndex, uv, uv1)
-      ).b;
-    }
-  }
+  ${simpleTextureSample('metalnessMap', 'wgsl')}
 
-  if (USE_THIN_FILM_MAPS) {
-    let thinFilmMapIndex = i32(matData.thinFilmMapIndex);
-    if (thinFilmMapIndex >= 0) {
-      (*ma).thinFilmThickness *= sampleMap(
-        thinFilmMapIndex, getMapUvSet(thinFilmMapIndex, uv, uv1)
-      ).r;
-    }
-  }
+  ${simpleTextureSample('thinFilmMap', 'wgsl')}
 
   // OpenPBR 1.1.1: coat refraction broadens all base microfacet lobes.
   // Keep the zero-coat / smooth-coat paths byte-identical.

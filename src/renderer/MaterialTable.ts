@@ -1,3 +1,4 @@
+import { MATERIAL_TEXTURE_NAMES, MATERIAL_TEXTURE_SLOTS, type MaterialTextureIndex } from './materialTextureSlots.js';
 import { packMaterialBuffer } from './materialLayout.js';
 import {createCanvas} from '../util/canvas.js';
 import { mapAlphaUsageConstants } from './materialConstants.js';
@@ -428,7 +429,7 @@ function makeTextureArray(
   };
 }
 
-export interface BufferData {
+export interface BufferData extends Record<MaterialTextureIndex, number[]> {
   color: ColorRGB[];
   roughness: number[];
   metallic: number[];
@@ -452,16 +453,7 @@ export interface BufferData {
   mapTransform: number[];
   mapUvChannel: number[];
 
-  diffuseMapIndex: number[];
-  alphaMapIndex: number[];
-  normalMapIndex: number[];
   bumpMapIndex: number[];
-  emissiveMapIndex: number[];
-  metallicRoughnessMapIndex: number[];
-  roughnessMapIndex: number[];
-  metalnessMapIndex: number[];
-  transmissionMapIndex: number[];
-  thinFilmMapIndex: number[];
 
   mediumType: number[];
   mediumDensity: number[];
@@ -472,8 +464,6 @@ export interface BufferData {
 
   displacementUvProjection: number[];
   displacementUvProjectionScale: number[];
-
-  displacementMapIndex: number[];
 
   // For PDM displacement.
   displacementStepSize: number[];
@@ -660,18 +650,7 @@ class MaterialTable {
     lights: SceneLight[],
     options: MaterialTableOptions = {}
   ) {
-    const maps = mergeTexturesFromMaterials(materials, [
-      'map',
-      'alphaMap',
-      'normalMap',
-      'emissiveMap',
-      'metallicRoughnessMap',
-      'roughnessMap',
-      'metalnessMap',
-      'transmissionMap',
-      'thinFilmMap',
-      'displacementMap'
-    ]);
+    const maps = mergeTexturesFromMaterials(materials, MATERIAL_TEXTURE_NAMES);
     const bumpMapIndices = maps.indices.displacementMap.map((index, materialIndex) =>
       materials[materialIndex].displacementBumpStrength > 0 ? index : -1
     );
@@ -708,17 +687,9 @@ class MaterialTable {
     bufferData.mapInfo = mapInfo;
     bufferData.mapTransform = mapTransform;
     bufferData.mapUvChannel = mapUvChannel;
-    bufferData.diffuseMapIndex = maps.indices.map;
-    bufferData.alphaMapIndex = maps.indices.alphaMap;
-    bufferData.normalMapIndex = maps.indices.normalMap;
-    bufferData.emissiveMapIndex = maps.indices.emissiveMap;
-    bufferData.metallicRoughnessMapIndex = maps.indices.metallicRoughnessMap;
-    bufferData.roughnessMapIndex = maps.indices.roughnessMap;
-    bufferData.metalnessMapIndex = maps.indices.metalnessMap;
-    bufferData.transmissionMapIndex = maps.indices.transmissionMap;
-    bufferData.thinFilmMapIndex = maps.indices.thinFilmMap;
-
-    bufferData.displacementMapIndex = maps.indices.displacementMap;
+    for (const slot of MATERIAL_TEXTURE_SLOTS) {
+      bufferData[slot.index] = maps.indices[slot.property];
+    }
     bufferData.bumpMapIndex = bumpMapIndices;
 
     // min max map for tfdm displacement
@@ -741,16 +712,9 @@ class MaterialTable {
 
     this.defines = {
       NUM_MAPS: allTextures.length,
-      NUM_DIFFUSE_MAPS: countMaps(maps.indices.map),
-      NUM_ALPHA_MAPS: countMaps(maps.indices.alphaMap),
-      NUM_NORMAL_MAPS: countMaps(maps.indices.normalMap),
-      NUM_BUMP_MAPS: countMaps(bumpMapIndices),
-      NUM_METALLIC_ROUGHNESS_MAPS: countMaps(maps.indices.metallicRoughnessMap),
-      NUM_ROUGHNESS_MAPS: countMaps(maps.indices.roughnessMap),
-      NUM_METALNESS_MAPS: countMaps(maps.indices.metalnessMap),
-      NUM_TRANSMISSION_MAPS: countMaps(maps.indices.transmissionMap),
-      NUM_EMISSIVE_MAPS: countMaps(maps.indices.emissiveMap),
-      NUM_THIN_FILM_MAPS: countMaps(maps.indices.thinFilmMap)
+      ...Object.fromEntries(MATERIAL_TEXTURE_SLOTS.flatMap(slot => slot.define
+        ? [[slot.define, countMaps(maps.indices[slot.property])]] : [])),
+      NUM_BUMP_MAPS: countMaps(bumpMapIndices)
     };
 
     this._updateBuffer();

@@ -1,3 +1,4 @@
+import { MATERIAL_TEXTURE_DEFINES, materialTextureFeatures } from './materialTextureSlots.js';
 import { sameInstanceMembership } from './meshInstances.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
 import { dirtyMeshInstanceIndices } from './prepareMeshBVH.js';
@@ -1021,16 +1022,8 @@ class WGPURayTracePass {
         'USE_BACKGROUND',
         'USE_BACKGROUND_MAP',
         'USE_GROUNDED_BACKGROUND',
-        'NUM_NORMAL_MAPS',
+        ...MATERIAL_TEXTURE_DEFINES,
         'NUM_BUMP_MAPS',
-        'NUM_METALLIC_ROUGHNESS_MAPS',
-        'NUM_ROUGHNESS_MAPS',
-        'NUM_METALNESS_MAPS',
-        'NUM_TRANSMISSION_MAPS',
-        'NUM_DIFFUSE_MAPS',
-        'NUM_ALPHA_MAPS',
-        'NUM_EMISSIVE_MAPS',
-        'NUM_THIN_FILM_MAPS',
         'COLOR_OFF',
         'USE_VERTEX_COLOR',
         'HAS_ALPHA_BLEND',
@@ -2410,17 +2403,7 @@ ${rayTraceCompute({
       ...materialData.defines,
 
       NUM_MAPS,
-      USE_DIFFUSE_MAPS: +materialData.defines.NUM_DIFFUSE_MAPS > 0,
-      USE_ALPHA_MAPS: +materialData.defines.NUM_ALPHA_MAPS > 0,
-      USE_METALLIC_ROUGHNESS_MAPS:
-        +materialData.defines.NUM_METALLIC_ROUGHNESS_MAPS > 0,
-      USE_ROUGHNESS_MAPS: +materialData.defines.NUM_ROUGHNESS_MAPS > 0,
-      USE_METALNESS_MAPS: +materialData.defines.NUM_METALNESS_MAPS > 0,
-      USE_TRANSMISSION_MAPS:
-        +materialData.defines.NUM_TRANSMISSION_MAPS > 0,
-      USE_EMISSIVE_MAPS: +materialData.defines.NUM_EMISSIVE_MAPS > 0,
-      USE_THIN_FILM_MAPS:
-        +materialData.defines.NUM_THIN_FILM_MAPS > 0,
+      ...materialTextureFeatures(materialData.defines),
       USE_NORMAL_MAPS:
         +materialData.defines.NUM_NORMAL_MAPS > 0 ||
         +materialData.defines.NUM_BUMP_MAPS > 0

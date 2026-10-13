@@ -1,0 +1,129 @@
+import { MATERIAL_LAYOUT, materialLayoutFields } from './materialLayout.js';
+
+// Internal slots only. Order is the legacy atlas/index contract. Color spaces
+// describe decoding at the sample site; textures share the same stored atlas.
+const slots = [
+  {
+    property: 'map', index: 'diffuseMapIndex',
+    target: 'baseColor/alpha/transmissionWeight', channel: 'rgb/a',
+    colorSpace: 'srgb', operation: 'custom',
+    define: 'NUM_DIFFUSE_MAPS', feature: 'USE_DIFFUSE_MAPS', featureBit: 2 ** 1,
+    sampling: 'manual'
+  },
+  {
+    property: 'alphaMap', index: 'alphaMapIndex',
+    target: 'alpha', channel: 'g',
+    colorSpace: 'linear', operation: 'multiply',
+    define: 'NUM_ALPHA_MAPS', feature: 'USE_ALPHA_MAPS', featureBit: 2 ** 2,
+    sampling: 'multiply'
+  },
+  {
+    property: 'normalMap', index: 'normalMapIndex',
+    target: 'normal', channel: 'rgb',
+    colorSpace: 'linear', operation: 'custom',
+    define: 'NUM_NORMAL_MAPS', feature: 'USE_NORMAL_MAPS', featureBit: 2 ** 9,
+    sampling: 'manual'
+  },
+  {
+    property: 'emissiveMap', index: 'emissiveMapIndex',
+    target: 'emission', channel: 'rgb',
+    colorSpace: 'srgb', operation: 'custom',
+    define: 'NUM_EMISSIVE_MAPS', feature: 'USE_EMISSIVE_MAPS', featureBit: 2 ** 7,
+    sampling: 'manual'
+  },
+  {
+    property: 'metallicRoughnessMap', index: 'metallicRoughnessMapIndex',
+    target: 'baseMetalness/specularRoughness', channel: 'b/g',
+    colorSpace: 'linear', operation: 'custom',
+    define: 'NUM_METALLIC_ROUGHNESS_MAPS', feature: 'USE_METALLIC_ROUGHNESS_MAPS', featureBit: 2 ** 3,
+    sampling: 'manual'
+  },
+  {
+    property: 'roughnessMap', index: 'roughnessMapIndex',
+    target: 'specularRoughness', channel: 'g',
+    colorSpace: 'linear', operation: 'multiply',
+    define: 'NUM_ROUGHNESS_MAPS', feature: 'USE_ROUGHNESS_MAPS', featureBit: 2 ** 4,
+    sampling: 'multiply'
+  },
+  {
+    property: 'metalnessMap', index: 'metalnessMapIndex',
+    target: 'baseMetalness', channel: 'b',
+    colorSpace: 'linear', operation: 'multiply',
+    define: 'NUM_METALNESS_MAPS', feature: 'USE_METALNESS_MAPS', featureBit: 2 ** 5,
+    sampling: 'multiply'
+  },
+  {
+    property: 'transmissionMap', index: 'transmissionMapIndex',
+    target: 'transmissionWeight', channel: 'r',
+    colorSpace: 'linear', operation: 'multiply',
+    define: 'NUM_TRANSMISSION_MAPS', feature: 'USE_TRANSMISSION_MAPS', featureBit: 2 ** 6,
+    sampling: 'multiply'
+  },
+  {
+    property: 'thinFilmMap', index: 'thinFilmMapIndex',
+    target: 'thinFilmThickness', channel: 'r',
+    colorSpace: 'linear', operation: 'multiply',
+    define: 'NUM_THIN_FILM_MAPS', feature: 'USE_THIN_FILM_MAPS', featureBit: 2 ** 8,
+    sampling: 'multiply'
+  },
+  {
+    property: 'displacementMap', index: 'displacementMapIndex',
+    target: 'displacement/bump', channel: 'r',
+    colorSpace: 'linear', operation: 'custom',
+    define: null, feature: null, featureBit: 0,
+    sampling: 'manual'
+  },
+] as const;
+
+export type MaterialTextureName = typeof slots[number]['property'];
+export type MaterialTextureIndex = typeof slots[number]['index'];
+
+export const MATERIAL_TEXTURE_SLOTS = slots.map(slot => {
+  const field = materialLayoutFields().find(field => field.source === slot.index);
+  if (!field) throw new Error(`Missing packed texture index: ${slot.property}`);
+  return { ...slot, packed: {
+    row: field.row, component: field.component, wgslField: field.name,
+    glslRow: `MAT_ROW_${MATERIAL_LAYOUT[field.row].name}`,
+    glslComponent: 'xyzw'[field.component]
+  } };
+});
+
+export const MATERIAL_TEXTURE_NAMES = slots.map(slot => slot.property);
+export const MATERIAL_TEXTURE_FEATURE_BITS = Object.fromEntries(slots.flatMap(slot => slot.feature
+  ? [[slot.feature, slot.featureBit]] : []));
+export const MATERIAL_TEXTURE_DEFINES = slots.flatMap(slot => slot.define ? [slot.define] : []);
+
+export function materialTextureFeatures(defines: Record<string, string | number>) {
+  return Object.fromEntries(MATERIAL_TEXTURE_SLOTS.flatMap(slot => slot.feature && slot.define
+    ? [[slot.feature, +defines[slot.define] > 0]] : []));
+}
+
+// Call at each original sample site: alpha resolution and combined maps must
+// keep their existing order. The five scalar factors use raw linear channels.
+export function simpleTextureSample(property: MaterialTextureName, backend: 'wgsl' | 'glsl'): string {
+  const slot = MATERIAL_TEXTURE_SLOTS.find(slot => slot.property === property);
+  if (!slot || slot.sampling !== 'multiply') throw new Error(`Handwritten texture slot: ${property}`);
+  const index = slot.index;
+  if (backend === 'wgsl') {
+    return `
+  if (${slot.feature}) {
+    let ${index} = i32(matData.${slot.packed.wgslField});
+    if (${index} >= 0) {
+      (*ma).${slot.target} *= sampleMap(
+        ${index}, getMapUvSet(${index}, uv, uv1)
+      ).${slot.channel};
+    }
+  }
+`;
+  }
+  return `
+  #ifdef ${slot.define}
+    int ${index} = int(fetchMatData(i + ${slot.packed.glslRow}).${slot.packed.glslComponent});
+    if (${index} >= 0) {
+      mat.${slot.target} *= sampleMap(
+        ${index}, getMapUvSet(${index}, uv, uv1)
+      ).${slot.channel};
+    }
+  #endif
+`;
+}

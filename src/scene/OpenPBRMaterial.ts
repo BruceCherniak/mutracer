@@ -6,17 +6,7 @@ import { materialDefault, applyMaterialParams } from './openPbrSchema.js';
 export type UVProjection = 'none' | 'triplanar' | 'spherical' | 'cylindrical';
 export type MaterialAlphaMode = 'auto' | 'opaque' | 'mask' | 'blend';
 
-export type MaterialTextureName =
-  | 'map'
-  | 'alphaMap'
-  | 'normalMap'
-  | 'emissiveMap'
-  | 'metallicRoughnessMap'
-  | 'roughnessMap'
-  | 'metalnessMap'
-  | 'transmissionMap'
-  | 'thinFilmMap'
-  | 'displacementMap';
+export type { MaterialTextureName } from '../renderer/materialTextureSlots.js';
 
 /**
  * OpenPBR 1.1 surface material.

@@ -1,3 +1,4 @@
+import { simpleTextureSample } from '../../materialTextureSlots.js';
 import { materialRowsGlsl } from '../../materialLayout.js';
 import { materialAlphaModeConstants } from '../../../scene/OpenPBRMaterial.js';
 import { mapAlphaUsageConstants } from '../../materialConstants.js';
@@ -201,27 +202,13 @@ void getMaterial(
     }
   #endif
 
-  #ifdef NUM_ALPHA_MAPS
-    int alphaMapIndex = int(standaloneMetalRoughMaps.z);
-    if (alphaMapIndex >= 0) {
-      mat.alpha *= sampleMap(
-        alphaMapIndex, getMapUvSet(alphaMapIndex, uv, uv1)
-      ).g;
-    }
-  #endif
+  ${simpleTextureSample('alphaMap', 'glsl')}
 
   mat.alpha = resolveMaterialAlpha(
     mat.alpha, int(fetchMatData(i + MAT_ROW_BUMP_ALPHA).w), standaloneMetalRoughMaps.w
   );
 
-  #ifdef NUM_TRANSMISSION_MAPS
-    int transmissionMapIndex = int(alphaAndThinFilm.w);
-    if (transmissionMapIndex >= 0) {
-      mat.transmissionWeight *= sampleMap(
-        transmissionMapIndex, getMapUvSet(transmissionMapIndex, uv, uv1)
-      ).r;
-    }
-  #endif
+  ${simpleTextureSample('transmissionMap', 'glsl')}
 
   #ifdef NUM_METALLIC_ROUGHNESS_MAPS
     int metallicRoughnessMapIndex = int(metallicAndMapIndex.w);
@@ -235,23 +222,9 @@ void getMaterial(
     }
   #endif
 
-  #ifdef NUM_ROUGHNESS_MAPS
-    int roughnessMapIndex = int(standaloneMetalRoughMaps.x);
-    if (roughnessMapIndex >= 0) {
-      mat.specularRoughness *= sampleMap(
-        roughnessMapIndex, getMapUvSet(roughnessMapIndex, uv, uv1)
-      ).g;
-    }
-  #endif
+  ${simpleTextureSample('roughnessMap', 'glsl')}
 
-  #ifdef NUM_METALNESS_MAPS
-    int metalnessMapIndex = int(standaloneMetalRoughMaps.y);
-    if (metalnessMapIndex >= 0) {
-      mat.baseMetalness *= sampleMap(
-        metalnessMapIndex, getMapUvSet(metalnessMapIndex, uv, uv1)
-      ).b;
-    }
-  #endif
+  ${simpleTextureSample('metalnessMap', 'glsl')}
 
   #ifdef NUM_EMISSIVE_MAPS
     int emissiveMapIndex = int(emissionAndEmissiveMapIndex.w);
@@ -263,14 +236,7 @@ void getMaterial(
     }
   #endif
 
-  #ifdef NUM_THIN_FILM_MAPS
-    int thinFilmMapIndex = int(alphaAndThinFilm.g);
-    if (thinFilmMapIndex >= 0) {
-      mat.thinFilmThickness *= sampleMap(
-        thinFilmMapIndex, getMapUvSet(thinFilmMapIndex, uv, uv1)
-      ).r;
-    }
-  #endif
+  ${simpleTextureSample('thinFilmMap', 'glsl')}
 
   // OpenPBR 1.1.1: coat refraction broadens all base microfacet lobes.
   // Keep the zero-coat / smooth-coat paths byte-identical.
