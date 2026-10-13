@@ -319,7 +319,7 @@ fn SampleMaterial(
     var sampledLobeRoughness = 1.0;
     var sampledLobeSpecular = false;
     var sampledLobeDiffuse = true;
-    var sampledLobeIndex = 5u;
+    var sampledLobeIndex = u32(OPENPBR_LOBE_DIFFUSE);
     var sampledMarginalPdf = 0.0;
     let matRnd = vec3f(sample2D(bounceDim(BSDF_DIRECTION)), sample1D(bounceDim(BSDF_LOBE)));
     var fullResponse = vec3f(0.0);

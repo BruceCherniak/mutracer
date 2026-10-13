@@ -25,6 +25,7 @@ const int OPENPBR_LOBE_SPECULAR = 3;
 const int OPENPBR_LOBE_TRANSMISSION = 4;
 const int OPENPBR_LOBE_DIFFUSE = 5;
 const int OPENPBR_LOBE_SUBSURFACE = 6;
+const int OPENPBR_LOBE_COUNT = 7;
 
 struct OpenPbrBasis {
     vec3 tangent;
@@ -46,21 +47,8 @@ struct OpenPbrPreparedBsdf {
     float diffuseSpecularEnergyCompensation;
     vec3 coatBaseScale;
 
-    float fuzzWeight;
-    float coatWeight;
-    float metalWeight;
-    float specularWeight;
-    float transmissionWeight;
-    float diffuseWeight;
-    float subsurfaceWeight;
-
-    float fuzzProbability;
-    float coatProbability;
-    float metalProbability;
-    float specularProbability;
-    float transmissionProbability;
-    float diffuseProbability;
-    float subsurfaceProbability;
+    float weights[OPENPBR_LOBE_COUNT];
+    float probabilities[OPENPBR_LOBE_COUNT];
 };
 
 float openpbr_luminance(vec3 color) {
@@ -735,31 +723,20 @@ vec3 openpbr_eval_subsurface_boundary(
 }
 
 void openpbr_normalize_probabilities(inout OpenPbrPreparedBsdf prepared) {
-    float total = prepared.fuzzProbability
-        + prepared.coatProbability
-        + prepared.metalProbability
-        + prepared.specularProbability
-        + prepared.transmissionProbability
-        + prepared.diffuseProbability
-        + prepared.subsurfaceProbability;
+    float total = prepared.probabilities[OPENPBR_LOBE_FUZZ];
+    for (int lobe = 1; lobe < OPENPBR_LOBE_COUNT; lobe++) {
+        total += prepared.probabilities[lobe];
+    }
     if (total <= 1e-8) {
-        prepared.fuzzProbability = 0.0;
-        prepared.coatProbability = 0.0;
-        prepared.metalProbability = 0.0;
-        prepared.specularProbability = 0.0;
-        prepared.transmissionProbability = 0.0;
-        prepared.diffuseProbability = 0.0;
-        prepared.subsurfaceProbability = 0.0;
+        for (int lobe = 0; lobe < OPENPBR_LOBE_COUNT; lobe++) {
+            prepared.probabilities[lobe] = 0.0;
+        }
         return;
     }
     float inverseTotal = 1.0 / total;
-    prepared.fuzzProbability *= inverseTotal;
-    prepared.coatProbability *= inverseTotal;
-    prepared.metalProbability *= inverseTotal;
-    prepared.specularProbability *= inverseTotal;
-    prepared.transmissionProbability *= inverseTotal;
-    prepared.diffuseProbability *= inverseTotal;
-    prepared.subsurfaceProbability *= inverseTotal;
+    for (int lobe = 0; lobe < OPENPBR_LOBE_COUNT; lobe++) {
+        prepared.probabilities[lobe] *= inverseTotal;
+    }
 }
 
 // Adapted from Adobe c91aad1 impl/openpbr_lobe_utils.h and
@@ -845,16 +822,16 @@ OpenPbrPreparedBsdf openpbr_prepare(
     float dielectricBaseWeight = 1.0 - material.baseMetalness;
     float opaqueDielectricWeight = dielectricBaseWeight
         * (1.0 - material.transmissionWeight);
-    prepared.fuzzWeight = material.fuzzWeight;
-    prepared.coatWeight = material.coatWeight;
-    if (material.inside) { prepared.coatWeight = 0.0; }
-    prepared.metalWeight = material.baseMetalness;
-    prepared.specularWeight = dielectricBaseWeight;
-    prepared.transmissionWeight = dielectricBaseWeight
+    prepared.weights[OPENPBR_LOBE_FUZZ] = material.fuzzWeight;
+    prepared.weights[OPENPBR_LOBE_COAT] = material.coatWeight;
+    if (material.inside) { prepared.weights[OPENPBR_LOBE_COAT] = 0.0; }
+    prepared.weights[OPENPBR_LOBE_METAL] = material.baseMetalness;
+    prepared.weights[OPENPBR_LOBE_SPECULAR] = dielectricBaseWeight;
+    prepared.weights[OPENPBR_LOBE_TRANSMISSION] = dielectricBaseWeight
         * material.transmissionWeight;
-    prepared.diffuseWeight = opaqueDielectricWeight
+    prepared.weights[OPENPBR_LOBE_DIFFUSE] = opaqueDielectricWeight
         * (1.0 - material.subsurfaceWeight) * material.baseWeight;
-    prepared.subsurfaceWeight = opaqueDielectricWeight
+    prepared.weights[OPENPBR_LOBE_SUBSURFACE] = opaqueDielectricWeight
         * material.subsurfaceWeight;
 
     prepared.specularEtaTOverEtaI = openpbr_apply_specular_weight_to_ior(
@@ -940,31 +917,31 @@ OpenPbrPreparedBsdf openpbr_prepare(
     prepared.diffuseSpecularEnergyCompensation = viewEnergyComplement
         / max(averageEnergyComplement, 1e-12);
 
-    prepared.fuzzProbability = prepared.fuzzWeight
+    prepared.probabilities[OPENPBR_LOBE_FUZZ] = prepared.weights[OPENPBR_LOBE_FUZZ]
         * openpbr_luminance(material.fuzzColor)
         * max(openpbr_fuzz_directional_albedo(
             viewCosine,
             material.fuzzRoughness
         ), 0.02);
-    prepared.coatProbability = 0.0;
+    prepared.probabilities[OPENPBR_LOBE_COAT] = 0.0;
     prepared.coatBaseScale = vec3(1.0);
     if (material.coatWeight > 0.0 && !material.inside) {
         float coatEnergy = openpbr_coat_energy(material, viewCosine);
-        prepared.coatProbability = prepared.coatWeight * coatEnergy;
+        prepared.probabilities[OPENPBR_LOBE_COAT] = prepared.weights[OPENPBR_LOBE_COAT] * coatEnergy;
         prepared.coatBaseScale = openpbr_coat_passage(material, viewCosine)
-            * (1.0 - prepared.coatWeight * coatEnergy) * openpbr_coat_darkening(prepared);
+            * (1.0 - prepared.weights[OPENPBR_LOBE_COAT] * coatEnergy) * openpbr_coat_darkening(prepared);
     }
-    prepared.metalProbability = prepared.metalWeight
+    prepared.probabilities[OPENPBR_LOBE_METAL] = prepared.weights[OPENPBR_LOBE_METAL]
         * openpbr_luminance(metalFresnelEstimate);
-    prepared.specularProbability = prepared.specularWeight
+    prepared.probabilities[OPENPBR_LOBE_SPECULAR] = prepared.weights[OPENPBR_LOBE_SPECULAR]
         * openpbr_luminance(dielectricFresnelEstimate);
-    prepared.transmissionProbability = prepared.transmissionWeight
+    prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] = prepared.weights[OPENPBR_LOBE_TRANSMISSION]
         * (1.0 - transmissionFresnel)
         * openpbr_luminance(transmissionTint);
-    prepared.diffuseProbability = prepared.diffuseWeight
+    prepared.probabilities[OPENPBR_LOBE_DIFFUSE] = prepared.weights[OPENPBR_LOBE_DIFFUSE]
         * openpbr_luminance(prepared.diffuseColor)
         * prepared.diffuseSpecularEnergyCompensation;
-    prepared.subsurfaceProbability = prepared.subsurfaceWeight
+    prepared.probabilities[OPENPBR_LOBE_SUBSURFACE] = prepared.weights[OPENPBR_LOBE_SUBSURFACE]
         * (1.0 - transmissionFresnel)
         * openpbr_luminance(material.subsurfaceColor)
         * prepared.diffuseSpecularEnergyCompensation;
@@ -972,16 +949,16 @@ OpenPbrPreparedBsdf openpbr_prepare(
     // Keep proposal support without duplicating the Airy optical solve here.
     if (material.coatWeight > 0.0 && material.thinFilmWeight > 0.0) {
         float filmSupport = 0.02 * openpbr_thin_film_presence(material.thinFilmThickness, material.thinFilmWeight);
-        prepared.specularProbability = max(prepared.specularProbability, prepared.specularWeight * filmSupport);
-        prepared.metalProbability = max(prepared.metalProbability, prepared.metalWeight * material.specularWeight * filmSupport);
+        prepared.probabilities[OPENPBR_LOBE_SPECULAR] = max(prepared.probabilities[OPENPBR_LOBE_SPECULAR], prepared.weights[OPENPBR_LOBE_SPECULAR] * filmSupport);
+        prepared.probabilities[OPENPBR_LOBE_METAL] = max(prepared.probabilities[OPENPBR_LOBE_METAL], prepared.weights[OPENPBR_LOBE_METAL] * material.specularWeight * filmSupport);
     }
     if (material.coatWeight > 0.0 && !material.inside) {
         float baseScale = max(max(prepared.coatBaseScale.x, prepared.coatBaseScale.y), prepared.coatBaseScale.z);
-        prepared.metalProbability *= baseScale;
-        prepared.specularProbability *= baseScale;
-        prepared.transmissionProbability *= baseScale;
-        prepared.diffuseProbability *= baseScale;
-        prepared.subsurfaceProbability *= baseScale;
+        prepared.probabilities[OPENPBR_LOBE_METAL] *= baseScale;
+        prepared.probabilities[OPENPBR_LOBE_SPECULAR] *= baseScale;
+        prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] *= baseScale;
+        prepared.probabilities[OPENPBR_LOBE_DIFFUSE] *= baseScale;
+        prepared.probabilities[OPENPBR_LOBE_SUBSURFACE] *= baseScale;
     }
     openpbr_normalize_probabilities(prepared);
     return prepared;
@@ -1032,8 +1009,8 @@ vec3 openpbr_eval_prepared(
         );
 
     if (reflection) {
-        if (prepared.diffuseWeight > 0.0) {
-            response += prepared.diffuseWeight * openpbr_eval_diffuse(
+        if (prepared.weights[OPENPBR_LOBE_DIFFUSE] > 0.0) {
+            response += prepared.weights[OPENPBR_LOBE_DIFFUSE] * openpbr_eval_diffuse(
                 material,
                 prepared.diffuseColor,
                 viewLocal,
@@ -1041,11 +1018,11 @@ vec3 openpbr_eval_prepared(
                 diffuseSpecularEnergyCompensation,
                 lobePdf
             );
-            pdf += prepared.diffuseProbability * lobePdf;
+            pdf += prepared.probabilities[OPENPBR_LOBE_DIFFUSE] * lobePdf;
         }
 
-        if (prepared.subsurfaceWeight > 0.0 && material.thinWalled) {
-            response += 0.5 * prepared.subsurfaceWeight * openpbr_eval_diffuse(
+        if (prepared.weights[OPENPBR_LOBE_SUBSURFACE] > 0.0 && material.thinWalled) {
+            response += 0.5 * prepared.weights[OPENPBR_LOBE_SUBSURFACE] * openpbr_eval_diffuse(
                 material,
                 material.subsurfaceColor,
                 viewLocal,
@@ -1053,10 +1030,10 @@ vec3 openpbr_eval_prepared(
                 diffuseSpecularEnergyCompensation,
                 lobePdf
             );
-            pdf += prepared.subsurfaceProbability * 0.5 * lobePdf;
+            pdf += prepared.probabilities[OPENPBR_LOBE_SUBSURFACE] * 0.5 * lobePdf;
         }
 
-        if (prepared.specularWeight > 0.0) {
+        if (prepared.weights[OPENPBR_LOBE_SPECULAR] > 0.0) {
             vec3 dielectricFresnel = vec3(openpbr_substrate_fresnel(prepared, viewHalf, true));
             if (material.thinFilmWeight > 0.0) {
                 dielectricFresnel = openpbr_apply_dielectric_thin_film(
@@ -1076,7 +1053,7 @@ vec3 openpbr_eval_prepared(
                 );
             }
             vec3 fresnel = material.specularColor * dielectricFresnel;
-            response += prepared.specularWeight * openpbr_eval_microfacet_reflection(
+            response += prepared.weights[OPENPBR_LOBE_SPECULAR] * openpbr_eval_microfacet_reflection(
                 material,
                 viewLocal,
                 lightLocal,
@@ -1084,10 +1061,10 @@ vec3 openpbr_eval_prepared(
                 fresnel,
                 lobePdf
             );
-            pdf += prepared.specularProbability * lobePdf;
+            pdf += prepared.probabilities[OPENPBR_LOBE_SPECULAR] * lobePdf;
         }
 
-        if (prepared.metalWeight > 0.0) {
+        if (prepared.weights[OPENPBR_LOBE_METAL] > 0.0) {
             vec3 fresnel = openpbr_metal_fresnel(
                 viewHalf,
                 material.baseWeight * material.baseColor,
@@ -1106,7 +1083,7 @@ vec3 openpbr_eval_prepared(
                 );
             }
             fresnel *= material.specularWeight;
-            response += prepared.metalWeight * openpbr_eval_microfacet_reflection(
+            response += prepared.weights[OPENPBR_LOBE_METAL] * openpbr_eval_microfacet_reflection(
                 material,
                 viewLocal,
                 lightLocal,
@@ -1114,7 +1091,7 @@ vec3 openpbr_eval_prepared(
                 fresnel,
                 lobePdf
             );
-            pdf += prepared.metalProbability * lobePdf;
+            pdf += prepared.probabilities[OPENPBR_LOBE_METAL] * lobePdf;
         }
     }
     else {
@@ -1130,7 +1107,7 @@ vec3 openpbr_eval_prepared(
                 prepared.thinFilmExteriorIor
             );
         }
-        if (prepared.transmissionWeight > 0.0) {
+        if (prepared.weights[OPENPBR_LOBE_TRANSMISSION] > 0.0) {
             if (material.thinWalled) {
                 vec3 mirroredLight = vec3(lightLocal.xy, -lightLocal.z);
                 vec3 thinWallHalf = normalize(mirroredLight + viewLocal);
@@ -1159,7 +1136,7 @@ vec3 openpbr_eval_prepared(
                     abs(viewLocal.z),
                     prepared.refractionEtaTOverEtaI
                 );
-                response += prepared.transmissionWeight
+                response += prepared.weights[OPENPBR_LOBE_TRANSMISSION]
                     * openpbr_eval_microfacet_reflection(
                         material,
                         viewLocal,
@@ -1170,7 +1147,7 @@ vec3 openpbr_eval_prepared(
                     );
             }
             else {
-                response += prepared.transmissionWeight
+                response += prepared.weights[OPENPBR_LOBE_TRANSMISSION]
                     * openpbr_eval_microfacet_refraction(
                         material,
                         material.relativeIor,
@@ -1182,12 +1159,12 @@ vec3 openpbr_eval_prepared(
                         lobePdf
                     );
             }
-            pdf += prepared.transmissionProbability * lobePdf;
+            pdf += prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] * lobePdf;
         }
-        if (prepared.subsurfaceWeight > 0.0) {
+        if (prepared.weights[OPENPBR_LOBE_SUBSURFACE] > 0.0) {
             if (material.thinWalled) {
                 vec3 flippedLight = vec3(lightLocal.xy, -lightLocal.z);
-                response += 0.5 * prepared.subsurfaceWeight
+                response += 0.5 * prepared.weights[OPENPBR_LOBE_SUBSURFACE]
                     * openpbr_eval_diffuse(
                         material,
                         material.subsurfaceColor,
@@ -1199,14 +1176,14 @@ vec3 openpbr_eval_prepared(
                 lobePdf *= 0.5;
             }
             else {
-                response += prepared.subsurfaceWeight * openpbr_eval_subsurface_boundary(
+                response += prepared.weights[OPENPBR_LOBE_SUBSURFACE] * openpbr_eval_subsurface_boundary(
                     material,
                     viewLocal,
                     lightLocal,
                     lobePdf
                 );
             }
-            pdf += prepared.subsurfaceProbability * lobePdf;
+            pdf += prepared.probabilities[OPENPBR_LOBE_SUBSURFACE] * lobePdf;
         }
     }
 
@@ -1214,7 +1191,7 @@ vec3 openpbr_eval_prepared(
         response *= openpbr_coat_base_scale(prepared, lightLocal.z);
     }
 
-    if (reflection && prepared.coatWeight > 0.0) {
+    if (reflection && prepared.weights[OPENPBR_LOBE_COAT] > 0.0) {
         vec3 coatFresnel = vec3(openpbr_dielectric_fresnel(
             viewHalf,
             1.0 / material.coatIor
@@ -1223,7 +1200,7 @@ vec3 openpbr_eval_prepared(
         vec2 coatAlpha = openpbr_roughness_to_alpha(material.coatRoughness, material.coatAnisotropy);
         coatMaterial.alphaX = coatAlpha.x;
         coatMaterial.alphaY = coatAlpha.y;
-        response += prepared.coatWeight * openpbr_eval_microfacet_reflection(
+        response += prepared.weights[OPENPBR_LOBE_COAT] * openpbr_eval_microfacet_reflection(
             coatMaterial,
             viewLocal,
             lightLocal,
@@ -1231,25 +1208,25 @@ vec3 openpbr_eval_prepared(
             coatFresnel,
             lobePdf
         );
-        pdf += prepared.coatProbability * lobePdf;
+        pdf += prepared.probabilities[OPENPBR_LOBE_COAT] * lobePdf;
     }
 
-    if (reflection && prepared.fuzzWeight > 0.0) {
+    if (reflection && prepared.weights[OPENPBR_LOBE_FUZZ] > 0.0) {
         float fuzzAlbedo = openpbr_fuzz_directional_albedo(
             abs(viewLocal.z),
             material.fuzzRoughness
         );
         response *= max(
             vec3(0.0),
-            vec3(1.0 - prepared.fuzzWeight * fuzzAlbedo)
+            vec3(1.0 - prepared.weights[OPENPBR_LOBE_FUZZ] * fuzzAlbedo)
         );
-        response += prepared.fuzzWeight * openpbr_eval_fuzz(
+        response += prepared.weights[OPENPBR_LOBE_FUZZ] * openpbr_eval_fuzz(
             material,
             viewLocal,
             lightLocal,
             lobePdf
         );
-        pdf += prepared.fuzzProbability * lobePdf;
+        pdf += prepared.probabilities[OPENPBR_LOBE_FUZZ] * lobePdf;
     }
 
     return response * abs(lightLocal.z);
@@ -1311,31 +1288,29 @@ vec3 openpbr_sample_prepared(
     // physically null interface as straight, unit-throughput transmission.
     if (!prepared.material.thinWalled &&
         abs(prepared.material.relativeIor - 1.0) <= 1e-6 &&
-        prepared.transmissionProbability >= 1.0 - 1e-6) {
+        prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] >= 1.0 - 1e-6) {
         lightDirection = openpbr_to_world(prepared.basis, -viewLocal);
         pdf = 1.0;
         isTransmissionEvent = true;
         return (openpbr_transmission_tint(prepared.material) * openpbr_coat_base_scale(prepared, -prepared.viewLocal.z));
     }
 
-    float fuzzCdf = prepared.fuzzProbability;
-    float coatCdf = fuzzCdf + prepared.coatProbability;
-    float metalCdf = coatCdf + prepared.metalProbability;
-    float specularCdf = metalCdf + prepared.specularProbability;
-    float transmissionCdf = specularCdf + prepared.transmissionProbability;
-    float diffuseCdf = transmissionCdf + prepared.diffuseProbability;
-    float subsurfaceCdf = diffuseCdf + prepared.subsurfaceProbability;
-    if (subsurfaceCdf <= 0.0) {
+    float cdf[OPENPBR_LOBE_COUNT];
+    cdf[OPENPBR_LOBE_FUZZ] = prepared.probabilities[OPENPBR_LOBE_FUZZ];
+    for (int lobe = 1; lobe < OPENPBR_LOBE_COUNT; lobe++) {
+        cdf[lobe] = cdf[lobe - 1] + prepared.probabilities[lobe];
+    }
+    if (cdf[OPENPBR_LOBE_SUBSURFACE] <= 0.0) {
         return vec3(0.0);
     }
 
     vec3 lightLocal;
-    if (lobeSample < fuzzCdf || (
-        lobeSample >= transmissionCdf && lobeSample < diffuseCdf
+    if (lobeSample < cdf[OPENPBR_LOBE_FUZZ] || (
+        lobeSample >= cdf[OPENPBR_LOBE_TRANSMISSION] && lobeSample < cdf[OPENPBR_LOBE_DIFFUSE]
     )) {
         lightLocal = sampling_cosine_hemisphere(vec2(randomX, randomY));
     }
-    else if (lobeSample < coatCdf) {
+    else if (lobeSample < cdf[OPENPBR_LOBE_COAT]) {
         vec3 halfVector = sampling_ggx_visible_normal(
             viewLocal,
             // The VNDF must use the same alpha as the evaluated coat PDF.
@@ -1347,7 +1322,7 @@ vec3 openpbr_sample_prepared(
         }
         lightLocal = normalize(reflect(-viewLocal, halfVector));
     }
-    else if (lobeSample < specularCdf) {
+    else if (lobeSample < cdf[OPENPBR_LOBE_SPECULAR]) {
         vec3 halfVector = sampling_ggx_visible_normal(
             viewLocal,
             vec2(material.alphaX, material.alphaY),
@@ -1358,7 +1333,7 @@ vec3 openpbr_sample_prepared(
         }
         lightLocal = normalize(reflect(-viewLocal, halfVector));
     }
-    else if (lobeSample < transmissionCdf) {
+    else if (lobeSample < cdf[OPENPBR_LOBE_TRANSMISSION]) {
         isTransmissionEvent = true;
         vec3 halfVector = sampling_ggx_visible_normal(
             viewLocal,
