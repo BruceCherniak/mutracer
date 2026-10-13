@@ -1,3 +1,4 @@
+import { bvhConfig, debugSettings, engineSettingsKey, workerCount, textureBudget } from './settings/engine.js';
 import {createCanvas} from './util/canvas.js';
 import Camera from './scene/Camera.js';
 import {getRecommendedDeviceDescriptor, validateDevice} from './renderer/deviceRequirements.js';
@@ -57,8 +58,6 @@ interface EngineEvents {
   error: Error;
   devicelost: { reason: string; recovering: boolean };
 }
-declare const process: { env: { NODE_ENV?: string } };
-function isDevelopment() { try { return process.env.NODE_ENV !== 'production'; } catch { return false; } }
 let globalGPUDevice: GPUDevice | null = null;
 let globalGPUAdapterInfo: GPUAdapterInfo | null = null;
 let globalGPURequest: Promise<GPUDevice> | undefined;
@@ -162,7 +161,7 @@ export default class Engine {
     this._suppliedDevice = params.device;
     this._ownsDeviceSelection = !params.device;
     this._backendChoice = params.device ? 'webgpu' : params.backend ?? 'auto';
-    this._sceneChangeDetector = new SceneChangeDetector(params.validateUpdates ?? isDevelopment());
+    this._sceneChangeDetector = new SceneChangeDetector(debugSettings(params).validateUpdates);
     this.display = Display._create(this, params.canvas ?? createCanvas());
   }
   /** Initializes once; concurrent/repeated calls share the result. */
@@ -200,8 +199,8 @@ export default class Engine {
       this._sourceCamera = this.camera; this._cameraFields = cameraFields;
       this._committedCamera = this.camera ? cameraSnapshot(this.camera) : undefined; this._cameraRevision++; changed = true;
     }
-    const bvhSettings = `${this.bvhBuilder}/${this.bvhLayout}/${this.bvhSpatialSplits}`;
-    const force = bvhSettings !== this._lastBvhSettings || this.textureAtlasBudgetBytes !== this._lastBudget;
+    const bvhSettings = engineSettingsKey(this, 'bvh');
+    const force = bvhSettings !== this._lastBvhSettings || textureBudget(this) !== this._lastBudget;
     if (this.scene !== this._sourceScene || force) this._sceneChangeDetector.reset();
     if (this.scene) {
       validateSceneLights(this.scene.lights, error => this._notifyError(error));
@@ -221,7 +220,7 @@ export default class Engine {
       }
       this._sceneChangeDetector.commit();
     } else if (this._sourceScene) { this._committedScene = undefined; this._pendingMeshes = 'full'; this._pendingLights = true; this._pendingBackground = true; this._sceneRevision++; changed = true; }
-    this._sourceScene = this.scene; this._lastBvhSettings = bvhSettings; this._lastBudget = this.textureAtlasBudgetBytes;
+    this._sourceScene = this.scene; this._lastBvhSettings = bvhSettings; this._lastBudget = textureBudget(this);
     if (!this._pipeline) void this.init().catch(() => {});
     if (changed) for (const render of this._renders) render._inputsChanged(resetTiming);
     this._upload();
@@ -236,7 +235,7 @@ export default class Engine {
       void task.then(() => { if (this._bvhPreparation === task) this._bvhPreparation = undefined; this._upload(); }, error => { if (this._bvhPreparation === task) this._bvhPreparation = undefined; this._notifyError(error); });
       return;
     }
-    const budgetChanged = pipeline.setTextureAtlasBudget(this._lastBudget >= 0 ? this._lastBudget : this.textureAtlasBudgetBytes);
+    const budgetChanged = pipeline.setTextureAtlasBudget(this._lastBudget >= 0 ? this._lastBudget : textureBudget(this));
     if (this._pendingMeshes !== 'none' || budgetChanged) pipeline.setMeshes(scene.meshes, this._pendingMeshes === 'full' || budgetChanged ? undefined : {
       transforms: [...this._pendingTransforms], geometries: [...this._pendingGeometries], materials: [...this._pendingMaterials]
     });
@@ -246,7 +245,7 @@ export default class Engine {
     this._pendingTransforms.clear(); this._pendingGeometries.clear(); this._pendingMaterials.clear();
     this._uploadedRevision = this._sceneRevision;
   }
-  private _bvhConfig(): BvhBuildConfig { return {builder: this.bvhBuilder, layout: this.bvhLayout, spatialSplits: this.bvhSpatialSplits}; }
+  private _bvhConfig(): BvhBuildConfig { return bvhConfig(this); }
   /** Builds static CPU BVHs for this scene without replacing GPU inputs. Options default undefined. */
   prepare(scene: Scene, options: PrepareOptions = {}): Promise<void> {
     const revision = this._bvhPreparationRevision;
@@ -256,7 +255,7 @@ export default class Engine {
       const meshes = scene.meshes;
       const useWorker = canUseBvhWorker() && !this._bvhWorkerUnavailable;
       if (useWorker) {
-        const count = resolveBvhWorkerCount(this.bvhWorkerCount);
+        const count = workerCount(this);
         if (this._bvhWorkerPool?.size !== count) {
           this._bvhWorkerPool?.dispose();
           this._bvhWorkerPool = new BvhWorkerPool(count);
@@ -265,8 +264,8 @@ export default class Engine {
       const config = this._bvhConfig();
       const result = await prepareStaticBvhs(meshes, {
         config,
+        ...config,
         builder: this.bvhBuilder === 'tinybvh' && !this._tinyBvhUnavailable ? 'tinybvh' : 'builtin',
-        layout: this.bvhLayout, spatialSplits: this.bvhSpatialSplits,
         useWorker, workerPool: this._bvhWorkerPool, isCancelled,
         rebuild: false, onProgress: progress => {
           if (this._bvhPreparation === preparation) this._events.emit('progress', {stage: 'bvh', progress});

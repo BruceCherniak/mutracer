@@ -95,7 +95,7 @@ export type { SamplingPattern } from './renderer/sampling.js';
 export { default as Engine } from './Engine.js';
 export type { EngineParams, EngineInfo, EngineDiagnostics, PrepareOptions, BVHBuilder, DepthSampleArea, TextureAtlasLimits } from './Engine.js';
 export { default as Display } from './Display.js';
-export type { BlobOptions, DisplayChannel } from './Display.js';
+export type { BlobOptions, DisplayChannel, DisplaySettings } from './Display.js';
 export { default as Render } from './Render.js';
 export type { RenderOptions, RenderSettings, ConvergeOptions, ConvergeResult, DenoiserOptions, Denoiser, DenoiseInput, CustomDenoiserOptions, DenoiseSchedule, JNLMDenoiserOptions, OIDNDenoiserOptions, RenderStatus, SampleEvent } from './Render.js';
 

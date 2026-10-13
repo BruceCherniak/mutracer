@@ -97,7 +97,10 @@ WebGL context loss also reports `devicelost` with reason `webglcontextlost` and
 `new Render(engine, options?)` creates one independent accumulation. All renders
 use the engine's committed scene/camera. Options are mutable except fixed
 constructor dimensions. Image-quality changes restart only this render;
-budget and display changes retain samples.
+budget and display changes retain samples. Batch assignments use
+`Object.assign(render, settings)` with `RenderSettings`, or constructor options.
+`maxSamples` changes restart accumulation only with `samplingPattern: 'zsobol'`;
+other sequences retain their completed samples.
 
 | Option | Default | Meaning |
 | --- | --- | --- |
@@ -221,6 +224,18 @@ quality defaults to the browser encoder value.
 | `shadowCatcherColor`, `shadowCatcherAlpha` | `[0, 0, 0]`, `1` |
 
 All display settings apply at composition and retain accumulated samples.
+Use the exported `DisplaySettings` type for a partial batch:
+
+```ts
+const settings: DisplaySettings = {toneMappingExposure: 2, bloomIntensity: 0.2};
+Object.assign(engine.display, settings);
+engine.display.present(render);
+```
+
+Ordinary setting fields remain enumerable and read back the assigned value.
+For example, `bevelSamples` and `directLightCandidates` are clamped when
+submitted, without rewriting the assigned field. Existing accessors for
+resolution, fallback, denoiser and worker count retain their validation rules.
 
 `DenoiserOptions` is a union of `JNLMDenoiserOptions`, `OIDNDenoiserOptions`
 and `CustomDenoiserOptions`,

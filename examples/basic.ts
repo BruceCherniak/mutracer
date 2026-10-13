@@ -9,7 +9,7 @@ import {
   OpenPBRMaterial, type OpenPBRMaterialParams,
   RectLight,
   Engine, RenderLoop, THREESync,
-  type Scene,
+  type Scene, type DisplaySettings,
   createCubeGeometry,
   createPlaneGeometry,
   createSphereGeometry
@@ -63,6 +63,8 @@ controls.target.set(0, .3, -.3); controls.update();
 // Uses WebGPU when available and WebGL 2 otherwise; add ?webgl to the URL to
 // force the WebGL 2 backend.
 const engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
+const displaySettings: DisplaySettings = {toneMapping: 'agx', toneMappingExposure: 1};
+Object.assign(engine.display, displaySettings);
 const sync = new THREESync(engine, {camera, controls});
 const loop = new RenderLoop(engine, {sync, final: {bounces: 6, maxSamples: 1024}});
 const final = loop.final;

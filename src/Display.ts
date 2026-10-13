@@ -3,12 +3,30 @@ import type Engine from './Engine.js';
 import type Render from './Render.js';
 import type { ToneMapping, DisplayChannel } from './renderer/RenderingPipeline.js';
 import type { ColorRGB } from './types.js';
+import { displaySettingsKey, applyDisplaySettings } from './settings/display.js';
 /** Display image channels. Default final. */
 export type {DisplayChannel} from './renderer/RenderingPipeline.js';
 /** Image encoding options for Display.toBlob. */
 export interface BlobOptions {
   /** Browser image MIME type. Default image/png. */ type?: string;
   /** Encoder quality in 0–1. Default undefined uses the browser default. */ quality?: number;
+}
+/** Optional shared display settings; defaults match Display. */
+export interface DisplaySettings {
+  /** Tone mapping transform. Default agx. */ toneMapping?: ToneMapping;
+  /** Linear exposure multiplier. Default 1. */ toneMappingExposure?: number;
+  /** Contrast multiplier. Default 1. */ contrast?: number;
+  /** Saturation multiplier. Default 1. */ saturation?: number;
+  /** White balance temperature shift in -1–1. Default 0. */ temperature?: number;
+  /** Green/magenta tint in -1–1. Default 0. */ tint?: number;
+  /** Vignette strength in 0–1. Default 0. */ vignette?: number;
+  /** Bloom intensity; 0 disables it. Default 0. */ bloomIntensity?: number;
+  /** Bloom luminance threshold. Default 1. */ bloomThreshold?: number;
+  /** Bloom radius in 0–1. Default 0.6. */ bloomRadius?: number;
+  /** Extended-range WebGPU presentation, ignored on WebGL. Default false. */ hdrOutputEnabled?: boolean;
+  /** Display image channel. Default final. */ channel?: DisplayChannel;
+  /** Linear shadow-catcher color. Default black. */ shadowCatcherColor?: ColorRGB;
+  /** Shadow-catcher opacity multiplier. Default 1. */ shadowCatcherAlpha?: number;
 }
 /** Canvas presentation and shared display settings; obtained from engine.display. */
 export default class Display {
@@ -41,18 +59,14 @@ export default class Display {
     if (render._engine !== this.engine) throw new Error('Render belongs to another engine.');
     const target = render._output;
     if (!target) return;
-    const key = JSON.stringify([this.toneMapping, this.toneMappingExposure, this.contrast, this.saturation, this.temperature, this.tint, this.vignette, this.bloomIntensity, this.bloomThreshold, this.bloomRadius, this.hdrOutputEnabled, this.channel, this.shadowCatcherColor, this.shadowCatcherAlpha]);
+    const key = displaySettingsKey(this);
     const previous = this.settings.get(render);
     if (previous !== key) {
       this.settings.set(render, key);
       if (previous !== undefined) render._displayChanged();
     }
     target.activate();
-    target.setToneMappingParams({toneMapping: this.toneMapping, exposure: this.toneMappingExposure, contrast: this.contrast, saturation: this.saturation, temperature: this.temperature, tint: this.tint, vignette: this.vignette});
-    target.setBloomParams({intensity: this.bloomIntensity, threshold: this.bloomThreshold, radius: this.bloomRadius});
-    target.setHDROutputEnabled?.(this.hdrOutputEnabled);
-    target.setOutput(this.channel);
-    target.setShadowCatcherParams(this.shadowCatcherColor, this.shadowCatcherAlpha);
+    applyDisplaySettings(this, target);
   }
   private compose(render: Render) {
     if (render._engine !== this.engine) throw new Error('Render belongs to another engine.');

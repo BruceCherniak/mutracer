@@ -3,7 +3,7 @@ import type Engine from './Engine.js';
 import type Camera from './scene/Camera.js';
 import { cameraSnapshot } from './renderer/cameraSnapshot.js';
 import type { AlphaBlendStrategy } from './renderer/RenderingPipeline.js';
-import { normalizeBevelSamples, normalizeDirectLightCandidates } from './renderer/RenderingPipeline.js';
+import { collectTraceSettings, imageSettingsKey } from './settings/render.js';
 import type { SamplingPattern } from './renderer/sampling.js';
 import type { RenderTarget, TraceSettings } from './renderer/renderPipeline.js';
 import type {DenoiserHandle, OwnedDenoiser} from './renderer/denoiser.js';
@@ -298,7 +298,7 @@ export default class Render {
     return {width: Math.max(1, Math.round(this._engine.display.canvas.width * scale)), height: Math.max(1, Math.round(this._engine.display.canvas.height * scale))};
   }
   private _settings(sampleCap = this.maxSamples): TraceSettings {
-    return {bounces: this.bounces, clamping: this.clamping, bevel: this.bevel, bevelSamples: normalizeBevelSamples(this.bevelSamples), dispersionWavelengths: this.dispersionWavelengths, directLightCandidates: normalizeDirectLightCandidates(this.directLightCandidates), alphaBlendStrategy: this.alphaBlendStrategy, transmissiveOutputAlphaMin: this.transmissiveOutputAlphaMin, samplingPattern: this.samplingPattern, maxSamples: sampleCap, timeBudgetMs: this.timeBudgetMs, maxTiles: this.maxTiles, allowMultipleSamplesPerFrame: this.allowMultipleSamplesPerFrame};
+    return collectTraceSettings(this, sampleCap);
   }
   private _synchronize(sampleCap = this.maxSamples, offline = false) {
     this._validate();
@@ -306,8 +306,7 @@ export default class Render {
     const target = this._target ??= this._engine._createTarget();
     if (!target) return;
     const settings = this._settings(sampleCap), size = this._size();
-    const {timeBudgetMs: _budget, maxTiles: _tiles, allowMultipleSamplesPerFrame: _multiple, maxSamples, ...imageSettings} = settings;
-    const key = JSON.stringify({ ...imageSettings, samples: this.samplingPattern === 'zsobol' ? maxSamples : undefined, ...size });
+    const key = imageSettingsKey(settings, size);
     const inputs = this._engine._inputs;
     target.configure(settings); target.activate();
     if ((!offline && this._offlineCamera) || inputs.scene !== this._input.scene || inputs.camera !== this._input.camera || key !== this._input.settings) {

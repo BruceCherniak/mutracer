@@ -105,6 +105,10 @@ loop.final.denoiser = { type: 'oidn', model: 'standard' }; // WebGPU; custom wei
 // Third-party WebGPU filters: { type: 'custom', denoiser: yourCallerOwnedDenoiser }.
 ```
 
+Batch quality or display edits use `Object.assign(loop.final, settings)` or
+`Object.assign(engine.display, settings)`, typed with `RenderSettings` or
+`DisplaySettings`; see the [setting defaults](./docs/api.md).
+
 RenderLoop provides preview and final results. For custom frame control, use
 Engine / Render / Display directly with a fallback, or a fixed-size
 invisible render for export. See [independent render results](./docs/progressive-rendering.md).
