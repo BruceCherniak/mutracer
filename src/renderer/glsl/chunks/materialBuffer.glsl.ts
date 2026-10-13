@@ -91,6 +91,16 @@ vec2 getMapTexelStep(int index) {
 }
 #endif
 
+// OpenPBR 1.1.1: RMS-preserving GGX anisotropy, shared by base and coat.
+vec2 openpbr_roughness_to_alpha(float roughness, float anisotropy) {
+  float alpha = roughness * roughness;
+  float alphaMin = ROUGHNESS_MIN * ROUGHNESS_MIN;
+  if (anisotropy == 0.0) { return vec2(max(alphaMin, alpha)); }
+  float complement = 1.0 - anisotropy;
+  float alphaT = alpha * sqrt(2.0 / (1.0 + complement * complement));
+  return max(vec2(alphaMin), vec2(alphaT, complement * alphaT));
+}
+
 void getMaterial(
   inout OpenPbrResolvedMaterial mat,
   int materialIndex,
@@ -119,7 +129,7 @@ void getMaterial(
   mat.materialType = int(colorAndMatType.w);
   mat.specularRoughness = roughnessAndNormal.x;
   mat.baseMetalness = metallicAndMapIndex.x;
-  mat.specularAnisotropy = metallicAndMapIndex.y;
+  mat.specularAnisotropy = clamp(metallicAndMapIndex.y, 0.0, 1.0);
   mat.emission = emissionAndEmissiveMapIndex.rgb;
   mat.specularIor = iorAndTransmission.x;
   mat.transmissionWeight = iorAndTransmission.y;
@@ -150,6 +160,7 @@ void getMaterial(
   mat.coatColor = max(coat.rgb, vec3(0.0));
   mat.coatWeight = clamp(coat.w, 0.0, 1.0);
   mat.coatRoughness = clamp(coatControls.x, ROUGHNESS_MIN, 1.0);
+  mat.coatAnisotropy = clamp(coatControls.y, 0.0, 1.0);
   mat.coatIor = max(coatControls.z, 1.0);
   mat.coatDarkening = clamp(coatControls.w, 0.0, 1.0);
 
@@ -261,14 +272,9 @@ void getMaterial(
 
   mat.specularRoughness = clamp(mat.specularRoughness, ROUGHNESS_MIN, 1.0);
   mat.baseMetalness = clamp(mat.baseMetalness, 0.0, 1.0);
-  float aspect = sqrt(1.0 - mat.specularAnisotropy * 0.9);
-  float specularAlpha = mat.specularRoughness * mat.specularRoughness;
-  // GGX alpha is squared perceptual roughness. Clamp it in the same domain;
-  // reusing ROUGHNESS_MIN directly here turns a nominally smooth surface into
-  // sqrt(ROUGHNESS_MIN) roughness and visibly broadens thick-glass transport.
-  float alphaMin = ROUGHNESS_MIN * ROUGHNESS_MIN;
-  mat.alphaX = max(alphaMin, specularAlpha / aspect);
-  mat.alphaY = max(alphaMin, specularAlpha * aspect);
+  vec2 specularAlpha = openpbr_roughness_to_alpha(mat.specularRoughness, mat.specularAnisotropy);
+  mat.alphaX = specularAlpha.x;
+  mat.alphaY = specularAlpha.y;
 }
 
 #if defined(NUM_NORMAL_MAPS) || defined(NUM_BUMP_MAPS)

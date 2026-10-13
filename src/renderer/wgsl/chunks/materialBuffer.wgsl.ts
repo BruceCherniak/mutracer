@@ -93,6 +93,16 @@ fn getMaterialEmission(materialIndex: i32, uv: vec2f, uv1: vec2f) -> vec3f {
   return emission;
 }
 
+// OpenPBR 1.1.1: RMS-preserving GGX anisotropy, shared by base and coat.
+fn openpbr_roughness_to_alpha(roughness: f32, anisotropy: f32) -> vec2f {
+  let alpha = roughness * roughness;
+  let alphaMin = ROUGHNESS_MIN * ROUGHNESS_MIN;
+  if (anisotropy == 0.0) { return vec2f(max(alphaMin, alpha)); }
+  let complement = 1.0 - anisotropy;
+  let alphaT = alpha * sqrt(2.0 / (1.0 + complement * complement));
+  return max(vec2f(alphaMin), vec2f(alphaT, complement * alphaT));
+}
+
 fn getMaterial(
   ma: ptr<function, OpenPbrResolvedMaterial>,
   materialIndex: i32,
@@ -105,7 +115,7 @@ fn getMaterial(
   (*ma).materialType = i32(matData.matType);
   (*ma).specularRoughness = matData.roughness;
   (*ma).baseMetalness = matData.metallic;
-  (*ma).specularAnisotropy = matData.anisotropy;
+  (*ma).specularAnisotropy = clamp(matData.anisotropy, 0.0, 1.0);
   (*ma).emission = getMaterialEmission(materialIndex, uv, uv1);
   (*ma).specularIor = matData.ior;
   (*ma).transmissionWeight = matData.transmission;
@@ -136,6 +146,7 @@ fn getMaterial(
   (*ma).coatWeight = clamp(matData.coatWeight, 0.0, 1.0);
   (*ma).coatColor = max(matData.coatColor, vec3f(0.0));
   (*ma).coatRoughness = clamp(matData.coatRoughness, ROUGHNESS_MIN, 1.0);
+  (*ma).coatAnisotropy = clamp(matData.coatAnisotropy, 0.0, 1.0);
   (*ma).coatIor = max(matData.coatIor, 1.0);
   (*ma).coatDarkening = clamp(matData.coatDarkening, 0.0, 1.0);
 
@@ -221,14 +232,9 @@ fn getMaterial(
 
   (*ma).specularRoughness = clamp((*ma).specularRoughness, ROUGHNESS_MIN, 1.0);
   (*ma).baseMetalness = clamp((*ma).baseMetalness, 0.0, 1.0);
-  let aspect: f32 = sqrt(1.0 - (*ma).specularAnisotropy * 0.9);
-  let specularAlpha = (*ma).specularRoughness * (*ma).specularRoughness;
-  // GGX alpha is squared perceptual roughness. Clamp it in the same domain;
-  // reusing ROUGHNESS_MIN directly here turns a nominally smooth surface into
-  // sqrt(ROUGHNESS_MIN) roughness and visibly broadens thick-glass transport.
-  let alphaMin = ROUGHNESS_MIN * ROUGHNESS_MIN;
-  (*ma).alphaX = max(alphaMin, specularAlpha / aspect);
-  (*ma).alphaY = max(alphaMin, specularAlpha * aspect);
+  let specularAlpha = openpbr_roughness_to_alpha((*ma).specularRoughness, (*ma).specularAnisotropy);
+  (*ma).alphaX = specularAlpha.x;
+  (*ma).alphaY = specularAlpha.y;
 }
 
 fn getMatNormal(materialIndex: i32, uv: vec2f, bumpUv: vec2f, normal: vec3f, dp1: vec3f, dp2: vec3f, duv1: vec2f, duv2: vec2f) -> vec3f {

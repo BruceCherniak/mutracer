@@ -2379,7 +2379,7 @@ ${rayTraceCompute({
       // Isotropic OpenPBR constructs its own basis. Normal/bump mapping uses
       // triangle UV differentials rather than this vertex tangent.
       USE_TANGENT: mergedGeometry.tangent != null &&
-        materials.some(material => material.specularAnisotropy !== 0),
+        materials.some(material => material.specularAnisotropy > 0 || material.coatAnisotropy > 0),
 
       HAS_MEDIUM,
       HAS_SHADOW_CATCHER: this._hasShadowCatcher,

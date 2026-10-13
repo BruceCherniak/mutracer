@@ -110,6 +110,7 @@ struct OpenPbrResolvedMaterial {
   float coatWeight;
   vec3 coatColor;
   float coatRoughness;
+  float coatAnisotropy;
   float coatIor;
   float coatDarkening;
 

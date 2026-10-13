@@ -6,6 +6,7 @@ import WGPURayTracePass, { makeRayTraceUniform } from '../../src/renderer/WGPURa
 import Geometry, { Attribute } from '../../src/scene/Geometry';
 import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
+import MaterialTable from '../../src/renderer/MaterialTable';
 
 function makeTriangleMesh() {
   return new Mesh(new Geometry({
@@ -64,6 +65,31 @@ describe('WGPURayTracePass output resource lifetime', () => {
     }
     expect(uniform.views.bevel[0]).toBe(1);
     expect(uniform.views.dispersionWavelengths[0]).toBe(3);
+  });
+
+  it('enables real tangents for either anisotropic layer and clears them after edits', () => {
+    const pass = Object.create(WGPURayTracePass.prototype) as any;
+    pass._constants = {};
+    const mesh = makeTriangleMesh();
+    const material = mesh.materials[0];
+    const geometry = mesh.geometry;
+    geometry.tangent = new Attribute(new Float32Array([1, 0, 0, 1, 0, 0, 1, 0, 0]), 3);
+    const update = () => {
+      pass._updateMaterialConstants([material], new MaterialTable([material], []), geometry);
+      return pass._constants.USE_TANGENT;
+    };
+    expect(update()).toBe(false);
+    material.coatWeight = 1;
+    material.coatAnisotropy = 0.8;
+    expect(update()).toBe(true);
+    material.coatAnisotropy = 0;
+    material.specularAnisotropy = 0.0005;
+    expect(update()).toBe(true);
+    material.specularAnisotropy = 0;
+    expect(update()).toBe(false);
+    material.coatAnisotropy = 1;
+    geometry.tangent = undefined;
+    expect(update()).toBe(false);
   });
 
   it('packs and resets sample counts without touching the sequence seed', () => {

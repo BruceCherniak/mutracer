@@ -210,7 +210,7 @@ OpenPbrBasis openpbr_make_basis(
 #ifdef USE_TANGENT
     basis.tangent = inputTangent;
 #endif
-    if (dot(basis.tangent, basis.tangent) < 0.001 || anisotropy < 0.001) {
+    if (dot(basis.tangent, basis.tangent) < 0.001 || anisotropy <= 0.0) {
         sampling_orthonormal_basis(normal, basis.tangent, basis.bitangent);
     }
     else {
@@ -761,7 +761,7 @@ OpenPbrPreparedBsdf openpbr_prepare(
     prepared.basis = openpbr_make_basis(
         tangent,
         normal,
-        material.specularAnisotropy
+        max(material.specularAnisotropy, material.coatAnisotropy)
     );
     prepared.viewLocal = openpbr_to_local(prepared.basis, viewDirection);
     prepared.diffuseColor = material.baseColor;
@@ -1075,10 +1075,9 @@ vec3 openpbr_eval_prepared(
             1.0 / material.coatIor
         )) * material.coatColor;
         OpenPbrResolvedMaterial coatMaterial = material;
-        float coatAlpha = material.coatRoughness * material.coatRoughness;
-        float coatAlphaMin = ROUGHNESS_MIN * ROUGHNESS_MIN;
-        coatMaterial.alphaX = max(coatAlphaMin, coatAlpha);
-        coatMaterial.alphaY = max(coatAlphaMin, coatAlpha);
+        vec2 coatAlpha = openpbr_roughness_to_alpha(material.coatRoughness, material.coatAnisotropy);
+        coatMaterial.alphaX = coatAlpha.x;
+        coatMaterial.alphaY = coatAlpha.y;
         vec3 attenuation = vec3(1.0)
             - coatFresnel * prepared.coatWeight;
         attenuation *= mix(
@@ -1211,7 +1210,7 @@ vec3 openpbr_sample(
         vec3 halfVector = sampling_ggx_visible_normal(
             viewLocal,
             // The VNDF must use the same alpha as the evaluated coat PDF.
-            vec2(max(ROUGHNESS_MIN * ROUGHNESS_MIN, material.coatRoughness * material.coatRoughness)),
+            openpbr_roughness_to_alpha(material.coatRoughness, material.coatAnisotropy),
             vec2(randomX, randomY)
         );
         if (halfVector.z < 0.0) {

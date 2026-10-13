@@ -104,6 +104,7 @@ struct OpenPbrResolvedMaterial {
   coatWeight: f32,
   coatColor: vec3f,
   coatRoughness: f32,
+  coatAnisotropy: f32,
   coatIor: f32,
   coatDarkening: f32,
 

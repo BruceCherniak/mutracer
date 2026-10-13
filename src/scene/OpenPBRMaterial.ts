@@ -69,7 +69,7 @@ export default class OpenPBRMaterial {
   specularRoughness: number = materialDefault('specularRoughness');
   /** Index of refraction. Default `1.5`. */
   specularIor: number = materialDefault('specularIor');
-  /** Specular anisotropy (requires tangents). Default `0`. */
+  /** OpenPBR GGX anisotropy, 0 to 1 (requires tangents). Default `0`. */
   specularAnisotropy: number = materialDefault('specularAnisotropy');
 
   // Transmission
@@ -115,7 +115,7 @@ export default class OpenPBRMaterial {
   coatColor: ColorRGB = materialDefault('coatColor');
   /** Coat roughness. Default `0`. */
   coatRoughness: number = materialDefault('coatRoughness');
-  /** Coat anisotropy. Default `0`. */
+  /** OpenPBR GGX coat anisotropy, 0 to 1; uses the base geometry tangent. Default `0`. */
   coatAnisotropy: number = materialDefault('coatAnisotropy');
   /** Coat index of refraction. Default `1.6`. */
   coatIor: number = materialDefault('coatIor');

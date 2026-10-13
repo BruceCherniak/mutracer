@@ -58,6 +58,11 @@ retain their own strengths. For metals, `specularColor` tints the F82 Fresnel
 curve near grazing angles and `specularWeight` scales the entire reflection,
 including thin-film reflection. At their default values, F82 reduces to Schlick.
 
+`specularAnisotropy` and `coatAnisotropy` use the OpenPBR GGX mapping:
+`alphaT = roughness² * sqrt(2 / (1 + (1 - anisotropy)²))` and
+`alphaB = (1 - anisotropy) * alphaT`, with the renderer's minimum alpha.
+Both layers use the geometry tangent; a separate coat tangent is not available.
+
 **Interior media.** Transmission describes a homogeneous volume:
 `transmissionColor` is the color that survives one `transmissionDepth`, and
 `transmissionScatter` is the scattering albedo. With `transmissionDepth = 0`

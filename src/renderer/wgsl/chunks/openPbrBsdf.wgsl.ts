@@ -207,7 +207,7 @@ fn openpbr_make_basis(
     basis.normal = normal;
     var tangent = inputTangent;
     var bitangent = vec3f(0.0);
-    if (dot(tangent, tangent) < 0.001 || anisotropy < 0.001) {
+    if (dot(tangent, tangent) < 0.001 || anisotropy <= 0.0) {
         sampling_orthonormal_basis(normal, &tangent, &bitangent);
     }
     else {
@@ -654,7 +654,7 @@ fn openpbr_prepare(
     prepared.basis = openpbr_make_basis(
         tangent,
         normal,
-        material.specularAnisotropy
+        max(material.specularAnisotropy, material.coatAnisotropy)
     );
     prepared.viewLocal = openpbr_to_local(prepared.basis, viewDirection);
     prepared.diffuseColor = material.baseColor;
@@ -963,10 +963,9 @@ fn openpbr_eval_prepared_lobe(
             1.0 / material.coatIor
         )) * material.coatColor;
         var coatMaterial = material;
-        let coatAlpha = material.coatRoughness * material.coatRoughness;
-        let coatAlphaMin = ROUGHNESS_MIN * ROUGHNESS_MIN;
-        coatMaterial.alphaX = max(coatAlphaMin, coatAlpha);
-        coatMaterial.alphaY = max(coatAlphaMin, coatAlpha);
+        let coatAlpha = openpbr_roughness_to_alpha(material.coatRoughness, material.coatAnisotropy);
+        coatMaterial.alphaX = coatAlpha.x;
+        coatMaterial.alphaY = coatAlpha.y;
         var attenuation = vec3f(1.0)
             - coatFresnel * prepared.coatWeight;
         attenuation *= mix(
@@ -1098,7 +1097,7 @@ fn openpbr_sample_direction(
         var halfVector = sampling_ggx_visible_normal(
             viewLocal,
             // The VNDF must use the same alpha as the evaluated coat PDF.
-            vec2f(max(ROUGHNESS_MIN * ROUGHNESS_MIN, material.coatRoughness * material.coatRoughness)),
+            openpbr_roughness_to_alpha(material.coatRoughness, material.coatAnisotropy),
             vec2f(randomX, randomY)
         );
         if (halfVector.z < 0.0) {
