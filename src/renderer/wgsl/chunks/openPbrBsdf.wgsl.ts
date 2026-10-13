@@ -371,6 +371,19 @@ fn openpbr_thin_film_reflectance_channel(
 }
 
 
+// OpenPBR 1.1.1 Metal: analytic F82-tint correction to Schlick.
+fn openpbr_metal_fresnel(cosine: f32, f0: vec3f, tint: vec3f) -> vec3f {
+    let schlick = mix(f0, vec3f(1.0), sampling_schlick_fifth_power(cosine));
+    if (all(tint == vec3f(1.0))) { return schlick; }
+    let edgeCosine = 1.0 / 7.0;
+    let edgeComplement = 1.0 - edgeCosine;
+    let edgeFresnel = mix(f0, vec3f(1.0), sampling_schlick_fifth_power(edgeCosine));
+    let complement = 1.0 - cosine;
+    let correction = cosine * sampling_schlick_fifth_power(cosine) * complement
+        / (edgeCosine * pow(edgeComplement, 6.0));
+    return schlick - correction * (edgeFresnel - tint * edgeFresnel);
+}
+
 fn openpbr_metal_complex_ior(f0: f32, f82Tint: f32) -> vec2f {
     let reflectivity = clamp(f0, 0.0, 0.99);
     let sqrtReflectivity = sqrt(reflectivity);
@@ -646,18 +659,17 @@ fn openpbr_prepare(
     prepared.viewLocal = openpbr_to_local(prepared.basis, viewDirection);
     prepared.diffuseColor = material.baseColor;
 
-    let dielectricBaseWeight = material.baseWeight
-        * (1.0 - material.baseMetalness);
+    let dielectricBaseWeight = 1.0 - material.baseMetalness;
     let opaqueDielectricWeight = dielectricBaseWeight
         * (1.0 - material.transmissionWeight);
     prepared.fuzzWeight = material.fuzzWeight;
     prepared.coatWeight = material.coatWeight;
-    prepared.metalWeight = material.baseWeight * material.baseMetalness;
+    prepared.metalWeight = material.baseMetalness;
     prepared.specularWeight = dielectricBaseWeight;
     prepared.transmissionWeight = dielectricBaseWeight
         * material.transmissionWeight;
     prepared.diffuseWeight = opaqueDielectricWeight
-        * (1.0 - material.subsurfaceWeight);
+        * (1.0 - material.subsurfaceWeight) * material.baseWeight;
     prepared.subsurfaceWeight = opaqueDielectricWeight
         * material.subsurfaceWeight;
 
@@ -669,7 +681,6 @@ fn openpbr_prepare(
     prepared.specularAlpha = material.specularRoughness
         * material.specularRoughness;
     let viewCosine = abs(prepared.viewLocal.z);
-    let viewScatter = sampling_schlick_fifth_power(viewCosine);
     let singleInterfaceFresnel = openpbr_dielectric_fresnel(
         viewCosine,
         prepared.material.relativeIor
@@ -683,10 +694,10 @@ fn openpbr_prepare(
         ),
         material.thinWalled
     );
-    let metalFresnelEstimate = mix(
-        material.baseColor,
-        vec3f(1.0),
-        viewScatter
+    let metalFresnelEstimate = material.specularWeight * openpbr_metal_fresnel(
+        viewCosine,
+        material.baseWeight * material.baseColor,
+        material.specularColor
     );
     let transmissionFresnel = select(
         singleInterfaceFresnel,
@@ -792,7 +803,7 @@ fn openpbr_eval_prepared_lobe(
         fresnels[0] = vec3f(openpbr_dielectric_fresnel(dielectricViewHalf, material.relativeIor));
     }
     if (evaluateMetal) {
-        fresnels[1] = mix(material.baseColor, vec3f(1.0), sampling_schlick_fifth_power(viewHalf));
+        fresnels[1] = openpbr_metal_fresnel(viewHalf, material.baseWeight * material.baseColor, material.specularColor);
     }
     if (material.thinFilmWeight > 0.0) {
         let wavelengths = vec3f(620.0, 540.0, 450.0);
@@ -804,7 +815,7 @@ fn openpbr_eval_prepared_lobe(
             for (var channel = 0u; channel + 1u < rtUniform.loopUnrollGuard; channel++) {
                 var ior = vec2f(prepared.specularEtaTOverEtaI, 0.0);
                 if (substrate == 1u) {
-                    ior = openpbr_metal_complex_ior(material.baseColor[channel], material.specularColor[channel]);
+                    ior = openpbr_metal_complex_ior(material.baseWeight * material.baseColor[channel], material.specularColor[channel]);
                 }
                 film[channel] = openpbr_thin_film_reflectance_channel(incidentCosine,
                     wavelengths[channel], material.thinFilmThickness, 1.0, material.thinFilmIor, ior);
@@ -869,7 +880,7 @@ fn openpbr_eval_prepared_lobe(
         }
 
         if (prepared.metalWeight > 0.0 && allowMetal) {
-            let fresnel = fresnels[1];
+            let fresnel = material.specularWeight * fresnels[1];
             response += prepared.metalWeight * openpbr_eval_microfacet_reflection(
                 material,
                 viewLocal,

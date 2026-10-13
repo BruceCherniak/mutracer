@@ -51,7 +51,7 @@ export default class OpenPBRMaterial {
   }
 
   // Base
-  /** Base layer weight. Default `1`. */
+  /** Multiplier of diffuse reflection and metallic normal-incidence color; does not scale dielectric specular, transmission or subsurface. Default `1`. */
   baseWeight: number = materialDefault('baseWeight');
   /** Diffuse/metal color. Default `[0.8, 0.8, 0.8]`. */
   baseColor: ColorRGB = materialDefault('baseColor');
@@ -61,9 +61,9 @@ export default class OpenPBRMaterial {
   baseMetalness: number = materialDefault('baseMetalness');
 
   // Specular
-  /** Specular reflection weight. Default `1`. */
+  /** Dielectric specular strength (via IOR) and overall metallic Fresnel multiplier. Default `1`. */
   specularWeight: number = materialDefault('specularWeight');
-  /** Specular tint. Default `[1, 1, 1]`. */
+  /** Dielectric specular tint and metallic F82 near-grazing tint. Default `[1, 1, 1]`. */
   specularColor: ColorRGB = materialDefault('specularColor');
   /** Microfacet roughness, `0` mirror to `1` rough. Default `0.3`. */
   specularRoughness: number = materialDefault('specularRoughness');

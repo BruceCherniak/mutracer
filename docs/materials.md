@@ -52,6 +52,12 @@ the textures they reference still share atlas space.
 Units: `transmissionDepth` and `subsurfaceRadius` are in scene units;
 `thinFilmThickness` is in micrometres (`0.45` = 450 nm).
 
+`baseWeight` scales diffuse reflection and the metallic normal-incidence color
+(`baseWeight * baseColor`). Dielectric specular, transmission and subsurface
+retain their own strengths. For metals, `specularColor` tints the F82 Fresnel
+curve near grazing angles and `specularWeight` scales the entire reflection,
+including thin-film reflection. At their default values, F82 reduces to Schlick.
+
 **Interior media.** Transmission describes a homogeneous volume:
 `transmissionColor` is the color that survives one `transmissionDepth`, and
 `transmissionScatter` is the scattering albedo. With `transmissionDepth = 0`

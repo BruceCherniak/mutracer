@@ -402,6 +402,19 @@ vec3 openpbr_thin_film_dielectric_reflectance(
     );
 }
 
+// OpenPBR 1.1.1 Metal: analytic F82-tint correction to Schlick.
+vec3 openpbr_metal_fresnel(float cosine, vec3 f0, vec3 tint) {
+    vec3 schlick = mix(f0, vec3(1.0), sampling_schlick_fifth_power(cosine));
+    if (all(equal(tint, vec3(1.0)))) { return schlick; }
+    float edgeCosine = 1.0 / 7.0;
+    float edgeComplement = 1.0 - edgeCosine;
+    vec3 edgeFresnel = mix(f0, vec3(1.0), sampling_schlick_fifth_power(edgeCosine));
+    float complement = 1.0 - cosine;
+    float correction = cosine * sampling_schlick_fifth_power(cosine) * complement
+        / (edgeCosine * pow(edgeComplement, 6.0));
+    return schlick - correction * (edgeFresnel - tint * edgeFresnel);
+}
+
 vec2 openpbr_metal_complex_ior(float f0, float f82Tint) {
     float reflectivity = clamp(f0, 0.0, 0.99);
     float sqrtReflectivity = sqrt(reflectivity);
@@ -753,18 +766,17 @@ OpenPbrPreparedBsdf openpbr_prepare(
     prepared.viewLocal = openpbr_to_local(prepared.basis, viewDirection);
     prepared.diffuseColor = material.baseColor;
 
-    float dielectricBaseWeight = material.baseWeight
-        * (1.0 - material.baseMetalness);
+    float dielectricBaseWeight = 1.0 - material.baseMetalness;
     float opaqueDielectricWeight = dielectricBaseWeight
         * (1.0 - material.transmissionWeight);
     prepared.fuzzWeight = material.fuzzWeight;
     prepared.coatWeight = material.coatWeight;
-    prepared.metalWeight = material.baseWeight * material.baseMetalness;
+    prepared.metalWeight = material.baseMetalness;
     prepared.specularWeight = dielectricBaseWeight;
     prepared.transmissionWeight = dielectricBaseWeight
         * material.transmissionWeight;
     prepared.diffuseWeight = opaqueDielectricWeight
-        * (1.0 - material.subsurfaceWeight);
+        * (1.0 - material.subsurfaceWeight) * material.baseWeight;
     prepared.subsurfaceWeight = opaqueDielectricWeight
         * material.subsurfaceWeight;
 
@@ -776,7 +788,6 @@ OpenPbrPreparedBsdf openpbr_prepare(
     prepared.specularAlpha = material.specularRoughness
         * material.specularRoughness;
     float viewCosine = abs(prepared.viewLocal.z);
-    float viewScatter = sampling_schlick_fifth_power(viewCosine);
     float singleInterfaceFresnel = openpbr_dielectric_fresnel(
         viewCosine,
         prepared.material.relativeIor
@@ -790,10 +801,10 @@ OpenPbrPreparedBsdf openpbr_prepare(
             )
             : singleInterfaceFresnel
     );
-    vec3 metalFresnelEstimate = mix(
-        material.baseColor,
-        vec3(1.0),
-        viewScatter
+    vec3 metalFresnelEstimate = material.specularWeight * openpbr_metal_fresnel(
+        viewCosine,
+        material.baseWeight * material.baseColor,
+        material.specularColor
     );
     float transmissionFresnel = material.thinWalled
         ? openpbr_thin_wall_fresnel(singleInterfaceFresnel)
@@ -933,10 +944,10 @@ vec3 openpbr_eval_prepared(
         }
 
         if (prepared.metalWeight > 0.0) {
-            vec3 fresnel = mix(
-                material.baseColor,
-                vec3(1.0),
-                sampling_schlick_fifth_power(viewHalf)
+            vec3 fresnel = openpbr_metal_fresnel(
+                viewHalf,
+                material.baseWeight * material.baseColor,
+                material.specularColor
             );
             if (material.thinFilmWeight > 0.0) {
                 fresnel = openpbr_apply_metal_thin_film(
@@ -944,11 +955,12 @@ vec3 openpbr_eval_prepared(
                     viewHalf,
                     material.thinFilmThickness,
                     material.thinFilmIor,
-                    material.baseColor,
+                    material.baseWeight * material.baseColor,
                     material.specularColor,
                     material.thinFilmWeight
                 );
             }
+            fresnel *= material.specularWeight;
             response += prepared.metalWeight * openpbr_eval_microfacet_reflection(
                 material,
                 viewLocal,

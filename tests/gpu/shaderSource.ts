@@ -63,7 +63,10 @@ const materialCases: {name: string; params: OpenPBRMaterialParams}[] = [
   {name: 'alpha-mask', params: {alphaMode: 'mask', opacity: 0.7, alphaCutoff: 0.5}}
 ];
 
-export async function captureMaterials(layout: Engine['bvhLayout'] = 'bvh2') {
+export async function captureMaterials(
+  layout: Engine['bvhLayout'] = 'bvh2',
+  cases: {name: string; params: OpenPBRMaterialParams}[] = materialCases
+) {
   const canvas = document.createElement('canvas');
   document.body.append(canvas);
   const engine = new Engine({canvas, backend: location.search.includes('webgl') ? 'webgl' : 'webgpu'});
@@ -84,7 +87,7 @@ export async function captureMaterials(layout: Engine['bvhLayout'] = 'bvh2') {
     const backgrounds = [undefined, [0.15, 0.2, 0.3, 1] as [number, number, number, number], map,
       {type: 'GroundedSkybox' as const, map, height: 2, radius: 20, groundHeight: -1}];
     const captures = [];
-    for (const {name, params} of materialCases) {
+    for (const {name, params} of cases) {
       const material = new OpenPBRMaterial({baseColor: [0.6, 0.3, 0.15], ...params});
       const mesh = new Mesh(geometry, material);
       for (const [backgroundIndex, background] of backgrounds.entries()) {
