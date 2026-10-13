@@ -1,6 +1,7 @@
 import {afterEach, describe, expect, it, vi} from 'vitest';
 import {makeShaderDataDefinitions} from 'webgpu-utils';
-import {shaderSourceLoader, stripShaderFormatting} from './shaderSourceLoader';
+import {shaderSourceLoader, shaderIdentifierMap, stripShaderFormatting} from './shaderSourceLoader';
+import {renameShaderIdentifiers} from '../../scripts/shader-identifiers.mjs';
 import {makeRayTraceUniform} from '../../src/renderer/WGPURayTracePass';
 import {WGPU_SCENE_FEATURE_BITS, wgpuSceneFeatureFlags} from '../../src/renderer/WGPUSceneFeatures';
 
@@ -8,7 +9,8 @@ const original = shaderSourceLoader(false);
 const stripped = shaderSourceLoader(true);
 const rayTrace = original('src/renderer/wgsl/rayTrace.compute.ts').default;
 const compactRayTrace = stripped('src/renderer/wgsl/rayTrace.compute.ts').default;
-const tokens = (source: string) => stripShaderFormatting(source).match(/[A-Za-z_][\w]*|\d+(?:\.\d*)?(?:[eE][+-]?\d+)?[uifh]?|>>|<<|&&|\|\||!=|==|<=|>=|\+\+|--|\S/g);
+const originalNames = new Map([...shaderIdentifierMap].map(([name, compact]) => [compact, name]));
+const tokens = (source: string) => stripShaderFormatting(renameShaderIdentifiers(source, originalNames)).match(/[A-Za-z_][\w]*|\d+(?:\.\d*)?(?:[eE][+-]?\d+)?[uifh]?|>>|<<|&&|\|\||!=|==|<=|>=|\+\+|--|\S/g);
 afterEach(() => { vi.unstubAllGlobals(); });
 
 function gpu() {
@@ -26,6 +28,8 @@ describe('shader generation independent of source formatting', () => {
         const source = rayTrace(options);
         const compact = compactRayTrace(options);
         expect(tokens(compact)).toEqual(tokens(source));
+        // No selected name may be left behind by a dynamic code path.
+        expect(renameShaderIdentifiers(compact, shaderIdentifierMap)).toBe(compact);
         const parsed = makeShaderDataDefinitions(compact);
         expect(Object.keys(parsed.entryPoints).sort()).toEqual(['depthQuery', 'main']);
         const {buffer, views} = makeRayTraceUniform();

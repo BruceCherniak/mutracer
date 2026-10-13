@@ -1,7 +1,11 @@
 import { runInNewContext } from 'node:vm';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { rollup } from 'rollup';
+import { createShaderIdentifierMap, readShaderSourceFiles, renameShaderIdentifiers } from '../../scripts/shader-identifiers.mjs';
 import {
   createShaderFormattingTransformer,
   shaderFormattingPlugin,
@@ -100,5 +104,40 @@ describe('production shader formatting', () => {
     expect(map.sourcesContent).toEqual([source]);
     expect(evaluate(output.code, false).shader).toBe('\n\nfn main() {}\n');
     expect(await plugin.transform.call({} as any, source, path.resolve('src/util/fixture.ts'))).toBeNull();
+  });
+
+  it('keeps cached chunk definitions and changed callers in sync when a rebuild changes names', async () => {
+    const root = mkdtempSync(path.join(tmpdir(), 'mutracer-shader-cache-'));
+    const sourceRoot = path.join(root, 'src');
+    const renderer = path.join(sourceRoot, 'renderer');
+    mkdirSync(renderer, { recursive: true });
+    const definition = 'fn firstPrivateFunction() -> i32 { return 1; }';
+    const body = (extra: string) => `fn secondPrivateFunction() -> i32 { return 2; }
+@compute @workgroup_size(1) fn main() { let result = firstPrivateFunction() + secondPrivateFunction()${extra}; }`;
+    const entry = path.join(renderer, 'entry.ts');
+    writeFileSync(path.join(renderer, 'definition.ts'), `export const definition = /* wgsl */ ${JSON.stringify(definition).replace(/^"|"$/g, '`')};`);
+    const writeEntry = (extra: string) => writeFileSync(entry,
+      "import { definition } from './definition.ts';\nexport const shader = definition + /* wgsl */ `" + body(extra) + '`;');
+    try {
+      writeEntry('');
+      const initialNames = createShaderIdentifierMap(readShaderSourceFiles(sourceRoot));
+      const plugin = shaderFormattingPlugin({ sourceRoot });
+      const first = await rollup({ input: entry, plugins: [plugin] });
+      const cache = first.cache;
+      await first.close();
+      const extra = ' + firstPrivateFunction()'.repeat(5);
+      writeEntry(extra);
+      const nextNames = createShaderIdentifierMap(readShaderSourceFiles(sourceRoot));
+      expect(nextNames.get('firstPrivateFunction')).not.toBe(initialNames.get('firstPrivateFunction'));
+      const second = await rollup({ input: entry, cache, plugins: [plugin] });
+      try {
+        const output = await second.generate({ format: 'es' });
+        const chunk = output.output.find(item => item.type === 'chunk');
+        if (!chunk || chunk.type !== 'chunk') throw new Error('Expected shader bundle');
+        const shader = evaluate(chunk.code, false).shader;
+        const inverse = new Map([...nextNames].map(([a, b]) => [b, a]));
+        expect(renameShaderIdentifiers(shader, inverse)).toBe(definition + body(extra));
+      } finally { await second.close(); }
+    } finally { rmSync(root, { recursive: true, force: true }); }
   });
 });

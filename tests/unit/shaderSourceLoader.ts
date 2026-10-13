@@ -4,7 +4,9 @@ import { dirname, resolve } from 'node:path';
 import { runInThisContext } from 'node:vm';
 import ts from 'typescript';
 import { createShaderFormattingTransformer } from '../../scripts/shader-formatting.mjs';
+import { loadShaderIdentifierMap } from '../../scripts/shader-identifiers.mjs';
 export { stripShaderFormatting } from '../../scripts/shader-formatting.mjs';
+export const shaderIdentifierMap = loadShaderIdentifierMap();
 
 /** Evaluate a separate shader-module graph with formatting stripped from each
  * string/template fragment BEFORE interpolation and variant generation.
@@ -20,7 +22,7 @@ export function shaderSourceLoader(stripFormatting: boolean) {
     const code = ts.transpileModule(readFileSync(filename, 'utf8'), {
       fileName: filename,
       compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022},
-      transformers: stripFormatting ? {before: [createShaderFormattingTransformer()]} : undefined
+      transformers: stripFormatting ? {before: [createShaderFormattingTransformer(shaderIdentifierMap)]} : undefined
     }).outputText;
     const require = (specifier: string) => specifier.startsWith('.')
       ? load(resolve(dirname(filename), specifier.replace(/\.js$/, '.ts')))
