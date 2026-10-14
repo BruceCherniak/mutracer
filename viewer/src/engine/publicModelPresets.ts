@@ -1,18 +1,18 @@
 import type { ModelPreset } from './presets';
 
-// From mutracer-assets/presets.json. Publish resources and the immutable tag together.
+// From mutracer-assets/presets.json. URLs follow its main branch; push assets before the viewer.
 export const PUBLIC_MODEL_PRESETS = [
   {
     "id": "spheres",
     "name": "Material spheres",
     "tag": "OpenPBR layers",
     "url": null,
-    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/spheres/thumbnail.webp",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/spheres/thumbnail.webp",
     "license": "CC0",
     "credit": "Procedural scene by Yi Shen",
     "sourceUrl": "https://github.com/pissang/mutracer",
     "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
-    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/spheres/attribution.json",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/spheres/attribution.json",
     "camera": {
       "position": [
         2.3694893932125187,
@@ -33,12 +33,12 @@ export const PUBLIC_MODEL_PRESETS = [
     "name": "Toy Car",
     "tag": "Coat · transmission",
     "url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/ToyCar/glTF-Binary/ToyCar.glb",
-    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/toycar/thumbnail.webp",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/toycar/thumbnail.webp",
     "license": "CC0",
     "credit": "Khronos glTF Sample Assets",
     "sourceUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/ToyCar",
     "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
-    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/toycar/attribution.json",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/toycar/attribution.json",
     "sizeMB": 5.17,
     "camera": {
       "position": [
@@ -60,12 +60,12 @@ export const PUBLIC_MODEL_PRESETS = [
     "name": "Sheen Chair",
     "tag": "Fuzz",
     "url": "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/SheenChair/glTF-Binary/SheenChair.glb",
-    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/sheenchair/thumbnail.webp",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/sheenchair/thumbnail.webp",
     "license": "CC0",
     "credit": "Khronos glTF Sample Assets",
     "sourceUrl": "https://github.com/KhronosGroup/glTF-Sample-Assets/tree/main/Models/SheenChair",
     "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
-    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/sheenchair/attribution.json",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/sheenchair/attribution.json",
     "sizeMB": 3.93,
     "camera": {
       "position": [
@@ -86,13 +86,13 @@ export const PUBLIC_MODEL_PRESETS = [
     "id": "wooden-chess",
     "name": "Wooden Chess Set",
     "tag": "Wood",
-    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/wooden-chess/model.glb",
-    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/wooden-chess/thumbnail.webp",
+    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/wooden-chess/model.glb",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/wooden-chess/thumbnail.webp",
     "license": "CC-BY 4.0",
     "credit": "cmzw",
     "sourceUrl": "https://sketchfab.com/3d-models/wooden-chess-set-90151fb0fb294e56b45e52b001a884db",
     "licenseUrl": "http://creativecommons.org/licenses/by/4.0/",
-    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/wooden-chess/attribution.json",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/wooden-chess/attribution.json",
     "sizeMB": 2.41,
     "camera": {
       "position": [
@@ -113,13 +113,13 @@ export const PUBLIC_MODEL_PRESETS = [
     "id": "yamaha-mt-09",
     "name": "2025 Yamaha MT-09 SP V4",
     "tag": "Motorcycle / metal",
-    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/yamaha-mt-09/model.glb",
-    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/yamaha-mt-09/thumbnail.webp",
+    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/yamaha-mt-09/model.glb",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/yamaha-mt-09/thumbnail.webp",
     "license": "CC-BY-NC-SA 4.0",
     "credit": "VTX",
     "sourceUrl": "https://sketchfab.com/3d-models/2025-yamaha-mt-09-sp-v4-cb5878baf5974167806eb8524d57f0b0",
     "licenseUrl": "http://creativecommons.org/licenses/by-nc-sa/4.0/",
-    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/yamaha-mt-09/attribution.json",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/yamaha-mt-09/attribution.json",
     "sizeMB": 10.94,
     "nonCommercial": true,
     "camera": {
@@ -141,13 +141,13 @@ export const PUBLIC_MODEL_PRESETS = [
     "id": "super-human",
     "name": "Super Human",
     "tag": "Character / skin",
-    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@ce63b50b22add741be1d7e57d05db614a34565d6/assets/super-human/model.glb",
-    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@ce63b50b22add741be1d7e57d05db614a34565d6/assets/super-human/thumbnail.webp",
+    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/super-human/model.glb",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/super-human/thumbnail.webp",
     "license": "CC-BY 4.0",
     "credit": "Davyd Vidiger",
     "sourceUrl": "https://sketchfab.com/3d-models/super-human-7aa58e978b9f4357b8e73d8e0440c896",
     "licenseUrl": "http://creativecommons.org/licenses/by/4.0/",
-    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@ce63b50b22add741be1d7e57d05db614a34565d6/assets/super-human/attribution.json",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/super-human/attribution.json",
     "sizeMB": 3.67,
     "camera": {
       "position": [
@@ -169,12 +169,12 @@ export const PUBLIC_MODEL_PRESETS = [
     "name": "Gelatinous Cube",
     "tag": "Glass / transmission",
     "url": "https://mutracer-assets.meimu-studio.com/models/gelatinous-cube/66cf10385995c18900cb9072/model.glb",
-    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/gelatinous-cube/thumbnail.webp",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/gelatinous-cube/thumbnail.webp",
     "license": "CC-BY-NC 4.0",
     "credit": "glenatron",
     "sourceUrl": "https://sketchfab.com/3d-models/gelatinous-cube-e08385238f4d4b59b012233a9fbdca21",
     "licenseUrl": "http://creativecommons.org/licenses/by-nc/4.0/",
-    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/gelatinous-cube/attribution.json",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/gelatinous-cube/attribution.json",
     "sizeMB": 19.2,
     "nonCommercial": true,
     "camera": {
@@ -197,12 +197,12 @@ export const PUBLIC_MODEL_PRESETS = [
     "name": "Blender Cover Remix",
     "tag": "Characters / scene",
     "url": "https://mutracer-assets.meimu-studio.com/models/blender-cover-remix/4c918299ecc8ef28fee4e5ac/model.glb",
-    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/blender-cover-remix/thumbnail.webp",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/blender-cover-remix/thumbnail.webp",
     "license": "CC-BY 4.0",
     "credit": "bandinopla",
     "sourceUrl": "https://sketchfab.com/3d-models/blender-cover-remix-a38f11890ff141c88fcdac6b637fdaf8",
     "licenseUrl": "http://creativecommons.org/licenses/by/4.0/",
-    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.0/assets/blender-cover-remix/attribution.json",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/blender-cover-remix/attribution.json",
     "sizeMB": 26.77,
     "camera": {
       "position": [
@@ -223,13 +223,13 @@ export const PUBLIC_MODEL_PRESETS = [
     "id": "bugatti-chiron",
     "name": "LEGO Technic Bugatti Chiron",
     "tag": "Sports car / Technic",
-    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.1/assets/bugatti-chiron/model.glb",
-    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.1/assets/bugatti-chiron/thumbnail.webp",
+    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/bugatti-chiron/model.glb",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/bugatti-chiron/thumbnail.webp",
     "license": "CC-BY-NC-SA 4.0",
     "credit": "VTX",
     "sourceUrl": "https://sketchfab.com/3d-models/lego-technic-bugatti-chiron-c2a54e2e979a4905b859c1533b498221",
     "licenseUrl": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
-    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.1/assets/bugatti-chiron/attribution.json",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/bugatti-chiron/attribution.json",
     "sizeMB": 12.81,
     "nonCommercial": true,
     "camera": {
@@ -251,13 +251,13 @@ export const PUBLIC_MODEL_PRESETS = [
     "id": "dragon",
     "name": "Dragon",
     "tag": "Glass / sculpture",
-    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@ce63b50b22add741be1d7e57d05db614a34565d6/assets/dragon/model.glb",
-    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@ce63b50b22add741be1d7e57d05db614a34565d6/assets/dragon/thumbnail.webp",
+    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/dragon/model.glb",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/dragon/thumbnail.webp",
     "license": "CC-BY 3.0",
     "credit": "Delatronic",
     "sourceUrl": "https://benedikt-bitterli.me/resources/",
     "licenseUrl": "https://creativecommons.org/licenses/by/3.0/",
-    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@ce63b50b22add741be1d7e57d05db614a34565d6/assets/dragon/attribution.json",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/dragon/attribution.json",
     "sizeMB": 4.99,
     "camera": {
       "position": [
