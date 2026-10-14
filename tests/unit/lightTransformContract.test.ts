@@ -13,7 +13,7 @@ it('packs a rigid light frame and ignores scale for both layouts',()=>{
  const gl=packLightsToBuffer([light],[-1]),gpu=packAnalyticsLightsToBuffer([light],[-1],[1]);
  expect(gl[17]).toBe(6);expect(gpu[7]).toBe(6);expect(gl.slice(20,23)).toEqual(gpu.slice(20,23));
  vi.stubGlobal('GPUShaderStage',{VERTEX:1,FRAGMENT:2,COMPUTE:4});
- const layout=makeShaderDataDefinitions(rayTraceCore({hasDisplacement:false})).structs.Light;
+ const layout=makeShaderDataDefinitions(rayTraceCore({})).structs.Light;
  expect(gpu.byteLength).toBe(layout.size);expect(layout.fields.iesReference.offset).toBe(20*4);vi.unstubAllGlobals();
 });
 it('uses local -Z for directional lights regardless of their position',()=>{

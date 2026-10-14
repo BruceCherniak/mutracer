@@ -39,13 +39,13 @@ describe('independent coat normal inputs', () => {
     expect(new Material({coatNormalMap: tex}).coatNormalMap).toBe(tex);
   });
 
-  it.each([false, true])('uses the preallocated bytes without disturbing directions, source model or film (TFDM=%s)', tfdm => {
+  it('uses the preallocated bytes without disturbing directions, source model or film', () => {
     const tex = image(); tex.uvChannel = 1; tex.uvScale = [-2, 3]; tex.uvOffset = [.1, .2]; tex.flipY = false;
     const m = new Material({map: tex, coatNormalMap: tex, coatNormalScale: [-.5, 2],
       anisotropyMap: image(), specularAnisotropyRotation: .7, coatAnisotropyRotation: -.3,
       specularAnisotropyModel: 'gltf', thinFilmThicknessMinimum: .2, thinFilmMapChannel: 'g'});
     const absent = new Material(); const table = new MaterialTable([m, absent], []);
-    const bytes = packMaterialBuffer(table.bufferData, tfdm);
+    const bytes = packMaterialBuffer(table.bufferData);
     expect(bytes.length).toBe(208);
     expect(bytes[26]).toBe(0); expect(bytes[130]).toBe(-1);
     expect(Array.from(bytes.slice(96, 104))).toEqual([1, Math.fround(.7), -.5, 2,
@@ -58,7 +58,7 @@ describe('independent coat normal inputs', () => {
     expect(features.USE_COAT_NORMAL_MAPS).toBe(true);
     expect(wgpuSceneFeatureFlags(features) & (2 ** 17)).toBe(2 ** 17);
     m.coatNormalScale = [0, -3]; table.repackParams([m, absent]);
-    const repacked = packMaterialBuffer(table.bufferData, tfdm);
+    const repacked = packMaterialBuffer(table.bufferData);
     expect(repacked[26]).toBe(0); expect(repacked[96]).toBe(1);
     expect(Array.from(repacked.slice(98, 100))).toEqual([0, -3]);
   });

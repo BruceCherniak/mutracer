@@ -50,7 +50,7 @@ export default function rayTraceCompute({
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ hasDisplacement, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals })}
+${rayTraceCoreWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals })}
 
 ${uvProjectionWgsl}
 

@@ -28,8 +28,7 @@ import RectLight from '../scene/RectLight.js';
 import SpotLight from '../scene/SpotLight.js';
 import MaterialTable, {
   DEFAULT_MAX_TEXTURE_ARRAY_BYTES,
-  materialUsesMedium,
-  USE_TFDM_DISPLACEMENT
+  materialUsesMedium
 } from './MaterialTable.js';
 import { SceneBackground, SceneLight } from '../scene/Scene.js';
 import { numberArraysEqual } from './util.js';
@@ -62,8 +61,7 @@ import {
   refitBLAS,
   refitTLAS
 } from './bvhAccel.js';
-import WGPUMinMaxMap from './WGPUMinMaxMap.js';
-import Texture, { isTextureDataSource } from '../scene/Texture.js';
+import { isTextureDataSource } from '../scene/Texture.js';
 import OpenPBRMaterial, {
   resolveMaterialAlphaMode
 } from '../scene/OpenPBRMaterial.js';
@@ -421,9 +419,6 @@ class WGPURayTracePass {
   private _mapsSampler: GPUSampler;
   private _maps?: GPUTexture;
 
-  private _minmaxPass;
-  private _minmaxTexture?: GPUTexture;
-
   private _envImageSource: EnvironmentMapSource | undefined;
   private _envTex?: GPUTexture;
   private _envDistributionTex?: GPUTexture;
@@ -522,7 +517,6 @@ class WGPURayTracePass {
       addressModeV: 'clamp-to-edge'
     });
 
-    this._minmaxPass = new WGPUMinMaxMap(device);
     this._setBackgroundMap(undefined);
     this._adaptiveSamplingTexture = device.createTexture({
       format: 'r32float',
@@ -881,17 +875,7 @@ class WGPURayTracePass {
             viewDimension: '2d',
             sampleType: 'unfilterable-float'
           }
-        },
-        // Minmax map
-        ...(this._hasDisplacement && USE_TFDM_DISPLACEMENT
-          ? [
-              {
-                binding: 7,
-                visibility: GPUShaderStage.COMPUTE,
-                texture: { viewDimension: '2d-array' }
-              } satisfies GPUBindGroupLayoutEntry
-            ]
-          : [])
+        }
       ];
     const texturesBindGroupLayout = this._shaderCache.createBindGroupLayout({
       label: 'Textures', entries: textureLayoutEntries
@@ -1137,7 +1121,6 @@ ${rayTraceCompute({
         this._compiledBlasLayoutMask = this._blasLayoutMask;
       }
 
-      const hasDisplacement = this._hasDisplacement;
       if (needsCreatePipeline) {
         if (!this._rayTracePipelineLayout) {
           device.pushErrorScope('validation');
@@ -1305,8 +1288,7 @@ ${rayTraceCompute({
       if (this._needsUpdateBindGroups) {
         this._needsUpdateBindGroups = false;
 
-        // TODO use hasDisplacement in the closure. Because this._hasDisplacement may be changed in setMeshes
-        this._updateBindGroups(hasDisplacement);
+        this._updateBindGroups();
       }
       this._failedPipelineSignature = undefined;
     } catch (error) {
@@ -1412,7 +1394,7 @@ ${rayTraceCompute({
     return this._pipelineError;
   }
 
-  private _updateBindGroups(hasDisplacement: boolean) {
+  private _updateBindGroups() {
     const { _device } = this;
     const bindGroupPipeline = this._rayTracePipeline;
     if (!bindGroupPipeline) {
@@ -1463,15 +1445,7 @@ ${rayTraceCompute({
         {
           binding: 10,
           resource: this._adaptiveSamplingTexture.createView()
-        },
-        ...(hasDisplacement && this._minmaxTexture
-          ? [
-              {
-                binding: 7,
-                resource: this._minmaxTexture.createView()
-              }
-            ]
-          : [])
+        }
       ]
     });
     const uniformBindGroup = _device.createBindGroup({
@@ -2712,58 +2686,6 @@ ${rayTraceCompute({
         [img.width, img.height]
       );
     });
-
-    // Minmax map
-    if (this._hasDisplacement && USE_TFDM_DISPLACEMENT) {
-      this._updateMinmaxTexture(materialData.getDisplacementMaps());
-    }
-  }
-
-  private _updateMinmaxTexture(displacementMaps: Texture[]) {
-    let size = 0;
-    displacementMaps.forEach((m) => {
-      size = Math.max(size, m.image.width);
-    });
-
-    // TODO Must at least 2 layers.
-    const depthOrArrayLayers = Math.max(displacementMaps.length, 2);
-
-    const minmaxTexture = this._minmaxTexture;
-    if (
-      !minmaxTexture ||
-      minmaxTexture.width !== size ||
-      minmaxTexture.height !== size ||
-      minmaxTexture.depthOrArrayLayers !== depthOrArrayLayers
-    ) {
-      this._minmaxTexture?.destroy();
-      this._minmaxTexture = this._device.createTexture({
-        format: 'rg8unorm',
-        label: 'Minmax',
-        usage:
-          GPUTextureUsage.TEXTURE_BINDING |
-          GPUTextureUsage.COPY_DST |
-          // GPUTextureUsage.COPY_SRC |
-          GPUTextureUsage.RENDER_ATTACHMENT,
-        size: {
-          width: size,
-          height: size,
-          depthOrArrayLayers
-        },
-        mipLevelCount: Math.floor(Math.log2(size)) + 1
-      });
-
-      this._needsUpdateBindGroups = true;
-    }
-
-    // TODO only update the changed displacement map
-    displacementMaps.forEach((m, idx) => {
-      this._minmaxPass.createMinmaxMipmap(
-        this._minmaxTexture!,
-        m.image as HTMLCanvasElement | OffscreenCanvas | ImageBitmap,
-        m.flipY,
-        idx
-      );
-    });
   }
 
   setLights(lights: SceneLight[]) {
@@ -2915,7 +2837,6 @@ ${rayTraceCompute({
   }
 
   dispose() {
-    this._minmaxPass.dispose();
     this._shaderCache.clear();
     const buffers = new Set<GPUBuffer | undefined>([
       ...Array.from(this._targetOutputs.values()).flatMap(target => target.buffers),
@@ -2935,7 +2856,6 @@ ${rayTraceCompute({
       this._envTex,
       this._envDistributionTex,
       this._backgroundTex,
-      this._minmaxTexture,
       this._adaptiveSamplingTexture
     ]);
     textures.forEach((texture) => texture?.destroy());

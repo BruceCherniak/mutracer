@@ -6,15 +6,12 @@ import {
   CONSTANT_SPHERE_LIGHT,
   CONSTANT_SPOT_LIGHT
 } from '../../lightsUtil.js';
-import { USE_TFDM_DISPLACEMENT } from '../../MaterialTable.js';
 
 export default function rayTraceCore({
-  hasDisplacement,
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
   hasSceneAlpha = true
 }: {
-  hasDisplacement: boolean;
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
   hasSceneAlpha?: boolean;
@@ -226,7 +223,7 @@ struct LightChoice {
   sourceIndex: i32,
 };
 
-${materialBufferWgsl(USE_TFDM_DISPLACEMENT)}
+${materialBufferWgsl()}
 
 struct CameraUniform {
   viewProjectionInv: mat4x4<f32>,
@@ -327,11 +324,7 @@ fn evaluateSpotEmissionMultiplier(light: Light, lightToSurface: vec3f) -> f32 {
   return cone * sampleIESProfile(i32(light.textureIndex), vec2f(vertical / PI, horizontal / TWOPI + 0.5));
 }
 
-${
-  hasDisplacement && USE_TFDM_DISPLACEMENT
-    ? /*wgsl*/ `@group(1) @binding(7) var minmaxMap: texture_2d_array<f32>;`
-    : ''
-}
+
   
 // Uniforms
 @group(2) @binding(0) var<uniform> cameraUniform: CameraUniform;

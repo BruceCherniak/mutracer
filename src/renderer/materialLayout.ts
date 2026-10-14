@@ -13,11 +13,10 @@ export interface MaterialLayoutField {
   source: keyof BufferData | null;
   type: FieldType;
   reserved: boolean;
-  tfdm?: MaterialLayoutField;
 }
 function field<T extends FieldType>(name: string, source: Source<T> | null,
-  type: T, reserved = false, tfdm?: MaterialLayoutField): MaterialLayoutField {
-  return { name, source, type, reserved, tfdm };
+  type: T, reserved = false): MaterialLayoutField {
+  return { name, source, type, reserved };
 }
 
 export const MATERIAL_LAYOUT = [
@@ -64,8 +63,8 @@ export const MATERIAL_LAYOUT = [
     field('uvScale', 'uvScale', 'vec2f')
   ] },
   { name: 'DISPLACEMENT', fields: [
-    field('displacementStepSize', 'displacementStepSize', 'f32', false, field('minmaxMapIndex', 'minmaxMapIndex', 'f32')),
-    field('_padding', null, 'f32', true, field('minmaxMapSize', 'minmaxMapSize', 'f32')),
+    field('displacementStepSize', 'displacementStepSize', 'f32'),
+    field('_padding', null, 'f32', true),
     field('displacementUvProjection', 'displacementUvProjection', 'f32'),
     field('displacementUvProjectionScale', 'displacementUvProjectionScale', 'f32')
   ] },
@@ -158,11 +157,10 @@ export const MATERIAL_LAYOUT = [
 export const MATERIAL_ROW_COUNT = MATERIAL_LAYOUT.length;
 export const MATERIAL_FLOAT_COUNT = MATERIAL_ROW_COUNT * 4;
 const components = { f32: 1, vec2f: 2, vec3f: 3 } as const;
-export function materialLayoutFields(tfdm = false) {
+export function materialLayoutFields() {
   return MATERIAL_LAYOUT.flatMap((row, rowIndex) => {
     let component = 0;
-    return row.fields.map(original => {
-      const field = tfdm && original.tfdm ? original.tfdm : original;
+    return row.fields.map(field => {
       const offset = rowIndex * 16 + component * 4;
       component += components[field.type];
       return { ...field, row: rowIndex, component: offset % 16 / 4, offset };
@@ -170,8 +168,8 @@ export function materialLayoutFields(tfdm = false) {
   });
 }
 
-export function packMaterialBuffer(data: BufferData, tfdm = false): Float32Array {
-  const fields = materialLayoutFields(tfdm).map(field => ({
+export function packMaterialBuffer(data: BufferData): Float32Array {
+  const fields = materialLayoutFields().map(field => ({
     ...field,
     // Flatten exactly as the legacy interleave did (including missing indices).
     values: field.source === null ? data.type.map(() => 0) : data[field.source]?.flat() ?? []
@@ -189,9 +187,9 @@ export function packMaterialBuffer(data: BufferData, tfdm = false): Float32Array
   return packed;
 }
 
-export function materialBufferWgsl(tfdm = false): string {
+export function materialBufferWgsl(): string {
   let end = 0;
-  const declarations = materialLayoutFields(tfdm).map(field => {
+  const declarations = materialLayoutFields().map(field => {
     const alignment = field.type === 'vec3f' ? 16 : components[field.type] * 4;
     const aligned = Math.ceil(end / alignment) * alignment;
     if (aligned !== field.offset) throw new Error(`Misaligned material field: ${field.name}`);

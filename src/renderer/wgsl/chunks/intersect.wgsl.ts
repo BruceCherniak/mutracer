@@ -2,18 +2,12 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
+import { uvProjectionConstants } from '../../MaterialTable.js';
 import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
-import {
-  USE_TFDM_DISPLACEMENT,
-  uvProjectionConstants
-} from '../../MaterialTable.js';
-import tfdm_displacementWgsl from './tfdm_displacement.wgsl.js';
 import pdm_displacementWgsl from './pdm_displacement.wgsl.js';
 import { createIntersectionAlphaWgsl } from './intersectionAlpha.wgsl.js';
 
-const displacementWgsl = USE_TFDM_DISPLACEMENT
-  ? tfdm_displacementWgsl
-  : pdm_displacementWgsl;
+const displacementWgsl = pdm_displacementWgsl;
 
 const flatIntersectCode = function () {
   return /* wgsl */ `
@@ -58,66 +52,6 @@ function getPDMDisplacmentCode(anyHit: boolean) {
 `;
 }
 
-function getTFDMDisplacmentCode(anyHit: boolean) {
-  return /* wgsl */ `
-  var hitDistMin: f32;
-  var hitDistMax: f32;
-  var microTriangle: MicroTriangleIntersect;
-  microTriangle.t = INF;
-  if (intersectPrism(
-    o, d,
-    0.0, tMax,
-    pA, pB, pC,
-    pD, pE, pF,
-    &hitDistMin, &hitDistMax
-  )) {
-    if (matData.displacementUvProjection == ${
-      uvProjectionConstants.triplanar
-    }) {
-      triplanarProjectionTriangle(tri.p0, tri.p1, tri.p2, n0, n1, n2, &uv0, &uv1, &uv2);
-    }
-    else if (matData.displacementUvProjection == ${
-      uvProjectionConstants.spherical
-    }) {
-      sphericalProjectionTriangle(tri.p0, tri.p1, tri.p2, &uv0, &uv1, &uv2);
-    }
-    else if (matData.displacementUvProjection == ${
-      uvProjectionConstants.cylindrical
-    }) {
-      uv0 = projectUV(${uvProjectionConstants.cylindrical}, tri.p0, n0);
-      uv1 = projectUV(${uvProjectionConstants.cylindrical}, tri.p1, n1);
-      uv2 = projectUV(${uvProjectionConstants.cylindrical}, tri.p2, n2);
-    }
-
-    uv0 = uv0 * displacementUvProjectionScale;
-    uv1 = uv1 * displacementUvProjectionScale;
-    uv2 = uv2 * displacementUvProjectionScale;
-
-    let e0 = uv1 - uv0;
-    let e1 = uv2 - uv0;
-    let area = abs(cross2D(e0, e1));
-    if (area > 1e-6) {
-      microTriangle = intersectDisplacement(
-        o, d, tMax,
-        tri.p0, tri.p1, tri.p2,
-        n0, n1, n2,
-        uv0, uv1, uv2,
-        displacementMapIndex,
-        getMapSize(displacementMapIndex),
-        i32(matData.minmaxMapIndex),
-        i32(matData.minmaxMapSize),
-        hScale,
-        0,
-        ${anyHit ? 'true' : 'false'}
-      );
-    }
-    else {
-      // TODO flat intersection
-    }
-  }
-`;
-}
-
 const displacementIntersectCode = function (anyHit: boolean, hasAnisotropyDirections: boolean) {
   return /* wgsl */ `
 
@@ -149,11 +83,7 @@ if (abs(hScale) > 0.0 && minMaxH > 0) {
   var uv1 = attrBuffers[index.y * ATTR_STRIDE + UV_OFF].xy;
   var uv2 = attrBuffers[index.z * ATTR_STRIDE + UV_OFF].xy;
 
-  ${
-    USE_TFDM_DISPLACEMENT
-      ? getTFDMDisplacmentCode(anyHit)
-      : getPDMDisplacmentCode(anyHit)
-  }
+  ${getPDMDisplacmentCode(anyHit)}
 
   if (microTriangle.t < tMax) {
     hitNormal = microTriangle.normal;

@@ -48,9 +48,6 @@ export interface TextureAtlasStats {
   width: number;
 }
 
-export const USE_TFDM_DISPLACEMENT =
-  typeof window !== 'undefined' ? (window as any).USE_TFDM_DISPLACEMENT : false;
-
 export function materialUsesMedium(material: OpenPBRMaterial): boolean {
   return !material.thinWalled && (
     (material.transmissionWeight > 0 && material.transmissionDepth > 0) ||
@@ -474,11 +471,6 @@ export interface BufferData extends Record<MaterialTextureIndex, number[]> {
   // For PDM displacement.
   displacementStepSize: number[];
 
-  // For TFDM displacement.
-  minmaxMapIndex: number[];
-  minmaxMapSize: number[];
-  // displacementScale: number[];
-
   // Alpha
   alpha: number[];
   alphaMode: number[];
@@ -660,14 +652,12 @@ class MaterialTable {
     const bumpMapIndices = maps.indices.displacementMap.map((index, materialIndex) =>
       materials[materialIndex].displacementBumpStrength > 0 ? index : -1
     );
-    // Displacement map must have the same width and height.
-    // And it must be power of 2.
-    const displacementMaps = (this._displacementMaps =
+    this._displacementMaps =
       maps.indices.displacementMap
         .map((idx) => {
           return maps.textures[idx];
         })
-        .filter((a) => !!a));
+        .filter((a) => !!a);
 
     const bufferData = this._packParams(materials);
 
@@ -697,16 +687,6 @@ class MaterialTable {
       bufferData[slot.index] = maps.indices[slot.property];
     }
     bufferData.bumpMapIndex = bumpMapIndices;
-
-    // min max map for tfdm displacement
-    bufferData.minmaxMapIndex = USE_TFDM_DISPLACEMENT
-        ? materials.map((m) =>
-            m.displacementMap ? displacementMaps.indexOf(m.displacementMap) : -1
-          )
-        : [];
-    bufferData.minmaxMapSize = USE_TFDM_DISPLACEMENT
-        ? materials.map((m) => m.displacementMap?.image.width || 0)
-        : [];
 
     this.bufferData = bufferData;
 
@@ -822,7 +802,7 @@ class MaterialTable {
   }
 
   getBufferArray() {
-    return packMaterialBuffer(this.bufferData, USE_TFDM_DISPLACEMENT);
+    return packMaterialBuffer(this.bufferData);
   }
 
   getDisplacementMaps() {

@@ -59,7 +59,7 @@ describe('WGPURayTracePass output resource lifetime', () => {
   it('keeps every CPU uniform view aligned with the WGSL target options', () => {
     vi.stubGlobal('GPUShaderStage', { VERTEX: 1, FRAGMENT: 2, COMPUTE: 4 });
     const uniform = makeRayTraceUniform();
-    const layout = makeShaderDataDefinitions(rayTraceCore({ hasDisplacement: false })).structs.RayTraceUniform;
+    const layout = makeShaderDataDefinitions(rayTraceCore({})).structs.RayTraceUniform;
     expect(layout.size).toBe(uniform.buffer.byteLength);
     for (const [key, view] of Object.entries(uniform.views)) {
       expect(layout.fields[key].offset, key).toBe(view.byteOffset);
