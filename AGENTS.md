@@ -93,6 +93,26 @@ sample count) on a real GPU before and after, and compare
 - Keep reusable documentation in `docs/`. Do not commit dated experiment logs
   or scene-specific evidence there.
 
+## Multi-session tasks
+
+- A task split across several sessions keeps one progress file beside its plan
+  in `plans/`. It is a snapshot of the current state, not a log. It holds only:
+  the status of each task with its commit, the remaining work in order, open
+  problems and known limitations with their evidence locations, the
+  maintainer's current decisions, fixed references (worktree, branch,
+  hardware, reference commits), and the handoff the next session needs, each
+  written once. Keep it within 150 lines and 15,000 characters.
+- When a session ends, rewrite the affected entries in place. Do not append
+  per-session narratives, restate rules or authorizations, or keep superseded
+  state or withdrawn decisions.
+- Put process details, failed attempts, command output, per-image numbers,
+  checksums and the reasoning behind each result in that session's evidence
+  directory outside the repository, as named by the plan, and link to it from
+  the progress file. Durable conclusions belong in `docs/` or the plan.
+- A new session reads this file, the plan and the progress file, then starts.
+  It looks up evidence directories or archived records only for the specific
+  item it needs.
+
 ## Commit messages
 
 - For viewer changes, include the `viewer` scope in the commit subject, for
