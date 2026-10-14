@@ -252,7 +252,7 @@ result. Schedule-only edits keep inference running. See [denoising](./denoising.
 
 `Denoiser` is the caller-owned third-party WebGPU interface. Its optional
 `prepare` receives device/dimensions, and `denoise` receives `DenoiseInput`
-plus abort signal/schedule. Built-ins use internal specialized implementations.
+plus abort signal/schedule.
 The packed buffer formats, ownership, cancellation, device changes and display
 semantics are documented in [Custom denoisers](./denoising.md#custom-denoisers).
 
@@ -361,10 +361,6 @@ execution engines, precision and dynamic tiles through `render.denoiser`;
 see [denoising](./denoising.md#custom-oidn-networks). The main entry exports
 `OIDNEngine`, `OIDNPrecision`, `OIDNHDRTransfer`, `OIDNDynamicTileOptions`,
 `OIDNDynamicTileSetting` and `OIDNAuxiliaryModelUrls` as types.
-
-## Implementation notes
-
-BVH caches, light packing helpers and material-weight packing are renderer internals. Texture upload notifications use `markUpdated()` and `version`.
 
 ## GPU output and display passes
 

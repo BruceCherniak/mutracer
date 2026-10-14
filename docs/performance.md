@@ -75,9 +75,7 @@ allocated GPU payload `bytes`, including its retained outputs. It excludes share
 and resources queued for release. Each render retains accumulation buffers,
 resolved outputs, its last complete composition and its valid denoised result.
 Post-processing, readback and denoising scratch resources are shared by the engine;
-their allocated capacity grows to the largest required dimensions. Denoising jobs
-and network prewarming share a serial lease so another render cannot overwrite
-an inference input while it is in use.
+their allocated capacity grows to the largest required dimensions.
 
 Preview and final keep independent outputs. Switching uses their complete
 images without reallocating them; final's first tiled sample keeps preview on

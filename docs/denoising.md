@@ -245,13 +245,9 @@ resources yourself after outstanding work has settled.
 
 ### Custom HDR layers
 
-Custom filters operate on the resolved beauty RGB. On a catcher, the filtered
-RGB correction is applied proportionally to the original foreground and
-premultiplied background HDR layers before they enter the common compose
-shader. Near zero source channels, an additive correction is used. Layer
-coverage and shadow masks remain unchanged. The layers are not independently
-filtered; the original display-space background and catcher composition is
-shared with the unfiltered path.
+Custom filters operate on the resolved beauty RGB. With a shadow catcher, the
+filtered correction is carried over to the foreground and background layers;
+coverage and shadow masks are not filtered.
 
 ### How JNLM works
 

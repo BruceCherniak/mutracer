@@ -101,7 +101,7 @@ instancing are unsupported: each source object warns once per converter and is
 converted as an ordinary mesh, without per-instance matrices or colors.
 
 Meshes without UVs get automatic triplanar texture and displacement
-projection through a cached copy of their material; explicit
+projection; explicit
 `mutracerUvProjection` settings take precedence.
 
 ## Skinning and morph targets

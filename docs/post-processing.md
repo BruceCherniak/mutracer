@@ -81,9 +81,7 @@ the callback must record valid commands.
 
 ## Implementation notes
 
-Two target-owned intermediate textures provide ping-pong storage. They are
-allocated only when passes run and reused until dimensions/format change;
-retired images are destroyed after submitted work completes. The composed image
-is kept separately, so a thrown callback cannot leave a partly processed result.
+The composed image is kept separately, so a thrown callback cannot leave a
+partly processed result.
 Display passes do not enter denoiser inputs, change samples or invalidate cached
 filter results. HDR-stage callbacks are outside this API.

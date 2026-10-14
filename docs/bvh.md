@@ -121,14 +121,10 @@ jsDelivr copy, then falls back to the built-in builder. See
 
 ## Implementation notes
 
-- Each renderer owns a lazy module Worker pool. Each Worker handles one BLAS
-  at a time and keeps its own TinyBVH WASM instance. Larger geometries start
-  first; preparation lanes generate inputs only when ready to submit work.
-  Only the used ranges of input attribute views are copied, and these owned
-  copies are transferred to the Worker. Source geometry stays usable on the
-  main thread; BVH buffers are transferred back.
-- Geometry revisions and displacement settings are checked before an
-  asynchronous result is accepted.
+- Source geometry stays usable on the main thread while its BLAS builds in a
+  Worker.
+- Editing geometry or displacement settings while a build is in flight
+  discards the stale result.
 - An invalid input affects only its mesh. Worker startup, messaging or runtime
   failures retry with the same builder on the calling thread within the same
   preparation call; TinyBVH failures retry with the built-in builder. Each

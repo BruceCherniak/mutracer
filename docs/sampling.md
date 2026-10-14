@@ -33,13 +33,8 @@ render.samplingPattern = 'zsobol';
   independently per pixel and domain.
 - ZSobol is blue-noise-first: sample zero uses a one-sample ZSobol pattern,
   and later samples use an independent scramble for the remaining budget.
-  Independent 256×256 pixel tiles and sample blocks keep Morton indices within
-  32 bits. The pattern is generated without a texture asset.
-- Each WebGPU pixel advances by its own accumulated count, so adaptive
-  sampling and interleaved preview tiles cannot skip sequence points.
-- Camera jitter, aperture, light positions, BSDF directions and phase
-  directions each use their own 2D domain. Variable-length choices (alpha,
-  displacement, traversal) use a separate hashed dimension range: per-pixel
-  Owen Sobol for the structured patterns, PCG for `random`.
-- Spectral wavelengths reuse dimensions and random streams to reduce colored
-  noise. Interactive resets keep seed zero for stable screen-relative noise.
+- On WebGPU each pixel follows its own sequence, so adaptive sampling and
+  preview tiles do not skip sequence points.
+- Camera, aperture, light, BSDF and phase sampling use separate dimensions;
+  spectral wavelengths reuse them to reduce colored noise. Interactive resets
+  keep seed zero for stable screen-relative noise.

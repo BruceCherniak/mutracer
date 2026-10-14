@@ -74,15 +74,12 @@ in the same sync options; see [Three.js integration](./docs/threejs.md).
 
 ### With MuTracer scene classes
 
-Without a Three.js scene, describe meshes, materials and lights directly. Here
-Three.js only supplies the camera and orbit controls.
+Describe meshes, materials, lights and the camera directly with MuTracer.
 
 ```ts
 import { mat4 } from 'gl-matrix';
-import * as THREE from 'three';
-import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-  EnvironmentLight, Mesh, OpenPBRMaterial, RectLight, Engine, RenderLoop, THREESync,
+  Camera, EnvironmentLight, Mesh, OpenPBRMaterial, RectLight, Engine, RenderLoop,
   Texture, createPlaneGeometry, createSphereGeometry, type Scene
 } from '@meimu/mutracer';
 
@@ -109,16 +106,15 @@ const scene: Scene = {
   lights: [light, new EnvironmentLight({ map: sky })]
 };
 
-const camera = new THREE.PerspectiveCamera(40, canvas.width / canvas.height, .1, 100);
-camera.position.set(0, 2, 6);
-const controls = new OrbitControls(camera, canvas);
-controls.target.set(0, 1, 0);
+const camera = new Camera({ projection: 'perspective', fov: 40, near: .1, far: 100 });
+camera.position = [0, 2, 6];
+camera.lookAt([0, 1, 0]);
 
 const engine = new Engine({ canvas });
 engine.on('error', error => console.error(error));
 engine.scene = scene;
-const sync = new THREESync(engine, {camera, controls});
-const loop = new RenderLoop(engine, {sync});
+engine.camera = camera;
+const loop = new RenderLoop(engine);
 loop.start();
 ```
 
