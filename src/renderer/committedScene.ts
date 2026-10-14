@@ -15,7 +15,7 @@ export class CommittedScene {
   private value?: Scene;
   private readonly copying = new WeakSet<object>();
 
-  private copy<T>(value: T): T {
+  private copy<T>(value: T, retainGeometryBvh = false): T {
     if (!value || typeof value !== 'object') return value;
     const object = value as object;
     if ((typeof HTMLImageElement !== 'undefined' && object instanceof HTMLImageElement) || (typeof HTMLCanvasElement !== 'undefined' && object instanceof HTMLCanvasElement) ||
@@ -57,7 +57,7 @@ export class CommittedScene {
             else if (previous?.[key] === array && cloned[key]?.length === array.length) cloned[key].set(array);
             else cloned[key] = array.slice();
           }
-        } else cloned[key] = value instanceof Texture && key === 'source' ? value.source : this.copy((value as any)[key]);
+        } else cloned[key] = value instanceof Texture && key === 'source' ? value.source : this.copy((value as any)[key], retainGeometryBvh);
       }
     } finally { this.copying.delete(object); }
     if (Array.isArray(value)) cloned.length = value.length;
@@ -67,7 +67,11 @@ export class CommittedScene {
     });
     if (value instanceof Geometry) {
       this.geometryVersions.set(value, value.version);
-      setGeometryBvh(cloned, getGeometryBvh(value));
+      // The renderer builds/refits BVHs on the committed geometry. A source
+      // without a precomputed BVH must not erase that tree on every pose edit.
+      // Full scene replacements cannot rely on an incremental renderer refit.
+      const sourceBvh = getGeometryBvh(value);
+      if (sourceBvh || !retainGeometryBvh) setGeometryBvh(cloned, sourceBvh);
       copyGeometryChangeState(value, cloned);
     }
     return cloned;
@@ -80,10 +84,10 @@ export class CommittedScene {
     else {
       for (const mesh of changes.transforms) {
         this.copy(mesh.transform);
-        if (mesh instanceof InstancedMesh) this.copy(mesh);
+        if (mesh instanceof InstancedMesh) this.copy(mesh, true);
       }
-      for (const mesh of changes.colors) this.copy(mesh);
-      for (const geometry of changes.geometries) this.copy(geometry);
+      for (const mesh of changes.colors) this.copy(mesh, true);
+      for (const geometry of changes.geometries) this.copy(geometry, true);
       for (const material of changes.materials) this.copy(material);
       if (changes.lights) this.value.lights = this.copy(scene.lights);
       if (changes.background) this.value.background = this.copy(scene.background);

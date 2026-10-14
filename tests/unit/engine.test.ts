@@ -7,8 +7,53 @@ import SpotLight from '../../src/scene/SpotLight';
 import AmbientLight from '../../src/scene/AmbientLight';
 import { createCubeGeometry } from '../../src/util/commonGeometry';
 import { renderFixture } from '../helpers/renderPipeline';
+import { getGeometryBvh } from '../../src/renderer/geometryBvh';
+import { updateMeshInstances } from '../../src/renderer/prepareMeshBVH';
+import { updatePreparedGeometries } from '../../src/renderer/geometryUpdates';
 
 describe('Engine commits inputs', () => {
+  it('retains renderer-built BLASes across committed poses and rebuilds edited topology', () => {
+    const {engine, pipeline} = renderFixture();
+    const geometry = createCubeGeometry(); geometry.dynamic = true;
+    engine.scene = {meshes: [new Mesh(geometry, new OpenPBRMaterial())], lights: []};
+    engine.update();
+    const committed = vi.mocked(pipeline.setMeshes).mock.calls.at(-1)![0][0].geometry;
+    const prepared = updateMeshInstances(vi.mocked(pipeline.setMeshes).mock.calls.at(-1)![0]);
+    const bvh = getGeometryBvh(committed)!;
+    const initialMinX = new Float32Array(bvh.buffer)[0];
+    for (let pose = 1; pose <= 3; pose++) {
+      for (let i = 0; i < geometry.position.array.length; i += 3) geometry.position.array[i] += .05;
+      geometry.markVerticesUpdated(); engine.update();
+      expect(getGeometryBvh(geometry)).toBeUndefined();
+      expect(getGeometryBvh(committed)).toBe(bvh);
+      const changed = vi.mocked(pipeline.setMeshes).mock.calls.at(-1)![1]!.geometries!;
+      const update = updatePreparedGeometries(prepared, new Set(changed));
+      expect(getGeometryBvh(committed)).toBe(bvh);
+      expect(update.resized).toBe(false);
+      expect(new Float32Array(bvh.buffer)[0]).toBeCloseTo(initialMinX + .05 * pose);
+    }
+    geometry.indices.array.fill(0); geometry.markUpdated(); engine.update();
+    updatePreparedGeometries(prepared, new Set([committed]));
+    expect(getGeometryBvh(committed)).not.toBe(bvh);
+    engine.dispose();
+  });
+  it('invalidates an edited cached BLAS when returning to a replaced scene', () => {
+    const {engine, pipeline} = renderFixture();
+    const geometry = createCubeGeometry(); geometry.dynamic = true;
+    const scene = {meshes: [new Mesh(geometry, new OpenPBRMaterial())], lights: []};
+    engine.scene = scene; engine.update();
+    const meshes = vi.mocked(pipeline.setMeshes).mock.calls.at(-1)![0];
+    updateMeshInstances(meshes);
+    const committed = meshes[0].geometry, bvh = getGeometryBvh(committed)!;
+    const initialMinX = new Float32Array(bvh.buffer)[0];
+    engine.scene = {meshes: [], lights: []}; engine.update();
+    for (let i = 0; i < geometry.position.array.length; i += 3) geometry.position.array[i] += 2;
+    geometry.markVerticesUpdated(); engine.scene = scene; engine.update();
+    expect(getGeometryBvh(committed)).toBeUndefined();
+    updateMeshInstances(vi.mocked(pipeline.setMeshes).mock.calls.at(-1)![0]);
+    expect(new Float32Array(getGeometryBvh(committed)!.buffer)[0]).toBeCloseTo(initialMinX + 2);
+    engine.dispose();
+  });
   it('preserves the exact values of a double-precision camera matrix', () => {
     const {engine, camera, targets} = renderFixture();
     camera.transform = Array.from(camera.transform); camera.transform[12] = .123456789012345;
