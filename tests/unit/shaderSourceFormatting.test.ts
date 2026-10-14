@@ -67,8 +67,8 @@ describe('shader generation independent of source formatting', () => {
 
   it('preserves the generated direction frames after formatting and identifier compression', () => {
     gpu();
-    for (const hasDisplacement of [false, true]) {
-      const options = {hasDisplacement, hasAnisotropyDirections: true, hasAlpha: true, hasSceneAlpha: true, blasLayoutMask: 15};
+    for (const hasDisplacement of [false, true]) for (const hasCoatNormals of [false, true]) {
+      const options = {hasDisplacement, hasCoatNormals, hasAnisotropyDirections: true, hasAlpha: true, hasSceneAlpha: true, blasLayoutMask: 15};
       const source = rayTrace(options), compact = compactRayTrace(options);
       expect(tokens(compact)).toEqual(tokens(source));
       const definitions = makeShaderDataDefinitions(compact);

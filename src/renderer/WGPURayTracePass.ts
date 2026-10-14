@@ -429,6 +429,7 @@ class WGPURayTracePass {
   private _blasLayoutMask = 1;
   private _compiledBlasLayoutMask = 0;
   private _compiledAnisotropyDirections = false;
+  private _compiledCoatNormals = false;
   private _compiledHasAlpha = true;
   private _compiledSceneHasAlpha = true;
   private _alphaBlendStrategy: AlphaBlendStrategy = 'stochastic';
@@ -1003,6 +1004,7 @@ class WGPURayTracePass {
         hasAlpha,
         hasSceneAlpha,
         hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
+        hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
         blasLayoutMask: this._blasLayoutMask,
         bakePipelineConstants: this._bakePipelineConstants
       });
@@ -1027,6 +1029,7 @@ class WGPURayTracePass {
         'USE_GROUNDED_BACKGROUND',
         ...MATERIAL_TEXTURE_DEFINES,
         'USE_ANISOTROPY_DIRECTIONS',
+        'USE_COAT_NORMAL_FRAMES',
         'NUM_BUMP_MAPS',
         'COLOR_OFF',
         'USE_VERTEX_COLOR',
@@ -1066,6 +1069,7 @@ class WGPURayTracePass {
         hasAlpha !== this._compiledHasAlpha ||
         hasSceneAlpha !== this._compiledSceneHasAlpha ||
         Boolean(constants.USE_ANISOTROPY_DIRECTIONS) !== this._compiledAnisotropyDirections ||
+        Boolean(constants.USE_COAT_NORMAL_FRAMES) !== this._compiledCoatNormals ||
         this._blasLayoutMask !== this._compiledBlasLayoutMask ||
         (this._bakePipelineConstants &&
           pipelineConstantsKeys.some(
@@ -1103,6 +1107,7 @@ ${rayTraceCompute({
   hasAlpha,
   hasSceneAlpha,
   hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
+  hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
   blasLayoutMask: this._blasLayoutMask
 })}`;
 
@@ -1121,6 +1126,7 @@ ${rayTraceCompute({
         this._compiledHasAlpha = hasAlpha;
         this._compiledSceneHasAlpha = hasSceneAlpha;
         this._compiledAnisotropyDirections = Boolean(constants.USE_ANISOTROPY_DIRECTIONS);
+        this._compiledCoatNormals = Boolean(constants.USE_COAT_NORMAL_FRAMES);
         this._compiledBlasLayoutMask = this._blasLayoutMask;
       }
 
@@ -2379,9 +2385,10 @@ ${rayTraceCompute({
       // Isotropic OpenPBR constructs its own basis. Normal/bump mapping uses
       // triangle UV differentials rather than this vertex tangent.
       USE_TANGENT: mergedGeometry.tangent != null &&
-        materials.some(material => material.specularAnisotropy > 0 || material.coatAnisotropy > 0),
+        materials.some(material => material.specularAnisotropy > 0 || material.coatAnisotropy > 0 || (!!material.coatNormalMap && material.coatWeight > 0)),
 
-      USE_ANISOTROPY_DIRECTIONS: materials.some(m =>
+      USE_COAT_NORMAL_FRAMES: materials.some(m => !!m.coatNormalMap && m.coatWeight > 0),
+      USE_ANISOTROPY_DIRECTIONS: materials.some(m => (!!m.coatNormalMap && m.coatWeight > 0) ||
         m.specularAnisotropy > 0 && (m.specularAnisotropyModel === 'gltf' || !!m.anisotropyMap || m.specularAnisotropyRotation !== 0) ||
         m.coatAnisotropy > 0 && m.coatAnisotropyRotation !== 0),
       HAS_MEDIUM,

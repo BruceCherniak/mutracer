@@ -332,6 +332,8 @@ one. See [thin-film textures](./materials.md#textures) for range behavior.
 `undefined`. Channels and color decoding are listed in [material textures](./materials.md#textures).
 They follow the existing material/texture update mechanism.
 
+`coatNormalMap` defaults to `undefined`, retaining the shared shading normal. With a map, linear RGB supplies an independent coat normal; `coatNormalScale` defaults to `[1, 1]` and scales its decoded XY. See [coat normals](./materials.md#coat-normals) for frame, sampling and update behavior.
+
 `Geometry`, `Texture` and `OpenPBRMaterial` expose `version` (initially `0`)
 and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 (initially `0`) and `markVerticesUpdated(): this`, which advances only

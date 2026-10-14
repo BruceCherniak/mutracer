@@ -104,6 +104,8 @@ export const openPbrSchema = [
   {key: 'specularAnisotropyRotation', type: 'float', default: 0, category: 'param'},
   {key: 'coatAnisotropyRotation', type: 'float', default: 0, category: 'param'},
   {key: 'specularAnisotropyModel', type: 'enum', default: 'openpbr', category: 'param'},
+  {key: 'coatNormalMap', type: 'texture', default: undefined, category: 'texture'},
+  {key: 'coatNormalScale', type: 'vec2', default: [1, 1], category: 'param'},
 ] as const satisfies readonly Field[];
 type SchemaTextureName = Extract<typeof openPbrSchema[number], {type: 'texture'}>['key'];
 const textureNamesMatch: [Exclude<MaterialTextureName, SchemaTextureName> | Exclude<SchemaTextureName, MaterialTextureName>] extends [never] ? true : never = true;

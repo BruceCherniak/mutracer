@@ -240,6 +240,8 @@ function convertMaterial(
     }
     material.coatWeightMap = convertTexture(physicalMaterial.clearcoatMap, textureCache);
     material.coatRoughnessMap = convertTexture(physicalMaterial.clearcoatRoughnessMap, textureCache);
+    material.coatNormalMap = convertTexture(physicalMaterial.clearcoatNormalMap, textureCache);
+    material.coatNormalScale = physicalMaterial.clearcoatNormalScale.toArray();
     material.fuzzColorMap = convertTexture(physicalMaterial.sheenColorMap, textureCache);
     material.fuzzRoughnessMap = convertTexture(physicalMaterial.sheenRoughnessMap, textureCache);
     material.specularWeightMap = convertTexture(physicalMaterial.specularIntensityMap, textureCache);
@@ -351,16 +353,24 @@ function convertMaterial(
     // Only supported Texture inputs are accepted; arbitrary metadata objects
     // must never enter the atlas as textures. Explicit null clears an import.
     for (const name of ['coatWeightMap', 'coatRoughnessMap', 'fuzzColorMap',
-      'fuzzRoughnessMap', 'specularWeightMap', 'specularColorMap', 'anisotropyMap'] as const) {
+      'fuzzRoughnessMap', 'specularWeightMap', 'specularColorMap', 'anisotropyMap', 'coatNormalMap'] as const) {
       const texture = openPbr[name];
       if (texture === null) material[name] = undefined;
       else if (texture instanceof Texture) material[name] = texture;
-      else if (texture && (texture as THREE.Texture).isTexture) {
+      else if (texture && (texture as THREE.Texture).isTexture &&
+        typeof (texture as THREE.Texture).clone === 'function') {
         material[name] = convertTexture(texture as THREE.Texture, textureCache);
       }
     }
     material.specularAnisotropyRotation = finite(openPbr.specularAnisotropyRotation, material.specularAnisotropyRotation, -Infinity, Infinity);
     material.coatAnisotropyRotation = finite(openPbr.coatAnisotropyRotation, material.coatAnisotropyRotation, -Infinity, Infinity);
+    const coatScale = openPbr.coatNormalScale as ArrayLike<number> | undefined;
+    if (coatScale && coatScale.length >= 2) {
+      material.coatNormalScale = [
+        finite(coatScale[0], material.coatNormalScale[0], -Infinity, Infinity),
+        finite(coatScale[1], material.coatNormalScale[1], -Infinity, Infinity)
+      ];
+    }
     material.baseWeight = finite(openPbr.baseWeight, material.baseWeight);
     material.baseDiffuseRoughness = finite(
       openPbr.baseDiffuseRoughness,
@@ -909,7 +919,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             !!(baseMaterial.map || baseMaterial.normalMap || baseMaterial.emissiveMap || baseMaterial.metallicRoughnessMap ||
               baseMaterial.roughnessMap || baseMaterial.metalnessMap || baseMaterial.thinFilmMap ||
               baseMaterial.coatWeightMap || baseMaterial.coatRoughnessMap || baseMaterial.fuzzColorMap ||
-              baseMaterial.fuzzRoughnessMap || baseMaterial.specularWeightMap || baseMaterial.specularColorMap || baseMaterial.anisotropyMap);
+              baseMaterial.fuzzRoughnessMap || baseMaterial.specularWeightMap || baseMaterial.specularColorMap || baseMaterial.anisotropyMap || baseMaterial.coatNormalMap);
           const autoDisplacementUvProjection = !geometry.uv && !!baseMaterial.displacementMap &&
             baseMaterial.displacementUvProjection === 'none';
           const instanceCount = expand ? instanced.count : 1;

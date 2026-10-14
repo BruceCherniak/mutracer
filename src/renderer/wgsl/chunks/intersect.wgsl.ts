@@ -694,10 +694,12 @@ while (tlasTop >= 0) {
 export default function getIntersectCode({
   hasDisplacement,
   hasAnisotropyDirections = true,
+  hasCoatNormals = false,
   blasLayoutMask = 1
 }: {
   hasDisplacement: boolean;
   hasAnisotropyDirections?: boolean;
+  hasCoatNormals?: boolean;
   blasLayoutMask?: number;
 }) {
   return /*wgsl*/ `
@@ -1084,8 +1086,9 @@ fn fetchAttributes(
   }
 
 ${hasAnisotropyDirections ? /* wgsl */ `
+${hasCoatNormals ? /* wgsl */ `  (*si).coatNormal = normal;` : ''}
   let directionMaterial = materialsBuffer[(*si).materialIndex];
-  if (directionMaterial.anisotropyMapIndex >= 0.0 || directionMaterial.specularAnisotropyRotation != 0.0 || directionMaterial.coatAnisotropyRotation != 0.0) {
+  if (directionMaterial.anisotropyMapIndex >= 0.0 || directionMaterial.specularAnisotropyRotation != 0.0 || directionMaterial.coatAnisotropyRotation != 0.0${hasCoatNormals ? " || (USE_COAT_NORMAL_MAPS && directionMaterial.coatNormalMapIndex >= 0.0)" : ""}) {
     let dp1 = tri.p0 - tri.p2;
     let dp2 = tri.p1 - tri.p2;
     var inputTangent = vec4f(0.0);
@@ -1106,6 +1109,26 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     }
     (*si).directionTangent = directionAxes[0];
     (*si).directionBitangent = directionAxes[1];
+${hasCoatNormals ? /* wgsl */ `
+    if (USE_COAT_NORMAL_MAPS && directionMaterial.coatNormalMapIndex >= 0.0) {
+      let coatIndex = i32(directionMaterial.coatNormalMapIndex);
+      var coatAxes = geometryAxes;
+      if (USE_UV1 && mapInfo[coatIndex + NUM_MAPS * 2].x > 0.5) {
+        let a = attrBuffers[i0 * ATTR_STRIDE + UV1_OFF].xy;
+        let b = attrBuffers[i1 * ATTR_STRIDE + UV1_OFF].xy;
+        let c = attrBuffers[i2 * ATTR_STRIDE + UV1_OFF].xy;
+        coatAxes = anisotropy_axes(normal, dp1, dp2, a-c, b-c,
+          select(inputTangent, vec4f(0.0), inputTangent.w == 0.0));
+      }
+      // Procedural projection overrides both UV sets. UV0 has already applied
+      // triplanar wrapping, so use it for either texture channel in that case.
+      let decoded = sampleMap(coatIndex, getMapUvSet(coatIndex, uv,
+        select(secondaryUv, uv, uvProjection > 0))).rgb * 2.0 - 1.0;
+      let mapped = coatAxes[0] * decoded.x * directionMaterial.coatNormalScale.x
+        + coatAxes[1] * decoded.y * directionMaterial.coatNormalScale.y + normal * decoded.z;
+      if (dot(mapped, mapped) > 1e-12) { (*si).coatNormal = normalize(mapped); }
+    }
+` : ''}
   }
 
 ` : /* wgsl */ ``}
@@ -1335,6 +1358,7 @@ fn completeSurfaceInteraction(
   (*si).faceNormal = normalize(normalTransform * hitNormal);
   (*si).vertexNormal = normalize(normalTransform * (*si).vertexNormal);
   (*si).normal = normalize(normalTransform * (*si).normal);
+${hasCoatNormals ? /* wgsl */ `  (*si).coatNormal = normalize(normalTransform * (*si).coatNormal);` : ''}
   if (USE_TANGENT && dot((*si).tangent, (*si).tangent) > 0.0) {
     (*si).tangent = normalize((l2w * vec4f((*si).tangent, 0.0)).xyz);
   }
@@ -1470,6 +1494,7 @@ hitInsIdx = insIdx;
     (*si).faceNormal = normalize(normalTransform * hitNormal);
     (*si).vertexNormal = normalize(normalTransform * (*si).vertexNormal);
     (*si).normal = normalize(normalTransform * (*si).normal);
+${hasCoatNormals ? /* wgsl */ `  (*si).coatNormal = normalize(normalTransform * (*si).coatNormal);` : ''}
     if (USE_TANGENT && dot((*si).tangent, (*si).tangent) > 0.0) {
       (*si).tangent = normalize((l2w * vec4f((*si).tangent, 0.0)).xyz);
     }

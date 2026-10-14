@@ -125,6 +125,13 @@ const slots = [
     define: 'NUM_ANISOTROPY_MAPS', feature: 'USE_ANISOTROPY_MAPS', featureBit: 2 ** 22,
     sampling: 'manual'
   },
+  {
+    property: 'coatNormalMap', index: 'coatNormalMapIndex',
+    target: 'coatNormal', channel: 'rgb',
+    colorSpace: 'linear', operation: 'custom',
+    define: 'NUM_COAT_NORMAL_MAPS', feature: 'USE_COAT_NORMAL_MAPS', featureBit: 2 ** 17,
+    sampling: 'manual'
+  },
 ] as const;
 
 // A missing or extra descriptor fails type checking in both directions.

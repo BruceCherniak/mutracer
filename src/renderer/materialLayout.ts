@@ -55,7 +55,7 @@ export const MATERIAL_LAYOUT = [
   { name: 'LAYER_MAPS', fields: [
     field('coatWeightMapIndex', 'coatWeightMapIndex', 'f32'),
     field('coatRoughnessMapIndex', 'coatRoughnessMapIndex', 'f32'),
-    field('coatNormalMapIndex', 'coatNormalMapIndex', 'f32', true),
+    field('coatNormalMapIndex', 'coatNormalMapIndex', 'f32'),
     field('fuzzColorMapIndex', 'fuzzColorMapIndex', 'f32')
   ] },
   { name: 'UV', fields: [
@@ -145,7 +145,7 @@ export const MATERIAL_LAYOUT = [
   { name: 'DIRECTION_NORMAL', fields: [
     field('anisotropyMapIndex', 'anisotropyMapIndex', 'f32'),
     field('specularAnisotropyRotation', 'specularAnisotropyRotation', 'f32'),
-    field('coatNormalScale', 'coatNormalScale', 'vec2f', true)
+    field('coatNormalScale', 'coatNormalScale', 'vec2f')
   ] },
   { name: 'FILM_TEXTURE', fields: [
     field('coatAnisotropyRotation', 'coatAnisotropyRotation', 'f32'),

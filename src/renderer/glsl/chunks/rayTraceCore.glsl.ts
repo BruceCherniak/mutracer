@@ -42,6 +42,9 @@ struct SurfaceInteraction {
   bool hit;
   vec3 position;
   vec3 normal; // material shading normal
+#ifdef NUM_COAT_NORMAL_MAPS
+  vec3 coatNormal;
+#endif
   vec3 vertexNormal; // interpolated mesh normal before normal mapping
   vec3 shadowOffset; // smooth-surface offset used by direct-light shadow rays
   
@@ -122,6 +125,11 @@ struct OpenPbrResolvedMaterial {
   vec3 directionBitangent;
   vec3 geometryTangent;
   vec3 geometryBitangent;
+#ifdef NUM_COAT_NORMAL_MAPS
+  vec3 coatNormal;
+  bool coatNormalEnabled;
+  vec3 geometricNormal;
+#endif
   float coatIor;
   float coatDarkening;
 

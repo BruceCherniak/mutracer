@@ -201,6 +201,10 @@ export default class OpenPBRMaterial {
   specularAnisotropyModel: 'openpbr' | 'gltf' = 'openpbr';
   /** Linear RG tangent direction and B strength multiplier for the base specular layer. Default `undefined`. */
   anisotropyMap?: Texture;
+  /** Independent tangent-space coat normal in linear RGB. Without a map, coat shares the existing shading normal. Default `undefined`. */
+  coatNormalMap?: Texture;
+  /** XY strength of coatNormalMap; independent of normalScale. Default `[1, 1]`. */
+  coatNormalScale: Vec2 = materialDefault('coatNormalScale');
   /** Base direction rotation in radians, counter-clockwise in tangent/bitangent space after RG decoding. Default `0`. */
   specularAnisotropyRotation: number = 0;
   /** Coat direction rotation in radians relative to the geometry tangent. Default `0`. */

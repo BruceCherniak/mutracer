@@ -18,7 +18,7 @@
 
 import { OPENPBR_METAL_ENERGY_LUT_ROW, OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW, OPENPBR_DIELECTRIC_ENERGY_LUT_ROW, OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW, OPENPBR_DIELECTRIC_REFLECTION_RATIO_LUT_ROW } from '../../openPbrEnergyLut.js';
 
-export function createOpenPbrBsdfWgsl(hasAnisotropyDirections = true) {
+export function createOpenPbrBsdfWgsl(hasAnisotropyDirections = true, hasCoatNormals = false) {
   return /* wgsl */ `
 const OPENPBR_LOBE_FUZZ: i32 = 0;
 const OPENPBR_LOBE_COAT: i32 = 1;
@@ -42,6 +42,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     coatBasis: OpenPbrBasis,
     directionFrames: bool,
 ` : /* wgsl */ ``}
+${hasCoatNormals ? /* wgsl */ `    coatViewLocal: vec3f,` : ''}
     viewLocal: vec3f,
     diffuseColor: vec3f,
     specularEtaTOverEtaI: f32,
@@ -858,6 +859,14 @@ fn openpbr_prepare(
 ${hasAnisotropyDirections ? /* wgsl */ `
     prepared.coatBasis = prepared.basis;
     prepared.directionFrames = false;
+${hasCoatNormals ? /* wgsl */ `
+    // Adobe c91aad1 openpbr_prepare_lobes: geometry_coat_basis is independent
+    // of the base shading basis; coat passage uses the same coat cosine.
+    if (material.coatNormalEnabled) {
+        prepared.coatBasis = openpbr_make_basis(material.geometryTangent, material.coatNormal, material.coatAnisotropy);
+        prepared.directionFrames = true;
+    }
+` : ''}
     if (material.specularAnisotropy > 0.0 && material.anisotropyDirectionEnabled) {
         prepared.basis = openpbr_direction_basis(prepared.basis, material.directionTangent, material.directionBitangent, material.anisotropyDirection);
         prepared.directionFrames = true;
@@ -868,6 +877,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     }
 ` : /* wgsl */ ``}
     prepared.viewLocal = openpbr_to_local(prepared.basis, viewDirection);
+${hasCoatNormals ? /* wgsl */ `    prepared.coatViewLocal = openpbr_to_local(prepared.coatBasis, viewDirection);` : ''}
     prepared.diffuseColor = material.baseColor;
 
     let dielectricBaseWeight = 1.0 - material.baseMetalness;
@@ -979,9 +989,10 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     prepared.probabilities[OPENPBR_LOBE_COAT] = 0.0;
     prepared.coatBaseScale = vec3f(1.0);
     if (material.coatWeight > 0.0 && !material.inside) {
-        let coatEnergy = openpbr_coat_energy(material, viewCosine);
+        ${hasCoatNormals ? /* wgsl */ `let coatViewCosine = select(viewCosine, max(prepared.coatViewLocal.z, 0.0), material.coatNormalEnabled);` : ''}
+        let coatEnergy = openpbr_coat_energy(material, ${hasCoatNormals ? 'coatViewCosine' : 'viewCosine'});
         prepared.probabilities[OPENPBR_LOBE_COAT] = prepared.weights[OPENPBR_LOBE_COAT] * coatEnergy;
-        prepared.coatBaseScale = openpbr_coat_passage(material, viewCosine)
+        prepared.coatBaseScale = openpbr_coat_passage(material, ${hasCoatNormals ? 'coatViewCosine' : 'viewCosine'})
             * (1.0 - prepared.weights[OPENPBR_LOBE_COAT] * coatEnergy) * openpbr_coat_darkening(prepared);
     }
     prepared.probabilities[OPENPBR_LOBE_METAL] = prepared.weights[OPENPBR_LOBE_METAL]
@@ -1078,6 +1089,12 @@ fn openpbr_eval_prepared_lobe(
     let viewLocal = prepared.viewLocal;
     let lightLocal = openpbr_to_local(prepared.basis, lightDirection);
     let reflection = lightLocal.z * viewLocal.z > 0.0;
+${hasCoatNormals ? /* wgsl */ `
+    let independentCoat = material.coatNormalEnabled;
+    let geometricReflection = dot(material.geometricNormal, lightDirection) > 0.0;
+    let coatLightCosine = dot(prepared.coatBasis.normal, lightDirection);
+    let coatReflection = geometricReflection && prepared.coatViewLocal.z > 0.0 && coatLightCosine > 0.0;
+` : ''}
 
     var halfVector: vec3f;
     if (reflection) {
@@ -1153,6 +1170,10 @@ fn openpbr_eval_prepared_lobe(
             abs(lightLocal.z)
         );
 
+${hasCoatNormals ? /* wgsl */ `
+    // Each lobe retains its own shading hemisphere; topology is geometric.
+    if (!independentCoat || (lightLocal.z != 0.0 && reflection == geometricReflection)) {
+` : ''}
     if (reflection) {
         if (prepared.weights[OPENPBR_LOBE_DIFFUSE] > 0.0 && allowDiffuse) {
             response += prepared.weights[OPENPBR_LOBE_DIFFUSE] * openpbr_eval_diffuse(
@@ -1302,18 +1323,23 @@ fn openpbr_eval_prepared_lobe(
         }
     }
 
+${hasCoatNormals ? /* wgsl */ `    } // base hemisphere support` : ''}
     if (material.coatWeight > 0.0) {
-        response *= openpbr_coat_base_scale(prepared, lightLocal.z);
+        response *= openpbr_coat_base_scale(prepared, ${hasCoatNormals ? 'select(lightLocal.z, coatLightCosine, independentCoat)' : 'lightLocal.z'});
     }
+${hasCoatNormals ? /* wgsl */ `
+    // Values are BSDF*cos in world solid angle before the frames are combined.
+    if (independentCoat) { response *= abs(lightLocal.z); }
+` : ''}
 
 ${hasAnisotropyDirections ? /* wgsl */ `
-    if (reflection && prepared.weights[OPENPBR_LOBE_COAT] > 0.0) {
+    if (${hasCoatNormals ? 'select(reflection, coatReflection, independentCoat)' : 'reflection'} && prepared.weights[OPENPBR_LOBE_COAT] > 0.0) {
         var coatView = viewLocal;
         var coatLight = lightLocal;
         var coatHalf = halfVector;
         var coatViewHalf = viewHalf;
         if (prepared.directionFrames) {
-            coatView = openpbr_to_local(prepared.coatBasis, openpbr_to_world(prepared.basis, viewLocal));
+            coatView = ${hasCoatNormals ? 'select(openpbr_to_local(prepared.coatBasis, openpbr_to_world(prepared.basis, viewLocal)), prepared.coatViewLocal, independentCoat)' : 'openpbr_to_local(prepared.coatBasis, openpbr_to_world(prepared.basis, viewLocal))'};
             coatLight = openpbr_to_local(prepared.coatBasis, lightDirection);
             coatHalf = normalize(coatLight + coatView);
             if (coatHalf.z < 0.0) { coatHalf = -coatHalf; }
@@ -1329,7 +1355,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
         coatMaterial.alphaX = coatAlpha.x;
         coatMaterial.alphaY = coatAlpha.y;
         if (allowCoat) {
-            response += prepared.weights[OPENPBR_LOBE_COAT] * openpbr_eval_microfacet_reflection(
+            response += prepared.weights[OPENPBR_LOBE_COAT]${hasCoatNormals ? ' * select(1.0, max(coatLightCosine, 0.0), independentCoat)' : ''} * openpbr_eval_microfacet_reflection(
                 coatMaterial,
                 coatView,
                 coatLight,
@@ -1341,7 +1367,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
         }
     }
 ` : /* wgsl */ `
-    if (reflection && prepared.weights[OPENPBR_LOBE_COAT] > 0.0) {
+    if (${hasCoatNormals ? 'select(reflection, coatReflection, independentCoat)' : 'reflection'} && prepared.weights[OPENPBR_LOBE_COAT] > 0.0) {
         let coatFresnel = vec3f(openpbr_dielectric_fresnel(
             viewHalf,
             1.0 / material.coatIor
@@ -1351,7 +1377,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
         coatMaterial.alphaX = coatAlpha.x;
         coatMaterial.alphaY = coatAlpha.y;
         if (allowCoat) {
-            response += prepared.weights[OPENPBR_LOBE_COAT] * openpbr_eval_microfacet_reflection(
+            response += prepared.weights[OPENPBR_LOBE_COAT]${hasCoatNormals ? ' * select(1.0, max(coatLightCosine, 0.0), independentCoat)' : ''} * openpbr_eval_microfacet_reflection(
                 coatMaterial,
                 viewLocal,
                 lightLocal,
@@ -1364,7 +1390,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     }
 `}
 
-    if (reflection && prepared.weights[OPENPBR_LOBE_FUZZ] > 0.0) {
+    if (${hasCoatNormals ? 'select(reflection, geometricReflection, independentCoat)' : 'reflection'} && prepared.weights[OPENPBR_LOBE_FUZZ] > 0.0) {
         let fuzzAlbedo = openpbr_fuzz_directional_albedo(
             abs(viewLocal.z),
             material.fuzzRoughness
@@ -1374,7 +1400,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
             vec3f(1.0 - prepared.weights[OPENPBR_LOBE_FUZZ] * fuzzAlbedo)
         );
         if (allowFuzz) {
-            response += prepared.weights[OPENPBR_LOBE_FUZZ] * openpbr_eval_fuzz(
+            response += prepared.weights[OPENPBR_LOBE_FUZZ]${hasCoatNormals ? ' * select(1.0, max(lightLocal.z, 0.0), independentCoat)' : ''} * openpbr_eval_fuzz(
                 material,
                 viewLocal,
                 lightLocal,
@@ -1384,7 +1410,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
         }
     }
 
-    return response * abs(lightLocal.z);
+    return response * ${hasCoatNormals ? 'select(abs(lightLocal.z), 1.0, independentCoat)' : 'abs(lightLocal.z)'};
 }
 
 fn openpbr_eval_prepared(
@@ -1472,7 +1498,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
         *sampledLobeSpecular = true;
         *sampledLobeIndex = u32(OPENPBR_LOBE_COAT);
         var coatView = viewLocal;
-        if (prepared.directionFrames) { coatView = openpbr_to_local(prepared.coatBasis, openpbr_to_world(prepared.basis, viewLocal)); }
+        if (prepared.directionFrames) { coatView = ${hasCoatNormals ? 'select(openpbr_to_local(prepared.coatBasis, openpbr_to_world(prepared.basis, viewLocal)), prepared.coatViewLocal, material.coatNormalEnabled)' : 'openpbr_to_local(prepared.coatBasis, openpbr_to_world(prepared.basis, viewLocal))'}; }
         var halfVector = sampling_ggx_visible_normal(
             coatView,
             // The VNDF must use the same alpha as the evaluated coat PDF.
@@ -1483,6 +1509,13 @@ ${hasAnisotropyDirections ? /* wgsl */ `
             halfVector = -halfVector;
         }
         lightLocal = normalize(reflect(-coatView, halfVector));
+${hasCoatNormals ? /* wgsl */ `
+        if (material.coatNormalEnabled) {
+            // Validate against the sampled coat frame, never the base normal.
+            *lightDirection = openpbr_to_world(prepared.coatBasis, lightLocal);
+            return lightLocal.z > 0.0 && dot(material.geometricNormal, *lightDirection) > 0.0;
+        }
+` : ''}
         if (prepared.directionFrames) { lightLocal = openpbr_to_local(prepared.basis, openpbr_to_world(prepared.coatBasis, lightLocal)); }
     }
 ` : /* wgsl */ `
@@ -1611,6 +1644,10 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     if (lightLocal.z == 0.0 || (lightLocal.z < 0.0) != *isTransmissionEvent) {
         return false;
     }
+${hasCoatNormals ? /* wgsl */ `
+    if (material.coatNormalEnabled &&
+        ((dot(material.geometricNormal, *lightDirection) <= 0.0) != *isTransmissionEvent)) { return false; }
+` : ''}
     return true;
 }
 
@@ -1642,7 +1679,7 @@ fn openpbr_sample_prepared(
             -prepared.viewLocal
         );
         let nullBoundaryTint = openpbr_transmission_tint(prepared.material)
-            * openpbr_coat_base_scale(prepared, -prepared.viewLocal.z);
+            * openpbr_coat_base_scale(prepared, ${hasCoatNormals ? 'select(-prepared.viewLocal.z, dot(prepared.coatBasis.normal, *lightDirection), prepared.material.coatNormalEnabled)' : '-prepared.viewLocal.z'});
         *pdf = 1.0;
         *marginalPdf = 1.0;
         *fullResponse = nullBoundaryTint;

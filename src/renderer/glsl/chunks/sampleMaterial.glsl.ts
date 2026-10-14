@@ -19,6 +19,9 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPrep
   // every direct-light sample seen from the back of a triangle (for example
   // the inside of an imported room wall).
   float cosThetaL = dot(ffnormal, lightDir);
+#ifdef NUM_COAT_NORMAL_MAPS
+  if (isSurface && mat.coatNormalEnabled) { cosThetaL = dot(mat.geometricNormal, lightDir); }
+#endif
 
   if (lightPdf <= 0.0 || max(max(lightSample.emission.x, lightSample.emission.y), lightSample.emission.z) <= 0.0) {
     return vec3(0.0);
@@ -49,6 +52,9 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPrep
   if (isSurface) {
     const float shadowTerminatorCutoff = 0.1;
     float normalLight = dot(si.normal, lightDir);
+#ifdef NUM_COAT_NORMAL_MAPS
+    if (mat.coatNormalEnabled) { normalLight = dot(si.faceNormal, lightDir); }
+#endif
     vec3 geometricNormal = normalLight < 0.0 ? -si.faceNormal : si.faceNormal;
     normalLight = abs(normalLight);
     float geometricLight = dot(geometricNormal, lightDir);
@@ -85,8 +91,21 @@ vec3 DirectLight(SurfaceInteraction si, OpenPbrResolvedMaterial mat, OpenPbrPrep
     : vec3(0.0);
 }
 
+#ifdef NUM_COAT_NORMAL_MAPS
+vec3 coat_frame_normal(vec3 inputNormal, vec3 face, vec3 view) {
+  bool front = dot(face, view) >= 0.0;
+  vec3 ffFace = front ? face : -face;
+  vec3 ffInput = front ? inputNormal : -inputNormal;
+  if (dot(inputNormal, face) <= 0.0 || dot(ffInput, view) <= 1e-6) { return ffFace; }
+  return ffInput;
+}
+#endif
 void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, inout Path path) {
   vec3 matRnd = vec3(sample2D(bounceDim(BSDF_DIRECTION)), sample1D(bounceDim(BSDF_LOBE)));
+#ifdef NUM_COAT_NORMAL_MAPS
+  vec3 originalFace = si.faceNormal;
+  vec3 originalNormal = si.normal;
+#endif
   float ndv1 = -dot(si.faceNormal, path.ray.d);
   float ndv2 = -dot(si.normal, path.ray.d);
   if ((mat.transmissionWeight > 0.0 || mat.subsurfaceWeight > 0.0) && mat.thinWalled) {
@@ -110,6 +129,17 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
   // In or out
   mat.relativeIor = ndv > 0.0 ? (1.0 / mat.specularIor) : mat.specularIor;
   vec3 ffnormal = ndv >= 0.0 ? normal : -normal;
+#ifdef NUM_COAT_NORMAL_MAPS
+  if (mat.coatNormalEnabled) {
+    vec3 view = -path.ray.d;
+    float geometricView = dot(originalFace, view);
+    mat.geometricNormal = geometricView >= 0.0 ? originalFace : -originalFace;
+    ffnormal = coat_frame_normal(originalNormal, originalFace, view);
+    mat.coatNormal = coat_frame_normal(si.coatNormal, originalFace, view);
+    mat.inside = geometricView <= 0.0 && !mat.thinWalled;
+    mat.relativeIor = (geometricView > 0.0 || mat.thinWalled) ? 1.0 / mat.specularIor : mat.specularIor;
+  }
+#endif
 
 
   float scatteringPdf;
@@ -215,6 +245,9 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
     // TODO prefer the opaque surface when transmission surface and opaque surface are overlapped.
     // Or the ray go out from transmission material will miss the opque surface.
     path.ray.o = si.position + EPS * scatterDir;
+#ifdef NUM_COAT_NORMAL_MAPS
+    if (mat.coatNormalEnabled) { path.ray.o = si.position + EPS * (dot(originalFace, scatterDir) >= 0.0 ? originalFace : -originalFace); }
+#endif
   }
 
   path.scatteringPdf = scatteringPdf;

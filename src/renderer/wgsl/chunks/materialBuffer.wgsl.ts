@@ -10,10 +10,12 @@ import {
 
 export function createMaterialBufferWgsl({
   hasAnisotropyDirections = true,
+  hasCoatNormals = false,
   hasSceneAlpha = true
 }: {
   hasSceneAlpha?: boolean;
   hasAnisotropyDirections?: boolean;
+  hasCoatNormals?: boolean;
 } = {}) {
   const alphaModeAssignment = hasSceneAlpha
     ? '(*ma).alphaMode = i32(matData.alphaMode);'
@@ -218,6 +220,10 @@ fn getMaterial(
   ${thinFilmTextureSample('wgsl')}
 
   ${simpleTextureSample('coatWeightMap', 'wgsl')}
+
+${hasCoatNormals ? /* wgsl */ `
+  (*ma).coatNormalEnabled = USE_COAT_NORMAL_MAPS && matData.coatNormalMapIndex >= 0.0 && (*ma).coatWeight > 0.0;
+` : ''}
 
   ${simpleTextureSample('coatRoughnessMap', 'wgsl')}
 

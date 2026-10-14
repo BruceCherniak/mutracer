@@ -55,6 +55,7 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | `MeshPhysicalMaterial.sheen`, `.sheenColor`, `.sheenRoughness` | `fuzzWeight`, `fuzzColor`, `fuzzRoughness`; explicit `userData.mutracerOpenPBR.fuzzRoughness` overrides imported roughness |
 | `MeshPhysicalMaterial.iridescenceThicknessMap`, `.iridescenceThicknessRange` | `thinFilmMap` with `thinFilmMapChannel = 'g'`; both nm endpoints are divided by 1000 into `thinFilmThicknessMinimum` / `thinFilmThickness`; without a map only the maximum is used |
 | `MeshPhysicalMaterial.clearcoatMap`, `.clearcoatRoughnessMap` | `coatWeightMap` (linear R), `coatRoughnessMap` (linear G) |
+| `MeshPhysicalMaterial.clearcoatNormalMap`, `.clearcoatNormalScale` | `coatNormalMap` (linear RGB), independent `coatNormalScale`; see [coat normals](./materials.md#coat-normals) |
 | `MeshPhysicalMaterial.sheenColorMap`, `.sheenRoughnessMap` | `fuzzColorMap` (sRGB RGB), `fuzzRoughnessMap` (linear A) |
 | `MeshPhysicalMaterial.specularIntensityMap`, `.specularColorMap` | `specularWeightMap` (linear A), `specularColorMap` (sRGB RGB) |
 | `MeshPhysicalMaterial.anisotropy`, `.anisotropyRotation`, `.anisotropyMap` | Source strength, rotation and direction texture; see [anisotropy source conversion](#anisotropy-source-conversion) |
@@ -243,6 +244,10 @@ synchronization, including parameter edits that do not change the source
 version. A null material result skips every group/instance of its mesh.
 The environment texture follows the built-in conversion and is not a
 `THREE.Light` hook source.
+
+## Coat normal conversion
+
+`clearcoatNormalMap` uses the shared texture conversion cache and preserves its UV channel, scale, offset and `flipY`; `clearcoatNormalScale` is copied separately from `normalScale`. Explicit `mutracerOpenPBR.coatNormalMap` accepts a MuTracer Texture or Three.js Texture, and `null` clears the imported map. `coatNormalScale` metadata overrides the imported pair; unrelated metadata retains the imported anisotropy source convention. Arbitrary JSON objects are not interpreted as texture images. `THREESync` propagates map and scale edits.
 
 ## Caveats
 

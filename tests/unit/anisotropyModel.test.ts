@@ -123,12 +123,12 @@ describe('anisotropy source convention', () => {
     const engine = new Engine({ canvas: { width: 1, height: 1 } as HTMLCanvasElement });
     const sync = new THREESync(engine, { scene, camera: new THREE.PerspectiveCamera() });
     sync.update();
-    const material = engine.scene.meshes[0].materials[0];
+    const material = engine.scene!.meshes[0].materials[0];
     source.anisotropy = .5;
     source.anisotropyRotation = -.3;
     source.anisotropyMap = null;
     sync.update();
-    expect(engine.scene.meshes[0].materials[0]).toBe(material);
+    expect(engine.scene!.meshes[0].materials[0]).toBe(material);
     expect(material.specularAnisotropy).toBe(.5);
     expect(material.specularAnisotropyRotation).toBe(-.3);
     expect(material.anisotropyMap).toBeUndefined();

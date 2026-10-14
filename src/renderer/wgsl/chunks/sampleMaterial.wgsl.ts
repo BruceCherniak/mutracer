@@ -1,7 +1,7 @@
 // Next-event estimation with resampled importance sampling over the light
 // candidates, followed by BSDF (or phase function) sampling, as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
-export function createSampleMaterialWgsl(hasAnisotropyDirections = true) {
+export function createSampleMaterialWgsl(hasAnisotropyDirections = true, hasCoatNormals = false) {
   return /* wgsl */ `
 
 struct ShadowRayWork {
@@ -48,7 +48,8 @@ fn PrepareDirectLight(
   let lightSelectionPmf = lightSample.selectionPmf;
   // Keep direct-light culling consistent with the two-sided BSDF evaluation.
   // The raw imported normal can point away from the camera on interior walls.
-  let cosThetaL = dot(ffnormal, lightDir);
+  ${hasCoatNormals ? /* wgsl */ `var cosThetaL = dot(ffnormal, lightDir);
+  if (isSurface && ma.coatNormalEnabled) { cosThetaL = dot(ma.geometricNormal, lightDir); }` : 'let cosThetaL = dot(ffnormal, lightDir);'}
 
   if (lightPdf <= 0.0 || lightSelectionPmf <= 0.0 ||
       max(max(Li.x, Li.y), Li.z) <= 0.0) {
@@ -83,6 +84,7 @@ fn PrepareDirectLight(
     shadowOrigin = offsetSurfaceRay((*si).position, (*si).faceNormal, lightDir);
     let shadowTerminatorCutoff = 0.1;
     var normalLight = dot((*si).normal, lightDir);
+${hasCoatNormals ? /* wgsl */ `    if (ma.coatNormalEnabled) { normalLight = dot((*si).faceNormal, lightDir); }` : ''}
     let geometricNormal = select(
       (*si).faceNormal,
       -(*si).faceNormal,
@@ -223,11 +225,26 @@ fn emissiveHitMisWeight(
   return bsdfMISWeight((*path).scatteringPdf, lightPdf);
 }
 
+${hasCoatNormals ? /* wgsl */ `
+// Keep each shading frame in the geometric/view hemisphere. This correction
+// does not replace the face normal used for topology or ray offsets.
+fn coat_frame_normal(input: vec3f, face: vec3f, view: vec3f) -> vec3f {
+  let front = dot(face, view) >= 0.0;
+  let ffFace = select(-face, face, front);
+  let ffInput = select(-input, input, front);
+  if (dot(input, face) <= 0.0 || dot(ffInput, view) <= 1e-6) { return ffFace; }
+  return ffInput;
+}
+` : ''}
 fn SampleMaterial(
   si: ptr<function, SurfaceInteraction>,
   ma: ptr<function, OpenPbrResolvedMaterial>,
   path: ptr<function, Path>
 ) {
+${hasCoatNormals ? /* wgsl */ `
+  let originalFace = (*si).faceNormal;
+  let originalNormal = (*si).normal;
+` : ''}
   var ndv1: f32 = -dot((*si).faceNormal, (*path).ray.d);
   var ndv2: f32 = -dot((*si).normal, (*path).ray.d);
   if (((*ma).transmissionWeight > 0.0 || (*ma).subsurfaceWeight > 0.0) && (*ma).thinWalled) {
@@ -251,6 +268,17 @@ fn SampleMaterial(
   // In or out
   (*ma).relativeIor = select((*ma).specularIor, (1.0 / (*ma).specularIor), ndv > 0.0);
   var ffnormal = select(-N, N, ndv >= 0.0);
+${hasCoatNormals ? /* wgsl */ `
+  if ((*ma).coatNormalEnabled) {
+    let view = -(*path).ray.d;
+    let geometricView = dot(originalFace, view);
+    (*ma).geometricNormal = select(-originalFace, originalFace, geometricView >= 0.0);
+    ffnormal = coat_frame_normal(originalNormal, originalFace, view);
+    (*ma).coatNormal = coat_frame_normal((*si).coatNormal, originalFace, view);
+    (*ma).inside = geometricView <= 0.0 && !(*ma).thinWalled;
+    (*ma).relativeIor = select((*ma).specularIor, 1.0 / (*ma).specularIor, geometricView > 0.0 || (*ma).thinWalled);
+  }
+` : ''}
 
   (*path).scatteringIsDelta = false;
   var mediumSampled = false;
@@ -374,6 +402,9 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     // TODO prefer the opaque surface when transmission surface and opaque surface are overlapped.
     // Or the ray go out from transmission material will miss the opque surface.
     (*path).ray.o = (*si).position + EPS * scatterDir;
+${hasCoatNormals ? /* wgsl */ `
+    if ((*ma).coatNormalEnabled) { (*path).ray.o = (*si).position + EPS * select(-originalFace, originalFace, dot(originalFace, scatterDir) >= 0.0); }
+` : ''}
   }
   (*path).scatteringPdf = scatteringPdf;
   (*path).ray.d = scatterDir;

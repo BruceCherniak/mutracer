@@ -11,10 +11,12 @@ import { USE_TFDM_DISPLACEMENT } from '../../MaterialTable.js';
 export default function rayTraceCore({
   hasDisplacement,
   hasAnisotropyDirections = true,
+  hasCoatNormals = false,
   hasSceneAlpha = true
 }: {
   hasDisplacement: boolean;
   hasAnisotropyDirections?: boolean;
+  hasCoatNormals?: boolean;
   hasSceneAlpha?: boolean;
 }) {
   return /*wgsl*/ `
@@ -44,6 +46,9 @@ struct SurfaceInteraction {
   albedoSampled: bool,
 
   normal: vec3f, // material shading normal
+${hasCoatNormals ? /* wgsl */ `
+  coatNormal: vec3f, // independent, built before base normal mapping
+` : ''}
   vertexNormal: vec3f, // interpolated mesh normal before normal mapping
   shadowOffset: vec3f, // smooth-surface offset for direct-light shadow rays
 
@@ -125,6 +130,11 @@ ${hasAnisotropyDirections ? /* wgsl */ `
   geometryBitangent: vec3f,
 ` : /* wgsl */ ``}
 ` : /* wgsl */ ``}
+${hasCoatNormals ? /* wgsl */ `
+  coatNormal: vec3f,
+  coatNormalEnabled: bool,
+  geometricNormal: vec3f, // face normal oriented toward the view
+` : ''}
   coatIor: f32,
   coatDarkening: f32,
 

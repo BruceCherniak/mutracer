@@ -38,8 +38,8 @@ describe('OpenPBR schema', () => {
     const materials = fixedMaterials(); const data = new MaterialTable(materials, []);
     const bytes = Buffer.from(data.getBufferArray().buffer);
     expect(materialKeys.slice(0, baseline.keys.length)).toEqual(baseline.keys);
-    expect(materialKeys.slice(baseline.keys.length)).toEqual(['thinFilmThicknessMinimum', 'thinFilmMapChannel', 'coatWeightMap', 'coatRoughnessMap', 'fuzzColorMap', 'fuzzRoughnessMap', 'specularWeightMap', 'specularColorMap', 'anisotropyMap', 'specularAnisotropyRotation', 'coatAnisotropyRotation', 'specularAnisotropyModel']);
-    expect(materials.map(getMaterialHashKey)).toEqual(baseline.hashes.map(hash => `${hash}_0_r_$_$_$_$_$_$_$_0_0_openpbr`));
+    expect(materialKeys.slice(baseline.keys.length)).toEqual(['thinFilmThicknessMinimum', 'thinFilmMapChannel', 'coatWeightMap', 'coatRoughnessMap', 'fuzzColorMap', 'fuzzRoughnessMap', 'specularWeightMap', 'specularColorMap', 'anisotropyMap', 'specularAnisotropyRotation', 'coatAnisotropyRotation', 'specularAnisotropyModel', 'coatNormalMap', 'coatNormalScale']);
+    expect(materials.map(getMaterialHashKey)).toEqual(baseline.hashes.map(hash => `${hash}_0_r_$_$_$_$_$_$_$_0_0_openpbr_$_1_1`));
     // C1 migrates only the seven obsolete reserved scalars and stride.
     // Historical keys/hash prefix and every effective field stay fixed.
     expect(bytes).toEqual(Buffer.from(baseline.packedBase64, 'base64'));

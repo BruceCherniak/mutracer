@@ -627,7 +627,7 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
   vec2 uv0 = texelFetch(uvBuffer, i0, 0).xy;
   vec2 uv1 = texelFetch(uvBuffer, i1, 0).xy;
   vec2 uv2 = texelFetch(uvBuffer, i2, 0).xy;
-  #if defined(NUM_DIFFUSE_MAPS) || defined(NUM_NORMAL_MAPS) || defined(NUM_BUMP_MAPS) || defined(NUM_METALLIC_ROUGHNESS_MAPS) || defined(NUM_ROUGHNESS_MAPS) || defined(NUM_METALNESS_MAPS) || defined(NUM_EMISSIVE_MAPS) || defined(NUM_THIN_FILM_MAPS) || defined(NUM_ANISOTROPY_MAPS)
+  #if defined(NUM_DIFFUSE_MAPS) || defined(NUM_NORMAL_MAPS) || defined(NUM_BUMP_MAPS) || defined(NUM_METALLIC_ROUGHNESS_MAPS) || defined(NUM_ROUGHNESS_MAPS) || defined(NUM_METALNESS_MAPS) || defined(NUM_EMISSIVE_MAPS) || defined(NUM_THIN_FILM_MAPS) || defined(NUM_ANISOTROPY_MAPS) || defined(NUM_COAT_NORMAL_MAPS)
     vec2 uv = barycentric.x * uv0 + barycentric.y * uv1 + barycentric.z * uv2;
     vec2 rawUv = uv;
     vec2 secondaryUv0 = texelFetch(uv1Buffer, i0, 0).xy;
@@ -651,9 +651,17 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
     vec2 secondaryUv = vec2(0.0);
   #endif
 
+#ifdef NUM_COAT_NORMAL_MAPS
+  si.coatNormal = normal;
+  float coatNormalIndex = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_LAYER_MAPS).z;
+#endif
   vec4 directionMaterial = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_DIRECTION_NORMAL);
   float coatRotation = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_FILM_TEXTURE).x;
-  if (directionMaterial.x >= 0.0 || directionMaterial.y != 0.0 || coatRotation != 0.0) {
+  if (directionMaterial.x >= 0.0 || directionMaterial.y != 0.0 || coatRotation != 0.0
+#ifdef NUM_COAT_NORMAL_MAPS
+    || coatNormalIndex >= 0.0
+#endif
+  ) {
     vec3 dp1 = tri.p0 - tri.p2;
     vec3 dp2 = tri.p1 - tri.p2;
     vec4 inputTangent = vec4(0.0);
@@ -676,6 +684,23 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
 #endif
     si.directionTangent = directionAxes[0];
     si.directionBitangent = directionAxes[1];
+#ifdef NUM_COAT_NORMAL_MAPS
+    if (coatNormalIndex >= 0.0) {
+      int coatIndex = int(coatNormalIndex);
+      mat2x3 coatAxes = geometryAxes;
+      if (mapUvChannel[coatIndex] > 0.5) {
+        vec2 a = texelFetch(uv1Buffer, i0, 0).xy;
+        vec2 b = texelFetch(uv1Buffer, i1, 0).xy;
+        vec2 c = texelFetch(uv1Buffer, i2, 0).xy;
+        coatAxes = anisotropy_axes(normal, dp1, dp2, a-c, b-c,
+          inputTangent.w == 0.0 ? vec4(0.0) : inputTangent);
+      }
+      vec3 decoded = sampleMap(coatIndex, getMapUvSet(coatIndex, uv, secondaryUv)).rgb * 2.0 - 1.0;
+      vec3 mapped = coatAxes[0] * decoded.x * directionMaterial.z
+        + coatAxes[1] * decoded.y * directionMaterial.w + normal * decoded.z;
+      if (dot(mapped, mapped) > 1e-12) { si.coatNormal = normalize(mapped); }
+    }
+#endif
   }
 
   si.uv = uv;
@@ -912,6 +937,9 @@ ${getBVHTraverseCode(glsl`
     si.faceNormal = normalize(normalTransform * hitFaceNormal);
     si.vertexNormal = normalize(normalTransform * si.vertexNormal);
     si.normal = normalize(normalTransform * si.normal);
+#ifdef NUM_COAT_NORMAL_MAPS
+    si.coatNormal = normalize(normalTransform * si.coatNormal);
+#endif
 #ifdef USE_TANGENT
     if (dot(si.tangent, si.tangent) > 0.0) {
       si.tangent = normalize(mat3(l2w) * si.tangent);
@@ -977,6 +1005,9 @@ ${getBVHTraverseCode(
     si.faceNormal = normalize(normalTransform * hitFaceNormal);
     si.vertexNormal = normalize(normalTransform * si.vertexNormal);
     si.normal = normalize(normalTransform * si.normal);
+#ifdef NUM_COAT_NORMAL_MAPS
+    si.coatNormal = normalize(normalTransform * si.coatNormal);
+#endif
 #ifdef USE_TANGENT
     if (dot(si.tangent, si.tangent) > 0.0) {
       si.tangent = normalize(mat3(l2w) * si.tangent);

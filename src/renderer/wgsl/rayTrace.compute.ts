@@ -25,6 +25,8 @@ export interface RayTraceShaderOptions {
   hasDisplacement: boolean;
   /** Include direction frames only when used, preserving the legacy shader arithmetic otherwise. */
   hasAnisotropyDirections?: boolean;
+  /** Include independent coat normals only when a material uses that slot. */
+  hasCoatNormals?: boolean;
   /** Split glTF BLEND primary hits deterministically instead of stochastically. */
   hasAlpha?: boolean;
   /** Any scene material uses alpha mask or blend. */
@@ -37,28 +39,30 @@ export interface RayTraceShaderOptions {
 export default function rayTraceCompute({
   hasDisplacement,
   hasAnisotropyDirections = false,
+  hasCoatNormals = false,
   hasAlpha = true,
   hasSceneAlpha = true,
   blasLayoutMask = 1
 }: RayTraceShaderOptions) {
+  hasAnisotropyDirections ||= hasCoatNormals;
   const deterministicPrimaryAlpha = hasAlpha;
   const source = /* wgsl */ `
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ hasDisplacement, hasSceneAlpha, hasAnisotropyDirections })}
+${rayTraceCoreWgsl({ hasDisplacement, hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals })}
 
 ${uvProjectionWgsl}
 
-${createMaterialBufferWgsl({ hasSceneAlpha, hasAnisotropyDirections })}
+${createMaterialBufferWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals })}
 
-${createIntersectionWgsl({ hasDisplacement, blasLayoutMask, hasAnisotropyDirections })}
+${createIntersectionWgsl({ hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals })}
 ${randWgsl}
 ${randomWgsl}
 ${envMapWgsl}
 
 ${samplingWgsl}
-${createOpenPbrBsdfWgsl(hasAnisotropyDirections)}
+${createOpenPbrBsdfWgsl(hasAnisotropyDirections, hasCoatNormals)}
 ${sampleLightWgsl}
 
 // Index of the path vertex currently being shaded.
@@ -108,7 +112,7 @@ fn bsdfMISWeight(scatteringPdf: f32, lightPdf: f32) -> f32 {
     max(scatteringPdf + weightedLightPdf, 1e-20);
 }
 
-${createSampleMaterialWgsl(hasAnisotropyDirections)}
+${createSampleMaterialWgsl(hasAnisotropyDirections, hasCoatNormals)}
 ${sampleShadowCatcherWgsl}
 
 // Output

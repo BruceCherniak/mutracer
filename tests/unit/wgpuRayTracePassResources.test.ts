@@ -7,6 +7,7 @@ import Geometry, { Attribute } from '../../src/scene/Geometry';
 import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import MaterialTable from '../../src/renderer/MaterialTable';
+import Texture from '../../src/scene/Texture';
 
 function makeTriangleMesh() {
   return new Mesh(new Geometry({
@@ -90,6 +91,26 @@ describe('WGPURayTracePass output resource lifetime', () => {
     material.coatAnisotropy = 1;
     geometry.tangent = undefined;
     expect(update()).toBe(false);
+  });
+
+  it('selects coat frame modules on enable/disable and retains authored tangents for isotropic coat normals', () => {
+    const pass = Object.create(WGPURayTracePass.prototype) as any;
+    pass._constants = {};
+    const mesh = makeTriangleMesh(), material = mesh.materials[0], geometry = mesh.geometry;
+    geometry.tangent = new Attribute(new Float32Array([1, 0, 0, 1, 0, 0, 1, 0, 0]), 3);
+    const update = () => {
+      pass._updateMaterialConstants([material], new MaterialTable([material], []), geometry);
+      return [pass._constants.USE_COAT_NORMAL_FRAMES, pass._constants.USE_ANISOTROPY_DIRECTIONS, pass._constants.USE_TANGENT];
+    };
+    expect(update()).toEqual([false, false, false]);
+    material.coatNormalMap = new Texture({width: 1, height: 1, data: new Uint8Array(4)});
+    expect(update()).toEqual([false, false, false]); // zero coat cannot change base transport
+    material.coatWeight = .5;
+    expect(update()).toEqual([true, true, true]);
+    geometry.tangent = undefined;
+    expect(update()).toEqual([true, true, false]); // UV/fallback frame still works
+    material.coatNormalMap = undefined;
+    expect(update()).toEqual([false, false, false]);
   });
 
   it('packs and resets sample counts without touching the sequence seed', () => {

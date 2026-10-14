@@ -28,10 +28,10 @@ describe('OpenPBR layer texture inputs', () => {
     const schemaNames = materialTextureKeys.filter(name => name !== 'displacementBumpStrength');
     expect([...schemaNames].sort()).toEqual([...MATERIAL_TEXTURE_NAMES].sort());
     expect(MATERIAL_TEXTURE_SLOTS.map(slot => slot.property)).toEqual([...MATERIAL_TEXTURE_NAMES]);
-    expect(new Set(MATERIAL_TEXTURE_SLOTS.map(slot => slot.property)).size).toBe(17);
+    expect(new Set(MATERIAL_TEXTURE_SLOTS.map(slot => slot.property)).size).toBe(18);
     expect(MATERIAL_TEXTURE_SLOTS.slice(10).map(slot => [slot.channel, slot.colorSpace, slot.featureBit])).toEqual([
       ['r', 'linear', 2 ** 15], ['g', 'linear', 2 ** 16], ['rgb', 'srgb', 2 ** 18],
-      ['a', 'linear', 2 ** 19], ['a', 'linear', 2 ** 20], ['rgb', 'srgb', 2 ** 21], ['rg/b', 'linear', 2 ** 22]
+      ['a', 'linear', 2 ** 19], ['a', 'linear', 2 ** 20], ['rgb', 'srgb', 2 ** 21], ['rg/b', 'linear', 2 ** 22], ['rgb', 'linear', 2 ** 17]
     ]);
   });
   it('appends atlas indices with sharing, UV metadata and missing sentinels', () => {
@@ -39,7 +39,7 @@ describe('OpenPBR layer texture inputs', () => {
     textures[10].uvChannel = 1; textures[10].uvScale = [2, 3]; textures[10].uvOffset = [.1, .2];
     const material = new Material(Object.fromEntries(MATERIAL_TEXTURE_NAMES.map((name, i) => [name, textures[i]])));
     const table = new MaterialTable([material, new Material({coatWeightMap: textures[10], specularColorMap: textures[10]}), new Material()], []);
-    expect(table.defines.NUM_MAPS).toBe(17);
+    expect(table.defines.NUM_MAPS).toBe(18);
     const packed = table.getBufferArray();
     offsets.forEach((offset, i) => {
       expect(packed[offset]).toBe(10 + i);

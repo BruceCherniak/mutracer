@@ -27,7 +27,8 @@ OpenPBR shader chunks are adapted from
 `9edf806740d2140846d9bef76e4342fc458e2ef5`.
 
 The F82 saturation, coat passage absorption, directional-energy partition,
-base albedo, internal-reflection darkening and coat/thin-film IOR resolution
+base albedo, internal-reflection darkening, independent coat-frame layering
+and coat/thin-film IOR resolution
 helpers additionally adapt
 `impl/openpbr_lobe_utils.h`, `impl/openpbr_coating_lobe.h`, and
 `impl/openpbr_bsdf.h` at commit `c91aad1d1ce1693e803f039d7c92c2965c4eb013`.
