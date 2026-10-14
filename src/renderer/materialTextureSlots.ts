@@ -118,6 +118,13 @@ const slots = [
     define: 'NUM_SPECULAR_COLOR_MAPS', feature: 'USE_SPECULAR_COLOR_MAPS', featureBit: 2 ** 21,
     sampling: 'multiply'
   },
+  {
+    property: 'anisotropyMap', index: 'anisotropyMapIndex',
+    target: 'specularAnisotropy/direction', channel: 'rg/b',
+    colorSpace: 'linear', operation: 'custom',
+    define: 'NUM_ANISOTROPY_MAPS', feature: 'USE_ANISOTROPY_MAPS', featureBit: 2 ** 22,
+    sampling: 'manual'
+  },
 ] as const;
 
 // A missing or extra descriptor fails type checking in both directions.

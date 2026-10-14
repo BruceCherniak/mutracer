@@ -63,12 +63,13 @@ export class THREEDeformation {
     const count = geometry.attributes.position.count;
     this.position = new Float32Array(count * 3);
     if (geometry.attributes.normal) this.normal = new Float32Array(count * 3);
-    if (geometry.attributes.tangent) this.tangent = new Float32Array(count * 3);
+    if (geometry.attributes.tangent) this.tangent = new Float32Array(count * Math.min(4, geometry.attributes.tangent.itemSize));
   }
 
   matches(geometry: THREE.BufferGeometry) {
     return this.geometry === geometry && this.position.length === geometry.attributes.position.count * 3 &&
-      !!this.normal === !!geometry.attributes.normal && !!this.tangent === !!geometry.attributes.tangent;
+      !!this.normal === !!geometry.attributes.normal && !!this.tangent === !!geometry.attributes.tangent &&
+      (!this.tangent || this.tangent.length === geometry.attributes.position.count * Math.min(4, geometry.attributes.tangent.itemSize));
   }
 
   update(mesh: THREE.Mesh) {
@@ -130,7 +131,7 @@ export class THREEDeformation {
         this._vector[component] = value;
       }
     };
-    const write = (target: Float32Array, vertex: number, position: boolean) => {
+    const write = (target: Float32Array, vertex: number, position: boolean, size = 3) => {
       let x = this._vector[0], y = this._vector[1], z = this._vector[2];
       if (skinned.isSkinnedMesh) {
         const matrix = this._skin;
@@ -140,7 +141,7 @@ export class THREEDeformation {
         x = tx; y = ty; z = tz;
         if (!position) { const length = Math.hypot(x,y,z); if (length) { x /= length; y /= length; z /= length; } }
       }
-      target[vertex * 3] = x; target[vertex * 3 + 1] = y; target[vertex * 3 + 2] = z;
+      target[vertex * size] = x; target[vertex * size + 1] = y; target[vertex * size + 2] = z;
     };
     for (let vertex = 0; vertex < this.position.length / 3; vertex++) {
       if (skinned.isSkinnedMesh) {
@@ -156,7 +157,9 @@ export class THREEDeformation {
       if (this.normal) { morphVector(normal!, normalMorphs, vertex); write(this.normal, vertex, false); }
       if (this.tangent) {
         for (let component = 0; component < 3; component++) this._vector[component] = read(tangent!, vertex, component);
-        write(this.tangent, vertex, false);
+        const size = this.tangent.length / (this.position.length / 3);
+        write(this.tangent, vertex, false, size);
+        if (size === 4) this.tangent[vertex * 4 + 3] = read(tangent!, vertex, 3);
       }
     }
     this._next = this._accepted; this._accepted = next; this._initialized = true;

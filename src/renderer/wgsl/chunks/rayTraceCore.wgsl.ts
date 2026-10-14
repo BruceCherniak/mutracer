@@ -10,9 +10,11 @@ import { USE_TFDM_DISPLACEMENT } from '../../MaterialTable.js';
 
 export default function rayTraceCore({
   hasDisplacement,
+  hasAnisotropyDirections = true,
   hasSceneAlpha = true
 }: {
   hasDisplacement: boolean;
+  hasAnisotropyDirections?: boolean;
   hasSceneAlpha?: boolean;
 }) {
   return /*wgsl*/ `
@@ -49,6 +51,12 @@ struct SurfaceInteraction {
   hit: bool,
 
   tangent: vec3f,
+${hasAnisotropyDirections ? /* wgsl */ `
+  directionTangent: vec3f,
+  directionBitangent: vec3f,
+  geometryTangent: vec3f,
+  geometryBitangent: vec3f,
+` : /* wgsl */ ``}
   uv: vec2f,
   uv1: vec2f,
 
@@ -106,6 +114,17 @@ struct OpenPbrResolvedMaterial {
   coatColor: vec3f,
   coatRoughness: f32,
   coatAnisotropy: f32,
+${hasAnisotropyDirections ? /* wgsl */ `
+  anisotropyDirection: vec2f,
+  anisotropyDirectionEnabled: bool,
+  coatAnisotropyRotation: f32,
+${hasAnisotropyDirections ? /* wgsl */ `
+  directionTangent: vec3f,
+  directionBitangent: vec3f,
+  geometryTangent: vec3f,
+  geometryBitangent: vec3f,
+` : /* wgsl */ ``}
+` : /* wgsl */ ``}
   coatIor: f32,
   coatDarkening: f32,
 
@@ -242,7 +261,7 @@ struct RayTraceUniform {
 // Buffers
 @group(0) @binding(0) var<storage, read> bvhBuffer: array<vec4f>;
 @group(0) @binding(1) var<storage, read> instancesBuffer: array<vec4f>;
-@group(0) @binding(2) var<storage, read> attrBuffers: array<vec3f>;
+@group(0) @binding(2) var<storage, read> attrBuffers: array<${hasAnisotropyDirections ? /* wgsl */ `vec4f` : /* wgsl */ `vec3f`}>;
 @group(0) @binding(3) var<storage, read> materialsBuffer: array<MaterialBuffer>;
 
 // Textures

@@ -49,7 +49,7 @@ export interface GeometryInit {
   indices?: Attribute<Uint16Array | Uint32Array>;
   /** Vertex normals, itemSize 3. Default: generated smooth area-weighted normals. */
   normal?: Attribute<Float32Array>;
-  /** Vertex tangents. Default undefined. */
+  /** Vertex tangents (XYZ, optional W handedness). Default undefined. */
   tangent?: Attribute<Float32Array>;
   /** Primary UV coordinates. Default undefined. */
   uv?: Attribute<Float32Array>;
@@ -77,7 +77,7 @@ export default class Geometry {
   position: Attribute<Float32Array>;
   /** Vertex normals; supplied or generated at construction. */
   normal: Attribute<Float32Array>;
-  /** Optional vertex tangents. Default undefined. */
+  /** Optional vertex tangents (XYZ, optional W handedness). Default undefined. */
   tangent?: Attribute<Float32Array>;
   /** Optional primary texture coordinates. Default undefined. */
   uv?: Attribute<Float32Array>;

@@ -51,6 +51,10 @@ struct SurfaceInteraction {
 #ifdef USE_TANGENT
   vec3 tangent;
 #endif
+  vec3 directionTangent;
+  vec3 directionBitangent;
+  vec3 geometryTangent;
+  vec3 geometryBitangent;
   vec3 faceNormal; // normal of the triangle
 
   bool isTransparency;
@@ -111,6 +115,13 @@ struct OpenPbrResolvedMaterial {
   vec3 coatColor;
   float coatRoughness;
   float coatAnisotropy;
+  vec2 anisotropyDirection;
+  bool anisotropyDirectionEnabled;
+  float coatAnisotropyRotation;
+  vec3 directionTangent;
+  vec3 directionBitangent;
+  vec3 geometryTangent;
+  vec3 geometryBitangent;
   float coatIor;
   float coatDarkening;
 

@@ -39,7 +39,7 @@ describe('internal material texture slots', () => {
       HAS_THIN_FILM: 1024, HAS_COAT: 2048, HAS_FUZZ: 4096, HAS_SUBSURFACE: 8192, HAS_SHADOW_CATCHER: 16384,
       USE_COAT_WEIGHT_MAPS: 32768, USE_COAT_ROUGHNESS_MAPS: 65536,
       USE_FUZZ_COLOR_MAPS: 262144, USE_FUZZ_ROUGHNESS_MAPS: 524288,
-      USE_SPECULAR_WEIGHT_MAPS: 1048576, USE_SPECULAR_COLOR_MAPS: 2097152
+      USE_SPECULAR_WEIGHT_MAPS: 1048576, USE_SPECULAR_COLOR_MAPS: 2097152, USE_ANISOTROPY_MAPS: 4194304
     });
     const material = new Material({roughnessMap: new Texture({width:1,height:1,data:new Uint8Array(4)})});
     expect(wgpuSceneFeatureFlags(materialTextureFeatures(new MaterialTable([material], []).defines))).toBe(16);

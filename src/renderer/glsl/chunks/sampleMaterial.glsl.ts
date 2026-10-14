@@ -180,6 +180,10 @@ void SampleMaterial(inout SurfaceInteraction si, OpenPbrResolvedMaterial mat, in
 #ifdef USE_TANGENT
     surfaceTangent = si.tangent;
 #endif
+    mat.directionTangent = si.directionTangent;
+    mat.directionBitangent = si.directionBitangent;
+    mat.geometryTangent = si.geometryTangent;
+    mat.geometryBitangent = si.geometryBitangent;
     prepared = openpbr_prepare(surfaceTangent, mat, -path.ray.d, ffnormal);
     path.li += DirectLight(si, mat, prepared, path, ffnormal, true) * path.beta;
     // Sample BSDF for color and outgoing direction

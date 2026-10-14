@@ -143,12 +143,12 @@ export const MATERIAL_LAYOUT = [
   ] },
   // Reserve the approved direction/normal inputs for C1 steps two and three.
   { name: 'DIRECTION_NORMAL', fields: [
-    field('anisotropyMapIndex', 'anisotropyMapIndex', 'f32', true),
-    field('specularAnisotropyRotation', null, 'f32', true),
+    field('anisotropyMapIndex', 'anisotropyMapIndex', 'f32'),
+    field('specularAnisotropyRotation', 'specularAnisotropyRotation', 'f32'),
     field('coatNormalScale', 'coatNormalScale', 'vec2f', true)
   ] },
   { name: 'FILM_TEXTURE', fields: [
-    field('coatAnisotropyRotation', null, 'f32', true),
+    field('coatAnisotropyRotation', 'coatAnisotropyRotation', 'f32'),
     field('specularAnisotropyModel', null, 'f32', true),
     field('thinFilmThicknessMinimum', 'thinFilmThicknessMinimum', 'f32'),
     field('thinFilmMapChannel', 'thinFilmMapChannel', 'f32')

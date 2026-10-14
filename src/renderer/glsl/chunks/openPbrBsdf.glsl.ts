@@ -38,6 +38,8 @@ struct OpenPbrBasis {
 struct OpenPbrPreparedBsdf {
     OpenPbrResolvedMaterial material;
     OpenPbrBasis basis;
+    OpenPbrBasis coatBasis;
+    bool directionFrames;
     vec3 viewLocal;
     vec3 diffuseColor;
     float specularEtaTOverEtaI;
@@ -929,6 +931,21 @@ vec3 openpbr_coat_base_scale(OpenPbrPreparedBsdf prepared, float lightCosine) {
     return prepared.coatBaseScale * openpbr_coat_passage(prepared.material, lightCosine);
 }
 
+
+OpenPbrBasis openpbr_direction_basis(OpenPbrBasis fallback, vec3 tangent, vec3 bitangent, vec2 direction) {
+    vec3 t = tangent - fallback.normal * dot(fallback.normal, tangent);
+    if (dot(t, t) < 1e-8) { t = fallback.tangent; }
+    t = normalize(t);
+    vec3 b = cross(fallback.normal, t) * (dot(cross(fallback.normal, t), bitangent) < 0.0 ? -1.0 : 1.0);
+    t = t * direction.x + b * direction.y;
+    if (dot(t, t) < 1e-8) { return fallback; }
+    OpenPbrBasis basis = fallback;
+    basis.tangent = normalize(t);
+    basis.bitangent = normalize(cross(basis.normal, basis.tangent));
+    basis.tangent = normalize(cross(basis.bitangent, basis.normal));
+    return basis;
+}
+
 OpenPbrPreparedBsdf openpbr_prepare(
     vec3 tangent,
     OpenPbrResolvedMaterial material,
@@ -942,6 +959,16 @@ OpenPbrPreparedBsdf openpbr_prepare(
         normal,
         max(material.specularAnisotropy, material.coatAnisotropy)
     );
+    prepared.coatBasis = prepared.basis;
+    prepared.directionFrames = false;
+    if (material.specularAnisotropy > 0.0 && material.anisotropyDirectionEnabled) {
+        prepared.basis = openpbr_direction_basis(prepared.basis, material.directionTangent, material.directionBitangent, material.anisotropyDirection);
+        prepared.directionFrames = true;
+    }
+    if (material.coatAnisotropy > 0.0 && material.coatAnisotropyRotation != 0.0) {
+        prepared.coatBasis = openpbr_direction_basis(prepared.coatBasis, material.geometryTangent, material.geometryBitangent, vec2(cos(material.coatAnisotropyRotation), sin(material.coatAnisotropyRotation)));
+        prepared.directionFrames = true;
+    }
     prepared.viewLocal = openpbr_to_local(prepared.basis, viewDirection);
     prepared.diffuseColor = material.baseColor;
 
@@ -1380,8 +1407,20 @@ vec3 openpbr_eval_prepared(
     }
 
     if (reflection && prepared.weights[OPENPBR_LOBE_COAT] > 0.0) {
+        vec3 coatView = viewLocal;
+        vec3 coatLight = lightLocal;
+        vec3 coatHalf = halfVector;
+        float coatViewHalf = viewHalf;
+        if (prepared.directionFrames) {
+            coatView = openpbr_to_local(prepared.coatBasis, openpbr_to_world(prepared.basis, viewLocal));
+            coatLight = openpbr_to_local(prepared.coatBasis, lightDirection);
+            coatHalf = normalize(coatLight + coatView);
+            if (coatHalf.z < 0.0) { coatHalf = -coatHalf; }
+            coatViewHalf = abs(dot(coatView, coatHalf));
+        }
+
         vec3 coatFresnel = vec3(openpbr_dielectric_fresnel(
-            viewHalf,
+            coatViewHalf,
             1.0 / material.coatIor
         ));
         OpenPbrResolvedMaterial coatMaterial = material;
@@ -1390,9 +1429,9 @@ vec3 openpbr_eval_prepared(
         coatMaterial.alphaY = coatAlpha.y;
         response += prepared.weights[OPENPBR_LOBE_COAT] * openpbr_eval_microfacet_reflection(
             coatMaterial,
-            viewLocal,
-            lightLocal,
-            halfVector,
+            coatView,
+            coatLight,
+            coatHalf,
             coatFresnel,
             lobePdf
         );
@@ -1499,8 +1538,10 @@ vec3 openpbr_sample_prepared(
         lightLocal = sampling_cosine_hemisphere(vec2(randomX, randomY));
     }
     else if (lobeSample < cdf[OPENPBR_LOBE_COAT]) {
+        vec3 coatView = viewLocal;
+        if (prepared.directionFrames) { coatView = openpbr_to_local(prepared.coatBasis, openpbr_to_world(prepared.basis, viewLocal)); }
         vec3 halfVector = sampling_ggx_visible_normal(
-            viewLocal,
+            coatView,
             // The VNDF must use the same alpha as the evaluated coat PDF.
             openpbr_roughness_to_alpha(material.coatRoughness, material.coatAnisotropy),
             vec2(randomX, randomY)
@@ -1508,7 +1549,8 @@ vec3 openpbr_sample_prepared(
         if (halfVector.z < 0.0) {
             halfVector = -halfVector;
         }
-        lightLocal = normalize(reflect(-viewLocal, halfVector));
+        lightLocal = normalize(reflect(-coatView, halfVector));
+        if (prepared.directionFrames) { lightLocal = openpbr_to_local(prepared.basis, openpbr_to_world(prepared.coatBasis, lightLocal)); }
     }
     else if (lobeSample < cdf[OPENPBR_LOBE_SPECULAR]) {
         bool isMetal = lobeSample < cdf[OPENPBR_LOBE_METAL];

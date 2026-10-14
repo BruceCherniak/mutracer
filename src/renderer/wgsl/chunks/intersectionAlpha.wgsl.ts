@@ -9,7 +9,8 @@ import {
  * candidate filtering. The caller supplies local-space hit data so UV
  * projection and stochastic glTF BLEND semantics stay backend-independent.
  */
-const intersectionAlphaWgsl = /* wgsl */ `
+export function createIntersectionAlphaWgsl(hasAnisotropyDirections = true) {
+  return /* wgsl */ `
 fn intersectionAlphaPasses(
   initialMaterialIndex: i32,
   index: vec3i,
@@ -18,9 +19,9 @@ fn intersectionAlphaPasses(
   hitNormal: vec3f
 ) -> bool {
   var materialIndex = initialMaterialIndex;
-  let m0 = vec3i(attrBuffers[index.x * ATTR_STRIDE + MATERIALINDEX_OFF]);
-  let m1 = vec3i(attrBuffers[index.y * ATTR_STRIDE + MATERIALINDEX_OFF]);
-  let m2 = vec3i(attrBuffers[index.z * ATTR_STRIDE + MATERIALINDEX_OFF]);
+  let m0 = vec3i(attrBuffers[index.x * ATTR_STRIDE + MATERIALINDEX_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
+  let m1 = vec3i(attrBuffers[index.y * ATTR_STRIDE + MATERIALINDEX_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
+  let m2 = vec3i(attrBuffers[index.z * ATTR_STRIDE + MATERIALINDEX_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
 
   if (m0.x > 0 || m1.x > 0 || m2.x > 0) {
     materialIndex = randomPickMaterial(m0, m1, m2, hitBarycentric);
@@ -83,4 +84,6 @@ fn intersectionAlphaPasses(
 }
 `;
 
-export default intersectionAlphaWgsl;
+
+}
+export default createIntersectionAlphaWgsl();

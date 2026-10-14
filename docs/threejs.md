@@ -255,3 +255,5 @@ and require a [full mesh update](./updates.md#full-mesh-updates).
 the last converted scene usable. Updating a disposed sync throws. RenderLoop does
 not dispose supplied syncs or renders; see [ownership](./progressive-rendering.md#options-and-ownership).
 
+
+Native `mutracerOpenPBR` metadata can set `anisotropyMap` (a MuTracer or Three.js Texture, or null to clear), `specularAnisotropyRotation` and `coatAnisotropyRotation` (radians, default zero). Imported geometry preserves a tangent's optional W handedness.

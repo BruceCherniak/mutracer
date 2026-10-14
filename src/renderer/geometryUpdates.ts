@@ -2,6 +2,7 @@ import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
 import { writeMaterialIndices } from './materialIndices.js';
 import { isDeformationUpdate } from '../scene/geometryChanges.js';
 import Geometry from '../scene/Geometry.js';
+import { hasGeneratedVertexTangents } from '../util/geometry.js';
 import { buildBLAS, refitBLAS, type FlattendBVH } from './bvhAccel.js';
 import { getBvhBounds, updateMeshInstances } from './prepareMeshBVH.js';
 import Mesh from '../scene/Mesh.js';
@@ -44,7 +45,12 @@ function copyRegion(source: Geometry, merged: Geometry, region: Prepared['geomet
     const target = merged[name]; if (!target) continue;
     const attribute = name === 'uv1' ? source.uv1 ?? source.uv : source[name];
     const offset = vertexOffset * target.itemSize;
-    if (attribute) target.array.set(attribute.array, offset);
+    if (attribute && attribute.itemSize !== target.itemSize) {
+      for (let v = 0; v < count; v++) for (let c = 0; c < target.itemSize; c++) {
+        target.array[offset + v * target.itemSize + c] = c < attribute.itemSize ? attribute.array[v * attribute.itemSize + c] : name === 'tangent' && !hasGeneratedVertexTangents(source) ? 2 : 0;
+      }
+    }
+    else if (attribute) target.array.set(attribute.array, offset);
     else target.array.fill(0, offset, offset + count * target.itemSize);
   }
   if (!topologyChanged) return;

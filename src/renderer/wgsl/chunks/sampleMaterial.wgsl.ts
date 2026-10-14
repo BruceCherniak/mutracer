@@ -1,7 +1,8 @@
 // Next-event estimation with resampled importance sampling over the light
 // candidates, followed by BSDF (or phase function) sampling, as described in
 // http://www.pbr-book.org/3ed-2018/Light_Transport_I_Surface_Reflection/Direct_Lighting.html#EstimatingtheDirectLightingIntegral
-export default /*wgsl*/ `
+export function createSampleMaterialWgsl(hasAnisotropyDirections = true) {
+  return /* wgsl */ `
 
 struct ShadowRayWork {
   ray: Ray,
@@ -306,6 +307,12 @@ fn SampleMaterial(
   // before NEE, then the continuation direction is sampled.
   var prepared: OpenPbrPreparedBsdf;
   if (!mediumSampled) {
+${hasAnisotropyDirections ? /* wgsl */ `
+    (*ma).directionTangent = (*si).directionTangent;
+    (*ma).directionBitangent = (*si).directionBitangent;
+    (*ma).geometryTangent = (*si).geometryTangent;
+    (*ma).geometryBitangent = (*si).geometryBitangent;
+` : /* wgsl */ ``}
     prepared = openpbr_prepare((*si).tangent, *ma, -(*path).ray.d, ffnormal);
   }
   DirectLight(si, *ma, prepared, path, ffnormal, !mediumSampled);
@@ -396,3 +403,7 @@ fn SampleMaterial(
   }
 }
 `;
+
+}
+
+export default createSampleMaterialWgsl();

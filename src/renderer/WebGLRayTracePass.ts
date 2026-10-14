@@ -561,7 +561,7 @@ class WebGLRayTracePass {
       mergedGeometry.color &&
         setDataTexture(this._colorBufferTex, mergedGeometry.color.array, 3);
       mergedGeometry.tangent &&
-        setDataTexture(this._tangentBufferTex, mergedGeometry.tangent.array, 3);
+        setDataTexture(this._tangentBufferTex, mergedGeometry.tangent.array, 4);
       mergedGeometry.uv &&
         setDataTexture(this._uvBufferTex, mergedGeometry.uv.array, 2);
       mergedGeometry.uv1 &&

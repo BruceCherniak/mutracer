@@ -99,6 +99,9 @@ export const openPbrSchema = [
   {key: 'fuzzRoughnessMap', type: 'texture', default: undefined, category: 'texture'},
   {key: 'specularWeightMap', type: 'texture', default: undefined, category: 'texture'},
   {key: 'specularColorMap', type: 'texture', default: undefined, category: 'texture'},
+  {key: 'anisotropyMap', type: 'texture', default: undefined, category: 'texture'},
+  {key: 'specularAnisotropyRotation', type: 'float', default: 0, category: 'param'},
+  {key: 'coatAnisotropyRotation', type: 'float', default: 0, category: 'param'},
 ] as const satisfies readonly Field[];
 type SchemaTextureName = Extract<typeof openPbrSchema[number], {type: 'texture'}>['key'];
 const textureNamesMatch: [Exclude<MaterialTextureName, SchemaTextureName> | Exclude<SchemaTextureName, MaterialTextureName>] extends [never] ? true : never = true;

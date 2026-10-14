@@ -218,6 +218,12 @@ export function generateCreasedVertexNormals(
   generateVertexNormals(geometry);
 }
 
+const generatedVertexTangents = new WeakSet<Attribute<Float32Array>>();
+/** @internal Distinguishes derivative fallback from an authored XYZ tangent. */
+export function hasGeneratedVertexTangents(geometry: Geometry) {
+  return !!geometry.tangent && generatedVertexTangents.has(geometry.tangent);
+}
+
 /** Generate a UV-aligned tangent for meshes that do not provide one. */
 export function generateVertexTangents(geometry: Geometry) {
   if (!geometry.position || !geometry.uv || !geometry.normal) return;
@@ -226,6 +232,7 @@ export function generateVertexTangents(geometry: Geometry) {
   const tangents = new Float32Array(count * 3);
   computeVertexTangents(geometry, new Float32Array(count * 3), tangents);
   geometry.tangent = new Attribute(tangents, 3);
+  generatedVertexTangents.add(geometry.tangent);
 }
 
 const dynamicTangentScratch = new WeakMap<Geometry, Float32Array>();
@@ -240,6 +247,7 @@ export function updateDynamicTangents(geometry: Geometry) {
   }
   if (geometry.tangent?.array.length !== count * 3) geometry.tangent = new Attribute(new Float32Array(count * 3), 3);
   computeVertexTangents(geometry, accumulated, geometry.tangent.array);
+  generatedVertexTangents.add(geometry.tangent);
 }
 
 function computeVertexTangents(geometry: Geometry, accumulated: Float32Array, tangents: Float32Array) {

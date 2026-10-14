@@ -370,3 +370,5 @@ BVH caches, light packing helpers and material-weight packing are renderer inter
 `render.getOutputTexture(kind)` borrows native HDR or the latest display image;
 `display.addPostProcess(pass)` returns unregister and runs on every present/export.
 Both are WebGPU-only. See [formats, lifecycle and overlay example](./post-processing.md).
+
+Anisotropy direction options: `anisotropyMap` (default `undefined`) reads linear RG as a tangent direction and B as a multiplier for base specular strength. `specularAnisotropyRotation` (default `0`) rotates that direction counter-clockwise in radians; `coatAnisotropyRotation` (default `0`) rotates the coat relative to the geometry tangent. See [materials](./materials.md#anisotropy-directions) for frame and fallback conventions.

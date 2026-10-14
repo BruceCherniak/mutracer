@@ -9,7 +9,7 @@ import {
 } from '../../MaterialTable.js';
 import tfdm_displacementWgsl from './tfdm_displacement.wgsl.js';
 import pdm_displacementWgsl from './pdm_displacement.wgsl.js';
-import intersectionAlphaWgsl from './intersectionAlpha.wgsl.js';
+import { createIntersectionAlphaWgsl } from './intersectionAlpha.wgsl.js';
 
 const displacementWgsl = USE_TFDM_DISPLACEMENT
   ? tfdm_displacementWgsl
@@ -118,16 +118,16 @@ function getTFDMDisplacmentCode(anyHit: boolean) {
 `;
 }
 
-const displacementIntersectCode = function (anyHit: boolean) {
+const displacementIntersectCode = function (anyHit: boolean, hasAnisotropyDirections: boolean) {
   return /* wgsl */ `
 
 let hScale = insData.w;
 let minMaxH = bitcast<i32>(r3.w);
 if (abs(hScale) > 0.0 && minMaxH > 0) {
   // Scale normal by displacement scale
-  let n0 = normalize(attrBuffers[index.x * ATTR_STRIDE + NORMAL_OFF]);
-  let n1 = normalize(attrBuffers[index.y * ATTR_STRIDE + NORMAL_OFF]);
-  let n2 = normalize(attrBuffers[index.z * ATTR_STRIDE + NORMAL_OFF]);
+  let n0 = normalize(attrBuffers[index.x * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
+  let n1 = normalize(attrBuffers[index.y * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
+  let n2 = normalize(attrBuffers[index.z * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
 
   let minH = f32(minMaxH >> 8) / 255.0;
   let maxH = f32(minMaxH & 0xff) / 255.0;
@@ -285,6 +285,7 @@ function getBVHTraverseCode(
   hasDisplacement: boolean,
   anyHit: boolean,
   blasLayoutMask: number,
+  hasAnisotropyDirections: boolean,
   skipTriangleCode = ''
 ) {
   const intersectTriangles = /* wgsl */ `
@@ -300,14 +301,14 @@ function getBVHTraverseCode(
         let r3 = bvhBuffer[triangleIndex];
         let index = bitcast<vec3i>(r3.xyz) + vertexOffset;
         var tri = Triangle(
-          attrBuffers[index.x * ATTR_STRIDE + POSITION_OFF],
-          attrBuffers[index.y * ATTR_STRIDE + POSITION_OFF],
-          attrBuffers[index.z * ATTR_STRIDE + POSITION_OFF]
+          attrBuffers[index.x * ATTR_STRIDE + POSITION_OFF]${hasAnisotropyDirections ? '.xyz' : ''},
+          attrBuffers[index.y * ATTR_STRIDE + POSITION_OFF]${hasAnisotropyDirections ? '.xyz' : ''},
+          attrBuffers[index.z * ATTR_STRIDE + POSITION_OFF]${hasAnisotropyDirections ? '.xyz' : ''}
         );
         var isHitCurrent = false;
 
         ${hasDisplacement
-          ? displacementIntersectCode(anyHit)
+          ? displacementIntersectCode(anyHit, hasAnisotropyDirections)
           : flatIntersectCode()}
         if (isHitCurrent) {
           ${handleHitCode}
@@ -692,9 +693,11 @@ while (tlasTop >= 0) {
 }
 export default function getIntersectCode({
   hasDisplacement,
+  hasAnisotropyDirections = true,
   blasLayoutMask = 1
 }: {
   hasDisplacement: boolean;
+  hasAnisotropyDirections?: boolean;
   blasLayoutMask?: number;
 }) {
   return /*wgsl*/ `
@@ -954,9 +957,9 @@ fn resolveSurfaceMaterialIndex(
   index: vec3i,
   bary: vec3f
 ) -> i32 {
-  let m0 = vec3i(attrBuffers[index.x * ATTR_STRIDE + MATERIALINDEX_OFF]);
-  let m1 = vec3i(attrBuffers[index.y * ATTR_STRIDE + MATERIALINDEX_OFF]);
-  let m2 = vec3i(attrBuffers[index.z * ATTR_STRIDE + MATERIALINDEX_OFF]);
+  let m0 = vec3i(attrBuffers[index.x * ATTR_STRIDE + MATERIALINDEX_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
+  let m1 = vec3i(attrBuffers[index.y * ATTR_STRIDE + MATERIALINDEX_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
+  let m2 = vec3i(attrBuffers[index.z * ATTR_STRIDE + MATERIALINDEX_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
   if (m0.x > 0 || m1.x > 0 || m2.x > 0) {
     return randomPickMaterial(m0, m1, m2, bary);
   }
@@ -964,6 +967,33 @@ fn resolveSurfaceMaterialIndex(
 }
 
 
+
+${hasAnisotropyDirections ? /* wgsl */ `
+fn anisotropy_axes(normal: vec3f, dp1: vec3f, dp2: vec3f, duv1: vec2f, duv2: vec2f, input: vec4f) -> mat2x3f {
+  let determinant = duv1.x * duv2.y - duv1.y * duv2.x;
+  var t = input.xyz;
+  var b = vec3f(0.0);
+  // Internal W=2 marks an authored XYZ tangent whose sign is derived from UVs.
+  var sign = select(input.w, 0.0, abs(input.w) > 1.5);
+  if (abs(determinant) > 1e-12) {
+    let dt = (dp1 * duv2.y - dp2 * duv1.y) / determinant;
+    let db = (dp2 * duv1.x - dp1 * duv2.x) / determinant;
+    if (dot(t, t) < 1e-8) { t = dt; }
+    if (sign == 0.0) { sign = select(1.0, -1.0, dot(cross(normal, dt), db) < 0.0); }
+  }
+  t -= normal * dot(normal, t);
+  if (dot(t, t) < 1e-8) {
+    let signZ = select(-1.0, 1.0, normal.z >= 0.0);
+    let factor = -1.0 / (signZ + normal.z);
+    let xy = normal.x * normal.y * factor;
+    t = vec3f(1.0 + signZ * normal.x * normal.x * factor, signZ * xy, -signZ * normal.x);
+    b = vec3f(xy, signZ + normal.y * normal.y * factor, -normal.y);
+  }
+  else { t = normalize(t); b = normalize(cross(normal, t)); }
+  return mat2x3f(t, b * select(1.0, -1.0, sign < 0.0));
+}
+
+` : /* wgsl */ ``}
 fn fetchAttributes(
   si: ptr<function, SurfaceInteraction>,
   tri: Triangle,
@@ -990,9 +1020,9 @@ fn fetchAttributes(
   // Otherwise use the normal from the microtriangle
   // The exception is spherical projection, we need the original normal to project the uv. Or the case like earth has wrong normal.
   if (!isHitMicroTriangle || isSphericalProj) {
-    n0 = attrBuffers[i0 * ATTR_STRIDE + NORMAL_OFF];
-    n1 = attrBuffers[i1 * ATTR_STRIDE + NORMAL_OFF];
-    n2 = attrBuffers[i2 * ATTR_STRIDE + NORMAL_OFF];
+    n0 = attrBuffers[i0 * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''};
+    n1 = attrBuffers[i1 * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''};
+    n2 = attrBuffers[i2 * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''};
     normalForSphericalProj = normalize(bary.x * n0 + bary.y * n1 + bary.z * n2);
     if (!isHitMicroTriangle) {
       normal = normalForSphericalProj;
@@ -1022,9 +1052,9 @@ fn fetchAttributes(
   }
 
   if (USE_TANGENT) {
-    let t0 = attrBuffers[i0 * ATTR_STRIDE + TANGENT_OFF];
-    let t1 = attrBuffers[i1 * ATTR_STRIDE + TANGENT_OFF];
-    let t2 = attrBuffers[i2 * ATTR_STRIDE + TANGENT_OFF];
+    let t0 = attrBuffers[i0 * ATTR_STRIDE + TANGENT_OFF]${hasAnisotropyDirections ? '.xyz' : ''};
+    let t1 = attrBuffers[i1 * ATTR_STRIDE + TANGENT_OFF]${hasAnisotropyDirections ? '.xyz' : ''};
+    let t2 = attrBuffers[i2 * ATTR_STRIDE + TANGENT_OFF]${hasAnisotropyDirections ? '.xyz' : ''};
     (*si).tangent = normalize(bary.x * t0 + bary.y * t1 + bary.z * t2);
   }
 
@@ -1053,6 +1083,32 @@ fn fetchAttributes(
     uv = fract(uv);
   }
 
+${hasAnisotropyDirections ? /* wgsl */ `
+  let directionMaterial = materialsBuffer[(*si).materialIndex];
+  if (directionMaterial.anisotropyMapIndex >= 0.0 || directionMaterial.specularAnisotropyRotation != 0.0 || directionMaterial.coatAnisotropyRotation != 0.0) {
+    let dp1 = tri.p0 - tri.p2;
+    let dp2 = tri.p1 - tri.p2;
+    var inputTangent = vec4f(0.0);
+    if (USE_TANGENT) {
+      inputTangent = bary.x * attrBuffers[i0 * ATTR_STRIDE + TANGENT_OFF]
+        + bary.y * attrBuffers[i1 * ATTR_STRIDE + TANGENT_OFF]
+        + bary.z * attrBuffers[i2 * ATTR_STRIDE + TANGENT_OFF];
+    }
+    let geometryAxes = anisotropy_axes(normal, dp1, dp2, uv0-uv2, uv1-uv2, inputTangent);
+    (*si).geometryTangent = geometryAxes[0];
+    (*si).geometryBitangent = geometryAxes[1];
+    var directionAxes = geometryAxes;
+    if (USE_UV1 && directionMaterial.anisotropyMapIndex >= 0.0 && mapInfo[i32(directionMaterial.anisotropyMapIndex) + NUM_MAPS * 2].x > 0.5) {
+      let a = attrBuffers[i0 * ATTR_STRIDE + UV1_OFF].xy;
+      let b = attrBuffers[i1 * ATTR_STRIDE + UV1_OFF].xy;
+      let c = attrBuffers[i2 * ATTR_STRIDE + UV1_OFF].xy;
+      directionAxes = anisotropy_axes(normal, dp1, dp2, a-c, b-c, select(inputTangent, vec4f(0.0), inputTangent.w == 0.0));
+    }
+    (*si).directionTangent = directionAxes[0];
+    (*si).directionBitangent = directionAxes[1];
+  }
+
+` : /* wgsl */ ``}
   (*si).normal = normal;
   (*si).vertexNormal = normal;
   (*si).shadowOffset = vec3f(0.0);
@@ -1282,12 +1338,18 @@ fn completeSurfaceInteraction(
   if (USE_TANGENT && dot((*si).tangent, (*si).tangent) > 0.0) {
     (*si).tangent = normalize((l2w * vec4f((*si).tangent, 0.0)).xyz);
   }
+${hasAnisotropyDirections ? /* wgsl */ `
+  (*si).directionTangent = (l2w * vec4f((*si).directionTangent, 0.0)).xyz;
+  (*si).directionBitangent = (l2w * vec4f((*si).directionBitangent, 0.0)).xyz;
+    (*si).geometryTangent = (l2w * vec4f((*si).geometryTangent, 0.0)).xyz;
+    (*si).geometryBitangent = (l2w * vec4f((*si).geometryBitangent, 0.0)).xyz;
+` : /* wgsl */ ``}
   (*si).shadowOffset = (l2w * vec4f((*si).shadowOffset, 0.0)).xyz;
   (*si).position = (l2w * vec4((*si).position, 1.0)).xyz;
 }
 
 
-${intersectionAlphaWgsl}
+${createIntersectionAlphaWgsl(hasAnisotropyDirections)}
 
 
 
@@ -1318,7 +1380,8 @@ hitInsIdx = insIdx;
   `,
     hasDisplacement,
     false,
-    blasLayoutMask
+    blasLayoutMask,
+    hasAnisotropyDirections
   )}
 
   if (isHit) {
@@ -1365,6 +1428,7 @@ hitInsIdx = insIdx;
     hasDisplacement,
     false,
     blasLayoutMask,
+    hasAnisotropyDirections,
     `
         if (insIdx != instanceIndex) {
           continue;
@@ -1409,7 +1473,13 @@ hitInsIdx = insIdx;
     if (USE_TANGENT && dot((*si).tangent, (*si).tangent) > 0.0) {
       (*si).tangent = normalize((l2w * vec4f((*si).tangent, 0.0)).xyz);
     }
-    (*si).shadowOffset = (l2w * vec4f((*si).shadowOffset, 0.0)).xyz;
+${hasAnisotropyDirections ? /* wgsl */ `
+    (*si).directionTangent = (l2w * vec4f((*si).directionTangent, 0.0)).xyz;
+    (*si).directionBitangent = (l2w * vec4f((*si).directionBitangent, 0.0)).xyz;
+    (*si).geometryTangent = (l2w * vec4f((*si).geometryTangent, 0.0)).xyz;
+    (*si).geometryBitangent = (l2w * vec4f((*si).geometryBitangent, 0.0)).xyz;
+` : /* wgsl */ ``}
+  (*si).shadowOffset = (l2w * vec4f((*si).shadowOffset, 0.0)).xyz;
     (*si).position = (l2w * vec4((*si).position, 1.0)).xyz;
   }
 }
@@ -1458,7 +1528,8 @@ if (isOccluded) {
     `,
     hasDisplacement,
     true,
-    blasLayoutMask
+    blasLayoutMask,
+    hasAnisotropyDirections
   )}
 
   return false;

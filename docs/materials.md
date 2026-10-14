@@ -236,3 +236,11 @@ original isotropic alpha and turns off below roughness 0.04. Its transmission
 scale follows the reference; single refraction retains the renderer's existing
 radiance IOR scaling. The combined model can retain an energy error, including
 with coat, and the finite path-event budget can truncate deep glass paths.
+
+## Anisotropy directions
+
+Set `specularAnisotropyRotation` or provide `anisotropyMap` to orient the base specular lobe. The map reads linear `2 * RG - 1`, normalizes the direction, multiplies strength by B, and then applies the rotation. A decoded squared length at or below `1e-4` falls back to `(1, 0)` before rotation (including the two central RGBA8 codes). Without a map the direction is `(1, 0)` and the strength multiplier is one. The rotation defaults to zero; the map defaults to undefined.
+
+`coatAnisotropyRotation` defaults to zero and uses the geometry tangent independently of the base map. Base and coat evaluation, sampling and PDF use their respective directions. Both still use the shared shading normal; independent coat normals are not yet available. Zero strength ignores the new direction and retains the original isotropic path.
+
+Provided tangent XYZ and optional W handedness are preserved. For XYZ tangents the sign comes from triangle UV derivatives. Missing or degenerate tangents use UV derivatives and then a stable orthonormal fallback; missing tangents produce one diagnostic per geometry. The direction texture's selected UV set is used for derivative fallback, including UV1. A provided XYZW tangent remains authoritative. Directions are reorthogonalized against the final shading normal, including normal maps and back faces, and instance transforms preserve mirrored handedness. UV scale, offset and flipY affect texel lookup; they do not rotate the encoded direction.

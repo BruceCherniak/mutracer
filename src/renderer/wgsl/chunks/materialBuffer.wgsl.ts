@@ -9,9 +9,11 @@ import {
 } from '../../../scene/OpenPBRMaterial.js';
 
 export function createMaterialBufferWgsl({
+  hasAnisotropyDirections = true,
   hasSceneAlpha = true
 }: {
   hasSceneAlpha?: boolean;
+  hasAnisotropyDirections?: boolean;
 } = {}) {
   const alphaModeAssignment = hasSceneAlpha
     ? '(*ma).alphaMode = i32(matData.alphaMode);'
@@ -218,6 +220,25 @@ fn getMaterial(
 
   ${simpleTextureSample('specularColorMap', 'wgsl')}
 
+${hasAnisotropyDirections ? /* wgsl */ `
+  (*ma).anisotropyDirection = vec2f(1.0, 0.0);
+  (*ma).anisotropyDirectionEnabled = matData.specularAnisotropyRotation != 0.0;
+  (*ma).coatAnisotropyRotation = matData.coatAnisotropyRotation;
+  if (USE_ANISOTROPY_MAPS && matData.anisotropyMapIndex >= 0.0) {
+    let index = i32(matData.anisotropyMapIndex);
+    let texel = sampleMap(index, getMapUvSet(index, uv, uv1));
+    (*ma).specularAnisotropy *= texel.b;
+    let direction = texel.rg * 2.0 - 1.0;
+    if (dot(direction, direction) > 1e-4) { (*ma).anisotropyDirection = normalize(direction); }
+    (*ma).anisotropyDirectionEnabled = true;
+  }
+  if ((*ma).anisotropyDirectionEnabled) {
+    let theta = matData.specularAnisotropyRotation;
+    let d = (*ma).anisotropyDirection;
+    (*ma).anisotropyDirection = vec2f(cos(theta)*d.x - sin(theta)*d.y, sin(theta)*d.x + cos(theta)*d.y);
+  }
+
+` : /* wgsl */ ``}
   // OpenPBR 1.1.1: coat refraction broadens all base microfacet lobes.
   // Keep the zero-coat / smooth-coat paths byte-identical.
   if ((*ma).coatWeight > 0.0 && (*ma).coatRoughness > 0.0) {

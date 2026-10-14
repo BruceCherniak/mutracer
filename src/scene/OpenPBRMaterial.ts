@@ -197,6 +197,13 @@ export default class OpenPBRMaterial {
   specularColorMap?: Texture;
 
 
+  /** Linear RG tangent direction and B strength multiplier for the base specular layer. Default `undefined`. */
+  anisotropyMap?: Texture;
+  /** Base direction rotation in radians, counter-clockwise in tangent/bitangent space after RG decoding. Default `0`. */
+  specularAnisotropyRotation: number = 0;
+  /** Coat direction rotation in radians relative to the geometry tangent. Default `0`. */
+  coatAnisotropyRotation: number = 0;
+
   /** OpenPBR GGX roughness anisotropy in [0, 1]; requires tangents. Default `0`. */
   get specularRoughnessAnisotropy(): number { return this.specularAnisotropy; }
   set specularRoughnessAnisotropy(value: number) { this.specularAnisotropy = value; }

@@ -11,7 +11,7 @@ import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
 import { buildBLAS, TLASInstance } from './bvhAccel.js';
 import { colorLuminance } from './lightSampling.js';
 import Texture, { isTextureDataSource } from '../scene/Texture.js';
-import { generateVertexTangents } from '../util/geometry.js';
+import { generateVertexTangents, hasGeneratedVertexTangents } from '../util/geometry.js';
 
 function computeGeometryBounds(geometry: Geometry) {
   const min = vec3.fromValues(Infinity, Infinity, Infinity);
@@ -689,9 +689,15 @@ export function getTrianglesDisplacementRange(
   return trianglesDisplacementRange;
 }
 
+const warnedDirectionGeometry = new WeakSet<Geometry>();
+
 /** Prepare auto-generated source attributes before the renderer captures array identities. */
 export function ensureMeshGeometryAttributes(meshes: readonly Mesh[]) {
-  for (const { geometry } of meshes) {
+  for (const { geometry, materials } of meshes) {
+    if (!geometry.tangent && !warnedDirectionGeometry.has(geometry) && materials.some(m => m.anisotropyMap || m.specularAnisotropyRotation !== 0 || m.coatAnisotropyRotation !== 0)) {
+      console.warn('MuTracer: anisotropy direction has no vertex tangent; deriving a frame from the selected UV set with a stable fallback for degenerate UVs.');
+      warnedDirectionGeometry.add(geometry);
+    }
     if (!geometry.position?.array.length) continue;
     if (!geometry.normal) computeGeometryNormals(geometry);
     if (!geometry.tangent && geometry.uv) generateVertexTangents(geometry);
@@ -908,7 +914,7 @@ function mergeGeometry(
       ? new Attribute(new Float32Array(3 * totalVertexCount), 3)
       : undefined,
     tangent: hasTangent
-      ? new Attribute(new Float32Array(3 * totalVertexCount), 3)
+      ? new Attribute(new Float32Array(4 * totalVertexCount), 4)
       : undefined,
     indices: indexAttrib
   });
@@ -934,10 +940,11 @@ function mergeGeometry(
       mergedGeometry.color!.array.set(geometry.color.array, currentVertex * 3);
     }
     if (geometry.tangent) {
-      mergedGeometry.tangent!.array.set(
-        geometry.tangent.array,
-        currentVertex * 3
-      );
+      const source = geometry.tangent;
+      for (let v = 0; v < vertexCount; v++) {
+        for (let c = 0; c < 4; c++) mergedGeometry.tangent!.array[(currentVertex + v) * 4 + c] =
+          c < source.itemSize ? source.array[v * source.itemSize + c] : hasGeneratedVertexTangents(geometry) ? 0 : 2;
+      }
     }
 
     writeMaterialIndices(geometry, globalMaterialIndex, materialIndexAttrib.array, currentVertex);

@@ -335,7 +335,7 @@ function convertMaterial(
     // Only supported Texture inputs are accepted; arbitrary metadata objects
     // must never enter the atlas as textures. Explicit null clears an import.
     for (const name of ['coatWeightMap', 'coatRoughnessMap', 'fuzzColorMap',
-      'fuzzRoughnessMap', 'specularWeightMap', 'specularColorMap'] as const) {
+      'fuzzRoughnessMap', 'specularWeightMap', 'specularColorMap', 'anisotropyMap'] as const) {
       const texture = openPbr[name];
       if (texture === null) material[name] = undefined;
       else if (texture instanceof Texture) material[name] = texture;
@@ -343,6 +343,8 @@ function convertMaterial(
         material[name] = convertTexture(texture as THREE.Texture, textureCache);
       }
     }
+    material.specularAnisotropyRotation = finite(openPbr.specularAnisotropyRotation, material.specularAnisotropyRotation, -Infinity, Infinity);
+    material.coatAnisotropyRotation = finite(openPbr.coatAnisotropyRotation, material.coatAnisotropyRotation, -Infinity, Infinity);
     material.baseWeight = finite(openPbr.baseWeight, material.baseWeight);
     material.baseDiffuseRoughness = finite(
       openPbr.baseDiffuseRoughness,
@@ -558,8 +560,8 @@ function convertGeometry(
       normalAttrb &&
       new Attribute(copyFloatAttribute(normalAttrb), normalAttrb.itemSize),
     tangent: tangentAttrb && new Attribute(
-      copyFloatAttribute(tangentAttrb, Math.min(3, tangentAttrb.itemSize)),
-      3
+      copyFloatAttribute(tangentAttrb, Math.min(4, tangentAttrb.itemSize)),
+      Math.min(4, tangentAttrb.itemSize)
     ),
     uv: uvAttrb && new Attribute(copyFloatAttribute(uvAttrb), uvAttrb.itemSize),
     uv1:
@@ -891,7 +893,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             !!(baseMaterial.map || baseMaterial.normalMap || baseMaterial.emissiveMap || baseMaterial.metallicRoughnessMap ||
               baseMaterial.roughnessMap || baseMaterial.metalnessMap || baseMaterial.thinFilmMap ||
               baseMaterial.coatWeightMap || baseMaterial.coatRoughnessMap || baseMaterial.fuzzColorMap ||
-              baseMaterial.fuzzRoughnessMap || baseMaterial.specularWeightMap || baseMaterial.specularColorMap);
+              baseMaterial.fuzzRoughnessMap || baseMaterial.specularWeightMap || baseMaterial.specularColorMap || baseMaterial.anisotropyMap);
           const autoDisplacementUvProjection = !geometry.uv && !!baseMaterial.displacementMap &&
             baseMaterial.displacementUvProjection === 'none';
           const instanceCount = expand ? instanced.count : 1;

@@ -4,6 +4,6 @@ export const MATERIAL_TEXTURE_NAMES = [
   'map', 'alphaMap', 'normalMap', 'emissiveMap', 'metallicRoughnessMap',
   'roughnessMap', 'metalnessMap', 'transmissionMap', 'thinFilmMap', 'displacementMap',
   'coatWeightMap', 'coatRoughnessMap', 'fuzzColorMap', 'fuzzRoughnessMap',
-  'specularWeightMap', 'specularColorMap'
+  'specularWeightMap', 'specularColorMap', 'anisotropyMap'
 ] as const;
 export type MaterialTextureName = typeof MATERIAL_TEXTURE_NAMES[number];

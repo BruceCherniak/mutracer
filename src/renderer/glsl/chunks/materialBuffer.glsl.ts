@@ -259,6 +259,26 @@ void getMaterial(
 
   ${simpleTextureSample('specularColorMap', 'glsl')}
 
+  vec4 directionInfo = fetchMatData(i + MAT_ROW_DIRECTION_NORMAL);
+  mat.anisotropyDirection = vec2(1.0, 0.0);
+  mat.anisotropyDirectionEnabled = directionInfo.y != 0.0;
+  mat.coatAnisotropyRotation = fetchMatData(i + MAT_ROW_FILM_TEXTURE).x;
+#ifdef NUM_ANISOTROPY_MAPS
+  if (directionInfo.x >= 0.0) {
+    int index = int(directionInfo.x);
+    vec4 texel = sampleMap(index, getMapUvSet(index, uv, uv1));
+    mat.specularAnisotropy *= texel.b;
+    vec2 direction = texel.rg * 2.0 - 1.0;
+    if (dot(direction, direction) > 1e-4) mat.anisotropyDirection = normalize(direction);
+    mat.anisotropyDirectionEnabled = true;
+  }
+#endif
+  if (mat.anisotropyDirectionEnabled) {
+    float theta = directionInfo.y;
+    vec2 d = mat.anisotropyDirection;
+    mat.anisotropyDirection = vec2(cos(theta)*d.x - sin(theta)*d.y, sin(theta)*d.x + cos(theta)*d.y);
+  }
+
   // OpenPBR 1.1.1: coat refraction broadens all base microfacet lobes.
   // Keep the zero-coat / smooth-coat paths byte-identical.
   if (mat.coatWeight > 0.0 && mat.coatRoughness > 0.0) {

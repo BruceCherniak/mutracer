@@ -545,6 +545,31 @@ int randomPickMaterial(ivec4 m0, ivec4 m1, ivec4 m2, vec3 bary) {
 
 vec4 fetchIns(int i);
 
+
+mat2x3 anisotropy_axes(vec3 normal, vec3 dp1, vec3 dp2, vec2 duv1, vec2 duv2, vec4 inputTangent) {
+  float determinant = duv1.x * duv2.y - duv1.y * duv2.x;
+  vec3 t = inputTangent.xyz;
+  vec3 b = vec3(0.0);
+  // Internal W=2 marks an authored XYZ tangent whose sign is derived from UVs.
+  float handedness = abs(inputTangent.w) > 1.5 ? 0.0 : inputTangent.w;
+  if (abs(determinant) > 1e-12) {
+    vec3 dt = (dp1 * duv2.y - dp2 * duv1.y) / determinant;
+    vec3 db = (dp2 * duv1.x - dp1 * duv2.x) / determinant;
+    if (dot(t, t) < 1e-8) { t = dt; }
+    if (handedness == 0.0) { handedness = (dot(cross(normal, dt), db) < 0.0 ? -1.0 : 1.0); }
+  }
+  t -= normal * dot(normal, t);
+  if (dot(t, t) < 1e-8) {
+    float signZ = (normal.z >= 0.0 ? 1.0 : -1.0);
+    float factor = -1.0 / (signZ + normal.z);
+    float xy = normal.x * normal.y * factor;
+    t = vec3(1.0 + signZ * normal.x * normal.x * factor, signZ * xy, -signZ * normal.x);
+    b = vec3(xy, signZ + normal.y * normal.y * factor, -normal.y);
+  }
+  else { t = normalize(t); b = normalize(cross(normal, t)); }
+  return mat2x3(t, b * (handedness < 0.0 ? -1.0 : 1.0));
+}
+
 void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric, ivec3 index) {
   si.hit = true;
   si.position = barycentric.x * tri.p0 + barycentric.y * tri.p1 + barycentric.z * tri.p2;
@@ -599,10 +624,10 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
     si.materialIndex = randomPickMaterial(m0, m1, m2, barycentric);
   }
   
-  #if defined(NUM_DIFFUSE_MAPS) || defined(NUM_NORMAL_MAPS) || defined(NUM_BUMP_MAPS) || defined(NUM_METALLIC_ROUGHNESS_MAPS) || defined(NUM_ROUGHNESS_MAPS) || defined(NUM_METALNESS_MAPS) || defined(NUM_EMISSIVE_MAPS) || defined(NUM_THIN_FILM_MAPS)
-    vec2 uv0 = texelFetch(uvBuffer, i0, 0).xy;
-    vec2 uv1 = texelFetch(uvBuffer, i1, 0).xy;
-    vec2 uv2 = texelFetch(uvBuffer, i2, 0).xy;
+  vec2 uv0 = texelFetch(uvBuffer, i0, 0).xy;
+  vec2 uv1 = texelFetch(uvBuffer, i1, 0).xy;
+  vec2 uv2 = texelFetch(uvBuffer, i2, 0).xy;
+  #if defined(NUM_DIFFUSE_MAPS) || defined(NUM_NORMAL_MAPS) || defined(NUM_BUMP_MAPS) || defined(NUM_METALLIC_ROUGHNESS_MAPS) || defined(NUM_ROUGHNESS_MAPS) || defined(NUM_METALNESS_MAPS) || defined(NUM_EMISSIVE_MAPS) || defined(NUM_THIN_FILM_MAPS) || defined(NUM_ANISOTROPY_MAPS)
     vec2 uv = barycentric.x * uv0 + barycentric.y * uv1 + barycentric.z * uv2;
     vec2 rawUv = uv;
     vec2 secondaryUv0 = texelFetch(uv1Buffer, i0, 0).xy;
@@ -625,6 +650,33 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
     vec2 uv = vec2(0.0);
     vec2 secondaryUv = vec2(0.0);
   #endif
+
+  vec4 directionMaterial = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_DIRECTION_NORMAL);
+  float coatRotation = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_FILM_TEXTURE).x;
+  if (directionMaterial.x >= 0.0 || directionMaterial.y != 0.0 || coatRotation != 0.0) {
+    vec3 dp1 = tri.p0 - tri.p2;
+    vec3 dp2 = tri.p1 - tri.p2;
+    vec4 inputTangent = vec4(0.0);
+#ifdef USE_TANGENT
+    inputTangent = barycentric.x * texelFetch(tangentBuffer, i0, 0)
+      + barycentric.y * texelFetch(tangentBuffer, i1, 0)
+      + barycentric.z * texelFetch(tangentBuffer, i2, 0);
+#endif
+    mat2x3 geometryAxes = anisotropy_axes(normal, dp1, dp2, uv0-uv2, uv1-uv2, inputTangent);
+    si.geometryTangent = geometryAxes[0];
+    si.geometryBitangent = geometryAxes[1];
+    mat2x3 directionAxes = geometryAxes;
+#ifdef NUM_ANISOTROPY_MAPS
+    if (directionMaterial.x >= 0.0 && mapUvChannel[int(directionMaterial.x)] > 0.5) {
+      vec2 a = texelFetch(uv1Buffer, i0, 0).xy;
+      vec2 b = texelFetch(uv1Buffer, i1, 0).xy;
+      vec2 c = texelFetch(uv1Buffer, i2, 0).xy;
+      directionAxes = anisotropy_axes(normal, dp1, dp2, a-c, b-c, (inputTangent.w == 0.0 ? vec4(0.0) : inputTangent));
+    }
+#endif
+    si.directionTangent = directionAxes[0];
+    si.directionBitangent = directionAxes[1];
+  }
 
   si.uv = uv;
   si.uv1 = secondaryUv;
@@ -866,6 +918,10 @@ ${getBVHTraverseCode(glsl`
     }
 #endif
     si.shadowOffset = (l2w * vec4(si.shadowOffset, 0.0)).xyz;
+    si.directionTangent = mat3(l2w) * si.directionTangent;
+    si.directionBitangent = mat3(l2w) * si.directionBitangent;
+    si.geometryTangent = mat3(l2w) * si.geometryTangent;
+    si.geometryBitangent = mat3(l2w) * si.geometryBitangent;
     si.position = (l2w * vec4(si.position, 1.0)).xyz;
   }
 }
@@ -927,6 +983,10 @@ ${getBVHTraverseCode(
     }
 #endif
     si.shadowOffset = (l2w * vec4(si.shadowOffset, 0.0)).xyz;
+    si.directionTangent = mat3(l2w) * si.directionTangent;
+    si.directionBitangent = mat3(l2w) * si.directionBitangent;
+    si.geometryTangent = mat3(l2w) * si.geometryTangent;
+    si.geometryBitangent = mat3(l2w) * si.geometryBitangent;
     si.position = (l2w * vec4(si.position, 1.0)).xyz;
   }
 }

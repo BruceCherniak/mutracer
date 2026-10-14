@@ -12,9 +12,9 @@ import { createMaterialBufferWgsl } from './chunks/materialBuffer.wgsl.js';
 import createIntersectionWgsl from './chunks/intersect.wgsl.js';
 import randomWgsl from './chunks/random.wgsl.js';
 import randWgsl from './chunks/rand.wgsl.js';
-import sampleMaterialWgsl from './chunks/sampleMaterial.wgsl.js';
+import { createSampleMaterialWgsl } from './chunks/sampleMaterial.wgsl.js';
 import sampleLightWgsl from './chunks/sampleLight.wgsl.js';
-import openPbrBsdfWgsl from './chunks/openPbrBsdf.wgsl.js';
+import { createOpenPbrBsdfWgsl } from './chunks/openPbrBsdf.wgsl.js';
 import samplingWgsl from './chunks/sampling.wgsl.js';
 import sampleShadowCatcherWgsl from './chunks/sampleShadowCatcher.wgsl.js';
 import envMapWgsl from './chunks/envMap.wgsl.js';
@@ -23,6 +23,8 @@ export const WORKGROUP_SIZE = 8;
 
 export interface RayTraceShaderOptions {
   hasDisplacement: boolean;
+  /** Include direction frames only when used, preserving the legacy shader arithmetic otherwise. */
+  hasAnisotropyDirections?: boolean;
   /** Split glTF BLEND primary hits deterministically instead of stochastically. */
   hasAlpha?: boolean;
   /** Any scene material uses alpha mask or blend. */
@@ -34,6 +36,7 @@ export interface RayTraceShaderOptions {
 /** Generates the WebGPU megakernel path tracing compute shader. */
 export default function rayTraceCompute({
   hasDisplacement,
+  hasAnisotropyDirections = false,
   hasAlpha = true,
   hasSceneAlpha = true,
   blasLayoutMask = 1
@@ -43,19 +46,19 @@ export default function rayTraceCompute({
 
 ${commonWgsl}
 
-${rayTraceCoreWgsl({ hasDisplacement, hasSceneAlpha })}
+${rayTraceCoreWgsl({ hasDisplacement, hasSceneAlpha, hasAnisotropyDirections })}
 
 ${uvProjectionWgsl}
 
-${createMaterialBufferWgsl({ hasSceneAlpha })}
+${createMaterialBufferWgsl({ hasSceneAlpha, hasAnisotropyDirections })}
 
-${createIntersectionWgsl({ hasDisplacement, blasLayoutMask })}
+${createIntersectionWgsl({ hasDisplacement, blasLayoutMask, hasAnisotropyDirections })}
 ${randWgsl}
 ${randomWgsl}
 ${envMapWgsl}
 
 ${samplingWgsl}
-${openPbrBsdfWgsl}
+${createOpenPbrBsdfWgsl(hasAnisotropyDirections)}
 ${sampleLightWgsl}
 
 // Index of the path vertex currently being shaded.
@@ -105,7 +108,7 @@ fn bsdfMISWeight(scatteringPdf: f32, lightPdf: f32) -> f32 {
     max(scatteringPdf + weightedLightPdf, 1e-20);
 }
 
-${sampleMaterialWgsl}
+${createSampleMaterialWgsl(hasAnisotropyDirections)}
 ${sampleShadowCatcherWgsl}
 
 // Output

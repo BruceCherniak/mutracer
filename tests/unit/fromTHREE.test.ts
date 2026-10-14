@@ -192,9 +192,9 @@ describe('Three.js scene conversion', () => {
     ]);
     expect(Array.from(converted.uv!.array)).toEqual([0, 0, 1, 0, 0, 1]);
     expect(Array.from(converted.tangent!.array)).toEqual([
-      1, 0, 0,
-      0, 1, 0,
-      0, 0, 1
+      1, 0, 0, 1,
+      0, 1, 0, -1,
+      0, 0, 1, 1
     ]);
   });
 
@@ -226,7 +226,7 @@ describe('Three.js scene conversion', () => {
     const converted = fromTHREEScene(scene).meshes[0].geometry;
     expect(Array.from(converted.position.array)).toEqual(positions);
     expect(Array.from(converted.normal.array)).toEqual(normals);
-    expect(Array.from(converted.tangent!.array)).toEqual([1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    expect(Array.from(converted.tangent!.array)).toEqual([1, 0, 0, 1, 0, 1, 0, -1, 0, 0, 1, 1]);
     expect(Array.from(converted.boundingBox.min)).toEqual([0, 0, 0]);
     expect(Array.from(converted.boundingBox.max)).toEqual([1, 1, 0]);
 
@@ -259,7 +259,7 @@ describe('Three.js scene conversion', () => {
     expect(Array.from(converted.position.array)).toEqual([0, 0, 0, 0.5, 0, 0, 0, 0.25, 0]);
     expect(Array.from(converted.normal.array)).toEqual([0, 0, 1, 0, 1, 0, -1, 0, 0]);
     expect(Array.from(converted.tangent!.array)).toEqual(Array.from(new Float32Array([
-      1 / 127, 0, 0, 0, 1 / 127, 0, 0, 0, 1 / 127
+      1 / 127, 0, 0, -1, 0, 1 / 127, 0, 1, 0, 0, 1 / 127, 1
     ])));
   });
 

@@ -428,6 +428,7 @@ class WGPURayTracePass {
   private _rayTraceBindGroups?: GPUBindGroup[];
   private _blasLayoutMask = 1;
   private _compiledBlasLayoutMask = 0;
+  private _compiledAnisotropyDirections = false;
   private _compiledHasAlpha = true;
   private _compiledSceneHasAlpha = true;
   private _alphaBlendStrategy: AlphaBlendStrategy = 'stochastic';
@@ -1001,6 +1002,7 @@ class WGPURayTracePass {
         hasDisplacement: this._hasDisplacement,
         hasAlpha,
         hasSceneAlpha,
+        hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
         blasLayoutMask: this._blasLayoutMask,
         bakePipelineConstants: this._bakePipelineConstants
       });
@@ -1024,6 +1026,7 @@ class WGPURayTracePass {
         'USE_BACKGROUND_MAP',
         'USE_GROUNDED_BACKGROUND',
         ...MATERIAL_TEXTURE_DEFINES,
+        'USE_ANISOTROPY_DIRECTIONS',
         'NUM_BUMP_MAPS',
         'COLOR_OFF',
         'USE_VERTEX_COLOR',
@@ -1062,6 +1065,7 @@ class WGPURayTracePass {
         defineCode !== this._prevDefinesCode ||
         hasAlpha !== this._compiledHasAlpha ||
         hasSceneAlpha !== this._compiledSceneHasAlpha ||
+        Boolean(constants.USE_ANISOTROPY_DIRECTIONS) !== this._compiledAnisotropyDirections ||
         this._blasLayoutMask !== this._compiledBlasLayoutMask ||
         (this._bakePipelineConstants &&
           pipelineConstantsKeys.some(
@@ -1098,6 +1102,7 @@ ${rayTraceCompute({
   hasDisplacement: this._hasDisplacement,
   hasAlpha,
   hasSceneAlpha,
+  hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
   blasLayoutMask: this._blasLayoutMask
 })}`;
 
@@ -1115,6 +1120,7 @@ ${rayTraceCompute({
           shaderCompilationNow() - moduleCreationStartedAt;
         this._compiledHasAlpha = hasAlpha;
         this._compiledSceneHasAlpha = hasSceneAlpha;
+        this._compiledAnisotropyDirections = Boolean(constants.USE_ANISOTROPY_DIRECTIONS);
         this._compiledBlasLayoutMask = this._blasLayoutMask;
       }
 
@@ -2375,6 +2381,9 @@ ${rayTraceCompute({
       USE_TANGENT: mergedGeometry.tangent != null &&
         materials.some(material => material.specularAnisotropy > 0 || material.coatAnisotropy > 0),
 
+      USE_ANISOTROPY_DIRECTIONS: materials.some(m =>
+        m.specularAnisotropy > 0 && (!!m.anisotropyMap || m.specularAnisotropyRotation !== 0) ||
+        m.coatAnisotropy > 0 && m.coatAnisotropyRotation !== 0),
       HAS_MEDIUM,
       HAS_SHADOW_CATCHER: this._hasShadowCatcher,
       HAS_THIN_FILM: materials.some((material) => material.thinFilmWeight > 0),

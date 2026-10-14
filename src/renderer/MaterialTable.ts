@@ -460,7 +460,8 @@ export interface BufferData extends Record<MaterialTextureIndex, number[]> {
 
   mediumType: number[];
   coatNormalMapIndex: number[];
-  anisotropyMapIndex: number[];
+  specularAnisotropyRotation: number[];
+  coatAnisotropyRotation: number[];
   coatNormalScale: vec2.Vec2Array[];
 
   uvProjection: number[];
@@ -758,7 +759,8 @@ class MaterialTable {
       // direction and coat-normal inputs are reserved for later C1 steps.
       mediumType: materials.map((m) => Number(materialUsesMedium(m))),
       coatNormalMapIndex: materials.map(() => -1),
-      anisotropyMapIndex: materials.map(() => -1),
+      specularAnisotropyRotation: materials.map(m => Number.isFinite(m.specularAnisotropyRotation) ? m.specularAnisotropyRotation : 0),
+      coatAnisotropyRotation: materials.map(m => Number.isFinite(m.coatAnisotropyRotation) ? m.coatAnisotropyRotation : 0),
       coatNormalScale: materials.map(() => [1, 1] as vec2.Vec2Array),
       uvProjection: materials.map(
         (m) => uvProjectionConstants[m.uvProjection] || 0

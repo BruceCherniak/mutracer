@@ -65,6 +65,19 @@ describe('shader generation independent of source formatting', () => {
 
   });
 
+  it('preserves the generated direction frames after formatting and identifier compression', () => {
+    gpu();
+    for (const hasDisplacement of [false, true]) {
+      const options = {hasDisplacement, hasAnisotropyDirections: true, hasAlpha: true, hasSceneAlpha: true, blasLayoutMask: 15};
+      const source = rayTrace(options), compact = compactRayTrace(options);
+      expect(tokens(compact)).toEqual(tokens(source));
+      const definitions = makeShaderDataDefinitions(compact);
+      const preparedName = shaderIdentifierMap.get('OpenPbrPreparedBsdf') ?? 'OpenPbrPreparedBsdf';
+      const fieldName = shaderIdentifierMap.get('coatBasis') ?? 'coatBasis';
+      expect(definitions.structs[preparedName].fields[fieldName]).toBeDefined();
+    }
+  });
+
   it.each([false, true])('generates and parses explicit WGSL sampling wrappers (scratch=%s)', scratch => {
     const device = gpu();
     const code = (loader: ReturnType<typeof shaderSourceLoader>) => {
