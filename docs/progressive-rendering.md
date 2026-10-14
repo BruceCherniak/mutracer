@@ -14,8 +14,8 @@ loop.start();
 Each tick updates syncs and commits engine inputs, then calls select, refines the
 selected render and presents it. Active syncs select preview by default. Isolated
 edits start final immediately; consecutive changes without explicit sync activity
-hold preview for idleMs (default 150 ms). When interaction ends, final starts in
-that tick and its ready fallback remains visible until final completes a sample.
+hold preview for idleMs (default 150 ms). When interaction ends, final starts after
+the current preview completes; its fallback remains visible until final completes a sample.
 
 ```ts
 loop.select = ({changing}) => changing || slider.dragging ? 'preview' : 'final';
@@ -30,6 +30,9 @@ Preview samples never emit loop sample events or count toward loop
 samples. Intermediate final filtering reports converging; only terminal filtering
 reports denoising. After finishing, unchanged ticks update syncs and the engine
 without GPU submissions. Display or render settings edits resume necessary work.
+
+During interaction, the loop finishes the current preview sample before applying
+the latest scene/camera edits, keeping previews responsive during continuous input.
 
 start pauses on hidden pages; stop preserves images. Use tick with your own frame
 loop, or start, which ignores manual tick calls with one warning. loop.converge

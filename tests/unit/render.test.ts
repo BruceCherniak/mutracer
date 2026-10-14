@@ -3,6 +3,40 @@ import Render from '../../src/Render';
 import { renderFixture } from '../helpers/renderPipeline';
 
 describe('independent Render', () => {
+  it.each([false, true])('adapts from the whole tiled sample, including fallback rendering (%s)', fallback => {
+    let now = 0; const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const {engine} = renderFixture({tiles: 4, fits: false});
+    const preview = new Render(engine, {maxSamples: 1, resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}});
+    const final = new Render(engine, {fallback: preview});
+    const refine = () => fallback ? final.refine() : preview.refine();
+    refine(); now = 20; refine(); now = 40; refine(); now = 60; refine();
+    expect(preview.width).toBe(400);
+    // Apply the completed measurement once on the next preview frame.
+    preview.refine(); expect(preview.width).toBe(250);
+    engine.dispose(); clock.mockRestore();
+  });
+  it('adapts a denoised preview before continuous camera edits restart it', async () => {
+    let now = 0; const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const {engine, camera} = renderFixture({tiles: 4});
+    const preview = new Render(engine, {maxSamples: 1, resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}, denoiser: {type: 'jnlm'}});
+    preview.refine(); now = 20; preview.refine(); now = 40; preview.refine(); now = 60; preview.refine();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    camera.position = [1, 0, 0]; engine.update(); preview.refine();
+    expect(preview.width).toBe(250);
+    engine.dispose(); clock.mockRestore();
+  });
+  it('includes inference latency without resizing a preview while its filter is pending', async () => {
+    let now = 0; const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const {engine, camera, targets} = renderFixture();
+    const preview = new Render(engine, {maxSamples: 1, resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}, denoiser: {type: 'jnlm'}});
+    preview.refine(); let complete!: (value: boolean) => void;
+    vi.mocked(targets[0].performDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;}));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    now = 80; preview.refine(); expect(preview.width).toBe(400); expect(preview.denoising).toBe(true);
+    complete(true); await new Promise(resolve => setTimeout(resolve, 0));
+    camera.position = [1, 0, 0]; engine.update(); preview.refine(); expect(preview.width).toBe(200);
+    engine.dispose(); clock.mockRestore();
+  });
   it('keeps final and preview resolution independent on a full-size display', () => {
     const {engine} = renderFixture(); engine.display.setSize(800, 600);
     const preview = new Render(engine, {resolutionScale: .5});

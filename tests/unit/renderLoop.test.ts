@@ -13,6 +13,48 @@ class Source extends Sync {
 afterEach(() => {vi.restoreAllMocks(); vi.unstubAllGlobals();});
 
 describe('RenderLoop selection and presentation', () => {
+  it.each([false, true])('finishes tiled previews during continuous camera edits (coalescing: %s)', coalesceSceneUpdates => {
+    const {engine, camera, targets, operations} = renderFixture({tiles: 3});
+    const sync = new Source(engine); sync.moving = true;
+    const loop = new RenderLoop(engine, {sync, coalesceSceneUpdates, preview: {maxSamples: 1}});
+    for (let frame = 1; frame <= 12; frame++) {
+      camera.position = [frame, 0, 0]; loop.tick();
+    }
+    const presented = operations.filter(operation => operation.kind === 'present');
+    expect(presented.length).toBeGreaterThanOrEqual(4);
+    expect(targets).toHaveLength(1);
+    const cameras = operations.filter(operation => operation.kind === 'draw').map(operation => operation.camera!.position[0]);
+    expect(cameras).toEqual([1, 1, 1, 4, 4, 4, 7, 7, 7, 10, 10, 10]);
+    // The next frame commits the newest input, rather than replaying queued poses.
+    camera.position = [20, 0, 0]; loop.tick();
+    expect(operations.filter(operation => operation.kind === 'draw').at(-1)!.camera!.position[0]).toBe(20);
+    loop.dispose(); engine.dispose();
+  });
+  it('completes preview inference after its last tile before committing newer input', async () => {
+    const {engine, camera, targets, operations} = renderFixture({tiles: 3});
+    const sync = new Source(engine); sync.moving = true;
+    const loop = new RenderLoop(engine, {sync, coalesceSceneUpdates: true, preview: {maxSamples: 1, denoiser: {type: 'jnlm'}}});
+    loop.tick(); let complete!: (value: boolean) => void;
+    vi.mocked(targets[0].performDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;}));
+    camera.position = [1, 0, 0]; loop.tick(); camera.position = [2, 0, 0]; loop.tick(); await settle();
+    expect(targets[0].trace).toHaveBeenCalledTimes(3); expect(targets[0].present).not.toHaveBeenCalled();
+    camera.position = [3, 0, 0]; loop.tick(); expect(targets[0].trace).toHaveBeenCalledTimes(3);
+    complete(true); await settle(); camera.position = [4, 0, 0]; loop.tick();
+    expect(targets[0].present).toHaveBeenCalledOnce();
+    expect(operations.filter(operation => operation.kind === 'draw').at(-1)!.camera!.position[0]).toBe(4);
+    loop.dispose(); engine.dispose();
+  });
+  it('starts final with the latest camera after interaction ends during a partial preview', () => {
+    const {engine, camera, operations} = renderFixture({tiles: 3});
+    const sync = new Source(engine); sync.moving = true;
+    const loop = new RenderLoop(engine, {sync, preview: {maxSamples: 1}});
+    loop.tick(); camera.position = [5, 0, 0]; sync.moving = false;
+    loop.tick(); loop.tick(); expect(loop.changing).toBe(false);
+    loop.tick(); expect(loop.final.samples).toBe(0);
+    expect(operations.filter(operation => operation.kind === 'draw').at(-1)!.camera!.position[0]).toBe(5);
+    loop.tick(); expect(loop.tick()).toBe('converging'); expect(loop.final.samples).toBe(1);
+    loop.dispose(); engine.dispose();
+  });
   it('retains preview status until a tiled final can replace the displayed preview', () => {
     const {engine, camera, targets} = renderFixture({tiles: 3, fits: false}); const sync = new Source(engine); sync.moving = true;
     const loop = new RenderLoop(engine, {sync});

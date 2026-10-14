@@ -41,7 +41,7 @@ export default class RenderLoop {
   private _disposed = false;
   private _cancelScheduled?: () => void;
   private _warnedTick = false;
-  /** Render whose next presentation is waiting for preview inference. */
+  /** Render whose next presentation is waiting for a complete preview frame. */
   private _previewFrameOwner?: Render;
   private _presented?: Render;
   private _finishedImage?: string;
@@ -102,9 +102,10 @@ export default class RenderLoop {
   private _tick(): RenderLoopStatus {
     if (this._busy || (typeof document !== 'undefined' && document.hidden)) return this.status;
     for (const sync of this._syncs) sync.update();
-    const owner = this.coalesceSceneUpdates ? this._previewFrameOwner : undefined;
+    const owner = this._previewFrameOwner;
     const pendingPreview = !!owner && (owner === this.preview || !owner._complete);
-    const holding = pendingPreview && !!this.preview?.denoising;
+    const tracingPreview = pendingPreview && this.preview?.status === 'converging' && this.preview.samples === 0;
+    const holding = tracingPreview || (this.coalesceSceneUpdates && pendingPreview && !!this.preview?.denoising);
     // Inference belongs to a presentation, not merely to a background render.
     // A fallback result must never replace an already available final image.
     if (pendingPreview && !holding && this.preview) this._present(this.preview);
@@ -115,6 +116,13 @@ export default class RenderLoop {
     this._changing = this._policy.changing;
     const selected = this.select({changing: this.changing});
     if (holding && this.preview) {
+      // Finish this image against its committed camera while syncs collect the
+      // latest input. Restarting its first tile on every edit starves presentation.
+      if (tracingPreview) {
+        const status = this.preview.refine();
+        if (status === 'error') { this._previewFrameOwner = undefined; return this._setStatus('error'); }
+        if ((!this.coalesceSceneUpdates || !this.preview.denoising) && this._present(this.preview)) this._previewFrameOwner = undefined;
+      }
       return this._setStatus('previewing');
     }
     const current = selected === 'preview' && this.preview ? this.preview : this.final;
@@ -125,7 +133,7 @@ export default class RenderLoop {
     const status = current.refine();
     // Keep the canvas on the last completed image while filtering the next
     // preview; presenting its raw sample here would overwrite the denoise above.
-    const waitingForPreview = this.coalesceSceneUpdates && !!this.preview?.denoising &&
+    const waitingForPreview = !!this.preview && ((current === this.preview && status === 'converging' && current.samples === 0) || (this.coalesceSceneUpdates && this.preview.denoising)) &&
       (current === this.preview || (!current._complete && current.fallback === this.preview));
     if (waitingForPreview) this._previewFrameOwner = current;
     else this._present(current);

@@ -261,6 +261,8 @@ export default class Render {
   private _adaptiveScale = 1;
   private _lastScale = 1;
   private _frameTime = 0;
+  private _sampleStart?: number;
+  private _frameStart?: number;
   private _events = new Events<{sample: SampleEvent}>();
   /** Owning engine. */ get engine(): Engine { return this._engine; }
   /** Whether inference is queued or running, including intermediate updates. Default false. */ get denoising(): boolean { return !!this._denoisePending; }
@@ -332,11 +334,30 @@ export default class Render {
     if ((!offline && this._offlineCamera) || inputs.scene !== this._input.scene || inputs.camera !== this._input.camera || key !== this._input.settings) {
       if (!offline) this._offlineCamera = false;
       this._cancelDenoise(); target.restartSamples();
+      this._sampleStart = this._frameStart = undefined; this._frameTime = 0;
       target.setSize(size.width, size.height);
       this._input = {scene: inputs.scene, camera: inputs.camera, settings: key};
     }
-    target.setOnSampleRendered((samples, isFirstFrame, frameTimeMs) => { this._frameTime = frameTimeMs; this._events.emit('sample', {samples, isFirstFrame, frameTimeMs}); });
+    target.setOnSampleRendered((samples, isFirstFrame, frameTimeMs) => {
+      // A preview's latency includes every tile, not just its last dispatch.
+      this._frameTime = Math.max(frameTimeMs, this._sampleStart === undefined ? 0 : performance.now() - this._sampleStart);
+      this._frameStart = this._sampleStart;
+      this._sampleStart = undefined;
+      this._events.emit('sample', {samples, isFirstFrame, frameTimeMs});
+    });
     return target;
+  }
+  private _trace(target: RenderTarget, limit: number) {
+    this._sampleStart ??= performance.now();
+    const compiling = target.trace(this._engine._inputs.value!, limit);
+    if (compiling) this._sampleStart = undefined;
+    return compiling;
+  }
+  private _adaptResolution() {
+    if (!this._busy && this.adaptiveResolution && this._frameTime > 0 && this.samples > 0) {
+      this._adaptiveScale = nextPreviewScale(this._adaptiveScale, this._frameTime, this.adaptiveResolution.targetFrameMs, this._resolutionScale, this._adaptiveScale, this.adaptiveResolution.minScale);
+      this._frameTime = 0;
+    }
   }
   /** Accumulates within this frame's budget. Rejects calls during converge or after disposal. */
   refine(): RenderStatus {
@@ -366,12 +387,12 @@ export default class Render {
     target.setPreserveDenoisedOutput?.(!!this._filter && this._schedule() === 'progressive');
     const limit = this._nextSampleTarget();
     if (this.samples < limit) {
-      if (target.trace(this._engine._inputs.value!, limit)) return this._status = 'compiling';
+      if (this._trace(target, limit)) return this._status = 'compiling';
     }
     this._maybeDenoise(false, limit);
     if (this._denoisePending) return this._status = this.converged ? 'denoising' : 'converging';
     if (this._filterPending && this.converged) return this._status = 'preparing';
-    if (this.adaptiveResolution && this._frameTime > 0 && this.samples > 0) this._adaptiveScale = nextPreviewScale(this._adaptiveScale, this._frameTime, this.adaptiveResolution.targetFrameMs, this._resolutionScale, this.adaptiveResolution.minScale);
+    this._adaptResolution();
     return this._status = this.converged ? 'finished' : 'converging';
   }
   private _refineOne() {
@@ -379,8 +400,9 @@ export default class Render {
     this._reloadDenoiser(); const target = this._synchronize();
     if (!target) return;
     target.activate();
-    if (this.samples < 1) this._status = target.trace(this._engine._inputs.value!, 1) ? 'compiling' : 'converging';
+    if (this.samples < 1) this._status = this._trace(target, 1) ? 'compiling' : 'converging';
     this._maybeDenoise();
+    if (!this._denoisePending) this._adaptResolution();
   }
   private _schedule() { return this._denoiserOptions?.schedule ?? 'converged'; }
   private _nextSampleTarget() {
@@ -452,7 +474,7 @@ export default class Render {
     if (!force && this._schedule() === 'progressive' && this.samples < sampleTarget) return;
     this._engine.display._configure(this);
     target.activate(); target.drawPostProcess();
-    const revision = ++this._denoiseRevision, samples = this.samples;
+    const revision = ++this._denoiseRevision, samples = this.samples, frameStart = this._frameStart;
     const controller = this._denoiseController = new AbortController();
     // One shared scratch lease across all renders; queued stale jobs do no GPU work.
     const task = this._engine._enqueueDenoise(async () => {
@@ -466,10 +488,18 @@ export default class Render {
       }
       const complete = await target.performDenoise?.(filter, undefined, this._schedule(), controller.signal);
       if (revision !== this._denoiseRevision || this._disposed) return;
-      if (complete) { target.activate(); target.drawPostProcess(); this._denoisedSamples = samples; this._lastDenoiseTime = performance.now(); }
+      if (complete) {
+        target.activate(); target.drawPostProcess(); this._denoisedSamples = samples; this._lastDenoiseTime = performance.now();
+        if (frameStart !== undefined) this._frameTime = Math.max(this._frameTime, this._lastDenoiseTime - frameStart);
+      }
     });
     this._denoisePending = task;
-    void task.catch(error => { if (revision === this._denoiseRevision && !this._disposed) this._engine._notifyError(error); }).finally(() => { if (this._denoisePending === task) { this._denoiseController = undefined; this._denoisePending = undefined; this._status = this.converged ? 'finished' : 'converging'; } });
+    void task.catch(error => { if (revision === this._denoiseRevision && !this._disposed) this._engine._notifyError(error); }).finally(() => {
+      if (this._denoisePending === task) {
+        this._denoiseController = undefined; this._denoisePending = undefined;
+        this._status = this.converged ? 'finished' : 'converging'; this._adaptResolution();
+      }
+    });
   }
   /** Reads native RGBA float32, top row first. Default hdr. Custom denoised output is resolved linear HDR ray color before display background/catcher composition; built-ins retain their native display-space output. Unavailable denoised output falls back to hdr. */
   async readPixels(kind: 'hdr' | 'denoised' | 'albedo' | 'normal' = 'hdr') {
@@ -488,7 +518,7 @@ export default class Render {
     return this._target?.getOutputTexture?.(kind);
   }
   /** Discards only this render's accumulation and pending denoising. */
-  restart() { if (this._disposed) throw new Error('Render is disposed.'); this._cancelDenoise(); this._target?.restartSamples(); this._status = 'converging'; }
+  restart() { if (this._disposed) throw new Error('Render is disposed.'); this._cancelDenoise(); this._sampleStart = this._frameStart = undefined; this._frameTime = 0; this._target?.restartSamples(); this._status = 'converging'; }
   /** Releases only this render's image resources and denoiser. */
   dispose() {
     if (this._disposed) return;
