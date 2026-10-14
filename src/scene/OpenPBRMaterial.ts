@@ -56,12 +56,12 @@ export default class OpenPBRMaterial {
   specularWeight: number = materialDefault('specularWeight');
   /** Dielectric specular tint and metallic F82 near-grazing tint. Default `[1, 1, 1]`. */
   specularColor: ColorRGB = materialDefault('specularColor');
-  /** Microfacet roughness, `0` mirror to `1` rough. Default `0.3`. */
+  /** Microfacet roughness, `0` mirror to `1` rough; retains source perceptual roughness in `gltf` anisotropy mode. Default `0.3`. */
   specularRoughness: number = materialDefault('specularRoughness');
   /** Index of refraction. Default `1.5`. */
   specularIor: number = materialDefault('specularIor');
   /**
-   * OpenPBR GGX anisotropy, 0 to 1 (requires tangents). Default `0`.
+   * GGX anisotropy strength, 0 to 1 (requires tangents); native OpenPBR or source glTF strength according to specularAnisotropyModel. Default `0`.
    * @deprecated Use specularRoughnessAnisotropy.
    */
   specularAnisotropy: number = materialDefault('specularAnisotropy');
@@ -197,6 +197,8 @@ export default class OpenPBRMaterial {
   specularColorMap?: Texture;
 
 
+  /** Source convention for base specular anisotropy. `gltf` converts textured roughness and strength before coat roughening; `openpbr` uses native parameters. Default `openpbr`. */
+  specularAnisotropyModel: 'openpbr' | 'gltf' = 'openpbr';
   /** Linear RG tangent direction and B strength multiplier for the base specular layer. Default `undefined`. */
   anisotropyMap?: Texture;
   /** Base direction rotation in radians, counter-clockwise in tangent/bitangent space after RG decoding. Default `0`. */
@@ -204,7 +206,7 @@ export default class OpenPBRMaterial {
   /** Coat direction rotation in radians relative to the geometry tangent. Default `0`. */
   coatAnisotropyRotation: number = 0;
 
-  /** OpenPBR GGX roughness anisotropy in [0, 1]; requires tangents. Default `0`. */
+  /** GGX roughness anisotropy in [0, 1]; native OpenPBR or source glTF strength according to specularAnisotropyModel. Requires tangents. Default `0`. */
   get specularRoughnessAnisotropy(): number { return this.specularAnisotropy; }
   set specularRoughnessAnisotropy(value: number) { this.specularAnisotropy = value; }
 

@@ -2382,7 +2382,7 @@ ${rayTraceCompute({
         materials.some(material => material.specularAnisotropy > 0 || material.coatAnisotropy > 0),
 
       USE_ANISOTROPY_DIRECTIONS: materials.some(m =>
-        m.specularAnisotropy > 0 && (!!m.anisotropyMap || m.specularAnisotropyRotation !== 0) ||
+        m.specularAnisotropy > 0 && (m.specularAnisotropyModel === 'gltf' || !!m.anisotropyMap || m.specularAnisotropyRotation !== 0) ||
         m.coatAnisotropy > 0 && m.coatAnisotropyRotation !== 0),
       HAS_MEDIUM,
       HAS_SHADOW_CATCHER: this._hasShadowCatcher,

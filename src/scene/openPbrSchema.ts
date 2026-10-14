@@ -1,6 +1,7 @@
 import type { default as OpenPBRMaterial, OpenPBRMaterialParams } from './OpenPBRMaterial.js';
 import Texture from './Texture.js';
 import type { MaterialTextureName } from './materialTextureNames.js';
+import { specularAnisotropyModelIndex } from './anisotropyParameters.js';
 import { thinFilmMapChannelIndex } from './thinFilmParameters.js';
 
 export const materialAliases = {
@@ -102,6 +103,7 @@ export const openPbrSchema = [
   {key: 'anisotropyMap', type: 'texture', default: undefined, category: 'texture'},
   {key: 'specularAnisotropyRotation', type: 'float', default: 0, category: 'param'},
   {key: 'coatAnisotropyRotation', type: 'float', default: 0, category: 'param'},
+  {key: 'specularAnisotropyModel', type: 'enum', default: 'openpbr', category: 'param'},
 ] as const satisfies readonly Field[];
 type SchemaTextureName = Extract<typeof openPbrSchema[number], {type: 'texture'}>['key'];
 const textureNamesMatch: [Exclude<MaterialTextureName, SchemaTextureName> | Exclude<SchemaTextureName, MaterialTextureName>] extends [never] ? true : never = true;
@@ -125,6 +127,7 @@ export function materialDefault<K extends MaterialKey>(key: K): OpenPBRMaterial[
 export function applyMaterialParams(material: OpenPBRMaterial, input: OpenPBRMaterialParams) {
   const params = normalizeMaterialParams(input);
   if (params.thinFilmMapChannel !== undefined) thinFilmMapChannelIndex(params.thinFilmMapChannel);
+  if (params.specularAnisotropyModel !== undefined) specularAnisotropyModelIndex(params.specularAnisotropyModel);
   for (const {key} of openPbrSchema) {
     if (params[key] !== undefined) Object.assign(material, {[key]: params[key]});
   }

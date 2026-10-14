@@ -694,7 +694,7 @@ const warnedDirectionGeometry = new WeakSet<Geometry>();
 /** Prepare auto-generated source attributes before the renderer captures array identities. */
 export function ensureMeshGeometryAttributes(meshes: readonly Mesh[]) {
   for (const { geometry, materials } of meshes) {
-    if (!geometry.tangent && !warnedDirectionGeometry.has(geometry) && materials.some(m => m.anisotropyMap || m.specularAnisotropyRotation !== 0 || m.coatAnisotropyRotation !== 0)) {
+    if (!geometry.tangent && !warnedDirectionGeometry.has(geometry) && materials.some(m => m.anisotropyMap || m.specularAnisotropyRotation !== 0 || m.coatAnisotropyRotation !== 0 || (m.specularAnisotropyModel === 'gltf' && m.specularAnisotropy > 0))) {
       console.warn('MuTracer: anisotropy direction has no vertex tangent; deriving a frame from the selected UV set with a stable fallback for degenerate UVs.');
       warnedDirectionGeometry.add(geometry);
     }

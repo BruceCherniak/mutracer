@@ -30,6 +30,15 @@ export function createMaterialBufferWgsl({
 
   return /* wgsl */ `
 
+${hasAnisotropyDirections ? /* wgsl */ `fn gltf_anisotropy_to_openpbr(roughness: f32, strength: f32) -> vec2f {
+  if (strength == 0.0) { return vec2f(roughness, 0.0); }
+  let u = roughness * roughness;
+  let a = u + (1.0 - u) * strength * strength;
+  if (a == 0.0) { return vec2f(0.0); }
+  return vec2f(pow((a*a + u*u) * 0.5, 0.25), clamp(1.0 - u/a, 0.0, 1.0));
+}
+` : /* wgsl */ ``}
+
 fn sRGBToLinear(c: vec3f) -> vec3f {
   return mix(pow(c * 0.9478672986 + 0.0521327014, vec3f(2.4)), c * 0.0773993808, vec3f(c < vec3f(0.04045)));
 }
@@ -231,6 +240,11 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     let direction = texel.rg * 2.0 - 1.0;
     if (dot(direction, direction) > 1e-4) { (*ma).anisotropyDirection = normalize(direction); }
     (*ma).anisotropyDirectionEnabled = true;
+  }
+  if (matData.specularAnisotropyModel > 0.5 && (*ma).specularAnisotropy > 0.0) {
+    let native = gltf_anisotropy_to_openpbr(clamp((*ma).specularRoughness, 0.0, 1.0), (*ma).specularAnisotropy);
+    (*ma).specularRoughness = native.x;
+    (*ma).specularAnisotropy = native.y;
   }
   if ((*ma).anisotropyDirectionEnabled) {
     let theta = matData.specularAnisotropyRotation;

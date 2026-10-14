@@ -1,3 +1,4 @@
+import { specularAnisotropyModelIndex, finiteAnisotropySource } from '../scene/anisotropyParameters.js';
 import { finiteFilmThickness, thinFilmMapChannelIndex } from '../scene/thinFilmParameters.js';
 import { MATERIAL_TEXTURE_NAMES, MATERIAL_TEXTURE_SLOTS, type MaterialTextureIndex } from './materialTextureSlots.js';
 import { packMaterialBuffer } from './materialLayout.js';
@@ -460,6 +461,7 @@ export interface BufferData extends Record<MaterialTextureIndex, number[]> {
 
   mediumType: number[];
   coatNormalMapIndex: number[];
+  specularAnisotropyModel: number[];
   specularAnisotropyRotation: number[];
   coatAnisotropyRotation: number[];
   coatNormalScale: vec2.Vec2Array[];
@@ -729,7 +731,7 @@ class MaterialTable {
     const media = materials.map(openPbrMedium);
     return {
       color: materials.map((m) => m.baseColor.slice(0, 3) as ColorRGB),
-      roughness: materials.map((m) => m.specularRoughness),
+      roughness: materials.map(m => m.specularAnisotropyModel === 'gltf' ? finiteAnisotropySource(m.specularRoughness, 0.3) : m.specularRoughness),
       emission: materials.map(materialEmission),
       metallic: materials.map((m) => m.baseMetalness),
       ior: materials.map((m) => m.specularIor),
@@ -737,7 +739,8 @@ class MaterialTable {
       thin: materials.map((m) => +m.thinWalled),
       bevelSize: materials.map((m) => m.bevelSize),
       transmission: materials.map((m) => m.transmissionWeight),
-      anisotropy: materials.map((m) => m.specularAnisotropy),
+      anisotropy: materials.map(m => m.specularAnisotropyModel === 'gltf' ? finiteAnisotropySource(m.specularAnisotropy, 0) : m.specularAnisotropy),
+      specularAnisotropyModel: materials.map(m => specularAnisotropyModelIndex(m.specularAnisotropyModel)),
       thinFilmThickness: materials.map((m) => finiteFilmThickness(m.thinFilmThickness, 0.5)),
       thinFilmThicknessMinimum: materials.map((m) => finiteFilmThickness(m.thinFilmThicknessMinimum, 0)),
       thinFilmMapChannel: materials.map((m) => thinFilmMapChannelIndex(m.thinFilmMapChannel)),

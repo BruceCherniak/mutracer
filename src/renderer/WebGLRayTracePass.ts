@@ -653,6 +653,7 @@ class WebGLRayTracePass {
         USE_VERTEX_COLOR: mergedGeometry.color != null,
         USE_TANGENT: mergedGeometry.tangent != null,
         HAS_TRANSMISSION: this._hasTransmission,
+        HAS_GLTF_ANISOTROPY: materials.some(m => m.specularAnisotropyModel === 'gltf' && m.specularAnisotropy > 0),
         HAS_BEVEL,
         HAS_MEDIUM,
         HAS_ALPHA: this._hasAlpha,

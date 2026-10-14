@@ -57,6 +57,7 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | `MeshPhysicalMaterial.clearcoatMap`, `.clearcoatRoughnessMap` | `coatWeightMap` (linear R), `coatRoughnessMap` (linear G) |
 | `MeshPhysicalMaterial.sheenColorMap`, `.sheenRoughnessMap` | `fuzzColorMap` (sRGB RGB), `fuzzRoughnessMap` (linear A) |
 | `MeshPhysicalMaterial.specularIntensityMap`, `.specularColorMap` | `specularWeightMap` (linear A), `specularColorMap` (sRGB RGB) |
+| `MeshPhysicalMaterial.anisotropy`, `.anisotropyRotation`, `.anisotropyMap` | Source strength, rotation and direction texture; see [anisotropy source conversion](#anisotropy-source-conversion) |
 | `SkinnedMesh` / mesh with morph targets | CPU-deformed dynamic geometry |
 | `InstancedMesh` | One InstancedMesh per group/color variant, sharing geometry and BLAS |
 | Multi-material groups | One MuTracer mesh per group |
@@ -88,8 +89,8 @@ scale, offset and flipY. `mutracerOpenPBR` can override them with a MuTracer
 `Texture` or `THREE.Texture`; explicit `null` clears an imported map, while
 unknown JSON objects are ignored. `THREESync` follows texture edits without
 copying pixels. General `KHR_texture_transform` rotation remains unsupported.
-Clearcoat normals and anisotropy direction maps are deferred to the next
-implementation steps. The conversion preserves OpenPBR layering: glTF sheen
+Clearcoat normals are deferred to the independent coat-frame implementation.
+Anisotropy direction and source-model mapping are described [below](#anisotropy-source-conversion). The conversion preserves OpenPBR layering: glTF sheen
 layer order differs, and specular weight/color also affect metals in OpenPBR;
 these imports do not imply identical glTF BRDFs.
 
@@ -257,3 +258,13 @@ not dispose supplied syncs or renders; see [ownership](./progressive-rendering.m
 
 
 Native `mutracerOpenPBR` metadata can set `anisotropyMap` (a MuTracer or Three.js Texture, or null to clear), `specularAnisotropyRotation` and `coatAnisotropyRotation` (radians, default zero). Imported geometry preserves a tangent's optional W handedness.
+
+## Anisotropy source conversion
+
+`MeshPhysicalMaterial.anisotropy`, `anisotropyRotation` and `anisotropyMap` import as source strength, base rotation (radians) and the linear RG/B direction map, with `specularAnisotropyModel = 'gltf'`. Roughness and its maps retain source values. `GLTFLoader` supplies the extension defaults and texture coordinates; `THREESync` propagates later strength, rotation, texture and metadata edits without rewriting pixels. Nonphysical materials retain native semantics.
+
+For sampled source roughness r and strength a, u = r², A = u + (1 - u)a² and B = u. The native anisotropy is 1 - B/A (clamped to [0, 1] against Float32 roundoff) and native roughness is ((A² + B²)/2)^(1/4). A = B = 0 resolves to zero. Strength zero returns the original roughness directly. Conversion occurs after roughness/metallic-roughness sampling and the anisotropy blue multiplier, followed by the existing OpenPBR coat roughening. CPU conversion before multiplying maps would give different alpha axes and is not used. The coat's anisotropy is independent.
+
+Metadata overriding `specularAnisotropy` or `specularRoughnessAnisotropy` defaults back to `'openpbr'` and clears the automatically imported direction map/rotation to undefined/zero. Explicit metadata direction values can replace or restore them; explicit `specularAnisotropyModel: 'gltf'` retains source semantics and the imported directions. An unrelated override such as baseColor preserves the imported model. Texture overrides accept MuTracer/Three.js textures, and null clears a texture. Invalid model names throw.
+
+This is an alpha-parameter match, with approximation differences from the renderer's Fresnel, masking, energy compensation and layer model. Zero roughness with nonzero strength reaches the existing alpha minimum; this numerical endpoint does not reproduce a singular zero-width distribution. General KHR texture-transform rotation remains the adapter limitation documented above.

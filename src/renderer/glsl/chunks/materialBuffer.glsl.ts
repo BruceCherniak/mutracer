@@ -22,6 +22,17 @@ export default createShaderMixin({
   },
   main: glsl`
 ${materialRowsGlsl()}
+#ifdef HAS_GLTF_ANISOTROPY
+vec2 gltf_anisotropy_to_openpbr(float roughness, float strength) {
+  if (strength == 0.0) { return vec2(roughness, 0.0); }
+  float u = roughness * roughness;
+  float a = u + (1.0 - u) * strength * strength;
+  if (a == 0.0) { return vec2(0.0); }
+  return vec2(pow((a*a + u*u) * 0.5, 0.25), clamp(1.0 - u/a, 0.0, 1.0));
+}
+
+#endif
+
 vec3 sRGBToLinear(vec3 c) {
   return mix(pow(c * 0.9478672986 + 0.0521327014, vec3(2.4)), c * 0.0773993808, vec3(lessThan(c, vec3(0.04045))));
 }
@@ -271,6 +282,13 @@ void getMaterial(
     vec2 direction = texel.rg * 2.0 - 1.0;
     if (dot(direction, direction) > 1e-4) mat.anisotropyDirection = normalize(direction);
     mat.anisotropyDirectionEnabled = true;
+  }
+#endif
+#ifdef HAS_GLTF_ANISOTROPY
+  if (fetchMatData(i + MAT_ROW_FILM_TEXTURE).y > 0.5 && mat.specularAnisotropy > 0.0) {
+    vec2 native = gltf_anisotropy_to_openpbr(clamp(mat.specularRoughness, 0.0, 1.0), mat.specularAnisotropy);
+    mat.specularRoughness = native.x;
+    mat.specularAnisotropy = native.y;
   }
 #endif
   if (mat.anisotropyDirectionEnabled) {

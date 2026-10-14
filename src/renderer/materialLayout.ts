@@ -149,7 +149,7 @@ export const MATERIAL_LAYOUT = [
   ] },
   { name: 'FILM_TEXTURE', fields: [
     field('coatAnisotropyRotation', 'coatAnisotropyRotation', 'f32'),
-    field('specularAnisotropyModel', null, 'f32', true),
+    field('specularAnisotropyModel', 'specularAnisotropyModel', 'f32'),
     field('thinFilmThicknessMinimum', 'thinFilmThicknessMinimum', 'f32'),
     field('thinFilmMapChannel', 'thinFilmMapChannel', 'f32')
   ] },

@@ -1,3 +1,4 @@
+import { specularAnisotropyModelIndex } from '../scene/anisotropyParameters.js';
 import { normalizeMaterialParams } from '../scene/openPbrSchema.js';
 import { thinFilmMapChannelIndex } from '../scene/thinFilmParameters.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
@@ -308,6 +309,12 @@ function convertMaterial(
   material.specularRoughnessAnisotropy = Number.isFinite(anisotropy)
     ? Math.min(1, Math.max(0, anisotropy))
     : 0;
+  if (physicalMaterial.isMeshPhysicalMaterial) {
+    material.specularAnisotropyModel = 'gltf';
+    material.anisotropyMap = convertTexture(physicalMaterial.anisotropyMap, textureCache);
+    const rotation = Number(physicalMaterial.anisotropyRotation);
+    material.specularAnisotropyRotation = Number.isFinite(rotation) ? rotation : 0;
+  }
   const sourceOpenPbr = standardMaterial.userData.mutracerOpenPBR as Record<string, unknown> | undefined;
   const openPbr = sourceOpenPbr ? normalizeMaterialParams(sourceOpenPbr) : undefined;
   const finite = (
@@ -332,6 +339,15 @@ function convertMaterial(
       : fallback;
   };
   if (openPbr) {
+    if (openPbr.specularAnisotropyModel !== undefined) {
+      specularAnisotropyModelIndex(openPbr.specularAnisotropyModel);
+      material.specularAnisotropyModel = openPbr.specularAnisotropyModel as 'openpbr' | 'gltf';
+    }
+    if (openPbr.specularAnisotropy !== undefined && openPbr.specularAnisotropyModel !== 'gltf') {
+      material.specularAnisotropyModel = 'openpbr';
+      material.anisotropyMap = undefined;
+      material.specularAnisotropyRotation = 0;
+    }
     // Only supported Texture inputs are accepted; arbitrary metadata objects
     // must never enter the atlas as textures. Explicit null clears an import.
     for (const name of ['coatWeightMap', 'coatRoughnessMap', 'fuzzColorMap',
