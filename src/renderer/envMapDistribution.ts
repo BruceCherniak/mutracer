@@ -69,7 +69,7 @@ export function envMapDistribution(
     Math.floor(data.length / (image.width * image.height)),
     1
   );
-  const sourceScale = data instanceof Uint8Array ? 1 / 255 : 1;
+  const sourceScale = (data instanceof Uint8Array || data instanceof Uint8ClampedArray) ? 1 / 255 : 1;
   const luminance = new Float32Array(image.width * image.height);
   for (let y = 0; y < image.height; y++) {
     for (let x = 0; x < image.width; x++) {

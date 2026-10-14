@@ -16,6 +16,7 @@ export default createShaderMixin({
     mapInfo: Shader.arrayUniform('vec4', 'NUM_MAPS'),
     mapTransform: Shader.arrayUniform('vec4', 'NUM_MAPS'),
     mapUvChannel: Shader.arrayUniform('float', 'NUM_MAPS'),
+    mapColorLinear: Shader.arrayUniform('float', 'NUM_MAPS'),
     map: Shader.uniform('sampler2DArray')
   },
   defines: {
@@ -61,6 +62,11 @@ vec2 unpackMaterialIndex(int val) {
 }
 
 #ifdef NUM_MAPS
+vec3 decodeMapColor(int index, vec3 c) {
+  if (mapColorLinear[index] > 0.5) { return c; }
+  return sRGBToLinear(c);
+}
+
 vec2 getMapSize(int index) {
   return mapInfo[index].xy;
 }
@@ -208,7 +214,7 @@ void getMaterial(
       );
       // Material factors from THREE / glTF are already linear. Only color
       // textures need decoding from their stored sRGB values.
-      mat.baseColor *= sRGBToLinear(diffuse.rgb);
+      mat.baseColor *= decodeMapColor(diffuseMapIndex, diffuse.rgb);
 
       // Map alpha to transmission
       if (mapAlphaUsage == ${mapAlphaUsageConstants.transmission + ''}) {
@@ -250,7 +256,7 @@ void getMaterial(
       vec3 emissive = sampleMap(
         emissiveMapIndex, getMapUvSet(emissiveMapIndex, uv, uv1)
       ).rgb;
-      mat.emission *= sRGBToLinear(emissive);
+      mat.emission *= decodeMapColor(emissiveMapIndex, emissive);
     }
   #endif
 

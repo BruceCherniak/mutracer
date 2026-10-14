@@ -165,7 +165,7 @@ export function simpleTextureSample(property: MaterialTextureName, backend: 'wgs
   const slot = MATERIAL_TEXTURE_SLOTS.find(slot => slot.property === property);
   if (!slot || slot.sampling !== 'multiply') throw new Error(`Handwritten texture slot: ${property}`);
   const index = slot.index;
-  const sample = (expression: string) => slot.colorSpace === 'srgb' ? `sRGBToLinear(${expression})` : expression;
+  const sample = (expression: string) => slot.colorSpace === 'srgb' ? `decodeMapColor(${index}, ${expression})` : expression;
   if (backend === 'wgsl') {
     return `
   if (${slot.feature}) {

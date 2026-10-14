@@ -2,6 +2,7 @@ import { specularAnisotropyModelIndex, finiteAnisotropySource } from '../scene/a
 import { finiteFilmThickness, thinFilmMapChannelIndex } from '../scene/thinFilmParameters.js';
 import { MATERIAL_TEXTURE_NAMES, MATERIAL_TEXTURE_SLOTS, type MaterialTextureIndex } from './materialTextureSlots.js';
 import { packMaterialBuffer } from './materialLayout.js';
+import { float16Bits } from './float16.js';
 import {createCanvas} from '../util/canvas.js';
 import { mapAlphaUsageConstants } from './materialConstants.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
@@ -14,7 +15,8 @@ import { materialEmission } from './materialEmission.js';
 import {
   Texture2DArray as WebGLTexture2DArray,
   constants,
-  Texture2D
+  Texture2D,
+  type TexturePixelSource
 } from './webgl.js';
 import OpenPBRMaterial, {
   materialAlphaModeConstants,
@@ -22,10 +24,7 @@ import OpenPBRMaterial, {
 } from '../scene/OpenPBRMaterial.js';
 import { ColorRGB } from '../types.js';
 import { mergeTexturesFromMaterials } from './texturesFromMaterials.js';
-import Texture, {
-  isTextureDataSource,
-  type TextureDataSource
-} from '../scene/Texture.js';
+import Texture, { isTextureDataSource } from '../scene/Texture.js';
 import { commonNearestFloatProps, setDataTexture } from './dataTextureUtil.js';
 import { SceneLight } from '../scene/Scene.js';
 
@@ -176,42 +175,63 @@ function createDataAtlasPage(
   width: number,
   height: number,
   page: ReturnType<typeof packTextureAtlas>['pages'][number],
-  textures: Texture[]
-): TextureDataSource {
-  const data = new Uint8Array(width * height * 4);
+  textures: Texture[],
+  floatStorage: boolean
+): TexturePixelSource {
+  const data = floatStorage ? new Uint16Array(width * height * 4) : new Uint8Array(width * height * 4);
+  // Retain the same Canvas composition for DOM layers, including straight-alpha
+  // readback. Raw sources never pass through Canvas or its color conversion.
+  const domPlacements = page.placements.filter(p => !isTextureDataSource(textures[p.index].image));
+  if (domPlacements.length) {
+    const canvas = createAtlasCanvas(width, height);
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Unable to create a canvas for the texture atlas.');
+    for (const placement of domPlacements) drawAtlasImage(context, placement, textures[placement.index]);
+    const pixels = context.getImageData(0, 0, width, height).data;
+    for (let i = 0; i < pixels.length; i++) data[i] = floatStorage ? float16Bits(pixels[i] / 255) : pixels[i];
+  }
   for (const placement of page.placements) {
     const texture = textures[placement.index];
     const source = texture.image;
-    if (!isTextureDataSource(source) || !(source.data instanceof Uint8Array)) {
-      throw new Error(
-        'Native texture atlas pages require RGBA8 Uint8Array sources.'
-      );
+    if (!isTextureDataSource(source)) continue;
+    const bytes = source.data instanceof Uint8Array || source.data instanceof Uint8ClampedArray;
+    if (!bytes && !(source.data instanceof Float32Array) && !(source.data instanceof Int32Array)) {
+      throw new Error('Material texture data must be Uint8Array, Uint8ClampedArray, Float32Array or Int32Array.');
     }
     if (source.data.length !== source.width * source.height * 4) {
-      throw new Error(
-        'Native texture atlas RGBA8 source length does not match its dimensions.'
-      );
+      throw new Error('Material texture RGBA source length does not match its dimensions.');
     }
     for (let y = 0; y < placement.height; y++) {
-      let sourceY = Math.min(
-        source.height - 1,
-        Math.floor(((y + 0.5) * source.height) / placement.height)
-      );
+      let sourceY = Math.min(source.height - 1, Math.floor(((y + 0.5) * source.height) / placement.height));
       if (texture.flipY) sourceY = source.height - 1 - sourceY;
       for (let x = 0; x < placement.width; x++) {
-        const sourceX = Math.min(
-          source.width - 1,
-          Math.floor(((x + 0.5) * source.width) / placement.width)
-        );
+        const sourceX = Math.min(source.width - 1, Math.floor(((x + 0.5) * source.width) / placement.width));
         const sourceOffset = (sourceY * source.width + sourceX) * 4;
-        const targetOffset = (
-          (placement.y + y) * width + placement.x + x
-        ) * 4;
-        data.set(source.data.subarray(sourceOffset, sourceOffset + 4), targetOffset);
+        const targetOffset = ((placement.y + y) * width + placement.x + x) * 4;
+        for (let c = 0; c < 4; c++) {
+          const value = source.data[sourceOffset + c];
+          data[targetOffset + c] = floatStorage ? float16Bits(bytes ? value / 255 : value) : value;
+        }
       }
     }
   }
   return { data, width, height };
+}
+
+function drawAtlasImage(
+  context: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D,
+  placement: AtlasPlacement,
+  texture: Texture
+) {
+  if (texture.flipY) {
+    context.save();
+    context.translate(placement.x, placement.y + placement.height);
+    context.scale(1, -1);
+    context.drawImage(texture.image as CanvasImageSource, 0, 0, placement.width, placement.height);
+    context.restore();
+  } else {
+    context.drawImage(texture.image as CanvasImageSource, placement.x, placement.y, placement.width, placement.height);
+  }
 }
 
 function makeTextureArray(
@@ -225,6 +245,7 @@ function makeTextureArray(
       mapInfo: [] as number[],
       mapTransform: [] as number[],
       mapUvChannel: [] as number[],
+      mapColorLinear: [] as number[],
       stats: {
         estimatedBytes: 0,
         height: 1,
@@ -251,14 +272,13 @@ function makeTextureArray(
   const dataBacked = textures.some((texture) =>
     isTextureDataSource(texture.image)
   );
-  if (
-    dataBacked &&
-    textures.some((texture) => !isTextureDataSource(texture.image))
-  ) {
-    throw new Error(
-      'Material texture atlases cannot mix DOM images and data-backed images.'
-    );
-  }
+  const mapColorLinear = textures.map(texture => {
+    const image = texture.image;
+    return Number(isTextureDataSource(image) &&
+      !(image.data instanceof Uint8Array) && !(image.data instanceof Uint8ClampedArray));
+  });
+  const floatStorage = mapColorLinear.some(Boolean);
+  const bytesPerPixel = floatStorage ? 8 : 4;
 
   const maxTextureArrayLayers = options.maxTextureArrayLayers ?? Infinity;
   const maxTextureDimension2D = options.maxTextureDimension2D ?? Infinity;
@@ -275,7 +295,7 @@ function makeTextureArray(
   );
   const maxPageSizeFromBudget = Math.max(
     1,
-    Math.floor(Math.sqrt(maxTextureArrayBytes / 4))
+    Math.floor(Math.sqrt(maxTextureArrayBytes / bytesPerPixel))
   );
   const pageSize = Math.max(
     1,
@@ -287,7 +307,7 @@ function makeTextureArray(
       )
     )
   );
-  const pageBytes = pageSize * pageSize * 4;
+  const pageBytes = pageSize * pageSize * bytesPerPixel;
   const maxPageCount = Math.max(
     1,
     Math.min(
@@ -338,37 +358,14 @@ function makeTextureArray(
   );
   const pages = packed.pages.map((page) => {
     if (dataBacked) {
-      return createDataAtlasPage(atlasWidth, atlasHeight, page, textures);
+      return createDataAtlasPage(atlasWidth, atlasHeight, page, textures, floatStorage);
     }
     const canvas = createAtlasCanvas(atlasWidth, atlasHeight);
     const context = canvas.getContext('2d');
     if (!context) {
       throw new Error('Unable to create a canvas for the texture atlas.');
     }
-    for (const placement of page.placements) {
-      const sourceTexture = textures[placement.index];
-      if (sourceTexture.flipY) {
-        context.save();
-        context.translate(placement.x, placement.y + placement.height);
-        context.scale(1, -1);
-        context.drawImage(
-          sourceTexture.image as CanvasImageSource,
-          0,
-          0,
-          placement.width,
-          placement.height
-        );
-        context.restore();
-      } else {
-        context.drawImage(
-          sourceTexture.image as CanvasImageSource,
-          placement.x,
-          placement.y,
-          placement.width,
-          placement.height
-        );
-      }
-    }
+    for (const placement of page.placements) drawAtlasImage(context, placement, textures[placement.index]);
     return canvas;
   });
 
@@ -396,6 +393,7 @@ function makeTextureArray(
     width: atlasWidth,
     height: atlasHeight,
     sRGB,
+    type: floatStorage ? constants.HALF_FLOAT : constants.UNSIGNED_BYTE,
     source: pages,
     flipY: false,
     flipYArray: pages.map(() => false),
@@ -415,8 +413,9 @@ function makeTextureArray(
       texture.uvOffset[1]
     ]),
     mapUvChannel: textures.map((texture) => texture.uvChannel),
+    mapColorLinear,
     stats: {
-      estimatedBytes: atlasWidth * atlasHeight * pages.length * 4,
+      estimatedBytes: atlasWidth * atlasHeight * pages.length * bytesPerPixel,
       height: atlasHeight,
       layers: pages.length,
       packTimeMs: performance.now() - packStart,
@@ -453,6 +452,7 @@ export interface BufferData extends Record<MaterialTextureIndex, number[]> {
   mapInfo: number[];
   mapTransform: number[];
   mapUvChannel: number[];
+  mapColorLinear: number[];
 
   bumpMapIndex: number[];
 
@@ -672,7 +672,7 @@ class MaterialTable {
         lightTexturesIndices.push(-1);
       }
     }
-    const { mapInfo, mapTransform, mapUvChannel, stats, texture } = makeTextureArray(
+    const { mapInfo, mapTransform, mapUvChannel, mapColorLinear, stats, texture } = makeTextureArray(
       allTextures,
       false,
       options
@@ -683,6 +683,7 @@ class MaterialTable {
     bufferData.mapInfo = mapInfo;
     bufferData.mapTransform = mapTransform;
     bufferData.mapUvChannel = mapUvChannel;
+    bufferData.mapColorLinear = mapColorLinear;
     for (const slot of MATERIAL_TEXTURE_SLOTS) {
       bufferData[slot.index] = maps.indices[slot.property];
     }
@@ -829,6 +830,7 @@ class MaterialTable {
     pass.setUniform('mapInfo', this.bufferData.mapInfo);
     pass.setUniform('mapTransform', this.bufferData.mapTransform);
     pass.setUniform('mapUvChannel', this.bufferData.mapUvChannel);
+    pass.setUniform('mapColorLinear', this.bufferData.mapColorLinear);
     pass.setUniforms({
       materialBuffer: this._matBufferTex,
       materialBufferColumns: this._materialBufferColumnsLog

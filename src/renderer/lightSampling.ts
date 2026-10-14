@@ -139,7 +139,7 @@ export function estimateEnvironmentPower(image?: TexturePixelSource) {
     const sinTheta = Math.sin(Math.PI * (y + 0.5) / height);
     for (let x = 0; x < width; x++) {
       const offset = (y * width + x) * channels;
-      const scale = data instanceof Uint8Array ? 1 / 255 : 1;
+      const scale = (data instanceof Uint8Array || data instanceof Uint8ClampedArray) ? 1 / 255 : 1;
       weightedLuminance +=
         colorLuminance([
           data[offset] * scale,

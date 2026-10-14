@@ -77,7 +77,7 @@ export namespace vec3 {
 export type Mat4Array = Float32Array | number[];
 export type TextureImageSource = any;
 export interface TexturePixelSource {
-  data: Float32Array | Int32Array | Uint8Array;
+  data: Float32Array | Int32Array | Uint8Array | Uint8ClampedArray;
   width: number;
   height: number;
 }

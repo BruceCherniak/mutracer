@@ -1,3 +1,4 @@
+import { constants } from './webgl.js';
 import { MATERIAL_FLOAT_COUNT } from './materialLayout.js';
 import { normalizeBounces } from './pathLimits.js';
 import { MATERIAL_TEXTURE_DEFINES, materialTextureFeatures } from './materialTextureSlots.js';
@@ -2062,7 +2063,7 @@ ${rayTraceCompute({
         source instanceof Float32Array
           ? source
           : Float32Array.from(source, (value) =>
-              source instanceof Uint8Array ? value / 255 : value
+              (source instanceof Uint8Array || source instanceof Uint8ClampedArray) ? value / 255 : value
             );
       this._device.queue.writeTexture(
         { texture: this._backgroundTex },
@@ -2607,6 +2608,7 @@ ${rayTraceCompute({
     const mapInfo = materialData.bufferData.mapInfo ?? [0, 0, 0, 0];
     const mapTransform = materialData.bufferData.mapTransform ?? [1, 1, 0, 0];
     const mapUvChannel = materialData.bufferData.mapUvChannel ?? [0];
+    const mapColorLinear = materialData.bufferData.mapColorLinear;
     const numMaps = +this._constants.NUM_MAPS;
     const mapInfoData = new F32(numMaps * 12);
     for (let i = 0; i < mapInfo.length; i++) {
@@ -2617,6 +2619,7 @@ ${rayTraceCompute({
     }
     for (let i = 0; i < mapUvChannel.length; i++) {
       mapInfoData[numMaps * 8 + i * 4] = mapUvChannel[i];
+      mapInfoData[numMaps * 8 + i * 4 + 1] = mapColorLinear[i];
     }
     let mapInfoUniform = this._mapInfoUniform;
     if (!mapInfoUniform || mapInfoUniform.size !== mapInfoData.byteLength) {
@@ -2627,6 +2630,8 @@ ${rayTraceCompute({
     this._device.queue.writeBuffer(mapInfoUniform, 0, mapInfoData);
     const texture = materialData.texture;
     const maps = this._maps;
+    const textureFormat = texture?.storageType === constants.HALF_FLOAT ? 'rgba16float' : 'rgba8unorm';
+    const bytesPerPixel = textureFormat === 'rgba16float' ? 8 : 4;
     const textureWidth = Math.max(texture?.width ?? 1, 1);
     const textureHeight = Math.max(texture?.height ?? 1, 1);
     // TODO Must at least 2 layers.
@@ -2641,13 +2646,14 @@ ${rayTraceCompute({
 
     if (
       !maps ||
+      textureFormat !== maps.format ||
       textureWidth !== maps.width ||
       textureHeight !== maps.height ||
       textureDepth !== maps.depthOrArrayLayers
     ) {
       maps && maps.destroy();
       this._maps = this._device.createTexture({
-        format: 'rgba8unorm',
+        format: textureFormat,
         label: 'Maps',
         usage:
           GPUTextureUsage.TEXTURE_BINDING |
@@ -2665,13 +2671,13 @@ ${rayTraceCompute({
     // Upload the textures
     texture?.source!.forEach((img: TexImageSource & { width: number; height: number }, idx: number) => {
       if (isTextureDataSource(img)) {
-        if (!(img.data instanceof Uint8Array)) {
-          throw new Error('Material texture atlas GPU upload requires RGBA8 data.');
+        if (!(img.data instanceof Uint8Array) && !(img.data instanceof Uint16Array)) {
+          throw new Error('Material texture atlas GPU upload requires RGBA8 or RGBA16F data.');
         }
         this._device.queue.writeTexture(
           { texture: this._maps!, origin: [0, 0, idx] },
           img.data,
-          { bytesPerRow: img.width * 4, rowsPerImage: img.height },
+          { bytesPerRow: img.width * bytesPerPixel, rowsPerImage: img.height },
           { width: img.width, height: img.height, depthOrArrayLayers: 1 }
         );
         return;

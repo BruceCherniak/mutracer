@@ -22,7 +22,7 @@ export const constants = {
 
 export type TextureImageSource = any;
 export interface TexturePixelSource {
-  data: Float32Array | Int32Array | Uint8Array;
+  data: Float32Array | Int32Array | Uint8Array | Uint8ClampedArray | Uint16Array;
   width: number;
   height: number;
 }
@@ -330,7 +330,10 @@ export class Texture2DArray extends Texture2D {
         `Texture array ${this.width}x${this.height}x${depth} exceeds WebGL limits ${maxTextureSize}x${maxTextureSize}x${maxTextureArrayLayers}.`
       );
     }
-    const internalFormat = this._options.sRGB ? gl.SRGB8_ALPHA8 : gl.RGBA8;
+    const type = this.storageType;
+    const internalFormat = type === gl.HALF_FLOAT ? gl.RGBA16F
+      : type === gl.FLOAT ? gl.RGBA32F
+      : this._options.sRGB ? gl.SRGB8_ALPHA8 : gl.RGBA8;
     // Attribute allocation errors to this upload rather than an unrelated
     // earlier WebGL call whose error flag was never consumed.
     while (gl.getError() !== gl.NO_ERROR) {
@@ -345,7 +348,7 @@ export class Texture2DArray extends Texture2D {
       depth,
       0,
       gl.RGBA,
-      gl.UNSIGNED_BYTE,
+      type,
       null
     );
     const allocationError = gl.getError();
@@ -372,9 +375,13 @@ export class Texture2DArray extends Texture2D {
         source.height,
         1,
         gl.RGBA,
-        gl.UNSIGNED_BYTE,
-        source
+        type,
+        isPixelSource(source) ? source.data : source
       );
+      const uploadError = gl.getError();
+      if (uploadError !== gl.NO_ERROR) {
+        throw new Error(`WebGL could not upload texture array layer ${index} (error 0x${uploadError.toString(16)}).`);
+      }
     });
     this._dirty = false;
     this._allocated = true;

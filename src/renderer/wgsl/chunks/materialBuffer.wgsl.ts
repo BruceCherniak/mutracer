@@ -46,6 +46,11 @@ fn sRGBToLinear(c: vec3f) -> vec3f {
   return mix(pow(c * 0.9478672986 + 0.0521327014, vec3f(2.4)), c * 0.0773993808, vec3f(c < vec3f(0.04045)));
 }
 
+fn decodeMapColor(idx: i32, c: vec3f) -> vec3f {
+  if (mapInfo[idx + NUM_MAPS * 2].y > 0.5) { return c; }
+  return sRGBToLinear(c);
+}
+
 fn unpackMaterialIndex(val: i32) -> vec2f {
   return vec2f(f32(val >> 8), f32(val & 0xff) / 255.0);
 }
@@ -100,7 +105,7 @@ fn getMaterialEmission(materialIndex: i32, uv: vec2f, uv1: vec2f) -> vec3f {
   if (USE_EMISSIVE_MAPS) {
     let emissiveMapIndex = i32(matData.emissiveMapIndex);
     if (emissiveMapIndex >= 0) {
-      emission *= sRGBToLinear(sampleMap(
+      emission *= decodeMapColor(emissiveMapIndex, sampleMap(
         emissiveMapIndex, getMapUvSet(emissiveMapIndex, uv, uv1)
       ).rgb);
     }
@@ -190,7 +195,7 @@ fn getMaterial(
       );
       // Material factors from THREE / glTF are already linear. Only color
       // textures need decoding from their stored sRGB values.
-      (*ma).baseColor *= sRGBToLinear(diffuse.rgb);
+      (*ma).baseColor *= decodeMapColor(diffuseMapIndex, diffuse.rgb);
 
       // Map alpha to transmission
       if (matData.mapAlphaUsage == ${mapAlphaUsageConstants.transmission}) {

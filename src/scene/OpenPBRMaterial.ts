@@ -144,7 +144,7 @@ export default class OpenPBRMaterial {
   doubleSided: boolean = materialDefault('doubleSided');
 
   // Textures
-  /** Base color texture (sRGB), multiplied with `baseColor`. Default `undefined`. */
+  /** Base color texture, multiplied with `baseColor` using Texture color encoding. Default `undefined`. */
   map?: Texture;
   /** Standalone opacity texture sampled from its green channel, matching Three.js. Default `undefined`. */
   alphaMap?: Texture;
@@ -177,13 +177,13 @@ export default class OpenPBRMaterial {
   coatWeightMap?: Texture;
   /** Multiplies coatRoughness by the linear green channel. Default `undefined`. */
   coatRoughnessMap?: Texture;
-  /** Multiplies fuzzColor by the decoded sRGB RGB channels. Default `undefined`. */
+  /** Multiplies fuzzColor by RGB channels using Texture color encoding. Default `undefined`. */
   fuzzColorMap?: Texture;
   /** Multiplies fuzzRoughness by the linear alpha channel. Default `undefined`. */
   fuzzRoughnessMap?: Texture;
   /** Multiplies specularWeight by the linear alpha channel. Default `undefined`. */
   specularWeightMap?: Texture;
-  /** Multiplies specularColor by the decoded sRGB RGB channels. Default `undefined`. */
+  /** Multiplies specularColor by RGB channels using Texture color encoding. Default `undefined`. */
   specularColorMap?: Texture;
 
 
