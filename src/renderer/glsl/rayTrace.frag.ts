@@ -59,7 +59,7 @@ for(int idx = 0; idx < min(BOUNCES * 3, ${MAX_PATH_EVENTS}); idx++) {
 export default function createRayTraceFragmentShader() {
   const intelMac = isIntelMac();
   return new FragmentShader({
-  name: 'rayTarceFrag',
+  name: 'rayTraceFrag',
   outputs: ['color', 'albedo', 'normal', 'moments'],
   defines: {
     BOUNCES: 2
