@@ -71,69 +71,73 @@ export function StatusBar() {
 
   return (
     <div className="float dock" role="status" data-phase={phase}>
-      <ProgressRing progress={progress} phase={phase} />
-      <div className="dock__status" title={done && msPerSample ? `${elapsed.toFixed(1)} s · ${msPerSample.toFixed(1)} ms per sample` : undefined}>
-        <b>{playing && (phase === 'previewing' || phase === 'converging') ? 'Playing' : LABELS[phase]}</b>
-        <span className="mono"><span className="dock__spp">{samples}</span> spp{time && <span className="dock__time"> · {time}</span>}</span>
+      <div className="dock__summary">
+        <ProgressRing progress={progress} phase={phase} />
+        <div className="dock__status" title={done && msPerSample ? `${elapsed.toFixed(1)} s · ${msPerSample.toFixed(1)} ms per sample` : undefined}>
+          <b>{playing && (phase === 'previewing' || phase === 'converging') ? 'Playing' : LABELS[phase]}</b>
+          <span className="mono"><span className="dock__spp">{samples}</span> spp{time && <span className="dock__time"> · {time}</span>}</span>
+        </div>
+        {phase !== 'finished' && <button className="icon-btn icon-btn--bare dock__pause" aria-label={paused ? 'Resume rendering' : 'Pause rendering'}
+          title={paused ? 'Resume (Space)' : 'Pause accumulation (Space)'} data-active={paused || undefined}
+          onClick={() => useViewer.setState({ paused: !paused })}>
+          {paused ? <Play size={14} /> : <Pause size={14} />}
+        </button>}
       </div>
-      {phase !== 'finished' && <button className="icon-btn icon-btn--bare dock__pause" aria-label={paused ? 'Resume rendering' : 'Pause rendering'}
-        title={paused ? 'Resume (Space)' : 'Pause accumulation (Space)'} data-active={paused || undefined}
-        onClick={() => useViewer.setState({ paused: !paused })}>
-        {paused ? <Play size={14} /> : <Pause size={14} />}
-      </button>}
       <span className="sep" />
-      <Select
-        label="Max samples"
-        prefix="Samples"
-        value={String(maxSamples)}
-        options={sampleOptions.map((v) => ({ value: String(v), label: String(v) }))}
-        onChange={(v) => setSettings({ maxSamples: Number(v) })}
-      />
-      <Select
-        label="Render resolution"
-        prefix="Res"
-        value={String(resolutionScale)}
-        options={resolutionOptions.map((v) => ({
-          value: String(v),
-          label: `${Math.round(v * 100)}%`,
-          hint: width ? `${Math.round(fullWidth * v)}×${Math.round(fullHeight * v)}` : undefined
-        }))}
-        onChange={(v) => setSettings({ resolutionScale: Number(v) })}
-      />
-      <label
-        className="dock__toggle"
-        data-selected={denoise || undefined}
-        title="Denoise (D)"
-      >
-        <input
-          type="checkbox"
-          checked={denoise}
-          onChange={(e) => setSettings({ denoise: e.currentTarget.checked })}
+      <div className="dock__settings">
+        <Select
+          label="Max samples"
+          prefix="Samples"
+          value={String(maxSamples)}
+          options={sampleOptions.map((v) => ({ value: String(v), label: String(v) }))}
+          onChange={(v) => setSettings({ maxSamples: Number(v) })}
         />
-        <span className="dock__label">Denoise</span>
-      </label>
-      {denoise && <Select
-        label="Denoiser type"
-        value={webgl || settings.denoiseModel === 'jnlm' ? 'jnlm' : 'oidn'}
-        options={[
-          { value: 'oidn', label: 'OIDN', disabled: webgl, hint: webgl ? 'Requires WebGPU' : undefined },
-          { value: 'jnlm', label: 'JNLM' }
-        ]}
-        onChange={(v) => setSettings({ denoiseModel: v === 'jnlm' ? 'jnlm' : settings.oidnModel })}
-      />}
-      {denoise && <label
-        className="dock__toggle"
-        data-selected={settings.denoiseWhileConverging || undefined}
-        title="Denoise while converging: previews and every few samples, not only the final image"
-      >
-        <input
-          type="checkbox"
-          aria-label="Live denoise"
-          checked={settings.denoiseWhileConverging}
-          onChange={(e) => setSettings({ denoiseWhileConverging: e.currentTarget.checked })}
+        <Select
+          label="Render resolution"
+          prefix="Res"
+          value={String(resolutionScale)}
+          options={resolutionOptions.map((v) => ({
+            value: String(v),
+            label: `${Math.round(v * 100)}%`,
+            hint: width ? `${Math.round(fullWidth * v)}×${Math.round(fullHeight * v)}` : undefined
+          }))}
+          onChange={(v) => setSettings({ resolutionScale: Number(v) })}
         />
-        <span className="dock__label">Live</span>
-      </label>}
+        <label
+          className="dock__toggle"
+          data-selected={denoise || undefined}
+          title="Denoise (D)"
+        >
+          <input
+            type="checkbox"
+            checked={denoise}
+            onChange={(e) => setSettings({ denoise: e.currentTarget.checked })}
+          />
+          <span className="dock__label">Denoise</span>
+        </label>
+        {denoise && <Select
+          label="Denoiser type"
+          value={webgl || settings.denoiseModel === 'jnlm' ? 'jnlm' : 'oidn'}
+          options={[
+            { value: 'oidn', label: 'OIDN', disabled: webgl, hint: webgl ? 'Requires WebGPU' : undefined },
+            { value: 'jnlm', label: 'JNLM' }
+          ]}
+          onChange={(v) => setSettings({ denoiseModel: v === 'jnlm' ? 'jnlm' : settings.oidnModel })}
+        />}
+        {denoise && <label
+          className="dock__toggle"
+          data-selected={settings.denoiseWhileConverging || undefined}
+          title="Denoise while converging: previews and every few samples, not only the final image"
+        >
+          <input
+            type="checkbox"
+            aria-label="Live denoise"
+            checked={settings.denoiseWhileConverging}
+            onChange={(e) => setSettings({ denoiseWhileConverging: e.currentTarget.checked })}
+          />
+          <span className="dock__label">Live</span>
+        </label>}
+      </div>
     </div>
   );
 }

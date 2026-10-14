@@ -45,9 +45,10 @@
 
 *, *::before, *::after { box-sizing: border-box; corner-shape: squircle; }
 html, body, #root { height: 100%; margin: 0; }
+#root { height: 100dvh; }
 [hidden] { display: none !important; }
 .backend-pill .dot, .tree-row.material .swatch, .step .dot, .ring, .timeline, .switch, .switch i,
-.progress, .progress i, .sheet-tabs button, .inspector--sheet::before, .mat-ball { corner-shape: round; }
+.progress, .progress i, .sheet-tabs button, .mat-ball { corner-shape: round; }
 body {
   background: var(--cv-bg);
   color: var(--cv-text);
@@ -210,6 +211,8 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 /* ---------- Viewport ---------- */
 .viewport { position: relative; overflow: hidden; background: var(--cv-workspace); container-type: inline-size; }
 .viewport__canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.viewport-bottom, .viewport-footer { display: contents; }
+.panel-toggle { display: none; }
 .viewport[data-picking] .viewport__canvas { cursor: crosshair; }
 .float {
   position: absolute; display: flex; align-items: center; gap: 4px; padding: 4px;
@@ -225,6 +228,7 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 
 .dock { left: 50%; bottom: 12px; translate: -50% 0; width: max-content; max-width: calc(100% - 24px); height: 46px; padding: 0 6px 0 9px; gap: 4px; }
 .dock .sep { height: 22px; margin: 0 2px; }
+.dock__summary, .dock__settings { display: contents; }
 .dock > *, .dock .select-field { flex: none; }
 .dock .select { width: auto; gap: 6px; padding: 0 7px 0 8px; font-family: var(--cv-mono); font-variant-numeric: tabular-nums; }
 .dock .select .muted { font-family: system-ui, sans-serif; color: var(--cv-text-4); }
@@ -574,7 +578,7 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 
 .scrim { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 16px; background: rgb(8 8 10 / 0.55); backdrop-filter: blur(3px); }
 .dialog { width: min(440px, 100%); padding: 18px; border: 1px solid rgb(255 255 255 / 0.09); border-radius: 22px; background: var(--cv-overlay);
-  box-shadow: var(--cv-shadow-overlay); outline: none; }
+  max-height: calc(100dvh - 32px); overflow: auto; box-shadow: var(--cv-shadow-overlay); outline: none; }
 .dialog [role='dialog'], .dialog form { display: grid; gap: 12px; outline: none; }
 .dialog__title { margin: 0; font-size: 14px; font-weight: 650; display: flex; justify-content: space-between; align-items: center; }
 .dialog .preview { height: 170px; border-radius: 12px; overflow: hidden; background: #222; }
@@ -612,7 +616,7 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 .ph-card img { display: block; width: 100%; aspect-ratio: 1; object-fit: cover; background: #2a2c33; }
 .ph-card span { overflow: hidden; padding: 5px 7px 6px; white-space: nowrap; text-overflow: ellipsis; }
 .ph-card__bar { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--cv-accent); transition: width 0.15s; }
-.code-head { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 12px; }
+.code-head { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
 .code-head__icon { display: grid; place-items: center; width: 34px; height: 34px; border-radius: var(--cv-radius-button);
   background: var(--cv-accent-surface); color: var(--cv-accent); }
 .code-head .hint { margin-top: 3px; font-size: 11px; color: var(--cv-text-3); }
@@ -657,7 +661,7 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 .hint code { font-family: var(--cv-mono); color: var(--cv-text-3); }
 .export-progress { display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 10px; color: var(--cv-text-2); font-size: 11px; }
 .export-progress .progress { margin: 0; }
-.text-input { height: 34px; padding: 0 10px; border: 1px solid var(--cv-control-border); border-radius: var(--cv-radius-compact);
+.text-input { width: 100%; min-width: 0; height: 34px; padding: 0 10px; border: 1px solid var(--cv-control-border); border-radius: var(--cv-radius-compact);
   background: var(--cv-input); outline: none; font-size: 12px; }
 .text-input:focus { border-color: var(--cv-accent); }
 
@@ -668,32 +672,97 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 .toast[data-tone='error'] span::before { content: '● '; color: var(--cv-error); }
 
 /* ---------- Mobile ---------- */
-@media (max-width: 768px) {
-  .app { grid-template-rows: 52px minmax(0, 1fr); }
-  .header { grid-template-columns: auto 1fr auto; gap: 6px; padding: 0 12px; }
-  .header__center { justify-content: flex-end; gap: 6px; }
-  .header .btn { padding: 0 10px; }
+@media (max-width: 768px), (max-width: 1024px) and (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
+  .app { grid-template-rows: auto minmax(0, 1fr);
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); }
+  .header { grid-template-columns: minmax(0, 1fr) auto auto; grid-template-rows: 44px; gap: 4px; padding: 4px 8px; }
+  .brand { grid-column: 1; grid-row: 1; }
+  .brand strong { overflow: hidden; text-overflow: ellipsis; }
+  .header__center { grid-column: 2; grid-row: 1; gap: 4px; min-width: 0; }
+  .header__right { grid-column: 3; grid-row: 1; gap: 4px; }
+  .header .btn, .header .icon-btn { height: 44px; border-radius: 16px; }
+  .header .icon-btn { width: 44px; }
+  .header .history-btns .icon-btn { width: 36px; }
+  .header .btn { min-width: 44px; padding: 0 10px; }
   .header .btn .chev { display: none; }
+  .header .hide-xs { display: none; }
   .brand small { display: none; }
   .hide-m { display: none !important; }
-  .workspace { display: block; position: relative; padding: 0; }
-  /* The canvas only covers the area above the sheet, so fitting centres the model. */
-  .viewport { position: absolute; inset: 0 0 calc(48% - 20px) 0; border-radius: 0; }
-  .inspector--sheet { position: absolute; left: 0; right: 0; bottom: 0; height: 48%; z-index: 10;
-    grid-template-rows: auto auto minmax(0, 1fr); border-radius: 20px 20px 0 0; box-shadow: 0 -10px 30px rgb(0 0 0 / 0.4); }
-  .inspector--sheet::before { content: ''; justify-self: center; width: 36px; height: 4px; margin-top: 8px; border-radius: 99px; background: rgb(255 255 255 / 0.2); }
+  .panel-toggle { display: inline-flex; flex: none; gap: 7px; width: 80px; height: 56px; padding: 0 10px; border-radius: 24px; }
+  .panel-toggle__label { display: grid; gap: 3px; text-align: left; line-height: 1.15; }
+  .panel-toggle__label b { font-size: 11px; font-weight: 600; }
+  .panel-toggle__label small { font-size: 10px; font-weight: 400; color: var(--cv-text-3); }
+  /* Floating controls need an opaque surface even when the panel is open. */
+  .btn.panel-toggle[aria-expanded] { background: #25272d; color: var(--cv-text);
+    border-color: rgb(255 255 255 / 0.09); box-shadow: var(--cv-shadow-floating); }
+  .btn.panel-toggle:hover { background: #30333b; }
+  .panel-toggle[aria-expanded='true'] svg { color: var(--cv-accent-hover); }
+  .workspace[data-mobile] { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 0; padding: 0; }
+  .workspace[data-sheet] { grid-template-rows: minmax(0, 1fr) minmax(0, 48%); }
+  /* Keep the canvas and its controls entirely above the settings panel. */
+  .viewport { min-width: 0; min-height: 0; border-radius: 0; }
+  .inspector--sheet { overflow: hidden;
+    grid-template-rows: auto minmax(0, 1fr); border-radius: 26px 26px 0 0; box-shadow: 0 -10px 30px rgb(0 0 0 / 0.4); }
   .inspector--sheet .scene-panel { background: none; }
-  .sheet-tabs { display: flex; gap: 4px; overflow-x: auto; padding: 8px 16px 0; scrollbar-width: none; }
-  .sheet-tabs button { flex: none; height: 30px; padding: 0 12px; border: 0; border-radius: 99px; background: rgb(255 255 255 / 0.05);
+  .sheet-tabs { display: flex; gap: 4px; overflow-x: auto; padding: 8px 12px; scrollbar-width: none; }
+  .sheet-tabs button { flex: 1 0 auto; min-height: 40px; padding: 0 10px; border: 0; border-radius: 99px; background: rgb(255 255 255 / 0.05);
     color: var(--cv-text-3); font-size: 11.5px; font-weight: 500; }
   .sheet-tabs button[data-on] { background: var(--cv-accent-surface); color: var(--cv-accent-hover); }
-  .insp-body { --insp-pad: 16px; }
+  .insp-body { --insp-pad: 16px; overscroll-behavior: contain; }
+  .inspector--sheet .scrub, .inspector--sheet .select { min-height: 38px; }
+  .inspector--sheet .switch-field { min-height: 40px; }
   .viewport-tools { top: 10px; }
-  .dock { bottom: 30px; }
-  .anim { bottom: 82px; }
-  .credit { bottom: 70px; max-width: calc(100% - 28px); font-size: 9px; }
-  .center-card { width: calc(100% - 32px); }
+  .float .icon-btn { width: 40px; height: 40px; }
+  .viewport-bottom { position: absolute; inset: auto 12px 12px; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
+  .viewport-bottom > * { position: static; translate: none; pointer-events: auto; }
+  .viewport-footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; }
+  .viewport-footer .dock { position: static; translate: none; flex: 0 1 auto; min-width: 0; max-width: calc(100% - 88px); }
+  .dock { flex-wrap: nowrap; justify-content: flex-start; width: fit-content; max-width: 100%; height: 56px; min-height: 46px;
+    padding: 8px 10px; gap: 6px; border: 1px solid rgb(255 255 255 / 0.08); border-radius: 24px; background: rgb(29 31 36 / 0.96); }
+  .dock__summary { display: flex; align-items: center; gap: 6px; flex: none; }
+  .dock .dock__settings { display: flex; align-items: center; gap: 4px; flex: 1; min-width: 0;
+    overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+  .dock__settings::-webkit-scrollbar { display: none; }
+  .dock > .sep { display: block; width: 1px; height: 24px; margin: 0; }
+  .dock .select .muted { display: none; }
+  .dock .select { height: 32px; gap: 4px; padding-inline: 7px; border-radius: 12px;
+    background: rgb(255 255 255 / 0.045); border: 1px solid rgb(255 255 255 / 0.05); }
+  .dock .ring { width: 26px; height: 26px; }
+  .dock__status { width: 70px; margin: 0; gap: 3px; }
+  .dock__time { display: none; }
+  .dock .dock__pause { display: grid; }
+  .dock .icon-btn { width: 28px; }
+  .dock__toggle { height: 32px; gap: 5px; padding: 0 7px; border-radius: 12px; background: rgb(255 255 255 / 0.04); }
+  .dock__toggle[data-selected] { background: rgb(var(--cv-accent-rgb) / 0.085); }
+  .dock__toggle input { width: 12px; height: 12px; }
+  .dock .select, .dock__toggle { min-height: 32px; }
+  .anim { flex-wrap: wrap; width: 100%; height: auto; padding: 6px; gap: 6px; }
+  .anim .select-field { max-width: 120px; }
+  .anim .select { min-width: 0; min-height: 36px; }
+  .anim .select > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .credit { max-width: 100%; font-size: 9px; text-align: center; overflow-wrap: anywhere; }
+  .center-card { width: min(340px, calc(100% - 24px)); max-height: calc(100% - 24px); overflow: auto; }
+  .popover { max-width: calc(100vw - 24px - env(safe-area-inset-left) - env(safe-area-inset-right)); }
+  .examples { max-height: min(var(--available-height, 100dvh), calc(100dvh - 24px)); }
+  .examples h4 { flex-wrap: wrap; }
+  .ex-grid { grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr)); }
+  .scrim { padding: max(12px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left)); }
+  .dialog { max-height: calc(100dvh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); }
+  .dialog .actions { flex-wrap: wrap; }
+  .dialog .est { flex-basis: 100%; }
+  .dialog .field-row { grid-template-columns: minmax(0, 1fr); }
+  .dialog .seg button { padding-inline: 4px; min-height: 32px; }
+  .search input, .text-input, .scrub__input { font-size: 16px; }
+  .toast { bottom: calc(12px + env(safe-area-inset-bottom)); }
+  .toast span { min-width: 0; overflow-wrap: anywhere; }
   .preset-grid { grid-template-columns: repeat(4, 1fr); }
+}
+@media (max-width: 380px) {
+  .header .brand__home > div { display: none; }
+}
+@media (max-width: 1024px) and (max-height: 500px) and (orientation: landscape) and (pointer: coarse) {
+  .workspace[data-sheet] { grid-template-columns: minmax(0, 1fr) minmax(280px, 38%); grid-template-rows: minmax(0, 1fr); }
+  .inspector--sheet { border-radius: 26px 0 0 26px; }
 }
 @media (max-width: 520px) {
   .hide-xs { display: none; }

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Crosshair, Focus, Maximize, Move, Pause, Play, Repeat as Loop, Upload } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Crosshair, Focus, Maximize, Move, Pause, Play, Repeat as Loop, Upload } from 'lucide-react';
 import { ViewerEngine, getEngine, setEngine } from '../engine/ViewerEngine';
 import { HANDOFF_HASH, readDroppedItems, takeStashedFiles } from '../engine/droppedFiles';
 import { FOCUS_AREA_SIZE } from '../engine/areaFocus';
@@ -13,6 +13,7 @@ export function Viewport() {
   const [dragging, setDragging] = useState(false);
   const picking = useViewer((s) => s.pickingFocus);
   const hidden = useViewer((s) => s.ui.hidden);
+  const inspectorOpen = useViewer((s) => s.ui.right);
 
   useEffect(() => {
     const engine = new ViewerEngine(canvasRef.current!);
@@ -59,9 +60,18 @@ export function Viewport() {
           <SelectionBox />
           <FocusFrame />
           <TopBar />
-          <Credit />
-          <AnimationBar />
-          <StatusBar />
+          <div className="viewport-bottom">
+            <Credit />
+            <AnimationBar />
+            <div className="viewport-footer">
+              <StatusBar />
+              <button className="btn panel-toggle" aria-label={inspectorOpen ? 'Hide inspector' : 'Show inspector'} aria-expanded={inspectorOpen}
+                onClick={() => setUi({ right: !inspectorOpen })}>
+                {inspectorOpen ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
+                <span className="panel-toggle__label"><b>{inspectorOpen ? 'Hide' : 'Show'}</b><small>Panel</small></span>
+              </button>
+            </div>
+          </div>
         </>
       )}
       <LoadingCard />

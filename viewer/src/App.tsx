@@ -11,7 +11,7 @@ import { ExportDialog } from './components/ExportDialog';
 import { CodeDialog } from './components/CodeDialog';
 import { TextureBrowser } from './components/TextureBrowser';
 
-const MOBILE_QUERY = '(max-width: 768px)';
+const MOBILE_QUERY = '(max-width: 768px), (max-width: 1024px) and (max-height: 500px) and (orientation: landscape) and (pointer: coarse)';
 
 function useMobile() {
   const [mobile, setMobile] = useState(() => matchMedia(MOBILE_QUERY).matches);
@@ -77,14 +77,15 @@ export function App() {
   const browse = right && ui.textureBrowser && ui.tab === 'material';
   return (
     <div className="app" data-hidden={ui.hidden || undefined}>
-      {!ui.hidden && <Toolbar />}
-      <main className="workspace" data-left={left || undefined} data-right={right || undefined} data-browse={browse || undefined} data-mobile={mobile || undefined}>
+      {!ui.hidden && <Toolbar mobile={mobile} />}
+      <main className="workspace" data-left={left || undefined} data-right={right || undefined} data-browse={browse || undefined} data-mobile={mobile || undefined}
+        data-sheet={(mobile && ui.right && !ui.hidden) || undefined}>
         {left && <SceneTree />}
         <Viewport />
         {browse && <TextureBrowser />}
         {right && <Inspector mobile={false} />}
         {!mobile && !ui.hidden && <InspectorRail />}
-        {mobile && !ui.hidden && <Inspector mobile />}
+        {mobile && ui.right && !ui.hidden && <Inspector mobile />}
       </main>
       <ExportDialog />
       <CodeDialog />

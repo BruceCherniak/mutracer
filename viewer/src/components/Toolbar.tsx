@@ -3,7 +3,7 @@ import {
   Button, Dialog, DialogTrigger, Heading, Menu, MenuItem, MenuTrigger, Modal, ModalOverlay, Popover, Separator
 } from 'react-aria-components';
 import {
-  ChevronDown, Code2, Download, FileUp, Folder, Globe, HelpCircle, Link, PanelLeft, PanelRight, Redo2, RotateCcw, Sparkles, Undo2, Upload, X
+  ChevronDown, Code2, Download, FileUp, Folder, Globe, HelpCircle, Link, MoreHorizontal, PanelLeft, PanelRight, Redo2, RotateCcw, Sparkles, Undo2, Upload, X
 } from 'lucide-react';
 import { setUi, useViewer } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
@@ -12,7 +12,7 @@ import { toPathedFiles } from '../engine/loadModel';
 import { redo, undo } from '../history';
 import { BrandMark } from './BrandMark';
 
-export function Toolbar() {
+export function Toolbar({ mobile }: { mobile: boolean }) {
   const backend = useViewer((s) => s.backend);
   const ui = useViewer((s) => s.ui);
   return (
@@ -20,7 +20,7 @@ export function Toolbar() {
       <div className="brand">
         <a className="brand__home" href="../" title="MuTracer home">
           <BrandMark />
-          <div><strong>MuTracer Viewer</strong><small>PATH TRACER</small></div>
+          <div><strong>{mobile ? 'MuTracer' : 'MuTracer Viewer'}</strong><small>PATH TRACER</small></div>
         </a>
         <span className="divider hide-m" />
         <button className="icon-btn icon-btn--bare sm hide-m" aria-label="Toggle scene panel" title="Toggle scene panel ([)"
@@ -32,10 +32,9 @@ export function Toolbar() {
       </div>
       <div className="header__right">
         <HistoryButtons />
-        <span className="divider" />
-        <ResetButton />
+        {!mobile && <><span className="divider" /><ResetButton /></>}
         <BackendMenu name={backend.name} adapter={backend.adapter} />
-        <a className="icon-btn icon-btn--bare" href="https://github.com/pissang/mutracer" target="_blank" rel="noopener noreferrer"
+        <a className="icon-btn icon-btn--bare hide-m" href="https://github.com/pissang/mutracer" target="_blank" rel="noopener noreferrer"
           aria-label="MuTracer on GitHub (opens in a new tab)" title="MuTracer on GitHub">
           {/* GitHub Octicons mark-github-16 (MIT): https://github.com/primer/octicons/blob/main/icons/mark-github-16.svg */}
           <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
@@ -43,9 +42,10 @@ export function Toolbar() {
           </svg>
         </a>
         <HelpButton />
-        <button className="btn" aria-label="Show code" title="Show code" onClick={() => setUi({ codeOpen: true })}>
+        {!mobile && <button className="btn" aria-label="Show code" title="Show code" onClick={() => setUi({ codeOpen: true })}>
           <Code2 size={15} /><span className="hide-xs">Code</span>
-        </button>
+        </button>}
+        {mobile && <MobileActionsMenu />}
         <button className="btn btn--primary" aria-label="Export image" onClick={() => setUi({ exportOpen: true })}>
           <Download size={15} /><span className="hide-xs">Export</span>
         </button>
@@ -74,23 +74,50 @@ function ResetButton() {
     <>
       <button className="icon-btn icon-btn--bare sm" aria-label="Reset all" title="Reset all"
         onClick={() => setOpen(true)}><RotateCcw size={15} /></button>
-      <ModalOverlay className="scrim" isOpen={open} onOpenChange={setOpen} isDismissable>
-        <Modal className="dialog">
-          <Dialog role="alertdialog" aria-label="Reset all">
-            {({ close }) => (
-              <>
-                <Heading slot="title" className="dialog__title">Reset all?</Heading>
-                <p className="hint">Lighting, render settings, materials and object visibility return to their defaults, and the camera frames the model again. You can undo this, except for the camera.</p>
-                <div className="actions">
-                  <button type="button" className="btn" autoFocus onClick={close}>Cancel</button>
-                  <button type="button" className="btn btn--danger" onClick={() => { getEngine()?.resetAll(); close(); }}>Reset all</button>
-                </div>
-              </>
-            )}
-          </Dialog>
-        </Modal>
-      </ModalOverlay>
+      <ResetDialog open={open} onOpenChange={setOpen} />
     </>
+  );
+}
+
+function MobileActionsMenu() {
+  const [resetOpen, setResetOpen] = useState(false);
+  return (
+    <>
+      <MenuTrigger>
+        <Button className="icon-btn" aria-label="More actions"><MoreHorizontal size={18} /></Button>
+        <Popover className="popover menu" offset={8} placement="bottom end" style={{ width: 220 }}>
+          <Menu className="menu-list" aria-label="More actions" onAction={(key) => {
+            if (key === 'code') setUi({ codeOpen: true });
+            if (key === 'reset') setResetOpen(true);
+          }}>
+            <MenuItem id="code" className="menu-item"><Code2 size={15} />Show code</MenuItem>
+            <MenuItem id="reset" className="menu-item"><RotateCcw size={15} />Reset all…</MenuItem>
+          </Menu>
+        </Popover>
+      </MenuTrigger>
+      <ResetDialog open={resetOpen} onOpenChange={setResetOpen} />
+    </>
+  );
+}
+
+function ResetDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
+  return (
+    <ModalOverlay className="scrim" isOpen={open} onOpenChange={onOpenChange} isDismissable>
+      <Modal className="dialog">
+        <Dialog role="alertdialog" aria-label="Reset all">
+          {({ close }) => (
+            <>
+              <Heading slot="title" className="dialog__title">Reset all?</Heading>
+              <p className="hint">Lighting, render settings, materials and object visibility return to their defaults, and the camera frames the model again. You can undo this, except for the camera.</p>
+              <div className="actions">
+                <button type="button" className="btn" autoFocus onClick={close}>Cancel</button>
+                <button type="button" className="btn btn--danger" onClick={() => { getEngine()?.resetAll(); close(); }}>Reset all</button>
+              </div>
+            </>
+          )}
+        </Dialog>
+      </Modal>
+    </ModalOverlay>
   );
 }
 
