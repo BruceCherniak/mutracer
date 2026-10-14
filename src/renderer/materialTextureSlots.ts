@@ -71,7 +71,7 @@ const slots = [
   },
   {
     property: 'displacementMap', index: 'displacementMapIndex',
-    target: 'displacement/bump', channel: 'r',
+    target: 'displacement', channel: 'r',
     colorSpace: 'linear', operation: 'custom',
     define: null, feature: null, featureBit: 0,
     sampling: 'manual'

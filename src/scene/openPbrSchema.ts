@@ -28,7 +28,6 @@ export function normalizeMaterialParams(params: OpenPBRMaterialParams | Record<s
 }
 type Field = {[K in MaterialKey]: {key: K; type: 'float' | 'color' | 'bool' | 'enum' | 'vec2' | 'texture'; default: OpenPBRMaterial[K]; category: 'param' | 'texture' | 'geometry'}}[MaterialKey];
 // Order is part of the existing deduplication hash contract.
-// displacementBumpStrength belongs to texture invalidation although its value is a float.
 export const openPbrSchema = [
   {key: 'baseWeight', type: 'float', default: 1, category: 'param'},
   {key: 'baseColor', type: 'color', default: [0.8, 0.8, 0.8], category: 'param'},
@@ -91,7 +90,6 @@ export const openPbrSchema = [
   {key: 'displacementMap', type: 'texture', default: undefined, category: 'texture'},
   {key: 'displacementScale', type: 'float', default: 0.1, category: 'geometry'},
   {key: 'displacementStepSize', type: 'float', default: 0.01, category: 'geometry'},
-  {key: 'displacementBumpStrength', type: 'float', default: 0, category: 'texture'},
   {key: 'thinFilmThicknessMinimum', type: 'float', default: 0, category: 'param'},
   {key: 'thinFilmMapChannel', type: 'enum', default: 'r', category: 'param'},
   {key: 'coatWeightMap', type: 'texture', default: undefined, category: 'texture'},

@@ -48,8 +48,7 @@ const lines = [
   '/** Static field accesses keep the unchanged-material path free of dynamic key lookups. */',
   'export function materialParametersEqual(material: OpenPBRMaterial, values: readonly unknown[]): boolean {'
 ];
-// The float displacementBumpStrength participates in both parameter and texture
-// classification. Texture objects are checked by materialTexturesChanged.
+// Texture objects are checked by materialTexturesChanged.
 const parameters = schema.filter(field => field.type !== 'texture');
 for (const [index, field] of parameters.entries()) {
   lines.push('  {', `    const value = material.${field.key}, previous = values[${index}];`);

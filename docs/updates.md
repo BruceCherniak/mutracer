@@ -116,8 +116,7 @@ The notification range is validated.
 Material parameter edits repack material parameters without touching geometry
 or BVHs. Emission edits also refresh light-sampling state, and texture edits
 rebuild the texture atlas. Displacement settings that move geometry require a
-[full mesh update](#full-mesh-updates); `displacementBumpStrength` affects
-shading only and takes the texture path.
+[full mesh update](#full-mesh-updates).
 
 Analytic-light edits keep the environment map. Ambient and environment edits
 rebuild it. Rect-light texture edits require a full mesh update, because those

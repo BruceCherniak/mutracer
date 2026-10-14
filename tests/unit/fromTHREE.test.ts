@@ -371,7 +371,6 @@ describe('Three.js scene conversion', () => {
     material.userData.mutracerDisplacementUvProjection = 'cylindrical';
     material.userData.mutracerDisplacementUvProjectionScale = 2.5;
     const mesh = new THREE.Mesh(new THREE.BoxGeometry(), material);
-    material.userData.mutracerDisplacementBumpStrength = 12;
     const scene = new THREE.Scene();
     scene.add(mesh);
 
@@ -384,8 +383,7 @@ describe('Three.js scene conversion', () => {
       uvProjectionScale: [1.5, 2.5],
       displacementStepSize: 0.004,
       displacementUvProjection: 'cylindrical',
-      displacementUvProjectionScale: 2.5,
-      displacementBumpStrength: 12
+      displacementUvProjectionScale: 2.5
     });
   });
 

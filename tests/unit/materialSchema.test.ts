@@ -40,8 +40,8 @@ describe('OpenPBR schema', () => {
     expect(materialKeys.slice(0, baseline.keys.length)).toEqual(baseline.keys);
     expect(materialKeys.slice(baseline.keys.length)).toEqual(['thinFilmThicknessMinimum', 'thinFilmMapChannel', 'coatWeightMap', 'coatRoughnessMap', 'fuzzColorMap', 'fuzzRoughnessMap', 'specularWeightMap', 'specularColorMap', 'anisotropyMap', 'specularAnisotropyRotation', 'coatAnisotropyRotation', 'specularAnisotropyModel', 'coatNormalMap', 'coatNormalScale']);
     expect(materials.map(getMaterialHashKey)).toEqual(baseline.hashes.map(hash => `${hash}_0_r_$_$_$_$_$_$_$_0_0_openpbr_$_1_1`));
-    // C1 migrates only the seven obsolete reserved scalars and stride.
-    // Historical keys/hash prefix and every effective field stay fixed.
+    // C1 migrates only the seven obsolete reserved scalars and stride; the
+    // displacement bump slots are reserved zeros since its removal.
     expect(bytes).toEqual(Buffer.from(baseline.packedBase64, 'base64'));
     expect(createHash('sha256').update(bytes).digest('hex')).toBe(baseline.sha256);
     // Undo just the approved reserved-slot migration and added rows. The
@@ -49,6 +49,9 @@ describe('OpenPBR schema', () => {
     const legacy = Buffer.concat(materials.map((_m, i) => {
       const prefix = Buffer.from(bytes.subarray(i * 416, i * 416 + 384));
       for (const offset of [96, 100, 104, 108, 300, 316, 348]) prefix.writeFloatLE(0, offset);
+      // Restore the removed displacement bump index and strength (1.043 at key 61).
+      prefix.writeFloatLE(i === 0 ? -1 : prefix.readFloatLE(116), 368);
+      prefix.writeFloatLE(i === 0 ? 0 : .25 + 61 * .013, 372);
       return prefix;
     }));
     expect(createHash('sha256').update(legacy).digest('hex')).toBe('bffe8ec5286e64b53b0fb35b542b8096b0a6ef0930c4c2d15266daf1b3b59a8c');

@@ -34,7 +34,7 @@ function getBVHTraverseCode(
               floatBitsToInt(fetchIns(insIdx * ${INSTANCE_VEC4_STRIDE}).z)
             ).x);
             bool materialDoubleSided = fetchMatData(
-              sideMaterialIndex * MAT_DATA_SIZE + MAT_ROW_BUMP_ALPHA
+              sideMaterialIndex * MAT_DATA_SIZE + MAT_ROW_ALPHA
             ).z > 0.5;
             if (!doubleSided && !materialDoubleSided && dot(faceNormal, d) > 0.0) {
               continue;
@@ -627,9 +627,8 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
   vec2 uv0 = texelFetch(uvBuffer, i0, 0).xy;
   vec2 uv1 = texelFetch(uvBuffer, i1, 0).xy;
   vec2 uv2 = texelFetch(uvBuffer, i2, 0).xy;
-  #if defined(NUM_DIFFUSE_MAPS) || defined(NUM_NORMAL_MAPS) || defined(NUM_BUMP_MAPS) || defined(NUM_METALLIC_ROUGHNESS_MAPS) || defined(NUM_ROUGHNESS_MAPS) || defined(NUM_METALNESS_MAPS) || defined(NUM_EMISSIVE_MAPS) || defined(NUM_THIN_FILM_MAPS) || defined(NUM_ANISOTROPY_MAPS) || defined(NUM_COAT_NORMAL_MAPS)
+  #if defined(NUM_DIFFUSE_MAPS) || defined(NUM_NORMAL_MAPS) || defined(NUM_METALLIC_ROUGHNESS_MAPS) || defined(NUM_ROUGHNESS_MAPS) || defined(NUM_METALNESS_MAPS) || defined(NUM_EMISSIVE_MAPS) || defined(NUM_THIN_FILM_MAPS) || defined(NUM_ANISOTROPY_MAPS) || defined(NUM_COAT_NORMAL_MAPS)
     vec2 uv = barycentric.x * uv0 + barycentric.y * uv1 + barycentric.z * uv2;
-    vec2 rawUv = uv;
     vec2 secondaryUv0 = texelFetch(uv1Buffer, i0, 0).xy;
     vec2 secondaryUv1 = texelFetch(uv1Buffer, i1, 0).xy;
     vec2 secondaryUv2 = texelFetch(uv1Buffer, i2, 0).xy;
@@ -712,24 +711,13 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
     vec3 t2 = texelFetch(tangentBuffer, i2, 0).xyz;
     si.tangent = normalize(barycentric.x * t0 + barycentric.y * t1 + barycentric.z * t2);
   #endif
-  #if defined(NUM_NORMAL_MAPS) || defined(NUM_BUMP_MAPS)
+  #if defined(NUM_NORMAL_MAPS)
     vec3 dp1 = tri.p0 - tri.p2;
     vec3 dp2 = tri.p1 - tri.p2;
     vec2 duv1 = uv0 - uv2;
     vec2 duv2 = uv1 - uv2;
-    vec4 displacementInfo = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_DISPLACEMENT);
-    int bumpProjection = int(displacementInfo.z);
-    float bumpUvScale = displacementInfo.w;
-    vec2 bumpUv = rawUv;
-    if (bumpProjection > 0) {
-      bumpUv = projectUV(
-        bumpProjection, si.position, normal, vec2(bumpUvScale)
-      );
-    } else {
-      bumpUv *= bumpUvScale;
-    }
     si.normal = getMatNormal(
-      si.materialIndex, uv, bumpUv, normal, dp1, dp2, duv1, duv2
+      si.materialIndex, uv, normal, dp1, dp2, duv1, duv2
     );
   #else
     si.normal = normal;
@@ -1096,7 +1084,7 @@ ${getBVHTraverseCode(
   #endif
     float alphaCutoff = fetchMatData(ii + MAT_ROW_STANDALONE_MAPS).a;
     alpha = resolveMaterialAlpha(
-      alpha, int(fetchMatData(ii + MAT_ROW_BUMP_ALPHA).w), alphaCutoff
+      alpha, int(fetchMatData(ii + MAT_ROW_ALPHA).w), alphaCutoff
     );
     if (hashedSample(0u) > alpha) {
       // Continue after a transparent hit without traversing beyond the light.

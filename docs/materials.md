@@ -204,7 +204,6 @@ ray-marching step (default `0.01`). No extra triangles are generated.
 `displacementUvProjection` (default `'none'`) and `displacementUvProjectionScale`
 (default `1`) control height-map coordinates.
 
-`displacementBumpStrength` (default `0`) reuses the height map for bump shading.
 The remaining `displacement*` properties are documented in the type declarations.
 
 ## Known limitations
@@ -244,10 +243,10 @@ Set `coatNormalMap` to give the coat a tangent-space normal independently of
 `normalMap`. The renderer decodes linear RGB as `2 * RGB - 1`, multiplies XY
 by `coatNormalScale`, then normalizes. The scale defaults to `[1, 1]` and can
 be negative or zero. A missing map (the default), zero coat weight or zero sampled coat coverage retains the existing shared
-shading normal, including the base normal and bump maps.
+shading normal, including the base normal map.
 
 The coat TBN starts from the interpolated geometry normal before base normal
-or bump mapping. It uses the coat texture's UV0/UV1 selection and geometric
+mapping. It uses the coat texture's UV0/UV1 selection and geometric
 tangent handedness; generated tangents use UV1 differentials when that set is
 selected. Degenerate frames and zero decoded vectors use stable fallbacks.
 The texture's scale, offset and `flipY` follow the ordinary atlas sampling

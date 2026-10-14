@@ -446,15 +446,12 @@ export interface BufferData extends Record<MaterialTextureIndex, number[]> {
   mapAlphaUsage: number[];
 
   normalScale: vec2.Vec2Array[];
-  bumpStrength: number[];
 
   type: (typeof ShadowCatcherMaterial | typeof UnlitMaterial | 0)[];
   mapInfo: number[];
   mapTransform: number[];
   mapUvChannel: number[];
   mapColorLinear: number[];
-
-  bumpMapIndex: number[];
 
   mediumType: number[];
   specularAnisotropyModel: number[];
@@ -649,9 +646,6 @@ class MaterialTable {
     options: MaterialTableOptions = {}
   ) {
     const maps = mergeTexturesFromMaterials(materials, MATERIAL_TEXTURE_NAMES);
-    const bumpMapIndices = maps.indices.displacementMap.map((index, materialIndex) =>
-      materials[materialIndex].displacementBumpStrength > 0 ? index : -1
-    );
     this._displacementMaps =
       maps.indices.displacementMap
         .map((idx) => {
@@ -687,7 +681,6 @@ class MaterialTable {
     for (const slot of MATERIAL_TEXTURE_SLOTS) {
       bufferData[slot.index] = maps.indices[slot.property];
     }
-    bufferData.bumpMapIndex = bumpMapIndices;
 
     this.bufferData = bufferData;
 
@@ -700,8 +693,7 @@ class MaterialTable {
     this.defines = {
       NUM_MAPS: allTextures.length,
       ...Object.fromEntries(MATERIAL_TEXTURE_SLOTS.flatMap(slot => slot.define
-        ? [[slot.define, countMaps(maps.indices[slot.property])]] : [])),
-      NUM_BUMP_MAPS: countMaps(bumpMapIndices)
+        ? [[slot.define, countMaps(maps.indices[slot.property])]] : []))
     };
 
     this._updateBuffer();
@@ -726,7 +718,6 @@ class MaterialTable {
       thinFilmMapChannel: materials.map((m) => thinFilmMapChannelIndex(m.thinFilmMapChannel)),
       thinFilmIor: materials.map((m) => m.thinFilmIor),
       normalScale: materials.map((m) => m.normalScale),
-      bumpStrength: materials.map((m) => Math.max(0, m.displacementBumpStrength)),
       mapAlphaUsage: materials.map((m) => mapAlphaUsageConstants[m.mapAlphaUsage]),
       type: materials.map((m) => {
         if (m.shadowCatcher) {

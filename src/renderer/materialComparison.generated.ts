@@ -262,31 +262,27 @@ export function materialParametersEqual(material: OpenPBRMaterial, values: reado
     if (!Object.is(value, previous) && !arrayParametersEqual(value, previous)) return false;
   }
   {
-    const value = material.displacementBumpStrength, previous = values[51];
+    const value = material.thinFilmThicknessMinimum, previous = values[51];
     if (!Object.is(value, previous) && !arrayParametersEqual(value, previous)) return false;
   }
   {
-    const value = material.thinFilmThicknessMinimum, previous = values[52];
+    const value = material.thinFilmMapChannel, previous = values[52];
     if (!Object.is(value, previous) && !arrayParametersEqual(value, previous)) return false;
   }
   {
-    const value = material.thinFilmMapChannel, previous = values[53];
+    const value = material.specularAnisotropyRotation, previous = values[53];
     if (!Object.is(value, previous) && !arrayParametersEqual(value, previous)) return false;
   }
   {
-    const value = material.specularAnisotropyRotation, previous = values[54];
+    const value = material.coatAnisotropyRotation, previous = values[54];
     if (!Object.is(value, previous) && !arrayParametersEqual(value, previous)) return false;
   }
   {
-    const value = material.coatAnisotropyRotation, previous = values[55];
+    const value = material.specularAnisotropyModel, previous = values[55];
     if (!Object.is(value, previous) && !arrayParametersEqual(value, previous)) return false;
   }
   {
-    const value = material.specularAnisotropyModel, previous = values[56];
-    if (!Object.is(value, previous) && !arrayParametersEqual(value, previous)) return false;
-  }
-  {
-    const value = material.coatNormalScale, previous = values[57];
+    const value = material.coatNormalScale, previous = values[56];
     if (Array.isArray(value) || ArrayBuffer.isView(value)) {
       const array = value as ArrayLike<number>;
       if (!Array.isArray(previous) || array.length !== previous.length) return false;
@@ -391,16 +387,6 @@ export function materialTexturesChanged(material: OpenPBRMaterial, previous: rea
   }
   {
     const texture = material.displacementMap;
-    if (typeof texture !== 'number') {
-      if (!texture) { if (previous[i++] !== undefined) return true; }
-      else if (previous[i++] !== texture || previous[i++] !== texture.version ||
-        previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
-        previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
-        previous[i++] !== texture.uvChannel) return true;
-    }
-  }
-  {
-    const texture = material.displacementBumpStrength as OpenPBRMaterial['map'] | number;
     if (typeof texture !== 'number') {
       if (!texture) { if (previous[i++] !== undefined) return true; }
       else if (previous[i++] !== texture || previous[i++] !== texture.version ||

@@ -25,8 +25,7 @@ function convert(source: THREE.MeshPhysicalMaterial) {
 
 describe('OpenPBR layer texture inputs', () => {
   it('has exactly one renderer descriptor for each scene texture name and schema field', () => {
-    const schemaNames = materialTextureKeys.filter(name => name !== 'displacementBumpStrength');
-    expect([...schemaNames].sort()).toEqual([...MATERIAL_TEXTURE_NAMES].sort());
+    expect([...materialTextureKeys].sort()).toEqual([...MATERIAL_TEXTURE_NAMES].sort());
     expect(MATERIAL_TEXTURE_SLOTS.map(slot => slot.property)).toEqual([...MATERIAL_TEXTURE_NAMES]);
     expect(new Set(MATERIAL_TEXTURE_SLOTS.map(slot => slot.property)).size).toBe(18);
     expect(MATERIAL_TEXTURE_SLOTS.slice(10).map(slot => [slot.channel, slot.colorSpace, slot.featureBit])).toEqual([

@@ -90,14 +90,6 @@ fn sampleMap(idx: i32, uv: vec2f) -> vec4f {
   return textureSampleLevel(map, mapSampler, getMapUV(idx, uv), getMapLayer(idx), 0.0);
 }
 
-fn getMapTexelStep(idx: i32) -> vec2f {
-  let atlasSize = vec2f(textureDimensions(map).xy);
-  let transform = abs(mapInfo[idx + NUM_MAPS].xy);
-  let sourceSize = getMapSize(idx) * atlasSize + vec2f(1.0);
-  let sourceSpan = max(sourceSize * transform, vec2f(1.0));
-  return 1.0 / sourceSpan;
-}
-
 
 fn getMaterialEmission(materialIndex: i32, uv: vec2f, uv1: vec2f) -> vec3f {
   let matData = materialsBuffer[materialIndex];
@@ -290,11 +282,10 @@ ${hasAnisotropyDirections ? /* wgsl */ `
   (*ma).alphaY = specularAlpha.y;
 }
 
-fn getMatNormal(materialIndex: i32, uv: vec2f, bumpUv: vec2f, normal: vec3f, dp1: vec3f, dp2: vec3f, duv1: vec2f, duv2: vec2f) -> vec3f {
+fn getMatNormal(materialIndex: i32, uv: vec2f, normal: vec3f, dp1: vec3f, dp2: vec3f, duv1: vec2f, duv2: vec2f) -> vec3f {
   let matData = materialsBuffer[materialIndex];
   let normalMapIndex = i32(matData.normalMapIndex);
-  let bumpMapIndex = i32(matData.bumpMapIndex);
-  if (normalMapIndex >= 0 || bumpMapIndex >= 0) {
+  if (normalMapIndex >= 0) {
     // http://www.thetenthplanet.de/archives/1180
     // TODO use tangent attribute
     // Compute co-tangent and co-bitangent vectors
@@ -320,23 +311,8 @@ fn getMatNormal(materialIndex: i32, uv: vec2f, bumpUv: vec2f, normal: vec3f, dp1
       dpdv = cross(normal, dpdu);
     }
 
-    var n = vec3f(0.0, 0.0, 1.0);
-    if (normalMapIndex >= 0) {
-      n = 2.0 * sampleMap(normalMapIndex, uv).rgb - 1.0;
-      n = vec3(n.xy * matData.normalMapScale, n.z);
-    }
-    if (bumpMapIndex >= 0 && matData.bumpStrength > 0.0) {
-      let texel = getMapTexelStep(bumpMapIndex);
-      let heightLeft = sampleMap(bumpMapIndex, bumpUv - vec2f(texel.x, 0.0)).r;
-      let heightRight = sampleMap(bumpMapIndex, bumpUv + vec2f(texel.x, 0.0)).r;
-      let heightDown = sampleMap(bumpMapIndex, bumpUv - vec2f(0.0, texel.y)).r;
-      let heightUp = sampleMap(bumpMapIndex, bumpUv + vec2f(0.0, texel.y)).r;
-      n = vec3f(
-        n.xy + vec2f(heightLeft - heightRight, heightDown - heightUp) * matData.bumpStrength,
-        n.z
-      );
-    }
-    n = normalize(n);
+    var n = 2.0 * sampleMap(normalMapIndex, uv).rgb - 1.0;
+    n = normalize(vec3(n.xy * matData.normalMapScale, n.z));
 
     let tbn = mat3x3(dpdu, dpdv, normal);
 

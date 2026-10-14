@@ -239,25 +239,6 @@ describe('MaterialTable texture arrays', () => {
     expect(packed[9 * 4 + 3]).toBe(0);
   });
 
-  it('reuses the projective displacement height map for bump shading', () => {
-    stubCanvas();
-    const material = new OpenPBRMaterial();
-    material.displacementMap = new Texture({
-      width: 32,
-      height: 16
-    } as HTMLImageElement);
-    material.displacementBumpStrength = 40;
-
-    const materialData = new MaterialTable([material], []);
-    const packed = materialData.getBufferArray();
-
-    expect(materialData.defines.NUM_BUMP_MAPS).toBe(1);
-    expect(materialData.bufferData.displacementMapIndex).toEqual([0]);
-    expect(materialData.bufferData.bumpMapIndex).toEqual([0]);
-    expect(packed[23 * 4]).toBe(0);
-    expect(packed[23 * 4 + 1]).toBe(40);
-  });
-
   it('packs the double-sided flag into the material buffer', () => {
     stubCanvas();
     const material = new OpenPBRMaterial();

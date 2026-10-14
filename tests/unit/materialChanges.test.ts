@@ -26,15 +26,6 @@ it('updates emission sampling and rebuilds projective bounds after height textur
   expect(tracker.classify([m]).level).toBe('geometry');
 });
 
-it('rebuilds texture indices for displacement bump strength without rebuilding geometry', () => {
-  const m = new OpenPBRMaterial(); m.displacementMap = texture();
-  const tracker = new MaterialChangeTracker(); tracker.capture([m]);
-  m.displacementBumpStrength = 1;
-  expect(tracker.classify([m])).toEqual({ level: 'textures', emission: false, emissiveMap: false });
-  tracker.capture([m]); m.displacementBumpStrength = 0;
-  expect(tracker.classify([m])).toEqual({ level: 'textures', emission: false, emissiveMap: false });
-});
-
 
 it('reports emissive map edits separately from unrelated texture edits', () => {
   const m = new OpenPBRMaterial(); const tracker = new MaterialChangeTracker();

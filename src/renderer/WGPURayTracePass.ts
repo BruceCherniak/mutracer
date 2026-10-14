@@ -1022,7 +1022,6 @@ class WGPURayTracePass {
         ...MATERIAL_TEXTURE_DEFINES,
         'USE_ANISOTROPY_DIRECTIONS',
         'USE_COAT_NORMAL_FRAMES',
-        'NUM_BUMP_MAPS',
         'COLOR_OFF',
         'USE_VERTEX_COLOR',
         'HAS_ALPHA_BLEND',
@@ -2368,7 +2367,7 @@ ${rayTraceCompute({
       // Match the atlas UV selector. Keep the second set when any texture
       // needs it; material/texture edits already rebuild these constants.
       USE_UV1: materialData.bufferData.mapUvChannel.some(channel => channel > 0.5),
-      // Isotropic OpenPBR constructs its own basis. Normal/bump mapping uses
+      // Isotropic OpenPBR constructs its own basis. Normal mapping uses
       // triangle UV differentials rather than this vertex tangent.
       USE_TANGENT: mergedGeometry.tangent != null &&
         materials.some(material => material.specularAnisotropy > 0 || material.coatAnisotropy > 0 || (!!material.coatNormalMap && material.coatWeight > 0)),
@@ -2407,9 +2406,7 @@ ${rayTraceCompute({
 
       NUM_MAPS,
       ...materialTextureFeatures(materialData.defines),
-      USE_NORMAL_MAPS:
-        +materialData.defines.NUM_NORMAL_MAPS > 0 ||
-        +materialData.defines.NUM_BUMP_MAPS > 0
+      USE_NORMAL_MAPS: +materialData.defines.NUM_NORMAL_MAPS > 0
     });
 
   }

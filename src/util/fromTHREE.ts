@@ -202,12 +202,6 @@ function convertMaterial(
   if (Number.isFinite(displacementUvProjectionScale)) {
     material.displacementUvProjectionScale = Math.max(displacementUvProjectionScale, 0.000001);
   }
-  const bumpStrength = Number(
-    standardMaterial.userData.mutracerDisplacementBumpStrength
-  );
-  if (Number.isFinite(bumpStrength)) {
-    material.displacementBumpStrength = Math.max(0, bumpStrength);
-  }
   if (
     standardMaterial.roughnessMap &&
     standardMaterial.roughnessMap === standardMaterial.metalnessMap

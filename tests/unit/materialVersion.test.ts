@@ -12,12 +12,12 @@ it('exhaustively classifies independent material property groups', () => {
   expect(Object.keys(material).sort()).toEqual([...materialKeys].sort());
 });
 
-it('detects scalar, vector element, vector replacement and displacement bump edits without notifications', () => {
+it('detects scalar, vector element, and vector replacement edits without notifications', () => {
   const material = new OpenPBRMaterial(), geometry = createCubeGeometry();
   const scene = {meshes: [new Mesh(geometry, material)], lights: []};
   const detector = new SceneChangeDetector(); detector.detect(scene); detector.commit();
   for (const edit of [() => {material.specularRoughness = .7;}, () => {material.baseColor[1] = .2;},
-    () => {material.baseColor = [.1,.2,.3];}, () => {material.displacementBumpStrength = .5;}]) {
+    () => {material.baseColor = [.1,.2,.3];}]) {
     edit();
     expect(detector.detect(scene)).toMatchObject({meshes: 'incremental', materials: [material], transforms: [], geometries: []});
     detector.commit(); expect(detector.detect(scene).meshes).toBe('none');

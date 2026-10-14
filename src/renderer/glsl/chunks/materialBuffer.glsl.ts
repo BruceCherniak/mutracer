@@ -101,14 +101,6 @@ vec2 getMapUvSet(int index, vec2 uv, vec2 uv1) {
 vec4 sampleMap(int index, vec2 uv) {
   return texture(map, vec3(getMapUV(index, uv), getMapLayer(index)));
 }
-
-vec2 getMapTexelStep(int index) {
-  vec2 atlasSize = vec2(textureSize(map, 0).xy);
-  vec2 transform = abs(mapTransform[index].xy);
-  vec2 sourceSize = getMapSize(index) * atlasSize + vec2(1.0);
-  vec2 sourceSpan = max(sourceSize * transform, vec2(1.0));
-  return 1.0 / sourceSpan;
-}
 #endif
 
 // OpenPBR 1.1.1: RMS-preserving GGX anisotropy, shared by base and coat.
@@ -229,7 +221,7 @@ void getMaterial(
   ${simpleTextureSample('alphaMap', 'glsl')}
 
   mat.alpha = resolveMaterialAlpha(
-    mat.alpha, int(fetchMatData(i + MAT_ROW_BUMP_ALPHA).w), standaloneMetalRoughMaps.w
+    mat.alpha, int(fetchMatData(i + MAT_ROW_ALPHA).w), standaloneMetalRoughMaps.w
   );
 
   ${simpleTextureSample('transmissionMap', 'glsl')}
@@ -333,15 +325,12 @@ void getMaterial(
   mat.alphaY = specularAlpha.y;
 }
 
-#if defined(NUM_NORMAL_MAPS) || defined(NUM_BUMP_MAPS)
-vec3 getMatNormal(int materialIndex, vec2 uv, vec2 bumpUv, vec3 normal, vec3 dp1, vec3 dp2, vec2 duv1, vec2 duv2) {
+#if defined(NUM_NORMAL_MAPS)
+vec3 getMatNormal(int materialIndex, vec2 uv, vec3 normal, vec3 dp1, vec3 dp2, vec2 duv1, vec2 duv2) {
   int i = materialIndex * MAT_DATA_SIZE;
   vec4 roughnessAndNormal = fetchMatData(i + MAT_ROW_ROUGHNESS_NORMAL);
   int normalMapIndex = int(roughnessAndNormal.y);
-  vec4 bump = fetchMatData(i + MAT_ROW_BUMP_ALPHA);
-  int bumpMapIndex = int(bump.x);
-  float bumpStrength = bump.y;
-  if (normalMapIndex >= 0 || bumpMapIndex >= 0) {
+  if (normalMapIndex >= 0) {
     // http://www.thetenthplanet.de/archives/1180
     // TODO use tangent attribute
     // Compute co-tangent and co-bitangent vectors
@@ -366,19 +355,8 @@ vec3 getMatNormal(int materialIndex, vec2 uv, vec2 bumpUv, vec3 normal, vec3 dp1
       dpdv = cross(normal, dpdu);
     }
 
-    vec3 n = vec3(0.0, 0.0, 1.0);
-    if (normalMapIndex >= 0) {
-      n = 2.0 * sampleMap(normalMapIndex, uv).rgb - 1.0;
-      n.xy *= roughnessAndNormal.zw;
-    }
-    if (bumpMapIndex >= 0 && bumpStrength > 0.0) {
-      vec2 texel = getMapTexelStep(bumpMapIndex);
-      float heightLeft = sampleMap(bumpMapIndex, bumpUv - vec2(texel.x, 0.0)).r;
-      float heightRight = sampleMap(bumpMapIndex, bumpUv + vec2(texel.x, 0.0)).r;
-      float heightDown = sampleMap(bumpMapIndex, bumpUv - vec2(0.0, texel.y)).r;
-      float heightUp = sampleMap(bumpMapIndex, bumpUv + vec2(0.0, texel.y)).r;
-      n.xy += vec2(heightLeft - heightRight, heightDown - heightUp) * bumpStrength;
-    }
+    vec3 n = 2.0 * sampleMap(normalMapIndex, uv).rgb - 1.0;
+    n.xy *= roughnessAndNormal.zw;
     n = normalize(n);
 
     mat3 tbn = mat3(dpdu, dpdv, normal);

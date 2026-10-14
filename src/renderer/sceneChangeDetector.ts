@@ -60,8 +60,7 @@ function captureMaterialTextures(material: OpenPBRMaterial, out: unknown[]) {
   out.length = i;
 }
 
-// Include scalar texture-category inputs such as displacementBumpStrength;
-// texture references and metadata have their own snapshot.
+// Texture references and metadata have their own snapshot.
 const parameterKeys = openPbrSchema.filter(field => field.type !== 'texture').map(field => field.key);
 
 export function snapshotMaterialParameters(material: OpenPBRMaterial, previous?: readonly unknown[]) {

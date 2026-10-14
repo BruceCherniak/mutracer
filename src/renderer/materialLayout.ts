@@ -134,9 +134,9 @@ export const MATERIAL_LAYOUT = [
     field('alphaMapIndex', 'alphaMapIndex', 'f32'),
     field('alphaCutoff', 'alphaCutoff', 'f32')
   ] },
-  { name: 'BUMP_ALPHA', fields: [
-    field('bumpMapIndex', 'bumpMapIndex', 'f32'),
-    field('bumpStrength', 'bumpStrength', 'f32'),
+  { name: 'ALPHA', fields: [
+    field('_padding1', null, 'f32', true),
+    field('_padding2', null, 'f32', true),
     field('doubleSided', 'doubleSided', 'f32'),
     field('alphaMode', 'alphaMode', 'f32')
   ] },

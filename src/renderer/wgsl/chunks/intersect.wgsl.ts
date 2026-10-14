@@ -962,7 +962,6 @@ fn fetchAttributes(
   }
 
   var uv: vec2f;
-  var rawUv: vec2f;
   var uv0: vec2f;
   var uv1: vec2f;
   var uv2: vec2f;
@@ -972,7 +971,6 @@ fn fetchAttributes(
     uv1 = attrBuffers[i1 * ATTR_STRIDE + UV_OFF].xy;
     uv2 = attrBuffers[i2 * ATTR_STRIDE + UV_OFF].xy;
     uv = bary.x * uv0 + bary.y * uv1 + bary.z * uv2;
-    rawUv = uv;
     if (USE_UV1) {
       let secondaryUv0 = attrBuffers[i0 * ATTR_STRIDE + UV1_OFF].xy;
       let secondaryUv1 = attrBuffers[i1 * ATTR_STRIDE + UV1_OFF].xy;
@@ -1104,18 +1102,8 @@ ${hasCoatNormals ? /* wgsl */ `
     let dp2 = tri.p1 - tri.p2;
     let duv1 = uv0 - uv2;
     let duv2 = uv1 - uv2;
-    let normalMaterial = materialsBuffer[(*si).materialIndex];
-    let bumpProjection = i32(normalMaterial.displacementUvProjection);
-    var bumpUv = rawUv;
-    if (bumpProjection > 0) {
-      bumpUv = projectUV(bumpProjection, (*si).position, normal);
-    }
-    bumpUv *= normalMaterial.displacementUvProjectionScale;
-    if (bumpProjection == ${uvProjectionConstants.triplanar}) {
-      bumpUv = fract(bumpUv);
-    }
     (*si).normal = getMatNormal(
-      (*si).materialIndex, uv, bumpUv, normal, dp1, dp2, duv1, duv2
+      (*si).materialIndex, uv, normal, dp1, dp2, duv1, duv2
     );
   }
 }

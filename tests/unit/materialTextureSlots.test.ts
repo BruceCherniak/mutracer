@@ -27,7 +27,6 @@ describe('internal material texture slots', () => {
       'NUM_METALLIC_ROUGHNESS_MAPS', 'NUM_ROUGHNESS_MAPS', 'NUM_METALNESS_MAPS', 'NUM_TRANSMISSION_MAPS', 'NUM_THIN_FILM_MAPS']) {
       expect(table.defines[define], define).toBe(2);
     }
-    expect(table.defines.NUM_BUMP_MAPS).toBe(0);
     expect(wgpuSceneFeatureFlags(materialTextureFeatures(table.defines))).toBe(1022);
   });
 

@@ -248,8 +248,6 @@ export default class OpenPBRMaterial {
   displacementScale: number = materialDefault('displacementScale');
   /** Ray-marching step for projective displacement. Default `0.01`. */
   displacementStepSize: number = materialDefault('displacementStepSize');
-  /** Reuses the displacement height map as a shading-only bump map. Default `0`. */
-  displacementBumpStrength: number = materialDefault('displacementBumpStrength');
 
 }
 export const materialAlphaModeConstants = {
