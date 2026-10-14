@@ -1,6 +1,7 @@
-import { Check, Pause, Play } from 'lucide-react';
+import { Button, Dialog, DialogTrigger, Heading, Popover } from 'react-aria-components';
+import { Check, Pause, Play, SlidersHorizontal, X } from 'lucide-react';
 import { setSettings, useViewer, type RenderPhase } from '../store';
-import { Select } from './ui/controls';
+import { Field, Select, Switch } from './ui/controls';
 
 const LABELS: Record<RenderPhase, string> = {
   starting: 'Starting',
@@ -55,7 +56,6 @@ export function StatusBar() {
   const settings = useViewer((s) => s.settings);
   const paused = useViewer((s) => s.paused);
   const playing = useViewer((s) => s.animation?.playing ?? false);
-  const webgl = useViewer((s) => s.backend.name === 'WebGL 2');
   const { phase, samples, elapsed, msPerSample, width, height } = stats;
   const { maxSamples, resolutionScale } = settings;
   const progress = Math.min(1, samples / maxSamples);
@@ -75,7 +75,7 @@ export function StatusBar() {
         <ProgressRing progress={progress} phase={phase} />
         <div className="dock__status" title={done && msPerSample ? `${elapsed.toFixed(1)} s · ${msPerSample.toFixed(1)} ms per sample` : undefined}>
           <b>{playing && (phase === 'previewing' || phase === 'converging') ? 'Playing' : LABELS[phase]}</b>
-          <span className="mono"><span className="dock__spp">{samples}</span> spp{time && <span className="dock__time"> · {time}</span>}</span>
+          <span className="mono"><span className="dock__spp">{samples}</span><span className="dock__unit"> spp</span>{time && <span className="dock__time"> · {time}</span>}</span>
         </div>
         {phase !== 'finished' && <button className="icon-btn icon-btn--bare dock__pause" aria-label={paused ? 'Resume rendering' : 'Pause rendering'}
           title={paused ? 'Resume (Space)' : 'Pause accumulation (Space)'} data-active={paused || undefined}
@@ -103,41 +103,77 @@ export function StatusBar() {
           }))}
           onChange={(v) => setSettings({ resolutionScale: Number(v) })}
         />
-        <label
-          className="dock__toggle"
-          data-selected={denoise || undefined}
-          title="Denoise (D)"
-        >
-          <input
-            type="checkbox"
-            checked={denoise}
-            onChange={(e) => setSettings({ denoise: e.currentTarget.checked })}
-          />
-          <span className="dock__label">Denoise</span>
-        </label>
-        {denoise && <Select
-          label="Denoiser type"
-          value={webgl || settings.denoiseModel === 'jnlm' ? 'jnlm' : 'oidn'}
-          options={[
-            { value: 'oidn', label: 'OIDN', disabled: webgl, hint: webgl ? 'Requires WebGPU' : undefined },
-            { value: 'jnlm', label: 'JNLM' }
-          ]}
-          onChange={(v) => setSettings({ denoiseModel: v === 'jnlm' ? 'jnlm' : settings.oidnModel })}
-        />}
-        {denoise && <label
-          className="dock__toggle"
-          data-selected={settings.denoiseWhileConverging || undefined}
-          title="Denoise while converging: previews and every few samples, not only the final image"
-        >
-          <input
-            type="checkbox"
-            aria-label="Live denoise"
-            checked={settings.denoiseWhileConverging}
-            onChange={(e) => setSettings({ denoiseWhileConverging: e.currentTarget.checked })}
-          />
-          <span className="dock__label">Live</span>
-        </label>}
+        <div className="dock__denoise">
+          <label
+            className="dock__toggle"
+            data-selected={denoise || undefined}
+            title="Denoise (D)"
+          >
+            <input
+              type="checkbox"
+              checked={denoise}
+              onChange={(e) => setSettings({ denoise: e.currentTarget.checked })}
+            />
+            <span className="dock__label">Denoise</span>
+          </label>
+          {denoise && <DenoiserSelect />}
+          {denoise && <label
+            className="dock__toggle"
+            data-selected={settings.denoiseWhileConverging || undefined}
+            title="Denoise while converging: previews and every few samples, not only the final image"
+          >
+            <input
+              type="checkbox"
+              aria-label="Live denoise"
+              checked={settings.denoiseWhileConverging}
+              onChange={(e) => setSettings({ denoiseWhileConverging: e.currentTarget.checked })}
+            />
+            <span className="dock__label">Live</span>
+          </label>}
+        </div>
+        <RenderSettingsPopover />
       </div>
     </div>
+  );
+}
+
+function DenoiserSelect({ disabled = false }: { disabled?: boolean }) {
+  const settings = useViewer((s) => s.settings);
+  const webgl = useViewer((s) => s.backend.name === 'WebGL 2');
+  return <Select
+    label="Denoiser type"
+    disabled={disabled}
+    value={webgl || settings.denoiseModel === 'jnlm' ? 'jnlm' : 'oidn'}
+    options={[
+      { value: 'oidn', label: 'OIDN', disabled: webgl, hint: webgl ? 'Requires WebGPU' : undefined },
+      { value: 'jnlm', label: 'JNLM' }
+    ]}
+    onChange={(v) => setSettings({ denoiseModel: v === 'jnlm' ? 'jnlm' : settings.oidnModel })}
+  />;
+}
+
+function RenderSettingsPopover() {
+  const settings = useViewer((s) => s.settings);
+  return (
+    <DialogTrigger>
+      <Button className="icon-btn dock__more" aria-label="Render settings"><SlidersHorizontal size={14} /></Button>
+      <Popover className="popover dock-options" placement="top end" offset={8}>
+        <Dialog aria-label="Render settings">
+          {({ close }) => <>
+            <Heading slot="title" className="dialog__title">Render settings
+              <button className="icon-btn icon-btn--bare xs" aria-label="Close render settings" onClick={close}><X size={12} /></button>
+            </Heading>
+            <Switch label="Denoise" checked={settings.denoise} onChange={(v) => setSettings({ denoise: v })}>
+              <span className="field-label">Denoise</span>
+            </Switch>
+            <Field label="Denoiser"><DenoiserSelect disabled={!settings.denoise} /></Field>
+            <Switch label="Live denoise" checked={settings.denoiseWhileConverging} disabled={!settings.denoise}
+              onChange={(v) => setSettings({ denoiseWhileConverging: v })}>
+              <span className="field-label">Live denoise</span>
+            </Switch>
+          </>}
+        </Dialog>
+      </Popover>
+    </DialogTrigger>
   );
 }
