@@ -237,6 +237,12 @@ function convertMaterial(
       material.specularColor =
         physicalMaterial.specularColor.toArray() as ColorRGB;
     }
+    material.coatWeightMap = convertTexture(physicalMaterial.clearcoatMap, textureCache);
+    material.coatRoughnessMap = convertTexture(physicalMaterial.clearcoatRoughnessMap, textureCache);
+    material.fuzzColorMap = convertTexture(physicalMaterial.sheenColorMap, textureCache);
+    material.fuzzRoughnessMap = convertTexture(physicalMaterial.sheenRoughnessMap, textureCache);
+    material.specularWeightMap = convertTexture(physicalMaterial.specularIntensityMap, textureCache);
+    material.specularColorMap = convertTexture(physicalMaterial.specularColorMap, textureCache);
     material.coatWeight = physicalMaterial.clearcoat;
     material.coatRoughness = physicalMaterial.clearcoatRoughness;
     // MeshPhysicalMaterial's clearcoat BRDF uses the fixed dielectric F0
@@ -326,6 +332,17 @@ function convertMaterial(
       : fallback;
   };
   if (openPbr) {
+    // Only supported Texture inputs are accepted; arbitrary metadata objects
+    // must never enter the atlas as textures. Explicit null clears an import.
+    for (const name of ['coatWeightMap', 'coatRoughnessMap', 'fuzzColorMap',
+      'fuzzRoughnessMap', 'specularWeightMap', 'specularColorMap'] as const) {
+      const texture = openPbr[name];
+      if (texture === null) material[name] = undefined;
+      else if (texture instanceof Texture) material[name] = texture;
+      else if (texture && (texture as THREE.Texture).isTexture) {
+        material[name] = convertTexture(texture as THREE.Texture, textureCache);
+      }
+    }
     material.baseWeight = finite(openPbr.baseWeight, material.baseWeight);
     material.baseDiffuseRoughness = finite(
       openPbr.baseDiffuseRoughness,
@@ -872,7 +889,9 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
           const baseMaterial = material;
           const autoUvProjection = !geometry.uv && baseMaterial.uvProjection === 'none' &&
             !!(baseMaterial.map || baseMaterial.normalMap || baseMaterial.emissiveMap || baseMaterial.metallicRoughnessMap ||
-              baseMaterial.roughnessMap || baseMaterial.metalnessMap || baseMaterial.thinFilmMap);
+              baseMaterial.roughnessMap || baseMaterial.metalnessMap || baseMaterial.thinFilmMap ||
+              baseMaterial.coatWeightMap || baseMaterial.coatRoughnessMap || baseMaterial.fuzzColorMap ||
+              baseMaterial.fuzzRoughnessMap || baseMaterial.specularWeightMap || baseMaterial.specularColorMap);
           const autoDisplacementUvProjection = !geometry.uv && !!baseMaterial.displacementMap &&
             baseMaterial.displacementUvProjection === 'none';
           const instanceCount = expand ? instanced.count : 1;

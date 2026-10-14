@@ -52,9 +52,11 @@ export const MATERIAL_LAYOUT = [
     field('thinFilmThickness', 'thinFilmThickness', 'f32'),
     field('mapAlphaUsage', 'mapAlphaUsage', 'f32')
   ] },
-  { name: 'LEGACY_MEDIUM', fields: [
-    field('mediumColor', 'mediumColor', 'vec3f', true),
-    field('mediumDensity', 'mediumDensity', 'f32', true)
+  { name: 'LAYER_MAPS', fields: [
+    field('coatWeightMapIndex', 'coatWeightMapIndex', 'f32'),
+    field('coatRoughnessMapIndex', 'coatRoughnessMapIndex', 'f32'),
+    field('coatNormalMapIndex', 'coatNormalMapIndex', 'f32', true),
+    field('fuzzColorMapIndex', 'fuzzColorMapIndex', 'f32')
   ] },
   { name: 'UV', fields: [
     field('uvProjection', 'uvProjection', 'f32'),
@@ -113,11 +115,11 @@ export const MATERIAL_LAYOUT = [
     field('thinFilmWeight', 'thinFilmWeight', 'f32'),
     field('dispersionAbbeNumber', 'dispersionAbbeNumber', 'f32'),
     field('subsurfaceScatterAnisotropy', 'subsurfaceScatterAnisotropy', 'f32'),
-    field('_padding5', null, 'f32', true)
+    field('fuzzRoughnessMapIndex', 'fuzzRoughnessMapIndex', 'f32')
   ] },
   { name: 'SUBSURFACE_RADIUS', fields: [
     field('subsurfaceRadiusScale', 'subsurfaceRadiusScale', 'vec3f'),
-    field('_padding6', null, 'f32', true)
+    field('specularWeightMapIndex', 'specularWeightMapIndex', 'f32')
   ] },
   { name: 'MEDIUM_EXTINCTION', fields: [
     field('mediumExtinction', 'mediumExtinction', 'vec3f'),
@@ -125,7 +127,7 @@ export const MATERIAL_LAYOUT = [
   ] },
   { name: 'MEDIUM_SCATTERING', fields: [
     field('mediumScattering', 'mediumScattering', 'vec3f'),
-    field('_padding7', null, 'f32', true)
+    field('specularColorMapIndex', 'specularColorMapIndex', 'f32')
   ] },
   { name: 'STANDALONE_MAPS', fields: [
     field('roughnessMapIndex', 'roughnessMapIndex', 'f32'),
@@ -139,10 +141,15 @@ export const MATERIAL_LAYOUT = [
     field('doubleSided', 'doubleSided', 'f32'),
     field('alphaMode', 'alphaMode', 'f32')
   ] },
-  // C5 temporary row24; C1 moves this named row to row25 in its 416-byte migration.
+  // Reserve the approved direction/normal inputs for C1 steps two and three.
+  { name: 'DIRECTION_NORMAL', fields: [
+    field('anisotropyMapIndex', 'anisotropyMapIndex', 'f32', true),
+    field('specularAnisotropyRotation', null, 'f32', true),
+    field('coatNormalScale', 'coatNormalScale', 'vec2f', true)
+  ] },
   { name: 'FILM_TEXTURE', fields: [
-    field('_padding8', null, 'f32', true),
-    field('_padding9', null, 'f32', true),
+    field('coatAnisotropyRotation', null, 'f32', true),
+    field('specularAnisotropyModel', null, 'f32', true),
     field('thinFilmThicknessMinimum', 'thinFilmThicknessMinimum', 'f32'),
     field('thinFilmMapChannel', 'thinFilmMapChannel', 'f32')
   ] },

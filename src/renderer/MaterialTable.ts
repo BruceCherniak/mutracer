@@ -459,8 +459,9 @@ export interface BufferData extends Record<MaterialTextureIndex, number[]> {
   bumpMapIndex: number[];
 
   mediumType: number[];
-  mediumDensity: number[];
-  mediumColor: ColorRGB[];
+  coatNormalMapIndex: number[];
+  anisotropyMapIndex: number[];
+  coatNormalScale: vec2.Vec2Array[];
 
   uvProjection: number[];
   uvScale: vec2.Vec2Array[];
@@ -753,10 +754,12 @@ class MaterialTable {
         // Standard material
         return 0;
       }),
-      // These slots are retained in the packed ABI for shader alignment.
+      // Retain mediumType until both legacy readers are migrated; the
+      // direction and coat-normal inputs are reserved for later C1 steps.
       mediumType: materials.map((m) => Number(materialUsesMedium(m))),
-      mediumDensity: materials.map(() => 0),
-      mediumColor: materials.map(() => [0, 0, 0] as ColorRGB),
+      coatNormalMapIndex: materials.map(() => -1),
+      anisotropyMapIndex: materials.map(() => -1),
+      coatNormalScale: materials.map(() => [1, 1] as vec2.Vec2Array),
       uvProjection: materials.map(
         (m) => uvProjectionConstants[m.uvProjection] || 0
       ),

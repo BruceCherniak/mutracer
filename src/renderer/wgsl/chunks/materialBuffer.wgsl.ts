@@ -91,6 +91,15 @@ fn getMaterialEmission(materialIndex: i32, uv: vec2f, uv1: vec2f) -> vec3f {
       ).rgb);
     }
   }
+  if (USE_COAT_WEIGHT_MAPS && matData.matType == 0.0) {
+    let coatWeightMapIndex = i32(matData.coatWeightMapIndex);
+    if (coatWeightMapIndex >= 0) {
+      let coatWeight = clamp(matData.coatWeight, 0.0, 1.0) * sampleMap(
+        coatWeightMapIndex, getMapUvSet(coatWeightMapIndex, uv, uv1)
+      ).r;
+      emission *= mix(vec3f(1.0), sqrt(max(matData.coatColor, vec3f(0.0))), coatWeight);
+    }
+  }
   return emission;
 }
 
@@ -196,6 +205,18 @@ fn getMaterial(
   ${simpleTextureSample('metalnessMap', 'wgsl')}
 
   ${thinFilmTextureSample('wgsl')}
+
+  ${simpleTextureSample('coatWeightMap', 'wgsl')}
+
+  ${simpleTextureSample('coatRoughnessMap', 'wgsl')}
+
+  ${simpleTextureSample('fuzzColorMap', 'wgsl')}
+
+  ${simpleTextureSample('fuzzRoughnessMap', 'wgsl')}
+
+  ${simpleTextureSample('specularWeightMap', 'wgsl')}
+
+  ${simpleTextureSample('specularColorMap', 'wgsl')}
 
   // OpenPBR 1.1.1: coat refraction broadens all base microfacet lobes.
   // Keep the zero-coat / smooth-coat paths byte-identical.

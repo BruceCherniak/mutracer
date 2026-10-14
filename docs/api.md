@@ -327,6 +327,11 @@ and `thinFilmMapChannel` (default `r`, one of `r/g/b/a`). `thinFilmThickness`
 (default `0.5` µm) is the maximum endpoint with a map and the constant without
 one. See [thin-film textures](./materials.md#textures) for range behavior.
 
+`coatWeightMap`, `coatRoughnessMap`, `fuzzColorMap`, `fuzzRoughnessMap`,
+`specularWeightMap` and `specularColorMap` accept `Texture` and each default to
+`undefined`. Channels and color decoding are listed in [material textures](./materials.md#textures).
+They follow the existing material/texture update mechanism.
+
 `Geometry`, `Texture` and `OpenPBRMaterial` expose `version` (initially `0`)
 and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 (initially `0`) and `markVerticesUpdated(): this`, which advances only

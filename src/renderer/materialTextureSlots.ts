@@ -1,3 +1,6 @@
+import { MATERIAL_TEXTURE_NAMES, type MaterialTextureName } from '../scene/materialTextureNames.js';
+export { MATERIAL_TEXTURE_NAMES };
+export type { MaterialTextureName };
 import { MATERIAL_LAYOUT, materialLayoutFields } from './materialLayout.js';
 
 // Internal slots only. Order is the legacy atlas/index contract. Color spaces
@@ -73,9 +76,54 @@ const slots = [
     define: null, feature: null, featureBit: 0,
     sampling: 'manual'
   },
+  {
+    property: 'coatWeightMap', index: 'coatWeightMapIndex',
+    target: 'coatWeight', channel: 'r',
+    colorSpace: 'linear', operation: 'multiply',
+    define: 'NUM_COAT_WEIGHT_MAPS', feature: 'USE_COAT_WEIGHT_MAPS', featureBit: 2 ** 15,
+    sampling: 'multiply'
+  },
+  {
+    property: 'coatRoughnessMap', index: 'coatRoughnessMapIndex',
+    target: 'coatRoughness', channel: 'g',
+    colorSpace: 'linear', operation: 'multiply',
+    define: 'NUM_COAT_ROUGHNESS_MAPS', feature: 'USE_COAT_ROUGHNESS_MAPS', featureBit: 2 ** 16,
+    sampling: 'multiply'
+  },
+  {
+    property: 'fuzzColorMap', index: 'fuzzColorMapIndex',
+    target: 'fuzzColor', channel: 'rgb',
+    colorSpace: 'srgb', operation: 'multiply',
+    define: 'NUM_FUZZ_COLOR_MAPS', feature: 'USE_FUZZ_COLOR_MAPS', featureBit: 2 ** 18,
+    sampling: 'multiply'
+  },
+  {
+    property: 'fuzzRoughnessMap', index: 'fuzzRoughnessMapIndex',
+    target: 'fuzzRoughness', channel: 'a',
+    colorSpace: 'linear', operation: 'multiply',
+    define: 'NUM_FUZZ_ROUGHNESS_MAPS', feature: 'USE_FUZZ_ROUGHNESS_MAPS', featureBit: 2 ** 19,
+    sampling: 'multiply'
+  },
+  {
+    property: 'specularWeightMap', index: 'specularWeightMapIndex',
+    target: 'specularWeight', channel: 'a',
+    colorSpace: 'linear', operation: 'multiply',
+    define: 'NUM_SPECULAR_WEIGHT_MAPS', feature: 'USE_SPECULAR_WEIGHT_MAPS', featureBit: 2 ** 20,
+    sampling: 'multiply'
+  },
+  {
+    property: 'specularColorMap', index: 'specularColorMapIndex',
+    target: 'specularColor', channel: 'rgb',
+    colorSpace: 'srgb', operation: 'multiply',
+    define: 'NUM_SPECULAR_COLOR_MAPS', feature: 'USE_SPECULAR_COLOR_MAPS', featureBit: 2 ** 21,
+    sampling: 'multiply'
+  },
 ] as const;
 
-export type MaterialTextureName = typeof slots[number]['property'];
+// A missing or extra descriptor fails type checking in both directions.
+type SlotName = typeof slots[number]['property'];
+const textureNamesMatch: [Exclude<MaterialTextureName, SlotName> | Exclude<SlotName, MaterialTextureName>] extends [never] ? true : never = true;
+void textureNamesMatch;
 export type MaterialTextureIndex = typeof slots[number]['index'];
 
 export const MATERIAL_TEXTURE_SLOTS = slots.map(slot => {
@@ -88,7 +136,6 @@ export const MATERIAL_TEXTURE_SLOTS = slots.map(slot => {
   } };
 });
 
-export const MATERIAL_TEXTURE_NAMES = slots.map(slot => slot.property);
 export const MATERIAL_TEXTURE_FEATURE_BITS = Object.fromEntries(slots.flatMap(slot => slot.feature
   ? [[slot.feature, slot.featureBit]] : []));
 export const MATERIAL_TEXTURE_DEFINES = slots.flatMap(slot => slot.define ? [slot.define] : []);
@@ -104,14 +151,15 @@ export function simpleTextureSample(property: MaterialTextureName, backend: 'wgs
   const slot = MATERIAL_TEXTURE_SLOTS.find(slot => slot.property === property);
   if (!slot || slot.sampling !== 'multiply') throw new Error(`Handwritten texture slot: ${property}`);
   const index = slot.index;
+  const sample = (expression: string) => slot.colorSpace === 'srgb' ? `sRGBToLinear(${expression})` : expression;
   if (backend === 'wgsl') {
     return `
   if (${slot.feature}) {
     let ${index} = i32(matData.${slot.packed.wgslField});
     if (${index} >= 0) {
-      (*ma).${slot.target} *= sampleMap(
+      (*ma).${slot.target} *= ${sample(`sampleMap(
         ${index}, getMapUvSet(${index}, uv, uv1)
-      ).${slot.channel};
+      ).${slot.channel}`)};
     }
   }
 `;
@@ -120,9 +168,9 @@ export function simpleTextureSample(property: MaterialTextureName, backend: 'wgs
   #ifdef ${slot.define}
     int ${index} = int(fetchMatData(i + ${slot.packed.glslRow}).${slot.packed.glslComponent});
     if (${index} >= 0) {
-      mat.${slot.target} *= sampleMap(
+      mat.${slot.target} *= ${sample(`sampleMap(
         ${index}, getMapUvSet(${index}, uv, uv1)
-      ).${slot.channel};
+      ).${slot.channel}`)};
     }
   #endif
 `;

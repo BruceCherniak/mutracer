@@ -7,7 +7,7 @@ import { materialDefault, applyMaterialParams } from './openPbrSchema.js';
 export type UVProjection = 'none' | 'triplanar' | 'spherical' | 'cylindrical';
 export type MaterialAlphaMode = 'auto' | 'opaque' | 'mask' | 'blend';
 
-export type { MaterialTextureName } from '../renderer/materialTextureSlots.js';
+export type { MaterialTextureName } from './materialTextureNames.js';
 
 /**
  * OpenPBR 1.1 surface material.
@@ -182,6 +182,20 @@ export default class OpenPBRMaterial {
   transmissionMap?: Texture;
   /** Linear thickness-range texture; R and zero minimum preserve multiplication semantics. Default `undefined`. */
   thinFilmMap?: Texture;
+
+  /** Multiplies coatWeight by the linear red channel. Default `undefined`. */
+  coatWeightMap?: Texture;
+  /** Multiplies coatRoughness by the linear green channel. Default `undefined`. */
+  coatRoughnessMap?: Texture;
+  /** Multiplies fuzzColor by the decoded sRGB RGB channels. Default `undefined`. */
+  fuzzColorMap?: Texture;
+  /** Multiplies fuzzRoughness by the linear alpha channel. Default `undefined`. */
+  fuzzRoughnessMap?: Texture;
+  /** Multiplies specularWeight by the linear alpha channel. Default `undefined`. */
+  specularWeightMap?: Texture;
+  /** Multiplies specularColor by the decoded sRGB RGB channels. Default `undefined`. */
+  specularColorMap?: Texture;
+
 
   /** OpenPBR GGX roughness anisotropy in [0, 1]; requires tangents. Default `0`. */
   get specularRoughnessAnisotropy(): number { return this.specularAnisotropy; }

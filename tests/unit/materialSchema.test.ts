@@ -38,12 +38,20 @@ describe('OpenPBR schema', () => {
     const materials = fixedMaterials(); const data = new MaterialTable(materials, []);
     const bytes = Buffer.from(data.getBufferArray().buffer);
     expect(materialKeys.slice(0, baseline.keys.length)).toEqual(baseline.keys);
-    expect(materialKeys.slice(baseline.keys.length)).toEqual(['thinFilmThicknessMinimum', 'thinFilmMapChannel']);
-    expect(materials.map(getMaterialHashKey)).toEqual(baseline.hashes.map(hash => `${hash}_0_r`));
-    const legacyBytes = Buffer.concat(materials.map((_m, i) => bytes.subarray(i * 400, i * 400 + 384)));
-    expect(legacyBytes).toEqual(Buffer.from(baseline.packedBase64, 'base64'));
-    expect(createHash('sha256').update(legacyBytes).digest('hex')).toBe(baseline.sha256);
-    for (let i = 0; i < materials.length; i++) expect(bytes.subarray(i * 400 + 384, (i + 1) * 400)).toEqual(Buffer.alloc(16));
+    expect(materialKeys.slice(baseline.keys.length)).toEqual(['thinFilmThicknessMinimum', 'thinFilmMapChannel', 'coatWeightMap', 'coatRoughnessMap', 'fuzzColorMap', 'fuzzRoughnessMap', 'specularWeightMap', 'specularColorMap']);
+    expect(materials.map(getMaterialHashKey)).toEqual(baseline.hashes.map(hash => `${hash}_0_r_$_$_$_$_$_$`));
+    // C1 migrates only the seven obsolete reserved scalars and stride.
+    // Historical keys/hash prefix and every effective field stay fixed.
+    expect(bytes).toEqual(Buffer.from(baseline.packedBase64, 'base64'));
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(baseline.sha256);
+    // Undo just the approved reserved-slot migration and added rows. The
+    // pre-C1 effective payload must retain its independent historical digest.
+    const legacy = Buffer.concat(materials.map((_m, i) => {
+      const prefix = Buffer.from(bytes.subarray(i * 416, i * 416 + 384));
+      for (const offset of [96, 100, 104, 108, 300, 316, 348]) prefix.writeFloatLE(0, offset);
+      return prefix;
+    }));
+    expect(createHash('sha256').update(legacy).digest('hex')).toBe('bffe8ec5286e64b53b0fb35b542b8096b0a6ef0930c4c2d15266daf1b3b59a8c');
   });
   for (const field of openPbrSchema.filter(field => field.category === 'param')) {
     it(`packs ${field.key}`, () => {

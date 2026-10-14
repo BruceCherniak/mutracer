@@ -54,6 +54,9 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | `MeshPhysicalMaterial.clearcoat`, `.clearcoatRoughness` (glTF `KHR_materials_clearcoat`) | `coatWeight`, `coatRoughness`, with `coatIor = 1.5` and `coatDarkening = 0` for Three.js compatibility; explicit `userData.mutracerOpenPBR.coatDarkening` overrides the imported value |
 | `MeshPhysicalMaterial.sheen`, `.sheenColor`, `.sheenRoughness` | `fuzzWeight`, `fuzzColor`, `fuzzRoughness`; explicit `userData.mutracerOpenPBR.fuzzRoughness` overrides imported roughness |
 | `MeshPhysicalMaterial.iridescenceThicknessMap`, `.iridescenceThicknessRange` | `thinFilmMap` with `thinFilmMapChannel = 'g'`; both nm endpoints are divided by 1000 into `thinFilmThicknessMinimum` / `thinFilmThickness`; without a map only the maximum is used |
+| `MeshPhysicalMaterial.clearcoatMap`, `.clearcoatRoughnessMap` | `coatWeightMap` (linear R), `coatRoughnessMap` (linear G) |
+| `MeshPhysicalMaterial.sheenColorMap`, `.sheenRoughnessMap` | `fuzzColorMap` (sRGB RGB), `fuzzRoughnessMap` (linear A) |
+| `MeshPhysicalMaterial.specularIntensityMap`, `.specularColorMap` | `specularWeightMap` (linear A), `specularColorMap` (sRGB RGB) |
 | `SkinnedMesh` / mesh with morph targets | CPU-deformed dynamic geometry |
 | `InstancedMesh` | One InstancedMesh per group/color variant, sharing geometry and BLAS |
 | Multi-material groups | One MuTracer mesh per group |
@@ -79,6 +82,16 @@ range, channel and map after conversion; its map accepts a MuTracer `Texture`
 or a source `THREE.Texture`. `THREESync` converts parameter edits without
 rewriting texture pixels. The iridescence strength texture is not supported;
 `thinFilmMap` represents thickness only.
+
+The six layer maps reuse the texture conversion cache, source UV channel,
+scale, offset and flipY. `mutracerOpenPBR` can override them with a MuTracer
+`Texture` or `THREE.Texture`; explicit `null` clears an imported map, while
+unknown JSON objects are ignored. `THREESync` follows texture edits without
+copying pixels. General `KHR_texture_transform` rotation remains unsupported.
+Clearcoat normals and anisotropy direction maps are deferred to the next
+implementation steps. The conversion preserves OpenPBR layering: glTF sheen
+layer order differs, and specular weight/color also affect metals in OpenPBR;
+these imports do not imply identical glTF BRDFs.
 
 Invisible objects are skipped. Other material types are skipped with a console
 warning unless `convertMaterial` supplies an OpenPBR material. `BatchedMesh`, instanced morph targets (`morphTexture`) and skinned

@@ -16,15 +16,15 @@ describe('thin-film texture parameters', () => {
   it.each(['r', 'g', 'b', 'a'] as const)('packs channel %s and independent endpoints without sorting', channel => {
     const m = new Material({thinFilmMap: tex(), thinFilmThickness: 0, thinFilmThicknessMinimum: .4, thinFilmMapChannel: channel});
     const table = new MaterialTable([m], []), p = table.getBufferArray();
-    expect(p[22]).toBe(0); expect(p[98]).toBeCloseTo(.4); expect(p[99]).toBe(['r','g','b','a'].indexOf(channel));
+    expect(p[22]).toBe(0); expect(p[102]).toBeCloseTo(.4); expect(p[103]).toBe(['r','g','b','a'].indexOf(channel));
     m.thinFilmThicknessMinimum = .2; table.repackParams([m]);
-    expect(table.getBufferArray()[98]).toBeCloseTo(.2);
+    expect(table.getBufferArray()[102]).toBeCloseTo(.2);
   });
   it('clamps nonfinite and negative endpoints separately and rejects invalid channels', () => {
     const m = new Material({thinFilmThickness: -1, thinFilmThicknessMinimum: Infinity});
-    let p = new MaterialTable([m], []).getBufferArray(); expect(p[22]).toBe(0); expect(p[98]).toBe(0);
+    let p = new MaterialTable([m], []).getBufferArray(); expect(p[22]).toBe(0); expect(p[102]).toBe(0);
     m.thinFilmThickness = NaN; m.thinFilmThicknessMinimum = -1;
-    p = new MaterialTable([m], []).getBufferArray(); expect(p[22]).toBe(.5); expect(p[98]).toBe(0);
+    p = new MaterialTable([m], []).getBufferArray(); expect(p[22]).toBe(.5); expect(p[102]).toBe(0);
     expect(() => new Material({thinFilmMapChannel: 'x' as 'r'})).toThrow(/thinFilmMapChannel/);
     m.thinFilmMapChannel = 'x' as 'r'; expect(() => new MaterialTable([m], [])).toThrow(/thinFilmMapChannel/);
     const source = new THREE.MeshPhysicalMaterial(); source.userData.mutracerOpenPBR = {thinFilmMapChannel: 'x'};

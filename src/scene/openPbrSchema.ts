@@ -1,5 +1,6 @@
 import type { default as OpenPBRMaterial, OpenPBRMaterialParams } from './OpenPBRMaterial.js';
 import Texture from './Texture.js';
+import type { MaterialTextureName } from './materialTextureNames.js';
 import { thinFilmMapChannelIndex } from './thinFilmParameters.js';
 
 export const materialAliases = {
@@ -92,7 +93,16 @@ export const openPbrSchema = [
   {key: 'displacementBumpStrength', type: 'float', default: 0, category: 'texture'},
   {key: 'thinFilmThicknessMinimum', type: 'float', default: 0, category: 'param'},
   {key: 'thinFilmMapChannel', type: 'enum', default: 'r', category: 'param'},
+  {key: 'coatWeightMap', type: 'texture', default: undefined, category: 'texture'},
+  {key: 'coatRoughnessMap', type: 'texture', default: undefined, category: 'texture'},
+  {key: 'fuzzColorMap', type: 'texture', default: undefined, category: 'texture'},
+  {key: 'fuzzRoughnessMap', type: 'texture', default: undefined, category: 'texture'},
+  {key: 'specularWeightMap', type: 'texture', default: undefined, category: 'texture'},
+  {key: 'specularColorMap', type: 'texture', default: undefined, category: 'texture'},
 ] as const satisfies readonly Field[];
+type SchemaTextureName = Extract<typeof openPbrSchema[number], {type: 'texture'}>['key'];
+const textureNamesMatch: [Exclude<MaterialTextureName, SchemaTextureName> | Exclude<SchemaTextureName, MaterialTextureName>] extends [never] ? true : never = true;
+void textureNamesMatch;
 type Keys<T extends readonly {key: PropertyKey}[]> = {readonly [I in keyof T]: T[I]['key']};
 type CategoryKeys<T extends readonly Field[], C extends Field['category'], R extends readonly MaterialKey[] = []> =
   T extends readonly [infer H extends Field, ...infer Rest extends readonly Field[]]

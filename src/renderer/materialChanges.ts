@@ -31,7 +31,7 @@ function snapshot(material: OpenPBRMaterial): MaterialSnapshot {
     textureKey: materialTextureKeys.map(k => { const value = material[k]; return typeof value === 'number' ? String(value) : textureKey(value); }).join('|'),
     // Height maps affect projective BLAS bounds.
     geometryKey: key(material, materialGeometryKeys) + '|' + textureKey(material.displacementMap),
-    emissive: key(material, ['emissionColor', 'emissionLuminance', 'coatWeight', 'coatColor', 'unlit', 'shadowCatcher']),
+    emissive: key(material, ['emissionColor', 'emissionLuminance', 'coatWeight', 'coatColor', 'unlit', 'shadowCatcher']) + '|' + textureKey(material.coatWeightMap),
     emissiveMap: textureKey(material.emissiveMap)
   };
 }

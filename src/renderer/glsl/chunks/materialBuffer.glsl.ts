@@ -168,7 +168,6 @@ void getMaterial(
   mat.coatDarkening = clamp(coatControls.w, 0.0, 1.0);
 
 #ifdef HAS_MEDIUM
-  vec4 medium = fetchMatData(i + MAT_ROW_LEGACY_MEDIUM);
   mat.mediumExtinction = max(fetchMatData(i + MAT_ROW_MEDIUM_EXTINCTION).rgb, vec3(0.0));
   mat.mediumAnisotropy = clamp(fetchMatData(i + MAT_ROW_MEDIUM_EXTINCTION).a, -1.0, 1.0);
   mat.mediumScattering = max(fetchMatData(i + MAT_ROW_MEDIUM_SCATTERING).rgb, vec3(0.0));
@@ -236,7 +235,29 @@ void getMaterial(
     }
   #endif
 
+  #ifdef NUM_COAT_WEIGHT_MAPS
+    int emissionCoatMapIndex = int(fetchMatData(i + MAT_ROW_LAYER_MAPS).x);
+    if (emissionCoatMapIndex >= 0 && mat.materialType == 0) {
+      float emissionCoatWeight = clamp(coat.w, 0.0, 1.0) * sampleMap(
+        emissionCoatMapIndex, getMapUvSet(emissionCoatMapIndex, uv, uv1)
+      ).r;
+      mat.emission *= mix(vec3(1.0), sqrt(max(coat.rgb, vec3(0.0))), emissionCoatWeight);
+    }
+  #endif
+
   ${thinFilmTextureSample('glsl')}
+
+  ${simpleTextureSample('coatWeightMap', 'glsl')}
+
+  ${simpleTextureSample('coatRoughnessMap', 'glsl')}
+
+  ${simpleTextureSample('fuzzColorMap', 'glsl')}
+
+  ${simpleTextureSample('fuzzRoughnessMap', 'glsl')}
+
+  ${simpleTextureSample('specularWeightMap', 'glsl')}
+
+  ${simpleTextureSample('specularColorMap', 'glsl')}
 
   // OpenPBR 1.1.1: coat refraction broadens all base microfacet lobes.
   // Keep the zero-coat / smooth-coat paths byte-identical.

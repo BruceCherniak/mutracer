@@ -77,7 +77,7 @@ Thin film lies below the coat: its exterior IOR is `mix(1, coatIor, coatWeight)`
 and its dielectric substrate uses the adjusted absolute base IOR. A solid
 inside hit exchanges these media; uncoated films retain their existing behavior.
 Emission uses a normal-incidence single passage: it is multiplied by
-`mix(1, sqrt(coatColor), coatWeight)`. The same attenuated emission determines
+`mix(1, sqrt(coatColor), coatWeight)`. Without `coatWeightMap`, the same attenuated emission determines
 emissive-light selection and hit MIS weights. This approximation has no angular
 dependence and does not apply coat darkening or fuzz attenuation to emission.
 Unlit and shadow-catching materials keep their existing emission behavior.
@@ -136,6 +136,23 @@ an alternate serialization format.
 | `transmissionMap` | R | Multiplies `transmissionWeight` |
 | `thinFilmMap` | R by default; selectable R/G/B/A | Linear thickness range |
 | `displacementMap` | R | See [displacement](#displacement) |
+| `coatWeightMap` | Linear R | Multiplies `coatWeight`, including emission absorption |
+| `coatRoughnessMap` | Linear G | Multiplies `coatRoughness` before base roughening |
+| `fuzzColorMap` | sRGB RGB | Decoded color multiplies `fuzzColor` |
+| `fuzzRoughnessMap` | Linear A | Multiplies `fuzzRoughness` |
+| `specularWeightMap` | Linear A | Multiplies `specularWeight`, for dielectric and metal |
+| `specularColorMap` | sRGB RGB | Decoded color multiplies `specularColor`, for dielectric and metal |
+
+All six layer maps default to `undefined`. They resolve before coat roughening
+and BSDF preparation. Images may be shared between color and data slots;
+sRGB decoding happens only at color sample sites. Independent coat normals
+and anisotropy direction textures are not yet exposed.
+
+With `coatWeightMap`, emission absorption uses the sampled coverage at each
+surface/mesh-light point. Light selection and emissive-hit MIS use raw constant
+emission luminance as a conservative proposal; absorption is applied once to
+the contribution. Black texture points can retain a positive sampling PDF.
+Removing the map restores the constant-coat packing path.
 
 `Texture.uvScale`, `uvOffset` and `uvChannel` (0 or 1) transform UVs per
 texture. For geometry without usable UVs, set `uvProjection` to
