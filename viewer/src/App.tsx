@@ -9,6 +9,7 @@ import { Viewport } from './components/Viewport';
 import { Inspector, InspectorRail, TABS } from './components/Inspector';
 import { ExportDialog } from './components/ExportDialog';
 import { CodeDialog } from './components/CodeDialog';
+import { TextureBrowser } from './components/TextureBrowser';
 
 const MOBILE_QUERY = '(max-width: 768px)';
 
@@ -73,12 +74,14 @@ export function App() {
   useShortcuts();
   const left = ui.left && !ui.hidden && !mobile;
   const right = ui.right && !ui.hidden && !mobile;
+  const browse = right && ui.textureBrowser && ui.tab === 'material';
   return (
     <div className="app" data-hidden={ui.hidden || undefined}>
       {!ui.hidden && <Toolbar />}
-      <main className="workspace" data-left={left || undefined} data-right={right || undefined} data-mobile={mobile || undefined}>
+      <main className="workspace" data-left={left || undefined} data-right={right || undefined} data-browse={browse || undefined} data-mobile={mobile || undefined}>
         {left && <SceneTree />}
         <Viewport />
+        {browse && <TextureBrowser />}
         {right && <Inspector mobile={false} />}
         {!mobile && !ui.hidden && <InspectorRail />}
         {mobile && !ui.hidden && <Inspector mobile />}

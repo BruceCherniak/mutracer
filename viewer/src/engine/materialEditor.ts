@@ -29,7 +29,8 @@ class MaterialEdit implements HistoryItem {
   constructor(
     private readonly replay: (materialId: string, patch: MaterialPatch) => void,
     readonly materialId: string, readonly label: string,
-    private readonly before: MaterialPatch, private after: MaterialPatch, readonly mergeKey?: string
+    private readonly before: MaterialPatch, private after: MaterialPatch,
+    readonly mergeKey?: string, readonly mergeMs?: number
   ) {}
   undo() { this.replay(this.materialId, this.before); }
   redo() { this.replay(this.materialId, this.after); }
@@ -170,18 +171,33 @@ export class MaterialEditor {
   }
 
   async setTexture(materialId: string, slot: TextureKey, file: Blob | null, label: string) {
+    await this.setTextures(materialId, { [slot]: file }, {}, label);
+  }
+
+  /** Replaces several texture slots and values as one undo step; `null` empties a slot. */
+  async setTextures(
+    materialId: string, files: Partial<Record<TextureKey, Blob | null>>, values: MaterialValues, label: string,
+    merge?: { key: string; ms?: number }
+  ) {
     const entry = this.entries.get(materialId);
     const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
     if (!entry || !material) return;
-    let texture: Texture | null = null;
-    if (file) {
-      const image = await decodeImage(file);
-      // The material may have been replaced while decoding.
-      if (this.entries.get(materialId) !== entry) return;
-      texture = createTexture(image, material, slot);
+    const slots = Object.entries(files) as [TextureKey, Blob | null][];
+    const images = await Promise.all(slots.map(([, file]) => (file ? decodeImage(file) : null)));
+    // The material may have been replaced while decoding.
+    if (this.entries.get(materialId) !== entry) return;
+    const textures: MaterialPatch['textures'] = {};
+    slots.forEach(([slot, file], i) => {
+      const image = images[i];
+      if (!file || !image) {
+        textures[slot] = null;
+        return;
+      }
+      const texture = createTexture(image, material, slot);
       this.uploads.set(texture, file);
-    }
-    this.commit(materialId, { values: {}, textures: { [slot]: texture } }, label);
+      textures[slot] = texture;
+    });
+    this.commit(materialId, { values, textures }, label, merge?.key, merge?.ms);
   }
 
   reset(materialId: string) {
@@ -212,7 +228,7 @@ export class MaterialEditor {
     this.onHistoryApplied(materialId);
   };
 
-  private commit(materialId: string, patch: MaterialPatch, label: string, mergeKey?: string) {
+  private commit(materialId: string, patch: MaterialPatch, label: string, mergeKey?: string, mergeMs?: number) {
     const entry = this.entries.get(materialId);
     const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
     if (!entry || !material) return;
@@ -221,7 +237,7 @@ export class MaterialEditor {
     if (isEmpty(after)) return;
     const before = pick(current, after);
     this.apply(entry, after);
-    pushHistory(new MaterialEdit(this.replay, materialId, label, before, after, mergeKey));
+    pushHistory(new MaterialEdit(this.replay, materialId, label, before, after, mergeKey, mergeMs));
     this.changed(materialId);
   }
 

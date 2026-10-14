@@ -13,6 +13,7 @@ import {
   type LoadedModel, type PathedFile
 } from './loadModel';
 import type { MaterialValues, TextureKey } from './materialParams';
+import { downloadPolyHavenMap, polyHavenMaps, type TextureResolution } from './polyHaven';
 import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
 import { MaterialEditor, readPendingEdits, type PendingEdits } from './materialEditor';
 import { cameraSettings, readCameraState, writeCameraState } from './cameraState';
@@ -76,6 +77,7 @@ export class ViewerEngine {
   private modelCameras: ViewCamera[] = [];
   /** Objects hidden in the loaded file, restored by {@link resetAll}. */
   private hiddenAtLoad = new Set<string>();
+  private polyHavenPicks = 0;
   private readonly materials = new MaterialEditor((materialId) => {
     // Show the material an undo or redo changed.
     if (get().selection.materialId === materialId) return;
@@ -994,6 +996,54 @@ export class ViewerEngine {
       await this.materials.setTexture(materialId, slot, file, label);
     } catch (error) {
       showToast(`Could not read the image: ${(error as Error).message}`, 'error');
+    }
+  }
+
+  /**
+   * Downloads a Poly Haven texture set and applies it to a material, each map
+   * as soon as it arrives so the set previews early; the whole pick is one
+   * undo step. Slots the set has no map for are cleared, and the factors the
+   * maps multiply are set to neutral values so the textures show as authored.
+   * Returns whether every map was applied.
+   */
+  async applyPolyHavenTexture(
+    materialId: string, id: string, name: string, resolution: TextureResolution,
+    onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal
+  ) {
+    try {
+      const { urls, metal } = await polyHavenMaps(id, resolution);
+      if (signal?.aborted) return false;
+      const entries = Object.entries(urls) as [TextureKey, string][];
+      const loaded = new Array<number>(entries.length).fill(0);
+      const totals = new Array<number>(entries.length).fill(0);
+      const report = () => onProgress?.(loaded.reduce((a, b) => a + b, 0), totals.reduce((a, b) => a + b, 0));
+      const merge = { key: `${materialId}:polyhaven:${++this.polyHavenPicks}`, ms: Infinity };
+      // The first map to land also clears the slots of the previous set.
+      let pending: Partial<Record<TextureKey, Blob | null>> | null = {
+        map: null, normalMap: null, metallicRoughnessMap: null, roughnessMap: null, metalnessMap: null
+      };
+      // Maps are applied in arrival order, one at a time.
+      let applying = Promise.resolve();
+      await Promise.all(entries.map(async ([slot, url], i) => {
+        const blob = await downloadPolyHavenMap(url, (bytes, total) => {
+          loaded[i] = bytes;
+          totals[i] = total;
+          report();
+        }, signal);
+        applying = applying.then(async () => {
+          if (signal?.aborted) return;
+          const first = pending;
+          pending = null;
+          await this.materials.setTextures(materialId, { ...first, [slot]: blob },
+            first ? { baseColor: [1, 1, 1], specularRoughness: 1, baseMetalness: metal ? 1 : 0 } : {},
+            `${name} textures`, merge);
+        });
+        await applying;
+      }));
+      return !signal?.aborted;
+    } catch (error) {
+      if (!signal?.aborted) showToast(`Could not load ${name} from Poly Haven: ${(error as Error).message}`, 'error');
+      return false;
     }
   }
 

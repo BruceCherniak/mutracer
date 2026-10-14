@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { ImagePlus, MousePointerClick, RotateCcw, X } from 'lucide-react';
-import { showToast, useViewer, type SelectedMaterial } from '../../store';
+import { setUi, showToast, useViewer, type SelectedMaterial } from '../../store';
 import { getEngine } from '../../engine/ViewerEngine';
 import { thumbnailUrl } from '../../engine/presets';
 import {
@@ -8,10 +8,12 @@ import {
   type MaterialGroup, type MaterialParam, type MaterialValues, type TextureKey
 } from '../../engine/materialParams';
 import { ColorField, Hint, Scrub, Section, Switch } from '../ui/controls';
+import { PolyHavenLogo } from '../PolyHavenLogo';
 
 export function MaterialPanel() {
   const material = useViewer((s) => s.material);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const browsing = useViewer((s) => s.ui.textureBrowser);
 
   if (!material) {
     return (
@@ -51,6 +53,12 @@ export function MaterialPanel() {
             <img src={thumbnailUrl(`material-${preset.id}`)} alt="" /><span>{preset.label}</span>
           </button>
         ))}
+      </div>
+      <div className="tex-browse hide-m">
+        <button className="btn btn--wide" aria-pressed={browsing} data-on={browsing || undefined}
+          onClick={() => setUi({ textureBrowser: !browsing })}>
+          <PolyHavenLogo />{browsing ? 'Hide Poly Haven textures' : 'Browse Poly Haven textures'}
+        </button>
       </div>
       {MATERIAL_GROUPS.map((group) => {
         const weight = group.weight ? Number(material.values[group.weight]) : undefined;

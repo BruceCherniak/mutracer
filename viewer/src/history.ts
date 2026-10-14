@@ -8,6 +8,8 @@ export interface HistoryItem {
   scope: 'settings' | 'material';
   /** Consecutive edits with the same key (a slider drag) collapse into one step. */
   mergeKey?: string;
+  /** How long after the previous edit with the same key this one still merges. Default 1000 ms. */
+  mergeMs?: number;
   undo(): void;
   redo(): void;
   /** Absorbs the next edit; returns false when the combined edit changes nothing. */
@@ -36,7 +38,7 @@ export function pushHistory(item: HistoryItem) {
   const last = undoStack[undoStack.length - 1];
   const now = performance.now();
   redoStack = [];
-  if (item.mergeKey && last?.item.mergeKey === item.mergeKey && last.item.merge && now - last.time < MERGE_MS) {
+  if (item.mergeKey && last?.item.mergeKey === item.mergeKey && last.item.merge && now - last.time < (item.mergeMs ?? MERGE_MS)) {
     if (last.item.merge(item)) last.time = now;
     else undoStack.pop();
   } else {

@@ -261,7 +261,7 @@ export interface ViewerState {
   focusArea: FocusAreaState;
   lens: LensInfo;
   paused: boolean;
-  ui: { tab: InspectorTab; left: boolean; right: boolean; hidden: boolean; focusFrame: boolean; exportOpen: boolean; codeOpen: boolean; helpOpen: boolean; mobileTab: InspectorTab | 'scene' };
+  ui: { tab: InspectorTab; left: boolean; right: boolean; hidden: boolean; focusFrame: boolean; exportOpen: boolean; codeOpen: boolean; helpOpen: boolean; textureBrowser: boolean; mobileTab: InspectorTab | 'scene' };
   export: { stage: 'pilot' | 'final' | 'denoising'; samples: number; target: number } | null;
 }
 
@@ -386,6 +386,7 @@ export const useViewer = create<ViewerState>(() => ({
     exportOpen: false,
     codeOpen: false,
     helpOpen: false,
+    textureBrowser: false,
     mobileTab: storedUi.tab ?? 'material'
   },
   export: null
