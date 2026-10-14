@@ -220,6 +220,34 @@ export const PUBLIC_MODEL_PRESETS = [
     }
   },
   {
+    "id": "bugatti-chiron",
+    "name": "LEGO Technic Bugatti Chiron",
+    "tag": "Sports car / Technic",
+    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.1/assets/bugatti-chiron/model.glb",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.1/assets/bugatti-chiron/thumbnail.webp",
+    "license": "CC-BY-NC-SA 4.0",
+    "credit": "VTX",
+    "sourceUrl": "https://sketchfab.com/3d-models/lego-technic-bugatti-chiron-c2a54e2e979a4905b859c1533b498221",
+    "licenseUrl": "https://creativecommons.org/licenses/by-nc-sa/4.0/",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@v0.1.1/assets/bugatti-chiron/attribution.json",
+    "sizeMB": 12.81,
+    "nonCommercial": true,
+    "camera": {
+      "position": [
+        4.55,
+        2.64,
+        4.96
+      ],
+      "target": [
+        -0.12,
+        0.55,
+        0.12
+      ],
+      "fov": 35,
+      "space": "grounded"
+    }
+  },
+  {
     "id": "dragon",
     "name": "Dragon",
     "tag": "Glass / sculpture",

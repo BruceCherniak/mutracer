@@ -125,13 +125,14 @@ user view takes precedence. Invalid camera metadata falls back to automatic fit.
 
 Example models are loaded on demand. Material spheres are procedural; Toy Car
 and Sheen Chair come from [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets)
-(CC0). All nine examples use the public selection in
+(CC0). All ten examples use the public selection in
 [mutracer-assets](https://github.com/pissang/mutracer-assets). Their metadata is
 copied from that repository's `presets.json` into `engine/publicModelPresets.ts`;
 Downloaded GLBs and all model previews stay in the assets repository or R2.
-The three original samples share the review list; their procedural/Khronos model
-sources are preserved and only their previews/credits are hosted there. GitHub downloads are
-pinned to `v0.1.0`, published with the resources before deployment.
+The original samples share the review list; their procedural/Khronos model
+sources are preserved and only their previews/credits are hosted there. GitHub
+downloads are pinned to immutable asset tags, published with the resources before
+deployment.
 When publishing a new asset release, update this metadata and its pinned version
 together. R2 permits browser reads from the production site only.
 
