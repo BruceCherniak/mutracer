@@ -86,6 +86,7 @@ for (const id of ['pick-files', 'pick-folder']) {
 
 const cards = document.getElementById('cards')!;
 for (const preset of MODEL_PRESETS) {
+  if (preset.id === 'spheres') continue;
   const li = document.createElement('li');
   const a = document.createElement('a');
   a.className = 'card';

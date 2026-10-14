@@ -11,22 +11,67 @@ Try the
 [viewer](https://mutracer.meimu-studio.com/viewer/). MuTracer is a 0.x library;
 APIs may change between minor releases.
 
-- **Progressive path tracing**: area, sphere, spot (with IES profiles),
-  directional and environment lights, with multiple importance sampling.
-- **OpenPBR 1.1 materials**: metal, dielectric, coat, fuzz, thin film,
-  transmission with absorption and scattering, subsurface, emission, and
-  ray-marched height-field displacement.
-- **Fast scene setup**: a JavaScript port of TinyBVH's binned SAH builder
-  builds acceleration structures, with the TinyBVH WebAssembly builder as an
-  option; transform-only animation refits the instance hierarchy.
-- **Denoising**: one call enables a built-in joint non-local means filter
-  (WebGPU and WebGL 2) or Intel Open Image Denoise (WebGPU), for the final
-  image or while the image converges.
-- **Three.js friendly**: keep a `THREE.Scene` (loaded with `GLTFLoader` or
-  built by hand) in sync with `THREESync`.
-- **Production output**: AgX, ACES, Cineon, Reinhard and linear tone mapping, color
-  grading, bloom, shadow catchers, transparent backgrounds, depth of field and
-  offline rendering with adaptive sampling.
+- **WebGPU first, WebGL 2 as fallback**: unidirectional progressive path
+  tracing with next-event estimation and multiple importance sampling over
+  rect, sphere, spot (with IES profiles), directional and HDR environment
+  lights. Without WebGPU, the same code renders on WebGL 2.
+- **OpenPBR 1.1 surface**: F82 metals, anisotropic GGX specular and coat,
+  fuzz, thin-film interference, dispersive transmission with absorption and
+  volume scattering, subsurface scattering, emission and ray-marched
+  height-field displacement.
+- **Interactive with millions of triangles**: a two-level BVH whose BLASes are
+  built with binned SAH in parallel Workers (a JavaScript port of TinyBVH, or
+  the TinyBVH WebAssembly builder with SBVH and CWBVH layouts). Moving
+  instances only refits the TLAS. See [performance](#performance).
+- **Low-noise sampling and denoising**: Owen-scrambled Sobol or blue-noise
+  ZSobol sequences. Albedo- and normal-guided denoising with Intel Open Image
+  Denoise (WebGPU) or a joint non-local means filter (WebGPU and WebGL 2),
+  while the image converges or on the final frame.
+- **Incremental Three.js sync**: `THREESync` converts standard and physical
+  materials, lights, instancing, skinning and morph targets, and picks up
+  transform, material and light edits on every update without reconverting
+  the scene.
+- **Offline-quality output**: deterministic `converge()` with variance-driven
+  adaptive sampling (WebGPU); AgX, ACES, Cineon, Reinhard and linear tone
+  mapping, color grading, bloom, thin-lens depth of field, shadow catchers and
+  transparent backgrounds.
+
+## Gallery
+
+Rendered live in the browser. Click an image to open the scene in the viewer.
+
+<table>
+  <tr>
+    <td width="33%"><a href="https://mutracer.meimu-studio.com/viewer/#model=yamaha-mt-09"><img src="https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/yamaha-mt-09/thumbnail.webp" alt="2025 Yamaha MT-09 SP V4" /></a><br /><sub>Yamaha MT-09 · metal and coat · <a href="https://sketchfab.com/3d-models/2025-yamaha-mt-09-sp-v4-cb5878baf5974167806eb8524d57f0b0">VTX</a>, CC-BY-NC-SA 4.0</sub></td>
+    <td width="33%"><a href="https://mutracer.meimu-studio.com/viewer/#model=super-human"><img src="https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/super-human/thumbnail.webp" alt="Super Human" /></a><br /><sub>Super Human · subsurface skin · <a href="https://sketchfab.com/3d-models/super-human-7aa58e978b9f4357b8e73d8e0440c896">Davyd Vidiger</a>, CC-BY 4.0</sub></td>
+    <td width="33%"><a href="https://mutracer.meimu-studio.com/viewer/#model=gelatinous-cube"><img src="https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/gelatinous-cube/thumbnail.webp" alt="Gelatinous Cube" /></a><br /><sub>Gelatinous Cube · transmission · <a href="https://sketchfab.com/3d-models/gelatinous-cube-e08385238f4d4b59b012233a9fbdca21">glenatron</a>, CC-BY-NC 4.0</sub></td>
+  </tr>
+  <tr>
+    <td width="33%"><a href="https://mutracer.meimu-studio.com/viewer/#model=dragon"><img src="https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/dragon/thumbnail.webp" alt="Glass dragon" /></a><br /><sub>Dragon · glass · <a href="https://benedikt-bitterli.me/resources/">Delatronic</a>, CC-BY 3.0</sub></td>
+    <td width="33%"><a href="https://mutracer.meimu-studio.com/viewer/#model=blender-cover-remix"><img src="https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/blender-cover-remix/thumbnail.webp" alt="Blender Cover Remix" /></a><br /><sub>Blender Cover Remix · characters · <a href="https://sketchfab.com/3d-models/blender-cover-remix-a38f11890ff141c88fcdac6b637fdaf8">bandinopla</a>, CC-BY 4.0</sub></td>
+    <td width="33%"><a href="https://mutracer.meimu-studio.com/viewer/#model=spheres"><img src="https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/spheres/thumbnail.webp" alt="OpenPBR material spheres" /></a><br /><sub>Material spheres · OpenPBR layers · procedural, CC0</sub></td>
+  </tr>
+</table>
+
+## Performance
+
+<a href="https://mutracer.meimu-studio.com/viewer/#model=bugatti-chiron"><img src="https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/bugatti-chiron/thumbnail.webp" alt="LEGO Technic Bugatti Chiron rendered in MuTracer" width="480" /></a>
+
+The [LEGO Technic Bugatti Chiron](https://mutracer.meimu-studio.com/viewer/#model=bugatti-chiron)
+(<a href="https://sketchfab.com/3d-models/lego-technic-bugatti-chiron-c2a54e2e979a4905b859c1533b498221">VTX</a>, CC-BY-NC-SA 4.0)
+is a heavy scene that path traces interactively in the viewer:
+
+| | Bugatti Chiron |
+| --- | --- |
+| Rendered triangles | 4.6 M (2.5 M unique, 341 geometries in 560 meshes) |
+| Materials | 35 |
+| Download | 12.8 MB `.glb` |
+| BVH build, 1 thread | 1.7 s (built-in builder) / 1.0 s (TinyBVH WebAssembly) |
+| BVH build, 4 workers (default) | 0.50 s (built-in builder) / 0.28 s (TinyBVH WebAssembly) |
+| 1920 × 1080, 64 spp | 12.1 s path tracing, 12.4 s with OIDN denoising |
+
+Measured on an Apple M4 Max: rendering in Chrome with WebGPU at the viewer's
+default settings (6 bounces), BVH builds on CPU threads excluding worker startup.
 
 ## Install
 

@@ -96,6 +96,18 @@ a { color: inherit; }
 .btn:has(input:focus-visible) { outline: 2px solid #f2ac8e; outline-offset: 2px; }
 .drag-veil { position: fixed; inset: 0; z-index: 10; }
 
+/* ---------- Features ---------- */
+.features { margin-top: 48px; }
+.features h2 { margin: 0 0 16px; font-size: 18px; font-weight: 650; }
+.features__grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 14px; margin: 0; padding: 0; list-style: none; }
+.feature { padding: 18px 18px 16px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.feature__icon { display: block; margin-bottom: 12px; color: var(--accent); }
+.feature h3 { margin: 0 0 6px; font-size: 15px; font-weight: 600; }
+.feature p { margin: 0; color: var(--text-2); font-size: 13.5px; }
+.feature a { color: var(--accent); text-decoration: none; }
+.feature a:hover { color: var(--accent-hover); text-decoration: underline; }
+.feature code { font: 12.5px var(--mono); color: var(--text); }
+
 /* ---------- Example cards ---------- */
 .examples { margin-top: 48px; }
 .examples h2 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; margin: 0 0 16px; font-size: 18px; font-weight: 650; }
@@ -140,6 +152,7 @@ a { color: inherit; }
   .nav__links a:nth-child(n + 3) { display: none; }
   .hero { padding-block: 28px 32px; }
   .drop { min-height: 280px; }
+  .features__grid { grid-template-columns: minmax(0, 1fr); gap: 10px; }
   .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 }
 

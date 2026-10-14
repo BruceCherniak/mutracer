@@ -67,6 +67,54 @@
         <h2 id="examples-title">Examples <span>Khronos &amp; Sketchfab · loaded on demand</span></h2>
         <ul class="cards" id="cards"></ul>
       </section>
+
+      <section class="features" aria-labelledby="features-title">
+        <h2 id="features-title">Features</h2>
+        <ul class="features__grid">
+          <li class="feature">
+            <svg class="feature__icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="4" y="4" width="16" height="16" rx="2" /><rect x="9" y="9" width="6" height="6" /><path d="M9 1v3M15 1v3M9 20v3M15 20v3M20 9h3M20 14h3M1 9h3M1 14h3" />
+            </svg>
+            <h3>WebGPU first, WebGL 2 as fallback</h3>
+            <p>Unidirectional path tracing with next-event estimation and MIS over rect, sphere, IES spot, directional and HDR environment lights. Without WebGPU it falls back to WebGL 2.</p>
+          </li>
+          <li class="feature">
+            <svg class="feature__icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" /><path d="M12 3a9 9 0 0 0 0 18" fill="currentColor" fill-opacity="0.25" /><path d="M7.5 8.5a5 5 0 0 1 4-2" />
+            </svg>
+            <h3>OpenPBR 1.1 surface</h3>
+            <p>F82 metals, anisotropic GGX specular and coat, fuzz, thin-film interference, dispersive transmission with volume scattering, subsurface scattering and ray-marched displacement.</p>
+          </li>
+          <li class="feature">
+            <svg class="feature__icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M13 2 4 14h7l-1 8 9-12h-7l1-8z" />
+            </svg>
+            <h3>Interactive with millions of triangles</h3>
+            <p>Two-level BVH with binned-SAH BLASes built in parallel Workers; moving instances only refits the TLAS. The <a href="./viewer/#model=bugatti-chiron">4.6 M-triangle Bugatti</a>: 0.5 s build, 5.3 full-HD spp/s on an M4 Max.</p>
+          </li>
+          <li class="feature">
+            <svg class="feature__icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="m12 3 1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z" /><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" />
+            </svg>
+            <h3>Low-noise sampling and denoising</h3>
+            <p>Owen-scrambled Sobol or blue-noise ZSobol sequences. Albedo- and normal-guided denoising with Intel OIDN (WebGPU) or joint non-local means, progressively or on convergence.</p>
+          </li>
+          <li class="feature">
+            <svg class="feature__icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M12 2 3 7v10l9 5 9-5V7z" /><path d="m3 7 9 5 9-5M12 12v10" />
+            </svg>
+            <h3>Incremental Three.js sync</h3>
+            <p><code>THREESync</code> converts standard and physical materials, lights, instancing, skinning and morph targets, and picks up transform, material and light edits on every update, without reconverting the scene.</p>
+          </li>
+          <li class="feature">
+            <svg class="feature__icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 7h3l2-3h6l2 3h3a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z" /><circle cx="12" cy="13" r="4" />
+            </svg>
+            <h3>Offline-quality output</h3>
+            <p>Deterministic <code>converge()</code> with variance-driven adaptive sampling (WebGPU), AgX and ACES tone mapping, bloom, thin-lens depth of field and shadow catchers.</p>
+          </li>
+        </ul>
+      </section>
     </main>
 
     <footer class="footer">
