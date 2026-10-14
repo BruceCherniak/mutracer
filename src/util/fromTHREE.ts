@@ -1132,7 +1132,8 @@ function orbitControlsState(camera: THREE.PerspectiveCamera | THREE.Orthographic
   const state: unknown[] = [camera, controls.update, camera.parent, ...camera.position.toArray(), ...camera.quaternion.toArray(),
     ...camera.scale.toArray(), ...camera.up.toArray(), camera.zoom, ...(camera.parent?.matrixWorld.elements ?? [])];
   for (const [key, value] of Object.entries(controls)) {
-    if (key.startsWith('_')) continue;
+    // Pointer-down changes the gesture state without changing the view.
+    if (key.startsWith('_') || key === 'state') continue;
     const vector = value as THREE.Vector3 | undefined;
     if (vector?.isVector3) state.push(key, ...vector.toArray());
     else if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') state.push(key, value);
@@ -1155,10 +1156,11 @@ export class THREESync extends Sync {
   private _store = createConversionStore();
   private _disposed = false;
   private _started = false;
+  private _gestureChanged = false;
   private _cameraState: unknown[] = [];
   private _lastUpdate?: number;
   private _idleControlsState?: unknown[];
-  private _start = () => {this._started = true; this._idleControlsState = undefined; this.setActive(true);};
+  private _start = () => {this._started = true; this._gestureChanged = false;};
   private _end = () => {this._started = false;};
   /** Subscribes to controls without converting sources or modifying the engine. */
   constructor(engine: Engine, private _options: THREESyncOptions = {}) {
@@ -1177,7 +1179,9 @@ export class THREESync extends Sync {
     let moving = false, settled = false;
     if (controls && this._options.updateControls !== false) {
       const orbitInputs = orbitControlsState(sourceCamera, controls);
-      const idle = !this._started && !controls.autoRotate && orbitInputs && this._idleControlsState && snapshotsEqual(orbitInputs, this._idleControlsState);
+      // OrbitControls applies pointer movement before synchronization. Keep a
+      // settled camera untouched on pointer-down until its inputs actually change.
+      const idle = (!this._started || !this._gestureChanged) && !controls.autoRotate && orbitInputs && this._idleControlsState && snapshotsEqual(orbitInputs, this._idleControlsState);
       if (!idle) {
         this._idleControlsState = undefined;
         const position = sourceCamera?.position.clone(), rotation = sourceCamera?.quaternion.clone(), zoom = sourceCamera?.zoom;
@@ -1225,7 +1229,8 @@ export class THREESync extends Sync {
       if (!this._camera) this._camera = next; else this._camera.copy(next);
       this.engine.camera = this._camera;
     }
-    this.setActive(this._started || moving || this._store.poseChanged || (cameraChanged && !settled));
+    if (this._started && (moving || cameraChanged)) this._gestureChanged = true;
+    this.setActive((this._started && this._gestureChanged) || moving || this._store.poseChanged || (cameraChanged && !settled));
   }
   /** Removes control subscriptions and caches. The last converted objects remain usable. */
   dispose(): void {

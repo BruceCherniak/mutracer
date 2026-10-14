@@ -142,6 +142,8 @@ export class ViewerEngine {
     this.controls.dampingFactor = 0.2;
     this.controls.addEventListener('start', () => {
       this.dragging = true;
+    });
+    this.controls.addEventListener('change', () => {
       if (get().paused) set({ paused: false });
     });
     this.controls.addEventListener('end', () => { this.dragging = false; });

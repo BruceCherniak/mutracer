@@ -192,8 +192,9 @@ MuTracer transform; source rotation alone does not specify their direction.
 Construction subscribes to control events. The first update converts and writes
 sources to the engine. `scene` exposes the retained converted scene, or undefined
 when no source was supplied. A camera-only sync preserves a MuTracer-built scene.
-`active` covers start/end interaction, camera movement, damping and changing
-skinned/morph poses. OrbitControls damping stays consistent across render frame
+`active` covers gestures once the camera moves, damping and changing
+skinned/morph poses. Clicking or holding a stationary view preserves accumulated
+samples. OrbitControls damping stays consistent across render frame
 rates, and final refinement resumes when motion settles. Use
 `updateControls: false` when your application already updates the controls.
 

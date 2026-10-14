@@ -392,6 +392,7 @@ describe('THREESync engine and interaction contract', () => {
   it('respects start/end and terminates a small damping tail in the ending tick', () => {
     const {engine, targets} = renderFixture({tiles: 2, fits: false}); const camera = new THREE.PerspectiveCamera(); camera.position.z = 5;
     const control = controls(camera); const sync = new THREESync(engine, {camera, controls: control});
+    control.update.mockImplementation(() => {camera.position.x += .01; return true;});
     const loop = new RenderLoop(engine, {sync}); control.fire('start'); loop.tick();
     const trace = vi.mocked(targets[0].trace).getMockImplementation()!;
     vi.mocked(targets[0].trace).mockImplementation((camera, cap) => {trace(camera, cap); return trace(camera, cap);});
@@ -410,7 +411,7 @@ describe('THREESync engine and interaction contract', () => {
     control.update.mockImplementation(() => {if (control.enableDamping) camera.zoom *= 1.0001; return true;}); sync.update(); expect(sync.active).toBe(false); sync.dispose(); engine.dispose();
   });
   it.each(['position', 'zoom'] as const)('ends %s damping below the controls change-event threshold', field => {
-    const {engine, targets} = renderFixture(); const camera = new THREE.PerspectiveCamera(); camera.position.z = 5;
+    const {engine} = renderFixture(); const camera = new THREE.PerspectiveCamera(); camera.position.z = 5;
     const control = controls(camera); const sync = new THREESync(engine, {camera, controls: control});
     const loop = new RenderLoop(engine, {sync}); control.fire('start'); loop.tick();
     // OrbitControls can keep moving the camera while update() returns false.
@@ -427,12 +428,15 @@ describe('THREESync engine and interaction contract', () => {
     const position = camera.position.clone(), zoom = camera.zoom; loop.tick();
     expect(camera.position.equals(position)).toBe(true); expect(camera.zoom).toBe(zoom); expect(loop.final.samples).toBe(2);
     expect(control.enableDamping).toBe(true);
-    expect(targets[1].trace).toHaveBeenCalledTimes(2);
+    expect(loop.final._output!.trace).toHaveBeenCalledTimes(3);
     loop.dispose(); sync.dispose(); engine.dispose();
   });
   it('does not call controls.update when updateControls is false', () => {
     const engine = new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement}); const camera = new THREE.PerspectiveCamera(); const control = controls(camera);
-    const sync = new THREESync(engine, {camera, controls: control, updateControls: false}); control.fire('start'); expect(sync.active).toBe(true); sync.update(); expect(sync.active).toBe(true);
+    const sync = new THREESync(engine, {camera, controls: control, updateControls: false}); sync.update();
+    control.fire('start'); expect(sync.active).toBe(false); sync.update(); expect(sync.active).toBe(false);
+    camera.position.x += .1; sync.update(); expect(sync.active).toBe(true);
+    sync.update(); expect(sync.active).toBe(true);
     control.fire('end'); sync.update(); expect(sync.active).toBe(false); expect(control.update).not.toHaveBeenCalled(); sync.dispose(); engine.dispose();
   });
   it('marks changed morph poses active for just that update', () => {
