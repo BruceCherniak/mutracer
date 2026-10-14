@@ -22,6 +22,7 @@ notification first:
 | Vertex attributes; indices and `materialIndex` unchanged | `geometry.markVerticesUpdated()` |
 | Indices, `materialIndex` or other geometry data | `geometry.markUpdated()` |
 | `instancedMesh.transforms` elements | `instancedMesh.markTransformsUpdated(start?, count?)` |
+| `instancedMesh.colors` elements | `instancedMesh.markColorsUpdated(start?, count?)` |
 
 Everything else, including the camera, `scene.meshes`, `mesh.transform`,
 replaced geometry, materials, textures or arrays, and `instancedMesh.count`,
@@ -69,22 +70,37 @@ inherited `position` and `lookAt` move the whole batch. Every instance uses the
 same material list, selected by the geometry's `materialIndex` exactly as for Mesh.
 
 `count` selects an active prefix and must be a nonnegative integer within the
-array capacity. Shrinking it retains the stored matrices; increase it again to
+transforms and colors array capacity. Shrinking it retains the stored matrices; increase it again to
 reactivate that prefix. To grow beyond capacity, assign a larger Float32Array
 with the previous prefix copied. The default count and capacity come from the
 constructor. Empty batches are supported.
 
-Element edits require `markTransformsUpdated` (default range: all active
-instances). The notification advances the read-only `version`, initially zero.
-Replacing the array and changing count are detected automatically. Matrices are
-copied into the engine snapshot on a version or storage change; unnotified
-edits remain uncommitted even when another scene resource changes. Call
+Optional `colors` contains linear RGB multipliers, three Float32 values per
+instance; omitted colors are white. The array is retained and must hold at least
+`3 * count` values. All materials of an instance share its color. Colors multiply
+baseColor after texture sampling, and emissionColor only for unlit materials.
+They do not affect alpha, other layer colors, non-unlit emission or light sampling.
+Color-only edits upload instance colors without refitting or rebuilding any BVH.
+Values are not clamped; results for nonfinite colors are undefined.
+
+```ts
+batch.colors = new Float32Array(batch.count * 3).fill(1); // replacement: detected
+batch.colors.set([0.2, 0.6, 1], 3);
+batch.markColorsUpdated(1, 1);
+engine.update();
+```
+
+Element edits require `markTransformsUpdated` or `markColorsUpdated` (default
+range: all active instances). Either notification advances the read-only
+`version`, initially zero, while internal transform/color versions are independent.
+Replacing either array, removing colors, and changing count are detected automatically.
+Arrays are copied into the engine snapshot on their own version or storage change;
+unnotified edits remain uncommitted even when another scene resource changes. Call
 `engine.update()` before refining or converging.
 
 Caveats: individual instances have no names, transforms or materials as JS
 objects. Use separate batches for distinct material sets. Nonfinite world
-matrices are excluded, as with Mesh. Per-instance shader colors are not supported;
-[Three.js conversion](./threejs.md#instancing) groups instanceColor variants.
+matrices are excluded, as with Mesh.
 The notification range is validated; see the implementation notes below for
 the current upload granularity.
 
@@ -181,15 +197,21 @@ functions use static field accesses generated from the OpenPBR schema, with
 no runtime code generation. Unchanged material snapshots are reused across
 commits; only changed or newly added materials allocate parameter snapshots.
 THREESync refreshes retained
-instance-color and UV-projection variants from the source material; those variants participate in
-normal material detection.
+UV-projection variants from the source material; those variants participate in
+normal material detection. Instance colors use batch storage, not material variants.
 
-Instance detection checks version, count and storage identity instead of matrix
+Instance detection checks versions, count and storage identity instead of array
 elements. On a version or storage change, the engine copies the full transforms
-array; start/count validation does not limit the copied elements. In scenes containing batches, a transform update regenerates all numeric
+or colors array independently; start/count validation does not limit the copied
+elements. In scenes containing batches, a transform update regenerates all numeric
 instance records and refits the TLAS. Individual dirty
 instance uploads are deferred; ordinary Mesh transform updates retain their
 existing partial upload path. The numeric world matrices keep double precision
 until GPU packing, preserving Three.js world-matrix multiplication and inverse
 transform calculations. BLAS and vertices are shared unless explicit
 materialIndex packing or displacement requires a distinct vertex region.
+
+Color updates keep numeric transforms and bounds, map source slots through TLAS
+leaf order, and upload only the color vec4 for each affected batch instance.
+Instance records are 10 vec4 (160 bytes), with RGB and zero padding in vec4 9;
+ordinary Mesh and uncolored batches store white.

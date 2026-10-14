@@ -1,6 +1,8 @@
 import { MATERIAL_FLOAT_COUNT } from './materialLayout.js';
 import { normalizeBounces } from './pathLimits.js';
 import { MATERIAL_TEXTURE_DEFINES, materialTextureFeatures } from './materialTextureSlots.js';
+import { updateMeshInstanceColors } from './prepareMeshBVH.js';
+import { updateTLASInstanceColors } from './bvhAccel.js';
 import { getMaterialHashKey } from '../scene/openPbrSchema.js';
 import { sameInstanceMembership } from './meshInstances.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
@@ -318,6 +320,8 @@ class WGPURayTracePass {
     instanceCount: number;
     instanceVersion: number;
     instanceTransforms?: Float32Array;
+    instanceColors?: Float32Array;
+    colorVersion: number;
     geometry: Geometry;
     bvh?: FlattendBVH;
     materials: OpenPBRMaterial[];
@@ -340,6 +344,7 @@ class WGPURayTracePass {
     (typeof this._meshSnapshot)[number]
   >();
   private _dirtyTransformMeshes = new Set<Mesh>();
+  private _dirtyColorMeshes = new Set<Mesh>();
   private _geometriesNeedRefit = new Set<Geometry>();
   private _needsUpdateAnalyticLightsBuffer = true;
 
@@ -986,6 +991,7 @@ class WGPURayTracePass {
       }
       if (this._pendingGeometryUpdates.size) this._updateGeometryData();
       if (this._needsRefitTLAS) this._refitMeshInstances();
+      if (this._dirtyColorMeshes.size) this._updateMeshColors();
       if (this._pendingMaterialUpdate) this._updateMaterialData();
       if (this._needsUpdateLightSamplingData) {
         this._updateLightSamplingData();
@@ -1786,7 +1792,8 @@ ${rayTraceCompute({
     this._constants.USE_ENVMAP = !!envImage;
   }
 
-  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[] }) {
+  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; colors?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[] }) {
+    for (const mesh of update?.colors ?? []) this._dirtyColorMeshes.add(mesh);
     if (update && this._preparedMeshData && this._materialData &&
       !this._needsUpdateMeshData && !this._needsUpdateMeshMembership && meshes === this._meshes) {
       const materialUpdate = this._materialChanges.classify(update.materials ?? []);
@@ -1810,10 +1817,10 @@ ${rayTraceCompute({
           this._dirtyTransformMeshes.add(mesh);
           this._needsRefitTLAS = true;
         }
-        return !!update.materials?.length || !!update.transforms?.length || !!update.geometries?.length;
+        return !!update.materials?.length || !!update.transforms?.length || !!update.colors?.length || !!update.geometries?.length;
       }
     }
-    const transformOnlyMeshes = update?.materials?.length ? undefined : update?.transforms;
+    const transformOnlyMeshes = update?.materials?.length || update?.colors?.length ? undefined : update?.transforms;
     const materialChange = !!update?.materials?.length;
     if (
       transformOnlyMeshes && !transformOnlyMeshes.some(mesh => mesh instanceof InstancedMesh) &&
@@ -1849,8 +1856,10 @@ ${rayTraceCompute({
     const nextSnapshot = meshes.map((mesh) => ({
       mesh,
       instanceCount: mesh instanceof InstancedMesh ? mesh.count : 1,
-      instanceVersion: mesh instanceof InstancedMesh ? mesh.version : 0,
+      instanceVersion: mesh instanceof InstancedMesh ? mesh.transformsVersion : 0,
       instanceTransforms: mesh instanceof InstancedMesh ? mesh.transforms : undefined,
+      instanceColors: mesh instanceof InstancedMesh ? mesh.colors : undefined,
+      colorVersion: mesh instanceof InstancedMesh ? mesh.colorsVersion : 0,
       geometry: mesh.geometry,
       bvh: getGeometryBvh(mesh.geometry),
       materials: mesh.materials.slice(),
@@ -1898,6 +1907,7 @@ ${rayTraceCompute({
         const resident = this._residentSnapshotByMesh.get(next.mesh);
         return (
           !!resident &&
+          next.colorVersion === resident.colorVersion && next.instanceColors === resident.instanceColors &&
           next.geometry === resident.geometry &&
           next.bvh === resident.bvh &&
           next.materials.length === resident.materials.length &&
@@ -1937,7 +1947,7 @@ ${rayTraceCompute({
           !prev ||
           next.mesh !== prev.mesh || next.instanceCount !== prev.instanceCount ||
           next.geometry !== prev.geometry ||
-          next.bvh !== prev.bvh ||
+          next.bvh !== prev.bvh || next.colorVersion !== prev.colorVersion || next.instanceColors !== prev.instanceColors ||
           next.materials.length !== prev.materials.length ||
           next.materials.some((material, k) => material !== prev.materials[k]) ||
           next.materialKeys.some((hash, k) => hash !== prev.materialKeys[k]) ||
@@ -2532,6 +2542,18 @@ ${rayTraceCompute({
       snapshot.bvh = getGeometryBvh(snapshot.geometry);
     });
     this._needsUpdateMeshMembership = false;
+  }
+
+  private _updateMeshColors() {
+    const res = this._preparedMeshData, tlas = this._tlas;
+    if (res && tlas) {
+      const dirty = updateMeshInstanceColors(res.instanceBindings, res.instances, this._dirtyColorMeshes);
+      const ranges = updateTLASInstanceColors(tlas, res.instances, dirty);
+      if (this._instancesBuffer) for (const {offset, size} of ranges) {
+        this._device.queue.writeBuffer(this._instancesBuffer, offset, tlas.instancesBuffer!, offset, size);
+      }
+    }
+    this._dirtyColorMeshes.clear();
   }
 
   private _refitMeshInstances() {

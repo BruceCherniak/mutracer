@@ -47,7 +47,7 @@ See [scene updates](./updates.md) for the cost of each kind of edit.
 - Three.js skinning and morph targets run on the CPU; cost grows with
   vertices, bone influences and material groups. An unchanged pose is free.
 - Each `InstancedMesh` instance adds one top-level BVH instance per material
-  group. Each distinct instance color adds a cached material; reuse colors.
+  group. Native instance colors share the same materials.
 
 ## Lighting
 

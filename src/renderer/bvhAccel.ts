@@ -11,7 +11,7 @@ import { buildBinnedSahBvh, layoutBvh2 } from './binnedSahBvh.js';
 const vec3Min = vec3.min;
 const vec3Max = vec3.max;
 
-export const INSTANCE_VEC4_STRIDE = 9;
+export const INSTANCE_VEC4_STRIDE = 10;
 export const INSTANCE_WORD_STRIDE = INSTANCE_VEC4_STRIDE * 4;
 
 export type BvhLayout = 'bvh2' | 'bvh4' | 'bvh-gpu' | 'cwbvh';
@@ -68,6 +68,7 @@ export interface TLASInstance {
   transform: Mat4Array;
   materialsIndices: number[];
   displacementScale?: number;
+  color?: [number, number, number];
 }
 
 export interface BLASInstance {
@@ -333,6 +334,8 @@ function writeInstanceRecord(
   instanceInts[offset + 1] = placement.vertexOffsets[instance.blasIndex];
   instanceInts[offset + 2] = instance.materialsIndices[0] || 0;
   instanceFloats[offset + 3] = instance.displacementScale || 0;
+  instanceFloats.set(instance.color ?? [1, 1, 1], offset + 36);
+  instanceFloats[offset + 39] = 0;
   const inverse = mat4.invert(mat4.create(), instance.transform);
   for (let i = 0; i < 16; i++) {
     instanceFloats[offset + 4 + i] = inverse[i];
@@ -717,4 +720,21 @@ export function refitBLAS(
     floats[base + 4] = maxX; floats[base + 5] = maxY; floats[base + 6] = maxZ;
   }
   return !geometry.dynamic || !(area > flattened.buildSurfaceArea * DYNAMIC_BLAS_REBUILD_RATIO);
+}
+
+/** Writes only instance colors; TLAS topology and bounds remain untouched. */
+export function updateTLASInstanceColors(flattened: FlattendBVH, instances: MeshInstances, dirty: ReadonlySet<number>): TLASRefitRange[] {
+  if (!flattened.instancesBuffer || !flattened.buffer.byteLength || !dirty.size) return [];
+  const metadata = getTLASRefitMetadata(flattened, new Int32Array(flattened.buffer));
+  const floats = new Float32Array(flattened.instancesBuffer);
+  const ranges: TLASRefitRange[] = [];
+  for (const source of dirty) for (const leaf of metadata.leavesBySource.get(source) ?? []) {
+    for (const entry of metadata.instancesByLeaf.get(leaf) ?? []) {
+      if (entry.source !== source) continue;
+      const offset = entry.target * INSTANCE_WORD_STRIDE + 36;
+      floats.set(readMeshInstance(instances, source).color ?? [1, 1, 1], offset);
+      ranges.push({offset: offset * 4, size: 16});
+    }
+  }
+  return mergeRefitRanges(ranges);
 }

@@ -321,7 +321,7 @@ it('retains the converted source material for UV meshes and shares automatic pro
   }
   expect(a.materials[0]).toBe(base); expect(b.materials[0]).toBe(variant);
 
-  const cache = (sync as unknown as { _store: { colorVariants: Map<THREE.Material, Map<string, unknown>> } })._store.colorVariants;
+  const cache = (sync as unknown as { _store: { projectionVariants: Map<THREE.Material, Map<string, unknown>> } })._store.projectionVariants;
   expect(cache.get(material)!.size).toBe(1);
   source.remove(fallback, secondFallback); sync.update(); expect(cache.size).toBe(0);
 });
@@ -332,7 +332,7 @@ it('respects explicit material projections and prunes superseded automatic varia
   const uvless = new THREE.BoxGeometry(); uvless.deleteAttribute('uv');
   source.add(new THREE.Mesh(new THREE.BoxGeometry(), material), new THREE.Mesh(uvless, material));
   const sync = initializedSync(source), [a, b] = sync.scene.meshes;
-  const cache = (sync as unknown as { _store: { colorVariants: Map<THREE.Material, Map<string, unknown>> } })._store.colorVariants;
+  const cache = (sync as unknown as { _store: { projectionVariants: Map<THREE.Material, Map<string, unknown>> } })._store.projectionVariants;
   const initial = b.materials[0];
   material.userData.mutracerUvProjection = 'spherical'; sync.update();
   expect(a.materials[0].uvProjection).toBe('spherical'); expect(b.materials[0].uvProjection).toBe('spherical');
@@ -460,7 +460,7 @@ describe('persistent conversion hooks', () => {
     result = null; material.needsUpdate = true; sync.update(); expect(sync.scene!.meshes).toEqual([]); expect(hook).toHaveBeenCalledTimes(3);
     sync.dispose(); engine.dispose();
   });
-  it('refreshes color and automatic-projection variants on custom edits and equal-version replacement', () => {
+  it('refreshes automatic-projection variants on custom edits and replacement', () => {
     const source = new THREE.Scene(); const material = new THREE.ShaderMaterial(); const geometry = new THREE.BoxGeometry(); geometry.deleteAttribute('uv');
     const mesh = new THREE.InstancedMesh(geometry, material, 2); mesh.setColorAt(0, new THREE.Color(.5,1,1)); mesh.setColorAt(1, new THREE.Color(.5,1,1)); source.add(mesh);
     const map = new Texture({width: 1,height: 1,data: new Uint8Array(4)});
@@ -470,11 +470,11 @@ describe('persistent conversion hooks', () => {
     const variant = sync.scene!.meshes[0].materials[0];
     expect(variant).not.toBe(custom); expect(sync.scene!.meshes).toHaveLength(1);
     expect((sync.scene!.meshes[0] as import('../../src/scene/InstancedMesh').default).count).toBe(2);
-    expect(variant.baseColor).toEqual([.4,.6,.4]); expect(variant.uvProjection).toBe('triplanar');
-    custom.baseColor = [.4,.3,.2]; sync.update(); expect(variant.baseColor).toEqual([.2,.3,.2]);
+    expect(variant.baseColor).toEqual([.8,.6,.4]); expect(variant.uvProjection).toBe('triplanar');
+    custom.baseColor = [.4,.3,.2]; sync.update(); expect(variant.baseColor).toEqual([.4,.3,.2]);
     custom = new OpenPBRMaterial({baseColor: [.2,.1,.6], map});
     material.needsUpdate = true; sync.update(); expect(sync.scene!.meshes[0].materials[0]).toBe(variant);
-    expect(variant.baseColor).toEqual([.1,.1,.6]); expect(variant.uvProjection).toBe('triplanar');
+    expect(variant.baseColor).toEqual([.2,.1,.6]); expect(variant.uvProjection).toBe('triplanar');
     sync.dispose(); engine.dispose();
   });
   it('caches lights without a native version, handles explicit revisions and keeps returned identity', () => {

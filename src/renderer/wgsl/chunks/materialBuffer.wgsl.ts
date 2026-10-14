@@ -1,4 +1,5 @@
 import { simpleTextureSample, thinFilmTextureSample } from '../../materialTextureSlots.js';
+import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
 import { mapAlphaUsageConstants } from '../../materialConstants.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
@@ -126,11 +127,17 @@ fn openpbr_roughness_to_alpha(roughness: f32, anisotropy: f32) -> vec2f {
   return max(vec2f(alphaMin), vec2f(alphaT, complement * alphaT));
 }
 
+fn getInstanceColor(instanceIndex: i32) -> vec3f {
+  if (instanceIndex < 0) { return vec3f(1.0); }
+  return instancesBuffer[instanceIndex * ${INSTANCE_VEC4_STRIDE} + 9].xyz;
+}
+
 fn getMaterial(
   ma: ptr<function, OpenPbrResolvedMaterial>,
   materialIndex: i32,
   uv: vec2f,
-  uv1: vec2f
+  uv1: vec2f,
+  instanceIndex: i32
 ) {
   let matData = materialsBuffer[materialIndex];
 
@@ -267,6 +274,10 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     (*ma).specularRoughness = mix((*ma).specularRoughness,
       pow(min(1.0, baseRoughness2 * baseRoughness2 + 2.0 * coatRoughness2 * coatRoughness2), 0.25), (*ma).coatWeight);
   }
+  let instanceColor = getInstanceColor(instanceIndex);
+  (*ma).baseColor *= instanceColor;
+  if ((*ma).materialType == UNLIT) { (*ma).emission *= instanceColor; }
+
   (*ma).specularRoughness = clamp((*ma).specularRoughness, ROUGHNESS_MIN, 1.0);
   (*ma).baseMetalness = clamp((*ma).baseMetalness, 0.0, 1.0);
   let specularAlpha = openpbr_roughness_to_alpha((*ma).specularRoughness, (*ma).specularAnisotropy);

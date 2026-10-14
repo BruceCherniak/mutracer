@@ -155,6 +155,8 @@ export function updateMeshInstanceTransforms(
         packed.bounds.set(bounds.min, index * 6); packed.bounds.set(bounds.max, index * 6 + 3);
         packed.blasIndices[index] = blasIndex; packed.materials[index] = packMaterialIndexAndWeightToInt(materialIndices[0], 1);
         packed.displacement[index] = displacementScale;
+        const colors = mesh instanceof InstancedMesh ? mesh.colors : undefined;
+        for (let k = 0; k < 3; k++) packed.colors[index * 3 + k] = colors?.[i * 3 + k] ?? 1;
       }
     }
     return packed;
@@ -1033,4 +1035,25 @@ function computeGeometryNormals(geometry: Geometry) {
 export function dirtyMeshInstanceIndices(bindings: PreparedMeshInstanceBinding[], meshes: ReadonlySet<Mesh>, instances: MeshInstances) {
   if (instances instanceof PackedMeshInstances) return new Set(Array.from({length: instances.length}, (_, i) => i));
   return new Set(bindings.flatMap((binding, i) => meshes.has(binding.mesh) ? [i] : []));
+}
+
+/** Refreshes color storage without computing transforms or bounds. Returns packed source slots. */
+export function updateMeshInstanceColors(bindings: PreparedMeshInstanceBinding[], instances: MeshInstances, meshes: ReadonlySet<Mesh>) {
+  const dirty = new Set<number>();
+  if (!(instances instanceof PackedMeshInstances)) return dirty;
+  let sourceStart = 0, packedIndex = 0;
+  for (const {mesh} of bindings) {
+    const count = meshInstanceCount(mesh), sourceEnd = sourceStart + count;
+    while (packedIndex < instances.length && instances.sourceIndices[packedIndex] < sourceEnd) {
+      if (meshes.has(mesh)) {
+        const localIndex = instances.sourceIndices[packedIndex] - sourceStart;
+        const colors = mesh instanceof InstancedMesh ? mesh.colors : undefined;
+        for (let k = 0; k < 3; k++) instances.colors[packedIndex * 3 + k] = colors?.[localIndex * 3 + k] ?? 1;
+        dirty.add(packedIndex);
+      }
+      packedIndex++;
+    }
+    sourceStart = sourceEnd;
+  }
+  return dirty;
 }

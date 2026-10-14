@@ -155,6 +155,7 @@ texture.markUpdated();                // texture pixels or UV-array elements
 geometry.markVerticesUpdated();       // vertex attributes only
 geometry.markUpdated();               // indices, materialIndex or other geometry data
 instancedMesh.markTransformsUpdated(); // instance matrix elements
+instancedMesh.markColorsUpdated();     // instance color elements
 ```
 
 See [scene updates](./updates.md) for vertex animation and update costs. RenderLoop calls its syncs automatically. With explicit frame control, call `sync.update()` before engine.update;

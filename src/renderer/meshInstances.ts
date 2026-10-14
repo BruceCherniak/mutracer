@@ -20,13 +20,15 @@ export function meshInstanceTransform(mesh: Mesh, index: number, out: mat4.Mat4A
 export class PackedMeshInstances {
   length = 0;
   readonly transforms: Float64Array;
+  readonly colors: Float32Array;
   readonly bounds: Float32Array;
   readonly blasIndices: Uint32Array;
   readonly materials: Int32Array;
   readonly displacement: Float64Array;
   readonly sourceIndices: Uint32Array;
-  private readonly view: TLASInstance = {blasIndex: 0, bounds: {min: [0,0,0], max: [0,0,0]}, transform: Array(16).fill(0), materialsIndices: [0]};
+  private readonly view: TLASInstance = {blasIndex: 0, bounds: {min: [0,0,0], max: [0,0,0]}, transform: Array(16).fill(0), materialsIndices: [0], color: [1,1,1]};
   constructor(capacity: number) {
+    this.colors = new Float32Array(capacity * 3);
     this.transforms = new Float64Array(capacity * 16); this.bounds = new Float32Array(capacity * 6);
     this.blasIndices = new Uint32Array(capacity); this.materials = new Int32Array(capacity); this.displacement = new Float64Array(capacity); this.sourceIndices = new Uint32Array(capacity);
   }
@@ -34,6 +36,7 @@ export class PackedMeshInstances {
     const v = this.view;
     v.blasIndex = this.blasIndices[index]; v.materialsIndices[0] = this.materials[index]; v.displacementScale = this.displacement[index];
     for (let i = 0; i < 16; i++) v.transform[i] = this.transforms[index * 16 + i];
+    for (let i = 0; i < 3; i++) v.color![i] = this.colors[index * 3 + i];
     for (let i = 0; i < 3; i++) {v.bounds.min[i] = this.bounds[index * 6 + i]; v.bounds.max[i] = this.bounds[index * 6 + i + 3];}
     return v;
   }

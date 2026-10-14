@@ -11,7 +11,7 @@ import type { SceneChanges } from './sceneChangeDetector.js';
 export class CommittedScene {
   private readonly copies = new WeakMap<object, any>();
   private readonly geometryVersions = new WeakMap<Geometry, number>();
-  private readonly instanceVersions = new WeakMap<InstancedMesh, {version: number; transforms: Float32Array}>();
+  private readonly instanceVersions = new WeakMap<InstancedMesh, {transformsVersion: number; transforms: Float32Array; colorsVersion: number; colors?: Float32Array}>();
   private value?: Scene;
   private readonly copying = new WeakSet<object>();
 
@@ -46,19 +46,25 @@ export class CommittedScene {
     this.copying.add(object);
     try {
       for (const key of Object.keys(value)) {
-        if (value instanceof InstancedMesh && key === 'transforms') {
+        if (value instanceof InstancedMesh && (key === 'transforms' || key === 'colors')) {
           const previous = this.instanceVersions.get(value);
-          if (!previous || previous.version !== value.version || previous.transforms !== value.transforms) {
-            // Each batch owns its snapshot even if external batches share a
-            // mutable source array and notify at different times.
-            if (cloned.transforms?.length === value.transforms.length) cloned.transforms.set(value.transforms);
-            else cloned.transforms = value.transforms.slice();
-            this.instanceVersions.set(value, {version: value.version, transforms: value.transforms});
+          const version = key === 'transforms' ? value.transformsVersion : value.colorsVersion;
+          const priorVersion = key === 'transforms' ? previous?.transformsVersion : previous?.colorsVersion;
+          const array = value[key];
+          if (!previous || priorVersion !== version || previous[key] !== array) {
+            // Each batch owns its snapshot even when callers share source storage.
+            if (!array) cloned[key] = undefined;
+            else if (previous?.[key] === array && cloned[key]?.length === array.length) cloned[key].set(array);
+            else cloned[key] = array.slice();
           }
         } else cloned[key] = value instanceof Texture && key === 'source' ? value.source : this.copy((value as any)[key]);
       }
     } finally { this.copying.delete(object); }
     if (Array.isArray(value)) cloned.length = value.length;
+    if (value instanceof InstancedMesh) this.instanceVersions.set(value, {
+      transformsVersion: value.transformsVersion, transforms: value.transforms,
+      colorsVersion: value.colorsVersion, colors: value.colors
+    });
     if (value instanceof Geometry) {
       this.geometryVersions.set(value, value.version);
       setGeometryBvh(cloned, getGeometryBvh(value));
@@ -76,6 +82,7 @@ export class CommittedScene {
         this.copy(mesh.transform);
         if (mesh instanceof InstancedMesh) this.copy(mesh);
       }
+      for (const mesh of changes.colors) this.copy(mesh);
       for (const geometry of changes.geometries) this.copy(geometry);
       for (const material of changes.materials) this.copy(material);
       if (changes.lights) this.value.lights = this.copy(scene.lights);

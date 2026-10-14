@@ -11,6 +11,7 @@ import { Scene, SceneBackground } from '../scene/Scene.js';
 export interface SceneChanges {
   meshes: 'none' | 'incremental' | 'full';
   transforms: Mesh[];
+  colors: InstancedMesh[];
   geometries: Geometry[];
   materials: OpenPBRMaterial[];
   lights: boolean;
@@ -103,6 +104,8 @@ interface MeshSnapshot {
   instanceVersion?: number;
   instanceCount?: number;
   instanceTransforms?: Float32Array;
+  instanceColors?: Float32Array;
+  colorVersion?: number;
   dynamic: boolean;
   storage: unknown[];
   materials: OpenPBRMaterial[];
@@ -127,6 +130,7 @@ export class SceneChangeDetector {
     const old = this._snapshot;
     let full = !old || old.meshList !== scene.meshes || old.meshes.length !== scene.meshes.length;
     const transforms: Mesh[] = [];
+    const colors: InstancedMesh[] = [];
     const geometries = new Set<Geometry>();
     const materials: OpenPBRMaterial[] = [];
     const seen = this._seen;
@@ -138,7 +142,8 @@ export class SceneChangeDetector {
       if (mesh instanceof InstancedMesh) {
         mesh.validate();
         if (prev?.instanceCount !== mesh.count) full = true;
-        if (prev?.mesh === mesh && (prev.instanceVersion !== mesh.version || prev.instanceTransforms !== mesh.transforms)) {
+        if (prev?.mesh === mesh && (prev.colorVersion !== mesh.colorsVersion || prev.instanceColors !== mesh.colors)) colors.push(mesh);
+        if (prev?.mesh === mesh && (prev.instanceVersion !== mesh.transformsVersion || prev.instanceTransforms !== mesh.transforms)) {
           transforms.push(mesh); instanceChanged = true;
         }
       }
@@ -165,8 +170,8 @@ export class SceneChangeDetector {
     const lights = scene.lights.map(snapshotFields);
     const background = backgroundSnapshot(scene.background);
     const changes: SceneChanges = {
-      meshes: full ? 'full' : transforms.length || materials.length || geometries.size ? 'incremental' : 'none',
-      transforms, materials, geometries: [...geometries],
+      meshes: full ? 'full' : transforms.length || colors.length || materials.length || geometries.size ? 'incremental' : 'none',
+      transforms, colors, materials, geometries: [...geometries],
       lights: !old || old.lightList !== scene.lights || lights.length !== old.lights.length ||
         lights.some((light, i) => !snapshotsEqual(light, old.lights[i])),
       background: !old || !snapshotsEqual(background, old.background)
@@ -188,7 +193,9 @@ export class SceneChangeDetector {
           next!.meshes[i] = item;
         }
         item.mesh = mesh; item.geometry = mesh.geometry; item.version = mesh.geometry.version;
-        item.instanceVersion = mesh instanceof InstancedMesh ? mesh.version : undefined;
+        item.instanceVersion = mesh instanceof InstancedMesh ? mesh.transformsVersion : undefined;
+        item.colorVersion = mesh instanceof InstancedMesh ? mesh.colorsVersion : undefined;
+        item.instanceColors = mesh instanceof InstancedMesh ? mesh.colors : undefined;
         item.instanceCount = mesh instanceof InstancedMesh ? mesh.count : undefined;
         item.instanceTransforms = mesh instanceof InstancedMesh ? mesh.transforms : undefined;
         item.dynamic = mesh.geometry.dynamic; captureGeometryStorage(mesh.geometry, item.storage);

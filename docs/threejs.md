@@ -60,7 +60,7 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | `MeshPhysicalMaterial.specularIntensityMap`, `.specularColorMap` | `specularWeightMap` (linear A), `specularColorMap` (sRGB RGB) |
 | `MeshPhysicalMaterial.anisotropy`, `.anisotropyRotation`, `.anisotropyMap` | Source strength, rotation and direction texture; see [anisotropy source conversion](#anisotropy-source-conversion) |
 | `SkinnedMesh` / mesh with morph targets | CPU-deformed dynamic geometry |
-| `InstancedMesh` | One InstancedMesh per group/color variant, sharing geometry and BLAS |
+| `InstancedMesh` | One InstancedMesh per material group, with native colors, sharing geometry and BLAS |
 | Multi-material groups | One MuTracer mesh per group |
 | `DirectionalLight` | `DirectionalLight` |
 | `PointLight` | `SphereLight` (radius `userData.mutracerRadius`, default 0.25) |
@@ -98,7 +98,7 @@ these imports do not imply identical glTF BRDFs.
 Invisible objects are skipped. Other material types are skipped with a console
 warning unless `convertMaterial` supplies an OpenPBR material. `BatchedMesh`, instanced morph targets (`morphTexture`) and skinned
 instancing are unsupported: each source object warns once per converter and is
-converted as an ordinary mesh.
+converted as an ordinary mesh, without per-instance matrices or colors.
 
 Meshes without UVs get automatic triplanar texture and displacement
 projection through a cached copy of their material; explicit
@@ -131,7 +131,7 @@ animation to accumulate samples; changing a pose restarts accumulation.
 ## Instanced meshes
 
 `THREE.InstancedMesh.count` converts to a MuTracer `InstancedMesh` per material
-group and distinct color variant. Local Float32 matrices are copied in source
+group. Local Float32 matrices and colors are copied in source
 index order within each batch; the retained double-precision `source.matrixWorld`
 is the batch transform. Each world matrix remains `source.matrixWorld * instanceMatrix[i]`.
 
@@ -142,14 +142,14 @@ is the batch transform. Each world matrix remains `source.matrixWorld * instance
   identities. Shrinking removes the tail; increasing reads it again from the
   source buffer. Membership changes rebuild the top-level BVH and reuse vertices
   and BLASes where packing permits ([scene updates](./updates.md#adding-removing-and-reassigning-meshes)).
-- **Colors**: `instanceColor` multiplies `baseColor` (and `emissionColor` for
-  unlit materials). Set `instanceColor.needsUpdate = true` after edits. Instances
-  with the same variant form one batch, ordered by their source indices. Source
-  material edits refresh variants; variants absent from the converted scene are
-  pruned each update. Reuse colors to bound material count and memory.
-- **Callbacks**: `onMeshConverted` runs once per batch on each update. It receives
-  `Mesh | InstancedMesh`; edit shared materials as usual, or the batch's local
-  matrices with `markTransformsUpdated`. It no longer runs per individual instance.
+- **Colors**: `instanceColor` is copied into the batch's native `colors` array in
+  source order; removing it restores undefined (white). Set
+  `instanceColor.needsUpdate = true` after edits. Only changed values notify the
+  batch, and colors do not create material variants or extra batches. See
+  [color semantics and updates](./updates.md#instanced-meshes).
+- **Callbacks**: `onMeshConverted` runs once per visible group on each update.
+  It receives `Mesh | InstancedMesh`; edit shared materials as usual, or notify
+  batch array element edits as described in [scene updates](./updates.md).
 
 Unsupported instanced deformation keeps the ordinary-mesh fallback described
 above. [Native instancing](./updates.md#instanced-meshes) uses the same primitive
@@ -187,7 +187,7 @@ MuTracer transform; source rotation alone does not specify their direction.
 | `updateControls` | true | Calls controls.update; false leaves updating to the application |
 | `convertMaterial` | undefined | `(sourceMaterial)` → OpenPBRMaterial, null to skip every mesh using it, undefined for built-in conversion |
 | `convertLight` | undefined | `(sourceLight)` → SceneLight, null to skip the light, undefined for built-in conversion |
-| `onMeshConverted` | undefined | `(mesh, source, group, groupIndex)` on every visible mesh/group/color batch during update |
+| `onMeshConverted` | undefined | `(mesh, source, group, groupIndex)` on every visible mesh/group during update |
 
 Construction subscribes to control events. The first update converts and writes
 sources to the engine. `scene` exposes the retained converted scene, or undefined
@@ -232,8 +232,8 @@ identity and `version`. The material hook receives only the source material,
 so a shared material converts once for every mesh using it; use distinct
 source materials for per-mesh conversion. Set `threeMaterial.needsUpdate = true` to advance its version and
 rerun the hook. Returned objects are used by identity and are caller-owned;
-`engine.update()` detects edits to them. Instance colors and automatic UV
-projection derive retained variants from the returned material; these refresh
+`engine.update()` detects edits to them. Automatic UV
+projection derives retained variants from the returned material; these refresh
 when its identity or parameters change.
 
 Three.js lights have no built-in `version`, so the light hook runs once. To

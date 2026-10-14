@@ -23,15 +23,13 @@ the ones marked additive would only add to it.
   post-filter (the `alphaDenoiser` parameter), but `Render` always passes
   `undefined`. Expose it or remove it; removing an image-quality mechanism is
   a maintainer decision.
-- **Per-instance color in shaders.** `THREESync` splits `instanceColor` into one
-  `InstancedMesh` per color variant, which costs CPU time and memory when there
-  are many distinct colors. Shader support needs both WGSL and GLSL.
 
 ## Performance and memory
 
-- **Dirty ranges for `InstancedMesh`.** `markTransformsUpdated(start, count)`
-  validates its range, but a commit still copies the whole `transforms` array
-  and refits the whole TLAS. Unchanged updates are already cheap (100,000
+- **Dirty ranges for `InstancedMesh`.** `markTransformsUpdated(start, count)` / `markColorsUpdated(start, count)`
+  validates its range, but a commit still copies the whole changed `transforms`
+  or `colors` array. Transform edits refit the whole TLAS; color edits only
+  upload instance records. Unchanged updates are already cheap (100,000
   instances: about 10.6 ms down to 0.0025 ms per `engine.update()`); frames
   that change transforms are not optimized.
 - **Camera allocation in `THREESync`.** Every `update()` creates a temporary

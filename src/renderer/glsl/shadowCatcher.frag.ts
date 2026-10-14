@@ -76,7 +76,7 @@ vec4 integrator(inout Ray ray, out vec4 background) {
   }
 
   OpenPbrResolvedMaterial mat;
-  getMaterial(mat, si.materialIndex, si.uv, si.uv1);
+  getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex);
   if (mat.materialType != SHADOW_CATCHER) {
     // The main path tracer already renders regular geometry. Only evaluate
     // shadow opacity when the primary ray actually hits the catcher.

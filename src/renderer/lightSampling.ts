@@ -327,7 +327,7 @@ export class EmissiveTriangleCache {
         const m = materials[index];
         return !!m && !m.unlit && !m.shadowCatcher && colorLuminance(materialEmission(m)) > 1e-8;
       };
-      const instanceVersion = mesh instanceof InstancedMesh ? mesh.version : 0;
+      const instanceVersion = mesh instanceof InstancedMesh ? mesh.transformsVersion : 0;
       const instanceCount = meshInstanceCount(mesh);
       const instanceTransforms = mesh instanceof InstancedMesh ? mesh.transforms : undefined;
       let cached = this._bindings.get(mesh);

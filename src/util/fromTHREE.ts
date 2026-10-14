@@ -609,7 +609,7 @@ export interface FromTHREESceneOptions {
   convertMaterial?(material: THREE.Material): OpenPBRMaterial | null | undefined;
   /** Custom light conversion. Default undefined uses built-in conversion; returning null skips this light. THREESync invokes once per source light identity and numeric userData.mutracerVersion (default undefined, never rerun). Returned lights are retained by identity and remain caller-owned. */
   convertLight?(light: THREE.Light): SceneLight | null | undefined;
-  /** Receives each converted mesh/group/color batch on every update. Default: no callback. */
+  /** Receives each converted visible mesh/group on every update. Default: no callback. */
   onMeshConverted?(
     mesh: Mesh | InstancedMesh,
     source: THREE.Mesh,
@@ -623,7 +623,6 @@ interface MaterialVariant {
   parameters: unknown[];
   hash?: string;
   base?: OpenPBRMaterial;
-  color?: ColorRGB;
   autoUvProjection: boolean;
   autoDisplacementUvProjection: boolean;
 }
@@ -640,9 +639,9 @@ interface ConversionStore {
   poseChanged: boolean;
   meshes: WeakMap<THREE.Mesh, Map<number, Mesh>>;
   lights: WeakMap<THREE.Object3D | THREE.Texture, SceneLight>;
-  instanceMeshes: WeakMap<THREE.Mesh, Map<number, Map<OpenPBRMaterial, InstancedMesh>>>;
-  // Combined instance-color and automatic-projection variants, pruned each update.
-  colorVariants: Map<THREE.Material, Map<string, MaterialVariant>>;
+  instanceMeshes: WeakMap<THREE.Mesh, Map<number, InstancedMesh>>;
+  // Automatic-projection variants, pruned each update.
+  projectionVariants: Map<THREE.Material, Map<string, MaterialVariant>>;
   warned: WeakSet<THREE.Object3D>;
   background?: Scene['background'];
 }
@@ -650,7 +649,7 @@ function createConversionStore(): ConversionStore {
   return { updateId: 0, textures: new WeakMap(), materials: new WeakMap(), geometries: new WeakMap(),
     materialHooks: new WeakMap(), lightHooks: new WeakMap(),
     poseChanged: false, meshes: new WeakMap(), lights: new WeakMap(), deformedGeometries: new WeakMap(), deformations: new WeakMap(),
-    instanceMeshes: new WeakMap(), colorVariants: new Map(), warned: new WeakSet() };
+    instanceMeshes: new WeakMap(), projectionVariants: new Map(), warned: new WeakSet() };
 }
 const geometryAttributeNames = ['position', 'normal', 'tangent', 'uv', 'uv1', 'index'] as const;
 function geometryState(geometry: THREE.BufferGeometry, deformation: boolean) {
@@ -708,7 +707,7 @@ function retainLight(store: ConversionStore, source: THREE.Object3D | THREE.Text
  * directional, ambient, rect-area, point and spot lights, and the scene
  * background / environment. Calls `scene.updateMatrixWorld()` and creates fresh objects on every call.
  * CPU-evaluates skinning/morph targets and batches InstancedMesh instances
- * with shared geometry and cached color/projection material variants. Unsupported batched
+ * with shared geometry, native colors and cached projection material variants. Unsupported batched
  * or instanced deformation falls back to an ordinary mesh with a warning.
  * For animation and editing, use {@link THREESync}.
  *
@@ -730,32 +729,25 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   const lights: SceneLight[] = [];
   const textureCache = store.textures;
   const convertedMaterials = new Set<THREE.Material>();
-  const instanceColor: ColorRGB = [1, 1, 1];
   const baseHashes = new Map<OpenPBRMaterial, string>();
   function refreshVariant(entry: MaterialVariant, base: OpenPBRMaterial) {
     let hash = baseHashes.get(base);
     if (hash === undefined) { hash = getMaterialHashKey(base); baseHashes.set(base, hash); }
     if (entry.base === base && entry.hash === hash && materialParametersEqual(base, entry.parameters)) return;
     for (const field of materialKeys) (entry.material as unknown as Record<string, unknown>)[field] = base[field];
-    if (entry.color) {
-      const color = entry.color;
-      entry.material.baseColor = base.baseColor.map((value, i) => value * color[i]) as ColorRGB;
-      // Three.js also applies instanceColor to MeshBasicMaterial's unlit color.
-      if (base.unlit) entry.material.emissionColor = base.emissionColor.map((value, i) => value * color[i]) as ColorRGB;
-    }
     if (entry.autoUvProjection) entry.material.uvProjection = 'triplanar';
     if (entry.autoDisplacementUvProjection) entry.material.displacementUvProjection = 'triplanar';
     entry.parameters = snapshotMaterialParameters(base); entry.hash = hash; entry.base = base;
   }
-  function materialVariant(source: THREE.Material, base: OpenPBRMaterial, color: ColorRGB | undefined,
+  function materialVariant(source: THREE.Material, base: OpenPBRMaterial,
     autoUvProjection: boolean, autoDisplacementUvProjection: boolean) {
-    if (!color && !autoUvProjection && !autoDisplacementUvProjection) return base;
-    let variants = store.colorVariants.get(source);
-    if (!variants) { variants = new Map(); store.colorVariants.set(source, variants); }
-    const key = `${color?.join(':') ?? ''}|${+autoUvProjection}:${+autoDisplacementUvProjection}`;
+    if (!autoUvProjection && !autoDisplacementUvProjection) return base;
+    let variants = store.projectionVariants.get(source);
+    if (!variants) { variants = new Map(); store.projectionVariants.set(source, variants); }
+    const key = `${+autoUvProjection}:${+autoDisplacementUvProjection}`;
     let variant = variants.get(key);
     if (!variant) {
-      variant = { material: new OpenPBRMaterial(), parameters: [], color: color?.slice() as ColorRGB | undefined,
+      variant = { material: new OpenPBRMaterial(), parameters: [],
         autoUvProjection, autoDisplacementUvProjection };
       variants.set(key, variant);
     }
@@ -930,52 +922,44 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
           if (expand) {
             let batchesByGroup = store.instanceMeshes.get(child);
             if (!batchesByGroup) { batchesByGroup = new Map(); store.instanceMeshes.set(child, batchesByGroup); }
-            let retained = batchesByGroup.get(groupIndex);
-            if (!retained) { retained = new Map(); batchesByGroup.set(groupIndex, retained); }
-            const indicesByMaterial = new Map<OpenPBRMaterial, number[]>();
-            for (let instanceIndex = 0; instanceIndex < instanceCount; instanceIndex++) {
-              if (instanced.instanceColor) {
-                instanceColor[0] = instanced.instanceColor.getX(instanceIndex);
-                instanceColor[1] = instanced.instanceColor.getY(instanceIndex);
-                instanceColor[2] = instanced.instanceColor.getZ(instanceIndex);
-              }
-              const variant = materialVariant(sourceMaterial, baseMaterial, instanced.instanceColor ? instanceColor : undefined,
-                autoUvProjection, autoDisplacementUvProjection);
-              let indices = indicesByMaterial.get(variant);
-              if (!indices) indicesByMaterial.set(variant, indices = []);
-              indices.push(instanceIndex);
+            const variant = materialVariant(sourceMaterial, baseMaterial, autoUvProjection, autoDisplacementUvProjection);
+            let batch = batchesByGroup.get(groupIndex);
+            if (!batch) {
+              batch = new InstancedMesh(geometry, variant, {count: instanceCount});
+              batch.transform = child.matrixWorld.elements.slice() as mat4.Mat4Array;
+              batchesByGroup.set(groupIndex, batch);
             }
-            for (const [variant, indices] of indicesByMaterial) {
-              let batch = retained.get(variant);
-              if (!batch) {
-                batch = new InstancedMesh(geometry, variant, {count: indices.length});
-                batch.transform = child.matrixWorld.elements.slice() as mat4.Mat4Array;
-                retained.set(variant, batch);
-              }
-              batch.geometry = geometry;
-              let changed = batch.count !== indices.length;
-              if (batch.transforms.length < indices.length * 16) {
-                batch.transforms = new Float32Array(indices.length * 16); changed = true;
-              }
-              batch.count = indices.length;
-              const matrices = instanced.instanceMatrix;
-              for (let i = 0; i < indices.length; i++) for (let k = 0; k < 16; k++) {
-                const value = matrices.array[indices[i] * matrices.itemSize + k];
-                if (!Object.is(batch.transforms[i * 16 + k], value)) { batch.transforms[i * 16 + k] = value; changed = true; }
-              }
-              for (let i = 0; i < 16; i++) batch.transform[i] = child.matrixWorld.elements[i];
-              if (changed) batch.markTransformsUpdated();
-              batch.name = child.name || `Mesh ${meshes.length + 1}${groups.length > 1 ? `.${groupIndex + 1}` : ''}`;
-              meshes.push(batch); options.onMeshConverted?.(batch, child, group, groupIndex);
+            batch.geometry = geometry;
+            if (batch.materials[0] !== variant) batch.materials = [variant];
+            let changed = batch.count !== instanceCount;
+            if (batch.transforms.length < instanceCount * 16) {
+              batch.transforms = new Float32Array(instanceCount * 16); changed = true;
             }
-            // Keep surviving prefixes; discard retired variant identities.
-            // A zero active count has no prefix to retain.
-            for (const [variant, batch] of retained) if (!indicesByMaterial.has(variant)) {
-              batch.count = 0;
-              retained.delete(variant);
+            // Grow colors before count validation in either notification method.
+            const sourceColors = instanced.instanceColor;
+            let colorsChanged = false;
+            if (sourceColors) {
+              if (!batch.colors || batch.colors.length < instanceCount * 3) batch.colors = new Float32Array(instanceCount * 3);
+              for (let i = 0; i < instanceCount; i++) {
+                for (let k = 0; k < 3; k++) {
+                  const value = Math.fround(k === 0 ? sourceColors.getX(i) : k === 1 ? sourceColors.getY(i) : sourceColors.getZ(i));
+                  if (!Object.is(batch.colors[i * 3 + k], value)) { batch.colors[i * 3 + k] = value; colorsChanged = true; }
+                }
+              }
+            } else batch.colors = undefined;
+            batch.count = instanceCount;
+            const matrices = instanced.instanceMatrix;
+            for (let i = 0; i < instanceCount; i++) for (let k = 0; k < 16; k++) {
+              const value = Math.fround(matrices.array[i * matrices.itemSize + k]);
+              if (!Object.is(batch.transforms[i * 16 + k], value)) { batch.transforms[i * 16 + k] = value; changed = true; }
             }
+            for (let i = 0; i < 16; i++) batch.transform[i] = child.matrixWorld.elements[i];
+            if (changed) batch.markTransformsUpdated();
+            if (colorsChanged) batch.markColorsUpdated();
+            batch.name = child.name || `Mesh ${meshes.length + 1}${groups.length > 1 ? `.${groupIndex + 1}` : ''}`;
+            if (instanceCount > 0) { meshes.push(batch); options.onMeshConverted?.(batch, child, group, groupIndex); }
           } else {
-            material = materialVariant(sourceMaterial, baseMaterial, undefined, autoUvProjection, autoDisplacementUvProjection);
+            material = materialVariant(sourceMaterial, baseMaterial, autoUvProjection, autoDisplacementUvProjection);
             let meshGroups = store.meshes.get(child);
             if (!meshGroups) { meshGroups = new Map(); store.meshes.set(child, meshGroups); }
             let mesh = meshGroups.get(groupIndex);
@@ -1114,9 +1098,9 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   // Inspect the final converted meshes, including onMeshConverted overrides.
   // Iterate across source materials so removed/hidden objects are pruned too.
   const usedMaterials = new Set(meshes.flatMap(mesh => mesh.materials));
-  for (const [source, variants] of store.colorVariants) {
+  for (const [source, variants] of store.projectionVariants) {
     for (const [key, variant] of variants) if (!usedMaterials.has(variant.material)) variants.delete(key);
-    if (!variants.size) store.colorVariants.delete(source);
+    if (!variants.size) store.projectionVariants.delete(source);
   }
   return {
     background,
@@ -1146,8 +1130,8 @@ export interface THREESyncOptions extends FromTHREESceneOptions {
  * Keeps one MuTracer scene in sync with a Three.js scene, reusing unchanged objects.
  * Skinning/morph targets run on the CPU with per-source-mesh dynamic geometry.
  * InstancedMesh retains its prefix on count changes and shares geometry/BLAS;
- * Currently used colors and automatic UV-less projections share cached material
- * variants per source material. Source edits refresh variants; unused variants
+ * Instance colors use native batch storage; automatic UV-less projections
+ * share cached material variants per source material. Source edits refresh variants; unused variants
  * are removed after each update.
  */
 export class THREESync extends Sync {

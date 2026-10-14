@@ -1,3 +1,4 @@
+import InstancedMesh from './scene/InstancedMesh.js';
 import { bvhConfig, engineSettingsKey, workerCount, textureBudget } from './settings/engine.js';
 import {createCanvas} from './util/canvas.js';
 import Camera from './scene/Camera.js';
@@ -135,6 +136,7 @@ export default class Engine {
   private _uploadedRevision = -1;
   private _pendingMeshes: 'none' | 'incremental' | 'full' = 'full';
   private _pendingTransforms = new Set<Mesh>();
+  private _pendingColors = new Set<InstancedMesh>();
   private _pendingGeometries = new Set<Geometry>();
   private _pendingMaterials = new Set<import('./scene/OpenPBRMaterial.js').default>();
   private _pendingLights = true;
@@ -211,6 +213,7 @@ export default class Engine {
         if (changes.meshes === 'full' || force || this.scene !== this._sourceScene) this._pendingMeshes = 'full';
         else if (changes.meshes === 'incremental' && this._pendingMeshes !== 'full') this._pendingMeshes = 'incremental';
         for (const mesh of changes.transforms) this._pendingTransforms.add(this._snapshot.mirror(mesh));
+        for (const mesh of changes.colors) this._pendingColors.add(this._snapshot.mirror(mesh));
         for (const geometry of changes.geometries) this._pendingGeometries.add(this._snapshot.mirror(geometry));
         for (const material of changes.materials) this._pendingMaterials.add(this._snapshot.mirror(material));
         this._pendingLights ||= changes.lights;
@@ -236,12 +239,12 @@ export default class Engine {
     }
     const budgetChanged = pipeline.setTextureAtlasBudget(this._lastBudget >= 0 ? this._lastBudget : textureBudget(this));
     if (this._pendingMeshes !== 'none' || budgetChanged) pipeline.setMeshes(scene.meshes, this._pendingMeshes === 'full' || budgetChanged ? undefined : {
-      transforms: [...this._pendingTransforms], geometries: [...this._pendingGeometries], materials: [...this._pendingMaterials]
+      transforms: [...this._pendingTransforms], colors: [...this._pendingColors], geometries: [...this._pendingGeometries], materials: [...this._pendingMaterials]
     });
     if (this._pendingLights) pipeline.setLights(scene.lights);
     if (this._pendingBackground) pipeline.setBackground(scene.background);
     this._pendingMeshes = 'none'; this._pendingLights = false; this._pendingBackground = false;
-    this._pendingTransforms.clear(); this._pendingGeometries.clear(); this._pendingMaterials.clear();
+    this._pendingTransforms.clear(); this._pendingColors.clear(); this._pendingGeometries.clear(); this._pendingMaterials.clear();
     this._uploadedRevision = this._sceneRevision;
   }
   private _bvhConfig(): BvhBuildConfig { return bvhConfig(this); }

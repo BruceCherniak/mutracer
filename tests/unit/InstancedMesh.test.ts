@@ -105,6 +105,8 @@ it('samples all emissive instances and invalidates the batch cache on matrix/cou
   const reference = collectEmissiveTriangles(expanded(mesh).map(single => ({...binding, mesh: single})), mesh.materials);
   expect(actual).toEqual(reference); expect(actual).toHaveLength(4);
   const first = cache.collect([binding], mesh.materials)[0];
+  mesh.colors = new Float32Array(6).fill(.2); mesh.markColorsUpdated();
+  expect(cache.collect([binding], mesh.materials)[0]).toBe(first);
   mesh.transforms[12] = 8; mesh.markTransformsUpdated(0,1);
   expect(cache.collect([binding], mesh.materials)[0]).not.toBe(first);
   mesh.count = 1; expect(cache.collect([binding], mesh.materials)).toHaveLength(2);
@@ -133,4 +135,71 @@ it('isolates separately notified batches even when they share an external transf
   expect(committed[0].transforms[12]).toBe(7); expect(committed[1].transforms[12]).toBe(0);
   b.markTransformsUpdated(0,1); engine.update(); expect(committed[1].transforms[12]).toBe(7);
   engine.dispose();
+});
+
+it('retains optional colors and validates color storage and notification ranges', () => {
+  const mesh = batch(); expect(mesh.colors).toBeUndefined();
+  const colors = new Float32Array(12);
+  const colored = new InstancedMesh(mesh.geometry, mesh.materials, {count:3,colors}); expect(colored.colors).toBe(colors);
+  for (const invalid of [new Float32Array(8),new Float64Array(9),[1,1,1]]) {
+    expect(() => new InstancedMesh(mesh.geometry,mesh.materials,{count:3,colors:invalid as Float32Array})).toThrow(RangeError);
+  }
+  expect(colored.markColorsUpdated(1,2)).toBe(colored); expect(colored.version).toBe(1);
+  expect(colored.transformsVersion).toBe(0); expect(colored.colorsVersion).toBe(1);
+  colored.markTransformsUpdated(); expect(colored.version).toBe(2); expect(colored.colorsVersion).toBe(1);
+  colored.markColorsUpdated(3,0); expect(colored.version).toBe(3);
+  for (const [start,count] of [[-1,1],[1,3],[.5,1],[0,-1],[NaN,0],[0,Infinity]]) expect(() => colored.markColorsUpdated(start,count)).toThrow(RangeError);
+  // Values are retained verbatim, including HDR multipliers and nonfinite values.
+  colors.set([-1,2,NaN]); expect(() => colored.validate()).not.toThrow();
+});
+
+it('commits colors independently and detects replacement/removal without leaking unnotified edits', () => {
+  const {engine,pipeline} = renderFixture(), a = batch(); a.colors = new Float32Array(9).fill(.5);
+  const b = new InstancedMesh(a.geometry,a.materials,{count:3,colors:a.colors});
+  engine.scene = {meshes:[a,b],lights:[]}; engine.update();
+  const [ca,cb] = vi.mocked(pipeline.setMeshes).mock.calls.at(-1)![0] as InstancedMesh[];
+  const colorStorage = ca.colors!, transformStorage = ca.transforms, copyTransform = vi.spyOn(transformStorage,'set');
+  expect(ca.colors).not.toBe(cb.colors); a.colors[3] = .2; a.transforms[12] = 20;
+  expect(engine.update()).toBe(false);
+  a.materials[0].baseColor[0] = .4; engine.update(); expect(ca.colors![3]).toBe(.5);
+  engine.scene.meshes.push(new Mesh(a.geometry,a.materials)); engine.update(); expect(ca.colors![3]).toBe(.5);
+  a.markColorsUpdated(1,1); engine.update();
+  expect(ca.colors).toBe(colorStorage); expect(ca.colors![3]).toBeCloseTo(.2); expect(cb.colors![3]).toBe(.5);
+  expect(ca.transforms[12]).toBe(0); expect(copyTransform).not.toHaveBeenCalled();
+  expect(pipeline.setMeshes).toHaveBeenLastCalledWith(expect.anything(),expect.objectContaining({transforms:[],colors:[ca],geometries:[],materials:[]}));
+  b.markColorsUpdated(); engine.update(); expect(cb.colors![3]).toBeCloseTo(.2);
+  a.colors = new Float32Array(9).fill(.8); engine.update(); expect(ca.colors![0]).toBeCloseTo(.8);
+  expect(ca.colors).not.toBe(colorStorage);
+  const replaced = ca.colors;
+  a.colors = new Float32Array(9).fill(.3); engine.scene.meshes = [...engine.scene.meshes]; engine.update();
+  expect(ca.colors).not.toBe(replaced); expect(ca.colors![0]).toBeCloseTo(.3);
+  expect(ca.colorsVersion).toBe(a.colorsVersion);
+  a.colors = undefined; engine.update(); expect(ca.colors).toBeUndefined();
+  a.markTransformsUpdated(); engine.update(); expect(ca.transforms[12]).toBe(20); expect(ca.colors).toBeUndefined();
+  engine.dispose();
+});
+
+it('packs vec4 9 as colors and uploads only color ranges without refitting either BVH', async () => {
+  const {INSTANCE_VEC4_STRIDE,INSTANCE_WORD_STRIDE,updateTLASInstanceColors} = await import('../../src/renderer/bvhAccel');
+  const {updateMeshInstanceColors} = await import('../../src/renderer/prepareMeshBVH');
+  const a = batch(), plain = new Mesh(a.geometry,a.materials), uncolored = batch(1);
+  a.colors = new Float32Array([.2,.3,.4,.5,.6,.7,.8,.9,1]);
+  a.transforms[12] = NaN; // Packed slots must still map to source instance indices.
+  const prepared = updateMeshInstances([plain,a,uncolored]), packed = prepared.instances as PackedMeshInstances;
+  expect(INSTANCE_VEC4_STRIDE).toBe(10); expect(INSTANCE_WORD_STRIDE).toBe(40);
+  expect(packed.colors.slice(0,packed.length * 3)).toEqual(new Float32Array([1,1,1,.5,.6,.7,.8,.9,1,1,1,1]));
+  const tlas = buildTLAS(packed,prepared.blases), before = new Uint8Array(tlas.instancesBuffer!).slice();
+  const bounds = tlas.buffer.slice(0), blas = prepared.blases.map(b=>b.bvh.buffer.slice(0)), matrices=packed.transforms.slice();
+  a.colors[3] = .1;
+  const dirty = updateMeshInstanceColors(prepared.instanceBindings,packed,new Set([a])); expect([...dirty]).toEqual([1,2]);
+  const ranges=updateTLASInstanceColors(tlas,packed,dirty);
+  expect(ranges).toHaveLength(2); expect(ranges.every(r=>r.size===16 && r.offset%160===144)).toBe(true);
+  const after=new Uint8Array(tlas.instancesBuffer!);
+  for(let i=0;i<after.length;i++) if(!ranges.some(r=>i>=r.offset&&i<r.offset+r.size)) expect(after[i]).toBe(before[i]);
+  expect(after).not.toEqual(before); expect(tlas.buffer).toEqual(bounds); expect(packed.transforms).toEqual(matrices);
+  prepared.blases.forEach((b,i)=>expect(b.bvh.buffer).toEqual(blas[i]));
+  a.colors = undefined; updateMeshInstanceColors(prepared.instanceBindings,packed,new Set([a]));
+  updateTLASInstanceColors(tlas,packed,dirty);
+  const data=new Float32Array(tlas.instancesBuffer!);
+  for(let i=0;i<packed.length;i++) expect([...data.slice(i*40+36,i*40+40)]).toEqual([1,1,1,0]);
 });

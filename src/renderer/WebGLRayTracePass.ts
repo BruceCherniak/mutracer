@@ -1,4 +1,6 @@
 import { normalizeBounces } from './pathLimits.js';
+import { updateMeshInstanceColors } from './prepareMeshBVH.js';
+import { updateTLASInstanceColors } from './bvhAccel.js';
 import { getMaterialHashKey } from '../scene/openPbrSchema.js';
 import { sameInstanceMembership } from './meshInstances.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
@@ -144,6 +146,7 @@ class WebGLRayTracePass {
   private _needsUpdateMeshMembership = false;
   private _needsRefitTLAS = false;
   private _dirtyTransformMeshes = new Set<Mesh>();
+  private _dirtyColorMeshes = new Set<Mesh>();
   private _tlas?: FlattendBVH;
   private _bvhData?: Float32Array;
   private _instancesData?: Float32Array;
@@ -153,6 +156,8 @@ class WebGLRayTracePass {
     instanceCount: number;
     instanceVersion: number;
     instanceTransforms?: Float32Array;
+    instanceColors?: Float32Array;
+    colorVersion: number;
     geometry: Mesh['geometry'];
     materials: OpenPBRMaterial[];
     materialKeys: string[];
@@ -406,7 +411,8 @@ class WebGLRayTracePass {
     return changed;
   }
 
-  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[] }) {
+  setMeshes(meshes: Mesh[], update?: { transforms?: readonly Mesh[]; colors?: readonly Mesh[]; geometries?: readonly Geometry[]; materials?: readonly OpenPBRMaterial[] }) {
+    for (const mesh of update?.colors ?? []) this._dirtyColorMeshes.add(mesh);
     if (update && this._preparedMeshData && this._materialData &&
       !this._needsUpdateMeshData && meshes === this._meshes) {
       const change = this._materialChanges.classify(update.materials ?? []);
@@ -427,15 +433,17 @@ class WebGLRayTracePass {
           for (let i = 0; i < 16; i++) item.matrix[i] = mesh.transform[i];
           this._dirtyTransformMeshes.add(mesh); this._needsRefitTLAS = true;
         }
-        return !!update.materials?.length || !!update.transforms?.length || !!update.geometries?.length;
+        return !!update.materials?.length || !!update.transforms?.length || !!update.colors?.length || !!update.geometries?.length;
       }
     }
     const materialChange = !!update?.materials?.length;
     const next = meshes.map((mesh) => ({
       mesh,
       instanceCount: mesh instanceof InstancedMesh ? mesh.count : 1,
-      instanceVersion: mesh instanceof InstancedMesh ? mesh.version : 0,
+      instanceVersion: mesh instanceof InstancedMesh ? mesh.transformsVersion : 0,
       instanceTransforms: mesh instanceof InstancedMesh ? mesh.transforms : undefined,
+      instanceColors: mesh instanceof InstancedMesh ? mesh.colors : undefined,
+      colorVersion: mesh instanceof InstancedMesh ? mesh.colorsVersion : 0,
       geometry: mesh.geometry,
       materials: mesh.materials.slice(),
       materialKeys: mesh.materials.map(getMaterialHashKey),
@@ -472,7 +480,7 @@ class WebGLRayTracePass {
         return (
           !prev ||
           item.mesh !== prev.mesh || item.instanceCount !== prev.instanceCount || item.instanceVersion !== prev.instanceVersion || item.instanceTransforms !== prev.instanceTransforms ||
-          item.geometry !== prev.geometry ||
+          item.geometry !== prev.geometry || item.colorVersion !== prev.colorVersion || item.instanceColors !== prev.instanceColors ||
           item.materials.length !== prev.materials.length ||
           item.materials.some((material, k) => material !== prev.materials[k]) ||
           item.materialKeys.some((hash, k) => hash !== prev.materialKeys[k]) ||
@@ -737,6 +745,16 @@ class WebGLRayTracePass {
     this._needsRefitTLAS = true; this._pendingGeometryUpdates.clear(); this._debugBvhData = undefined;
   }
 
+  private _updateMeshColors() {
+    const res = this._preparedMeshData, tlas = this._tlas;
+    if (res && tlas) {
+      const dirty = updateMeshInstanceColors(res.instanceBindings, res.instances, this._dirtyColorMeshes);
+      const ranges = updateTLASInstanceColors(tlas, res.instances, dirty);
+      for (const {offset, size} of ranges) this._instancesBufferTex.updateDataRange(this._renderer.gl, this._instancesData!, offset, size);
+    }
+    this._dirtyColorMeshes.clear();
+  }
+
   private _refitMeshInstances() {
     const res = this._preparedMeshData!, tlas = this._tlas!;
     const dirty = dirtyMeshInstanceIndices(res.instanceBindings, this._dirtyTransformMeshes, res.instances);
@@ -955,6 +973,7 @@ class WebGLRayTracePass {
     }
     if (this._pendingGeometryUpdates.size) this._updateGeometryData();
     if (this._needsRefitTLAS) this._refitMeshInstances();
+    if (this._dirtyColorMeshes.size) this._updateMeshColors();
 
     if (this._pendingMaterialUpdate) this._updateMaterialData();
 

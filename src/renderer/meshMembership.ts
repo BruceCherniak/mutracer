@@ -38,8 +38,8 @@ export class MeshMembershipCache {
         checked.add(mesh.geometry);
       }
     }
-    // Rebuild the active material table as instances acquire new color variants.
-    // Retaining retired slots here would keep pruned conversion variants alive.
+    // Rebuild active material slots when batches are added, removed or reassigned.
+    // Retired material identities must not remain in the active table.
     const materials: Prepared['materials'] = [];
     const materialIndices = new Map<Prepared['materials'][number], number>();
     const templates = new Map(res.instanceBindings.map(binding => [binding.geometry, binding]));

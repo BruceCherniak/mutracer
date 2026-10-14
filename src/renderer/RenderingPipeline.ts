@@ -191,6 +191,7 @@ export interface SceneResources {
   /** Returns true when scene geometry, materials, or instance transforms changed. */
   setMeshes(meshes: Mesh[], update?: {
     transforms?: readonly Mesh[];
+    colors?: readonly Mesh[];
     geometries?: readonly Geometry[];
     materials?: readonly OpenPBRMaterial[];
   }): boolean;

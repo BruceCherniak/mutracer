@@ -23,7 +23,7 @@ fn depthQuery(@builtin(global_invocation_id) id: vec3u) {
     intersectScene(ray, &si, 0, false, false);
     if (!si.hit) { return; }
     var material: OpenPbrResolvedMaterial;
-    getMaterial(&material, si.materialIndex, si.uv, si.uv1);
+    getMaterial(&material, si.materialIndex, si.uv, si.uv1, si.instanceIndex);
     if (material.materialType != SHADOW_CATCHER && material.alpha > 0.0) {
       outColor[index] = vec4f(max(dot(si.position - eye, forward), 0.0), 0.0, 0.0, 0.0);
       return;
