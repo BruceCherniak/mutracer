@@ -20,4 +20,10 @@ describe('nextPreviewScale', () => {
     // Hysteresis is measured against the current scale, not the measured one.
     expect(nextPreviewScale(0.5, 20, 20, 1, 0.5625)).toBe(0.5625);
   });
+  it('adapts severe slowdowns below quarter scale while keeping custom bounds', () => {
+    expect(nextPreviewScale(.25, 80, 20, .5)).toBe(.125);
+    expect(nextPreviewScale(.125, 80, 20, .5)).toBe(.125);
+    expect(nextPreviewScale(.25, 10000, 20, .5, .25, .125)).toBe(.125);
+    expect(nextPreviewScale(.0625, 12, 20, .5, .0625, .0625)).toBe(.078125);
+  });
 });

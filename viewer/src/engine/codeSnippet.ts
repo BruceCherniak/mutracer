@@ -41,7 +41,7 @@ export interface CodeSnapshot {
 
 /** Library defaults the code leaves out. */
 const RENDER_DEFAULTS = { maxSamples: 2048, bounces: 3, resolutionScale: 1, samplingPattern: 'sobol', clamping: 0 };
-const PREVIEW_DEFAULTS = { resolutionScale: 0.5, minScale: 0.25, bounces: 2 };
+const PREVIEW_DEFAULTS = { resolutionScale: 0.5, minScale: 0.125, bounces: 2 };
 const DISPLAY_DEFAULTS: [keyof Settings, string, unknown][] = [
   ['toneMapping', 'toneMapping', 'agx'], ['exposure', 'toneMappingExposure', 1], ['contrast', 'contrast', 1],
   ['saturation', 'saturation', 1], ['temperature', 'temperature', 0], ['tint', 'tint', 0],
@@ -272,7 +272,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
     const minScale = Math.min(PREVIEW_DEFAULTS.minScale, scale);
     preview = {
       resolutionScale: scale !== PREVIEW_DEFAULTS.resolutionScale ? scale : undefined,
-      adaptiveResolution: minScale !== PREVIEW_DEFAULTS.minScale ? {targetFrameMs: 20, minScale} : undefined,
+      adaptiveResolution: minScale !== PREVIEW_DEFAULTS.minScale ? {targetFrameMs: 80, minScale} : undefined,
       bounces: Math.min(PREVIEW_DEFAULTS.bounces, s.bounces) !== PREVIEW_DEFAULTS.bounces ? s.bounces : undefined,
       samplingPattern: s.samplingPattern !== RENDER_DEFAULTS.samplingPattern ? s.samplingPattern : undefined,
       clamping: s.clamping !== RENDER_DEFAULTS.clamping ? s.clamping : undefined,

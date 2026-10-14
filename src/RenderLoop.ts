@@ -10,7 +10,7 @@ import { updateProgressiveState, loopImageState, type ProgressiveState } from '.
 export type RenderLoopStatus = RenderStatus | 'previewing';
 export interface RenderLoopOptions {
   /** Presentation settings/canvas. Default engine.display. */ display?: Display;
-  /** Preview render/settings, or false to disable. Default half resolution with adaptive scale .25–.5, 20 ms, 2 bounces, no bevel, 1 wavelength and 2 light candidates. */ preview?: Render | RenderOptions | false;
+  /** Preview render/settings, or false to disable. Default half resolution with adaptive scale .125–.5, 80 ms budget, 2 bounces, no bevel, 1 wavelength and 2 light candidates. */ preview?: Render | RenderOptions | false;
   /** Final render/settings. Default a new Render with preview as fallback. */ final?: Render | RenderOptions;
   /** External integrations, invoked in order. Default none. */ sync?: Sync | Sync[];
   /** Idle delay for consecutive edits without explicit sync activity. Default 150 ms. */ idleMs?: number;
@@ -56,7 +56,7 @@ export default class RenderLoop {
     this.coalesceSceneUpdates = options.coalesceSceneUpdates ?? false;
     try {
       if (options.preview !== false) this.preview = this._render(options.preview, {
-        resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25},
+        resolutionScale: .5, timeBudgetMs: 80, adaptiveResolution: {targetFrameMs: 80, minScale: .125},
         bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2,
       });
       this.final = this._render(options.final, {fallback: this.preview ?? null});
@@ -139,7 +139,7 @@ export default class RenderLoop {
     else this._present(current);
     // Execution may already be tracing final tiles while the canvas still shows
     // preview. Only a successful presentation transfers ownership of the image.
-    const previewing = waitingForPreview || (!!this.preview && this._presented === this.preview);
+    const previewing = waitingForPreview || (current === this.preview && current.denoising) || (!!this.preview && this._presented === this.preview);
     const next = status === 'error' ? 'error' : previewing ? 'previewing' : status;
     this._finishedImage = next === 'finished' ? loopImageState(this.final, this.display) : undefined;
     return this._setStatus(next);

@@ -122,7 +122,7 @@ export class ViewerEngine {
     this.canvas = canvas;
     this.settings = get().settings;
     this.engine = new Engine({canvas, backend: new URLSearchParams(location.search).has('webgl') ? 'webgl' : 'auto'});
-    this.preview = new Render(this.engine, {resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}, maxSamples: 1,
+    this.preview = new Render(this.engine, {resolutionScale: .5, timeBudgetMs: 80, adaptiveResolution: {targetFrameMs: 80, minScale: .125}, maxSamples: 1,
       bounces: 2, bevel: false, dispersionWavelengths: 1, directLightCandidates: 2});
     this.final = new Render(this.engine, {fallback: this.preview});
     this.engine.on('error', error => showToast(`Rendering failed: ${error.message}`, 'error'));
@@ -559,7 +559,7 @@ export class ViewerEngine {
     r.fallback = s.previewEnabled ? this.preview : null;
     this.loop.coalesceSceneUpdates = s.previewEnabled && s.denoiseWhileConverging;
     this.preview.resolutionScale = s.previewMaxResolutionScale;
-    this.preview.adaptiveResolution = {targetFrameMs: 20, minScale: Math.min(.25, s.previewMaxResolutionScale)};
+    this.preview.adaptiveResolution = {targetFrameMs: 80, minScale: Math.min(.125, s.previewMaxResolutionScale)};
     const displaySettings: DisplaySettings = {
       toneMapping: s.toneMapping, toneMappingExposure: s.exposure,
       contrast: s.contrast, saturation: s.saturation,

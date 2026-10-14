@@ -103,10 +103,12 @@ export default class Display {
     catch (error) { this.engine._notifyError(error); }
     return target;
   }
-  /** Presents a complete render or its fallback. Does not trace; leaves canvas unchanged if neither is ready. */
+  /** Presents a complete image or fallback. Keeps fallback visible until the first intermediate filter finishes. Does not trace. */
   present(render: Render): Render | undefined {
     if (render._engine !== this.engine) throw new Error('Render belongs to another engine.');
-    const selected = render._complete ? render : render.fallback?._complete ? render.fallback : undefined;
+    const ready = this.channel === 'final' && render.fallback ? render._presentable : render._complete;
+    const fallback = render.fallback;
+    const selected = ready ? render : fallback && (this.channel === 'final' ? fallback._presentable : fallback._complete) ? fallback : undefined;
     if (!selected) return;
     const target = this.compose(selected);
     if (!target) return;

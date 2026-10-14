@@ -2,8 +2,17 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import Render from '../../src/Render';
 import { renderFixture } from '../helpers/renderPipeline';
 
+function adaptiveFrames() {
+  let id = 0; const frames = new Map<number, FrameRequestCallback>();
+  vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => {frames.set(++id, callback); return id;});
+  vi.stubGlobal('cancelAnimationFrame', (key: number) => frames.delete(key));
+  return () => {const pending = [...frames.values()]; frames.clear(); pending.forEach(callback => callback(performance.now()));};
+}
+afterEach(() => {vi.restoreAllMocks(); vi.unstubAllGlobals();});
+
 describe('independent Render', () => {
   it.each([false, true])('adapts from the whole tiled sample, including fallback rendering (%s)', fallback => {
+    const frame = adaptiveFrames();
     let now = 0; const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
     const {engine} = renderFixture({tiles: 4, fits: false});
     const preview = new Render(engine, {maxSamples: 1, resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}});
@@ -12,20 +21,23 @@ describe('independent Render', () => {
     refine(); now = 20; refine(); now = 40; refine(); now = 60; refine();
     expect(preview.width).toBe(400);
     // Apply the completed measurement once on the next preview frame.
-    preview.refine(); expect(preview.width).toBe(250);
+    frame(); preview.refine(); expect(preview.width).toBe(250);
     engine.dispose(); clock.mockRestore();
   });
   it('adapts a denoised preview before continuous camera edits restart it', async () => {
+    const frame = adaptiveFrames();
     let now = 0; const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
     const {engine, camera} = renderFixture({tiles: 4});
     const preview = new Render(engine, {maxSamples: 1, resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}, denoiser: {type: 'jnlm'}});
     preview.refine(); now = 20; preview.refine(); now = 40; preview.refine(); now = 60; preview.refine();
     await new Promise(resolve => setTimeout(resolve, 0));
+    frame();
     camera.position = [1, 0, 0]; engine.update(); preview.refine();
     expect(preview.width).toBe(250);
     engine.dispose(); clock.mockRestore();
   });
   it('includes inference latency without resizing a preview while its filter is pending', async () => {
+    const frame = adaptiveFrames();
     let now = 0; const clock = vi.spyOn(performance, 'now').mockImplementation(() => now);
     const {engine, camera, targets} = renderFixture();
     const preview = new Render(engine, {maxSamples: 1, resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}, denoiser: {type: 'jnlm'}});
@@ -34,8 +46,29 @@ describe('independent Render', () => {
     await new Promise(resolve => setTimeout(resolve, 0));
     now = 80; preview.refine(); expect(preview.width).toBe(400); expect(preview.denoising).toBe(true);
     complete(true); await new Promise(resolve => setTimeout(resolve, 0));
+    frame();
     camera.position = [1, 0, 0]; engine.update(); preview.refine(); expect(preview.width).toBe(200);
     engine.dispose(); clock.mockRestore();
+  });
+  it('adapts below quarter resolution from display latency and restores quality gradually', () => {
+    const frame = adaptiveFrames(); let now = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const {engine, camera} = renderFixture({frameTimeMs: 2});
+    const preview = new Render(engine, {maxSamples: 1, resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .0625}});
+    preview.refine(); now = 320; frame();
+    const next = (delay: number) => {camera.position = [now, 0, 0]; engine.update(); preview.refine(); now += delay; frame();};
+    for (let i = 0; i < 3; i++) {next(5); expect(preview.width).toBe(100);}
+    next(5); next(5); expect(preview.width).toBe(125);
+    next(2000); next(5); expect(preview.width).toBe(50);
+    engine.dispose();
+  });
+  it('honors an explicit adaptive minimum and cancels scheduled feedback on disposal', () => {
+    const frame = adaptiveFrames(); let now = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => now);
+    const {engine} = renderFixture({frameTimeMs: 2});
+    const preview = new Render(engine, {maxSamples: 1, resolutionScale: .5, adaptiveResolution: {targetFrameMs: 20, minScale: .25}});
+    preview.refine(); now = 2000; frame(); preview.refine(); expect(preview.width).toBe(200);
+    preview.dispose(); expect(() => frame()).not.toThrow(); engine.dispose();
   });
   it('keeps final and preview resolution independent on a full-size display', () => {
     const {engine} = renderFixture(); engine.display.setSize(800, 600);

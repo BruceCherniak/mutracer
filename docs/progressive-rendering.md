@@ -16,6 +16,7 @@ selected render and presents it. Active syncs select preview by default. Isolate
 edits start final immediately; consecutive changes without explicit sync activity
 hold preview for idleMs (default 150 ms). When interaction ends, final starts after
 the current preview completes; its fallback remains visible until final completes a sample.
+With intermediate denoising enabled, it stays visible until the first filtered final image is ready.
 
 ```ts
 loop.select = ({changing}) => changing || slider.dragging ? 'preview' : 'final';
@@ -62,7 +63,8 @@ engine.scene = scene;
 engine.camera = camera;
 const preview = new Render(engine, {
   resolutionScale: .5,
-  adaptiveResolution: { targetFrameMs: 20, minScale: .25 },
+  timeBudgetMs: 80,
+  adaptiveResolution: { targetFrameMs: 80, minScale: .125 },
   bounces: 2, bevel: false, dispersionWavelengths: 1,
   directLightCandidates: 2,
 });
@@ -114,9 +116,11 @@ usable.
   fallback and denoiser. `transmissiveOutputAlphaMin` belongs to Render because
   it is evaluated along individual paths, so changing it restarts that render.
 
-RenderLoop creates a half-resolution preview with adaptive scale .25–.5,
-20 ms target, 2 bounces, no bevel, one wavelength and two light candidates;
+RenderLoop creates a half-resolution preview with adaptive scale .125–.5,
+80 ms budget, 2 bounces, no bevel, one wavelength and two light candidates;
 other settings use Render defaults. Pass preview settings, a Render or false.
+Preview resolution drops when interaction is slow and recovers gradually when
+performance improves. Final resolution stays independent of preview adaptation.
 Pass final settings or a Render; newly created finals use preview as fallback.
 Supplied Render/Sync objects must belong to this engine. loop.dispose releases
 only renders it created; dispose supplied renders, syncs and controls yourself.

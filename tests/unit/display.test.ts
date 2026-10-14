@@ -4,6 +4,35 @@ import { renderFixture } from '../helpers/renderPipeline';
 afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('Display', () => {
+  it('presents guide channels immediately while the first final filter is pending', () => {
+    const {engine} = renderFixture();
+    const preview = new Render(engine); preview.refine();
+    const render = new Render(engine, {fallback: preview, denoiser: {type: 'jnlm', schedule: 'progressive'}});
+    render.refine(); expect(engine.display.present(render)).toBe(preview);
+    engine.display.channel = 'normal'; expect(engine.display.present(render)).toBe(render);
+    engine.dispose();
+  });
+  it('allows standalone renders to present raw samples during intermediate filtering', () => {
+    const {engine} = renderFixture();
+    const render = new Render(engine, {denoiser: {type: 'jnlm', schedule: 'progressive'}});
+    render.refine(); expect(render.denoising).toBe(true);
+    expect(engine.display.present(render)).toBe(render); engine.dispose();
+  });
+  it.each(['progressive', 'every-sample'] as const)('keeps fallback until the first %s filter completes', async schedule => {
+    const {engine, targets} = renderFixture(); const preview = new Render(engine, {maxSamples: 1});
+    const final = new Render(engine, {maxSamples: 4, fallback: preview, denoiser: {type: 'jnlm', schedule}});
+    preview.refine(); expect(engine.display.present(preview)).toBe(preview);
+    final.refine(); let complete!: (value: boolean) => void;
+    vi.mocked(targets[1].performDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;}));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(final.samples).toBe(1); expect(engine.display.present(final)).toBe(preview);
+    expect(targets[1].present).not.toHaveBeenCalled();
+    complete(true); await new Promise(resolve => setTimeout(resolve, 0));
+    // Refining before presenting must retain the completed filter too.
+    final.refine(); expect(engine.display.present(final)).toBe(final);
+    expect(targets[1].setPreserveDenoisedOutput).toHaveBeenLastCalledWith(true);
+    engine.dispose();
+  });
   it('presents the complete fallback and otherwise leaves the canvas untouched', () => {
     const {engine, targets} = renderFixture({tiles: 3}); const preview = new Render(engine), final = new Render(engine, {fallback: preview});
     expect(engine.display.present(final)).toBeUndefined(); preview.refine(); preview.refine(); preview.refine();

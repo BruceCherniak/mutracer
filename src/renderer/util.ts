@@ -53,13 +53,13 @@ export function isIntelMac() {
 }
 
 /** Lowest resolution scale interactive preview adapts down to. */
-export const MIN_PREVIEW_SCALE = 0.25;
+export const MIN_PREVIEW_SCALE = 0.125;
 
 /**
  * Next interactive-preview resolution scale from a preview frame time measured
  * at `measuredScale`. Tracing and denoising cost grow with the pixel count
  * (scale²), so the scale follows the square root of the time ratio. Steps are
- * 1/16 (1/32 below 0.25); a change of less than 15% from `currentScale` keeps
+ * 1/16 (1/128 below 0.25); a change of less than 15% from `currentScale` keeps
  * it, because every resolution change restarts sampling.
  */
 export function nextPreviewScale(
@@ -71,7 +71,7 @@ export function nextPreviewScale(
   minScale = MIN_PREVIEW_SCALE
 ) {
   const raw = measuredScale * Math.sqrt(targetTimeMs / Math.max(frameTimeMs, 0.1));
-  const steps = raw < 0.25 ? 32 : 16;
+  const steps = raw < 0.25 ? 128 : 16;
   const next = clamp(Math.round(raw * steps) / steps, minScale, Math.max(minScale, maxScale));
   return Math.abs(Math.log(next / currentScale)) >= Math.log(1.15) ? next : currentScale;
 }

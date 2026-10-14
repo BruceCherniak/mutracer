@@ -4,7 +4,7 @@ import Camera from '../../src/scene/Camera';
 import type { Scene } from '../../src/scene/Scene';
 import type { RenderPipeline, RenderTarget, TraceSettings } from '../../src/renderer/renderPipeline';
 
-export function renderFixture(options: {tiles?: number; fits?: boolean; backend?: 'webgpu' | 'webgl'} = {}) {
+export function renderFixture(options: {tiles?: number; fits?: boolean; backend?: 'webgpu' | 'webgl'; frameTimeMs?: number} = {}) {
   const operations: {id: string; kind: string; camera?: Camera; cap?: number}[] = [];
   const targets: RenderTarget[] = [];
   let active = '';
@@ -27,7 +27,7 @@ export function renderFixture(options: {tiles?: number; fits?: boolean; backend?
           operations.push({id: label, kind: 'draw', camera: camera.clone(), cap});
           first = false;
           if (samples < cap && ++partial >= (options.tiles ?? 1)) {
-            partial = 0; samples = Math.min(cap, samples + (samplesPerBatch || 1)); complete = true; callback(samples, samples === 1, 20);
+            partial = 0; samples = Math.min(cap, samples + (samplesPerBatch || 1)); complete = true; callback(samples, samples === 1, options.frameTimeMs ?? 20);
           }
           return false;
         }),

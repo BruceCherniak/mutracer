@@ -11,6 +11,7 @@ import type { OIDNModel, OIDNEngine, OIDNPrecision, OIDNHDRTransfer, OIDNDynamic
 import { DEFAULT_JNLM_OPTIONS, createJNLMDenoiser, type JNLMOptions } from './renderer/jnlm.js';
 import type { OfflineAdaptiveSamplingOptions, OfflineVarianceHistory } from './renderer/OfflineAdaptiveSampling.js';
 import { nextPreviewScale } from './renderer/util.js';
+import {scheduleFrame} from './util/frame.js';
 
 /** Complete-sample notification, including the backend's measured sample time. */
 export interface SampleEvent { samples: number; isFirstFrame: boolean; frameTimeMs: number; }
@@ -218,6 +219,7 @@ export default class Render {
   set resolutionScale(value: number) {
     if (this._fixed) throw new Error('Fixed-size renders cannot use resolutionScale.');
     if (!Number.isFinite(value) || value <= 0) throw new Error('resolutionScale must be positive.');
+    if (value !== this._resolutionScale) this._cancelAdaptiveFrames();
     this._resolutionScale = value;
   }
   private _fallback: Render | null = null;
@@ -263,6 +265,10 @@ export default class Render {
   private _frameTime = 0;
   private _sampleStart?: number;
   private _frameStart?: number;
+  private _sampleScale = 1;
+  private _frameScale = 1;
+  private _adaptiveFrames = new Set<() => void>();
+  private _adaptiveFastFrames = 0;
   private _events = new Events<{sample: SampleEvent}>();
   /** Owning engine. */ get engine(): Engine { return this._engine; }
   /** Whether inference is queued or running, including intermediate updates. Default false. */ get denoising(): boolean { return !!this._denoisePending; }
@@ -307,6 +313,7 @@ export default class Render {
   }
   private get _current() { const inputs = this._engine._inputs; return inputs.scene === this._input.scene && inputs.camera === this._input.camera && !this._disposed; }
   /** @internal */ get _complete() { return this._current && !!this._target?.presentationComplete && !this._target.isFirstFrame() && this.samples > 0; }
+  /** @internal */ get _presentable() { return this._complete && (!this._denoisePending || this._denoisedSamples > 0 || (this._schedule() === 'converged' && this.maxSamples > 1)); }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
   private _validate() {
     if (!Number.isFinite(this.maxSamples) || this.maxSamples < 1) throw new Error('maxSamples must be positive.');
@@ -342,22 +349,45 @@ export default class Render {
       // A preview's latency includes every tile, not just its last dispatch.
       this._frameTime = Math.max(frameTimeMs, this._sampleStart === undefined ? 0 : performance.now() - this._sampleStart);
       this._frameStart = this._sampleStart;
+      this._frameScale = this._sampleScale;
       this._sampleStart = undefined;
       this._events.emit('sample', {samples, isFirstFrame, frameTimeMs});
     });
     return target;
   }
   private _trace(target: RenderTarget, limit: number) {
-    this._sampleStart ??= performance.now();
+    if (this._sampleStart === undefined) { this._sampleStart = performance.now(); this._sampleScale = this._adaptiveScale; }
     const compiling = target.trace(this._engine._inputs.value!, limit);
     if (compiling) this._sampleStart = undefined;
     return compiling;
   }
   private _adaptResolution() {
     if (!this._busy && this.adaptiveResolution && this._frameTime > 0 && this.samples > 0) {
-      this._adaptiveScale = nextPreviewScale(this._adaptiveScale, this._frameTime, this.adaptiveResolution.targetFrameMs, this._resolutionScale, this._adaptiveScale, this.adaptiveResolution.minScale);
+      const {targetFrameMs, minScale} = this.adaptiveResolution;
+      const start = this._frameStart, time = this._frameTime, scale = this._frameScale, maxScale = this._resolutionScale;
+      const {width, height} = this._engine.display.canvas;
       this._frameTime = 0;
+      // Observe the following display frame too: GPU submissions and WebGL
+      // filters can return long before their work reaches the screen.
+      const cancel = scheduleFrame(() => {
+        this._adaptiveFrames.delete(cancel);
+        const adaptive = this.adaptiveResolution, canvas = this._engine.display.canvas;
+        if (this._disposed || this._busy || !adaptive || adaptive.targetFrameMs !== targetFrameMs || adaptive.minScale !== minScale ||
+          this._resolutionScale !== maxScale || canvas.width !== width || canvas.height !== height) return;
+        const elapsed = Math.max(time, start === undefined ? 0 : performance.now() - start);
+        const next = nextPreviewScale(scale, elapsed, targetFrameMs, maxScale, this._adaptiveScale, minScale);
+        if (next > this._adaptiveScale) {
+          if (++this._adaptiveFastFrames < 4) return;
+          this._adaptiveScale = Math.min(next, this._adaptiveScale * 1.25);
+        } else this._adaptiveScale = next;
+        this._adaptiveFastFrames = 0;
+      });
+      this._adaptiveFrames.add(cancel);
     }
+  }
+  private _cancelAdaptiveFrames() {
+    for (const cancel of this._adaptiveFrames) cancel();
+    this._adaptiveFrames.clear(); this._adaptiveFastFrames = 0;
   }
   /** Accumulates within this frame's budget. Rejects calls during converge or after disposal. */
   refine(): RenderStatus {
@@ -384,7 +414,7 @@ export default class Render {
     if (this._fallback && this.samples === 0 && !target.canCompleteSampleWithin(this.timeBudgetMs) && !this._fallback._complete) this._fallback._refineOne();
     target.activate();
     if (this._denoisePending) return this._status = this.converged ? 'denoising' : 'converging';
-    target.setPreserveDenoisedOutput?.(!!this._filter && this._schedule() === 'progressive');
+    target.setPreserveDenoisedOutput?.(!!this._filter && this._schedule() !== 'converged');
     const limit = this._nextSampleTarget();
     if (this.samples < limit) {
       if (this._trace(target, limit)) return this._status = 'compiling';
@@ -461,6 +491,7 @@ export default class Render {
   private _cancelDenoise() { this._denoiseController?.abort(); this._denoiseController = undefined; this._denoiseRevision++; this._target?.cancelDenoise?.(); this._denoisePending = undefined; this._denoisedSamples = 0; }
   /** @internal */ _inputsChanged(resetTiming = false) { this._cancelDenoise(); if (resetTiming) this._target?.invalidateTiming?.(); }
   /** @internal */ _deviceLost(recovering: boolean) {
+    this._cancelAdaptiveFrames();
     this._cancelDenoise(); this._filterRevision++;
     this._filter = undefined; this._filterPending = undefined; this._filterKey = '';
     this._target = undefined; this._input = {scene: -1, camera: -1, settings: ''};
@@ -518,11 +549,11 @@ export default class Render {
     return this._target?.getOutputTexture?.(kind);
   }
   /** Discards only this render's accumulation and pending denoising. */
-  restart() { if (this._disposed) throw new Error('Render is disposed.'); this._cancelDenoise(); this._sampleStart = this._frameStart = undefined; this._frameTime = 0; this._target?.restartSamples(); this._status = 'converging'; }
+  restart() { if (this._disposed) throw new Error('Render is disposed.'); this._cancelDenoise(); this._cancelAdaptiveFrames(); this._sampleStart = this._frameStart = undefined; this._frameTime = 0; this._target?.restartSamples(); this._status = 'converging'; }
   /** Releases only this render's image resources and denoiser. */
   dispose() {
     if (this._disposed) return;
-    this._disposed = true; this._events.clear(); this._filterRevision++; this._cancelDenoise();
+    this._disposed = true; this._events.clear(); this._filterRevision++; this._cancelDenoise(); this._cancelAdaptiveFrames();
     if (this._target) this._engine._releaseTarget(this._target);
     if (this._filter && this._filter.kind !== 'custom') this._engine._releaseDenoiser(this._filter);
     this._target = undefined; this._filter = undefined; this._engine._unregister(this);

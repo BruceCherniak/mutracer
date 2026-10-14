@@ -13,6 +13,13 @@ class Source extends Sync {
 afterEach(() => {vi.restoreAllMocks(); vi.unstubAllGlobals();});
 
 describe('RenderLoop selection and presentation', () => {
+  it('uses an 80 ms adaptive preview budget with an independent final budget', () => {
+    const {engine} = renderFixture(); const loop = new RenderLoop(engine);
+    expect(loop.preview!.timeBudgetMs).toBe(80);
+    expect(loop.preview!.adaptiveResolution).toEqual({targetFrameMs: 80, minScale: .125});
+    expect(loop.final.timeBudgetMs).toBe(21);
+    loop.dispose(); engine.dispose();
+  });
   it.each([false, true])('finishes tiled previews during continuous camera edits (coalescing: %s)', coalesceSceneUpdates => {
     const {engine, camera, targets, operations} = renderFixture({tiles: 3});
     const sync = new Source(engine); sync.moving = true;
@@ -132,6 +139,16 @@ describe('RenderLoop selection and presentation', () => {
 });
 
 describe('RenderLoop events and inference', () => {
+  it('keeps preview visible until the first filtered final image is ready', async () => {
+    const {engine, targets} = renderFixture(); const sync = new Source(engine); sync.moving = true;
+    const loop = new RenderLoop(engine, {sync, preview: {maxSamples: 1}, final: {maxSamples: 4, denoiser: {type: 'jnlm', schedule: 'progressive'}}});
+    expect(loop.tick()).toBe('previewing'); sync.moving = false;
+    expect(loop.tick()).toBe('previewing'); let complete!: (value: boolean) => void;
+    vi.mocked(targets[1].performDenoise!).mockImplementation(() => new Promise(resolve => {complete = resolve;}));
+    await settle(); expect(loop.tick()).toBe('previewing'); expect(targets[1].present).not.toHaveBeenCalled();
+    complete(true); await settle(); expect(loop.tick()).toBe('converging');
+    expect(targets[1].present).toHaveBeenCalledOnce(); loop.dispose(); engine.dispose();
+  });
   it('keeps converging when unused fallback inference outlives the first final sample', async () => {
     const {engine, targets} = renderFixture({fits: false});
     const loop = new RenderLoop(engine, {coalesceSceneUpdates: true, preview: {maxSamples: 1, denoiser: {type: 'jnlm'}}, final: {maxSamples: 4}});
@@ -244,7 +261,8 @@ describe('RenderLoop events and inference', () => {
     const {engine, targets} = renderFixture(); const source = new Source(engine); source.moving = true;
     const loop = new RenderLoop(engine, {sync: source, preview: {maxSamples: 1, denoiser: {type: 'jnlm'}}, final: {maxSamples: 1, denoiser: {type: 'jnlm'}}});
     expect(loop.tick()).toBe('previewing'); await settle();
-    source.moving = false; expect(loop.tick()).toBe('denoising'); await settle(); expect(loop.tick()).toBe('finished');
+    source.moving = false; expect(loop.tick()).toBe('previewing'); expect(loop.final.denoising).toBe(true);
+    await settle(); expect(loop.tick()).toBe('finished');
     expect(targets.map(target => vi.mocked(target.performDenoise!).mock.calls.length)).toEqual([1, 1]);
     loop.dispose(); engine.dispose();
   });
