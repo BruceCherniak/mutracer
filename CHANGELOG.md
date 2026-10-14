@@ -5,10 +5,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## 0.1.1 - 2026-10-14
 
-### Added
-
-- README gallery, performance measurements and expanded feature overview.
-
 ### Changed
 
 - Interactive previews adapt resolution to tracing, denoising and display latency.
