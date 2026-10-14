@@ -105,8 +105,8 @@ export default class RenderLoop {
     this._changing = this._policy.changing;
     const selected = this.select({changing: this.changing});
     if (holding && this.preview) {
-      const shown = this.display.present(this.preview); this._previewDenoising = true;
-      return this._setStatus(shown ? 'previewing' : this.preview.status);
+      this._previewDenoising = true;
+      return this._setStatus('previewing');
     }
     const current = selected === 'preview' && this.preview ? this.preview : this.final;
     const imageState = loopImageState(this.final, this.display);
@@ -114,9 +114,12 @@ export default class RenderLoop {
     // Invalidate a completed filter before refinement when display settings changed.
     if (this.status === 'finished' && imageState !== this._finishedImage && this.final.samples > 0) this.display.present(this.final);
     const status = current.refine();
-    const shown = this.display.present(current);
+    // Keep the canvas on the last completed image while filtering the next
+    // preview; presenting its raw sample here would overwrite the denoise above.
+    const waitingForPreview = this.coalesceSceneUpdates && current === this.preview && current.denoising;
+    const shown = waitingForPreview ? undefined : this.display.present(current);
     this._previewDenoising = !!this.preview?.denoising;
-    const next = status === 'error' ? 'error' : shown === this.preview && shown ? 'previewing' : status;
+    const next = status === 'error' ? 'error' : waitingForPreview || shown === this.preview && shown ? 'previewing' : status;
     this._finishedImage = next === 'finished' ? loopImageState(this.final, this.display) : undefined;
     return this._setStatus(next);
   }

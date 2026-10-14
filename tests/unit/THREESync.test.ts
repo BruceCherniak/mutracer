@@ -409,6 +409,27 @@ describe('THREESync engine and interaction contract', () => {
     control.update.mockImplementation(() => {if (control.enableDamping) camera.zoom *= 1.01; return true;}); sync.update(); expect(sync.active).toBe(true);
     control.update.mockImplementation(() => {if (control.enableDamping) camera.zoom *= 1.0001; return true;}); sync.update(); expect(sync.active).toBe(false); sync.dispose(); engine.dispose();
   });
+  it.each(['position', 'zoom'] as const)('ends %s damping below the controls change-event threshold', field => {
+    const {engine, targets} = renderFixture(); const camera = new THREE.PerspectiveCamera(); camera.position.z = 5;
+    const control = controls(camera); const sync = new THREESync(engine, {camera, controls: control});
+    const loop = new RenderLoop(engine, {sync}); control.fire('start'); loop.tick();
+    // OrbitControls can keep moving the camera while update() returns false.
+    let residual = .0001;
+    control.update.mockImplementation(() => {
+      if (field === 'position') camera.position.x += residual;
+      else camera.zoom *= 1 + residual;
+      if (!control.enableDamping) residual = 0;
+      return false;
+    });
+    loop.tick(); expect(loop.changing).toBe(true);
+    control.fire('end'); loop.tick();
+    expect(loop.changing).toBe(false); expect(loop.final.samples).toBe(1);
+    const position = camera.position.clone(), zoom = camera.zoom; loop.tick();
+    expect(camera.position.equals(position)).toBe(true); expect(camera.zoom).toBe(zoom); expect(loop.final.samples).toBe(2);
+    expect(control.enableDamping).toBe(true);
+    expect(targets[1].trace).toHaveBeenCalledTimes(2);
+    loop.dispose(); sync.dispose(); engine.dispose();
+  });
   it('does not call controls.update when updateControls is false', () => {
     const engine = new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement}); const camera = new THREE.PerspectiveCamera(); const control = controls(camera);
     const sync = new THREESync(engine, {camera, controls: control, updateControls: false}); control.fire('start'); expect(sync.active).toBe(true); sync.update(); expect(sync.active).toBe(true);

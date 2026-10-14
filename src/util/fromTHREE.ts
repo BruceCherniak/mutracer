@@ -1157,10 +1157,12 @@ export class THREESync extends Sync {
     if (controls && this._options.updateControls !== false) {
       const position = sourceCamera?.position.clone(), zoom = sourceCamera?.zoom;
       moving = !!controls.update(dt);
-      if (moving && !this._started && !controls.autoRotate && controls.enableDamping && position && sourceCamera && controls.target) {
+      if (!this._started && !controls.autoRotate && controls.enableDamping && position && sourceCamera && controls.target) {
         const step = position.distanceTo(sourceCamera.position);
         const zoomStep = Math.abs(Math.log(sourceCamera.zoom / zoom!));
-        if (step < 5e-4 * sourceCamera.position.distanceTo(controls.target) && zoomStep < 5e-4) {
+        // OrbitControls can move below its change-event threshold while update()
+        // returns false. Flush that tail too, before cameraChanged keeps it active.
+        if ((moving || step > 0 || zoomStep > 0) && step < 5e-4 * sourceCamera.position.distanceTo(controls.target) && zoomStep < 5e-4) {
           controls.enableDamping = false;
           try {controls.update(0);} finally {controls.enableDamping = true;}
           moving = false; settled = true;
