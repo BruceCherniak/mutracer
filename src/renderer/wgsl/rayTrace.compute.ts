@@ -715,6 +715,10 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
 
   if (ma.materialType == SHADOW_CATCHER) {
     (*outAux).isShadowCatcher = true;
+    // The composed denoising input includes this receiver's shadow. Supply
+    // neutral reflectance and its shading normal, independent of visibility.
+    (*outAux).albedo = vec3f(1.0);
+    (*outAux).normal = select(si.normal, -si.normal, dot(si.normal, ray.d) > 0.0);
     var path: Path;
     path.ray = ray;
     path.fromEye = true;
@@ -912,8 +916,8 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
     outShadowCatcher[idx].mask += vec4f(1.0, backgroundSample.a, backgroundHit, liAndAlpha.a);
     outShadowCatcher[idx].background += backgroundPremultiplied;
     outColor[idx] += backgroundPremultiplied;
-    outAlbedo[idx] += vec4f(vec3f(0.0), backgroundHit);
-    accumulateNormalOrVariance(idx, backgroundSample.rgb, vec3f(0.0));
+    outAlbedo[idx] += vec4f(outAux.albedo, backgroundHit);
+    accumulateNormalOrVariance(idx, backgroundSample.rgb, outAux.normal);
     // The composed catcher is the background darkened by the shadow. Over a
     // transparent background the shadow is only its opacity.
     let visibility = 1.0 - liAndAlpha.a;

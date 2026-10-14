@@ -127,6 +127,10 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
   bool isShadowCatcher = mat.materialType == SHADOW_CATCHER;
   if (isShadowCatcher) {
     if (path.fromEye) {
+      // Match the composed shadow with neutral receiver guides, while keeping
+      // background coverage and radiance independent of the invisible ground.
+      outAux.albedo = vec3(1.0);
+      outAux.normal = dot(si.normal, path.ray.d) > 0.0 ? -si.normal : si.normal;
       si.hit = false;
       outAux.isShadowCatcher = true;
     }
