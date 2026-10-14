@@ -45,7 +45,8 @@ export type SceneBackground = ColorRGBA | Texture | GroundedSkyboxBackground;
  * values are detected automatically, including edits within existing arrays.
  * Call `markUpdated()` on a Geometry after attribute edits, and a Texture
  * after pixel or UV-array element edits.
- * InstancedMesh matrix/color elements require markTransformsUpdated()/markColorsUpdated().
+ * InstancedMesh matrix/color elements require markUpdated() or the dedicated
+ * markTransformsUpdated()/markColorsUpdated() notifications.
  */
 export interface Scene {
   /** Required mesh instances; use an empty array for an empty scene. */

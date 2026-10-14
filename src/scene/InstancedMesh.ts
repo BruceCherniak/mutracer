@@ -20,7 +20,7 @@ export default class InstancedMesh extends Mesh {
   count: number;
   /** Linear RGB multipliers, 3 floats per instance. Default undefined (white). Call markColorsUpdated after element edits. */
   colors: Float32Array | undefined;
-  /** Advanced by markTransformsUpdated and markColorsUpdated. Default 0. */
+  /** Advanced by any update notification. Default 0. */
   get version(): number { return this._version; }
   private _version = 0;
   private _transformVersion = 0;
@@ -41,7 +41,20 @@ export default class InstancedMesh extends Mesh {
       this.transforms[offset] = this.transforms[offset + 5] = this.transforms[offset + 10] = this.transforms[offset + 15] = 1;
     }
   }
-  /** Notify edited local matrices. Defaults: start 0, count all active matrices from start. Returns this. */
+  /**
+   * Notify edits to both local matrices and colors for all active instances.
+   * Advances version once. Does not notify geometry or material edits. Returns this.
+   * Use the dedicated methods for single-property edits to avoid unnecessary work.
+   */
+  markUpdated(): this {
+    this.validate();
+    this._transformVersion++; this._colorVersion++; this._version++;
+    return this;
+  }
+  /**
+   * Notify edited local matrices, avoiding copies of unchanged colors.
+   * Defaults: start 0, count all active matrices from start. Returns this.
+   */
   markTransformsUpdated(start = 0, count = this.count - start): this {
     this.validate();
     if (!Number.isInteger(start) || !Number.isInteger(count) || start < 0 || count < 0 || start + count > this.count) {
@@ -50,7 +63,10 @@ export default class InstancedMesh extends Mesh {
     this._transformVersion++; this._version++;
     return this;
   }
-  /** Notify edited colors. Defaults: start 0, count all active instances from start. Returns this. */
+  /**
+   * Notify edited colors without copying matrices or updating BVHs.
+   * Defaults: start 0, count all active instances from start. Returns this.
+   */
   markColorsUpdated(start = 0, count = this.count - start): this {
     this.validate();
     if (!Number.isInteger(start) || !Number.isInteger(count) || start < 0 || count < 0 || start + count > this.count) {

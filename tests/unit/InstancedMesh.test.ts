@@ -56,6 +56,31 @@ it('commits notified matrices once, isolates edits and keeps snapshots stable du
   mesh.count = 4; expect(() => engine.update()).toThrow(RangeError);
   engine.dispose();
 });
+it('commits both matrices and colors with one general notification', () => {
+  const {engine, pipeline} = renderFixture(); const mesh = batch();
+  mesh.colors = new Float32Array(mesh.count * 3).fill(1);
+  engine.scene = {meshes: [mesh], lights: []}; engine.update();
+  const committed = vi.mocked(pipeline.setMeshes).mock.calls.at(-1)![0][0] as InstancedMesh;
+  mesh.transforms[28] = 8; mesh.colors[3] = .2;
+  expect(engine.update()).toBe(false);
+  expect(mesh.markUpdated()).toBe(mesh); expect(mesh.version).toBe(1);
+  expect(engine.update()).toBe(true);
+  expect(committed.transforms[28]).toBe(8); expect(committed.colors![3]).toBeCloseTo(.2);
+  expect(pipeline.setMeshes).toHaveBeenLastCalledWith(expect.anything(),
+    expect.objectContaining({transforms:[committed], colors:[committed], geometries:[], materials:[]}));
+  expect(engine.update()).toBe(false);
+  engine.dispose();
+});
+it('supports general notifications without colors or active instances and validates before marking', () => {
+  for (const count of [0, 2]) {
+    const mesh = batch(count);
+    expect(mesh.markUpdated()).toBe(mesh); expect(mesh.version).toBe(1);
+    expect(mesh.transformsVersion).toBe(1); expect(mesh.colorsVersion).toBe(1);
+    mesh.count = count + 1;
+    expect(() => mesh.markUpdated()).toThrow(RangeError);
+    expect(mesh.version).toBe(1); expect(mesh.transformsVersion).toBe(1); expect(mesh.colorsVersion).toBe(1);
+  }
+});
 it('stores one binding per batch and produces exactly the expanded TLAS and flattened geometry', () => {
   const mesh = batch(7), singles = expanded(mesh);
   const packed = updateMeshInstances([mesh]), reference = updateMeshInstances(singles);

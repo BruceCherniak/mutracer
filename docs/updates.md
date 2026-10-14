@@ -23,6 +23,7 @@ notification first:
 | Indices, `materialIndex` or other geometry data | `geometry.markUpdated()` |
 | `instancedMesh.transforms` elements | `instancedMesh.markTransformsUpdated(start?, count?)` |
 | `instancedMesh.colors` elements | `instancedMesh.markColorsUpdated(start?, count?)` |
+| Both instance matrices and colors | `instancedMesh.markUpdated()` |
 
 Everything else, including the camera, `scene.meshes`, `mesh.transform`,
 replaced geometry, materials, textures or arrays, and `instancedMesh.count`,
@@ -80,7 +81,6 @@ instance; omitted colors are white. The array is retained and must hold at least
 `3 * count` values. All materials of an instance share its color. Colors multiply
 baseColor after texture sampling, and emissionColor only for unlit materials.
 They do not affect alpha, other layer colors, non-unlit emission or light sampling.
-Color-only edits upload instance colors without refitting or rebuilding any BVH.
 Values are not clamped; results for nonfinite colors are undefined.
 
 ```ts
@@ -90,9 +90,17 @@ batch.markColorsUpdated(1, 1);
 engine.update();
 ```
 
-Element edits require `markTransformsUpdated` or `markColorsUpdated` (default
-range: all active instances). Either notification advances the read-only
-`version`, initially zero.
+After editing both matrices and colors, call `batch.markUpdated()` to notify
+both for all active instances. This does not notify geometry or material edits.
+For edits to just one array, use the dedicated notification (default range: all
+active instances):
+
+| Notification | Work avoided compared with `markUpdated()` |
+| --- | --- |
+| `markTransformsUpdated(start?, count?)` | Copying unchanged instance colors |
+| `markColorsUpdated(start?, count?)` | Copying instance matrices and refitting or rebuilding BVHs; only instance colors are uploaded |
+
+Each notification advances the read-only `version` once, initially zero.
 Replacing either array, removing colors, and changing count are detected automatically.
 Arrays are copied into the engine snapshot on their own version or storage change;
 unnotified edits remain uncommitted even when another scene resource changes. Call
