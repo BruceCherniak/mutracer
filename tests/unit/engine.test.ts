@@ -32,7 +32,7 @@ describe('Engine commits inputs', () => {
     camera.position = [2, 2, 2]; a.refine(); b.refine();
     expect(pipeline.setMeshes).toHaveBeenCalledTimes(uploads);
     expect(uploaded[0].position).toEqual([0, 0, 0]); expect(uploaded[0].materials[0].baseColor[0]).toBe(.2);
-    material.markUpdated(); geometry.markVerticesUpdated(); engine.update();
+    geometry.markVerticesUpdated(); engine.update();
     expect(uploaded[0].position).toEqual([4, 5, 6]); expect(uploaded[0].materials[0].baseColor[0]).toBe(.9);
     expect(pipeline.setMeshes).toHaveBeenCalledTimes(uploads + 1); engine.dispose();
   });
@@ -74,22 +74,6 @@ it('reports shared shader progress only when compilation advances', () => {
 
 describe('Engine validation', () => {
   afterEach(() => { vi.unstubAllEnvs(); vi.restoreAllMocks(); });
-  it.each([
-    ['development', undefined, true], ['production', undefined, false],
-    ['development', false, false], ['production', false, false],
-    ['development', true, true], ['production', true, true],
-  ] as const)('honors validateUpdates=%s/%s when committing edits', (environment, validateUpdates, expected) => {
-    vi.stubEnv('NODE_ENV', environment);
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const {engine} = renderFixture({validateUpdates});
-    const material = new OpenPBRMaterial();
-    engine.scene = {meshes: [new Mesh(createCubeGeometry(), material)], lights: []};
-    engine.update(); material.baseColor[0] = .2;
-    engine.update(); engine.update();
-    expect(warn).toHaveBeenCalledTimes(expected ? 1 : 0);
-    if (expected) expect(warn).toHaveBeenCalledWith(expect.stringContaining('markUpdated'), material);
-    engine.dispose();
-  });
   it('clamps invalid lights and emits one error without failing refinement', () => {
     const {engine, pipeline} = renderFixture();
     const error = vi.fn(); engine.on('error', error);

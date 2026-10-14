@@ -1,3 +1,4 @@
+import { SceneChangeDetector } from '../../src/renderer/sceneChangeDetector';
 import RenderLoop from '../../src/RenderLoop';
 import { renderFixture } from '../helpers/renderPipeline';
 import Engine from '../../src/Engine';
@@ -36,7 +37,7 @@ describe('THREESync', () => {
     expect(scene.background).toBe(background);
     expect(scene.meshes[0]).toBe(first);
     expect(first.materials[0]).toBe(material); expect(material.map).toBe(texture);
-    expect(material.version).toBe(0);
+
   });
 
   it('updates only the existing matrix when rotating a mesh', () => {
@@ -59,8 +60,8 @@ describe('THREESync', () => {
     expect(sync.scene.meshes[0].materials[0]).toBe(converted);
     expect(sync.scene.meshes[1].materials[0]).toBe(converted);
     expect(converted.baseColor).toEqual([0.3, 0.4, 0.5]);
-    expect(converted.version).toBe(1);
-    sync.update(); expect(converted.version).toBe(1);
+
+    sync.update(); expect(converted.baseColor).toEqual([0.3, 0.4, 0.5]);
   });
 
   it('refreshes a texture in place by version, image and UV metadata', () => {
@@ -311,7 +312,7 @@ it('retains the converted source material for UV meshes and shares automatic pro
   expect(variant.uvProjection).toBe('triplanar'); expect(variant.displacementUvProjection).toBe('triplanar');
   expect(a).not.toHaveProperty('uvProjection'); expect(b).not.toHaveProperty('displacementUvProjection');
   sync.update();
-  const baseVersion = base.version, variantVersion = variant.version;
+
   material.roughness = .7; material.color.setRGB(.2, .4, .6); material.opacity = .5;
   sync.update();
   for (const converted of [base, variant]) {
@@ -319,7 +320,7 @@ it('retains the converted source material for UV meshes and shares automatic pro
     expect(converted.opacity).toBe(.5); expect(converted.map).toBe(base.map);
   }
   expect(a.materials[0]).toBe(base); expect(b.materials[0]).toBe(variant);
-  expect(base.version).toBe(baseVersion + 1); expect(variant.version).toBe(variantVersion + 1);
+
   const cache = (sync as unknown as { _store: { colorVariants: Map<THREE.Material, Map<string, unknown>> } })._store.colorVariants;
   expect(cache.get(material)!.size).toBe(1);
   source.remove(fallback, secondFallback); sync.update(); expect(cache.size).toBe(0);
@@ -432,9 +433,11 @@ describe('persistent conversion hooks', () => {
     expect(hook).not.toHaveBeenCalled(); sync.update(); sync.update();
     expect(hook).toHaveBeenCalledOnce(); expect(hook).toHaveBeenCalledWith(material);
     expect(sync.scene!.meshes.map(m => m.materials[0])).toEqual([custom,custom]);
-    custom.baseColor = [.2,.3,.4]; custom.markUpdated(); sync.update();
+    const detector = new SceneChangeDetector(); detector.detect(sync.scene!); detector.commit();
+    custom.baseColor = [.2,.3,.4]; sync.update();
+    expect(detector.detect(sync.scene!).materials).toEqual([custom]);
     expect(hook).toHaveBeenCalledOnce(); expect(sync.scene!.meshes[0].materials[0]).toBe(custom);
-    expect(custom.baseColor).toEqual([.2,.3,.4]); expect(custom.version).toBe(1);
+    expect(custom.baseColor).toEqual([.2,.3,.4]);
     material.needsUpdate = true; sync.update(); expect(hook).toHaveBeenCalledTimes(2);
     source.remove(mesh); sync.update(); source.add(mesh); sync.update(); expect(hook).toHaveBeenCalledTimes(2);
     sync.dispose(); engine.dispose();
@@ -468,8 +471,8 @@ describe('persistent conversion hooks', () => {
     expect(variant).not.toBe(custom); expect(sync.scene!.meshes).toHaveLength(1);
     expect((sync.scene!.meshes[0] as import('../../src/scene/InstancedMesh').default).count).toBe(2);
     expect(variant.baseColor).toEqual([.4,.6,.4]); expect(variant.uvProjection).toBe('triplanar');
-    custom.baseColor = [.4,.3,.2]; custom.markUpdated(); sync.update(); expect(variant.baseColor).toEqual([.2,.3,.2]);
-    custom = new OpenPBRMaterial({baseColor: [.2,.1,.6], map}); custom.markUpdated();
+    custom.baseColor = [.4,.3,.2]; sync.update(); expect(variant.baseColor).toEqual([.2,.3,.2]);
+    custom = new OpenPBRMaterial({baseColor: [.2,.1,.6], map});
     material.needsUpdate = true; sync.update(); expect(sync.scene!.meshes[0].materials[0]).toBe(variant);
     expect(variant.baseColor).toEqual([.1,.1,.6]); expect(variant.uvProjection).toBe('triplanar');
     sync.dispose(); engine.dispose();

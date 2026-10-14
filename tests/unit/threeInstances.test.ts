@@ -61,9 +61,8 @@ it('retains the prefix when count changes and reports matrix edits only as trans
 it.each([false, true])('propagates source edits to color variants, including unlit=%s', basic => {
   const { mesh, sync, material } = fixture(basic);
   const first = sync.scene.meshes[0].materials[0], second = sync.scene.meshes[1].materials[0];
-  const mark = vi.spyOn(first, 'markUpdated');
   material.color.setRGB(.2, .4, .8); material.opacity = .6;
-  sync.update(); expect(mark).toHaveBeenCalledOnce();
+  sync.update();
   expect(first.baseColor).toEqual([.2, .1, .8 * .75]); expect(second.baseColor).toEqual([.1, .1, .8 * .75]);
   expect(first.opacity).toBe(.6); if (basic) expect(first.emissionColor).toEqual(first.baseColor);
   mesh.setColorAt(0, new THREE.Color(.5, .25, .75)); mesh.instanceColor!.needsUpdate = true;

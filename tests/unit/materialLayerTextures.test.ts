@@ -54,12 +54,12 @@ describe('OpenPBR layer texture inputs', () => {
   it.each(newNames)('classifies %s enable/edit/remove without geometry changes', name => {
     const material = new Material(), tracker = new MaterialChangeTracker();
     tracker.capture([material]); const hash = getMaterialHashKey(material);
-    material[name] = texture(); material.markUpdated();
+    material[name] = texture();
     expect(getMaterialHashKey(material)).not.toBe(hash);
     expect(tracker.classify([material])).toEqual({level: 'textures', emission: name === 'coatWeightMap', emissiveMap: false});
     tracker.capture([material]); material[name]!.uvChannel = 1; material[name]!.markUpdated();
     expect(tracker.classify([material]).level).toBe('textures');
-    tracker.capture([material]); material[name] = undefined; material.markUpdated();
+    tracker.capture([material]); material[name] = undefined;
     expect(tracker.classify([material]).level).toBe('textures');
   });
   it.each(newNames.map((name, i) => [name, sourceNames[i]] as const))('imports %s through Three.js and preserves shared identity', (name, sourceName) => {
@@ -79,9 +79,9 @@ describe('OpenPBR layer texture inputs', () => {
   it('THREESync retains material identity while updating imported layer maps', () => {
     const source = new THREE.MeshPhysicalMaterial(); const scene = new THREE.Scene(); scene.add(new THREE.Mesh(new THREE.BoxGeometry(), source));
     const sync = new THREESync(new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement}), {scene}); sync.update();
-    const m = sync.scene!.meshes[0].materials[0], before = m.version;
+    const m = sync.scene!.meshes[0].materials[0], hash = getMaterialHashKey(m);
     for (const name of sourceNames) source[name] = new THREE.Texture({width: 1, height: 1});
-    sync.update(); expect(sync.scene!.meshes[0].materials[0]).toBe(m); expect(m.version).toBeGreaterThan(before);
+    sync.update(); expect(sync.scene!.meshes[0].materials[0]).toBe(m); expect(getMaterialHashKey(m)).not.toBe(hash);
     for (const name of newNames) expect(m[name]).toBeInstanceOf(Texture);
     source.clearcoatMap = null; sync.update(); expect(m.coatWeightMap).toBeUndefined();
   });

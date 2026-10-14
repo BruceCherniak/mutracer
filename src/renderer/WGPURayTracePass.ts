@@ -1,6 +1,7 @@
 import { MATERIAL_FLOAT_COUNT } from './materialLayout.js';
 import { normalizeBounces } from './pathLimits.js';
 import { MATERIAL_TEXTURE_DEFINES, materialTextureFeatures } from './materialTextureSlots.js';
+import { getMaterialHashKey } from '../scene/openPbrSchema.js';
 import { sameInstanceMembership } from './meshInstances.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
 import { dirtyMeshInstanceIndices } from './prepareMeshBVH.js';
@@ -320,7 +321,7 @@ class WGPURayTracePass {
     geometry: Geometry;
     bvh?: FlattendBVH;
     materials: OpenPBRMaterial[];
-    materialVersions: number[];
+    materialKeys: string[];
     geometryVersion: number;
     positionArray: Float32Array;
     positionItemSize: number;
@@ -1798,7 +1799,7 @@ ${rayTraceCompute({
             emissiveMap: !!pending?.emissiveMap || materialUpdate.emissiveMap,
             materials: new Set([...(pending?.materials ?? []), ...update.materials])
           };
-          this._meshSnapshot.forEach(item => { item.materialVersions = item.materials.map(m => m.version); });
+          this._meshSnapshot.forEach(item => { item.materialKeys = item.materials.map(getMaterialHashKey); });
         }
         for (const geometry of update.geometries ?? []) this._pendingGeometryUpdates.add(geometry);
         for (const item of this._meshSnapshot) if (this._pendingGeometryUpdates.has(item.geometry)) item.geometryVersion = item.geometry.version;
@@ -1853,7 +1854,7 @@ ${rayTraceCompute({
       geometry: mesh.geometry,
       bvh: getGeometryBvh(mesh.geometry),
       materials: mesh.materials.slice(),
-      materialVersions: mesh.materials.map(material => material.version),
+      materialKeys: mesh.materials.map(getMaterialHashKey),
       geometryVersion: mesh.geometry.version,
       positionArray: mesh.geometry.position.array,
       positionItemSize: mesh.geometry.position.itemSize,
@@ -1869,10 +1870,10 @@ ${rayTraceCompute({
     const membership = !this._needsUpdateMeshData && membershipChanged && this._preparedMeshData
       ? this._membershipCache.update(this._preparedMeshData, meshes) : undefined;
     if (membership) {
-      const versions = new Map(previousSnapshot.flatMap(item => item.materials.map((m, i) => [m, item.materialVersions[i]] as const)));
+      const versions = new Map(previousSnapshot.flatMap(item => item.materials.map((m, i) => [m, item.materialKeys[i]] as const)));
       const materialsChanged = membership.materials.length !== this._preparedMeshData!.materials.length ||
         membership.materials.some((m, i) => m !== this._preparedMeshData!.materials[i] ||
-          versions.has(m) && m.version !== versions.get(m));
+          versions.has(m) && getMaterialHashKey(m) !== versions.get(m));
       this._pendingMembershipData = membership;
       this._meshes = meshes;
       this._meshSnapshot = nextSnapshot;
@@ -1903,8 +1904,8 @@ ${rayTraceCompute({
           next.materials.every(
             (material, index) => material === resident.materials[index]
           ) &&
-          next.materialVersions.every(
-            (hash, index) => hash === resident.materialVersions[index]
+          next.materialKeys.every(
+            (hash, index) => hash === resident.materialKeys[index]
           ) &&
           next.geometryVersion === resident.geometryVersion &&
           this._materialChanges.classify(next.materials).level === 'params' &&
@@ -1939,7 +1940,7 @@ ${rayTraceCompute({
           next.bvh !== prev.bvh ||
           next.materials.length !== prev.materials.length ||
           next.materials.some((material, k) => material !== prev.materials[k]) ||
-          next.materialVersions.some((hash, k) => hash !== prev.materialVersions[k]) ||
+          next.materialKeys.some((hash, k) => hash !== prev.materialKeys[k]) ||
           next.positionArray !== prev.positionArray ||
           next.positionArray.length !== prev.positionArray.length ||
           next.positionItemSize !== prev.positionItemSize ||

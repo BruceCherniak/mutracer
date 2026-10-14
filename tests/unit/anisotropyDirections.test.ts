@@ -24,10 +24,10 @@ describe('anisotropy direction contracts', () => {
   });
   it('classifies rotations as parameters and direction texture changes as texture updates', () => {
     const m=new Material(),tracker=new MaterialChangeTracker();tracker.capture([m]);const hash=getMaterialHashKey(m);
-    m.coatAnisotropyRotation=1;m.markUpdated();expect(tracker.classify([m]).level).toBe('params');expect(getMaterialHashKey(m)).not.toBe(hash);
-    tracker.capture([m]);m.anisotropyMap=new Texture({width:1,height:1,data:new Uint8Array(4)});m.markUpdated();expect(tracker.classify([m]).level).toBe('textures');
+    m.coatAnisotropyRotation=1;expect(tracker.classify([m]).level).toBe('params');expect(getMaterialHashKey(m)).not.toBe(hash);
+    tracker.capture([m]);m.anisotropyMap=new Texture({width:1,height:1,data:new Uint8Array(4)});expect(tracker.classify([m]).level).toBe('textures');
     tracker.capture([m]);m.anisotropyMap.markUpdated();expect(tracker.classify([m]).level).toBe('textures');
-    tracker.capture([m]);m.anisotropyMap=undefined;m.markUpdated();expect(tracker.classify([m]).level).toBe('textures');
+    tracker.capture([m]);m.anisotropyMap=undefined;expect(tracker.classify([m]).level).toBe('textures');
   });
   it('preserves supplied tangent handedness through merging and partial geometry updates alongside XYZ inputs', () => {
     const a=createPlaneGeometry(),b=createPlaneGeometry();a.dynamic=true;

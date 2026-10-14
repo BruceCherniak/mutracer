@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import Render from '../../src/Render';
 import { renderSchema, traceSchema } from '../../src/settings/render';
 import { displaySchema } from '../../src/settings/display';
-import { bvhConfig, engineSchema, engineDebugSchema, debugSettings, workerCount } from '../../src/settings/engine';
+import { bvhConfig, engineSchema, workerCount } from '../../src/settings/engine';
 import { renderFixture } from '../helpers/renderPipeline';
 
 const renderChanges: Record<string, unknown> = {
@@ -32,8 +32,6 @@ describe('settings schemas', () => {
         expect((owner as unknown as Record<string, unknown>)[field.key]).toEqual(field.default);
       }
     }
-    expect(engineDebugSchema[0].kind).toBe('debug');
-    expect(debugSettings({validateUpdates: false}).validateUpdates).toBe(false);
     engine.dispose();
   });
 

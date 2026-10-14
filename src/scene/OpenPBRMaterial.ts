@@ -23,19 +23,9 @@ export type { MaterialTextureName } from './materialTextureNames.js';
  * });
  * ```
  *
- * After changing a material that is already being rendered, call
- * `material.markUpdated()`.
+ * Edit parameters in place; the next `engine.update()` detects the changes.
  */
 export default class OpenPBRMaterial {
-  /** Incremented by markUpdated(). Default `0`. */
-  version = 0;
-
-  /** Call after changing any property of this material in place. */
-  markUpdated(): this {
-    this.version++;
-    return this;
-  }
-
   /** Creates a material. Omitted properties use their documented defaults. */
   constructor(params: OpenPBRMaterialParams = {}) {
     applyMaterialParams(this, params);
@@ -288,4 +278,4 @@ export function resolveMaterialAlphaMode(
 export { materialKeys, materialTextureKeys, materialGeometryKeys, materialParamKeys, getMaterialHashKey, resetMaterialTextureId } from './openPbrSchema.js';
 
 /** Optional material properties; defaults are documented on OpenPBRMaterial. */
-export type OpenPBRMaterialParams = Partial<Pick<OpenPBRMaterial, Exclude<keyof OpenPBRMaterial, 'version' | 'markUpdated'>>>;
+export type OpenPBRMaterialParams = Partial<OpenPBRMaterial>;

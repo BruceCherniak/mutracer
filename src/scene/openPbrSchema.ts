@@ -11,7 +11,7 @@ export const materialAliases = {
   geometryOpacity: 'opacity',
   geometryThinWalled: 'thinWalled'
 } as const;
-type MaterialKey = Exclude<keyof OpenPBRMaterial, 'version' | 'markUpdated' | keyof typeof materialAliases>;
+type MaterialKey = Exclude<keyof OpenPBRMaterial, keyof typeof materialAliases>;
 // Constructor and Three.js metadata share conflict handling before either mutates storage.
 export function normalizeMaterialParams(params: OpenPBRMaterialParams | Record<string, unknown>): Record<string, unknown> {
   const normalized: Record<string, unknown> = {...params};

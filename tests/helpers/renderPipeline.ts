@@ -4,7 +4,7 @@ import Camera from '../../src/scene/Camera';
 import type { Scene } from '../../src/scene/Scene';
 import type { RenderPipeline, RenderTarget, TraceSettings } from '../../src/renderer/renderPipeline';
 
-export function renderFixture(options: {tiles?: number; fits?: boolean; backend?: 'webgpu' | 'webgl'; validateUpdates?: boolean} = {}) {
+export function renderFixture(options: {tiles?: number; fits?: boolean; backend?: 'webgpu' | 'webgl'} = {}) {
   const operations: {id: string; kind: string; camera?: Camera; cap?: number}[] = [];
   const targets: RenderTarget[] = [];
   let active = '';
@@ -55,7 +55,7 @@ export function renderFixture(options: {tiles?: number; fits?: boolean; backend?
     releaseTarget: vi.fn(target => {target.dispose();}),
   };
   const canvas = {width: 800, height: 600} as HTMLCanvasElement;
-  const engine = new Engine({canvas, validateUpdates: 'validateUpdates' in options ? options.validateUpdates : false});
+  const engine = new Engine({canvas});
   const state = engine as unknown as {_pipeline: RenderPipeline; _info: {backend: 'webgpu' | 'webgl'}; _gpuDevice?: GPUDevice};
   state._pipeline = pipeline; state._info = {backend: options.backend ?? 'webgpu'};
   if (state._info.backend === 'webgpu') state._gpuDevice = {queue: {onSubmittedWorkDone: async () => {}}} as GPUDevice;

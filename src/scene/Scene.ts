@@ -41,10 +41,10 @@ export interface GroundedSkyboxBackground {
 export type SceneBackground = ColorRGBA | Texture | GroundedSkyboxBackground;
 /**
  * Everything the renderer draws. A plain object; mesh and light membership,
- * mesh transforms, resource references, light parameters and background
+ * mesh transforms, material parameters, resource references, light parameters and background
  * values are detected automatically, including edits within existing arrays.
- * Call `markUpdated()` on a material after parameter edits, a Geometry after
- * attribute edits, and a Texture after pixel or UV-array element edits.
+ * Call `markUpdated()` on a Geometry after attribute edits, and a Texture
+ * after pixel or UV-array element edits.
  * InstancedMesh matrix elements require markTransformsUpdated().
  */
 export interface Scene {

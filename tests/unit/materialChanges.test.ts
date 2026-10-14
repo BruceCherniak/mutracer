@@ -5,7 +5,7 @@ import { MaterialChangeTracker } from '../../src/renderer/materialChanges';
 const texture = () => new Texture({ data: new Uint8Array(4), width: 1, height: 1 });
 it('classifies parameters, emission, textures and geometry with the heaviest level winning', () => {
   const m = new OpenPBRMaterial(); const tracker = new MaterialChangeTracker();
-  tracker.capture([m]); m.baseColor[0] = 0.4; m.markUpdated();
+  tracker.capture([m]); m.baseColor[0] = 0.4;
   expect(tracker.classify([m])).toEqual({ level: 'params', emission: false, emissiveMap: false });
   tracker.capture([m]); m.emissionLuminance = 5;
   expect(tracker.classify([m])).toEqual({ level: 'emission', emission: true, emissiveMap: false });
@@ -29,9 +29,9 @@ it('updates emission sampling and rebuilds projective bounds after height textur
 it('rebuilds texture indices for displacement bump strength without rebuilding geometry', () => {
   const m = new OpenPBRMaterial(); m.displacementMap = texture();
   const tracker = new MaterialChangeTracker(); tracker.capture([m]);
-  m.displacementBumpStrength = 1; m.markUpdated();
+  m.displacementBumpStrength = 1;
   expect(tracker.classify([m])).toEqual({ level: 'textures', emission: false, emissiveMap: false });
-  tracker.capture([m]); m.displacementBumpStrength = 0; m.markUpdated();
+  tracker.capture([m]); m.displacementBumpStrength = 0;
   expect(tracker.classify([m])).toEqual({ level: 'textures', emission: false, emissiveMap: false });
 });
 

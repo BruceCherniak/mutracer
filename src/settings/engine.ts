@@ -1,11 +1,8 @@
 import type Engine from '../Engine.js';
-import type { EngineParams } from '../Engine.js';
 import type { BvhBuildConfig } from '../renderer/geometryBvh.js';
 import { DEFAULT_MAX_TEXTURE_ARRAY_BYTES } from '../renderer/MaterialTable.js';
 import { resolveBvhWorkerCount } from '../renderer/bvhWorkerClient.js';
 
-declare const process: { env: { NODE_ENV?: string } };
-function isDevelopment() { try { return process.env.NODE_ENV !== 'production'; } catch { return false; } }
 const both = ['webgpu', 'webgl'] as const;
 export const engineSchema = [
   {key: 'bvhBuilder', default: 'builtin', kind: 'bvh', backends: both, parameter: 'builder'},
@@ -15,11 +12,6 @@ export const engineSchema = [
   {key: 'bvhWorkerCount', default: 'auto', kind: 'bvh', backends: both, normalize: resolveBvhWorkerCount},
   {key: 'textureAtlasBudgetBytes', default: DEFAULT_MAX_TEXTURE_ARRAY_BYTES, kind: 'resources', backends: both},
 ] as const satisfies readonly {key: keyof Engine; default: unknown; kind: 'bvh' | 'resources'; backends: readonly string[]; parameter?: string; normalize?: (value: number | 'auto') => number}[];
-// validateUpdates is construction-only in the existing API, not an Engine field.
-export const engineDebugSchema = [{key: 'validateUpdates', default: isDevelopment, kind: 'debug', backends: both}] as const;
-export function debugSettings(params: EngineParams) {
-  return Object.fromEntries(engineDebugSchema.map(field => [field.key, params[field.key] ?? field.default()])) as {validateUpdates: boolean};
-}
 export function bvhConfig(engine: Engine): BvhBuildConfig {
   return Object.fromEntries(engineSchema.flatMap(field => 'parameter' in field ? [[field.parameter, engine[field.key]]] : [])) as unknown as BvhBuildConfig;
 }

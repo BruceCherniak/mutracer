@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import MaterialTable, {
-  
-  
+
+
 } from '../../src/renderer/MaterialTable';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import Texture from '../../src/scene/Texture';
@@ -332,7 +332,7 @@ it('repacking parameters matches fresh packing while preserving the texture atla
 it('constructs material properties and packs public alpha strings without exposing numeric constants', () => {
   const materials = (['opaque', 'alpha', 'transmission'] as const).map(mapAlphaUsage =>
     new OpenPBRMaterial({ mapAlphaUsage, baseColor: [0.1, 0.2, 0.3], uvProjectionScale: [2, 3], displacementUvProjectionScale: 4 }));
-  expect(materials[0]).toMatchObject({ version: 0, specularRoughness: .3, baseColor: [.1, .2, .3] });
+  expect(materials[0]).toMatchObject({ specularRoughness: .3, baseColor: [.1, .2, .3] });
   const packed = new MaterialTable(materials, []);
   expect(packed.bufferData.mapAlphaUsage).toEqual([0, 2, 3]);
   expect(packed.bufferData.uvScale).toEqual([[2, 3], [2, 3], [2, 3]]);

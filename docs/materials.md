@@ -22,13 +22,13 @@ const gold = new OpenPBRMaterial({
 });
 ```
 
-After editing a material that is already rendering, call `material.markUpdated()`
-(see [scene updates](./updates.md#materials-textures-and-lights) for costs):
+Edit a material that is already rendering in place; the next `engine.update()`
+detects the change (see [scene updates](./updates.md#materials-textures-and-lights)
+for costs):
 
 ```ts
 gold.specularRoughness = 0.4;
 gold.baseColor[1] = 0.7;
-gold.markUpdated();
 ```
 
 Materials occupy GPU slots by object identity: share one material object to
@@ -107,7 +107,7 @@ wavelengths spectrally.
 The canonical names below share storage with the deprecated names. Both work in
 constructor parameters, property reads/writes and Three.js metadata. If both
 are supplied together, equal values are accepted and conflicting values throw.
-Calling `markUpdated()` after either spelling has the same update cost.
+Edits through either spelling are detected by the next `engine.update()`; see [scene updates](./updates.md).
 
 | Canonical name | Deprecated compatibility name | Default |
 | --- | --- | --- |
@@ -266,9 +266,9 @@ Strongly tilted shading normals lose some lobe support when clipped to the
 geometric hemisphere. A unit white environment can therefore render below
 unit radiance; the renderer does not renormalize the clipped lobes.
 
-Use `material.markUpdated()` after replacing the map or editing its scale,
-and `texture.markUpdated()` after pixel or UV changes. These update material
-parameters/textures without rebuilding geometry. Normal maps do not alter
+Replacing the map or editing its scale is detected by `engine.update()`. Call
+`texture.markUpdated()` after pixel or UV-array element edits; see [scene updates](./updates.md).
+These edits update material parameters/textures without rebuilding geometry. Normal maps do not alter
 emission's existing normal-incidence absorption or light-selection proposals.
 
 ## Anisotropy directions

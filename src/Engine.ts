@@ -1,4 +1,4 @@
-import { bvhConfig, debugSettings, engineSettingsKey, workerCount, textureBudget } from './settings/engine.js';
+import { bvhConfig, engineSettingsKey, workerCount, textureBudget } from './settings/engine.js';
 import {createCanvas} from './util/canvas.js';
 import Camera from './scene/Camera.js';
 import {getRecommendedDeviceDescriptor, validateDevice} from './renderer/deviceRequirements.js';
@@ -40,7 +40,6 @@ export interface EngineParams {
   /** Default display canvas. Default a new HTML canvas, or OffscreenCanvas without document. */ canvas?: HTMLCanvasElement | OffscreenCanvas;
   /** Backend selection. Default auto, with WebGL fallback. webgpu requires WebGPU. */ backend?: 'auto' | 'webgpu' | 'webgl';
   /** Caller-owned WebGPU device. Default undefined uses a shared device. Implies webgpu; incompatible with webgl. */ device?: GPUDevice;
-  /** Warn about unmarked material edits. Default true in development, false in production. */ validateUpdates?: boolean;
 }
 /** Material-atlas device limits. */
 export interface TextureAtlasLimits { maxTextureArrayLayers: number; maxTextureDimension2D: number; }
@@ -161,7 +160,7 @@ export default class Engine {
     this._suppliedDevice = params.device;
     this._ownsDeviceSelection = !params.device;
     this._backendChoice = params.device ? 'webgpu' : params.backend ?? 'auto';
-    this._sceneChangeDetector = new SceneChangeDetector(debugSettings(params).validateUpdates);
+    this._sceneChangeDetector = new SceneChangeDetector();
     this.display = Display._create(this, params.canvas ?? createCanvas());
   }
   /** Initializes once; concurrent/repeated calls share the result. */

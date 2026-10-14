@@ -127,7 +127,6 @@ export function writeMaterial(material: OpenPBRMaterial, values: MaterialValues)
   for (const [key, value] of Object.entries(values)) {
     record[key] = Array.isArray(value) ? [...value] : value;
   }
-  material.markUpdated();
 }
 
 /** Which texture slots a material uses, for the "multiplied by texture" marks. */

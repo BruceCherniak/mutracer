@@ -66,14 +66,14 @@ describe('independent coat normal inputs', () => {
   it('invalidates parameters or textures without rebuilding geometry or emission proposals', () => {
     const m = new Material({emissionLuminance: 1}), tracker = new MaterialChangeTracker();
     tracker.capture([m]); const hash = getMaterialHashKey(m);
-    m.coatNormalScale = [.3, -1]; m.markUpdated();
+    m.coatNormalScale = [.3, -1];
     expect(getMaterialHashKey(m)).not.toBe(hash);
     expect(tracker.classify([m])).toEqual({level: 'params', emission: false, emissiveMap: false});
     for (const change of [() => { m.coatNormalMap = image(); },
       () => { m.coatNormalMap!.uvChannel = 1; m.coatNormalMap!.markUpdated(); },
       () => { m.coatNormalMap!.flipY = false; m.coatNormalMap!.markUpdated(); },
       () => { m.coatNormalMap = undefined; }]) {
-      tracker.capture([m]); change(); m.markUpdated();
+      tracker.capture([m]); change();
       expect(tracker.classify([m])).toEqual({level: 'textures', emission: false, emissiveMap: false});
     }
     const table = new MaterialTable([m], []);
@@ -131,10 +131,10 @@ describe('independent coat normal inputs', () => {
   it('THREESync preserves identity across imported texture and scale edits, including removal', () => {
     const source = new THREE.MeshPhysicalMaterial();
     const sync = new THREESync(new Engine({canvas: {width: 1, height: 1} as HTMLCanvasElement}), {scene: sceneFor(source)});
-    sync.update(); const m = sync.scene!.meshes[0].materials[0], version = m.version;
+    sync.update(); const m = sync.scene!.meshes[0].materials[0], hash = getMaterialHashKey(m);
     const tex = new THREE.Texture({width: 2, height: 2});
     source.clearcoatNormalMap = tex; source.clearcoatNormalScale.set(.5, -1); sync.update();
-    expect(sync.scene!.meshes[0].materials[0]).toBe(m); expect(m.version).toBeGreaterThan(version);
+    expect(sync.scene!.meshes[0].materials[0]).toBe(m); expect(getMaterialHashKey(m)).not.toBe(hash);
     expect(m.coatNormalMap?.image).toBe(tex.image); expect(m.coatNormalScale).toEqual([.5, -1]);
     source.clearcoatNormalMap = null; sync.update(); expect(m.coatNormalMap).toBeUndefined();
   });

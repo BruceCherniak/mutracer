@@ -62,8 +62,8 @@
   ],
   "scripts": {
     "dev": "vite",
-    "build": "tsc --noEmit && vite build",
-    "typecheck": "tsc --noEmit",
+    "build": "npm run typecheck && vite build",
+    "typecheck": "npm run check:material-comparison && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "build:tinybvh": "./scripts/build-tinybvh.sh",
@@ -73,7 +73,7 @@
     "preview": "vite preview",
     "prepare": "npm run build:lib",
     "prepublishOnly": "npm run build && npm run build:lib",
-    "build:lib": "node scripts/build-lib.mjs",
+    "build:lib": "npm run check:material-comparison && node scripts/build-lib.mjs",
     "watch:lib": "tsc --watch",
     "viewer": "vite --config viewer/vite.config.ts",
     "build:viewer": "vite build --config viewer/vite.config.ts",
@@ -84,7 +84,9 @@
     "deploy": "wrangler deploy",
     "pack:oidn-weights": "node scripts/pack-oidn-weights.mjs",
     "check:lib-esm": "node scripts/check-lib-esm.mjs",
-    "test:viewer": "vitest run --config viewer/vitest.config.ts"
+    "test:viewer": "vitest run --config viewer/vitest.config.ts",
+    "generate:material-comparison": "node scripts/generate-material-comparison.mjs",
+    "check:material-comparison": "node scripts/generate-material-comparison.mjs --check"
   },
   "dependencies": {
     "gl-matrix": "^3.4.4",

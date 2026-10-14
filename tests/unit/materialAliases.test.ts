@@ -30,8 +30,8 @@ describe('OpenPBR compatibility aliases', () => {
     expect(() => new Material({[alias]: v, [old]: alias === 'geometryThinWalled' ? false : .5})).toThrow(new RegExp(alias + '.*' + old));
     expect(() => new Material({[old]: alias === 'geometryThinWalled' ? false : .5, [alias]: v})).toThrow(/Conflicting/);
     Object.assign(modern, {[old]: alias === 'geometryThinWalled' ? false : .7}); expect(modern[alias]).toBe(modern[old]);
-    const tracker = new MaterialChangeTracker(); tracker.capture([modern]); const version = modern.version;
-    Object.assign(modern, {[alias]: v}); modern.markUpdated(); expect(modern[old]).toBe(v); expect(modern.version).toBe(version+1);
+    const tracker = new MaterialChangeTracker(); tracker.capture([modern]);
+    Object.assign(modern, {[alias]: v});  expect(modern[old]).toBe(v);
     expect(tracker.classify([modern])).toEqual({level: 'params', emission: false, emissiveMap: false});
   });
   it('keeps aliases out of keys, JSON, snapshots and parameter enumeration', () => {
@@ -53,8 +53,8 @@ describe('OpenPBR compatibility aliases', () => {
     expect(getMaterialHashKey(fromTHREEScene(a.scene).meshes[0].materials[0])).toBe(getMaterialHashKey(legacy));
     a.source.userData.mutracerOpenPBR={[old]:alias==='geometryThinWalled'?false:.5,[alias]:v};
     expect(()=>fromTHREEScene(a.scene)).toThrow(/Conflicting/);
-    const sync=new THREESync(new Engine({canvas:{width:1,height:1} as HTMLCanvasElement}),{scene:b.scene});sync.update();const m=sync.scene!.meshes[0].materials[0];const version=m.version;
+    const sync=new THREESync(new Engine({canvas:{width:1,height:1} as HTMLCanvasElement}),{scene:b.scene});sync.update();const m=sync.scene!.meshes[0].materials[0];const hash=getMaterialHashKey(m);
     b.source.userData.mutracerOpenPBR={[alias]:alias==='geometryThinWalled'?false:.7};sync.update();
-    expect(m).toBe(sync.scene!.meshes[0].materials[0]);expect(m[old]).toBe(alias==='geometryThinWalled'?false:.7);expect(m.version).toBeGreaterThan(version);
+    expect(m).toBe(sync.scene!.meshes[0].materials[0]);expect(m[old]).toBe(alias==='geometryThinWalled'?false:.7);expect(getMaterialHashKey(m)).not.toBe(hash);
   });
 });

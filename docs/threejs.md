@@ -23,7 +23,7 @@ loop.start();
 ## Keeping scenes in sync
 
 Edit Three.js transforms, membership, lights, backgrounds and materials directly.
-Material edits are converted and versioned automatically; color and roughness
+Material edits are converted automatically; color and roughness
 edits do not require `material.needsUpdate`. Buffer and pixel edits need the
 usual flags:
 
@@ -225,18 +225,16 @@ const sync = new THREESync(engine, {
 });
 // Edit the returned MuTracer material directly after initial conversion.
 customMaterial.baseColor = [0.8, 0.4, 0.2];
-customMaterial.markUpdated();
 ```
 
 The sync caches each hook result (including null and undefined) by source
 identity and `version`. The material hook receives only the source material,
 so a shared material converts once for every mesh using it; use distinct
 source materials for per-mesh conversion. Set `threeMaterial.needsUpdate = true` to advance its version and
-rerun the hook. Returned objects are used by identity and are caller-owned:
-material edits need `markUpdated()`, while returned light parameter/transform
-edits are detected by `engine.update()`. Instance colors and automatic UV
+rerun the hook. Returned objects are used by identity and are caller-owned;
+`engine.update()` detects edits to them. Instance colors and automatic UV
 projection derive retained variants from the returned material; these refresh
-when its identity or MuTracer version changes.
+when its identity or parameters change.
 
 Three.js lights have no built-in `version`, so the light hook runs once. To
 rerun it, set a numeric `light.userData.mutracerVersion` and increment it. An undefined hook result keeps normal built-in material/light

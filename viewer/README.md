@@ -70,7 +70,7 @@ selection back to the store.
 Notes:
 
 - Material edits go to the converted MuTracer `OpenPBRMaterial`s (collected with
-  `onMeshConverted`), followed by `markUpdated()`. The Three.js source material
+  `onMeshConverted`). The Three.js source material
   is not touched, so the scene sync does not overwrite the edit.
 - Material edits (values, presets, texture uploads and removals, reset) and
   lighting and render settings changed through `setSettings` share one undo

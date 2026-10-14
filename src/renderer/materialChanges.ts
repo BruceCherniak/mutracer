@@ -5,7 +5,6 @@ import { materialEmission } from './materialEmission.js';
 
 export type MaterialUpdateLevel = 'params' | 'emission' | 'textures' | 'geometry';
 interface MaterialSnapshot {
-  version: number;
   paramKey: string;
   textureKey: string;
   geometryKey: string;
@@ -26,7 +25,6 @@ function key(material: OpenPBRMaterial, keys: readonly (keyof OpenPBRMaterial)[]
 }
 function snapshot(material: OpenPBRMaterial): MaterialSnapshot {
   return {
-    version: material.version,
     paramKey: key(material, materialParamKeys),
     textureKey: materialTextureKeys.map(k => { const value = material[k]; return typeof value === 'number' ? String(value) : textureKey(value); }).join('|'),
     // Height maps affect projective BLAS bounds.

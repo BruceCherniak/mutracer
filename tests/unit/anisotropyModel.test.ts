@@ -63,7 +63,7 @@ describe('anisotropy source convention', () => {
     t.capture([m]);
     const h = getMaterialHashKey(m);
     m.specularAnisotropyModel = 'gltf';
-    m.markUpdated();
+
     expect(t.classify([m])).toEqual({ level: 'params', emission: false, emissiveMap: false });
     expect(getMaterialHashKey(m)).not.toBe(h);
   });

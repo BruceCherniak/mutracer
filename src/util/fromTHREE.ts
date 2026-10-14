@@ -1,6 +1,7 @@
 import { specularAnisotropyModelIndex } from '../scene/anisotropyParameters.js';
 import { normalizeMaterialParams } from '../scene/openPbrSchema.js';
 import { thinFilmMapChannelIndex } from '../scene/thinFilmParameters.js';
+import { snapshotMaterialParameters, materialParametersEqual } from '../renderer/sceneChangeDetector.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
 import Sync from '../Sync.js';
 import type Engine from '../Engine.js';
@@ -604,7 +605,7 @@ function convertGeometry(
 
 /** Options for one-shot conversion and persistent Three.js synchronization. */
 export interface FromTHREESceneOptions {
-  /** Custom material conversion. Default undefined uses built-in conversion; returning null skips every mesh using this material. THREESync invokes once per source material identity/version, so the result cannot depend on a particular mesh. Returned materials are caller-owned; call markUpdated after edits. */
+  /** Custom material conversion. Default undefined uses built-in conversion; returning null skips every mesh using this material. THREESync invokes once per source material identity/version, so the result cannot depend on a particular mesh. Returned materials are caller-owned; engine.update detects parameter edits. */
   convertMaterial?(material: THREE.Material): OpenPBRMaterial | null | undefined;
   /** Custom light conversion. Default undefined uses built-in conversion; returning null skips this light. THREESync invokes once per source light identity and numeric userData.mutracerVersion (default undefined, never rerun). Returned lights are retained by identity and remain caller-owned. */
   convertLight?(light: THREE.Light): SceneLight | null | undefined;
@@ -619,7 +620,8 @@ export interface FromTHREESceneOptions {
 
 interface MaterialVariant {
   material: OpenPBRMaterial;
-  version: number;
+  parameters: unknown[];
+  hash?: string;
   base?: OpenPBRMaterial;
   color?: ColorRGB;
   autoUvProjection: boolean;
@@ -729,8 +731,11 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   const textureCache = store.textures;
   const convertedMaterials = new Set<THREE.Material>();
   const instanceColor: ColorRGB = [1, 1, 1];
+  const baseHashes = new Map<OpenPBRMaterial, string>();
   function refreshVariant(entry: MaterialVariant, base: OpenPBRMaterial) {
-    if (entry.base === base && entry.version === base.version) return;
+    let hash = baseHashes.get(base);
+    if (hash === undefined) { hash = getMaterialHashKey(base); baseHashes.set(base, hash); }
+    if (entry.base === base && entry.hash === hash && materialParametersEqual(base, entry.parameters)) return;
     for (const field of materialKeys) (entry.material as unknown as Record<string, unknown>)[field] = base[field];
     if (entry.color) {
       const color = entry.color;
@@ -740,8 +745,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
     }
     if (entry.autoUvProjection) entry.material.uvProjection = 'triplanar';
     if (entry.autoDisplacementUvProjection) entry.material.displacementUvProjection = 'triplanar';
-    entry.material.markUpdated();
-    entry.version = base.version; entry.base = base;
+    entry.parameters = snapshotMaterialParameters(base); entry.hash = hash; entry.base = base;
   }
   function materialVariant(source: THREE.Material, base: OpenPBRMaterial, color: ColorRGB | undefined,
     autoUvProjection: boolean, autoDisplacementUvProjection: boolean) {
@@ -751,7 +755,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
     const key = `${color?.join(':') ?? ''}|${+autoUvProjection}:${+autoDisplacementUvProjection}`;
     let variant = variants.get(key);
     if (!variant) {
-      variant = { material: new OpenPBRMaterial(), version: -1, color: color?.slice() as ColorRGB | undefined,
+      variant = { material: new OpenPBRMaterial(), parameters: [], color: color?.slice() as ColorRGB | undefined,
         autoUvProjection, autoDisplacementUvProjection };
       variants.set(key, variant);
     }
@@ -791,7 +795,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
     if (cached) {
       if (cached.hash !== hash) {
         for (const key of materialKeys) (cached.material as unknown as Record<string, unknown>)[key] = converted[key];
-        cached.material.markUpdated(); cached.hash = hash;
+        cached.hash = hash;
       }
       material = cached.material;
     } else store.materials.set(source, {material, hash});

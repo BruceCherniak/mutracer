@@ -10,46 +10,35 @@ Changes restart each render at its next refine. See
 
 ## What to do after a change
 
-| Change | What to do |
+`engine.update()` compares the scene with its last commit. It detects every
+property assignment, membership change and small value such as matrices,
+material parameters, light parameters and background fields. It does not read
+the contents of large arrays or images, so in-place edits to them need a
+notification first:
+
+| Edited in place | Notification |
 | --- | --- |
-| Camera changed | Call engine.update before refining |
-| Meshes added, removed or reordered | Edit `scene.meshes`, then engine.update |
-| `mesh.transform` elements edited | Call engine.update |
-| `instancedMesh.transforms` elements edited | `markTransformsUpdated(start?, count?)`, then engine.update |
-| `instancedMesh.count` or transforms array replaced | Call engine.update; count must fit the array |
-| `mesh.geometry` or a mesh material replaced | Call engine.update |
-| Lights added, removed or their parameters edited | Call engine.update |
-| Background assigned, or its color or grounded-skybox fields edited | Call engine.update |
-| Texture, image, UV array, `flipY` or `uvChannel` assigned | Call engine.update |
-| Material parameters edited | `material.markUpdated()` |
-| Texture pixels or UV-array elements edited | `texture.markUpdated()` |
-| Vertex attributes edited; indices and `materialIndex` unchanged | `geometry.markVerticesUpdated()` |
-| Indices, `materialIndex` or other geometry data edited | `geometry.markUpdated()` |
-| `bvhBuilder`, `bvhLayout` or `bvhSpatialSplits` changed | Automatically rebuilds static BLASes; reports preparing and retains the old image ([BVH](./bvh.md)) |
+| Texture pixels or UV-array elements | `texture.markUpdated()` |
+| Vertex attributes; indices and `materialIndex` unchanged | `geometry.markVerticesUpdated()` |
+| Indices, `materialIndex` or other geometry data | `geometry.markUpdated()` |
+| `instancedMesh.transforms` elements | `instancedMesh.markTransformsUpdated(start?, count?)` |
+
+Everything else, including the camera, `scene.meshes`, `mesh.transform`,
+replaced geometry, materials, textures or arrays, and `instancedMesh.count`,
+needs only `engine.update()`. Engine BVH settings also take effect at the next
+update; see [BVH](./bvh.md).
 
 ```ts
-mesh.transform[12] += 0.1;           // detected automatically
-material.specularRoughness = 0.6;
-material.markUpdated();
+mesh.transform[12] += 0.1;           // detected
+material.specularRoughness = 0.6;    // detected
+// ...edit texture pixels...
+texture.markUpdated();               // pixels: notify
 engine.update(); final.refine(); engine.display.present(final);
 ```
 
 With RenderLoop, edit sources before the next tick; the loop calls sync.update
 and engine.update. THREESync sends resource notifications for you. See
 [Three.js](./threejs.md#keeping-scenes-in-sync).
-
-## Checking missing material notifications
-
-Use `new Engine({ canvas, validateUpdates: true })` to diagnose forgotten
-`material.markUpdated()` calls. The default is on in development builds and off
-in production builds or native browser ESM. Pass `false` to disable it explicitly.
-
-Each engine.update checks up to 200 materials in rotation, comparing parameters and
-vector elements with their previous inspection. A parameter change without a
-material version change warns once per material. It does not update the material
-for you. Automatically detected texture references, versions and metadata do not
-warn. Geometry arrays and texture pixels are not inspected; changes made before
-a material's first inspection have no baseline to compare.
 
 ## Transforms
 
@@ -101,7 +90,7 @@ the current upload granularity.
 
 ## Materials, textures and lights
 
-`material.markUpdated()` repacks material parameters without touching geometry
+Material parameter edits repack material parameters without touching geometry
 or BVHs. Emission edits also refresh light-sampling state, and texture edits
 rebuild the texture atlas. Displacement settings that move geometry require a
 [full mesh update](#full-mesh-updates); `displacementBumpStrength` affects
@@ -184,6 +173,16 @@ converge on each frame with disjoint sequence offsets.
 
 
 ## Implementation notes
+
+Material detection compares the parameters and vector elements of each
+distinct material once per engine.update, however many meshes share it; cost
+grows with the number of distinct materials. Parameter and texture comparison
+functions use static field accesses generated from the OpenPBR schema, with
+no runtime code generation. Unchanged material snapshots are reused across
+commits; only changed or newly added materials allocate parameter snapshots.
+THREESync refreshes retained
+instance-color and UV-projection variants from the source material; those variants participate in
+normal material detection.
 
 Instance detection checks version, count and storage identity instead of matrix
 elements. On a version or storage change, the engine copies the full transforms

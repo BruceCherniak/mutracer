@@ -56,10 +56,6 @@ the ones marked additive would only add to it.
 
 ## Decided against
 
-- **Automatic per-frame material change detection.** Comparing every field
-  costs about 0.6 ms per 1,000 materials per frame, and Three.js color variants
-  easily produce tens of thousands of materials. The bounded development check
-  (`validateUpdates`) catches the common mistake instead.
 - **A scene graph.** Path tracing consumes a flat instance list. Hierarchy stays
   in Three.js or the application, which computes each world `transform`.
 - **Open material or light type extension.** Every new type needs shader support

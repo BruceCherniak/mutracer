@@ -145,22 +145,19 @@ lights.
 
 ## Updating the scene
 
-Keep the same scene and edit it in place. Scene membership, transforms,
-resource references, lights and backgrounds are detected automatically. Three
-edits need a notification:
+Keep the same scene and edit it in place. `engine.update()` detects property
+assignments, scene membership, transforms, materials, lights and backgrounds.
+In-place edits to array or image contents need a notification:
 
 ```ts
-material.specularRoughness = 0.6;
-material.markUpdated();               // material parameters
-
 texture.markUpdated();                // texture pixels or UV-array elements
 
 geometry.markVerticesUpdated();       // vertex attributes only
 geometry.markUpdated();               // indices, materialIndex or other geometry data
+instancedMesh.markTransformsUpdated(); // instance matrix elements
 ```
 
-See [scene updates](./updates.md) for the full table, vertex animation and
-update costs. RenderLoop calls its syncs automatically. With explicit frame control, call `sync.update()` before engine.update;
+See [scene updates](./updates.md) for vertex animation and update costs. RenderLoop calls its syncs automatically. With explicit frame control, call `sync.update()` before engine.update;
 see [Three.js](./threejs.md).
 
 ## Exporting an image

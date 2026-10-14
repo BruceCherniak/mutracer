@@ -1,7 +1,10 @@
+import { openPbrSchema } from '../scene/openPbrSchema.js';
+import { materialParametersEqual, materialTexturesChanged } from './materialComparison.generated.js';
+export { materialParametersEqual } from './materialComparison.generated.js';
 import Mesh from '../scene/Mesh.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
 import Geometry from '../scene/Geometry.js';
-import OpenPBRMaterial, { materialKeys, materialTextureKeys } from '../scene/OpenPBRMaterial.js';
+import OpenPBRMaterial, { materialTextureKeys } from '../scene/OpenPBRMaterial.js';
 import Texture from '../scene/Texture.js';
 import { Scene, SceneBackground } from '../scene/Scene.js';
 
@@ -56,43 +59,24 @@ function captureMaterialTextures(material: OpenPBRMaterial, out: unknown[]) {
   out.length = i;
 }
 
-function texturesChanged(material: OpenPBRMaterial, previous: readonly unknown[]) {
-  let i = 0;
-  for (const key of materialTextureKeys) {
-    const texture = material[key];
-    if (typeof texture === 'number') continue;
-    if (!texture) { if (previous[i++] !== undefined) return true; continue; }
-    if (previous[i++] !== texture || previous[i++] !== texture.version ||
-      previous[i++] !== texture.image || previous[i++] !== texture.flipY ||
-      previous[i++] !== texture.uvScale || previous[i++] !== texture.uvOffset ||
-      previous[i++] !== texture.uvChannel) return true;
-  }
-  return i !== previous.length;
-}
+// Include scalar texture-category inputs such as displacementBumpStrength;
+// texture references and metadata have their own snapshot.
+const parameterKeys = openPbrSchema.filter(field => field.type !== 'texture').map(field => field.key);
 
-const textureFields = new Set<keyof OpenPBRMaterial>(materialTextureKeys);
-// Texture references and metadata are automatic. The texture-category scalar
-// displacementBumpStrength still requires a material version notification.
-const validationKeys = materialKeys.filter(key => !textureFields.has(key) || key === 'displacementBumpStrength');
-
-function snapshotMaterialParameters(material: OpenPBRMaterial) {
-  return validationKeys.map(key => {
+export function snapshotMaterialParameters(material: OpenPBRMaterial, previous?: readonly unknown[]) {
+  return parameterKeys.map((key, index) => {
     const value = material[key];
-    return Array.isArray(value) || ArrayBuffer.isView(value)
-      ? Array.from(value as ArrayLike<number>) : value;
-  });
-}
-
-function materialParametersEqual(material: OpenPBRMaterial, values: unknown[]) {
-  for (let index = 0; index < validationKeys.length; index++) {
-    const value = material[validationKeys[index]], previous = values[index];
     if (Array.isArray(value) || ArrayBuffer.isView(value)) {
-      const array = value as ArrayLike<number>;
-      if (!Array.isArray(previous) || array.length !== previous.length) return false;
-      for (let i = 0; i < array.length; i++) if (!Object.is(array[i], previous[i])) return false;
-    } else if (!Object.is(value, previous)) return false;
-  }
-  return true;
+      const array = value as ArrayLike<number>, prior = previous?.[index];
+      if (Array.isArray(prior) && prior.length === array.length) {
+        let equal = true;
+        for (let i = 0; i < array.length; i++) if (!Object.is(array[i], prior[i])) { equal = false; break; }
+        if (equal) return prior;
+      }
+      return Array.from(array);
+    }
+    return value;
+  });
 }
 
 const geometryAttributes = ['position', 'normal', 'tangent', 'uv', 'uv1', 'color', 'indices', 'materialIndex'] as const;
@@ -127,7 +111,7 @@ interface Snapshot {
   meshList: Mesh[];
   meshes: MeshSnapshot[];
   matrices: Float64Array;
-  materials: Map<OpenPBRMaterial, { version: number; textures: unknown[] }>;
+  materials: Map<OpenPBRMaterial, { values: readonly unknown[]; textures: unknown[] }>;
   lightList: Scene['lights'];
   lights: unknown[][];
   background: unknown[];
@@ -139,33 +123,6 @@ export class SceneChangeDetector {
   private _pending?: Snapshot;
   private _spare?: Snapshot;
   private _seen = new Set<OpenPBRMaterial>();
-  private _validationMaterials: OpenPBRMaterial[] = [];
-  private _validationCursor = 0;
-  private _validationSnapshots = new WeakMap<OpenPBRMaterial, { version: number; values: unknown[] }>();
-  private _validationWarned = new WeakSet<OpenPBRMaterial>();
-
-  constructor(private _validateUpdates = false) {}
-
-  private _validateMaterials(membershipChanged: boolean) {
-    if (!this._validateUpdates) return;
-    if (membershipChanged) this._validationMaterials = [...this._seen];
-    const materials = this._validationMaterials;
-    const count = Math.min(200, materials.length);
-    for (let checked = 0; checked < count; checked++) {
-      this._validationCursor %= materials.length;
-      const material = materials[this._validationCursor++];
-      const previous = this._validationSnapshots.get(material);
-      const notified = !previous || previous.version !== material.version;
-      if (notified || !materialParametersEqual(material, previous.values)) {
-        if (!notified && !this._validationWarned.has(material)) {
-          this._validationWarned.add(material);
-          console.warn('material changed without markUpdated()', material);
-        }
-        this._validationSnapshots.set(material, { version: material.version, values: snapshotMaterialParameters(material) });
-      }
-    }
-  }
-
   detect(scene: Scene): SceneChanges {
     const old = this._snapshot;
     let full = !old || old.meshList !== scene.meshes || old.meshes.length !== scene.meshes.length;
@@ -201,11 +158,10 @@ export class SceneChangeDetector {
         if (seen.has(material)) continue;
         seen.add(material);
         const prior = old?.materials.get(material);
-        if (!prior || prior.version !== material.version ||
-          texturesChanged(material, prior.textures)) materials.push(material);
+        if (!prior || !materialParametersEqual(material, prior.values) ||
+          materialTexturesChanged(material, prior.textures)) materials.push(material);
       }
     }
-    this._validateMaterials(full);
     const lights = scene.lights.map(snapshotFields);
     const background = backgroundSnapshot(scene.background);
     const changes: SceneChanges = {
@@ -241,11 +197,21 @@ export class SceneChangeDetector {
         next!.matrices.set(mesh.transform, i * 16);
       });
       for (const material of next.materials.keys()) if (!seen.has(material)) next.materials.delete(material);
+      const changedMaterials = new Set(materials);
       for (const material of seen) {
-        let item = next.materials.get(material);
-        if (!item) { item = { version: material.version, textures: [] }; next.materials.set(material, item); }
-        item.version = material.version;
-        captureMaterialTextures(material, item.textures);
+        const previous = old?.materials.get(material);
+        if (previous && !changedMaterials.has(material)) {
+          next.materials.set(material, previous);
+        } else {
+          // Never overwrite a shared committed entry. The other buffer's
+          // retired entry can reuse its texture storage; parameter arrays and
+          // their reused vector snapshots remain immutable after capture.
+          let item = next.materials.get(material);
+          if (!item || item === previous) item = { values: [], textures: [] };
+          item.values = snapshotMaterialParameters(material, previous?.values);
+          captureMaterialTextures(material, item.textures);
+          next.materials.set(material, item);
+        }
       }
       next.lightList = scene.lights; next.lights = lights; next.background = background;
       this._pending = next;
@@ -260,5 +226,5 @@ export class SceneChangeDetector {
     }
     this._pending = undefined;
   }
-  reset() { this._snapshot = this._pending = this._spare = undefined; this._seen.clear(); this._validationMaterials = []; this._validationCursor = 0; }
+  reset() { this._snapshot = this._pending = this._spare = undefined; this._seen.clear(); }
 }

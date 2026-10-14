@@ -44,7 +44,7 @@ it('commits notified matrices once, isolates edits and keeps snapshots stable du
   const storage = committed.transforms, set = vi.spyOn(storage, 'set');
   mesh.transforms[28] = 8;
   expect(engine.update()).toBe(false); expect(storage[28]).toBe(3); expect(set).not.toHaveBeenCalled();
-  mesh.materials[0].baseColor = [.8,.1,.2]; mesh.materials[0].markUpdated(); engine.update();
+  mesh.materials[0].baseColor = [.8,.1,.2];  engine.update();
   expect(storage[28]).toBe(3); expect(set).not.toHaveBeenCalled();
   mesh.markTransformsUpdated(1,1); expect(engine.update()).toBe(true);
   expect(committed.transforms).toBe(storage); expect(storage[28]).toBe(8); expect(set).toHaveBeenCalledOnce();

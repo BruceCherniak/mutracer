@@ -1,4 +1,5 @@
 import { normalizeBounces } from './pathLimits.js';
+import { getMaterialHashKey } from '../scene/openPbrSchema.js';
 import { sameInstanceMembership } from './meshInstances.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
 import { dirtyMeshInstanceIndices } from './prepareMeshBVH.js';
@@ -154,7 +155,7 @@ class WebGLRayTracePass {
     instanceTransforms?: Float32Array;
     geometry: Mesh['geometry'];
     materials: OpenPBRMaterial[];
-    materialVersions: number[];
+    materialKeys: string[];
     geometryVersion: number;
     positionArray: Float32Array;
     indexArray: Geometry['indices']['array'];
@@ -416,7 +417,7 @@ class WebGLRayTracePass {
             emission: !!pending?.emission || change.emission,
             emissiveMap: !!pending?.emissiveMap || change.emissiveMap,
             materials: new Set([...(pending?.materials ?? []), ...update.materials]) };
-          this._meshSnapshot.forEach(item => { item.materialVersions = item.materials.map(m => m.version); });
+          this._meshSnapshot.forEach(item => { item.materialKeys = item.materials.map(getMaterialHashKey); });
         }
         for (const geometry of update.geometries ?? []) this._pendingGeometryUpdates.add(geometry);
         for (const item of this._meshSnapshot) if (this._pendingGeometryUpdates.has(item.geometry)) item.geometryVersion = item.geometry.version;
@@ -437,7 +438,7 @@ class WebGLRayTracePass {
       instanceTransforms: mesh instanceof InstancedMesh ? mesh.transforms : undefined,
       geometry: mesh.geometry,
       materials: mesh.materials.slice(),
-      materialVersions: mesh.materials.map(material => material.version),
+      materialKeys: mesh.materials.map(getMaterialHashKey),
       geometryVersion: mesh.geometry.version,
       positionArray: mesh.geometry.position.array, indexArray: mesh.geometry.indices.array,
       matrix: Array.from(mesh.transform as ArrayLike<number>)
@@ -448,10 +449,10 @@ class WebGLRayTracePass {
     const membership = !this._needsUpdateMeshData && membershipChanged && this._preparedMeshData
       ? this._membershipCache.update(this._preparedMeshData, meshes) : undefined;
     if (membership) {
-      const versions = new Map(this._meshSnapshot.flatMap(item => item.materials.map((m, i) => [m, item.materialVersions[i]] as const)));
+      const versions = new Map(this._meshSnapshot.flatMap(item => item.materials.map((m, i) => [m, item.materialKeys[i]] as const)));
       const materialsChanged = membership.materials.length !== this._preparedMeshData!.materials.length ||
         membership.materials.some((m, i) => m !== this._preparedMeshData!.materials[i] ||
-          versions.has(m) && m.version !== versions.get(m));
+          versions.has(m) && getMaterialHashKey(m) !== versions.get(m));
       this._pendingMembershipData = membership;
       this._meshes = meshes;
       this._meshSnapshot = next;
@@ -474,7 +475,7 @@ class WebGLRayTracePass {
           item.geometry !== prev.geometry ||
           item.materials.length !== prev.materials.length ||
           item.materials.some((material, k) => material !== prev.materials[k]) ||
-          item.materialVersions.some((hash, k) => hash !== prev.materialVersions[k]) ||
+          item.materialKeys.some((hash, k) => hash !== prev.materialKeys[k]) ||
           item.geometryVersion !== prev.geometryVersion ||
           item.matrix.some((value, k) => value !== prev.matrix[k])
         );

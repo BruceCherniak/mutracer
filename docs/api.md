@@ -5,7 +5,7 @@ See [progressive rendering](./progressive-rendering.md) for complete examples.
 
 ## Engine
 
-`new Engine({canvas?, backend?, device?, validateUpdates?})` manages the device and one GPU
+`new Engine({canvas?, backend?, device?})` manages the device and one GPU
 scene. `scene` and `camera` default to undefined. Assign them and call
 `update()` to commit edits before rendering; see [updates](./updates.md).
 
@@ -14,7 +14,6 @@ scene. `scene` and `camera` default to undefined. Assign them and call
 | `canvas` | new HTML canvas, or OffscreenCanvas without document | Accepts either canvas type; default `engine.display.canvas` |
 | `device` | undefined | Caller-owned WebGPU device; see [requirements](#device-requirements) |
 | `backend` | `'auto'` | Automatic WebGPU/WebGL selection; `'webgpu'` requires WebGPU; `'webgl'` forces WebGL 2 |
-| `validateUpdates` | development build | Warn about missing material notifications |
 | `bvhBuilder` | `'builtin'` | JavaScript or `'tinybvh'` WebAssembly |
 | `bvhWorkerCount` | `'auto'` | Hardware concurrency minus one, clamped 1–4; or positive integer |
 | `bvhLayout` | `'bvh2'` | Static TinyBVH layout; see [BVH](./bvh.md) |
@@ -334,7 +333,7 @@ They follow the existing material/texture update mechanism.
 
 `coatNormalMap` defaults to `undefined`, retaining the shared shading normal. With a map, linear RGB supplies an independent coat normal; `coatNormalScale` defaults to `[1, 1]` and scales its decoded XY. See [coat normals](./materials.md#coat-normals) for frame, sampling and update behavior.
 
-`Geometry`, `Texture` and `OpenPBRMaterial` expose `version` (initially `0`)
+`Geometry` and `Texture` expose `version` (initially `0`)
 and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 (initially `0`) and `markVerticesUpdated(): this`, which advances only
 `version`. See [scene updates](./updates.md) for when to call each.

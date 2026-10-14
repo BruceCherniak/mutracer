@@ -38,7 +38,6 @@ it('assigns material slots by identity and retains them after parameter edits', 
   expect(before.materials).toEqual([a,b]);
   expect(before.instanceBindings.map(b => b.materialIndices)).toEqual([[0],[1],[0]]);
   a.specularRoughness = 0.7;
-  a.markUpdated();
   expect(updateMeshInstances(meshes).instanceBindings.map(b => b.materialIndices)).toEqual([[0],[1],[0]]);
 });
 

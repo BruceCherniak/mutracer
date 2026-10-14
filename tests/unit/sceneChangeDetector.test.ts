@@ -47,7 +47,7 @@ describe('scene change detection', () => {
     const { scene, detector, mesh, material } = fixture();
     scene.meshes.push(new Mesh(mesh.geometry, material));
     material.map = texture(); detector.detect(scene); detector.commit();
-    material.markUpdated();
+    material.baseColor[1] = .4;
     expect(detector.detect(scene).materials).toEqual([material]);
     detector.commit(); material.map.markUpdated();
     expect(detector.detect(scene).materials).toEqual([material]);
@@ -90,7 +90,7 @@ it('reports projection edits through the material without changing mesh structur
   const { scene, detector, material } = fixture();
   detector.detect(scene); detector.commit();
   for (const field of ['uvProjection', 'displacementUvProjection'] as const) {
-    material[field] = 'triplanar'; material.markUpdated();
+    material[field] = 'triplanar';
     const change = detector.detect(scene);
     expect(change.meshes).toBe('incremental'); expect(change.materials).toEqual([material]);
     expect(change.transforms).toEqual([]); detector.commit();
@@ -98,11 +98,11 @@ it('reports projection edits through the material without changing mesh structur
 });
 
 
-it('keeps reporting the latest uncommitted pose and material versions throughout animation', () => {
+it('keeps reporting the latest uncommitted pose and material parameters throughout animation', () => {
   const { scene, detector, mesh, material } = fixture();
   for (let frame = 1; frame <= 200; frame++) {
     mesh.transform[12] = frame;
-    material.markUpdated();
+    material.specularRoughness = frame / 201;
     const first = detector.detect(scene);
     expect(first.transforms).toEqual([mesh]); expect(first.materials).toEqual([material]);
     mesh.transform[13] = frame * 2;

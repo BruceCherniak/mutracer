@@ -1,53 +1,39 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import OpenPBRMaterial, { materialKeys, materialTextureKeys, materialGeometryKeys, materialParamKeys } from '../../src/scene/OpenPBRMaterial';
+import { SceneChangeDetector } from '../../src/renderer/sceneChangeDetector';
+import Mesh from '../../src/scene/Mesh';
+import { createCubeGeometry } from '../../src/util/commonGeometry';
 
-it('versions material edits and exhaustively classifies independent property groups', () => {
+it('exhaustively classifies independent material property groups', () => {
   const material = new OpenPBRMaterial();
-  expect(material.version).toBe(0);
-  expect(material.markUpdated()).toBe(material);
-  expect(material.version).toBe(1);
   const grouped = [...materialTextureKeys, ...materialGeometryKeys, ...materialParamKeys];
   expect(new Set(grouped).size).toBe(grouped.length);
   expect([...grouped].sort()).toEqual([...materialKeys].sort());
-  expect(Object.keys(material).filter(key => key !== 'version').sort()).toEqual([...materialKeys].sort());
+  expect(Object.keys(material).sort()).toEqual([...materialKeys].sort());
 });
 
-import { vi } from 'vitest';
-import { SceneChangeDetector } from '../../src/renderer/sceneChangeDetector';
-import Mesh from '../../src/scene/Mesh';
-import Texture from '../../src/scene/Texture';
-import { createCubeGeometry } from '../../src/util/commonGeometry';
-
-it('warns once for unnotified material array/scalar edits and permits automatic texture changes', () => {
+it('detects scalar, vector element, vector replacement and displacement bump edits without notifications', () => {
   const material = new OpenPBRMaterial(), geometry = createCubeGeometry();
-  const scene = { meshes:[new Mesh(geometry,material)],lights:[] };
-  const detector = new SceneChangeDetector(true);
-  const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
-  try {
-    detector.detect(scene); detector.commit();
-    material.map = new Texture({data:new Uint8Array(4),width:1,height:1});
-    detector.detect(scene);detector.commit(); material.map.markUpdated();
-    detector.detect(scene);detector.commit();material.map.uvScale[0] = 2;material.map.markUpdated();
-    detector.detect(scene);detector.commit();expect(warn).not.toHaveBeenCalled();
-    material.specularRoughness=.7;material.markUpdated();detector.detect(scene);detector.commit();
-    expect(warn).not.toHaveBeenCalled();
-    material.baseColor[0]=.25;detector.detect(scene);detector.commit();
-    expect(warn).toHaveBeenCalledWith('material changed without markUpdated()',material);
-    material.specularRoughness=.2;detector.detect(scene);detector.commit();
-    expect(warn).toHaveBeenCalledTimes(1);
-    const other = new OpenPBRMaterial();scene.meshes[0].materials=[other];detector.detect(scene);detector.commit();
-    other.displacementBumpStrength=.5;detector.detect(scene);expect(warn).toHaveBeenCalledTimes(2);
-  } finally {warn.mockRestore();}
+  const scene = {meshes: [new Mesh(geometry, material)], lights: []};
+  const detector = new SceneChangeDetector(); detector.detect(scene); detector.commit();
+  for (const edit of [() => {material.specularRoughness = .7;}, () => {material.baseColor[1] = .2;},
+    () => {material.baseColor = [.1,.2,.3];}, () => {material.displacementBumpStrength = .5;}]) {
+    edit();
+    expect(detector.detect(scene)).toMatchObject({meshes: 'incremental', materials: [material], transforms: [], geometries: []});
+    detector.commit(); expect(detector.detect(scene).meshes).toBe('none');
+  }
+  material.baseColor = [...material.baseColor];
+  expect(detector.detect(scene).materials).toEqual([]);
 });
 
-it('checks at most 200 materials per frame and eventually visits every material', () => {
-  const geometry=createCubeGeometry(); const materials=Array.from({length:401},()=>new OpenPBRMaterial());
-  const scene={meshes:materials.map(m=>new Mesh(geometry,m)),lights:[]};
-  const detector=new SceneChangeDetector(true);const warn=vi.spyOn(console,'warn').mockImplementation(()=>{});
-  try {
-    for(let i=0;i<3;i++){detector.detect(scene);detector.commit();}
-    for(const m of materials)m.baseColor[0]=.2;
-    for(let i=0;i<3;i++){const before=warn.mock.calls.length;detector.detect(scene);detector.commit();expect(warn.mock.calls.length-before).toBeLessThanOrEqual(200);}
-    expect(warn).toHaveBeenCalledTimes(401);
-  }finally {warn.mockRestore();}
+it('compares a shared material once and reports its change once', () => {
+  const material = new OpenPBRMaterial(), geometry = createCubeGeometry();
+  const scene = {meshes: Array.from({length: 50}, () => new Mesh(geometry, material)), lights: []};
+  const detector = new SceneChangeDetector(); detector.detect(scene); detector.commit();
+  material.baseColor[0] = .2;
+  const read = vi.fn(() => .8);
+  Object.defineProperty(material, 'baseWeight', {get: read, configurable: true});
+  expect(detector.detect(scene).materials).toEqual([material]);
+  // One comparison and one capture of pending state, independent of mesh count.
+  expect(read).toHaveBeenCalledTimes(2);
 });

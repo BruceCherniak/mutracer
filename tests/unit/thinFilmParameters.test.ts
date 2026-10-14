@@ -33,7 +33,7 @@ describe('thin-film texture parameters', () => {
   it('classifies range/channel edits as parameters and extends the hash', () => {
     const m = new Material({thinFilmMap: tex()}), tracker = new MaterialChangeTracker();
     tracker.capture([m]); const hash = getMaterialHashKey(m);
-    m.thinFilmThicknessMinimum = .1; m.thinFilmMapChannel = 'g'; m.markUpdated();
+    m.thinFilmThicknessMinimum = .1; m.thinFilmMapChannel = 'g';
     expect(getMaterialHashKey(m)).not.toBe(hash);
     expect(tracker.classify([m])).toEqual({level: 'params', emission: false, emissiveMap: false});
   });
@@ -56,9 +56,9 @@ describe('thin-film texture parameters', () => {
     const source = new THREE.MeshPhysicalMaterial(); source.iridescenceThicknessMap = new THREE.Texture({width: 1,height: 1});
     const scene = new THREE.Scene(); scene.add(new THREE.Mesh(new THREE.BoxGeometry(), source));
     const sync = new THREESync(new Engine({canvas: {width: 1,height: 1} as HTMLCanvasElement}), {scene});
-    sync.update(); const m = sync.scene!.meshes[0].materials[0], texture = m.thinFilmMap, version = m.version;
+    sync.update(); const m = sync.scene!.meshes[0].materials[0], texture = m.thinFilmMap, hash = getMaterialHashKey(m);
     source.iridescenceThicknessRange = [300,0]; sync.update();
-    expect(m).toBe(sync.scene!.meshes[0].materials[0]); expect(m.version).toBeGreaterThan(version);
+    expect(m).toBe(sync.scene!.meshes[0].materials[0]); expect(getMaterialHashKey(m)).not.toBe(hash);
     expect(m.thinFilmMap).toBe(texture); expect(m.thinFilmThicknessMinimum).toBe(.3); expect(m.thinFilmThickness).toBe(0);
   });
 });
