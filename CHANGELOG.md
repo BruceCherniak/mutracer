@@ -3,6 +3,23 @@
 All notable changes to MuTracer will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.1.1 - 2026-10-14
+
+### Added
+
+- README gallery, performance measurements and expanded feature overview.
+
+### Changed
+
+- Interactive previews adapt resolution to tracing, denoising and display latency.
+
+### Fixed
+
+- Denoised previews remain responsive and finish during continuous interaction, with stable transitions to the final render.
+- Three.js camera controls settle reliably and account for elapsed time when damping.
+- Animation and incremental geometry updates retain prepared BVHs.
+- Shadow catcher denoising receives auxiliary albedo and normal guides on both WebGPU and WebGL 2, reducing color artifacts.
+
 ## 0.1.0 - 2026-10-14
 
 ### Added
