@@ -41,7 +41,7 @@ body:
     id: diagnostics
     attributes:
       label: Renderer diagnostics
-      description: Paste the output of renderer.getDiagnostics().
+      description: Paste the output of engine.getDiagnostics().
       render: json
     validations:
       required: true

@@ -180,7 +180,9 @@ platforms; `refine()` reports the progress through its return status.
 
 ## Contributing
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup, required checks
+Pull requests are not accepted at the moment; please open an
+[issue](https://github.com/pissang/mutracer/issues) instead. See
+[CONTRIBUTING.md](./CONTRIBUTING.md) for development setup, required checks
 and GPU validation.
 
 ## License
