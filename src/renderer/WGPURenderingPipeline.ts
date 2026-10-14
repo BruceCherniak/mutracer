@@ -829,11 +829,13 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     }
 
     // Never enter a waiting prediction state while the shared timestamp
-    // buffer is still being mapped. Render normally and retry the probe on a
-    // later frame. The probe itself is also non-blocking: if readback fails or
+    // buffer is still being mapped. Render normally and retry the probe at an
+    // accumulation restart; a delayed probe must not discard visible samples.
+    // The probe itself is also non-blocking: if readback fails or
     // is superseded, the renderer keeps using the conservative tile seed.
     if (
       offlineSamplesPerBatch === 0 &&
+      resetAccumulation &&
       tileRenderWithPredict &&
       needsUpdatePredicting &&
       timeQuery?.resultBuffer.mapState === 'unmapped'

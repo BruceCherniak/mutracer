@@ -1110,8 +1110,12 @@ export interface THREEControls {
   removeEventListener(type: 'start' | 'end', listener: () => void): void;
   target?: THREE.Vector3;
   enableDamping?: boolean;
+  /** Damping per 60 Hz frame; synchronization adjusts it for elapsed time. Default undefined uses the control's own timing. */
+  dampingFactor?: number;
   autoRotate?: boolean;
   enabled?: boolean;
+  /** Optional OrbitControls polar-angle accessor. Default undefined. */ getPolarAngle?(): number;
+  /** Optional OrbitControls azimuthal-angle accessor. Default undefined. */ getAzimuthalAngle?(): number;
 }
 /** Three.js sources synchronized on each tick. */
 export interface THREESyncOptions extends FromTHREESceneOptions {
@@ -1119,6 +1123,21 @@ export interface THREESyncOptions extends FromTHREESceneOptions {
   /** Camera source. Default undefined (engine.camera is untouched). */ camera?: THREE.PerspectiveCamera | THREE.OrthographicCamera;
   /** Camera controls. Default undefined. */ controls?: THREEControls;
   /** Call controls.update during synchronization. Default true. */ updateControls?: boolean;
+}
+
+/** Inputs that can wake an idle OrbitControls instance, without inspecting its private inertia. */
+function orbitControlsState(camera: THREE.PerspectiveCamera | THREE.OrthographicCamera | undefined, controls: THREEControls): unknown[] | undefined {
+  if (!camera || !controls.getPolarAngle || !controls.getAzimuthalAngle) return;
+  camera.parent?.updateWorldMatrix(true, false);
+  const state: unknown[] = [camera, controls.update, camera.parent, ...camera.position.toArray(), ...camera.quaternion.toArray(),
+    ...camera.scale.toArray(), ...camera.up.toArray(), camera.zoom, ...(camera.parent?.matrixWorld.elements ?? [])];
+  for (const [key, value] of Object.entries(controls)) {
+    if (key.startsWith('_')) continue;
+    const vector = value as THREE.Vector3 | undefined;
+    if (vector?.isVector3) state.push(key, ...vector.toArray());
+    else if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'string') state.push(key, value);
+  }
+  return state;
 }
 /**
  * Keeps one MuTracer scene in sync with a Three.js scene, reusing unchanged objects.
@@ -1138,7 +1157,8 @@ export class THREESync extends Sync {
   private _started = false;
   private _cameraState: unknown[] = [];
   private _lastUpdate?: number;
-  private _start = () => {this._started = true; this.setActive(true);};
+  private _idleControlsState?: unknown[];
+  private _start = () => {this._started = true; this._idleControlsState = undefined; this.setActive(true);};
   private _end = () => {this._started = false;};
   /** Subscribes to controls without converting sources or modifying the engine. */
   constructor(engine: Engine, private _options: THREESyncOptions = {}) {
@@ -1151,21 +1171,39 @@ export class THREESync extends Sync {
   update(): void {
     if (this._disposed) throw new Error('THREESync has been disposed');
     const now = performance.now(), controls = this._options.controls, sourceCamera = this._options.camera;
-    const dt = this._lastUpdate === undefined ? 0 : Math.min(.1, Math.max(0, (now - this._lastUpdate) / 1000));
+    const elapsed = this._lastUpdate === undefined ? 0 : Math.max(0, (now - this._lastUpdate) / 1000);
+    const dt = Math.min(.1, elapsed);
     this._lastUpdate = now;
     let moving = false, settled = false;
     if (controls && this._options.updateControls !== false) {
-      const position = sourceCamera?.position.clone(), zoom = sourceCamera?.zoom;
-      moving = !!controls.update(dt);
-      if (!this._started && !controls.autoRotate && controls.enableDamping && position && sourceCamera && controls.target) {
-        const step = position.distanceTo(sourceCamera.position);
-        const zoomStep = Math.abs(Math.log(sourceCamera.zoom / zoom!));
-        // OrbitControls can move below its change-event threshold while update()
-        // returns false. Flush that tail too, before cameraChanged keeps it active.
-        if ((moving || step > 0 || zoomStep > 0) && step < 5e-4 * sourceCamera.position.distanceTo(controls.target) && zoomStep < 5e-4) {
-          controls.enableDamping = false;
-          try {controls.update(0);} finally {controls.enableDamping = true;}
-          moving = false; settled = true;
+      const orbitInputs = orbitControlsState(sourceCamera, controls);
+      const idle = !this._started && !controls.autoRotate && orbitInputs && this._idleControlsState && snapshotsEqual(orbitInputs, this._idleControlsState);
+      if (!idle) {
+        this._idleControlsState = undefined;
+        const position = sourceCamera?.position.clone(), rotation = sourceCamera?.quaternion.clone(), zoom = sourceCamera?.zoom;
+        const target = controls.target?.clone(), damping = controls.dampingFactor;
+        const frameDamping = controls.enableDamping && damping !== undefined && damping >= 0 && damping <= 1
+          ? 1 - Math.pow(1 - damping, elapsed * 60) : undefined;
+        if (frameDamping !== undefined) controls.dampingFactor = frameDamping;
+        try {moving = !!controls.update(dt);}
+        finally {if (frameDamping !== undefined) controls.dampingFactor = damping;}
+        if (!this._started && !controls.autoRotate && controls.enableDamping && position && sourceCamera && controls.target) {
+          const referenceScale = frameDamping ? damping! / frameDamping : 1;
+          const step = position.distanceTo(sourceCamera.position) * referenceScale;
+          const zoomStep = Math.abs(Math.log(sourceCamera.zoom / zoom!)) * referenceScale;
+          const poseChanged = step > 0 || sourceCamera.zoom !== zoom || !!(orbitInputs && (!rotation!.equals(sourceCamera.quaternion) || !target!.equals(controls.target)));
+          // End the remaining inertia once its 60 Hz movement is imperceptible.
+          // update() can return false before that tail has actually stopped.
+          if ((moving || poseChanged) && step < 5e-4 * sourceCamera.position.distanceTo(controls.target) && zoomStep < 5e-4) {
+            controls.enableDamping = false;
+            try {controls.update(0);} finally {controls.enableDamping = true;}
+            moving = false; settled = true;
+          }
+          // Once stopped, no more spherical/cartesian round trips occur until
+          // a gesture, source pose, parent transform or public control option changes.
+          if (orbitInputs && (settled || (!moving && !poseChanged))) this._idleControlsState = orbitControlsState(sourceCamera, controls);
+        } else if (orbitInputs && !this._started && !controls.autoRotate && !moving) {
+          this._idleControlsState = orbitControlsState(sourceCamera, controls);
         }
       }
     }
@@ -1194,7 +1232,7 @@ export class THREESync extends Sync {
     if (this._disposed) return;
     this._options.controls?.removeEventListener('start', this._start);
     this._options.controls?.removeEventListener('end', this._end);
-    this._store = createConversionStore(); this._disposed = true; super.dispose();
+    this._store = createConversionStore(); this._idleControlsState = undefined; this._disposed = true; super.dispose();
   }
 }
 

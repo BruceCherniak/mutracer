@@ -41,7 +41,9 @@ export default class RenderLoop {
   private _disposed = false;
   private _cancelScheduled?: () => void;
   private _warnedTick = false;
-  private _previewDenoising = false;
+  /** Render whose next presentation is waiting for preview inference. */
+  private _previewFrameOwner?: Render;
+  private _presented?: Render;
   private _finishedImage?: string;
   private _unsubscribe: () => void;
   constructor(readonly engine: Engine, options: RenderLoopOptions = {}) {
@@ -86,6 +88,11 @@ export default class RenderLoop {
     if (status !== this._status) { const previous = this._status; this._status = status; this._events.emit('status', {status, previous}); }
     return status;
   }
+  private _present(render: Render): Render | undefined {
+    const shown = this.display.present(render);
+    if (shown) this._presented = shown;
+    return shown;
+  }
   /** Executes one manual tick. Calls during start are ignored with one warning. */
   tick(): RenderLoopStatus {
     this._assertAlive();
@@ -95,31 +102,37 @@ export default class RenderLoop {
   private _tick(): RenderLoopStatus {
     if (this._busy || (typeof document !== 'undefined' && document.hidden)) return this.status;
     for (const sync of this._syncs) sync.update();
-    const holding = this.coalesceSceneUpdates && !!this.preview?.denoising;
-    // Present completed inference before a newer engine revision can invalidate it,
-    // including synchronous filters which finish between animation frames.
-    if (this.coalesceSceneUpdates && this._previewDenoising && !this.preview?.denoising && this.preview) this.display.present(this.preview);
+    const owner = this.coalesceSceneUpdates ? this._previewFrameOwner : undefined;
+    const pendingPreview = !!owner && (owner === this.preview || !owner._complete);
+    const holding = pendingPreview && !!this.preview?.denoising;
+    // Inference belongs to a presentation, not merely to a background render.
+    // A fallback result must never replace an already available final image.
+    if (pendingPreview && !holding && this.preview) this._present(this.preview);
+    if (!holding) this._previewFrameOwner = undefined;
     const changed = holding ? false : this.engine.update();
     const active = [...this._syncs].some(sync => sync.active);
     this._policy = updateProgressiveState(this._policy, changed, active, performance.now(), this.idleMs);
     this._changing = this._policy.changing;
     const selected = this.select({changing: this.changing});
     if (holding && this.preview) {
-      this._previewDenoising = true;
       return this._setStatus('previewing');
     }
     const current = selected === 'preview' && this.preview ? this.preview : this.final;
     const imageState = loopImageState(this.final, this.display);
     if (!changed && !this.changing && current === this.final && this.status === 'finished' && this.final.status === 'finished' && imageState === this._finishedImage) return this.status;
     // Invalidate a completed filter before refinement when display settings changed.
-    if (this.status === 'finished' && imageState !== this._finishedImage && this.final.samples > 0) this.display.present(this.final);
+    if (this.status === 'finished' && imageState !== this._finishedImage && this.final.samples > 0) this._present(this.final);
     const status = current.refine();
     // Keep the canvas on the last completed image while filtering the next
     // preview; presenting its raw sample here would overwrite the denoise above.
-    const waitingForPreview = this.coalesceSceneUpdates && current === this.preview && current.denoising;
-    const shown = waitingForPreview ? undefined : this.display.present(current);
-    this._previewDenoising = !!this.preview?.denoising;
-    const next = status === 'error' ? 'error' : waitingForPreview || shown === this.preview && shown ? 'previewing' : status;
+    const waitingForPreview = this.coalesceSceneUpdates && !!this.preview?.denoising &&
+      (current === this.preview || (!current._complete && current.fallback === this.preview));
+    if (waitingForPreview) this._previewFrameOwner = current;
+    else this._present(current);
+    // Execution may already be tracing final tiles while the canvas still shows
+    // preview. Only a successful presentation transfers ownership of the image.
+    const previewing = waitingForPreview || (!!this.preview && this._presented === this.preview);
+    const next = status === 'error' ? 'error' : previewing ? 'previewing' : status;
     this._finishedImage = next === 'finished' ? loopImageState(this.final, this.display) : undefined;
     return this._setStatus(next);
   }
@@ -136,7 +149,7 @@ export default class RenderLoop {
   /** Pauses ticks, converges final, presents it, and resumes a previously running loop. */
   async converge(options: ConvergeOptions): Promise<ConvergeResult> {
     this._assertAlive(); if (this._busy) throw new Error('RenderLoop convergence is already running.');
-    this._busy = true; this._cancelFrame();
+    this._busy = true; this._previewFrameOwner = undefined; this._cancelFrame();
     try {
       for (const sync of this._syncs) sync.update(); this.engine.update();
       this._setStatus('preparing');
@@ -144,7 +157,7 @@ export default class RenderLoop {
         this._setStatus(progress.stage === 'denoising' ? 'denoising' : this.final.status);
         options.onProgress?.(progress);
       }});
-      this.display.present(this.final); this._setStatus('finished'); return result;
+      this._present(this.final); this._setStatus('finished'); return result;
     } catch (error) {this._setStatus('error'); throw error;}
     finally {this._busy = false; this._schedule();}
   }

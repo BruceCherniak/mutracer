@@ -3,6 +3,16 @@ import Render from '../../src/Render';
 import { renderFixture } from '../helpers/renderPipeline';
 
 describe('independent Render', () => {
+  it('keeps final and preview resolution independent on a full-size display', () => {
+    const {engine} = renderFixture(); engine.display.setSize(800, 600);
+    const preview = new Render(engine, {resolutionScale: .5});
+    const final = new Render(engine, {resolutionScale: .25, fallback: preview});
+    preview.refine(); final.refine();
+    expect([preview.width, preview.height, final.width, final.height]).toEqual([400, 300, 200, 150]);
+    final.resolutionScale = 1; final.refine(); preview.refine();
+    expect([preview.width, preview.height, final.width, final.height]).toEqual([400, 300, 800, 600]);
+    expect([engine.display.canvas.width, engine.display.canvas.height]).toEqual([800, 600]); engine.dispose();
+  });
   it('accumulates three interleaved outputs and selects the requested read/present target', async () => {
     const {engine, targets, operations} = renderFixture();
     const a = new Render(engine), b = new Render(engine), c = new Render(engine, {width: 256, height: 256});

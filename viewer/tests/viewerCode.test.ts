@@ -33,7 +33,7 @@ describe('viewer code snippet', () => {
     expect(syntaxErrors(code)).toEqual([]);
     expect(code).not.toContain('engine.display,');
     expect(code).toContain("loadAsync('https://example.com/model.glb')");
-    expect(code).toContain('final: { maxSamples: 64, bounces: 6 }');
+    expect(code).toContain('final: { maxSamples: 64, bounces: 6, resolutionScale: 0.5 }');
     expect(code).not.toContain(', Sync }');
   });
 

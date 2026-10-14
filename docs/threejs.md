@@ -193,8 +193,9 @@ Construction subscribes to control events. The first update converts and writes
 sources to the engine. `scene` exposes the retained converted scene, or undefined
 when no source was supplied. A camera-only sync preserves a MuTracer-built scene.
 `active` covers start/end interaction, camera movement, damping and changing
-skinned/morph poses. The damping tail ends when movement and zoom fall below
-0.05% of view distance, allowing final refinement in that same tick.
+skinned/morph poses. OrbitControls damping stays consistent across render frame
+rates, and final refinement resumes when motion settles. Use
+`updateControls: false` when your application already updates the controls.
 
 `fromTHREEScene(scene, options?)` and `fromTHREECamera(camera, options?)` remain
 available for one-shot conversions. Each call reruns conversion hooks and creates fresh default objects; custom

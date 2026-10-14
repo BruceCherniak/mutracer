@@ -40,7 +40,7 @@ export interface CodeSnapshot {
 }
 
 /** Library defaults the code leaves out. */
-const RENDER_DEFAULTS = { maxSamples: 2048, bounces: 3, samplingPattern: 'sobol', clamping: 0 };
+const RENDER_DEFAULTS = { maxSamples: 2048, bounces: 3, resolutionScale: 1, samplingPattern: 'sobol', clamping: 0 };
 const PREVIEW_DEFAULTS = { resolutionScale: 0.5, minScale: 0.25, bounces: 2 };
 const DISPLAY_DEFAULTS: [keyof Settings, string, unknown][] = [
   ['toneMapping', 'toneMapping', 'agx'], ['exposure', 'toneMappingExposure', 1], ['contrast', 'contrast', 1],
@@ -272,7 +272,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
     const minScale = Math.min(PREVIEW_DEFAULTS.minScale, scale);
     preview = {
       resolutionScale: scale !== PREVIEW_DEFAULTS.resolutionScale ? scale : undefined,
-      adaptiveResolution: minScale !== PREVIEW_DEFAULTS.minScale ? { targetFrameMs: 20, minScale } : undefined,
+      adaptiveResolution: minScale !== PREVIEW_DEFAULTS.minScale ? {targetFrameMs: 20, minScale} : undefined,
       bounces: Math.min(PREVIEW_DEFAULTS.bounces, s.bounces) !== PREVIEW_DEFAULTS.bounces ? s.bounces : undefined,
       samplingPattern: s.samplingPattern !== RENDER_DEFAULTS.samplingPattern ? s.samplingPattern : undefined,
       clamping: s.clamping !== RENDER_DEFAULTS.clamping ? s.clamping : undefined,
@@ -290,7 +290,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
     '});',
     '',
     'new ResizeObserver(() => {',
-    `  const scale = Math.min(devicePixelRatio, 2)${s.resolutionScale !== 1 ? ` * ${num(s.resolutionScale)}` : ''};`,
+    '  const scale = Math.min(devicePixelRatio, 2);',
     '  engine.display.setSize(Math.round(canvas.clientWidth * scale), Math.round(canvas.clientHeight * scale));',
     '  const aspect = canvas.clientWidth / canvas.clientHeight;',
     ...(ortho ? ['  camera.left = -camera.top * aspect;', '  camera.right = camera.top * aspect;'] : ['  camera.aspect = aspect;']),

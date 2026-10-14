@@ -137,7 +137,7 @@ export class ViewerEngine {
 
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableDamping = true;
-    this.controls.dampingFactor = 0.12;
+    this.controls.dampingFactor = 0.2;
     this.controls.addEventListener('start', () => {
       this.dragging = true;
       if (get().paused) set({ paused: false });
@@ -550,7 +550,7 @@ export class ViewerEngine {
     const changed = (key: keyof Settings) => !prev || prev[key] !== s[key];
     const r = this.final, display = this.engine.display;
     this.engine.bvhBuilder = s.bvhBuilder;
-    r.maxSamples = s.maxSamples; r.bounces = s.bounces;
+    r.maxSamples = s.maxSamples; r.bounces = s.bounces; r.resolutionScale = s.resolutionScale;
     r.samplingPattern = s.samplingPattern; r.clamping = s.clamping;
     this.preview.bounces = Math.min(2, s.bounces);
     this.preview.samplingPattern = s.samplingPattern; this.preview.clamping = s.clamping;
@@ -580,7 +580,7 @@ export class ViewerEngine {
     }
     if (changed('lighting') || changed('background') || changed('backgroundColor') || changed('groundedHeight') ||
       changed('groundedRadius')) this.applyBackground();
-    if (changed('resolutionScale') || changed('cameraIndex')) this.needsResize = true;
+    if (changed('cameraIndex')) this.needsResize = true;
     // A focus distance set elsewhere (the slider, fitting) ends a running pull.
     if (prev && changed('focusDistance') && !this.writingFocus) {
       this.pull = null;
@@ -1228,7 +1228,7 @@ export class ViewerEngine {
 
   private resize() {
     this.needsResize = false;
-    const dpr = Math.min(window.devicePixelRatio || 1, 2) * this.settings.resolutionScale;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const width = Math.max(1, Math.round(this.canvas.clientWidth * dpr));
     const height = Math.max(1, Math.round(this.canvas.clientHeight * dpr));
     const size = this.engine.display.canvas;

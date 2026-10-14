@@ -24,7 +24,9 @@ loop.on('sample', ({samples, frameTimeMs}) => updateSamples(samples));
 ```
 
 Loop status is previewing when the displayed target is preview, including fallback
-presentation. Preview samples never emit loop sample events or count toward loop
+presentation and the wait for the first complete final image. Starting to trace
+final tiles does not change that status until final is actually presented.
+Preview samples never emit loop sample events or count toward loop
 samples. Intermediate final filtering reports converging; only terminal filtering
 reports denoising. After finishing, unchanged ticks update syncs and the engine
 without GPU submissions. Display or render settings edits resume necessary work.
@@ -34,10 +36,13 @@ loop, or start, which ignores manual tick calls with one warning. loop.converge
 pauses interactive ticks, converges/presents final and resumes if still started.
 
 coalesceSceneUpdates defaults to false. When enabled, preview inference defers
-engine commits while syncs keep collecting edits. Completed inference is presented
+engine commits while syncs keep collecting edits. The last presented image stays
+visible until the next filtered preview is ready. Completed inference is presented
 before the latest camera/scene is committed together. Interaction ending during
 inference waits for that result before final starts. With it disabled, changes
-immediately invalidate old inference. Render.denoising includes intermediate
+immediately invalidate old inference. Once final is available, unused fallback
+inference does not delay it or switch presentation back to preview.
+Render.denoising includes intermediate
 inference without changing status semantics. Denoising does not enable preview;
 preview: false always disables it.
 
@@ -117,6 +122,10 @@ The default render scale is 1 and adaptive resolution is disabled. Alternatively
 provide both fixed width and height at construction; fixed dimensions cannot be
 changed through `resolutionScale`. `width` and `height` report the actual GPU
 image, including WebGPU's 16-pixel alignment. See [API options](api.md).
+
+Keep the display canvas at the viewport's drawing-buffer size and set
+`resolutionScale` on each render independently. Lowering final's scale does not
+lower preview's scale; resizing the display canvas affects both.
 
 Call `render.setDenoiser({ type: 'jnlm', schedule: 'converged' })` with JNLM or an OIDN
 configuration. The schedules are `converged` (default), `progressive` (first

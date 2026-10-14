@@ -80,12 +80,12 @@ vi.mock('../../src/renderer/WGPURayTraceOutput', () => ({ WGPURayTraceOutputPass
 vi.mock('../../src/renderer/WGPUFullQuadPass', () => ({ WGPUFullQuadPass: mocks.Pass }));
 vi.mock('../../src/renderer/WGPUComputePass', () => ({ WGPUComputePass: mocks.Pass }));
 
-function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) = 1_000_000n) {
+function createPipeline(timestamps = true, traceTimeNs: bigint | (() => bigint) = 1_000_000n, mapState: () => GPUBufferMapState = () => 'unmapped') {
   const device = {
     features: new Set(timestamps ? ['timestamp-query'] : []),
     createQuerySet: () => ({ count: 2, destroy() {} }),
     createBuffer: (opts: GPUBufferDescriptor) => ({
-      size: opts.size, mapState: 'unmapped', destroy() {}, unmap() {},
+      size: opts.size, get mapState() {return mapState();}, destroy() {}, unmap() {},
       mapAsync: async () => {},
       getMappedRange: () => new BigInt64Array([
         0n, typeof traceTimeNs === 'function' ? traceTimeNs() : traceTimeNs
@@ -333,6 +333,17 @@ it('completes samples during continuous input restarts after the initial timing 
     expect(pipeline.getTotalSamplesRendered()).toBe(1); await pipeline.flushDiagnostics();
   }
   expect(sample).toHaveBeenCalledTimes(4); pipeline.dispose();
+});
+it.each(['pending', 'mapped'] as const)('keeps visible samples when the shared timing readback starts %s', async initialState => {
+  let state: GPUBufferMapState = initialState;
+  const pipeline = createPipeline(true, 1_000_000n, () => state); const camera = new Camera({projection: 'perspective'});
+  pipeline.trace(camera, 64); expect(pipeline.getTotalSamplesRendered()).toBe(1);
+  state = 'unmapped';
+  for (let sample = 2; sample <= 4; sample++) {
+    pipeline.trace(camera, 64); expect(pipeline.getTotalSamplesRendered()).toBe(sample);
+    await pipeline.flushDiagnostics();
+  }
+  pipeline.manager.dispose();
 });
 it('refreshes the hidden timing probe for structural scene changes', async () => {
   const pipeline = createPipeline(); const camera = new Camera({projection: 'perspective'});
