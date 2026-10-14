@@ -231,18 +231,26 @@ export default class Render {
   }
   private _dependents = new Set<Render>();
   private _denoiserOptions: Readonly<DenoiserOptions> | null = null;
-  /** Frozen configuration snapshot. Default null. Reassign to edit; invalid options throw before replacing any state. Loading errors are asynchronous. */
-  get denoiser() { return this._denoiserOptions; }
-  set denoiser(options: DenoiserOptions | null) {
+  /** Frozen configuration snapshot. Default null. Change it with {@link Render.setDenoiser}. */
+  get denoiser(): Readonly<DenoiserOptions> | null { return this._denoiserOptions; }
+  /**
+   * Replaces the denoising configuration; null disables denoising. Invalid options throw synchronously
+   * before replacing any state. Resolves when the filter is ready to use (after OIDN weights load) or this
+   * configuration is replaced; rejects when loading fails. An equal configuration returns the current
+   * promise without reloading.
+   */
+  setDenoiser(options: DenoiserOptions | null): Promise<void> {
     if (options !== null) validateDenoiserOptions(options);
     const next = options ? snapshotDenoiserOptions(options) : null;
-    if (this._denoiserOptions === null && next === null) return;
-    if (next && this._denoiserOptions && denoiserKey(next) === denoiserKey(this._denoiserOptions)
-      && next.schedule === this._denoiserOptions.schedule && (next.type !== 'oidn' ||
-        (this._denoiserOptions.type === 'oidn' && next.signal === this._denoiserOptions.signal))) return;
+    const current = this._denoiserOptions;
+    if (current === null && next === null) return this._denoiserReady;
+    if (next && current && denoiserKey(next) === denoiserKey(current)
+      && next.schedule === current.schedule && (next.type !== 'oidn' ||
+        (current.type === 'oidn' && next.signal === current.signal))) return this._denoiserReady;
     this._denoiserOptions = next;
-    this._refreshDenoiser();
+    return this._refreshDenoiser() ?? this._denoiserReady;
   }
+  private _denoiserReady: Promise<void> = Promise.resolve();
   private _fixed?: {width: number; height: number};
   private _target?: RenderTarget;
   private _status: RenderStatus = 'preparing';
@@ -284,7 +292,7 @@ export default class Render {
     this._adaptiveScale = this._resolutionScale; this._lastScale = this._resolutionScale;
     this._validate(); this.fallback = fallback ?? null;
     engine._register(this);
-    if (denoiser) this.denoiser = denoiser;
+    if (denoiser) void this.setDenoiser(denoiser).catch(error => this._engine._notifyError(error));
   }
   /** Actual target width; before allocation uses the requested dimensions. */ get width() { return this._target?.getMemory().width || this._size().width; }
   /** Actual target height; before allocation uses the requested dimensions. */ get height() { return this._target?.getMemory().height || this._size().height; }
@@ -341,7 +349,7 @@ export default class Render {
   }
   private _refine(): RenderStatus {
     if (this._engine._initializationError) throw this._engine._initializationError;
-    this._refreshDenoiser();
+    this._reloadDenoiser();
     if (!this._engine._ready) {
       const generation = this._engine._deviceGeneration;
       void this._engine.init().catch(error => {
@@ -368,7 +376,7 @@ export default class Render {
   }
   private _refineOne() {
     if (this._busy || this._disposed || !this._engine._ready) return;
-    this._refreshDenoiser(); const target = this._synchronize();
+    this._reloadDenoiser(); const target = this._synchronize();
     if (!target) return;
     target.activate();
     if (this.samples < 1) this._status = target.trace(this._engine._inputs.value!, 1) ? 'compiling' : 'converging';
@@ -383,7 +391,10 @@ export default class Render {
     if (performance.now() - this._lastDenoiseTime >= 10000) return Math.min(this.maxSamples, this.samples + 1);
     return Math.min(this.maxSamples, Math.max(4, this._denoisedSamples * 2));
   }
-  private _refreshDenoiser() {
+  /** Reloads a filter dropped by device recovery; failures report through engine errors. */
+  private _reloadDenoiser() { void this._refreshDenoiser()?.catch(error => this._engine._notifyError(error)); }
+  /** Starts loading the configured filter; returns its readiness when a new configuration was applied. */
+  private _refreshDenoiser(): Promise<void> | undefined {
     if (this._disposed) return;
     const options = this._denoiserOptions;
     const key = options ? denoiserKey(options) : '';
@@ -393,8 +404,8 @@ export default class Render {
     if (this._filter && this._filter.kind !== 'custom') this._engine._releaseDenoiser(this._filter);
     this._target?.invalidateDenoisedOutput();
     this._filter = undefined; this._filterPending = undefined;
-    if (!options) return;
-    if (options.type === 'jnlm') { this._filter = this._engine._retainDenoiser(`jnlm:${key}`, () => ({kind: 'jnlm', denoiser: createJNLMDenoiser(options)})); return; }
+    if (!options) return this._denoiserReady = Promise.resolve();
+    if (options.type === 'jnlm') { this._filter = this._engine._retainDenoiser(`jnlm:${key}`, () => ({kind: 'jnlm', denoiser: createJNLMDenoiser(options)})); return this._denoiserReady = Promise.resolve(); }
     const task = (async () => {
       await this._engine.init();
       if (this._engine.backend !== 'webgpu') { if (revision === this._filterRevision && !this._warnedWebGPUFilter) { this._warnedWebGPUFilter = true; console.warn('This denoiser requires WebGPU; denoising is disabled for this render.'); } return; }
@@ -406,7 +417,9 @@ export default class Render {
       this._filter = filter; this._warmDenoiser();
     })();
     this._filterPending = task;
-    void task.catch(error => { if (revision === this._filterRevision && !this._disposed) this._engine._notifyError(error); }).finally(() => { if (this._filterPending === task) this._filterPending = undefined; });
+    // Superseded or disposed loads resolve instead of reporting obsolete failures.
+    return this._denoiserReady = task.catch(error => { if (revision === this._filterRevision && !this._disposed) throw error; })
+      .finally(() => { if (this._filterPending === task) this._filterPending = undefined; });
   }
   private _warmDenoiser() {
     const filter = this._filter, revision = this._filterRevision;
@@ -520,7 +533,7 @@ export default class Render {
       this._offlineCamera = !!options.camera;
       if (!target) throw new Error('The render target is not ready.');
       this._cancelDenoise(); target.restartSamples();
-      this._refreshDenoiser(); await this._engine._awaitDevice(Promise.resolve(this._filterPending)); check();
+      this._reloadDenoiser(); await this._engine._awaitDevice(Promise.resolve(this._filterPending)); check();
       const stage = async (cap: number, name: 'pilot' | 'final', offset: number) => {
         check(); this._cancelDenoise(); target!.activate(); target!.restartSamples();
         target!.configure({...this._settings(cap), allowMultipleSamplesPerFrame: true});

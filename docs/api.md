@@ -117,7 +117,7 @@ other sequences retain their completed samples.
 | `timeBudgetMs` / `maxTiles` | `21` / `Infinity` | Tile time budget / tiles per call |
 | `allowMultipleSamplesPerFrame` | `false` | Add multiple samples when time permits |
 | `fallback` | `null` | Single-level Render on the same engine |
-| `denoiser` | `null` | Per-render configuration; see [denoising](./denoising.md) |
+| `denoiser` | `null` | Per-render configuration; read back through the frozen `denoiser` getter and change with `setDenoiser()`; see [denoising](./denoising.md) |
 
 `bounces` is rounded and clamped to [1, 20] in both backends; NaN becomes 1.
 The path loop allows at most `min(bounces * 3, 20)` events, including transmission,
@@ -138,6 +138,7 @@ or alpha, plus its existing early depth termination.
 | `samples` | Complete samples since restart; stale engine inputs report 0 |
 | `converged` | `samples >= maxSamples`, independently of filtering |
 | `status` | Preparing, compiling, converging, denoising, finished or error |
+| `setDenoiser(options)` | Replace the denoiser configuration; resolves when the filter is ready |
 | `restart()` | Discard this accumulation |
 | `dispose()` | Release this render and its denoiser lease |
 
@@ -242,7 +243,7 @@ engine.display.present(render);
 Ordinary setting fields remain enumerable and read back the assigned value.
 For example, `bevelSamples` and `directLightCandidates` are clamped when
 submitted, without rewriting the assigned field. Existing accessors for
-resolution, fallback, denoiser and worker count retain their validation rules.
+resolution, fallback and worker count retain their validation rules.
 
 `DenoiserOptions` is a union of `JNLMDenoiserOptions`, `OIDNDenoiserOptions`
 and `CustomDenoiserOptions`,
@@ -357,7 +358,7 @@ and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 `OIDN_WEIGHTS_PACKAGE_VERSION`, `DEFAULT_OIDN_WEIGHTS_BASE_URL`,
 `DEFAULT_OIDN_WEIGHTS_PACKAGE_BASE_URL`) and `resolveOIDNModelUrl` /
 `resolveOIDNAuxiliaryModelUrls`. Configure packaged/custom OIDN networks,
-execution engines, precision and dynamic tiles through `render.denoiser`;
+execution engines, precision and dynamic tiles through `render.setDenoiser()`;
 see [denoising](./denoising.md#custom-oidn-networks). The main entry exports
 `OIDNEngine`, `OIDNPrecision`, `OIDNHDRTransfer`, `OIDNDynamicTileOptions`,
 `OIDNDynamicTileSetting` and `OIDNAuxiliaryModelUrls` as types.

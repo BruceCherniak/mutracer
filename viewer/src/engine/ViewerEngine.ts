@@ -623,7 +623,8 @@ export class ViewerEngine {
     if (!this.engine.backend) return;
     const final = getDenoiserOptions(this.settings, this.engine.backend === 'webgpu', OIDN_WEIGHTS);
     const preview = this.settings.previewEnabled ? getDenoiserOptions(this.settings, this.engine.backend === 'webgpu', OIDN_WEIGHTS, true) : null;
-    this.final.denoiser = final; this.preview.denoiser = preview;
+    const failed = (error: Error) => showToast(`Denoiser failed to load: ${error.message}`, 'error');
+    this.final.setDenoiser(final).catch(failed); this.preview.setDenoiser(preview).catch(failed);
   }
 
   // ----------------------------------------------------------------- camera

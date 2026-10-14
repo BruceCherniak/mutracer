@@ -64,11 +64,11 @@ describe('custom denoiser lifecycle', () => {
       denoise: vi.fn((_input: DenoiseInput, context: {signal: AbortSignal}) => {signal = context.signal; return new Promise<void>(resolve => {finish = resolve;});})};
     const render = new Render(engine, {maxSamples: 1, denoiser: {type: 'custom', denoiser: filter}});
     await settle(); hook(render); await settle(); const options = render.denoiser;
-    render.denoiser = {type: 'custom', denoiser: filter}; expect(render.denoiser).toBe(options);
-    render.denoiser = {type: 'custom', denoiser: filter, schedule: 'progressive'};
+    render.setDenoiser({type: 'custom', denoiser: filter}); expect(render.denoiser).toBe(options);
+    render.setDenoiser({type: 'custom', denoiser: filter, schedule: 'progressive'});
     expect(signal.aborted).toBe(false); expect(render.denoising).toBe(true);
     finish(); await settle(); expect(render.status).toBe('finished');
-    const next = {...filter}; render.denoiser = {type: 'custom', denoiser: next};
+    const next = {...filter}; render.setDenoiser({type: 'custom', denoiser: next});
     expect(render.denoiser!.type).toBe('custom'); engine.dispose();
   });
 
@@ -82,7 +82,7 @@ describe('custom denoiser lifecycle', () => {
     vi.mocked(target.drawPostProcess).mockClear();
     if (action === 'input') {camera.position = [1, 0, 0]; engine.update();}
     else if (action === 'restart') render.restart();
-    else if (action === 'replace') render.denoiser = null;
+    else if (action === 'replace') render.setDenoiser(null);
     else if (action === 'render disposal') render.dispose();
     else engine.dispose();
     expect(signal.aborted).toBe(true); finish(); await settle();
@@ -133,7 +133,7 @@ describe('custom denoiser lifecycle', () => {
     const {engine} = renderFixture({backend: 'webgl'}); const filter = copyFilter();
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const render = new Render(engine, {maxSamples: 1, denoiser: {type: 'custom', denoiser: filter}}); await settle();
-    expect(render.refine()).toBe('finished'); render.denoiser = null; render.denoiser = {type: 'custom', denoiser: copyFilter()};
+    expect(render.refine()).toBe('finished'); render.setDenoiser(null); render.setDenoiser({type: 'custom', denoiser: copyFilter()});
     await settle(); expect(warn).toHaveBeenCalledOnce(); expect(filter.prepare).not.toHaveBeenCalled(); expect(filter.denoise).not.toHaveBeenCalled();
     engine.dispose(); expect(filter.dispose).not.toHaveBeenCalled();
   });
@@ -141,7 +141,7 @@ describe('custom denoiser lifecycle', () => {
   it('rejects an invalid custom interface before replacing the current filter', () => {
     const {engine} = renderFixture(); const render = new Render(engine, {denoiser: {type: 'jnlm'}}); const before = render.denoiser;
     for (const denoiser of [{}, {denoise: 'bad'}, {denoise() {}, prepare: 'bad'}]) {
-      expect(() => {render.denoiser = {type: 'custom', denoiser: denoiser as unknown as Denoiser};}).toThrow();
+      expect(() => {render.setDenoiser({type: 'custom', denoiser: denoiser as unknown as Denoiser});}).toThrow();
       expect(render.denoiser).toBe(before);
     }
     engine.dispose();

@@ -13,7 +13,7 @@ describe('per-render denoising', () => {
     loadOIDNNetwork.mockResolvedValueOnce(standard).mockResolvedValueOnce(small);
     const a = new Render(engine, {denoiser: {type: 'oidn'}}), b = new Render(engine, {denoiser: {type: 'oidn', model: 'standard'}});
     await vi.waitFor(() => expect(standard.prepareForImage).toHaveBeenCalledTimes(2)); expect(loadOIDNNetwork).toHaveBeenCalledOnce();
-    a.denoiser = {type: 'oidn', model: 'small'}; await vi.waitFor(() => expect(small.prepareForImage).toHaveBeenCalledOnce());
+    a.setDenoiser({type: 'oidn', model: 'small'}); await vi.waitFor(() => expect(small.prepareForImage).toHaveBeenCalledOnce());
     expect(standard.dispose).not.toHaveBeenCalled(); expect(loadOIDNNetwork).toHaveBeenCalledTimes(2);
     b.dispose(); expect(standard.dispose).toHaveBeenCalledOnce(); a.dispose(); expect(small.dispose).toHaveBeenCalledOnce(); engine.dispose();
   });
@@ -25,17 +25,17 @@ describe('per-render denoising', () => {
     const error = vi.fn(); engine.on('error', error); const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     try {
       const render = new Render(engine, {denoiser: {type: 'oidn'}}); await settle(); expect(old.prepareForImage).toHaveBeenCalledOnce();
-      render.denoiser = {type: 'oidn', model: 'small'}; await settle(); expect(old.dispose).toHaveBeenCalledOnce();
+      render.setDenoiser({type: 'oidn', model: 'small'}); await settle(); expect(old.dispose).toHaveBeenCalledOnce();
       reject(new Error('Native OIDN executor is disposed')); await settle(); expect(error).not.toHaveBeenCalled(); expect(log).not.toHaveBeenCalled();
       const failure = new Error('Current prewarm failed'); next.prepareForImage.mockRejectedValue(failure);
-      render.denoiser = null; render.denoiser = {type: 'oidn', model: 'small'}; loadOIDNNetwork.mockResolvedValue(next); await settle();
+      render.setDenoiser(null); render.setDenoiser({type: 'oidn', model: 'small'}); loadOIDNNetwork.mockResolvedValue(next); await settle();
       expect(error).toHaveBeenCalledWith(failure);
     } finally { engine.dispose(); log.mockRestore(); }
   });
   it('drops a superseded load and releases its engine lease', async () => {
     const {engine} = renderFixture(); const obsolete = filter(); let resolve!: (value: unknown) => void;
     loadOIDNNetwork.mockImplementation(() => new Promise(done => {resolve = done;}));
-    const render = new Render(engine, {denoiser: {type: 'oidn'}}); await settle(); render.denoiser = null;
+    const render = new Render(engine, {denoiser: {type: 'oidn'}}); await settle(); render.setDenoiser(null);
     resolve(obsolete); await settle(); expect(obsolete.dispose).toHaveBeenCalledOnce(); expect(obsolete.prepareForImage).not.toHaveBeenCalled(); engine.dispose();
   });
   it.each(['converged', 'progressive', 'every-sample'] as const)('schedules %s on each independent target', async schedule => {
@@ -71,7 +71,7 @@ it('composes an invisible render with current display settings before convergenc
 it('invalidates a completed filter when disabled without discarding samples', async () => {
   const {engine, targets} = renderFixture(); const render = new Render(engine, {maxSamples: 1, denoiser: {type: 'jnlm'}});
   render.refine(); await settle(); vi.mocked(targets[0].invalidateDenoisedOutput).mockClear();
-  render.denoiser = null; render.refine();
+  render.setDenoiser(null); render.refine();
   expect(render.samples).toBe(1); expect(targets[0].invalidateDenoisedOutput).toHaveBeenCalledOnce(); engine.dispose();
 });
 it('denoises again after display settings change without tracing another sample', async () => {
@@ -166,8 +166,8 @@ it('keeps equal OIDN assignments and schedule edits on the current in-flight inf
   vi.mocked(targets[0].performDenoise!).mockImplementation(() => new Promise(resolve => {finish = resolve;}));
   await settle(); vi.mocked(targets[0].cancelDenoise!).mockClear(); vi.mocked(targets[0].invalidateDenoisedOutput).mockClear();
   const configuration = render.denoiser;
-  render.denoiser = {type: 'oidn'}; expect(render.denoiser).toBe(configuration);
-  render.denoiser = {type: 'oidn', model: 'standard', schedule: 'progressive'};
+  render.setDenoiser({type: 'oidn'}); expect(render.denoiser).toBe(configuration);
+  render.setDenoiser({type: 'oidn', model: 'standard', schedule: 'progressive'});
   expect(render.denoising).toBe(true); expect(loadOIDNNetwork).toHaveBeenCalledOnce();
   expect(targets[0].cancelDenoise).not.toHaveBeenCalled(); expect(targets[0].invalidateDenoisedOutput).not.toHaveBeenCalled();
   finish(true); await settle(); expect(render.status).toBe('finished'); engine.dispose();
@@ -183,7 +183,7 @@ it.each([
   const render = new Render(engine, {maxSamples: 1, denoiser: {type: 'oidn'}}); await settle();
   render.refine(); await settle(); const configuration = render.denoiser;
   vi.mocked(targets[0].cancelDenoise!).mockClear(); vi.mocked(targets[0].invalidateDenoisedOutput).mockClear();
-  expect(() => {render.denoiser = invalid as unknown as import('../../src/main').DenoiserOptions;}).toThrow();
+  expect(() => {render.setDenoiser(invalid as unknown as import('../../src/main').DenoiserOptions);}).toThrow();
   expect(render.denoiser).toBe(configuration); expect(network.dispose).not.toHaveBeenCalled();
   expect(targets[0].cancelDenoise).not.toHaveBeenCalled(); expect(targets[0].invalidateDenoisedOutput).not.toHaveBeenCalled();
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {}); await render.readPixels('denoised'); expect(warn).not.toHaveBeenCalled();
@@ -195,6 +195,36 @@ it('returns a frozen snapshot independent of the assigned object', () => {
   const render = new Render(engine, {denoiser: options}); options.strength = 3;
   expect(render.denoiser).toEqual({type: 'jnlm', strength: 2}); expect(Object.isFrozen(render.denoiser)).toBe(true);
   expect(() => Object.assign(render.denoiser!, {strength: 4})).toThrow(); engine.dispose();
+});
+
+describe('setDenoiser readiness', () => {
+  it('resolves after OIDN loads and returns the same promise for an equal configuration', async () => {
+    const {engine} = renderFixture(); let resolve!: (value: unknown) => void;
+    loadOIDNNetwork.mockImplementation(() => new Promise(done => {resolve = done;}));
+    const render = new Render(engine); const ready = render.setDenoiser({type: 'oidn'}); let done = false; void ready.then(() => {done = true;});
+    expect(render.setDenoiser({type: 'oidn', model: 'standard'})).toBe(ready);
+    await settle(); expect(done).toBe(false);
+    resolve(filter()); await ready; expect(loadOIDNNetwork).toHaveBeenCalledOnce(); engine.dispose();
+  });
+  it('rejects with the current load failure instead of reporting an engine error, and retries after disabling', async () => {
+    const {engine} = renderFixture(); const failure = new Error('Weights missing'); const error = vi.fn(); engine.on('error', error);
+    loadOIDNNetwork.mockRejectedValueOnce(failure).mockResolvedValueOnce(filter());
+    const render = new Render(engine);
+    await expect(render.setDenoiser({type: 'oidn'})).rejects.toBe(failure); expect(error).not.toHaveBeenCalled();
+    await render.setDenoiser(null); await render.setDenoiser({type: 'oidn'}); expect(loadOIDNNetwork).toHaveBeenCalledTimes(2); engine.dispose();
+  });
+  it('resolves a superseded load without its failure', async () => {
+    const {engine} = renderFixture(); let reject!: (error: Error) => void;
+    loadOIDNNetwork.mockImplementation(() => new Promise((_, fail) => {reject = fail;}));
+    const render = new Render(engine); const ready = render.setDenoiser({type: 'oidn'}); await settle();
+    await render.setDenoiser({type: 'jnlm'}); reject(new Error('obsolete')); await expect(ready).resolves.toBeUndefined(); engine.dispose();
+  });
+  it('reports a constructor option load failure through engine errors', async () => {
+    const {engine} = renderFixture(); const failure = new Error('Weights missing'); const error = vi.fn(); engine.on('error', error);
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    loadOIDNNetwork.mockRejectedValue(failure); new Render(engine, {denoiser: {type: 'oidn'}});
+    await vi.waitFor(() => expect(error).toHaveBeenCalledWith(failure)); engine.dispose(); log.mockRestore();
+  });
 });
 
 it('loads an explicit network through the render and shares it across download signals', async () => {
@@ -213,7 +243,7 @@ it.each([
   {type: 'oidn', engine: 'bad'}, {type: 'oidn', dynamicTile: {bad: 1}}
 ])('rejects incompatible OIDN options %j synchronously', options => {
   const {engine} = renderFixture(); const render = new Render(engine, {denoiser: {type: 'jnlm'}}); const before = render.denoiser;
-  expect(() => {render.denoiser = options as unknown as import('../../src/main').DenoiserOptions;}).toThrow();
+  expect(() => {render.setDenoiser(options as unknown as import('../../src/main').DenoiserOptions);}).toThrow();
   expect(render.denoiser).toBe(before); expect(loadOIDNNetwork).not.toHaveBeenCalled(); engine.dispose();
 });
 

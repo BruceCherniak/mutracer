@@ -127,8 +127,8 @@ instancing into the same batches automatically. See the [instancing example](./e
 Enable denoising on an individual result:
 
 ```ts
-loop.final.denoiser = { type: 'jnlm' }; // required type; reassign the frozen configuration to edit
-loop.final.denoiser = { type: 'oidn', model: 'standard' }; // WebGPU; custom weightsUrl also supported
+loop.final.setDenoiser({ type: 'jnlm' }); // required type; call again to change it
+loop.final.setDenoiser({ type: 'oidn', model: 'standard' }); // WebGPU; custom weightsUrl also supported
 // Third-party WebGPU filters: { type: 'custom', denoiser: yourCallerOwnedDenoiser }.
 ```
 

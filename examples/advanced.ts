@@ -95,7 +95,7 @@ engine.on('error', error => {statusElement.textContent = error.message;});
 // on the same Render. The built-in JNLM filter needs no weights.
 function updateDenoiser() {
   const model = denoiserSelect.value;
-  final.denoiser = (
+  final.setDenoiser(
     model === 'off'
       ? null
       : model === 'custom-copy'
@@ -103,7 +103,7 @@ function updateDenoiser() {
       : model === 'jnlm'
       ? { type: 'jnlm' }
       : { type: 'oidn', model: model as OIDNModel, weightsBaseUrl: '/oidn/weights/' }
-  );
+  ).catch(error => console.error('Denoiser failed to load.', error));
 }
 denoiserSelect.addEventListener('change', () => {
   updateDenoiser();

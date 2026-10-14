@@ -13,24 +13,40 @@ albedo and normal guides.
 ```ts
 const engine = new Engine({canvas});
 const final = new Render(engine, {denoiser: {type: 'jnlm'}});
-final.denoiser = {type: 'oidn', model: 'standard'};
-final.denoiser = null; // disable
+final.setDenoiser({type: 'oidn', model: 'standard'});
+final.setDenoiser(null); // disable
 ```
 
-`type` is required: use `jnlm` or `oidn`. The getter returns a frozen copy;
-reassign the configuration to edit it. Unknown types, foreign fields and invalid
-JNLM settings throw synchronously, preserving the active network and output.
-Equal implementation settings share the network; changing only `schedule`
-preserves active inference, and assigning an identical configuration does nothing.
+`type` is required: use `jnlm` or `oidn`. `render.denoiser` returns a frozen
+copy of the configuration; call `setDenoiser` again to change it. Unknown types,
+foreign fields and invalid JNLM settings throw synchronously, preserving the
+active network and output. Equal implementation settings share the network;
+changing only `schedule` preserves active inference, and passing an identical
+configuration does nothing.
 Each render has its own configuration and scheduling. Converge waits for its
 configured filter; intermediate progressive inference reports converging and
 final inference reports denoising. Engine caches equal network configurations
 and weights, releasing the network after its last render lease is released.
 
-OIDN is loaded lazily. On WebGL its configuration warns and leaves this render
-unfiltered; JNLM works on both backends. Current loading and inference failures
-are reported through engine error events. Replaced/disposed network prewarm
-results are discarded.
+`setDenoiser` returns a promise that resolves when the filter is ready, which
+for OIDN means its weights have loaded, and rejects when loading fails. A
+configuration replaced before it finishes loading resolves without an error;
+an identical configuration returns the current promise. Await it when you need
+the filter before rendering:
+
+```ts
+try {
+  await final.setDenoiser({type: 'oidn', model: 'standard'});
+} catch (error) {
+  final.setDenoiser({type: 'jnlm'}); // weights unavailable; fall back to JNLM
+}
+```
+
+OIDN is loaded lazily. On WebGL its configuration warns, leaves this render
+unfiltered and resolves; JNLM works on both backends. Loading failures of a
+`denoiser` constructor option, and of reloads after device recovery, report
+through engine error events, as do inference failures. Replaced/disposed
+network prewarm results are discarded.
 
 ## Options
 
@@ -82,7 +98,7 @@ static directory. If you only use standard/small, copying the two files from
 `node_modules/@meimu/mutracer/oidn/weights/` is sufficient:
 
 ```ts
-final.denoiser = {type: 'oidn', weightsBaseUrl: '/assets/oidn/weights/'};
+final.setDenoiser({type: 'oidn', weightsBaseUrl: '/assets/oidn/weights/'});
 ```
 
 Explicit URLs never fall back to the CDN. Every download is checked for the
@@ -91,8 +107,8 @@ TZA file signature. The weights use Apache-2.0 (`oidn/weights/LICENSE.txt`).
 ## Scheduling
 
 ```ts
-final.denoiser = {type: 'oidn', model: 'standard', schedule: 'progressive'};
-preview.denoiser = {type: 'oidn', model: 'small', schedule: 'every-sample'};
+final.setDenoiser({type: 'oidn', model: 'standard', schedule: 'progressive'});
+preview.setDenoiser({type: 'oidn', model: 'small', schedule: 'every-sample'});
 ```
 
 Converged filters the final sample budget. Progressive filters sample 1,
@@ -107,24 +123,24 @@ edits only when update is called. See [progressive rendering](./progressive-rend
 more noise at low sample counts and more detail at high ones.
 
 ```ts
-final.denoiser = {type: 'jnlm', strength: 1.5};    // filter more
+final.setDenoiser({type: 'jnlm', strength: 1.5});    // filter more
 ```
 
 JNLM settings are available through `DenoiserOptions`. Omitted settings use
 the exported `DEFAULT_JNLM_OPTIONS`; `JNLMOptions` is the corresponding type.
-Assigning `render.denoiser` applies a fresh configuration to the existing sample
+`setDenoiser` applies a fresh configuration to the existing sample
 accumulation, so include the settings you want to retain on each call.
 
 ```ts
 import { DEFAULT_JNLM_OPTIONS } from '@meimu/mutracer';
 
-final.denoiser = {
+final.setDenoiser({
   type: 'jnlm',
   ...DEFAULT_JNLM_OPTIONS,
   strength: 1.2,
   searchRadius: 7,
   albedoBandwidth: 0.3
-};
+});
 ```
 
 Larger search windows cost more but find more matching neighbors. Smaller
@@ -139,11 +155,11 @@ and WebGL 2; OIDN rejects JNLM fields.
 Load an explicit network file through the same built-in OIDN path:
 
 ```ts
-final.denoiser = {
+final.setDenoiser({
   type: 'oidn', weightsUrl: '/assets/custom.tza',
   aux: true, hdr: true, hdrTransfer: 'pu',
   engine: 'wgsl', precision: 'auto', dynamicTile: true
-};
+});
 ```
 
 `weightsUrl` is mutually exclusive with `model` and `weightsBaseUrl`. The
@@ -164,8 +180,8 @@ defaults to `true`; use `false` for fixed tiles or an object with
 All implementation settings participate in the network cache key; `schedule`
 and download `signal` do not. Renders with different signals share a pending
 load; its initial request's signal controls that download. Loading failures
-report an engine error and can be retried by disabling and reassigning the
-configuration. Nested tile/URL settings are copied and frozen too.
+reject the returned promise and can be retried by calling `setDenoiser(null)`
+and then the configuration again. Nested tile/URL settings are copied and frozen too.
 
 `@meimu/mutracer/oidn` contains only weight constants and the
 `resolveOIDNModelUrl` / `resolveOIDNAuxiliaryModelUrls` URL helpers. Loading
@@ -188,7 +204,7 @@ const copy: Denoiser = {
     device.queue.submit([encoder.finish()]);
   }
 };
-final.denoiser = {type: 'custom', denoiser: copy, schedule: 'converged'};
+final.setDenoiser({type: 'custom', denoiser: copy, schedule: 'converged'});
 ```
 
 The required `type` and `denoiser` choose this branch; `schedule` defaults to

@@ -237,7 +237,7 @@ it('wakes a finished final for quality edits, restart and denoiser changes', asy
   const {engine, targets} = renderFixture(); const loop = new RenderLoop(engine, {preview: false, final: {maxSamples: 1}});
   loop.tick(); loop.final.bounces = 8; loop.tick(); expect(targets[0].trace).toHaveBeenCalledTimes(2);
   loop.final.restart(); loop.tick(); expect(targets[0].trace).toHaveBeenCalledTimes(3);
-  loop.final.denoiser = {type: 'jnlm'}; expect(loop.tick()).toBe('denoising'); await settle(); expect(loop.tick()).toBe('finished');
+  loop.final.setDenoiser({type: 'jnlm'}); expect(loop.tick()).toBe('denoising'); await settle(); expect(loop.tick()).toBe('finished');
   expect(targets[0].trace).toHaveBeenCalledTimes(3); loop.dispose(); engine.dispose();
 });
 it('reports zero formal samples while showing preview without discarding a current final image', () => {

@@ -256,7 +256,7 @@ import { Engine, Render } from '@meimu/mutracer';
 
 const engine = new Engine({canvas});
 const render = new Render(engine);
-render.denoiser = {type: 'oidn'};
+render.setDenoiser({type: 'oidn'});
 ```
 
 MuTracer initializes OIDN and loads its model weights automatically when a

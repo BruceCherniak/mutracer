@@ -27,7 +27,7 @@ export async function capture(layout: Engine['bvhLayout'] = 'bvh2', postProcess 
   const backgrounds = [undefined, [0.15, 0.2, 0.3, 1] as [number, number, number, number], map,
     {type: 'GroundedSkybox' as const, map, height: 2, radius: 20, groundHeight: -1}];
   const render = new Render(engine, {samplingPattern: 'sobol', bounces: 4});
-  if (postProcess) { engine.display.bloomIntensity = 0.25; render.denoiser = {type: 'jnlm'}; }
+  if (postProcess) { engine.display.bloomIntensity = 0.25; render.setDenoiser({type: 'jnlm'}); }
   const captures = [];
   try {
     for (const [width, height] of (postProcess ? [[48, 32], [30, 20], [48, 32]] : [[48, 32]])) {

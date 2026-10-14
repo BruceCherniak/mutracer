@@ -118,7 +118,7 @@ provide both fixed width and height at construction; fixed dimensions cannot be
 changed through `resolutionScale`. `width` and `height` report the actual GPU
 image, including WebGPU's 16-pixel alignment. See [API options](api.md).
 
-Assign `render.denoiser = { type: 'jnlm', schedule: 'converged' }` or an OIDN
+Call `render.setDenoiser({ type: 'jnlm', schedule: 'converged' })` with JNLM or an OIDN
 configuration. The schedules are `converged` (default), `progressive` (first
 sample, then 4, 8, 16, … with a ten-second limit), and `every-sample`. Same-engine
 renders share equal filter configurations and OIDN weight downloads. The engine
