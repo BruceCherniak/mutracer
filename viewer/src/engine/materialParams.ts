@@ -153,8 +153,8 @@ export interface MaterialPreset {
 
 export const MATERIAL_PRESETS: MaterialPreset[] = [
   {
-    id: 'ceramic', label: 'Ceramic',
-    values: { ...ZERO_LAYERS, baseColor: [0.85, 0.82, 0.76], specularRoughness: 0.2, specularIor: 1.5, coatWeight: 0.6, coatRoughness: 0.03 }
+    id: 'white', label: 'White model',
+    values: { ...ZERO_LAYERS, baseColor: [1, 1, 1], specularRoughness: 0.8, specularIor: 1.5, specularWeight: 1, baseDiffuseRoughness: 0, opacity: 1 }
   },
   {
     id: 'metal', label: 'Metal',
