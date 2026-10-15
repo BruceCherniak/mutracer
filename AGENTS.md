@@ -88,15 +88,13 @@ sample count) on a real GPU before and after, and compare
 - Document each behavior in one place and link to it elsewhere: scene update
   rules in `docs/updates.md`, BVH preparation in `docs/bvh.md`, options and
   defaults in TSDoc and `docs/api.md`.
-- Order each guide as usage, options, then caveats. Put implementation details
-  in a trailing "Implementation notes" section.
-- Document only what a library user can observe or act on: behavior, cost
-  scaling, limits, precision, and when work is copied or rebuilt. Leave out how
-  the code achieves it (internal caches, allocation and reuse strategy,
-  generated or schema-driven code, internal class and function names,
-  optimizations without a user-visible effect). Ask whether a user would write
-  different code after reading the sentence; if not, it belongs in a code
-  comment or the commit body, not in `docs/`.
+- Order each guide as usage, options, then caveats.
+- User-facing documentation (READMEs, `docs/`, `llms.txt` and public API comments)
+  covers only behavior, usage, costs and limits that affect user decisions. Put
+  internal implementation, maintenance and release details in code comments,
+  commit bodies or contributor guides.
+- Review edited documentation passages separately, including retained text;
+  remove details that do not affect usage and briefly report the review.
 - Keep reusable documentation in `docs/`. Do not commit dated experiment logs
   or scene-specific evidence there.
 

@@ -129,16 +129,8 @@ Example models are loaded on demand. Downloads retry temporary network or server
 failures up to twice; samples hosted on jsDelivr use GitHub as the final fallback.
 Material spheres are procedural; Toy Car
 and Sheen Chair come from [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets)
-(CC0). All ten examples use the public selection in
-[mutracer-assets](https://github.com/pissang/mutracer-assets). Their metadata is
-copied from that repository's `presets.json` into `engine/publicModelPresets.ts`;
-Downloaded GLBs and all model previews stay in the assets repository or R2.
-The original samples share the review list; their procedural/Khronos model
-sources are preserved and only their previews/credits are hosted there. GitHub
-downloads are pinned to immutable asset tags, published with the resources before
-deployment.
-When publishing a new asset release, update this metadata and its pinned version
-together. R2 permits browser reads from the production site only.
+(CC0). Model previews and credits are available in
+[mutracer-assets](https://github.com/pissang/mutracer-assets).
 
 The sample site is a free, noncommercial technical demonstration. Each Sketchfab
 asset retains its own CC BY, CC BY-NC or CC BY-NC-SA 4.0 license, displayed with
