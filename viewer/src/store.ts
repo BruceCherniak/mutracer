@@ -4,6 +4,7 @@ import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, DisplayChanne
 import type { MaterialValues, TextureKey } from './engine/materialParams';
 import { STUDIO_PRESETS } from './engine/studio';
 import { historyLabels, onHistoryChange, pushHistory, type HistoryItem } from './history';
+import { readURLSettings, URL_SETTINGS_FIELDS } from './urlSettings';
 
 export type EnvResolution = '1k' | '2k' | '4k';
 
@@ -293,30 +294,20 @@ function writeStorage(key: string, value: unknown) {
   }
 }
 
-/** Shareable settings in the URL hash. */
-const HASH_FIELDS: (keyof Settings)[] = [
-  'lighting', 'studioPreset', 'studioIntensity', 'studioRotation', 'studioSize', 'studioAmbient', 'studioAmbientColor', 'envId', 'envResolution', 'envIntensity', 'envRotation', 'exposure', 'toneMapping', 'background'
-];
-
-function readHash(): Partial<Settings> {
-  const params = new URLSearchParams(location.hash.slice(1));
-  const out: Record<string, unknown> = {};
-  for (const key of HASH_FIELDS) {
-    const raw = params.get(key);
-    if (raw === null) continue;
-    out[key] = typeof DEFAULT_SETTINGS[key] === 'number' ? Number(raw) : raw;
-  }
-  return out as Partial<Settings>;
-}
-
 export function writeHash(settings: Settings, modelPreset: string | null) {
+  const search = new URLSearchParams(location.search);
+  const previous = new URLSearchParams(location.hash.slice(1));
   const params = new URLSearchParams();
   if (modelPreset) params.set('model', modelPreset);
-  for (const key of HASH_FIELDS) {
-    if (settings[key] !== DEFAULT_SETTINGS[key]) params.set(key, String(settings[key]));
+  for (const key of URL_SETTINGS_FIELDS) {
+    // Keep explicit defaults (especially false), so they still override the recipient's preferences.
+    if (settings[key] !== DEFAULT_SETTINGS[key] || search.has(key) || previous.has(key)) params.set(key, String(settings[key]));
+    // Move overrides to the hash so later UI edits cannot leave a stale query override behind.
+    search.delete(key);
   }
   const hash = params.toString();
-  history.replaceState(null, '', hash ? `#${hash}` : location.pathname + location.search);
+  const query = search.toString();
+  history.replaceState(null, '', location.pathname + (query ? `?${query}` : '') + (hash ? `#${hash}` : ''));
 }
 
 export const hashModelPreset = () => new URLSearchParams(location.hash.slice(1)).get('model');
@@ -360,7 +351,7 @@ function validateSettings(settings: Settings): Settings {
 const storedUi = readStorage<ViewerState['ui']>(UI_KEY);
 
 export const useViewer = create<ViewerState>(() => ({
-  settings: validateSettings({ ...DEFAULT_SETTINGS, ...readStorage<Settings>(RENDER_KEY), ...readHash() }),
+  settings: validateSettings({ ...DEFAULT_SETTINGS, ...readStorage<Settings>(RENDER_KEY), ...readURLSettings() }),
   stats: { phase: 'starting', samples: 0, elapsed: 0, msPerSample: 0, width: 0, height: 0 },
   backend: { name: null, adapter: '' },
   model: null,

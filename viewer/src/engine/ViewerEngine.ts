@@ -17,6 +17,7 @@ import { downloadPolyHavenMap, polyHavenMaps, type TextureResolution } from './p
 import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
 import { MaterialEditor, readPendingEdits, type PendingEdits } from './materialEditor';
 import { cameraSettings, readCameraState, writeCameraState } from './cameraState';
+import { URL_SETTINGS_FIELDS } from '../urlSettings';
 import { readModelCamera } from './modelCamera';
 import { pushHistory, recordGroup } from '../history';
 import { groundModel } from './modelGrounding';
@@ -617,9 +618,7 @@ export class ViewerEngine {
         void this.updateDenoiser();
       }
     }
-    if (prev && (changed('lighting') || changed('studioPreset') || changed('studioIntensity') || changed('studioRotation') ||
-      changed('studioSize') || changed('studioAmbient') || changed('studioAmbientColor') || changed('envId') || changed('envResolution') || changed('envIntensity') || changed('envRotation') || changed('exposure') ||
-      changed('toneMapping') || changed('background'))) {
+    if (prev && URL_SETTINGS_FIELDS.some(changed)) {
       writeHash(s, get().model?.presetId ?? null);
     }
   }

@@ -28,9 +28,11 @@ npm run typecheck:viewer
 npm run test:viewer       # source aliases; no prior build:lib needed
 ```
 
-Add `?webgl` to force the WebGL 2 backend. The URL hash keeps the example
-model, lighting (environment or studio preset), exposure and tone mapping, so a
-view can be shared.
+Add `?webgl` to force the WebGL 2 backend. The URL keeps the example model,
+lighting, render and display settings so a view can be shared. URL parameters
+override saved preferences; for example, `?hdrOutputEnabled=true` opens with
+HDR output enabled. See [sharing viewer settings](../docs/viewer.md) for options
+and precedence.
 
 ## Deployment
 
