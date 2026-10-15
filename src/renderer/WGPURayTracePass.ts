@@ -1,7 +1,10 @@
+import { wgpuMaterialConstants } from './wgpuMaterialConstants.js';
+import { wgpuShaderSource } from './wgpuShaderSource.js';
+import { makeRayTraceUniform, packWgpuAnalyticLights, WGPU_SCENE_BUFFER_MIN_BYTES } from './wgpuSceneUniform.js';
 import { constants } from './webgl.js';
 import { MATERIAL_FLOAT_COUNT } from './materialLayoutSchema.js';
 import { normalizeBounces } from './pathLimits.js';
-import { MATERIAL_TEXTURE_DEFINES, materialTextureFeatures } from './materialTextureSlots.js';
+import { MATERIAL_TEXTURE_DEFINES } from './materialTextureSlots.js';
 import { updateMeshInstanceColors } from './prepareMeshBVH.js';
 import { updateTLASInstanceColors } from './bvhAccel.js';
 import { getMaterialHashKey } from '../scene/openPbrSchema.js';
@@ -9,7 +12,6 @@ import { sameInstanceMembership } from './meshInstances.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
 import { dirtyMeshInstanceIndices } from './prepareMeshBVH.js';
 import { cameraApertureRadius } from './cameraLens.js';
-import { getRectLightUOrV, getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getLightDirection, getRigidLightFrame, validateSceneLights } from './lightsUtil.js';
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
 import { packCameraUniform } from './cameraUniform.js';
 import { SHADOW_CATCHER_ACCUMULATION_BYTES } from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
@@ -29,8 +31,7 @@ import SphereLight from '../scene/SphereLight.js';
 import RectLight from '../scene/RectLight.js';
 import SpotLight from '../scene/SpotLight.js';
 import MaterialTable, {
-  DEFAULT_MAX_TEXTURE_ARRAY_BYTES,
-  materialUsesMedium
+  DEFAULT_MAX_TEXTURE_ARRAY_BYTES
 } from './MaterialTable.js';
 import type { SceneBackground, SceneLight } from '../scene/Scene.js';
 import { numberArraysEqual } from './util.js';
@@ -38,14 +39,8 @@ import Camera from '../scene/Camera.js';
 import {
   generateBackgroundMapFromSceneBackground
 } from './envMapCreation.js';
-import rayTraceCompute, { WORKGROUP_SIZE } from './wgsl/rayTrace.compute.js';
+import { WORKGROUP_SIZE } from './wgsl/rayTrace.compute.js';
 import Geometry from '../scene/Geometry.js';
-import {
-  CONSTANT_DIRECTIONAL_LIGHT,
-  CONSTANT_RECT_LIGHT,
-  CONSTANT_SPHERE_LIGHT,
-  CONSTANT_SPOT_LIGHT
-} from './lightsUtil.js';
 import {
   envMapDistribution,
   environmentMapSourcesMatch,
@@ -64,9 +59,7 @@ import {
   refitTLAS
 } from './bvhAccel.js';
 import { isTextureDataSource } from '../scene/Texture.js';
-import OpenPBRMaterial, {
-  resolveMaterialAlphaMode
-} from '../scene/OpenPBRMaterial.js';
+import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
 import {
   DEFAULT_BEVEL_SAMPLES,
   DEFAULT_DIRECT_LIGHT_CANDIDATES,
@@ -170,124 +163,10 @@ export function isWebGPUPipelineSpecializationFailure(...errors: unknown[]) {
 }
 
 /** CPU-side views over the `RayTraceUniform` WGSL struct. */
-export function makeRayTraceUniform() {
-  // Created from https://webgpufundamentals.org/webgpu/lessons/resources/wgsl-offset-computer.html
-  const RayTraceUniformValues = new ArrayBuffer(176);
-  const RayTraceUniformViews = {
-    outputSize: new Float32Array(RayTraceUniformValues, 0, 2),
-    sampleCount: new Float32Array(RayTraceUniformValues, 8, 1),
-    scaleOffset: new Float32Array(RayTraceUniformValues, 16, 4),
-    lightsCount: new Int32Array(RayTraceUniformValues, 32, 1),
-    transmissiveOutputAlphaMin: new Float32Array(RayTraceUniformValues, 36, 1),
-    jitter: new Float32Array(RayTraceUniformValues, 40, 2),
-    backgroundColor: new Float32Array(RayTraceUniformValues, 48, 4),
-    groundedBackgroundParams: new Float32Array(RayTraceUniformValues, 64, 4),
-    groundedBackgroundCenter: new Float32Array(RayTraceUniformValues, 80, 2),
-    blasOffset: new Int32Array(RayTraceUniformValues, 88, 1),
-    isEmpty: new Int32Array(RayTraceUniformValues, 92, 1),
-    bevel: new Int32Array(RayTraceUniformValues, 96, 1),
-    dispersionWavelengths: new Int32Array(RayTraceUniformValues, 100, 1),
-    envLightPmf: new Float32Array(RayTraceUniformValues, 104, 1),
-    lightChoiceCount: new Int32Array(RayTraceUniformValues, 108, 1),
-    lightWeightTotal: new Float32Array(RayTraceUniformValues, 112, 1),
-    lightSamplingTextureWidth: new Int32Array(RayTraceUniformValues, 116, 1),
-    lightChoiceTexelOffset: new Int32Array(RayTraceUniformValues, 120, 1),
-    bounces: new Int32Array(RayTraceUniformValues, 124, 1),
-    varianceMoments: new Int32Array(RayTraceUniformValues, 128, 1),
-    adaptiveSampling: new Int32Array(RayTraceUniformValues, 132, 1),
-    clamping: new Float32Array(RayTraceUniformValues, 136, 1),
-    directLightCandidates: new Int32Array(RayTraceUniformValues, 140, 1),
-    backgroundFlags: new Int32Array(RayTraceUniformValues, 144, 1),
-    loopUnrollGuard: new Uint32Array(RayTraceUniformValues, 148, 1),
-    sceneFeatureFlags: new Uint32Array(RayTraceUniformValues, 152, 1),
-    sequenceSeed: new Uint32Array(RayTraceUniformValues, 156, 1),
-    zSobolLogSPP: new Uint32Array(RayTraceUniformValues, 160, 1),
-    sampleSequenceOffset: new Uint32Array(RayTraceUniformValues, 164, 1)
-  };
-  // Fixed runtime trip bounds discourage thin-film loop unrolling. Keep 4 for
-  // 2 polarizations/substrates and 3 channels, independent of BSDF budgets.
-  RayTraceUniformViews.loopUnrollGuard[0] = 4;
-  RayTraceUniformViews.bevel[0] = 1;
-  RayTraceUniformViews.dispersionWavelengths[0] = 3;
-  return {
-    buffer: RayTraceUniformValues,
-    views: RayTraceUniformViews
-  };
-}
-export function packAnalyticsLightsToBuffer(
-  lights: AnalyticLight[],
-  texturesIndices: number[],
-  selectionPmfs: number[],
-  iesProfileTexelOffsets: ArrayLike<number> = []
-) {
-  validateSceneLights(lights);
-  const numLights = lights.length;
-  if (numLights > FIXED_LIGHT_COUNT) {
-    console.warn(
-      `Too many lights, only the first ${FIXED_LIGHT_COUNT} lights will be used.`
-    );
-  }
-  const data = new Float32Array(numLights * PIXELS_PER_LIGHT * 4);
-
-  function packVec3(idx: number, v: number[] | Float32Array) {
-    for (let i = 0; i < 3; i++) {
-      data[i + idx * 4] = v[i];
-    }
-  }
-
-  const lightTypeConstants = {
-    DirectionalLight: CONSTANT_DIRECTIONAL_LIGHT,
-    SphereLight: CONSTANT_SPHERE_LIGHT,
-    RectLight: CONSTANT_RECT_LIGHT,
-    SpotLight: CONSTANT_SPOT_LIGHT
-  };
-
-  for (let i = 0; i < numLights; i++) {
-    const light = lights[i];
-    const color = light.color;
-    const intensity = light.intensity;
-    const off = i * PIXELS_PER_LIGHT;
-    packVec3(
-      off,
-      light.position
-    );
-    data[off * 4 + 3] = lightTypeConstants[light.type];
-    // emission
-    const emissionScale =
-      light.type === 'SpotLight' ? getSpotLightRadiance(light) : intensity;
-    packVec3(off + 1, [
-      color[0] * emissionScale,
-      color[1] * emissionScale,
-      color[2] * emissionScale
-    ]);
-    if (light.type === 'RectLight') {
-      data[(off + 1) * 4 + 3] = getRectLightArea(light);
-      packVec3(off + 2, getRectLightUOrV(light, 0));
-      data[(off + 2) * 4 + 3] = light.spread;
-      packVec3(off + 3, getRectLightUOrV(light, 1));
-    } else if (light.type === 'SphereLight') {
-      data[(off + 1) * 4 + 3] = getSphereLightArea(light);
-      data[(off + 2) * 4 + 3] = light.radius;
-    } else if (light.type === 'SpotLight') {
-      data[(off + 1) * 4 + 3] = getSpotLightArea(light);
-      packVec3(off + 2, getLightDirection(light));
-      data[(off + 2) * 4 + 3] = light.radius;
-      packVec3(off + 3, [
-        Math.cos((light.outerAngle * Math.PI) / 180),
-        Math.min(1, Math.max(0, 1 - light.innerAngle / light.outerAngle)),
-        0
-      ]);
-    } else if (light.type === 'DirectionalLight') {
-      packVec3(off + 2, getLightDirection(light));
-    }
-    data[(off + 3) * 4 + 3] = light.type === 'SpotLight'
-      ? iesProfileTexelOffsets[i] ?? -1
-      : texturesIndices[i];
-    data[(off + 4) * 4] = selectionPmfs[i] ?? 0;
-    packVec3(off + 5, getRigidLightFrame(light).x);
-  }
-
-  return data;
+export { makeRayTraceUniform } from './wgpuSceneUniform.js';
+export function packAnalyticsLightsToBuffer(lights: AnalyticLight[], texturesIndices: number[], selectionPmfs: number[],
+  iesProfileTexelOffsets: ArrayLike<number> = []) {
+  return packWgpuAnalyticLights(lights, texturesIndices, selectionPmfs, i => iesProfileTexelOffsets[i]);
 }
 
 class WGPURayTracePass {
@@ -927,7 +806,7 @@ class WGPURayTracePass {
     label: string,
     gpuBuffer: GPUBuffer | undefined,
     data: Float32Array | Uint32Array,
-    minSize = 200
+    minSize = WGPU_SCENE_BUFFER_MIN_BYTES
   ) {
     const device = this._device;
     const size = Math.max(data.byteLength, minSize);
@@ -1085,23 +964,12 @@ class WGPURayTracePass {
         this._shaderCompilationDiagnostics?.modules[0]?.sourceFingerprint ?? '';
       if (needsCreateShaderModule) {
         const sourceGenerationStartedAt = shaderCompilationNow();
-        const constantsCode = pipelineConstantsKeys
-          .map(
-            (key) =>
-              `${this._bakePipelineConstants ? 'const' : 'override'} ${key} = ${constants[key].toString()};`
-          )
-          .join('\n');
-        const rayTraceShaderCode = /* wgsl */ `
-${defineCode}
-${constantsCode}
-${rayTraceCompute({
-  hasDisplacement: this._hasDisplacement,
-  hasAlpha,
-  hasSceneAlpha,
-  hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
-  hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
-  blasLayoutMask: this._blasLayoutMask
-})}`;
+        const rayTraceShaderCode = wgpuShaderSource(constants, {
+          hasDisplacement: this._hasDisplacement, hasAlpha, hasSceneAlpha,
+          hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
+          hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
+          blasLayoutMask: this._blasLayoutMask
+        }, this._bakePipelineConstants);
 
         sourceBytes = rayTraceShaderCode.length;
         sourceLines = shaderSourceLineCount(rayTraceShaderCode);
@@ -2352,64 +2220,8 @@ ${rayTraceCompute({
       this._rayTracePipelineLayout = undefined;
     }
 
-    const HAS_BEVEL = materials.some((m) => m.bevelSize > 0);
-    const SPECTRAL =
-      materials.some((m) => m.transmissionDispersionScale > 0);
-    const HAS_MEDIUM = materials.some(materialUsesMedium);
-    // Retain the atlas uniform capacity when a stage/material is removed.
-    // Shrinking the array would rebuild every pipeline again on the next edit.
-    const NUM_MAPS = Math.max(
-      Math.ceil(+materialData.defines.NUM_MAPS / 10) * 10,
-      Number(this._constants.NUM_MAPS ?? 0),
-      20
-    );
-
-    Object.assign(this._constants, {
-      // Match the atlas UV selector. Keep the second set when any texture
-      // needs it; material/texture edits already rebuild these constants.
-      USE_UV1: materialData.bufferData.mapUvChannel.some(channel => channel > 0.5),
-      // Isotropic OpenPBR constructs its own basis. Normal mapping uses
-      // triangle UV differentials rather than this vertex tangent.
-      USE_TANGENT: mergedGeometry.tangent != null &&
-        materials.some(material => material.specularAnisotropy > 0 || material.coatAnisotropy > 0 || (!!material.coatNormalMap && material.coatWeight > 0)),
-
-      USE_COAT_NORMAL_FRAMES: materials.some(m => !!m.coatNormalMap && m.coatWeight > 0),
-      USE_ANISOTROPY_DIRECTIONS: materials.some(m => (!!m.coatNormalMap && m.coatWeight > 0) ||
-        m.specularAnisotropy > 0 && (m.specularAnisotropyModel === 'gltf' || !!m.anisotropyMap || m.specularAnisotropyRotation !== 0) ||
-        m.coatAnisotropy > 0 && m.coatAnisotropyRotation !== 0),
-      HAS_MEDIUM,
-      HAS_SHADOW_CATCHER: this._hasShadowCatcher,
-      HAS_THIN_FILM: materials.some((material) => material.thinFilmWeight > 0),
-      HAS_COAT: materials.some((material) => material.coatWeight > 0),
-      HAS_FUZZ: materials.some((material) => material.fuzzWeight > 0),
-      HAS_SUBSURFACE: materials.some((material) => material.subsurfaceWeight > 0),
-      HAS_BEVEL,
-      HAS_ALPHA_MASK: materials.some(
-        (m) => resolveMaterialAlphaMode(m) === 'mask'
-      ),
-      HAS_ALPHA_BLEND: materials.some(
-        (m) => resolveMaterialAlphaMode(m) === 'blend'
-      ),
-      HAS_ALPHA: materials.some(
-        (m) => resolveMaterialAlphaMode(m) !== 'opaque'
-      ),
-
-      SPECTRAL,
-      BEVEL_SAMPLES: this._bevelSamples,
-
-      USE_RR: true,
-      // Match WebGL: defer roulette for multiple-scattering SSS paths.
-      RR_MAX: HAS_MEDIUM ? 12 : 2,
-
-      NUM_UNIFORM_LIGHTS: FIXED_LIGHT_COUNT,
-
-      ...materialData.defines,
-
-      NUM_MAPS,
-      ...materialTextureFeatures(materialData.defines),
-      USE_NORMAL_MAPS: +materialData.defines.NUM_NORMAL_MAPS > 0
-    });
-
+    Object.assign(this._constants, wgpuMaterialConstants(materials, materialData, mergedGeometry,
+      this._bevelSamples, Number(this._constants.NUM_MAPS ?? 0)));
   }
 
   private _updateGeometryData() {

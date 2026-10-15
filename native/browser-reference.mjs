@@ -2,14 +2,14 @@
 const status = document.querySelector('#status');
 try {
   if (!navigator.gpu) throw new Error('This browser does not expose navigator.gpu');
-  const scene = await (await fetch('/scene/scene.json')).json();
+  const scene = await (await fetch('./scene/scene.json')).json();
   const samples = Number(new URL(location.href).searchParams.get('samples') ?? 256);
   if (!Number.isInteger(samples) || samples < 1 || samples > 4096) throw new Error('Invalid sample count');
   const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) throw new Error('No browser WebGPU adapter');
   const device = await adapter.requestDevice();
   device.addEventListener('uncapturederror', event => { status.textContent += `\nGPU error: ${event.error.message}`; });
-  const read = async name => new Uint8Array(await (await fetch(`/scene/${name}`)).arrayBuffer());
+  const read = async name => new Uint8Array(await (await fetch(`./scene/${name}`)).arrayBuffer());
   const buffers = new Map(), textures = new Map(), samplers = new Map();
   for (const input of scene.buffers) {
     const buffer = device.createBuffer({ size: input.size, usage: input.usage | GPUBufferUsage.COPY_DST });
@@ -26,7 +26,7 @@ try {
   }
   for (const {id, ...descriptor} of scene.samplers) samplers.set(id, device.createSampler(descriptor));
   const layouts = scene.bindGroups.map(group => device.createBindGroupLayout({ entries: group.layout }));
-  const source = await (await fetch(`/scene/${scene.shader}`)).text();
+  const source = await (await fetch(`./scene/${scene.shader}`)).text();
   const module = device.createShaderModule({ code: source });
   const pipeline = await device.createComputePipelineAsync({
     layout: device.createPipelineLayout({ bindGroupLayouts: layouts }),
@@ -62,7 +62,7 @@ try {
       floats[i] /= samples;
       if (!Number.isFinite(floats[i])) throw new Error(`Non-finite browser value at ${i}`);
     }
-    const posted = await fetch(`/result/${name}`, { method: 'POST', body: floats });
+    const posted = await fetch(`./result/${name}`, { method: 'POST', body: floats });
     if (!posted.ok) throw new Error(`Failed saving browser ${name}`);
     aovOutputs.push(name);
     output.destroy();
@@ -72,10 +72,10 @@ try {
       device: adapter.info?.device, description: adapter.info?.description },
     renderSeconds: (performance.now() - start) / 1000, finitePixels: scene.width * scene.height,
     aovOutputs, backend: 'browser WebGPU', hdrLayout: 'little-endian f32 RGBA, bottom row first' };
-  await fetch('/result/info', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify(info) });
+  await fetch('./result/info', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify(info) });
   status.textContent = `PASS: browser HDR reference saved\n${JSON.stringify(info, null, 2)}`;
   device.destroy();
 } catch (error) {
   status.textContent = `FAIL: ${error.stack ?? error}`;
-  await fetch('/result/error', { method: 'POST', body: String(error.stack ?? error) });
+  await fetch('./result/error', { method: 'POST', body: String(error.stack ?? error) });
 }

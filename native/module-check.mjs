@@ -29,6 +29,8 @@ export function run(bytes: Uint8Array): Uint8Array { return new Uint8Array(new M
   // needs their values in the graph to lower class-typed sampler parameters.
   ['lights', 'src/renderer/lightCore.ts', null, 'native/modules/lights.ts', 'lightParameters'],
   ['shader-generation', 'src/renderer/wgsl/rayTrace.compute.ts', null, 'native/modules/shader-generation.ts', 'shaderParameters'],
+  ['displacement', 'src/renderer/displacementPreparation.ts', null, 'native/modules/displacement.ts', 'displacementParameters'],
+  ['ies', 'src/scene/IESProfile.ts', null, 'native/modules/ies.ts', 'iesParameters'],
   ['sampling', 'src/renderer/sampling.ts', null, 'native/modules/sampling.ts', 'samplingParameters']
 ];
 function invoke(name, args) {

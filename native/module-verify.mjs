@@ -23,7 +23,7 @@ const sourceOracleRoot = resolve(output, 'javascript-source');
 const sourceEntry = resolve(root, 'native/modules/shader-generation.ts');
 const sourceConfig = ts.readConfigFile(resolve(root, 'tsconfig.json'), ts.sys.readFile);
 const sourceOptions = ts.parseJsonConfigFileContent(sourceConfig.config, ts.sys, root).options;
-const sourceProgram = ts.createProgram([sourceEntry], { ...sourceOptions, rootDir: root,
+const sourceProgram = ts.createProgram([sourceEntry, resolve(root, 'native/modules/displacement.ts'), resolve(root, 'native/modules/ies.ts')], { ...sourceOptions, rootDir: root,
   outDir: sourceOracleRoot, declaration: false, sourceMap: false, inlineSources: false });
 const sourceDiagnostics = [...ts.getPreEmitDiagnostics(sourceProgram), ...sourceProgram.emit().diagnostics];
 if (sourceDiagnostics.some(item => item.category === ts.DiagnosticCategory.Error)) {
@@ -36,7 +36,7 @@ function writeState(complete) {
     success: complete && results.every(result => result.byteIdentical), results }, null, 2) + '\n');
 }
 writeState(false);
-for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updates', 'bvh-core', 'bvh-facade', 'material-packing', 'material-data', 'lights', 'shader-generation', 'sampling']) {
+for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updates', 'bvh-core', 'bvh-facade', 'material-packing', 'material-data', 'lights', 'shader-generation', 'sampling', 'displacement', 'ies']) {
   const module = matrix.results.find(item => item.name === name);
   if (module?.status !== 'archive-built') throw new Error(`Required composition module blocked: ${name}`);
   const host = resolve(output, `${name}-host`);
@@ -46,8 +46,8 @@ for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updat
     const adapter = readFileSync(resolve(root, `native/modules/${name}.ts`), 'utf8');
     const javascript = ts.transpileModule(adapter, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext } }).outputText
       .replaceAll('../../src/', pathToFileURL(resolve(root, 'lib') + '/').href);
-    const oracle = name === 'shader-generation'
-      ? await import(pathToFileURL(resolve(sourceOracleRoot, 'native/modules/shader-generation.js')).href)
+    const oracle = ['shader-generation', 'displacement', 'ies'].includes(name)
+      ? await import(pathToFileURL(resolve(sourceOracleRoot, `native/modules/${name}.js`)).href)
       : await import(`data:text/javascript;base64,${Buffer.from(javascript).toString('base64')}`);
     if (name === 'math') for (const [i, values] of [[0, 0, 0], [1, 2, 3], [-1.25, .3, 4], [.3, -.7, 1.2], [1e-6, 2e-6, -3e-6], [100, -50, .125]].entries()) {
       const input = new Uint8Array(new Float32Array(values).buffer);
@@ -80,6 +80,24 @@ for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updat
     else if (name === 'material-data') for (const count of [0, 1, 5]) for (let flags = 0; flags < 128; flags++) {
       const input = new Uint8Array(new Uint32Array([count, flags]).buffer);
       fixtures.push({label: `atlas-${count}-${flags}`, input, expected: oracle.materialDataParameters(input)});
+    }
+    else if (name === 'displacement') for (const size of [1, 2, 4, 16]) for (let flags = 0; flags < (size === 4 ? 36 : 32); flags++) {
+      if ((flags & 8) && !(flags & 3)) continue;
+      const input = new Uint8Array(new Uint32Array([size, flags]).buffer);
+      fixtures.push({label: `height-${size}-${flags}`, input, expected: oracle.displacementParameters(input)});
+    }
+    else if (name === 'ies') {
+      const valid = 'IESNA:LM-63-2002\nTILT=NONE\n1 1000 1 3 1 1 2 0 0 0 1 1 20\n0 45 90\n0\n100 50 0\n';
+      for (const [label, text] of [
+        ['valid', valid], ['commas', valid.replaceAll(' ', ',')], ['header', valid.replace('2002', '1995')],
+        ['asymmetric', valid.replace('3 1 1 2', '3 3 1 2').replace('0\n100 50 0', '0 90 180\n100 50 0 20 10 0 50 25 0')],
+        ['invalid-header', 'bad'], ['tilt', valid.replace('NONE', 'INCLUDE')],
+        ['counts', valid.replace('1 1000 1 3', '1 1000 1 4')], ['zero', valid.replace('100 50 0', '0 0 0')],
+        ['negative', valid.replace('100 50 0', '-1 50 0')], ['non-finite', valid.replace('100 50 0', 'NaN 50 0')]
+      ]) {
+        const input = new TextEncoder().encode(text);
+        fixtures.push({label, input, expected: oracle.iesParameters(input)});
+      }
     }
     else if (name === 'lights') for (let flags = 0; flags < 128; flags++) {
       const input = new Uint8Array(new Uint32Array([flags]).buffer);

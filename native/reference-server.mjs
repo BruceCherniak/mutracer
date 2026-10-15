@@ -5,11 +5,20 @@ import { fileURLToPath } from 'node:url';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const output = resolve(process.env.MUTRACER_NATIVE_OUTPUT ?? resolve(root, '../.native-build'));
-const scene = resolve(output, 'scene');
-const reference = resolve(output, 'browser-reference'); mkdirSync(reference, { recursive: true });
+const multiple = process.env.MUTRACER_REFERENCE_SCENES === '1';
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url, 'http://127.0.0.1');
+    let directory = output;
+    if (multiple) {
+      const match = /^\/([a-z0-9-]+)(\/.*)$/.exec(url.pathname);
+      if (!match) throw new Error('Use /image/, /textures/, or another verified scene fixture.');
+      directory = resolve(output, match[1], 'reference');
+      url.pathname = match[2];
+    }
+    const scene = resolve(directory, 'scene');
+    const reference = resolve(directory, 'browser-reference');
+    mkdirSync(reference, {recursive: true});
     if (request.method === 'POST' && url.pathname.startsWith('/result/')) {
       const filenames = { '/result/hdr': 'render.rgba32f', '/result/normal': 'normal.rgba32f', '/result/albedo': 'albedo.rgba32f', '/result/info': 'result.json', '/result/error': 'error.txt' };
       const file = filenames[url.pathname]; if (!file) throw new Error('Unknown result');

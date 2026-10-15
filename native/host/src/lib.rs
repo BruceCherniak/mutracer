@@ -1,5 +1,5 @@
-//! Headless, synchronous feasibility renderer for an offline MuTracer capture.
-//! This is an experimental replay ABI, not the complete MuTracer native API.
+//! Headless native experiments for raw descriptors and prepared MuTracer scenes.
+//! Blocking probes and persistent contexts expose experimental subsets of MuTracer.
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -11,8 +11,11 @@ use std::{
     time::{Duration, Instant},
 };
 use wgpu::util::DeviceExt;
+mod context;
 mod hardware;
+mod material_properties;
 mod native_bvh;
+mod scene;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -298,10 +301,567 @@ pub fn render_options(scene_dir: &Path, output: &Path, options: &RenderOptions) 
     let _entry = ENTRY_LOCK
         .try_lock()
         .map_err(|_| "Native probe is already active or poisoned")?;
+    context::check_owner()?;
     let scene: Scene = serde_json::from_slice(&fs::read(scene_dir.join("scene.json"))?)?;
-    if scene.format != 1 || scene.width == 0 || scene.height == 0 {
-        return Err("Invalid capture".into());
+    render_scene(scene_dir, scene, output, options, None)
+}
+
+#[derive(Clone)]
+struct GpuDevice {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    info: wgpu::AdapterInfo,
+    hardware_ray_query: bool,
+}
+impl GpuDevice {
+    fn new(use_hwrt: bool) -> Result<Self> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+            ..Default::default()
+        }))?;
+        let info = adapter.get_info();
+        eprintln!(
+            "Native adapter: {} ({:?}, {:?})",
+            info.name, info.backend, info.device_type
+        );
+        let hardware_ray_query = adapter
+            .features()
+            .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
+        if use_hwrt && !hardware_ray_query {
+            return Err("Hardware ray query is not supported by this adapter".into());
+        }
+        let (device, queue) =
+            pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                label: Some("MuTracer native feasibility"),
+                required_limits: adapter.limits(),
+                required_features: if use_hwrt {
+                    wgpu::Features::EXPERIMENTAL_RAY_QUERY
+                } else {
+                    wgpu::Features::empty()
+                },
+                experimental_features: if use_hwrt {
+                    unsafe { wgpu::ExperimentalFeatures::enabled() }
+                } else {
+                    wgpu::ExperimentalFeatures::disabled()
+                },
+                ..Default::default()
+            }))?;
+        Ok(Self {
+            device,
+            queue,
+            info,
+            hardware_ray_query,
+        })
     }
+}
+struct GpuScene {
+    gpu: GpuDevice,
+    scene: Scene,
+    buffers: HashMap<usize, wgpu::Buffer>,
+    pipeline: wgpu::ComputePipeline,
+    groups: Vec<wgpu::BindGroup>,
+    _textures: HashMap<usize, wgpu::Texture>,
+    _samplers: HashMap<usize, wgpu::Sampler>,
+    hardware: Option<hardware::Resources>,
+    native_bvh: Option<(Vec<u8>, native_bvh::Stats)>,
+    compile_seconds: f64,
+    samples: u32,
+}
+impl GpuScene {
+    fn new(
+        scene_dir: &Path,
+        scene: Scene,
+        options: &RenderOptions,
+        assets: Option<&HashMap<String, Vec<u8>>>,
+        gpu: GpuDevice,
+    ) -> Result<Self> {
+        // Drain validation/OOM errors before making a candidate scene visible to a context.
+        let memory_scope = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let validation_scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let result = Self::upload(scene_dir, scene, options, assets, gpu.clone());
+        let validation = pollster::block_on(validation_scope.pop());
+        let memory = pollster::block_on(memory_scope.pop());
+        if let Some(error) = validation.or(memory) {
+            return Err(error.to_string().into());
+        }
+        result
+    }
+    fn upload(
+        scene_dir: &Path,
+        scene: Scene,
+        options: &RenderOptions,
+        assets: Option<&HashMap<String, Vec<u8>>>,
+        gpu: GpuDevice,
+    ) -> Result<Self> {
+        let read = |name: &str| -> Result<Vec<u8>> {
+            if let Some(assets) = assets {
+                return assets
+                    .get(name)
+                    .cloned()
+                    .ok_or_else(|| format!("Missing native resource {name}").into());
+            }
+            Ok(fs::read(scene_dir.join(name))?)
+        };
+        if scene.format != 1 || scene.width == 0 || scene.height == 0 {
+            return Err("Invalid capture".into());
+        }
+        if options.flags & 2 != 0
+            && options.material_index
+                >= scene
+                    .material_count
+                    .ok_or("Capture has no material metadata")?
+        {
+            return Err("Material index is out of range".into());
+        }
+        let use_hwrt = options.flags & 4 != 0;
+        if use_hwrt && !scene.hwrt.as_ref().is_some_and(|capture| capture.eligible) {
+            return Err("Capture is not eligible for the initial hybrid HWRT backend".into());
+        }
+        let device = &gpu.device;
+        let queue = &gpu.queue;
+        unsafe {
+            mt_core_init();
+        }
+        let native_bvh = scene
+            .native_bvh
+            .as_ref()
+            .map(|capture| native_bvh::rebuild(scene_dir, capture))
+            .transpose()?;
+        let mut buffers = HashMap::new();
+        for buffer in &scene.buffers {
+            let data = if scene
+                .native_bvh
+                .as_ref()
+                .is_some_and(|capture| capture.buffer == buffer.id)
+            {
+                native_bvh
+                    .as_ref()
+                    .ok_or("Missing native BVH result")?
+                    .0
+                    .clone()
+            } else {
+                read(&buffer.file)?
+            };
+            if data.len() as u64 != buffer.size {
+                return Err("Capture buffer length mismatch".into());
+            }
+            let usage =
+                wgpu::BufferUsages::from_bits(buffer.usage).ok_or("Invalid buffer usage")?;
+            buffers.insert(
+                buffer.id,
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&buffer.file),
+                    contents: &data,
+                    usage,
+                }),
+            );
+        }
+        if let Some(sampling) = &scene.sampling {
+            if sampling.pattern != "sobol" {
+                return Err(
+                    "Native module composition currently supports captured Sobol only".into(),
+                );
+            }
+            let input = sampling.max_samples.to_le_bytes();
+            let mut pointer = std::ptr::null();
+            let mut size = 0;
+            unsafe {
+                mt_core_sampling(input.as_ptr(), input.len(), &mut pointer, &mut size);
+            }
+            let command = unsafe { copy_core_result(pointer, size, 168)? };
+            if command[..4] != [0, 0, 0, 0] {
+                return Err("Unexpected native sampling pattern".into());
+            }
+            queue.write_buffer(&buffers[&scene.rt_uniform], 160, &command[4..8]);
+        }
+        if options.flags & 1 != 0 {
+            let id = scene
+                .camera_uniform
+                .ok_or("Capture has no camera metadata")?;
+            let record = scene
+                .buffers
+                .iter()
+                .find(|buffer| buffer.id == id)
+                .ok_or("Missing camera buffer")?;
+            let data = read(&record.file)?;
+            if data.len() != 144 {
+                return Err("Invalid camera uniform length".into());
+            }
+            let mut pointer = std::ptr::null();
+            let mut size = 0;
+            unsafe {
+                mt_core_camera(
+                    data.as_ptr(),
+                    data.len(),
+                    options.camera_offset[0] as f64,
+                    options.camera_offset[1] as f64,
+                    options.camera_offset[2] as f64,
+                    &mut pointer,
+                    &mut size,
+                );
+            }
+            let command = unsafe { copy_core_result(pointer, size, 144)? };
+            queue.write_buffer(&buffers[&id], 0, &command);
+        }
+        if options.flags & 2 != 0 {
+            let id = scene
+                .material_buffer
+                .ok_or("Capture has no material buffer metadata")?;
+            let stride = scene
+                .material_stride
+                .ok_or("Capture has no material stride")?;
+            let offsets = scene
+                .material_offsets
+                .as_ref()
+                .ok_or("Capture has no material offsets")?;
+            let start = options.material_index as u64 * stride;
+            if offsets.color + 12 > stride
+                || offsets.roughness + 4 > stride
+                || start + stride > buffers[&id].size()
+            {
+                return Err("Invalid material offsets".into());
+            }
+            let mut pointer = std::ptr::null();
+            let mut size = 0;
+            unsafe {
+                mt_core_material(
+                    options.base_color[0] as f64,
+                    options.base_color[1] as f64,
+                    options.base_color[2] as f64,
+                    options.roughness as f64,
+                    &mut pointer,
+                    &mut size,
+                );
+            }
+            let command = unsafe { copy_core_result(pointer, size, 16)? };
+            queue.write_buffer(&buffers[&id], start + offsets.color, &command[..12]);
+            queue.write_buffer(&buffers[&id], start + offsets.roughness, &command[12..]);
+        }
+        let mut textures = HashMap::new();
+        let mut views = HashMap::new();
+        for texture in &scene.textures {
+            let gpu_texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(&texture.format),
+                size: wgpu::Extent3d {
+                    width: texture.width,
+                    height: texture.height,
+                    depth_or_array_layers: texture.depth,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: match texture.format.as_str() {
+                    "rgba8unorm" => wgpu::TextureFormat::Rgba8Unorm,
+                    "rgba16float" => wgpu::TextureFormat::Rgba16Float,
+                    "rgba32float" => wgpu::TextureFormat::Rgba32Float,
+                    "r32float" => wgpu::TextureFormat::R32Float,
+                    "rg32float" => wgpu::TextureFormat::Rg32Float,
+                    _ => return Err("Unsupported capture texture format".into()),
+                },
+                usage: wgpu::TextureUsages::from_bits(texture.usage)
+                    .ok_or("Invalid texture usage")?,
+                view_formats: &[],
+            });
+            for write in &texture.writes {
+                let origin = &write["origin"];
+                let origin = wgpu::Origin3d {
+                    x: origin[0].as_u64().unwrap_or(0) as u32,
+                    y: origin[1].as_u64().unwrap_or(0) as u32,
+                    z: origin[2].as_u64().unwrap_or(0) as u32,
+                };
+                let layout = &write["layout"];
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &gpu_texture,
+                        mip_level: 0,
+                        origin,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &read(write["file"].as_str().ok_or("Missing texture file")?)?,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: layout["offset"].as_u64().unwrap_or(0),
+                        bytes_per_row: layout["bytesPerRow"].as_u64().map(|v| v as u32),
+                        rows_per_image: layout["rowsPerImage"].as_u64().map(|v| v as u32),
+                    },
+                    extent(&write["size"], 1),
+                );
+            }
+            views.insert(
+                texture.id,
+                gpu_texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            );
+            textures.insert(texture.id, gpu_texture);
+        }
+        let mut samplers = HashMap::new();
+        for sampler in &scene.samplers {
+            samplers.insert(
+                number(sampler, "id", 0) as usize,
+                device.create_sampler(&wgpu::SamplerDescriptor {
+                    label: Some("MuTracer maps"),
+                    mag_filter: wgpu::FilterMode::Linear,
+                    min_filter: wgpu::FilterMode::Linear,
+                    ..Default::default()
+                }),
+            );
+        }
+        let hardware = if use_hwrt {
+            Some(hardware::prepare(
+                &device,
+                &queue,
+                scene_dir,
+                scene.hwrt.as_ref().unwrap(),
+            )?)
+        } else {
+            None
+        };
+        let layouts: Vec<_> = scene
+            .bind_groups
+            .iter()
+            .enumerate()
+            .map(|(index, group)| {
+                let mut entries: Vec<_> = group.layout.iter().map(layout_entry).collect();
+                if index == 0 && hardware.is_some() {
+                    entries.extend([
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 4,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::AccelerationStructure {
+                                vertex_return: false,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 5,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                        wgpu::BindGroupLayoutEntry {
+                            binding: 6,
+                            visibility: wgpu::ShaderStages::COMPUTE,
+                            ty: wgpu::BindingType::Buffer {
+                                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                has_dynamic_offset: false,
+                                min_binding_size: None,
+                            },
+                            count: None,
+                        },
+                    ]);
+                }
+                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                    label: Some("MuTracer capture layout"),
+                    entries: &entries,
+                })
+            })
+            .collect();
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("MuTracer capture pipeline layout"),
+            bind_group_layouts: &layouts.iter().map(Some).collect::<Vec<_>>(),
+            ..Default::default()
+        });
+        eprintln!("Validating original MuTracer WGSL and creating native compute pipeline...");
+        let shader_started = Instant::now();
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Original MuTracer path tracer"),
+            source: wgpu::ShaderSource::Wgsl(
+                String::from_utf8(read(if use_hwrt {
+                    scene
+                        .hwrt
+                        .as_ref()
+                        .unwrap()
+                        .shader
+                        .as_ref()
+                        .ok_or("Missing HWRT shader")?
+                } else {
+                    &scene.shader
+                })?)?
+                .into(),
+            ),
+        });
+        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("MuTracer native path tracer"),
+            layout: Some(&layout),
+            module: &shader,
+            entry_point: Some(&scene.entry_point),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+        let compile_seconds = shader_started.elapsed().as_secs_f64();
+        let groups: Vec<_> = scene
+            .bind_groups
+            .iter()
+            .zip(&layouts)
+            .enumerate()
+            .map(|(index, (group, layout))| {
+                let mut entries: Vec<_> = group
+                    .entries
+                    .iter()
+                    .map(|entry| wgpu::BindGroupEntry {
+                        binding: entry.binding,
+                        resource: match entry.kind.as_str() {
+                            "buffer" => buffers[&entry.id].as_entire_binding(),
+                            "texture" => wgpu::BindingResource::TextureView(&views[&entry.id]),
+                            "sampler" => wgpu::BindingResource::Sampler(&samplers[&entry.id]),
+                            other => panic!("Unsupported resource: {other}"),
+                        },
+                    })
+                    .collect();
+                if index == 0 {
+                    if let Some(resources) = &hardware {
+                        entries.extend([
+                            wgpu::BindGroupEntry {
+                                binding: 4,
+                                resource: resources.tlas.as_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 5,
+                                resource: resources.mapping.as_entire_binding(),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 6,
+                                resource: resources.counters.as_entire_binding(),
+                            },
+                        ]);
+                    }
+                }
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("MuTracer capture resources"),
+                    layout,
+                    entries: &entries,
+                })
+            })
+            .collect();
+        Ok(Self {
+            gpu,
+            scene,
+            buffers,
+            pipeline,
+            groups,
+            _textures: textures,
+            _samplers: samplers,
+            hardware,
+            native_bvh,
+            compile_seconds,
+            samples: 0,
+        })
+    }
+    fn add_samples(&mut self, additional: u32, bounces: f32, seed: u32) -> Result<()> {
+        let end = self
+            .samples
+            .checked_add(additional)
+            .ok_or("Sample count overflow")?;
+        if additional == 0 || end > 4096 {
+            return Err("Total samples must be 1..4096".into());
+        }
+        let device = &self.gpu.device;
+        let queue = &self.gpu.queue;
+        for sample in self.samples..end {
+            let mut pointer = std::ptr::null();
+            let mut size = 0;
+            unsafe {
+                mt_core_frame(sample as f64, bounces as f64, seed, &mut pointer, &mut size);
+            }
+            if size != 16 || pointer.is_null() {
+                return Err("Invalid AOT frame command".into());
+            }
+            // Copy all arena-backed bytes before any reset/collect or next call.
+            let mut frame = [0u8; 16];
+            unsafe {
+                frame.copy_from_slice(std::slice::from_raw_parts(pointer, size));
+                mt_core_reset();
+            }
+            let uniform = &self.buffers[&self.scene.rt_uniform];
+            queue.write_buffer(uniform, 8, &frame[0..4]);
+            queue.write_buffer(uniform, 124, &frame[4..8]);
+            queue.write_buffer(uniform, 156, &frame[8..12]);
+            let mut encoder =
+                device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+                pass.set_pipeline(&self.pipeline);
+                for (index, group) in self.groups.iter().enumerate() {
+                    pass.set_bind_group(index as u32, group, &[]);
+                }
+                pass.dispatch_workgroups(
+                    self.scene.width.div_ceil(8),
+                    self.scene.height.div_ceil(8),
+                    1,
+                );
+            }
+            queue.submit([encoder.finish()]);
+            self.samples = sample + 1;
+            if sample % 8 == 7 {
+                device.poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(Duration::from_secs(30)),
+                })?;
+                eprintln!("  {}/{} samples", sample + 1, end);
+            }
+        }
+        unsafe {
+            mt_core_collect();
+        }
+        device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_secs(30)),
+        })?;
+        Ok(())
+    }
+    fn read_pixels(&self, kind: u32) -> Result<Vec<u8>> {
+        if self.samples == 0 {
+            return Err("No completed samples".into());
+        }
+        let id = match kind {
+            0 => self.scene.color_output,
+            1 => self.scene.normal_output.ok_or("No normal output")?,
+            2 => self.scene.albedo_output.ok_or("No albedo output")?,
+            _ => return Err("Unknown image kind".into()),
+        };
+        read_average(
+            &self.gpu.device,
+            &self.gpu.queue,
+            self.buffers.get(&id).ok_or("Missing output buffer")?,
+            self.scene.width,
+            self.scene.height,
+            self.samples,
+        )
+    }
+    fn reset_raw(&mut self) -> Result<()> {
+        // The raw resource protocol reserves 10..13 for accumulation and ray scratch.
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        for id in 10..=13 {
+            encoder.clear_buffer(
+                self.buffers
+                    .get(&id)
+                    .ok_or("Missing raw accumulation buffer")?,
+                0,
+                None,
+            );
+        }
+        self.gpu.queue.submit([encoder.finish()]);
+        self.gpu.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_secs(30)),
+        })?;
+        self.samples = 0;
+        Ok(())
+    }
+}
+
+fn render_scene(
+    scene_dir: &Path,
+    scene: Scene,
+    output: &Path,
+    options: &RenderOptions,
+    assets: Option<&HashMap<String, Vec<u8>>>,
+) -> Result<()> {
     let samples = if options.samples == 0 {
         scene.samples
     } else {
@@ -310,424 +870,22 @@ pub fn render_options(scene_dir: &Path, output: &Path, options: &RenderOptions) 
     if samples == 0 || samples > 4096 {
         return Err("Samples must be 1..4096".into());
     }
-    if options.flags & 2 != 0
-        && options.material_index
-            >= scene
-                .material_count
-                .ok_or("Capture has no material metadata")?
-    {
-        return Err("Material index is out of range".into());
-    }
     fs::create_dir_all(output)?;
     let start = Instant::now();
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::HighPerformance,
-        force_fallback_adapter: false,
-        compatible_surface: None,
-        ..Default::default()
-    }))?;
-    let info = adapter.get_info();
-    eprintln!(
-        "Native adapter: {} ({:?}, {:?})",
-        info.name, info.backend, info.device_type
-    );
-    let hardware_ray_query = adapter
-        .features()
-        .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
     let use_hwrt = options.flags & 4 != 0;
-    if use_hwrt && !hardware_ray_query {
-        return Err("Hardware ray query is not supported by this adapter".into());
-    }
-    if use_hwrt && !scene.hwrt.as_ref().is_some_and(|capture| capture.eligible) {
-        return Err("Capture is not eligible for the initial hybrid HWRT backend".into());
-    }
-    let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-        label: Some("MuTracer native feasibility"),
-        required_limits: adapter.limits(),
-        required_features: if use_hwrt {
-            wgpu::Features::EXPERIMENTAL_RAY_QUERY
-        } else {
-            wgpu::Features::empty()
-        },
-        experimental_features: if use_hwrt {
-            unsafe { wgpu::ExperimentalFeatures::enabled() }
-        } else {
-            wgpu::ExperimentalFeatures::disabled()
-        },
-        ..Default::default()
-    }))?;
-    unsafe {
-        mt_core_init();
-    }
-    let native_bvh = scene
-        .native_bvh
-        .as_ref()
-        .map(|capture| native_bvh::rebuild(scene_dir, capture))
-        .transpose()?;
-    if let Some((data, _)) = &native_bvh {
+    let gpu = GpuDevice::new(use_hwrt)?;
+    let mut gpu_scene = GpuScene::new(scene_dir, scene, options, assets, gpu)?;
+    if let Some((data, _)) = &gpu_scene.native_bvh {
         fs::write(output.join("native-bvh.bin"), data)?;
     }
-    let mut buffers = HashMap::new();
-    for buffer in &scene.buffers {
-        let data = if scene
-            .native_bvh
-            .as_ref()
-            .is_some_and(|capture| capture.buffer == buffer.id)
-        {
-            native_bvh
-                .as_ref()
-                .ok_or("Missing native BVH result")?
-                .0
-                .clone()
-        } else {
-            fs::read(scene_dir.join(&buffer.file))?
-        };
-        if data.len() as u64 != buffer.size {
-            return Err("Capture buffer length mismatch".into());
-        }
-        let usage = wgpu::BufferUsages::from_bits(buffer.usage).ok_or("Invalid buffer usage")?;
-        buffers.insert(
-            buffer.id,
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(&buffer.file),
-                contents: &data,
-                usage,
-            }),
-        );
-    }
-    if let Some(sampling) = &scene.sampling {
-        if sampling.pattern != "sobol" {
-            return Err("Native module composition currently supports captured Sobol only".into());
-        }
-        let input = sampling.max_samples.to_le_bytes();
-        let mut pointer = std::ptr::null();
-        let mut size = 0;
-        unsafe {
-            mt_core_sampling(input.as_ptr(), input.len(), &mut pointer, &mut size);
-        }
-        let command = unsafe { copy_core_result(pointer, size, 168)? };
-        if command[..4] != [0, 0, 0, 0] {
-            return Err("Unexpected native sampling pattern".into());
-        }
-        queue.write_buffer(&buffers[&scene.rt_uniform], 160, &command[4..8]);
-    }
-    if options.flags & 1 != 0 {
-        let id = scene
-            .camera_uniform
-            .ok_or("Capture has no camera metadata")?;
-        let record = scene
-            .buffers
-            .iter()
-            .find(|buffer| buffer.id == id)
-            .ok_or("Missing camera buffer")?;
-        let data = fs::read(scene_dir.join(&record.file))?;
-        if data.len() != 144 {
-            return Err("Invalid camera uniform length".into());
-        }
-        let mut pointer = std::ptr::null();
-        let mut size = 0;
-        unsafe {
-            mt_core_camera(
-                data.as_ptr(),
-                data.len(),
-                options.camera_offset[0] as f64,
-                options.camera_offset[1] as f64,
-                options.camera_offset[2] as f64,
-                &mut pointer,
-                &mut size,
-            );
-        }
-        let command = unsafe { copy_core_result(pointer, size, 144)? };
-        queue.write_buffer(&buffers[&id], 0, &command);
-    }
-    if options.flags & 2 != 0 {
-        let id = scene
-            .material_buffer
-            .ok_or("Capture has no material buffer metadata")?;
-        let stride = scene
-            .material_stride
-            .ok_or("Capture has no material stride")?;
-        let offsets = scene
-            .material_offsets
-            .as_ref()
-            .ok_or("Capture has no material offsets")?;
-        let start = options.material_index as u64 * stride;
-        if offsets.color + 12 > stride
-            || offsets.roughness + 4 > stride
-            || start + stride > buffers[&id].size()
-        {
-            return Err("Invalid material offsets".into());
-        }
-        let mut pointer = std::ptr::null();
-        let mut size = 0;
-        unsafe {
-            mt_core_material(
-                options.base_color[0] as f64,
-                options.base_color[1] as f64,
-                options.base_color[2] as f64,
-                options.roughness as f64,
-                &mut pointer,
-                &mut size,
-            );
-        }
-        let command = unsafe { copy_core_result(pointer, size, 16)? };
-        queue.write_buffer(&buffers[&id], start + offsets.color, &command[..12]);
-        queue.write_buffer(&buffers[&id], start + offsets.roughness, &command[12..]);
-    }
-    let mut textures = HashMap::new();
-    let mut views = HashMap::new();
-    for texture in &scene.textures {
-        let gpu_texture = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(&texture.format),
-            size: wgpu::Extent3d {
-                width: texture.width,
-                height: texture.height,
-                depth_or_array_layers: texture.depth,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: match texture.format.as_str() {
-                "rgba8unorm" => wgpu::TextureFormat::Rgba8Unorm,
-                "rgba16float" => wgpu::TextureFormat::Rgba16Float,
-                "rgba32float" => wgpu::TextureFormat::Rgba32Float,
-                "r32float" => wgpu::TextureFormat::R32Float,
-                "rg32float" => wgpu::TextureFormat::Rg32Float,
-                _ => return Err("Unsupported capture texture format".into()),
-            },
-            usage: wgpu::TextureUsages::from_bits(texture.usage).ok_or("Invalid texture usage")?,
-            view_formats: &[],
-        });
-        for write in &texture.writes {
-            let origin = &write["origin"];
-            let origin = wgpu::Origin3d {
-                x: origin[0].as_u64().unwrap_or(0) as u32,
-                y: origin[1].as_u64().unwrap_or(0) as u32,
-                z: origin[2].as_u64().unwrap_or(0) as u32,
-            };
-            let layout = &write["layout"];
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &gpu_texture,
-                    mip_level: 0,
-                    origin,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                &fs::read(scene_dir.join(write["file"].as_str().ok_or("Missing texture file")?))?,
-                wgpu::TexelCopyBufferLayout {
-                    offset: layout["offset"].as_u64().unwrap_or(0),
-                    bytes_per_row: layout["bytesPerRow"].as_u64().map(|v| v as u32),
-                    rows_per_image: layout["rowsPerImage"].as_u64().map(|v| v as u32),
-                },
-                extent(&write["size"], 1),
-            );
-        }
-        views.insert(
-            texture.id,
-            gpu_texture.create_view(&wgpu::TextureViewDescriptor::default()),
-        );
-        textures.insert(texture.id, gpu_texture);
-    }
-    let mut samplers = HashMap::new();
-    for sampler in &scene.samplers {
-        samplers.insert(
-            number(sampler, "id", 0) as usize,
-            device.create_sampler(&wgpu::SamplerDescriptor {
-                label: Some("MuTracer maps"),
-                mag_filter: wgpu::FilterMode::Linear,
-                min_filter: wgpu::FilterMode::Linear,
-                ..Default::default()
-            }),
-        );
-    }
-    let hardware = if use_hwrt {
-        Some(hardware::prepare(
-            &device,
-            &queue,
-            scene_dir,
-            scene.hwrt.as_ref().unwrap(),
-        )?)
-    } else {
-        None
-    };
-    let layouts: Vec<_> = scene
-        .bind_groups
-        .iter()
-        .enumerate()
-        .map(|(index, group)| {
-            let mut entries: Vec<_> = group.layout.iter().map(layout_entry).collect();
-            if index == 0 && hardware.is_some() {
-                entries.extend([
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 4,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::AccelerationStructure {
-                            vertex_return: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 5,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 6,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
-                    },
-                ]);
-            }
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("MuTracer capture layout"),
-                entries: &entries,
-            })
-        })
-        .collect();
-    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some("MuTracer capture pipeline layout"),
-        bind_group_layouts: &layouts.iter().map(Some).collect::<Vec<_>>(),
-        ..Default::default()
-    });
-    eprintln!("Validating original MuTracer WGSL and creating native compute pipeline...");
-    let shader_started = Instant::now();
-    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some("Original MuTracer path tracer"),
-        source: wgpu::ShaderSource::Wgsl(
-            fs::read_to_string(scene_dir.join(if use_hwrt {
-                scene
-                    .hwrt
-                    .as_ref()
-                    .unwrap()
-                    .shader
-                    .as_ref()
-                    .ok_or("Missing HWRT shader")?
-            } else {
-                &scene.shader
-            }))?
-            .into(),
-        ),
-    });
-    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some("MuTracer native path tracer"),
-        layout: Some(&layout),
-        module: &shader,
-        entry_point: Some(&scene.entry_point),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    let compile_seconds = shader_started.elapsed().as_secs_f64();
-    let groups: Vec<_> = scene
-        .bind_groups
-        .iter()
-        .zip(&layouts)
-        .enumerate()
-        .map(|(index, (group, layout))| {
-            let mut entries: Vec<_> = group
-                .entries
-                .iter()
-                .map(|entry| wgpu::BindGroupEntry {
-                    binding: entry.binding,
-                    resource: match entry.kind.as_str() {
-                        "buffer" => buffers[&entry.id].as_entire_binding(),
-                        "texture" => wgpu::BindingResource::TextureView(&views[&entry.id]),
-                        "sampler" => wgpu::BindingResource::Sampler(&samplers[&entry.id]),
-                        other => panic!("Unsupported resource: {other}"),
-                    },
-                })
-                .collect();
-            if index == 0 {
-                if let Some(resources) = &hardware {
-                    entries.extend([
-                        wgpu::BindGroupEntry {
-                            binding: 4,
-                            resource: resources.tlas.as_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 5,
-                            resource: resources.mapping.as_entire_binding(),
-                        },
-                        wgpu::BindGroupEntry {
-                            binding: 6,
-                            resource: resources.counters.as_entire_binding(),
-                        },
-                    ]);
-                }
-            }
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("MuTracer capture resources"),
-                layout,
-                entries: &entries,
-            })
-        })
-        .collect();
+    let compile_seconds = gpu_scene.compile_seconds;
+    let hardware_ray_query = gpu_scene.gpu.hardware_ray_query;
     eprintln!("Native pipeline ready in {compile_seconds:.2}s; tracing {samples} samples...");
     let render_started = Instant::now();
-    for sample in 0..samples {
-        let mut pointer = std::ptr::null();
-        let mut size = 0;
-        unsafe {
-            mt_core_frame(
-                sample as f64,
-                options.bounces as f64,
-                options.seed,
-                &mut pointer,
-                &mut size,
-            );
-        }
-        if size != 16 || pointer.is_null() {
-            return Err("Invalid AOT frame command".into());
-        }
-        // Copy all arena-backed bytes before any reset/collect or next call.
-        let mut frame = [0u8; 16];
-        unsafe {
-            frame.copy_from_slice(std::slice::from_raw_parts(pointer, size));
-            mt_core_reset();
-        }
-        let uniform = &buffers[&scene.rt_uniform];
-        queue.write_buffer(uniform, 8, &frame[0..4]);
-        queue.write_buffer(uniform, 124, &frame[4..8]);
-        queue.write_buffer(uniform, 156, &frame[8..12]);
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
-            pass.set_pipeline(&pipeline);
-            for (index, group) in groups.iter().enumerate() {
-                pass.set_bind_group(index as u32, group, &[]);
-            }
-            pass.dispatch_workgroups(scene.width.div_ceil(8), scene.height.div_ceil(8), 1);
-        }
-        queue.submit([encoder.finish()]);
-        if sample % 8 == 7 {
-            device.poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(Duration::from_secs(30)),
-            })?;
-            eprintln!("  {}/{} samples", sample + 1, samples);
-        }
-    }
-    unsafe {
-        mt_core_collect();
-    }
-    let averaged = read_average(
-        &device,
-        &queue,
-        &buffers[&scene.color_output],
-        scene.width,
-        scene.height,
-        samples,
-    )?;
+    gpu_scene.add_samples(samples, options.bounces, options.seed)?;
+    let scene = &gpu_scene.scene;
+    let info = &gpu_scene.gpu.info;
+    let averaged = gpu_scene.read_pixels(0)?;
     let mapped = &averaged;
     let mut aov_outputs = Vec::new();
     for (name, id) in [
@@ -736,9 +894,9 @@ pub fn render_options(scene_dir: &Path, output: &Path, options: &RenderOptions) 
     ] {
         if let Some(id) = id {
             let values = read_average(
-                &device,
-                &queue,
-                buffers.get(&id).ok_or("Missing AOV buffer")?,
+                &gpu_scene.gpu.device,
+                &gpu_scene.gpu.queue,
+                gpu_scene.buffers.get(&id).ok_or("Missing AOV buffer")?,
                 scene.width,
                 scene.height,
                 samples,
@@ -791,9 +949,10 @@ pub fn render_options(scene_dir: &Path, output: &Path, options: &RenderOptions) 
     png.set_color(png::ColorType::Rgb);
     png.set_depth(png::BitDepth::Eight);
     png.write_header()?.write_image_data(&rgb)?;
-    let query_counts = hardware
+    let query_counts = gpu_scene
+        .hardware
         .as_ref()
-        .map(|resources| hardware::counts(&device, &queue, resources))
+        .map(|resources| hardware::counts(&gpu_scene.gpu.device, &gpu_scene.gpu.queue, resources))
         .transpose()?;
     fs::write(
         output.join("result.json"),
@@ -809,13 +968,14 @@ pub fn render_options(scene_dir: &Path, output: &Path, options: &RenderOptions) 
             "totalSeconds": start.elapsed().as_secs_f64(), "rgbMin": minimum, "rgbMax": maximum,
             "rgbMean": mean / (scene.width as f64 * scene.height as f64 * 3.0),
             "finitePixels": scene.width as u64 * scene.height as u64,
-            "aot": "original SAH BVH builder/layout and sampling modules, frame packing/normalizeBounces, shared camera packing and material patch",
+            "nativeSceneConstruction": assets.is_some(),
+            "aot": if assets.is_some() { "native input decoding, shared scene assembly/BLAS/TLAS/attributes/materials/atlas/lights/camera/full WGSL, sampling and frame packing" } else { "original SAH BVH builder/layout and sampling modules, frame packing/normalizeBounces, shared camera packing and material patch" },
             "nativeOptions": options,
-            "buildTimeJavaScript": "scene/raw geometry, TLAS/instance/material/light packing and original shader generation; eligible BLASes are rebuilt natively",
+            "buildTimeJavaScript": if assets.is_some() { "none for scene construction or rendering" } else { "scene/raw geometry, TLAS/instance/material/light packing and original shader generation; eligible BLASes are rebuilt natively" },
             "runtime": "native Rust + scriptc machine code + wgpu/Metal; no Node/JS engine",
             "preview": "Reinhard + sRGB; compare render.rgba32f for numerical validation",
             "aovOutputs": aov_outputs,
-            "nativeBvh": native_bvh.as_ref().map(|(_, stats)| stats),
+            "nativeBvh": gpu_scene.native_bvh.as_ref().map(|(_, stats)| stats),
             "nativeSamplingModule": scene.sampling.is_some(),
             "hdrLayout": "little-endian f32 RGBA, bottom row first; linear sample average",
             "wholeLibraryNative": false

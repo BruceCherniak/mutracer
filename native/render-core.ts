@@ -1,3 +1,4 @@
+import { sceneParameters as prepareNativeScene } from './scene-core.js';
 import { normalizeBounces } from '../src/renderer/pathLimits.js';
 import { packCameraUniform } from '../src/renderer/cameraUniform.js';
 import { buildBvh as buildBvhModule } from './modules/bvh.js';
@@ -40,3 +41,5 @@ export function materialParameters(r: number, g: number, b: number, roughness: n
 
 export function buildBvh(bytes: Uint8Array): Uint8Array { return buildBvhModule(bytes); }
 export function samplingParameters(bytes: Uint8Array): Uint8Array { return buildSamplingParameters(bytes); }
+
+export function sceneParameters(bytes: Uint8Array): Uint8Array { return prepareNativeScene(bytes); }

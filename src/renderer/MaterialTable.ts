@@ -141,7 +141,7 @@ class MaterialTable {
   texture: WebGLTexture2DArray | undefined;
   textureAtlasStats: TextureAtlasStats;
 
-  defines: Record<string, string | number> = {};
+  defines: Record<string, number> = {};
 
   bufferData: BufferData;
 

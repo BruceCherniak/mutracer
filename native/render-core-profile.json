@@ -59,6 +59,14 @@
         "bytes"
       ],
       "returns": "bytes"
+    },
+    {
+      "export": "sceneParameters",
+      "symbol": "mt_core_scene",
+      "params": [
+        "bytes"
+      ],
+      "returns": "bytes"
     }
   ]
 }
