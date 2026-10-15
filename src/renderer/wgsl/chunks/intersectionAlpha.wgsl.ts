@@ -1,8 +1,8 @@
 import { mapAlphaUsageConstants } from '../../materialConstants.js';
-import { uvProjectionConstants } from '../../MaterialTable.js';
+import { uvProjectionConstants } from '../../materialConstants.js';
 import {
   materialAlphaModeConstants
-} from '../../../scene/OpenPBRMaterial.js';
+} from '../../materialConstants.js';
 
 /**
  * Material coverage shared by software BVH traversal and native RayQuery

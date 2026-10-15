@@ -53,7 +53,7 @@ import DirectionalLight from '../scene/DirectionalLight.js';
 import SphereLight from '../scene/SphereLight.js';
 import RectLight from '../scene/RectLight.js';
 import SpotLight from '../scene/SpotLight.js';
-import { SceneBackground, SceneLight } from '../scene/Scene.js';
+import type { SceneBackground, SceneLight } from '../scene/Scene.js';
 import { isIntelMac, numberArraysEqual } from './util.js';
 import Camera from '../scene/Camera.js';
 import {

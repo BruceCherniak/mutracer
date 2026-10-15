@@ -1,5 +1,5 @@
 import type { ShaderCompilationDiagnostics } from './RenderingPipeline.js';
-import { FragmentShader, ShaderDefineValue, ShaderUniform } from './shader.js';
+import { FragmentShader, type ShaderDefineValue, type ShaderUniform } from './shader.js';
 
 export { FragmentShader, Shader, createShaderMixin, glsl } from './shader.js';
 

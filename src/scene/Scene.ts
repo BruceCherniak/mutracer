@@ -1,4 +1,4 @@
-import { ColorRGBA } from '../types.js';
+import type { ColorRGBA } from '../types.js';
 import AmbientLight from './AmbientLight.js';
 import DirectionalLight from './DirectionalLight.js';
 import EnvironmentLight from './EnvironmentLight.js';

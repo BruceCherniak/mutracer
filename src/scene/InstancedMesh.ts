@@ -1,6 +1,7 @@
 import Mesh from './Mesh.js';
 import Geometry from './Geometry.js';
-import OpenPBRMaterial from './OpenPBRMaterial.js';
+import type OpenPBRMaterial from './OpenPBRMaterial.js';
+import type { InstanceData } from './MeshState.js';
 
 /** Options for a batch sharing geometry and materials. */
 export interface InstancedMeshOptions {
@@ -14,6 +15,9 @@ export interface InstancedMeshOptions {
 
 /** A batch of instances. World matrices are transform * transforms[i]. */
 export default class InstancedMesh extends Mesh {
+  // A live view over the public own properties keeps engine snapshots independent.
+  /** @internal */
+  override get instanceData(): InstanceData { return this; }
   /** Local column-major matrices. Default: count identities. Call markTransformsUpdated after element edits. */
   transforms: Float32Array;
   /** Active prefix length. Default: constructor count; must fit transforms and colors. Changes are detected by engine.update. */

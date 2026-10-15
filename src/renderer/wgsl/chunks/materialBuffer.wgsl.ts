@@ -7,7 +7,7 @@ import { mapAlphaUsageConstants } from '../../materialConstants.js';
 
 import {
   materialAlphaModeConstants
-} from '../../../scene/OpenPBRMaterial.js';
+} from '../../materialConstants.js';
 
 export function createMaterialBufferWgsl({
   hasAnisotropyDirections = true,

@@ -1,6 +1,6 @@
 import { getTargetShaderCache } from './WGPUShaderCache.js';
 // TODO output read write buffer
-import { getUniformBuffer, Uniform } from './WGPUFullQuadPass.js';
+import { getUniformBuffer, type Uniform } from './WGPUFullQuadPass.js';
 
 export type { Uniform };
 

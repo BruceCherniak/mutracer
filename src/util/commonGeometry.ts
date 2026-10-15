@@ -253,12 +253,12 @@ export function createCubeGeometry(
  * `curveSize` is the fraction of the profile taken by the bend.
  */
 export function createCurvePlaneGeometry(curveSize = 0.2) {
-  const faces = [];
-  const positions = [];
+  const faces: number[] = [];
+  const positions: number[] = [];
   // Set width segments to 1 may have weired bands in ray tracing.
   const widthSegments = 5;
   const heightSegments = 200;
-  const texcoords = [];
+  const texcoords: number[] = [];
   const curveRadius = (curveSize / Math.PI) * 2;
   const planeSize = (1 - curveSize) / 2;
 
@@ -291,20 +291,20 @@ export function createCurvePlaneGeometry(curveSize = 0.2) {
     for (let n = 0; n <= widthSegments; n++) {
       const s = n / widthSegments;
       const x = 2 * s - 1;
-      positions.push([x, y * 2, z * 2]);
-      texcoords.push([s, t]);
+      positions.push(x, y * 2, z * 2);
+      texcoords.push(s, t);
       if (n < widthSegments && m < heightSegments) {
         const i = n + mm * (widthSegments + 1);
-        faces.push([i, i + 1, i + widthSegments + 1]);
-        faces.push([i + widthSegments + 1, i + 1, i + widthSegments + 2]);
+        faces.push(i, i + 1, i + widthSegments + 1);
+        faces.push(i + widthSegments + 1, i + 1, i + widthSegments + 2);
       }
     }
     mm++;
   }
   const geo = new Geometry({
-    uv: new Attribute(new Float32Array(texcoords.flat()), 2),
-    position: new Attribute(new Float32Array(positions.flat()), 3),
-    indices: new Attribute(new Uint32Array(faces.flat()), 1)
+    uv: new Attribute(new Float32Array(texcoords), 2),
+    position: new Attribute(new Float32Array(positions), 3),
+    indices: new Attribute(new Uint32Array(faces), 1)
   });
   updateBoundingBox(geo);
   generateVertexNormals(geo);

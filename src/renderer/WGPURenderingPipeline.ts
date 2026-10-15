@@ -11,7 +11,7 @@ import type { TargetPipeline } from './accumulationTarget.js';
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { SceneBackground } from '../scene/Scene.js';
+import type { SceneBackground } from '../scene/Scene.js';
 import Camera from '../scene/Camera.js';
 
 import { WGPUFullQuadPass } from './WGPUFullQuadPass.js';
@@ -25,9 +25,9 @@ import {
 } from './wgsl/compose.frag.wgsl.js';
 import halton from './halton.js';
 import { makeTileRender, makeTileRenderWithPredict } from './TileRender.js';
-import { ToneMappingParams } from './RenderingPipeline.js';
-import { DisplayChannel } from './RenderingPipeline.js';
-import { ColorRGB } from '../types.js';
+import type { ToneMappingParams } from './RenderingPipeline.js';
+import type { DisplayChannel } from './RenderingPipeline.js';
+import type { ColorRGB } from '../types.js';
 import { WGPURayTraceOutputPass } from './WGPURayTraceOutput.js';
 import { vec3 } from '../math.js';
 

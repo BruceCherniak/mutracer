@@ -117,18 +117,22 @@ export default class Camera extends SceneNode {
 
   /** Creates an independent camera with copied settings and transform. */
   clone(): Camera {
-    return new Camera({ projection: this.projection }).copy(this);
+    const copy = this.projection === 'perspective'
+      ? new Camera({ projection: 'perspective' })
+      : new Camera({ projection: 'orthographic' });
+    return copy.copy(this);
   }
 
   /** Returns a new column-major projection matrix including zoom. Default targetAspect 1, used only when aspect is undefined. */
   getProjectionMatrix(targetAspect = 1): Mat4 {
     const camera = this;
+    const output: number[] = [];
     if (camera.projection === 'perspective') {
       const fov = (camera.fov * Math.PI) / 180;
       const effectiveFov =
         2 * Math.atan(Math.tan(fov / 2) / Math.max(camera.zoom, Number.EPSILON));
       return mat4.perspective(
-        [] as any as Mat4,
+        output,
         effectiveFov,
         camera.aspect ?? targetAspect,
         camera.near,
@@ -136,7 +140,7 @@ export default class Camera extends SceneNode {
       );
     }
     return mat4.ortho(
-      [] as any as Mat4,
+      output,
       (camera.left + camera.right) / 2 -
         (camera.right - camera.left) / (2 * camera.zoom),
       (camera.left + camera.right) / 2 +

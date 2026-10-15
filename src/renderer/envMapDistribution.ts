@@ -5,7 +5,8 @@
 // Create a piecewise 2D cumulative distribution function of light intensity from an env map
 // http://www.pbr-book.org/3ed-2018/Monte_Carlo_Integration/2D_Sampling_with_Multidimensional_Transformations.html#Piecewise-Constant2DDistributions
 
-import { TextureDataSource } from '../scene/Texture.js';
+import type { TextureDataSource } from '../scene/Texture.js';
+import { pixelLength, pixelValue } from '../scene/texturePixels.js';
 
 export interface EnvironmentMapSource extends TextureDataSource {
   /** Stable identity shared by adapters that recreate source wrappers. */
@@ -58,15 +59,12 @@ export function envMapDistribution(
   }
   const data = image.data;
 
-  const cdfImage = {
-    width: image.width + 2,
-    height: image.height + 1
-  } as TextureDataSource;
-
-  const cdf = makeTextureArray(cdfImage.width, cdfImage.height, 2);
+  const width = image.width + 2, height = image.height + 1;
+  const cdf = makeTextureArray(width, height, 2);
+  const cdfImage: TextureDataSource = { width, height, data: cdf.array };
 
   const channels = Math.max(
-    Math.floor(data.length / (image.width * image.height)),
+    Math.floor(pixelLength(data) / (image.width * image.height)),
     1
   );
   const sourceScale = (data instanceof Uint8Array || data instanceof Uint8ClampedArray) ? 1 / 255 : 1;
@@ -76,9 +74,9 @@ export function envMapDistribution(
       const sourceIndex = channels * (y * image.width + x);
       luminance[y * image.width + x] =
         sourceScale * (
-          0.2126 * data[sourceIndex]
-          + 0.7152 * data[sourceIndex + Math.min(1, channels - 1)]
-          + 0.0722 * data[sourceIndex + Math.min(2, channels - 1)]
+          0.2126 * pixelValue(data, sourceIndex)
+          + 0.7152 * pixelValue(data, sourceIndex + Math.min(1, channels - 1))
+          + 0.0722 * pixelValue(data, sourceIndex + Math.min(2, channels - 1))
         );
     }
   }

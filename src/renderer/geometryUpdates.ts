@@ -1,18 +1,24 @@
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
 import { writeMaterialIndices } from './materialIndices.js';
 import { isDeformationUpdate } from '../scene/geometryChanges.js';
-import Geometry from '../scene/Geometry.js';
+import type Geometry from '../scene/Geometry.js';
+import { Attribute } from '../scene/Geometry.js';
+import { attributeLength, attributeValue, type AttributeData } from '../scene/attributeData.js';
 import { hasGeneratedVertexTangents } from '../util/geometry.js';
 import { buildBLAS, refitBLAS, type FlattendBVH } from './bvhAccel.js';
-import { getBvhBounds, updateMeshInstances } from './prepareMeshBVH.js';
-import Mesh from '../scene/Mesh.js';
+import type { GeometryUpdateState, GeometryUpdateMesh, GeometryUpdateRegion, GeometryUpdateBinding } from './geometryUpdateState.js';
+import { getBvhBounds } from './geometryBvhBounds.js';
 
-type Prepared = ReturnType<typeof updateMeshInstances>;
+type Prepared = GeometryUpdateState;
+type BindingIndices<M extends GeometryUpdateMesh> = {source: Map<Geometry, GeometryUpdateBinding<M>[]>; prepared: Map<Geometry, GeometryUpdateBinding<M>[]>};
 const vertexAttributes = ['position', 'normal', 'uv', 'uv1', 'color', 'tangent', 'materialIndex'] as const;
-const bindingIndices = new WeakMap<Prepared, { source: Map<Geometry, Prepared['instanceBindings']>;
-  prepared: Map<Geometry, Prepared['instanceBindings']> }>();
-function indices(prepared: Prepared) {
-  let maps = bindingIndices.get(prepared);
+// Box only the identity: widening a generic preparation record for a native
+// WeakMap key can otherwise make a copy instead of retaining the caller's key.
+const bindingIndices = new WeakMap<object, BindingIndices<GeometryUpdateMesh>>();
+function indices<M extends GeometryUpdateMesh>(prepared: GeometryUpdateState<M>) {
+  // The prepared object's identity owns its binding type; entries are never
+  // shared between preparations with different mesh types.
+  let maps = bindingIndices.get(prepared) as BindingIndices<M> | undefined;
   if (!maps) {
     maps = { source: new Map(), prepared: new Map() };
     for (const binding of prepared.instanceBindings) {
@@ -28,7 +34,7 @@ function indices(prepared: Prepared) {
 }
 
 /** Displaced geometry must be prepared as a whole. */
-export function canUpdateGeometries(prepared: Prepared, geometries: readonly Geometry[]) {
+export function canUpdateGeometries<M extends GeometryUpdateMesh>(prepared: GeometryUpdateState<M>, geometries: readonly Geometry[]) {
   return geometries.every(geometry => {
     const bindings = indices(prepared).source.get(geometry) ?? [];
     return bindings.length > 0 && bindings.every(b => !b.mesh.materials.some(m => m.displacementMap) &&
@@ -37,7 +43,7 @@ export function canUpdateGeometries(prepared: Prepared, geometries: readonly Geo
 }
 
 /** Rewrites only a geometry's existing region, preserving global material indices. */
-function copyRegion(source: Geometry, merged: Geometry, region: Prepared['geometryRegions'] extends Map<Geometry, infer R> ? R : never, topologyChanged: boolean, deformationOnly: boolean) {
+function copyRegion(source: Geometry, merged: Geometry, region: GeometryUpdateRegion, topologyChanged: boolean, deformationOnly: boolean) {
   const { vertexOffset, indexOffset, materialIndices } = region;
   const count = source.vertexCount;
   for (const name of vertexAttributes) {
@@ -55,21 +61,21 @@ function copyRegion(source: Geometry, merged: Geometry, region: Prepared['geomet
   }
   if (!topologyChanged) return;
   writeMaterialIndices(source, materialIndices, merged.materialIndex!.array, vertexOffset);
-  for (let i = 0; i < source.indices.array.length; i++) merged.indices.array[indexOffset + i] = source.indices.array[i] + vertexOffset;
+  for (let i = 0; i < attributeLength(source.indices.array); i++) writeIndex(merged, indexOffset + i, attributeValue(source.indices.array, i) + vertexOffset);
 }
 
 /** Constant-time topology detection; markUpdated also covers in-place index edits. */
-export function geometryTopologyChanged(prepared: Prepared | undefined, source: Geometry) {
+export function geometryTopologyChanged(prepared: {geometryStates: Prepared['geometryStates']} | undefined, source: Geometry) {
   const state = prepared?.geometryStates.get(source);
   return !!state && (state.topologyVersion !== source.topologyVersion ||
-    state.indices !== source.indices.array || state.indexCount !== source.indices.array.length);
+    state.indices !== source.indices.array || state.indexCount !== attributeLength(source.indices.array));
 }
 
 /** Refits/rebuilds changed BLASes and refreshes all shared instances' cached bounds. */
-export function updatePreparedGeometries(prepared: Prepared, changed: ReadonlySet<Geometry>) {
+export function updatePreparedGeometries<M extends GeometryUpdateMesh>(prepared: GeometryUpdateState<M>, changed: ReadonlySet<Geometry>) {
   const vertices: { first: number; count: number; topologyChanged: boolean; deformationOnly: boolean }[] = [];
   const blases: { blas: FlattendBVH; offset: number }[] = [];
-  const meshes = new Set<Mesh>();
+  const meshes = new Set<M>();
   let resized = false, relocated = false, offset = 0;
   const updated = new Map<Geometry, FlattendBVH>();
   prepared.geometries.forEach((geometry, i) => {
@@ -103,21 +109,36 @@ export function updatePreparedGeometries(prepared: Prepared, changed: ReadonlySe
     offset += prepared.blases[i].bvh.buffer.byteLength;
   });
   for (const source of changed) prepared.geometryStates.set(source, { topologyVersion: source.topologyVersion,
-    indices: source.indices.array, indexCount: source.indices.array.length });
+    indices: source.indices.array, indexCount: attributeLength(source.indices.array) });
   return { vertices, blases, meshes, resized, relocated };
+}
+
+function writeIndex(geometry: Geometry, index: number, value: number) {
+  const array = geometry.indices.array;
+  if (array instanceof Uint16Array) array[index] = value;
+  else array[index] = value;
+}
+
+function packAttribute<T extends AttributeData>(attribute: Attribute<T> | undefined,
+  output: Float32Array, stride: number, offset: number, first: number, count: number) {
+  if (!attribute) return;
+  const array = attribute.array, size = attribute.itemSize;
+  let destination = first * stride + offset, source = first * size;
+  for (let i = 0; i < count; i++, destination += stride, source += size) {
+    for (let c = 0; c < size; c++) output[destination + c] = attributeValue(array, source + c);
+  }
 }
 
 /** Packs the same interleaved vertex layout for full and partial GPU uploads. */
 export function packVertexAttributes(geometry: Geometry, output: Float32Array, stride: number,
   offsets: readonly number[], first: number, count: number, includeMaterialIndex = true, deformationOnly = false) {
-  for (let k = 0; k < vertexAttributes.length; k++) {
-    if (k === 6 && !includeMaterialIndex || deformationOnly && k >= 2 && k <= 4) continue;
-    const attribute = geometry[vertexAttributes[k]];
-    if (!attribute) continue;
-    const array = attribute.array, size = attribute.itemSize;
-    let destination = first * stride + offsets[k], source = first * size;
-    for (let i = 0; i < count; i++, destination += stride, source += size) {
-      for (let c = 0; c < size; c++) output[destination + c] = array[source + c];
-    }
+  packAttribute(geometry.position, output, stride, offsets[0], first, count);
+  packAttribute(geometry.normal, output, stride, offsets[1], first, count);
+  if (!deformationOnly) {
+    packAttribute(geometry.uv, output, stride, offsets[2], first, count);
+    packAttribute(geometry.uv1, output, stride, offsets[3], first, count);
+    packAttribute(geometry.color, output, stride, offsets[4], first, count);
   }
+  packAttribute(geometry.tangent, output, stride, offsets[5], first, count);
+  if (includeMaterialIndex) packAttribute(geometry.materialIndex, output, stride, offsets[6], first, count);
 }

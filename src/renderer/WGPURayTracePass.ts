@@ -1,5 +1,5 @@
 import { constants } from './webgl.js';
-import { MATERIAL_FLOAT_COUNT } from './materialLayout.js';
+import { MATERIAL_FLOAT_COUNT } from './materialLayoutSchema.js';
 import { normalizeBounces } from './pathLimits.js';
 import { MATERIAL_TEXTURE_DEFINES, materialTextureFeatures } from './materialTextureSlots.js';
 import { updateMeshInstanceColors } from './prepareMeshBVH.js';
@@ -11,6 +11,7 @@ import { dirtyMeshInstanceIndices } from './prepareMeshBVH.js';
 import { cameraApertureRadius } from './cameraLens.js';
 import { getRectLightUOrV, getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getLightDirection, getRigidLightFrame, validateSceneLights } from './lightsUtil.js';
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
+import { packCameraUniform } from './cameraUniform.js';
 import { SHADOW_CATCHER_ACCUMULATION_BYTES } from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
 import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling.js';
 import { DEPTH_SAMPLE_COUNT, packDepthSampleArea, unpackDepthSamples, type DepthSampleArea } from './depthQuery.js';
@@ -21,7 +22,7 @@ import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChan
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges.js';
 import { WGPUShaderCache, retainedShaderCapacity } from './WGPUShaderCache.js';
 import { WGPU_SCENE_FEATURE_BITS, wgpuSceneFeatureFlags } from './WGPUSceneFeatures.js';
-import { TexturePixelSource as TexturePixelSource, mat4 } from '../math.js';
+import { type TexturePixelSource as TexturePixelSource, mat4 } from '../math.js';
 import Mesh from '../scene/Mesh.js';
 import DirectionalLight from '../scene/DirectionalLight.js';
 import SphereLight from '../scene/SphereLight.js';
@@ -31,7 +32,7 @@ import MaterialTable, {
   DEFAULT_MAX_TEXTURE_ARRAY_BYTES,
   materialUsesMedium
 } from './MaterialTable.js';
-import { SceneBackground, SceneLight } from '../scene/Scene.js';
+import type { SceneBackground, SceneLight } from '../scene/Scene.js';
 import { numberArraysEqual } from './util.js';
 import Camera from '../scene/Camera.js';
 import {
@@ -57,7 +58,7 @@ import {
 import {
   buildTLAS,
   concatBLASBuffers,
-  FlattendBVH,
+  type FlattendBVH,
   getTraversalStackSizes,
   refitBLAS,
   refitTLAS
@@ -78,7 +79,7 @@ import {
   buildLightAliasTable,
   EmissiveTriangleCache,
   LightChoiceBuffer,
-  EmissiveTriangle,
+  type EmissiveTriangle,
   estimateAnalyticLightPower,
   estimateEnvironmentPower,
   LIGHT_CHOICE_ANALYTIC,
@@ -2799,14 +2800,8 @@ ${rayTraceCompute({
     this._device.queue.writeBuffer(
       this._uniforms.cameraUniform,
       0,
-      new F32([
-        ...this._viewProjInv,
-        ...this._cameraWorld,
-        this._apertureRadius,
-        this._focusDistance,
-        0,
-        0
-      ])
+      packCameraUniform(this._viewProjInv, this._cameraWorld,
+        this._apertureRadius, this._focusDistance)
     );
   }
 

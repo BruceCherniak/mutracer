@@ -1,15 +1,17 @@
-import { readMeshInstance, type MeshInstances } from './meshInstances.js';
+import { readMeshInstance, meshInstancesLength, type MeshInstances } from './packedMeshInstances.js';
 // Bounding volume hierarchies of scene geometry (BLAS) and mesh instances
 // (TLAS), built with the binned SAH builder in ./binnedSahBvh and written
 // directly in the BVH2 layout read by the traversal shaders.
 
 import Geometry, { Attribute } from '../scene/Geometry.js';
 import { mat4, vec3 } from '../math.js';
-import { Mat4Array } from '../math.js';
+import type { Mat4Array } from '../math.js';
 import { buildBinnedSahBvh, layoutBvh2 } from './binnedSahBvh.js';
 
-const vec3Min = vec3.min;
-const vec3Max = vec3.max;
+import { read, write } from '../math/access.js';
+import { attributeLength, attributeValue } from '../scene/attributeData.js';
+import { Box3 } from './Box3.js';
+export { Box3 } from './Box3.js';
 
 export const INSTANCE_VEC4_STRIDE = 10;
 export const INSTANCE_WORD_STRIDE = INSTANCE_VEC4_STRIDE * 4;
@@ -46,19 +48,9 @@ function encodeBlasOffset(offset: number, layout: BvhLayout) {
   return (offset | (blasLayoutCodes[layout] << BLAS_LAYOUT_SHIFT)) | 0;
 }
 
-export class Box3 {
-  min: vec3.Vec3Array;
-  max: vec3.Vec3Array;
-
-  constructor() {
-    this.min = [Infinity, Infinity, Infinity];
-    this.max = [-Infinity, -Infinity, -Infinity];
-  }
-}
-
 function unionBounds(bounds: Box3, a: Box3, b: Box3) {
-  vec3Min(bounds.min, a.min, b.min);
-  vec3Max(bounds.max, a.max, b.max);
+  vec3.min(bounds.min, a.min, b.min);
+  vec3.max(bounds.max, a.max, b.max);
   return bounds;
 }
 
@@ -135,9 +127,9 @@ function packH(minH: number, maxH: number): number {
 
 /** Writes min and max of a triangle, or of its displacement prism, to out. */
 function triangleBounds(
-  positions: ArrayLike<number>,
+  positions: Float32Array,
   stride: number,
-  normals: ArrayLike<number> | undefined,
+  normals: Float32Array | undefined,
   normalStride: number,
   i0: number,
   i1: number,
@@ -206,16 +198,17 @@ export function buildBLAS(
   trianglesDisplacement?: Float32Array
 ): FlattendBVH {
   const position = geometry.position;
-  const indices = geometry.indices?.array;
-  if (!position || !indices || !Attribute.getCount(position)) {
+  const indexAttribute = geometry.indices;
+  if (!position || !indexAttribute || !Attribute.getCount(position)) {
     return emptyBvh(false);
   }
+  const indices = indexAttribute.array;
   const positions = position.array;
   const stride = position.itemSize;
   const normal = trianglesDisplacement ? geometry.normal : undefined;
   const normals = normal?.array;
   const normalStride = normal?.itemSize ?? 0;
-  const triangleCount = Math.floor(indices.length / 3);
+  const triangleCount = Math.floor(attributeLength(indices) / 3);
   const aabbs = new Float32Array(triangleCount * 6);
   const triangles = new Uint32Array(triangleCount);
   let count = 0;
@@ -231,7 +224,7 @@ export function buildBLAS(
     }
     if (triangleBounds(
       positions, stride, normals, normalStride,
-      indices[t * 3], indices[t * 3 + 1], indices[t * 3 + 2],
+      attributeValue(indices, t * 3), attributeValue(indices, t * 3 + 1), attributeValue(indices, t * 3 + 2),
       minHeight, maxHeight, aabbs, count * 6
     )) {
       triangles[count++] = t;
@@ -264,9 +257,9 @@ export function buildBLAS(
     for (let i = 0; i < prims; i++) {
       const t = triangles[primIndices[leftFirst[node] + i]];
       const e = o + 8 + i * 4;
-      ints[e] = indices[t * 3];
-      ints[e + 1] = indices[t * 3 + 1];
-      ints[e + 2] = indices[t * 3 + 2];
+      ints[e] = attributeValue(indices, t * 3);
+      ints[e + 1] = attributeValue(indices, t * 3 + 1);
+      ints[e + 2] = attributeValue(indices, t * 3 + 2);
       // Pack minH, maxH to one channel.
       ints[e + 3] = trianglesDisplacement
         ? packH(trianglesDisplacement[t * 2], trianglesDisplacement[t * 2 + 1])
@@ -311,12 +304,19 @@ function instanceBounds(instance: TLASInstance, out: Float32Array, o: number) {
   const displacementScale = instance.displacementScale;
   if (displacementScale) {
     const m = instance.transform;
-    padX = Math.max(0, displacementScale * Math.hypot(m[0], m[1], m[2]));
-    padY = Math.max(0, displacementScale * Math.hypot(m[4], m[5], m[6]));
-    padZ = Math.max(0, displacementScale * Math.hypot(m[8], m[9], m[10]));
+    padX = Math.max(0, displacementScale * Math.hypot(read(m, 0), read(m, 1), read(m, 2)));
+    padY = Math.max(0, displacementScale * Math.hypot(read(m, 4), read(m, 5), read(m, 6)));
+    padZ = Math.max(0, displacementScale * Math.hypot(read(m, 8), read(m, 9), read(m, 10)));
   }
-  out[o] = min[0] - padX; out[o + 1] = min[1] - padY; out[o + 2] = min[2] - padZ;
-  out[o + 3] = max[0] + padX; out[o + 4] = max[1] + padY; out[o + 5] = max[2] + padZ;
+  out[o] = read(min, 0) - padX; out[o + 1] = read(min, 1) - padY; out[o + 2] = read(min, 2) - padZ;
+  out[o + 3] = read(max, 0) + padX; out[o + 4] = read(max, 1) + padY; out[o + 5] = read(max, 2) + padZ;
+}
+
+function writeInstanceColor(output: Float32Array, offset: number, instance: TLASInstance) {
+  const color = instance.color;
+  output[offset] = color ? color[0] : 1;
+  output[offset + 1] = color ? color[1] : 1;
+  output[offset + 2] = color ? color[2] : 1;
 }
 
 function writeInstanceRecord(
@@ -334,12 +334,12 @@ function writeInstanceRecord(
   instanceInts[offset + 1] = placement.vertexOffsets[instance.blasIndex];
   instanceInts[offset + 2] = instance.materialsIndices[0] || 0;
   instanceFloats[offset + 3] = instance.displacementScale || 0;
-  instanceFloats.set(instance.color ?? [1, 1, 1], offset + 36);
+  writeInstanceColor(instanceFloats, offset + 36, instance);
   instanceFloats[offset + 39] = 0;
-  const inverse = mat4.invert(mat4.create(), instance.transform);
+  const inverse = mat4.invert(mat4.create(), instance.transform)!;
   for (let i = 0; i < 16; i++) {
     instanceFloats[offset + 4 + i] = inverse[i];
-    instanceFloats[offset + 20 + i] = instance.transform[i];
+    instanceFloats[offset + 20 + i] = read(instance.transform, i);
   }
 }
 
@@ -352,20 +352,20 @@ export function buildTLAS(
   instances: MeshInstances,
   blases: BLASInstance[]
 ): FlattendBVH {
-  if (!instances.length) return emptyBvh(true);
+  if (!meshInstancesLength(instances)) return emptyBvh(true);
   const placement = getBlasPlacement(blases);
-  const aabbs = new Float32Array(instances.length * 6);
-  for (let i = 0; i < instances.length; i++) {
+  const aabbs = new Float32Array(meshInstancesLength(instances) * 6);
+  for (let i = 0; i < meshInstancesLength(instances); i++) {
     instanceBounds(readMeshInstance(instances, i), aabbs, i * 6);
   }
 
-  const bvh = buildBinnedSahBvh(aabbs, instances.length);
+  const bvh = buildBinnedSahBvh(aabbs, meshInstancesLength(instances));
   const { order, offsets, vec4Count, maxDepth, maxLeafPrimitives } = layoutBvh2(bvh);
   const { bounds, leftFirst, primCount, primIndices } = bvh;
   const buffer = new ArrayBuffer(vec4Count * 16);
   const floats = new Float32Array(buffer);
   const ints = new Int32Array(buffer);
-  const instancesBuffer = new ArrayBuffer(instances.length * INSTANCE_WORD_STRIDE * 4);
+  const instancesBuffer = new ArrayBuffer(meshInstancesLength(instances) * INSTANCE_WORD_STRIDE * 4);
   const instanceInts = new Int32Array(instancesBuffer);
   const instanceFloats = new Float32Array(instancesBuffer);
   let target = 0;
@@ -472,7 +472,7 @@ export function mergeRefitRanges(ranges: TLASRefitRange[]) {
         range.offset + range.size - previous.offset
       );
     } else {
-      merged.push({ ...range });
+      merged.push({ offset: range.offset, size: range.size });
     }
   }
   return merged;
@@ -501,22 +501,22 @@ export function refitTLAS(
 
   function addInstanceBounds(bounds: Box3, instance: TLASInstance) {
     instanceBounds(instance, scratch, 0);
-    bounds.min[0] = Math.min(bounds.min[0], scratch[0]);
-    bounds.min[1] = Math.min(bounds.min[1], scratch[1]);
-    bounds.min[2] = Math.min(bounds.min[2], scratch[2]);
-    bounds.max[0] = Math.max(bounds.max[0], scratch[3]);
-    bounds.max[1] = Math.max(bounds.max[1], scratch[4]);
-    bounds.max[2] = Math.max(bounds.max[2], scratch[5]);
+    write(bounds.min, 0, Math.min(read(bounds.min, 0), scratch[0]));
+    write(bounds.min, 1, Math.min(read(bounds.min, 1), scratch[1]));
+    write(bounds.min, 2, Math.min(read(bounds.min, 2), scratch[2]));
+    write(bounds.max, 0, Math.max(read(bounds.max, 0), scratch[3]));
+    write(bounds.max, 1, Math.max(read(bounds.max, 1), scratch[4]));
+    write(bounds.max, 2, Math.max(read(bounds.max, 2), scratch[5]));
   }
 
   function writeNodeBounds(index: number, bounds: Box3) {
     const base = index * 4;
-    floats[base] = bounds.min[0];
-    floats[base + 1] = bounds.min[1];
-    floats[base + 2] = bounds.min[2];
-    floats[base + 4] = bounds.max[0];
-    floats[base + 5] = bounds.max[1];
-    floats[base + 6] = bounds.max[2];
+    floats[base] = read(bounds.min, 0);
+    floats[base + 1] = read(bounds.min, 1);
+    floats[base + 2] = read(bounds.min, 2);
+    floats[base + 4] = read(bounds.max, 0);
+    floats[base + 5] = read(bounds.max, 1);
+    floats[base + 6] = read(bounds.max, 2);
   }
 
   function readNodeBounds(index: number) {
@@ -728,12 +728,16 @@ export function updateTLASInstanceColors(flattened: FlattendBVH, instances: Mesh
   const metadata = getTLASRefitMetadata(flattened, new Int32Array(flattened.buffer));
   const floats = new Float32Array(flattened.instancesBuffer);
   const ranges: TLASRefitRange[] = [];
-  for (const source of dirty) for (const leaf of metadata.leavesBySource.get(source) ?? []) {
-    for (const entry of metadata.instancesByLeaf.get(leaf) ?? []) {
-      if (entry.source !== source) continue;
-      const offset = entry.target * INSTANCE_WORD_STRIDE + 36;
-      floats.set(readMeshInstance(instances, source).color ?? [1, 1, 1], offset);
-      ranges.push({offset: offset * 4, size: 16});
+  for (const source of dirty) {
+    const leaves = metadata.leavesBySource.get(source);
+    if (!leaves) continue;
+    for (const leaf of leaves) {
+      for (const entry of metadata.instancesByLeaf.get(leaf) ?? []) {
+        if (entry.source !== source) continue;
+        const offset = entry.target * INSTANCE_WORD_STRIDE + 36;
+        writeInstanceColor(floats, offset, readMeshInstance(instances, source));
+        ranges.push({offset: offset * 4, size: 16});
+      }
     }
   }
   return mergeRefitRanges(ranges);

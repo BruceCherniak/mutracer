@@ -7,9 +7,9 @@ import Camera from '../scene/Camera.js';
 import Mesh from '../scene/Mesh.js';
 import Geometry from '../scene/Geometry.js';
 import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
-import { SceneBackground, SceneLight } from '../scene/Scene.js';
-import { ColorRGB } from '../types.js';
-import { TextureAtlasStats } from './MaterialTable.js';
+import type { SceneBackground, SceneLight } from '../scene/Scene.js';
+import type { ColorRGB } from '../types.js';
+import type { TextureAtlasStats } from './MaterialTable.js';
 import type {
   OfflineAdaptiveSamplingOptions,
   OfflineAdaptiveSamplingResult

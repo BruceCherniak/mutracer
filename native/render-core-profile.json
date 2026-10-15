@@ -1,0 +1,64 @@
+{
+  "profile_format": 1,
+  "name": "mutracer_frame_core",
+  "entry": "render-core.ts",
+  "emission": "llvm",
+  "abi": {
+    "prefix": "mt_core_",
+    "init_symbol": "mt_core_init",
+    "sink_register_symbol": "mt_core_sink",
+    "collect_symbol": "mt_core_collect",
+    "result_reset_symbol": "mt_core_reset",
+    "localize_runtime": true
+  },
+  "exports": [
+    {
+      "export": "frameParameters",
+      "symbol": "mt_core_frame",
+      "params": [
+        "f64",
+        "f64",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "cameraParameters",
+      "symbol": "mt_core_camera",
+      "params": [
+        "bytes",
+        "f64",
+        "f64",
+        "f64"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "materialParameters",
+      "symbol": "mt_core_material",
+      "params": [
+        "f64",
+        "f64",
+        "f64",
+        "f64"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "buildBvh",
+      "symbol": "mt_core_bvh",
+      "params": [
+        "bytes"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "samplingParameters",
+      "symbol": "mt_core_sampling",
+      "params": [
+        "bytes"
+      ],
+      "returns": "bytes"
+    }
+  ]
+}

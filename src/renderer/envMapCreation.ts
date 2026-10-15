@@ -5,14 +5,14 @@
 // Convert image data from the RGBE format to a 32-bit floating point format
 // See https://www.cg.tuwien.ac.at/research/theses/matkovic/node84.html for a description of the RGBE format
 
-import { ColorRGBA, WritableArrayLike } from '../types.js';
+import type { ColorRGBA, WritableArrayLike } from '../types.js';
 import Texture, {
   isTextureDataSource,
-  TextureDataSource
+  type TextureDataSource
 } from '../scene/Texture.js';
 import AmbientLight from '../scene/AmbientLight.js';
 import EnvironmentLight from '../scene/EnvironmentLight.js';
-import { SceneBackground } from '../scene/Scene.js';
+import type { SceneBackground } from '../scene/Scene.js';
 import type { EnvironmentMapSource } from './envMapDistribution.js';
 
 const DEFAULT_MAP_RESOLUTION = {

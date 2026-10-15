@@ -6,9 +6,33 @@ import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import { createCubeGeometry } from '../../src/util/commonGeometry';
 import { updateMeshInstances } from '../../src/renderer/prepareMeshBVH';
-import { canUpdateGeometries, updatePreparedGeometries } from '../../src/renderer/geometryUpdates';
+import { canUpdateGeometries, packVertexAttributes, updatePreparedGeometries } from '../../src/renderer/geometryUpdates';
+import Geometry, { Attribute } from '../../src/scene/Geometry';
 import { refitBLAS, DYNAMIC_BLAS_REBUILD_RATIO } from '../../src/renderer/bvhAccel';
 import Engine from '../../src/Engine';
+
+it('packs partial vertex uploads while preserving padding and excluded attributes', () => {
+  const g = new Geometry({
+    position: new Attribute(new Float32Array([1, 2, 3, 4, 5, 6]), 3),
+    normal: new Attribute(new Float32Array([0, 1, 0, 0, 0, 1]), 3),
+    uv: new Attribute(new Float32Array([.25, .5, .75, 1]), 2),
+    color: new Attribute(new Float32Array([1, 0, 0, 0, 1, 0]), 3),
+    tangent: new Attribute(new Float32Array([1, 0, 0, -1, 0, 1, 0, 1]), 4),
+    materialIndex: new Attribute(new Int32Array([-3, 123456]), 1)
+  });
+  const stride = 24, offsets = [0, 4, 8, 10, 12, 16, 20];
+  for (const deformationOnly of [false, true]) for (const includeMaterialIndex of [false, true]) {
+    const output = new Float32Array(stride * 2).fill(-99);
+    packVertexAttributes(g, output, stride, offsets, 1, 1, includeMaterialIndex, deformationOnly);
+    expect(Array.from(output.subarray(0, stride))).toEqual(Array(stride).fill(-99));
+    const expected = new Float32Array(stride).fill(-99);
+    expected.set([4, 5, 6], 0); expected.set([0, 0, 1], 4);
+    expected.set([0, 1, 0, 1], 16);
+    if (!deformationOnly) { expected.set([.75, 1], 8); expected.set([0, 1, 0], 12); }
+    if (includeMaterialIndex) expected[20] = 123456;
+    expect(output.subarray(stride)).toEqual(expected);
+  }
+});
 
 it('uses builtin BVH2 for dynamic geometry, even with an incompatible precomputed layout', async () => {
   const g = createCubeGeometry(); g.dynamic = true;

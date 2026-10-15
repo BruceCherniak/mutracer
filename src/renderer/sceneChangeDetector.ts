@@ -6,7 +6,7 @@ import InstancedMesh from '../scene/InstancedMesh.js';
 import Geometry from '../scene/Geometry.js';
 import OpenPBRMaterial, { materialTextureKeys } from '../scene/OpenPBRMaterial.js';
 import Texture from '../scene/Texture.js';
-import { Scene, SceneBackground } from '../scene/Scene.js';
+import type { Scene, SceneBackground } from '../scene/Scene.js';
 
 export interface SceneChanges {
   meshes: 'none' | 'incremental' | 'full';

@@ -1,11 +1,11 @@
-import { materialBufferWgsl } from '../../materialLayout.js';
+import { materialBufferWgsl } from '../../materialLayoutSchema.js';
 import { ShadowCatcherMaterial, UnlitMaterial } from '../../../constants.js';
 import {
   CONSTANT_DIRECTIONAL_LIGHT,
   CONSTANT_RECT_LIGHT,
   CONSTANT_SPHERE_LIGHT,
   CONSTANT_SPOT_LIGHT
-} from '../../lightsUtil.js';
+} from '../../lightConstants.js';
 
 export default function rayTraceCore({
   hasAnisotropyDirections = true,

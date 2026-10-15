@@ -61,6 +61,12 @@
     "llms.txt"
   ],
   "scripts": {
+    "native:modules": "npm run build:lib && node native/module-check.mjs",
+    "native:render": "node native/render.mjs",
+    "native:verify": "node native/verify.mjs",
+    "native:browser-reference": "node native/reference-server.mjs",
+    "native:check": "node native/check.mjs",
+    "native:verify-oidn": "node native/verify-oidn.mjs",
     "dev": "vite",
     "build": "npm run typecheck && vite build",
     "typecheck": "npm run check:material-comparison && tsc --noEmit",
@@ -86,10 +92,10 @@
     "check:lib-esm": "node scripts/check-lib-esm.mjs",
     "test:viewer": "vitest run --config viewer/vitest.config.ts",
     "generate:material-comparison": "node scripts/generate-material-comparison.mjs",
-    "check:material-comparison": "node scripts/generate-material-comparison.mjs --check"
+    "check:material-comparison": "node scripts/generate-material-comparison.mjs --check",
+    "native:modules:verify": "node native/module-verify.mjs"
   },
   "dependencies": {
-    "gl-matrix": "^3.4.4",
     "oidn-web": "^0.5.0",
     "webgpu-utils": "^1.9.3",
     "@webgpu/types": "^0.1.40"
@@ -121,6 +127,7 @@
     "vite": "^4.1.2",
     "vitest": "^1.6.1",
     "wrangler": "^4.54.0",
-    "zustand": "^5.0.15"
+    "zustand": "^5.0.15",
+    "gl-matrix": "^3.4.4"
   }
 }

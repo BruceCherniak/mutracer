@@ -1,178 +1,116 @@
+import type { BufferData } from './materialBufferData.js';
+import type { ColorRGB } from '../types.js';
 import type { vec2 } from '../math.js';
-import type { BufferData } from './MaterialTable.js';
-
-// Internal GPU contract. Each row occupies one vec4 (16 bytes). Reserved fields
-// retain their legacy sources/zero bytes; reuse requires an intentional migration.
-type FieldType = 'f32' | 'vec2f' | 'vec3f';
-type Source<T extends FieldType> = {
-  [K in keyof BufferData]: BufferData[K] extends (T extends 'f32' ? number[] :
-    T extends 'vec2f' ? vec2.Vec2Array[] : [number, number, number][]) ? K : never
-}[keyof BufferData];
-export interface MaterialLayoutField {
-  name: string;
-  source: keyof BufferData | null;
-  type: FieldType;
-  reserved: boolean;
-}
-function field<T extends FieldType>(name: string, source: Source<T> | null,
-  type: T, reserved = false): MaterialLayoutField {
-  return { name, source, type, reserved };
-}
-
-export const MATERIAL_LAYOUT = [
-  { name: 'COLOR', fields: [
-    field('color', 'color', 'vec3f'),
-    field('matType', 'type', 'f32')
-  ] },
-  { name: 'ROUGHNESS_NORMAL', fields: [
-    field('roughness', 'roughness', 'f32'),
-    field('normalMapIndex', 'normalMapIndex', 'f32'),
-    field('normalMapScale', 'normalScale', 'vec2f')
-  ] },
-  { name: 'METALLIC_MAPS', fields: [
-    field('metallic', 'metallic', 'f32'),
-    field('anisotropy', 'anisotropy', 'f32'),
-    field('diffuseMapIndex', 'diffuseMapIndex', 'f32'),
-    field('mrtMapIndex', 'metallicRoughnessMapIndex', 'f32')
-  ] },
-  { name: 'EMISSION', fields: [
-    field('emission', 'emission', 'vec3f'),
-    field('emissiveMapIndex', 'emissiveMapIndex', 'f32')
-  ] },
-  { name: 'IOR_TRANSMISSION', fields: [
-    field('ior', 'ior', 'f32'),
-    field('transmission', 'transmission', 'f32'),
-    field('mediumType', 'mediumType', 'f32', true),
-    field('thin', 'thin', 'f32')
-  ] },
-  { name: 'MISC', fields: [
-    field('bevel', 'bevelSize', 'f32'),
-    field('dispersion', 'dispersion', 'f32'),
-    field('thinFilmThickness', 'thinFilmThickness', 'f32'),
-    field('mapAlphaUsage', 'mapAlphaUsage', 'f32')
-  ] },
-  { name: 'LAYER_MAPS', fields: [
-    field('coatWeightMapIndex', 'coatWeightMapIndex', 'f32'),
-    field('coatRoughnessMapIndex', 'coatRoughnessMapIndex', 'f32'),
-    field('coatNormalMapIndex', 'coatNormalMapIndex', 'f32'),
-    field('fuzzColorMapIndex', 'fuzzColorMapIndex', 'f32')
-  ] },
-  { name: 'UV', fields: [
-    field('uvProjection', 'uvProjection', 'f32'),
-    field('displacementMapIndex', 'displacementMapIndex', 'f32'),
-    field('uvScale', 'uvScale', 'vec2f')
-  ] },
-  { name: 'DISPLACEMENT', fields: [
-    field('displacementStepSize', 'displacementStepSize', 'f32'),
-    field('_padding', null, 'f32', true),
-    field('displacementUvProjection', 'displacementUvProjection', 'f32'),
-    field('displacementUvProjectionScale', 'displacementUvProjectionScale', 'f32')
-  ] },
-  { name: 'ALPHA_FILM', fields: [
-    field('alpha', 'alpha', 'f32'),
-    field('thinFilmMapIndex', 'thinFilmMapIndex', 'f32'),
-    field('thinFilmIor', 'thinFilmIor', 'f32'),
-    field('transmissionMapIndex', 'transmissionMapIndex', 'f32')
-  ] },
-  { name: 'BASE_CONTROLS', fields: [
-    field('baseWeight', 'baseWeight', 'f32'),
-    field('baseDiffuseRoughness', 'baseDiffuseRoughness', 'f32'),
-    field('specularWeight', 'specularWeight', 'f32'),
-    field('subsurfaceWeight', 'subsurfaceWeight', 'f32')
-  ] },
-  { name: 'SPECULAR_FUZZ', fields: [
-    field('specularColor', 'specularColor', 'vec3f'),
-    field('fuzzWeight', 'fuzzWeight', 'f32')
-  ] },
-  { name: 'TRANSMISSION_COLOR', fields: [
-    field('transmissionColor', 'transmissionColor', 'vec3f'),
-    field('transmissionDepth', 'transmissionDepth', 'f32')
-  ] },
-  { name: 'TRANSMISSION_SCATTER', fields: [
-    field('transmissionScatter', 'transmissionScatter', 'vec3f'),
-    field('transmissionScatterAnisotropy', 'transmissionScatterAnisotropy', 'f32')
-  ] },
-  { name: 'SUBSURFACE', fields: [
-    field('subsurfaceColor', 'subsurfaceColor', 'vec3f'),
-    field('subsurfaceRadius', 'subsurfaceRadius', 'f32')
-  ] },
-  { name: 'FUZZ', fields: [
-    field('fuzzColor', 'fuzzColor', 'vec3f'),
-    field('fuzzRoughness', 'fuzzRoughness', 'f32')
-  ] },
-  { name: 'COAT', fields: [
-    field('coatColor', 'coatColor', 'vec3f'),
-    field('coatWeight', 'coatWeight', 'f32')
-  ] },
-  { name: 'COAT_CONTROLS', fields: [
-    field('coatRoughness', 'coatRoughness', 'f32'),
-    field('coatAnisotropy', 'coatAnisotropy', 'f32'),
-    field('coatIor', 'coatIor', 'f32'),
-    field('coatDarkening', 'coatDarkening', 'f32')
-  ] },
-  { name: 'FILM_DISPERSION', fields: [
-    field('thinFilmWeight', 'thinFilmWeight', 'f32'),
-    field('dispersionAbbeNumber', 'dispersionAbbeNumber', 'f32'),
-    field('subsurfaceScatterAnisotropy', 'subsurfaceScatterAnisotropy', 'f32'),
-    field('fuzzRoughnessMapIndex', 'fuzzRoughnessMapIndex', 'f32')
-  ] },
-  { name: 'SUBSURFACE_RADIUS', fields: [
-    field('subsurfaceRadiusScale', 'subsurfaceRadiusScale', 'vec3f'),
-    field('specularWeightMapIndex', 'specularWeightMapIndex', 'f32')
-  ] },
-  { name: 'MEDIUM_EXTINCTION', fields: [
-    field('mediumExtinction', 'mediumExtinction', 'vec3f'),
-    field('mediumAnisotropy', 'mediumAnisotropy', 'f32')
-  ] },
-  { name: 'MEDIUM_SCATTERING', fields: [
-    field('mediumScattering', 'mediumScattering', 'vec3f'),
-    field('specularColorMapIndex', 'specularColorMapIndex', 'f32')
-  ] },
-  { name: 'STANDALONE_MAPS', fields: [
-    field('roughnessMapIndex', 'roughnessMapIndex', 'f32'),
-    field('metalnessMapIndex', 'metalnessMapIndex', 'f32'),
-    field('alphaMapIndex', 'alphaMapIndex', 'f32'),
-    field('alphaCutoff', 'alphaCutoff', 'f32')
-  ] },
-  { name: 'ALPHA', fields: [
-    field('_padding1', null, 'f32', true),
-    field('_padding2', null, 'f32', true),
-    field('doubleSided', 'doubleSided', 'f32'),
-    field('alphaMode', 'alphaMode', 'f32')
-  ] },
-  // Reserve the approved direction/normal inputs for C1 steps two and three.
-  { name: 'DIRECTION_NORMAL', fields: [
-    field('anisotropyMapIndex', 'anisotropyMapIndex', 'f32'),
-    field('specularAnisotropyRotation', 'specularAnisotropyRotation', 'f32'),
-    field('coatNormalScale', 'coatNormalScale', 'vec2f')
-  ] },
-  { name: 'FILM_TEXTURE', fields: [
-    field('coatAnisotropyRotation', 'coatAnisotropyRotation', 'f32'),
-    field('specularAnisotropyModel', 'specularAnisotropyModel', 'f32'),
-    field('thinFilmThicknessMinimum', 'thinFilmThicknessMinimum', 'f32'),
-    field('thinFilmMapChannel', 'thinFilmMapChannel', 'f32')
-  ] },
-] as const;
-
-export const MATERIAL_ROW_COUNT = MATERIAL_LAYOUT.length;
-export const MATERIAL_FLOAT_COUNT = MATERIAL_ROW_COUNT * 4;
+import { materialLayoutFields, MATERIAL_FLOAT_COUNT } from './materialLayoutSchema.js';
+export * from './materialLayoutSchema.js';
 const components = { f32: 1, vec2f: 2, vec3f: 3 } as const;
-export function materialLayoutFields() {
-  return MATERIAL_LAYOUT.flatMap((row, rowIndex) => {
-    let component = 0;
-    return row.fields.map(field => {
-      const offset = rowIndex * 16 + component * 4;
-      component += components[field.type];
-      return { ...field, row: rowIndex, component: offset % 16 / 4, offset };
-    });
-  });
+
+function flattenColors(values: ColorRGB[] | undefined): number[] {
+  const result: number[] = [];
+  if (!values) return result;
+  for (const value of values) {
+    const array = value as readonly number[];
+    for (let i = 0; i < array.length; i++) result.push(array[i]);
+  }
+  return result;
+}
+function flattenVectors(values: vec2.Vec2Array[] | undefined): number[] {
+  const result: number[] = [];
+  if (!values) return result;
+  for (const value of values) {
+    // Array.flat leaves typed arrays intact; Number then converts each as one
+    // entry. Preserve that existing behavior, including non-finite conversion.
+    if (value instanceof Float32Array) {
+      result.push(value.length === 0 ? 0 : value.length === 1 ? value[0] : NaN);
+    } else {
+      for (let i = 0; i < value.length; i++) result.push(value[i]);
+    }
+  }
+  return result;
 }
 
 export function packMaterialBuffer(data: BufferData): Float32Array {
+  const values: Record<string, number[]> = {
+    color: flattenColors(data.color),
+    type: data.type?.flat() ?? [],
+    roughness: data.roughness?.flat() ?? [],
+    normalMapIndex: data.normalMapIndex?.flat() ?? [],
+    normalScale: flattenVectors(data.normalScale),
+    metallic: data.metallic?.flat() ?? [],
+    anisotropy: data.anisotropy?.flat() ?? [],
+    diffuseMapIndex: data.diffuseMapIndex?.flat() ?? [],
+    metallicRoughnessMapIndex: data.metallicRoughnessMapIndex?.flat() ?? [],
+    emission: flattenColors(data.emission),
+    emissiveMapIndex: data.emissiveMapIndex?.flat() ?? [],
+    ior: data.ior?.flat() ?? [],
+    transmission: data.transmission?.flat() ?? [],
+    mediumType: data.mediumType?.flat() ?? [],
+    thin: data.thin?.flat() ?? [],
+    bevelSize: data.bevelSize?.flat() ?? [],
+    dispersion: data.dispersion?.flat() ?? [],
+    thinFilmThickness: data.thinFilmThickness?.flat() ?? [],
+    mapAlphaUsage: data.mapAlphaUsage?.flat() ?? [],
+    coatWeightMapIndex: data.coatWeightMapIndex?.flat() ?? [],
+    coatRoughnessMapIndex: data.coatRoughnessMapIndex?.flat() ?? [],
+    coatNormalMapIndex: data.coatNormalMapIndex?.flat() ?? [],
+    fuzzColorMapIndex: data.fuzzColorMapIndex?.flat() ?? [],
+    uvProjection: data.uvProjection?.flat() ?? [],
+    displacementMapIndex: data.displacementMapIndex?.flat() ?? [],
+    uvScale: flattenVectors(data.uvScale),
+    displacementStepSize: data.displacementStepSize?.flat() ?? [],
+    displacementUvProjection: data.displacementUvProjection?.flat() ?? [],
+    displacementUvProjectionScale: data.displacementUvProjectionScale?.flat() ?? [],
+    alpha: data.alpha?.flat() ?? [],
+    thinFilmMapIndex: data.thinFilmMapIndex?.flat() ?? [],
+    thinFilmIor: data.thinFilmIor?.flat() ?? [],
+    transmissionMapIndex: data.transmissionMapIndex?.flat() ?? [],
+    baseWeight: data.baseWeight?.flat() ?? [],
+    baseDiffuseRoughness: data.baseDiffuseRoughness?.flat() ?? [],
+    specularWeight: data.specularWeight?.flat() ?? [],
+    subsurfaceWeight: data.subsurfaceWeight?.flat() ?? [],
+    specularColor: flattenColors(data.specularColor),
+    fuzzWeight: data.fuzzWeight?.flat() ?? [],
+    transmissionColor: flattenColors(data.transmissionColor),
+    transmissionDepth: data.transmissionDepth?.flat() ?? [],
+    transmissionScatter: flattenColors(data.transmissionScatter),
+    transmissionScatterAnisotropy: data.transmissionScatterAnisotropy?.flat() ?? [],
+    subsurfaceColor: flattenColors(data.subsurfaceColor),
+    subsurfaceRadius: data.subsurfaceRadius?.flat() ?? [],
+    fuzzColor: flattenColors(data.fuzzColor),
+    fuzzRoughness: data.fuzzRoughness?.flat() ?? [],
+    coatColor: flattenColors(data.coatColor),
+    coatWeight: data.coatWeight?.flat() ?? [],
+    coatRoughness: data.coatRoughness?.flat() ?? [],
+    coatAnisotropy: data.coatAnisotropy?.flat() ?? [],
+    coatIor: data.coatIor?.flat() ?? [],
+    coatDarkening: data.coatDarkening?.flat() ?? [],
+    thinFilmWeight: data.thinFilmWeight?.flat() ?? [],
+    dispersionAbbeNumber: data.dispersionAbbeNumber?.flat() ?? [],
+    subsurfaceScatterAnisotropy: data.subsurfaceScatterAnisotropy?.flat() ?? [],
+    fuzzRoughnessMapIndex: data.fuzzRoughnessMapIndex?.flat() ?? [],
+    subsurfaceRadiusScale: flattenColors(data.subsurfaceRadiusScale),
+    specularWeightMapIndex: data.specularWeightMapIndex?.flat() ?? [],
+    mediumExtinction: flattenColors(data.mediumExtinction),
+    mediumAnisotropy: data.mediumAnisotropy?.flat() ?? [],
+    mediumScattering: flattenColors(data.mediumScattering),
+    specularColorMapIndex: data.specularColorMapIndex?.flat() ?? [],
+    roughnessMapIndex: data.roughnessMapIndex?.flat() ?? [],
+    metalnessMapIndex: data.metalnessMapIndex?.flat() ?? [],
+    alphaMapIndex: data.alphaMapIndex?.flat() ?? [],
+    alphaCutoff: data.alphaCutoff?.flat() ?? [],
+    doubleSided: data.doubleSided?.flat() ?? [],
+    alphaMode: data.alphaMode?.flat() ?? [],
+    anisotropyMapIndex: data.anisotropyMapIndex?.flat() ?? [],
+    specularAnisotropyRotation: data.specularAnisotropyRotation?.flat() ?? [],
+    coatNormalScale: flattenVectors(data.coatNormalScale),
+    coatAnisotropyRotation: data.coatAnisotropyRotation?.flat() ?? [],
+    specularAnisotropyModel: data.specularAnisotropyModel?.flat() ?? [],
+    thinFilmThicknessMinimum: data.thinFilmThicknessMinimum?.flat() ?? [],
+    thinFilmMapChannel: data.thinFilmMapChannel?.flat() ?? [],
+  };
   const fields = materialLayoutFields().map(field => ({
-    ...field,
-    // Flatten exactly as the legacy interleave did (including missing indices).
-    values: field.source === null ? data.type.map(() => 0) : data[field.source]?.flat() ?? []
+    type: field.type, offset: field.offset,
+    values: field.source === null ? data.type.map(() => 0) : values[field.source] ?? []
   }));
   const packed = new Float32Array(data.type.length * MATERIAL_FLOAT_COUNT);
   for (let material = 0; material < data.type.length; material++) {
@@ -185,25 +123,4 @@ export function packMaterialBuffer(data: BufferData): Float32Array {
     }
   }
   return packed;
-}
-
-export function materialBufferWgsl(): string {
-  let end = 0;
-  const declarations = materialLayoutFields().map(field => {
-    const alignment = field.type === 'vec3f' ? 16 : components[field.type] * 4;
-    const aligned = Math.ceil(end / alignment) * alignment;
-    if (aligned !== field.offset) throw new Error(`Misaligned material field: ${field.name}`);
-    end = aligned + components[field.type] * 4;
-    return `  ${field.name}: ${field.type},`;
-  });
-  if (Math.ceil(end / 16) * 16 !== MATERIAL_ROW_COUNT * 16) {
-    throw new Error('Invalid material buffer size');
-  }
-  return `struct MaterialBuffer {\n${declarations.join('\n')}\n};`;
-}
-
-export function materialRowsGlsl(): string {
-  return [`const int MAT_DATA_SIZE = ${MATERIAL_ROW_COUNT};`,
-    ...MATERIAL_LAYOUT.map((row, index) => `const int MAT_ROW_${row.name} = ${index};`)
-  ].join('\n');
 }

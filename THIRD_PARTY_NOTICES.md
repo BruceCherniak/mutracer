@@ -4,6 +4,22 @@ MuTracer is released under the MIT License (see [`LICENSE`](./LICENSE)). It
 includes or adapts the following third-party work. License texts are in
 [`LICENSES/`](./LICENSES) unless noted otherwise.
 
+## gl-matrix numeric functions
+
+The internal vector and matrix functions in `src/math/` are adapted from
+[gl-matrix 3.4.4](https://github.com/toji/gl-matrix/tree/v3.4.4/src).
+
+Copyright (c) 2015-2025 Brandon Jones and Colin MacKenzie IV. MIT License
+([`LICENSES/GlMatrix-MIT.txt`](./LICENSES/GlMatrix-MIT.txt)).
+
+## wgpu native ray-query probe
+
+The experimental `native/host/ray-query-probe.wgsl` follows ray-query API usage
+from the [wgpu v30.0.1 ray-traced triangle example](https://github.com/gfx-rs/wgpu/blob/v30.0.1/examples/features/src/ray_traced_triangle/shader.wgsl),
+modified into analytic hit/miss, mask, distance and instance checks.
+Copyright (c) 2025 The gfx-rs developers. MIT License
+([`LICENSES/Wgpu-MIT.txt`](./LICENSES/Wgpu-MIT.txt)).
+
 ## TinyBVH
 
 The WebAssembly BVH builder (`src/tinybvh/`) wraps
@@ -132,7 +148,7 @@ The adapted files under `src/renderer/` include:
 
 - `TileRender.ts`, `envMapDistribution.ts`,
   `mergeMeshesToGeometry.ts`, `envMapCreation.ts`, `MaterialTable.ts`,
-  `texturesFromMaterials.ts`, `util.ts`, and parts of
+  `texturesFromMaterials.ts`, `materialTextures.ts`, `materialParams.ts`, `util.ts`, and parts of
   `WGPURenderingPipeline.ts` / `WebGLRenderingPipeline.ts`.
 - `glsl/chunks/{intersect,envMap,rayTraceCore,materialBuffer,textureLinear,common,sampleShadowCatcher}.glsl.ts`,
   `glsl/rayTrace.frag.ts`, and `glsl/shadowCatcher.frag.ts`.
@@ -144,9 +160,6 @@ The adapted files under `src/renderer/` include:
 The standalone `dist/mutracer.{es,umd}.js` builds and their chunks bundle these
 MIT-licensed dependencies. The `lib/` ESM modules keep npm dependency imports.
 
-- [gl-matrix](https://github.com/toji/gl-matrix): Copyright (c) 2015-2025,
-  Brandon Jones, Colin MacKenzie IV.
-  [`LICENSES/GlMatrix-MIT.txt`](./LICENSES/GlMatrix-MIT.txt).
 - [webgpu-utils](https://github.com/greggman/webgpu-utils): Copyright (c) 2022
   Gregg Tavares.
   [`LICENSES/WebGPUUtils-MIT.txt`](./LICENSES/WebGPUUtils-MIT.txt).

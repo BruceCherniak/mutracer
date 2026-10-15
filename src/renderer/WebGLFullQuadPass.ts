@@ -1,11 +1,11 @@
 import {scratchGLSLFunctions} from './scratchSampling.js';
 import {setTextureRegion, textureRegion} from './textureRegion.js';
-import { FragmentShader, ShaderDefineValue } from './shader.js';
+import { FragmentShader, type ShaderDefineValue } from './shader.js';
 import {
   FrameBuffer,
   WebGLDevice,
   Texture2D,
-  TextureOptions,
+  type TextureOptions,
   WebGLProgramBindings
 } from './webgl.js';
 

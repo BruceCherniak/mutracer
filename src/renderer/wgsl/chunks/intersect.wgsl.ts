@@ -2,7 +2,7 @@
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
-import { uvProjectionConstants } from '../../MaterialTable.js';
+import { uvProjectionConstants } from '../../materialConstants.js';
 import { INSTANCE_VEC4_STRIDE } from '../../bvhAccel.js';
 import pdm_displacementWgsl from './pdm_displacement.wgsl.js';
 import { createIntersectionAlphaWgsl } from './intersectionAlpha.wgsl.js';

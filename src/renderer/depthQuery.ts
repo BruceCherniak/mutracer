@@ -21,5 +21,7 @@ export function packDepthSampleArea(area: DepthSampleArea, aspect: number) {
 }
 
 export function unpackDepthSamples(rgba: Float32Array) {
-  return Float32Array.from({ length: DEPTH_SAMPLE_COUNT }, (_, i) => rgba[i * 4]);
+  const result = new Float32Array(DEPTH_SAMPLE_COUNT);
+  for (let i = 0; i < result.length; i++) result[i] = rgba[i * 4];
+  return result;
 }

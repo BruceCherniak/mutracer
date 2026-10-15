@@ -1,3 +1,5 @@
+import { attributeLength, attributeValue } from '../scene/attributeData.js';
+import { read, write } from '../math/access.js';
 import { vec3 } from '../math.js';
 import Geometry, { Attribute } from '../scene/Geometry.js';
 
@@ -21,13 +23,13 @@ export function generateVertexNormals(geometry: Geometry) {
 
   const n = vec3.create();
 
-  const len = indices ? indices.length : geometry.vertexCount;
+  const len = indices ? attributeLength(indices) : geometry.vertexCount;
   let i1, i2, i3;
   for (let f = 0; f < len; ) {
     if (indices) {
-      i1 = indices[f++];
-      i2 = indices[f++];
-      i3 = indices[f++];
+      i1 = attributeValue(indices, f++);
+      i2 = attributeValue(indices, f++);
+      i3 = attributeValue(indices, f++);
     } else {
       i1 = f++;
       i2 = f++;
@@ -85,7 +87,7 @@ export function generateCreasedVertexNormals(
 ) {
   const indices = geometry.indices?.array;
   const positions = geometry.position?.array;
-  if (!indices || !positions || !indices.length || !positions.length) {
+  if (!indices || !positions || !attributeLength(indices) || !positions.length) {
     generateVertexNormals(geometry);
     return;
   }
@@ -106,7 +108,7 @@ export function generateCreasedVertexNormals(
     { length: originalVertexCount },
     () => [] as NormalGroup[]
   );
-  const generatedIndices = new Uint32Array(indices.length);
+  const generatedIndices = new Uint32Array(attributeLength(indices));
   const generatedPositions = Array.from(positions);
   const generatedUvs = geometry.uv ? Array.from(geometry.uv.array) : undefined;
   const generatedColors = geometry.color
@@ -130,10 +132,10 @@ export function generateCreasedVertexNormals(
     }
   };
 
-  for (let offset = 0; offset + 2 < indices.length; offset += 3) {
-    const i0 = indices[offset];
-    const i1 = indices[offset + 1];
-    const i2 = indices[offset + 2];
+  for (let offset = 0; offset + 2 < attributeLength(indices); offset += 3) {
+    const i0 = attributeValue(indices, offset);
+    const i1 = attributeValue(indices, offset + 1);
+    const i2 = attributeValue(indices, offset + 2);
     const ax = positions[i1 * 3] - positions[i0 * 3];
     const ay = positions[i1 * 3 + 1] - positions[i0 * 3 + 1];
     const az = positions[i1 * 3 + 2] - positions[i0 * 3 + 2];
@@ -261,12 +263,12 @@ function computeVertexTangents(geometry: Geometry, accumulated: Float32Array, ta
   const vertexCount = geometry.vertexCount;
   accumulated.fill(0);
   const indices = geometry.indices?.array;
-  const count = indices?.length ?? vertexCount;
+  const count = indices ? attributeLength(indices) : vertexCount;
 
   for (let offset = 0; offset + 2 < count; offset += 3) {
-    const i0 = indices ? indices[offset] : offset;
-    const i1 = indices ? indices[offset + 1] : offset + 1;
-    const i2 = indices ? indices[offset + 2] : offset + 2;
+    const i0 = indices ? attributeValue(indices, offset) : offset;
+    const i1 = indices ? attributeValue(indices, offset + 1) : offset + 1;
+    const i2 = indices ? attributeValue(indices, offset + 2) : offset + 2;
     const x1 = positions[i1 * 3] - positions[i0 * 3];
     const y1 = positions[i1 * 3 + 1] - positions[i0 * 3 + 1];
     const z1 = positions[i1 * 3 + 2] - positions[i0 * 3 + 2];
@@ -329,24 +331,24 @@ export function updateBoundingBox(geometry: Geometry) {
       const x = posArr[i++];
       const y = posArr[i++];
       const z = posArr[i++];
-      if (x < min[0]) {
-        min[0] = x;
+      if (x < read(min, 0)) {
+        write(min, 0, x);
       }
-      if (y < min[1]) {
-        min[1] = y;
+      if (y < read(min, 1)) {
+        write(min, 1, y);
       }
-      if (z < min[2]) {
-        min[2] = z;
+      if (z < read(min, 2)) {
+        write(min, 2, z);
       }
 
-      if (x > max[0]) {
-        max[0] = x;
+      if (x > read(max, 0)) {
+        write(max, 0, x);
       }
-      if (y > max[1]) {
-        max[1] = y;
+      if (y > read(max, 1)) {
+        write(max, 1, y);
       }
-      if (z > max[2]) {
-        max[2] = z;
+      if (z > read(max, 2)) {
+        write(max, 2, z);
       }
     }
   }

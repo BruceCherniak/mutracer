@@ -1,7 +1,7 @@
-import { SceneLight } from '../scene/Scene.js';
+import type { SceneLight } from '../scene/Scene.js';
 import { snapshotFields, snapshotsEqual } from './sceneChangeDetector.js';
 import { generateEnvMapFromSceneComponents } from './envMapCreation.js';
-import { EnvironmentMapSource } from './envMapDistribution.js';
+import type { EnvironmentMapSource } from './envMapDistribution.js';
 import Texture from '../scene/Texture.js';
 
 /** Synthesized environment data is retained across analytic-light edits. */

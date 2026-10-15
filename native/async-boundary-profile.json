@@ -1,0 +1,17 @@
+{
+  "profile_format": 1,
+  "name": "mutracer_async_boundary",
+  "entry": "async-boundary.ts",
+  "emission": "llvm",
+  "abi": {
+    "prefix": "mutracer_async_",
+    "init_symbol": "mutracer_async_init",
+    "sink_register_symbol": "mutracer_async_sink",
+    "collect_symbol": "mutracer_async_collect",
+    "result_reset_symbol": "mutracer_async_reset"
+  },
+  "exports": [
+    { "export": "begin", "symbol": "mutracer_async_begin", "params": [], "returns": "void" },
+    { "export": "ready", "symbol": "mutracer_async_ready", "params": [], "returns": "bool" }
+  ]
+}

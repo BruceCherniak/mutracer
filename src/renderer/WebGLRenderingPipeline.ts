@@ -10,11 +10,11 @@ import { readRgbaPixels } from './WebGLReadback.js';
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
 
 import Camera from '../scene/Camera.js';
-import { ColorRGB } from '../types.js';
+import type { ColorRGB } from '../types.js';
 import { vec3 } from '../math.js';
 import halton from './halton.js';
 import { makeTileRender } from './TileRender.js';
-import {
+import type {
   DisplayChannel,
   ToneMappingParams
 } from './RenderingPipeline.js';
