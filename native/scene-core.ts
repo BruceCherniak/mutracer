@@ -9,7 +9,7 @@ import MeshState from '../src/scene/MeshState.js';
 import MaterialState from '../src/scene/MaterialState.js';
 import PixelTexture from '../src/scene/PixelTexture.js';
 import type TextureState from '../src/scene/TextureState.js';
-import Camera from '../src/scene/Camera.js';
+import { sceneCameraParameters } from './camera-core.js';
 import { InstanceState, RectLightState, SphereLight, DirectionalLight, SpotLight,
   EmissiveTriangleCache, LightChoiceBuffer, buildLightAliasTable, estimateAnalyticLightPower, estimateEnvironmentPower,
   packEmissiveTriangles, packIESProfiles, LIGHT_CHOICE_ENVIRONMENT, LIGHT_CHOICE_ANALYTIC,
@@ -18,7 +18,6 @@ export * from '../src/renderer/lightCore.js';
 import type { AnalyticLightState } from '../src/scene/lightState.js';
 import { write } from '../src/math/access.js';
 import { meshInstancesLength } from '../src/renderer/packedMeshInstances.js';
-import { mat4 } from '../src/math.js';
 import { prepareSceneMeshes, computeGeometryNormals } from '../src/renderer/scenePreparation.js';
 import { buildBLAS, buildTLAS, concatBLASBuffers, getTraversalStackSizes } from '../src/renderer/bvhAccel.js';
 import { getGeometryBvh, setGeometryBvh } from '../src/renderer/geometryBvh.js';
@@ -31,8 +30,6 @@ import { wgpuSceneFeatureFlags } from '../src/renderer/WGPUSceneFeatures.js';
 import { wgpuShaderSource } from '../src/renderer/wgpuShaderSource.js';
 import { makeRayTraceUniform, packWgpuAnalyticLights, WGPU_SCENE_BUFFER_MIN_BYTES } from '../src/renderer/wgpuSceneUniform.js';
 import { zSobolLog2SPP } from '../src/renderer/sampling.js';
-import { packCameraUniform } from '../src/renderer/cameraUniform.js';
-import { cameraApertureRadius } from '../src/renderer/cameraLens.js';
 import { getOpenPbrEnergyLutData, OPENPBR_ENERGY_LUT_WIDTH, OPENPBR_ENERGY_LUT_HEIGHT } from '../src/renderer/openPbrEnergyLut.js';
 
 // Versioned experimental wire protocol. The Rust boundary validates every span,
@@ -253,14 +250,7 @@ function buildSceneParameters(bytes: Uint8Array): Uint8Array {
   rt.views.sequenceSeed[0] = 12345; rt.views.zSobolLogSPP[0] = zSobolLog2SPP(64);
   rt.views.bounces[0] = 6; rt.views.directLightCandidates[0] = 2;
   rt.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(constants);
-  const co = u[14];
-  const camera = u[co] === 0 ? new Camera({projection: 'perspective', fov: f[co + 1], near: f[co + 2], far: f[co + 3]})
-    : new Camera({projection: 'orthographic', left: f[co + 4], right: f[co + 5], bottom: f[co + 6], top: f[co + 7], near: f[co + 2], far: f[co + 3]});
-  camera.zoom = f[co + 8]; camera.fStop = f[co + 9]; camera.focusDistance = f[co + 10];
-  camera.sensorHeight = f[co + 11]; camera.metersPerUnit = f[co + 12];
-  for (let i = 0; i < 16; i++) write(camera.transform, i, f[co + 16 + i]);
-  const inverse = mat4.create(); mat4.invert(inverse, camera.getProjectionMatrix(width / height));
-  mat4.mul(inverse, camera.transform, inverse);
+  const cameraUniform = sceneCameraParameters(bytes.subarray(u[14] * 4, u[14] * 4 + 128), width, height);
   // Output packet: version, count, width, height, then 8-word resource descriptors
   // (id, kind[0=buffer,1=texture,2=WGSL], length, width,height,layers,format,offset).
   const parts: Uint8Array[] = [], records: number[][] = [];
@@ -272,7 +262,7 @@ function buildSceneParameters(bytes: Uint8Array): Uint8Array {
   }
   add(1, 0, bvh, 0, 0, 0, 0); add(2, 0, new Uint8Array(tlas.instancesBuffer!), 0, 0, 0, 0);
   add(3, 0, new Uint8Array(attributes.buffer), 0, 0, 0, 0); add(4, 0, new Uint8Array(table.getBufferArray().buffer), 0, 0, 0, 0);
-  add(5, 0, new Uint8Array(mapInfo.buffer), 0, 0, 0, 0); add(6, 0, new Uint8Array(packCameraUniform(inverse, new Float32Array(camera.transform), cameraApertureRadius(camera), camera.focusDistance).buffer), 0, 0, 0, 0);
+  add(5, 0, new Uint8Array(mapInfo.buffer), 0, 0, 0, 0); add(6, 0, cameraUniform, 0, 0, 0, 0);
   add(7, 0, new Uint8Array(rt.buffer), 0, 0, 0, 0); add(8, 0, new Uint8Array(lightUniform.buffer), 0, 0, 0, 0);
   add(20, 1, atlasBytes, atlas.width, atlas.height, atlasLayers, atlas.floatStorage ? 1 : 0);
   add(21, 1, environment ? new Uint8Array(environment.data.buffer) : new Uint8Array(16), environment?.width ?? 1, environment?.height ?? 1, 1, 2);

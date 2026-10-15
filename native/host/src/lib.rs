@@ -52,6 +52,9 @@ unsafe extern "C" {
 // scriptc state is confined to one dedicated owner for this initial probe.
 // No worker thread calls into it; the mutex also rejects overlapping C entry.
 static ENTRY_LOCK: Mutex<()> = Mutex::new(());
+// ABI tests share process-global AOT/registry state even on Rust's test workers.
+#[cfg(test)]
+static ABI_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -848,6 +851,20 @@ impl GpuScene {
         })?;
         self.samples = 0;
         Ok(())
+    }
+    fn update_camera(&mut self, packed: &[u8]) -> Result<()> {
+        let buffer = self
+            .scene
+            .camera_uniform
+            .and_then(|id| self.buffers.get(&id))
+            .ok_or("Missing raw camera buffer")?;
+        if packed.len() != 144 || buffer.size() != 144 {
+            return Err("Camera uniform size mismatch".into());
+        }
+        // Existing TS Camera/lens/packing owns the values; the host only uploads
+        // the command and clears accumulation. No scene/pipeline recreation.
+        self.gpu.queue.write_buffer(buffer, 0, packed);
+        self.reset_raw()
     }
 }
 

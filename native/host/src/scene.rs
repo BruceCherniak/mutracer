@@ -2,6 +2,14 @@
 use super::*;
 unsafe extern "C" {
     fn mt_core_scene(input: *const u8, length: usize, output: *mut *const u8, size: *mut usize);
+    fn mt_core_scene_camera(
+        input: *const u8,
+        length: usize,
+        width: u32,
+        height: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
 }
 const MAX_BYTES: usize = 64 * 1024 * 1024;
 
@@ -392,6 +400,9 @@ fn validate(bytes: &[u8]) -> Result<()> {
     }
     let o = w.u(14);
     w.span(o, 32)?;
+    validate_camera(&w, o)
+}
+fn validate_camera(w: &Words<'_>, o: usize) -> Result<()> {
     w.finite(o + 1, 12)?;
     if w.u(o) > 1
         || w.f(o + 2) <= 0.0
@@ -412,6 +423,35 @@ fn validate(bytes: &[u8]) -> Result<()> {
     w.reserved(o + 13, 3)?;
     w.affine(o + 16)?;
     Ok(())
+}
+pub(super) fn prepare_camera(bytes: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
+    if bytes.len() != 128 {
+        return Err("Camera descriptor must contain exactly 128 bytes".into());
+    }
+    validate_camera(&Words(bytes), 0)?;
+    let mut pointer = std::ptr::null();
+    let mut size = 0;
+    let packed = unsafe {
+        mt_core_scene_camera(
+            bytes.as_ptr(),
+            bytes.len(),
+            width,
+            height,
+            &mut pointer,
+            &mut size,
+        );
+        let result = copy_core_result(pointer, size, 144);
+        mt_core_reset();
+        mt_core_collect();
+        result?
+    };
+    if !packed
+        .chunks_exact(4)
+        .all(|b| f32::from_le_bytes(b.try_into().unwrap()).is_finite())
+    {
+        return Err("Camera produces non-finite GPU parameters".into());
+    }
+    Ok(packed)
 }
 fn buffer_layout(binding: u32, ty: &str) -> Value {
     json!({"binding":binding,"visibility":4,"buffer":{"type":ty}})
@@ -651,6 +691,27 @@ pub unsafe extern "C" fn mt_probe_render_scene(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn camera_rejects_finite_inputs_with_nonfinite_packing_and_recovers() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _entry = ENTRY_LOCK.lock().unwrap();
+        unsafe {
+            mt_core_init();
+        }
+        let scene = input();
+        let camera = &scene[88 * 4..120 * 4];
+        let expected = prepare_camera(camera, 8, 8).unwrap();
+        let mut extreme = camera.to_vec();
+        extreme[28 * 4..29 * 4].copy_from_slice(&f32::MAX.to_le_bytes());
+        assert!(validate_camera(&Words(&extreme), 0).is_ok());
+        assert!(
+            prepare_camera(&extreme, 8, 8)
+                .unwrap_err()
+                .to_string()
+                .contains("non-finite")
+        );
+        assert_eq!(prepare_camera(camera, 8, 8).unwrap(), expected);
+    }
     fn input() -> Vec<u8> {
         let mut words = vec![0u32; 132];
         words[..15].copy_from_slice(&[1, 132, 8, 8, 1, 1, 1, 0, 0, 32, 44, 64, 88, 88, 88]);

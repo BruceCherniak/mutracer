@@ -13,6 +13,12 @@
   },
   "exports": [
     {
+      "export": "sceneCameraParameters",
+      "symbol": "mt_core_scene_camera",
+      "params": ["bytes", "u32", "u32"],
+      "returns": "bytes"
+    },
+    {
       "export": "frameParameters",
       "symbol": "mt_core_frame",
       "params": [

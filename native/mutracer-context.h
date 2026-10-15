@@ -12,8 +12,8 @@ extern "C" {
  * retained. Pixel storage belongs to the caller. This ABI is not stable yet.
  *
  * All contexts and probe calls must use the first creating owner thread until
- * process exit (including after destroying the last context). Calls are
- * serialized; render/read/reset/commit can block. Jobs use polling below.
+ * process exit (including after destroying the last context). Overlapping calls
+ * return errors; render/read/reset/commit can block. Jobs use polling below.
  * At most eight contexts. Context handles are
  * unique until process exit; destroyed/unknown handles return errors.
  * Contexts retain GPU resources between renders; commit replaces the complete
@@ -49,6 +49,15 @@ int32_t mt_context_destroy(mt_context handle, char *error, size_t capacity);
 int32_t mt_context_commit(mt_context handle, const uint8_t *input, size_t length, char *error, size_t capacity);
 int32_t mt_context_render(mt_context handle, uint32_t additional_samples, char *error, size_t capacity);
 int32_t mt_context_reset(mt_context handle, char *error, size_t capacity);
+/* Replace the Camera[32] record described in mutracer-scene.h (exactly 128 bytes).
+ * Uses the committed image dimensions/aspect and retains geometry, textures and
+ * pipeline. Every successful call resets samples and expires the previous job,
+ * even for identical input. Validation rejection preserves camera/samples/output
+ * and job. GPU execution failure marks the scene failed. This call blocks and
+ * rejects active jobs; it cannot recover a failed scene. Caller input is copied.
+ */
+int32_t mt_context_update_camera(mt_context handle, const uint8_t *input, size_t length,
+  char *error, size_t capacity);
 int32_t mt_context_info(mt_context handle, mt_context_info_v1 *info, char *error, size_t capacity);
 int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, size_t size,
   size_t *written, char *error, size_t capacity);
@@ -61,15 +70,17 @@ int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, s
  *
  * requested/submitted/completed counts are additional samples, excluding base.
  * Context info counts only completed samples. Active jobs reject blocking render,
- * reset, commit, read_pixels and destroy. Cancel is idempotent: queued work stops
- * immediately; in-flight work finishes, then poll reaches cancelled or complete.
+ * reset, commit, update_camera, read_pixels and destroy. Cancel is idempotent:
+ * queued work stops immediately; in-flight work finishes, then poll reaches
+ * cancelled or complete.
  * Submitted batches cannot be interrupted. Completed samples remain accumulated;
  * a later job continues the same sequence. Full completion takes precedence over
  * late cancellation. GPU failures mark the scene/job failed; failed contexts may
  * be destroyed or replaced by commit. Device-loss recovery remains unavailable.
  *
  * A job handle expires on the next submit, blocking render, successful reset/
- * commit, or context destruction. Validation-rejected calls retain the job.
+ * commit/camera update, or context destruction. Validation-rejected calls retain
+ * the job.
  * Handles are never reused. Save any terminal info before starting another job.
  */
 typedef uint64_t mt_render_job;

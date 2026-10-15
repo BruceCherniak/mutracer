@@ -48,12 +48,20 @@ copies HDR, normal or albedo pixels into caller-owned memory. The context API
 has no file output. The command above builds the C consumer and saves its
 verified images under `.native-build/context-core/`.
 
-Commit replaces the full scene and restarts accumulation; submit camera/material
-edits in the updated descriptor. A rejected commit retains the previous scene.
+Commit replaces the full scene and restarts accumulation; submit geometry,
+material and light edits in the updated descriptor. A rejected commit retains the previous scene.
 Reset clears sampling while keeping the committed scene. Contexts have independent
 accumulation, with at most eight contexts on one owner thread. Commits can
 briefly hold old and new scene resources together. The header specifies lifetime,
 thread binding, byte lengths, error behavior and remaining limits.
+
+For camera edits, `mt_context_update_camera` accepts the same 128-byte `Camera[32]`
+record from the scene descriptor. It retains geometry, textures and the pipeline,
+uses the committed image dimensions, and restarts accumulation on every successful
+call. It supports perspective/orthographic projection, transform, zoom and lens
+fields. The header specifies rejection, job lifetime and thread rules. Run
+`npm run native:camera` to build and verify this C usage; results are saved under
+`.native-build/camera-core/`.
 
 ## Render with polling and cancellation
 
@@ -74,8 +82,8 @@ Cancel stops further submissions. An already submitted batch finishes before
 poll reports cancellation, so keep polling after cancel. Completed samples stay
 accumulated and a later job can continue them. Full completion takes precedence
 over late cancellation. One context accepts one active job; while active, render,
-commit, reset, readback and destroy return errors. Finish or cancel and drain the
-job before using those calls. The header specifies job states, sample counters
+commit, camera update, reset, readback and destroy return errors. Finish or cancel
+and drain the job before using those calls. The header specifies job states, sample counters
 and handle lifetimes.
 
 ## Scene inputs and options
@@ -126,9 +134,10 @@ Build/run settings:
 
 - `MUTRACER_NATIVE_OUTPUT`: output directory; defaults are `.native-build/scene-core/`
   for `native:scene`, `.native-build/context-core/` for `native:context` and
-  `.native-build/job-core/` for `native:jobs`.
+  `.native-build/job-core/` for `native:jobs`; `native:camera` uses
+  `.native-build/camera-core/`.
 - `MUTRACER_NATIVE_SAMPLES`: verification samples, default 256; range 1..4096
-  for scene verification, 8..4096 for context and job verification.
+  for scene verification, 8..4096 for context, job and camera verification.
 - `CARGO_TARGET_DIR`: optional reusable Cargo build directory.
 - `CC`: C compiler executable, default `cc`.
 
@@ -142,9 +151,9 @@ material-related expansion. Atlas storage is limited to 64 MiB, 4096 pixels per
 side and 256 layers; source textures can be scaled to fit. The header specifies
 the remaining validation and format constraints.
 
-Raw scenes currently use software BVH traversal on the GPU. Incremental scene
-updates, device-loss recovery, denoising, browser display parity
-and a stable release ABI remain pending. This library does not yet replace
+Raw scenes currently use software BVH traversal on the GPU. Incremental updates
+to geometry, materials and lights, device-loss recovery, denoising, browser display
+parity and a stable release ABI remain pending. This library does not yet replace
 the full browser Engine/Render API.
 
 ## Prepared replay and experimental HWRT

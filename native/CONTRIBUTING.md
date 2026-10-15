@@ -4,6 +4,26 @@ The native implementation is an experimental synchronous AOT core plus Rust/wgpu
 host. Usage and supported inputs are in [README.md](./README.md). Do not treat
 module compilation, prepared replay and raw-scene rendering as equivalent gates.
 
+## Partial camera validation
+
+`npm run native:camera` runs the complete job gate, then compares partial camera
+updates against full scene commits for six camera records on each of 33 fixtures.
+The cases cover translation, perspective field/clip/zoom changes, physical lens
+changes, orthographic projection, affine shear and restoration. It tests input
+ownership, zeroed accumulation, invalid descriptor preservation, active-job
+rejection, completed-job expiry and owner/stale-handle rejection. HDR and both
+guides must match exactly; restoration must reproduce the original image.
+
+`camera-core.ts` only decodes the wire camera record into the existing TS
+`Camera`, lens/math and uniform-packing functions. Both `scene-core.ts` and the
+partial AOT export call that same adapter. Rust shares the full-scene lens/
+transform validator, copies the AOT command before arena reset/collection, checks
+finite packed values, uploads the camera uniform and clears accumulation. It
+does not rebuild the scene, bind groups, textures or pipeline. No duplicate
+camera math is implemented in Rust. Other partial scene updates still need a
+native persistent preparation-state contract for the existing shared TS update
+functions; raw commits currently discard those TS scene objects after packing.
+
 ## Job validation
 
 `npm run native:jobs` first runs `native:context`, then exercises queued,

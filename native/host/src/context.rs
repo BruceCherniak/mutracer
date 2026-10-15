@@ -267,6 +267,30 @@ pub unsafe extern "C" fn mt_context_reset(handle: u64, error: *mut c_char, capac
     })
 }
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_context_update_camera(
+    handle: u64,
+    input: *const u8,
+    length: usize,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    action(error, capacity, |registry| {
+        let context = context(registry, handle)?;
+        idle(context)?;
+        let scene = ready(context)?;
+        if input.is_null() || length != 128 {
+            return Err("Camera descriptor must contain exactly 128 bytes".into());
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+        let packed = scene::prepare_camera(bytes, scene.scene.width, scene.scene.height)?;
+        context.failed = true;
+        context.scene.as_mut().unwrap().update_camera(&packed)?;
+        context.job = None;
+        context.failed = false;
+        Ok(())
+    })
+}
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_info(
     handle: u64,
     info: *mut ContextInfo,
@@ -533,6 +557,7 @@ mod tests {
     use super::*;
     #[test]
     fn caught_context_panic_does_not_poison_the_registry() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
         let mut error = [0i8; 128];
         assert_eq!(
             action(error.as_mut_ptr(), error.len(), |_| panic!(
