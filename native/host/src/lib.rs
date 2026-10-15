@@ -11,7 +11,7 @@ use std::{
     time::{Duration, Instant},
 };
 use wgpu::util::DeviceExt;
-mod context;
+pub mod context;
 mod hardware;
 mod material_properties;
 mod native_bvh;

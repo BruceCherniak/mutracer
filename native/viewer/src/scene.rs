@@ -1,0 +1,697 @@
+//! glTF-to-descriptor adapter; all renderer preparation stays in the AOT library.
+use anyhow::{Context, Result, bail, ensure};
+use glam::{Mat4, Vec3};
+use std::{collections::HashMap, path::Path};
+
+#[derive(Clone)]
+pub struct Texture {
+    pub source: usize,
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
+    pub uv: u32,
+    pub scale: [f32; 2],
+    pub offset: [f32; 2],
+}
+#[derive(Clone)]
+pub struct Material {
+    pub name: String,
+    pub color: [f32; 3],
+    pub roughness: f32,
+    pub metalness: f32,
+    pub opacity: f32,
+    pub transmission: f32,
+    pub ior: f32,
+    pub emission: [f32; 3],
+    pub emission_strength: f32,
+    pub maps: [u32; 4],
+    pub alpha_mode: u32,
+    pub alpha_cutoff: f32,
+    pub double_sided: bool,
+    pub normal_scale: f32,
+    pub unlit: bool,
+}
+pub struct Geometry {
+    pub positions: Vec<f32>,
+    pub indices: Vec<u32>,
+    pub normals: Vec<f32>,
+    pub uv: [Vec<f32>; 2],
+    pub colors: Vec<f32>,
+    pub tangents: Vec<f32>,
+}
+pub struct Mesh {
+    pub geometry: usize,
+    pub material: usize,
+    pub transform: Mat4,
+}
+pub struct Model {
+    pub name: String,
+    pub materials: Vec<Material>,
+    pub textures: Vec<Texture>,
+    pub geometries: Vec<Geometry>,
+    pub meshes: Vec<Mesh>,
+    pub center: Vec3,
+    pub radius: f32,
+    pub warnings: Vec<String>,
+}
+impl Model {
+    pub fn load(path: &Path) -> Result<Self> {
+        ensure!(
+            path.metadata()?.len() <= 128 * 1024 * 1024,
+            "Model file exceeds 128 MiB"
+        );
+        let (document, buffers, images) =
+            gltf::import(path).context("Loading GLTF/GLB and its buffers/images")?;
+        ensure!(
+            buffers.iter().map(|b| b.len()).sum::<usize>() <= 64 * 1024 * 1024,
+            "Model buffers exceed 64 MiB"
+        );
+        let known = [
+            "KHR_materials_ior",
+            "KHR_materials_transmission",
+            "KHR_materials_emissive_strength",
+            "KHR_materials_unlit",
+            "KHR_texture_transform",
+        ];
+        for extension in document.extensions_required() {
+            ensure!(
+                known.contains(&extension),
+                "Required glTF extension is unsupported: {extension}"
+            );
+        }
+        let mut model = Self {
+            name: path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into(),
+            materials: vec![],
+            textures: vec![],
+            geometries: vec![],
+            meshes: vec![],
+            center: Vec3::ZERO,
+            radius: 1.,
+            warnings: vec![],
+        };
+        for extension in document.extensions_used().filter(|e| !known.contains(e)) {
+            model.warnings.push(format!(
+                "Unsupported optional extension is ignored: {extension}"
+            ));
+        }
+        if document.animations().len() > 0 {
+            model
+                .warnings
+                .push("Animations are not played; showing the scene's static pose.".into());
+        }
+        let rgba: Vec<Vec<u8>> = images.iter().map(image_rgba).collect::<Result<_>>()?;
+        for material in document.materials() {
+            let pbr = material.pbr_metallic_roughness();
+            let base = pbr.base_color_factor();
+            let mut maps = [u32::MAX; 4];
+            if let Some(info) = pbr.base_color_texture() {
+                maps[0] = model.add_map(
+                    info.texture(),
+                    info.tex_coord(),
+                    info.texture_transform()
+                        .map(|t| (t.offset(), t.scale(), t.rotation(), t.tex_coord())),
+                    &images,
+                    &rgba,
+                )?;
+            }
+            if let Some(info) = material.normal_texture() {
+                maps[1] = model.add_map(info.texture(), info.tex_coord(), None, &images, &rgba)?;
+            }
+            if let Some(info) = pbr.metallic_roughness_texture() {
+                maps[2] = model.add_map(
+                    info.texture(),
+                    info.tex_coord(),
+                    info.texture_transform()
+                        .map(|t| (t.offset(), t.scale(), t.rotation(), t.tex_coord())),
+                    &images,
+                    &rgba,
+                )?;
+            }
+            if let Some(info) = material.emissive_texture() {
+                maps[3] = model.add_map(
+                    info.texture(),
+                    info.tex_coord(),
+                    info.texture_transform()
+                        .map(|t| (t.offset(), t.scale(), t.rotation(), t.tex_coord())),
+                    &images,
+                    &rgba,
+                )?;
+            }
+            if material.occlusion_texture().is_some() {
+                model
+                    .warnings
+                    .push("Occlusion textures are ignored by this path-traced example.".into());
+            }
+            if material
+                .transmission()
+                .and_then(|t| t.transmission_texture())
+                .is_some()
+            {
+                model
+                    .warnings
+                    .push("Transmission textures are ignored; using the scalar factor.".into());
+            }
+            model.materials.push(Material {
+                name: material.name().map(str::to_owned).unwrap_or_else(|| {
+                    format!(
+                        "Material {}",
+                        material
+                            .index()
+                            .map(|i| i.to_string())
+                            .unwrap_or("default".into())
+                    )
+                }),
+                color: [base[0], base[1], base[2]],
+                opacity: if material.alpha_mode() == gltf::material::AlphaMode::Opaque {
+                    1.
+                } else {
+                    base[3]
+                },
+                roughness: pbr.roughness_factor(),
+                metalness: pbr.metallic_factor(),
+                transmission: material
+                    .transmission()
+                    .map(|t| t.transmission_factor())
+                    .unwrap_or(0.),
+                ior: material.ior().unwrap_or(1.5),
+                emission: material.emissive_factor(),
+                emission_strength: material.emissive_strength().unwrap_or(1.),
+                maps,
+                alpha_mode: match material.alpha_mode() {
+                    gltf::material::AlphaMode::Opaque => 1,
+                    gltf::material::AlphaMode::Mask => 2,
+                    gltf::material::AlphaMode::Blend => 3,
+                },
+                alpha_cutoff: material.alpha_cutoff().unwrap_or(0.5),
+                double_sided: material.double_sided(),
+                normal_scale: material.normal_texture().map(|t| t.scale()).unwrap_or(1.),
+                unlit: material.unlit(),
+            });
+        }
+        model.materials.push(Material {
+            name: "Default".into(),
+            color: [1.; 3],
+            roughness: 1.,
+            metalness: 1.,
+            opacity: 1.,
+            transmission: 0.,
+            ior: 1.5,
+            emission: [0.; 3],
+            emission_strength: 1.,
+            maps: [u32::MAX; 4],
+            alpha_mode: 1,
+            alpha_cutoff: 0.5,
+            double_sided: false,
+            normal_scale: 1.,
+            unlit: false,
+        });
+        let scene = document
+            .default_scene()
+            .or_else(|| document.scenes().next())
+            .context("glTF has no scene")?;
+        let mut cache = HashMap::new();
+        for node in scene.nodes() {
+            model.visit(node, Mat4::IDENTITY, &buffers, &mut cache)?;
+        }
+        ensure!(
+            !model.meshes.is_empty(),
+            "The selected scene has no triangle meshes"
+        );
+        let mut min = Vec3::splat(f32::INFINITY);
+        let mut max = Vec3::splat(f32::NEG_INFINITY);
+        for mesh in &model.meshes {
+            for p in model.geometries[mesh.geometry].positions.chunks_exact(3) {
+                let p = mesh.transform.transform_point3(Vec3::from_slice(p));
+                min = min.min(p);
+                max = max.max(p);
+            }
+        }
+        model.center = (min + max) * 0.5;
+        model.radius = (max - min).length() * 0.5;
+        ensure!(
+            model.center.is_finite() && model.radius.is_finite() && model.radius > 1e-8,
+            "Invalid or degenerate model bounds"
+        );
+        for mesh in &model.meshes {
+            for id in model.materials[mesh.material].maps {
+                if id != u32::MAX {
+                    ensure!(
+                        !model.geometries[mesh.geometry].uv
+                            [model.textures[id as usize].uv as usize]
+                            .is_empty(),
+                        "Material references a missing texture coordinate set"
+                    );
+                }
+            }
+        }
+        model.warnings.sort();
+        model.warnings.dedup();
+        Ok(model)
+    }
+    fn add_map(
+        &mut self,
+        texture: gltf::Texture<'_>,
+        uv: u32,
+        transform: Option<([f32; 2], [f32; 2], f32, Option<u32>)>,
+        images: &[gltf::image::Data],
+        rgba: &[Vec<u8>],
+    ) -> Result<u32> {
+        let (offset, scale, rotation, override_uv) =
+            transform.unwrap_or(([0.; 2], [1.; 2], 0., None));
+        let uv = override_uv.unwrap_or(uv);
+        ensure!(uv <= 1, "Only TEXCOORD_0/1 are supported");
+        if rotation != 0. {
+            self.warnings
+                .push("Texture rotation is ignored; offset and scale are applied.".into());
+        }
+        let sampler = texture.sampler();
+        if sampler.wrap_s() != gltf::texture::WrappingMode::Repeat
+            || sampler.wrap_t() != gltf::texture::WrappingMode::Repeat
+        {
+            self.warnings.push(
+                "Texture wrapping uses repeat; clamp/mirror samplers are unsupported.".into(),
+            );
+        }
+        let source = texture.source().index();
+        let image = &images[source];
+        ensure!(
+            image.width as u64 * image.height as u64 <= 16_777_216,
+            "Source material texture exceeds 16M pixels"
+        );
+        if let Some(id) = self.textures.iter().position(|t| {
+            t.source == source && t.uv == uv && t.scale == scale && t.offset == offset
+        }) {
+            return Ok(id as u32);
+        }
+        let id = self.textures.len() as u32;
+        let (width, height, pixels) = if image.width.max(image.height) > 512 {
+            let factor = 512. / image.width.max(image.height) as f32;
+            let width = (image.width as f32 * factor).round().max(1.) as u32;
+            let height = (image.height as f32 * factor).round().max(1.) as u32;
+            let input = image::RgbaImage::from_raw(image.width, image.height, rgba[source].clone())
+                .context("Invalid decoded texture size")?;
+            self.warnings
+                .push("Material textures are limited to 512 pixels on the longest side.".into());
+            (
+                width,
+                height,
+                image::imageops::resize(
+                    &input,
+                    width,
+                    height,
+                    image::imageops::FilterType::Triangle,
+                )
+                .into_raw(),
+            )
+        } else {
+            (image.width, image.height, rgba[source].clone())
+        };
+        self.textures.push(Texture {
+            source,
+            width,
+            height,
+            pixels,
+            uv,
+            scale,
+            offset,
+        });
+        Ok(id)
+    }
+    fn visit(
+        &mut self,
+        node: gltf::Node<'_>,
+        parent: Mat4,
+        buffers: &[gltf::buffer::Data],
+        cache: &mut HashMap<(usize, usize), usize>,
+    ) -> Result<()> {
+        ensure!(
+            node.skin().is_none(),
+            "Skinned meshes are unsupported by this static example"
+        );
+        let transform = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
+        ensure!(
+            transform.is_finite() && transform.determinant().abs() >= 1e-12,
+            "Node transform must be finite and invertible"
+        );
+        if let Some(mesh) = node.mesh() {
+            for primitive in mesh.primitives() {
+                ensure!(
+                    primitive.morph_targets().len() == 0,
+                    "Morph targets are unsupported by this static example"
+                );
+                let key = (mesh.index(), primitive.index());
+                let index = if let Some(&index) = cache.get(&key) {
+                    index
+                } else {
+                    let reader = primitive.reader(|b| Some(&buffers[b.index()]));
+                    let positions: Vec<f32> = reader
+                        .read_positions()
+                        .context("Mesh is missing POSITION")?
+                        .flatten()
+                        .collect();
+                    let input: Vec<u32> = reader
+                        .read_indices()
+                        .map(|i| i.into_u32().collect())
+                        .unwrap_or_else(|| (0..positions.len() as u32 / 3).collect());
+                    let mut indices = vec![];
+                    match primitive.mode() {
+                        gltf::mesh::Mode::Triangles => indices = input,
+                        gltf::mesh::Mode::TriangleStrip => {
+                            for i in 2..input.len() {
+                                indices.extend(if i % 2 == 0 {
+                                    [input[i - 2], input[i - 1], input[i]]
+                                } else {
+                                    [input[i - 1], input[i - 2], input[i]]
+                                });
+                            }
+                        }
+                        gltf::mesh::Mode::TriangleFan => {
+                            for i in 2..input.len() {
+                                indices.extend([input[0], input[i - 1], input[i]]);
+                            }
+                        }
+                        _ => bail!(
+                            "Only triangle, triangle-strip and triangle-fan primitives are supported"
+                        ),
+                    }
+                    let colors = reader
+                        .read_colors(0)
+                        .map(|c| {
+                            let rgba: Vec<_> = c.into_rgba_f32().collect();
+                            if rgba.iter().any(|c| c[3] != 1.) {
+                                self.warnings.push(
+                                    "Vertex color alpha is ignored; RGB is preserved.".into(),
+                                );
+                            }
+                            rgba.into_iter().flat_map(|c| [c[0], c[1], c[2]]).collect()
+                        })
+                        .unwrap_or_default();
+                    let geometry = Geometry {
+                        positions,
+                        indices,
+                        normals: reader
+                            .read_normals()
+                            .map(|v| v.flatten().collect())
+                            .unwrap_or_default(),
+                        uv: [0, 1].map(|i| {
+                            reader
+                                .read_tex_coords(i)
+                                .map(|v| v.into_f32().flatten().collect())
+                                .unwrap_or_default()
+                        }),
+                        colors,
+                        tangents: reader
+                            .read_tangents()
+                            .map(|v| v.flatten().collect())
+                            .unwrap_or_default(),
+                    };
+                    let index = self.geometries.len();
+                    self.geometries.push(geometry);
+                    cache.insert(key, index);
+                    index
+                };
+                self.meshes.push(Mesh {
+                    geometry: index,
+                    material: primitive
+                        .material()
+                        .index()
+                        .unwrap_or(self.materials.len() - 1),
+                    transform,
+                });
+            }
+        }
+        for child in node.children() {
+            self.visit(child, transform, buffers, cache)?;
+        }
+        Ok(())
+    }
+    pub fn descriptor(&self, camera: &[u8], size: [u32; 2], environment: &Environment) -> Vec<u8> {
+        let mut w = Wire(vec![0; 32]);
+        w.0[0] = 2;
+        w.0[2] = size[0];
+        w.0[3] = size[1];
+        w.0[4] = self.geometries.len() as u32;
+        w.0[5] = self.meshes.len() as u32;
+        w.0[6] = self.materials.len() as u32;
+        w.0[8] = self.textures.len() as u32 + 1;
+        for (header, count, stride) in [
+            (9, self.geometries.len(), 12),
+            (10, self.meshes.len(), 20),
+            (11, self.materials.len(), 24),
+            (13, self.textures.len() + 1, 12),
+        ] {
+            w.0[header] = w.0.len() as u32;
+            w.0.resize(w.0.len() + count * stride, 0);
+        }
+        w.0[12] = w.0.len() as u32;
+        w.0[14] = w.append_bytes(camera);
+        w.0[19] = 1f32.to_bits();
+        for (i, g) in self.geometries.iter().enumerate() {
+            let o = w.0[9] as usize + i * 12;
+            w.0[o] = g.positions.len() as u32 / 3;
+            w.0[o + 1] = g.indices.len() as u32;
+            w.0[o + 2] = w.append_floats(&g.positions);
+            w.0[o + 3] = w.append(&g.indices);
+            for (k, data) in [
+                (4, &g.normals),
+                (5, &g.uv[0]),
+                (6, &g.uv[1]),
+                (7, &g.colors),
+                (8, &g.tangents),
+            ] {
+                if !data.is_empty() {
+                    w.0[o + k] = w.append_floats(data);
+                }
+            }
+        }
+        for (i, m) in self.meshes.iter().enumerate() {
+            let o = w.0[10] as usize + i * 20;
+            w.0[o] = m.geometry as u32;
+            w.0[o + 1] = m.material as u32;
+            for (k, v) in m.transform.to_cols_array().iter().enumerate() {
+                w.0[o + 4 + k] = v.to_bits();
+            }
+        }
+        for (i, m) in self.materials.iter().enumerate() {
+            let o = w.0[11] as usize + i * 24;
+            let values = [
+                m.color[0],
+                m.color[1],
+                m.color[2],
+                m.roughness,
+                m.metalness,
+                m.transmission,
+                m.ior,
+                m.emission[0],
+                m.emission[1],
+                m.emission[2],
+                m.emission_strength,
+                0.,
+                0.,
+                m.opacity,
+            ];
+            for (k, v) in values.iter().enumerate() {
+                w.0[o + k] = v.to_bits();
+            }
+            w.0[o + 14] = 1;
+            for (k, v) in m.maps.iter().enumerate() {
+                w.0[o + 15 + k] = *v;
+            }
+            let ext = [
+                38,
+                u32::from(m.double_sided),
+                0,
+                0,
+                41,
+                m.alpha_mode,
+                0,
+                0,
+                42,
+                m.alpha_cutoff.to_bits(),
+                0,
+                0,
+                45,
+                m.normal_scale.to_bits(),
+                m.normal_scale.to_bits(),
+                0,
+                52,
+                u32::from(m.unlit),
+                0,
+                0,
+                73,
+                1,
+                0,
+                0,
+            ];
+            w.0[o + 19] = 6;
+            w.0[o + 20] = w.append(&ext);
+        }
+        for (i, t) in self.textures.iter().enumerate() {
+            let o = w.0[13] as usize + i * 12;
+            w.0[o] = t.width;
+            w.0[o + 1] = t.height;
+            w.0[o + 3] = w.append_bytes(&t.pixels);
+            w.0[o + 5] = t.uv;
+            w.0[o + 6] = t.scale[0].to_bits();
+            w.0[o + 7] = t.scale[1].to_bits();
+            w.0[o + 8] = t.offset[0].to_bits();
+            w.0[o + 9] = t.offset[1].to_bits();
+        }
+        let (width, height, pixels) = environment.pixels();
+        let o = w.0[13] as usize + self.textures.len() * 12;
+        w.0[o] = width;
+        w.0[o + 1] = height;
+        w.0[o + 2] = 1;
+        w.0[o + 3] = w.append_floats(&pixels);
+        w.0[o + 6] = 1f32.to_bits();
+        w.0[o + 7] = 1f32.to_bits();
+        w.0[20] = self.textures.len() as u32 + 1;
+        if environment.background {
+            w.0[21] = w.0[20];
+        } else {
+            w.0[16] = 0.025f32.to_bits();
+            w.0[17] = 0.025f32.to_bits();
+            w.0[18] = 0.03f32.to_bits();
+        }
+        w.0[1] = w.0.len() as u32;
+        w.0.into_iter().flat_map(u32::to_le_bytes).collect()
+    }
+}
+fn image_rgba(image: &gltf::image::Data) -> Result<Vec<u8>> {
+    use gltf::image::Format::*;
+    let (channels, bytes) = match image.format {
+        R8 => (1, 1),
+        R8G8 => (2, 1),
+        R8G8B8 => (3, 1),
+        R8G8B8A8 => (4, 1),
+        R16 => (1, 2),
+        R16G16 => (2, 2),
+        R16G16B16 => (3, 2),
+        R16G16B16A16 => (4, 2),
+        _ => bail!("Floating-point glTF material images are unsupported"),
+    };
+    let mut result = Vec::with_capacity(image.width as usize * image.height as usize * 4);
+    for pixel in image.pixels.chunks_exact(channels * bytes) {
+        let get = |i: usize| {
+            if bytes == 1 {
+                pixel[i]
+            } else {
+                (u16::from_ne_bytes([pixel[i * 2], pixel[i * 2 + 1]]) / 257) as u8
+            }
+        };
+        let rgb = if channels < 3 {
+            [get(0); 3]
+        } else {
+            [get(0), get(1), get(2)]
+        };
+        result.extend(rgb);
+        result.push(if channels == 2 {
+            get(1)
+        } else if channels == 4 {
+            get(3)
+        } else {
+            255
+        });
+    }
+    Ok(result)
+}
+struct Wire(Vec<u32>);
+impl Wire {
+    fn append(&mut self, v: &[u32]) -> u32 {
+        let o = self.0.len() as u32;
+        self.0.extend(v);
+        o
+    }
+    fn append_floats(&mut self, v: &[f32]) -> u32 {
+        let o = self.0.len() as u32;
+        self.0.extend(v.iter().map(|v| v.to_bits()));
+        o
+    }
+    fn append_bytes(&mut self, v: &[u8]) -> u32 {
+        let o = self.0.len() as u32;
+        for b in v.chunks(4) {
+            let mut word = [0; 4];
+            word[..b.len()].copy_from_slice(b);
+            self.0.push(u32::from_le_bytes(word));
+        }
+        o
+    }
+}
+pub struct Environment {
+    pub intensity: f32,
+    pub color: [f32; 3],
+    pub rotation: f32,
+    pub background: bool,
+    pub image: Option<image::Rgb32FImage>,
+    pub name: String,
+}
+impl Default for Environment {
+    fn default() -> Self {
+        Self {
+            intensity: 1.,
+            color: [0.8, 0.88, 1.],
+            rotation: 0.,
+            background: true,
+            image: None,
+            name: "Studio".into(),
+        }
+    }
+}
+impl Environment {
+    pub fn load(&mut self, path: &Path) -> Result<()> {
+        let img = image::ImageReader::open(path)?
+            .with_guessed_format()?
+            .decode()?
+            .into_rgb32f();
+        ensure!(
+            img.width() as u64 * img.height() as u64 <= 4_194_304,
+            "Environment exceeds 4M pixels"
+        );
+        ensure!(
+            img.pixels()
+                .all(|p| p.0.iter().all(|v| v.is_finite() && *v >= 0.)),
+            "Environment must be finite and nonnegative"
+        );
+        self.image = Some(img);
+        self.name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into();
+        Ok(())
+    }
+    fn pixels(&self) -> (u32, u32, Vec<f32>) {
+        let (width, height) = self
+            .image
+            .as_ref()
+            .map(|i| i.dimensions())
+            .unwrap_or((64, 32));
+        let mut pixels = Vec::with_capacity(width as usize * height as usize * 4);
+        for y in 0..height {
+            for x in 0..width {
+                let sx = ((x as f32 + self.rotation / 360. * width as f32).rem_euclid(width as f32))
+                    as u32;
+                let rgb = if let Some(image) = &self.image {
+                    image.get_pixel(sx, y).0
+                } else {
+                    let bright = if (7..20).contains(&sx) && (6..14).contains(&y) {
+                        5.
+                    } else {
+                        0.
+                    };
+                    let sky = 0.12 + 0.6 * (1. - y as f32 / height as f32);
+                    [sky + bright, sky + bright, sky + bright]
+                };
+                for (k, c) in rgb.iter().enumerate() {
+                    pixels.push(c * self.color[k] * self.intensity);
+                }
+                pixels.push(1.);
+            }
+        }
+        (width, height, pixels)
+    }
+}

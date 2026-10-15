@@ -4,6 +4,31 @@ The native implementation is an experimental synchronous AOT core plus Rust/wgpu
 host. Usage and supported inputs are in [README.md](./README.md). Do not treat
 module compilation, prepared replay and raw-scene rendering as equivalent gates.
 
+## Native viewer validation
+
+`npm run native:viewer:build` checks the complete AOT entry graph, builds the
+archive and Rust viewer with locked dependencies, creates a macOS app bundle
+and ad-hoc-signs it. `native:viewer` also launches it. The viewer is a small
+client of the experimental ABI; exposing its Rust module does not change C
+layouts or exported symbols. Its owner-bound wrapper cannot be sent to another
+thread. UI presentation uses egui/glow; tracing uses the existing wgpu/Metal
+library and reads completed HDR batches back to the UI.
+
+Run the bundled executable with `[MODEL] --smoke-out DIRECTORY` for real GPU
+checks of load/render, queued cancellation/restart, orbit/restore, material and
+environment edits, Radiance HDR loading and PNG output. Test both external and
+embedded textured GLTF resources, unsupported required extensions and malformed
+files. Copy the app elsewhere and run with an empty inherited environment and
+`PATH=/nonexistent`; compare HDR bytes and inspect native dependencies. Keep
+fixture generation, images, detailed checks and measurements outside the repo.
+
+Also inspect the actual app: open a file, change each panel, orbit/pan/zoom/fit,
+pause/resume/restart, change resolution and exposure, and export PNG. Headless
+smoke alone does not validate window input or file dialogs. Record any OS lock
+or permission block without marking the interactive gate complete. The supplied
+procedural GLB is original project geometry under the repository MIT license.
+No third-party model or source implementation is copied into the viewer.
+
 ## Partial camera validation
 
 `npm run native:camera` runs the complete job gate, then compares partial camera

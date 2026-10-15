@@ -376,14 +376,14 @@ pub unsafe extern "C" fn mt_context_read_pixels(
 
 #[repr(C)]
 pub struct JobInfo {
-    struct_size: u32,
-    version: u32,
-    state: u32,
-    requested_samples: u32,
-    submitted_samples: u32,
-    completed_samples: u32,
-    base_samples: u32,
-    reserved: u32,
+    pub struct_size: u32,
+    pub version: u32,
+    pub state: u32,
+    pub requested_samples: u32,
+    pub submitted_samples: u32,
+    pub completed_samples: u32,
+    pub base_samples: u32,
+    pub reserved: u32,
 }
 fn job_context(registry: &mut Registry, id: u64) -> Result<&mut Context> {
     registry

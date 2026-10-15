@@ -5,6 +5,11 @@ native machine code and wgpu, without a JavaScript engine or Node at runtime.
 It supports part of MuTracer and has an unstable ABI. It has been verified on
 macOS arm64 with Metal; other platforms and a performance benefit are unverified.
 
+## Native viewer
+
+Run `npm run native:viewer` for a standalone GLTF/GLB viewer with material, render
+and environment controls. See [viewer usage and limits](./viewer/README.md).
+
 ## Render a scene
 
 Building requires Rust, a C compiler/Xcode Command Line Tools, project npm

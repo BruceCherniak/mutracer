@@ -98,7 +98,9 @@
     "native:jobs": "node native/job-render.mjs",
     "native:context": "node native/context-render.mjs",
     "native:scene": "node native/scene-render.mjs",
-    "native:scene:verify": "node native/scene-verify.mjs"
+    "native:scene:verify": "node native/scene-verify.mjs",
+    "native:viewer": "node native/viewer-build.mjs",
+    "native:viewer:build": "node native/viewer-build.mjs --build-only"
   },
   "dependencies": {
     "oidn-web": "^0.5.0",
