@@ -752,9 +752,8 @@ impl GpuScene {
             samples: 0,
         })
     }
-    fn add_samples(&mut self, additional: u32, bounces: f32, seed: u32) -> Result<()> {
-        let end = self
-            .samples
+    fn dispatch_samples(&self, start: u32, additional: u32, bounces: f32, seed: u32) -> Result<()> {
+        let end = start
             .checked_add(additional)
             .ok_or("Sample count overflow")?;
         if additional == 0 || end > 4096 {
@@ -762,7 +761,7 @@ impl GpuScene {
         }
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
-        for sample in self.samples..end {
+        for sample in start..end {
             let mut pointer = std::ptr::null();
             let mut size = 0;
             unsafe {
@@ -796,22 +795,19 @@ impl GpuScene {
                 );
             }
             queue.submit([encoder.finish()]);
-            self.samples = sample + 1;
-            if sample % 8 == 7 {
-                device.poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: Some(Duration::from_secs(30)),
-                })?;
-                eprintln!("  {}/{} samples", sample + 1, end);
-            }
         }
         unsafe {
             mt_core_collect();
         }
-        device.poll(wgpu::PollType::Wait {
+        Ok(())
+    }
+    fn add_samples(&mut self, additional: u32, bounces: f32, seed: u32) -> Result<()> {
+        self.dispatch_samples(self.samples, additional, bounces, seed)?;
+        self.gpu.device.poll(wgpu::PollType::Wait {
             submission_index: None,
             timeout: Some(Duration::from_secs(30)),
         })?;
+        self.samples += additional;
         Ok(())
     }
     fn read_pixels(&self, kind: u32) -> Result<Vec<u8>> {

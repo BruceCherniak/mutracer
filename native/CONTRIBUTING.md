@@ -4,6 +4,26 @@ The native implementation is an experimental synchronous AOT core plus Rust/wgpu
 host. Usage and supported inputs are in [README.md](./README.md). Do not treat
 module compilation, prepared replay and raw-scene rendering as equivalent gates.
 
+## Job validation
+
+`npm run native:jobs` first runs `native:context`, then exercises queued,
+running, cancelling, cancelled and completed states on every raw fixture. It
+checks busy-context rejection, owner binding, stale handles, cancellation before
+and after dispatch, completed-sample accounting and two interleaved jobs with
+different batch sizes. Cancelled accumulation resumes and must match the blocking
+reference in HDR, normal and albedo bytes. `job-verification.json` is complete
+only after every fixture passes. Check counts include timing-dependent poll loops.
+
+Submission creates a job without dispatch. Owner-thread polls use wgpu's
+non-waiting poll mode, observe an atomic completion flag, and submit at most one
+bounded batch. Queue callbacks only set their owned atomic flag; they never
+reenter AOT or access the registry. Cancellation drains submitted work before
+releasing the context. A failed scene can be replaced or destroyed even with an
+old completion outstanding; that callback cannot revive a handle. No background
+worker is introduced. Keep no-Node execution and previous-stage byte comparisons
+outside the repository; repeat legacy software/HWRT replay after dispatch changes.
+Forced GPU failure and device-loss recovery remain unvalidated.
+
 ## Persistent context validation
 
 `npm run native:context` first runs the full raw-scene compilation/preparation

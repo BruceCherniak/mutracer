@@ -1,12 +1,58 @@
 //! Owner-thread contexts retain actual wgpu resources, never AOT arena pointers.
 use super::*;
-use std::{panic::AssertUnwindSafe, thread::ThreadId};
+use std::{
+    panic::AssertUnwindSafe,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::ThreadId,
+};
 
 const MAX_CONTEXTS: usize = 8;
 struct Context {
     gpu: GpuDevice,
     scene: Option<GpuScene>,
     failed: bool,
+    job: Option<RenderJob>,
+}
+#[derive(Clone, Copy, PartialEq)]
+#[repr(u32)]
+enum JobState {
+    Queued = 0,
+    Running = 1,
+    Complete = 2,
+    Cancelled = 3,
+    Failed = 4,
+    Cancelling = 5,
+}
+struct Flight {
+    end: u32,
+    done: Arc<AtomicBool>,
+}
+struct RenderJob {
+    id: u64,
+    base: u32,
+    requested: u32,
+    submitted: u32,
+    completed: u32,
+    state: JobState,
+    cancelled: bool,
+    flight: Option<Flight>,
+}
+impl RenderJob {
+    fn active(&self) -> bool {
+        matches!(
+            self.state,
+            JobState::Queued | JobState::Running | JobState::Cancelling
+        )
+    }
+}
+fn idle(context: &Context) -> Result<()> {
+    if !context.failed && context.job.as_ref().is_some_and(|j| j.active()) {
+        return Err("Context has an active render job; cancel and poll it first".into());
+    }
+    Ok(())
 }
 struct Registry {
     next: u64,
@@ -126,6 +172,7 @@ pub unsafe extern "C" fn mt_context_create(
                 gpu,
                 scene: None,
                 failed: false,
+                job: None,
             },
         );
         registry.next = next;
@@ -143,6 +190,7 @@ pub unsafe extern "C" fn mt_context_destroy(
     capacity: usize,
 ) -> i32 {
     action(error, capacity, |registry| {
+        idle(context(registry, handle)?)?;
         registry
             .contexts
             .remove(&handle)
@@ -160,6 +208,7 @@ pub unsafe extern "C" fn mt_context_commit(
 ) -> i32 {
     action(error, capacity, |registry| {
         let context = context(registry, handle)?;
+        idle(context)?;
         if input.is_null() || length > 64 * 1024 * 1024 {
             return Err("Null or oversized scene input".into());
         }
@@ -174,6 +223,7 @@ pub unsafe extern "C" fn mt_context_commit(
         )?;
         // Commit is transactional: the previous scene survives any preparation/upload failure.
         context.scene = Some(candidate);
+        context.job = None;
         context.failed = false;
         Ok(())
     })
@@ -187,10 +237,12 @@ pub unsafe extern "C" fn mt_context_render(
 ) -> i32 {
     action(error, capacity, |registry| {
         let context = context(registry, handle)?;
+        idle(context)?;
         let scene = ready(context)?;
         if additional == 0 || additional > 4096 - scene.samples {
             return Err("Total samples must be 1..4096".into());
         }
+        context.job = None;
         context.failed = true;
         context
             .scene
@@ -205,9 +257,11 @@ pub unsafe extern "C" fn mt_context_render(
 pub unsafe extern "C" fn mt_context_reset(handle: u64, error: *mut c_char, capacity: usize) -> i32 {
     action(error, capacity, |registry| {
         let context = context(registry, handle)?;
+        idle(context)?;
         ready(context)?;
         context.failed = true;
         context.scene.as_mut().unwrap().reset_raw()?;
+        context.job = None;
         context.failed = false;
         Ok(())
     })
@@ -240,6 +294,8 @@ pub unsafe extern "C" fn mt_context_info(
                 samples,
                 state: if context.failed {
                     2
+                } else if context.job.as_ref().is_some_and(|j| j.active()) {
+                    3
                 } else if context.scene.is_some() {
                     1
                 } else {
@@ -269,6 +325,7 @@ pub unsafe extern "C" fn mt_context_read_pixels(
             *written = 0;
         }
         let context = context(registry, handle)?;
+        idle(context)?;
         let scene = ready(context)?;
         if kind > 2 || scene.samples == 0 {
             return Err("Unknown image kind or no completed samples".into());
@@ -289,6 +346,184 @@ pub unsafe extern "C" fn mt_context_read_pixels(
             std::ptr::copy_nonoverlapping(values.as_ptr(), pixels, values.len());
         }
         context.failed = false;
+        Ok(())
+    })
+}
+
+#[repr(C)]
+pub struct JobInfo {
+    struct_size: u32,
+    version: u32,
+    state: u32,
+    requested_samples: u32,
+    submitted_samples: u32,
+    completed_samples: u32,
+    base_samples: u32,
+    reserved: u32,
+}
+fn job_context(registry: &mut Registry, id: u64) -> Result<&mut Context> {
+    registry
+        .contexts
+        .values_mut()
+        .find(|c| c.job.as_ref().is_some_and(|j| j.id == id))
+        .ok_or_else(|| "Invalid or expired render job".into())
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_context_submit(
+    handle: u64,
+    additional: u32,
+    output: *mut u64,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    action(error, capacity, |registry| {
+        if output.is_null() {
+            return Err("Null render job output".into());
+        }
+        let id = registry.next;
+        let next = id.checked_add(1).ok_or("Native handles exhausted")?;
+        let context = context(registry, handle)?;
+        idle(context)?;
+        let scene = ready(context)?;
+        if additional == 0 || additional > 4096 - scene.samples {
+            return Err("Total samples must be 1..4096".into());
+        }
+        let base = scene.samples;
+        context.job = Some(RenderJob {
+            id,
+            base,
+            requested: additional,
+            submitted: 0,
+            completed: 0,
+            state: JobState::Queued,
+            cancelled: false,
+            flight: None,
+        });
+        registry.next = next;
+        unsafe {
+            *output = id;
+        }
+        Ok(())
+    })
+}
+fn advance_job(context: &mut Context, budget: u32) -> Result<()> {
+    let scene = context.scene.as_mut().ok_or("No committed scene")?;
+    let job = context.job.as_mut().ok_or("Missing render job")?;
+    if !job.active() {
+        return Ok(());
+    }
+    scene.gpu.device.poll(wgpu::PollType::Poll)?;
+    if job
+        .flight
+        .as_ref()
+        .is_some_and(|f| f.done.load(Ordering::Acquire))
+    {
+        let flight = job.flight.take().unwrap();
+        scene.samples = flight.end;
+        job.completed = flight.end - job.base;
+    }
+    if job.flight.is_some() {
+        return Ok(());
+    }
+    if job.completed == job.requested {
+        job.state = JobState::Complete;
+        return Ok(());
+    }
+    if job.cancelled {
+        job.state = JobState::Cancelled;
+        return Ok(());
+    }
+    if budget == 0 {
+        return Ok(());
+    }
+    let count = budget.min(job.requested - job.submitted);
+    scene.dispatch_samples(job.base + job.submitted, count, 6.0, 12345)?;
+    let done = Arc::new(AtomicBool::new(false));
+    let signal = done.clone();
+    scene
+        .gpu
+        .queue
+        .on_submitted_work_done(move || signal.store(true, Ordering::Release));
+    job.submitted += count;
+    job.flight = Some(Flight {
+        end: job.base + job.submitted,
+        done,
+    });
+    job.state = JobState::Running;
+    Ok(())
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_job_poll(
+    id: u64,
+    budget: u32,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    action(error, capacity, |registry| {
+        if budget > 64 {
+            return Err("Poll dispatch budget must be 0..64 samples".into());
+        }
+        let context = job_context(registry, id)?;
+        if context.failed {
+            return Err("Render scene failed; commit a new scene".into());
+        }
+        context.failed = true;
+        let result = advance_job(context, budget);
+        if result.is_err() {
+            context.job.as_mut().unwrap().state = JobState::Failed;
+        } else {
+            context.failed = false;
+        }
+        result
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_job_info(
+    id: u64,
+    info: *mut JobInfo,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    action(error, capacity, |registry| {
+        let context = job_context(registry, id)?;
+        if info.is_null() || unsafe { (*info).struct_size } != std::mem::size_of::<JobInfo>() as u32
+        {
+            return Err("Job info size mismatch".into());
+        }
+        let job = context.job.as_ref().unwrap();
+        unsafe {
+            *info = JobInfo {
+                struct_size: std::mem::size_of::<JobInfo>() as u32,
+                version: 1,
+                state: if context.failed {
+                    JobState::Failed as u32
+                } else {
+                    job.state as u32
+                },
+                requested_samples: job.requested,
+                submitted_samples: job.submitted,
+                completed_samples: job.completed,
+                base_samples: job.base,
+                reserved: 0,
+            };
+        }
+        Ok(())
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_job_cancel(id: u64, error: *mut c_char, capacity: usize) -> i32 {
+    action(error, capacity, |registry| {
+        let context = job_context(registry, id)?;
+        let job = context.job.as_mut().unwrap();
+        if !job.active() {
+            return Ok(());
+        }
+        job.cancelled = true;
+        job.state = if job.flight.is_some() {
+            JobState::Cancelling
+        } else {
+            JobState::Cancelled
+        };
         Ok(())
     })
 }

@@ -55,6 +55,29 @@ accumulation, with at most eight contexts on one owner thread. Commits can
 briefly hold old and new scene resources together. The header specifies lifetime,
 thread binding, byte lengths, error behavior and remaining limits.
 
+## Render with polling and cancellation
+
+```sh
+npm run native:jobs
+```
+
+Use `mt_context_submit` to request additional samples, then call `mt_job_poll`
+on the owner thread to submit batches and observe completion. Each poll accepts
+a budget of 0..64 new samples; zero only checks completion. Submit performs no
+GPU work, and polling does not wait for GPU completion. Polling still costs CPU
+time to prepare and submit a batch; this is not a fixed-latency interface.
+`mt_job_info` returns the last polled snapshot without advancing work. The
+command above builds the C example and saves verified images under
+`.native-build/job-core/`.
+
+Cancel stops further submissions. An already submitted batch finishes before
+poll reports cancellation, so keep polling after cancel. Completed samples stay
+accumulated and a later job can continue them. Full completion takes precedence
+over late cancellation. One context accepts one active job; while active, render,
+commit, reset, readback and destroy return errors. Finish or cancel and drain the
+job before using those calls. The header specifies job states, sample counters
+and handle lifetimes.
+
 ## Scene inputs and options
 
 All descriptor versions support indexed triangles, generated or supplied
@@ -91,18 +114,21 @@ shares that profile. Versions 1 and 2 keep their earlier input restrictions.
 Additional examples are `v3-displacement-uv`, `v3-displacement-triplanar`,
 `v3-ies`, `v3-ies-shared` and `v3-rect-texture`.
 
-Calls block until completion, copy their inputs and retain no caller storage.
-Use one owner thread for all calls. Every raw probe call rebuilds the scene and
-restarts accumulation; context render calls retain the committed scene. Samples
-range from 1 to 4096; seed is fixed at 12345 and bounce count at 6. Version 1 remains accepted with its original limited inputs;
-unknown or unsupported fields return an error.
+Scene commits copy their inputs and retain no caller storage. Raw probes and
+`mt_context_render` block until rendering finishes; jobs use the polling lifecycle
+above. Use one owner thread for all calls. Every raw probe call rebuilds the
+scene and restarts accumulation; context render calls retain the committed scene.
+Samples range from 1 to 4096; seed is fixed at 12345 and bounce count at 6.
+Version 1 remains accepted with its original limited inputs; unknown or unsupported
+fields return an error.
 
 Build/run settings:
 
 - `MUTRACER_NATIVE_OUTPUT`: output directory; defaults are `.native-build/scene-core/`
-  for `native:scene` and `.native-build/context-core/` for `native:context`.
+  for `native:scene`, `.native-build/context-core/` for `native:context` and
+  `.native-build/job-core/` for `native:jobs`.
 - `MUTRACER_NATIVE_SAMPLES`: verification samples, default 256; range 1..4096
-  for scene verification, 8..4096 for context verification.
+  for scene verification, 8..4096 for context and job verification.
 - `CARGO_TARGET_DIR`: optional reusable Cargo build directory.
 - `CC`: C compiler executable, default `cc`.
 
@@ -117,7 +143,7 @@ side and 256 layers; source textures can be scaled to fit. The header specifies
 the remaining validation and format constraints.
 
 Raw scenes currently use software BVH traversal on the GPU. Incremental scene
-updates, jobs/cancellation, device-loss recovery, denoising, browser display parity
+updates, device-loss recovery, denoising, browser display parity
 and a stable release ABI remain pending. This library does not yet replace
 the full browser Engine/Render API.
 

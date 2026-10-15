@@ -94,6 +94,7 @@
     "generate:material-comparison": "node scripts/generate-material-comparison.mjs",
     "check:material-comparison": "node scripts/generate-material-comparison.mjs --check",
     "native:modules:verify": "node native/module-verify.mjs",
+    "native:jobs": "node native/job-render.mjs",
     "native:context": "node native/context-render.mjs",
     "native:scene": "node native/scene-render.mjs",
     "native:scene:verify": "node native/scene-verify.mjs"
