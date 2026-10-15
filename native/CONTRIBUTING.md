@@ -22,6 +22,12 @@ files. Copy the app elsewhere and run with an empty inherited environment and
 `PATH=/nonexistent`; compare HDR bytes and inspect native dependencies. Keep
 fixture generation, images, detailed checks and measurements outside the repo.
 
+Run `cargo test --locked --manifest-path native/viewer/Cargo.toml` with
+`MUTRACER_AOT_ARCHIVE` set to the built archive. Input tests cover stationary and
+outside presses, and orbit/Shift/right-pan gestures delivered across frames or
+coalesced into one frame. Keep event ordering: release-frame movement must not
+be dropped, and moving the pointer to press must not move the camera.
+
 Also inspect the actual app: open a file, change each panel, orbit/pan/zoom/fit,
 pause/resume/restart, change resolution and exposure, and export PNG. Headless
 smoke alone does not validate window input or file dialogs. Record any OS lock

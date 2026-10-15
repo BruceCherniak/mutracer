@@ -1,4 +1,5 @@
 //! Small native example: glTF input → native MuTracer library → egui image.
+mod input;
 mod renderer;
 mod scene;
 use anyhow::{Context, Result, ensure};
@@ -21,6 +22,7 @@ struct Viewer {
     renderer: Renderer,
     model: Model,
     camera: Camera,
+    drag: input::ViewportDrag,
     environment: Environment,
     size: [u32; 2],
     target: u32,
@@ -48,6 +50,7 @@ impl Viewer {
             renderer,
             model,
             camera,
+            drag: input::ViewportDrag::default(),
             environment,
             size,
             target: 64,
@@ -374,17 +377,11 @@ impl Viewer {
                         egui::Color32::GRAY,
                     );
                 }
-                let response = ui.interact(
-                    rect,
-                    ui.id().with("viewport"),
-                    egui::Sense::click_and_drag(),
-                );
-                let delta = ui.input(|i| i.pointer.delta());
-                if response.dragged() && delta != egui::Vec2::ZERO {
-                    if response.dragged_by(egui::PointerButton::Secondary)
-                        || response.dragged_by(egui::PointerButton::Middle)
-                        || ui.input(|i| i.modifiers.shift)
-                    {
+                let response = ui.interact(rect, ui.id().with("viewport"), egui::Sense::drag());
+                for (pan, delta) in
+                    ui.input(|i| self.drag.motion(rect, response.contains_pointer(), i))
+                {
+                    if pan {
                         self.camera.pan([delta.x, delta.y]);
                     } else {
                         self.camera.orbit([delta.x, delta.y]);
@@ -416,6 +413,11 @@ impl eframe::App for Viewer {
             self.change = Change::None;
         }
         self.panels(ctx);
+        // Input can arrive after tick, including the final event of a short drag.
+        // Ensure camera changes are committed even when accumulation was idle.
+        if self.change != Change::None {
+            ctx.request_repaint();
+        }
     }
 }
 fn default_model() -> PathBuf {
