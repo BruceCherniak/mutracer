@@ -125,7 +125,9 @@ in the active glTF scene's `extras.mutracerCamera`: `{position: [x,y,z], target:
 viewer centers X/Z and grounds Y. Fresh loads apply this view; a restored saved
 user view takes precedence. Invalid camera metadata falls back to automatic fit.
 
-Example models are loaded on demand. Material spheres are procedural; Toy Car
+Example models are loaded on demand. Downloads retry temporary network or server
+failures up to twice; samples hosted on jsDelivr use GitHub as the final fallback.
+Material spheres are procedural; Toy Car
 and Sheen Chair come from [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets)
 (CC0). All ten examples use the public selection in
 [mutracer-assets](https://github.com/pissang/mutracer-assets). Their metadata is
