@@ -58,6 +58,8 @@ export interface Settings {
   /** Zero lets OIDN choose the tile size. */
   oidnMaxTileSize: number;
   toneMapping: ToneMapping;
+  /** Extended-range display on compatible WebGPU browsers. Default false. */
+  hdrOutputEnabled: boolean;
   exposure: number;
   contrast: number;
   saturation: number;
@@ -124,6 +126,7 @@ export const DEFAULT_SETTINGS: Settings = {
   oidnModel: 'standard',
   oidnMaxTileSize: 0,
   toneMapping: 'agx',
+  hdrOutputEnabled: false,
   exposure: 1,
   contrast: 1,
   saturation: 1,
@@ -271,7 +274,7 @@ const RENDER_FIELDS: (keyof Settings)[] = [
   'envResolution', 'maxSamples', 'bounces', 'resolutionScale', 'samplingPattern', 'bvhBuilder', 'denoise', 'denoiseModel', 'denoiseWhileConverging',
   'jnlmStrength', 'jnlmSearchRadius', 'jnlmPatchRadius', 'jnlmAlbedoBandwidth', 'jnlmNormalBandwidth', 'jnlmIterations',
   'oidnModel', 'oidnMaxTileSize',
-  'toneMapping', 'previewEnabled', 'previewMaxResolutionScale'
+  'toneMapping', 'hdrOutputEnabled', 'previewEnabled', 'previewMaxResolutionScale'
 ];
 
 function readStorage<T>(key: string): Partial<T> {
@@ -337,6 +340,7 @@ function validateSettings(settings: Settings): Settings {
     studioSize: number('studioSize', 0.1, 4),
     studioAmbientColor: /^#[0-9a-f]{6}$/i.test(settings.studioAmbientColor) ? settings.studioAmbientColor : DEFAULT_SETTINGS.studioAmbientColor,
     toneMapping: allowed.includes(settings.toneMapping) ? settings.toneMapping : 'agx',
+    hdrOutputEnabled: settings.hdrOutputEnabled === true,
     fStop: settings.fStop > 0 ? number('fStop', 0.5, 64) : 0,
     metersPerUnit: typeof settings.metersPerUnit === 'number' && settings.metersPerUnit > 0 && Number.isFinite(settings.metersPerUnit)
       ? settings.metersPerUnit : null,
@@ -402,7 +406,7 @@ const SETTING_LABELS: Partial<Record<keyof Settings, string>> = {
   background: 'Background', backgroundColor: 'Background color', groundedHeight: 'Grounded height', groundedRadius: 'Grounded radius',
   groundShadow: 'Ground shadow', groundOpacity: 'Ground opacity', maxSamples: 'Samples', resolutionScale: 'Resolution',
   bvhBuilder: 'BVH builder', denoise: 'Denoise', denoiseModel: 'Denoiser', denoiseWhileConverging: 'Denoise while converging',
-  toneMapping: 'Tone mapping', bloomIntensity: 'Bloom intensity', bloomThreshold: 'Bloom threshold',
+  toneMapping: 'Tone mapping', hdrOutputEnabled: 'HDR output', bloomIntensity: 'Bloom intensity', bloomThreshold: 'Bloom threshold',
   bloomRadius: 'Bloom radius', previewEnabled: 'Interactive preview', previewMaxResolutionScale: 'Preview resolution',
   samplingPattern: 'Sampling pattern', oidnModel: 'OIDN model', oidnMaxTileSize: 'OIDN tile size', temperature: 'Temperature',
   jnlmStrength: 'JNLM strength', jnlmSearchRadius: 'JNLM search radius', jnlmPatchRadius: 'JNLM patch radius',

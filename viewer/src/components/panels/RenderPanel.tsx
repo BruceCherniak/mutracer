@@ -112,10 +112,15 @@ export function RenderPanel() {
       </Section>
 
       <Section title="Color" icon={<Palette size={14} />}>
+        <Switch label="HDR output" checked={!webgl && s.hdrOutputEnabled} disabled={backend !== 'WebGPU'} onChange={(v) => update({ hdrOutputEnabled: v })}>
+          <span className="field-label">HDR output</span>
+        </Switch>
+        <Hint>{webgl ? 'HDR output requires WebGPU.' : 'Requires an HDR display and a compatible browser; falls back to SDR when unsupported.'}</Hint>
         <Select
           label="Tone mapping"
           prefix="Tone mapping"
           value={s.toneMapping}
+          disabled={!webgl && s.hdrOutputEnabled}
           options={[
             { value: 'agx', label: 'AgX' },
             { value: 'aces', label: 'ACES' },

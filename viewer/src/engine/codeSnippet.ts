@@ -46,7 +46,7 @@ const DISPLAY_DEFAULTS: [keyof Settings, string, unknown][] = [
   ['toneMapping', 'toneMapping', 'agx'], ['exposure', 'toneMappingExposure', 1], ['contrast', 'contrast', 1],
   ['saturation', 'saturation', 1], ['temperature', 'temperature', 0], ['tint', 'tint', 0],
   ['bloomIntensity', 'bloomIntensity', 0], ['bloomThreshold', 'bloomThreshold', 1], ['bloomRadius', 'bloomRadius', 0.6],
-  ['vignette', 'vignette', 0], ['output', 'channel', 'final']
+  ['vignette', 'vignette', 0], ['output', 'channel', 'final'], ['hdrOutputEnabled', 'hdrOutputEnabled', false]
 ];
 
 /** Short number literal. */

@@ -564,6 +564,7 @@ export class ViewerEngine {
     this.preview.adaptiveResolution = {targetFrameMs: 80, minScale: Math.min(.125, s.previewMaxResolutionScale)};
     const displaySettings: DisplaySettings = {
       toneMapping: s.toneMapping, toneMappingExposure: s.exposure,
+      hdrOutputEnabled: s.hdrOutputEnabled,
       contrast: s.contrast, saturation: s.saturation,
       temperature: s.temperature, tint: s.tint,
       bloomIntensity: s.bloomIntensity, bloomThreshold: s.bloomThreshold, bloomRadius: s.bloomRadius,

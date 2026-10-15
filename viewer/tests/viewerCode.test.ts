@@ -55,6 +55,14 @@ describe('viewer code snippet', () => {
     expect(generateCode(snapshot({ denoise: true, denoiseWhileConverging: false }))).toContain("denoiser: { type: 'oidn' }");
   });
 
+  it('preserves the HDR display preference in generated code', () => {
+    for (const webgpu of [true, false]) {
+      const code = generateCode(snapshot({ hdrOutputEnabled: true, groundOpacity: 1 }, { webgpu }));
+      expect(syntaxErrors(code)).toEqual([]);
+      expect(code).toContain('Object.assign(engine.display, { hdrOutputEnabled: true })');
+    }
+  });
+
   it('covers studio lighting, backgrounds, lens, orthographic views and animation', () => {
     const studio = generateCode(snapshot({ lighting: 'studio', background: 'environment' }));
     expect(syntaxErrors(studio)).toEqual([]);
