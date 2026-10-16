@@ -1,0 +1,15 @@
+# Native third-party notices
+
+The native library is part of MuTracer under the repository [MIT License](../LICENSE).
+Shared renderer attributions are in the [repository notices](../THIRD_PARTY_NOTICES.md).
+The native viewer has [separate notices](./viewer/THIRD_PARTY_NOTICES.md).
+Native-specific license texts are in [LICENSES/](./LICENSES).
+
+## wgpu native ray-query probe
+
+The experimental `native/host/ray-query-probe.wgsl` follows ray-query API usage
+from the [wgpu v30.0.1 ray-traced triangle example](https://github.com/gfx-rs/wgpu/blob/v30.0.1/examples/features/src/ray_traced_triangle/shader.wgsl),
+modified into analytic hit/miss, mask, distance and instance checks.
+Copyright (c) 2025 The gfx-rs developers. MIT License
+([`LICENSES/Wgpu-MIT.txt`](./LICENSES/Wgpu-MIT.txt)).
+

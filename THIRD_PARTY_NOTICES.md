@@ -12,44 +12,6 @@ The internal vector and matrix functions in `src/math/` are adapted from
 Copyright (c) 2015-2025 Brandon Jones and Colin MacKenzie IV. MIT License
 ([`LICENSES/GlMatrix-MIT.txt`](./LICENSES/GlMatrix-MIT.txt)).
 
-## wgpu native ray-query probe
-
-The experimental `native/host/ray-query-probe.wgsl` follows ray-query API usage
-from the [wgpu v30.0.1 ray-traced triangle example](https://github.com/gfx-rs/wgpu/blob/v30.0.1/examples/features/src/ray_traced_triangle/shader.wgsl),
-modified into analytic hit/miss, mask, distance and instance checks.
-Copyright (c) 2025 The gfx-rs developers. MIT License
-([`LICENSES/Wgpu-MIT.txt`](./LICENSES/Wgpu-MIT.txt)).
-
-## Native Open Image Denoise runtime
-
-The optional native viewer bundles [Open Image Denoise 2.5.1](https://github.com/RenderKit/oidn/releases/tag/v2.5.1)
-under the Apache License 2.0, including its regular/small model weights and
-native runtime dependencies. MuTracer rebuilds its core/API from the fixed
-2.5.1 source with three optional large weight sets omitted; CPU/Metal modules
-remain from the matching official SDK. Copyright 2018 Intel Corporation.
-The [license](./LICENSES/Apache-2.0.txt) and upstream bundled dependency notices
-([OIDN](./LICENSES/OIDN-third-party-programs.txt),
-[oneTBB](./LICENSES/OIDN-third-party-programs-oneTBB.txt),
-[DPC++](./LICENSES/OIDN-third-party-programs-DPCPP.txt)) accompany the app in
-`Contents/Resources/licenses/OIDN/`. This runtime is not part of the npm library.
-
-The native OIDN adapter loads the runtime through
-[libloading 0.8.9](https://github.com/nagisa/rust_libloading/tree/0.8.9),
-Copyright © 2015 Simonas Kazlauskas, ISC License
-([text](./LICENSES/Libloading-ISC.txt)).
-
-## Native glTF codecs
-
-The native viewer uses [meshopt-rs 0.6.2](https://github.com/gwihlidal/meshopt-rs)
-(MIT, Copyright 2018 Graham Wihlidal;
-[license](./LICENSES/Meshopt-rs-MIT.txt)) and its bundled
-[meshoptimizer 0.25](https://github.com/zeux/meshoptimizer/tree/v0.25)
-(MIT, Copyright 2016-2025 Arseny Kapoulkine;
-[license](./LICENSES/Meshoptimizer-MIT.txt)) for Meshopt decoding.
-WebP decoding uses [image-webp 0.2.4](https://github.com/image-rs/image-webp)
-under MIT ([license](./LICENSES/Image-webp-MIT.txt)). These codecs do not ship in
-the npm library. The licenses accompany the native app.
-
 ## TinyBVH
 
 The WebAssembly BVH builder (`src/tinybvh/`) wraps

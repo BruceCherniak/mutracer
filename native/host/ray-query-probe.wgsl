@@ -1,6 +1,6 @@
 // Ray-query API usage follows gfx-rs/wgpu v30.0.1's ray_traced_triangle example:
 // https://github.com/gfx-rs/wgpu/blob/v30.0.1/examples/features/src/ray_traced_triangle/shader.wgsl
-// Copyright (c) 2025 The gfx-rs developers. MIT; see LICENSES/Wgpu-MIT.txt.
+// Copyright (c) 2025 The gfx-rs developers. MIT; see native/LICENSES/Wgpu-MIT.txt.
 // Modified for analytic hit/miss, mask, distance and instance verification.
 enable wgpu_ray_query;
 

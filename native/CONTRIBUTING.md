@@ -2,7 +2,10 @@
 
 The native implementation is an experimental synchronous AOT core plus Rust/wgpu
 host. Usage and supported inputs are in [README.md](./README.md). Do not treat
-module compilation, prepared replay and raw-scene rendering as equivalent gates.
+module compilation, prepared replay and raw-scene rendering as equivalent gates. License
+texts and notices belong to their component: [native library](./THIRD_PARTY_NOTICES.md)
+and [native viewer](./viewer/THIRD_PARTY_NOTICES.md). Shared renderer notices stay at
+the repository root.
 
 ## Native viewer validation
 
