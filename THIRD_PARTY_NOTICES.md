@@ -16,9 +16,9 @@ Copyright (c) 2015-2025 Brandon Jones and Colin MacKenzie IV. MIT License
 
 The WebAssembly BVH builder (`src/tinybvh/`) wraps
 [jbikker/tinybvh](https://github.com/jbikker/tinybvh) at commit
-`0e4584287823252cf83f0e9cd072848bec5f79c5`. The JavaScript binned SAH builder
+`c9be3103cc9693b456b0a0353927c11cac7d710f` (TinyBVH 1.9.1). The JavaScript binned SAH builder
 (`src/renderer/binnedSahBvh.ts`) is ported from TinyBVH's reference builder
-(`BVH::Build`) at the same commit.
+(`BVH::Build`) at commit `0e4584287823252cf83f0e9cd072848bec5f79c5`.
 
 Copyright (c) 2024-2026 Jacco Bikker / Breda University of Applied Sciences.
 MIT License. The license text is at

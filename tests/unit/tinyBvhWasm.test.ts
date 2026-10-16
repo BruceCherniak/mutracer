@@ -218,7 +218,9 @@ describe('tinybvh WASM builders', () => {
     const sliverIndices = Uint32Array.from({ length: 64 * 3 }, (_, i) => i);
     const sliversBinned = build(slivers, sliverIndices, undefined, undefined, 0);
     const sliversSbvh = build(slivers, sliverIndices, undefined, undefined, 0, true);
-    expect(sliversSbvh.buffer.byteLength).toBeGreaterThan(sliversBinned.buffer.byteLength);
+    // Upstream may unsplit references and merge leaves; allocation size is not
+    // evidence of using spatial splits. Check the intended SAH improvement.
+    expect(sahCost(sliversSbvh.buffer)).toBeLessThan(sahCost(sliversBinned.buffer));
   });
 });
 
@@ -310,7 +312,7 @@ describe('tinybvh WASM layouts', () => {
     expect(buffer.byteLength).toBeGreaterThan(0);
   });
 
-  it('emits TinyBVH native BVH_GPU nodes with indexed triangle leaves', () => {
+  it('emits renderer-compatible BVH_GPU nodes with indexed triangle leaves', () => {
     const { buffer, layout } = build(
       positions,
       indices,
@@ -321,9 +323,29 @@ describe('tinybvh WASM layouts', () => {
     const words = new Uint32Array(buffer);
 
     expect(layout).toBe(2);
-    expect(words[11]).toBe(2);
-    expect(words[15]).toBe(4);
-    expect(Array.from(words.slice(16, 19)).join(',')).toBe('0,1,2');
+    // Leaf sizes can change between upstream builders. Traverse the public
+    // renderer format and require complete indexed geometry instead.
+    const stack = [0];
+    const visited = new Set<number>();
+    const triangles: string[] = [];
+    while (stack.length) {
+      const node = stack.pop()!;
+      expect(visited.has(node)).toBe(false);
+      visited.add(node);
+      const at = node * 16;
+      expect(at + 16).toBeLessThanOrEqual(words.length);
+      const count = words[at + 11];
+      if (count) {
+        const first = words[at + 15] * 4;
+        expect(first + count * 4).toBeLessThanOrEqual(words.length);
+        for (let i = 0; i < count; i++) {
+          triangles.push(Array.from(words.slice(first + i * 4, first + i * 4 + 3)).join(','));
+        }
+      } else {
+        stack.push(words[at + 3], words[at + 7]);
+      }
+    }
+    expect(triangles.sort()).toEqual(['0,1,2', '0,2,3']);
   });
 
   it('encodes single-node meshes directly as CWBVH', () => {
@@ -370,6 +392,14 @@ describe('tinybvh WASM layouts', () => {
 
     expect(layout).toBe(3);
     expect(buffer.byteLength).toBeGreaterThan(triangleCount * 16);
+    // The renderer decodes signed exponent bytes. IEEE-biased upstream bytes
+    // still give valid triangle IDs, but destroy the world-space box scale.
+    const exponents = new Int8Array(buffer, 12, 3);
+    for (let axis = 0; axis < 3; axis++) {
+      const values = Array.from({ length: triangleCount * 3 }, (_, i) => gridPositions[i * 4 + axis]);
+      const extent = Math.max(...values) - Math.min(...values);
+      expect(exponents[axis]).toBe(Math.ceil(Math.log2(extent / 255)));
+    }
     expect(stackRequirement).toBeLessThanOrEqual(MAX_TRAVERSAL_STACK_SIZE);
     expect(getCwbvhTraversalStackSize(buffer)).toBe(
       getCwbvhGroupStackRequirement(buffer)

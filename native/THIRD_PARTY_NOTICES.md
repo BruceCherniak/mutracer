@@ -16,13 +16,10 @@ Copyright (c) 2025 The gfx-rs developers. MIT License
 
 ## TinyBVH native builder
 
-`vendor/tinybvh/tiny_bvh.h` is based on the official
-[jbikker/tinybvh](https://github.com/jbikker/tinybvh/blob/0e4584287823252cf83f0e9cd072848bec5f79c5/tiny_bvh.h)
-header at commit `0e4584287823252cf83f0e9cd072848bec5f79c5`, shared with the
-browser wrapper revision. The native copy makes the worker-pool teardown wake
-flag atomic to avoid a data race; construction algorithms are unchanged.
-Upstream SHA-256:
-`301b9f6453de619078257203db184383fb25a038bde9b6726fe008453dce0084`.
+`vendor/tinybvh/tiny_bvh*.h` contains the unmodified official
+[jbikker/tinybvh](https://github.com/jbikker/tinybvh/tree/c9be3103cc9693b456b0a0353927c11cac7d710f)
+1.9.1 headers at commit `c9be3103cc9693b456b0a0353927c11cac7d710f`, shared with the
+browser Wasm builder. File hashes are in [`vendor/tinybvh/upstream.json`](./vendor/tinybvh/upstream.json).
 Copyright (c) 2024-2026 Jacco Bikker / Breda University of Applied Sciences.
 MIT License ([`LICENSES/TinyBVH-MIT.txt`](./LICENSES/TinyBVH-MIT.txt)).
 `host/tinybvh.cpp` reuses `src/tinybvh/tinybvh_wrapper.cpp` for native builds

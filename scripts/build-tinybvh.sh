@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-TINYBVH_REVISION="0e4584287823252cf83f0e9cd072848bec5f79c5"
+TINYBVH_REVISION="c9be3103cc9693b456b0a0353927c11cac7d710f"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SOURCE_DIR="$PROJECT_DIR/src/tinybvh"
 TEMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mutracer-tinybvh.XXXXXX")"
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
-curl --fail --location --silent --show-error \
-  "https://raw.githubusercontent.com/jbikker/tinybvh/$TINYBVH_REVISION/tiny_bvh.h" \
-  --output "$TEMP_DIR/tiny_bvh.h"
+for header in tiny_bvh.h tiny_bvh_base.h tiny_bvh_arm_float.h \
+  tiny_bvh_arm_double.h tiny_bvh_x86_float.h tiny_bvh_x86_double.h; do
+  curl --fail --location --silent --show-error \
+    "https://raw.githubusercontent.com/jbikker/tinybvh/$TINYBVH_REVISION/$header" \
+    --output "$TEMP_DIR/$header"
+done
 
 em++ "$SOURCE_DIR/tinybvh_wrapper.cpp" \
   -I"$TEMP_DIR" \

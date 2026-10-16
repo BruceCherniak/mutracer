@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$revision = '0e4584287823252cf83f0e9cd072848bec5f79c5'
+$revision = 'c9be3103cc9693b456b0a0353927c11cac7d710f'
 $projectDirectory = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if (-not $SourceDirectory) {
   $rendererSource = Join-Path $projectDirectory 'src\tinybvh'
@@ -29,12 +29,14 @@ $tempDirectory = Join-Path $tempRoot (
   'tinybvh-header-' + [guid]::NewGuid().ToString('N')
 )
 New-Item -ItemType Directory -Path $tempDirectory | Out-Null
-$header = Join-Path $tempDirectory 'tiny_bvh.h'
 
 try {
-  Invoke-WebRequest -UseBasicParsing (
-    "https://raw.githubusercontent.com/jbikker/tinybvh/$revision/tiny_bvh.h"
-  ) -OutFile $header
+  foreach ($name in @('tiny_bvh.h', 'tiny_bvh_base.h', 'tiny_bvh_arm_float.h',
+    'tiny_bvh_arm_double.h', 'tiny_bvh_x86_float.h', 'tiny_bvh_x86_double.h')) {
+    Invoke-WebRequest -UseBasicParsing (
+      "https://raw.githubusercontent.com/jbikker/tinybvh/$revision/$name"
+    ) -OutFile (Join-Path $tempDirectory $name)
+  }
 
   $arguments = @(
     $wrapper,
@@ -56,15 +58,12 @@ try {
     throw "em++ failed with exit code $LASTEXITCODE"
   }
 } finally {
-  if (Test-Path -LiteralPath $header) {
-    Remove-Item -LiteralPath $header
-  }
   $resolvedTemp = [IO.Path]::GetFullPath($tempDirectory)
   if (
     (Test-Path -LiteralPath $resolvedTemp) -and
     $resolvedTemp.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)
   ) {
-    Remove-Item -LiteralPath $resolvedTemp
+    Remove-Item -LiteralPath $resolvedTemp -Recurse
   }
 }
 

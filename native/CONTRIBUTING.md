@@ -449,18 +449,20 @@ that behavior in addition to the original structural geometry-update fixtures.
 Raw scene commits and transform/vertex update TLAS construction use the official
 TinyBVH header pinned in `native/vendor/tinybvh/`. The host compiles the browser's
 existing C++ wrapper directly; preserve pointer-width-safe result addresses and
-`-ffp-contract=off` for conservative float bounds. The native bridge opts into
-upstream SIMD and threaded builds; the browser wrapper retains its scalar,
-single-threaded Wasm configuration. Spatial splits remain disabled in the native
-bridge, matching the browser default (the browser can opt in).
-On ARM64, explicitly call upstream `BuildNEON` with aligned float4 vertices and
-retain them through serialization. In the pinned version, NEON accelerates
-fragment preparation; subdivision delegates to the reference builder. The
-upstream worker pool handles builds of at least 50,000 primitives, including
-AABB-input TLASes and displaced BLASes. Small builds remain single-threaded.
-The vendored header has one local fix: the thread-pool teardown wake flag is
-atomic. Keep the upstream revision/hash and this patch described in the native
-notices. Exercise owner-thread exit with ThreadSanitizer:
+`-ffp-contract=off` for conservative float bounds. Native and Web now pin
+TinyBVH 1.9.1 to the same upstream revision; all six native headers are unmodified
+and recorded in the vendor manifest. See the shared
+[adapter contributor guide](../src/tinybvh/CONTRIBUTING.md) for Wasm rebuilding
+and CWBVH conversion.
+
+The native bridge enables full ARM NEON/Bonsai construction and upstream workers
+with aligned float4 vertices retained through serialization. Web uses its scalar
+Wasm build and existing browser worker pool. Native spatial splits stay disabled,
+matching the browser default; Web spatial splits remain opt-in. Upstream chooses
+threaded work by size; small BVHs stay on the calling thread. Stable-topology
+refits still use the original TS updater. The 1.9 process-wide worker pool
+survives a host thread and joins at shutdown. Check host exit, explicit shutdown,
+restart and process exit with ThreadSanitizer:
 
 ```sh
 c++ -std=c++20 -O1 -g -fsanitize=thread -ffp-contract=off \
@@ -475,8 +477,10 @@ packs instance records, materials, lights and shader resources. Stable-topology
 BLAS refit still reuses `updatePreparedGeometries`; the TS SAH builder remains
 available to browser/replay fixtures and legacy stateless AOT comparison exports.
 
-Compare native BLAS bytes with scalar native and the existing Wasm adapter on
-identical inputs, including degenerate triangles and all displacement projections. Full and partial
+Compare native and Wasm on identical inputs, including degenerate triangles and
+all displacement projections. SIMD/Bonsai and scalar builds can choose different
+trees: validate primitive identity, conservative bounds and GPU output, and keep
+byte comparisons for matching builder configurations. Full and partial
 results must agree on HDR/normal/albedo, survive failed candidates/other contexts,
 and preserve HWRT identity mapping after TLAS leaf reordering. Compare against
 the chosen builder reference: switching from built-in SAH to TinyBVH can change

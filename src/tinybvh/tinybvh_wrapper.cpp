@@ -397,8 +397,12 @@ bool buildOptimalCwbvhNode(
   return true;
 }
 
-bool convertToOptimalCwbvh(const tinybvh::BVH& bvh, tinybvh::MBVH<8>& wide) {
-  wide.ConvertFrom(bvh);
+bool convertToOptimalCwbvh(tinybvh::BVH& bvh, tinybvh::MBVH<8>& wide) {
+  // Our DP indexes wide nodes by binary node ID. Upstream 1.9 normally sizes
+  // its compact output to the collapsed node count, which is too small for
+  // those sparse IDs. Keep the full binary-sized pool and primitive references.
+  wide.ConvertFrom(bvh, false);
+  wide.usedNodes = bvh.usedNodes;
   std::vector<CwbvhDecision> decisions(static_cast<size_t>(bvh.usedNodes) * 7);
   std::vector<CwbvhSubtreeInfo> subtrees(bvh.usedNodes);
   calculateCwbvhDecisions(bvh, 0, decisions, subtrees);
@@ -413,25 +417,45 @@ bool flattenGpuBvh(
   std::vector<uint32_t>& output,
   uint32_t& stackRequirement
 ) {
-  tinybvh::BVH_GPU gpu;
-  gpu.ConvertFrom(bvh);
-  if (!gpu.usedNodes) return false;
-  output.resize(static_cast<size_t>(gpu.usedNodes) * 16);
-  std::memcpy(
-    output.data(),
-    gpu.bvhNode,
-    static_cast<size_t>(gpu.usedNodes) * sizeof(tinybvh::BVH_GPU::BVHNode)
-  );
+  // TinyBVH 1.9 packs leaves into child pointers in BVH_GPU. Keep MuTracer's
+  // existing 64-byte GPU contract, including full-width leaf counts/offsets,
+  // by serializing the official binary tree into that layout explicitly.
+  std::vector<uint32_t> nodes{0};
+  std::vector<uint32_t> addresses(bvh.usedNodes, 0);
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    const auto& node = bvh.bvhNode[nodes[i]];
+    if (node.isLeaf()) continue;
+    addresses[node.leftFirst] = static_cast<uint32_t>(nodes.size());
+    nodes.push_back(node.leftFirst);
+    addresses[node.leftFirst + 1] = static_cast<uint32_t>(nodes.size());
+    nodes.push_back(node.leftFirst + 1);
+  }
+  output.assign(nodes.size() * 16, 0);
   std::vector<uint32_t> primitiveData;
   primitiveData.reserve(triangleMap.size() * 4);
-  for (uint32_t nodeIndex = 0; nodeIndex < gpu.usedNodes; ++nodeIndex) {
-    const auto& node = gpu.bvhNode[nodeIndex];
-    if (!node.isLeaf()) continue;
-    output[static_cast<size_t>(nodeIndex) * 16 + 15] =
-      static_cast<uint32_t>(gpu.usedNodes * 4 + primitiveData.size() / 4);
+  for (size_t i = 0; i < nodes.size(); ++i) {
+    const auto& node = bvh.bvhNode[nodes[i]];
+    const auto& left = node.isLeaf() ? node : bvh.bvhNode[node.leftFirst];
+    const auto& right = node.isLeaf() ? node : bvh.bvhNode[node.leftFirst + 1];
+    const size_t at = i * 16;
+    const tinybvh::bvhvec3 bounds[4] = {
+      left.aabbMin, left.aabbMax, right.aabbMin, right.aabbMax
+    };
+    for (uint32_t corner = 0; corner < 4; ++corner) {
+      output[at + corner * 4] = floatBits(bounds[corner].x);
+      output[at + corner * 4 + 1] = floatBits(bounds[corner].y);
+      output[at + corner * 4 + 2] = floatBits(bounds[corner].z);
+    }
+    if (!node.isLeaf()) {
+      output[at + 3] = addresses[node.leftFirst];
+      output[at + 7] = addresses[node.leftFirst + 1];
+      continue;
+    }
+    output[at + 11] = node.triCount;
+    output[at + 15] = static_cast<uint32_t>(nodes.size() * 4 + primitiveData.size() / 4);
     for (uint32_t triangleOffset = 0; triangleOffset < node.triCount; ++triangleOffset) {
       appendPrimitive(
-        bvh.primIdx[node.firstTri + triangleOffset],
+        bvh.primIdx[node.leftFirst + triangleOffset],
         indices,
         triangleMap,
         displacement,
@@ -540,6 +564,13 @@ bool flattenCwbvh(
   const uint32_t nodeCount = compressed.usedBlocks / 5;
   for (uint32_t nodeIndex = 0; nodeIndex < nodeCount; ++nodeIndex) {
     const size_t wordOffset = static_cast<size_t>(nodeIndex) * 20;
+    // Upstream 1.9 stores IEEE-biased exponents. MuTracer's existing WGSL/GLSL
+    // contract uses signed exponent bytes, including the direct tiny-root path.
+    const uint32_t biased = output[wordOffset + 3];
+    output[wordOffset + 3] = (biased & 0xff000000u) |
+      (((biased & 0xffu) - 127u) & 0xffu) |
+      (((((biased >> 8) & 0xffu) - 127u) & 0xffu) << 8) |
+      (((((biased >> 16) & 0xffu) - 127u) & 0xffu) << 16);
     const uint32_t originalTriangleBase = output[wordOffset + 5];
     const uint32_t patchedTriangleBase = static_cast<uint32_t>(
       compressed.usedBlocks + primitiveData.size() / 4
@@ -555,8 +586,15 @@ bool flattenCwbvh(
       const uint32_t triangleCount =
         ((meta >> 5) & 1) + ((meta >> 6) & 1) + ((meta >> 7) & 1);
       for (uint32_t triangleOffset = 0; triangleOffset < triangleCount; ++triangleOffset) {
+        // Upstream 1.9 defaults to four-block precomputed triangles. The
+        // renderer still receives its existing index/height primitive records.
+#ifdef CWBVH_COMPRESSED_TRIS
+        const uint32_t sourceAddress =
+          originalTriangleBase + (localOffset + triangleOffset) * 4 + 3;
+#else
         const uint32_t sourceAddress =
           originalTriangleBase + (localOffset + triangleOffset) * 3 + 2;
+#endif
         uint32_t compactTriangle;
         std::memcpy(
           &compactTriangle,
@@ -594,7 +632,7 @@ uint32_t packBytes(const uint8_t values[4]) {
 }
 
 bool flattenWideBvh(
-  const tinybvh::BVH& bvh,
+  tinybvh::BVH& bvh,
   const std::vector<uint32_t>& indices,
   const std::vector<uint32_t>& triangleMap,
   const float* displacement,
@@ -816,18 +854,16 @@ BuildResult* tinybvh_build(
       static_cast<uint32_t>(positionStride * sizeof(float))
     };
 #if defined(MUTRACER_TINYBVH_NATIVE) && defined(BVH_USENEON)
-    if (!bvh->settings.useSpatialSplits) {
-      // Upstream's ARM Build() does not dispatch to BuildNEON. Its NEON input
-      // preparation requires aligned float4 vertices; the subdivision stage
-      // delegates to the official threaded reference builder in this revision.
-      alignedPositions.resize(vertexCount);
-      for (uint32_t i = 0; i < vertexCount; ++i) {
-        alignedPositions[i] = tinybvh::bvhvec4(vertexAt(positions, positionStride, i), 0.0f);
-      }
-      bvh->BuildNEON(alignedPositions.data(), buildIndices, static_cast<uint32_t>(triangleMap.size()));
-    } else
-#endif
+    // TinyBVH 1.9 dispatches to the full NEON/Bonsai builder. Its input slice
+    // needs aligned float4 vertices; keep this storage through serialization.
+    alignedPositions.resize(vertexCount);
+    for (uint32_t i = 0; i < vertexCount; ++i) {
+      alignedPositions[i] = tinybvh::bvhvec4(vertexAt(positions, positionStride, i), 0.0f);
+    }
+    bvh->Build(alignedPositions.data(), buildIndices, static_cast<uint32_t>(triangleMap.size()));
+#else
     bvh->Build(vertices, buildIndices, static_cast<uint32_t>(triangleMap.size()));
+#endif
   }
 
   serializeBvh(
