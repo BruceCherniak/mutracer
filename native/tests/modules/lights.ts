@@ -2,12 +2,12 @@ import { DirectionalLight, SphereLight, SpotLight, RectLightState, TextureState,
   MeshState, InstanceState, MaterialState, LightChoiceBuffer, buildLightAliasTable,
   estimateAnalyticLightPower, estimateEnvironmentPower, collectEmissiveTriangles,
   EmissiveTriangleCache, packEmissiveTriangles, packIESProfiles, packLightsData,
-  validateSceneLights, sphereSolidAnglePdf } from '../../src/renderer/lightCore.js';
-import type { AnalyticLightState } from '../../src/scene/lightState.js';
-import type { LightChoiceInput } from '../../src/renderer/lightSampling.js';
-import IESProfile from '../../src/scene/IESProfile.js';
-import { createPlaneGeometry } from '../../src/util/commonGeometry.js';
-import { read, write } from '../../src/math/access.js';
+  validateSceneLights, sphereSolidAnglePdf } from '../../../src/renderer/lightCore.js';
+import type { AnalyticLightState } from '../../../src/scene/lightState.js';
+import type { LightChoiceInput } from '../../../src/renderer/lightSampling.js';
+import IESProfile from '../../../src/scene/IESProfile.js';
+import { createPlaneGeometry } from '../../../src/util/commonGeometry.js';
+import { read, write } from '../../../src/math/access.js';
 
 export function lightParameters(bytes: Uint8Array): Uint8Array {
   const flags = new Uint32Array(bytes.buffer, bytes.byteOffset, 1)[0];

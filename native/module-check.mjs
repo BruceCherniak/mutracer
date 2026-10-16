@@ -13,25 +13,25 @@ mkdirSync(output, { recursive: true });
 const entries = resolve(root, '.native-build/module-probes');
 mkdirSync(entries, { recursive: true });
 const modules = [
-  ['math', 'src/math.ts', null, 'native/modules/math.ts', 'mathParameters'],
-  ['geometry', 'src/util/commonGeometry.ts', null, 'native/modules/geometry.ts', 'geometryParameters'],
-  ['camera', 'src/scene/Camera.ts', null, 'native/modules/camera.ts', 'cameraParameters'],
-  ['environment', 'src/renderer/envMapDistribution.ts', null, 'native/modules/environment.ts', 'environmentParameters'],
-  ['geometry-updates', 'src/renderer/geometryUpdates.ts', null, 'native/modules/geometry-updates.ts', 'geometryUpdateParameters'],
-  ['bvh-core', 'src/renderer/binnedSahBvh.ts', null, 'native/modules/bvh.ts', 'buildBvh'],
-  ['bvh-facade', 'src/renderer/bvhAccel.ts', null, 'native/modules/bvh-facade.ts', 'bvhParameters'],
+  ['math', 'src/math.ts', null, 'native/tests/modules/math.ts', 'mathParameters'],
+  ['geometry', 'src/util/commonGeometry.ts', null, 'native/tests/modules/geometry.ts', 'geometryParameters'],
+  ['camera', 'src/scene/Camera.ts', null, 'native/tests/modules/camera.ts', 'cameraParameters'],
+  ['environment', 'src/renderer/envMapDistribution.ts', null, 'native/tests/modules/environment.ts', 'environmentParameters'],
+  ['geometry-updates', 'src/renderer/geometryUpdates.ts', null, 'native/tests/modules/geometry-updates.ts', 'geometryUpdateParameters'],
+  ['bvh-core', 'src/renderer/binnedSahBvh.ts', null, 'native/bvh-core.ts', 'buildBvh'],
+  ['bvh-facade', 'src/renderer/bvhAccel.ts', null, 'native/tests/modules/bvh-facade.ts', 'bvhParameters'],
   ['materials', 'src/renderer/MaterialTable.ts', `import MaterialTable from '${root}/src/renderer/MaterialTable.js';
 import Material from '${root}/src/scene/OpenPBRMaterial.js';
 export function run(bytes: Uint8Array): Uint8Array { return new Uint8Array(new MaterialTable([new Material()], []).getBufferArray().buffer); }`],
-  ['material-packing', 'src/renderer/materialLayout.ts', null, 'native/modules/material-packing.ts', 'materialParameters'],
-  ['material-data', 'src/renderer/materialCore.ts', null, 'native/modules/material-data.ts', 'materialDataParameters'],
+  ['material-packing', 'src/renderer/materialLayout.ts', null, 'native/tests/modules/material-packing.ts', 'materialParameters'],
+  ['material-data', 'src/renderer/materialCore.ts', null, 'native/tests/modules/material-data.ts', 'materialDataParameters'],
   // The native light entry includes the portable model constructors: scriptc
   // needs their values in the graph to lower class-typed sampler parameters.
-  ['lights', 'src/renderer/lightCore.ts', null, 'native/modules/lights.ts', 'lightParameters'],
-  ['shader-generation', 'src/renderer/wgsl/rayTrace.compute.ts', null, 'native/modules/shader-generation.ts', 'shaderParameters'],
-  ['displacement', 'src/renderer/displacementPreparation.ts', null, 'native/modules/displacement.ts', 'displacementParameters'],
-  ['ies', 'src/scene/IESProfile.ts', null, 'native/modules/ies.ts', 'iesParameters'],
-  ['sampling', 'src/renderer/sampling.ts', null, 'native/modules/sampling.ts', 'samplingParameters']
+  ['lights', 'src/renderer/lightCore.ts', null, 'native/tests/modules/lights.ts', 'lightParameters'],
+  ['shader-generation', 'src/renderer/wgsl/rayTrace.compute.ts', null, 'native/tests/modules/shader-generation.ts', 'shaderParameters'],
+  ['displacement', 'src/renderer/displacementPreparation.ts', null, 'native/tests/modules/displacement.ts', 'displacementParameters'],
+  ['ies', 'src/scene/IESProfile.ts', null, 'native/tests/modules/ies.ts', 'iesParameters'],
+  ['sampling', 'src/renderer/sampling.ts', null, 'native/sampling-core.ts', 'samplingParameters']
 ];
 function invoke(name, args) {
   const result = spawnSync(compiler, args, { cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 90_000 });

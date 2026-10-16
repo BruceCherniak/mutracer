@@ -1,6 +1,6 @@
-import Geometry, {Attribute} from '../../src/scene/Geometry.js';
-import MaterialState from '../../src/scene/MaterialState.js';
-import {computeDisplacementMinmax, computeTrianglesDisplacementRange} from '../../src/renderer/displacementPreparation.js';
+import Geometry, {Attribute} from '../../../src/scene/Geometry.js';
+import MaterialState from '../../../src/scene/MaterialState.js';
+import {computeDisplacementMinmax, computeTrianglesDisplacementRange} from '../../../src/renderer/displacementPreparation.js';
 
 export function displacementParameters(bytes: Uint8Array): Uint8Array {
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);

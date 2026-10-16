@@ -2,8 +2,8 @@ import { sceneParameters as prepareNativeScene } from './scene-core.js';
 import { sceneCameraParameters as prepareSceneCamera } from './camera-core.js';
 import { normalizeBounces } from '../src/renderer/pathLimits.js';
 import { packCameraUniform } from '../src/renderer/cameraUniform.js';
-import { buildBvh as buildBvhModule } from './modules/bvh.js';
-import { samplingParameters as buildSamplingParameters } from './modules/sampling.js';
+import { buildBvh as buildBvhModule } from './bvh-core.js';
+import { samplingParameters as buildSamplingParameters } from './sampling-core.js';
 
 /** Experimental frame command: sample:f32, depth:i32, seed:u32, reserved:u32. */
 export function frameParameters(sample: number, bounces: number, seed: number): Uint8Array {

@@ -1,4 +1,4 @@
-import { buildBinnedSahBvh, layoutBvh2 } from '../../src/renderer/binnedSahBvh.js';
+import { buildBinnedSahBvh, layoutBvh2 } from '../src/renderer/binnedSahBvh.js';
 
 /** Entire SAH builder + traversal layout, transported as little-endian words.
  * Input: packed minXYZ/maxXYZ f32 boxes. Output header (8 u32 words):

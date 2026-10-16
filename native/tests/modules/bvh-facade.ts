@@ -1,12 +1,12 @@
 import { buildBLAS, buildTLAS, refitBLAS, refitTLAS, updateTLASInstanceColors,
   concatBLASBuffers, getTraversalStackSizes, emptyBLAS, Box3,
-  type FlattendBVH, type TLASInstance, type TLASRefitRange } from '../../src/renderer/bvhAccel.js';
-import { PackedMeshInstances, sameInstanceMembership, meshInstancesLength } from '../../src/renderer/packedMeshInstances.js';
-import { createPlaneGeometry, createSphereGeometry } from '../../src/util/commonGeometry.js';
-import { Attribute } from '../../src/scene/Geometry.js';
-import { attributeValue, attributeLength } from '../../src/scene/attributeData.js';
-import { mat4 } from '../../src/math.js';
-import { read, write } from '../../src/math/access.js';
+  type FlattendBVH, type TLASInstance, type TLASRefitRange } from '../../../src/renderer/bvhAccel.js';
+import { PackedMeshInstances, sameInstanceMembership, meshInstancesLength } from '../../../src/renderer/packedMeshInstances.js';
+import { createPlaneGeometry, createSphereGeometry } from '../../../src/util/commonGeometry.js';
+import { Attribute } from '../../../src/scene/Geometry.js';
+import { attributeValue, attributeLength } from '../../../src/scene/attributeData.js';
+import { mat4 } from '../../../src/math.js';
+import { read, write } from '../../../src/math/access.js';
 
 function snapshot(buffers: ArrayBuffer[], bvh: FlattendBVH) {
   buffers.push(new Float64Array([bvh.maxDepth, bvh.maxLeafPrimitives ?? 0,

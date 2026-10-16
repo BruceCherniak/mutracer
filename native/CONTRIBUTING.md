@@ -180,9 +180,10 @@ npm run build:lib
 npm run native:modules:verify
 ```
 
-`native/modules/` contains byte adapters and deterministic fixtures that call
-the implementations in `src/`. The replay also reuses the BVH/sampling adapters.
-These entries are experimental and do not define the final native library API.
+`native/tests/modules/` contains compilation and result-comparison fixtures that
+call the implementations in `src/`. The runtime BVH and sampling byte adapters
+live beside `render-core.ts` as `bvh-core.ts` and `sampling-core.ts`; verification
+also exercises them. These entries do not define the final native library API.
 
 The consumers compare native outputs with JavaScript, including repeated calls
 and result-memory reset. `modules/runtime.json` records completion and failures;
@@ -298,13 +299,13 @@ the original packing and translated matrices. The native baseline's HDR hash is
 unchanged by extraction. These replay edits still start from captured inputs;
 the raw-scene entry prepares its scene separately.
 
-`native/modules/bvh.ts` transports both original SAH construction and BVH2 layout
+`native/bvh-core.ts` transports both original SAH construction and BVH2 layout
 outputs without replacing their algorithms. The native host computes bounds from
 raw indexed vertices and writes the existing GPU layout. It verifies captured
 byte sizes/depth; the integration verifier compares every reconstructed byte.
 Only finite, nonempty builtin BVH2 geometry without displacement is enabled for
 this initial path. Other captures retain their original prebuilt buffer.
-`native/modules/sampling.ts` compiles the existing sampling module; Sobol parameters
+`native/sampling-core.ts` compiles the existing sampling module; Sobol parameters
 and constants are checked independently before composition. The C ABI and
 existing hardware traversal fallbacks are unchanged.
 

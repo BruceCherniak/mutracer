@@ -1,4 +1,4 @@
-import { mat3, mat4, vec2, vec3 } from '../../src/math.js';
+import { mat3, mat4, vec2, vec3 } from '../../../src/math.js';
 
 function save(target: Float32Array, offset: number, value: Float32Array): number {
   target.set(value, offset); return offset + value.length;

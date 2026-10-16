@@ -1,5 +1,5 @@
-import rayTraceCompute from '../../src/renderer/wgsl/rayTrace.compute.js';
-import { getOpenPbrEnergyLutData } from '../../src/renderer/openPbrEnergyLut.js';
+import rayTraceCompute from '../../../src/renderer/wgsl/rayTrace.compute.js';
+import { getOpenPbrEnergyLutData } from '../../../src/renderer/openPbrEnergyLut.js';
 
 /** Generates the original megakernel from runtime feature flags and BLAS layouts. */
 export function shaderParameters(bytes: Uint8Array): Uint8Array {

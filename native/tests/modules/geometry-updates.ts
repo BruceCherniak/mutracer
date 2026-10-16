@@ -1,18 +1,18 @@
-/// <reference path="../browser-types.d.ts" />
-import Geometry, { Attribute } from '../../src/scene/Geometry.js';
-import MaterialState from '../../src/scene/MaterialState.js';
-import TextureState from '../../src/scene/TextureState.js';
-import { attributeLength, attributeValue } from '../../src/scene/attributeData.js';
-import { markDeformedGeometry } from '../../src/scene/geometryChanges.js';
-import { createPlaneGeometry } from '../../src/util/commonGeometry.js';
-import { generateVertexTangents } from '../../src/util/geometry.js';
-import { read } from '../../src/math/access.js';
-import { buildBLAS } from '../../src/renderer/bvhAccel.js';
-import { setGeometryBvh } from '../../src/renderer/geometryBvh.js';
-import { getBvhBounds } from '../../src/renderer/geometryBvhBounds.js';
-import type { GeometryUpdateState, GeometryUpdateMesh } from '../../src/renderer/geometryUpdateState.js';
+/// <reference path="../../browser-types.d.ts" />
+import Geometry, { Attribute } from '../../../src/scene/Geometry.js';
+import MaterialState from '../../../src/scene/MaterialState.js';
+import TextureState from '../../../src/scene/TextureState.js';
+import { attributeLength, attributeValue } from '../../../src/scene/attributeData.js';
+import { markDeformedGeometry } from '../../../src/scene/geometryChanges.js';
+import { createPlaneGeometry } from '../../../src/util/commonGeometry.js';
+import { generateVertexTangents } from '../../../src/util/geometry.js';
+import { read } from '../../../src/math/access.js';
+import { buildBLAS } from '../../../src/renderer/bvhAccel.js';
+import { setGeometryBvh } from '../../../src/renderer/geometryBvh.js';
+import { getBvhBounds } from '../../../src/renderer/geometryBvhBounds.js';
+import type { GeometryUpdateState, GeometryUpdateMesh } from '../../../src/renderer/geometryUpdateState.js';
 import { canUpdateGeometries, geometryTopologyChanged, packVertexAttributes,
-  updatePreparedGeometries } from '../../src/renderer/geometryUpdates.js';
+  updatePreparedGeometries } from '../../../src/renderer/geometryUpdates.js';
 
 interface ProbeMesh extends GeometryUpdateMesh { id: number; }
 

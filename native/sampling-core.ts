@@ -1,4 +1,4 @@
-import { samplingPatternCode, zSobolLog2SPP, zSobolPermutations, zSobolPackedPermutations, sobolD1Steps } from '../../src/renderer/sampling.js';
+import { samplingPatternCode, zSobolLog2SPP, zSobolPermutations, zSobolPackedPermutations, sobolD1Steps } from '../src/renderer/sampling.js';
 
 /** Full sampling module constants and parameter calculation; input is maxSamples:u32. */
 export function samplingParameters(bytes: Uint8Array): Uint8Array {

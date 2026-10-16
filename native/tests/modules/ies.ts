@@ -1,4 +1,4 @@
-import {parseIESProfile} from '../../src/scene/IESProfile.js';
+import {parseIESProfile} from '../../../src/scene/IESProfile.js';
 
 export function iesParameters(bytes: Uint8Array): Uint8Array {
   try {

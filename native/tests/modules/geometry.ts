@@ -1,7 +1,7 @@
-import Geometry, { Attribute } from '../../src/scene/Geometry.js';
-import { attributeLength, attributeValue, type AttributeData } from '../../src/scene/attributeData.js';
-import { read } from '../../src/math/access.js';
-import { createSphereGeometry, createPlaneGeometry, createCubeGeometry, createCurvePlaneGeometry } from '../../src/util/commonGeometry.js';
+import Geometry, { Attribute } from '../../../src/scene/Geometry.js';
+import { attributeLength, attributeValue, type AttributeData } from '../../../src/scene/attributeData.js';
+import { read } from '../../../src/math/access.js';
+import { createSphereGeometry, createPlaneGeometry, createCubeGeometry, createCurvePlaneGeometry } from '../../../src/util/commonGeometry.js';
 
 function attributeParameters<T extends AttributeData>(attribute: Attribute<T>, output: Float32Array, offset: number) {
   output[offset] = Attribute.getCount(attribute);

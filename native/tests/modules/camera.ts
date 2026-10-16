@@ -1,6 +1,6 @@
-import Camera from '../../src/scene/Camera.js';
-import { cameraSnapshot } from '../../src/renderer/cameraSnapshot.js';
-import { read, write } from '../../src/math/access.js';
+import Camera from '../../../src/scene/Camera.js';
+import { cameraSnapshot } from '../../../src/renderer/cameraSnapshot.js';
+import { read, write } from '../../../src/math/access.js';
 
 export function cameraParameters(bytes: Uint8Array): Uint8Array {
   const input = new Uint32Array(bytes.buffer, bytes.byteOffset, 1);

@@ -1,5 +1,5 @@
-import { packMaterialBuffer } from '../../src/renderer/materialLayout.js';
-import type { BufferData } from '../../src/renderer/materialBufferData.js';
+import { packMaterialBuffer } from '../../../src/renderer/materialLayout.js';
+import type { BufferData } from '../../../src/renderer/materialBufferData.js';
 
 export function materialParameters(bytes: Uint8Array): Uint8Array {
   const input = new Uint32Array(bytes.buffer, bytes.byteOffset, 3);

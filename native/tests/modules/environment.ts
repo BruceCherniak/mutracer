@@ -1,7 +1,7 @@
-/// <reference path="../browser-types.d.ts" />
-import { envMapDistribution, environmentMapSourcesMatch, type EnvironmentMapSource } from '../../src/renderer/envMapDistribution.js';
-import { pixelLength, pixelValue, writePixel } from '../../src/scene/texturePixels.js';
-import type { TextureDataSource } from '../../src/scene/Texture.js';
+/// <reference path="../../browser-types.d.ts" />
+import { envMapDistribution, environmentMapSourcesMatch, type EnvironmentMapSource } from '../../../src/renderer/envMapDistribution.js';
+import { pixelLength, pixelValue, writePixel } from '../../../src/scene/texturePixels.js';
+import type { TextureDataSource } from '../../../src/scene/Texture.js';
 
 export function environmentParameters(bytes: Uint8Array): Uint8Array {
   const input = new Uint32Array(bytes.buffer, bytes.byteOffset, 5);

@@ -1,10 +1,10 @@
-import MaterialState, { getMaterialHashKey, resetMaterialTextureId } from '../../src/scene/MaterialState.js';
-import PixelTexture from '../../src/scene/PixelTexture.js';
-import type TextureState from '../../src/scene/TextureState.js';
-import type { TextureDataSource } from '../../src/scene/textureData.js';
-import { writePixel } from '../../src/scene/texturePixels.js';
-import MaterialData from '../../src/renderer/MaterialData.js';
-import { writeRawAtlasPlacement } from '../../src/renderer/textureAtlasPixels.js';
+import MaterialState, { getMaterialHashKey, resetMaterialTextureId } from '../../../src/scene/MaterialState.js';
+import PixelTexture from '../../../src/scene/PixelTexture.js';
+import type TextureState from '../../../src/scene/TextureState.js';
+import type { TextureDataSource } from '../../../src/scene/textureData.js';
+import { writePixel } from '../../../src/scene/texturePixels.js';
+import MaterialData from '../../../src/renderer/MaterialData.js';
+import { writeRawAtlasPlacement } from '../../../src/renderer/textureAtlasPixels.js';
 
 export function materialDataParameters(bytes: Uint8Array): Uint8Array {
   const input = new Uint32Array(bytes.buffer, bytes.byteOffset, 2);
