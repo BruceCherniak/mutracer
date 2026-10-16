@@ -5,6 +5,8 @@ import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import {
   getTrianglesDisplacementRange,
+  getBvhBounds,
+  getPreparedMeshGeometry,
   updateMeshInstances
 } from '../../src/renderer/prepareMeshBVH';
 
@@ -24,6 +26,60 @@ describe('merged renderer geometry', () => {
       0, 1, 2, 3, 4, 5
     ]);
   });
+});
+
+it('rebuilds UV displacement bounds when a height map is added or its height changes', () => {
+  const geometry = triangleGeometry();
+  const material = new OpenPBRMaterial();
+  const mesh = new Mesh(geometry, material);
+  updateMeshInstances([mesh]);
+  expect(getBvhBounds(getPreparedMeshGeometry(mesh))[1][2]).toBe(0);
+
+  material.displacementMap = heightTexture([1, 1, 1, 1], 2);
+  material.displacementScale = .2;
+  updateMeshInstances([mesh]);
+  expect(getBvhBounds(getPreparedMeshGeometry(mesh))[1][2]).toBeCloseTo(.2);
+
+  material.displacementScale = .4;
+  updateMeshInstances([mesh]);
+  expect(getBvhBounds(getPreparedMeshGeometry(mesh))[1][2]).toBeCloseTo(.4);
+
+  material.displacementMap = undefined;
+  updateMeshInstances([mesh]);
+  expect(getPreparedMeshGeometry(mesh)).toBe(geometry);
+  expect(getBvhBounds(geometry)[1][2]).toBe(0);
+});
+
+it('isolates shared geometry by height map and refreshes same-size image replacements', () => {
+  const geometry = triangleGeometry();
+  const first = new OpenPBRMaterial(), second = new OpenPBRMaterial();
+  first.displacementMap = heightTexture([1, 1, 1, 1], 2);
+  second.displacementMap = heightTexture([.5, .5, .5, .5], 2);
+  first.displacementScale = second.displacementScale = .4;
+  const a = new Mesh(geometry, first), b = new Mesh(geometry, second);
+  const ordinary = new Mesh(geometry, new OpenPBRMaterial());
+  const prepared = updateMeshInstances([a, b, ordinary]);
+  expect(prepared.geometries).toHaveLength(3);
+  expect(getBvhBounds(getPreparedMeshGeometry(a))[1][2]).toBeCloseTo(.4);
+  // Bounds conservatively pad quantized height samples.
+  expect(getBvhBounds(getPreparedMeshGeometry(b))[1][2]).toBeCloseTo(.2, 1);
+  expect(getBvhBounds(geometry)[1][2]).toBe(0);
+  first.displacementMap.image = heightTexture([.25, .25, .25, .25], 2).image;
+  updateMeshInstances([a]);
+  expect(getBvhBounds(getPreparedMeshGeometry(a))[1][2]).toBeCloseTo(.1, 1);
+});
+
+it('uses undisplaced bounds on a backend without height-field intersection', () => {
+  const material = new OpenPBRMaterial();
+  material.displacementMap = heightTexture([1, 1, 1, 1], 2);
+  material.displacementScale = .4;
+  const mesh = new Mesh(triangleGeometry(), material);
+  updateMeshInstances([mesh]);
+  const prepared = updateMeshInstances([mesh], { displacement: false });
+  expect(prepared.geometries[0]).toBe(mesh.geometry);
+  expect(getBvhBounds(prepared.geometries[0])[1][2]).toBe(0);
+  expect(prepared.instanceBindings[0].displacementScale).toBe(0);
+  expect(material.displacementMap).toBeDefined();
 });
 
 it('assigns material slots by identity and retains them after parameter edits', () => {

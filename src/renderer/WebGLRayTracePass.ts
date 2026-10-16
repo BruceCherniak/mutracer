@@ -547,7 +547,9 @@ class WebGLRayTracePass {
     this._pendingGeometryUpdates.clear();
     this._needsUpdateMeshData = false;
 
-    const res = updateMeshInstances(this._meshes);
+    // GLSL intersects the original triangles, so its BVH must bound those
+    // triangles rather than WebGPU's displaced height prisms.
+    const res = updateMeshInstances(this._meshes, { displacement: false });
     this._preparedMeshData = res;
     this._membershipCache.capture(res);
     this._pendingMembershipData = undefined;

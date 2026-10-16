@@ -7,7 +7,7 @@ import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import Texture from '../../src/scene/Texture';
 import { createCubeGeometry, createSphereGeometry } from '../../src/util/commonGeometry';
-import { getPreparedMeshGeometry, updateMeshInstances } from '../../src/renderer/prepareMeshBVH';
+import { getBvhBounds, getPreparedMeshGeometry, updateMeshInstances } from '../../src/renderer/prepareMeshBVH';
 import { prepareStaticBvhs } from '../../src/renderer/staticBvhPreparation';
 import * as worker from '../../src/renderer/bvhWorkerClient';
 import { executeBvhBuild } from '../../src/renderer/bvhWorkerBuild';
@@ -68,6 +68,27 @@ it('isolates invalid UV displacement without disabling Workers or retrying each 
   expect((r as any)._bvhWorkerUnavailable).toBe(false);
   expect((r as any)._needsBVHPreparation([bad])).toBe(false);
   expect(() => updateMeshInstances([bad])).toThrow('UV');
+});
+
+it('prepares a new UV height field after an ordinary tree has already been built', async () => {
+  const build = simulatedWorker();
+  const m = mesh(), r = renderer();
+  await prepareStats(r, [m]);
+  const ordinary = getGeometryBvh(m.geometry);
+  m.materials[0].displacementMap = new Texture({data: new Uint8Array(64).fill(255), width: 4, height: 4});
+  m.materials[0].displacementScale = .2;
+  expect((r as any)._needsBVHPreparation([m])).toBe(true);
+  expect((await prepareStats(r, [m])).geometryCount).toBe(1);
+  const target = getPreparedMeshGeometry(m);
+  expect(target).not.toBe(m.geometry);
+  expect(getGeometryBvh(target)).not.toBe(ordinary);
+  expect(getGeometryBvh(m.geometry)).toBe(ordinary);
+  expect(getBvhBounds(target)[1][1]).toBeGreaterThan(getBvhBounds(m.geometry)[1][1]);
+  m.materials[0].displacementScale = .4;
+  expect((await prepareStats(r, [m])).geometryCount).toBe(1);
+  expect(getPreparedMeshGeometry(m)).not.toBe(target);
+  expect(build).toHaveBeenCalledTimes(3);
+  r.dispose();
 });
 
 it('retries TinyBVH on the main thread when the Worker is unavailable', async () => {
