@@ -1,3 +1,4 @@
+import {specializeVectorCalls} from './vector-lowering.mjs';
 import {canonicalAttributes, lowerConcreteAccess} from './attribute-lowering.mjs';
 import {canonicalMatrixStorage, matrixNames, specializeMatrices} from './matrix-lowering.mjs';
 import {spawnSync} from 'node:child_process';
@@ -9,6 +10,7 @@ import ts from 'typescript';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 let staged, nativeMatrices = false;
 const snapshots = new Map();
+const loweredGraphs = new Set();
 const originals = new Map();
 // scriptc 0.3.2 cannot index numeric storage unions. Lower these two access
 // adapters only in generated compiler inputs, keeping Web hot loops branch-free.
@@ -74,7 +76,6 @@ function compilerSource() {
     const file = `src/math/${name}.ts`;
     writeFileSync(resolve(staged, file), lowerMath(readFileSync(resolve(staged, file), 'utf8'), name));
   }
-  if (nativeMatrices) lowerConcreteAccess(staged, 'native/render-core.ts');
   snapshots.set(nativeMatrices, staged);
   return staged;
 }
@@ -100,6 +101,7 @@ export function spawnCompiler(compiler, args, options = {}, matrixPrecision) {
   nativeMatrices = matrixPrecision ?? (resolve(root, entry ?? '') === resolve(root, 'native/render-core.ts'));
   staged = snapshots.get(nativeMatrices);
   const mapped = [...args];
+  let compiledEntry;
   for (let i = 1; i < args.length; i++) {
     if (args[i - 1] === '-o' || args[i - 1] === '--out') continue;
     if (args[i - 1] === '--profile') {
@@ -107,8 +109,13 @@ export function spawnCompiler(compiler, args, options = {}, matrixPrecision) {
       const entry = sourcePath(resolve(dirname(profile), spec.entry));
       const target = resolve(compilerSource(), 'profiles', String(originals.size) + '.json');
       mkdirSync(dirname(target), {recursive:true}); writeFileSync(target, JSON.stringify({...spec, entry}));
-      originals.set(target, profile); mapped[i] = target;
-    } else if (/\.tsx?$/.test(args[i]) && existsSync(resolve(root, args[i]))) mapped[i] = sourcePath(args[i]);
+      originals.set(target, profile); mapped[i] = target; compiledEntry = entry;
+    } else if (/\.tsx?$/.test(args[i]) && existsSync(resolve(root, args[i]))) compiledEntry = mapped[i] = sourcePath(args[i]);
+  }
+  if (nativeMatrices && compiledEntry && !loweredGraphs.has(compiledEntry)) {
+    specializeVectorCalls(staged, compiledEntry);
+    lowerConcreteAccess(staged, compiledEntry);
+    loweredGraphs.add(compiledEntry);
   }
   const result = spawnSync(compiler, mapped, options);
   result.nativeMatrixPrecision = nativeMatrices ? 64 : 32;

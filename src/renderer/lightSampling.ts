@@ -223,6 +223,14 @@ export function collectEmissiveTriangles(
   const cross = vec3.create();
 
   for (const { mesh, geometry, materialIndices } of bindings) {
+    // Emission is constant during this synchronous collection. Compute it once
+    // per local material table instead of allocating an RGB array per triangle.
+    const samplingLuminances: number[] = [];
+    for (let local = 0; local < Math.max(1, materialIndices.length); local++) {
+      const material = materials[materialIndices[local] ?? materialIndices[0] ?? 0];
+      samplingLuminances.push(!material || material.shadowCatcher || material.unlit
+        ? 0 : colorLuminance(materialEmission(material)));
+    }
     const matrix = new Array<number>(16).fill(0);
     for (let instance = 0; instance < meshInstanceCount(mesh); instance++) {
       meshInstanceTransform(mesh, instance, matrix);
@@ -233,10 +241,7 @@ export function collectEmissiveTriangles(
       for (let triangleOffset = 0; triangleOffset < attributeLength(indices); triangleOffset += 3) {
         const localMaterialIndex = dominantLocalMaterial(geometry, triangleOffset, materialIndices.length);
         const materialIndex = materialIndices[localMaterialIndex] ?? materialIndices[0] ?? 0;
-        const material = materials[materialIndex];
-        if (!material || material.shadowCatcher || material.unlit) continue;
-        const samplingLuminance =
-          colorLuminance(materialEmission(material));
+        const samplingLuminance = samplingLuminances[localMaterialIndex];
         if (!(samplingLuminance > 1e-8)) continue;
 
         const triangleIndices = [

@@ -14,6 +14,8 @@ export function canonicalAttributes(stage) {
   if (!/^type IndexAttribute = .*;$/m.test(source)) throw new Error('Review native index attribute layout');
   writeFileSync(path, source.replace(/^type IndexAttribute = .*;$/m, 'type IndexAttribute = Attribute<Uint32Array>;'));
   replace('native/scene-core.ts', 'sourceIndices instanceof Uint32Array ? sourceIndices : new Uint32Array(sourceIndices)', 'sourceIndices');
+  // Raw native emissive vertices are always produced by vec3.clone (Float32).
+  for (const name of ['p0', 'p1', 'p2']) replace('src/renderer/lightSampling.ts', `${name}: vec3.Vec3Array;`, `${name}: Float32Array;`);
   replace('src/renderer/geometryUpdates.ts', 'if (array instanceof Uint16Array) array[index] = value;\n  else array[index] = value;', 'array[index] = value;');
 
   // Generate concrete packers from the one shared loop. The caller's attribute

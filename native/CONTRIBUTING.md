@@ -488,3 +488,13 @@ TinyBVH backend. Drain GPU work before stopping render timers, measure first and
 warm runs separately, and read images outside render timing. Keep shader caches
 and adapter differences explicit. Browser JS heap and native process peak RSS
 are different memory metrics and must not be reported as a memory speedup.
+
+Closed native vector calls use `vector-lowering.mjs` to clone the shared AST with
+concrete Float32/Float64 parameter storage before direct-access lowering. Mixed
+precision and aliasing retain the source arithmetic/order; open unions, ordinary
+arrays and callbacks keep the generic implementation. Do not assume every call
+is concrete. Run `node native/vector-verify.mjs` and `node native/matrix-verify.mjs`
+with the pinned compiler before comparing full/partial GPU outputs. Their C
+consumers compare against upstream gl-matrix, including shared storage aliases,
+zero vectors and the generic fallback. Performance runs must alternate old/new
+order and keep unrelated builds/GPU work out of the timed interval.
