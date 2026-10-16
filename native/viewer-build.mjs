@@ -16,6 +16,7 @@ function run(command,args){const r=(command===compiler?spawnCompiler:spawnSync)(
 const version=spawnCompiler(compiler,['--version'],{encoding:'utf8'});if(version.status!==0||version.stdout.trim()!=='0.3.2')throw new Error('Set MUTRACER_SCRIPTC to scriptc 0.3.2.');
 const coverage=spawnCompiler(compiler,['coverage','native/render-core.ts','--print','diagnostics','--fail-on','blockers'],{cwd:root,encoding:'utf8',maxBuffer:32*1024*1024});
 writeFileSync(resolve(out,'coverage.json'),coverage.stdout??'');
+if(coverage.nativeMatrixPrecision!==64)throw new Error('Native viewer requires Float64 CPU matrix storage.');
 if(coverage.error||!summarizeCoverage(JSON.parse(coverage.stdout),coverage.status).passed)throw new Error('AOT compilation graph failed; see coverage.json.');
 run(compiler,['build','--lib','--profile','native/render-core-profile.json','-o',env.MUTRACER_AOT_ARCHIVE]);
 run('cargo',['build','--release','--locked','--manifest-path','native/viewer/Cargo.toml']);

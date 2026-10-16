@@ -60,6 +60,8 @@ Reset clears sampling while keeping the committed scene. Contexts have independe
 accumulation, with at most eight contexts on one owner thread. Commits can
 briefly hold old and new scene resources together. The header specifies lifetime,
 thread binding, byte lengths, error behavior and remaining limits.
+Transform inputs and GPU matrices use Float32; CPU matrix calculations keep
+Float64 intermediates. Input and GPU precision still limit large coordinates.
 
 For camera edits, `mt_context_update_camera` accepts the same 128-byte `Camera[32]`
 record from the scene descriptor. It retains geometry, textures and the pipeline,

@@ -1,3 +1,4 @@
+import {canonicalMatrixStorage, matrixNames, specializeMatrices} from './matrix-lowering.mjs';
 import {spawnSync} from 'node:child_process';
 import {cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync} from 'node:fs';
 import {dirname, relative, resolve} from 'node:path';
@@ -5,7 +6,8 @@ import {fileURLToPath} from 'node:url';
 import ts from 'typescript';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
-let staged;
+let staged, nativeMatrices = false;
+const snapshots = new Map();
 const originals = new Map();
 // scriptc 0.3.2 cannot index numeric storage unions. Lower these two access
 // adapters only in generated compiler inputs, keeping Web hot loops branch-free.
@@ -30,20 +32,28 @@ function narrowAccess(source, constructors) {
 }
 // Math source keeps the original direct indexing. Generate the compiler's
 // equivalent accesses without copying or maintaining another math implementation.
-function lowerMath(source) {
+function lowerMath(source, module) {
+  if (nativeMatrices) source = specializeMatrices(source, module);
   const file = ts.createSourceFile('math.ts', source, ts.ScriptTarget.Latest, true);
   const f = ts.factory, used = new Set();
+  let direct = new Set();
   const transformed = ts.transform(file, [context => node => ts.visitNode(node, function visit(node) {
+    if (ts.isFunctionDeclaration(node) && node.body) {
+      const previous = direct; direct = nativeMatrices ? matrixNames(module, node.name.text) : new Set();
+      const result = ts.visitEachChild(node, visit, context); direct = previous; return result;
+    }
+    const concrete = expression => ts.isIdentifier(expression) && direct.has(expression.text);
     const call = (name, args) => {used.add(name); return f.createCallExpression(f.createIdentifier(name), undefined, args);};
     if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken && ts.isElementAccessExpression(node.left)) {
+      if (concrete(node.left.expression)) return ts.visitEachChild(node, visit, context);
       return call('write', [ts.visitNode(node.left.expression, visit), ts.visitNode(node.left.argumentExpression, visit), ts.visitNode(node.right, visit)]);
     }
-    if (ts.isElementAccessExpression(node)) return call('read', [ts.visitNode(node.expression, visit), ts.visitNode(node.argumentExpression, visit)]);
-    if (ts.isPropertyAccessExpression(node) && node.name.text === 'length') return call('size', [ts.visitNode(node.expression, visit)]);
+    if (ts.isElementAccessExpression(node) && !concrete(node.expression)) return call('read', [ts.visitNode(node.expression, visit), ts.visitNode(node.argumentExpression, visit)]);
+    if (ts.isPropertyAccessExpression(node) && node.name.text === 'length' && !concrete(node.expression)) return call('size', [ts.visitNode(node.expression, visit)]);
     return ts.visitEachChild(node, visit, context);
   })]);
   const result = ts.createPrinter().printFile(transformed.transformed[0]); transformed.dispose();
-  return `import {${[...used].join(', ')}} from './access.js';\n` + result;
+  return (used.size ? `import {${[...used].join(', ')}} from './access.js';\n` : '') + result;
 }
 function compilerSource() {
   if (staged) return staged;
@@ -58,10 +68,12 @@ function compilerSource() {
     ['src/scene/attributeData.ts', ['Float32Array', 'Uint16Array', 'Uint32Array']]]) {
     writeFileSync(resolve(staged, file), narrowAccess(readFileSync(resolve(root, file), 'utf8'), types));
   }
+  if (nativeMatrices) canonicalMatrixStorage(staged);
   for (const name of ['mat3', 'mat4', 'vec2', 'vec3']) {
     const file = `src/math/${name}.ts`;
-    writeFileSync(resolve(staged, file), lowerMath(readFileSync(resolve(root, file), 'utf8')));
+    writeFileSync(resolve(staged, file), lowerMath(readFileSync(resolve(staged, file), 'utf8'), name));
   }
+  snapshots.set(nativeMatrices, staged);
   return staged;
 }
 function sourcePath(path) {
@@ -75,8 +87,16 @@ function sourcePath(path) {
   originals.set(target, absolute);
   return target;
 }
-export function spawnCompiler(compiler, args, options = {}) {
+export function spawnCompiler(compiler, args, options = {}, matrixPrecision) {
   if (!['build', 'coverage'].includes(args[0])) return spawnSync(compiler, args, options);
+  const profileAt = args.indexOf('--profile');
+  let entry = args[1];
+  if (profileAt >= 0) {
+    const profile = resolve(root, args[profileAt + 1]);
+    entry = resolve(dirname(profile), JSON.parse(readFileSync(profile, 'utf8')).entry);
+  }
+  nativeMatrices = matrixPrecision ?? (resolve(root, entry ?? '') === resolve(root, 'native/render-core.ts'));
+  staged = snapshots.get(nativeMatrices);
   const mapped = [...args];
   for (let i = 1; i < args.length; i++) {
     if (args[i - 1] === '-o' || args[i - 1] === '--out') continue;
@@ -89,6 +109,8 @@ export function spawnCompiler(compiler, args, options = {}) {
     } else if (/\.tsx?$/.test(args[i]) && existsSync(resolve(root, args[i]))) mapped[i] = sourcePath(args[i]);
   }
   const result = spawnSync(compiler, mapped, options);
+  result.nativeMatrixPrecision = nativeMatrices ? 64 : 32;
+  result.nativeSourceRoot = staged;
   for (const field of ['stdout', 'stderr']) if (typeof result[field] === 'string') {
     for (const [generated, original] of originals) result[field] = result[field].replaceAll(generated, original);
     result[field] = result[field].replaceAll(staged + '/', root + '/');

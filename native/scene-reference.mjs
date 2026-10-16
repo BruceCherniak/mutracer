@@ -100,7 +100,7 @@ export async function referenceScene(bytes, sourceRoot) {
     if (!pass.isPipelineReady())
         throw pass.getPipelineError() ?? new Error('Reference pipeline not ready');
     pass.createPass(device.createCommandEncoder(), true, [1, 1]);
-    return { device, pass };
+    return { device, pass, camera };
 }
 export function textureBytes(texture) {
     const bpp = { rgba8unorm: 4, rgba16float: 8, rgba32float: 16, r32float: 4, rg32float: 8 }[texture.format];

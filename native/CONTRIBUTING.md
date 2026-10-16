@@ -316,15 +316,22 @@ OIDN string/URL coercion and extract camera packing without changing its layout.
 The internal math functions are vendored from gl-matrix 3.4.4 with MIT attribution
 and original numeric operation order. Runtime code has no gl-matrix import; the
 package remains a devDependency for independent comparison tests and examples.
-Creators currently use Float32Array; ordinary arrays and Float64 scratch storage
+Web creators use Float32Array; ordinary arrays and Float64 scratch storage
 are also accepted. Web math and attribute helpers index storage directly.
 Native build/check scripts use `spawnCompiler` from `native/compiler.mjs`: it
 copies the same TS sources into `.native-build/compiler-*`, lowers math indexing
 to the two numeric access adapters and inserts explicit storage narrowing there
 for scriptc0.3.2. Mathematical/geometry algorithms are not duplicated. Do not edit
 generated sources. Keep native byte-contract and Web performance checks when
-changing this lowering; native-only Float64 transform normalization remains
-separate work. Geometry keeps supplied attribute objects/arrays by identity,
+changing this lowering. The raw render-core target uses `matrix-lowering.mjs`
+to normalize CPU matrices and instance storage to Float64 and specialize shared
+matrix parameters for direct indexing; module/Web contract probes retain their
+original storage. GPU packing remains Float32. Metadata/constructor edits must
+fail closed when the source contract changes. Run `node native/matrix-verify.mjs`
+with the configured compiler for independent Float64 matrix/vector/storage checks.
+Raw camera comparisons use upstream Float64 math; original browser captures keep
+their own precision so cross-backend differences remain visible. Geometry keeps
+supplied attribute objects/arrays by identity,
 including union-typed Uint16/Uint32 index attributes.
 
 The viewer importer expands Meshopt, quantized float attributes and WebP before

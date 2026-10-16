@@ -1,3 +1,4 @@
+import {mat4 as referenceMat4} from 'gl-matrix';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
@@ -30,7 +31,7 @@ async function verifyScene(input, directory, variant, capture = true) {
         const first = packet.findIndex((v, i) => v !== expected[i]);
         throw new Error(`Native/JS packet ${variant} differs at byte ${first}; ${packet.length}/${expected.length}`);
     }
-    const { pass, device } = await referenceScene(input, source);
+    const { pass, device, camera } = await referenceScene(input, source);
     const header = new Uint32Array(packet.buffer, packet.byteOffset, packet.byteLength / 4);
     const records = new Map();
     for (let i = 0; i < header[1]; i++) {
@@ -41,14 +42,24 @@ async function verifyScene(input, directory, variant, capture = true) {
     const resources = [];
     for (const [id, group, binding] of mappings) {
         const resource = pass._rayTraceBindGroups[group].descriptor.entries.find(e => e.binding === binding).resource;
-        const reference = resource.buffer ? resource.buffer.data : textureBytes(resource.texture);
+        let reference = resource.buffer ? resource.buffer.data : textureBytes(resource.texture);
+        if (id === 6) {
+            // Native preserves double intermediates until GPU packing; compare
+            // against upstream gl-matrix rather than its own AOT implementation.
+            // The independent browser capture below keeps its original precision.
+            const matrix = new Float64Array(16);
+            referenceMat4.invert(matrix, camera.getProjectionMatrix(header[2] / header[3]));
+            referenceMat4.multiply(matrix, camera.transform, matrix);
+            const cameraBlock = new Float32Array(Uint8Array.from(reference).buffer);
+            cameraBlock.set(matrix); reference = new Uint8Array(cameraBlock.buffer);
+        }
         const native = records.get(id);
         if (!Buffer.from(reference).equals(native)) {
             writeFileSync(resolve(directory, `reference-${id}.bin`), reference);
             const first = native.findIndex((v, i) => v !== reference[i]);
             throw new Error(`Browser resource ${variant}/${id} differs at ${first}; ${native.length}/${reference.length}`);
         }
-        resources.push({ id, bytes: native.length, byteIdentical: true });
+        resources.push({ id, bytes: native.length, byteIdentical: true, reference: id === 6 ? 'independent Float64 camera' : 'browser' });
     }
     const shader = device.resources.findLast(r => r.kind === 'pipeline').descriptor.compute.module.descriptor.code;
     if (!records.get(30).equals(Buffer.from(shader))) {
@@ -71,7 +82,7 @@ async function verifyScene(input, directory, variant, capture = true) {
 for (const variant of process.argv.slice(2).length ? process.argv.slice(2) : ['baseline', 'textures', 'transforms', 'orthographic', 'emissive', 'missing-normals', 'float-textures', 'sphere-light', 'directional-light', 'spot-light', 'alpha', 'v2-environment', 'v2-environment-only', 'v2-background', 'v2-hidden-background', 'v2-film', 'v2-medium', 'v2-alpha', 'v2-bevel', 'v2-vertices', 'v2-multimaterial', 'v2-instances', 'v2-empty-batch', 'v3-displacement-uv', 'v3-displacement-triplanar', 'v3-displacement-spherical', 'v3-displacement-cylindrical', 'v3-displacement-negative', 'v3-displacement-bytes', 'v3-displacement-zero', 'v3-ies', 'v3-ies-shared', 'v3-rect-texture']) {
     const directory = resolve(out, variant === 'baseline' ? 'image' : variant);
     results.push(await verifyScene(readFileSync(resolve(directory, 'scene-input.bin')), directory, variant));
-    console.log(`${variant}: native/JS packet and all browser resources/full WGSL exact`);
+    console.log(`${variant}: native/JS packet, browser scene resources, independent Float64 camera and full WGSL exact`);
 }
 const properties = JSON.parse(readFileSync(resolve(root, 'native/material-properties.json'), 'utf8'));
 const { openPbrSchema } = await import(pathToFileURL(resolve(source, 'src/scene/openPbrSchema.js')).href);
@@ -99,4 +110,4 @@ for (const field of properties.filter(p => p.supported)) {
     propertyResults.push(await verifyScene(input, resolve(out, 'properties', field.key), field.key, false));
 }
 writeFileSync(resolve(out, 'scene-verification.json'), JSON.stringify({complete:true, results, propertyResults}, null, 2) + '\n');
-console.log(`${propertyResults.length} material properties: native/JS packet and browser preparation exact`);
+console.log(`${propertyResults.length} material properties: native/JS packet, browser material resources and independent Float64 camera exact`);
