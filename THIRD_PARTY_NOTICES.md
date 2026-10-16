@@ -23,8 +23,10 @@ Copyright (c) 2025 The gfx-rs developers. MIT License
 ## Native Open Image Denoise runtime
 
 The optional native viewer bundles [Open Image Denoise 2.5.1](https://github.com/RenderKit/oidn/releases/tag/v2.5.1)
-under the Apache License 2.0, including its model weights and native runtime
-dependencies. Copyright 2018 Intel Corporation.
+under the Apache License 2.0, including its regular/small model weights and
+native runtime dependencies. MuTracer rebuilds its core/API from the fixed
+2.5.1 source with three optional large weight sets omitted; CPU/Metal modules
+remain from the matching official SDK. Copyright 2018 Intel Corporation.
 The [license](./LICENSES/Apache-2.0.txt) and upstream bundled dependency notices
 ([OIDN](./LICENSES/OIDN-third-party-programs.txt),
 [oneTBB](./LICENSES/OIDN-third-party-programs-oneTBB.txt),

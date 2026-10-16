@@ -1,6 +1,21 @@
 //! Validated raw scene boundary. Only returned AOT bytes are retained by Rust.
 use super::*;
 unsafe extern "C" {
+    fn mt_core_scene_retained(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
+    fn mt_core_scene_release(token: u32, output: *mut *const u8, size: *mut usize);
+    fn mt_core_scene_material(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
     fn mt_core_scene(input: *const u8, length: usize, output: *mut *const u8, size: *mut usize);
     fn mt_core_scene_camera(
         input: *const u8,
@@ -468,17 +483,121 @@ fn binding(binding: u32, kind: &str, id: usize) -> Binding {
     }
 }
 
+// RAII lifetime matches the committed native scene, including failed candidates.
+// Every AOT arena reset/collection leaves these explicitly rooted TS objects alive.
+pub(super) struct PreparedState {
+    token: u32,
+    material_count: usize,
+}
+impl Drop for PreparedState {
+    fn drop(&mut self) {
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            init_core();
+            mt_core_scene_release(self.token, &mut pointer, &mut size);
+            mt_core_reset();
+            mt_core_collect();
+        }
+    }
+}
+impl PreparedState {
+    pub(super) fn material(&self, bytes: &[u8]) -> Result<Vec<u8>> {
+        if bytes.len() != 48 {
+            return Err("Material descriptor must contain exactly 48 bytes".into());
+        }
+        let w = Words(bytes);
+        if w.u(0) != 1
+            || w.u(1) >= self.material_count
+            || w.u(2) != 0
+            || w.u(3) != 0
+            || w.u(11) != 0
+        {
+            return Err("Invalid material descriptor version/index/reserved fields".into());
+        }
+        w.finite(4, 7)?;
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            mt_core_scene_material(
+                bytes.as_ptr(),
+                bytes.len(),
+                self.token,
+                &mut pointer,
+                &mut size,
+            );
+        }
+        if pointer.is_null() || size < 16 || size > 64 * 1024 * 1024 {
+            return Err("Invalid AOT material command".into());
+        }
+        let packet = unsafe {
+            let result = copy_core_result(pointer, size, size);
+            mt_core_reset();
+            mt_core_collect();
+            result?
+        };
+        let w = Words(&packet);
+        if w.u(0) == 2 {
+            let reason = match w.u(1) {
+                1 => "Native retained material state is unavailable",
+                2 => "Invalid source material reference",
+                3 => "Full scene commit required: unused material",
+                4 => "Full scene commit required: unlit material affects emission",
+                5 => "Full scene commit required: medium shader feature changed",
+                _ => "Invalid AOT material rejection",
+            };
+            return Err(reason.into());
+        }
+        if w.u(0) != 1
+            || w.u(1) != packet.len() - 16
+            || w.u(2) != 0
+            || w.u(3) != 0
+            || packet.len() % 4 != 0
+        {
+            return Err("Invalid AOT material payload".into());
+        }
+        w.finite(4, w.len() - 4)?;
+        Ok(packet[16..].to_vec())
+    }
+}
+pub(super) fn prepare_retained(
+    bytes: &[u8],
+) -> Result<(Scene, HashMap<String, Vec<u8>>, PreparedState)> {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    let token = NEXT
+        .fetch_update(
+            std::sync::atomic::Ordering::Relaxed,
+            std::sync::atomic::Ordering::Relaxed,
+            |v| v.checked_add(1),
+        )
+        .map_err(|_| "Native preparation token space exhausted")?;
+    let state = PreparedState {
+        token,
+        material_count: if bytes.len() >= 28 {
+            Words(bytes).u(6)
+        } else {
+            0
+        },
+    };
+    let (scene, assets) = prepare_impl(bytes, token)?;
+    Ok((scene, assets, state))
+}
 pub(super) fn prepare(bytes: &[u8]) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
+    prepare_impl(bytes, 0)
+}
+fn prepare_impl(bytes: &[u8], token: u32) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
     validate(bytes)?;
     // The ABI bytes are borrowed only during this call; the AOT decoder copies
     // every retained array. Copy result bytes before reset or collection.
-    unsafe {
-        mt_core_init();
-    }
+    init_core();
     let mut pointer = std::ptr::null();
     let mut size = 0;
     unsafe {
-        mt_core_scene(bytes.as_ptr(), bytes.len(), &mut pointer, &mut size);
+        if token == 0 {
+            mt_core_scene(bytes.as_ptr(), bytes.len(), &mut pointer, &mut size);
+        } else {
+            mt_core_scene_retained(bytes.as_ptr(), bytes.len(), token, &mut pointer, &mut size);
+        }
     }
     if pointer.is_null() || size < 16 || size > MAX_PREPARED_BYTES {
         return Err("Invalid native scene command".into());
@@ -696,9 +815,7 @@ mod tests {
     fn camera_rejects_finite_inputs_with_nonfinite_packing_and_recovers() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let _entry = ENTRY_LOCK.lock().unwrap();
-        unsafe {
-            mt_core_init();
-        }
+        init_core();
         let scene = input();
         let camera = &scene[88 * 4..120 * 4];
         let expected = prepare_camera(camera, 8, 8).unwrap();

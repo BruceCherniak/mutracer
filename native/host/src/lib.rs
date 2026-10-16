@@ -49,6 +49,12 @@ unsafe extern "C" {
     );
     fn mt_core_sampling(input: *const u8, length: usize, output: *mut *const u8, size: *mut usize);
 }
+// scriptc init initializes module globals on every invocation. Initialize once
+// so a later GPU upload/context cannot erase another scene's rooted TS state.
+fn init_core() {
+    static INITIALIZED: std::sync::Once = std::sync::Once::new();
+    INITIALIZED.call_once(|| unsafe { mt_core_init() });
+}
 // scriptc state is confined to one dedicated owner for this initial probe.
 // No worker thread calls into it; the mutex also rejects overlapping C entry.
 static ENTRY_LOCK: Mutex<()> = Mutex::new(());
@@ -365,6 +371,7 @@ impl GpuDevice {
     }
 }
 struct GpuScene {
+    retained: Option<scene::PreparedState>,
     gpu: GpuDevice,
     scene: Scene,
     buffers: HashMap<usize, wgpu::Buffer>,
@@ -429,9 +436,7 @@ impl GpuScene {
         }
         let device = &gpu.device;
         let queue = &gpu.queue;
-        unsafe {
-            mt_core_init();
-        }
+        init_core();
         let native_bvh = scene
             .native_bvh
             .as_ref()
@@ -747,6 +752,7 @@ impl GpuScene {
             })
             .collect();
         Ok(Self {
+            retained: None,
             gpu,
             scene,
             buffers,
@@ -856,6 +862,18 @@ impl GpuScene {
         })?;
         self.samples = 0;
         Ok(())
+    }
+    fn update_material(&mut self, packed: &[u8]) -> Result<()> {
+        let buffer = self
+            .scene
+            .material_buffer
+            .and_then(|id| self.buffers.get(&id))
+            .ok_or("Missing raw material buffer")?;
+        if buffer.size() != packed.len() as u64 {
+            return Err("Material buffer size mismatch".into());
+        }
+        self.gpu.queue.write_buffer(buffer, 0, packed);
+        self.reset_raw()
     }
     fn update_camera(&mut self, packed: &[u8]) -> Result<()> {
         let buffer = self

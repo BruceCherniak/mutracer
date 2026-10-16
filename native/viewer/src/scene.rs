@@ -31,6 +31,28 @@ pub struct Material {
     pub normal_scale: f32,
     pub unlit: bool,
 }
+impl Material {
+    pub fn update_bytes(&self, index: usize) -> Vec<u8> {
+        let mut words = vec![0u32; 12];
+        words[0] = 1;
+        words[1] = index as u32;
+        for (k, v) in [
+            self.color[0],
+            self.color[1],
+            self.color[2],
+            self.roughness,
+            self.metalness,
+            self.transmission,
+            self.ior,
+        ]
+        .iter()
+        .enumerate()
+        {
+            words[4 + k] = v.to_bits();
+        }
+        words.into_iter().flat_map(u32::to_le_bytes).collect()
+    }
+}
 pub struct Geometry {
     pub min: Vec3,
     pub max: Vec3,

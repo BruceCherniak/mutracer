@@ -35,8 +35,8 @@ pause/resume/restart, change resolution and exposure, and export PNG. Headless
 smoke alone does not validate window input or file dialogs. Record any OS lock
 or permission block without marking the interactive gate complete. The supplied
 procedural GLB is original project geometry under the repository MIT license.
-The build bundles the official pinned OIDN runtime/weights and upstream license
-notices. `MUTRACER_OIDN_ROOT` can select an extracted SDK; direct Cargo executable
+The build rebuilds OIDN2.5.1 core/API without the three large weight blobs and
+bundles the ABI-matched official CPU/Metal modules and upstream license notices. `MUTRACER_OIDN_ROOT` can select an extracted SDK; direct Cargo executable
 runs can set `MUTRACER_OIDN_LIBRARY` to its main dynamic library. The package helper
 copies and signs libraries atomically so rebuilding does not truncate loaded code.
 
@@ -336,3 +336,23 @@ local models for compatibility checks; do not add those assets to the repository
 `--interaction-smoke DIRECTORY` includes native dropped-file events, retained
 previews and invalid-drop recovery. Model decoding runs off the renderer owner
 thread; native scene commits still run on the owner thread.
+
+## Partial material validation
+
+`[MODEL] --material-smoke DIRECTORY` compares basic material changes with full
+commits, including exact HDR/normal/albedo, invalid-input and active-job rejection
+and restoration. `--interaction-smoke` also combines held material edits with
+camera input and compares the final accumulation to a full commit.
+The native context owns an opaque AOT preparation token; retained TS MaterialData
+reuses the existing repack/layout. Release tokens when candidates fail or scenes
+are replaced/destroyed, and collect only after copying result bytes.
+Initialize the scriptc module once: calling its init export again reinitializes
+module globals and erases other contexts' rooted preparation state.
+
+`viewer-oidn-core.mjs` pins OIDN source and weight commits, verifies source/hash
+metadata, excludes the three `_large` blobs and inspects built symbols. It needs
+CMake and the system make/compiler; SDK device modules avoid ISPC/TBB build
+dependencies. Rebuilt core/API and official modules must be from the same version.
+Check both Metal and forced CPU inference after any upstream change, compare
+RGBA32F against prior output, and test a relocated package with no build-tree
+loader paths. No source SDKs, weights or binaries enter the repository.

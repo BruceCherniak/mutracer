@@ -6,10 +6,12 @@ JavaScript engine, Node installation or prepared GPU capture at runtime.
 
 ## Build and open
 
-Install Rust, Xcode Command Line Tools, project npm dependencies and scriptc
-**0.3.2**, then run from the repository root. The first build downloads the
-pinned native OIDN SDK (about 49 MiB); the resulting app includes its runtime
-and model weights, adding about 50 MiB to the app. It needs no download when opened:
+Install Rust, CMake, Xcode Command Line Tools, project npm dependencies and
+scriptc **0.3.2**, then run from the repository root. The first build downloads
+the native OIDN SDK (about 49 MiB), its source and regular model weights
+(about 29 MiB more). The app includes regular/small models and omits the three
+large weight sets. Native denoising adds about 28 MiB to the app and needs no
+download when opened:
 
 ```sh
 export MUTRACER_SCRIPTC=/absolute/path/to/node_modules/.bin/scriptc
@@ -57,9 +59,11 @@ are unverified.
 
 Camera changes restart accumulation while retaining the scene. The previous
 image remains visible until a newer preview arrives, including while dragging.
-Material, environment and resolution edits rebuild the scene and restart
-accumulation; these updates can pause interaction briefly. Slider changes are
-combined at roughly 120 ms intervals while held, then applied when released.
+Basic color, roughness, metalness and transmission edits retain the scene's
+geometry and textures and restart accumulation. Changes that affect shader
+features, unlit materials, environment and resolution still rebuild the scene;
+these updates can pause interaction briefly. Full rebuilds are combined at
+roughly 120 ms intervals while held, then applied when released.
 Exposure and denoising change only the displayed image, preserving the original
 HDR accumulation. Denoising does not block window interaction; a result for an
 older scene, camera or sample count cannot replace the current preview.

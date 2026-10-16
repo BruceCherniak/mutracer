@@ -24,6 +24,7 @@ import { getGeometryBvh, setGeometryBvh } from '../src/renderer/geometryBvh.js';
 import { generateVertexTangents } from '../src/util/geometry.js';
 import { packVertexAttributes } from '../src/renderer/geometryUpdates.js';
 import MaterialData from '../src/renderer/MaterialData.js';
+import { materialUsesMedium } from '../src/renderer/materialParams.js';
 import { writeRawAtlasPlacement } from '../src/renderer/textureAtlasPixels.js';
 import { wgpuMaterialConstants } from '../src/renderer/wgpuMaterialConstants.js';
 import { wgpuSceneFeatureFlags } from '../src/renderer/WGPUSceneFeatures.js';
@@ -32,6 +33,44 @@ import { makeRayTraceUniform, packWgpuAnalyticLights, WGPU_SCENE_BUFFER_MIN_BYTE
 import { zSobolLog2SPP } from '../src/renderer/sampling.js';
 import { getOpenPbrEnergyLutData, OPENPBR_ENERGY_LUT_WIDTH, OPENPBR_ENERGY_LUT_HEIGHT } from '../src/renderer/openPbrEnergyLut.js';
 
+// Root only material preparation, not merged geometry or GPU resources. A full
+// context commit owns the token; raw/replay probes remain stateless.
+const retainedMaterials = new Map<number, {source: MaterialState[]; ordered: MaterialState[]; table: MaterialData}>();
+export function retainedSceneParameters(bytes: Uint8Array, token: number): Uint8Array {
+  try { return buildSceneParameters(bytes, token); }
+  catch { retainedMaterials.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer); }
+}
+export function releaseSceneParameters(token: number): Uint8Array {
+  retainedMaterials.delete(token);
+  return new Uint8Array(16);
+}
+// Version 1: source material index and seven scalar parameters. Maps, emission,
+// geometry and compile-time feature changes require a full commit instead.
+export function sceneMaterialParameters(bytes: Uint8Array, token: number): Uint8Array {
+  const state = retainedMaterials.get(token);
+  const u = new Uint32Array(bytes.buffer, bytes.byteOffset, 12);
+  const f = new Float32Array(bytes.buffer, bytes.byteOffset, 12);
+  const m = state?.source[u[1]];
+  if (!state || !m || !state.ordered.includes(m) || m.unlit) return new Uint8Array(new Uint32Array([2, !state ? 1 : !m ? 2 : !state.ordered.includes(m) ? 3 : 4, 0, 0]).buffer);
+  const color = m.baseColor, roughness = m.specularRoughness, metalness = m.baseMetalness;
+  const transmission = m.transmissionWeight, ior = m.specularIor, medium = materialUsesMedium(m);
+  m.baseColor = [f[4], f[5], f[6]]; m.specularRoughness = f[7]; m.baseMetalness = f[8];
+  m.transmissionWeight = f[9]; m.specularIor = f[10];
+  if (materialUsesMedium(m) !== medium) {
+    m.baseColor = color; m.specularRoughness = roughness; m.baseMetalness = metalness;
+    m.transmissionWeight = transmission; m.specularIor = ior;
+    return new Uint8Array(new Uint32Array([2, 5, 0, 0]).buffer);
+  }
+  // Same repacking and layout used by browser MaterialTable updates. Texture
+  // indices and atlas mapping remain in the retained MaterialData object.
+  state.table.repackParams(state.ordered);
+  const packed = state.table.getBufferArray();
+  const result = new Uint8Array(16 + packed.byteLength);
+  new Uint32Array(result.buffer).set([1, packed.byteLength, 0, 0]);
+  result.set(new Uint8Array(packed.buffer), 16);
+  return result;
+}
+
 // Versioned experimental wire protocol. The Rust boundary validates every span,
 // reference, numeric range and resource budget before entering this trusted core.
 // All offsets/counts below are uint32 words; float payloads are IEEE f32.
@@ -39,7 +78,7 @@ export function sceneParameters(bytes: Uint8Array): Uint8Array {
   try { return buildSceneParameters(bytes); }
   catch { return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer); }
 }
-function buildSceneParameters(bytes: Uint8Array): Uint8Array {
+function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
   const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
   const width = u[2], height = u[3];
@@ -284,6 +323,7 @@ function buildSceneParameters(bytes: Uint8Array): Uint8Array {
     records[i][7] = offset; header.set(records[i], 4 + i * 8);
     result.set(parts[i], offset); offset += Math.ceil(parts[i].length / 4) * 4;
   }
+  if (token) retainedMaterials.set(token, {source: materials, ordered: prepared.materials, table});
   return result;
 }
 

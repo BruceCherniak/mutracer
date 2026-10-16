@@ -34,7 +34,7 @@ extern "C" {
  * pixels=NULL,size=0 queries required size without reading GPU data. written is
  * required; a short destination returns an error and required size without
  * changing destination or scene. A successful read copies the whole image.
- * No file output or Node/JS process is involved. HWRT/denoising are pending.
+ * No file output or Node/JS process is involved. Native C denoising is pending.
  */
 typedef uint64_t mt_context;
 typedef struct mt_context_info_v1 {
@@ -74,6 +74,20 @@ int32_t mt_context_reset(mt_context handle, char *error, size_t capacity);
  */
 int32_t mt_context_update_camera(mt_context handle, const uint8_t *input, size_t length,
   char *error, size_t capacity);
+/* Update one original descriptor material, retaining geometry, textures,
+ * acceleration structures and pipeline. Exactly 48 bytes / 12 uint32 words:
+ * version=1, source_material_index, reserved[2]=0,
+ * base_color[3], roughness, metalness, transmission, ior (f32), reserved=0.
+ * All float inputs must be finite. Texture bindings and emission stay unchanged.
+ * Unsupported unlit/unused materials or medium-feature changes return an error
+ * beginning "Full scene commit required:"; submit a full descriptor instead.
+ * Successful calls reset samples and expire the last job, even for identical
+ * values. Rejects active jobs and failed scenes. Validation rejection preserves
+ * parameters/samples/job; GPU execution failure marks the scene failed.
+ * Full commits can temporarily hold old/new CPU material and GPU scene data.
+ */
+int32_t mt_context_update_material(mt_context handle, const uint8_t *input, size_t length,
+  char *error, size_t capacity);
 int32_t mt_context_info(mt_context handle, mt_context_info_v1 *info, char *error, size_t capacity);
 int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, size_t size,
   size_t *written, char *error, size_t capacity);
@@ -86,7 +100,7 @@ int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, s
  *
  * requested/submitted/completed counts are additional samples, excluding base.
  * Context info counts only completed samples. Active jobs reject blocking render,
- * reset, commit, update_camera, read_pixels and destroy. Cancel is idempotent:
+ * reset, commit, update_camera, update_material, read_pixels and destroy. Cancel is idempotent:
  * queued work stops immediately; in-flight work finishes, then poll reaches
  * cancelled or complete.
  * Submitted batches cannot be interrupted. Completed samples remain accumulated;
@@ -95,7 +109,7 @@ int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, s
  * be destroyed or replaced by commit. Device-loss recovery remains unavailable.
  *
  * A job handle expires on the next submit, blocking render, successful reset/
- * commit/camera update, or context destruction. Validation-rejected calls retain
+ * commit/camera/material update, or context destruction. Validation-rejected calls retain
  * the job.
  * Handles are never reused. Save any terminal info before starting another job.
  */

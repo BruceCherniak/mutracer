@@ -73,6 +73,16 @@ impl Renderer {
             native::mt_context_commit(self.handle, bytes.as_ptr(), bytes.len(), e, n)
         })
     }
+    /// False requests a full commit for an unsupported feature change.
+    pub fn material(&mut self, bytes: &[u8]) -> Result<bool> {
+        match check(|e, n| unsafe {
+            native::mt_context_update_material(self.handle, bytes.as_ptr(), bytes.len(), e, n)
+        }) {
+            Ok(()) => Ok(true),
+            Err(error) if error.to_string().starts_with("Full scene commit required:") => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
     pub fn camera(&mut self, bytes: &[u8]) -> Result<()> {
         check(|e, n| unsafe {
             native::mt_context_update_camera(self.handle, bytes.as_ptr(), bytes.len(), e, n)

@@ -15,7 +15,11 @@
     {
       "export": "sceneCameraParameters",
       "symbol": "mt_core_scene_camera",
-      "params": ["bytes", "u32", "u32"],
+      "params": [
+        "bytes",
+        "u32",
+        "u32"
+      ],
       "returns": "bytes"
     },
     {
@@ -71,6 +75,32 @@
       "symbol": "mt_core_scene",
       "params": [
         "bytes"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "retainedSceneParameters",
+      "symbol": "mt_core_scene_retained",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "releaseSceneParameters",
+      "symbol": "mt_core_scene_release",
+      "params": [
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "sceneMaterialParameters",
+      "symbol": "mt_core_scene_material",
+      "params": [
+        "bytes",
+        "u32"
       ],
       "returns": "bytes"
     }

@@ -19,6 +19,7 @@ enum Change {
     None,
     Reset,
     Camera,
+    Material,
     Scene,
 }
 struct Viewer {
@@ -41,6 +42,8 @@ struct Viewer {
     queued_load: Option<PathBuf>,
     running: bool,
     change: Change,
+    pending_materials: std::collections::BTreeSet<usize>,
+    pending_camera: bool,
     candidate: Option<(Model, Camera)>,
     pixels: Vec<f32>,
     pixel_size: [u32; 2],
@@ -88,6 +91,8 @@ impl Viewer {
             queued_load: None,
             running: true,
             change: Change::None,
+            pending_materials: Default::default(),
+            pending_camera: false,
             candidate: None,
             pixels: vec![],
             pixel_size: size,
@@ -127,6 +132,9 @@ impl Viewer {
         Ok(())
     }
     fn dirty(&mut self, change: Change) {
+        if change == Change::Camera {
+            self.pending_camera = true;
+        }
         self.change = self.change.max(change);
         self.generation += 1;
     }
@@ -214,6 +222,21 @@ impl Viewer {
                             ))?;
                         }
                     }
+                    Change::Material => {
+                        for &id in &self.pending_materials {
+                            if !self
+                                .renderer
+                                .material(&self.model.materials[id].update_bytes(id))?
+                            {
+                                // Apply the existing held-input rebuild throttle next tick.
+                                self.change = Change::Scene;
+                                return Ok(());
+                            }
+                        }
+                        if self.pending_camera {
+                            self.renderer.camera(&self.camera.bytes())?;
+                        }
+                    }
                     Change::Camera => self.renderer.camera(&self.camera.bytes())?,
                     Change::Reset => self.renderer.reset()?,
                     Change::None => {}
@@ -226,6 +249,8 @@ impl Viewer {
                     self.render_generation = self.generation;
                     self.render_size = self.size;
                     self.change = Change::None;
+                    self.pending_materials.clear();
+                    self.pending_camera = false;
                     self.error.clear();
                 }
             }
@@ -521,7 +546,8 @@ impl Viewer {
                             )
                             .changed();
                         if changed {
-                            self.dirty(Change::Scene);
+                            self.pending_materials.insert(self.selected);
+                            self.dirty(Change::Material);
                         }
                         ui.add_space(14.);
                     }
@@ -1115,7 +1141,214 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         "Invalid drop was not rejected transactionally"
     );
     println!("PASS native file-drop event loads and renders; invalid drop preserves scene");
+    viewer.error.clear();
+    viewer.denoise = false;
+    let id = viewer.model.meshes[0].material;
+    let mut previews = 0;
+    let mut previous = viewer.pixels.clone();
+    let _ = ctx.run(
+        egui::RawInput {
+            events: vec![egui::Event::PointerButton {
+                pos: egui::pos2(700., 400.),
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        },
+        |_| {},
+    );
+    for step in 0..80 {
+        viewer.model.materials[id].color = [0.1 + step as f32 / 100., 0.4, 0.7];
+        viewer.model.materials[id].roughness = (step % 20) as f32 / 20.;
+        viewer.pending_materials.insert(id);
+        viewer.dirty(Change::Material);
+        if step % 5 == 0 {
+            viewer.camera.orbit([1., 0.]);
+            viewer.dirty(Change::Camera);
+        }
+        viewer.tick(&ctx)?;
+        ensure!(
+            viewer.texture.is_some() && !viewer.pixels.is_empty(),
+            "Material interaction blanked preview"
+        );
+        if viewer.pixels != previous {
+            previews += 1;
+            previous = viewer.pixels.clone();
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    let _ = ctx.run(
+        egui::RawInput {
+            events: vec![egui::Event::PointerButton {
+                pos: egui::pos2(700., 400.),
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            ..Default::default()
+        },
+        |_| {},
+    );
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    {
+        viewer.tick(&ctx)?;
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Material interaction did not settle"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    ensure!(previews >= 3, "Held material edits starved previews");
+    let mut reference = Renderer::with_backend(viewer.backend)?;
+    reference.commit(&viewer.model.descriptor(
+        &viewer.camera.bytes(),
+        viewer.size,
+        &viewer.environment,
+    ))?;
+    ensure!(
+        reference.finish(viewer.samples)? == viewer.pixels,
+        "Combined material/camera updates differ from full commit"
+    );
+    renderer::save(
+        &out.join("interactive-material.png"),
+        &viewer.pixels,
+        viewer.pixel_size,
+        0.,
+    )?;
+    println!(
+        "PASS 80 held material updates plus camera motion: {previews} changed previews, zero blanks, final HDR byte-exact to full commit"
+    );
+    viewer.model.materials[id].unlit = true;
+    viewer.dirty(Change::Scene);
+    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    {
+        viewer.tick(&ctx)?;
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Unlit setup timed out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    viewer.model.materials[id].color = [0.1, 0.7, 0.2];
+    viewer.pending_materials.insert(id);
+    viewer.dirty(Change::Material);
+    viewer.tick(&ctx)?;
+    ensure!(
+        viewer.change == Change::Scene && viewer.texture.is_some(),
+        "Unsupported material did not schedule a full rebuild with retained preview"
+    );
+    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    {
+        viewer.tick(&ctx)?;
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Unlit fallback timed out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    reference.commit(&viewer.model.descriptor(
+        &viewer.camera.bytes(),
+        viewer.size,
+        &viewer.environment,
+    ))?;
+    ensure!(
+        reference.finish(viewer.samples)? == viewer.pixels,
+        "Unlit full-commit fallback mismatch"
+    );
+    println!(
+        "PASS unsupported material update falls back to full commit; preview retained; final HDR byte-exact"
+    );
 
+    Ok(())
+}
+fn material_smoke(path: &Path, out: &Path) -> Result<()> {
+    std::fs::create_dir_all(out)?;
+    let mut model = Model::load(path)?;
+    let camera = Camera::fit(model.center, model.radius);
+    let environment = Environment::default();
+    let size = [160, 106];
+    let mut renderer = Renderer::with_backend(1)?;
+    let mut reference = Renderer::with_backend(1)?;
+    let initial = model.descriptor(&camera.bytes(), size, &environment);
+    renderer.commit(&initial)?;
+    let baseline = renderer.finish(8)?;
+    let id = model.meshes[0].material;
+    let mut bad = model.materials[id].update_bytes(id);
+    bad[16..20].copy_from_slice(&f32::NAN.to_le_bytes());
+    ensure!(
+        renderer.material(&bad).is_err() && renderer.pixels()? == baseline,
+        "Invalid material modified the scene"
+    );
+    renderer.start(1)?;
+    ensure!(
+        renderer
+            .material(&model.materials[id].update_bytes(id))
+            .is_err(),
+        "Active job accepted material update"
+    );
+    renderer.cancel()?;
+    while !renderer.poll()? {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    ensure!(
+        renderer.pixels()? == baseline,
+        "Queued cancellation changed pixels"
+    );
+    let mut partial_ms = Vec::new();
+    let mut full_ms = Vec::new();
+    let used: std::collections::BTreeSet<_> = model.meshes.iter().map(|m| m.material).collect();
+    let mut count = 0;
+    for &id in used.iter().take(3) {
+        if model.materials[id].unlit {
+            continue;
+        }
+        for step in 0..6 {
+            let m = &mut model.materials[id];
+            m.color = [0.2 + step as f32 * 0.1, 0.35, 0.8];
+            m.roughness = step as f32 / 5.;
+            m.metalness = 1. - m.roughness;
+            m.transmission = m.roughness * 0.6;
+            m.ior = 1.1 + step as f32 * 0.15;
+            let started = std::time::Instant::now();
+            ensure!(
+                renderer.material(&m.update_bytes(id))?,
+                "Expected supported partial material update"
+            );
+            partial_ms.push(started.elapsed().as_secs_f64() * 1000.);
+            ensure!(
+                renderer.samples()? == 0,
+                "Partial material did not reset samples"
+            );
+            let actual = renderer.finish(8)?;
+            let started = std::time::Instant::now();
+            reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+            full_ms.push(started.elapsed().as_secs_f64() * 1000.);
+            let expected = reference.finish(8)?;
+            ensure!(
+                actual == expected
+                    && renderer.image(1)? == reference.image(1)?
+                    && renderer.image(2)? == reference.image(2)?,
+                "Partial material differed from full commit at {id}/{step}"
+            );
+            count += 1;
+        }
+    }
+    ensure!(count > 0, "No supported material updates tested");
+    renderer::save(&out.join("partial.png"), &renderer.pixels()?, size, 0.)?;
+    renderer.commit(&initial)?;
+    ensure!(
+        renderer.finish(8)? == baseline,
+        "Full commit after partial failed to restore"
+    );
+    std::fs::write(
+        out.join("timings.txt"),
+        format!("partial ms {partial_ms:?}\nfull commit ms {full_ms:?}\n"),
+    )?;
+    println!(
+        "PASS {count} basic material updates: HDR/normal/albedo byte-exact to full commits; baseline restored"
+    );
     Ok(())
 }
 fn main() -> Result<()> {
@@ -1124,9 +1357,15 @@ fn main() -> Result<()> {
     let mut interaction_out = None;
     let mut inspect = false;
     let mut preview_out = None;
+    let mut material_out = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--material-smoke" => {
+                material_out = Some(PathBuf::from(
+                    args.next().context("--material-smoke needs a directory")?,
+                ))
+            }
             "--inspect" => inspect = true,
             "--preview-out" => {
                 preview_out = Some(PathBuf::from(
@@ -1151,6 +1390,9 @@ fn main() -> Result<()> {
         }
     }
     let model = model.unwrap_or_else(default_model);
+    if let Some(out) = material_out {
+        return material_smoke(&model, &out);
+    }
     if inspect || preview_out.is_some() {
         let m = Model::load(&model)?;
         println!(

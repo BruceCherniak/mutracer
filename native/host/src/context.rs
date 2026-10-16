@@ -230,7 +230,7 @@ pub unsafe extern "C" fn mt_context_commit(
             return Err("Null or oversized scene input".into());
         }
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
-        let (mut scene, mut assets) = scene::prepare(bytes)?;
+        let (mut scene, mut assets, retained) = scene::prepare_retained(bytes)?;
         let mut options = RenderOptions::default();
         let mut fallback_reason = String::new();
         if context.backend != 0 {
@@ -259,7 +259,7 @@ pub unsafe extern "C" fn mt_context_commit(
             Some(&assets),
             context.gpu.clone(),
         );
-        let candidate = match candidate {
+        let mut candidate = match candidate {
             Ok(candidate) => candidate,
             Err(error) if context.backend == 1 && options.flags & 4 != 0 => {
                 fallback_reason = format!("HWRT upload unavailable: {error}");
@@ -274,6 +274,7 @@ pub unsafe extern "C" fn mt_context_commit(
             }
             Err(error) => return Err(error),
         };
+        candidate.retained = Some(retained);
         // Commit is transactional: the previous scene survives any preparation/upload failure.
         context.scene = Some(candidate);
         context.fallback_reason = fallback_reason;
@@ -339,6 +340,35 @@ pub unsafe extern "C" fn mt_context_update_camera(
         let packed = scene::prepare_camera(bytes, scene.scene.width, scene.scene.height)?;
         context.failed = true;
         context.scene.as_mut().unwrap().update_camera(&packed)?;
+        context.job = None;
+        context.failed = false;
+        Ok(())
+    })
+}
+/// Patch basic scalar material parameters through the retained original TS packer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_context_update_material(
+    handle: u64,
+    input: *const u8,
+    length: usize,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    action(error, capacity, |registry| {
+        let context = context(registry, handle)?;
+        idle(context)?;
+        let scene = ready(context)?;
+        if input.is_null() || length != 48 {
+            return Err("Material descriptor must contain exactly 48 bytes".into());
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+        let packed = scene
+            .retained
+            .as_ref()
+            .ok_or("No retained material preparation")?
+            .material(bytes)?;
+        context.failed = true;
+        context.scene.as_mut().unwrap().update_material(&packed)?;
         context.job = None;
         context.failed = false;
         Ok(())
