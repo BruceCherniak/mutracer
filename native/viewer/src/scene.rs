@@ -696,6 +696,15 @@ impl Model {
         Ok(())
     }
     pub fn descriptor(&self, camera: &[u8], size: [u32; 2], environment: &Environment) -> Vec<u8> {
+        self.descriptor_with_light(camera, size, environment, &KeyLight::default())
+    }
+    pub fn descriptor_with_light(
+        &self,
+        camera: &[u8],
+        size: [u32; 2],
+        environment: &Environment,
+        light: &KeyLight,
+    ) -> Vec<u8> {
         let mut w = Wire(vec![0; 32]);
         w.0[0] = 2;
         w.0[2] = size[0];
@@ -703,17 +712,22 @@ impl Model {
         w.0[4] = self.geometries.len() as u32;
         w.0[5] = self.meshes.len() as u32;
         w.0[6] = self.materials.len() as u32;
+        w.0[7] = u32::from(light.enabled);
         w.0[8] = self.textures.len() as u32 + 1;
         for (header, count, stride) in [
             (9, self.geometries.len(), 12),
             (10, self.meshes.len(), 20),
             (11, self.materials.len(), 24),
             (13, self.textures.len() + 1, 12),
+            (12, usize::from(light.enabled), 28),
         ] {
             w.0[header] = w.0.len() as u32;
             w.0.resize(w.0.len() + count * stride, 0);
         }
-        w.0[12] = w.0.len() as u32;
+        if light.enabled {
+            let offset = w.0[12] as usize;
+            w.0[offset..offset + 28].copy_from_slice(&light.record());
+        }
         w.0[14] = w.append_bytes(camera);
         w.0[19] = 1f32.to_bits();
         for (i, g) in self.geometries.iter().enumerate() {
@@ -887,6 +901,46 @@ impl Wire {
         o
     }
 }
+pub struct KeyLight {
+    pub enabled: bool,
+    pub color: [f32; 3],
+    pub intensity: f32,
+    pub azimuth: f32,
+    pub elevation: f32,
+}
+impl Default for KeyLight {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            color: [1., 0.95, 0.85],
+            intensity: 2.,
+            azimuth: 45.,
+            elevation: 60.,
+        }
+    }
+}
+impl KeyLight {
+    fn record(&self) -> [u32; 28] {
+        let mut words = [0; 28];
+        words[0] = 2;
+        for (k, value) in self.color.iter().enumerate() {
+            words[1 + k] = value.to_bits();
+        }
+        words[4] = self.intensity.to_bits();
+        let transform = Mat4::from_rotation_y(self.azimuth.to_radians())
+            * Mat4::from_rotation_x(-self.elevation.to_radians());
+        for (k, value) in transform.to_cols_array().iter().enumerate() {
+            words[12 + k] = value.to_bits();
+        }
+        words
+    }
+    pub fn update_bytes(&self) -> Vec<u8> {
+        let mut words = vec![1, 0, 0, 0];
+        words.extend(self.record());
+        words.into_iter().flat_map(u32::to_le_bytes).collect()
+    }
+}
+
 pub struct Environment {
     pub intensity: f32,
     pub color: [f32; 3],
@@ -940,7 +994,7 @@ impl Environment {
             0.025f32.to_bits(),
             0.025f32.to_bits(),
             0.03f32.to_bits(),
-            0,
+            1f32.to_bits(),
             if self.background { width } else { 0 },
             if self.background { height } else { 0 },
             0,

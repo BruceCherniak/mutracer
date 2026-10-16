@@ -54,7 +54,8 @@ has no file output. The command above builds the C consumer and saves its
 verified images under `.native-build/context-core/`.
 
 Commit replaces the full scene and restarts accumulation; submit geometry,
-texture, emission and light edits in the updated descriptor. A rejected commit retains the previous scene.
+texture, emission and light type/count/attachment edits in the updated descriptor.
+A rejected commit retains the previous scene.
 Reset clears sampling while keeping the committed scene. Contexts have independent
 accumulation, with at most eight contexts on one owner thread. Commits can
 briefly hold old and new scene resources together. The header specifies lifetime,
@@ -84,6 +85,16 @@ and nonzero map power can also require a full commit. The call restarts
 accumulation, rejects active jobs and preserves the scene on validation rejection.
 Its cost grows with map size and the number of emissive triangles. See
 [the context header](./mutracer-context.h) for the record format and limits.
+
+Use `mt_context_update_light` to change an existing rectangular, spherical,
+directional or spot light's color, intensity, size, spread/angles or transform.
+It retains geometry, acceleration structures, material textures and the pipeline;
+existing rectangular emission textures and spot IES profiles are preserved.
+Light type/count and attachment changes require a full commit. Some zero/nonzero
+power transitions also require a full commit. Successful updates restart
+accumulation. Active jobs reject updates; validation rejection preserves the scene.
+Update cost grows with the number of lights and emissive triangles. The
+[context header](./mutracer-context.h) specifies the record and lifetime rules.
 
 ## Intersection backend
 
@@ -120,7 +131,7 @@ Cancel stops further submissions. An already submitted batch finishes before
 poll reports cancellation, so keep polling after cancel. Completed samples stay
 accumulated and a later job can continue them. Full completion takes precedence
 over late cancellation. One context accepts one active job; while active, render,
-commit, camera/material/environment update, reset, readback and destroy return
+commit, camera/material/environment/light update, reset, readback and destroy return
 errors. Finish or cancel and drain the job before using those calls. The header
 specifies job states, sample counters and handle lifetimes.
 
@@ -191,7 +202,7 @@ side and 256 layers; source textures can be scaled to fit. The header specifies
 the remaining validation and format constraints.
 
 Raw scenes support the [intersection modes above](#intersection-backend).
-Incremental geometry/light updates, texture/emission material updates, device-loss recovery,
+Incremental geometry updates, texture/emission material updates, device-loss recovery,
 a C denoising API, browser display parity and a stable release ABI remain pending.
 The viewer provides its own [native OIDN controls](./viewer/README.md#controls).
 This library does not yet replace the full browser Engine/Render API.

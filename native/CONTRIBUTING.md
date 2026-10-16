@@ -363,3 +363,20 @@ do not root the merged geometry/BVH graph. Texture shape changes use full commit
 Both light-selection PMFs and the environment CDF must update with radiance.
 The native OIDN CPU/Metal smoke supersedes the removed URL-only AOT/C example;
 whole-entry diagnostics still include `src/oidn.ts` and its public export inventory.
+
+## Partial analytic light validation
+
+Run `[MODEL] --light-smoke DIRECTORY` to compare key-light color/intensity/direction
+with full commits while interleaving environment changes and mapped/solid
+backgrounds. Check exact HDR/normal/albedo, reset, invalid/busy/type rejection and
+light removal. `--interaction-smoke` combines held light/environment/material
+updates with camera movement and asserts no full scene commit during that input.
+The C update also supports rectangular/spherical/spot lights with preserved
+texture/IES attachments; validate those against raw descriptor full commits.
+
+Lighting preparation stages a TS candidate. Only acknowledge it after validating
+all returned resource shapes and completing GPU writes/reset. Environment power,
+light records and RT uniform state must represent the last successful update;
+rejected environment/light changes must not contaminate subsequent partial edits.
+Neither geometry/BVH nor environment pixels need to remain rooted for light-only
+updates. Both paths reuse original light sampling and packing through nativeLighting.

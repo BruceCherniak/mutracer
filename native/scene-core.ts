@@ -39,13 +39,25 @@ import { getOpenPbrEnergyLutData, OPENPBR_ENERGY_LUT_WIDTH, OPENPBR_ENERGY_LUT_H
 const retainedScenes = new Map<number, {source: MaterialState[]; ordered: MaterialState[]; table: MaterialData;
   lights: AnalyticLightState[]; emissive: EmissiveTriangle[]; rt: ArrayBuffer;
   environmentWidth: number; environmentHeight: number; backgroundWidth: number; backgroundHeight: number;
-  qualityFlags: number}>();
+  qualityFlags: number; environmentPower: number}>();
+// Pending light/environment candidates become authoritative only after the host
+// validates resource shapes and completes GPU writes. Rejected edits never alter
+// the inputs of a subsequent partial update.
+const pendingLighting = new Map<number, {lights: AnalyticLightState[]; rt: ArrayBuffer; environmentPower: number}>();
+export function acceptSceneLighting(token: number): Uint8Array {
+  const state = retainedScenes.get(token), pending = pendingLighting.get(token);
+  if (!state || !pending) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  state.lights = pending.lights; state.rt = pending.rt; state.environmentPower = pending.environmentPower;
+  retainedScenes.set(token, state);
+  pendingLighting.delete(token);
+  return new Uint8Array(new Uint32Array([1, 0, 0, 0]).buffer);
+}
 export function retainedSceneParameters(bytes: Uint8Array, token: number): Uint8Array {
   try { return buildSceneParameters(bytes, token); }
   catch { retainedScenes.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer); }
 }
 export function releaseSceneParameters(token: number): Uint8Array {
-  retainedScenes.delete(token);
+  retainedScenes.delete(token); pendingLighting.delete(token);
   return new Uint8Array(16);
 }
 // Version 1: source material index and seven scalar parameters. Maps, emission,
@@ -156,12 +168,7 @@ function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
   const iesProfiles = new Map<string, IESProfile>();
   for (let i = 0; i < u[7]; i++) {
     const off = u[12] + i * 28;
-    let light: AnalyticLightState;
-    if (u[off] === 0) light = new RectLightState({size: [f[off + 5], f[off + 6]], spread: f[off + 7],
-      texture: u[0] === 3 && u[off + 8] ? textures[u[off + 8] - 1] : undefined});
-    else if (u[off] === 1) light = new SphereLight({radius: f[off + 5]});
-    else if (u[off] === 2) light = new DirectionalLight();
-    else light = new SpotLight({radius: f[off + 5], innerAngle: f[off + 6], outerAngle: f[off + 7]});
+    const light = lightFromRecord(u, f, off, u[0] === 3 && u[off + 8] ? textures[u[off + 8] - 1] : undefined);
     if (u[0] === 3 && light.type === 'SpotLight' && u[off + 10]) {
       const key = `${u[off + 9]}:${u[off + 10]}`;
       let profile = iesProfiles.get(key);
@@ -171,8 +178,6 @@ function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
       }
       light.iesProfile = profile;
     }
-    light.color = [f[off + 1], f[off + 2], f[off + 3]]; light.intensity = f[off + 4];
-    for (let k = 0; k < 16; k++) write(light.transform, k, f[off + 12 + k]);
     lights.push(light);
   }
   const minmaxCache = new Map<PixelTexture, Uint8Array[]>();
@@ -261,7 +266,7 @@ function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
   }
   const emissive = new EmissiveTriangleCache().collect(prepared.emissiveBindings, prepared.materials);
   const {lightData, lightWidth, lightHeight, lightUniform, environmentPmf, choiceCount, totalWeight, emissiveTexels}
-    = nativeLighting(lights, table, emissive, environment);
+    = nativeLighting(lights, table, emissive, estimateEnvironmentPower(environment));
   const rt = makeRayTraceUniform();
   rt.views.outputSize.set([width, height]); rt.views.scaleOffset.set([1, 1, 0, 0]);
   rt.views.lightsCount[0] = lights.length; rt.views.transmissiveOutputAlphaMin[0] = 1;
@@ -303,7 +308,7 @@ function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
   add(30, 2, shader, 0, 0, 0, 0);
   if (token) retainedScenes.set(token, {source: materials, ordered: prepared.materials, table, lights, emissive,
     rt: rt.buffer, environmentWidth: environment?.width ?? 0, environmentHeight: environment?.height ?? 0,
-    backgroundWidth: background?.width ?? 0, backgroundHeight: background?.height ?? 0, qualityFlags});
+    backgroundWidth: background?.width ?? 0, backgroundHeight: background?.height ?? 0, qualityFlags, environmentPower: estimateEnvironmentPower(environment)});
   return resourcePacket(records, parts, width, height);
 }
 
@@ -320,9 +325,9 @@ function resourcePacket(records: number[][], parts: Uint8Array[], width: number,
 }
 
 function nativeLighting(lights: AnalyticLightState[], table: MaterialData, emissive: EmissiveTriangle[],
-  environment: {width: number; height: number; data: Float32Array} | undefined) {
+  environmentPower: number) {
   const choices = new LightChoiceBuffer(); choices.reserve(1 + lights.length + emissive.length);
-  choices.push(LIGHT_CHOICE_ENVIRONMENT, 0, estimateEnvironmentPower(environment));
+  choices.push(LIGHT_CHOICE_ENVIRONMENT, 0, environmentPower);
   for (let i = 0; i < lights.length; i++) choices.push(LIGHT_CHOICE_ANALYTIC, i, estimateAnalyticLightPower(lights[i]));
   for (let i = 0; i < emissive.length; i++) choices.push(LIGHT_CHOICE_EMISSIVE_TRIANGLE, i, emissive[i].area * emissive[i].samplingLuminance);
   const distribution = buildLightAliasTable(choices), lightPmfs = new Array<number>(lights.length).fill(0);
@@ -349,6 +354,7 @@ function nativeLighting(lights: AnalyticLightState[], table: MaterialData, emiss
 // Version 1: dimensions/visibility plus linear RGBA32F environment/background.
 // Resource shape or shader-feature changes use a full scene commit instead.
 export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Uint8Array {
+  pendingLighting.delete(token);
   const state = retainedScenes.get(token);
   if (!state) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, 12);
@@ -362,13 +368,13 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
   const environment = envLength ? {width: u[1], height: u[2], data: f.slice(12, 12 + envLength)} : undefined;
   const background = u[8] * u[9] ? {width: u[8], height: u[9], data: f.slice(12 + envLength)} : undefined;
   const distribution = environment ? envMapDistribution(environment) : undefined;
-  const lighting = nativeLighting(state.lights, state.table, state.emissive, environment);
+  const environmentPower = estimateEnvironmentPower(environment);
+  const lighting = nativeLighting(state.lights, state.table, state.emissive, environmentPower);
   const rt = makeRayTraceUniform();
   new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   if (!background && !u[3]) rt.views.backgroundColor.set(f.slice(4, 8));
-  rt.views.envLightPmf[0] = lighting.environmentPmf; rt.views.lightChoiceCount[0] = lighting.choiceCount;
-  rt.views.lightWeightTotal[0] = lighting.totalWeight; rt.views.lightSamplingTextureWidth[0] = lighting.lightWidth;
-  rt.views.lightChoiceTexelOffset[0] = lighting.emissiveTexels;
+  packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
+  pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, environmentPower});
   const parts: Uint8Array[] = [], records: number[][] = [];
   function add(id: number, kind: number, data: Uint8Array, width: number, height: number, format: number) {
     records.push([id, kind, data.length, width, height, kind === 1 ? 1 : 0, format, 0]); parts.push(data);
@@ -380,6 +386,45 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
   add(23, 1, background ? new Uint8Array(background.data.buffer) : new Uint8Array(16), u[8] || 1, u[9] || 1, 2);
   add(24, 1, new Uint8Array(lighting.lightData.buffer), lighting.lightWidth, lighting.lightHeight, 2);
   return resourcePacket(records, parts, 0, 0);
+}
+
+function packLightingUniform(rt: ReturnType<typeof makeRayTraceUniform>, environmentPmf: number, choiceCount: number,
+  totalWeight: number, lightWidth: number, emissiveTexels: number) {
+  rt.views.envLightPmf[0] = environmentPmf; rt.views.lightChoiceCount[0] = choiceCount;
+  rt.views.lightWeightTotal[0] = totalWeight; rt.views.lightSamplingTextureWidth[0] = lightWidth;
+  rt.views.lightChoiceTexelOffset[0] = emissiveTexels;
+}
+function lightFromRecord(u: Uint32Array, f: Float32Array, off: number, texture: TextureState | undefined): AnalyticLightState {
+  let light: AnalyticLightState;
+  if (u[off] === 0) light = new RectLightState({size: [f[off + 5], f[off + 6]], spread: f[off + 7], texture});
+  else if (u[off] === 1) light = new SphereLight({radius: f[off + 5]});
+  else if (u[off] === 2) light = new DirectionalLight();
+  else light = new SpotLight({radius: f[off + 5], innerAngle: f[off + 6], outerAngle: f[off + 7]});
+  light.color = [f[off + 1], f[off + 2], f[off + 3]]; light.intensity = f[off + 4];
+  for (let k = 0; k < 16; k++) write(light.transform, k, f[off + 12 + k]);
+  return light;
+}
+// Version1,index,reserved[2], followed by Light[28]. Attachments remain committed.
+export function sceneLightParameters(bytes: Uint8Array, token: number): Uint8Array {
+  pendingLighting.delete(token);
+  const state = retainedScenes.get(token);
+  const u = new Uint32Array(bytes.buffer, bytes.byteOffset, 32), f = new Float32Array(bytes.buffer, bytes.byteOffset, 32);
+  const previous = state?.lights[u[1]];
+  if (!state || !previous) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  const kinds = ['RectLight', 'SphereLight', 'DirectionalLight', 'SpotLight'];
+  if (previous.type !== kinds[u[4]]) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+  const light = lightFromRecord(u, f, 4, previous.type === 'RectLight' ? previous.texture : undefined);
+  if (light.type === 'SpotLight' && previous.type === 'SpotLight') light.iesProfile = previous.iesProfile;
+  const lights = state.lights.slice(); lights[u[1]] = light;
+  const lighting = nativeLighting(lights, state.table, state.emissive, state.environmentPower);
+  const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
+  packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
+  pendingLighting.set(token, {lights, rt: rt.buffer, environmentPower: state.environmentPower});
+  return resourcePacket([
+    [7, 0, rt.buffer.byteLength, 0, 0, 0, 0, 0],
+    [8, 0, lighting.lightUniform.byteLength, 0, 0, 0, 0, 0],
+    [24, 1, lighting.lightData.byteLength, lighting.lightWidth, lighting.lightHeight, 1, 2, 0]
+  ], [new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer)], 0, 0);
 }
 
 function nativeFloatImage(texture: PixelTexture | undefined): {width: number; height: number; data: Float32Array} | undefined {

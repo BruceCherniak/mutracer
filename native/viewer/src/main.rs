@@ -8,7 +8,7 @@ mod scene;
 use anyhow::{Context, Result, ensure};
 use eframe::egui;
 use renderer::{Camera, Renderer};
-use scene::{Environment, Model};
+use scene::{Environment, KeyLight, Model};
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -21,6 +21,7 @@ enum Change {
     Camera,
     Material,
     Environment,
+    Light,
     Scene,
 }
 struct Viewer {
@@ -31,6 +32,7 @@ struct Viewer {
     camera: Camera,
     drag: input::ViewportDrag,
     environment: Environment,
+    light: KeyLight,
     size: [u32; 2],
     target: u32,
     samples: u32,
@@ -46,6 +48,7 @@ struct Viewer {
     pending_materials: std::collections::BTreeSet<usize>,
     pending_camera: bool,
     pending_environment: bool,
+    pending_light: bool,
     candidate: Option<(Model, Camera)>,
     pixels: Vec<f32>,
     pixel_size: [u32; 2],
@@ -81,6 +84,7 @@ impl Viewer {
             camera,
             drag: input::ViewportDrag::default(),
             environment,
+            light: KeyLight::default(),
             size,
             target: 64,
             samples: 0,
@@ -96,6 +100,7 @@ impl Viewer {
             pending_materials: Default::default(),
             pending_camera: false,
             pending_environment: false,
+            pending_light: false,
             candidate: None,
             pixels: vec![],
             pixel_size: size,
@@ -140,6 +145,9 @@ impl Viewer {
         }
         if change == Change::Environment {
             self.pending_environment = true;
+        }
+        if change == Change::Light {
+            self.pending_light = true;
         }
         self.change = self.change.max(change);
         self.generation += 1;
@@ -211,24 +219,26 @@ impl Viewer {
                 match self.change {
                     Change::Scene => {
                         if let Some((model, camera)) = self.candidate.take() {
-                            self.commit_scene(&model.descriptor(
+                            self.commit_scene(&model.descriptor_with_light(
                                 &camera.bytes(),
                                 self.size,
                                 &self.environment,
+                                &self.light,
                             ))?;
                             self.model = model;
                             self.camera = camera;
                             self.selected = self.model.meshes[0].material;
                             self.selected_mesh = None;
                         } else {
-                            self.commit_scene(&self.model.descriptor(
+                            self.commit_scene(&self.model.descriptor_with_light(
                                 &self.camera.bytes(),
                                 self.size,
                                 &self.environment,
+                                &self.light,
                             ))?;
                         }
                     }
-                    Change::Material | Change::Environment => {
+                    Change::Material | Change::Environment | Change::Light => {
                         for &id in &self.pending_materials {
                             if !self
                                 .renderer
@@ -244,6 +254,10 @@ impl Viewer {
                                 .renderer
                                 .environment(&self.environment.update_bytes())?
                         {
+                            self.change = Change::Scene;
+                            return Ok(());
+                        }
+                        if self.pending_light && !self.renderer.light(&self.light.update_bytes())? {
                             self.change = Change::Scene;
                             return Ok(());
                         }
@@ -266,6 +280,7 @@ impl Viewer {
                     self.pending_materials.clear();
                     self.pending_camera = false;
                     self.pending_environment = false;
+                    self.pending_light = false;
                     self.error.clear();
                 }
             }
@@ -613,6 +628,43 @@ impl Viewer {
                         });
                         if changed {
                             self.dirty(Change::Environment);
+                        }
+                        ui.add_space(14.);
+                        ui.heading("Key light");
+                        if ui
+                            .checkbox(&mut self.light.enabled, "Enable directional light")
+                            .changed()
+                        {
+                            self.dirty(Change::Scene);
+                        }
+                        let mut light_changed = false;
+                        ui.add_enabled_ui(self.light.enabled, |ui| {
+                            light_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.light.intensity, 0.0..=10.0)
+                                        .text("Intensity"),
+                                )
+                                .changed();
+                            ui.horizontal(|ui| {
+                                ui.label("Color");
+                                light_changed |=
+                                    ui.color_edit_button_rgb(&mut self.light.color).changed();
+                            });
+                            light_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.light.azimuth, 0.0..=360.0)
+                                        .text("Azimuth"),
+                                )
+                                .changed();
+                            light_changed |= ui
+                                .add(
+                                    egui::Slider::new(&mut self.light.elevation, 5.0..=85.0)
+                                        .text("Elevation"),
+                                )
+                                .changed();
+                        });
+                        if light_changed {
+                            self.dirty(Change::Light);
                         }
                         ui.add_space(14.);
                     }
@@ -1173,8 +1225,22 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         },
         |_| {},
     );
+    viewer.light.enabled = true;
+    viewer.dirty(Change::Scene);
+    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    {
+        viewer.tick(&ctx)?;
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Key light setup timed out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
     let last_commit = viewer.last_scene_commit;
     for step in 0..80 {
+        viewer.light.azimuth = step as f32 * 7.;
+        viewer.light.intensity = 0.5 + step as f32 / 40.;
+        viewer.dirty(Change::Light);
         viewer.environment.intensity = 0.3 + step as f32 * 0.02;
         viewer.environment.rotation = step as f32 * 9.;
         viewer.dirty(Change::Environment);
@@ -1228,14 +1294,15 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         "Partial edits rebuilt the scene"
     );
     let mut reference = Renderer::with_backend(viewer.backend)?;
-    reference.commit(&viewer.model.descriptor(
+    reference.commit(&viewer.model.descriptor_with_light(
         &viewer.camera.bytes(),
         viewer.size,
         &viewer.environment,
+        &viewer.light,
     ))?;
     ensure!(
         reference.finish(viewer.samples)? == viewer.pixels,
-        "Combined environment/material/camera updates differ from full commit"
+        "Combined light/environment/material/camera updates differ from full commit"
     );
     renderer::save(
         &out.join("interactive-material.png"),
@@ -1244,7 +1311,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         0.,
     )?;
     println!(
-        "PASS 80 held environment/material updates plus camera motion: {previews} changed previews, zero blanks, final HDR byte-exact to full commit"
+        "PASS 80 held light/environment/material updates plus camera motion: {previews} changed previews, zero blanks, final HDR byte-exact to full commit"
     );
     viewer.model.materials[id].unlit = true;
     viewer.dirty(Change::Scene);
@@ -1274,10 +1341,11 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
-    reference.commit(&viewer.model.descriptor(
+    reference.commit(&viewer.model.descriptor_with_light(
         &viewer.camera.bytes(),
         viewer.size,
         &viewer.environment,
+        &viewer.light,
     ))?;
     ensure!(
         reference.finish(viewer.samples)? == viewer.pixels,
@@ -1303,10 +1371,11 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
-    reference.commit(&viewer.model.descriptor(
+    reference.commit(&viewer.model.descriptor_with_light(
         &viewer.camera.bytes(),
         viewer.size,
         &viewer.environment,
+        &viewer.light,
     ))?;
     ensure!(
         reference.finish(viewer.samples)? == viewer.pixels,
@@ -1484,6 +1553,108 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     Ok(())
 }
+fn light_smoke(path: &Path, out: &Path) -> Result<()> {
+    std::fs::create_dir_all(out)?;
+    let model = Model::load(path)?;
+    let camera = Camera::fit(model.center, model.radius);
+    let mut environment = Environment::default();
+    let mut light = KeyLight {
+        enabled: true,
+        ..Default::default()
+    };
+    let size = [160, 106];
+    let mut renderer = Renderer::with_backend(1)?;
+    let mut reference = Renderer::with_backend(1)?;
+    renderer.commit(&model.descriptor_with_light(&camera.bytes(), size, &environment, &light))?;
+    let before = renderer.finish(8)?;
+    let mut bad = light.update_bytes();
+    bad[20..24].copy_from_slice(&f32::NAN.to_le_bytes());
+    ensure!(
+        renderer.light(&bad).is_err() && renderer.pixels()? == before,
+        "Invalid light modified scene"
+    );
+    renderer.start(1)?;
+    ensure!(
+        renderer.light(&light.update_bytes()).is_err(),
+        "Active job accepted light update"
+    );
+    renderer.cancel()?;
+    while !renderer.poll()? {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    for step in 0..18 {
+        if step == 9 {
+            environment.background = false;
+            renderer.commit(&model.descriptor_with_light(
+                &camera.bytes(),
+                size,
+                &environment,
+                &light,
+            ))?;
+        }
+        environment.intensity = 0.3 + step as f32 * 0.1;
+        environment.rotation = step as f32 * 31.;
+        let env_bytes = environment.update_bytes();
+        if !environment.background {
+            let full = model.descriptor_with_light(&camera.bytes(), size, &environment, &light);
+            ensure!(
+                env_bytes[16..32] == full[64..80],
+                "Partial background color differs from full descriptor"
+            );
+        }
+        ensure!(
+            renderer.environment(&env_bytes)?,
+            "Expected partial environment before light update"
+        );
+        light.intensity = if step % 6 == 0 {
+            0.
+        } else {
+            0.5 + step as f32 * 0.4
+        };
+        light.color = [0.2 + step as f32 * 0.03, 0.8, 0.4];
+        light.azimuth = step as f32 * 21.;
+        light.elevation = 10. + (step % 8) as f32 * 9.;
+        ensure!(
+            renderer.light(&light.update_bytes())?,
+            "Expected partial light update"
+        );
+        ensure!(
+            renderer.samples()? == 0,
+            "Light update did not reset samples"
+        );
+        let actual = renderer.finish(8)?;
+        reference.commit(&model.descriptor_with_light(
+            &camera.bytes(),
+            size,
+            &environment,
+            &light,
+        ))?;
+        ensure!(
+            actual == reference.finish(8)?
+                && renderer.image(1)? == reference.image(1)?
+                && renderer.image(2)? == reference.image(2)?,
+            "Partial light/environment differed from full commit at {step}"
+        );
+    }
+    let before = renderer.pixels()?;
+    let mut different_type = light.update_bytes();
+    different_type[16..20].copy_from_slice(&1u32.to_le_bytes());
+    ensure!(
+        !renderer.light(&different_type)? && renderer.pixels()? == before,
+        "Light type rejection changed scene"
+    );
+    renderer::save(&out.join("partial.png"), &before, size, 0.)?;
+    light.enabled = false;
+    renderer.commit(&model.descriptor_with_light(&camera.bytes(), size, &environment, &light))?;
+    ensure!(
+        renderer.finish(8)? != before,
+        "Removing key light had no effect"
+    );
+    println!(
+        "PASS18 key-light updates interleaved with environment edits: HDR/normal/albedo byte-exact; invalid/busy/type rejection; removal renders"
+    );
+    Ok(())
+}
 fn main() -> Result<()> {
     let mut model = None;
     let mut smoke_out = None;
@@ -1492,9 +1663,15 @@ fn main() -> Result<()> {
     let mut preview_out = None;
     let mut material_out = None;
     let mut environment_out = None;
+    let mut light_out = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--light-smoke" => {
+                light_out = Some(PathBuf::from(
+                    args.next().context("--light-smoke needs a directory")?,
+                ))
+            }
             "--environment-smoke" => {
                 environment_out = Some(PathBuf::from(
                     args.next()
@@ -1530,6 +1707,9 @@ fn main() -> Result<()> {
         }
     }
     let model = model.unwrap_or_else(default_model);
+    if let Some(out) = light_out {
+        return light_smoke(&model, &out);
+    }
     if let Some(out) = environment_out {
         return environment_smoke(&model, &out);
     }

@@ -49,6 +49,9 @@ are unverified.
   restores the built-in light.
 - Choose sample count and resolution, pause/resume, restart accumulation, adjust
   exposure or save the displayed image as PNG. The preview uses Reinhard/sRGB.
+- **Light** also provides an optional directional **Key light**, disabled by
+  default. Adjust its intensity, color, azimuth and elevation. Enabling or
+  disabling it rebuilds the scene; other edits use partial updates where possible.
 - **Native OIDN** is on by default. It denoises completed previews after interaction
   pauses, using Metal where available and CPU otherwise. Toggle it to compare
   the unfiltered image; PNG export uses the currently displayed result.
@@ -62,10 +65,11 @@ image remains visible until a newer preview arrives, including while dragging.
 Basic color, roughness, metalness and transmission edits retain the scene's
 geometry and textures and restart accumulation. Environment intensity, tint and
 rotation also retain the scene when map dimensions and background mode stay the
-same. Loading a different-sized HDR, switching background mode, changing shader
+same. Key-light color, intensity and direction edits retain the scene as well.
+Loading a different-sized HDR, switching background mode, changing shader
 features or unlit materials, and changing resolution rebuild the scene. Moving
-between zero and nonzero environment intensity can also require a rebuild. These
-updates can pause interaction briefly. Full rebuilds are combined at
+between zero and nonzero light or environment intensity can also require a
+rebuild. These updates can pause interaction briefly. Full rebuilds are combined at
 roughly 120 ms intervals while held, then applied when released.
 Exposure and denoising change only the displayed image, preserving the original
 HDR accumulation. Denoising does not block window interaction; a result for an

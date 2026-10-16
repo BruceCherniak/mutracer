@@ -103,6 +103,20 @@ int32_t mt_context_update_material(mt_context handle, const uint8_t *input, size
  */
 int32_t mt_context_update_environment(mt_context handle, const uint8_t *input, size_t length,
   char *error, size_t capacity);
+/* Update one analytic light; geometry, acceleration structures, textures and
+ * pipeline are retained. Exactly 128 bytes / 32 words: version=1, original light
+ * index, reserved[2]=0, then Light[28] from mutracer-scene.h. Light words8..11
+ * must be zero: existing rectangular textures and spot IES profiles are preserved.
+ * Supports color, intensity, size/radius, spread/angles and affine transform.
+ * Values follow the full scene's light validation. Type/count/attachment changes
+ * require full commit; type or sampling-resource shape changes return an error
+ * beginning "Full scene commit required:". No addition/removal through this call.
+ * Successful calls reset samples/expire the last job, even for identical input.
+ * Rejects active jobs/failed scenes. Validation rejection preserves scene/job;
+ * GPU execution failure marks the scene failed. Caller input is copied.
+ */
+int32_t mt_context_update_light(mt_context handle, const uint8_t *input, size_t length,
+  char *error, size_t capacity);
 int32_t mt_context_info(mt_context handle, mt_context_info_v1 *info, char *error, size_t capacity);
 int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, size_t size,
   size_t *written, char *error, size_t capacity);
@@ -115,8 +129,8 @@ int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, s
  *
  * requested/submitted/completed counts are additional samples, excluding base.
  * Context info counts only completed samples. Active jobs reject blocking render,
- * reset, commit, update_camera, update_material, update_environment, read_pixels
- * and destroy. Cancel is idempotent:
+ * reset, commit, update_camera, update_material, update_environment, update_light,
+ * read_pixels and destroy. Cancel is idempotent:
  * queued work stops immediately; in-flight work finishes, then poll reaches
  * cancelled or complete.
  * Submitted batches cannot be interrupted. Completed samples remain accumulated;
@@ -125,7 +139,7 @@ int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, s
  * be destroyed or replaced by commit. Device-loss recovery remains unavailable.
  *
  * A job handle expires on the next submit, blocking render, successful reset/
- * commit/camera/material/environment update, or context destruction.
+ * commit/camera/material/environment/light update, or context destruction.
  * Validation-rejected calls retain the job.
  * Handles are never reused. Save any terminal info before starting another job.
  */

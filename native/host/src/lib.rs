@@ -861,14 +861,14 @@ impl GpuScene {
         self.samples = 0;
         Ok(())
     }
-    fn validate_environment(&self, updates: &scene::EnvironmentUpdates) -> Result<()> {
+    fn validate_lighting(&self, updates: &scene::LightingUpdates) -> Result<()> {
         for (id, width, height, data) in updates {
             if *id < 21 {
                 if self.buffers.get(id).map(wgpu::Buffer::size) != Some(data.len() as u64) {
-                    return Err("Environment uniform size mismatch".into());
+                    return Err("Lighting uniform size mismatch".into());
                 }
             } else {
-                let texture = self.textures.get(id).ok_or("Missing environment texture")?;
+                let texture = self.textures.get(id).ok_or("Missing lighting texture")?;
                 if texture.width() != *width || texture.height() != *height {
                     return Err(
                         "Full scene commit required: light sampling texture shape changed".into(),
@@ -876,13 +876,13 @@ impl GpuScene {
                 }
                 let bpp = if *id == 22 { 8 } else { 16 };
                 if data.len() != *width as usize * *height as usize * bpp {
-                    return Err("Environment texture size mismatch".into());
+                    return Err("Lighting texture size mismatch".into());
                 }
             }
         }
         Ok(())
     }
-    fn update_environment(&mut self, updates: &scene::EnvironmentUpdates) -> Result<()> {
+    fn update_lighting(&mut self, updates: &scene::LightingUpdates) -> Result<()> {
         for (id, width, height, data) in updates {
             if *id < 21 {
                 self.gpu.queue.write_buffer(&self.buffers[id], 0, data);

@@ -93,6 +93,15 @@ impl Renderer {
             Err(error) => Err(error),
         }
     }
+    pub fn light(&mut self, bytes: &[u8]) -> Result<bool> {
+        match check(|e, n| unsafe {
+            native::mt_context_update_light(self.handle, bytes.as_ptr(), bytes.len(), e, n)
+        }) {
+            Ok(()) => Ok(true),
+            Err(error) if error.to_string().starts_with("Full scene commit required:") => Ok(false),
+            Err(error) => Err(error),
+        }
+    }
     pub fn camera(&mut self, bytes: &[u8]) -> Result<()> {
         check(|e, n| unsafe {
             native::mt_context_update_camera(self.handle, bytes.as_ptr(), bytes.len(), e, n)

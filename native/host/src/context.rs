@@ -396,13 +396,55 @@ pub unsafe extern "C" fn mt_context_update_environment(
             .as_ref()
             .ok_or("No retained environment preparation")?
             .environment(bytes)?;
-        scene.validate_environment(&packed)?;
+        scene.validate_lighting(&packed)?;
         context.failed = true;
+        context.scene.as_mut().unwrap().update_lighting(&packed)?;
         context
             .scene
-            .as_mut()
+            .as_ref()
             .unwrap()
-            .update_environment(&packed)?;
+            .retained
+            .as_ref()
+            .unwrap()
+            .accept_lighting()?;
+        context.job = None;
+        context.failed = false;
+        Ok(())
+    })
+}
+/// Update one analytic light and refresh all light-selection probabilities.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_context_update_light(
+    handle: u64,
+    input: *const u8,
+    length: usize,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    action(error, capacity, |registry| {
+        let context = context(registry, handle)?;
+        idle(context)?;
+        let scene = ready(context)?;
+        if input.is_null() || length != 128 {
+            return Err("Light descriptor must contain exactly 128 bytes".into());
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+        let packed = scene
+            .retained
+            .as_ref()
+            .ok_or("No retained light preparation")?
+            .light(bytes)?;
+        scene.validate_lighting(&packed)?;
+        context.failed = true;
+        context.scene.as_mut().unwrap().update_lighting(&packed)?;
+        context
+            .scene
+            .as_ref()
+            .unwrap()
+            .retained
+            .as_ref()
+            .unwrap()
+            .accept_lighting()?;
         context.job = None;
         context.failed = false;
         Ok(())

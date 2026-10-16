@@ -16,6 +16,14 @@ unsafe extern "C" {
         output: *mut *const u8,
         size: *mut usize,
     );
+    fn mt_core_scene_accept_lighting(token: u32, output: *mut *const u8, size: *mut usize);
+    fn mt_core_scene_light(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
     fn mt_core_scene_environment(
         input: *const u8,
         length: usize,
@@ -378,26 +386,7 @@ fn validate(bytes: &[u8]) -> Result<()> {
     }
     for i in 0..w.u(7) {
         let o = w.u(12) + i * 28;
-        if w.u(o) > 3 {
-            return Err("Unsupported analytic light type".into());
-        }
-        w.finite(o + 1, 7)?;
-        if (1..=5).any(|k| w.f(o + k) < 0.0) {
-            return Err("Negative light color/intensity/size".into());
-        }
-        if w.u(o) == 0
-            && (w.f(o + 5) <= 0.0 || w.f(o + 6) <= 0.0 || !(0.0..=1.0).contains(&w.f(o + 7)))
-        {
-            return Err("Invalid rectangular light".into());
-        }
-        if w.u(o) == 3
-            && (w.f(o + 6) < 0.0
-                || w.f(o + 6) > w.f(o + 7)
-                || w.f(o + 7) <= 0.0
-                || w.f(o + 7) >= 90.0)
-        {
-            return Err("Invalid spot light angles".into());
-        }
+        validate_light(&w, o)?;
         if w.u(0) < 3 {
             w.reserved(o + 8, 4)?;
         } else {
@@ -419,11 +408,29 @@ fn validate(bytes: &[u8]) -> Result<()> {
                 std::str::from_utf8(&bytes[offset * 4..offset * 4 + length])?;
             }
         }
-        w.affine(o + 12)?;
     }
     let o = w.u(14);
     w.span(o, 32)?;
     validate_camera(&w, o)
+}
+fn validate_light(w: &Words<'_>, o: usize) -> Result<()> {
+    if w.u(o) > 3 {
+        return Err("Unsupported analytic light type".into());
+    }
+    w.finite(o + 1, 7)?;
+    if (1..=5).any(|k| w.f(o + k) < 0.0) {
+        return Err("Negative light color/intensity/size".into());
+    }
+    if w.u(o) == 0 && (w.f(o + 5) <= 0.0 || w.f(o + 6) <= 0.0 || !(0.0..=1.0).contains(&w.f(o + 7)))
+    {
+        return Err("Invalid rectangular light".into());
+    }
+    if w.u(o) == 3
+        && (w.f(o + 6) < 0.0 || w.f(o + 6) > w.f(o + 7) || w.f(o + 7) <= 0.0 || w.f(o + 7) >= 90.0)
+    {
+        return Err("Invalid spot light angles".into());
+    }
+    w.affine(o + 12)
 }
 fn validate_camera(w: &Words<'_>, o: usize) -> Result<()> {
     w.finite(o + 1, 12)?;
@@ -495,6 +502,7 @@ fn binding(binding: u32, kind: &str, id: usize) -> Binding {
 pub(super) struct PreparedState {
     token: u32,
     material_count: usize,
+    light_count: usize,
 }
 impl Drop for PreparedState {
     fn drop(&mut self) {
@@ -509,9 +517,9 @@ impl Drop for PreparedState {
     }
 }
 // Buffer records have zero dimensions; texture records carry their exact extent.
-pub(super) type EnvironmentUpdates = Vec<(usize, u32, u32, Vec<u8>)>;
+pub(super) type LightingUpdates = Vec<(usize, u32, u32, Vec<u8>)>;
 impl PreparedState {
-    pub(super) fn environment(&self, bytes: &[u8]) -> Result<EnvironmentUpdates> {
+    pub(super) fn environment(&self, bytes: &[u8]) -> Result<LightingUpdates> {
         if bytes.len() < 48 || bytes.len() > MAX_BYTES || bytes.len() % 4 != 0 {
             return Err("Invalid environment descriptor length".into());
         }
@@ -550,57 +558,47 @@ impl PreparedState {
                 &mut size,
             );
         }
-        if pointer.is_null() || size < 16 || size > MAX_PREPARED_BYTES || size % 4 != 0 {
-            return Err("Invalid AOT environment command".into());
+        lighting_result(pointer, size, &[7, 8, 21, 22, 23, 24])
+    }
+    pub(super) fn light(&self, bytes: &[u8]) -> Result<LightingUpdates> {
+        if bytes.len() != 128 {
+            return Err("Light descriptor must contain exactly 128 bytes".into());
+        }
+        let w = Words(bytes);
+        if w.u(0) != 1 || w.u(1) >= self.light_count {
+            return Err("Invalid light descriptor version/index".into());
+        }
+        w.reserved(2, 2)?;
+        w.reserved(12, 4)?;
+        validate_light(&w, 4)?;
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            mt_core_scene_light(
+                bytes.as_ptr(),
+                bytes.len(),
+                self.token,
+                &mut pointer,
+                &mut size,
+            );
+        }
+        lighting_result(pointer, size, &[7, 8, 24])
+    }
+    pub(super) fn accept_lighting(&self) -> Result<()> {
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            mt_core_scene_accept_lighting(self.token, &mut pointer, &mut size);
         }
         let packet = unsafe {
-            let result = copy_core_result(pointer, size, size);
+            let result = copy_core_result(pointer, size, 16);
             mt_core_collect();
             result?
         };
-        let w = Words(&packet);
-        if w.u(0) == 2 {
-            return Err(if w.u(1) == 2 {
-                "Full scene commit required: environment shape or shader feature changed"
-            } else {
-                "Native retained environment state is unavailable"
-            }
-            .into());
+        if packet[..4] != 1u32.to_le_bytes() {
+            return Err("Native lighting acceptance failed".into());
         }
-        if w.u(0) != 1 || w.u(1) != 6 || packet.len() < 208 {
-            return Err("Invalid AOT environment resources".into());
-        }
-        let mut updates = Vec::new();
-        for (i, id) in [7, 8, 21, 22, 23, 24].into_iter().enumerate() {
-            let o = 4 + i * 8;
-            let (length, offset) = (w.u(o + 2), w.u(o + 7));
-            if w.u(o) != id
-                || offset < 208
-                || offset % 4 != 0
-                || length % 4 != 0
-                || offset > packet.len()
-                || length > packet.len() - offset
-                || w.u(o + 1) != usize::from(id >= 21)
-                || w.u(o + 6)
-                    != if id == 22 {
-                        4
-                    } else if id >= 21 {
-                        2
-                    } else {
-                        0
-                    }
-            {
-                return Err("Invalid AOT environment resource span/format".into());
-            }
-            w.finite(offset / 4, length / 4)?;
-            updates.push((
-                id,
-                w.u(o + 3) as u32,
-                w.u(o + 4) as u32,
-                packet[offset..offset + length].to_vec(),
-            ));
-        }
-        Ok(updates)
+        Ok(())
     }
     pub(super) fn material(&self, bytes: &[u8]) -> Result<Vec<u8>> {
         if bytes.len() != 48 {
@@ -659,6 +657,60 @@ impl PreparedState {
         Ok(packet[16..].to_vec())
     }
 }
+fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<LightingUpdates> {
+    let header_length = 16 + ids.len() * 32;
+    if pointer.is_null() || size < 16 || size > MAX_PREPARED_BYTES || size % 4 != 0 {
+        return Err("Invalid AOT lighting command".into());
+    }
+    let packet = unsafe {
+        let result = copy_core_result(pointer, size, size);
+        mt_core_collect();
+        result?
+    };
+    let w = Words(&packet);
+    if w.u(0) == 2 {
+        return Err(if w.u(1) == 2 {
+            "Full scene commit required: lighting shape or feature changed"
+        } else {
+            "Native retained lighting state is unavailable"
+        }
+        .into());
+    }
+    if w.u(0) != 1 || w.u(1) != ids.len() || packet.len() < header_length {
+        return Err("Invalid AOT lighting resources".into());
+    }
+    let mut updates = Vec::new();
+    for (i, &id) in ids.iter().enumerate() {
+        let o = 4 + i * 8;
+        let (length, offset) = (w.u(o + 2), w.u(o + 7));
+        if w.u(o) != id
+            || offset < header_length
+            || offset % 4 != 0
+            || length % 4 != 0
+            || offset > packet.len()
+            || length > packet.len() - offset
+            || w.u(o + 1) != usize::from(id >= 21)
+            || w.u(o + 6)
+                != if id == 22 {
+                    4
+                } else if id >= 21 {
+                    2
+                } else {
+                    0
+                }
+        {
+            return Err("Invalid AOT lighting resource span/format".into());
+        }
+        w.finite(offset / 4, length / 4)?;
+        updates.push((
+            id,
+            w.u(o + 3) as u32,
+            w.u(o + 4) as u32,
+            packet[offset..offset + length].to_vec(),
+        ));
+    }
+    Ok(updates)
+}
 pub(super) fn prepare_retained(
     bytes: &[u8],
 ) -> Result<(Scene, HashMap<String, Vec<u8>>, PreparedState)> {
@@ -672,6 +724,11 @@ pub(super) fn prepare_retained(
         .map_err(|_| "Native preparation token space exhausted")?;
     let state = PreparedState {
         token,
+        light_count: if bytes.len() >= 32 {
+            Words(bytes).u(7)
+        } else {
+            0
+        },
         material_count: if bytes.len() >= 28 {
             Words(bytes).u(6)
         } else {
