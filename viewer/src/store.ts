@@ -217,6 +217,8 @@ export interface SelectedMaterial {
   textures: string[];
   /** Texture in each slot, as a thumbnail URL; `''` when it cannot be drawn. */
   maps: Partial<Record<TextureKey, string>>;
+  /** Suggested local-unit slider range for the selected mesh, without limiting typed values. */
+  displacementRange: { min: number; max: number; step: number };
 }
 
 /**

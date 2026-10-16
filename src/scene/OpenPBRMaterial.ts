@@ -244,9 +244,11 @@ export default class OpenPBRMaterial {
   displacementUvProjection: UVProjection = materialDefault('displacementUvProjection');
   /** UV scale used with `displacementUvProjection`. Default `1`. */
   displacementUvProjectionScale: number = materialDefault('displacementUvProjectionScale');
-  /** Height multiplier in mesh-local coordinate units. Default `0.1`. */
+  /** Height multiplier in mesh-local units; 0 removes height variation. Default `0.1`. */
   displacementScale: number = materialDefault('displacementScale');
-  /** Ray-marching step for projective displacement. Default `0.01`. */
+  /** Offset added after scaling the height map, along the normal in mesh-local units; requires a displacement map. Default `0`. */
+  displacementBias: number = materialDefault('displacementBias');
+  /** Ray-marching step in mesh-local units; 0 automatically uses abs(displacementScale) / 32. Default `0`. */
   displacementStepSize: number = materialDefault('displacementStepSize');
 
 }

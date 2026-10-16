@@ -32,7 +32,7 @@ export function MaterialPanel() {
   const base = material.values.baseColor as [number, number, number];
   const isOpen = (group: MaterialGroup) => {
     if (openGroups[group.id] !== undefined) return openGroups[group.id];
-    if (group.id === 'displacement') return textures.has('displacementMap');
+    if (group.id === 'displacement') return true;
     if (!group.weight) return group.id !== 'advanced';
     return Number(material.values[group.weight]) > 0;
   };
@@ -73,12 +73,14 @@ export function MaterialPanel() {
             onOpenChange={(open) => setOpenGroups((g) => ({ ...g, [group.id]: open }))}
           >
             {group.params.map((param) => (
-              <ParamControl key={param.key} param={param} values={material.values} textures={textures}
+              <ParamControl key={param.key} param={param.key === 'displacementScale'
+                ? { ...param, ...material.displacementRange } : param.key === 'displacementBias'
+                  ? { ...param, ...material.displacementRange, min: -material.displacementRange.max } : param} values={material.values} textures={textures}
                 disabled={group.id === 'displacement' && webgl}
                 onChange={(values) => set(values, paramLabel(group, param), `${material.id}:${param.key}`)} />
             ))}
             {group.id === 'displacement' && <Hint>{webgl ? 'Displacement requires WebGPU.' :
-              'Height uses mesh-local units; 0 disables displacement.'}</Hint>}
+              'Offset = texture × Scale + Bias, in mesh-local units. Sliders follow object size. Double-click to enter any value. A displacement texture is required.'}</Hint>}
           </Section>
         );
       })}
@@ -120,12 +122,13 @@ function ParamControl({
   return (
     <Scrub
       label={<>{param.label}{badge}</>}
-      title={param.label}
+      title={param.key === 'displacementScale' || param.key === 'displacementBias' ? param.key : param.label}
       value={Number(values[param.key])}
       min={param.min}
       max={param.max}
       step={param.step}
       unit={param.unit}
+      format={param.key === 'displacementScale' || param.key === 'displacementBias' ? (value) => Number(value.toPrecision(6)).toString() : undefined}
       disabled={disabled}
       onChange={(v) => onChange({ [param.key]: v })}
     />

@@ -43,7 +43,7 @@ describe('viewer displacement edits', () => {
     material.map = new Texture({ data: new Uint8Array(4), width: 1, height: 1 });
     material.map.uvScale = [2, 3]; material.map.uvOffset = [.1, .2]; material.map.uvChannel = 1;
     const file = new Blob(['height'], { type: 'image/png' });
-    await editor.setTextures(source.uuid, { displacementMap: file }, { displacementScale: .04, displacementStepSize: .005 }, 'Height');
+    await editor.setTextures(source.uuid, { displacementMap: file }, { displacementScale: .04, displacementBias: -.02, displacementStepSize: .005 }, 'Height');
     const height = material.displacementMap!;
     expect(height.uvScale).toEqual([2, 3]);
     expect(height.uvOffset).toEqual([.1, .2]);
@@ -53,12 +53,15 @@ describe('viewer displacement edits', () => {
     undo();
     expect(material.displacementMap).toBeUndefined();
     expect(material.displacementScale).toBe(.1);
+    expect(material.displacementBias).toBe(0);
     redo();
     expect(material.displacementMap).toBe(height);
+    expect(material.displacementBias).toBe(-.02);
     expect(material.displacementStepSize).toBe(.005);
     editor.reset(source.uuid);
     expect(material.displacementMap).toBeUndefined();
     expect(material.displacementScale).toBe(.1);
+    expect(material.displacementBias).toBe(0);
   });
 
   it('selects triplanar coordinates for a UV-less mesh in the same undo step', async () => {
@@ -77,7 +80,7 @@ describe('viewer displacement edits', () => {
     editor.modelId = 'model';
     const file = new Blob(['height'], { type: 'image/jpeg' });
     await editor.setTextures(source.uuid, { displacementMap: file }, {
-      displacementScale: .025, displacementStepSize: .003, displacementUvProjection: 'spherical', displacementUvProjectionScale: 2
+      displacementScale: .025, displacementBias: -.0125, displacementStepSize: .003, displacementUvProjection: 'spherical', displacementUvProjectionScale: 2
     }, 'Height');
     editor.flush();
     const saved = vi.mocked(saveMaterialEdits).mock.calls[0][0];
@@ -90,6 +93,7 @@ describe('viewer displacement edits', () => {
     expect(restored.displacementMap).toBeDefined();
     expect(restored.displacementMap).not.toBe(material.displacementMap);
     expect(restored.displacementScale).toBe(.025);
+    expect(restored.displacementBias).toBe(-.0125);
     expect(restored.displacementStepSize).toBe(.003);
     expect(restored.displacementUvProjection).toBe('spherical');
     expect(restored.displacementUvProjectionScale).toBe(2);

@@ -239,10 +239,11 @@ export function getPreparedMeshGeometryCacheKey(mesh: Mesh) {
   // UV and procedural displacement both need height-aware BLAS bounds and
   // packed triangle ranges. Never reuse the source's undisplaced tree, or a
   // different material's height field, when a texture/scale changes.
-  if (texture && Math.abs(material.displacementScale) > 1e-6) {
+  const scale = getMeshDisplacementScale(mesh);
+  if (texture && (scale !== 0 || material.displacementBias !== 0)) {
     return ['displacement', source.version, getDisplacementTextureDataCacheKey(texture),
       +texture.flipY, texture.uvScale.join(','), texture.uvOffset.join(','), texture.uvChannel,
-      material.displacementScale, material.displacementUvProjectionScale, material.displacementUvProjection].join('|');
+      scale, material.displacementBias, material.displacementUvProjectionScale, material.displacementUvProjection].join('|');
   }
   return undefined;
 }
@@ -723,9 +724,26 @@ export function getMeshBlasInput(mesh: Mesh) {
   const geometry = getMeshBlasGeometry(mesh);
   const heightMap = getMeshDisplacementMap(mesh);
   const displacementScale = heightMap ? getMeshDisplacementScale(mesh) : 0;
-  const trianglesDisplacement = Math.abs(displacementScale) > 1e-6
+  const trianglesDisplacement = displacementScale !== 0
     ? getTrianglesDisplacementRange(geometry, heightMap, getMeshDisplacementMaterial(mesh))
     : undefined;
+  // Build bounds around a normal-offset base while retaining original vertex
+  // attributes for texture coordinates and shading. This same input works for
+  // built-in, TinyBVH and Worker builds; the shader offsets its base identically.
+  const bias = heightMap ? getMeshDisplacementMaterial(mesh).displacementBias : 0;
+  if (bias !== 0) {
+    const positions = geometry.position.array.slice();
+    const normals = geometry.normal.array;
+    for (let vertex = 0; vertex < geometry.vertexCount; vertex++) {
+      const p = vertex * geometry.position.itemSize, n = vertex * geometry.normal.itemSize;
+      const length = Math.hypot(normals[n], normals[n + 1], normals[n + 2]);
+      if (length > 0) {
+        for (let axis = 0; axis < 3; axis++) positions[p + axis] += normals[n + axis] / length * bias;
+      }
+    }
+    return { geometry: new Geometry({ ...geometry, position: new Attribute(positions, geometry.position.itemSize) }),
+      displacementScale, trianglesDisplacement };
+  }
   return { geometry, displacementScale, trianglesDisplacement };
 }
 
@@ -767,8 +785,8 @@ function prepareMeshGeometryBvh(mesh: Mesh, displacement = true) {
   const displacementScale = displacement && getMeshDisplacementMap(mesh) ? getMeshDisplacementScale(mesh) : 0;
   if (geometry.dynamic && getGeometryBvh(geometry)?.builder !== 'builtin') setGeometryBvh(geometry, undefined);
   if (!getGeometryBvh(geometry)) {
-    const trianglesDisplacement = displacement ? getMeshBlasInput(mesh).trianglesDisplacement : undefined;
-    setGeometryBvh(geometry, buildBLAS(geometry, displacementScale, trianglesDisplacement));
+    const input = displacement ? getMeshBlasInput(mesh) : { geometry, displacementScale, trianglesDisplacement: undefined };
+    setGeometryBvh(geometry, buildBLAS(input.geometry, input.displacementScale, input.trianglesDisplacement));
   }
   return { geometry, displacementScale };
 }

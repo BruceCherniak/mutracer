@@ -89,7 +89,7 @@ export const openPbrSchema = [
   {key: 'displacementUvProjectionScale', type: 'float', default: 1, category: 'geometry'},
   {key: 'displacementMap', type: 'texture', default: undefined, category: 'texture'},
   {key: 'displacementScale', type: 'float', default: 0.1, category: 'geometry'},
-  {key: 'displacementStepSize', type: 'float', default: 0.01, category: 'geometry'},
+  {key: 'displacementStepSize', type: 'float', default: 0, category: 'geometry'},
   {key: 'thinFilmThicknessMinimum', type: 'float', default: 0, category: 'param'},
   {key: 'thinFilmMapChannel', type: 'enum', default: 'r', category: 'param'},
   {key: 'coatWeightMap', type: 'texture', default: undefined, category: 'texture'},
@@ -104,6 +104,7 @@ export const openPbrSchema = [
   {key: 'specularAnisotropyModel', type: 'enum', default: 'openpbr', category: 'param'},
   {key: 'coatNormalMap', type: 'texture', default: undefined, category: 'texture'},
   {key: 'coatNormalScale', type: 'vec2', default: [1, 1], category: 'param'},
+  {key: 'displacementBias', type: 'float', default: 0, category: 'geometry'},
 ] as const satisfies readonly Field[];
 type SchemaTextureName = Extract<typeof openPbrSchema[number], {type: 'texture'}>['key'];
 const textureNamesMatch: [Exclude<MaterialTextureName, SchemaTextureName> | Exclude<SchemaTextureName, MaterialTextureName>] extends [never] ? true : never = true;

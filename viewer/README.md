@@ -6,10 +6,17 @@ materials, lighting, camera and render settings, play glTF animations and
 export PNGs.
 
 In the material panel, upload or drop a height image into the Displacement
-texture slot, then adjust Height in the Displacement section. Height uses
-mesh-local units; 0 disables the effect. Meshes without UVs automatically
-use triplanar coordinates when a height map is applied. Displacement requires
-WebGPU; its controls are disabled on WebGL 2.
+texture slot, then adjust Scale (`displacementScale`) in the Displacement
+section, which is expanded by default. Bias shifts the surface along its normal:
+`offset = texture × Scale + Bias`. Both use mesh-local units; Bias defaults to
+`0`. Set Bias to `-Scale / 2` for centered displacement. Scale's slider covers
+0–10% of the selected mesh's longest local side, and Bias covers the same
+distance in both directions, with precision adjusted to mesh size. Double-click
+to enter a value outside those ranges. Selecting another mesh changes the range
+without changing the material's values. A map is required even when Scale is
+`0` and Bias is nonzero. Meshes without UVs automatically use triplanar
+coordinates when a height map is applied.
+Displacement requires WebGPU; its controls are disabled on WebGL 2.
 
 In the Poly Haven texture browser, enable Download displacement map before
 choosing a set to include its height map when available. This option is off by

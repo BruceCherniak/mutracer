@@ -43,6 +43,7 @@ function getPDMDisplacmentCode(anyHit: boolean) {
     getMapSize(displacementMapIndex),
     minH, maxH,
     hScale,
+    matData.displacementBias,
     matData.displacementStepSize,
     i32(matData.displacementUvProjection),
     displacementUvProjectionScale,
@@ -57,24 +58,20 @@ const displacementIntersectCode = function (anyHit: boolean, hasAnisotropyDirect
 
 let hScale = insData.w;
 let minMaxH = bitcast<i32>(r3.w);
+// Displacement currently uses the first material of the instance.
+let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
+let matData = materialsBuffer[materialIndex];
+let n0 = normalize(attrBuffers[index.x * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
+let n1 = normalize(attrBuffers[index.y * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
+let n2 = normalize(attrBuffers[index.z * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
+if (matData.displacementMapIndex >= 0.0 && matData.displacementBias != 0.0) {
+  tri.p0 += n0 * matData.displacementBias;
+  tri.p1 += n1 * matData.displacementBias;
+  tri.p2 += n2 * matData.displacementBias;
+}
 if (abs(hScale) > 0.0 && minMaxH > 0) {
-  // Scale normal by displacement scale
-  let n0 = normalize(attrBuffers[index.x * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
-  let n1 = normalize(attrBuffers[index.y * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
-  let n2 = normalize(attrBuffers[index.z * ATTR_STRIDE + NORMAL_OFF]${hasAnisotropyDirections ? '.xyz' : ''});
-
   let minH = f32(minMaxH >> 8) / 255.0;
   let maxH = f32(minMaxH & 0xff) / 255.0;
-
-  let pA = tri.p0 + n0 * hScale * minH;
-  let pB = tri.p1 + n1 * hScale * minH;
-  let pC = tri.p2 + n2 * hScale * minH;
-  let pD = tri.p0 + n0 * hScale * maxH;
-  let pE = tri.p1 + n1 * hScale * maxH;
-  let pF = tri.p2 + n2 * hScale * maxH;
-  // TODO not support material blending
-  let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
-  let matData = materialsBuffer[materialIndex];
   let displacementUvProjectionScale = vec2f(matData.displacementUvProjectionScale);
   let displacementMapIndex = i32(matData.displacementMapIndex);
 

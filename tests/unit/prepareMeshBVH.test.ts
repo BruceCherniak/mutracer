@@ -7,6 +7,9 @@ import {
   getTrianglesDisplacementRange,
   getBvhBounds,
   getPreparedMeshGeometry,
+  getMeshBlasInput,
+  captureMeshBlasSnapshot,
+  meshBlasSnapshotIsCurrent,
   updateMeshInstances
 } from '../../src/renderer/prepareMeshBVH';
 
@@ -80,6 +83,16 @@ it('uses undisplaced bounds on a backend without height-field intersection', () 
   expect(getBvhBounds(prepared.geometries[0])[1][2]).toBe(0);
   expect(prepared.instanceBindings[0].displacementScale).toBe(0);
   expect(material.displacementMap).toBeDefined();
+});
+
+it('prepares height prisms for local heights smaller than a microunit', () => {
+  const material = new OpenPBRMaterial();
+  material.displacementMap = heightTexture([1, 1, 1, 1], 2);
+  material.displacementScale = 1e-7;
+  const geometry = triangleGeometry(), mesh = new Mesh(geometry, material);
+  updateMeshInstances([mesh]);
+  expect(getPreparedMeshGeometry(mesh)).not.toBe(geometry);
+  expect(getBvhBounds(getPreparedMeshGeometry(mesh))[1][2]).toBeCloseTo(1e-7, 12);
 });
 
 it('assigns material slots by identity and retains them after parameter edits', () => {
@@ -172,3 +185,30 @@ function triangleGeometry() {
 function heightTexture(values: number[], width: number, height = width) {
   return new Texture({ data: new Float32Array(values), width, height });
 }
+
+
+it.each([-.3, .2])('adds signed bias %s to height bounds without modifying source vertices', (bias) => {
+  const geometry = triangleGeometry();
+  const original = geometry.position.array.slice();
+  const material = new OpenPBRMaterial({ displacementMap: heightTexture([1, 1, 1, 1], 2), displacementScale: .2 });
+  const mesh = new Mesh(geometry, material);
+  updateMeshInstances([mesh]);
+  const target = getPreparedMeshGeometry(mesh), snapshot = captureMeshBlasSnapshot(mesh, target);
+  material.displacementBias = bias;
+  expect(meshBlasSnapshotIsCurrent(mesh, target, snapshot)).toBe(false);
+  updateMeshInstances([mesh]);
+  expect(getBvhBounds(getPreparedMeshGeometry(mesh))[1][2]).toBeCloseTo(.2 + bias);
+  expect(geometry.position.array).toEqual(original);
+  expect(getPreparedMeshGeometry(mesh).position.array).toEqual(original);
+  // Worker/TinyBVH builds receive the same biased base used by the shader.
+  expect(getMeshBlasInput(mesh).geometry.position.array[2]).toBeCloseTo(bias);
+  material.displacementScale = 0;
+  updateMeshInstances([mesh]);
+  const [min, max] = getBvhBounds(getPreparedMeshGeometry(mesh));
+  expect(min[2]).toBeCloseTo(bias); expect(max[2]).toBeCloseTo(bias);
+  const unsupported = updateMeshInstances([mesh], { displacement: false });
+  expect(getBvhBounds(unsupported.geometries[0])[1][2]).toBe(0);
+  material.displacementMap = undefined;
+  updateMeshInstances([mesh]);
+  expect(getPreparedMeshGeometry(mesh)).toBe(geometry);
+});

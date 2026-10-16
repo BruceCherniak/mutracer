@@ -15,6 +15,8 @@ it('classifies parameters, emission, textures and geometry with the heaviest lev
   expect(tracker.classify([m]).level).toBe('textures');
   tracker.capture([m]); m.map.markUpdated();
   expect(tracker.classify([m]).level).toBe('textures');
+  tracker.capture([m]); m.displacementBias = -.1;
+  expect(tracker.classify([m]).level).toBe('geometry');
   tracker.capture([m]); m.displacementScale++;
   expect(tracker.classify([m]).level).toBe('geometry');
 });

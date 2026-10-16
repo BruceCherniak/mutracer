@@ -289,6 +289,10 @@ export function materialParametersEqual(material: OpenPBRMaterial, values: reado
       for (let i = 0; i < array.length; i++) if (!Object.is(array[i], previous[i])) return false;
     } else if (!Object.is(value, previous)) return false;
   }
+  {
+    const value = material.displacementBias, previous = values[57];
+    if (!Object.is(value, previous) && !arrayParametersEqual(value, previous)) return false;
+  }
   return true;
 }
 

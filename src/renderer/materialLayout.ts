@@ -64,7 +64,8 @@ export const MATERIAL_LAYOUT = [
   ] },
   { name: 'DISPLACEMENT', fields: [
     field('displacementStepSize', 'displacementStepSize', 'f32'),
-    field('_padding', null, 'f32', true),
+    // Reuses zero padding: default bias preserves historical bytes and stride.
+    field('displacementBias', 'displacementBias', 'f32'),
     field('displacementUvProjection', 'displacementUvProjection', 'f32'),
     field('displacementUvProjectionScale', 'displacementUvProjectionScale', 'f32')
   ] },

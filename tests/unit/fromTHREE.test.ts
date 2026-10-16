@@ -363,6 +363,7 @@ describe('Three.js scene conversion', () => {
     const material = new THREE.MeshStandardMaterial({
       displacementMap,
       displacementScale: 0.25,
+      displacementBias: -.125,
     });
     material.userData.mutracerUvProjection = 'spherical';
     material.userData.mutracerUvProjectionScale = [1.5, 2.5];
@@ -379,11 +380,45 @@ describe('Three.js scene conversion', () => {
     expect(converted.displacementMap?.image).toBe(displacementMap.image);
     expect(converted).toMatchObject({
       displacementScale: 0.25,
+      displacementBias: -.125,
       uvProjection: 'spherical',
       uvProjectionScale: [1.5, 2.5],
       displacementStepSize: 0.004,
       displacementUvProjection: 'cylindrical',
       displacementUvProjectionScale: 2.5
+    });
+  });
+
+  it('uses native displacement defaults before a map is assigned and preserves authored Three.js heights', () => {
+    const source = new THREE.MeshStandardMaterial();
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(new THREE.BoxGeometry(), source));
+    const defaults = new OpenPBRMaterial();
+    let converted = fromTHREEScene(scene).meshes[0].materials[0];
+    expect(source.displacementScale).toBe(1);
+    expect(converted.displacementScale).toBe(defaults.displacementScale);
+    expect(converted.displacementStepSize).toBe(0);
+
+    source.displacementScale = .025;
+    expect(fromTHREEScene(scene).meshes[0].materials[0].displacementScale).toBe(.025);
+    source.displacementScale = 1;
+    source.displacementMap = new THREE.DataTexture(new Uint8Array(16), 2, 2);
+    converted = fromTHREEScene(scene).meshes[0].materials[0];
+    expect(converted.displacementScale).toBe(1);
+    source.displacementScale = 0;
+    expect(fromTHREEScene(scene).meshes[0].materials[0].displacementScale).toBe(0);
+  });
+
+  it('preserves explicit small marching steps and supports automatic step metadata', () => {
+    const source = new THREE.MeshStandardMaterial();
+    const scene = new THREE.Scene(); scene.add(new THREE.Mesh(new THREE.BoxGeometry(), source));
+    source.userData.mutracerDisplacementStepSize = 1e-9;
+    expect(fromTHREEScene(scene).meshes[0].materials[0].displacementStepSize).toBe(1e-9);
+    source.userData.mutracerDisplacementStepSize = 0;
+    expect(fromTHREEScene(scene).meshes[0].materials[0].displacementStepSize).toBe(0);
+    source.userData.mutracerOpenPBR = { displacementScale: .003, displacementBias: -.001, displacementStepSize: .00002 };
+    expect(fromTHREEScene(scene).meshes[0].materials[0]).toMatchObject({
+      displacementScale: .003, displacementBias: -.001, displacementStepSize: .00002
     });
   });
 

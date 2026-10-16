@@ -467,6 +467,7 @@ export interface BufferData extends Record<MaterialTextureIndex, number[]> {
 
   // For PDM displacement.
   displacementStepSize: number[];
+  displacementBias: number[];
 
   // Alpha
   alpha: number[];
@@ -744,8 +745,9 @@ class MaterialTable {
         (m) => uvProjectionConstants[m.displacementUvProjection] || 0
       ),
       displacementUvProjectionScale: materials.map((m) => m.displacementUvProjectionScale || 1),
+      displacementBias: materials.map((m) => m.displacementBias),
       displacementStepSize: materials.map(
-        (m) => m.displacementStepSize || 0.01
+        (m) => Number.isFinite(m.displacementStepSize) && m.displacementStepSize > 0 ? m.displacementStepSize : 0
       ),
 
       // Alpha

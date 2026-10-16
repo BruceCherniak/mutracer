@@ -2214,7 +2214,7 @@ ${rayTraceCompute({
         (mesh) =>
           mesh.geometry === geometry &&
           !!mesh.materials[0]?.displacementMap &&
-          Math.abs(mesh.materials[0].displacementScale) > 1e-6
+          (mesh.materials[0].displacementScale !== 0 || mesh.materials[0].displacementBias !== 0)
       );
       if (usesDisplacement || geometryTopologyChanged(this._preparedMeshData, geometry) || !getGeometryBvh(geometry) || !refitBLAS(getGeometryBvh(geometry)!, geometry)) {
         setGeometryBvh(geometry, undefined);

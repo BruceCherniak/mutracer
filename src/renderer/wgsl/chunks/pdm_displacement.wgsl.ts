@@ -181,6 +181,7 @@ fn intersectDisplacement(
 
   _minH: f32, _maxH: f32,
   hScale: f32,
+  hBias: f32,
   stepSize: f32,
   uvProjection: i32,
   uvScale: vec2f,
@@ -188,7 +189,9 @@ fn intersectDisplacement(
   isRefraction: bool
 ) -> MicroTriangleIntersect {
 
-  let DT = stepSize;
+  // Zero keeps marching resolution proportional to the height instead of
+  // letting a fixed local-unit step dominate small displacements.
+  let DT = select(max(abs(hScale) / 32.0, 1e-12), stepSize, stepSize > 0.0);
   let dt = DT / length(_rayDir);
   let dbx = 0.001;
   let dby = 0.001;
@@ -216,9 +219,11 @@ fn intersectDisplacement(
   // 1. Avoid too small height cause ray marching miss.
   // 2. Make sure the ray start beyond the displaced surface when surface height is same with prism height.
   let prismHeight = abs(maxH) - abs(minH);
-  minH = sign(minH) * max(abs(minH) - dt * 2.0, 0.0);
-  if (prismHeight < dt * 2.0) {
-    maxH = sign(maxH) * min(abs(maxH) + dt * 2.0, abs(hScale));
+  // DT is a local-space length; dt is a ray-parameter increment and changes
+  // when the instance transform scales the ray direction.
+  minH = sign(minH) * max(abs(minH) - DT * 2.0, 0.0);
+  if (prismHeight < DT * 2.0) {
+    maxH = sign(maxH) * min(abs(maxH) + DT * 2.0, abs(hScale));
   }
 
   let pA = _pA + _nA * minH / dA;
@@ -273,14 +278,14 @@ fn intersectDisplacement(
     var uv: vec2f;
     if (uvProjection > 0) {
       let n = normalize(_nA * b.x + _nB * b.y + _nC * b.z);
-      uv = wrapUv(projectUV(uvProjection, projPos, n) * uvScale);
+      uv = wrapUv(projectUV(uvProjection, projPos - (_nA * b.x + _nB * b.y + _nC * b.z) * hBias, n) * uvScale);
     }
     else {
       uv = wrapUv(_tcA * b.x + _tcB * b.y + _tcC * b.z);
     }
     let h = sampleMap(heightMapIndex, uv).x;
-    // height < dt will be ignored in ray marching
-    hSurf = max(hScaleAbs * h, dt);
+    // Heights are measured in mesh-local units, independently of ray length.
+    hSurf = max(hScaleAbs * h, DT);
 
     // Advance scanning triangle
     let dh = dot(faceN, s - c0);
@@ -324,9 +329,9 @@ fn intersectDisplacement(
       let NA = normalize(_nA * b.x + _nB * b.y + _nC * b.z);
       let NB = normalize(_nA * (b.x + dbx) + _nB * b.y + _nC * (b.z - dbx));
       let NC = normalize(_nA * b.x + _nB * (b.y + dby) + _nC * (b.z - dby));  
-      uv_a = projectUV(uvProjection, p_a, NA) * uvScale;
-      uv_b = projectUV(uvProjection, p_b, NB) * uvScale;
-      uv_c = projectUV(uvProjection, p_c, NC) * uvScale;
+      uv_a = projectUV(uvProjection, p_a - (_nA * b.x + _nB * b.y + _nC * b.z) * hBias, NA) * uvScale;
+      uv_b = projectUV(uvProjection, p_b - (_nA * (b.x + dbx) + _nB * b.y + _nC * (b.z - dbx)) * hBias, NB) * uvScale;
+      uv_c = projectUV(uvProjection, p_c - (_nA * b.x + _nB * (b.y + dby) + _nC * (b.z - dby)) * hBias, NC) * uvScale;
     }
     else {
       uv_a = _tcA * b.x + _tcB * b.y + _tcC * b.z;

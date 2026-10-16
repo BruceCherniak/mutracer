@@ -104,6 +104,16 @@ Meshes without UVs get automatic triplanar texture and displacement
 projection; explicit
 `mutracerUvProjection` settings take precedence.
 
+Three.js `displacementScale` and `displacementBias` retain their local-unit
+semantics. Without a displacement map, Three.js's inactive default height of `1`
+is replaced by MuTracer's default `0.1`; other explicitly configured heights
+are preserved. `userData.mutracerOpenPBR.displacementScale` can explicitly set
+any height, including `1`, before a map is assigned; `displacementBias` in the
+same metadata overrides the Three.js bias. The same metadata object's
+`displacementStepSize` overrides marching quality: `0` uses automatic steps,
+and a positive value is a fixed local-unit step. See
+[displacement](materials.md#displacement) for scaling and cost.
+
 ## Skinning and morph targets
 
 The initial conversion and each `sync.update()` evaluate morph targets and

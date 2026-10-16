@@ -176,15 +176,20 @@ function convertMaterial(
     standardMaterial.displacementMap,
     textureCache
   );
+  const displacementBias = Number(standardMaterial.displacementBias);
+  if (Number.isFinite(displacementBias)) material.displacementBias = displacementBias;
   const displacementScale = Number(standardMaterial.displacementScale);
-  material.displacementScale = Number.isFinite(displacementScale)
+  // Three.js stores 1 even without a height map. Do not turn that inactive
+  // default into MuTracer's height when a texture is added after conversion.
+  material.displacementScale = Number.isFinite(displacementScale) &&
+    (standardMaterial.displacementMap != null || displacementScale !== 1)
     ? displacementScale
     : material.displacementScale;
   const displacementStepSize = Number(
     standardMaterial.userData.mutracerDisplacementStepSize
   );
   if (Number.isFinite(displacementStepSize)) {
-    material.displacementStepSize = Math.max(0.000001, displacementStepSize);
+    material.displacementStepSize = Math.max(0, displacementStepSize);
   }
   const uvProjection = standardMaterial.userData
     .mutracerDisplacementUvProjection;
@@ -336,6 +341,12 @@ function convertMaterial(
       : fallback;
   };
   if (openPbr) {
+    for (const key of ['displacementScale', 'displacementBias', 'displacementStepSize'] as const) {
+      const value = openPbr[key];
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        material[key] = key === 'displacementStepSize' ? Math.max(0, value) : value;
+      }
+    }
     if (openPbr.specularAnisotropyModel !== undefined) {
       specularAnisotropyModelIndex(openPbr.specularAnisotropyModel);
       material.specularAnisotropyModel = openPbr.specularAnisotropyModel as 'openpbr' | 'gltf';

@@ -13,6 +13,7 @@ import {
   type LoadedModel, type PathedFile
 } from './loadModel';
 import type { MaterialValues, TextureKey } from './materialParams';
+import { displacementHeightRange } from './displacementHeightRange';
 import { downloadPolyHavenMap, polyHavenMaps, type TextureResolution } from './polyHaven';
 import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
 import { MaterialEditor, readPendingEdits, type PendingEdits } from './materialEditor';
@@ -981,7 +982,12 @@ export class ViewerEngine {
 
   private publishMaterial(materialId: string | null, meshName?: string) {
     const description = materialId ? this.materials.describe(materialId) : null;
-    set({ material: materialId && description ? { id: materialId, meshName: meshName ?? '', ...description } : null });
+    const objectId = get().selection.objectId;
+    const mesh = objectId ? this.modelGroup.getObjectByProperty('uuid', objectId) as THREE.Mesh | undefined : undefined;
+    set({ material: materialId && description ? {
+      id: materialId, meshName: meshName ?? '', ...description,
+      displacementRange: displacementHeightRange(mesh?.geometry)
+    } : null });
   }
 
   /**

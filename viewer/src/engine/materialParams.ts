@@ -94,7 +94,8 @@ export const MATERIAL_GROUPS: MaterialGroup[] = [
   },
   {
     id: 'displacement', label: 'Displacement', params: [
-      { kind: 'number', key: 'displacementScale', label: 'Height', min: 0, max: 1, step: 0.001, texture: 'displacementMap' }
+      { kind: 'number', key: 'displacementScale', label: 'Scale', min: 0, max: 1, step: 0.001, texture: 'displacementMap' },
+      { kind: 'number', key: 'displacementBias', label: 'Bias', min: -1, max: 1, step: 0.001 }
     ]
   },
   {

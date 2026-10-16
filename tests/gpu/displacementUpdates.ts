@@ -9,20 +9,31 @@ const webgl = parameters.has('webgl');
 const builder = parameters.get('builder') === 'tinybvh' ? 'tinybvh' : 'builtin';
 const captures: { label: string; data: Float32Array }[] = [];
 
-async function fixture() {
+async function fixture(scale = 1, objectScale = false, baseOffset = 0) {
   const source = new THREE.Scene();
-  source.add(new THREE.Mesh(new THREE.SphereGeometry(.65, 24, 12), new THREE.MeshBasicMaterial({ color: 0xff8040 })));
+  source.add(new THREE.Mesh(new THREE.SphereGeometry(.65 * (objectScale ? 1 : scale), 24, 12), new THREE.MeshBasicMaterial({ color: 0xff8040 })));
+  if (baseOffset !== 0) {
+    const geometry = (source.children[0] as THREE.Mesh).geometry;
+    const position = geometry.getAttribute('position'), normal = geometry.getAttribute('normal');
+    const n = new THREE.Vector3();
+    for (let i = 0; i < position.count; i++) {
+      n.fromBufferAttribute(normal, i).normalize().multiplyScalar(baseOffset);
+      position.setXYZ(i, position.getX(i) + n.x, position.getY(i) + n.y, position.getZ(i) + n.z);
+    }
+  }
   const glb = await new GLTFExporter().parseAsync(source, { binary: true }) as ArrayBuffer;
   const root = (await new GLTFLoader().parseAsync(glb, '')).scene;
+  if (objectScale) root.scale.setScalar(scale);
   const scene = new THREE.Scene(); scene.add(root);
   const canvas = document.createElement('canvas');
   const engine = new Engine({ canvas, backend: webgl ? 'webgl' : 'webgpu' });
   engine.display.setSize(64, 64);
   engine.bvhBuilder = builder;
-  const camera = new THREE.PerspectiveCamera(40, 1, .1, 10);
-  camera.position.set(0, 0, 3); camera.lookAt(0, 0, 0);
+  const camera = new THREE.PerspectiveCamera(40, 1, .1 * scale, 10 * scale);
+  camera.position.set(0, 0, 3 * scale); camera.lookAt(0, 0, 0);
   const sync = new THREESync(engine, { scene, camera }); sync.update();
   const material = sync.scene!.meshes[0].materials[0];
+  if (parameters.has('fixed-step')) material.displacementStepSize = .01;
   const render = new Render(engine, { width: 64, height: 64, bounces: 2, samplingPattern: 'sobol' });
   const info = await engine.init();
   return { canvas, engine, sync, render, material, info };
@@ -86,11 +97,78 @@ async function run() {
     document.getElementById('result')!.textContent = JSON.stringify({ passed, backend: f.engine.backend, builder,
       adapter: f.info.adapterName, comparisons }, null, 2);
     const download = document.createElement('a'); download.textContent = 'Download HDR evidence';
-    download.download = `displacement-${f.engine.backend}-${builder}.json`;
+    download.download = `displacement-${f.engine.backend}-${builder}${parameters.has('fixed-step') ? '-fixed-step' : '-auto-step'}.json`;
     download.href = URL.createObjectURL(new Blob([JSON.stringify(captures.map(({label, data}) => ({label, data: Array.from(data)})))]));
     document.body.append(download);
   } finally {
     for (const item of [f, reference]) { item?.render.dispose(); item?.sync.dispose(); item?.engine.dispose(); }
   }
 }
-void run().catch(error => { document.getElementById('result')!.textContent = `FAILED: ${error.stack ?? error}`; });
+async function runDefaultScales() {
+  const comparisons: Record<string, ReturnType<typeof difference>> = {};
+  let reference: Float32Array | undefined;
+  for (const scale of [.01, 1, 100]) {
+    const object = await fixture(scale, true), baked = await fixture(scale);
+    try {
+      object.material.displacementMap = heightTexture();
+      baked.material.displacementMap = heightTexture();
+      // Baking the object transform into the vertices also requires baking
+      // its local displacement height. The API does not change units.
+      baked.material.displacementScale = object.material.displacementScale * scale;
+      const transformed = await capture(object, `Object scale ${scale}`);
+      const applied = await capture(baked, `Baked scale ${scale}, height ${baked.material.displacementScale}`);
+      comparisons[`baked-${scale}`] = difference(transformed, applied);
+      if (reference) comparisons[`object-${scale}`] = difference(reference, transformed);
+      else reference = transformed;
+    } finally {
+      for (const f of [object, baked]) { f.render.dispose(); f.sync.dispose(); f.engine.dispose(); }
+    }
+  }
+  document.getElementById('result')!.textContent = JSON.stringify({
+    passed: Object.values(comparisons).every(value => value.meanAbsolute < .0001), webgl, builder, comparisons
+  }, null, 2);
+  const download = document.createElement('a'); download.textContent = 'Download HDR evidence';
+  download.download = `displacement-default-scales-${webgl ? 'webgl' : 'webgpu'}-${builder}.json`;
+  download.href = URL.createObjectURL(new Blob([JSON.stringify(captures.map(({ label, data }) => ({ label, data: Array.from(data) })))]));
+  document.body.append(download);
+}
+async function runBias() {
+  const f = await fixture();
+  const comparisons: Record<string, ReturnType<typeof difference>> = {};
+  try {
+    const baseline = await capture(f, 'No map');
+    f.material.displacementBias = -.1;
+    const withoutMap = await capture(f, 'Bias without a map');
+    comparisons.noMap = difference(baseline, withoutMap);
+    f.material.displacementBias = 0;
+    f.material.displacementMap = heightTexture(); f.material.displacementScale = .2;
+    const unbiased = await capture(f, 'Height 0.2, bias 0');
+    for (const [height, bias] of [[.2, -.1], [.2, .1], [0, -.1], [0, .1]]) {
+      f.material.displacementScale = height; f.material.displacementBias = bias;
+      const actual = await capture(f, `Height ${height}, bias ${bias}`);
+      comparisons[`effect-${height}-${bias}`] = difference(height === 0 ? baseline : unbiased, actual);
+      if (!webgl) {
+        const reference = await fixture(1, false, bias);
+        try {
+          reference.material.displacementMap = heightTexture(); reference.material.displacementScale = height;
+          const expected = await capture(reference, `Baked bias ${bias}, height ${height}`);
+          comparisons[`reference-${height}-${bias}`] = difference(expected, actual);
+        } finally { reference.render.dispose(); reference.sync.dispose(); reference.engine.dispose(); }
+      }
+    }
+    f.material.displacementBias = 0; f.material.displacementScale = .2;
+    comparisons.restored = difference(unbiased, await capture(f, 'Restored bias 0'));
+    const passed = comparisons.noMap.changedValues === 0 && comparisons.restored.changedValues === 0 &&
+      Object.entries(comparisons).every(([key, value]) => Number.isFinite(value.meanAbsolute) &&
+        (key.startsWith('reference-') ? value.meanAbsolute < .0001 :
+          key.startsWith('effect-') ? (webgl ? value.changedValues === 0 : value.changedValues > 100) : true));
+    document.getElementById('result')!.textContent = JSON.stringify({passed, backend: f.engine.backend, builder, comparisons}, null, 2);
+    const download = document.createElement('a'); download.textContent = 'Download HDR evidence';
+    download.download = `displacement-bias-${f.engine.backend}-${builder}.json`;
+    download.href = URL.createObjectURL(new Blob([JSON.stringify(captures.map(({label, data}) => ({label, data: Array.from(data)})))]));
+    document.body.append(download);
+  } finally { f.render.dispose(); f.sync.dispose(); f.engine.dispose(); }
+}
+void (parameters.has('bias') ? runBias() : parameters.has('scale-defaults') ? runDefaultScales() : run()).catch(error => {
+  document.getElementById('result')!.textContent = `FAILED: ${error.stack ?? error}`;
+});

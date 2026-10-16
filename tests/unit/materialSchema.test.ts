@@ -9,7 +9,9 @@ import baseline from '../fixtures/material-schema-baseline.json';
 function fixedMaterials() {
   const textures = [0,1].map(i => new Texture({width:2,height:2,data:new Uint8Array(16).fill(80 + i*60)}));
   textures[0].uvScale = [2,3]; textures[0].uvOffset = [.1,.2]; textures[1].uvChannel = 1; textures[1].markUpdated();
-  const base = new Material();
+  // This historical packing fixture explicitly retains the old fixed step.
+  // Automatic step defaults are tested separately.
+  const base = new Material({displacementStepSize: .01});
   const enums: Record<string, string> = {alphaMode:'mask', mapAlphaUsage:'transmission', uvProjection:'triplanar', displacementUvProjection:'spherical'};
   const params = Object.fromEntries(baseline.keys.map((key,i) => {
     const value = base[key as keyof Material];
@@ -38,8 +40,8 @@ describe('OpenPBR schema', () => {
     const materials = fixedMaterials(); const data = new MaterialTable(materials, []);
     const bytes = Buffer.from(data.getBufferArray().buffer);
     expect(materialKeys.slice(0, baseline.keys.length)).toEqual(baseline.keys);
-    expect(materialKeys.slice(baseline.keys.length)).toEqual(['thinFilmThicknessMinimum', 'thinFilmMapChannel', 'coatWeightMap', 'coatRoughnessMap', 'fuzzColorMap', 'fuzzRoughnessMap', 'specularWeightMap', 'specularColorMap', 'anisotropyMap', 'specularAnisotropyRotation', 'coatAnisotropyRotation', 'specularAnisotropyModel', 'coatNormalMap', 'coatNormalScale']);
-    expect(materials.map(getMaterialHashKey)).toEqual(baseline.hashes.map(hash => `${hash}_0_r_$_$_$_$_$_$_$_0_0_openpbr_$_1_1`));
+    expect(materialKeys.slice(baseline.keys.length)).toEqual(['thinFilmThicknessMinimum', 'thinFilmMapChannel', 'coatWeightMap', 'coatRoughnessMap', 'fuzzColorMap', 'fuzzRoughnessMap', 'specularWeightMap', 'specularColorMap', 'anisotropyMap', 'specularAnisotropyRotation', 'coatAnisotropyRotation', 'specularAnisotropyModel', 'coatNormalMap', 'coatNormalScale', 'displacementBias']);
+    expect(materials.map(getMaterialHashKey)).toEqual(baseline.hashes.map(hash => `${hash}_0_r_$_$_$_$_$_$_$_0_0_openpbr_$_1_1_0`));
     // C1 migrates only the seven obsolete reserved scalars and stride; the
     // displacement bump slots are reserved zeros since its removal.
     expect(bytes).toEqual(Buffer.from(baseline.packedBase64, 'base64'));
