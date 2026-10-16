@@ -639,6 +639,8 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
   if (native && !getGeometryBvh(geometry)!.buffer.byteLength) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
   geometry.markVerticesUpdated();
   updatePreparedGeometries(prepared, new Set([geometry]));
+  // A shared refit may request a rebuild; native rebuilds must go through C++ TinyBVH.
+  if (native && getGeometryBvh(geometry)?.builder !== 'tinybvh') return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
   const instances = updateMeshInstanceTransforms(prepared.instanceBindings), stage = {meshes, prepared, geometry, sourceIndex: u[1], instances};
   if (native) {geometryStages.set(token, stage); return requestInstances(instances);}
   return packGeometryUpdate(stage, buildTLAS(instances, prepared.blases), token);

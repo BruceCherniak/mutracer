@@ -1,3 +1,4 @@
+import {canonicalAttributes, lowerConcreteAccess} from './attribute-lowering.mjs';
 import {canonicalMatrixStorage, matrixNames, specializeMatrices} from './matrix-lowering.mjs';
 import {spawnSync} from 'node:child_process';
 import {cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync} from 'node:fs';
@@ -68,11 +69,12 @@ function compilerSource() {
     ['src/scene/attributeData.ts', ['Float32Array', 'Uint16Array', 'Uint32Array']]]) {
     writeFileSync(resolve(staged, file), narrowAccess(readFileSync(resolve(root, file), 'utf8'), types));
   }
-  if (nativeMatrices) canonicalMatrixStorage(staged);
+  if (nativeMatrices) {canonicalMatrixStorage(staged); canonicalAttributes(staged);}
   for (const name of ['mat3', 'mat4', 'vec2', 'vec3']) {
     const file = `src/math/${name}.ts`;
     writeFileSync(resolve(staged, file), lowerMath(readFileSync(resolve(staged, file), 'utf8'), name));
   }
+  if (nativeMatrices) lowerConcreteAccess(staged, 'native/render-core.ts');
   snapshots.set(nativeMatrices, staged);
   return staged;
 }
@@ -113,7 +115,7 @@ export function spawnCompiler(compiler, args, options = {}, matrixPrecision) {
   result.nativeSourceRoot = staged;
   for (const field of ['stdout', 'stderr']) if (typeof result[field] === 'string') {
     for (const [generated, original] of originals) result[field] = result[field].replaceAll(generated, original);
-    result[field] = result[field].replaceAll(staged + '/', root + '/');
+    if (!nativeMatrices) result[field] = result[field].replaceAll(staged + '/', root + '/');
   }
   return result;
 }

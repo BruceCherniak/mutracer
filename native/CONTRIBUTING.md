@@ -333,6 +333,14 @@ Raw camera comparisons use upstream Float64 math; original browser captures keep
 their own precision so cross-backend differences remain visible. Geometry keeps
 supplied attribute objects/arrays by identity,
 including union-typed Uint16/Uint32 index attributes.
+The raw native wire uses Uint32 indices. Its generated layout narrows indices to
+that format, derives Float32/Int32 vertex packers from the shared loop, then uses
+the TypeScript checker to inline only provably concrete typed-array accesses.
+Open numeric/vector unions retain compatibility accessors; never reinterpret
+mixed buffers by casting their storage. Diagnostics for the raw graph point to
+inspectable generated files, preserving their actual line numbers. Accepted native
+vertex refits retain TinyBVH data; a builder change requests a native full commit.
+
 
 The viewer importer expands Meshopt, quantized float attributes and WebP before
 gltf-rs validation; instance transforms and the initial skin/morph pose are
