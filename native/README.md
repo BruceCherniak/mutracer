@@ -76,6 +76,15 @@ a full scene commit; rejection preserves the current scene and samples. These
 updates reject active jobs. See [the context header](./mutracer-context.h) for
 the record layout and lifetime rules.
 
+Use `mt_context_update_environment` to replace linear environment/background map
+pixels or a solid background color while retaining geometry, material textures
+and the pipeline. Map dimensions, map presence and background visibility must
+match the committed scene; changes require a full commit. Moving between zero
+and nonzero map power can also require a full commit. The call restarts
+accumulation, rejects active jobs and preserves the scene on validation rejection.
+Its cost grows with map size and the number of emissive triangles. See
+[the context header](./mutracer-context.h) for the record format and limits.
+
 ## Intersection backend
 
 `mt_context_create` keeps software BVH traversal. Use
@@ -111,9 +120,9 @@ Cancel stops further submissions. An already submitted batch finishes before
 poll reports cancellation, so keep polling after cancel. Completed samples stay
 accumulated and a later job can continue them. Full completion takes precedence
 over late cancellation. One context accepts one active job; while active, render,
-commit, camera/material update, reset, readback and destroy return errors. Finish or cancel
-and drain the job before using those calls. The header specifies job states, sample counters
-and handle lifetimes.
+commit, camera/material/environment update, reset, readback and destroy return
+errors. Finish or cancel and drain the job before using those calls. The header
+specifies job states, sample counters and handle lifetimes.
 
 ## Scene inputs and options
 

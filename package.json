@@ -66,7 +66,6 @@
     "native:verify": "node native/verify.mjs",
     "native:browser-reference": "node native/reference-server.mjs",
     "native:check": "node native/check.mjs",
-    "native:verify-oidn": "node native/verify-oidn.mjs",
     "dev": "vite",
     "build": "npm run typecheck && vite build",
     "typecheck": "npm run check:material-comparison && tsc --noEmit",

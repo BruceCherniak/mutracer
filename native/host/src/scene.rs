@@ -16,6 +16,13 @@ unsafe extern "C" {
         output: *mut *const u8,
         size: *mut usize,
     );
+    fn mt_core_scene_environment(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
     fn mt_core_scene(input: *const u8, length: usize, output: *mut *const u8, size: *mut usize);
     fn mt_core_scene_camera(
         input: *const u8,
@@ -501,7 +508,100 @@ impl Drop for PreparedState {
         }
     }
 }
+// Buffer records have zero dimensions; texture records carry their exact extent.
+pub(super) type EnvironmentUpdates = Vec<(usize, u32, u32, Vec<u8>)>;
 impl PreparedState {
+    pub(super) fn environment(&self, bytes: &[u8]) -> Result<EnvironmentUpdates> {
+        if bytes.len() < 48 || bytes.len() > MAX_BYTES || bytes.len() % 4 != 0 {
+            return Err("Invalid environment descriptor length".into());
+        }
+        let w = Words(bytes);
+        if w.u(0) != 1 || w.u(3) > 1 || w.u(10) != 0 || w.u(11) != 0 {
+            return Err("Invalid environment version/visibility/reserved fields".into());
+        }
+        let mut pixels = 0;
+        for i in [1, 8] {
+            let (width, height) = (w.u(i), w.u(i + 1));
+            if (width == 0) != (height == 0)
+                || width > 16382
+                || height > 16382
+                || width * height > 4_194_304
+            {
+                return Err("Environment dimensions exceed limits".into());
+            }
+            pixels += width * height;
+        }
+        if w.len() != 12 + pixels * 4 {
+            return Err("Environment pixel length mismatch".into());
+        }
+        w.finite(4, 4)?;
+        w.finite(12, pixels * 4)?;
+        if (12..w.len()).any(|i| w.f(i) < 0.) {
+            return Err("Environment pixels must be nonnegative".into());
+        }
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            mt_core_scene_environment(
+                bytes.as_ptr(),
+                bytes.len(),
+                self.token,
+                &mut pointer,
+                &mut size,
+            );
+        }
+        if pointer.is_null() || size < 16 || size > MAX_PREPARED_BYTES || size % 4 != 0 {
+            return Err("Invalid AOT environment command".into());
+        }
+        let packet = unsafe {
+            let result = copy_core_result(pointer, size, size);
+            mt_core_collect();
+            result?
+        };
+        let w = Words(&packet);
+        if w.u(0) == 2 {
+            return Err(if w.u(1) == 2 {
+                "Full scene commit required: environment shape or shader feature changed"
+            } else {
+                "Native retained environment state is unavailable"
+            }
+            .into());
+        }
+        if w.u(0) != 1 || w.u(1) != 6 || packet.len() < 208 {
+            return Err("Invalid AOT environment resources".into());
+        }
+        let mut updates = Vec::new();
+        for (i, id) in [7, 8, 21, 22, 23, 24].into_iter().enumerate() {
+            let o = 4 + i * 8;
+            let (length, offset) = (w.u(o + 2), w.u(o + 7));
+            if w.u(o) != id
+                || offset < 208
+                || offset % 4 != 0
+                || length % 4 != 0
+                || offset > packet.len()
+                || length > packet.len() - offset
+                || w.u(o + 1) != usize::from(id >= 21)
+                || w.u(o + 6)
+                    != if id == 22 {
+                        4
+                    } else if id >= 21 {
+                        2
+                    } else {
+                        0
+                    }
+            {
+                return Err("Invalid AOT environment resource span/format".into());
+            }
+            w.finite(offset / 4, length / 4)?;
+            updates.push((
+                id,
+                w.u(o + 3) as u32,
+                w.u(o + 4) as u32,
+                packet[offset..offset + length].to_vec(),
+            ));
+        }
+        Ok(updates)
+    }
     pub(super) fn material(&self, bytes: &[u8]) -> Result<Vec<u8>> {
         if bytes.len() != 48 {
             return Err("Material descriptor must contain exactly 48 bytes".into());
@@ -532,7 +632,6 @@ impl PreparedState {
         }
         let packet = unsafe {
             let result = copy_core_result(pointer, size, size);
-            mt_core_reset();
             mt_core_collect();
             result?
         };

@@ -20,6 +20,7 @@ enum Change {
     Reset,
     Camera,
     Material,
+    Environment,
     Scene,
 }
 struct Viewer {
@@ -44,6 +45,7 @@ struct Viewer {
     change: Change,
     pending_materials: std::collections::BTreeSet<usize>,
     pending_camera: bool,
+    pending_environment: bool,
     candidate: Option<(Model, Camera)>,
     pixels: Vec<f32>,
     pixel_size: [u32; 2],
@@ -93,6 +95,7 @@ impl Viewer {
             change: Change::None,
             pending_materials: Default::default(),
             pending_camera: false,
+            pending_environment: false,
             candidate: None,
             pixels: vec![],
             pixel_size: size,
@@ -134,6 +137,9 @@ impl Viewer {
     fn dirty(&mut self, change: Change) {
         if change == Change::Camera {
             self.pending_camera = true;
+        }
+        if change == Change::Environment {
+            self.pending_environment = true;
         }
         self.change = self.change.max(change);
         self.generation += 1;
@@ -222,7 +228,7 @@ impl Viewer {
                             ))?;
                         }
                     }
-                    Change::Material => {
+                    Change::Material | Change::Environment => {
                         for &id in &self.pending_materials {
                             if !self
                                 .renderer
@@ -232,6 +238,14 @@ impl Viewer {
                                 self.change = Change::Scene;
                                 return Ok(());
                             }
+                        }
+                        if self.pending_environment
+                            && !self
+                                .renderer
+                                .environment(&self.environment.update_bytes())?
+                        {
+                            self.change = Change::Scene;
+                            return Ok(());
                         }
                         if self.pending_camera {
                             self.renderer.camera(&self.camera.bytes())?;
@@ -251,6 +265,7 @@ impl Viewer {
                     self.change = Change::None;
                     self.pending_materials.clear();
                     self.pending_camera = false;
+                    self.pending_environment = false;
                     self.error.clear();
                 }
             }
@@ -597,7 +612,7 @@ impl Viewer {
                             }
                         });
                         if changed {
-                            self.dirty(Change::Scene);
+                            self.dirty(Change::Environment);
                         }
                         ui.add_space(14.);
                     }
@@ -1158,7 +1173,11 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         },
         |_| {},
     );
+    let last_commit = viewer.last_scene_commit;
     for step in 0..80 {
+        viewer.environment.intensity = 0.3 + step as f32 * 0.02;
+        viewer.environment.rotation = step as f32 * 9.;
+        viewer.dirty(Change::Environment);
         viewer.model.materials[id].color = [0.1 + step as f32 / 100., 0.4, 0.7];
         viewer.model.materials[id].roughness = (step % 20) as f32 / 20.;
         viewer.pending_materials.insert(id);
@@ -1200,7 +1219,14 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
-    ensure!(previews >= 3, "Held material edits starved previews");
+    ensure!(
+        previews >= 3,
+        "Held environment/material edits starved previews"
+    );
+    ensure!(
+        viewer.last_scene_commit == last_commit,
+        "Partial edits rebuilt the scene"
+    );
     let mut reference = Renderer::with_backend(viewer.backend)?;
     reference.commit(&viewer.model.descriptor(
         &viewer.camera.bytes(),
@@ -1209,7 +1235,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     ))?;
     ensure!(
         reference.finish(viewer.samples)? == viewer.pixels,
-        "Combined material/camera updates differ from full commit"
+        "Combined environment/material/camera updates differ from full commit"
     );
     renderer::save(
         &out.join("interactive-material.png"),
@@ -1218,7 +1244,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         0.,
     )?;
     println!(
-        "PASS 80 held material updates plus camera motion: {previews} changed previews, zero blanks, final HDR byte-exact to full commit"
+        "PASS 80 held environment/material updates plus camera motion: {previews} changed previews, zero blanks, final HDR byte-exact to full commit"
     );
     viewer.model.materials[id].unlit = true;
     viewer.dirty(Change::Scene);
@@ -1259,6 +1285,35 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     println!(
         "PASS unsupported material update falls back to full commit; preview retained; final HDR byte-exact"
+    );
+
+    viewer.environment.background = !viewer.environment.background;
+    viewer.dirty(Change::Environment);
+    viewer.tick(&ctx)?;
+    ensure!(
+        viewer.change == Change::Scene && viewer.texture.is_some(),
+        "Environment feature change did not retain preview and schedule full commit"
+    );
+    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    {
+        viewer.tick(&ctx)?;
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Environment fallback timed out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    reference.commit(&viewer.model.descriptor(
+        &viewer.camera.bytes(),
+        viewer.size,
+        &viewer.environment,
+    ))?;
+    ensure!(
+        reference.finish(viewer.samples)? == viewer.pixels,
+        "Environment full-commit fallback mismatch"
+    );
+    println!(
+        "PASS environment feature change falls back to full commit; preview retained; HDR byte-exact"
     );
 
     Ok(())
@@ -1351,6 +1406,84 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     Ok(())
 }
+fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
+    std::fs::create_dir_all(out)?;
+    let model = Model::load(path)?;
+    let camera = Camera::fit(model.center, model.radius);
+    let mut environment = Environment::default();
+    let size = [160, 106];
+    let mut renderer = Renderer::with_backend(1)?;
+    let mut reference = Renderer::with_backend(1)?;
+    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    let original = renderer.finish(8)?;
+    let mut bad = environment.update_bytes();
+    bad[48..52].copy_from_slice(&f32::NAN.to_le_bytes());
+    ensure!(
+        renderer.environment(&bad).is_err() && renderer.pixels()? == original,
+        "Invalid environment changed scene"
+    );
+    renderer.start(1)?;
+    ensure!(
+        renderer.environment(&environment.update_bytes()).is_err(),
+        "Active job accepted environment update"
+    );
+    renderer.cancel()?;
+    while !renderer.poll()? {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    for mode in 0..2 {
+        if mode == 1 {
+            // Different dimensions require a full commit. Subsequent HDR edits
+            // use the same partial path as the procedural studio environment.
+            environment.image = Some(image::Rgb32FImage::from_fn(16, 8, |x, y| {
+                image::Rgb([0.1 + x as f32 * 0.2, 0.2 + y as f32 * 0.3, 0.5])
+            }));
+            ensure!(
+                !renderer.environment(&environment.update_bytes())?,
+                "Map resize accepted partial update"
+            );
+            renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+        }
+        for step in 0..8 {
+            environment.intensity = if step == 0 { 0. } else { step as f32 * 0.4 };
+            environment.rotation = step as f32 * 57.;
+            environment.color = [0.2 + step as f32 * 0.1, 0.8, 0.4];
+            ensure!(
+                renderer.environment(&environment.update_bytes())?,
+                "Expected partial environment update"
+            );
+            ensure!(
+                renderer.samples()? == 0,
+                "Environment update did not reset samples"
+            );
+            let actual = renderer.finish(8)?;
+            reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+            ensure!(
+                actual == reference.finish(8)?
+                    && renderer.image(1)? == reference.image(1)?
+                    && renderer.image(2)? == reference.image(2)?,
+                "Partial environment differs from full commit at {mode}/{step}"
+            );
+        }
+    }
+    renderer::save(&out.join("partial.png"), &renderer.pixels()?, size, 0.)?;
+    let current = renderer.pixels()?;
+    environment.background = false;
+    ensure!(
+        !renderer.environment(&environment.update_bytes())? && renderer.pixels()? == current,
+        "Background feature rejection changed scene"
+    );
+    environment = Environment::default();
+    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    ensure!(
+        renderer.finish(8)? == original,
+        "Environment baseline restore differs"
+    );
+    println!(
+        "PASS 16 studio/HDR environment updates: HDR/normal/albedo byte-exact to full commits; invalid/active-job/shape/feature rejection; original restored"
+    );
+    Ok(())
+}
 fn main() -> Result<()> {
     let mut model = None;
     let mut smoke_out = None;
@@ -1358,9 +1491,16 @@ fn main() -> Result<()> {
     let mut inspect = false;
     let mut preview_out = None;
     let mut material_out = None;
+    let mut environment_out = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--environment-smoke" => {
+                environment_out = Some(PathBuf::from(
+                    args.next()
+                        .context("--environment-smoke needs a directory")?,
+                ))
+            }
             "--material-smoke" => {
                 material_out = Some(PathBuf::from(
                     args.next().context("--material-smoke needs a directory")?,
@@ -1390,6 +1530,9 @@ fn main() -> Result<()> {
         }
     }
     let model = model.unwrap_or_else(default_model);
+    if let Some(out) = environment_out {
+        return environment_smoke(&model, &out);
+    }
     if let Some(out) = material_out {
         return material_smoke(&model, &out);
     }

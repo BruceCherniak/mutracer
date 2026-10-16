@@ -50,7 +50,9 @@ export function sceneCameraParameters(bytes: Uint8Array, width: number, height: 
 }
 
 import {retainedSceneParameters as prepareRetained, releaseSceneParameters as releaseRetained,
-  sceneMaterialParameters as prepareMaterial} from './scene-core.js';
+  sceneMaterialParameters as prepareMaterial, sceneEnvironmentParameters as prepareEnvironment} from './scene-core.js';
 export function retainedSceneParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareRetained(bytes, token); }
 export function releaseSceneParameters(token: number): Uint8Array { return releaseRetained(token); }
 export function sceneMaterialParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareMaterial(bytes, token); }
+
+export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareEnvironment(bytes, token); }

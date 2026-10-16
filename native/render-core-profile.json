@@ -103,6 +103,15 @@
         "u32"
       ],
       "returns": "bytes"
+    },
+    {
+      "export": "sceneEnvironmentParameters",
+      "symbol": "mt_core_scene_environment",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
     }
   ]
 }

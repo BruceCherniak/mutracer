@@ -53,7 +53,7 @@ for (const [name, entry] of [
 }
 
 const builds = {};
-for (const name of ['engine', 'engine-core', 'async-boundary', 'oidn']) {
+for (const name of ['engine', 'engine-core', 'async-boundary']) {
   const artifact = resolve(output, `${name}.lib.a`);
   rmSync(artifact, { force: true });
   const result = run(['build', '--lib', '--profile', `native/${name}-profile.json`, '-o', artifact]);

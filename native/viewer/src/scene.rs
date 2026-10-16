@@ -930,6 +930,28 @@ impl Environment {
             .into();
         Ok(())
     }
+    pub fn update_bytes(&self) -> Vec<u8> {
+        let (width, height, pixels) = self.pixels();
+        let mut words = vec![
+            1,
+            width,
+            height,
+            0,
+            0.025f32.to_bits(),
+            0.025f32.to_bits(),
+            0.03f32.to_bits(),
+            0,
+            if self.background { width } else { 0 },
+            if self.background { height } else { 0 },
+            0,
+            0,
+        ];
+        words.extend(pixels.iter().map(|v| v.to_bits()));
+        if self.background {
+            words.extend(pixels.iter().map(|v| v.to_bits()));
+        }
+        words.into_iter().flat_map(u32::to_le_bytes).collect()
+    }
     fn pixels(&self) -> (u32, u32, Vec<f32>) {
         let (width, height) = self
             .image

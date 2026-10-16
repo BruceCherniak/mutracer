@@ -66,9 +66,8 @@ partial AOT export call that same adapter. Rust shares the full-scene lens/
 transform validator, copies the AOT command before arena reset/collection, checks
 finite packed values, uploads the camera uniform and clears accumulation. It
 does not rebuild the scene, bind groups, textures or pipeline. No duplicate
-camera math is implemented in Rust. Other partial scene updates still need a
-native persistent preparation-state contract for the existing shared TS update
-functions; raw commits currently discard those TS scene objects after packing.
+camera math is implemented in Rust. Material and environment updates retain
+separate preparation state as described below; geometry updates remain pending.
 
 ## Job validation
 
@@ -213,7 +212,6 @@ prebuilt combined BVH file and requires the same C-driven render/AOV output.
 | Camera translation/shared camera packing and material patches | scriptc AOT machine code from runtime C inputs |
 | Resource creation, dispatch, accumulation, HDR readback | Native Rust/wgpu with the real GPU |
 | Preview encoding | Native Rust; simplified presentation, not browser display parity |
-| OIDN URL utilities | Separate AOT archive verified below; not denoising |
 | Hardware ray queries | Independent BLAS/TLAS probe and opt-in hybrid MuTracer rendering pass |
 
 Verified on Apple M4 Max / Metal at 480x320 and 256 samples. The actual adapter
@@ -238,7 +236,7 @@ difference. Broader scene and feature parity remain pending.
 | Correctness across backends | Browser/native HDR and exact guide comparisons; two native hybrid fixtures pass documented color/guide/shadow gates | Broader fixed-seed scenes and browser WebGL coverage |
 | Native release | macOS-only probe and experimental ABI | Stable ABI, platform CI, release dependency/license inventory |
 
-## Full-library diagnostics and isolated URL archive
+## Full-library diagnostics
 
 ```sh
 npm run native:check
@@ -251,16 +249,6 @@ Read `summary.json`, individual JSON diagnostics and build logs in the output
 directory. Error-site counts include cascading errors, not independent fixes.
 Coverage's top-level `success` can be true while uncalled exports still contain
 errors; the gate counts those errors too.
-
-The OIDN URL archive can be checked against the JavaScript distribution:
-
-```sh
-npm run build:lib
-npm run native:verify-oidn
-```
-
-Run `native:check` first and use the same output directory. Verification covers
-37 cases / 3,700 calls and one invalid-model panic. No inference is executed.
 
 ## Implementation notes
 
@@ -356,3 +344,18 @@ dependencies. Rebuilt core/API and official modules must be from the same versio
 Check both Metal and forced CPU inference after any upstream change, compare
 RGBA32F against prior output, and test a relocated package with no build-tree
 loader paths. No source SDKs, weights or binaries enter the repository.
+
+## Partial environment validation
+
+Run `[MODEL] --environment-smoke DIRECTORY` for exact full/partial comparisons of
+studio and HDR intensity/tint/rotation, including zero power, invalid/busy calls,
+shape/feature rejection and restoration. `--interaction-smoke` combines held
+environment/material edits with camera movement, checks no full commit occurs,
+and validates the background-feature fallback with a retained preview.
+Full and partial preparation call the same native adapter around the original
+TS environment distribution, alias-table, emissive and analytic light packing.
+Retain only material state, analytic lights, emissive records and base uniforms;
+do not root the merged geometry/BVH graph. Texture shape changes use full commit.
+Both light-selection PMFs and the environment CDF must update with radiance.
+The native OIDN CPU/Metal smoke supersedes the removed URL-only AOT/C example;
+whole-entry diagnostics still include `src/oidn.ts` and its public export inventory.

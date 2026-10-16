@@ -60,9 +60,12 @@ are unverified.
 Camera changes restart accumulation while retaining the scene. The previous
 image remains visible until a newer preview arrives, including while dragging.
 Basic color, roughness, metalness and transmission edits retain the scene's
-geometry and textures and restart accumulation. Changes that affect shader
-features, unlit materials, environment and resolution still rebuild the scene;
-these updates can pause interaction briefly. Full rebuilds are combined at
+geometry and textures and restart accumulation. Environment intensity, tint and
+rotation also retain the scene when map dimensions and background mode stay the
+same. Loading a different-sized HDR, switching background mode, changing shader
+features or unlit materials, and changing resolution rebuild the scene. Moving
+between zero and nonzero environment intensity can also require a rebuild. These
+updates can pause interaction briefly. Full rebuilds are combined at
 roughly 120 ms intervals while held, then applied when released.
 Exposure and denoising change only the displayed image, preserving the original
 HDR accumulation. Denoising does not block window interaction; a result for an

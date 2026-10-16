@@ -377,8 +377,7 @@ struct GpuScene {
     buffers: HashMap<usize, wgpu::Buffer>,
     pipeline: wgpu::ComputePipeline,
     groups: Vec<wgpu::BindGroup>,
-    _textures: HashMap<usize, wgpu::Texture>,
-    _samplers: HashMap<usize, wgpu::Sampler>,
+    textures: HashMap<usize, wgpu::Texture>,
     hardware: Option<hardware::Resources>,
     native_bvh: Option<(Vec<u8>, native_bvh::Stats)>,
     compile_seconds: f64,
@@ -758,8 +757,7 @@ impl GpuScene {
             buffers,
             pipeline,
             groups,
-            _textures: textures,
-            _samplers: samplers,
+            textures: textures,
             hardware,
             native_bvh,
             compile_seconds,
@@ -862,6 +860,50 @@ impl GpuScene {
         })?;
         self.samples = 0;
         Ok(())
+    }
+    fn validate_environment(&self, updates: &scene::EnvironmentUpdates) -> Result<()> {
+        for (id, width, height, data) in updates {
+            if *id < 21 {
+                if self.buffers.get(id).map(wgpu::Buffer::size) != Some(data.len() as u64) {
+                    return Err("Environment uniform size mismatch".into());
+                }
+            } else {
+                let texture = self.textures.get(id).ok_or("Missing environment texture")?;
+                if texture.width() != *width || texture.height() != *height {
+                    return Err(
+                        "Full scene commit required: light sampling texture shape changed".into(),
+                    );
+                }
+                let bpp = if *id == 22 { 8 } else { 16 };
+                if data.len() != *width as usize * *height as usize * bpp {
+                    return Err("Environment texture size mismatch".into());
+                }
+            }
+        }
+        Ok(())
+    }
+    fn update_environment(&mut self, updates: &scene::EnvironmentUpdates) -> Result<()> {
+        for (id, width, height, data) in updates {
+            if *id < 21 {
+                self.gpu.queue.write_buffer(&self.buffers[id], 0, data);
+            } else {
+                self.gpu.queue.write_texture(
+                    self.textures[id].as_image_copy(),
+                    data,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(*width * if *id == 22 { 8 } else { 16 }),
+                        rows_per_image: Some(*height),
+                    },
+                    wgpu::Extent3d {
+                        width: *width,
+                        height: *height,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+        }
+        self.reset_raw()
     }
     fn update_material(&mut self, packed: &[u8]) -> Result<()> {
         let buffer = self

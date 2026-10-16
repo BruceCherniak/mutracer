@@ -374,6 +374,40 @@ pub unsafe extern "C" fn mt_context_update_material(
         Ok(())
     })
 }
+/// Refresh environment radiance, importance distribution and all light PMFs.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_context_update_environment(
+    handle: u64,
+    input: *const u8,
+    length: usize,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    action(error, capacity, |registry| {
+        let context = context(registry, handle)?;
+        idle(context)?;
+        let scene = ready(context)?;
+        if input.is_null() || length < 48 || length > scene::MAX_BYTES {
+            return Err("Invalid environment descriptor length".into());
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+        let packed = scene
+            .retained
+            .as_ref()
+            .ok_or("No retained environment preparation")?
+            .environment(bytes)?;
+        scene.validate_environment(&packed)?;
+        context.failed = true;
+        context
+            .scene
+            .as_mut()
+            .unwrap()
+            .update_environment(&packed)?;
+        context.job = None;
+        context.failed = false;
+        Ok(())
+    })
+}
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_info(
     handle: u64,

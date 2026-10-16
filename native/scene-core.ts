@@ -15,6 +15,7 @@ import { InstanceState, RectLightState, SphereLight, DirectionalLight, SpotLight
   packEmissiveTriangles, packIESProfiles, LIGHT_CHOICE_ENVIRONMENT, LIGHT_CHOICE_ANALYTIC,
   LIGHT_CHOICE_EMISSIVE_TRIANGLE } from '../src/renderer/lightCore.js';
 export * from '../src/renderer/lightCore.js';
+import type { EmissiveTriangle } from '../src/renderer/lightSampling.js';
 import type { AnalyticLightState } from '../src/scene/lightState.js';
 import { write } from '../src/math/access.js';
 import { meshInstancesLength } from '../src/renderer/packedMeshInstances.js';
@@ -33,21 +34,24 @@ import { makeRayTraceUniform, packWgpuAnalyticLights, WGPU_SCENE_BUFFER_MIN_BYTE
 import { zSobolLog2SPP } from '../src/renderer/sampling.js';
 import { getOpenPbrEnergyLutData, OPENPBR_ENERGY_LUT_WIDTH, OPENPBR_ENERGY_LUT_HEIGHT } from '../src/renderer/openPbrEnergyLut.js';
 
-// Root only material preparation, not merged geometry or GPU resources. A full
-// context commit owns the token; raw/replay probes remain stateless.
-const retainedMaterials = new Map<number, {source: MaterialState[]; ordered: MaterialState[]; table: MaterialData}>();
+// Root material and light preparation, never merged geometry/BVH or GPU resources.
+// A full context commit owns the token; raw/replay probes remain stateless.
+const retainedScenes = new Map<number, {source: MaterialState[]; ordered: MaterialState[]; table: MaterialData;
+  lights: AnalyticLightState[]; emissive: EmissiveTriangle[]; rt: ArrayBuffer;
+  environmentWidth: number; environmentHeight: number; backgroundWidth: number; backgroundHeight: number;
+  qualityFlags: number}>();
 export function retainedSceneParameters(bytes: Uint8Array, token: number): Uint8Array {
   try { return buildSceneParameters(bytes, token); }
-  catch { retainedMaterials.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer); }
+  catch { retainedScenes.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer); }
 }
 export function releaseSceneParameters(token: number): Uint8Array {
-  retainedMaterials.delete(token);
+  retainedScenes.delete(token);
   return new Uint8Array(16);
 }
 // Version 1: source material index and seven scalar parameters. Maps, emission,
 // geometry and compile-time feature changes require a full commit instead.
 export function sceneMaterialParameters(bytes: Uint8Array, token: number): Uint8Array {
-  const state = retainedMaterials.get(token);
+  const state = retainedScenes.get(token);
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, 12);
   const f = new Float32Array(bytes.buffer, bytes.byteOffset, 12);
   const m = state?.source[u[1]];
@@ -252,30 +256,12 @@ function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
       if (!(texture instanceof PixelTexture)) throw new Error('Native scene requires raw pixels.');
       writeRawAtlasPlacement(data, atlas.width, placement, {image: texture.pixels, flipY: texture.flipY}, atlas.floatStorage);
     }
+    // scriptc needs both typed-array arms narrowed before reading buffer.
     atlasBytes.set(new Uint8Array(data instanceof Uint16Array ? data.buffer : data.buffer), layer * atlas.width * atlas.height * atlas.bytesPerPixel);
   }
   const emissive = new EmissiveTriangleCache().collect(prepared.emissiveBindings, prepared.materials);
-  const choices = new LightChoiceBuffer(); choices.reserve(1 + lights.length + emissive.length);
-  choices.push(LIGHT_CHOICE_ENVIRONMENT, 0, estimateEnvironmentPower(environment));
-  for (let i = 0; i < lights.length; i++) choices.push(LIGHT_CHOICE_ANALYTIC, i, estimateAnalyticLightPower(lights[i]));
-  for (let i = 0; i < emissive.length; i++) choices.push(LIGHT_CHOICE_EMISSIVE_TRIANGLE, i, emissive[i].area * emissive[i].samplingLuminance);
-  const distribution = buildLightAliasTable(choices), lightPmfs = new Array<number>(lights.length).fill(0);
-  let environmentPmf = 0;
-  for (let i = 0; i < choices.count; i++) {
-    if (choices.sourceTypes[i] === LIGHT_CHOICE_ENVIRONMENT) environmentPmf = distribution.pmfs[i];
-    if (choices.sourceTypes[i] === LIGHT_CHOICE_ANALYTIC) lightPmfs[choices.sourceIndices[i]] = distribution.pmfs[i];
-    else if (choices.sourceTypes[i] === LIGHT_CHOICE_EMISSIVE_TRIANGLE) emissive[choices.sourceIndices[i]].selectionPmf = distribution.pmfs[i];
-  }
-  const emissiveTexels = emissive.length * 6, profileStart = emissiveTexels + Math.max(choices.count, 1);
-  const profiles = packIESProfiles(lights, profileStart);
-  const lightWidth = Math.max(16, Math.ceil(Math.sqrt(Math.max(profileStart + profiles.texelCount, 1)) / 16) * 16);
-  const lightHeight = Math.ceil(Math.max(profileStart + profiles.texelCount, 1) / lightWidth);
-  const lightData = new Float32Array(lightWidth * lightHeight * 4);
-  if (emissive.length) packEmissiveTriangles(emissive, lightData);
-  new Uint32Array(lightData.buffer).set(distribution.choices, emissiveTexels * 4);
-  lightData.set(profiles.data, profileStart * 4);
-  const lightUniform = new Float32Array(64 * 24);
-  lightUniform.set(packWgpuAnalyticLights(lights, table.lightTexturesIndices, lightPmfs, i => profiles.offsets[i]));
+  const {lightData, lightWidth, lightHeight, lightUniform, environmentPmf, choiceCount, totalWeight, emissiveTexels}
+    = nativeLighting(lights, table, emissive, environment);
   const rt = makeRayTraceUniform();
   rt.views.outputSize.set([width, height]); rt.views.scaleOffset.set([1, 1, 0, 0]);
   rt.views.lightsCount[0] = lights.length; rt.views.transmissiveOutputAlphaMin[0] = 1;
@@ -283,8 +269,8 @@ function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
   if (!background && !(qualityFlags & 4)) rt.views.backgroundColor.set(f.slice(16, 20));
   rt.views.backgroundFlags[0] = (qualityFlags & 4 ? 0 : 1) | (background ? 2 : 0); rt.views.blasOffset[0] = tlas.buffer.byteLength / 16;
   rt.views.isEmpty[0] = Number(meshInstancesLength(prepared.instances) === 0); rt.views.bevel[0] = Number(!!(qualityFlags & 1));
-  rt.views.dispersionWavelengths[0] = qualityFlags & 2 ? 3 : 1; rt.views.lightChoiceCount[0] = choices.count;
-  rt.views.envLightPmf[0] = environmentPmf; rt.views.lightWeightTotal[0] = distribution.totalWeight;
+  rt.views.dispersionWavelengths[0] = qualityFlags & 2 ? 3 : 1; rt.views.lightChoiceCount[0] = choiceCount;
+  rt.views.envLightPmf[0] = environmentPmf; rt.views.lightWeightTotal[0] = totalWeight;
   rt.views.lightSamplingTextureWidth[0] = lightWidth; rt.views.lightChoiceTexelOffset[0] = emissiveTexels;
   rt.views.sequenceSeed[0] = 12345; rt.views.zSobolLogSPP[0] = zSobolLog2SPP(64);
   rt.views.bounces[0] = 6; rt.views.directLightCandidates[0] = 2;
@@ -315,6 +301,13 @@ function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
   add(25, 1, new Uint8Array(getOpenPbrEnergyLutData().buffer), OPENPBR_ENERGY_LUT_WIDTH, OPENPBR_ENERGY_LUT_HEIGHT, 1, 3);
   add(26, 1, new Uint8Array(new Float32Array([Number.MAX_SAFE_INTEGER]).buffer), 1, 1, 1, 3);
   add(30, 2, shader, 0, 0, 0, 0);
+  if (token) retainedScenes.set(token, {source: materials, ordered: prepared.materials, table, lights, emissive,
+    rt: rt.buffer, environmentWidth: environment?.width ?? 0, environmentHeight: environment?.height ?? 0,
+    backgroundWidth: background?.width ?? 0, backgroundHeight: background?.height ?? 0, qualityFlags});
+  return resourcePacket(records, parts, width, height);
+}
+
+function resourcePacket(records: number[][], parts: Uint8Array[], width: number, height: number) {
   let size = 16 + records.length * 32;
   for (const part of parts) size += Math.ceil(part.length / 4) * 4;
   const result = new Uint8Array(size), header = new Uint32Array(result.buffer);
@@ -323,8 +316,70 @@ function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
     records[i][7] = offset; header.set(records[i], 4 + i * 8);
     result.set(parts[i], offset); offset += Math.ceil(parts[i].length / 4) * 4;
   }
-  if (token) retainedMaterials.set(token, {source: materials, ordered: prepared.materials, table});
   return result;
+}
+
+function nativeLighting(lights: AnalyticLightState[], table: MaterialData, emissive: EmissiveTriangle[],
+  environment: {width: number; height: number; data: Float32Array} | undefined) {
+  const choices = new LightChoiceBuffer(); choices.reserve(1 + lights.length + emissive.length);
+  choices.push(LIGHT_CHOICE_ENVIRONMENT, 0, estimateEnvironmentPower(environment));
+  for (let i = 0; i < lights.length; i++) choices.push(LIGHT_CHOICE_ANALYTIC, i, estimateAnalyticLightPower(lights[i]));
+  for (let i = 0; i < emissive.length; i++) choices.push(LIGHT_CHOICE_EMISSIVE_TRIANGLE, i, emissive[i].area * emissive[i].samplingLuminance);
+  const distribution = buildLightAliasTable(choices), lightPmfs = new Array<number>(lights.length).fill(0);
+  let environmentPmf = 0;
+  for (let i = 0; i < choices.count; i++) {
+    if (choices.sourceTypes[i] === LIGHT_CHOICE_ENVIRONMENT) environmentPmf = distribution.pmfs[i];
+    if (choices.sourceTypes[i] === LIGHT_CHOICE_ANALYTIC) lightPmfs[choices.sourceIndices[i]] = distribution.pmfs[i];
+    else if (choices.sourceTypes[i] === LIGHT_CHOICE_EMISSIVE_TRIANGLE) emissive[choices.sourceIndices[i]].selectionPmf = distribution.pmfs[i];
+  }
+  const emissiveTexels = emissive.length * 6, profileStart = emissiveTexels + Math.max(choices.count, 1);
+  const profiles = packIESProfiles(lights, profileStart);
+  const lightWidth = Math.max(16, Math.ceil(Math.sqrt(Math.max(profileStart + profiles.texelCount, 1)) / 16) * 16);
+  const lightHeight = Math.ceil(Math.max(profileStart + profiles.texelCount, 1) / lightWidth);
+  const lightData = new Float32Array(lightWidth * lightHeight * 4);
+  if (emissive.length) packEmissiveTriangles(emissive, lightData);
+  new Uint32Array(lightData.buffer).set(distribution.choices, emissiveTexels * 4);
+  lightData.set(profiles.data, profileStart * 4);
+  const lightUniform = new Float32Array(64 * 24);
+  lightUniform.set(packWgpuAnalyticLights(lights, table.lightTexturesIndices, lightPmfs, i => profiles.offsets[i]));
+  return {lightData, lightWidth, lightHeight, lightUniform, environmentPmf,
+    choiceCount: choices.count, totalWeight: distribution.totalWeight, emissiveTexels};
+}
+
+// Version 1: dimensions/visibility plus linear RGBA32F environment/background.
+// Resource shape or shader-feature changes use a full scene commit instead.
+export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Uint8Array {
+  const state = retainedScenes.get(token);
+  if (!state) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  const u = new Uint32Array(bytes.buffer, bytes.byteOffset, 12);
+  const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+  if (u[1] !== state.environmentWidth || u[2] !== state.environmentHeight
+    || u[8] !== state.backgroundWidth || u[9] !== state.backgroundHeight
+    || u[3] !== Number(!!(state.qualityFlags & 4))) {
+    return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+  }
+  const envLength = u[1] * u[2] * 4;
+  const environment = envLength ? {width: u[1], height: u[2], data: f.slice(12, 12 + envLength)} : undefined;
+  const background = u[8] * u[9] ? {width: u[8], height: u[9], data: f.slice(12 + envLength)} : undefined;
+  const distribution = environment ? envMapDistribution(environment) : undefined;
+  const lighting = nativeLighting(state.lights, state.table, state.emissive, environment);
+  const rt = makeRayTraceUniform();
+  new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
+  if (!background && !u[3]) rt.views.backgroundColor.set(f.slice(4, 8));
+  rt.views.envLightPmf[0] = lighting.environmentPmf; rt.views.lightChoiceCount[0] = lighting.choiceCount;
+  rt.views.lightWeightTotal[0] = lighting.totalWeight; rt.views.lightSamplingTextureWidth[0] = lighting.lightWidth;
+  rt.views.lightChoiceTexelOffset[0] = lighting.emissiveTexels;
+  const parts: Uint8Array[] = [], records: number[][] = [];
+  function add(id: number, kind: number, data: Uint8Array, width: number, height: number, format: number) {
+    records.push([id, kind, data.length, width, height, kind === 1 ? 1 : 0, format, 0]); parts.push(data);
+  }
+  add(7, 0, new Uint8Array(rt.buffer), 0, 0, 0); add(8, 0, new Uint8Array(lighting.lightUniform.buffer), 0, 0, 0);
+  add(21, 1, environment ? new Uint8Array(environment.data.buffer) : new Uint8Array(16), u[1] || 1, u[2] || 1, 2);
+  add(22, 1, distribution ? new Uint8Array((distribution.data as Float32Array).buffer) : new Uint8Array(8),
+    distribution?.width ?? 1, distribution?.height ?? 1, 4);
+  add(23, 1, background ? new Uint8Array(background.data.buffer) : new Uint8Array(16), u[8] || 1, u[9] || 1, 2);
+  add(24, 1, new Uint8Array(lighting.lightData.buffer), lighting.lightWidth, lighting.lightHeight, 2);
+  return resourcePacket(records, parts, 0, 0);
 }
 
 function nativeFloatImage(texture: PixelTexture | undefined): {width: number; height: number; data: Float32Array} | undefined {
