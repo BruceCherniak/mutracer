@@ -964,16 +964,37 @@ fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
     Ok(packet)
 }
 fn prepare_impl(bytes: &[u8], token: u32) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
+    let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
+    let started = Instant::now();
     validate(bytes)?;
+    let validated = Instant::now();
     // The ABI bytes are borrowed only during this call; the AOT decoder copies
     // every retained array. Copy result bytes before reset or collection.
     init_core();
     let work = (|| -> Result<Vec<u8>> {
         let requests = native_step(mt_core_native_scene_begin, bytes, token)?;
+        let decoded = Instant::now();
         let blases = tinybvh::jobs(&requests, false)?;
+        let built = Instant::now();
         let instances = native_step(mt_core_native_scene_blas, &blases, token)?;
+        let packed = Instant::now();
         let tlas = tinybvh::jobs(&instances, true)?;
-        native_step(mt_core_native_scene_finish, &tlas, token)
+        let top = Instant::now();
+        let result = native_step(mt_core_native_scene_finish, &tlas, token)?;
+        if profile {
+            eprintln!(
+                "{}",
+                json!({"nativePreparationProfile": {
+                    "validateMs": validated.duration_since(started).as_secs_f64() * 1000.0,
+                    "decodeMs": decoded.duration_since(validated).as_secs_f64() * 1000.0,
+                    "blasMs": built.duration_since(decoded).as_secs_f64() * 1000.0,
+                    "meshMs": packed.duration_since(built).as_secs_f64() * 1000.0,
+                    "tlasMs": top.duration_since(packed).as_secs_f64() * 1000.0,
+                    "composeMs": top.elapsed().as_secs_f64() * 1000.0,
+                }})
+            );
+        }
+        Ok(result)
     })();
     if work.is_err() {
         let mut pointer = std::ptr::null();

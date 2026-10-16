@@ -167,9 +167,11 @@ function decodeScene(bytes: Uint8Array) {
   const geometries: Geometry[] = [];
   for (let i = 0; i < u[4]; i++) {
     const off = u[9] + i * 12, count = u[off], indexCount = u[off + 1];
+    // Let the shared constructor generate normals only when the input omits
+    // them. Assigning authored normals afterwards needlessly traversed all faces.
     const geometry = new Geometry({position: new Attribute(f.slice(u[off + 2], u[off + 2] + count * 3), 3),
-      indices: new Attribute(u.slice(u[off + 3], u[off + 3] + indexCount), 1)});
-    if (u[off + 4]) geometry.normal = new Attribute(f.slice(u[off + 4], u[off + 4] + count * 3), 3);
+      indices: new Attribute(u.slice(u[off + 3], u[off + 3] + indexCount), 1),
+      normal: u[off + 4] ? new Attribute(f.slice(u[off + 4], u[off + 4] + count * 3), 3) : undefined});
     if (u[off + 5]) geometry.uv = new Attribute(f.slice(u[off + 5], u[off + 5] + count * 2), 2);
     if (u[off + 6]) geometry.uv1 = new Attribute(f.slice(u[off + 6], u[off + 6] + count * 2), 2);
     if (u[0] >= 2) {
@@ -177,7 +179,6 @@ function decodeScene(bytes: Uint8Array) {
       if (u[off + 8]) geometry.tangent = new Attribute(f.slice(u[off + 8], u[off + 8] + count * 4), 4);
       if (u[off + 9]) geometry.materialIndex = new Attribute(new Int32Array(u.slice(u[off + 9], u[off + 9] + count)), 1);
     }
-    if (!geometry.normal) computeGeometryNormals(geometry);
     if (!geometry.tangent && geometry.uv) generateVertexTangents(geometry);
     geometries.push(geometry);
   }

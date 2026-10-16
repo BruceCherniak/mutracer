@@ -475,6 +475,14 @@ pipeline creation is a subset of it, not an additional phase. An upload retry
 also includes fallback preparation in setup; check `uploadRetried`. Timings
 exclude replacing/dropping the previously committed scene.
 
+The accompanying `nativePreparationProfile` splits validation, source decoding,
+native BLAS construction, mesh assembly, native TLAS construction and resource
+composition. AOT phase times include output copying and collection. Source
+decoding includes missing-attribute generation and BLAS job serialization; mesh
+assembly includes consuming BLAS results and packing the TLAS request. Keep
+authored normals in the initial Geometry options so its shared constructor does
+not generate normals that the decoder immediately replaces.
+
 Compare identical raw inputs, seeds, samples and batch sizes against the browser
 TinyBVH backend. Drain GPU work before stopping render timers, measure first and
 warm runs separately, and read images outside render timing. Keep shader caches
