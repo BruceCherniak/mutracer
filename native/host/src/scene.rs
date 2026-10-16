@@ -16,6 +16,14 @@ unsafe extern "C" {
         output: *mut *const u8,
         size: *mut usize,
     );
+    fn mt_core_scene_geometry(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
+    fn mt_core_scene_accept_geometry(token: u32, output: *mut *const u8, size: *mut usize);
     fn mt_core_scene_transform(
         input: *const u8,
         length: usize,
@@ -511,6 +519,8 @@ pub(super) struct PreparedState {
     token: u32,
     material_count: usize,
     light_count: usize,
+    raw_version: u32,
+    shader: Vec<u8>,
 }
 impl Drop for PreparedState {
     fn drop(&mut self) {
@@ -527,6 +537,64 @@ impl Drop for PreparedState {
 // Buffer records have zero dimensions; texture records carry their exact extent.
 pub(super) type LightingUpdates = Vec<(usize, u32, u32, Vec<u8>)>;
 impl PreparedState {
+    pub(super) fn geometry(&self, bytes: &[u8]) -> Result<LightingUpdates> {
+        if bytes.len() < 16 || bytes.len() > MAX_BYTES || bytes.len() % 4 != 0 {
+            return Err("Invalid geometry update length".into());
+        }
+        let w = Words(bytes);
+        let flags = w.u(3);
+        let count = w.u(2);
+        if w.u(0) != 1 || flags > 3 || count == 0 || count > 4_194_304 {
+            return Err("Invalid geometry version/flags/vertex count".into());
+        }
+        if w.len()
+            != 4 + count * (3 + usize::from(flags & 1 != 0) * 3 + usize::from(flags & 2 != 0) * 4)
+        {
+            return Err("Geometry attribute length mismatch".into());
+        }
+        w.finite(4, w.len() - 4)?;
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            mt_core_scene_geometry(
+                bytes.as_ptr(),
+                bytes.len(),
+                self.token,
+                &mut pointer,
+                &mut size,
+            );
+        }
+        lighting_result(pointer, size, &[1, 2, 3, 7, 8, 24])
+    }
+    pub(super) fn accept_geometry(&self) -> Result<()> {
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            mt_core_scene_accept_geometry(self.token, &mut pointer, &mut size);
+        }
+        let packet = unsafe {
+            let result = copy_core_result(pointer, size, 16);
+            mt_core_collect();
+            result?
+        };
+        if packet[..4] != 1u32.to_le_bytes() {
+            return Err("Native geometry acceptance failed".into());
+        }
+        Ok(())
+    }
+    pub(super) fn hardware_geometry(
+        &self,
+        scene: &Scene,
+        updates: &LightingUpdates,
+    ) -> Result<(hardware::Capture, HashMap<String, Vec<u8>>)> {
+        let mut assets: HashMap<_, _> = updates
+            .iter()
+            .map(|(id, _, _, data)| (format!("native-{id}"), data.clone()))
+            .collect();
+        assets.insert(scene.shader.clone(), self.shader.clone());
+        let capture = hardware::from_raw(scene, &mut assets, self.raw_version)?;
+        Ok((capture, assets))
+    }
     pub(super) fn transform(&self, bytes: &[u8]) -> Result<LightingUpdates> {
         if bytes.len() != 80 {
             return Err("Transform descriptor must contain exactly 80 bytes".into());
@@ -747,28 +815,12 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
         {
             return Err("Invalid AOT lighting resource span/format".into());
         }
-        if id >= 7 {
+        if id >= 7 || id == 3 {
             w.finite(offset / 4, length / 4)?;
         }
         if id == 2 && length >= 160 {
             for i in (offset / 4..(offset + length) / 4).step_by(40) {
                 w.finite(i + 3, 37)?;
-            }
-        }
-        if id == 1 {
-            let mut stack = vec![0usize];
-            while let Some(node) = stack.pop() {
-                let at = offset / 4 + node * 4;
-                if at + 8 > (offset + length) / 4 {
-                    return Err("Invalid transform TLAS".into());
-                }
-                w.finite(at, 3)?;
-                w.finite(at + 4, 3)?;
-                let child = w.u(at + 3) as u32 as i32;
-                if child >= 0 {
-                    stack.push(node + 2);
-                    stack.push(child as usize);
-                }
             }
         }
         updates.push((
@@ -777,6 +829,36 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
             w.u(o + 4) as u32,
             packet[offset..offset + length].to_vec(),
         ));
+    }
+    if let Some((_, _, _, data)) = updates.iter().find(|record| record.0 == 1) {
+        let rt = updates
+            .iter()
+            .find(|record| record.0 == 7)
+            .ok_or("Missing geometry RT parameters")?;
+        if rt.3.len() != 176 {
+            return Err("Invalid geometry RT size".into());
+        }
+        let limit = Words(&rt.3).u(22) * 16;
+        if limit > data.len() {
+            return Err("Invalid geometry BLAS offset".into());
+        }
+        let mut stack = if limit == 0 { vec![] } else { vec![0usize] };
+        let mut visited = 0;
+        let bvh = Words(data);
+        while let Some(node) = stack.pop() {
+            let at = node * 4;
+            visited += 1;
+            if at + 8 > limit / 4 || visited > limit / 32 {
+                return Err("Invalid geometry TLAS".into());
+            }
+            bvh.finite(at, 3)?;
+            bvh.finite(at + 4, 3)?;
+            let child = bvh.u(at + 3) as u32 as i32;
+            if child >= 0 {
+                stack.push(node + 2);
+                stack.push(child as usize);
+            }
+        }
     }
     Ok(updates)
 }
@@ -791,8 +873,10 @@ pub(super) fn prepare_retained(
             |v| v.checked_add(1),
         )
         .map_err(|_| "Native preparation token space exhausted")?;
-    let state = PreparedState {
+    let mut state = PreparedState {
         token,
+        raw_version: 0,
+        shader: Vec::new(),
         light_count: if bytes.len() >= 32 {
             Words(bytes).u(7)
         } else {
@@ -805,6 +889,11 @@ pub(super) fn prepare_retained(
         },
     };
     let (scene, assets) = prepare_impl(bytes, token)?;
+    state.raw_version = Words(bytes).u(0) as u32;
+    state.shader = assets
+        .get(&scene.shader)
+        .ok_or("Missing raw geometry shader")?
+        .clone();
     Ok((scene, assets, state))
 }
 pub(super) fn prepare(bytes: &[u8]) -> Result<(Scene, HashMap<String, Vec<u8>>)> {

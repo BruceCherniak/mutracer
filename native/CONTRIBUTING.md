@@ -398,3 +398,25 @@ Hardware updates reuse BLASes/TLAS bindings and rebuild the TLAS in place. Map
 software leaf-order changes back to hardware geometry/triangle bases using BLAS
 root and vertex region, rather than assuming stable instance order. A change to
 the compiled hardware closest-hit eligibility requests a full commit.
+
+
+## Partial vertex validation
+
+Run `[MODEL] --geometry-smoke DIRECTORY` to compare stable-topology deformation
+with full commits on software and Auto backends. Verify all three AOVs, generated/
+supplied normals, authored/generated tangents, retained environments, rejection
+and sample reset. Raw C cases also cover shared geometry/material-table regions,
+colored batches, emissive triangles and explicit displacement fallback.
+
+The adapter stages a copied source geometry/BLAS and transient shared
+`prepareSceneMeshes` result, then calls `updatePreparedGeometries` and repacks
+vertices with `packVertexAttributes`. Unchanged BLASes and material maps are
+reused. Only accept the staged mesh/binding/source-geometry state after validated
+GPU upload/reset. Hardware stages replacement acceleration structures and group0
+against the existing pipeline, with all old resources retained until acceptance.
+Transform and vertex candidates must both use the latest accepted source state.
+
+Keep bound-array storage shared when updating Map-indexed generic binding records:
+scriptc can return record copies, so replacing a tuple field does not necessarily
+reach the preparation owner. The concrete MeshState/TLAS module fixtures exercise
+that behavior in addition to the original structural geometry-update fixtures.

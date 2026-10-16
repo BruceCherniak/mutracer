@@ -1,5 +1,6 @@
 //! Small native example: glTF input → native MuTracer library → egui image.
 mod denoise;
+mod geometry_smoke;
 mod import;
 mod input;
 mod picking;
@@ -1836,9 +1837,15 @@ fn main() -> Result<()> {
     let mut environment_out = None;
     let mut light_out = None;
     let mut transform_out = None;
+    let mut geometry_out = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--geometry-smoke" => {
+                geometry_out = Some(PathBuf::from(
+                    args.next().context("--geometry-smoke needs a directory")?,
+                ));
+            }
             "--transform-smoke" => {
                 transform_out = Some(PathBuf::from(
                     args.next().context("--transform-smoke needs a directory")?,
@@ -1884,6 +1891,9 @@ fn main() -> Result<()> {
         }
     }
     let model = model.unwrap_or_else(default_model);
+    if let Some(out) = geometry_out {
+        return geometry_smoke::run(&model, &out);
+    }
     if let Some(out) = transform_out {
         return transform_smoke(&model, &out);
     }

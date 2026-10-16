@@ -1,4 +1,7 @@
 /// <reference path="../../browser-types.d.ts" />
+import MeshState from '../../../src/scene/MeshState.js';
+import InstanceState from '../../../src/scene/InstanceState.js';
+import {prepareSceneMeshes, updateMeshInstanceTransforms} from '../../../src/renderer/scenePreparation.js';
 import Geometry, { Attribute } from '../../../src/scene/Geometry.js';
 import MaterialState from '../../../src/scene/MaterialState.js';
 import TextureState from '../../../src/scene/TextureState.js';
@@ -7,7 +10,7 @@ import { markDeformedGeometry } from '../../../src/scene/geometryChanges.js';
 import { createPlaneGeometry } from '../../../src/util/commonGeometry.js';
 import { generateVertexTangents } from '../../../src/util/geometry.js';
 import { read } from '../../../src/math/access.js';
-import { buildBLAS } from '../../../src/renderer/bvhAccel.js';
+import { buildBLAS, buildTLAS } from '../../../src/renderer/bvhAccel.js';
 import { setGeometryBvh } from '../../../src/renderer/geometryBvh.js';
 import { getBvhBounds } from '../../../src/renderer/geometryBvhBounds.js';
 import type { GeometryUpdateState, GeometryUpdateMesh } from '../../../src/renderer/geometryUpdateState.js';
@@ -19,6 +22,7 @@ interface ProbeMesh extends GeometryUpdateMesh { id: number; }
 export function geometryUpdateParameters(bytes: Uint8Array): Uint8Array {
   const input = new Uint32Array(bytes.buffer, bytes.byteOffset, 2);
   const flags = input[0], segments = input[1];
+  if (flags & 128) return meshStateBounds(flags, segments);
   const source = createPlaneGeometry(segments, segments), other = createPlaneGeometry();
   source.dynamic = !!(flags & 1);
   if (flags & 16) {
@@ -104,5 +108,27 @@ export function geometryUpdateParameters(bytes: Uint8Array): Uint8Array {
     new Uint8Array(merged.materialIndex!.array.buffer)];
   const output = new Uint8Array(parts.reduce((sum, part) => sum + part.length, 0));
   let offset = 0; for (const part of parts) { output.set(part, offset); offset += part.length; }
+  return output;
+}
+
+// Exercise the concrete scene-preparation record used by the native context,
+// including Map-indexed binding records and a changed world-space TLAS bound.
+function meshStateBounds(flags: number, segments: number): Uint8Array {
+  const geometry = createPlaneGeometry(segments,segments), other = createPlaneGeometry();
+  setGeometryBvh(geometry,buildBLAS(geometry)); setGeometryBvh(other,buildBLAS(other));
+  const material = new MaterialState(), mesh = new MeshState(geometry,material), b = new MeshState(other,material);
+  if (flags & 1) mesh.setInstanceState(new InstanceState({count:1,transforms:new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,2,0,0,1])}));
+  const prepared = prepareSceneMeshes([mesh,b],m=>({geometry:m.geometry,displacementScale:0}));
+  geometry.position.array[0] -= .375; geometry.position.array[1] += .25;
+  geometry.markVerticesUpdated(); updatePreparedGeometries(prepared,new Set([geometry]));
+  const instances = updateMeshInstanceTransforms(prepared.instanceBindings), tlas = buildTLAS(instances,prepared.blases);
+  const bounds = new Float32Array(12);
+  let offset=0;
+  for (const binding of prepared.instanceBindings) for (const bound of binding.bvhBounds) {
+    for (let c=0;c<3;c++) bounds[offset++]=read(bound,c);
+  }
+  const output=new Uint8Array(bounds.byteLength+tlas.buffer.byteLength+tlas.instancesBuffer!.byteLength);
+  output.set(new Uint8Array(bounds.buffer)); output.set(new Uint8Array(tlas.buffer),bounds.byteLength);
+  output.set(new Uint8Array(tlas.instancesBuffer!),bounds.byteLength+tlas.buffer.byteLength);
   return output;
 }

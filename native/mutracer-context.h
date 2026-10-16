@@ -74,6 +74,26 @@ int32_t mt_context_reset(mt_context handle, char *error, size_t capacity);
  */
 int32_t mt_context_update_camera(mt_context handle, const uint8_t *input, size_t length,
   char *error, size_t capacity);
+/* Replace stable-topology vertex positions for an original geometry index.
+ * All meshes/instances sharing that geometry change together. Header: four u32
+ * words (version=1, source geometry index, unchanged vertex_count, flags).
+ * Payload: positions XYZ f32, optional normals XYZ (flags&1), then authored
+ * tangents XYZW (flags&2). Each present array has vertex_count entries. Exactly
+ * 16 + vertex_count*(3 + 3*(flags&1!=0) + 4*(flags&2!=0))*4 bytes. Other flags
+ * reject. All components must be finite; vertex_count 1..4194304.
+ * Omitted normals regenerate smooth area-weighted normals. Generated tangents
+ * are refreshed automatically. Existing authored tangents require flags&2 and
+ * replacement values; adding/removing authored tangents needs a full commit.
+ * UVs, colors, indices, material indices and texture bindings remain unchanged.
+ * Displacement, unused geometry, resource size or shader-stack changes return
+ * "Full scene commit required:". Successful updates reset samples/expire the
+ * last job. Invalid input/unsupported updates preserve scene/samples/job.
+ * Rejects active jobs and failed scenes; GPU execution failure marks it failed.
+ * Blocks. CPU copying/upload cost can grow with the whole scene; native HWRT
+ * rebuilds acceleration structures. Temporary CPU/GPU copies increase memory use.
+ */
+int32_t mt_context_update_geometry(mt_context handle, const uint8_t *input, size_t length,
+  char *error, size_t capacity);
 /* Update a mesh world matrix or one instance-local matrix. Exactly 80 bytes:
  * version=1, original mesh index, local instance index+1 (0=mesh world matrix),
  * reserved=0, column-major matrix[16] (f32). Matrix must be finite, invertible

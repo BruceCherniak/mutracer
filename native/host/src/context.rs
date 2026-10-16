@@ -412,6 +412,44 @@ pub unsafe extern "C" fn mt_context_update_environment(
         Ok(())
     })
 }
+/// Update stable-topology vertices and all shared instances through original TS.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_context_update_geometry(
+    handle: u64,
+    input: *const u8,
+    length: usize,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    action(error, capacity, |registry| {
+        let context = context(registry, handle)?;
+        idle(context)?;
+        let scene = ready(context)?;
+        if input.is_null() || length < 16 || length > scene::MAX_BYTES {
+            return Err("Invalid geometry update length".into());
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+        let packed = scene
+            .retained
+            .as_ref()
+            .ok_or("No retained geometry preparation")?
+            .geometry(bytes)?;
+        scene.validate_lighting(&packed)?;
+        let hardware = scene.prepare_geometry_hardware(&packed)?;
+        context.failed = true;
+        let scene = context.scene.as_mut().unwrap();
+        if let Some((resources, capture, group)) = hardware {
+            scene.hardware = Some(resources);
+            scene.scene.hwrt = Some(capture);
+            scene.groups[0] = group;
+        }
+        scene.update_lighting(&packed)?;
+        scene.retained.as_ref().unwrap().accept_geometry()?;
+        context.job = None;
+        context.failed = false;
+        Ok(())
+    })
+}
 /// Update a mesh world matrix or one local instance matrix through shared TS.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_update_transform(

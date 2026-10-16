@@ -53,7 +53,7 @@ copies HDR, normal or albedo pixels into caller-owned memory. The context API
 has no file output. The command above builds the C consumer and saves its
 verified images under `.native-build/context-core/`.
 
-Commit replaces the full scene and restarts accumulation; submit vertex/topology,
+Commit replaces the full scene and restarts accumulation; submit topology,
 texture, emission and light type/count/attachment edits in the updated descriptor.
 A rejected commit retains the previous scene.
 Reset clears sampling while keeping the committed scene. Contexts have independent
@@ -77,6 +77,17 @@ size, traversal stack or hardware closest-hit eligibility changes require a full
 commit; validation rejection preserves the scene and samples. Cost grows with
 instance and BLAS data and emissive triangles. See
 [the context header](./mutracer-context.h) for the 80-byte record and lifetime rules.
+
+Use `mt_context_update_geometry` for vertex positions with unchanged topology.
+All objects sharing the original geometry change together. Supply normals or omit
+them to generate smooth normals; generated tangents update automatically, while
+authored tangents require replacement values. UVs, colors, indices, materials
+and textures stay unchanged. Displacement, unused geometry and resource-size or
+shader-stack changes require a full commit. Successful updates restart accumulation;
+validation rejection preserves the scene and samples. Updates reject active jobs.
+Copying/upload cost can grow with the whole scene, and HWRT updates rebuild
+acceleration structures. Temporary copies increase memory use. See
+[the context header](./mutracer-context.h) for flags, limits and record layout.
 
 Basic material parameters can be updated with `mt_context_update_material` using
 the original descriptor's material index. Color, roughness, metalness,
@@ -140,8 +151,7 @@ Cancel stops further submissions. An already submitted batch finishes before
 poll reports cancellation, so keep polling after cancel. Completed samples stay
 accumulated and a later job can continue them. Full completion takes precedence
 over late cancellation. One context accepts one active job; while active, render,
-commit, camera/material/environment/light/transform update, reset, readback and
-destroy return errors. Finish or cancel and drain the job before using those calls. The header
+commit, any scene update, reset, readback and destroy return errors. Finish or cancel and drain the job before using those calls. The header
 specifies job states, sample counters and handle lifetimes.
 
 ## Scene inputs and options

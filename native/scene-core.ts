@@ -23,8 +23,8 @@ import { prepareSceneMeshes, computeGeometryNormals, updateMeshInstanceTransform
 import type { BLASInstance } from '../src/renderer/bvhAccel.js';
 import { buildBLAS, buildTLAS, concatBLASBuffers, getTraversalStackSizes } from '../src/renderer/bvhAccel.js';
 import { getGeometryBvh, setGeometryBvh } from '../src/renderer/geometryBvh.js';
-import { generateVertexTangents } from '../src/util/geometry.js';
-import { packVertexAttributes } from '../src/renderer/geometryUpdates.js';
+import { generateVertexTangents, hasGeneratedVertexTangents, updateDynamicTangents } from '../src/util/geometry.js';
+import { packVertexAttributes, canUpdateGeometries, updatePreparedGeometries } from '../src/renderer/geometryUpdates.js';
 import MaterialData from '../src/renderer/MaterialData.js';
 import { materialUsesMedium } from '../src/renderer/materialParams.js';
 import { writeRawAtlasPlacement } from '../src/renderer/textureAtlasPixels.js';
@@ -42,7 +42,17 @@ const retainedScenes = new Map<number, {source: MaterialState[]; ordered: Materi
   lights: AnalyticLightState[]; emissive: EmissiveTriangle[]; rt: ArrayBuffer;
   environmentWidth: number; environmentHeight: number; backgroundWidth: number; backgroundHeight: number;
   qualityFlags: number; environmentPower: number; meshes: MeshState[];
-  bindings: PreparedMeshInstanceBinding[]; blases: BLASInstance[]; tlasStack: number}>();
+  bindings: PreparedMeshInstanceBinding[]; blases: BLASInstance[]; tlasStack: number; blasStack: number; geometries: Geometry[]}>();
+const pendingGeometry = new Map<number, {meshes: MeshState[]; bindings: PreparedMeshInstanceBinding[];
+  blases: BLASInstance[]; geometries: Geometry[]; emissive: EmissiveTriangle[]; rt: ArrayBuffer}>();
+export function acceptSceneGeometry(token: number): Uint8Array {
+  const state = retainedScenes.get(token), pending = pendingGeometry.get(token);
+  if (!state || !pending) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  state.meshes = pending.meshes; state.bindings = pending.bindings; state.blases = pending.blases;
+  state.geometries = pending.geometries; state.emissive = pending.emissive; state.rt = pending.rt;
+  retainedScenes.set(token, state); pendingGeometry.delete(token);
+  return new Uint8Array(new Uint32Array([1, 0, 0, 0]).buffer);
+}
 const pendingTransforms = new Map<number, {meshes: MeshState[]; bindings: PreparedMeshInstanceBinding[];
   emissive: EmissiveTriangle[]; rt: ArrayBuffer}>();
 export function acceptSceneTransform(token: number): Uint8Array {
@@ -70,7 +80,7 @@ export function retainedSceneParameters(bytes: Uint8Array, token: number): Uint8
   catch { retainedScenes.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer); }
 }
 export function releaseSceneParameters(token: number): Uint8Array {
-  retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token);
+  retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometry.delete(token);
   return new Uint8Array(16);
 }
 // Version 1: source material index and seven scalar parameters. Maps, emission,
@@ -322,7 +332,7 @@ function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
   if (token) retainedScenes.set(token, {source: materials, ordered: prepared.materials, table, lights, emissive,
     rt: rt.buffer, environmentWidth: environment?.width ?? 0, environmentHeight: environment?.height ?? 0,
     backgroundWidth: background?.width ?? 0, backgroundHeight: background?.height ?? 0, qualityFlags, environmentPower: estimateEnvironmentPower(environment),
-    meshes, bindings: prepared.instanceBindings, blases, tlasStack: Number(constants.TLAS_STACK_SIZE)});
+    meshes, bindings: prepared.instanceBindings, blases, geometries, tlasStack: Number(constants.TLAS_STACK_SIZE), blasStack: Number(constants.BLAS_STACK_SIZE)});
   return resourcePacket(records, parts, width, height);
 }
 
@@ -481,6 +491,89 @@ export function sceneTransformParameters(bytes: Uint8Array, token: number): Uint
     [7, 0, rt.buffer.byteLength, 0, 0, 0, 0, 0], [8, 0, lighting.lightUniform.byteLength, 0, 0, 0, 0, 0],
     [24, 1, lighting.lightData.byteLength, lighting.lightWidth, lighting.lightHeight, 1, 2, 0]
   ], [paddedBvh, paddedInstances, new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer)], 0, 0);
+}
+
+// Version1, source geometry index, vertex count, flags (1=normals,2=authored
+// XYZW tangents). Positions then optional normals/tangents, all f32. Topology and
+// material indices stay fixed. Candidate preparation copies merged CPU arrays
+// transiently, but never mutates accepted geometry/BVH or rebuilds material maps.
+export function sceneGeometryParameters(bytes: Uint8Array, token: number): Uint8Array {
+  pendingGeometry.delete(token);
+  const state = retainedScenes.get(token);
+  const u = new Uint32Array(bytes.buffer, bytes.byteOffset, 4);
+  const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+  if (state === undefined) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  const previous = state.geometries[u[1]], count = u[2], flags = u[3];
+  if (previous === undefined) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  if (count !== previous.vertexCount) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  const affected = state.bindings.filter(b => b.mesh.geometry === previous);
+  if (!affected.length || affected.some(b => b.mesh.materials.some(m => !!m.displacementMap))
+    || !!(flags & 2) !== !!(previous.tangent && !hasGeneratedVertexTangents(previous))) {
+    return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+  }
+  const oldBvh = getGeometryBvh(previous);
+  if (!oldBvh) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+  const geometry = new Geometry({position: previous.position, normal: previous.normal, indices: previous.indices,
+    uv: previous.uv, uv1: previous.uv1, color: previous.color, tangent: previous.tangent, materialIndex: previous.materialIndex});
+  geometry.position = new Attribute(previous.position.array.slice(), 3);
+  geometry.normal = new Attribute(previous.normal.array.slice(), 3);
+  if (hasGeneratedVertexTangents(previous)) generateVertexTangents(geometry);
+  else if (previous.tangent) geometry.tangent = new Attribute(previous.tangent.array.slice(), previous.tangent.itemSize);
+  setGeometryBvh(geometry, {builder: oldBvh.builder, buildSurfaceArea: oldBvh.buildSurfaceArea,
+    maxDepth: oldBvh.maxDepth, maxLeafPrimitives: oldBvh.maxLeafPrimitives, layout: oldBvh.layout,
+    buffer: oldBvh.buffer.slice(0)});
+  const bindingsByMesh = new Map(state.bindings.map(b => [b.mesh, b]));
+  const meshes = state.meshes.map(previousMesh => {
+    if (previousMesh.geometry !== previous) return previousMesh;
+    const mesh = new MeshState(geometry, previousMesh.materials);
+    for (let i = 0; i < 16; i++) write(mesh.transform, i, read(previousMesh.transform, i));
+    const data = previousMesh.instanceData;
+    if (data) mesh.setInstanceState(new InstanceState({count: data.count, transforms: data.transforms, colors: data.colors}));
+    return mesh;
+  });
+  const prepared = prepareSceneMeshes(meshes, mesh => {
+    const binding = bindingsByMesh.get(mesh);
+    return mesh.geometry === geometry ? {geometry, displacementScale: 0}
+      : {geometry: binding!.geometry, displacementScale: binding!.displacementScale};
+  });
+  if (prepared.materials.length !== state.ordered.length || prepared.materials.some((m, i) => m !== state.ordered[i])
+    || !canUpdateGeometries(prepared, [geometry])) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+  geometry.position.array.set(f.subarray(4, 4 + count * 3));
+  if (flags & 1) geometry.normal.array.set(f.subarray(4 + count * 3, 4 + count * 6));
+  else {
+    const normal = geometry.normal;
+    computeGeometryNormals(geometry); normal.array.set(geometry.normal.array); geometry.normal = normal;
+  }
+  if (flags & 2) geometry.tangent!.array.set(f.subarray(4 + count * (flags & 1 ? 6 : 3)));
+  else if (hasGeneratedVertexTangents(geometry)) updateDynamicTangents(geometry);
+  geometry.markVerticesUpdated();
+  updatePreparedGeometries(prepared, new Set([geometry]));
+  const instances = updateMeshInstanceTransforms(prepared.instanceBindings), tlas = buildTLAS(instances, prepared.blases);
+  const stacks = getTraversalStackSizes(tlas, prepared.blases);
+  if (stacks.tlas > state.tlasStack || stacks.blas > state.blasStack) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+  const blas = new Uint8Array(concatBLASBuffers(prepared.blases));
+  const bvh = new Uint8Array(Math.max(WGPU_SCENE_BUFFER_MIN_BYTES, tlas.buffer.byteLength + blas.byteLength));
+  bvh.set(new Uint8Array(tlas.buffer)); bvh.set(blas, tlas.buffer.byteLength);
+  const instanceBytes = new Uint8Array(tlas.instancesBuffer!);
+  const packedInstances = new Uint8Array(Math.max(instanceBytes.length, WGPU_SCENE_BUFFER_MIN_BYTES)); packedInstances.set(instanceBytes);
+  const merged = prepared.geometry, offsets: number[] = []; let stride = 0;
+  for (const name of ['position', 'normal', 'uv', 'uv1', 'color', 'tangent', 'materialIndex'] as const) {
+    offsets.push(stride); if (merged[name]) stride += 4;
+  }
+  const attributes = new Float32Array(merged.vertexCount * stride);
+  packVertexAttributes(merged, attributes, stride, offsets, 0, merged.vertexCount);
+  const emissive = new EmissiveTriangleCache().collect(prepared.emissiveBindings, state.ordered);
+  const lighting = nativeLighting(state.lights, state.table, emissive, state.environmentPower);
+  const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
+  rt.views.blasOffset[0] = tlas.buffer.byteLength / 16; rt.views.isEmpty[0] = Number(meshInstancesLength(instances) === 0);
+  packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
+  const geometries = state.geometries.slice(); geometries[u[1]] = geometry;
+  pendingGeometry.set(token, {meshes, bindings: prepared.instanceBindings, blases: prepared.blases, geometries, emissive, rt: rt.buffer});
+  return resourcePacket([
+    [1,0,bvh.byteLength,0,0,0,0,0], [2,0,packedInstances.byteLength,0,0,0,0,0], [3,0,attributes.byteLength,0,0,0,0,0],
+    [7,0,rt.buffer.byteLength,0,0,0,0,0], [8,0,lighting.lightUniform.byteLength,0,0,0,0,0],
+    [24,1,lighting.lightData.byteLength,lighting.lightWidth,lighting.lightHeight,1,2,0]
+  ], [bvh, packedInstances, new Uint8Array(attributes.buffer), new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer)], 0,0);
 }
 
 function nativeFloatImage(texture: PixelTexture | undefined): {width: number; height: number; data: Float32Array} | undefined {

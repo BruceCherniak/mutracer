@@ -73,7 +73,7 @@ for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updat
       const input = new Uint8Array(new Uint32Array([count, flags, 7]).buffer);
       fixtures.push({ label: `materials-${count}-${flags}`, input, expected: oracle.materialParameters(input) });
     }
-    else if (name === 'geometry-updates') for (const segments of [1, 3]) for (let flags = 0; flags < 128; flags++) {
+    else if (name === 'geometry-updates') for (const segments of [1, 3]) for (let flags = 0; flags < 130; flags++) {
       const input = new Uint8Array(new Uint32Array([flags, segments]).buffer);
       fixtures.push({label: `updates-${segments}-${flags}`, input, expected: oracle.geometryUpdateParameters(input)});
     }

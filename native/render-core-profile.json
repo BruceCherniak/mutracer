@@ -146,6 +146,23 @@
         "u32"
       ],
       "returns": "bytes"
+    },
+    {
+      "export": "sceneGeometryParameters",
+      "symbol": "mt_core_scene_geometry",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "acceptSceneGeometry",
+      "symbol": "mt_core_scene_accept_geometry",
+      "params": [
+        "u32"
+      ],
+      "returns": "bytes"
     }
   ]
 }

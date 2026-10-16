@@ -8,6 +8,7 @@ import { hasGeneratedVertexTangents } from '../util/geometry.js';
 import { buildBLAS, refitBLAS, type FlattendBVH } from './bvhAccel.js';
 import type { GeometryUpdateState, GeometryUpdateMesh, GeometryUpdateRegion, GeometryUpdateBinding } from './geometryUpdateState.js';
 import { getBvhBounds } from './geometryBvhBounds.js';
+import { read, write } from '../math/access.js';
 
 type Prepared = GeometryUpdateState;
 type BindingIndices<M extends GeometryUpdateMesh> = {source: Map<Geometry, GeometryUpdateBinding<M>[]>; prepared: Map<Geometry, GeometryUpdateBinding<M>[]>};
@@ -103,7 +104,14 @@ export function updatePreparedGeometries<M extends GeometryUpdateMesh>(prepared:
       else vertices.push({first: region.vertexOffset, count, topologyChanged, deformationOnly});
       blases.push({blas: bvh, offset});
       for (const binding of indices(prepared).prepared.get(geometry) ?? []) {
-        binding.bvhBounds = getBvhBounds(geometry); meshes.add(binding.mesh);
+        const bounds = getBvhBounds(geometry);
+        // Keep shared bound arrays: native generic-record values read from a Map
+        // can be copies, so replacing their tuple does not update the owner view.
+        for (let c = 0; c < 3; c++) {
+          write(binding.bvhBounds[0], c, read(bounds[0], c));
+          write(binding.bvhBounds[1], c, read(bounds[1], c));
+        }
+        meshes.add(binding.mesh);
       }
     }
     offset += prepared.blases[i].bvh.buffer.byteLength;

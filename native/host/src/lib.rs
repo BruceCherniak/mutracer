@@ -882,6 +882,72 @@ impl GpuScene {
         }
         Ok(())
     }
+    fn prepare_geometry_hardware(
+        &self,
+        updates: &scene::LightingUpdates,
+    ) -> Result<Option<(hardware::Resources, hardware::Capture, wgpu::BindGroup)>> {
+        let Some(current) = self.scene.hwrt.as_ref().filter(|_| self.hardware.is_some()) else {
+            return Ok(None);
+        };
+        let (capture, assets) = self
+            .retained
+            .as_ref()
+            .ok_or("Missing retained geometry")?
+            .hardware_geometry(&self.scene, updates)
+            .map_err(|error| format!("Full scene commit required: {error}"))?;
+        if capture.hardware_closest != current.hardware_closest {
+            return Err(
+                "Full scene commit required: hardware closest-hit eligibility changed".into(),
+            );
+        }
+        let device = &self.gpu.device;
+        let memory_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let result = hardware::prepare(
+            device,
+            &self.gpu.queue,
+            Path::new(""),
+            &capture,
+            Some(&assets),
+        )
+        .map(|resources| {
+            let mut entries: Vec<_> = (0..4)
+                .map(|i| wgpu::BindGroupEntry {
+                    binding: i,
+                    resource: self.buffers[&(i as usize + 1)].as_entire_binding(),
+                })
+                .collect();
+            entries.extend([
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: resources.tlas.as_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: resources.mapping.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: resources.counters.as_entire_binding(),
+                },
+            ]);
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("MuTracer updated geometry"),
+                layout: &self.pipeline.get_bind_group_layout(0),
+                entries: &entries,
+            });
+            (resources, capture, group)
+        });
+        let validation = pollster::block_on(validation_scope.pop());
+        let memory = pollster::block_on(memory_scope.pop());
+        if let Some(error) = validation.or(memory) {
+            return Err(format!(
+                "Full scene commit required: hardware geometry preparation: {error}"
+            )
+            .into());
+        }
+        result.map(Some)
+    }
     fn update_lighting(&mut self, updates: &scene::LightingUpdates) -> Result<()> {
         for (id, width, height, data) in updates {
             if *id < 21 {

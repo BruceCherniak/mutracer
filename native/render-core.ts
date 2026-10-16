@@ -63,3 +63,7 @@ export function acceptSceneLighting(token: number): Uint8Array { return acceptLi
 import {sceneTransformParameters as prepareTransform, acceptSceneTransform as acceptTransform} from './scene-core.js';
 export function sceneTransformParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareTransform(bytes, token); }
 export function acceptSceneTransform(token: number): Uint8Array { return acceptTransform(token); }
+
+import {sceneGeometryParameters as prepareGeometry, acceptSceneGeometry as acceptGeometry} from './scene-core.js';
+export function sceneGeometryParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareGeometry(bytes, token); }
+export function acceptSceneGeometry(token: number): Uint8Array { return acceptGeometry(token); }

@@ -63,6 +63,23 @@ pub struct Geometry {
     pub colors: Vec<f32>,
     pub tangents: Vec<f32>,
 }
+impl Geometry {
+    pub fn update_bytes(&self, index: usize) -> Vec<u8> {
+        let flags =
+            u32::from(!self.normals.is_empty()) | (u32::from(!self.tangents.is_empty()) << 1);
+        [1, index as u32, (self.positions.len() / 3) as u32, flags]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .chain(
+                self.positions
+                    .iter()
+                    .chain(&self.normals)
+                    .chain(&self.tangents)
+                    .flat_map(|value| value.to_le_bytes()),
+            )
+            .collect()
+    }
+}
 pub struct Mesh {
     pub name: String,
     pub geometry: usize,
