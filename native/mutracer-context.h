@@ -44,6 +44,22 @@ typedef struct mt_context_info_v1 {
   uint32_t state; /* 0=no scene, 1=committed, 2=failed, 3=active job. */
   uint32_t reserved[2]; /* Returned as zero. */
 } mt_context_info_v1;
+/* Backend selection for raw scenes: 0=software, 1=auto, 2=require hardware.
+ * Existing mt_context_create keeps software behavior. Auto falls back when the
+ * device or scene is unsupported; forced hardware fails without replacing the
+ * previous scene. Alpha, displacement, bevel and empty scenes use software.
+ * General affine transforms retain software closest-hit plus hardware shadows.
+ */
+int32_t mt_context_create_with_backend(uint32_t backend, mt_context *output, char *error, size_t capacity);
+/* active: 0=software, 1=hardware shadows, 2=hardware closest+shadows.
+ * reason is caller-owned UTF-8 storage (capacity>=1), always NUL terminated.
+ */
+int32_t mt_context_backend(mt_context handle, uint32_t *active, char *reason, size_t reason_capacity, char *error, size_t capacity);
+/* Diagnostic readback: exactly eleven u32 counters, idle hardware scene only.
+ * Order matches native/hwrt-intersect.wgsl; shadow mismatches are index 9 when
+ * MUTRACER_NATIVE_VALIDATE_SHADOWS=1 was set at commit time. Blocking readback.
+ */
+int32_t mt_context_hwrt_counts(mt_context handle, uint32_t *output, size_t length, char *error, size_t capacity);
 int32_t mt_context_create(mt_context *output, char *error, size_t capacity);
 int32_t mt_context_destroy(mt_context handle, char *error, size_t capacity);
 int32_t mt_context_commit(mt_context handle, const uint8_t *input, size_t length, char *error, size_t capacity);

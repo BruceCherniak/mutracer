@@ -318,6 +318,9 @@ struct GpuDevice {
 }
 impl GpuDevice {
     fn new(use_hwrt: bool) -> Result<Self> {
+        Self::with_backend(if use_hwrt { 2 } else { 0 })
+    }
+    fn with_backend(mode: u32) -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -333,9 +336,10 @@ impl GpuDevice {
         let hardware_ray_query = adapter
             .features()
             .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
-        if use_hwrt && !hardware_ray_query {
+        if mode == 2 && !hardware_ray_query {
             return Err("Hardware ray query is not supported by this adapter".into());
         }
+        let use_hwrt = mode != 0 && hardware_ray_query;
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("MuTracer native feasibility"),
@@ -616,6 +620,7 @@ impl GpuScene {
                 &queue,
                 scene_dir,
                 scene.hwrt.as_ref().unwrap(),
+                assets,
             )?)
         } else {
             None

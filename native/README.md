@@ -68,6 +68,22 @@ fields. The header specifies rejection, job lifetime and thread rules. Run
 `npm run native:camera` to build and verify this C usage; results are saved under
 `.native-build/camera-core/`.
 
+## Intersection backend
+
+`mt_context_create` keeps software BVH traversal. Use
+`mt_context_create_with_backend` with 0 for software, 1 for automatic selection
+or 2 to require hardware queries. Query `mt_context_backend` after committing to
+find the active path and fallback reason. Automatic selection falls back when
+hardware or the scene is unsupported; forced hardware returns an error and
+preserves the previous committed scene.
+
+HWRT currently accepts opaque scenes in raw descriptor versions 1 and 2.
+Alpha materials, bevel, empty scenes and all version-3 descriptors use software.
+Nonuniform scale, reflection or shear uses hardware shadows with software
+closest-hit traversal; other eligible scenes use hardware closest-hit and
+shadows with conservative software fallbacks. Hardware acceleration structures
+add build time and memory use; a speedup is not guaranteed.
+
 ## Render with polling and cancellation
 
 ```sh
@@ -156,10 +172,11 @@ material-related expansion. Atlas storage is limited to 64 MiB, 4096 pixels per
 side and 256 layers; source textures can be scaled to fit. The header specifies
 the remaining validation and format constraints.
 
-Raw scenes currently use software BVH traversal on the GPU. Incremental updates
-to geometry, materials and lights, device-loss recovery, denoising, browser display
-parity and a stable release ABI remain pending. This library does not yet replace
-the full browser Engine/Render API.
+Raw scenes support the [intersection modes above](#intersection-backend).
+Incremental updates to geometry, materials and lights, device-loss recovery,
+a C denoising API, browser display parity and a stable release ABI remain pending.
+The viewer provides its own [native OIDN controls](./viewer/README.md#controls).
+This library does not yet replace the full browser Engine/Render API.
 
 ## Prepared replay and experimental HWRT
 

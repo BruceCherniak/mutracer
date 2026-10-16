@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::{fs, path::Path, sync::mpsc, time::Duration};
+use std::{collections::HashMap, fs, path::Path, sync::mpsc, time::Duration};
 use wgpu::util::DeviceExt;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -47,7 +47,17 @@ pub fn prepare(
     queue: &wgpu::Queue,
     directory: &Path,
     capture: &Capture,
+    assets: Option<&HashMap<String, Vec<u8>>>,
 ) -> Result<Resources> {
+    let read = |name: &str| -> Result<Vec<u8>> {
+        if let Some(assets) = assets {
+            return assets
+                .get(name)
+                .cloned()
+                .ok_or_else(|| format!("Missing HWRT resource {name}").into());
+        }
+        Ok(fs::read(directory.join(name))?)
+    };
     if !capture.eligible {
         return Err(capture
             .reason
@@ -59,7 +69,7 @@ pub fn prepare(
     let mut sizes = Vec::new();
     let mut blases = Vec::new();
     for geometry in &capture.geometries {
-        let data = fs::read(directory.join(&geometry.positions))?;
+        let data = read(&geometry.positions)?;
         if data.len() != geometry.vertex_count as usize * 12 {
             return Err("Invalid hardware vertex bytes".into());
         }
@@ -125,13 +135,11 @@ pub fn prepare(
     let mut encoder = device.create_command_encoder(&Default::default());
     encoder.build_acceleration_structures(entries.iter(), [&tlas]);
     queue.submit([encoder.finish()]);
-    let data = fs::read(
-        directory.join(
-            capture
-                .triangle_map
-                .as_ref()
-                .ok_or("Missing HWRT triangle map")?,
-        ),
+    let data = read(
+        capture
+            .triangle_map
+            .as_ref()
+            .ok_or("Missing HWRT triangle map")?,
     )?;
     let mapping = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("MuTracer hardware primitive identity"),
@@ -182,4 +190,200 @@ pub fn counts(
     Ok(std::array::from_fn(|i| {
         u32::from_le_bytes(values[i * 4..i * 4 + 4].try_into().unwrap())
     }))
+}
+
+// Native counterpart of prepare-hwrt.mjs: consume the original AOT-packed BVH,
+// attributes and TLAS leaf order, then create platform acceleration structures.
+// No browser capture or alternative scene/material preparation is involved.
+pub fn from_raw(
+    scene: &super::Scene,
+    assets: &mut HashMap<String, Vec<u8>>,
+    version: u32,
+) -> Result<Capture> {
+    if version >= 3 {
+        return Err("HWRT displacement descriptors are not supported yet".into());
+    }
+    let source = String::from_utf8(
+        assets
+            .get(&scene.shader)
+            .ok_or("Missing native shader")?
+            .clone(),
+    )?;
+    let constant = |name: &str| -> Result<&str> {
+        source
+            .lines()
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix(&format!("const {name} = "))
+                    .and_then(|s| s.strip_suffix(';'))
+            })
+            .ok_or_else(|| format!("Missing WGSL constant {name}").into())
+    };
+    if constant("HAS_ALPHA")? != "false" {
+        return Err("Alpha materials retain software traversal".into());
+    }
+    let words = |name: &str| -> Result<Vec<u32>> {
+        let bytes = assets.get(name).ok_or("Missing packed HWRT input")?;
+        if bytes.len() % 4 != 0 {
+            return Err("Invalid packed HWRT input".into());
+        }
+        Ok(bytes
+            .chunks_exact(4)
+            .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+            .collect())
+    };
+    let uniform = words("native-7")?;
+    if uniform.get(24) != Some(&0) {
+        return Err("Shader bevel retains software traversal".into());
+    }
+    if uniform.get(23) != Some(&0) {
+        return Err("Empty scenes retain software traversal".into());
+    }
+    let blas_offset = *uniform.get(22).ok_or("Missing BLAS offset")? as usize;
+    let instances = words("native-2")?;
+    let bvh = words("native-1")?;
+    let attributes = words("native-3")?;
+    let stride = constant("ATTR_STRIDE")?.parse::<usize>()? * 4;
+    let position = constant("POSITION_OFF")?.parse::<usize>()? * 4;
+    if stride == 0 || instances.len() % 40 != 0 {
+        return Err("Invalid native HWRT layout".into());
+    }
+    let count = instances.len() / 40;
+    let mut mapping = vec![0u32; count];
+    let mut geometries = Vec::new();
+    let mut placements = Vec::new();
+    let mut cache = HashMap::new();
+    // Keep the measured affine closest-hit limitation: hardware shadows still run.
+    let mut hardware_closest = true;
+    let mut generated = HashMap::new();
+    for id in 0..count {
+        let encoded = instances[id * 40];
+        if encoded >> 30 != 0 {
+            return Err("HWRT requires BVH2 packing".into());
+        }
+        let root = blas_offset + encoded as usize;
+        let vertex_offset = instances[id * 40 + 1] as usize;
+        let geometry = if let Some(&(index, _)) = cache.get(&(root, vertex_offset)) {
+            index
+        } else {
+            let mut stack = vec![root];
+            let mut positions = Vec::<u8>::new();
+            let base = mapping.len() as u32;
+            let mut visited = 0;
+            while let Some(node) = stack.pop() {
+                visited += 1;
+                if visited > bvh.len() / 4 {
+                    return Err("Invalid cyclic BVH input".into());
+                }
+                let child = *bvh.get(node * 4 + 3).ok_or("BVH node out of bounds")? as i32;
+                if child >= 0 {
+                    stack.push(root + child as usize);
+                    stack.push(node + 2);
+                    continue;
+                }
+                for k in 0..child.unsigned_abs() as usize {
+                    let record = node + 2 + k;
+                    mapping.push(record as u32);
+                    for corner in 0..3 {
+                        let vertex = *bvh
+                            .get(record * 4 + corner)
+                            .ok_or("BVH triangle out of bounds")?
+                            as usize
+                            + vertex_offset;
+                        let off = vertex
+                            .checked_mul(stride)
+                            .and_then(|v| v.checked_add(position))
+                            .ok_or("Attribute offset overflow")?;
+                        for &word in attributes
+                            .get(off..off + 3)
+                            .ok_or("HWRT vertex out of bounds")?
+                        {
+                            if !f32::from_bits(word).is_finite() {
+                                return Err("Non-finite HWRT vertex".into());
+                            }
+                            positions.extend(word.to_le_bytes());
+                        }
+                    }
+                }
+            }
+            if positions.is_empty() {
+                return Err("Empty HWRT geometry".into());
+            }
+            let index = geometries.len();
+            let name = format!("native-hwrt-positions-{index}");
+            geometries.push(Geometry {
+                positions: name.clone(),
+                vertex_count: (positions.len() / 12) as u32,
+            });
+            generated.insert(name, positions);
+            cache.insert((root, vertex_offset), (index, base));
+            index
+        };
+        mapping[id] = cache
+            .get(&(root, vertex_offset))
+            .ok_or("Missing HWRT map base")?
+            .1;
+        let m: Vec<_> = instances[id * 40 + 20..id * 40 + 36]
+            .iter()
+            .map(|v| f64::from(f32::from_bits(*v)))
+            .collect();
+        let a = [m[0], m[1], m[2]];
+        let b = [m[4], m[5], m[6]];
+        let c = [m[8], m[9], m[10]];
+        let dot = |u: [f64; 3], v: [f64; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+        let scale = dot(a, a).max(dot(b, b)).max(dot(c, c));
+        let epsilon = scale * 1e-5;
+        let determinant = a[0] * (b[1] * c[2] - b[2] * c[1]) - b[0] * (a[1] * c[2] - a[2] * c[1])
+            + c[0] * (a[1] * b[2] - a[2] * b[1]);
+        hardware_closest &= determinant > 0.
+            && scale > 0.
+            && (dot(a, a) - dot(b, b)).abs() <= epsilon
+            && (dot(a, a) - dot(c, c)).abs() <= epsilon
+            && dot(a, b).abs() <= epsilon
+            && dot(a, c).abs() <= epsilon
+            && dot(b, c).abs() <= epsilon;
+        placements.push(Instance {
+            geometry,
+            custom_index: id as u32,
+            transform: [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14].map(|i| m[i] as f32),
+        });
+    }
+    let mut shader = source;
+    for name in ["intersectScene", "intersectSceneShadow"] {
+        let marker = format!("fn {name}(");
+        if shader.matches(&marker).count() != 1 {
+            return Err("Unexpected native intersection definitions".into());
+        }
+        shader = shader.replace(&marker, &format!("fn {name}Software("));
+    }
+    let wrapper = include_str!("../../hwrt-intersect.wgsl")
+        .replace(
+            "const MT_SOFTWARE_CLOSEST: bool = false;",
+            &format!("const MT_SOFTWARE_CLOSEST: bool = {};", !hardware_closest),
+        )
+        .replace(
+            "const MT_VALIDATE_SHADOWS: bool = false;",
+            &format!(
+                "const MT_VALIDATE_SHADOWS: bool = {};",
+                std::env::var("MUTRACER_NATIVE_VALIDATE_SHADOWS").as_deref() == Ok("1")
+            ),
+        );
+    generated.insert(
+        "native-hwrt-map".into(),
+        mapping.iter().flat_map(|v| v.to_le_bytes()).collect(),
+    );
+    generated.insert(
+        "native-hwrt-shader".into(),
+        format!("enable wgpu_ray_query;\n{shader}\n{wrapper}").into_bytes(),
+    );
+    assets.extend(generated);
+    Ok(Capture {
+        eligible: true,
+        reason: None,
+        shader: Some("native-hwrt-shader".into()),
+        hardware_closest,
+        geometries,
+        instances: placements,
+        triangle_map: Some("native-hwrt-map".into()),
+    })
 }

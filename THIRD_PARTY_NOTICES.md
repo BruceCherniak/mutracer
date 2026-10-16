@@ -20,6 +20,22 @@ modified into analytic hit/miss, mask, distance and instance checks.
 Copyright (c) 2025 The gfx-rs developers. MIT License
 ([`LICENSES/Wgpu-MIT.txt`](./LICENSES/Wgpu-MIT.txt)).
 
+## Native Open Image Denoise runtime
+
+The optional native viewer bundles [Open Image Denoise 2.5.1](https://github.com/RenderKit/oidn/releases/tag/v2.5.1)
+under the Apache License 2.0, including its model weights and native runtime
+dependencies. Copyright 2018 Intel Corporation.
+The [license](./LICENSES/Apache-2.0.txt) and upstream bundled dependency notices
+([OIDN](./LICENSES/OIDN-third-party-programs.txt),
+[oneTBB](./LICENSES/OIDN-third-party-programs-oneTBB.txt),
+[DPC++](./LICENSES/OIDN-third-party-programs-DPCPP.txt)) accompany the app in
+`Contents/Resources/licenses/OIDN/`. This runtime is not part of the npm library.
+
+The native OIDN adapter loads the runtime through
+[libloading 0.8.9](https://github.com/nagisa/rust_libloading/tree/0.8.9),
+Copyright © 2015 Simonas Kazlauskas, ISC License
+([text](./LICENSES/Libloading-ISC.txt)).
+
 ## TinyBVH
 
 The WebAssembly BVH builder (`src/tinybvh/`) wraps

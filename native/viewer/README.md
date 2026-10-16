@@ -7,7 +7,9 @@ JavaScript engine, Node installation or prepared GPU capture at runtime.
 ## Build and open
 
 Install Rust, Xcode Command Line Tools, project npm dependencies and scriptc
-**0.3.2**, then run from the repository root:
+**0.3.2**, then run from the repository root. The first build downloads the
+pinned native OIDN SDK (about 49 MiB); the resulting app includes its runtime
+and model weights, adding about 50 MiB to the app. It needs no download when opened:
 
 ```sh
 export MUTRACER_SCRIPTC=/absolute/path/to/node_modules/.bin/scriptc
@@ -38,12 +40,24 @@ opened without the project files or build tools on the tested macOS arm64 machin
   restores the built-in light.
 - Choose sample count and resolution, pause/resume, restart accumulation, adjust
   exposure or save the displayed image as PNG. The preview uses Reinhard/sRGB.
+- **Native OIDN** is on by default. It denoises completed previews after interaction
+  pauses, using Metal where available and CPU otherwise. Toggle it to compare
+  the unfiltered image; PNG export uses the currently displayed result.
+- **Ray tracing** defaults to **Auto**: use hardware queries for supported opaque
+  scenes and software BVH otherwise. The panel reports the active path and any
+  fallback reason. **Software** disables hardware queries; **HWRT** reports an
+  error if the scene or device is unsupported.
 
-Camera changes restart accumulation while retaining the scene. Material,
-environment and resolution edits rebuild the scene and restart accumulation;
-these updates can pause interaction briefly. Material/environment sliders apply
-when released. Exposure changes only the displayed image. The example reads
-pixels back to CPU memory between progressive batches, which limits throughput.
+Camera changes restart accumulation while retaining the scene. The previous
+image remains visible until a newer preview arrives, including while dragging.
+Material, environment and resolution edits rebuild the scene and restart
+accumulation; these updates can pause interaction briefly. Slider changes are
+combined at roughly 120 ms intervals while held, then applied when released.
+Exposure and denoising change only the displayed image, preserving the original
+HDR accumulation. Denoising does not block window interaction; a result for an
+older scene, camera or sample count cannot replace the current preview.
+The first denoise can take longer than later runs. Choose a lower render
+resolution for more responsive interaction; a fixed frame rate is not guaranteed.
 
 ## Supported inputs and limits
 
@@ -65,5 +79,8 @@ File size is limited to 128 MiB, combined geometry buffers to 64 MiB and source
 material images to 16M pixels each, and environments to 4M pixels. The native
 library imposes additional
 scene/texture budgets described in [the native guide](../README.md#limits).
-Rendering uses software BVH traversal through wgpu/Metal, with six bounces.
-HWRT, denoising and device-loss recovery are not exposed by this viewer.
+Rendering uses wgpu/Metal with six bounces. HWRT support and fallbacks follow
+[the native intersection limits](../README.md#intersection-backend).
+Device-loss recovery is not implemented.
+Native OIDN output can differ from browser OIDN output. Custom OIDN model
+weights are not supported by this example.

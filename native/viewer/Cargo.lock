@@ -1535,6 +1535,7 @@ dependencies = [
  "glam",
  "gltf",
  "image",
+ "libloading",
  "mutracer-native-probe",
  "rfd",
 ]

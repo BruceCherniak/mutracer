@@ -9,15 +9,17 @@ module compilation, prepared replay and raw-scene rendering as equivalent gates.
 `npm run native:viewer:build` checks the complete AOT entry graph, builds the
 archive and Rust viewer with locked dependencies, creates a macOS app bundle
 and ad-hoc-signs it. `native:viewer` also launches it. The viewer is a small
-client of the experimental ABI; exposing its Rust module does not change C
-layouts or exported symbols. Its owner-bound wrapper cannot be sent to another
-thread. UI presentation uses egui/glow; tracing uses the existing wgpu/Metal
+client of the experimental ABI; backend selection extends the C entry points
+without changing existing signatures or structure layouts. Its owner-bound
+wrapper cannot be sent to another thread. UI presentation uses egui/glow; tracing uses the existing wgpu/Metal
 library and reads completed HDR batches back to the UI.
 
 Run the bundled executable with `[MODEL] --smoke-out DIRECTORY` for real GPU
 checks of load/render, queued cancellation/restart, orbit/restore, material and
-environment edits, Radiance HDR loading and PNG output. Test both external and
-embedded textured GLTF resources, unsupported required extensions and malformed
+environment edits, Radiance HDR loading and PNG output. It also compares raw
+software/automatic HWRT HDR and guides, records query counts, and runs native
+OIDN against a higher-sample reference without changing accumulation. Test both
+external and embedded textured GLTF resources, unsupported required extensions and malformed
 files. Copy the app elsewhere and run with an empty inherited environment and
 `PATH=/nonexistent`; compare HDR bytes and inspect native dependencies. Keep
 fixture generation, images, detailed checks and measurements outside the repo.
@@ -33,7 +35,20 @@ pause/resume/restart, change resolution and exposure, and export PNG. Headless
 smoke alone does not validate window input or file dialogs. Record any OS lock
 or permission block without marking the interactive gate complete. The supplied
 procedural GLB is original project geometry under the repository MIT license.
-No third-party model or source implementation is copied into the viewer.
+The build bundles the official pinned OIDN runtime/weights and upstream license
+notices. `MUTRACER_OIDN_ROOT` can select an extracted SDK; direct Cargo executable
+runs can set `MUTRACER_OIDN_LIBRARY` to its main dynamic library. The package helper
+copies and signs libraries atomically so rebuilding does not truncate loaded code.
+
+Run the executable with `--interaction-smoke DIRECTORY` to hold continuous camera
+input, assert changing/nonblank previews, reject stale OIDN output after a resize,
+and wait for the new denoised result. Keep AOT/context calls on the UI owner thread;
+the OIDN worker owns only its separate OIDN device/filter and copied image data.
+Set `MUTRACER_NATIVE_VALIDATE_SHADOWS=1` before raw HWRT scene commit to compare
+hardware shadow results against software per ray; counter 9 must remain zero.
+Also check forced-HWRT rejection preserves the prior scene, and automatic fallback
+reports alpha/version-3/bevel/empty-scene exclusions. Do not treat a fallback as a
+hardware closest-hit success or native OIDN as browser-model numerical parity.
 
 ## Partial camera validation
 

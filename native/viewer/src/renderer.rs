@@ -11,6 +11,7 @@ use std::{
 
 pub struct Renderer {
     handle: u64,
+    pub mode: u32,
     job: Option<u64>,
     _owner: PhantomData<Rc<()>>,
 }
@@ -27,13 +28,44 @@ fn check(operation: impl FnOnce(*mut i8, usize) -> i32) -> Result<()> {
 }
 impl Renderer {
     pub fn new() -> Result<Self> {
+        Self::with_backend(0)
+    }
+    pub fn with_backend(mode: u32) -> Result<Self> {
         let mut handle = 0;
-        check(|e, n| unsafe { native::mt_context_create(&mut handle, e, n) })?;
+        check(|e, n| unsafe { native::mt_context_create_with_backend(mode, &mut handle, e, n) })?;
         Ok(Self {
             handle,
+            mode,
             job: None,
             _owner: PhantomData,
         })
+    }
+    pub fn backend(&self) -> Result<(u32, String)> {
+        let mut active = 0;
+        let mut reason = [0i8; 512];
+        check(|e, n| unsafe {
+            native::mt_context_backend(
+                self.handle,
+                &mut active,
+                reason.as_mut_ptr(),
+                reason.len(),
+                e,
+                n,
+            )
+        })?;
+        Ok((
+            active,
+            unsafe { CStr::from_ptr(reason.as_ptr()) }
+                .to_string_lossy()
+                .into_owned(),
+        ))
+    }
+    pub fn counts(&self) -> Result<[u32; 11]> {
+        let mut counts = [0; 11];
+        check(|e, n| unsafe {
+            native::mt_context_hwrt_counts(self.handle, counts.as_mut_ptr(), counts.len(), e, n)
+        })?;
+        Ok(counts)
     }
     pub fn commit(&mut self, bytes: &[u8]) -> Result<()> {
         ensure!(self.job.is_none(), "Drain current job before committing");
@@ -107,12 +139,12 @@ impl Renderer {
             _ => Ok(false),
         }
     }
-    pub fn pixels(&self) -> Result<Vec<f32>> {
+    pub fn image(&self, kind: u32) -> Result<Vec<f32>> {
         let mut bytes = 0;
         check(|e, n| unsafe {
             native::mt_context_read_pixels(
                 self.handle,
-                0,
+                kind,
                 std::ptr::null_mut(),
                 0,
                 &mut bytes,
@@ -124,7 +156,7 @@ impl Renderer {
         check(|e, n| unsafe {
             native::mt_context_read_pixels(
                 self.handle,
-                0,
+                kind,
                 pixels.as_mut_ptr(),
                 pixels.len(),
                 &mut bytes,
@@ -141,6 +173,9 @@ impl Renderer {
             "Non-finite rendered pixels"
         );
         Ok(pixels)
+    }
+    pub fn pixels(&self) -> Result<Vec<f32>> {
+        self.image(0)
     }
     pub fn finish(&mut self, samples: u32) -> Result<Vec<f32>> {
         self.start(samples)?;

@@ -12,6 +12,8 @@ use std::{
 const MAX_CONTEXTS: usize = 8;
 struct Context {
     gpu: GpuDevice,
+    backend: u32,
+    fallback_reason: String,
     scene: Option<GpuScene>,
     failed: bool,
     job: Option<RenderJob>,
@@ -151,6 +153,16 @@ pub unsafe extern "C" fn mt_context_create(
     error: *mut c_char,
     capacity: usize,
 ) -> i32 {
+    unsafe { mt_context_create_with_backend(0, output, error, capacity) }
+}
+/// Backend 0=software, 1=automatic, 2=require supported HWRT scene/device.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_context_create_with_backend(
+    backend: u32,
+    output: *mut u64,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
     action(error, capacity, |registry| {
         if output.is_null() {
             return Err("Null context output".into());
@@ -165,11 +177,16 @@ pub unsafe extern "C" fn mt_context_create(
         let next = handle
             .checked_add(1)
             .ok_or("Native context handles exhausted")?;
-        let gpu = GpuDevice::new(false)?;
+        if backend > 2 {
+            return Err("Unknown native intersection backend".into());
+        }
+        let gpu = GpuDevice::with_backend(backend)?;
         registry.contexts.insert(
             handle,
             Context {
                 gpu,
+                backend,
+                fallback_reason: String::new(),
                 scene: None,
                 failed: false,
                 job: None,
@@ -213,16 +230,53 @@ pub unsafe extern "C" fn mt_context_commit(
             return Err("Null or oversized scene input".into());
         }
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
-        let (scene, assets) = scene::prepare(bytes)?;
+        let (mut scene, mut assets) = scene::prepare(bytes)?;
+        let mut options = RenderOptions::default();
+        let mut fallback_reason = String::new();
+        if context.backend != 0 {
+            let capture = if context.gpu.hardware_ray_query {
+                hardware::from_raw(
+                    &scene,
+                    &mut assets,
+                    u32::from_le_bytes(bytes[..4].try_into().unwrap()),
+                )
+            } else {
+                Err("Hardware ray queries unavailable on this device".into())
+            };
+            match capture {
+                Ok(capture) => {
+                    scene.hwrt = Some(capture);
+                    options.flags |= 4;
+                }
+                Err(error) if context.backend == 2 => return Err(error),
+                Err(error) => fallback_reason = error.to_string(),
+            }
+        }
         let candidate = GpuScene::new(
             Path::new(""),
             scene,
-            &RenderOptions::default(),
+            &options,
             Some(&assets),
             context.gpu.clone(),
-        )?;
+        );
+        let candidate = match candidate {
+            Ok(candidate) => candidate,
+            Err(error) if context.backend == 1 && options.flags & 4 != 0 => {
+                fallback_reason = format!("HWRT upload unavailable: {error}");
+                let (scene, assets) = scene::prepare(bytes)?;
+                GpuScene::new(
+                    Path::new(""),
+                    scene,
+                    &RenderOptions::default(),
+                    Some(&assets),
+                    context.gpu.clone(),
+                )?
+            }
+            Err(error) => return Err(error),
+        };
         // Commit is transactional: the previous scene survives any preparation/upload failure.
         context.scene = Some(candidate);
+        context.fallback_reason = fallback_reason;
         context.job = None;
         context.failed = false;
         Ok(())
@@ -585,4 +639,75 @@ mod tests {
             1
         );
     }
+}
+
+/// Runtime backend: 0=software, 1=hardware shadows, 2=hardware closest+shadows.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_context_backend(
+    handle: u64,
+    active: *mut u32,
+    reason: *mut c_char,
+    reason_capacity: usize,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    action(error, capacity, |registry| {
+        if active.is_null() || reason.is_null() || reason_capacity == 0 {
+            return Err("Invalid backend info output".into());
+        }
+        let context = context(registry, handle)?;
+        let scene = ready(context)?;
+        unsafe {
+            *active = if scene.hardware.is_none() {
+                0
+            } else if scene.scene.hwrt.as_ref().unwrap().hardware_closest {
+                2
+            } else {
+                1
+            };
+        }
+        let bytes = context.fallback_reason.as_bytes();
+        let mut n = bytes.len().min(reason_capacity - 1);
+        while !context.fallback_reason.is_char_boundary(n) {
+            n -= 1;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), reason.cast(), n);
+            *reason.add(n) = 0;
+        }
+        Ok(())
+    })
+}
+/// Diagnostic counters, valid only for an idle hardware context.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_context_hwrt_counts(
+    handle: u64,
+    output: *mut u32,
+    length: usize,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    action(error, capacity, |registry| {
+        if output.is_null() || length != 11 {
+            return Err("Expected eleven HWRT counters".into());
+        }
+        let context = context(registry, handle)?;
+        idle(context)?;
+        ready(context)?;
+        if context.scene.as_ref().unwrap().hardware.is_none() {
+            return Err("Context uses software traversal".into());
+        }
+        context.failed = true;
+        let scene = context.scene.as_ref().unwrap();
+        let hardware = scene
+            .hardware
+            .as_ref()
+            .ok_or("Context uses software traversal")?;
+        let counts = hardware::counts(&scene.gpu.device, &scene.gpu.queue, hardware)?;
+        unsafe {
+            std::ptr::copy_nonoverlapping(counts.as_ptr(), output, 11);
+        }
+        context.failed = false;
+        Ok(())
+    })
 }

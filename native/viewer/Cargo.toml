@@ -12,3 +12,4 @@ gltf = { version = "=1.4.1", features = ["KHR_materials_ior", "KHR_materials_tra
 glam = "=0.30.9"
 image = { version = "=0.25.8", default-features = false, features = ["png", "jpeg", "hdr"] }
 rfd = "=0.15.4"
+libloading = "=0.8.9"

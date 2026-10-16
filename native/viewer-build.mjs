@@ -2,6 +2,7 @@ import {spawnSync} from 'node:child_process';
 import {mkdirSync,copyFileSync,writeFileSync,renameSync} from 'node:fs';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {bundleOIDN} from './viewer-oidn.mjs';
 import {summarizeCoverage} from './diagnostics.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'..');
 const out=resolve(process.env.MUTRACER_NATIVE_OUTPUT??resolve(root,'.native-build/viewer'));
@@ -32,6 +33,8 @@ writeFileSync(resolve(contents,'Info.plist'),`<?xml version="1.0" encoding="UTF-
 <key>CFBundleVersion</key><string>0.0.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>\n`);
+bundleOIDN(out, contents);
+copyFileSync(resolve(root,'LICENSES/Libloading-ISC.txt'),resolve(contents,'Resources/licenses/Libloading-ISC.txt'));
 run('/usr/bin/codesign',['--force','--sign','-',app]);
 console.log(`Native app: ${app}`);
 const args=process.argv.slice(2);if(!args.includes('--build-only'))run('/usr/bin/open',['-n',app,...(args.length?['--args',...args.map(a=>resolve(a))]:[])]);
