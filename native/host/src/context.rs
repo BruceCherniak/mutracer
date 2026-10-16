@@ -230,7 +230,10 @@ pub unsafe extern "C" fn mt_context_commit(
             return Err("Null or oversized scene input".into());
         }
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+        let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
+        let started = Instant::now();
         let (mut scene, mut assets, retained) = scene::prepare_retained(bytes)?;
+        let prepared = Instant::now();
         let mut options = RenderOptions::default();
         let mut fallback_reason = String::new();
         if context.backend != 0 {
@@ -252,6 +255,7 @@ pub unsafe extern "C" fn mt_context_commit(
                 Err(error) => fallback_reason = error.to_string(),
             }
         }
+        let hardware_prepared = Instant::now();
         let candidate = GpuScene::new(
             Path::new(""),
             scene,
@@ -274,6 +278,23 @@ pub unsafe extern "C" fn mt_context_commit(
             }
             Err(error) => return Err(error),
         };
+        if profile {
+            // Host setup includes uploads, AS creation, bindings and validation.
+            // Pipeline time is a subset; retries remain included in setup time.
+            eprintln!(
+                "{}",
+                serde_json::json!({
+                    "nativeCommitProfile": {
+                        "cpuPrepareMs": prepared.duration_since(started).as_secs_f64() * 1000.0,
+                        "hardwareCaptureMs": hardware_prepared.duration_since(prepared).as_secs_f64() * 1000.0,
+                        "gpuSetupMs": hardware_prepared.elapsed().as_secs_f64() * 1000.0,
+                        "pipelineMs": candidate.compile_seconds * 1000.0,
+                        "totalMs": started.elapsed().as_secs_f64() * 1000.0,
+                        "uploadRetried": fallback_reason.starts_with("HWRT upload unavailable:"),
+                    }
+                })
+            );
+        }
         candidate.retained = Some(retained);
         // Commit is transactional: the previous scene survives any preparation/upload failure.
         context.scene = Some(candidate);

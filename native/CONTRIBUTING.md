@@ -465,3 +465,18 @@ leaf order, packed displacement heights and output. Archive those differences;
 do not silently change the rendering algorithm or claim universal pixel parity.
 The native TinyBVH license belongs under `native/LICENSES/` and is also copied
 into the application bundle.
+
+## Performance comparisons
+
+Set `MUTRACER_NATIVE_PROFILE=1` for one JSON diagnostic per successful full
+context commit. CPU preparation and HWRT capture are separate from GPU setup.
+GPU setup includes uploads, acceleration structures, bindings and validation;
+pipeline creation is a subset of it, not an additional phase. An upload retry
+also includes fallback preparation in setup; check `uploadRetried`. Timings
+exclude replacing/dropping the previously committed scene.
+
+Compare identical raw inputs, seeds, samples and batch sizes against the browser
+TinyBVH backend. Drain GPU work before stopping render timers, measure first and
+warm runs separately, and read images outside render timing. Keep shader caches
+and adapter differences explicit. Browser JS heap and native process peak RSS
+are different memory metrics and must not be reported as a memory speedup.
