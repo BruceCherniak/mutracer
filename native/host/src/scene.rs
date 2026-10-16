@@ -16,6 +16,14 @@ unsafe extern "C" {
         output: *mut *const u8,
         size: *mut usize,
     );
+    fn mt_core_scene_transform(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
+    fn mt_core_scene_accept_transform(token: u32, output: *mut *const u8, size: *mut usize);
     fn mt_core_scene_accept_lighting(token: u32, output: *mut *const u8, size: *mut usize);
     fn mt_core_scene_light(
         input: *const u8,
@@ -519,6 +527,44 @@ impl Drop for PreparedState {
 // Buffer records have zero dimensions; texture records carry their exact extent.
 pub(super) type LightingUpdates = Vec<(usize, u32, u32, Vec<u8>)>;
 impl PreparedState {
+    pub(super) fn transform(&self, bytes: &[u8]) -> Result<LightingUpdates> {
+        if bytes.len() != 80 {
+            return Err("Transform descriptor must contain exactly 80 bytes".into());
+        }
+        let w = Words(bytes);
+        if w.u(0) != 1 || w.u(3) != 0 {
+            return Err("Invalid transform version/reserved fields".into());
+        }
+        w.affine(4)?;
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            mt_core_scene_transform(
+                bytes.as_ptr(),
+                bytes.len(),
+                self.token,
+                &mut pointer,
+                &mut size,
+            );
+        }
+        lighting_result(pointer, size, &[1, 2, 7, 8, 24])
+    }
+    pub(super) fn accept_transform(&self) -> Result<()> {
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            mt_core_scene_accept_transform(self.token, &mut pointer, &mut size);
+        }
+        let packet = unsafe {
+            let result = copy_core_result(pointer, size, 16);
+            mt_core_collect();
+            result?
+        };
+        if packet[..4] != 1u32.to_le_bytes() {
+            return Err("Native transform acceptance failed".into());
+        }
+        Ok(())
+    }
     pub(super) fn environment(&self, bytes: &[u8]) -> Result<LightingUpdates> {
         if bytes.len() < 48 || bytes.len() > MAX_BYTES || bytes.len() % 4 != 0 {
             return Err("Invalid environment descriptor length".into());
@@ -670,9 +716,9 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
     let w = Words(&packet);
     if w.u(0) == 2 {
         return Err(if w.u(1) == 2 {
-            "Full scene commit required: lighting shape or feature changed"
+            "Full scene commit required: resource shape or shader feature changed"
         } else {
-            "Native retained lighting state is unavailable"
+            "Invalid or unavailable retained scene reference"
         }
         .into());
     }
@@ -701,7 +747,30 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
         {
             return Err("Invalid AOT lighting resource span/format".into());
         }
-        w.finite(offset / 4, length / 4)?;
+        if id >= 7 {
+            w.finite(offset / 4, length / 4)?;
+        }
+        if id == 2 && length >= 160 {
+            for i in (offset / 4..(offset + length) / 4).step_by(40) {
+                w.finite(i + 3, 37)?;
+            }
+        }
+        if id == 1 {
+            let mut stack = vec![0usize];
+            while let Some(node) = stack.pop() {
+                let at = offset / 4 + node * 4;
+                if at + 8 > (offset + length) / 4 {
+                    return Err("Invalid transform TLAS".into());
+                }
+                w.finite(at, 3)?;
+                w.finite(at + 4, 3)?;
+                let child = w.u(at + 3) as u32 as i32;
+                if child >= 0 {
+                    stack.push(node + 2);
+                    stack.push(child as usize);
+                }
+            }
+        }
         updates.push((
             id,
             w.u(o + 3) as u32,

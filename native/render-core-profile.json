@@ -129,6 +129,23 @@
         "u32"
       ],
       "returns": "bytes"
+    },
+    {
+      "export": "sceneTransformParameters",
+      "symbol": "mt_core_scene_transform",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "acceptSceneTransform",
+      "symbol": "mt_core_scene_accept_transform",
+      "params": [
+        "u32"
+      ],
+      "returns": "bytes"
     }
   ]
 }

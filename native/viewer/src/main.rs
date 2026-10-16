@@ -22,6 +22,7 @@ enum Change {
     Material,
     Environment,
     Light,
+    Transform,
     Scene,
 }
 struct Viewer {
@@ -49,6 +50,7 @@ struct Viewer {
     pending_camera: bool,
     pending_environment: bool,
     pending_light: bool,
+    pending_transforms: std::collections::BTreeSet<usize>,
     candidate: Option<(Model, Camera)>,
     pixels: Vec<f32>,
     pixel_size: [u32; 2],
@@ -101,6 +103,7 @@ impl Viewer {
             pending_camera: false,
             pending_environment: false,
             pending_light: false,
+            pending_transforms: Default::default(),
             candidate: None,
             pixels: vec![],
             pixel_size: size,
@@ -238,7 +241,7 @@ impl Viewer {
                             ))?;
                         }
                     }
-                    Change::Material | Change::Environment | Change::Light => {
+                    Change::Material | Change::Environment | Change::Light | Change::Transform => {
                         for &id in &self.pending_materials {
                             if !self
                                 .renderer
@@ -261,6 +264,15 @@ impl Viewer {
                             self.change = Change::Scene;
                             return Ok(());
                         }
+                        for &id in &self.pending_transforms {
+                            if !self
+                                .renderer
+                                .transform(&self.model.meshes[id].update_bytes(id))?
+                            {
+                                self.change = Change::Scene;
+                                return Ok(());
+                            }
+                        }
                         if self.pending_camera {
                             self.renderer.camera(&self.camera.bytes())?;
                         }
@@ -278,6 +290,7 @@ impl Viewer {
                     self.render_size = self.size;
                     self.change = Change::None;
                     self.pending_materials.clear();
+                    self.pending_transforms.clear();
                     self.pending_camera = false;
                     self.pending_environment = false;
                     self.pending_light = false;
@@ -697,6 +710,66 @@ impl Viewer {
                                 }
                             });
                         ui.separator();
+                        if let Some(id) = self.selected_mesh {
+                            ui.label("Object transform");
+                            let mesh = &mut self.model.meshes[id];
+                            let mut position = mesh.transform.w_axis.truncate();
+                            let mut changed = false;
+                            ui.horizontal(|ui| {
+                                for (label, value) in [
+                                    ("X", &mut position.x),
+                                    ("Y", &mut position.y),
+                                    ("Z", &mut position.z),
+                                ] {
+                                    changed |= ui
+                                        .add(
+                                            egui::DragValue::new(value)
+                                                .prefix(format!("{label} "))
+                                                .speed(self.model.radius as f64 * 0.005)
+                                                .range(-1e6..=1e6),
+                                        )
+                                        .changed();
+                                }
+                            });
+                            if changed {
+                                mesh.transform.w_axis = position.extend(1.);
+                            }
+                            ui.horizontal(|ui| {
+                                if ui.small_button("Rotate Y −15°").clicked() {
+                                    mesh.transform *=
+                                        glam::Mat4::from_rotation_y(-15f32.to_radians());
+                                    changed = true;
+                                }
+                                if ui.small_button("Rotate Y +15°").clicked() {
+                                    mesh.transform *=
+                                        glam::Mat4::from_rotation_y(15f32.to_radians());
+                                    changed = true;
+                                }
+                            });
+                            ui.horizontal(|ui| {
+                                for (label, scale) in [("Smaller", 1. / 1.1), ("Larger", 1.1)] {
+                                    if ui.small_button(label).clicked() {
+                                        let candidate = mesh.transform
+                                            * glam::Mat4::from_scale(glam::Vec3::splat(scale));
+                                        let determinant = candidate.determinant();
+                                        if candidate.is_finite()
+                                            && determinant.is_finite()
+                                            && determinant.abs() >= 1e-10
+                                            && determinant.abs() <= 1e12
+                                        {
+                                            mesh.transform = candidate;
+                                            changed = true;
+                                        }
+                                    }
+                                }
+                            });
+                            if changed {
+                                self.model.refresh_bounds();
+                                self.pending_transforms.insert(id);
+                                self.dirty(Change::Transform);
+                            }
+                            ui.separator();
+                        }
                         for warning in &self.model.warnings {
                             ui.colored_label(egui::Color32::YELLOW, warning);
                         }
@@ -1237,7 +1310,14 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         std::thread::sleep(Duration::from_millis(2));
     }
     let last_commit = viewer.last_scene_commit;
+    let original_transform = viewer.model.meshes[0].transform;
     for step in 0..80 {
+        viewer.model.meshes[0].transform =
+            glam::Mat4::from_translation(glam::Vec3::new(step as f32 * 0.002, 0., 0.))
+                * original_transform;
+        viewer.model.refresh_bounds();
+        viewer.pending_transforms.insert(0);
+        viewer.dirty(Change::Transform);
         viewer.light.azimuth = step as f32 * 7.;
         viewer.light.intensity = 0.5 + step as f32 / 40.;
         viewer.dirty(Change::Light);
@@ -1302,7 +1382,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     ))?;
     ensure!(
         reference.finish(viewer.samples)? == viewer.pixels,
-        "Combined light/environment/material/camera updates differ from full commit"
+        "Combined transform/light/environment/material/camera updates differ from full commit"
     );
     renderer::save(
         &out.join("interactive-material.png"),
@@ -1311,7 +1391,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         0.,
     )?;
     println!(
-        "PASS 80 held light/environment/material updates plus camera motion: {previews} changed previews, zero blanks, final HDR byte-exact to full commit"
+        "PASS 80 held transform/light/environment/material updates plus camera motion: {previews} changed previews, zero blanks, final HDR byte-exact to full commit"
     );
     viewer.model.materials[id].unlit = true;
     viewer.dirty(Change::Scene);
@@ -1655,6 +1735,97 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     Ok(())
 }
+fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
+    std::fs::create_dir_all(out)?;
+    let mut model = Model::load(path)?;
+    let camera = Camera::fit(model.center, model.radius);
+    let mut environment = Environment::default();
+    let size = [160, 104];
+    let originals: Vec<_> = model.meshes.iter().map(|m| m.transform).collect();
+    let mut partial = 0;
+    let mut fallback = 0;
+    for mode in [0, 1] {
+        let mut renderer = Renderer::with_backend(mode)?;
+        let mut reference = Renderer::with_backend(mode)?;
+        renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+        renderer.finish(8)?;
+        for (id, original) in originals.iter().enumerate().take(3) {
+            for step in 0..8 {
+                let scale = if step == 6 {
+                    glam::Vec3::new(1.2, 0.8, 1.1)
+                } else if step == 7 {
+                    glam::Vec3::new(-1., 1., 1.)
+                } else {
+                    glam::Vec3::splat(1. + step as f32 * 0.03)
+                };
+                model.meshes[id].transform = glam::Mat4::from_translation(glam::Vec3::new(
+                    step as f32 * model.radius * 0.025,
+                    0.,
+                    0.,
+                )) * *original
+                    * glam::Mat4::from_rotation_y(step as f32 * 0.15)
+                    * glam::Mat4::from_scale(scale);
+                let update = model.meshes[id].update_bytes(id);
+                let before = renderer.pixels()?;
+                let mut invalid = update.clone();
+                invalid[16..20].copy_from_slice(&f32::NAN.to_le_bytes());
+                ensure!(
+                    renderer.transform(&invalid).is_err() && renderer.pixels()? == before,
+                    "Invalid transform mutated scene"
+                );
+                if renderer.transform(&update)? {
+                    partial += 1;
+                } else {
+                    ensure!(
+                        renderer.pixels()? == before,
+                        "Rejected transform changed output"
+                    );
+                    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                    fallback += 1;
+                }
+                ensure!(renderer.samples()? == 0, "Transform did not reset samples");
+                let actual = renderer.finish(8)?;
+                reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                ensure!(
+                    actual == reference.finish(8)?
+                        && renderer.image(1)? == reference.image(1)?
+                        && renderer.image(2)? == reference.image(2)?,
+                    "Transform full/partial mismatch {mode}/{id}/{step}"
+                );
+                // Accepted transform lighting must survive subsequent environment edits.
+                environment.intensity = 0.5 + step as f32 * 0.2;
+                if !renderer.environment(&environment.update_bytes())? {
+                    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                }
+                let actual = renderer.finish(8)?;
+                reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                ensure!(
+                    actual == reference.finish(8)?
+                        && renderer.image(1)? == reference.image(1)?
+                        && renderer.image(2)? == reference.image(2)?,
+                    "Environment after transform mismatch"
+                );
+                if renderer.backend()?.0 != 0 {
+                    ensure!(renderer.counts()?[9] == 0, "HWRT shadow mismatch");
+                }
+            }
+        }
+        renderer::save(
+            &out.join(format!("mode-{mode}.png")),
+            &renderer.pixels()?,
+            size,
+            0.,
+        )?;
+        for (mesh, original) in model.meshes.iter_mut().zip(&originals) {
+            mesh.transform = *original;
+        }
+    }
+    ensure!(partial > 0, "No partial transforms executed");
+    println!(
+        "PASS {partial} partial transforms, {fallback} explicit full fallbacks; software/auto HDR/normal/albedo exact; interleaved environment and invalid-update preservation"
+    );
+    Ok(())
+}
 fn main() -> Result<()> {
     let mut model = None;
     let mut smoke_out = None;
@@ -1664,9 +1835,15 @@ fn main() -> Result<()> {
     let mut material_out = None;
     let mut environment_out = None;
     let mut light_out = None;
+    let mut transform_out = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--transform-smoke" => {
+                transform_out = Some(PathBuf::from(
+                    args.next().context("--transform-smoke needs a directory")?,
+                ));
+            }
             "--light-smoke" => {
                 light_out = Some(PathBuf::from(
                     args.next().context("--light-smoke needs a directory")?,
@@ -1707,6 +1884,9 @@ fn main() -> Result<()> {
         }
     }
     let model = model.unwrap_or_else(default_model);
+    if let Some(out) = transform_out {
+        return transform_smoke(&model, &out);
+    }
     if let Some(out) = light_out {
         return light_smoke(&model, &out);
     }

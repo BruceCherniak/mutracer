@@ -74,6 +74,21 @@ int32_t mt_context_reset(mt_context handle, char *error, size_t capacity);
  */
 int32_t mt_context_update_camera(mt_context handle, const uint8_t *input, size_t length,
   char *error, size_t capacity);
+/* Update a mesh world matrix or one instance-local matrix. Exactly 80 bytes:
+ * version=1, original mesh index, local instance index+1 (0=mesh world matrix),
+ * reserved=0, column-major matrix[16] (f32). Matrix must be finite, invertible
+ * and affine. A batch world edit affects all its instances; a local edit affects
+ * only that instance. Materials, geometry and textures are preserved.
+ * Success restarts accumulation and expires the last job, even for identical
+ * input. Rejects active jobs and failed scenes. Validation rejection preserves
+ * scene/samples/job. GPU failure marks the scene failed. This call blocks.
+ * Resource size, traversal stack or HWRT closest-hit eligibility changes return
+ * "Full scene commit required:"; submit an updated full descriptor instead.
+ * Cost grows with instance/BLAS data and emissive triangles. Full commits and
+ * candidate updates may temporarily retain old and new CPU/GPU resources.
+ */
+int32_t mt_context_update_transform(mt_context handle, const uint8_t *input, size_t length,
+  char *error, size_t capacity);
 /* Update one original descriptor material, retaining geometry, textures,
  * acceleration structures and pipeline. Exactly 48 bytes / 12 uint32 words:
  * version=1, source_material_index, reserved[2]=0,

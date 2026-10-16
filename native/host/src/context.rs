@@ -412,6 +412,50 @@ pub unsafe extern "C" fn mt_context_update_environment(
         Ok(())
     })
 }
+/// Update a mesh world matrix or one local instance matrix through shared TS.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_context_update_transform(
+    handle: u64,
+    input: *const u8,
+    length: usize,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    action(error, capacity, |registry| {
+        let context = context(registry, handle)?;
+        idle(context)?;
+        let scene = ready(context)?;
+        if input.is_null() || length != 80 {
+            return Err("Transform descriptor must contain exactly 80 bytes".into());
+        }
+        let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+        let packed = scene
+            .retained
+            .as_ref()
+            .ok_or("No retained transform preparation")?
+            .transform(bytes)?;
+        scene.validate_lighting(&packed)?;
+        let hardware = scene
+            .hardware
+            .as_ref()
+            .map(|hw| hw.transform_plan(scene.scene.hwrt.as_ref().unwrap(), &packed[1].3))
+            .transpose()?;
+        context.failed = true;
+        let scene = context.scene.as_mut().unwrap();
+        if let Some(plan) = hardware {
+            scene.hardware.as_mut().unwrap().update_transforms(
+                &scene.gpu.device,
+                &scene.gpu.queue,
+                plan,
+            );
+        }
+        scene.update_lighting(&packed)?;
+        scene.retained.as_ref().unwrap().accept_transform()?;
+        context.job = None;
+        context.failed = false;
+        Ok(())
+    })
+}
 /// Update one analytic light and refresh all light-selection probabilities.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_update_light(

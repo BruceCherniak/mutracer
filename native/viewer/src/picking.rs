@@ -70,6 +70,17 @@ impl Model {
         }
         selected
     }
+    pub fn refresh_bounds(&mut self) {
+        let mut min = Vec3::splat(f32::INFINITY);
+        let mut max = Vec3::splat(f32::NEG_INFINITY);
+        for id in 0..self.meshes.len() {
+            let (lo, hi) = self.mesh_bounds(id);
+            min = min.min(lo);
+            max = max.max(hi);
+        }
+        self.center = (min + max) * 0.5;
+        self.radius = (max - min).length() * 0.5;
+    }
     pub fn mesh_bounds(&self, id: usize) -> (Vec3, Vec3) {
         let mesh = &self.meshes[id];
         let geometry = &self.geometries[mesh.geometry];

@@ -358,8 +358,8 @@ environment/material edits with camera movement, checks no full commit occurs,
 and validates the background-feature fallback with a retained preview.
 Full and partial preparation call the same native adapter around the original
 TS environment distribution, alias-table, emissive and analytic light packing.
-Retain only material state, analytic lights, emissive records and base uniforms;
-do not root the merged geometry/BVH graph. Texture shape changes use full commit.
+Environment updates use retained material/light/emissive/uniform state without
+retaining standalone environment images. Texture shape changes use full commit.
 Both light-selection PMFs and the environment CDF must update with radiance.
 The native OIDN CPU/Metal smoke supersedes the removed URL-only AOT/C example;
 whole-entry diagnostics still include `src/oidn.ts` and its public export inventory.
@@ -378,5 +378,23 @@ Lighting preparation stages a TS candidate. Only acknowledge it after validating
 all returned resource shapes and completing GPU writes/reset. Environment power,
 light records and RT uniform state must represent the last successful update;
 rejected environment/light changes must not contaminate subsequent partial edits.
-Neither geometry/BVH nor environment pixels need to remain rooted for light-only
-updates. Both paths reuse original light sampling and packing through nativeLighting.
+Light-only updates reuse original light sampling and packing through nativeLighting;
+the scene also roots mesh bindings and BLASes for transform updates.
+
+## Partial transform validation
+
+Run `[MODEL] --transform-smoke DIRECTORY` on software and Auto backends. It
+compares HDR/normal/albedo with full commits, including rotation, uniform and
+nonuniform scale, reflection, invalid edits and interleaved environments.
+`--interaction-smoke` also combines held transforms with camera/material/light/
+environment edits, requires retained previews and no full commit in that loop.
+The C record can also update a batch parent or an individual local instance.
+
+Retain source meshes, prepared instance bindings and original BLASes. Candidate
+mesh objects reuse `updateMeshInstanceTransforms`, `buildTLAS` and
+`EmissiveTriangleCache`; merged vertex arrays are not rooted. Validate resource
+sizes, stack bounds and packed floats before GPU writes, then accept the candidate.
+Hardware updates reuse BLASes/TLAS bindings and rebuild the TLAS in place. Map
+software leaf-order changes back to hardware geometry/triangle bases using BLAS
+root and vertex region, rather than assuming stable instance order. A change to
+the compiled hardware closest-hit eligibility requests a full commit.

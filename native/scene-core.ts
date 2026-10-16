@@ -17,9 +17,10 @@ import { InstanceState, RectLightState, SphereLight, DirectionalLight, SpotLight
 export * from '../src/renderer/lightCore.js';
 import type { EmissiveTriangle } from '../src/renderer/lightSampling.js';
 import type { AnalyticLightState } from '../src/scene/lightState.js';
-import { write } from '../src/math/access.js';
+import { read, write } from '../src/math/access.js';
 import { meshInstancesLength } from '../src/renderer/packedMeshInstances.js';
-import { prepareSceneMeshes, computeGeometryNormals } from '../src/renderer/scenePreparation.js';
+import { prepareSceneMeshes, computeGeometryNormals, updateMeshInstanceTransforms, type PreparedMeshInstanceBinding } from '../src/renderer/scenePreparation.js';
+import type { BLASInstance } from '../src/renderer/bvhAccel.js';
 import { buildBLAS, buildTLAS, concatBLASBuffers, getTraversalStackSizes } from '../src/renderer/bvhAccel.js';
 import { getGeometryBvh, setGeometryBvh } from '../src/renderer/geometryBvh.js';
 import { generateVertexTangents } from '../src/util/geometry.js';
@@ -34,12 +35,24 @@ import { makeRayTraceUniform, packWgpuAnalyticLights, WGPU_SCENE_BUFFER_MIN_BYTE
 import { zSobolLog2SPP } from '../src/renderer/sampling.js';
 import { getOpenPbrEnergyLutData, OPENPBR_ENERGY_LUT_WIDTH, OPENPBR_ENERGY_LUT_HEIGHT } from '../src/renderer/openPbrEnergyLut.js';
 
-// Root material and light preparation, never merged geometry/BVH or GPU resources.
+// Root source meshes and prepared bindings/BLASes for transform updates. The
+// merged vertex allocation is not retained; geometry edits have a separate gate.
 // A full context commit owns the token; raw/replay probes remain stateless.
 const retainedScenes = new Map<number, {source: MaterialState[]; ordered: MaterialState[]; table: MaterialData;
   lights: AnalyticLightState[]; emissive: EmissiveTriangle[]; rt: ArrayBuffer;
   environmentWidth: number; environmentHeight: number; backgroundWidth: number; backgroundHeight: number;
-  qualityFlags: number; environmentPower: number}>();
+  qualityFlags: number; environmentPower: number; meshes: MeshState[];
+  bindings: PreparedMeshInstanceBinding[]; blases: BLASInstance[]; tlasStack: number}>();
+const pendingTransforms = new Map<number, {meshes: MeshState[]; bindings: PreparedMeshInstanceBinding[];
+  emissive: EmissiveTriangle[]; rt: ArrayBuffer}>();
+export function acceptSceneTransform(token: number): Uint8Array {
+  const state = retainedScenes.get(token), pending = pendingTransforms.get(token);
+  if (!state || !pending) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  state.meshes = pending.meshes; state.bindings = pending.bindings;
+  state.emissive = pending.emissive; state.rt = pending.rt;
+  retainedScenes.set(token, state); pendingTransforms.delete(token);
+  return new Uint8Array(new Uint32Array([1, 0, 0, 0]).buffer);
+}
 // Pending light/environment candidates become authoritative only after the host
 // validates resource shapes and completes GPU writes. Rejected edits never alter
 // the inputs of a subsequent partial update.
@@ -57,7 +70,7 @@ export function retainedSceneParameters(bytes: Uint8Array, token: number): Uint8
   catch { retainedScenes.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer); }
 }
 export function releaseSceneParameters(token: number): Uint8Array {
-  retainedScenes.delete(token); pendingLighting.delete(token);
+  retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token);
   return new Uint8Array(16);
 }
 // Version 1: source material index and seven scalar parameters. Maps, emission,
@@ -308,7 +321,8 @@ function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
   add(30, 2, shader, 0, 0, 0, 0);
   if (token) retainedScenes.set(token, {source: materials, ordered: prepared.materials, table, lights, emissive,
     rt: rt.buffer, environmentWidth: environment?.width ?? 0, environmentHeight: environment?.height ?? 0,
-    backgroundWidth: background?.width ?? 0, backgroundHeight: background?.height ?? 0, qualityFlags, environmentPower: estimateEnvironmentPower(environment)});
+    backgroundWidth: background?.width ?? 0, backgroundHeight: background?.height ?? 0, qualityFlags, environmentPower: estimateEnvironmentPower(environment),
+    meshes, bindings: prepared.instanceBindings, blases, tlasStack: Number(constants.TLAS_STACK_SIZE)});
   return resourcePacket(records, parts, width, height);
 }
 
@@ -425,6 +439,48 @@ export function sceneLightParameters(bytes: Uint8Array, token: number): Uint8Arr
     [8, 0, lighting.lightUniform.byteLength, 0, 0, 0, 0, 0],
     [24, 1, lighting.lightData.byteLength, lighting.lightWidth, lighting.lightHeight, 1, 2, 0]
   ], [new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer)], 0, 0);
+}
+
+// Version 1, source mesh index, local instance index+1 (0=mesh world matrix),
+// reserved=0, matrix[16]. Candidate meshes never mutate accepted source state.
+export function sceneTransformParameters(bytes: Uint8Array, token: number): Uint8Array {
+  pendingTransforms.delete(token);
+  const state = retainedScenes.get(token);
+  const u = new Uint32Array(bytes.buffer, bytes.byteOffset, 20), f = new Float32Array(bytes.buffer, bytes.byteOffset, 20);
+  const previous = state?.meshes[u[1]];
+  if (!state || !previous) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  const mesh = new MeshState(previous.geometry, previous.materials);
+  const data = previous.instanceData;
+  if (u[2] && (!data || u[2] > data.count)) return new Uint8Array(new Uint32Array([2, 3, 0, 0]).buffer);
+  for (let i = 0; i < 16; i++) write(mesh.transform, i, u[2] ? read(previous.transform, i) : f[4 + i]);
+  if (data) {
+    const transforms = data.transforms.slice();
+    if (u[2]) transforms.set(f.subarray(4), (u[2] - 1) * 16);
+    mesh.setInstanceState(new InstanceState({count: data.count, transforms, colors: data.colors}));
+  }
+  const meshes = state.meshes.slice(); meshes[u[1]] = mesh;
+  const bindings = state.bindings.map(b => ({mesh: b.mesh === previous ? mesh : b.mesh, geometry: b.geometry,
+    blasIndex: b.blasIndex, materialIndices: b.materialIndices, displacementScale: b.displacementScale, bvhBounds: b.bvhBounds}));
+  const instances = updateMeshInstanceTransforms(bindings), tlas = buildTLAS(instances, state.blases);
+  if (getTraversalStackSizes(tlas, state.blases).tlas > state.tlasStack) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+  const blas = new Uint8Array(concatBLASBuffers(state.blases));
+  const bvh = new Uint8Array(tlas.buffer.byteLength + blas.byteLength);
+  bvh.set(new Uint8Array(tlas.buffer)); bvh.set(blas, tlas.buffer.byteLength);
+  const emissive = new EmissiveTriangleCache().collect(bindings, state.ordered);
+  const lighting = nativeLighting(state.lights, state.table, emissive, state.environmentPower);
+  const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
+  rt.views.blasOffset[0] = tlas.buffer.byteLength / 16;
+  rt.views.isEmpty[0] = Number(meshInstancesLength(instances) === 0);
+  packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
+  pendingTransforms.set(token, {meshes, bindings, emissive, rt: rt.buffer});
+  const instanceBytes = new Uint8Array(tlas.instancesBuffer!);
+  const paddedBvh = new Uint8Array(Math.max(bvh.length, WGPU_SCENE_BUFFER_MIN_BYTES)); paddedBvh.set(bvh);
+  const paddedInstances = new Uint8Array(Math.max(instanceBytes.length, WGPU_SCENE_BUFFER_MIN_BYTES)); paddedInstances.set(instanceBytes);
+  return resourcePacket([
+    [1, 0, paddedBvh.length, 0, 0, 0, 0, 0], [2, 0, paddedInstances.length, 0, 0, 0, 0, 0],
+    [7, 0, rt.buffer.byteLength, 0, 0, 0, 0, 0], [8, 0, lighting.lightUniform.byteLength, 0, 0, 0, 0, 0],
+    [24, 1, lighting.lightData.byteLength, lighting.lightWidth, lighting.lightHeight, 1, 2, 0]
+  ], [paddedBvh, paddedInstances, new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer)], 0, 0);
 }
 
 function nativeFloatImage(texture: PixelTexture | undefined): {width: number; height: number; data: Float32Array} | undefined {

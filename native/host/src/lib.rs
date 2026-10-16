@@ -865,7 +865,7 @@ impl GpuScene {
         for (id, width, height, data) in updates {
             if *id < 21 {
                 if self.buffers.get(id).map(wgpu::Buffer::size) != Some(data.len() as u64) {
-                    return Err("Lighting uniform size mismatch".into());
+                    return Err("Full scene commit required: scene buffer size changed".into());
                 }
             } else {
                 let texture = self.textures.get(id).ok_or("Missing lighting texture")?;

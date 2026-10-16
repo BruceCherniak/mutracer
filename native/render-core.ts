@@ -59,3 +59,7 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
 
 export function sceneLightParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareLight(bytes, token); }
 export function acceptSceneLighting(token: number): Uint8Array { return acceptLighting(token); }
+
+import {sceneTransformParameters as prepareTransform, acceptSceneTransform as acceptTransform} from './scene-core.js';
+export function sceneTransformParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareTransform(bytes, token); }
+export function acceptSceneTransform(token: number): Uint8Array { return acceptTransform(token); }

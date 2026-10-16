@@ -40,6 +40,7 @@ pub struct Resources {
     pub counters: wgpu::Buffer,
     _blases: Vec<wgpu::Blas>,
     _vertices: Vec<wgpu::Buffer>,
+    raw_instances: Option<HashMap<(u32, u32), (usize, u32)>>,
 }
 
 pub fn prepare(
@@ -144,7 +145,7 @@ pub fn prepare(
     let mapping = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("MuTracer hardware primitive identity"),
         contents: &data,
-        usage: wgpu::BufferUsages::STORAGE,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
     let counters = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("MuTracer hardware query counts"),
@@ -152,13 +153,120 @@ pub fn prepare(
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     });
+    // Software TLAS rebuilds may reorder instances. Match BLAS root/vertex region
+    // rather than the previous instance index, preserving primitive identity.
+    let raw_instances = assets
+        .and_then(|assets| assets.get("native-2"))
+        .map(|bytes| {
+            bytes
+                .chunks_exact(160)
+                .zip(&capture.instances)
+                .enumerate()
+                .map(|(i, (record, instance))| {
+                    let word =
+                        |offset| u32::from_le_bytes(record[offset..offset + 4].try_into().unwrap());
+                    (
+                        (word(0), word(4)),
+                        (
+                            instance.geometry,
+                            u32::from_le_bytes(data[i * 4..i * 4 + 4].try_into().unwrap()),
+                        ),
+                    )
+                })
+                .collect()
+        });
     Ok(Resources {
+        raw_instances,
         tlas,
         mapping,
         counters,
         _blases: blases,
         _vertices: vertices,
     })
+}
+
+// A validated plan owns no GPU side effects; rejected updates preserve old ASes.
+pub struct TransformPlan {
+    instances: Vec<Instance>,
+    mapping: Vec<u8>,
+}
+impl Resources {
+    pub fn transform_plan(&self, capture: &Capture, bytes: &[u8]) -> Result<TransformPlan> {
+        let roots = self
+            .raw_instances
+            .as_ref()
+            .ok_or("Full scene commit required: no raw hardware instance metadata")?;
+        if bytes.len() != capture.instances.len() * 160 {
+            return Err("Full scene commit required: hardware instance membership changed".into());
+        }
+        let mut instances = Vec::new();
+        let mut mapping = Vec::new();
+        let mut closest = true;
+        for (i, record) in bytes.chunks_exact(160).enumerate() {
+            let word = |offset| u32::from_le_bytes(record[offset..offset + 4].try_into().unwrap());
+            let &(geometry, base) = roots
+                .get(&(word(0), word(4)))
+                .ok_or("Full scene commit required: hardware BLAS placement changed")?;
+            let m: Vec<_> = (0..16)
+                .map(|k| f32::from_bits(word(80 + k * 4)) as f64)
+                .collect();
+            if m.iter().any(|v| !v.is_finite()) {
+                return Err("Non-finite hardware instance matrix".into());
+            }
+            closest &= supports_closest(&m);
+            instances.push(Instance {
+                geometry,
+                custom_index: i as u32,
+                transform: [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14].map(|k| m[k] as f32),
+            });
+            mapping.extend(base.to_le_bytes());
+        }
+        if closest != capture.hardware_closest {
+            return Err(
+                "Full scene commit required: hardware closest-hit eligibility changed".into(),
+            );
+        }
+        Ok(TransformPlan { instances, mapping })
+    }
+    pub fn update_transforms(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        plan: TransformPlan,
+    ) {
+        for (i, instance) in plan.instances.iter().enumerate() {
+            self.tlas[i] = Some(wgpu::TlasInstance::new(
+                &self._blases[instance.geometry],
+                instance.transform,
+                instance.custom_index,
+                255,
+            ));
+        }
+        queue.write_buffer(&self.mapping, 0, &plan.mapping);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        encoder.build_acceleration_structures(
+            std::iter::empty::<&wgpu::BlasBuildEntry<'_>>(),
+            [&self.tlas],
+        );
+        queue.submit([encoder.finish()]);
+    }
+}
+fn supports_closest(m: &[f64]) -> bool {
+    let a = [m[0], m[1], m[2]];
+    let b = [m[4], m[5], m[6]];
+    let c = [m[8], m[9], m[10]];
+    let dot = |u: [f64; 3], v: [f64; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
+    let scale = dot(a, a).max(dot(b, b)).max(dot(c, c));
+    let epsilon = scale * 1e-5;
+    let determinant = a[0] * (b[1] * c[2] - b[2] * c[1]) - b[0] * (a[1] * c[2] - a[2] * c[1])
+        + c[0] * (a[1] * b[2] - a[2] * b[1]);
+    determinant > 0.
+        && scale > 0.
+        && (dot(a, a) - dot(b, b)).abs() <= epsilon
+        && (dot(a, a) - dot(c, c)).abs() <= epsilon
+        && dot(a, b).abs() <= epsilon
+        && dot(a, c).abs() <= epsilon
+        && dot(b, c).abs() <= epsilon
 }
 
 pub fn counts(
@@ -327,21 +435,7 @@ pub fn from_raw(
             .iter()
             .map(|v| f64::from(f32::from_bits(*v)))
             .collect();
-        let a = [m[0], m[1], m[2]];
-        let b = [m[4], m[5], m[6]];
-        let c = [m[8], m[9], m[10]];
-        let dot = |u: [f64; 3], v: [f64; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
-        let scale = dot(a, a).max(dot(b, b)).max(dot(c, c));
-        let epsilon = scale * 1e-5;
-        let determinant = a[0] * (b[1] * c[2] - b[2] * c[1]) - b[0] * (a[1] * c[2] - a[2] * c[1])
-            + c[0] * (a[1] * b[2] - a[2] * b[1]);
-        hardware_closest &= determinant > 0.
-            && scale > 0.
-            && (dot(a, a) - dot(b, b)).abs() <= epsilon
-            && (dot(a, a) - dot(c, c)).abs() <= epsilon
-            && dot(a, b).abs() <= epsilon
-            && dot(a, c).abs() <= epsilon
-            && dot(b, c).abs() <= epsilon;
+        hardware_closest &= supports_closest(&m);
         placements.push(Instance {
             geometry,
             custom_index: id as u32,

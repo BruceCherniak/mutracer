@@ -39,7 +39,9 @@ are unverified.
 - Drag the image to orbit; right-drag or Shift-drag to pan; scroll to zoom.
   **Fit model** or **F** restores framing.
 - Click a surface to select its object and open the **Material** panel. **Frame selection**
-  fits the camera to that object. The **Scene** panel also lists selectable objects.
+  fits the camera to that object. The **Scene** panel lists selectable objects and
+  provides world position, local Y rotation and uniform scale controls. Each edit
+  affects the selected object; objects sharing its geometry move independently.
 - Select a material and edit base color, roughness, metalness or transmission.
   Edits affect every object sharing that material. Picking tests geometry, so
   transparent surfaces can be selected ahead of objects behind them.
@@ -66,6 +68,8 @@ Basic color, roughness, metalness and transmission edits retain the scene's
 geometry and textures and restart accumulation. Environment intensity, tint and
 rotation also retain the scene when map dimensions and background mode stay the
 same. Key-light color, intensity and direction edits retain the scene as well.
+Object transforms retain vertices and textures; changes to resource sizes or
+hardware closest-hit eligibility require a rebuild.
 Loading a different-sized HDR, switching background mode, changing shader
 features or unlit materials, and changing resolution rebuild the scene. Moving
 between zero and nonzero light or environment intensity can also require a

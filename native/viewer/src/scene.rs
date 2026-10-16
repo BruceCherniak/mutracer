@@ -69,6 +69,20 @@ pub struct Mesh {
     pub material: usize,
     pub transform: Mat4,
 }
+impl Mesh {
+    pub fn update_bytes(&self, index: usize) -> Vec<u8> {
+        [1u32, index as u32, 0, 0]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .chain(
+                self.transform
+                    .to_cols_array()
+                    .into_iter()
+                    .flat_map(f32::to_le_bytes),
+            )
+            .collect()
+    }
+}
 pub struct Model {
     pub name: String,
     pub materials: Vec<Material>,

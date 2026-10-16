@@ -53,7 +53,7 @@ copies HDR, normal or albedo pixels into caller-owned memory. The context API
 has no file output. The command above builds the C consumer and saves its
 verified images under `.native-build/context-core/`.
 
-Commit replaces the full scene and restarts accumulation; submit geometry,
+Commit replaces the full scene and restarts accumulation; submit vertex/topology,
 texture, emission and light type/count/attachment edits in the updated descriptor.
 A rejected commit retains the previous scene.
 Reset clears sampling while keeping the committed scene. Contexts have independent
@@ -68,6 +68,15 @@ call. It supports perspective/orthographic projection, transform, zoom and lens
 fields. The header specifies rejection, job lifetime and thread rules. Run
 `npm run native:camera` to build and verify this C usage; results are saved under
 `.native-build/camera-core/`.
+
+Use `mt_context_update_transform` to replace a mesh world matrix or a single
+instance's local matrix without re-uploading vertices or textures. A mesh world
+edit also moves all instances in its batch. Lighting and shadow placement follow
+the new transform. Updates restart accumulation and reject active jobs. Resource
+size, traversal stack or hardware closest-hit eligibility changes require a full
+commit; validation rejection preserves the scene and samples. Cost grows with
+instance and BLAS data and emissive triangles. See
+[the context header](./mutracer-context.h) for the 80-byte record and lifetime rules.
 
 Basic material parameters can be updated with `mt_context_update_material` using
 the original descriptor's material index. Color, roughness, metalness,
@@ -131,8 +140,8 @@ Cancel stops further submissions. An already submitted batch finishes before
 poll reports cancellation, so keep polling after cancel. Completed samples stay
 accumulated and a later job can continue them. Full completion takes precedence
 over late cancellation. One context accepts one active job; while active, render,
-commit, camera/material/environment/light update, reset, readback and destroy return
-errors. Finish or cancel and drain the job before using those calls. The header
+commit, camera/material/environment/light/transform update, reset, readback and
+destroy return errors. Finish or cancel and drain the job before using those calls. The header
 specifies job states, sample counters and handle lifetimes.
 
 ## Scene inputs and options
