@@ -316,9 +316,16 @@ OIDN string/URL coercion and extract camera packing without changing its layout.
 The internal math functions are vendored from gl-matrix 3.4.4 with MIT attribution
 and original numeric operation order. Runtime code has no gl-matrix import; the
 package remains a devDependency for independent comparison tests and examples.
-Creators always use Float32Array, and explicit storage narrowing also supports
-ordinary arrays and Float64 scratch storage. Geometry keeps supplied attribute
-objects/arrays by identity, including union-typed Uint16/Uint32 index attributes.
+Creators currently use Float32Array; ordinary arrays and Float64 scratch storage
+are also accepted. Web math and attribute helpers index storage directly.
+Native build/check scripts use `spawnCompiler` from `native/compiler.mjs`: it
+copies the same TS sources into `.native-build/compiler-*`, lowers math indexing
+to the two numeric access adapters and inserts explicit storage narrowing there
+for scriptc0.3.2. Mathematical/geometry algorithms are not duplicated. Do not edit
+generated sources. Keep native byte-contract and Web performance checks when
+changing this lowering; native-only Float64 transform normalization remains
+separate work. Geometry keeps supplied attribute objects/arrays by identity,
+including union-typed Uint16/Uint32 index attributes.
 
 The viewer importer expands Meshopt, quantized float attributes and WebP before
 gltf-rs validation; instance transforms and the initial skin/morph pose are

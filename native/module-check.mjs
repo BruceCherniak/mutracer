@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import {spawnCompiler} from './compiler.mjs';
 import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -34,7 +34,7 @@ export function run(bytes: Uint8Array): Uint8Array { return new Uint8Array(new M
   ['sampling', 'src/renderer/sampling.ts', null, 'native/sampling-core.ts', 'samplingParameters']
 ];
 function invoke(name, args) {
-  const result = spawnSync(compiler, args, { cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 90_000 });
+  const result = spawnCompiler(compiler, args, { cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024, timeout: 90_000 });
   writeFileSync(resolve(output, `${name}.stdout`), result.stdout ?? '');
   writeFileSync(resolve(output, `${name}.stderr`), result.stderr ?? '');
   return result;

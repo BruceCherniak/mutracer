@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import {spawnCompiler} from './compiler.mjs';
 import { mkdirSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -10,7 +10,7 @@ const output = resolve(root, process.env.MUTRACER_NATIVE_OUTPUT ?? '.native-buil
 const compiler = process.env.MUTRACER_SCRIPTC ?? 'scriptc';
 mkdirSync(output, { recursive: true });
 const run = args => {
-  const result = spawnSync(compiler, args, { cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
+  const result = spawnCompiler(compiler, args, { cwd: root, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 });
   if (result.error) throw result.error;
   if (result.signal) throw new Error(`scriptc terminated by ${result.signal}`);
   return result;

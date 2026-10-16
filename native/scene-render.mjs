@@ -1,3 +1,4 @@
+import {spawnCompiler} from './compiler.mjs';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -15,7 +16,7 @@ const env = { ...process.env, MUTRACER_NATIVE_OUTPUT: out, CARGO_TARGET_DIR: tar
 const checks = [];
 function run(name, command, args, check = true) {
     console.log(`${name}...`);
-    const result = spawnSync(command, args, { cwd: root, env, encoding: 'utf8', timeout: 300000, maxBuffer: 32 * 1024 * 1024 });
+    const result = (command === compiler ? spawnCompiler : spawnSync)(command, args, { cwd: root, env, encoding: 'utf8', timeout: 300000, maxBuffer: 32 * 1024 * 1024 });
     writeFileSync(resolve(out, `${name}.log`), (result.stdout ?? '') + (result.stderr ?? ''));
     checks.push({ name, exitCode: result.status });
     writeFileSync(resolve(out, 'checks.json'), JSON.stringify(checks, null, 2) + '\n');

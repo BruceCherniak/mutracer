@@ -1,3 +1,4 @@
+import {spawnCompiler} from './compiler.mjs';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
@@ -15,7 +16,7 @@ const env = { ...process.env, MUTRACER_NATIVE_OUTPUT: output, CARGO_TARGET_DIR: 
   MUTRACER_AOT_ARCHIVE: resolve(output, 'render-core.lib.a') };
 function run(name, command, args) {
   console.log(`${name}...`);
-  const result = spawnSync(command, args, { cwd: root, env, encoding: 'utf8',
+  const result = (command === compiler ? spawnCompiler : spawnSync)(command, args, { cwd: root, env, encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024, timeout: 300_000 });
   writeFileSync(resolve(output, `${name}.log`), (result.stdout ?? '') + (result.stderr ?? ''));
   if (result.error) throw result.error;
