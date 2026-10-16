@@ -18,10 +18,8 @@ The [license](./LICENSES/Apache-2.0.txt) and upstream bundled dependency notices
 [DPC++](./LICENSES/OIDN-third-party-programs-DPCPP.txt)) accompany the app in
 `Contents/Resources/licenses/OIDN/`. This runtime is not part of the npm library.
 
-The native OIDN adapter loads the runtime through
-[libloading 0.8.9](https://github.com/nagisa/rust_libloading/tree/0.8.9),
-Copyright © 2015 Simonas Kazlauskas, ISC License
-([text](./LICENSES/Libloading-ISC.txt)).
+The shared native OIDN adapter and its loader attribution are covered by the
+[native library notices](../THIRD_PARTY_NOTICES.md).
 
 ## Native glTF codecs
 

@@ -498,3 +498,34 @@ with the pinned compiler before comparing full/partial GPU outputs. Their C
 consumers compare against upstream gl-matrix, including shared storage aliases,
 zero vectors and the generic fallback. Performance runs must alternate old/new
 order and keep unrelated builds/GPU work out of the timed interval.
+
+## Native library OIDN validation
+
+`host/src/denoise.rs` owns the same SDK adapter used by the viewer worker and
+`mutracer-denoise.h`; do not duplicate filters or guide/alpha semantics. The C
+handle registry is independent of the AOT owner, local to its creating thread,
+and uses non-recycled IDs. Check stale/wrong-thread rejection, independent worker
+handles, resizing, malformed image lengths/pointers/nonfinite values, output
+rollback and in-place output. SDK calls and library loading occur only on use.
+
+Compile the no-Node consumer against the built library:
+
+```sh
+cc -Wall -Wextra -Werror native/denoise-host.c -L "$CARGO_TARGET_DIR/release" \
+  -lmutracer_native_probe -Wl,-rpath,"$CARGO_TARGET_DIR/release" -o denoise-host
+./denoise-host /absolute/libOpenImageDenoise.2.dylib INPUT_DIR OUTPUT.rgba32f 480 320
+```
+
+For a C consumer linked to the native static library on macOS:
+
+```sh
+cc native/denoise-host.c "$CARGO_TARGET_DIR/release/libmutracer_native_probe.a" \
+  -framework Foundation -framework Metal -framework QuartzCore \
+  -framework Security -framework CoreGraphics -lc++ -liconv -o denoise-static
+```
+
+Use regular/small-only bundled runtime, check explicit CPU/Metal and Auto, preserve
+raw context output, and compare both quality and alpha to retained reference
+images. Relocate the package, inspect the component license tree and validate its
+signature after changing bundle resources. No render performance conclusion may
+include this optional SDK loading/inference inside a tracing timer.

@@ -12,6 +12,8 @@ use std::{
 };
 use wgpu::util::DeviceExt;
 pub mod context;
+pub mod denoise;
+mod denoise_ffi;
 mod hardware;
 mod material_properties;
 mod native_bvh;

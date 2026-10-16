@@ -3,7 +3,8 @@
 MuTracer's experimental C interface accepts raw scene data and renders through
 native machine code and wgpu, without a JavaScript engine or Node at runtime.
 It supports part of MuTracer and has an unstable ABI. It has been verified on
-macOS arm64 with Metal; other platforms and a performance benefit are unverified.
+macOS arm64 with Metal. Other platforms are unverified; performance varies by
+scene and hardware.
 
 ## Native viewer
 
@@ -39,6 +40,22 @@ The output directory contains `render.png`, `render.rgba32f`, `normal.rgba32f`,
 `albedo.rgba32f` and `result.json`. The PNG is a Reinhard/sRGB preview. Float files
 contain linear sample averages as little-endian f32 RGBA, bottom row first;
 dimensions are in `result.json`. Normal guides are not renormalized after averaging.
+
+## Denoise caller-owned images
+
+Use [mutracer-denoise.h](./mutracer-denoise.h) to
+`create → run → destroy` a native OIDN denoiser. Supply matching linear RGBA32F
+HDR, normal and albedo images, such as those returned by `mt_context_read_pixels`.
+Choose automatic Metal/CPU fallback, CPU only or Metal only. Output keeps the
+input alpha and can reuse an input buffer; a failed call leaves output unchanged.
+Rendering accumulation is independent of denoising.
+
+Provide OIDN **2.5.1** and matching device modules through an explicit library path
+or `MUTRACER_OIDN_LIBRARY`; the standalone viewer already includes them. The native
+library does not bundle that runtime. Denoising blocks and uses additional image
+buffers; use a denoiser on its creating worker thread. Images are limited to
+4,194,304 pixels. See the header for exact limits, thread rules
+and memory ownership. Browser/native denoising parity is not guaranteed.
 
 ## Keep a scene alive and read pixels
 
@@ -224,8 +241,8 @@ the remaining validation and format constraints.
 
 Raw scenes support the [intersection modes above](#intersection-backend).
 Topology-changing geometry updates, texture/emission material updates, device-loss recovery,
-a C denoising API, browser display parity and a stable release ABI remain pending.
-The viewer provides its own [native OIDN controls](./viewer/README.md#controls).
+browser display parity and a stable release ABI remain pending.
+The viewer provides [native OIDN controls](./viewer/README.md#controls).
 This library does not yet replace the full browser Engine/Render API.
 
 ## Prepared replay and experimental HWRT
@@ -250,8 +267,8 @@ nonuniform scale, reflection or shear use software closest-hit traversal and
 hardware shadows because broader closest-hit parity remains unresolved.
 Diagnostic overhead and software fallbacks apply; no speedup is claimed.
 
-Output formats match the raw-scene probe. All interfaces share the owner-thread
-restriction. The replay probe rebuilds
-each call; contexts use the lifecycle described in their header. Contributor
+Output formats match the raw-scene probe. Render interfaces share one owner
+thread; each denoiser uses its creating thread. The replay probe rebuilds each
+call; contexts use the lifecycle described in their header. Contributor
 build, comparison and compiler diagnostics are in
 [CONTRIBUTING.md](./CONTRIBUTING.md).

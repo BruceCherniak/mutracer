@@ -1557,7 +1557,9 @@ dependencies = [
 name = "mutracer-native-probe"
 version = "0.0.0"
 dependencies = [
+ "anyhow",
  "cc",
+ "libloading",
  "png",
  "pollster",
  "serde",
@@ -1575,7 +1577,6 @@ dependencies = [
  "glam",
  "gltf",
  "image",
- "libloading",
  "meshopt",
  "mutracer-native-probe",
  "percent-encoding",

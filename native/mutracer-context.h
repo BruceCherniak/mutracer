@@ -34,7 +34,7 @@ extern "C" {
  * pixels=NULL,size=0 queries required size without reading GPU data. written is
  * required; a short destination returns an error and required size without
  * changing destination or scene. A successful read copies the whole image.
- * No file output or Node/JS process is involved. Native C denoising is pending.
+ * No file output or Node/JS process is involved. Use mutracer-denoise.h for optional independent native denoising.
  */
 typedef uint64_t mt_context;
 typedef struct mt_context_info_v1 {

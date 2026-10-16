@@ -8,6 +8,8 @@ publish = false
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]
+anyhow = "1"
+libloading = "=0.8.9"
 wgpu = { version = "=30.0.1", default-features = false, features = ["std", "metal", "wgsl"] }
 pollster = "=0.4.0"
 serde = { version = "1", features = ["derive"] }

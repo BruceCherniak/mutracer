@@ -25,3 +25,12 @@ Copyright (c) 2024-2026 Jacco Bikker / Breda University of Applied Sciences.
 MIT License ([`LICENSES/TinyBVH-MIT.txt`](./LICENSES/TinyBVH-MIT.txt)).
 `host/tinybvh.cpp` reuses `src/tinybvh/tinybvh_wrapper.cpp` for native builds
 and adds the AABB-input bridge used for instances.
+
+## Native OIDN loader
+
+The shared native library/viewer adapter loads Open Image Denoise through
+[libloading 0.8.9](https://github.com/nagisa/rust_libloading/tree/0.8.9),
+Copyright © 2015 Simonas Kazlauskas, ISC License
+([text](./LICENSES/Libloading-ISC.txt)). The library caller supplies the OIDN
+runtime; the viewer bundles a runtime covered by its
+[separate notices](./viewer/THIRD_PARTY_NOTICES.md).

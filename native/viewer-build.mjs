@@ -1,6 +1,6 @@
 import {spawnCompiler} from './compiler.mjs';
 import {spawnSync} from 'node:child_process';
-import {mkdirSync,copyFileSync,writeFileSync,renameSync} from 'node:fs';
+import {mkdirSync,copyFileSync,cpSync,writeFileSync,renameSync} from 'node:fs';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {bundleOIDN} from './viewer-oidn.mjs';
@@ -36,8 +36,15 @@ writeFileSync(resolve(contents,'Info.plist'),`<?xml version="1.0" encoding="UTF-
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>\n`);
 bundleOIDN(out, contents);
-for(const name of ['Libloading-ISC.txt','Meshopt-rs-MIT.txt','Meshoptimizer-MIT.txt','Image-webp-MIT.txt'])copyFileSync(resolve(root,'native/viewer/LICENSES',name),resolve(contents,'Resources/licenses',name));
-copyFileSync(resolve(root,'native/LICENSES/TinyBVH-MIT.txt'),resolve(contents,'Resources/licenses/TinyBVH-MIT.txt'));
+// Mirror component notice paths, including shared renderer attribution, in the
+// standalone package. OIDN's upstream runtime notices keep their existing folder.
+const licenses=resolve(contents,'Resources/licenses');
+for(const component of ['', 'native', 'native/viewer']) {
+  const destination=resolve(licenses,component);mkdirSync(destination,{recursive:true});
+  cpSync(resolve(root,component,'LICENSES'),resolve(destination,'LICENSES'),{recursive:true});
+  copyFileSync(resolve(root,component,'THIRD_PARTY_NOTICES.md'),resolve(destination,'THIRD_PARTY_NOTICES.md'));
+}
+copyFileSync(resolve(root,'LICENSE'),resolve(licenses,'LICENSE'));
 run('/usr/bin/codesign',['--force','--sign','-',app]);
 console.log(`Native app: ${app}`);
 const args=process.argv.slice(2);if(!args.includes('--build-only'))run('/usr/bin/open',['-n',app,...(args.length?['--args',...args.map(a=>resolve(a))]:[])]);
