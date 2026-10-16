@@ -32,6 +32,8 @@ pub struct Material {
     pub unlit: bool,
 }
 pub struct Geometry {
+    pub min: Vec3,
+    pub max: Vec3,
     pub positions: Vec<f32>,
     pub indices: Vec<u32>,
     pub normals: Vec<f32>,
@@ -40,6 +42,7 @@ pub struct Geometry {
     pub tangents: Vec<f32>,
 }
 pub struct Mesh {
+    pub name: String,
     pub geometry: usize,
     pub material: usize,
     pub transform: Mat4,
@@ -61,10 +64,10 @@ impl Model {
             "Model file exceeds 128 MiB"
         );
         let (document, buffers, images) =
-            gltf::import(path).context("Loading GLTF/GLB and its buffers/images")?;
+            crate::import::load(path).context("Loading GLTF/GLB and its buffers/images")?;
         ensure!(
-            buffers.iter().map(|b| b.len()).sum::<usize>() <= 64 * 1024 * 1024,
-            "Model buffers exceed 64 MiB"
+            buffers.iter().map(|b| b.len()).sum::<usize>() <= 512 * 1024 * 1024,
+            "Model buffers exceed 512 MiB"
         );
         let known = [
             "KHR_materials_ior",
@@ -72,6 +75,10 @@ impl Model {
             "KHR_materials_emissive_strength",
             "KHR_materials_unlit",
             "KHR_texture_transform",
+            "EXT_meshopt_compression",
+            "KHR_mesh_quantization",
+            "EXT_texture_webp",
+            "EXT_mesh_gpu_instancing",
         ];
         for extension in document.extensions_required() {
             ensure!(
@@ -213,9 +220,42 @@ impl Model {
             .default_scene()
             .or_else(|| document.scenes().next())
             .context("glTF has no scene")?;
+        let mut worlds = vec![Mat4::IDENTITY; document.nodes().len()];
+        fn world(
+            node: gltf::Node<'_>,
+            parent: Mat4,
+            worlds: &mut [Mat4],
+            depth: usize,
+        ) -> Result<()> {
+            ensure!(
+                depth < 512,
+                "Node hierarchy exceeds 512 levels or contains a cycle"
+            );
+            let matrix = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
+            worlds[node.index()] = matrix;
+            for child in node.children() {
+                world(child, matrix, worlds, depth + 1)?;
+            }
+            Ok(())
+        }
+        let children: std::collections::HashSet<_> = document
+            .nodes()
+            .flat_map(|n| n.children().map(|c| c.index()))
+            .collect();
+        for node in document.nodes().filter(|n| !children.contains(&n.index())) {
+            world(node, Mat4::IDENTITY, &mut worlds, 0)?;
+        }
         let mut cache = HashMap::new();
         for node in scene.nodes() {
-            model.visit(node, Mat4::IDENTITY, &buffers, &mut cache)?;
+            model.visit(
+                node,
+                Mat4::IDENTITY,
+                &buffers,
+                &mut cache,
+                &document,
+                &worlds,
+                0,
+            )?;
         }
         ensure!(
             !model.meshes.is_empty(),
@@ -326,11 +366,14 @@ impl Model {
         node: gltf::Node<'_>,
         parent: Mat4,
         buffers: &[gltf::buffer::Data],
-        cache: &mut HashMap<(usize, usize), usize>,
+        cache: &mut HashMap<(usize, usize, usize), usize>,
+        document: &gltf::Document,
+        worlds: &[Mat4],
+        depth: usize,
     ) -> Result<()> {
         ensure!(
-            node.skin().is_none(),
-            "Skinned meshes are unsupported by this static example"
+            depth < 512,
+            "Node hierarchy exceeds 512 levels or contains a cycle"
         );
         let transform = parent * Mat4::from_cols_array_2d(&node.transform().matrix());
         ensure!(
@@ -339,11 +382,12 @@ impl Model {
         );
         if let Some(mesh) = node.mesh() {
             for primitive in mesh.primitives() {
-                ensure!(
-                    primitive.morph_targets().len() == 0,
-                    "Morph targets are unsupported by this static example"
+                let unique = node.skin().is_some() || primitive.morph_targets().len() > 0;
+                let key = (
+                    mesh.index(),
+                    primitive.index(),
+                    if unique { node.index() } else { usize::MAX },
                 );
-                let key = (mesh.index(), primitive.index());
                 let index = if let Some(&index) = cache.get(&key) {
                     index
                 } else {
@@ -390,7 +434,9 @@ impl Model {
                             rgba.into_iter().flat_map(|c| [c[0], c[1], c[2]]).collect()
                         })
                         .unwrap_or_default();
-                    let geometry = Geometry {
+                    let mut geometry = Geometry {
+                        min: Vec3::ZERO,
+                        max: Vec3::ZERO,
                         positions,
                         indices,
                         normals: reader
@@ -409,23 +455,221 @@ impl Model {
                             .map(|v| v.flatten().collect())
                             .unwrap_or_default(),
                     };
+                    ensure!(
+                        geometry.indices.len() % 3 == 0
+                            && geometry
+                                .indices
+                                .iter()
+                                .all(|&i| (i as usize) < geometry.positions.len() / 3),
+                        "Invalid triangle indices"
+                    );
+                    let weights = node.weights().or_else(|| mesh.weights()).unwrap_or(&[]);
+                    for (i, (positions, normals, tangents)) in
+                        reader.read_morph_targets().enumerate()
+                    {
+                        let weight = weights.get(i).copied().unwrap_or(0.);
+                        for (target, delta, stride) in [
+                            (&mut geometry.positions, positions, 3),
+                            (&mut geometry.normals, normals, 3),
+                            (&mut geometry.tangents, tangents, 4),
+                        ] {
+                            if let Some(delta) = delta {
+                                for (vertex, d) in delta.enumerate() {
+                                    for k in 0..3 {
+                                        if let Some(v) = target.get_mut(vertex * stride + k) {
+                                            *v += weight * d[k];
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if let Some(skin) = node.skin() {
+                        let inverse: Vec<_> = skin
+                            .reader(|b| Some(&buffers[b.index()]))
+                            .read_inverse_bind_matrices()
+                            .map(|v| v.map(|m| Mat4::from_cols_array_2d(&m)).collect())
+                            .unwrap_or_else(|| vec![Mat4::IDENTITY; skin.joints().len()]);
+                        ensure!(
+                            inverse.len() == skin.joints().len(),
+                            "Invalid inverse bind matrix count"
+                        );
+                        let joints: Vec<_> = skin
+                            .joints()
+                            .zip(inverse)
+                            .map(|(n, bind)| transform.inverse() * worlds[n.index()] * bind)
+                            .collect();
+                        let ids: Vec<_> = reader
+                            .read_joints(0)
+                            .context("Skinned mesh has no JOINTS_0")?
+                            .into_u16()
+                            .collect();
+                        let weights: Vec<_> = reader
+                            .read_weights(0)
+                            .context("Skinned mesh has no WEIGHTS_0")?
+                            .into_f32()
+                            .collect();
+                        ensure!(
+                            ids.len() == geometry.positions.len() / 3 && ids.len() == weights.len(),
+                            "Invalid skin attribute count"
+                        );
+                        ensure!(
+                            reader.read_joints(1).is_none(),
+                            "More than four skin influences are unsupported"
+                        );
+                        for (vertex, (ids, weights)) in ids.iter().zip(&weights).enumerate() {
+                            let sum: f32 = weights.iter().sum();
+                            ensure!(sum.is_finite() && sum > 0., "Invalid skin weights");
+                            let mut matrix = Mat4::ZERO;
+                            for k in 0..4 {
+                                matrix +=
+                                    *joints.get(ids[k] as usize).context("Invalid skin joint")?
+                                        * (weights[k] / sum);
+                            }
+                            let p = matrix.transform_point3(Vec3::from_slice(
+                                &geometry.positions[vertex * 3..vertex * 3 + 3],
+                            ));
+                            geometry.positions[vertex * 3..vertex * 3 + 3]
+                                .copy_from_slice(&p.to_array());
+                            for (data, stride) in
+                                [(&mut geometry.normals, 3), (&mut geometry.tangents, 4)]
+                            {
+                                if !data.is_empty() {
+                                    let n = matrix
+                                        .transform_vector3(Vec3::from_slice(
+                                            &data[vertex * stride..vertex * stride + 3],
+                                        ))
+                                        .normalize_or_zero();
+                                    data[vertex * stride..vertex * stride + 3]
+                                        .copy_from_slice(&n.to_array());
+                                }
+                            }
+                        }
+                        self.warnings.push(
+                            "Skinned meshes use the initial static pose; animation is not played."
+                                .into(),
+                        );
+                    }
+                    geometry.min = Vec3::splat(f32::INFINITY);
+                    geometry.max = Vec3::splat(f32::NEG_INFINITY);
+                    for p in geometry.positions.chunks_exact(3) {
+                        let v = Vec3::from_slice(p);
+                        geometry.min = geometry.min.min(v);
+                        geometry.max = geometry.max.max(v);
+                    }
                     let index = self.geometries.len();
                     self.geometries.push(geometry);
                     cache.insert(key, index);
                     index
                 };
-                self.meshes.push(Mesh {
-                    geometry: index,
-                    material: primitive
-                        .material()
-                        .index()
-                        .unwrap_or(self.materials.len() - 1),
-                    transform,
-                });
+                let mut instances = vec![Mat4::IDENTITY];
+                if let Some(ext) = node.extension_value("EXT_mesh_gpu_instancing") {
+                    let attrs = &ext["attributes"];
+                    let read3 = |name: &str| -> Result<Option<Vec<[f32; 3]>>> {
+                        let Some(id) = attrs[name].as_u64() else {
+                            return Ok(None);
+                        };
+                        let a = document
+                            .accessors()
+                            .nth(id as usize)
+                            .context("Invalid instance accessor")?;
+                        Ok(Some(
+                            gltf::accessor::Iter::<[f32; 3]>::new(a, |b| Some(&buffers[b.index()]))
+                                .context("Invalid instance attribute")?
+                                .collect(),
+                        ))
+                    };
+                    let translation = read3("TRANSLATION")?;
+                    let scale = read3("SCALE")?;
+                    let rotation = if let Some(id) = attrs["ROTATION"].as_u64() {
+                        let a = document
+                            .accessors()
+                            .nth(id as usize)
+                            .context("Invalid rotation accessor")?;
+                        ensure!(
+                            a.data_type() == gltf::accessor::DataType::F32,
+                            "Quantized instance rotation is unsupported"
+                        );
+                        Some(
+                            gltf::accessor::Iter::<[f32; 4]>::new(a, |b| Some(&buffers[b.index()]))
+                                .context("Invalid instance rotation")?
+                                .collect::<Vec<_>>(),
+                        )
+                    } else {
+                        None
+                    };
+                    let count = translation
+                        .as_ref()
+                        .map(Vec::len)
+                        .or_else(|| scale.as_ref().map(Vec::len))
+                        .or_else(|| rotation.as_ref().map(Vec::len))
+                        .context("Instance transforms missing")?;
+                    ensure!(
+                        count <= 65536
+                            && translation.as_ref().is_none_or(|v| v.len() == count)
+                            && scale.as_ref().is_none_or(|v| v.len() == count)
+                            && rotation.as_ref().is_none_or(|v| v.len() == count),
+                        "Invalid instance counts"
+                    );
+                    instances = (0..count)
+                        .map(|i| {
+                            Mat4::from_scale_rotation_translation(
+                                scale
+                                    .as_ref()
+                                    .map(|v| Vec3::from(v[i]))
+                                    .unwrap_or(Vec3::ONE),
+                                rotation
+                                    .as_ref()
+                                    .map(|v| glam::Quat::from_array(v[i]).normalize())
+                                    .unwrap_or(glam::Quat::IDENTITY),
+                                translation
+                                    .as_ref()
+                                    .map(|v| Vec3::from(v[i]))
+                                    .unwrap_or(Vec3::ZERO),
+                            )
+                        })
+                        .collect();
+                }
+                for (instance, local) in instances.into_iter().enumerate() {
+                    let matrix = transform * local;
+                    ensure!(
+                        matrix.is_finite() && matrix.determinant().abs() >= 1e-12,
+                        "Invalid instance transform"
+                    );
+                    self.meshes.push(Mesh {
+                        name: format!(
+                            "{} / {}{}",
+                            node.name()
+                                .or_else(|| mesh.name())
+                                .map(str::to_owned)
+                                .unwrap_or_else(|| format!("Mesh {}", node.index() + 1)),
+                            primitive.index() + 1,
+                            if instance == 0 {
+                                String::new()
+                            } else {
+                                format!(" · {}", instance + 1)
+                            }
+                        ),
+                        geometry: index,
+                        material: primitive
+                            .material()
+                            .index()
+                            .unwrap_or(self.materials.len() - 1),
+                        transform: matrix,
+                    });
+                }
             }
         }
         for child in node.children() {
-            self.visit(child, transform, buffers, cache)?;
+            self.visit(
+                child,
+                transform,
+                buffers,
+                cache,
+                document,
+                worlds,
+                depth + 1,
+            )?;
         }
         Ok(())
     }

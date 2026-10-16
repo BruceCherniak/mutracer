@@ -72,14 +72,14 @@ extern "C" {
  * Matrices are invertible affine, column-major camera/local-to-world.
  *
  * Limits: nonempty scenes, <=4096 geometries, <=65536 meshes/materials,
- * <=64 lights, <=256 textures, <=64 MiB input, <=4M output/raw-texture pixels.
- * Each geometry has <=1M vertices/3M indices; preparation has a conservative
- * 64 MiB budget based on input vertex/index counts.
+ * <=64 lights, <=256 textures, <=512 MiB input, <=4M output pixels, <=16M raw-texture pixels.
+ * Each geometry has <=4M vertices/12M indices; preparation has a conservative
+ * 1 GiB budget based on input vertex/index counts.
  * Texture atlas budget 64 MiB, max side 4096/layers 256; sources may be scaled.
  * v1 has no environment/background maps, material extensions or extra geometry/
  * instance inputs. V2 rejects displacement and light extension fields.
- * V3 adds those inputs. All versions currently use software BVH traversal.
- * Native replay retains its separate HWRT experiment.
+ * V3 adds those inputs. Contexts default to software traversal; optional v1/v2
+ * hardware queries and their fallbacks are described in mutracer-context.h.
  * Samples 1..4096, fixed seed 12345, bounces 6.
  * Result HDR/guides use the existing probe's bottom-row-first f32 RGBA layout.
  * output_directory receives render.png, HDR/guides and result.json.

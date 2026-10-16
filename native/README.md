@@ -164,10 +164,11 @@ Build/run settings:
 
 ## Limits
 
-Input is limited to 64 MiB; output and total raw texture pixels to 4,194,304 each.
+Input is limited to 512 MiB; output to 4,194,304 pixels and total raw textures
+to 16,777,216 pixels.
 There must be at least one geometry, mesh and material. Counts are limited to
 4096 geometries, 65536 meshes/materials/expanded instances, 64 analytic lights and
-256 textures. Geometry preparation has a conservative 64 MiB budget, including
+256 textures. Geometry preparation has a conservative 1 GiB budget, including
 material-related expansion. Atlas storage is limited to 64 MiB, 4096 pixels per
 side and 256 layers; source textures can be scaled to fit. The header specifies
 the remaining validation and format constraints.

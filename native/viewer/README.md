@@ -17,7 +17,9 @@ npm run native:viewer
 ```
 
 The app opens with the included procedural sample. Use **Open GLTF / GLB…** or
-drop a model into the window. Keep external `.bin` files and images beside their
+drop a `.gltf` or `.glb` file anywhere in the window. A drop target appears
+while dragging. Loading keeps the previous image visible; failures show an error
+without replacing the model. Keep external `.bin` files and images beside their
 `.gltf` file. You can also open a model at launch:
 
 ```sh
@@ -26,14 +28,19 @@ npm run native:viewer -- /absolute/path/model.glb
 
 `npm run native:viewer:build` builds without opening the app. The result is
 `.native-build/viewer/MuTracer.app`; the app includes its sample and can be
-opened without the project files or build tools on the tested macOS arm64 machine. `MUTRACER_NATIVE_OUTPUT` changes the output directory and
-`CARGO_TARGET_DIR` selects a reusable Cargo cache. Other platforms are unverified.
+opened without the project files or build tools on the tested macOS arm64
+machine. `MUTRACER_NATIVE_OUTPUT` changes the output directory. Other platforms
+are unverified.
 
 ## Controls
 
 - Drag the image to orbit; right-drag or Shift-drag to pan; scroll to zoom.
   **Fit model** or **F** restores framing.
+- Click a surface to select its object and open the **Material** panel. **Frame selection**
+  fits the camera to that object. The **Scene** panel also lists selectable objects.
 - Select a material and edit base color, roughness, metalness or transmission.
+  Edits affect every object sharing that material. Picking tests geometry, so
+  transparent surfaces can be selected ahead of objects behind them.
   Imported base-color, normal, metallic/roughness and emissive maps remain active.
 - Adjust environment intensity, tint, rotation and background visibility.
   **Load HDR…** opens a local Radiance equirectangular environment; **Studio**
@@ -64,21 +71,25 @@ resolution for more responsive interaction; a fixed frame rate is not guaranteed
 The example displays the default glTF scene, or the first scene if none is marked
 default. Static triangle meshes, strips and fans, node transforms, shared mesh
 instances, RGB vertex colors, two UV sets and core metallic/roughness PBR are
-supported. Missing normals and tangents are generated. Scalar transmission/IOR,
-unlit materials and emissive strength are also supported.
+supported. Missing normals and tangents are generated. Meshopt compression,
+quantized geometry, WebP textures, mesh instancing, the initial static pose of skinned meshes (up to four joint influences) and default
+morph weights are supported. Scalar transmission/IOR, unlit materials and emissive
+strength are also supported.
 
-Material textures are limited to 512 pixels on their longest side. Textures use
-repeat wrapping, native filtering and offset/scale UV transforms; texture rotation and normal-map
-UV transforms are unsupported. Vertex-color alpha, occlusion and transmission
+Material textures are limited to 512 pixels on their longest side; models with
+many images use a lower limit to fit the texture budget. Textures use
+repeat wrapping, filtering and offset/scale UV transforms; texture rotation and
+normal-map UV transforms are unsupported. Vertex-color alpha, occlusion and transmission
 textures are ignored. Unsupported optional extensions are reported in the panel;
-unsupported required extensions, skins and morph targets return an error.
-Animations are not played. Draco, Meshopt and Basis/KTX2 assets need conversion
-before loading. This is a static sample viewer, not full glTF feature coverage.
+unsupported required extensions return an error.
+Animations are not played. Sparse quantized attributes are unsupported.
+Draco and Basis/KTX2 assets need conversion before loading. This is a
+static sample viewer, not full glTF feature coverage.
 
-File size is limited to 128 MiB, combined geometry buffers to 64 MiB and source
-material images to 16M pixels each, and environments to 4M pixels. The native
-library imposes additional
-scene/texture budgets described in [the native guide](../README.md#limits).
+File size is limited to 128 MiB, combined model buffers to 512 MiB and source
+material images to 64M pixels each, and environments to 4M pixels. The native
+library imposes additional scene/texture budgets described in
+[the native guide](../README.md#limits).
 Rendering uses wgpu/Metal with six bounces. HWRT support and fallbacks follow
 [the native intersection limits](../README.md#intersection-backend).
 Device-loss recovery is not implemented.

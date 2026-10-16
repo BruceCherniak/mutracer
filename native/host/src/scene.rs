@@ -11,7 +11,8 @@ unsafe extern "C" {
         size: *mut usize,
     );
 }
-const MAX_BYTES: usize = 64 * 1024 * 1024;
+pub(crate) const MAX_BYTES: usize = 512 * 1024 * 1024;
+const MAX_PREPARED_BYTES: usize = 1024 * 1024 * 1024;
 
 struct Words<'a>(&'a [u8]);
 impl Words<'_> {
@@ -112,12 +113,12 @@ fn validate(bytes: &[u8]) -> Result<()> {
         let o = w.u(9) + i * 12;
         let v = w.u(o);
         let n = w.u(o + 1);
-        if v == 0 || n == 0 || n % 3 != 0 || v > 1_000_000 || n > 3_000_000 {
+        if v == 0 || n == 0 || n % 3 != 0 || v > 4_000_000 || n > 12_000_000 {
             return Err("Invalid geometry counts".into());
         }
         geometry_words += v * 32 + n * 24;
         geometry_costs.push(v * 32 + n * 24);
-        if geometry_words > MAX_BYTES / 4 {
+        if geometry_words > MAX_PREPARED_BYTES / 4 {
             return Err("Prepared geometry exceeds probe budget".into());
         }
         w.span(w.u(o + 2), v * 3)?;
@@ -175,7 +176,7 @@ fn validate(bytes: &[u8]) -> Result<()> {
                 return Err("Vertex material index is out of range".into());
             }
             geometry_words += geometry_costs[w.u(o)];
-            if geometry_words > MAX_BYTES / 4 {
+            if geometry_words > MAX_PREPARED_BYTES / 4 {
                 return Err("Multi-material geometry expansion exceeds probe budget".into());
             }
         }
@@ -321,7 +322,7 @@ fn validate(bytes: &[u8]) -> Result<()> {
         }
         if projection != 0 {
             geometry_words += geometry_costs[w.u(mesh)];
-            if geometry_words > MAX_BYTES / 4 {
+            if geometry_words > MAX_PREPARED_BYTES / 4 {
                 return Err("Displaced geometry expansion exceeds probe budget".into());
             }
         }
@@ -342,7 +343,7 @@ fn validate(bytes: &[u8]) -> Result<()> {
             return Err("Invalid raw texture descriptor".into());
         }
         pixels += width * height;
-        if pixels > 4_194_304 {
+        if pixels > 16_777_216 {
             return Err("Raw textures exceed probe budget".into());
         }
         let count = width * height * if w.u(o + 2) == 0 { 1 } else { 4 };
@@ -479,7 +480,7 @@ pub(super) fn prepare(bytes: &[u8]) -> Result<(Scene, HashMap<String, Vec<u8>>)>
     unsafe {
         mt_core_scene(bytes.as_ptr(), bytes.len(), &mut pointer, &mut size);
     }
-    if pointer.is_null() || size < 16 || size > 256 * 1024 * 1024 {
+    if pointer.is_null() || size < 16 || size > MAX_PREPARED_BYTES {
         return Err("Invalid native scene command".into());
     }
     let packet = unsafe { copy_core_result(pointer, size, size)? };

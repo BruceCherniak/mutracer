@@ -226,7 +226,7 @@ pub unsafe extern "C" fn mt_context_commit(
     action(error, capacity, |registry| {
         let context = context(registry, handle)?;
         idle(context)?;
-        if input.is_null() || length > 64 * 1024 * 1024 {
+        if input.is_null() || length > scene::MAX_BYTES {
             return Err("Null or oversized scene input".into());
         }
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };

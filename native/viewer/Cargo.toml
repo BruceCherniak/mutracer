@@ -8,8 +8,13 @@ publish = false
 mutracer-native-probe = { path = "../host" }
 anyhow = "1"
 eframe = { version = "=0.33.3", default-features = false, features = ["default_fonts", "glow"] }
-gltf = { version = "=1.4.1", features = ["KHR_materials_ior", "KHR_materials_transmission", "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_texture_transform"] }
+gltf = { version = "=1.4.1", features = ["KHR_materials_ior", "KHR_materials_transmission", "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_texture_transform", "extensions"] }
 glam = "=0.30.9"
-image = { version = "=0.25.8", default-features = false, features = ["png", "jpeg", "hdr"] }
+image = { version = "=0.25.8", default-features = false, features = ["png", "jpeg", "hdr", "webp"] }
 rfd = "=0.15.4"
 libloading = "=0.8.9"
+
+serde_json = "1"
+meshopt = "=0.6.2"
+base64 = "0.22"
+percent-encoding = "2"

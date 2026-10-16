@@ -327,3 +327,12 @@ package remains a devDependency for independent comparison tests and examples.
 Creators always use Float32Array, and explicit storage narrowing also supports
 ordinary arrays and Float64 scratch storage. Geometry keeps supplied attribute
 objects/arrays by identity, including union-typed Uint16/Uint32 index attributes.
+
+The viewer importer expands Meshopt, quantized float attributes and WebP before
+gltf-rs validation; instance transforms and the initial skin/morph pose are
+applied in the scene adapter. `--inspect` prepares and renders 16 samples at
+160×106; `--preview-out DIRECTORY` also saves a PNG. Run it against external
+local models for compatibility checks; do not add those assets to the repository.
+`--interaction-smoke DIRECTORY` includes native dropped-file events, retained
+previews and invalid-drop recovery. Model decoding runs off the renderer owner
+thread; native scene commits still run on the owner thread.

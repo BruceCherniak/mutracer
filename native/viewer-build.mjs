@@ -34,7 +34,7 @@ writeFileSync(resolve(contents,'Info.plist'),`<?xml version="1.0" encoding="UTF-
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>\n`);
 bundleOIDN(out, contents);
-copyFileSync(resolve(root,'LICENSES/Libloading-ISC.txt'),resolve(contents,'Resources/licenses/Libloading-ISC.txt'));
+for(const name of ['Libloading-ISC.txt','Meshopt-rs-MIT.txt','Meshoptimizer-MIT.txt','Image-webp-MIT.txt'])copyFileSync(resolve(root,'LICENSES',name),resolve(contents,'Resources/licenses',name));
 run('/usr/bin/codesign',['--force','--sign','-',app]);
 console.log(`Native app: ${app}`);
 const args=process.argv.slice(2);if(!args.includes('--build-only'))run('/usr/bin/open',['-n',app,...(args.length?['--args',...args.map(a=>resolve(a))]:[])]);

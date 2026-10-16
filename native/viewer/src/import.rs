@@ -1,0 +1,531 @@
+//! Native glTF extension decoding before the typed, validated scene reader.
+//! Meshopt follows Khronos EXT_meshopt_compression; quantization is expanded
+//! according to KHR_mesh_quantization before gltf-rs validates FLOAT attributes.
+use anyhow::{Context, Result, bail, ensure};
+use base64::Engine;
+use serde_json::{Value, json};
+use std::path::Path;
+
+type Import = (
+    gltf::Document,
+    Vec<gltf::buffer::Data>,
+    Vec<gltf::image::Data>,
+);
+const MAX_BUFFER: usize = 512 * 1024 * 1024;
+fn number(v: &Value, name: &str) -> Result<usize> {
+    v[name]
+        .as_u64()
+        .and_then(|n| usize::try_from(n).ok())
+        .with_context(|| format!("Invalid {name}"))
+}
+fn uri(path: &Path, name: &str) -> Result<Vec<u8>> {
+    if let Some(data) = name.strip_prefix("data:") {
+        let (header, value) = data.split_once(',').context("Invalid data URI")?;
+        ensure!(
+            header.ends_with(";base64"),
+            "Only base64 data URIs are supported"
+        );
+        Ok(base64::engine::general_purpose::STANDARD.decode(value)?)
+    } else {
+        ensure!(
+            !name.contains("://"),
+            "Only local model resources are supported"
+        );
+        let decoded = percent_encoding::percent_decode_str(name).decode_utf8()?;
+        let p = path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join(decoded.as_ref());
+        ensure!(
+            p.metadata()?.len() <= MAX_BUFFER as u64,
+            "External resource exceeds 512 MiB"
+        );
+        Ok(std::fs::read(p)?)
+    }
+}
+fn span(data: &[u8], offset: usize, len: usize) -> Result<&[u8]> {
+    data.get(offset..offset.checked_add(len).context("Resource span overflow")?)
+        .context("Resource span exceeds buffer")
+}
+fn view<'a>(j: &Value, buffers: &'a [gltf::buffer::Data], index: usize) -> Result<&'a [u8]> {
+    let v = &j["bufferViews"][index];
+    span(
+        &buffers
+            .get(number(v, "buffer")?)
+            .context("Invalid buffer reference")?
+            .0,
+        v["byteOffset"].as_u64().unwrap_or(0) as usize,
+        number(v, "byteLength")?,
+    )
+}
+fn decode(ext: &Value, source: &[u8]) -> Result<Vec<u8>> {
+    let count = number(ext, "count")?;
+    let stride = number(ext, "byteStride")?;
+    let len = count
+        .checked_mul(stride)
+        .context("Meshopt decoded size overflow")?;
+    ensure!(
+        count > 0 && len <= MAX_BUFFER,
+        "Meshopt decoded buffer exceeds 512 MiB"
+    );
+    let mode = ext["mode"].as_str().context("Missing Meshopt mode")?;
+    let filter = ext["filter"].as_str().unwrap_or("NONE");
+    match mode {
+        "ATTRIBUTES" => ensure!(
+            (4..=256).contains(&stride) && stride % 4 == 0,
+            "Invalid Meshopt attribute stride"
+        ),
+        "TRIANGLES" | "INDICES" => ensure!(
+            [2, 4].contains(&stride) && filter == "NONE" && (mode != "TRIANGLES" || count % 3 == 0),
+            "Invalid Meshopt index layout"
+        ),
+        _ => bail!("Unsupported Meshopt mode {mode}"),
+    }
+    ensure!(
+        match filter {
+            "NONE" => true,
+            "OCTAHEDRAL" => [4, 8].contains(&stride),
+            "QUATERNION" => stride == 8,
+            "EXPONENTIAL" => stride % 4 == 0,
+            _ => false,
+        },
+        "Invalid Meshopt filter {filter}"
+    );
+    // u64 storage guarantees alignment for decoder/filter native writes.
+    let mut aligned = vec![0u64; len.div_ceil(8)];
+    let ptr = aligned.as_mut_ptr().cast();
+    let status = unsafe {
+        match mode {
+            "ATTRIBUTES" => meshopt::ffi::meshopt_decodeVertexBuffer(
+                ptr,
+                count,
+                stride,
+                source.as_ptr(),
+                source.len(),
+            ),
+            "TRIANGLES" => meshopt::ffi::meshopt_decodeIndexBuffer(
+                ptr,
+                count,
+                stride,
+                source.as_ptr(),
+                source.len(),
+            ),
+            _ => meshopt::ffi::meshopt_decodeIndexSequence(
+                ptr,
+                count,
+                stride,
+                source.as_ptr(),
+                source.len(),
+            ),
+        }
+    };
+    ensure!(status == 0, "Meshopt decoding failed ({status})");
+    unsafe {
+        match filter {
+            "OCTAHEDRAL" => meshopt::ffi::meshopt_decodeFilterOct(ptr, count, stride),
+            "QUATERNION" => meshopt::ffi::meshopt_decodeFilterQuat(ptr, count, stride),
+            "EXPONENTIAL" => meshopt::ffi::meshopt_decodeFilterExp(ptr, count, stride),
+            _ => (),
+        }
+        Ok(std::slice::from_raw_parts(ptr.cast::<u8>(), len).to_vec())
+    }
+}
+fn component(bytes: &[u8], kind: usize, normalized: bool) -> Result<f32> {
+    let v = match kind {
+        5120 => {
+            let v = bytes[0] as i8 as f32;
+            if normalized { (v / 127.).max(-1.) } else { v }
+        }
+        5121 => {
+            let v = bytes[0] as f32;
+            if normalized { v / 255. } else { v }
+        }
+        5122 => {
+            let v = i16::from_le_bytes(bytes[..2].try_into()?) as f32;
+            if normalized { (v / 32767.).max(-1.) } else { v }
+        }
+        5123 => {
+            let v = u16::from_le_bytes(bytes[..2].try_into()?) as f32;
+            if normalized { v / 65535. } else { v }
+        }
+        5126 => f32::from_le_bytes(bytes[..4].try_into()?),
+        _ => bail!("Unsupported quantized component type {kind}"),
+    };
+    ensure!(v.is_finite(), "Non-finite quantized component");
+    Ok(v)
+}
+pub fn load(path: &Path) -> Result<Import> {
+    let bytes = std::fs::read(path)?;
+    let (mut j, blob): (Value, Option<Vec<u8>>) = if bytes.starts_with(b"glTF") {
+        let glb = gltf::Glb::from_slice(&bytes)?;
+        (
+            serde_json::from_slice(&glb.json)?,
+            glb.bin.map(|b| b.into_owned()),
+        )
+    } else {
+        (serde_json::from_slice(&bytes)?, None)
+    };
+    let supported = [
+        "EXT_meshopt_compression",
+        "KHR_mesh_quantization",
+        "EXT_texture_webp",
+        "EXT_mesh_gpu_instancing",
+        "KHR_materials_ior",
+        "KHR_materials_transmission",
+        "KHR_materials_emissive_strength",
+        "KHR_materials_unlit",
+        "KHR_texture_transform",
+    ];
+    for e in j["extensionsRequired"].as_array().into_iter().flatten() {
+        ensure!(
+            supported.contains(&e.as_str().unwrap_or("")),
+            "Required glTF extension is unsupported: {e}"
+        );
+    }
+    let mut buffers = Vec::new();
+    let mut total = 0usize;
+    for (i, b) in j["buffers"]
+        .as_array()
+        .context("Model has no buffers")?
+        .iter()
+        .enumerate()
+    {
+        let len = number(b, "byteLength")?;
+        total = total.checked_add(len).context("Buffer budget overflow")?;
+        ensure!(total <= MAX_BUFFER, "Model buffers exceed 512 MiB");
+        let data = if let Some(name) = b["uri"].as_str() {
+            uri(path, name)?
+        } else if i == 0 {
+            blob.as_ref().context("Missing GLB buffer")?.clone()
+        } else if b["extensions"]["EXT_meshopt_compression"]["fallback"] == true {
+            vec![0; len]
+        } else {
+            bail!("Missing buffer {i}")
+        };
+        ensure!(data.len() >= len, "Buffer {i} is shorter than declared");
+        buffers.push(gltf::buffer::Data(data));
+    }
+    for v in j["bufferViews"].as_array().into_iter().flatten() {
+        if let Some(ext) = v["extensions"].get("EXT_meshopt_compression") {
+            let source = span(
+                &buffers
+                    .get(number(ext, "buffer")?)
+                    .context("Invalid Meshopt source")?
+                    .0,
+                ext["byteOffset"].as_u64().unwrap_or(0) as usize,
+                number(ext, "byteLength")?,
+            )?;
+            let decoded = decode(ext, source)?;
+            ensure!(
+                decoded.len() == number(v, "byteLength")?,
+                "Meshopt decoded length mismatch"
+            );
+            let target = buffers
+                .get_mut(number(v, "buffer")?)
+                .context("Invalid Meshopt target")?;
+            let offset = v["byteOffset"].as_u64().unwrap_or(0) as usize;
+            let end = offset
+                .checked_add(decoded.len())
+                .context("Meshopt target overflow")?;
+            target
+                .0
+                .get_mut(offset..end)
+                .context("Meshopt target exceeds buffer")?
+                .copy_from_slice(&decoded);
+        }
+    }
+    // Expand geometry float attributes and normalized instance quaternions;
+    // joints and index semantics stay integer.
+    let mut attributes = std::collections::BTreeSet::new();
+    for mesh in j["meshes"].as_array().into_iter().flatten() {
+        for primitive in mesh["primitives"].as_array().into_iter().flatten() {
+            for (name, id) in primitive["attributes"].as_object().into_iter().flatten() {
+                if name == "POSITION"
+                    || name == "NORMAL"
+                    || name == "TANGENT"
+                    || name.starts_with("TEXCOORD_")
+                {
+                    attributes.insert(id.as_u64().context("Invalid accessor index")? as usize);
+                }
+            }
+        }
+    }
+    for node in j["nodes"].as_array().into_iter().flatten() {
+        if let Some(index) =
+            node["extensions"]["EXT_mesh_gpu_instancing"]["attributes"]["ROTATION"].as_u64()
+        {
+            attributes.insert(index as usize);
+        }
+    }
+    for index in attributes {
+        let a = &j["accessors"][index];
+        let kind = number(a, "componentType")?;
+        if kind == 5126 {
+            continue;
+        }
+        ensure!(
+            a.get("sparse").is_none(),
+            "Sparse quantized attributes are unsupported"
+        );
+        let count = number(a, "count")?;
+        let components = match a["type"].as_str() {
+            Some("VEC2") => 2,
+            Some("VEC3") => 3,
+            Some("VEC4") => 4,
+            _ => bail!("Invalid attribute dimensions"),
+        };
+        let width = match kind {
+            5120 | 5121 => 1,
+            5122 | 5123 => 2,
+            _ => bail!("Invalid quantized component"),
+        };
+        let view_id = number(a, "bufferView")?;
+        let data = view(&j, &buffers, view_id)?;
+        let stride = j["bufferViews"][view_id]["byteStride"]
+            .as_u64()
+            .unwrap_or((width * components) as u64) as usize;
+        ensure!(stride >= width * components, "Invalid attribute stride");
+        let offset = a["byteOffset"].as_u64().unwrap_or(0) as usize;
+        ensure!(count <= 4_000_000, "Too many quantized vertices");
+        let normalized = a["normalized"].as_bool().unwrap_or(false);
+        let mut floats = Vec::with_capacity(count * components * 4);
+        let mut min = vec![f32::INFINITY; components];
+        let mut max = vec![f32::NEG_INFINITY; components];
+        for i in 0..count {
+            for k in 0..components {
+                let v = component(
+                    span(data, offset + i * stride + k * width, width)?,
+                    kind,
+                    normalized,
+                )?;
+                floats.extend(v.to_le_bytes());
+                min[k] = min[k].min(v);
+                max[k] = max[k].max(v);
+            }
+        }
+        total += floats.len();
+        ensure!(total <= MAX_BUFFER, "Expanded model buffers exceed 512 MiB");
+        let buffer = buffers.len();
+        let buffer_view = j["bufferViews"].as_array().unwrap().len();
+        j["buffers"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"byteLength":floats.len()}));
+        j["bufferViews"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"buffer":buffer,"byteLength":floats.len()}));
+        buffers.push(gltf::buffer::Data(floats));
+        let a = &mut j["accessors"][index];
+        a["bufferView"] = json!(buffer_view);
+        a["byteOffset"] = json!(0);
+        a["componentType"] = json!(5126);
+        a["normalized"] = json!(false);
+        a["min"] = json!(min);
+        a["max"] = json!(max);
+    }
+    for t in j
+        .get_mut("textures")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+    {
+        if let Some(source) = t["extensions"]["EXT_texture_webp"]["source"].as_u64() {
+            t["source"] = json!(source);
+        }
+    }
+    // Extensions handled here are no longer required of gltf-rs itself.
+    if let Some(required) = j
+        .get_mut("extensionsRequired")
+        .and_then(Value::as_array_mut)
+    {
+        required.retain(|e| {
+            !matches!(
+                e.as_str(),
+                Some(
+                    "EXT_meshopt_compression"
+                        | "KHR_mesh_quantization"
+                        | "EXT_texture_webp"
+                        | "EXT_mesh_gpu_instancing"
+                )
+            )
+        });
+    }
+    let root = serde_json::from_value(j.clone()).context("Parsing decoded glTF")?;
+    let document = gltf::Document::from_json(root).context("Validating decoded glTF")?;
+    let mut images = Vec::new();
+    let image_count = document.images().len().max(1);
+    let edge = ((12_582_912 / image_count) as f64).sqrt().floor().min(512.) as u32;
+    for image in document.images() {
+        let data = match image.source() {
+            gltf::image::Source::Uri { uri: name, .. } => uri(path, name)?,
+            gltf::image::Source::View { view: v, .. } => view(&j, &buffers, v.index())?.to_vec(),
+        };
+        let reader = image::ImageReader::new(std::io::Cursor::new(&data)).with_guessed_format()?;
+        let (w, h) = reader.into_dimensions()?;
+        ensure!(
+            u64::from(w) * u64::from(h) <= 67_108_864,
+            "Source material image exceeds 64M pixels"
+        );
+        let image = image::load_from_memory(&data)?;
+        let rgba = if w.max(h) > edge {
+            image
+                .resize(edge, edge, image::imageops::FilterType::Triangle)
+                .into_rgba8()
+        } else {
+            image.into_rgba8()
+        };
+        images.push(gltf::image::Data {
+            width: rgba.width(),
+            height: rgba.height(),
+            format: gltf::image::Format::R8G8B8A8,
+            pixels: rgba.into_raw(),
+        });
+    }
+    Ok((document, buffers, images))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    pub(crate) fn model_file(mut root: Value, bytes: &[u8]) -> std::path::PathBuf {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        root["asset"] = json!({"version":"2.0"});
+        root["buffers"] = json!([{"byteLength":bytes.len(),"uri":format!("data:application/octet-stream;base64,{}",base64::engine::general_purpose::STANDARD.encode(bytes))}]);
+        let path = std::env::temp_dir().join(format!(
+            "mutracer-import-{}-{}.gltf",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::write(&path, serde_json::to_vec(&root).unwrap()).unwrap();
+        path
+    }
+    #[test]
+    fn meshopt_modes_roundtrip_and_reject_malformed_layouts() {
+        let vertices = [[1f32, 2., 3.], [-1., 0., 1.], [3., 4., 5.]];
+        let encoded = meshopt::encode_vertex_buffer(&vertices).unwrap();
+        let ext = json!({"count":3,"byteStride":12,"mode":"ATTRIBUTES"});
+        assert_eq!(
+            decode(&ext, &encoded).unwrap(),
+            vertices
+                .into_iter()
+                .flatten()
+                .flat_map(f32::to_le_bytes)
+                .collect::<Vec<_>>()
+        );
+        assert!(decode(&ext, &encoded[..3]).is_err());
+        let indices = [0u32, 1, 2, 0, 2, 1];
+        for mode in ["TRIANGLES", "INDICES"] {
+            let encoded = if mode == "TRIANGLES" {
+                meshopt::encode_index_buffer(&indices, 3).unwrap()
+            } else {
+                let mut bytes =
+                    vec![
+                        0;
+                        unsafe { meshopt::ffi::meshopt_encodeIndexSequenceBound(indices.len(), 3) }
+                    ];
+                let len = unsafe {
+                    meshopt::ffi::meshopt_encodeIndexSequence(
+                        bytes.as_mut_ptr(),
+                        bytes.len(),
+                        indices.as_ptr(),
+                        indices.len(),
+                    )
+                };
+                bytes.truncate(len);
+                bytes
+            };
+            for stride in [2, 4] {
+                let result = decode(
+                    &json!({"count":6,"byteStride":stride,"mode":mode}),
+                    &encoded,
+                )
+                .unwrap();
+                let expected: Vec<u8> = indices
+                    .iter()
+                    .flat_map(|&i| i.to_le_bytes()[..stride].to_vec())
+                    .collect();
+                assert_eq!(result, expected);
+            }
+        }
+        for ext in [
+            json!({"count":3,"byteStride":3,"mode":"ATTRIBUTES"}),
+            json!({"count":4,"byteStride":2,"mode":"TRIANGLES"}),
+            json!({"count":3,"byteStride":12,"mode":"ATTRIBUTES","filter":"QUATERNION"}),
+            json!({"count":u64::MAX,"byteStride":256,"mode":"ATTRIBUTES"}),
+        ] {
+            assert!(decode(&ext, &encoded).is_err());
+        }
+    }
+    #[test]
+    fn quantized_positions_webp_and_instance_transforms_load_together() {
+        let mut bytes = Vec::new();
+        for p in [[-32768i16, 0, 0], [32767, 0, 0], [0, 32767, 0]] {
+            for c in p {
+                bytes.extend(c.to_le_bytes());
+            }
+            bytes.extend([0, 0]);
+        }
+        for t in [[0f32, 0., 0.], [2., 0., 0.]] {
+            for c in t {
+                bytes.extend(c.to_le_bytes());
+            }
+        }
+        let mut webp = Vec::new();
+        image::codecs::webp::WebPEncoder::new_lossless(&mut webp)
+            .encode(&[255, 10, 0, 255], 1, 1, image::ExtendedColorType::Rgba8)
+            .unwrap();
+        bytes.extend(&webp);
+        let path = model_file(
+            json!({
+                "extensionsUsed":["KHR_mesh_quantization","EXT_texture_webp","EXT_mesh_gpu_instancing"],
+                "extensionsRequired":["KHR_mesh_quantization","EXT_texture_webp","EXT_mesh_gpu_instancing"],
+                "bufferViews":[{"buffer":0,"byteLength":24,"byteStride":8},{"buffer":0,"byteOffset":24,"byteLength":24},{"buffer":0,"byteOffset":48,"byteLength":webp.len()}],
+                "accessors":[{"bufferView":0,"componentType":5122,"normalized":true,"type":"VEC3","count":3,"min":[-32768,0,0],"max":[32767,32767,0]},{"bufferView":1,"componentType":5126,"type":"VEC3","count":2}],
+                "images":[{"bufferView":2,"mimeType":"image/webp"}],"textures":[{"extensions":{"EXT_texture_webp":{"source":0}}}],
+                "meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],
+                "nodes":[{"mesh":0,"translation":[1,0,0],"extensions":{"EXT_mesh_gpu_instancing":{"attributes":{"TRANSLATION":1}}}}],"scenes":[{"nodes":[0]}],"scene":0
+            }),
+            &bytes,
+        );
+        let (_, _, images) = load(&path).unwrap();
+        assert_eq!(images[0].pixels, [255, 10, 0, 255]);
+        let model = crate::scene::Model::load(&path).unwrap();
+        assert_eq!(
+            model.geometries[0].positions,
+            [-1., 0., 0., 1., 0., 0., 0., 1., 0.]
+        );
+        assert_eq!(model.meshes.len(), 2);
+        assert_eq!(
+            model.meshes[1].transform.transform_point3(glam::Vec3::ZERO),
+            glam::Vec3::new(3., 0., 0.)
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn skin_initial_pose_is_baked_per_node() {
+        let mut bytes = Vec::new();
+        for x in [-1f32, 0., 0., 1., 0., 0., 0., 1., 0.] {
+            bytes.extend(x.to_le_bytes());
+        }
+        bytes.extend([0u8; 12]);
+        for _ in 0..3 {
+            for w in [1f32, 0., 0., 0.] {
+                bytes.extend(w.to_le_bytes());
+            }
+        }
+        let path = model_file(
+            json!({"bufferViews":[{"buffer":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":12},{"buffer":0,"byteOffset":48,"byteLength":48}],
+            "accessors":[{"bufferView":0,"componentType":5126,"type":"VEC3","count":3,"min":[-1,0,0],"max":[1,1,0]},{"bufferView":1,"componentType":5121,"type":"VEC4","count":3},{"bufferView":2,"componentType":5126,"type":"VEC4","count":3}],
+            "meshes":[{"primitives":[{"attributes":{"POSITION":0,"JOINTS_0":1,"WEIGHTS_0":2}}]}],
+            "skins":[{"joints":[1]}],"nodes":[{"mesh":0,"skin":0},{"translation":[0,2,0]}],"scenes":[{"nodes":[0,1]}],"scene":0}),
+            &bytes,
+        );
+        let model = crate::scene::Model::load(&path).unwrap();
+        assert_eq!(
+            model.geometries[0].positions,
+            [-1., 2., 0., 1., 2., 0., 0., 3., 0.]
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+}
