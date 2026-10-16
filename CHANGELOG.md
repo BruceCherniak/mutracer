@@ -3,6 +3,24 @@
 All notable changes to MuTracer will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.1.2 - 2026-10-16
+
+### Added
+
+- WebGPU displacement supports `displacementBias` (default `0`) for signed height offsets in mesh-local units, including conversion from Three.js materials.
+
+### Changed
+
+- `displacementStepSize` now defaults to `0`, automatically using 1/32 of the absolute displacement height. Set `0.01` explicitly to retain the previous fixed step; smaller steps capture finer detail at a higher rendering cost.
+- Converting a Three.js material without a displacement map now uses MuTracer's default height of `0.1` instead of Three.js's inactive default of `1`. Other configured heights are preserved.
+
+### Fixed
+
+- Editing displacement maps, image sources or height settings updates the rendered surface correctly, including meshes that share geometry.
+- Displacement remains consistent when object transforms scale the mesh, including small displacement heights.
+- WebGL 2 renders the original surface correctly when displacement settings are present; displacement requires WebGPU.
+- Clicking or holding a stationary view with Three.js controls preserves accumulated samples and completed renders.
+
 ## 0.1.1 - 2026-10-14
 
 ### Changed
