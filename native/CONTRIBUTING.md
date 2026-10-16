@@ -449,15 +449,34 @@ that behavior in addition to the original structural geometry-update fixtures.
 Raw scene commits and transform/vertex update TLAS construction use the official
 TinyBVH header pinned in `native/vendor/tinybvh/`. The host compiles the browser's
 existing C++ wrapper directly; preserve pointer-width-safe result addresses and
-`-ffp-contract=off` so scalar native BLAS output matches the checked-in Web Wasm.
+`-ffp-contract=off` for conservative float bounds. The native bridge opts into
+upstream SIMD and threaded builds; the browser wrapper retains its scalar,
+single-threaded Wasm configuration. Spatial splits remain disabled in the native
+bridge, matching the browser default (the browser can opt in).
+On ARM64, explicitly call upstream `BuildNEON` with aligned float4 vertices and
+retain them through serialization. In the pinned version, NEON accelerates
+fragment preparation; subdivision delegates to the reference builder. The
+upstream worker pool handles builds of at least 50,000 primitives, including
+AABB-input TLASes and displaced BLASes. Small builds remain single-threaded.
+The vendored header has one local fix: the thread-pool teardown wake flag is
+atomic. Keep the upstream revision/hash and this patch described in the native
+notices. Exercise owner-thread exit with ThreadSanitizer:
+
+```sh
+c++ -std=c++20 -O1 -g -fsanitize=thread -ffp-contract=off \
+  -I native/vendor/tinybvh native/host/tinybvh.cpp \
+  native/tests/tinybvh-thread-exit.cpp -o /tmp/mutracer-tinybvh-thread-exit
+TSAN_OPTIONS=halt_on_error=1 /tmp/mutracer-tinybvh-thread-exit
+```
+
 The synchronous AOT steps return geometry/displacement/AABB jobs, retain source
 state across arena resets, and consume the host's BVH2 results. Shared TS code
 packs instance records, materials, lights and shader resources. Stable-topology
 BLAS refit still reuses `updatePreparedGeometries`; the TS SAH builder remains
 available to browser/replay fixtures and legacy stateless AOT comparison exports.
 
-Compare native BLAS bytes with the existing Wasm adapter on identical inputs,
-including degenerate triangles and all displacement projections. Full and partial
+Compare native BLAS bytes with scalar native and the existing Wasm adapter on
+identical inputs, including degenerate triangles and all displacement projections. Full and partial
 results must agree on HDR/normal/albedo, survive failed candidates/other contexts,
 and preserve HWRT identity mapping after TLAS leaf reordering. Compare against
 the chosen builder reference: switching from built-in SAH to TinyBVH can change

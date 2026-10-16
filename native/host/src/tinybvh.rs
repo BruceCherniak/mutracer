@@ -286,6 +286,76 @@ mod tests {
         assert!(aabbs(&[2., 0., 0., 1., 1., 1.]).is_err());
     }
     #[test]
+    fn large_threaded_builds_keep_bounds_and_every_primitive() {
+        // Cross upstream's 50,000-primitive worker threshold for BLAS and TLAS.
+        // Serialized output must remain deterministic despite task scheduling.
+        let count = 65_536usize;
+        let mut positions = Vec::with_capacity(count * 9);
+        let mut boxes = Vec::with_capacity(count * 6);
+        for i in 0..count {
+            let x = (i % 256) as f32;
+            let y = (i / 256) as f32;
+            let z = ((i * 17) % 31) as f32 * 0.125;
+            positions.extend_from_slice(&[x, y, z, x + 0.75, y, z, x, y + 0.5, z + 0.25]);
+            boxes.extend_from_slice(&[x, y, z, x + 0.75, y + 0.5, z + 0.25]);
+        }
+        let indices: Vec<u32> = (0..count as u32 * 3).collect();
+        for is_tlas in [false, true] {
+            let build = || {
+                if is_tlas {
+                    aabbs(&boxes).unwrap()
+                } else {
+                    blas(&positions, None, &indices, 0., None).unwrap()
+                }
+            };
+            let built = build();
+            for _ in 0..3 {
+                assert_eq!(build().bytes, built.bytes);
+            }
+            let words: Vec<u32> = built
+                .bytes
+                .chunks_exact(4)
+                .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+                .collect();
+            let mut stack = vec![(0usize, None::<[f32; 6]>)];
+            let mut seen = vec![false; count];
+            while let Some((node, parent)) = stack.pop() {
+                let at = node * 4;
+                let bounds = [0, 1, 2, 4, 5, 6].map(|j| f32::from_bits(words[at + j]));
+                for axis in 0..3 {
+                    assert!(bounds[axis] <= bounds[axis + 3]);
+                    if let Some(parent) = parent {
+                        assert!(bounds[axis] >= parent[axis]);
+                        assert!(bounds[axis + 3] <= parent[axis + 3]);
+                    }
+                }
+                let child = words[at + 3] as i32;
+                if child >= 0 {
+                    stack.push((node + 2, Some(bounds)));
+                    stack.push((child as usize, Some(bounds)));
+                } else {
+                    for i in 0..child.unsigned_abs() as usize {
+                        let record = at + 8 + i * 4;
+                        let id = words[record] as usize / if is_tlas { 1 } else { 3 };
+                        assert!(!seen[id], "duplicate primitive {id}");
+                        seen[id] = true;
+                        for corner in 0..3 {
+                            assert_eq!(
+                                words[record + corner] as usize,
+                                if is_tlas { id } else { id * 3 + corner }
+                            );
+                        }
+                        for axis in 0..3 {
+                            assert!(bounds[axis] <= boxes[id * 6 + axis]);
+                            assert!(bounds[axis + 3] >= boxes[id * 6 + axis + 3]);
+                        }
+                    }
+                }
+            }
+            assert!(seen.iter().all(|v| *v));
+        }
+    }
+    #[test]
     fn batch_rejects_invalid_spans_and_counts() {
         // One empty TLAS record is valid; malformed framing must never reach C++.
         let mut packet = vec![0u8; 48];

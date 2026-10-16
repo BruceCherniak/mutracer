@@ -8,7 +8,7 @@ fn main() {
         .cpp(true)
         .std("c++20")
         .opt_level(3)
-        // Match WebAssembly scalar float operations in conservative bounds.
+        // Preserve conservative bounds across native SIMD and scalar Wasm.
         .flag_if_supported("-ffp-contract=off")
         .file("tinybvh.cpp")
         .include("../vendor/tinybvh")

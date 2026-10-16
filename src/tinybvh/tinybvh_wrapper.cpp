@@ -9,9 +9,13 @@
 
 #define NO_CUSTOM_GEOMETRY
 #define NO_DOUBLE_PRECISION_SUPPORT
-#define NO_THREADED_BUILDS
 #define NO_VOXEL_SUPPORT
+#ifndef MUTRACER_TINYBVH_NATIVE
+// The browser keeps its scalar, single-threaded Wasm module. Native builds use
+// upstream SIMD and subtree workers without changing the browser build flags.
+#define NO_THREADED_BUILDS
 #define TINYBVH_NO_SIMD
+#endif
 #define TINYBVH_IMPLEMENTATION
 #include "tiny_bvh.h"
 
@@ -764,6 +768,10 @@ BuildResult* tinybvh_build(
 
   tinybvh::BVH localBvh;
   tinybvh::BVH* bvh = &localBvh;
+#if defined(MUTRACER_TINYBVH_NATIVE) && defined(BVH_USENEON)
+  // Keep the backing vertices alive through layout conversion/serialization.
+  std::vector<tinybvh::bvhvec4> alignedPositions;
+#endif
   const bool useDisplacement = normals && normalStride >= 3 && displacement && std::abs(displacementScale) > 1e-6f;
   if (useDisplacement) {
     std::vector<tinybvh::bvhvec4> bounds(triangleMap.size() * 2);
@@ -807,6 +815,18 @@ BuildResult* tinybvh_build(
       vertexCount,
       static_cast<uint32_t>(positionStride * sizeof(float))
     };
+#if defined(MUTRACER_TINYBVH_NATIVE) && defined(BVH_USENEON)
+    if (!bvh->settings.useSpatialSplits) {
+      // Upstream's ARM Build() does not dispatch to BuildNEON. Its NEON input
+      // preparation requires aligned float4 vertices; the subdivision stage
+      // delegates to the official threaded reference builder in this revision.
+      alignedPositions.resize(vertexCount);
+      for (uint32_t i = 0; i < vertexCount; ++i) {
+        alignedPositions[i] = tinybvh::bvhvec4(vertexAt(positions, positionStride, i), 0.0f);
+      }
+      bvh->BuildNEON(alignedPositions.data(), buildIndices, static_cast<uint32_t>(triangleMap.size()));
+    } else
+#endif
     bvh->Build(vertices, buildIndices, static_cast<uint32_t>(triangleMap.size()));
   }
 

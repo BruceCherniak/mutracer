@@ -9187,7 +9187,8 @@ public:
 	{
 		if (res.numThreads == 0) return;
 		res.alive.store( false );
-		bool wake_loop = true;
+		// MuTracer: the teardown waker reads this concurrently with the owner.
+		std::atomic_bool wake_loop{ true };
 		std::thread waker( [&] { while (wake_loop) res.sleepingCondition.notify_all(); } );
 		for (auto& thread : res.threads) thread.join();
 		wake_loop = false;

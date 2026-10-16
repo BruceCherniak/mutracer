@@ -1,11 +1,14 @@
 // Reuse the browser adapter and official pinned TinyBVH header. No builder port.
 // See native/THIRD_PARTY_NOTICES.md and native/LICENSES/TinyBVH-MIT.txt.
+#define MUTRACER_TINYBVH_NATIVE
 #include "../../src/tinybvh/tinybvh_wrapper.cpp"
 
 extern "C" BuildResult* mt_native_tiny_blas(
   const float* positions, uint32_t vertexCount, const float* normals,
   const uint32_t* indices, uint32_t indexCount, float scale, const float* ranges
 ) noexcept {
+  // Spatial splits stay disabled, matching the browser default. SIMD and
+  // threading change execution, not the requested object-split algorithm.
   try { return tinybvh_build(positions, vertexCount, 3, normals, 3, indices, indexCount, scale, ranges, BVH2_LAYOUT, 0); }
   catch (...) { return nullptr; }
 }
