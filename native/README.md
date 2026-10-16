@@ -12,7 +12,7 @@ and environment controls. See [viewer usage and limits](./viewer/README.md).
 
 ## Render a scene
 
-Building requires Rust, a C compiler/Xcode Command Line Tools, project npm
+Building requires Rust, a C++20 compiler/Xcode Command Line Tools, project npm
 dependencies and a separately installed scriptc **0.3.2**.
 
 ```sh
@@ -221,7 +221,7 @@ side and 256 layers; source textures can be scaled to fit. The header specifies
 the remaining validation and format constraints.
 
 Raw scenes support the [intersection modes above](#intersection-backend).
-Incremental geometry updates, texture/emission material updates, device-loss recovery,
+Topology-changing geometry updates, texture/emission material updates, device-loss recovery,
 a C denoising API, browser display parity and a stable release ABI remain pending.
 The viewer provides its own [native OIDN controls](./viewer/README.md#controls).
 This library does not yet replace the full browser Engine/Render API.

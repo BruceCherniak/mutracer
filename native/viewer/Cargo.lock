@@ -1557,6 +1557,7 @@ dependencies = [
 name = "mutracer-native-probe"
 version = "0.0.0"
 dependencies = [
+ "cc",
  "png",
  "pollster",
  "serde",

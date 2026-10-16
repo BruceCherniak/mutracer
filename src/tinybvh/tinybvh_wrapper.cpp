@@ -805,7 +805,7 @@ BuildResult* tinybvh_build(
     tinybvh::bvhvec4slice vertices{
       reinterpret_cast<const tinybvh::bvhvec4*>(buildPositions),
       vertexCount,
-      positionStride * sizeof(float)
+      static_cast<uint32_t>(positionStride * sizeof(float))
     };
     bvh->Build(vertices, buildIndices, static_cast<uint32_t>(triangleMap.size()));
   }
@@ -822,7 +822,8 @@ BuildResult* tinybvh_build(
   return result;
 }
 
-uint32_t tinybvh_result_data(const BuildResult* result) {
+// uintptr_t is i32 in Wasm32 and preserves full pointers in native builds.
+uintptr_t tinybvh_result_data(const BuildResult* result) {
   return reinterpret_cast<uintptr_t>(result ? result->data : nullptr);
 }
 

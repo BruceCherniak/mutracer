@@ -67,3 +67,15 @@ export function acceptSceneTransform(token: number): Uint8Array { return acceptT
 import {sceneGeometryParameters as prepareGeometry, acceptSceneGeometry as acceptGeometry} from './scene-core.js';
 export function sceneGeometryParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareGeometry(bytes, token); }
 export function acceptSceneGeometry(token: number): Uint8Array { return acceptGeometry(token); }
+
+import {nativeSceneBegin as beginScene, nativeSceneBlas as sceneBlas, nativeSceneFinish as finishScene} from './scene-core.js';
+export function nativeSceneBegin(bytes: Uint8Array, token: number): Uint8Array {return beginScene(bytes, token);}
+export function nativeSceneBlas(bytes: Uint8Array, token: number): Uint8Array {return sceneBlas(bytes, token);}
+export function nativeSceneFinish(bytes: Uint8Array, token: number): Uint8Array {return finishScene(bytes, token);}
+
+import {nativeTransformBegin as beginTransform, nativeTransformFinish as finishTransform,
+  nativeGeometryBegin as beginGeometry, nativeGeometryFinish as finishGeometry} from './scene-core.js';
+export function nativeTransformBegin(bytes: Uint8Array, token: number): Uint8Array {return beginTransform(bytes,token);}
+export function nativeTransformFinish(bytes: Uint8Array, token: number): Uint8Array {return finishTransform(bytes,token);}
+export function nativeGeometryBegin(bytes: Uint8Array, token: number): Uint8Array {return beginGeometry(bytes,token);}
+export function nativeGeometryFinish(bytes: Uint8Array, token: number): Uint8Array {return finishGeometry(bytes,token);}

@@ -1,7 +1,21 @@
 //! Validated raw scene boundary. Only returned AOT bytes are retained by Rust.
 use super::*;
 unsafe extern "C" {
-    fn mt_core_scene_retained(
+    fn mt_core_native_scene_begin(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
+    fn mt_core_native_scene_blas(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
+    fn mt_core_native_scene_finish(
         input: *const u8,
         length: usize,
         token: u32,
@@ -16,7 +30,14 @@ unsafe extern "C" {
         output: *mut *const u8,
         size: *mut usize,
     );
-    fn mt_core_scene_geometry(
+    fn mt_core_native_geometry_begin(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
+    fn mt_core_native_geometry_finish(
         input: *const u8,
         length: usize,
         token: u32,
@@ -24,7 +45,14 @@ unsafe extern "C" {
         size: *mut usize,
     );
     fn mt_core_scene_accept_geometry(token: u32, output: *mut *const u8, size: *mut usize);
-    fn mt_core_scene_transform(
+    fn mt_core_native_transform_begin(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
+    fn mt_core_native_transform_finish(
         input: *const u8,
         length: usize,
         token: u32,
@@ -47,7 +75,6 @@ unsafe extern "C" {
         output: *mut *const u8,
         size: *mut usize,
     );
-    fn mt_core_scene(input: *const u8, length: usize, output: *mut *const u8, size: *mut usize);
     fn mt_core_scene_camera(
         input: *const u8,
         length: usize,
@@ -537,6 +564,29 @@ impl Drop for PreparedState {
 // Buffer records have zero dimensions; texture records carry their exact extent.
 pub(super) type LightingUpdates = Vec<(usize, u32, u32, Vec<u8>)>;
 impl PreparedState {
+    fn native_update(
+        &self,
+        begin: NativeStep,
+        finish: NativeStep,
+        bytes: &[u8],
+        ids: &[usize],
+    ) -> Result<LightingUpdates> {
+        let requests = native_step(begin, bytes, self.token)?;
+        let tlas = tinybvh::jobs(&requests, true)?;
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            finish(
+                tlas.as_ptr(),
+                tlas.len(),
+                self.token,
+                &mut pointer,
+                &mut size,
+            );
+        }
+        lighting_result(pointer, size, ids)
+    }
+
     pub(super) fn geometry(&self, bytes: &[u8]) -> Result<LightingUpdates> {
         if bytes.len() < 16 || bytes.len() > MAX_BYTES || bytes.len() % 4 != 0 {
             return Err("Invalid geometry update length".into());
@@ -553,18 +603,12 @@ impl PreparedState {
             return Err("Geometry attribute length mismatch".into());
         }
         w.finite(4, w.len() - 4)?;
-        let mut pointer = std::ptr::null();
-        let mut size = 0;
-        unsafe {
-            mt_core_scene_geometry(
-                bytes.as_ptr(),
-                bytes.len(),
-                self.token,
-                &mut pointer,
-                &mut size,
-            );
-        }
-        lighting_result(pointer, size, &[1, 2, 3, 7, 8, 24])
+        self.native_update(
+            mt_core_native_geometry_begin,
+            mt_core_native_geometry_finish,
+            bytes,
+            &[1, 2, 3, 7, 8, 24],
+        )
     }
     pub(super) fn accept_geometry(&self) -> Result<()> {
         let mut pointer = std::ptr::null();
@@ -604,18 +648,12 @@ impl PreparedState {
             return Err("Invalid transform version/reserved fields".into());
         }
         w.affine(4)?;
-        let mut pointer = std::ptr::null();
-        let mut size = 0;
-        unsafe {
-            mt_core_scene_transform(
-                bytes.as_ptr(),
-                bytes.len(),
-                self.token,
-                &mut pointer,
-                &mut size,
-            );
-        }
-        lighting_result(pointer, size, &[1, 2, 7, 8, 24])
+        self.native_update(
+            mt_core_native_transform_begin,
+            mt_core_native_transform_finish,
+            bytes,
+            &[1, 2, 7, 8, 24],
+        )
     }
     pub(super) fn accept_transform(&self) -> Result<()> {
         let mut pointer = std::ptr::null();
@@ -899,27 +937,54 @@ pub(super) fn prepare_retained(
 pub(super) fn prepare(bytes: &[u8]) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
     prepare_impl(bytes, 0)
 }
+type NativeStep = unsafe extern "C" fn(*const u8, usize, u32, *mut *const u8, *mut usize);
+fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
+    let mut pointer = std::ptr::null();
+    let mut size = 0;
+    unsafe {
+        step(bytes.as_ptr(), bytes.len(), token, &mut pointer, &mut size);
+    }
+    if pointer.is_null() || size < 16 || size > MAX_PREPARED_BYTES {
+        return Err("Invalid native scene construction result".into());
+    }
+    let packet = unsafe {
+        let result = copy_core_result(pointer, size, size);
+        mt_core_collect();
+        result?
+    };
+    let w = Words(&packet);
+    if w.u(0) != 1 {
+        return Err(match w.u(1) {
+            2 => "Full scene commit required: resource shape or shader feature changed",
+            1 | 3 => "Invalid or unavailable retained scene reference",
+            _ => "Native scene preparation rejected the scene (invalid IES or displacement inputs)",
+        }
+        .into());
+    }
+    Ok(packet)
+}
 fn prepare_impl(bytes: &[u8], token: u32) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
     validate(bytes)?;
     // The ABI bytes are borrowed only during this call; the AOT decoder copies
     // every retained array. Copy result bytes before reset or collection.
     init_core();
-    let mut pointer = std::ptr::null();
-    let mut size = 0;
-    unsafe {
-        if token == 0 {
-            mt_core_scene(bytes.as_ptr(), bytes.len(), &mut pointer, &mut size);
-        } else {
-            mt_core_scene_retained(bytes.as_ptr(), bytes.len(), token, &mut pointer, &mut size);
+    let work = (|| -> Result<Vec<u8>> {
+        let requests = native_step(mt_core_native_scene_begin, bytes, token)?;
+        let blases = tinybvh::jobs(&requests, false)?;
+        let instances = native_step(mt_core_native_scene_blas, &blases, token)?;
+        let tlas = tinybvh::jobs(&instances, true)?;
+        native_step(mt_core_native_scene_finish, &tlas, token)
+    })();
+    if work.is_err() {
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            mt_core_scene_release(token, &mut pointer, &mut size);
+            mt_core_reset();
+            mt_core_collect();
         }
     }
-    if pointer.is_null() || size < 16 || size > MAX_PREPARED_BYTES {
-        return Err("Invalid native scene command".into());
-    }
-    let packet = unsafe { copy_core_result(pointer, size, size)? };
-    unsafe {
-        mt_core_collect();
-    }
+    let packet = work?;
     let w = Words(&packet);
     if w.u(0) == 2 {
         return Err(

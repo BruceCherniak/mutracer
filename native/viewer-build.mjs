@@ -35,6 +35,7 @@ writeFileSync(resolve(contents,'Info.plist'),`<?xml version="1.0" encoding="UTF-
 </dict></plist>\n`);
 bundleOIDN(out, contents);
 for(const name of ['Libloading-ISC.txt','Meshopt-rs-MIT.txt','Meshoptimizer-MIT.txt','Image-webp-MIT.txt'])copyFileSync(resolve(root,'native/viewer/LICENSES',name),resolve(contents,'Resources/licenses',name));
+copyFileSync(resolve(root,'native/LICENSES/TinyBVH-MIT.txt'),resolve(contents,'Resources/licenses/TinyBVH-MIT.txt'));
 run('/usr/bin/codesign',['--force','--sign','-',app]);
 console.log(`Native app: ${app}`);
 const args=process.argv.slice(2);if(!args.includes('--build-only'))run('/usr/bin/open',['-n',app,...(args.length?['--args',...args.map(a=>resolve(a))]:[])]);

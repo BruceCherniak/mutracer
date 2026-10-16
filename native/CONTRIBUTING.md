@@ -420,3 +420,26 @@ Keep bound-array storage shared when updating Map-indexed generic binding record
 scriptc can return record copies, so replacing a tuple field does not necessarily
 reach the preparation owner. The concrete MeshState/TLAS module fixtures exercise
 that behavior in addition to the original structural geometry-update fixtures.
+
+
+## Native TinyBVH boundary
+
+Raw scene commits and transform/vertex update TLAS construction use the official
+TinyBVH header pinned in `native/vendor/tinybvh/`. The host compiles the browser's
+existing C++ wrapper directly; preserve pointer-width-safe result addresses and
+`-ffp-contract=off` so scalar native BLAS output matches the checked-in Web Wasm.
+The synchronous AOT steps return geometry/displacement/AABB jobs, retain source
+state across arena resets, and consume the host's BVH2 results. Shared TS code
+packs instance records, materials, lights and shader resources. Stable-topology
+BLAS refit still reuses `updatePreparedGeometries`; the TS SAH builder remains
+available to browser/replay fixtures and legacy stateless AOT comparison exports.
+
+Compare native BLAS bytes with the existing Wasm adapter on identical inputs,
+including degenerate triangles and all displacement projections. Full and partial
+results must agree on HDR/normal/albedo, survive failed candidates/other contexts,
+and preserve HWRT identity mapping after TLAS leaf reordering. Compare against
+the chosen builder reference: switching from built-in SAH to TinyBVH can change
+leaf order, packed displacement heights and output. Archive those differences;
+do not silently change the rendering algorithm or claim universal pixel parity.
+The native TinyBVH license belongs under `native/LICENSES/` and is also copied
+into the application bundle.

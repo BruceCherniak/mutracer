@@ -404,6 +404,37 @@ export function buildTLAS(
   };
 }
 
+/** Bounds transport for a platform BVH builder; same padding as buildTLAS. */
+export function meshInstanceBounds(instances: MeshInstances): Float32Array {
+  const bounds = new Float32Array(meshInstancesLength(instances) * 6);
+  for (let i = 0; i < meshInstancesLength(instances); i++) instanceBounds(readMeshInstance(instances, i), bounds, i * 6);
+  return bounds;
+}
+
+/** Pack a platform-built BVH2 hierarchy whose leaf x lane holds source indices. */
+export function packBuiltTLAS(instances: MeshInstances, blases: BLASInstance[], hierarchy: FlattendBVH): FlattendBVH {
+  const count = meshInstancesLength(instances);
+  if (!count) return emptyBvh(true);
+  const placement = getBlasPlacement(blases), words = new Int32Array(hierarchy.buffer);
+  const instancesBuffer = new ArrayBuffer(count * INSTANCE_WORD_STRIDE * 4);
+  const instanceInts = new Int32Array(instancesBuffer), instanceFloats = new Float32Array(instancesBuffer);
+  const stack: number[] = [0]; let target = 0;
+  while (stack.length) {
+    const node = stack.pop()!, o = node * 4, child = words[o + 3];
+    if (child >= 0) { stack.push(child); stack.push(node + 2); continue; }
+    for (let i = 0; i < -child; i++) {
+      const e = o + 8 + i * 4, source = words[e];
+      if (source < 0 || source >= count || target >= count) throw new Error('Invalid platform TLAS instance');
+      const instance = readMeshInstance(instances, source);
+      words[e] = target; words[e + 1] = placement.blasOffsets[instance.blasIndex]; words[e + 2] = source; words[e + 3] = 0;
+      writeInstanceRecord(instanceInts, instanceFloats, target++, instance, placement);
+    }
+  }
+  if (target !== count) throw new Error('Platform TLAS instance count mismatch');
+  hierarchy.instancesBuffer = instancesBuffer;
+  return hierarchy;
+}
+
 export interface TLASRefitRange {
   offset: number;
   size: number;

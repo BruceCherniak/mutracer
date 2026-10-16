@@ -5,6 +5,8 @@ import {
   INSTANCE_WORD_STRIDE,
   buildBLAS,
   buildTLAS,
+  meshInstanceBounds,
+  packBuiltTLAS,
   getTraversalStackSizes,
   refitBLAS,
   refitTLAS,
@@ -188,5 +190,42 @@ describe('BVH refit', () => {
 
     expect(refitBLAS(flat, geometry)).toBe(true);
     expect(new Float32Array(flat.buffer)[4]).toBe(8);
+  });
+});
+
+
+describe('platform-built TLAS packing', () => {
+  it('preserves source identity, records and refit after platform leaf ordering', () => {
+    const blases: BLASInstance[] = [0, 1].map(() => ({
+      bvh: {buffer: new ArrayBuffer(48), maxDepth: 1, layout: 'bvh2'},
+      trainglesCount: 1, verticesCount: 3
+    }));
+    const instances: TLASInstance[] = [3, -5, 8, 0].map((x, i) => ({
+      blasIndex: i % 2, bounds: bounds(x, x + 1), transform: mat4.create(), materialsIndices: [i]
+    }));
+    const expected = buildTLAS(instances, blases);
+    const hierarchy = {...expected, buffer: expected.buffer.slice(0), instancesBuffer: undefined};
+    const words = new Int32Array(hierarchy.buffer), stack = [0];
+    while (stack.length) {
+      const node = stack.pop()!, o = node * 4, child = words[o + 3];
+      if (child >= 0) {stack.push(child, node + 2); continue;}
+      for (let i = 0; i < -child; i++) words[o + 8 + i * 4] = words[o + 10 + i * 4];
+    }
+    const packed = packBuiltTLAS(instances, blases, hierarchy);
+    expect(new Uint8Array(packed.buffer)).toEqual(new Uint8Array(expected.buffer));
+    expect(new Uint8Array(packed.instancesBuffer!)).toEqual(new Uint8Array(expected.instancesBuffer!));
+    expect(meshInstanceBounds(instances).length).toBe(24);
+    mat4.translate(instances[1].transform, instances[1].transform, [2, 0, 0]);
+    refitTLAS(packed, instances, blases);
+    refitTLAS(expected, instances, blases);
+    expect(new Uint8Array(packed.buffer)).toEqual(new Uint8Array(expected.buffer));
+    expect(new Uint8Array(packed.instancesBuffer!)).toEqual(new Uint8Array(expected.instancesBuffer!));
+  });
+
+  it('packs the existing empty-scene representation', () => {
+    expect(meshInstanceBounds([])).toHaveLength(0);
+    const actual = packBuiltTLAS([], [], {buffer: new ArrayBuffer(0), maxDepth: 0});
+    expect(new Uint8Array(actual.buffer)).toEqual(new Uint8Array(buildTLAS([], []).buffer));
+    expect(actual.instancesBuffer?.byteLength).toBe(0);
   });
 });

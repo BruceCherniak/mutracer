@@ -163,6 +163,69 @@
         "u32"
       ],
       "returns": "bytes"
+    },
+    {
+      "export": "nativeSceneBegin",
+      "symbol": "mt_core_native_scene_begin",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "nativeSceneBlas",
+      "symbol": "mt_core_native_scene_blas",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "nativeSceneFinish",
+      "symbol": "mt_core_native_scene_finish",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "nativeTransformBegin",
+      "symbol": "mt_core_native_transform_begin",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "nativeTransformFinish",
+      "symbol": "mt_core_native_transform_finish",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "nativeGeometryBegin",
+      "symbol": "mt_core_native_geometry_begin",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "nativeGeometryFinish",
+      "symbol": "mt_core_native_geometry_finish",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
     }
   ]
 }

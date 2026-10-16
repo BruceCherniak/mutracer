@@ -16,6 +16,7 @@ mod hardware;
 mod material_properties;
 mod native_bvh;
 mod scene;
+mod tinybvh;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
