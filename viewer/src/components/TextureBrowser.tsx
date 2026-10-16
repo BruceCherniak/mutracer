@@ -6,7 +6,7 @@ import {
   TEXTURE_RESOLUTIONS, filterTextures, listPolyHavenTextures, polyHavenMaps, polyHavenThumbnail, topCategories,
   type PolyHavenTexture, type TextureResolution
 } from '../engine/polyHaven';
-import { Segmented } from './ui/controls';
+import { Segmented, Switch } from './ui/controls';
 import { PolyHavenLogo } from './PolyHavenLogo';
 
 const PAGE = 48;
@@ -14,6 +14,7 @@ const formatMB = (bytes: number) => (bytes / 1048576).toFixed(1);
 
 // Kept for the session so the panel reopens where it was.
 let lastResolution: TextureResolution = '1k';
+let lastDisplacement = false;
 let lastQuery = '';
 let lastCategory: string | null = null;
 /** The set last applied to each material, to mark it in the grid. */
@@ -37,6 +38,8 @@ export function TextureBrowser() {
   const [query, setQuery] = useState(lastQuery);
   const [category, setCategory] = useState(lastCategory);
   const [resolution, setResolution] = useState(lastResolution);
+  const [displacement, setDisplacement] = useState(lastDisplacement);
+  const webgpu = useViewer((s) => s.backend?.name === 'WebGPU');
   const [limit, setLimit] = useState(PAGE);
   const [, rerender] = useState(0);
   const materialId = material?.id;
@@ -81,7 +84,7 @@ export function TextureBrowser() {
       if (signal.aborted) return;
       progress = { loaded, total };
       notify();
-    }, signal);
+    }, signal, displacement && webgpu);
     if (signal.aborted) return;
     current = null;
     if (ok) appliedSets.set(materialId, texture.id);
@@ -113,6 +116,10 @@ export function TextureBrowser() {
           options={TEXTURE_RESOLUTIONS.map((r) => ({ value: r.value, label: <span title={r.size}>{r.label}</span> }))}
           onChange={(v) => { lastResolution = v; setResolution(v); }}
         />
+        <Switch label="Download displacement map" checked={displacement && webgpu} disabled={!webgpu}
+          onChange={(v) => { lastDisplacement = v; setDisplacement(v); }}>
+          <span className="field-label">Download displacement map</span>
+        </Switch>
         {categories.length > 0 && (
           <div className="ph-cats" role="radiogroup" aria-label="Category">
             {[null, ...categories].map((c) => (
@@ -147,7 +154,8 @@ export function TextureBrowser() {
       </div>
       <p className="hint tex-browser__foot">
         By <a href="https://polyhaven.com/textures" target="_blank" rel="noreferrer">Poly Haven</a> (CC0). A set replaces the
-        base color, normal and roughness/metalness maps; picks in a row undo as one step.
+        base color, normal and roughness/metalness maps. Displacement is optional (WebGPU only), adds download
+        and render time, and replaces the previous height map; leaving it off clears that map.
       </p>
     </section>
   );

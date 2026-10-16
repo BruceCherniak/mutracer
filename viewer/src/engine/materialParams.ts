@@ -15,7 +15,7 @@ export type MaterialParam =
   | { kind: 'color'; key: ColorKey; label: string; texture?: TextureKey }
   | { kind: 'boolean'; key: BooleanKey; label: string };
 
-export type TextureKey = 'map' | 'metallicRoughnessMap' | 'roughnessMap' | 'metalnessMap' | 'emissiveMap' | 'transmissionMap' | 'normalMap' | 'thinFilmMap';
+export type TextureKey = 'map' | 'metallicRoughnessMap' | 'roughnessMap' | 'metalnessMap' | 'emissiveMap' | 'transmissionMap' | 'normalMap' | 'thinFilmMap' | 'displacementMap';
 
 /** Texture slots shown in the Textures section, with the channel each slot reads. */
 export const TEXTURE_SLOTS: { key: TextureKey; label: string; hint: string }[] = [
@@ -24,6 +24,7 @@ export const TEXTURE_SLOTS: { key: TextureKey; label: string; hint: string }[] =
   { key: 'roughnessMap', label: 'Roughness', hint: 'Green channel' },
   { key: 'metalnessMap', label: 'Metalness', hint: 'Blue channel' },
   { key: 'normalMap', label: 'Normal', hint: 'Tangent space' },
+  { key: 'displacementMap', label: 'Displacement', hint: 'Red channel · WebGPU only' },
   { key: 'emissiveMap', label: 'Emission', hint: 'Multiplies emission color' },
   { key: 'transmissionMap', label: 'Transmission', hint: 'Red channel' },
   { key: 'thinFilmMap', label: 'Thin film', hint: 'Thickness' }
@@ -92,6 +93,11 @@ export const MATERIAL_GROUPS: MaterialGroup[] = [
     ]
   },
   {
+    id: 'displacement', label: 'Displacement', params: [
+      { kind: 'number', key: 'displacementScale', label: 'Height', min: 0, max: 1, step: 0.001, texture: 'displacementMap' }
+    ]
+  },
+  {
     id: 'advanced', label: 'Advanced', params: [
       { kind: 'number', key: 'specularAnisotropy', label: 'Anisotropy', min: 0, max: 1 },
       { kind: 'number', key: 'baseDiffuseRoughness', label: 'Diffuse roughness', min: 0, max: 1 },
@@ -103,15 +109,21 @@ export const MATERIAL_GROUPS: MaterialGroup[] = [
   }
 ];
 
-export const MATERIAL_KEYS = [...new Set(MATERIAL_GROUPS.flatMap((g) => g.params.map((p) => p.key)))];
-export type MaterialValues = Partial<Record<(typeof MATERIAL_KEYS)[number], number | boolean | [number, number, number]>>;
+// Track hidden displacement settings for reset, undo and cached edits as well.
+export const MATERIAL_KEYS = [...new Set([
+  ...MATERIAL_GROUPS.flatMap((g) => g.params.map((p) => p.key)),
+  'displacementStepSize', 'displacementUvProjection', 'displacementUvProjectionScale'
+] as const)];
+export type DisplacementProjection = OpenPBRMaterial['displacementUvProjection'];
+export const DISPLACEMENT_PROJECTIONS: DisplacementProjection[] = ['none', 'triplanar', 'spherical', 'cylindrical'];
+export type MaterialValues = Partial<Record<(typeof MATERIAL_KEYS)[number], number | boolean | [number, number, number] | DisplacementProjection>>;
 
 export function readMaterial(material: OpenPBRMaterial): MaterialValues {
   const values: MaterialValues = {};
   const record = material as unknown as Record<string, unknown>;
   for (const key of MATERIAL_KEYS) {
     const value = record[key];
-    values[key] = Array.isArray(value) ? (value.slice(0, 3) as [number, number, number]) : (value as number | boolean);
+    values[key] = Array.isArray(value) ? (value.slice(0, 3) as [number, number, number]) : (value as MaterialValues[typeof key]);
   }
   return values;
 }

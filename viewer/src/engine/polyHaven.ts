@@ -75,7 +75,7 @@ export interface PolyHavenMaps {
  * Picks the JPG maps for the viewer's slots. The `arm` map packs AO, roughness
  * and metalness in R, G and B, which is the glTF metallic-roughness layout.
  */
-export async function polyHavenMaps(id: string, resolution: TextureResolution): Promise<PolyHavenMaps> {
+export async function polyHavenMaps(id: string, resolution: TextureResolution, displacement = false): Promise<PolyHavenMaps> {
   let request = fileTrees.get(id);
   if (!request) {
     request = fetchJson<FileTree>(`${API}/files/${encodeURIComponent(id)}`);
@@ -96,6 +96,7 @@ export async function polyHavenMaps(id: string, resolution: TextureResolution): 
     normalMap: jpg('nor_gl')
   };
   const arm = jpg('arm');
+  if (displacement) urls.displacementMap = jpg('Displacement');
   if (arm) urls.metallicRoughnessMap = arm;
   else {
     urls.roughnessMap = jpg('Rough');

@@ -5,6 +5,19 @@ its .bin and textures) or a Radiance .hdr, browse the scene tree, edit OpenPBR
 materials, lighting, camera and render settings, play glTF animations and
 export PNGs.
 
+In the material panel, upload or drop a height image into the Displacement
+texture slot, then adjust Height in the Displacement section. Height uses
+mesh-local units; 0 disables the effect. Meshes without UVs automatically
+use triplanar coordinates when a height map is applied. Displacement requires
+WebGPU; its controls are disabled on WebGL 2.
+
+In the Poly Haven texture browser, enable Download displacement map before
+choosing a set to include its height map when available. This option is off by
+default and adds download and rendering time. Applying a set replaces the
+previous displacement map; leaving the option off clears it. Height maps and
+their settings support undo, redo and restoration when reloading the cached
+model, like other material edits.
+
 The Export dialog can download the current viewport PNG immediately, preserving
 its displayed appearance and pixel size without restarting the render. Render PNG
 instead renders a new image at Viewport, 1080p, 2K (2560 × 1440), 4K, or Square

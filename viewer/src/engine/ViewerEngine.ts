@@ -458,7 +458,7 @@ export class ViewerEngine {
       onMeshConverted: (mesh, source, group) => {
         if (source === this.ground) return;
         const material = toArray(source.material)[group.materialIndex ?? 0];
-        if (material) this.materials.onConverted(material, mesh.materials[0], source.uuid);
+        if (material) this.materials.onConverted(material, mesh.materials[0], source.uuid, !!mesh.geometry.uv);
       }
     });
   }
@@ -1010,10 +1010,10 @@ export class ViewerEngine {
    */
   async applyPolyHavenTexture(
     materialId: string, id: string, name: string, resolution: TextureResolution,
-    onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal
+    onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal, displacement = false
   ) {
     try {
-      const { urls, metal } = await polyHavenMaps(id, resolution);
+      const { urls, metal } = await polyHavenMaps(id, resolution, displacement && this.engine.backend === 'webgpu');
       if (signal?.aborted) return false;
       const entries = Object.entries(urls) as [TextureKey, string][];
       const loaded = new Array<number>(entries.length).fill(0);
@@ -1022,7 +1022,7 @@ export class ViewerEngine {
       const merge = { key: `${materialId}:polyhaven:${++this.polyHavenPicks}`, ms: Infinity };
       // The first map to land also clears the slots of the previous set.
       let pending: Partial<Record<TextureKey, Blob | null>> | null = {
-        map: null, normalMap: null, metallicRoughnessMap: null, roughnessMap: null, metalnessMap: null
+        map: null, normalMap: null, metallicRoughnessMap: null, roughnessMap: null, metalnessMap: null, displacementMap: null
       };
       // Maps are applied in arrival order, one at a time.
       let applying = Promise.resolve();

@@ -20,6 +20,7 @@ interface Entry {
   index: number;
   converted: Set<OpenPBRMaterial>;
   meshes: Set<string>;
+  needsDisplacementProjection?: boolean;
   initial?: MaterialPatch;
 }
 
@@ -124,13 +125,14 @@ export class MaterialEditor {
     this.entries.clear();
   }
 
-  onConverted(source: THREE.Material, converted: OpenPBRMaterial | undefined, meshId: string) {
+  onConverted(source: THREE.Material, converted: OpenPBRMaterial | undefined, meshId: string, hasUVs = true) {
     let entry = this.entries.get(source.uuid);
     if (!entry) {
       entry = { name: source.name || 'Material', index: this.order.get(source.uuid)?.index ?? -1, converted: new Set(), meshes: new Set() };
       this.entries.set(source.uuid, entry);
     }
     entry.meshes.add(meshId);
+    if (!hasUVs) entry.needsDisplacementProjection = true;
     if (!converted || entry.converted.has(converted)) return;
     const first = entry.converted.values().next().value as OpenPBRMaterial | undefined;
     entry.converted.add(converted);
@@ -197,6 +199,11 @@ export class MaterialEditor {
       this.uploads.set(texture, file);
       textures[slot] = texture;
     });
+    // Newly uploaded heights also work on meshes that had no textures or UVs when converted.
+    if (textures.displacementMap && entry.needsDisplacementProjection &&
+      (values.displacementUvProjection ?? material.displacementUvProjection) === 'none') {
+      values = { ...values, displacementUvProjection: 'triplanar' };
+    }
     this.commit(materialId, { values, textures }, label, merge?.key, merge?.ms);
   }
 

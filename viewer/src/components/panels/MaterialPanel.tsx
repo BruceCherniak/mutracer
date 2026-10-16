@@ -14,6 +14,7 @@ export function MaterialPanel() {
   const material = useViewer((s) => s.material);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const browsing = useViewer((s) => s.ui.textureBrowser);
+  const webgl = useViewer((s) => s.backend?.name === 'WebGL 2');
 
   if (!material) {
     return (
@@ -31,6 +32,7 @@ export function MaterialPanel() {
   const base = material.values.baseColor as [number, number, number];
   const isOpen = (group: MaterialGroup) => {
     if (openGroups[group.id] !== undefined) return openGroups[group.id];
+    if (group.id === 'displacement') return textures.has('displacementMap');
     if (!group.weight) return group.id !== 'advanced';
     return Number(material.values[group.weight]) > 0;
   };
@@ -72,8 +74,11 @@ export function MaterialPanel() {
           >
             {group.params.map((param) => (
               <ParamControl key={param.key} param={param} values={material.values} textures={textures}
+                disabled={group.id === 'displacement' && webgl}
                 onChange={(values) => set(values, paramLabel(group, param), `${material.id}:${param.key}`)} />
             ))}
+            {group.id === 'displacement' && <Hint>{webgl ? 'Displacement requires WebGPU.' :
+              'Height uses mesh-local units; 0 disables displacement.'}</Hint>}
           </Section>
         );
       })}
@@ -91,12 +96,13 @@ export function MaterialPanel() {
 }
 
 function ParamControl({
-  param, values, textures, onChange
+  param, values, textures, onChange, disabled
 }: {
   param: MaterialParam;
   values: MaterialValues;
   textures: Set<string>;
   onChange: (values: MaterialValues) => void;
+  disabled?: boolean;
 }) {
   const badge = 'texture' in param && param.texture && textures.has(param.texture)
     ? <i className="tex" title="Multiplied by a texture" /> : null;
@@ -120,17 +126,20 @@ function ParamControl({
       max={param.max}
       step={param.step}
       unit={param.unit}
+      disabled={disabled}
       onChange={(v) => onChange({ [param.key]: v })}
     />
   );
 }
 
 function TextureSlots({ material }: { material: SelectedMaterial }) {
+  const webgl = useViewer((s) => s.backend?.name === 'WebGL 2');
   const input = useRef<HTMLInputElement>(null);
   const target = useRef<TextureKey | null>(null);
   const [dropTarget, setDropTarget] = useState<TextureKey | null>(null);
   const label = (slot: TextureKey) => TEXTURE_SLOTS.find((s) => s.key === slot)!.label;
   const upload = (slot: TextureKey, file: File | undefined) => {
+    if (slot === 'displacementMap' && webgl) return;
     if (!file) return;
     if (!file.type.startsWith('image/')) return showToast(`${file.name} is not an image`, 'error');
     void getEngine()?.setMaterialTexture(material.id, slot, file, `${label(slot)} texture`);
@@ -161,6 +170,7 @@ function TextureSlots({ material }: { material: SelectedMaterial }) {
             }}
           >
             <button className="tex-slot__thumb" title={has ? `Replace ${label.toLowerCase()} texture` : `Upload ${label.toLowerCase()} texture`}
+              disabled={key === 'displacementMap' && webgl}
               aria-label={has ? `Replace ${label} texture` : `Upload ${label} texture`}
               onClick={() => { target.current = key; input.current?.click(); }}>
               {thumb ? <img src={thumb} alt="" /> : has ? <i className="tex" /> : <ImagePlus size={14} />}

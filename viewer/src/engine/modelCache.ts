@@ -1,5 +1,5 @@
 import type { ModelSource } from './loadModel';
-import { MATERIAL_KEYS, TEXTURE_KEYS, type MaterialValues, type TextureKey } from './materialParams';
+import { DISPLACEMENT_PROJECTIONS, MATERIAL_KEYS, TEXTURE_KEYS, type MaterialValues, type TextureKey } from './materialParams';
 
 export interface ModelMeta {
   name: string;
@@ -173,7 +173,8 @@ export function readMaterialEdits(): Promise<MaterialEdits | null> {
         const values: MaterialValues = {};
         for (const key of MATERIAL_KEYS) {
           const value = entry.values?.[key];
-          if (typeof value === 'number' || typeof value === 'boolean' ||
+          if ((key === 'displacementUvProjection' && DISPLACEMENT_PROJECTIONS.some((p) => p === value)) ||
+            typeof value === 'number' || typeof value === 'boolean' ||
             (Array.isArray(value) && value.length === 3 && value.every((c) => typeof c === 'number'))) values[key] = value as MaterialValues[typeof key];
         }
         const textures: MaterialEdit['textures'] = [];
