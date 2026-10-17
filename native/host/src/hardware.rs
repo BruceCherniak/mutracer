@@ -31,7 +31,7 @@ pub struct IndexedGeometry {
     dynamic: bool,
     bounds_offset: u32,
 }
-#[derive(serde::Serialize, Deserialize)]
+#[derive(Clone, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capture {
     pub eligible: bool,
@@ -62,7 +62,7 @@ impl Capture {
 fn default_hardware_closest() -> bool {
     true
 }
-#[derive(serde::Serialize, Deserialize)]
+#[derive(Clone, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
 pub struct Geometry {
@@ -87,7 +87,7 @@ pub struct Geometry {
     #[serde(default)]
     non_opaque: bool,
 }
-#[derive(serde::Serialize, Deserialize)]
+#[derive(Clone, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Instance {
     geometry: usize,
@@ -100,6 +100,7 @@ fn default_stride() -> u64 {
 }
 
 pub struct Resources {
+    pub inputs: HashMap<String, wgpu::Buffer>,
     indexed: bool,
     pub tlas: wgpu::Tlas,
     pub mapping: wgpu::Buffer,
@@ -123,6 +124,17 @@ pub fn prepare(
     capture: &Capture,
     assets: Option<&HashMap<String, Vec<u8>>>,
     _buffers: Option<&HashMap<usize, wgpu::Buffer>>,
+) -> Result<Resources> {
+    prepare_reusing(device, queue, directory, capture, assets, _buffers, None)
+}
+pub fn prepare_reusing(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    directory: &Path,
+    capture: &Capture,
+    assets: Option<&HashMap<String, Vec<u8>>>,
+    _buffers: Option<&HashMap<usize, wgpu::Buffer>>,
+    reusable: Option<&HashMap<String, wgpu::Buffer>>,
 ) -> Result<Resources> {
     let read = |name: &str| -> Result<Vec<u8>> {
         if let Some(assets) = assets {
@@ -149,49 +161,62 @@ pub fn prepare(
     }) {
         return Err("HWRT BLAS primitive count exceeds device limit".into());
     }
-    let direct_indices = if capture.indexed {
-        Some(
+    let mut inputs = HashMap::new();
+    let mut reused_bytes = 0u64;
+    let mut upload = |name: &str, data: &[u8], usage: wgpu::BufferUsages| {
+        let usage = usage | wgpu::BufferUsages::COPY_DST;
+        let previous = reusable
+            .and_then(|b| b.get(name))
+            .filter(|b| b.size() == data.len() as u64 && b.usage() == usage);
+        let buffer = if let Some(previous) = previous {
+            queue.write_buffer(previous, 0, data);
+            reused_bytes += previous.size();
+            previous.clone()
+        } else {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("MuTracer merged indices"),
-                contents: &read("native-35")?,
-                usage: wgpu::BufferUsages::BLAS_INPUT
-                    | wgpu::BufferUsages::STORAGE
-                    | wgpu::BufferUsages::COPY_DST,
-            }),
-        )
+                label: Some(name),
+                contents: data,
+                usage,
+            })
+        };
+        inputs.insert(name.to_string(), buffer.clone());
+        buffer
+    };
+    let direct_indices = if capture.indexed {
+        Some(upload(
+            "MuTracer merged indices",
+            &read("native-35")?,
+            wgpu::BufferUsages::BLAS_INPUT
+                | wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST,
+        ))
     } else {
         None
     };
     let direct_blas_indices = if capture.indexed {
-        Some(
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("MuTracer soup indices"),
-                contents: &read("native-42")?,
-                usage: wgpu::BufferUsages::BLAS_INPUT,
-            }),
-        )
+        Some(upload(
+            "MuTracer soup indices",
+            &read("native-42")?,
+            wgpu::BufferUsages::BLAS_INPUT,
+        ))
     } else {
         None
     };
     let direct_bounds = if capture.indexed && capture.geometries.iter().any(|g| g.procedural) {
-        Some(
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("MuTracer displacement bounds"),
-                contents: &read("native-38")?,
-                usage: wgpu::BufferUsages::BLAS_INPUT,
-            }),
-        )
+        Some(upload(
+            "MuTracer displacement bounds",
+            &read("native-38")?,
+            wgpu::BufferUsages::BLAS_INPUT,
+        ))
     } else {
         None
     };
     let direct_positions = if capture.indexed && capture.geometries.iter().any(|g| !g.procedural) {
-        Some(
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("MuTracer compact positions"),
-                contents: &read("native-41")?,
-                usage: wgpu::BufferUsages::BLAS_INPUT,
-            }),
-        )
+        Some(upload(
+            "MuTracer compact positions",
+            &read("native-41")?,
+            wgpu::BufferUsages::BLAS_INPUT,
+        ))
     } else {
         None
     };
@@ -228,11 +253,7 @@ pub fn prepare(
                     .clone()
             }
         } else {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("MuTracer HWRT vertices"),
-                contents: &data,
-                usage: wgpu::BufferUsages::BLAS_INPUT,
-            })
+            upload(&geometry.positions, &data, wgpu::BufferUsages::BLAS_INPUT)
         });
         indices.push(if capture.indexed {
             if geometry.procedural {
@@ -249,13 +270,11 @@ pub fn prepare(
                     if data.len() < geometry.vertex_count as usize * 4 {
                         return Err("HWRT explicit index buffer is too short".into());
                     }
-                    Ok(
-                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("HWRT explicit indices"),
-                            contents: &data[..geometry.vertex_count as usize * 4],
-                            usage: wgpu::BufferUsages::BLAS_INPUT,
-                        }),
-                    )
+                    Ok(upload(
+                        name,
+                        &data[..geometry.vertex_count as usize * 4],
+                        wgpu::BufferUsages::BLAS_INPUT,
+                    ))
                 })
                 .transpose()?
         });
@@ -406,11 +425,11 @@ pub fn prepare(
     let mapping = if let Some(buffer) = direct_indices {
         buffer
     } else {
-        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("MuTracer hardware primitive identity"),
-            contents: &data,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        })
+        upload(
+            "MuTracer hardware primitive identity",
+            &data,
+            wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        )
     };
     if super::profiling::enabled() {
         eprintln!(
@@ -418,12 +437,18 @@ pub fn prepare(
             serde_json::json!({"nativeHardwareUploadProfile": {"kind":"geometry","writeBytes":vertices.iter().map(|b| b.size()).sum::<u64>() + data.len() as u64,"instanceCount":capture.instances.len()}})
         );
     }
-    let counters = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("MuTracer hardware query counts"),
-        size: 44,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        mapped_at_creation: false,
-    });
+    let counters = upload(
+        "MuTracer hardware query counts",
+        &[0; 44],
+        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+    );
+    drop(upload);
+    if super::profiling::enabled() {
+        eprintln!(
+            "{}",
+            serde_json::json!({"nativeHardwareReuseProfile": {"reusedBytes": reused_bytes}})
+        );
+    }
     // Software TLAS rebuilds may reorder instances. Match BLAS root/vertex region
     // rather than the previous instance index, preserving primitive identity.
     let raw_instances = assets
@@ -451,6 +476,7 @@ pub fn prepare(
                 .collect()
         });
     Ok(Resources {
+        inputs,
         indexed: capture.indexed,
         raw_instances,
         tlas,

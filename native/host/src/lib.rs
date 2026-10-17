@@ -7,7 +7,7 @@ use std::{
     ffi::{CStr, c_char},
     fs,
     path::Path,
-    sync::{Mutex, mpsc},
+    sync::{Arc, Mutex, mpsc},
     time::{Duration, Instant},
 };
 use wgpu::util::DeviceExt;
@@ -68,7 +68,7 @@ static ENTRY_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 static ABI_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Scene {
     format: u32,
@@ -95,13 +95,13 @@ struct Scene {
     native_bvh: Option<native_bvh::Capture>,
     sampling: Option<Sampling>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Sampling {
     max_samples: u32,
     pattern: String,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct MaterialOffsets {
     color: u64,
     roughness: u64,
@@ -172,14 +172,14 @@ unsafe fn copy_core_result(pointer: *const u8, size: usize, expected: usize) -> 
     }
     Ok(bytes)
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Buffer {
     id: usize,
     size: u64,
     usage: u32,
     file: String,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Texture {
     id: usize,
     width: u32,
@@ -189,12 +189,12 @@ struct Texture {
     usage: u32,
     writes: Vec<Value>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Group {
     layout: Vec<Value>,
     entries: Vec<Binding>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 struct Binding {
     binding: u32,
     kind: String,
@@ -322,12 +322,29 @@ pub fn render_options(scene_dir: &Path, output: &Path, options: &RenderOptions) 
     render_scene(scene_dir, scene, output, options, None)
 }
 
+// Device-local keys compare the full source/layout as well as hashing them, so
+// collisions cannot reuse an incompatible shader. Keep retained variants bounded.
+#[derive(Hash, PartialEq, Eq)]
+struct PipelineKey {
+    source: String,
+    entry: String,
+    layout: String,
+    hardware: bool,
+}
+#[derive(Clone)]
+struct CachedPipeline {
+    _shader: wgpu::ShaderModule,
+    layouts: Vec<wgpu::BindGroupLayout>,
+    pipeline: wgpu::ComputePipeline,
+}
 #[derive(Clone)]
 struct GpuDevice {
     device: wgpu::Device,
     queue: wgpu::Queue,
     info: wgpu::AdapterInfo,
     hardware_ray_query: bool,
+    pipelines: Arc<Mutex<HashMap<PipelineKey, CachedPipeline>>>,
+    pipeline_cache: Option<wgpu::PipelineCache>,
 }
 impl GpuDevice {
     fn new(use_hwrt: bool) -> Result<Self> {
@@ -360,11 +377,17 @@ impl GpuDevice {
         } else {
             wgpu::Features::empty()
         };
+        let cache_feature = if info.backend == wgpu::Backend::Vulkan {
+            adapter.features() & wgpu::Features::PIPELINE_CACHE
+        } else {
+            wgpu::Features::empty()
+        };
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("MuTracer native feasibility"),
                 required_limits: adapter.limits(),
                 required_features: profile_features
+                    | cache_feature
                     | if use_hwrt {
                         wgpu::Features::EXPERIMENTAL_RAY_QUERY
                     } else {
@@ -383,7 +406,21 @@ impl GpuDevice {
                 json!({"nativeGpuCapabilities": {"timestampQuery": device.features().contains(wgpu::Features::TIMESTAMP_QUERY),"encoderTimestamps": device.features().contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)}})
             );
         }
+        // No external cache bytes are accepted; wgpu owns the cache's lifetime.
+        let pipeline_cache = if cache_feature.is_empty() {
+            None
+        } else {
+            Some(unsafe {
+                device.create_pipeline_cache(&wgpu::PipelineCacheDescriptor {
+                    label: Some("MuTracer device pipeline cache"),
+                    data: None,
+                    fallback: true,
+                })
+            })
+        };
         Ok(Self {
+            pipelines: Arc::new(Mutex::new(HashMap::new())),
+            pipeline_cache,
             device,
             queue,
             info,
@@ -412,13 +449,33 @@ impl GpuScene {
         assets: Option<&HashMap<String, Vec<u8>>>,
         gpu: GpuDevice,
     ) -> Result<Self> {
+        Self::new_reusing(scene_dir, scene, options, assets, gpu, None, None)
+    }
+    fn new_reusing(
+        scene_dir: &Path,
+        scene: Scene,
+        options: &RenderOptions,
+        assets: Option<&HashMap<String, Vec<u8>>>,
+        gpu: GpuDevice,
+        reusable: Option<&HashMap<usize, wgpu::Buffer>>,
+        reusable_hw: Option<&HashMap<String, wgpu::Buffer>>,
+    ) -> Result<Self> {
         // Drain validation/OOM errors before making a candidate scene visible to a context.
         let memory_scope = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation_scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let result = Self::upload(scene_dir, scene, options, assets, gpu.clone());
+        let result = Self::upload(
+            scene_dir,
+            scene,
+            options,
+            assets,
+            gpu.clone(),
+            reusable,
+            reusable_hw,
+        );
         let validation = pollster::block_on(validation_scope.pop());
         let memory = pollster::block_on(memory_scope.pop());
         if let Some(error) = validation.or(memory) {
+            gpu.pipelines.lock().unwrap().clear();
             return Err(error.to_string().into());
         }
         result
@@ -429,6 +486,8 @@ impl GpuScene {
         options: &RenderOptions,
         assets: Option<&HashMap<String, Vec<u8>>>,
         gpu: GpuDevice,
+        reusable: Option<&HashMap<usize, wgpu::Buffer>>,
+        reusable_hw: Option<&HashMap<String, wgpu::Buffer>>,
     ) -> Result<Self> {
         let read = |name: &str| -> Result<Vec<u8>> {
             if let Some(assets) = assets {
@@ -463,6 +522,8 @@ impl GpuScene {
             .map(|capture| native_bvh::rebuild(scene_dir, capture))
             .transpose()?;
         let mut buffers = HashMap::new();
+        let mut reused_bytes = 0u64;
+        let mut allocated_bytes = 0u64;
         for buffer in &scene.buffers {
             let data = if scene
                 .native_bvh
@@ -486,14 +547,23 @@ impl GpuScene {
             {
                 usage |= wgpu::BufferUsages::BLAS_INPUT;
             }
-            buffers.insert(
-                buffer.id,
+            usage |= wgpu::BufferUsages::COPY_DST;
+            let existing = reusable
+                .and_then(|buffers| buffers.get(&buffer.id))
+                .filter(|b| b.size() == buffer.size && b.usage() == usage);
+            let gpu_buffer = if let Some(existing) = existing {
+                queue.write_buffer(existing, 0, &data);
+                reused_bytes += buffer.size;
+                existing.clone()
+            } else {
+                allocated_bytes += buffer.size;
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some(&buffer.file),
                     contents: &data,
                     usage,
-                }),
-            );
+                })
+            };
+            buffers.insert(buffer.id, gpu_buffer);
         }
         if let Some(sampling) = &scene.sampling {
             if sampling.pattern != "sobol" {
@@ -649,94 +719,132 @@ impl GpuScene {
                 .as_ref()
                 .is_some_and(|capture| capture.authoritative && capture.instances.is_empty())
         {
-            Some(hardware::prepare(
+            Some(hardware::prepare_reusing(
                 &device,
                 &queue,
                 scene_dir,
                 scene.hwrt.as_ref().unwrap(),
                 assets,
                 Some(&buffers),
+                reusable_hw,
             )?)
         } else {
             None
         };
-        let layouts: Vec<_> = scene
-            .bind_groups
-            .iter()
-            .enumerate()
-            .map(|(index, group)| {
-                let mut entries: Vec<_> = group.layout.iter().map(layout_entry).collect();
-                if index == 0 && hardware.is_some() {
-                    entries.extend([
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 4,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::AccelerationStructure {
-                                vertex_return: false,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 5,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                        wgpu::BindGroupLayoutEntry {
-                            binding: 6,
-                            visibility: wgpu::ShaderStages::COMPUTE,
-                            ty: wgpu::BindingType::Buffer {
-                                ty: wgpu::BufferBindingType::Storage { read_only: false },
-                                has_dynamic_offset: false,
-                                min_binding_size: None,
-                            },
-                            count: None,
-                        },
-                    ]);
-                }
-                device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                    label: Some("MuTracer capture layout"),
-                    entries: &entries,
-                })
-            })
-            .collect();
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("MuTracer capture pipeline layout"),
-            bind_group_layouts: &layouts.iter().map(Some).collect::<Vec<_>>(),
-            ..Default::default()
-        });
-        eprintln!("Validating original MuTracer WGSL and creating native compute pipeline...");
+        let source = String::from_utf8(read(if use_hwrt {
+            scene
+                .hwrt
+                .as_ref()
+                .unwrap()
+                .shader
+                .as_ref()
+                .ok_or("Missing HWRT shader")?
+        } else {
+            &scene.shader
+        })?)?;
+        let key = PipelineKey {
+            source,
+            entry: scene.entry_point.clone(),
+            layout: serde_json::to_string(
+                &scene
+                    .bind_groups
+                    .iter()
+                    .map(|g| &g.layout)
+                    .collect::<Vec<_>>(),
+            )?,
+            hardware: hardware.is_some(),
+        };
         let shader_started = Instant::now();
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Original MuTracer path tracer"),
-            source: wgpu::ShaderSource::Wgsl(
-                String::from_utf8(read(if use_hwrt {
-                    scene
-                        .hwrt
-                        .as_ref()
-                        .unwrap()
-                        .shader
-                        .as_ref()
-                        .ok_or("Missing HWRT shader")?
-                } else {
-                    &scene.shader
-                })?)?
-                .into(),
-            ),
-        });
-        let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("MuTracer native path tracer"),
-            layout: Some(&layout),
-            module: &shader,
-            entry_point: Some(&scene.entry_point),
-            compilation_options: Default::default(),
-            cache: None,
-        });
+        let mut cache = gpu.pipelines.lock().unwrap();
+        let cached = cache.get(&key).cloned();
+        let cache_hit = cached.is_some();
+        let compiled = if let Some(cached) = cached {
+            cached
+        } else {
+            let layouts: Vec<_> = scene
+                .bind_groups
+                .iter()
+                .enumerate()
+                .map(|(index, group)| {
+                    let mut entries: Vec<_> = group.layout.iter().map(layout_entry).collect();
+                    if index == 0 && hardware.is_some() {
+                        entries.extend([
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 4,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::AccelerationStructure {
+                                    vertex_return: false,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 5,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                            wgpu::BindGroupLayoutEntry {
+                                binding: 6,
+                                visibility: wgpu::ShaderStages::COMPUTE,
+                                ty: wgpu::BindingType::Buffer {
+                                    ty: wgpu::BufferBindingType::Storage { read_only: false },
+                                    has_dynamic_offset: false,
+                                    min_binding_size: None,
+                                },
+                                count: None,
+                            },
+                        ]);
+                    }
+                    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                        label: Some("MuTracer capture layout"),
+                        entries: &entries,
+                    })
+                })
+                .collect();
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("MuTracer capture pipeline layout"),
+                bind_group_layouts: &layouts.iter().map(Some).collect::<Vec<_>>(),
+                ..Default::default()
+            });
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("MuTracer path tracer"),
+                source: wgpu::ShaderSource::Wgsl(key.source.as_str().into()),
+            });
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("MuTracer native path tracer"),
+                layout: Some(&layout),
+                module: &shader,
+                entry_point: Some(&scene.entry_point),
+                compilation_options: Default::default(),
+                cache: gpu.pipeline_cache.as_ref(),
+            });
+            let compiled = CachedPipeline {
+                _shader: shader,
+                layouts,
+                pipeline,
+            };
+            if cache.len() >= 32 {
+                cache.clear();
+            }
+            cache.insert(key, compiled.clone());
+            compiled
+        };
+        drop(cache);
+        let CachedPipeline {
+            layouts, pipeline, ..
+        } = compiled;
         let compile_seconds = shader_started.elapsed().as_secs_f64();
+        if std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1") {
+            eprintln!(
+                "{}",
+                json!({"nativeReuseProfile": {"pipelineCacheHit": cache_hit,
+                "reusedBufferBytes": reused_bytes,"allocatedBufferBytes": allocated_bytes}})
+            );
+        }
         let groups: Vec<_> = scene
             .bind_groups
             .iter()

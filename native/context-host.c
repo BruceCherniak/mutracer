@@ -68,6 +68,15 @@ int main(int argc,char **argv) {
     OK(read_image(a,kind,pixels,size));REQUIRE(memcmp(pixels,expected,size)==0);free(expected);
     OK(save(argv[3],names[kind],pixels,size));
   }
+  /* Reusing a retired buffer generation must reset accumulation and guides. */
+  for(unsigned repeat=0;repeat<2;repeat++)OK(mt_context_commit(a,input,length,error,sizeof(error)));
+  OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.samples==0);
+  OK(mt_context_render(a,samples,error,sizeof(error)));
+  for(uint32_t kind=0;kind<3;kind++){
+    char path[4096];if(snprintf(path,sizeof(path),"%s/%s.rgba32f",argv[2],names[kind])>=(int)sizeof(path))return 2;
+    size_t expected_size=0;unsigned char *expected=load(path,&expected_size);REQUIRE(expected&&expected_size==size);
+    OK(read_image(a,kind,pixels,size));REQUIRE(memcmp(pixels,expected,size)==0);free(expected);
+  }
   OK(mt_context_read_pixels(a,0,NULL,0,&written,error,sizeof(error)));REQUIRE(written==size);
   unsigned char short_buffer[8];memset(short_buffer,0xa5,sizeof(short_buffer));
   BAD(mt_context_read_pixels(a,0,short_buffer,sizeof(short_buffer),&written,error,sizeof(error)));

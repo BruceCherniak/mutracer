@@ -15,6 +15,8 @@ struct Context {
     backend: u32,
     fallback_reason: String,
     scene: Option<GpuScene>,
+    spare_buffers: HashMap<usize, wgpu::Buffer>,
+    spare_hardware: HashMap<String, wgpu::Buffer>,
     failed: bool,
     job: Option<RenderJob>,
 }
@@ -188,6 +190,8 @@ pub unsafe extern "C" fn mt_context_create_with_backend(
                 backend,
                 fallback_reason: String::new(),
                 scene: None,
+                spare_buffers: HashMap::new(),
+                spare_hardware: HashMap::new(),
                 failed: false,
                 job: None,
             },
@@ -273,24 +277,40 @@ pub unsafe extern "C" fn mt_context_commit(
             }
         }
         let hardware_prepared = Instant::now();
-        let candidate = GpuScene::new(
+        let mut software_scene = scene.clone();
+        software_scene.hwrt = None;
+        let candidate = GpuScene::new_reusing(
             Path::new(""),
             scene,
             &options,
             Some(&assets),
             context.gpu.clone(),
+            Some(&context.spare_buffers),
+            Some(&context.spare_hardware),
         );
         let mut candidate = match candidate {
             Ok(candidate) => candidate,
             Err(error) if matches!(context.backend, 1 | 3) && options.flags & 4 != 0 => {
                 fallback_reason = format!("HWRT upload unavailable: {error}");
-                let (scene, assets) = scene::prepare(bytes)?;
-                GpuScene::new(
+                // Production preparation already contains the full software BVH.
+                // Only the opt-in direct-AS experiment lacks that CPU result.
+                let software_scene = if software_scene
+                    .native_layout
+                    .as_ref()
+                    .is_some_and(|l| l.indexed)
+                {
+                    return Err(format!("Direct-AS diagnostic cannot fall back: {error}").into());
+                } else {
+                    software_scene
+                };
+                GpuScene::new_reusing(
                     Path::new(""),
-                    scene,
+                    software_scene,
                     &RenderOptions::default(),
                     Some(&assets),
                     context.gpu.clone(),
+                    Some(&context.spare_buffers),
+                    Some(&context.spare_hardware),
                 )?
             }
             Err(error) => return Err(error),
@@ -314,7 +334,12 @@ pub unsafe extern "C" fn mt_context_commit(
         }
         candidate.retained = Some(retained);
         // Commit is transactional: the previous scene survives any preparation/upload failure.
-        context.scene = Some(candidate);
+        // Only retired buffers may be overwritten while preparing the next scene.
+        // Keeping one spare generation preserves the live scene on failed commits.
+        if let Some(previous) = context.scene.replace(candidate) {
+            context.spare_buffers = previous.buffers;
+            context.spare_hardware = previous.hardware.map_or_else(HashMap::new, |h| h.inputs);
+        }
         context.fallback_reason = fallback_reason;
         context.job = None;
         context.failed = false;

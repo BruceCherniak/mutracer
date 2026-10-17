@@ -8,14 +8,14 @@ unsafe extern "C" {
     fn mt_core_bvh(input: *const u8, length: usize, output: *mut *const u8, size: *mut usize);
     fn mt_core_reset();
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct Capture {
     pub buffer: usize,
     size: usize,
     prefix: String,
     geometries: Vec<Geometry>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Geometry {
     positions: String,
