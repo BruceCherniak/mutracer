@@ -77,8 +77,12 @@ fn render(
     if backend == 1 && !gpu.hardware_ray_query {
         return Err("Image diagnostic requires actual HWRT".into());
     }
-    let (mut scene, mut assets, _retained) =
-        scene::prepare_retained(input, backend == 1 && hardware::direct_input_enabled())?;
+    let (mut scene, mut assets, _retained) = scene::prepare_retained_with_settings(
+        input,
+        backend == 1 && hardware::direct_input_enabled(),
+        backend,
+        &settings::RenderSettings::default(),
+    )?;
     if backend == 1 {
         scene.hwrt = Some(hardware::capture_from_prepared(
             &mut assets,

@@ -235,6 +235,21 @@
         "u32"
       ],
       "returns": "bytes"
+    },
+    {
+      "export": "configureSceneParameters",
+      "symbol": "mt_core_scene_configure",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "shaderCacheParameters",
+      "symbol": "mt_core_shader_cache",
+      "params": [],
+      "returns": "bytes"
     }
   ]
 }

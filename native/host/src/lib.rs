@@ -25,6 +25,7 @@ mod native_bvh;
 pub mod path_diagnostics;
 mod profiling;
 mod scene;
+pub mod settings;
 mod tinybvh;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;

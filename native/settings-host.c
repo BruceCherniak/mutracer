@@ -1,0 +1,76 @@
+#include "mutracer-context.h"
+#include "mutracer-layout.h"
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <time.h>
+_Static_assert(sizeof(mt_render_settings)==MT_SETTINGS_WORDS*MT_WORD_BYTES,"settings ABI");
+static char error[4096];
+static unsigned checks=0;
+#define REQUIRE(x) do {checks++;if(!(x)){fprintf(stderr,"settings check %u, line %d: %s\n",checks,__LINE__,#x);return 1;}} while(0)
+#define OK(x) do {int status=(x);checks++;if(status){fprintf(stderr,"settings check %u, line %d: %s\n",checks,__LINE__,error);return 1;}} while(0)
+#define BAD(x) REQUIRE((x)!=0)
+static unsigned char *load(const char *path,size_t *size) {
+ FILE *f=fopen(path,"rb");if(!f||fseek(f,0,SEEK_END))return NULL;long n=ftell(f);if(n<0||fseek(f,0,SEEK_SET))return NULL;
+ unsigned char *bytes=malloc(n?(size_t)n:1);if(!bytes||fread(bytes,1,(size_t)n,f)!=(size_t)n)return NULL;
+ fclose(f);*size=(size_t)n;return bytes;
+}
+static int pixels(mt_context context,unsigned kind,unsigned char *bytes,size_t size) {
+ size_t written=0;return mt_context_read_pixels(context,kind,bytes,size,&written,error,sizeof(error))||written!=size;
+}
+int main(int argc,char **argv) {
+ if(argc!=4)return 2;
+ size_t length=0;unsigned char *input=load(argv[1],&length);if(!input||length<128)return 2;
+ uint32_t *words=(uint32_t*)input;size_t size=(size_t)words[2]*words[3]*16;
+ unsigned backend=(unsigned)strtoul(argv[3],NULL,10);if(backend>1)return 2;
+ unsigned char *reference=malloc(size*3),*image=malloc(size),*default_hdr=malloc(size);if(!reference||!image||!default_hdr)return 2;
+ mt_render_settings settings;REQUIRE(mt_render_settings_default(NULL)==1);
+ OK(mt_render_settings_default(&settings));REQUIRE(settings.struct_size==sizeof(settings)&&settings.seed==12345&&settings.reserved==0);
+ mt_context context=0;OK(mt_context_create_with_backend(backend,&context,error,sizeof(error)));
+ OK(mt_context_commit(context,input,length,error,sizeof(error)));
+ uint32_t actual=99;char reason[512];OK(mt_context_backend(context,&actual,reason,sizeof(reason),error,sizeof(error)));REQUIRE(actual==backend);
+ OK(mt_context_render(context,8,error,sizeof(error)));
+ for(unsigned kind=0;kind<3;kind++)OK(pixels(context,kind,reference+kind*size,size));
+ memcpy(default_hdr,reference,size);
+ if(backend==0) {
+  settings.bounces=6.49;settings.direct_light_candidates=2.49;settings.bevel_samples=8.49;
+  OK(mt_context_commit_with_settings(context,input,length,&settings,error,sizeof(error)));OK(mt_context_render(context,8,error,sizeof(error)));
+  for(unsigned kind=0;kind<3;kind++){OK(pixels(context,kind,image,size));REQUIRE(memcmp(image,reference+kind*size,size)==0);}
+ }
+ for(unsigned pattern=0;pattern<3;pattern++) {
+  OK(mt_render_settings_default(&settings));settings.seed=67890;settings.sampling_pattern=pattern;settings.max_samples=65;
+  if(pattern) {
+   settings.bounces=3.2;settings.direct_light_candidates=3.7;settings.bevel_samples=4.2;
+   settings.clamping=.8;settings.transmissive_output_alpha_min=.4;settings.sample_sequence_offset=3;
+  }
+  OK(mt_context_commit_with_settings(context,input,length,&settings,error,sizeof(error)));
+  OK(mt_context_backend(context,&actual,reason,sizeof(reason),error,sizeof(error)));REQUIRE(actual==backend);
+  OK(mt_context_render(context,3,error,sizeof(error)));OK(mt_context_render(context,5,error,sizeof(error)));
+  for(unsigned kind=0;kind<3;kind++) {
+   OK(pixels(context,kind,reference+kind*size,size));
+   if(backend==0&&pattern==0&&kind==0)REQUIRE(memcmp(default_hdr,reference,size)!=0);
+   const float *f=(const float*)(reference+kind*size);for(size_t i=0;i<size/4;i++)REQUIRE(isfinite(f[i]));
+   char path[4096];REQUIRE(snprintf(path,sizeof(path),"%s/pattern-%u-%u.rgba32f",argv[2],pattern,kind)<(int)sizeof(path));
+   FILE *out=fopen(path,"wb");REQUIRE(out&&fwrite(reference+kind*size,1,size,out)==size);fclose(out);
+  }
+  mt_render_settings bad=settings;bad.sampling_pattern=3;BAD(mt_context_commit_with_settings(context,input,length,&bad,error,sizeof(error)));
+  bad=settings;bad.struct_size--;BAD(mt_context_commit_with_settings(context,input,length,&bad,error,sizeof(error)));
+  bad=settings;bad.reserved=1;BAD(mt_context_commit_with_settings(context,input,length,&bad,error,sizeof(error)));
+  bad=settings;bad.clamping=NAN;BAD(mt_context_commit_with_settings(context,input,length,&bad,error,sizeof(error)));
+  BAD(mt_context_commit_with_settings(context,input,length,NULL,error,sizeof(error)));
+  for(unsigned kind=0;kind<3;kind++){OK(pixels(context,kind,image,size));REQUIRE(memcmp(image,reference+kind*size,size)==0);}
+  OK(mt_context_reset(context,error,sizeof(error)));
+  mt_render_job job=0;OK(mt_context_submit(context,8,&job,error,sizeof(error)));
+  BAD(mt_context_commit_with_settings(context,input,length,&settings,error,sizeof(error)));
+  mt_job_info_v1 info={.struct_size=sizeof(info)};unsigned iteration=0;
+  for(;iteration<60000;iteration++) {
+   OK(mt_job_poll(job,3,error,sizeof(error)));OK(mt_job_info(job,&info,error,sizeof(error)));
+   if(info.state==2)break;REQUIRE(info.state<=2);const struct timespec delay={0,1000000};nanosleep(&delay,NULL);
+  }
+  REQUIRE(iteration<60000&&info.completed_samples==8);
+  for(unsigned kind=0;kind<3;kind++){OK(pixels(context,kind,image,size));REQUIRE(memcmp(image,reference+kind*size,size)==0);}
+ }
+ OK(mt_context_destroy(context,error,sizeof(error)));
+ free(default_hdr);free(reference);free(image);free(input);printf("PASS %u settings checks\n",checks);return 0;
+}

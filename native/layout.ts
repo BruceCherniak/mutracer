@@ -126,6 +126,20 @@ export const EXTENSION = {
   "Z": 3,
   "WORDS": 4
 } as const;
+export const SETTINGS = {
+  "STRUCT_SIZE": 0,
+  "SAMPLING_PATTERN": 1,
+  "SEED": 2,
+  "MAX_SAMPLES": 3,
+  "BOUNCES": 4,
+  "DIRECT_LIGHT_CANDIDATES": 6,
+  "BEVEL_SAMPLES": 8,
+  "CLAMPING": 10,
+  "TRANSMISSIVE_ALPHA_MIN": 12,
+  "SEQUENCE_OFFSET": 14,
+  "VARIANTS": 15,
+  "WORDS": 16
+} as const;
 export const PACKET_HEADER = {
   "VERSION": 0,
   "COUNT": 1,

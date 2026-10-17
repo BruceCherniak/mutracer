@@ -126,6 +126,20 @@ pub mod extension {
     pub const Z: usize = 3;
     pub const WORDS: usize = 4;
 }
+pub mod settings {
+    pub const STRUCT_SIZE: usize = 0;
+    pub const SAMPLING_PATTERN: usize = 1;
+    pub const SEED: usize = 2;
+    pub const MAX_SAMPLES: usize = 3;
+    pub const BOUNCES: usize = 4;
+    pub const DIRECT_LIGHT_CANDIDATES: usize = 6;
+    pub const BEVEL_SAMPLES: usize = 8;
+    pub const CLAMPING: usize = 10;
+    pub const TRANSMISSIVE_ALPHA_MIN: usize = 12;
+    pub const SEQUENCE_OFFSET: usize = 14;
+    pub const VARIANTS: usize = 15;
+    pub const WORDS: usize = 16;
+}
 pub mod packet_header {
     pub const VERSION: usize = 0;
     pub const COUNT: usize = 1;

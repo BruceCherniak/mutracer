@@ -80,3 +80,12 @@ export function nativeTransformBegin(bytes: Uint8Array, token: number): Uint8Arr
 export function nativeTransformFinish(bytes: Uint8Array, token: number): Uint8Array {return finishTransform(bytes,token);}
 export function nativeGeometryBegin(bytes: Uint8Array, token: number): Uint8Array {return beginGeometry(bytes,token);}
 export function nativeGeometryFinish(bytes: Uint8Array, token: number): Uint8Array {return finishGeometry(bytes,token);}
+
+import {configureSceneParameters as configureScene} from './scene-core.js';
+export function configureSceneParameters(bytes: Uint8Array, token: number): Uint8Array { return configureScene(bytes, token); }
+
+import {nativeShaderVariantStats} from './shader-variants.js';
+export function shaderCacheParameters(): Uint8Array {
+  const stats = nativeShaderVariantStats();
+  return new Uint8Array(new Uint32Array([stats.generated, stats.hits, stats.retained, 0]).buffer);
+}

@@ -1,5 +1,8 @@
 /// <reference lib="esnext" />
 /// <reference path="./browser-types.d.ts" />
+import {initialSceneConstants, sceneAttributeLayout, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, writeTraceSampling} from '../src/renderer/sceneAssembly.js';
+import {defaultSceneConfiguration, decodeSceneConfiguration} from './scene-configuration.js';
+import {nativeShaderVariant} from './shader-variants.js';
 import {hardwareOpaqueGeometryFlags} from './hwrt-eligibility.js';
 import {VERSION, RESOURCE, KIND, FORMAT, HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, TEXTURE as T, LIGHT as L, CAMERA as C, BATCH as B, PACKET_HEADER as PH, PACKET_ENTRY as PE, WORD_BYTES, quantizeDisplacementRange} from './layout.js';
 import {nativePathIntersections} from './path-diagnostics.wgsl.js';
@@ -17,9 +20,7 @@ import PixelTexture from '../src/scene/PixelTexture.js';
 import type TextureState from '../src/scene/TextureState.js';
 import { sceneCameraParameters } from './camera-core.js';
 import { InstanceState, RectLightState, SphereLight, DirectionalLight, SpotLight,
-  EmissiveTriangleCache, LightChoiceBuffer, buildLightAliasTable, estimateAnalyticLightPower, estimateEnvironmentPower,
-  packEmissiveTriangles, packIESProfiles, LIGHT_CHOICE_ENVIRONMENT, LIGHT_CHOICE_ANALYTIC,
-  LIGHT_CHOICE_EMISSIVE_TRIANGLE } from '../src/renderer/lightCore.js';
+  EmissiveTriangleCache, estimateEnvironmentPower } from '../src/renderer/lightCore.js';
 export * from '../src/renderer/lightCore.js';
 import type { EmissiveTriangle } from '../src/renderer/lightSampling.js';
 import type { AnalyticLightState } from '../src/scene/lightState.js';
@@ -38,8 +39,7 @@ import { wgpuMaterialConstants } from '../src/renderer/wgpuMaterialConstants.js'
 import { wgpuSceneFeatureFlags } from '../src/renderer/WGPUSceneFeatures.js';
 import { nativeIntersections, nativeHitDiagnostics } from './intersections.wgsl.js';
 import { wgpuShaderSource } from '../src/renderer/wgpuShaderSource.js';
-import { makeRayTraceUniform, packWgpuAnalyticLights, WGPU_SCENE_BUFFER_MIN_BYTES } from '../src/renderer/wgpuSceneUniform.js';
-import { zSobolLog2SPP } from '../src/renderer/sampling.js';
+import { makeRayTraceUniform, WGPU_SCENE_BUFFER_MIN_BYTES } from '../src/renderer/wgpuSceneUniform.js';
 import { getOpenPbrEnergyLutData, OPENPBR_ENERGY_LUT_WIDTH, OPENPBR_ENERGY_LUT_HEIGHT } from '../src/renderer/openPbrEnergyLut.js';
 
 interface NativeLayout {
@@ -54,6 +54,13 @@ function nativeLayoutBytes(layout: NativeLayout, blasOffset: number, isEmpty: bo
 // Root source meshes and prepared bindings/BLASes for transform updates. The
 // merged vertex allocation is not retained; geometry edits have a separate gate.
 // A full context commit owns the token; raw/replay probes remain stateless.
+const sceneConfigurations = new Map<number, ReturnType<typeof defaultSceneConfiguration>>();
+export function configureSceneParameters(bytes: Uint8Array, token: number): Uint8Array {
+  try {
+    sceneConfigurations.set(token, decodeSceneConfiguration(bytes));
+    return new Uint8Array(new Uint32Array([1, 0, 0, 0]).buffer);
+  } catch { return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer); }
+}
 const retainedScenes = new Map<number, {source: MaterialState[]; ordered: MaterialState[]; table: MaterialData;
   lights: AnalyticLightState[]; emissive: EmissiveTriangle[]; rt: ArrayBuffer;
   environmentWidth: number; environmentHeight: number; backgroundWidth: number; backgroundHeight: number;
@@ -101,7 +108,7 @@ export function retainedSceneParameters(bytes: Uint8Array, token: number): Uint8
   catch { retainedScenes.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer); }
 }
 export function releaseSceneParameters(token: number): Uint8Array {
-  retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
+  sceneConfigurations.delete(token); retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
   return new Uint8Array(16);
 }
 // Version 1: source material index and seven scalar parameters. Maps, emission,
@@ -295,27 +302,20 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     if (!(texture instanceof PixelTexture)) throw new Error('Native scene requires raw pixels.');
     return Number(texture.pixels.data instanceof Float32Array);
   }, {maxTextureDimension2D: 4096, maxTextureArrayLayers: 256, maxTextureArrayBytes: 64 * 1024 * 1024});
+  const configuration = sceneConfigurations.get(token) ?? defaultSceneConfiguration();
   const geometry = prepared.geometry;
-  const names = ['position', 'normal', 'uv', 'uv1', 'color', 'tangent', 'materialIndex'] as const;
-  const offsets: number[] = [];
-  let stride = 0;
-  for (const name of names) { offsets.push(stride); if (geometry[name]) stride += 4; }
+  const attributeLayout = sceneAttributeLayout(geometry);
+  const {stride, offsets} = attributeLayout;
   const attributes = new Float32Array(geometry.vertexCount * stride);
   packVertexAttributes(geometry, attributes, stride, offsets, 0, geometry.vertexCount);
   const stacks = getTraversalStackSizes(tlas, blases);
-  const constants: Record<string, boolean | number> = {USE_BACKGROUND: !(qualityFlags & 4), USE_BACKGROUND_MAP: !!background,
-    USE_ENVMAP: !!environment, USE_GROUNDED_BACKGROUND: false, SAMPLING_PATTERN: 0, BEVEL_SAMPLES: 8,
-    TLAS_STACK_SIZE: Math.max(8, 2 ** Math.ceil(Math.log2(Math.max(1, stacks.tlas)))),
-    BLAS_STACK_SIZE: Math.max(32, 2 ** Math.ceil(Math.log2(Math.max(1, stacks.blas)))),
-    USE_UV: geometry.uv != null, USE_VERTEX_COLOR: geometry.color != null, ATTR_STRIDE: stride / 4,
-    ...wgpuMaterialConstants(prepared.materials, table, geometry, 8)};
-  const offsetNames: string[] = ['POSITION_OFF', 'NORMAL_OFF', 'UV_OFF', 'UV1_OFF', 'COLOR_OFF', 'TANGENT_OFF', 'MATERIALINDEX_OFF'];
-  for (let i = 0; i < offsetNames.length; i++) constants[offsetNames[i]] = offsets[i] / 4;
+  const constants: Record<string, boolean | number> = {...initialSceneConstants(), USE_BACKGROUND: !(qualityFlags & 4), USE_BACKGROUND_MAP: !!background,
+    USE_ENVMAP: !!environment, ...sceneTraversalConstants(stacks.tlas, stacks.blas), ...attributeLayout.constants,
+    ...wgpuMaterialConstants(prepared.materials, table, geometry, configuration.bevelSamples), SAMPLING_PATTERN: configuration.sampling.code};
   const features = {hasDisplacement: table.displacementMaps.length > 0,
     hasAlpha: false, hasSceneAlpha: Boolean(constants.HAS_ALPHA),
     hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
     hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES), blasLayoutMask: 1};
-  const shader = new TextEncoder().encode(wgpuShaderSource(constants, features, true));
   const mapCount = Number(constants.NUM_MAPS), mapInfo = new Float32Array(mapCount * 12);
   mapInfo.set(table.bufferData.mapInfo); mapInfo.set(table.bufferData.mapTransform, mapCount * 4);
   for (let i = 0; i < table.bufferData.mapUvChannel.length; i++) {
@@ -336,7 +336,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   }
   const emissive = new EmissiveTriangleCache().collect(prepared.emissiveBindings, prepared.materials);
   const {lightData, lightWidth, lightHeight, lightUniform, environmentPmf, choiceCount, totalWeight, emissiveTexels}
-    = nativeLighting(lights, table, emissive, estimateEnvironmentPower(environment));
+    = prepareNativeLightSampling(lights, table, emissive, estimateEnvironmentPower(environment));
   const rt = makeRayTraceUniform();
   rt.views.outputSize.set([width, height]); rt.views.scaleOffset.set([1, 1, 0, 0]);
   rt.views.lightsCount[0] = lights.length; rt.views.transmissiveOutputAlphaMin[0] = 1;
@@ -345,10 +345,11 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   rt.views.backgroundFlags[0] = (qualityFlags & 4 ? 0 : 1) | (background ? 2 : 0); rt.views.blasOffset[0] = tlas.buffer.byteLength / 16;
   rt.views.isEmpty[0] = Number(meshInstancesLength(prepared.instances) === 0); rt.views.bevel[0] = Number(!!(qualityFlags & 1));
   rt.views.dispersionWavelengths[0] = qualityFlags & 2 ? 3 : 1; rt.views.lightChoiceCount[0] = choiceCount;
-  rt.views.envLightPmf[0] = environmentPmf; rt.views.lightWeightTotal[0] = totalWeight;
-  rt.views.lightSamplingTextureWidth[0] = lightWidth; rt.views.lightChoiceTexelOffset[0] = emissiveTexels;
-  rt.views.sequenceSeed[0] = 12345; rt.views.zSobolLogSPP[0] = zSobolLog2SPP(64);
-  rt.views.bounces[0] = 6; rt.views.directLightCandidates[0] = 2;
+  writeTraceLighting(rt.views, {environmentPmf, choiceCount, totalWeight, lightWidth, emissiveTexels});
+  writeTraceSampling(rt.views, configuration.sampling);
+  rt.views.clamping[0] = configuration.clamping; rt.views.transmissiveOutputAlphaMin[0] = configuration.transmissiveAlphaMin;
+  rt.views.sampleSequenceOffset[0] = configuration.sequenceOffset;
+  writeTraceQuality(rt.views, {bounces: configuration.bounces, bevel: !!(qualityFlags & 1), dispersionWavelengths: qualityFlags & 2 ? 3 : 1, directLightCandidates: configuration.directLightCandidates});
   rt.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(constants);
   // Output packet: version, count, width, height, then 8-word resource descriptors
   // (id, kind[0=buffer,1=texture,2=WGSL,3=metadata], length, width,height,layers,format,offset).
@@ -374,8 +375,6 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   add(RESOURCE.LIGHT_SAMPLING, KIND.TEXTURE, new Uint8Array(lightData.buffer), lightWidth, lightHeight, 1, FORMAT.RGBA32_FLOAT);
   add(RESOURCE.ENERGY_LUT, KIND.TEXTURE, new Uint8Array(getOpenPbrEnergyLutData().buffer), OPENPBR_ENERGY_LUT_WIDTH, OPENPBR_ENERGY_LUT_HEIGHT, 1, FORMAT.R32_FLOAT);
   add(RESOURCE.DISPLACEMENT, KIND.TEXTURE, new Uint8Array(new Float32Array([Number.MAX_SAFE_INTEGER]).buffer), 1, 1, 1, FORMAT.R32_FLOAT);
-  add(RESOURCE.SOFTWARE_SHADER, KIND.WGSL, shader, 0, 0, 0, 0);
-  add(RESOURCE.SOFTWARE_HIT_SHADER, KIND.WGSL, new TextEncoder().encode(wgpuShaderSource(constants, features, true) + nativeHitDiagnostics(features, false, 'software')), 0, 0, 0, 0);
   const nativeLayout: NativeLayout = {
     hasAlpha: Boolean(constants.HAS_ALPHA), attributeStrideBytes: stride * 4,
     positionOffsetBytes: offsets[0] * 4, blasOffset: rt.views.blasOffset[0],
@@ -384,12 +383,25 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   };
   add(RESOURCE.METADATA, KIND.METADATA, nativeLayoutBytes(nativeLayout, nativeLayout.blasOffset, nativeLayout.isEmpty), 0, 0, 0, 0);
   const opaqueClosest = !!hardware && !features.hasDisplacement && hardware.geometries.some(g => g.opaque);
-  const hardwareShader = 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
-    nativeIntersections(features, nativeLayout.isEmpty, false, false, !!hardware, opaqueClosest));
-  add(RESOURCE.HWRT_SHADER, KIND.WGSL, new TextEncoder().encode(hardwareShader), 0, 0, 0, 0);
-  const diagnosticShader = 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
-    nativeIntersections(features, nativeLayout.isEmpty, true, false, !!hardware, opaqueClosest));
-  add(RESOURCE.HIT_SHADER, KIND.WGSL, new TextEncoder().encode(diagnosticShader + nativeHitDiagnostics(features, nativeLayout.isEmpty, hardware ? 'hardware' : 'both')), 0, 0, 0, 0);
+  const variantFlags = Number(nativeLayout.isEmpty) | Number(!!hardware) * 2 | Number(opaqueClosest) * 4;
+  function shader(id: number, source: () => string) {
+    add(id, KIND.WGSL, nativeShaderVariant(id, constants, features, variantFlags, source), 0, 0, 0, 0);
+  }
+  if (configuration.variants & 1) shader(RESOURCE.SOFTWARE_SHADER, () => wgpuShaderSource(constants, features, true));
+  if (configuration.variants & 2) shader(RESOURCE.HWRT_SHADER, () => 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
+    nativeIntersections(features, nativeLayout.isEmpty, false, false, !!hardware, opaqueClosest)));
+  if (configuration.variants & 4) {
+    shader(RESOURCE.SOFTWARE_HIT_SHADER, () => wgpuShaderSource(constants, features, true) + nativeHitDiagnostics(features, false, 'software'));
+    shader(RESOURCE.HIT_SHADER, () => 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
+      nativeIntersections(features, nativeLayout.isEmpty, true, false, !!hardware, opaqueClosest))
+      + nativeHitDiagnostics(features, nativeLayout.isEmpty, hardware ? 'hardware' : 'both'));
+  }
+  if (configuration.variants & 8) {
+    shader(RESOURCE.SOFTWARE_PATH_SHADER, () => wgpuShaderSource(constants, features, true,
+      nativePathIntersections(features, nativeLayout.isEmpty, false), true));
+    shader(RESOURCE.HWRT_PATH_SHADER, () => 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
+      nativePathIntersections(features, nativeLayout.isEmpty, true, !!hardware, opaqueClosest), true));
+  }
   // Both AS inputs remain explicitly indexed. Production retains source index
   // lookup; leaf-order regression diagnostics use sequence indices.
   const sequential = new Uint32Array(attributeLength(geometry.indices.array));
@@ -399,10 +411,6 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     }
   } else for (let i = 0; i < sequential.length; i++) sequential[i] = i;
   add(RESOURCE.INDICES, KIND.METADATA, new Uint8Array(sequential.buffer), 0, 0, 0, 0);
-  add(RESOURCE.SOFTWARE_PATH_SHADER, KIND.WGSL, new TextEncoder().encode(wgpuShaderSource(constants, features, true,
-    nativePathIntersections(features, nativeLayout.isEmpty, false), true)), 0, 0, 0, 0);
-  add(RESOURCE.HWRT_PATH_SHADER, KIND.WGSL, new TextEncoder().encode('enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
-    nativePathIntersections(features, nativeLayout.isEmpty, true, !!hardware, opaqueClosest), true)), 0, 0, 0, 0);
   const identity: number[] = [];
   let recordBase = tlas.buffer.byteLength / 16;
   for (let i = 0; i < blases.length; i++) {
@@ -590,31 +598,11 @@ function resourcePacket(records: number[][], parts: Uint8Array[], width: number,
   return result;
 }
 
-function nativeLighting(lights: AnalyticLightState[], table: MaterialData, emissive: EmissiveTriangle[],
-  environmentPower: number) {
-  const choices = new LightChoiceBuffer(); choices.reserve(1 + lights.length + emissive.length);
-  choices.push(LIGHT_CHOICE_ENVIRONMENT, 0, environmentPower);
-  for (let i = 0; i < lights.length; i++) choices.push(LIGHT_CHOICE_ANALYTIC, i, estimateAnalyticLightPower(lights[i]));
-  for (let i = 0; i < emissive.length; i++) choices.push(LIGHT_CHOICE_EMISSIVE_TRIANGLE, i, emissive[i].area * emissive[i].samplingLuminance);
-  const distribution = buildLightAliasTable(choices), lightPmfs = new Array<number>(lights.length).fill(0);
-  let environmentPmf = 0;
-  for (let i = 0; i < choices.count; i++) {
-    if (choices.sourceTypes[i] === LIGHT_CHOICE_ENVIRONMENT) environmentPmf = distribution.pmfs[i];
-    if (choices.sourceTypes[i] === LIGHT_CHOICE_ANALYTIC) lightPmfs[choices.sourceIndices[i]] = distribution.pmfs[i];
-    else if (choices.sourceTypes[i] === LIGHT_CHOICE_EMISSIVE_TRIANGLE) emissive[choices.sourceIndices[i]].selectionPmf = distribution.pmfs[i];
-  }
-  const emissiveTexels = emissive.length * 6, profileStart = emissiveTexels + Math.max(choices.count, 1);
-  const profiles = packIESProfiles(lights, profileStart);
-  const lightWidth = Math.max(16, Math.ceil(Math.sqrt(Math.max(profileStart + profiles.texelCount, 1)) / 16) * 16);
-  const lightHeight = Math.ceil(Math.max(profileStart + profiles.texelCount, 1) / lightWidth);
-  const lightData = new Float32Array(lightWidth * lightHeight * 4);
-  if (emissive.length) packEmissiveTriangles(emissive, lightData);
-  new Uint32Array(lightData.buffer).set(distribution.choices, emissiveTexels * 4);
-  lightData.set(profiles.data, profileStart * 4);
+function prepareNativeLightSampling(lights: AnalyticLightState[], table: MaterialData, emissive: EmissiveTriangle[], environmentPower: number) {
+  const lighting = prepareSceneLightSampling(lights, emissive, environmentPower, 4096);
   const lightUniform = new Float32Array(64 * 24);
-  lightUniform.set(packWgpuAnalyticLights(lights, table.lightTexturesIndices, lightPmfs, i => profiles.offsets[i]));
-  return {lightData, lightWidth, lightHeight, lightUniform, environmentPmf,
-    choiceCount: choices.count, totalWeight: distribution.totalWeight, emissiveTexels};
+  lightUniform.set(packSceneAnalyticLights(lights, table.lightTexturesIndices, lighting.analyticPmfs, i => lighting.profiles.offsets[i]));
+  return {...lighting, lightUniform};
 }
 
 // Version 1: dimensions/visibility plus linear RGBA32F environment/background.
@@ -635,7 +623,7 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
   const background = u[8] * u[9] ? {width: u[8], height: u[9], data: f.slice(12 + envLength)} : undefined;
   const distribution = environment ? envMapDistribution(environment) : undefined;
   const environmentPower = estimateEnvironmentPower(environment);
-  const lighting = nativeLighting(state.lights, state.table, state.emissive, environmentPower);
+  const lighting = prepareNativeLightSampling(state.lights, state.table, state.emissive, environmentPower);
   const rt = makeRayTraceUniform();
   new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   if (!background && !u[3]) rt.views.backgroundColor.set(f.slice(4, 8));
@@ -656,9 +644,7 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
 
 function packLightingUniform(rt: ReturnType<typeof makeRayTraceUniform>, environmentPmf: number, choiceCount: number,
   totalWeight: number, lightWidth: number, emissiveTexels: number) {
-  rt.views.envLightPmf[0] = environmentPmf; rt.views.lightChoiceCount[0] = choiceCount;
-  rt.views.lightWeightTotal[0] = totalWeight; rt.views.lightSamplingTextureWidth[0] = lightWidth;
-  rt.views.lightChoiceTexelOffset[0] = emissiveTexels;
+  writeTraceLighting(rt.views, {environmentPmf, choiceCount, totalWeight, lightWidth, emissiveTexels});
 }
 function lightFromRecord(u: Uint32Array, f: Float32Array, off: number, texture: TextureState | undefined): AnalyticLightState {
   let light: AnalyticLightState;
@@ -682,7 +668,7 @@ export function sceneLightParameters(bytes: Uint8Array, token: number): Uint8Arr
   const light = lightFromRecord(u, f, 4, previous.type === 'RectLight' ? previous.texture : undefined);
   if (light.type === 'SpotLight' && previous.type === 'SpotLight') light.iesProfile = previous.iesProfile;
   const lights = state.lights.slice(); lights[u[1]] = light;
-  const lighting = nativeLighting(lights, state.table, state.emissive, state.environmentPower);
+  const lighting = prepareNativeLightSampling(lights, state.table, state.emissive, state.environmentPower);
   const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
   pendingLighting.set(token, {lights, rt: rt.buffer, environmentPower: state.environmentPower});
@@ -726,7 +712,7 @@ function packTransformUpdate(stage: TransformStage, tlas: FlattendBVH, token: nu
   const bvh = new Uint8Array(tlas.buffer.byteLength + blas.byteLength);
   bvh.set(new Uint8Array(tlas.buffer)); bvh.set(blas, tlas.buffer.byteLength);
   const emissive = new EmissiveTriangleCache().collect(bindings, state.ordered);
-  const lighting = nativeLighting(state.lights, state.table, emissive, state.environmentPower);
+  const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
   const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   rt.views.blasOffset[0] = tlas.buffer.byteLength / 16;
   rt.views.isEmpty[0] = Number(meshInstancesLength(instances) === 0);
@@ -831,7 +817,7 @@ function packGeometryUpdate(stage: GeometryStage, tlas: FlattendBVH, token: numb
   const attributes = new Float32Array(merged.vertexCount * stride);
   packVertexAttributes(merged, attributes, stride, offsets, 0, merged.vertexCount);
   const emissive = new EmissiveTriangleCache().collect(prepared.emissiveBindings, state.ordered);
-  const lighting = nativeLighting(state.lights, state.table, emissive, state.environmentPower);
+  const lighting = prepareNativeLightSampling(state.lights, state.table, emissive, state.environmentPower);
   const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   rt.views.blasOffset[0] = tlas.buffer.byteLength / 16; rt.views.isEmpty[0] = Number(meshInstancesLength(instances) === 0);
   packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);

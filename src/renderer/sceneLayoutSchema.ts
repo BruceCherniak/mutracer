@@ -14,7 +14,7 @@ function record(fields: Field[]): Record<string, number> {
 // bindings. Descriptor offsets are u32 words; uniform offsets are bytes.
 export const WORD_BYTES = 4;
 export const protocolVersions = {SCENE: 4, RESOURCE_PACKET: 1};
-export const records = {
+export function sceneRecords() { return {
   HEADER: record([field('VERSION'), field('LENGTH'), field('WIDTH'), field('HEIGHT'),
     field('GEOMETRY_COUNT'), field('MESH_COUNT'), field('MATERIAL_COUNT'), field('LIGHT_COUNT'), field('TEXTURE_COUNT'),
     field('GEOMETRY_OFFSET'), field('MESH_OFFSET'), field('MATERIAL_OFFSET'), field('LIGHT_OFFSET'), field('TEXTURE_OFFSET'),
@@ -36,9 +36,13 @@ export const records = {
     field('RESERVED', 3), field('TRANSFORM', 16)]),
   BATCH: record([field('COUNT'), field('TRANSFORMS'), field('COLORS'), field('RESERVED')]),
   EXTENSION: record([field('ID'), field('X'), field('Y'), field('Z')]),
+  SETTINGS: record([field('STRUCT_SIZE'), field('SAMPLING_PATTERN'), field('SEED'), field('MAX_SAMPLES'),
+    field('BOUNCES', 2), field('DIRECT_LIGHT_CANDIDATES', 2), field('BEVEL_SAMPLES', 2), field('CLAMPING', 2),
+    field('TRANSMISSIVE_ALPHA_MIN', 2), field('SEQUENCE_OFFSET'), field('VARIANTS')]),
   PACKET_HEADER: record([field('VERSION'), field('COUNT'), field('WIDTH'), field('HEIGHT')]),
   PACKET_ENTRY: record([field('ID'), field('KIND'), field('LENGTH'), field('WIDTH'), field('HEIGHT'), field('LAYERS'), field('FORMAT'), field('BYTE_OFFSET')])
 };
+}
 export const resourceIds = {
   BVH: 1, INSTANCES: 2, ATTRIBUTES: 3, MATERIALS: 4, MAP_INFO: 5, CAMERA: 6, TRACE_UNIFORM: 7, LIGHT_UNIFORM: 8,
   COLOR: 10, NORMAL: 11, ALBEDO: 12, SHADOW_CATCHER: 13, ATLAS: 20, ENVIRONMENT: 21, ENVIRONMENT_CDF: 22,
@@ -77,8 +81,11 @@ export function rayTraceBindGroupLayouts(): GPUBindGroupLayoutDescriptor[] {
   return bindGroups.map(group => ({label: group.label, entries: group.bindings.map(binding => binding.layout)}));
 }
 
+export function rayTraceUniformOffsets() {
 const uniform = makeRayTraceUniform();
-export const rayTraceUniform = Object.fromEntries(Object.entries(uniform.views).map(([name, view]) =>
+const rayTraceUniform = Object.fromEntries(Object.entries(uniform.views).map(([name, view]) =>
   [name.replace(/([a-z0-9])([A-Z])/g, '$1_$2').replace(/([A-Z])([A-Z][a-z])/g, '$1_$2').toUpperCase(), view.byteOffset]));
 rayTraceUniform.BYTES = uniform.buffer.byteLength;
+return rayTraceUniform;
+}
 export const uniformSizes = {CAMERA_BYTES: 144, LIGHT_BYTES: 64 * 6 * 4 * WORD_BYTES};

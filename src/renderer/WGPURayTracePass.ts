@@ -1,7 +1,8 @@
+import {initialSceneConstants, sceneAttributeLayout, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, traceSampling, writeTraceSampling} from './sceneAssembly.js';
 import {rayTraceBindGroupLayouts} from './sceneLayoutSchema.js';
 import { wgpuMaterialConstants } from './wgpuMaterialConstants.js';
 import { wgpuShaderSource } from './wgpuShaderSource.js';
-import { makeRayTraceUniform, packWgpuAnalyticLights, WGPU_SCENE_BUFFER_MIN_BYTES } from './wgpuSceneUniform.js';
+import { makeRayTraceUniform, WGPU_SCENE_BUFFER_MIN_BYTES } from './wgpuSceneUniform.js';
 import { constants } from './webgl.js';
 import { MATERIAL_FLOAT_COUNT } from './materialLayoutSchema.js';
 import { normalizeBounces } from './pathLimits.js';
@@ -16,7 +17,7 @@ import { cameraApertureRadius } from './cameraLens.js';
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
 import { packCameraUniform } from './cameraUniform.js';
 import { SHADOW_CATCHER_ACCUMULATION_BYTES } from './wgsl/chunks/shadowCatcherAccumulation.wgsl.js';
-import { samplingPatternCode, zSobolLog2SPP, type SamplingPattern } from './sampling.js';
+import type { SamplingPattern } from './sampling.js';
 import { DEPTH_SAMPLE_COUNT, packDepthSampleArea, unpackDepthSamples, type DepthSampleArea } from './depthQuery.js';
 import { MeshMembershipCache } from './meshMembership.js';
 import { mergeRefitRanges } from './bvhAccel.js';
@@ -70,20 +71,10 @@ import {
   type ShaderCompilationDiagnostics
 } from './RenderingPipeline.js';
 import {
-  buildLightAliasTable,
   EmissiveTriangleCache,
   LightChoiceBuffer,
   type EmissiveTriangle,
-  estimateAnalyticLightPower,
   estimateEnvironmentPower,
-  LIGHT_CHOICE_ANALYTIC,
-  LIGHT_CHOICE_EMISSIVE_TRIANGLE,
-  LIGHT_CHOICE_ENVIRONMENT,
-  LIGHT_DOMAIN_ENVIRONMENT,
-  LIGHT_DOMAIN_INFINITE,
-  LIGHT_DOMAIN_LOCAL_AND_EMISSIVE,
-  packEmissiveTriangles,
-  packIESProfiles
 } from './lightSampling.js';
 import {
   getOpenPbrEnergyLutData,
@@ -167,7 +158,7 @@ export function isWebGPUPipelineSpecializationFailure(...errors: unknown[]) {
 export { makeRayTraceUniform } from './wgpuSceneUniform.js';
 export function packAnalyticsLightsToBuffer(lights: AnalyticLight[], texturesIndices: number[], selectionPmfs: number[],
   iesProfileTexelOffsets: ArrayLike<number> = []) {
-  return packWgpuAnalyticLights(lights, texturesIndices, selectionPmfs, i => iesProfileTexelOffsets[i]);
+  return packSceneAnalyticLights(lights, texturesIndices, selectionPmfs, i => iesProfileTexelOffsets[i]);
 }
 
 class WGPURayTracePass {
@@ -316,13 +307,7 @@ class WGPURayTracePass {
   private _compiledHasAlpha = true;
   private _compiledSceneHasAlpha = true;
   private _alphaBlendStrategy: AlphaBlendStrategy = 'stochastic';
-  private _constants: Record<string, boolean | number> = {
-    USE_BACKGROUND: false,
-    USE_BACKGROUND_MAP: false,
-    USE_GROUNDED_BACKGROUND: false,
-    SAMPLING_PATTERN: 0,
-    BEVEL_SAMPLES: DEFAULT_BEVEL_SAMPLES
-  };
+  private _constants = initialSceneConstants();
   private _prevPipelineConstants: Record<string, boolean | number> = {};
   private _prevDefinesCode = '';
 
@@ -1389,15 +1374,14 @@ class WGPURayTracePass {
   }
 
   setSamplingPattern(pattern: SamplingPattern, maxSamples: number, sequenceSeed = 0) {
-    const code = samplingPatternCode(pattern);
-    const logSPP = zSobolLog2SPP(code === 1 ? maxSamples - 1 : maxSamples);
+    const sampling = traceSampling(pattern, maxSamples, sequenceSeed);
+    const {code, logSPP} = sampling;
     const views = this._rtUniform.views;
     const changed = this._constants.SAMPLING_PATTERN !== code ||
       views.sequenceSeed[0] !== (sequenceSeed >>> 0) ||
       (code === 1 && views.zSobolLogSPP[0] !== logSPP);
     this._constants.SAMPLING_PATTERN = code;
-    views.sequenceSeed[0] = sequenceSeed;
-    views.zSobolLogSPP[0] = logSPP;
+    writeTraceSampling(views, sampling);
     return changed;
   }
 
@@ -1430,10 +1414,7 @@ class WGPURayTracePass {
   }
 
   setQuality(options: { bounces: number; bevel: boolean; dispersionWavelengths: 1 | 3; directLightCandidates: number }) {
-    this._rtUniform.views.bounces[0] = normalizeBounces(options.bounces);
-    this._rtUniform.views.bevel[0] = +options.bevel;
-    this._rtUniform.views.dispersionWavelengths[0] = options.dispersionWavelengths;
-    this._rtUniform.views.directLightCandidates[0] = normalizeDirectLightCandidates(options.directLightCandidates);
+    writeTraceQuality(this._rtUniform.views, options);
   }
 
   private _setEnvMap(envImage: EnvironmentMapSource | undefined) {
@@ -1819,53 +1800,13 @@ class WGPURayTracePass {
   }
 
   private _updateLightSamplingData() {
-    const choices = this._lightChoices;
-    choices.reserve(1 + this._analyticLights.length + this._emissiveTriangles.length);
-    choices.push(LIGHT_CHOICE_ENVIRONMENT, 0, estimateEnvironmentPower(this._envImageSource));
-    this._analyticLights.forEach((light, i) => choices.push(LIGHT_CHOICE_ANALYTIC, i, estimateAnalyticLightPower(light)));
-    this._emissiveTriangles.forEach((triangle, i) => choices.push(LIGHT_CHOICE_EMISSIVE_TRIANGLE, i, triangle.area * triangle.samplingLuminance));
-    const distribution = buildLightAliasTable(choices);
-    const domainDiagnostics = {
-      environment: { count: 0, weight: 0, pmf: 0 },
-      infinite: { count: 0, weight: 0, pmf: 0 },
-      localAndEmissive: { count: 0, weight: 0, pmf: 0 }
-    };
-    this._analyticLightSelectionPmfs = new Array(
-      this._analyticLights.length
-    ).fill(0);
-    this._rtUniform.views.envLightPmf[0] = 0;
-    const domains = [domainDiagnostics.environment, domainDiagnostics.infinite, domainDiagnostics.localAndEmissive];
-    for (let i = 0; i < choices.count; i++) {
-      const type = choices.sourceTypes[i], source = choices.sourceIndices[i];
-      const pmf = distribution.pmfs[i];
-      const domainIndex = type === LIGHT_CHOICE_ENVIRONMENT ? LIGHT_DOMAIN_ENVIRONMENT :
-        type === LIGHT_CHOICE_ANALYTIC && this._analyticLights[source]?.type === 'DirectionalLight' ?
-          LIGHT_DOMAIN_INFINITE : LIGHT_DOMAIN_LOCAL_AND_EMISSIVE;
-      const domain = domains[domainIndex];
-      domain.count++; domain.weight += choices.weights[i]; domain.pmf += pmf;
-      if (type === LIGHT_CHOICE_ENVIRONMENT) this._rtUniform.views.envLightPmf[0] = pmf;
-      else if (type === LIGHT_CHOICE_ANALYTIC) this._analyticLightSelectionPmfs[source] = pmf;
-      else this._emissiveTriangles[source].selectionPmf = pmf;
-    }
-    this._lightDomainDiagnostics = domainDiagnostics;
-    this._rtUniform.views.lightChoiceCount[0] = choices.count;
-    this._rtUniform.views.lightWeightTotal[0] = distribution.totalWeight;
-
-    const emissiveTexels = this._emissiveTriangles.length * 6;
-    const choiceTexels = Math.max(choices.count, 1);
-    const profileStartTexel = emissiveTexels + choiceTexels;
-    const packedIES = packIESProfiles(this._analyticLights, profileStartTexel);
-    this._iesProfileTexelOffsets = packedIES.offsets;
-    const totalTexels = Math.max(profileStartTexel + packedIES.texelCount, 1);
-    const maxDimension = this._device.limits.maxTextureDimension2D;
-    const width = Math.min(
-      maxDimension,
-      Math.max(16, Math.ceil(Math.sqrt(totalTexels) / 16) * 16)
-    );
-    const height = Math.ceil(totalTexels / width);
-    if (height > maxDimension) {
-      throw new Error('Too many emissive triangles for the light sampling texture.');
-    }
+    const lighting = prepareSceneLightSampling(this._analyticLights, this._emissiveTriangles,
+      estimateEnvironmentPower(this._envImageSource), this._device.limits.maxTextureDimension2D, this._lightChoices, this._lightSamplingScratch);
+    this._analyticLightSelectionPmfs = lighting.analyticPmfs;
+    this._iesProfileTexelOffsets = lighting.profiles.offsets;
+    this._lightDomainDiagnostics = lighting.domains;
+    const {lightWidth: width, lightHeight: height, lightData: textureData} = lighting;
+    writeTraceLighting(this._rtUniform.views, lighting);
     const resized = !this._lightSamplingTexture || width !== this._lightSamplingTextureSize[0] || height !== this._lightSamplingTextureSize[1];
     if (
       !this._lightSamplingTexture ||
@@ -1882,17 +1823,6 @@ class WGPURayTracePass {
       this._lightSamplingTextureSize = [width, height];
       this._needsUpdateBindGroups = true;
     }
-    const textureData = this._lightSamplingScratch?.length === width * height * 4
-      ? this._lightSamplingScratch : new Float32Array(width * height * 4);
-    textureData.fill(0);
-    if (this._emissiveTriangles.length) {
-      packEmissiveTriangles(this._emissiveTriangles, textureData);
-    }
-    new Uint32Array(textureData.buffer).set(
-      distribution.choices,
-      emissiveTexels * 4
-    );
-    textureData.set(packedIES.data, profileStartTexel * 4);
     const previous = this._lightSamplingData;
     const full = resized || !previous || this._lightSamplingTriangleCount !== this._emissiveTriangles.length;
     const words = new Uint32Array(textureData.buffer);
@@ -1917,8 +1847,6 @@ class WGPURayTracePass {
     this._lightSamplingScratch = previous;
     this._lightSamplingData = textureData;
     this._lightSamplingTriangleCount = this._emissiveTriangles.length;
-    this._rtUniform.views.lightSamplingTextureWidth[0] = width;
-    this._rtUniform.views.lightChoiceTexelOffset[0] = emissiveTexels;
     this._needsUpdateAnalyticLightsBuffer = true;
     this._needsUpdateLightSamplingData = false;
   }
@@ -1993,26 +1921,8 @@ class WGPURayTracePass {
     );
     this._needsUpdateLightSamplingData = true;
 
-    const attrNames = [
-      'position',
-      'normal',
-      'uv',
-      'uv1',
-      'color',
-      'tangent',
-      'materialIndex'
-    ] as const;
-    const attributes = attrNames.map((a) => mergedGeometry[a]);
-    const fixedSize = 4;
-    let stride = 0;
-    const offsets = attrNames.map((attrName, idx) => {
-      const attr = attributes[idx];
-      const offset = stride;
-      if (attr) {
-        stride += fixedSize;
-      }
-      return offset;
-    });
+    const attributeLayout = sceneAttributeLayout(mergedGeometry);
+    const {stride, offsets} = attributeLayout;
 
     const attrBufferData = new F32(
       mergedGeometry.vertexCount * stride
@@ -2048,17 +1958,7 @@ class WGPURayTracePass {
       0
     );
 
-    Object.assign(this._constants, {
-      TLAS_STACK_SIZE: retainedShaderCapacity(traversalStackSizes.tlas, Number(this._constants.TLAS_STACK_SIZE ?? 0)),
-      BLAS_STACK_SIZE: retainedShaderCapacity(traversalStackSizes.blas, Number(this._constants.BLAS_STACK_SIZE ?? 0), 32),
-      USE_UV: mergedGeometry.uv != null,
-      USE_VERTEX_COLOR: mergedGeometry.color != null,
-      ATTR_STRIDE: stride / fixedSize,
-      ...offsets.reduce((obj, off, idx) => {
-        obj[attrNames[idx].toUpperCase() + '_OFF'] = off / fixedSize;
-        return obj;
-      }, {} as Record<string, number>)
-    });
+    Object.assign(this._constants, sceneTraversalConstants(traversalStackSizes.tlas, traversalStackSizes.blas, this._constants), attributeLayout.constants);
     this._updateMaterialConstants(materials, materialData, mergedGeometry);
     this._updateTextures(materialData);
 

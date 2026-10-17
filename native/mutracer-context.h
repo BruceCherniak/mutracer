@@ -22,9 +22,10 @@ extern "C" {
  * camera/material edit submitted through the same raw descriptor. Commit can
  * temporarily hold both scenes' resources. Descriptors are in mutracer-scene.h.
  *
- * render adds samples to the current accumulation, total 1..4096. Seed 12345,
- * bounces 6 and Sobol configuration match the raw probe. reset clears accumulation
- * and temporary ray state, keeping the committed scene. Independent contexts keep
+ * render adds samples to the current accumulation, total 1..4096. The default
+ * commit uses seed 12345, bounces 6 and Sobol, matching the raw probe. A commit
+ * with settings retains those settings for blocking and job renders. reset clears
+ * accumulation and temporary ray state, keeping the committed scene. Independent contexts keep
  * independent accumulation. Render/read/reset GPU failures mark the scene failed;
  * commit a new scene before further use. Device-loss recovery is unavailable.
  *
@@ -59,6 +60,30 @@ int32_t mt_context_backend(mt_context handle, uint32_t *active, char *reason, si
 int32_t mt_context_create(mt_context *output, char *error, size_t capacity);
 int32_t mt_context_destroy(mt_context handle, char *error, size_t capacity);
 int32_t mt_context_commit(mt_context handle, const uint8_t *input, size_t length, char *error, size_t capacity);
+/* Settings are copied by commit_with_settings. Initialize with
+ * mt_render_settings_default, then change fields. Defaults: Sobol, seed 12345,
+ * max_samples 64, bounces 6, direct-light candidates 2, bevel samples 8, clamping
+ * 0, transmissive alpha minimum 1, sequence offset 0. These match commit.
+ * sampling_pattern: 0=Sobol, 1=ZSobol, 2=random. max_samples configures the
+ * sequence; render still allows total 1..4096 samples. seed is any u32.
+ * bounces round/clamp to 1..20 (NaN selects 1). Direct-light candidates round/
+ * clamp to 1..16 (nonfinite selects 4); bevel samples to 1..32 (nonfinite selects
+ * 8). clamping must be finite; 0 disables it. Transmissive alpha must be finite.
+ * Scene quality flags still select bevel and dispersion. sample_sequence_offset
+ * selects the first sequence index. reserved must be 0; struct_size must match.
+ * Successful commit resets accumulation and expires the previous job. Rejection
+ * preserves the old scene, settings and output; active jobs must finish first.
+ */
+typedef struct mt_render_settings {
+  uint32_t struct_size, sampling_pattern, seed, max_samples;
+  double bounces, direct_light_candidates, bevel_samples, clamping;
+  double transmissive_output_alpha_min;
+  uint32_t sample_sequence_offset, reserved;
+} mt_render_settings;
+/* Pure initialization, no device or owner-thread requirement. Returns 1 for NULL. */
+int32_t mt_render_settings_default(mt_render_settings *output);
+int32_t mt_context_commit_with_settings(mt_context handle, const uint8_t *input, size_t length,
+  const mt_render_settings *settings, char *error, size_t capacity);
 int32_t mt_context_render(mt_context handle, uint32_t additional_samples, char *error, size_t capacity);
 int32_t mt_context_reset(mt_context handle, char *error, size_t capacity);
 /* Replace the Camera[32] record described in mutracer-scene.h (exactly 128 bytes).

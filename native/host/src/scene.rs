@@ -6,6 +6,14 @@ use crate::layout::{
     resource as res, sampler, texture as t,
 };
 unsafe extern "C" {
+    fn mt_core_scene_configure(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
+
     fn mt_core_native_hardware_scene(
         input: *const u8,
         length: usize,
@@ -574,6 +582,7 @@ pub(super) fn prepare_camera(bytes: &[u8], width: u32, height: u32) -> Result<Ve
 // Every AOT arena reset/collection leaves these explicitly rooted TS objects alive.
 pub(super) struct PreparedState {
     token: u32,
+    pub(super) settings: settings::RenderSettings,
     indexed: bool,
     material_count: usize,
     light_count: usize,
@@ -992,9 +1001,23 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
         hardware_positions,
     })
 }
+#[cfg(test)]
 pub(super) fn prepare_retained(
     bytes: &[u8],
     hardware: bool,
+) -> Result<(Scene, HashMap<String, Vec<u8>>, PreparedState)> {
+    prepare_retained_with_settings(
+        bytes,
+        hardware,
+        u32::from(hardware),
+        &settings::RenderSettings::default(),
+    )
+}
+pub(super) fn prepare_retained_with_settings(
+    bytes: &[u8],
+    hardware: bool,
+    backend: u32,
+    settings: &settings::RenderSettings,
 ) -> Result<(Scene, HashMap<String, Vec<u8>>, PreparedState)> {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
     let token = NEXT
@@ -1006,6 +1029,7 @@ pub(super) fn prepare_retained(
         .map_err(|_| "Native preparation token space exhausted")?;
     let mut state = PreparedState {
         token,
+        settings: *settings,
         indexed: hardware,
         authoritative_shader: Vec::new(),
         authoritative_indices: Vec::new(),
@@ -1022,11 +1046,15 @@ pub(super) fn prepare_retained(
             0
         },
     };
-    let (scene, assets) = prepare_impl(bytes, token, hardware, false)?;
-    state.authoritative_shader = assets
-        .get("native-33")
-        .ok_or("Missing authoritative shader")?
-        .clone();
+    let (scene, assets) = prepare_impl(
+        bytes,
+        token,
+        hardware,
+        false,
+        settings,
+        if backend == 1 { 2 } else { 1 },
+    )?;
+    state.authoritative_shader = assets.get("native-33").cloned().unwrap_or_default();
     state.authoritative_as_indices = assets.get("native-42").cloned().unwrap_or_default();
     state.authoritative_bounds = assets.get("native-38").cloned().unwrap_or_default();
     state.authoritative_indices = assets
@@ -1042,10 +1070,24 @@ pub(super) fn prepare_diagnostic(
     bytes: &[u8],
     hardware: bool,
 ) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
-    prepare_impl(bytes, 0, hardware, true)
+    prepare_impl(
+        bytes,
+        0,
+        hardware,
+        true,
+        &settings::RenderSettings::default(),
+        15,
+    )
 }
 pub(super) fn prepare(bytes: &[u8]) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
-    prepare_impl(bytes, 0, false, false)
+    prepare_impl(
+        bytes,
+        0,
+        false,
+        false,
+        &settings::RenderSettings::default(),
+        1,
+    )
 }
 type NativeStep = unsafe extern "C" fn(*const u8, usize, u32, *mut *const u8, *mut usize);
 fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
@@ -1078,6 +1120,8 @@ fn prepare_impl(
     token: u32,
     hardware: bool,
     diagnostic: bool,
+    settings: &settings::RenderSettings,
+    variants: u32,
 ) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
     let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
     let started = Instant::now();
@@ -1086,6 +1130,10 @@ fn prepare_impl(
     // The ABI bytes are borrowed only during this call; the AOT decoder copies
     // every retained array. Copy result bytes before reset or collection.
     init_core();
+    let configured = native_step(mt_core_scene_configure, &settings.wire(variants)?, token)?;
+    if configured[..4] != 1u32.to_le_bytes() {
+        return Err("Invalid render settings".into());
+    }
     let work = (|| -> Result<Vec<u8>> {
         if hardware {
             let result = native_step(mt_core_native_hardware_scene, bytes, token)?;
@@ -1143,7 +1191,7 @@ fn prepare_impl(
     }
     let count = w.u(ph::COUNT);
     if w.u(ph::VERSION) != 1
-        || !(24..=27).contains(&count)
+        || !(19..=27).contains(&count)
         || packet.len() < (ph::WORDS + count * pe::WORDS) * WORD_BYTES
     {
         return Err("Invalid native resource packet".into());
@@ -1218,6 +1266,12 @@ fn prepare_impl(
             return Err("Duplicate native resource".into());
         }
     }
+    if shader.is_empty() && assets.contains_key("native-33") {
+        shader = "native-33".into();
+    }
+    if shader.is_empty() {
+        return Err("Missing requested production shader".into());
+    }
     let pixels = w.u(ph::WIDTH) * w.u(ph::HEIGHT);
     for id in res::COLOR..=res::SHADOW_CATCHER {
         let size = pixels * if id == res::SHADOW_CATCHER { 48 } else { 16 };
@@ -1255,10 +1309,7 @@ fn prepare_impl(
             material_offsets: None,
             hwrt: None,
             native_bvh: None,
-            sampling: Some(Sampling {
-                max_samples: 64,
-                pattern: "sobol".into(),
-            }),
+            sampling: None,
         },
         assets,
     ))
@@ -1320,6 +1371,62 @@ pub unsafe extern "C" fn mt_probe_render_scene(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    unsafe extern "C" {
+        fn mt_core_shader_cache(output: *mut *const u8, size: *mut usize);
+    }
+    fn shader_stats() -> [u32; 3] {
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            mt_core_shader_cache(&mut pointer, &mut size);
+        }
+        let packet = unsafe { copy_core_result(pointer, size, 16).unwrap() };
+        std::array::from_fn(|i| u32::from_le_bytes(packet[i * 4..i * 4 + 4].try_into().unwrap()))
+    }
+    #[test]
+    fn production_emits_one_backend_and_reuses_aot_shader_generation() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _entry = ENTRY_LOCK.lock().unwrap();
+        init_core();
+        let settings = settings::RenderSettings {
+            seed: 67890,
+            bounces: f64::NAN,
+            direct_light_candidates: f64::INFINITY,
+            bevel_samples: 17.7,
+            sampling_pattern: 2,
+            ..Default::default()
+        };
+        for backend in [0, 1] {
+            let (scene, assets, retained) =
+                prepare_retained_with_settings(&input(), backend == 1, backend, &settings).unwrap();
+            let ids = [30, 33, 34, 36, 37, 39]
+                .into_iter()
+                .filter(|id| assets.contains_key(&format!("native-{id}")))
+                .collect::<Vec<_>>();
+            assert_eq!(ids, vec![if backend == 0 { 30 } else { 33 }]);
+            let uniform = &assets["native-7"];
+            let word =
+                |offset: usize| u32::from_le_bytes(uniform[offset..offset + 4].try_into().unwrap());
+            assert_eq!(word(layout::ray_uniform::SEQUENCE_SEED), 67890);
+            assert_eq!(word(layout::ray_uniform::BOUNCES), 1);
+            assert_eq!(word(layout::ray_uniform::DIRECT_LIGHT_CANDIDATES), 4);
+            let first = shader_stats();
+            let (again, repeated, _) =
+                prepare_retained_with_settings(&input(), backend == 1, backend, &settings).unwrap();
+            assert_eq!(assets[&scene.shader], repeated[&again.shader]);
+            let second = shader_stats();
+            assert_eq!(second[0], first[0]);
+            assert_eq!(second[1], first[1] + 1);
+            drop(retained);
+        }
+        let (_, diagnostics) = prepare_diagnostic(&input(), false).unwrap();
+        assert!(
+            [30, 33, 34, 36, 37, 39]
+                .into_iter()
+                .all(|id| diagnostics.contains_key(&format!("native-{id}")))
+        );
+    }
+
     #[test]
     fn camera_rejects_finite_inputs_with_nonfinite_packing_and_recovers() {
         let _test = ABI_TEST_LOCK.lock().unwrap();

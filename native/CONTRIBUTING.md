@@ -53,6 +53,28 @@ path diagnostic tools compare authoritative hardware identities against software
 image statistics use a high-sample software reference. Do not treat a fallback
 as a hardware success or native OIDN as browser-model numerical parity.
 
+## Shared scene assembly and render settings
+
+The raw context compiles the shared TypeScript scene assembly. Both paths use
+the same attribute layout, light choices/PMFs/IES packing, stack capacity and
+uniform setters. Render limits live in a platform-independent module; the browser
+pipeline reexports the same constants and normalizers.
+
+Use `native/generate-layout-schema.mjs` after editing the shared layout schema.
+Its `--check` runs with typecheck. Descriptor/uniform/resource offsets and the
+displacement quantization contract are generated for TS, Rust and C.
+
+`npm run native:settings` runs scene/context/jobs/camera validation, then checks
+the settings C API on ordinary, alpha, IES and displacement fixtures with both
+backends. It asserts the actual backend, all three sampling patterns, finite
+AOVs, default normalization, rejection preservation and exact blocking/job
+accumulation. Settings behavior and defaults are in mutracer-context.h.
+
+Production commits emit their selected shader; diagnostic variants are requested
+by diagnostic tools. The AOT cache retains at most 32 generated variants and checks
+the complete signature after hashing. Rust tests check the actual AOT cache reuse
+and that production packets contain exactly one backend shader.
+
 ## Native storage access validation
 
 `native/storage-lowering.mjs` derives concrete pixel and numeric validation kernels

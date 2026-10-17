@@ -13,6 +13,8 @@ const MAX_CONTEXTS: usize = 8;
 struct Context {
     gpu: GpuDevice,
     backend: u32,
+    render_seed: u32,
+    render_bounces: f32,
     fallback_reason: String,
     scene: Option<GpuScene>,
     spare_buffers: HashMap<usize, wgpu::Buffer>,
@@ -161,8 +163,11 @@ fn prepare_software_fallback(
         .native_layout
         .as_ref()
         .is_some_and(|layout| layout.indexed)
+        || !assets.contains_key("native-30")
     {
-        let (software, software_assets, software_retained) = scene::prepare_retained(bytes, false)?;
+        let settings = retained.settings;
+        let (software, software_assets, software_retained) =
+            scene::prepare_retained_with_settings(bytes, false, 0, &settings)?;
         *assets = software_assets;
         *retained = software_retained;
         Ok(software)
@@ -212,6 +217,8 @@ pub unsafe extern "C" fn mt_context_create_with_backend(
             Context {
                 gpu,
                 backend,
+                render_seed: 12345,
+                render_bounces: 6.,
                 fallback_reason: String::new(),
                 scene: None,
                 spare_buffers: HashMap::new(),
@@ -251,20 +258,46 @@ pub unsafe extern "C" fn mt_context_commit(
     error: *mut c_char,
     capacity: usize,
 ) -> i32 {
+    unsafe {
+        mt_context_commit_with_settings(
+            handle,
+            input,
+            length,
+            &settings::RenderSettings::default(),
+            error,
+            capacity,
+        )
+    }
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_context_commit_with_settings(
+    handle: u64,
+    input: *const u8,
+    length: usize,
+    settings: *const settings::RenderSettings,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
     action(error, capacity, |registry| {
         let context = context(registry, handle)?;
         idle(context)?;
+        if settings.is_null() {
+            return Err("Null render settings".into());
+        }
+        let settings = unsafe { *settings };
         if input.is_null() || length > scene::MAX_BYTES {
             return Err("Null or oversized scene input".into());
         }
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
         let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
         let started = Instant::now();
-        let (mut scene, mut assets, mut retained) = scene::prepare_retained(
+        let (mut scene, mut assets, mut retained) = scene::prepare_retained_with_settings(
             bytes,
             context.backend == 1
                 && context.gpu.hardware_ray_query
                 && hardware::direct_input_enabled(),
+            context.backend,
+            &settings,
         )?;
         let prepared = Instant::now();
         let mut options = RenderOptions::default();
@@ -339,6 +372,16 @@ pub unsafe extern "C" fn mt_context_commit(
                 })
             );
         }
+        let uniform = assets
+            .get("native-7")
+            .ok_or("Missing normalized render settings")?;
+        let seed = u32::from_le_bytes(
+            uniform[layout::ray_uniform::SEQUENCE_SEED..layout::ray_uniform::SEQUENCE_SEED + 4]
+                .try_into()?,
+        );
+        let bounces = i32::from_le_bytes(
+            uniform[layout::ray_uniform::BOUNCES..layout::ray_uniform::BOUNCES + 4].try_into()?,
+        ) as f32;
         candidate.retained = Some(retained);
         // Commit is transactional: the previous scene survives any preparation/upload failure.
         // Only retired buffers may be overwritten while preparing the next scene.
@@ -347,6 +390,8 @@ pub unsafe extern "C" fn mt_context_commit(
             context.spare_buffers = previous.buffers;
             context.spare_hardware = previous.hardware.map_or_else(HashMap::new, |h| h.inputs);
         }
+        context.render_seed = seed;
+        context.render_bounces = bounces;
         context.fallback_reason = fallback_reason;
         context.job = None;
         context.failed = false;
@@ -369,11 +414,11 @@ pub unsafe extern "C" fn mt_context_render(
         }
         context.job = None;
         context.failed = true;
-        context
-            .scene
-            .as_mut()
-            .unwrap()
-            .add_samples(additional, 6.0, 12345)?;
+        context.scene.as_mut().unwrap().add_samples(
+            additional,
+            context.render_bounces,
+            context.render_seed,
+        )?;
         context.failed = false;
         Ok(())
     })
@@ -776,7 +821,12 @@ fn advance_job(context: &mut Context, budget: u32) -> Result<()> {
         return Ok(());
     }
     let count = budget.min(job.requested - job.submitted);
-    scene.dispatch_samples(job.base + job.submitted, count, 6.0, 12345)?;
+    scene.dispatch_samples(
+        job.base + job.submitted,
+        count,
+        context.render_bounces,
+        context.render_seed,
+    )?;
     let done = Arc::new(AtomicBool::new(false));
     let signal = done.clone();
     scene
