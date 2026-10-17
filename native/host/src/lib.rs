@@ -17,6 +17,7 @@ pub mod denoise;
 mod denoise_ffi;
 mod hardware;
 pub mod hit_diagnostics;
+pub mod image_diagnostics;
 mod material_properties;
 mod native_bvh;
 pub mod path_diagnostics;
