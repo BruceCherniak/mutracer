@@ -1,5 +1,5 @@
 """Unmodified ABI measurement; each invocation owns a fresh process/context."""
-import argparse,ctypes as c,json,pathlib as p,time,resource,statistics,struct,hashlib
+import os,argparse,ctypes as c,json,pathlib as p,time,resource,statistics,struct,hashlib
 parser=argparse.ArgumentParser();parser.add_argument('directory',type=p.Path);parser.add_argument('key');parser.add_argument('mode',type=int);parser.add_argument('round',type=int);parser.add_argument('--single',action='store_true');parser.add_argument('--edits',action='store_true');parser.add_argument('--library',required=True);parser.add_argument('--manifest',required=True);a=parser.parse_args();out=a.directory;mode=a.mode
 case=next(row for row in json.loads(p.Path(a.manifest).read_text()) if row['key']==a.key)
 lib=c.CDLL(a.library)
@@ -58,13 +58,23 @@ try:
   t=clock();call('commit',ctx,raw,len(raw));elapsed=clock()-t
   actual=backend();assert actual==initialBackend,(initialBackend,actual)
   commits.append(dict(iteration=i,ms=elapsed,backend=actual))
+ # Keep steady wall-clock measurements comparable with the uninstrumented
+ # baseline. Device timestamp support is enabled at creation, but queries and
+ # readback run in a separate series after all twelve steady measurements.
+ gpuProfiling=os.environ.get('MUTRACER_NATIVE_GPU_TIMESTAMPS')=='1'
+ if gpuProfiling:os.environ.pop('MUTRACER_NATIVE_GPU_TIMESTAMPS')
  firstMs=run();warm=[]
  for i in range(12 if not a.single else 0):
   call('reset',ctx);warm.append(run())
+ gpuProfileRuns=[]
+ if gpuProfiling:
+  os.environ['MUTRACER_NATIVE_GPU_TIMESTAMPS']='1'
+  for i in range(12 if not a.single else 1):
+   call('reset',ctx);gpuProfileRuns.append(run())
  counts=None
  images={}
  for k,kind in enumerate(['hdr','normal','albedo']):
   length=n();call('read_pixels',ctx,k,None,0,c.byref(length));buf=c.create_string_buffer(length.value);call('read_pixels',ctx,k,buf,len(buf),c.byref(length));(folder/(kind+'.bin')).write_bytes(buf.raw);images[kind]=hashlib.sha256(buf.raw).hexdigest()
- row=dict(key=a.key,requested=mode,round=a.round,backend=initialBackend,deviceMs=deviceMs,initialCommitMs=initialCommit,commits=commits,firstMs=firstMs,warm=warm,counts=list(counts) if counts is not None else None,images=images,peakProcessRssBytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,renderMsMedian=statistics.median(warm[2:]) if warm else None)
+ row=dict(key=a.key,requested=mode,round=a.round,backend=initialBackend,deviceMs=deviceMs,initialCommitMs=initialCommit,commits=commits,firstMs=firstMs,warm=warm,gpuProfileRuns=gpuProfileRuns,steadyGpuTimestamps=False,counts=list(counts) if counts is not None else None,images=images,peakProcessRssBytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,renderMsMedian=statistics.median(warm[2:]) if warm else None)
  (folder/'info.json').write_text(json.dumps(row,indent=2));print(json.dumps(row),flush=True)
 finally:call('destroy',ctx)
