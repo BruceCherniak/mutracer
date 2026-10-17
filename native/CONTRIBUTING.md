@@ -536,6 +536,51 @@ consumers compare against upstream gl-matrix, including shared storage aliases,
 zero vectors and the generic fallback. Performance runs must alternate old/new
 order and keep unrelated builds/GPU work out of the timed interval.
 
+## Reproducible descriptor benchmarks
+
+```sh
+node native/benchmark/benchmark.mjs --manifest /absolute/inputs.json \
+  --library /absolute/libmutracer_native_probe.dylib --output /absolute/evidence --port 4201
+```
+
+Open the printed loopback URL. Use `?index=0&edits=1` for transform and vertex
+edits, restoring the original value between observations. Both hosts select the
+first source mesh using the largest geometry and edit its middle vertex.
+`benchmark-native.py --single` makes one commit and one 64spp render for image
+validation instead of collecting repeated wall-time samples.
+
+Each manifest entry has a unique `key`, an `input` descriptor path relative to
+the manifest, its `sha256`, and `expectedHardware: {active, reason}`. Determine
+the expected path independently; every native commit asserts it. Descriptors
+include dimensions and camera. Models and results stay outside the repository.
+The tool snapshots its library and clients, records source/bundle hashes, and
+uses 64spp, seed 12345, six bounces, eight samples per batch, TinyBVH BVH2 and
+eight Web Workers.
+
+The browser drives three serial rounds in forward/reverse/forward backend order.
+Each group warms first and records twelve full commits and twelve 64spp renders;
+exclude the first two observations. Retain the median, range and per-round
+values of all thirty remaining samples. The device and Worker pool persist
+within a group; navigation separates groups. Resume interrupted runs with
+`?index=N`, keeping incomplete attempts separate.
+
+Web commits wait for deferred packing, pipeline readiness and upload completion.
+Readback and legacy HWRT counters stay outside render timers. Native commit
+wall time includes retiring the previous scene; `nativeCommitProfile.totalMs`
+ends before retirement. Native peak RSS and browser JavaScript heap are distinct
+memory metrics. Report actual software fallbacks separately.
+
+`MUTRACER_NATIVE_PROFILE=1` records CPU phases and application upload bytes.
+`MUTRACER_NATIVE_GPU_TIMESTAMPS=1` additionally requests optional timestamp features
+for blocking-render kernels and full-commit AS builds. Its allocations and
+synchronization affect wall time, so collect this breakdown separately.
+The pinned Metal backend exposes pass timestamps but not encoder timestamps:
+AS GPU time remains unavailable. `completedWallMs` starts after prior uploads
+have drained and ends when the AS build completes. Zero or unordered timestamp
+samples are rejected. Upload totals include application writes and explicit
+hardware input buffers; driver-internal AS instance traffic is unobservable.
+The native edit helper reports rejected partial updates explicitly.
+
 ## Native library OIDN validation
 
 `host/src/denoise.rs` owns the same SDK adapter used by the viewer worker and

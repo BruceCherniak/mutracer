@@ -66,6 +66,16 @@ pub fn prepare(
             .unwrap_or("Unsupported hardware capture".into())
             .into());
     }
+    // Profiling waits are opt-in and separate from ordinary wall-time runs.
+    // Drain unrelated resource uploads before timing acceleration structures.
+    if super::profiling::gpu_enabled() {
+        queue.submit([]);
+        device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_secs(30)),
+        })?;
+    }
+    let as_started = std::time::Instant::now();
     let mut vertices = Vec::new();
     let mut sizes = Vec::new();
     let mut blases = Vec::new();
@@ -133,9 +143,37 @@ pub fn prepare(
             }]),
         })
         .collect();
+    let timer = super::profiling::GpuTimer::new(device, 1, true);
     let mut encoder = device.create_command_encoder(&Default::default());
+    if let Some(t) = &timer {
+        t.stamp(&mut encoder, 0);
+    }
     encoder.build_acceleration_structures(entries.iter(), [&tlas]);
+    if let Some(t) = &timer {
+        t.stamp(&mut encoder, 1);
+        t.resolve(&mut encoder);
+    }
     queue.submit([encoder.finish()]);
+    let build_submit_ms = as_started.elapsed().as_secs_f64() * 1000.0;
+    let completed_wall_ms = if super::profiling::gpu_enabled() {
+        device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_secs(30)),
+        })?;
+        Some(as_started.elapsed().as_secs_f64() * 1000.0)
+    } else {
+        None
+    };
+    if super::profiling::enabled() || super::profiling::gpu_enabled() {
+        let gpu_ms = timer
+            .as_ref()
+            .map(|t| t.milliseconds(device, queue))
+            .transpose()?;
+        eprintln!(
+            "{}",
+            serde_json::json!({"nativeAsProfile": {"cpuBuildSubmitMs": build_submit_ms,"completedWallMs": completed_wall_ms,"gpuMs": gpu_ms,"gpuTimestampUnavailable": if super::profiling::gpu_enabled() && timer.is_none() { Some("Encoder timestamp queries unavailable") } else { None },"blasCount": blases.len(),"instanceCount": capture.instances.len(),"vertexUploadBytes": vertices.iter().map(|b| b.size()).sum::<u64>()}})
+        );
+    }
     let data = read(
         capture
             .triangle_map
@@ -147,6 +185,12 @@ pub fn prepare(
         contents: &data,
         usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
+    if super::profiling::enabled() {
+        eprintln!(
+            "{}",
+            serde_json::json!({"nativeHardwareUploadProfile": {"kind":"geometry","writeBytes":vertices.iter().map(|b| b.size()).sum::<u64>() + data.len() as u64,"instanceCount":capture.instances.len()}})
+        );
+    }
     let counters = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("MuTracer hardware query counts"),
         size: 44,
@@ -241,6 +285,12 @@ impl Resources {
                 instance.custom_index,
                 255,
             ));
+        }
+        if super::profiling::enabled() {
+            eprintln!(
+                "{}",
+                serde_json::json!({"nativeHardwareUploadProfile": {"kind":"transform","writeBytes":plan.mapping.len(),"instanceCount":plan.instances.len()}})
+            );
         }
         queue.write_buffer(&self.mapping, 0, &plan.mapping);
         let mut encoder = device.create_command_encoder(&Default::default());

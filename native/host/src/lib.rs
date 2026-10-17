@@ -17,6 +17,7 @@ mod denoise_ffi;
 mod hardware;
 mod material_properties;
 mod native_bvh;
+mod profiling;
 mod scene;
 mod tinybvh;
 
@@ -349,15 +350,23 @@ impl GpuDevice {
             return Err("Hardware ray query is not supported by this adapter".into());
         }
         let use_hwrt = mode != 0 && hardware_ray_query;
+        let profile_features = if profiling::gpu_enabled() {
+            adapter.features()
+                & (wgpu::Features::TIMESTAMP_QUERY
+                    | wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)
+        } else {
+            wgpu::Features::empty()
+        };
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("MuTracer native feasibility"),
                 required_limits: adapter.limits(),
-                required_features: if use_hwrt {
-                    wgpu::Features::EXPERIMENTAL_RAY_QUERY
-                } else {
-                    wgpu::Features::empty()
-                },
+                required_features: profile_features
+                    | if use_hwrt {
+                        wgpu::Features::EXPERIMENTAL_RAY_QUERY
+                    } else {
+                        wgpu::Features::empty()
+                    },
                 experimental_features: if use_hwrt {
                     unsafe { wgpu::ExperimentalFeatures::enabled() }
                 } else {
@@ -365,6 +374,12 @@ impl GpuDevice {
                 },
                 ..Default::default()
             }))?;
+        if profiling::gpu_enabled() {
+            eprintln!(
+                "{}",
+                json!({"nativeGpuCapabilities": {"timestampQuery": device.features().contains(wgpu::Features::TIMESTAMP_QUERY),"encoderTimestamps": device.features().contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)}})
+            );
+        }
         Ok(Self {
             device,
             queue,
@@ -768,6 +783,16 @@ impl GpuScene {
         })
     }
     fn dispatch_samples(&self, start: u32, additional: u32, bounces: f32, seed: u32) -> Result<()> {
+        self.dispatch_timed(start, additional, bounces, seed, None)
+    }
+    fn dispatch_timed(
+        &self,
+        start: u32,
+        additional: u32,
+        bounces: f32,
+        seed: u32,
+        timer: Option<&profiling::GpuTimer>,
+    ) -> Result<()> {
         let end = start
             .checked_add(additional)
             .ok_or("Sample count overflow")?;
@@ -798,7 +823,10 @@ impl GpuScene {
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             {
-                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    timestamp_writes: timer.map(|t| t.pass(sample - start)),
+                    ..Default::default()
+                });
                 pass.set_pipeline(&self.pipeline);
                 for (index, group) in self.groups.iter().enumerate() {
                     pass.set_bind_group(index as u32, group, &[]);
@@ -809,6 +837,11 @@ impl GpuScene {
                     1,
                 );
             }
+            if sample + 1 == end {
+                if let Some(t) = timer {
+                    t.resolve(&mut encoder);
+                }
+            }
             queue.submit([encoder.finish()]);
         }
         unsafe {
@@ -817,11 +850,22 @@ impl GpuScene {
         Ok(())
     }
     fn add_samples(&mut self, additional: u32, bounces: f32, seed: u32) -> Result<()> {
-        self.dispatch_samples(self.samples, additional, bounces, seed)?;
+        let timer = profiling::GpuTimer::new(&self.gpu.device, additional, false);
+        self.dispatch_timed(self.samples, additional, bounces, seed, timer.as_ref())?;
         self.gpu.device.poll(wgpu::PollType::Wait {
             submission_index: None,
             timeout: Some(Duration::from_secs(30)),
         })?;
+        if profiling::gpu_enabled() {
+            let gpu_ms = timer
+                .as_ref()
+                .map(|t| t.milliseconds(&self.gpu.device, &self.gpu.queue))
+                .transpose()?;
+            eprintln!(
+                "{}",
+                json!({"nativeRenderProfile": {"firstSample": self.samples, "samples": additional, "kernelGpuMs": gpu_ms}})
+            );
+        }
         self.samples += additional;
         Ok(())
     }
@@ -952,6 +996,12 @@ impl GpuScene {
         result.map(Some)
     }
     fn update_lighting(&mut self, updates: &scene::LightingUpdates) -> Result<()> {
+        if profiling::enabled() {
+            eprintln!(
+                "{}",
+                json!({"nativeUploadProfile": {"writeBytes": updates.iter().map(|(_,_,_,data)| data.len()).sum::<usize>(), "resources": updates.iter().map(|(id,_,_,data)| json!({"id": id,"bytes": data.len()})).collect::<Vec<_>>()}})
+            );
+        }
         for (id, width, height, data) in updates {
             if *id < 21 {
                 self.gpu.queue.write_buffer(&self.buffers[id], 0, data);

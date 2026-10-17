@@ -12,6 +12,6 @@ dist-site/
 
 dist-oidn-weights/
 plans/
-.native-build/
+.native-build
 native/*.lib.ll
 native/host/target/
