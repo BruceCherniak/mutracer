@@ -1006,7 +1006,7 @@ pub(super) fn prepare_retained(
             0
         },
     };
-    let (scene, assets) = prepare_impl(bytes, token, hardware)?;
+    let (scene, assets) = prepare_impl(bytes, token, hardware, false)?;
     state.raw_version = Words(bytes).u(0) as u32;
     state.shader = assets
         .get("native-32")
@@ -1025,10 +1025,16 @@ pub(super) fn prepare_retained(
     Ok((scene, assets, state))
 }
 pub(super) fn prepare_hardware(bytes: &[u8]) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
-    prepare_impl(bytes, 0, hardware::direct_input_enabled())
+    prepare_diagnostic(bytes, hardware::direct_input_enabled())
+}
+pub(super) fn prepare_diagnostic(
+    bytes: &[u8],
+    hardware: bool,
+) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
+    prepare_impl(bytes, 0, hardware, true)
 }
 pub(super) fn prepare(bytes: &[u8]) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
-    prepare_impl(bytes, 0, false)
+    prepare_impl(bytes, 0, false, false)
 }
 type NativeStep = unsafe extern "C" fn(*const u8, usize, u32, *mut *const u8, *mut usize);
 fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
@@ -1060,6 +1066,7 @@ fn prepare_impl(
     bytes: &[u8],
     token: u32,
     hardware: bool,
+    diagnostic: bool,
 ) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
     let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
     let started = Instant::now();
@@ -1084,7 +1091,7 @@ fn prepare_impl(
         }
         let requests = native_step(mt_core_native_scene_begin, bytes, token)?;
         let decoded = Instant::now();
-        let blases = tinybvh::jobs(&requests, false)?;
+        let blases = tinybvh::jobs_with_ids(&requests, false, diagnostic)?;
         let built = Instant::now();
         let instances = native_step(mt_core_native_scene_blas, &blases, token)?;
         let packed = Instant::now();

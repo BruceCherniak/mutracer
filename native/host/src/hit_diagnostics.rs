@@ -71,7 +71,7 @@ fn run_side(input: &[u8], output: &Path, hardware: bool) -> Result<()> {
     let (mut scene, mut assets) = if hardware {
         scene::prepare_hardware(input)?
     } else {
-        scene::prepare(input)?
+        scene::prepare_diagnostic(input, false)?
     };
     write_geometry_snapshot(&scene, &assets, output)?;
     let layout = scene

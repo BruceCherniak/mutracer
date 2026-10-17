@@ -29,3 +29,26 @@ extern "C" BuildResult* mt_native_tiny_aabbs(const float* boxes, uint32_t count)
     return result.release();
   } catch (...) { return nullptr; }
 }
+
+// Share upstream's one process-wide pool between independent BLASes and its
+// subtree jobs. Each BLAS owns a separate spawn/barrier group, including when a
+// waiting worker steals another BLAS; no second all-core pool is introduced.
+extern "C" void mt_native_tiny_parallel_for(uint32_t count,
+  void (*fn)(uint32_t, void*), void* payload, uint32_t captureIds) noexcept {
+  struct Work {void (*fn)(uint32_t, void*); void* payload; bool capture;};
+  Work work{fn, payload, captureIds != 0};
+  auto run = [](uint32_t i, void* data) {
+    auto& work = *static_cast<Work*>(data);
+    tinybvh::JobSystem::JobGroup group;
+    auto* previousGroup = tinybvh::tinybvh_tl_group;
+    const bool previousCapture = nativeCaptureTriangleIds;
+    tinybvh::tinybvh_tl_group = &group;
+    nativeCaptureTriangleIds = work.capture;
+    work.fn(i, work.payload);
+    tinybvh::tinybvh_builtin_barrier(nullptr);
+    nativeCaptureTriangleIds = previousCapture;
+    tinybvh::tinybvh_tl_group = previousGroup;
+  };
+  if (count == 1) run(0, &work);
+  else tinybvh::tinybvh_builtin_parallel_for(count, run, &work, nullptr);
+}

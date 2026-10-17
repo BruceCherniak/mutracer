@@ -21,6 +21,11 @@
 
 namespace {
 
+#ifdef MUTRACER_TINYBVH_NATIVE
+// Set only on the owner/worker executing serialization, with scoped restoration.
+static thread_local bool nativeCaptureTriangleIds = true;
+#endif
+
 struct BuildResult {
   uint32_t* data = nullptr;
   uint32_t byteLength = 0;
@@ -740,7 +745,7 @@ void serializeBvh(
     result.layout = BVH2_LAYOUT;
     flattenNode(bvh, 0, 1, indices, triangleMap, displacement, flattened, result.maxDepth
 #ifdef MUTRACER_TINYBVH_NATIVE
-      , &result.triangleIds
+      , nativeCaptureTriangleIds ? &result.triangleIds : nullptr
 #endif
     );
   } else if (requestedLayout == BVH4_LAYOUT) {

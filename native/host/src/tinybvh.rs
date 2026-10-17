@@ -1,7 +1,13 @@
 //! Native binding to the same official TinyBVH adapter used by the browser.
 use super::Result;
-use std::ffi::c_void;
+use std::{borrow::Cow, ffi::c_void, sync::OnceLock};
 unsafe extern "C" {
+    fn mt_native_tiny_parallel_for(
+        count: u32,
+        callback: extern "C" fn(u32, *mut c_void),
+        payload: *mut c_void,
+        capture_ids: u32,
+    );
     fn mt_native_tiny_blas(
         positions: *const f32,
         vertices: u32,
@@ -56,10 +62,7 @@ fn finish(pointer: *mut c_void, primitive_count: usize) -> Result<Built> {
         });
     }
     let bytes = unsafe { std::slice::from_raw_parts(address as *const u8, size) }.to_vec();
-    let words: Vec<_> = bytes
-        .chunks_exact(4)
-        .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
-        .collect();
+    let words = words(&bytes);
     let mut stack = vec![(0usize, 1u32)];
     let mut visited = vec![false; size / 16];
     let mut max_depth = 0;
@@ -156,9 +159,100 @@ pub(super) fn aabbs(boxes: &[f32]) -> Result<Built> {
         boxes.len() / 6,
     )
 }
-// Internal batch protocol:resourcePacket records carry packed input jobs, then
-// the same records return BVH2 bytes/depth/leaf bounds. No JS-prepared BVH input.
+// Validated native packets are aligned by their owner allocation. Borrow them
+// directly on little-endian hosts; unaligned callers retain the safe copy path.
+fn floats(bytes: &[u8]) -> Cow<'_, [f32]> {
+    if cfg!(target_endian = "little")
+        && bytes.as_ptr().align_offset(std::mem::align_of::<f32>()) == 0
+    {
+        // f32 admits every bit pattern; immutable input outlives the borrow.
+        Cow::Borrowed(unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast(), bytes.len() / 4) })
+    } else {
+        Cow::Owned(
+            bytes
+                .chunks_exact(4)
+                .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+                .collect(),
+        )
+    }
+}
+fn words(bytes: &[u8]) -> Cow<'_, [u32]> {
+    if cfg!(target_endian = "little")
+        && bytes.as_ptr().align_offset(std::mem::align_of::<u32>()) == 0
+    {
+        Cow::Borrowed(unsafe { std::slice::from_raw_parts(bytes.as_ptr().cast(), bytes.len() / 4) })
+    } else {
+        Cow::Owned(
+            bytes
+                .chunks_exact(4)
+                .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+                .collect(),
+        )
+    }
+}
+fn build_job(data: &[u8], instances: bool) -> Result<Built> {
+    if instances {
+        return aabbs(&floats(data));
+    }
+    if data.len() < 16 {
+        return Err("Short native TinyBVH geometry request".into());
+    }
+    let u = |i: usize| u32::from_le_bytes(data[i * 4..i * 4 + 4].try_into().unwrap()) as usize;
+    let vertices = u(0);
+    let indices = u(1);
+    let displacement = u(2);
+    if vertices > 4_194_304 || indices > 12_582_912 || displacement > 1 || indices % 3 != 0 {
+        return Err("Invalid native TinyBVH geometry request".into());
+    }
+    let p = 16;
+    let n = p + vertices * 12;
+    let idx = n + vertices * 12 * displacement;
+    let end = idx + indices * 4;
+    if data.len() != end + indices / 3 * 8 * displacement {
+        return Err("Native TinyBVH request length mismatch".into());
+    }
+    let positions = floats(&data[p..n]);
+    let normals = floats(&data[n..idx]);
+    let indices = words(&data[idx..end]);
+    let ranges = floats(&data[end..]);
+    blas(
+        &positions,
+        if displacement == 1 {
+            Some(&normals)
+        } else {
+            None
+        },
+        &indices,
+        f32::from_bits(u(3) as u32),
+        if displacement == 1 {
+            Some(&ranges)
+        } else {
+            None
+        },
+    )
+}
+struct Batch<'a> {
+    jobs: Vec<&'a [u8]>,
+    instances: bool,
+    results: Vec<OnceLock<std::result::Result<Built, String>>>,
+}
+extern "C" fn execute_job(index: u32, payload: *mut c_void) {
+    // The synchronous C++ pool calls each valid index exactly once and joins all
+    // work before returning; only the matching OnceLock is written by a worker.
+    let batch = unsafe { &*payload.cast::<Batch<'_>>() };
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        build_job(batch.jobs[index as usize], batch.instances)
+    }))
+    .map_err(|_| "Native TinyBVH worker panicked".to_string())
+    .and_then(|r| r.map_err(|e| e.to_string()));
+    let _ = batch.results[index as usize].set(result);
+}
+// Diagnostic identities are opt-in so ordinary commits do not serialize or
+// compose an O(triangles) identity sidecar that the renderer never consumes.
 pub(super) fn jobs(packet: &[u8], instances: bool) -> Result<Vec<u8>> {
+    jobs_with_ids(packet, instances, false)
+}
+pub(super) fn jobs_with_ids(packet: &[u8], instances: bool, capture_ids: bool) -> Result<Vec<u8>> {
     let word = |i: usize| u32::from_le_bytes(packet[i * 4..i * 4 + 4].try_into().unwrap()) as usize;
     if packet.len() < 16 || packet.len() % 4 != 0 || word(0) != 1 {
         return Err("Invalid native TinyBVH request packet".into());
@@ -168,8 +262,7 @@ pub(super) fn jobs(packet: &[u8], instances: bool) -> Result<Vec<u8>> {
     if count > 65_536 || packet.len() < header || (instances && count != 1) {
         return Err("Invalid native TinyBVH request count".into());
     }
-    let mut built = Vec::new();
-    let mut total = header;
+    let mut jobs = Vec::with_capacity(count);
     for i in 0..count {
         let o = 4 + i * 8;
         let length = word(o + 2);
@@ -184,66 +277,34 @@ pub(super) fn jobs(packet: &[u8], instances: bool) -> Result<Vec<u8>> {
         {
             return Err("Invalid native TinyBVH request span".into());
         }
-        let data = &packet[offset..offset + length];
-        let floats = |data: &[u8]| {
-            data.chunks_exact(4)
-                .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
-                .collect::<Vec<_>>()
-        };
-        let result = if instances {
-            aabbs(&floats(data))?
-        } else {
-            if data.len() < 16 {
-                return Err("Short native TinyBVH geometry request".into());
-            }
-            let u =
-                |i: usize| u32::from_le_bytes(data[i * 4..i * 4 + 4].try_into().unwrap()) as usize;
-            let vertices = u(0);
-            let indices = u(1);
-            let displacement = u(2);
-            if vertices > 4_194_304 || indices > 12_582_912 || displacement > 1 || indices % 3 != 0
-            {
-                return Err("Invalid native TinyBVH geometry request".into());
-            }
-            let positions_size = vertices * 12;
-            let normals_size = positions_size * displacement;
-            let indices_size = indices * 4;
-            let ranges_size = indices / 3 * 8 * displacement;
-            if data.len() != 16 + positions_size + normals_size + indices_size + ranges_size {
-                return Err("Native TinyBVH request length mismatch".into());
-            }
-            let p = 16;
-            let n = p + positions_size;
-            let idx = n + normals_size;
-            let r = idx + indices_size;
-            let positions = floats(&data[p..n]);
-            let normals = floats(&data[n..idx]);
-            let ranges = floats(&data[r..]);
-            let indices: Vec<_> = data[idx..r]
-                .chunks_exact(4)
-                .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
-                .collect();
-            blas(
-                &positions,
-                if displacement == 1 {
-                    Some(&normals)
-                } else {
-                    None
-                },
-                &indices,
-                f32::from_bits(u(3) as u32),
-                if displacement == 1 {
-                    Some(&ranges)
-                } else {
-                    None
-                },
-            )?
-        };
-        total += result.bytes.len() + result.triangle_ids.len() * 4;
-        if total > 1024 * 1024 * 1024 || result.depth > 64 {
+        jobs.push(&packet[offset..offset + length]);
+    }
+    let batch = Batch {
+        jobs,
+        instances,
+        results: (0..count).map(|_| OnceLock::new()).collect(),
+    };
+    fn assert_sync<T: Sync>(_: &T) {}
+    assert_sync(&batch);
+    unsafe {
+        mt_native_tiny_parallel_for(
+            count as u32,
+            execute_job,
+            (&batch as *const Batch<'_>).cast_mut().cast(),
+            u32::from(capture_ids),
+        );
+    }
+    let mut built = Vec::with_capacity(count);
+    let mut total = header;
+    for slot in batch.results {
+        let bvh = slot
+            .into_inner()
+            .ok_or("Missing native TinyBVH job result")??;
+        total += bvh.bytes.len() + bvh.triangle_ids.len() * 4;
+        if total > 1024 * 1024 * 1024 || bvh.depth > 64 {
             return Err("Native TinyBVH result exceeds byte/stack budget".into());
         }
-        built.push(result);
+        built.push(bvh);
     }
     let mut output = vec![0u8; total];
     let put = |data: &mut [u8], i: usize, value: u32| {
@@ -281,6 +342,69 @@ pub(super) fn jobs(packet: &[u8], instances: bool) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn packet(jobs: &[Vec<u8>]) -> Vec<u8> {
+        let header = 16 + jobs.len() * 32;
+        let mut output = vec![0; header];
+        output[..4].copy_from_slice(&1u32.to_le_bytes());
+        output[4..8].copy_from_slice(&(jobs.len() as u32).to_le_bytes());
+        for (i, job) in jobs.iter().enumerate() {
+            let o = 16 + i * 32;
+            output[o..o + 4].copy_from_slice(&(i as u32).to_le_bytes());
+            output[o + 8..o + 12].copy_from_slice(&(job.len() as u32).to_le_bytes());
+            let offset = output.len() as u32;
+            output[o + 28..o + 32].copy_from_slice(&offset.to_le_bytes());
+            output.extend_from_slice(job);
+        }
+        output
+    }
+    #[test]
+    fn parallel_blas_batches_preserve_order_and_unaligned_inputs() {
+        // Exercise both the outer fan-out and the builder's nested subtree jobs.
+        let count = 65_536usize;
+        let mut positions = Vec::new();
+        for i in 0..count {
+            let x = (i % 256) as f32;
+            let y = (i / 256) as f32;
+            positions.extend_from_slice(&[x, y, 0., x + 0.7, y, 0., x, y + 0.5, 0.]);
+        }
+        let indices: Vec<u32> = (0..count as u32 * 3).collect();
+        let reference = blas(&positions, None, &indices, 0., None).unwrap();
+        let mut request = Vec::new();
+        for value in [count as u32 * 3, count as u32 * 3, 0, 0] {
+            request.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in &positions {
+            request.extend_from_slice(&value.to_le_bytes());
+        }
+        for value in &indices {
+            request.extend_from_slice(&value.to_le_bytes());
+        }
+        let requests = packet(&vec![request; 12]);
+        let result = jobs_with_ids(&requests, false, true).unwrap();
+        for i in 0..12 {
+            let at = 4 + i * 8;
+            let w = words(&result);
+            let offset = w[at + 7] as usize;
+            assert_eq!(
+                &result[offset..offset + w[at + 2] as usize],
+                reference.bytes
+            );
+            assert_eq!(w[at + 5] as usize, reference.triangle_ids.len());
+            let start = w[at + 6] as usize;
+            assert_eq!(
+                &*words(&result[start..start + w[at + 5] as usize * 4]),
+                reference.triangle_ids
+            );
+        }
+        let mut unaligned = vec![0];
+        unaligned.extend_from_slice(&requests);
+        assert_eq!(jobs_with_ids(&unaligned[1..], false, true).unwrap(), result);
+        let ordinary = jobs(&requests, false).unwrap();
+        for i in 0..12 {
+            let w = words(&ordinary);
+            assert_eq!((w[4 + i * 8 + 5], w[4 + i * 8 + 6]), (0, 0));
+        }
+    }
     #[test]
     fn native_triangle_preserves_geometry_and_lifetime() {
         for _ in 0..100 {
