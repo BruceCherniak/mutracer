@@ -25,8 +25,12 @@ fn add_closest_counters(scene: &mut Scene, assets: &mut HashMap<String, Vec<u8>>
     {
         return Err("Production closest shader changed; update diagnostic instrumentation".into());
     }
-    let shader = shader.replacen("fn mtTrace(",
-        "@group(0) @binding(7) var<storage, read_write> mtQueryCounts: array<atomic<u32>>;\nfn mtTrace(", 1)
+    let declaration = format!(
+        "@group({}) @binding({}) var<storage, read_write> mtQueryCounts: array<atomic<u32>>;\nfn mtTrace(",
+        layout::group::SCENE,
+        layout::hwrt_binding::DIAGNOSTIC
+    );
+    let shader = shader.replacen("fn mtTrace(", &declaration, 1)
         .replacen("  var query: ray_query;", r#"
   let mtBucket = ((samplingPixel.x ^ (samplingPixel.y * 131u)) & 255u) * 16u;
   if (shadow) { atomicAdd(&mtQueryCounts[mtBucket + 8u], 1u); }
@@ -38,19 +42,21 @@ fn add_closest_counters(scene: &mut Scene, assets: &mut HashMap<String, Vec<u8>>
     assets.insert("native-33".into(), shader.into_bytes());
     assets.insert("diagnostic-52".into(), vec![0; COUNTER_BYTES]);
     scene.buffers.push(Buffer {
-        id: 52,
+        id: layout::resource::QUERY_COUNTS,
         size: COUNTER_BYTES as u64,
         usage: 140,
         file: "diagnostic-52".into(),
     });
-    scene.bind_groups[0]
+    scene.bind_groups[layout::group::SCENE]
         .layout
-        .push(json!({"binding":7,"visibility":4,"buffer":{"type":"storage"}}));
-    scene.bind_groups[0].entries.push(Binding {
-        binding: 7,
-        kind: "buffer".into(),
-        id: 52,
-    });
+        .push(json!({"binding":layout::hwrt_binding::DIAGNOSTIC,"visibility":4,"buffer":{"type":"storage"}}));
+    scene.bind_groups[layout::group::SCENE]
+        .entries
+        .push(Binding {
+            binding: layout::hwrt_binding::DIAGNOSTIC as u32,
+            kind: "buffer".into(),
+            id: layout::resource::QUERY_COUNTS,
+        });
     Ok(())
 }
 
@@ -100,14 +106,18 @@ fn render(
     for start in (0..samples).step_by(8) {
         state.add_samples((samples - start).min(8), options.bounces, seed)?;
         if counts {
-            let data = hit_diagnostics::read_raw(&state.gpu, &state.buffers[&52])?;
+            let data = hit_diagnostics::read_raw(
+                &state.gpu,
+                &state.buffers[&layout::resource::QUERY_COUNTS],
+            )?;
             for (i, word) in data.chunks_exact(4).enumerate() {
                 totals[i % 16] += u32::from_le_bytes(word.try_into().unwrap()) as u64;
             }
-            state
-                .gpu
-                .queue
-                .write_buffer(&state.buffers[&52], 0, &vec![0; COUNTER_BYTES]);
+            state.gpu.queue.write_buffer(
+                &state.buffers[&layout::resource::QUERY_COUNTS],
+                0,
+                &vec![0; COUNTER_BYTES],
+            );
         }
     }
     fs::create_dir_all(output)?;

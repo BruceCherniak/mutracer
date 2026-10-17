@@ -1,6 +1,7 @@
 /// <reference lib="esnext" />
 /// <reference path="./browser-types.d.ts" />
 import {hardwareOpaqueGeometryFlags} from './hwrt-eligibility.js';
+import {RESOURCE, KIND, FORMAT, HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, TEXTURE as T, LIGHT as L, CAMERA as C, BATCH as B, PACKET_HEADER as PH, PACKET_ENTRY as PE, WORD_BYTES, quantizeDisplacementRange} from './layout.js';
 import {nativePathIntersections} from './path-diagnostics.wgsl.js';
 import IESProfile, {parseIESProfile} from '../src/scene/IESProfile.js';
 import {computeDisplacementMinmax, computeTrianglesDisplacementRange} from '../src/renderer/displacementPreparation.js';
@@ -148,84 +149,84 @@ function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
 function decodeScene(bytes: Uint8Array) {
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
   const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
-  const width = u[2], height = u[3];
+  const width = u[H.WIDTH], height = u[H.HEIGHT];
   const textures: PixelTexture[] = [];
   const textureIds = new Map<TextureState, number>();
-  for (let i = 0; i < u[8]; i++) {
-    const off = u[13] + i * 12;
-    const data = u[off + 2] === 0
-      ? new Uint8Array(bytes.buffer, bytes.byteOffset + u[off + 3] * 4, u[off] * u[off + 1] * 4).slice()
-      : new Float32Array(f.slice(u[off + 3], u[off + 3] + u[off] * u[off + 1] * 4));
-    const texture = new PixelTexture({width: u[off], height: u[off + 1], data});
-    texture.flipY = !!u[off + 4]; texture.uvChannel = u[off + 5] === 1 ? 1 : 0;
-    texture.uvScale = [f[off + 6], f[off + 7]]; texture.uvOffset = [f[off + 8], f[off + 9]];
+  for (let i = 0; i < u[H.TEXTURE_COUNT]; i++) {
+    const off = u[H.TEXTURE_OFFSET] + i * T.WORDS;
+    const data = u[off + T.STORAGE] === 0
+      ? new Uint8Array(bytes.buffer, bytes.byteOffset + u[off + T.PIXELS] * 4, u[off + T.WIDTH] * u[off + T.HEIGHT] * 4).slice()
+      : new Float32Array(f.slice(u[off + T.PIXELS], u[off + T.PIXELS] + u[off + T.WIDTH] * u[off + T.HEIGHT] * 4));
+    const texture = new PixelTexture({width: u[off + T.WIDTH], height: u[off + T.HEIGHT], data});
+    texture.flipY = !!u[off + T.FLIP_Y]; texture.uvChannel = u[off + T.UV_CHANNEL] === 1 ? 1 : 0;
+    texture.uvScale = [f[off + T.UV_SCALE], f[off + T.UV_SCALE + 1]]; texture.uvOffset = [f[off + T.UV_OFFSET], f[off + T.UV_OFFSET + 1]];
     textures.push(texture); textureIds.set(texture, i);
   }
-  const environment = nativeFloatImage(u[0] >= 2 && u[20] ? textures[u[20] - 1] : undefined);
-  const background = nativeFloatImage(u[0] >= 2 && u[21] ? textures[u[21] - 1] : undefined);
-  const qualityFlags = u[0] >= 2 ? u[22] : 0;
+  const environment = nativeFloatImage(u[H.VERSION] >= 2 && u[H.ENVIRONMENT_TEXTURE] ? textures[u[H.ENVIRONMENT_TEXTURE] - 1] : undefined);
+  const background = nativeFloatImage(u[H.VERSION] >= 2 && u[H.BACKGROUND_TEXTURE] ? textures[u[H.BACKGROUND_TEXTURE] - 1] : undefined);
+  const qualityFlags = u[H.VERSION] >= 2 ? u[H.QUALITY_FLAGS] : 0;
   const environmentDistribution = environment ? envMapDistribution(environment) : undefined;
   const materials: MaterialState[] = [];
-  for (let i = 0; i < u[6]; i++) {
-    const off = u[11] + i * 24;
-    const m = new MaterialState({baseColor: [f[off], f[off + 1], f[off + 2]],
-      specularRoughness: f[off + 3], baseMetalness: f[off + 4], transmissionWeight: f[off + 5],
-      specularIor: f[off + 6], emissionColor: [f[off + 7], f[off + 8], f[off + 9]],
-      emissionLuminance: f[off + 10], coatWeight: f[off + 11], coatRoughness: f[off + 12],
-      geometryOpacity: f[off + 13], geometryThinWalled: !!u[off + 14]});
-    m.map = u[off + 15] === 0xffffffff ? undefined : textures[u[off + 15]];
-    m.normalMap = u[off + 16] === 0xffffffff ? undefined : textures[u[off + 16]];
-    m.metallicRoughnessMap = u[off + 17] === 0xffffffff ? undefined : textures[u[off + 17]];
-    m.emissiveMap = u[off + 18] === 0xffffffff ? undefined : textures[u[off + 18]];
-    if (u[0] >= 2) applyNativeMaterialProperties(m, textures, u, f, u[off + 20], u[off + 19]);
+  for (let i = 0; i < u[H.MATERIAL_COUNT]; i++) {
+    const off = u[H.MATERIAL_OFFSET] + i * MAT.WORDS;
+    const m = new MaterialState({baseColor: [f[off + MAT.BASE_COLOR], f[off + MAT.BASE_COLOR + 1], f[off + MAT.BASE_COLOR + 2]],
+      specularRoughness: f[off + MAT.ROUGHNESS], baseMetalness: f[off + MAT.METALNESS], transmissionWeight: f[off + MAT.TRANSMISSION],
+      specularIor: f[off + MAT.IOR], emissionColor: [f[off + MAT.EMISSION_COLOR], f[off + MAT.EMISSION_COLOR + 1], f[off + MAT.EMISSION_COLOR + 2]],
+      emissionLuminance: f[off + MAT.EMISSION_LUMINANCE], coatWeight: f[off + MAT.COAT_WEIGHT], coatRoughness: f[off + MAT.COAT_ROUGHNESS],
+      geometryOpacity: f[off + MAT.OPACITY], geometryThinWalled: !!u[off + MAT.THIN_WALLED]});
+    m.map = u[off + MAT.MAP] === 0xffffffff ? undefined : textures[u[off + MAT.MAP]];
+    m.normalMap = u[off + MAT.NORMAL_MAP] === 0xffffffff ? undefined : textures[u[off + MAT.NORMAL_MAP]];
+    m.metallicRoughnessMap = u[off + MAT.METALLIC_ROUGHNESS_MAP] === 0xffffffff ? undefined : textures[u[off + MAT.METALLIC_ROUGHNESS_MAP]];
+    m.emissiveMap = u[off + MAT.EMISSIVE_MAP] === 0xffffffff ? undefined : textures[u[off + MAT.EMISSIVE_MAP]];
+    if (u[H.VERSION] >= 2) applyNativeMaterialProperties(m, textures, u, f, u[off + MAT.EXTENSION_OFFSET], u[off + MAT.EXTENSION_COUNT]);
     materials.push(m);
   }
   const geometries: Geometry[] = [];
-  for (let i = 0; i < u[4]; i++) {
-    const off = u[9] + i * 12, count = u[off], indexCount = u[off + 1];
+  for (let i = 0; i < u[H.GEOMETRY_COUNT]; i++) {
+    const off = u[H.GEOMETRY_OFFSET] + i * G.WORDS, count = u[off + G.VERTEX_COUNT], indexCount = u[off + G.INDEX_COUNT];
     // Let the shared constructor generate normals only when the input omits
     // them. Assigning authored normals afterwards needlessly traversed all faces.
-    const geometry = new Geometry({position: new Attribute(f.slice(u[off + 2], u[off + 2] + count * 3), 3),
-      indices: new Attribute(u.slice(u[off + 3], u[off + 3] + indexCount), 1),
-      normal: u[off + 4] ? new Attribute(f.slice(u[off + 4], u[off + 4] + count * 3), 3) : undefined});
-    if (u[off + 5]) geometry.uv = new Attribute(f.slice(u[off + 5], u[off + 5] + count * 2), 2);
-    if (u[off + 6]) geometry.uv1 = new Attribute(f.slice(u[off + 6], u[off + 6] + count * 2), 2);
-    if (u[0] >= 2) {
-      if (u[off + 7]) geometry.color = new Attribute(f.slice(u[off + 7], u[off + 7] + count * 3), 3);
-      if (u[off + 8]) geometry.tangent = new Attribute(f.slice(u[off + 8], u[off + 8] + count * 4), 4);
-      if (u[off + 9]) geometry.materialIndex = new Attribute(new Int32Array(u.slice(u[off + 9], u[off + 9] + count)), 1);
+    const geometry = new Geometry({position: new Attribute(f.slice(u[off + G.POSITION], u[off + G.POSITION] + count * 3), 3),
+      indices: new Attribute(u.slice(u[off + G.INDICES], u[off + G.INDICES] + indexCount), 1),
+      normal: u[off + G.NORMAL] ? new Attribute(f.slice(u[off + G.NORMAL], u[off + G.NORMAL] + count * 3), 3) : undefined});
+    if (u[off + G.UV]) geometry.uv = new Attribute(f.slice(u[off + G.UV], u[off + G.UV] + count * 2), 2);
+    if (u[off + G.UV1]) geometry.uv1 = new Attribute(f.slice(u[off + G.UV1], u[off + G.UV1] + count * 2), 2);
+    if (u[H.VERSION] >= 2) {
+      if (u[off + G.COLOR]) geometry.color = new Attribute(f.slice(u[off + G.COLOR], u[off + G.COLOR] + count * 3), 3);
+      if (u[off + G.TANGENT]) geometry.tangent = new Attribute(f.slice(u[off + G.TANGENT], u[off + G.TANGENT] + count * 4), 4);
+      if (u[off + G.MATERIAL_INDEX]) geometry.materialIndex = new Attribute(new Int32Array(u.slice(u[off + G.MATERIAL_INDEX], u[off + G.MATERIAL_INDEX] + count)), 1);
     }
     if (!geometry.tangent && geometry.uv) generateVertexTangents(geometry);
     geometries.push(geometry);
   }
   const meshes: MeshState[] = [];
-  for (let i = 0; i < u[5]; i++) {
-    const off = u[10] + i * 20;
+  for (let i = 0; i < u[H.MESH_COUNT]; i++) {
+    const off = u[H.MESH_OFFSET] + i * M.WORDS;
     const meshMaterials: MaterialState[] = [];
-    if (u[0] >= 2 && u[off + 3]) {
-      for (let k = 0; k < u[off + 3]; k++) meshMaterials.push(materials[u[u[off + 2] + k]]);
-    } else meshMaterials.push(materials[u[off + 1]]);
-    const mesh = new MeshState(geometries[u[off]], meshMaterials);
-    if (u[0] >= 2 && u[23]) {
-      const io = u[23] + i * 4, instanceCount = u[io];
+    if (u[H.VERSION] >= 2 && u[off + M.MATERIAL_COUNT]) {
+      for (let k = 0; k < u[off + M.MATERIAL_COUNT]; k++) meshMaterials.push(materials[u[u[off + M.MATERIAL_TABLE] + k]]);
+    } else meshMaterials.push(materials[u[off + M.MATERIAL]]);
+    const mesh = new MeshState(geometries[u[off + M.GEOMETRY]], meshMaterials);
+    if (u[H.VERSION] >= 2 && u[H.BATCH_OFFSET]) {
+      const io = u[H.BATCH_OFFSET] + i * B.WORDS, instanceCount = u[io + B.COUNT];
       // Count UINT32_MAX denotes an ordinary mesh; zero is an empty batch.
       if (instanceCount !== 0xffffffff) mesh.setInstanceState(new InstanceState({count: instanceCount,
-        transforms: f.slice(u[io + 1], u[io + 1] + instanceCount * 16),
-        colors: u[io + 2] ? f.slice(u[io + 2], u[io + 2] + instanceCount * 3) : undefined}));
+        transforms: f.slice(u[io + B.TRANSFORMS], u[io + B.TRANSFORMS] + instanceCount * 16),
+        colors: u[io + B.COLORS] ? f.slice(u[io + B.COLORS], u[io + B.COLORS] + instanceCount * 3) : undefined}));
     }
-    for (let k = 0; k < 16; k++) write(mesh.transform, k, f[off + 4 + k]);
+    for (let k = 0; k < 16; k++) write(mesh.transform, k, f[off + M.TRANSFORM + k]);
     meshes.push(mesh);
   }
   const lights: AnalyticLightState[] = [];
   const iesProfiles = new Map<string, IESProfile>();
-  for (let i = 0; i < u[7]; i++) {
-    const off = u[12] + i * 28;
-    const light = lightFromRecord(u, f, off, u[0] === 3 && u[off + 8] ? textures[u[off + 8] - 1] : undefined);
-    if (u[0] === 3 && light.type === 'SpotLight' && u[off + 10]) {
-      const key = `${u[off + 9]}:${u[off + 10]}`;
+  for (let i = 0; i < u[H.LIGHT_COUNT]; i++) {
+    const off = u[H.LIGHT_OFFSET] + i * L.WORDS;
+    const light = lightFromRecord(u, f, off, u[H.VERSION] === 3 && u[off + L.TEXTURE] ? textures[u[off + L.TEXTURE] - 1] : undefined);
+    if (u[H.VERSION] === 3 && light.type === 'SpotLight' && u[off + L.IES_BYTES]) {
+      const key = `${u[off + L.IES_OFFSET]}:${u[off + L.IES_BYTES]}`;
       let profile = iesProfiles.get(key);
       if (!profile) {
-        profile = parseIESProfile(new TextDecoder().decode(bytes.subarray(u[off + 9] * 4, u[off + 9] * 4 + u[off + 10])), 'native scene');
+        profile = parseIESProfile(new TextDecoder().decode(bytes.subarray(u[off + L.IES_OFFSET] * 4, u[off + L.IES_OFFSET] * 4 + u[off + L.IES_BYTES])), 'native scene');
         iesProfiles.set(key, profile);
       }
       light.iesProfile = profile;
@@ -233,8 +234,8 @@ function decodeScene(bytes: Uint8Array) {
     lights.push(light);
   }
   return {width, height, environment, background, qualityFlags, environmentDistribution,
-    materials, geometries, meshes, lights, textureIds, backgroundColor: f.slice(16, 20),
-    cameraUniform: sceneCameraParameters(bytes.subarray(u[14] * 4, u[14] * 4 + 128), width, height)};
+    materials, geometries, meshes, lights, textureIds, backgroundColor: f.slice(H.BACKGROUND_COLOR, H.BACKGROUND_COLOR + 4),
+    cameraUniform: sceneCameraParameters(bytes.subarray(u[H.CAMERA_OFFSET] * WORD_BYTES, u[H.CAMERA_OFFSET] * WORD_BYTES + C.WORDS * WORD_BYTES), width, height)};
 }
 function prepareSceneSources(input: DecodedScene) {
   const {meshes, textureIds} = input;
@@ -355,39 +356,39 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     if (kind === 0 && id <= 3 && data.length < WGPU_SCENE_BUFFER_MIN_BYTES) {
       const padded = new Uint8Array(WGPU_SCENE_BUFFER_MIN_BYTES); padded.set(data); data = padded;
     }
-    records.push([id, kind, data.length, w, h, layers, format, 0]); parts.push(data);
+    records.push(resourceRecord(id, kind, data.length, w, h, layers, format)); parts.push(data);
   }
-  add(1, 0, bvh, 0, 0, 0, 0); add(2, 0, new Uint8Array(tlas.instancesBuffer!), 0, 0, 0, 0);
-  add(3, 0, new Uint8Array(attributes.buffer), 0, 0, 0, 0); add(4, 0, new Uint8Array(table.getBufferArray().buffer), 0, 0, 0, 0);
-  add(5, 0, new Uint8Array(mapInfo.buffer), 0, 0, 0, 0); add(6, 0, cameraUniform, 0, 0, 0, 0);
-  add(7, 0, new Uint8Array(rt.buffer), 0, 0, 0, 0); add(8, 0, new Uint8Array(lightUniform.buffer), 0, 0, 0, 0);
-  add(20, 1, atlasBytes, atlas.width, atlas.height, atlasLayers, atlas.floatStorage ? 1 : 0);
-  add(21, 1, environment ? new Uint8Array(environment.data.buffer) : new Uint8Array(16), environment?.width ?? 1, environment?.height ?? 1, 1, 2);
+  add(RESOURCE.BVH, KIND.BUFFER, bvh, 0, 0, 0, 0); add(RESOURCE.INSTANCES, KIND.BUFFER, new Uint8Array(tlas.instancesBuffer!), 0, 0, 0, 0);
+  add(RESOURCE.ATTRIBUTES, KIND.BUFFER, new Uint8Array(attributes.buffer), 0, 0, 0, 0); add(RESOURCE.MATERIALS, KIND.BUFFER, new Uint8Array(table.getBufferArray().buffer), 0, 0, 0, 0);
+  add(RESOURCE.MAP_INFO, KIND.BUFFER, new Uint8Array(mapInfo.buffer), 0, 0, 0, 0); add(RESOURCE.CAMERA, KIND.BUFFER, cameraUniform, 0, 0, 0, 0);
+  add(RESOURCE.TRACE_UNIFORM, KIND.BUFFER, new Uint8Array(rt.buffer), 0, 0, 0, 0); add(RESOURCE.LIGHT_UNIFORM, KIND.BUFFER, new Uint8Array(lightUniform.buffer), 0, 0, 0, 0);
+  add(RESOURCE.ATLAS, KIND.TEXTURE, atlasBytes, atlas.width, atlas.height, atlasLayers, atlas.floatStorage ? FORMAT.RGBA16_FLOAT : FORMAT.RGBA8_UNORM);
+  add(RESOURCE.ENVIRONMENT, KIND.TEXTURE, environment ? new Uint8Array(environment.data.buffer) : new Uint8Array(16), environment?.width ?? 1, environment?.height ?? 1, 1, FORMAT.RGBA32_FLOAT);
   if (environmentDistribution) {
     const data = environmentDistribution.data;
     if (!(data instanceof Float32Array)) throw new Error('Expected float environment distribution.');
-    add(22, 1, new Uint8Array(data.buffer), environmentDistribution.width, environmentDistribution.height, 1, 4);
-  } else add(22, 1, new Uint8Array(8), 1, 1, 1, 4);
-  add(23, 1, background ? new Uint8Array(background.data.buffer) : new Uint8Array(16), background?.width ?? 1, background?.height ?? 1, 1, 2);
-  add(24, 1, new Uint8Array(lightData.buffer), lightWidth, lightHeight, 1, 2);
-  add(25, 1, new Uint8Array(getOpenPbrEnergyLutData().buffer), OPENPBR_ENERGY_LUT_WIDTH, OPENPBR_ENERGY_LUT_HEIGHT, 1, 3);
-  add(26, 1, new Uint8Array(new Float32Array([Number.MAX_SAFE_INTEGER]).buffer), 1, 1, 1, 3);
-  add(30, 2, shader, 0, 0, 0, 0);
-  add(39, 2, new TextEncoder().encode(wgpuShaderSource(constants, features, true) + nativeHitDiagnostics(features, false, 'software')), 0, 0, 0, 0);
+    add(RESOURCE.ENVIRONMENT_CDF, KIND.TEXTURE, new Uint8Array(data.buffer), environmentDistribution.width, environmentDistribution.height, 1, FORMAT.RG32_FLOAT);
+  } else add(RESOURCE.ENVIRONMENT_CDF, KIND.TEXTURE, new Uint8Array(8), 1, 1, 1, FORMAT.RG32_FLOAT);
+  add(RESOURCE.BACKGROUND, KIND.TEXTURE, background ? new Uint8Array(background.data.buffer) : new Uint8Array(16), background?.width ?? 1, background?.height ?? 1, 1, FORMAT.RGBA32_FLOAT);
+  add(RESOURCE.LIGHT_SAMPLING, KIND.TEXTURE, new Uint8Array(lightData.buffer), lightWidth, lightHeight, 1, FORMAT.RGBA32_FLOAT);
+  add(RESOURCE.ENERGY_LUT, KIND.TEXTURE, new Uint8Array(getOpenPbrEnergyLutData().buffer), OPENPBR_ENERGY_LUT_WIDTH, OPENPBR_ENERGY_LUT_HEIGHT, 1, FORMAT.R32_FLOAT);
+  add(RESOURCE.DISPLACEMENT, KIND.TEXTURE, new Uint8Array(new Float32Array([Number.MAX_SAFE_INTEGER]).buffer), 1, 1, 1, FORMAT.R32_FLOAT);
+  add(RESOURCE.SOFTWARE_SHADER, KIND.WGSL, shader, 0, 0, 0, 0);
+  add(RESOURCE.SOFTWARE_HIT_SHADER, KIND.WGSL, new TextEncoder().encode(wgpuShaderSource(constants, features, true) + nativeHitDiagnostics(features, false, 'software')), 0, 0, 0, 0);
   const nativeLayout: NativeLayout = {
     hasAlpha: Boolean(constants.HAS_ALPHA), attributeStrideBytes: stride * 4,
     positionOffsetBytes: offsets[0] * 4, blasOffset: rt.views.blasOffset[0],
     isEmpty: rt.views.isEmpty[0] !== 0, bevel: rt.views.bevel[0] !== 0,
     hasDisplacement: features.hasDisplacement, indexed: !!hardware, hardwareGeometries: hardware?.geometries
   };
-  add(31, 3, nativeLayoutBytes(nativeLayout, nativeLayout.blasOffset, nativeLayout.isEmpty), 0, 0, 0, 0);
+  add(RESOURCE.METADATA, KIND.METADATA, nativeLayoutBytes(nativeLayout, nativeLayout.blasOffset, nativeLayout.isEmpty), 0, 0, 0, 0);
   const opaqueClosest = !!hardware && !features.hasDisplacement && hardware.geometries.some(g => g.opaque);
   const hardwareShader = 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
     nativeIntersections(features, nativeLayout.isEmpty, false, false, !!hardware, opaqueClosest));
-  add(33, 2, new TextEncoder().encode(hardwareShader), 0, 0, 0, 0);
+  add(RESOURCE.HWRT_SHADER, KIND.WGSL, new TextEncoder().encode(hardwareShader), 0, 0, 0, 0);
   const diagnosticShader = 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
     nativeIntersections(features, nativeLayout.isEmpty, true, false, !!hardware, opaqueClosest));
-  add(34, 2, new TextEncoder().encode(diagnosticShader + nativeHitDiagnostics(features, nativeLayout.isEmpty, hardware ? 'hardware' : 'both')), 0, 0, 0, 0);
+  add(RESOURCE.HIT_SHADER, KIND.WGSL, new TextEncoder().encode(diagnosticShader + nativeHitDiagnostics(features, nativeLayout.isEmpty, hardware ? 'hardware' : 'both')), 0, 0, 0, 0);
   // Both AS inputs remain explicitly indexed. Production retains source index
   // lookup; leaf-order regression diagnostics use sequence indices.
   const sequential = new Uint32Array(attributeLength(geometry.indices.array));
@@ -396,10 +397,10 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
       sequential[i] = attributeValue(geometry.indices.array, i) - g.vertexOffset;
     }
   } else for (let i = 0; i < sequential.length; i++) sequential[i] = i;
-  add(35, 3, new Uint8Array(sequential.buffer), 0, 0, 0, 0);
-  add(36, 2, new TextEncoder().encode(wgpuShaderSource(constants, features, true,
+  add(RESOURCE.INDICES, KIND.METADATA, new Uint8Array(sequential.buffer), 0, 0, 0, 0);
+  add(RESOURCE.SOFTWARE_PATH_SHADER, KIND.WGSL, new TextEncoder().encode(wgpuShaderSource(constants, features, true,
     nativePathIntersections(features, nativeLayout.isEmpty, false), true)), 0, 0, 0, 0);
-  add(37, 2, new TextEncoder().encode('enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
+  add(RESOURCE.HWRT_PATH_SHADER, KIND.WGSL, new TextEncoder().encode('enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
     nativePathIntersections(features, nativeLayout.isEmpty, true, !!hardware, opaqueClosest), true)), 0, 0, 0, 0);
   const identity: number[] = [];
   let recordBase = tlas.buffer.byteLength / 16;
@@ -409,13 +410,13 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     if (ids) for (let k = 0; k < ids.length; k += 2) identity.push(recordBase + ids[k], primitiveBase + ids[k + 1]);
     recordBase += blases[i].bvh.buffer.byteLength / 16;
   }
-  add(40, 3, new Uint8Array(new Uint32Array(identity).buffer), 0, 0, 0, 0);
+  add(RESOURCE.PRIMITIVE_IDS, KIND.METADATA, new Uint8Array(new Uint32Array(identity).buffer), 0, 0, 0, 0);
   if (hardware) {
-    add(38, 3, new Uint8Array(hardware.bounds.buffer), 0, 0, 0, 0);
-    add(41, 3, new Uint8Array(hardwarePositions(geometry).buffer), 0, 0, 0, 0);
+    add(RESOURCE.DISPLACEMENT_BOUNDS, KIND.METADATA, new Uint8Array(hardware.bounds.buffer), 0, 0, 0, 0);
+    add(RESOURCE.AS_POSITIONS, KIND.METADATA, new Uint8Array(hardwarePositions(geometry).buffer), 0, 0, 0, 0);
     const asIndices = new Uint32Array(sequential.length);
     for (const g of hardware.geometries) for (let i = g.indexOffset; i < g.indexOffset + g.indexCount; i++) asIndices[i] = i - g.indexOffset;
-    add(42, 3, new Uint8Array(asIndices.buffer), 0, 0, 0, 0);
+    add(RESOURCE.AS_INDICES, KIND.METADATA, new Uint8Array(asIndices.buffer), 0, 0, 0, 0);
   }
   if (token) retainedScenes.set(token, {source: materials, ordered: prepared.materials, table, lights, emissive,
     rt: rt.buffer, environmentWidth: environment?.width ?? 0, environmentHeight: environment?.height ?? 0,
@@ -463,10 +464,7 @@ function hardwareScene(prepared: PreparedScene, build: SceneSources): HardwareSc
     for (let t = 0; t < attributeLength(geometry.indices.array) / 3; t++) {
       const record = region.indexOffset / 3 + t;
       if (ranges) {
-        const lo = Math.max(0, Math.min(255, Math.floor(Math.fround(ranges[t * 2] * 255))));
-        const hi = Math.abs(ranges[t * 2 + 1] - ranges[t * 2]) < 1e-6 ? lo
-          : Math.max(0, Math.min(255, Math.ceil(Math.fround(ranges[t * 2 + 1] * 255))));
-        records[record * 4 + 3] = (lo << 8) | hi;
+        records[record * 4 + 3] = quantizeDisplacementRange(ranges[t * 2], ranges[t * 2 + 1]);
       }
       if (!procedural) continue;
       const minimum = [Infinity, Infinity, Infinity], maximum = [-Infinity, -Infinity, -Infinity];
@@ -533,7 +531,7 @@ function build_nativeSceneBegin(bytes: Uint8Array, token: number): Uint8Array {
     new Float32Array(data.buffer)[3] = job.displacementScale;
     let offset = 16;
     for (const part of [positions, normals, new Uint8Array(indices.buffer), ranges]) {data.set(part, offset); offset += part.length;}
-    records.push([i, 0, data.byteLength, 0, 0, 0, 0, 0]); parts.push(data);
+    records.push(resourceRecord(i, KIND.BUFFER, data.byteLength, 0, 0, 0, 0)); parts.push(data);
   }
   return resourcePacket(records, parts, 0, 0);
 }
@@ -571,14 +569,22 @@ function build_nativeSceneFinish(bytes: Uint8Array, token: number): Uint8Array {
   return output;
 }
 
+function resourceRecord(id: number, kind: number, length: number, width: number, height: number, layers: number, format: number): number[] {
+  const record = new Array<number>(PE.WORDS).fill(0);
+  record[PE.ID] = id; record[PE.KIND] = kind; record[PE.LENGTH] = length;
+  record[PE.WIDTH] = width; record[PE.HEIGHT] = height; record[PE.LAYERS] = layers; record[PE.FORMAT] = format;
+  return record;
+}
+
 function resourcePacket(records: number[][], parts: Uint8Array[], width: number, height: number) {
-  let size = 16 + records.length * 32;
-  for (const part of parts) size += Math.ceil(part.length / 4) * 4;
+  let size = (PH.WORDS + records.length * PE.WORDS) * WORD_BYTES;
+  for (const part of parts) size += Math.ceil(part.length / WORD_BYTES) * WORD_BYTES;
   const result = new Uint8Array(size), header = new Uint32Array(result.buffer);
-  header.set([1, records.length, width, height]); let offset = 16 + records.length * 32;
+  header[PH.VERSION] = 1; header[PH.COUNT] = records.length; header[PH.WIDTH] = width; header[PH.HEIGHT] = height;
+  let offset = (PH.WORDS + records.length * PE.WORDS) * WORD_BYTES;
   for (let i = 0; i < records.length; i++) {
-    records[i][7] = offset; header.set(records[i], 4 + i * 8);
-    result.set(parts[i], offset); offset += Math.ceil(parts[i].length / 4) * 4;
+    records[i][PE.BYTE_OFFSET] = offset; header.set(records[i], PH.WORDS + i * PE.WORDS);
+    result.set(parts[i], offset); offset += Math.ceil(parts[i].length / WORD_BYTES) * WORD_BYTES;
   }
   return result;
 }
@@ -636,14 +642,14 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
   pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, environmentPower});
   const parts: Uint8Array[] = [], records: number[][] = [];
   function add(id: number, kind: number, data: Uint8Array, width: number, height: number, format: number) {
-    records.push([id, kind, data.length, width, height, kind === 1 ? 1 : 0, format, 0]); parts.push(data);
+    records.push(resourceRecord(id, kind, data.length, width, height, kind === KIND.TEXTURE ? 1 : 0, format)); parts.push(data);
   }
-  add(7, 0, new Uint8Array(rt.buffer), 0, 0, 0); add(8, 0, new Uint8Array(lighting.lightUniform.buffer), 0, 0, 0);
-  add(21, 1, environment ? new Uint8Array(environment.data.buffer) : new Uint8Array(16), u[1] || 1, u[2] || 1, 2);
-  add(22, 1, distribution ? new Uint8Array((distribution.data as Float32Array).buffer) : new Uint8Array(8),
-    distribution?.width ?? 1, distribution?.height ?? 1, 4);
-  add(23, 1, background ? new Uint8Array(background.data.buffer) : new Uint8Array(16), u[8] || 1, u[9] || 1, 2);
-  add(24, 1, new Uint8Array(lighting.lightData.buffer), lighting.lightWidth, lighting.lightHeight, 2);
+  add(RESOURCE.TRACE_UNIFORM, KIND.BUFFER, new Uint8Array(rt.buffer), 0, 0, 0); add(RESOURCE.LIGHT_UNIFORM, KIND.BUFFER, new Uint8Array(lighting.lightUniform.buffer), 0, 0, 0);
+  add(RESOURCE.ENVIRONMENT, KIND.TEXTURE, environment ? new Uint8Array(environment.data.buffer) : new Uint8Array(16), u[1] || 1, u[2] || 1, FORMAT.RGBA32_FLOAT);
+  add(RESOURCE.ENVIRONMENT_CDF, KIND.TEXTURE, distribution ? new Uint8Array((distribution.data as Float32Array).buffer) : new Uint8Array(8),
+    distribution?.width ?? 1, distribution?.height ?? 1, FORMAT.RG32_FLOAT);
+  add(RESOURCE.BACKGROUND, KIND.TEXTURE, background ? new Uint8Array(background.data.buffer) : new Uint8Array(16), u[8] || 1, u[9] || 1, FORMAT.RGBA32_FLOAT);
+  add(RESOURCE.LIGHT_SAMPLING, KIND.TEXTURE, new Uint8Array(lighting.lightData.buffer), lighting.lightWidth, lighting.lightHeight, FORMAT.RGBA32_FLOAT);
   return resourcePacket(records, parts, 0, 0);
 }
 
@@ -655,12 +661,12 @@ function packLightingUniform(rt: ReturnType<typeof makeRayTraceUniform>, environ
 }
 function lightFromRecord(u: Uint32Array, f: Float32Array, off: number, texture: TextureState | undefined): AnalyticLightState {
   let light: AnalyticLightState;
-  if (u[off] === 0) light = new RectLightState({size: [f[off + 5], f[off + 6]], spread: f[off + 7], texture});
-  else if (u[off] === 1) light = new SphereLight({radius: f[off + 5]});
-  else if (u[off] === 2) light = new DirectionalLight();
-  else light = new SpotLight({radius: f[off + 5], innerAngle: f[off + 6], outerAngle: f[off + 7]});
-  light.color = [f[off + 1], f[off + 2], f[off + 3]]; light.intensity = f[off + 4];
-  for (let k = 0; k < 16; k++) write(light.transform, k, f[off + 12 + k]);
+  if (u[off + L.TYPE] === 0) light = new RectLightState({size: [f[off + L.SIZE], f[off + L.HEIGHT_OR_INNER]], spread: f[off + L.SPREAD_OR_OUTER], texture});
+  else if (u[off + L.TYPE] === 1) light = new SphereLight({radius: f[off + L.SIZE]});
+  else if (u[off + L.TYPE] === 2) light = new DirectionalLight();
+  else light = new SpotLight({radius: f[off + L.SIZE], innerAngle: f[off + L.HEIGHT_OR_INNER], outerAngle: f[off + L.SPREAD_OR_OUTER]});
+  light.color = [f[off + L.COLOR], f[off + L.COLOR + 1], f[off + L.COLOR + 2]]; light.intensity = f[off + L.INTENSITY];
+  for (let k = 0; k < 16; k++) write(light.transform, k, f[off + L.TRANSFORM + k]);
   return light;
 }
 // Version1,index,reserved[2], followed by Light[28]. Attachments remain committed.

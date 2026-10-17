@@ -2,6 +2,7 @@
 use anyhow::{Result, bail, ensure};
 use glam::{Mat4, Vec3};
 use mutracer_native_probe::context as native;
+use mutracer_native_probe::layout::camera as camera_wire;
 use std::{
     ffi::CStr,
     marker::PhantomData,
@@ -284,20 +285,20 @@ impl Camera {
             (self.distance * (-delta * 0.002).exp()).clamp(self.radius * 0.03, self.radius * 100.);
     }
     pub fn bytes(&self) -> Vec<u8> {
-        let mut f = [0f32; 32];
-        f[1] = self.fov;
-        f[2] = (self.radius * 0.0001).max(0.00001);
-        f[3] = (self.radius * 1000.).max(100.);
-        f[4] = -1.;
-        f[5] = 1.;
-        f[6] = -1.;
-        f[7] = 1.;
-        f[8] = 1.;
-        f[10] = self.distance;
-        f[11] = 24.;
-        f[12] = 1.;
+        let mut f = [0f32; camera_wire::WORDS];
+        f[camera_wire::FOV] = self.fov;
+        f[camera_wire::NEAR] = (self.radius * 0.0001).max(0.00001);
+        f[camera_wire::FAR] = (self.radius * 1000.).max(100.);
+        f[camera_wire::LEFT] = -1.;
+        f[camera_wire::RIGHT] = 1.;
+        f[camera_wire::BOTTOM] = -1.;
+        f[camera_wire::TOP] = 1.;
+        f[camera_wire::ZOOM] = 1.;
+        f[camera_wire::FOCUS_DISTANCE] = self.distance;
+        f[camera_wire::SENSOR_HEIGHT] = 24.;
+        f[camera_wire::METERS_PER_UNIT] = 1.;
         let world = Mat4::look_at_rh(self.eye(), self.target, Vec3::Y).inverse();
-        f[16..32].copy_from_slice(&world.to_cols_array());
+        f[camera_wire::TRANSFORM..camera_wire::WORDS].copy_from_slice(&world.to_cols_array());
         f.into_iter().flat_map(f32::to_le_bytes).collect()
     }
 }

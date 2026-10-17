@@ -1,3 +1,4 @@
+import {GROUP, HWRT_BINDING} from './layout.js';
 import {createSceneIntersectionsWgsl} from '../src/renderer/wgsl/chunks/intersect.wgsl.js';
 import type {WGPUShaderFeatures} from '../src/renderer/wgpuShaderSource.js';
 import {nativeIntersections} from './intersections.wgsl.js';
@@ -14,8 +15,8 @@ export function nativePathIntersections(features: WGPUShaderFeatures, empty: boo
 `});
   return intersections + /* wgsl */ `
 struct MtPathEvent { identity: vec4u, barycentric: vec4f, origin: vec4f, direction: vec4f, }
-@group(0) @binding(7) var<storage, read_write> mtPathEvents: array<MtPathEvent>;
-@group(0) @binding(8) var<storage, read> mtPathParameters: vec4u;
+@group(${GROUP.SCENE}) @binding(${HWRT_BINDING.DIAGNOSTIC}) var<storage, read_write> mtPathEvents: array<MtPathEvent>;
+@group(${GROUP.SCENE}) @binding(${HWRT_BINDING.PATH_PARAMETERS}) var<storage, read> mtPathParameters: vec4u;
 var<private> mtPathBase: u32;
 var<private> mtPathCount: u32;
 fn mtPathBegin(coord: vec2u) {

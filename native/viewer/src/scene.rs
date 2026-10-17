@@ -1,6 +1,10 @@
 //! glTF-to-descriptor adapter; all renderer preparation stays in the AOT library.
 use anyhow::{Context, Result, bail, ensure};
 use glam::{Mat4, Vec3};
+use mutracer_native_probe::layout::{
+    geometry as g, header as h, light as light_wire, material as mat, mesh as wire_mesh,
+    texture as tex,
+};
 use std::{collections::HashMap, path::Path};
 
 #[derive(Clone)]
@@ -736,43 +740,47 @@ impl Model {
         environment: &Environment,
         light: &KeyLight,
     ) -> Vec<u8> {
-        let mut w = Wire(vec![0; 32]);
-        w.0[0] = 2;
-        w.0[2] = size[0];
-        w.0[3] = size[1];
-        w.0[4] = self.geometries.len() as u32;
-        w.0[5] = self.meshes.len() as u32;
-        w.0[6] = self.materials.len() as u32;
-        w.0[7] = u32::from(light.enabled);
-        w.0[8] = self.textures.len() as u32 + 1;
+        let mut w = Wire(vec![0; h::WORDS]);
+        w.0[h::VERSION] = 2;
+        w.0[h::WIDTH] = size[0];
+        w.0[h::HEIGHT] = size[1];
+        w.0[h::GEOMETRY_COUNT] = self.geometries.len() as u32;
+        w.0[h::MESH_COUNT] = self.meshes.len() as u32;
+        w.0[h::MATERIAL_COUNT] = self.materials.len() as u32;
+        w.0[h::LIGHT_COUNT] = u32::from(light.enabled);
+        w.0[h::TEXTURE_COUNT] = self.textures.len() as u32 + 1;
         for (header, count, stride) in [
-            (9, self.geometries.len(), 12),
-            (10, self.meshes.len(), 20),
-            (11, self.materials.len(), 24),
-            (13, self.textures.len() + 1, 12),
-            (12, usize::from(light.enabled), 28),
+            (h::GEOMETRY_OFFSET, self.geometries.len(), g::WORDS),
+            (h::MESH_OFFSET, self.meshes.len(), wire_mesh::WORDS),
+            (h::MATERIAL_OFFSET, self.materials.len(), mat::WORDS),
+            (h::TEXTURE_OFFSET, self.textures.len() + 1, tex::WORDS),
+            (
+                h::LIGHT_OFFSET,
+                usize::from(light.enabled),
+                light_wire::WORDS,
+            ),
         ] {
             w.0[header] = w.0.len() as u32;
             w.0.resize(w.0.len() + count * stride, 0);
         }
         if light.enabled {
-            let offset = w.0[12] as usize;
-            w.0[offset..offset + 28].copy_from_slice(&light.record());
+            let offset = w.0[h::LIGHT_OFFSET] as usize;
+            w.0[offset..offset + light_wire::WORDS].copy_from_slice(&light.record());
         }
-        w.0[14] = w.append_bytes(camera);
-        w.0[19] = 1f32.to_bits();
+        w.0[h::CAMERA_OFFSET] = w.append_bytes(camera);
+        w.0[h::BACKGROUND_COLOR + 3] = 1f32.to_bits();
         for (i, g) in self.geometries.iter().enumerate() {
-            let o = w.0[9] as usize + i * 12;
-            w.0[o] = g.positions.len() as u32 / 3;
-            w.0[o + 1] = g.indices.len() as u32;
-            w.0[o + 2] = w.append_floats(&g.positions);
-            w.0[o + 3] = w.append(&g.indices);
+            let o = w.0[h::GEOMETRY_OFFSET] as usize + i * g::WORDS;
+            w.0[o + g::VERTEX_COUNT] = g.positions.len() as u32 / 3;
+            w.0[o + g::INDEX_COUNT] = g.indices.len() as u32;
+            w.0[o + g::POSITION] = w.append_floats(&g.positions);
+            w.0[o + g::INDICES] = w.append(&g.indices);
             for (k, data) in [
-                (4, &g.normals),
-                (5, &g.uv[0]),
-                (6, &g.uv[1]),
-                (7, &g.colors),
-                (8, &g.tangents),
+                (g::NORMAL, &g.normals),
+                (g::UV, &g.uv[0]),
+                (g::UV1, &g.uv[1]),
+                (g::COLOR, &g.colors),
+                (g::TANGENT, &g.tangents),
             ] {
                 if !data.is_empty() {
                     w.0[o + k] = w.append_floats(data);
@@ -780,37 +788,36 @@ impl Model {
             }
         }
         for (i, m) in self.meshes.iter().enumerate() {
-            let o = w.0[10] as usize + i * 20;
-            w.0[o] = m.geometry as u32;
-            w.0[o + 1] = m.material as u32;
+            let o = w.0[h::MESH_OFFSET] as usize + i * wire_mesh::WORDS;
+            w.0[o + wire_mesh::GEOMETRY] = m.geometry as u32;
+            w.0[o + wire_mesh::MATERIAL] = m.material as u32;
             for (k, v) in m.transform.to_cols_array().iter().enumerate() {
-                w.0[o + 4 + k] = v.to_bits();
+                w.0[o + wire_mesh::TRANSFORM + k] = v.to_bits();
             }
         }
         for (i, m) in self.materials.iter().enumerate() {
-            let o = w.0[11] as usize + i * 24;
-            let values = [
-                m.color[0],
-                m.color[1],
-                m.color[2],
-                m.roughness,
-                m.metalness,
-                m.transmission,
-                m.ior,
-                m.emission[0],
-                m.emission[1],
-                m.emission[2],
-                m.emission_strength,
-                0.,
-                0.,
-                m.opacity,
-            ];
-            for (k, v) in values.iter().enumerate() {
-                w.0[o + k] = v.to_bits();
+            let o = w.0[h::MATERIAL_OFFSET] as usize + i * mat::WORDS;
+            for (field, value) in [
+                (mat::BASE_COLOR, m.color[0]),
+                (mat::BASE_COLOR + 1, m.color[1]),
+                (mat::BASE_COLOR + 2, m.color[2]),
+                (mat::ROUGHNESS, m.roughness),
+                (mat::METALNESS, m.metalness),
+                (mat::TRANSMISSION, m.transmission),
+                (mat::IOR, m.ior),
+                (mat::EMISSION_COLOR, m.emission[0]),
+                (mat::EMISSION_COLOR + 1, m.emission[1]),
+                (mat::EMISSION_COLOR + 2, m.emission[2]),
+                (mat::EMISSION_LUMINANCE, m.emission_strength),
+                (mat::COAT_WEIGHT, 0.),
+                (mat::COAT_ROUGHNESS, 0.),
+                (mat::OPACITY, m.opacity),
+            ] {
+                w.0[o + field] = value.to_bits();
             }
-            w.0[o + 14] = 1;
+            w.0[o + mat::THIN_WALLED] = 1;
             for (k, v) in m.maps.iter().enumerate() {
-                w.0[o + 15 + k] = *v;
+                w.0[o + mat::MAP + k] = *v;
             }
             let ext = [
                 38,
@@ -838,37 +845,37 @@ impl Model {
                 0,
                 0,
             ];
-            w.0[o + 19] = 6;
-            w.0[o + 20] = w.append(&ext);
+            w.0[o + mat::EXTENSION_COUNT] = 6;
+            w.0[o + mat::EXTENSION_OFFSET] = w.append(&ext);
         }
         for (i, t) in self.textures.iter().enumerate() {
-            let o = w.0[13] as usize + i * 12;
-            w.0[o] = t.width;
-            w.0[o + 1] = t.height;
-            w.0[o + 3] = w.append_bytes(&t.pixels);
-            w.0[o + 5] = t.uv;
-            w.0[o + 6] = t.scale[0].to_bits();
-            w.0[o + 7] = t.scale[1].to_bits();
-            w.0[o + 8] = t.offset[0].to_bits();
-            w.0[o + 9] = t.offset[1].to_bits();
+            let o = w.0[h::TEXTURE_OFFSET] as usize + i * tex::WORDS;
+            w.0[o + tex::WIDTH] = t.width;
+            w.0[o + tex::HEIGHT] = t.height;
+            w.0[o + tex::PIXELS] = w.append_bytes(&t.pixels);
+            w.0[o + tex::UV_CHANNEL] = t.uv;
+            w.0[o + tex::UV_SCALE] = t.scale[0].to_bits();
+            w.0[o + tex::UV_SCALE + 1] = t.scale[1].to_bits();
+            w.0[o + tex::UV_OFFSET] = t.offset[0].to_bits();
+            w.0[o + tex::UV_OFFSET + 1] = t.offset[1].to_bits();
         }
         let (width, height, pixels) = environment.pixels();
-        let o = w.0[13] as usize + self.textures.len() * 12;
-        w.0[o] = width;
-        w.0[o + 1] = height;
-        w.0[o + 2] = 1;
-        w.0[o + 3] = w.append_floats(&pixels);
-        w.0[o + 6] = 1f32.to_bits();
-        w.0[o + 7] = 1f32.to_bits();
-        w.0[20] = self.textures.len() as u32 + 1;
+        let o = w.0[h::TEXTURE_OFFSET] as usize + self.textures.len() * tex::WORDS;
+        w.0[o + tex::WIDTH] = width;
+        w.0[o + tex::HEIGHT] = height;
+        w.0[o + tex::STORAGE] = 1;
+        w.0[o + tex::PIXELS] = w.append_floats(&pixels);
+        w.0[o + tex::UV_SCALE] = 1f32.to_bits();
+        w.0[o + tex::UV_SCALE + 1] = 1f32.to_bits();
+        w.0[h::ENVIRONMENT_TEXTURE] = self.textures.len() as u32 + 1;
         if environment.background {
-            w.0[21] = w.0[20];
+            w.0[h::BACKGROUND_TEXTURE] = w.0[h::ENVIRONMENT_TEXTURE];
         } else {
-            w.0[16] = 0.025f32.to_bits();
-            w.0[17] = 0.025f32.to_bits();
-            w.0[18] = 0.03f32.to_bits();
+            w.0[h::BACKGROUND_COLOR] = 0.025f32.to_bits();
+            w.0[h::BACKGROUND_COLOR + 1] = 0.025f32.to_bits();
+            w.0[h::BACKGROUND_COLOR + 2] = 0.03f32.to_bits();
         }
-        w.0[1] = w.0.len() as u32;
+        w.0[h::LENGTH] = w.0.len() as u32;
         w.0.into_iter().flat_map(u32::to_le_bytes).collect()
     }
 }
@@ -951,17 +958,17 @@ impl Default for KeyLight {
     }
 }
 impl KeyLight {
-    fn record(&self) -> [u32; 28] {
-        let mut words = [0; 28];
-        words[0] = 2;
+    fn record(&self) -> [u32; light_wire::WORDS] {
+        let mut words = [0; light_wire::WORDS];
+        words[light_wire::TYPE] = 2;
         for (k, value) in self.color.iter().enumerate() {
-            words[1 + k] = value.to_bits();
+            words[light_wire::COLOR + k] = value.to_bits();
         }
-        words[4] = self.intensity.to_bits();
+        words[light_wire::INTENSITY] = self.intensity.to_bits();
         let transform = Mat4::from_rotation_y(self.azimuth.to_radians())
             * Mat4::from_rotation_x(-self.elevation.to_radians());
         for (k, value) in transform.to_cols_array().iter().enumerate() {
-            words[12 + k] = value.to_bits();
+            words[light_wire::TRANSFORM + k] = value.to_bits();
         }
         words
     }

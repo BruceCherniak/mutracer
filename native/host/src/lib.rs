@@ -18,6 +18,8 @@ mod denoise_ffi;
 mod hardware;
 pub mod hit_diagnostics;
 pub mod image_diagnostics;
+#[rustfmt::skip]
+pub mod layout;
 mod material_properties;
 mod native_bvh;
 pub mod path_diagnostics;
@@ -589,7 +591,11 @@ impl GpuScene {
             if command[..4] != [0, 0, 0, 0] {
                 return Err("Unexpected native sampling pattern".into());
             }
-            queue.write_buffer(&buffers[&scene.rt_uniform], 160, &command[4..8]);
+            queue.write_buffer(
+                &buffers[&scene.rt_uniform],
+                layout::ray_uniform::Z_SOBOL_LOG_SPP as u64,
+                &command[4..8],
+            );
         }
         if options.flags & 1 != 0 {
             let id = scene
@@ -778,10 +784,10 @@ impl GpuScene {
                 .enumerate()
                 .map(|(index, group)| {
                     let mut entries: Vec<_> = group.layout.iter().map(layout_entry).collect();
-                    if index == 0 && hardware.is_some() {
+                    if index == layout::group::SCENE && hardware.is_some() {
                         entries.extend([
                             wgpu::BindGroupLayoutEntry {
-                                binding: 4,
+                                binding: layout::hwrt_binding::ACCELERATION as u32,
                                 visibility: wgpu::ShaderStages::COMPUTE,
                                 ty: wgpu::BindingType::AccelerationStructure {
                                     vertex_return: false,
@@ -789,7 +795,7 @@ impl GpuScene {
                                 count: None,
                             },
                             wgpu::BindGroupLayoutEntry {
-                                binding: 5,
+                                binding: layout::hwrt_binding::INDICES as u32,
                                 visibility: wgpu::ShaderStages::COMPUTE,
                                 ty: wgpu::BindingType::Buffer {
                                     ty: wgpu::BufferBindingType::Storage { read_only: true },
@@ -865,15 +871,15 @@ impl GpuScene {
                         },
                     })
                     .collect();
-                if index == 0 {
+                if index == layout::group::SCENE {
                     if let Some(resources) = &hardware {
                         entries.extend([
                             wgpu::BindGroupEntry {
-                                binding: 4,
+                                binding: layout::hwrt_binding::ACCELERATION as u32,
                                 resource: resources.tlas.as_binding(),
                             },
                             wgpu::BindGroupEntry {
-                                binding: 5,
+                                binding: layout::hwrt_binding::INDICES as u32,
                                 resource: resources.mapping.as_entire_binding(),
                             },
                         ]);
@@ -935,9 +941,17 @@ impl GpuScene {
                 mt_core_reset();
             }
             let uniform = &self.buffers[&self.scene.rt_uniform];
-            queue.write_buffer(uniform, 8, &frame[0..4]);
-            queue.write_buffer(uniform, 124, &frame[4..8]);
-            queue.write_buffer(uniform, 156, &frame[8..12]);
+            queue.write_buffer(
+                uniform,
+                layout::ray_uniform::SAMPLE_COUNT as u64,
+                &frame[0..4],
+            );
+            queue.write_buffer(uniform, layout::ray_uniform::BOUNCES as u64, &frame[4..8]);
+            queue.write_buffer(
+                uniform,
+                layout::ray_uniform::SEQUENCE_SEED as u64,
+                &frame[8..12],
+            );
             let mut encoder =
                 device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
             {
@@ -1102,11 +1116,11 @@ impl GpuScene {
                 .collect();
             entries.extend([
                 wgpu::BindGroupEntry {
-                    binding: 4,
+                    binding: layout::hwrt_binding::ACCELERATION as u32,
                     resource: resources.tlas.as_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 5,
+                    binding: layout::hwrt_binding::INDICES as u32,
                     resource: resources.mapping.as_entire_binding(),
                 },
             ]);

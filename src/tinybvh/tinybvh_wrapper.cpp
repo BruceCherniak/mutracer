@@ -1,3 +1,4 @@
+#include "../../native/mutracer-layout.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -51,11 +52,7 @@ uint32_t floatBits(float value) {
 }
 
 uint32_t packHeight(float minHeight, float maxHeight) {
-  const int minValue = std::clamp(static_cast<int>(std::floor(minHeight * 255.0f)), 0, 255);
-  const int maxValue = std::abs(maxHeight - minHeight) < 1e-6f
-    ? minValue
-    : std::clamp(static_cast<int>(std::ceil(maxHeight * 255.0f)), 0, 255);
-  return static_cast<uint32_t>((minValue << 8) | maxValue);
+  return mt_quantize_displacement_range(minHeight, maxHeight);
 }
 
 bool finiteVertex(const float* positions, uint32_t stride, uint32_t index) {

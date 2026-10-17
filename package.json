@@ -68,7 +68,7 @@
     "native:check": "node native/check.mjs",
     "dev": "vite",
     "build": "npm run typecheck && vite build",
-    "typecheck": "npm run check:material-comparison && tsc --noEmit",
+    "typecheck": "node native/generate-layout-schema.mjs --check && npm run check:material-comparison && tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "build:tinybvh": "./scripts/build-tinybvh.sh",

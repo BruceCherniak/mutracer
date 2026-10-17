@@ -1,5 +1,10 @@
 //! Validated raw scene boundary. Only returned AOT bytes are retained by Rust.
 use super::*;
+use crate::layout::{
+    WORD_BYTES, batch as b, camera as cam, extension as ext, geometry as g, header as h, kind,
+    light as l, material as mat, mesh as m, packet_entry as pe, packet_header as ph,
+    resource as res, sampler, texture as t,
+};
 unsafe extern "C" {
     fn mt_core_native_hardware_scene(
         input: *const u8,
@@ -106,7 +111,7 @@ impl Words<'_> {
         f32::from_bits(self.u(i) as u32)
     }
     fn span(&self, off: usize, count: usize) -> Result<()> {
-        if off < 32 || off > self.len() || count > self.len() - off {
+        if off < h::WORDS || off > self.len() || count > self.len() - off {
             return Err("Scene span is out of bounds".into());
         }
         Ok(())
@@ -135,64 +140,73 @@ impl Words<'_> {
     }
 }
 fn validate(bytes: &[u8]) -> Result<()> {
-    if bytes.len() < 128 || bytes.len() > MAX_BYTES || bytes.len() % 4 != 0 {
+    if bytes.len() < h::WORDS * WORD_BYTES || bytes.len() > MAX_BYTES || bytes.len() % 4 != 0 {
         return Err("Invalid scene byte length".into());
     }
     let w = Words(bytes);
-    if ![1, 2, 3].contains(&w.u(0)) || w.u(1) != w.len() {
+    if ![1, 2, 3].contains(&w.u(h::VERSION)) || w.u(h::LENGTH) != w.len() {
         return Err("Scene descriptor version/length mismatch".into());
     }
-    if w.u(2) == 0 || w.u(3) == 0 || w.u(2) > 4096 || w.u(3) > 4096 || w.u(2) * w.u(3) > 4_194_304 {
+    if w.u(h::WIDTH) == 0
+        || w.u(h::HEIGHT) == 0
+        || w.u(h::WIDTH) > 4096
+        || w.u(h::HEIGHT) > 4096
+        || w.u(h::WIDTH) * w.u(h::HEIGHT) > 4_194_304
+    {
         return Err("Scene image dimensions exceed probe limits".into());
     }
-    if w.u(4) == 0
-        || w.u(4) > 4096
-        || w.u(5) == 0
-        || w.u(5) > 65536
-        || w.u(6) == 0
-        || w.u(6) > 65536
-        || w.u(7) > 64
-        || w.u(8) > 256
+    if w.u(h::GEOMETRY_COUNT) == 0
+        || w.u(h::GEOMETRY_COUNT) > 4096
+        || w.u(h::MESH_COUNT) == 0
+        || w.u(h::MESH_COUNT) > 65536
+        || w.u(h::MATERIAL_COUNT) == 0
+        || w.u(h::MATERIAL_COUNT) > 65536
+        || w.u(h::LIGHT_COUNT) > 64
+        || w.u(h::TEXTURE_COUNT) > 256
     {
         return Err("Scene count exceeds probe limits; empty scenes are pending".into());
     }
     for (count, offset, stride) in [
-        (4, 9, 12),
-        (5, 10, 20),
-        (6, 11, 24),
-        (7, 12, 28),
-        (8, 13, 12),
+        (h::GEOMETRY_COUNT, h::GEOMETRY_OFFSET, g::WORDS),
+        (h::MESH_COUNT, h::MESH_OFFSET, m::WORDS),
+        (h::MATERIAL_COUNT, h::MATERIAL_OFFSET, mat::WORDS),
+        (h::LIGHT_COUNT, h::LIGHT_OFFSET, l::WORDS),
+        (h::TEXTURE_COUNT, h::TEXTURE_OFFSET, t::WORDS),
     ] {
         w.span(w.u(offset), w.u(count) * stride)?;
     }
-    w.reserved(15, 1)?;
-    if w.u(0) == 1 {
-        w.reserved(20, 12)?;
+    w.reserved(h::RESERVED, 1)?;
+    if w.u(h::VERSION) == 1 {
+        w.reserved(h::ENVIRONMENT_TEXTURE, h::WORDS - h::ENVIRONMENT_TEXTURE)?;
     } else {
-        w.reserved(24, 8)?;
-        if w.u(23) != 0 {
-            w.span(w.u(23), w.u(5) * 4)?;
+        w.reserved(h::RESERVED_TAIL, h::WORDS - h::RESERVED_TAIL)?;
+        if w.u(h::BATCH_OFFSET) != 0 {
+            w.span(w.u(h::BATCH_OFFSET), w.u(h::MESH_COUNT) * b::WORDS)?;
         }
-        if w.u(22) & !7 != 0 || w.u(22) & 4 != 0 && w.u(21) != 0 {
+        if w.u(h::QUALITY_FLAGS) & !7 != 0
+            || w.u(h::QUALITY_FLAGS) & 4 != 0 && w.u(h::BACKGROUND_TEXTURE) != 0
+        {
             return Err("Unknown/incompatible scene quality flags".into());
         }
-        for field in [20, 21] {
+        for field in [h::ENVIRONMENT_TEXTURE, h::BACKGROUND_TEXTURE] {
             let reference = w.u(field);
-            if reference > w.u(8) {
+            if reference > w.u(h::TEXTURE_COUNT) {
                 return Err("Environment/background texture reference is out of range".into());
             }
-            if reference != 0 && w.u(w.u(13) + (reference - 1) * 12 + 2) != 1 {
+            if reference != 0
+                && w.u(w.u(h::TEXTURE_OFFSET) + (reference - 1) * t::WORDS + t::STORAGE) != 1
+            {
                 return Err("Environment/background requires linear RGBA32F".into());
             }
         }
     }
-    w.finite(16, 4)?;
+    w.finite(h::BACKGROUND_COLOR, 4)?;
     let mut geometry_words = 0usize;
     let mut geometry_costs = Vec::new();
-    for i in 0..w.u(4) {
-        let o = w.u(9) + i * 12;
-        let v = w.u(o);
-        let n = w.u(o + 1);
+    for i in 0..w.u(h::GEOMETRY_COUNT) {
+        let o = w.u(h::GEOMETRY_OFFSET) + i * g::WORDS;
+        let v = w.u(o + g::VERTEX_COUNT);
+        let n = w.u(o + g::INDEX_COUNT);
         if v == 0 || n == 0 || n % 3 != 0 || v > 4_000_000 || n > 12_000_000 {
             return Err("Invalid geometry counts".into());
         }
@@ -201,86 +215,94 @@ fn validate(bytes: &[u8]) -> Result<()> {
         if geometry_words > MAX_PREPARED_BYTES / 4 {
             return Err("Prepared geometry exceeds probe budget".into());
         }
-        w.span(w.u(o + 2), v * 3)?;
-        w.finite(w.u(o + 2), v * 3)?;
-        w.span(w.u(o + 3), n)?;
-        if (0..n).any(|k| w.u(w.u(o + 3) + k) >= v) {
+        w.span(w.u(o + g::POSITION), v * 3)?;
+        w.finite(w.u(o + g::POSITION), v * 3)?;
+        w.span(w.u(o + g::INDICES), n)?;
+        if (0..n).any(|k| w.u(w.u(o + g::INDICES) + k) >= v) {
             return Err("Geometry index is out of range".into());
         }
-        for (field, stride) in [(4, 3), (5, 2), (6, 2)] {
+        for (field, stride) in [(g::NORMAL, 3), (g::UV, 2), (g::UV1, 2)] {
             if w.u(o + field) != 0 {
                 w.span(w.u(o + field), v * stride)?;
                 w.finite(w.u(o + field), v * stride)?;
             }
         }
-        if w.u(0) == 1 {
-            w.reserved(o + 7, 5)?;
+        if w.u(h::VERSION) == 1 {
+            w.reserved(o + g::COLOR, 5)?;
         } else {
-            for (field, stride) in [(7, 3), (8, 4)] {
+            for (field, stride) in [(g::COLOR, 3), (g::TANGENT, 4)] {
                 if w.u(o + field) != 0 {
                     w.span(w.u(o + field), v * stride)?;
                     w.finite(w.u(o + field), v * stride)?;
                 }
             }
-            if w.u(o + 9) != 0 {
-                w.span(w.u(o + 9), v)?;
+            if w.u(o + g::MATERIAL_INDEX) != 0 {
+                w.span(w.u(o + g::MATERIAL_INDEX), v)?;
             }
-            w.reserved(o + 10, 2)?;
+            w.reserved(o + g::RESERVED, 2)?;
         }
     }
     let mut expanded_instances = 0usize;
-    for i in 0..w.u(5) {
-        let o = w.u(10) + i * 20;
-        if w.u(o) >= w.u(4) || w.u(o + 1) >= w.u(6) {
+    for i in 0..w.u(h::MESH_COUNT) {
+        let o = w.u(h::MESH_OFFSET) + i * m::WORDS;
+        if w.u(o + m::GEOMETRY) >= w.u(h::GEOMETRY_COUNT)
+            || w.u(o + m::MATERIAL) >= w.u(h::MATERIAL_COUNT)
+        {
             return Err("Mesh geometry/material reference is out of range".into());
         }
         let material_count;
-        if w.u(0) == 1 {
-            w.reserved(o + 2, 2)?;
+        if w.u(h::VERSION) == 1 {
+            w.reserved(o + m::MATERIAL_TABLE, 2)?;
             material_count = 1;
         } else {
-            material_count = w.u(o + 3).max(1);
-            if w.u(o + 3) > 65536 || w.u(o + 3) == 0 && w.u(o + 2) != 0 {
+            material_count = w.u(o + m::MATERIAL_COUNT).max(1);
+            if w.u(o + m::MATERIAL_COUNT) > 65536
+                || w.u(o + m::MATERIAL_COUNT) == 0 && w.u(o + m::MATERIAL_TABLE) != 0
+            {
                 return Err("Invalid mesh material table".into());
             }
-            if w.u(o + 3) != 0 {
-                w.span(w.u(o + 2), w.u(o + 3))?;
-                if (0..w.u(o + 3)).any(|k| w.u(w.u(o + 2) + k) >= w.u(6)) {
+            if w.u(o + m::MATERIAL_COUNT) != 0 {
+                w.span(w.u(o + m::MATERIAL_TABLE), w.u(o + m::MATERIAL_COUNT))?;
+                if (0..w.u(o + m::MATERIAL_COUNT))
+                    .any(|k| w.u(w.u(o + m::MATERIAL_TABLE) + k) >= w.u(h::MATERIAL_COUNT))
+                {
                     return Err("Mesh material table reference is out of range".into());
                 }
             }
         }
-        let geometry = w.u(9) + w.u(o) * 12;
-        if w.u(0) >= 2 && w.u(geometry + 9) != 0 {
-            if (0..w.u(geometry)).any(|k| w.u(w.u(geometry + 9) + k) >= material_count) {
+        let geometry = w.u(h::GEOMETRY_OFFSET) + w.u(o + m::GEOMETRY) * g::WORDS;
+        if w.u(h::VERSION) >= 2 && w.u(geometry + g::MATERIAL_INDEX) != 0 {
+            if (0..w.u(geometry + g::VERTEX_COUNT))
+                .any(|k| w.u(w.u(geometry + g::MATERIAL_INDEX) + k) >= material_count)
+            {
                 return Err("Vertex material index is out of range".into());
             }
-            geometry_words += geometry_costs[w.u(o)];
+            geometry_words += geometry_costs[w.u(o + m::GEOMETRY)];
             if geometry_words > MAX_PREPARED_BYTES / 4 {
                 return Err("Multi-material geometry expansion exceeds probe budget".into());
             }
         }
         let mut instance_count = 1;
-        if w.u(0) >= 2 && w.u(23) != 0 {
-            let io = w.u(23) + i * 4;
-            w.reserved(io + 3, 1)?;
-            if w.u(io) == u32::MAX as usize {
-                w.reserved(io + 1, 2)?;
+        if w.u(h::VERSION) >= 2 && w.u(h::BATCH_OFFSET) != 0 {
+            let io = w.u(h::BATCH_OFFSET) + i * b::WORDS;
+            w.reserved(io + b::RESERVED, 1)?;
+            if w.u(io + b::COUNT) == u32::MAX as usize {
+                w.reserved(io + b::TRANSFORMS, 2)?;
             } else {
-                instance_count = w.u(io);
+                instance_count = w.u(io + b::COUNT);
                 if instance_count > 65536 {
                     return Err("Too many batch instances".into());
                 }
                 if instance_count == 0 {
-                    w.reserved(io + 1, 2)?;
+                    w.reserved(io + b::TRANSFORMS, 2)?;
                 } else {
-                    w.span(w.u(io + 1), instance_count * 16)?;
+                    w.span(w.u(io + b::TRANSFORMS), instance_count * 16)?;
                     for k in 0..instance_count {
-                        w.affine(w.u(io + 1) + k * 16)?;
+                        w.affine(w.u(io + b::TRANSFORMS) + k * 16)?;
                     }
-                    if w.u(io + 2) != 0 {
-                        w.span(w.u(io + 2), instance_count * 3)?;
-                        w.finite(w.u(io + 2), instance_count * 3)?;
+                    if w.u(io + b::COLORS) != 0 {
+                        w.span(w.u(io + b::COLORS), instance_count * 3)?;
+                        w.finite(w.u(io + b::COLORS), instance_count * 3)?;
                     }
                 }
             }
@@ -289,56 +311,73 @@ fn validate(bytes: &[u8]) -> Result<()> {
         if expanded_instances > 65536 {
             return Err("Expanded instance count exceeds probe limit".into());
         }
-        w.affine(o + 4)?;
+        w.affine(o + m::TRANSFORM)?;
     }
     let mut displacement = Vec::new();
-    for i in 0..w.u(6) {
+    for i in 0..w.u(h::MATERIAL_COUNT) {
         let mut disp = (u32::MAX as usize, 0.1f32, 0usize, 1f32, 0.01f32);
-        let o = w.u(11) + i * 24;
-        w.finite(o, 14)?;
-        if [3, 4, 5, 11, 12, 13]
+        let o = w.u(h::MATERIAL_OFFSET) + i * mat::WORDS;
+        w.finite(o + mat::BASE_COLOR, mat::THIN_WALLED - mat::BASE_COLOR)?;
+        if [
+            mat::ROUGHNESS,
+            mat::METALNESS,
+            mat::TRANSMISSION,
+            mat::COAT_WEIGHT,
+            mat::COAT_ROUGHNESS,
+            mat::OPACITY,
+        ]
+        .iter()
+        .any(|&k| !(0.0..=1.0).contains(&w.f(o + k)))
+            || w.f(o + mat::IOR) < 1.0
+            || w.u(o + mat::THIN_WALLED) > 1
+            || [
+                mat::BASE_COLOR,
+                mat::BASE_COLOR + 1,
+                mat::BASE_COLOR + 2,
+                mat::EMISSION_COLOR,
+                mat::EMISSION_COLOR + 1,
+                mat::EMISSION_COLOR + 2,
+                mat::EMISSION_LUMINANCE,
+            ]
             .iter()
-            .any(|&k| !(0.0..=1.0).contains(&w.f(o + k)))
-            || w.f(o + 6) < 1.0
-            || w.u(o + 14) > 1
-            || [0, 1, 2, 7, 8, 9, 10].iter().any(|&k| w.f(o + k) < 0.0)
+            .any(|&k| w.f(o + k) < 0.0)
         {
             return Err("Invalid material values".into());
         }
-        for k in 15..19 {
-            if w.u(o + k) != 0xffffffff && w.u(o + k) >= w.u(8) {
+        for k in mat::MAP..mat::EXTENSION_COUNT {
+            if w.u(o + k) != 0xffffffff && w.u(o + k) >= w.u(h::TEXTURE_COUNT) {
                 return Err("Material texture reference is out of range".into());
             }
         }
-        if w.u(0) == 1 {
-            w.reserved(o + 19, 5)?;
+        if w.u(h::VERSION) == 1 {
+            w.reserved(o + mat::EXTENSION_COUNT, 5)?;
         } else {
-            w.reserved(o + 21, 3)?;
-            let count = w.u(o + 19);
-            let offset = w.u(o + 20);
+            w.reserved(o + mat::RESERVED, 3)?;
+            let count = w.u(o + mat::EXTENSION_COUNT);
+            let offset = w.u(o + mat::EXTENSION_OFFSET);
             if count > 75 || count == 0 && offset != 0 {
                 return Err("Invalid material extension count/offset".into());
             }
             if count != 0 {
-                w.span(offset, count * 4)?;
+                w.span(offset, count * ext::WORDS)?;
             }
             let mut seen = [false; 76];
             for i in 0..count {
-                let entry = offset + i * 4;
-                let id = w.u(entry);
+                let entry = offset + i * ext::WORDS;
+                let id = w.u(entry + ext::ID);
                 let &(kind, variants) = material_properties::MATERIAL_PROPERTIES
                     .get(id)
                     .ok_or("Unknown material property ID")?;
-                if kind == 6 || seen[id] || w.u(0) < 3 && (57..=61).contains(&id) {
+                if kind == 6 || seen[id] || w.u(h::VERSION) < 3 && (57..=61).contains(&id) {
                     return Err("Unsupported or duplicate material property".into());
                 }
                 seen[id] = true;
                 match id {
-                    57 => disp.2 = w.u(entry + 1),
-                    58 => disp.3 = w.f(entry + 1),
-                    59 => disp.0 = w.u(entry + 1),
-                    60 => disp.1 = w.f(entry + 1),
-                    61 => disp.4 = w.f(entry + 1),
+                    57 => disp.2 = w.u(entry + ext::X),
+                    58 => disp.3 = w.f(entry + ext::X),
+                    59 => disp.0 = w.u(entry + ext::X),
+                    60 => disp.1 = w.f(entry + ext::X),
+                    61 => disp.4 = w.f(entry + ext::X),
                     _ => {}
                 }
                 let components = if kind == 1 {
@@ -348,16 +387,16 @@ fn validate(bytes: &[u8]) -> Result<()> {
                 } else {
                     1
                 };
-                w.reserved(entry + 1 + components, 3 - components)?;
+                w.reserved(entry + ext::X + components, 3 - components)?;
                 if kind <= 2 {
-                    w.finite(entry + 1, components)?;
-                } else if kind == 3 && w.u(entry + 1) > 1
-                    || kind == 4 && w.u(entry + 1) >= variants as usize
+                    w.finite(entry + ext::X, components)?;
+                } else if kind == 3 && w.u(entry + ext::X) > 1
+                    || kind == 4 && w.u(entry + ext::X) >= variants as usize
                 {
                     return Err("Invalid material boolean/enum".into());
                 } else if kind == 5
-                    && w.u(entry + 1) != u32::MAX as usize
-                    && w.u(entry + 1) >= w.u(8)
+                    && w.u(entry + ext::X) != u32::MAX as usize
+                    && w.u(entry + ext::X) >= w.u(h::TEXTURE_COUNT)
                 {
                     return Err("Material extension texture reference is out of range".into());
                 }
@@ -369,12 +408,12 @@ fn validate(bytes: &[u8]) -> Result<()> {
         displacement.push(disp);
     }
     // Bound projective copies and numeric coordinate loops before entering AOT.
-    for i in 0..w.u(5) {
-        let mesh = w.u(10) + i * 20;
-        let material = if w.u(0) >= 2 && w.u(mesh + 3) > 0 {
-            w.u(w.u(mesh + 2))
+    for i in 0..w.u(h::MESH_COUNT) {
+        let mesh = w.u(h::MESH_OFFSET) + i * m::WORDS;
+        let material = if w.u(h::VERSION) >= 2 && w.u(mesh + m::MATERIAL_COUNT) > 0 {
+            w.u(w.u(mesh + m::MATERIAL_TABLE))
         } else {
-            w.u(mesh + 1)
+            w.u(mesh + m::MATERIAL)
         };
         let (texture, scale, projection, uv_scale, _) = displacement[material];
         if texture == u32::MAX as usize || scale.abs() <= 1e-6 {
@@ -383,16 +422,19 @@ fn validate(bytes: &[u8]) -> Result<()> {
         if uv_scale.abs() > 1_000_000.0 {
             return Err("Displacement projection scale exceeds the preparation limit".into());
         }
-        let geo = w.u(9) + w.u(mesh) * 12;
-        let tex = w.u(13) + texture * 12;
-        let width = w.u(tex);
-        if width == 0 || !width.is_power_of_two() || width != w.u(tex + 1) {
+        let geo = w.u(h::GEOMETRY_OFFSET) + w.u(mesh + m::GEOMETRY) * g::WORDS;
+        let tex = w.u(h::TEXTURE_OFFSET) + texture * t::WORDS;
+        let width = w.u(tex + t::WIDTH);
+        if width == 0 || !width.is_power_of_two() || width != w.u(tex + t::HEIGHT) {
             return Err("Displacement requires a square power-of-two texture".into());
         }
-        if projection == 0 && w.u(geo + 5) == 0 {
+        if projection == 0 && w.u(geo + g::UV) == 0 {
             return Err("UV displacement requires UV coordinates".into());
         }
-        for (offset, count) in [(w.u(geo + 2), w.u(geo) * 3), (w.u(geo + 5), w.u(geo) * 2)] {
+        for (offset, count) in [
+            (w.u(geo + g::POSITION), w.u(geo + g::VERTEX_COUNT) * 3),
+            (w.u(geo + g::UV), w.u(geo + g::VERTEX_COUNT) * 2),
+        ] {
             if offset != 0
                 && (0..count)
                     .any(|k| (w.f(offset + k) as f64 * uv_scale as f64).abs() > 1_000_000.0)
@@ -401,24 +443,24 @@ fn validate(bytes: &[u8]) -> Result<()> {
             }
         }
         if projection != 0 {
-            geometry_words += geometry_costs[w.u(mesh)];
+            geometry_words += geometry_costs[w.u(mesh + m::GEOMETRY)];
             if geometry_words > MAX_PREPARED_BYTES / 4 {
                 return Err("Displaced geometry expansion exceeds probe budget".into());
             }
         }
     }
     let mut pixels = 0;
-    for i in 0..w.u(8) {
-        let o = w.u(13) + i * 12;
-        let width = w.u(o);
-        let height = w.u(o + 1);
+    for i in 0..w.u(h::TEXTURE_COUNT) {
+        let o = w.u(h::TEXTURE_OFFSET) + i * t::WORDS;
+        let width = w.u(o + t::WIDTH);
+        let height = w.u(o + t::HEIGHT);
         if width == 0
             || height == 0
             || width > 4096
             || height > 4096
-            || w.u(o + 2) > 1
-            || w.u(o + 4) > 1
-            || w.u(o + 5) > 1
+            || w.u(o + t::STORAGE) > 1
+            || w.u(o + t::FLIP_Y) > 1
+            || w.u(o + t::UV_CHANNEL) > 1
         {
             return Err("Invalid raw texture descriptor".into());
         }
@@ -426,32 +468,32 @@ fn validate(bytes: &[u8]) -> Result<()> {
         if pixels > 16_777_216 {
             return Err("Raw textures exceed probe budget".into());
         }
-        let count = width * height * if w.u(o + 2) == 0 { 1 } else { 4 };
-        w.span(w.u(o + 3), count)?;
-        if w.u(o + 2) == 1 {
-            w.finite(w.u(o + 3), count)?;
+        let count = width * height * if w.u(o + t::STORAGE) == 0 { 1 } else { 4 };
+        w.span(w.u(o + t::PIXELS), count)?;
+        if w.u(o + t::STORAGE) == 1 {
+            w.finite(w.u(o + t::PIXELS), count)?;
         }
-        w.finite(o + 6, 4)?;
-        w.reserved(o + 10, 2)?;
+        w.finite(o + t::UV_SCALE, 4)?;
+        w.reserved(o + t::RESERVED, 2)?;
     }
-    for i in 0..w.u(7) {
-        let o = w.u(12) + i * 28;
+    for i in 0..w.u(h::LIGHT_COUNT) {
+        let o = w.u(h::LIGHT_OFFSET) + i * l::WORDS;
         validate_light(&w, o)?;
-        if w.u(0) < 3 {
-            w.reserved(o + 8, 4)?;
+        if w.u(h::VERSION) < 3 {
+            w.reserved(o + l::TEXTURE, 4)?;
         } else {
-            w.reserved(o + 11, 1)?;
-            let reference = w.u(o + 8);
-            if reference > w.u(8) || reference != 0 && w.u(o) != 0 {
+            w.reserved(o + l::RESERVED, 1)?;
+            let reference = w.u(o + l::TEXTURE);
+            if reference > w.u(h::TEXTURE_COUNT) || reference != 0 && w.u(o + l::TYPE) != 0 {
                 return Err("Rectangular light texture reference/type is invalid".into());
             }
-            let (offset, length) = (w.u(o + 9), w.u(o + 10));
+            let (offset, length) = (w.u(o + l::IES_OFFSET), w.u(o + l::IES_BYTES));
             if length == 0 {
                 if offset != 0 {
                     return Err("Empty IES source has an offset".into());
                 }
             } else {
-                if w.u(o) != 3 || length > 16384 {
+                if w.u(o + l::TYPE) != 3 || length > 16384 {
                     return Err("IES source requires a spot light and at most 16 KiB".into());
                 }
                 w.span(offset, length.div_ceil(4))?;
@@ -459,53 +501,61 @@ fn validate(bytes: &[u8]) -> Result<()> {
             }
         }
     }
-    let o = w.u(14);
-    w.span(o, 32)?;
+    let o = w.u(h::CAMERA_OFFSET);
+    w.span(o, cam::WORDS)?;
     validate_camera(&w, o)
 }
 fn validate_light(w: &Words<'_>, o: usize) -> Result<()> {
-    if w.u(o) > 3 {
+    if w.u(o + l::TYPE) > 3 {
         return Err("Unsupported analytic light type".into());
     }
-    w.finite(o + 1, 7)?;
+    w.finite(o + l::COLOR, 7)?;
     if (1..=5).any(|k| w.f(o + k) < 0.0) {
         return Err("Negative light color/intensity/size".into());
     }
-    if w.u(o) == 0 && (w.f(o + 5) <= 0.0 || w.f(o + 6) <= 0.0 || !(0.0..=1.0).contains(&w.f(o + 7)))
+    if w.u(o + l::TYPE) == 0
+        && (w.f(o + l::SIZE) <= 0.0
+            || w.f(o + l::HEIGHT_OR_INNER) <= 0.0
+            || !(0.0..=1.0).contains(&w.f(o + l::SPREAD_OR_OUTER)))
     {
         return Err("Invalid rectangular light".into());
     }
-    if w.u(o) == 3
-        && (w.f(o + 6) < 0.0 || w.f(o + 6) > w.f(o + 7) || w.f(o + 7) <= 0.0 || w.f(o + 7) >= 90.0)
+    if w.u(o + l::TYPE) == 3
+        && (w.f(o + l::HEIGHT_OR_INNER) < 0.0
+            || w.f(o + l::HEIGHT_OR_INNER) > w.f(o + l::SPREAD_OR_OUTER)
+            || w.f(o + l::SPREAD_OR_OUTER) <= 0.0
+            || w.f(o + l::SPREAD_OR_OUTER) >= 90.0)
     {
         return Err("Invalid spot light angles".into());
     }
-    w.affine(o + 12)
+    w.affine(o + l::TRANSFORM)
 }
 fn validate_camera(w: &Words<'_>, o: usize) -> Result<()> {
-    w.finite(o + 1, 12)?;
-    if w.u(o) > 1
-        || w.f(o + 2) <= 0.0
-        || w.f(o + 3) <= w.f(o + 2)
-        || w.f(o + 8) <= 0.0
-        || w.f(o + 9) < 0.0
-        || w.f(o + 10) <= 0.0
-        || w.f(o + 11) <= 0.0
-        || w.f(o + 12) <= 0.0
+    w.finite(o + cam::FOV, 12)?;
+    if w.u(o + cam::PROJECTION) > 1
+        || w.f(o + cam::NEAR) <= 0.0
+        || w.f(o + cam::FAR) <= w.f(o + cam::NEAR)
+        || w.f(o + cam::ZOOM) <= 0.0
+        || w.f(o + cam::F_STOP) < 0.0
+        || w.f(o + cam::FOCUS_DISTANCE) <= 0.0
+        || w.f(o + cam::SENSOR_HEIGHT) <= 0.0
+        || w.f(o + cam::METERS_PER_UNIT) <= 0.0
     {
         return Err("Invalid camera lens".into());
     }
-    if w.u(o) == 0 && !(w.f(o + 1) > 0.0 && w.f(o + 1) < 180.0)
-        || w.u(o) == 1 && (w.f(o + 4) >= w.f(o + 5) || w.f(o + 6) >= w.f(o + 7))
+    if w.u(o + cam::PROJECTION) == 0 && !(w.f(o + cam::FOV) > 0.0 && w.f(o + cam::FOV) < 180.0)
+        || w.u(o + cam::PROJECTION) == 1
+            && (w.f(o + cam::LEFT) >= w.f(o + cam::RIGHT)
+                || w.f(o + cam::BOTTOM) >= w.f(o + cam::TOP))
     {
         return Err("Invalid camera projection".into());
     }
-    w.reserved(o + 13, 3)?;
-    w.affine(o + 16)?;
+    w.reserved(o + cam::RESERVED, 3)?;
+    w.affine(o + cam::TRANSFORM)?;
     Ok(())
 }
 pub(super) fn prepare_camera(bytes: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
-    if bytes.len() != 128 {
+    if bytes.len() != cam::WORDS * WORD_BYTES {
         return Err("Camera descriptor must contain exactly 128 bytes".into());
     }
     validate_camera(&Words(bytes), 0)?;
@@ -533,20 +583,6 @@ pub(super) fn prepare_camera(bytes: &[u8], width: u32, height: u32) -> Result<Ve
     }
     Ok(packed)
 }
-fn buffer_layout(binding: u32, ty: &str) -> Value {
-    json!({"binding":binding,"visibility":4,"buffer":{"type":ty}})
-}
-fn texture_layout(binding: u32, array: bool, filter: bool) -> Value {
-    json!({"binding":binding,"visibility":4,"texture":{"viewDimension":if array {"2d-array"}else{"2d"},"sampleType":if filter {"float"}else{"unfilterable-float"}}})
-}
-fn binding(binding: u32, kind: &str, id: usize) -> Binding {
-    Binding {
-        binding,
-        kind: kind.into(),
-        id,
-    }
-}
-
 // RAII lifetime matches the committed native scene, including failed candidates.
 // Every AOT arena reset/collection leaves these explicitly rooted TS objects alive.
 pub(super) struct PreparedState {
@@ -754,7 +790,7 @@ impl PreparedState {
         lighting_result(pointer, size, &[7, 8, 21, 22, 23, 24])
     }
     pub(super) fn light(&self, bytes: &[u8]) -> Result<LightingUpdates> {
-        if bytes.len() != 128 {
+        if bytes.len() != cam::WORDS * WORD_BYTES {
             return Err("Light descriptor must contain exactly 128 bytes".into());
         }
         let w = Words(bytes);
@@ -851,7 +887,7 @@ impl PreparedState {
     }
 }
 fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<LightingUpdates> {
-    let header_length = 16 + ids.len() * 32;
+    let header_length = (ph::WORDS + ids.len() * pe::WORDS) * WORD_BYTES;
     if pointer.is_null() || size < 16 || size > MAX_PREPARED_BYTES || size % 4 != 0 {
         return Err("Invalid AOT lighting command".into());
     }
@@ -861,36 +897,36 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
         result?
     };
     let w = Words(&packet);
-    if w.u(0) == 2 {
-        return Err(if w.u(1) == 2 {
+    if w.u(ph::VERSION) == 2 {
+        return Err(if w.u(ph::COUNT) == 2 {
             "Full scene commit required: resource shape or shader feature changed"
         } else {
             "Invalid or unavailable retained scene reference"
         }
         .into());
     }
-    if w.u(0) != 1 || w.u(1) != ids.len() || packet.len() < header_length {
+    if w.u(ph::VERSION) != 1 || w.u(ph::COUNT) != ids.len() || packet.len() < header_length {
         return Err("Invalid AOT lighting resources".into());
     }
     let mut updates = Vec::new();
     let mut native_layout = None;
     let mut hardware_positions = None;
     for (i, &id) in ids.iter().enumerate() {
-        let o = 4 + i * 8;
-        let (length, offset) = (w.u(o + 2), w.u(o + 7));
-        if w.u(o) != id
+        let o = ph::WORDS + i * pe::WORDS;
+        let (length, offset) = (w.u(o + pe::LENGTH), w.u(o + pe::BYTE_OFFSET));
+        if w.u(o + pe::ID) != id
             || offset < header_length
             || offset % 4 != 0
             || (id != 31 && length % 4 != 0)
             || offset > packet.len()
             || length > packet.len() - offset
-            || w.u(o + 1)
+            || w.u(o + pe::KIND)
                 != if id == 31 || id == 41 {
                     3
                 } else {
                     usize::from(id >= 21)
                 }
-            || w.u(o + 6)
+            || w.u(o + pe::FORMAT)
                 != if id == 31 || id == 41 {
                     0
                 } else if id == 22 {
@@ -924,8 +960,8 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
         }
         updates.push((
             id,
-            w.u(o + 3) as u32,
-            w.u(o + 4) as u32,
+            w.u(o + pe::WIDTH) as u32,
+            w.u(o + pe::HEIGHT) as u32,
             packet[offset..offset + length].to_vec(),
         ));
     }
@@ -934,7 +970,7 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
             .iter()
             .find(|record| record.0 == 7)
             .ok_or("Missing geometry RT parameters")?;
-        if rt.3.len() != 176 {
+        if rt.3.len() != crate::layout::ray_uniform::BYTES {
             return Err("Invalid geometry RT size".into());
         }
         let limit = native_layout
@@ -1112,14 +1148,17 @@ fn prepare_impl(
     }
     let packet = work?;
     let w = Words(&packet);
-    if w.u(0) == 2 {
+    if w.u(ph::VERSION) == 2 {
         return Err(
             "Native scene preparation rejected the scene (invalid IES or displacement inputs)"
                 .into(),
         );
     }
-    let count = w.u(1);
-    if w.u(0) != 1 || !(24..=27).contains(&count) || packet.len() < 16 + count * 32 {
+    let count = w.u(ph::COUNT);
+    if w.u(ph::VERSION) != 1
+        || !(24..=27).contains(&count)
+        || packet.len() < (ph::WORDS + count * pe::WORDS) * WORD_BYTES
+    {
         return Err("Invalid native resource packet".into());
     }
     let mut assets = HashMap::new();
@@ -1128,50 +1167,60 @@ fn prepare_impl(
     let mut shader = String::new();
     let mut native_layout = None;
     for i in 0..count {
-        let o = 4 + i * 8;
-        let id = w.u(o);
-        let kind = w.u(o + 1);
-        let length = w.u(o + 2);
-        let offset = w.u(o + 7);
-        if offset < 16 + count * 32 || offset > packet.len() || length > packet.len() - offset {
+        let o = ph::WORDS + i * pe::WORDS;
+        let id = w.u(o + pe::ID);
+        let kind = w.u(o + pe::KIND);
+        let length = w.u(o + pe::LENGTH);
+        let offset = w.u(o + pe::BYTE_OFFSET);
+        if offset < (ph::WORDS + count * pe::WORDS) * WORD_BYTES
+            || offset > packet.len()
+            || length > packet.len() - offset
+        {
             return Err("Native resource span exceeds packet".into());
         }
         let name = format!("native-{id}");
         let mut data = packet[offset..offset + length].to_vec();
-        if kind == 0 {
+        if kind == kind::BUFFER {
             // Runtime storage arrays require one complete element even for empty payloads.
             let minimum = 16;
             data.resize(data.len().max(minimum), 0);
             buffers.push(Buffer {
                 id,
                 size: data.len() as u64,
-                usage: if id <= 4 { 140 } else { 72 },
+                usage: if id <= res::MATERIALS { 140 } else { 72 },
                 file: name.clone(),
             });
-        } else if kind == 1 {
-            let (width, height, depth) = (w.u(o + 3) as u32, w.u(o + 4) as u32, w.u(o + 5) as u32);
-            let (format, bpp) = match w.u(o + 6) {
-                0 => ("rgba8unorm", 4),
-                1 => ("rgba16float", 8),
-                2 => ("rgba32float", 16),
-                3 => ("r32float", 4),
-                4 => ("rg32float", 8),
-                _ => return Err("Unknown native texture encoding".into()),
-            };
+        } else if kind == kind::TEXTURE {
+            let (width, height, depth) = (
+                w.u(o + pe::WIDTH) as u32,
+                w.u(o + pe::HEIGHT) as u32,
+                w.u(o + pe::LAYERS) as u32,
+            );
+            let (format, bpp) = crate::layout::texture_format(w.u(o + pe::FORMAT))
+                .ok_or("Unknown native texture encoding")?;
             if data.len() != width as usize * height as usize * depth as usize * bpp {
                 return Err("Native texture length mismatch".into());
             }
             textures.push(Texture{id,width,height,depth,format:format.into(),usage:6,writes:vec![json!({"origin":[0,0,0],"size":[width,height,depth],"layout":{"bytesPerRow":width as usize*bpp,"rowsPerImage":height},"file":name})]});
-        } else if kind == 2 {
-            if id == 30 {
+        } else if kind == kind::WGSL {
+            if id == res::SOFTWARE_SHADER {
                 shader = name.clone();
-            } else if id != 33 && id != 34 && id != 36 && id != 37 && id != 39 {
+            } else if id != res::HWRT_SHADER
+                && id != res::HIT_SHADER
+                && id != res::SOFTWARE_PATH_SHADER
+                && id != res::HWRT_PATH_SHADER
+                && id != res::SOFTWARE_HIT_SHADER
+            {
                 return Err("Unknown native shader variant".into());
             }
-        } else if kind == 3 && id == 31 {
+        } else if kind == kind::METADATA && id == res::METADATA {
             native_layout = Some(serde_json::from_slice::<hardware::NativeLayout>(&data)?);
-        } else if kind == 3
-            && (id == 35 || id == 38 || id == 40 || id == 41 || id == 42)
+        } else if kind == kind::METADATA
+            && (id == res::INDICES
+                || id == res::DISPLACEMENT_BOUNDS
+                || id == res::PRIMITIVE_IDS
+                || id == res::AS_POSITIONS
+                || id == res::AS_INDICES)
             && data.len() % 4 == 0
         {
             // CPU packet payload; uploaded only when HWRT is selected.
@@ -1182,9 +1231,9 @@ fn prepare_impl(
             return Err("Duplicate native resource".into());
         }
     }
-    let pixels = w.u(2) * w.u(3);
-    for id in 10..=13 {
-        let size = pixels * if id == 13 { 48 } else { 16 };
+    let pixels = w.u(ph::WIDTH) * w.u(ph::HEIGHT);
+    for id in res::COLOR..=res::SHADOW_CATCHER {
+        let size = pixels * if id == res::SHADOW_CATCHER { 48 } else { 16 };
         let name = format!("native-{id}");
         assets.insert(name.clone(), vec![0; size]);
         buffers.push(Buffer {
@@ -1194,71 +1243,26 @@ fn prepare_impl(
             file: name,
         });
     }
-    let groups = vec![
-        Group {
-            layout: (0..4)
-                .map(|i| buffer_layout(i, "read-only-storage"))
-                .collect(),
-            entries: (0..4)
-                .map(|i| binding(i, "buffer", i as usize + 1))
-                .collect(),
-        },
-        Group {
-            layout: vec![
-                json!({"binding":0,"visibility":4,"sampler":{}}),
-                texture_layout(1, true, true),
-                buffer_layout(3, "uniform"),
-                texture_layout(4, false, false),
-                texture_layout(5, false, false),
-                texture_layout(6, false, false),
-                texture_layout(8, false, false),
-                texture_layout(9, false, false),
-                texture_layout(10, false, false),
-            ],
-            entries: vec![
-                binding(0, "sampler", 40),
-                binding(1, "texture", 20),
-                binding(3, "buffer", 5),
-                binding(4, "texture", 21),
-                binding(5, "texture", 22),
-                binding(6, "texture", 23),
-                binding(8, "texture", 24),
-                binding(9, "texture", 25),
-                binding(10, "texture", 26),
-            ],
-        },
-        Group {
-            layout: (0..3).map(|i| buffer_layout(i, "uniform")).collect(),
-            entries: (0..3)
-                .map(|i| binding(i, "buffer", i as usize + 6))
-                .collect(),
-        },
-        Group {
-            layout: (0..4).map(|i| buffer_layout(i, "storage")).collect(),
-            entries: (0..4)
-                .map(|i| binding(i, "buffer", i as usize + 10))
-                .collect(),
-        },
-    ];
+    let groups = crate::layout::bind_groups();
     Ok((
         Scene {
             format: 1,
-            width: w.u(2) as u32,
-            height: w.u(3) as u32,
+            width: w.u(ph::WIDTH) as u32,
+            height: w.u(ph::HEIGHT) as u32,
             samples: 64,
             shader,
             native_layout,
             entry_point: "main".into(),
             buffers,
             textures,
-            samplers: vec![json!({"id":40})],
+            samplers: vec![json!({"id":sampler::MATERIAL})],
             bind_groups: groups,
-            rt_uniform: 7,
-            color_output: 10,
-            normal_output: Some(11),
-            albedo_output: Some(12),
-            camera_uniform: Some(6),
-            material_buffer: Some(4),
+            rt_uniform: res::TRACE_UNIFORM,
+            color_output: res::COLOR,
+            normal_output: Some(res::NORMAL),
+            albedo_output: Some(res::ALBEDO),
+            camera_uniform: Some(res::CAMERA),
+            material_buffer: Some(res::MATERIALS),
             material_count: None,
             material_stride: None,
             material_offsets: None,

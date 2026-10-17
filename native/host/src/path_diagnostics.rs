@@ -33,12 +33,17 @@ pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
     let pixel_bytes = slots * 64;
     for (id, binding, size, storage) in [
         (
-            50,
-            7,
+            layout::resource::PATH_EVENTS,
+            layout::hwrt_binding::DIAGNOSTIC as u32,
             scene.width as usize * tile_rows as usize * pixel_bytes,
             "storage",
         ),
-        (51, 8, 16, "read-only-storage"),
+        (
+            layout::resource::PATH_PARAMETERS,
+            layout::hwrt_binding::PATH_PARAMETERS as u32,
+            16,
+            "read-only-storage",
+        ),
     ] {
         let name = format!("diagnostic-{id}");
         assets.insert(name.clone(), vec![0; size]);
@@ -48,14 +53,16 @@ pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
             usage: 140,
             file: name,
         });
-        scene.bind_groups[0]
+        scene.bind_groups[layout::group::SCENE]
             .layout
             .push(json!({"binding":binding,"visibility":4,"buffer":{"type":storage}}));
-        scene.bind_groups[0].entries.push(Binding {
-            binding,
-            kind: "buffer".into(),
-            id,
-        });
+        scene.bind_groups[layout::group::SCENE]
+            .entries
+            .push(Binding {
+                binding,
+                kind: "buffer".into(),
+                id,
+            });
     }
     let gpu = GpuDevice::with_backend(backend)?;
     if backend == 1 && !gpu.hardware_ray_query {
@@ -81,12 +88,14 @@ pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
             .into_iter()
             .flat_map(u32::to_le_bytes)
             .collect();
-        state
-            .gpu
-            .queue
-            .write_buffer(&state.buffers[&51], 0, &parameters);
+        state.gpu.queue.write_buffer(
+            &state.buffers[&layout::resource::PATH_PARAMETERS],
+            0,
+            &parameters,
+        );
         state.dispatch_timed(0, 1, 6., 12345, None)?;
-        let data = hit_diagnostics::read_raw(&state.gpu, &state.buffers[&50])?;
+        let data =
+            hit_diagnostics::read_raw(&state.gpu, &state.buffers[&layout::resource::PATH_EVENTS])?;
         for pixel in 0..state.scene.width as usize * rows as usize {
             let block = &data[pixel * pixel_bytes..(pixel + 1) * pixel_bytes];
             let count = u32::from_le_bytes(block[..4].try_into().unwrap()) as usize;

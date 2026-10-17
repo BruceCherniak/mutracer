@@ -1,3 +1,4 @@
+import {rayTraceBindGroupLayouts} from './sceneLayoutSchema.js';
 import { wgpuMaterialConstants } from './wgpuMaterialConstants.js';
 import { wgpuShaderSource } from './wgpuShaderSource.js';
 import { makeRayTraceUniform, packWgpuAnalyticLights, WGPU_SCENE_BUFFER_MIN_BYTES } from './wgpuSceneUniform.js';
@@ -670,135 +671,9 @@ class WGPURayTracePass {
   }
 
   private _createPipelineLayout() {
-    //Bind group layouts
-    const commonBufferLayoutEntries = Array.from(
-      { length: 4 },
-      (_, i) => ({
-        binding: i,
-        visibility: GPUShaderStage.COMPUTE,
-        buffer: {
-          type: 'read-only-storage' as const
-        }
-      }) satisfies GPUBindGroupLayoutEntry
-    );
-    const buffersBindGroupLayout = this._shaderCache.createBindGroupLayout({
-      label: 'Buffers',
-      entries: commonBufferLayoutEntries
-    });
-    const textureLayoutEntries: GPUBindGroupLayoutEntry[] = [
-        {
-          binding: 0,
-          visibility: GPUShaderStage.COMPUTE,
-          sampler: {}
-        },
-        {
-          binding: 1,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d-array'
-          }
-        },
-        // Map size
-        {
-          binding: 3,
-          visibility: GPUShaderStage.COMPUTE,
-          buffer: {
-            type: 'uniform'
-          }
-        },
-        // Env map
-        {
-          binding: 4,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d',
-            sampleType: 'unfilterable-float'
-          }
-        },
-        // Env map distribution
-        {
-          binding: 5,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d',
-            sampleType: 'unfilterable-float'
-          }
-        },
-        // Background map
-        {
-          binding: 6,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d',
-            sampleType: 'unfilterable-float'
-          }
-        },
-        {
-          binding: 8,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d',
-            sampleType: 'unfilterable-float'
-          }
-        },
-        {
-          binding: 9,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d',
-            sampleType: 'unfilterable-float'
-          }
-        },
-        {
-          binding: 10,
-          visibility: GPUShaderStage.COMPUTE,
-          texture: {
-            viewDimension: '2d',
-            sampleType: 'unfilterable-float'
-          }
-        }
-      ];
-    const texturesBindGroupLayout = this._shaderCache.createBindGroupLayout({
-      label: 'Textures', entries: textureLayoutEntries
-    });
-    const uniformsBindGroupLayout = this._shaderCache.createBindGroupLayout({
-      label: 'Uniforms',
-      entries: [
-        ...Array.from(
-          { length: Object.keys(this._uniforms).length },
-          (_, i) => ({
-            binding: i,
-            visibility: GPUShaderStage.COMPUTE,
-            buffer: {
-              type: 'uniform' as const
-            }
-          }) satisfies GPUBindGroupLayoutEntry
-        ),
-        ...([])
-      ]
-    });
-    const rayTraceOutBuffersBindGroupLayout = this._shaderCache.createBindGroupLayout({
-      label: 'Ray Trace Out Buffers',
-      entries: [
-        ...Array.from(
-          { length: 4 },
-          (_, i) => ({
-            binding: i,
-            visibility: GPUShaderStage.COMPUTE,
-            buffer: { type: 'storage' as const }
-          })
-        ),
-        ...([])
-      ]
-    });
     this._rayTracePipelineLayout = this._shaderCache.createPipelineLayout({
       label: 'Ray Trace Pipeline Layout',
-      bindGroupLayouts: [
-        buffersBindGroupLayout,
-        texturesBindGroupLayout,
-        uniformsBindGroupLayout,
-        rayTraceOutBuffersBindGroupLayout
-      ]
+      bindGroupLayouts: rayTraceBindGroupLayouts().map(layout => this._shaderCache.createBindGroupLayout(layout))
     });
   }
 

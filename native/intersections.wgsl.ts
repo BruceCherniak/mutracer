@@ -1,3 +1,4 @@
+import {GROUP, HWRT_BINDING} from './layout.js';
 import {createSceneHitQueryWgsl} from '../src/renderer/wgsl/chunks/intersect.wgsl.js';
 import type {WGPUShaderFeatures} from '../src/renderer/wgpuShaderSource.js';
 
@@ -18,8 +19,8 @@ var<private> mtWantedSeen: u32;
 var<private> mtWantedConfirmed: u32;
 var<private> mtWantedDot: f32;
 var<private> mtCandidateCount: u32;` : ''}
-@group(0) @binding(4) var mtAcceleration: acceleration_structure;
-@group(0) @binding(5) var<storage, read> mtTriangleRecords: array<u32>;
+@group(${GROUP.SCENE}) @binding(${HWRT_BINDING.ACCELERATION}) var mtAcceleration: acceleration_structure;
+@group(${GROUP.SCENE}) @binding(${HWRT_BINDING.INDICES}) var<storage, read> mtTriangleRecords: array<u32>;
 struct MtHit {
   kind: u32, t: f32, instance: i32, record: i32,
   barycentric: vec3f, normal: vec3f, micro: bool,
