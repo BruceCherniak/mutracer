@@ -1036,9 +1036,12 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
         renderer.finish(16)? == original,
         "Restoring camera changed the original image"
     );
-    let first_material = model.meshes[0].material;
-    model.materials[first_material].color = [0.05, 0.85, 0.15];
-    model.materials[first_material].roughness = 0.8;
+    // Imported mesh order does not imply visibility in the fitted camera. Edit
+    // every material so this model-agnostic smoke always reaches visible surfaces.
+    for material in &mut model.materials {
+        material.color = [0.05, 0.85, 0.15];
+        material.roughness = 0.8;
+    }
     renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
     let material = renderer.finish(16)?;
     ensure!(material != original, "Material edit did not change pixels");
