@@ -30,6 +30,28 @@ class HitConsistency(unittest.TestCase):
             hit=np.zeros(1,dtype=m.HIT);hit['hit']=1;hit['bary']=[.2,.3,.5]
             np.testing.assert_allclose(m.PackedGeometry(folder).points(hit),[[3,5.9,6]],rtol=1e-7)
 
+    def test_source_ids_preserve_duplicate_triangles_across_index_layouts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp)
+            attributes=np.zeros((6,4),dtype='<f4');attributes[3:,:3]=[[0,0,0],[1,0,0],[0,1,0]]
+            instances=np.zeros((1,40),dtype='<u4');instances[0,1]=3
+            instances[0,20:36]=np.eye(4,dtype='<f4').T.ravel().view('<u4')
+            bvh=np.zeros((7,4),dtype='<u4');bvh[0,3]=np.uint32(0xffffffff)
+            bvh[2]=[0,0,0,0];bvh[3,3]=np.uint32(0xfffffffe);bvh[5,:3]=bvh[6,:3]=[0,1,2]
+            for side,indexed in [('software',False),('hardware',True)]:
+                folder=root/side;folder.mkdir()
+                (folder/'layout.json').write_text(json.dumps({'indexed':indexed,'attributeStrideBytes':16,
+                    'positionOffsetBytes':0,'isEmpty':False,'blasOffset':3,'hardwareGeometries':[{'vertexOffset':3}]}))
+                attributes.tofile(folder/'native-3.bin');instances.tofile(folder/'native-2.bin');bvh.tofile(folder/'native-1.bin')
+                np.array([[0,1,2],[0,1,2]],dtype='<u4').tofile(folder/'native-35.bin')
+                np.array([[5,1],[6,0]],dtype='<u4').tofile(folder/'native-40.bin')
+            pair=m.GeometryPair(root);sw=np.zeros(1,dtype=m.HIT)
+            sw['hit']=1;sw['record']=5;sw['t']=2;sw['bary']=[.2,.3,.5];hw=sw.copy();hw['record']=1
+            self.assertEqual(pair.compare(sw,hw)[0].tolist(),[0])
+            hw['record']=0
+            self.assertEqual(pair.compare(sw,hw)[0].tolist(),[2])
+            self.assertEqual(pair.duplicate_triangles,1)
+
     def test_categories_and_edge_priority(self):
         a, b = self.pair()
         self.assertEqual(self.classify(a, b)[0].tolist(), [0])

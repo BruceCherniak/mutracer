@@ -26,6 +26,9 @@ struct BuildResult {
   uint32_t byteLength = 0;
   uint32_t maxDepth = 0;
   uint32_t layout = 0;
+#ifdef MUTRACER_TINYBVH_NATIVE
+  std::vector<uint32_t> triangleIds;
+#endif
 };
 
 constexpr uint32_t BVH2_LAYOUT = 0;
@@ -86,7 +89,8 @@ void flattenNode(
   const std::vector<uint32_t>& triangleMap,
   const float* displacement,
   std::vector<uint32_t>& output,
-  uint32_t& maxDepth
+  uint32_t& maxDepth,
+  std::vector<uint32_t>* triangleIds = nullptr
 ) {
   const tinybvh::BVH::BVHNode& node = bvh.bvhNode[nodeIndex];
   maxDepth = std::max(maxDepth, depth);
@@ -104,6 +108,7 @@ void flattenNode(
     for (uint32_t i = 0; i < node.triCount; ++i) {
       const uint32_t compactTriangle = bvh.primIdx[node.leftFirst + i];
       const uint32_t triangle = triangleMap[compactTriangle];
+      if (triangleIds) {triangleIds->push_back(static_cast<uint32_t>(output.size()/4)); triangleIds->push_back(triangle);}
       output.push_back(indices[triangle * 3]);
       output.push_back(indices[triangle * 3 + 1]);
       output.push_back(indices[triangle * 3 + 2]);
@@ -112,9 +117,9 @@ void flattenNode(
     return;
   }
 
-  flattenNode(bvh, node.leftFirst, depth + 1, indices, triangleMap, displacement, output, maxDepth);
+  flattenNode(bvh, node.leftFirst, depth + 1, indices, triangleMap, displacement, output, maxDepth, triangleIds);
   output[start + 3] = static_cast<uint32_t>(output.size() / 4);
-  flattenNode(bvh, node.leftFirst + 1, depth + 1, indices, triangleMap, displacement, output, maxDepth);
+  flattenNode(bvh, node.leftFirst + 1, depth + 1, indices, triangleMap, displacement, output, maxDepth, triangleIds);
 }
 
 void collectWideNodes(
@@ -733,7 +738,11 @@ void serializeBvh(
   flattened.reserve(triangleMap.size() * 6);
   if (forceBvh2 || requestedLayout == BVH2_LAYOUT) {
     result.layout = BVH2_LAYOUT;
-    flattenNode(bvh, 0, 1, indices, triangleMap, displacement, flattened, result.maxDepth);
+    flattenNode(bvh, 0, 1, indices, triangleMap, displacement, flattened, result.maxDepth
+#ifdef MUTRACER_TINYBVH_NATIVE
+      , &result.triangleIds
+#endif
+    );
   } else if (requestedLayout == BVH4_LAYOUT) {
     result.layout = BVH4_LAYOUT;
     if (!flattenWideBvh(
@@ -895,6 +904,10 @@ uint32_t tinybvh_result_layout(const BuildResult* result) {
   return result ? result->layout : BVH2_LAYOUT;
 }
 
+#ifdef MUTRACER_TINYBVH_NATIVE
+uintptr_t mt_native_tiny_triangle_ids(const BuildResult* result) {return reinterpret_cast<uintptr_t>(result->triangleIds.data());}
+uint32_t mt_native_tiny_triangle_ids_size(const BuildResult* result) {return static_cast<uint32_t>(result->triangleIds.size());}
+#endif
 void tinybvh_result_destroy(BuildResult* result) {
   if (!result) return;
   std::free(result->data);

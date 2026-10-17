@@ -6,7 +6,7 @@ spec=importlib.util.spec_from_file_location('hit_consistency',Path(__file__).wit
 hc=importlib.util.module_from_spec(spec);spec.loader.exec_module(hc)
 EVENT=np.dtype([('hit',hc.HIT),('origin','<f4',(3,)),('flags','<u4'),('direction','<f4',(3,)),('previousRecord','<i4')])
 def analyze(directory, geometry=None, points=None):
- p=Path(directory);points = points or hc.PackedGeometry(geometry or p/'software').points;sinfo=json.loads((p/'software/info.json').read_text());hinfo=json.loads((p/'hardware/info.json').read_text());assert sinfo['actualBackend']==0 and hinfo['actualBackend']==3
+ p=Path(directory);pair = hc.GeometryPair(p) if points is None and geometry is None and json.loads((p/'hardware/layout.json').read_text()).get('indexed',False) else None;points = points or hc.PackedGeometry(geometry or p/'software').points;sinfo=json.loads((p/'software/info.json').read_text());hinfo=json.loads((p/'hardware/info.json').read_text());assert sinfo['actualBackend']==0 and hinfo['actualBackend']==3
  headers=[np.fromfile(p/side/'headers.bin',dtype='<u4').reshape(-1,16) for side in ['software','hardware']]
  events=[np.fromfile(p/side/'events.bin',dtype=EVENT) for side in ['software','hardware']]
  counts=[a[:,0].astype(np.int64) for a in headers];offsets=[np.r_[0,np.cumsum(c)] for c in counts]
@@ -14,7 +14,11 @@ def analyze(directory, geometry=None, points=None):
  n=len(headers[0]);first=np.full(n,-1,dtype=np.int16);codes=np.zeros(n,dtype=np.uint8);unpaired=np.zeros(n,dtype=bool);ray_delta=np.zeros(n);examples=[];steps=[]
  for step in range(int(max(c.max() for c in counts))):
   active=first<0;paired=active&(counts[0]>step)&(counts[1]>step);ids=np.flatnonzero(paired)
-  sw,hw=[events[i][offsets[i][ids]+step] for i in range(2)];distance=np.linalg.norm(points(sw['hit'])-points(hw['hit']),axis=1);code,stats=hc.classify(sw['hit'],hw['hit'],distance);steps.append({'query':step,'paired':len(ids),'classification':stats})
+  sw,hw=[events[i][offsets[i][ids]+step] for i in range(2)]
+  if pair: code,stats=pair.compare(sw['hit'],hw['hit'])
+  else:
+   distance=np.linalg.norm(points(sw['hit'])-points(hw['hit']),axis=1);code,stats=hc.classify(sw['hit'],hw['hit'],distance)
+  steps.append({'query':step,'paired':len(ids),'classification':stats})
   bad=code!=0;which=ids[bad];first[which]=step;codes[which]=code[bad]
   if len(which):
    ray_delta[which]=np.maximum(np.max(np.abs(sw['origin'][bad].astype(float)-hw['origin'][bad].astype(float)),axis=1),np.max(np.abs(sw['direction'][bad].astype(float)-hw['direction'][bad].astype(float)),axis=1))

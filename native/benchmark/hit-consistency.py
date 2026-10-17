@@ -12,24 +12,79 @@ class PackedGeometry:
     def __init__(self, directory):
         directory = Path(directory)
         layout = json.loads((directory / 'layout.json').read_text())
+        self.indexed = layout.get('indexed', False)
+        self.local_indices = self.indexed and any('vertexOffset' in g for g in layout.get('hardwareGeometries', []))
+        self.blas_offset = layout.get('blasOffset', 0)
+        self.indices = np.fromfile(directory / 'native-35.bin', dtype='<u4').reshape(-1, 3) if self.indexed else None
         self.stride = layout['attributeStrideBytes'] // 4
         self.position = layout['positionOffsetBytes'] // 4
         self.instances = np.fromfile(directory / 'native-2.bin', dtype='<u4').reshape(-1, 40) if not layout['isEmpty'] else np.zeros((0,40), dtype='<u4')
-        self.bvh = np.fromfile(directory / 'native-1.bin', dtype='<u4').reshape(-1, 4)
-        self.attributes = np.fromfile(directory / 'native-3.bin', dtype='<f4').reshape(-1, self.stride) if self.stride else np.zeros((0,0))
+        words = np.fromfile(directory / 'native-1.bin', dtype='<u4')
+        self.bvh = words[:len(words)//4*4].reshape(-1, 4)
+        values = np.fromfile(directory / 'native-3.bin', dtype='<f4')
+        self.attributes = values[:len(values)//self.stride*self.stride].reshape(-1, self.stride) if self.stride else np.zeros((0,0))
     def points(self, hits):
         result = np.full((len(hits),3), np.nan)
-        valid = (hits['hit']!=0)&(hits['instance']>=0)&(hits['instance']<len(self.instances))&(hits['record']>=0)&(hits['record']<len(self.bvh))
+        valid = (hits['hit']!=0)&(hits['instance']>=0)&(hits['instance']<len(self.instances))&(hits['record']>=0)&(hits['record']<(len(self.indices) if self.indexed else len(self.bvh)))
         ids = np.flatnonzero(valid)
         for start in range(0,len(ids),65536):
             selected = ids[start:start+65536]
             ins = self.instances[hits['instance'][selected]]
-            index = self.bvh[hits['record'][selected],:3].astype(np.int64) + ins[:,1,None]
+            index = self.indices[hits['record'][selected]].astype(np.int64) + (ins[:,1,None] if self.local_indices else 0) if self.indexed else self.bvh[hits['record'][selected],:3].astype(np.int64) + ins[:,1,None]
             triangle = self.attributes[index,self.position:self.position+3].astype(float)
             matrix = ins[:,20:36].copy().view('<f4').reshape(-1,4,4).transpose(0,2,1).astype(float)
             world = np.einsum('nij,nkj->nki',matrix[:,:3,:3],triangle) + matrix[:,:3,3][:,None,:]
             result[selected] = np.einsum('nk,nkj->nj',hits['bary'][selected].astype(float),world)
         return result
+
+class GeometryPair:
+    """Compare exact source primitive IDs from the native TinyBVH sidecar.
+
+    This preserves distinct identities even for duplicated ordered index triples.
+    Raw records remain untouched on disk.
+    """
+    def __init__(self, directory):
+        p = Path(directory)
+        self.software, self.hardware = PackedGeometry(p/'software'), PackedGeometry(p/'hardware')
+        sw, hw = self.software, self.hardware
+        self.legacy = not hw.indexed
+        if self.legacy:
+            if not np.array_equal(sw.bvh,hw.bvh) or not np.array_equal(sw.instances,hw.instances):
+                raise ValueError('Production BVH-soup diagnostic packing differs between preparations')
+            self.duplicate_triangles=0
+            return
+        if not np.array_equal(sw.attributes, hw.attributes):
+            raise ValueError('Merged attributes differ between diagnostic preparations')
+        pairs = np.fromfile(p/'software/native-40.bin',dtype='<u4').reshape(-1,2)
+        self.source_records = {int(record):int(primitive) for record,primitive in pairs}
+        self.duplicate_triangles = len(hw.indices)-len(np.unique(hw.indices,axis=0))
+        self.software_records = {}
+        self.software_instances = np.full(len(sw.instances),-1,dtype=np.int32)
+        if len(sw.instances):
+            stack = [0]
+            while stack:
+                node = stack.pop(); child = int(sw.bvh[node,3].view('<i4'))
+                if child >= 0:
+                    stack.extend([node+2,child]);continue
+                for record in sw.bvh[node+2:node+2-child]:
+                    self.software_instances[int(record[0])] = int(record[2])
+            if np.any(self.software_instances<0):
+                raise ValueError('Software TLAS instance identity missing')
+    def canonical(self, hits, side):
+        result = hits.copy(); selected = np.flatnonzero(hits['hit']!=0)
+        if side == 'hardware':
+            return result
+        sw = self.software
+        for instance in np.unique(hits['instance'][selected]):
+            ids = selected[hits['instance'][selected]==instance]
+            result['instance'][ids] = self.software_instances[instance]
+            result['record'][ids] = np.array([self.source_records[int(v)] for v in hits['record'][ids]],dtype=np.int32)
+        return result
+    def compare(self, sw, hw):
+        if self.legacy:
+            return classify(sw,hw,np.linalg.norm(self.software.points(sw)-self.hardware.points(hw),axis=1))
+        distance = np.linalg.norm(self.software.points(sw)-self.hardware.points(hw),axis=1)
+        return classify(self.canonical(sw,'software'),self.canonical(hw,'hardware'),distance)
 
 def classify(sw, hw, world_distance):
     if sw.shape != hw.shape:
@@ -91,9 +146,16 @@ def analyze(directory, output=None, geometry=None):
     sw, hw = [np.fromfile(directory / (name + '.hit.bin'), dtype=HIT) for name in ['software', 'hardware']]
     if len(sw) != info['width'] * info['height']:
         raise ValueError('Dimensions differ from record count')
-    geometry = PackedGeometry(geometry or directory)
-    world_distance = np.linalg.norm(geometry.points(sw)-geometry.points(hw),axis=1)
-    codes, result = classify(sw, hw, world_distance)
+    if geometry is None and (directory/'hardware/layout.json').exists():
+        pair = GeometryPair(directory)
+        codes, result = pair.compare(sw, hw)
+        result['identityMapping'] = {'softwareInstance': 'TLAS source instance index',
+            'triangle': 'exact source triangle ID from TinyBVH primitive permutation sidecar',
+            'duplicateSourceTriangles': pair.duplicate_triangles}
+    else:
+        geometry = PackedGeometry(geometry or directory)
+        world_distance = np.linalg.norm(geometry.points(sw)-geometry.points(hw),axis=1)
+        codes, result = classify(sw, hw, world_distance)
     result.update({'width': info['width'], 'height': info['height'], 'actualBackend': info['actualBackend'],
                    'comparison': 'Same instance/record: relative t and world point distance/max(1,tSW) <=1e-4; barycentric errors are diagnostic only; differing hit: edge first (<1e-3), then distinct-triangle t tie (<=1e-5).',
                    'codes': {'0': 'agree', '1': 'edge', '2': 'tie', '3': 'other'}})

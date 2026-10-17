@@ -2,7 +2,7 @@ import type Geometry from '../scene/Geometry.js';
 import { vec3 } from '../math.js';
 import { getGeometryBvh } from './geometryBvh.js';
 
-function computeGeometryBounds(geometry: Geometry) {
+export function computeGeometryBounds(geometry: Geometry) {
   const min = vec3.fromValues(Infinity, Infinity, Infinity);
   const max = vec3.fromValues(-Infinity, -Infinity, -Infinity);
   const positions = geometry.position.array;

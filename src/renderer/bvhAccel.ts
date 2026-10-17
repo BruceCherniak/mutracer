@@ -26,6 +26,8 @@ export interface FlattendBVH {
   /** Largest leaf fan-out; used with maxDepth to size the traversal stack. */
   maxLeafPrimitives?: number;
   buffer: ArrayBuffer;
+  /** Native diagnostic source triangle IDs, (record, source triangle) pairs. */
+  triangleIds?: Uint32Array;
   /** Precomputed data without a layout field uses the legacy BVH2 layout. */
   layout?: BvhLayout;
 
@@ -341,6 +343,19 @@ function writeInstanceRecord(
     instanceFloats[offset + 4 + i] = inverse[i];
     instanceFloats[offset + 20 + i] = read(instance.transform, i);
   }
+}
+
+// Hardware adapters use the same instance/material/matrix packing without a
+// software hierarchy. Offsets are primitive offsets in their indexed geometry.
+export function packLinearInstances(instances: MeshInstances, primitiveOffsets: number[], vertexOffsets: number[]): ArrayBuffer {
+  const buffer = new ArrayBuffer(meshInstancesLength(instances) * INSTANCE_WORD_STRIDE * 4);
+  const words = new Int32Array(buffer), floats = new Float32Array(buffer);
+  const placement: BlasPlacement = {blasOffsets: primitiveOffsets, vertexOffsets,
+    layouts: primitiveOffsets.map(() => 'bvh2')};
+  for (let i = 0; i < meshInstancesLength(instances); i++) {
+    writeInstanceRecord(words, floats, i, readMeshInstance(instances, i), placement);
+  }
+  return buffer;
 }
 
 /**

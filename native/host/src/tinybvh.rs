@@ -16,6 +16,8 @@ unsafe extern "C" {
     fn tinybvh_result_size(result: *const c_void) -> u32;
     fn tinybvh_result_max_depth(result: *const c_void) -> u32;
     fn tinybvh_result_layout(result: *const c_void) -> u32;
+    fn mt_native_tiny_triangle_ids(result: *const c_void) -> usize;
+    fn mt_native_tiny_triangle_ids_size(result: *const c_void) -> u32;
     fn tinybvh_result_destroy(result: *mut c_void);
 }
 struct Handle(*mut c_void);
@@ -26,6 +28,7 @@ impl Drop for Handle {
 }
 pub(super) struct Built {
     pub bytes: Vec<u8>,
+    pub triangle_ids: Vec<u32>,
     pub depth: u32,
     pub leaf_primitives: u32,
 }
@@ -47,6 +50,7 @@ fn finish(pointer: *mut c_void, primitive_count: usize) -> Result<Built> {
     if size == 0 {
         return Ok(Built {
             bytes: vec![],
+            triangle_ids: vec![],
             depth: 0,
             leaf_primitives: 0,
         });
@@ -90,8 +94,16 @@ fn finish(pointer: *mut c_void, primitive_count: usize) -> Result<Built> {
     if max_depth != depth || count != primitive_count {
         return Err("Native TinyBVH primitive/depth mismatch".into());
     }
+    let ids_len = unsafe { mt_native_tiny_triangle_ids_size(handle.0) } as usize;
+    let ids = unsafe { mt_native_tiny_triangle_ids(handle.0) };
+    let triangle_ids = if ids_len == 0 {
+        vec![]
+    } else {
+        unsafe { std::slice::from_raw_parts(ids as *const u32, ids_len) }.to_vec()
+    };
     Ok(Built {
         bytes,
+        triangle_ids,
         depth,
         leaf_primitives,
     })
@@ -227,7 +239,7 @@ pub(super) fn jobs(packet: &[u8], instances: bool) -> Result<Vec<u8>> {
                 },
             )?
         };
-        total += result.bytes.len();
+        total += result.bytes.len() + result.triangle_ids.len() * 4;
         if total > 1024 * 1024 * 1024 || result.depth > 64 {
             return Err("Native TinyBVH result exceeds byte/stack budget".into());
         }
@@ -249,6 +261,20 @@ pub(super) fn jobs(packet: &[u8], instances: bool) -> Result<Vec<u8>> {
         put(&mut output, o + 7, offset as u32);
         output[offset..offset + bvh.bytes.len()].copy_from_slice(&bvh.bytes);
         offset += bvh.bytes.len();
+        put(&mut output, o + 5, bvh.triangle_ids.len() as u32);
+        put(
+            &mut output,
+            o + 6,
+            if bvh.triangle_ids.is_empty() {
+                0
+            } else {
+                offset as u32
+            },
+        );
+        for value in &bvh.triangle_ids {
+            output[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+            offset += 4;
+        }
     }
     Ok(output)
 }
@@ -277,6 +303,34 @@ mod tests {
             assert_eq!(f32::from_bits(w[5]), 2.);
         }
     }
+    #[test]
+    fn source_ids_preserve_duplicate_triangle_identities() {
+        let indices = [0, 1, 2, 0, 1, 2];
+        let built = blas(
+            &[-1., 0., 0., 1., 0., 0., 0., 2., 0.],
+            None,
+            &indices,
+            0.,
+            None,
+        )
+        .unwrap();
+        let mut sources = Vec::new();
+        for pair in built.triangle_ids.chunks_exact(2) {
+            let start = pair[0] as usize * 16;
+            let actual: Vec<_> = built.bytes[start..start + 12]
+                .chunks_exact(4)
+                .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+                .collect();
+            assert_eq!(
+                actual,
+                indices[pair[1] as usize * 3..pair[1] as usize * 3 + 3]
+            );
+            sources.push(pair[1]);
+        }
+        sources.sort_unstable();
+        assert_eq!(sources, [0, 1]);
+    }
+
     #[test]
     fn native_boxes_and_empty_inputs() {
         assert!(aabbs(&[]).unwrap().bytes.is_empty());

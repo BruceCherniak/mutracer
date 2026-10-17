@@ -42,7 +42,7 @@ pub(super) fn write_geometry_snapshot(
                 .ok_or("Missing diagnostic layout")?,
         )?,
     )?;
-    for id in [1, 2, 3] {
+    for id in [1, 2, 3, 35, 40] {
         let key = format!("native-{id}");
         fs::write(
             output.join(format!("{key}.bin")),
@@ -53,9 +53,26 @@ pub(super) fn write_geometry_snapshot(
 }
 
 pub fn run(input: &[u8], output: &Path) -> Result<()> {
+    run_side(input, &output.join("software"), false)?;
+    run_side(input, &output.join("hardware"), true)?;
+    for (side, file) in [
+        ("software", "software.hit.bin"),
+        ("hardware", "hardware.hit.bin"),
+    ] {
+        fs::copy(output.join(side).join(file), output.join(file))?;
+    }
+    fs::copy(output.join("hardware/info.json"), output.join("info.json"))?;
+    fs::copy(output.join("hardware/rays.bin"), output.join("rays.bin"))?;
+    Ok(())
+}
+fn run_side(input: &[u8], output: &Path, hardware: bool) -> Result<()> {
     let _entry = ENTRY_LOCK.try_lock().map_err(|_| "Native core is active")?;
     context::check_owner()?;
-    let (mut scene, mut assets) = scene::prepare(input)?;
+    let (mut scene, mut assets) = if hardware {
+        scene::prepare_hardware(input)?
+    } else {
+        scene::prepare(input)?
+    };
     write_geometry_snapshot(&scene, &assets, output)?;
     let layout = scene
         .native_layout
@@ -92,7 +109,12 @@ pub fn run(input: &[u8], output: &Path) -> Result<()> {
             .ok()
             .map(|v| v.parse())
             .transpose()?;
-        hardware::isolate_diagnostic(&mut capture, &mut assets, instance.parse()?, primitive)?;
+        hardware::isolate_diagnostic(
+            &mut capture,
+            &mut assets,
+            instance.parse()?,
+            if hardware { primitive } else { None },
+        )?;
     }
     if capture.geometries.iter().any(|g| g.procedural) {
         return Err("First-hit diagnostics exclude displacement geometries".into());
@@ -100,6 +122,7 @@ pub fn run(input: &[u8], output: &Path) -> Result<()> {
     capture.shader = Some("native-34".into());
     scene.hwrt = Some(capture);
     scene.entry_point = "diagnoseHits".into();
+    scene.shader = "native-39".into();
     let gpu = GpuDevice::with_backend(3)?;
     if !gpu.hardware_ray_query {
         return Err("Diagnostic requires actual HWRT".into());
@@ -108,7 +131,7 @@ pub fn run(input: &[u8], output: &Path) -> Result<()> {
         Path::new(""),
         scene,
         &RenderOptions {
-            flags: 4,
+            flags: if hardware { 4 } else { 0 },
             ..Default::default()
         },
         Some(&assets),
@@ -140,7 +163,7 @@ pub fn run(input: &[u8], output: &Path) -> Result<()> {
             "width":state.scene.width,"height":state.scene.height,"samples":1,"sampleIndex":0,"seed":12345,
             "actualBackend":3,"adapter":state.gpu.info.name,"recordBytes":32,
             "recordLayout":"u32 hit, i32 instance, i32 record, f32 t, f32 barycentric[3], f32 reserved",
-            "orientation":"bottom row first","raysSecondVector":"wanted seen, local normal dot direction, wanted confirmed, candidate count","primaryAlpha":"first geometric hit, prior to integrator coverage"
+            "orientation":"bottom row first","raysSecondVector":"direction.z, local normal dot direction, wanted confirmed, candidate count; direction.x in hit reserved; direction.y in origin.w","primaryAlpha":"first geometric hit, prior to integrator coverage"
         }))?,
     )?;
     Ok(())

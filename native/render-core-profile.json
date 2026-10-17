@@ -226,6 +226,15 @@
         "u32"
       ],
       "returns": "bytes"
+    },
+    {
+      "export": "nativeHardwareScene",
+      "symbol": "mt_core_native_hardware_scene",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
     }
   ]
 }

@@ -1,6 +1,13 @@
 //! Validated raw scene boundary. Only returned AOT bytes are retained by Rust.
 use super::*;
 unsafe extern "C" {
+    fn mt_core_native_hardware_scene(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
     fn mt_core_native_scene_begin(
         input: *const u8,
         length: usize,
@@ -544,12 +551,15 @@ fn binding(binding: u32, kind: &str, id: usize) -> Binding {
 // Every AOT arena reset/collection leaves these explicitly rooted TS objects alive.
 pub(super) struct PreparedState {
     token: u32,
+    indexed: bool,
     material_count: usize,
     light_count: usize,
     raw_version: u32,
     shader: Vec<u8>,
     authoritative_shader: Vec<u8>,
     authoritative_indices: Vec<u8>,
+    authoritative_as_indices: Vec<u8>,
+    authoritative_bounds: Vec<u8>,
 }
 impl Drop for PreparedState {
     fn drop(&mut self) {
@@ -567,6 +577,7 @@ impl Drop for PreparedState {
 pub(super) struct LightingUpdates {
     resources: Vec<(usize, u32, u32, Vec<u8>)>,
     pub native_layout: Option<hardware::NativeLayout>,
+    pub hardware_positions: Option<Vec<u8>>,
 }
 impl std::ops::Deref for LightingUpdates {
     type Target = [(usize, u32, u32, Vec<u8>)];
@@ -590,7 +601,11 @@ impl PreparedState {
         ids: &[usize],
     ) -> Result<LightingUpdates> {
         let requests = native_step(begin, bytes, self.token)?;
-        let tlas = tinybvh::jobs(&requests, true)?;
+        let tlas = if self.indexed {
+            requests.clone()
+        } else {
+            tinybvh::jobs(&requests, true)?
+        };
         let mut pointer = std::ptr::null();
         let mut size = 0;
         unsafe {
@@ -625,7 +640,7 @@ impl PreparedState {
             mt_core_native_geometry_begin,
             mt_core_native_geometry_finish,
             bytes,
-            &[1, 2, 3, 7, 8, 24, 31],
+            &[1, 2, 3, 7, 8, 24, 31, 41],
         )
     }
     pub(super) fn accept_geometry(&self) -> Result<()> {
@@ -656,12 +671,18 @@ impl PreparedState {
         assets.insert("native-32".into(), self.shader.clone());
         assets.insert("native-33".into(), self.authoritative_shader.clone());
         assets.insert("native-35".into(), self.authoritative_indices.clone());
+        assets.insert("native-42".into(), self.authoritative_as_indices.clone());
+        if let Some(positions) = &updates.hardware_positions {
+            assets.insert("native-41".into(), positions.clone());
+        }
+        assets.insert("native-38".into(), self.authoritative_bounds.clone());
         let layout = updates
             .native_layout
             .as_ref()
             .ok_or("Missing geometry HWRT metadata")?;
-        let capture =
+        let mut capture =
             hardware::from_raw_with_layout(&mut assets, self.raw_version, authoritative, layout)?;
+        capture.allow_updates();
         Ok((capture, assets))
     }
     pub(super) fn transform(&self, bytes: &[u8]) -> Result<LightingUpdates> {
@@ -858,6 +879,7 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
     }
     let mut updates = Vec::new();
     let mut native_layout = None;
+    let mut hardware_positions = None;
     for (i, &id) in ids.iter().enumerate() {
         let o = 4 + i * 8;
         let (length, offset) = (w.u(o + 2), w.u(o + 7));
@@ -867,9 +889,14 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
             || (id != 31 && length % 4 != 0)
             || offset > packet.len()
             || length > packet.len() - offset
-            || w.u(o + 1) != if id == 31 { 3 } else { usize::from(id >= 21) }
+            || w.u(o + 1)
+                != if id == 31 || id == 41 {
+                    3
+                } else {
+                    usize::from(id >= 21)
+                }
             || w.u(o + 6)
-                != if id == 31 {
+                != if id == 31 || id == 41 {
                     0
                 } else if id == 22 {
                     4
@@ -880,6 +907,11 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
                 }
         {
             return Err("Invalid AOT lighting resource span/format".into());
+        }
+        if id == 41 {
+            w.finite(offset / 4, length / 4)?;
+            hardware_positions = Some(packet[offset..offset + length].to_vec());
+            continue;
         }
         if id == 31 {
             native_layout = Some(serde_json::from_slice::<hardware::NativeLayout>(
@@ -939,10 +971,12 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
     Ok(LightingUpdates {
         resources: updates,
         native_layout,
+        hardware_positions,
     })
 }
 pub(super) fn prepare_retained(
     bytes: &[u8],
+    hardware: bool,
 ) -> Result<(Scene, HashMap<String, Vec<u8>>, PreparedState)> {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
     let token = NEXT
@@ -954,10 +988,13 @@ pub(super) fn prepare_retained(
         .map_err(|_| "Native preparation token space exhausted")?;
     let mut state = PreparedState {
         token,
+        indexed: hardware,
         raw_version: 0,
         shader: Vec::new(),
         authoritative_shader: Vec::new(),
         authoritative_indices: Vec::new(),
+        authoritative_as_indices: Vec::new(),
+        authoritative_bounds: Vec::new(),
         light_count: if bytes.len() >= 32 {
             Words(bytes).u(7)
         } else {
@@ -969,7 +1006,7 @@ pub(super) fn prepare_retained(
             0
         },
     };
-    let (scene, assets) = prepare_impl(bytes, token)?;
+    let (scene, assets) = prepare_impl(bytes, token, hardware)?;
     state.raw_version = Words(bytes).u(0) as u32;
     state.shader = assets
         .get("native-32")
@@ -979,14 +1016,19 @@ pub(super) fn prepare_retained(
         .get("native-33")
         .ok_or("Missing authoritative shader")?
         .clone();
+    state.authoritative_as_indices = assets.get("native-42").cloned().unwrap_or_default();
+    state.authoritative_bounds = assets.get("native-38").cloned().unwrap_or_default();
     state.authoritative_indices = assets
         .get("native-35")
         .ok_or("Missing explicit HWRT indices")?
         .clone();
     Ok((scene, assets, state))
 }
+pub(super) fn prepare_hardware(bytes: &[u8]) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
+    prepare_impl(bytes, 0, hardware::direct_input_enabled())
+}
 pub(super) fn prepare(bytes: &[u8]) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
-    prepare_impl(bytes, 0)
+    prepare_impl(bytes, 0, false)
 }
 type NativeStep = unsafe extern "C" fn(*const u8, usize, u32, *mut *const u8, *mut usize);
 fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
@@ -1014,7 +1056,11 @@ fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
     }
     Ok(packet)
 }
-fn prepare_impl(bytes: &[u8], token: u32) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
+fn prepare_impl(
+    bytes: &[u8],
+    token: u32,
+    hardware: bool,
+) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
     let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
     let started = Instant::now();
     validate(bytes)?;
@@ -1023,6 +1069,19 @@ fn prepare_impl(bytes: &[u8], token: u32) -> Result<(Scene, HashMap<String, Vec<
     // every retained array. Copy result bytes before reset or collection.
     init_core();
     let work = (|| -> Result<Vec<u8>> {
+        if hardware {
+            let result = native_step(mt_core_native_hardware_scene, bytes, token)?;
+            if profile {
+                eprintln!(
+                    "{}",
+                    json!({"nativePreparationProfile": {
+                "validateMs": validated.duration_since(started).as_secs_f64()*1000.0,
+                "hardwarePrepareComposeMs": validated.elapsed().as_secs_f64()*1000.0,
+                "blasMs":0.0,"tlasMs":0.0}})
+                );
+            }
+            return Ok(result);
+        }
         let requests = native_step(mt_core_native_scene_begin, bytes, token)?;
         let decoded = Instant::now();
         let blases = tinybvh::jobs(&requests, false)?;
@@ -1065,7 +1124,7 @@ fn prepare_impl(bytes: &[u8], token: u32) -> Result<(Scene, HashMap<String, Vec<
         );
     }
     let count = w.u(1);
-    if w.u(0) != 1 || count != 23 || packet.len() < 16 + count * 32 {
+    if w.u(0) != 1 || !(25..=28).contains(&count) || packet.len() < 16 + count * 32 {
         return Err("Invalid native resource packet".into());
     }
     let mut assets = HashMap::new();
@@ -1111,12 +1170,15 @@ fn prepare_impl(bytes: &[u8], token: u32) -> Result<(Scene, HashMap<String, Vec<
         } else if kind == 2 {
             if id == 30 {
                 shader = name.clone();
-            } else if id != 32 && id != 33 && id != 34 && id != 36 && id != 37 {
+            } else if id != 32 && id != 33 && id != 34 && id != 36 && id != 37 && id != 39 {
                 return Err("Unknown native shader variant".into());
             }
         } else if kind == 3 && id == 31 {
             native_layout = Some(serde_json::from_slice::<hardware::NativeLayout>(&data)?);
-        } else if kind == 3 && id == 35 && data.len() % 4 == 0 {
+        } else if kind == 3
+            && (id == 35 || id == 38 || id == 40 || id == 41 || id == 42)
+            && data.len() % 4 == 0
+        {
             // CPU packet payload; uploaded only when HWRT is selected.
         } else {
             return Err("Unknown native resource command".into());

@@ -480,8 +480,12 @@ impl GpuScene {
             if data.len() as u64 != buffer.size {
                 return Err("Capture buffer length mismatch".into());
             }
-            let usage =
+            let mut usage =
                 wgpu::BufferUsages::from_bits(buffer.usage).ok_or("Invalid buffer usage")?;
+            if use_hwrt && buffer.id == 3 && scene.native_layout.as_ref().is_some_and(|l| l.indexed)
+            {
+                usage |= wgpu::BufferUsages::BLAS_INPUT;
+            }
             buffers.insert(
                 buffer.id,
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -651,6 +655,7 @@ impl GpuScene {
                 scene_dir,
                 scene.hwrt.as_ref().unwrap(),
                 assets,
+                Some(&buffers),
             )?)
         } else {
             None
@@ -940,7 +945,14 @@ impl GpuScene {
     fn prepare_geometry_hardware(
         &self,
         updates: &scene::LightingUpdates,
-    ) -> Result<Option<(hardware::Resources, hardware::Capture, wgpu::BindGroup)>> {
+    ) -> Result<
+        Option<(
+            hardware::Resources,
+            hardware::Capture,
+            wgpu::BindGroup,
+            Option<wgpu::Buffer>,
+        )>,
+    > {
         let Some(current) = self.scene.hwrt.as_ref().filter(|_| self.hardware.is_some()) else {
             return Ok(None);
         };
@@ -958,18 +970,34 @@ impl GpuScene {
         let device = &self.gpu.device;
         let memory_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let attributes = if capture.indexed {
+            Some(
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("MuTracer candidate attributes"),
+                    contents: assets.get("native-3").ok_or("Missing updated attributes")?,
+                    usage: self.buffers[&3].usage(),
+                }),
+            )
+        } else {
+            None
+        };
+        let mut candidate_buffers = self.buffers.clone();
+        if let Some(buffer) = &attributes {
+            candidate_buffers.insert(3, buffer.clone());
+        }
         let result = hardware::prepare(
             device,
             &self.gpu.queue,
             Path::new(""),
             &capture,
             Some(&assets),
+            Some(&candidate_buffers),
         )
         .map(|resources| {
             let mut entries: Vec<_> = (0..4)
                 .map(|i| wgpu::BindGroupEntry {
                     binding: i,
-                    resource: self.buffers[&(i as usize + 1)].as_entire_binding(),
+                    resource: candidate_buffers[&(i as usize + 1)].as_entire_binding(),
                 })
                 .collect();
             entries.extend([
@@ -991,7 +1019,7 @@ impl GpuScene {
                 layout: &self.pipeline.get_bind_group_layout(0),
                 entries: &entries,
             });
-            (resources, capture, group)
+            (resources, capture, group, attributes)
         });
         let validation = pollster::block_on(validation_scope.pop());
         let memory = pollster::block_on(memory_scope.pop());

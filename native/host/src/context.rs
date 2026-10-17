@@ -232,7 +232,12 @@ pub unsafe extern "C" fn mt_context_commit(
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
         let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
         let started = Instant::now();
-        let (mut scene, mut assets, retained) = scene::prepare_retained(bytes)?;
+        let (mut scene, mut assets, retained) = scene::prepare_retained(
+            bytes,
+            context.backend == 3
+                && context.gpu.hardware_ray_query
+                && hardware::direct_input_enabled(),
+        )?;
         let prepared = Instant::now();
         let mut options = RenderOptions::default();
         let mut fallback_reason = String::new();
@@ -471,7 +476,10 @@ pub unsafe extern "C" fn mt_context_update_geometry(
         let hardware = scene.prepare_geometry_hardware(&packed)?;
         context.failed = true;
         let scene = context.scene.as_mut().unwrap();
-        if let Some((resources, capture, group)) = hardware {
+        if let Some((resources, capture, group, attributes)) = hardware {
+            if let Some(buffer) = attributes {
+                scene.buffers.insert(3, buffer);
+            }
             scene.hardware = Some(resources);
             scene.scene.hwrt = Some(capture);
             scene.groups[0] = group;

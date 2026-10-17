@@ -109,7 +109,8 @@ export function updateMeshInstanceTransforms<M extends MeshState>(
 }
 
 export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
-  prepareGeometry: (mesh: M) => {geometry: Geometry; displacementScale: number}) {
+  prepareGeometry: (mesh: M) => {geometry: Geometry; displacementScale: number},
+  boundsForGeometry = getBvhBounds, softwareBvhs = true) {
   const materialIndexMap = new Map<MaterialState, number>();
   const geometryIndexMap = new Map<Geometry, number>();
   const geometries: Geometry[] = [];
@@ -127,7 +128,7 @@ export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
     .filter((mesh) => mesh.geometry.position?.array.length > 0)
     .map((mesh) => {
       let { geometry, displacementScale } = prepareGeometry(mesh);
-      const bvhBounds = getBvhBounds(geometry);
+      const bvhBounds = boundsForGeometry(geometry);
       const bounds = computeBounds(geometry, mesh.transform, bvhBounds);
 
       let geoIdx = geometryIndexMap.get(geometry);
@@ -209,11 +210,11 @@ export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
     materials,
     instanceBindings,
     emissiveBindings,
-    blases: geometries.map((geo) => ({
+    blases: softwareBvhs ? geometries.map((geo) => ({
       bvh: getGeometryBvh(geo)!,
       verticesCount: geo.vertexCount,
       trainglesCount: attributeLength(geo.indices.array) / 3
-    }))
+    })) : []
   };
 }
 

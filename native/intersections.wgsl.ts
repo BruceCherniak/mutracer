@@ -10,9 +10,10 @@ export function nativeHybridIntersections(features: WGPUShaderFeatures): string 
     closestName: 'intersectSceneSoftware', shadowName: 'intersectSceneShadowSoftware'});
 }
 
-// Hardware hit metadata is authoritative. The temporary record map is replaced
-// by direct indexed geometry in 1.5; it supplies identity, never hit testing.
-export function nativeIntersections(features: WGPUShaderFeatures, empty: boolean, diagnostic = false, pathDiagnostic = false): string {
+// Hardware hit metadata is authoritative. Production retains the accepted
+// indexed soup map; the BVH-independent candidate uses source primitive offsets.
+// Both supply identity only, never a software hit test.
+export function nativeIntersections(features: WGPUShaderFeatures, empty: boolean, diagnostic = false, pathDiagnostic = false, indexed = false): string {
   if (empty) return /* wgsl */ `
 fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) { (*si).hit = false; }
 fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool { return false; }
@@ -33,10 +34,10 @@ struct MtHit {
   barycentric: vec3f, normal: vec3f, micro: bool,
 }
 fn mtRecord(instance: i32, primitive: u32) -> i32 {
-  return i32(mtTriangleRecords[mtTriangleRecords[instance] + primitive]);
+  return ${indexed ? 'bitcast<i32>(instancesBuffer[instance * 10].x) + i32(primitive)' : 'i32(mtTriangleRecords[mtTriangleRecords[instance] + primitive])'};
 }
 fn mtIndices(instance: i32, record: i32) -> vec3i {
-  return bitcast<vec3i>(bvhBuffer[record].xyz) + vec3i(bitcast<i32>(instancesBuffer[instance * 10].y));
+  return ${indexed ? 'vec3i(i32(mtTriangleRecords[record * 3]), i32(mtTriangleRecords[record * 3 + 1]), i32(mtTriangleRecords[record * 3 + 2])) + vec3i(bitcast<i32>(instancesBuffer[instance * 10].y))' : 'bitcast<vec3i>(bvhBuffer[record].xyz) + vec3i(bitcast<i32>(instancesBuffer[instance * 10].y))'};
 }
 fn mtTriangle(index: vec3i) -> Triangle {
   return Triangle(attrBuffers[index.x * ATTR_STRIDE + POSITION_OFF].xyz,
@@ -157,7 +158,7 @@ fn intersectSceneBevel(ray: Ray, si: ptr<function, SurfaceInteraction>, instance
 
 // A separate entry point is generated only for explicit diagnostic execution.
 // Integer identity bits are read back raw, never passed through AOV averaging.
-export function nativeHitDiagnostics(features: WGPUShaderFeatures, empty: boolean): string {
+export function nativeHitDiagnostics(features: WGPUShaderFeatures, empty: boolean, backend: 'both' | 'software' | 'hardware' = 'both'): string {
   return createSceneHitQueryWgsl(features.hasAnisotropyDirections || features.hasCoatNormals) + /* wgsl */ `
 @compute @workgroup_size(8, 8, 1)
 fn diagnoseHits(@builtin(global_invocation_id) id: vec3u) {
@@ -179,17 +180,17 @@ fn diagnoseHits(@builtin(global_invocation_id) id: vec3u) {
     let origin = (cameraUniform.viewInv * vec4f(lensPoint, 0.0, 1.0)).xyz;
     initRay(&ray, origin, normalize(focusPoint - origin));
   }
-  let software = querySceneSoftware(ray);
-  ${empty ? '' : 'mtWantedInstance = software.instance; mtWantedRecord = software.record;'}
-  ${empty ? 'let hardware = software;' : `let hw = mtTrace(ray, RAY_MAX_DISTANCE, false, -1, -1, false, false);
+  let software = ${backend === 'hardware' ? 'SceneQueryHit(false, -1, -1, RAY_MAX_DISTANCE, vec3f(0.0))' : 'querySceneSoftware(ray)'};
+  ${empty || backend === 'software' ? '' : 'mtWantedInstance = software.instance; mtWantedRecord = software.record;'}
+  ${empty || backend === 'software' ? 'let hardware = software;' : `let hw = mtTrace(ray, RAY_MAX_DISTANCE, false, -1, -1, false, false);
   let hardware = SceneQueryHit(hw.kind != 0u, select(-1, hw.instance, hw.kind != 0u),
     select(-1, hw.record, hw.kind != 0u), select(RAY_MAX_DISTANCE, hw.t, hw.kind != 0u), hw.barycentric);`}
   outColor[idx] = bitcast<vec4f>(vec4u(u32(software.hit), bitcast<u32>(software.instance), bitcast<u32>(software.record), bitcast<u32>(software.t)));
   outNormal[idx] = vec4f(software.barycentric, 0.0);
   outAlbedo[idx] = bitcast<vec4f>(vec4u(u32(hardware.hit), bitcast<u32>(hardware.instance), bitcast<u32>(hardware.record), bitcast<u32>(hardware.t)));
-  outShadowCatcher[idx].mask = vec4f(hardware.barycentric, 0.0);
-  outShadowCatcher[idx].background = vec4f(ray.o, 0.0);
-  outShadowCatcher[idx].moments = ${empty ? 'vec4f(0.0)' : 'vec4f(f32(mtWantedSeen), mtWantedDot, f32(mtWantedConfirmed), f32(mtCandidateCount))'};
+  outShadowCatcher[idx].mask = vec4f(hardware.barycentric, ray.d.x);
+  outShadowCatcher[idx].background = vec4f(ray.o, ray.d.y);
+  outShadowCatcher[idx].moments = ${empty || backend === 'software' ? 'vec4f(0.0)' : 'vec4f(ray.d.z, mtWantedDot, f32(mtWantedConfirmed), f32(mtCandidateCount))'};
 }
 `;
 }

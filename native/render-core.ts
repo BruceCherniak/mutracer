@@ -68,7 +68,8 @@ import {sceneGeometryParameters as prepareGeometry, acceptSceneGeometry as accep
 export function sceneGeometryParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareGeometry(bytes, token); }
 export function acceptSceneGeometry(token: number): Uint8Array { return acceptGeometry(token); }
 
-import {nativeSceneBegin as beginScene, nativeSceneBlas as sceneBlas, nativeSceneFinish as finishScene} from './scene-core.js';
+import {nativeHardwareScene as hardwareScene, nativeSceneBegin as beginScene, nativeSceneBlas as sceneBlas, nativeSceneFinish as finishScene} from './scene-core.js';
+export function nativeHardwareScene(bytes: Uint8Array, token: number): Uint8Array {return hardwareScene(bytes, token);}
 export function nativeSceneBegin(bytes: Uint8Array, token: number): Uint8Array {return beginScene(bytes, token);}
 export function nativeSceneBlas(bytes: Uint8Array, token: number): Uint8Array {return sceneBlas(bytes, token);}
 export function nativeSceneFinish(bytes: Uint8Array, token: number): Uint8Array {return finishScene(bytes, token);}

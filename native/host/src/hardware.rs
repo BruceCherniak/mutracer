@@ -14,14 +14,31 @@ pub struct NativeLayout {
     pub is_empty: bool,
     pub bevel: bool,
     pub has_displacement: bool,
+    #[serde(default)]
+    pub indexed: bool,
+    #[serde(default)]
+    pub hardware_geometries: Vec<IndexedGeometry>,
 }
 
+#[derive(Clone, serde::Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IndexedGeometry {
+    index_offset: u32,
+    index_count: u32,
+    vertex_offset: u32,
+    vertex_count: u32,
+    procedural: bool,
+    dynamic: bool,
+    bounds_offset: u32,
+}
 #[derive(serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capture {
     pub eligible: bool,
     #[serde(default)]
     pub authoritative: bool,
+    #[serde(default)]
+    pub indexed: bool,
     pub reason: Option<String>,
     pub shader: Option<String>,
     #[serde(default = "default_hardware_closest")]
@@ -32,16 +49,39 @@ pub struct Capture {
     pub instances: Vec<Instance>,
     pub triangle_map: Option<String>,
 }
+impl Capture {
+    // A first stable-topology edit declares these rebuilt BLASes mutable. Keep
+    // fast-trace static builds lean; the replacement reserves update support for
+    // subsequent Phase 2 refits without changing the experimental descriptor.
+    pub(super) fn allow_updates(&mut self) {
+        for geometry in &mut self.geometries {
+            geometry.dynamic = true;
+        }
+    }
+}
 fn default_hardware_closest() -> bool {
     true
 }
 #[derive(serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct Geometry {
     positions: String,
     #[serde(default)]
     indices: Option<String>,
     vertex_count: u32,
+    #[serde(default)]
+    index_count: Option<u32>,
+    #[serde(default)]
+    index_offset: u32,
+    #[serde(default)]
+    first_vertex: u32,
+    #[serde(default = "default_stride")]
+    vertex_stride: u64,
+    #[serde(default)]
+    bounds_offset: u32,
+    #[serde(default)]
+    dynamic: bool,
     #[serde(default)]
     pub(super) procedural: bool,
     #[serde(default)]
@@ -55,7 +95,12 @@ pub struct Instance {
     transform: [f32; 12],
 }
 
+fn default_stride() -> u64 {
+    12
+}
+
 pub struct Resources {
+    indexed: bool,
     pub tlas: wgpu::Tlas,
     pub mapping: wgpu::Buffer,
     pub counters: wgpu::Buffer,
@@ -65,12 +110,19 @@ pub struct Resources {
     raw_instances: Option<HashMap<(u32, u32), (usize, u32)>>,
 }
 
+// Both BVH-independent candidates remain diagnostic opt-ins after their image
+// gates failed. Production retains the accepted 0cdfd01 indexed AS representation.
+pub(super) fn direct_input_enabled() -> bool {
+    std::env::var_os("MUTRACER_NATIVE_DIRECT_AS").is_some_and(|v| v == "1")
+}
+
 pub fn prepare(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
     directory: &Path,
     capture: &Capture,
     assets: Option<&HashMap<String, Vec<u8>>>,
+    _buffers: Option<&HashMap<usize, wgpu::Buffer>>,
 ) -> Result<Resources> {
     let read = |name: &str| -> Result<Vec<u8>> {
         if let Some(assets) = assets {
@@ -88,49 +140,107 @@ pub fn prepare(
             .unwrap_or("Unsupported hardware capture".into())
             .into());
     }
-    // Profiling waits are opt-in and separate from ordinary wall-time runs.
-    // Drain unrelated resource uploads before timing acceleration structures.
-    if super::profiling::gpu_enabled() {
-        queue.submit([]);
-        device.poll(wgpu::PollType::Wait {
-            submission_index: None,
-            timeout: Some(Duration::from_secs(30)),
-        })?;
-    }
-    let as_started = std::time::Instant::now();
+    let preparation_started = std::time::Instant::now();
     if capture.instances.len() > device.limits().max_tlas_instance_count as usize {
         return Err("HWRT TLAS instance count exceeds device limit".into());
     }
-    if capture
-        .geometries
-        .iter()
-        .any(|g| g.vertex_count / 3 > device.limits().max_blas_primitive_count)
-    {
+    if capture.geometries.iter().any(|g| {
+        g.index_count.unwrap_or(g.vertex_count) / 3 > device.limits().max_blas_primitive_count
+    }) {
         return Err("HWRT BLAS primitive count exceeds device limit".into());
     }
+    let direct_indices = if capture.indexed {
+        Some(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("MuTracer merged indices"),
+                contents: &read("native-35")?,
+                usage: wgpu::BufferUsages::BLAS_INPUT
+                    | wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST,
+            }),
+        )
+    } else {
+        None
+    };
+    let direct_blas_indices = if capture.indexed {
+        Some(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("MuTracer soup indices"),
+                contents: &read("native-42")?,
+                usage: wgpu::BufferUsages::BLAS_INPUT,
+            }),
+        )
+    } else {
+        None
+    };
+    let direct_bounds = if capture.indexed && capture.geometries.iter().any(|g| g.procedural) {
+        Some(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("MuTracer displacement bounds"),
+                contents: &read("native-38")?,
+                usage: wgpu::BufferUsages::BLAS_INPUT,
+            }),
+        )
+    } else {
+        None
+    };
+    let direct_positions = if capture.indexed && capture.geometries.iter().any(|g| !g.procedural) {
+        Some(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("MuTracer compact positions"),
+                contents: &read("native-41")?,
+                usage: wgpu::BufferUsages::BLAS_INPUT,
+            }),
+        )
+    } else {
+        None
+    };
     let mut vertices = Vec::new();
     let mut sizes = Vec::new();
     let mut indices = Vec::new();
     let mut blases = Vec::new();
     for geometry in &capture.geometries {
-        let data = read(&geometry.positions)?;
-        if data.len()
-            != if geometry.procedural {
-                geometry.vertex_count as usize / 3 * 24
-            } else {
-                geometry.vertex_count as usize * 12
-            }
+        let data = if capture.indexed {
+            Vec::new()
+        } else {
+            read(&geometry.positions)?
+        };
+        if !capture.indexed
+            && data.len()
+                != if geometry.procedural {
+                    geometry.vertex_count as usize / 3 * 24
+                } else {
+                    geometry.vertex_count as usize * 12
+                }
         {
             return Err("Invalid hardware vertex bytes".into());
         }
-        vertices.push(
+        vertices.push(if capture.indexed {
+            if geometry.procedural {
+                direct_bounds
+                    .as_ref()
+                    .ok_or("Missing direct AABBs")?
+                    .clone()
+            } else {
+                direct_positions
+                    .as_ref()
+                    .ok_or("Missing compact positions")?
+                    .clone()
+            }
+        } else {
             device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("MuTracer HWRT vertices"),
                 contents: &data,
                 usage: wgpu::BufferUsages::BLAS_INPUT,
-            }),
-        );
-        indices.push(
+            })
+        });
+        indices.push(if capture.indexed {
+            if geometry.procedural {
+                None
+            } else {
+                direct_blas_indices.clone()
+            }
+        } else {
             geometry
                 .indices
                 .as_ref()
@@ -147,8 +257,8 @@ pub fn prepare(
                         }),
                     )
                 })
-                .transpose()?,
-        );
+                .transpose()?
+        });
         let flags = if geometry.non_opaque {
             wgpu::AccelerationStructureGeometryFlags::empty()
         } else {
@@ -157,7 +267,7 @@ pub fn prepare(
         let descriptors = if geometry.procedural {
             wgpu::BlasGeometrySizeDescriptors::AABBs {
                 descriptors: vec![wgpu::BlasAABBGeometrySizeDescriptor {
-                    primitive_count: geometry.vertex_count / 3,
+                    primitive_count: geometry.index_count.unwrap_or(geometry.vertex_count) / 3,
                     flags: wgpu::AccelerationStructureGeometryFlags::empty(),
                 }],
             }
@@ -167,7 +277,10 @@ pub fn prepare(
                     vertex_format: wgpu::VertexFormat::Float32x3,
                     vertex_count: geometry.vertex_count,
                     index_format: geometry.indices.as_ref().map(|_| wgpu::IndexFormat::Uint32),
-                    index_count: geometry.indices.as_ref().map(|_| geometry.vertex_count),
+                    index_count: geometry
+                        .indices
+                        .as_ref()
+                        .map(|_| geometry.index_count.unwrap_or(geometry.vertex_count)),
                     flags,
                 }],
             }
@@ -175,8 +288,17 @@ pub fn prepare(
         blases.push(device.create_blas(
             &wgpu::CreateBlasDescriptor {
                 label: Some("MuTracer hardware BLAS"),
-                flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
-                update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+                flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE
+                    | if geometry.dynamic {
+                        wgpu::AccelerationStructureFlags::ALLOW_UPDATE
+                    } else {
+                        wgpu::AccelerationStructureFlags::empty()
+                    },
+                update_mode: if geometry.dynamic {
+                    wgpu::AccelerationStructureUpdateMode::PreferUpdate
+                } else {
+                    wgpu::AccelerationStructureUpdateMode::Build
+                },
             },
             descriptors.clone(),
         ));
@@ -210,10 +332,12 @@ pub fn prepare(
                     wgpu::BlasGeometries::TriangleGeometries(vec![wgpu::BlasTriangleGeometry {
                         size: &descriptors[0],
                         vertex_buffer,
-                        first_vertex: 0,
-                        vertex_stride: 12,
+                        first_vertex: capture.geometries[i].first_vertex,
+                        vertex_stride: capture.geometries[i].vertex_stride,
                         index_buffer: indices[i].as_ref(),
-                        first_index: indices[i].as_ref().map(|_| 0),
+                        first_index: indices[i]
+                            .as_ref()
+                            .map(|_| capture.geometries[i].index_offset),
                         transform_buffer: None,
                         transform_buffer_offset: None,
                     }])
@@ -223,12 +347,25 @@ pub fn prepare(
                         size: &descriptors[0],
                         stride: 24,
                         aabb_buffer: vertex_buffer,
-                        primitive_offset: 0,
+                        primitive_offset: capture.geometries[i].bounds_offset * 24,
                     }])
                 }
             },
         })
         .collect();
+    let setup_ms = preparation_started.elapsed().as_secs_f64() * 1000.0;
+    // All AS input uploads above must complete before the AS wall clock starts.
+    // Metal does not expose encoder timestamps through this wgpu version.
+    let drain_started = std::time::Instant::now();
+    if super::profiling::gpu_enabled() {
+        queue.submit([]);
+        device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_secs(30)),
+        })?;
+    }
+    let upload_drain_ms = drain_started.elapsed().as_secs_f64() * 1000.0;
+    let as_started = std::time::Instant::now();
     let timer = super::profiling::GpuTimer::new(device, 1, true);
     let mut encoder = device.create_command_encoder(&Default::default());
     if let Some(t) = &timer {
@@ -257,7 +394,7 @@ pub fn prepare(
             .transpose()?;
         eprintln!(
             "{}",
-            serde_json::json!({"nativeAsProfile": {"cpuBuildSubmitMs": build_submit_ms,"completedWallMs": completed_wall_ms,"gpuMs": gpu_ms,"gpuTimestampUnavailable": if super::profiling::gpu_enabled() && timer.is_none() { Some("Encoder timestamp queries unavailable") } else { None },"blasCount": blases.len(),"instanceCount": capture.instances.len(),"vertexUploadBytes": vertices.iter().map(|b| b.size()).sum::<u64>()}})
+            serde_json::json!({"nativeAsProfile": {"inputSetupMs": setup_ms,"uploadDrainMs":upload_drain_ms,"cpuBuildSubmitMs": build_submit_ms,"completedWallMs": completed_wall_ms,"gpuMs": gpu_ms,"gpuTimestampUnavailable": if super::profiling::gpu_enabled() && timer.is_none() { Some("Encoder timestamp queries unavailable") } else { None },"blasCount": blases.len(),"instanceCount": capture.instances.len(),"vertexUploadBytes": vertices.iter().map(|b| b.size()).sum::<u64>()}})
         );
     }
     let data = read(
@@ -266,11 +403,15 @@ pub fn prepare(
             .as_ref()
             .ok_or("Missing HWRT triangle map")?,
     )?;
-    let mapping = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("MuTracer hardware primitive identity"),
-        contents: &data,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-    });
+    let mapping = if let Some(buffer) = direct_indices {
+        buffer
+    } else {
+        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("MuTracer hardware primitive identity"),
+            contents: &data,
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        })
+    };
     if super::profiling::enabled() {
         eprintln!(
             "{}",
@@ -299,13 +440,18 @@ pub fn prepare(
                         (word(0), word(4)),
                         (
                             instance.geometry,
-                            u32::from_le_bytes(data[i * 4..i * 4 + 4].try_into().unwrap()),
+                            if capture.indexed {
+                                word(0)
+                            } else {
+                                u32::from_le_bytes(data[i * 4..i * 4 + 4].try_into().unwrap())
+                            },
                         ),
                     )
                 })
                 .collect()
         });
     Ok(Resources {
+        indexed: capture.indexed,
         raw_instances,
         tlas,
         mapping,
@@ -381,7 +527,9 @@ impl Resources {
                 serde_json::json!({"nativeHardwareUploadProfile": {"kind":"transform","writeBytes":plan.mapping.len(),"instanceCount":plan.instances.len()}})
             );
         }
-        queue.write_buffer(&self.mapping, 0, &plan.mapping);
+        if !self.indexed {
+            queue.write_buffer(&self.mapping, 0, &plan.mapping);
+        }
         let mut encoder = device.create_command_encoder(&Default::default());
         encoder.build_acceleration_structures(
             std::iter::empty::<&wgpu::BlasBuildEntry<'_>>(),
@@ -463,6 +611,9 @@ pub fn from_raw_with_layout(
     authoritative: bool,
     layout: &NativeLayout,
 ) -> Result<Capture> {
+    if authoritative && layout.indexed {
+        return from_indexed(assets, layout);
+    }
     if !authoritative && version >= 3 {
         return Err("HWRT displacement descriptors are not supported yet".into());
     }
@@ -599,6 +750,8 @@ pub fn from_raw_with_layout(
                 vertex_count: triangle_count * 3,
                 procedural: authoritative && displaced,
                 non_opaque: authoritative && layout.has_alpha,
+                vertex_stride: 12,
+                ..Default::default()
             });
             generated.insert(
                 name,
@@ -654,6 +807,7 @@ pub fn from_raw_with_layout(
     assets.extend(generated);
     Ok(Capture {
         eligible: true,
+        indexed: false,
         authoritative,
         reason: None,
         shader: Some("native-hwrt-shader".into()),
@@ -661,6 +815,73 @@ pub fn from_raw_with_layout(
         geometries,
         instances: placements,
         triangle_map: Some("native-hwrt-map".into()),
+    })
+}
+
+// TS supplies merged geometry regions and local displacement AABBs. Rust only
+// binds buffers and converts instance matrices for the wgpu API.
+fn from_indexed(assets: &mut HashMap<String, Vec<u8>>, layout: &NativeLayout) -> Result<Capture> {
+    if layout.position_offset_bytes != 0 || layout.attribute_stride_bytes < 12 {
+        return Err("Unsupported HWRT position layout".into());
+    }
+    let attributes = assets.get("native-3").ok_or("Missing indexed attributes")?;
+    if attributes.len() < layout.attribute_stride_bytes && !layout.is_empty {
+        return Err("Missing indexed attributes".into());
+    }
+    let geometries = layout
+        .hardware_geometries
+        .iter()
+        .map(|g| Geometry {
+            positions: if g.procedural {
+                "native-38"
+            } else {
+                "native-41"
+            }
+            .into(),
+            indices: (!g.procedural).then(|| "native-42".into()),
+            vertex_count: g.index_count,
+            first_vertex: g.index_offset,
+            index_count: Some(g.index_count),
+            index_offset: g.index_offset,
+            vertex_stride: 12,
+            bounds_offset: g.bounds_offset,
+            dynamic: g.dynamic,
+            procedural: g.procedural,
+            non_opaque: layout.has_alpha,
+        })
+        .collect();
+    let mut instances = Vec::new();
+    if !layout.is_empty {
+        for (i, record) in assets
+            .get("native-2")
+            .ok_or("Missing indexed instances")?
+            .chunks_exact(160)
+            .enumerate()
+        {
+            let word = |k: usize| u32::from_le_bytes(record[k * 4..k * 4 + 4].try_into().unwrap());
+            let geometry = layout
+                .hardware_geometries
+                .iter()
+                .position(|g| g.index_offset / 3 == word(0))
+                .ok_or("Missing indexed geometry region")?;
+            instances.push(Instance {
+                geometry,
+                custom_index: i as u32,
+                transform: [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14]
+                    .map(|k| f32::from_bits(word(20 + k))),
+            });
+        }
+    }
+    Ok(Capture {
+        eligible: true,
+        authoritative: true,
+        indexed: true,
+        reason: None,
+        shader: Some("native-33".into()),
+        hardware_closest: true,
+        geometries,
+        instances,
+        triangle_map: Some("native-35".into()),
     })
 }
 
@@ -680,6 +901,17 @@ pub fn isolate_diagnostic(
         let geometry = &mut capture.geometries[placement.geometry];
         if geometry.procedural {
             return Err("Diagnostic isolation expects triangles".into());
+        }
+        if capture.indexed {
+            let base = geometry.index_offset / 3 + primitive as u32;
+            geometry.index_offset += primitive as u32 * 3;
+            geometry.index_count = Some(3);
+            let records = assets
+                .get_mut("native-2")
+                .ok_or("Missing indexed instances")?;
+            records[instance as usize * 160..instance as usize * 160 + 4]
+                .copy_from_slice(&base.to_le_bytes());
+            return Ok(());
         }
         let source = assets
             .get(&geometry.positions)

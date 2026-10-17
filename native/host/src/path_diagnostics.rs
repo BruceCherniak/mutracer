@@ -9,7 +9,11 @@ pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
     }
     let _entry = ENTRY_LOCK.try_lock().map_err(|_| "Native core is active")?;
     context::check_owner()?;
-    let (mut scene, mut assets) = scene::prepare(input)?;
+    let (mut scene, mut assets) = if backend == 3 {
+        scene::prepare_hardware(input)?
+    } else {
+        scene::prepare(input)?
+    };
     hit_diagnostics::write_geometry_snapshot(&scene, &assets, output)?;
     let mut capture = hardware::from_raw_with_layout(
         &mut assets,
