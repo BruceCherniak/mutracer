@@ -281,7 +281,7 @@ export function packAnalyticsLightsToBuffer(
     }
     data[(off + 3) * 4 + 3] = light.type === 'SpotLight'
       ? iesProfileTexelOffsets[i] ?? -1
-      : texturesIndices[i];
+      : texturesIndices[i] ?? -1;
     data[(off + 4) * 4] = selectionPmfs[i] ?? 0;
     packVec3(off + 5, getRigidLightFrame(light).x);
   }

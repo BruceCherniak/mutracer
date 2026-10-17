@@ -51,7 +51,7 @@ export function packLightsToBuffer(
       packVec3(off + 2, getRectLightUOrV(light, 0));
       data[(off + 2) * 4 + 3] = light.spread;
       packVec3(off + 3, getRectLightUOrV(light, 1));
-      data[(off + 3) * 4 + 3] = texturesIndices[i];
+      data[(off + 3) * 4 + 3] = texturesIndices[i] ?? -1;
       packVec3(off + 4, [
         light.spread,
         getRectLightArea(light),
