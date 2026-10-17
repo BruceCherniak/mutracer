@@ -35,7 +35,6 @@ export function canonicalMatrixStorage(stage) {
   for (const file of ['src/renderer/scenePreparation.ts', 'src/renderer/lightSampling.ts', 'src/renderer/packedMeshInstances.ts']) {
     replace(file, 'new Array<number>(16).fill(0)', 'new Float64Array(16)');
   }
-  replace('src/renderer/lightSampling.ts', 'matrix instanceof Float32Array ? matrix.length : matrix.length', 'matrix.length');
   replace('src/scene/MeshState.ts', 'transforms: Float32Array;', 'transforms: Float64Array;');
   replace('src/renderer/lightSampling.ts', 'instanceTransforms?: Float32Array;', 'instanceTransforms?: Float64Array;');
   for (const file of ['src/scene/InstanceState.ts', 'src/scene/InstancedMesh.ts']) {

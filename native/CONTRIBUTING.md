@@ -53,6 +53,20 @@ Also check forced-HWRT rejection preserves the prior scene, and automatic fallba
 reports alpha/version-3/bevel/empty-scene exclusions. Do not treat a fallback as a
 hardware closest-hit success or native OIDN as browser-model numerical parity.
 
+## Native storage access validation
+
+`native/storage-lowering.mjs` derives concrete pixel and numeric validation kernels
+from the shared TypeScript bodies. Storage selection happens once per texture or
+array. Web accessors remain direct; mixed-storage compatibility branches exist
+only in generated compiler inputs. The raw-core matrix/index storage remains
+Float64/Uint32; diagnostic browser-shaped fixtures retain their compatibility arms.
+
+Run `npm run native:storage:verify` with `MUTRACER_SCRIPTC` set to scriptc0.3.2.
+The C consumer compares all four pixel formats, byte/half output, subarray offsets,
+resizing, orientation, environment CDF and power against the ordinary Web TS path.
+Also run the lowering behavior tests, normal library checks and real Web/native
+image comparisons; clean compilation alone does not validate specialization.
+
 ## Partial camera validation
 
 `npm run native:camera` runs the complete job gate, then compares partial camera

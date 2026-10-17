@@ -374,7 +374,7 @@ export function computeGeometryNormals(geometry: Geometry) {
 
 
 function finiteValues(values: Float32Array | Float64Array | number[]): boolean {
-  const length = values instanceof Float32Array ? values.length : values instanceof Float64Array ? values.length : values.length;
+  const length = values.length;
   for (let i = 0; i < length; i++) if (!Number.isFinite(read(values, i))) return false;
   return true;
 }

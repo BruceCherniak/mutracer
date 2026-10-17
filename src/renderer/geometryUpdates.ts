@@ -123,8 +123,7 @@ export function updatePreparedGeometries<M extends GeometryUpdateMesh>(prepared:
 
 function writeIndex(geometry: Geometry, index: number, value: number) {
   const array = geometry.indices.array;
-  if (array instanceof Uint16Array) array[index] = value;
-  else array[index] = value;
+  array[index] = value;
 }
 
 function packAttribute<T extends AttributeData>(attribute: Attribute<T> | undefined,

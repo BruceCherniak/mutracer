@@ -1,6 +1,6 @@
 import { pixelLength, pixelValue } from '../scene/texturePixels.js';
 import { materialEmission } from './materialEmission.js';
-import { read } from '../math/access.js';
+import { read, size } from '../math/access.js';
 import { meshInstanceCount, meshInstanceTransform } from './meshInstances.js';
 import { getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getSpotLightShapingFluxFactor } from './lightsData.js';
 import { localMaterialIndex } from './materialIndices.js';
@@ -130,22 +130,7 @@ export function estimateEnvironmentPower<T extends TexturePixelSource>(image?: T
   const cached = environmentPowers.get(image);
   if (cached !== undefined) return cached;
   const { data, width, height } = image;
-  const channels = Math.max(Math.floor(pixelLength(data) / (width * height)), 1);
-  let weightedLuminance = 0;
-  for (let y = 0; y < height; y++) {
-    const sinTheta = Math.sin(Math.PI * (y + 0.5) / height);
-    for (let x = 0; x < width; x++) {
-      const offset = (y * width + x) * channels;
-      const scale = (data instanceof Uint8Array || data instanceof Uint8ClampedArray) ? 1 / 255 : 1;
-      weightedLuminance +=
-        colorLuminance([
-          pixelValue(data, offset) * scale,
-          pixelValue(data, offset + Math.min(1, channels - 1)) * scale,
-          pixelValue(data, offset + Math.min(2, channels - 1)) * scale
-        ]) * sinTheta;
-    }
-  }
-  const power = weightedLuminance * (2 * Math.PI * Math.PI) / (width * height);
+  const power = environmentPower(data, width, height);
   environmentPowers.set(image, power);
   return power;
 }
@@ -366,10 +351,28 @@ function copyMeshMatrix(mesh: Mesh): Float64Array {
   return out;
 }
 function meshMatrixLength(mesh: Mesh): number {
-  const matrix = mesh.transform;
-  return matrix instanceof Float32Array ? matrix.length : matrix.length;
+  return size(mesh.transform);
 }
 function meshMatrixChanged(mesh: Mesh, previous: Float64Array): boolean {
   for (let i = 0; i < meshMatrixLength(mesh); i++) if (!Object.is(read(mesh.transform, i), previous[i])) return true;
   return false;
+}
+
+function environmentPower(data: NonNullable<TexturePixelSource['data']>, width: number, height: number): number {
+  const channels = Math.max(Math.floor(pixelLength(data) / (width * height)), 1);
+  const scale = (data instanceof Uint8Array || data instanceof Uint8ClampedArray) ? 1 / 255 : 1;
+  let weightedLuminance = 0;
+  for (let y = 0; y < height; y++) {
+    const sinTheta = Math.sin(Math.PI * (y + 0.5) / height);
+    for (let x = 0; x < width; x++) {
+      const offset = (y * width + x) * channels;
+      weightedLuminance +=
+        colorLuminance([
+          pixelValue(data, offset) * scale,
+          pixelValue(data, offset + Math.min(1, channels - 1)) * scale,
+          pixelValue(data, offset + Math.min(2, channels - 1)) * scale
+        ]) * sinTheta;
+    }
+  }
+  return weightedLuminance * (2 * Math.PI * Math.PI) / (width * height);
 }

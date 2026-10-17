@@ -1930,9 +1930,9 @@ class WGPURayTracePass {
       const data =
         source instanceof Float32Array
           ? source
-          : Float32Array.from(source, (value) =>
-              (source instanceof Uint8Array || source instanceof Uint8ClampedArray) ? value / 255 : value
-            );
+          : source instanceof Uint8Array || source instanceof Uint8ClampedArray
+            ? Float32Array.from(source, value => value / 255)
+            : Float32Array.from(source);
       this._device.queue.writeTexture(
         { texture: this._backgroundTex },
         data.buffer,

@@ -5,7 +5,7 @@
 // Create a piecewise 2D cumulative distribution function of light intensity from an env map
 // http://www.pbr-book.org/3ed-2018/Monte_Carlo_Integration/2D_Sampling_with_Multidimensional_Transformations.html#Piecewise-Constant2DDistributions
 
-import type { TextureDataSource } from '../scene/Texture.js';
+import type { TextureDataSource } from '../scene/textureData.js';
 import { pixelLength, pixelValue } from '../scene/texturePixels.js';
 
 export interface EnvironmentMapSource extends TextureDataSource {
@@ -63,23 +63,7 @@ export function envMapDistribution(
   const cdf = makeTextureArray(width, height, 2);
   const cdfImage: TextureDataSource = { width, height, data: cdf.array };
 
-  const channels = Math.max(
-    Math.floor(pixelLength(data) / (image.width * image.height)),
-    1
-  );
-  const sourceScale = (data instanceof Uint8Array || data instanceof Uint8ClampedArray) ? 1 / 255 : 1;
-  const luminance = new Float32Array(image.width * image.height);
-  for (let y = 0; y < image.height; y++) {
-    for (let x = 0; x < image.width; x++) {
-      const sourceIndex = channels * (y * image.width + x);
-      luminance[y * image.width + x] =
-        sourceScale * (
-          0.2126 * pixelValue(data, sourceIndex)
-          + 0.7152 * pixelValue(data, sourceIndex + Math.min(1, channels - 1))
-          + 0.0722 * pixelValue(data, sourceIndex + Math.min(2, channels - 1))
-        );
-    }
-  }
+  const luminance = environmentLuminance(data, image.width, image.height);
 
   // Environment radiance is read with bilinear filtering while the CDF is
   // piecewise constant. Dilating luminance over the filter footprint keeps a
@@ -153,4 +137,26 @@ function makeTextureArray(width: number, height: number, channels: number) {
     channels,
     array
   };
+}
+
+function environmentLuminance(data: TextureDataSource['data'], width: number, height: number): Float32Array {
+  const channels = Math.max(
+    Math.floor(pixelLength(data) / (width * height)),
+    1
+  );
+  const sourceScale = (data instanceof Uint8Array || data instanceof Uint8ClampedArray) ? 1 / 255 : 1;
+  const luminance = new Float32Array(width * height);
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const sourceIndex = channels * (y * width + x);
+      luminance[y * width + x] =
+        sourceScale * (
+          0.2126 * pixelValue(data, sourceIndex)
+          + 0.7152 * pixelValue(data, sourceIndex + Math.min(1, channels - 1))
+          + 0.0722 * pixelValue(data, sourceIndex + Math.min(2, channels - 1))
+        );
+    }
+  }
+
+  return luminance;
 }
