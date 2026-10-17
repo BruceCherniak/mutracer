@@ -3,6 +3,19 @@ use std::{collections::HashMap, fs, path::Path, sync::mpsc, time::Duration};
 use wgpu::util::DeviceExt;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
+// Explicit AOT packet metadata; units belong to the contract, not uniform words.
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeLayout {
+    pub has_alpha: bool,
+    pub attribute_stride_bytes: usize,
+    pub position_offset_bytes: usize,
+    pub blas_offset: usize,
+    pub is_empty: bool,
+    pub bevel: bool,
+    pub has_displacement: bool,
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capture {
@@ -358,28 +371,35 @@ pub fn from_raw(
     assets: &mut HashMap<String, Vec<u8>>,
     version: u32,
 ) -> Result<Capture> {
+    from_raw_with_layout(
+        assets,
+        version,
+        scene
+            .native_layout
+            .as_ref()
+            .ok_or("Missing native HWRT metadata")?,
+    )
+}
+pub fn from_raw_with_layout(
+    assets: &mut HashMap<String, Vec<u8>>,
+    version: u32,
+    layout: &NativeLayout,
+) -> Result<Capture> {
     if version >= 3 {
         return Err("HWRT displacement descriptors are not supported yet".into());
     }
-    let source = String::from_utf8(
-        assets
-            .get(&scene.shader)
-            .ok_or("Missing native shader")?
-            .clone(),
-    )?;
-    let constant = |name: &str| -> Result<&str> {
-        source
-            .lines()
-            .find_map(|line| {
-                line.trim()
-                    .strip_prefix(&format!("const {name} = "))
-                    .and_then(|s| s.strip_suffix(';'))
-            })
-            .ok_or_else(|| format!("Missing WGSL constant {name}").into())
-    };
-    if constant("HAS_ALPHA")? != "false" {
+    if layout.has_displacement {
+        return Err("HWRT displacement descriptors are not supported yet".into());
+    }
+    if layout.has_alpha {
         return Err("Alpha materials retain software traversal".into());
     }
+    let source = String::from_utf8(
+        assets
+            .get("native-32")
+            .ok_or("Missing native hybrid shader")?
+            .clone(),
+    )?;
     let words = |name: &str| -> Result<Vec<u32>> {
         let bytes = assets.get(name).ok_or("Missing packed HWRT input")?;
         if bytes.len() % 4 != 0 {
@@ -390,19 +410,21 @@ pub fn from_raw(
             .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
             .collect())
     };
-    let uniform = words("native-7")?;
-    if uniform.get(24) != Some(&0) {
+    if layout.bevel {
         return Err("Shader bevel retains software traversal".into());
     }
-    if uniform.get(23) != Some(&0) {
+    if layout.is_empty {
         return Err("Empty scenes retain software traversal".into());
     }
-    let blas_offset = *uniform.get(22).ok_or("Missing BLAS offset")? as usize;
+    let blas_offset = layout.blas_offset;
     let instances = words("native-2")?;
     let bvh = words("native-1")?;
     let attributes = words("native-3")?;
-    let stride = constant("ATTR_STRIDE")?.parse::<usize>()? * 4;
-    let position = constant("POSITION_OFF")?.parse::<usize>()? * 4;
+    if layout.attribute_stride_bytes % 4 != 0 || layout.position_offset_bytes % 4 != 0 {
+        return Err("Invalid native HWRT attribute alignment".into());
+    }
+    let stride = layout.attribute_stride_bytes / 4;
+    let position = layout.position_offset_bytes / 4;
     if stride == 0 || instances.len() % 40 != 0 {
         return Err("Invalid native HWRT layout".into());
     }
@@ -492,14 +514,7 @@ pub fn from_raw(
             transform: [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14].map(|i| m[i] as f32),
         });
     }
-    let mut shader = source;
-    for name in ["intersectScene", "intersectSceneShadow"] {
-        let marker = format!("fn {name}(");
-        if shader.matches(&marker).count() != 1 {
-            return Err("Unexpected native intersection definitions".into());
-        }
-        shader = shader.replace(&marker, &format!("fn {name}Software("));
-    }
+    let shader = source;
     let wrapper = include_str!("../../hwrt-intersect.wgsl")
         .replace(
             "const MT_SOFTWARE_CLOSEST: bool = false;",

@@ -30,10 +30,19 @@ import { materialUsesMedium } from '../src/renderer/materialParams.js';
 import { writeRawAtlasPlacement } from '../src/renderer/textureAtlasPixels.js';
 import { wgpuMaterialConstants } from '../src/renderer/wgpuMaterialConstants.js';
 import { wgpuSceneFeatureFlags } from '../src/renderer/WGPUSceneFeatures.js';
+import { nativeHybridIntersections } from './intersections.wgsl.js';
 import { wgpuShaderSource } from '../src/renderer/wgpuShaderSource.js';
 import { makeRayTraceUniform, packWgpuAnalyticLights, WGPU_SCENE_BUFFER_MIN_BYTES } from '../src/renderer/wgpuSceneUniform.js';
 import { zSobolLog2SPP } from '../src/renderer/sampling.js';
 import { getOpenPbrEnergyLutData, OPENPBR_ENERGY_LUT_WIDTH, OPENPBR_ENERGY_LUT_HEIGHT } from '../src/renderer/openPbrEnergyLut.js';
+
+interface NativeLayout {
+  hasAlpha: boolean; attributeStrideBytes: number; positionOffsetBytes: number;
+  blasOffset: number; isEmpty: boolean; bevel: boolean; hasDisplacement: boolean;
+}
+function nativeLayoutBytes(layout: NativeLayout, blasOffset: number, isEmpty: boolean): Uint8Array {
+  return new TextEncoder().encode(JSON.stringify({...layout, blasOffset, isEmpty}));
+}
 
 // Root source meshes and prepared bindings/BLASes for transform updates. The
 // merged vertex allocation is not retained; geometry edits have a separate gate.
@@ -42,6 +51,7 @@ const retainedScenes = new Map<number, {source: MaterialState[]; ordered: Materi
   lights: AnalyticLightState[]; emissive: EmissiveTriangle[]; rt: ArrayBuffer;
   environmentWidth: number; environmentHeight: number; backgroundWidth: number; backgroundHeight: number;
   qualityFlags: number; environmentPower: number; meshes: MeshState[];
+  nativeLayout: NativeLayout;
   bindings: PreparedMeshInstanceBinding[]; blases: BLASInstance[]; tlasStack: number; blasStack: number; geometries: Geometry[]}>();
 const pendingGeometry = new Map<number, {meshes: MeshState[]; bindings: PreparedMeshInstanceBinding[];
   blases: BLASInstance[]; geometries: Geometry[]; emissive: EmissiveTriangle[]; rt: ArrayBuffer}>();
@@ -293,10 +303,12 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     ...wgpuMaterialConstants(prepared.materials, table, geometry, 8)};
   const offsetNames: string[] = ['POSITION_OFF', 'NORMAL_OFF', 'UV_OFF', 'UV1_OFF', 'COLOR_OFF', 'TANGENT_OFF', 'MATERIALINDEX_OFF'];
   for (let i = 0; i < offsetNames.length; i++) constants[offsetNames[i]] = offsets[i] / 4;
-  const shader = new TextEncoder().encode(wgpuShaderSource(constants, {hasDisplacement: table.displacementMaps.length > 0,
+  const features = {hasDisplacement: table.displacementMaps.length > 0,
     hasAlpha: false, hasSceneAlpha: Boolean(constants.HAS_ALPHA),
     hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
-    hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES), blasLayoutMask: 1}, true));
+    hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES), blasLayoutMask: 1};
+  const shader = new TextEncoder().encode(wgpuShaderSource(constants, features, true));
+  const hybridShader = new TextEncoder().encode(wgpuShaderSource(constants, features, true, nativeHybridIntersections(features)));
   const mapCount = Number(constants.NUM_MAPS), mapInfo = new Float32Array(mapCount * 12);
   mapInfo.set(table.bufferData.mapInfo); mapInfo.set(table.bufferData.mapTransform, mapCount * 4);
   for (let i = 0; i < table.bufferData.mapUvChannel.length; i++) {
@@ -332,7 +344,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   rt.views.bounces[0] = 6; rt.views.directLightCandidates[0] = 2;
   rt.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(constants);
   // Output packet: version, count, width, height, then 8-word resource descriptors
-  // (id, kind[0=buffer,1=texture,2=WGSL], length, width,height,layers,format,offset).
+  // (id, kind[0=buffer,1=texture,2=WGSL,3=metadata], length, width,height,layers,format,offset).
   const parts: Uint8Array[] = [], records: number[][] = [];
   function add(id: number, kind: number, data: Uint8Array, w: number, h: number, layers: number, format: number) {
     if (kind === 0 && id <= 3 && data.length < WGPU_SCENE_BUFFER_MIN_BYTES) {
@@ -356,10 +368,18 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   add(25, 1, new Uint8Array(getOpenPbrEnergyLutData().buffer), OPENPBR_ENERGY_LUT_WIDTH, OPENPBR_ENERGY_LUT_HEIGHT, 1, 3);
   add(26, 1, new Uint8Array(new Float32Array([Number.MAX_SAFE_INTEGER]).buffer), 1, 1, 1, 3);
   add(30, 2, shader, 0, 0, 0, 0);
+  const nativeLayout: NativeLayout = {
+    hasAlpha: Boolean(constants.HAS_ALPHA), attributeStrideBytes: stride * 4,
+    positionOffsetBytes: offsets[0] * 4, blasOffset: rt.views.blasOffset[0],
+    isEmpty: rt.views.isEmpty[0] !== 0, bevel: rt.views.bevel[0] !== 0,
+    hasDisplacement: features.hasDisplacement
+  };
+  add(31, 3, nativeLayoutBytes(nativeLayout, nativeLayout.blasOffset, nativeLayout.isEmpty), 0, 0, 0, 0);
+  add(32, 2, hybridShader, 0, 0, 0, 0);
   if (token) retainedScenes.set(token, {source: materials, ordered: prepared.materials, table, lights, emissive,
     rt: rt.buffer, environmentWidth: environment?.width ?? 0, environmentHeight: environment?.height ?? 0,
     backgroundWidth: background?.width ?? 0, backgroundHeight: background?.height ?? 0, qualityFlags, environmentPower: estimateEnvironmentPower(environment),
-    meshes, bindings: prepared.instanceBindings, blases, geometries, tlasStack: Number(constants.TLAS_STACK_SIZE), blasStack: Number(constants.BLAS_STACK_SIZE)});
+    nativeLayout, meshes, bindings: prepared.instanceBindings, blases, geometries, tlasStack: Number(constants.TLAS_STACK_SIZE), blasStack: Number(constants.BLAS_STACK_SIZE)});
   return resourcePacket(records, parts, width, height);
 }
 
@@ -577,11 +597,13 @@ function packTransformUpdate(stage: TransformStage, tlas: FlattendBVH, token: nu
   const instanceBytes = new Uint8Array(tlas.instancesBuffer!);
   const paddedBvh = new Uint8Array(Math.max(bvh.length, WGPU_SCENE_BUFFER_MIN_BYTES)); paddedBvh.set(bvh);
   const paddedInstances = new Uint8Array(Math.max(instanceBytes.length, WGPU_SCENE_BUFFER_MIN_BYTES)); paddedInstances.set(instanceBytes);
+  const metadata = nativeLayoutBytes(state.nativeLayout, rt.views.blasOffset[0], rt.views.isEmpty[0] !== 0);
   return resourcePacket([
     [1, 0, paddedBvh.length, 0, 0, 0, 0, 0], [2, 0, paddedInstances.length, 0, 0, 0, 0, 0],
     [7, 0, rt.buffer.byteLength, 0, 0, 0, 0, 0], [8, 0, lighting.lightUniform.byteLength, 0, 0, 0, 0, 0],
-    [24, 1, lighting.lightData.byteLength, lighting.lightWidth, lighting.lightHeight, 1, 2, 0]
-  ], [paddedBvh, paddedInstances, new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer)], 0, 0);
+    [24, 1, lighting.lightData.byteLength, lighting.lightWidth, lighting.lightHeight, 1, 2, 0],
+    [31, 3, metadata.byteLength, 0, 0, 0, 0, 0]
+  ], [paddedBvh, paddedInstances, new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer), metadata], 0, 0);
 }
 
 // Version1, source geometry index, vertex count, flags (1=normals,2=authored
@@ -670,11 +692,13 @@ function packGeometryUpdate(stage: GeometryStage, tlas: FlattendBVH, token: numb
   packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
   const geometries = state.geometries.slice(); geometries[sourceIndex] = geometry;
   pendingGeometry.set(token, {meshes, bindings: prepared.instanceBindings, blases: prepared.blases, geometries, emissive, rt: rt.buffer});
+  const metadata = nativeLayoutBytes(state.nativeLayout, rt.views.blasOffset[0], rt.views.isEmpty[0] !== 0);
   return resourcePacket([
     [1,0,bvh.byteLength,0,0,0,0,0], [2,0,packedInstances.byteLength,0,0,0,0,0], [3,0,attributes.byteLength,0,0,0,0,0],
     [7,0,rt.buffer.byteLength,0,0,0,0,0], [8,0,lighting.lightUniform.byteLength,0,0,0,0,0],
-    [24,1,lighting.lightData.byteLength,lighting.lightWidth,lighting.lightHeight,1,2,0]
-  ], [bvh, packedInstances, new Uint8Array(attributes.buffer), new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer)], 0,0);
+    [24,1,lighting.lightData.byteLength,lighting.lightWidth,lighting.lightHeight,1,2,0],
+    [31,3,metadata.byteLength,0,0,0,0,0]
+  ], [bvh, packedInstances, new Uint8Array(attributes.buffer), new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer), metadata], 0,0);
 }
 
 function nativeFloatImage(texture: PixelTexture | undefined): {width: number; height: number; data: Float32Array} | undefined {

@@ -621,16 +621,211 @@ while (tlasTop >= 0) {
 
 `;
 }
+export function createSceneIntersectionsWgsl({
+  hasDisplacement, hasAnisotropyDirections = true, hasCoatNormals = false, blasLayoutMask = 1,
+  closestName = 'intersectScene', shadowName = 'intersectSceneShadow', bevelName = 'intersectSceneBevel'
+}: {
+  hasDisplacement: boolean; hasAnisotropyDirections?: boolean; hasCoatNormals?: boolean;
+  blasLayoutMask?: number; closestName?: string; shadowName?: string; bevelName?: string;
+}) {
+  return /* wgsl */ `// Traverse BVH, find closest triangle intersection, and return surface information
+fn ${closestName}(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) {
+
+  (*si).hit = false;
+
+  if (rtUniform.isEmpty > 0) {
+    return;
+  }
+
+  var tMax = RAY_MAX_DISTANCE;
+  var maxDim: i32;
+  var shear: vec3f;
+
+  var hitIndex: vec3i;
+  var hitTri: Triangle;
+  var hitInsIdx: i32;
+  var currentTriangleIndex: i32 = (*si).triangleIndex;
+
+  ${getBVHTraverseCode(
+    `
+(*si).triangleIndex = triangleIndex;
+hitTri = tri;
+hitIndex = index;
+hitInsIdx = insIdx;
+  `,
+    hasDisplacement,
+    false,
+    blasLayoutMask,
+    hasAnisotropyDirections
+  )}
+
+  if (isHit) {
+    completeSurfaceInteraction(
+      si,
+      hitTri,
+      hitBarycentric,
+      hitIndex,
+      isHitMicroTriangle,
+      hitInsIdx,
+      hitNormal,
+      hitPosition,
+      -1
+    );
+  }
+}
+
+// Local intersection helper for shader bevel.
+fn ${bevelName}(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: i32, maxDistance: f32) {
+  (*si).hit = false;
+
+  if (rtUniform.isEmpty > 0) {
+    return;
+  }
+
+  let bounces = 0;
+  let doubleSided = true;
+  let isRefractionRay = false;
+  var tMax = maxDistance;
+  var maxDim: i32;
+  var shear: vec3f;
+  var hitIndex: vec3i;
+  var hitTri: Triangle;
+  var hitInsIdx: i32;
+  var currentTriangleIndex: i32 = -1;
+
+  ${getBVHTraverseCode(
+    `
+(*si).triangleIndex = triangleIndex;
+hitTri = tri;
+hitIndex = index;
+hitInsIdx = insIdx;
+    `,
+    hasDisplacement,
+    false,
+    blasLayoutMask,
+    hasAnisotropyDirections,
+    `
+        if (insIdx != instanceIndex) {
+          continue;
+        }
+    `
+  )}
+
+  if (isHit) {
+    (*si).instanceIndex = hitInsIdx;
+    (*si).normal = hitNormal;
+    (*si).position = hitPosition;
+    (*si).materialIndex = i32(unpackMaterialIndex(bitcast<i32>(instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE}].z)).x);
+    fetchAttributes(
+      si,
+      hitTri,
+      hitBarycentric,
+      hitIndex,
+      isHitMicroTriangle,
+      -1
+    );
+
+    let l2w = mat4x4<f32>(
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 5],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 6],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 7],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 8]
+    );
+    let w2l = mat4x4<f32>(
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 1],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 2],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 3],
+      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 4]
+    );
+    let normalTransform = transpose(mat3x3<f32>(
+      w2l[0].xyz,
+      w2l[1].xyz,
+      w2l[2].xyz
+    ));
+    (*si).faceNormal = normalize(normalTransform * hitNormal);
+    (*si).vertexNormal = normalize(normalTransform * (*si).vertexNormal);
+    (*si).normal = normalize(normalTransform * (*si).normal);
+${hasCoatNormals ? /* wgsl */ `  (*si).coatNormal = normalize(normalTransform * (*si).coatNormal);` : ''}
+    if (USE_TANGENT && dot((*si).tangent, (*si).tangent) > 0.0) {
+      (*si).tangent = normalize((l2w * vec4f((*si).tangent, 0.0)).xyz);
+    }
+${hasAnisotropyDirections ? /* wgsl */ `
+    (*si).directionTangent = (l2w * vec4f((*si).directionTangent, 0.0)).xyz;
+    (*si).directionBitangent = (l2w * vec4f((*si).directionBitangent, 0.0)).xyz;
+    (*si).geometryTangent = (l2w * vec4f((*si).geometryTangent, 0.0)).xyz;
+    (*si).geometryBitangent = (l2w * vec4f((*si).geometryBitangent, 0.0)).xyz;
+` : /* wgsl */ ``}
+  (*si).shadowOffset = (l2w * vec4f((*si).shadowOffset, 0.0)).xyz;
+    (*si).position = (l2w * vec4((*si).position, 1.0)).xyz;
+  }
+}
+
+fn ${shadowName}(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool {
+  if (rtUniform.isEmpty > 0) {
+    return false;
+  }
+
+  let doubleSided = true;
+  let shadowRayTMax = min(max(lightDistance, 0.0), RAY_MAX_DISTANCE);
+  var tMax = shadowRayTMax;
+  var maxDim: i32;
+  var shear: vec3f;
+
+  let bounces = 1;
+  var isRefractionRay = false;
+  var currentTriangleIndex: i32 = currTriangleIndex;
+
+  ${getBVHTraverseCode(
+    /*wgsl */ `
+// Traversal is already clipped to the sampled light. Affine instance
+// transforms preserve the ray parameter because local directions are not
+// renormalized, so no local-to-world hit transform or distance() is needed.
+var isOccluded = true;
+
+if (isOccluded) {
+  if (HAS_ALPHA) {
+    let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
+    if (!intersectionAlphaPasses(
+      materialIndex,
+      index,
+      hitBarycentric,
+      hitPosition,
+      hitNormal
+    )) {
+      // Continue looking for an opaque hit, but never traverse beyond the light.
+      tMax = shadowRayTMax;
+      isOccluded = false;
+    }
+  }
+}
+if (isOccluded) {
+  return true;
+}
+    `,
+    hasDisplacement,
+    true,
+    blasLayoutMask,
+    hasAnisotropyDirections
+  )}
+
+  return false;
+}
+
+`;
+}
+
 export default function getIntersectCode({
   hasDisplacement,
   hasAnisotropyDirections = true,
   hasCoatNormals = false,
-  blasLayoutMask = 1
+  blasLayoutMask = 1,
+  sceneIntersections = ''
 }: {
   hasDisplacement: boolean;
   hasAnisotropyDirections?: boolean;
   hasCoatNormals?: boolean;
   blasLayoutMask?: number;
+  sceneIntersections?: string;
 }) {
   return /*wgsl*/ `
 
@@ -1295,188 +1490,5 @@ ${createIntersectionAlphaWgsl(hasAnisotropyDirections)}
 
 
 
-// Traverse BVH, find closest triangle intersection, and return surface information
-fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) {
-
-  (*si).hit = false;
-
-  if (rtUniform.isEmpty > 0) {
-    return;
-  }
-
-  var tMax = RAY_MAX_DISTANCE;
-  var maxDim: i32;
-  var shear: vec3f;
-
-  var hitIndex: vec3i;
-  var hitTri: Triangle;
-  var hitInsIdx: i32;
-  var currentTriangleIndex: i32 = (*si).triangleIndex;
-
-  ${getBVHTraverseCode(
-    `
-(*si).triangleIndex = triangleIndex;
-hitTri = tri;
-hitIndex = index;
-hitInsIdx = insIdx;
-  `,
-    hasDisplacement,
-    false,
-    blasLayoutMask,
-    hasAnisotropyDirections
-  )}
-
-  if (isHit) {
-    completeSurfaceInteraction(
-      si,
-      hitTri,
-      hitBarycentric,
-      hitIndex,
-      isHitMicroTriangle,
-      hitInsIdx,
-      hitNormal,
-      hitPosition,
-      -1
-    );
-  }
-}
-
-// Local intersection helper for shader bevel.
-fn intersectSceneBevel(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: i32, maxDistance: f32) {
-  (*si).hit = false;
-
-  if (rtUniform.isEmpty > 0) {
-    return;
-  }
-
-  let bounces = 0;
-  let doubleSided = true;
-  let isRefractionRay = false;
-  var tMax = maxDistance;
-  var maxDim: i32;
-  var shear: vec3f;
-  var hitIndex: vec3i;
-  var hitTri: Triangle;
-  var hitInsIdx: i32;
-  var currentTriangleIndex: i32 = -1;
-
-  ${getBVHTraverseCode(
-    `
-(*si).triangleIndex = triangleIndex;
-hitTri = tri;
-hitIndex = index;
-hitInsIdx = insIdx;
-    `,
-    hasDisplacement,
-    false,
-    blasLayoutMask,
-    hasAnisotropyDirections,
-    `
-        if (insIdx != instanceIndex) {
-          continue;
-        }
-    `
-  )}
-
-  if (isHit) {
-    (*si).instanceIndex = hitInsIdx;
-    (*si).normal = hitNormal;
-    (*si).position = hitPosition;
-    (*si).materialIndex = i32(unpackMaterialIndex(bitcast<i32>(instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE}].z)).x);
-    fetchAttributes(
-      si,
-      hitTri,
-      hitBarycentric,
-      hitIndex,
-      isHitMicroTriangle,
-      -1
-    );
-
-    let l2w = mat4x4<f32>(
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 5],
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 6],
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 7],
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 8]
-    );
-    let w2l = mat4x4<f32>(
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 1],
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 2],
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 3],
-      instancesBuffer[hitInsIdx * ${INSTANCE_VEC4_STRIDE} + 4]
-    );
-    let normalTransform = transpose(mat3x3<f32>(
-      w2l[0].xyz,
-      w2l[1].xyz,
-      w2l[2].xyz
-    ));
-    (*si).faceNormal = normalize(normalTransform * hitNormal);
-    (*si).vertexNormal = normalize(normalTransform * (*si).vertexNormal);
-    (*si).normal = normalize(normalTransform * (*si).normal);
-${hasCoatNormals ? /* wgsl */ `  (*si).coatNormal = normalize(normalTransform * (*si).coatNormal);` : ''}
-    if (USE_TANGENT && dot((*si).tangent, (*si).tangent) > 0.0) {
-      (*si).tangent = normalize((l2w * vec4f((*si).tangent, 0.0)).xyz);
-    }
-${hasAnisotropyDirections ? /* wgsl */ `
-    (*si).directionTangent = (l2w * vec4f((*si).directionTangent, 0.0)).xyz;
-    (*si).directionBitangent = (l2w * vec4f((*si).directionBitangent, 0.0)).xyz;
-    (*si).geometryTangent = (l2w * vec4f((*si).geometryTangent, 0.0)).xyz;
-    (*si).geometryBitangent = (l2w * vec4f((*si).geometryBitangent, 0.0)).xyz;
-` : /* wgsl */ ``}
-  (*si).shadowOffset = (l2w * vec4f((*si).shadowOffset, 0.0)).xyz;
-    (*si).position = (l2w * vec4((*si).position, 1.0)).xyz;
-  }
-}
-
-fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool {
-  if (rtUniform.isEmpty > 0) {
-    return false;
-  }
-
-  let doubleSided = true;
-  let shadowRayTMax = min(max(lightDistance, 0.0), RAY_MAX_DISTANCE);
-  var tMax = shadowRayTMax;
-  var maxDim: i32;
-  var shear: vec3f;
-
-  let bounces = 1;
-  var isRefractionRay = false;
-  var currentTriangleIndex: i32 = currTriangleIndex;
-
-  ${getBVHTraverseCode(
-    /*wgsl */ `
-// Traversal is already clipped to the sampled light. Affine instance
-// transforms preserve the ray parameter because local directions are not
-// renormalized, so no local-to-world hit transform or distance() is needed.
-var isOccluded = true;
-
-if (isOccluded) {
-  if (HAS_ALPHA) {
-    let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
-    if (!intersectionAlphaPasses(
-      materialIndex,
-      index,
-      hitBarycentric,
-      hitPosition,
-      hitNormal
-    )) {
-      // Continue looking for an opaque hit, but never traverse beyond the light.
-      tMax = shadowRayTMax;
-      isOccluded = false;
-    }
-  }
-}
-if (isOccluded) {
-  return true;
-}
-    `,
-    hasDisplacement,
-    true,
-    blasLayoutMask,
-    hasAnisotropyDirections
-  )}
-
-  return false;
-}
-
-`;
+${sceneIntersections || createSceneIntersectionsWgsl({hasDisplacement, hasAnisotropyDirections, hasCoatNormals, blasLayoutMask})}`;
 }

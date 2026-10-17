@@ -562,7 +562,23 @@ impl Drop for PreparedState {
     }
 }
 // Buffer records have zero dimensions; texture records carry their exact extent.
-pub(super) type LightingUpdates = Vec<(usize, u32, u32, Vec<u8>)>;
+pub(super) struct LightingUpdates {
+    resources: Vec<(usize, u32, u32, Vec<u8>)>,
+    pub native_layout: Option<hardware::NativeLayout>,
+}
+impl std::ops::Deref for LightingUpdates {
+    type Target = [(usize, u32, u32, Vec<u8>)];
+    fn deref(&self) -> &Self::Target {
+        &self.resources
+    }
+}
+impl<'a> IntoIterator for &'a LightingUpdates {
+    type Item = &'a (usize, u32, u32, Vec<u8>);
+    type IntoIter = std::slice::Iter<'a, (usize, u32, u32, Vec<u8>)>;
+    fn into_iter(self) -> Self::IntoIter {
+        self.resources.iter()
+    }
+}
 impl PreparedState {
     fn native_update(
         &self,
@@ -607,7 +623,7 @@ impl PreparedState {
             mt_core_native_geometry_begin,
             mt_core_native_geometry_finish,
             bytes,
-            &[1, 2, 3, 7, 8, 24],
+            &[1, 2, 3, 7, 8, 24, 31],
         )
     }
     pub(super) fn accept_geometry(&self) -> Result<()> {
@@ -628,15 +644,18 @@ impl PreparedState {
     }
     pub(super) fn hardware_geometry(
         &self,
-        scene: &Scene,
         updates: &LightingUpdates,
     ) -> Result<(hardware::Capture, HashMap<String, Vec<u8>>)> {
         let mut assets: HashMap<_, _> = updates
             .iter()
             .map(|(id, _, _, data)| (format!("native-{id}"), data.clone()))
             .collect();
-        assets.insert(scene.shader.clone(), self.shader.clone());
-        let capture = hardware::from_raw(scene, &mut assets, self.raw_version)?;
+        assets.insert("native-32".into(), self.shader.clone());
+        let layout = updates
+            .native_layout
+            .as_ref()
+            .ok_or("Missing geometry HWRT metadata")?;
+        let capture = hardware::from_raw_with_layout(&mut assets, self.raw_version, layout)?;
         Ok((capture, assets))
     }
     pub(super) fn transform(&self, bytes: &[u8]) -> Result<LightingUpdates> {
@@ -652,7 +671,7 @@ impl PreparedState {
             mt_core_native_transform_begin,
             mt_core_native_transform_finish,
             bytes,
-            &[1, 2, 7, 8, 24],
+            &[1, 2, 7, 8, 24, 31],
         )
     }
     pub(super) fn accept_transform(&self) -> Result<()> {
@@ -832,18 +851,21 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
         return Err("Invalid AOT lighting resources".into());
     }
     let mut updates = Vec::new();
+    let mut native_layout = None;
     for (i, &id) in ids.iter().enumerate() {
         let o = 4 + i * 8;
         let (length, offset) = (w.u(o + 2), w.u(o + 7));
         if w.u(o) != id
             || offset < header_length
             || offset % 4 != 0
-            || length % 4 != 0
+            || (id != 31 && length % 4 != 0)
             || offset > packet.len()
             || length > packet.len() - offset
-            || w.u(o + 1) != usize::from(id >= 21)
+            || w.u(o + 1) != if id == 31 { 3 } else { usize::from(id >= 21) }
             || w.u(o + 6)
-                != if id == 22 {
+                != if id == 31 {
+                    0
+                } else if id == 22 {
                     4
                 } else if id >= 21 {
                     2
@@ -852,6 +874,12 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
                 }
         {
             return Err("Invalid AOT lighting resource span/format".into());
+        }
+        if id == 31 {
+            native_layout = Some(serde_json::from_slice::<hardware::NativeLayout>(
+                &packet[offset..offset + length],
+            )?);
+            continue;
         }
         if id >= 7 || id == 3 {
             w.finite(offset / 4, length / 4)?;
@@ -876,7 +904,11 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
         if rt.3.len() != 176 {
             return Err("Invalid geometry RT size".into());
         }
-        let limit = Words(&rt.3).u(22) * 16;
+        let limit = native_layout
+            .as_ref()
+            .ok_or("Missing geometry layout")?
+            .blas_offset
+            * 16;
         if limit > data.len() {
             return Err("Invalid geometry BLAS offset".into());
         }
@@ -898,7 +930,10 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
             }
         }
     }
-    Ok(updates)
+    Ok(LightingUpdates {
+        resources: updates,
+        native_layout,
+    })
 }
 pub(super) fn prepare_retained(
     bytes: &[u8],
@@ -929,8 +964,8 @@ pub(super) fn prepare_retained(
     let (scene, assets) = prepare_impl(bytes, token)?;
     state.raw_version = Words(bytes).u(0) as u32;
     state.shader = assets
-        .get(&scene.shader)
-        .ok_or("Missing raw geometry shader")?
+        .get("native-32")
+        .ok_or("Missing raw hybrid geometry shader")?
         .clone();
     Ok((scene, assets, state))
 }
@@ -1014,13 +1049,14 @@ fn prepare_impl(bytes: &[u8], token: u32) -> Result<(Scene, HashMap<String, Vec<
         );
     }
     let count = w.u(1);
-    if w.u(0) != 1 || count != 16 || packet.len() < 16 + count * 32 {
+    if w.u(0) != 1 || count != 18 || packet.len() < 16 + count * 32 {
         return Err("Invalid native resource packet".into());
     }
     let mut assets = HashMap::new();
     let mut buffers = Vec::new();
     let mut textures = Vec::new();
     let mut shader = String::new();
+    let mut native_layout = None;
     for i in 0..count {
         let o = 4 + i * 8;
         let id = w.u(o);
@@ -1057,7 +1093,13 @@ fn prepare_impl(bytes: &[u8], token: u32) -> Result<(Scene, HashMap<String, Vec<
             }
             textures.push(Texture{id,width,height,depth,format:format.into(),usage:6,writes:vec![json!({"origin":[0,0,0],"size":[width,height,depth],"layout":{"bytesPerRow":width as usize*bpp,"rowsPerImage":height},"file":name})]});
         } else if kind == 2 {
-            shader = name.clone();
+            if id == 30 {
+                shader = name.clone();
+            } else if id != 32 {
+                return Err("Unknown native shader variant".into());
+            }
+        } else if kind == 3 && id == 31 {
+            native_layout = Some(serde_json::from_slice::<hardware::NativeLayout>(&data)?);
         } else {
             return Err("Unknown native resource command".into());
         }
@@ -1130,6 +1172,7 @@ fn prepare_impl(bytes: &[u8], token: u32) -> Result<(Scene, HashMap<String, Vec<
             height: w.u(3) as u32,
             samples: 64,
             shader,
+            native_layout,
             entry_point: "main".into(),
             buffers,
             textures,

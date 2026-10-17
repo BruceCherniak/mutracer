@@ -89,6 +89,7 @@ struct Scene {
     material_stride: Option<u64>,
     material_offsets: Option<MaterialOffsets>,
     hwrt: Option<hardware::Capture>,
+    native_layout: Option<hardware::NativeLayout>,
     native_bvh: Option<native_bvh::Capture>,
     sampling: Option<Sampling>,
 }
@@ -940,7 +941,7 @@ impl GpuScene {
             .retained
             .as_ref()
             .ok_or("Missing retained geometry")?
-            .hardware_geometry(&self.scene, updates)
+            .hardware_geometry(updates)
             .map_err(|error| format!("Full scene commit required: {error}"))?;
         if capture.hardware_closest != current.hardware_closest {
             return Err(
@@ -996,6 +997,9 @@ impl GpuScene {
         result.map(Some)
     }
     fn update_lighting(&mut self, updates: &scene::LightingUpdates) -> Result<()> {
+        if let Some(layout) = &updates.native_layout {
+            self.scene.native_layout = Some(layout.clone());
+        }
         if profiling::enabled() {
             eprintln!(
                 "{}",

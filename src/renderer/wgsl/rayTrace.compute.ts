@@ -43,7 +43,7 @@ export default function rayTraceCompute({
   hasAlpha = true,
   hasSceneAlpha = true,
   blasLayoutMask = 1
-}: RayTraceShaderOptions) {
+}: RayTraceShaderOptions, sceneIntersections = '') {
   hasAnisotropyDirections ||= hasCoatNormals;
   const deterministicPrimaryAlpha = hasAlpha;
   const source = /* wgsl */ `
@@ -56,7 +56,7 @@ ${uvProjectionWgsl}
 
 ${createMaterialBufferWgsl({ hasSceneAlpha, hasAnisotropyDirections, hasCoatNormals })}
 
-${createIntersectionWgsl({ hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals })}
+${createIntersectionWgsl({ hasDisplacement, blasLayoutMask, hasAnisotropyDirections, hasCoatNormals, sceneIntersections })}
 ${randWgsl}
 ${randomWgsl}
 ${envMapWgsl}
