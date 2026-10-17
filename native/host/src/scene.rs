@@ -548,6 +548,8 @@ pub(super) struct PreparedState {
     light_count: usize,
     raw_version: u32,
     shader: Vec<u8>,
+    authoritative_shader: Vec<u8>,
+    authoritative_indices: Vec<u8>,
 }
 impl Drop for PreparedState {
     fn drop(&mut self) {
@@ -645,17 +647,21 @@ impl PreparedState {
     pub(super) fn hardware_geometry(
         &self,
         updates: &LightingUpdates,
+        authoritative: bool,
     ) -> Result<(hardware::Capture, HashMap<String, Vec<u8>>)> {
         let mut assets: HashMap<_, _> = updates
             .iter()
             .map(|(id, _, _, data)| (format!("native-{id}"), data.clone()))
             .collect();
         assets.insert("native-32".into(), self.shader.clone());
+        assets.insert("native-33".into(), self.authoritative_shader.clone());
+        assets.insert("native-35".into(), self.authoritative_indices.clone());
         let layout = updates
             .native_layout
             .as_ref()
             .ok_or("Missing geometry HWRT metadata")?;
-        let capture = hardware::from_raw_with_layout(&mut assets, self.raw_version, layout)?;
+        let capture =
+            hardware::from_raw_with_layout(&mut assets, self.raw_version, authoritative, layout)?;
         Ok((capture, assets))
     }
     pub(super) fn transform(&self, bytes: &[u8]) -> Result<LightingUpdates> {
@@ -950,6 +956,8 @@ pub(super) fn prepare_retained(
         token,
         raw_version: 0,
         shader: Vec::new(),
+        authoritative_shader: Vec::new(),
+        authoritative_indices: Vec::new(),
         light_count: if bytes.len() >= 32 {
             Words(bytes).u(7)
         } else {
@@ -966,6 +974,14 @@ pub(super) fn prepare_retained(
     state.shader = assets
         .get("native-32")
         .ok_or("Missing raw hybrid geometry shader")?
+        .clone();
+    state.authoritative_shader = assets
+        .get("native-33")
+        .ok_or("Missing authoritative shader")?
+        .clone();
+    state.authoritative_indices = assets
+        .get("native-35")
+        .ok_or("Missing explicit HWRT indices")?
         .clone();
     Ok((scene, assets, state))
 }
@@ -1049,7 +1065,7 @@ fn prepare_impl(bytes: &[u8], token: u32) -> Result<(Scene, HashMap<String, Vec<
         );
     }
     let count = w.u(1);
-    if w.u(0) != 1 || count != 18 || packet.len() < 16 + count * 32 {
+    if w.u(0) != 1 || count != 23 || packet.len() < 16 + count * 32 {
         return Err("Invalid native resource packet".into());
     }
     let mut assets = HashMap::new();
@@ -1095,11 +1111,13 @@ fn prepare_impl(bytes: &[u8], token: u32) -> Result<(Scene, HashMap<String, Vec<
         } else if kind == 2 {
             if id == 30 {
                 shader = name.clone();
-            } else if id != 32 {
+            } else if id != 32 && id != 33 && id != 34 && id != 36 && id != 37 {
                 return Err("Unknown native shader variant".into());
             }
         } else if kind == 3 && id == 31 {
             native_layout = Some(serde_json::from_slice::<hardware::NativeLayout>(&data)?);
+        } else if kind == 3 && id == 35 && data.len() % 4 == 0 {
+            // CPU packet payload; uploaded only when HWRT is selected.
         } else {
             return Err("Unknown native resource command".into());
         }

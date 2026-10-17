@@ -43,7 +43,7 @@ export default function rayTraceCompute({
   hasAlpha = true,
   hasSceneAlpha = true,
   blasLayoutMask = 1
-}: RayTraceShaderOptions, sceneIntersections = '') {
+}: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false) {
   hasAnisotropyDirections ||= hasCoatNormals;
   const deterministicPrimaryAlpha = hasAlpha;
   const source = /* wgsl */ `
@@ -846,7 +846,9 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
   let scaleOffset = rtUniform.scaleOffset;
   var jitter = rtUniform.jitter;
   // TODO if outputSize is not multiple of 8?
-  let coord = globalId.xy * vec2u(scaleOffset.xy) + vec2u(scaleOffset.zw);
+${pathDiagnostic ? `  if (globalId.y >= mtPathParameters.y) { return; }
+  let pathId = vec2u(globalId.x, globalId.y + mtPathParameters.x);
+` : ''}  let coord = ${pathDiagnostic ? 'pathId' : 'globalId.xy'} * vec2u(scaleOffset.xy) + vec2u(scaleOffset.zw);
   if (coord.x >= u32(outputSize.x) || coord.y >= u32(outputSize.y)) {
     return;
   }
@@ -893,7 +895,7 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
   outAux.normal = vec3f(0.0);
   outAux.isBlank = false;
   outAux.isShadowCatcher = false;
-  var liAndAlpha = integrator(uv + jitter, cam, &outAux);
+${pathDiagnostic ? '  mtPathBegin(coord);\n' : ''}  var liAndAlpha = integrator(uv + jitter, cam, &outAux);
 
   // Clamp at Integration Level to reduce fireflies.
   // TODO Path level configuration?
@@ -931,7 +933,7 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
     accumulateNormalOrVariance(idx, liAndAlpha.rgb, outAux.normal);
     accumulateDenoiseMoments(idx, dot(liAndAlpha.rgb, luminance));
   }
-}
+${pathDiagnostic ? '  mtPathEnd(outAux.normal, outAux.albedo);\n' : ''}}
 `;
   // The query entry point shares the exact BVH and material implementation.
   // It has no effect on the beauty entry point or its bindings.

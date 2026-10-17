@@ -1,4 +1,4 @@
-import {createSceneIntersectionsWgsl} from '../src/renderer/wgsl/chunks/intersect.wgsl.js';
+import {createSceneIntersectionsWgsl, createSceneHitQueryWgsl} from '../src/renderer/wgsl/chunks/intersect.wgsl.js';
 import type {WGPUShaderFeatures} from '../src/renderer/wgpuShaderSource.js';
 
 // This native-only injection keeps the archived hybrid wrapper unchanged until
@@ -8,4 +8,188 @@ export function nativeHybridIntersections(features: WGPUShaderFeatures): string 
   return createSceneIntersectionsWgsl({...features,
     hasAnisotropyDirections: features.hasAnisotropyDirections || features.hasCoatNormals,
     closestName: 'intersectSceneSoftware', shadowName: 'intersectSceneShadowSoftware'});
+}
+
+// Hardware hit metadata is authoritative. The temporary record map is replaced
+// by direct indexed geometry in 1.5; it supplies identity, never hit testing.
+export function nativeIntersections(features: WGPUShaderFeatures, empty: boolean, diagnostic = false, pathDiagnostic = false): string {
+  if (empty) return /* wgsl */ `
+fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) { (*si).hit = false; }
+fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool { return false; }
+fn intersectSceneBevel(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: i32, maxDistance: f32) { (*si).hit = false; }
+`;
+  const vector = features.hasAnisotropyDirections || features.hasCoatNormals ? '.xyz' : '';
+  return /* wgsl */ `
+${diagnostic ? `var<private> mtWantedInstance: i32;
+var<private> mtWantedRecord: i32;
+var<private> mtWantedSeen: u32;
+var<private> mtWantedConfirmed: u32;
+var<private> mtWantedDot: f32;
+var<private> mtCandidateCount: u32;` : ''}
+@group(0) @binding(4) var mtAcceleration: acceleration_structure;
+@group(0) @binding(5) var<storage, read> mtTriangleRecords: array<u32>;
+struct MtHit {
+  kind: u32, t: f32, instance: i32, record: i32,
+  barycentric: vec3f, normal: vec3f, micro: bool,
+}
+fn mtRecord(instance: i32, primitive: u32) -> i32 {
+  return i32(mtTriangleRecords[mtTriangleRecords[instance] + primitive]);
+}
+fn mtIndices(instance: i32, record: i32) -> vec3i {
+  return bitcast<vec3i>(bvhBuffer[record].xyz) + vec3i(bitcast<i32>(instancesBuffer[instance * 10].y));
+}
+fn mtTriangle(index: vec3i) -> Triangle {
+  return Triangle(attrBuffers[index.x * ATTR_STRIDE + POSITION_OFF].xyz,
+    attrBuffers[index.y * ATTR_STRIDE + POSITION_OFF].xyz,
+    attrBuffers[index.z * ATTR_STRIDE + POSITION_OFF].xyz);
+}
+fn mtWorldToLocal(instance: i32) -> mat4x4f {
+  return mat4x4f(instancesBuffer[instance * 10 + 1], instancesBuffer[instance * 10 + 2],
+    instancesBuffer[instance * 10 + 3], instancesBuffer[instance * 10 + 4]);
+}
+fn mtTrace(ray: Ray, limit: f32, shadow: bool, onlyInstance: i32, skipRecord: i32,
+    doubleSided: bool, isRefractionRay: bool) -> MtHit {
+  var query: ray_query;
+  // Closest/bevel need explicit backface/self/instance filtering. Shadow rays
+  // already start EPS away from the surface and do not skip triangle records.
+  let flags = select(2u, 4u, shadow);
+  let minimum = select(0.0, 1e-7, shadow);
+  rayQueryInitialize(&query, mtAcceleration, RayDesc(flags, 255u, minimum, limit, ray.o, ray.d));
+  var generated: MtHit;
+  generated.t = limit;
+  while rayQueryProceed(&query) {
+    let candidate = rayQueryGetCandidateIntersection(&query);
+    let instance = i32(candidate.instance_custom_data);
+    if (onlyInstance >= 0 && instance != onlyInstance) { continue; }
+    let record = mtRecord(instance, candidate.primitive_index);
+${diagnostic ? `    mtCandidateCount++;
+    if (instance == mtWantedInstance && record == mtWantedRecord) { mtWantedSeen++; }` : ''}
+    if (!shadow && record == skipRecord) { continue; }
+    let index = mtIndices(instance, record);
+    let tri = mtTriangle(index);
+    let w2l = mtWorldToLocal(instance);
+    let o = (w2l * vec4f(ray.o, 1.0)).xyz;
+    let d = (w2l * vec4f(ray.d, 0.0)).xyz;
+    var normal = normalize(cross(tri.p1 - tri.p0, tri.p2 - tri.p0));
+    var barycentric = vec3f(1.0 - candidate.barycentrics.x - candidate.barycentrics.y, candidate.barycentrics);
+    var t = candidate.t;
+    var micro = false;
+    let insData = instancesBuffer[instance * 10];
+    let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
+    if (candidate.kind == RAY_QUERY_INTERSECTION_AABB) {
+${features.hasDisplacement ? /* wgsl */ `
+      let minMaxH = bitcast<i32>(bvhBuffer[record].w);
+      if (abs(insData.w) > 0.0 && minMaxH > 0) {
+        let matData = materialsBuffer[materialIndex];
+        let map = i32(matData.displacementMapIndex);
+        let hit = intersectDisplacement(o, d, generated.t, tri.p0, tri.p1, tri.p2,
+          normalize(attrBuffers[index.x * ATTR_STRIDE + NORMAL_OFF]${vector}),
+          normalize(attrBuffers[index.y * ATTR_STRIDE + NORMAL_OFF]${vector}),
+          normalize(attrBuffers[index.z * ATTR_STRIDE + NORMAL_OFF]${vector}),
+          attrBuffers[index.x * ATTR_STRIDE + UV_OFF].xy,
+          attrBuffers[index.y * ATTR_STRIDE + UV_OFF].xy,
+          attrBuffers[index.z * ATTR_STRIDE + UV_OFF].xy,
+          map, getMapSize(map), f32(minMaxH >> 8) / 255.0, f32(minMaxH & 255) / 255.0,
+          insData.w, matData.displacementStepSize, i32(matData.displacementUvProjection),
+          vec2f(matData.displacementUvProjectionScale), shadow, isRefractionRay);
+        t = hit.t; barycentric = hit.barycentric; normal = hit.normal; micro = true;
+      } else {
+        // Zero-height triangles inside a procedural geometry still need a
+        // surface test; ordinary triangle AS hits never enter this branch.
+        let dimension = maxDimension(abs(d));
+        let hit = intersectTriangle(o, d, tri, dimension, getShear(d, dimension), generated.t);
+        t = hit.t; barycentric = hit.barycentric;
+      }
+` : ''}
+      if (!(t > minimum && t < generated.t)) { continue; }
+    }
+${diagnostic ? `    if (instance == mtWantedInstance && record == mtWantedRecord) { mtWantedDot = dot(normal, d); }` : ''}
+    if (!shadow && !micro && !doubleSided && materialsBuffer[materialIndex].doubleSided <= 0.5
+        && dot(normal, d) > 0.0) { continue; }
+    // Primary/path alpha remains in the shared integrator, exactly as software:
+    // filtering it here as well would square stochastic BLEND coverage.
+    if (shadow && HAS_ALPHA && !intersectionAlphaPasses(materialIndex, index, barycentric, o + t * d, normal)) { continue; }
+${diagnostic ? `    if (instance == mtWantedInstance && record == mtWantedRecord) { mtWantedConfirmed++; }` : ''}
+    // naga 30 requires the generated-distance expression to dominate the call.
+    let generatedDistance = t;
+    if (candidate.kind == RAY_QUERY_INTERSECTION_AABB) {
+      generated = MtHit(2u, generatedDistance, instance, record, barycentric, normal, micro);
+      rayQueryGenerateIntersection(&query, generatedDistance);
+    } else { rayQueryConfirmIntersection(&query); }
+  }
+  let hit = rayQueryGetCommittedIntersection(&query);
+  if (hit.kind == RAY_QUERY_INTERSECTION_GENERATED) { return generated; }
+  var result: MtHit;
+  if (hit.kind == RAY_QUERY_INTERSECTION_NONE) { return result; }
+  result.kind = hit.kind; result.t = hit.t; result.instance = i32(hit.instance_custom_data);
+  result.record = mtRecord(result.instance, hit.primitive_index);
+  result.barycentric = vec3f(1.0 - hit.barycentrics.x - hit.barycentrics.y, hit.barycentrics);
+  let tri = mtTriangle(mtIndices(result.instance, result.record));
+  result.normal = normalize(cross(tri.p1 - tri.p0, tri.p2 - tri.p0));
+  return result;
+}
+fn mtComplete(ray: Ray, si: ptr<function, SurfaceInteraction>, hit: MtHit) {
+  (*si).hit = false;
+  if (hit.kind == 0u) { return; }
+  let w2l = mtWorldToLocal(hit.instance);
+  let o = (w2l * vec4f(ray.o, 1.0)).xyz;
+  let d = (w2l * vec4f(ray.d, 0.0)).xyz;
+  let index = mtIndices(hit.instance, hit.record);
+  (*si).triangleIndex = hit.record;
+  completeSurfaceInteraction(si, mtTriangle(index), hit.barycentric, index, hit.micro,
+    hit.instance, hit.normal, o + hit.t * d, -1);
+}
+fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) {
+  let hit = mtTrace(ray, RAY_MAX_DISTANCE, false, -1, select(-1, (*si).triangleIndex, bounces > 0), doubleSided, isRefractionRay);
+${pathDiagnostic ? `  mtPathRecord(ray, (*si).albedoSampled, hit.kind != 0u, hit.instance, hit.record, hit.t, hit.barycentric, bounces, doubleSided, isRefractionRay, (*si).triangleIndex);` : ''}
+  mtComplete(ray, si, hit);
+}
+fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool {
+  let limit = min(max(lightDistance, 0.0), RAY_MAX_DISTANCE);
+  if (limit <= 1e-7) { return false; }
+  return mtTrace(ray, limit, true, -1, -1, true, false).kind != 0u;
+}
+fn intersectSceneBevel(ray: Ray, si: ptr<function, SurfaceInteraction>, instanceIndex: i32, maxDistance: f32) {
+  mtComplete(ray, si, mtTrace(ray, maxDistance, false, instanceIndex, -1, true, false));
+}
+`;
+}
+
+// A separate entry point is generated only for explicit diagnostic execution.
+// Integer identity bits are read back raw, never passed through AOV averaging.
+export function nativeHitDiagnostics(features: WGPUShaderFeatures, empty: boolean): string {
+  return createSceneHitQueryWgsl(features.hasAnisotropyDirections || features.hasCoatNormals) + /* wgsl */ `
+@compute @workgroup_size(8, 8, 1)
+fn diagnoseHits(@builtin(global_invocation_id) id: vec3u) {
+  let size = rtUniform.outputSize;
+  if (id.x >= u32(size.x) || id.y >= u32(size.y)) { return; }
+  let coord = id.xy;
+  let idx = coord.x + coord.y * u32(size.x);
+  let uv = (vec2f(coord) + vec2f(0.5)) / size;
+  samplingPixel = coord; pixelSampleIndex = 0u; samplingBounce = 0u; hashedCounter = 0u;
+  var jitter = rtUniform.jitter;
+  if (SAMPLING_PATTERN == 0 || SAMPLING_PATTERN == 1) { jitter = (sample2D(CAMERA_PIXEL) - 0.5) / size; }
+  rng_initialize(coord, i32(sampleHash(rtUniform.sequenceSeed)));
+  var ray = initCameraRay(uv + jitter);
+  if (cameraUniform.apertureRadius > 0.0) {
+    let eye = cameraUniform.viewInv[3].xyz;
+    let forward = -normalize(cameraUniform.viewInv[2].xyz);
+    let focusPoint = eye + ray.d * (cameraUniform.focusDistance / dot(ray.d, forward));
+    let lensPoint = cameraUniform.apertureRadius * sampleCircle(sample2D(CAMERA_LENS));
+    let origin = (cameraUniform.viewInv * vec4f(lensPoint, 0.0, 1.0)).xyz;
+    initRay(&ray, origin, normalize(focusPoint - origin));
+  }
+  let software = querySceneSoftware(ray);
+  ${empty ? '' : 'mtWantedInstance = software.instance; mtWantedRecord = software.record;'}
+  ${empty ? 'let hardware = software;' : `let hw = mtTrace(ray, RAY_MAX_DISTANCE, false, -1, -1, false, false);
+  let hardware = SceneQueryHit(hw.kind != 0u, select(-1, hw.instance, hw.kind != 0u),
+    select(-1, hw.record, hw.kind != 0u), select(RAY_MAX_DISTANCE, hw.t, hw.kind != 0u), hw.barycentric);`}
+  outColor[idx] = bitcast<vec4f>(vec4u(u32(software.hit), bitcast<u32>(software.instance), bitcast<u32>(software.record), bitcast<u32>(software.t)));
+  outNormal[idx] = vec4f(software.barycentric, 0.0);
+  outAlbedo[idx] = bitcast<vec4f>(vec4u(u32(hardware.hit), bitcast<u32>(hardware.instance), bitcast<u32>(hardware.record), bitcast<u32>(hardware.t)));
+  outShadowCatcher[idx].mask = vec4f(hardware.barycentric, 0.0);
+  outShadowCatcher[idx].background = vec4f(ray.o, 0.0);
+  outShadowCatcher[idx].moments = ${empty ? 'vec4f(0.0)' : 'vec4f(f32(mtWantedSeen), mtWantedDot, f32(mtWantedConfirmed), f32(mtCandidateCount))'};
+}
+`;
 }

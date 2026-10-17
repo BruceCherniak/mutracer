@@ -621,12 +621,39 @@ while (tlasTop >= 0) {
 
 `;
 }
+// Raw first-hit contract for native diagnostics. Reuse the same traversal and
+// triangle tests without surface completion or any integrator/alpha sampling.
+export function createSceneHitQueryWgsl(hasAnisotropyDirections = false) {
+  return /* wgsl */ `
+struct SceneQueryHit {
+  hit: bool, instance: i32, record: i32, t: f32, barycentric: vec3f,
+}
+fn querySceneSoftware(ray: Ray) -> SceneQueryHit {
+  var result: SceneQueryHit;
+  result.instance = -1; result.record = -1; result.t = RAY_MAX_DISTANCE;
+  if (rtUniform.isEmpty > 0) { return result; }
+  let bounces = 0;
+  let doubleSided = false;
+  let isRefractionRay = false;
+  let currentTriangleIndex = -1;
+  var tMax = RAY_MAX_DISTANCE;
+  var maxDim: i32;
+  var shear: vec3f;
+  ${getBVHTraverseCode(`
+    result.hit = true; result.instance = insIdx; result.record = triangleIndex;
+    result.t = tMax; result.barycentric = hitBarycentric;
+  `, false, false, 1, hasAnisotropyDirections)}
+  return result;
+}
+`;
+}
+
 export function createSceneIntersectionsWgsl({
   hasDisplacement, hasAnisotropyDirections = true, hasCoatNormals = false, blasLayoutMask = 1,
-  closestName = 'intersectScene', shadowName = 'intersectSceneShadow', bevelName = 'intersectSceneBevel'
+  closestName = 'intersectScene', shadowName = 'intersectSceneShadow', bevelName = 'intersectSceneBevel', closestHitHook = ''
 }: {
   hasDisplacement: boolean; hasAnisotropyDirections?: boolean; hasCoatNormals?: boolean;
-  blasLayoutMask?: number; closestName?: string; shadowName?: string; bevelName?: string;
+  blasLayoutMask?: number; closestName?: string; shadowName?: string; bevelName?: string; closestHitHook?: string;
 }) {
   return /* wgsl */ `// Traverse BVH, find closest triangle intersection, and return surface information
 fn ${closestName}(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) {
@@ -659,7 +686,7 @@ hitInsIdx = insIdx;
     hasAnisotropyDirections
   )}
 
-  if (isHit) {
+${closestHitHook}  if (isHit) {
     completeSurfaceInteraction(
       si,
       hitTri,

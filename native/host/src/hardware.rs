@@ -4,7 +4,7 @@ use wgpu::util::DeviceExt;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 // Explicit AOT packet metadata; units belong to the contract, not uniform words.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NativeLayout {
     pub has_alpha: bool,
@@ -16,10 +16,12 @@ pub struct NativeLayout {
     pub has_displacement: bool,
 }
 
-#[derive(Deserialize)]
+#[derive(serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capture {
     pub eligible: bool,
+    #[serde(default)]
+    pub authoritative: bool,
     pub reason: Option<String>,
     pub shader: Option<String>,
     #[serde(default = "default_hardware_closest")]
@@ -33,13 +35,19 @@ pub struct Capture {
 fn default_hardware_closest() -> bool {
     true
 }
-#[derive(Deserialize)]
+#[derive(serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Geometry {
     positions: String,
+    #[serde(default)]
+    indices: Option<String>,
     vertex_count: u32,
+    #[serde(default)]
+    pub(super) procedural: bool,
+    #[serde(default)]
+    non_opaque: bool,
 }
-#[derive(Deserialize)]
+#[derive(serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Instance {
     geometry: usize,
@@ -53,6 +61,7 @@ pub struct Resources {
     pub counters: wgpu::Buffer,
     _blases: Vec<wgpu::Blas>,
     _vertices: Vec<wgpu::Buffer>,
+    _indices: Vec<Option<wgpu::Buffer>>,
     raw_instances: Option<HashMap<(u32, u32), (usize, u32)>>,
 }
 
@@ -89,12 +98,29 @@ pub fn prepare(
         })?;
     }
     let as_started = std::time::Instant::now();
+    if capture.instances.len() > device.limits().max_tlas_instance_count as usize {
+        return Err("HWRT TLAS instance count exceeds device limit".into());
+    }
+    if capture
+        .geometries
+        .iter()
+        .any(|g| g.vertex_count / 3 > device.limits().max_blas_primitive_count)
+    {
+        return Err("HWRT BLAS primitive count exceeds device limit".into());
+    }
     let mut vertices = Vec::new();
     let mut sizes = Vec::new();
+    let mut indices = Vec::new();
     let mut blases = Vec::new();
     for geometry in &capture.geometries {
         let data = read(&geometry.positions)?;
-        if data.len() != geometry.vertex_count as usize * 12 {
+        if data.len()
+            != if geometry.procedural {
+                geometry.vertex_count as usize / 3 * 24
+            } else {
+                geometry.vertex_count as usize * 12
+            }
+        {
             return Err("Invalid hardware vertex bytes".into());
         }
         vertices.push(
@@ -104,23 +130,57 @@ pub fn prepare(
                 usage: wgpu::BufferUsages::BLAS_INPUT,
             }),
         );
-        sizes.push(wgpu::BlasTriangleGeometrySizeDescriptor {
-            vertex_format: wgpu::VertexFormat::Float32x3,
-            vertex_count: geometry.vertex_count,
-            index_format: None,
-            index_count: None,
-            flags: wgpu::AccelerationStructureGeometryFlags::OPAQUE,
-        });
+        indices.push(
+            geometry
+                .indices
+                .as_ref()
+                .map(|name| -> Result<wgpu::Buffer> {
+                    let data = read(name)?;
+                    if data.len() < geometry.vertex_count as usize * 4 {
+                        return Err("HWRT explicit index buffer is too short".into());
+                    }
+                    Ok(
+                        device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some("HWRT explicit indices"),
+                            contents: &data[..geometry.vertex_count as usize * 4],
+                            usage: wgpu::BufferUsages::BLAS_INPUT,
+                        }),
+                    )
+                })
+                .transpose()?,
+        );
+        let flags = if geometry.non_opaque {
+            wgpu::AccelerationStructureGeometryFlags::empty()
+        } else {
+            wgpu::AccelerationStructureGeometryFlags::OPAQUE
+        };
+        let descriptors = if geometry.procedural {
+            wgpu::BlasGeometrySizeDescriptors::AABBs {
+                descriptors: vec![wgpu::BlasAABBGeometrySizeDescriptor {
+                    primitive_count: geometry.vertex_count / 3,
+                    flags: wgpu::AccelerationStructureGeometryFlags::empty(),
+                }],
+            }
+        } else {
+            wgpu::BlasGeometrySizeDescriptors::Triangles {
+                descriptors: vec![wgpu::BlasTriangleGeometrySizeDescriptor {
+                    vertex_format: wgpu::VertexFormat::Float32x3,
+                    vertex_count: geometry.vertex_count,
+                    index_format: geometry.indices.as_ref().map(|_| wgpu::IndexFormat::Uint32),
+                    index_count: geometry.indices.as_ref().map(|_| geometry.vertex_count),
+                    flags,
+                }],
+            }
+        };
         blases.push(device.create_blas(
             &wgpu::CreateBlasDescriptor {
                 label: Some("MuTracer hardware BLAS"),
                 flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
                 update_mode: wgpu::AccelerationStructureUpdateMode::Build,
             },
-            wgpu::BlasGeometrySizeDescriptors::Triangles {
-                descriptors: vec![sizes.last().unwrap().clone()],
-            },
+            descriptors.clone(),
         ));
+        sizes.push(descriptors);
     }
     let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
         label: Some("MuTracer hardware TLAS"),
@@ -142,18 +202,31 @@ pub fn prepare(
         .iter()
         .zip(&sizes)
         .zip(&vertices)
-        .map(|((blas, size), vertex_buffer)| wgpu::BlasBuildEntry {
+        .enumerate()
+        .map(|(i, ((blas, size), vertex_buffer))| wgpu::BlasBuildEntry {
             blas,
-            geometry: wgpu::BlasGeometries::TriangleGeometries(vec![wgpu::BlasTriangleGeometry {
-                size,
-                vertex_buffer,
-                first_vertex: 0,
-                vertex_stride: 12,
-                index_buffer: None,
-                first_index: None,
-                transform_buffer: None,
-                transform_buffer_offset: None,
-            }]),
+            geometry: match size {
+                wgpu::BlasGeometrySizeDescriptors::Triangles { descriptors } => {
+                    wgpu::BlasGeometries::TriangleGeometries(vec![wgpu::BlasTriangleGeometry {
+                        size: &descriptors[0],
+                        vertex_buffer,
+                        first_vertex: 0,
+                        vertex_stride: 12,
+                        index_buffer: indices[i].as_ref(),
+                        first_index: indices[i].as_ref().map(|_| 0),
+                        transform_buffer: None,
+                        transform_buffer_offset: None,
+                    }])
+                }
+                wgpu::BlasGeometrySizeDescriptors::AABBs { descriptors } => {
+                    wgpu::BlasGeometries::AabbGeometries(vec![wgpu::BlasAabbGeometry {
+                        size: &descriptors[0],
+                        stride: 24,
+                        aabb_buffer: vertex_buffer,
+                        primitive_offset: 0,
+                    }])
+                }
+            },
         })
         .collect();
     let timer = super::profiling::GpuTimer::new(device, 1, true);
@@ -239,6 +312,7 @@ pub fn prepare(
         counters,
         _blases: blases,
         _vertices: vertices,
+        _indices: indices,
     })
 }
 
@@ -270,7 +344,9 @@ impl Resources {
             if m.iter().any(|v| !v.is_finite()) {
                 return Err("Non-finite hardware instance matrix".into());
             }
-            closest &= supports_closest(&m);
+            if !capture.authoritative {
+                closest &= supports_closest(&m);
+            }
             instances.push(Instance {
                 geometry,
                 custom_index: i as u32,
@@ -374,6 +450,7 @@ pub fn from_raw(
     from_raw_with_layout(
         assets,
         version,
+        false,
         scene
             .native_layout
             .as_ref()
@@ -383,20 +460,25 @@ pub fn from_raw(
 pub fn from_raw_with_layout(
     assets: &mut HashMap<String, Vec<u8>>,
     version: u32,
+    authoritative: bool,
     layout: &NativeLayout,
 ) -> Result<Capture> {
-    if version >= 3 {
+    if !authoritative && version >= 3 {
         return Err("HWRT displacement descriptors are not supported yet".into());
     }
-    if layout.has_displacement {
+    if !authoritative && layout.has_displacement {
         return Err("HWRT displacement descriptors are not supported yet".into());
     }
-    if layout.has_alpha {
+    if !authoritative && layout.has_alpha {
         return Err("Alpha materials retain software traversal".into());
     }
     let source = String::from_utf8(
         assets
-            .get("native-32")
+            .get(if authoritative {
+                "native-33"
+            } else {
+                "native-32"
+            })
             .ok_or("Missing native hybrid shader")?
             .clone(),
     )?;
@@ -410,10 +492,10 @@ pub fn from_raw_with_layout(
             .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
             .collect())
     };
-    if layout.bevel {
+    if !authoritative && layout.bevel {
         return Err("Shader bevel retains software traversal".into());
     }
-    if layout.is_empty {
+    if !authoritative && layout.is_empty {
         return Err("Empty scenes retain software traversal".into());
     }
     let blas_offset = layout.blas_offset;
@@ -425,10 +507,14 @@ pub fn from_raw_with_layout(
     }
     let stride = layout.attribute_stride_bytes / 4;
     let position = layout.position_offset_bytes / 4;
-    if stride == 0 || instances.len() % 40 != 0 {
+    if !layout.is_empty && (stride == 0 || instances.len() % 40 != 0) {
         return Err("Invalid native HWRT layout".into());
     }
-    let count = instances.len() / 40;
+    let count = if layout.is_empty {
+        0
+    } else {
+        instances.len() / 40
+    };
     let mut mapping = vec![0u32; count];
     let mut geometries = Vec::new();
     let mut placements = Vec::new();
@@ -448,6 +534,9 @@ pub fn from_raw_with_layout(
         } else {
             let mut stack = vec![root];
             let mut positions = Vec::<u8>::new();
+            let mut bounds = Vec::<u8>::new();
+            let mut displaced = false;
+            let mut triangle_count = 0u32;
             let base = mapping.len() as u32;
             let mut visited = 0;
             while let Some(node) = stack.pop() {
@@ -464,6 +553,19 @@ pub fn from_raw_with_layout(
                 for k in 0..child.unsigned_abs() as usize {
                     let record = node + 2 + k;
                     mapping.push(record as u32);
+                    triangle_count += 1;
+                    displaced |= f32::from_bits(instances[id * 40 + 3]).abs() > 0.0
+                        && *bvh
+                            .get(record * 4 + 3)
+                            .ok_or("Missing displacement range")?
+                            != 0;
+                    for coordinate in [0, 1, 2, 4, 5, 6] {
+                        bounds.extend(
+                            bvh.get(node * 4 + coordinate)
+                                .ok_or("Missing leaf bounds")?
+                                .to_le_bytes(),
+                        );
+                    }
                     for corner in 0..3 {
                         let vertex = *bvh
                             .get(record * 4 + corner)
@@ -493,9 +595,19 @@ pub fn from_raw_with_layout(
             let name = format!("native-hwrt-positions-{index}");
             geometries.push(Geometry {
                 positions: name.clone(),
-                vertex_count: (positions.len() / 12) as u32,
+                indices: (authoritative && !displaced).then(|| "native-35".into()),
+                vertex_count: triangle_count * 3,
+                procedural: authoritative && displaced,
+                non_opaque: authoritative && layout.has_alpha,
             });
-            generated.insert(name, positions);
+            generated.insert(
+                name,
+                if authoritative && displaced {
+                    bounds
+                } else {
+                    positions
+                },
+            );
             cache.insert((root, vertex_offset), (index, base));
             index
         };
@@ -533,16 +645,65 @@ pub fn from_raw_with_layout(
     );
     generated.insert(
         "native-hwrt-shader".into(),
-        format!("enable wgpu_ray_query;\n{shader}\n{wrapper}").into_bytes(),
+        if authoritative {
+            shader.into_bytes()
+        } else {
+            format!("enable wgpu_ray_query;\n{shader}\n{wrapper}").into_bytes()
+        },
     );
     assets.extend(generated);
     Ok(Capture {
         eligible: true,
+        authoritative,
         reason: None,
         shader: Some("native-hwrt-shader".into()),
-        hardware_closest,
+        hardware_closest: authoritative || hardware_closest,
         geometries,
         instances: placements,
         triangle_map: Some("native-hwrt-map".into()),
     })
+}
+
+// Explicit diagnostic isolation; never called by commit/render entry points.
+pub fn isolate_diagnostic(
+    capture: &mut Capture,
+    assets: &mut HashMap<String, Vec<u8>>,
+    instance: u32,
+    primitive: Option<usize>,
+) -> Result<()> {
+    capture.instances.retain(|i| i.custom_index == instance);
+    let placement = capture
+        .instances
+        .first()
+        .ok_or("Unknown diagnostic instance")?;
+    if let Some(primitive) = primitive {
+        let geometry = &mut capture.geometries[placement.geometry];
+        if geometry.procedural {
+            return Err("Diagnostic isolation expects triangles".into());
+        }
+        let source = assets
+            .get(&geometry.positions)
+            .ok_or("Missing diagnostic vertices")?;
+        let vertices = source
+            .get(primitive * 36..primitive * 36 + 36)
+            .ok_or("Unknown diagnostic primitive")?
+            .to_vec();
+        assets.insert(geometry.positions.clone(), vertices);
+        geometry.vertex_count = 3;
+        let name = capture
+            .triangle_map
+            .as_ref()
+            .ok_or("Missing diagnostic mapping")?;
+        let old = assets.get(name).ok_or("Missing diagnostic mapping")?;
+        let read = |i: usize| u32::from_le_bytes(old[i * 4..i * 4 + 4].try_into().unwrap());
+        let record = read(read(instance as usize) as usize + primitive);
+        let mut mapping = vec![0u32; instance as usize + 2];
+        mapping[instance as usize] = instance + 1;
+        mapping[instance as usize + 1] = record;
+        assets.insert(
+            name.clone(),
+            mapping.iter().flat_map(|v| v.to_le_bytes()).collect(),
+        );
+    }
+    Ok(())
 }

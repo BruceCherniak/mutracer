@@ -63,7 +63,7 @@ try:
   call('reset',ctx);warm.append(run())
  # Optional legacy diagnostics are archived before the hybrid path is removed.
  counts=None
- if initialBackend['active'] and hasattr(lib,'mt_context_hwrt_counts'):
+ if initialBackend['active'] in [1,2] and hasattr(lib,'mt_context_hwrt_counts'):
   lib.mt_context_hwrt_counts.argtypes=[h,c.POINTER(u),n,v,n];lib.mt_context_hwrt_counts.restype=c.c_int32
   counts=(u*11)();call('hwrt_counts',ctx,counts,11)
  images={}

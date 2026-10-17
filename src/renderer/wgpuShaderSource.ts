@@ -25,6 +25,6 @@ export function wgpuShaderPreamble(constants: Record<string, boolean | number>, 
   }).join('\n');
   return `\n${defineCode}\n${constantsCode}\n`;
 }
-export function wgpuShaderSource(constants: Record<string, boolean | number>, features: WGPUShaderFeatures, bake = false, sceneIntersections = ''): string {
-  return wgpuShaderPreamble(constants, bake) + rayTraceCompute(features, sceneIntersections);
+export function wgpuShaderSource(constants: Record<string, boolean | number>, features: WGPUShaderFeatures, bake = false, sceneIntersections = '', pathDiagnostic = false): string {
+  return wgpuShaderPreamble(constants, bake) + rayTraceCompute(features, sceneIntersections, pathDiagnostic);
 }

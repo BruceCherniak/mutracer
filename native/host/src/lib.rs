@@ -15,8 +15,10 @@ pub mod context;
 pub mod denoise;
 mod denoise_ffi;
 mod hardware;
+pub mod hit_diagnostics;
 mod material_properties;
 mod native_bvh;
+pub mod path_diagnostics;
 mod profiling;
 mod scene;
 mod tinybvh;
@@ -637,7 +639,12 @@ impl GpuScene {
                 }),
             );
         }
-        let hardware = if use_hwrt {
+        let hardware = if use_hwrt
+            && !scene
+                .hwrt
+                .as_ref()
+                .is_some_and(|capture| capture.authoritative && capture.instances.is_empty())
+        {
             Some(hardware::prepare(
                 &device,
                 &queue,
@@ -941,7 +948,7 @@ impl GpuScene {
             .retained
             .as_ref()
             .ok_or("Missing retained geometry")?
-            .hardware_geometry(updates)
+            .hardware_geometry(updates, current.authoritative)
             .map_err(|error| format!("Full scene commit required: {error}"))?;
         if capture.hardware_closest != current.hardware_closest {
             return Err(

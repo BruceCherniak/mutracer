@@ -177,7 +177,7 @@ pub unsafe extern "C" fn mt_context_create_with_backend(
         let next = handle
             .checked_add(1)
             .ok_or("Native context handles exhausted")?;
-        if backend > 2 {
+        if backend > 3 {
             return Err("Unknown native intersection backend".into());
         }
         let gpu = GpuDevice::with_backend(backend)?;
@@ -238,11 +238,23 @@ pub unsafe extern "C" fn mt_context_commit(
         let mut fallback_reason = String::new();
         if context.backend != 0 {
             let capture = if context.gpu.hardware_ray_query {
-                hardware::from_raw(
-                    &scene,
-                    &mut assets,
-                    u32::from_le_bytes(bytes[..4].try_into().unwrap()),
-                )
+                if context.backend == 3 {
+                    hardware::from_raw_with_layout(
+                        &mut assets,
+                        u32::from_le_bytes(bytes[..4].try_into().unwrap()),
+                        true,
+                        scene
+                            .native_layout
+                            .as_ref()
+                            .ok_or("Missing native HWRT metadata")?,
+                    )
+                } else {
+                    hardware::from_raw(
+                        &scene,
+                        &mut assets,
+                        u32::from_le_bytes(bytes[..4].try_into().unwrap()),
+                    )
+                }
             } else {
                 Err("Hardware ray queries unavailable on this device".into())
             };
@@ -265,7 +277,7 @@ pub unsafe extern "C" fn mt_context_commit(
         );
         let mut candidate = match candidate {
             Ok(candidate) => candidate,
-            Err(error) if context.backend == 1 && options.flags & 4 != 0 => {
+            Err(error) if matches!(context.backend, 1 | 3) && options.flags & 4 != 0 => {
                 fallback_reason = format!("HWRT upload unavailable: {error}");
                 let (scene, assets) = scene::prepare(bytes)?;
                 GpuScene::new(
@@ -867,7 +879,14 @@ pub unsafe extern "C" fn mt_context_backend(
         let context = context(registry, handle)?;
         let scene = ready(context)?;
         unsafe {
-            *active = if scene.hardware.is_none() {
+            *active = if scene
+                .scene
+                .hwrt
+                .as_ref()
+                .is_some_and(|capture| capture.authoritative)
+            {
+                3
+            } else if scene.hardware.is_none() {
                 0
             } else if scene.scene.hwrt.as_ref().unwrap().hardware_closest {
                 2

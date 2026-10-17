@@ -1,10 +1,12 @@
 /// <reference lib="esnext" />
 /// <reference path="./browser-types.d.ts" />
+import {nativePathIntersections} from './path-diagnostics.wgsl.js';
 import IESProfile, {parseIESProfile} from '../src/scene/IESProfile.js';
 import {computeDisplacementMinmax, computeTrianglesDisplacementRange} from '../src/renderer/displacementPreparation.js';
 import { applyNativeMaterialProperties } from './material-properties.js';
 import { envMapDistribution } from '../src/renderer/envMapDistribution.js';
 import Geometry, { Attribute } from '../src/scene/Geometry.js';
+import {attributeLength} from '../src/scene/attributeData.js';
 import MeshState from '../src/scene/MeshState.js';
 import MaterialState from '../src/scene/MaterialState.js';
 import PixelTexture from '../src/scene/PixelTexture.js';
@@ -30,7 +32,7 @@ import { materialUsesMedium } from '../src/renderer/materialParams.js';
 import { writeRawAtlasPlacement } from '../src/renderer/textureAtlasPixels.js';
 import { wgpuMaterialConstants } from '../src/renderer/wgpuMaterialConstants.js';
 import { wgpuSceneFeatureFlags } from '../src/renderer/WGPUSceneFeatures.js';
-import { nativeHybridIntersections } from './intersections.wgsl.js';
+import { nativeHybridIntersections, nativeIntersections, nativeHitDiagnostics } from './intersections.wgsl.js';
 import { wgpuShaderSource } from '../src/renderer/wgpuShaderSource.js';
 import { makeRayTraceUniform, packWgpuAnalyticLights, WGPU_SCENE_BUFFER_MIN_BYTES } from '../src/renderer/wgpuSceneUniform.js';
 import { zSobolLog2SPP } from '../src/renderer/sampling.js';
@@ -376,6 +378,21 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   };
   add(31, 3, nativeLayoutBytes(nativeLayout, nativeLayout.blasOffset, nativeLayout.isEmpty), 0, 0, 0, 0);
   add(32, 2, hybridShader, 0, 0, 0, 0);
+  const hardwareShader = 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
+    nativeIntersections(features, nativeLayout.isEmpty));
+  add(33, 2, new TextEncoder().encode(hardwareShader), 0, 0, 0, 0);
+  const diagnosticShader = 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
+    nativeIntersections(features, nativeLayout.isEmpty, true));
+  add(34, 2, new TextEncoder().encode(diagnosticShader + nativeHitDiagnostics(features, nativeLayout.isEmpty)), 0, 0, 0, 0);
+  // Metal's non-indexed triangle BLAS can miss valid triangles in large meshes.
+  // Keep the temporary soup explicitly indexed until direct merged indices in 1.5.
+  const sequential = new Uint32Array(attributeLength(geometry.indices.array));
+  for (let i = 0; i < sequential.length; i++) sequential[i] = i;
+  add(35, 3, new Uint8Array(sequential.buffer), 0, 0, 0, 0);
+  add(36, 2, new TextEncoder().encode(wgpuShaderSource(constants, features, true,
+    nativePathIntersections(features, nativeLayout.isEmpty, false), true)), 0, 0, 0, 0);
+  add(37, 2, new TextEncoder().encode('enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
+    nativePathIntersections(features, nativeLayout.isEmpty, true), true)), 0, 0, 0, 0);
   if (token) retainedScenes.set(token, {source: materials, ordered: prepared.materials, table, lights, emissive,
     rt: rt.buffer, environmentWidth: environment?.width ?? 0, environmentHeight: environment?.height ?? 0,
     backgroundWidth: background?.width ?? 0, backgroundHeight: background?.height ?? 0, qualityFlags, environmentPower: estimateEnvironmentPower(environment),
