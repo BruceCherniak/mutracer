@@ -28,7 +28,7 @@ int main(int argc,char **argv){
  unsigned char camera[128],original[128];memcpy(original,source,128);memcpy(camera,original,128);
  unsigned char *a_pixels=malloc(size),*b_pixels=malloc(size),*initial=malloc(size*3);if(!a_pixels||!b_pixels||!initial)return 2;
  mt_context a=0,b=0;mt_render_job old=0,job=0;mt_context_info_v1 ci={.struct_size=sizeof(ci)};mt_job_info_v1 ji={.struct_size=sizeof(ji)};
- OK(mt_context_create(&a,error,sizeof(error)));OK(mt_context_create(&b,error,sizeof(error)));
+ OK(mt_context_create_with_backend(0,&a,error,sizeof(error)));OK(mt_context_create_with_backend(0,&b,error,sizeof(error)));
  BAD(mt_context_update_camera(a,camera,128,error,sizeof(error)));
  OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(mt_context_commit(b,input,length,error,sizeof(error)));
  OK(mt_context_render(a,samples,error,sizeof(error)));

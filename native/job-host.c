@@ -29,7 +29,7 @@ int main(int argc,char **argv){
  unsigned char *a_pixels=malloc(size),*b_pixels=malloc(size);if(!a_pixels||!b_pixels)return 2;
  mt_context a=0,b=0;mt_render_job old=0,job_a=0,job_b=0;
  mt_job_info_v1 info={.struct_size=sizeof(info)};mt_context_info_v1 context_info={.struct_size=sizeof(context_info)};
- OK(mt_context_create(&a,error,sizeof(error)));OK(mt_context_create(&b,error,sizeof(error)));
+ OK(mt_context_create_with_backend(0,&a,error,sizeof(error)));OK(mt_context_create_with_backend(0,&b,error,sizeof(error)));
  OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(mt_context_commit(b,input,length,error,sizeof(error)));
  BAD(mt_job_info(0,&info,error,sizeof(error)));BAD(mt_context_submit(a,1,NULL,error,sizeof(error)));
  BAD(mt_context_submit(a,0,&old,error,sizeof(error)));BAD(mt_context_submit(a,4097,&old,error,sizeof(error)));

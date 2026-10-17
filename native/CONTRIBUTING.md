@@ -19,8 +19,8 @@ library and reads completed HDR batches back to the UI.
 
 Run the bundled executable with `[MODEL] --smoke-out DIRECTORY` for real GPU
 checks of load/render, queued cancellation/restart, orbit/restore, material and
-environment edits, Radiance HDR loading and PNG output. It also compares raw
-software/automatic HWRT HDR and guides, records query counts, and runs native
+environment edits, Radiance HDR loading and PNG output. It also records raw
+software/HWRT HDR and guide differences, asserts the actual backend, and runs native
 OIDN against a higher-sample reference without changing accumulation. Test both
 external and embedded textured GLTF resources, unsupported required extensions and malformed
 files. Copy the app elsewhere and run with an empty inherited environment and
@@ -47,11 +47,11 @@ Run the executable with `--interaction-smoke DIRECTORY` to hold continuous camer
 input, assert changing/nonblank previews, reject stale OIDN output after a resize,
 and wait for the new denoised result. Keep AOT/context calls on the UI owner thread;
 the OIDN worker owns only its separate OIDN device/filter and copied image data.
-Set `MUTRACER_NATIVE_VALIDATE_SHADOWS=1` before raw HWRT scene commit to compare
-hardware shadow results against software per ray; counter 9 must remain zero.
-Also check forced-HWRT rejection preserves the prior scene, and automatic fallback
-reports alpha/version-3/bevel/empty-scene exclusions. Do not treat a fallback as a
-hardware closest-hit success or native OIDN as browser-model numerical parity.
+Check the actual backend after every HWRT commit. Unsupported devices and AS
+allocation or limit failures must report a software fallback. The first-hit and
+path diagnostic tools compare authoritative hardware identities against software;
+image statistics use a high-sample software reference. Do not treat a fallback
+as a hardware success or native OIDN as browser-model numerical parity.
 
 ## Native storage access validation
 
@@ -230,15 +230,12 @@ prebuilt combined BVH file and requires the same C-driven render/AOV output.
 | Camera translation/shared camera packing and material patches | scriptc AOT machine code from runtime C inputs |
 | Resource creation, dispatch, accumulation, HDR readback | Native Rust/wgpu with the real GPU |
 | Preview encoding | Native Rust; simplified presentation, not browser display parity |
-| Hardware ray queries | Independent BLAS/TLAS probe and opt-in hybrid MuTracer rendering pass |
+| Hardware ray queries | Independent BLAS/TLAS probe and authoritative raw-scene HWRT |
 
-Verified on Apple M4 Max / Metal at 480x320 and 256 samples. The actual adapter
-reports `EXPERIMENTAL_RAY_QUERY` support. Real execution also passes: one BLAS,
-three TLAS instances and eight analytic rays verify nearest hit, transforms,
-masks, tmax, back-face intersection and misses, including distance, barycentrics
-and instance identity. The two hybrid fixtures have byte-identical
-normal/albedo guides, zero shadow-decision differences and at most 3 ULP color
-difference. Broader scene and feature parity remain pending.
+The independent ray-query probe exercises nearest hits, transforms, masks,
+tmax, back faces, misses, procedural candidates, barycentrics and instance IDs.
+Use the raw-scene image, first-hit and guide-path diagnostics for renderer parity;
+prepared replay is software-only.
 
 ## Deferred items and workarounds
 
@@ -250,8 +247,8 @@ difference. Broader scene and feature parity remain pending.
 | Native scene preparation | Raw descriptors now build BLAS/TLAS, attributes, materials/atlas, lights, camera and full WGSL natively; descriptor coverage is limited as listed above | Remaining scene/material features and persistent updates |
 | Complete public API | Engine/Render facade, Three.js/Canvas equivalents and other runtime exports pending | Public-export/feature parity matrix completed |
 | Denoising and display parity | First image is raw path tracing with a simple native preview | OIDN/JNLM and native display pipeline compared |
-| HWRT coverage | Prepared replay has opaque closest-hit and shadows; affine scenes retain software closest-hit due unresolved guide differences | Affine closest-hit parity, broader scenes, alpha/displacement/bevel and performance evaluation |
-| Correctness across backends | Browser/native HDR and exact guide comparisons; two native hybrid fixtures pass documented color/guide/shadow gates | Broader fixed-seed scenes and browser WebGL coverage |
+| HWRT coverage | Raw scenes support alpha, affine instances, displacement and bevel; prepared replay is software-only | Cross-device coverage and performance evaluation |
+| Correctness across backends | Software/Web byte comparisons plus HWRT statistical, first-hit and guide-path diagnostics | Extend fixtures with renderer features |
 | Native release | macOS-only probe and experimental ABI | Stable ABI, platform CI, release dependency/license inventory |
 
 ## Full-library diagnostics
@@ -299,11 +296,6 @@ uses the existing ray-tracing pass to generate a fixed initial resource state;
 Rust/wgpu validates and executes the actual WGSL and bind-group layouts.
 Only the capture's current formats/bindings are implemented; unsupported
 operations must be recorded as limitations instead of silently ignored.
-`prepare-hwrt.mjs` preserves actual TLAS leaf-order IDs and BVH triangle-record
-identities while deduplicating hardware BLAS geometry. The native shader wrapper
-uses the same identifier mapping as the library build; generated WGSL and GLSL
-match the original source outputs. If hardware capture fails, the reason is recorded and software capture
-still completes. Selecting hardware explicitly then reports that limitation.
 
 `render-core.ts` imports the original depth-normalization function and returns
 a 16-byte frame command. The host copies result-arena bytes before reset/collect.
@@ -419,7 +411,7 @@ the scene also roots mesh bindings and BLASes for transform updates.
 
 ## Partial transform validation
 
-Run `[MODEL] --transform-smoke DIRECTORY` on software and Auto backends. It
+Run `[MODEL] --transform-smoke DIRECTORY` on software and HWRT backends. It
 compares HDR/normal/albedo with full commits, including rotation, uniform and
 nonuniform scale, reflection, invalid edits and interleaved environments.
 `--interaction-smoke` also combines held transforms with camera/material/light/
@@ -432,14 +424,13 @@ mesh objects reuse `updateMeshInstanceTransforms`, `buildTLAS` and
 sizes, stack bounds and packed floats before GPU writes, then accept the candidate.
 Hardware updates reuse BLASes/TLAS bindings and rebuild the TLAS in place. Map
 software leaf-order changes back to hardware geometry/triangle bases using BLAS
-root and vertex region, rather than assuming stable instance order. A change to
-the compiled hardware closest-hit eligibility requests a full commit.
+root and vertex region, rather than assuming stable instance order.
 
 
 ## Partial vertex validation
 
 Run `[MODEL] --geometry-smoke DIRECTORY` to compare stable-topology deformation
-with full commits on software and Auto backends. Verify all three AOVs, generated/
+with full commits on software and HWRT backends. Verify all three AOVs, generated/
 supplied normals, authored/generated tangents, retained environments, rejection
 and sample reset. Raw C cases also cover shared geometry/material-table regions,
 colored batches, emissive triangles and explicit displacement fallback.

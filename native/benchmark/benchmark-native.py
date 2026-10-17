@@ -61,11 +61,7 @@ try:
  firstMs=run();warm=[]
  for i in range(12 if not a.single else 0):
   call('reset',ctx);warm.append(run())
- # Optional legacy diagnostics are archived before the hybrid path is removed.
  counts=None
- if initialBackend['active'] in [1,2] and hasattr(lib,'mt_context_hwrt_counts'):
-  lib.mt_context_hwrt_counts.argtypes=[h,c.POINTER(u),n,v,n];lib.mt_context_hwrt_counts.restype=c.c_int32
-  counts=(u*11)();call('hwrt_counts',ctx,counts,11)
  images={}
  for k,kind in enumerate(['hdr','normal','albedo']):
   length=n();call('read_pixels',ctx,k,None,0,c.byref(length));buf=c.create_string_buffer(length.value);call('read_pixels',ctx,k,buf,len(buf),c.byref(length));(folder/(kind+'.bin')).write_bytes(buf.raw);images[kind]=hashlib.sha256(buf.raw).hexdigest()

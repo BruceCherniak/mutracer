@@ -74,13 +74,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                         && renderer.image(2)? == reference.image(2)?,
                     "Environment after geometry mismatch"
                 );
-                if renderer.backend()?.0 != 0 {
-                    let counts = renderer.counts()?;
-                    ensure!(
-                        counts[4] > 0 && counts[9] == 0,
-                        "HWRT shadow validation did not run or mismatched"
-                    );
-                }
+                ensure!(renderer.backend()?.0 == mode, "Unexpected backend fallback");
             }
         }
         renderer::save(

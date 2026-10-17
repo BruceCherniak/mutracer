@@ -554,8 +554,6 @@ pub(super) struct PreparedState {
     indexed: bool,
     material_count: usize,
     light_count: usize,
-    raw_version: u32,
-    shader: Vec<u8>,
     authoritative_shader: Vec<u8>,
     authoritative_indices: Vec<u8>,
     authoritative_as_indices: Vec<u8>,
@@ -662,13 +660,11 @@ impl PreparedState {
     pub(super) fn hardware_geometry(
         &self,
         updates: &LightingUpdates,
-        authoritative: bool,
     ) -> Result<(hardware::Capture, HashMap<String, Vec<u8>>)> {
         let mut assets: HashMap<_, _> = updates
             .iter()
             .map(|(id, _, _, data)| (format!("native-{id}"), data.clone()))
             .collect();
-        assets.insert("native-32".into(), self.shader.clone());
         assets.insert("native-33".into(), self.authoritative_shader.clone());
         assets.insert("native-35".into(), self.authoritative_indices.clone());
         assets.insert("native-42".into(), self.authoritative_as_indices.clone());
@@ -680,8 +676,7 @@ impl PreparedState {
             .native_layout
             .as_ref()
             .ok_or("Missing geometry HWRT metadata")?;
-        let mut capture =
-            hardware::from_raw_with_layout(&mut assets, self.raw_version, authoritative, layout)?;
+        let mut capture = hardware::capture_from_prepared(&mut assets, layout)?;
         capture.allow_updates();
         Ok((capture, assets))
     }
@@ -989,8 +984,6 @@ pub(super) fn prepare_retained(
     let mut state = PreparedState {
         token,
         indexed: hardware,
-        raw_version: 0,
-        shader: Vec::new(),
         authoritative_shader: Vec::new(),
         authoritative_indices: Vec::new(),
         authoritative_as_indices: Vec::new(),
@@ -1007,11 +1000,6 @@ pub(super) fn prepare_retained(
         },
     };
     let (scene, assets) = prepare_impl(bytes, token, hardware, false)?;
-    state.raw_version = Words(bytes).u(0) as u32;
-    state.shader = assets
-        .get("native-32")
-        .ok_or("Missing raw hybrid geometry shader")?
-        .clone();
     state.authoritative_shader = assets
         .get("native-33")
         .ok_or("Missing authoritative shader")?
@@ -1131,7 +1119,7 @@ fn prepare_impl(
         );
     }
     let count = w.u(1);
-    if w.u(0) != 1 || !(25..=28).contains(&count) || packet.len() < 16 + count * 32 {
+    if w.u(0) != 1 || !(24..=27).contains(&count) || packet.len() < 16 + count * 32 {
         return Err("Invalid native resource packet".into());
     }
     let mut assets = HashMap::new();
@@ -1177,7 +1165,7 @@ fn prepare_impl(
         } else if kind == 2 {
             if id == 30 {
                 shader = name.clone();
-            } else if id != 32 && id != 33 && id != 34 && id != 36 && id != 37 && id != 39 {
+            } else if id != 33 && id != 34 && id != 36 && id != 37 && id != 39 {
                 return Err("Unknown native shader variant".into());
             }
         } else if kind == 3 && id == 31 {

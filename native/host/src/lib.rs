@@ -107,7 +107,7 @@ struct MaterialOffsets {
     roughness: u64,
 }
 
-/// Experimental C descriptor; flags 1=camera, 2=material patch, 4=hybrid HWRT.
+/// Experimental C descriptor; flags 1=camera, 2=material patch, 4=authoritative HWRT.
 #[repr(C)]
 #[derive(Clone, Copy, serde::Serialize)]
 pub struct RenderOptions {
@@ -348,7 +348,7 @@ struct GpuDevice {
 }
 impl GpuDevice {
     fn new(use_hwrt: bool) -> Result<Self> {
-        Self::with_backend(if use_hwrt { 2 } else { 0 })
+        Self::with_backend(if use_hwrt { 1 } else { 0 })
     }
     fn with_backend(mode: u32) -> Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -366,9 +366,6 @@ impl GpuDevice {
         let hardware_ray_query = adapter
             .features()
             .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY);
-        if mode == 2 && !hardware_ray_query {
-            return Err("Hardware ray query is not supported by this adapter".into());
-        }
         let use_hwrt = mode != 0 && hardware_ray_query;
         let profile_features = if profiling::gpu_enabled() {
             adapter.features()
@@ -510,8 +507,15 @@ impl GpuScene {
             return Err("Material index is out of range".into());
         }
         let use_hwrt = options.flags & 4 != 0;
-        if use_hwrt && !scene.hwrt.as_ref().is_some_and(|capture| capture.eligible) {
-            return Err("Capture is not eligible for the initial hybrid HWRT backend".into());
+        if use_hwrt
+            && !scene
+                .hwrt
+                .as_ref()
+                .is_some_and(|capture| capture.eligible && capture.authoritative)
+        {
+            return Err(
+                "Capture is not eligible for authoritative HWRT; use the raw scene API".into(),
+            );
         }
         let device = &gpu.device;
         let queue = &gpu.queue;
@@ -787,16 +791,6 @@ impl GpuScene {
                                 },
                                 count: None,
                             },
-                            wgpu::BindGroupLayoutEntry {
-                                binding: 6,
-                                visibility: wgpu::ShaderStages::COMPUTE,
-                                ty: wgpu::BindingType::Buffer {
-                                    ty: wgpu::BufferBindingType::Storage { read_only: false },
-                                    has_dynamic_offset: false,
-                                    min_binding_size: None,
-                                },
-                                count: None,
-                            },
                         ]);
                     }
                     device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -874,10 +868,6 @@ impl GpuScene {
                             wgpu::BindGroupEntry {
                                 binding: 5,
                                 resource: resources.mapping.as_entire_binding(),
-                            },
-                            wgpu::BindGroupEntry {
-                                binding: 6,
-                                resource: resources.counters.as_entire_binding(),
                             },
                         ]);
                     }
@@ -1061,20 +1051,15 @@ impl GpuScene {
             Option<wgpu::Buffer>,
         )>,
     > {
-        let Some(current) = self.scene.hwrt.as_ref().filter(|_| self.hardware.is_some()) else {
+        let Some(_current) = self.scene.hwrt.as_ref().filter(|_| self.hardware.is_some()) else {
             return Ok(None);
         };
         let (capture, assets) = self
             .retained
             .as_ref()
             .ok_or("Missing retained geometry")?
-            .hardware_geometry(updates, current.authoritative)
+            .hardware_geometry(updates)
             .map_err(|error| format!("Full scene commit required: {error}"))?;
-        if capture.hardware_closest != current.hardware_closest {
-            return Err(
-                "Full scene commit required: hardware closest-hit eligibility changed".into(),
-            );
-        }
         let device = &self.gpu.device;
         let memory_scope = device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation_scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
@@ -1116,10 +1101,6 @@ impl GpuScene {
                 wgpu::BindGroupEntry {
                     binding: 5,
                     resource: resources.mapping.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 6,
-                    resource: resources.counters.as_entire_binding(),
                 },
             ]);
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1293,21 +1274,13 @@ fn render_scene(
     png.set_color(png::ColorType::Rgb);
     png.set_depth(png::BitDepth::Eight);
     png.write_header()?.write_image_data(&rgb)?;
-    let query_counts = gpu_scene
-        .hardware
-        .as_ref()
-        .map(|resources| hardware::counts(&gpu_scene.gpu.device, &gpu_scene.gpu.queue, resources))
-        .transpose()?;
     fs::write(
         output.join("result.json"),
         serde_json::to_vec_pretty(&json!({
             "width": scene.width, "height": scene.height, "samples": samples,
             "adapter": info.name, "backend": format!("{:?}", info.backend),
             "hardwareRayQuerySupported": hardware_ray_query, "hardwareRayTracingUsed": use_hwrt,
-            "intersectionBackend": if !use_hwrt { "software BVH" }
-                else if scene.hwrt.as_ref().is_some_and(|capture| capture.hardware_closest) { "hybrid hardware closest-hit and shadows / software fallbacks" }
-                else { "hardware shadows / software closest-hit for affine instances" },
-            "queryCounts": query_counts.map(|c| json!({"queries":c[0],"softwareFallbacks":c[1],"misses":c[2],"accepted":c[3],"correctedHardwareMisses":c[10],"shadows":{"queries":c[4],"softwareFallbacks":c[5],"misses":c[6],"occluded":c[7],"softwareComparisons":c[8],"mismatches":c[9]}})),
+            "intersectionBackend": if use_hwrt { "authoritative HWRT" } else { "software BVH" },
             "shaderCompileSeconds": compile_seconds, "renderReadbackSeconds": render_seconds,
             "totalSeconds": start.elapsed().as_secs_f64(), "rgbMin": minimum, "rgbMax": maximum,
             "rgbMean": mean / (scene.width as f64 * scene.height as f64 * 3.0),

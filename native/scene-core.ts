@@ -34,7 +34,7 @@ import { materialUsesMedium } from '../src/renderer/materialParams.js';
 import { writeRawAtlasPlacement } from '../src/renderer/textureAtlasPixels.js';
 import { wgpuMaterialConstants } from '../src/renderer/wgpuMaterialConstants.js';
 import { wgpuSceneFeatureFlags } from '../src/renderer/WGPUSceneFeatures.js';
-import { nativeHybridIntersections, nativeIntersections, nativeHitDiagnostics } from './intersections.wgsl.js';
+import { nativeIntersections, nativeHitDiagnostics } from './intersections.wgsl.js';
 import { wgpuShaderSource } from '../src/renderer/wgpuShaderSource.js';
 import { makeRayTraceUniform, packWgpuAnalyticLights, WGPU_SCENE_BUFFER_MIN_BYTES } from '../src/renderer/wgpuSceneUniform.js';
 import { zSobolLog2SPP } from '../src/renderer/sampling.js';
@@ -313,7 +313,6 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
     hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES), blasLayoutMask: 1};
   const shader = new TextEncoder().encode(wgpuShaderSource(constants, features, true));
-  const hybridShader = new TextEncoder().encode(wgpuShaderSource(constants, features, true, nativeHybridIntersections(features)));
   const mapCount = Number(constants.NUM_MAPS), mapInfo = new Float32Array(mapCount * 12);
   mapInfo.set(table.bufferData.mapInfo); mapInfo.set(table.bufferData.mapTransform, mapCount * 4);
   for (let i = 0; i < table.bufferData.mapUvChannel.length; i++) {
@@ -381,7 +380,6 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     hasDisplacement: features.hasDisplacement, indexed: !!hardware, hardwareGeometries: hardware?.geometries
   };
   add(31, 3, nativeLayoutBytes(nativeLayout, nativeLayout.blasOffset, nativeLayout.isEmpty), 0, 0, 0, 0);
-  add(32, 2, hybridShader, 0, 0, 0, 0);
   const hardwareShader = 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
     nativeIntersections(features, nativeLayout.isEmpty, false, false, !!hardware));
   add(33, 2, new TextEncoder().encode(hardwareShader), 0, 0, 0, 0);

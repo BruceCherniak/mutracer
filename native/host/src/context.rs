@@ -155,7 +155,7 @@ pub unsafe extern "C" fn mt_context_create(
     error: *mut c_char,
     capacity: usize,
 ) -> i32 {
-    unsafe { mt_context_create_with_backend(0, output, error, capacity) }
+    unsafe { mt_context_create_with_backend(1, output, error, capacity) }
 }
 /// Backend 0=software, 1=automatic, 2=require supported HWRT scene/device.
 #[unsafe(no_mangle)]
@@ -179,7 +179,7 @@ pub unsafe extern "C" fn mt_context_create_with_backend(
         let next = handle
             .checked_add(1)
             .ok_or("Native context handles exhausted")?;
-        if backend > 3 {
+        if backend > 1 {
             return Err("Unknown native intersection backend".into());
         }
         let gpu = GpuDevice::with_backend(backend)?;
@@ -238,7 +238,7 @@ pub unsafe extern "C" fn mt_context_commit(
         let started = Instant::now();
         let (mut scene, mut assets, retained) = scene::prepare_retained(
             bytes,
-            context.backend == 3
+            context.backend == 1
                 && context.gpu.hardware_ray_query
                 && hardware::direct_input_enabled(),
         )?;
@@ -247,23 +247,13 @@ pub unsafe extern "C" fn mt_context_commit(
         let mut fallback_reason = String::new();
         if context.backend != 0 {
             let capture = if context.gpu.hardware_ray_query {
-                if context.backend == 3 {
-                    hardware::from_raw_with_layout(
-                        &mut assets,
-                        u32::from_le_bytes(bytes[..4].try_into().unwrap()),
-                        true,
-                        scene
-                            .native_layout
-                            .as_ref()
-                            .ok_or("Missing native HWRT metadata")?,
-                    )
-                } else {
-                    hardware::from_raw(
-                        &scene,
-                        &mut assets,
-                        u32::from_le_bytes(bytes[..4].try_into().unwrap()),
-                    )
-                }
+                hardware::capture_from_prepared(
+                    &mut assets,
+                    scene
+                        .native_layout
+                        .as_ref()
+                        .ok_or("Missing native HWRT metadata")?,
+                )
             } else {
                 Err("Hardware ray queries unavailable on this device".into())
             };
@@ -272,7 +262,6 @@ pub unsafe extern "C" fn mt_context_commit(
                     scene.hwrt = Some(capture);
                     options.flags |= 4;
                 }
-                Err(error) if context.backend == 2 => return Err(error),
                 Err(error) => fallback_reason = error.to_string(),
             }
         }
@@ -290,7 +279,7 @@ pub unsafe extern "C" fn mt_context_commit(
         );
         let mut candidate = match candidate {
             Ok(candidate) => candidate,
-            Err(error) if matches!(context.backend, 1 | 3) && options.flags & 4 != 0 => {
+            Err(error) if context.backend == 1 && options.flags & 4 != 0 => {
                 fallback_reason = format!("HWRT upload unavailable: {error}");
                 // Production preparation already contains the full software BVH.
                 // Only the opt-in direct-AS experiment lacks that CPU result.
@@ -895,7 +884,7 @@ mod tests {
     }
 }
 
-/// Runtime backend: 0=software, 1=hardware shadows, 2=hardware closest+shadows.
+/// Actual backend: 0=software, 1=authoritative HWRT.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_backend(
     handle: u64,
@@ -912,63 +901,23 @@ pub unsafe extern "C" fn mt_context_backend(
         let context = context(registry, handle)?;
         let scene = ready(context)?;
         unsafe {
-            *active = if scene
-                .scene
-                .hwrt
-                .as_ref()
-                .is_some_and(|capture| capture.authoritative)
-            {
-                3
-            } else if scene.hardware.is_none() {
-                0
-            } else if scene.scene.hwrt.as_ref().unwrap().hardware_closest {
-                2
-            } else {
-                1
-            };
+            *active = u32::from(scene.scene.hwrt.is_some());
         }
-        let bytes = context.fallback_reason.as_bytes();
+        let status = if scene.scene.hwrt.is_some() {
+            "software BVH geometries: 0"
+        } else {
+            context.fallback_reason.as_str()
+        };
+
+        let bytes = status.as_bytes();
         let mut n = bytes.len().min(reason_capacity - 1);
-        while !context.fallback_reason.is_char_boundary(n) {
+        while !status.is_char_boundary(n) {
             n -= 1;
         }
         unsafe {
             std::ptr::copy_nonoverlapping(bytes.as_ptr(), reason.cast(), n);
             *reason.add(n) = 0;
         }
-        Ok(())
-    })
-}
-/// Diagnostic counters, valid only for an idle hardware context.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mt_context_hwrt_counts(
-    handle: u64,
-    output: *mut u32,
-    length: usize,
-    error: *mut c_char,
-    capacity: usize,
-) -> i32 {
-    action(error, capacity, |registry| {
-        if output.is_null() || length != 11 {
-            return Err("Expected eleven HWRT counters".into());
-        }
-        let context = context(registry, handle)?;
-        idle(context)?;
-        ready(context)?;
-        if context.scene.as_ref().unwrap().hardware.is_none() {
-            return Err("Context uses software traversal".into());
-        }
-        context.failed = true;
-        let scene = context.scene.as_ref().unwrap();
-        let hardware = scene
-            .hardware
-            .as_ref()
-            .ok_or("Context uses software traversal")?;
-        let counts = hardware::counts(&scene.gpu.device, &scene.gpu.queue, hardware)?;
-        unsafe {
-            std::ptr::copy_nonoverlapping(counts.as_ptr(), output, 11);
-        }
-        context.failed = false;
         Ok(())
     })
 }

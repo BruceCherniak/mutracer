@@ -57,10 +57,10 @@ are unverified.
 - **Native OIDN** is on by default. It denoises completed previews after interaction
   pauses, using Metal where available and CPU otherwise. Toggle it to compare
   the unfiltered image; PNG export uses the currently displayed result.
-- **Ray tracing** defaults to **Auto**: use hardware queries for supported opaque
-  scenes and software BVH otherwise. The panel reports the active path and any
-  fallback reason. **Software** disables hardware queries; **HWRT** reports an
-  error if the scene or device is unsupported.
+- **Ray tracing** defaults to **HWRT**, with **Software** as the other option.
+  Unsupported devices and acceleration-structure limits or allocation failures
+  fall back to Software. The panel reports the actual path, fallback reason and
+  the number of geometries using a software BVH.
 
 Camera changes restart accumulation while retaining the scene. The previous
 image remains visible until a newer preview arrives, including while dragging.
@@ -68,8 +68,8 @@ Basic color, roughness, metalness and transmission edits retain the scene's
 geometry and textures and restart accumulation. Environment intensity, tint and
 rotation also retain the scene when map dimensions and background mode stay the
 same. Key-light color, intensity and direction edits retain the scene as well.
-Object transforms retain vertices and textures; changes to resource sizes or
-hardware closest-hit eligibility require a rebuild.
+Object transforms retain vertices and textures; changes to resource sizes
+require a rebuild.
 Loading a different-sized HDR, switching background mode, changing shader
 features or unlit materials, and changing resolution rebuild the scene. Moving
 between zero and nonzero light or environment intensity can also require a

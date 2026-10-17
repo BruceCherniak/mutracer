@@ -8,7 +8,7 @@ class PathConsistency(unittest.TestCase):
     def test_first_difference_and_unpaired_queries(self):
         with tempfile.TemporaryDirectory() as tmp:
             root=Path(tmp)
-            for side,backend,counts in [('software',0,[3,2,2]),('hardware',3,[3,2,1])]:
+            for side,backend,counts in [('software',0,[3,2,2]),('hardware',1,[3,2,1])]:
                 folder=root/side;folder.mkdir()
                 header=np.zeros((3,16),dtype='<u4');header[:,0]=counts;header[:,2]=backend;header.tofile(folder/'headers.bin')
                 events=np.zeros(sum(counts),dtype=m.EVENT);events['hit']['hit']=1;events['hit']['instance']=7;events['hit']['record']=20;events['hit']['t']=2;events['hit']['bary']=[.2,.3,.5]

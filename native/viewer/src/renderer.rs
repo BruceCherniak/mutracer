@@ -28,7 +28,7 @@ fn check(operation: impl FnOnce(*mut i8, usize) -> i32) -> Result<()> {
 }
 impl Renderer {
     pub fn new() -> Result<Self> {
-        Self::with_backend(0)
+        Self::with_backend(1)
     }
     pub fn with_backend(mode: u32) -> Result<Self> {
         let mut handle = 0;
@@ -60,13 +60,7 @@ impl Renderer {
                 .into_owned(),
         ))
     }
-    pub fn counts(&self) -> Result<[u32; 11]> {
-        let mut counts = [0; 11];
-        check(|e, n| unsafe {
-            native::mt_context_hwrt_counts(self.handle, counts.as_mut_ptr(), counts.len(), e, n)
-        })?;
-        Ok(counts)
-    }
+
     pub fn commit(&mut self, bytes: &[u8]) -> Result<()> {
         ensure!(self.job.is_none(), "Drain current job before committing");
         check(|e, n| unsafe {

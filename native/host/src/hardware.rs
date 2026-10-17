@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::{collections::HashMap, fs, path::Path, sync::mpsc, time::Duration};
+use std::{collections::HashMap, fs, path::Path, time::Duration};
 use wgpu::util::DeviceExt;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -41,8 +41,6 @@ pub struct Capture {
     pub indexed: bool,
     pub reason: Option<String>,
     pub shader: Option<String>,
-    #[serde(default = "default_hardware_closest")]
-    pub hardware_closest: bool,
     #[serde(default)]
     pub geometries: Vec<Geometry>,
     #[serde(default)]
@@ -58,9 +56,6 @@ impl Capture {
             geometry.dynamic = true;
         }
     }
-}
-fn default_hardware_closest() -> bool {
-    true
 }
 #[derive(Clone, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -104,7 +99,6 @@ pub struct Resources {
     indexed: bool,
     pub tlas: wgpu::Tlas,
     pub mapping: wgpu::Buffer,
-    pub counters: wgpu::Buffer,
     _blases: Vec<wgpu::Blas>,
     _vertices: Vec<wgpu::Buffer>,
     _indices: Vec<Option<wgpu::Buffer>>,
@@ -437,11 +431,6 @@ pub fn prepare_reusing(
             serde_json::json!({"nativeHardwareUploadProfile": {"kind":"geometry","writeBytes":vertices.iter().map(|b| b.size()).sum::<u64>() + data.len() as u64,"instanceCount":capture.instances.len()}})
         );
     }
-    let counters = upload(
-        "MuTracer hardware query counts",
-        &[0; 44],
-        wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-    );
     drop(upload);
     if super::profiling::enabled() {
         eprintln!(
@@ -481,7 +470,6 @@ pub fn prepare_reusing(
         raw_instances,
         tlas,
         mapping,
-        counters,
         _blases: blases,
         _vertices: vertices,
         _indices: indices,
@@ -504,7 +492,6 @@ impl Resources {
         }
         let mut instances = Vec::new();
         let mut mapping = Vec::new();
-        let mut closest = true;
         for (i, record) in bytes.chunks_exact(160).enumerate() {
             let word = |offset| u32::from_le_bytes(record[offset..offset + 4].try_into().unwrap());
             let &(geometry, base) = roots
@@ -516,20 +503,12 @@ impl Resources {
             if m.iter().any(|v| !v.is_finite()) {
                 return Err("Non-finite hardware instance matrix".into());
             }
-            if !capture.authoritative {
-                closest &= supports_closest(&m);
-            }
             instances.push(Instance {
                 geometry,
                 custom_index: i as u32,
                 transform: [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14].map(|k| m[k] as f32),
             });
             mapping.extend(base.to_le_bytes());
-        }
-        if closest != capture.hardware_closest {
-            return Err(
-                "Full scene commit required: hardware closest-hit eligibility changed".into(),
-            );
         }
         Ok(TransformPlan { instances, mapping })
     }
@@ -564,101 +543,21 @@ impl Resources {
         queue.submit([encoder.finish()]);
     }
 }
-fn supports_closest(m: &[f64]) -> bool {
-    let a = [m[0], m[1], m[2]];
-    let b = [m[4], m[5], m[6]];
-    let c = [m[8], m[9], m[10]];
-    let dot = |u: [f64; 3], v: [f64; 3]| u[0] * v[0] + u[1] * v[1] + u[2] * v[2];
-    let scale = dot(a, a).max(dot(b, b)).max(dot(c, c));
-    let epsilon = scale * 1e-5;
-    let determinant = a[0] * (b[1] * c[2] - b[2] * c[1]) - b[0] * (a[1] * c[2] - a[2] * c[1])
-        + c[0] * (a[1] * b[2] - a[2] * b[1]);
-    determinant > 0.
-        && scale > 0.
-        && (dot(a, a) - dot(b, b)).abs() <= epsilon
-        && (dot(a, a) - dot(c, c)).abs() <= epsilon
-        && dot(a, b).abs() <= epsilon
-        && dot(a, c).abs() <= epsilon
-        && dot(b, c).abs() <= epsilon
-}
-
-pub fn counts(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    resources: &Resources,
-) -> Result<[u32; 11]> {
-    let readback = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("HWRT counter readback"),
-        size: 44,
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
-    let mut encoder = device.create_command_encoder(&Default::default());
-    encoder.copy_buffer_to_buffer(&resources.counters, 0, &readback, 0, 44);
-    queue.submit([encoder.finish()]);
-    let (sender, receiver) = mpsc::channel();
-    readback
-        .slice(..)
-        .map_async(wgpu::MapMode::Read, move |value| {
-            let _ = sender.send(value);
-        });
-    device.poll(wgpu::PollType::Wait {
-        submission_index: None,
-        timeout: Some(Duration::from_secs(30)),
-    })?;
-    receiver.recv_timeout(Duration::from_secs(5))??;
-    let values = readback.slice(..).get_mapped_range()?;
-    Ok(std::array::from_fn(|i| {
-        u32::from_le_bytes(values[i * 4..i * 4 + 4].try_into().unwrap())
-    }))
-}
-
-// Native counterpart of prepare-hwrt.mjs: consume the original AOT-packed BVH,
-// attributes and TLAS leaf order, then create platform acceleration structures.
-// No browser capture or alternative scene/material preparation is involved.
-pub fn from_raw(
-    scene: &super::Scene,
+// Approved 1.5 fallback: keep the accepted BVH-leaf-order indexed soup until
+// a BVH-independent AS representation passes both identity and image gates.
+// This extraction supplies geometry/identity only; tracing never recomputes a
+// hardware triangle hit or retries a hardware miss in the software BVH.
+pub fn capture_from_prepared(
     assets: &mut HashMap<String, Vec<u8>>,
-    version: u32,
-) -> Result<Capture> {
-    from_raw_with_layout(
-        assets,
-        version,
-        false,
-        scene
-            .native_layout
-            .as_ref()
-            .ok_or("Missing native HWRT metadata")?,
-    )
-}
-pub fn from_raw_with_layout(
-    assets: &mut HashMap<String, Vec<u8>>,
-    version: u32,
-    authoritative: bool,
     layout: &NativeLayout,
 ) -> Result<Capture> {
-    if authoritative && layout.indexed {
+    if layout.indexed {
         return from_indexed(assets, layout);
     }
-    if !authoritative && version >= 3 {
-        return Err("HWRT displacement descriptors are not supported yet".into());
-    }
-    if !authoritative && layout.has_displacement {
-        return Err("HWRT displacement descriptors are not supported yet".into());
-    }
-    if !authoritative && layout.has_alpha {
-        return Err("Alpha materials retain software traversal".into());
-    }
-    let source = String::from_utf8(
-        assets
-            .get(if authoritative {
-                "native-33"
-            } else {
-                "native-32"
-            })
-            .ok_or("Missing native hybrid shader")?
-            .clone(),
-    )?;
+    let source = assets
+        .get("native-33")
+        .ok_or("Missing authoritative HWRT shader")?
+        .clone();
     let words = |name: &str| -> Result<Vec<u32>> {
         let bytes = assets.get(name).ok_or("Missing packed HWRT input")?;
         if bytes.len() % 4 != 0 {
@@ -669,12 +568,6 @@ pub fn from_raw_with_layout(
             .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
             .collect())
     };
-    if !authoritative && layout.bevel {
-        return Err("Shader bevel retains software traversal".into());
-    }
-    if !authoritative && layout.is_empty {
-        return Err("Empty scenes retain software traversal".into());
-    }
     let blas_offset = layout.blas_offset;
     let instances = words("native-2")?;
     let bvh = words("native-1")?;
@@ -696,8 +589,6 @@ pub fn from_raw_with_layout(
     let mut geometries = Vec::new();
     let mut placements = Vec::new();
     let mut cache = HashMap::new();
-    // Keep the measured affine closest-hit limitation: hardware shadows still run.
-    let mut hardware_closest = true;
     let mut generated = HashMap::new();
     for id in 0..count {
         let encoded = instances[id * 40];
@@ -772,21 +663,14 @@ pub fn from_raw_with_layout(
             let name = format!("native-hwrt-positions-{index}");
             geometries.push(Geometry {
                 positions: name.clone(),
-                indices: (authoritative && !displaced).then(|| "native-35".into()),
+                indices: (!displaced).then(|| "native-35".into()),
                 vertex_count: triangle_count * 3,
-                procedural: authoritative && displaced,
-                non_opaque: authoritative && layout.has_alpha,
+                procedural: displaced,
+                non_opaque: layout.has_alpha,
                 vertex_stride: 12,
                 ..Default::default()
             });
-            generated.insert(
-                name,
-                if authoritative && displaced {
-                    bounds
-                } else {
-                    positions
-                },
-            );
+            generated.insert(name, if displaced { bounds } else { positions });
             cache.insert((root, vertex_offset), (index, base));
             index
         };
@@ -798,46 +682,24 @@ pub fn from_raw_with_layout(
             .iter()
             .map(|v| f64::from(f32::from_bits(*v)))
             .collect();
-        hardware_closest &= supports_closest(&m);
         placements.push(Instance {
             geometry,
             custom_index: id as u32,
             transform: [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14].map(|i| m[i] as f32),
         });
     }
-    let shader = source;
-    let wrapper = include_str!("../../hwrt-intersect.wgsl")
-        .replace(
-            "const MT_SOFTWARE_CLOSEST: bool = false;",
-            &format!("const MT_SOFTWARE_CLOSEST: bool = {};", !hardware_closest),
-        )
-        .replace(
-            "const MT_VALIDATE_SHADOWS: bool = false;",
-            &format!(
-                "const MT_VALIDATE_SHADOWS: bool = {};",
-                std::env::var("MUTRACER_NATIVE_VALIDATE_SHADOWS").as_deref() == Ok("1")
-            ),
-        );
     generated.insert(
         "native-hwrt-map".into(),
         mapping.iter().flat_map(|v| v.to_le_bytes()).collect(),
     );
-    generated.insert(
-        "native-hwrt-shader".into(),
-        if authoritative {
-            shader.into_bytes()
-        } else {
-            format!("enable wgpu_ray_query;\n{shader}\n{wrapper}").into_bytes()
-        },
-    );
+    generated.insert("native-hwrt-shader".into(), source);
     assets.extend(generated);
     Ok(Capture {
         eligible: true,
         indexed: false,
-        authoritative,
+        authoritative: true,
         reason: None,
         shader: Some("native-hwrt-shader".into()),
-        hardware_closest: authoritative || hardware_closest,
         geometries,
         instances: placements,
         triangle_map: Some("native-hwrt-map".into()),
@@ -904,7 +766,6 @@ fn from_indexed(assets: &mut HashMap<String, Vec<u8>>, layout: &NativeLayout) ->
         indexed: true,
         reason: None,
         shader: Some("native-33".into()),
-        hardware_closest: true,
         geometries,
         instances,
         triangle_map: Some("native-35".into()),

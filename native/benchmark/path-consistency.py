@@ -6,7 +6,7 @@ spec=importlib.util.spec_from_file_location('hit_consistency',Path(__file__).wit
 hc=importlib.util.module_from_spec(spec);spec.loader.exec_module(hc)
 EVENT=np.dtype([('hit',hc.HIT),('origin','<f4',(3,)),('flags','<u4'),('direction','<f4',(3,)),('previousRecord','<i4')])
 def analyze(directory, geometry=None, points=None):
- p=Path(directory);pair = hc.GeometryPair(p) if points is None and geometry is None and json.loads((p/'hardware/layout.json').read_text()).get('indexed',False) else None;points = points or hc.PackedGeometry(geometry or p/'software').points;sinfo=json.loads((p/'software/info.json').read_text());hinfo=json.loads((p/'hardware/info.json').read_text());assert sinfo['actualBackend']==0 and hinfo['actualBackend']==3
+ p=Path(directory);pair = hc.GeometryPair(p) if points is None and geometry is None and json.loads((p/'hardware/layout.json').read_text()).get('indexed',False) else None;points = points or hc.PackedGeometry(geometry or p/'software').points;sinfo=json.loads((p/'software/info.json').read_text());hinfo=json.loads((p/'hardware/info.json').read_text());assert sinfo['actualBackend']==0 and hinfo['actualBackend']==1
  headers=[np.fromfile(p/side/'headers.bin',dtype='<u4').reshape(-1,16) for side in ['software','hardware']]
  events=[np.fromfile(p/side/'events.bin',dtype=EVENT) for side in ['software','hardware']]
  counts=[a[:,0].astype(np.int64) for a in headers];offsets=[np.r_[0,np.cumsum(c)] for c in counts]
@@ -30,7 +30,7 @@ def analyze(directory, geometry=None, points=None):
    if counts[i][pixel]>step:
     event=events[i][offsets[i][pixel]+step];row[side]={**{k:event['hit'][k].tolist() for k in ['hit','instance','record','t','bary']},'origin':event['origin'].tolist(),'direction':event['direction'].tolist(),'flags':int(event['flags']),'previousRecord':int(event['previousRecord'])}
   examples.append(row)
- result={'pixels':n,'width':sinfo['width'],'height':sinfo['height'],'samples':1,'actualBackends':[0,3],
+ result={'pixels':n,'width':sinfo['width'],'height':sinfo['height'],'samples':1,'actualBackends':[0,1],
   'firstDifferenceCounts':{k:int(np.sum((codes==i)&~unpaired)) for i,k in enumerate(['agree','edge','tie','other'])},
   'unpairedAfterConsistentPrefix':int(unpaired.sum()),'softwareQueries':len(events[0]),'hardwareQueries':len(events[1]),'maxQueriesPerPixel':[int(c.max()) for c in counts],
   'firstDifferenceRayMaxAbsDelta':float(ray_delta.max()),'querySteps':steps,'otherOrUnpairedExamples':examples,

@@ -4,21 +4,19 @@ use super::*;
 use std::io::{BufWriter, Write};
 
 pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
-    if ![0, 3].contains(&backend) {
-        return Err("Path diagnostic backend must be software=0 or authoritative HWRT=3".into());
+    if ![0, 1].contains(&backend) {
+        return Err("Path diagnostic backend must be software=0 or authoritative HWRT=1".into());
     }
     let _entry = ENTRY_LOCK.try_lock().map_err(|_| "Native core is active")?;
     context::check_owner()?;
-    let (mut scene, mut assets) = if backend == 3 {
+    let (mut scene, mut assets) = if backend == 1 {
         scene::prepare_hardware(input)?
     } else {
         scene::prepare_diagnostic(input, false)?
     };
     hit_diagnostics::write_geometry_snapshot(&scene, &assets, output)?;
-    let mut capture = hardware::from_raw_with_layout(
+    let mut capture = hardware::capture_from_prepared(
         &mut assets,
-        0,
-        true,
         scene
             .native_layout
             .as_ref()
@@ -60,14 +58,14 @@ pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
         });
     }
     let gpu = GpuDevice::with_backend(backend)?;
-    if backend == 3 && !gpu.hardware_ray_query {
+    if backend == 1 && !gpu.hardware_ray_query {
         return Err("Path diagnostic requires actual HWRT".into());
     }
     let state = GpuScene::new(
         Path::new(""),
         scene,
         &RenderOptions {
-            flags: if backend == 3 { 4 } else { 0 },
+            flags: if backend == 1 { 4 } else { 0 },
             ..Default::default()
         },
         Some(&assets),

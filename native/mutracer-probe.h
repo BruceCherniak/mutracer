@@ -18,9 +18,7 @@ int32_t mt_probe_render(const char *scene_directory, const char *output_director
 /* All fields must be initialized. sizeof(struct) is currently 52 bytes.
  * flags: bit 0 applies world-space camera translation (orientation/lens fixed);
  * bit 1 patches one existing material's linear RGB base color and roughness.
- * bit 2 selects experimental hybrid HWRT shadows and eligible closest hits.
- * Affine-instance scenes keep software closest hit; conservative fallbacks remain.
- * Forced HWRT fails if the adapter or capture is unsupported; flags=0 retains software BVH.
+ * Prepared replay uses software traversal; use raw contexts for HWRT.
  * Material values must be in 0..1. Patches cannot enable new shader variants.
  * samples=0 uses capture default; seed/bounces always apply (defaults 12345/6).
  * Options affect only this render; the capture files are never modified.

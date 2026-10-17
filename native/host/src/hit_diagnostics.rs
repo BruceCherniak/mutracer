@@ -78,7 +78,7 @@ fn run_side(input: &[u8], output: &Path, hardware: bool) -> Result<()> {
         .native_layout
         .as_ref()
         .ok_or("Missing native layout")?;
-    let mut capture = hardware::from_raw_with_layout(&mut assets, 0, true, layout)?;
+    let mut capture = hardware::capture_from_prepared(&mut assets, layout)?;
     if std::env::var_os("MUTRACER_NATIVE_HIT_INPUTS").is_some_and(|v| v == "1") {
         fs::create_dir_all(output)?;
         fs::write(
@@ -123,7 +123,7 @@ fn run_side(input: &[u8], output: &Path, hardware: bool) -> Result<()> {
     scene.hwrt = Some(capture);
     scene.entry_point = "diagnoseHits".into();
     scene.shader = "native-39".into();
-    let gpu = GpuDevice::with_backend(3)?;
+    let gpu = GpuDevice::with_backend(1)?;
     if !gpu.hardware_ray_query {
         return Err("Diagnostic requires actual HWRT".into());
     }
@@ -161,7 +161,7 @@ fn run_side(input: &[u8], output: &Path, hardware: bool) -> Result<()> {
         output.join("info.json"),
         serde_json::to_vec_pretty(&json!({
             "width":state.scene.width,"height":state.scene.height,"samples":1,"sampleIndex":0,"seed":12345,
-            "actualBackend":3,"adapter":state.gpu.info.name,"recordBytes":32,
+            "actualBackend":1,"adapter":state.gpu.info.name,"recordBytes":32,
             "recordLayout":"u32 hit, i32 instance, i32 record, f32 t, f32 barycentric[3], f32 reserved",
             "orientation":"bottom row first","raysSecondVector":"direction.z, local normal dot direction, wanted confirmed, candidate count; direction.x in hit reserved; direction.y in origin.w","primaryAlpha":"first geometric hit, prior to integrator coverage"
         }))?,

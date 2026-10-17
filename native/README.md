@@ -92,7 +92,7 @@ Use `mt_context_update_transform` to replace a mesh world matrix or a single
 instance's local matrix without re-uploading vertices or textures. A mesh world
 edit also moves all instances in its batch. Lighting and shadow placement follow
 the new transform. Updates restart accumulation and reject active jobs. Resource
-size, traversal stack or hardware closest-hit eligibility changes require a full
+size or traversal stack changes require a full
 commit; validation rejection preserves the scene and samples. Cost grows with
 instance and BLAS data and emissive triangles. See
 [the context header](./mutracer-context.h) for the 80-byte record and lifetime rules.
@@ -137,19 +137,16 @@ Update cost grows with the number of lights and emissive triangles. The
 
 ## Intersection backend
 
-`mt_context_create` keeps software BVH traversal. Use
-`mt_context_create_with_backend` with 0 for software, 1 for automatic selection
-or 2 to require hardware queries. Query `mt_context_backend` after committing to
-find the active path and fallback reason. Automatic selection falls back when
-hardware or the scene is unsupported; forced hardware returns an error and
-preserves the previous committed scene.
+`mt_context_create` defaults to HWRT. `mt_context_create_with_backend` accepts
+0 for Software and 1 for HWRT. Query `mt_context_backend` after committing to
+verify the actual path. Unsupported devices and acceleration-structure limits
+or allocation failures fall back to software and report the reason.
 
-HWRT currently accepts opaque scenes in raw descriptor versions 1 and 2.
-Alpha materials, bevel, empty scenes and all version-3 descriptors use software.
-Nonuniform scale, reflection or shear uses hardware shadows with software
-closest-hit traversal; other eligible scenes use hardware closest-hit and
-shadows with conservative software fallbacks. Hardware acceleration structures
-add build time and memory use; a speedup is not guaranteed.
+HWRT supports alpha materials, bevel, displacement and general affine instances.
+Displacement uses hardware AABBs with procedural intersection. The backend status
+reports how many geometries use a software BVH; currently this is zero. Hardware
+acceleration structures add build time and memory use; a speedup depends on the
+scene and hardware.
 
 ## Render with polling and cancellation
 
@@ -260,12 +257,7 @@ without Node. [mutracer-probe.h](./mutracer-probe.h) describes camera translatio
 base-color/roughness edits, seed and bounce options. Each call starts from the
 prepared scene; edits do not persist or enable new material variants.
 
-Set `mt_probe_options.flags = 4` to require experimental hybrid HWRT. Unsupported
-adapters or captures return an error; flags 0 selects software traversal. HWRT
-requires opaque BVH2 geometry with no displacement or shader bevel. Scenes with
-nonuniform scale, reflection or shear use software closest-hit traversal and
-hardware shadows because broader closest-hit parity remains unresolved.
-Diagnostic overhead and software fallbacks apply; no speedup is claimed.
+Prepared replay uses software traversal. Use the raw-scene context API for HWRT.
 
 Output formats match the raw-scene probe. Render interfaces share one owner
 thread; each denoiser uses its creating thread. The replay probe rebuilds each

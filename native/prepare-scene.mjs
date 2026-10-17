@@ -3,7 +3,6 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mat4 } from 'gl-matrix';
 import { CaptureDevice, installWebGPUConstants } from './capture-device.mjs';
-import { prepareHardwareCapture } from './prepare-hwrt.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const output = resolve(root, process.env.MUTRACER_NATIVE_OUTPUT ?? '.native-build', 'scene');
@@ -126,11 +125,5 @@ if (!pass._hasDisplacement && prepared.blases.every(({ bvh }) => bvh.builder ===
   };
 }
 manifest.sampling = { maxSamples: 64, pattern: 'sobol' };
-try {
-  manifest.hwrt = prepareHardwareCapture(pass, save, pipeline.descriptor.compute.module.descriptor.code);
-} catch (error) {
-  manifest.hwrt = { eligible: false, reason: String(error.message ?? error) };
-  console.warn(`HWRT capture deferred: ${manifest.hwrt.reason}. Software capture remains available.`);
-}
 save('scene.json', JSON.stringify(manifest, null, 2) + '\n');
 console.log(`Prepared ${output}: ${buffers.length} buffers, ${textures.length} textures, ${bindGroups.length} groups`);

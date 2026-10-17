@@ -44,9 +44,15 @@ int main(int argc,char **argv) {
   uint32_t *words=(uint32_t*)input;size_t size=(size_t)words[2]*words[3]*16;
   unsigned char *pixels=malloc(size),*other=malloc(size),*reference=malloc(size);if(!pixels||!other||!reference)return 2;
   mt_context a=0,b=0,c=0;mt_context_info_v1 info={.struct_size=sizeof(info)};
+  BAD(mt_context_create_with_backend(2,&c,error,sizeof(error)));REQUIRE(c==0);
+  BAD(mt_context_create_with_backend(3,&c,error,sizeof(error)));REQUIRE(c==0);
+  OK(mt_context_create(&c,error,sizeof(error)));OK(mt_context_commit(c,input,length,error,sizeof(error)));
+  uint32_t actual=99;char reason[256];OK(mt_context_backend(c,&actual,reason,sizeof(reason),error,sizeof(error)));
+  REQUIRE(actual<=1);REQUIRE(reason[0]!=0); /* HWRT reports software-BVH count; fallback reports cause. */
+  OK(mt_context_destroy(c,error,sizeof(error)));c=0;
   BAD(mt_context_info(0,&info,error,sizeof(error)));
-  BAD(mt_context_create(NULL,error,sizeof(error)));
-  OK(mt_context_create(&a,error,sizeof(error)));OK(mt_context_create(&b,error,sizeof(error)));REQUIRE(a!=b&&a&&b);
+  BAD(mt_context_create_with_backend(0,NULL,error,sizeof(error)));
+  OK(mt_context_create_with_backend(0,&a,error,sizeof(error)));OK(mt_context_create_with_backend(0,&b,error,sizeof(error)));REQUIRE(a!=b&&a&&b);
   OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.state==0&&info.samples==0&&info.version==1);
   BAD(mt_context_render(a,1,error,sizeof(error)));BAD(mt_context_reset(a,error,sizeof(error)));
   size_t written=999;BAD(mt_context_read_pixels(a,0,NULL,0,&written,error,sizeof(error)));REQUIRE(written==0);
@@ -109,7 +115,7 @@ int main(int argc,char **argv) {
   REQUIRE(pthread_join(thread,&thread_result)==0);REQUIRE((uintptr_t)thread_result==1);
   OK(read_image(b,0,pixels,size));REQUIRE(memcmp(pixels,other,size)==0);
   OK(mt_context_destroy(a,error,sizeof(error)));BAD(mt_context_destroy(a,error,sizeof(error)));
-  BAD(mt_context_info(a,&info,error,sizeof(error)));OK(mt_context_create(&c,error,sizeof(error)));REQUIRE(c!=a&&c!=b);
+  BAD(mt_context_info(a,&info,error,sizeof(error)));OK(mt_context_create_with_backend(0,&c,error,sizeof(error)));REQUIRE(c!=a&&c!=b);
   BAD(mt_context_info(a,&info,error,sizeof(error)));OK(mt_context_destroy(c,error,sizeof(error)));
   OK(read_image(b,0,pixels,size));REQUIRE(memcmp(pixels,other,size)==0);OK(mt_context_destroy(b,error,sizeof(error)));
   free(input);free(pixels);free(other);free(reference);printf("PASS %u context checks\n",checks);return 0;
