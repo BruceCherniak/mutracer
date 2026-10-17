@@ -53,7 +53,7 @@ int32_t mt_context_create_with_backend(uint32_t backend, mt_context *output, cha
 /* active: 0=software, 1=HWRT. Call after commit to verify the actual path.
  * reason is caller-owned UTF-8 storage (capacity>=1), always NUL terminated.
  * For HWRT it reports the number of geometries using a software BVH (currently
- * zero: displacement uses hardware AABBs). For fallback it explains the cause.
+ * zero). For fallback it explains the cause.
  */
 int32_t mt_context_backend(mt_context handle, uint32_t *active, char *reason, size_t reason_capacity, char *error, size_t capacity);
 int32_t mt_context_create(mt_context *output, char *error, size_t capacity);

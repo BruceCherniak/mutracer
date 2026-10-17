@@ -1,5 +1,5 @@
 use serde::Deserialize;
-use std::{collections::HashMap, fs, path::Path, time::Duration};
+use std::{borrow::Cow, collections::HashMap, fs, path::Path, time::Duration};
 use wgpu::util::DeviceExt;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -130,14 +130,14 @@ pub fn prepare_reusing(
     _buffers: Option<&HashMap<usize, wgpu::Buffer>>,
     reusable: Option<&HashMap<String, wgpu::Buffer>>,
 ) -> Result<Resources> {
-    let read = |name: &str| -> Result<Vec<u8>> {
+    let read = |name: &str| -> Result<Cow<'_, [u8]>> {
         if let Some(assets) = assets {
             return assets
                 .get(name)
-                .cloned()
+                .map(|bytes| Cow::Borrowed(bytes.as_slice()))
                 .ok_or_else(|| format!("Missing HWRT resource {name}").into());
         }
-        Ok(fs::read(directory.join(name))?)
+        Ok(Cow::Owned(fs::read(directory.join(name))?))
     };
     if !capture.eligible {
         return Err(capture
@@ -218,9 +218,9 @@ pub fn prepare_reusing(
     let mut sizes = Vec::new();
     let mut indices = Vec::new();
     let mut blases = Vec::new();
-    for geometry in &capture.geometries {
+    for (geometry_id, geometry) in capture.geometries.iter().enumerate() {
         let data = if capture.indexed {
-            Vec::new()
+            Cow::Borrowed(&[] as &[u8])
         } else {
             read(&geometry.positions)?
         };
@@ -265,7 +265,7 @@ pub fn prepare_reusing(
                         return Err("HWRT explicit index buffer is too short".into());
                     }
                     Ok(upload(
-                        name,
+                        &format!("geometry-{geometry_id}:{name}:indices"),
                         &data[..geometry.vertex_count as usize * 4],
                         wgpu::BufferUsages::BLAS_INPUT,
                     ))
@@ -825,4 +825,107 @@ pub fn isolate_diagnostic(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn retired_indices_are_reused_for_every_geometry_size() {
+        let Ok(gpu) = crate::GpuDevice::with_backend(1) else {
+            return;
+        };
+        if !gpu.hardware_ray_query {
+            return;
+        }
+        let mut assets = HashMap::new();
+        let triangle = [-1f32, 0., 0., 1., 0., 0., 0., 1., 0.];
+        assets.insert(
+            "a".into(),
+            triangle.iter().flat_map(|v| v.to_le_bytes()).collect(),
+        );
+        assets.insert(
+            "b".into(),
+            triangle
+                .repeat(2)
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect(),
+        );
+        assets.insert(
+            "indices".into(),
+            (0..6u32).flat_map(u32::to_le_bytes).collect(),
+        );
+        assets.insert(
+            "map".into(),
+            [2u32, 3, 10, 11, 12]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect(),
+        );
+        let capture = Capture {
+            eligible: true,
+            authoritative: true,
+            indexed: false,
+            reason: None,
+            shader: None,
+            triangle_map: Some("map".into()),
+            geometries: [3, 6]
+                .into_iter()
+                .enumerate()
+                .map(|(i, count)| Geometry {
+                    positions: if i == 0 { "a" } else { "b" }.into(),
+                    indices: Some("indices".into()),
+                    vertex_count: count,
+                    vertex_stride: 12,
+                    ..Default::default()
+                })
+                .collect(),
+            instances: (0..2)
+                .map(|geometry| Instance {
+                    geometry,
+                    custom_index: geometry as u32,
+                    transform: [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0.],
+                })
+                .collect(),
+        };
+        let first = prepare(
+            &gpu.device,
+            &gpu.queue,
+            Path::new(""),
+            &capture,
+            Some(&assets),
+            None,
+        )
+        .unwrap();
+        gpu.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(30)),
+            })
+            .unwrap();
+        let second = prepare_reusing(
+            &gpu.device,
+            &gpu.queue,
+            Path::new(""),
+            &capture,
+            Some(&assets),
+            None,
+            Some(&first.inputs),
+        )
+        .unwrap();
+        gpu.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(30)),
+            })
+            .unwrap();
+        // Both BLASes read the same source index array, with different lengths.
+        // A cache keyed only by that source name loses one of these buffers.
+        for i in 0..2 {
+            assert_eq!(first._indices[i], second._indices[i]);
+            assert_eq!(first._vertices[i], second._vertices[i]);
+        }
+        assert_eq!(first.mapping, second.mapping);
+    }
 }

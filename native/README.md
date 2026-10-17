@@ -143,9 +143,9 @@ verify the actual path. Unsupported devices and acceleration-structure limits
 or allocation failures fall back to software and report the reason.
 
 HWRT supports alpha materials, bevel, displacement and general affine instances.
-Displacement uses hardware AABBs with procedural intersection. The backend status
-reports how many geometries use a software BVH; currently this is zero. Hardware
-acceleration structures add build time and memory use; a speedup depends on the
+The backend status reports how many geometries use a software BVH; currently
+this is zero. Hardware acceleration structures add build time and memory use; a
+speedup depends on the
 scene and hardware.
 
 ## Render with polling and cancellation

@@ -3,6 +3,7 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
+    borrow::Cow,
     collections::HashMap,
     ffi::{CStr, c_char},
     fs,
@@ -486,14 +487,14 @@ impl GpuScene {
         reusable: Option<&HashMap<usize, wgpu::Buffer>>,
         reusable_hw: Option<&HashMap<String, wgpu::Buffer>>,
     ) -> Result<Self> {
-        let read = |name: &str| -> Result<Vec<u8>> {
+        let read = |name: &str| -> Result<Cow<'_, [u8]>> {
             if let Some(assets) = assets {
                 return assets
                     .get(name)
-                    .cloned()
+                    .map(|bytes| Cow::Borrowed(bytes.as_slice()))
                     .ok_or_else(|| format!("Missing native resource {name}").into());
             }
-            Ok(fs::read(scene_dir.join(name))?)
+            Ok(Cow::Owned(fs::read(scene_dir.join(name))?))
         };
         if scene.format != 1 || scene.width == 0 || scene.height == 0 {
             return Err("Invalid capture".into());
@@ -534,11 +535,13 @@ impl GpuScene {
                 .as_ref()
                 .is_some_and(|capture| capture.buffer == buffer.id)
             {
-                native_bvh
-                    .as_ref()
-                    .ok_or("Missing native BVH result")?
-                    .0
-                    .clone()
+                Cow::Borrowed(
+                    native_bvh
+                        .as_ref()
+                        .ok_or("Missing native BVH result")?
+                        .0
+                        .as_slice(),
+                )
             } else {
                 read(&buffer.file)?
             };
@@ -735,17 +738,20 @@ impl GpuScene {
         } else {
             None
         };
-        let source = String::from_utf8(read(if use_hwrt {
-            scene
-                .hwrt
-                .as_ref()
-                .unwrap()
-                .shader
-                .as_ref()
-                .ok_or("Missing HWRT shader")?
-        } else {
-            &scene.shader
-        })?)?;
+        let source = String::from_utf8(
+            read(if use_hwrt {
+                scene
+                    .hwrt
+                    .as_ref()
+                    .unwrap()
+                    .shader
+                    .as_ref()
+                    .ok_or("Missing HWRT shader")?
+            } else {
+                &scene.shader
+            })?
+            .into_owned(),
+        )?;
         let key = PipelineKey {
             source,
             entry: scene.entry_point.clone(),
