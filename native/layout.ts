@@ -144,6 +144,10 @@ export const PACKET_ENTRY = {
   "BYTE_OFFSET": 7,
   "WORDS": 8
 } as const;
+export const VERSION = {
+  "SCENE": 4,
+  "RESOURCE_PACKET": 1
+} as const;
 export const RESOURCE = {
   "BVH": 1,
   "INSTANCES": 2,

@@ -91,7 +91,7 @@ int main(int argc,char **argv) {
   BAD(mt_context_read_pixels(a,0,NULL,size,&written,error,sizeof(error)));
   OK(read_image(a,0,reference,size));
   uint32_t version=words[0];words[0]=99;BAD(mt_context_commit(a,input,length,error,sizeof(error)));words[0]=version;
-  if(version==3&&words[words[12]+10]){
+  if(words[words[12]+10]){
     uint32_t offset=words[words[12]+9],saved=words[offset];words[offset]=0;
     BAD(mt_context_commit(a,input,length,error,sizeof(error)));words[offset]=saved;
   }
@@ -106,7 +106,7 @@ int main(int argc,char **argv) {
   OK(mt_context_commit(b,input,length,error,sizeof(error)));words[camera_x]=saved_x;
   OK(mt_context_info(b,&info,error,sizeof(error)));REQUIRE(info.samples==0);
   OK(mt_context_render(b,samples,error,sizeof(error)));OK(read_image(b,0,other,size));
-  int empty=version>=2&&words[23]!=0;
+  int empty=words[23]!=0;
   if(empty)for(uint32_t i=0;i<words[5];i++)if(words[words[23]+i*4]!=0)empty=0;
   if(!empty)REQUIRE(memcmp(other,reference,size)!=0);
   OK(read_image(a,0,pixels,size));REQUIRE(memcmp(pixels,reference,size)==0);

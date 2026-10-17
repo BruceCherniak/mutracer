@@ -144,6 +144,10 @@ pub mod packet_entry {
     pub const BYTE_OFFSET: usize = 7;
     pub const WORDS: usize = 8;
 }
+pub mod version {
+    pub const SCENE: usize = 4;
+    pub const RESOURCE_PACKET: usize = 1;
+}
 pub mod resource {
     pub const BVH: usize = 1;
     pub const INSTANCES: usize = 2;

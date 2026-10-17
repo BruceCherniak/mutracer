@@ -32,7 +32,7 @@ export async function referenceScene(bytes, sourceRoot) {
             emissionLuminance: f[o + 10], coatWeight: f[o + 11], coatRoughness: f[o + 12], geometryOpacity: f[o + 13], geometryThinWalled: !!u[o + 14] });
         for (const [k, name] of [[15, 'map'], [16, 'normalMap'], [17, 'metallicRoughnessMap'], [18, 'emissiveMap']])
             m[name] = u[o + k] === 0xffffffff ? undefined : textures[u[o + k]];
-        if (u[0] >= 2) for (let i = 0; i < u[o + 19]; i++) {
+        for (let i = 0; i < u[o + 19]; i++) {
             const entry = u[o + 20] + i * 4, field = materialProperties.find(p => p.id === u[entry]);
             if (!field || !field.supported) throw new Error('Unsupported property in reference');
             m[field.key] = field.type === 'float' ? f[entry + 1] : field.type === 'color' ? Array.from(f.slice(entry + 1, entry + 4)) :
@@ -46,17 +46,17 @@ export async function referenceScene(bytes, sourceRoot) {
         for (const [k, name, stride] of [[4, 'normal', 3], [5, 'uv', 2], [6, 'uv1', 2]])
             if (u[o + k])
                 g[name] = new Attribute(f.slice(u[o + k], u[o + k] + n * stride), stride);
-        if (u[0] >= 2) {
-            if (u[o + 7]) g.color = new Attribute(f.slice(u[o + 7], u[o + 7] + n * 3), 3);
-            if (u[o + 8]) g.tangent = new Attribute(f.slice(u[o + 8], u[o + 8] + n * 4), 4);
-            if (u[o + 9]) g.materialIndex = new Attribute(new Int32Array(u.slice(u[o + 9], u[o + 9] + n)), 1);
-        }
+
+        if (u[o + 7]) g.color = new Attribute(f.slice(u[o + 7], u[o + 7] + n * 3), 3);
+        if (u[o + 8]) g.tangent = new Attribute(f.slice(u[o + 8], u[o + 8] + n * 4), 4);
+        if (u[o + 9]) g.materialIndex = new Attribute(new Int32Array(u.slice(u[o + 9], u[o + 9] + n)), 1);
+
         geometries.push(g);
     }
     for (let i = 0; i < u[5]; i++) {
         const o = u[10] + i * 20;
-        const material = u[0] >= 2 && u[o + 3] ? Array.from(u.slice(u[o + 2], u[o + 2] + u[o + 3]), id => materials[id]) : materials[u[o + 1]];
-        const io = u[0] >= 2 && u[23] ? u[23] + i * 4 : 0;
+        const material = u[o + 3] ? Array.from(u.slice(u[o + 2], u[o + 2] + u[o + 3]), id => materials[id]) : materials[u[o + 1]];
+        const io = u[23] ? u[23] + i * 4 : 0;
         const m = io && u[io] !== 0xffffffff ? new InstancedMesh(geometries[u[o]], material, {count:u[io],
             transforms:f.slice(u[io + 1],u[io + 1]+u[io]*16),colors:u[io+2]?f.slice(u[io+2],u[io+2]+u[io]*3):undefined}) : new Mesh(geometries[u[o]], material);
         m.transform = f.slice(o + 4, o + 20);
@@ -64,8 +64,8 @@ export async function referenceScene(bytes, sourceRoot) {
     }
     for (let i = 0; i < u[7]; i++) {
         const o = u[12] + i * 28, type = u[o], light = type === 0 ? new Rect({ size: [f[o + 5], f[o + 6]], spread: f[o + 7] }) : type === 1 ? new Sphere({ radius: f[o + 5] }) : type === 2 ? new Directional() : new Spot({ radius: f[o + 5], innerAngle: f[o + 6], outerAngle: f[o + 7] });
-        if (u[0] === 3 && type === 0 && u[o + 8]) light.texture = textures[u[o + 8] - 1];
-        if (u[0] === 3 && type === 3 && u[o + 10]) {
+        if (type === 0 && u[o + 8]) light.texture = textures[u[o + 8] - 1];
+        if (type === 3 && u[o + 10]) {
             const key = `${u[o + 9]}:${u[o + 10]}`;
             if (!profiles.has(key)) profiles.set(key, parseIESProfile(new TextDecoder().decode(bytes.subarray(u[o + 9] * 4, u[o + 9] * 4 + u[o + 10])), 'native scene'));
             light.iesProfile = profiles.get(key);
@@ -86,10 +86,10 @@ export async function referenceScene(bytes, sourceRoot) {
     pass.setSize(u[2], u[3]);
     pass.setCamera(camera);
     pass.setMeshes(meshes);
-    if (u[0] >= 2 && u[20]) lights.push(new Environment({map: textures[u[20] - 1]}));
+    if (u[20]) lights.push(new Environment({map: textures[u[20] - 1]}));
     pass.setLights(lights);
-    const flags = u[0] >= 2 ? u[22] : 0;
-    pass.setBackground(flags & 4 ? undefined : u[0] >= 2 && u[21] ? textures[u[21] - 1] : Array.from(f.slice(16, 20)));
+    const flags = u[22];
+    pass.setBackground(flags & 4 ? undefined : u[21] ? textures[u[21] - 1] : Array.from(f.slice(16, 20)));
     pass.setQuality({ bounces: 6, bevel: !!(flags & 1), dispersionWavelengths: flags & 2 ? 3 : 1, directLightCandidates: 2 });
     pass.setTransmissiveOutputAlphaMin(1);
     pass.setSamplingPattern('sobol', 64, 12345);

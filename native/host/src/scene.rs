@@ -144,7 +144,7 @@ fn validate(bytes: &[u8]) -> Result<()> {
         return Err("Invalid scene byte length".into());
     }
     let w = Words(bytes);
-    if ![1, 2, 3].contains(&w.u(h::VERSION)) || w.u(h::LENGTH) != w.len() {
+    if w.u(h::VERSION) != layout::version::SCENE || w.u(h::LENGTH) != w.len() {
         return Err("Scene descriptor version/length mismatch".into());
     }
     if w.u(h::WIDTH) == 0
@@ -176,30 +176,28 @@ fn validate(bytes: &[u8]) -> Result<()> {
         w.span(w.u(offset), w.u(count) * stride)?;
     }
     w.reserved(h::RESERVED, 1)?;
-    if w.u(h::VERSION) == 1 {
-        w.reserved(h::ENVIRONMENT_TEXTURE, h::WORDS - h::ENVIRONMENT_TEXTURE)?;
-    } else {
-        w.reserved(h::RESERVED_TAIL, h::WORDS - h::RESERVED_TAIL)?;
-        if w.u(h::BATCH_OFFSET) != 0 {
-            w.span(w.u(h::BATCH_OFFSET), w.u(h::MESH_COUNT) * b::WORDS)?;
+
+    w.reserved(h::RESERVED_TAIL, h::WORDS - h::RESERVED_TAIL)?;
+    if w.u(h::BATCH_OFFSET) != 0 {
+        w.span(w.u(h::BATCH_OFFSET), w.u(h::MESH_COUNT) * b::WORDS)?;
+    }
+    if w.u(h::QUALITY_FLAGS) & !7 != 0
+        || w.u(h::QUALITY_FLAGS) & 4 != 0 && w.u(h::BACKGROUND_TEXTURE) != 0
+    {
+        return Err("Unknown/incompatible scene quality flags".into());
+    }
+    for field in [h::ENVIRONMENT_TEXTURE, h::BACKGROUND_TEXTURE] {
+        let reference = w.u(field);
+        if reference > w.u(h::TEXTURE_COUNT) {
+            return Err("Environment/background texture reference is out of range".into());
         }
-        if w.u(h::QUALITY_FLAGS) & !7 != 0
-            || w.u(h::QUALITY_FLAGS) & 4 != 0 && w.u(h::BACKGROUND_TEXTURE) != 0
+        if reference != 0
+            && w.u(w.u(h::TEXTURE_OFFSET) + (reference - 1) * t::WORDS + t::STORAGE) != 1
         {
-            return Err("Unknown/incompatible scene quality flags".into());
-        }
-        for field in [h::ENVIRONMENT_TEXTURE, h::BACKGROUND_TEXTURE] {
-            let reference = w.u(field);
-            if reference > w.u(h::TEXTURE_COUNT) {
-                return Err("Environment/background texture reference is out of range".into());
-            }
-            if reference != 0
-                && w.u(w.u(h::TEXTURE_OFFSET) + (reference - 1) * t::WORDS + t::STORAGE) != 1
-            {
-                return Err("Environment/background requires linear RGBA32F".into());
-            }
+            return Err("Environment/background requires linear RGBA32F".into());
         }
     }
+
     w.finite(h::BACKGROUND_COLOR, 4)?;
     let mut geometry_words = 0usize;
     let mut geometry_costs = Vec::new();
@@ -227,20 +225,17 @@ fn validate(bytes: &[u8]) -> Result<()> {
                 w.finite(w.u(o + field), v * stride)?;
             }
         }
-        if w.u(h::VERSION) == 1 {
-            w.reserved(o + g::COLOR, 5)?;
-        } else {
-            for (field, stride) in [(g::COLOR, 3), (g::TANGENT, 4)] {
-                if w.u(o + field) != 0 {
-                    w.span(w.u(o + field), v * stride)?;
-                    w.finite(w.u(o + field), v * stride)?;
-                }
+
+        for (field, stride) in [(g::COLOR, 3), (g::TANGENT, 4)] {
+            if w.u(o + field) != 0 {
+                w.span(w.u(o + field), v * stride)?;
+                w.finite(w.u(o + field), v * stride)?;
             }
-            if w.u(o + g::MATERIAL_INDEX) != 0 {
-                w.span(w.u(o + g::MATERIAL_INDEX), v)?;
-            }
-            w.reserved(o + g::RESERVED, 2)?;
         }
+        if w.u(o + g::MATERIAL_INDEX) != 0 {
+            w.span(w.u(o + g::MATERIAL_INDEX), v)?;
+        }
+        w.reserved(o + g::RESERVED, 2)?;
     }
     let mut expanded_instances = 0usize;
     for i in 0..w.u(h::MESH_COUNT) {
@@ -251,27 +246,24 @@ fn validate(bytes: &[u8]) -> Result<()> {
             return Err("Mesh geometry/material reference is out of range".into());
         }
         let material_count;
-        if w.u(h::VERSION) == 1 {
-            w.reserved(o + m::MATERIAL_TABLE, 2)?;
-            material_count = 1;
-        } else {
-            material_count = w.u(o + m::MATERIAL_COUNT).max(1);
-            if w.u(o + m::MATERIAL_COUNT) > 65536
-                || w.u(o + m::MATERIAL_COUNT) == 0 && w.u(o + m::MATERIAL_TABLE) != 0
+
+        material_count = w.u(o + m::MATERIAL_COUNT).max(1);
+        if w.u(o + m::MATERIAL_COUNT) > 65536
+            || w.u(o + m::MATERIAL_COUNT) == 0 && w.u(o + m::MATERIAL_TABLE) != 0
+        {
+            return Err("Invalid mesh material table".into());
+        }
+        if w.u(o + m::MATERIAL_COUNT) != 0 {
+            w.span(w.u(o + m::MATERIAL_TABLE), w.u(o + m::MATERIAL_COUNT))?;
+            if (0..w.u(o + m::MATERIAL_COUNT))
+                .any(|k| w.u(w.u(o + m::MATERIAL_TABLE) + k) >= w.u(h::MATERIAL_COUNT))
             {
-                return Err("Invalid mesh material table".into());
-            }
-            if w.u(o + m::MATERIAL_COUNT) != 0 {
-                w.span(w.u(o + m::MATERIAL_TABLE), w.u(o + m::MATERIAL_COUNT))?;
-                if (0..w.u(o + m::MATERIAL_COUNT))
-                    .any(|k| w.u(w.u(o + m::MATERIAL_TABLE) + k) >= w.u(h::MATERIAL_COUNT))
-                {
-                    return Err("Mesh material table reference is out of range".into());
-                }
+                return Err("Mesh material table reference is out of range".into());
             }
         }
+
         let geometry = w.u(h::GEOMETRY_OFFSET) + w.u(o + m::GEOMETRY) * g::WORDS;
-        if w.u(h::VERSION) >= 2 && w.u(geometry + g::MATERIAL_INDEX) != 0 {
+        if w.u(geometry + g::MATERIAL_INDEX) != 0 {
             if (0..w.u(geometry + g::VERTEX_COUNT))
                 .any(|k| w.u(w.u(geometry + g::MATERIAL_INDEX) + k) >= material_count)
             {
@@ -283,7 +275,7 @@ fn validate(bytes: &[u8]) -> Result<()> {
             }
         }
         let mut instance_count = 1;
-        if w.u(h::VERSION) >= 2 && w.u(h::BATCH_OFFSET) != 0 {
+        if w.u(h::BATCH_OFFSET) != 0 {
             let io = w.u(h::BATCH_OFFSET) + i * b::WORDS;
             w.reserved(io + b::RESERVED, 1)?;
             if w.u(io + b::COUNT) == u32::MAX as usize {
@@ -349,59 +341,57 @@ fn validate(bytes: &[u8]) -> Result<()> {
                 return Err("Material texture reference is out of range".into());
             }
         }
-        if w.u(h::VERSION) == 1 {
-            w.reserved(o + mat::EXTENSION_COUNT, 5)?;
-        } else {
-            w.reserved(o + mat::RESERVED, 3)?;
-            let count = w.u(o + mat::EXTENSION_COUNT);
-            let offset = w.u(o + mat::EXTENSION_OFFSET);
-            if count > 75 || count == 0 && offset != 0 {
-                return Err("Invalid material extension count/offset".into());
+
+        w.reserved(o + mat::RESERVED, 3)?;
+        let count = w.u(o + mat::EXTENSION_COUNT);
+        let offset = w.u(o + mat::EXTENSION_OFFSET);
+        if count > 75 || count == 0 && offset != 0 {
+            return Err("Invalid material extension count/offset".into());
+        }
+        if count != 0 {
+            w.span(offset, count * ext::WORDS)?;
+        }
+        let mut seen = [false; 76];
+        for i in 0..count {
+            let entry = offset + i * ext::WORDS;
+            let id = w.u(entry + ext::ID);
+            let &(kind, variants) = material_properties::MATERIAL_PROPERTIES
+                .get(id)
+                .ok_or("Unknown material property ID")?;
+            if kind == 6 || seen[id] {
+                return Err("Unsupported or duplicate material property".into());
             }
-            if count != 0 {
-                w.span(offset, count * ext::WORDS)?;
+            seen[id] = true;
+            match id {
+                57 => disp.2 = w.u(entry + ext::X),
+                58 => disp.3 = w.f(entry + ext::X),
+                59 => disp.0 = w.u(entry + ext::X),
+                60 => disp.1 = w.f(entry + ext::X),
+                61 => disp.4 = w.f(entry + ext::X),
+                _ => {}
             }
-            let mut seen = [false; 76];
-            for i in 0..count {
-                let entry = offset + i * ext::WORDS;
-                let id = w.u(entry + ext::ID);
-                let &(kind, variants) = material_properties::MATERIAL_PROPERTIES
-                    .get(id)
-                    .ok_or("Unknown material property ID")?;
-                if kind == 6 || seen[id] || w.u(h::VERSION) < 3 && (57..=61).contains(&id) {
-                    return Err("Unsupported or duplicate material property".into());
-                }
-                seen[id] = true;
-                match id {
-                    57 => disp.2 = w.u(entry + ext::X),
-                    58 => disp.3 = w.f(entry + ext::X),
-                    59 => disp.0 = w.u(entry + ext::X),
-                    60 => disp.1 = w.f(entry + ext::X),
-                    61 => disp.4 = w.f(entry + ext::X),
-                    _ => {}
-                }
-                let components = if kind == 1 {
-                    3
-                } else if kind == 2 {
-                    2
-                } else {
-                    1
-                };
-                w.reserved(entry + ext::X + components, 3 - components)?;
-                if kind <= 2 {
-                    w.finite(entry + ext::X, components)?;
-                } else if kind == 3 && w.u(entry + ext::X) > 1
-                    || kind == 4 && w.u(entry + ext::X) >= variants as usize
-                {
-                    return Err("Invalid material boolean/enum".into());
-                } else if kind == 5
-                    && w.u(entry + ext::X) != u32::MAX as usize
-                    && w.u(entry + ext::X) >= w.u(h::TEXTURE_COUNT)
-                {
-                    return Err("Material extension texture reference is out of range".into());
-                }
+            let components = if kind == 1 {
+                3
+            } else if kind == 2 {
+                2
+            } else {
+                1
+            };
+            w.reserved(entry + ext::X + components, 3 - components)?;
+            if kind <= 2 {
+                w.finite(entry + ext::X, components)?;
+            } else if kind == 3 && w.u(entry + ext::X) > 1
+                || kind == 4 && w.u(entry + ext::X) >= variants as usize
+            {
+                return Err("Invalid material boolean/enum".into());
+            } else if kind == 5
+                && w.u(entry + ext::X) != u32::MAX as usize
+                && w.u(entry + ext::X) >= w.u(h::TEXTURE_COUNT)
+            {
+                return Err("Material extension texture reference is out of range".into());
             }
         }
+
         if disp.4 <= 0.0 {
             return Err("Displacement step size must be positive".into());
         }
@@ -410,7 +400,7 @@ fn validate(bytes: &[u8]) -> Result<()> {
     // Bound projective copies and numeric coordinate loops before entering AOT.
     for i in 0..w.u(h::MESH_COUNT) {
         let mesh = w.u(h::MESH_OFFSET) + i * m::WORDS;
-        let material = if w.u(h::VERSION) >= 2 && w.u(mesh + m::MATERIAL_COUNT) > 0 {
+        let material = if w.u(mesh + m::MATERIAL_COUNT) > 0 {
             w.u(w.u(mesh + m::MATERIAL_TABLE))
         } else {
             w.u(mesh + m::MATERIAL)
@@ -479,26 +469,23 @@ fn validate(bytes: &[u8]) -> Result<()> {
     for i in 0..w.u(h::LIGHT_COUNT) {
         let o = w.u(h::LIGHT_OFFSET) + i * l::WORDS;
         validate_light(&w, o)?;
-        if w.u(h::VERSION) < 3 {
-            w.reserved(o + l::TEXTURE, 4)?;
+
+        w.reserved(o + l::RESERVED, 1)?;
+        let reference = w.u(o + l::TEXTURE);
+        if reference > w.u(h::TEXTURE_COUNT) || reference != 0 && w.u(o + l::TYPE) != 0 {
+            return Err("Rectangular light texture reference/type is invalid".into());
+        }
+        let (offset, length) = (w.u(o + l::IES_OFFSET), w.u(o + l::IES_BYTES));
+        if length == 0 {
+            if offset != 0 {
+                return Err("Empty IES source has an offset".into());
+            }
         } else {
-            w.reserved(o + l::RESERVED, 1)?;
-            let reference = w.u(o + l::TEXTURE);
-            if reference > w.u(h::TEXTURE_COUNT) || reference != 0 && w.u(o + l::TYPE) != 0 {
-                return Err("Rectangular light texture reference/type is invalid".into());
+            if w.u(o + l::TYPE) != 3 || length > 16384 {
+                return Err("IES source requires a spot light and at most 16 KiB".into());
             }
-            let (offset, length) = (w.u(o + l::IES_OFFSET), w.u(o + l::IES_BYTES));
-            if length == 0 {
-                if offset != 0 {
-                    return Err("Empty IES source has an offset".into());
-                }
-            } else {
-                if w.u(o + l::TYPE) != 3 || length > 16384 {
-                    return Err("IES source requires a spot light and at most 16 KiB".into());
-                }
-                w.span(offset, length.div_ceil(4))?;
-                std::str::from_utf8(&bytes[offset * 4..offset * 4 + length])?;
-            }
+            w.span(offset, length.div_ceil(4))?;
+            std::str::from_utf8(&bytes[offset * 4..offset * 4 + length])?;
         }
     }
     let o = w.u(h::CAMERA_OFFSET);
@@ -1277,7 +1264,7 @@ fn prepare_impl(
     ))
 }
 
-/// Raw version-1 descriptors; paths and all bytes are borrowed for the call.
+/// Raw scene descriptors; paths and all bytes are borrowed for the call.
 /// # Safety
 /// `input` must be readable for `length` bytes and output/error strings follow
 /// mutracer-scene.h. Calls use the same owner thread as the replay API.
@@ -1354,7 +1341,23 @@ pub(crate) mod tests {
     }
     pub(crate) fn input() -> Vec<u8> {
         let mut words = vec![0u32; 132];
-        words[..15].copy_from_slice(&[1, 132, 8, 8, 1, 1, 1, 0, 0, 32, 44, 64, 88, 88, 88]);
+        words[..15].copy_from_slice(&[
+            layout::version::SCENE as u32,
+            132,
+            8,
+            8,
+            1,
+            1,
+            1,
+            0,
+            0,
+            32,
+            44,
+            64,
+            88,
+            88,
+            88,
+        ]);
         words[16..20].copy_from_slice(&[0, 0, 0, 1f32.to_bits()]);
         words[32..36].copy_from_slice(&[3, 3, 120, 129]);
         for off in [48, 104] {
@@ -1395,10 +1398,16 @@ pub(crate) mod tests {
         assert!(validate(&input()).is_ok());
     }
     #[test]
+    fn retired_scene_versions_are_rejected() {
+        for version in [1, 2, 3] {
+            assert!(validate(&change(&input(), h::VERSION, version)).is_err());
+        }
+    }
+    #[test]
     fn bad_spans_references_numbers_and_unknown_fields_are_recoverable() {
         let bytes = input();
         for (word, value) in [
-            (0, 4),
+            (0, 99),
             (1, 1),
             (2, 0),
             (4, 0),
@@ -1437,13 +1446,13 @@ pub(crate) mod tests {
         bytes
     }
     #[test]
-    fn v2_environment_roles_validate_encoding_references_and_flags() {
+    fn environment_roles_validate_encoding_references_and_flags() {
         let mut descriptor = vec![0u32; 16];
         descriptor[..4].copy_from_slice(&[1, 1, 1, 144]);
         descriptor[6] = 1f32.to_bits();
         descriptor[7] = 1f32.to_bits();
         descriptor[15] = 1f32.to_bits();
-        let mut bytes = extend(change(&input(), 0, 2), &descriptor);
+        let mut bytes = extend(input(), &descriptor);
         for (word, value) in [(8, 1), (13, 132), (20, 1), (21, 1)] {
             bytes = change(&bytes, word, value);
         }
@@ -1457,8 +1466,8 @@ pub(crate) mod tests {
         assert!(validate(&change(&change(&bytes, 21, 0), 22, 4)).is_ok());
     }
     #[test]
-    fn v2_material_extensions_validate_types_uniqueness_and_support() {
-        let mut bytes = extend(change(&input(), 0, 2), &[5, 0.6f32.to_bits(), 0, 0]);
+    fn material_extensions_validate_types_uniqueness_and_support() {
+        let mut bytes = extend(input(), &[5, 0.6f32.to_bits(), 0, 0]);
         bytes = change(&bytes, 83, 1);
         bytes = change(&bytes, 84, 132);
         assert!(validate(&bytes).is_ok());
@@ -1481,14 +1490,14 @@ pub(crate) mod tests {
         assert!(validate(&duplicate).is_err());
     }
     #[test]
-    fn v2_vertex_attributes_and_material_tables_reject_invalid_spans_and_indices() {
+    fn vertex_attributes_and_material_tables_reject_invalid_spans_and_indices() {
         // Three RGB colors, three XYZW tangents, local material IDs and one material table.
         let mut payload = vec![0u32; 25];
         for i in 0..3 {
             payload[9 + i * 4] = 1f32.to_bits();
             payload[12 + i * 4] = 1f32.to_bits();
         }
-        let mut bytes = extend(change(&input(), 0, 2), &payload);
+        let mut bytes = extend(input(), &payload);
         for (word, value) in [(39, 132), (40, 141), (41, 153), (46, 156), (47, 1)] {
             bytes = change(&bytes, word, value);
         }
@@ -1510,14 +1519,14 @@ pub(crate) mod tests {
         }
     }
     #[test]
-    fn v2_batches_validate_transforms_colors_empty_and_ordinary_meshes() {
+    fn batches_validate_transforms_colors_empty_and_ordinary_meshes() {
         let mut payload = vec![0u32; 23];
         payload[..4].copy_from_slice(&[1, 136, 152, 0]);
         for k in [0, 5, 10, 15] {
             payload[4 + k] = 1f32.to_bits();
         }
         payload[20..].fill(1f32.to_bits());
-        let bytes = change(&extend(change(&input(), 0, 2), &payload), 23, 132);
+        let bytes = change(&extend(input(), &payload), 23, 132);
         assert!(validate(&bytes).is_ok());
         for (word, value) in [
             (132, 65537),
@@ -1540,7 +1549,7 @@ pub(crate) mod tests {
         assert!(validate(&change(&no_arrays, 132, u32::MAX)).is_ok());
     }
     #[test]
-    fn v3_displacement_checks_projection_uv_texture_and_numeric_limits() {
+    fn displacement_checks_projection_uv_texture_and_numeric_limits() {
         let mut payload = vec![0u32; 54];
         payload[6..10].copy_from_slice(&[2, 2, 1, 150]);
         payload[12] = 1f32.to_bits();
@@ -1567,7 +1576,7 @@ pub(crate) mod tests {
             0,
             0,
         ]);
-        let mut bytes = extend(change(&input(), 0, 3), &payload);
+        let mut bytes = extend(input(), &payload);
         for (word, value) in [(8, 1), (13, 138), (37, 132), (83, 5), (84, 166)] {
             bytes = change(&bytes, word, value);
         }
@@ -1597,7 +1606,7 @@ pub(crate) mod tests {
         assert!(validate(&change(&change(&change(&bytes, 37, 0), 171, 0), 139, 1)).is_ok());
     }
     #[test]
-    fn v3_light_extensions_validate_roles_utf8_and_byte_spans() {
+    fn light_extensions_validate_roles_utf8_and_byte_spans() {
         let mut light = vec![0u32; 28];
         light[0] = 3;
         for k in 1..=7 {
@@ -1611,7 +1620,7 @@ pub(crate) mod tests {
             light[12 + k] = 1f32.to_bits();
         }
         light.push(u32::from_le_bytes(*b"test"));
-        let mut bytes = extend(change(&input(), 0, 3), &light);
+        let mut bytes = extend(input(), &light);
         bytes = change(&change(&bytes, 7, 1), 12, 132);
         assert!(validate(&bytes).is_ok()); // Syntax is checked by the original AOT IES parser.
         for (word, value) in [

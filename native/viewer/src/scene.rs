@@ -741,7 +741,7 @@ impl Model {
         light: &KeyLight,
     ) -> Vec<u8> {
         let mut w = Wire(vec![0; h::WORDS]);
-        w.0[h::VERSION] = 2;
+        w.0[h::VERSION] = mutracer_native_probe::layout::version::SCENE as u32;
         w.0[h::WIDTH] = size[0];
         w.0[h::HEIGHT] = size[1];
         w.0[h::GEOMETRY_COUNT] = self.geometries.len() as u32;

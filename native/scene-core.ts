@@ -1,7 +1,7 @@
 /// <reference lib="esnext" />
 /// <reference path="./browser-types.d.ts" />
 import {hardwareOpaqueGeometryFlags} from './hwrt-eligibility.js';
-import {RESOURCE, KIND, FORMAT, HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, TEXTURE as T, LIGHT as L, CAMERA as C, BATCH as B, PACKET_HEADER as PH, PACKET_ENTRY as PE, WORD_BYTES, quantizeDisplacementRange} from './layout.js';
+import {VERSION, RESOURCE, KIND, FORMAT, HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, TEXTURE as T, LIGHT as L, CAMERA as C, BATCH as B, PACKET_HEADER as PH, PACKET_ENTRY as PE, WORD_BYTES, quantizeDisplacementRange} from './layout.js';
 import {nativePathIntersections} from './path-diagnostics.wgsl.js';
 import IESProfile, {parseIESProfile} from '../src/scene/IESProfile.js';
 import {computeDisplacementMinmax, computeTrianglesDisplacementRange} from '../src/renderer/displacementPreparation.js';
@@ -149,6 +149,7 @@ function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
 function decodeScene(bytes: Uint8Array) {
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
   const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+  if (u[H.VERSION] !== VERSION.SCENE) throw new Error('Unsupported native scene version');
   const width = u[H.WIDTH], height = u[H.HEIGHT];
   const textures: PixelTexture[] = [];
   const textureIds = new Map<TextureState, number>();
@@ -162,9 +163,9 @@ function decodeScene(bytes: Uint8Array) {
     texture.uvScale = [f[off + T.UV_SCALE], f[off + T.UV_SCALE + 1]]; texture.uvOffset = [f[off + T.UV_OFFSET], f[off + T.UV_OFFSET + 1]];
     textures.push(texture); textureIds.set(texture, i);
   }
-  const environment = nativeFloatImage(u[H.VERSION] >= 2 && u[H.ENVIRONMENT_TEXTURE] ? textures[u[H.ENVIRONMENT_TEXTURE] - 1] : undefined);
-  const background = nativeFloatImage(u[H.VERSION] >= 2 && u[H.BACKGROUND_TEXTURE] ? textures[u[H.BACKGROUND_TEXTURE] - 1] : undefined);
-  const qualityFlags = u[H.VERSION] >= 2 ? u[H.QUALITY_FLAGS] : 0;
+  const environment = nativeFloatImage(u[H.ENVIRONMENT_TEXTURE] ? textures[u[H.ENVIRONMENT_TEXTURE] - 1] : undefined);
+  const background = nativeFloatImage(u[H.BACKGROUND_TEXTURE] ? textures[u[H.BACKGROUND_TEXTURE] - 1] : undefined);
+  const qualityFlags = u[H.QUALITY_FLAGS];
   const environmentDistribution = environment ? envMapDistribution(environment) : undefined;
   const materials: MaterialState[] = [];
   for (let i = 0; i < u[H.MATERIAL_COUNT]; i++) {
@@ -178,7 +179,7 @@ function decodeScene(bytes: Uint8Array) {
     m.normalMap = u[off + MAT.NORMAL_MAP] === 0xffffffff ? undefined : textures[u[off + MAT.NORMAL_MAP]];
     m.metallicRoughnessMap = u[off + MAT.METALLIC_ROUGHNESS_MAP] === 0xffffffff ? undefined : textures[u[off + MAT.METALLIC_ROUGHNESS_MAP]];
     m.emissiveMap = u[off + MAT.EMISSIVE_MAP] === 0xffffffff ? undefined : textures[u[off + MAT.EMISSIVE_MAP]];
-    if (u[H.VERSION] >= 2) applyNativeMaterialProperties(m, textures, u, f, u[off + MAT.EXTENSION_OFFSET], u[off + MAT.EXTENSION_COUNT]);
+    applyNativeMaterialProperties(m, textures, u, f, u[off + MAT.EXTENSION_OFFSET], u[off + MAT.EXTENSION_COUNT]);
     materials.push(m);
   }
   const geometries: Geometry[] = [];
@@ -191,11 +192,11 @@ function decodeScene(bytes: Uint8Array) {
       normal: u[off + G.NORMAL] ? new Attribute(f.slice(u[off + G.NORMAL], u[off + G.NORMAL] + count * 3), 3) : undefined});
     if (u[off + G.UV]) geometry.uv = new Attribute(f.slice(u[off + G.UV], u[off + G.UV] + count * 2), 2);
     if (u[off + G.UV1]) geometry.uv1 = new Attribute(f.slice(u[off + G.UV1], u[off + G.UV1] + count * 2), 2);
-    if (u[H.VERSION] >= 2) {
-      if (u[off + G.COLOR]) geometry.color = new Attribute(f.slice(u[off + G.COLOR], u[off + G.COLOR] + count * 3), 3);
-      if (u[off + G.TANGENT]) geometry.tangent = new Attribute(f.slice(u[off + G.TANGENT], u[off + G.TANGENT] + count * 4), 4);
-      if (u[off + G.MATERIAL_INDEX]) geometry.materialIndex = new Attribute(new Int32Array(u.slice(u[off + G.MATERIAL_INDEX], u[off + G.MATERIAL_INDEX] + count)), 1);
-    }
+
+    if (u[off + G.COLOR]) geometry.color = new Attribute(f.slice(u[off + G.COLOR], u[off + G.COLOR] + count * 3), 3);
+    if (u[off + G.TANGENT]) geometry.tangent = new Attribute(f.slice(u[off + G.TANGENT], u[off + G.TANGENT] + count * 4), 4);
+    if (u[off + G.MATERIAL_INDEX]) geometry.materialIndex = new Attribute(new Int32Array(u.slice(u[off + G.MATERIAL_INDEX], u[off + G.MATERIAL_INDEX] + count)), 1);
+
     if (!geometry.tangent && geometry.uv) generateVertexTangents(geometry);
     geometries.push(geometry);
   }
@@ -203,11 +204,11 @@ function decodeScene(bytes: Uint8Array) {
   for (let i = 0; i < u[H.MESH_COUNT]; i++) {
     const off = u[H.MESH_OFFSET] + i * M.WORDS;
     const meshMaterials: MaterialState[] = [];
-    if (u[H.VERSION] >= 2 && u[off + M.MATERIAL_COUNT]) {
+    if (u[off + M.MATERIAL_COUNT]) {
       for (let k = 0; k < u[off + M.MATERIAL_COUNT]; k++) meshMaterials.push(materials[u[u[off + M.MATERIAL_TABLE] + k]]);
     } else meshMaterials.push(materials[u[off + M.MATERIAL]]);
     const mesh = new MeshState(geometries[u[off + M.GEOMETRY]], meshMaterials);
-    if (u[H.VERSION] >= 2 && u[H.BATCH_OFFSET]) {
+    if (u[H.BATCH_OFFSET]) {
       const io = u[H.BATCH_OFFSET] + i * B.WORDS, instanceCount = u[io + B.COUNT];
       // Count UINT32_MAX denotes an ordinary mesh; zero is an empty batch.
       if (instanceCount !== 0xffffffff) mesh.setInstanceState(new InstanceState({count: instanceCount,
@@ -221,8 +222,8 @@ function decodeScene(bytes: Uint8Array) {
   const iesProfiles = new Map<string, IESProfile>();
   for (let i = 0; i < u[H.LIGHT_COUNT]; i++) {
     const off = u[H.LIGHT_OFFSET] + i * L.WORDS;
-    const light = lightFromRecord(u, f, off, u[H.VERSION] === 3 && u[off + L.TEXTURE] ? textures[u[off + L.TEXTURE] - 1] : undefined);
-    if (u[H.VERSION] === 3 && light.type === 'SpotLight' && u[off + L.IES_BYTES]) {
+    const light = lightFromRecord(u, f, off, u[off + L.TEXTURE] ? textures[u[off + L.TEXTURE] - 1] : undefined);
+    if (light.type === 'SpotLight' && u[off + L.IES_BYTES]) {
       const key = `${u[off + L.IES_OFFSET]}:${u[off + L.IES_BYTES]}`;
       let profile = iesProfiles.get(key);
       if (!profile) {
@@ -580,7 +581,7 @@ function resourcePacket(records: number[][], parts: Uint8Array[], width: number,
   let size = (PH.WORDS + records.length * PE.WORDS) * WORD_BYTES;
   for (const part of parts) size += Math.ceil(part.length / WORD_BYTES) * WORD_BYTES;
   const result = new Uint8Array(size), header = new Uint32Array(result.buffer);
-  header[PH.VERSION] = 1; header[PH.COUNT] = records.length; header[PH.WIDTH] = width; header[PH.HEIGHT] = height;
+  header[PH.VERSION] = VERSION.RESOURCE_PACKET; header[PH.COUNT] = records.length; header[PH.WIDTH] = width; header[PH.HEIGHT] = height;
   let offset = (PH.WORDS + records.length * PE.WORDS) * WORD_BYTES;
   for (let i = 0; i < records.length; i++) {
     records[i][PE.BYTE_OFFSET] = offset; header.set(records[i], PH.WORDS + i * PE.WORDS);

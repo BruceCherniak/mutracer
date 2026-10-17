@@ -31,11 +31,11 @@ static void camera(uint32_t off) {
 static size_t make_scene(const char *variant) {
   memset(words,0,sizeof(words));used=32;
   int floating=!strcmp(variant,"float-textures"),textured=!strcmp(variant,"textures")||floating,affine=!strcmp(variant,"transforms"),emissive=!strcmp(variant,"emissive");
-  int v3=!strncmp(variant,"v3-",3),v2=!strncmp(variant,"v2-",3)||v3;
+  int displacement_or_photometric=!strncmp(variant,"v3-",3),advanced=!strncmp(variant,"v2-",3)||displacement_or_photometric;
   uint32_t light_count=!strcmp(variant,"v3-ies-shared")?2:1;
-  uint32_t texture_count=v2?4:(uint32_t)textured;
+  uint32_t texture_count=advanced?4:(uint32_t)textured;
   uint32_t geos=reserve(24),meshes=reserve(80),materials=reserve(96),lights=reserve(light_count*28),textures=reserve(texture_count*12),cam=reserve(32);
-  words[0]=v3?3:v2?2:1;words[2]=480;words[3]=320;words[4]=2;words[5]=4;words[6]=4;words[7]=light_count;words[8]=texture_count;
+  words[MT_HEADER_VERSION]=MT_VERSION_SCENE;words[2]=480;words[3]=320;words[4]=2;words[5]=4;words[6]=4;words[7]=light_count;words[8]=texture_count;
   words[9]=geos;words[10]=meshes;words[11]=materials;words[12]=lights;words[13]=textures;words[14]=cam;
   vector(16,.055,.075,.11);value(19,1);
   const uint32_t phi=32,theta=20,vc=(phi+1)*(theta+1),ic=phi*theta*6;
@@ -77,7 +77,7 @@ static size_t make_scene(const char *variant) {
   if(!strcmp(variant,"alpha"))value(materials+24+13,.4);
   words[cam]=!strcmp(variant,"orthographic")?1:0;value(cam+1,40);value(cam+2,.1);value(cam+3,100);value(cam+4,-2.6);value(cam+5,2.6);value(cam+6,-1.75);value(cam+7,1.75);value(cam+8,1);value(cam+10,10);value(cam+11,24);value(cam+12,1);camera(cam+16);
   if(!strcmp(variant,"missing-normals")){words[geos+4]=0;words[geos+12+4]=0;}
-  if(v2){
+  if(advanced){
     for(uint32_t t=0;t<4;t++){
       uint32_t o=textures+t*12,w=t==0?32:4,h=t==0?16:4,pixels=reserve(w*h*4);
       words[o]=w;words[o+1]=h;words[o+2]=1;words[o+3]=pixels;value(o+6,1);value(o+7,1);
@@ -147,7 +147,7 @@ static size_t make_scene(const char *variant) {
       for(uint32_t i=0;i<3;i++){matrix(transforms+i*16,.7,i*.9,i*.9,-(double)i*.3);vector(colors+i*3,i==0?1:.3,i==1?1:.3,i==2?1:.3);}
     }
   }
-  if(v3 && !strncmp(variant,"v3-displacement-",16)) {
+  if(displacement_or_photometric && !strncmp(variant,"v3-displacement-",16)) {
     int projected=!strcmp(variant,"v3-displacement-triplanar")||!strcmp(variant,"v3-displacement-spherical")||!strcmp(variant,"v3-displacement-cylindrical");
     uint32_t m=materials+(projected?24:0),e=reserve(5*4);words[m+19]=5;words[m+20]=e;
     words[e]=MT_MAT_DISPLACEMENT_MAP;words[e+1]=1;
@@ -161,7 +161,7 @@ static size_t make_scene(const char *variant) {
       for(uint32_t i=0;i<16;i++)words[pixels+i]=(i%2)?0xffc06020u:0xff20c0e0u;
     }
   }
-  if(v3 && (!strcmp(variant,"v3-ies")||!strcmp(variant,"v3-ies-shared"))) {
+  if(displacement_or_photometric && (!strcmp(variant,"v3-ies")||!strcmp(variant,"v3-ies-shared"))) {
     const char *ies="IESNA:LM-63-2002\nTILT=NONE\n1 1000 1 5 3 1 2 0 0 0 1 1 20\n0 20 45 70 90\n0 90 180\n100 90 40 5 0 80 60 15 0 0 50 30 5 0 0\n";
     size_t len=strlen(ies);uint32_t text=reserve((uint32_t)((len+3)/4));memcpy(words+text,ies,len);
     words[lights]=3;value(lights+4,200);value(lights+5,.15);value(lights+6,20);value(lights+7,70);words[lights+9]=text;words[lights+10]=(uint32_t)len;
@@ -187,7 +187,7 @@ int main(int argc,char **argv) {
   if(mt_probe_render_scene((uint8_t*)words,size,argv[1],(uint32_t)samples,error,sizeof(error))==0)return 3;
   words[words[10]]=old;
   if(mt_probe_render_scene((uint8_t*)words,size-4,argv[1],(uint32_t)samples,error,sizeof(error))==0)return 3;
-  if(words[0]==3 && words[words[12]+10]){
+  if(words[words[12]+10]){
     uint32_t off=words[words[12]+9],saved=words[off];words[off]=0;
     if(mt_probe_render_scene((uint8_t*)words,size,argv[1],(uint32_t)samples,error,sizeof(error))==0)return 3;
     words[off]=saved;
