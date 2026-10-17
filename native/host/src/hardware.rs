@@ -23,6 +23,8 @@ pub struct NativeLayout {
 #[derive(Clone, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct IndexedGeometry {
+    #[serde(default)]
+    opaque: bool,
     index_offset: u32,
     index_count: u32,
     vertex_offset: u32,
@@ -734,7 +736,14 @@ fn from_indexed(assets: &mut HashMap<String, Vec<u8>>, layout: &NativeLayout) ->
             bounds_offset: g.bounds_offset,
             dynamic: g.dynamic,
             procedural: g.procedural,
-            non_opaque: layout.has_alpha,
+            // PDM keeps its accepted candidate order and AS flags. Its shared
+            // random stream depends on traversal order, so the closest fast
+            // path is conservatively disabled for a scene containing PDM.
+            non_opaque: if layout.has_displacement {
+                layout.has_alpha
+            } else {
+                !g.opaque
+            },
         })
         .collect();
     let mut instances = Vec::new();

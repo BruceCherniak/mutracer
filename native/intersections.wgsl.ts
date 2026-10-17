@@ -1,10 +1,10 @@
 import {createSceneHitQueryWgsl} from '../src/renderer/wgsl/chunks/intersect.wgsl.js';
 import type {WGPUShaderFeatures} from '../src/renderer/wgpuShaderSource.js';
 
-// Hardware hit metadata is authoritative. Production retains the accepted
-// indexed soup map; the BVH-independent candidate uses source primitive offsets.
+// Hardware hit metadata is authoritative. Production uses source primitive
+// offsets; leaf-order regression diagnostics retain their indexed soup map.
 // Both supply identity only, never a software hit test.
-export function nativeIntersections(features: WGPUShaderFeatures, empty: boolean, diagnostic = false, pathDiagnostic = false, indexed = false): string {
+export function nativeIntersections(features: WGPUShaderFeatures, empty: boolean, diagnostic = false, pathDiagnostic = false, indexed = false, opaqueClosest = false): string {
   if (empty) return /* wgsl */ `
 fn intersectScene(ray: Ray, si: ptr<function, SurfaceInteraction>, bounces: i32, doubleSided: bool, isRefractionRay: bool) { (*si).hit = false; }
 fn intersectSceneShadow(ray: Ray, lightDistance: f32, currTriangleIndex: i32) -> bool { return false; }
@@ -42,9 +42,10 @@ fn mtWorldToLocal(instance: i32) -> mat4x4f {
 fn mtTrace(ray: Ray, limit: f32, shadow: bool, onlyInstance: i32, skipRecord: i32,
     doubleSided: bool, isRefractionRay: bool) -> MtHit {
   var query: ray_query;
-  // Closest/bevel need explicit backface/self/instance filtering. Shadow rays
-  // already start EPS away from the surface and do not skip triangle records.
-  let flags = select(2u, 4u, shadow);
+  // OPAQUE is enabled only for all-double-sided, non-alpha, non-PDM geometry.
+  // A previous-record or instance restriction still requires every candidate.
+  // Shadow retains its existing alpha-aware terminate-on-first-hit semantics.
+  let flags = ${opaqueClosest ? 'select(select(0u, 2u, skipRecord >= 0 || onlyInstance >= 0), 4u, shadow)' : 'select(2u, 4u, shadow)'};
   let minimum = select(0.0, 1e-7, shadow);
   rayQueryInitialize(&query, mtAcceleration, RayDesc(flags, 255u, minimum, limit, ray.o, ray.d));
   var generated: MtHit;

@@ -1,5 +1,6 @@
 /// <reference lib="esnext" />
 /// <reference path="./browser-types.d.ts" />
+import {hardwareOpaqueGeometryFlags} from './hwrt-eligibility.js';
 import {nativePathIntersections} from './path-diagnostics.wgsl.js';
 import IESProfile, {parseIESProfile} from '../src/scene/IESProfile.js';
 import {computeDisplacementMinmax, computeTrianglesDisplacementRange} from '../src/renderer/displacementPreparation.js';
@@ -380,14 +381,15 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     hasDisplacement: features.hasDisplacement, indexed: !!hardware, hardwareGeometries: hardware?.geometries
   };
   add(31, 3, nativeLayoutBytes(nativeLayout, nativeLayout.blasOffset, nativeLayout.isEmpty), 0, 0, 0, 0);
+  const opaqueClosest = !!hardware && !features.hasDisplacement && hardware.geometries.some(g => g.opaque);
   const hardwareShader = 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
-    nativeIntersections(features, nativeLayout.isEmpty, false, false, !!hardware));
+    nativeIntersections(features, nativeLayout.isEmpty, false, false, !!hardware, opaqueClosest));
   add(33, 2, new TextEncoder().encode(hardwareShader), 0, 0, 0, 0);
   const diagnosticShader = 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
-    nativeIntersections(features, nativeLayout.isEmpty, true, false, !!hardware));
+    nativeIntersections(features, nativeLayout.isEmpty, true, false, !!hardware, opaqueClosest));
   add(34, 2, new TextEncoder().encode(diagnosticShader + nativeHitDiagnostics(features, nativeLayout.isEmpty, hardware ? 'hardware' : 'both')), 0, 0, 0, 0);
-  // Both AS inputs remain explicitly indexed. The accepted path uses sequence
-  // indices for BVH-leaf-order soup; the candidate retains source index lookup.
+  // Both AS inputs remain explicitly indexed. Production retains source index
+  // lookup; leaf-order regression diagnostics use sequence indices.
   const sequential = new Uint32Array(attributeLength(geometry.indices.array));
   if (hardware) {
     for (const g of hardware.geometries) for (let i = g.indexOffset; i < g.indexOffset + g.indexCount; i++) {
@@ -398,7 +400,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   add(36, 2, new TextEncoder().encode(wgpuShaderSource(constants, features, true,
     nativePathIntersections(features, nativeLayout.isEmpty, false), true)), 0, 0, 0, 0);
   add(37, 2, new TextEncoder().encode('enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
-    nativePathIntersections(features, nativeLayout.isEmpty, true, !!hardware), true)), 0, 0, 0, 0);
+    nativePathIntersections(features, nativeLayout.isEmpty, true, !!hardware, opaqueClosest), true)), 0, 0, 0, 0);
   const identity: number[] = [];
   let recordBase = tlas.buffer.byteLength / 16;
   for (let i = 0; i < blases.length; i++) {
@@ -432,7 +434,7 @@ function hardwarePositions(geometry: Geometry): Float32Array {
   }
   return positions;
 }
-interface HardwareGeometry {indexOffset: number; indexCount: number; vertexOffset: number; vertexCount: number; procedural: boolean; dynamic: boolean; boundsOffset: number}
+interface HardwareGeometry {opaque: boolean; indexOffset: number; indexCount: number; vertexOffset: number; vertexCount: number; procedural: boolean; dynamic: boolean; boundsOffset: number}
 interface HardwareScene {geometries: HardwareGeometry[]; records: Uint32Array; bounds: Float32Array}
 function linearTlas(instances: MeshInstances, bindings: PreparedMeshInstanceBinding[], hardware: HardwareScene): FlattendBVH {
   const vertexOffsets = hardware.geometries.map((_, i) => {
@@ -444,6 +446,7 @@ function linearTlas(instances: MeshInstances, bindings: PreparedMeshInstanceBind
     instancesBuffer: packLinearInstances(instances, hardware.geometries.map(g => g.indexOffset / 3), vertexOffsets)};
 }
 function hardwareScene(prepared: PreparedScene, build: SceneSources): HardwareScene {
+  const opaque = hardwareOpaqueGeometryFlags(prepared.materials, prepared.instanceBindings, prepared.geometries.length);
   const count = attributeLength(prepared.geometry.indices.array) / 3;
   const records = new Uint32Array(build.jobs.some(j => !!j.ranges) ? count * 4 : 0), boxes: number[] = [], geometries: HardwareGeometry[] = [];
   for (const geometry of prepared.geometries) {
@@ -454,7 +457,7 @@ function hardwareScene(prepared: PreparedScene, build: SceneSources): HardwareSc
     const job = build.jobs.find(j => j.geometry === source)!;
     const ranges = job?.ranges;
     const procedural = !!ranges && Math.abs(job.displacementScale) > 1e-6;
-    geometries.push({indexOffset: region.indexOffset, indexCount: attributeLength(geometry.indices.array), vertexOffset: region.vertexOffset, vertexCount: geometry.vertexCount,
+    geometries.push({opaque: !procedural && opaque[geometries.length], indexOffset: region.indexOffset, indexCount: attributeLength(geometry.indices.array), vertexOffset: region.vertexOffset, vertexCount: geometry.vertexCount,
       procedural, dynamic: geometry.dynamic, boundsOffset: boxes.length / 6});
     if (!ranges) continue;
     for (let t = 0; t < attributeLength(geometry.indices.array) / 3; t++) {

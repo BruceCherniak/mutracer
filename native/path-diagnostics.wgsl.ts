@@ -5,8 +5,8 @@ import {nativeIntersections} from './intersections.wgsl.js';
 // An independent diagnostic PSO runs the actual integrator, recording every
 // closest query whose guide is still open. This also covers alpha back rays
 // and reset wavelength/front branches without modifying their random streams.
-export function nativePathIntersections(features: WGPUShaderFeatures, empty: boolean, hardware: boolean, indexed = false): string {
-  const intersections = hardware ? nativeIntersections(features, empty, false, true, indexed)
+export function nativePathIntersections(features: WGPUShaderFeatures, empty: boolean, hardware: boolean, indexed = false, opaqueClosest = false): string {
+  const intersections = hardware ? nativeIntersections(features, empty, false, true, indexed, opaqueClosest)
     : createSceneIntersectionsWgsl({...features,
       hasAnisotropyDirections: features.hasAnisotropyDirections || features.hasCoatNormals,
       closestHitHook: `  mtPathRecord(ray, (*si).albedoSampled, isHit, hitInsIdx, (*si).triangleIndex,
