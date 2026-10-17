@@ -1327,7 +1327,7 @@ pub unsafe extern "C" fn mt_probe_render_scene(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     #[test]
     fn camera_rejects_finite_inputs_with_nonfinite_packing_and_recovers() {
@@ -1348,7 +1348,7 @@ mod tests {
         );
         assert_eq!(prepare_camera(camera, 8, 8).unwrap(), expected);
     }
-    fn input() -> Vec<u8> {
+    pub(crate) fn input() -> Vec<u8> {
         let mut words = vec![0u32; 132];
         words[..15].copy_from_slice(&[1, 132, 8, 8, 1, 1, 1, 0, 0, 32, 44, 64, 88, 88, 88]);
         words[16..20].copy_from_slice(&[0, 0, 0, 1f32.to_bits()]);

@@ -105,10 +105,10 @@ pub struct Resources {
     raw_instances: Option<HashMap<(u32, u32), (usize, u32)>>,
 }
 
-// Both BVH-independent candidates remain diagnostic opt-ins after their image
-// gates failed. Production retains the accepted 0cdfd01 indexed AS representation.
+// Source-order indexed soup builds AS inputs without a software BVH. The
+// opt-out retains leaf-order inputs for explicit regression diagnostics.
 pub(super) fn direct_input_enabled() -> bool {
-    std::env::var_os("MUTRACER_NATIVE_DIRECT_AS").is_some_and(|v| v == "1")
+    std::env::var_os("MUTRACER_NATIVE_DIRECT_AS").is_none_or(|v| v != "0")
 }
 
 pub fn prepare(
@@ -543,10 +543,9 @@ impl Resources {
         queue.submit([encoder.finish()]);
     }
 }
-// Approved 1.5 fallback: keep the accepted BVH-leaf-order indexed soup until
-// a BVH-independent AS representation passes both identity and image gates.
-// This extraction supplies geometry/identity only; tracing never recomputes a
-// hardware triangle hit or retries a hardware miss in the software BVH.
+// Source-order inputs use the shared TS geometry regions. Leaf-order extraction
+// remains available for explicit regression diagnostics; both supply identity
+// only, never a software recomputation of a hardware hit or miss.
 pub fn capture_from_prepared(
     assets: &mut HashMap<String, Vec<u8>>,
     layout: &NativeLayout,

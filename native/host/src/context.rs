@@ -148,6 +148,30 @@ fn ready(context: &mut Context) -> Result<&mut GpuScene> {
         .as_mut()
         .ok_or_else(|| "No committed scene".into())
 }
+// Direct AS preparation deliberately omits the software BVH. Re-run the shared
+// TS preparation only when hardware capture/upload fails, replacing its retained
+// state too so later edits operate on the same representation as the fallback.
+fn prepare_software_fallback(
+    bytes: &[u8],
+    mut scene: Scene,
+    assets: &mut HashMap<String, Vec<u8>>,
+    retained: &mut scene::PreparedState,
+) -> Result<Scene> {
+    if scene
+        .native_layout
+        .as_ref()
+        .is_some_and(|layout| layout.indexed)
+    {
+        let (software, software_assets, software_retained) = scene::prepare_retained(bytes, false)?;
+        *assets = software_assets;
+        *retained = software_retained;
+        Ok(software)
+    } else {
+        scene.hwrt = None;
+        Ok(scene)
+    }
+}
+
 // C pointer ownership and structure sizes are specified in mutracer-context.h.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_create(
@@ -157,7 +181,7 @@ pub unsafe extern "C" fn mt_context_create(
 ) -> i32 {
     unsafe { mt_context_create_with_backend(1, output, error, capacity) }
 }
-/// Backend 0=software, 1=automatic, 2=require supported HWRT scene/device.
+/// Backend 0=software, 1=HWRT with reported software fallback.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_create_with_backend(
     backend: u32,
@@ -236,7 +260,7 @@ pub unsafe extern "C" fn mt_context_commit(
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
         let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
         let started = Instant::now();
-        let (mut scene, mut assets, retained) = scene::prepare_retained(
+        let (mut scene, mut assets, mut retained) = scene::prepare_retained(
             bytes,
             context.backend == 1
                 && context.gpu.hardware_ray_query
@@ -262,7 +286,10 @@ pub unsafe extern "C" fn mt_context_commit(
                     scene.hwrt = Some(capture);
                     options.flags |= 4;
                 }
-                Err(error) => fallback_reason = error.to_string(),
+                Err(error) => {
+                    fallback_reason = error.to_string();
+                    scene = prepare_software_fallback(bytes, scene, &mut assets, &mut retained)?;
+                }
             }
         }
         let hardware_prepared = Instant::now();
@@ -281,17 +308,8 @@ pub unsafe extern "C" fn mt_context_commit(
             Ok(candidate) => candidate,
             Err(error) if context.backend == 1 && options.flags & 4 != 0 => {
                 fallback_reason = format!("HWRT upload unavailable: {error}");
-                // Production preparation already contains the full software BVH.
-                // Only the opt-in direct-AS experiment lacks that CPU result.
-                let software_scene = if software_scene
-                    .native_layout
-                    .as_ref()
-                    .is_some_and(|l| l.indexed)
-                {
-                    return Err(format!("Direct-AS diagnostic cannot fall back: {error}").into());
-                } else {
-                    software_scene
-                };
+                let software_scene =
+                    prepare_software_fallback(bytes, software_scene, &mut assets, &mut retained)?;
                 GpuScene::new_reusing(
                     Path::new(""),
                     software_scene,
@@ -852,6 +870,109 @@ pub unsafe extern "C" fn mt_job_cancel(id: u64, error: *mut c_char, capacity: us
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn rejected_hardware_candidate_can_render_the_rebuilt_software_scene() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _entry = ENTRY_LOCK.lock().unwrap();
+        let Ok(gpu) = GpuDevice::with_backend(1) else {
+            return;
+        };
+        if !gpu.hardware_ray_query {
+            return;
+        }
+        let mut input = scene::tests::input();
+        input[118 * 4..119 * 4].copy_from_slice(&3f32.to_le_bytes());
+        let (mut direct, mut assets, mut retained) = scene::prepare_retained(&input, true).unwrap();
+        let mut capture =
+            hardware::capture_from_prepared(&mut assets, direct.native_layout.as_ref().unwrap())
+                .unwrap();
+        capture.eligible = false;
+        direct.hwrt = Some(capture);
+        let fallback_source = direct.clone();
+        let rejected = GpuScene::new(
+            Path::new(""),
+            direct,
+            &RenderOptions {
+                flags: 4,
+                ..Default::default()
+            },
+            Some(&assets),
+            gpu.clone(),
+        );
+        assert!(rejected.is_err());
+        let software =
+            prepare_software_fallback(&input, fallback_source, &mut assets, &mut retained).unwrap();
+        let mut state = GpuScene::new(
+            Path::new(""),
+            software,
+            &RenderOptions::default(),
+            Some(&assets),
+            gpu.clone(),
+        )
+        .unwrap();
+        let (reference, reference_assets, _reference_retained) =
+            scene::prepare_retained(&input, false).unwrap();
+        let mut expected = GpuScene::new(
+            Path::new(""),
+            reference,
+            &RenderOptions::default(),
+            Some(&reference_assets),
+            gpu,
+        )
+        .unwrap();
+        state.add_samples(1, 6., 12345).unwrap();
+        expected.add_samples(1, 6., 12345).unwrap();
+        for kind in 0..3 {
+            assert_eq!(
+                state.read_pixels(kind).unwrap(),
+                expected.read_pixels(kind).unwrap()
+            );
+        }
+        assert!(
+            state
+                .read_pixels(2)
+                .unwrap()
+                .chunks_exact(4)
+                .any(|b| f32::from_le_bytes(b.try_into().unwrap()) > 0.)
+        );
+    }
+    #[test]
+    fn direct_as_fallback_rebuilds_software_and_retained_edits() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _entry = ENTRY_LOCK.lock().unwrap();
+        let input = scene::tests::input();
+        let (direct, mut assets, mut retained) = scene::prepare_retained(&input, true).unwrap();
+        assert!(direct.native_layout.as_ref().unwrap().indexed);
+        let software =
+            prepare_software_fallback(&input, direct, &mut assets, &mut retained).unwrap();
+        let (expected, expected_assets, expected_retained) =
+            scene::prepare_retained(&input, false).unwrap();
+        assert!(!software.native_layout.as_ref().unwrap().indexed);
+        assert!(software.hwrt.is_none());
+        assert_eq!(software.shader, expected.shader);
+        assert_eq!(assets, expected_assets);
+        let patch: Vec<u8> = [
+            1u32,
+            0,
+            0,
+            0,
+            0.2f32.to_bits(),
+            0.4f32.to_bits(),
+            0.8f32.to_bits(),
+            0.3f32.to_bits(),
+            0,
+            0,
+            1.5f32.to_bits(),
+            0,
+        ]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+        assert_eq!(
+            retained.material(&patch).unwrap(),
+            expected_retained.material(&patch).unwrap()
+        );
+    }
     #[test]
     fn caught_context_panic_does_not_poison_the_registry() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
