@@ -13,7 +13,7 @@ function record(fields: Field[]): Record<string, number> {
 // One source for native wire records, resource identities and shared WebGPU
 // bindings. Descriptor offsets are u32 words; uniform offsets are bytes.
 export const WORD_BYTES = 4;
-export const protocolVersions = {SCENE: 4, RESOURCE_PACKET: 1};
+export const protocolVersions = {SCENE: 4, RESOURCE_PACKET: 1, RESOURCE_WRITES: 3};
 export function sceneRecords() { return {
   HEADER: record([field('VERSION'), field('LENGTH'), field('WIDTH'), field('HEIGHT'),
     field('GEOMETRY_COUNT'), field('MESH_COUNT'), field('MATERIAL_COUNT'), field('LIGHT_COUNT'), field('TEXTURE_COUNT'),
@@ -39,11 +39,13 @@ export function sceneRecords() { return {
   SETTINGS: record([field('STRUCT_SIZE'), field('SAMPLING_PATTERN'), field('SEED'), field('MAX_SAMPLES'),
     field('BOUNCES', 2), field('DIRECT_LIGHT_CANDIDATES', 2), field('BEVEL_SAMPLES', 2), field('CLAMPING', 2),
     field('TRANSMISSIVE_ALPHA_MIN', 2), field('SEQUENCE_OFFSET'), field('VARIANTS')]),
+  WRITE_ENTRY: record([field('ID'), field('KIND'), field('LENGTH'), field('DESTINATION'), field('WIDTH'), field('HEIGHT'), field('FORMAT'), field('BYTE_OFFSET')]),
   PACKET_HEADER: record([field('VERSION'), field('COUNT'), field('WIDTH'), field('HEIGHT')]),
   PACKET_ENTRY: record([field('ID'), field('KIND'), field('LENGTH'), field('WIDTH'), field('HEIGHT'), field('LAYERS'), field('FORMAT'), field('BYTE_OFFSET')])
 };
 }
 export const resourceIds = {
+  AS_CHANGED_BLASES: 53,
   BVH: 1, INSTANCES: 2, ATTRIBUTES: 3, MATERIALS: 4, MAP_INFO: 5, CAMERA: 6, TRACE_UNIFORM: 7, LIGHT_UNIFORM: 8,
   COLOR: 10, NORMAL: 11, ALBEDO: 12, SHADOW_CATCHER: 13, ATLAS: 20, ENVIRONMENT: 21, ENVIRONMENT_CDF: 22,
   BACKGROUND: 23, LIGHT_SAMPLING: 24, ENERGY_LUT: 25, DISPLACEMENT: 26, SOFTWARE_SHADER: 30, METADATA: 31,

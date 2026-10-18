@@ -742,7 +742,7 @@ void serializeBvh(
     result.layout = BVH2_LAYOUT;
     flattenNode(bvh, 0, 1, indices, triangleMap, displacement, flattened, result.maxDepth
 #ifdef MUTRACER_TINYBVH_NATIVE
-      , nativeCaptureTriangleIds ? &result.triangleIds : nullptr
+      , (nativeCaptureTriangleIds || displacement) ? &result.triangleIds : nullptr
 #endif
     );
   } else if (requestedLayout == BVH4_LAYOUT) {

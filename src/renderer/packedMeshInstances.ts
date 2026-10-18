@@ -12,11 +12,23 @@ export class PackedMeshInstances {
   readonly materials: Int32Array;
   readonly displacement: Float64Array;
   readonly sourceIndices: Uint32Array;
+  bindingSlots: number[][] = [];
+  readonly bindingIndices: Uint32Array;
+  readonly localIndices: Uint32Array;
   private readonly view: TLASInstance = {blasIndex: 0, bounds: new Box3(), transform: new Array<number>(16).fill(0), materialsIndices: [0], color: [1,1,1]};
   constructor(capacity: number) {
+    this.bindingIndices = new Uint32Array(capacity); this.localIndices = new Uint32Array(capacity);
     this.colors = new Float32Array(capacity * 3);
     this.transforms = new Float64Array(capacity * 16); this.bounds = new Float32Array(capacity * 6);
     this.blasIndices = new Uint32Array(capacity); this.materials = new Int32Array(capacity); this.displacement = new Float64Array(capacity); this.sourceIndices = new Uint32Array(capacity);
+  }
+  copy(): PackedMeshInstances {
+    const next = new PackedMeshInstances(this.transforms.length / 16);
+    next.length = this.length; next.bindingSlots = this.bindingSlots;
+    next.transforms.set(this.transforms); next.bounds.set(this.bounds); next.colors.set(this.colors);
+    next.blasIndices.set(this.blasIndices); next.materials.set(this.materials); next.displacement.set(this.displacement);
+    next.sourceIndices.set(this.sourceIndices); next.bindingIndices.set(this.bindingIndices); next.localIndices.set(this.localIndices);
+    return next;
   }
   read(index: number): TLASInstance {
     const v = this.view;

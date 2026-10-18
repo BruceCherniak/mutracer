@@ -54,7 +54,7 @@ int main(int argc,char **argv) {
   BAD(mt_context_create_with_backend(0,NULL,error,sizeof(error)));
   OK(mt_context_create_with_backend(0,&a,error,sizeof(error)));OK(mt_context_create_with_backend(0,&b,error,sizeof(error)));REQUIRE(a!=b&&a&&b);
   OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.state==0&&info.samples==0&&info.version==1);
-  BAD(mt_context_render(a,1,error,sizeof(error)));BAD(mt_context_reset(a,error,sizeof(error)));
+  BAD(mt_context_render(a,1,error,sizeof(error)));BAD(mt_context_reset(a,error,sizeof(error)));BAD(mt_context_wait(a,error,sizeof(error)));
   size_t written=999;BAD(mt_context_read_pixels(a,0,NULL,0,&written,error,sizeof(error)));REQUIRE(written==0);
   info.struct_size=0;BAD(mt_context_info(a,&info,error,sizeof(error)));info.struct_size=sizeof(info);
   OK(mt_context_commit(a,input,length,error,sizeof(error)));
@@ -63,6 +63,7 @@ int main(int argc,char **argv) {
   BAD(mt_context_render(a,0,error,sizeof(error)));BAD(mt_context_render(a,4097,error,sizeof(error)));
   OK(mt_context_render(a,samples/4,error,sizeof(error)));
   OK(mt_context_render(b,samples/4,error,sizeof(error)));
+  OK(mt_context_wait(a,error,sizeof(error)));OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.samples==samples/4);
   for(uint32_t kind=0;kind<3;kind++){OK(read_image(a,kind,pixels,size));OK(read_image(b,kind,other,size));REQUIRE(memcmp(pixels,other,size)==0);}
   OK(mt_context_render(b,1,error,sizeof(error)));
   OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.samples==samples/4);

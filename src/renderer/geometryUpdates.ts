@@ -7,7 +7,7 @@ import { attributeLength, attributeValue, type AttributeData } from '../scene/at
 import { hasGeneratedVertexTangents } from '../util/geometry.js';
 import { buildBLAS, refitBLAS, type FlattendBVH } from './bvhAccel.js';
 import type { GeometryUpdateState, GeometryUpdateMesh, GeometryUpdateRegion, GeometryUpdateBinding } from './geometryUpdateState.js';
-import { getBvhBounds } from './geometryBvhBounds.js';
+import {computeGeometryBounds, getBvhBounds } from './geometryBvhBounds.js';
 import { read, write } from '../math/access.js';
 
 type Prepared = GeometryUpdateState;
@@ -72,8 +72,13 @@ export function geometryTopologyChanged(prepared: {geometryStates: Prepared['geo
     state.indices !== source.indices.array || state.indexCount !== attributeLength(source.indices.array));
 }
 
+export interface GeometryUpdateOptions {
+  softwareBvhs?: boolean;
+  displacement?: Map<Geometry, {scale: number; ranges: Float32Array}>;
+}
+
 /** Refits/rebuilds changed BLASes and refreshes all shared instances' cached bounds. */
-export function updatePreparedGeometries<M extends GeometryUpdateMesh>(prepared: GeometryUpdateState<M>, changed: ReadonlySet<Geometry>) {
+export function updatePreparedGeometries<M extends GeometryUpdateMesh>(prepared: GeometryUpdateState<M>, changed: ReadonlySet<Geometry>, options: GeometryUpdateOptions = {}) {
   const vertices: { first: number; count: number; topologyChanged: boolean; deformationOnly: boolean }[] = [];
   const blases: { blas: FlattendBVH; offset: number }[] = [];
   const meshes = new Set<M>();
@@ -81,30 +86,37 @@ export function updatePreparedGeometries<M extends GeometryUpdateMesh>(prepared:
   const updated = new Map<Geometry, FlattendBVH>();
   prepared.geometries.forEach((geometry, i) => {
     const source = indices(prepared).prepared.get(geometry)?.[0].mesh.geometry ?? geometry;
-    const previous = prepared.blases[i].bvh;
+    const previous = i < prepared.blases.length ? prepared.blases[i].bvh : undefined;
     if (changed.has(source)) {
       const region = prepared.geometryRegions.get(geometry)!;
       const topologyChanged = geometryTopologyChanged(prepared, source);
       const deformationOnly = !topologyChanged && isDeformationUpdate(source);
-      let bvh = updated.get(source);
-      if (!bvh) {
-        bvh = getGeometryBvh(source);
-        if (topologyChanged || !bvh || source.dynamic && bvh.builder !== 'builtin' || !refitBLAS(bvh, source)) {
-          bvh = buildBLAS(source);
+      if (options.softwareBvhs !== false) {
+        const displacement = options.displacement?.get(geometry);
+        const key = displacement ? geometry : source;
+        let bvh = updated.get(key);
+        if (!bvh) {
+          bvh = displacement ? getGeometryBvh(geometry) ?? getGeometryBvh(source) : getGeometryBvh(source);
+          const detail = displacement ? {normal: source.normal.array,
+            scale: displacement.scale, ranges: displacement.ranges} : undefined;
+          if (topologyChanged || !bvh || source.dynamic && bvh.builder !== 'builtin' || !refitBLAS(bvh, source, detail)) {
+            bvh = buildBLAS(source, displacement?.scale, displacement?.ranges);
+          }
+          setGeometryBvh(source, bvh); updated.set(key, bvh);
         }
-        setGeometryBvh(source, bvh); updated.set(source, bvh);
+        setGeometryBvh(geometry, bvh);
+        prepared.blases[i].bvh = bvh;
+        resized ||= previous?.buffer.byteLength !== bvh.buffer.byteLength;
+        relocated ||= previous?.buffer.byteLength !== bvh.buffer.byteLength || previous?.layout !== bvh.layout;
+        blases.push({blas: bvh, offset});
       }
-      setGeometryBvh(geometry, bvh); geometry.version = source.version;
-      prepared.blases[i].bvh = bvh;
-      resized ||= previous.buffer.byteLength !== bvh.buffer.byteLength;
-      relocated ||= previous.buffer.byteLength !== bvh.buffer.byteLength || previous.layout !== bvh.layout;
+      geometry.version = source.version;
       copyRegion(source, prepared.geometry, region, topologyChanged, deformationOnly);
       const count = source.vertexCount, previousVertices = vertices[vertices.length - 1];
       if (previousVertices && previousVertices.first + previousVertices.count === region.vertexOffset && previousVertices.topologyChanged === topologyChanged && previousVertices.deformationOnly === deformationOnly) previousVertices.count += count;
       else vertices.push({first: region.vertexOffset, count, topologyChanged, deformationOnly});
-      blases.push({blas: bvh, offset});
       for (const binding of indices(prepared).prepared.get(geometry) ?? []) {
-        const bounds = getBvhBounds(geometry);
+        const bounds = options.softwareBvhs === false ? computeGeometryBounds(geometry) : getBvhBounds(geometry);
         // Keep shared bound arrays: native generic-record values read from a Map
         // can be copies, so replacing their tuple does not update the owner view.
         for (let c = 0; c < 3; c++) {
@@ -114,7 +126,7 @@ export function updatePreparedGeometries<M extends GeometryUpdateMesh>(prepared:
         meshes.add(binding.mesh);
       }
     }
-    offset += prepared.blases[i].bvh.buffer.byteLength;
+    if (i < prepared.blases.length) offset += prepared.blases[i].bvh.buffer.byteLength;
   });
   for (const source of changed) prepared.geometryStates.set(source, { topologyVersion: source.topologyVersion,
     indices: source.indices.array, indexCount: attributeLength(source.indices.array) });
@@ -127,10 +139,10 @@ function writeIndex(geometry: Geometry, index: number, value: number) {
 }
 
 function packAttribute<T extends AttributeData>(attribute: Attribute<T> | undefined,
-  output: Float32Array, stride: number, offset: number, first: number, count: number) {
+  output: Float32Array, stride: number, offset: number, first: number, count: number, outputFirst = first) {
   if (!attribute) return;
   const array = attribute.array, size = attribute.itemSize;
-  let destination = first * stride + offset, source = first * size;
+  let destination = outputFirst * stride + offset, source = first * size;
   for (let i = 0; i < count; i++, destination += stride, source += size) {
     for (let c = 0; c < size; c++) output[destination + c] = attributeValue(array, source + c);
   }
@@ -138,14 +150,14 @@ function packAttribute<T extends AttributeData>(attribute: Attribute<T> | undefi
 
 /** Packs the same interleaved vertex layout for full and partial GPU uploads. */
 export function packVertexAttributes(geometry: Geometry, output: Float32Array, stride: number,
-  offsets: readonly number[], first: number, count: number, includeMaterialIndex = true, deformationOnly = false) {
-  packAttribute(geometry.position, output, stride, offsets[0], first, count);
-  packAttribute(geometry.normal, output, stride, offsets[1], first, count);
+  offsets: readonly number[], first: number, count: number, includeMaterialIndex = true, deformationOnly = false, outputFirst = first) {
+  packAttribute(geometry.position, output, stride, offsets[0], first, count, outputFirst);
+  packAttribute(geometry.normal, output, stride, offsets[1], first, count, outputFirst);
   if (!deformationOnly) {
-    packAttribute(geometry.uv, output, stride, offsets[2], first, count);
-    packAttribute(geometry.uv1, output, stride, offsets[3], first, count);
-    packAttribute(geometry.color, output, stride, offsets[4], first, count);
+    packAttribute(geometry.uv, output, stride, offsets[2], first, count, outputFirst);
+    packAttribute(geometry.uv1, output, stride, offsets[3], first, count, outputFirst);
+    packAttribute(geometry.color, output, stride, offsets[4], first, count, outputFirst);
   }
-  packAttribute(geometry.tangent, output, stride, offsets[5], first, count);
-  if (includeMaterialIndex) packAttribute(geometry.materialIndex, output, stride, offsets[6], first, count);
+  packAttribute(geometry.tangent, output, stride, offsets[5], first, count, outputFirst);
+  if (includeMaterialIndex) packAttribute(geometry.materialIndex, output, stride, offsets[6], first, count, outputFirst);
 }

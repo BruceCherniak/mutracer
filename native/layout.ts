@@ -140,6 +140,17 @@ export const SETTINGS = {
   "VARIANTS": 15,
   "WORDS": 16
 } as const;
+export const WRITE_ENTRY = {
+  "ID": 0,
+  "KIND": 1,
+  "LENGTH": 2,
+  "DESTINATION": 3,
+  "WIDTH": 4,
+  "HEIGHT": 5,
+  "FORMAT": 6,
+  "BYTE_OFFSET": 7,
+  "WORDS": 8
+} as const;
 export const PACKET_HEADER = {
   "VERSION": 0,
   "COUNT": 1,
@@ -160,9 +171,11 @@ export const PACKET_ENTRY = {
 } as const;
 export const VERSION = {
   "SCENE": 4,
-  "RESOURCE_PACKET": 1
+  "RESOURCE_PACKET": 1,
+  "RESOURCE_WRITES": 3
 } as const;
 export const RESOURCE = {
+  "AS_CHANGED_BLASES": 53,
   "BVH": 1,
   "INSTANCES": 2,
   "ATTRIBUTES": 3,
@@ -290,10 +303,4 @@ export const OUTPUT_BINDING = {
   "ALBEDO": 2,
   "SHADOW_CATCHER": 3
 } as const;
-export function quantizeDisplacementRange(minimum: number, maximum: number): number {
-  const lo = Math.fround(minimum), hi = Math.fround(maximum);
-  const lower = Math.max(0, Math.min(255, Math.floor(Math.fround(lo * 255))));
-  const upper = Math.abs(Math.fround(hi - lo)) < Math.fround(0.000001) ? lower
-    : Math.max(0, Math.min(255, Math.ceil(Math.fround(hi * 255))));
-  return (lower << 8) | upper;
-}
+export {quantizeDisplacementRange} from '../src/renderer/displacementRange.js';

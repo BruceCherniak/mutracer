@@ -254,11 +254,7 @@ export function updateMeshInstances(meshes: Mesh[]) {
   return prepareSceneMeshes(meshes, prepareMeshGeometryBvh);
 }
 
-/** Batch records are regenerated together; refit all numeric source slots. */
-export function dirtyMeshInstanceIndices(bindings: PreparedMeshInstanceBinding[], meshes: ReadonlySet<Mesh>, instances: MeshInstances) {
-  if (instances instanceof PackedMeshInstances) return new Set(Array.from({length: instances.length}, (_, i) => i));
-  return new Set(bindings.flatMap((binding, i) => meshes.has(binding.mesh) ? [i] : []));
-}
+export {dirtyPreparedInstanceIndices as dirtyMeshInstanceIndices} from './scenePreparation.js';
 
 /** Refreshes color storage without computing transforms or bounds. Returns packed source slots. */
 export function updateMeshInstanceColors(bindings: PreparedMeshInstanceBinding[], instances: MeshInstances, meshes: ReadonlySet<Mesh>) {

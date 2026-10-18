@@ -364,3 +364,41 @@ export function computeTrianglesDisplacementRange(geometry: Geometry,
 
   return trianglesDisplacementRange;
 }
+
+/** Conservative source-order AABBs for the actual displacement prism. */
+export function displacementPrismAabbs(geometry: Geometry, displacementScale: number): Float32Array {
+  const count = Math.floor(attributeLength(geometry.indices.array) / 3);
+  const boxes = new Float32Array(count * 6);
+  for (let t = 0; t < count; t++) {
+    const minimum = [Infinity, Infinity, Infinity], maximum = [-Infinity, -Infinity, -Infinity];
+    const ia = attributeValue(geometry.indices.array, t * 3) * 3;
+    const ib = attributeValue(geometry.indices.array, t * 3 + 1) * 3;
+    const ic = attributeValue(geometry.indices.array, t * 3 + 2) * 3;
+    const positions = geometry.position.array;
+    const ux = positions[ib]-positions[ia], uy = positions[ib+1]-positions[ia+1], uz = positions[ib+2]-positions[ia+2];
+    const vx = positions[ic]-positions[ia], vy = positions[ic+1]-positions[ia+1], vz = positions[ic+2]-positions[ia+2];
+    const fx = uy*vz-uz*vy, fy = uz*vx-ux*vz, fz = ux*vy-uy*vx;
+    const faceLength = Math.hypot(fx,fy,fz);
+    for (let c = 0; c < 3; c++) {
+      const v = attributeValue(geometry.indices.array, t * 3 + c);
+      const nx = geometry.normal.array[v * 3], ny = geometry.normal.array[v * 3 + 1], nz = geometry.normal.array[v * 3 + 2];
+      const length = Math.hypot(nx, ny, nz);
+      const cosine = Math.abs((nx*fx+ny*fy+nz*fz)/((length || 1)*(faceLength || 1)));
+      const extrusion = cosine > 0 ? displacementScale/cosine : 0;
+      for (let a = 0; a < 3; a++) {
+        const position = geometry.position.array[v * 3 + a], n = geometry.normal.array[v * 3 + a] / (length || 1);
+        const p0 = position;
+        const p1 = position + n * extrusion;
+        minimum[a] = Math.min(minimum[a], p0, p1); maximum[a] = Math.max(maximum[a], p0, p1);
+      }
+    }
+    for (let a = 0; a < 3; a++) {
+      const padding = Math.max(1, Math.abs(minimum[a]), Math.abs(maximum[a])) * 1e-6;
+      minimum[a] -= padding; maximum[a] += padding;
+    }
+    for (let a = 0; a < 3; a++) {
+      boxes[t * 6 + a] = minimum[a]; boxes[t * 6 + a + 3] = maximum[a];
+    }
+  }
+  return boxes;
+}

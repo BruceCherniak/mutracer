@@ -605,19 +605,21 @@ impl Drop for PreparedState {
 }
 // Buffer records have zero dimensions; texture records carry their exact extent.
 pub(super) struct LightingUpdates {
-    resources: Vec<(usize, u32, u32, Vec<u8>)>,
+    resources: Vec<(usize, u64, u32, u32, Vec<u8>)>,
     pub native_layout: Option<hardware::NativeLayout>,
     pub hardware_positions: Option<Vec<u8>>,
+    pub hardware_writes: Vec<(usize, u64, Vec<u8>)>,
+    pub changed_blases: Option<Vec<usize>>,
 }
 impl std::ops::Deref for LightingUpdates {
-    type Target = [(usize, u32, u32, Vec<u8>)];
+    type Target = [(usize, u64, u32, u32, Vec<u8>)];
     fn deref(&self) -> &Self::Target {
         &self.resources
     }
 }
 impl<'a> IntoIterator for &'a LightingUpdates {
-    type Item = &'a (usize, u32, u32, Vec<u8>);
-    type IntoIter = std::slice::Iter<'a, (usize, u32, u32, Vec<u8>)>;
+    type Item = &'a (usize, u64, u32, u32, Vec<u8>);
+    type IntoIter = std::slice::Iter<'a, (usize, u64, u32, u32, Vec<u8>)>;
     fn into_iter(self) -> Self::IntoIter {
         self.resources.iter()
     }
@@ -631,6 +633,9 @@ impl PreparedState {
         ids: &[usize],
     ) -> Result<LightingUpdates> {
         let requests = native_step(begin, bytes, self.token)?;
+        if Words(&requests).u(ph::VERSION) == crate::layout::version::RESOURCE_WRITES {
+            return lighting_packet(&requests, ids);
+        }
         let tlas = if self.indexed {
             requests.clone()
         } else {
@@ -670,7 +675,7 @@ impl PreparedState {
             mt_core_native_geometry_begin,
             mt_core_native_geometry_finish,
             bytes,
-            &[1, 2, 3, 7, 8, 24, 31, 41],
+            &[1, 2, 3, 7, 8, 24, 31, 38, 41, 53],
         )
     }
     pub(super) fn accept_geometry(&self) -> Result<()> {
@@ -695,7 +700,7 @@ impl PreparedState {
     ) -> Result<(hardware::Capture, HashMap<String, Vec<u8>>)> {
         let mut assets: HashMap<_, _> = updates
             .iter()
-            .map(|(id, _, _, data)| (format!("native-{id}"), data.clone()))
+            .map(|(id, _, _, _, data)| (format!("native-{id}"), data.clone()))
             .collect();
         assets.insert("native-33".into(), self.authoritative_shader.clone());
         assets.insert("native-35".into(), self.authoritative_indices.clone());
@@ -708,8 +713,7 @@ impl PreparedState {
             .native_layout
             .as_ref()
             .ok_or("Missing geometry HWRT metadata")?;
-        let mut capture = hardware::capture_from_prepared(&mut assets, layout)?;
-        capture.allow_updates();
+        let capture = hardware::capture_from_prepared(&mut assets, layout)?;
         Ok((capture, assets))
     }
     pub(super) fn transform(&self, bytes: &[u8]) -> Result<LightingUpdates> {
@@ -883,16 +887,19 @@ impl PreparedState {
     }
 }
 fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<LightingUpdates> {
-    let header_length = (ph::WORDS + ids.len() * pe::WORDS) * WORD_BYTES;
     if pointer.is_null() || size < 16 || size > MAX_PREPARED_BYTES || size % 4 != 0 {
-        return Err("Invalid AOT lighting command".into());
+        return Err("Invalid AOT scene write command".into());
     }
     let packet = unsafe {
         let result = copy_core_result(pointer, size, size);
         mt_core_collect();
         result?
     };
-    let w = Words(&packet);
+    lighting_packet(&packet, ids)
+}
+fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
+    use crate::layout::write_entry as we;
+    let w = Words(packet);
     if w.u(ph::VERSION) == 2 {
         return Err(if w.u(ph::COUNT) == 2 {
             "Full scene commit required: resource shape or shader feature changed"
@@ -901,29 +908,39 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
         }
         .into());
     }
-    if w.u(ph::VERSION) != 1 || w.u(ph::COUNT) != ids.len() || packet.len() < header_length {
-        return Err("Invalid AOT lighting resources".into());
+    let count = w.u(ph::COUNT);
+    let header_length = (ph::WORDS + count * we::WORDS) * WORD_BYTES;
+    if w.u(ph::VERSION) != crate::layout::version::RESOURCE_WRITES || header_length > packet.len() {
+        return Err("Invalid AOT scene write resources".into());
     }
     let mut updates = Vec::new();
     let mut native_layout = None;
     let mut hardware_positions = None;
-    for (i, &id) in ids.iter().enumerate() {
-        let o = ph::WORDS + i * pe::WORDS;
-        let (length, offset) = (w.u(o + pe::LENGTH), w.u(o + pe::BYTE_OFFSET));
-        if w.u(o + pe::ID) != id
+    let mut hardware_writes = Vec::new();
+    let mut changed_blases = None;
+    for i in 0..count {
+        let o = ph::WORDS + i * we::WORDS;
+        let (id, length, offset, destination) = (
+            w.u(o + we::ID),
+            w.u(o + we::LENGTH),
+            w.u(o + we::BYTE_OFFSET),
+            w.u(o + we::DESTINATION),
+        );
+        if !ids.contains(&id)
             || offset < header_length
-            || offset % 4 != 0
-            || (id != 31 && length % 4 != 0)
+            || offset % WORD_BYTES != 0
+            || destination % WORD_BYTES != 0
+            || (id != 31 && length % WORD_BYTES != 0)
             || offset > packet.len()
             || length > packet.len() - offset
-            || w.u(o + pe::KIND)
-                != if id == 31 || id == 41 {
+            || w.u(o + we::KIND)
+                != if matches!(id, 31 | 38 | 41 | 53) {
                     3
                 } else {
                     usize::from(id >= 21)
                 }
-            || w.u(o + pe::FORMAT)
-                != if id == 31 || id == 41 {
+            || w.u(o + we::FORMAT)
+                != if matches!(id, 31 | 38 | 41 | 53) {
                     0
                 } else if id == 22 {
                     4
@@ -933,65 +950,85 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
                     0
                 }
         {
-            return Err("Invalid AOT lighting resource span/format".into());
+            return Err("Invalid AOT scene write span/format".into());
         }
-        if id == 41 {
-            w.finite(offset / 4, length / 4)?;
-            hardware_positions = Some(packet[offset..offset + length].to_vec());
+        if id == 53 {
+            if destination != 0 || changed_blases.is_some() || length == 0 {
+                return Err("Invalid changed BLAS list".into());
+            }
+            changed_blases = Some(
+                (offset / WORD_BYTES..(offset + length) / WORD_BYTES)
+                    .map(|at| w.u(at))
+                    .collect(),
+            );
+            continue;
+        }
+        if id == 38 || id == 41 {
+            w.finite(offset / WORD_BYTES, length / WORD_BYTES)?;
+            hardware_writes.push((
+                id,
+                destination as u64,
+                packet[offset..offset + length].to_vec(),
+            ));
+            if id == 41 && destination == 0 {
+                hardware_positions = Some(packet[offset..offset + length].to_vec());
+            }
             continue;
         }
         if id == 31 {
+            if destination != 0 {
+                return Err("Invalid metadata destination".into());
+            }
             native_layout = Some(serde_json::from_slice::<hardware::NativeLayout>(
                 &packet[offset..offset + length],
             )?);
             continue;
         }
         if id >= 7 || id == 3 {
-            w.finite(offset / 4, length / 4)?;
+            w.finite(offset / WORD_BYTES, length / WORD_BYTES)?;
         }
-        if id == 2 && length >= 160 {
-            for i in (offset / 4..(offset + length) / 4).step_by(40) {
-                w.finite(i + 3, 37)?;
+        if id == 2 {
+            if destination % 160 != 0 || length % 160 != 0 {
+                return Err("Invalid instance write alignment".into());
+            }
+            for at in (offset / WORD_BYTES..(offset + length) / WORD_BYTES).step_by(40) {
+                w.finite(at + 3, 37)?;
             }
         }
         updates.push((
             id,
-            w.u(o + pe::WIDTH) as u32,
-            w.u(o + pe::HEIGHT) as u32,
+            destination as u64,
+            w.u(o + we::WIDTH) as u32,
+            w.u(o + we::HEIGHT) as u32,
             packet[offset..offset + length].to_vec(),
         ));
     }
-    if let Some((_, _, _, data)) = updates.iter().find(|record| record.0 == 1) {
-        let rt = updates
-            .iter()
-            .find(|record| record.0 == 7)
-            .ok_or("Missing geometry RT parameters")?;
-        if rt.3.len() != crate::layout::ray_uniform::BYTES {
-            return Err("Invalid geometry RT size".into());
-        }
-        let limit = native_layout
-            .as_ref()
-            .ok_or("Missing geometry layout")?
-            .blas_offset
-            * 16;
-        if limit > data.len() {
-            return Err("Invalid geometry BLAS offset".into());
-        }
-        let mut stack = if limit == 0 { vec![] } else { vec![0usize] };
-        let mut visited = 0;
-        let bvh = Words(data);
-        while let Some(node) = stack.pop() {
-            let at = node * 4;
-            visited += 1;
-            if at + 8 > limit / 4 || visited > limit / 32 {
-                return Err("Invalid geometry TLAS".into());
+    // Full replacements still validate the TLAS graph. Dirty refits preserve its
+    // topology and are checked against committed resource bounds before upload.
+    if let Some(layout) = &native_layout {
+        if let Some((_, _, _, _, data)) =
+            updates.iter().find(|record| record.0 == 1 && record.1 == 0)
+        {
+            let limit = layout.blas_offset * 16;
+            if limit > data.len() {
+                return Err("Invalid geometry BLAS offset".into());
             }
-            bvh.finite(at, 3)?;
-            bvh.finite(at + 4, 3)?;
-            let child = bvh.u(at + 3) as u32 as i32;
-            if child >= 0 {
-                stack.push(node + 2);
-                stack.push(child as usize);
+            let mut stack = if limit == 0 { vec![] } else { vec![0usize] };
+            let mut visited = 0;
+            let bvh = Words(data);
+            while let Some(node) = stack.pop() {
+                let at = node * 4;
+                visited += 1;
+                if at + 8 > limit / 4 || visited > limit / 32 {
+                    return Err("Invalid geometry TLAS".into());
+                }
+                bvh.finite(at, 3)?;
+                bvh.finite(at + 4, 3)?;
+                let child = bvh.u(at + 3) as u32 as i32;
+                if child >= 0 {
+                    stack.push(node + 2);
+                    stack.push(child as usize);
+                }
             }
         }
     }
@@ -999,8 +1036,11 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
         resources: updates,
         native_layout,
         hardware_positions,
+        hardware_writes,
+        changed_blases,
     })
 }
+
 #[cfg(test)]
 pub(super) fn prepare_retained(
     bytes: &[u8],
@@ -1105,7 +1145,7 @@ fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
         result?
     };
     let w = Words(&packet);
-    if w.u(0) != 1 {
+    if w.u(0) != 1 && w.u(0) != crate::layout::version::RESOURCE_WRITES {
         return Err(match w.u(1) {
             2 => "Full scene commit required: resource shape or shader feature changed",
             1 | 3 => "Invalid or unavailable retained scene reference",
@@ -1382,6 +1422,34 @@ pub(crate) mod tests {
         }
         let packet = unsafe { copy_core_result(pointer, size, 16).unwrap() };
         std::array::from_fn(|i| u32::from_le_bytes(packet[i * 4..i * 4 + 4].try_into().unwrap()))
+    }
+    #[test]
+    fn retained_transform_accepts_range_writes_from_the_aot_call_chain() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _entry = ENTRY_LOCK.lock().unwrap();
+        for hardware in [false, true] {
+            let (_, _, retained) = prepare_retained(&input(), hardware).unwrap();
+            for translation in [0.125f32, 0.0] {
+                let mut words = [0u32; 20];
+                words[0] = 1;
+                for index in [0, 5, 10, 15] {
+                    words[4 + index] = 1f32.to_bits();
+                }
+                words[16] = translation.to_bits();
+                let bytes: Vec<_> = words.iter().flat_map(|v| v.to_le_bytes()).collect();
+                let writes = retained.transform(&bytes).unwrap();
+                let (_, offset, _, _, instance) =
+                    writes.iter().find(|record| record.0 == 2).unwrap();
+                assert_eq!(*offset, 0);
+                assert_eq!(instance.len(), 160);
+                assert_eq!(
+                    f32::from_le_bytes(instance[128..132].try_into().unwrap()),
+                    translation
+                );
+                assert!(writes.iter().all(|record| record.0 == 1 || record.0 == 2));
+                retained.accept_transform().unwrap();
+            }
+        }
     }
     #[test]
     fn production_emits_one_backend_and_reuses_aot_shader_generation() {

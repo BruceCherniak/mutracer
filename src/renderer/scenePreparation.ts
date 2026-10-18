@@ -57,19 +57,39 @@ export function updateMeshInstanceTransforms<M extends MeshState>(
   current?: MeshInstances,
   dirtyIndices?: ReadonlySet<number>
 ) {
+  // Dirty indices are packed source slots, as consumed by refitTLAS. Preserve
+  // the previous candidate until membership and GPU validation have succeeded.
+  if (current instanceof PackedMeshInstances && dirtyIndices && current.bindingSlots.length === bindings.length &&
+    current.bindingSlots.every((slots, i) => slots.length === meshInstanceCount(bindings[i].mesh))) {
+    const next = current.copy(), matrix = new Array<number>(16).fill(0);
+    const boundsScratch = makeBounds(), pointScratch = vec3.create();
+    let membershipChanged = false;
+    for (const index of dirtyIndices) {
+      const binding = bindings[current.bindingIndices[index]];
+      const local = current.localIndices[index];
+      if (!binding || local >= meshInstanceCount(binding.mesh)) {membershipChanged = true; break;}
+      meshInstanceTransform(binding.mesh, local, matrix);
+      const bounds = computeBounds(binding.geometry, matrix, binding.bvhBounds, boundsScratch, pointScratch);
+      if (!finiteValues(bounds.min) || !finiteValues(bounds.max) || !finiteValues(matrix)) {membershipChanged = true; break;}
+      next.transforms.set(matrix, index * 16); next.bounds.set(bounds.min, index * 6); next.bounds.set(bounds.max, index * 6 + 3);
+    }
+    if (!membershipChanged) return next;
+  }
   if (bindings.some(binding => binding.mesh.instanceData != null)) {
     const packed = new PackedMeshInstances(bindings.reduce((count, binding) => count + meshInstanceCount(binding.mesh), 0));
     const matrix = new Array<number>(16).fill(0);
     const boundsScratch = makeBounds(), pointScratch = vec3.create();
     let sourceIndex = 0;
-    for (const binding of bindings) {
+    for (let bindingIndex = 0; bindingIndex < bindings.length; bindingIndex++) {
+      const binding = bindings[bindingIndex];
+      const slots: number[] = []; packed.bindingSlots.push(slots);
       const {mesh, geometry, bvhBounds, blasIndex, materialIndices, displacementScale} = binding;
       for (let i = 0; i < meshInstanceCount(mesh); i++, sourceIndex++) {
         meshInstanceTransform(mesh, i, matrix);
         const bounds = computeBounds(geometry, matrix, bvhBounds, boundsScratch, pointScratch);
         if (!finiteValues(bounds.min) || !finiteValues(bounds.max) || !finiteValues(matrix)) continue;
         const index = packed.length++;
-        packed.sourceIndices[index] = sourceIndex;
+        packed.sourceIndices[index] = sourceIndex; packed.bindingIndices[index] = bindingIndex; packed.localIndices[index] = i; slots.push(index);
         packed.transforms.set(matrix, index * 16);
         packed.bounds.set(bounds.min, index * 6); packed.bounds.set(bounds.max, index * 6 + 3);
         packed.blasIndices[index] = blasIndex; packed.materials[index] = packMaterialIndexAndWeightToInt(materialIndices[0], 1);
@@ -99,13 +119,25 @@ export function updateMeshInstanceTransforms<M extends MeshState>(
       ),
       displacementScale
     }) satisfies TLASInstance;
-  if (!current || !dirtyIndices) return bindings.map(update);
+  if (!current || !dirtyIndices || current instanceof PackedMeshInstances) return bindings.map(update);
   const next = (current as TLASInstance[]).slice();
   dirtyIndices.forEach((index) => {
     const binding = bindings[index];
     if (binding) next[index] = update(binding);
   });
   return next;
+}
+
+/** Dirty slots shared by Web refits and native range uploads. */
+export function dirtyPreparedInstanceIndices<M extends MeshState>(bindings: PreparedMeshInstanceBinding<M>[], meshes: ReadonlySet<M>, instances: MeshInstances) {
+  const dirty = new Set<number>();
+  for (let i = 0; i < bindings.length; i++) {
+    if (!meshes.has(bindings[i].mesh)) continue;
+    if (instances instanceof PackedMeshInstances) {
+      for (const slot of instances.bindingSlots[i] ?? []) dirty.add(slot);
+    } else dirty.add(i);
+  }
+  return dirty;
 }
 
 export function prepareSceneMeshes<M extends MeshState>(meshes: M[],

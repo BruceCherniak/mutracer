@@ -2,6 +2,8 @@ use serde::Deserialize;
 use std::{borrow::Cow, collections::HashMap, fs, path::Path, time::Duration};
 use wgpu::util::DeviceExt;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+#[cfg(target_os = "macos")]
+mod metal_refit;
 
 // Explicit AOT packet metadata; units belong to the contract, not uniform words.
 #[derive(Clone, serde::Serialize, Deserialize)]
@@ -49,16 +51,6 @@ pub struct Capture {
     pub instances: Vec<Instance>,
     pub triangle_map: Option<String>,
 }
-impl Capture {
-    // A first stable-topology edit declares these rebuilt BLASes mutable. Keep
-    // fast-trace static builds lean; the replacement reserves update support for
-    // subsequent Phase 2 refits without changing the experimental descriptor.
-    pub(super) fn allow_updates(&mut self) {
-        for geometry in &mut self.geometries {
-            geometry.dynamic = true;
-        }
-    }
-}
 #[derive(Clone, serde::Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
@@ -105,6 +97,10 @@ pub struct Resources {
     _vertices: Vec<wgpu::Buffer>,
     _indices: Vec<Option<wgpu::Buffer>>,
     raw_instances: Option<HashMap<(u32, u32), (usize, u32)>>,
+    pub(super) metal_refit_opt_in: bool,
+    updatable_blases: Vec<bool>,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(super) used_metal_refit: bool,
 }
 
 // Source-order indexed soup builds AS inputs without a software BVH. The
@@ -303,17 +299,8 @@ pub fn prepare_reusing(
         blases.push(device.create_blas(
             &wgpu::CreateBlasDescriptor {
                 label: Some("MuTracer hardware BLAS"),
-                flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE
-                    | if geometry.dynamic {
-                        wgpu::AccelerationStructureFlags::ALLOW_UPDATE
-                    } else {
-                        wgpu::AccelerationStructureFlags::empty()
-                    },
-                update_mode: if geometry.dynamic {
-                    wgpu::AccelerationStructureUpdateMode::PreferUpdate
-                } else {
-                    wgpu::AccelerationStructureUpdateMode::Build
-                },
+                flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
+                update_mode: wgpu::AccelerationStructureUpdateMode::Build,
             },
             descriptors.clone(),
         ));
@@ -472,6 +459,10 @@ pub fn prepare_reusing(
         raw_instances,
         tlas,
         mapping,
+        updatable_blases: vec![false; blases.len()],
+        metal_refit_opt_in: cfg!(target_os = "macos")
+            && std::env::var_os("MUTRACER_NATIVE_METAL_REFIT").is_some_and(|v| v == "1"),
+        used_metal_refit: false,
         _blases: blases,
         _vertices: vertices,
         _indices: indices,
@@ -480,62 +471,380 @@ pub fn prepare_reusing(
 
 // A validated plan owns no GPU side effects; rejected updates preserve old ASes.
 pub struct TransformPlan {
-    instances: Vec<Instance>,
-    mapping: Vec<u8>,
+    instances: Vec<(usize, Instance, u32)>,
 }
 impl Resources {
-    pub fn transform_plan(&self, capture: &Capture, bytes: &[u8]) -> Result<TransformPlan> {
+    /// Stage independent replacement BLASes; unchanged BLASes and their input
+    /// buffers stay shared. Validation precedes GPU work and accepted ASes are
+    /// never mutated, so a rejected candidate leaves the scene usable.
+    pub fn rebuild_changed(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        capture: &Capture,
+        writes: &super::scene::LightingUpdates,
+    ) -> Result<Resources> {
+        if !self.indexed || !capture.indexed {
+            return Err("Partial AS rebuild requires indexed source inputs".into());
+        }
+        let changed = writes
+            .changed_blases
+            .as_ref()
+            .ok_or("Missing changed BLAS list")?;
+        let mut unique = std::collections::HashSet::new();
+        let mut plans = Vec::new();
+        let mut used_writes = std::collections::HashSet::new();
+        for &index in changed {
+            if !unique.insert(index) {
+                return Err("Duplicate changed BLAS".into());
+            }
+            let geometry = capture
+                .geometries
+                .get(index)
+                .ok_or("Changed BLAS out of bounds")?;
+            let (id, offset, length) = if geometry.procedural {
+                (
+                    38,
+                    geometry.bounds_offset as u64 * 24,
+                    geometry.index_count.unwrap_or(geometry.vertex_count) as usize / 3 * 24,
+                )
+            } else {
+                (
+                    41,
+                    geometry.first_vertex as u64 * 12,
+                    geometry.vertex_count as usize * 12,
+                )
+            };
+            let (write_index, (_, _, data)) = writes
+                .hardware_writes
+                .iter()
+                .enumerate()
+                .find(|(_, (resource, destination, data))| {
+                    *resource == id && *destination == offset && data.len() == length
+                })
+                .ok_or("Missing exact changed geometry AS span")?;
+            used_writes.insert(write_index);
+            plans.push((index, geometry, data));
+        }
+        if used_writes.len() != writes.hardware_writes.len() {
+            return Err("Unexpected hardware geometry span".into());
+        }
+        #[cfg(target_os = "macos")]
+        let allow_update = self.metal_refit_opt_in && metal_refit::available(device);
+        #[cfg(not(target_os = "macos"))]
+        let allow_update = false;
+        let mut blases = self._blases.clone();
+        let mut vertices = self._vertices.clone();
+        let indices = self._indices.clone();
+        let mut sizes = Vec::new();
+        for (index, geometry, data) in &plans {
+            let flags = if geometry.non_opaque {
+                wgpu::AccelerationStructureGeometryFlags::empty()
+            } else {
+                wgpu::AccelerationStructureGeometryFlags::OPAQUE
+            };
+            let descriptors = if geometry.procedural {
+                wgpu::BlasGeometrySizeDescriptors::AABBs {
+                    descriptors: vec![wgpu::BlasAABBGeometrySizeDescriptor {
+                        primitive_count: geometry.index_count.unwrap_or(geometry.vertex_count) / 3,
+                        flags: wgpu::AccelerationStructureGeometryFlags::empty(),
+                    }],
+                }
+            } else {
+                wgpu::BlasGeometrySizeDescriptors::Triangles {
+                    descriptors: vec![wgpu::BlasTriangleGeometrySizeDescriptor {
+                        vertex_format: wgpu::VertexFormat::Float32x3,
+                        vertex_count: geometry.vertex_count,
+                        index_format: Some(wgpu::IndexFormat::Uint32),
+                        index_count: geometry.index_count,
+                        flags,
+                    }],
+                }
+            };
+            vertices[*index] = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("MuTracer changed AS input"),
+                contents: data,
+                usage: wgpu::BufferUsages::BLAS_INPUT | wgpu::BufferUsages::COPY_DST,
+            });
+            blases[*index] = device.create_blas(
+                &wgpu::CreateBlasDescriptor {
+                    label: Some("MuTracer changed BLAS"),
+                    flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE
+                        | if allow_update {
+                            wgpu::AccelerationStructureFlags::ALLOW_UPDATE
+                        } else {
+                            wgpu::AccelerationStructureFlags::empty()
+                        },
+                    update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+                },
+                descriptors.clone(),
+            );
+            sizes.push(descriptors);
+        }
+        let mut tlas = device.create_tlas(&wgpu::CreateTlasDescriptor {
+            label: Some("MuTracer changed geometry TLAS"),
+            max_instances: capture.instances.len() as u32,
+            flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
+            update_mode: wgpu::AccelerationStructureUpdateMode::Build,
+        });
+        for (index, instance) in capture.instances.iter().enumerate() {
+            tlas[index] = Some(wgpu::TlasInstance::new(
+                &blases[instance.geometry],
+                instance.transform,
+                instance.custom_index,
+                255,
+            ));
+        }
+        let mut metal_blas_wall_ms: Option<f64> = None;
+        #[cfg(target_os = "macos")]
+        if allow_update && changed.iter().all(|&i| self.updatable_blases[i]) {
+            match self.refit_metal_candidate(
+                device,
+                queue,
+                &plans,
+                &mut blases,
+                &vertices,
+                &indices,
+            ) {
+                Ok(elapsed) => metal_blas_wall_ms = Some(elapsed),
+                Err(error) => eprintln!(
+                    "{}",
+                    serde_json::json!({"nativeMetalRefitFallback":error.to_string()})
+                ),
+            }
+        }
+        let entries: Vec<_> = plans
+            .iter()
+            .zip(&sizes)
+            .map(|((index, geometry, _), size)| wgpu::BlasBuildEntry {
+                blas: &blases[*index],
+                geometry: match size {
+                    wgpu::BlasGeometrySizeDescriptors::Triangles { descriptors } => {
+                        wgpu::BlasGeometries::TriangleGeometries(vec![wgpu::BlasTriangleGeometry {
+                            size: &descriptors[0],
+                            vertex_buffer: &vertices[*index],
+                            first_vertex: 0,
+                            vertex_stride: 12,
+                            index_buffer: indices[*index].as_ref(),
+                            first_index: Some(geometry.index_offset),
+                            transform_buffer: None,
+                            transform_buffer_offset: None,
+                        }])
+                    }
+                    wgpu::BlasGeometrySizeDescriptors::AABBs { descriptors } => {
+                        wgpu::BlasGeometries::AabbGeometries(vec![wgpu::BlasAabbGeometry {
+                            size: &descriptors[0],
+                            stride: 24,
+                            aabb_buffer: &vertices[*index],
+                            primitive_offset: 0,
+                        }])
+                    }
+                },
+            })
+            .collect();
+        let profile = super::profiling::gpu_enabled();
+        if profile {
+            queue.submit([]);
+            device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(30)),
+            })?;
+        }
+        let started = std::time::Instant::now();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let blas_wall_ms = if profile {
+            encoder
+                .build_acceleration_structures(entries.iter(), std::iter::empty::<&wgpu::Tlas>());
+            queue.submit([encoder.finish()]);
+            device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(30)),
+            })?;
+            let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.build_acceleration_structures(
+                std::iter::empty::<&wgpu::BlasBuildEntry<'_>>(),
+                [&tlas],
+            );
+            queue.submit([encoder.finish()]);
+            Some(elapsed)
+        } else {
+            // Encode the BLAS-to-TLAS dependency together. On Metal, separate
+            // unfenced submissions exposed incomplete replacement BLASes.
+            encoder.build_acceleration_structures(entries.iter(), [&tlas]);
+            queue.submit([encoder.finish()]);
+            None
+        };
+        if super::profiling::enabled() || profile {
+            eprintln!(
+                "{}",
+                serde_json::json!({"nativeGeometryAsProfile":{
+                    "changedBlasCount":changed.len(),"totalBlasCount":blases.len(),"blasCompletedWallMs":blas_wall_ms,
+                    "inputUploadBytes":plans.iter().map(|(_,_,data)|data.len()).sum::<usize>(),"method":if metal_blas_wall_ms.is_some() {"metal-refit"} else {"wgpu-rebuild"}
+                }})
+            );
+        }
+        let mut updatable_blases = self.updatable_blases.clone();
+        for &index in changed {
+            updatable_blases[index] = allow_update;
+        }
+        Ok(Resources {
+            inputs: self.inputs.clone(),
+            indexed: self.indexed,
+            tlas,
+            mapping: self.mapping.clone(),
+            _blases: blases,
+            _vertices: vertices,
+            _indices: indices,
+            raw_instances: self.raw_instances.clone(),
+            metal_refit_opt_in: self.metal_refit_opt_in,
+            used_metal_refit: metal_blas_wall_ms.is_some(),
+            updatable_blases,
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn refit_metal_candidate(
+        &self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        plans: &[(usize, &Geometry, &Vec<u8>)],
+        blases: &mut [wgpu::Blas],
+        vertices: &[wgpu::Buffer],
+        indices: &[Option<wgpu::Buffer>],
+    ) -> Result<f64> {
+        // Draining completes old source-AS builds and all new input uploads.
+        // Every raw input, source/destination AS and scratch stays owned here
+        // until the completion fence. Each destination is a fresh allocation.
+        queue.submit([]);
+        device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_secs(30)),
+        })?;
+        let started = std::time::Instant::now();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut scratches = Vec::new();
+        let mut sources = Vec::new();
+        for (index, geometry, _) in plans {
+            let mut local = (*geometry).clone();
+            local.first_vertex = 0;
+            local.bounds_offset = 0;
+            let size = metal_refit::scratch_size(
+                device,
+                &vertices[*index],
+                indices[*index].as_ref(),
+                &local,
+                true,
+            )?;
+            scratches.push(device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("MuTracer Metal refit scratch"),
+                size,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            }));
+            sources.push(self._blases[*index].clone());
+            metal_refit::encode(
+                device,
+                &mut encoder,
+                &mut blases[*index],
+                sources.last_mut().unwrap(),
+                &vertices[*index],
+                indices[*index].as_ref(),
+                &local,
+                scratches.last().unwrap(),
+            )?;
+        }
+        // Only the raw encoder touched these fresh destinations, and every BLAS
+        // listed was encoded above. TLAS construction is fenced and separate.
+        unsafe {
+            encoder.mark_acceleration_structures_built(
+                plans.iter().map(|(index, _, _)| &blases[*index]),
+                std::iter::empty::<&wgpu::Tlas>(),
+            );
+        }
+        queue.submit([encoder.finish()]);
+        device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_secs(30)),
+        })?;
+        Ok(started.elapsed().as_secs_f64() * 1000.0)
+    }
+    pub fn transform_plan(
+        &self,
+        capture: &Capture,
+        writes: &super::scene::LightingUpdates,
+    ) -> Result<TransformPlan> {
         let roots = self
             .raw_instances
             .as_ref()
             .ok_or("Full scene commit required: no raw hardware instance metadata")?;
-        if bytes.len() != capture.instances.len() * 160 {
-            return Err("Full scene commit required: hardware instance membership changed".into());
-        }
         let mut instances = Vec::new();
-        let mut mapping = Vec::new();
-        for (i, record) in bytes.chunks_exact(160).enumerate() {
-            let word = |offset| u32::from_le_bytes(record[offset..offset + 4].try_into().unwrap());
-            let &(geometry, base) = roots
-                .get(&(word(0), word(4)))
-                .ok_or("Full scene commit required: hardware BLAS placement changed")?;
-            let m: Vec<_> = (0..16)
-                .map(|k| f32::from_bits(word(80 + k * 4)) as f64)
-                .collect();
-            if m.iter().any(|v| !v.is_finite()) {
-                return Err("Non-finite hardware instance matrix".into());
+        for (_, offset, _, _, bytes) in writes.iter().filter(|record| record.0 == 2) {
+            let first = *offset as usize / 160;
+            if *offset % 160 != 0
+                || bytes.len() % 160 != 0
+                || first + bytes.len() / 160 > capture.instances.len()
+            {
+                return Err(
+                    "Full scene commit required: hardware instance membership changed".into(),
+                );
             }
-            instances.push(Instance {
-                geometry,
-                custom_index: i as u32,
-                transform: [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14].map(|k| m[k] as f32),
-            });
-            mapping.extend(base.to_le_bytes());
+            for (local, record) in bytes.chunks_exact(160).enumerate() {
+                let i = first + local;
+                let word =
+                    |offset| u32::from_le_bytes(record[offset..offset + 4].try_into().unwrap());
+                let &(geometry, base) = roots
+                    .get(&(word(0), word(4)))
+                    .ok_or("Full scene commit required: hardware BLAS placement changed")?;
+                let matrix: [f32; 16] = std::array::from_fn(|k| f32::from_bits(word(80 + k * 4)));
+                if matrix.iter().any(|v| !v.is_finite()) {
+                    return Err("Non-finite hardware instance matrix".into());
+                }
+                instances.push((
+                    i,
+                    Instance {
+                        geometry,
+                        custom_index: i as u32,
+                        transform: [0, 4, 8, 12, 1, 5, 9, 13, 2, 6, 10, 14].map(|k| matrix[k]),
+                    },
+                    base,
+                ));
+            }
         }
-        Ok(TransformPlan { instances, mapping })
+        Ok(TransformPlan { instances })
     }
     pub fn update_transforms(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         plan: TransformPlan,
+        capture: &mut Capture,
     ) {
-        for (i, instance) in plan.instances.iter().enumerate() {
-            self.tlas[i] = Some(wgpu::TlasInstance::new(
+        if plan.instances.is_empty() {
+            return;
+        }
+        let bytes = if self.indexed {
+            0
+        } else {
+            plan.instances.len() * 4
+        };
+        for (index, instance, base) in &plan.instances {
+            capture.instances[*index] = instance.clone();
+            self.tlas[*index] = Some(wgpu::TlasInstance::new(
                 &self._blases[instance.geometry],
                 instance.transform,
                 instance.custom_index,
                 255,
             ));
+            if !self.indexed {
+                queue.write_buffer(&self.mapping, *index as u64 * 4, &base.to_le_bytes());
+            }
         }
         if super::profiling::enabled() {
             eprintln!(
                 "{}",
-                serde_json::json!({"nativeHardwareUploadProfile": {"kind":"transform","writeBytes":plan.mapping.len(),"instanceCount":plan.instances.len()}})
+                serde_json::json!({"nativeHardwareUploadProfile":{"kind":"transform","writeBytes":bytes,"instanceCount":plan.instances.len()}})
             );
-        }
-        if !self.indexed {
-            queue.write_buffer(&self.mapping, 0, &plan.mapping);
         }
         let mut encoder = device.create_command_encoder(&Default::default());
         encoder.build_acceleration_structures(

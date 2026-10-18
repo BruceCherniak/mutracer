@@ -140,6 +140,17 @@ pub mod settings {
     pub const VARIANTS: usize = 15;
     pub const WORDS: usize = 16;
 }
+pub mod write_entry {
+    pub const ID: usize = 0;
+    pub const KIND: usize = 1;
+    pub const LENGTH: usize = 2;
+    pub const DESTINATION: usize = 3;
+    pub const WIDTH: usize = 4;
+    pub const HEIGHT: usize = 5;
+    pub const FORMAT: usize = 6;
+    pub const BYTE_OFFSET: usize = 7;
+    pub const WORDS: usize = 8;
+}
 pub mod packet_header {
     pub const VERSION: usize = 0;
     pub const COUNT: usize = 1;
@@ -161,8 +172,10 @@ pub mod packet_entry {
 pub mod version {
     pub const SCENE: usize = 4;
     pub const RESOURCE_PACKET: usize = 1;
+    pub const RESOURCE_WRITES: usize = 3;
 }
 pub mod resource {
+    pub const AS_CHANGED_BLASES: usize = 53;
     pub const BVH: usize = 1;
     pub const INSTANCES: usize = 2;
     pub const ATTRIBUTES: usize = 3;

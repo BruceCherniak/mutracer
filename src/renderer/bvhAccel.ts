@@ -11,6 +11,7 @@ import { buildBinnedSahBvh, layoutBvh2 } from './binnedSahBvh.js';
 import { read, write } from '../math/access.js';
 import { attributeLength, attributeValue } from '../scene/attributeData.js';
 import { Box3 } from './Box3.js';
+import {quantizeDisplacementRange} from './displacementRange.js';
 export { Box3 } from './Box3.js';
 
 export const INSTANCE_VEC4_STRIDE = 10;
@@ -26,7 +27,7 @@ export interface FlattendBVH {
   /** Largest leaf fan-out; used with maxDepth to size the traversal stack. */
   maxLeafPrimitives?: number;
   buffer: ArrayBuffer;
-  /** Native diagnostic source triangle IDs, (record, source triangle) pairs. */
+  /** Source triangle IDs, (record, source triangle) pairs. */
   triangleIds?: Uint32Array;
   /** Precomputed data without a layout field uses the legacy BVH2 layout. */
   layout?: BvhLayout;
@@ -241,6 +242,7 @@ export function buildBLAS(
   const floats = new Float32Array(buffer);
   const ints = new Int32Array(buffer);
   let buildSurfaceArea = 0;
+  const triangleIds: number[] = [];
   for (let k = 0; k < order.length; k++) {
     const node = order[k];
     const o = offsets[node] * 4, b = node * 6;
@@ -259,6 +261,7 @@ export function buildBLAS(
     for (let i = 0; i < prims; i++) {
       const t = triangles[primIndices[leftFirst[node] + i]];
       const e = o + 8 + i * 4;
+      if (trianglesDisplacement) triangleIds.push(e / 4, t);
       ints[e] = attributeValue(indices, t * 3);
       ints[e + 1] = attributeValue(indices, t * 3 + 1);
       ints[e + 2] = attributeValue(indices, t * 3 + 2);
@@ -271,6 +274,7 @@ export function buildBLAS(
 
   return {
     builder: 'builtin',
+    triangleIds: trianglesDisplacement ? new Uint32Array(triangleIds) : undefined,
     buildSurfaceArea,
     maxDepth,
     maxLeafPrimitives,
@@ -356,6 +360,18 @@ export function packLinearInstances(instances: MeshInstances, primitiveOffsets: 
     writeInstanceRecord(words, floats, i, readMeshInstance(instances, i), placement);
   }
   return buffer;
+}
+
+/** Repack only selected source-order instance slots for hardware adapters. */
+export function refitLinearInstances(buffer: ArrayBuffer, instances: MeshInstances, primitiveOffsets: number[], vertexOffsets: number[], dirty: ReadonlySet<number>): TLASRefitRange[] {
+  const words = new Int32Array(buffer), floats = new Float32Array(buffer);
+  const placement: BlasPlacement = {blasOffsets: primitiveOffsets, vertexOffsets, layouts: primitiveOffsets.map(() => 'bvh2')};
+  const ranges: TLASRefitRange[] = [];
+  for (const index of dirty) {
+    writeInstanceRecord(words, floats, index, readMeshInstance(instances, index), placement);
+    ranges.push({offset: index * INSTANCE_WORD_STRIDE * 4, size: INSTANCE_WORD_STRIDE * 4});
+  }
+  return mergeRefitRanges(ranges);
 }
 
 /**
@@ -522,6 +538,15 @@ export function mergeRefitRanges(ranges: TLASRefitRange[]) {
     }
   }
   return merged;
+}
+
+/** A transactional candidate shares immutable refit topology metadata. */
+export function copyTLASForRefit(flattened: FlattendBVH): FlattendBVH {
+  const next = {...flattened, buffer: flattened.buffer.slice(0), instancesBuffer: flattened.instancesBuffer?.slice(0)};
+  if (flattened.buffer.byteLength && flattened.instancesBuffer) {
+    tlasRefitMetadata.set(next, getTLASRefitMetadata(flattened, new Int32Array(flattened.buffer)));
+  }
+  return next;
 }
 
 export function refitTLAS(
@@ -724,7 +749,8 @@ function getBlasRefitData(buffer: ArrayBuffer): BlasRefitData {
 /** Refit a BVH2 BLAS after vertex deformation, preserving topology. */
 export function refitBLAS(
   flattened: FlattendBVH,
-  geometry: Pick<Geometry, 'position'> & Partial<Pick<Geometry, 'dynamic'>>
+  geometry: Pick<Geometry, 'position'> & Partial<Pick<Geometry, 'dynamic'>>,
+  displacement?: {normal: Float32Array; scale: number; ranges: Float32Array}
 ) {
   if ((flattened.layout ?? 'bvh2') !== 'bvh2' || !flattened.buffer.byteLength) {
     return false;
@@ -732,6 +758,18 @@ export function refitBLAS(
   const { offsets, vertices, postorder } = getBlasRefitData(flattened.buffer);
   const floats = new Float32Array(flattened.buffer), ints = new Int32Array(flattened.buffer);
   const positions = geometry.position.array, stride = geometry.position.itemSize;
+  const sourceTriangles = new Int32Array(displacement ? floats.length / 4 : 0).fill(-1);
+  const prism = new Float32Array(6);
+  if (displacement) {
+    // Leaf source IDs remain distinct even for duplicate index triples.
+    // Refuse old caches without this metadata before mutating their bounds.
+    const triangleIds = flattened.triangleIds;
+    if (!(triangleIds instanceof Uint32Array)) return false;
+    for (let i = 0; i < triangleIds.length; i += 2) {
+      const record: number = Number(triangleIds[i]);
+      sourceTriangles[record] = triangleIds[i + 1];
+    }
+  }
   if (flattened.buildSurfaceArea == null) {
     let area = 0;
     for (const index of postorder) {
@@ -750,6 +788,19 @@ export function refitBLAS(
       const left = base + 8, right = child * 4;
       minX = Math.min(floats[left], floats[right]); minY = Math.min(floats[left + 1], floats[right + 1]); minZ = Math.min(floats[left + 2], floats[right + 2]);
       maxX = Math.max(floats[left + 4], floats[right + 4]); maxY = Math.max(floats[left + 5], floats[right + 5]); maxZ = Math.max(floats[left + 6], floats[right + 6]);
+    } else if (displacement) {
+      for (let i = 0; i < -child; i++) {
+        const record = base + 8 + i * 4;
+        const ia = ints[record], ib = ints[record + 1], ic = ints[record + 2];
+        const triangle = sourceTriangles[record / 4];
+        if (triangle < 0) return false;
+        const minimum = displacement.ranges[triangle * 2], maximum = displacement.ranges[triangle * 2 + 1];
+        if (!triangleBounds(positions, stride, displacement.normal, 3, ia, ib, ic,
+          minimum * displacement.scale, maximum * displacement.scale, prism, 0)) return false;
+        ints[record + 3] = flattened.builder === 'tinybvh' ? quantizeDisplacementRange(minimum, maximum) : packH(minimum, maximum);
+        minX = Math.min(minX, prism[0]); minY = Math.min(minY, prism[1]); minZ = Math.min(minZ, prism[2]);
+        maxX = Math.max(maxX, prism[3]); maxY = Math.max(maxY, prism[4]); maxZ = Math.max(maxZ, prism[5]);
+      }
     } else {
       const start = offsets[index], end = start + 1 + vertices[start];
       for (let i = start + 1; i < end; i++) {

@@ -86,6 +86,9 @@ int32_t mt_context_commit_with_settings(mt_context handle, const uint8_t *input,
   const mt_render_settings *settings, char *error, size_t capacity);
 int32_t mt_context_render(mt_context handle, uint32_t additional_samples, char *error, size_t capacity);
 int32_t mt_context_reset(mt_context handle, char *error, size_t capacity);
+/* Wait up to 30 seconds for submitted GPU work without changing the scene or
+ * samples. Requires a committed, healthy scene and no active render job. */
+int32_t mt_context_wait(mt_context handle, char *error, size_t capacity);
 /* Replace the Camera[32] record described in mutracer-scene.h (exactly 128 bytes).
  * Uses the committed image dimensions/aspect and retains geometry, textures and
  * pipeline. Every successful call resets samples and expires the previous job,
@@ -106,12 +109,13 @@ int32_t mt_context_update_camera(mt_context handle, const uint8_t *input, size_t
  * are refreshed automatically. Existing authored tangents require flags&2 and
  * replacement values; adding/removing authored tangents needs a full commit.
  * UVs, colors, indices, material indices and texture bindings remain unchanged.
- * Displacement, unused geometry, resource size or shader-stack changes return
+ * Unused geometry, resource size or shader-stack changes return
  * "Full scene commit required:". Successful updates reset samples/expire the
  * last job. Invalid input/unsupported updates preserve scene/samples/job.
  * Rejects active jobs and failed scenes; GPU execution failure marks it failed.
- * Blocks. CPU copying/upload cost can grow with the whole scene; native HWRT
- * rebuilds acceleration structures. Temporary CPU/GPU copies increase memory use.
+ * Blocks until submitted GPU work completes. Uploads cover changed geometry
+ * and affected instances; HWRT rebuilds affected BLASes and the TLAS. Temporary
+ * CPU/GPU copies increase memory use.
  */
 int32_t mt_context_update_geometry(mt_context handle, const uint8_t *input, size_t length,
   char *error, size_t capacity);
@@ -122,11 +126,12 @@ int32_t mt_context_update_geometry(mt_context handle, const uint8_t *input, size
  * only that instance. Materials, geometry and textures are preserved.
  * Success restarts accumulation and expires the last job, even for identical
  * input. Rejects active jobs and failed scenes. Validation rejection preserves
- * scene/samples/job. GPU failure marks the scene failed. This call blocks.
- * Resource size, traversal stack or HWRT closest-hit eligibility changes return
+ * scene/samples/job. GPU failure marks the scene failed. This call blocks until
+ * submitted GPU work completes. Resource size or traversal stack changes return
  * "Full scene commit required:"; submit an updated full descriptor instead.
- * Cost grows with instance/BLAS data and emissive triangles. Full commits and
- * candidate updates may temporarily retain old and new CPU/GPU resources.
+ * CPU cost can grow with total instance count; uploads cover affected instances
+ * and TLAS ranges. Affected emissive bindings also refresh light sampling.
+ * Candidate updates may temporarily retain old and new CPU/GPU resources.
  */
 int32_t mt_context_update_transform(mt_context handle, const uint8_t *input, size_t length,
   char *error, size_t capacity);

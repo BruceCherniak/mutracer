@@ -1042,12 +1042,20 @@ impl GpuScene {
         Ok(())
     }
     fn validate_lighting(&self, updates: &scene::LightingUpdates) -> Result<()> {
-        for (id, width, height, data) in updates {
+        for (id, offset, width, height, data) in updates {
             if *id < 21 {
-                if self.buffers.get(id).map(wgpu::Buffer::size) != Some(data.len() as u64) {
-                    return Err("Full scene commit required: scene buffer size changed".into());
+                let size = self
+                    .buffers
+                    .get(id)
+                    .ok_or("Missing updated scene buffer")?
+                    .size();
+                if *offset > size || data.len() as u64 > size - offset {
+                    return Err("Full scene commit required: scene write exceeds buffer".into());
                 }
             } else {
+                if *offset != 0 {
+                    return Err("Texture write destination must be zero".into());
+                }
                 let texture = self.textures.get(id).ok_or("Missing lighting texture")?;
                 if texture.width() != *width || texture.height() != *height {
                     return Err(
@@ -1073,9 +1081,71 @@ impl GpuScene {
             Option<wgpu::Buffer>,
         )>,
     > {
-        let Some(_current) = self.scene.hwrt.as_ref().filter(|_| self.hardware.is_some()) else {
+        let Some(current) = self.scene.hwrt.as_ref().filter(|_| self.hardware.is_some()) else {
             return Ok(None);
         };
+        if updates.changed_blases.is_some() {
+            let memory_scope = self
+                .gpu
+                .device
+                .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+            let validation_scope = self
+                .gpu
+                .device
+                .push_error_scope(wgpu::ErrorFilter::Validation);
+            let result = (|| -> Result<_> {
+                let resources = self.hardware.as_ref().unwrap().rebuild_changed(
+                    &self.gpu.device,
+                    &self.gpu.queue,
+                    current,
+                    updates,
+                )?;
+                let entries = [
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.buffers[&1].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.buffers[&2].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: self.buffers[&3].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: self.buffers[&4].as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: layout::hwrt_binding::ACCELERATION as u32,
+                        resource: resources.tlas.as_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: layout::hwrt_binding::INDICES as u32,
+                        resource: resources.mapping.as_entire_binding(),
+                    },
+                ];
+                let group = self
+                    .gpu
+                    .device
+                    .create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("MuTracer changed geometry bindings"),
+                        layout: &self.pipeline.get_bind_group_layout(0),
+                        entries: &entries,
+                    });
+                Ok(Some((resources, current.clone(), group, None)))
+            })();
+            let validation = pollster::block_on(validation_scope.pop());
+            let memory = pollster::block_on(memory_scope.pop());
+            if let Some(error) = validation.or(memory) {
+                return Err(format!(
+                    "Full scene commit required: changed BLAS preparation: {error}"
+                )
+                .into());
+            }
+            return result;
+        }
         let (capture, assets) = self
             .retained
             .as_ref()
@@ -1149,12 +1219,14 @@ impl GpuScene {
         if profiling::enabled() {
             eprintln!(
                 "{}",
-                json!({"nativeUploadProfile": {"writeBytes": updates.iter().map(|(_,_,_,data)| data.len()).sum::<usize>(), "resources": updates.iter().map(|(id,_,_,data)| json!({"id": id,"bytes": data.len()})).collect::<Vec<_>>()}})
+                json!({"nativeUploadProfile": {"writeBytes": updates.iter().map(|(_,_,_,_,data)| data.len()).sum::<usize>(), "resources": updates.iter().map(|(id,offset,_,_,data)| json!({"id": id,"offset":offset,"bytes": data.len()})).collect::<Vec<_>>()}})
             );
         }
-        for (id, width, height, data) in updates {
+        for (id, offset, width, height, data) in updates {
             if *id < 21 {
-                self.gpu.queue.write_buffer(&self.buffers[id], 0, data);
+                self.gpu
+                    .queue
+                    .write_buffer(&self.buffers[id], *offset, data);
             } else {
                 self.gpu.queue.write_texture(
                     self.textures[id].as_image_copy(),

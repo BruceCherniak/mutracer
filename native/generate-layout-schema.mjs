@@ -19,7 +19,8 @@ const quantTS=`export function quantizeDisplacementRange(minimum: number, maximu
     : Math.max(0, Math.min(${rounding.rangeScale}, Math.ceil(Math.fround(hi * ${rounding.rangeScale}))));
   return (lower << ${rounding.rangeShift}) | upper;
 }\n`;
-save('native/layout.ts',`// ${banner}\nexport const WORD_BYTES = ${schema.WORD_BYTES};\n`+Object.entries(groups).map(([name,fields])=>`export const ${name} = ${JSON.stringify(fields,null,2)} as const;`).join('\n')+'\n'+quantTS);
+save('src/renderer/displacementRange.ts', `// ${banner}\n`+quantTS);
+save('native/layout.ts',`// ${banner}\nexport const WORD_BYTES = ${schema.WORD_BYTES};\n`+Object.entries(groups).map(([name,fields])=>`export const ${name} = ${JSON.stringify(fields,null,2)} as const;`).join('\n')+"\nexport {quantizeDisplacementRange} from '../src/renderer/displacementRange.js';\n");
 const rust=Object.entries(groups).map(([name,fields])=>`pub mod ${name.toLowerCase()} {\n${Object.entries(fields).map(([field,value])=>`    pub const ${field}: usize = ${value};`).join('\n')}\n}`).join('\n');
 const bindRust=schema.bindGroups.map(g=>`        super::Group { layout: vec![${g.bindings.map(b=>'serde_json::json!('+JSON.stringify(b.layout)+')').join(',')}], entries: vec![${g.bindings.map(b=>`super::Binding { binding: ${b.layout.binding}, kind: "${b.kind}".into(), id: ${b.resource} }`).join(',')}] }`).join(',\n');
 const textureRust=schema.textureFormatInfo.map(f=>`        ${f.id} => Some(("${f.name}", ${f.bytes})),`).join('\n');

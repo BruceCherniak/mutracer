@@ -1,7 +1,7 @@
 /// <reference path="../../browser-types.d.ts" />
 import MeshState from '../../../src/scene/MeshState.js';
 import InstanceState from '../../../src/scene/InstanceState.js';
-import {prepareSceneMeshes, updateMeshInstanceTransforms} from '../../../src/renderer/scenePreparation.js';
+import {prepareSceneMeshes, updateMeshInstanceTransforms, dirtyPreparedInstanceIndices} from '../../../src/renderer/scenePreparation.js';
 import Geometry, { Attribute } from '../../../src/scene/Geometry.js';
 import MaterialState from '../../../src/scene/MaterialState.js';
 import TextureState from '../../../src/scene/TextureState.js';
@@ -9,10 +9,10 @@ import { attributeLength, attributeValue } from '../../../src/scene/attributeDat
 import { markDeformedGeometry } from '../../../src/scene/geometryChanges.js';
 import { createPlaneGeometry } from '../../../src/util/commonGeometry.js';
 import { generateVertexTangents } from '../../../src/util/geometry.js';
-import { read } from '../../../src/math/access.js';
-import { buildBLAS, buildTLAS } from '../../../src/renderer/bvhAccel.js';
+import { read, write } from '../../../src/math/access.js';
+import { buildBLAS, buildTLAS, packLinearInstances } from '../../../src/renderer/bvhAccel.js';
 import { setGeometryBvh } from '../../../src/renderer/geometryBvh.js';
-import { getBvhBounds } from '../../../src/renderer/geometryBvhBounds.js';
+import { getBvhBounds, computeGeometryBounds } from '../../../src/renderer/geometryBvhBounds.js';
 import type { GeometryUpdateState, GeometryUpdateMesh } from '../../../src/renderer/geometryUpdateState.js';
 import { canUpdateGeometries, geometryTopologyChanged, packVertexAttributes,
   updatePreparedGeometries } from '../../../src/renderer/geometryUpdates.js';
@@ -118,10 +118,15 @@ function meshStateBounds(flags: number, segments: number): Uint8Array {
   setGeometryBvh(geometry,buildBLAS(geometry)); setGeometryBvh(other,buildBLAS(other));
   const material = new MaterialState(), mesh = new MeshState(geometry,material), b = new MeshState(other,material);
   if (flags & 1) mesh.setInstanceState(new InstanceState({count:1,transforms:new Float32Array([1,0,0,0,0,1,0,0,0,0,1,0,2,0,0,1])}));
-  const prepared = prepareSceneMeshes([mesh,b],m=>({geometry:m.geometry,displacementScale:0}));
+  const software = !(flags & 2);
+  const prepared = prepareSceneMeshes([mesh,b],m=>({geometry:m.geometry,displacementScale:0}),computeGeometryBounds,software);
   geometry.position.array[0] -= .375; geometry.position.array[1] += .25;
-  geometry.markVerticesUpdated(); updatePreparedGeometries(prepared,new Set([geometry]));
-  const instances = updateMeshInstanceTransforms(prepared.instanceBindings), tlas = buildTLAS(instances,prepared.blases);
+  geometry.markVerticesUpdated(); updatePreparedGeometries(prepared,new Set([geometry]),{softwareBvhs:software});
+  if (flags & 4) write(mesh.transform,12,.25);
+  const dirty = dirtyPreparedInstanceIndices(prepared.instanceBindings,new Set([mesh]),prepared.instances);
+  const instances = updateMeshInstanceTransforms(prepared.instanceBindings,prepared.instances,flags & 4 ? dirty : undefined);
+  const tlas = software ? buildTLAS(instances,prepared.blases) : {buffer:new ArrayBuffer(0),
+    instancesBuffer:packLinearInstances(instances,[0,attributeLength(geometry.indices.array)/3],[0,geometry.vertexCount])};
   const bounds = new Float32Array(12);
   let offset=0;
   for (const binding of prepared.instanceBindings) for (const bound of binding.bvhBounds) {

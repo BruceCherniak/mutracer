@@ -437,6 +437,19 @@ pub unsafe extern "C" fn mt_context_reset(handle: u64, error: *mut c_char, capac
     })
 }
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_context_wait(handle: u64, error: *mut c_char, capacity: usize) -> i32 {
+    action(error, capacity, |registry| {
+        let context = context(registry, handle)?;
+        idle(context)?;
+        let scene = ready(context)?;
+        scene.gpu.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_secs(30)),
+        })?;
+        Ok(())
+    })
+}
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_update_camera(
     handle: u64,
     input: *const u8,
@@ -594,7 +607,7 @@ pub unsafe extern "C" fn mt_context_update_transform(
         let hardware = scene
             .hardware
             .as_ref()
-            .map(|hw| hw.transform_plan(scene.scene.hwrt.as_ref().unwrap(), &packed[1].3))
+            .map(|hw| hw.transform_plan(scene.scene.hwrt.as_ref().unwrap(), &packed))
             .transpose()?;
         context.failed = true;
         let scene = context.scene.as_mut().unwrap();
@@ -603,6 +616,7 @@ pub unsafe extern "C" fn mt_context_update_transform(
                 &scene.gpu.device,
                 &scene.gpu.queue,
                 plan,
+                scene.scene.hwrt.as_mut().unwrap(),
             );
         }
         scene.update_lighting(&packed)?;
@@ -920,6 +934,100 @@ pub unsafe extern "C" fn mt_job_cancel(id: u64, error: *mut c_char, capacity: us
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn changed_blas_and_tlas_are_ready_after_interleaved_retained_edits() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _entry = ENTRY_LOCK.lock().unwrap();
+        let Ok(gpu) = GpuDevice::with_backend(1) else {
+            return;
+        };
+        if !gpu.hardware_ray_query {
+            return;
+        }
+        let make = |input: &[u8]| {
+            let (mut scene, mut assets, retained) = scene::prepare_retained(input, true).unwrap();
+            scene.hwrt = Some(
+                hardware::capture_from_prepared(&mut assets, scene.native_layout.as_ref().unwrap())
+                    .unwrap(),
+            );
+            let mut result = GpuScene::new(
+                Path::new(""),
+                scene,
+                &RenderOptions {
+                    flags: 4,
+                    ..Default::default()
+                },
+                Some(&assets),
+                gpu.clone(),
+            )
+            .unwrap();
+            assert!(result.hardware.is_some());
+            result.retained = Some(retained);
+            result
+        };
+        for optional_refit in [false, true] {
+            #[cfg(not(target_os = "macos"))]
+            if optional_refit {
+                continue;
+            }
+            let mut input = scene::tests::input();
+            input[118 * 4..119 * 4].copy_from_slice(&3f32.to_le_bytes());
+            let mut state = make(&input);
+            state.hardware.as_mut().unwrap().metal_refit_opt_in = optional_refit;
+            let mut transform = [0u32; 20];
+            transform[0] = 1;
+            for index in [0, 5, 10, 15] {
+                transform[4 + index] = 1f32.to_bits();
+            }
+            transform[16] = 0.125f32.to_bits();
+            let bytes: Vec<_> = transform.iter().flat_map(|v| v.to_le_bytes()).collect();
+            let writes = state.retained.as_ref().unwrap().transform(&bytes).unwrap();
+            let plan = state
+                .hardware
+                .as_ref()
+                .unwrap()
+                .transform_plan(state.scene.hwrt.as_ref().unwrap(), &writes)
+                .unwrap();
+            state.hardware.as_mut().unwrap().update_transforms(
+                &state.gpu.device,
+                &state.gpu.queue,
+                plan,
+                state.scene.hwrt.as_mut().unwrap(),
+            );
+            state.update_lighting(&writes).unwrap();
+            state.retained.as_ref().unwrap().accept_transform().unwrap();
+            input[60 * 4..61 * 4].copy_from_slice(&0.125f32.to_le_bytes());
+            let original = f32::from_le_bytes(input[120 * 4..121 * 4].try_into().unwrap());
+            for (step, shift) in [0.05f32, 0.1, 0.0].into_iter().enumerate() {
+                input[120 * 4..121 * 4].copy_from_slice(&(original + shift).to_le_bytes());
+                let mut bytes: Vec<_> = [1u32, 0, 3, 0]
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect();
+                bytes.extend_from_slice(&input[120 * 4..129 * 4]);
+                let writes = state.retained.as_ref().unwrap().geometry(&bytes).unwrap();
+                assert_eq!(writes.changed_blases.as_deref(), Some(&[0][..]));
+                let (resources, capture, group, attributes) =
+                    state.prepare_geometry_hardware(&writes).unwrap().unwrap();
+                assert!(attributes.is_none());
+                assert_eq!(resources.used_metal_refit, optional_refit && step > 0);
+                state.hardware = Some(resources);
+                state.scene.hwrt = Some(capture);
+                state.groups[0] = group;
+                state.update_lighting(&writes).unwrap();
+                state.retained.as_ref().unwrap().accept_geometry().unwrap();
+                let mut expected = make(&input);
+                state.add_samples(8, 6., 12345).unwrap();
+                expected.add_samples(8, 6., 12345).unwrap();
+                for kind in 0..3 {
+                    assert_eq!(
+                        state.read_pixels(kind).unwrap(),
+                        expected.read_pixels(kind).unwrap()
+                    );
+                }
+            }
+        }
+    }
     #[test]
     fn rejected_hardware_candidate_can_render_the_rebuilt_software_scene() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
