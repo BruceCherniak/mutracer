@@ -71,7 +71,8 @@ function compilerSource() {
   staged = mkdtempSync(resolve(root, '.native-build/compiler-'));
   cpSync(resolve(root, 'src'), resolve(staged, 'src'), {recursive:true});
   cpSync(resolve(root, 'native'), resolve(staged, 'native'), {recursive:true,
-    filter: path => !/\.[^/]+$/.test(path) || /\.(ts|json)$/.test(path)});
+    filter: path => !path.includes('/node_modules') &&
+      (!/\.[^/]+$/.test(path) || /\.(ts|json)$/.test(path))});
   for (const name of ['tsconfig.json', 'package.json']) cpSync(resolve(root, name), resolve(staged, name));
   symlinkSync(resolve(root, 'node_modules'), resolve(staged, 'node_modules'), 'dir');
   for (const [file, types] of [['src/math/access.ts', ['Float32Array', 'Float64Array', 'Array']],

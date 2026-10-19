@@ -99,7 +99,8 @@
     "native:scene:verify": "node native/scene-verify.mjs",
     "native:viewer": "node native/viewer-build.mjs",
     "native:viewer:build": "node native/viewer-build.mjs --build-only",
-    "native:settings": "node native/settings-render.mjs"
+    "native:settings": "node native/settings-render.mjs",
+    "native:ci": "node native/ci.mjs"
   },
   "dependencies": {
     "oidn-web": "^0.5.0",

@@ -28,3 +28,25 @@ jobs:
       - run: npm run test:viewer
       - run: npm run build
       - run: npm run check:lib-esm
+
+  native-macos:
+    runs-on: macos-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            native/toolchain/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - name: Install pinned native compiler for this platform
+        run: npm ci --prefix native/toolchain --include=optional
+      - name: Build and validate native modules and GPU contracts
+        env:
+          MUTRACER_NATIVE_OUTPUT: ${{ runner.temp }}/mutracer-native
+        run: npm run native:ci
