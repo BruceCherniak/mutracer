@@ -1,4 +1,5 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    mutracer_native_probe::logging::stderr();
     let args: Vec<_> = std::env::args().collect();
     if args.len() != 6 {
         return Err("Usage: image-diagnostics INPUT OUTPUT BACKEND(0|1) SAMPLES SEED".into());

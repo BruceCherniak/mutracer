@@ -5,7 +5,8 @@ import {fileURLToPath} from 'node:url';
 const root=resolve(dirname(fileURLToPath(import.meta.url)), '..'), check=process.argv.includes('--check');
 const bundle=await build({entryPoints:[resolve(root,'src/renderer/sceneLayoutSchema.ts')],bundle:true,write:false,platform:'node',format:'esm'});
 const schema=await import('data:text/javascript;base64,'+Buffer.from(bundle.outputFiles[0].contents).toString('base64'));
-const groups={...schema.sceneRecords(), VERSION:schema.protocolVersions, RESOURCE:schema.resourceIds, SAMPLER:schema.samplerIds, KIND:schema.packetKinds, FORMAT:schema.textureFormats,
+const errors=JSON.parse(readFileSync(resolve(root,'native/scene-error-schema.json'),'utf8'));
+const groups={ERROR_PACKET:errors.packet,ERROR_CODE:errors.codes,...schema.sceneRecords(), VERSION:schema.protocolVersions, RESOURCE:schema.resourceIds, SAMPLER:schema.samplerIds, KIND:schema.packetKinds, FORMAT:schema.textureFormats,
   RAY_UNIFORM:schema.rayTraceUniformOffsets(), UNIFORM_SIZE:schema.uniformSizes, HWRT_BINDING:schema.hwrtBindings,
   GROUP:Object.fromEntries(schema.bindGroups.map((g,i)=>[g.name,i]))};
 for(const group of schema.bindGroups)groups[group.name+'_BINDING']=Object.fromEntries(group.bindings.map(b=>[b.name,b.layout.binding]));

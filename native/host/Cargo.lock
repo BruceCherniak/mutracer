@@ -333,6 +333,8 @@ dependencies = [
  "anyhow",
  "cc",
  "libloading",
+ "objc2",
+ "objc2-metal",
  "png",
  "pollster",
  "serde",

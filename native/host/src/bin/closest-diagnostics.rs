@@ -1,4 +1,5 @@
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    mutracer_native_probe::logging::stderr();
     let args: Vec<_> = std::env::args().collect();
     if args.len() != 5 {
         return Err("Usage: closest-diagnostics INPUT OUTPUT SAMPLES SEED".into());

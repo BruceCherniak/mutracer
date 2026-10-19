@@ -1,4 +1,5 @@
 fn main() {
+    mutracer_native_probe::logging::stderr();
     let args: Vec<_> = std::env::args().collect();
     if args.len() < 3 || args.len() > 5 {
         eprintln!("Usage: mutracer-native-probe SCENE_DIRECTORY OUTPUT_DIRECTORY [SAMPLES] [hwrt]");

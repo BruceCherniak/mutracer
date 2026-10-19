@@ -13,6 +13,14 @@ if a.thermal_helper:
 gpuProfiling=mode==1 and os.environ.get('MUTRACER_NATIVE_GPU_TIMESTAMPS')=='1'
 if mode==0:os.environ.pop('MUTRACER_NATIVE_GPU_TIMESTAMPS',None)
 lib=c.CDLL(a.library)
+# Keep profiling JSON in stderr now that library diagnostics are opt-in.
+LogCallback=c.CFUNCTYPE(None,c.c_void_p,c.c_void_p,c.c_size_t)
+@LogCallback
+def native_log(_user,message,length):os.write(2,c.string_at(message,length)+b'\n')
+if hasattr(lib,'mt_set_log_callback'):
+ lib.mt_set_log_callback.argtypes=[LogCallback,c.c_void_p]
+ assert lib.mt_set_log_callback(native_log,None)==0
+
 u=c.c_uint32;h=c.c_uint64;n=c.c_size_t;v=c.c_void_p
 sigs={'create_with_backend':[u,c.POINTER(h)],'commit':[h,v,n],'render':[h,u],'reset':[h],'read_pixels':[h,u,v,n,c.POINTER(n)],'destroy':[h],'backend':[h,c.POINTER(u),v,n],'update_transform':[h,v,n],'update_geometry':[h,v,n]}
 for key,args in sigs.items():getattr(lib,'mt_context_'+key).argtypes=args+[v,n];getattr(lib,'mt_context_'+key).restype=c.c_int32

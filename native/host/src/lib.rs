@@ -12,6 +12,8 @@ use std::{
     time::{Duration, Instant},
 };
 use wgpu::util::DeviceExt;
+#[macro_use]
+pub mod logging;
 pub mod context;
 pub mod denoise;
 mod denoise_ffi;
@@ -20,6 +22,8 @@ pub mod hit_diagnostics;
 pub mod image_diagnostics;
 #[rustfmt::skip]
 pub mod layout;
+#[cfg(feature = "fuzzing")]
+pub mod fuzzing;
 mod material_properties;
 mod native_bvh;
 pub mod path_diagnostics;
@@ -31,6 +35,19 @@ pub mod settings;
 mod tinybvh;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+// C callers and headless threads need not have Cocoa's event-loop pool. Drain
+// temporary Metal objects per operation; persistent resources own their handles.
+fn platform_scope<T>(body: impl FnOnce() -> T) -> T {
+    #[cfg(target_os = "macos")]
+    {
+        objc2::rc::autoreleasepool(|_| body())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        body()
+    }
+}
 
 unsafe extern "C" {
     fn mt_core_init();
@@ -366,9 +383,11 @@ impl GpuDevice {
             ..Default::default()
         }))?;
         let info = adapter.get_info();
-        eprintln!(
+        native_log!(
             "Native adapter: {} ({:?}, {:?})",
-            info.name, info.backend, info.device_type
+            info.name,
+            info.backend,
+            info.device_type
         );
         let hardware_ray_query = adapter
             .features()
@@ -405,7 +424,7 @@ impl GpuDevice {
                 ..Default::default()
             }))?;
         if profiling::gpu_enabled() {
-            eprintln!(
+            native_log!(
                 "{}",
                 json!({"nativeGpuCapabilities": {"timestampQuery": device.features().contains(wgpu::Features::TIMESTAMP_QUERY),"encoderTimestamps": device.features().contains(wgpu::Features::TIMESTAMP_QUERY_INSIDE_ENCODERS)}})
             );
@@ -860,7 +879,7 @@ impl GpuScene {
         } = compiled;
         let compile_seconds = shader_started.elapsed().as_secs_f64();
         if std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1") {
-            eprintln!(
+            native_log!(
                 "{}",
                 json!({"nativeReuseProfile": {"pipelineCacheHit": cache_hit,
                 "reusedBufferBytes": reused_bytes,"allocatedBufferBytes": allocated_bytes}})
@@ -997,9 +1016,8 @@ impl GpuScene {
         if profiling::gpu_enabled() {
             let gpu_ms = timer
                 .as_ref()
-                .map(|t| t.milliseconds(&self.gpu.device, &self.gpu.queue))
-                .transpose()?;
-            eprintln!(
+                .and_then(|t| t.optional_milliseconds(&self.gpu.device, &self.gpu.queue));
+            native_log!(
                 "{}",
                 json!({"nativeRenderProfile": {"firstSample": self.samples, "samples": additional, "kernelGpuMs": gpu_ms}})
             );
@@ -1222,7 +1240,7 @@ impl GpuScene {
             self.scene.native_layout = Some(layout.clone());
         }
         if profiling::enabled() {
-            eprintln!(
+            native_log!(
                 "{}",
                 json!({"nativeUploadProfile": {"writeBytes": updates.iter().map(|(_,_,_,_,data)| data.len()).sum::<usize>(), "resources": updates.iter().map(|(id,offset,_,_,data)| json!({"id": id,"offset":offset,"bytes": data.len()})).collect::<Vec<_>>()}})
             );
@@ -1304,7 +1322,7 @@ fn render_scene(
     }
     let compile_seconds = gpu_scene.compile_seconds;
     let hardware_ray_query = gpu_scene.gpu.hardware_ray_query;
-    eprintln!("Native pipeline ready in {compile_seconds:.2}s; tracing {samples} samples...");
+    native_log!("Native pipeline ready in {compile_seconds:.2}s; tracing {samples} samples...");
     let render_started = Instant::now();
     gpu_scene.add_samples(samples, options.bounces, options.seed)?;
     let scene = &gpu_scene.scene;
@@ -1397,7 +1415,7 @@ fn render_scene(
             "wholeLibraryNative": false
         }))?,
     )?;
-    eprintln!("Saved {}", output.join("render.png").display());
+    native_log!("Saved {}", output.join("render.png").display());
     Ok(())
 }
 

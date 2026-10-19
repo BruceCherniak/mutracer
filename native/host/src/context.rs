@@ -91,6 +91,7 @@ struct Registry {
     contexts: HashMap<u64, Context>,
 }
 static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
+thread_local! { static TOUCHED: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) }; }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -108,7 +109,7 @@ fn action(
     capacity: usize,
     operation: impl FnOnce(&mut Registry) -> Result<()>,
 ) -> i32 {
-    let result = (|| -> Result<()> {
+    let result = platform_scope(|| -> Result<()> {
         let mut slot = REGISTRY
             .try_lock()
             .map_err(|_| "Context registry is active or poisoned")?;
@@ -116,10 +117,18 @@ fn action(
             next: 1,
             contexts: HashMap::new(),
         });
-        // Catch while guards remain in this stack frame, avoiding mutex poisoning.
-        std::panic::catch_unwind(AssertUnwindSafe(|| operation(registry)))
-            .map_err(|_| "Native context operation panicked")?
-    })();
+        // Catch while guards remain in scope, avoiding mutex poisoning.
+        TOUCHED.set(None);
+        match std::panic::catch_unwind(AssertUnwindSafe(|| operation(registry))) {
+            Ok(result) => result,
+            Err(_) => {
+                if let Some(context) = TOUCHED.get().and_then(|id| registry.contexts.get_mut(&id)) {
+                    context.failed = true;
+                }
+                Err("Native context operation panicked; context marked failed".into())
+            }
+        }
+    });
     write_result(error, capacity, result)
 }
 fn write_result(error: *mut c_char, capacity: usize, result: Result<()>) -> i32 {
@@ -144,11 +153,14 @@ pub(super) fn check_owner() -> Result<()> {
     Ok(())
 }
 fn context(registry: &mut Registry, handle: u64) -> Result<&mut Context> {
-    registry
+    let context = registry
         .contexts
         .get_mut(&handle)
-        .ok_or_else(|| "Invalid or destroyed native context".into())
+        .ok_or("Invalid or destroyed native context")?;
+    TOUCHED.set(Some(handle));
+    Ok(context)
 }
+
 fn ready(context: &mut Context) -> Result<&mut GpuScene> {
     if context.failed {
         return Err("Scene failed; commit a new scene before rendering or reading".into());
@@ -297,6 +309,19 @@ pub unsafe extern "C" fn mt_context_commit_with_settings(
     error: *mut c_char,
     capacity: usize,
 ) -> i32 {
+    platform_scope(|| unsafe {
+        commit_with_settings(handle, input, length, settings, error, capacity)
+    })
+}
+
+unsafe fn commit_with_settings(
+    handle: u64,
+    input: *const u8,
+    length: usize,
+    settings: *const settings::RenderSettings,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
     // Caller buffers are borrowed only by this synchronous invocation. Every
     // runtime message owns its input; the registry is free during preparation.
     if settings.is_null() || input.is_null() || length > scene::MAX_BYTES {
@@ -329,115 +354,142 @@ pub unsafe extern "C" fn mt_context_commit_with_settings(
         return status;
     }
     let snapshot = snapshot.unwrap();
-    let result = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<_> {
-        let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
-        let started = Instant::now();
-        let (mut scene, mut assets, mut retained) = scene::prepare_retained_with_settings(
-            bytes,
-            snapshot.backend == 1
-                && snapshot.gpu.hardware_ray_query
-                && hardware::direct_input_enabled(),
-            snapshot.backend,
-            &settings,
-        )?;
-        cancelled(&cancel)?;
-        let prepared = Instant::now();
-        let uniform = assets
-            .get("native-7")
-            .ok_or("Missing normalized render settings")?;
-        let seed = u32::from_le_bytes(
-            uniform[layout::ray_uniform::SEQUENCE_SEED..layout::ray_uniform::SEQUENCE_SEED + 4]
-                .try_into()?,
-        );
-        let bounces = i32::from_le_bytes(
-            uniform[layout::ray_uniform::BOUNCES..layout::ray_uniform::BOUNCES + 4].try_into()?,
-        ) as f32;
-
-        let mut options = RenderOptions { seed, bounces, ..Default::default() };
-        let mut fallback_reason = String::new();
-        if snapshot.backend != 0 {
-            let capture = if snapshot.gpu.hardware_ray_query {
-                hardware::capture_from_prepared(
-                    &mut assets,
-                    scene
-                        .native_layout
-                        .as_ref()
-                        .ok_or("Missing native HWRT metadata")?,
-                )
-            } else {
-                Err("Hardware ray queries unavailable on this device".into())
-            };
-            match capture {
-                Ok(capture) => {
-                    scene.hwrt = Some(capture);
-                    options.flags |= 4;
-                }
-                Err(error) => {
-                    fallback_reason = error.to_string();
-                    scene = prepare_software_fallback(bytes, scene, &mut assets, &mut retained)?;
-                }
-            }
-        }
-        cancelled(&cancel)?;
-        let hardware_prepared = Instant::now();
-        let mut software_scene = scene.clone();
-        software_scene.hwrt = None;
-        let candidate = GpuScene::new_reusing(
-            Path::new(""),
-            scene,
-            &options,
-            Some(&assets),
-            snapshot.gpu.clone(),
-            Some(&snapshot.spare_buffers),
-            Some(&snapshot.spare_hardware),
-        );
-        let mut candidate = match candidate {
-            Ok(candidate) => candidate,
-            Err(error) if snapshot.backend == 1 && options.flags & 4 != 0 => {
-                fallback_reason = format!("HWRT upload unavailable: {error}");
-                let software_scene =
-                    prepare_software_fallback(bytes, software_scene, &mut assets, &mut retained)?;
-                GpuScene::new_reusing(
-                    Path::new(""),
-                    software_scene,
-                    &RenderOptions { flags: 0, ..options },
-                    Some(&assets),
-                    snapshot.gpu.clone(),
-                    Some(&snapshot.spare_buffers),
-                    Some(&snapshot.spare_hardware),
-                )?
-            }
-            Err(error) => return Err(error),
-        };
-        if profile {
-            // Host setup includes uploads, AS creation, bindings and validation.
-            // Pipeline time is a subset; retries remain included in setup time.
-            eprintln!(
-                "{}",
-                serde_json::json!({
-                    "nativeCommitProfile": {
-                        "cpuPrepareMs": prepared.duration_since(started).as_secs_f64() * 1000.0,
-                        "hardwareCaptureMs": hardware_prepared.duration_since(prepared).as_secs_f64() * 1000.0,
-                        "gpuSetupMs": hardware_prepared.elapsed().as_secs_f64() * 1000.0,
-                        "pipelineMs": candidate.compile_seconds * 1000.0,
-                        "totalMs": started.elapsed().as_secs_f64() * 1000.0,
-                        "uploadRetried": fallback_reason.starts_with("HWRT upload unavailable:"),
-                    }
-                })
+    let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<_> {
+        let result = (|| -> Result<_> {
+            let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
+            let started = Instant::now();
+            let (mut scene, mut assets, mut retained) = scene::prepare_retained_with_settings(
+                bytes,
+                snapshot.backend == 1
+                    && snapshot.gpu.hardware_ray_query
+                    && hardware::direct_input_enabled(),
+                snapshot.backend,
+                &settings,
+            )?;
+            cancelled(&cancel)?;
+            let prepared = Instant::now();
+            let uniform = assets
+                .get("native-7")
+                .ok_or("Missing normalized render settings")?;
+            let seed = u32::from_le_bytes(
+                uniform[layout::ray_uniform::SEQUENCE_SEED..layout::ray_uniform::SEQUENCE_SEED + 4]
+                    .try_into()?,
             );
-        }
-        cancelled(&cancel)?;
-        candidate.retained = Some(retained);
-        Ok((candidate, seed, bounces, fallback_reason))
-    })).unwrap_or_else(|_| Err("Native commit preparation panicked".into()));
+            let bounces = i32::from_le_bytes(
+                uniform[layout::ray_uniform::BOUNCES..layout::ray_uniform::BOUNCES + 4]
+                    .try_into()?,
+            ) as f32;
+
+            let mut options = RenderOptions {
+                seed,
+                bounces,
+                ..Default::default()
+            };
+            let mut fallback_reason = String::new();
+            if snapshot.backend != 0 {
+                let capture = if snapshot.gpu.hardware_ray_query {
+                    hardware::capture_from_prepared(
+                        &mut assets,
+                        scene
+                            .native_layout
+                            .as_ref()
+                            .ok_or("Missing native HWRT metadata")?,
+                    )
+                } else {
+                    Err("Hardware ray queries unavailable on this device".into())
+                };
+                match capture {
+                    Ok(capture) => {
+                        scene.hwrt = Some(capture);
+                        options.flags |= 4;
+                    }
+                    Err(error) => {
+                        fallback_reason = error.to_string();
+                        scene =
+                            prepare_software_fallback(bytes, scene, &mut assets, &mut retained)?;
+                    }
+                }
+            }
+            cancelled(&cancel)?;
+            let hardware_prepared = Instant::now();
+            let mut software_scene = scene.clone();
+            software_scene.hwrt = None;
+            let candidate = GpuScene::new_reusing(
+                Path::new(""),
+                scene,
+                &options,
+                Some(&assets),
+                snapshot.gpu.clone(),
+                Some(&snapshot.spare_buffers),
+                Some(&snapshot.spare_hardware),
+            );
+            let mut candidate = match candidate {
+                Ok(candidate) => candidate,
+                Err(error) if snapshot.backend == 1 && options.flags & 4 != 0 => {
+                    fallback_reason = format!("HWRT upload unavailable: {error}");
+                    let software_scene = prepare_software_fallback(
+                        bytes,
+                        software_scene,
+                        &mut assets,
+                        &mut retained,
+                    )?;
+                    GpuScene::new_reusing(
+                        Path::new(""),
+                        software_scene,
+                        &RenderOptions {
+                            flags: 0,
+                            ..options
+                        },
+                        Some(&assets),
+                        snapshot.gpu.clone(),
+                        Some(&snapshot.spare_buffers),
+                        Some(&snapshot.spare_hardware),
+                    )?
+                }
+                Err(error) => return Err(error),
+            };
+            if profile {
+                // Host setup includes uploads, AS creation, bindings and validation.
+                // Pipeline time is a subset; retries remain included in setup time.
+                native_log!(
+                    "{}",
+                    serde_json::json!({
+                        "nativeCommitProfile": {
+                            "cpuPrepareMs": prepared.duration_since(started).as_secs_f64() * 1000.0,
+                            "hardwareCaptureMs": hardware_prepared.duration_since(prepared).as_secs_f64() * 1000.0,
+                            "gpuSetupMs": hardware_prepared.elapsed().as_secs_f64() * 1000.0,
+                            "pipelineMs": candidate.compile_seconds * 1000.0,
+                            "totalMs": started.elapsed().as_secs_f64() * 1000.0,
+                            "uploadRetried": fallback_reason.starts_with("HWRT upload unavailable:"),
+                        }
+                    })
+                );
+            }
+            cancelled(&cancel)?;
+            candidate.retained = Some(retained);
+            Ok((candidate, seed, bounces, fallback_reason))
+        })();
+        // write_buffer queues staging allocations until the next submission.
+        // Flush even rejected/cancelled candidates; a client need not render.
+        snapshot.gpu.queue.submit([]);
+        snapshot.gpu.device.poll(wgpu::PollType::Poll)?;
+        result
+    }));
+    let panicked = outcome.is_err();
+    let result = outcome.unwrap_or_else(|_| {
+        Err("Native commit preparation panicked; context marked failed".into())
+    });
     // Publication waits for any currently executing ABI operation, but never
     // holds the registry while waiting for CPU preparation. Cancellation wins
     // until this point; after publication the new scene is committed atomically.
     let mut slot = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
     let registry = slot.as_mut().expect("initialized context registry");
-    let result = (|| -> Result<()> {
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<()> {
         let context = context(registry, handle)?;
         context.commit = None;
+        if panicked {
+            context.failed = true;
+        }
         let (candidate, seed, bounces, fallback_reason) = result?;
         cancelled(&cancel)?;
         // A pending render batch owns the old scene until its fence completes.
@@ -461,7 +513,15 @@ pub unsafe extern "C" fn mt_context_commit_with_settings(
         context.job = None;
         context.failed = false;
         Ok(())
-    })();
+    }))
+    .unwrap_or_else(|_| {
+        if let Some(context) = registry.contexts.get_mut(&handle) {
+            context.failed = true;
+            context.commit = None;
+        }
+        Err("Native commit publication panicked; context marked failed".into())
+    });
+
     drop(slot);
     write_result(error, capacity, result)
 }
@@ -741,7 +801,7 @@ pub unsafe extern "C" fn mt_context_update_transform(
                 &scene.gpu.queue,
                 plan,
                 scene.scene.hwrt.as_mut().unwrap(),
-            );
+            )?;
         }
         scene.update_lighting(&packed)?;
         scene.retained.as_ref().unwrap().accept_transform()?;
@@ -889,12 +949,15 @@ pub struct JobInfo {
     pub reserved: u32,
 }
 fn job_context(registry: &mut Registry, id: u64) -> Result<&mut Context> {
-    registry
+    let (handle, context) = registry
         .contexts
-        .values_mut()
-        .find(|c| c.job.as_ref().is_some_and(|j| j.id == id))
-        .ok_or_else(|| "Invalid or expired render job".into())
+        .iter_mut()
+        .find(|(_, c)| c.job.as_ref().is_some_and(|j| j.id == id))
+        .ok_or("Invalid or expired render job")?;
+    TOUCHED.set(Some(*handle));
+    Ok(context)
 }
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_submit(
     handle: u64,
@@ -1359,12 +1422,17 @@ mod tests {
                 .unwrap()
                 .transform_plan(state.scene.hwrt.as_ref().unwrap(), &writes)
                 .unwrap();
-            state.hardware.as_mut().unwrap().update_transforms(
-                &state.gpu.device,
-                &state.gpu.queue,
-                plan,
-                state.scene.hwrt.as_mut().unwrap(),
-            );
+            state
+                .hardware
+                .as_mut()
+                .unwrap()
+                .update_transforms(
+                    &state.gpu.device,
+                    &state.gpu.queue,
+                    plan,
+                    state.scene.hwrt.as_mut().unwrap(),
+                )
+                .unwrap();
             state.update_lighting(&writes).unwrap();
             state.retained.as_ref().unwrap().accept_transform().unwrap();
             input[60 * 4..61 * 4].copy_from_slice(&0.125f32.to_le_bytes());
@@ -1390,12 +1458,49 @@ mod tests {
                 let mut expected = make(&input);
                 state.add_samples(8, 6., 12345).unwrap();
                 expected.add_samples(8, 6., 12345).unwrap();
+                let mut changed = Vec::new();
+                let mut normal_hits = [0f64; 2];
                 for kind in 0..3 {
-                    assert_eq!(
-                        state.read_pixels(kind).unwrap(),
-                        expected.read_pixels(kind).unwrap()
-                    );
+                    let actual = state.read_pixels(kind).unwrap();
+                    let reference = expected.read_pixels(kind).unwrap();
+                    assert_eq!(actual.len(), reference.len());
+                    for bytes in [&actual, &reference] {
+                        assert!(
+                            bytes
+                                .chunks_exact(4)
+                                .all(|v| { f32::from_le_bytes(v.try_into().unwrap()).is_finite() })
+                        );
+                    }
+                    if actual != reference {
+                        changed.push(kind);
+                    }
+                    if kind == 1 {
+                        // This fixture has one front-facing triangle (normal Z=1).
+                        // The accumulated normal Z therefore counts primary hits,
+                        // independently of the beauty value and environment.
+                        for (side, bytes) in [&actual, &reference].into_iter().enumerate() {
+                            normal_hits[side] = bytes
+                                .chunks_exact(16)
+                                .map(|pixel| {
+                                    f32::from_le_bytes(pixel[8..12].try_into().unwrap()) as f64 * 8.
+                                })
+                                .sum();
+                        }
+                    }
                 }
+                // Phase2 already exhibits an intermittent whole-dispatch miss.
+                // Keep this diagnostic in task checks, with its classification
+                // separate from the validated error/flush/synchronization changes.
+                println!(
+                    "{}",
+                    serde_json::json!({"interleavedHitClassification": {
+                        "optionalRefit": optional_refit, "step": step,
+                        "changedAovs": changed, "primaryHits": normal_hits,
+                        "classification": if changed.is_empty() {"matched"}
+                            else if normal_hits[0] != normal_hits[1] {"hit-coverage-mismatch"}
+                            else {"equal-coverage-aov-mismatch"}
+                    }})
+                );
             }
         }
     }
@@ -1501,6 +1606,44 @@ mod tests {
             retained.material(&patch).unwrap(),
             expected_retained.material(&patch).unwrap()
         );
+    }
+    #[test]
+    fn panic_marks_the_touched_context_failed_and_commit_recovers_it() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let mut handle = 0;
+        let mut error = [0i8; 512];
+        if unsafe {
+            mt_context_create_with_backend(0, &mut handle, error.as_mut_ptr(), error.len())
+        } != 0
+        {
+            return;
+        }
+        assert_eq!(
+            action(error.as_mut_ptr(), error.len(), |registry| {
+                let _ = context(registry, handle)?;
+                panic!("context-specific boundary probe");
+            }),
+            1
+        );
+        assert!(REGISTRY.lock().unwrap().as_ref().unwrap().contexts[&handle].failed);
+        let input = scene::tests::input();
+        unsafe {
+            assert_eq!(
+                mt_context_commit(
+                    handle,
+                    input.as_ptr(),
+                    input.len(),
+                    error.as_mut_ptr(),
+                    error.len()
+                ),
+                0
+            );
+            assert!(!REGISTRY.lock().unwrap().as_ref().unwrap().contexts[&handle].failed);
+            assert_eq!(
+                mt_context_destroy(handle, error.as_mut_ptr(), error.len()),
+                0
+            );
+        }
     }
     #[test]
     fn caught_context_panic_does_not_poison_the_registry() {

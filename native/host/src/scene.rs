@@ -155,7 +155,65 @@ impl Words<'_> {
         Ok(())
     }
 }
-fn validate(bytes: &[u8]) -> Result<()> {
+#[cfg(feature = "fuzzing")]
+pub(super) fn fuzz_budget(bytes: &[u8]) -> bool {
+    // Called only after full wire validation; restrict cost without relaxing it.
+    let w = Words(bytes);
+    if w.u(h::WIDTH) > 32
+        || w.u(h::HEIGHT) > 32
+        || w.u(h::GEOMETRY_COUNT) > 4
+        || w.u(h::MESH_COUNT) > 8
+        || w.u(h::MATERIAL_COUNT) > 8
+        || w.u(h::TEXTURE_COUNT) > 4
+        || w.u(h::LIGHT_COUNT) > 4
+    {
+        return false;
+    }
+    for i in 0..w.u(h::GEOMETRY_COUNT) {
+        let o = w.u(h::GEOMETRY_OFFSET) + i * g::WORDS;
+        if w.u(o + g::VERTEX_COUNT) > 64 || w.u(o + g::INDEX_COUNT) > 192 {
+            return false;
+        }
+        for (field, components) in [(g::POSITION, 3), (g::UV, 2), (g::UV1, 2)] {
+            let offset = w.u(o + field);
+            if offset != 0
+                && (0..w.u(o + g::VERTEX_COUNT) * components).any(|k| w.f(offset + k).abs() > 2.)
+            {
+                return false;
+            }
+        }
+    }
+    for i in 0..w.u(h::TEXTURE_COUNT) {
+        let o = w.u(h::TEXTURE_OFFSET) + i * t::WORDS;
+        if w.u(o + t::WIDTH) > 8 || w.u(o + t::HEIGHT) > 8 {
+            return false;
+        }
+    }
+    for i in 0..w.u(h::MATERIAL_COUNT) {
+        let o = w.u(h::MATERIAL_OFFSET) + i * mat::WORDS;
+        for j in 0..w.u(o + mat::EXTENSION_COUNT) {
+            let entry = w.u(o + mat::EXTENSION_OFFSET) + j * ext::WORDS;
+            let id = w.u(entry + ext::ID);
+            let value = w.f(entry + ext::X);
+            if matches!(id, 58 | 60) && value.abs() > 2. || id == 61 && value < 0.125 {
+                return false;
+            }
+        }
+    }
+    if w.u(h::BATCH_OFFSET) != 0
+        && (0..w.u(h::MESH_COUNT))
+            .map(|i| match w.u(w.u(h::BATCH_OFFSET) + i * b::WORDS) {
+                value if value == u32::MAX as usize => 1,
+                value => value,
+            })
+            .sum::<usize>()
+            > 8
+    {
+        return false;
+    }
+    true
+}
+pub(super) fn validate(bytes: &[u8]) -> Result<()> {
     if bytes.len() < h::WORDS * WORD_BYTES || bytes.len() > MAX_BYTES || bytes.len() % 4 != 0 {
         return Err("Invalid scene byte length".into());
     }
@@ -924,6 +982,7 @@ impl PreparedState {
             mt_core_collect();
             result?
         };
+        exception_packet(&packet)?;
         let w = Words(&packet);
         if w.u(0) == 2 {
             let reason = match w.u(1) {
@@ -948,6 +1007,28 @@ impl PreparedState {
         Ok(packet[16..].to_vec())
     }
 }
+// Decode a caught TS exception without losing its operation code or message.
+fn exception_packet(packet: &[u8]) -> Result<()> {
+    use layout::error_packet as e;
+    let header = e::WORDS * WORD_BYTES;
+    if packet.len() < header {
+        return Ok(());
+    }
+    let words = Words(packet);
+    if words.u(e::STATUS) != e::REJECTED || words.u(e::TAG) != e::MAGIC {
+        return Ok(());
+    }
+    let length = words.u(e::LENGTH);
+    if length > packet.len() - header {
+        return Err("Invalid native exception packet length".into());
+    }
+    let message = std::str::from_utf8(&packet[header..header + length])?;
+    if message.starts_with("Full scene commit required:") {
+        return Err(format!("{message} (native code {})", words.u(e::CODE)).into());
+    }
+    Err(format!("Native scene error {}: {message}", words.u(e::CODE)).into())
+}
+
 fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<LightingUpdates> {
     if pointer.is_null() || size < 16 || size > MAX_PREPARED_BYTES || size % 4 != 0 {
         return Err("Invalid AOT scene write command".into());
@@ -961,6 +1042,7 @@ fn lighting_result(pointer: *const u8, size: usize, ids: &[usize]) -> Result<Lig
 }
 fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
     use crate::layout::write_entry as we;
+    exception_packet(packet)?;
     let w = Words(packet);
     if w.u(ph::VERSION) == 2 {
         return Err(if w.u(ph::COUNT) == 2 {
@@ -1220,12 +1302,13 @@ fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
         mt_core_collect();
         result?
     };
+    exception_packet(&packet)?;
     let w = Words(&packet);
     if w.u(0) != 1 && w.u(0) != crate::layout::version::RESOURCE_WRITES {
         return Err(match w.u(1) {
             2 => "Full scene commit required: resource shape or shader feature changed",
             1 | 3 => "Invalid or unavailable retained scene reference",
-            _ => "Native scene preparation rejected the scene (invalid IES or displacement inputs)",
+            _ => "Native scene preparation rejected the scene",
         }
         .into());
     }
@@ -1300,7 +1383,7 @@ fn prepare_impl_with_kernels_inner(
         }
     }
     if profile {
-        eprintln!(
+        native_log!(
             "{}",
             json!({"nativeDataKernelProfile":{"completedWallMs":kernel_start.elapsed().as_secs_f64()*1000.}})
         );
@@ -1309,7 +1392,7 @@ fn prepare_impl_with_kernels_inner(
         if hardware {
             let result = native_step(mt_core_native_hardware_scene, bytes, token)?;
             if profile {
-                eprintln!(
+                native_log!(
                     "{}",
                     json!({"nativePreparationProfile": {
                 "validateMs": validated.duration_since(started).as_secs_f64()*1000.0,
@@ -1329,7 +1412,7 @@ fn prepare_impl_with_kernels_inner(
         let top = Instant::now();
         let result = native_step(mt_core_native_scene_finish, &tlas, token)?;
         if profile {
-            eprintln!(
+            native_log!(
                 "{}",
                 json!({"nativePreparationProfile": {
                     "validateMs": validated.duration_since(started).as_secs_f64() * 1000.0,
@@ -1355,10 +1438,7 @@ fn prepare_impl_with_kernels_inner(
     let packet = work?;
     let w = Words(&packet);
     if w.u(ph::VERSION) == 2 {
-        return Err(
-            "Native scene preparation rejected the scene (invalid IES or displacement inputs)"
-                .into(),
-        );
+        return Err("Native scene preparation rejected the scene".into());
     }
     let count = w.u(ph::COUNT);
     if w.u(ph::VERSION) != 1
@@ -1539,6 +1619,56 @@ pub unsafe extern "C" fn mt_probe_render_scene(
     1
 }
 
+#[cfg(any(test, feature = "fuzzing"))]
+pub(super) fn small_fixture() -> Vec<u8> {
+    let mut words = vec![0u32; 132];
+    words[..15].copy_from_slice(&[
+        layout::version::SCENE as u32,
+        132,
+        8,
+        8,
+        1,
+        1,
+        1,
+        0,
+        0,
+        32,
+        44,
+        64,
+        88,
+        88,
+        88,
+    ]);
+    words[16..20].copy_from_slice(&[0, 0, 0, 1f32.to_bits()]);
+    words[32..36].copy_from_slice(&[3, 3, 120, 129]);
+    for off in [48, 104] {
+        for k in [0, 5, 10, 15] {
+            words[off + k] = 1f32.to_bits();
+        }
+    }
+    for (k, x) in [(0, 0.8), (1, 0.8), (2, 0.8), (3, 0.3), (6, 1.5), (13, 1.)] {
+        words[64 + k] = (x as f32).to_bits();
+    }
+    for k in 15..19 {
+        words[64 + k] = u32::MAX;
+    }
+    for (k, x) in [
+        (1, 45.),
+        (2, 0.1),
+        (3, 100.),
+        (8, 1.),
+        (10, 10.),
+        (11, 24.),
+        (12, 1.),
+    ] {
+        words[88 + k] = (x as f32).to_bits();
+    }
+    for (k, x) in [-1f32, 0., 0., 1., 0., 0., 0., 1., 0.].iter().enumerate() {
+        words[120 + k] = x.to_bits();
+    }
+    words[129..].copy_from_slice(&[0, 1, 2]);
+    words.into_iter().flat_map(u32::to_le_bytes).collect()
+}
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -1557,6 +1687,30 @@ pub(crate) mod tests {
                 u32::from_le_bytes(packet[i * 4..i * 4 + 4].try_into().unwrap())
             })
         })
+    }
+    #[test]
+    fn aot_exception_preserves_configuration_failure_and_full_commit_class() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let error = runtime::call(|| native_step(mt_core_scene_configure, &[], 0))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("Native scene error 101:"), "{error}");
+        assert!(error.contains("Invalid render settings size"), "{error}");
+        let message = "Full scene commit required: 数据形状 changed";
+        let mut packet: Vec<u8> = [2, 105, message.len() as u32, 0x45525231]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        packet.extend_from_slice(message.as_bytes());
+        let error = exception_packet(&packet).unwrap_err().to_string();
+        assert!(error.starts_with(message));
+        packet[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(
+            exception_packet(&packet)
+                .unwrap_err()
+                .to_string()
+                .contains("length")
+        );
     }
     #[test]
     fn retained_transform_accepts_range_writes_from_the_aot_call_chain() {
@@ -1650,53 +1804,7 @@ pub(crate) mod tests {
         assert_eq!(prepare_camera(camera, 8, 8).unwrap(), expected);
     }
     pub(crate) fn input() -> Vec<u8> {
-        let mut words = vec![0u32; 132];
-        words[..15].copy_from_slice(&[
-            layout::version::SCENE as u32,
-            132,
-            8,
-            8,
-            1,
-            1,
-            1,
-            0,
-            0,
-            32,
-            44,
-            64,
-            88,
-            88,
-            88,
-        ]);
-        words[16..20].copy_from_slice(&[0, 0, 0, 1f32.to_bits()]);
-        words[32..36].copy_from_slice(&[3, 3, 120, 129]);
-        for off in [48, 104] {
-            for k in [0, 5, 10, 15] {
-                words[off + k] = 1f32.to_bits();
-            }
-        }
-        for (k, x) in [(0, 0.8), (1, 0.8), (2, 0.8), (3, 0.3), (6, 1.5), (13, 1.)] {
-            words[64 + k] = (x as f32).to_bits();
-        }
-        for k in 15..19 {
-            words[64 + k] = u32::MAX;
-        }
-        for (k, x) in [
-            (1, 45.),
-            (2, 0.1),
-            (3, 100.),
-            (8, 1.),
-            (10, 10.),
-            (11, 24.),
-            (12, 1.),
-        ] {
-            words[88 + k] = (x as f32).to_bits();
-        }
-        for (k, x) in [-1f32, 0., 0., 1., 0., 0., 0., 1., 0.].iter().enumerate() {
-            words[120 + k] = x.to_bits();
-        }
-        words[129..].copy_from_slice(&[0, 1, 2]);
-        words.into_iter().flat_map(u32::to_le_bytes).collect()
+        small_fixture()
     }
     fn change(bytes: &[u8], word: usize, value: u32) -> Vec<u8> {
         let mut result = bytes.to_vec();

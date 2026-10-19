@@ -32,6 +32,7 @@ fn ray(
     }
 }
 fn main() {
+    mutracer_native_probe::logging::stderr();
     if let Err(e) = run() {
         eprintln!("{e}");
         std::process::exit(1);
@@ -359,7 +360,14 @@ fn dispatch(
         ],
     });
     let mut encoder = device.create_command_encoder(&Default::default());
-    encoder.build_acceleration_structures([build], [tlas]);
+    encoder.build_acceleration_structures([build], std::iter::empty::<&wgpu::Tlas>());
+    let submission = queue.submit([encoder.finish()]);
+    device.poll(wgpu::PollType::Wait {
+        submission_index: Some(submission),
+        timeout: Some(Duration::from_secs(30)),
+    })?;
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.build_acceleration_structures(std::iter::empty::<&wgpu::BlasBuildEntry<'_>>(), [tlas]);
     {
         let mut pass = encoder.begin_compute_pass(&Default::default());
         pass.set_pipeline(&pipeline);

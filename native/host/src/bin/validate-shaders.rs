@@ -2,6 +2,7 @@
 use std::{fs, path::Path};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    mutracer_native_probe::logging::stderr();
     let directory = std::env::args()
         .nth(1)
         .ok_or("Expected shader fixture directory")?;

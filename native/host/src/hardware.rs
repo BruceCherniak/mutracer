@@ -84,6 +84,18 @@ pub struct Instance {
     transform: [f32; 12],
 }
 
+// Metal's indirect TLAS descriptors refer to BLAS resource IDs, which do not
+// establish a driver-visible dependency. wgpu-hal 30's Metal AS barrier is empty.
+// Finish BLAS GPU work before even encoding the dependent TLAS, not merely before
+// submitting it. The exact submission fence includes all earlier queue work.
+fn wait_for_as(device: &wgpu::Device, submission: wgpu::SubmissionIndex) -> Result<()> {
+    device.poll(wgpu::PollType::Wait {
+        submission_index: Some(submission),
+        timeout: Some(Duration::from_secs(30)),
+    })?;
+    Ok(())
+}
+
 fn default_stride() -> u64 {
     12
 }
@@ -155,7 +167,9 @@ pub fn prepare_reusing(
     }
     let mut inputs = HashMap::new();
     let mut reused_bytes = 0u64;
-    let mut upload = |name: &str, data: &[u8], usage: wgpu::BufferUsages| {
+    let mut payload_bytes = 0u64;
+    let mut vertex_payload_bytes = 0u64;
+    let mut upload = |name: &str, data: &[u8], usage: wgpu::BufferUsages, vertex: bool| {
         let usage = usage | wgpu::BufferUsages::COPY_DST;
         let previous = reusable
             .and_then(|b| b.get(name))
@@ -171,6 +185,10 @@ pub fn prepare_reusing(
                 usage,
             })
         };
+        payload_bytes += data.len() as u64;
+        if vertex {
+            vertex_payload_bytes += data.len() as u64;
+        }
         inputs.insert(name.to_string(), buffer.clone());
         buffer
     };
@@ -181,6 +199,7 @@ pub fn prepare_reusing(
             wgpu::BufferUsages::BLAS_INPUT
                 | wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST,
+            false,
         ))
     } else {
         None
@@ -190,6 +209,7 @@ pub fn prepare_reusing(
             "MuTracer soup indices",
             &read("native-42")?,
             wgpu::BufferUsages::BLAS_INPUT,
+            false,
         ))
     } else {
         None
@@ -199,6 +219,7 @@ pub fn prepare_reusing(
             "MuTracer displacement bounds",
             &read("native-38")?,
             wgpu::BufferUsages::BLAS_INPUT,
+            true,
         ))
     } else {
         None
@@ -208,6 +229,7 @@ pub fn prepare_reusing(
             "MuTracer compact positions",
             &read("native-41")?,
             wgpu::BufferUsages::BLAS_INPUT,
+            true,
         ))
     } else {
         None
@@ -245,7 +267,12 @@ pub fn prepare_reusing(
                     .clone()
             }
         } else {
-            upload(&geometry.positions, &data, wgpu::BufferUsages::BLAS_INPUT)
+            upload(
+                &geometry.positions,
+                &data,
+                wgpu::BufferUsages::BLAS_INPUT,
+                true,
+            )
         });
         indices.push(if capture.indexed {
             if geometry.procedural {
@@ -266,6 +293,7 @@ pub fn prepare_reusing(
                         &format!("geometry-{geometry_id}:{name}:indices"),
                         &data[..geometry.vertex_count as usize * 4],
                         wgpu::BufferUsages::BLAS_INPUT,
+                        false,
                     ))
                 })
                 .transpose()?
@@ -373,7 +401,11 @@ pub fn prepare_reusing(
     if let Some(t) = &timer {
         t.stamp(&mut encoder, 0);
     }
-    encoder.build_acceleration_structures(entries.iter(), [&tlas]);
+    encoder.build_acceleration_structures(entries.iter(), std::iter::empty::<&wgpu::Tlas>());
+    let blas_submission = queue.submit([encoder.finish()]);
+    wait_for_as(device, blas_submission)?;
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.build_acceleration_structures(std::iter::empty::<&wgpu::BlasBuildEntry<'_>>(), [&tlas]);
     if let Some(t) = &timer {
         t.stamp(&mut encoder, 1);
         t.resolve(&mut encoder);
@@ -389,16 +421,22 @@ pub fn prepare_reusing(
     } else {
         None
     };
-    if super::profiling::enabled() || super::profiling::gpu_enabled() {
-        let gpu_ms = timer
-            .as_ref()
-            .map(|t| t.milliseconds(device, queue))
-            .transpose()?;
-        eprintln!(
-            "{}",
-            serde_json::json!({"nativeAsProfile": {"inputSetupMs": setup_ms,"uploadDrainMs":upload_drain_ms,"cpuBuildSubmitMs": build_submit_ms,"completedWallMs": completed_wall_ms,"gpuMs": gpu_ms,"gpuTimestampUnavailable": if super::profiling::gpu_enabled() && timer.is_none() { Some("Encoder timestamp queries unavailable") } else { None },"blasCount": blases.len(),"instanceCount": capture.instances.len(),"vertexUploadBytes": vertices.iter().map(|b| b.size()).sum::<u64>()}})
-        );
-    }
+    #[cfg(target_os = "macos")]
+    let as_storage_bytes = if super::profiling::enabled() {
+        metal_refit::storage_bytes(
+            device,
+            &vertices,
+            &indices,
+            &capture.geometries,
+            capture.instances.len() as u32,
+        )
+        .ok()
+    } else {
+        None
+    };
+    #[cfg(not(target_os = "macos"))]
+    let as_storage_bytes: Option<u64> = None;
+
     let data = read(
         capture
             .triangle_map
@@ -412,17 +450,27 @@ pub fn prepare_reusing(
             "MuTracer hardware primitive identity",
             &data,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            false,
         )
     };
-    if super::profiling::enabled() {
-        eprintln!(
+    drop(upload);
+    if super::profiling::enabled() || super::profiling::gpu_enabled() {
+        let gpu_ms = timer
+            .as_ref()
+            .and_then(|t| t.optional_milliseconds(device, queue));
+        native_log!(
             "{}",
-            serde_json::json!({"nativeHardwareUploadProfile": {"kind":"geometry","writeBytes":vertices.iter().map(|b| b.size()).sum::<u64>() + data.len() as u64,"instanceCount":capture.instances.len()}})
+            serde_json::json!({"nativeAsProfile": {"inputSetupMs": setup_ms,"uploadDrainMs":upload_drain_ms,"cpuBuildSubmitMs": build_submit_ms,"completedWallMs": completed_wall_ms,"gpuMs": gpu_ms,"gpuTimestampUnavailable": if super::profiling::gpu_enabled() && timer.is_none() { Some("Encoder timestamp queries unavailable") } else { None },"blasCount": blases.len(),"instanceCount": capture.instances.len(),"vertexUploadBytes":vertex_payload_bytes,"asStorageRequiredBytes":as_storage_bytes}})
         );
     }
-    drop(upload);
     if super::profiling::enabled() {
-        eprintln!(
+        native_log!(
+            "{}",
+            serde_json::json!({"nativeHardwareUploadProfile": {"kind":"geometry","writeBytes":payload_bytes, "vertexUploadBytes":vertex_payload_bytes, "bufferCapacityBytes":inputs.values().map(|b|b.size()).sum::<u64>(), "asStorageRequiredBytes":as_storage_bytes,"instanceCount":capture.instances.len()}})
+        );
+    }
+    if super::profiling::enabled() {
+        native_log!(
             "{}",
             serde_json::json!({"nativeHardwareReuseProfile": {"reusedBytes": reused_bytes}})
         );
@@ -607,7 +655,7 @@ impl Resources {
                 &indices,
             ) {
                 Ok(elapsed) => metal_blas_wall_ms = Some(elapsed),
-                Err(error) => eprintln!(
+                Err(error) => native_log!(
                     "{}",
                     serde_json::json!({"nativeMetalRefitFallback":error.to_string()})
                 ),
@@ -651,35 +699,47 @@ impl Resources {
             })?;
         }
         let started = std::time::Instant::now();
-        let mut encoder = device.create_command_encoder(&Default::default());
-        let blas_wall_ms = if profile {
-            encoder
-                .build_acceleration_structures(entries.iter(), std::iter::empty::<&wgpu::Tlas>());
-            queue.submit([encoder.finish()]);
-            device.poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(Duration::from_secs(30)),
-            })?;
-            let elapsed = started.elapsed().as_secs_f64() * 1000.0;
+        let completed_wall_ms = if let Some(elapsed) = metal_blas_wall_ms {
+            // wgpu prohibits mixing raw and high-level encoding APIs. The raw
+            // refit has completed; encode its dependent TLAS after that fence.
             let mut encoder = device.create_command_encoder(&Default::default());
             encoder.build_acceleration_structures(
                 std::iter::empty::<&wgpu::BlasBuildEntry<'_>>(),
                 [&tlas],
             );
             queue.submit([encoder.finish()]);
-            Some(elapsed)
+            device.poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(Duration::from_secs(30)),
+            })?;
+            Some(elapsed + started.elapsed().as_secs_f64() * 1000.0)
         } else {
-            // Encode the BLAS-to-TLAS dependency together. On Metal, separate
-            // unfenced submissions exposed incomplete replacement BLASes.
-            encoder.build_acceleration_structures(entries.iter(), [&tlas]);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder
+                .build_acceleration_structures(entries.iter(), std::iter::empty::<&wgpu::Tlas>());
+            let blas_submission = queue.submit([encoder.finish()]);
+            wait_for_as(device, blas_submission)?;
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.build_acceleration_structures(
+                std::iter::empty::<&wgpu::BlasBuildEntry<'_>>(),
+                [&tlas],
+            );
             queue.submit([encoder.finish()]);
-            None
+            if profile {
+                device.poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(Duration::from_secs(30)),
+                })?;
+                Some(started.elapsed().as_secs_f64() * 1000.0)
+            } else {
+                None
+            }
         };
         if super::profiling::enabled() || profile {
-            eprintln!(
+            native_log!(
                 "{}",
                 serde_json::json!({"nativeGeometryAsProfile":{
-                    "changedBlasCount":changed.len(),"totalBlasCount":blases.len(),"blasCompletedWallMs":blas_wall_ms,
+                    "changedBlasCount":changed.len(),"totalBlasCount":blases.len(),"blasCompletedWallMs":Option::<f64>::None,"blasTlasCompletedWallMs":completed_wall_ms,
                     "inputUploadBytes":plans.iter().map(|(_,_,data)|data.len()).sum::<usize>(),"method":if metal_blas_wall_ms.is_some() {"metal-refit"} else {"wgpu-rebuild"}
                 }})
             );
@@ -754,8 +814,8 @@ impl Resources {
                 scratches.last().unwrap(),
             )?;
         }
-        // Only the raw encoder touched these fresh destinations, and every BLAS
-        // listed was encoded above. TLAS construction is fenced and separate.
+        // Only the raw encoder touched these fresh destinations. Register every
+        // encoded BLAS; dependent high-level TLAS work follows the completion fence.
         unsafe {
             encoder.mark_acceleration_structures_built(
                 plans.iter().map(|(index, _, _)| &blases[*index]),
@@ -819,10 +879,12 @@ impl Resources {
         queue: &wgpu::Queue,
         plan: TransformPlan,
         capture: &mut Capture,
-    ) {
+    ) -> Result<()> {
         if plan.instances.is_empty() {
-            return;
+            return Ok(());
         }
+        // Also fence a preceding geometry edit before encoding a TLAS-only edit.
+        wait_for_as(device, queue.submit([]))?;
         let bytes = if self.indexed {
             0
         } else {
@@ -841,7 +903,7 @@ impl Resources {
             }
         }
         if super::profiling::enabled() {
-            eprintln!(
+            native_log!(
                 "{}",
                 serde_json::json!({"nativeHardwareUploadProfile":{"kind":"transform","writeBytes":bytes,"instanceCount":plan.instances.len()}})
             );
@@ -852,6 +914,7 @@ impl Resources {
             [&self.tlas],
         );
         queue.submit([encoder.finish()]);
+        Ok(())
     }
 }
 // Source-order inputs use the shared TS geometry regions. Leaf-order extraction
@@ -1246,3 +1309,6 @@ mod tests {
         assert_eq!(first.mapping, second.mapping);
     }
 }
+
+#[cfg(test)]
+mod as_sync_tests;

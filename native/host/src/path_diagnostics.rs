@@ -108,7 +108,7 @@ pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
             total_events += count as u64;
         }
         if y % 64 == 0 {
-            eprintln!("Path diagnostic rows {y}/{}", state.scene.height);
+            native_log!("Path diagnostic rows {y}/{}", state.scene.height);
         }
     }
     headers.flush()?;

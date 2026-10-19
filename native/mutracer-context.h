@@ -2,6 +2,7 @@
 #define MUTRACER_CONTEXT_H
 #include <stddef.h>
 #include <stdint.h>
+#include "mutracer-log.h"
 #ifdef __cplusplus
 extern "C" {
 #endif

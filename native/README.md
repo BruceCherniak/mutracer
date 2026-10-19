@@ -11,6 +11,13 @@ scene and hardware.
 Run `npm run native:viewer` for a standalone GLTF/GLB viewer with material, render
 and environment controls. See [viewer usage and limits](./viewer/README.md).
 
+## HWRT limitation
+
+On macOS/Metal, HWRT can intermittently miss the entire scene for one render
+sample, producing an incorrect image. Use the software backend when this
+unresolved correctness risk is unacceptable.
+See [HWRT reproduction](./CONTRIBUTING.md#hwrt-reproduction) for the diagnostic test and observed failures.
+
 ## Render a scene
 
 Building requires Rust, a C++20 compiler/Xcode Command Line Tools, project npm
@@ -235,6 +242,19 @@ There must be at least one geometry, mesh and material. Counts are limited to
 material-related expansion. Atlas storage is limited to 64 MiB, 4096 pixels per
 side and 256 layers; source textures can be scaled to fit. The header specifies
 the remaining validation and format constraints.
+
+C API failures return a nonzero status and an error message. Validation and
+preparation errors preserve the current scene. A caught Rust panic marks the
+affected context failed; replace its scene with a successful commit or destroy
+it before reuse. Rust's process-wide panic hook can still emit panic diagnostics.
+The AOT runtime's fatal traps, including allocation failure and abort, terminate
+the process and cannot become C API errors. Applications that require recovery
+from these failures need process isolation.
+
+Library logs are silent by default. Register a callback through
+[mutracer-log.h](./mutracer-log.h) to receive diagnostics and optional profiling
+messages. Callbacks run serially on the emitting thread; message storage is valid
+only during the callback. Unregister before releasing the callback or its data.
 
 Raw scenes support the [intersection modes above](#intersection-backend).
 Topology-changing geometry updates, texture/emission material updates, device-loss recovery,

@@ -16,7 +16,7 @@ static DENOISERS: LazyLock<Mutex<HashMap<u64, Denoiser>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static NEXT: AtomicU64 = AtomicU64::new(1 << 63);
 fn action(error: *mut c_char, capacity: usize, operation: impl FnOnce() -> Result<()>) -> i32 {
-    let result = std::panic::catch_unwind(AssertUnwindSafe(operation));
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| crate::platform_scope(operation)));
     let message = match result {
         Ok(Ok(())) => String::new(),
         Ok(Err(error)) => format!("{error:#}"),

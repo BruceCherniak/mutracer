@@ -164,3 +164,67 @@ pub(super) fn encode(
         }
     })
 }
+
+// Read-only Metal sizing queries use with_entries' owning-handle lifetime.
+// These report required internal AS storage separately from application buffers.
+pub(super) fn storage_bytes(
+    device: &wgpu::Device,
+    vertices: &[wgpu::Buffer],
+    indices: &[Option<wgpu::Buffer>],
+    geometries: &[Geometry],
+    instances: u32,
+) -> Result<u64> {
+    let mut bytes = 0;
+    for ((geometry, vertices), indices) in geometries.iter().zip(vertices).zip(indices) {
+        bytes += with_entries(
+            device,
+            vertices,
+            indices.as_ref(),
+            geometry,
+            |device, entries| {
+                Ok(unsafe {
+                    device.get_acceleration_structure_build_sizes(
+                        &hal::GetAccelerationStructureBuildSizesDescriptor {
+                            entries,
+                            flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
+                        },
+                    )
+                }
+                .acceleration_structure_size)
+            },
+        )?;
+    }
+    // Metal requires an instance-buffer handle even for this read-only size
+    // query. Its contents are never submitted or included in upload payload.
+    let query_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("AS sizing query instances"),
+        size: (instances as u64
+            * std::mem::size_of::<objc2_metal::MTLIndirectAccelerationStructureInstanceDescriptor>()
+                as u64)
+            .max(4),
+        usage: wgpu::BufferUsages::BLAS_INPUT,
+        mapped_at_creation: false,
+    });
+    let buffer_pointer = {
+        let raw = unsafe { query_buffer.as_hal::<Metal>() }
+            .ok_or("Metal AS sizing buffer unavailable")?;
+        &*raw as *const hal::metal::Buffer
+    };
+    let raw = unsafe { device.as_hal::<Metal>() }.ok_or("Metal AS sizing unavailable")?;
+    let entries =
+        hal::AccelerationStructureEntries::Instances(hal::AccelerationStructureInstances {
+            buffer: Some(unsafe { &*buffer_pointer }),
+            offset: 0,
+            count: instances,
+        });
+    bytes += unsafe {
+        raw.get_acceleration_structure_build_sizes(
+            &hal::GetAccelerationStructureBuildSizesDescriptor {
+                entries: &entries,
+                flags: wgpu::AccelerationStructureFlags::PREFER_FAST_TRACE,
+            },
+        )
+    }
+    .acceleration_structure_size;
+    Ok(bytes)
+}

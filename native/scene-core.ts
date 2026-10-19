@@ -1,5 +1,6 @@
 /// <reference lib="esnext" />
 /// <reference path="./browser-types.d.ts" />
+import {sceneErrorPacket} from './scene-errors.js';
 import {takeGeometryKernelHints, releaseGeometryKernelHints, rememberKernelBounds, geometryKernelBounds, encodeGeometryKernelHints, type GeometryKernelHint} from './geometry-kernel-hints.js';
 import {installGeneratedVertexTangents} from '../src/util/geometry.js';
 import {matrixStorage} from '../src/math/storage.js';
@@ -12,7 +13,7 @@ import {vec3} from '../src/math.js';
 import {markDeformedGeometry} from '../src/scene/geometryChanges.js';
 import {PackedMeshInstances, sameInstanceMembership} from '../src/renderer/packedMeshInstances.js';
 import {hardwareOpaqueGeometryFlags} from './hwrt-eligibility.js';
-import {VERSION, RESOURCE, KIND, FORMAT, HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, TEXTURE as T, LIGHT as L, CAMERA as C, BATCH as B, PACKET_HEADER as PH, PACKET_ENTRY as PE, WRITE_ENTRY as WE, WORD_BYTES, quantizeDisplacementRange} from './layout.js';
+import {ERROR_CODE, VERSION, RESOURCE, KIND, FORMAT, HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, TEXTURE as T, LIGHT as L, CAMERA as C, BATCH as B, PACKET_HEADER as PH, PACKET_ENTRY as PE, WRITE_ENTRY as WE, WORD_BYTES, quantizeDisplacementRange} from './layout.js';
 import {nativePathIntersections} from './path-diagnostics.wgsl.js';
 import IESProfile, {parseIESProfile} from '../src/scene/IESProfile.js';
 import {computeDisplacementMinmax, computeTrianglesDisplacementRange} from '../src/renderer/displacementPreparation.js';
@@ -66,7 +67,7 @@ export function configureSceneParameters(bytes: Uint8Array, token: number): Uint
   try {
     sceneConfigurations.set(token, decodeSceneConfiguration(bytes));
     return new Uint8Array(new Uint32Array([1, 0, 0, 0]).buffer);
-  } catch { return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer); }
+  } catch (error) { return sceneErrorPacket(ERROR_CODE.CONFIGURE, error);}
 }
 const retainedScenes = new Map<number, {source: MaterialState[]; ordered: MaterialState[]; table: MaterialData;
   lights: AnalyticLightState[]; emissive: EmissiveTriangle[]; rt: ArrayBuffer;
@@ -126,7 +127,7 @@ export function acceptSceneLighting(token: number): Uint8Array {
 }
 export function retainedSceneParameters(bytes: Uint8Array, token: number): Uint8Array {
   try { return buildSceneParameters(bytes, token); }
-  catch { retainedScenes.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer); }
+  catch (error) { retainedScenes.delete(token); return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error);}
 }
 export function releaseSceneParameters(token: number): Uint8Array {
   releaseGeometryKernelHints(token); sceneConfigurations.delete(token); retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
@@ -164,7 +165,7 @@ export function sceneMaterialParameters(bytes: Uint8Array, token: number): Uint8
 // All offsets/counts below are uint32 words; float payloads are IEEE f32.
 export function sceneParameters(bytes: Uint8Array): Uint8Array {
   try { return buildSceneParameters(bytes); }
-  catch { return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer); }
+  catch (error) { return sceneErrorPacket(ERROR_CODE.MATERIAL, error);}
 }
 type DecodedScene = ReturnType<typeof decodeScene>;
 type PreparedScene = ReturnType<typeof prepareSceneMeshes<MeshState>>;
@@ -523,7 +524,7 @@ export function nativeHardwareScene(bytes: Uint8Array, token: number): Uint8Arra
     const tlas: FlattendBVH = {buffer: new ArrayBuffer(0), maxDepth: 0,
       instancesBuffer: packLinearInstances(prepared.instances, primitiveOffsets, vertexOffsets)};
     return composeScene(input, prepared, tlas, token, hardware);
-  } catch {retainedScenes.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer);}
+  } catch (error) {retainedScenes.delete(token); return sceneErrorPacket(ERROR_CODE.HARDWARE_SCENE, error);}
 }
 
 // Native construction is a finite three-step exchange. TS decodes and prepares
@@ -1047,7 +1048,7 @@ function requestInstances(instances: MeshInstances): Uint8Array {
 }
 export function nativeTransformBegin(bytes: Uint8Array, token: number): Uint8Array {
   try {return prepareTransformUpdate(bytes, token, true);}
-  catch {transformStages.delete(token); pendingTransforms.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer);}
+  catch (error) {transformStages.delete(token); pendingTransforms.delete(token); return sceneErrorPacket(ERROR_CODE.TRANSFORM_BEGIN, error);}
 }
 export function nativeTransformFinish(bytes: Uint8Array, token: number): Uint8Array {
   try {
@@ -1055,11 +1056,11 @@ export function nativeTransformFinish(bytes: Uint8Array, token: number): Uint8Ar
     if (!stage || !state) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
     const tlas = state.hardware ? linearTlas(stage.instances, stage.bindings, state.hardware) : packBuiltTLAS(stage.instances, state.blases, builtBvhs(bytes, 1)[0]);
     const output = packTransformUpdate(stage, tlas, token); transformStages.delete(token); return output;
-  } catch {transformStages.delete(token); pendingTransforms.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer);}
+  } catch (error) {transformStages.delete(token); pendingTransforms.delete(token); return sceneErrorPacket(ERROR_CODE.TRANSFORM_FINISH, error);}
 }
 export function nativeGeometryBegin(bytes: Uint8Array, token: number): Uint8Array {
   try {return prepareGeometryUpdate(bytes, token, true);}
-  catch {geometryStages.delete(token); pendingGeometry.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer);}
+  catch (error) {geometryStages.delete(token); pendingGeometry.delete(token); return sceneErrorPacket(ERROR_CODE.GEOMETRY_BEGIN, error);}
 }
 export function nativeGeometryFinish(bytes: Uint8Array, token: number): Uint8Array {
   try {
@@ -1068,22 +1069,22 @@ export function nativeGeometryFinish(bytes: Uint8Array, token: number): Uint8Arr
     const state = retainedScenes.get(token)!;
     const tlas = state.hardware ? linearTlas(stage.instances, stage.prepared.instanceBindings, state.hardware) : packBuiltTLAS(stage.instances, stage.prepared.blases, builtBvhs(bytes, 1)[0]);
     const output = packGeometryUpdate(stage, tlas, token); geometryStages.delete(token); return output;
-  } catch {geometryStages.delete(token); pendingGeometry.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer);}
+  } catch (error) {geometryStages.delete(token); pendingGeometry.delete(token); return sceneErrorPacket(ERROR_CODE.GEOMETRY_FINISH, error);}
 }
 
 export function nativeSceneBegin(bytes: Uint8Array, token: number): Uint8Array {
   try {return build_nativeSceneBegin(bytes, token);}
-  catch {pendingBuilds.delete(token); retainedScenes.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer);}
+  catch (error) {pendingBuilds.delete(token); retainedScenes.delete(token); return sceneErrorPacket(ERROR_CODE.SCENE_BEGIN, error);}
 }
 
 export function nativeSceneBlas(bytes: Uint8Array, token: number): Uint8Array {
   try {return build_nativeSceneBlas(bytes, token);}
-  catch {pendingBuilds.delete(token); retainedScenes.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer);}
+  catch (error) {pendingBuilds.delete(token); retainedScenes.delete(token); return sceneErrorPacket(ERROR_CODE.SCENE_BLAS, error);}
 }
 
 export function nativeSceneFinish(bytes: Uint8Array, token: number): Uint8Array {
   try {return build_nativeSceneFinish(bytes, token);}
-  catch {pendingBuilds.delete(token); retainedScenes.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer);}
+  catch (error) {pendingBuilds.delete(token); retainedScenes.delete(token); return sceneErrorPacket(ERROR_CODE.SCENE_FINISH, error);}
 }
 
 // Independent TS reference for the two D4 kernels; not used by production preparation.

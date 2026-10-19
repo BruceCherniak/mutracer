@@ -591,8 +591,8 @@ within a group; navigation separates groups. Resume interrupted runs with
 Web commits wait for deferred packing, pipeline readiness and upload completion.
 Readback and legacy HWRT counters stay outside render timers. Native commit
 wall time includes retiring the previous scene; `nativeCommitProfile.totalMs`
-ends before retirement. Native peak RSS and browser JavaScript heap are distinct
-memory metrics. Report actual software fallbacks separately.
+ends before the final queued-upload flush, publication and retirement. Native
+peak RSS and browser JavaScript heap are distinct memory metrics. Report actual software fallbacks separately.
 
 `MUTRACER_NATIVE_PROFILE=1` records CPU phases and application upload bytes.
 `MUTRACER_NATIVE_GPU_TIMESTAMPS=1` additionally requests optional timestamp features
@@ -635,3 +635,52 @@ raw context output, and compare both quality and alpha to retained reference
 images. Relocate the package, inspect the component license tree and validate its
 signature after changing bundle resources. No render performance conclusion may
 include this optional SDK loading/inference inside a tracing timer.
+
+## Robustness and diagnostics
+
+Caught TypeScript exceptions must retain their operation code and message across
+the packet boundary. Exercise the actual AOT archive; a JavaScript-only test is
+insufficient. Fatal AOT traps abort the process, so fuzz in a separate process.
+
+With nightly Rust and cargo-fuzz installed, set `MUTRACER_AOT_ARCHIVE` to the
+compiled archive and `CARGO_TARGET_DIR` to an evidence directory outside the
+checkout. Generate a valid seed with `cargo run --manifest-path
+native/host/Cargo.toml --features fuzzing --bin fuzz-seed -- SEED_PATH`. Put that
+seed and small descriptor fixtures in external corpus directories. Run each
+target for at least 30 minutes:
+
+```sh
+cargo +nightly fuzz run --fuzz-dir native/host/fuzz validate CORPUS_VALIDATE -- \
+  -max_total_time=1860 -max_len=65536 -artifact_prefix=ARTIFACT_DIRECTORY/
+cargo +nightly fuzz run --fuzz-dir native/host/fuzz commit CORPUS_COMMIT -- \
+  -max_total_time=1860 -max_len=65536 -artifact_prefix=ARTIFACT_DIRECTORY/
+```
+
+The commit target needs a real adapter and checks both actual backends with
+bounded dimensions, geometry and displacement work. Rust AddressSanitizer does
+not instrument the scriptc archive or system drivers; report instrumentation
+boundaries. Compile C++ separately with a compatible sanitizer runtime before
+claiming C++ coverage. Preserve failing inputs, logs, exact toolchain and hashes.
+
+Library diagnostics use `mutracer-log.h`; standalone Rust tools explicitly enable
+stderr logging. Missing or invalid GPU timestamps produce a diagnostic and a
+missing measurement, while rendering continues. Upload payload counts belong at
+the actual write calls; buffer capacity and required AS storage are separate.
+
+## HWRT reproduction
+
+Run the small interleaved geometry/full-commit diagnostic with the linked AOT archive:
+
+```sh
+cargo test --manifest-path native/host/Cargo.toml --lib \
+  changed_blas_and_tlas_are_ready_after_interleaved_retained_edits -- --nocapture
+```
+
+It prints AOV and primary-hit coverage classifications; a mismatch is reported
+separately from the other task checks while the known Metal HWRT bug is open.
+Independent-process stop-at-first-mismatch runs observed process 8 on Phase 2
+(`09ba6ce`) and process 20 on Phase 3.1 (`d334f37`). The Phase 1 closest
+geometry-only equivalent observed process 13; its padded transform packet was
+rejected before rendering, so it starts with the same final transform. These
+stopping times do not estimate a failure rate or identify every mismatching
+sample's root cause. Phase 3 acceptance still requires the repair gate.

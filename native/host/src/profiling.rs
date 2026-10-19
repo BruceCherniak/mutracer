@@ -69,19 +69,114 @@ impl GpuTimer {
             timeout: Some(Duration::from_secs(30)),
         })?;
         receiver.recv_timeout(Duration::from_secs(5))??;
-        let mapped = self.readback.slice(..).get_mapped_range()?;
-        let mut ticks = 0u64;
-        for pair in mapped.chunks_exact(16) {
-            let begin = u64::from_le_bytes(pair[..8].try_into().unwrap());
-            let end = u64::from_le_bytes(pair[8..].try_into().unwrap());
-            let elapsed = end.checked_sub(begin).ok_or("Unordered GPU timestamps")?;
-            ticks = ticks
-                .checked_add(elapsed)
-                .ok_or("GPU timestamp sum overflow")?;
+        let result = (|| {
+            let mapped = self.readback.slice(..).get_mapped_range()?;
+            timestamp_milliseconds(&mapped, queue.get_timestamp_period())
+        })();
+        self.readback.unmap();
+        result
+    }
+    pub fn optional_milliseconds(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<f64> {
+        match self.milliseconds(device, queue) {
+            Ok(value) => Some(value),
+            Err(error) => {
+                native_log!(
+                    "{}",
+                    serde_json::json!({"nativeProfilingError": error.to_string()})
+                );
+                None
+            }
         }
-        if ticks == 0 {
-            return Err("GPU timestamps did not advance".into());
+    }
+}
+fn timestamp_milliseconds(bytes: &[u8], period: f32) -> Result<f64> {
+    if bytes.is_empty() || bytes.len() % 16 != 0 || !period.is_finite() || period <= 0. {
+        return Err("Invalid GPU timestamp payload/period".into());
+    }
+    let mut ticks = 0u64;
+    for pair in bytes.chunks_exact(16) {
+        let begin = u64::from_le_bytes(pair[..8].try_into().unwrap());
+        let end = u64::from_le_bytes(pair[8..].try_into().unwrap());
+        if begin == 0 || end <= begin {
+            return Err("GPU timestamps did not advance or were unordered".into());
         }
-        Ok(ticks as f64 * queue.get_timestamp_period() as f64 / 1e6)
+        ticks = ticks
+            .checked_add(end - begin)
+            .ok_or("GPU timestamp sum overflow")?;
+    }
+    Ok(ticks as f64 * period as f64 / 1e6)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn zero_timestamp_readback_does_not_prevent_real_gpu_rendering() {
+        let _test = crate::ABI_TEST_LOCK.lock().unwrap();
+        let Ok(gpu) = crate::GpuDevice::with_backend(1) else {
+            return;
+        };
+        if !gpu.hardware_ray_query {
+            return;
+        }
+        let Some(timer) = GpuTimer::new(&gpu.device, 1, false) else {
+            return;
+        };
+        // No query resolve was encoded: the initialized readback contains zero.
+        assert!(
+            timer
+                .optional_milliseconds(&gpu.device, &gpu.queue)
+                .is_none()
+        );
+        let input = crate::scene::tests::input();
+        let (mut scene, mut assets, _retained) =
+            crate::scene::prepare_retained(&input, true).unwrap();
+        scene.hwrt = Some(
+            crate::hardware::capture_from_prepared(
+                &mut assets,
+                scene.native_layout.as_ref().unwrap(),
+            )
+            .unwrap(),
+        );
+        let mut renderer = crate::GpuScene::new(
+            std::path::Path::new(""),
+            scene,
+            &crate::RenderOptions {
+                flags: 4,
+                ..Default::default()
+            },
+            Some(&assets),
+            gpu,
+        )
+        .unwrap();
+        assert!(renderer.hardware.is_some());
+        renderer.add_samples(1, 6., 12345).unwrap();
+        assert_eq!(renderer.samples, 1);
+        assert!(!renderer.read_pixels(0).unwrap().is_empty());
+    }
+    #[test]
+    fn timestamp_payload_rejects_zero_unordered_and_overflowing_samples() {
+        let bytes = |ticks: &[u64]| {
+            ticks
+                .iter()
+                .flat_map(|t| t.to_le_bytes())
+                .collect::<Vec<_>>()
+        };
+        for ticks in [
+            &[0, 0][..],
+            &[9, 0],
+            &[9, 8],
+            &[9, 9],
+            &[9, 10, 0, 0],
+            &[1, u64::MAX, 1, u64::MAX],
+        ] {
+            assert!(timestamp_milliseconds(&bytes(ticks), 1.).is_err());
+        }
+        assert!(timestamp_milliseconds(&[], 1.).is_err());
+        assert!(timestamp_milliseconds(&[0; 17], 1.).is_err());
+        assert!(timestamp_milliseconds(&bytes(&[1, 2]), f32::NAN).is_err());
+        assert_eq!(
+            timestamp_milliseconds(&bytes(&[10, 20, 40, 70]), 2.).unwrap(),
+            0.00008
+        );
     }
 }
