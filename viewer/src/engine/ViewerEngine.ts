@@ -13,9 +13,11 @@ import {
   isModelFile, type LoadedModel, type PathedFile
 } from './loadModel';
 import { MATERIAL_BASE, TEXTURE_KEYS, type MaterialValues, type TextureKey } from './materialParams';
-import { parseMaterialX, type MapPlan } from './materialx';
-import { loadMapImage, readMaterialXPackage } from './materialxFiles';
+import type { MapPlan } from './materialx';
 import { isMaterialXFile } from './droppedFiles';
+
+/** MaterialX import is still experimental: only development builds offer it. */
+export const MATERIALX_IMPORT = import.meta.env.DEV;
 import { displacementHeightRange } from './displacementHeightRange';
 import { downloadPolyHavenMap, polyHavenMaps, type TextureResolution } from './polyHaven';
 import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
@@ -261,7 +263,7 @@ export class ViewerEngine {
   }
 
   async loadFiles(files: PathedFile[]) {
-    if (files.some((f) => isMaterialXFile(f.path)) && !files.some((f) => isModelFile(f.path))) {
+    if (MATERIALX_IMPORT && files.some((f) => isMaterialXFile(f.path)) && !files.some((f) => isModelFile(f.path))) {
       const material = get().material;
       if (!material) return showToast('Select a material to apply the MaterialX file to', 'error');
       return this.importMaterialX(material.id, files);
@@ -276,7 +278,8 @@ export class ViewerEngine {
       }
     }
     if (!models.some((f) => /\.(glb|gltf)$/i.test(f.path))) {
-      if (!hdr) showToast('Drop a .glb, a .gltf with its files, an .hdr environment, or a MaterialX .mtlx or .zip', 'error');
+      if (!hdr) showToast(MATERIALX_IMPORT ? 'Drop a .glb, a .gltf with its files, an .hdr environment, or a MaterialX .mtlx or .zip'
+        : 'Drop a .glb, a .gltf with its files, or an .hdr environment', 'error');
       return;
     }
     const main = models.find((f) => /\.(glb|gltf)$/i.test(f.path))!;
@@ -1076,6 +1079,8 @@ export class ViewerEngine {
   async importMaterialX(materialId: string, files: PathedFile[]) {
     let name = files[0]?.file.name ?? 'MaterialX';
     try {
+      // Loaded on demand, so production bundles leave the importer and fflate out.
+      const [{ parseMaterialX }, { loadMapImage, readMaterialXPackage }] = await Promise.all([import('./materialx'), import('./materialxFiles')]);
       const pkg = await readMaterialXPackage(files);
       const material = parseMaterialX(pkg.text);
       name = material.name;

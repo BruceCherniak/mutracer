@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { FileUp, ImagePlus, MousePointerClick, RotateCcw, X } from 'lucide-react';
 import { setUi, showToast, useViewer, type SelectedMaterial } from '../../store';
-import { getEngine } from '../../engine/ViewerEngine';
+import { MATERIALX_IMPORT, getEngine } from '../../engine/ViewerEngine';
 import { thumbnailUrl } from '../../engine/presets';
 import {
   MATERIAL_GROUPS, MATERIAL_PRESET_CATEGORIES, MATERIAL_PRESETS, TEXTURE_SLOTS, hexToLinear, linearToHex,
@@ -70,7 +70,7 @@ export function MaterialPanel() {
           onClick={() => setUi({ textureBrowser: !browsing })}>
           <PolyHavenLogo />{browsing ? 'Hide Poly Haven textures' : 'Browse Poly Haven textures'}
         </button>
-        <MaterialXImport materialId={material.id} />
+        {MATERIALX_IMPORT && <MaterialXImport materialId={material.id} />}
       </div>
       {MATERIAL_GROUPS.map((group) => {
         const weight = group.weight ? Number(material.values[group.weight]) : undefined;
