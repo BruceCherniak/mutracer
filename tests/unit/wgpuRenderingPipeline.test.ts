@@ -253,6 +253,45 @@ describe('WebGPU denoised presentation transitions', () => {
     pipeline.dispose();
   });
 
+  it.each(['standard', 'albedo', 'normal', 'beauty'] as const)('discards cancelled first-inference results during %s filtering', async stage => {
+    const pipeline = createPipeline(false);
+    pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
+    const abort = vi.fn();
+    let options!: Parameters<OIDNWeb['tileExecute']>[0];
+    let started!: () => void;
+    const ready = new Promise<void>(resolve => { started = resolve; });
+    const held: OIDNWeb = {tileExecute(opts) {options = opts; started(); return abort;}};
+    const beauty = stage === 'beauty' || stage === 'standard' ? held : completedDenoiser();
+    const execute = vi.spyOn(beauty, 'tileExecute');
+    const auxiliaryDenoisers = stage === 'standard' ? undefined : {
+      albedo: stage === 'albedo' ? held : completedDenoiser(),
+      normal: stage === 'normal' ? held : completedDenoiser()
+    };
+    const pending = pipeline.performDenoise!({kind: 'oidn', denoiser: {...beauty, auxiliaryDenoisers}}, undefined);
+    await ready;
+    // Display._configure invalidates the target before changing compose uniforms.
+    pipeline.invalidateDenoisedOutput();
+    pipeline.setToneMappingParams({exposure: 2});
+    pipeline.drawPostProcess(); pipeline.present();
+    const displayed = displayedTexture();
+    const decode = mocks.Pass.instances.get('OIDN albedo sRGB decode')!;
+    const decodeCalls = decode.createPass.mock.calls.length;
+    const beautyCalls = execute.mock.calls.length;
+    expect(abort).toHaveBeenCalledOnce();
+    expect(await pending).toBe(false);
+    // An executor may still deliver callbacks after its abort function returns.
+    const image = {data: {size: 80 * 64 * 16} as GPUBuffer, width: 80, height: 64};
+    options.progress?.(image, undefined, {x: 0, y: 0, width: 80, height: 64}, 0, 1);
+    options.done(image);
+    await Promise.resolve();
+    pipeline.present();
+    expect(displayedTexture()).toBe(displayed);
+    expect(decode.createPass).toHaveBeenCalledTimes(decodeCalls);
+    expect(execute).toHaveBeenCalledTimes(beautyCalls);
+    expect(pipeline.getTotalSamplesRendered()).toBe(1);
+    pipeline.manager.dispose();
+  });
+
   it('publishes a completed composite when OIDN omits progress callbacks', async () => {
     const pipeline = createPipeline(false);
     pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();

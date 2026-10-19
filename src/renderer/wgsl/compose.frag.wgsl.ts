@@ -217,11 +217,15 @@ var compositeAlbedo = rawAlbedo.rgb;
 if (shadowCatcherEnabled > 0.5 && flatBackgroundColor.a < 0.5) {
   let coverage = clamp(load_shadowCatcherTex(uv, 0).r, 0.0, 1.0);
   let background = load_catcherBackgroundTex(uv, 0);
-  if (coverage > 0.0 && background.a > 0.000001) {
+  if (coverage > 0.0 && background.a > 0.0) {
     var backgroundAlbedo = gradeColor(background.rgb / background.a * exposure);
     backgroundAlbedo *= 1.0 - toneMappingParams.y * vignetteEdge;
     if (!hdrOutput) { backgroundAlbedo = applyToneMapping(backgroundAlbedo); }
-    compositeAlbedo += coverage * (clamp(backgroundAlbedo, vec3f(0.0), vec3f(1.0)) - vec3f(1.0));
+    // Background alpha already includes primary catcher coverage. Retain the
+    // neutral receiver for its transparent part, without counting coverage twice
+    // or adding the stochastic shadow opacity to the texture guide.
+    let backgroundWeight = clamp(background.a, 0.0, coverage);
+    compositeAlbedo += backgroundWeight * (clamp(backgroundAlbedo, vec3f(0.0), vec3f(1.0)) - vec3f(1.0));
   }
 }
 output.denoiseAlbedo = vec4f(clamp(compositeAlbedo, vec3f(0.0), vec3f(1.0)), rawAlbedo.a);

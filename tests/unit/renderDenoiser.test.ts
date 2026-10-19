@@ -82,6 +82,42 @@ it('denoises again after display settings change without tracing another sample'
   expect(targets[0].performDenoise).toHaveBeenCalledTimes(2); engine.dispose();
 });
 
+it.each(['exposure', 'tone mapping', 'HDR'] as const)('cancels the first OIDN inference before applying changed %s settings', async setting => {
+  const {engine, targets} = renderFixture();
+  loadOIDNNetwork.mockResolvedValue(filter());
+  const render = new Render(engine, {maxSamples: 1});
+  await render.setDenoiser({type: 'oidn'});
+  render.refine();
+  const target = targets[0];
+  let finish!: (complete: boolean) => void;
+  let signal!: AbortSignal;
+  vi.mocked(target.performDenoise!).mockImplementation((_filter, _alpha, _schedule, inputSignal) => {
+    signal = inputSignal!;
+    return new Promise(resolve => {finish = resolve;});
+  });
+  await settle();
+  expect(render.denoising).toBe(true);
+  expect(signal.aborted).toBe(false);
+  vi.mocked(target.cancelDenoise!).mockClear();
+  if (setting === 'exposure') engine.display.toneMappingExposure = 2;
+  else if (setting === 'tone mapping') engine.display.toneMapping = 'aces';
+  else engine.display.hdrOutputEnabled = true;
+  engine.display.present(render);
+  expect(signal.aborted).toBe(true);
+  expect(target.cancelDenoise).toHaveBeenCalled();
+  const cancelOrder = vi.mocked(target.cancelDenoise!).mock.invocationCallOrder[0];
+  expect(cancelOrder).toBeLessThan(vi.mocked(target.setToneMappingParams).mock.invocationCallOrder.at(-1)!);
+  expect(cancelOrder).toBeLessThan(vi.mocked(target.drawPostProcess).mock.invocationCallOrder.at(-1)!);
+  const composed = vi.mocked(target.drawPostProcess).mock.calls.length;
+  finish(true); await settle();
+  expect(target.drawPostProcess).toHaveBeenCalledTimes(composed);
+  vi.mocked(target.performDenoise!).mockResolvedValue(true);
+  render.refine(); await settle();
+  expect(target.performDenoise).toHaveBeenCalledTimes(2);
+  expect(target.trace).toHaveBeenCalledOnce();
+  engine.dispose();
+});
+
 it('recomposes the requested render after waiting for the shared inference lease', async () => {
   const {engine, targets} = renderFixture(); let composed = ''; const filtered: string[] = [];
   const a = new Render(engine, {maxSamples: 1, denoiser: {type: 'jnlm'}}), b = new Render(engine, {maxSamples: 1, denoiser: {type: 'jnlm'}});

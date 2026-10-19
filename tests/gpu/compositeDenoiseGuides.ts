@@ -45,6 +45,12 @@ export async function capture() {
     {name: 'mixed coverage', coverage: .5, shadow: .8},
     {name: 'bloom', coverage: 1, shadow: .8, bloom: 2},
     {name: 'transparent background', coverage: 1, shadow: .8, alpha: 0},
+    {name: 'quarter-opacity background', coverage: 1, shadow: .8, alpha: .25},
+    {name: 'translucent background without shadow', coverage: 1, shadow: 0, alpha: .25},
+    {name: 'translucent background at silhouette', coverage: .5, shadow: .8, alpha: .25},
+    {name: 'opaque background at thin silhouette', coverage: .125, shadow: .8},
+    {name: 'background below former alpha threshold', coverage: 1, shadow: .8, alpha: .5e-6},
+    {name: 'background above former alpha threshold', coverage: 1, shadow: .8, alpha: 1.5e-6},
     {name: 'flat background', coverage: 1, shadow: .8, flat: true},
     {name: 'exposure', coverage: 1, shadow: 0, exposure: 2}
   ];
@@ -71,7 +77,9 @@ export async function capture() {
       device.queue.submit([encoder.finish()]);
       await buffer.mapAsync(GPUMapMode.READ);
       const data = new Uint8Array(buffer.getMappedRange());
-      const expected = albedo.map((v, ch) => entry.flat || alpha === 0 ? v : v + coverage * (Math.min(1, background[ch] * (entry.exposure ?? 1)) - 1));
+      // Interpolate the neutral receiver toward the backdrop by its own opacity.
+      // Accumulated backdrop alpha already contains primary catcher coverage.
+      const expected = albedo.map((v, ch) => entry.flat ? v : v + coverage * alpha * (Math.min(1, background[ch] * (entry.exposure ?? 1)) - 1));
       for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) for (let ch = 0; ch < 4; ch++) {
         const want = ch === 3 ? .75 : expected[ch];
         if (Math.abs(data[y * 256 + x * 4 + ch] / 255 - want) > 1.01 / 255) throw new Error(`${entry.name}: wrong guide at ${x},${y},${ch}`);
