@@ -713,7 +713,7 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
   intersectScene(ray, &si, 0, false, false);
   getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex);
 
-  if (ma.materialType == SHADOW_CATCHER) {
+  if (si.hit && ma.materialType == SHADOW_CATCHER) {
     (*outAux).isShadowCatcher = true;
     // The composed denoising input includes this receiver's shadow. Supply
     // neutral reflectance and its shading normal, independent of visibility.
@@ -926,6 +926,15 @@ fn main(@builtin(global_invocation_id) globalId: vec3u) {
     ));
   }
   else {
+    if (HAS_SHADOW_CATCHER && outAux.isBlank && USE_BACKGROUND && !USE_BACKGROUND_MAP && rtUniform.backgroundColor.a >= 0.99999) {
+      // A primary miss sees the same opaque display backdrop as a catcher
+      // hit, but must never receive its shadow. Keep that radiance and alpha
+      // out of the geometry layer before hit-count normalization/tone mapping.
+      // Red/blue still count only actual catcher hits; green counts all
+      // background alpha removed from the foreground during normalization.
+      outShadowCatcher[idx].background += liAndAlpha;
+      outShadowCatcher[idx].mask.g += liAndAlpha.a;
+    }
     outColor[idx] += liAndAlpha;
     outAlbedo[idx] += vec4f(outAux.albedo, select(1.0, 0.0, outAux.isBlank));
     accumulateNormalOrVariance(idx, liAndAlpha.rgb, outAux.normal);

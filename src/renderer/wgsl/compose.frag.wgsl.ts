@@ -156,9 +156,14 @@ if (shadowCatcherEnabled > 0.5) {
   let shadowCatcher = load_shadowCatcherTex(uv, 0);
   let coverage = clamp(shadowCatcher.r, 0.0, 1.0);
   let opacity = max(clamp(shadowCatcher.a / max(coverage, 0.000001), 0.0, 1.0) - (1.0 - shadowCatcherAlpha), 0.0);
-  if (coverage > 0.0) {
+  if (coverage > 0.0 || flatBackgroundColor.a > 0.5) {
     let foreground = load_foregroundTex(uv, 0);
     let background = load_catcherBackgroundTex(uv, 0);
+    // An opaque flat backdrop also owns primary misses outside the receiver.
+    // Its alpha contains catcher coverage plus miss coverage; only the catcher
+    // fraction receives shadow. These weights come from the accumulation,
+    // independently of the quantized denoising/albedo guide.
+    let flatMissCoverage = select(0.0, clamp(background.a - coverage, 0.0, 1.0 - coverage), flatBackgroundColor.a > 0.5);
     var foregroundColor = gradeColor((foreground.rgb + bloomTexel.rgb) * exposure);
     var backgroundColor = gradeColor((background.rgb / max(background.a, 0.000001) + bloomTexel.rgb) * exposure);
     foregroundColor *= 1.0 - toneMappingParams.y * vignetteEdge;
@@ -181,11 +186,12 @@ if (shadowCatcherEnabled > 0.5) {
     // alpha layers. Shadow only the catcher background before averaging.
     let shadowAlpha = coverage * opacity;
     let bloomAlpha = clamp(dot(bloomTexel.rgb, vec3f(0.2125, 0.7154, 0.0721)), 0.0, 1.0);
-    let foregroundAlpha = max(foreground.a, bloomAlpha * (1.0 - coverage));
+    let foregroundAlpha = max(foreground.a, bloomAlpha * (1.0 - coverage - flatMissCoverage));
     let backgroundAlpha = max(background.a, bloomAlpha * coverage);
-    let alpha = foregroundAlpha + backgroundAlpha * (1.0 - opacity) + shadowAlpha;
+    let visibleBackgroundAlpha = (backgroundAlpha - flatMissCoverage) * (1.0 - opacity) + flatMissCoverage;
+    let alpha = foregroundAlpha + visibleBackgroundAlpha + shadowAlpha;
     let premultiplied = foregroundColor * foregroundAlpha
-      + backgroundColor * backgroundAlpha * (1.0 - opacity)
+      + backgroundColor * visibleBackgroundAlpha
       + shadowCatcherColor * shadowAlpha;
     finalColor = vec4f(premultiplied / max(alpha, 0.000001), alpha);
   }
