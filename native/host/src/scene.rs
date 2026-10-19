@@ -789,23 +789,23 @@ impl PreparedState {
     pub(super) fn hardware_geometry(
         &self,
         updates: &LightingUpdates,
-    ) -> Result<(hardware::Capture, HashMap<String, Vec<u8>>)> {
+    ) -> Result<(hardware::Capture, Assets)> {
         let mut assets: HashMap<_, _> = updates
             .iter()
-            .map(|(id, _, _, _, data)| (format!("native-{id}"), data.clone()))
+            .map(|(id, _, _, _, data)| (AssetId::Packet(*id), data.clone()))
             .collect();
-        assets.insert("native-33".into(), self.authoritative_shader.clone());
-        assets.insert("native-35".into(), self.authoritative_indices.clone());
-        assets.insert("native-42".into(), self.authoritative_as_indices.clone());
+        assets.insert(AssetId::Packet(33), self.authoritative_shader.clone());
+        assets.insert(AssetId::Packet(35), self.authoritative_indices.clone());
+        assets.insert(AssetId::Packet(42), self.authoritative_as_indices.clone());
         if let Some(positions) = &updates.hardware_positions {
-            assets.insert("native-41".into(), positions.clone());
+            assets.insert(AssetId::Packet(41), positions.clone());
         }
-        assets.insert("native-38".into(), self.authoritative_bounds.clone());
+        assets.insert(AssetId::Packet(38), self.authoritative_bounds.clone());
         let layout = updates
             .native_layout
             .as_ref()
             .ok_or("Missing geometry HWRT metadata")?;
-        let capture = hardware::capture_from_prepared(&mut assets, layout)?;
+        let capture = hardware::capture_from_resources(&mut assets, layout)?;
         Ok((capture, assets))
     }
     pub(super) fn transform(&self, bytes: &[u8]) -> Result<LightingUpdates> {
@@ -1189,7 +1189,7 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
 pub(super) fn prepare_retained(
     bytes: &[u8],
     hardware: bool,
-) -> Result<(Scene, HashMap<String, Vec<u8>>, PreparedState)> {
+) -> Result<(Scene, Assets, PreparedState)> {
     prepare_retained_with_settings(
         bytes,
         hardware,
@@ -1202,7 +1202,7 @@ pub(super) fn prepare_retained_with_settings(
     hardware: bool,
     backend: u32,
     settings: &settings::RenderSettings,
-) -> Result<(Scene, HashMap<String, Vec<u8>>, PreparedState)> {
+) -> Result<(Scene, Assets, PreparedState)> {
     let bytes = bytes.to_vec();
     let hardware = hardware;
     let backend = backend;
@@ -1216,7 +1216,7 @@ fn prepare_retained_with_settings_inner(
     hardware: bool,
     backend: u32,
     settings: &settings::RenderSettings,
-) -> Result<(Scene, HashMap<String, Vec<u8>>, PreparedState)> {
+) -> Result<(Scene, Assets, PreparedState)> {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
     let token = NEXT
         .fetch_update(
@@ -1252,22 +1252,28 @@ fn prepare_retained_with_settings_inner(
         settings,
         if backend == 1 { 2 } else { 1 },
     )?;
-    state.authoritative_shader = assets.get("native-33").cloned().unwrap_or_default();
-    state.authoritative_as_indices = assets.get("native-42").cloned().unwrap_or_default();
-    state.authoritative_bounds = assets.get("native-38").cloned().unwrap_or_default();
+    state.authoritative_shader = assets
+        .get(&AssetId::Packet(33))
+        .cloned()
+        .unwrap_or_default();
+    state.authoritative_as_indices = assets
+        .get(&AssetId::Packet(42))
+        .cloned()
+        .unwrap_or_default();
+    state.authoritative_bounds = assets
+        .get(&AssetId::Packet(38))
+        .cloned()
+        .unwrap_or_default();
     state.authoritative_indices = assets
-        .get("native-35")
+        .get(&AssetId::Packet(35))
         .ok_or("Missing explicit HWRT indices")?
         .clone();
     Ok((scene, assets, PreparedState(Arc::new(state))))
 }
-pub(super) fn prepare_hardware(bytes: &[u8]) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
+pub(super) fn prepare_hardware(bytes: &[u8]) -> Result<(Scene, Assets)> {
     prepare_diagnostic(bytes, hardware::direct_input_enabled())
 }
-pub(super) fn prepare_diagnostic(
-    bytes: &[u8],
-    hardware: bool,
-) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
+pub(super) fn prepare_diagnostic(bytes: &[u8], hardware: bool) -> Result<(Scene, Assets)> {
     prepare_impl(
         bytes,
         0,
@@ -1277,7 +1283,7 @@ pub(super) fn prepare_diagnostic(
         15,
     )
 }
-pub(super) fn prepare(bytes: &[u8]) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
+pub(super) fn prepare(bytes: &[u8]) -> Result<(Scene, Assets)> {
     prepare_impl(
         bytes,
         0,
@@ -1321,7 +1327,7 @@ fn prepare_impl(
     diagnostic: bool,
     settings: &settings::RenderSettings,
     variants: u32,
-) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
+) -> Result<(Scene, Assets)> {
     prepare_impl_with_kernels(bytes, token, hardware, diagnostic, settings, variants, true)
 }
 fn prepare_impl_with_kernels(
@@ -1332,7 +1338,7 @@ fn prepare_impl_with_kernels(
     settings: &settings::RenderSettings,
     variants: u32,
     native_kernels: bool,
-) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
+) -> Result<(Scene, Assets)> {
     let bytes = bytes.to_vec();
     let token = token;
     let hardware = hardware;
@@ -1360,7 +1366,7 @@ fn prepare_impl_with_kernels_inner(
     settings: &settings::RenderSettings,
     variants: u32,
     native_kernels: bool,
-) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
+) -> Result<(Scene, Assets)> {
     let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
     let started = Instant::now();
     validate(bytes)?;
@@ -1450,7 +1456,7 @@ fn prepare_impl_with_kernels_inner(
     let mut assets = HashMap::new();
     let mut buffers = Vec::new();
     let mut textures = Vec::new();
-    let mut shader = String::new();
+    let mut shader = None;
     let mut native_layout = None;
     for i in 0..count {
         let o = ph::WORDS + i * pe::WORDS;
@@ -1464,7 +1470,7 @@ fn prepare_impl_with_kernels_inner(
         {
             return Err("Native resource span exceeds packet".into());
         }
-        let name = format!("native-{id}");
+        let name = AssetId::Packet(id);
         let mut data = packet[offset..offset + length].to_vec();
         if kind == kind::BUFFER {
             // Runtime storage arrays require one complete element even for empty payloads.
@@ -1474,7 +1480,7 @@ fn prepare_impl_with_kernels_inner(
                 id,
                 size: data.len() as u64,
                 usage: if id <= res::MATERIALS { 140 } else { 72 },
-                file: name.clone(),
+                resource: name.clone(),
             });
         } else if kind == kind::TEXTURE {
             let (width, height, depth) = (
@@ -1487,10 +1493,31 @@ fn prepare_impl_with_kernels_inner(
             if data.len() != width as usize * height as usize * depth as usize * bpp {
                 return Err("Native texture length mismatch".into());
             }
-            textures.push(Texture{id,width,height,depth,format:format.into(),usage:6,writes:vec![json!({"origin":[0,0,0],"size":[width,height,depth],"layout":{"bytesPerRow":width as usize*bpp,"rowsPerImage":height},"file":name})]});
+            textures.push(Texture {
+                id,
+                width,
+                height,
+                depth,
+                format,
+                usage: 6,
+                writes: vec![TextureWrite {
+                    resource: name,
+                    origin: wgpu::Origin3d::ZERO,
+                    size: wgpu::Extent3d {
+                        width,
+                        height,
+                        depth_or_array_layers: depth,
+                    },
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(width * bpp as u32),
+                        rows_per_image: Some(height),
+                    },
+                }],
+            });
         } else if kind == kind::WGSL {
             if id == res::SOFTWARE_SHADER {
-                shader = name.clone();
+                shader = Some(name);
             } else if id != res::HWRT_SHADER
                 && id != res::HIT_SHADER
                 && id != res::SOFTWARE_PATH_SHADER
@@ -1517,50 +1544,39 @@ fn prepare_impl_with_kernels_inner(
             return Err("Duplicate native resource".into());
         }
     }
-    if shader.is_empty() && assets.contains_key("native-33") {
-        shader = "native-33".into();
+    if shader.is_none() && assets.contains_key(&AssetId::Packet(33)) {
+        shader = Some(AssetId::Packet(33));
     }
-    if shader.is_empty() {
-        return Err("Missing requested production shader".into());
-    }
+    let shader = shader.ok_or("Missing requested production shader")?;
     let pixels = w.u(ph::WIDTH) * w.u(ph::HEIGHT);
     for id in res::COLOR..=res::SHADOW_CATCHER {
         let size = pixels * if id == res::SHADOW_CATCHER { 48 } else { 16 };
-        let name = format!("native-{id}");
+        let name = AssetId::Packet(id);
         assets.insert(name.clone(), vec![0; size]);
         buffers.push(Buffer {
             id,
             size: size as u64,
             usage: 140,
-            file: name,
+            resource: name,
         });
     }
     let groups = crate::layout::bind_groups();
     Ok((
         Scene {
-            format: 1,
             width: w.u(ph::WIDTH) as u32,
             height: w.u(ph::HEIGHT) as u32,
-            samples: 64,
             shader,
             native_layout,
             entry_point: "main".into(),
             buffers,
             textures,
-            samplers: vec![json!({"id":sampler::MATERIAL})],
+            samplers: vec![sampler::MATERIAL],
             bind_groups: groups,
             rt_uniform: res::TRACE_UNIFORM,
             color_output: res::COLOR,
             normal_output: Some(res::NORMAL),
             albedo_output: Some(res::ALBEDO),
-            camera_uniform: Some(res::CAMERA),
-            material_buffer: Some(res::MATERIALS),
-            material_count: None,
-            material_stride: None,
-            material_offsets: None,
             hwrt: None,
-            native_bvh: None,
-            sampling: None,
         },
         assets,
     ))
@@ -1569,7 +1585,7 @@ fn prepare_impl_with_kernels_inner(
 /// Raw scene descriptors; paths and all bytes are borrowed for the call.
 /// # Safety
 /// `input` must be readable for `length` bytes and output/error strings follow
-/// mutracer-scene.h. Calls use the same owner thread as the replay API.
+/// mutracer-scene.h. Concurrent blocking probes return a busy error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_probe_render_scene(
     input: *const u8,
@@ -1594,14 +1610,13 @@ pub unsafe extern "C" fn mt_probe_render_scene(
         let output = unsafe { CStr::from_ptr(output) }.to_str()?;
         let (scene, assets) = prepare(bytes)?;
         render_scene(
-            Path::new(""),
             scene,
             Path::new(output),
             &RenderOptions {
                 samples,
                 ..Default::default()
             },
-            Some(&assets),
+            &assets,
         )
     });
     let message = match result {
@@ -1758,10 +1773,10 @@ pub(crate) mod tests {
                 prepare_retained_with_settings(&input(), backend == 1, backend, &settings).unwrap();
             let ids = [30, 33, 34, 36, 37, 39]
                 .into_iter()
-                .filter(|id| assets.contains_key(&format!("native-{id}")))
+                .filter(|id| assets.contains_key(&AssetId::Packet(*id)))
                 .collect::<Vec<_>>();
             assert_eq!(ids, vec![if backend == 0 { 30 } else { 33 }]);
-            let uniform = &assets["native-7"];
+            let uniform = &assets[&AssetId::Packet(7)];
             let word =
                 |offset: usize| u32::from_le_bytes(uniform[offset..offset + 4].try_into().unwrap());
             assert_eq!(word(layout::ray_uniform::SEQUENCE_SEED), 67890);
@@ -1780,7 +1795,7 @@ pub(crate) mod tests {
         assert!(
             [30, 33, 34, 36, 37, 39]
                 .into_iter()
-                .all(|id| diagnostics.contains_key(&format!("native-{id}")))
+                .all(|id| diagnostics.contains_key(&AssetId::Packet(id)))
         );
     }
 

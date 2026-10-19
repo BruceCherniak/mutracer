@@ -131,20 +131,19 @@ mod tests {
         let (mut scene, mut assets, _retained) =
             crate::scene::prepare_retained(&input, true).unwrap();
         scene.hwrt = Some(
-            crate::hardware::capture_from_prepared(
+            crate::hardware::capture_from_resources(
                 &mut assets,
                 scene.native_layout.as_ref().unwrap(),
             )
             .unwrap(),
         );
         let mut renderer = crate::GpuScene::new(
-            std::path::Path::new(""),
             scene,
             &crate::RenderOptions {
                 flags: 4,
                 ..Default::default()
             },
-            Some(&assets),
+            &assets,
             gpu,
         )
         .unwrap();

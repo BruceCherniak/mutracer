@@ -27,11 +27,7 @@ pub(super) fn read_raw(gpu: &GpuDevice, source: &wgpu::Buffer) -> Result<Vec<u8>
 
 // Geometry is an explicit diagnostic payload, independent of shader text.
 // NumPy evaluates barycentric world points in float64, with no GPU rounding.
-pub(super) fn write_geometry_snapshot(
-    scene: &Scene,
-    assets: &HashMap<String, Vec<u8>>,
-    output: &Path,
-) -> Result<()> {
+pub(super) fn write_geometry_snapshot(scene: &Scene, assets: &Assets, output: &Path) -> Result<()> {
     fs::create_dir_all(output)?;
     fs::write(
         output.join("layout.json"),
@@ -43,7 +39,7 @@ pub(super) fn write_geometry_snapshot(
         )?,
     )?;
     for id in [1, 2, 3, 35, 40] {
-        let key = format!("native-{id}");
+        let key = AssetId::Packet(id);
         fs::write(
             output.join(format!("{key}.bin")),
             assets.get(&key).ok_or("Missing diagnostic geometry")?,
@@ -78,7 +74,7 @@ fn run_side(input: &[u8], output: &Path, hardware: bool) -> Result<()> {
         .native_layout
         .as_ref()
         .ok_or("Missing native layout")?;
-    let mut capture = hardware::capture_from_prepared(&mut assets, layout)?;
+    let mut capture = hardware::capture_from_resources(&mut assets, layout)?;
     if std::env::var_os("MUTRACER_NATIVE_HIT_INPUTS").is_some_and(|v| v == "1") {
         fs::create_dir_all(output)?;
         fs::write(
@@ -90,16 +86,12 @@ fn run_side(input: &[u8], output: &Path, hardware: bool) -> Result<()> {
             serde_json::to_vec_pretty(&capture)?,
         )?;
         for (name, bytes) in &assets {
-            if [
-                "native-1",
-                "native-2",
-                "native-3",
-                "native-4",
-                "native-hwrt-map",
-            ]
-            .contains(&name.as_str())
-                || name.starts_with("native-hwrt-positions-")
-            {
+            if matches!(
+                name,
+                AssetId::Packet(1 | 2 | 3 | 4)
+                    | AssetId::HardwareMap
+                    | AssetId::GeometryPositions(_)
+            ) {
                 fs::write(output.join(format!("{name}.bin")), bytes)?;
             }
         }
@@ -119,22 +111,21 @@ fn run_side(input: &[u8], output: &Path, hardware: bool) -> Result<()> {
     if capture.geometries.iter().any(|g| g.procedural) {
         return Err("First-hit diagnostics exclude displacement geometries".into());
     }
-    capture.shader = Some("native-34".into());
+    capture.shader = Some(AssetId::Packet(34));
     scene.hwrt = Some(capture);
     scene.entry_point = "diagnoseHits".into();
-    scene.shader = "native-39".into();
+    scene.shader = AssetId::Packet(39);
     let gpu = GpuDevice::with_backend(1)?;
     if !gpu.hardware_ray_query {
         return Err("Diagnostic requires actual HWRT".into());
     }
     let state = GpuScene::new(
-        Path::new(""),
         scene,
         &RenderOptions {
             flags: if hardware { 4 } else { 0 },
             ..Default::default()
         },
-        Some(&assets),
+        &assets,
         gpu,
     )?;
     state.dispatch_timed(0, 1, 6., 12345, None)?;

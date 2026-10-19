@@ -28,14 +28,14 @@ fn large_and_small_blas_complete_before_tlas_encoding() {
             .collect::<Vec<_>>()
     };
     let assets = HashMap::from([
-        ("large".into(), bytes(&positions)),
-        ("large-indices".into(), indices(triangles * 3)),
+        (AssetId::Diagnostic(100), bytes(&positions)),
+        (AssetId::Diagnostic(101), indices(triangles * 3)),
         (
-            "small".into(),
+            AssetId::Diagnostic(102),
             bytes(&[0., 0., 0., 0.8, 0., 0., 0., 0.8, 0.]),
         ),
-        ("small-indices".into(), indices(3)),
-        ("map".into(), vec![0; 32]),
+        (AssetId::Diagnostic(103), indices(3)),
+        (AssetId::Diagnostic(104), vec![0; 32]),
     ]);
     let transform = [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0.];
     let capture = Capture {
@@ -46,16 +46,16 @@ fn large_and_small_blas_complete_before_tlas_encoding() {
         shader: None,
         geometries: vec![
             Geometry {
-                positions: "large".into(),
-                indices: Some("large-indices".into()),
+                positions: AssetId::Diagnostic(100),
+                indices: Some(AssetId::Diagnostic(101)),
                 vertex_count: (triangles * 3) as u32,
                 index_count: Some((triangles * 3) as u32),
                 vertex_stride: 12,
                 ..Default::default()
             },
             Geometry {
-                positions: "small".into(),
-                indices: Some("small-indices".into()),
+                positions: AssetId::Diagnostic(102),
+                indices: Some(AssetId::Diagnostic(103)),
                 vertex_count: 3,
                 index_count: Some(3),
                 vertex_stride: 12,
@@ -74,7 +74,7 @@ fn large_and_small_blas_complete_before_tlas_encoding() {
                 transform,
             },
         ],
-        triangle_map: Some("map".into()),
+        triangle_map: Some(AssetId::Diagnostic(104)),
     };
     let shader = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label:Some("Mixed BLAS completion regression"),
@@ -101,15 +101,7 @@ fn large_and_small_blas_complete_before_tlas_encoding() {
             cache: None,
         });
     for iteration in 0..8 {
-        let resources = prepare(
-            &gpu.device,
-            &gpu.queue,
-            Path::new(""),
-            &capture,
-            Some(&assets),
-            None,
-        )
-        .unwrap();
+        let resources = prepare(&gpu.device, &gpu.queue, &capture, &assets, None).unwrap();
         let output = gpu
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {

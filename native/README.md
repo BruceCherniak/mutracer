@@ -261,26 +261,3 @@ Topology-changing geometry updates, texture/emission material updates, device-lo
 browser display parity and a stable release ABI remain pending.
 The viewer provides [native OIDN controls](./viewer/README.md#controls).
 This library does not yet replace the full browser Engine/Render API.
-
-## Prepared replay and experimental HWRT
-
-A separate interface replays prepared scene files:
-
-```sh
-npm run native:render
-.native-build/render-host .native-build/scene .native-build/another-image 256 repeat
-```
-
-Its output defaults to `.native-build/`; `MUTRACER_NATIVE_SAMPLES` defaults to 64
-for this command. Scene preparation requires Node, while the built consumer runs
-without Node. [mutracer-probe.h](./mutracer-probe.h) describes camera translation,
-base-color/roughness edits, seed and bounce options. Each call starts from the
-prepared scene; edits do not persist or enable new material variants.
-
-Prepared replay uses software traversal. Use the raw-scene context API for HWRT.
-
-Output formats match the raw-scene probe. Render interfaces share one owner
-thread; each denoiser uses its creating thread. The replay probe rebuilds each
-call; contexts use the lifecycle described in their header. Contributor
-build, comparison and compiler diagnostics are in
-[CONTRIBUTING.md](./CONTRIBUTING.md).

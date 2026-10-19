@@ -1,5 +1,6 @@
+use crate::{AssetId, Assets};
 use serde::Deserialize;
-use std::{borrow::Cow, collections::HashMap, fs, path::Path, time::Duration};
+use std::{borrow::Cow, collections::HashMap, time::Duration};
 use wgpu::util::DeviceExt;
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 #[cfg(target_os = "macos")]
@@ -35,7 +36,7 @@ pub struct IndexedGeometry {
     dynamic: bool,
     bounds_offset: u32,
 }
-#[derive(Clone, serde::Serialize, Deserialize)]
+#[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Capture {
     pub eligible: bool,
@@ -44,20 +45,20 @@ pub struct Capture {
     #[serde(default)]
     pub indexed: bool,
     pub reason: Option<String>,
-    pub shader: Option<String>,
+    pub shader: Option<AssetId>,
     #[serde(default)]
     pub geometries: Vec<Geometry>,
     #[serde(default)]
     pub instances: Vec<Instance>,
-    pub triangle_map: Option<String>,
+    pub triangle_map: Option<AssetId>,
 }
-#[derive(Clone, serde::Serialize, Deserialize)]
+#[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 #[derive(Default)]
 pub struct Geometry {
-    positions: String,
+    positions: AssetId,
     #[serde(default)]
-    indices: Option<String>,
+    indices: Option<AssetId>,
     vertex_count: u32,
     #[serde(default)]
     index_count: Option<u32>,
@@ -65,7 +66,6 @@ pub struct Geometry {
     index_offset: u32,
     #[serde(default)]
     first_vertex: u32,
-    #[serde(default = "default_stride")]
     vertex_stride: u64,
     #[serde(default)]
     bounds_offset: u32,
@@ -76,7 +76,7 @@ pub struct Geometry {
     #[serde(default)]
     non_opaque: bool,
 }
-#[derive(Clone, serde::Serialize, Deserialize)]
+#[derive(Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Instance {
     geometry: usize,
@@ -96,12 +96,15 @@ fn wait_for_as(device: &wgpu::Device, submission: wgpu::SubmissionIndex) -> Resu
     Ok(())
 }
 
-fn default_stride() -> u64 {
-    12
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum HardwareBufferId {
+    Packet(usize),
+    Vertices(usize),
+    Indices(usize),
+    Mapping,
 }
-
 pub struct Resources {
-    pub inputs: HashMap<String, wgpu::Buffer>,
+    pub inputs: HashMap<HardwareBufferId, wgpu::Buffer>,
     indexed: bool,
     pub tlas: wgpu::Tlas,
     pub mapping: wgpu::Buffer,
@@ -124,30 +127,25 @@ pub(super) fn direct_input_enabled() -> bool {
 pub fn prepare(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    directory: &Path,
     capture: &Capture,
-    assets: Option<&HashMap<String, Vec<u8>>>,
+    assets: &Assets,
     _buffers: Option<&HashMap<usize, wgpu::Buffer>>,
 ) -> Result<Resources> {
-    prepare_reusing(device, queue, directory, capture, assets, _buffers, None)
+    prepare_reusing(device, queue, capture, assets, _buffers, None)
 }
 pub fn prepare_reusing(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
-    directory: &Path,
     capture: &Capture,
-    assets: Option<&HashMap<String, Vec<u8>>>,
+    assets: &Assets,
     _buffers: Option<&HashMap<usize, wgpu::Buffer>>,
-    reusable: Option<&HashMap<String, wgpu::Buffer>>,
+    reusable: Option<&HashMap<HardwareBufferId, wgpu::Buffer>>,
 ) -> Result<Resources> {
-    let read = |name: &str| -> Result<Cow<'_, [u8]>> {
-        if let Some(assets) = assets {
-            return assets
-                .get(name)
-                .map(|bytes| Cow::Borrowed(bytes.as_slice()))
-                .ok_or_else(|| format!("Missing HWRT resource {name}").into());
-        }
-        Ok(Cow::Owned(fs::read(directory.join(name))?))
+    let read = |name: &AssetId| -> Result<Cow<'_, [u8]>> {
+        assets
+            .get(name)
+            .map(|data| Cow::Borrowed(data.as_slice()))
+            .ok_or_else(|| format!("Missing HWRT resource {name:?}").into())
     };
     if !capture.eligible {
         return Err(capture
@@ -169,33 +167,34 @@ pub fn prepare_reusing(
     let mut reused_bytes = 0u64;
     let mut payload_bytes = 0u64;
     let mut vertex_payload_bytes = 0u64;
-    let mut upload = |name: &str, data: &[u8], usage: wgpu::BufferUsages, vertex: bool| {
-        let usage = usage | wgpu::BufferUsages::COPY_DST;
-        let previous = reusable
-            .and_then(|b| b.get(name))
-            .filter(|b| b.size() == data.len() as u64 && b.usage() == usage);
-        let buffer = if let Some(previous) = previous {
-            queue.write_buffer(previous, 0, data);
-            reused_bytes += previous.size();
-            previous.clone()
-        } else {
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some(name),
-                contents: data,
-                usage,
-            })
+    let mut upload =
+        |name: HardwareBufferId, data: &[u8], usage: wgpu::BufferUsages, vertex: bool| {
+            let usage = usage | wgpu::BufferUsages::COPY_DST;
+            let previous = reusable
+                .and_then(|b| b.get(&name))
+                .filter(|b| b.size() == data.len() as u64 && b.usage() == usage);
+            let buffer = if let Some(previous) = previous {
+                queue.write_buffer(previous, 0, data);
+                reused_bytes += previous.size();
+                previous.clone()
+            } else {
+                device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some(&format!("MuTracer {name:?}")),
+                    contents: data,
+                    usage,
+                })
+            };
+            payload_bytes += data.len() as u64;
+            if vertex {
+                vertex_payload_bytes += data.len() as u64;
+            }
+            inputs.insert(name, buffer.clone());
+            buffer
         };
-        payload_bytes += data.len() as u64;
-        if vertex {
-            vertex_payload_bytes += data.len() as u64;
-        }
-        inputs.insert(name.to_string(), buffer.clone());
-        buffer
-    };
     let direct_indices = if capture.indexed {
         Some(upload(
-            "MuTracer merged indices",
-            &read("native-35")?,
+            HardwareBufferId::Packet(35),
+            &read(&AssetId::Packet(35))?,
             wgpu::BufferUsages::BLAS_INPUT
                 | wgpu::BufferUsages::STORAGE
                 | wgpu::BufferUsages::COPY_DST,
@@ -206,8 +205,8 @@ pub fn prepare_reusing(
     };
     let direct_blas_indices = if capture.indexed {
         Some(upload(
-            "MuTracer soup indices",
-            &read("native-42")?,
+            HardwareBufferId::Packet(42),
+            &read(&AssetId::Packet(42))?,
             wgpu::BufferUsages::BLAS_INPUT,
             false,
         ))
@@ -216,8 +215,8 @@ pub fn prepare_reusing(
     };
     let direct_bounds = if capture.indexed && capture.geometries.iter().any(|g| g.procedural) {
         Some(upload(
-            "MuTracer displacement bounds",
-            &read("native-38")?,
+            HardwareBufferId::Packet(38),
+            &read(&AssetId::Packet(38))?,
             wgpu::BufferUsages::BLAS_INPUT,
             true,
         ))
@@ -226,8 +225,8 @@ pub fn prepare_reusing(
     };
     let direct_positions = if capture.indexed && capture.geometries.iter().any(|g| !g.procedural) {
         Some(upload(
-            "MuTracer compact positions",
-            &read("native-41")?,
+            HardwareBufferId::Packet(41),
+            &read(&AssetId::Packet(41))?,
             wgpu::BufferUsages::BLAS_INPUT,
             true,
         ))
@@ -268,7 +267,7 @@ pub fn prepare_reusing(
             }
         } else {
             upload(
-                &geometry.positions,
+                HardwareBufferId::Vertices(geometry_id),
                 &data,
                 wgpu::BufferUsages::BLAS_INPUT,
                 true,
@@ -290,7 +289,7 @@ pub fn prepare_reusing(
                         return Err("HWRT explicit index buffer is too short".into());
                     }
                     Ok(upload(
-                        &format!("geometry-{geometry_id}:{name}:indices"),
+                        HardwareBufferId::Indices(geometry_id),
                         &data[..geometry.vertex_count as usize * 4],
                         wgpu::BufferUsages::BLAS_INPUT,
                         false,
@@ -447,7 +446,7 @@ pub fn prepare_reusing(
         buffer
     } else {
         upload(
-            "MuTracer hardware primitive identity",
+            HardwareBufferId::Mapping,
             &data,
             wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
             false,
@@ -477,30 +476,28 @@ pub fn prepare_reusing(
     }
     // Software TLAS rebuilds may reorder instances. Match BLAS root/vertex region
     // rather than the previous instance index, preserving primitive identity.
-    let raw_instances = assets
-        .and_then(|assets| assets.get("native-2"))
-        .map(|bytes| {
-            bytes
-                .chunks_exact(160)
-                .zip(&capture.instances)
-                .enumerate()
-                .map(|(i, (record, instance))| {
-                    let word =
-                        |offset| u32::from_le_bytes(record[offset..offset + 4].try_into().unwrap());
+    let raw_instances = assets.get(&AssetId::Packet(2)).map(|bytes| {
+        bytes
+            .chunks_exact(160)
+            .zip(&capture.instances)
+            .enumerate()
+            .map(|(i, (record, instance))| {
+                let word =
+                    |offset| u32::from_le_bytes(record[offset..offset + 4].try_into().unwrap());
+                (
+                    (word(0), word(4)),
                     (
-                        (word(0), word(4)),
-                        (
-                            instance.geometry,
-                            if capture.indexed {
-                                word(0)
-                            } else {
-                                u32::from_le_bytes(data[i * 4..i * 4 + 4].try_into().unwrap())
-                            },
-                        ),
-                    )
-                })
-                .collect()
-        });
+                        instance.geometry,
+                        if capture.indexed {
+                            word(0)
+                        } else {
+                            u32::from_le_bytes(data[i * 4..i * 4 + 4].try_into().unwrap())
+                        },
+                    ),
+                )
+            })
+            .collect()
+    });
     Ok(Resources {
         inputs,
         indexed: capture.indexed,
@@ -920,18 +917,15 @@ impl Resources {
 // Source-order inputs use the shared TS geometry regions. Leaf-order extraction
 // remains available for explicit regression diagnostics; both supply identity
 // only, never a software recomputation of a hardware hit or miss.
-pub fn capture_from_prepared(
-    assets: &mut HashMap<String, Vec<u8>>,
-    layout: &NativeLayout,
-) -> Result<Capture> {
+pub fn capture_from_resources(assets: &mut Assets, layout: &NativeLayout) -> Result<Capture> {
     if layout.indexed {
         return from_indexed(assets, layout);
     }
     let source = assets
-        .get("native-33")
+        .get(&AssetId::Packet(33))
         .ok_or("Missing authoritative HWRT shader")?
         .clone();
-    let words = |name: &str| -> Result<Vec<u32>> {
+    let words = |name: &AssetId| -> Result<Vec<u32>> {
         let bytes = assets.get(name).ok_or("Missing packed HWRT input")?;
         if bytes.len() % 4 != 0 {
             return Err("Invalid packed HWRT input".into());
@@ -942,9 +936,9 @@ pub fn capture_from_prepared(
             .collect())
     };
     let blas_offset = layout.blas_offset;
-    let instances = words("native-2")?;
-    let bvh = words("native-1")?;
-    let attributes = words("native-3")?;
+    let instances = words(&AssetId::Packet(2))?;
+    let bvh = words(&AssetId::Packet(1))?;
+    let attributes = words(&AssetId::Packet(3))?;
     if layout.attribute_stride_bytes % 4 != 0 || layout.position_offset_bytes % 4 != 0 {
         return Err("Invalid native HWRT attribute alignment".into());
     }
@@ -1033,10 +1027,10 @@ pub fn capture_from_prepared(
                 return Err("Empty HWRT geometry".into());
             }
             let index = geometries.len();
-            let name = format!("native-hwrt-positions-{index}");
+            let name = AssetId::GeometryPositions(index);
             geometries.push(Geometry {
                 positions: name.clone(),
-                indices: (!displaced).then(|| "native-35".into()),
+                indices: (!displaced).then(|| AssetId::Packet(35)),
                 vertex_count: triangle_count * 3,
                 procedural: displaced,
                 non_opaque: layout.has_alpha,
@@ -1062,30 +1056,32 @@ pub fn capture_from_prepared(
         });
     }
     generated.insert(
-        "native-hwrt-map".into(),
+        AssetId::HardwareMap,
         mapping.iter().flat_map(|v| v.to_le_bytes()).collect(),
     );
-    generated.insert("native-hwrt-shader".into(), source);
+    generated.insert(AssetId::HardwareShader, source);
     assets.extend(generated);
     Ok(Capture {
         eligible: true,
         indexed: false,
         authoritative: true,
         reason: None,
-        shader: Some("native-hwrt-shader".into()),
+        shader: Some(AssetId::HardwareShader),
         geometries,
         instances: placements,
-        triangle_map: Some("native-hwrt-map".into()),
+        triangle_map: Some(AssetId::HardwareMap),
     })
 }
 
 // TS supplies merged geometry regions and local displacement AABBs. Rust only
 // binds buffers and converts instance matrices for the wgpu API.
-fn from_indexed(assets: &mut HashMap<String, Vec<u8>>, layout: &NativeLayout) -> Result<Capture> {
+fn from_indexed(assets: &mut Assets, layout: &NativeLayout) -> Result<Capture> {
     if layout.position_offset_bytes != 0 || layout.attribute_stride_bytes < 12 {
         return Err("Unsupported HWRT position layout".into());
     }
-    let attributes = assets.get("native-3").ok_or("Missing indexed attributes")?;
+    let attributes = assets
+        .get(&AssetId::Packet(3))
+        .ok_or("Missing indexed attributes")?;
     if attributes.len() < layout.attribute_stride_bytes && !layout.is_empty {
         return Err("Missing indexed attributes".into());
     }
@@ -1093,13 +1089,8 @@ fn from_indexed(assets: &mut HashMap<String, Vec<u8>>, layout: &NativeLayout) ->
         .hardware_geometries
         .iter()
         .map(|g| Geometry {
-            positions: if g.procedural {
-                "native-38"
-            } else {
-                "native-41"
-            }
-            .into(),
-            indices: (!g.procedural).then(|| "native-42".into()),
+            positions: AssetId::Packet(if g.procedural { 38 } else { 41 }),
+            indices: (!g.procedural).then(|| AssetId::Packet(42)),
             vertex_count: g.index_count,
             first_vertex: g.index_offset,
             index_count: Some(g.index_count),
@@ -1121,7 +1112,7 @@ fn from_indexed(assets: &mut HashMap<String, Vec<u8>>, layout: &NativeLayout) ->
     let mut instances = Vec::new();
     if !layout.is_empty {
         for (i, record) in assets
-            .get("native-2")
+            .get(&AssetId::Packet(2))
             .ok_or("Missing indexed instances")?
             .chunks_exact(160)
             .enumerate()
@@ -1145,17 +1136,17 @@ fn from_indexed(assets: &mut HashMap<String, Vec<u8>>, layout: &NativeLayout) ->
         authoritative: true,
         indexed: true,
         reason: None,
-        shader: Some("native-33".into()),
+        shader: Some(AssetId::Packet(33)),
         geometries,
         instances,
-        triangle_map: Some("native-35".into()),
+        triangle_map: Some(AssetId::Packet(35)),
     })
 }
 
 // Explicit diagnostic isolation; never called by commit/render entry points.
 pub fn isolate_diagnostic(
     capture: &mut Capture,
-    assets: &mut HashMap<String, Vec<u8>>,
+    assets: &mut Assets,
     instance: u32,
     primitive: Option<usize>,
 ) -> Result<()> {
@@ -1174,7 +1165,7 @@ pub fn isolate_diagnostic(
             geometry.index_offset += primitive as u32 * 3;
             geometry.index_count = Some(3);
             let records = assets
-                .get_mut("native-2")
+                .get_mut(&AssetId::Packet(2))
                 .ok_or("Missing indexed instances")?;
             records[instance as usize * 160..instance as usize * 160 + 4]
                 .copy_from_slice(&base.to_le_bytes());
@@ -1221,11 +1212,11 @@ mod tests {
         let mut assets = HashMap::new();
         let triangle = [-1f32, 0., 0., 1., 0., 0., 0., 1., 0.];
         assets.insert(
-            "a".into(),
+            AssetId::Diagnostic(110),
             triangle.iter().flat_map(|v| v.to_le_bytes()).collect(),
         );
         assets.insert(
-            "b".into(),
+            AssetId::Diagnostic(111),
             triangle
                 .repeat(2)
                 .iter()
@@ -1233,11 +1224,11 @@ mod tests {
                 .collect(),
         );
         assets.insert(
-            "indices".into(),
+            AssetId::Diagnostic(112),
             (0..6u32).flat_map(u32::to_le_bytes).collect(),
         );
         assets.insert(
-            "map".into(),
+            AssetId::Diagnostic(113),
             [2u32, 3, 10, 11, 12]
                 .into_iter()
                 .flat_map(u32::to_le_bytes)
@@ -1249,13 +1240,13 @@ mod tests {
             indexed: false,
             reason: None,
             shader: None,
-            triangle_map: Some("map".into()),
+            triangle_map: Some(AssetId::Diagnostic(113)),
             geometries: [3, 6]
                 .into_iter()
                 .enumerate()
                 .map(|(i, count)| Geometry {
-                    positions: if i == 0 { "a" } else { "b" }.into(),
-                    indices: Some("indices".into()),
+                    positions: AssetId::Diagnostic(110 + i),
+                    indices: Some(AssetId::Diagnostic(112)),
                     vertex_count: count,
                     vertex_stride: 12,
                     ..Default::default()
@@ -1269,15 +1260,7 @@ mod tests {
                 })
                 .collect(),
         };
-        let first = prepare(
-            &gpu.device,
-            &gpu.queue,
-            Path::new(""),
-            &capture,
-            Some(&assets),
-            None,
-        )
-        .unwrap();
+        let first = prepare(&gpu.device, &gpu.queue, &capture, &assets, None).unwrap();
         gpu.device
             .poll(wgpu::PollType::Wait {
                 submission_index: None,
@@ -1287,9 +1270,8 @@ mod tests {
         let second = prepare_reusing(
             &gpu.device,
             &gpu.queue,
-            Path::new(""),
             &capture,
-            Some(&assets),
+            &assets,
             None,
             Some(&first.inputs),
         )

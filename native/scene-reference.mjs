@@ -4,7 +4,7 @@ import { pathToFileURL } from 'node:url';
 import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
 const materialProperties = JSON.parse(readFileSync(new URL('./material-properties.json', import.meta.url), 'utf8'));
-import { CaptureDevice, installWebGPUConstants } from './capture-device.mjs';
+import { CaptureDevice, installWebGPUConstants } from './validation/resource-recorder.mjs';
 export async function referenceScene(bytes, sourceRoot) {
     const load = path => import(pathToFileURL(resolve(sourceRoot, 'src', path)).href);
     const [{ default: Geometry, Attribute }, { default: Mesh }, { default: Material }, { default: Texture }, { default: Camera }, { default: Rect }, { default: Sphere }, { default: Directional }, { default: Spot }, { default: Pass }, { default: Environment }, { default: InstancedMesh }] = await Promise.all([

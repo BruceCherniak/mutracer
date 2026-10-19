@@ -16,7 +16,7 @@ struct Context {
     fallback_reason: String,
     scene: Option<GpuScene>,
     spare_buffers: HashMap<usize, wgpu::Buffer>,
-    spare_hardware: HashMap<String, wgpu::Buffer>,
+    spare_hardware: HashMap<hardware::HardwareBufferId, wgpu::Buffer>,
     failed: bool,
     job: Option<RenderJob>,
     commit: Option<Arc<PendingCommit>>,
@@ -176,14 +176,14 @@ fn ready(context: &mut Context) -> Result<&mut GpuScene> {
 fn prepare_software_fallback(
     bytes: &[u8],
     mut scene: Scene,
-    assets: &mut HashMap<String, Vec<u8>>,
+    assets: &mut Assets,
     retained: &mut scene::PreparedState,
 ) -> Result<Scene> {
     if scene
         .native_layout
         .as_ref()
         .is_some_and(|layout| layout.indexed)
-        || !assets.contains_key("native-30")
+        || !assets.contains_key(&AssetId::Packet(30))
     {
         let settings = retained.settings;
         let (software, software_assets, software_retained) =
@@ -441,7 +441,7 @@ unsafe fn commit_with_settings(
             cancelled(&cancel)?;
             let prepared = Instant::now();
             let uniform = assets
-                .get("native-7")
+                .get(&AssetId::Packet(7))
                 .ok_or("Missing normalized render settings")?;
             let seed = u32::from_le_bytes(
                 uniform[layout::ray_uniform::SEQUENCE_SEED..layout::ray_uniform::SEQUENCE_SEED + 4]
@@ -460,7 +460,7 @@ unsafe fn commit_with_settings(
             let mut fallback_reason = String::new();
             if snapshot.backend != 0 {
                 let capture = if snapshot.gpu.hardware_ray_query {
-                    hardware::capture_from_prepared(
+                    hardware::capture_from_resources(
                         &mut assets,
                         scene
                             .native_layout
@@ -487,10 +487,9 @@ unsafe fn commit_with_settings(
             let mut software_scene = scene.clone();
             software_scene.hwrt = None;
             let candidate = GpuScene::new_reusing(
-                Path::new(""),
                 scene,
                 &options,
-                Some(&assets),
+                &assets,
                 snapshot.gpu.clone(),
                 Some(&snapshot.spare_buffers),
                 Some(&snapshot.spare_hardware),
@@ -506,13 +505,12 @@ unsafe fn commit_with_settings(
                         &mut retained,
                     )?;
                     GpuScene::new_reusing(
-                        Path::new(""),
                         software_scene,
                         &RenderOptions {
                             flags: 0,
                             ..options
                         },
-                        Some(&assets),
+                        &assets,
                         snapshot.gpu.clone(),
                         Some(&snapshot.spare_buffers),
                         Some(&snapshot.spare_hardware),
@@ -601,7 +599,7 @@ struct CommitSnapshot {
     gpu: GpuDevice,
     backend: u32,
     spare_buffers: HashMap<usize, wgpu::Buffer>,
-    spare_hardware: HashMap<String, wgpu::Buffer>,
+    spare_hardware: HashMap<hardware::HardwareBufferId, wgpu::Buffer>,
 }
 fn cancelled(cancel: &PendingCommit) -> Result<()> {
     if cancel.cancelled.load(Ordering::Acquire) {
@@ -1503,17 +1501,19 @@ mod tests {
         let make = |input: &[u8]| {
             let (mut scene, mut assets, retained) = scene::prepare_retained(input, true).unwrap();
             scene.hwrt = Some(
-                hardware::capture_from_prepared(&mut assets, scene.native_layout.as_ref().unwrap())
-                    .unwrap(),
+                hardware::capture_from_resources(
+                    &mut assets,
+                    scene.native_layout.as_ref().unwrap(),
+                )
+                .unwrap(),
             );
             let mut result = GpuScene::new(
-                Path::new(""),
                 scene,
                 &RenderOptions {
                     flags: 4,
                     ..Default::default()
                 },
-                Some(&assets),
+                &assets,
                 gpu.clone(),
             )
             .unwrap();
@@ -1640,42 +1640,29 @@ mod tests {
         input[118 * 4..119 * 4].copy_from_slice(&3f32.to_le_bytes());
         let (mut direct, mut assets, mut retained) = scene::prepare_retained(&input, true).unwrap();
         let mut capture =
-            hardware::capture_from_prepared(&mut assets, direct.native_layout.as_ref().unwrap())
+            hardware::capture_from_resources(&mut assets, direct.native_layout.as_ref().unwrap())
                 .unwrap();
         capture.eligible = false;
         direct.hwrt = Some(capture);
         let fallback_source = direct.clone();
         let rejected = GpuScene::new(
-            Path::new(""),
             direct,
             &RenderOptions {
                 flags: 4,
                 ..Default::default()
             },
-            Some(&assets),
+            &assets,
             gpu.clone(),
         );
         assert!(rejected.is_err());
         let software =
             prepare_software_fallback(&input, fallback_source, &mut assets, &mut retained).unwrap();
-        let mut state = GpuScene::new(
-            Path::new(""),
-            software,
-            &RenderOptions::default(),
-            Some(&assets),
-            gpu.clone(),
-        )
-        .unwrap();
+        let mut state =
+            GpuScene::new(software, &RenderOptions::default(), &assets, gpu.clone()).unwrap();
         let (reference, reference_assets, _reference_retained) =
             scene::prepare_retained(&input, false).unwrap();
-        let mut expected = GpuScene::new(
-            Path::new(""),
-            reference,
-            &RenderOptions::default(),
-            Some(&reference_assets),
-            gpu,
-        )
-        .unwrap();
+        let mut expected =
+            GpuScene::new(reference, &RenderOptions::default(), &reference_assets, gpu).unwrap();
         state.add_samples(1, 6., 12345).unwrap();
         expected.add_samples(1, 6., 12345).unwrap();
         for kind in 0..3 {

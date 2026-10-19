@@ -15,7 +15,7 @@ pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
         scene::prepare_diagnostic(input, false)?
     };
     hit_diagnostics::write_geometry_snapshot(&scene, &assets, output)?;
-    let mut capture = hardware::capture_from_prepared(
+    let mut capture = hardware::capture_from_resources(
         &mut assets,
         scene
             .native_layout
@@ -25,9 +25,9 @@ pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
     if capture.geometries.iter().any(|g| g.procedural) {
         return Err("Path diagnostics exclude displacement geometries".into());
     }
-    capture.shader = Some("native-37".into());
+    capture.shader = Some(AssetId::Packet(37));
     scene.hwrt = Some(capture);
-    scene.shader = "native-36".into();
+    scene.shader = AssetId::Packet(36);
     let tile_rows = 8u32;
     let slots = 129usize; // header + at most 128 guide-open queries
     let pixel_bytes = slots * 64;
@@ -45,22 +45,22 @@ pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
             "read-only-storage",
         ),
     ] {
-        let name = format!("diagnostic-{id}");
+        let name = AssetId::Diagnostic(id);
         assets.insert(name.clone(), vec![0; size]);
         scene.buffers.push(Buffer {
             id,
             size: size as u64,
             usage: 140,
-            file: name,
+            resource: name,
         });
         scene.bind_groups[layout::group::SCENE]
             .layout
-            .push(json!({"binding":binding,"visibility":4,"buffer":{"type":storage}}));
+            .push(storage_layout(binding, storage == "read-only-storage"));
         scene.bind_groups[layout::group::SCENE]
             .entries
             .push(Binding {
                 binding,
-                kind: "buffer".into(),
+                kind: BindingKind::Buffer,
                 id,
             });
     }
@@ -69,13 +69,12 @@ pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
         return Err("Path diagnostic requires actual HWRT".into());
     }
     let state = GpuScene::new(
-        Path::new(""),
         scene,
         &RenderOptions {
             flags: if backend == 1 { 4 } else { 0 },
             ..Default::default()
         },
-        Some(&assets),
+        &assets,
         gpu,
     )?;
     fs::create_dir_all(output)?;

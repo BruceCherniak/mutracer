@@ -1,7 +1,6 @@
 //! Headless native experiments for raw descriptors and prepared MuTracer scenes.
 //! Blocking probes and persistent contexts expose experimental subsets of MuTracer.
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::{
     borrow::Cow,
     collections::HashMap,
@@ -27,7 +26,6 @@ pub mod layout;
 #[cfg(feature = "fuzzing")]
 pub mod fuzzing;
 mod material_properties;
-mod native_bvh;
 pub mod path_diagnostics;
 pub mod preparation_diagnostics;
 mod profiling;
@@ -37,6 +35,40 @@ pub mod settings;
 mod tinybvh;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum AssetId {
+    Packet(usize),
+    GeometryPositions(usize),
+    HardwareMap,
+    HardwareShader,
+    Diagnostic(usize),
+}
+impl std::fmt::Display for AssetId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Packet(id) => write!(f, "native-{id}"),
+            Self::GeometryPositions(id) => write!(f, "native-hwrt-positions-{id}"),
+            Self::HardwareMap => write!(f, "native-hwrt-map"),
+            Self::HardwareShader => write!(f, "native-hwrt-shader"),
+            Self::Diagnostic(id) => write!(f, "diagnostic-{id}"),
+        }
+    }
+}
+impl serde::Serialize for AssetId {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+impl Default for AssetId {
+    fn default() -> Self {
+        Self::Packet(0)
+    }
+}
+type Assets = HashMap<AssetId, Vec<u8>>;
 
 // C callers and headless threads need not have Cocoa's event-loop pool. Drain
 // temporary Metal objects per operation; persistent resources own their handles.
@@ -62,24 +94,7 @@ unsafe extern "C" {
         output: *mut *const u8,
         size: *mut usize,
     );
-    fn mt_core_camera(
-        bytes: *const u8,
-        length: usize,
-        x: f64,
-        y: f64,
-        z: f64,
-        output: *mut *const u8,
-        size: *mut usize,
-    );
-    fn mt_core_material(
-        r: f64,
-        g: f64,
-        b: f64,
-        roughness: f64,
-        output: *mut *const u8,
-        size: *mut usize,
-    );
-    fn mt_core_sampling(input: *const u8, length: usize, output: *mut *const u8, size: *mut usize);
+
 }
 // scriptc init initializes module globals on every invocation. Initialize once
 // so a later GPU upload/context cannot erase another scene's rooted TS state.
@@ -87,107 +102,48 @@ fn init_core() {
     static INITIALIZED: std::sync::Once = std::sync::Once::new();
     INITIALIZED.call_once(|| unsafe { mt_core_init() });
 }
-// Legacy diagnostic operations serialize their own probe state. The AOT heap
+// Diagnostic and blocking raw-scene operations serialize their probe state. The AOT heap
 // itself is confined to runtime.rs, independently of context/GPU operations.
 static ENTRY_LOCK: Mutex<()> = Mutex::new(());
 // ABI tests share process-global AOT/registry state even on Rust's test workers.
 #[cfg(test)]
 static ABI_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone)]
 struct Scene {
-    format: u32,
     width: u32,
     height: u32,
-    samples: u32,
-    shader: String,
+    shader: AssetId,
     entry_point: String,
     buffers: Vec<Buffer>,
     textures: Vec<Texture>,
-    samplers: Vec<Value>,
+    samplers: Vec<usize>,
     bind_groups: Vec<Group>,
     rt_uniform: usize,
     color_output: usize,
     normal_output: Option<usize>,
     albedo_output: Option<usize>,
-    camera_uniform: Option<usize>,
-    material_buffer: Option<usize>,
-    material_count: Option<u32>,
-    material_stride: Option<u64>,
-    material_offsets: Option<MaterialOffsets>,
     hwrt: Option<hardware::Capture>,
     native_layout: Option<hardware::NativeLayout>,
-    native_bvh: Option<native_bvh::Capture>,
-    sampling: Option<Sampling>,
 }
-#[derive(Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct Sampling {
-    max_samples: u32,
-    pattern: String,
-}
-#[derive(Clone, Deserialize)]
-struct MaterialOffsets {
-    color: u64,
-    roughness: u64,
-}
-
-/// Experimental C descriptor; flags 1=camera, 2=material patch, 4=authoritative HWRT.
-#[repr(C)]
+/// Internal execution settings; flag4 requires authoritative HWRT.
 #[derive(Clone, Copy, serde::Serialize)]
-pub struct RenderOptions {
-    pub struct_size: u32,
+struct RenderOptions {
     pub flags: u32,
     pub samples: u32,
     pub seed: u32,
     pub bounces: f32,
-    pub camera_offset: [f32; 3],
-    pub material_index: u32,
-    pub base_color: [f32; 3],
-    pub roughness: f32,
 }
 impl Default for RenderOptions {
     fn default() -> Self {
         Self {
-            struct_size: std::mem::size_of::<Self>() as u32,
             flags: 0,
             samples: 0,
             seed: 12345,
             bounces: 6.0,
-            camera_offset: [0.0; 3],
-            material_index: 0,
-            base_color: [0.5; 3],
-            roughness: 0.5,
         }
     }
 }
-fn validate_options(options: &RenderOptions) -> Result<()> {
-    if options.struct_size != std::mem::size_of::<RenderOptions>() as u32 {
-        return Err("Render options size mismatch".into());
-    }
-    if options.flags & !7 != 0 {
-        return Err("Unknown render options flags".into());
-    }
-    if !options.bounces.is_finite() {
-        return Err("Non-finite bounce count".into());
-    }
-    if options.flags & 1 != 0 && !options.camera_offset.iter().all(|v| v.is_finite()) {
-        return Err("Non-finite camera translation".into());
-    }
-    if options.flags & 2 != 0
-        && (!options
-            .base_color
-            .iter()
-            .all(|v| v.is_finite() && (0.0..=1.0).contains(v))
-            || !options.roughness.is_finite()
-            || !(0.0..=1.0).contains(&options.roughness))
-    {
-        return Err("Material values must be finite and in 0..1".into());
-    }
-    Ok(())
-}
-
 unsafe fn copy_core_result(pointer: *const u8, size: usize, expected: usize) -> Result<Vec<u8>> {
     if pointer.is_null() || size != expected {
         return Err("Invalid AOT command length".into());
@@ -198,95 +154,61 @@ unsafe fn copy_core_result(pointer: *const u8, size: usize, expected: usize) -> 
     }
     Ok(bytes)
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
 struct Buffer {
     id: usize,
     size: u64,
     usage: u32,
-    file: String,
+    resource: AssetId,
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
 struct Texture {
     id: usize,
     width: u32,
     height: u32,
     depth: u32,
-    format: String,
+    format: wgpu::TextureFormat,
     usage: u32,
-    writes: Vec<Value>,
+    writes: Vec<TextureWrite>,
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
 struct Group {
-    layout: Vec<Value>,
+    layout: Vec<wgpu::BindGroupLayoutEntry>,
     entries: Vec<Binding>,
 }
-#[derive(Clone, Deserialize)]
+#[derive(Clone)]
 struct Binding {
     binding: u32,
-    kind: String,
+    kind: BindingKind,
     id: usize,
 }
 
-fn number(value: &Value, key: &str, default: u32) -> u32 {
-    value
-        .get(key)
-        .and_then(Value::as_u64)
-        .map(|v| v as u32)
-        .unwrap_or(default)
+#[derive(Clone)]
+struct TextureWrite {
+    resource: AssetId,
+    origin: wgpu::Origin3d,
+    size: wgpu::Extent3d,
+    layout: wgpu::TexelCopyBufferLayout,
 }
-fn extent(value: &Value, default_depth: u32) -> wgpu::Extent3d {
-    if value.is_array() {
-        wgpu::Extent3d {
-            width: value[0].as_u64().unwrap() as u32,
-            height: value[1].as_u64().unwrap_or(1) as u32,
-            depth_or_array_layers: value[2].as_u64().unwrap_or(default_depth as u64) as u32,
-        }
-    } else {
-        wgpu::Extent3d {
-            width: number(value, "width", 1),
-            height: number(value, "height", 1),
-            depth_or_array_layers: number(value, "depthOrArrayLayers", default_depth),
-        }
-    }
+#[derive(Clone, Copy)]
+enum BindingKind {
+    Buffer,
+    Texture,
+    Sampler,
 }
-fn layout_entry(entry: &Value) -> wgpu::BindGroupLayoutEntry {
-    let ty = if let Some(buffer) = entry.get("buffer") {
-        wgpu::BindingType::Buffer {
-            ty: match buffer["type"].as_str().unwrap_or("uniform") {
-                "uniform" => wgpu::BufferBindingType::Uniform,
-                "storage" => wgpu::BufferBindingType::Storage { read_only: false },
-                "read-only-storage" => wgpu::BufferBindingType::Storage { read_only: true },
-                other => panic!("Unsupported buffer layout: {other}"),
-            },
+fn storage_layout(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
+    wgpu::BindGroupLayoutEntry {
+        binding,
+        visibility: wgpu::ShaderStages::COMPUTE,
+        ty: wgpu::BindingType::Buffer {
+            ty: wgpu::BufferBindingType::Storage { read_only },
             has_dynamic_offset: false,
             min_binding_size: None,
-        }
-    } else if let Some(texture) = entry.get("texture") {
-        wgpu::BindingType::Texture {
-            sample_type: wgpu::TextureSampleType::Float {
-                filterable: texture["sampleType"].as_str() != Some("unfilterable-float"),
-            },
-            view_dimension: if texture["viewDimension"] == "2d-array" {
-                wgpu::TextureViewDimension::D2Array
-            } else {
-                wgpu::TextureViewDimension::D2
-            },
-            multisampled: false,
-        }
-    } else if entry.get("sampler").is_some() {
-        wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)
-    } else {
-        panic!("Unsupported binding layout: {entry}")
-    };
-    wgpu::BindGroupLayoutEntry {
-        binding: number(entry, "binding", 0),
-        visibility: wgpu::ShaderStages::COMPUTE,
-        ty,
+        },
         count: None,
     }
 }
 
-// Return sample-averaged RGBA, preserving the capture's bottom-row-first layout.
 fn read_average(
     device: &wgpu::Device,
     queue: &wgpu::Queue,
@@ -327,34 +249,13 @@ fn read_average(
     Ok(values)
 }
 
-pub fn render(scene_dir: &Path, output: &Path, requested_samples: u32) -> Result<()> {
-    render_options(
-        scene_dir,
-        output,
-        &RenderOptions {
-            samples: requested_samples,
-            ..Default::default()
-        },
-    )
-}
-
-pub fn render_options(scene_dir: &Path, output: &Path, options: &RenderOptions) -> Result<()> {
-    validate_options(options)?;
-    let _entry = ENTRY_LOCK
-        .try_lock()
-        .map_err(|_| "Native probe is already active or poisoned")?;
-    context::check_owner()?;
-    let scene: Scene = serde_json::from_slice(&fs::read(scene_dir.join("scene.json"))?)?;
-    render_scene(scene_dir, scene, output, options, None)
-}
-
 // Device-local keys compare the full source/layout as well as hashing them, so
 // collisions cannot reuse an incompatible shader. Keep retained variants bounded.
 #[derive(Hash, PartialEq, Eq)]
 struct PipelineKey {
     source: String,
     entry: String,
-    layout: String,
+    layout: Vec<Vec<wgpu::BindGroupLayoutEntry>>,
     hardware: bool,
 }
 #[derive(Clone)]
@@ -462,43 +363,27 @@ struct GpuScene {
     groups: Vec<wgpu::BindGroup>,
     textures: HashMap<usize, wgpu::Texture>,
     hardware: Option<hardware::Resources>,
-    native_bvh: Option<(Vec<u8>, native_bvh::Stats)>,
     compile_seconds: f64,
     samples: u32,
     frames: Vec<[u8; 16]>,
     frame_key: (u32, u32),
 }
 impl GpuScene {
-    fn new(
-        scene_dir: &Path,
-        scene: Scene,
-        options: &RenderOptions,
-        assets: Option<&HashMap<String, Vec<u8>>>,
-        gpu: GpuDevice,
-    ) -> Result<Self> {
-        Self::new_reusing(scene_dir, scene, options, assets, gpu, None, None)
+    fn new(scene: Scene, options: &RenderOptions, assets: &Assets, gpu: GpuDevice) -> Result<Self> {
+        Self::new_reusing(scene, options, assets, gpu, None, None)
     }
     fn new_reusing(
-        scene_dir: &Path,
         scene: Scene,
         options: &RenderOptions,
-        assets: Option<&HashMap<String, Vec<u8>>>,
+        assets: &Assets,
         gpu: GpuDevice,
         reusable: Option<&HashMap<usize, wgpu::Buffer>>,
-        reusable_hw: Option<&HashMap<String, wgpu::Buffer>>,
+        reusable_hw: Option<&HashMap<hardware::HardwareBufferId, wgpu::Buffer>>,
     ) -> Result<Self> {
         // Drain validation/OOM errors before making a candidate scene visible to a context.
         let memory_scope = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let validation_scope = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let result = Self::upload(
-            scene_dir,
-            scene,
-            options,
-            assets,
-            gpu.clone(),
-            reusable,
-            reusable_hw,
-        );
+        let result = Self::upload(scene, options, assets, gpu.clone(), reusable, reusable_hw);
         let validation = pollster::block_on(validation_scope.pop());
         let memory = pollster::block_on(memory_scope.pop());
         if let Some(error) = validation.or(memory) {
@@ -508,33 +393,21 @@ impl GpuScene {
         result
     }
     fn upload(
-        scene_dir: &Path,
         scene: Scene,
         options: &RenderOptions,
-        assets: Option<&HashMap<String, Vec<u8>>>,
+        assets: &Assets,
         gpu: GpuDevice,
         reusable: Option<&HashMap<usize, wgpu::Buffer>>,
-        reusable_hw: Option<&HashMap<String, wgpu::Buffer>>,
+        reusable_hw: Option<&HashMap<hardware::HardwareBufferId, wgpu::Buffer>>,
     ) -> Result<Self> {
-        let read = |name: &str| -> Result<Cow<'_, [u8]>> {
-            if let Some(assets) = assets {
-                return assets
-                    .get(name)
-                    .map(|bytes| Cow::Borrowed(bytes.as_slice()))
-                    .ok_or_else(|| format!("Missing native resource {name}").into());
-            }
-            Ok(Cow::Owned(fs::read(scene_dir.join(name))?))
+        let read = |name: &AssetId| -> Result<Cow<'_, [u8]>> {
+            assets
+                .get(name)
+                .map(|data| Cow::Borrowed(data.as_slice()))
+                .ok_or_else(|| format!("Missing native resource {name:?}").into())
         };
-        if scene.format != 1 || scene.width == 0 || scene.height == 0 {
+        if scene.width == 0 || scene.height == 0 {
             return Err("Invalid capture".into());
-        }
-        if options.flags & 2 != 0
-            && options.material_index
-                >= scene
-                    .material_count
-                    .ok_or("Capture has no material metadata")?
-        {
-            return Err("Material index is out of range".into());
         }
         let use_hwrt = options.flags & 4 != 0;
         if use_hwrt
@@ -550,30 +423,11 @@ impl GpuScene {
         let device = &gpu.device;
         let queue = &gpu.queue;
         runtime::init();
-        let native_bvh = scene
-            .native_bvh
-            .as_ref()
-            .map(|capture| native_bvh::rebuild(scene_dir, capture))
-            .transpose()?;
         let mut buffers = HashMap::new();
         let mut reused_bytes = 0u64;
         let mut allocated_bytes = 0u64;
         for buffer in &scene.buffers {
-            let data = if scene
-                .native_bvh
-                .as_ref()
-                .is_some_and(|capture| capture.buffer == buffer.id)
-            {
-                Cow::Borrowed(
-                    native_bvh
-                        .as_ref()
-                        .ok_or("Missing native BVH result")?
-                        .0
-                        .as_slice(),
-                )
-            } else {
-                read(&buffer.file)?
-            };
+            let data = read(&buffer.resource)?;
             if data.len() as u64 != buffer.size {
                 return Err("Capture buffer length mismatch".into());
             }
@@ -594,112 +448,18 @@ impl GpuScene {
             } else {
                 allocated_bytes += buffer.size;
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&buffer.file),
+                    label: Some(&format!("MuTracer {:?}", buffer.resource)),
                     contents: &data,
                     usage,
                 })
             };
             buffers.insert(buffer.id, gpu_buffer);
         }
-        if let Some(sampling) = &scene.sampling {
-            if sampling.pattern != "sobol" {
-                return Err(
-                    "Native module composition currently supports captured Sobol only".into(),
-                );
-            }
-            let input = sampling.max_samples.to_le_bytes();
-            let command = runtime::call(move || {
-                let mut pointer = std::ptr::null();
-                let mut size = 0;
-                unsafe {
-                    mt_core_sampling(input.as_ptr(), input.len(), &mut pointer, &mut size);
-                }
-                unsafe { copy_core_result(pointer, size, 168) }
-            })?;
-            if command[..4] != [0, 0, 0, 0] {
-                return Err("Unexpected native sampling pattern".into());
-            }
-            queue.write_buffer(
-                &buffers[&scene.rt_uniform],
-                layout::ray_uniform::Z_SOBOL_LOG_SPP as u64,
-                &command[4..8],
-            );
-        }
-        if options.flags & 1 != 0 {
-            let id = scene
-                .camera_uniform
-                .ok_or("Capture has no camera metadata")?;
-            let record = scene
-                .buffers
-                .iter()
-                .find(|buffer| buffer.id == id)
-                .ok_or("Missing camera buffer")?;
-            let data = read(&record.file)?;
-            if data.len() != 144 {
-                return Err("Invalid camera uniform length".into());
-            }
-            let options = *options;
-            let data = data.into_owned();
-            let command = runtime::call(move || {
-                let mut pointer = std::ptr::null();
-                let mut size = 0;
-                unsafe {
-                    mt_core_camera(
-                        data.as_ptr(),
-                        data.len(),
-                        options.camera_offset[0] as f64,
-                        options.camera_offset[1] as f64,
-                        options.camera_offset[2] as f64,
-                        &mut pointer,
-                        &mut size,
-                    );
-                }
-                unsafe { copy_core_result(pointer, size, 144) }
-            })?;
-            queue.write_buffer(&buffers[&id], 0, &command);
-        }
-        if options.flags & 2 != 0 {
-            let id = scene
-                .material_buffer
-                .ok_or("Capture has no material buffer metadata")?;
-            let stride = scene
-                .material_stride
-                .ok_or("Capture has no material stride")?;
-            let offsets = scene
-                .material_offsets
-                .as_ref()
-                .ok_or("Capture has no material offsets")?;
-            let start = options.material_index as u64 * stride;
-            if offsets.color + 12 > stride
-                || offsets.roughness + 4 > stride
-                || start + stride > buffers[&id].size()
-            {
-                return Err("Invalid material offsets".into());
-            }
-            let options = *options;
-            let command = runtime::call(move || {
-                let mut pointer = std::ptr::null();
-                let mut size = 0;
-                unsafe {
-                    mt_core_material(
-                        options.base_color[0] as f64,
-                        options.base_color[1] as f64,
-                        options.base_color[2] as f64,
-                        options.roughness as f64,
-                        &mut pointer,
-                        &mut size,
-                    );
-                }
-                unsafe { copy_core_result(pointer, size, 16) }
-            })?;
-            queue.write_buffer(&buffers[&id], start + offsets.color, &command[..12]);
-            queue.write_buffer(&buffers[&id], start + offsets.roughness, &command[12..]);
-        }
         let mut textures = HashMap::new();
         let mut views = HashMap::new();
         for texture in &scene.textures {
             let gpu_texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(&texture.format),
+                label: Some("MuTracer texture"),
                 size: wgpu::Extent3d {
                     width: texture.width,
                     height: texture.height,
@@ -708,40 +468,22 @@ impl GpuScene {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: match texture.format.as_str() {
-                    "rgba8unorm" => wgpu::TextureFormat::Rgba8Unorm,
-                    "rgba16float" => wgpu::TextureFormat::Rgba16Float,
-                    "rgba32float" => wgpu::TextureFormat::Rgba32Float,
-                    "r32float" => wgpu::TextureFormat::R32Float,
-                    "rg32float" => wgpu::TextureFormat::Rg32Float,
-                    _ => return Err("Unsupported capture texture format".into()),
-                },
+                format: texture.format,
                 usage: wgpu::TextureUsages::from_bits(texture.usage)
                     .ok_or("Invalid texture usage")?,
                 view_formats: &[],
             });
             for write in &texture.writes {
-                let origin = &write["origin"];
-                let origin = wgpu::Origin3d {
-                    x: origin[0].as_u64().unwrap_or(0) as u32,
-                    y: origin[1].as_u64().unwrap_or(0) as u32,
-                    z: origin[2].as_u64().unwrap_or(0) as u32,
-                };
-                let layout = &write["layout"];
                 queue.write_texture(
                     wgpu::TexelCopyTextureInfo {
                         texture: &gpu_texture,
                         mip_level: 0,
-                        origin,
+                        origin: write.origin,
                         aspect: wgpu::TextureAspect::All,
                     },
-                    &read(write["file"].as_str().ok_or("Missing texture file")?)?,
-                    wgpu::TexelCopyBufferLayout {
-                        offset: layout["offset"].as_u64().unwrap_or(0),
-                        bytes_per_row: layout["bytesPerRow"].as_u64().map(|v| v as u32),
-                        rows_per_image: layout["rowsPerImage"].as_u64().map(|v| v as u32),
-                    },
-                    extent(&write["size"], 1),
+                    &read(&write.resource)?,
+                    write.layout,
+                    write.size,
                 );
             }
             views.insert(
@@ -753,7 +495,7 @@ impl GpuScene {
         let mut samplers = HashMap::new();
         for sampler in &scene.samplers {
             samplers.insert(
-                number(sampler, "id", 0) as usize,
+                *sampler,
                 device.create_sampler(&wgpu::SamplerDescriptor {
                     label: Some("MuTracer maps"),
                     mag_filter: wgpu::FilterMode::Linear,
@@ -771,7 +513,6 @@ impl GpuScene {
             Some(hardware::prepare_reusing(
                 &device,
                 &queue,
-                scene_dir,
                 scene.hwrt.as_ref().unwrap(),
                 assets,
                 Some(&buffers),
@@ -797,13 +538,7 @@ impl GpuScene {
         let key = PipelineKey {
             source,
             entry: scene.entry_point.clone(),
-            layout: serde_json::to_string(
-                &scene
-                    .bind_groups
-                    .iter()
-                    .map(|g| &g.layout)
-                    .collect::<Vec<_>>(),
-            )?,
+            layout: scene.bind_groups.iter().map(|g| g.layout.clone()).collect(),
             hardware: hardware.is_some(),
         };
         let shader_started = Instant::now();
@@ -818,7 +553,7 @@ impl GpuScene {
                 .iter()
                 .enumerate()
                 .map(|(index, group)| {
-                    let mut entries: Vec<_> = group.layout.iter().map(layout_entry).collect();
+                    let mut entries: Vec<_> = group.layout.clone();
                     if index == layout::group::SCENE && hardware.is_some() {
                         entries.extend([
                             wgpu::BindGroupLayoutEntry {
@@ -898,11 +633,14 @@ impl GpuScene {
                     .iter()
                     .map(|entry| wgpu::BindGroupEntry {
                         binding: entry.binding,
-                        resource: match entry.kind.as_str() {
-                            "buffer" => buffers[&entry.id].as_entire_binding(),
-                            "texture" => wgpu::BindingResource::TextureView(&views[&entry.id]),
-                            "sampler" => wgpu::BindingResource::Sampler(&samplers[&entry.id]),
-                            other => panic!("Unsupported resource: {other}"),
+                        resource: match entry.kind {
+                            BindingKind::Buffer => buffers[&entry.id].as_entire_binding(),
+                            BindingKind::Texture => {
+                                wgpu::BindingResource::TextureView(&views[&entry.id])
+                            }
+                            BindingKind::Sampler => {
+                                wgpu::BindingResource::Sampler(&samplers[&entry.id])
+                            }
                         },
                     })
                     .collect();
@@ -941,7 +679,6 @@ impl GpuScene {
             groups,
             textures: textures,
             hardware,
-            native_bvh,
             compile_seconds,
             samples: 0,
         })
@@ -1184,7 +921,9 @@ impl GpuScene {
             Some(
                 device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("MuTracer candidate attributes"),
-                    contents: assets.get("native-3").ok_or("Missing updated attributes")?,
+                    contents: assets
+                        .get(&AssetId::Packet(3))
+                        .ok_or("Missing updated attributes")?,
                     usage: self.buffers[&3].usage(),
                 }),
             )
@@ -1198,9 +937,8 @@ impl GpuScene {
         let result = hardware::prepare(
             device,
             &self.gpu.queue,
-            Path::new(""),
             &capture,
-            Some(&assets),
+            &assets,
             Some(&candidate_buffers),
         )
         .map(|resources| {
@@ -1273,9 +1011,8 @@ impl GpuScene {
     }
     fn update_material(&mut self, packed: &[u8]) -> Result<()> {
         let buffer = self
-            .scene
-            .material_buffer
-            .and_then(|id| self.buffers.get(&id))
+            .buffers
+            .get(&layout::resource::MATERIALS)
             .ok_or("Missing raw material buffer")?;
         if buffer.size() != packed.len() as u64 {
             return Err("Material buffer size mismatch".into());
@@ -1285,9 +1022,8 @@ impl GpuScene {
     }
     fn update_camera(&mut self, packed: &[u8]) -> Result<()> {
         let buffer = self
-            .scene
-            .camera_uniform
-            .and_then(|id| self.buffers.get(&id))
+            .buffers
+            .get(&layout::resource::CAMERA)
             .ok_or("Missing raw camera buffer")?;
         if packed.len() != 144 || buffer.size() != 144 {
             return Err("Camera uniform size mismatch".into());
@@ -1300,17 +1036,12 @@ impl GpuScene {
 }
 
 fn render_scene(
-    scene_dir: &Path,
     scene: Scene,
     output: &Path,
     options: &RenderOptions,
-    assets: Option<&HashMap<String, Vec<u8>>>,
+    assets: &Assets,
 ) -> Result<()> {
-    let samples = if options.samples == 0 {
-        scene.samples
-    } else {
-        options.samples
-    };
+    let samples = options.samples;
     if samples == 0 || samples > 4096 {
         return Err("Samples must be 1..4096".into());
     }
@@ -1318,10 +1049,7 @@ fn render_scene(
     let start = Instant::now();
     let use_hwrt = options.flags & 4 != 0;
     let gpu = GpuDevice::new(use_hwrt)?;
-    let mut gpu_scene = GpuScene::new(scene_dir, scene, options, assets, gpu)?;
-    if let Some((data, _)) = &gpu_scene.native_bvh {
-        fs::write(output.join("native-bvh.bin"), data)?;
-    }
+    let mut gpu_scene = GpuScene::new(scene, options, assets, gpu)?;
     let compile_seconds = gpu_scene.compile_seconds;
     let hardware_ray_query = gpu_scene.gpu.hardware_ray_query;
     native_log!("Native pipeline ready in {compile_seconds:.2}s; tracing {samples} samples...");
@@ -1404,78 +1132,17 @@ fn render_scene(
             "totalSeconds": start.elapsed().as_secs_f64(), "rgbMin": minimum, "rgbMax": maximum,
             "rgbMean": mean / (scene.width as f64 * scene.height as f64 * 3.0),
             "finitePixels": scene.width as u64 * scene.height as u64,
-            "nativeSceneConstruction": assets.is_some(),
-            "aot": if assets.is_some() { "native input decoding, shared scene assembly/BLAS/TLAS/attributes/materials/atlas/lights/camera/full WGSL, sampling and frame packing" } else { "original SAH BVH builder/layout and sampling modules, frame packing/normalizeBounces, shared camera packing and material patch" },
+            "nativeSceneConstruction": true,
+            "aot": "native input decoding, shared scene assembly/BLAS/TLAS/attributes/materials/atlas/lights/camera/full WGSL, sampling and frame packing",
             "nativeOptions": options,
-            "buildTimeJavaScript": if assets.is_some() { "none for scene construction or rendering" } else { "scene/raw geometry, TLAS/instance/material/light packing and original shader generation; eligible BLASes are rebuilt natively" },
+            "buildTimeJavaScript": "none for scene construction or rendering",
             "runtime": "native Rust + scriptc machine code + wgpu/Metal; no Node/JS engine",
             "preview": "Reinhard + sRGB; compare render.rgba32f for numerical validation",
             "aovOutputs": aov_outputs,
-            "nativeBvh": gpu_scene.native_bvh.as_ref().map(|(_, stats)| stats),
-            "nativeSamplingModule": scene.sampling.is_some(),
             "hdrLayout": "little-endian f32 RGBA, bottom row first; linear sample average",
             "wholeLibraryNative": false
         }))?,
     )?;
     native_log!("Saved {}", output.join("render.png").display());
     Ok(())
-}
-
-/// Experimental blocking C entry. Paths and writable error storage are caller-owned.
-/// Calls must all use the same owner thread. The first implementation serializes calls.
-/// # Safety
-/// `scene` and `output` must be valid NUL-terminated UTF-8 strings. If non-null,
-/// `error` must be writable for `error_capacity` bytes. No overlapping calls.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mt_probe_render(
-    scene: *const c_char,
-    output: *const c_char,
-    samples: u32,
-    error: *mut c_char,
-    error_capacity: usize,
-) -> i32 {
-    let options = RenderOptions {
-        samples,
-        ..Default::default()
-    };
-    unsafe { mt_probe_render_with_options(scene, output, &options, error, error_capacity) }
-}
-
-/// Same path/storage/thread requirements as mt_probe_render. `options` must
-/// point to a valid, aligned RenderOptions descriptor for the full call.
-/// # Safety
-/// All input pointers must be valid as described by mutracer-probe.h.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mt_probe_render_with_options(
-    scene: *const c_char,
-    output: *const c_char,
-    options: *const RenderOptions,
-    error: *mut c_char,
-    error_capacity: usize,
-) -> i32 {
-    let result = std::panic::catch_unwind(|| -> Result<()> {
-        if scene.is_null() || output.is_null() || options.is_null() {
-            return Err("Null input path".into());
-        }
-        let scene = unsafe { CStr::from_ptr(scene) }.to_str()?;
-        let output = unsafe { CStr::from_ptr(output) }.to_str()?;
-        render_options(Path::new(scene), Path::new(output), unsafe { &*options })
-    });
-    let message = match result {
-        Ok(Ok(())) => return 0,
-        Ok(Err(error)) => error.to_string(),
-        Err(panic) => panic
-            .downcast_ref::<String>()
-            .cloned()
-            .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
-            .unwrap_or_else(|| "Native renderer panicked".into()),
-    };
-    if !error.is_null() && error_capacity > 0 {
-        let length = message.len().min(error_capacity - 1);
-        unsafe {
-            std::ptr::copy_nonoverlapping(message.as_ptr(), error.cast(), length);
-            *error.add(length) = 0;
-        }
-    }
-    1
 }

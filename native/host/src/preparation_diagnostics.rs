@@ -19,7 +19,7 @@ pub fn run(input: &[u8], output: &Path, backend: u32, iterations: u32) -> Result
         let prepared = start.elapsed().as_secs_f64() * 1000.;
         let capture_start = Instant::now();
         if backend == 1 {
-            std::hint::black_box(hardware::capture_from_prepared(
+            std::hint::black_box(hardware::capture_from_resources(
                 &mut assets,
                 scene
                     .native_layout

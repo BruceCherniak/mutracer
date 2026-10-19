@@ -12,7 +12,7 @@ extern "C" {
  * beginning of input. Arrays/tables must fit length. Reserved words must be 0.
  * Caller owns all bytes and strings through the blocking call; none are retained.
  * Return 0 on success, 1 on failure (NUL-terminated message if capacity > 0).
- * Use one owner thread, including calls to the prepared-replay API.
+ * Calls may run on arbitrary threads; keep borrowed bytes valid through return.
  *
  * Header[32]: version[4], total_words, width,height, geometry_count,mesh_count,
  * material_count,light_count,texture_count, geometry_offset,mesh_offset,

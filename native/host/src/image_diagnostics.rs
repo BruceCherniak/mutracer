@@ -13,10 +13,10 @@ pub fn closest_counts(input: &[u8], output: &Path, samples: u32, seed: u32) -> R
 // Sharding avoids a single global atomic serializing every ray. No timestamp
 // from this instrumented path is a production performance measurement.
 const COUNTER_BYTES: usize = 256 * 16 * 4;
-fn add_closest_counters(scene: &mut Scene, assets: &mut HashMap<String, Vec<u8>>) -> Result<()> {
+fn add_closest_counters(scene: &mut Scene, assets: &mut Assets) -> Result<()> {
     let shader = String::from_utf8(
         assets
-            .get("native-33")
+            .get(&AssetId::Packet(33))
             .ok_or("Missing HWRT shader")?
             .clone(),
     )?;
@@ -39,22 +39,25 @@ fn add_closest_counters(scene: &mut Scene, assets: &mut HashMap<String, Vec<u8>>
     atomicAdd(&mtQueryCounts[mtBucket + category], 1u);
   }
   var query: ray_query;"#, 1);
-    assets.insert("native-33".into(), shader.into_bytes());
-    assets.insert("diagnostic-52".into(), vec![0; COUNTER_BYTES]);
+    assets.insert(AssetId::Packet(33), shader.into_bytes());
+    assets.insert(AssetId::Diagnostic(52), vec![0; COUNTER_BYTES]);
     scene.buffers.push(Buffer {
         id: layout::resource::QUERY_COUNTS,
         size: COUNTER_BYTES as u64,
         usage: 140,
-        file: "diagnostic-52".into(),
+        resource: AssetId::Diagnostic(52),
     });
     scene.bind_groups[layout::group::SCENE]
         .layout
-        .push(json!({"binding":layout::hwrt_binding::DIAGNOSTIC,"visibility":4,"buffer":{"type":"storage"}}));
+        .push(storage_layout(
+            layout::hwrt_binding::DIAGNOSTIC as u32,
+            false,
+        ));
     scene.bind_groups[layout::group::SCENE]
         .entries
         .push(Binding {
             binding: layout::hwrt_binding::DIAGNOSTIC as u32,
-            kind: "buffer".into(),
+            kind: BindingKind::Buffer,
             id: layout::resource::QUERY_COUNTS,
         });
     Ok(())
@@ -84,7 +87,7 @@ fn render(
         &settings::RenderSettings::default(),
     )?;
     if backend == 1 {
-        scene.hwrt = Some(hardware::capture_from_prepared(
+        scene.hwrt = Some(hardware::capture_from_resources(
             &mut assets,
             scene
                 .native_layout
@@ -101,7 +104,7 @@ fn render(
         samples,
         ..Default::default()
     };
-    let mut state = GpuScene::new(Path::new(""), scene, &options, Some(&assets), gpu)?;
+    let mut state = GpuScene::new(scene, &options, &assets, gpu)?;
     let actual = u32::from(state.scene.hwrt.is_some());
     if actual != backend {
         return Err("Unexpected image diagnostic backend".into());

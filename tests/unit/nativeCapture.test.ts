@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CaptureDevice } from '../../native/capture-device.mjs';
+import { CaptureDevice } from '../../native/validation/resource-recorder.mjs';
 import { frameParameters } from '../../native/render-core.js';
 
 describe('native capture buffer boundaries', () => {

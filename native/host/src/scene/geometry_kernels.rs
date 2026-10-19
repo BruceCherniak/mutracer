@@ -105,6 +105,8 @@ fn tangents(positions: &[f32], normals: &[f32], uvs: &[f32], indices: &[u32]) ->
     result
 }
 pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
+    let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
+    let (mut bounds_ms, mut tangents_ms, mut tangent_calls) = (0f64, 0f64, 0u32);
     let w = Words(bytes);
     let count = w.u(h::GEOMETRY_COUNT);
     let any_tangents = (0..count).any(|i| {
@@ -131,7 +133,11 @@ pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
         let positions = floats(&w, w.u(off + g::POSITION), vertices * 3);
         if include_bounds {
             result[entry + ke::BOUNDS] = result.len() as u32;
+            let start = profile.then(Instant::now);
             result.extend(bounds(&positions).map(f32::to_bits));
+            if let Some(start) = start {
+                bounds_ms += start.elapsed().as_secs_f64() * 1000.;
+            }
         }
         if need_tangents {
             let normals = floats(&w, w.u(off + g::NORMAL), vertices * 3);
@@ -140,12 +146,23 @@ pub(super) fn packet(bytes: &[u8], include_bounds: bool) -> Option<Vec<u8>> {
                 .map(|j| w.u(w.u(off + g::INDICES) + j) as u32)
                 .collect::<Vec<_>>();
             result[entry + ke::TANGENTS] = result.len() as u32;
+            let start = profile.then(Instant::now);
             result.extend(
                 tangents(&positions, &normals, &uvs, &indices)
                     .into_iter()
                     .map(f32::to_bits),
             );
+            if let Some(start) = start {
+                tangents_ms += start.elapsed().as_secs_f64() * 1000.;
+            }
+            tangent_calls += 1;
         }
+    }
+    if profile {
+        native_log!(
+            "{}",
+            json!({"nativeGeometryKernelProfile":{"boundsMs":bounds_ms,"tangentsMs":tangents_ms,"tangentCalls":tangent_calls}})
+        );
     }
     result[kh::LENGTH] = result.len() as u32;
     Some(result.into_iter().flat_map(u32::to_le_bytes).collect())

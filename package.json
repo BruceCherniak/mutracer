@@ -62,8 +62,6 @@
   ],
   "scripts": {
     "native:modules": "npm run build:lib && node native/module-check.mjs",
-    "native:render": "node native/render.mjs",
-    "native:verify": "node native/verify.mjs",
     "native:browser-reference": "node native/reference-server.mjs",
     "native:check": "node native/check.mjs",
     "dev": "vite",
