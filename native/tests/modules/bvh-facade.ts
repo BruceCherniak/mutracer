@@ -55,7 +55,7 @@ export function bvhParameters(bytes: Uint8Array): Uint8Array {
       packed.bounds[i * 6 + axis] = read(bounds.min, axis);
       packed.bounds[i * 6 + axis + 3] = read(bounds.max, axis);
     }
-    const transform = mat4.create();
+    const transform = mat4.identity(new Float64Array(16));
     transform[0] = 1 + i * .125; transform[5] = 1.5; transform[10] = .75;
     transform[12] = i * 2; transform[13] = -i;
     const instance: TLASInstance = { blasIndex: 0, bounds, transform,

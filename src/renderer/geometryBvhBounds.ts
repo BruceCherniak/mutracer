@@ -3,25 +3,18 @@ import { vec3 } from '../math.js';
 import { getGeometryBvh } from './geometryBvh.js';
 
 export function computeGeometryBounds(geometry: Geometry) {
-  const min = vec3.fromValues(Infinity, Infinity, Infinity);
-  const max = vec3.fromValues(-Infinity, -Infinity, -Infinity);
-  const positions = geometry.position.array;
-  const stride = geometry.position.itemSize;
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  const positions = geometry.position.array, stride = geometry.position.itemSize;
   for (let offset = 0; offset + 2 < positions.length; offset += stride) {
-    const x = positions[offset];
-    const y = positions[offset + 1];
-    const z = positions[offset + 2];
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
-      continue;
-    }
-    min[0] = Math.min(min[0], x);
-    min[1] = Math.min(min[1], y);
-    min[2] = Math.min(min[2], z);
-    max[0] = Math.max(max[0], x);
-    max[1] = Math.max(max[1], y);
-    max[2] = Math.max(max[2], z);
+    const x = positions[offset], y = positions[offset + 1], z = positions[offset + 2];
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
+    // Each selected value is already float32. Keep the reduction in scalars,
+    // avoiding six typed-array loads/stores per vertex with identical rounding.
+    minX = Math.min(minX, x); minY = Math.min(minY, y); minZ = Math.min(minZ, z);
+    maxX = Math.max(maxX, x); maxY = Math.max(maxY, y); maxZ = Math.max(maxZ, z);
   }
-  return [min, max] as [vec3.Vec3Array, vec3.Vec3Array];
+  return [vec3.fromValues(minX, minY, minZ), vec3.fromValues(maxX, maxY, maxZ)] as [vec3.Vec3Array, vec3.Vec3Array];
 }
 
 export function getBvhBounds(geometry: Geometry) {

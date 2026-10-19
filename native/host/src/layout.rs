@@ -151,6 +151,20 @@ pub mod write_entry {
     pub const BYTE_OFFSET: usize = 7;
     pub const WORDS: usize = 8;
 }
+pub mod geometry_kernel_header {
+    pub const VERSION: usize = 0;
+    pub const COUNT: usize = 1;
+    pub const LENGTH: usize = 2;
+    pub const RESERVED: usize = 3;
+    pub const WORDS: usize = 4;
+}
+pub mod geometry_kernel_entry {
+    pub const SOURCE: usize = 0;
+    pub const VERTEX_COUNT: usize = 1;
+    pub const BOUNDS: usize = 2;
+    pub const TANGENTS: usize = 3;
+    pub const WORDS: usize = 4;
+}
 pub mod packet_header {
     pub const VERSION: usize = 0;
     pub const COUNT: usize = 1;
@@ -173,6 +187,7 @@ pub mod version {
     pub const SCENE: usize = 4;
     pub const RESOURCE_PACKET: usize = 1;
     pub const RESOURCE_WRITES: usize = 3;
+    pub const GEOMETRY_KERNELS: usize = 1;
 }
 pub mod resource {
     pub const AS_CHANGED_BLASES: usize = 53;

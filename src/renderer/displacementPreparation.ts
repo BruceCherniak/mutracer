@@ -71,19 +71,19 @@ export function computeDisplacementMinmax(w: number, sourceChannels: number,
   return minmaxData;
 }
 
-function sphericalProjection(n: vec3.Vec3Array, uv: vec2.Vec2Array) {
+function sphericalProjection<T0 extends vec3.Vec3Array, T1 extends vec2.Vec2Array>(n: T0, uv: T1) {
   const theta = Math.atan2(read(n, 0), read(n, 2)) / (2.0 * Math.PI) + 0.5;
   const phi = Math.acos(read(n, 1)) / Math.PI;
   vec2.set(uv, theta, 1.0 - phi);
 }
 
-export function sphericalProjectionTriangle(
-  na: vec3.Vec3Array,
-  nb: vec3.Vec3Array,
-  nc: vec3.Vec3Array,
-  uvA: vec2.Vec2Array,
-  uvB: vec2.Vec2Array,
-  uvC: vec2.Vec2Array
+export function sphericalProjectionTriangle<T0 extends vec3.Vec3Array, T1 extends vec3.Vec3Array, T2 extends vec3.Vec3Array, T3 extends vec2.Vec2Array, T4 extends vec2.Vec2Array, T5 extends vec2.Vec2Array>(
+  na: T0,
+  nb: T1,
+  nc: T2,
+  uvA: T3,
+  uvB: T4,
+  uvC: T5
 ) {
   sphericalProjection(na, uvA);
   sphericalProjection(nb, uvB);
@@ -114,23 +114,23 @@ export function sphericalProjectionTriangle(
   return onSeam;
 }
 
-function getMaxAxisIndex(n: vec3.Vec3Array) {
+function getMaxAxisIndex<T0 extends vec3.Vec3Array>(n: T0) {
   const x = Math.abs(read(n, 0));
   const y = Math.abs(read(n, 1));
   const z = Math.abs(read(n, 2));
   return x > y && x > z ? 0 : y > z ? 1 : 2;
 }
 
-export function triplanarProjectionTriangle(
-  a: vec3.Vec3Array,
-  b: vec3.Vec3Array,
-  c: vec3.Vec3Array,
-  na: vec3.Vec3Array,
-  nb: vec3.Vec3Array,
-  nc: vec3.Vec3Array,
-  uvA: vec2.Vec2Array,
-  uvB: vec2.Vec2Array,
-  uvC: vec2.Vec2Array
+export function triplanarProjectionTriangle<T0 extends vec3.Vec3Array, T1 extends vec3.Vec3Array, T2 extends vec3.Vec3Array, T3 extends vec3.Vec3Array, T4 extends vec3.Vec3Array, T5 extends vec3.Vec3Array, T6 extends vec2.Vec2Array, T7 extends vec2.Vec2Array, T8 extends vec2.Vec2Array>(
+  a: T0,
+  b: T1,
+  c: T2,
+  na: T3,
+  nb: T4,
+  nc: T5,
+  uvA: T6,
+  uvB: T7,
+  uvC: T8
 ) {
   const tmpMaxX = Math.max(Math.abs(read(na, 0)), Math.abs(read(nb, 0)), Math.abs(read(nc, 0)));
   const tmpMaxY = Math.max(Math.abs(read(na, 1)), Math.abs(read(nb, 1)), Math.abs(read(nc, 1)));
@@ -155,10 +155,10 @@ export function triplanarProjectionTriangle(
 }
 
 function findRoots(
-  triAabbMinP: vec2.Vec2Array,
-  triAabbMaxP: vec2.Vec2Array,
+  triAabbMinP: Float32Array,
+  triAabbMaxP: Float32Array,
   maxDepth: number,
-  roots: vec3.Vec3Array[]
+  roots: Float64Array[]
 ) {
   let d = vec2.sub(vec2.create(), triAabbMaxP, triAabbMinP);
   let size = Math.max(d[0], d[1]);
@@ -213,7 +213,7 @@ export function conservativeTrianglesDisplacementRange(triangleCount: number): F
 
 export function computeTrianglesDisplacementRange(geometry: Geometry,
   minmaxData: Uint8Array[], width: number, isFlipY: boolean, material: MaterialState) {
-  const indices = geometry.indices.array;
+  const indices = geometry.indexArray;
   const uvs = geometry.uv?.array;
   const uvProjection = material.displacementUvProjection;
   if (!uvs && uvProjection === 'none') throw new Error(
@@ -245,9 +245,9 @@ export function computeTrianglesDisplacementRange(geometry: Geometry,
   const minUv = vec2.create();
   const maxUv = vec2.create();
 
-  const roots: vec3.Vec3Array[] = [];
+  const roots: Float64Array[] = [];
   for (let i = 0; i < 100; i++) {
-    roots.push([0, 0, 0]);
+    roots.push(new Float64Array(3));
   }
   for (let i = 0; i < attributeLength(indices); i += 3) {
     const i1 = attributeValue(indices, i);
@@ -367,20 +367,21 @@ export function computeTrianglesDisplacementRange(geometry: Geometry,
 
 /** Conservative source-order AABBs for the actual displacement prism. */
 export function displacementPrismAabbs(geometry: Geometry, displacementScale: number): Float32Array {
-  const count = Math.floor(attributeLength(geometry.indices.array) / 3);
+  const indices = geometry.indexArray;
+  const count = Math.floor(indices.length / 3);
   const boxes = new Float32Array(count * 6);
   for (let t = 0; t < count; t++) {
     const minimum = [Infinity, Infinity, Infinity], maximum = [-Infinity, -Infinity, -Infinity];
-    const ia = attributeValue(geometry.indices.array, t * 3) * 3;
-    const ib = attributeValue(geometry.indices.array, t * 3 + 1) * 3;
-    const ic = attributeValue(geometry.indices.array, t * 3 + 2) * 3;
+    const ia = indices[t * 3] * 3;
+    const ib = indices[t * 3 + 1] * 3;
+    const ic = indices[t * 3 + 2] * 3;
     const positions = geometry.position.array;
     const ux = positions[ib]-positions[ia], uy = positions[ib+1]-positions[ia+1], uz = positions[ib+2]-positions[ia+2];
     const vx = positions[ic]-positions[ia], vy = positions[ic+1]-positions[ia+1], vz = positions[ic+2]-positions[ia+2];
     const fx = uy*vz-uz*vy, fy = uz*vx-ux*vz, fz = ux*vy-uy*vx;
     const faceLength = Math.hypot(fx,fy,fz);
     for (let c = 0; c < 3; c++) {
-      const v = attributeValue(geometry.indices.array, t * 3 + c);
+      const v = indices[t * 3 + c];
       const nx = geometry.normal.array[v * 3], ny = geometry.normal.array[v * 3 + 1], nz = geometry.normal.array[v * 3 + 2];
       const length = Math.hypot(nx, ny, nz);
       const cosine = Math.abs((nx*fx+ny*fy+nz*fz)/((length || 1)*(faceLength || 1)));

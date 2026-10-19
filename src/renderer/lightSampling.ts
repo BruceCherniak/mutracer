@@ -1,6 +1,6 @@
+import {matrixStorage} from '../math/storage.js';
 import { pixelLength, pixelValue } from '../scene/texturePixels.js';
 import { materialEmission } from './materialEmission.js';
-import { read, size } from '../math/access.js';
 import { meshInstanceCount, meshInstanceTransform } from './meshInstances.js';
 import { getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getSpotLightShapingFluxFactor } from './lightsData.js';
 import { localMaterialIndex } from './materialIndices.js';
@@ -19,9 +19,9 @@ export * from './lightConstants.js';
 type AnalyticLight = DirectionalLight | SphereLight | SpotLight | RectLight;
 
 export interface EmissiveTriangle {
-  p0: vec3.Vec3Array;
-  p1: vec3.Vec3Array;
-  p2: vec3.Vec3Array;
+  p0: Float32Array;
+  p1: Float32Array;
+  p2: Float32Array;
   uv0: [number, number];
   uv1: [number, number];
   uv2: [number, number];
@@ -191,9 +191,9 @@ export function buildLightAliasTable(inputs: LightChoiceInput[] | LightChoiceBuf
   return { choices: new Uint32Array(buffer), pmfs, totalWeight };
 }
 
-function dominantLocalMaterial(geometry: Geometry, triangleOffset: number, materialCount: number) {
+function dominantLocalMaterial(geometry: Geometry, indices: Uint32Array, triangleOffset: number, materialCount: number) {
   // Public triangles have the same raw material index on all three corners.
-  return localMaterialIndex(geometry, attributeValue(geometry.indices.array, triangleOffset), materialCount);
+  return localMaterialIndex(geometry, indices[triangleOffset], materialCount);
 }
 
 export function collectEmissiveTriangles(
@@ -216,15 +216,15 @@ export function collectEmissiveTriangles(
       samplingLuminances.push(!material || material.shadowCatcher || material.unlit
         ? 0 : colorLuminance(materialEmission(material)));
     }
-    const matrix = new Array<number>(16).fill(0);
+    const matrix = new Float64Array(16), parent = matrixStorage(mesh.transform);
     for (let instance = 0; instance < meshInstanceCount(mesh); instance++) {
-      meshInstanceTransform(mesh, instance, matrix);
-      const indices = geometry.indices.array;
+      meshInstanceTransform(mesh, instance, matrix, parent);
+      const indices = geometry.indexArray;
       const positions = geometry.position.array;
       const uvs = geometry.uv?.array;
       const secondaryUvs = geometry.uv1?.array ?? uvs;
       for (let triangleOffset = 0; triangleOffset < attributeLength(indices); triangleOffset += 3) {
-        const localMaterialIndex = dominantLocalMaterial(geometry, triangleOffset, materialIndices.length);
+        const localMaterialIndex = dominantLocalMaterial(geometry, indices, triangleOffset, materialIndices.length);
         const materialIndex = materialIndices[localMaterialIndex] ?? materialIndices[0] ?? 0;
         const samplingLuminance = samplingLuminances[localMaterialIndex];
         if (!(samplingLuminance > 1e-8)) continue;
@@ -281,21 +281,26 @@ export function collectEmissiveTriangles(
   return triangles;
 }
 
+function packEmissivePoint(data: Float32Array, offset: number, point: Float32Array) {
+  // Preserve TypedArray.set's overlapping-view semantics for callers with aliases.
+  if (data.buffer === point.buffer) {data.set(point, offset); return;}
+  data[offset] = point[0]; data[offset + 1] = point[1]; data[offset + 2] = point[2];
+}
 export function packEmissiveTriangles(triangles: EmissiveTriangle[], data: Float32Array = new Float32Array(Math.max(triangles.length, 1) * 24)) {
   triangles.forEach((triangle, index) => {
     const offset = index * 24;
-    data.set(triangle.p0, offset);
+    packEmissivePoint(data, offset, triangle.p0);
     data[offset + 3] = triangle.selectionPmf;
-    data.set(triangle.p1, offset + 4);
+    packEmissivePoint(data, offset + 4, triangle.p1);
     data[offset + 7] = triangle.area;
-    data.set(triangle.p2, offset + 8);
+    packEmissivePoint(data, offset + 8, triangle.p2);
     data[offset + 11] = triangle.materialIndex;
-    data.set(triangle.uv0, offset + 12);
-    data.set(triangle.uv1, offset + 14);
-    data.set(triangle.uv2, offset + 16);
-    data.set(triangle.secondaryUv0, offset + 18);
-    data.set(triangle.secondaryUv1, offset + 20);
-    data.set(triangle.secondaryUv2, offset + 22);
+    data[offset + 12] = triangle.uv0[0]; data[offset + 13] = triangle.uv0[1];
+    data[offset + 14] = triangle.uv1[0]; data[offset + 15] = triangle.uv1[1];
+    data[offset + 16] = triangle.uv2[0]; data[offset + 17] = triangle.uv2[1];
+    data[offset + 18] = triangle.secondaryUv0[0]; data[offset + 19] = triangle.secondaryUv0[1];
+    data[offset + 20] = triangle.secondaryUv1[0]; data[offset + 21] = triangle.secondaryUv1[1];
+    data[offset + 22] = triangle.secondaryUv2[0]; data[offset + 23] = triangle.secondaryUv2[1];
   });
   return data;
 }
@@ -345,22 +350,22 @@ export class EmissiveTriangleCache {
   }
 }
 
-function copyMeshMatrix(mesh: Mesh): Float64Array {
-  const out = new Float64Array(meshMatrixLength(mesh));
-  for (let i = 0; i < out.length; i++) out[i] = read(mesh.transform, i);
-  return out;
-}
-function meshMatrixLength(mesh: Mesh): number {
-  return size(mesh.transform);
-}
+function copyMeshMatrix(mesh: Mesh): Float64Array { return matrixStorage(mesh.transform); }
 function meshMatrixChanged(mesh: Mesh, previous: Float64Array): boolean {
-  for (let i = 0; i < meshMatrixLength(mesh); i++) if (!Object.is(read(mesh.transform, i), previous[i])) return true;
+  const matrix = matrixStorage(mesh.transform);
+  for (let i = 0; i < matrix.length; i++) if (!Object.is(matrix[i], previous[i])) return true;
   return false;
 }
 
 function environmentPower(data: NonNullable<TexturePixelSource['data']>, width: number, height: number): number {
+  if (data instanceof Uint8Array) return environmentPowerKernel(data, width, height, 1 / 255);
+  if (data instanceof Uint8ClampedArray) return environmentPowerKernel(data, width, height, 1 / 255);
+  if (data instanceof Float32Array) return environmentPowerKernel(data, width, height, 1);
+  return environmentPowerKernel(data, width, height, 1);
+}
+
+function environmentPowerKernel<T extends NonNullable<TexturePixelSource['data']>>(data: T, width: number, height: number, scale: number): number {
   const channels = Math.max(Math.floor(pixelLength(data) / (width * height)), 1);
-  const scale = (data instanceof Uint8Array || data instanceof Uint8ClampedArray) ? 1 / 255 : 1;
   let weightedLuminance = 0;
   for (let y = 0; y < height; y++) {
     const sinTheta = Math.sin(Math.PI * (y + 0.5) / height);

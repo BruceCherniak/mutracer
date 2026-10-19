@@ -1,5 +1,8 @@
 /// <reference lib="esnext" />
 /// <reference path="./browser-types.d.ts" />
+import {takeGeometryKernelHints, releaseGeometryKernelHints, rememberKernelBounds, geometryKernelBounds, encodeGeometryKernelHints, type GeometryKernelHint} from './geometry-kernel-hints.js';
+import {installGeneratedVertexTangents} from '../src/util/geometry.js';
+import {matrixStorage} from '../src/math/storage.js';
 import {initialSceneConstants, sceneAttributeLayout, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, writeTraceSampling} from '../src/renderer/sceneAssembly.js';
 import {defaultSceneConfiguration, decodeSceneConfiguration} from './scene-configuration.js';
 import {nativeShaderVariant} from './shader-variants.js';
@@ -29,7 +32,6 @@ import { InstanceState, RectLightState, SphereLight, DirectionalLight, SpotLight
 export * from '../src/renderer/lightCore.js';
 import type { EmissiveTriangle } from '../src/renderer/lightSampling.js';
 import type { AnalyticLightState } from '../src/scene/lightState.js';
-import { read, write } from '../src/math/access.js';
 import { meshInstancesLength, type MeshInstances } from '../src/renderer/packedMeshInstances.js';
 import { prepareSceneMeshes, computeGeometryNormals, dirtyPreparedInstanceIndices, updateMeshInstanceTransforms, type PreparedMeshInstanceBinding } from '../src/renderer/scenePreparation.js';
 import type { BLASInstance, FlattendBVH } from '../src/renderer/bvhAccel.js';
@@ -127,7 +129,7 @@ export function retainedSceneParameters(bytes: Uint8Array, token: number): Uint8
   catch { retainedScenes.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer); }
 }
 export function releaseSceneParameters(token: number): Uint8Array {
-  sceneConfigurations.delete(token); retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
+  releaseGeometryKernelHints(token); sceneConfigurations.delete(token); retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
   return new Uint8Array(16);
 }
 // Version 1: source material index and seven scalar parameters. Maps, emission,
@@ -167,12 +169,13 @@ export function sceneParameters(bytes: Uint8Array): Uint8Array {
 type DecodedScene = ReturnType<typeof decodeScene>;
 type PreparedScene = ReturnType<typeof prepareSceneMeshes<MeshState>>;
 function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
-  const input = decodeScene(bytes), build = prepareSceneSources(input);
+  const input = decodeScene(bytes, token), build = prepareSceneSources(input);
   for (const job of build.jobs) setGeometryBvh(job.geometry, buildBLAS(job.geometry, job.displacementScale, job.ranges));
   const prepared = prepareSceneMeshes(input.meshes, mesh => build.sources.get(mesh)!);
   return composeScene(input, prepared, buildTLAS(prepared.instances, prepared.blases), token);
 }
-function decodeScene(bytes: Uint8Array) {
+function decodeScene(bytes: Uint8Array, token = 0) {
+  const kernelHints = takeGeometryKernelHints(token);
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
   const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
   if (u[H.VERSION] !== VERSION.SCENE) throw new Error('Unsupported native scene version');
@@ -208,6 +211,7 @@ function decodeScene(bytes: Uint8Array) {
     applyNativeMaterialProperties(m, textures, u, f, u[off + MAT.EXTENSION_OFFSET], u[off + MAT.EXTENSION_COUNT]);
     materials.push(m);
   }
+  if (kernelHints && kernelHints.length !== u[H.GEOMETRY_COUNT]) throw new Error('Kernel geometry count mismatch');
   const geometries: Geometry[] = [];
   for (let i = 0; i < u[H.GEOMETRY_COUNT]; i++) {
     const off = u[H.GEOMETRY_OFFSET] + i * G.WORDS, count = u[off + G.VERTEX_COUNT], indexCount = u[off + G.INDEX_COUNT];
@@ -223,6 +227,12 @@ function decodeScene(bytes: Uint8Array) {
     if (u[off + G.TANGENT]) geometry.tangent = new Attribute(f.slice(u[off + G.TANGENT], u[off + G.TANGENT] + count * 4), 4);
     if (u[off + G.MATERIAL_INDEX]) geometry.materialIndex = new Attribute(new Int32Array(u.slice(u[off + G.MATERIAL_INDEX], u[off + G.MATERIAL_INDEX] + count)), 1);
 
+    const hint = kernelHints && i < kernelHints.length ? kernelHints[i] : undefined;
+    if (hint) {
+      if (hint.vertexCount !== count) throw new Error('Kernel vertex count mismatch');
+      if(hint.bounds) rememberKernelBounds(geometry, hint.bounds);
+      if (!geometry.tangent && hint.tangents) installGeneratedVertexTangents(geometry,hint.tangents);
+    }
     if (!geometry.tangent && geometry.uv) generateVertexTangents(geometry);
     geometries.push(geometry);
   }
@@ -241,7 +251,7 @@ function decodeScene(bytes: Uint8Array) {
         transforms: f.slice(u[io + B.TRANSFORMS], u[io + B.TRANSFORMS] + instanceCount * 16),
         colors: u[io + B.COLORS] ? f.slice(u[io + B.COLORS], u[io + B.COLORS] + instanceCount * 3) : undefined}));
     }
-    for (let k = 0; k < 16; k++) write(mesh.transform, k, f[off + M.TRANSFORM + k]);
+    mesh.transform = f.slice(off + M.TRANSFORM, off + M.TRANSFORM + 16);
     meshes.push(mesh);
   }
   const lights: AnalyticLightState[] = [];
@@ -424,10 +434,11 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   }
   // Both AS inputs remain explicitly indexed. Production retains source index
   // lookup; leaf-order regression diagnostics use sequence indices.
-  const sequential = new Uint32Array(attributeLength(geometry.indices.array));
+  const sourceIndices = geometry.indexArray;
+  const sequential = new Uint32Array(sourceIndices.length);
   if (hardware) {
     for (const g of hardware.geometries) for (let i = g.indexOffset; i < g.indexOffset + g.indexCount; i++) {
-      sequential[i] = attributeValue(geometry.indices.array, i) - g.vertexOffset;
+      sequential[i] = sourceIndices[i] - g.vertexOffset;
     }
   } else for (let i = 0; i < sequential.length; i++) sequential[i] = i;
   add(RESOURCE.INDICES, KIND.METADATA, new Uint8Array(sequential.buffer), 0, 0, 0, 0);
@@ -456,7 +467,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
 
 // AS soup is generated in source primitive order, independently of any BVH.
 function hardwarePositions(geometry: Geometry): Float32Array {
-  const source = geometry.position.array, indices = geometry.indices.array;
+  const source = geometry.position.array, indices = geometry.indexArray;
   const positions = new Float32Array(attributeLength(indices) * 3);
   for (let i = 0; i < attributeLength(indices); i++) {
     const vertex = attributeValue(indices, i) * 3;
@@ -477,21 +488,21 @@ function linearTlas(instances: MeshInstances, bindings: PreparedMeshInstanceBind
 }
 function hardwareScene(prepared: PreparedScene, build: SceneSources): HardwareScene {
   const opaque = hardwareOpaqueGeometryFlags(prepared.materials, prepared.instanceBindings, prepared.geometries.length);
-  const count = attributeLength(prepared.geometry.indices.array) / 3;
+  const count = attributeLength(prepared.geometry.indexArray) / 3;
   const records = new Uint32Array(build.jobs.some(j => !!j.ranges) ? count * 4 : 0), boxes: number[] = [], geometries: HardwareGeometry[] = [];
   for (const geometry of prepared.geometries) {
-    const region = prepared.geometryRegions.get(geometry)!;
+    const region = prepared.geometryRegions.get(geometry)!, indexCount = geometry.indexArray.length;
     // Material-index clones share source positions and displacement ranges.
     const binding = prepared.instanceBindings.find(b => b.geometry === geometry)!;
     const source = build.sources.get(binding.mesh)!.geometry;
     const job = build.jobs.find(j => j.geometry === source)!;
     const ranges = job?.ranges;
     const procedural = !!ranges && Math.abs(job.displacementScale) > 1e-6;
-    geometries.push({opaque: !procedural && opaque[geometries.length], indexOffset: region.indexOffset, indexCount: attributeLength(geometry.indices.array), vertexOffset: region.vertexOffset, vertexCount: geometry.vertexCount,
+    geometries.push({opaque: !procedural && opaque[geometries.length], indexOffset: region.indexOffset, indexCount, vertexOffset: region.vertexOffset, vertexCount: geometry.vertexCount,
       procedural, dynamic: geometry.dynamic, boundsOffset: boxes.length / 6});
     if (!ranges) continue;
     const prisms = procedural ? displacementPrismAabbs(geometry, job.displacementScale) : undefined;
-    for (let t = 0; t < attributeLength(geometry.indices.array) / 3; t++) {
+    for (let t = 0; t < indexCount / 3; t++) {
       const record = region.indexOffset / 3 + t;
       if (ranges) {
         records[record * 4 + 3] = quantizeDisplacementRange(ranges[t * 2], ranges[t * 2 + 1]);
@@ -504,8 +515,8 @@ function hardwareScene(prepared: PreparedScene, build: SceneSources): HardwareSc
 }
 export function nativeHardwareScene(bytes: Uint8Array, token: number): Uint8Array {
   try {
-    const input = decodeScene(bytes), build = prepareSceneSources(input);
-    const prepared = prepareSceneMeshes(input.meshes, mesh => build.sources.get(mesh)!, computeGeometryBounds, false);
+    const input = decodeScene(bytes, token), build = prepareSceneSources(input);
+    const prepared = prepareSceneMeshes(input.meshes, mesh => build.sources.get(mesh)!, geometryKernelBounds, false);
     const hardware = hardwareScene(prepared, build);
     const primitiveOffsets = hardware.geometries.map(g => g.indexOffset / 3);
     const vertexOffsets = prepared.geometries.map(g => prepared.geometryRegions.get(g)!.vertexOffset);
@@ -521,11 +532,11 @@ type SceneSources = ReturnType<typeof prepareSceneSources>;
 const pendingBuilds = new Map<number, {input: DecodedScene; build: SceneSources; prepared: PreparedScene | undefined}>();
 function build_nativeSceneBegin(bytes: Uint8Array, token: number): Uint8Array {
   pendingBuilds.delete(token);
-  const input = decodeScene(bytes), build = prepareSceneSources(input);
+  const input = decodeScene(bytes, token), build = prepareSceneSources(input);
   pendingBuilds.set(token, {input, build, prepared: undefined});
   const records: number[][] = [], parts: Uint8Array[] = [];
   for (let i = 0; i < build.jobs.length; i++) {
-    const job = build.jobs[i], geometry = job.geometry, sourceIndices = geometry.indices.array;
+    const job = build.jobs[i], geometry = job.geometry, sourceIndices = geometry.indexArray;
     const indices = sourceIndices instanceof Uint32Array ? sourceIndices : new Uint32Array(sourceIndices);
     const positions = new Uint8Array(geometry.position.array.buffer);
     const normals = job.ranges ? new Uint8Array(geometry.normal.array.buffer) : new Uint8Array(0);
@@ -710,7 +721,7 @@ function lightFromRecord(u: Uint32Array, f: Float32Array, off: number, texture: 
   else if (u[off + L.TYPE] === 2) light = new DirectionalLight();
   else light = new SpotLight({radius: f[off + L.SIZE], innerAngle: f[off + L.HEIGHT_OR_INNER], outerAngle: f[off + L.SPREAD_OR_OUTER]});
   light.color = [f[off + L.COLOR], f[off + L.COLOR + 1], f[off + L.COLOR + 2]]; light.intensity = f[off + L.INTENSITY];
-  for (let k = 0; k < 16; k++) write(light.transform, k, f[off + L.TRANSFORM + k]);
+  light.transform = f.slice(off + L.TRANSFORM, off + L.TRANSFORM + 16);
   return light;
 }
 // Version1,index,reserved[2], followed by Light[28]. Attachments remain committed.
@@ -747,7 +758,7 @@ function prepareTransformUpdate(bytes: Uint8Array, token: number, native: boolea
   const mesh = new MeshState(previous.geometry, previous.materials);
   const data = previous.instanceData;
   if (u[2] && (!data || u[2] > data.count)) return new Uint8Array(new Uint32Array([2, 3, 0, 0]).buffer);
-  for (let i = 0; i < 16; i++) write(mesh.transform, i, u[2] ? read(previous.transform, i) : f[4 + i]);
+  mesh.transform = u[2] ? new Float32Array(matrixStorage(previous.transform)) : f.slice(4, 20);
   if (data) {
     const transforms = data.transforms.slice();
     if (u[2]) transforms.set(f.subarray(4), (u[2] - 1) * 16);
@@ -812,7 +823,7 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
   markDeformedGeometry(geometry);
   const meshes = state.meshes.map(mesh => {
     if (mesh.geometry !== previous) return mesh;
-    const next = new MeshState(geometry, mesh.materials); for (let c = 0; c < 16; c++) write(next.transform, c, read(mesh.transform, c));
+    const next = new MeshState(geometry, mesh.materials); next.transform = new Float32Array(matrixStorage(mesh.transform));
     const data = mesh.instanceData; if (data) next.setInstanceState(new InstanceState({count: data.count, transforms: data.transforms, colors: data.colors}));
     return next;
   });
@@ -845,10 +856,10 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
     if (!changedMeshes.has(binding.mesh)) return binding;
     const mesh = meshes[meshIndices.get(binding.mesh)!];
     return {...binding, mesh, geometry: changedGeometries.get(binding.geometry)!,
-      bvhBounds: [vec3.clone(binding.bvhBounds[0]), vec3.clone(binding.bvhBounds[1])] as [vec3.Vec3Array,vec3.Vec3Array]};
+      bvhBounds: [vec3.clone(matrixStorage(binding.bvhBounds[0])), vec3.clone(matrixStorage(binding.bvhBounds[1]))] as [vec3.Vec3Array,vec3.Vec3Array]};
   });
   const geometryStates = new Map(state.prepared.geometryStates); geometryStates.delete(previous);
-  geometryStates.set(geometry, {topologyVersion: geometry.topologyVersion, indices: geometry.indices.array, indexCount: attributeLength(geometry.indices.array)});
+  geometryStates.set(geometry, {topologyVersion: geometry.topologyVersion, indices: geometry.indices.array, indexCount: attributeLength(geometry.indexArray)});
   const blases = state.blases.map(blas => ({...blas}));
   for (const index of affectedBlases) if (blases[index]) blases[index].bvh = getGeometryBvh(geometries[index])!;
   const emissiveBindings = state.prepared.emissiveBindings.map(binding => {
@@ -946,7 +957,7 @@ function prepareLegacyGeometryUpdate(bytes: Uint8Array, token: number, native: b
   const meshes = state.meshes.map(previousMesh => {
     if (previousMesh.geometry !== previous) return previousMesh;
     const mesh = new MeshState(geometry, previousMesh.materials);
-    for (let i = 0; i < 16; i++) write(mesh.transform, i, read(previousMesh.transform, i));
+    mesh.transform = new Float32Array(matrixStorage(previousMesh.transform));
     const data = previousMesh.instanceData;
     if (data) mesh.setInstanceState(new InstanceState({count: data.count, transforms: data.transforms, colors: data.colors}));
     return mesh;
@@ -1073,4 +1084,17 @@ export function nativeSceneBlas(bytes: Uint8Array, token: number): Uint8Array {
 export function nativeSceneFinish(bytes: Uint8Array, token: number): Uint8Array {
   try {return build_nativeSceneFinish(bytes, token);}
   catch {pendingBuilds.delete(token); retainedScenes.delete(token); return new Uint8Array(new Uint32Array([2, 0, 0, 0]).buffer);}
+}
+
+// Independent TS reference for the two D4 kernels; not used by production preparation.
+export function geometryKernelReference(bytes: Uint8Array, withBounds: number): Uint8Array {
+  const input=decodeScene(bytes),u=new Uint32Array(bytes.buffer,bytes.byteOffset,bytes.length/4);
+  const hints:GeometryKernelHint[]=[],counts:number[]=[];
+  for(let i=0;i<input.geometries.length;i++) {
+    const geometry=input.geometries[i],off=u[H.GEOMETRY_OFFSET]+i*G.WORDS,bounds=computeGeometryBounds(geometry),packed=new Float32Array(6);
+    packed.set(bounds[0]);packed.set(bounds[1],3);counts.push(geometry.vertexCount);
+    const generated=!!u[off+G.UV]&&!!u[off+G.NORMAL]&&!u[off+G.TANGENT];
+    hints.push({vertexCount:geometry.vertexCount,bounds:withBounds?packed:undefined,tangents:generated?geometry.tangent!.array:undefined});
+  }
+  return encodeGeometryKernelHints(hints,counts);
 }

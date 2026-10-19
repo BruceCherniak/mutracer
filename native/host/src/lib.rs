@@ -23,6 +23,7 @@ pub mod layout;
 mod material_properties;
 mod native_bvh;
 pub mod path_diagnostics;
+pub mod preparation_diagnostics;
 mod profiling;
 mod scene;
 pub mod settings;

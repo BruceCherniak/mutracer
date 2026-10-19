@@ -2,50 +2,12 @@ import {readFileSync, writeFileSync} from 'node:fs';
 import {resolve} from 'node:path';
 import ts from 'typescript';
 
-export function canonicalAttributes(stage) {
-  function replace(file, before, after) {
-    const path = resolve(stage, file), source = readFileSync(path, 'utf8');
-    if (!source.includes(before)) throw new Error(`Native attribute layout changed: ${file}`);
-    writeFileSync(path, source.replace(before, after));
-  }
-  // Raw C descriptors already supply Uint32 indices. Keep the Web/U16 contract
-  // in the original source and module probes; the raw native graph is closed.
-  const geometry = 'src/scene/Geometry.ts', path = resolve(stage, geometry), source = readFileSync(path, 'utf8');
-  if (!/^type IndexAttribute = .*;$/m.test(source)) throw new Error('Review native index attribute layout');
-  writeFileSync(path, source.replace(/^type IndexAttribute = .*;$/m, 'type IndexAttribute = Attribute<Uint32Array>;'));
-  replace('native/scene-core.ts', 'sourceIndices instanceof Uint32Array ? sourceIndices : new Uint32Array(sourceIndices)', 'sourceIndices');
-  // Raw native emissive vertices are always produced by vec3.clone (Float32).
-  for (const name of ['p0', 'p1', 'p2']) replace('src/renderer/lightSampling.ts', `${name}: vec3.Vec3Array;`, `${name}: Float32Array;`);
-
-  // Generate concrete packers from the one shared loop. The caller's attribute
-  // format selects a function once, rather than testing every vertex component.
-  const packPath = resolve(stage, 'src/renderer/geometryUpdates.ts');
-  const file = ts.createSourceFile(packPath, readFileSync(packPath, 'utf8'), ts.ScriptTarget.Latest, true), f = ts.factory;
-  const formats = {position:'Float32Array', normal:'Float32Array', uv:'Float32Array', uv1:'Float32Array', color:'Float32Array', tangent:'Float32Array', materialIndex:'Int32Array'};
-  const transformed = ts.transform(file, [context => node => ts.visitNode(node, function visit(node) {
-    if (ts.isFunctionDeclaration(node) && node.name?.text === 'packAttribute') {
-      return ['Float32Array', 'Int32Array'].map(storage => f.updateFunctionDeclaration(node, node.modifiers, node.asteriskToken,
-        f.createIdentifier('packAttribute' + storage), undefined,
-        node.parameters.map(p => f.updateParameterDeclaration(p, p.modifiers, p.dotDotDotToken, p.name, p.questionToken,
-          p.type && ts.visitNode(p.type, function type(n) {return ts.isTypeReferenceNode(n) && n.typeName.getText(file) === 'T'
-            ? f.createTypeReferenceNode(storage) : ts.visitEachChild(n, type, context);}), p.initializer)), node.type, node.body));
-    }
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'packAttribute') {
-      const arg = node.arguments[0], storage = ts.isPropertyAccessExpression(arg) && formats[arg.name.text];
-      if (!storage) throw new Error('Review native vertex attribute format');
-      return f.updateCallExpression(node, f.createIdentifier('packAttribute' + storage), undefined, node.arguments);
-    }
-    return ts.visitEachChild(node, visit, context);
-  })]);
-  writeFileSync(packPath, ts.createPrinter().printFile(transformed.transformed[0])); transformed.dispose();
-}
-
 export function lowerConcreteAccess(stage, entry) {
   const config = ts.readConfigFile(resolve(stage, 'tsconfig.json'), ts.sys.readFile);
   const options = ts.parseJsonConfigFileContent(config.config, ts.sys, stage).options;
   const program = ts.createProgram([resolve(stage, entry)], {...options, noEmit:true}), checker = program.getTypeChecker(), f = ts.factory;
   const summary = {replaced:0, byStorage:{}, remainingValueAccesses:0};
-  const typed = new Set(['Float32Array', 'Float64Array', 'Int32Array', 'Uint32Array', 'Uint16Array']);
+  const typed = new Set(['Float32Array', 'Float64Array', 'Int32Array', 'Uint32Array', 'Uint16Array', 'Uint8Array', 'Uint8ClampedArray', 'number[]']);
   for (const file of program.getSourceFiles()) {
     if (file.isDeclarationFile || !file.fileName.startsWith(stage + '/')) continue;
     const imports = new Map(), counts = new Map();
@@ -54,11 +16,10 @@ export function lowerConcreteAccess(stage, entry) {
         const symbol = checker.getSymbolAtLocation(spec.name);
         if (!symbol || !(symbol.flags & ts.SymbolFlags.Alias)) continue;
         const target = checker.getAliasedSymbol(symbol), declaration = target.declarations?.[0];
-        if (!declaration || !/\/(math\/access|scene\/attributeData)\.ts$/.test(declaration.getSourceFile().fileName)) continue;
+        if (!declaration || !/\/(math\/access|scene\/attributeData|scene\/texturePixels|renderer\/textureAtlasPixels)\.ts$/.test(declaration.getSourceFile().fileName)) continue;
         imports.set(symbol, spec); counts.set(symbol, 0);
       }
     }
-    if (!imports.size) continue;
     function count(node) {
       if (ts.isImportDeclaration(node)) return;
       if (ts.isIdentifier(node)) {const symbol = checker.getSymbolAtLocation(node); if (counts.has(symbol)) counts.set(symbol, counts.get(symbol) + 1);}
@@ -68,17 +29,20 @@ export function lowerConcreteAccess(stage, entry) {
     let changed = false;
     const transformed = ts.transform(file, [context => node => ts.visitNode(node, function visit(node) {
       if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
-        const symbol = checker.getSymbolAtLocation(node.expression), spec = imports.get(symbol), name = spec && (spec.propertyName ?? spec.name).text;
-        if (spec && ['read', 'write', 'size', 'attributeValue', 'attributeLength'].includes(name)) {
+        const symbol = checker.getSymbolAtLocation(node.expression), spec = imports.get(symbol);
+        const declaration = checker.getResolvedSignature(node)?.declaration;
+        const accessor = declaration && /\/(math\/access|scene\/attributeData|scene\/texturePixels|renderer\/textureAtlasPixels)\.ts$/.test(declaration.getSourceFile().fileName);
+        const name = spec ? (spec.propertyName ?? spec.name).text : accessor && declaration.name?.text;
+        if ((spec || accessor) && ['read', 'write', 'size', 'attributeValue', 'attributeLength', 'pixelValue', 'pixelLength', 'writeAtlasPixel'].includes(name)) {
           let type = checker.getTypeAtLocation(node.arguments[0]);
           if (type.flags & ts.TypeFlags.TypeParameter) type = checker.getBaseConstraintOfType(type) ?? type;
-          const storage = !type.isUnion() && type.getSymbol()?.name;
-          if (typed.has(storage) && (name !== 'write' || ts.isExpressionStatement(node.parent))) {
+          const storage = !type.isUnion() && (checker.isArrayType(type) && checker.getTypeArguments(type)[0]?.flags & ts.TypeFlags.Number ? 'number[]' : type.getSymbol()?.name);
+          if (typed.has(storage) && (!['write', 'writeAtlasPixel'].includes(name) || ts.isExpressionStatement(node.parent))) {
             const args = node.arguments.map(arg => ts.visitNode(arg, visit));
-            counts.set(symbol, counts.get(symbol) - 1); changed = true; summary.replaced++; summary.byStorage[storage] = (summary.byStorage[storage] ?? 0) + 1;
-            if (['size', 'attributeLength'].includes(name)) return f.createPropertyAccessExpression(args[0], 'length');
+            if (counts.has(symbol)) counts.set(symbol, counts.get(symbol) - 1); changed = true; summary.replaced++; summary.byStorage[storage] = (summary.byStorage[storage] ?? 0) + 1;
+            if (['size', 'attributeLength', 'pixelLength'].includes(name)) return f.createPropertyAccessExpression(args[0], 'length');
             const access = f.createElementAccessExpression(args[0], args[1]);
-            return name === 'write' ? f.createBinaryExpression(access, ts.SyntaxKind.EqualsToken, args[2]) : access;
+            return ['write', 'writeAtlasPixel'].includes(name) ? f.createBinaryExpression(access, ts.SyntaxKind.EqualsToken, args[2]) : access;
           }
           if (name === 'attributeValue') summary.remainingValueAccesses++;
         }

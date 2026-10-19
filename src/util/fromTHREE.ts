@@ -920,7 +920,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             let batch = batchesByGroup.get(groupIndex);
             if (!batch) {
               batch = new InstancedMesh(geometry, variant, {count: instanceCount});
-              batch.transform = child.matrixWorld.elements.slice() as mat4.Mat4Array;
+              batch.transform = child.matrixWorld.elements.slice() as number[];
               batchesByGroup.set(groupIndex, batch);
             }
             batch.geometry = geometry;
@@ -959,7 +959,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             let mesh = meshGroups.get(groupIndex);
             if (!mesh) {
               mesh = new Mesh(geometry, material);
-              mesh.transform = child.matrixWorld.elements.slice() as mat4.Mat4Array;
+              mesh.transform = child.matrixWorld.elements.slice() as number[];
               meshGroups.set(groupIndex, mesh);
             }
             mesh.geometry = geometry;
@@ -991,7 +991,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
         intensity: child.intensity
       });
       worldMatrix.compose(worldPosition, worldRotation, child.scale.clone().set(1, 1, 1));
-      light.transform = worldMatrix.elements.slice() as mat4.Mat4Array;
+      light.transform = worldMatrix.elements.slice() as number[];
       lights.push(retainLight(store, child, light));
     } else if (isSpotLight(child)) {
       const worldPosition = child.getWorldPosition(child.position.clone());
@@ -1269,7 +1269,7 @@ export function fromTHREECamera(
   threeCamera.updateWorldMatrix(true, false);
   camera.zoom = threeCamera.zoom;
   camera.transform =
-    threeCamera.matrixWorld.elements.slice() as mat4.Mat4Array;
+    threeCamera.matrixWorld.elements.slice() as number[];
   const perspective = threeCamera as THREE.PerspectiveCamera;
   if (perspective.isPerspectiveCamera) {
     if (perspective.focus > 0) camera.focusDistance = perspective.focus;

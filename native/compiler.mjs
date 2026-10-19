@@ -1,7 +1,7 @@
+import {auditNumericAccess} from './numeric-access-audit.mjs';
 import {specializeStorageLoops} from './storage-lowering.mjs';
 import {specializeVectorCalls} from './vector-lowering.mjs';
-import {canonicalAttributes, lowerConcreteAccess} from './attribute-lowering.mjs';
-import {canonicalMatrixStorage, matrixNames, specializeMatrices} from './matrix-lowering.mjs';
+import {lowerConcreteAccess} from './attribute-lowering.mjs';
 import {spawnSync} from 'node:child_process';
 import {cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync} from 'node:fs';
 import {dirname, relative, resolve} from 'node:path';
@@ -20,13 +20,20 @@ function narrowAccess(source, constructors, parameter = 'array', names) {
   const factory = ts.factory;
   const transformed = ts.transform(file, [context => node => ts.visitNode(node, function visit(node) {
     if (ts.isFunctionDeclaration(node) && node.body && node.parameters[0]?.name.getText(file) === parameter && (!names || names.includes(node.name?.text))) {
+      let indexed = false;
+      function inspect(n) {
+        if (ts.isElementAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === parameter ||
+            ts.isPropertyAccessExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === parameter && n.name.text === 'length') indexed = true;
+        ts.forEachChild(n, inspect);
+      }
+      inspect(node.body); if (!indexed) return node;
       const body = node.body.statements;
-      const branches = constructors.map(name => factory.createIfStatement(
+      const branches = constructors.filter(name => name !== 'Array').map(name => factory.createIfStatement(
         factory.createBinaryExpression(factory.createIdentifier(parameter), ts.SyntaxKind.InstanceOfKeyword, factory.createIdentifier(name)),
         factory.createBlock([...body, ...(body.some(ts.isReturnStatement) ? [] : [factory.createReturnStatement()])], true)
       ));
       return factory.updateFunctionDeclaration(node, node.modifiers, node.asteriskToken, node.name, node.typeParameters,
-        node.parameters, node.type, factory.createBlock([...branches, ...body], true));
+        node.parameters, node.type, factory.createBlock([...branches, ...(constructors.includes('Array') ? body : [factory.createThrowStatement(factory.createNewExpression(factory.createIdentifier('Error'), undefined, [factory.createStringLiteral('Unsupported numeric storage')]))])], true));
     }
     return ts.visitEachChild(node, visit, context);
   })]);
@@ -37,13 +44,12 @@ function narrowAccess(source, constructors, parameter = 'array', names) {
 // Math source keeps the original direct indexing. Generate the compiler's
 // equivalent accesses without copying or maintaining another math implementation.
 function lowerMath(source, module) {
-  if (nativeMatrices) source = specializeMatrices(source, module);
   const file = ts.createSourceFile('math.ts', source, ts.ScriptTarget.Latest, true);
   const f = ts.factory, used = new Set();
   let direct = new Set();
   const transformed = ts.transform(file, [context => node => ts.visitNode(node, function visit(node) {
     if (ts.isFunctionDeclaration(node) && node.body) {
-      const previous = direct; direct = nativeMatrices ? matrixNames(module, node.name.text) : new Set();
+      const previous = direct; direct = new Set();
       const result = ts.visitEachChild(node, visit, context); direct = previous; return result;
     }
     const concrete = expression => ts.isIdentifier(expression) && direct.has(expression.text);
@@ -68,28 +74,16 @@ function compilerSource() {
     filter: path => !/\.[^/]+$/.test(path) || /\.(ts|json)$/.test(path)});
   for (const name of ['tsconfig.json', 'package.json']) cpSync(resolve(root, name), resolve(staged, name));
   symlinkSync(resolve(root, 'node_modules'), resolve(staged, 'node_modules'), 'dir');
-  for (const [file, types] of [['src/math/access.ts', ['Float32Array', 'Float64Array']],
-    ['src/scene/attributeData.ts', ['Float32Array', 'Uint16Array', 'Uint32Array']]]) {
+  for (const [file, types] of [['src/math/access.ts', ['Float32Array', 'Float64Array', 'Array']],
+    ['src/scene/attributeData.ts', ['Float32Array', 'Uint16Array', 'Uint32Array', 'Int32Array']]]) {
     writeFileSync(resolve(staged, file), narrowAccess(readFileSync(resolve(root, file), 'utf8'), types));
   }
-  if (nativeMatrices) {canonicalMatrixStorage(staged); canonicalAttributes(staged);}
-  specializeStorageLoops(staged);
   for (const [file, types, names] of [
-    ['src/scene/texturePixels.ts', ['Float32Array', 'Int32Array', 'Uint8Array'], undefined],
-    ['src/renderer/textureAtlasPixels.ts', ['Uint16Array'], ['writeAtlasPixel']]
+    ['src/scene/texturePixels.ts', ['Float32Array', 'Int32Array', 'Uint8Array', 'Uint8ClampedArray'], undefined],
+    ['src/renderer/textureAtlasPixels.ts', ['Uint16Array', 'Uint8Array'], ['writeAtlasPixel']]
   ]) {
     const path = resolve(staged, file);
     writeFileSync(path, narrowAccess(readFileSync(path, 'utf8'), types, 'data', names));
-  }
-  if (!nativeMatrices) {
-    // Diagnostic module fixtures retain the browser's mixed matrix/index types.
-    // Production raw-core storage is concrete, so it needs neither fallback.
-    const camera = resolve(staged, 'src/renderer/cameraSnapshot.ts');
-    writeFileSync(camera, readFileSync(camera, 'utf8').replace('transform.slice()',
-      'transform instanceof Float32Array ? transform.slice() : transform.slice()'));
-    const indices = resolve(staged, 'src/renderer/geometryUpdates.ts');
-    writeFileSync(indices, readFileSync(indices, 'utf8').replace('array[index] = value;',
-      'if (array instanceof Uint16Array) array[index] = value; else array[index] = value;'));
   }
 
   for (const name of ['mat3', 'mat4', 'vec2', 'vec3']) {
@@ -132,9 +126,11 @@ export function spawnCompiler(compiler, args, options = {}, matrixPrecision) {
       originals.set(target, profile); mapped[i] = target; compiledEntry = entry;
     } else if (/\.tsx?$/.test(args[i]) && existsSync(resolve(root, args[i]))) compiledEntry = mapped[i] = sourcePath(args[i]);
   }
-  if (nativeMatrices && compiledEntry && !loweredGraphs.has(compiledEntry)) {
+  if (compiledEntry && !loweredGraphs.has(compiledEntry)) {
     specializeVectorCalls(staged, compiledEntry);
+    specializeStorageLoops(staged, compiledEntry);
     lowerConcreteAccess(staged, compiledEntry);
+    auditNumericAccess(staged, compiledEntry, nativeMatrices);
     loweredGraphs.add(compiledEntry);
   }
   const result = spawnSync(compiler, mapped, options);

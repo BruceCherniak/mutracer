@@ -2,7 +2,7 @@ import {spawnSync} from 'node:child_process';
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {mat4, vec3} from 'gl-matrix';
+import {mat3, mat4, vec3} from 'gl-matrix';
 import {spawnCompiler} from './compiler.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const out = resolve(process.env.MUTRACER_NATIVE_OUTPUT ?? resolve(root, '.native-build/matrix-f64'));
@@ -31,7 +31,7 @@ for (let i = 0; i < 100; i++) {
   const input = new Float64Array(32); input.set(a); input.set(b, 16);
   const product = mat4.multiply(new Float64Array(16), a, b), inverse = mat4.invert(new Float64Array(16), product);
   const point = vec3.transformMat4(new Float32Array(3), new Float32Array([.1, .2, .3]), product);
-  const expected = new Float64Array(37); expected.set([8, 8]); expected.set(product, 2); expected.set(inverse, 18); expected.set(point, 34);
+  const expected = new Float64Array(46); expected.set([8, 8]); expected.set(product, 2); expected.set(inverse, 18); expected.set(point, 34); expected.set(mat3.normalFromMat4(new Float64Array(9), product), 37);
   const path = resolve(out, String(i)); writeFileSync(path + '.input', new Uint8Array(input.buffer));
   const run = spawnSync(host, [path + '.input', path + '.output'], {encoding:'utf8'});
   if (run.status !== 0) throw new Error(`C matrix consumer ${i}: ${run.stderr}`);
@@ -39,4 +39,4 @@ for (let i = 0; i < 100; i++) {
   results.push({index:i, exact}); if (!exact) throw new Error(`Float64 matrix ${i} differs from upstream reference`);
 }
 writeFileSync(resolve(out, 'results.json'), JSON.stringify(results, null, 2));
-console.log('PASS 100 native Float64 matrix/vector cases, 200 C calls; creators use 8-byte storage and outputs equal the independent upstream reference.');
+console.log('PASS 100 native Float64 matrix/vector cases, 200 C calls; explicit 8-byte matrices, inverse normal matrices and outputs equal the independent upstream reference.');

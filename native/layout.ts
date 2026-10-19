@@ -151,6 +151,20 @@ export const WRITE_ENTRY = {
   "BYTE_OFFSET": 7,
   "WORDS": 8
 } as const;
+export const GEOMETRY_KERNEL_HEADER = {
+  "VERSION": 0,
+  "COUNT": 1,
+  "LENGTH": 2,
+  "RESERVED": 3,
+  "WORDS": 4
+} as const;
+export const GEOMETRY_KERNEL_ENTRY = {
+  "SOURCE": 0,
+  "VERTEX_COUNT": 1,
+  "BOUNDS": 2,
+  "TANGENTS": 3,
+  "WORDS": 4
+} as const;
 export const PACKET_HEADER = {
   "VERSION": 0,
   "COUNT": 1,
@@ -172,7 +186,8 @@ export const PACKET_ENTRY = {
 export const VERSION = {
   "SCENE": 4,
   "RESOURCE_PACKET": 1,
-  "RESOURCE_WRITES": 3
+  "RESOURCE_WRITES": 3,
+  "GEOMETRY_KERNELS": 1
 } as const;
 export const RESOURCE = {
   "AS_CHANGED_BLASES": 53,

@@ -1,3 +1,5 @@
+import {matrixStorage} from '../math/storage.js';
+import type {ReadonlyMathArray} from '../math/types.js';
 import { getRectLightUOrV, getRectLightArea, getSphereLightArea, getSpotLightArea, getSpotLightRadiance, getLightDirection, getRigidLightFrame, validateSceneLights } from './lightsData.js';
 import { CONSTANT_DIRECTIONAL_LIGHT, CONSTANT_SPHERE_LIGHT, CONSTANT_RECT_LIGHT, CONSTANT_SPOT_LIGHT } from './lightConstants.js';
 import type { AnalyticLightState as AnalyticLight } from '../scene/lightState.js';
@@ -65,7 +67,7 @@ export function packWgpuAnalyticLights(
   }
   const data = new Float32Array(numLights * PIXELS_PER_LIGHT * 4);
 
-  function packVec3(idx: number, v: number[] | Float32Array) {
+  function packVec3<T extends ReadonlyMathArray>(idx: number, v: T) {
     for (let i = 0; i < 3; i++) {
       data[i + idx * 4] = read(v, i);
     }
@@ -80,12 +82,13 @@ export function packWgpuAnalyticLights(
 
   for (let i = 0; i < numLights; i++) {
     const light = lights[i];
+    const matrix = matrixStorage(light.transform);
     const color = light.color;
     const intensity = light.intensity;
     const off = i * PIXELS_PER_LIGHT;
     packVec3(
       off,
-      [read(light.transform, 12), read(light.transform, 13), read(light.transform, 14)]
+      [matrix[12], matrix[13], matrix[14]]
     );
     data[off * 4 + 3] = lightTypeConstants[light.type];
     // emission

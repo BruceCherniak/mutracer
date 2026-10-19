@@ -1,7 +1,7 @@
+import {matrixStorage} from '../src/math/storage.js';
 import {CAMERA as C} from './layout.js';
 import Camera from '../src/scene/Camera.js';
 import { mat4 } from '../src/math.js';
-import { write } from '../src/math/access.js';
 import { packCameraUniform } from '../src/renderer/cameraUniform.js';
 import { cameraApertureRadius } from '../src/renderer/cameraLens.js';
 
@@ -15,8 +15,8 @@ export function sceneCameraParameters(bytes: Uint8Array, width: number, height: 
     : new Camera({projection: 'orthographic', left: f[C.LEFT], right: f[C.RIGHT], bottom: f[C.BOTTOM], top: f[C.TOP], near: f[C.NEAR], far: f[C.FAR]});
   camera.zoom = f[C.ZOOM]; camera.fStop = f[C.F_STOP]; camera.focusDistance = f[C.FOCUS_DISTANCE];
   camera.sensorHeight = f[C.SENSOR_HEIGHT]; camera.metersPerUnit = f[C.METERS_PER_UNIT];
-  for (let i = 0; i < 16; i++) write(camera.transform, i, f[C.TRANSFORM + i]);
-  const inverse = new Float64Array(16); mat4.invert(inverse, camera.getProjectionMatrix(width / height));
-  mat4.mul(inverse, camera.transform, inverse);
+  camera.transform = f.slice(C.TRANSFORM, C.TRANSFORM + 16);
+  const inverse = new Float64Array(16); mat4.invert(inverse, matrixStorage(camera.getProjectionMatrix(width / height)));
+  mat4.mul(inverse, matrixStorage(camera.transform), inverse);
   return new Uint8Array(packCameraUniform(new Float32Array(inverse), new Float32Array(camera.transform), cameraApertureRadius(camera), camera.focusDistance).buffer);
 }

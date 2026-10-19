@@ -165,4 +165,4 @@ export function forEach<T extends MathArray, A = undefined>(a: T, stride: number
   return a;
 }
 
-export type Vec3Array = Float32Array | number[];
+export type Vec3Array = Float32Array | Float64Array | number[];

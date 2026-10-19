@@ -77,17 +77,34 @@ and that production packets contain exactly one backend shader.
 
 ## Native storage access validation
 
-`native/storage-lowering.mjs` derives concrete pixel and numeric validation kernels
-from the shared TypeScript bodies. Storage selection happens once per texture or
-array. Web accessors remain direct; mixed-storage compatibility branches exist
-only in generated compiler inputs. The raw-core matrix/index storage remains
-Float64/Uint32; diagnostic browser-shaped fixtures retain their compatibility arms.
+Source kernels select pixel storage and scale once per texture. Public geometry
+attributes remain caller-owned; algorithms use Uint32 index views, Float32 vertex
+attributes and Float64 matrix copies. Uint16 indices acquire a cached Uint32 copy
+that refreshes after topology notifications or source replacement.
+
+`native/storage-lowering.mjs` uses the TypeScript checker to instantiate numeric
+generics, including nested closures, without changing arithmetic, branches or
+scale values. `attribute-lowering.mjs` then turns provably concrete accesses into
+indexing. Generated `numeric-access-report.json` traces native exports through
+constructors, getters and callbacks; a dispatcher reachable from a loop fails a
+production build. Compatibility probes retain their open-storage diagnostics.
 
 Run `npm run native:storage:verify` with `MUTRACER_SCRIPTC` set to scriptc0.3.2.
 The C consumer compares all four pixel formats, byte/half output, subarray offsets,
 resizing, orientation, environment CDF and power against the ordinary Web TS path.
 Also run the lowering behavior tests, normal library checks and real Web/native
 image comparisons; clean compilation alone does not validate specialization.
+
+Native bounds and generated-tangent kernels are the profiled O(N) exceptions to
+TS reuse. Their owned result packet uses the generated layout; decoding, scene
+assembly and incremental updates still execute the shared TS. Tangent length
+uses the compiled TS Math.hypot primitive to preserve its rounding. Run host tests
+with `MUTRACER_KERNEL_FIXTURES=/absolute/manifest.json` to compare kernel packets
+and every production resource byte against the TS reference on those descriptors.
+`prepare-diagnostics INPUT OUTPUT BACKEND ITERATIONS` profiles CPU preparation
+without creating a GPU device. `nativeDataKernelProfile.completedWallMs` includes
+kernel computation and transfer; it is part of decode/hardware preparation, not
+an additional phase.
 
 ## Partial camera validation
 
@@ -344,28 +361,22 @@ OIDN string/URL coercion and extract camera packing without changing its layout.
 The internal math functions are vendored from gl-matrix 3.4.4 with MIT attribution
 and original numeric operation order. Runtime code has no gl-matrix import; the
 package remains a devDependency for independent comparison tests and examples.
-Web creators use Float32Array; ordinary arrays and Float64 scratch storage
-are also accepted. Web math and attribute helpers index storage directly.
-Native build/check scripts use `spawnCompiler` from `native/compiler.mjs`: it
-copies the same TS sources into `.native-build/compiler-*`, lowers math indexing
-to the two numeric access adapters and inserts explicit storage narrowing there
-for scriptc0.3.2. Mathematical/geometry algorithms are not duplicated. Do not edit
-generated sources. Keep native byte-contract and Web performance checks when
-changing this lowering. The raw render-core target uses `matrix-lowering.mjs`
-to normalize CPU matrices and instance storage to Float64 and specialize shared
-matrix parameters for direct indexing; module/Web contract probes retain their
-original storage. GPU packing remains Float32. Metadata/constructor edits must
-fail closed when the source contract changes. Run `node native/matrix-verify.mjs`
-with the configured compiler for independent Float64 matrix/vector/storage checks.
-Raw camera comparisons use upstream Float64 math; original browser captures keep
-their own precision so cross-backend differences remain visible. Geometry keeps
-supplied attribute objects/arrays by identity,
-including union-typed Uint16/Uint32 index attributes.
-The raw native wire uses Uint32 indices. Its generated layout narrows indices to
-that format, derives Float32/Int32 vertex packers from the shared loop, then uses
-the TypeScript checker to inline only provably concrete typed-array accesses.
-Open numeric/vector unions retain compatibility accessors; never reinterpret
-mixed buffers by casting their storage. Diagnostics for the raw graph point to
+Math creators keep Float32 defaults; internal matrix copies use Float64 without
+rounding source values. Public matrix and instance-array types remain unchanged.
+Native build/check scripts use `spawnCompiler` from `native/compiler.mjs` to copy
+the same sources into `.native-build/compiler-*`, instantiate concrete storage
+signatures and lower supported numeric accessors. No source constructor, index
+attribute or matrix type is replaced by text patches. Do not edit generated files.
+
+Run `node native/matrix-verify.mjs` and `node native/vector-verify.mjs` with the
+configured compiler for independent upstream comparisons of double matrices,
+normal matrices, mixed storage, aliases and ordinary-array compatibility. Keep
+native byte contracts and Web performance checks when changing specialization.
+Raw camera packing retains double intermediates until its Float32 GPU block;
+browser captures retain their existing rounding stages. Geometry keeps supplied
+attribute objects/arrays by identity, including Uint16/Uint32 index attributes;
+the renderer's canonical index view is separate from that public identity.
+Diagnostics for the raw graph point to
 inspectable generated files, preserving their actual line numbers. Accepted native
 vertex refits retain TinyBVH data; a builder change requests a native full commit.
 

@@ -1,6 +1,6 @@
+import {matrixStorage} from '../math/storage.js';
 import type { SceneLightState as SceneLight, AnalyticLightState as AnalyticLight } from '../scene/lightState.js';
 import { read, write } from '../math/access.js';
-import type { Vec3 } from '../types.js';
 import DirectionalLight from '../scene/DirectionalLight.js';
 import SphereLight from '../scene/SphereLight.js';
 import type RectLight from '../scene/RectLightState.js';
@@ -86,29 +86,31 @@ export function packLightsData(
 }
 
 export function getRigidLightFrame(light: AnalyticLight) {
-  const m = light.transform;
-  const normalize = (v: Vec3, fallback: Vec3): Vec3 => {
+  const m = matrixStorage(light.transform);
+  const normalize = (v: number[], fallback: number[]): number[] => {
     const length = Math.hypot(read(v, 0), read(v, 1), read(v, 2));
     return length > 1e-12 ? [read(v, 0)/length, read(v, 1)/length, read(v, 2)/length] : fallback;
   };
   const z = normalize([read(m, 8),read(m, 9),read(m, 10)], [0,0,1]);
   const projection = read(m, 0)*read(z, 0) + read(m, 1)*read(z, 1) + read(m, 2)*read(z, 2);
-  let x: Vec3 = [read(m, 0)-projection*read(z, 0),read(m, 1)-projection*read(z, 1),read(m, 2)-projection*read(z, 2)];
+  let x: number[] = [read(m, 0)-projection*read(z, 0),read(m, 1)-projection*read(z, 1),read(m, 2)-projection*read(z, 2)];
   if (Math.hypot(...x) <= 1e-12) x = Math.abs(read(z, 1)) < .99 ? [read(z, 2),0,-read(z, 0)] : [1,0,0];
   x = normalize(x, [1,0,0]);
-  const y: Vec3 = [read(z, 1)*read(x, 2)-read(z, 2)*read(x, 1), read(z, 2)*read(x, 0)-read(z, 0)*read(x, 2), read(z, 0)*read(x, 1)-read(z, 1)*read(x, 0)];
-  return { x, y, direction: [-read(z, 0) || 0,-read(z, 1) || 0,-read(z, 2) || 0] as Vec3 };
+  const y: number[] = [read(z, 1)*read(x, 2)-read(z, 2)*read(x, 1), read(z, 2)*read(x, 0)-read(z, 0)*read(x, 2), read(z, 0)*read(x, 1)-read(z, 1)*read(x, 0)];
+  return { x, y, direction: [-read(z, 0) || 0,-read(z, 1) || 0,-read(z, 2) || 0] as number[] };
 }
 export function getLightDirection(light: AnalyticLight) { return getRigidLightFrame(light).direction; }
 export function getRectLightUOrV(light: RectLight, uOrV: 0 | 1) {
   const frame = getRigidLightFrame(light), axis = uOrV ? frame.y : frame.x;
-  const size = read(light.size, uOrV) * (uOrV ? -1 : 1);
+  const dimensions = matrixStorage(light.size);
+  const size = dimensions[uOrV] * (uOrV ? -1 : 1);
   return [read(axis, 0)*size,read(axis, 1)*size,read(axis, 2)*size];
 }
 export function getRectLightPosition(light: RectLight) { return light.position; }
 
 export function getRectLightArea(light: RectLight) {
-    return read(light.size, 0) * read(light.size, 1);
+    const size = matrixStorage(light.size);
+    return size[0] * size[1];
 }
 
 export function getSphereLightArea(light: SphereLight) {
@@ -154,9 +156,8 @@ export function validateSceneLights(lights: readonly SceneLight[], onError?: (er
       case 'SpotLight': sanitizeIntensity(light, clamp); break;
     }
     if (light.type !== 'AmbientLight') {
-      for(let i=0;i<16;i++) if (!Number.isFinite(read(light.transform, i))) {
-        write(light.transform, i, i % 5 === 0 ? 1 : 0); invalid = true;
-      }
+      const matrix = light.transform;
+      invalid = (matrix instanceof Float32Array ? sanitizeMatrix(matrix) : sanitizeMatrix(matrix)) || invalid;
     }
     if (light.type === 'RectLight') {
       // A tuple widened to number[] is copied by this native compiler. Mutate
@@ -192,4 +193,12 @@ function sanitizeIntensity<L extends {intensity: number; color: [number, number,
   light.color[0] = clamp(light.color[0],0,Number.MAX_VALUE,1);
   light.color[1] = clamp(light.color[1],0,Number.MAX_VALUE,1);
   light.color[2] = clamp(light.color[2],0,Number.MAX_VALUE,1);
+}
+
+function sanitizeMatrix<T extends Float32Array | number[]>(matrix: T): boolean {
+  let invalid = false;
+  for (let i = 0; i < 16; i++) if (!Number.isFinite(read(matrix, i))) {
+    write(matrix, i, i % 5 === 0 ? 1 : 0); invalid = true;
+  }
+  return invalid;
 }

@@ -15,7 +15,7 @@ export class PackedMeshInstances {
   bindingSlots: number[][] = [];
   readonly bindingIndices: Uint32Array;
   readonly localIndices: Uint32Array;
-  private readonly view: TLASInstance = {blasIndex: 0, bounds: new Box3(), transform: new Array<number>(16).fill(0), materialsIndices: [0], color: [1,1,1]};
+  private readonly view: TLASInstance = {blasIndex: 0, bounds: new Box3(), transform: new Float64Array(16), materialsIndices: [0], color: [1,1,1]};
   constructor(capacity: number) {
     this.bindingIndices = new Uint32Array(capacity); this.localIndices = new Uint32Array(capacity);
     this.colors = new Float32Array(capacity * 3);

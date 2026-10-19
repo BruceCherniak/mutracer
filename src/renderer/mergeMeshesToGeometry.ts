@@ -1,3 +1,4 @@
+import {matrixStorage} from '../math/storage.js';
 import { meshInstanceCount, meshInstanceTransform } from './meshInstances.js';
 import { writeMaterialIndices } from './materialIndices.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
@@ -28,6 +29,7 @@ export function mergeMeshesToGeometry(meshes: Mesh[]): InternalMergedMesh {
   resetMaterialTextureId();
 
   for (const mesh of meshes) {
+    const parent = matrixStorage(mesh.transform);
     for (let instance = 0; instance < meshInstanceCount(mesh); instance++) {
       let geometry = mesh.geometry;
 
@@ -36,7 +38,7 @@ export function mergeMeshesToGeometry(meshes: Mesh[]): InternalMergedMesh {
         addFlatGeometryIndices(geometry);
       }
 
-      geometry = transformGeometry(geometry, meshInstanceTransform(mesh, instance, Array(16).fill(0)));
+      geometry = transformGeometry(geometry, meshInstanceTransform(mesh, instance, new Float64Array(16), parent));
 
       if (!geometry.normal) {
         computeGeometryNormals(geometry);
@@ -192,7 +194,7 @@ function mergeGeometry(
       }
     }
 
-    const meshIndices = geometry.indices.array;
+    const meshIndices = geometry.indexArray;
     for (let i = 0; i < meshIndices.length; i++) {
       indexAttrib.array[currentIndex + i] = currentVertex + meshIndices[i];
     }
@@ -235,7 +237,7 @@ function transformGeometry(geometry: Geometry, matrix: mat4.Mat4Array) {
     color: geometry.color && geometry.color.array,
     tangent: geometry.tangent && geometry.tangent.array,
     materialIndex: geometry.materialIndex && geometry.materialIndex.array,
-    indices: geometry.indices.array
+    indices: geometry.indexArray
   };
   const newGeometry = new Geometry({
     position: new Attribute(

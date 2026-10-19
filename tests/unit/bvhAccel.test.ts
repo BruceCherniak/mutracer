@@ -17,8 +17,8 @@ import Geometry, { Attribute } from '../../src/scene/Geometry';
 
 function bounds(minX: number, maxX: number) {
   const result = new Box3();
-  result.min = [minX, 0, 0];
-  result.max = [maxX, 1, 1];
+  result.min.set([minX, 0, 0]);
+  result.max.set([maxX, 1, 1]);
   return result;
 }
 
@@ -49,7 +49,7 @@ describe('mixed BVH layouts', () => {
     const instances: TLASInstance[] = blases.map((_, blasIndex) => ({
       blasIndex,
       bounds: bounds(blasIndex * 2, blasIndex * 2 + 1),
-      transform: mat4.create(),
+      transform: mat4.identity(new Float64Array(16)),
       materialsIndices: [blasIndex]
     }));
 
@@ -113,7 +113,7 @@ describe('BVH refit', () => {
     const instances: TLASInstance[] = [0, 1].map((i) => ({
       blasIndex: 0,
       bounds: bounds(i * 2, i * 2 + 1),
-      transform: mat4.create(),
+      transform: mat4.identity(new Float64Array(16)),
       materialsIndices: [i]
     }));
     const flat = buildTLAS(instances, blases);
@@ -152,7 +152,7 @@ describe('BVH refit', () => {
     const instances: TLASInstance[] = Array.from({ length: 8 }, (_, index) => ({
       blasIndex: 0,
       bounds: bounds(index * 3, index * 3 + 1),
-      transform: mat4.create(),
+      transform: mat4.identity(new Float64Array(16)),
       materialsIndices: [index]
     }));
     const flat = buildTLAS(instances, blases);
@@ -201,7 +201,7 @@ describe('platform-built TLAS packing', () => {
       trainglesCount: 1, verticesCount: 3
     }));
     const instances: TLASInstance[] = [3, -5, 8, 0].map((x, i) => ({
-      blasIndex: i % 2, bounds: bounds(x, x + 1), transform: mat4.create(), materialsIndices: [i]
+      blasIndex: i % 2, bounds: bounds(x, x + 1), transform: mat4.identity(new Float64Array(16)), materialsIndices: [i]
     }));
     const expected = buildTLAS(instances, blases);
     const hierarchy = {...expected, buffer: expected.buffer.slice(0), instancesBuffer: undefined};

@@ -3,6 +3,6 @@ import type Camera from '../scene/Camera.js';
 export function cameraSnapshot(source: Camera): Camera {
   const copy = source.clone();
   const transform = source.transform;
-  copy.transform = transform.slice();
+  copy.transform = transform instanceof Float32Array ? transform.slice() : transform.slice();
   return copy;
 }

@@ -1,11 +1,19 @@
 //! Validated raw scene boundary. Only returned AOT bytes are retained by Rust.
 use super::*;
+mod geometry_kernels;
 use crate::layout::{
     WORD_BYTES, batch as b, camera as cam, extension as ext, geometry as g, header as h, kind,
     light as l, material as mat, mesh as m, packet_entry as pe, packet_header as ph,
     resource as res, sampler, texture as t,
 };
 unsafe extern "C" {
+    fn mt_core_geometry_kernel_hints(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
     fn mt_core_scene_configure(
         input: *const u8,
         length: usize,
@@ -1163,6 +1171,17 @@ fn prepare_impl(
     settings: &settings::RenderSettings,
     variants: u32,
 ) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
+    prepare_impl_with_kernels(bytes, token, hardware, diagnostic, settings, variants, true)
+}
+fn prepare_impl_with_kernels(
+    bytes: &[u8],
+    token: u32,
+    hardware: bool,
+    diagnostic: bool,
+    settings: &settings::RenderSettings,
+    variants: u32,
+    native_kernels: bool,
+) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
     let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
     let started = Instant::now();
     validate(bytes)?;
@@ -1173,6 +1192,22 @@ fn prepare_impl(
     let configured = native_step(mt_core_scene_configure, &settings.wire(variants)?, token)?;
     if configured[..4] != 1u32.to_le_bytes() {
         return Err("Invalid render settings".into());
+    }
+    let kernel_start = Instant::now();
+    if let Some(hints) = native_kernels
+        .then(|| geometry_kernels::packet(bytes, hardware))
+        .flatten()
+    {
+        let accepted = native_step(mt_core_geometry_kernel_hints, &hints, token)?;
+        if accepted[..4] != 1u32.to_le_bytes() {
+            return Err("Native geometry kernel hints rejected".into());
+        }
+    }
+    if profile {
+        eprintln!(
+            "{}",
+            json!({"nativeDataKernelProfile":{"completedWallMs":kernel_start.elapsed().as_secs_f64()*1000.}})
+        );
     }
     let work = (|| -> Result<Vec<u8>> {
         if hardware {

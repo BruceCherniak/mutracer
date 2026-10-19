@@ -3,13 +3,12 @@ import { readMeshInstance, meshInstancesLength, type MeshInstances } from './pac
 // (TLAS), built with the binned SAH builder in ./binnedSahBvh and written
 // directly in the BVH2 layout read by the traversal shaders.
 
-import Geometry, { Attribute } from '../scene/Geometry.js';
+import Geometry from '../scene/Geometry.js';
 import { mat4, vec3 } from '../math.js';
-import type { Mat4Array } from '../math.js';
 import { buildBinnedSahBvh, layoutBvh2 } from './binnedSahBvh.js';
 
 import { read, write } from '../math/access.js';
-import { attributeLength, attributeValue } from '../scene/attributeData.js';
+import { attributeLength, attributeValue, indexStorage } from '../scene/attributeData.js';
 import { Box3 } from './Box3.js';
 import {quantizeDisplacementRange} from './displacementRange.js';
 export { Box3 } from './Box3.js';
@@ -60,7 +59,7 @@ function unionBounds(bounds: Box3, a: Box3, b: Box3) {
 export interface TLASInstance {
   blasIndex: number;
   bounds: Box3;
-  transform: Mat4Array;
+  transform: Float64Array;
   materialsIndices: number[];
   displacementScale?: number;
   color?: [number, number, number];
@@ -202,10 +201,10 @@ export function buildBLAS(
 ): FlattendBVH {
   const position = geometry.position;
   const indexAttribute = geometry.indices;
-  if (!position || !indexAttribute || !Attribute.getCount(position)) {
+  if (!position || !indexAttribute || !position.array.length) {
     return emptyBvh(false);
   }
-  const indices = indexAttribute.array;
+  const indices = indexStorage(indexAttribute.array);
   const positions = position.array;
   const stride = position.itemSize;
   const normal = trianglesDisplacement ? geometry.normal : undefined;
@@ -342,7 +341,7 @@ function writeInstanceRecord(
   instanceFloats[offset + 3] = instance.displacementScale || 0;
   writeInstanceColor(instanceFloats, offset + 36, instance);
   instanceFloats[offset + 39] = 0;
-  const inverse = mat4.invert(mat4.create(), instance.transform)!;
+  const inverse = mat4.invert(new Float64Array(16), instance.transform)!;
   for (let i = 0; i < 16; i++) {
     instanceFloats[offset + 4 + i] = inverse[i];
     instanceFloats[offset + 20 + i] = read(instance.transform, i);

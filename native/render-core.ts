@@ -89,3 +89,9 @@ export function shaderCacheParameters(): Uint8Array {
   const stats = nativeShaderVariantStats();
   return new Uint8Array(new Uint32Array([stats.generated, stats.hits, stats.retained, 0]).buffer);
 }
+
+import {receiveGeometryKernelHints as receiveKernelHints} from './geometry-kernel-hints.js';
+import {geometryKernelReference as referenceKernels} from './scene-core.js';
+export function receiveGeometryKernelHints(bytes:Uint8Array,token:number):Uint8Array {return receiveKernelHints(bytes,token);}
+export function geometryKernelReference(bytes:Uint8Array,withBounds:number):Uint8Array {return referenceKernels(bytes,withBounds);}
+export function geometryKernelHypot(x: number,y: number,z: number): number {return Math.hypot(x,y,z);}

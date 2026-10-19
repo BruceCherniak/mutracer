@@ -1,14 +1,14 @@
+import {matrixStorage, copyNumericStorage} from '../math/storage.js';
 import { getGeometryBvh, setGeometryBvh } from './geometryBvh.js';
 import { writeMaterialIndices } from './materialIndices.js';
 import { isDeformationUpdate } from '../scene/geometryChanges.js';
 import type Geometry from '../scene/Geometry.js';
 import { Attribute } from '../scene/Geometry.js';
-import { attributeLength, attributeValue, type AttributeData } from '../scene/attributeData.js';
+import { attributeValue, type AttributeData } from '../scene/attributeData.js';
 import { hasGeneratedVertexTangents } from '../util/geometry.js';
 import { buildBLAS, refitBLAS, type FlattendBVH } from './bvhAccel.js';
 import type { GeometryUpdateState, GeometryUpdateMesh, GeometryUpdateRegion, GeometryUpdateBinding } from './geometryUpdateState.js';
 import {computeGeometryBounds, getBvhBounds } from './geometryBvhBounds.js';
-import { read, write } from '../math/access.js';
 
 type Prepared = GeometryUpdateState;
 type BindingIndices<M extends GeometryUpdateMesh> = {source: Map<Geometry, GeometryUpdateBinding<M>[]>; prepared: Map<Geometry, GeometryUpdateBinding<M>[]>};
@@ -62,14 +62,15 @@ function copyRegion(source: Geometry, merged: Geometry, region: GeometryUpdateRe
   }
   if (!topologyChanged) return;
   writeMaterialIndices(source, materialIndices, merged.materialIndex!.array, vertexOffset);
-  for (let i = 0; i < attributeLength(source.indices.array); i++) writeIndex(merged, indexOffset + i, attributeValue(source.indices.array, i) + vertexOffset);
+  const indices = source.indexArray;
+  for (let i = 0; i < indices.length; i++) writeIndex(merged, indexOffset + i, indices[i] + vertexOffset);
 }
 
 /** Constant-time topology detection; markUpdated also covers in-place index edits. */
 export function geometryTopologyChanged(prepared: {geometryStates: Prepared['geometryStates']} | undefined, source: Geometry) {
   const state = prepared?.geometryStates.get(source);
   return !!state && (state.topologyVersion !== source.topologyVersion ||
-    state.indices !== source.indices.array || state.indexCount !== attributeLength(source.indices.array));
+    state.indices !== source.indices.array || state.indexCount !== source.indexArray.length);
 }
 
 export interface GeometryUpdateOptions {
@@ -119,22 +120,20 @@ export function updatePreparedGeometries<M extends GeometryUpdateMesh>(prepared:
         const bounds = options.softwareBvhs === false ? computeGeometryBounds(geometry) : getBvhBounds(geometry);
         // Keep shared bound arrays: native generic-record values read from a Map
         // can be copies, so replacing their tuple does not update the owner view.
-        for (let c = 0; c < 3; c++) {
-          write(binding.bvhBounds[0], c, read(bounds[0], c));
-          write(binding.bvhBounds[1], c, read(bounds[1], c));
-        }
+        copyNumericStorage(binding.bvhBounds[0], matrixStorage(bounds[0]));
+        copyNumericStorage(binding.bvhBounds[1], matrixStorage(bounds[1]));
         meshes.add(binding.mesh);
       }
     }
     if (i < prepared.blases.length) offset += prepared.blases[i].bvh.buffer.byteLength;
   });
   for (const source of changed) prepared.geometryStates.set(source, { topologyVersion: source.topologyVersion,
-    indices: source.indices.array, indexCount: attributeLength(source.indices.array) });
+    indices: source.indices.array, indexCount: source.indexArray.length });
   return { vertices, blases, meshes, resized, relocated };
 }
 
 function writeIndex(geometry: Geometry, index: number, value: number) {
-  const array = geometry.indices.array;
+  const array = geometry.indexArray;
   array[index] = value;
 }
 
@@ -143,6 +142,36 @@ function packAttribute<T extends AttributeData>(attribute: Attribute<T> | undefi
   if (!attribute) return;
   const array = attribute.array, size = attribute.itemSize;
   let destination = outputFirst * stride + offset, source = first * size;
+  if (size === 1) {
+    for (let i = 0; i < count; i++, destination += stride, source += size) {
+      output[destination] = attributeValue(array, source);
+    }
+    return;
+  }
+  if (size === 2) {
+    for (let i = 0; i < count; i++, destination += stride, source += size) {
+      output[destination] = attributeValue(array, source);
+      output[destination + 1] = attributeValue(array, source + 1);
+    }
+    return;
+  }
+  if (size === 3) {
+    for (let i = 0; i < count; i++, destination += stride, source += size) {
+      output[destination] = attributeValue(array, source);
+      output[destination + 1] = attributeValue(array, source + 1);
+      output[destination + 2] = attributeValue(array, source + 2);
+    }
+    return;
+  }
+  if (size === 4) {
+    for (let i = 0; i < count; i++, destination += stride, source += size) {
+      output[destination] = attributeValue(array, source);
+      output[destination + 1] = attributeValue(array, source + 1);
+      output[destination + 2] = attributeValue(array, source + 2);
+      output[destination + 3] = attributeValue(array, source + 3);
+    }
+    return;
+  }
   for (let i = 0; i < count; i++, destination += stride, source += size) {
     for (let c = 0; c < size; c++) output[destination + c] = attributeValue(array, source + c);
   }

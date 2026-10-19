@@ -19,6 +19,22 @@ function scene(software = true) {
   const prepared = prepareSceneMeshes([batch,other],mesh=>({geometry:mesh.geometry,displacementScale:0}),computeGeometryBounds,software);
   return {geometry,batch,other,instances,prepared};
 }
+it('scans shared geometry once per preparation and keeps retained bounds independent', () => {
+  const {geometry,batch,other}=scene(false);
+  let scans=0;
+  const prepare=()=>prepareSceneMeshes([batch,other],mesh=>({geometry:mesh.geometry,displacementScale:0}),g=>{
+    scans++;
+    return computeGeometryBounds(g);
+  },false);
+  const first=prepare();
+  expect(scans).toBe(1);
+  first.instanceBindings[0].bvhBounds[0][0]=-100;
+  expect(first.instanceBindings[1].bvhBounds[0][0]).toBe(0);
+  geometry.position.array[0]=-.5;geometry.markVerticesUpdated();
+  const next=prepare();
+  expect(scans).toBe(2);
+  expect(next.instanceBindings.every(b=>b.bvhBounds[0][0]===-.5)).toBe(true);
+});
 it('recomputes only dirty packed transforms and preserves the previous candidate',()=>{
   const {batch,instances,prepared} = scene();
   const before=prepared.instances as PackedMeshInstances, saved=before.transforms.slice();

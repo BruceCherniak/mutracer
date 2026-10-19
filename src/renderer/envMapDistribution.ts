@@ -140,11 +140,17 @@ function makeTextureArray(width: number, height: number, channels: number) {
 }
 
 function environmentLuminance(data: TextureDataSource['data'], width: number, height: number): Float32Array {
+  if (data instanceof Uint8Array) return environmentLuminanceKernel(data, width, height, 1 / 255);
+  if (data instanceof Uint8ClampedArray) return environmentLuminanceKernel(data, width, height, 1 / 255);
+  if (data instanceof Float32Array) return environmentLuminanceKernel(data, width, height, 1);
+  return environmentLuminanceKernel(data, width, height, 1);
+}
+
+function environmentLuminanceKernel<T extends TextureDataSource['data']>(data: T, width: number, height: number, sourceScale: number): Float32Array {
   const channels = Math.max(
     Math.floor(pixelLength(data) / (width * height)),
     1
   );
-  const sourceScale = (data instanceof Uint8Array || data instanceof Uint8ClampedArray) ? 1 / 255 : 1;
   const luminance = new Float32Array(width * height);
   for (let y = 0; y < height; y++) {
     for (let x = 0; x < width; x++) {

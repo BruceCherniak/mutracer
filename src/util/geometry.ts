@@ -1,4 +1,4 @@
-import { attributeLength, attributeValue } from '../scene/attributeData.js';
+import { attributeLength, attributeValue, indexStorage } from '../scene/attributeData.js';
 import { read, write } from '../math/access.js';
 import { vec3 } from '../math.js';
 import Geometry, { Attribute } from '../scene/Geometry.js';
@@ -9,7 +9,9 @@ export function generateVertexNormals(geometry: Geometry) {
     return;
   }
 
-  const indices = geometry.indices?.array;
+  // Explicit geometry helpers may run before the renderer is notified of edits.
+  // Normalize their current input rather than consulting a revision cache.
+  const indices = indexStorage(geometry.indices.array);
   const positions = geometry.position.array!;
   const normals = new Float32Array(positions.length);
   geometry.normal = new Attribute(normals, 3);
@@ -85,7 +87,9 @@ export function generateCreasedVertexNormals(
   geometry: Geometry,
   creaseAngleDegrees = 180
 ) {
-  const indices = geometry.indices?.array;
+  // Explicit geometry helpers may run before the renderer is notified of edits.
+  // Normalize their current input rather than consulting a revision cache.
+  const indices = indexStorage(geometry.indices.array);
   const positions = geometry.position?.array;
   if (!indices || !positions || !attributeLength(indices) || !positions.length) {
     generateVertexNormals(geometry);
@@ -226,6 +230,12 @@ export function hasGeneratedVertexTangents(geometry: Geometry) {
   return !!geometry.tangent && generatedVertexTangents.has(geometry.tangent);
 }
 
+/** @internal Installs the byte-equivalent result of a native tangent kernel. */
+export function installGeneratedVertexTangents(geometry: Geometry, tangents: Float32Array) {
+  geometry.tangent = new Attribute(tangents, 3);
+  generatedVertexTangents.add(geometry.tangent);
+}
+
 /** Generate a UV-aligned tangent for meshes that do not provide one. */
 export function generateVertexTangents(geometry: Geometry) {
   if (!geometry.position || !geometry.uv || !geometry.normal) return;
@@ -262,7 +272,9 @@ function computeVertexTangents(geometry: Geometry, accumulated: Float32Array, ta
 
   const vertexCount = geometry.vertexCount;
   accumulated.fill(0);
-  const indices = geometry.indices?.array;
+  // Explicit geometry helpers may run before the renderer is notified of edits.
+  // Normalize their current input rather than consulting a revision cache.
+  const indices = indexStorage(geometry.indices.array);
   const count = indices ? attributeLength(indices) : vertexCount;
 
   for (let offset = 0; offset + 2 < count; offset += 3) {

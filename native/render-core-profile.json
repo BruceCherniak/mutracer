@@ -250,6 +250,34 @@
       "symbol": "mt_core_shader_cache",
       "params": [],
       "returns": "bytes"
+    },
+    {
+      "export": "receiveGeometryKernelHints",
+      "symbol": "mt_core_geometry_kernel_hints",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "geometryKernelReference",
+      "symbol": "mt_core_geometry_kernel_reference",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "geometryKernelHypot",
+      "symbol": "mt_core_geometry_kernel_hypot",
+      "params": [
+        "f64",
+        "f64",
+        "f64"
+      ],
+      "returns": "f64"
     }
   ]
 }

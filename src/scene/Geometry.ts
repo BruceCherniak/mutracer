@@ -96,8 +96,33 @@ export default class Geometry {
   uv1?: Attribute<Float32Array>;
   /** Optional vertex RGB colors. Default undefined. */
   color?: Attribute<Float32Array>;
-  /** Required triangle vertex indices; three entries per triangle. */
+  /**
+   * Required triangle vertex indices; three entries per triangle.
+   * Uint16 input may retain a cached Uint32 copy, costing 4 extra bytes per index.
+   */
   indices: IndexAttribute;
+  private _indexSource: Uint16Array | Uint32Array | undefined;
+  private _indexVersion = -1;
+  private _indices32 = new Uint32Array(0);
+
+  /** @internal Canonical CPU/GPU indices; public index storage remains caller-owned. */
+  get indexArray(): Uint32Array {
+    const source = this.indices.array;
+    if (source instanceof Uint32Array) {
+      if (this._indexSource) {
+        this._indexSource = undefined;
+        this._indices32 = new Uint32Array(0);
+        this._indexVersion = -1;
+      }
+      return source;
+    }
+    if (this._indexSource !== source || this._indexVersion !== this.topologyVersion || this._indices32.length !== source.length) {
+      this._indices32 = new Uint32Array(source);
+      this._indexSource = source;
+      this._indexVersion = this.topologyVersion;
+    }
+    return this._indices32;
+  }
   /** Optional per-vertex raw material indices, itemSize 1. All three triangle corners must match. Default undefined selects material 0. */
   materialIndex?: Attribute<Int32Array>;
 

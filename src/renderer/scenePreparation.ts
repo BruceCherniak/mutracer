@@ -1,3 +1,4 @@
+import {matrixStorage} from '../math/storage.js';
 import { Box3 } from './Box3.js';
 import MeshState from '../scene/MeshState.js';
 import MaterialState from '../scene/MaterialState.js';
@@ -21,6 +22,7 @@ export function computeBounds(
   result: Box3 = makeBounds(),
   p = vec3.create()
 ) {
+  const matrix = matrixStorage(m), lower = matrixStorage(bvhBounds[0]), upper = matrixStorage(bvhBounds[1]);
   const {min, max} = result;
   vec3.set(min, Infinity, Infinity, Infinity);
   vec3.set(max, -Infinity, -Infinity, -Infinity);
@@ -30,11 +32,11 @@ export function computeBounds(
   for (let corner = 0; corner < 8; corner++) {
     vec3.set(
       p,
-      (corner & 1 ? read(bvhBounds[1], 0) : read(bvhBounds[0], 0)),
-      (corner & 2 ? read(bvhBounds[1], 1) : read(bvhBounds[0], 1)),
-      (corner & 4 ? read(bvhBounds[1], 2) : read(bvhBounds[0], 2))
+      (corner & 1 ? upper[0] : lower[0]),
+      (corner & 2 ? upper[1] : lower[1]),
+      (corner & 4 ? upper[2] : lower[2])
     );
-    vec3.transformMat4(p, p, m);
+    vec3.transformMat4(p, p, matrix);
     if (!finiteValues(p)) continue;
     vec3.min(min, min, p);
     vec3.max(max, max, p);
@@ -61,14 +63,17 @@ export function updateMeshInstanceTransforms<M extends MeshState>(
   // the previous candidate until membership and GPU validation have succeeded.
   if (current instanceof PackedMeshInstances && dirtyIndices && current.bindingSlots.length === bindings.length &&
     current.bindingSlots.every((slots, i) => slots.length === meshInstanceCount(bindings[i].mesh))) {
-    const next = current.copy(), matrix = new Array<number>(16).fill(0);
+    const next = current.copy(), matrix = new Float64Array(16);
     const boundsScratch = makeBounds(), pointScratch = vec3.create();
     let membershipChanged = false;
+    const parents = new Map<M, Float64Array>();
     for (const index of dirtyIndices) {
       const binding = bindings[current.bindingIndices[index]];
       const local = current.localIndices[index];
       if (!binding || local >= meshInstanceCount(binding.mesh)) {membershipChanged = true; break;}
-      meshInstanceTransform(binding.mesh, local, matrix);
+      let parent = parents.get(binding.mesh);
+      if (!parent) { parent = matrixStorage(binding.mesh.transform); parents.set(binding.mesh, parent); }
+      meshInstanceTransform(binding.mesh, local, matrix, parent);
       const bounds = computeBounds(binding.geometry, matrix, binding.bvhBounds, boundsScratch, pointScratch);
       if (!finiteValues(bounds.min) || !finiteValues(bounds.max) || !finiteValues(matrix)) {membershipChanged = true; break;}
       next.transforms.set(matrix, index * 16); next.bounds.set(bounds.min, index * 6); next.bounds.set(bounds.max, index * 6 + 3);
@@ -77,15 +82,16 @@ export function updateMeshInstanceTransforms<M extends MeshState>(
   }
   if (bindings.some(binding => binding.mesh.instanceData != null)) {
     const packed = new PackedMeshInstances(bindings.reduce((count, binding) => count + meshInstanceCount(binding.mesh), 0));
-    const matrix = new Array<number>(16).fill(0);
+    const matrix = new Float64Array(16);
     const boundsScratch = makeBounds(), pointScratch = vec3.create();
     let sourceIndex = 0;
     for (let bindingIndex = 0; bindingIndex < bindings.length; bindingIndex++) {
       const binding = bindings[bindingIndex];
       const slots: number[] = []; packed.bindingSlots.push(slots);
       const {mesh, geometry, bvhBounds, blasIndex, materialIndices, displacementScale} = binding;
+      const parent = matrixStorage(mesh.transform);
       for (let i = 0; i < meshInstanceCount(mesh); i++, sourceIndex++) {
-        meshInstanceTransform(mesh, i, matrix);
+        meshInstanceTransform(mesh, i, matrix, parent);
         const bounds = computeBounds(geometry, matrix, bvhBounds, boundsScratch, pointScratch);
         if (!finiteValues(bounds.min) || !finiteValues(bounds.max) || !finiteValues(matrix)) continue;
         const index = packed.length++;
@@ -113,7 +119,7 @@ export function updateMeshInstanceTransforms<M extends MeshState>(
     ({
       bounds: computeBounds(geometry, mesh.transform, bvhBounds),
       blasIndex,
-      transform: mesh.transform,
+      transform: matrixStorage(mesh.transform),
       materialsIndices: materialIndices.map((idx) =>
         packMaterialIndexAndWeightToInt(idx, 1)
       ),
@@ -145,6 +151,7 @@ export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
   boundsForGeometry = getBvhBounds, softwareBvhs = true) {
   const materialIndexMap = new Map<MaterialState, number>();
   const geometryIndexMap = new Map<Geometry, number>();
+  const geometryBounds = new Map<Geometry, [Float64Array, Float64Array]>();
   const geometries: Geometry[] = [];
   const materials: M['materials'] = [];
   const globalMaterialIndicesMap: number[][] = [];
@@ -160,7 +167,14 @@ export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
     .filter((mesh) => mesh.geometry.position?.array.length > 0)
     .map((mesh) => {
       let { geometry, displacementScale } = prepareGeometry(mesh);
-      const bvhBounds = boundsForGeometry(geometry);
+      let cachedBounds = geometryBounds.get(geometry);
+      if (!cachedBounds) {
+        const rawBounds = boundsForGeometry(geometry);
+        cachedBounds = [matrixStorage(rawBounds[0]), matrixStorage(rawBounds[1])];
+        geometryBounds.set(geometry, cachedBounds);
+      }
+      // Instances share the scan, while retained updates keep independent arrays.
+      const bvhBounds: [Float64Array, Float64Array] = [cachedBounds[0].slice(), cachedBounds[1].slice()];
       const bounds = computeBounds(geometry, mesh.transform, bvhBounds);
 
       let geoIdx = geometryIndexMap.get(geometry);
@@ -195,7 +209,7 @@ export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
       const instance: TLASInstance = {
         bounds,
         blasIndex: geoIdx!,
-        transform: mesh.transform,
+        transform: matrixStorage(mesh.transform),
         materialsIndices: materialsIndices.map((idx) =>
           packMaterialIndexAndWeightToInt(idx, 1)
         ),
@@ -236,7 +250,7 @@ export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
     geometryStates: new Map(instanceBindings.map(binding => {
       const source = binding.mesh.geometry;
       return [source, { topologyVersion: source.topologyVersion, indices: source.indices.array,
-        indexCount: attributeLength(source.indices.array) }];
+        indexCount: source.indexArray.length }];
     })),
     instances: (meshes.some(mesh => mesh.instanceData != null) ? updateMeshInstanceTransforms(instanceBindings) : instances) as MeshInstances,
     materials,
@@ -245,7 +259,7 @@ export function prepareSceneMeshes<M extends MeshState>(meshes: M[],
     blases: softwareBvhs ? geometries.map((geo) => ({
       bvh: getGeometryBvh(geo)!,
       verticesCount: geo.vertexCount,
-      trainglesCount: attributeLength(geo.indices.array) / 3
+      trainglesCount: geo.indexArray.length / 3
     })) : []
   };
 }
@@ -260,7 +274,7 @@ function mergeGeometry(
     0
   );
   const totalIndexCount = geometries.reduce(
-    (sum, geo) => sum + attributeLength(geo.indices.array),
+    (sum, geo) => sum + geo.indexArray.length,
     0
   );
   const positionAttrib = new Attribute(
@@ -325,7 +339,7 @@ function mergeGeometry(
 
     writeMaterialIndices(geometry, globalMaterialIndex, materialIndexAttrib.array, currentVertex);
 
-    const meshIndices = geometry.indices.array;
+    const meshIndices = geometry.indexArray;
     for (let i = 0; i < attributeLength(meshIndices); i++) {
       indexAttrib.array[currentIndex + i] = currentVertex + attributeValue(meshIndices, i);
     }
@@ -337,7 +351,7 @@ function mergeGeometry(
 }
 
 export function computeGeometryNormals(geometry: Geometry) {
-  const indices = geometry.indices;
+  const indices = geometry.indexArray;
   const positions = geometry.position.array;
   geometry.normal = new Attribute(new Float32Array(positions.length), 3);
   const normals = geometry.normal.array;
@@ -352,14 +366,14 @@ export function computeGeometryNormals(geometry: Geometry) {
   const n = vec3.create();
 
   const len = indices
-    ? attributeLength(indices.array)
+    ? indices.length
     : geometry.vertexCount;
   let i1, i2, i3;
   for (let f = 0; f < len; ) {
     if (indices) {
-      i1 = attributeValue(indices.array, f++);
-      i2 = attributeValue(indices.array, f++);
-      i3 = attributeValue(indices.array, f++);
+      i1 = attributeValue(indices, f++);
+      i2 = attributeValue(indices, f++);
+      i3 = attributeValue(indices, f++);
     } else {
       i1 = f++;
       i2 = f++;
@@ -407,11 +421,16 @@ export function computeGeometryNormals(geometry: Geometry) {
 
 
 function finiteValues(values: Float32Array | Float64Array | number[]): boolean {
+  if (values instanceof Float32Array) return finiteStorage(values);
+  if (values instanceof Float64Array) return finiteStorage(values);
+  return finiteStorage(values);
+}
+function finiteStorage<T extends Float32Array | Float64Array | number[]>(values: T): boolean {
   const length = values.length;
   for (let i = 0; i < length; i++) if (!Number.isFinite(read(values, i))) return false;
   return true;
 }
 
 function makeBounds(): Box3 {
-  const bounds = new Box3(); bounds.min = vec3.create(); bounds.max = vec3.create(); return bounds;
+  return new Box3();
 }

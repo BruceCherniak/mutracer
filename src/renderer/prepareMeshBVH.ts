@@ -139,7 +139,7 @@ export function getTrianglesDisplacementRange(
   heightTexture: Texture | undefined,
   material: OpenPBRMaterial
 ) {
-  const indices = geometry.indices.array;
+  const indices = geometry.indexArray;
   const uvs = geometry.uv?.array;
   const uvProjection = material.displacementUvProjection;
   if (!heightTexture) return;

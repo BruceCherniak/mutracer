@@ -471,4 +471,4 @@ export function translate<T0 extends MathArray, T1 extends ReadonlyMathArray, T2
   return out;
 }
 
-export type Mat4Array = Float32Array | number[];
+export type Mat4Array = Float32Array | Float64Array | number[];
