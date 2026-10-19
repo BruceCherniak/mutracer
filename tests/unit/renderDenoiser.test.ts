@@ -52,6 +52,45 @@ describe('per-render denoising', () => {
     camera.position = [1, 0, 0]; engine.update(); done(true); await settle();
     expect(targets[1].performDenoise).not.toHaveBeenCalled(); engine.dispose();
   });
+  it('keeps cancelled inference on the shared scratch lease until its submitted GPU work completes', async () => {
+    const {engine, targets} = renderFixture();
+    const render = new Render(engine, {maxSamples: 1, denoiser: {type: 'jnlm'}});
+    let gpuDone!: () => void;
+    const gpuPending = new Promise<undefined>(resolve => {gpuDone = () => resolve(undefined);});
+    vi.spyOn(engine.device!.queue, 'onSubmittedWorkDone').mockReturnValue(gpuPending);
+    render.refine();
+    let cancelled!: () => void;
+    vi.mocked(targets[0].performDenoise!).mockImplementationOnce(() => new Promise(resolve => {cancelled = () => resolve(false);}));
+    await settle();
+    render.restart(); cancelled(); render.refine(); await settle();
+    // Cancellation cannot retract already-submitted filter passes.
+    // Repeated edits must not enqueue the next inference on top of those passes.
+    expect(targets[0].performDenoise).toHaveBeenCalledTimes(1);
+    gpuDone(); await settle();
+    expect(targets[0].performDenoise).toHaveBeenCalledTimes(2);
+    engine.dispose();
+  });
+
+  it('releases the inference lease when disposed while GPU completion is pending', async () => {
+    const {engine} = renderFixture();
+    vi.spyOn(engine.device!.queue, 'onSubmittedWorkDone').mockReturnValue(new Promise(() => {}));
+    const work = engine._enqueueDenoise(async () => 42);
+    await settle(); engine.dispose();
+    expect(await work).toBe(42);
+  });
+  it('drains submitted work before reusing scratch after an inference error', async () => {
+    const {engine} = renderFixture();
+    let gpuDone!: () => void;
+    vi.spyOn(engine.device!.queue, 'onSubmittedWorkDone').mockReturnValue(new Promise<undefined>(resolve => {gpuDone = () => resolve(undefined);}));
+    const error = new Error('Inference failed after submission');
+    const failed = engine._enqueueDenoise(async () => {throw error;});
+    const rejection = expect(failed).rejects.toBe(error);
+    const nextWork = vi.fn(async () => 7);
+    const next = engine._enqueueDenoise(nextWork);
+    await settle(); expect(nextWork).not.toHaveBeenCalled();
+    gpuDone(); await rejection; expect(await next).toBe(7);
+    engine.dispose();
+  });
   it('fails soft for OIDN on WebGL', async () => {
     const {engine} = renderFixture({backend: 'webgl'}); const error = vi.fn(); engine.on('error', error);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
