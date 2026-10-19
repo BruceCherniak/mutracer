@@ -4,14 +4,18 @@ import { setUi, showToast, useViewer, type SelectedMaterial } from '../../store'
 import { getEngine } from '../../engine/ViewerEngine';
 import { thumbnailUrl } from '../../engine/presets';
 import {
-  MATERIAL_GROUPS, MATERIAL_PRESETS, TEXTURE_SLOTS, hexToLinear, linearToHex,
-  type MaterialGroup, type MaterialParam, type MaterialValues, type TextureKey
+  MATERIAL_GROUPS, MATERIAL_PRESET_CATEGORIES, MATERIAL_PRESETS, TEXTURE_SLOTS, hexToLinear, linearToHex,
+  type MaterialGroup, type MaterialPresetCategory, type MaterialParam, type MaterialValues, type TextureKey
 } from '../../engine/materialParams';
-import { ColorField, Hint, Scrub, Section, Switch } from '../ui/controls';
+import { ColorField, Hint, Scrub, Section, Segmented, Switch } from '../ui/controls';
 import { PolyHavenLogo } from '../PolyHavenLogo';
+
+// Kept across material selections.
+let lastPresetCategory: MaterialPresetCategory = 'basic';
 
 export function MaterialPanel() {
   const material = useViewer((s) => s.material);
+  const [presetCategory, setPresetCategory] = useState(lastPresetCategory);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
   const browsing = useViewer((s) => s.ui.textureBrowser);
   const webgl = useViewer((s) => s.backend?.name === 'WebGL 2');
@@ -49,12 +53,16 @@ export function MaterialPanel() {
           <RotateCcw size={13} />
         </button>
       </div>
-      <div className="preset-grid" aria-label="Material presets">
-        {MATERIAL_PRESETS.map((preset) => (
-          <button key={preset.id} className="preset" title={`Apply ${preset.label}`} onClick={() => set(preset.values, `${preset.label} preset`)}>
-            <img src={thumbnailUrl(`material-${preset.id}`)} alt="" /><span>{preset.label}</span>
-          </button>
-        ))}
+      <div className="mat-presets">
+        <Segmented label="Preset category" value={presetCategory} options={MATERIAL_PRESET_CATEGORIES}
+          onChange={(v) => { lastPresetCategory = v; setPresetCategory(v); }} />
+        <div className="preset-grid" aria-label="Material presets">
+          {MATERIAL_PRESETS.filter((preset) => preset.category === presetCategory).map((preset) => (
+            <button key={preset.id} className="preset" title={`Apply ${preset.label}`} onClick={() => set(preset.values, `${preset.label} preset`)}>
+              <img src={thumbnailUrl(`material-${preset.id}`)} alt="" /><span>{preset.label}</span>
+            </button>
+          ))}
+        </div>
       </div>
       <div className="tex-browse hide-m">
         <button className="btn btn--wide" aria-pressed={browsing} data-on={browsing || undefined}

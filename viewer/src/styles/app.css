@@ -510,7 +510,7 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 /* Material */
 .mat-card { display: grid; grid-template-columns: 44px 1fr auto; align-items: center; gap: 10px; }
 .insp-body > .mat-card { padding-bottom: 8px; border-bottom: 0; }
-.insp-body > .preset-grid { padding-top: 4px; }
+.insp-body > .mat-presets { display: grid; gap: 8px; padding-top: 4px; }
 .mat-card > div { min-width: 0; }
 .mat-ball { --c: #ccc; width: 44px; height: 44px; border-radius: 50%; corner-shape: round;
   background: radial-gradient(circle at 34% 28%, rgb(255 255 255 / 0.9) 0, rgb(255 255 255 / 0) 22%),
