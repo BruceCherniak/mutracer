@@ -111,7 +111,20 @@ export interface MaterialEdit {
   name: string;
   values: MaterialValues;
   /** `null` removes the loaded texture from the slot. */
-  textures: { slot: TextureKey; file: Blob | null }[];
+  textures: { slot: TextureKey; file: Blob | null; transform?: TextureTransform }[];
+}
+
+/** UV repeat and orientation of an imported texture; uploads otherwise follow the texture they replace. */
+export interface TextureTransform {
+  uvScale: [number, number];
+  flipY: boolean;
+}
+
+function readTransform(value: unknown): TextureTransform | undefined {
+  const t = value as Partial<TextureTransform> | undefined;
+  if (!t || !Array.isArray(t.uvScale) || t.uvScale.length !== 2 || !t.uvScale.every(Number.isFinite) ||
+    typeof t.flipY !== 'boolean') return undefined;
+  return { uvScale: [t.uvScale[0], t.uvScale[1]], flipY: t.flipY };
 }
 
 export interface MaterialEdits {
@@ -137,9 +150,9 @@ export function saveMaterialEdits(edits: MaterialEdits): Promise<void> {
         version: 1, modelId: edits.modelId,
         materials: edits.materials.map(({ index, name, values, textures }) => ({
           index, name, values,
-          textures: textures.map(({ slot, file }) => {
+          textures: textures.map(({ slot, file, transform }) => {
             if (file) blobs.push(file);
-            return { slot, file: file && { type: file.type, size: file.size } };
+            return { slot, file: file && { type: file.type, size: file.size }, transform };
           })
         }))
       }));
@@ -187,7 +200,10 @@ export function readMaterialEdits(): Promise<MaterialEdits | null> {
           const { size, type } = texture.file;
           if (!Number.isSafeInteger(size) || size < 0 || offset + size > file.size || typeof type !== 'string') return null;
           // Copy into memory: OPFS snapshots become unreadable once the file is rewritten.
-          textures.push({ slot: texture.slot, file: new Blob([await file.slice(offset, offset + size).arrayBuffer()], { type }) });
+          textures.push({
+            slot: texture.slot, file: new Blob([await file.slice(offset, offset + size).arrayBuffer()], { type }),
+            transform: readTransform(texture.transform)
+          });
           offset += size;
         }
         materials.push({ index: entry.index, name: entry.name, values, textures });

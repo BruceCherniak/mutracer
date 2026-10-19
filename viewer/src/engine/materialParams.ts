@@ -110,10 +110,12 @@ export const MATERIAL_GROUPS: MaterialGroup[] = [
   }
 ];
 
-// Track hidden displacement settings for reset, undo and cached edits as well.
+// Track hidden settings for reset, undo and cached edits as well: displacement
+// settings, and colors that MaterialX import sets.
 export const MATERIAL_KEYS = [...new Set([
   ...MATERIAL_GROUPS.flatMap((g) => g.params.map((p) => p.key)),
-  'displacementStepSize', 'displacementUvProjection', 'displacementUvProjectionScale'
+  'displacementStepSize', 'displacementUvProjection', 'displacementUvProjectionScale',
+  'specularColor', 'subsurfaceRadiusScale'
 ] as const)];
 export type DisplacementProjection = OpenPBRMaterial['displacementUvProjection'];
 export const DISPLACEMENT_PROJECTIONS: DisplacementProjection[] = ['none', 'triplanar', 'spherical', 'cylindrical'];
@@ -159,10 +161,10 @@ export function textureSlots(material: OpenPBRMaterial) {
  * Textures and displacement stay.
  */
 export const MATERIAL_BASE: MaterialValues = {
-  baseMetalness: 0, baseDiffuseRoughness: 0, specularWeight: 1, specularIor: 1.5, specularAnisotropy: 0,
+  baseMetalness: 0, baseDiffuseRoughness: 0, specularWeight: 1, specularColor: [1, 1, 1], specularIor: 1.5, specularAnisotropy: 0,
   transmissionWeight: 0, transmissionColor: [1, 1, 1], transmissionDepth: 0, transmissionDispersionScale: 0, thinWalled: false,
   coatWeight: 0, coatRoughness: 0, coatIor: 1.6, coatColor: [1, 1, 1],
-  subsurfaceWeight: 0, fuzzWeight: 0, thinFilmWeight: 0, emissionLuminance: 0, opacity: 1
+  subsurfaceWeight: 0, subsurfaceRadiusScale: [1, 0.5, 0.25], fuzzWeight: 0, thinFilmWeight: 0, emissionLuminance: 0, opacity: 1
 };
 
 export type MaterialPresetCategory = 'basic' | 'metal' | 'glass' | 'soft';

@@ -10,9 +10,12 @@ import { Environment, createSky, loadHDR, parseHDR } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
   createMaterialSpheres, isHDRFile, loadModelFromFiles, loadModelFromURL, loadModelFromSource,
-  type LoadedModel, type PathedFile
+  isModelFile, type LoadedModel, type PathedFile
 } from './loadModel';
-import { MATERIAL_BASE, type MaterialValues, type TextureKey } from './materialParams';
+import { MATERIAL_BASE, TEXTURE_KEYS, type MaterialValues, type TextureKey } from './materialParams';
+import { parseMaterialX, type MapPlan } from './materialx';
+import { loadMapImage, readMaterialXPackage } from './materialxFiles';
+import { isMaterialXFile } from './droppedFiles';
 import { displacementHeightRange } from './displacementHeightRange';
 import { downloadPolyHavenMap, polyHavenMaps, type TextureResolution } from './polyHaven';
 import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
@@ -258,6 +261,11 @@ export class ViewerEngine {
   }
 
   async loadFiles(files: PathedFile[]) {
+    if (files.some((f) => isMaterialXFile(f.path)) && !files.some((f) => isModelFile(f.path))) {
+      const material = get().material;
+      if (!material) return showToast('Select a material to apply the MaterialX file to', 'error');
+      return this.importMaterialX(material.id, files);
+    }
     const hdr = files.find((f) => isHDRFile(f.path));
     const models = files.filter((f) => !isHDRFile(f.path));
     if (hdr) {
@@ -268,7 +276,7 @@ export class ViewerEngine {
       }
     }
     if (!models.some((f) => /\.(glb|gltf)$/i.test(f.path))) {
-      if (!hdr) showToast('Drop a .glb, a .gltf with its files, or an .hdr environment', 'error');
+      if (!hdr) showToast('Drop a .glb, a .gltf with its files, an .hdr environment, or a MaterialX .mtlx or .zip', 'error');
       return;
     }
     const main = models.find((f) => /\.(glb|gltf)$/i.test(f.path))!;
@@ -1056,6 +1064,37 @@ export class ViewerEngine {
       return !signal?.aborted;
     } catch (error) {
       if (!signal?.aborted) showToast(`Could not load ${name} from Poly Haven: ${(error as Error).message}`, 'error');
+      return false;
+    }
+  }
+
+  /**
+   * Imports a MaterialX document, with its textures or as a zip, into a
+   * material as one undo step. The import replaces the whole material: every
+   * value starts from the neutral base and every texture slot is set or cleared.
+   */
+  async importMaterialX(materialId: string, files: PathedFile[]) {
+    let name = files[0]?.file.name ?? 'MaterialX';
+    try {
+      const pkg = await readMaterialXPackage(files);
+      const material = parseMaterialX(pkg.text);
+      name = material.name;
+      const warnings = [...material.warnings];
+      const maps: Partial<Record<TextureKey, Blob | null>> = Object.fromEntries(TEXTURE_KEYS.map((key) => [key, null]));
+      await Promise.all((Object.entries(material.maps) as [TextureKey, MapPlan][]).map(async ([slot, plan]) => {
+        try {
+          maps[slot] = await loadMapImage(plan, pkg);
+        } catch (error) {
+          warnings.push(`texture ${(error as Error).message}`);
+        }
+      }));
+      // MaterialX images have their origin at the bottom left.
+      await this.materials.setTextures(materialId, maps, { ...MATERIAL_BASE, ...material.values }, `${name} MaterialX`,
+        undefined, { uvScale: material.uvScale, flipY: true });
+      showToast(warnings.length ? `Imported ${name}. Not supported: ${warnings.join('; ')}` : `Imported ${name}`);
+      return true;
+    } catch (error) {
+      showToast(`Could not import ${name}: ${(error as Error).message}`, 'error');
       return false;
     }
   }

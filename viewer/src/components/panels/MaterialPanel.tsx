@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { ImagePlus, MousePointerClick, RotateCcw, X } from 'lucide-react';
+import { FileUp, ImagePlus, MousePointerClick, RotateCcw, X } from 'lucide-react';
 import { setUi, showToast, useViewer, type SelectedMaterial } from '../../store';
 import { getEngine } from '../../engine/ViewerEngine';
 import { thumbnailUrl } from '../../engine/presets';
@@ -9,6 +9,7 @@ import {
 } from '../../engine/materialParams';
 import { ColorField, Hint, Scrub, Section, Segmented, Switch } from '../ui/controls';
 import { PolyHavenLogo } from '../PolyHavenLogo';
+import { toPathedFiles } from '../../engine/droppedFiles';
 
 // Kept across material selections.
 let lastPresetCategory: MaterialPresetCategory = 'basic';
@@ -69,6 +70,7 @@ export function MaterialPanel() {
           onClick={() => setUi({ textureBrowser: !browsing })}>
           <PolyHavenLogo />{browsing ? 'Hide Poly Haven textures' : 'Browse Poly Haven textures'}
         </button>
+        <MaterialXImport materialId={material.id} />
       </div>
       {MATERIAL_GROUPS.map((group) => {
         const weight = group.weight ? Number(material.values[group.weight]) : undefined;
@@ -101,6 +103,29 @@ export function MaterialPanel() {
         <TextureSlots material={material} />
       </Section>
       {material.textures.length > 0 && <Hint>Values marked with a texture swatch multiply the texture.</Hint>}
+    </>
+  );
+}
+
+/** Picks a MaterialX .zip, or a .mtlx with its textures; folders can be dropped on the viewport. */
+function MaterialXImport({ materialId }: { materialId: string }) {
+  const input = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <>
+      <button className="btn btn--wide" disabled={busy} title="A .zip package, or a .mtlx with its texture images. Folders can be dropped on the viewport."
+        onClick={() => input.current?.click()}>
+        <FileUp size={14} />{busy ? 'Importing MaterialX…' : 'Import MaterialX'}
+      </button>
+      <input ref={input} type="file" hidden multiple accept=".mtlx,.zip,image/png,image/jpeg,image/webp,image/avif"
+        onChange={async (e) => {
+          const files = toPathedFiles(e.currentTarget.files ?? []);
+          e.currentTarget.value = '';
+          if (!files.length) return;
+          setBusy(true);
+          await getEngine()?.importMaterialX(materialId, files);
+          setBusy(false);
+        }} />
     </>
   );
 }

@@ -5,7 +5,7 @@ import {
   TEXTURE_KEYS, readMaterial, sameValue, textureSlots, writeMaterial,
   type MaterialValues, type TextureKey
 } from './materialParams';
-import { readMaterialEdits, saveMaterialEdits, type MaterialEdit as StoredEdit } from './modelCache';
+import { readMaterialEdits, saveMaterialEdits, type MaterialEdit as StoredEdit, type TextureTransform } from './modelCache';
 import { discardHistory, pushHistory, type HistoryItem } from '../history';
 
 /** Values and textures to set; `null` empties a texture slot. */
@@ -46,7 +46,7 @@ class MaterialEdit implements HistoryItem {
 interface PendingEdit {
   name: string;
   values: MaterialValues;
-  textures: Partial<Record<TextureKey, { image: ImageBitmap; file: Blob } | null>>;
+  textures: Partial<Record<TextureKey, { image: ImageBitmap; file: Blob; transform?: TextureTransform } | null>>;
 }
 
 export type PendingEdits = Map<number, PendingEdit>;
@@ -64,13 +64,13 @@ export async function readPendingEdits(modelId: string): Promise<PendingEdits | 
   const pending: PendingEdits = new Map();
   await Promise.all(edits.materials.map(async (edit) => {
     const textures: PendingEdit['textures'] = {};
-    await Promise.all(edit.textures.map(async ({ slot, file }) => {
+    await Promise.all(edit.textures.map(async ({ slot, file, transform }) => {
       if (!file) {
         textures[slot] = null;
         return;
       }
       try {
-        textures[slot] = { image: await decodeImage(file), file };
+        textures[slot] = { image: await decodeImage(file), file, transform };
       } catch {
         // An unreadable image drops only that slot.
       }
@@ -95,6 +95,7 @@ export class MaterialEditor {
   private pending: PendingEdits = new Map();
   /** Original files of uploaded textures, for persistence. */
   private uploads = new WeakMap<Texture, Blob>();
+  private transforms = new WeakMap<Texture, TextureTransform>();
   private thumbs = new WeakMap<Texture, string>();
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
   /** Set once the model is identified; edits are only saved for a known model. */
@@ -176,10 +177,13 @@ export class MaterialEditor {
     await this.setTextures(materialId, { [slot]: file }, {}, label);
   }
 
-  /** Replaces several texture slots and values as one undo step; `null` empties a slot. */
+  /**
+   * Replaces several texture slots and values as one undo step; `null` empties a slot.
+   * New textures take `transform`, or else the UV transform of the texture they replace.
+   */
   async setTextures(
     materialId: string, files: Partial<Record<TextureKey, Blob | null>>, values: MaterialValues, label: string,
-    merge?: { key: string; ms?: number }
+    merge?: { key: string; ms?: number }, transform?: TextureTransform
   ) {
     const entry = this.entries.get(materialId);
     const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
@@ -195,9 +199,7 @@ export class MaterialEditor {
         textures[slot] = null;
         return;
       }
-      const texture = createTexture(image, material, slot);
-      this.uploads.set(texture, file);
-      textures[slot] = texture;
+      textures[slot] = this.upload(image, file, material, slot, transform);
     });
     // Newly uploaded heights also work on meshes that had no textures or UVs when converted.
     if (textures.displacementMap && entry.needsDisplacementProjection &&
@@ -263,11 +265,21 @@ export class MaterialEditor {
         textures[slot] = null;
         continue;
       }
-      const texture = createTexture(upload.image, material, slot);
-      this.uploads.set(texture, upload.file);
-      textures[slot] = texture;
+      textures[slot] = this.upload(upload.image, upload.file, material, slot, upload.transform);
     }
     return { values: edit.values, textures };
+  }
+
+  private upload(image: ImageBitmap, file: Blob, material: OpenPBRMaterial, slot: TextureKey, transform?: TextureTransform) {
+    const texture = createTexture(image, material, slot);
+    if (transform) {
+      texture.uvScale = [...transform.uvScale];
+      texture.uvOffset = [0, 0];
+      texture.flipY = transform.flipY;
+      this.transforms.set(texture, transform);
+    }
+    this.uploads.set(texture, file);
+    return texture;
   }
 
   /** Refreshes the published selection and schedules saving. */
@@ -301,7 +313,7 @@ export class MaterialEditor {
       const textures: StoredEdit['textures'] = [];
       for (const [slot, texture] of Object.entries(changes.textures) as [TextureKey, Texture | null][]) {
         const file = texture ? this.uploads.get(texture) : null;
-        if (file !== undefined) textures.push({ slot, file });
+        if (file !== undefined) textures.push({ slot, file, transform: texture ? this.transforms.get(texture) : undefined });
       }
       materials.push({ index: entry.index, name: this.order.get(materialId)?.name ?? '', values: changes.values, textures });
     }
@@ -309,7 +321,8 @@ export class MaterialEditor {
     for (const [index, edit] of this.pending) {
       materials.push({
         index, name: edit.name, values: edit.values,
-        textures: Object.entries(edit.textures).map(([slot, upload]) => ({ slot: slot as TextureKey, file: upload?.file ?? null }))
+        textures: Object.entries(edit.textures).map(([slot, upload]) =>
+          ({ slot: slot as TextureKey, file: upload?.file ?? null, transform: upload?.transform }))
       });
     }
     return saveMaterialEdits({ modelId: this.modelId, materials });
