@@ -328,5 +328,32 @@ export const PUBLIC_MODEL_PRESETS = [
       "fov": 35,
       "space": "grounded"
     }
+  },
+  {
+    "id": "standard-shader-ball",
+    "name": "Standard Shader Ball",
+    "tag": "Glass / transmission",
+    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/standard-shader-ball/model.glb",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/standard-shader-ball/thumbnail.webp",
+    "license": "CC-BY 4.0",
+    "credit": "Chris Rydalch",
+    "sourceUrl": "https://github.com/usd-wg/assets/tree/main/full_assets/StandardShaderBall",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/standard-shader-ball/attribution.json",
+    "sizeMB": 0.7,
+    "camera": {
+      "position": [
+        2.62,
+        13.75,
+        14.86
+      ],
+      "target": [
+        0,
+        5,
+        0
+      ],
+      "fov": 35,
+      "space": "grounded"
+    }
   }
 ] satisfies ModelPreset[];
