@@ -24,6 +24,7 @@ const editMode = new URL(location.href).searchParams.get('edits') === '1';
 const save = async (path, body) => { const r = await fetch('/save/' + path, { method: 'POST', body }); if (!r.ok)
     throw Error(await r.text()); };
 async function web(key, round) {
+    const thermal = await (await fetch('/thermal')).json();
     let lastScene;
     const raw = await (await fetch('/input/' + key)).arrayBuffer(), bytes = new Uint8Array(raw), commits = [], pipelineCalls = [];
     const { width, height, flags } = await referenceScene(bytes, 'unused');
@@ -112,8 +113,8 @@ async function web(key, round) {
         commits.push(await commit());
     }
     const firstMs = await run(), warm = [];
-    for (let i = 0; i < 12; i++) {
-        pre.textContent = progress + ` render ${i + 1}/12`;
+    for (let i = 0; i < 6; i++) {
+        pre.textContent = progress + ` render ${i + 1}/6`;
         warm.push(await run());
     }
     const folder = `${round}-${key}-web`;
@@ -129,13 +130,13 @@ async function web(key, round) {
         buffer.destroy();
         await save(folder + '/' + kind + '.bin', image);
     }
-    const info = { key, round, width, height, samples: 64, seed: 12345, rawAccumulation: true, preparationCalls, commits, initialMs, firstMs, warm, pipelineCalls, userAgent: navigator.userAgent, backend: engine.backend, workerCount: engine.bvhWorkerCount, bvh: engine._lastBvhBuild, jsHeapBytes: performance.memory?.usedJSHeapSize };
+    const info = { key, round, thermal, discardRender: 1, discardCommit: 2, width, height, samples: 64, seed: 12345, rawAccumulation: true, preparationCalls, commits, initialMs, firstMs, warm, pipelineCalls, userAgent: navigator.userAgent, backend: engine.backend, workerCount: engine.bvhWorkerCount, bvh: engine._lastBvhBuild, jsHeapBytes: performance.memory?.usedJSHeapSize };
     await save(folder + '/info.json', JSON.stringify(info));
     engine.dispose();
 }
 try {
-    const cases = await (await fetch('/cases')).json(), jobs = [];
-    for (let round = 0; round < 3; round++)
+    const cases = await (await fetch('/cases')).json(), {rounds} = await (await fetch('/config')).json(), jobs = [];
+    for (let round = 0; round < rounds; round++)
         for (const { key } of cases)
             for (const backend of (round % 2 ? ['hardware', 'software', 'web'] : ['web', 'software', 'hardware']))
                 jobs.push({ key, round, backend });

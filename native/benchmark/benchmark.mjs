@@ -10,11 +10,27 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const args = process.argv.slice(2), option = name => args[args.indexOf(name) + 1];
 if (!args.includes('--output') || !args.includes('--manifest') || !args.includes('--library'))
     throw Error('Usage: node native/benchmark/benchmark.mjs --output DIRECTORY --manifest INPUTS.json --library LIBRARY [--port 4201]');
+const rounds = args.includes('--rounds') ? Number(option('--rounds')) : 1;
+if (![1, 3].includes(rounds)) throw Error('Rounds must be 1 or 3');
 const dir = resolve(option('--output')), manifest = resolve(option('--manifest')), librarySource = resolve(option('--library'));
 if (dir === root || dir.startsWith(root + '/'))
     throw Error('Benchmark evidence must be outside the repository');
 const cases = JSON.parse(readFileSync(manifest));
 mkdirSync(dir, { recursive: true });
+const thermalHelper = process.platform === 'darwin' ? resolve(dir, 'thermal-state') : null;
+if (thermalHelper) execFileSync('xcrun', ['swiftc', resolve(root, 'native/benchmark/thermal.swift'), '-o', thermalHelper]);
+const thermalReadings = async () => {
+    const readings = [];
+    if (!thermalHelper) return { state: null, readings, unavailable: 'ProcessInfo thermalState requires macOS' };
+    let state;
+    do {
+        state = Number(execFileSync(thermalHelper, { encoding: 'utf8' }).trim());
+        if (!Number.isInteger(state) || state < 0 || state > 3) throw Error('Invalid ProcessInfo thermalState');
+        readings.push({ at: new Date().toISOString(), state });
+        if (state !== 0) await new Promise(resolve => setTimeout(resolve, 1000));
+    } while (state !== 0);
+    return { state, readings };
+};
 const library = resolve(dir, basename(librarySource));
 if (library !== librarySource) copyFileSync(librarySource, library);
 const nativeClient = resolve(dir, 'native-client.py');
@@ -30,7 +46,7 @@ for (const row of cases) {
 const configuredManifest = resolve(dir, 'inputs.json');
 copyFileSync(fileURLToPath(import.meta.url),resolve(dir,'server-source.mjs'));
 writeFileSync(configuredManifest, JSON.stringify(cases, null, 2));
-writeFileSync(resolve(dir, 'run.json'), JSON.stringify({ commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), node: process.version, library, librarySha256: createHash('sha256').update(readFileSync(library)).digest('hex'), sourceDirty: execFileSync('git',['status','--porcelain'],{cwd:root,encoding:'utf8'}).trim()!=='', gpuTimestamps: process.env.MUTRACER_NATIVE_GPU_TIMESTAMPS==='1', manifest, rounds: 3, iterations: 12, discard: 2, samples: 64, seed: 12345, batch: 8, webWorkers: 8 }, null, 2));
+writeFileSync(resolve(dir, 'run.json'), JSON.stringify({ commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), node: process.version, library, librarySha256: createHash('sha256').update(readFileSync(library)).digest('hex'), sourceDirty: execFileSync('git',['status','--porcelain'],{cwd:root,encoding:'utf8'}).trim()!=='', gpuTimestamps: 'hardware-only', manifest, rounds, commitIterations: 12, commitDiscard: 2, renderIterations: {web: 6, hardware: 6, software: 1}, renderDiscard: 1, profileIterations: 2, samples: 64, seed: 12345, batch: 8, webWorkers: 8 }, null, 2));
 const modules = ['scene/Geometry', 'scene/Mesh', 'scene/OpenPBRMaterial', 'scene/Texture', 'scene/Camera', 'scene/RectLight', 'scene/SphereLight', 'scene/DirectionalLight', 'scene/SpotLight', 'renderer/WGPURayTracePass', 'scene/EnvironmentLight', 'scene/InstancedMesh', 'scene/IESProfile'];
 let reference = readFileSync(root + '/native/scene-reference.mjs', 'utf8');
 reference = reference.replace(/^import .*from 'node:[^']+';\n/gm, '').replace(/^import .*capture-device.*\n/m, '').replace(/^const materialProperties =.*$/m, 'const materialProperties = ' + readFileSync(root + '/native/material-properties.json', 'utf8') + ';');
@@ -49,6 +65,12 @@ import { spawn } from 'node:child_process';
 createServer(async (req, res) => {
     try {
         const url = new URL(req.url, 'http://127.0.0.1');
+        if (url.pathname === '/config') {
+            res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({rounds})); return;
+        }
+        if (url.pathname === '/thermal') {
+            res.setHeader('content-type', 'application/json'); res.end(JSON.stringify(await thermalReadings())); return;
+        }
         if (url.pathname === '/cases') {
             res.setHeader('content-type', 'application/json');
             res.end(JSON.stringify(cases));
@@ -62,7 +84,7 @@ createServer(async (req, res) => {
             if (!cases.some(c => c.key === job.key) || ![0, 1].includes(job.mode) || ![0, 1, 2].includes(job.round))
                 throw Error('Invalid job');
             const log = dir + `/${job.edits ? 'edits-' : ''}native-${job.round}-${job.key}-${job.mode}.log`;
-            const child = spawn('python3', [nativeClient, dir, job.key, String(job.mode), String(job.round), '--library', library, '--manifest', configuredManifest, ...(job.edits ? ['--edits'] : [])], { env: { ...process.env, MUTRACER_NATIVE_PROFILE: '1' } });
+            const child = spawn('python3', [nativeClient, dir, job.key, String(job.mode), String(job.round), '--library', library, '--manifest', configuredManifest, ...(thermalHelper ? ['--thermal-helper', thermalHelper] : []), ...(job.edits ? ['--edits'] : [])], { env: { ...process.env, MUTRACER_NATIVE_PROFILE: '1', MUTRACER_NATIVE_GPU_TIMESTAMPS: job.mode === 1 ? '1' : '0' } });
             const logs = [];
             child.stdout.on('data', c => logs.push(c));
             child.stderr.on('data', c => logs.push(c));
