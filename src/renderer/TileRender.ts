@@ -241,6 +241,10 @@ export function makeTileRenderWithPredict() {
   let numTiles = 1;
   let currentTile = -1;
   let lastTraceTime = -1;
+  // Several offline samples can be submitted before a timing callback runs.
+  // Consume each measurement once so stale feedback cannot repeatedly shrink tiles.
+  let timingRevision = 0;
+  let appliedTimingRevision = -1;
   let lastFrameTotalTraceTime = 0;
   let lastFrameTraceTimeValidCount = 0;
   let tilePixels = [64, 64];
@@ -268,7 +272,8 @@ export function makeTileRenderWithPredict() {
       currentTile = 0;
     }
 
-    if (currentTile === 0) {
+    if (currentTile === 0 && timingRevision !== appliedTimingRevision) {
+      appliedTimingRevision = timingRevision;
       const result = getPredictResult(
         width,
         height,
@@ -315,21 +320,26 @@ export function makeTileRenderWithPredict() {
       currentTile = -1;
     },
     setSize(w: number, h: number) {
+      if (width !== w || height !== h) timingRevision++;
       width = w;
       height = h;
     },
     setMaxTiles(maxTiles: number) {
+      if (maxNumTiles !== maxTiles) timingRevision++;
       maxNumTiles = maxTiles;
     },
     setDesiredMsPerTile(time: number) {
+      if (expectFrameTime !== time) timingRevision++;
       expectFrameTime = time;
     },
     needsUpdatePredicting() {
+      timingRevision++;
       lastTraceTime = -1;
       lastFrameTotalTraceTime = 0;
       lastFrameTraceTimeValidCount = 0;
     },
     setLastTraceTime(time: number) {
+      timingRevision++;
       lastTraceTime = time;
       lastFrameTraceTimeValidCount++;
       lastFrameTotalTraceTime += time;

@@ -84,4 +84,73 @@ describe('predictive tile rendering', () => {
     }
     expect(renderers[0].nextTile()).toEqual(renderers[1].nextTile());
   });
+
+  function completeSample(tiles: ReturnType<typeof makeTileRenderWithPredict>) {
+    const first = tiles.nextTile();
+    const count = first.columns * first.rows;
+    expect(count).toBeLessThan(100000);
+    for (let i = 1; i < count; i++) {
+      const tile = tiles.nextTile();
+      expect([tile.columns, tile.rows]).toEqual([first.columns, first.rows]);
+      expect(tile.isLastTile).toBe(i === count - 1);
+    }
+    return first;
+  }
+
+  function warmedPredictor() {
+    const tiles = makeTileRenderWithPredict();
+    tiles.setSize(1920, 1080);
+    tiles.setDesiredMsPerTile(21);
+    completeSample(tiles);
+    for (let i = 0; i < 3; i++) {
+      tiles.setLastTraceTime(5);
+      completeSample(tiles);
+    }
+    return tiles;
+  }
+
+  it('keeps a batch grid stable until another GPU measurement arrives', () => {
+    const tiles = warmedPredictor();
+    tiles.setLastTraceTime(200);
+    const first = completeSample(tiles);
+    for (let sample = 1; sample < 8; sample++) {
+      // Restoring unchanged target settings must not replay old feedback.
+      tiles.setSize(1920, 1080);
+      tiles.setDesiredMsPerTile(21);
+      tiles.setMaxTiles(Infinity);
+      const next = completeSample(tiles);
+      expect([next.columns, next.rows]).toEqual([first.columns, first.rows]);
+    }
+    tiles.setLastTraceTime(200);
+    const measured = completeSample(tiles);
+    expect(measured.columns * measured.rows).toBeGreaterThan(first.columns * first.rows);
+  });
+
+  it('retains a valid grid across accumulation resets without new timings', () => {
+    const tiles = warmedPredictor();
+    tiles.setLastTraceTime(200);
+    const first = completeSample(tiles);
+    for (let reset = 0; reset < 3; reset++) {
+      tiles.reset();
+      const next = completeSample(tiles);
+      expect([next.columns, next.rows]).toEqual([first.columns, first.rows]);
+    }
+  });
+
+  it('recomputes the grid when size or execution limits change', () => {
+    const tiles = warmedPredictor();
+    tiles.setLastTraceTime(200);
+    completeSample(tiles);
+    tiles.setMaxTiles(1);
+    expect(completeSample(tiles).columns).toBe(1);
+    tiles.setSize(1280, 720);
+    tiles.reset();
+    const resized = completeSample(tiles);
+    expect([resized.tileWidth, resized.tileHeight]).toEqual([1280, 720]);
+    tiles.setMaxTiles(Infinity);
+    tiles.setDesiredMsPerTile(1);
+    const budget = completeSample(tiles);
+    expect(budget.columns * budget.rows).toBeGreaterThan(1);
+  });
+
 });
