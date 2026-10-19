@@ -20,8 +20,8 @@ fn bounds(origin: Vec3, direction: Vec3, min: Vec3, max: Vec3, nearest: f32) -> 
 }
 impl Model {
     pub fn pick(&self, camera: &Camera, uv: [f32; 2], aspect: f32) -> Option<usize> {
-        let origin = camera.eye();
-        let forward = (camera.target - origin).normalize();
+        let eye = camera.eye();
+        let forward = (camera.target - eye).normalize();
         let right = forward.cross(Vec3::Y).normalize();
         let up = right.cross(forward);
         let half = (camera.fov.to_radians() * 0.5).tan();
@@ -29,6 +29,7 @@ impl Model {
             + right * ((uv[0] * 2. - 1.) * aspect * half)
             + up * ((1. - uv[1] * 2.) * half))
             .normalize();
+        let origin = eye + direction * (camera.radius * 0.0001);
         let mut nearest = f32::INFINITY;
         let mut selected = None;
         for (id, mesh) in self.meshes.iter().enumerate() {
@@ -39,36 +40,28 @@ impl Model {
             if !bounds(o, d, g.min, g.max, nearest) {
                 continue;
             }
-            for tri in g.indices.chunks_exact(3) {
-                let vertex =
-                    |i: u32| Vec3::from_slice(&g.positions[i as usize * 3..i as usize * 3 + 3]);
-                let a = vertex(tri[0]);
-                let e1 = vertex(tri[1]) - a;
-                let e2 = vertex(tri[2]) - a;
-                let p = d.cross(e2);
-                let det = e1.dot(p);
-                if det.abs() < 1e-20 {
-                    continue;
-                }
-                let inv = 1. / det;
-                let s = o - a;
-                let u = s.dot(p) * inv;
-                if !(0. ..=1.).contains(&u) {
-                    continue;
-                }
-                let q = s.cross(e1);
-                let v = d.dot(q) * inv;
-                if v < 0. || u + v > 1. {
-                    continue;
-                }
-                let distance = e2.dot(q) * inv;
-                if distance > camera.radius * 0.0001 && distance < nearest {
-                    nearest = distance;
-                    selected = Some(id);
-                }
+            if let Some(distance) =
+                self.picking
+                    .get(mesh.geometry)?
+                    .intersect(o.to_array(), d.to_array(), nearest)
+            {
+                nearest = distance;
+                selected = Some(id);
             }
         }
         selected
+    }
+    pub fn rebuild_picking(&mut self) -> anyhow::Result<()> {
+        self.picking = std::sync::Arc::new(
+            self.geometries
+                .iter()
+                .map(|g| {
+                    mutracer_native_probe::picking::PickBvh::new(&g.positions, &g.indices)
+                        .map_err(anyhow::Error::msg)
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?,
+        );
+        Ok(())
     }
     pub fn refresh_bounds(&mut self) {
         let mut min = Vec3::splat(f32::INFINITY);
@@ -117,7 +110,9 @@ mod tests {
             tangents: vec![],
             min: Vec3::new(-1., -1., 0.),
             max: Vec3::new(1., 1., 0.),
-        }];
+        }]
+        .into();
+        model.rebuild_picking().unwrap();
         model.meshes = [0., 1.]
             .map(|z| Mesh {
                 name: format!("{z}"),
@@ -138,5 +133,94 @@ mod tests {
             Vec3::new(0., 0., 1.),
         );
         assert_eq!(model.pick(&camera, [0.5, 0.5], 1.5), Some(1));
+    }
+}
+
+#[cfg(test)]
+mod transformed_tests {
+    use super::*;
+    #[test]
+    fn bvh_matches_world_triangle_oracle_under_mirrors_and_nonuniform_scales() {
+        let mut model = Model::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sample.glb"),
+        )
+        .unwrap();
+        let vertices = [
+            Vec3::new(-1., -1., 0.),
+            Vec3::new(1., -1., 0.),
+            Vec3::new(0., 1., 0.),
+        ];
+        model.geometries = vec![crate::scene::Geometry {
+            positions: vertices.iter().flat_map(|v| v.to_array()).collect(),
+            indices: vec![0, 1, 2],
+            normals: vec![],
+            uv: [vec![], vec![]],
+            colors: vec![],
+            tangents: vec![],
+            min: Vec3::new(-1., -1., 0.),
+            max: Vec3::new(1., 1., 0.),
+        }]
+        .into();
+        model.meshes = [
+            (-0.4, 0.5, Vec3::new(-1.4, 0.5, 2.)),
+            (0.3, -0.5, Vec3::new(0.7, 1.8, 0.3)),
+        ]
+        .into_iter()
+        .map(|(x, z, scale)| crate::scene::Mesh {
+            name: String::new(),
+            geometry: 0,
+            material: 0,
+            transform: glam::Mat4::from_scale_rotation_translation(
+                scale,
+                glam::Quat::IDENTITY,
+                Vec3::new(x, 0., z),
+            ),
+        })
+        .collect();
+        model.rebuild_picking().unwrap();
+        let mut camera = Camera::fit(Vec3::ZERO, 2.);
+        camera.yaw = 0.;
+        camera.pitch = 0.;
+        for y in 0..21 {
+            for x in 0..21 {
+                let uv = [x as f32 / 20., y as f32 / 20.];
+                let eye = camera.eye();
+                let f = (camera.target - eye).normalize();
+                let r = f.cross(Vec3::Y).normalize();
+                let u = r.cross(f);
+                let half = (camera.fov.to_radians() * 0.5).tan();
+                let d = (f + r * ((uv[0] * 2. - 1.) * half) + u * ((1. - uv[1] * 2.) * half))
+                    .normalize();
+                let mut expected = None;
+                let mut nearest = f32::INFINITY;
+                for (id, mesh) in model.meshes.iter().enumerate() {
+                    let a = mesh.transform.transform_point3(vertices[0]);
+                    let b = mesh.transform.transform_point3(vertices[1]);
+                    let c = mesh.transform.transform_point3(vertices[2]);
+                    let e1 = b - a;
+                    let e2 = c - a;
+                    let p = d.cross(e2);
+                    let det = e1.dot(p);
+                    if det.abs() < 1e-10 {
+                        continue;
+                    }
+                    let s = eye - a;
+                    let q = s.cross(e1);
+                    let u = s.dot(p) / det;
+                    let v = d.dot(q) / det;
+                    let t = e2.dot(q) / det;
+                    if u >= 0.
+                        && v >= 0.
+                        && u + v <= 1.
+                        && t > camera.radius * 0.0001
+                        && t < nearest
+                    {
+                        nearest = t;
+                        expected = Some(id);
+                    }
+                }
+                assert_eq!(model.pick(&camera, uv, 1.), expected, "uv={uv:?}");
+            }
+        }
     }
 }

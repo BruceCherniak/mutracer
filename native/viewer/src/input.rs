@@ -80,19 +80,20 @@ mod tests {
         events: Vec<Event>,
     ) -> Vec<(bool, Vec2)> {
         let mut motion = vec![];
-        let _ = ctx.run(
+        let mut output = ctx.run_ui(
             egui::RawInput {
                 events,
                 ..Default::default()
             },
-            |ctx| {
-                egui::CentralPanel::default().show(ctx, |ui| {
+            |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
                     let rect = Rect::from_min_max(egui::pos2(10., 10.), egui::pos2(300., 300.));
                     let response = ui.interact(rect, ui.id().with("viewport"), egui::Sense::drag());
                     motion = ui.input(|i| drag.motion(rect, response.contains_pointer(), i));
                 });
             },
         );
+        output.textures_delta.clear();
         motion
     }
     fn button(pos: Pos2, button: PointerButton, pressed: bool, shift: bool) -> Event {

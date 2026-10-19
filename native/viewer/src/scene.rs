@@ -5,7 +5,7 @@ use mutracer_native_probe::layout::{
     geometry as g, header as h, light as light_wire, material as mat, mesh as wire_mesh,
     texture as tex,
 };
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, path::Path, sync::Arc};
 
 #[derive(Clone)]
 pub struct Texture {
@@ -57,6 +57,7 @@ impl Material {
         words.into_iter().flat_map(u32::to_le_bytes).collect()
     }
 }
+#[derive(Clone)]
 pub struct Geometry {
     pub min: Vec3,
     pub max: Vec3,
@@ -84,6 +85,7 @@ impl Geometry {
             .collect()
     }
 }
+#[derive(Clone)]
 pub struct Mesh {
     pub name: String,
     pub geometry: usize,
@@ -104,11 +106,13 @@ impl Mesh {
             .collect()
     }
 }
+#[derive(Clone)]
 pub struct Model {
     pub name: String,
     pub materials: Vec<Material>,
-    pub textures: Vec<Texture>,
-    pub geometries: Vec<Geometry>,
+    pub textures: Arc<Vec<Texture>>,
+    pub geometries: Arc<Vec<Geometry>>,
+    pub picking: Arc<Vec<mutracer_native_probe::picking::PickBvh>>,
     pub meshes: Vec<Mesh>,
     pub center: Vec3,
     pub radius: f32,
@@ -150,8 +154,9 @@ impl Model {
                 .to_string_lossy()
                 .into(),
             materials: vec![],
-            textures: vec![],
-            geometries: vec![],
+            textures: Arc::new(vec![]),
+            geometries: Arc::new(vec![]),
+            picking: Arc::new(vec![]),
             meshes: vec![],
             center: Vec3::ZERO,
             radius: 1.,
@@ -347,6 +352,7 @@ impl Model {
         }
         model.warnings.sort();
         model.warnings.dedup();
+        model.rebuild_picking()?;
         Ok(model)
     }
     fn add_map(
@@ -407,7 +413,7 @@ impl Model {
         } else {
             (image.width, image.height, rgba[source].clone())
         };
-        self.textures.push(Texture {
+        Arc::make_mut(&mut self.textures).push(Texture {
             source,
             width,
             height,
@@ -615,7 +621,7 @@ impl Model {
                         geometry.max = geometry.max.max(v);
                     }
                     let index = self.geometries.len();
-                    self.geometries.push(geometry);
+                    Arc::make_mut(&mut self.geometries).push(geometry);
                     cache.insert(key, index);
                     index
                 };
@@ -939,6 +945,7 @@ impl Wire {
         o
     }
 }
+#[derive(Clone)]
 pub struct KeyLight {
     pub enabled: bool,
     pub color: [f32; 3],
@@ -979,12 +986,13 @@ impl KeyLight {
     }
 }
 
+#[derive(Clone)]
 pub struct Environment {
     pub intensity: f32,
     pub color: [f32; 3],
     pub rotation: f32,
     pub background: bool,
-    pub image: Option<image::Rgb32FImage>,
+    pub image: Option<Arc<image::Rgb32FImage>>,
     pub name: String,
 }
 impl Default for Environment {
@@ -1014,7 +1022,7 @@ impl Environment {
                 .all(|p| p.0.iter().all(|v| v.is_finite() && *v >= 0.)),
             "Environment must be finite and nonnegative"
         );
-        self.image = Some(img);
+        self.image = Some(Arc::new(img));
         self.name = path
             .file_name()
             .unwrap_or_default()

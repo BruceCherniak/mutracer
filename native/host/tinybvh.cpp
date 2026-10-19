@@ -52,3 +52,25 @@ extern "C" void mt_native_tiny_parallel_for(uint32_t count,
   if (count == 1) run(0, &work);
   else tinybvh::tinybvh_builtin_parallel_for(count, run, &work, nullptr);
 }
+
+// Picking owns all indexed inputs: TinyBVH keeps pointers into these arrays.
+// Queries only mutate their local Ray, so immutable instances can be shared.
+struct NativePickBvh {
+  std::vector<tinybvh::bvhvec4> vertices;
+  std::vector<uint32_t> indices;
+  tinybvh::BVH bvh;
+  NativePickBvh(const float* p,uint32_t nv,const uint32_t* i,uint32_t ni)
+    : vertices(nv),indices(i,i+ni) {
+    for(uint32_t k=0;k<nv;k++)vertices[k]=tinybvh::bvhvec4(p[k*3],p[k*3+1],p[k*3+2],0);
+    bvh.Build(vertices.data(),indices.data(),ni/3);
+  }
+};
+extern "C" void* mt_native_pick_create(const float* p,uint32_t nv,const uint32_t* i,uint32_t ni) noexcept {
+  try { return new NativePickBvh(p,nv,i,ni); } catch(...) {return nullptr;}
+}
+extern "C" void mt_native_pick_destroy(void* p) noexcept {delete static_cast<NativePickBvh*>(p);}
+extern "C" float mt_native_pick_query(const void* p,const float* o,const float* d,float nearest) noexcept {
+  tinybvh::Ray ray(tinybvh::bvhvec3(o[0],o[1],o[2]),tinybvh::bvhvec3(d[0],d[1],d[2]),nearest);
+  static_cast<const NativePickBvh*>(p)->bvh.Intersect(ray);
+  return ray.hit.t;
+}

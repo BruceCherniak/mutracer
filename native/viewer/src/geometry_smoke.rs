@@ -23,7 +23,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             let positions = model.geometries[gi].positions.clone();
             let normals = model.geometries[gi].normals.clone();
             for step in 0..8 {
-                let geometry = &mut model.geometries[gi];
+                let geometry = &mut std::sync::Arc::make_mut(&mut model.geometries)[gi];
                 geometry.positions.clone_from(&positions);
                 for vertex in geometry.positions.chunks_exact_mut(3) {
                     vertex[1] += model.radius * 0.015 * step as f32 * (vertex[0] + vertex[2]).sin();

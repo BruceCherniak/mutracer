@@ -3,6 +3,7 @@ mod denoise;
 mod geometry_smoke;
 mod import;
 mod input;
+mod metrics;
 mod picking;
 mod renderer;
 mod scene;
@@ -27,7 +28,17 @@ enum Change {
     Scene,
 }
 struct Viewer {
+    metrics: Option<metrics::Metrics>,
     renderer: Renderer,
+    gpu: Option<eframe::egui_wgpu::RenderState>,
+    gpu_display: Option<mutracer_native_probe::display::Display>,
+    gpu_texture: Option<egui::TextureId>,
+    commit: Option<(
+        std::sync::mpsc::Receiver<Result<Option<Renderer>>>,
+        u64,
+        Option<(Model, Camera)>,
+        [u32; 2],
+    )>,
     backend: u32,
     backend_status: String,
     model: Model,
@@ -72,17 +83,40 @@ struct Viewer {
 }
 impl Viewer {
     fn new(path: &Path) -> Result<Self> {
+        Self::new_on_device(path, None)
+    }
+    fn new_on_device(path: &Path, gpu: Option<eframe::egui_wgpu::RenderState>) -> Result<Self> {
         let model = Model::load(path)?;
         let camera = Camera::fit(model.center, model.radius);
-        let mut renderer = Renderer::new()?;
+        let mut renderer = if let Some(gpu) = &gpu {
+            Renderer::on_device(gpu, 1)?
+        } else {
+            Renderer::new()?
+        };
         let environment = Environment::default();
-        let size = [480, 320];
-        renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+        let metrics = metrics::Metrics::from_env();
+        let size = if metrics.is_some() {
+            [1280, 720]
+        } else {
+            [480, 320]
+        };
+        if gpu.is_none() {
+            renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+        }
         let selected = model.meshes[0].material;
         Ok(Self {
+            metrics,
             backend: 1,
-            backend_status: Self::describe_backend(renderer.backend()?),
+            backend_status: if gpu.is_some() {
+                "Preparing scene…".into()
+            } else {
+                Self::describe_backend(renderer.backend()?)
+            },
             renderer,
+            gpu: gpu.clone(),
+            gpu_display: None,
+            gpu_texture: None,
+            commit: None,
             model,
             camera,
             drag: input::ViewportDrag::default(),
@@ -99,7 +133,11 @@ impl Viewer {
             loading_name: String::new(),
             queued_load: None,
             running: true,
-            change: Change::None,
+            change: if gpu.is_some() {
+                Change::Scene
+            } else {
+                Change::None
+            },
             pending_materials: Default::default(),
             pending_camera: false,
             pending_environment: false,
@@ -130,17 +168,6 @@ impl Viewer {
             _ if !reason.is_empty() => format!("Software BVH · {reason}"),
             _ => "Software BVH".into(),
         }
-    }
-    fn commit_scene(&mut self, bytes: &[u8]) -> Result<()> {
-        if self.renderer.mode != self.backend {
-            let mut candidate = Renderer::with_backend(self.backend)?;
-            candidate.commit(bytes)?;
-            self.renderer = candidate;
-        } else {
-            self.renderer.commit(bytes)?;
-        }
-        self.backend_status = Self::describe_backend(self.renderer.backend()?);
-        Ok(())
     }
     fn dirty(&mut self, change: Change) {
         if change == Change::Camera {
@@ -188,7 +215,9 @@ impl Viewer {
         match result {
             Ok(model) => {
                 let camera = Camera::fit(model.center, model.radius);
-                self.candidate = Some((model, camera));
+                if let Some(retired) = self.candidate.replace((model, camera)) {
+                    std::thread::spawn(move || drop(retired));
+                }
                 self.running = true;
                 self.dirty(Change::Scene);
             }
@@ -196,6 +225,64 @@ impl Viewer {
         }
     }
     fn tick(&mut self, ctx: &egui::Context) -> Result<()> {
+        if self.commit.is_some() {
+            let completed = self.commit.as_ref().unwrap().0.try_recv();
+            match completed {
+                Ok(result) => {
+                    let (_, generation, candidate, size) = self.commit.take().unwrap();
+                    match result {
+                        Ok(replacement) => {
+                            if let Some(renderer) = replacement {
+                                let retired = std::mem::replace(&mut self.renderer, renderer);
+                                std::thread::spawn(move || drop(retired));
+                            }
+                            self.renderer.commit_finished();
+                            if let Ok(backend) = self.renderer.backend() {
+                                self.backend_status = Self::describe_backend(backend);
+                            }
+                            if generation == self.generation {
+                                if let Some((model, camera)) = candidate {
+                                    let retired = std::mem::replace(&mut self.model, model);
+                                    std::thread::spawn(move || drop(retired));
+                                    self.camera = camera;
+                                    self.selected = self.model.meshes[0].material;
+                                    self.selected_mesh = None;
+                                }
+                                self.samples = 0;
+                                self.render_generation = generation;
+                                self.render_size = size;
+                            } else {
+                                // Preserve a loaded candidate until the newest snapshot commits.
+                                if self.candidate.is_none() {
+                                    self.candidate = candidate;
+                                } else {
+                                    std::thread::spawn(move || drop(candidate));
+                                }
+                                self.change = Change::Scene;
+                            }
+                        }
+                        Err(error) => {
+                            self.change = Change::None;
+                            return Err(error);
+                        }
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    if self.display_dirty {
+                        if let Some(display) = &self.gpu_display {
+                            display.compose(self.exposure);
+                            self.display_dirty = false;
+                        }
+                    }
+                    ctx.request_repaint_after(Duration::from_millis(16));
+                    return Ok(());
+                }
+                Err(error) => {
+                    self.commit = None;
+                    return Err(error.into());
+                }
+            }
+        }
         if self.change != Change::None || !self.running {
             self.renderer.cancel()?;
         }
@@ -205,7 +292,31 @@ impl Viewer {
         if finished {
             self.samples = self.renderer.samples()?;
             if self.samples > 0 {
-                self.pixels = self.renderer.pixels()?;
+                if self.gpu.is_some() {
+                    let old_size = self.gpu_display.as_ref().map(|d| d.size);
+                    self.renderer.capture(&mut self.gpu_display)?;
+                    if old_size != self.gpu_display.as_ref().map(|d| d.size) {
+                        if let Some(id) = self.gpu_texture.take() {
+                            self.gpu
+                                .as_ref()
+                                .unwrap()
+                                .renderer
+                                .write()
+                                .free_texture(&id);
+                        }
+                    }
+                    if self.gpu_texture.is_none() {
+                        let display = self.gpu_display.as_ref().unwrap();
+                        let gpu = self.gpu.as_ref().unwrap();
+                        self.gpu_texture = Some(gpu.renderer.write().register_native_texture(
+                            &gpu.device,
+                            &display.texture.create_view(&Default::default()),
+                            wgpu::FilterMode::Linear,
+                        ));
+                    }
+                } else {
+                    self.pixels = self.renderer.pixels()?;
+                }
                 self.pixel_size = self.render_size;
                 self.frame_samples = self.samples;
                 self.frame_generation = self.render_generation;
@@ -221,25 +332,31 @@ impl Viewer {
             if !deferred {
                 match self.change {
                     Change::Scene => {
-                        if let Some((model, camera)) = self.candidate.take() {
-                            self.commit_scene(&model.descriptor_with_light(
-                                &camera.bytes(),
-                                self.size,
-                                &self.environment,
-                                &self.light,
-                            ))?;
-                            self.model = model;
-                            self.camera = camera;
-                            self.selected = self.model.meshes[0].material;
-                            self.selected_mesh = None;
-                        } else {
-                            self.commit_scene(&self.model.descriptor_with_light(
-                                &self.camera.bytes(),
-                                self.size,
-                                &self.environment,
-                                &self.light,
-                            ))?;
-                        }
+                        let candidate = self.candidate.take();
+                        let (model, camera) = candidate
+                            .as_ref()
+                            .map(|(m, c)| (m, c))
+                            .unwrap_or((&self.model, &self.camera));
+                        let receive = self.renderer.commit_worker(
+                            self.backend,
+                            model.clone(),
+                            camera.clone(),
+                            self.size,
+                            self.environment.clone(),
+                            self.light.clone(),
+                            ctx.clone(),
+                        );
+                        self.commit = Some((receive, self.generation, candidate, self.size));
+                        self.last_scene_commit = std::time::Instant::now();
+                        self.samples = 0;
+                        self.change = Change::None;
+                        self.pending_materials.clear();
+                        self.pending_transforms.clear();
+                        self.pending_camera = false;
+                        self.pending_environment = false;
+                        self.pending_light = false;
+                        ctx.request_repaint_after(Duration::from_millis(16));
+                        return Ok(());
                     }
                     Change::Material | Change::Environment | Change::Light | Change::Transform => {
                         for &id in &self.pending_materials {
@@ -315,7 +432,7 @@ impl Viewer {
             && !held
             && !self.renderer.busy()
             && self.change == Change::None
-            && !self.pixels.is_empty()
+            && self.frame_samples > 0
             && self.frame_generation == self.generation
             && (self.samples >= self.target
                 || !self.running
@@ -326,6 +443,9 @@ impl Viewer {
                 .denoiser
                 .get_or_insert_with(|| denoise::Worker::new(ctx.clone()));
             if !worker.busy {
+                if self.gpu.is_some() {
+                    self.pixels = self.renderer.pixels()?;
+                }
                 worker.submit(denoise::Request {
                     generation: self.generation,
                     samples: self.samples,
@@ -347,6 +467,19 @@ impl Viewer {
             self.renderer
                 .start((self.target - self.samples).min(if held { 1 } else { 4 }))?;
             self.renderer.poll()?;
+        }
+        if self.display_dirty && self.gpu.is_some() {
+            if let Some(display) = &mut self.gpu_display {
+                if self.denoise && !self.denoised.is_empty() && !display.using_denoised {
+                    display
+                        .upload(&self.denoised)
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                } else if !self.denoise || self.denoised.is_empty() {
+                    display.original();
+                }
+                self.gpu_display.as_ref().unwrap().compose(self.exposure);
+            }
+            self.display_dirty = false;
         }
         if self.display_dirty && !self.pixels.is_empty() {
             let pixels = renderer::display(self.display_pixels(), self.pixel_size, self.exposure);
@@ -382,7 +515,7 @@ impl Viewer {
             i.raw
                 .dropped_files
                 .iter()
-                .filter_map(|f| f.path.clone())
+                .map(|f| f.path().to_owned())
                 .collect::<Vec<_>>()
         });
         if paths.is_empty() {
@@ -397,8 +530,9 @@ impl Viewer {
             self.error="Drop a .gltf or .glb file. Keep external buffers and textures beside the .gltf file.".into();
         }
     }
-    fn panels(&mut self, ctx: &egui::Context) {
-        egui::TopBottomPanel::top("toolbar").show(ctx, |ui| {
+    fn panels(&mut self, root: &mut egui::Ui) {
+        let ctx = root.ctx().clone();
+        egui::Panel::top("toolbar").show(root, |ui| {
             ui.horizontal(|ui| {
                 ui.strong("MuTracer");
                 ui.separator();
@@ -407,7 +541,7 @@ impl Viewer {
                         .add_filter("glTF", &["gltf", "glb"])
                         .pick_file()
                     {
-                        self.load(path, ctx);
+                        self.load(path, &ctx);
                     }
                 }
                 ui.label(
@@ -415,11 +549,11 @@ impl Viewer {
                         .color(egui::Color32::from_rgb(190, 196, 208)),
                 );
                 if ui.small_button("Sample").clicked() {
-                    self.load(default_model(), ctx);
+                    self.load(default_model(), &ctx);
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add_enabled(!self.pixels.is_empty(), egui::Button::new("Save PNG…"))
+                        .add_enabled(self.frame_samples > 0, egui::Button::new("Save PNG…"))
                         .clicked()
                     {
                         if let Some(path) = rfd::FileDialog::new()
@@ -427,12 +561,16 @@ impl Viewer {
                             .add_filter("PNG", &["png"])
                             .save_file()
                         {
-                            if let Err(e) = renderer::save(
-                                &path,
-                                self.display_pixels(),
-                                self.pixel_size,
-                                self.exposure,
-                            ) {
+                            let linear = if let Some(display) = &self.gpu_display {
+                                display
+                                    .read_linear()
+                                    .map_err(|e| anyhow::anyhow!(e.to_string()))
+                            } else {
+                                Ok(self.display_pixels().to_vec())
+                            };
+                            if let Err(e) = linear.and_then(|pixels| {
+                                renderer::save(&path, &pixels, self.pixel_size, self.exposure)
+                            }) {
                                 self.error = e.to_string();
                             }
                         }
@@ -440,12 +578,12 @@ impl Viewer {
                 });
             });
         });
-        egui::SidePanel::right("settings")
+        egui::Panel::right("settings")
             .resizable(true)
-            .default_width(300.)
-            .min_width(270.)
-            .max_width(420.)
-            .show(ctx, |ui| {
+            .default_size(300.)
+            .min_size(270.)
+            .max_size(420.)
+            .show(root, |ui| {
                 egui::ScrollArea::vertical().show(ui, |ui| {
                     ui.add_space(10.);
                     ui.horizontal(|ui| {
@@ -776,7 +914,7 @@ impl Viewer {
                     }
                 });
             });
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+        egui::Panel::bottom("status").show(root, |ui| {
             ui.horizontal(|ui| {
                 if self.loading.is_some() {
                     ui.spinner();
@@ -801,7 +939,7 @@ impl Viewer {
             });
         });
         if !self.error.is_empty() {
-            egui::Window::new("Unable to complete action").collapsible(false).resizable(true).default_width(480.).show(ctx,|ui|{
+            egui::Window::new("Unable to complete action").collapsible(false).resizable(true).default_width(480.).show(&ctx,|ui|{
                 ui.colored_label(egui::Color32::LIGHT_RED,&self.error);
                 ui.small("The previous image is kept. You can open another model or change settings.");
                 if ui.button("Dismiss").clicked(){self.error.clear();}
@@ -809,17 +947,21 @@ impl Viewer {
         }
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::central_panel(&ctx.style()).fill(egui::Color32::from_rgb(18, 20, 24)),
+                egui::Frame::central_panel(&ctx.style_of(egui::Theme::Dark))
+                    .fill(egui::Color32::from_rgb(18, 20, 24)),
             )
-            .show(ctx, |ui| {
+            .show(root, |ui| {
                 let available = ui.available_size();
                 let aspect = self.pixel_size[0] as f32 / self.pixel_size[1] as f32;
                 let width = available.x.min(available.y * aspect);
                 let size = egui::vec2(width, width / aspect);
                 let rect = egui::Rect::from_center_size(ui.max_rect().center(), size);
-                if let Some(texture) = &self.texture {
+                if let Some(texture) = self
+                    .gpu_texture
+                    .or_else(|| self.texture.as_ref().map(|t| t.id()))
+                {
                     ui.painter().image(
-                        texture.id(),
+                        texture,
                         rect,
                         egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
                         egui::Color32::WHITE,
@@ -876,17 +1018,41 @@ impl Viewer {
                     }
                 }
             });
-        if ctx.input(|i| i.key_pressed(egui::Key::F)) && !ctx.wants_keyboard_input() {
+        if ctx.input(|i| i.key_pressed(egui::Key::F)) && !ctx.egui_wants_keyboard_input() {
             self.camera = Camera::fit(self.model.center, self.model.radius);
             self.dirty(Change::Camera);
         }
     }
 }
 impl eframe::App for Viewer {
-    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.receive_model(ctx);
-        self.input_files(ctx);
-        self.panels(ctx);
+    fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = root.ctx().clone();
+        let frame_started = std::time::Instant::now();
+        let during_commit = self.commit.is_some();
+        let mut pick_ms = 0.;
+        if self.metrics.is_some() {
+            self.denoise = false;
+            self.target = 8;
+            let m = self.metrics.as_mut().unwrap();
+            if self.commit.is_none()
+                && self.frame_samples > 0
+                && m.commits < 3
+                && m.frames.len() >= (m.commits as usize + 1) * 70
+            {
+                m.commits += 1;
+                self.environment.color[0] = 1. - m.commits as f32 * 0.01;
+                self.dirty(Change::Scene);
+            } else if self.commit.is_none() && self.frame_samples > 0 && m.frames.len() % 3 == 0 {
+                self.camera.yaw += 0.01;
+                self.dirty(Change::Camera);
+            }
+            let started = std::time::Instant::now();
+            let _ = self.model.pick(&self.camera, [0.5, 0.5], 1280. / 720.);
+            pick_ms = started.elapsed().as_secs_f64() * 1000.;
+        }
+        self.receive_model(&ctx);
+        self.input_files(&ctx);
+        self.panels(root);
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) {
             let painter = ctx.layer_painter(egui::LayerId::new(
                 egui::Order::Foreground,
@@ -908,18 +1074,51 @@ impl eframe::App for Viewer {
                 egui::Color32::WHITE,
             );
         }
-        if let Err(e) = self.tick(ctx) {
-            self.error = format!("Render stopped: {e:#}");
-            self.running = false;
-            self.backend = self.renderer.mode;
-            self.change = Change::None;
+        if let Err(e) = self.tick(&ctx) {
+            if e.to_string().contains("Context registry is active") {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            } else {
+                self.error = format!("Render stopped: {e:#}");
+                self.running = false;
+                self.backend = self.renderer.mode;
+                self.change = Change::None;
+            }
         }
+
         // Input can arrive after tick, including the final event of a short drag.
         // Ensure camera changes are committed even when accumulation was idle.
         if self.change != Change::None {
             ctx.request_repaint();
         }
+        if let Some(metrics) = &mut self.metrics {
+            let done = metrics.record(
+                frame_started.elapsed().as_secs_f64() * 1000.,
+                during_commit || self.commit.is_some(),
+                pick_ms,
+                self.gpu_texture.is_some(),
+                self.pixels.is_empty(),
+                &self.error,
+            );
+            if done {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            } else {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
+        }
     }
+}
+fn dropped_file(path: PathBuf) -> egui::DroppedFileHandle {
+    #[derive(Debug)]
+    struct File(PathBuf);
+    impl egui::DroppedFile for File {
+        fn path(&self) -> &Path {
+            &self.0
+        }
+        fn bytes(&self) -> std::result::Result<Vec<u8>, String> {
+            std::fs::read(&self.0).map_err(|e| e.to_string())
+        }
+    }
+    std::sync::Arc::new(File(path))
 }
 fn default_model() -> PathBuf {
     if let Ok(exe) = std::env::current_exe() {
@@ -1125,7 +1324,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    let _ = ctx.run(
+    let mut output = ctx.run_ui(
         egui::RawInput {
             events: vec![egui::Event::PointerButton {
                 pos: egui::pos2(700., 400.),
@@ -1137,6 +1336,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         },
         |_| {},
     );
+    output.textures_delta.clear();
     ensure!(
         frames >= 3 && last != before,
         "Continuous input starved preview rendering: {frames} updates"
@@ -1228,16 +1428,14 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     viewer.denoise = false;
     let old = viewer.pixels.clone();
     let old_name = viewer.model.name.clone();
-    let _ = ctx.run(
+    let mut output = ctx.run_ui(
         egui::RawInput {
-            dropped_files: vec![egui::DroppedFile {
-                path: Some(path.to_path_buf()),
-                ..Default::default()
-            }],
+            dropped_files: vec![dropped_file(path.to_path_buf())],
             ..Default::default()
         },
-        |ctx| viewer.input_files(ctx),
+        |ui| viewer.input_files(ui.ctx()),
     );
+    output.textures_delta.clear();
     ensure!(
         viewer.loading.is_some() && viewer.pixels == old,
         "Drop did not retain preview while loading"
@@ -1260,16 +1458,14 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         viewer.model.name == old_name && !viewer.pixels.is_empty(),
         "Dropped model did not replace scene"
     );
-    let _ = ctx.run(
+    let mut output = ctx.run_ui(
         egui::RawInput {
-            dropped_files: vec![egui::DroppedFile {
-                path: Some(PathBuf::from("texture.png")),
-                ..Default::default()
-            }],
+            dropped_files: vec![dropped_file(PathBuf::from("texture.png"))],
             ..Default::default()
         },
-        |ctx| viewer.input_files(ctx),
+        |ui| viewer.input_files(ui.ctx()),
     );
+    output.textures_delta.clear();
     ensure!(
         !viewer.error.is_empty() && viewer.model.name == old_name,
         "Invalid drop was not rejected transactionally"
@@ -1280,7 +1476,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     let id = viewer.model.meshes[0].material;
     let mut previews = 0;
     let mut previous = viewer.pixels.clone();
-    let _ = ctx.run(
+    let mut output = ctx.run_ui(
         egui::RawInput {
             events: vec![egui::Event::PointerButton {
                 pos: egui::pos2(700., 400.),
@@ -1292,6 +1488,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         },
         |_| {},
     );
+    output.textures_delta.clear();
     viewer.light.enabled = true;
     viewer.dirty(Change::Scene);
     while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
@@ -1337,7 +1534,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    let _ = ctx.run(
+    let mut output = ctx.run_ui(
         egui::RawInput {
             events: vec![egui::Event::PointerButton {
                 pos: egui::pos2(700., 400.),
@@ -1349,6 +1546,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         },
         |_| {},
     );
+    output.textures_delta.clear();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
     {
@@ -1578,9 +1776,11 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
         if mode == 1 {
             // Different dimensions require a full commit. Subsequent HDR edits
             // use the same partial path as the procedural studio environment.
-            environment.image = Some(image::Rgb32FImage::from_fn(16, 8, |x, y| {
-                image::Rgb([0.1 + x as f32 * 0.2, 0.2 + y as f32 * 0.3, 0.5])
-            }));
+            environment.image = Some(std::sync::Arc::new(image::Rgb32FImage::from_fn(
+                16,
+                8,
+                |x, y| image::Rgb([0.1 + x as f32 * 0.2, 0.2 + y as f32 * 0.3, 0.5]),
+            )));
             ensure!(
                 !renderer.environment(&environment.update_bytes())?,
                 "Map resize accepted partial update"
@@ -1927,13 +2127,29 @@ fn main() -> Result<()> {
     if let Some(out) = smoke_out {
         return smoke(&model, &out);
     }
-    let viewer = Viewer::new(&model)?;
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_drag_and_drop(true)
             .with_inner_size([1200., 800.])
             .with_min_inner_size([800., 560.]),
-        renderer: eframe::Renderer::Glow,
+        renderer: eframe::Renderer::Wgpu,
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            wgpu_setup: eframe::egui_wgpu::WgpuSetup::CreateNew(
+                eframe::egui_wgpu::WgpuSetupCreateNew {
+                    device_descriptor: std::sync::Arc::new(|adapter| wgpu::DeviceDescriptor {
+                        label: Some("MuTracer and egui"),
+                        required_limits: adapter.limits(),
+                        required_features: adapter.features()
+                            & wgpu::Features::EXPERIMENTAL_RAY_QUERY,
+                        experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
+                        ..Default::default()
+                    }),
+                    ..eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle()
+                },
+            ),
+            ..Default::default()
+        },
         ..Default::default()
     };
     eframe::run_native(
@@ -1944,12 +2160,15 @@ fn main() -> Result<()> {
             visuals.panel_fill = egui::Color32::from_rgb(27, 30, 36);
             visuals.selection.bg_fill = egui::Color32::from_rgb(44, 91, 140);
             cc.egui_ctx.set_visuals(visuals);
-            cc.egui_ctx.style_mut(|style| {
+            cc.egui_ctx.style_mut_of(egui::Theme::Dark, |style| {
                 style.spacing.item_spacing = egui::vec2(10., 10.);
                 style.spacing.button_padding = egui::vec2(10., 6.);
                 style.spacing.slider_width = 150.;
             });
-            Ok(Box::new(viewer))
+            Ok(Box::new(Viewer::new_on_device(
+                &model,
+                cc.wgpu_render_state.clone(),
+            )?))
         }),
     )
     .map_err(|e| anyhow::anyhow!(e.to_string()))

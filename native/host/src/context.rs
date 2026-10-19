@@ -207,6 +207,78 @@ pub unsafe extern "C" fn mt_context_create(
     unsafe { mt_context_create_with_backend(1, output, error, capacity) }
 }
 /// Backend 0=software, 1=HWRT with reported software fallback.
+/// Rust embedding bridge: presentation and tracing share the caller's device.
+/// Request the adapter limits and optional ray-query feature when creating it.
+pub fn create_on_device(
+    adapter: &wgpu::Adapter,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    backend: u32,
+) -> std::result::Result<u64, String> {
+    if backend > 1 {
+        return Err("Unknown native intersection backend".into());
+    }
+    let gpu = GpuDevice {
+        device: device.clone(),
+        queue: queue.clone(),
+        info: adapter.get_info(),
+        hardware_ray_query: device
+            .features()
+            .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY),
+        pipelines: Arc::new(Mutex::new(HashMap::new())),
+        pipeline_cache: None,
+    };
+    let mut slot = REGISTRY.lock().map_err(|_| "Context registry poisoned")?;
+    let registry = slot.get_or_insert_with(|| Registry {
+        next: 1,
+        contexts: HashMap::new(),
+    });
+    let handle = registry.next;
+    registry.next = handle.checked_add(1).ok_or("Context handles exhausted")?;
+    registry.contexts.insert(
+        handle,
+        Context {
+            gpu,
+            backend,
+            render_seed: 12345,
+            render_bounces: 6.,
+            fallback_reason: String::new(),
+            scene: None,
+            spare_buffers: HashMap::new(),
+            spare_hardware: HashMap::new(),
+            failed: false,
+            job: None,
+            commit: None,
+        },
+    );
+    Ok(handle)
+}
+/// Capture the last completed accumulation without a CPU image readback.
+/// A busy publication returns false so the UI can retain its stable old frame.
+pub fn capture_display(
+    handle: u64,
+    display: &mut Option<crate::display::Display>,
+) -> std::result::Result<bool, String> {
+    let Ok(mut slot) = REGISTRY.try_lock() else {
+        return Ok(false);
+    };
+    let registry = slot.as_mut().ok_or("No context registry")?;
+    let state = context(registry, handle).map_err(|e| e.to_string())?;
+    let scene = ready(state).map_err(|e| e.to_string())?;
+    if scene.samples == 0 {
+        return Ok(false);
+    }
+    let size = [scene.scene.width, scene.scene.height];
+    if display.as_ref().is_none_or(|d| d.size != size) {
+        *display = Some(crate::display::Display::new(scene.gpu.clone(), size));
+    }
+    display
+        .as_mut()
+        .unwrap()
+        .capture(&scene.buffers[&scene.scene.color_output], scene.samples);
+    Ok(true)
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_create_with_backend(
     backend: u32,
@@ -1367,6 +1439,56 @@ mod tests {
                 .contexts
                 .contains_key(&handle)
         );
+    }
+    #[test]
+    fn shared_device_preview_survives_reset_and_context_destruction() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
+            return;
+        };
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            required_limits: adapter.limits(),
+            ..Default::default()
+        }))
+        .unwrap();
+        let handle = create_on_device(&adapter, &device, &queue, 0).unwrap();
+        let mut input = scene::tests::input();
+        input[118 * 4..119 * 4].copy_from_slice(&3f32.to_le_bytes());
+        let mut error = [0i8; 4096];
+        unsafe {
+            assert_eq!(
+                mt_context_commit(
+                    handle,
+                    input.as_ptr(),
+                    input.len(),
+                    error.as_mut_ptr(),
+                    error.len()
+                ),
+                0
+            );
+            assert_eq!(
+                mt_context_render(handle, 3, error.as_mut_ptr(), error.len()),
+                0
+            );
+        }
+        let mut display = None;
+        assert!(capture_display(handle, &mut display).unwrap());
+        let display = display.unwrap();
+        let before = display.read_linear().unwrap();
+        assert_eq!(before.len(), 8 * 8 * 4);
+        unsafe {
+            assert_eq!(mt_context_reset(handle, error.as_mut_ptr(), error.len()), 0);
+        }
+        assert_eq!(display.read_linear().unwrap(), before);
+        unsafe {
+            assert_eq!(
+                mt_context_destroy(handle, error.as_mut_ptr(), error.len()),
+                0
+            );
+        }
+        display.compose(0.);
+        assert_eq!(display.read_linear().unwrap(), before);
     }
     #[test]
     fn changed_blas_and_tlas_are_ready_after_interleaved_retained_edits() {

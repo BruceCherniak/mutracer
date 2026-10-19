@@ -1,12 +1,10 @@
-//! Thin owner-thread client of the same experimental native ABI used by C examples.
+//! Native ABI client; complete scene preparation can run on a background worker.
 use anyhow::{Result, bail, ensure};
 use glam::{Mat4, Vec3};
 use mutracer_native_probe::context as native;
 use mutracer_native_probe::layout::camera as camera_wire;
 use std::{
     ffi::CStr,
-    marker::PhantomData,
-    rc::Rc,
     time::{Duration, Instant},
 };
 
@@ -14,7 +12,7 @@ pub struct Renderer {
     handle: u64,
     pub mode: u32,
     job: Option<u64>,
-    _owner: PhantomData<Rc<()>>,
+    pub shared: Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue)>,
 }
 fn check(operation: impl FnOnce(*mut i8, usize) -> i32) -> Result<()> {
     let mut error = [0i8; 4096];
@@ -38,8 +36,78 @@ impl Renderer {
             handle,
             mode,
             job: None,
-            _owner: PhantomData,
+            shared: None,
         })
+    }
+    pub fn on_device(state: &eframe::egui_wgpu::RenderState, mode: u32) -> Result<Self> {
+        let handle = native::create_on_device(&state.adapter, &state.device, &state.queue, mode)
+            .map_err(anyhow::Error::msg)?;
+        Ok(Self {
+            handle,
+            mode,
+            job: None,
+            shared: Some((
+                state.adapter.clone(),
+                state.device.clone(),
+                state.queue.clone(),
+            )),
+        })
+    }
+    pub fn capture(
+        &self,
+        display: &mut Option<mutracer_native_probe::display::Display>,
+    ) -> Result<bool> {
+        native::capture_display(self.handle, display).map_err(anyhow::Error::msg)
+    }
+    pub fn commit_worker(
+        &self,
+        mode: u32,
+        model: crate::scene::Model,
+        camera: Camera,
+        size: [u32; 2],
+        environment: crate::scene::Environment,
+        light: crate::scene::KeyLight,
+        ctx: eframe::egui::Context,
+    ) -> std::sync::mpsc::Receiver<Result<Option<Self>>> {
+        let current = self.handle;
+        let shared = self.shared.clone();
+        let replace = mode != self.mode;
+        let (send, receive) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                || -> Result<Option<Self>> {
+                    let bytes =
+                        model.descriptor_with_light(&camera.bytes(), size, &environment, &light);
+                    if replace {
+                        let mut candidate = if let Some((adapter, device, queue)) = shared {
+                            Self {
+                                handle: native::create_on_device(&adapter, &device, &queue, mode)
+                                    .map_err(anyhow::Error::msg)?,
+                                mode,
+                                job: None,
+                                shared: Some((adapter, device, queue)),
+                            }
+                        } else {
+                            Self::with_backend(mode)?
+                        };
+                        candidate.commit(&bytes)?;
+                        Ok(Some(candidate))
+                    } else {
+                        check(|e, n| unsafe {
+                            native::mt_context_commit(current, bytes.as_ptr(), bytes.len(), e, n)
+                        })?;
+                        Ok(None)
+                    }
+                },
+            ))
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("Scene preparation panicked")));
+            let _ = send.send(result);
+            ctx.request_repaint();
+        });
+        receive
+    }
+    pub fn commit_finished(&mut self) {
+        self.job = None;
     }
     pub fn backend(&self) -> Result<(u32, String)> {
         let mut active = 0;
@@ -158,6 +226,9 @@ impl Renderer {
             return Ok(false);
         };
         if let Err(error) = check(|e, n| unsafe { native::mt_job_poll(job, 1, e, n) }) {
+            if error.to_string().contains("Context registry is active") {
+                return Ok(false);
+            }
             self.job = None;
             return Err(error);
         }
@@ -239,7 +310,17 @@ impl Drop for Renderer {
             }
             std::thread::sleep(Duration::from_millis(1));
         }
-        let _ = check(|e, n| unsafe { native::mt_context_destroy(self.handle, e, n) });
+        loop {
+            match check(|e, n| unsafe { native::mt_context_destroy(self.handle, e, n) }) {
+                Err(error)
+                    if error.to_string().contains("Context registry is active")
+                        && Instant::now() < deadline =>
+                {
+                    std::thread::sleep(Duration::from_millis(1))
+                }
+                _ => break,
+            }
+        }
     }
 }
 #[derive(Clone)]

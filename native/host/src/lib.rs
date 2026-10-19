@@ -17,9 +17,11 @@ pub mod logging;
 pub mod context;
 pub mod denoise;
 mod denoise_ffi;
+pub mod display;
 mod hardware;
 pub mod hit_diagnostics;
 pub mod image_diagnostics;
+pub mod picking;
 #[rustfmt::skip]
 pub mod layout;
 #[cfg(feature = "fuzzing")]
