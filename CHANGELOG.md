@@ -3,6 +3,18 @@
 All notable changes to MuTracer will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.1.3 - 2026-10-19
+
+### Changed
+
+- Installing the library no longer pulls in `webgpu-utils`.
+
+### Fixed
+
+- Adding untextured lights after a scene update works correctly on WebGPU and WebGL 2.
+- WebGPU shadow catchers blend seamlessly into opaque flat backgrounds at receiver edges, including with bloom and HDR output.
+- WebGPU OIDN denoising reduces colored artifacts around foreground silhouettes over shadow catchers with textured or translucent backgrounds.
+
 ## 0.1.2 - 2026-10-16
 
 ### Added
