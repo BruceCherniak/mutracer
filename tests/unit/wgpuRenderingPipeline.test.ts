@@ -214,6 +214,10 @@ describe('WebGPU denoised presentation transitions', () => {
     expect(execute).toHaveBeenCalledTimes(1);
     expect(compose.createPass.mock.lastCall![1]).toEqual(rawInputs);
     expect(execute.mock.lastCall![0].color.data).toMatchObject({size: 80 * 64 * 16});
+    // Beauty contains the backdrop texture seen through the invisible catcher;
+    // its albedo must describe that same composition, not a white receiver.
+    const albedoCopy = mocks.Pass.instances.get('OIDN raw albedo copy')!;
+    expect(albedoCopy.createPass.mock.lastCall![1].guide.texture).toBe(compose.getOutput('denoiseAlbedo'));
     const finish = mocks.Pass.instances.get('OIDN composed display')!;
     expect(finish.createPass.mock.lastCall![1].composedTex).toBe(compose.getOutput('denoiseColor'));
     pipeline.present();
@@ -233,6 +237,19 @@ describe('WebGPU denoised presentation transitions', () => {
       color: {data: expect.objectContaining({size: 80 * 64 * 16})},
       denoiseAlpha: true
     });
+    pipeline.dispose();
+  });
+
+  it('prefilters the composed albedo for clean-aux OIDN networks', async () => {
+    const pipeline = createPipeline(false);
+    pipeline.activate(); pipeline.trace(new Camera({projection: 'perspective'}), 1); pipeline.present();
+    const denoiser = {...completedDenoiser(), auxiliaryDenoisers: {
+      albedo: completedDenoiser(), normal: completedDenoiser()
+    }};
+    await pipeline.performDenoise!({kind: 'oidn', denoiser}, undefined);
+    const albedo = mocks.Pass.instances.get('compose')!.getOutput('denoiseAlbedo');
+    expect(mocks.Pass.instances.get('OIDN albedo sRGB encode')!.createPass.mock.lastCall![1].albedo.texture).toBe(albedo);
+    expect(mocks.Pass.instances.get('OIDN albedo sRGB decode')!.createPass.mock.lastCall![1].rawAlbedo.texture).toBe(albedo);
     pipeline.dispose();
   });
 

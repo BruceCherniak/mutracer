@@ -207,6 +207,24 @@ let displayLinear = select(
   hdrOutput
 );
 output.denoiseColor = vec4f(displayLinear, finalColor.a);
+
+// The receiver is invisible: its visible texture is the displayed background,
+// not the neutral reflectance used for its lighting estimate. Match the beauty
+// reconstruction filter, including mixed foreground/receiver primary samples.
+// Exclude the stochastic shadow and bloom so neither is preserved as texture.
+let rawAlbedo = load_flatBackgroundMaskTex(uv, 0);
+var compositeAlbedo = rawAlbedo.rgb;
+if (shadowCatcherEnabled > 0.5 && flatBackgroundColor.a < 0.5) {
+  let coverage = clamp(load_shadowCatcherTex(uv, 0).r, 0.0, 1.0);
+  let background = load_catcherBackgroundTex(uv, 0);
+  if (coverage > 0.0 && background.a > 0.000001) {
+    var backgroundAlbedo = gradeColor(background.rgb / background.a * exposure);
+    backgroundAlbedo *= 1.0 - toneMappingParams.y * vignetteEdge;
+    if (!hdrOutput) { backgroundAlbedo = applyToneMapping(backgroundAlbedo); }
+    compositeAlbedo += coverage * (clamp(backgroundAlbedo, vec3f(0.0), vec3f(1.0)) - vec3f(1.0));
+  }
+}
+output.denoiseAlbedo = vec4f(clamp(compositeAlbedo, vec3f(0.0), vec3f(1.0)), rawAlbedo.a);
 `;
 
 export const compositeDenoiseDisplayMain = /* wgsl */ `
