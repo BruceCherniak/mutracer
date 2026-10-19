@@ -44,6 +44,11 @@ pub struct Denoiser {
     size: [u32; 2],
     pub backend: &'static str,
 }
+// SAFETY: OIDN 2.5.1 explicitly permits calls from arbitrary threads, including
+// releasing handles. API calls that use one device are serialized by OIDN;
+// Rust mutation still requires &mut self. The FFI registry adds a mutex.
+// https://github.com/RenderKit/oidn/blob/v2.5.1/doc/api.md#open-image-denoise-api
+unsafe impl Send for Denoiser {}
 impl Denoiser {
     pub fn new() -> Result<Self> {
         Self::with_backend(0)

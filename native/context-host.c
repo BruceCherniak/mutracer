@@ -12,6 +12,10 @@ static unsigned checks;
 #define REQUIRE(test) do {checks++;if(!(test)){fprintf(stderr,"line %d: %s; %s\n",__LINE__,#test,error);return 1;}}while(0)
 #define OK(call) REQUIRE((call)==0)
 #define BAD(call) REQUIRE((call)!=0)
+static int backend_is(mt_context context,uint32_t expected) {
+ uint32_t actual=99;char reason[512];
+ return mt_context_backend(context,&actual,reason,sizeof(reason),error,sizeof(error)) || actual!=expected;
+}
 static unsigned char *load(const char *path,size_t *length) {
   FILE *file=fopen(path,"rb");if(!file||fseek(file,0,SEEK_END))return NULL;
   long size=ftell(file);if(size<0||fseek(file,0,SEEK_SET))return NULL;
@@ -29,13 +33,11 @@ static int read_image(mt_context handle,uint32_t kind,unsigned char *pixels,size
   return 0;
 }
 struct thread_input { mt_context context; const unsigned char *input; size_t length; };
-static void *wrong_thread(void *argument) {
+static void *other_thread(void *argument) {
   const struct thread_input *args=argument;
   mt_context_info_v1 info={.struct_size=sizeof(info)};char message[128];
   int code=mt_context_info(args->context,&info,message,sizeof(message));
-  int rejected=code!=0&&strstr(message,"owner")!=NULL;
-  code=mt_probe_render_scene(args->input,args->length,"/dev/null/wrong-thread",1,message,sizeof(message));
-  return (void*)(uintptr_t)(rejected&&code!=0&&strstr(message,"owner")!=NULL);
+  return (void*)(uintptr_t)(code==0 && info.version==1);
 }
 int main(int argc,char **argv) {
   if(argc!=5)return 2;
@@ -57,8 +59,8 @@ int main(int argc,char **argv) {
   BAD(mt_context_render(a,1,error,sizeof(error)));BAD(mt_context_reset(a,error,sizeof(error)));BAD(mt_context_wait(a,error,sizeof(error)));
   size_t written=999;BAD(mt_context_read_pixels(a,0,NULL,0,&written,error,sizeof(error)));REQUIRE(written==0);
   info.struct_size=0;BAD(mt_context_info(a,&info,error,sizeof(error)));info.struct_size=sizeof(info);
-  OK(mt_context_commit(a,input,length,error,sizeof(error)));
-  OK(mt_context_commit(b,input,length,error,sizeof(error)));
+  OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,0));
+  OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,0));
   OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.state==1&&info.samples==0&&info.width==words[2]&&info.height==words[3]);
   BAD(mt_context_render(a,0,error,sizeof(error)));BAD(mt_context_render(a,4097,error,sizeof(error)));
   OK(mt_context_render(a,samples/4,error,sizeof(error)));
@@ -76,7 +78,7 @@ int main(int argc,char **argv) {
     OK(save(argv[3],names[kind],pixels,size));
   }
   /* Reusing a retired buffer generation must reset accumulation and guides. */
-  for(unsigned repeat=0;repeat<2;repeat++)OK(mt_context_commit(a,input,length,error,sizeof(error)));
+  for(unsigned repeat=0;repeat<2;repeat++)OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,0));
   OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.samples==0);
   OK(mt_context_render(a,samples,error,sizeof(error)));
   for(uint32_t kind=0;kind<3;kind++){
@@ -104,7 +106,7 @@ int main(int argc,char **argv) {
   OK(read_image(a,0,pixels,size));REQUIRE(memcmp(pixels,reference,size)==0);
   /* A complete camera edit commits on B while A retains its accumulation. */
   uint32_t camera_x=words[14]+16+12,saved_x=words[camera_x];float x;memcpy(&x,words+camera_x,4);x+=.4f;memcpy(words+camera_x,&x,4);
-  OK(mt_context_commit(b,input,length,error,sizeof(error)));words[camera_x]=saved_x;
+  OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,0));words[camera_x]=saved_x;
   OK(mt_context_info(b,&info,error,sizeof(error)));REQUIRE(info.samples==0);
   OK(mt_context_render(b,samples,error,sizeof(error)));OK(read_image(b,0,other,size));
   int empty=words[23]!=0;
@@ -112,7 +114,7 @@ int main(int argc,char **argv) {
   if(!empty)REQUIRE(memcmp(other,reference,size)!=0);
   OK(read_image(a,0,pixels,size));REQUIRE(memcmp(pixels,reference,size)==0);
   pthread_t thread;void *thread_result=NULL;struct thread_input thread_args={b,input,length};
-  REQUIRE(pthread_create(&thread,NULL,wrong_thread,&thread_args)==0);
+  REQUIRE(pthread_create(&thread,NULL,other_thread,&thread_args)==0);
   REQUIRE(pthread_join(thread,&thread_result)==0);REQUIRE((uintptr_t)thread_result==1);
   OK(read_image(b,0,pixels,size));REQUIRE(memcmp(pixels,other,size)==0);
   OK(mt_context_destroy(a,error,sizeof(error)));BAD(mt_context_destroy(a,error,sizeof(error)));

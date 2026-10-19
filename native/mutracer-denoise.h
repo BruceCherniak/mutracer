@@ -18,10 +18,10 @@ extern "C" {
  * backend: 0=Metal with CPU fallback, 1=CPU only, 2=Metal only. No silent fallback
  * for explicit 1/2. backend query returns 1=CPU or 2=Metal.
  *
- * Handles belong to their creating thread; run/query/destroy
- * there. At most 8 live handles per thread. IDs are not reused; wrong-thread and
- * stale handles reject. Separate threads may create independent denoisers.
- * Denoising is independent of the AOT/render owner thread and does not modify
+ * Calls may come from any thread. Overlapping denoiser operations return busy
+ * and can be retried. IDs are not reused; stale handles reject. Device memory
+ * limits the number of live handles.
+ * Denoising is independent of the AOT/render runtime and does not modify
  * render accumulation. Calls block: run on an application worker if needed.
  * Destroy releases its resources; caller supplies/owns runtime files.
  */

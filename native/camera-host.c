@@ -10,6 +10,10 @@ static char error[4096];static unsigned checks;
 #define REQUIRE(test) do{checks++;if(!(test)){fprintf(stderr,"line %d: %s; %s\n",__LINE__,#test,error);return 1;}}while(0)
 #define OK(call) REQUIRE((call)==0)
 #define BAD(call) REQUIRE((call)!=0)
+static int backend_is(mt_context context,uint32_t expected) {
+ uint32_t actual=99;char reason[512];
+ return mt_context_backend(context,&actual,reason,sizeof(reason),error,sizeof(error)) || actual!=expected;
+}
 static unsigned char *load(const char *path,size_t *size){
  FILE *f=fopen(path,"rb");if(!f||fseek(f,0,SEEK_END))return NULL;long n=ftell(f);if(n<0||fseek(f,0,SEEK_SET))return NULL;
  unsigned char *p=malloc(n?(size_t)n:1);if(!p||fread(p,1,(size_t)n,f)!=(size_t)n)return NULL;fclose(f);*size=(size_t)n;return p;
@@ -18,8 +22,8 @@ static int read_image(mt_context context,unsigned kind,unsigned char *output,siz
  return mt_context_read_pixels(context,kind,output,size,&written,error,sizeof(error))||written!=size;
 }
 struct thread_args {mt_context context;const unsigned char *camera;};
-static void *wrong_thread(void *input){struct thread_args *args=input;char message[128];
- return (void*)(uintptr_t)(mt_context_update_camera(args->context,args->camera,128,message,sizeof(message))!=0);
+static void *other_thread(void *input){struct thread_args *args=input;char message[128];
+ return (void*)(uintptr_t)(mt_context_update_camera(args->context,args->camera,128,message,sizeof(message))==0);
 }
 int main(int argc,char **argv){
  if(argc!=4)return 2;size_t length=0;unsigned char *input=load(argv[1],&length);if(!input||length<128)return 2;
@@ -30,7 +34,7 @@ int main(int argc,char **argv){
  mt_context a=0,b=0;mt_render_job old=0,job=0;mt_context_info_v1 ci={.struct_size=sizeof(ci)};mt_job_info_v1 ji={.struct_size=sizeof(ji)};
  OK(mt_context_create_with_backend(0,&a,error,sizeof(error)));OK(mt_context_create_with_backend(0,&b,error,sizeof(error)));
  BAD(mt_context_update_camera(a,camera,128,error,sizeof(error)));
- OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(mt_context_commit(b,input,length,error,sizeof(error)));
+ OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,0));OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,0));
  OK(mt_context_render(a,samples,error,sizeof(error)));
  for(unsigned kind=0;kind<3;kind++)OK(read_image(a,kind,initial+kind*size,size));
  OK(mt_context_submit(a,1,&old,error,sizeof(error)));BAD(mt_context_update_camera(a,camera,128,error,sizeof(error)));
@@ -56,7 +60,7 @@ int main(int argc,char **argv){
   if(variant==3){projection=1;f[2]=.01f;f[3]=100;f[4]=-3;f[5]=3;f[6]=-2;f[7]=2;f[8]=1.1f;}
   if(variant==4){f[20]+=.07f;f[28]-=.2f;}
   memcpy(camera,f,128);memcpy(camera,&projection,4);memcpy(source,camera,128);
-  OK(mt_context_commit(b,input,length,error,sizeof(error)));
+  OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,0));
   OK(mt_context_update_camera(a,camera,128,error,sizeof(error)));memset(camera,0,128);
   OK(mt_context_info(a,&ci,error,sizeof(error)));REQUIRE(ci.samples==0&&ci.state==1);
   size_t written=0;BAD(mt_context_read_pixels(a,0,NULL,0,&written,error,sizeof(error)));
@@ -75,7 +79,8 @@ int main(int argc,char **argv){
   }
  }
  memcpy(camera,original,128);pthread_t thread;void *thread_result=NULL;struct thread_args args={a,camera};
- REQUIRE(pthread_create(&thread,NULL,wrong_thread,&args)==0);REQUIRE(pthread_join(thread,&thread_result)==0);REQUIRE((uintptr_t)thread_result==1);
+ REQUIRE(pthread_create(&thread,NULL,other_thread,&args)==0);REQUIRE(pthread_join(thread,&thread_result)==0);REQUIRE((uintptr_t)thread_result==1);
+ OK(mt_context_render(a,samples,error,sizeof(error)));
  OK(read_image(a,0,a_pixels,size));REQUIRE(memcmp(a_pixels,initial,size)==0);
  OK(mt_context_update_camera(a,camera,128,error,sizeof(error)));OK(mt_context_info(a,&ci,error,sizeof(error)));REQUIRE(ci.samples==0);
  OK(mt_context_destroy(a,error,sizeof(error)));BAD(mt_context_update_camera(a,camera,128,error,sizeof(error)));OK(mt_context_destroy(b,error,sizeof(error)));

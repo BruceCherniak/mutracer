@@ -191,108 +191,112 @@ mod tests {
     fn geometry_kernels_preserve_production_assets() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let _entry = ENTRY_LOCK.lock().unwrap();
-        init_core();
-        let mut inputs = vec![super::super::tests::input()];
-        if let Ok(path) = std::env::var("MUTRACER_KERNEL_FIXTURES") {
-            let cases: Vec<serde_json::Value> =
-                serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-            for case in cases {
-                inputs.push(fs::read(case["input"].as_str().unwrap()).unwrap());
-            }
-        }
-        for (i, input) in inputs.iter().enumerate() {
-            for hardware in [false, true] {
-                let token = 2_000_000 + i as u32 * 2 + u32::from(hardware);
-                let settings = settings::RenderSettings::default();
-                let variants = if hardware { 2 } else { 1 };
-                let (_, actual) = prepare_impl_with_kernels(
-                    input, token, hardware, false, &settings, variants, true,
-                )
-                .unwrap();
-                let (_, expected) = prepare_impl_with_kernels(
-                    input, token, hardware, false, &settings, variants, false,
-                )
-                .unwrap();
-                assert_eq!(actual.len(), expected.len());
-                for (name, bytes) in actual {
-                    let reference = expected.get(&name).unwrap();
-                    assert!(
-                        bytes == *reference,
-                        "input {i}, hardware {hardware}, {name}: first difference {:?}, lengths {} / {}",
-                        bytes.iter().zip(reference).position(|(a, b)| a != b),
-                        bytes.len(),
-                        reference.len()
-                    );
-                }
-                let mut pointer = std::ptr::null();
-                let mut size = 0;
-                unsafe {
-                    mt_core_scene_release(token, &mut pointer, &mut size);
-                    mt_core_reset();
-                    mt_core_collect();
+        runtime::run(|| {
+            init_core();
+            let mut inputs = vec![super::super::tests::input()];
+            if let Ok(path) = std::env::var("MUTRACER_KERNEL_FIXTURES") {
+                let cases: Vec<serde_json::Value> =
+                    serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+                for case in cases {
+                    inputs.push(fs::read(case["input"].as_str().unwrap()).unwrap());
                 }
             }
-        }
+            for (i, input) in inputs.iter().enumerate() {
+                for hardware in [false, true] {
+                    let token = 2_000_000 + i as u32 * 2 + u32::from(hardware);
+                    let settings = settings::RenderSettings::default();
+                    let variants = if hardware { 2 } else { 1 };
+                    let (_, actual) = prepare_impl_with_kernels(
+                        input, token, hardware, false, &settings, variants, true,
+                    )
+                    .unwrap();
+                    let (_, expected) = prepare_impl_with_kernels(
+                        input, token, hardware, false, &settings, variants, false,
+                    )
+                    .unwrap();
+                    assert_eq!(actual.len(), expected.len());
+                    for (name, bytes) in actual {
+                        let reference = expected.get(&name).unwrap();
+                        assert!(
+                            bytes == *reference,
+                            "input {i}, hardware {hardware}, {name}: first difference {:?}, lengths {} / {}",
+                            bytes.iter().zip(reference).position(|(a, b)| a != b),
+                            bytes.len(),
+                            reference.len()
+                        );
+                    }
+                    let mut pointer = std::ptr::null();
+                    let mut size = 0;
+                    unsafe {
+                        mt_core_scene_release(token, &mut pointer, &mut size);
+                        mt_core_reset();
+                        mt_core_collect();
+                    }
+                }
+            }
+        });
     }
     #[test]
     fn geometry_kernels_match_shared_ts_bytes() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let _entry = ENTRY_LOCK.lock().unwrap();
-        init_core();
-        let base = super::super::tests::input();
-        let mut seed = 0x12345678u32;
-        for case in 0..80 {
-            let count = 3 + case % 29;
-            let mut words = base
-                .chunks_exact(4)
-                .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
-                .collect::<Vec<_>>();
-            let mut random = || {
-                seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
-                (seed as f64 / u32::MAX as f64 - 0.5) as f32
-            };
-            let geometry = words[h::GEOMETRY_OFFSET] as usize;
-            words[geometry + g::VERTEX_COUNT] = count as u32;
-            words[geometry + g::POSITION] = words.len() as u32;
-            for i in 0..count * 3 {
-                let value = if case == 0 {
-                    if i % 2 == 0 { -0.0f32 } else { 0.0f32 }
-                } else {
-                    random() * if case % 11 == 0 { 1e20 } else { 10. }
+        runtime::run(|| {
+            init_core();
+            let base = super::super::tests::input();
+            let mut seed = 0x12345678u32;
+            for case in 0..80 {
+                let count = 3 + case % 29;
+                let mut words = base
+                    .chunks_exact(4)
+                    .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+                    .collect::<Vec<_>>();
+                let mut random = || {
+                    seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+                    (seed as f64 / u32::MAX as f64 - 0.5) as f32
                 };
-                words.push(value.to_bits());
-            }
-            words[geometry + g::NORMAL] = words.len() as u32;
-            for _ in 0..count {
-                for n in [random(), random(), 1.] {
-                    words.push(n.to_bits());
+                let geometry = words[h::GEOMETRY_OFFSET] as usize;
+                words[geometry + g::VERTEX_COUNT] = count as u32;
+                words[geometry + g::POSITION] = words.len() as u32;
+                for i in 0..count * 3 {
+                    let value = if case == 0 {
+                        if i % 2 == 0 { -0.0f32 } else { 0.0f32 }
+                    } else {
+                        random() * if case % 11 == 0 { 1e20 } else { 10. }
+                    };
+                    words.push(value.to_bits());
+                }
+                words[geometry + g::NORMAL] = words.len() as u32;
+                for _ in 0..count {
+                    for n in [random(), random(), 1.] {
+                        words.push(n.to_bits());
+                    }
+                }
+                words[geometry + g::UV] = words.len() as u32;
+                for _ in 0..count * 2 {
+                    words.push(if case % 7 == 0 { 0 } else { random().to_bits() });
+                }
+                words[geometry + g::INDICES] = words.len() as u32;
+                words[geometry + g::INDEX_COUNT] = (count * 6) as u32;
+                for i in 0..count * 6 {
+                    words.push(((i * 7 + i / 3) % count) as u32);
+                }
+                words[h::LENGTH] = words.len() as u32;
+                let input = words
+                    .into_iter()
+                    .flat_map(u32::to_le_bytes)
+                    .collect::<Vec<_>>();
+                for include_bounds in [false, true] {
+                    compare(&input, include_bounds);
                 }
             }
-            words[geometry + g::UV] = words.len() as u32;
-            for _ in 0..count * 2 {
-                words.push(if case % 7 == 0 { 0 } else { random().to_bits() });
+            if let Ok(path) = std::env::var("MUTRACER_KERNEL_FIXTURES") {
+                let cases: Vec<serde_json::Value> =
+                    serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+                for case in cases {
+                    let input = fs::read(case["input"].as_str().unwrap()).unwrap();
+                    compare(&input, true);
+                }
             }
-            words[geometry + g::INDICES] = words.len() as u32;
-            words[geometry + g::INDEX_COUNT] = (count * 6) as u32;
-            for i in 0..count * 6 {
-                words.push(((i * 7 + i / 3) % count) as u32);
-            }
-            words[h::LENGTH] = words.len() as u32;
-            let input = words
-                .into_iter()
-                .flat_map(u32::to_le_bytes)
-                .collect::<Vec<_>>();
-            for include_bounds in [false, true] {
-                compare(&input, include_bounds);
-            }
-        }
-        if let Ok(path) = std::env::var("MUTRACER_KERNEL_FIXTURES") {
-            let cases: Vec<serde_json::Value> =
-                serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
-            for case in cases {
-                let input = fs::read(case["input"].as_str().unwrap()).unwrap();
-                compare(&input, true);
-            }
-        }
+        });
     }
 }

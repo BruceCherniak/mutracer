@@ -25,6 +25,7 @@ mod native_bvh;
 pub mod path_diagnostics;
 pub mod preparation_diagnostics;
 mod profiling;
+mod runtime;
 mod scene;
 pub mod settings;
 mod tinybvh;
@@ -67,8 +68,8 @@ fn init_core() {
     static INITIALIZED: std::sync::Once = std::sync::Once::new();
     INITIALIZED.call_once(|| unsafe { mt_core_init() });
 }
-// scriptc state is confined to one dedicated owner for this initial probe.
-// No worker thread calls into it; the mutex also rejects overlapping C entry.
+// Legacy diagnostic operations serialize their own probe state. The AOT heap
+// itself is confined to runtime.rs, independently of context/GPU operations.
 static ENTRY_LOCK: Mutex<()> = Mutex::new(());
 // ABI tests share process-global AOT/registry state even on Rust's test workers.
 #[cfg(test)]
@@ -443,6 +444,8 @@ struct GpuScene {
     native_bvh: Option<(Vec<u8>, native_bvh::Stats)>,
     compile_seconds: f64,
     samples: u32,
+    frames: Vec<[u8; 16]>,
+    frame_key: (u32, u32),
 }
 impl GpuScene {
     fn new(
@@ -525,7 +528,7 @@ impl GpuScene {
         }
         let device = &gpu.device;
         let queue = &gpu.queue;
-        init_core();
+        runtime::init();
         let native_bvh = scene
             .native_bvh
             .as_ref()
@@ -584,12 +587,14 @@ impl GpuScene {
                 );
             }
             let input = sampling.max_samples.to_le_bytes();
-            let mut pointer = std::ptr::null();
-            let mut size = 0;
-            unsafe {
-                mt_core_sampling(input.as_ptr(), input.len(), &mut pointer, &mut size);
-            }
-            let command = unsafe { copy_core_result(pointer, size, 168)? };
+            let command = runtime::call(move || {
+                let mut pointer = std::ptr::null();
+                let mut size = 0;
+                unsafe {
+                    mt_core_sampling(input.as_ptr(), input.len(), &mut pointer, &mut size);
+                }
+                unsafe { copy_core_result(pointer, size, 168) }
+            })?;
             if command[..4] != [0, 0, 0, 0] {
                 return Err("Unexpected native sampling pattern".into());
             }
@@ -612,20 +617,24 @@ impl GpuScene {
             if data.len() != 144 {
                 return Err("Invalid camera uniform length".into());
             }
-            let mut pointer = std::ptr::null();
-            let mut size = 0;
-            unsafe {
-                mt_core_camera(
-                    data.as_ptr(),
-                    data.len(),
-                    options.camera_offset[0] as f64,
-                    options.camera_offset[1] as f64,
-                    options.camera_offset[2] as f64,
-                    &mut pointer,
-                    &mut size,
-                );
-            }
-            let command = unsafe { copy_core_result(pointer, size, 144)? };
+            let options = *options;
+            let data = data.into_owned();
+            let command = runtime::call(move || {
+                let mut pointer = std::ptr::null();
+                let mut size = 0;
+                unsafe {
+                    mt_core_camera(
+                        data.as_ptr(),
+                        data.len(),
+                        options.camera_offset[0] as f64,
+                        options.camera_offset[1] as f64,
+                        options.camera_offset[2] as f64,
+                        &mut pointer,
+                        &mut size,
+                    );
+                }
+                unsafe { copy_core_result(pointer, size, 144) }
+            })?;
             queue.write_buffer(&buffers[&id], 0, &command);
         }
         if options.flags & 2 != 0 {
@@ -646,19 +655,22 @@ impl GpuScene {
             {
                 return Err("Invalid material offsets".into());
             }
-            let mut pointer = std::ptr::null();
-            let mut size = 0;
-            unsafe {
-                mt_core_material(
-                    options.base_color[0] as f64,
-                    options.base_color[1] as f64,
-                    options.base_color[2] as f64,
-                    options.roughness as f64,
-                    &mut pointer,
-                    &mut size,
-                );
-            }
-            let command = unsafe { copy_core_result(pointer, size, 16)? };
+            let options = *options;
+            let command = runtime::call(move || {
+                let mut pointer = std::ptr::null();
+                let mut size = 0;
+                unsafe {
+                    mt_core_material(
+                        options.base_color[0] as f64,
+                        options.base_color[1] as f64,
+                        options.base_color[2] as f64,
+                        options.roughness as f64,
+                        &mut pointer,
+                        &mut size,
+                    );
+                }
+                unsafe { copy_core_result(pointer, size, 16) }
+            })?;
             queue.write_buffer(&buffers[&id], start + offsets.color, &command[..12]);
             queue.write_buffer(&buffers[&id], start + offsets.roughness, &command[12..]);
         }
@@ -894,8 +906,13 @@ impl GpuScene {
                 })
             })
             .collect();
+        let bounces = options.bounces;
+        let seed = options.seed;
+        let frames = runtime::frames(bounces, seed)?;
         Ok(Self {
             retained: None,
+            frames,
+            frame_key: (bounces.to_bits(), seed),
             gpu,
             scene,
             buffers,
@@ -928,20 +945,10 @@ impl GpuScene {
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
         for sample in start..end {
-            let mut pointer = std::ptr::null();
-            let mut size = 0;
-            unsafe {
-                mt_core_frame(sample as f64, bounces as f64, seed, &mut pointer, &mut size);
+            if self.frame_key != (bounces.to_bits(), seed) {
+                return Err("Frame settings do not match the prepared sequence".into());
             }
-            if size != 16 || pointer.is_null() {
-                return Err("Invalid AOT frame command".into());
-            }
-            // Copy all arena-backed bytes before any reset/collect or next call.
-            let mut frame = [0u8; 16];
-            unsafe {
-                frame.copy_from_slice(std::slice::from_raw_parts(pointer, size));
-                mt_core_reset();
-            }
+            let frame = &self.frames[sample as usize];
             let uniform = &self.buffers[&self.scene.rt_uniform];
             queue.write_buffer(
                 uniform,
@@ -977,9 +984,6 @@ impl GpuScene {
                 }
             }
             queue.submit([encoder.finish()]);
-        }
-        unsafe {
-            mt_core_collect();
         }
         Ok(())
     }

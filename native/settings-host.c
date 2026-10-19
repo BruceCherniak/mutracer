@@ -11,6 +11,10 @@ static unsigned checks=0;
 #define REQUIRE(x) do {checks++;if(!(x)){fprintf(stderr,"settings check %u, line %d: %s\n",checks,__LINE__,#x);return 1;}} while(0)
 #define OK(x) do {int status=(x);checks++;if(status){fprintf(stderr,"settings check %u, line %d: %s\n",checks,__LINE__,error);return 1;}} while(0)
 #define BAD(x) REQUIRE((x)!=0)
+static int backend_is(mt_context context,uint32_t expected) {
+ uint32_t actual=99;char reason[512];
+ return mt_context_backend(context,&actual,reason,sizeof(reason),error,sizeof(error)) || actual!=expected;
+}
 static unsigned char *load(const char *path,size_t *size) {
  FILE *f=fopen(path,"rb");if(!f||fseek(f,0,SEEK_END))return NULL;long n=ftell(f);if(n<0||fseek(f,0,SEEK_SET))return NULL;
  unsigned char *bytes=malloc(n?(size_t)n:1);if(!bytes||fread(bytes,1,(size_t)n,f)!=(size_t)n)return NULL;
@@ -28,14 +32,14 @@ int main(int argc,char **argv) {
  mt_render_settings settings;REQUIRE(mt_render_settings_default(NULL)==1);
  OK(mt_render_settings_default(&settings));REQUIRE(settings.struct_size==sizeof(settings)&&settings.seed==12345&&settings.reserved==0);
  mt_context context=0;OK(mt_context_create_with_backend(backend,&context,error,sizeof(error)));
- OK(mt_context_commit(context,input,length,error,sizeof(error)));
+ OK(mt_context_commit(context,input,length,error,sizeof(error)));OK(backend_is(context,backend));
  uint32_t actual=99;char reason[512];OK(mt_context_backend(context,&actual,reason,sizeof(reason),error,sizeof(error)));REQUIRE(actual==backend);
  OK(mt_context_render(context,8,error,sizeof(error)));
  for(unsigned kind=0;kind<3;kind++)OK(pixels(context,kind,reference+kind*size,size));
  memcpy(default_hdr,reference,size);
  if(backend==0) {
   settings.bounces=6.49;settings.direct_light_candidates=2.49;settings.bevel_samples=8.49;
-  OK(mt_context_commit_with_settings(context,input,length,&settings,error,sizeof(error)));OK(mt_context_render(context,8,error,sizeof(error)));
+  OK(mt_context_commit_with_settings(context,input,length,&settings,error,sizeof(error)));OK(backend_is(context,backend));OK(mt_context_render(context,8,error,sizeof(error)));
   for(unsigned kind=0;kind<3;kind++){OK(pixels(context,kind,image,size));REQUIRE(memcmp(image,reference+kind*size,size)==0);}
  }
  for(unsigned pattern=0;pattern<3;pattern++) {
@@ -44,7 +48,7 @@ int main(int argc,char **argv) {
    settings.bounces=3.2;settings.direct_light_candidates=3.7;settings.bevel_samples=4.2;
    settings.clamping=.8;settings.transmissive_output_alpha_min=.4;settings.sample_sequence_offset=3;
   }
-  OK(mt_context_commit_with_settings(context,input,length,&settings,error,sizeof(error)));
+  OK(mt_context_commit_with_settings(context,input,length,&settings,error,sizeof(error)));OK(backend_is(context,backend));
   OK(mt_context_backend(context,&actual,reason,sizeof(reason),error,sizeof(error)));REQUIRE(actual==backend);
   OK(mt_context_render(context,3,error,sizeof(error)));OK(mt_context_render(context,5,error,sizeof(error)));
   for(unsigned kind=0;kind<3;kind++) {
@@ -62,7 +66,6 @@ int main(int argc,char **argv) {
   for(unsigned kind=0;kind<3;kind++){OK(pixels(context,kind,image,size));REQUIRE(memcmp(image,reference+kind*size,size)==0);}
   OK(mt_context_reset(context,error,sizeof(error)));
   mt_render_job job=0;OK(mt_context_submit(context,8,&job,error,sizeof(error)));
-  BAD(mt_context_commit_with_settings(context,input,length,&settings,error,sizeof(error)));
   mt_job_info_v1 info={.struct_size=sizeof(info)};unsigned iteration=0;
   for(;iteration<60000;iteration++) {
    OK(mt_job_poll(job,3,error,sizeof(error)));OK(mt_job_info(job,&info,error,sizeof(error)));
@@ -70,6 +73,10 @@ int main(int argc,char **argv) {
   }
   REQUIRE(iteration<60000&&info.completed_samples==8);
   for(unsigned kind=0;kind<3;kind++){OK(pixels(context,kind,image,size));REQUIRE(memcmp(image,reference+kind*size,size)==0);}
+  /* Publishing a full commit cancels/expires an unfinished queued job. */
+  OK(mt_context_submit(context,1,&job,error,sizeof(error)));
+  OK(mt_context_commit_with_settings(context,input,length,&settings,error,sizeof(error)));OK(backend_is(context,backend));
+  BAD(mt_job_info(job,&info,error,sizeof(error)));
  }
  OK(mt_context_destroy(context,error,sizeof(error)));
  free(default_hdr);free(reference);free(image);free(input);printf("PASS %u settings checks\n",checks);return 0;

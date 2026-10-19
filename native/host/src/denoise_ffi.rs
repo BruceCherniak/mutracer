@@ -1,18 +1,19 @@
-//! Independent owner-thread OIDN handles; never enter the AOT/render registry.
+//! Independent synchronized OIDN handles; never enter the AOT/render registry.
 use crate::denoise::Denoiser;
 use anyhow::{Result, bail, ensure};
 use std::{
-    cell::RefCell,
     collections::HashMap,
     ffi::{CStr, c_char},
     panic::AssertUnwindSafe,
     path::Path,
-    sync::atomic::{AtomicU64, Ordering},
+    sync::{
+        LazyLock, Mutex,
+        atomic::{AtomicU64, Ordering},
+    },
 };
 
-thread_local! {
-    static DENOISERS: RefCell<HashMap<u64, Denoiser>> = RefCell::new(HashMap::new());
-}
+static DENOISERS: LazyLock<Mutex<HashMap<u64, Denoiser>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 static NEXT: AtomicU64 = AtomicU64::new(1 << 63);
 fn action(error: *mut c_char, capacity: usize, operation: impl FnOnce() -> Result<()>) -> i32 {
     let result = std::panic::catch_unwind(AssertUnwindSafe(operation));
@@ -34,13 +35,15 @@ fn action(error: *mut c_char, capacity: usize, operation: impl FnOnce() -> Resul
     i32::from(!message.is_empty())
 }
 fn state<T>(handle: u64, operation: impl FnOnce(&mut Denoiser) -> Result<T>) -> Result<T> {
-    DENOISERS.with(|slot| {
-        let mut values = slot.try_borrow_mut()?;
-        let value = values.get_mut(&handle).ok_or_else(|| {
-            anyhow::anyhow!("Invalid/destroyed denoiser handle or wrong owner thread")
-        })?;
+    (move || {
+        let mut values = DENOISERS
+            .try_lock()
+            .map_err(|_| anyhow::anyhow!("Denoiser registry is busy"))?;
+        let value = values
+            .get_mut(&handle)
+            .ok_or_else(|| anyhow::anyhow!("Invalid/destroyed denoiser handle"))?;
         operation(value)
-    })
+    })()
 }
 
 /// # Safety
@@ -59,9 +62,10 @@ pub unsafe extern "C" fn mt_denoiser_create(
             "Null or unaligned denoiser handle output"
         );
         ensure!(backend <= 2, "Invalid native OIDN backend preference");
-        DENOISERS.with(|slot| -> Result<()> {
-            let mut values = slot.try_borrow_mut()?;
-            ensure!(values.len() < 8, "At most eight denoisers per owner thread");
+        (|| -> Result<()> {
+            let mut values = DENOISERS
+                .try_lock()
+                .map_err(|_| anyhow::anyhow!("Denoiser registry is busy"))?;
             let denoiser = if library.is_null() {
                 Denoiser::with_backend(backend)?
             } else {
@@ -75,7 +79,7 @@ pub unsafe extern "C" fn mt_denoiser_create(
             values.insert(handle, denoiser);
             unsafe { *output = handle };
             Ok(())
-        })
+        })()
     })
 }
 /// # Safety
@@ -149,20 +153,70 @@ pub unsafe extern "C" fn mt_denoiser_destroy(
     capacity: usize,
 ) -> i32 {
     action(error, capacity, || {
-        DENOISERS.with(|slot| {
-            if slot.try_borrow_mut()?.remove(&handle).is_none() {
-                bail!("Invalid/destroyed denoiser handle or wrong owner thread");
+        (move || {
+            if DENOISERS
+                .try_lock()
+                .map_err(|_| anyhow::anyhow!("Denoiser registry is busy"))?
+                .remove(&handle)
+                .is_none()
+            {
+                bail!("Invalid/destroyed denoiser handle");
             }
             Ok(())
-        })
+        })()
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+    #[test]
+    fn denoiser_can_be_queried_and_destroyed_from_another_thread() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let Ok(path) = std::env::var("MUTRACER_OIDN_LIBRARY") else {
+            return;
+        };
+        let path = std::ffi::CString::new(path).unwrap();
+        let mut handle = 0;
+        let mut error = [0 as c_char; 512];
+        assert_eq!(
+            unsafe {
+                mt_denoiser_create(
+                    path.as_ptr(),
+                    1,
+                    &mut handle,
+                    error.as_mut_ptr(),
+                    error.len(),
+                )
+            },
+            0
+        );
+        std::thread::spawn(move || {
+            let mut error = [0 as c_char; 512];
+            let mut backend = 99;
+            assert_eq!(
+                unsafe {
+                    mt_denoiser_backend(handle, &mut backend, error.as_mut_ptr(), error.len())
+                },
+                0
+            );
+            assert_eq!(backend, 1);
+            assert_eq!(
+                unsafe { mt_denoiser_destroy(handle, error.as_mut_ptr(), error.len()) },
+                0
+            );
+            assert_ne!(
+                unsafe { mt_denoiser_destroy(handle, error.as_mut_ptr(), error.len()) },
+                0
+            );
+        })
+        .join()
+        .unwrap();
+    }
     #[test]
     fn invalid_handles_and_options_preserve_outputs_without_sdk() {
+        let _test = TEST_LOCK.lock().unwrap();
         let mut error = [0 as c_char; 128];
         let mut handle = 42;
         assert_ne!(
@@ -213,6 +267,7 @@ mod tests {
     }
     #[test]
     fn load_failure_preserves_handle_and_terminates_tiny_error_buffer() {
+        let _test = TEST_LOCK.lock().unwrap();
         for capacity in 1..=128 {
             let mut error = [1 as c_char; 128];
             let mut handle = 42;

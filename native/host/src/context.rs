@@ -1,4 +1,4 @@
-//! Owner-thread contexts retain actual wgpu resources, never AOT arena pointers.
+//! Context operations serialize publication; candidate preparation runs outside the registry lock.
 use super::*;
 use std::{
     panic::AssertUnwindSafe,
@@ -6,10 +6,8 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    thread::ThreadId,
 };
 
-const MAX_CONTEXTS: usize = 8;
 struct Context {
     gpu: GpuDevice,
     backend: u32,
@@ -21,6 +19,34 @@ struct Context {
     spare_hardware: HashMap<String, wgpu::Buffer>,
     failed: bool,
     job: Option<RenderJob>,
+    commit: Option<Arc<PendingCommit>>,
+}
+struct PendingCommit {
+    cancelled: AtomicBool,
+    finished: Mutex<bool>,
+    completed: std::sync::Condvar,
+}
+impl PendingCommit {
+    fn new() -> Self {
+        Self {
+            cancelled: AtomicBool::new(false),
+            finished: Mutex::new(false),
+            completed: std::sync::Condvar::new(),
+        }
+    }
+    fn wait(&self) {
+        let mut finished = self.finished.lock().unwrap();
+        while !*finished {
+            finished = self.completed.wait(finished).unwrap();
+        }
+    }
+}
+struct Completion(Arc<PendingCommit>);
+impl Drop for Completion {
+    fn drop(&mut self) {
+        *self.0.finished.lock().unwrap() = true;
+        self.0.completed.notify_all();
+    }
 }
 #[derive(Clone, Copy, PartialEq)]
 #[repr(u32)]
@@ -62,7 +88,6 @@ fn idle(context: &Context) -> Result<()> {
 }
 struct Registry {
     next: u64,
-    owner: Option<ThreadId>,
     contexts: HashMap<u64, Context>,
 }
 static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
@@ -84,27 +109,20 @@ fn action(
     operation: impl FnOnce(&mut Registry) -> Result<()>,
 ) -> i32 {
     let result = (|| -> Result<()> {
-        let _entry = ENTRY_LOCK
-            .try_lock()
-            .map_err(|_| "Native core is active or poisoned")?;
         let mut slot = REGISTRY
             .try_lock()
             .map_err(|_| "Context registry is active or poisoned")?;
         let registry = slot.get_or_insert_with(|| Registry {
             next: 1,
-            owner: None,
             contexts: HashMap::new(),
         });
-        if registry
-            .owner
-            .is_some_and(|owner| owner != std::thread::current().id())
-        {
-            return Err("Native contexts must use their creating owner thread".into());
-        }
         // Catch while guards remain in this stack frame, avoiding mutex poisoning.
         std::panic::catch_unwind(AssertUnwindSafe(|| operation(registry)))
             .map_err(|_| "Native context operation panicked")?
     })();
+    write_result(error, capacity, result)
+}
+fn write_result(error: *mut c_char, capacity: usize, result: Result<()>) -> i32 {
     let (status, message) = match result {
         Ok(()) => (0, String::new()),
         Err(e) => (1, e.to_string()),
@@ -121,18 +139,8 @@ fn action(
     }
     status
 }
-// Probe entries hold ENTRY_LOCK before consulting the context owner.
+// Probes have their own owned inputs and use the same dedicated AOT runtime.
 pub(super) fn check_owner() -> Result<()> {
-    let registry = REGISTRY
-        .try_lock()
-        .map_err(|_| "Context registry is active or poisoned")?;
-    if registry
-        .as_ref()
-        .and_then(|r| r.owner)
-        .is_some_and(|owner| owner != std::thread::current().id())
-    {
-        return Err("Native core must use the context owner thread".into());
-    }
     Ok(())
 }
 fn context(registry: &mut Registry, handle: u64) -> Result<&mut Context> {
@@ -201,9 +209,6 @@ pub unsafe extern "C" fn mt_context_create_with_backend(
         unsafe {
             *output = 0;
         }
-        if registry.contexts.len() >= MAX_CONTEXTS {
-            return Err("At most eight native contexts are supported".into());
-        }
         let handle = registry.next;
         let next = handle
             .checked_add(1)
@@ -225,10 +230,10 @@ pub unsafe extern "C" fn mt_context_create_with_backend(
                 spare_hardware: HashMap::new(),
                 failed: false,
                 job: None,
+                commit: None,
             },
         );
         registry.next = next;
-        registry.owner = Some(std::thread::current().id());
         unsafe {
             *output = handle;
         }
@@ -241,15 +246,29 @@ pub unsafe extern "C" fn mt_context_destroy(
     error: *mut c_char,
     capacity: usize,
 ) -> i32 {
-    action(error, capacity, |registry| {
-        idle(context(registry, handle)?)?;
+    let mut pending = None;
+    let status = action(error, capacity, |registry| {
+        let current = context(registry, handle)?;
+        idle(current)?;
+        pending = current.commit.clone();
+        if let Some(commit) = &pending {
+            commit.cancelled.store(true, Ordering::Release);
+        }
         registry
             .contexts
             .remove(&handle)
             .ok_or("Invalid or destroyed native context")?;
         Ok(())
-    })
+    });
+    if status == 0 {
+        if let Some(commit) = pending {
+            commit.wait();
+        }
+        runtime::init(); // All root releases precede this owned barrier message.
+    }
+    status
 }
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_commit(
     handle: u64,
@@ -278,32 +297,66 @@ pub unsafe extern "C" fn mt_context_commit_with_settings(
     error: *mut c_char,
     capacity: usize,
 ) -> i32 {
-    action(error, capacity, |registry| {
+    // Caller buffers are borrowed only by this synchronous invocation. Every
+    // runtime message owns its input; the registry is free during preparation.
+    if settings.is_null() || input.is_null() || length > scene::MAX_BYTES {
+        return write_result(
+            error,
+            capacity,
+            Err("Null or oversized scene/settings input".into()),
+        );
+    }
+    let settings = unsafe { *settings };
+    let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+    let mut snapshot = None;
+    let cancel = Arc::new(PendingCommit::new());
+    let _completion = Completion(cancel.clone());
+    let status = action(error, capacity, |registry| {
         let context = context(registry, handle)?;
-        idle(context)?;
-        if settings.is_null() {
-            return Err("Null render settings".into());
+        if context.commit.is_some() {
+            return Err("Scene commit is already preparing".into());
         }
-        let settings = unsafe { *settings };
-        if input.is_null() || length > scene::MAX_BYTES {
-            return Err("Null or oversized scene input".into());
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+        snapshot = Some(CommitSnapshot {
+            gpu: context.gpu.clone(),
+            backend: context.backend,
+            spare_buffers: std::mem::take(&mut context.spare_buffers),
+            spare_hardware: std::mem::take(&mut context.spare_hardware),
+        });
+        context.commit = Some(cancel.clone());
+        Ok(())
+    });
+    if status != 0 {
+        return status;
+    }
+    let snapshot = snapshot.unwrap();
+    let result = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<_> {
         let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
         let started = Instant::now();
         let (mut scene, mut assets, mut retained) = scene::prepare_retained_with_settings(
             bytes,
-            context.backend == 1
-                && context.gpu.hardware_ray_query
+            snapshot.backend == 1
+                && snapshot.gpu.hardware_ray_query
                 && hardware::direct_input_enabled(),
-            context.backend,
+            snapshot.backend,
             &settings,
         )?;
+        cancelled(&cancel)?;
         let prepared = Instant::now();
-        let mut options = RenderOptions::default();
+        let uniform = assets
+            .get("native-7")
+            .ok_or("Missing normalized render settings")?;
+        let seed = u32::from_le_bytes(
+            uniform[layout::ray_uniform::SEQUENCE_SEED..layout::ray_uniform::SEQUENCE_SEED + 4]
+                .try_into()?,
+        );
+        let bounces = i32::from_le_bytes(
+            uniform[layout::ray_uniform::BOUNCES..layout::ray_uniform::BOUNCES + 4].try_into()?,
+        ) as f32;
+
+        let mut options = RenderOptions { seed, bounces, ..Default::default() };
         let mut fallback_reason = String::new();
-        if context.backend != 0 {
-            let capture = if context.gpu.hardware_ray_query {
+        if snapshot.backend != 0 {
+            let capture = if snapshot.gpu.hardware_ray_query {
                 hardware::capture_from_prepared(
                     &mut assets,
                     scene
@@ -325,6 +378,7 @@ pub unsafe extern "C" fn mt_context_commit_with_settings(
                 }
             }
         }
+        cancelled(&cancel)?;
         let hardware_prepared = Instant::now();
         let mut software_scene = scene.clone();
         software_scene.hwrt = None;
@@ -333,24 +387,24 @@ pub unsafe extern "C" fn mt_context_commit_with_settings(
             scene,
             &options,
             Some(&assets),
-            context.gpu.clone(),
-            Some(&context.spare_buffers),
-            Some(&context.spare_hardware),
+            snapshot.gpu.clone(),
+            Some(&snapshot.spare_buffers),
+            Some(&snapshot.spare_hardware),
         );
         let mut candidate = match candidate {
             Ok(candidate) => candidate,
-            Err(error) if context.backend == 1 && options.flags & 4 != 0 => {
+            Err(error) if snapshot.backend == 1 && options.flags & 4 != 0 => {
                 fallback_reason = format!("HWRT upload unavailable: {error}");
                 let software_scene =
                     prepare_software_fallback(bytes, software_scene, &mut assets, &mut retained)?;
                 GpuScene::new_reusing(
                     Path::new(""),
                     software_scene,
-                    &RenderOptions::default(),
+                    &RenderOptions { flags: 0, ..options },
                     Some(&assets),
-                    context.gpu.clone(),
-                    Some(&context.spare_buffers),
-                    Some(&context.spare_hardware),
+                    snapshot.gpu.clone(),
+                    Some(&snapshot.spare_buffers),
+                    Some(&snapshot.spare_hardware),
                 )?
             }
             Err(error) => return Err(error),
@@ -372,21 +426,32 @@ pub unsafe extern "C" fn mt_context_commit_with_settings(
                 })
             );
         }
-        let uniform = assets
-            .get("native-7")
-            .ok_or("Missing normalized render settings")?;
-        let seed = u32::from_le_bytes(
-            uniform[layout::ray_uniform::SEQUENCE_SEED..layout::ray_uniform::SEQUENCE_SEED + 4]
-                .try_into()?,
-        );
-        let bounces = i32::from_le_bytes(
-            uniform[layout::ray_uniform::BOUNCES..layout::ray_uniform::BOUNCES + 4].try_into()?,
-        ) as f32;
+        cancelled(&cancel)?;
         candidate.retained = Some(retained);
-        // Commit is transactional: the previous scene survives any preparation/upload failure.
-        // Only retired buffers may be overwritten while preparing the next scene.
-        // Keeping one spare generation preserves the live scene on failed commits.
-        if let Some(previous) = context.scene.replace(candidate) {
+        Ok((candidate, seed, bounces, fallback_reason))
+    })).unwrap_or_else(|_| Err("Native commit preparation panicked".into()));
+    // Publication waits for any currently executing ABI operation, but never
+    // holds the registry while waiting for CPU preparation. Cancellation wins
+    // until this point; after publication the new scene is committed atomically.
+    let mut slot = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    let registry = slot.as_mut().expect("initialized context registry");
+    let result = (|| -> Result<()> {
+        let context = context(registry, handle)?;
+        context.commit = None;
+        let (candidate, seed, bounces, fallback_reason) = result?;
+        cancelled(&cancel)?;
+        // A pending render batch owns the old scene until its fence completes.
+        if let Some(job) = context.job.as_mut() {
+            if job.active() {
+                job.cancelled = true;
+                while job_active(context) {
+                    advance_job(context, 0)?;
+                    std::thread::yield_now();
+                }
+            }
+        }
+        let previous = context.scene.replace(candidate);
+        if let Some(previous) = previous {
             context.spare_buffers = previous.buffers;
             context.spare_hardware = previous.hardware.map_or_else(HashMap::new, |h| h.inputs);
         }
@@ -396,8 +461,42 @@ pub unsafe extern "C" fn mt_context_commit_with_settings(
         context.job = None;
         context.failed = false;
         Ok(())
+    })();
+    drop(slot);
+    write_result(error, capacity, result)
+}
+struct CommitSnapshot {
+    gpu: GpuDevice,
+    backend: u32,
+    spare_buffers: HashMap<usize, wgpu::Buffer>,
+    spare_hardware: HashMap<String, wgpu::Buffer>,
+}
+fn cancelled(cancel: &PendingCommit) -> Result<()> {
+    if cancel.cancelled.load(Ordering::Acquire) {
+        Err("Scene commit cancelled".into())
+    } else {
+        Ok(())
+    }
+}
+fn job_active(context: &Context) -> bool {
+    context.job.as_ref().is_some_and(|j| j.active())
+}
+/// Request cancellation. The synchronous committing caller drains preparation
+/// and releases the private candidate before returning; the old scene survives.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_context_cancel_commit(
+    handle: u64,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    action(error, capacity, |registry| {
+        if let Some(cancel) = &context(registry, handle)?.commit {
+            cancel.cancelled.store(true, Ordering::Release);
+        }
+        Ok(())
     })
 }
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_render(
     handle: u64,
@@ -458,6 +557,11 @@ pub unsafe extern "C" fn mt_context_update_camera(
     capacity: usize,
 ) -> i32 {
     action(error, capacity, |registry| {
+        if registry.contexts.values().any(|c| c.commit.is_some()) {
+            return Err(
+                "Scene commit is preparing; retry incremental edits after it finishes".into(),
+            );
+        }
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
@@ -483,6 +587,11 @@ pub unsafe extern "C" fn mt_context_update_material(
     capacity: usize,
 ) -> i32 {
     action(error, capacity, |registry| {
+        if registry.contexts.values().any(|c| c.commit.is_some()) {
+            return Err(
+                "Scene commit is preparing; retry incremental edits after it finishes".into(),
+            );
+        }
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
@@ -512,6 +621,11 @@ pub unsafe extern "C" fn mt_context_update_environment(
     capacity: usize,
 ) -> i32 {
     action(error, capacity, |registry| {
+        if registry.contexts.values().any(|c| c.commit.is_some()) {
+            return Err(
+                "Scene commit is preparing; retry incremental edits after it finishes".into(),
+            );
+        }
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
@@ -550,6 +664,11 @@ pub unsafe extern "C" fn mt_context_update_geometry(
     capacity: usize,
 ) -> i32 {
     action(error, capacity, |registry| {
+        if registry.contexts.values().any(|c| c.commit.is_some()) {
+            return Err(
+                "Scene commit is preparing; retry incremental edits after it finishes".into(),
+            );
+        }
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
@@ -591,6 +710,11 @@ pub unsafe extern "C" fn mt_context_update_transform(
     capacity: usize,
 ) -> i32 {
     action(error, capacity, |registry| {
+        if registry.contexts.values().any(|c| c.commit.is_some()) {
+            return Err(
+                "Scene commit is preparing; retry incremental edits after it finishes".into(),
+            );
+        }
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
@@ -636,6 +760,11 @@ pub unsafe extern "C" fn mt_context_update_light(
     capacity: usize,
 ) -> i32 {
     action(error, capacity, |registry| {
+        if registry.contexts.values().any(|c| c.commit.is_some()) {
+            return Err(
+                "Scene commit is preparing; retry incremental edits after it finishes".into(),
+            );
+        }
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
@@ -934,6 +1063,248 @@ pub unsafe extern "C" fn mt_job_cancel(id: u64, error: *mut c_char, capacity: us
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preparation_does_not_block_render_and_cancellation_preserves_old_scene() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let mut handle = 0;
+        let mut error = [0i8; 512];
+        unsafe {
+            if mt_context_create_with_backend(0, &mut handle, error.as_mut_ptr(), error.len()) != 0
+            {
+                return;
+            }
+            let input = scene::tests::input();
+            assert_eq!(
+                mt_context_commit(
+                    handle,
+                    input.as_ptr(),
+                    input.len(),
+                    error.as_mut_ptr(),
+                    error.len()
+                ),
+                0
+            );
+            let mut active = 99;
+            let mut reason = [0i8; 128];
+            assert_eq!(
+                mt_context_backend(
+                    handle,
+                    &mut active,
+                    reason.as_mut_ptr(),
+                    reason.len(),
+                    error.as_mut_ptr(),
+                    error.len()
+                ),
+                0
+            );
+            assert_eq!(active, 0);
+        }
+        let (started, entered) = mpsc::sync_channel(1);
+        let (resume, resumed) = mpsc::sync_channel(1);
+        runtime::enqueue(move || {
+            started.send(()).unwrap();
+            resumed.recv_timeout(Duration::from_secs(15)).unwrap();
+        });
+        entered.recv().unwrap();
+        let committing = std::thread::spawn(move || {
+            let input = scene::tests::input();
+            let mut error = [0i8; 512];
+            loop {
+                let code = unsafe {
+                    mt_context_commit(
+                        handle,
+                        input.as_ptr(),
+                        input.len(),
+                        error.as_mut_ptr(),
+                        error.len(),
+                    )
+                };
+                if code == 0
+                    || !unsafe { CStr::from_ptr(error.as_ptr()) }
+                        .to_string_lossy()
+                        .contains("registry is active")
+                {
+                    return code;
+                }
+                std::thread::yield_now();
+            }
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let preparing = REGISTRY.lock().unwrap().as_ref().unwrap().contexts[&handle]
+                .commit
+                .is_some();
+            if preparing {
+                break;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        unsafe {
+            let mut job = 0;
+            assert_eq!(
+                mt_context_submit(handle, 1, &mut job, error.as_mut_ptr(), error.len()),
+                0
+            );
+            assert_eq!(mt_job_poll(job, 1, error.as_mut_ptr(), error.len()), 0);
+            assert_eq!(
+                mt_context_cancel_commit(handle, error.as_mut_ptr(), error.len()),
+                0
+            );
+            loop {
+                assert_eq!(mt_job_poll(job, 0, error.as_mut_ptr(), error.len()), 0);
+                if !job_active(&REGISTRY.lock().unwrap().as_ref().unwrap().contexts[&handle]) {
+                    break;
+                }
+                assert!(Instant::now() < deadline);
+            }
+        }
+        resume.send(()).unwrap();
+        assert_eq!(committing.join().unwrap(), 1);
+        let mut before = vec![0u8; 8 * 8 * 16];
+        let mut after = before.clone();
+        let mut written = 0;
+        unsafe {
+            assert_eq!(
+                mt_context_read_pixels(
+                    handle,
+                    0,
+                    before.as_mut_ptr(),
+                    before.len(),
+                    &mut written,
+                    error.as_mut_ptr(),
+                    error.len()
+                ),
+                0
+            );
+            assert_eq!(mt_context_reset(handle, error.as_mut_ptr(), error.len()), 0);
+            assert_eq!(
+                mt_context_render(handle, 1, error.as_mut_ptr(), error.len()),
+                0
+            );
+            assert_eq!(
+                mt_context_read_pixels(
+                    handle,
+                    0,
+                    after.as_mut_ptr(),
+                    after.len(),
+                    &mut written,
+                    error.as_mut_ptr(),
+                    error.len()
+                ),
+                0
+            );
+            assert_eq!(before, after);
+            assert_eq!(
+                mt_context_destroy(handle, error.as_mut_ptr(), error.len()),
+                0
+            );
+        }
+        // No creating-thread binding survives teardown, and eight is not a cap.
+        std::thread::spawn(|| {
+            let mut handles = Vec::new();
+            let mut error = [0i8; 512];
+            for _ in 0..9 {
+                let mut handle = 0;
+                unsafe {
+                    assert_eq!(
+                        mt_context_create_with_backend(
+                            0,
+                            &mut handle,
+                            error.as_mut_ptr(),
+                            error.len()
+                        ),
+                        0
+                    );
+                }
+                handles.push(handle);
+            }
+            for handle in handles {
+                unsafe {
+                    assert_eq!(
+                        mt_context_destroy(handle, error.as_mut_ptr(), error.len()),
+                        0
+                    );
+                }
+            }
+        })
+        .join()
+        .unwrap();
+    }
+    #[test]
+    fn destroy_cancels_and_drains_an_unpublished_candidate() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let mut handle = 0;
+        let mut error = [0i8; 512];
+        if unsafe {
+            mt_context_create_with_backend(0, &mut handle, error.as_mut_ptr(), error.len())
+        } != 0
+        {
+            return;
+        }
+        let (entered, started) = mpsc::sync_channel(1);
+        let (resume, resumed) = mpsc::sync_channel(1);
+        runtime::enqueue(move || {
+            entered.send(()).unwrap();
+            resumed.recv_timeout(Duration::from_secs(15)).unwrap();
+        });
+        started.recv().unwrap();
+        let committing = std::thread::spawn(move || {
+            let bytes = scene::tests::input();
+            let mut error = [0i8; 512];
+            loop {
+                let code = unsafe {
+                    mt_context_commit(
+                        handle,
+                        bytes.as_ptr(),
+                        bytes.len(),
+                        error.as_mut_ptr(),
+                        error.len(),
+                    )
+                };
+                if !unsafe { CStr::from_ptr(error.as_ptr()) }
+                    .to_string_lossy()
+                    .contains("registry is active")
+                {
+                    return code;
+                }
+                std::thread::yield_now();
+            }
+        });
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let pending = loop {
+            let pending = REGISTRY.lock().unwrap().as_ref().unwrap().contexts[&handle]
+                .commit
+                .clone();
+            if let Some(pending) = pending {
+                break pending;
+            }
+            assert!(Instant::now() < deadline);
+            std::thread::sleep(Duration::from_millis(1));
+        };
+        let destroying = std::thread::spawn(move || {
+            let mut error = [0i8; 512];
+            unsafe { mt_context_destroy(handle, error.as_mut_ptr(), error.len()) }
+        });
+        while !pending.cancelled.load(Ordering::Acquire) {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert!(!destroying.is_finished());
+        resume.send(()).unwrap();
+        assert_eq!(committing.join().unwrap(), 1);
+        assert_eq!(destroying.join().unwrap(), 0);
+        assert!(*pending.finished.lock().unwrap());
+        assert!(
+            !REGISTRY
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .contexts
+                .contains_key(&handle)
+        );
+    }
     #[test]
     fn changed_blas_and_tlas_are_ready_after_interleaved_retained_edits() {
         let _test = ABI_TEST_LOCK.lock().unwrap();

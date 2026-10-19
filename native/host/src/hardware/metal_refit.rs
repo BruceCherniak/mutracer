@@ -25,7 +25,7 @@ fn with_entries<T>(
 ) -> Result<T> {
     // SAFETY: wgpu's HAL guards share one non-reentrant snatch lock. Take
     // pointers with separate guards, then release each guard before the next.
-    // The native owner/ENTRY_LOCK serializes this operation; device, inputs,
+    // The context registry serializes edits and publication; device, inputs,
     // source/candidate ASes and scratch have live owning handles throughout it.
     // No destroy or resource replacement is allowed until the completion fence.
     // wgpu stores these HAL objects in stable owned resource allocations.
@@ -121,7 +121,7 @@ pub(super) fn encode(
 ) -> Result<()> {
     // Source and destination are different AS allocations, both created with
     // ALLOW_UPDATE and identical geometry sizes. No accepted AS is mutated.
-    // Same owner/lifetime preconditions as with_entries: guards may not nest.
+    // Same context-lock/lifetime preconditions as with_entries: guards may not nest.
     let source_pointer = {
         let raw = unsafe { source.as_hal::<Metal>() }.ok_or("Metal source BLAS unavailable")?;
         &*raw as *const hal::metal::AccelerationStructure

@@ -44,6 +44,11 @@ fn read_words(path: &Path) -> Result<Vec<u32>> {
         .collect())
 }
 pub fn rebuild(directory: &Path, capture: &Capture) -> Result<(Vec<u8>, Stats)> {
+    let scene_dir = directory.to_owned();
+    let capture = capture.clone();
+    super::runtime::call(move || rebuild_inner(&scene_dir, &capture))
+}
+fn rebuild_inner(directory: &Path, capture: &Capture) -> Result<(Vec<u8>, Stats)> {
     let prefix = fs::read(directory.join(&capture.prefix))?;
     if prefix.len() > capture.size {
         return Err("Invalid BVH prefix size".into());

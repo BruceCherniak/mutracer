@@ -558,6 +558,12 @@ fn validate_camera(w: &Words<'_>, o: usize) -> Result<()> {
     Ok(())
 }
 pub(super) fn prepare_camera(bytes: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
+    let bytes = bytes.to_vec();
+    let width = width;
+    let height = height;
+    runtime::call(move || prepare_camera_inner(&bytes, width, height))
+}
+fn prepare_camera_inner(bytes: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
     if bytes.len() != cam::WORDS * WORD_BYTES {
         return Err("Camera descriptor must contain exactly 128 bytes".into());
     }
@@ -588,7 +594,15 @@ pub(super) fn prepare_camera(bytes: &[u8], width: u32, height: u32) -> Result<Ve
 }
 // RAII lifetime matches the committed native scene, including failed candidates.
 // Every AOT arena reset/collection leaves these explicitly rooted TS objects alive.
-pub(super) struct PreparedState {
+#[derive(Clone)]
+pub(super) struct PreparedState(Arc<PreparedData>);
+impl std::ops::Deref for PreparedState {
+    type Target = PreparedData;
+    fn deref(&self) -> &PreparedData {
+        &self.0
+    }
+}
+pub(super) struct PreparedData {
     token: u32,
     pub(super) settings: settings::RenderSettings,
     indexed: bool,
@@ -599,16 +613,19 @@ pub(super) struct PreparedState {
     authoritative_as_indices: Vec<u8>,
     authoritative_bounds: Vec<u8>,
 }
-impl Drop for PreparedState {
+impl Drop for PreparedData {
     fn drop(&mut self) {
-        let mut pointer = std::ptr::null();
-        let mut size = 0;
-        unsafe {
-            init_core();
-            mt_core_scene_release(self.token, &mut pointer, &mut size);
-            mt_core_reset();
-            mt_core_collect();
-        }
+        let token = self.token;
+        runtime::enqueue(move || {
+            let mut pointer = std::ptr::null();
+            let mut size = 0;
+            unsafe {
+                init_core();
+                mt_core_scene_release(token, &mut pointer, &mut size);
+                mt_core_reset();
+                mt_core_collect();
+            }
+        });
     }
 }
 // Buffer records have zero dimensions; texture records carry their exact extent.
@@ -664,6 +681,11 @@ impl PreparedState {
     }
 
     pub(super) fn geometry(&self, bytes: &[u8]) -> Result<LightingUpdates> {
+        let state = self.clone();
+        let bytes = bytes.to_vec();
+        runtime::call(move || state.geometry_inner(&bytes))
+    }
+    fn geometry_inner(&self, bytes: &[u8]) -> Result<LightingUpdates> {
         if bytes.len() < 16 || bytes.len() > MAX_BYTES || bytes.len() % 4 != 0 {
             return Err("Invalid geometry update length".into());
         }
@@ -687,6 +709,10 @@ impl PreparedState {
         )
     }
     pub(super) fn accept_geometry(&self) -> Result<()> {
+        let state = self.clone();
+        runtime::call(move || state.accept_geometry_inner())
+    }
+    fn accept_geometry_inner(&self) -> Result<()> {
         let mut pointer = std::ptr::null();
         let mut size = 0;
         unsafe {
@@ -725,6 +751,11 @@ impl PreparedState {
         Ok((capture, assets))
     }
     pub(super) fn transform(&self, bytes: &[u8]) -> Result<LightingUpdates> {
+        let state = self.clone();
+        let bytes = bytes.to_vec();
+        runtime::call(move || state.transform_inner(&bytes))
+    }
+    fn transform_inner(&self, bytes: &[u8]) -> Result<LightingUpdates> {
         if bytes.len() != 80 {
             return Err("Transform descriptor must contain exactly 80 bytes".into());
         }
@@ -741,6 +772,10 @@ impl PreparedState {
         )
     }
     pub(super) fn accept_transform(&self) -> Result<()> {
+        let state = self.clone();
+        runtime::call(move || state.accept_transform_inner())
+    }
+    fn accept_transform_inner(&self) -> Result<()> {
         let mut pointer = std::ptr::null();
         let mut size = 0;
         unsafe {
@@ -757,6 +792,11 @@ impl PreparedState {
         Ok(())
     }
     pub(super) fn environment(&self, bytes: &[u8]) -> Result<LightingUpdates> {
+        let state = self.clone();
+        let bytes = bytes.to_vec();
+        runtime::call(move || state.environment_inner(&bytes))
+    }
+    fn environment_inner(&self, bytes: &[u8]) -> Result<LightingUpdates> {
         if bytes.len() < 48 || bytes.len() > MAX_BYTES || bytes.len() % 4 != 0 {
             return Err("Invalid environment descriptor length".into());
         }
@@ -798,6 +838,11 @@ impl PreparedState {
         lighting_result(pointer, size, &[7, 8, 21, 22, 23, 24])
     }
     pub(super) fn light(&self, bytes: &[u8]) -> Result<LightingUpdates> {
+        let state = self.clone();
+        let bytes = bytes.to_vec();
+        runtime::call(move || state.light_inner(&bytes))
+    }
+    fn light_inner(&self, bytes: &[u8]) -> Result<LightingUpdates> {
         if bytes.len() != cam::WORDS * WORD_BYTES {
             return Err("Light descriptor must contain exactly 128 bytes".into());
         }
@@ -822,6 +867,10 @@ impl PreparedState {
         lighting_result(pointer, size, &[7, 8, 24])
     }
     pub(super) fn accept_lighting(&self) -> Result<()> {
+        let state = self.clone();
+        runtime::call(move || state.accept_lighting_inner())
+    }
+    fn accept_lighting_inner(&self) -> Result<()> {
         let mut pointer = std::ptr::null();
         let mut size = 0;
         unsafe {
@@ -838,6 +887,11 @@ impl PreparedState {
         Ok(())
     }
     pub(super) fn material(&self, bytes: &[u8]) -> Result<Vec<u8>> {
+        let state = self.clone();
+        let bytes = bytes.to_vec();
+        runtime::call(move || state.material_inner(&bytes))
+    }
+    fn material_inner(&self, bytes: &[u8]) -> Result<Vec<u8>> {
         if bytes.len() != 48 {
             return Err("Material descriptor must contain exactly 48 bytes".into());
         }
@@ -1067,6 +1121,20 @@ pub(super) fn prepare_retained_with_settings(
     backend: u32,
     settings: &settings::RenderSettings,
 ) -> Result<(Scene, HashMap<String, Vec<u8>>, PreparedState)> {
+    let bytes = bytes.to_vec();
+    let hardware = hardware;
+    let backend = backend;
+    let settings = *settings;
+    runtime::call(move || {
+        prepare_retained_with_settings_inner(&bytes, hardware, backend, &settings)
+    })
+}
+fn prepare_retained_with_settings_inner(
+    bytes: &[u8],
+    hardware: bool,
+    backend: u32,
+    settings: &settings::RenderSettings,
+) -> Result<(Scene, HashMap<String, Vec<u8>>, PreparedState)> {
     static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
     let token = NEXT
         .fetch_update(
@@ -1075,7 +1143,7 @@ pub(super) fn prepare_retained_with_settings(
             |v| v.checked_add(1),
         )
         .map_err(|_| "Native preparation token space exhausted")?;
-    let mut state = PreparedState {
+    let mut state = PreparedData {
         token,
         settings: *settings,
         indexed: hardware,
@@ -1109,7 +1177,7 @@ pub(super) fn prepare_retained_with_settings(
         .get("native-35")
         .ok_or("Missing explicit HWRT indices")?
         .clone();
-    Ok((scene, assets, state))
+    Ok((scene, assets, PreparedState(Arc::new(state))))
 }
 pub(super) fn prepare_hardware(bytes: &[u8]) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
     prepare_diagnostic(bytes, hardware::direct_input_enabled())
@@ -1174,6 +1242,34 @@ fn prepare_impl(
     prepare_impl_with_kernels(bytes, token, hardware, diagnostic, settings, variants, true)
 }
 fn prepare_impl_with_kernels(
+    bytes: &[u8],
+    token: u32,
+    hardware: bool,
+    diagnostic: bool,
+    settings: &settings::RenderSettings,
+    variants: u32,
+    native_kernels: bool,
+) -> Result<(Scene, HashMap<String, Vec<u8>>)> {
+    let bytes = bytes.to_vec();
+    let token = token;
+    let hardware = hardware;
+    let diagnostic = diagnostic;
+    let settings = *settings;
+    let variants = variants;
+    let native_kernels = native_kernels;
+    runtime::call(move || {
+        prepare_impl_with_kernels_inner(
+            &bytes,
+            token,
+            hardware,
+            diagnostic,
+            &settings,
+            variants,
+            native_kernels,
+        )
+    })
+}
+fn prepare_impl_with_kernels_inner(
     bytes: &[u8],
     token: u32,
     hardware: bool,
@@ -1450,13 +1546,17 @@ pub(crate) mod tests {
         fn mt_core_shader_cache(output: *mut *const u8, size: *mut usize);
     }
     fn shader_stats() -> [u32; 3] {
-        let mut pointer = std::ptr::null();
-        let mut size = 0;
-        unsafe {
-            mt_core_shader_cache(&mut pointer, &mut size);
-        }
-        let packet = unsafe { copy_core_result(pointer, size, 16).unwrap() };
-        std::array::from_fn(|i| u32::from_le_bytes(packet[i * 4..i * 4 + 4].try_into().unwrap()))
+        runtime::run(|| {
+            let mut pointer = std::ptr::null();
+            let mut size = 0;
+            unsafe {
+                mt_core_shader_cache(&mut pointer, &mut size);
+            }
+            let packet = unsafe { copy_core_result(pointer, size, 16).unwrap() };
+            std::array::from_fn(|i| {
+                u32::from_le_bytes(packet[i * 4..i * 4 + 4].try_into().unwrap())
+            })
+        })
     }
     #[test]
     fn retained_transform_accepts_range_writes_from_the_aot_call_chain() {
@@ -1490,7 +1590,7 @@ pub(crate) mod tests {
     fn production_emits_one_backend_and_reuses_aot_shader_generation() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let _entry = ENTRY_LOCK.lock().unwrap();
-        init_core();
+        runtime::init();
         let settings = settings::RenderSettings {
             seed: 67890,
             bounces: f64::NAN,
@@ -1534,7 +1634,7 @@ pub(crate) mod tests {
     fn camera_rejects_finite_inputs_with_nonfinite_packing_and_recovers() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let _entry = ENTRY_LOCK.lock().unwrap();
-        init_core();
+        runtime::init();
         let scene = input();
         let camera = &scene[88 * 4..120 * 4];
         let expected = prepare_camera(camera, 8, 8).unwrap();

@@ -11,11 +11,11 @@ extern "C" {
  * All pointers must remain valid for the call; input is copied, no pointers are
  * retained. Pixel storage belongs to the caller. This ABI is not stable yet.
  *
- * All contexts and probe calls must use the first creating owner thread until
- * process exit (including after destroying the last context). Overlapping calls
- * return errors; render/read/reset/commit can block. Jobs use polling below.
- * At most eight contexts. Context handles are
- * unique until process exit; destroyed/unknown handles return errors.
+ * Calls may come from any thread. Short context operations serialize; an
+ * overlapping operation may return busy and can be retried. Scene preparation
+ * runs on a dedicated library thread; poll/render of the old scene remain usable
+ * during a full commit. No fixed context count limit; device memory limits apply.
+ * Handles are unique until process exit; destroyed/unknown handles return errors.
  * Contexts retain GPU resources between renders; commit replaces the complete
  * scene. A failed commit preserves the previous scene,
  * samples and outputs. Successful commit resets samples to zero, including a
@@ -58,7 +58,13 @@ int32_t mt_context_create_with_backend(uint32_t backend, mt_context *output, cha
  */
 int32_t mt_context_backend(mt_context handle, uint32_t *active, char *reason, size_t reason_capacity, char *error, size_t capacity);
 int32_t mt_context_create(mt_context *output, char *error, size_t capacity);
+/* Destroy rejects active render jobs: cancel/poll them first. It cancels a
+ * pending commit and waits for candidate resources and AOT roots to retire. */
 int32_t mt_context_destroy(mt_context handle, char *error, size_t capacity);
+/* Cancellation is idempotent. The committing call returns an error after
+ * draining its current preparation step and releasing the candidate. It preserves
+ * the old scene. Already submitted GPU work cannot be interrupted. */
+int32_t mt_context_cancel_commit(mt_context handle, char *error, size_t capacity);
 int32_t mt_context_commit(mt_context handle, const uint8_t *input, size_t length, char *error, size_t capacity);
 /* Settings are copied by commit_with_settings. Initialize with
  * mt_render_settings_default, then change fields. Defaults: Sobol, seed 12345,
@@ -72,7 +78,9 @@ int32_t mt_context_commit(mt_context handle, const uint8_t *input, size_t length
  * Scene quality flags still select bevel and dispersion. sample_sequence_offset
  * selects the first sequence index. reserved must be 0; struct_size must match.
  * Successful commit resets accumulation and expires the previous job. Rejection
- * preserves the old scene, settings and output; active jobs must finish first.
+ * preserves the old scene, settings and output. Jobs can progress during
+ * preparation; successful publication drains/cancels the old job before replacing
+ * the scene. Incremental edits reject while a full commit is preparing.
  */
 typedef struct mt_render_settings {
   uint32_t struct_size, sampling_pattern, seed, max_samples;
@@ -80,7 +88,7 @@ typedef struct mt_render_settings {
   double transmissive_output_alpha_min;
   uint32_t sample_sequence_offset, reserved;
 } mt_render_settings;
-/* Pure initialization, no device or owner-thread requirement. Returns 1 for NULL. */
+/* Pure initialization, no device requirement. Returns 1 for NULL. */
 int32_t mt_render_settings_default(mt_render_settings *output);
 int32_t mt_context_commit_with_settings(mt_context handle, const uint8_t *input, size_t length,
   const mt_render_settings *settings, char *error, size_t capacity);
@@ -182,7 +190,7 @@ int32_t mt_context_info(mt_context handle, mt_context_info_v1 *info, char *error
 int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, size_t size,
   size_t *written, char *error, size_t capacity);
 /* One job per context. submit records the request without GPU dispatch. Poll
- * drives progress on the owner thread, submits at most max_new_samples (0..64)
+ * drives progress on the calling thread, submits at most max_new_samples (0..64)
  * when no batch is in flight, and checks completion without waiting for the GPU.
  * CPU batch preparation/submission still takes time; no fixed latency guarantee.
  * A budget of 0 only checks completion. info reports the last polled snapshot;
@@ -190,7 +198,7 @@ int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, s
  *
  * requested/submitted/completed counts are additional samples, excluding base.
  * Context info counts only completed samples. Active jobs reject blocking render,
- * reset, commit, update_camera, update_material, update_environment, update_light,
+ * reset, update_camera, update_material, update_environment, update_light,
  * read_pixels and destroy. Cancel is idempotent:
  * queued work stops immediately; in-flight work finishes, then poll reaches
  * cancelled or complete.

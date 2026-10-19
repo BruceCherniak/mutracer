@@ -1,4 +1,4 @@
-/* Real asynchronous GPU jobs: owner-thread polling, draining cancellation and resume. */
+/* Real asynchronous GPU jobs: any-thread polling, draining cancellation and resume. */
 #include "mutracer-context.h"
 #include <pthread.h>
 #include <stdio.h>
@@ -10,6 +10,10 @@ static char error[4096];static unsigned checks;
 #define REQUIRE(test) do{checks++;if(!(test)){fprintf(stderr,"line %d: %s; %s\n",__LINE__,#test,error);return 1;}}while(0)
 #define OK(call) REQUIRE((call)==0)
 #define BAD(call) REQUIRE((call)!=0)
+static int backend_is(mt_context context,uint32_t expected) {
+ uint32_t actual=99;char reason[512];
+ return mt_context_backend(context,&actual,reason,sizeof(reason),error,sizeof(error)) || actual!=expected;
+}
 static unsigned char *load(const char *path,size_t *size){
  FILE *f=fopen(path,"rb");if(!f||fseek(f,0,SEEK_END))return NULL;long n=ftell(f);if(n<0||fseek(f,0,SEEK_SET))return NULL;
  unsigned char *p=malloc(n?(size_t)n:1);if(!p||fread(p,1,(size_t)n,f)!=(size_t)n)return NULL;fclose(f);*size=(size_t)n;return p;
@@ -18,9 +22,10 @@ static int read_image(mt_context context,unsigned kind,unsigned char *output,siz
  return mt_context_read_pixels(context,kind,output,size,&written,error,sizeof(error))||written!=size;
 }
 static void pause_poll(void){const struct timespec delay={0,1000000};nanosleep(&delay,NULL);}
-static void *wrong_thread(void *input){char message[128];mt_render_job id=*(mt_render_job*)input;
- int a=mt_job_poll(id,1,message,sizeof(message)),b=mt_job_cancel(id,message,sizeof(message));
- return (void*)(uintptr_t)(a!=0&&b!=0);
+static void *other_thread(void *input){char message[128];mt_render_job id=*(mt_render_job*)input;
+ mt_job_info_v1 info={.struct_size=sizeof(info)};
+ return (void*)(uintptr_t)(mt_job_info(id,&info,message,sizeof(message))==0);
+
 }
 int main(int argc,char **argv){
  if(argc!=5)return 2;size_t length=0;unsigned char *input=load(argv[1],&length);if(!input||length<128)return 2;
@@ -30,18 +35,18 @@ int main(int argc,char **argv){
  mt_context a=0,b=0;mt_render_job old=0,job_a=0,job_b=0;
  mt_job_info_v1 info={.struct_size=sizeof(info)};mt_context_info_v1 context_info={.struct_size=sizeof(context_info)};
  OK(mt_context_create_with_backend(0,&a,error,sizeof(error)));OK(mt_context_create_with_backend(0,&b,error,sizeof(error)));
- OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(mt_context_commit(b,input,length,error,sizeof(error)));
+ OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,0));OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,0));
  BAD(mt_job_info(0,&info,error,sizeof(error)));BAD(mt_context_submit(a,1,NULL,error,sizeof(error)));
  BAD(mt_context_submit(a,0,&old,error,sizeof(error)));BAD(mt_context_submit(a,4097,&old,error,sizeof(error)));
  OK(mt_context_submit(a,samples,&old,error,sizeof(error)));OK(mt_job_info(old,&info,error,sizeof(error)));
  REQUIRE(info.state==0&&info.submitted_samples==0&&info.completed_samples==0&&info.base_samples==0);
  OK(mt_context_info(a,&context_info,error,sizeof(error)));REQUIRE(context_info.state==3&&context_info.samples==0);
- BAD(mt_context_commit(a,input,length,error,sizeof(error)));BAD(mt_context_render(a,1,error,sizeof(error)));
+ BAD(mt_context_render(a,1,error,sizeof(error)));
  BAD(mt_context_reset(a,error,sizeof(error)));BAD(mt_context_destroy(a,error,sizeof(error)));
  size_t written=0;BAD(mt_context_read_pixels(a,0,NULL,0,&written,error,sizeof(error)));
  BAD(mt_context_submit(a,1,&job_a,error,sizeof(error)));BAD(mt_job_poll(old,65,error,sizeof(error)));
  OK(mt_job_poll(old,0,error,sizeof(error)));OK(mt_job_info(old,&info,error,sizeof(error)));REQUIRE(info.submitted_samples==0);
- pthread_t thread;void *thread_result=NULL;REQUIRE(pthread_create(&thread,NULL,wrong_thread,&old)==0);
+ pthread_t thread;void *thread_result=NULL;REQUIRE(pthread_create(&thread,NULL,other_thread,&old)==0);
  REQUIRE(pthread_join(thread,&thread_result)==0);REQUIRE((uintptr_t)thread_result==1);
  OK(mt_job_cancel(old,error,sizeof(error)));OK(mt_job_cancel(old,error,sizeof(error)));
  OK(mt_job_info(old,&info,error,sizeof(error)));REQUIRE(info.state==3&&info.completed_samples==0);
@@ -80,7 +85,7 @@ int main(int argc,char **argv){
  uint32_t version=words[0];words[0]=99;BAD(mt_context_commit(b,input,length,error,sizeof(error)));words[0]=version;
  OK(mt_job_info(job_b,&info,error,sizeof(error)));REQUIRE(info.state==2);
  OK(mt_context_reset(a,error,sizeof(error)));BAD(mt_job_info(job_a,&info,error,sizeof(error)));
- OK(mt_context_commit(b,input,length,error,sizeof(error)));BAD(mt_job_info(job_b,&info,error,sizeof(error)));
+ OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,0));BAD(mt_job_info(job_b,&info,error,sizeof(error)));
  /* Cancelling the final submitted batch still reaches complete, never partial cancellation. */
  OK(mt_context_submit(a,8,&job_a,error,sizeof(error)));OK(mt_job_poll(job_a,64,error,sizeof(error)));
  OK(mt_job_cancel(job_a,error,sizeof(error)));
