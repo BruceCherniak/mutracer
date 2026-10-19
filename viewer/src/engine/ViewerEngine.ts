@@ -12,7 +12,7 @@ import {
   createMaterialSpheres, isHDRFile, loadModelFromFiles, loadModelFromURL, loadModelFromSource,
   type LoadedModel, type PathedFile
 } from './loadModel';
-import type { MaterialValues, TextureKey } from './materialParams';
+import { MATERIAL_BASE, type MaterialValues, type TextureKey } from './materialParams';
 import { displacementHeightRange } from './displacementHeightRange';
 import { downloadPolyHavenMap, polyHavenMaps, type TextureResolution } from './polyHaven';
 import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
@@ -1026,6 +1026,11 @@ export class ViewerEngine {
       const totals = new Array<number>(entries.length).fill(0);
       const report = () => onProgress?.(loaded.reduce((a, b) => a + b, 0), totals.reduce((a, b) => a + b, 0));
       const merge = { key: `${materialId}:polyhaven:${++this.polyHavenPicks}`, ms: Infinity };
+      // The maps carry the color, roughness and metalness; the other layers would hide them.
+      const values: MaterialValues = {
+        ...MATERIAL_BASE, baseColor: [1, 1, 1], baseMetalness: metal ? 1 : 0,
+        ...(urls.metallicRoughnessMap || urls.roughnessMap ? { specularRoughness: 1 } : {})
+      };
       // The first map to land also clears the slots of the previous set.
       let pending: Partial<Record<TextureKey, Blob | null>> | null = {
         map: null, normalMap: null, metallicRoughnessMap: null, roughnessMap: null, metalnessMap: null, displacementMap: null
@@ -1043,7 +1048,7 @@ export class ViewerEngine {
           const first = pending;
           pending = null;
           await this.materials.setTextures(materialId, { ...first, [slot]: blob },
-            first ? { baseColor: [1, 1, 1], specularRoughness: 1, baseMetalness: metal ? 1 : 0 } : {},
+            first ? values : {},
             `${name} textures`, merge);
         });
         await applying;

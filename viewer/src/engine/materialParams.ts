@@ -153,9 +153,12 @@ export function textureSlots(material: OpenPBRMaterial) {
   return slots;
 }
 
-// Presets reset every layer and the shared specular settings, so a preset looks
-// the same whatever material it is applied to. Textures and displacement stay.
-const BASE: MaterialValues = {
+/**
+ * Every layer off and default specular settings. Presets and Poly Haven texture
+ * sets start from it, so they look the same whatever material they replace.
+ * Textures and displacement stay.
+ */
+export const MATERIAL_BASE: MaterialValues = {
   baseMetalness: 0, baseDiffuseRoughness: 0, specularWeight: 1, specularIor: 1.5, specularAnisotropy: 0,
   transmissionWeight: 0, transmissionColor: [1, 1, 1], transmissionDepth: 0, transmissionDispersionScale: 0, thinWalled: false,
   coatWeight: 0, coatRoughness: 0, coatIor: 1.6, coatColor: [1, 1, 1],
@@ -179,7 +182,7 @@ export interface MaterialPreset {
 }
 
 const preset = (category: MaterialPresetCategory, id: string, label: string, values: MaterialValues): MaterialPreset =>
-  ({ id, label, category, values: { ...BASE, ...values } });
+  ({ id, label, category, values: { ...MATERIAL_BASE, ...values } });
 
 // Metal colors are linear F0 reflectances of the pure metals.
 export const MATERIAL_PRESETS: MaterialPreset[] = [
