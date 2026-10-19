@@ -15,7 +15,8 @@ extern "C" {
  * Calls may come from any thread. Short context operations serialize; an
  * overlapping operation may return busy and can be retried. Scene preparation
  * runs on a dedicated library thread; poll/render of the old scene remain usable
- * during a full commit. No fixed context count limit; device memory limits apply.
+ * during a full commit. The committing caller waits; use another calling thread
+ * for UI responsiveness. No fixed context count limit; device memory limits apply.
  * Handles are unique until process exit; destroyed/unknown handles return errors.
  * Contexts retain GPU resources between renders; commit replaces the complete
  * scene. A failed commit preserves the previous scene,
@@ -27,7 +28,11 @@ extern "C" {
  * commit uses seed 12345, bounces 6 and Sobol, matching the raw probe. A commit
  * with settings retains those settings for blocking and job renders. reset clears
  * accumulation and temporary ray state, keeping the committed scene. Independent contexts keep
- * independent accumulation. Render/read/reset GPU failures mark the scene failed;
+ * independent accumulation. Caught Rust panics mark the touched context failed.
+ * Fatal AOT traps, including OOM/abort, terminate the process; use process
+ * isolation if recovery is required. Diagnostics use mutracer-log.h and are
+ * silent by default; the process-wide Rust panic hook may still print.
+ * Render/read/reset GPU failures mark the scene failed;
  * commit a new scene before further use. Device-loss recovery is unavailable.
  *
  * read_pixels kind 0=linear HDR, 1=normal, 2=albedo: little-endian f32 RGBA,
@@ -49,7 +54,9 @@ typedef struct mt_context_info_v1 {
 /* Backend selection: 0=software, 1=HWRT (also the mt_context_create default).
  * HWRT uses hardware closest/shadow hits, including alpha, affine instances,
  * bevel and displacement. Unsupported devices or AS allocation/limit failures
- * fall back to software and report the reason after commit.
+ * fall back to software and report the reason after commit. Coplanar overlapping
+ * surfaces may differ from software. Metal HWRT has an unresolved intermittent
+ * whole-scene miss for one sample; choose software if this risk is unacceptable.
  */
 int32_t mt_context_create_with_backend(uint32_t backend, mt_context *output, char *error, size_t capacity);
 /* active: 0=software, 1=HWRT. Call after commit to verify the actual path.
@@ -199,7 +206,8 @@ int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, s
  *
  * requested/submitted/completed counts are additional samples, excluding base.
  * Context info counts only completed samples. Active jobs reject blocking render,
- * reset, update_camera, update_material, update_environment, update_light,
+ * reset, update_camera, update_transform, update_geometry, update_material,
+ * update_environment, update_light,
  * read_pixels and destroy. Cancel is idempotent:
  * queued work stops immediately; in-flight work finishes, then poll reaches
  * cancelled or complete.
@@ -209,7 +217,8 @@ int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, s
  * be destroyed or replaced by commit. Device-loss recovery remains unavailable.
  *
  * A job handle expires on the next submit, blocking render, successful reset/
- * commit/camera/material/environment/light update, or context destruction.
+ * commit/camera/transform/geometry/material/environment/light update, or context
+ * destruction.
  * Validation-rejected calls retain the job.
  * Handles are never reused. Save any terminal info before starting another job.
  */

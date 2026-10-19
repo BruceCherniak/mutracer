@@ -1,319 +1,166 @@
 # Native contributor guide
 
-The native implementation is an experimental synchronous AOT core plus Rust/wgpu
-host. Usage and supported inputs are in [README.md](./README.md). Do not treat
-module compilation, prepared replay and raw-scene rendering as equivalent gates. License
-texts and notices belong to their component: [native library](./THIRD_PARTY_NOTICES.md)
-and [native viewer](./viewer/THIRD_PARTY_NOTICES.md). Shared renderer notices stay at
-the repository root.
+Public behavior, costs and limits belong in [README.md](./README.md) and the C
+headers. This guide covers implementation, validation and maintenance. License
+notices are separate for the [native library](./THIRD_PARTY_NOTICES.md) and
+[viewer](./viewer/THIRD_PARTY_NOTICES.md).
 
-## Native viewer validation
+## Build and CI
 
-`npm run native:viewer:build` checks the complete AOT entry graph, builds the
-archive and Rust viewer with locked dependencies, creates a macOS app bundle
-and ad-hoc-signs it. `native:viewer` also launches it. The viewer is a small
-client of the experimental ABI; backend selection extends the C entry points
-without changing existing signatures or structure layouts. Its owner-bound
-wrapper cannot be sent to another thread. UI presentation uses egui/glow; tracing uses the existing wgpu/Metal
-library and reads completed HDR batches back to the UI.
+Use scriptc **0.3.2**, Rust with locked dependencies and a C++20 compiler. Set
+`MUTRACER_SCRIPTC` to the compiler and `MUTRACER_NATIVE_OUTPUT` to an evidence
+folder outside the checkout. `npm run native:scene` builds the composed AOT
+archive and verifies raw-scene preparation and rendering on 33 fixtures.
+`native:context`, `native:jobs`, `native:camera` and `native:settings` build on that
+gate and validate retained scenes, polling/cancellation, camera updates and render
+settings respectively. Use `MUTRACER_NATIVE_SAMPLES` to select the fixture sample
+count; cross-stage byte comparisons must use the same count and seed.
 
-Run the bundled executable with `[MODEL] --smoke-out DIRECTORY` for real GPU
-checks of load/render, queued cancellation/restart, orbit/restore, material and
-environment edits, Radiance HDR loading and PNG output. It also records raw
-software/HWRT HDR and guide differences, asserts the actual backend, and runs native
-OIDN against a higher-sample reference without changing accumulation. Test both
-external and embedded textured GLTF resources, unsupported required extensions and malformed
-files. Copy the app elsewhere and run with an empty inherited environment and
-`PATH=/nonexistent`; compare HDR bytes and inspect native dependencies. Keep
-fixture generation, images, detailed checks and measurements outside the repo.
+The macOS CI job installs platform optional packages from `native/toolchain/`.
+For the same local run:
 
-Run `cargo test --locked --manifest-path native/viewer/Cargo.toml` with
-`MUTRACER_AOT_ARCHIVE` set to the built archive. Input tests cover stationary and
-outside presses, and orbit/Shift/right-pan gestures delivered across frames or
-coalesced into one frame. Keep event ordering: release-frame movement must not
-be dropped, and moving the pointer to press must not move the camera.
+```sh
+npm ci --prefix native/toolchain --include=optional
+MUTRACER_NATIVE_OUTPUT=/absolute/evidence npm run native:ci
+```
 
-Also inspect the actual app: open a file, change each panel, orbit/pan/zoom/fit,
-pause/resume/restart, change resolution and exposure, and export PNG. Headless
-smoke alone does not validate window input or file dialogs. Record any OS lock
-or permission block without marking the interactive gate complete. The supplied
-procedural GLB is original project geometry under the repository MIT license.
-The build rebuilds OIDN2.5.1 core/API without the three large weight blobs and
-bundles the ABI-matched official CPU/Metal modules and upstream license notices. `MUTRACER_OIDN_ROOT` can select an extracted SDK; direct Cargo executable
-runs can set `MUTRACER_OIDN_LIBRARY` to its main dynamic library. The package helper
-copies and signs libraries atomically so rebuilding does not truncate loaded code.
+The compiler resolver restores executable permissions for the platform archive's
+compiler, TypeScript server, LLVM code generator and comptime helper. Root Web
+dependencies do not include this compiler. CI skips GPU execution only when
+adapter discovery reports no adapter; device initialization/execution failures
+remain failures. Rust CPU tests, module contracts and storage checks still run.
+The optional MaterialTable whole-module probe has known compiler blockers;
+all 14 required modules must build and verify.
 
-Run the executable with `--interaction-smoke DIRECTORY` to hold continuous camera
-input, assert changing/nonblank previews, reject stale OIDN output after a resize,
-and wait for the new denoised result. Keep AOT/context calls on the UI owner thread;
-the OIDN worker owns only its separate OIDN device/filter and copied image data.
-Check the actual backend after every HWRT commit. Unsupported devices and AS
-allocation or limit failures must report a software fallback. The first-hit and
-path diagnostic tools compare authoritative hardware identities against software;
-image statistics use a high-sample software reference. Do not treat a fallback
-as a hardware success or native OIDN as browser-model numerical parity.
+For direct Rust builds, set `MUTRACER_AOT_ARCHIVE` to the built archive. **Use
+separate `CARGO_TARGET_DIR` values for the independent host and viewer manifests.**
+Their different wgpu feature graphs can otherwise overwrite the host's unhashed
+multi-crate-type rlib and cause incompatible wgpu crate identities.
+Run both Rust suites, the root typechecks, library/viewer tests,
+`native:modules:verify`, `native:storage:verify` and `npm run build` before stage
+review. Run rustfmt before committing Rust. Compilation is not a GPU output gate.
 
-## Shared scene assembly and render settings
+## Runtime, ownership and errors
 
-The raw context compiles the shared TypeScript scene assembly. Both paths use
-the same attribute layout, light choices/PMFs/IES packing, stack capacity and
-uniform setters. Render limits live in a platform-independent module; the browser
-pipeline reexports the same constants and normalizers.
+C context and job calls may originate on arbitrary threads. Short registry
+operations serialize and overlapping calls may return busy. Full commit builds a
+candidate outside the registry lock; the old scene can keep rendering/polling.
+A process-wide dedicated worker owns the AOT runtime and its preparation roots.
+Copy AOT results before reset/collection, and initialize the module only once.
+There is no dynamic-unload shutdown API for that worker.
 
-Use `native/generate-layout-schema.mjs` after editing the shared layout schema.
-Its `--check` runs with typecheck. Descriptor/uniform/resource offsets and the
-displacement quantization contract are generated for TS, Rust and C.
+A context commit token identifies cancellation and publication. Cancel drains the
+current preparation step; destroy waits until the candidate's roots/resources
+retire. A candidate keeps its GPU resources until successful publication, and
+rejection preserves the old scene/settings/samples. Publication cancels/drains
+old render work. Incremental updates reject active jobs or pending full commits.
+Handles are monotonic, with no fixed eight-context cap. Device memory remains
+finite. Two resource generations and at most 32 pipeline variants may coexist;
+preserve transactional behavior when changing their retention policy.
 
-`npm run native:settings` runs scene/context/jobs/camera validation, then checks
-the settings C API on ordinary, alpha, IES and displacement fixtures with both
-backends. It asserts the actual backend, all three sampling patterns, finite
-AOVs, default normalization, rejection preservation and exact blocking/job
-accumulation. Settings behavior and defaults are in mutracer-context.h.
+TS errors carry an operation code and message in a bounded UTF-8 packet. Rust
+validates that packet and reports the specific cause. Caught Rust panics mark
+the touched context failed while guards remain alive to avoid poisoned locks.
+A successful full commit recovers the scene; AOT OOM/abort traps terminate the
+process. Logs use `mutracer-log.h`, silent by default. Callbacks serialize on the
+emitting thread, cannot reenter the library and must outlive unregistration.
 
-Production commits emit their selected shader; diagnostic variants are requested
-by diagnostic tools. The AOT cache retains at most 32 generated variants and checks
-the complete signature after hashing. Rust tests check the actual AOT cache reuse
-and that production packets contain exactly one backend shader.
+## Shared source and typed resources
 
-## Native storage access validation
+Production native rendering accepts only version-4 raw descriptors. Prepared
+capture replay and its file-backed resource loader have been removed. The
+validation-only Web oracle records writes through
+`validation/resource-recorder.mjs`; production never consumes those captures.
 
-Source kernels select pixel storage and scale once per texture. Public geometry
-attributes remain caller-owned; algorithms use Uint32 index views, Float32 vertex
-attributes and Float64 matrix copies. Uint16 indices acquire a cached Uint32 copy
-that refreshes after topology notifications or source replacement.
+Shared TypeScript owns scene decoding/assembly, material/light/environment
+packing, render settings, layouts, shader generation and incremental preparation.
+The host uses typed resource IDs, texture formats, layout entries and pipeline
+keys. Update `native/generate-layout-schema.mjs` after schema edits; `--check`
+runs with typecheck. Material wire IDs in `material-properties.json` are frozen;
+regenerate with `generate-material-properties.mjs` without renumbering IDs.
 
-`native/storage-lowering.mjs` uses the TypeScript checker to instantiate numeric
-generics, including nested closures, without changing arithmetic, branches or
-scale values. `attribute-lowering.mjs` then turns provably concrete accesses into
-indexing. Generated `numeric-access-report.json` traces native exports through
-constructors, getters and callbacks; a dispatcher reachable from a loop fails a
-production build. Compatibility probes retain their open-storage diagnostics.
+`storage-lowering.mjs` instantiates numeric generics and nested closures without
+changing arithmetic or control flow. `attribute-lowering.mjs` lowers proven
+concrete accesses; `vector-lowering.mjs` specializes shared math storage.
+The numeric-access report traces the complete production graph and rejects loop
+storage dispatch. Open unions, ordinary arrays and callbacks retain fallback
+implementations. Keep emitted compiler inputs separate from browser source.
 
-Run `npm run native:storage:verify` with `MUTRACER_SCRIPTC` set to scriptc0.3.2.
-The C consumer compares all four pixel formats, byte/half output, subarray offsets,
-resizing, orientation, environment CDF and power against the ordinary Web TS path.
-Also run the lowering behavior tests, normal library checks and real Web/native
-image comparisons; clean compilation alone does not validate specialization.
+Bounds and generated tangents are the two profiled native O(N) kernels. Tangent
+normalization uses compiled TS Math.hypot to preserve rounding. All other scene
+logic stays TS. With `MUTRACER_KERNEL_FIXTURES=/absolute/manifest.json`, host tests
+compare kernel packets and production resources against compiled TS byte for
+byte. `prepare-diagnostics INPUT OUTPUT BACKEND ITERATIONS` profiles CPU-only
+preparation. `nativeGeometryKernelProfile` separates kernel bodies; its time is
+already included in preparation, never an extra phase. Qualify a replacement on
+complex scenes and the same concrete function specialization, not combined
+generic variants or procedural fixtures.
 
-Native bounds and generated-tangent kernels are the profiled O(N) exceptions to
-TS reuse. Their owned result packet uses the generated layout; decoding, scene
-assembly and incremental updates still execute the shared TS. Tangent length
-uses the compiled TS Math.hypot primitive to preserve its rounding. Run host tests
-with `MUTRACER_KERNEL_FIXTURES=/absolute/manifest.json` to compare kernel packets
-and every production resource byte against the TS reference on those descriptors.
-`prepare-diagnostics INPUT OUTPUT BACKEND ITERATIONS` profiles CPU preparation
-without creating a GPU device. `nativeDataKernelProfile.completedWallMs` includes
-kernel computation and transfer; it is part of decode/hardware preparation, not
-an additional phase.
+## Incremental and GPU validation
 
-## Partial camera validation
+`native:camera` compares six camera records on every fixture. `native:jobs` checks
+queued/running/cancelling/cancelled/completed states, completed-sample accounting,
+stale handles and accumulation equivalence. Poll submits at most one bounded
+batch and never waits for the GPU; callbacks only update owned completion flags.
+Test arbitrary calling threads, cancel/destroy during preparation, failed commit
+rollback and continued rendering of the previous scene. Use ThreadSanitizer and
+state which Rust/C++ dependencies it instruments; AOT, Metal and OIDN are outside
+that coverage.
 
-`npm run native:camera` runs the complete job gate, then compares partial camera
-updates against full scene commits for six camera records on each of 33 fixtures.
-The cases cover translation, perspective field/clip/zoom changes, physical lens
-changes, orthographic projection, affine shear and restoration. It tests input
-ownership, zeroed accumulation, invalid descriptor preservation, active-job
-rejection, completed-job expiry and owner/stale-handle rejection. HDR and both
-guides must match exactly; restoration must reproduce the original image.
+The staged TS adapters reuse the original camera math, material repacking,
+environment distributions, light PMFs and emissive caches. Acknowledge candidate
+state only after layout validation and GPU upload/reset. Transform and vertex
+edits must use the latest accepted source state; reject unsupported shape or
+shader-stack changes with a full-commit requirement. Retain shared tuple storage
+when Map-indexed records are copied by scriptc.
 
-`camera-core.ts` only decodes the wire camera record into the existing TS
-`Camera`, lens/math and uniform-packing functions. Both `scene-core.ts` and the
-partial AOT export call that same adapter. Rust shares the full-scene lens/
-transform validator, copies the AOT command before arena reset/collection, checks
-finite packed values, uploads the camera uniform and clears accumulation. It
-does not rebuild the scene, bind groups, textures or pipeline. No duplicate
-camera math is implemented in Rust. Material and environment updates retain
-separate preparation state as described below; geometry updates remain pending.
+HWRT uses authoritative hardware hits. Assert the actual backend after every
+commit; software fallback cannot count as hardware success. All AS build paths
+submit BLASes and wait for completion **before encoding TLAS construction**.
+Metal's indirect instance descriptors and empty HAL AS barriers make one encoder
+insufficient. This wait is preventive; it has not fixed the intermittent miss.
+PreferUpdate is not a refit. HAL refit remains opt-in and must preserve its
+thread/resource lifetime assumptions.
 
-## Job validation
+Compare fixed-seed HDR/normal/albedo on real GPUs for both browser backends.
+Use the independent high-sample software reference for image statistics. Diagnose
+first hits and the first differing path event when statistics exceed the gate;
+report edge/tie cases and reject unexplained differences. Displacement random
+streams depend on traversal order. Keep all raw images, failure samples, hashes,
+logs and experiment reports outside the repository.
 
-`npm run native:jobs` first runs `native:context`, then exercises queued,
-running, cancelling, cancelled and completed states on every raw fixture. It
-checks busy-context rejection, owner binding, stale handles, cancellation before
-and after dispatch, completed-sample accounting and two interleaved jobs with
-different batch sizes. Cancelled accumulation resumes and must match the blocking
-reference in HDR, normal and albedo bytes. `job-verification.json` is complete
-only after every fixture passes. Check counts include timing-dependent poll loops.
+## Viewer and OIDN validation
 
-Submission creates a job without dispatch. Owner-thread polls use wgpu's
-non-waiting poll mode, observe an atomic completion flag, and submit at most one
-bounded batch. Queue callbacks only set their owned atomic flag; they never
-reenter AOT or access the registry. Cancellation drains submitted work before
-releasing the context. A failed scene can be replaced or destroyed even with an
-old completion outstanding; that callback cannot revive a handle. No background
-worker is introduced. Keep no-Node execution and previous-stage byte comparisons
-outside the repository; repeat legacy software/HWRT replay after dispatch changes.
-Forced GPU failure and device-loss recovery remain unvalidated.
+`npm run native:viewer:build` builds the full AOT graph and macOS app with locked
+Rust dependencies and ad-hoc signing. eframe/egui-wgpu and tracing share one
+adapter/device/queue. `display-shader.ts` generates the display WGSL through the
+Web TS generator; `generate-display.mjs --check` detects stale output. Normal
+preview capture, tonemap and presentation stay on the GPU. Only OIDN/export reads
+pixels back. The immutable owned picking BVH is built while loading a model on
+a worker. Descriptor assembly and full commits also run off the UI thread.
 
-## Persistent context validation
+The packaged executable accepts `[MODEL] --smoke-out DIRECTORY` for load/render,
+editing, cancellation, HDR environments, backend assertions and native OIDN.
+`--interaction-smoke DIRECTORY` checks continuous camera/held edits, retained
+previews, resize and stale-OIDN rejection. Material, environment, light, transform
+and geometry each have a corresponding `--NAME-smoke DIRECTORY` full/partial
+comparison. Test all three AOVs, invalid/busy calls, rollback and restoration.
 
-`npm run native:context` first runs the full raw-scene compilation/preparation
-and one-shot rendering gate, then exercises the persistent C API for every
-fixture. `GpuScene` owns upload/pass resources; both the old probe and context
-API use that same implementation. Contexts retain their native device across
-commits. A candidate upload is checked in validation/OOM scopes before replacing
-the committed scene. No AOT arena pointer or caller input survives the call.
+Inspect the real window as well: file dialogs, panel changes, orbit/pan/zoom/fit,
+pause/restart, resolution/exposure and PNG export are not covered by headless
+smokes. `MUTRACER_VIEWER_METRICS=/absolute/result.json` runs a 1280×720 real-window
+interaction/three-full-commit sequence, reports UI/picking/frame intervals and
+closes automatically. Use LEGO, keep the Mac unlocked and nominal, and retain
+outliers. This opt-in contributor instrument does not change normal usage.
 
-The C consumer compares split accumulation, reset/replay and normal/albedo/HDR
-readback with the one-shot output; interleaves two contexts, commits camera
-edits, rejects malformed commits without replacing old outputs, checks short
-buffers, stale handles, and wrong-thread calls through both context and probe
-entries. Context handles are monotonic; owner binding persists after teardown
-because the AOT module is process-global. ABI entries catch Rust panics while
-mutex guards stay in scope, so the registry/entry mutex is not poisoned. GPU
-execution errors mark the affected scene failed. Hardware device-loss recovery is pending.
-
-The command writes `context-verification.json`. It reuses the raw preview only
-after the context's HDR bytes match exactly. Keep cross-stage HDR comparisons,
-no-Node process runs, legacy replay/HWRT regressions and timing evidence outside
-the repository. Compilation/module and browser parity limitations below remain
-separate from successful context lifecycle validation.
-
-## Raw-scene validation
-
-`npm run native:scene` builds the complete composed AOT archive and native C
-consumer, renders 33 fixtures, and checks native preparation against ordinary
-JavaScript and independent browser-facade preparation. Each of 75 supported
-material extension IDs also has an independent preparation comparison. Fixtures
-cover v1 compatibility, environment/background roles, material variants, vertex
-attributes, differing material tables on shared geometry, colored batches and
-zero-instance batches, four displacement projections/negative/byte/zero cases,
-IES source parsing/shared profiles and rectangular light textures. The module
-matrix now includes full displacement and IES graphs; C verification also tests
-invalid profiles and dense displacement bounds. GPU references are a separate
-check; preparation equality alone does not prove GPU output equality.
-
-Run `cargo test --locked --manifest-path native/host/Cargo.toml` with
-`MUTRACER_AOT_ARCHIVE` pointing to the built archive. Descriptor tests exercise
-lengths, spans, references, numeric values, material types, batch transforms and
-empty/ordinary batch behavior. Run the root contributor checks for shared changes.
-
-The material wire IDs in `material-properties.json` are frozen. Changing source
-schema order must not renumber them. After deliberate schema changes, regenerate
-with `node native/generate-material-properties.mjs`; the scene driver runs
-`--check` and refuses stale generated TS, Rust or C files. Displacement IDs
-require descriptor v3; v1/v2 retain strict validation.
-
-Optional vertex material IDs are local to each mesh's material table. Shared
-geometry is cloned when those tables require different global IDs. Geometry
-expansion and total expanded instance counts are included in boundary budgets.
-IES parsing exceptions return a rejected-preparation packet; Rust copies it and
-resets/collects AOT storage before returning an error. Rust validates byte spans,
-UTF-8 and budgets, while the original TS parser validates photometric syntax.
-Active displacement validates square/power-of-two sources, UV availability,
-positive step size and coordinate/projection limits before AOT loops.
-The empty-batch path pads storage allocations to the shared browser minimum.
-
-For GPU comparisons, start `native/reference-server.mjs` with
-`MUTRACER_NATIVE_OUTPUT` set to the scene output directory and
-`MUTRACER_REFERENCE_SCENES=1`. Open `/v2-environment/?samples=256` or another
-fixture path. Outputs go to `<fixture>/reference/browser-reference/`. Compare
-HDR and guides with `native/compare-hdr.mjs`; record errors and tolerances rather
-than declaring a universal driver tolerance. Close temporary tabs and stop the
-server afterward. Keep experiment logs and per-image metrics outside the repo.
-
-## Module and resource diagnostics
-
-`npm run native:check`, `npm run native:modules:verify` and
-`npm run native:storage:verify` validate compiler support, concrete storage and
-native module contracts. These checks remain separate from GPU output gates.
-
-The independent raw-scene oracle records Web adapter resource writes through
-`validation/resource-recorder.mjs`. It neither validates nor executes shaders;
-real wgpu and browser GPU tests validate execution. Production native rendering
-accepts raw descriptors only and never reads these oracle captures.
-
-## Partial material validation
-
-`[MODEL] --material-smoke DIRECTORY` compares basic material changes with full
-commits, including exact HDR/normal/albedo, invalid-input and active-job rejection
-and restoration. `--interaction-smoke` also combines held material edits with
-camera input and compares the final accumulation to a full commit.
-The native context owns an opaque AOT preparation token; retained TS MaterialData
-reuses the existing repack/layout. Release tokens when candidates fail or scenes
-are replaced/destroyed, and collect only after copying result bytes.
-Initialize the scriptc module once: calling its init export again reinitializes
-module globals and erases other contexts' rooted preparation state.
-
-`viewer-oidn-core.mjs` pins OIDN source and weight commits, verifies source/hash
-metadata, excludes the three `_large` blobs and inspects built symbols. It needs
-CMake and the system make/compiler; SDK device modules avoid ISPC/TBB build
-dependencies. Rebuilt core/API and official modules must be from the same version.
-Check both Metal and forced CPU inference after any upstream change, compare
-RGBA32F against prior output, and test a relocated package with no build-tree
-loader paths. No source SDKs, weights or binaries enter the repository.
-
-## Partial environment validation
-
-Run `[MODEL] --environment-smoke DIRECTORY` for exact full/partial comparisons of
-studio and HDR intensity/tint/rotation, including zero power, invalid/busy calls,
-shape/feature rejection and restoration. `--interaction-smoke` combines held
-environment/material edits with camera movement, checks no full commit occurs,
-and validates the background-feature fallback with a retained preview.
-Full and partial preparation call the same native adapter around the original
-TS environment distribution, alias-table, emissive and analytic light packing.
-Environment updates use retained material/light/emissive/uniform state without
-retaining standalone environment images. Texture shape changes use full commit.
-Both light-selection PMFs and the environment CDF must update with radiance.
-The native OIDN CPU/Metal smoke supersedes the removed URL-only AOT/C example;
-whole-entry diagnostics still include `src/oidn.ts` and its public export inventory.
-
-## Partial analytic light validation
-
-Run `[MODEL] --light-smoke DIRECTORY` to compare key-light color/intensity/direction
-with full commits while interleaving environment changes and mapped/solid
-backgrounds. Check exact HDR/normal/albedo, reset, invalid/busy/type rejection and
-light removal. `--interaction-smoke` combines held light/environment/material
-updates with camera movement and asserts no full scene commit during that input.
-The C update also supports rectangular/spherical/spot lights with preserved
-texture/IES attachments; validate those against raw descriptor full commits.
-
-Lighting preparation stages a TS candidate. Only acknowledge it after validating
-all returned resource shapes and completing GPU writes/reset. Environment power,
-light records and RT uniform state must represent the last successful update;
-rejected environment/light changes must not contaminate subsequent partial edits.
-Light-only updates reuse original light sampling and packing through nativeLighting;
-the scene also roots mesh bindings and BLASes for transform updates.
-
-## Partial transform validation
-
-Run `[MODEL] --transform-smoke DIRECTORY` on software and HWRT backends. It
-compares HDR/normal/albedo with full commits, including rotation, uniform and
-nonuniform scale, reflection, invalid edits and interleaved environments.
-`--interaction-smoke` also combines held transforms with camera/material/light/
-environment edits, requires retained previews and no full commit in that loop.
-The C record can also update a batch parent or an individual local instance.
-
-Retain source meshes, prepared instance bindings and original BLASes. Candidate
-mesh objects reuse `updateMeshInstanceTransforms`, `buildTLAS` and
-`EmissiveTriangleCache`; merged vertex arrays are not rooted. Validate resource
-sizes, stack bounds and packed floats before GPU writes, then accept the candidate.
-Hardware updates reuse BLASes/TLAS bindings and rebuild the TLAS in place. Map
-software leaf-order changes back to hardware geometry/triangle bases using BLAS
-root and vertex region, rather than assuming stable instance order.
-
-
-## Partial vertex validation
-
-Run `[MODEL] --geometry-smoke DIRECTORY` to compare stable-topology deformation
-with full commits on software and HWRT backends. Verify all three AOVs, generated/
-supplied normals, authored/generated tangents, retained environments, rejection
-and sample reset. Raw C cases also cover shared geometry/material-table regions,
-colored batches, emissive triangles and explicit displacement fallback.
-
-The adapter stages a copied source geometry/BLAS and transient shared
-`prepareSceneMeshes` result, then calls `updatePreparedGeometries` and repacks
-vertices with `packVertexAttributes`. Unchanged BLASes and material maps are
-reused. Only accept the staged mesh/binding/source-geometry state after validated
-GPU upload/reset. Hardware stages replacement acceleration structures and group0
-against the existing pipeline, with all old resources retained until acceptance.
-Transform and vertex candidates must both use the latest accepted source state.
-
-Keep bound-array storage shared when updating Map-indexed generic binding records:
-scriptc can return record copies, so replacing a tuple field does not necessarily
-reach the preparation owner. The concrete MeshState/TLAS module fixtures exercise
-that behavior in addition to the original structural geometry-update fixtures.
-
+OIDN uses the library's `denoise.rs` for both the C ABI and viewer worker. The
+build pins 2.5.1 source/weights and official ABI-matched CPU/Metal modules, omits
+three large models and packages component notices. Check CPU/Metal/Auto,
+malformed inputs, rollback, in-place output and arbitrary calling threads.
+Rust/TS rendering accumulation is independent of optional denoising. Copy the
+app to a new location and run all demo models plus Sponza without Node or build
+paths. Inspect dependencies, licenses and signature. Denoising parity with the
+browser model is not guaranteed.
 
 ## Native TinyBVH boundary
 
@@ -346,7 +193,7 @@ The synchronous AOT steps return geometry/displacement/AABB jobs, retain source
 state across arena resets, and consume the host's BVH2 results. Shared TS code
 packs instance records, materials, lights and shader resources. Stable-topology
 BLAS refit still reuses `updatePreparedGeometries`; the TS SAH builder remains
-available to browser/replay fixtures and legacy stateless AOT comparison exports.
+available to browser fixtures and legacy stateless AOT comparison exports.
 
 Compare native and Wasm on identical inputs, including degenerate triangles and
 all displacement projections. SIMD/Bonsai and scalar builds can choose different
@@ -362,112 +209,33 @@ into the application bundle.
 
 ## Performance comparisons
 
-Set `MUTRACER_NATIVE_PROFILE=1` for one JSON diagnostic per successful full
-context commit. CPU preparation and HWRT capture are separate from GPU setup.
-GPU setup includes uploads, acceleration structures, bindings and validation;
-pipeline creation is a subset of it, not an additional phase. An upload retry
-also includes fallback preparation in setup; check `uploadRetried`. Timings
-exclude replacing/dropping the previously committed scene.
-
-The accompanying `nativePreparationProfile` splits validation, source decoding,
-native BLAS construction, mesh assembly, native TLAS construction and resource
-composition. AOT phase times include output copying and collection. Source
-decoding includes missing-attribute generation and BLAS job serialization; mesh
-assembly includes consuming BLAS results and packing the TLAS request. Keep
-authored normals in the initial Geometry options so its shared constructor does
-not generate normals that the decoder immediately replaces.
-
-Compare identical raw inputs, seeds, samples and batch sizes against the browser
-TinyBVH backend. Drain GPU work before stopping render timers, measure first and
-warm runs separately, and read images outside render timing. Keep shader caches
-and adapter differences explicit. Browser JS heap and native process peak RSS
-are different memory metrics and must not be reported as a memory speedup.
-
-Closed native vector calls use `vector-lowering.mjs` to clone the shared AST with
-concrete Float32/Float64 parameter storage before direct-access lowering. Mixed
-precision and aliasing retain the source arithmetic/order; open unions, ordinary
-arrays and callbacks keep the generic implementation. Do not assume every call
-is concrete. Run `node native/vector-verify.mjs` and `node native/matrix-verify.mjs`
-with the pinned compiler before comparing full/partial GPU outputs. Their C
-consumers compare against upstream gl-matrix, including shared storage aliases,
-zero vectors and the generic fallback. Performance runs must alternate old/new
-order and keep unrelated builds/GPU work out of the timed interval.
-
-## Reproducible descriptor benchmarks
-
 ```sh
 node native/benchmark/benchmark.mjs --manifest /absolute/inputs.json \
   --library /absolute/libmutracer_native_probe.dylib --output /absolute/evidence --port 4201
 ```
 
-Open the printed loopback URL. Use `?index=0&edits=1` for transform and vertex
-edits, restoring the original value between observations. Both hosts select the
-first source mesh using the largest geometry and edit its middle vertex.
-`benchmark-native.py --single` makes one commit and one 64spp render for image
-validation instead of collecting repeated wall-time samples.
+The manifest fixes raw descriptors, checksums and expected backend/reason. The
+harness freezes binaries, bundles and configuration. Use only complex models for
+performance. Procedural fixtures are correctness checks. Web requests 1080 rows
+but renders 1088 internally; compare requested sizes without pixel rescaling.
 
-Each manifest entry has a unique `key`, an `input` descriptor path relative to
-the manifest, its `sha256`, and `expectedHardware: {active, reason}`. Determine
-the expected path independently; every native commit asserts it. Descriptors
-include dimensions and camera. Models and results stay outside the repository.
-The tool snapshots its library and clients, records source/bundle hashes, and
-uses 64spp, seed 12345, six bounces, eight samples per batch, TinyBVH BVH2 and
-eight Web Workers.
+Use caffeinate with an unlocked display and wait for thermalState=0 before every
+group. Default one round; Web/HWRT render six times and discard the first. Software
+renders once for bytes and records no render performance or GPU profiling. HWRT
+profiles twice after formal output is durable. Commit sequences retain twelve
+observations, discarding the first two. Supplement threshold-adjacent results,
+benefits/regressions or outliers to three alternating Web/native rounds under
+the plan's noise rule. Do not reuse Web timing across browser upgrades or bundle
+hash changes. `?index=N` resumes a group; `?edits=1` measures retained edits.
 
-The browser drives three serial rounds in forward/reverse/forward backend order.
-Each group warms first and records twelve full commits and twelve 64spp renders;
-exclude the first two observations. Retain the median, range and per-round
-values of all thirty remaining samples. The device and Worker pool persist
-within a group; navigation separates groups. Resume interrupted runs with
-`?index=N`, keeping incomplete attempts separate.
-
-Web commits wait for deferred packing, pipeline readiness and upload completion.
-Readback and legacy HWRT counters stay outside render timers. Native commit
-wall time includes retiring the previous scene; `nativeCommitProfile.totalMs`
-ends before the final queued-upload flush, publication and retirement. Native
-peak RSS and browser JavaScript heap are distinct memory metrics. Report actual software fallbacks separately.
-
-`MUTRACER_NATIVE_PROFILE=1` records CPU phases and application upload bytes.
-`MUTRACER_NATIVE_GPU_TIMESTAMPS=1` additionally requests optional timestamp features
-for blocking-render kernels and full-commit AS builds. Its allocations and
-synchronization affect wall time, so collect this breakdown separately.
-The pinned Metal backend exposes pass timestamps but not encoder timestamps:
-AS GPU time remains unavailable. `completedWallMs` starts after prior uploads
-have drained and ends when the AS build completes. Zero or unordered timestamp
-samples are rejected. Upload totals include application writes and explicit
-hardware input buffers; driver-internal AS instance traffic is unobservable.
-The native edit helper reports rejected partial updates explicitly.
-
-## Native library OIDN validation
-
-`host/src/denoise.rs` owns the same SDK adapter used by the viewer worker and
-`mutracer-denoise.h`; do not duplicate filters or guide/alpha semantics. The C
-handle registry is independent of the AOT owner, local to its creating thread,
-and uses non-recycled IDs. Check stale/wrong-thread rejection, independent worker
-handles, resizing, malformed image lengths/pointers/nonfinite values, output
-rollback and in-place output. SDK calls and library loading occur only on use.
-
-Compile the no-Node consumer against the built library:
-
-```sh
-cc -Wall -Wextra -Werror native/denoise-host.c -L "$CARGO_TARGET_DIR/release" \
-  -lmutracer_native_probe -Wl,-rpath,"$CARGO_TARGET_DIR/release" -o denoise-host
-./denoise-host /absolute/libOpenImageDenoise.2.dylib INPUT_DIR OUTPUT.rgba32f 480 320
-```
-
-For a C consumer linked to the native static library on macOS:
-
-```sh
-cc native/denoise-host.c "$CARGO_TARGET_DIR/release/libmutracer_native_probe.a" \
-  -framework Foundation -framework Metal -framework QuartzCore \
-  -framework Security -framework CoreGraphics -lc++ -liconv -o denoise-static
-```
-
-Use regular/small-only bundled runtime, check explicit CPU/Metal and Auto, preserve
-raw context output, and compare both quality and alpha to retained reference
-images. Relocate the package, inspect the component license tree and validate its
-signature after changing bundle resources. No render performance conclusion may
-include this optional SDK loading/inference inside a tracing timer.
+`MUTRACER_NATIVE_PROFILE=1` reports validation, source preparation, BLAS/TLAS,
+composition, GPU setup and pipeline time. Pipeline is a subset of setup. Full
+commit wall time includes flush/publication/retirement that the inner profile
+excludes. Timestamp profiling is separate from formal timing. Metal pass timestamps
+measure kernels; AS `completedWallMs` is wall time after draining earlier uploads,
+not a GPU timestamp. Invalid timestamps are missing diagnostics, not render errors.
+Upload payload counts come from write calls, separate from buffer capacity and
+AS internal storage. Native peak RSS and browser JS heap are different metrics.
 
 ## Robustness and diagnostics
 
@@ -511,9 +279,11 @@ cargo test --manifest-path native/host/Cargo.toml --lib \
 
 It prints AOV and primary-hit coverage classifications; a mismatch is reported
 separately from the other task checks while the known Metal HWRT bug is open.
-Independent-process stop-at-first-mismatch runs observed process 8 on Phase 2
-(`09ba6ce`) and process 20 on Phase 3.1 (`d334f37`). The Phase 1 closest
-geometry-only equivalent observed process 13; its padded transform packet was
-rejected before rendering, so it starts with the same final transform. These
-stopping times do not estimate a failure rate or identify every mismatching
-sample's root cause. Phase 3 acceptance still requires the repair gate.
+Use independent processes and retain hit classifications and per-sample query
+parameters. A stop-at-first-failure count is not a failure-rate estimate. The
+closest Phase 1 equivalent rejects the later padded transform packet, so record
+adaptations explicitly. The issue predates Phase 3 and also reproduces in a
+standalone wgpu program with two live BLAS/TLAS pairs and alternating bindings.
+A persistent residency set has not fixed the real host test. Keep those probes
+outside the repository and distinguish resource lifetime changes from residency.
+Phase 3 acceptance still requires the plan's repair gate.

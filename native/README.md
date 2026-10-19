@@ -1,4 +1,4 @@
-# Native feasibility renderer
+# Experimental native renderer
 
 MuTracer's experimental C interface accepts raw scene data and renders through
 native machine code and wgpu, without a JavaScript engine or Node at runtime.
@@ -10,13 +10,6 @@ scene and hardware.
 
 Run `npm run native:viewer` for a standalone GLTF/GLB viewer with material, render
 and environment controls. See [viewer usage and limits](./viewer/README.md).
-
-## HWRT limitation
-
-On macOS/Metal, HWRT can intermittently miss the entire scene for one render
-sample, producing an incorrect image. Use the software backend when this
-unresolved correctness risk is unacceptable.
-See [HWRT reproduction](./CONTRIBUTING.md#hwrt-reproduction) for the diagnostic test and observed failures.
 
 ## Render a scene
 
@@ -60,7 +53,8 @@ Rendering accumulation is independent of denoising.
 Provide OIDN **2.5.1** and matching device modules through an explicit library path
 or `MUTRACER_OIDN_LIBRARY`; the standalone viewer already includes them. The native
 library does not bundle that runtime. Denoising blocks and uses additional image
-buffers; use a denoiser on its creating worker thread. Images are limited to
+buffers. Calls may come from any thread; overlapping operations return busy.
+Images are limited to
 4,194,304 pixels. See the header for exact limits, thread rules
 and memory ownership. Browser/native denoising parity is not guaranteed.
 
@@ -81,9 +75,13 @@ Commit replaces the full scene and restarts accumulation; submit topology,
 texture, emission and light type/count/attachment edits in the updated descriptor.
 A rejected commit retains the previous scene.
 Reset clears sampling while keeping the committed scene. Contexts have independent
-accumulation, with at most eight contexts on one owner thread. Commits can
-briefly hold old and new scene resources together. The header specifies lifetime,
-thread binding, byte lengths, error behavior and remaining limits.
+accumulation. Calls may come from any thread; overlapping operations can return
+busy. There is no fixed context-count limit, but GPU memory limits apply. Full
+commit preparation allows the previous scene to keep rendering and can be
+cancelled with `mt_context_cancel_commit`. Destroy waits for pending preparation
+to release its resources. Commit blocks its calling thread; use an application
+worker to keep the UI responsive. Commits briefly retain old and new resources together.
+The header specifies byte lengths, ownership, errors and remaining limits.
 Transform inputs and GPU matrices use Float32; CPU matrix calculations keep
 Float64 intermediates. Input and GPU precision still limit large coordinates.
 
@@ -111,8 +109,9 @@ authored tangents require replacement values. UVs, colors, indices, materials
 and textures stay unchanged. Displacement, unused geometry and resource-size or
 shader-stack changes require a full commit. Successful updates restart accumulation;
 validation rejection preserves the scene and samples. Updates reject active jobs.
-Copying/upload cost can grow with the whole scene, and HWRT updates rebuild
-acceleration structures. Temporary copies increase memory use. See
+CPU copying cost can grow with the scene. GPU uploads cover changed geometry
+and affected instances; HWRT rebuilds affected BLASes and the TLAS. Temporary
+copies increase memory use. See
 [the context header](./mutracer-context.h) for flags, limits and record layout.
 
 Basic material parameters can be updated with `mt_context_update_material` using
@@ -155,6 +154,12 @@ this is zero. Hardware acceleration structures add build time and memory use; a
 speedup depends on the
 scene and hardware.
 
+Coplanar or overlapping surfaces can resolve to different triangles in software
+and HWRT, changing the image. On macOS/Metal, HWRT can also intermittently miss
+the entire scene for one sample. Use software when that unresolved correctness
+risk is unacceptable. Diagnostic instructions are in the
+[contributor guide](./CONTRIBUTING.md#hwrt-reproduction).
+
 ## Render with polling and cancellation
 
 ```sh
@@ -162,7 +167,7 @@ npm run native:jobs
 ```
 
 Use `mt_context_submit` to request additional samples, then call `mt_job_poll`
-on the owner thread to submit batches and observe completion. Each poll accepts
+from any thread to submit batches and observe completion. Each poll accepts
 a budget of 0..64 new samples; zero only checks completion. Submit performs no
 GPU work, and polling does not wait for GPU completion. Polling still costs CPU
 time to prepare and submit a batch; this is not a fixed-latency interface.
@@ -174,22 +179,26 @@ Cancel stops further submissions. An already submitted batch finishes before
 poll reports cancellation, so keep polling after cancel. Completed samples stay
 accumulated and a later job can continue them. Full completion takes precedence
 over late cancellation. One context accepts one active job; while active, render,
-commit, any scene update, reset, readback and destroy return errors. Finish or cancel and drain the job before using those calls. The header
+any incremental scene update, reset, readback and destroy return errors. A full
+commit can prepare alongside the active job; successful publication drains the
+old job before replacing the scene. Finish or cancel and drain a job before
+using the other calls. The header
 specifies job states, sample counters and handle lifetimes.
 
 ## Scene inputs and options
 
-All descriptor versions support indexed triangles, generated or supplied
+Only scene descriptor **version 4** is accepted. It supports indexed triangles,
+generated or supplied
 normals, two UV sets, shared geometry, affine transforms, perspective and
 orthographic cameras, raw RGBA8 sRGB or RGBA32F linear textures, rectangular,
 spherical, directional and spot lights, and emissive meshes.
 
-Version 2 also accepts RGB vertex colors, XYZW tangents, per-vertex material
+It also accepts RGB vertex colors, XYZW tangents, per-vertex material
 indices, per-mesh material tables, local instance transforms and RGB instance
 multipliers. Empty instance batches are valid. A triangle's vertices must select
 the same material; duplicate vertices at material boundaries.
 
-Version 2 exposes all non-displacement material properties and texture slots
+The descriptor exposes all non-displacement material properties and texture slots
 through [material property IDs](./mutracer-material-properties.h), including
 thin film, participating media, opacity, anisotropy, coat and fuzz. Omitted
 properties keep MuTracer defaults. Environment lighting and visible backgrounds
@@ -198,7 +207,7 @@ roles ignore texture UV transforms and flip settings. Quality flags enable
 bevel, three dispersion wavelengths, or a hidden background; a hidden background
 cannot also select a background map.
 
-Version 3 adds displacement, rectangular-light textures and spot-light IES.
+It accepts displacement, rectangular-light textures and spot-light IES.
 Displacement uses the first material of each mesh, with UV, triplanar, spherical
 or cylindrical projection, including negative amplitudes. Active displacement
 requires a square power-of-two texture, UVs for UV projection and a positive
@@ -209,17 +218,19 @@ and normal parity remains unresolved.
 IES inputs are UTF-8 LM-63 Type C files with `TILT=NONE`, at most 16 KiB per
 profile. Submit source text through the light descriptor; profile preparation
 runs natively. Invalid profiles return an error. Reusing an offset/length pair
-shares that profile. Versions 1 and 2 keep their earlier input restrictions.
+shares that profile.
 Additional examples are `v3-displacement-uv`, `v3-displacement-triplanar`,
 `v3-ies`, `v3-ies-shared` and `v3-rect-texture`.
 
 Scene commits copy their inputs and retain no caller storage. Raw probes and
 `mt_context_render` block until rendering finishes; jobs use the polling lifecycle
-above. Use one owner thread for all calls. Every raw probe call rebuilds the
+above. Keep borrowed input/output storage valid until the call returns. Every
+raw probe call rebuilds the
 scene and restarts accumulation; context render calls retain the committed scene.
-Samples range from 1 to 4096; seed is fixed at 12345 and bounce count at 6.
-Version 1 remains accepted with its original limited inputs; unknown or unsupported
-fields return an error.
+Samples range from 1 to 4096. `mt_context_commit` defaults to Sobol, seed
+12345 and six bounces. `mt_context_commit_with_settings` accepts the sampling
+pattern, sequence, bounce and quality options in the context header. Unknown
+or unsupported fields return an error.
 
 Build/run settings:
 

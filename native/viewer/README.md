@@ -73,8 +73,9 @@ require a rebuild.
 Loading a different-sized HDR, switching background mode, changing shader
 features or unlit materials, and changing resolution rebuild the scene. Moving
 between zero and nonzero light or environment intensity can also require a
-rebuild. These updates can pause interaction briefly. Full rebuilds are combined at
-roughly 120 ms intervals while held, then applied when released.
+rebuild. Full rebuilds run in the background while the previous image stays visible.
+Changes are combined at roughly 120 ms intervals while held, then applied when
+released. CPU/GPU contention can still reduce responsiveness.
 Exposure and denoising change only the displayed image, preserving the original
 HDR accumulation. Denoising does not block window interaction; a result for an
 older scene, camera or sample count cannot replace the current preview.
@@ -107,6 +108,9 @@ library imposes additional scene/texture budgets described in
 [the native guide](../README.md#limits).
 Rendering uses wgpu/Metal with six bounces. HWRT support and fallbacks follow
 [the native intersection limits](../README.md#intersection-backend).
-Device-loss recovery is not implemented.
+HWRT has an unresolved intermittent whole-scene miss on macOS/Metal; choose
+Software when image correctness is critical. Coplanar overlapping surfaces can
+also look different between the two backends. Device-loss recovery is not
+implemented.
 Native OIDN output can differ from browser OIDN output. Custom OIDN model
 weights are not supported by this example.

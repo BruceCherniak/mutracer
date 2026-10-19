@@ -63,11 +63,11 @@ enum mt_material_property {
   MT_MAT_MAP_ALPHA_USAGE = 54, /* enum: 0=opaque, 1=alpha, 2=transmission */
   MT_MAT_UV_PROJECTION = 55, /* enum: 0=none, 1=spherical, 2=cylindrical, 3=triplanar */
   MT_MAT_UV_PROJECTION_SCALE = 56, /* vec2 */
-  MT_MAT_DISPLACEMENT_UV_PROJECTION = 57, /* v3; enum: 0=none, 1=triplanar, 2=spherical, 3=cylindrical */
-  MT_MAT_DISPLACEMENT_UV_PROJECTION_SCALE = 58, /* v3; float */
-  MT_MAT_DISPLACEMENT_MAP = 59, /* v3; texture */
-  MT_MAT_DISPLACEMENT_SCALE = 60, /* v3; float */
-  MT_MAT_DISPLACEMENT_STEP_SIZE = 61, /* v3; float */
+  MT_MAT_DISPLACEMENT_UV_PROJECTION = 57, /* enum: 0=none, 1=triplanar, 2=spherical, 3=cylindrical */
+  MT_MAT_DISPLACEMENT_UV_PROJECTION_SCALE = 58, /* float */
+  MT_MAT_DISPLACEMENT_MAP = 59, /* texture */
+  MT_MAT_DISPLACEMENT_SCALE = 60, /* float */
+  MT_MAT_DISPLACEMENT_STEP_SIZE = 61, /* float */
   MT_MAT_THIN_FILM_THICKNESS_MINIMUM = 62, /* float */
   MT_MAT_THIN_FILM_MAP_CHANNEL = 63, /* enum: 0=r, 1=g, 2=b, 3=a */
   MT_MAT_COAT_WEIGHT_MAP = 64, /* texture */

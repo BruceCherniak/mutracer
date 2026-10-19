@@ -23,6 +23,8 @@ people and coding agents changing the library. For using it, read
   devDependencies and never ship in the npm package.
 - `site/`: home page of the deployed site (`npm run site`). `npm run build:site`
   builds it with the viewer and the examples into `dist-site/` for Cloudflare.
+- `native/`: experimental raw-scene C ABI, shared TypeScript AOT core, Rust/wgpu host
+  and standalone egui-wgpu viewer; native checks are in `native/CONTRIBUTING.md`.
 - `LICENSES/`, `THIRD_PARTY_NOTICES.md`: third-party attributions.
 
 ## Checks
