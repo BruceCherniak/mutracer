@@ -204,7 +204,11 @@ fn sampleAnalyticLight(
 
 fn sampleEnvLight(randomV2: vec2f, lightSample: ptr<function, LightSampleRec>) {
   var uv: vec2f;
-  (*lightSample).direction = sampleEnvmap(randomV2, &uv, &(*lightSample).pdf);
+  // Naga's SPIR-V writer cannot pass a struct-member pointer as a call argument.
+  var pdf: f32;
+  let direction = sampleEnvmap(randomV2, &uv, &pdf);
+  (*lightSample).pdf = pdf;
+  (*lightSample).direction = direction;
   (*lightSample).emission = textureLinear(envMap, uv).rgb;
   (*lightSample).dist = INF;
 }

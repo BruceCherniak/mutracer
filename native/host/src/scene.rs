@@ -1756,6 +1756,58 @@ pub(crate) mod tests {
         }
     }
     #[test]
+    fn generated_software_and_hardware_shaders_compile_for_vulkan_and_dx12() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let _entry = ENTRY_LOCK.lock().unwrap();
+        for hardware in [false, true] {
+            let (scene, assets, _) = prepare_retained(&input(), hardware).unwrap();
+            let source = std::str::from_utf8(&assets[&scene.shader]).unwrap();
+            let module = naga::front::wgsl::parse_str(source).unwrap();
+            let info = naga::valid::Validator::new(
+                naga::valid::ValidationFlags::all(),
+                naga::valid::Capabilities::all(),
+            )
+            .validate(&module)
+            .unwrap();
+            let (module, info) = naga::back::pipeline_constants::process_overrides(
+                &module,
+                &info,
+                Some((naga::ShaderStage::Compute, &scene.entry_point)),
+                &Default::default(),
+            )
+            .unwrap();
+            naga::back::spv::write_vec(
+                &module,
+                &info,
+                &naga::back::spv::Options::default(),
+                Some(&naga::back::spv::PipelineOptions {
+                    shader_stage: naga::ShaderStage::Compute,
+                    entry_point: scene.entry_point.clone(),
+                }),
+            )
+            .unwrap();
+            let options = naga::back::hlsl::Options {
+                shader_model: naga::back::hlsl::ShaderModel::V6_8,
+                ..Default::default()
+            };
+            let pipeline = naga::back::hlsl::PipelineOptions {
+                entry_point: Some((naga::ShaderStage::Compute, scene.entry_point.clone())),
+            };
+            let mut output = String::new();
+            let reflection = naga::back::hlsl::Writer::new(&mut output, &options, &pipeline)
+                .write(&module, &info, None)
+                .unwrap();
+            assert!(
+                reflection
+                    .entry_point_names
+                    .iter()
+                    .all(|entry| entry.is_ok())
+            );
+            assert!(!output.is_empty());
+        }
+    }
+
+    #[test]
     fn production_emits_one_backend_and_reuses_aot_shader_generation() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let _entry = ENTRY_LOCK.lock().unwrap();

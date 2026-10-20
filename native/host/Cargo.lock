@@ -382,6 +382,7 @@ dependencies = [
  "anyhow",
  "cc",
  "libloading",
+ "naga",
  "objc2",
  "objc2-metal",
  "png",
