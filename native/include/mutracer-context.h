@@ -6,7 +6,9 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Experimental persistent C API, macOS arm64. Return 0 on success, 1 on error;
+/* Experimental persistent C API; see native/README.md#platforms for supported
+ * platforms.
+ * Return 0 on success, 1 on error;
  * If error is non-NULL and capacity > 0, it receives a truncated
  * NUL-terminated UTF-8 message (complete characters only).
  * All pointers must remain valid for the call; input is copied, no pointers are
@@ -27,11 +29,11 @@ extern "C" {
  * render adds samples to the current accumulation, total 1..4096. The default
  * commit uses seed 12345, bounces 6 and Sobol, matching the raw probe. A commit
  * with settings retains those settings for blocking and job renders. reset clears
- * accumulation and temporary ray state, keeping the committed scene. Independent contexts keep
+ * accumulation, keeping the committed scene. Independent contexts keep
  * independent accumulation. Caught Rust panics mark the touched context failed.
- * Fatal AOT traps, including OOM/abort, terminate the process; use process
- * isolation if recovery is required. Diagnostics use mutracer-log.h and are
- * silent by default; the process-wide Rust panic hook may still print.
+ * Fatal runtime errors, including out-of-memory and abort, terminate the process;
+ * use process isolation if recovery is required. Diagnostics use mutracer-log.h
+ * and are silent by default; the process-wide Rust panic hook may still print.
  * Render/read/reset GPU failures mark the scene failed;
  * commit a new scene before further use. Device-loss recovery is unavailable.
  *
@@ -52,10 +54,10 @@ typedef struct mt_context_info_v1 {
   uint32_t reserved[2]; /* Returned as zero. */
 } mt_context_info_v1;
 /* Backend selection: 0=software, 1=HWRT (also the mt_context_create default).
- * HWRT uses hardware closest/shadow hits, including alpha, affine instances,
- * bevel and displacement. Unsupported devices or AS allocation/limit failures
- * fall back to software and report the reason after commit. Coplanar overlapping
- * surfaces may differ from software. Metal HWRT has an unresolved intermittent
+ * HWRT supports alpha, affine instances, bevel and displacement. Unsupported
+ * devices or acceleration-structure allocation/limit failures fall back to
+ * software and report the reason after commit. Coplanar overlapping surfaces
+ * may differ from software. Metal HWRT has an unresolved intermittent
  * whole-scene miss for one sample; choose software if this risk is unacceptable.
  */
 int32_t mt_context_create_with_backend(uint32_t backend, mt_context *output, char *error, size_t capacity);
@@ -67,11 +69,11 @@ int32_t mt_context_create_with_backend(uint32_t backend, mt_context *output, cha
 int32_t mt_context_backend(mt_context handle, uint32_t *active, char *reason, size_t reason_capacity, char *error, size_t capacity);
 int32_t mt_context_create(mt_context *output, char *error, size_t capacity);
 /* Destroy rejects active render jobs: cancel/poll them first. It cancels a
- * pending commit and waits for candidate resources and AOT roots to retire. */
+ * pending commit and waits for it to release its resources. */
 int32_t mt_context_destroy(mt_context handle, char *error, size_t capacity);
 /* Cancellation is idempotent. The committing call returns an error after
- * draining its current preparation step and releasing the candidate. It preserves
- * the old scene. Already submitted GPU work cannot be interrupted. */
+ * its current preparation step finishes. It preserves the old scene. Already
+ * submitted GPU work cannot be interrupted. */
 int32_t mt_context_cancel_commit(mt_context handle, char *error, size_t capacity);
 int32_t mt_context_commit(mt_context handle, const uint8_t *input, size_t length, char *error, size_t capacity);
 /* Settings are copied by commit_with_settings. Initialize with
@@ -125,13 +127,14 @@ int32_t mt_context_update_camera(mt_context handle, const uint8_t *input, size_t
  * are refreshed automatically. Existing authored tangents require flags&2 and
  * replacement values; adding/removing authored tangents needs a full commit.
  * UVs, colors, indices, material indices and texture bindings remain unchanged.
- * Unused geometry, resource size or shader-stack changes return
- * "Full scene commit required:". Successful updates reset samples/expire the
- * last job. Invalid input/unsupported updates preserve scene/samples/job.
+ * Unused geometry, or edits that change GPU resource sizes or the required
+ * shader variant, return "Full scene commit required:". Successful updates
+ * reset samples/expire the last job. Invalid input/unsupported updates preserve
+ * scene/samples/job.
  * Rejects active jobs and failed scenes; GPU execution failure marks it failed.
  * Blocks until submitted GPU work completes. Uploads cover changed geometry
- * and affected instances; HWRT rebuilds affected BLASes and the TLAS. Temporary
- * CPU/GPU copies increase memory use.
+ * and affected instances; HWRT rebuilds affected acceleration structures.
+ * Temporary CPU/GPU copies increase memory use.
  */
 int32_t mt_context_update_geometry(mt_context handle, const uint8_t *input, size_t length,
   char *error, size_t capacity);
@@ -143,11 +146,11 @@ int32_t mt_context_update_geometry(mt_context handle, const uint8_t *input, size
  * Success restarts accumulation and expires the last job, even for identical
  * input. Rejects active jobs and failed scenes. Validation rejection preserves
  * scene/samples/job. GPU failure marks the scene failed. This call blocks until
- * submitted GPU work completes. Resource size or traversal stack changes return
- * "Full scene commit required:"; submit an updated full descriptor instead.
- * CPU cost can grow with total instance count; uploads cover affected instances
- * and TLAS ranges. Affected emissive bindings also refresh light sampling.
- * Candidate updates may temporarily retain old and new CPU/GPU resources.
+ * submitted GPU work completes. Edits that need larger GPU resources or a
+ * deeper traversal stack return "Full scene commit required:"; submit an updated full
+ * descriptor instead. CPU cost can grow with total instance count; uploads cover
+ * affected instances. Moving emissive meshes also updates light sampling.
+ * Updates may temporarily retain old and new CPU/GPU resources.
  */
 int32_t mt_context_update_transform(mt_context handle, const uint8_t *input, size_t length,
   char *error, size_t capacity);
@@ -156,12 +159,11 @@ int32_t mt_context_update_transform(mt_context handle, const uint8_t *input, siz
  * version=1, source_material_index, reserved[2]=0,
  * base_color[3], roughness, metalness, transmission, ior (f32), reserved=0.
  * All float inputs must be finite. Texture bindings and emission stay unchanged.
- * Unsupported unlit/unused materials or medium-feature changes return an error
- * beginning "Full scene commit required:"; submit a full descriptor instead.
+ * Unlit/unused materials or enabling/disabling a participating medium return
+ * an error beginning "Full scene commit required:"; submit a full descriptor instead.
  * Successful calls reset samples and expire the last job, even for identical
  * values. Rejects active jobs and failed scenes. Validation rejection preserves
  * parameters/samples/job; GPU execution failure marks the scene failed.
- * Full commits can temporarily hold old/new CPU material and GPU scene data.
  */
 int32_t mt_context_update_material(mt_context handle, const uint8_t *input, size_t length,
   char *error, size_t capacity);
@@ -173,7 +175,8 @@ int32_t mt_context_update_material(mt_context handle, const uint8_t *input, size
  * Missing maps have both dimensions zero and no pixels. Each map is <=4M pixels,
  * each dimension <=16382. Floats must be finite; map pixels must be nonnegative.
  * Dimensions/map presence/hidden state must match the committed scene. Changes
- * to these or the light-sampling texture shape return "Full scene commit required:".
+ * to these, or switching between zero and nonzero map power, can return
+ * "Full scene commit required:".
  * Every successful call resets samples/expires the job, including identical input.
  * Rejects active jobs/failed scenes; validation rejection preserves scene/job.
  * GPU execution failure marks the scene failed. Caller input is copied.
@@ -186,8 +189,9 @@ int32_t mt_context_update_environment(mt_context handle, const uint8_t *input, s
  * must be zero: existing rectangular textures and spot IES profiles are preserved.
  * Supports color, intensity, size/radius, spread/angles and affine transform.
  * Values follow the full scene's light validation. Type/count/attachment changes
- * require full commit; type or sampling-resource shape changes return an error
- * beginning "Full scene commit required:". No addition/removal through this call.
+ * require full commit; type changes and some zero/nonzero power transitions
+ * return an error beginning "Full scene commit required:". No addition/removal
+ * through this call.
  * Successful calls reset samples/expire the last job, even for identical input.
  * Rejects active jobs/failed scenes. Validation rejection preserves scene/job;
  * GPU execution failure marks the scene failed. Caller input is copied.

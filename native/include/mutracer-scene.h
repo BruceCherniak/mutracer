@@ -7,9 +7,10 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Experimental raw scene ABI v4, macOS arm64, little endian. Every record is
- * uint32 words; float fields contain IEEE f32 bits. Offsets are words from the
- * beginning of input. Arrays/tables must fit length. Reserved words must be 0.
+/* Experimental raw scene ABI v4, little endian; see native/README.md#platforms for
+ * supported platforms. Every record is uint32 words; float fields contain IEEE
+ * f32 bits. Offsets are words from the beginning of input. Arrays/tables must
+ * fit length. Reserved words must be 0.
  * Caller owns all bytes and strings through the blocking call; none are retained.
  * Return 0 on success, 1 on failure (NUL-terminated message if capacity > 0).
  * Calls may run on arbitrary threads; keep borrowed bytes valid through return.
@@ -54,7 +55,7 @@ extern "C" {
  * UVs for projection=none and a positive step size. Absolute projection scale and
  * position/UV components multiplied by it must not exceed 1,000,000.
  * Texture references use UINT32_MAX for absent; omitted material properties
- * retain MuTracer defaults. Texture storage/UV data are not prepacked atlases.
+ * retain MuTracer defaults. Supply each texture separately; the library packs them.
  * Texture[12]: width,height,encoding[0=RGBA8 sRGB,1=RGBA32F linear],pixel_offset,
  * flip_y[0/1],uv_channel[0/1],uv_scale[f32*2],uv_offset[f32*2],reserved[2].
  * Light[28]: type[0=rect,1=sphere,2=directional,3=spot],rgb[f32*3],intensity,
@@ -82,7 +83,7 @@ extern "C" {
  * Contexts default to HWRT with reported software fallback when unavailable;
  * backend selection and fallback details are in mutracer-context.h.
  * Samples 1..4096, fixed seed 12345, bounces 6.
- * Result HDR/guides use the existing probe's bottom-row-first f32 RGBA layout.
+ * Result HDR/guides are little-endian f32 RGBA, bottom row first.
  * output_directory receives render.png, HDR/guides and result.json.
  */
 int32_t mt_probe_render_scene(const uint8_t *input, size_t length,

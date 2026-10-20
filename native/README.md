@@ -2,10 +2,20 @@
 
 MuTracer's experimental C interface accepts raw scene data and renders through
 native machine code and wgpu, without a JavaScript engine or Node at runtime.
-It supports part of MuTracer and has an unstable ABI. Builds target macOS arm64
-with Metal and Linux x64 with Vulkan; Windows x64 support remains experimental.
-Physical GPU rendering has been verified on macOS; Linux hardware-specific
-behavior and performance remain unverified. Performance varies by scene and hardware.
+It supports part of MuTracer and has an unstable ABI.
+
+## Platforms
+
+| Platform | GPU API | Status |
+| --- | --- | --- |
+| macOS arm64 | Metal | Supported; physical GPU rendering verified |
+| Linux x64 | Vulkan | Supported; hardware-specific behavior and performance unverified |
+| Windows x64 | DX12 or Vulkan | Experimental; CI builds only, no release packages |
+
+The headers in [`include/`](include) and the [native viewer](./viewer/README.md)
+follow this table. Native denoising backends depend on the OIDN runtime; see
+[Denoise caller-owned images](#denoise-caller-owned-images). Performance varies
+by scene and hardware.
 
 ## Native viewer
 
@@ -104,21 +114,22 @@ fields. The header specifies rejection, job lifetime and thread rules. Run
 Use `mt_context_update_transform` to replace a mesh world matrix or a single
 instance's local matrix without re-uploading vertices or textures. A mesh world
 edit also moves all instances in its batch. Lighting and shadow placement follow
-the new transform. Updates restart accumulation and reject active jobs. Resource
-size or traversal stack changes require a full
-commit; validation rejection preserves the scene and samples. Cost grows with
-instance and BLAS data and emissive triangles. See
+the new transform. Updates restart accumulation and reject active jobs. Edits
+that need larger GPU resources or a deeper traversal stack require a full commit;
+validation rejection preserves the scene and samples. Cost grows with instance
+count, acceleration-structure data and emissive triangles. See
 [the context header](include/mutracer-context.h) for the 80-byte record and lifetime rules.
 
 Use `mt_context_update_geometry` for vertex positions with unchanged topology.
 All objects sharing the original geometry change together. Supply normals or omit
 them to generate smooth normals; generated tangents update automatically, while
 authored tangents require replacement values. UVs, colors, indices, materials
-and textures stay unchanged. Displacement, unused geometry and resource-size or
-shader-stack changes require a full commit. Successful updates restart accumulation;
+and textures stay unchanged. Displacement, unused geometry and edits that change
+GPU resource sizes or the required shader variant require a full commit. Successful
+updates restart accumulation;
 validation rejection preserves the scene and samples. Updates reject active jobs.
 CPU copying cost can grow with the scene. GPU uploads cover changed geometry
-and affected instances; HWRT rebuilds affected BLASes and the TLAS. Temporary
+and affected instances; HWRT rebuilds affected acceleration structures. Temporary
 copies increase memory use. See
 [the context header](include/mutracer-context.h) for flags, limits and record layout.
 
@@ -275,7 +286,7 @@ C API failures return a nonzero status and an error message. Validation and
 preparation errors preserve the current scene. A caught Rust panic marks the
 affected context failed; replace its scene with a successful commit or destroy
 it before reuse. Rust's process-wide panic hook can still emit panic diagnostics.
-The AOT runtime's fatal traps, including allocation failure and abort, terminate
+Fatal runtime errors, including allocation failure and abort, terminate
 the process and cannot become C API errors. Applications that require recovery
 from these failures need process isolation.
 

@@ -5,7 +5,8 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-/* Experimental optional native OIDN API, verified on macOS arm64.
+/* Experimental optional native OIDN API; see native/README.md#platforms for
+ * supported platforms.
  * Returns 0 on success, 1 on error; error is optional caller-owned UTF-8 storage,
  * NUL terminated when capacity>0. Its storage must not overlap other arguments.
  * All other pointers must be aligned, valid for the call and span the specified
@@ -24,7 +25,7 @@ extern "C" {
  * Calls may come from any thread. Overlapping denoiser operations return busy
  * and can be retried. IDs are not reused; stale handles reject. Device memory
  * limits the number of live handles.
- * Denoising is independent of the AOT/render runtime and does not modify
+ * Denoising is independent of render contexts and does not modify
  * render accumulation. Calls block: run on an application worker if needed.
  * Destroy releases its resources; caller supplies/owns runtime files.
  */
@@ -38,7 +39,7 @@ int32_t mt_denoiser_backend(mt_denoiser handle, uint32_t *output, char *error, s
  * required; normal/albedo are treated as noisy accumulated guides.
  * Filters HDR RGB, preserves color alpha exactly, and never modifies inputs
  * unless they alias output. Output may alias any input; no partial result is
- * written on failure. Input/SDK/output copies add memory proportional to pixels;
+ * written on failure. Temporary image copies add memory proportional to pixels;
  * changing dimensions allocates new image storage. No denoising parity guarantee
  * with the browser filter. A backend error may require destroy/create to recover.
  */
