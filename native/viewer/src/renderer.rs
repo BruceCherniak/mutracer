@@ -5,6 +5,7 @@ use mutracer_native_probe::context as native;
 use mutracer_native_probe::layout::camera as camera_wire;
 use std::{
     ffi::CStr,
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -12,7 +13,12 @@ pub struct Renderer {
     handle: u64,
     pub mode: u32,
     job: Option<u64>,
-    pub shared: Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue)>,
+    pub shared: Option<(
+        wgpu::Adapter,
+        wgpu::Device,
+        wgpu::Queue,
+        Arc<mutracer_native_probe::submission::SubmissionGate>,
+    )>,
 }
 fn check(operation: impl FnOnce(*mut i8, usize) -> i32) -> Result<()> {
     let mut error = [0i8; 4096];
@@ -40,8 +46,15 @@ impl Renderer {
         })
     }
     pub fn on_device(state: &eframe::egui_wgpu::RenderState, mode: u32) -> Result<Self> {
-        let handle = native::create_on_device(&state.adapter, &state.device, &state.queue, mode)
-            .map_err(anyhow::Error::msg)?;
+        let gate = Arc::new(mutracer_native_probe::submission::SubmissionGate::default());
+        let handle = native::create_on_device_with_gate(
+            &state.adapter,
+            &state.device,
+            &state.queue,
+            mode,
+            Some(gate.clone()),
+        )
+        .map_err(anyhow::Error::msg)?;
         Ok(Self {
             handle,
             mode,
@@ -50,6 +63,7 @@ impl Renderer {
                 state.adapter.clone(),
                 state.device.clone(),
                 state.queue.clone(),
+                gate,
             )),
         })
     }
@@ -79,13 +93,19 @@ impl Renderer {
                     let bytes =
                         model.descriptor_with_light(&camera.bytes(), size, &environment, &light);
                     if replace {
-                        let mut candidate = if let Some((adapter, device, queue)) = shared {
+                        let mut candidate = if let Some((adapter, device, queue, gate)) = shared {
                             Self {
-                                handle: native::create_on_device(&adapter, &device, &queue, mode)
-                                    .map_err(anyhow::Error::msg)?,
+                                handle: native::create_on_device_with_gate(
+                                    &adapter,
+                                    &device,
+                                    &queue,
+                                    mode,
+                                    Some(gate.clone()),
+                                )
+                                .map_err(anyhow::Error::msg)?,
                                 mode,
                                 job: None,
-                                shared: Some((adapter, device, queue)),
+                                shared: Some((adapter, device, queue, gate)),
                             }
                         } else {
                             Self::with_backend(mode)?

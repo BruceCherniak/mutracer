@@ -29,6 +29,7 @@ enum Change {
     Scene,
 }
 struct Viewer {
+    submission_gate: Option<std::sync::Arc<mutracer_native_probe::submission::SubmissionGate>>,
     startup_smoke: Option<(PathBuf, std::time::Instant, u32)>,
     metrics: Option<metrics::Metrics>,
     renderer: Renderer,
@@ -106,7 +107,12 @@ impl Viewer {
             renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
         }
         let selected = model.meshes[0].material;
+        let submission_gate = renderer.shared.as_ref().map(|shared| shared.3.clone());
+        if let Some(gate) = &submission_gate {
+            gate.pause();
+        }
         Ok(Self {
+            submission_gate,
             startup_smoke: None,
             metrics,
             backend: 1,
@@ -1029,6 +1035,9 @@ impl Viewer {
 }
 impl eframe::App for Viewer {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        if let Some(gate) = &self.submission_gate {
+            gate.resume();
+        }
         let ctx = root.ctx().clone();
         let frame_started = std::time::Instant::now();
         let during_commit = self.commit.is_some();
@@ -1109,6 +1118,16 @@ impl eframe::App for Viewer {
             }
         }
         if let Some((path, started, frames)) = &mut self.startup_smoke {
+            // Exercise surface reconfiguration while scene preparation runs.
+            match ctx.cumulative_frame_nr() {
+                2 => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1180., 780.)))
+                }
+                4 => {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1200., 800.)))
+                }
+                _ => {}
+            }
             if self.gpu_texture.is_some() && self.frame_samples > 0 {
                 *frames += 1;
             }
@@ -1122,6 +1141,19 @@ impl eframe::App for Viewer {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
             ctx.request_repaint_after(Duration::from_millis(16));
+        }
+        // eframe configures/reconfigures its surface outside this callback.
+        // Drain only active submissions; CPU preparation stays asynchronous.
+        if let Some(gate) = &self.submission_gate {
+            gate.pause();
+        }
+    }
+}
+impl Drop for Viewer {
+    fn drop(&mut self) {
+        // Renderer teardown can wait for a pending background commit.
+        if let Some(gate) = &self.submission_gate {
+            gate.resume();
         }
     }
 }

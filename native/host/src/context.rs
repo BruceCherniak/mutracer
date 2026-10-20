@@ -215,12 +215,22 @@ pub fn create_on_device(
     queue: &wgpu::Queue,
     backend: u32,
 ) -> std::result::Result<u64, String> {
+    create_on_device_with_gate(adapter, device, queue, backend, None)
+}
+/// Shared-device embedding with an optional presentation submission gate.
+pub fn create_on_device_with_gate(
+    adapter: &wgpu::Adapter,
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    backend: u32,
+    gate: Option<Arc<submission::SubmissionGate>>,
+) -> std::result::Result<u64, String> {
     if backend > 1 {
         return Err("Unknown native intersection backend".into());
     }
     let gpu = GpuDevice {
         device: device.clone(),
-        queue: queue.clone(),
+        queue: GpuQueue::new(queue.clone(), gate),
         info: adapter.get_info(),
         hardware_ray_query: device
             .features()

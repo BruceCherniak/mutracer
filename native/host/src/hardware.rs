@@ -126,7 +126,7 @@ pub(super) fn direct_input_enabled() -> bool {
 
 pub fn prepare(
     device: &wgpu::Device,
-    queue: &wgpu::Queue,
+    queue: &crate::GpuQueue,
     capture: &Capture,
     assets: &Assets,
     _buffers: Option<&HashMap<usize, wgpu::Buffer>>,
@@ -135,7 +135,7 @@ pub fn prepare(
 }
 pub fn prepare_reusing(
     device: &wgpu::Device,
-    queue: &wgpu::Queue,
+    queue: &crate::GpuQueue,
     capture: &Capture,
     assets: &Assets,
     _buffers: Option<&HashMap<usize, wgpu::Buffer>>,
@@ -525,7 +525,7 @@ impl Resources {
     pub fn rebuild_changed(
         &self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        queue: &crate::GpuQueue,
         capture: &Capture,
         writes: &super::scene::LightingUpdates,
     ) -> Result<Resources> {
@@ -764,7 +764,7 @@ impl Resources {
     fn refit_metal_candidate(
         &self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        queue: &crate::GpuQueue,
         plans: &[(usize, &Geometry, &Vec<u8>)],
         blases: &mut [wgpu::Blas],
         vertices: &[wgpu::Buffer],
@@ -873,7 +873,7 @@ impl Resources {
     pub fn update_transforms(
         &mut self,
         device: &wgpu::Device,
-        queue: &wgpu::Queue,
+        queue: &crate::GpuQueue,
         plan: TransformPlan,
         capture: &mut Capture,
     ) -> Result<()> {

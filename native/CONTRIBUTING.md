@@ -190,10 +190,12 @@ Web TS generator; `scripts/generate-display.mjs --check` detects stale output. N
 preview capture, tonemap and presentation stay on the GPU. Only OIDN/export reads
 pixels back. The immutable owned picking BVH is built while loading a model on
 a worker. Descriptor assembly and full commits also run off the UI thread.
+The viewer pauses native queue submissions outside its UI callback so eframe can
+reconfigure the shared surface safely; CPU preparation continues while paused.
 
 The packaged executable accepts `[MODEL] --package-smoke DIRECTORY` for the
 portable package gate. `--startup-smoke REPORT.json` opens a window and closes
-after presenting rendered frames; its report must confirm success. The stronger
+after resizing the window and presenting rendered frames; its report must confirm success. The stronger
 `[MODEL] --smoke-out DIRECTORY` requires actual HWRT for load/render,
 editing, cancellation, HDR environments, backend assertions and native OIDN.
 `--interaction-smoke DIRECTORY` checks continuous camera/held edits, retained

@@ -34,7 +34,9 @@ mod profiling;
 mod runtime;
 mod scene;
 pub mod settings;
+pub mod submission;
 mod tinybvh;
+use submission::GpuQueue;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -213,7 +215,7 @@ fn storage_layout(binding: u32, read_only: bool) -> wgpu::BindGroupLayoutEntry {
 
 fn read_average(
     device: &wgpu::Device,
-    queue: &wgpu::Queue,
+    queue: &GpuQueue,
     buffer: &wgpu::Buffer,
     width: u32,
     height: u32,
@@ -269,7 +271,7 @@ struct CachedPipeline {
 #[derive(Clone)]
 struct GpuDevice {
     device: wgpu::Device,
-    queue: wgpu::Queue,
+    queue: GpuQueue,
     info: wgpu::AdapterInfo,
     hardware_ray_query: bool,
     pipelines: Arc<Mutex<HashMap<PipelineKey, CachedPipeline>>>,
@@ -350,7 +352,7 @@ impl GpuDevice {
             pipelines: Arc::new(Mutex::new(HashMap::new())),
             pipeline_cache,
             device,
-            queue,
+            queue: GpuQueue::new(queue, None),
             info,
             hardware_ray_query,
         })
