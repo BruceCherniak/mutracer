@@ -929,7 +929,7 @@ fn intersectLight(r: Ray, light: Light, lightSample: ptr<function, LightSampleRe
   var v = light.v;
   var lightType = i32(light.litType);
 
-  if (lightType == RECT_LIGHT) {
+  if (HAS_SCENE_RECT_LIGHT && lightType == RECT_LIGHT) {
     // Adjust the position from center to start corner
     var pos = light.position - u * 0.5 - v * 0.5;
     var normal = normalize(cross(u, v));
@@ -958,7 +958,7 @@ fn intersectLight(r: Ray, light: Light, lightSample: ptr<function, LightSampleRe
     }
   }
 
-  else if (lightType == SPHERE_LIGHT) {
+  else if (HAS_SCENE_SPHERE_LIGHT && lightType == SPHERE_LIGHT) {
     if (light.radiusOrSpread <= 0.0) {
       let toPoint = light.position - r.o;
       let projection = dot(toPoint, r.d);
@@ -1003,7 +1003,7 @@ fn intersectLight(r: Ray, light: Light, lightSample: ptr<function, LightSampleRe
     }
   }
 
-  else if (lightType == SPOT_LIGHT) {
+  else if (HAS_SCENE_SPOT_LIGHT && lightType == SPOT_LIGHT) {
     if (light.radiusOrSpread <= 0.0) {
       let toPoint = light.position - r.o;
       let projection = dot(toPoint, r.d);

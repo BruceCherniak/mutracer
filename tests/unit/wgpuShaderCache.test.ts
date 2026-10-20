@@ -19,6 +19,14 @@ function fixture() {
 }
 
 describe('WebGPU pipeline reuse', () => {
+  it('reuses a retained pipeline after its shader module has been evicted', async () => {
+    const {device, cache, descriptor} = fixture();
+    const original = await cache.createComputePipelineAsync(descriptor());
+    for (let i = 0; i < 9; i++) cache.createShaderModule({code: `fn other${i}() {}`});
+    expect(await cache.createComputePipelineAsync(descriptor())).toBe(original);
+    expect(device.createShaderModule).toHaveBeenCalledTimes(11);
+    expect(device.createComputePipelineAsync).toHaveBeenCalledTimes(1);
+  });
   it('reuses actual pipelines after an A/B/A scene variant switch', async () => {
     const { device, cache, descriptor } = fixture();
     const a = await cache.createComputePipelineAsync(descriptor());

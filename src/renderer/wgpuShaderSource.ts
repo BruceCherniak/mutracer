@@ -26,5 +26,11 @@ export function wgpuShaderPreamble(constants: Record<string, boolean | number>, 
   return `\n${defineCode}\n${constantsCode}\n`;
 }
 export function wgpuShaderSource(constants: Record<string, boolean | number>, features: WGPUShaderFeatures, bake = false, sceneIntersections = '', pathDiagnostic = false): string {
-  return wgpuShaderPreamble(constants, bake) + rayTraceCompute(features, sceneIntersections, pathDiagnostic);
+  return wgpuShaderPreamble(constants, bake) + rayTraceCompute({
+    ...features,
+    spectral: bake ? Boolean(constants.SPECTRAL) : undefined,
+    sceneCapabilities: bake && constants.SCENE_CAPABILITIES !== undefined ? Number(constants.SCENE_CAPABILITIES) : undefined,
+    materialCapabilities: bake && constants.MATERIAL_CAPABILITIES !== undefined ? Number(constants.MATERIAL_CAPABILITIES) : undefined,
+    lightCapabilities: bake && constants.LIGHT_CAPABILITIES !== undefined ? Number(constants.LIGHT_CAPABILITIES) : undefined
+  }, sceneIntersections, pathDiagnostic);
 }

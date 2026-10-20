@@ -4,6 +4,7 @@ import type Geometry from '../scene/Geometry.js';
 import type MaterialData from './MaterialData.js';
 import { materialUsesMedium } from './materialParams.js';
 import { materialTextureFeatures } from './materialTextureSlots.js';
+import {MATERIAL_SHADER_CAPABILITIES} from './shaderCapabilities.js';
 
 // Same feature decisions for browser pipeline updates and native scene commits.
 export function wgpuMaterialConstants(materials: MaterialState[], materialData: Pick<MaterialData, 'defines' | 'bufferData'>, mergedGeometry: Geometry,
@@ -21,6 +22,10 @@ export function wgpuMaterialConstants(materials: MaterialState[], materialData: 
   );
 
   return {
+    MATERIAL_CAPABILITIES:
+      (materials.some(m => m.transmissionWeight !== 0 || !!m.map && m.mapAlphaUsage === 'transmission')
+        ? MATERIAL_SHADER_CAPABILITIES.transmission : 0) |
+      (materials.some(m => m.baseMetalness !== 0) ? MATERIAL_SHADER_CAPABILITIES.metal : 0),
     // Match the atlas UV selector. Keep the second set when any texture
     // needs it; material/texture edits already rebuild these constants.
     USE_UV1: materialData.bufferData.mapUvChannel.some(channel => channel > 0.5),

@@ -118,6 +118,12 @@ or BVHs. Emission edits also refresh light-sampling state, and texture edits
 rebuild the texture atlas. Displacement settings that move geometry require a
 [full mesh update](#full-mesh-updates).
 
+WebGPU compiles support for the material layers, texture types and light types
+used by the scene. Changing that combination can compile a new shader variant;
+returning to a cached combination reuses its pipeline. Ordinary parameter changes
+within the same combination keep the shader. Compilation time depends on the
+combination of features, BVH layout, browser and GPU driver.
+
 Analytic-light edits keep the environment map. Ambient and environment edits
 rebuild it. Rect-light texture edits require a full mesh update, because those
 textures live in the material atlas.

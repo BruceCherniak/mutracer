@@ -26,6 +26,7 @@ import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChan
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges.js';
 import { WGPUShaderCache, retainedShaderCapacity } from './WGPUShaderCache.js';
 import { WGPU_SCENE_FEATURE_BITS, wgpuSceneFeatureFlags } from './WGPUSceneFeatures.js';
+import {lightShaderCapabilities, updateSceneShaderCapabilities} from './shaderCapabilities.js';
 import { type TexturePixelSource as TexturePixelSource, mat4 } from '../math.js';
 import Mesh from '../scene/Mesh.js';
 import DirectionalLight from '../scene/DirectionalLight.js';
@@ -724,6 +725,7 @@ class WGPURayTracePass {
 
       const device = this._device;
       const constants = this._constants;
+      updateSceneShaderCapabilities(constants);
       this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(constants);
       const hasAlpha = Boolean(constants.HAS_ALPHA_BLEND) &&
         this._alphaBlendStrategy === 'deterministic-source-over';
@@ -752,8 +754,8 @@ class WGPURayTracePass {
         'BLAS_STACK_SIZE',
         'NUM_UNIFORM_LIGHTS'
       ];
-      // Scene feature flags and background selection are runtime uniforms so
-      // interactive edits do not recompile the path tracer.
+      // Specialize feature combinations alongside their uniform representation.
+      // Cached pipelines serve combinations revisited after interactive edits.
       const constantsNotUsed = [
         ...Object.keys(WGPU_SCENE_FEATURE_BITS),
         'USE_BACKGROUND',
@@ -1800,6 +1802,7 @@ class WGPURayTracePass {
   }
 
   private _updateLightSamplingData() {
+    this._constants.LIGHT_CAPABILITIES = lightShaderCapabilities(this._analyticLights.map(light => light.type), this._emissiveTriangles.length);
     const lighting = prepareSceneLightSampling(this._analyticLights, this._emissiveTriangles,
       estimateEnvironmentPower(this._envImageSource), this._device.limits.maxTextureDimension2D, this._lightChoices, this._lightSamplingScratch);
     this._analyticLightSelectionPmfs = lighting.analyticPmfs;

@@ -17,6 +17,7 @@
  */
 
 import { OPENPBR_METAL_ENERGY_LUT_ROW, OPENPBR_METAL_ENERGY_LUT_AVERAGE_ROW, OPENPBR_DIELECTRIC_ENERGY_LUT_ROW, OPENPBR_DIELECTRIC_ENERGY_LUT_AVERAGE_ROW, OPENPBR_DIELECTRIC_REFLECTION_RATIO_LUT_ROW } from '../../openPbrEnergyLut.js';
+const LOBE_INDICES = [0, 1, 2, 3, 4, 5, 6];
 
 export function createOpenPbrBsdfWgsl(hasAnisotropyDirections = true, hasCoatNormals = false) {
   return /* wgsl */ `
@@ -27,7 +28,10 @@ const OPENPBR_LOBE_SPECULAR: i32 = 3;
 const OPENPBR_LOBE_TRANSMISSION: i32 = 4;
 const OPENPBR_LOBE_DIFFUSE: i32 = 5;
 const OPENPBR_LOBE_SUBSURFACE: i32 = 6;
-const OPENPBR_LOBE_COUNT: i32 = 7;
+const OPENPBR_LOBE_COUNT: i32 = ${LOBE_INDICES.length};
+
+// Eager boolean operators below combine pure scalar predicates. This avoids
+// multiplying short-circuit control flow when DXC inlines the layered BSDF.
 
 struct OpenPbrBasis {
     tangent: vec3f,
@@ -276,7 +280,7 @@ fn openpbr_metal_average_energy_complement(alpha: f32) -> f32 {
 }
 
 fn openpbr_extrapolate_energy_complement(value: f32, ior: f32) -> f32 {
-    if (ior > 2.5 || ior < 0.4) {
+    if ((ior > 2.5) | (ior < 0.4)) {
         let maxF0 = openpbr_f0_from_ior(2.5);
         let progress = (openpbr_f0_from_ior(ior) - maxF0) / (1.0 - maxF0);
         return (1.0 - progress) * value;
@@ -328,7 +332,7 @@ fn openpbr_make_basis(
     basis.normal = normal;
     var tangent = inputTangent;
     var bitangent = vec3f(0.0);
-    if (dot(tangent, tangent) < 0.001 || anisotropy <= 0.0) {
+    if ((dot(tangent, tangent) < 0.001) | (anisotropy <= 0.0)) {
         sampling_orthonormal_basis(normal, &tangent, &bitangent);
     }
     else {
@@ -606,7 +610,7 @@ fn openpbr_eval_fuzz(
     pdf: ptr<function, f32>
 ) -> vec3f {
     *pdf = 0.0;
-    if (viewLocal.z <= 0.0 || lightLocal.z <= 0.0) {
+    if ((viewLocal.z <= 0.0) | (lightLocal.z <= 0.0)) {
         return vec3f(0.0);
     }
     let albedo = openpbr_fuzz_directional_albedo(
@@ -660,7 +664,7 @@ fn openpbr_eval_microfacet_refraction(
     let viewHalf = dot(viewLocal, halfVector);
     // A refracting microfacet must face the view and the opposite side of the
     // light. Backfacing configurations have no support in the VNDF proposal.
-    if (viewHalf <= 0.0 || lightHalf >= 0.0) {
+    if ((viewHalf <= 0.0) | (lightHalf >= 0.0)) {
         return vec3f(0.0);
     }
     let alpha = vec2f(material.alphaX, material.alphaY);
@@ -681,7 +685,7 @@ fn openpbr_eval_microfacet_refraction(
 }
 
 fn openpbr_transmission_tint(material: OpenPbrResolvedMaterial) -> vec3f {
-    if (HAS_MEDIUM && material.mediumType > 0) {
+    if (HAS_MEDIUM & (material.mediumType > 0)) {
         return vec3f(1.0);
     }
     return material.transmissionColor;
@@ -730,7 +734,7 @@ fn openpbr_eval_subsurface_boundary(
     pdf: ptr<function, f32>
 ) -> vec3f {
     *pdf = 0.0;
-    if (viewLocal.z <= 0.0 || lightLocal.z >= 0.0) {
+    if ((viewLocal.z <= 0.0) | (lightLocal.z >= 0.0)) {
         return vec3f(0.0);
     }
     let transmittedCosine = -lightLocal.z;
@@ -743,23 +747,15 @@ fn openpbr_eval_subsurface_boundary(
 }
 
 fn openpbr_normalize_probabilities(prepared: ptr<function, OpenPbrPreparedBsdf>) {
-    // loopUnrollGuard is 4; the dynamic bound covers all seven lobes without
-    // asking the driver to unroll array operations across the full BSDF.
-    let lobeCount = min(OPENPBR_LOBE_COUNT, i32(rtUniform.loopUnrollGuard * 2u));
+    // Fixed indices avoid dynamic array copies; retain the original sum order.
     var total = (*prepared).probabilities[OPENPBR_LOBE_FUZZ];
-    for (var lobe = 1; lobe < lobeCount; lobe++) {
-        total += (*prepared).probabilities[lobe];
-    }
+    ${LOBE_INDICES.slice(1).map(i => /* wgsl */ `total += (*prepared).probabilities[${i}];`).join('\n    ')}
     if (total <= 1e-8) {
-        for (var lobe = 0; lobe < lobeCount; lobe++) {
-            (*prepared).probabilities[lobe] = 0.0;
-        }
+        ${LOBE_INDICES.map(i => /* wgsl */ `(*prepared).probabilities[${i}] = 0.0;`).join('\n        ')}
         return;
     }
     let inverseTotal = 1.0 / total;
-    for (var lobe = 0; lobe < lobeCount; lobe++) {
-        (*prepared).probabilities[lobe] *= inverseTotal;
-    }
+    ${LOBE_INDICES.map(i => /* wgsl */ `(*prepared).probabilities[${i}] *= inverseTotal;`).join('\n    ')}
 }
 
 // Adapted from Adobe c91aad1 impl/openpbr_lobe_utils.h and
@@ -867,11 +863,11 @@ ${hasCoatNormals ? /* wgsl */ `
         prepared.directionFrames = true;
     }
 ` : ''}
-    if (material.specularAnisotropy > 0.0 && material.anisotropyDirectionEnabled) {
+    if ((material.specularAnisotropy > 0.0) & material.anisotropyDirectionEnabled) {
         prepared.basis = openpbr_direction_basis(prepared.basis, material.directionTangent, material.directionBitangent, material.anisotropyDirection);
         prepared.directionFrames = true;
     }
-    if (material.coatAnisotropy > 0.0 && material.coatAnisotropyRotation != 0.0) {
+    if ((material.coatAnisotropy > 0.0) & (material.coatAnisotropyRotation != 0.0)) {
         prepared.coatBasis = openpbr_direction_basis(prepared.coatBasis, material.geometryTangent, material.geometryBitangent, vec2f(cos(material.coatAnisotropyRotation), sin(material.coatAnisotropyRotation)));
         prepared.directionFrames = true;
     }
@@ -910,7 +906,7 @@ ${hasCoatNormals ? /* wgsl */ `    prepared.coatViewLocal = openpbr_to_local(pre
         let weightedBaseIor = weightedCoatIor * openpbr_apply_specular_weight_to_ior(
             material.specularIor / weightedCoatIor, material.specularWeight);
         var reflectionEta = weightedBaseIor / weightedCoatIor;
-        if (weightedCoatIor > weightedBaseIor && weightedBaseIor >= 1.0) {
+        if ((weightedCoatIor > weightedBaseIor) & (weightedBaseIor >= 1.0)) {
             reflectionEta = 1.0 / reflectionEta;
         }
         prepared.specularEtaTOverEtaI = reflectionEta;
@@ -988,7 +984,7 @@ ${hasCoatNormals ? /* wgsl */ `    prepared.coatViewLocal = openpbr_to_local(pre
         ), 0.02);
     prepared.probabilities[OPENPBR_LOBE_COAT] = 0.0;
     prepared.coatBaseScale = vec3f(1.0);
-    if (material.coatWeight > 0.0 && !material.inside) {
+    if ((material.coatWeight > 0.0) & !material.inside) {
         ${hasCoatNormals ? /* wgsl */ `let coatViewCosine = select(viewCosine, max(prepared.coatViewLocal.z, 0.0), material.coatNormalEnabled);` : ''}
         let coatEnergy = openpbr_coat_energy(material, ${hasCoatNormals ? 'coatViewCosine' : 'viewCosine'});
         prepared.probabilities[OPENPBR_LOBE_COAT] = prepared.weights[OPENPBR_LOBE_COAT] * coatEnergy;
@@ -1002,7 +998,7 @@ ${hasCoatNormals ? /* wgsl */ `    prepared.coatViewLocal = openpbr_to_local(pre
     prepared.metalMsProbability = 0.0;
     // Reference suppresses loss below roughness .04 and uses the original
     // isotropic alpha even when the single-scattering lobe is anisotropic.
-    if (material.specularRoughness >= 0.04 && prepared.weights[OPENPBR_LOBE_METAL] > 0.0) {
+    if ((material.specularRoughness >= 0.04) & (prepared.weights[OPENPBR_LOBE_METAL] > 0.0)) {
         let averageFresnel = openpbr_metal_average_fresnel(material.baseWeight * material.baseColor, material.specularColor);
         prepared.metalMsScale = material.specularWeight * averageFresnel * averageFresnel;
         let viewLoss = openpbr_metal_energy_complement(prepared.specularAlpha, viewCosine);
@@ -1027,9 +1023,9 @@ ${hasCoatNormals ? /* wgsl */ `    prepared.coatViewLocal = openpbr_to_local(pre
     prepared.dielectricMsViewLoss = 0.0;
     prepared.dielectricMsReflectionRatio = 0.0;
     prepared.dielectricMsProbability = 0.0;
-    if (!material.thinWalled && material.transmissionWeight > 0.0 &&
-        prepared.specularAlpha >= 0.0016 && prepared.weights[OPENPBR_LOBE_TRANSMISSION] > 0.0 &&
-        abs(prepared.refractionEtaTOverEtaI - 1.0) > 1e-6) {
+    if (!material.thinWalled & (material.transmissionWeight > 0.0) &
+        (prepared.specularAlpha >= 0.0016) & (prepared.weights[OPENPBR_LOBE_TRANSMISSION] > 0.0) &
+        (abs(prepared.refractionEtaTOverEtaI - 1.0) > 1e-6)) {
         let nonOpaqueWeight = prepared.weights[OPENPBR_LOBE_TRANSMISSION] + prepared.weights[OPENPBR_LOBE_SUBSURFACE];
         prepared.dielectricMsReflectionScale = select(material.specularColor, vec3f(1.0), material.inside) * nonOpaqueWeight;
         prepared.dielectricMsTransmissionScale = transmissionTint * prepared.weights[OPENPBR_LOBE_TRANSMISSION]
@@ -1050,12 +1046,12 @@ ${hasCoatNormals ? /* wgsl */ `    prepared.coatViewLocal = openpbr_to_local(pre
         * prepared.diffuseSpecularEnergyCompensation;
     // Index-matched base interfaces can still reflect through thin film.
     // Keep proposal support without duplicating the Airy optical solve here.
-    if (material.coatWeight > 0.0 && HAS_THIN_FILM && material.thinFilmWeight > 0.0) {
+    if ((material.coatWeight > 0.0) & HAS_THIN_FILM & (material.thinFilmWeight > 0.0)) {
         let filmSupport = 0.02 * openpbr_thin_film_presence(material.thinFilmThickness, material.thinFilmWeight);
         prepared.probabilities[OPENPBR_LOBE_SPECULAR] = max(prepared.probabilities[OPENPBR_LOBE_SPECULAR], prepared.weights[OPENPBR_LOBE_SPECULAR] * filmSupport);
         prepared.probabilities[OPENPBR_LOBE_METAL] = max(prepared.probabilities[OPENPBR_LOBE_METAL], prepared.weights[OPENPBR_LOBE_METAL] * material.specularWeight * filmSupport);
     }
-    if (material.coatWeight > 0.0 && !material.inside) {
+    if ((material.coatWeight > 0.0) & !material.inside) {
         let baseScale = max(max(prepared.coatBaseScale.x, prepared.coatBaseScale.y), prepared.coatBaseScale.z);
         prepared.probabilities[OPENPBR_LOBE_METAL] *= baseScale;
         prepared.probabilities[OPENPBR_LOBE_SPECULAR] *= baseScale;
@@ -1093,7 +1089,7 @@ ${hasCoatNormals ? /* wgsl */ `
     let independentCoat = material.coatNormalEnabled;
     let geometricReflection = dot(material.geometricNormal, lightDirection) > 0.0;
     let coatLightCosine = dot(prepared.coatBasis.normal, lightDirection);
-    let coatReflection = geometricReflection && prepared.coatViewLocal.z > 0.0 && coatLightCosine > 0.0;
+    let coatReflection = geometricReflection & (prepared.coatViewLocal.z > 0.0) & (coatLightCosine > 0.0);
 ` : ''}
 
     var halfVector: vec3f;
@@ -1111,30 +1107,28 @@ ${hasCoatNormals ? /* wgsl */ `
     *pdf = 0.0;
     var lobePdf = 0.0;
     let allowAll = allowedLobe < 0;
-    let allowFuzz = allowAll || allowedLobe == OPENPBR_LOBE_FUZZ;
-    let allowCoat = allowAll || allowedLobe == OPENPBR_LOBE_COAT;
-    let allowMetal = allowAll || allowedLobe == OPENPBR_LOBE_METAL;
-    let allowSpecular = allowAll || allowedLobe == OPENPBR_LOBE_SPECULAR;
-    let allowTransmission = allowAll ||
-        allowedLobe == OPENPBR_LOBE_TRANSMISSION;
-    let allowDiffuse = allowAll || allowedLobe == OPENPBR_LOBE_DIFFUSE;
-    let allowSubsurface = allowAll ||
-        allowedLobe == OPENPBR_LOBE_SUBSURFACE;
+    let allowFuzz = allowAll | (allowedLobe == OPENPBR_LOBE_FUZZ);
+    let allowCoat = allowAll | (allowedLobe == OPENPBR_LOBE_COAT);
+    let allowMetal = allowAll | (allowedLobe == OPENPBR_LOBE_METAL);
+    let allowSpecular = allowAll | (allowedLobe == OPENPBR_LOBE_SPECULAR);
+    let allowTransmission = allowAll | (allowedLobe == OPENPBR_LOBE_TRANSMISSION);
+    let allowDiffuse = allowAll | (allowedLobe == OPENPBR_LOBE_DIFFUSE);
+    let allowSubsurface = allowAll | (allowedLobe == OPENPBR_LOBE_SUBSURFACE);
     let viewHalf = abs(dot(viewLocal, halfVector));
     // Reflection, solid refraction and thin-wall transmission share the same
     // dielectric optical solve. Select its half angle before evaluating the
     // film, instead of inlining that large solve in each transport branch.
     var thinWallHalf = halfVector;
     var dielectricViewHalf = viewHalf;
-    if (!reflection && material.thinWalled) {
+    if (!reflection & material.thinWalled) {
         thinWallHalf = normalize(vec3f(lightLocal.xy, -lightLocal.z) + viewLocal);
         if (thinWallHalf.z < 0.0) { thinWallHalf = -thinWallHalf; }
         dielectricViewHalf = abs(dot(viewLocal, thinWallHalf));
     }
     let evaluateDielectric =
-        (reflection && prepared.weights[OPENPBR_LOBE_SPECULAR] > 0.0 && allowSpecular) ||
-        (!reflection && prepared.weights[OPENPBR_LOBE_TRANSMISSION] > 0.0 && allowTransmission);
-    let evaluateMetal = reflection && prepared.weights[OPENPBR_LOBE_METAL] > 0.0 && allowMetal;
+        (reflection & (prepared.weights[OPENPBR_LOBE_SPECULAR] > 0.0) & allowSpecular) |
+        (!reflection & (prepared.weights[OPENPBR_LOBE_TRANSMISSION] > 0.0) & allowTransmission);
+    let evaluateMetal = reflection & (prepared.weights[OPENPBR_LOBE_METAL] > 0.0) & allowMetal;
     var fresnels: array<vec3f, 2>;
     if (evaluateDielectric) {
         fresnels[0] = vec3f(openpbr_substrate_fresnel(prepared, dielectricViewHalf, reflection));
@@ -1142,7 +1136,7 @@ ${hasCoatNormals ? /* wgsl */ `
     if (evaluateMetal) {
         fresnels[1] = openpbr_metal_fresnel(viewHalf, material.baseWeight * material.baseColor, material.specularColor);
     }
-    if (HAS_THIN_FILM && material.thinFilmWeight > 0.0) {
+    if (HAS_THIN_FILM & (material.thinFilmWeight > 0.0)) {
         let wavelengths = vec3f(620.0, 540.0, 450.0);
         // Dielectric and conductor substrates share one complete optical graph.
         for (var substrate = 0u; substrate < (rtUniform.loopUnrollGuard >> 1u); substrate++) {
@@ -1172,10 +1166,10 @@ ${hasCoatNormals ? /* wgsl */ `
 
 ${hasCoatNormals ? /* wgsl */ `
     // Each lobe retains its own shading hemisphere; topology is geometric.
-    if (!independentCoat || (lightLocal.z != 0.0 && reflection == geometricReflection)) {
+    if (!independentCoat | ((lightLocal.z != 0.0) & (reflection == geometricReflection))) {
 ` : ''}
     if (reflection) {
-        if (prepared.weights[OPENPBR_LOBE_DIFFUSE] > 0.0 && allowDiffuse) {
+        if ((prepared.weights[OPENPBR_LOBE_DIFFUSE] > 0.0) & allowDiffuse) {
             response += prepared.weights[OPENPBR_LOBE_DIFFUSE] * openpbr_eval_diffuse(
                 material,
                 prepared.diffuseColor,
@@ -1187,8 +1181,7 @@ ${hasCoatNormals ? /* wgsl */ `
             *pdf += prepared.probabilities[OPENPBR_LOBE_DIFFUSE] * lobePdf;
         }
 
-        if (prepared.weights[OPENPBR_LOBE_SUBSURFACE] > 0.0 && material.thinWalled &&
-            allowSubsurface) {
+        if ((prepared.weights[OPENPBR_LOBE_SUBSURFACE] > 0.0) & material.thinWalled & allowSubsurface) {
             response += 0.5 * prepared.weights[OPENPBR_LOBE_SUBSURFACE] * openpbr_eval_diffuse(
                 material,
                 material.subsurfaceColor,
@@ -1200,7 +1193,7 @@ ${hasCoatNormals ? /* wgsl */ `
             *pdf += prepared.probabilities[OPENPBR_LOBE_SUBSURFACE] * 0.5 * lobePdf;
         }
 
-        if (prepared.weights[OPENPBR_LOBE_SPECULAR] > 0.0 && allowSpecular) {
+        if ((prepared.weights[OPENPBR_LOBE_SPECULAR] > 0.0) & allowSpecular) {
             var dielectricFresnel = substrateFresnel;
             if (material.thinWalled) {
                 dielectricFresnel = openpbr_thin_wall_reflection_coefficient(
@@ -1220,7 +1213,7 @@ ${hasCoatNormals ? /* wgsl */ `
             *pdf += prepared.probabilities[OPENPBR_LOBE_SPECULAR] * lobePdf;
         }
 
-        if (prepared.weights[OPENPBR_LOBE_METAL] > 0.0 && allowMetal) {
+        if ((prepared.weights[OPENPBR_LOBE_METAL] > 0.0) & allowMetal) {
             let fresnel = material.specularWeight * fresnels[1];
             response += prepared.weights[OPENPBR_LOBE_METAL] * openpbr_eval_microfacet_reflection(
                 material,
@@ -1240,7 +1233,7 @@ ${hasCoatNormals ? /* wgsl */ `
     }
     else {
         let fresnel = substrateFresnel;
-        if (prepared.weights[OPENPBR_LOBE_TRANSMISSION] > 0.0 && allowTransmission) {
+        if ((prepared.weights[OPENPBR_LOBE_TRANSMISSION] > 0.0) & allowTransmission) {
             if (material.thinWalled) {
                 let mirroredLight = vec3f(lightLocal.xy, -lightLocal.z);
                 let windowFresnel = openpbr_thin_wall_reflection_coefficient(
@@ -1280,7 +1273,7 @@ ${hasCoatNormals ? /* wgsl */ `
             }
             *pdf += prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] * lobePdf;
         }
-        if (prepared.weights[OPENPBR_LOBE_SUBSURFACE] > 0.0 && allowSubsurface) {
+        if ((prepared.weights[OPENPBR_LOBE_SUBSURFACE] > 0.0) & allowSubsurface) {
             if (material.thinWalled) {
                 let flippedLight = vec3f(lightLocal.xy, -lightLocal.z);
                 response += 0.5 * prepared.weights[OPENPBR_LOBE_SUBSURFACE]
@@ -1309,7 +1302,7 @@ ${hasCoatNormals ? /* wgsl */ `
     // Reference value includes the hemisphere ratio before the grazing clamp.
     // Reference scale_trans has no extra eta^2 factor; single refraction keeps
     // its existing radiance Jacobian. Both proposals share the aggregate PDF.
-    if (prepared.dielectricMsProbability > 0.0 && allowTransmission) {
+    if ((prepared.dielectricMsProbability > 0.0) & allowTransmission) {
         let cosine = abs(lightLocal.z);
         if (cosine > 0.0) {
             let ior = select(1.0 / prepared.refractionEtaTOverEtaI, prepared.refractionEtaTOverEtaI, reflection);
@@ -1333,7 +1326,7 @@ ${hasCoatNormals ? /* wgsl */ `
 ` : ''}
 
 ${hasAnisotropyDirections ? /* wgsl */ `
-    if (${hasCoatNormals ? 'select(reflection, coatReflection, independentCoat)' : 'reflection'} && prepared.weights[OPENPBR_LOBE_COAT] > 0.0) {
+    if (${hasCoatNormals ? 'select(reflection, coatReflection, independentCoat)' : 'reflection'} & (prepared.weights[OPENPBR_LOBE_COAT] > 0.0)) {
         var coatView = viewLocal;
         var coatLight = lightLocal;
         var coatHalf = halfVector;
@@ -1367,7 +1360,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
         }
     }
 ` : /* wgsl */ `
-    if (${hasCoatNormals ? 'select(reflection, coatReflection, independentCoat)' : 'reflection'} && prepared.weights[OPENPBR_LOBE_COAT] > 0.0) {
+    if (${hasCoatNormals ? 'select(reflection, coatReflection, independentCoat)' : 'reflection'} & (prepared.weights[OPENPBR_LOBE_COAT] > 0.0)) {
         let coatFresnel = vec3f(openpbr_dielectric_fresnel(
             viewHalf,
             1.0 / material.coatIor
@@ -1390,7 +1383,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     }
 `}
 
-    if (${hasCoatNormals ? 'select(reflection, geometricReflection, independentCoat)' : 'reflection'} && prepared.weights[OPENPBR_LOBE_FUZZ] > 0.0) {
+    if (${hasCoatNormals ? 'select(reflection, geometricReflection, independentCoat)' : 'reflection'} & (prepared.weights[OPENPBR_LOBE_FUZZ] > 0.0)) {
         let fuzzAlbedo = openpbr_fuzz_directional_albedo(
             abs(viewLocal.z),
             material.fuzzRoughness
@@ -1466,17 +1459,14 @@ fn openpbr_sample_direction(
 
     var cdf: array<f32, OPENPBR_LOBE_COUNT>;
     cdf[OPENPBR_LOBE_FUZZ] = prepared.probabilities[OPENPBR_LOBE_FUZZ];
-    let lobeCount = min(OPENPBR_LOBE_COUNT, i32(rtUniform.loopUnrollGuard * 2u));
-    for (var lobe = 1; lobe < lobeCount; lobe++) {
-        cdf[lobe] = cdf[lobe - 1] + prepared.probabilities[lobe];
-    }
+    ${LOBE_INDICES.slice(1).map(i => /* wgsl */ `cdf[${i}] = cdf[${i - 1}] + prepared.probabilities[${i}];`).join('\n    ')}
     if (cdf[OPENPBR_LOBE_SUBSURFACE] <= 0.0) {
         return false;
     }
 
     var lightLocal: vec3f;
-    if (lobeSample < cdf[OPENPBR_LOBE_FUZZ] || (
-        lobeSample >= cdf[OPENPBR_LOBE_TRANSMISSION] && lobeSample < cdf[OPENPBR_LOBE_DIFFUSE]
+    if ((lobeSample < cdf[OPENPBR_LOBE_FUZZ]) | (
+        (lobeSample >= cdf[OPENPBR_LOBE_TRANSMISSION]) & (lobeSample < cdf[OPENPBR_LOBE_DIFFUSE])
     )) {
         let sampledFuzz = lobeSample < cdf[OPENPBR_LOBE_FUZZ];
         *sampledLobeRoughness = select(
@@ -1513,7 +1503,7 @@ ${hasCoatNormals ? /* wgsl */ `
         if (material.coatNormalEnabled) {
             // Validate against the sampled coat frame, never the base normal.
             *lightDirection = openpbr_to_world(prepared.coatBasis, lightLocal);
-            return lightLocal.z > 0.0 && dot(material.geometricNormal, *lightDirection) > 0.0;
+            return (lightLocal.z > 0.0) & (dot(material.geometricNormal, *lightDirection) > 0.0);
         }
 ` : ''}
         if (prepared.directionFrames) { lightLocal = openpbr_to_local(prepared.basis, openpbr_to_world(prepared.coatBasis, lightLocal)); }
@@ -1545,7 +1535,7 @@ ${hasCoatNormals ? /* wgsl */ `
         );
         let isMetal = lobeSample < cdf[OPENPBR_LOBE_METAL];
         let metalDraw = (lobeSample - cdf[OPENPBR_LOBE_COAT]) / max(prepared.probabilities[OPENPBR_LOBE_METAL], 1e-12);
-        if (isMetal && metalDraw < prepared.metalMsProbability) {
+        if (isMetal & (metalDraw < prepared.metalMsProbability)) {
             let z = randomX;
             let radial = sqrt(max(0.0, 1.0 - z * z));
             let azimuth = TWOPI * randomY;
@@ -1571,7 +1561,7 @@ ${hasCoatNormals ? /* wgsl */ `
         // Split the existing BSDF_LOBE interval. BSDF_DIRECTION retains its
         // two dimensions; rand.x selects and remaps the reference hemisphere.
         let msDraw = (lobeSample - cdf[OPENPBR_LOBE_SPECULAR]) / max(prepared.probabilities[OPENPBR_LOBE_TRANSMISSION], 1e-12);
-        if (prepared.dielectricMsProbability > 0.0 && msDraw < prepared.dielectricMsProbability) {
+        if ((prepared.dielectricMsProbability > 0.0) & (msDraw < prepared.dielectricMsProbability)) {
             let ratio = prepared.dielectricMsReflectionRatio;
             let reflectMs = randomX < ratio;
             var z: f32;
@@ -1641,11 +1631,11 @@ ${hasCoatNormals ? /* wgsl */ `
     // VNDF reflection may land below the macrosurface. A mirrored thin-wall
     // transmission draw can likewise land above it. Reject that draw before
     // aggregate evaluation can accidentally turn it into the opposite lobe.
-    if (lightLocal.z == 0.0 || (lightLocal.z < 0.0) != *isTransmissionEvent) {
+    if ((lightLocal.z == 0.0) | ((lightLocal.z < 0.0) != *isTransmissionEvent)) {
         return false;
     }
 ${hasCoatNormals ? /* wgsl */ `
-    if (material.coatNormalEnabled &&
+    if (material.coatNormalEnabled &
         ((dot(material.geometricNormal, *lightDirection) <= 0.0) != *isTransmissionEvent)) { return false; }
 ` : ''}
     return true;
@@ -1671,9 +1661,9 @@ fn openpbr_sample_prepared(
     // half vector normalizes light + eta * view, which is zero for straight
     // transmission. Resolve the physically null boundary as a discrete,
     // unit-throughput continuation instead of losing the path to NaNs.
-    if (!prepared.material.thinWalled &&
-        abs(prepared.material.relativeIor - 1.0) <= 1e-6 &&
-        prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] >= 1.0 - 1e-6) {
+    if (!prepared.material.thinWalled &
+        (abs(prepared.material.relativeIor - 1.0) <= 1e-6) &
+        (prepared.probabilities[OPENPBR_LOBE_TRANSMISSION] >= 1.0 - 1e-6)) {
         *lightDirection = openpbr_to_world(
             prepared.basis,
             -prepared.viewLocal
