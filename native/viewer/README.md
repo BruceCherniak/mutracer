@@ -1,30 +1,30 @@
 # MuTracer native viewer
 
-A small standalone viewer for macOS arm64, Windows x64 and Linux x64. It loads local GLTF/GLB models and
+A small standalone viewer for macOS arm64 and Linux x64. It loads local GLTF/GLB models and
 renders with the native MuTracer library. The app requires no browser,
 JavaScript engine, Node installation or prepared GPU capture at runtime.
 
 ## Download and open
 
 Download the matching archive from [GitHub Releases](https://github.com/pissang/mutracer/releases):
-`MuTracer-macos-arm64.zip`, `MuTracer-windows-x64.zip` or `MuTracer-linux-x64.tar.gz`.
-Extract the whole archive, then open `MuTracer.app` on macOS, `mutracer-viewer.exe`
-on Windows, or `mutracer-viewer` on Linux. Keep the executable, sample, OIDN libraries
+`MuTracer-macos-arm64.zip` or `MuTracer-linux-x64.tar.gz`.
+Extract the whole archive, then open `MuTracer.app` on macOS or `mutracer-viewer`
+on Linux. Keep the executable, sample, OIDN libraries
 and licenses together. SHA-256 checksum files accompany the downloads.
 
-The macOS app is ad-hoc signed and not Apple-notarized. Windows requires the
-[Microsoft Visual C++ v14 x64 runtime](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
+The macOS app is ad-hoc signed and not Apple-notarized.
 Linux packages target Ubuntu 24.04 x64 and require a Vulkan driver and an X11 or
 Wayland desktop. X11 sessions also need `libxkbcommon-x11-0`. Physical GPU behavior
 outside the tested macOS hardware remains unverified.
 
+Windows support remains experimental and is not included in release downloads.
+
 ## Build and open
 
 Install Rust, CMake, a C++20 compiler, project npm dependencies and scriptc
-**0.3.2**, then run from the repository root. Windows needs an x64 MSVC Developer
-shell with MinGW-w64 GCC, Ninja and Zig 0.15.2. Install the Rust toolchain
-`stable-x86_64-pc-windows-gnu` and set `RUSTUP_TOOLCHAIN` to that name for the build.
-Linux also needs patchelf and X11/Wayland development libraries.
+**0.3.2**, then run from the repository root. Linux also needs patchelf and
+X11/Wayland development libraries. Experimental Windows build prerequisites are
+in the [contributor guide](../CONTRIBUTING.md#build-and-ci).
 The first build downloads the native OIDN SDK, source and regular model
 weights (about 80–95 MiB depending on platform). The app includes regular/small
 models and omits the three large weight sets. Denoising needs no runtime download:

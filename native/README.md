@@ -3,8 +3,8 @@
 MuTracer's experimental C interface accepts raw scene data and renders through
 native machine code and wgpu, without a JavaScript engine or Node at runtime.
 It supports part of MuTracer and has an unstable ABI. Builds target macOS arm64
-with Metal, Windows x64 with DirectX 12/Vulkan, and Linux x64 with Vulkan.
-Physical GPU rendering has been verified on macOS; Windows/Linux hardware-specific
+with Metal and Linux x64 with Vulkan; Windows x64 support remains experimental.
+Physical GPU rendering has been verified on macOS; Linux hardware-specific
 behavior and performance remain unverified. Performance varies by scene and hardware.
 
 ## Native viewer

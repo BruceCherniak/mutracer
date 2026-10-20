@@ -45,13 +45,15 @@ MUTRACER_NATIVE_OUTPUT=/absolute/evidence npm run native:ci
 
 The GitHub Actions `CI` workflow runs on pull requests, pushes to `main`, and
 manual dispatches. It validates native code and builds standalone viewers for
-macOS arm64, Windows x64 and Linux x64, including OIDN and licenses. Download
-`native-macos-arm64`, `native-windows-x64` or `native-linux-x64` from the run's
+macOS arm64 and Linux x64, including OIDN and licenses. Download
+`native-macos-arm64` or `native-linux-x64` from the run's
 artifacts for the app archive and SHA-256 checksum (retained for 14 days).
 The corresponding `native-PLATFORM-diagnostics` artifact retains logs and check
 summaries for seven days, including failed runs.
-Manual dispatch defaults to all three platforms; `native_platform` can select one
-target for diagnosis. A single-target dispatch never publishes a release.
+Manual dispatch defaults to `release` (macOS and Linux); `native_platform` can
+select one target for diagnosis. Windows x64 is an experimental manual-only
+target, deferred for validation and optimization on Windows. A single-target
+dispatch never publishes a release.
 
 Windows builds need an x64 MSVC Developer environment for OIDN, MinGW-w64 GCC,
 Ninja, CMake and Zig 0.15.2 for scriptc's library archiver. Install Rust's
@@ -66,7 +68,7 @@ when an adapter exists. Set `MUTRACER_NATIVE_GUI_SMOKE=1` to require a real wind
 and displayed frames on those adapters; Linux uses `xvfb-run`.
 
 Push a `native-v*` tag, for example `native-v0.1.0`, to run the same checks and
-publish all three app archives and checksums to that tag's GitHub Release after
+publish macOS and Linux app archives and checksums to that tag's GitHub Release after
 Web and all native jobs pass. Tags such as `native-v0.1.0-rc.1` create prereleases. Native
 releases do not replace the repository's latest release. Rerunning a tag's job
 replaces matching assets on a mutable release. Publishing uses `GITHUB_TOKEN`;
@@ -195,7 +197,8 @@ reconfigure the shared surface safely; CPU preparation continues while paused.
 
 The packaged executable accepts `[MODEL] --package-smoke DIRECTORY` for the
 portable package gate. `--startup-smoke REPORT.json` opens a window and closes
-after resizing the window and presenting rendered frames; its report must confirm success. The stronger
+after resizing the window and presenting rendered frames; its report must confirm
+success. The stronger
 `[MODEL] --smoke-out DIRECTORY` requires actual HWRT for load/render,
 editing, cancellation, HDR environments, backend assertions and native OIDN.
 `--interaction-smoke DIRECTORY` checks continuous camera/held edits, retained
