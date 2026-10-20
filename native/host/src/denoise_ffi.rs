@@ -61,7 +61,7 @@ pub unsafe extern "C" fn mt_denoiser_create(
             !output.is_null() && (output as usize) % std::mem::align_of::<u64>() == 0,
             "Null or unaligned denoiser handle output"
         );
-        ensure!(backend <= 2, "Invalid native OIDN backend preference");
+        ensure!(backend <= 3, "Invalid native OIDN backend preference");
         (|| -> Result<()> {
             let mut values = DENOISERS
                 .try_lock()
@@ -99,6 +99,7 @@ pub unsafe extern "C" fn mt_denoiser_backend(
         let backend = state(handle, |d| match d.backend {
             "OIDN Metal" => Ok(2),
             "OIDN CPU" => Ok(1),
+            "OIDN CUDA" => Ok(3),
             _ => bail!("Unrecognized native OIDN backend"),
         })?;
         unsafe { *output = backend };
@@ -171,6 +172,122 @@ pub unsafe extern "C" fn mt_denoiser_destroy(
 mod tests {
     use super::*;
     static TEST_LOCK: Mutex<()> = Mutex::new(());
+    #[test]
+    fn sdk_backends_filter_resize_and_preserve_aliased_output_on_failure() {
+        let _test = TEST_LOCK.lock().unwrap();
+        let Ok(path) = std::env::var("MUTRACER_OIDN_LIBRARY") else {
+            return;
+        };
+        let path = std::ffi::CString::new(path).unwrap();
+        let mut preferences = vec![1, 0];
+        if std::env::var_os("MUTRACER_TEST_OIDN_CUDA").is_some() {
+            preferences.push(3);
+        }
+        for preference in preferences {
+            let mut error = [0 as c_char; 512];
+            let mut handle = 0;
+            let message = |error: &[c_char]| {
+                unsafe { CStr::from_ptr(error.as_ptr()) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            assert_eq!(
+                unsafe {
+                    mt_denoiser_create(
+                        path.as_ptr(),
+                        preference,
+                        &mut handle,
+                        error.as_mut_ptr(),
+                        error.len(),
+                    )
+                },
+                0,
+                "{}",
+                message(&error)
+            );
+            let mut backend = 0;
+            assert_eq!(
+                unsafe {
+                    mt_denoiser_backend(handle, &mut backend, error.as_mut_ptr(), error.len())
+                },
+                0
+            );
+            if preference != 0 {
+                assert_eq!(backend, preference);
+            }
+            if preference == 0 && std::env::var_os("MUTRACER_TEST_OIDN_CUDA").is_some() {
+                assert_eq!(backend, 3);
+            }
+            for (width, height) in [(32, 24), (48, 32), (32, 24)] {
+                let count = width as usize * height as usize;
+                let mut color: Vec<f32> = (0..count)
+                    .flat_map(|i| {
+                        [
+                            if i % 3 == 0 { 2. } else { 0.1 },
+                            0.3,
+                            0.6,
+                            (i % 7) as f32 / 7.,
+                        ]
+                    })
+                    .collect();
+                let original = color.clone();
+                let normal = [0., 0., 1., 1.].repeat(count);
+                let albedo = [0.5, 0.5, 0.5, 1.].repeat(count);
+                assert_eq!(
+                    unsafe {
+                        mt_denoiser_run(
+                            handle,
+                            width,
+                            height,
+                            color.as_ptr(),
+                            normal.as_ptr(),
+                            albedo.as_ptr(),
+                            color.as_mut_ptr(),
+                            color.len(),
+                            error.as_mut_ptr(),
+                            error.len(),
+                        )
+                    },
+                    0,
+                    "{}",
+                    message(&error)
+                );
+                assert_ne!(color, original);
+                assert!(color.iter().all(|v| v.is_finite()));
+                assert!(
+                    color
+                        .chunks_exact(4)
+                        .zip(original.chunks_exact(4))
+                        .all(|(a, b)| a[3] == b[3])
+                );
+                let filtered = color.clone();
+                let mut invalid = normal.clone();
+                invalid[0] = f32::NAN;
+                assert_ne!(
+                    unsafe {
+                        mt_denoiser_run(
+                            handle,
+                            width,
+                            height,
+                            color.as_ptr(),
+                            invalid.as_ptr(),
+                            albedo.as_ptr(),
+                            color.as_mut_ptr(),
+                            color.len(),
+                            error.as_mut_ptr(),
+                            error.len(),
+                        )
+                    },
+                    0
+                );
+                assert_eq!(color, filtered);
+            }
+            assert_eq!(
+                unsafe { mt_denoiser_destroy(handle, error.as_mut_ptr(), error.len()) },
+                0
+            );
+        }
+    }
     #[test]
     fn denoiser_can_be_queried_and_destroyed_from_another_thread() {
         let _test = TEST_LOCK.lock().unwrap();

@@ -40,6 +40,11 @@ fuzzing = []
 validation = []
 
 [[bin]]
+name = "denoise-benchmark"
+path = "diagnostics/denoise-benchmark.rs"
+required-features = ["validation"]
+
+[[bin]]
 name = "fuzz-seed"
 path = "diagnostics/fuzz-seed.rs"
 required-features = ["fuzzing"]

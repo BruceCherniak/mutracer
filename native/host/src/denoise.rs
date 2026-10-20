@@ -27,7 +27,11 @@ api! {
     oidnReleaseDevice: unsafe extern "C" fn(Handle),
     oidnGetDeviceError: unsafe extern "C" fn(Handle, *mut *const c_char) -> i32,
     oidnNewBuffer: unsafe extern "C" fn(Handle, usize) -> Handle,
+    oidnNewBufferWithStorage: unsafe extern "C" fn(Handle, usize, i32) -> Handle,
     oidnGetBufferData: unsafe extern "C" fn(Handle) -> *mut c_void,
+    oidnWriteBufferAsync: unsafe extern "C" fn(Handle, usize, usize, *const c_void),
+    oidnReadBuffer: unsafe extern "C" fn(Handle, usize, usize, *mut c_void),
+    oidnSyncDevice: unsafe extern "C" fn(Handle),
     oidnReleaseBuffer: unsafe extern "C" fn(Handle),
     oidnNewFilter: unsafe extern "C" fn(Handle, *const c_char) -> Handle,
     oidnReleaseFilter: unsafe extern "C" fn(Handle),
@@ -42,6 +46,8 @@ pub struct Denoiser {
     filter: Handle,
     buffers: Vec<Handle>,
     size: [u32; 2],
+    #[cfg(feature = "validation")]
+    input_scale: Option<f32>,
     pub backend: &'static str,
 }
 // SAFETY: OIDN 2.5.1 explicitly permits calls from arbitrary threads, including
@@ -72,35 +78,48 @@ impl Denoiser {
         };
         Self::from_library(&path, preference)
     }
-    /// Backend preference:0=Metal then CPU,1=CPU only,2=Metal only.
+    /// Backend preference: 0=Metal/CUDA then CPU, 1=CPU, 2=Metal, 3=CUDA.
     pub fn from_library(path: &Path, preference: u32) -> Result<Self> {
         let devices: &[(i32, &str)] = match preference {
-            0 => &[(5, "OIDN Metal"), (1, "OIDN CPU")],
+            0 => &[(5, "OIDN Metal"), (3, "OIDN CUDA"), (1, "OIDN CPU")],
             1 => &[(1, "OIDN CPU")],
             2 => &[(5, "OIDN Metal")],
+            3 => &[(3, "OIDN CUDA")],
             _ => bail!("Invalid native OIDN backend preference"),
         };
         let api = unsafe { Api::load(path)? };
+        let mut failures = Vec::new();
         for &(kind, backend) in devices {
             let device = unsafe { (api.oidnNewDevice)(kind) };
             if device.is_null() {
-                let _ = error(&api, device);
+                let reason = error(&api, device).err();
+                failures.push(format!(
+                    "{backend}: {}",
+                    reason.map_or_else(|| "device unavailable".into(), |e| e.to_string())
+                ));
                 continue;
             }
             unsafe { (api.oidnCommitDevice)(device) };
-            if error(&api, device).is_ok() {
+            let result = error(&api, device);
+            if result.is_ok() {
                 return Ok(Self {
                     api,
                     device,
                     filter: ptr::null_mut(),
                     buffers: vec![],
                     size: [0; 2],
+                    #[cfg(feature = "validation")]
+                    input_scale: None,
                     backend,
                 });
             }
+            failures.push(format!("{backend}: {}", result.unwrap_err()));
             unsafe { (api.oidnReleaseDevice)(device) };
         }
-        bail!("Native OIDN could not create the requested device")
+        bail!(
+            "Native OIDN could not create the requested device: {}",
+            failures.join("; ")
+        )
     }
     fn clear(&mut self) {
         unsafe {
@@ -113,6 +132,15 @@ impl Denoiser {
             }
         }
         self.size = [0; 2];
+    }
+    /// Fix HDR normalization for comparisons with GPU-resident oidn-web input.
+    /// Normal application calls retain OIDN's automatic exposure.
+    #[cfg(feature = "validation")]
+    pub fn set_validation_input_scale(&mut self, scale: f32) -> Result<()> {
+        ensure!(scale.is_finite() && scale > 0., "Invalid input scale");
+        self.clear();
+        self.input_scale = Some(scale);
+        Ok(())
     }
     pub fn run(
         &mut self,
@@ -141,7 +169,13 @@ impl Denoiser {
                 error(&self.api, self.device)?;
                 ensure!(!self.filter.is_null(), "OIDN filter allocation failed");
                 for name in [c"color", c"normal", c"albedo", c"output"] {
-                    let buffer = (self.api.oidnNewBuffer)(self.device, count * 4);
+                    // Discrete CUDA GPUs use explicit transfers to avoid managed
+                    // memory migration between each host copy and inference.
+                    let buffer = if self.backend == "OIDN CUDA" {
+                        (self.api.oidnNewBufferWithStorage)(self.device, count * 4, 2)
+                    } else {
+                        (self.api.oidnNewBuffer)(self.device, count * 4)
+                    };
                     if !buffer.is_null() {
                         self.buffers.push(buffer);
                     }
@@ -163,12 +197,49 @@ impl Denoiser {
                 (self.api.oidnSetFilterBool)(self.filter, c"hdr".as_ptr(), true);
                 // Accumulated guides contain sampling noise, so never mark them clean.
                 (self.api.oidnSetFilterBool)(self.filter, c"cleanAux".as_ptr(), false);
+                #[cfg(feature = "validation")]
+                if let Some(scale) = self.input_scale {
+                    let set_float =
+                        self.api
+                            ._library
+                            .get::<unsafe extern "C" fn(Handle, *const c_char, f32)>(
+                                b"oidnSetFilterFloat\0",
+                            )?;
+                    set_float(self.filter, c"inputScale".as_ptr(), scale);
+                }
                 (self.api.oidnCommitFilter)(self.filter);
                 error(&self.api, self.device)?;
             }
             self.size = size;
         }
         unsafe {
+            if self.backend == "OIDN CUDA" {
+                for (buffer, data) in self.buffers.iter().zip([color, normal, albedo, color]) {
+                    (self.api.oidnWriteBufferAsync)(*buffer, 0, count * 4, data.as_ptr().cast());
+                }
+                // Always drain submitted copies before returning, including on
+                // an upload error, so caller-owned input storage can be freed.
+                (self.api.oidnSyncDevice)(self.device);
+                error(&self.api, self.device)?;
+                (self.api.oidnExecuteFilter)(self.filter);
+                error(&self.api, self.device)?;
+                let mut values = vec![0.; count];
+                (self.api.oidnReadBuffer)(
+                    self.buffers[3],
+                    0,
+                    count * 4,
+                    values.as_mut_ptr().cast(),
+                );
+                error(&self.api, self.device)?;
+                for (dst, src) in values.chunks_exact_mut(4).zip(color.chunks_exact(4)) {
+                    dst[3] = src[3];
+                }
+                ensure!(
+                    values.iter().all(|v| v.is_finite()),
+                    "OIDN returned non-finite pixels"
+                );
+                return Ok(values);
+            }
             // Float3 writes RGB only. Initialize output RGBA too, so copying
             // the result never reads uninitialized padding/alpha from the SDK.
             for (buffer, data) in self.buffers.iter().zip([color, normal, albedo, color]) {

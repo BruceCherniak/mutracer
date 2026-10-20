@@ -213,8 +213,9 @@ closes automatically. Use LEGO, keep the Mac unlocked and nominal, and retain
 outliers. This opt-in contributor instrument does not change normal usage.
 
 OIDN uses the library's `denoise.rs` for both the C ABI and viewer worker. The
-build pins 2.5.1 source/weights and official ABI-matched CPU modules (plus Metal on macOS), omits
-three large models and packages component notices. Check CPU/Metal/Auto,
+build pins 2.5.1 source/weights and official ABI-matched CPU modules (plus Metal
+on macOS and CUDA on Windows/Linux), omits three large models and packages
+component notices. Check CPU/Metal/CUDA/Auto,
 malformed inputs, rollback, in-place output and arbitrary calling threads.
 Rust/TS rendering accumulation is independent of optional denoising. Copy the
 app to a new location and run all demo models plus Sponza without Node or build
@@ -271,6 +272,23 @@ The native TinyBVH license belongs under `native/LICENSES/` and is also copied
 into the application bundle.
 
 ## Performance comparisons
+
+For native CPU/CUDA versus oidn-web denoising, build the diagnostic with
+`cargo build --release --locked --manifest-path native/host/Cargo.toml --features validation --bin denoise-benchmark`,
+then run `node native/benchmark/denoise.mjs --output /absolute/evidence
+--native /absolute/denoise-benchmark --oidn /absolute/OIDN-library --model /absolute/complex-model.gltf`.
+Open its localhost URL in a WebGPU browser. The harness loads the model with
+GLTFLoader/THREESync and captures the same 8-sample HDR/normal/albedo inputs for
+all three paths. It runs three alternating rounds, each discarding the first
+execution and two warmups before seven measurements. Web uses the standard
+model, fixed 512-pixel tiles and FP16 when supported. Native uses high quality
+with noisy guides; the diagnostic fixes HDR inputScale=1 to match Web GPU-buffer
+inputs. Normal application calls retain automatic HDR exposure. Both wall times
+include host input upload and result readback; renderer readback and model loading
+are excluded. The Web `residentMs` diagnostic excludes result readback but may
+include pending uploads; it is not a pure GPU timestamp. Retain input/output
+bytes, verify the actual GPU, and report cold start separately. Compare outputs
+as well as timings; this benchmark does not establish denoising quality parity.
 
 ```sh
 node native/benchmark/benchmark.mjs --manifest /absolute/inputs.json \

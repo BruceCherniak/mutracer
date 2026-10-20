@@ -49,7 +49,8 @@ dimensions are in `result.json`. Normal guides are not renormalized after averag
 Use [mutracer-denoise.h](include/mutracer-denoise.h) to
 `create → run → destroy` a native OIDN denoiser. Supply matching linear RGBA32F
 HDR, normal and albedo images, such as those returned by `mt_context_read_pixels`.
-Choose automatic Metal/CPU fallback, CPU only or Metal only. Output keeps the
+Choose automatic Metal/CUDA/CPU fallback, CPU only, Metal only or CUDA only.
+Output keeps the
 input alpha and can reuse an input buffer; a failed call leaves output unchanged.
 Rendering accumulation is independent of denoising.
 

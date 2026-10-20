@@ -74,7 +74,8 @@ the output directory. See the [native guide](../README.md) for platform backends
   default. Adjust its intensity, color, azimuth and elevation. Enabling or
   disabling it rebuilds the scene; other edits use partial updates where possible.
 - **Native OIDN** is on by default. It denoises completed previews after interaction
-  pauses, using Metal where available and CPU otherwise. Toggle it to compare
+  pauses, trying Metal, then CUDA, then CPU. CUDA requires a supported NVIDIA
+  GPU and driver. Toggle it to compare
   the unfiltered image; PNG export uses the currently displayed result.
 - **Ray tracing** defaults to **HWRT**, with **Software** as the other option.
   Unsupported devices and acceleration-structure limits or allocation failures
