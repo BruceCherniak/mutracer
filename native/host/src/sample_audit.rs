@@ -145,6 +145,38 @@ fn classify(data: &[u8], normal: &[u8], sample: u32) -> Result<Sample> {
     Ok(result)
 }
 
+#[cfg(feature = "validation")]
+pub(super) fn accumulation_count(state: &GpuScene, sample: u32) -> Result<serde_json::Value> {
+    let data = hit_diagnostics::read_raw(
+        &state.gpu,
+        &state.buffers[&state
+            .scene
+            .normal_output
+            .ok_or("Missing normal accumulator")?],
+    )?;
+    Ok(classify_accumulation(&data, sample))
+}
+
+#[cfg(any(test, feature = "validation"))]
+fn classify_accumulation(data: &[u8], sample: u32) -> serde_json::Value {
+    let mut short = 0usize;
+    let mut invalid = usize::from(data.is_empty() || data.len() % 16 != 0);
+    let mut minimum = sample + 1;
+    let mut maximum = 0u32;
+    for pixel in data.chunks_exact(16) {
+        let count = f32::from_le_bytes(pixel[12..16].try_into().unwrap());
+        if !count.is_finite() || count < 0. || count > (sample + 1) as f32 || count.fract() != 0. {
+            invalid += 1;
+        } else {
+            let count = count as u32;
+            minimum = minimum.min(count);
+            maximum = maximum.max(count);
+            short += usize::from(count < sample + 1);
+        }
+    }
+    json!({"sample":sample,"pixels":data.len()/16,"shortPixels":short,"invalidPixels":invalid,"expectedCount":sample+1,"observedMin":minimum,"observedMax":maximum})
+}
+
 #[cfg(test)]
 pub(super) fn evidence(a: &Sample, b: Option<&Sample>) -> Option<serde_json::Value> {
     if a.invalid_pixels > 0 || b.is_some_and(|v| v.invalid_pixels > 0) {
@@ -293,6 +325,18 @@ mod tests {
                 .collect(),
         )
     }
+    #[test]
+    fn ordinary_accumulator_requires_finite_integral_counts() {
+        let (_, normal) = record(1, 0, 1);
+        assert_eq!(classify_accumulation(&normal, 0)["shortPixels"], 0);
+        assert_eq!(classify_accumulation(&normal, 1)["shortPixels"], 1);
+        for count in [f32::NAN, f32::INFINITY, -1., 0.5, 3.] {
+            let mut data = normal.clone();
+            data[12..16].copy_from_slice(&count.to_le_bytes());
+            assert_eq!(classify_accumulation(&data, 1)["invalidPixels"], 1);
+        }
+    }
+
     #[test]
     fn independent_counts_and_same_sample_hits_bound_retry_evidence() {
         let (d, n) = record(1, 0, 1);

@@ -45,9 +45,34 @@ def sample_evidence(*audits):
     return None
 
 
+def accumulation_evidence(rows):
+    if not rows:
+        raise ValueError('missing ordinary sample counts')
+    for index, row in enumerate(rows):
+        if (row['sample'] != index or row['invalidPixels'] or row['expectedCount'] != index+1
+                or row['pixels'] <= 0 or not 0 <= row['shortPixels'] <= row['pixels']
+                or not 0 <= row['observedMin'] <= row['observedMax'] <= index+1
+                or bool(row['shortPixels']) != (row['observedMin'] < index+1)):
+            raise ValueError('invalid ordinary sample counts')
+    for row in rows:
+        if row['shortPixels']:
+            return {'kind':'accumulation-count-short', 'sample':row['sample'],
+                    'pixels':row['pixels'], 'shortPixels':row['shortPixels'],
+                    'expectedCount':row['expectedCount'], 'observedMin':row['observedMin'],
+                    'observedMax':row['observedMax'], 'countSource':'normal.a',
+                    'finiteIntegralCounts':True}
+    return None
+
+
 def positive(e):
     if not isinstance(e, dict) or not isinstance(e.get('sample'), int) or e['sample'] < 0:
         return False
+    if e.get('kind') == 'accumulation-count-short':
+        fields = ['pixels','shortPixels','expectedCount','observedMin','observedMax']
+        return (all(isinstance(e.get(k),int) for k in fields)
+                and e.get('countSource') == 'normal.a' and e.get('finiteIntegralCounts') is True
+                and 0 < e['shortPixels'] <= e['pixels'] and e['expectedCount'] == e['sample']+1
+                and 0 <= e['observedMin'] < e['expectedCount'] and e['observedMin'] <= e['observedMax'] <= e['expectedCount'])
     if e.get('kind') == 'sample-count-short':
         return (e.get('independentCountersAgree') is True
                 and isinstance(e.get('shortPixels'), int)
@@ -63,7 +88,7 @@ def positive(e):
     return False
 
 
-def run_with_retry(test, root, operation):
+def run_with_retry(test, root, operation, resume=False):
     """operation(folder) returns passed, step, evidence (optional), details.
 
     Contradictory evidence or a simultaneous unknown failure must be returned as
@@ -71,7 +96,15 @@ def run_with_retry(test, root, operation):
     """
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    for attempt in range(MAX_RERUNS + 1):
+    start = 0
+    if resume and (root/'resume.json').exists():
+        review = json.loads((root/'resume.json').read_text())
+        start = review['nextAttempt']
+        if not 1 <= start <= MAX_RERUNS or not positive(review['evidence']):
+            raise ValueError('resume requires reviewed positive evidence and remaining reruns')
+        if not (root/f'attempt-{start-1}'/'result.json').exists() or (root/f'attempt-{start}').exists():
+            raise ValueError('resume attempt history does not match')
+    for attempt in range(start, MAX_RERUNS + 1):
         folder = root / f'attempt-{attempt}'
         folder.mkdir()  # Never reuse output from a previous invocation.
         result = operation(folder)

@@ -55,3 +55,26 @@ class PlatformRetry(unittest.TestCase):
             self.assertFalse(events[0]['rerun'])
         result, calls, events = self.run_attempts('unknown', sample_evidence([row(shortPixels=1)]))
         self.assertEqual(len(calls), 1)
+
+    def test_ordinary_counts_and_evidence_review_preserve_retry_budget(self):
+        from platform_retry import accumulation_evidence
+        ordinary = dict(sample=0, pixels=64, shortPixels=64, invalidPixels=0,
+                        expectedCount=1, observedMin=0, observedMax=0)
+        evidence = accumulation_evidence([ordinary])
+        self.assertEqual(evidence['kind'], 'accumulation-count-short')
+        with self.assertRaises(ValueError):
+            accumulation_evidence([ordinary | {'invalidPixels': 1}])
+        with tempfile.TemporaryDirectory() as tmp:
+            calls=[]
+            def operation(folder):
+                calls.append(folder)
+                return dict(passed=len(calls)==2, classification='unknown',step='fidelity')
+            with self.assertRaises(RuntimeError):
+                run_with_retry('control',tmp,operation)
+            root=Path(tmp)
+            original=(root/'attempt-0/result.json').read_bytes()
+            (root/'resume.json').write_text(json.dumps(dict(nextAttempt=1,evidence=evidence)))
+            result=run_with_retry('control',tmp,operation,resume=True)
+            self.assertEqual(result['reruns'],1)
+            self.assertEqual((root/'attempt-0/result.json').read_bytes(),original)
+            self.assertEqual(len(calls),2)

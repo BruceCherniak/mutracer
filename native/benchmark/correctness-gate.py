@@ -11,7 +11,7 @@ from pathlib import Path
 import subprocess
 import sys
 import numpy as np
-from platform_retry import run_with_retry, sample_evidence
+from platform_retry import run_with_retry, sample_evidence, accumulation_evidence
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent.parent
@@ -48,8 +48,16 @@ def statistics(args):
     base = load(p / 'v4-phase1-inputs.json')
     extras = [c for c in load(p / 'v4-inputs.json') if c['key'] not in {x['key'] for x in base}]
     cases = base + extras
-    rows = []
+    rows = load(args.output/'statistics.json') if args.resume and (args.output/'statistics.json').exists() else []
     for c in cases:
+        completed = next((row for row in rows if row['key'] == c['key']), None)
+        if completed:
+            saved = load(Path(completed['attemptDirectory'])/'result.json')
+            if not saved['passed'] or not all(completed['softwareBytes'].values()) or not all(all(f.values()) for f in completed['sameAsFidelity']) or not all(v['finite'] for v in completed['statistics'].values()):
+                raise ValueError('completed group has no passing evidence')
+            if 'hits' in completed and completed['hits']['counts'].get('other', 0):
+                raise ValueError('completed hit gate did not pass')
+            continue
         key, coll = c['key'], c.get('collection', 'extra')
         reference = p / 'reference-67890' / coll / key if coll != 'extra' else args.extra_references / key
         def operation(folder):
@@ -57,6 +65,9 @@ def statistics(args):
             evidence = sample_evidence(*audits)
             if evidence:
                 return fault(evidence, '64spp image comparison')
+            ordinary_evidence = [accumulation_evidence(load(folder/str(b)/'ordinary-sample-audit.json')) for b in [0,1]]
+            if any(ordinary_evidence):
+                return fault(next(e for e in ordinary_evidence if e), 'ordinary same-AS control counts')
             fidelity = [load(folder/str(b)/'same-as-fidelity.json') for b in [0,1]]
             if not all(all(v.values()) for v in fidelity):
                 return dict(passed=False, classification='unknown', step='same-AS sample instrumentation fidelity', details=fidelity)
@@ -70,7 +81,7 @@ def statistics(args):
                 row['statistics'][kind] = dict(ratio=ratio, finite=bool(finite), passGate=bool(finite and ratio is not None and ratio <= 1.05))
                 row['softwareBytes'][kind] = paths[0].read_bytes() == (p/'stage-final/as-gate/images'/key/'0'/(kind+'.bin')).read_bytes()
             return dict(passed=all(row['softwareBytes'].values()) and all(v['finite'] for v in row['statistics'].values()), classification='unknown', step='software bytes/finite', details=row)
-        result = run_with_retry('statistics/'+key, args.output/'images'/key, operation)
+        result = run_with_retry('statistics/'+key, args.output/'images'/key, operation, resume=args.resume)
         row = result['details'] | {'reruns': result['reruns'], 'attemptDirectory': result['attemptDirectory']}
         if not (key.startswith('v3-displacement') and key != 'v3-displacement-zero'):
             def hit_operation(folder):
@@ -128,6 +139,9 @@ def software(args):
             evidence = sample_evidence(audit)
             if evidence:
                 return fault(evidence, 'software fixed-reference bytes')
+            evidence = accumulation_evidence(load(folder/'software'/'ordinary-sample-audit.json'))
+            if evidence:
+                return fault(evidence, 'software ordinary same-AS control counts')
             fidelity = load(folder/'software'/'same-as-fidelity.json')
             if not all(fidelity.values()):
                 return dict(passed=False, classification='unknown', step='software same-AS audit fidelity', details=fidelity)
@@ -142,6 +156,7 @@ def software(args):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--resume', action='store_true', help='Keep completed statistics groups; a failed attempt needs reviewed positive evidence in resume.json')
     parser.add_argument('mode', choices=['statistics','software'])
     for arg in ['artifacts','output','phase2','extra-references','fixtures','software-reference']:
         parser.add_argument('--'+arg, type=Path, required=arg in ['artifacts','output'])

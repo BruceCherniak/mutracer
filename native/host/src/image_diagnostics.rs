@@ -204,9 +204,31 @@ fn render(
         // fixture cannot. Its AS and immutable resources are identical.
         sample_audit::ordinary_pipeline(&mut state, source);
         state.reset_raw()?;
-        for start in (0..samples).step_by(8) {
-            state.add_samples((samples - start).min(8), options.bounces, seed)?;
+        let mut ordinary_audit = Vec::new();
+        for sample in 0..samples {
+            state.add_samples(1, options.bounces, seed)?;
+            let check = sample_audit::accumulation_count(&state, sample)?;
+            let failed = check["shortPixels"].as_u64().unwrap() > 0
+                || check["invalidPixels"].as_u64().unwrap() > 0;
+            ordinary_audit.push(check);
+            if failed {
+                for id in [
+                    state.scene.color_output,
+                    state.scene.normal_output.unwrap(),
+                    state.scene.albedo_output.unwrap(),
+                ] {
+                    fs::write(
+                        output.join(format!("ordinary-first-failure-buffer{id}.bin")),
+                        hit_diagnostics::read_raw(&state.gpu, &state.buffers[&id])?,
+                    )?;
+                }
+                break;
+            }
         }
+        fs::write(
+            output.join("ordinary-sample-audit.json"),
+            serde_json::to_vec_pretty(&ordinary_audit)?,
+        )?;
         let mut fidelity = serde_json::Map::new();
         for (kind, name) in [(0, "hdr"), (1, "normal"), (2, "albedo")] {
             let bytes = state.read_pixels(kind)?;
