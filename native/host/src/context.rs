@@ -1231,6 +1231,13 @@ mod tests {
                 0
             );
             assert_eq!(active, 0);
+            // Software Vulkan drivers can compile the first dispatch lazily.
+            // Warm that path before testing progress while preparation is blocked.
+            assert_eq!(
+                mt_context_render(handle, 1, error.as_mut_ptr(), error.len()),
+                0
+            );
+            assert_eq!(mt_context_reset(handle, error.as_mut_ptr(), error.len()), 0);
         }
         let (started, entered) = mpsc::sync_channel(1);
         let (resume, resumed) = mpsc::sync_channel(1);
@@ -1290,6 +1297,7 @@ mod tests {
                     break;
                 }
                 assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(1));
             }
         }
         resume.send(()).unwrap();
