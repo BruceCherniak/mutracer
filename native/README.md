@@ -155,10 +155,19 @@ speedup depends on the
 scene and hardware.
 
 Coplanar or overlapping surfaces can resolve to different triangles in software
-and HWRT, changing the image. On macOS/Metal, HWRT can also intermittently miss
-the entire scene for one sample. Use software when that unresolved correctness
-risk is unacceptable. Diagnostic instructions are in the
-[contributor guide](./CONTRIBUTING.md#hwrt-reproduction).
+and HWRT, changing the image.
+
+On Apple M4 Max with macOS 27.0.1, a sample can occasionally see an empty scene
+or fail to accumulate without a reported error. This occurs with small
+64-ray dispatches while other GPU users, including ordinary background apps,
+are active. At 1920×1080, about 620,000 dispatches over three hours, mostly
+under additional GPU load, showed no occurrences; this does not guarantee
+absence at other resolutions or workloads. An affected sample can cause an
+abnormal preview frame or a small offline-image bias and break byte-for-byte
+repeatability. For precise, reproducible output, render again and compare the
+results. Software can also lose samples during GPU recovery, so it is not a
+complete substitute. HWRT remains the default; production rendering does not
+detect or retry these samples.
 
 ## Render with polling and cancellation
 

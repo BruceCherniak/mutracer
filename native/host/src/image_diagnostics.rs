@@ -2,11 +2,15 @@
 use super::*;
 
 pub fn run(input: &[u8], output: &Path, backend: u32, samples: u32, seed: u32) -> Result<()> {
-    render(input, output, backend, samples, seed, false)
+    render(input, output, backend, samples, seed, false, false)
+}
+
+pub fn audited(input: &[u8], output: &Path, backend: u32, samples: u32, seed: u32) -> Result<()> {
+    render(input, output, backend, samples, seed, false, true)
 }
 
 pub fn closest_counts(input: &[u8], output: &Path, samples: u32, seed: u32) -> Result<()> {
-    render(input, output, 1, samples, seed, true)
+    render(input, output, 1, samples, seed, true, false)
 }
 
 // Diagnostic-only instrumentation of the shared TS-generated production WGSL.
@@ -70,6 +74,7 @@ fn render(
     samples: u32,
     seed: u32,
     counts: bool,
+    audit: bool,
 ) -> Result<()> {
     if backend > 1 || samples == 0 || samples > 4096 {
         return Err("Expected backend 0|1 and samples 1..4096".into());
@@ -98,6 +103,12 @@ fn render(
     if counts {
         add_closest_counters(&mut scene, &mut assets)?;
     }
+    if audit {
+        #[cfg(not(feature = "validation"))]
+        return Err("Build with --features validation for sample auditing".into());
+        #[cfg(feature = "validation")]
+        sample_audit::install(&mut scene, &mut assets)?;
+    }
     let options = RenderOptions {
         flags: if backend == 1 { 4 } else { 0 },
         seed,
@@ -110,8 +121,23 @@ fn render(
         return Err("Unexpected image diagnostic backend".into());
     }
     let mut totals = [0u64; 16];
-    for start in (0..samples).step_by(8) {
-        state.add_samples((samples - start).min(8), options.bounces, seed)?;
+    #[cfg(feature = "validation")]
+    let mut audit_samples = Vec::new();
+    for start in (0..samples).step_by(if audit { 1 } else { 8 }) {
+        state.add_samples(
+            (samples - start).min(if audit { 1 } else { 8 }),
+            options.bounces,
+            seed,
+        )?;
+        #[cfg(feature = "validation")]
+        if audit {
+            let check = sample_audit::read(&state, start)?;
+            let failed = check.short_pixels > 0 || check.invalid_pixels > 0;
+            audit_samples.push(check);
+            if failed {
+                break;
+            }
+        }
         if counts {
             let data = hit_diagnostics::read_raw(
                 &state.gpu,
@@ -128,6 +154,29 @@ fn render(
         }
     }
     fs::create_dir_all(output)?;
+    #[cfg(feature = "validation")]
+    if audit {
+        fs::write(
+            output.join("sample-audit.json"),
+            serde_json::to_vec_pretty(&audit_samples)?,
+        )?;
+        if audit_samples
+            .iter()
+            .any(|s| s.short_pixels > 0 || s.invalid_pixels > 0)
+        {
+            for id in [
+                state.scene.color_output,
+                state.scene.normal_output.unwrap(),
+                state.scene.albedo_output.unwrap(),
+                layout::resource::QUERY_COUNTS,
+            ] {
+                fs::write(
+                    output.join(format!("first-failure-buffer{id}.bin")),
+                    hit_diagnostics::read_raw(&state.gpu, &state.buffers[&id])?,
+                )?;
+            }
+        }
+    }
     for (kind, name) in [(0, "hdr"), (1, "normal"), (2, "albedo")] {
         let bytes = state.read_pixels(kind)?;
         if !bytes

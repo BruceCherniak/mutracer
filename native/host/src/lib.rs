@@ -21,6 +21,8 @@ mod hardware;
 pub mod hit_diagnostics;
 pub mod image_diagnostics;
 pub mod picking;
+#[cfg(any(test, feature = "validation"))]
+mod sample_audit;
 #[rustfmt::skip]
 pub mod layout;
 #[cfg(feature = "fuzzing")]

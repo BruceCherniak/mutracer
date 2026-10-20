@@ -1507,6 +1507,7 @@ mod tests {
                 )
                 .unwrap(),
             );
+            sample_audit::install(&mut scene, &mut assets).unwrap();
             let mut result = GpuScene::new(
                 scene,
                 &RenderOptions {
@@ -1521,109 +1522,116 @@ mod tests {
             result.retained = Some(retained);
             result
         };
-        for optional_refit in [false, true] {
-            #[cfg(not(target_os = "macos"))]
-            if optional_refit {
-                continue;
-            }
-            let mut input = scene::tests::input();
-            input[118 * 4..119 * 4].copy_from_slice(&3f32.to_le_bytes());
-            let mut state = make(&input);
-            state.hardware.as_mut().unwrap().metal_refit_opt_in = optional_refit;
-            let mut transform = [0u32; 20];
-            transform[0] = 1;
-            for index in [0, 5, 10, 15] {
-                transform[4 + index] = 1f32.to_bits();
-            }
-            transform[16] = 0.125f32.to_bits();
-            let bytes: Vec<_> = transform.iter().flat_map(|v| v.to_le_bytes()).collect();
-            let writes = state.retained.as_ref().unwrap().transform(&bytes).unwrap();
-            let plan = state
-                .hardware
-                .as_ref()
-                .unwrap()
-                .transform_plan(state.scene.hwrt.as_ref().unwrap(), &writes)
-                .unwrap();
-            state
-                .hardware
-                .as_mut()
-                .unwrap()
-                .update_transforms(
-                    &state.gpu.device,
-                    &state.gpu.queue,
-                    plan,
-                    state.scene.hwrt.as_mut().unwrap(),
-                )
-                .unwrap();
-            state.update_lighting(&writes).unwrap();
-            state.retained.as_ref().unwrap().accept_transform().unwrap();
-            input[60 * 4..61 * 4].copy_from_slice(&0.125f32.to_le_bytes());
-            let original = f32::from_le_bytes(input[120 * 4..121 * 4].try_into().unwrap());
-            for (step, shift) in [0.05f32, 0.1, 0.0].into_iter().enumerate() {
-                input[120 * 4..121 * 4].copy_from_slice(&(original + shift).to_le_bytes());
-                let mut bytes: Vec<_> = [1u32, 0, 3, 0]
-                    .iter()
-                    .flat_map(|v| v.to_le_bytes())
-                    .collect();
-                bytes.extend_from_slice(&input[120 * 4..129 * 4]);
-                let writes = state.retained.as_ref().unwrap().geometry(&bytes).unwrap();
-                assert_eq!(writes.changed_blases.as_deref(), Some(&[0][..]));
-                let (resources, capture, group, attributes) =
-                    state.prepare_geometry_hardware(&writes).unwrap().unwrap();
-                assert!(attributes.is_none());
-                assert_eq!(resources.used_metal_refit, optional_refit && step > 0);
-                state.hardware = Some(resources);
-                state.scene.hwrt = Some(capture);
-                state.groups[0] = group;
+        'attempts: for attempt in 0..=3 {
+            for optional_refit in [false, true] {
+                #[cfg(not(target_os = "macos"))]
+                if optional_refit {
+                    continue;
+                }
+                let mut input = scene::tests::input();
+                input[118 * 4..119 * 4].copy_from_slice(&3f32.to_le_bytes());
+                let mut state = make(&input);
+                state.hardware.as_mut().unwrap().metal_refit_opt_in = optional_refit;
+                let mut transform = [0u32; 20];
+                transform[0] = 1;
+                for index in [0, 5, 10, 15] {
+                    transform[4 + index] = 1f32.to_bits();
+                }
+                transform[16] = 0.125f32.to_bits();
+                let bytes: Vec<_> = transform.iter().flat_map(|v| v.to_le_bytes()).collect();
+                let writes = state.retained.as_ref().unwrap().transform(&bytes).unwrap();
+                let plan = state
+                    .hardware
+                    .as_ref()
+                    .unwrap()
+                    .transform_plan(state.scene.hwrt.as_ref().unwrap(), &writes)
+                    .unwrap();
+                state
+                    .hardware
+                    .as_mut()
+                    .unwrap()
+                    .update_transforms(
+                        &state.gpu.device,
+                        &state.gpu.queue,
+                        plan,
+                        state.scene.hwrt.as_mut().unwrap(),
+                    )
+                    .unwrap();
                 state.update_lighting(&writes).unwrap();
-                state.retained.as_ref().unwrap().accept_geometry().unwrap();
-                let mut expected = make(&input);
-                state.add_samples(8, 6., 12345).unwrap();
-                expected.add_samples(8, 6., 12345).unwrap();
-                let mut changed = Vec::new();
-                let mut normal_hits = [0f64; 2];
-                for kind in 0..3 {
-                    let actual = state.read_pixels(kind).unwrap();
-                    let reference = expected.read_pixels(kind).unwrap();
-                    assert_eq!(actual.len(), reference.len());
-                    for bytes in [&actual, &reference] {
-                        assert!(
-                            bytes
-                                .chunks_exact(4)
-                                .all(|v| { f32::from_le_bytes(v.try_into().unwrap()).is_finite() })
+                state.retained.as_ref().unwrap().accept_transform().unwrap();
+                input[60 * 4..61 * 4].copy_from_slice(&0.125f32.to_le_bytes());
+                let original = f32::from_le_bytes(input[120 * 4..121 * 4].try_into().unwrap());
+                for (step, shift) in [0.05f32, 0.1, 0.0].into_iter().enumerate() {
+                    input[120 * 4..121 * 4].copy_from_slice(&(original + shift).to_le_bytes());
+                    let mut bytes: Vec<_> = [1u32, 0, 3, 0]
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect();
+                    bytes.extend_from_slice(&input[120 * 4..129 * 4]);
+                    let writes = state.retained.as_ref().unwrap().geometry(&bytes).unwrap();
+                    assert_eq!(writes.changed_blases.as_deref(), Some(&[0][..]));
+                    let (resources, capture, group, attributes) =
+                        state.prepare_geometry_hardware(&writes).unwrap().unwrap();
+                    assert!(attributes.is_none());
+                    assert_eq!(resources.used_metal_refit, optional_refit && step > 0);
+                    state.hardware = Some(resources);
+                    state.scene.hwrt = Some(capture);
+                    state.groups[0] = group;
+                    state.update_lighting(&writes).unwrap();
+                    state.retained.as_ref().unwrap().accept_geometry().unwrap();
+                    let mut expected = make(&input);
+                    for current in [&state, &expected] {
+                        current.gpu.queue.write_buffer(
+                            &current.buffers[&layout::resource::QUERY_COUNTS],
+                            0,
+                            &vec![
+                                0;
+                                current.scene.width as usize * current.scene.height as usize * 16
+                            ],
                         );
                     }
-                    if actual != reference {
-                        changed.push(kind);
-                    }
-                    if kind == 1 {
-                        // This fixture has one front-facing triangle (normal Z=1).
-                        // The accumulated normal Z therefore counts primary hits,
-                        // independently of the beauty value and environment.
-                        for (side, bytes) in [&actual, &reference].into_iter().enumerate() {
-                            normal_hits[side] = bytes
-                                .chunks_exact(16)
-                                .map(|pixel| {
-                                    f32::from_le_bytes(pixel[8..12].try_into().unwrap()) as f64 * 8.
-                                })
-                                .sum();
+                    for sample in 0..8 {
+                        state.add_samples(1, 6., 12345).unwrap();
+                        expected.add_samples(1, 6., 12345).unwrap();
+                        let a = sample_audit::read(&state, sample).unwrap();
+                        let b = sample_audit::read(&expected, sample).unwrap();
+                        let evidence = sample_audit::evidence(&a, Some(&b));
+                        let invalid = a.invalid_pixels > 0 || b.invalid_pixels > 0;
+                        let mut changed = Vec::new();
+                        for kind in 0..3 {
+                            let actual = state.read_pixels(kind).unwrap();
+                            let reference = expected.read_pixels(kind).unwrap();
+                            if actual != reference
+                                || !actual
+                                    .chunks_exact(4)
+                                    .chain(reference.chunks_exact(4))
+                                    .all(|v| f32::from_le_bytes(v.try_into().unwrap()).is_finite())
+                            {
+                                changed.push(kind);
+                            }
+                        }
+                        if invalid || evidence.is_some() || !changed.is_empty() {
+                            let test = format!("interleaved-retained-edits-refit{optional_refit}");
+                            let retry = sample_audit::retry_event(
+                                &test,
+                                attempt,
+                                step,
+                                sample,
+                                evidence.as_ref(),
+                                &input,
+                                [&state, &expected],
+                            )
+                            .unwrap();
+                            assert!(
+                                retry,
+                                "{test} step {step} sample {sample}: audit {a:?}/{b:?}, changed {changed:?}; no permitted rerun remains"
+                            );
+                            continue 'attempts;
                         }
                     }
                 }
-                // Phase2 already exhibits an intermittent whole-dispatch miss.
-                // Keep this diagnostic in task checks, with its classification
-                // separate from the validated error/flush/synchronization changes.
-                println!(
-                    "{}",
-                    serde_json::json!({"interleavedHitClassification": {
-                        "optionalRefit": optional_refit, "step": step,
-                        "changedAovs": changed, "primaryHits": normal_hits,
-                        "classification": if changed.is_empty() {"matched"}
-                            else if normal_hits[0] != normal_hits[1] {"hit-coverage-mismatch"}
-                            else {"equal-coverage-aov-mismatch"}
-                    }})
-                );
             }
+            break;
         }
     }
     #[test]

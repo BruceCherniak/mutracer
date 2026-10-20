@@ -25,6 +25,8 @@ cc = "=1.8.0"
 
 [features]
 fuzzing = []
+# Opt-in stage-gate observations; never enabled by the native API/viewer.
+validation = []
 
 [[bin]]
 name = "fuzz-seed"

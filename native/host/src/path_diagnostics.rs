@@ -25,6 +25,15 @@ pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
     if capture.geometries.iter().any(|g| g.procedural) {
         return Err("Path diagnostics exclude displacement geometries".into());
     }
+    #[cfg(feature = "validation")]
+    let ordinary_source = String::from_utf8(
+        assets[&if backend == 1 {
+            capture.shader.ok_or("Missing ordinary HWRT shader")?
+        } else {
+            scene.shader
+        }]
+            .clone(),
+    )?;
     capture.shader = Some(AssetId::Packet(37));
     scene.hwrt = Some(capture);
     scene.shader = AssetId::Packet(36);
@@ -68,7 +77,8 @@ pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
     if backend == 1 && !gpu.hardware_ray_query {
         return Err("Path diagnostic requires actual HWRT".into());
     }
-    let state = GpuScene::new(
+    #[allow(unused_mut)]
+    let mut state = GpuScene::new(
         scene,
         &RenderOptions {
             flags: if backend == 1 { 4 } else { 0 },
@@ -116,6 +126,57 @@ pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
         fs::write(
             output.join(format!("{name}.bin")),
             hit_diagnostics::read_raw(&state.gpu, &state.buffers[&id])?,
+        )?;
+    }
+    #[cfg(feature = "validation")]
+    {
+        // Compare on the same AS. Rebuilding between the instrumented and
+        // ordinary pass can legitimately choose another coplanar triangle.
+        let layouts: Vec<_> = (0..state.groups.len())
+            .map(|i| state.pipeline.get_bind_group_layout(i as u32))
+            .collect();
+        let refs: Vec<_> = layouts.iter().map(Some).collect();
+        let layout = state
+            .gpu
+            .device
+            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("path fidelity layout"),
+                bind_group_layouts: &refs,
+                ..Default::default()
+            });
+        let module = state
+            .gpu
+            .device
+            .create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("ordinary path fidelity shader"),
+                source: wgpu::ShaderSource::Wgsl(ordinary_source.into()),
+            });
+        state.pipeline =
+            state
+                .gpu
+                .device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("ordinary path fidelity pipeline"),
+                    layout: Some(&layout),
+                    module: &module,
+                    entry_point: Some(&state.scene.entry_point),
+                    compilation_options: Default::default(),
+                    cache: None,
+                });
+        state.reset_raw()?;
+        state.add_samples(1, 6., 12345)?;
+        let mut fidelity = serde_json::Map::new();
+        for (kind, name) in [(0, "hdr"), (1, "normal"), (2, "albedo")] {
+            let bytes = state.read_pixels(kind)?;
+            fidelity.insert(
+                name.into(),
+                json!(bytes == fs::read(output.join(format!("{name}.bin")))?),
+            );
+            fs::write(output.join(format!("ordinary-{name}.bin")), bytes)?;
+        }
+        fs::write(
+            output.join("same-as-fidelity.json"),
+            serde_json::to_vec_pretty(&fidelity)?,
         )?;
     }
     fs::write(
