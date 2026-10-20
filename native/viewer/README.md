@@ -17,7 +17,10 @@ Linux packages target Ubuntu 24.04 x64 and require a Vulkan driver and an X11 or
 Wayland desktop. X11 sessions also need `libxkbcommon-x11-0`. Physical GPU behavior
 outside the tested macOS hardware remains unverified.
 
-Windows support remains experimental and is not included in release downloads.
+Windows support remains experimental. Download `MuTracer-windows-x64.zip` from
+the `native-windows-x64` artifact of a [CI run](https://github.com/pissang/mutracer/actions/workflows/ci.yml).
+Extract the whole archive and open `mutracer-viewer.exe`. Windows packages are
+not included in release downloads.
 
 ## Build and open
 

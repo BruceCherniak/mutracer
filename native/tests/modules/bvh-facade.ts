@@ -30,6 +30,11 @@ export function bvhParameters(bytes: Uint8Array): Uint8Array {
   const input = new Uint32Array(bytes.buffer, bytes.byteOffset, 4);
   const count = input[0], segments = input[1], flags = input[2];
   const geometry = flags & 1 ? createSphereGeometry(segments, segments) : createPlaneGeometry(segments, segments);
+  // BVH byte comparisons need identical vertices/normals, independent of the platform's
+  // trigonometric rounding. Procedural geometry is checked by its own probe.
+  const positions = geometry.position.array, normals = geometry.normal.array;
+  positions.set(new Float32Array(bytes.buffer, bytes.byteOffset + 16, positions.length));
+  normals.set(new Float32Array(bytes.buffer, bytes.byteOffset + 16 + positions.byteLength, normals.length));
   if (flags & 2) {
     const indices = geometry.indices.array, narrow = new Uint16Array(attributeLength(indices));
     for (let i = 0; i < narrow.length; i++) narrow[i] = attributeValue(indices, i);

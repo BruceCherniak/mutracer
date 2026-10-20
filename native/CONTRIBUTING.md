@@ -43,17 +43,16 @@ npm ci --prefix native/toolchain --include=optional
 MUTRACER_NATIVE_OUTPUT=/absolute/evidence npm run native:ci
 ```
 
-The GitHub Actions `CI` workflow runs on pull requests, pushes to `main`, and
+The GitHub Actions `CI` workflow runs on pull requests, pushes to `main` and `dev`, and
 manual dispatches. It validates native code and builds standalone viewers for
-macOS arm64 and Linux x64, including OIDN and licenses. Download
-`native-macos-arm64` or `native-linux-x64` from the run's
+macOS arm64, Linux x64 and Windows x64, including OIDN and licenses. Download
+`native-macos-arm64`, `native-linux-x64` or `native-windows-x64` from the run's
 artifacts for the app archive and SHA-256 checksum (retained for 14 days).
 The corresponding `native-PLATFORM-diagnostics` artifact retains logs and check
 summaries for seven days, including failed runs.
-Manual dispatch defaults to `release` (macOS and Linux); `native_platform` can
-select one target for diagnosis. Windows x64 is an experimental manual-only
-target, deferred for validation and optimization on Windows. A single-target
-dispatch never publishes a release.
+Manual dispatch defaults to `release` (all three platforms); `native_platform` can
+select one target for diagnosis. Windows x64 remains experimental; its app is
+available from CI artifacts. A single-target dispatch never publishes a release.
 
 Windows builds need an x64 MSVC Developer environment for OIDN, MinGW-w64 GCC,
 Ninja, CMake and Zig 0.15.2 for scriptc's library archiver. Install Rust's
@@ -228,9 +227,14 @@ Raw scene commits and transform/vertex update TLAS construction use the official
 TinyBVH headers pinned in `src/tinybvh/upstream.json`. The host compiles the browser's
 existing C++ wrapper directly; preserve pointer-width-safe result addresses and
 `-ffp-contract=off` for conservative float bounds. Native and Web now pin
-TinyBVH 1.9.1 to the same upstream revision; all six headers are unmodified.
+TinyBVH 1.9.1 to the same upstream revision; all six cached upstream headers are unmodified.
 See the shared [adapter contributor guide](../src/tinybvh/CONTRIBUTING.md) for Wasm rebuilding
 and CWBVH conversion.
+
+Windows compiles a generated header copy whose pool exit hook skips cleanup
+after DLL process termination has stopped the other threads. The verified
+upstream cache stays unmodified; normal static-executable teardown and explicit
+pool shutdown still join workers. Native CI checks DLL exit without a GPU.
 
 The native bridge enables full ARM NEON/Bonsai construction and upstream workers
 with aligned float4 vertices retained through serialization. Web uses its scalar

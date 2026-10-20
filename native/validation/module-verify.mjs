@@ -5,6 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
 import { cCompiler, cLinkFlags, executable } from '../scripts/platform.mjs';
+import {compareModuleBytes} from './module-comparison.mjs';
+import {createPlaneGeometry, createSphereGeometry} from '../../lib/util/commonGeometry.js';
 import { buildBinnedSahBvh, layoutBvh2 } from '../../lib/renderer/binnedSahBvh.js';
 import { samplingPatternCode, zSobolLog2SPP, zSobolPermutations, zSobolPackedPermutations, sobolD1Steps } from '../../lib/renderer/sampling.js';
 
@@ -34,7 +36,7 @@ if (sourceDiagnostics.some(item => item.category === ts.DiagnosticCategory.Error
 writeFileSync(resolve(sourceOracleRoot, 'package.json'), '{"type":"module"}\n');
 function writeState(complete) {
   writeFileSync(resolve(output, 'runtime.json'), JSON.stringify({ complete,
-    success: complete && results.every(result => result.byteIdentical), results }, null, 2) + '\n');
+    success: complete && results.every(result => result.passedCases === result.cases), results }, null, 2) + '\n');
 }
 writeState(false);
 for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updates', 'bvh-core', 'bvh-facade', 'material-packing', 'material-data', 'lights', 'shader-generation', 'sampling', 'displacement', 'ies']) {
@@ -67,7 +69,11 @@ for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updat
       fixtures.push({ label: `cdf-${width}-${height}-${storage}-${flags}`, input, expected: oracle.environmentParameters(input) });
     }
     else if (name === 'bvh-facade') for (const count of [0, 1, 3, 17]) for (const [flags, segments, dynamic] of [[0, 1, 0], [3, 8, 0], [5, 8, 1], [9, 8, 0]]) {
-      const input = new Uint8Array(new Uint32Array([count, segments, flags, dynamic]).buffer);
+      const geometry = flags & 1 ? createSphereGeometry(segments, segments) : createPlaneGeometry(segments, segments);
+      const input = new Uint8Array(16 + geometry.position.array.byteLength + geometry.normal.array.byteLength);
+      new Uint32Array(input.buffer, 0, 4).set([count, segments, flags, dynamic]);
+      input.set(new Uint8Array(geometry.position.array.buffer), 16);
+      input.set(new Uint8Array(geometry.normal.array.buffer), 16 + geometry.position.array.byteLength);
       fixtures.push({ label: `instances-${count}-${flags}`, input, expected: oracle.bvhParameters(input) });
     }
     else if (name === 'material-packing') for (const count of [0, 1, 3, 257]) for (const flags of [0, 1, 2, 3]) {
@@ -140,6 +146,7 @@ for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updat
   }
   const directory = resolve(output, name); mkdirSync(directory, { recursive: true });
   const failures = [];
+  let byteIdentical = true, nearZeroComponents = 0;
   for (const fixture of fixtures) {
     const input = resolve(directory, `${fixture.label}.input.bin`), actual = resolve(directory, `${fixture.label}.native.bin`);
     writeFileSync(input, fixture.input);
@@ -148,7 +155,10 @@ for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updat
     try {
       run(`${name}-${fixture.label}`, host, [input, actual]);
       const bytes = readFileSync(actual);
-      if (!bytes.equals(Buffer.from(fixture.expected))) throw new Error(`Module byte mismatch: ${name}/${fixture.label}`);
+      const comparison = compareModuleBytes(name, bytes, fixture.expected);
+      byteIdentical &&= comparison.byteIdentical;
+      nearZeroComponents += comparison.nearZeroComponents;
+      if (!comparison.matched) throw new Error(`Module byte mismatch: ${name}/${fixture.label}`);
       if (name === 'lights') {
         const count = bytes.readUInt32LE(4), parts = [];
         let offset = (count + 2) * 4;
@@ -166,9 +176,9 @@ for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updat
     } catch (error) { failures.push({ label: fixture.label, error: error.message }); }
   }
   results.push({ name, cases: fixtures.length, passedCases: fixtures.length - failures.length,
-    repeatedCalls: (fixtures.length - failures.length) * 2, byteIdentical: failures.length === 0, failures });
+    repeatedCalls: (fixtures.length - failures.length) * 2, byteIdentical: byteIdentical && failures.length === 0, nearZeroComponents, failures });
   writeState(false);
-  console.log(`${name}: ${fixtures.length - failures.length}/${fixtures.length} cases match native/JavaScript bytes`);
+  console.log(`${name}: ${fixtures.length - failures.length}/${fixtures.length} cases match native/JavaScript${nearZeroComponents ? ` (${nearZeroComponents} Windows libm near-zero components)` : ' bytes'}`);
 }
 writeState(true);
-if (results.some(result => !result.byteIdentical)) process.exitCode = 1;
+if (results.some(result => result.passedCases !== result.cases)) process.exitCode = 1;

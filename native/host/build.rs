@@ -9,7 +9,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", manifest_path.display());
     let manifest: serde_json::Value =
         serde_json::from_slice(&std::fs::read(manifest_path).unwrap()).unwrap();
-    let include = root
+    let mut include = root
         .join(".cache/tinybvh")
         .join(manifest["revision"].as_str().unwrap());
     for file in manifest["files"].as_array().unwrap() {
@@ -20,6 +20,30 @@ fn main() {
             header.display()
         );
         println!("cargo:rerun-if-changed={}", header.display());
+    }
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // Keep the verified upstream cache intact. DLL static destructors run
+        // after ExitProcess has killed the other threads, so pool cleanup must
+        // check Windows' process-termination state before CRT teardown.
+        let adapted =
+            std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("tinybvh");
+        std::fs::create_dir_all(&adapted).unwrap();
+        for file in manifest["files"].as_array().unwrap() {
+            let name = file["file"].as_str().unwrap();
+            let mut source = std::fs::read_to_string(include.join(name)).unwrap();
+            if name == "tiny_bvh_base.h" {
+                let original =
+                    "struct PoolAtExit { ~PoolAtExit() { tinybvh_shutdown_builtin_pool(); } };";
+                assert_eq!(
+                    source.matches(original).count(),
+                    1,
+                    "TinyBVH exit hook changed"
+                );
+                source = source.replace(original, "struct PoolAtExit { ~PoolAtExit() { if (!::mt_native_process_terminating()) tinybvh_shutdown_builtin_pool(); } };");
+            }
+            std::fs::write(adapted.join(name), source).unwrap();
+        }
+        include = adapted;
     }
     cc::Build::new()
         .cpp(true)

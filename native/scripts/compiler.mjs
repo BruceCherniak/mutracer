@@ -142,10 +142,13 @@ export function spawnCompiler(compiler, args, options = {}, matrixPrecision) {
     // The program uses MSVC's x64 probe name; the runtime pack uses MinGW's.
     // Both preserve RSP and use the same RAX size argument. Normalize the name
     // for GNU embedders without changing the probe or its guard-page behavior.
+    // The runtime also uses newer MinGW's unprefixed stat64i32 alias. Its layout
+    // matches the CRT's _stat64i32, which older MinGW import libraries expose.
     const outputAt=args.findIndex(arg=>arg==='-o'||arg==='--out');
     if(outputAt<0)throw new Error('Windows native libraries require an explicit output path');
     const archive=resolve(options.cwd??process.cwd(),args[outputAt+1]);
-    const patched=spawnSync('objcopy',['--redefine-sym','__chkstk=___chkstk_ms',archive],options);
+    const patched=spawnSync('objcopy',['--redefine-sym','__chkstk=___chkstk_ms',
+      '--redefine-sym','stat64i32=_stat64i32',archive],options);
     if(patched.error||patched.status!==0)result=patched;
   }
   result.nativeMatrixPrecision = nativeMatrices ? 64 : 32;

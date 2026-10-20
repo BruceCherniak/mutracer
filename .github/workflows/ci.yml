@@ -2,13 +2,13 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ['native-v*']
   pull_request:
   workflow_dispatch:
     inputs:
       native_platform:
-        description: Native target (Windows is manual only; releases require release)
+        description: Native target (all platforms by default; releases require release)
         type: choice
         default: release
         options: [release, macos-arm64, linux-x64, windows-x64]
@@ -54,7 +54,7 @@ jobs:
             inputs.native_platform == 'macos-arm64' && '[{"os":"macos-15","platform":"macos-arm64"}]' ||
             inputs.native_platform == 'windows-x64' && '[{"os":"windows-2025","platform":"windows-x64"}]' ||
             inputs.native_platform == 'linux-x64' && '[{"os":"ubuntu-24.04","platform":"linux-x64"}]' ||
-            '[{"os":"macos-15","platform":"macos-arm64"},{"os":"ubuntu-24.04","platform":"linux-x64"}]'
+            '[{"os":"macos-15","platform":"macos-arm64"},{"os":"ubuntu-24.04","platform":"linux-x64"},{"os":"windows-2025","platform":"windows-x64"}]'
           ) }}
     runs-on: ${{ matrix.os }}
     defaults:

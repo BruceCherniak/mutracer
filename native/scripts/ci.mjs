@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnCompiler} from './compiler.mjs';
-import {archiveName,executable,nativeToolchainEnv} from './platform.mjs';
+import {archiveName,executable,nativeToolchainEnv,windows} from './platform.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const out=resolve(process.env.MUTRACER_NATIVE_OUTPUT??mkdtempSync(resolve(tmpdir(),'mutracer-native-ci-')));
 mkdirSync(out,{recursive:true});
@@ -29,6 +29,7 @@ if(version.stdout.trim()!=='0.3.2')throw Error('Native CI requires scriptc0.3.2.
 run('aot-build',compiler,['build','--lib','--profile','native/src/render-core-profile.json','-o',archive]);
 await prepareTinyBvh();
 run('native-build','cargo',['build','--release','--locked','--manifest-path','native/host/Cargo.toml']);
+if(windows)run('windows-dll-exit',process.execPath,['native/validation/windows-dll-exit.mjs']);
 const probe=run('gpu-availability',resolve(hostTarget,'release',executable('gpu-availability')),[]);
 const gpu=JSON.parse(probe.stdout);if(typeof gpu.available!=='boolean')throw Error('Invalid GPU availability result.');
 run('host-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml','--','--test-threads=1']);

@@ -1,5 +1,16 @@
 // Reuse the browser adapter and official pinned TinyBVH header. No builder port.
 // See native/THIRD_PARTY_NOTICES.md and native/LICENSES/TinyBVH-MIT.txt.
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+// Import directly so teardown never enters the loader to resolve a symbol.
+// Keep the embedding application's DllMain available when statically linked.
+extern "C" __declspec(dllimport) BOOLEAN NTAPI RtlDllShutdownInProgress();
+static bool mt_native_process_terminating() {
+  return RtlDllShutdownInProgress() != FALSE;
+}
+#endif
 #define MUTRACER_TINYBVH_NATIVE
 #include "../../src/tinybvh/tinybvh_wrapper.cpp"
 

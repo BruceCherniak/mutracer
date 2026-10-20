@@ -25,7 +25,7 @@ Copyright (c) 2025 The gfx-rs developers. MIT License
 
 ## TinyBVH native builder
 
-The native builder compiles the unmodified official
+The native builder uses the official
 [jbikker/tinybvh](https://github.com/jbikker/tinybvh/tree/c9be3103cc9693b456b0a0353927c11cac7d710f)
 1.9.1 headers at commit `c9be3103cc9693b456b0a0353927c11cac7d710f`, shared with the
 browser Wasm builder. File hashes are in
@@ -34,6 +34,9 @@ Copyright (c) 2024-2026 Jacco Bikker / Breda University of Applied Sciences.
 MIT License ([`LICENSES/TinyBVH-MIT.txt`](./LICENSES/TinyBVH-MIT.txt)).
 `host/tinybvh.cpp` reuses `src/tinybvh/tinybvh_wrapper.cpp` for native builds
 and adds the AABB-input bridge used for instances.
+Windows builds adapt the process-exit hook in a generated header copy to avoid
+joining worker threads during DLL process termination. The verified cached
+headers remain unmodified.
 
 ## Native OIDN loader
 
