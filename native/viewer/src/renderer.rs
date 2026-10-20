@@ -1,6 +1,6 @@
 //! Native ABI client; complete scene preparation can run on a background worker.
 use anyhow::{Result, bail, ensure};
-use glam::{Mat4, Vec3};
+use glam::{Affine3A, Mat4, Vec3};
 use mutracer_native_probe::context as native;
 use mutracer_native_probe::layout::camera as camera_wire;
 use std::{
@@ -398,7 +398,9 @@ impl Camera {
         f[camera_wire::FOCUS_DISTANCE] = self.distance;
         f[camera_wire::SENSOR_HEIGHT] = 24.;
         f[camera_wire::METERS_PER_UNIT] = 1.;
-        let world = Mat4::look_at_rh(self.eye(), self.target, Vec3::Y).inverse();
+        // A general Mat4 inverse can round the homogeneous 1 away from 1.0,
+        // which violates the native ABI's exact affine-transform contract.
+        let world = Mat4::from(Affine3A::look_at_rh(self.eye(), self.target, Vec3::Y).inverse());
         f[camera_wire::TRANSFORM..camera_wire::WORDS].copy_from_slice(&world.to_cols_array());
         f.into_iter().flat_map(f32::to_le_bytes).collect()
     }
@@ -435,4 +437,36 @@ pub fn save(path: &std::path::Path, pixels: &[f32], size: [u32; 2], exposure: f3
         image::ImageFormat::Png,
     )?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn camera_controls_preserve_the_affine_wire_contract() {
+        for (center, radius) in [(Vec3::ZERO, 1.), (Vec3::new(2., -3., 5.), 12.)] {
+            let mut camera = Camera::fit(center, radius);
+            for step in 0..128 {
+                match step % 4 {
+                    0 => camera.orbit([7., -3.]),
+                    1 => camera.pan([5., 2.]),
+                    2 => camera.zoom(60.),
+                    _ => camera.zoom(-60.),
+                }
+                let bytes = camera.bytes();
+                let f: Vec<f32> = bytes
+                    .chunks_exact(4)
+                    .map(|word| f32::from_le_bytes(word.try_into().unwrap()))
+                    .collect();
+                let world = Mat4::from_cols_slice(&f[camera_wire::TRANSFORM..]);
+                // The native ABI requires this row exactly, not approximately.
+                assert_eq!(world.row(3), glam::Vec4::W, "step {step}");
+                assert!(world.is_finite() && world.determinant().abs() > 1e-12);
+                assert!(world.w_axis.truncate().distance(camera.eye()) < radius * 1e-5);
+                let forward = world.transform_vector3(Vec3::NEG_Z).normalize();
+                assert!(forward.distance((camera.target - camera.eye()).normalize()) < 1e-5);
+            }
+        }
+    }
 }
