@@ -1,3 +1,4 @@
+import {prepareTinyBvh} from '../../scripts/fetch-tinybvh.mjs';
 import {spawnCompiler} from './compiler.mjs';
 import {spawnSync} from 'node:child_process';
 import {mkdirSync,copyFileSync,cpSync,writeFileSync,renameSync} from 'node:fs';
@@ -20,6 +21,7 @@ if(coverage.nativeMatrixPrecision!==64)throw new Error('Native viewer requires F
 if(coverage.error||!summarizeCoverage(JSON.parse(coverage.stdout),coverage.status).passed)throw new Error('AOT compilation graph failed; see coverage.json.');
 run(compiler,['build','--lib','--profile','native/src/render-core-profile.json','-o',env.MUTRACER_AOT_ARCHIVE]);
 run(process.execPath,['native/scripts/generate-display.mjs','--check']);
+await prepareTinyBvh();
 run('cargo',['build','--release','--locked','--manifest-path','native/viewer/Cargo.toml']);
 const app=resolve(out,'MuTracer.app'),contents=resolve(app,'Contents');mkdirSync(resolve(contents,'MacOS'),{recursive:true});mkdirSync(resolve(contents,'Resources'),{recursive:true});
 const staged=resolve(contents,'MacOS/.mutracer-viewer.build');

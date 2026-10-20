@@ -16,7 +16,7 @@ notices are separate for the [native library](./THIRD_PARTY_NOTICES.md) and
   `validation/compiler/` holds whole-browser-API and async compilation probes.
 - `benchmark/`: performance and correctness comparison tools.
 - `viewer/`: standalone app; `toolchain/`: pinned compiler installation;
-  `vendor/`: third-party sources; `LICENSES/`: license texts.
+  `LICENSES/`: license texts.
 
 The existing `npm run native:*` commands remain the entry points. Additional
 precision checks run with `node native/validation/matrix-verify.mjs` and
@@ -51,7 +51,9 @@ remain failures. Rust CPU tests, module contracts and storage checks still run.
 The optional MaterialTable whole-module probe has known compiler blockers;
 all 14 required modules must build and verify.
 
-For direct Rust builds, set `MUTRACER_AOT_ARCHIVE` to the built archive. **Use
+For direct Rust builds, first run `npm run fetch:tinybvh` to
+[prepare the headers](../src/tinybvh/CONTRIBUTING.md#preparing-headers), then set
+`MUTRACER_AOT_ARCHIVE` to the built archive. **Use
 separate `CARGO_TARGET_DIR` values for the independent host and viewer manifests.**
 Their different wgpu feature graphs can otherwise overwrite the host's unhashed
 multi-crate-type rlib and cause incompatible wgpu crate identities.
@@ -185,12 +187,11 @@ browser model is not guaranteed.
 ## Native TinyBVH boundary
 
 Raw scene commits and transform/vertex update TLAS construction use the official
-TinyBVH header pinned in `native/vendor/tinybvh/`. The host compiles the browser's
+TinyBVH headers pinned in `src/tinybvh/upstream.json`. The host compiles the browser's
 existing C++ wrapper directly; preserve pointer-width-safe result addresses and
 `-ffp-contract=off` for conservative float bounds. Native and Web now pin
-TinyBVH 1.9.1 to the same upstream revision; all six native headers are unmodified
-and recorded in the vendor manifest. See the shared
-[adapter contributor guide](../src/tinybvh/CONTRIBUTING.md) for Wasm rebuilding
+TinyBVH 1.9.1 to the same upstream revision; all six headers are unmodified.
+See the shared [adapter contributor guide](../src/tinybvh/CONTRIBUTING.md) for Wasm rebuilding
 and CWBVH conversion.
 
 The native bridge enables full ARM NEON/Bonsai construction and upstream workers
@@ -204,7 +205,7 @@ restart and process exit with ThreadSanitizer:
 
 ```sh
 c++ -std=c++20 -O1 -g -fsanitize=thread -ffp-contract=off \
-  -I native/vendor/tinybvh native/host/tinybvh.cpp \
+  -I "$(node scripts/fetch-tinybvh.mjs)" native/host/tinybvh.cpp \
   native/tests/tinybvh-thread-exit.cpp -o /tmp/mutracer-tinybvh-thread-exit
 TSAN_OPTIONS=halt_on_error=1 /tmp/mutracer-tinybvh-thread-exit
 ```

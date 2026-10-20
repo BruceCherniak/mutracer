@@ -1,14 +1,30 @@
 # TinyBVH adapter development
 
-The Web and native builders pin upstream commit `c9be3103cc9693b456b0a0353927c11cac7d710f`.
-Native vendored headers and their hashes are in `native/vendor/tinybvh/`.
-The Web Wasm build downloads the same headers; no SDK is needed to consume the library.
-Keep both build scripts and the native headers on the same upstream revision.
+The Web and native builders share the version and SHA-256 hashes in
+[`upstream.json`](./upstream.json). No SDK or header download is needed to consume
+the browser library, which includes the prebuilt Wasm module.
+
+## Preparing headers
+
+With Node.js 20 or newer, run from the repository root:
+
+```sh
+npm run fetch:tinybvh
+```
+
+This downloads the six upstream headers at the pinned commit and verifies their
+SHA-256 hashes. Headers are cached in `.cache/tinybvh/<revision>/`, outside Git.
+Valid cached files are reused without network access; missing or corrupt files
+require a download. Keep this directory when building offline.
+
+The Web Wasm rebuild, native viewer build, native CI and scene validation prepare
+headers automatically. Before direct Cargo builds, run the preparation command
+above. Cargo itself does not download headers.
 
 ## Rebuilding the WASM module
 
-The build scripts download all six `tiny_bvh*.h` headers at the pinned 1.9.1
-revision and compile the wrapper with Emscripten's `em++`:
+The build scripts prepare the headers and compile the wrapper with Emscripten's
+`em++`:
 
 ```bash
 npm run build:tinybvh

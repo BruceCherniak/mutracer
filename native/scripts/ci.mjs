@@ -1,4 +1,5 @@
 // Reproducible native CI, with outputs isolated from the Web install/build.
+import {prepareTinyBvh} from '../../scripts/fetch-tinybvh.mjs';
 import {spawnSync} from 'node:child_process';
 import {mkdirSync,readFileSync,writeFileSync,mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -23,6 +24,7 @@ function run(name,command,args,extra={},allowFailure=false){
 const version=run('compiler-version',compiler,['--version']);
 if(version.stdout.trim()!=='0.3.2')throw Error('Native CI requires scriptc0.3.2.');
 run('aot-build',compiler,['build','--lib','--profile','native/src/render-core-profile.json','-o',archive]);
+await prepareTinyBvh();
 run('native-build','cargo',['build','--release','--locked','--manifest-path','native/host/Cargo.toml']);
 const probe=run('gpu-availability',resolve(hostTarget,'release/gpu-availability'),[]);
 const gpu=JSON.parse(probe.stdout);if(typeof gpu.available!=='boolean')throw Error('Invalid GPU availability result.');

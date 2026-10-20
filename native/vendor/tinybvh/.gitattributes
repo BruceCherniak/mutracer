@@ -1,2 +1,0 @@
-# Keep the pinned upstream header byte-for-byte, including its whitespace.
-tiny_bvh.h -whitespace

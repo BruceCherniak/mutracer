@@ -70,6 +70,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "build:tinybvh": "./scripts/build-tinybvh.sh",
+    "fetch:tinybvh": "node scripts/fetch-tinybvh.mjs",
     "build:tinybvh:windows": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-tinybvh.ps1",
     "typecheck:examples": "tsc --noEmit -p tsconfig.examples.json",
     "watch": "vite build -w",

@@ -1,18 +1,25 @@
 fn main() {
     println!("cargo:rerun-if-changed=../include/mutracer-layout.h");
     // This is the same wrapper used by the WebAssembly build, linked natively.
-    // Upstream:tinybvh@c9be3103cc9693b456b0a0353927c11cac7d710f (1.9.1).
     println!("cargo:rerun-if-changed=tinybvh.cpp");
     println!("cargo:rerun-if-changed=../../src/tinybvh/tinybvh_wrapper.cpp");
-    for header in [
-        "tiny_bvh.h",
-        "tiny_bvh_base.h",
-        "tiny_bvh_arm_float.h",
-        "tiny_bvh_arm_double.h",
-        "tiny_bvh_x86_float.h",
-        "tiny_bvh_x86_double.h",
-    ] {
-        println!("cargo:rerun-if-changed=../vendor/tinybvh/{header}");
+    let root =
+        std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("../..");
+    let manifest_path = root.join("src/tinybvh/upstream.json");
+    println!("cargo:rerun-if-changed={}", manifest_path.display());
+    let manifest: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(manifest_path).unwrap()).unwrap();
+    let include = root
+        .join(".cache/tinybvh")
+        .join(manifest["revision"].as_str().unwrap());
+    for file in manifest["files"].as_array().unwrap() {
+        let header = include.join(file["file"].as_str().unwrap());
+        assert!(
+            header.is_file(),
+            "TinyBVH header missing: {}. Run npm run fetch:tinybvh from the repository root before Cargo.",
+            header.display()
+        );
+        println!("cargo:rerun-if-changed={}", header.display());
     }
     cc::Build::new()
         .cpp(true)
@@ -21,7 +28,7 @@ fn main() {
         // Preserve conservative bounds across native SIMD and scalar Wasm.
         .flag_if_supported("-ffp-contract=off")
         .file("tinybvh.cpp")
-        .include("../vendor/tinybvh")
+        .include(include)
         .warnings(false)
         .compile("mutracer_tinybvh");
     println!("cargo:rerun-if-env-changed=MUTRACER_AOT_ARCHIVE");

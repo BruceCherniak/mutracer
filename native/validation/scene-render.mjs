@@ -1,3 +1,4 @@
+import {prepareTinyBvh} from '../../scripts/fetch-tinybvh.mjs';
 import {spawnCompiler} from '../scripts/compiler.mjs';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
@@ -40,6 +41,7 @@ writeFileSync(resolve(out, 'render-core-coverage.json'), JSON.stringify(composed
 if (!summarizeCoverage(composedDiagnostics, composed.status).passed)
     throw new Error('Full AOT entry graph has compiler diagnostics');
 run('aot-build', compiler, ['build', '--lib', '--profile', 'native/src/render-core-profile.json', '-o', env.MUTRACER_AOT_ARCHIVE]);
+await prepareTinyBvh();
 run('native-build', 'cargo', ['build', '--release', '--locked', '--manifest-path', 'native/host/Cargo.toml']);
 const cc = process.env.CC ?? 'cc';
 run('scene-host-build', cc, ['-Wall', '-Wextra', '-Werror', '-I', 'native/include', 'native/examples/scene-host.c', '-L', resolve(target, 'release'), '-lmutracer_native_probe', `-Wl,-rpath,${resolve(target, 'release')}`, '-o', resolve(out, 'scene-host')]);
