@@ -11,7 +11,7 @@ The optional native viewer bundles [Open Image Denoise 2.5.1](https://github.com
 under the Apache License 2.0, including its regular/small model weights and
 native runtime dependencies. MuTracer rebuilds its core/API from the fixed
 2.5.1 source with three optional large weight sets omitted; CPU modules and the
-macOS Metal module and Windows/Linux CUDA modules remain from the matching
+macOS Metal module and Windows/Linux CUDA/HIP modules remain from the matching
 official SDK. macOS/Linux loader
 paths are adjusted to the bundled libraries. Copyright 2018 Intel Corporation.
 The [license](./LICENSES/Apache-2.0.txt) and upstream bundled dependency notices

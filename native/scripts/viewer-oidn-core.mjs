@@ -29,7 +29,7 @@ export function buildOIDNCore(out) {
   const stamp=resolve(cache,'verified.json');
   if(existsSync(stamp)&&existsSync(core)&&existsSync(api)) {
     const info=JSON.parse(readFileSync(stamp,'utf8'));
-    if(info.sourceCommit===sourceCommit&&info.cuda===!mac&&info.coreSha256===sha(readFileSync(core))&&info.apiSha256===sha(readFileSync(api)))return {core,api};
+    if(info.sourceCommit===sourceCommit&&info.cuda===!mac&&info.hip===!mac&&info.coreSha256===sha(readFileSync(core))&&info.apiSha256===sha(readFileSync(api)))return {core,api};
   }
   mkdirSync(cache,{recursive:true});
   if(!existsSync(resolve(source,'CMakeLists.txt'))) {
@@ -46,9 +46,9 @@ export function buildOIDNCore(out) {
       cmake=cmake.replace(`    weights/${name}.tza\n`,'');
       filter=filter.replace(`  #include "weights/${name}.h"\n`,'').replace(`blobs::weights::${name}`,'nullptr');
     }
-    // Generate matching CPU/Metal configuration without rebuilding their official
-    // modules or introducing ISPC/TBB build dependencies for this small example.
-    cmake=cmake.replace('add_subdirectory(devices)','# MuTracer: use official ABI-matched CPU/Metal modules.');
+    // Generate matching device configuration without rebuilding official modules
+    // or introducing ISPC/TBB build dependencies for this small example.
+    cmake=cmake.replace('add_subdirectory(devices)','# MuTracer: use official ABI-matched device modules.');
     cmake='# MuTracer: no large weights; modified from fixed upstream source.\n'+cmake;
     filter='// MuTracer modification: optional large weights omitted.\n'+filter;
     writeFileSync(cmakePath,cmake);writeFileSync(filterPath,filter);
@@ -71,11 +71,11 @@ export function buildOIDNCore(out) {
   run('cmake',['-S',source,'-B',build,
     ...(mac?['-DCMAKE_MAKE_PROGRAM=/usr/bin/make','-DOIDN_DEVICE_METAL=ON','-DCMAKE_OSX_ARCHITECTURES=arm64','-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0']:
       win?['-G','Ninja','-DCMAKE_C_COMPILER=cl','-DCMAKE_CXX_COMPILER=cl']:[]),
-    '-DCMAKE_BUILD_TYPE=Release','-DOIDN_DEVICE_CPU=ON',`-DOIDN_DEVICE_CUDA=${mac?'OFF':'ON'}`,'-DOIDN_APPS=OFF','-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON',
+    '-DCMAKE_BUILD_TYPE=Release','-DOIDN_DEVICE_CPU=ON',`-DOIDN_DEVICE_CUDA=${mac?'OFF':'ON'}`,`-DOIDN_DEVICE_HIP=${mac?'OFF':'ON'}`,'-DOIDN_APPS=OFF','-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON',
     ...(!mac&&!win?['-DCMAKE_INSTALL_RPATH=$ORIGIN']:[])]);
   run('cmake',['--build',build,'--config','Release','--target','OpenImageDenoise_core','OpenImageDenoise','--parallel','8']);
   const symbols=run(win?'dumpbin':'nm',win?['/exports',core]:[...(mac?['-gU']:['-D','--defined-only']),core],{stdio:['ignore','pipe','inherit'],encoding:'utf8',maxBuffer:4*1024*1024});
   if(removed.some(name=>symbols.includes(name)))throw new Error('Large weights remain in OIDN binary');
-  writeFileSync(stamp,JSON.stringify({sourceCommit,weightsCommit,removed,cuda:!mac,coreSha256:sha(readFileSync(core)),apiSha256:sha(readFileSync(api))},null,2)+'\n');
+  writeFileSync(stamp,JSON.stringify({sourceCommit,weightsCommit,removed,cuda:!mac,hip:!mac,coreSha256:sha(readFileSync(core)),apiSha256:sha(readFileSync(api))},null,2)+'\n');
   return {core,api};
 }

@@ -214,9 +214,15 @@ outliers. This opt-in contributor instrument does not change normal usage.
 
 OIDN uses the library's `denoise.rs` for both the C ABI and viewer worker. The
 build pins 2.5.1 source/weights and official ABI-matched CPU modules (plus Metal
-on macOS and CUDA on Windows/Linux), omits three large models and packages
-component notices. Check CPU/Metal/CUDA/Auto,
+on macOS and CUDA/HIP on Windows/Linux), omits three large models and packages
+component notices. Check CPU/Metal/CUDA/HIP/Auto,
 malformed inputs, rollback, in-place output and arbitrary calling threads.
+Set `MUTRACER_OIDN_LIBRARY` for the Rust SDK tests and
+`MUTRACER_TEST_OIDN_HIP=1` on a supported AMD machine to require HIP execution
+and backend assertions (`MUTRACER_TEST_OIDN_CUDA=1` does the same for CUDA).
+To require CPU fallback and explicit GPU rejection, set
+`MUTRACER_TEST_OIDN_NO_GPU=1` with `OIDN_DEVICE_METAL=0`, `OIDN_DEVICE_CUDA=0`
+and `OIDN_DEVICE_HIP=0`, leaving the GPU requirement flags unset.
 Rust/TS rendering accumulation is independent of optional denoising. Copy the
 app to a new location and run all demo models plus Sponza without Node or build
 paths. Inspect dependencies, licenses and signature. Denoising parity with the

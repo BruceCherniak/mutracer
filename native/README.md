@@ -49,9 +49,13 @@ dimensions are in `result.json`. Normal guides are not renormalized after averag
 Use [mutracer-denoise.h](include/mutracer-denoise.h) to
 `create → run → destroy` a native OIDN denoiser. Supply matching linear RGBA32F
 HDR, normal and albedo images, such as those returned by `mt_context_read_pixels`.
-Choose automatic Metal/CUDA/CPU fallback, CPU only, Metal only or CUDA only.
-Output keeps the
-input alpha and can reuse an input buffer; a failed call leaves output unchanged.
+Choose automatic Metal/CUDA/HIP/CPU fallback or an explicit CPU, Metal, CUDA or
+HIP backend. GPU backends require supported hardware and a compatible driver;
+HIP also needs its matching AMD HIP runtime; see
+[OIDN's system requirements](https://github.com/RenderKit/oidn/blob/v2.5.1/README.md#system-requirements).
+Automatic selection falls back to CPU when no supported GPU backend can initialize.
+Output keeps the input alpha and can reuse an input buffer; a failed call leaves
+output unchanged.
 Rendering accumulation is independent of denoising.
 
 Provide OIDN **2.5.1** and matching device modules through an explicit library path

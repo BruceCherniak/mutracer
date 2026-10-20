@@ -24,7 +24,7 @@ export function bundleOIDN(out, contents) {
     run(nativeTar,[win?'-xf':'-xzf',archive,'-C',cache]);
   }
   const required=mac?['libOpenImageDenoise_core.2.5.1.dylib','libOpenImageDenoise_device_cpu.2.5.1.dylib','libOpenImageDenoise_device_metal.2.5.1.dylib']:
-    win?['OpenImageDenoise_core.dll','OpenImageDenoise_device_cpu.dll','OpenImageDenoise_device_cuda.dll']:['libOpenImageDenoise_core.so.2.5.1','libOpenImageDenoise_device_cpu.so.2.5.1','libOpenImageDenoise_device_cuda.so.2.5.1'];
+    win?['OpenImageDenoise_core.dll','OpenImageDenoise_device_cpu.dll','OpenImageDenoise_device_cuda.dll','OpenImageDenoise_device_hip.dll']:['libOpenImageDenoise_core.so.2.5.1','libOpenImageDenoise_device_cpu.so.2.5.1','libOpenImageDenoise_device_cuda.so.2.5.1','libOpenImageDenoise_device_hip.so.2.5.1'];
   for(const name of required)if(!existsSync(resolve(sourceLibs,name)))throw new Error('The no-large core requires the matching OIDN 2.5.1 platform SDK');
   const slim=buildOIDNCore(out);
   const libs=mac?resolve(contents,'Frameworks'):contents;
@@ -32,7 +32,7 @@ export function bundleOIDN(out, contents) {
   mkdirSync(libs,{recursive:true});mkdirSync(notices,{recursive:true});
   const libraryFile=mac? /\.dylib$/ :win?/\.dll$/i:/\.so(?:\.\d+)*$/;
   for(const name of readdirSync(sourceLibs).filter(n=>libraryFile.test(n)&&
-    (mac||/^(?:lib)?(?:OpenImageDenoise(?:_core|_device_cpu|_device_cuda)?|tbb[^.]*)\./i.test(n)))) {
+    (mac||/^(?:lib)?(?:OpenImageDenoise(?:_core|_device_cpu|_device_cuda|_device_hip)?|tbb[^.]*)\./i.test(n)))) {
     const target=resolve(libs,`.${name}.build`);
     const source=/^(?:lib)?OpenImageDenoise_core\./.test(name)?slim.core:
       /^(?:lib)?OpenImageDenoise\./.test(name)?slim.api:resolve(sourceLibs,name);

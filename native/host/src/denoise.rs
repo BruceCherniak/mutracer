@@ -78,13 +78,19 @@ impl Denoiser {
         };
         Self::from_library(&path, preference)
     }
-    /// Backend preference: 0=Metal/CUDA then CPU, 1=CPU, 2=Metal, 3=CUDA.
+    /// Backend preference: 0=Metal/CUDA/HIP then CPU, 1=CPU, 2=Metal, 3=CUDA, 4=HIP.
     pub fn from_library(path: &Path, preference: u32) -> Result<Self> {
         let devices: &[(i32, &str)] = match preference {
-            0 => &[(5, "OIDN Metal"), (3, "OIDN CUDA"), (1, "OIDN CPU")],
+            0 => &[
+                (5, "OIDN Metal"),
+                (3, "OIDN CUDA"),
+                (4, "OIDN HIP"),
+                (1, "OIDN CPU"),
+            ],
             1 => &[(1, "OIDN CPU")],
             2 => &[(5, "OIDN Metal")],
             3 => &[(3, "OIDN CUDA")],
+            4 => &[(4, "OIDN HIP")],
             _ => bail!("Invalid native OIDN backend preference"),
         };
         let api = unsafe { Api::load(path)? };
@@ -169,9 +175,9 @@ impl Denoiser {
                 error(&self.api, self.device)?;
                 ensure!(!self.filter.is_null(), "OIDN filter allocation failed");
                 for name in [c"color", c"normal", c"albedo", c"output"] {
-                    // Discrete CUDA GPUs use explicit transfers to avoid managed
+                    // Discrete CUDA/HIP GPUs use explicit transfers to avoid managed
                     // memory migration between each host copy and inference.
-                    let buffer = if self.backend == "OIDN CUDA" {
+                    let buffer = if matches!(self.backend, "OIDN CUDA" | "OIDN HIP") {
                         (self.api.oidnNewBufferWithStorage)(self.device, count * 4, 2)
                     } else {
                         (self.api.oidnNewBuffer)(self.device, count * 4)
@@ -213,7 +219,7 @@ impl Denoiser {
             self.size = size;
         }
         unsafe {
-            if self.backend == "OIDN CUDA" {
+            if matches!(self.backend, "OIDN CUDA" | "OIDN HIP") {
                 for (buffer, data) in self.buffers.iter().zip([color, normal, albedo, color]) {
                     (self.api.oidnWriteBufferAsync)(*buffer, 0, count * 4, data.as_ptr().cast());
                 }

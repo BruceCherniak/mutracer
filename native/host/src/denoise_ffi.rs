@@ -61,7 +61,7 @@ pub unsafe extern "C" fn mt_denoiser_create(
             !output.is_null() && (output as usize) % std::mem::align_of::<u64>() == 0,
             "Null or unaligned denoiser handle output"
         );
-        ensure!(backend <= 3, "Invalid native OIDN backend preference");
+        ensure!(backend <= 4, "Invalid native OIDN backend preference");
         (|| -> Result<()> {
             let mut values = DENOISERS
                 .try_lock()
@@ -100,6 +100,7 @@ pub unsafe extern "C" fn mt_denoiser_backend(
             "OIDN Metal" => Ok(2),
             "OIDN CPU" => Ok(1),
             "OIDN CUDA" => Ok(3),
+            "OIDN HIP" => Ok(4),
             _ => bail!("Unrecognized native OIDN backend"),
         })?;
         unsafe { *output = backend };
@@ -183,6 +184,9 @@ mod tests {
         if std::env::var_os("MUTRACER_TEST_OIDN_CUDA").is_some() {
             preferences.push(3);
         }
+        if std::env::var_os("MUTRACER_TEST_OIDN_HIP").is_some() {
+            preferences.push(4);
+        }
         for preference in preferences {
             let mut error = [0 as c_char; 512];
             let mut handle = 0;
@@ -217,6 +221,10 @@ mod tests {
             }
             if preference == 0 && std::env::var_os("MUTRACER_TEST_OIDN_CUDA").is_some() {
                 assert_eq!(backend, 3);
+            } else if preference == 0 && std::env::var_os("MUTRACER_TEST_OIDN_HIP").is_some() {
+                assert_eq!(backend, 4);
+            } else if preference == 0 && std::env::var_os("MUTRACER_TEST_OIDN_NO_GPU").is_some() {
+                assert_eq!(backend, 1);
             }
             for (width, height) in [(32, 24), (48, 32), (32, 24)] {
                 let count = width as usize * height as usize;
@@ -286,6 +294,30 @@ mod tests {
                 unsafe { mt_denoiser_destroy(handle, error.as_mut_ptr(), error.len()) },
                 0
             );
+        }
+        if std::env::var_os("MUTRACER_TEST_OIDN_NO_GPU").is_some() {
+            for preference in [2, 3, 4] {
+                let mut error = [0 as c_char; 512];
+                let mut handle = 42;
+                assert_ne!(
+                    unsafe {
+                        mt_denoiser_create(
+                            path.as_ptr(),
+                            preference,
+                            &mut handle,
+                            error.as_mut_ptr(),
+                            error.len(),
+                        )
+                    },
+                    0
+                );
+                assert_eq!(handle, 42);
+                let message = unsafe { CStr::from_ptr(error.as_ptr()) }.to_str().unwrap();
+                assert!(
+                    message.contains("could not create the requested device"),
+                    "{message}"
+                );
+            }
         }
     }
     #[test]
