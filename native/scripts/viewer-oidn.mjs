@@ -4,7 +4,7 @@ import {mkdirSync,existsSync,readFileSync,readdirSync,copyFileSync,renameSync,wr
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
 import {buildOIDNCore} from './viewer-oidn-core.mjs';
-import {viewerPlatform} from './platform.mjs';
+import {nativeTar,viewerPlatform} from './platform.mjs';
 export function bundleOIDN(out, contents) {
   const platform=viewerPlatform(),mac=platform==='macos-arm64',win=platform==='windows-x64';
   const version='2.5.1', name=`oidn-${version}.${mac?'arm64.macos':win?'x64.windows':'x86_64.linux'}`;
@@ -21,7 +21,7 @@ export function bundleOIDN(out, contents) {
     const archive=resolve(cache,`${name}.${extension}`);
     if(!existsSync(archive))run('curl',['-LfsS','--retry','2',`https://github.com/RenderKit/oidn/releases/download/v${version}/${name}.${extension}`,'-o',archive]);
     if(createHash('sha256').update(readFileSync(archive)).digest('hex')!==expected)throw new Error('OIDN SDK checksum mismatch');
-    run('tar',[win?'-xf':'-xzf',archive,'-C',cache]);
+    run(nativeTar,[win?'-xf':'-xzf',archive,'-C',cache]);
   }
   const required=mac?['libOpenImageDenoise_core.2.5.1.dylib','libOpenImageDenoise_device_cpu.2.5.1.dylib','libOpenImageDenoise_device_metal.2.5.1.dylib']:
     win?['OpenImageDenoise_core.dll','OpenImageDenoise_device_cpu.dll']:['libOpenImageDenoise_core.so.2.5.1','libOpenImageDenoise_device_cpu.so.2.5.1'];

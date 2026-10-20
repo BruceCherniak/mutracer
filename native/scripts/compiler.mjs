@@ -7,6 +7,7 @@ import {cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, w
 import {basename, dirname, relative, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import ts from 'typescript';
+import {nativeToolchainEnv} from './platform.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 let staged, nativeMatrices = false;
@@ -107,6 +108,7 @@ function sourcePath(path) {
   return target;
 }
 export function spawnCompiler(compiler, args, options = {}, matrixPrecision) {
+  options={...options,env:nativeToolchainEnv(options.env)};
   if (!['build', 'coverage'].includes(args[0])) return spawnSync(compiler, args, options);
   const profileAt = args.indexOf('--profile');
   let entry = args[1];
@@ -135,7 +137,17 @@ export function spawnCompiler(compiler, args, options = {}, matrixPrecision) {
     auditNumericAccess(staged, compiledEntry, nativeMatrices);
     loweredGraphs.add(compiledEntry);
   }
-  const result = spawnSync(compiler, mapped, options);
+  let result = spawnSync(compiler, mapped, options);
+  if(process.platform==='win32'&&args[0]==='build'&&args.includes('--lib')&&result.status===0) {
+    // The program uses MSVC's x64 probe name; the runtime pack uses MinGW's.
+    // Both preserve RSP and use the same RAX size argument. Normalize the name
+    // for GNU embedders without changing the probe or its guard-page behavior.
+    const outputAt=args.findIndex(arg=>arg==='-o'||arg==='--out');
+    if(outputAt<0)throw new Error('Windows native libraries require an explicit output path');
+    const archive=resolve(options.cwd??process.cwd(),args[outputAt+1]);
+    const patched=spawnSync('objcopy',['--redefine-sym','__chkstk=___chkstk_ms',archive],options);
+    if(patched.error||patched.status!==0)result=patched;
+  }
   result.nativeMatrixPrecision = nativeMatrices ? 64 : 32;
   result.nativeSourceRoot = staged;
   for (const field of ['stdout', 'stderr']) if (typeof result[field] === 'string') {

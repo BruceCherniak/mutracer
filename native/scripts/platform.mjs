@@ -1,11 +1,28 @@
 // Names at the native toolchain/OS boundary; renderer data stays platform-neutral.
+import {delimiter,resolve} from 'node:path';
 export const windows = process.platform === 'win32';
+// Git Bash's GNU tar treats a Windows drive letter as a remote archive host.
+export const nativeTar = windows ? resolve(process.env.SystemRoot??'C:\\Windows','System32/tar.exe') : 'tar';
 export const executable = name => name + (windows ? '.exe' : '');
 export const archiveName = name => name + (windows ? '.lib' : '.lib.a');
-export const cCompiler = process.env.CC ?? (windows ? 'clang' : 'cc');
+export const cCompiler = process.env.CC ?? (windows ? 'gcc' : 'cc');
 export const cLinkFlags = windows
-  ? ['-D_CRT_SECURE_NO_WARNINGS', '-lws2_32', '-lbcrypt', '-lcrypt32', '-liphlpapi', '-luserenv', '-lntdll']
+  ? ['-D_CRT_SECURE_NO_WARNINGS', '-lws2_32', '-lbcrypt', '-lcrypt32', '-liphlpapi', '-luserenv', '-lntdll', '-ladvapi32']
   : ['-lm'];
+
+export function nativeToolchainEnv(environment=process.env) {
+  const env={...environment};
+  if(windows&&env.VCToolsInstallDir) {
+    const tools=resolve(env.VCToolsInstallDir,'bin/Hostx64/x64');
+    const path=Object.keys(env).find(key=>key.toLowerCase()==='path');
+    const previous=path?env[path]:'';
+    for(const key of Object.keys(env))if(key.toLowerCase()==='path')delete env[key];
+    // Git Bash prepends its Unix link.exe; OIDN's CMake build needs MSVC.
+    env.PATH=tools+delimiter+previous;
+    env.CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER??=resolve(tools,'link.exe');
+  }
+  return env;
+}
 
 export function viewerPlatform() {
   if (process.platform === 'darwin' && process.arch === 'arm64') return 'macos-arm64';

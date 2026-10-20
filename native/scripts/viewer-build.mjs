@@ -6,7 +6,7 @@ import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {bundleOIDN} from './viewer-oidn.mjs';
 import {summarizeCoverage} from '../validation/diagnostics.mjs';
-import {archiveName,executable,viewerPlatform} from './platform.mjs';
+import {archiveName,executable,nativeToolchainEnv,viewerPlatform} from './platform.mjs';
 import {prepareDxc} from './fetch-dxc.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const out=resolve(process.env.MUTRACER_NATIVE_OUTPUT??resolve(root,'.native-build/viewer'));
@@ -14,7 +14,7 @@ const target=resolve(process.env.CARGO_TARGET_DIR??resolve(out,'cargo-target'));
 const compiler=process.env.MUTRACER_SCRIPTC??'scriptc';
 const platform=viewerPlatform(),mac=platform==='macos-arm64';
 mkdirSync(out,{recursive:true});
-const env={...process.env,CARGO_TARGET_DIR:target,MUTRACER_AOT_ARCHIVE:resolve(out,archiveName('render-core'))};
+const env={...nativeToolchainEnv(),CARGO_TARGET_DIR:target,MUTRACER_AOT_ARCHIVE:resolve(out,archiveName('render-core'))};
 function run(command,args){const r=(command===compiler?spawnCompiler:spawnSync)(command,args,{cwd:root,env,stdio:'inherit'});if(r.error||r.status!==0)throw new Error(`${command} failed: ${r.error?.message??r.status}`);}
 const version=spawnCompiler(compiler,['--version'],{encoding:'utf8'});if(version.status!==0||version.stdout.trim()!=='0.3.2')throw new Error('Set MUTRACER_SCRIPTC to scriptc 0.3.2.');
 const coverage=spawnCompiler(compiler,['coverage','native/src/render-core.ts','--print','diagnostics','--fail-on','blockers'],{cwd:root,encoding:'utf8',maxBuffer:32*1024*1024});

@@ -3,6 +3,9 @@ import {resolve} from 'node:path';
 import ts from 'typescript';
 
 export function lowerConcreteAccess(stage, entry) {
+  // TypeScript canonicalizes Windows source-file names to forward slashes.
+  stage = resolve(stage).replaceAll('\\', '/');
+  entry = resolve(stage, entry).replaceAll('\\', '/');
   const config = ts.readConfigFile(resolve(stage, 'tsconfig.json'), ts.sys.readFile);
   const options = ts.parseJsonConfigFileContent(config.config, ts.sys, stage).options;
   const program = ts.createProgram([resolve(stage, entry)], {...options, noEmit:true}), checker = program.getTypeChecker(), f = ts.factory;

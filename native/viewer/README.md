@@ -22,8 +22,10 @@ outside the tested macOS hardware remains unverified.
 
 Install Rust, CMake, a C++20 compiler, project npm dependencies and scriptc
 **0.3.2**, then run from the repository root. Windows needs an x64 MSVC Developer
-shell with Clang and Ninja; Linux also needs patchelf and X11/Wayland development
-libraries. The first build downloads the native OIDN SDK, source and regular model
+shell with MinGW-w64 GCC, Ninja and Zig 0.15.2. Install the Rust toolchain
+`stable-x86_64-pc-windows-gnu` and set `RUSTUP_TOOLCHAIN` to that name for the build.
+Linux also needs patchelf and X11/Wayland development libraries.
+The first build downloads the native OIDN SDK, source and regular model
 weights (about 80–95 MiB depending on platform). The app includes regular/small
 models and omits the three large weight sets. Denoising needs no runtime download:
 

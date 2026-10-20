@@ -15,7 +15,8 @@ and environment controls. See [viewer usage and limits](./viewer/README.md).
 ## Render a scene
 
 Building requires Rust, a C++20 compiler (Xcode Command Line Tools on macOS), project npm
-dependencies and a separately installed scriptc **0.3.2**.
+dependencies and a separately installed scriptc **0.3.2**. See the
+[platform prerequisites](./viewer/README.md#build-and-open) for Windows and Linux.
 
 ```sh
 export MUTRACER_SCRIPTC=/absolute/path/to/node_modules/.bin/scriptc

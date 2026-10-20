@@ -5,6 +5,7 @@ import {existsSync,mkdirSync,readFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {nativeTar} from './platform.mjs';
 
 export function prepareDxc() {
   const cache=resolve(tmpdir(),'mutracer-dxc-v1.8.2505.1'),archive=resolve(cache,'dxc_2025_07_14.zip');
@@ -16,7 +17,7 @@ export function prepareDxc() {
   if(!existsSync(archive))run('curl',['-LfsS','--retry','2',
     'https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2505.1/dxc_2025_07_14.zip','-o',archive]);
   if(createHash('sha256').update(readFileSync(archive)).digest('hex')!=='9ad895a6b039e3a8f8c22a1009f866800b840a74b50db9218d13319e215ea8a4')throw new Error('DXC checksum mismatch');
-  if(!existsSync(resolve(cache,'bin/x64/dxcompiler.dll')))run('tar',['-xf',archive,'-C',cache]);
+  if(!existsSync(resolve(cache,'bin/x64/dxcompiler.dll')))run(nativeTar,['-xf',archive,'-C',cache]);
   for(const name of ['dxcompiler.dll','dxil.dll'])if(!existsSync(resolve(cache,'bin/x64',name)))throw new Error(`DXC missing ${name}`);
   return cache;
 }

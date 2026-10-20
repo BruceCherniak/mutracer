@@ -6,6 +6,9 @@ import ts from 'typescript';
 // Clone the shared function AST, never maintain a second arithmetic body. Open
 // arrays/unions and callbacks keep the existing compatibility implementation.
 export function specializeVectorCalls(stage, entry) {
+  // TypeScript canonicalizes Windows source-file names to forward slashes.
+  stage = resolve(stage).replaceAll('\\', '/');
+  entry = resolve(stage, entry).replaceAll('\\', '/');
   const config = ts.readConfigFile(resolve(stage, 'tsconfig.json'), ts.sys.readFile);
   const options = ts.parseJsonConfigFileContent(config.config, ts.sys, stage).options;
   const program = ts.createProgram([entry], {...options, noEmit:true});

@@ -6,14 +6,14 @@ import {tmpdir} from 'node:os';
 import {resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnCompiler} from './compiler.mjs';
-import {archiveName,executable} from './platform.mjs';
+import {archiveName,executable,nativeToolchainEnv} from './platform.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const out=resolve(process.env.MUTRACER_NATIVE_OUTPUT??mkdtempSync(resolve(tmpdir(),'mutracer-native-ci-')));
 mkdirSync(out,{recursive:true});
 const compiler=process.env.MUTRACER_SCRIPTC??spawnSync(process.execPath,['native/toolchain/compiler.mjs'],{cwd:root,encoding:'utf8'}).stdout?.trim();
 if(!compiler)throw Error('Install native/toolchain optional dependencies or set MUTRACER_SCRIPTC.');
 const hostTarget=resolve(out,'host-target'),viewerTarget=resolve(out,'viewer-target'),archive=resolve(out,archiveName('render-core'));
-const env={...process.env,MUTRACER_SCRIPTC:compiler,MUTRACER_AOT_ARCHIVE:archive,CARGO_TARGET_DIR:hostTarget,MUTRACER_NATIVE_OUTPUT:out};
+const env={...nativeToolchainEnv(),MUTRACER_SCRIPTC:compiler,MUTRACER_AOT_ARCHIVE:archive,CARGO_TARGET_DIR:hostTarget,MUTRACER_NATIVE_OUTPUT:out};
 const checks=[];
 function run(name,command,args,extra={},allowFailure=false){
  if(command==='npm'&&process.env.npm_execpath){args=[process.env.npm_execpath,...args];command=process.execPath;}

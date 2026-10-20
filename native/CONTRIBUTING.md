@@ -50,8 +50,14 @@ macOS arm64, Windows x64 and Linux x64, including OIDN and licenses. Download
 artifacts for the app archive and SHA-256 checksum (retained for 14 days).
 The corresponding `native-PLATFORM-diagnostics` artifact retains logs and check
 summaries for seven days, including failed runs.
+Manual dispatch defaults to all three platforms; `native_platform` can select one
+target for diagnosis. A single-target dispatch never publishes a release.
 
-Windows builds need an x64 MSVC Developer environment, Clang, Ninja and CMake.
+Windows builds need an x64 MSVC Developer environment for OIDN, MinGW-w64 GCC,
+Ninja, CMake and Zig 0.15.2 for scriptc's library archiver. Install Rust's
+`stable-x86_64-pc-windows-gnu` toolchain and select it with `RUSTUP_TOOLCHAIN`.
+The scriptc 0.3.2 Windows archive references MinGW CRT helpers despite its `msvc`
+package suffix; the host, viewer and C harnesses use the GNU toolchain to match.
 Linux builds need a C++20 compiler, CMake, patchelf, and the X11/Wayland development
 libraries installed by the workflow. `npm run native:viewer:package` archives the
 built app, extracts it to a new directory and validates the bundled sample and

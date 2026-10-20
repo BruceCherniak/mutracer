@@ -4,12 +4,13 @@ import {spawnSync} from 'node:child_process';
 import {mkdirSync,existsSync,readFileSync,writeFileSync,renameSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
+import {nativeTar,nativeToolchainEnv} from './platform.mjs';
 const sourceCommit='6602ee2ca38a1a2a02135beed8f6e68eed630180';
 const weightsCommit='28883d1769d5930e13cf7f1676dd852bd81ed9e7';
 const removed=['rt_alb_large','rt_hdr_calb_cnrm_large','rt_nrm_large'];
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 function run(command,args,options={}) {
-  const r=spawnSync(command,args,{stdio:'inherit',...options});
+  const r=spawnSync(command,args,{stdio:'inherit',...options,env:nativeToolchainEnv(options.env)});
   if(r.error||r.status!==0)throw new Error(`${command} failed: ${r.error?.message??r.status}`);
   return r.stdout;
 }
@@ -34,7 +35,7 @@ export function buildOIDNCore(out) {
   if(!existsSync(resolve(source,'CMakeLists.txt'))) {
     const archive=resolve(cache,'source.tar.gz');
     download(`https://codeload.github.com/RenderKit/oidn/tar.gz/${sourceCommit}`,archive,'026a777d76c8e65a7a19e7f490f2ad5f6ecde316e907f6620b56bacf392733ea');
-    run('tar',['-xzf',archive,'-C',cache]);
+    run(nativeTar,['-xzf',archive,'-C',cache]);
   }
   // Verify the exact source pattern instead of applying a fuzzy vendor patch.
   const cmakePath=resolve(source,'CMakeLists.txt'),filterPath=resolve(source,'core/rt_filter.cpp');
@@ -69,7 +70,7 @@ export function buildOIDNCore(out) {
   }
   run('cmake',['-S',source,'-B',build,
     ...(mac?['-DCMAKE_MAKE_PROGRAM=/usr/bin/make','-DOIDN_DEVICE_METAL=ON','-DCMAKE_OSX_ARCHITECTURES=arm64','-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0']:
-      win?['-G','Ninja']:[]),
+      win?['-G','Ninja','-DCMAKE_C_COMPILER=cl','-DCMAKE_CXX_COMPILER=cl']:[]),
     '-DCMAKE_BUILD_TYPE=Release','-DOIDN_DEVICE_CPU=ON','-DOIDN_APPS=OFF','-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON',
     ...(!mac&&!win?['-DCMAKE_INSTALL_RPATH=$ORIGIN']:[])]);
   run('cmake',['--build',build,'--config','Release','--target','OpenImageDenoise_core','OpenImageDenoise','--parallel','8']);

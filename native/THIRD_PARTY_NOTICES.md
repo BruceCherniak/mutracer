@@ -5,6 +5,15 @@ Shared renderer attributions are in the [repository notices](../THIRD_PARTY_NOTI
 The native viewer has [separate notices](./viewer/THIRD_PARTY_NOTICES.md).
 Native-specific license texts are in [LICENSES/](./LICENSES).
 
+## Windows toolchain runtime
+
+Windows native builds link the [MinGW-w64 runtime](https://www.mingw-w64.org/) and
+GCC's C++ runtime. MinGW-w64's runtime notices are included in
+[`LICENSES/MinGW-w64-runtime.txt`](./LICENSES/MinGW-w64-runtime.txt).
+The GCC runtime is covered by [GPL version 3](./LICENSES/GPL-3.0.txt) with the
+[GCC Runtime Library Exception 3.1](./LICENSES/GCC-RUNTIME-EXCEPTION-3.1.txt).
+These runtimes are included in the Windows native binaries, outside the npm library.
+
 ## wgpu native ray-query probe
 
 The experimental `native/host/diagnostics/ray-query-probe.wgsl` follows ray-query API usage

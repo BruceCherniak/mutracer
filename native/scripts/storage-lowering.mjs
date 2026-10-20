@@ -9,6 +9,9 @@ const numericStorage = new Set(['Float32Array', 'Float64Array', 'Int32Array', 'U
 // scale values and loop bodies remain the shared source's AST, without name-based
 // rewrites. Iterate because a concrete wrapper can expose further generic calls.
 export function specializeStorageLoops(stage, entry) {
+  // TypeScript canonicalizes Windows source-file names to forward slashes.
+  stage = resolve(stage).replaceAll('\\', '/');
+  entry = resolve(stage, entry).replaceAll('\\', '/');
   const config = ts.readConfigFile(resolve(stage, 'tsconfig.json'), ts.sys.readFile);
   const options = config.config ? ts.parseJsonConfigFileContent(config.config, ts.sys, stage).options : {};
   const f = ts.factory, summary = {calls: 0, functions: 0, passes: 0, variants: []};

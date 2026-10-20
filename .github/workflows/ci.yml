@@ -6,12 +6,18 @@ on:
     tags: ['native-v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      native_platform:
+        description: Native target (releases require all)
+        type: choice
+        default: all
+        options: [all, macos-arm64, windows-x64, linux-x64]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ inputs.native_platform || 'all' }}
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
@@ -43,13 +49,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: macos-15
-            platform: macos-arm64
-          - os: windows-2025
-            platform: windows-x64
-          - os: ubuntu-24.04
-            platform: linux-x64
+        include: >-
+          ${{ fromJSON(
+            inputs.native_platform == 'macos-arm64' && '[{"os":"macos-15","platform":"macos-arm64"}]' ||
+            inputs.native_platform == 'windows-x64' && '[{"os":"windows-2025","platform":"windows-x64"}]' ||
+            inputs.native_platform == 'linux-x64' && '[{"os":"ubuntu-24.04","platform":"linux-x64"}]' ||
+            '[{"os":"macos-15","platform":"macos-arm64"},{"os":"windows-2025","platform":"windows-x64"},{"os":"ubuntu-24.04","platform":"linux-x64"}]'
+          ) }}
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -65,9 +71,29 @@ jobs:
             package-lock.json
             native/toolchain/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          # scriptc 0.3.2's Windows archive requires MinGW CRT helpers.
+          toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
+      - uses: actions/cache/restore@v4
+        id: native_cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ runner.temp }}/mutracer-native/host-target
+            ${{ runner.temp }}/mutracer-native/viewer-target
+          key: native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/host/Cargo.lock', 'native/viewer/Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            native-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('native/host/Cargo.lock', 'native/viewer/Cargo.lock') }}-
+            native-${{ runner.os }}-${{ runner.arch }}-
       - name: Set up MSVC and Windows SDK
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
+      - name: Install Windows AOT archiver
+        if: runner.os == 'Windows'
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.15.2
       - name: Install Linux windowing, Vulkan and packaging dependencies
         if: runner.os == 'Linux'
         run: |
@@ -118,9 +144,18 @@ jobs:
             ${{ runner.temp }}/mutracer-native/viewer/coverage.json
           if-no-files-found: ignore
           retention-days: 7
+      - uses: actions/cache/save@v4
+        if: ${{ always() && steps.native_cache.outputs.cache-hit != 'true' }}
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ${{ runner.temp }}/mutracer-native/host-target
+            ${{ runner.temp }}/mutracer-native/viewer-target
+          key: ${{ steps.native_cache.outputs.cache-primary-key }}
 
   native-release:
-    if: ${{ startsWith(github.ref, 'refs/tags/native-v') }}
+    if: ${{ startsWith(github.ref, 'refs/tags/native-v') && (!inputs.native_platform || inputs.native_platform == 'all') }}
     needs: [checks, native]
     runs-on: ubuntu-latest
     permissions:

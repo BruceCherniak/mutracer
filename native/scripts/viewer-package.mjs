@@ -2,9 +2,9 @@
 import {createHash} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {mkdirSync,mkdtempSync,readFileSync,writeFileSync} from 'node:fs';
-import {dirname,resolve} from 'node:path';
+import {delimiter,dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {executable,viewerPlatform} from './platform.mjs';
+import {executable,nativeTar,viewerPlatform} from './platform.mjs';
 
 const root=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 const out=resolve(process.env.MUTRACER_NATIVE_OUTPUT??resolve(root,'.native-build/viewer'));
@@ -24,13 +24,19 @@ if(mac) {
 mkdirSync(dist,{recursive:true});
 const name=`MuTracer-${platform}.${platform==='linux-x64'?'tar.gz':'zip'}`,archive=resolve(dist,name);
 if(mac)run('ditto',['-c','-k','--sequesterRsrc','--keepParent',app,archive]);
-else run('tar',[platform==='windows-x64'?'-acf':'-czf',archive,'-C',out,appName]);
+else run(nativeTar,[platform==='windows-x64'?'-acf':'-czf',archive,'-C',out,appName]);
 writeFileSync(archive+'.sha256',`${createHash('sha256').update(readFileSync(archive)).digest('hex')}  ${name}\n`);
 const relocated=mkdtempSync(resolve(out,'relocated-'));
 if(mac)run('ditto',['-x','-k',archive,relocated]);
-else run('tar',['-xf',archive,'-C',relocated]);
+else run(nativeTar,['-xf',archive,'-C',relocated]);
 const binary=resolve(relocated,appName,mac?'Contents/MacOS/mutracer-viewer':executable('mutracer-viewer'));
 const env={...process.env};delete env.MUTRACER_OIDN_LIBRARY;
+for(const key of ['LD_LIBRARY_PATH','DYLD_LIBRARY_PATH','DYLD_FALLBACK_LIBRARY_PATH'])delete env[key];
+if(process.platform==='win32') {
+  // Developer PATH entries must not supply missing packaged DLLs.
+  for(const key of Object.keys(env))if(key.toLowerCase()==='path')delete env[key];
+  env.PATH=[dirname(binary),resolve(process.env.SystemRoot,'System32'),process.env.SystemRoot].join(delimiter);
+}
 if(process.platform==='linux'&&!env.XDG_RUNTIME_DIR) {
   env.XDG_RUNTIME_DIR=resolve(relocated,'runtime');mkdirSync(env.XDG_RUNTIME_DIR,{mode:0o700});
 }

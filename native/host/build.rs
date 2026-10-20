@@ -25,6 +25,9 @@ fn main() {
         .cpp(true)
         .std("c++20")
         .opt_level(3)
+        // Windows' scriptc runtime uses MinGW; keep C++ runtime support static
+        // so the standalone viewer does not require libstdc++-6.dll on PATH.
+        .cpp_link_stdlib_static(std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows"))
         // Preserve conservative bounds across native SIMD and scalar Wasm.
         .flag_if_supported("-ffp-contract=off")
         .file("tinybvh.cpp")
@@ -42,13 +45,14 @@ fn main() {
         "libmutracer_aot.a"
     };
     std::fs::copy(archive, output.join(library_name)).unwrap();
+    println!("cargo:rustc-link-search=native={}", output.display());
+    println!("cargo:rustc-link-lib=static=mutracer_aot");
+    // GNU linkers resolve import archives from left to right, after AOT users.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         for library in [
-            "ws2_32", "bcrypt", "crypt32", "iphlpapi", "userenv", "ntdll",
+            "ws2_32", "bcrypt", "crypt32", "iphlpapi", "userenv", "ntdll", "advapi32",
         ] {
             println!("cargo:rustc-link-lib={library}");
         }
     }
-    println!("cargo:rustc-link-search=native={}", output.display());
-    println!("cargo:rustc-link-lib=static=mutracer_aot");
 }

@@ -5,6 +5,9 @@ import ts from 'typescript';
 // Trace exported native entry points, constructors, getters and callbacks. A
 // dispatcher called by a loop is just as hot as one written inside that loop.
 export function auditNumericAccess(stage, entry, enforce = true) {
+  // TypeScript canonicalizes Windows source-file names to forward slashes.
+  stage = resolve(stage).replaceAll('\\', '/');
+  entry = resolve(stage, entry).replaceAll('\\', '/');
   const config = ts.readConfigFile(resolve(stage, 'tsconfig.json'), ts.sys.readFile);
   const options = ts.parseJsonConfigFileContent(config.config, ts.sys, stage).options;
   const program = ts.createProgram([resolve(stage, entry)], {...options, noEmit: true}), checker = program.getTypeChecker();
@@ -69,7 +72,7 @@ export function auditNumericAccess(stage, entry, enforce = true) {
   for (const file of program.getSourceFiles()) {
     if (!belongs(file)) continue;
     record(file); roots.add(file); visit(file, file, false);
-    if (file.fileName === resolve(stage, entry)) {
+    if (file.fileName === entry) {
       const symbol = checker.getSymbolAtLocation(file);
       for (const exported of symbol ? checker.getExportsOfModule(symbol) : []) for (const node of target(exported)) roots.add(node);
     }
