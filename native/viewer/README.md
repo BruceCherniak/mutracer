@@ -14,8 +14,8 @@ and licenses together. SHA-256 checksum files accompany the downloads.
 
 The macOS app is ad-hoc signed and not Apple-notarized. Windows requires the
 [Microsoft Visual C++ v14 x64 runtime](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
-Linux packages target Ubuntu 24.04 x64 and
-require a Vulkan driver and an X11 or Wayland desktop. Physical GPU behavior
+Linux packages target Ubuntu 24.04 x64 and require a Vulkan driver and an X11 or
+Wayland desktop. X11 sessions also need `libxkbcommon-x11-0`. Physical GPU behavior
 outside the tested macOS hardware remains unverified.
 
 ## Build and open

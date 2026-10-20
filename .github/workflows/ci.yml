@@ -98,7 +98,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev mesa-vulkan-drivers libvulkan1 patchelf xvfb
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev mesa-vulkan-drivers libvulkan1 patchelf xvfb
       - run: npm ci
       - name: Install pinned native compiler for this platform
         run: |
