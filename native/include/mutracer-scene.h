@@ -4,6 +4,7 @@
 #include <stdint.h>
 #include "mutracer-material-properties.h"
 #include "mutracer-layout.h"
+#include "mutracer-status.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -12,7 +13,9 @@ extern "C" {
  * f32 bits. Offsets are words from the beginning of input. Arrays/tables must
  * fit length. Reserved words must be 0.
  * Caller owns all bytes and strings through the blocking call; none are retained.
- * Return 0 on success, 1 on failure (NUL-terminated message if capacity > 0).
+ * Return MT_OK or an mt_status (NUL-terminated message if capacity > 0):
+ * MT_ERROR_INVALID_ARGUMENT for a rejected descriptor, MT_ERROR_BUSY while
+ * another probe runs.
  * Calls may run on arbitrary threads; keep borrowed bytes valid through return.
  *
  * Header[32]: version[4], total_words, width,height, geometry_count,mesh_count,

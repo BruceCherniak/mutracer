@@ -1597,18 +1597,26 @@ pub unsafe extern "C" fn mt_probe_render_scene(
 ) -> i32 {
     let result = std::panic::catch_unwind(|| -> Result<()> {
         if input.is_null() || output.is_null() || length > MAX_BYTES {
-            return Err("Null scene input or oversized descriptor".into());
+            return Err(fail(
+                Status::InvalidArgument,
+                "Null scene input or oversized descriptor",
+            ));
         }
         if samples == 0 || samples > 4096 {
-            return Err("Samples must be 1..4096".into());
+            return Err(fail(Status::InvalidArgument, "Samples must be 1..4096"));
         }
-        let _entry = ENTRY_LOCK
-            .try_lock()
-            .map_err(|_| "Native probe is already active or poisoned")?;
+        let _entry = ENTRY_LOCK.try_lock().map_err(|error| match error {
+            std::sync::TryLockError::WouldBlock => {
+                fail(Status::Busy, "Native probe is already active")
+            }
+            std::sync::TryLockError::Poisoned(_) => "Native probe lock is poisoned".into(),
+        })?;
         context::check_owner()?;
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
-        let output = unsafe { CStr::from_ptr(output) }.to_str()?;
-        let (scene, assets) = prepare(bytes)?;
+        let output = unsafe { CStr::from_ptr(output) }
+            .to_str()
+            .map_err(|e| fail(Status::InvalidArgument, format!("Output directory: {e}")))?;
+        let (scene, assets) = prepare(bytes).map_err(rejected)?;
         render_scene(
             scene,
             Path::new(output),
@@ -1619,19 +1627,12 @@ pub unsafe extern "C" fn mt_probe_render_scene(
             &assets,
         )
     });
-    let message = match result {
-        Ok(Ok(())) => return 0,
-        Ok(Err(e)) => e.to_string(),
-        Err(_) => "Native scene renderer panicked".into(),
+    let (status, message) = match result {
+        Ok(Ok(())) => (Status::Ok, String::new()),
+        Ok(Err(e)) => (classify(e.as_ref(), Status::Error), e.to_string()),
+        Err(_) => (Status::Error, "Native scene renderer panicked".into()),
     };
-    if !error.is_null() && error_capacity > 0 {
-        let count = message.len().min(error_capacity - 1);
-        unsafe {
-            std::ptr::copy_nonoverlapping(message.as_ptr(), error.cast(), count);
-            *error.add(count) = 0;
-        }
-    }
-    1
+    status::write(error, error_capacity, status, &message)
 }
 
 #[cfg(any(test, feature = "fuzzing"))]

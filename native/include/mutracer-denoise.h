@@ -2,12 +2,13 @@
 #define MUTRACER_DENOISE_H
 #include <stdint.h>
 #include <stddef.h>
+#include "mutracer-status.h"
 #ifdef __cplusplus
 extern "C" {
 #endif
 /* Experimental optional native OIDN API; see native/README.md#platforms for
  * supported platforms.
- * Returns 0 on success, 1 on error; error is optional caller-owned UTF-8 storage,
+ * Returns MT_OK or an mt_status; error is optional caller-owned UTF-8 storage,
  * NUL terminated when capacity>0. Its storage must not overlap other arguments.
  * All other pointers must be aligned, valid for the call and span the specified
  * count; keep input storage unchanged until run returns. A validation/SDK failure
@@ -18,12 +19,15 @@ extern "C" {
  * MUTRACER_OIDN_LIBRARY, then the bundled library relative to the executable
  * (../Frameworks/libOpenImageDenoise.2.dylib on macOS, OpenImageDenoise.dll on
  * Windows, libOpenImageDenoise.so.2 on Linux).
- * backend: 0=Metal then CUDA then HIP then CPU, 1=CPU only, 2=Metal only,
- * 3=CUDA only, 4=HIP only. Explicit 1/2/3/4 never fall back.
- * Backend query returns 1=CPU, 2=Metal, 3=CUDA or 4=HIP.
+ * backend (mt_denoise_backend): MT_DENOISE_AUTO tries Metal, CUDA, HIP, then CPU;
+ * MT_DENOISE_CPU, MT_DENOISE_METAL, MT_DENOISE_CUDA and MT_DENOISE_HIP never fall
+ * back. The backend query returns the selected explicit backend.
  *
- * Calls may come from any thread. Overlapping denoiser operations return busy
- * and can be retried. IDs are not reused; stale handles reject. Device memory
+ * Calls may come from any thread. Overlapping denoiser operations return
+ * MT_ERROR_BUSY and can be retried. IDs are not reused; stale handles return
+ * MT_ERROR_INVALID_HANDLE. Invalid sizes, pointers, images or backend values
+ * return MT_ERROR_INVALID_ARGUMENT; a missing library or unavailable backend
+ * returns MT_ERROR_UNAVAILABLE from create. Device memory
  * limits the number of live handles.
  * Denoising is independent of render contexts and does not modify
  * render accumulation. Calls block: run on an application worker if needed.

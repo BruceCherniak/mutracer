@@ -160,14 +160,17 @@ impl Denoiser {
             .filter(|count| *count > 0 && *count <= 4_194_304)
             .context("Invalid OIDN image size")?;
         let count = pixels * 4;
-        ensure!(
-            count > 0
-                && count <= 4_194_304 * 4
-                && [color, normal, albedo]
-                    .iter()
-                    .all(|v| v.len() == count && v.iter().all(|x| x.is_finite())),
-            "Invalid OIDN input images"
-        );
+        if !(count > 0
+            && count <= 4_194_304 * 4
+            && [color, normal, albedo]
+                .iter()
+                .all(|v| v.len() == count && v.iter().all(|x| x.is_finite())))
+        {
+            return Err(crate::status::fail_anyhow(
+                crate::Status::InvalidArgument,
+                "Invalid OIDN input images",
+            ));
+        }
         if self.size != size {
             self.clear();
             unsafe {

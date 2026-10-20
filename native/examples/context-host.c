@@ -11,7 +11,7 @@ static char error[4096];
 static unsigned checks;
 #define REQUIRE(test) do {checks++;if(!(test)){fprintf(stderr,"line %d: %s; %s\n",__LINE__,#test,error);return 1;}}while(0)
 #define OK(call) REQUIRE((call)==0)
-#define BAD(call) REQUIRE((call)!=0)
+#define FAILS(status,call) REQUIRE((call)==(status))
 static int backend_is(mt_context context,uint32_t expected) {
  uint32_t actual=99;char reason[512];
  return mt_context_backend(context,&actual,reason,sizeof(reason),error,sizeof(error)) || actual!=expected;
@@ -46,23 +46,23 @@ int main(int argc,char **argv) {
   uint32_t *words=(uint32_t*)input;size_t size=(size_t)words[2]*words[3]*16;
   unsigned char *pixels=malloc(size),*other=malloc(size),*reference=malloc(size);if(!pixels||!other||!reference)return 2;
   mt_context a=0,b=0,c=0;mt_context_info_v1 info={.struct_size=sizeof(info)};
-  BAD(mt_context_create_with_backend(2,&c,error,sizeof(error)));REQUIRE(c==0);
-  BAD(mt_context_create_with_backend(3,&c,error,sizeof(error)));REQUIRE(c==0);
+  FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_create_with_backend(2,&c,error,sizeof(error)));REQUIRE(c==0);
+  FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_create_with_backend(3,&c,error,sizeof(error)));REQUIRE(c==0);
   OK(mt_context_create(&c,error,sizeof(error)));OK(mt_context_commit(c,input,length,error,sizeof(error)));
   uint32_t actual=99;char reason[256];OK(mt_context_backend(c,&actual,reason,sizeof(reason),error,sizeof(error)));
-  REQUIRE(actual<=1);REQUIRE(reason[0]!=0); /* HWRT reports software-BVH count; fallback reports cause. */
+  REQUIRE(actual==MT_BACKEND_SOFTWARE||actual==MT_BACKEND_HWRT);REQUIRE(reason[0]!=0); /* HWRT reports software-BVH count; fallback reports cause. */
   OK(mt_context_destroy(c,error,sizeof(error)));c=0;
-  BAD(mt_context_info(0,&info,error,sizeof(error)));
-  BAD(mt_context_create_with_backend(0,NULL,error,sizeof(error)));
-  OK(mt_context_create_with_backend(0,&a,error,sizeof(error)));OK(mt_context_create_with_backend(0,&b,error,sizeof(error)));REQUIRE(a!=b&&a&&b);
-  OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.state==0&&info.samples==0&&info.version==1);
-  BAD(mt_context_render(a,1,error,sizeof(error)));BAD(mt_context_reset(a,error,sizeof(error)));BAD(mt_context_wait(a,error,sizeof(error)));
-  size_t written=999;BAD(mt_context_read_pixels(a,0,NULL,0,&written,error,sizeof(error)));REQUIRE(written==0);
-  info.struct_size=0;BAD(mt_context_info(a,&info,error,sizeof(error)));info.struct_size=sizeof(info);
-  OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,0));
-  OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,0));
-  OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.state==1&&info.samples==0&&info.width==words[2]&&info.height==words[3]);
-  BAD(mt_context_render(a,0,error,sizeof(error)));BAD(mt_context_render(a,4097,error,sizeof(error)));
+  FAILS(MT_ERROR_INVALID_HANDLE,mt_context_info(0,&info,error,sizeof(error)));
+  FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_create_with_backend(MT_BACKEND_SOFTWARE,NULL,error,sizeof(error)));
+  OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&a,error,sizeof(error)));OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&b,error,sizeof(error)));REQUIRE(a!=b&&a&&b);
+  OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.state==MT_CONTEXT_EMPTY&&info.samples==0&&info.version==1);
+  FAILS(MT_ERROR_INVALID_STATE,mt_context_render(a,1,error,sizeof(error)));FAILS(MT_ERROR_INVALID_STATE,mt_context_reset(a,error,sizeof(error)));FAILS(MT_ERROR_INVALID_STATE,mt_context_wait(a,error,sizeof(error)));
+  size_t written=999;FAILS(MT_ERROR_INVALID_STATE,mt_context_read_pixels(a,MT_IMAGE_HDR,NULL,0,&written,error,sizeof(error)));REQUIRE(written==0);
+  info.struct_size=0;FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_info(a,&info,error,sizeof(error)));info.struct_size=sizeof(info);
+  OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,MT_BACKEND_SOFTWARE));
+  OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,MT_BACKEND_SOFTWARE));
+  OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.state==MT_CONTEXT_COMMITTED&&info.samples==0&&info.width==words[2]&&info.height==words[3]);
+  FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_render(a,0,error,sizeof(error)));FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_render(a,4097,error,sizeof(error)));
   OK(mt_context_render(a,samples/4,error,sizeof(error)));
   OK(mt_context_render(b,samples/4,error,sizeof(error)));
   OK(mt_context_wait(a,error,sizeof(error)));OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.samples==samples/4);
@@ -78,7 +78,7 @@ int main(int argc,char **argv) {
     OK(save(argv[3],names[kind],pixels,size));
   }
   /* Reusing a retired buffer generation must reset accumulation and guides. */
-  for(unsigned repeat=0;repeat<2;repeat++)OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,0));
+  for(unsigned repeat=0;repeat<2;repeat++)OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,MT_BACKEND_SOFTWARE));
   OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.samples==0);
   OK(mt_context_render(a,samples,error,sizeof(error)));
   for(uint32_t kind=0;kind<3;kind++){
@@ -88,25 +88,25 @@ int main(int argc,char **argv) {
   }
   OK(mt_context_read_pixels(a,0,NULL,0,&written,error,sizeof(error)));REQUIRE(written==size);
   unsigned char short_buffer[8];memset(short_buffer,0xa5,sizeof(short_buffer));
-  BAD(mt_context_read_pixels(a,0,short_buffer,sizeof(short_buffer),&written,error,sizeof(error)));
+  FAILS(MT_ERROR_BUFFER_TOO_SMALL,mt_context_read_pixels(a,MT_IMAGE_HDR,short_buffer,sizeof(short_buffer),&written,error,sizeof(error)));
   REQUIRE(written==size);for(size_t i=0;i<sizeof(short_buffer);i++)REQUIRE(short_buffer[i]==0xa5);
-  BAD(mt_context_read_pixels(a,3,NULL,0,&written,error,sizeof(error)));
-  BAD(mt_context_read_pixels(a,0,NULL,size,&written,error,sizeof(error)));
+  FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_read_pixels(a,3,NULL,0,&written,error,sizeof(error)));
+  FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_read_pixels(a,MT_IMAGE_HDR,NULL,size,&written,error,sizeof(error)));
   OK(read_image(a,0,reference,size));
-  uint32_t version=words[0];words[0]=99;BAD(mt_context_commit(a,input,length,error,sizeof(error)));words[0]=version;
+  uint32_t version=words[0];words[0]=99;FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_commit(a,input,length,error,sizeof(error)));words[0]=version;
   if(words[words[12]+10]){
     uint32_t offset=words[words[12]+9],saved=words[offset];words[offset]=0;
-    BAD(mt_context_commit(a,input,length,error,sizeof(error)));words[offset]=saved;
+    FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_commit(a,input,length,error,sizeof(error)));words[offset]=saved;
   }
-  OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.state==1&&info.samples==samples);
+  OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.state==MT_CONTEXT_COMMITTED&&info.samples==samples);
   OK(read_image(a,0,pixels,size));REQUIRE(memcmp(pixels,reference,size)==0);
   OK(mt_context_reset(a,error,sizeof(error)));OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.samples==0);
-  BAD(mt_context_read_pixels(a,0,NULL,0,&written,error,sizeof(error)));
+  FAILS(MT_ERROR_INVALID_STATE,mt_context_read_pixels(a,MT_IMAGE_HDR,NULL,0,&written,error,sizeof(error)));
   OK(mt_context_render(a,1,error,sizeof(error)));OK(mt_context_render(a,samples-1,error,sizeof(error)));
   OK(read_image(a,0,pixels,size));REQUIRE(memcmp(pixels,reference,size)==0);
   /* A complete camera edit commits on B while A retains its accumulation. */
   uint32_t camera_x=words[14]+16+12,saved_x=words[camera_x];float x;memcpy(&x,words+camera_x,4);x+=.4f;memcpy(words+camera_x,&x,4);
-  OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,0));words[camera_x]=saved_x;
+  OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,MT_BACKEND_SOFTWARE));words[camera_x]=saved_x;
   OK(mt_context_info(b,&info,error,sizeof(error)));REQUIRE(info.samples==0);
   OK(mt_context_render(b,samples,error,sizeof(error)));OK(read_image(b,0,other,size));
   int empty=words[23]!=0;
@@ -117,9 +117,9 @@ int main(int argc,char **argv) {
   REQUIRE(pthread_create(&thread,NULL,other_thread,&thread_args)==0);
   REQUIRE(pthread_join(thread,&thread_result)==0);REQUIRE((uintptr_t)thread_result==1);
   OK(read_image(b,0,pixels,size));REQUIRE(memcmp(pixels,other,size)==0);
-  OK(mt_context_destroy(a,error,sizeof(error)));BAD(mt_context_destroy(a,error,sizeof(error)));
-  BAD(mt_context_info(a,&info,error,sizeof(error)));OK(mt_context_create_with_backend(0,&c,error,sizeof(error)));REQUIRE(c!=a&&c!=b);
-  BAD(mt_context_info(a,&info,error,sizeof(error)));OK(mt_context_destroy(c,error,sizeof(error)));
+  OK(mt_context_destroy(a,error,sizeof(error)));FAILS(MT_ERROR_INVALID_HANDLE,mt_context_destroy(a,error,sizeof(error)));
+  FAILS(MT_ERROR_INVALID_HANDLE,mt_context_info(a,&info,error,sizeof(error)));OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&c,error,sizeof(error)));REQUIRE(c!=a&&c!=b);
+  FAILS(MT_ERROR_INVALID_HANDLE,mt_context_info(a,&info,error,sizeof(error)));OK(mt_context_destroy(c,error,sizeof(error)));
   OK(read_image(b,0,pixels,size));REQUIRE(memcmp(pixels,other,size)==0);OK(mt_context_destroy(b,error,sizeof(error)));
   free(input);free(pixels);free(other);free(reference);printf("PASS %u context checks\n",checks);return 0;
 }

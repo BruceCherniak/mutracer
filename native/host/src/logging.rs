@@ -17,7 +17,7 @@ thread_local! { static IN_CALLBACK: Cell<bool> = const { Cell::new(false) }; }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_set_log_callback(callback: Option<Callback>, user: *mut c_void) -> i32 {
     if IN_CALLBACK.get() {
-        return 1;
+        return crate::Status::InvalidState as i32;
     }
     let mut slot = LOG.lock().unwrap_or_else(|e| e.into_inner());
     *slot = Registration {
@@ -68,7 +68,7 @@ mod tests {
             }
             assert_eq!(
                 unsafe { mt_set_log_callback(None, std::ptr::null_mut()) },
-                1
+                crate::Status::InvalidState as i32
             );
             unsafe { &*user.cast::<AtomicUsize>() }.fetch_add(1, Ordering::Relaxed);
         }

@@ -1,6 +1,7 @@
 //! Independent synchronized OIDN handles; never enter the AOT/render registry.
 use crate::denoise::Denoiser;
-use anyhow::{Result, bail, ensure};
+use crate::status::{self, Status, StatusError, fail_anyhow as fail};
+use anyhow::{Result, bail};
 use std::{
     collections::HashMap,
     ffi::{CStr, c_char},
@@ -17,31 +18,31 @@ static DENOISERS: LazyLock<Mutex<HashMap<u64, Denoiser>>> =
 static NEXT: AtomicU64 = AtomicU64::new(1 << 63);
 fn action(error: *mut c_char, capacity: usize, operation: impl FnOnce() -> Result<()>) -> i32 {
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| crate::platform_scope(operation)));
-    let message = match result {
-        Ok(Ok(())) => String::new(),
-        Ok(Err(error)) => format!("{error:#}"),
-        Err(_) => "Native denoising operation panicked".into(),
+    let (code, message) = match result {
+        Ok(Ok(())) => (Status::Ok, String::new()),
+        Ok(Err(error)) => (
+            error
+                .downcast_ref::<StatusError>()
+                .map_or(Status::Error, |e| e.status),
+            format!("{error:#}"),
+        ),
+        Err(_) => (Status::Error, "Native denoising operation panicked".into()),
     };
-    if !error.is_null() && capacity > 0 {
-        let mut count = message.len().min(capacity - 1);
-        while !message.is_char_boundary(count) {
-            count -= 1;
-        }
-        unsafe {
-            std::ptr::copy_nonoverlapping(message.as_ptr(), error.cast(), count);
-            *error.add(count) = 0;
-        }
-    }
-    i32::from(!message.is_empty())
+    status::write(error, capacity, code, &message)
+}
+fn registry() -> Result<std::sync::MutexGuard<'static, HashMap<u64, Denoiser>>> {
+    DENOISERS.try_lock().map_err(|error| match error {
+        std::sync::TryLockError::WouldBlock => fail(Status::Busy, "Denoiser registry is busy"),
+        std::sync::TryLockError::Poisoned(_) => anyhow::anyhow!("Denoiser registry is poisoned"),
+    })
+}
+fn invalid_handle() -> anyhow::Error {
+    fail(Status::InvalidHandle, "Invalid/destroyed denoiser handle")
 }
 fn state<T>(handle: u64, operation: impl FnOnce(&mut Denoiser) -> Result<T>) -> Result<T> {
     (move || {
-        let mut values = DENOISERS
-            .try_lock()
-            .map_err(|_| anyhow::anyhow!("Denoiser registry is busy"))?;
-        let value = values
-            .get_mut(&handle)
-            .ok_or_else(|| anyhow::anyhow!("Invalid/destroyed denoiser handle"))?;
+        let mut values = registry()?;
+        let value = values.get_mut(&handle).ok_or_else(invalid_handle)?;
         operation(value)
     })()
 }
@@ -57,21 +58,34 @@ pub unsafe extern "C" fn mt_denoiser_create(
     capacity: usize,
 ) -> i32 {
     action(error, capacity, || {
-        ensure!(
-            !output.is_null() && (output as usize) % std::mem::align_of::<u64>() == 0,
-            "Null or unaligned denoiser handle output"
-        );
-        ensure!(backend <= 4, "Invalid native OIDN backend preference");
+        if output.is_null() || (output as usize) % std::mem::align_of::<u64>() != 0 {
+            return Err(fail(
+                Status::InvalidArgument,
+                "Null or unaligned denoiser handle output",
+            ));
+        }
+        if backend > 4 {
+            return Err(fail(
+                Status::InvalidArgument,
+                "Invalid native OIDN backend preference",
+            ));
+        }
         (|| -> Result<()> {
-            let mut values = DENOISERS
-                .try_lock()
-                .map_err(|_| anyhow::anyhow!("Denoiser registry is busy"))?;
+            let mut values = registry()?;
+            let unavailable = |e: anyhow::Error| fail(Status::Unavailable, format!("{e:#}"));
             let denoiser = if library.is_null() {
-                Denoiser::with_backend(backend)?
+                Denoiser::with_backend(backend).map_err(unavailable)?
             } else {
-                let path = unsafe { CStr::from_ptr(library) }.to_str()?;
-                ensure!(!path.is_empty(), "Empty native OIDN library path");
-                Denoiser::from_library(Path::new(path), backend)?
+                let path = unsafe { CStr::from_ptr(library) }.to_str().map_err(|e| {
+                    fail(Status::InvalidArgument, format!("OIDN library path: {e}"))
+                })?;
+                if path.is_empty() {
+                    return Err(fail(
+                        Status::InvalidArgument,
+                        "Empty native OIDN library path",
+                    ));
+                }
+                Denoiser::from_library(Path::new(path), backend).map_err(unavailable)?
             };
             let handle = NEXT
                 .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
@@ -92,10 +106,12 @@ pub unsafe extern "C" fn mt_denoiser_backend(
     capacity: usize,
 ) -> i32 {
     action(error, capacity, || {
-        ensure!(
-            !output.is_null() && (output as usize) % std::mem::align_of::<u32>() == 0,
-            "Null or unaligned denoiser backend output"
-        );
+        if output.is_null() || (output as usize) % std::mem::align_of::<u32>() != 0 {
+            return Err(fail(
+                Status::InvalidArgument,
+                "Null or unaligned denoiser backend output",
+            ));
+        }
         let backend = state(handle, |d| match d.backend {
             "OIDN Metal" => Ok(2),
             "OIDN CPU" => Ok(1),
@@ -126,14 +142,22 @@ pub unsafe extern "C" fn mt_denoiser_run(
         let pixels = (width as usize)
             .checked_mul(height as usize)
             .filter(|n| *n > 0 && *n <= 4_194_304)
-            .ok_or_else(|| anyhow::anyhow!("Invalid OIDN image size"))?;
-        ensure!(count == pixels * 4, "OIDN RGBA float count mismatch");
-        ensure!(
-            [color, normal, albedo, output.cast_const()]
-                .iter()
-                .all(|p| !p.is_null() && (*p as usize) % std::mem::align_of::<f32>() == 0),
-            "Null or unaligned OIDN image pointer"
-        );
+            .ok_or_else(|| fail(Status::InvalidArgument, "Invalid OIDN image size"))?;
+        if count != pixels * 4 {
+            return Err(fail(
+                Status::InvalidArgument,
+                "OIDN RGBA float count mismatch",
+            ));
+        }
+        if ![color, normal, albedo, output.cast_const()]
+            .iter()
+            .all(|p| !p.is_null() && (*p as usize) % std::mem::align_of::<f32>() == 0)
+        {
+            return Err(fail(
+                Status::InvalidArgument,
+                "Null or unaligned OIDN image pointer",
+            ));
+        }
         // No destination write until SDK success. Inputs may overlap each other
         // or the output: the adapter filters into its own initialized buffers.
         let values = {
@@ -156,13 +180,8 @@ pub unsafe extern "C" fn mt_denoiser_destroy(
 ) -> i32 {
     action(error, capacity, || {
         (move || {
-            if DENOISERS
-                .try_lock()
-                .map_err(|_| anyhow::anyhow!("Denoiser registry is busy"))?
-                .remove(&handle)
-                .is_none()
-            {
-                bail!("Invalid/destroyed denoiser handle");
+            if registry()?.remove(&handle).is_none() {
+                return Err(invalid_handle());
             }
             Ok(())
         })()
@@ -271,7 +290,7 @@ mod tests {
                 let filtered = color.clone();
                 let mut invalid = normal.clone();
                 invalid[0] = f32::NAN;
-                assert_ne!(
+                assert_eq!(
                     unsafe {
                         mt_denoiser_run(
                             handle,
@@ -286,7 +305,7 @@ mod tests {
                             error.len(),
                         )
                     },
-                    0
+                    Status::InvalidArgument as i32
                 );
                 assert_eq!(color, filtered);
             }
@@ -299,7 +318,7 @@ mod tests {
             for preference in [2, 3, 4] {
                 let mut error = [0 as c_char; 512];
                 let mut handle = 42;
-                assert_ne!(
+                assert_eq!(
                     unsafe {
                         mt_denoiser_create(
                             path.as_ptr(),
@@ -309,7 +328,7 @@ mod tests {
                             error.len(),
                         )
                     },
-                    0
+                    Status::Unavailable as i32
                 );
                 assert_eq!(handle, 42);
                 let message = unsafe { CStr::from_ptr(error.as_ptr()) }.to_str().unwrap();
@@ -355,9 +374,9 @@ mod tests {
                 unsafe { mt_denoiser_destroy(handle, error.as_mut_ptr(), error.len()) },
                 0
             );
-            assert_ne!(
+            assert_eq!(
                 unsafe { mt_denoiser_destroy(handle, error.as_mut_ptr(), error.len()) },
-                0
+                Status::InvalidHandle as i32
             );
         })
         .join()
@@ -368,7 +387,7 @@ mod tests {
         let _test = TEST_LOCK.lock().unwrap();
         let mut error = [0 as c_char; 128];
         let mut handle = 42;
-        assert_ne!(
+        assert_eq!(
             unsafe {
                 mt_denoiser_create(
                     std::ptr::null(),
@@ -378,19 +397,23 @@ mod tests {
                     error.len(),
                 )
             },
-            0
+            Status::InvalidArgument as i32
         );
         assert_eq!(handle, 42);
         let mut backend = 17;
-        assert_ne!(
+        assert_eq!(
             unsafe { mt_denoiser_backend(0, &mut backend, error.as_mut_ptr(), error.len()) },
-            0
+            Status::InvalidHandle as i32
         );
         assert_eq!(backend, 17);
         let input = [0.5f32; 64];
         let mut output = [123.25f32; 64];
-        for count in [0, 63, 64] {
-            assert_ne!(
+        for (count, status) in [
+            (0, Status::InvalidArgument),
+            (63, Status::InvalidArgument),
+            (64, Status::InvalidHandle),
+        ] {
+            assert_eq!(
                 unsafe {
                     mt_denoiser_run(
                         0,
@@ -405,13 +428,13 @@ mod tests {
                         error.len(),
                     )
                 },
-                0
+                status as i32
             );
             assert_eq!(output, [123.25; 64]);
         }
-        assert_ne!(
+        assert_eq!(
             unsafe { mt_denoiser_destroy(0, std::ptr::null_mut(), 0) },
-            0
+            Status::InvalidHandle as i32
         );
     }
     #[test]
@@ -420,7 +443,7 @@ mod tests {
         for capacity in 1..=128 {
             let mut error = [1 as c_char; 128];
             let mut handle = 42;
-            assert_ne!(
+            assert_eq!(
                 unsafe {
                     mt_denoiser_create(
                         c"/mutracer-missing/不存在/oidn.dylib".as_ptr(),
@@ -430,7 +453,7 @@ mod tests {
                         capacity,
                     )
                 },
-                0
+                Status::Unavailable as i32
             );
             assert_eq!(handle, 42);
             assert!(error[..capacity].contains(&0));

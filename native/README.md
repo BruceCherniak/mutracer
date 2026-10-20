@@ -71,7 +71,8 @@ Rendering accumulation is independent of denoising.
 Provide OIDN **2.5.1** and matching device modules through an explicit library path
 or `MUTRACER_OIDN_LIBRARY`; the standalone viewer already includes them. The native
 library does not bundle that runtime. Denoising blocks and uses additional image
-buffers. Calls may come from any thread; overlapping operations return busy.
+buffers. Calls may come from any thread; overlapping operations return
+`MT_ERROR_BUSY`.
 Images are limited to
 4,194,304 pixels. See the header for exact limits, thread rules
 and memory ownership. Browser/native denoising parity is not guaranteed.
@@ -94,7 +95,7 @@ texture, emission and light type/count/attachment edits in the updated descripto
 A rejected commit retains the previous scene.
 Reset clears sampling while keeping the committed scene. Contexts have independent
 accumulation. Calls may come from any thread; overlapping operations can return
-busy. There is no fixed context-count limit, but GPU memory limits apply. Full
+`MT_ERROR_BUSY`. There is no fixed context-count limit, but GPU memory limits apply. Full
 commit preparation allows the previous scene to keep rendering and can be
 cancelled with `mt_context_cancel_commit`. Destroy waits for pending preparation
 to release its resources. Commit blocks its calling thread; use an application
@@ -163,7 +164,7 @@ Update cost grows with the number of lights and emissive triangles. The
 ## Intersection backend
 
 `mt_context_create` defaults to HWRT. `mt_context_create_with_backend` accepts
-0 for Software and 1 for HWRT. Query `mt_context_backend` after committing to
+`MT_BACKEND_SOFTWARE` or `MT_BACKEND_HWRT`. Query `mt_context_backend` after committing to
 verify the actual path. Unsupported devices and acceleration-structure limits
 or allocation failures fall back to software and report the reason.
 
@@ -282,10 +283,19 @@ material-related expansion. Atlas storage is limited to 64 MiB, 4096 pixels per
 side and 256 layers; source textures can be scaled to fit. The header specifies
 the remaining validation and format constraints.
 
-C API failures return a nonzero status and an error message. Validation and
-preparation errors preserve the current scene. A caught Rust panic marks the
-affected context failed; replace its scene with a successful commit or destroy
-it before reuse. Rust's process-wide panic hook can still emit panic diagnostics.
+Every C API call returns `MT_OK` (0) or a nonzero `mt_status` from
+[mutracer-status.h](include/mutracer-status.h), plus an optional message for
+people. Branch on the code rather than the message: retry `MT_ERROR_BUSY`,
+submit a full commit after `MT_ERROR_FULL_COMMIT_REQUIRED`, and enlarge the
+destination after `MT_ERROR_BUFFER_TOO_SMALL`. Treat an unknown nonzero code as
+a failure; later versions may add codes. The same header names the backend,
+image kind, context/job state, sampling pattern and denoiser backend values.
+When loading the library dynamically, compare `mt_abi_version()` with the
+`MT_ABI_VERSION` you compiled against.
+
+Validation and preparation errors preserve the current scene.
+`MT_ERROR_CONTEXT_FAILED`, including a caught Rust panic, marks the context
+failed; replace its scene with a successful commit or destroy it before reuse. Rust's process-wide panic hook can still emit panic diagnostics.
 Fatal runtime errors, including allocation failure and abort, terminate
 the process and cannot become C API errors. Applications that require recovery
 from these failures need process isolation.

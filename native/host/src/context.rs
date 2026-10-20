@@ -82,7 +82,10 @@ impl RenderJob {
 }
 fn idle(context: &Context) -> Result<()> {
     if !context.failed && context.job.as_ref().is_some_and(|j| j.active()) {
-        return Err("Context has an active render job; cancel and poll it first".into());
+        return Err(fail(
+            Status::InvalidState,
+            "Context has an active render job; cancel and poll it first",
+        ));
     }
     Ok(())
 }
@@ -91,7 +94,8 @@ struct Registry {
     contexts: HashMap<u64, Context>,
 }
 static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
-thread_local! { static TOUCHED: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) }; }
+// The context an ABI call resolved, and whether it was already failed then.
+thread_local! { static TOUCHED: std::cell::Cell<Option<(u64, bool)>> = const { std::cell::Cell::new(None) }; }
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -110,9 +114,10 @@ fn action(
     operation: impl FnOnce(&mut Registry) -> Result<()>,
 ) -> i32 {
     let result = platform_scope(|| -> Result<()> {
-        let mut slot = REGISTRY
-            .try_lock()
-            .map_err(|_| "Context registry is active or poisoned")?;
+        let mut slot = REGISTRY.try_lock().map_err(|error| match error {
+            std::sync::TryLockError::WouldBlock => fail(Status::Busy, "Context registry is active"),
+            std::sync::TryLockError::Poisoned(_) => "Context registry is poisoned".into(),
+        })?;
         let registry = slot.get_or_insert_with(|| Registry {
             next: 1,
             contexts: HashMap::new(),
@@ -120,33 +125,48 @@ fn action(
         // Catch while guards remain in scope, avoiding mutex poisoning.
         TOUCHED.set(None);
         match std::panic::catch_unwind(AssertUnwindSafe(|| operation(registry))) {
-            Ok(result) => result,
-            Err(_) => {
-                if let Some(context) = TOUCHED.get().and_then(|id| registry.contexts.get_mut(&id)) {
-                    context.failed = true;
+            Ok(Ok(())) => Ok(()),
+            // An unclassified error that left a healthy context failed came from
+            // execution after validation; report the state change it caused.
+            Ok(Err(error)) => {
+                let newly_failed = TOUCHED.get().is_some_and(|(id, was_failed)| {
+                    !was_failed && registry.contexts.get(&id).is_some_and(|c| c.failed)
+                });
+                if newly_failed && classify(error.as_ref(), Status::Error) == Status::Error {
+                    Err(fail(Status::ContextFailed, error.to_string()))
+                } else {
+                    Err(error)
                 }
-                Err("Native context operation panicked; context marked failed".into())
+            }
+            Err(_) => {
+                match TOUCHED
+                    .get()
+                    .and_then(|(id, _)| registry.contexts.get_mut(&id))
+                {
+                    Some(context) => {
+                        context.failed = true;
+                        Err(fail(
+                            Status::ContextFailed,
+                            "Native context operation panicked; context marked failed",
+                        ))
+                    }
+                    None => Err("Native context operation panicked".into()),
+                }
             }
         }
     });
     write_result(error, capacity, result)
 }
 fn write_result(error: *mut c_char, capacity: usize, result: Result<()>) -> i32 {
-    let (status, message) = match result {
-        Ok(()) => (0, String::new()),
-        Err(e) => (1, e.to_string()),
-    };
-    if !error.is_null() && capacity > 0 {
-        let mut count = message.len().min(capacity - 1);
-        while !message.is_char_boundary(count) {
-            count -= 1;
-        }
-        unsafe {
-            std::ptr::copy_nonoverlapping(message.as_ptr(), error.cast(), count);
-            *error.add(count) = 0;
-        }
+    match result {
+        Ok(()) => status::write(error, capacity, Status::Ok, ""),
+        Err(e) => status::write(
+            error,
+            capacity,
+            classify(e.as_ref(), Status::Error),
+            &e.to_string(),
+        ),
     }
-    status
 }
 // Probes have their own owned inputs and use the same dedicated AOT runtime.
 pub(super) fn check_owner() -> Result<()> {
@@ -156,19 +176,24 @@ fn context(registry: &mut Registry, handle: u64) -> Result<&mut Context> {
     let context = registry
         .contexts
         .get_mut(&handle)
-        .ok_or("Invalid or destroyed native context")?;
-    TOUCHED.set(Some(handle));
+        .ok_or_else(|| fail(Status::InvalidHandle, "Invalid or destroyed native context"))?;
+    if TOUCHED.get().is_none() {
+        TOUCHED.set(Some((handle, context.failed)));
+    }
     Ok(context)
 }
 
 fn ready(context: &mut Context) -> Result<&mut GpuScene> {
     if context.failed {
-        return Err("Scene failed; commit a new scene before rendering or reading".into());
+        return Err(fail(
+            Status::InvalidState,
+            "Scene failed; commit a new scene before rendering or reading",
+        ));
     }
     context
         .scene
         .as_mut()
-        .ok_or_else(|| "No committed scene".into())
+        .ok_or_else(|| fail(Status::InvalidState, "No committed scene"))
 }
 // Direct AS preparation deliberately omits the software BVH. Re-run the shared
 // TS preparation only when hardware capture/upload fails, replacing its retained
@@ -298,7 +323,7 @@ pub unsafe extern "C" fn mt_context_create_with_backend(
 ) -> i32 {
     action(error, capacity, |registry| {
         if output.is_null() {
-            return Err("Null context output".into());
+            return Err(fail(Status::InvalidArgument, "Null context output"));
         }
         unsafe {
             *output = 0;
@@ -308,9 +333,13 @@ pub unsafe extern "C" fn mt_context_create_with_backend(
             .checked_add(1)
             .ok_or("Native context handles exhausted")?;
         if backend > 1 {
-            return Err("Unknown native intersection backend".into());
+            return Err(fail(
+                Status::InvalidArgument,
+                "Unknown native intersection backend",
+            ));
         }
-        let gpu = GpuDevice::with_backend(backend)?;
+        let gpu = GpuDevice::with_backend(backend)
+            .map_err(|e| fail(Status::Unavailable, format!("GPU device unavailable: {e}")))?;
         registry.contexts.insert(
             handle,
             Context {
@@ -410,7 +439,10 @@ unsafe fn commit_with_settings(
         return write_result(
             error,
             capacity,
-            Err("Null or oversized scene/settings input".into()),
+            Err(fail(
+                Status::InvalidArgument,
+                "Null or oversized scene/settings input",
+            )),
         );
     }
     let settings = unsafe { *settings };
@@ -421,7 +453,10 @@ unsafe fn commit_with_settings(
     let status = action(error, capacity, |registry| {
         let context = context(registry, handle)?;
         if context.commit.is_some() {
-            return Err("Scene commit is already preparing".into());
+            return Err(fail(
+                Status::InvalidState,
+                "Scene commit is already preparing",
+            ));
         }
         snapshot = Some(CommitSnapshot {
             gpu: context.gpu.clone(),
@@ -447,7 +482,8 @@ unsafe fn commit_with_settings(
                     && hardware::direct_input_enabled(),
                 snapshot.backend,
                 &settings,
-            )?;
+            )
+            .map_err(rejected)?;
             cancelled(&cancel)?;
             let prepared = Instant::now();
             let uniform = assets
@@ -557,7 +593,10 @@ unsafe fn commit_with_settings(
     }));
     let panicked = outcome.is_err();
     let result = outcome.unwrap_or_else(|_| {
-        Err("Native commit preparation panicked; context marked failed".into())
+        Err(fail(
+            Status::ContextFailed,
+            "Native commit preparation panicked; context marked failed",
+        ))
     });
     // Publication waits for any currently executing ABI operation, but never
     // holds the registry while waiting for CPU preparation. Cancellation wins
@@ -565,7 +604,11 @@ unsafe fn commit_with_settings(
     let mut slot = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
     let registry = slot.as_mut().expect("initialized context registry");
     let result = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<()> {
-        let context = context(registry, handle)?;
+        // Destroy cancels a pending commit before removing its context.
+        let context = context(registry, handle).or_else(|error| {
+            cancelled(&cancel)?;
+            Err(error)
+        })?;
         context.commit = None;
         if panicked {
             context.failed = true;
@@ -599,7 +642,10 @@ unsafe fn commit_with_settings(
             context.failed = true;
             context.commit = None;
         }
-        Err("Native commit publication panicked; context marked failed".into())
+        Err(fail(
+            Status::ContextFailed,
+            "Native commit publication panicked; context marked failed",
+        ))
     });
 
     drop(slot);
@@ -613,7 +659,7 @@ struct CommitSnapshot {
 }
 fn cancelled(cancel: &PendingCommit) -> Result<()> {
     if cancel.cancelled.load(Ordering::Acquire) {
-        Err("Scene commit cancelled".into())
+        Err(fail(Status::Cancelled, "Scene commit cancelled"))
     } else {
         Ok(())
     }
@@ -649,7 +695,10 @@ pub unsafe extern "C" fn mt_context_render(
         idle(context)?;
         let scene = ready(context)?;
         if additional == 0 || additional > 4096 - scene.samples {
-            return Err("Total samples must be 1..4096".into());
+            return Err(fail(
+                Status::InvalidArgument,
+                "Total samples must be 1..4096",
+            ));
         }
         context.job = None;
         context.failed = true;
@@ -698,18 +747,23 @@ pub unsafe extern "C" fn mt_context_update_camera(
 ) -> i32 {
     action(error, capacity, |registry| {
         if registry.contexts.values().any(|c| c.commit.is_some()) {
-            return Err(
-                "Scene commit is preparing; retry incremental edits after it finishes".into(),
-            );
+            return Err(fail(
+                Status::InvalidState,
+                "Scene commit is preparing; retry incremental edits after it finishes",
+            ));
         }
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
         if input.is_null() || length != 128 {
-            return Err("Camera descriptor must contain exactly 128 bytes".into());
+            return Err(fail(
+                Status::InvalidArgument,
+                "Camera descriptor must contain exactly 128 bytes",
+            ));
         }
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
-        let packed = scene::prepare_camera(bytes, scene.scene.width, scene.scene.height)?;
+        let packed = scene::prepare_camera(bytes, scene.scene.width, scene.scene.height)
+            .map_err(rejected)?;
         context.failed = true;
         context.scene.as_mut().unwrap().update_camera(&packed)?;
         context.job = None;
@@ -728,22 +782,27 @@ pub unsafe extern "C" fn mt_context_update_material(
 ) -> i32 {
     action(error, capacity, |registry| {
         if registry.contexts.values().any(|c| c.commit.is_some()) {
-            return Err(
-                "Scene commit is preparing; retry incremental edits after it finishes".into(),
-            );
+            return Err(fail(
+                Status::InvalidState,
+                "Scene commit is preparing; retry incremental edits after it finishes",
+            ));
         }
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
         if input.is_null() || length != 48 {
-            return Err("Material descriptor must contain exactly 48 bytes".into());
+            return Err(fail(
+                Status::InvalidArgument,
+                "Material descriptor must contain exactly 48 bytes",
+            ));
         }
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
         let packed = scene
             .retained
             .as_ref()
             .ok_or("No retained material preparation")?
-            .material(bytes)?;
+            .material(bytes)
+            .map_err(rejected)?;
         context.failed = true;
         context.scene.as_mut().unwrap().update_material(&packed)?;
         context.job = None;
@@ -762,22 +821,27 @@ pub unsafe extern "C" fn mt_context_update_environment(
 ) -> i32 {
     action(error, capacity, |registry| {
         if registry.contexts.values().any(|c| c.commit.is_some()) {
-            return Err(
-                "Scene commit is preparing; retry incremental edits after it finishes".into(),
-            );
+            return Err(fail(
+                Status::InvalidState,
+                "Scene commit is preparing; retry incremental edits after it finishes",
+            ));
         }
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
         if input.is_null() || length < 48 || length > scene::MAX_BYTES {
-            return Err("Invalid environment descriptor length".into());
+            return Err(fail(
+                Status::InvalidArgument,
+                "Invalid environment descriptor length",
+            ));
         }
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
         let packed = scene
             .retained
             .as_ref()
             .ok_or("No retained environment preparation")?
-            .environment(bytes)?;
+            .environment(bytes)
+            .map_err(rejected)?;
         scene.validate_lighting(&packed)?;
         context.failed = true;
         context.scene.as_mut().unwrap().update_lighting(&packed)?;
@@ -805,22 +869,27 @@ pub unsafe extern "C" fn mt_context_update_geometry(
 ) -> i32 {
     action(error, capacity, |registry| {
         if registry.contexts.values().any(|c| c.commit.is_some()) {
-            return Err(
-                "Scene commit is preparing; retry incremental edits after it finishes".into(),
-            );
+            return Err(fail(
+                Status::InvalidState,
+                "Scene commit is preparing; retry incremental edits after it finishes",
+            ));
         }
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
         if input.is_null() || length < 16 || length > scene::MAX_BYTES {
-            return Err("Invalid geometry update length".into());
+            return Err(fail(
+                Status::InvalidArgument,
+                "Invalid geometry update length",
+            ));
         }
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
         let packed = scene
             .retained
             .as_ref()
             .ok_or("No retained geometry preparation")?
-            .geometry(bytes)?;
+            .geometry(bytes)
+            .map_err(rejected)?;
         scene.validate_lighting(&packed)?;
         let hardware = scene.prepare_geometry_hardware(&packed)?;
         context.failed = true;
@@ -851,22 +920,27 @@ pub unsafe extern "C" fn mt_context_update_transform(
 ) -> i32 {
     action(error, capacity, |registry| {
         if registry.contexts.values().any(|c| c.commit.is_some()) {
-            return Err(
-                "Scene commit is preparing; retry incremental edits after it finishes".into(),
-            );
+            return Err(fail(
+                Status::InvalidState,
+                "Scene commit is preparing; retry incremental edits after it finishes",
+            ));
         }
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
         if input.is_null() || length != 80 {
-            return Err("Transform descriptor must contain exactly 80 bytes".into());
+            return Err(fail(
+                Status::InvalidArgument,
+                "Transform descriptor must contain exactly 80 bytes",
+            ));
         }
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
         let packed = scene
             .retained
             .as_ref()
             .ok_or("No retained transform preparation")?
-            .transform(bytes)?;
+            .transform(bytes)
+            .map_err(rejected)?;
         scene.validate_lighting(&packed)?;
         let hardware = scene
             .hardware
@@ -901,22 +975,27 @@ pub unsafe extern "C" fn mt_context_update_light(
 ) -> i32 {
     action(error, capacity, |registry| {
         if registry.contexts.values().any(|c| c.commit.is_some()) {
-            return Err(
-                "Scene commit is preparing; retry incremental edits after it finishes".into(),
-            );
+            return Err(fail(
+                Status::InvalidState,
+                "Scene commit is preparing; retry incremental edits after it finishes",
+            ));
         }
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
         if input.is_null() || length != 128 {
-            return Err("Light descriptor must contain exactly 128 bytes".into());
+            return Err(fail(
+                Status::InvalidArgument,
+                "Light descriptor must contain exactly 128 bytes",
+            ));
         }
         let bytes = unsafe { std::slice::from_raw_parts(input, length) };
         let packed = scene
             .retained
             .as_ref()
             .ok_or("No retained light preparation")?
-            .light(bytes)?;
+            .light(bytes)
+            .map_err(rejected)?;
         scene.validate_lighting(&packed)?;
         context.failed = true;
         context.scene.as_mut().unwrap().update_lighting(&packed)?;
@@ -945,7 +1024,7 @@ pub unsafe extern "C" fn mt_context_info(
         if info.is_null()
             || unsafe { (*info).struct_size } != std::mem::size_of::<ContextInfo>() as u32
         {
-            return Err("Context info size mismatch".into());
+            return Err(fail(Status::InvalidArgument, "Context info size mismatch"));
         }
         let (width, height, samples) = context
             .scene
@@ -986,7 +1065,7 @@ pub unsafe extern "C" fn mt_context_read_pixels(
 ) -> i32 {
     action(error, capacity, |registry| {
         if written.is_null() {
-            return Err("Null pixel length output".into());
+            return Err(fail(Status::InvalidArgument, "Null pixel length output"));
         }
         unsafe {
             *written = 0;
@@ -994,8 +1073,11 @@ pub unsafe extern "C" fn mt_context_read_pixels(
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
-        if kind > 2 || scene.samples == 0 {
-            return Err("Unknown image kind or no completed samples".into());
+        if kind > 2 {
+            return Err(fail(Status::InvalidArgument, "Unknown image kind"));
+        }
+        if scene.samples == 0 {
+            return Err(fail(Status::InvalidState, "No completed samples"));
         }
         let required = scene.scene.width as usize * scene.scene.height as usize * 16;
         unsafe {
@@ -1004,8 +1086,14 @@ pub unsafe extern "C" fn mt_context_read_pixels(
         if pixels.is_null() && size == 0 {
             return Ok(());
         }
-        if pixels.is_null() || size < required {
-            return Err("Pixel destination is null or too small".into());
+        if pixels.is_null() {
+            return Err(fail(Status::InvalidArgument, "Null pixel destination"));
+        }
+        if size < required {
+            return Err(fail(
+                Status::BufferTooSmall,
+                "Pixel destination is too small",
+            ));
         }
         context.failed = true;
         let values = context.scene.as_ref().unwrap().read_pixels(kind)?;
@@ -1033,8 +1121,10 @@ fn job_context(registry: &mut Registry, id: u64) -> Result<&mut Context> {
         .contexts
         .iter_mut()
         .find(|(_, c)| c.job.as_ref().is_some_and(|j| j.id == id))
-        .ok_or("Invalid or expired render job")?;
-    TOUCHED.set(Some(*handle));
+        .ok_or_else(|| fail(Status::InvalidHandle, "Invalid or expired render job"))?;
+    if TOUCHED.get().is_none() {
+        TOUCHED.set(Some((*handle, context.failed)));
+    }
     Ok(context)
 }
 
@@ -1048,7 +1138,7 @@ pub unsafe extern "C" fn mt_context_submit(
 ) -> i32 {
     action(error, capacity, |registry| {
         if output.is_null() {
-            return Err("Null render job output".into());
+            return Err(fail(Status::InvalidArgument, "Null render job output"));
         }
         let id = registry.next;
         let next = id.checked_add(1).ok_or("Native handles exhausted")?;
@@ -1056,7 +1146,10 @@ pub unsafe extern "C" fn mt_context_submit(
         idle(context)?;
         let scene = ready(context)?;
         if additional == 0 || additional > 4096 - scene.samples {
-            return Err("Total samples must be 1..4096".into());
+            return Err(fail(
+                Status::InvalidArgument,
+                "Total samples must be 1..4096",
+            ));
         }
         let base = scene.samples;
         context.job = Some(RenderJob {
@@ -1136,11 +1229,17 @@ pub unsafe extern "C" fn mt_job_poll(
 ) -> i32 {
     action(error, capacity, |registry| {
         if budget > 64 {
-            return Err("Poll dispatch budget must be 0..64 samples".into());
+            return Err(fail(
+                Status::InvalidArgument,
+                "Poll dispatch budget must be 0..64 samples",
+            ));
         }
         let context = job_context(registry, id)?;
         if context.failed {
-            return Err("Render scene failed; commit a new scene".into());
+            return Err(fail(
+                Status::InvalidState,
+                "Render scene failed; commit a new scene",
+            ));
         }
         context.failed = true;
         let result = advance_job(context, budget);
@@ -1163,7 +1262,7 @@ pub unsafe extern "C" fn mt_job_info(
         let context = job_context(registry, id)?;
         if info.is_null() || unsafe { (*info).struct_size } != std::mem::size_of::<JobInfo>() as u32
         {
-            return Err("Job info size mismatch".into());
+            return Err(fail(Status::InvalidArgument, "Job info size mismatch"));
         }
         let job = context.job.as_ref().unwrap();
         unsafe {
@@ -1311,7 +1410,7 @@ mod tests {
             }
         }
         resume.send(()).unwrap();
-        assert_eq!(committing.join().unwrap(), 1);
+        assert_eq!(committing.join().unwrap(), Status::Cancelled as i32);
         let mut before = vec![0u8; 8 * 8 * 16];
         let mut after = before.clone();
         let mut written = 0;
@@ -1443,7 +1542,7 @@ mod tests {
         }
         assert!(!destroying.is_finished());
         resume.send(()).unwrap();
-        assert_eq!(committing.join().unwrap(), 1);
+        assert_eq!(committing.join().unwrap(), Status::Cancelled as i32);
         assert_eq!(destroying.join().unwrap(), 0);
         assert!(*pending.finished.lock().unwrap());
         assert!(
@@ -1758,7 +1857,7 @@ mod tests {
                 let _ = context(registry, handle)?;
                 panic!("context-specific boundary probe");
             }),
-            1
+            Status::ContextFailed as i32
         );
         assert!(REGISTRY.lock().unwrap().as_ref().unwrap().contexts[&handle].failed);
         let input = scene::tests::input();
@@ -1810,6 +1909,105 @@ mod tests {
             1
         );
     }
+    #[test]
+    fn rejected_calls_report_specific_status_codes() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let mut error = [0i8; 256];
+        let (e, n) = (error.as_mut_ptr(), error.len());
+        let full: Result<()> = Err("Full scene commit required: probe".into());
+        assert_eq!(action(e, n, |_| full), Status::FullCommitRequired as i32);
+        let mut handle = 7;
+        unsafe {
+            assert_eq!(
+                mt_context_create_with_backend(2, &mut handle, e, n),
+                Status::InvalidArgument as i32
+            );
+            assert_eq!(handle, 0);
+            assert_eq!(
+                mt_context_render(u64::MAX, 1, e, n),
+                Status::InvalidHandle as i32
+            );
+            assert_eq!(
+                mt_job_poll(u64::MAX, 65, e, n),
+                Status::InvalidArgument as i32
+            );
+            assert_eq!(mt_job_poll(u64::MAX, 1, e, n), Status::InvalidHandle as i32);
+            let mut written = 1;
+            assert_eq!(
+                mt_context_read_pixels(u64::MAX, 0, std::ptr::null_mut(), 0, &mut written, e, n),
+                Status::InvalidHandle as i32
+            );
+            assert_eq!(written, 0);
+            assert_eq!(
+                settings::mt_render_settings_default(std::ptr::null_mut()),
+                Status::InvalidArgument as i32
+            );
+        }
+        // A held registry is reported as retryable busy work.
+        let held = REGISTRY.lock().unwrap();
+        assert_eq!(action(e, n, |_| Ok(())), Status::Busy as i32);
+        drop(held);
+    }
+    #[test]
+    fn scene_state_errors_and_short_reads_report_status_codes() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let mut handle = 0;
+        let mut error = [0i8; 512];
+        let (e, n) = (error.as_mut_ptr(), error.len());
+        unsafe {
+            if mt_context_create_with_backend(0, &mut handle, e, n) != 0 {
+                return;
+            }
+            assert_eq!(
+                mt_context_render(handle, 1, e, n),
+                Status::InvalidState as i32
+            );
+            let input = scene::tests::input();
+            let mut bad = input.clone();
+            bad[0] = 99;
+            assert_eq!(
+                mt_context_commit(handle, bad.as_ptr(), bad.len(), e, n),
+                Status::InvalidArgument as i32
+            );
+            assert_eq!(
+                mt_context_commit(handle, input.as_ptr(), input.len(), e, n),
+                0
+            );
+            let mut written = 0;
+            assert_eq!(
+                mt_context_read_pixels(handle, 0, std::ptr::null_mut(), 0, &mut written, e, n),
+                Status::InvalidState as i32
+            );
+            assert_eq!(mt_context_render(handle, 1, e, n), 0);
+            let mut short = [0u8; 16];
+            assert_eq!(
+                mt_context_read_pixels(
+                    handle,
+                    0,
+                    short.as_mut_ptr(),
+                    short.len(),
+                    &mut written,
+                    e,
+                    n
+                ),
+                Status::BufferTooSmall as i32
+            );
+            assert!(written > short.len());
+            assert_eq!(
+                mt_context_read_pixels(
+                    handle,
+                    3,
+                    short.as_mut_ptr(),
+                    short.len(),
+                    &mut written,
+                    e,
+                    n
+                ),
+                Status::InvalidArgument as i32
+            );
+            assert_eq!(mt_context_destroy(handle, e, n), 0);
+        }
+    }
 }
 
 /// Actual backend: 0=software, 1=authoritative HWRT.
@@ -1824,7 +2022,7 @@ pub unsafe extern "C" fn mt_context_backend(
 ) -> i32 {
     action(error, capacity, |registry| {
         if active.is_null() || reason.is_null() || reason_capacity == 0 {
-            return Err("Invalid backend info output".into());
+            return Err(fail(Status::InvalidArgument, "Invalid backend info output"));
         }
         let context = context(registry, handle)?;
         let scene = ready(context)?;

@@ -72,7 +72,7 @@ impl RenderSettings {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_render_settings_default(output: *mut RenderSettings) -> i32 {
     if output.is_null() {
-        return 1;
+        return crate::Status::InvalidArgument as i32;
     }
     unsafe {
         *output = RenderSettings::default();

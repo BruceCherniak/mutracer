@@ -3,6 +3,7 @@ use anyhow::{Result, bail, ensure};
 use glam::{Affine3A, Mat4, Vec3};
 use mutracer_native_probe::context as native;
 use mutracer_native_probe::layout::camera as camera_wire;
+use mutracer_native_probe::status::Status;
 use std::{
     ffi::CStr,
     sync::Arc,
@@ -20,16 +21,25 @@ pub struct Renderer {
         Arc<mutracer_native_probe::submission::SubmissionGate>,
     )>,
 }
-fn check(operation: impl FnOnce(*mut i8, usize) -> i32) -> Result<()> {
+fn call(operation: impl FnOnce(*mut i8, usize) -> i32) -> (i32, String) {
     let mut error = [0i8; 4096];
-    if operation(error.as_mut_ptr(), error.len()) != 0 {
-        bail!(
-            unsafe { CStr::from_ptr(error.as_ptr()) }
-                .to_string_lossy()
-                .into_owned()
-        );
+    let code = operation(error.as_mut_ptr(), error.len());
+    let message = unsafe { CStr::from_ptr(error.as_ptr()) }.to_string_lossy();
+    (code, message.into_owned())
+}
+fn check(operation: impl FnOnce(*mut i8, usize) -> i32) -> Result<()> {
+    match call(operation) {
+        (0, _) => Ok(()),
+        (_, message) => bail!(message),
     }
-    Ok(())
+}
+/// False requests a full commit for a change the incremental update cannot express.
+fn incremental(operation: impl FnOnce(*mut i8, usize) -> i32) -> Result<bool> {
+    match call(operation) {
+        (0, _) => Ok(true),
+        (code, _) if code == Status::FullCommitRequired as i32 => Ok(false),
+        (_, message) => bail!(message),
+    }
 }
 impl Renderer {
     pub fn new() -> Result<Self> {
@@ -158,50 +168,30 @@ impl Renderer {
     }
     /// False requests a full commit for an unsupported feature change.
     pub fn material(&mut self, bytes: &[u8]) -> Result<bool> {
-        match check(|e, n| unsafe {
+        incremental(|e, n| unsafe {
             native::mt_context_update_material(self.handle, bytes.as_ptr(), bytes.len(), e, n)
-        }) {
-            Ok(()) => Ok(true),
-            Err(error) if error.to_string().starts_with("Full scene commit required:") => Ok(false),
-            Err(error) => Err(error),
-        }
+        })
     }
     /// False requests a full commit when resource shapes or shader features change.
     pub fn environment(&mut self, bytes: &[u8]) -> Result<bool> {
-        match check(|e, n| unsafe {
+        incremental(|e, n| unsafe {
             native::mt_context_update_environment(self.handle, bytes.as_ptr(), bytes.len(), e, n)
-        }) {
-            Ok(()) => Ok(true),
-            Err(error) if error.to_string().starts_with("Full scene commit required:") => Ok(false),
-            Err(error) => Err(error),
-        }
+        })
     }
     pub fn light(&mut self, bytes: &[u8]) -> Result<bool> {
-        match check(|e, n| unsafe {
+        incremental(|e, n| unsafe {
             native::mt_context_update_light(self.handle, bytes.as_ptr(), bytes.len(), e, n)
-        }) {
-            Ok(()) => Ok(true),
-            Err(error) if error.to_string().starts_with("Full scene commit required:") => Ok(false),
-            Err(error) => Err(error),
-        }
+        })
     }
     pub fn geometry(&mut self, bytes: &[u8]) -> Result<bool> {
-        match check(|e, n| unsafe {
+        incremental(|e, n| unsafe {
             native::mt_context_update_geometry(self.handle, bytes.as_ptr(), bytes.len(), e, n)
-        }) {
-            Ok(()) => Ok(true),
-            Err(error) if error.to_string().starts_with("Full scene commit required:") => Ok(false),
-            Err(error) => Err(error),
-        }
+        })
     }
     pub fn transform(&mut self, bytes: &[u8]) -> Result<bool> {
-        match check(|e, n| unsafe {
+        incremental(|e, n| unsafe {
             native::mt_context_update_transform(self.handle, bytes.as_ptr(), bytes.len(), e, n)
-        }) {
-            Ok(()) => Ok(true),
-            Err(error) if error.to_string().starts_with("Full scene commit required:") => Ok(false),
-            Err(error) => Err(error),
-        }
+        })
     }
     pub fn camera(&mut self, bytes: &[u8]) -> Result<()> {
         check(|e, n| unsafe {

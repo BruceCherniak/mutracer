@@ -34,8 +34,10 @@ mod profiling;
 mod runtime;
 mod scene;
 pub mod settings;
+pub mod status;
 pub mod submission;
 mod tinybvh;
+use status::{Status, classify, fail, rejected};
 use submission::GpuQueue;
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
