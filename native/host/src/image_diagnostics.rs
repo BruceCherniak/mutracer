@@ -103,6 +103,17 @@ fn render(
     if counts {
         add_closest_counters(&mut scene, &mut assets)?;
     }
+    #[cfg(feature = "validation")]
+    let ordinary_source = if audit {
+        let id = scene
+            .hwrt
+            .as_ref()
+            .and_then(|h| h.shader)
+            .unwrap_or(scene.shader);
+        Some(String::from_utf8(assets[&id].clone())?)
+    } else {
+        None
+    };
     if audit {
         #[cfg(not(feature = "validation"))]
         return Err("Build with --features validation for sample auditing".into());
@@ -186,6 +197,29 @@ fn render(
             return Err(format!("Non-finite {name} diagnostic").into());
         }
         fs::write(output.join(format!("{name}.bin")), bytes)?;
+    }
+    #[cfg(feature = "validation")]
+    if let Some(source) = ordinary_source {
+        // The full-size control catches shader/compiler changes that a small
+        // fixture cannot. Its AS and immutable resources are identical.
+        sample_audit::ordinary_pipeline(&mut state, source);
+        state.reset_raw()?;
+        for start in (0..samples).step_by(8) {
+            state.add_samples((samples - start).min(8), options.bounces, seed)?;
+        }
+        let mut fidelity = serde_json::Map::new();
+        for (kind, name) in [(0, "hdr"), (1, "normal"), (2, "albedo")] {
+            let bytes = state.read_pixels(kind)?;
+            fidelity.insert(
+                name.into(),
+                json!(bytes == fs::read(output.join(format!("{name}.bin")))?),
+            );
+            fs::write(output.join(format!("ordinary-{name}.bin")), bytes)?;
+        }
+        fs::write(
+            output.join("same-as-fidelity.json"),
+            serde_json::to_vec_pretty(&fidelity)?,
+        )?;
     }
     if counts {
         fs::write(

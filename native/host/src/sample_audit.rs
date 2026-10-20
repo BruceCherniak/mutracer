@@ -51,6 +51,40 @@ pub(super) fn install(scene: &mut Scene, assets: &mut Assets) -> Result<()> {
     Ok(())
 }
 
+/// Reuse the same immutable buffers and AS for an ordinary shader control.
+pub(super) fn ordinary_pipeline(state: &mut GpuScene, source: String) {
+    let layouts: Vec<_> = (0..state.groups.len())
+        .map(|i| state.pipeline.get_bind_group_layout(i as u32))
+        .collect();
+    let refs: Vec<_> = layouts.iter().map(Some).collect();
+    let layout = state
+        .gpu
+        .device
+        .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("ordinary validation layout"),
+            bind_group_layouts: &refs,
+            ..Default::default()
+        });
+    let module = state
+        .gpu
+        .device
+        .create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("ordinary validation shader"),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+    state.pipeline = state
+        .gpu
+        .device
+        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("ordinary validation pipeline"),
+            layout: Some(&layout),
+            module: &module,
+            entry_point: Some(&state.scene.entry_point),
+            compilation_options: Default::default(),
+            cache: None,
+        });
+}
+
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub(super) struct Sample {
@@ -234,38 +268,7 @@ mod tests {
                 assert_eq!(audit.short_pixels + audit.invalid_pixels, 0);
             }
             let audited: Vec<_> = (0..3).map(|k| state.read_pixels(k).unwrap()).collect();
-            let layouts: Vec<_> = (0..state.groups.len())
-                .map(|i| state.pipeline.get_bind_group_layout(i as u32))
-                .collect();
-            let refs: Vec<_> = layouts.iter().map(Some).collect();
-            let pipeline_layout =
-                state
-                    .gpu
-                    .device
-                    .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                        label: Some("ordinary validation layout"),
-                        bind_group_layouts: &refs,
-                        ..Default::default()
-                    });
-            let module = state
-                .gpu
-                .device
-                .create_shader_module(wgpu::ShaderModuleDescriptor {
-                    label: Some("ordinary validation shader"),
-                    source: wgpu::ShaderSource::Wgsl(original.into()),
-                });
-            state.pipeline =
-                state
-                    .gpu
-                    .device
-                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                        label: Some("ordinary validation pipeline"),
-                        layout: Some(&pipeline_layout),
-                        module: &module,
-                        entry_point: Some(&state.scene.entry_point),
-                        compilation_options: Default::default(),
-                        cache: None,
-                    });
+            ordinary_pipeline(&mut state, original);
             state.reset_raw().unwrap();
             state.add_samples(8, 6., 12345).unwrap();
             for kind in 0..3 {

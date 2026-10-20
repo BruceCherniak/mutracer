@@ -132,37 +132,7 @@ pub fn run(input: &[u8], output: &Path, backend: u32) -> Result<()> {
     {
         // Compare on the same AS. Rebuilding between the instrumented and
         // ordinary pass can legitimately choose another coplanar triangle.
-        let layouts: Vec<_> = (0..state.groups.len())
-            .map(|i| state.pipeline.get_bind_group_layout(i as u32))
-            .collect();
-        let refs: Vec<_> = layouts.iter().map(Some).collect();
-        let layout = state
-            .gpu
-            .device
-            .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("path fidelity layout"),
-                bind_group_layouts: &refs,
-                ..Default::default()
-            });
-        let module = state
-            .gpu
-            .device
-            .create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("ordinary path fidelity shader"),
-                source: wgpu::ShaderSource::Wgsl(ordinary_source.into()),
-            });
-        state.pipeline =
-            state
-                .gpu
-                .device
-                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                    label: Some("ordinary path fidelity pipeline"),
-                    layout: Some(&layout),
-                    module: &module,
-                    entry_point: Some(&state.scene.entry_point),
-                    compilation_options: Default::default(),
-                    cache: None,
-                });
+        sample_audit::ordinary_pipeline(&mut state, ordinary_source);
         state.reset_raw()?;
         state.add_samples(1, 6., 12345)?;
         let mut fidelity = serde_json::Map::new();

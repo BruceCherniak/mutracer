@@ -57,7 +57,10 @@ def statistics(args):
             evidence = sample_evidence(*audits)
             if evidence:
                 return fault(evidence, '64spp image comparison')
-            row = dict(key=key, collection=coll, statistics={}, softwareBytes={})
+            fidelity = [load(folder/str(b)/'same-as-fidelity.json') for b in [0,1]]
+            if not all(all(v.values()) for v in fidelity):
+                return dict(passed=False, classification='unknown', step='same-AS sample instrumentation fidelity', details=fidelity)
+            row = dict(key=key, collection=coll, statistics={}, softwareBytes={}, sameAsFidelity=fidelity)
             for kind in KINDS:
                 paths = [folder / '0' / (kind+'.bin'), folder / '1' / (kind+'.bin'), reference / (kind+'.bin')]
                 a, b, ref = [np.fromfile(f, dtype='<f4').reshape(-1, 4) for f in paths]
@@ -125,6 +128,9 @@ def software(args):
             evidence = sample_evidence(audit)
             if evidence:
                 return fault(evidence, 'software fixed-reference bytes')
+            fidelity = load(folder/'software'/'same-as-fidelity.json')
+            if not all(fidelity.values()):
+                return dict(passed=False, classification='unknown', step='software same-AS audit fidelity', details=fidelity)
             matches = {k: (folder/'software'/(k+'.bin')).read_bytes() == (reference/(('render' if k=='hdr' else k)+'.rgba32f')).read_bytes() for k in KINDS}
             return dict(passed=all(matches.values()), classification='unknown', step='software byte comparison', details=dict(variant=c['variant'], samples=samples, matches=matches))
         result = run_with_retry('software/'+name, args.output/name, operation)
