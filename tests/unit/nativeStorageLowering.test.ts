@@ -3,9 +3,9 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {describe, expect, it} from 'vitest';
 import ts from 'typescript';
-import {specializeStorageLoops} from '../../native/storage-lowering.mjs';
-import {lowerConcreteAccess} from '../../native/attribute-lowering.mjs';
-import {auditNumericAccess} from '../../native/numeric-access-audit.mjs';
+import {specializeStorageLoops} from '../../native/scripts/storage-lowering.mjs';
+import {lowerConcreteAccess} from '../../native/scripts/attribute-lowering.mjs';
+import {auditNumericAccess} from '../../native/scripts/numeric-access-audit.mjs';
 import {writeRawAtlasPlacement} from '../../src/renderer/textureAtlasPixels.js';
 
 function fixture(source: string, action: (directory: string) => void) {

@@ -1,4 +1,4 @@
-/// <reference path="../../browser-types.d.ts" />
+/// <reference path="../../src/browser-types.d.ts" />
 import { envMapDistribution, environmentMapSourcesMatch, type EnvironmentMapSource } from '../../../src/renderer/envMapDistribution.js';
 import { pixelLength, pixelValue, writePixel } from '../../../src/scene/texturePixels.js';
 import type { TextureDataSource } from '../../../src/scene/Texture.js';

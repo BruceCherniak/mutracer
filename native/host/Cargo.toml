@@ -30,5 +30,37 @@ validation = []
 
 [[bin]]
 name = "fuzz-seed"
-path = "src/bin/fuzz-seed.rs"
+path = "diagnostics/fuzz-seed.rs"
 required-features = ["fuzzing"]
+
+[[bin]]
+name = "closest-diagnostics"
+path = "diagnostics/closest-diagnostics.rs"
+
+[[bin]]
+name = "gpu-availability"
+path = "diagnostics/gpu-availability.rs"
+
+[[bin]]
+name = "hit-diagnostics"
+path = "diagnostics/hit-diagnostics.rs"
+
+[[bin]]
+name = "image-diagnostics"
+path = "diagnostics/image-diagnostics.rs"
+
+[[bin]]
+name = "path-diagnostics"
+path = "diagnostics/path-diagnostics.rs"
+
+[[bin]]
+name = "prepare-diagnostics"
+path = "diagnostics/prepare-diagnostics.rs"
+
+[[bin]]
+name = "ray-query-probe"
+path = "diagnostics/ray-query-probe.rs"
+
+[[bin]]
+name = "validate-shaders"
+path = "diagnostics/validate-shaders.rs"

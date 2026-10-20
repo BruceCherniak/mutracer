@@ -48,8 +48,8 @@ copyFileSync(fileURLToPath(import.meta.url),resolve(dir,'server-source.mjs'));
 writeFileSync(configuredManifest, JSON.stringify(cases, null, 2));
 writeFileSync(resolve(dir, 'run.json'), JSON.stringify({ commit: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim(), node: process.version, library, librarySha256: createHash('sha256').update(readFileSync(library)).digest('hex'), sourceDirty: execFileSync('git',['status','--porcelain'],{cwd:root,encoding:'utf8'}).trim()!=='', gpuTimestamps: 'hardware-only', manifest, rounds, commitIterations: 12, commitDiscard: 2, renderIterations: {web: 6, hardware: 6, software: 1}, renderDiscard: 1, profileIterations: 2, samples: 64, seed: 12345, batch: 8, webWorkers: 8 }, null, 2));
 const modules = ['scene/Geometry', 'scene/Mesh', 'scene/OpenPBRMaterial', 'scene/Texture', 'scene/Camera', 'scene/RectLight', 'scene/SphereLight', 'scene/DirectionalLight', 'scene/SpotLight', 'renderer/WGPURayTracePass', 'scene/EnvironmentLight', 'scene/InstancedMesh', 'scene/IESProfile'];
-let reference = readFileSync(root + '/native/scene-reference.mjs', 'utf8');
-reference = reference.replace(/^import .*from 'node:[^']+';\n/gm, '').replace(/^import .*resource-recorder.*\n/m, '').replace(/^const materialProperties =.*$/m, 'const materialProperties = ' + readFileSync(root + '/native/material-properties.json', 'utf8') + ';');
+let reference = readFileSync(root + '/native/validation/scene-reference.mjs', 'utf8');
+reference = reference.replace(/^import .*from 'node:[^']+';\n/gm, '').replace(/^import .*resource-recorder.*\n/m, '').replace(/^const materialProperties =.*$/m, 'const materialProperties = ' + readFileSync(root + '/native/schemas/material-properties.json', 'utf8') + ';');
 const begin = reference.indexOf('    installWebGPUConstants();');
 if (begin < 0 || !reference.includes("const load = path => import(pathToFileURL(resolve(sourceRoot, 'src', path)).href);"))
     throw Error('Descriptor oracle structure changed; update benchmark adapter');

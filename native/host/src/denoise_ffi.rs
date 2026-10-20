@@ -47,7 +47,7 @@ fn state<T>(handle: u64, operation: impl FnOnce(&mut Denoiser) -> Result<T>) -> 
 }
 
 /// # Safety
-/// Pointers and ownership follow native/mutracer-denoise.h.
+/// Pointers and ownership follow native/include/mutracer-denoise.h.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_denoiser_create(
     library: *const c_char,
@@ -83,7 +83,7 @@ pub unsafe extern "C" fn mt_denoiser_create(
     })
 }
 /// # Safety
-/// Pointers and ownership follow native/mutracer-denoise.h.
+/// Pointers and ownership follow native/include/mutracer-denoise.h.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_denoiser_backend(
     handle: u64,
@@ -106,7 +106,7 @@ pub unsafe extern "C" fn mt_denoiser_backend(
     })
 }
 /// # Safety
-/// Pointers and ownership follow native/mutracer-denoise.h.
+/// Pointers and ownership follow native/include/mutracer-denoise.h.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_denoiser_run(
     handle: u64,
@@ -145,7 +145,7 @@ pub unsafe extern "C" fn mt_denoiser_run(
     })
 }
 /// # Safety
-/// Pointers and ownership follow native/mutracer-denoise.h.
+/// Pointers and ownership follow native/include/mutracer-denoise.h.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_denoiser_destroy(
     handle: u64,

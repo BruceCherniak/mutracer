@@ -34,7 +34,8 @@ Examples include `baseline`, `textures`, `transforms`, `orthographic`, `emissive
 `alpha`, `v2-environment`, `v2-background`, `v2-hidden-background`, `v2-film`,
 `v2-medium`, `v2-bevel`, `v2-vertices`, `v2-multimaterial` and `v2-instances`.
 For caller-supplied data, use `mt_probe_render_scene` with the byte layout and
-ownership rules in [mutracer-scene.h](./mutracer-scene.h).
+ownership rules in [mutracer-scene.h](include/mutracer-scene.h). Add `native/include`
+to your C compiler's header search path.
 
 The output directory contains `render.png`, `render.rgba32f`, `normal.rgba32f`,
 `albedo.rgba32f` and `result.json`. The PNG is a Reinhard/sRGB preview. Float files
@@ -43,7 +44,7 @@ dimensions are in `result.json`. Normal guides are not renormalized after averag
 
 ## Denoise caller-owned images
 
-Use [mutracer-denoise.h](./mutracer-denoise.h) to
+Use [mutracer-denoise.h](include/mutracer-denoise.h) to
 `create → run → destroy` a native OIDN denoiser. Supply matching linear RGBA32F
 HDR, normal and albedo images, such as those returned by `mt_context_read_pixels`.
 Choose automatic Metal/CPU fallback, CPU only or Metal only. Output keeps the
@@ -64,7 +65,7 @@ and memory ownership. Browser/native denoising parity is not guaranteed.
 npm run native:context
 ```
 
-Use [mutracer-context.h](./mutracer-context.h) for
+Use [mutracer-context.h](include/mutracer-context.h) for
 `create → commit → render → read_pixels → destroy`. Rendering adds samples;
 for example, two calls with 32 samples produce 64 accumulated samples. Readback
 copies HDR, normal or albedo pixels into caller-owned memory. The context API
@@ -100,7 +101,7 @@ the new transform. Updates restart accumulation and reject active jobs. Resource
 size or traversal stack changes require a full
 commit; validation rejection preserves the scene and samples. Cost grows with
 instance and BLAS data and emissive triangles. See
-[the context header](./mutracer-context.h) for the 80-byte record and lifetime rules.
+[the context header](include/mutracer-context.h) for the 80-byte record and lifetime rules.
 
 Use `mt_context_update_geometry` for vertex positions with unchanged topology.
 All objects sharing the original geometry change together. Supply normals or omit
@@ -112,14 +113,14 @@ validation rejection preserves the scene and samples. Updates reject active jobs
 CPU copying cost can grow with the scene. GPU uploads cover changed geometry
 and affected instances; HWRT rebuilds affected BLASes and the TLAS. Temporary
 copies increase memory use. See
-[the context header](./mutracer-context.h) for flags, limits and record layout.
+[the context header](include/mutracer-context.h) for flags, limits and record layout.
 
 Basic material parameters can be updated with `mt_context_update_material` using
 the original descriptor's material index. Color, roughness, metalness,
 transmission and IOR updates retain geometry, textures and pipelines, then reset
 accumulation. Unlit/unused materials and medium shader-feature changes require
 a full scene commit; rejection preserves the current scene and samples. These
-updates reject active jobs. See [the context header](./mutracer-context.h) for
+updates reject active jobs. See [the context header](include/mutracer-context.h) for
 the record layout and lifetime rules.
 
 Use `mt_context_update_environment` to replace linear environment/background map
@@ -129,7 +130,7 @@ match the committed scene; changes require a full commit. Moving between zero
 and nonzero map power can also require a full commit. The call restarts
 accumulation, rejects active jobs and preserves the scene on validation rejection.
 Its cost grows with map size and the number of emissive triangles. See
-[the context header](./mutracer-context.h) for the record format and limits.
+[the context header](include/mutracer-context.h) for the record format and limits.
 
 Use `mt_context_update_light` to change an existing rectangular, spherical,
 directional or spot light's color, intensity, size, spread/angles or transform.
@@ -139,7 +140,7 @@ Light type/count and attachment changes require a full commit. Some zero/nonzero
 power transitions also require a full commit. Successful updates restart
 accumulation. Active jobs reject updates; validation rejection preserves the scene.
 Update cost grows with the number of lights and emissive triangles. The
-[context header](./mutracer-context.h) specifies the record and lifetime rules.
+[context header](include/mutracer-context.h) specifies the record and lifetime rules.
 
 ## Intersection backend
 
@@ -208,7 +209,7 @@ multipliers. Empty instance batches are valid. A triangle's vertices must select
 the same material; duplicate vertices at material boundaries.
 
 The descriptor exposes all non-displacement material properties and texture slots
-through [material property IDs](./mutracer-material-properties.h), including
+through [material property IDs](include/mutracer-material-properties.h), including
 thin film, participating media, opacity, anisotropy, coat and fuzz. Omitted
 properties keep MuTracer defaults. Environment lighting and visible backgrounds
 can use separate linear RGBA32F equirectangular maps. Environment/background map
@@ -272,7 +273,7 @@ the process and cannot become C API errors. Applications that require recovery
 from these failures need process isolation.
 
 Library logs are silent by default. Register a callback through
-[mutracer-log.h](./mutracer-log.h) to receive diagnostics and optional profiling
+[mutracer-log.h](include/mutracer-log.h) to receive diagnostics and optional profiling
 messages. Callbacks run serially on the emitting thread; message storage is valid
 only during the callback. Unregister before releasing the callback or its data.
 

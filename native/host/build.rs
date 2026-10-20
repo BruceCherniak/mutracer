@@ -1,5 +1,5 @@
 fn main() {
-    println!("cargo:rerun-if-changed=../mutracer-layout.h");
+    println!("cargo:rerun-if-changed=../include/mutracer-layout.h");
     // This is the same wrapper used by the WebAssembly build, linked natively.
     // Upstream:tinybvh@c9be3103cc9693b456b0a0353927c11cac7d710f (1.9.1).
     println!("cargo:rerun-if-changed=tinybvh.cpp");

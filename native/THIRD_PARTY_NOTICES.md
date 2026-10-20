@@ -7,7 +7,7 @@ Native-specific license texts are in [LICENSES/](./LICENSES).
 
 ## wgpu native ray-query probe
 
-The experimental `native/host/ray-query-probe.wgsl` follows ray-query API usage
+The experimental `native/host/diagnostics/ray-query-probe.wgsl` follows ray-query API usage
 from the [wgpu v30.0.1 ray-traced triangle example](https://github.com/gfx-rs/wgpu/blob/v30.0.1/examples/features/src/ray_traced_triangle/shader.wgsl),
 modified into analytic hit/miss, mask, distance and instance checks.
 Copyright (c) 2025 The gfx-rs developers. MIT License

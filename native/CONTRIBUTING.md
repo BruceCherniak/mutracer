@@ -5,6 +5,25 @@ headers. This guide covers implementation, validation and maintenance. License
 notices are separate for the [native library](./THIRD_PARTY_NOTICES.md) and
 [viewer](./viewer/THIRD_PARTY_NOTICES.md).
 
+## Directory layout
+
+- `src/`: TypeScript AOT entry points, runtime adapters and shader generators.
+- `host/src/`: Rust library; `host/diagnostics/`: standalone diagnostic executables and shaders.
+- `include/`: public C headers; `schemas/`: frozen wire-property IDs and error codes.
+- `scripts/`: compiler lowering, contract generators, CI and viewer packaging.
+- `examples/`: C consumers; `tests/`: AOT fixtures and the C module test harness.
+- `validation/`: render/contract checks and browser reference tools;
+  `validation/compiler/` holds whole-browser-API and async compilation probes.
+- `benchmark/`: performance and correctness comparison tools.
+- `viewer/`: standalone app; `toolchain/`: pinned compiler installation;
+  `vendor/`: third-party sources; `LICENSES/`: license texts.
+
+The existing `npm run native:*` commands remain the entry points. Additional
+precision checks run with `node native/validation/matrix-verify.mjs` and
+`node native/validation/vector-verify.mjs`. `native:check` is a compiler-capability
+probe that reports the incomplete browser API port and exits with status 1;
+`native:ci` validates the supported native implementation.
+
 ## Build and CI
 
 Use scriptc **0.3.2**, Rust with locked dependencies and a C++20 compiler. Set
@@ -75,13 +94,14 @@ validation-only Web oracle records writes through
 Shared TypeScript owns scene decoding/assembly, material/light/environment
 packing, render settings, layouts, shader generation and incremental preparation.
 The host uses typed resource IDs, texture formats, layout entries and pipeline
-keys. Update `native/generate-layout-schema.mjs` after schema edits; `--check`
-runs with typecheck. Material wire IDs in `material-properties.json` are frozen;
-regenerate with `generate-material-properties.mjs` without renumbering IDs.
+keys. Update `native/scripts/generate-layout-schema.mjs` after schema edits;
+`--check` runs with typecheck. Material wire IDs in
+`schemas/material-properties.json` are frozen;
+regenerate with `scripts/generate-material-properties.mjs` without renumbering IDs.
 
-`storage-lowering.mjs` instantiates numeric generics and nested closures without
-changing arithmetic or control flow. `attribute-lowering.mjs` lowers proven
-concrete accesses; `vector-lowering.mjs` specializes shared math storage.
+`scripts/storage-lowering.mjs` instantiates numeric generics and nested closures without
+changing arithmetic or control flow. `scripts/attribute-lowering.mjs` lowers proven
+concrete accesses; `scripts/vector-lowering.mjs` specializes shared math storage.
 The numeric-access report traces the complete production graph and rejects loop
 storage dispatch. Open unions, ordinary arrays and callbacks retain fallback
 implementations. Keep emitted compiler inputs separate from browser source.
@@ -133,8 +153,8 @@ logs and experiment reports outside the repository.
 
 `npm run native:viewer:build` builds the full AOT graph and macOS app with locked
 Rust dependencies and ad-hoc signing. eframe/egui-wgpu and tracing share one
-adapter/device/queue. `display-shader.ts` generates the display WGSL through the
-Web TS generator; `generate-display.mjs --check` detects stale output. Normal
+adapter/device/queue. `src/display-shader.ts` generates the display WGSL through the
+Web TS generator; `scripts/generate-display.mjs --check` detects stale output. Normal
 preview capture, tonemap and presentation stay on the GPU. Only OIDN/export reads
 pixels back. The immutable owned picking BVH is built while loading a model on
 a worker. Descriptor assembly and full commits also run off the UI thread.

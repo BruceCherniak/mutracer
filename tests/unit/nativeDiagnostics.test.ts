@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { summarizeCoverage } from '../../native/diagnostics.mjs';
+import { summarizeCoverage } from '../../native/validation/diagnostics.mjs';
 
 const report = (groups: object[], success = true) => ({
   schema: 'scriptc-diagnostics', schemaVersion: 1, success, phase: 'compile', groups

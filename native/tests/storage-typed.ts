@@ -1,4 +1,4 @@
-/// <reference path="../browser-types.d.ts" />
+/// <reference path="../src/browser-types.d.ts" />
 import {writeRawAtlasPlacement} from '../../src/renderer/textureAtlasPixels.js';
 import {envMapDistribution} from '../../src/renderer/envMapDistribution.js';
 import {estimateEnvironmentPower} from '../../src/renderer/lightSampling.js';

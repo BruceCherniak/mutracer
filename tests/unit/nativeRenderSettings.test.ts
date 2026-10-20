@@ -1,6 +1,6 @@
 import {expect, it} from 'vitest';
-import {decodeSceneConfiguration} from '../../native/scene-configuration.js';
-import {SETTINGS as S, WORD_BYTES} from '../../native/layout.js';
+import {decodeSceneConfiguration} from '../../native/src/scene-configuration.js';
+import {SETTINGS as S, WORD_BYTES} from '../../native/src/layout.js';
 
 function settings() {
   const bytes = new Uint8Array(S.WORDS * WORD_BYTES), u = new Uint32Array(bytes.buffer), f = new Float64Array(bytes.buffer);

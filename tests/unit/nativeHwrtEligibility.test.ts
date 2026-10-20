@@ -1,7 +1,7 @@
 import {expect, it} from 'vitest';
 import MaterialState from '../../src/scene/MaterialState.js';
 import PixelTexture from '../../src/scene/PixelTexture.js';
-import {hardwareOpaqueGeometryFlags} from '../../native/hwrt-eligibility.js';
+import {hardwareOpaqueGeometryFlags} from '../../native/src/hwrt-eligibility.js';
 
 const opaque = () => new MaterialState({doubleSided: true, alphaMode: 'opaque'});
 it('requires every instance sharing a geometry to permit unfiltered hits', () => {

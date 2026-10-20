@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {sceneErrorPacket, SCENE_ERROR_MAGIC} from '../../native/scene-errors';
+import {sceneErrorPacket, SCENE_ERROR_MAGIC} from '../../native/src/scene-errors';
 
 describe('native scene exception packets', () => {
   it('retains operation codes and UTF-8 messages, including non-Error throws', () => {

@@ -1,4 +1,4 @@
-/// <reference path="../../browser-types.d.ts" />
+/// <reference path="../../src/browser-types.d.ts" />
 import MeshState from '../../../src/scene/MeshState.js';
 import InstanceState from '../../../src/scene/InstanceState.js';
 import {prepareSceneMeshes, updateMeshInstanceTransforms, dirtyPreparedInstanceIndices} from '../../../src/renderer/scenePreparation.js';

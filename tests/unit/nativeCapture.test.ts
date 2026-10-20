@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CaptureDevice } from '../../native/validation/resource-recorder.mjs';
-import { frameParameters } from '../../native/render-core.js';
+import { frameParameters } from '../../native/src/render-core.js';
 
 describe('native capture buffer boundaries', () => {
   it('copies TypedArray subranges using element offsets and source byteOffset', () => {

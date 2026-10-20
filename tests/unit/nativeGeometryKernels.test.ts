@@ -2,8 +2,8 @@ import {expect, it} from 'vitest';
 import {generateVertexNormals, generateVertexTangents} from '../../src/util/geometry.js';
 import Geometry, {Attribute} from '../../src/scene/Geometry.js';
 import {encodeGeometryKernelHints, receiveGeometryKernelHints, takeGeometryKernelHints,
-  geometryKernelBounds, rememberKernelBounds} from '../../native/geometry-kernel-hints.js';
-import {GEOMETRY_KERNEL_HEADER as H, GEOMETRY_KERNEL_ENTRY as E} from '../../native/layout.js';
+  geometryKernelBounds, rememberKernelBounds} from '../../native/src/geometry-kernel-hints.js';
+import {GEOMETRY_KERNEL_HEADER as H, GEOMETRY_KERNEL_ENTRY as E} from '../../native/src/layout.js';
 
 it('owns kernel results, consumes each token once, and rejects overlapping payloads', () => {
   const bounds = new Float32Array([-1, -2, -3, 4, 5, 6]);

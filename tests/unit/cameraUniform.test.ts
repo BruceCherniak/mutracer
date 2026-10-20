@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { mat4 } from 'gl-matrix';
 import { packCameraUniform } from '../../src/renderer/cameraUniform.js';
-import { cameraParameters, materialParameters } from '../../native/render-core.js';
+import { cameraParameters, materialParameters } from '../../native/src/render-core.js';
 
 describe('shared native/browser camera block', () => {
   const world = new Float32Array(16);

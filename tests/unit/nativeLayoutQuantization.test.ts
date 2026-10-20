@@ -1,5 +1,5 @@
 import {expect, it} from 'vitest';
-import {quantizeDisplacementRange} from '../../native/layout.js';
+import {quantizeDisplacementRange} from '../../native/src/layout.js';
 
 it('rounds displacement range arithmetic to float32 before outward quantization', () => {
   // f32(.2) * 255 in f64 exceeds 51; the native/WASM f32 product is exactly 51.
