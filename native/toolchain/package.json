@@ -5,6 +5,8 @@
   "engines": { "node": ">=24" },
   "optionalDependencies": {
     "@scriptc/cli-darwin-arm64": "0.3.2",
-    "@scriptc/cli-darwin-x64": "0.3.2"
+    "@scriptc/cli-darwin-x64": "0.3.2",
+    "@scriptc/cli-linux-x64-gnu": "0.3.2",
+    "@scriptc/cli-win32-x64-msvc": "0.3.2"
   }
 }

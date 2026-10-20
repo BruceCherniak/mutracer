@@ -6,15 +6,18 @@ import {tmpdir} from 'node:os';
 import {resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnCompiler} from './compiler.mjs';
+import {archiveName,executable} from './platform.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const out=resolve(process.env.MUTRACER_NATIVE_OUTPUT??mkdtempSync(resolve(tmpdir(),'mutracer-native-ci-')));
 mkdirSync(out,{recursive:true});
 const compiler=process.env.MUTRACER_SCRIPTC??spawnSync(process.execPath,['native/toolchain/compiler.mjs'],{cwd:root,encoding:'utf8'}).stdout?.trim();
 if(!compiler)throw Error('Install native/toolchain optional dependencies or set MUTRACER_SCRIPTC.');
-const hostTarget=resolve(out,'host-target'),viewerTarget=resolve(out,'viewer-target'),archive=resolve(out,'render-core.lib.a');
+const hostTarget=resolve(out,'host-target'),viewerTarget=resolve(out,'viewer-target'),archive=resolve(out,archiveName('render-core'));
 const env={...process.env,MUTRACER_SCRIPTC:compiler,MUTRACER_AOT_ARCHIVE:archive,CARGO_TARGET_DIR:hostTarget,MUTRACER_NATIVE_OUTPUT:out};
 const checks=[];
 function run(name,command,args,extra={},allowFailure=false){
+ if(command==='npm'&&process.env.npm_execpath){args=[process.env.npm_execpath,...args];command=process.execPath;}
+ console.log(`${name}...`);
  const result=(command===compiler?spawnCompiler:spawnSync)(command,args,{cwd:root,env:{...env,...extra},encoding:'utf8',maxBuffer:64*1024*1024,timeout:900000});
  writeFileSync(resolve(out,name+'.log'),(result.stdout??'')+(result.stderr??''));
  checks.push({name,command:[command,...args],exitCode:result.status});writeFileSync(resolve(out,'checks.json'),JSON.stringify(checks,null,2)+'\n');
@@ -26,7 +29,7 @@ if(version.stdout.trim()!=='0.3.2')throw Error('Native CI requires scriptc0.3.2.
 run('aot-build',compiler,['build','--lib','--profile','native/src/render-core-profile.json','-o',archive]);
 await prepareTinyBvh();
 run('native-build','cargo',['build','--release','--locked','--manifest-path','native/host/Cargo.toml']);
-const probe=run('gpu-availability',resolve(hostTarget,'release/gpu-availability'),[]);
+const probe=run('gpu-availability',resolve(hostTarget,'release',executable('gpu-availability')),[]);
 const gpu=JSON.parse(probe.stdout);if(typeof gpu.available!=='boolean')throw Error('Invalid GPU availability result.');
 run('host-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml','--','--test-threads=1']);
 // Separate target dirs avoid an unhashed multi-crate-type rlib being reused with
@@ -41,6 +44,6 @@ run('modules-verify','npm',['run','native:modules:verify']);
 run('storage-verify','npm',['run','native:storage:verify'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'storage')});
 if(gpu.available){
  run('raw-gpu-fixtures','npm',['run','native:scene'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'fixtures'),MUTRACER_NATIVE_SAMPLES:'8'});
- run('ray-query-contracts',resolve(hostTarget,'release/ray-query-probe'),[resolve(out,'ray-query')]);
+ run('ray-query-contracts',resolve(hostTarget,'release',executable('ray-query-probe')),[resolve(out,'ray-query')]);
 }else console.log('GPU execution skipped: no adapter; CPU/module/storage checks still ran.');
 writeFileSync(resolve(out,'summary.json'),JSON.stringify({passed:true,scriptc:'0.3.2',gpu,requiredModules:required.length,checks},null,2)+'\n');

@@ -35,7 +35,7 @@ gate and validate retained scenes, polling/cancellation, camera updates and rend
 settings respectively. Use `MUTRACER_NATIVE_SAMPLES` to select the fixture sample
 count; cross-stage byte comparisons must use the same count and seed.
 
-The macOS CI job installs platform optional packages from `native/toolchain/`.
+The native CI jobs install platform optional packages from `native/toolchain/`.
 For the same local run:
 
 ```sh
@@ -44,15 +44,24 @@ MUTRACER_NATIVE_OUTPUT=/absolute/evidence npm run native:ci
 ```
 
 The GitHub Actions `CI` workflow runs on pull requests, pushes to `main`, and
-manual dispatches. It validates native code and builds the standalone macOS
-arm64 viewer, including OIDN and licenses. Download `native-macos-arm64` from
-the run's artifacts for the app ZIP and SHA-256 checksum (retained for 14 days).
-`native-macos-diagnostics` retains logs and check summaries for seven days,
-including failed runs.
+manual dispatches. It validates native code and builds standalone viewers for
+macOS arm64, Windows x64 and Linux x64, including OIDN and licenses. Download
+`native-macos-arm64`, `native-windows-x64` or `native-linux-x64` from the run's
+artifacts for the app archive and SHA-256 checksum (retained for 14 days).
+The corresponding `native-PLATFORM-diagnostics` artifact retains logs and check
+summaries for seven days, including failed runs.
+
+Windows builds need an x64 MSVC Developer environment, Clang, Ninja and CMake.
+Linux builds need a C++20 compiler, CMake, patchelf, and the X11/Wayland development
+libraries installed by the workflow. `npm run native:viewer:package` archives the
+built app, extracts it to a new directory and validates the bundled sample and
+CPU OIDN without an override library path. It also checks rendering and all AOVs
+when an adapter exists. Set `MUTRACER_NATIVE_GUI_SMOKE=1` to require a real window
+and displayed frames on those adapters; Linux uses `xvfb-run`.
 
 Push a `native-v*` tag, for example `native-v0.1.0`, to run the same checks and
-publish the ZIP and checksum to that tag's GitHub Release after both Web and
-native jobs pass. Tags such as `native-v0.1.0-rc.1` create prereleases. Native
+publish all three app archives and checksums to that tag's GitHub Release after
+Web and all native jobs pass. Tags such as `native-v0.1.0-rc.1` create prereleases. Native
 releases do not replace the repository's latest release. Rerunning a tag's job
 replaces matching assets on a mutable release. Publishing uses `GITHUB_TOKEN`;
 the release job requires `contents: write`. The app is ad-hoc signed and is not
@@ -168,15 +177,18 @@ logs and experiment reports outside the repository.
 
 ## Viewer and OIDN validation
 
-`npm run native:viewer:build` builds the full AOT graph and macOS app with locked
-Rust dependencies and ad-hoc signing. eframe/egui-wgpu and tracing share one
+`npm run native:viewer:build` builds the full AOT graph and platform app with locked
+Rust dependencies; macOS uses ad-hoc signing. eframe/egui-wgpu and tracing share one
 adapter/device/queue. `src/display-shader.ts` generates the display WGSL through the
 Web TS generator; `scripts/generate-display.mjs --check` detects stale output. Normal
 preview capture, tonemap and presentation stay on the GPU. Only OIDN/export reads
 pixels back. The immutable owned picking BVH is built while loading a model on
 a worker. Descriptor assembly and full commits also run off the UI thread.
 
-The packaged executable accepts `[MODEL] --smoke-out DIRECTORY` for load/render,
+The packaged executable accepts `[MODEL] --package-smoke DIRECTORY` for the
+portable package gate. `--startup-smoke REPORT.json` opens a window and closes
+after presenting rendered frames; its report must confirm success. The stronger
+`[MODEL] --smoke-out DIRECTORY` requires actual HWRT for load/render,
 editing, cancellation, HDR environments, backend assertions and native OIDN.
 `--interaction-smoke DIRECTORY` checks continuous camera/held edits, retained
 previews, resize and stale-OIDN rejection. Material, environment, light, transform
@@ -191,7 +203,7 @@ closes automatically. Use LEGO, keep the Mac unlocked and nominal, and retain
 outliers. This opt-in contributor instrument does not change normal usage.
 
 OIDN uses the library's `denoise.rs` for both the C ABI and viewer worker. The
-build pins 2.5.1 source/weights and official ABI-matched CPU/Metal modules, omits
+build pins 2.5.1 source/weights and official ABI-matched CPU modules (plus Metal on macOS), omits
 three large models and packages component notices. Check CPU/Metal/Auto,
 malformed inputs, rollback, in-place output and arbitrary calling threads.
 Rust/TS rendering accumulation is independent of optional denoising. Copy the

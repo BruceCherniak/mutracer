@@ -4,7 +4,7 @@ import {specializeVectorCalls} from './vector-lowering.mjs';
 import {lowerConcreteAccess} from './attribute-lowering.mjs';
 import {spawnSync} from 'node:child_process';
 import {cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync} from 'node:fs';
-import {dirname, relative, resolve} from 'node:path';
+import {basename, dirname, relative, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import ts from 'typescript';
 
@@ -71,10 +71,10 @@ function compilerSource() {
   staged = mkdtempSync(resolve(root, '.native-build/compiler-'));
   cpSync(resolve(root, 'src'), resolve(staged, 'src'), {recursive:true});
   cpSync(resolve(root, 'native'), resolve(staged, 'native'), {recursive:true,
-    filter: path => !path.includes('/node_modules') &&
+    filter: path => !path.replaceAll('\\', '/').includes('/node_modules') &&
       (!/\.[^/]+$/.test(path) || /\.(ts|json)$/.test(path))});
   for (const name of ['tsconfig.json', 'package.json']) cpSync(resolve(root, name), resolve(staged, name));
-  symlinkSync(resolve(root, 'node_modules'), resolve(staged, 'node_modules'), 'dir');
+  symlinkSync(resolve(root, 'node_modules'), resolve(staged, 'node_modules'), process.platform==='win32'?'junction':'dir');
   for (const [file, types] of [['src/math/access.ts', ['Float32Array', 'Float64Array', 'Array']],
     ['src/scene/attributeData.ts', ['Float32Array', 'Uint16Array', 'Uint32Array', 'Int32Array']]]) {
     writeFileSync(resolve(staged, file), narrowAccess(readFileSync(resolve(root, file), 'utf8'), types));
@@ -96,12 +96,13 @@ function compilerSource() {
 }
 function sourcePath(path) {
   const absolute = resolve(root, path), rel = relative(root, absolute), stage = compilerSource();
-  if (!rel.startsWith('..') && !rel.startsWith('.native-build/')) return resolve(stage, rel);
+  if (!rel.startsWith('..') && !rel.replaceAll('\\', '/').startsWith('.native-build/')) return resolve(stage, rel);
   // Diagnostic wrappers and profiles can be generated outside the source tree.
   // Their absolute project imports must use this same staged dependency graph.
-  const target = resolve(stage, 'entries', String(originals.size) + '-' + absolute.split('/').at(-1));
+  const target = resolve(stage, 'entries', String(originals.size) + '-' + basename(absolute));
   mkdirSync(dirname(target), {recursive:true});
-  writeFileSync(target, readFileSync(absolute, 'utf8').replaceAll(root + '/', stage + '/'));
+  writeFileSync(target, readFileSync(absolute, 'utf8')
+    .replaceAll(root.replaceAll('\\', '/') + '/', stage.replaceAll('\\', '/') + '/'));
   originals.set(target, absolute);
   return target;
 }

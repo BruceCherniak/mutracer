@@ -4,10 +4,11 @@ import {dirname, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';
 import {build} from 'esbuild';
 import {spawnCompiler} from '../scripts/compiler.mjs';
+import {archiveName,cCompiler,cLinkFlags,executable} from '../scripts/platform.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const out = resolve(process.env.MUTRACER_NATIVE_OUTPUT ?? resolve(root, '.native-build/storage-typed'));
 mkdirSync(out, {recursive:true});
-const profile = resolve(out, 'profile.json'), archive = resolve(out, 'storage.lib.a'), host = resolve(out, 'storage-host');
+const profile = resolve(out, 'profile.json'), archive = resolve(out, archiveName('storage')), host = resolve(out, executable('storage-host'));
 writeFileSync(profile, JSON.stringify({profile_format:1, name:'storage_typed', entry:resolve(root, 'native/tests/storage-typed.ts'), emission:'llvm',
   abi:{prefix:'mt_module_', init_symbol:'mt_module_init', collect_symbol:'mt_module_collect', result_reset_symbol:'mt_module_reset', sink_register_symbol:'mt_module_sink', localize_runtime:true},
   exports:[{export:'storageParameters', symbol:'mt_module_run', params:['bytes'], returns:'bytes'}]}));
@@ -15,7 +16,7 @@ const built = spawnCompiler(process.env.MUTRACER_SCRIPTC ?? 'scriptc', ['build',
   {cwd:root, encoding:'utf8', maxBuffer:32*1024*1024}, true);
 writeFileSync(resolve(out, 'build.log'), (built.stdout ?? '') + (built.stderr ?? ''));
 if (built.status !== 0) throw new Error('Concrete storage compilation failed; see build.log');
-const cc = spawnSync(process.env.CC ?? 'cc', ['-Wall', '-Wextra', '-Werror', resolve(root, 'native/tests/module-host.c'), archive, '-lm', '-o', host], {encoding:'utf8'});
+const cc = spawnSync(cCompiler, ['-Wall', '-Wextra', '-Werror', resolve(root, 'native/tests/module-host.c'), archive, ...cLinkFlags, '-o', host], {encoding:'utf8'});
 if (cc.status !== 0) throw new Error(cc.stderr);
 const reference = resolve(out, 'reference.mjs');
 await build({entryPoints:[resolve(root, 'native/tests/storage-typed.ts')], outfile:reference, bundle:true, platform:'node', format:'esm'});

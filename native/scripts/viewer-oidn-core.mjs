@@ -1,5 +1,5 @@
 // Fixed upstream build, excluding only the three optional large weight blobs.
-// Device modules remain the ABI-matched official 2.5.1 binaries (CPU and Metal).
+// Device modules remain the ABI-matched official 2.5.1 binaries.
 import {spawnSync} from 'node:child_process';
 import {mkdirSync,existsSync,readFileSync,writeFileSync,renameSync} from 'node:fs';
 import {resolve} from 'node:path';
@@ -22,8 +22,9 @@ function download(url,path,expected) {
 }
 export function buildOIDNCore(out) {
   const cache=resolve(out,'oidn-no-large'),source=resolve(cache,`oidn-${sourceCommit}`),build=resolve(cache,'build');
-  const core=resolve(build,'libOpenImageDenoise_core.2.5.1.dylib');
-  const api=resolve(build,'libOpenImageDenoise.2.5.1.dylib');
+  const mac=process.platform==='darwin',win=process.platform==='win32';
+  const core=resolve(build,mac?'libOpenImageDenoise_core.2.5.1.dylib':win?'OpenImageDenoise_core.dll':'libOpenImageDenoise_core.so.2.5.1');
+  const api=resolve(build,mac?'libOpenImageDenoise.2.5.1.dylib':win?'OpenImageDenoise.dll':'libOpenImageDenoise.so.2.5.1');
   const stamp=resolve(cache,'verified.json');
   if(existsSync(stamp)&&existsSync(core)&&existsSync(api)) {
     const info=JSON.parse(readFileSync(stamp,'utf8'));
@@ -66,9 +67,13 @@ export function buildOIDNCore(out) {
     download(`https://media.githubusercontent.com/media/RenderKit/oidn-weights/${weightsCommit}/${name}`,path,hash);
     if(readFileSync(path).length!==size)throw new Error('Invalid OIDN weight length');
   }
-  run('cmake',['-S',source,'-B',build,'-DCMAKE_MAKE_PROGRAM=/usr/bin/make','-DCMAKE_BUILD_TYPE=Release','-DOIDN_DEVICE_CPU=ON','-DOIDN_DEVICE_METAL=ON','-DOIDN_APPS=OFF','-DCMAKE_OSX_ARCHITECTURES=arm64','-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0','-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON']);
-  run('cmake',['--build',build,'--target','OpenImageDenoise_core','OpenImageDenoise','--parallel','8']);
-  const symbols=run('/usr/bin/nm',['-gU',core],{stdio:['ignore','pipe','inherit'],encoding:'utf8',maxBuffer:4*1024*1024});
+  run('cmake',['-S',source,'-B',build,
+    ...(mac?['-DCMAKE_MAKE_PROGRAM=/usr/bin/make','-DOIDN_DEVICE_METAL=ON','-DCMAKE_OSX_ARCHITECTURES=arm64','-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0']:
+      win?['-G','Ninja']:[]),
+    '-DCMAKE_BUILD_TYPE=Release','-DOIDN_DEVICE_CPU=ON','-DOIDN_APPS=OFF','-DCMAKE_BUILD_WITH_INSTALL_RPATH=ON',
+    ...(!mac&&!win?['-DCMAKE_INSTALL_RPATH=$ORIGIN']:[])]);
+  run('cmake',['--build',build,'--config','Release','--target','OpenImageDenoise_core','OpenImageDenoise','--parallel','8']);
+  const symbols=run(win?'dumpbin':'nm',win?['/exports',core]:[...(mac?['-gU']:['-D','--defined-only']),core],{stdio:['ignore','pipe','inherit'],encoding:'utf8',maxBuffer:4*1024*1024});
   if(removed.some(name=>symbols.includes(name)))throw new Error('Large weights remain in OIDN binary');
   writeFileSync(stamp,JSON.stringify({sourceCommit,weightsCommit,removed,coreSha256:sha(readFileSync(core)),apiSha256:sha(readFileSync(api))},null,2)+'\n');
   return {core,api};

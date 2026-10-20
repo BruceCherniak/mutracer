@@ -36,7 +36,19 @@ fn main() {
         .expect("Set MUTRACER_AOT_ARCHIVE to the scriptc render-core.lib.a");
     println!("cargo:rerun-if-changed={archive}");
     let output = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    std::fs::copy(archive, output.join("libmutracer_aot.a")).unwrap();
+    let library_name = if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        "mutracer_aot.lib"
+    } else {
+        "libmutracer_aot.a"
+    };
+    std::fs::copy(archive, output.join(library_name)).unwrap();
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        for library in [
+            "ws2_32", "bcrypt", "crypt32", "iphlpapi", "userenv", "ntdll",
+        ] {
+            println!("cargo:rustc-link-lib={library}");
+        }
+    }
     println!("cargo:rustc-link-search=native={}", output.display());
     println!("cargo:rustc-link-lib=static=mutracer_aot");
 }

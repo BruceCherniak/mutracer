@@ -4,6 +4,7 @@ mod geometry_smoke;
 mod import;
 mod input;
 mod metrics;
+mod package_smoke;
 mod picking;
 mod renderer;
 mod scene;
@@ -28,6 +29,7 @@ enum Change {
     Scene,
 }
 struct Viewer {
+    startup_smoke: Option<(PathBuf, std::time::Instant, u32)>,
     metrics: Option<metrics::Metrics>,
     renderer: Renderer,
     gpu: Option<eframe::egui_wgpu::RenderState>,
@@ -105,6 +107,7 @@ impl Viewer {
         }
         let selected = model.meshes[0].material;
         Ok(Self {
+            startup_smoke: None,
             metrics,
             backend: 1,
             backend_status: if gpu.is_some() {
@@ -1105,6 +1108,21 @@ impl eframe::App for Viewer {
                 ctx.request_repaint_after(Duration::from_millis(16));
             }
         }
+        if let Some((path, started, frames)) = &mut self.startup_smoke {
+            if self.gpu_texture.is_some() && self.frame_samples > 0 {
+                *frames += 1;
+            }
+            let passed = *frames >= 3 && self.error.is_empty();
+            if passed || !self.error.is_empty() || started.elapsed() > Duration::from_secs(90) {
+                let report = serde_json::json!({"passed":passed,"frames":frames,"samples":self.frame_samples,"error":self.error});
+                if let Some(parent) = path.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(path, report.to_string());
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
     }
 }
 fn dropped_file(path: PathBuf) -> egui::DroppedFileHandle {
@@ -2029,9 +2047,21 @@ fn main() -> Result<()> {
     let mut light_out = None;
     let mut transform_out = None;
     let mut geometry_out = None;
+    let mut package_out = None;
+    let mut startup_out = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--startup-smoke" => {
+                startup_out = Some(PathBuf::from(
+                    args.next().context("--startup-smoke needs a report path")?,
+                ));
+            }
+            "--package-smoke" => {
+                package_out = Some(PathBuf::from(
+                    args.next().context("--package-smoke needs a directory")?,
+                ));
+            }
             "--geometry-smoke" => {
                 geometry_out = Some(PathBuf::from(
                     args.next().context("--geometry-smoke needs a directory")?,
@@ -2082,6 +2112,9 @@ fn main() -> Result<()> {
         }
     }
     let model = model.unwrap_or_else(default_model);
+    if let Some(out) = package_out {
+        return package_smoke::run(&model, &out);
+    }
     if let Some(out) = geometry_out {
         return geometry_smoke::run(&model, &out);
     }
@@ -2152,6 +2185,7 @@ fn main() -> Result<()> {
         },
         ..Default::default()
     };
+    let startup_report = startup_out.clone();
     eframe::run_native(
         "MuTracer Native Viewer",
         options,
@@ -2165,11 +2199,24 @@ fn main() -> Result<()> {
                 style.spacing.button_padding = egui::vec2(10., 6.);
                 style.spacing.slider_width = 150.;
             });
-            Ok(Box::new(Viewer::new_on_device(
-                &model,
-                cc.wgpu_render_state.clone(),
-            )?))
+            let mut viewer = Viewer::new_on_device(&model, cc.wgpu_render_state.clone())?;
+            if let Some(path) = startup_out {
+                viewer.size = [64, 48];
+                viewer.target = 1;
+                viewer.backend = 0;
+                viewer.denoise = false;
+                viewer.startup_smoke = Some((path, std::time::Instant::now(), 0));
+            }
+            Ok(Box::new(viewer))
         }),
     )
-    .map_err(|e| anyhow::anyhow!(e.to_string()))
+    .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+    if let Some(path) = startup_report {
+        let report: serde_json::Value = serde_json::from_slice(&std::fs::read(path)?)?;
+        ensure!(
+            report["passed"] == true,
+            "Window startup smoke failed: {report}"
+        );
+    }
+    Ok(())
 }

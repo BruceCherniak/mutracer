@@ -1,17 +1,31 @@
 # MuTracer native viewer
 
-A small standalone macOS arm64 example. It loads local GLTF/GLB models and
+A small standalone viewer for macOS arm64, Windows x64 and Linux x64. It loads local GLTF/GLB models and
 renders with the native MuTracer library. The app requires no browser,
 JavaScript engine, Node installation or prepared GPU capture at runtime.
 
+## Download and open
+
+Download the matching archive from [GitHub Releases](https://github.com/pissang/mutracer/releases):
+`MuTracer-macos-arm64.zip`, `MuTracer-windows-x64.zip` or `MuTracer-linux-x64.tar.gz`.
+Extract the whole archive, then open `MuTracer.app` on macOS, `mutracer-viewer.exe`
+on Windows, or `mutracer-viewer` on Linux. Keep the executable, sample, OIDN libraries
+and licenses together. SHA-256 checksum files accompany the downloads.
+
+The macOS app is ad-hoc signed and not Apple-notarized. Windows requires the
+[Microsoft Visual C++ v14 x64 runtime](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist).
+Linux packages target Ubuntu 24.04 x64 and
+require a Vulkan driver and an X11 or Wayland desktop. Physical GPU behavior
+outside the tested macOS hardware remains unverified.
+
 ## Build and open
 
-Install Rust, CMake, Xcode Command Line Tools, project npm dependencies and
-scriptc **0.3.2**, then run from the repository root. The first build downloads
-the native OIDN SDK (about 49 MiB), its source and regular model weights
-(about 29 MiB more). The app includes regular/small models and omits the three
-large weight sets. Native denoising adds about 28 MiB to the app and needs no
-download when opened:
+Install Rust, CMake, a C++20 compiler, project npm dependencies and scriptc
+**0.3.2**, then run from the repository root. Windows needs an x64 MSVC Developer
+shell with Clang and Ninja; Linux also needs patchelf and X11/Wayland development
+libraries. The first build downloads the native OIDN SDK, source and regular model
+weights (about 80–95 MiB depending on platform). The app includes regular/small
+models and omits the three large weight sets. Denoising needs no runtime download:
 
 ```sh
 export MUTRACER_SCRIPTC=/absolute/path/to/node_modules/.bin/scriptc
@@ -29,10 +43,10 @@ npm run native:viewer -- /absolute/path/model.glb
 ```
 
 `npm run native:viewer:build` builds without opening the app. The result is
-`.native-build/viewer/MuTracer.app`; the app includes its sample and can be
-opened without the project files or build tools on the tested macOS arm64
-machine. `MUTRACER_NATIVE_OUTPUT` changes the output directory. Other platforms
-are unverified.
+`.native-build/viewer/MuTracer.app` on macOS or `.native-build/viewer/MuTracer/`
+on Windows/Linux. The output includes its sample and runtime libraries and can
+be opened without project files or build tools. `MUTRACER_NATIVE_OUTPUT` changes
+the output directory. See the [native guide](../README.md) for platform backends.
 
 ## Controls
 
@@ -106,7 +120,7 @@ File size is limited to 128 MiB, combined model buffers to 512 MiB and source
 material images to 64M pixels each, and environments to 4M pixels. The native
 library imposes additional scene/texture budgets described in
 [the native guide](../README.md#limits).
-Rendering uses wgpu/Metal with six bounces. HWRT support and fallbacks follow
+Rendering uses wgpu with six bounces. HWRT support and fallbacks follow
 [the native intersection limits](../README.md#intersection-backend).
 HWRT has an unresolved intermittent whole-scene miss on macOS/Metal; choose
 Software when image correctness is critical. Coplanar overlapping surfaces can

@@ -3,8 +3,10 @@ import { mkdirSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { summarizeCoverage } from './diagnostics.mjs';
+import { archiveName } from '../scripts/platform.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
+const importRoot = root.replaceAll('\\', '/');
 const output = resolve(root, process.env.MUTRACER_NATIVE_OUTPUT ?? '.native-build', 'modules');
 const compiler = process.env.MUTRACER_SCRIPTC ?? 'scriptc';
 mkdirSync(output, { recursive: true });
@@ -20,8 +22,8 @@ const modules = [
   ['geometry-updates', 'src/renderer/geometryUpdates.ts', null, 'native/tests/modules/geometry-updates.ts', 'geometryUpdateParameters'],
   ['bvh-core', 'src/renderer/binnedSahBvh.ts', null, 'native/src/bvh-core.ts', 'buildBvh'],
   ['bvh-facade', 'src/renderer/bvhAccel.ts', null, 'native/tests/modules/bvh-facade.ts', 'bvhParameters'],
-  ['materials', 'src/renderer/MaterialTable.ts', `import MaterialTable from '${root}/src/renderer/MaterialTable.js';
-import Material from '${root}/src/scene/OpenPBRMaterial.js';
+  ['materials', 'src/renderer/MaterialTable.ts', `import MaterialTable from '${importRoot}/src/renderer/MaterialTable.js';
+import Material from '${importRoot}/src/scene/OpenPBRMaterial.js';
 export function run(bytes: Uint8Array): Uint8Array { return new Uint8Array(new MaterialTable([new Material()], []).getBufferArray().buffer); }`],
   ['material-packing', 'src/renderer/materialLayout.ts', null, 'native/tests/modules/material-packing.ts', 'materialParameters'],
   ['material-data', 'src/renderer/materialCore.ts', null, 'native/tests/modules/material-data.ts', 'materialDataParameters'],
@@ -45,7 +47,7 @@ const results = [];
 for (const [name, source, wrapper, providedEntry, providedExport] of modules) {
   console.log(`Module ${name}: coverage...`);
   const coverageEntry = resolve(entries, `${name}-coverage.ts`);
-  const coverageSource = `/// <reference path="${root}/native/src/browser-types.d.ts" />\nexport * from '${root}/${source.replace(/\.ts$/, '.js')}';\n`;
+  const coverageSource = `/// <reference path="${importRoot}/native/src/browser-types.d.ts" />\nexport * from '${importRoot}/${source.replace(/\.ts$/, '.js')}';\n`;
   writeFileSync(coverageEntry, coverageSource);
   writeFileSync(resolve(output, `${name}-coverage.ts`), coverageSource);
   const check = invoke(`${name}-coverage`, ['coverage', coverageEntry, '--print', 'diagnostics', '--fail-on', 'blockers']);
@@ -56,10 +58,10 @@ for (const [name, source, wrapper, providedEntry, providedExport] of modules) {
   if (wrapper || providedEntry) {
     const entry = providedEntry ? resolve(root, providedEntry) : resolve(entries, `${name}-entry.ts`);
     if (wrapper) {
-      const source = `/// <reference path="${root}/native/src/browser-types.d.ts" />\n${wrapper}\n`;
+      const source = `/// <reference path="${importRoot}/native/src/browser-types.d.ts" />\n${wrapper}\n`;
       writeFileSync(entry, source); writeFileSync(resolve(output, `${name}-entry.ts`), source);
     }
-    const profile = resolve(output, `${name}-profile.json`), artifact = resolve(output, `${name}.lib.a`);
+    const profile = resolve(output, `${name}-profile.json`), artifact = resolve(output, archiveName(name));
     writeFileSync(profile, JSON.stringify({ profile_format: 1, name: `module_${name.replaceAll('-', '_')}`, entry,
       emission: 'llvm', abi: { prefix: 'mt_module_', init_symbol: 'mt_module_init', collect_symbol: 'mt_module_collect',
         result_reset_symbol: 'mt_module_reset', sink_register_symbol: 'mt_module_sink', localize_runtime: true },

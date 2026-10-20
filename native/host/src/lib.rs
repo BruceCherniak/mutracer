@@ -1138,7 +1138,7 @@ fn render_scene(
             "aot": "native input decoding, shared scene assembly/BLAS/TLAS/attributes/materials/atlas/lights/camera/full WGSL, sampling and frame packing",
             "nativeOptions": options,
             "buildTimeJavaScript": "none for scene construction or rendering",
-            "runtime": "native Rust + scriptc machine code + wgpu/Metal; no Node/JS engine",
+            "runtime": "native Rust + scriptc machine code + wgpu; no Node/JS engine",
             "preview": "Reinhard + sRGB; compare render.rgba32f for numerical validation",
             "aovOutputs": aov_outputs,
             "hdrLayout": "little-endian f32 RGBA, bottom row first; linear sample average",

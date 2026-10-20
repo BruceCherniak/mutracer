@@ -2,9 +2,10 @@
 
 MuTracer's experimental C interface accepts raw scene data and renders through
 native machine code and wgpu, without a JavaScript engine or Node at runtime.
-It supports part of MuTracer and has an unstable ABI. It has been verified on
-macOS arm64 with Metal. Other platforms are unverified; performance varies by
-scene and hardware.
+It supports part of MuTracer and has an unstable ABI. Builds target macOS arm64
+with Metal, Windows x64 with DirectX 12/Vulkan, and Linux x64 with Vulkan.
+Physical GPU rendering has been verified on macOS; Windows/Linux hardware-specific
+behavior and performance remain unverified. Performance varies by scene and hardware.
 
 ## Native viewer
 
@@ -13,7 +14,7 @@ and environment controls. See [viewer usage and limits](./viewer/README.md).
 
 ## Render a scene
 
-Building requires Rust, a C++20 compiler/Xcode Command Line Tools, project npm
+Building requires Rust, a C++20 compiler (Xcode Command Line Tools on macOS), project npm
 dependencies and a separately installed scriptc **0.3.2**.
 
 ```sh

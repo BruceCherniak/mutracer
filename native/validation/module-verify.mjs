@@ -4,6 +4,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
 import ts from 'typescript';
+import { cCompiler, cLinkFlags, executable } from '../scripts/platform.mjs';
 import { buildBinnedSahBvh, layoutBvh2 } from '../../lib/renderer/binnedSahBvh.js';
 import { samplingPatternCode, zSobolLog2SPP, zSobolPermutations, zSobolPackedPermutations, sobolD1Steps } from '../../lib/renderer/sampling.js';
 
@@ -39,8 +40,8 @@ writeState(false);
 for (const name of ['math', 'geometry', 'camera', 'environment', 'geometry-updates', 'bvh-core', 'bvh-facade', 'material-packing', 'material-data', 'lights', 'shader-generation', 'sampling', 'displacement', 'ies']) {
   const module = matrix.results.find(item => item.name === name);
   if (module?.status !== 'archive-built') throw new Error(`Required composition module blocked: ${name}`);
-  const host = resolve(output, `${name}-host`);
-  run(`${name}-host-build`, process.env.CC ?? 'cc', ['-Wall', '-Wextra', '-Werror', 'native/tests/module-host.c', module.archive.artifact, '-lm', '-o', host]);
+  const host = resolve(output, executable(`${name}-host`));
+  run(`${name}-host-build`, cCompiler, ['-Wall', '-Wextra', '-Werror', 'native/tests/module-host.c', module.archive.artifact, ...cLinkFlags, '-o', host]);
   const fixtures = [];
   if (name !== 'bvh-core' && name !== 'sampling') {
     const adapter = readFileSync(resolve(root, `native/tests/modules/${name}.ts`), 'utf8');

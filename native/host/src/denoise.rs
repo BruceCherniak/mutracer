@@ -59,10 +59,16 @@ impl Denoiser {
         } else {
             let executable =
                 std::env::current_exe().context("Finding executable for bundled OIDN")?;
-            executable
+            let directory = executable
                 .parent()
-                .context("Executable has no parent directory")?
-                .join("../Frameworks/libOpenImageDenoise.2.dylib")
+                .context("Executable has no parent directory")?;
+            #[cfg(target_os = "macos")]
+            let library = "../Frameworks/libOpenImageDenoise.2.dylib";
+            #[cfg(target_os = "windows")]
+            let library = "OpenImageDenoise.dll";
+            #[cfg(target_os = "linux")]
+            let library = "libOpenImageDenoise.so.2";
+            directory.join(library)
         };
         Self::from_library(&path, preference)
     }

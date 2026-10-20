@@ -2,9 +2,10 @@ import {prepareTinyBvh} from '../../scripts/fetch-tinybvh.mjs';
 import {spawnCompiler} from '../scripts/compiler.mjs';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { delimiter, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { summarizeCoverage } from './diagnostics.mjs';
+import { archiveName, cCompiler, cLinkFlags, executable, windows } from '../scripts/platform.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const out = resolve(process.env.MUTRACER_NATIVE_OUTPUT ?? resolve(root, '.native-build/scene-core'));
 const target = resolve(process.env.CARGO_TARGET_DIR ?? resolve(out, 'cargo-target'));
@@ -13,7 +14,8 @@ const samples = Number(process.env.MUTRACER_NATIVE_SAMPLES ?? '256');
 if (!Number.isInteger(samples) || samples < 1 || samples > 4096)
     throw new Error('Samples must be 1..4096');
 mkdirSync(out, { recursive: true });
-const env = { ...process.env, MUTRACER_NATIVE_OUTPUT: out, CARGO_TARGET_DIR: target, MUTRACER_AOT_ARCHIVE: resolve(out, 'render-core.lib.a') };
+const env = { ...process.env, MUTRACER_NATIVE_OUTPUT: out, CARGO_TARGET_DIR: target, MUTRACER_AOT_ARCHIVE: resolve(out, archiveName('render-core')) };
+if(windows)env.PATH=resolve(target,'release')+delimiter+process.env.PATH;
 const checks = [];
 function run(name, command, args, check = true) {
     console.log(`${name}...`);
@@ -43,11 +45,13 @@ if (!summarizeCoverage(composedDiagnostics, composed.status).passed)
 run('aot-build', compiler, ['build', '--lib', '--profile', 'native/src/render-core-profile.json', '-o', env.MUTRACER_AOT_ARCHIVE]);
 await prepareTinyBvh();
 run('native-build', 'cargo', ['build', '--release', '--locked', '--manifest-path', 'native/host/Cargo.toml']);
-const cc = process.env.CC ?? 'cc';
-run('scene-host-build', cc, ['-Wall', '-Wextra', '-Werror', '-I', 'native/include', 'native/examples/scene-host.c', '-L', resolve(target, 'release'), '-lmutracer_native_probe', `-Wl,-rpath,${resolve(target, 'release')}`, '-o', resolve(out, 'scene-host')]);
-run('core-host-build', cc, ['-Wall', '-Wextra', '-Werror', '-Dmt_module_init=mt_core_init', '-Dmt_module_reset=mt_core_reset', '-Dmt_module_collect=mt_core_collect', '-Dmt_module_sink=mt_core_sink', '-Dmt_module_run=mt_core_scene', 'native/tests/module-host.c', env.MUTRACER_AOT_ARCHIVE, '-lm', '-o', resolve(out, 'core-host')]);
+const sceneHost=resolve(out,executable('scene-host'));
+run('scene-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-I', 'native/include', 'native/examples/scene-host.c',
+    ...(windows?[resolve(target,'release/mutracer_native_probe.dll.lib')]:['-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`]),
+    ...cLinkFlags,'-o',sceneHost]);
+run('core-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-Dmt_module_init=mt_core_init', '-Dmt_module_reset=mt_core_reset', '-Dmt_module_collect=mt_core_collect', '-Dmt_module_sink=mt_core_sink', '-Dmt_module_run=mt_core_scene', 'native/tests/module-host.c', env.MUTRACER_AOT_ARCHIVE, ...cLinkFlags, '-o', resolve(out, executable('core-host'))]);
 for (const variant of ['baseline', 'textures', 'transforms', 'orthographic', 'emissive', 'missing-normals', 'float-textures', 'sphere-light', 'directional-light', 'spot-light', 'alpha', 'v2-environment', 'v2-environment-only', 'v2-background', 'v2-hidden-background', 'v2-film', 'v2-medium', 'v2-alpha', 'v2-bevel', 'v2-vertices', 'v2-multimaterial', 'v2-instances', 'v2-empty-batch', 'v3-displacement-uv', 'v3-displacement-triplanar', 'v3-displacement-spherical', 'v3-displacement-cylindrical', 'v3-displacement-negative', 'v3-displacement-bytes', 'v3-displacement-zero', 'v3-ies', 'v3-ies-shared', 'v3-rect-texture'])
-    run(`render-${variant}`, resolve(out, 'scene-host'), [resolve(out, variant === 'baseline' ? 'image' : variant), String(samples), variant, ...(variant === 'baseline' ? ['repeat'] : [])]);
+    run(`render-${variant}`, sceneHost, [resolve(out, variant === 'baseline' ? 'image' : variant), String(samples), variant, ...(variant === 'baseline' ? ['repeat'] : [])]);
 run('verify-scenes', process.execPath, ['native/validation/scene-verify.mjs']);
 // Both baseline renders execute in one C process with reset/collection between calls.
 for (const name of ['render', 'normal', 'albedo'])
