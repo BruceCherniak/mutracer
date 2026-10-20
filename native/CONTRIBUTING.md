@@ -43,6 +43,21 @@ npm ci --prefix native/toolchain --include=optional
 MUTRACER_NATIVE_OUTPUT=/absolute/evidence npm run native:ci
 ```
 
+The GitHub Actions `CI` workflow runs on pull requests, pushes to `main`, and
+manual dispatches. It validates native code and builds the standalone macOS
+arm64 viewer, including OIDN and licenses. Download `native-macos-arm64` from
+the run's artifacts for the app ZIP and SHA-256 checksum (retained for 14 days).
+`native-macos-diagnostics` retains logs and check summaries for seven days,
+including failed runs.
+
+Push a `native-v*` tag, for example `native-v0.1.0`, to run the same checks and
+publish the ZIP and checksum to that tag's GitHub Release after both Web and
+native jobs pass. Tags such as `native-v0.1.0-rc.1` create prereleases. Native
+releases do not replace the repository's latest release. Rerunning a tag's job
+replaces matching assets on a mutable release. Publishing uses `GITHUB_TOKEN`;
+the release job requires `contents: write`. The app is ad-hoc signed and is not
+Apple-notarized.
+
 The compiler resolver restores executable permissions for the platform archive's
 compiler, TypeScript server, LLVM code generator and comptime helper. Root Web
 dependencies do not include this compiler. CI skips GPU execution only when

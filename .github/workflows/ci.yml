@@ -3,7 +3,16 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['native-v*']
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 
 jobs:
   checks:
@@ -30,9 +39,8 @@ jobs:
       - run: npm run check:lib-esm
 
   native-macos:
-    runs-on: macos-latest
-    permissions:
-      contents: read
+    runs-on: macos-15
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -45,8 +53,81 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
       - name: Install pinned native compiler for this platform
-        run: npm ci --prefix native/toolchain --include=optional
+        run: |
+          npm ci --prefix native/toolchain --include=optional
+          echo "MUTRACER_SCRIPTC=$(node native/toolchain/compiler.mjs)" >> "$GITHUB_ENV"
+          echo "MUTRACER_NATIVE_OUTPUT=$RUNNER_TEMP/mutracer-native" >> "$GITHUB_ENV"
       - name: Build and validate native modules and GPU contracts
-        env:
-          MUTRACER_NATIVE_OUTPUT: ${{ runner.temp }}/mutracer-native
         run: npm run native:ci
+      - name: Build standalone macOS arm64 app
+        env:
+          MUTRACER_NATIVE_OUTPUT: ${{ runner.temp }}/mutracer-native/viewer
+          CARGO_TARGET_DIR: ${{ runner.temp }}/mutracer-native/viewer-target
+        run: |
+          set -o pipefail
+          mkdir -p "$MUTRACER_NATIVE_OUTPUT"
+          npm run native:viewer:build 2>&1 | tee "$MUTRACER_NATIVE_OUTPUT/build.log"
+      - name: Package and verify app
+        run: |
+          app="$MUTRACER_NATIVE_OUTPUT/viewer/MuTracer.app"
+          codesign --verify --deep --strict "$app"
+          test "$(lipo -archs "$app/Contents/MacOS/mutracer-viewer")" = arm64
+          mkdir -p "$RUNNER_TEMP/native-dist"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$RUNNER_TEMP/native-dist/MuTracer-macos-arm64.zip"
+          cd "$RUNNER_TEMP/native-dist"
+          shasum -a 256 MuTracer-macos-arm64.zip > MuTracer-macos-arm64.zip.sha256
+      - name: Upload native app
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-macos-arm64
+          path: ${{ runner.temp }}/native-dist/*
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: Upload native diagnostics
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-macos-diagnostics
+          path: |
+            ${{ runner.temp }}/mutracer-native/**/*.log
+            ${{ runner.temp }}/mutracer-native/**/checks.json
+            ${{ runner.temp }}/mutracer-native/**/summary.json
+            ${{ runner.temp }}/mutracer-native/viewer/coverage.json
+          if-no-files-found: ignore
+          retention-days: 7
+
+  native-release:
+    if: ${{ startsWith(github.ref, 'refs/tags/native-v') }}
+    needs: [checks, native-macos]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-macos-arm64
+          path: native-dist
+      - name: Verify release assets
+        working-directory: native-dist
+        run: sha256sum --check MuTracer-macos-arm64.zip.sha256
+      - name: Publish native release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          flags=()
+          if [[ "${RELEASE_TAG#native-v}" == *-* ]]; then
+            flags+=(--prerelease)
+          fi
+          if draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null); then
+            gh release upload "$RELEASE_TAG" native-dist/* --clobber
+            if [[ "$draft" == true ]]; then
+              gh release edit "$RELEASE_TAG" --draft=false --latest=false "${flags[@]}"
+            fi
+          else
+            gh release create "$RELEASE_TAG" native-dist/* \
+              --verify-tag --title "MuTracer $RELEASE_TAG" --generate-notes \
+              --latest=false "${flags[@]}"
+          fi
