@@ -1,11 +1,10 @@
 #include "mutracer-context.h"
-#include "mutracer-layout.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-_Static_assert(sizeof(mt_render_settings)==MT_SETTINGS_WORDS*MT_WORD_BYTES,"settings ABI");
+_Static_assert(sizeof(mt_render_settings)==64,"settings ABI");
 static char error[4096];
 static unsigned checks=0;
 #define REQUIRE(x) do {checks++;if(!(x)){fprintf(stderr,"settings check %u, line %d: %s\n",checks,__LINE__,#x);return 1;}} while(0)

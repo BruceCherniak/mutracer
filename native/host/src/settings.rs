@@ -79,3 +79,24 @@ pub unsafe extern "C" fn mt_render_settings_default(output: *mut RenderSettings)
     }
     0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    // The C struct in mutracer-context.h is copied word-for-word into the wire record.
+    #[test]
+    fn c_settings_struct_matches_the_wire_record() {
+        assert_eq!(
+            std::mem::size_of::<RenderSettings>(),
+            wire::WORDS * WORD_BYTES
+        );
+        assert_eq!(
+            std::mem::offset_of!(RenderSettings, sample_sequence_offset),
+            wire::SEQUENCE_OFFSET * WORD_BYTES
+        );
+        assert_eq!(
+            std::mem::offset_of!(RenderSettings, transmissive_output_alpha_min),
+            wire::TRANSMISSIVE_ALPHA_MIN * WORD_BYTES
+        );
+    }
+}

@@ -1,4 +1,4 @@
-#include "../../native/include/mutracer-layout.h"
+#include "../../native/src/mutracer-internal-layout.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdint>

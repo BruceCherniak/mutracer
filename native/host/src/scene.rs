@@ -1585,7 +1585,7 @@ fn prepare_impl_with_kernels_inner(
 /// Raw scene descriptors; paths and all bytes are borrowed for the call.
 /// # Safety
 /// `input` must be readable for `length` bytes and output/error strings follow
-/// mutracer-scene.h. Concurrent blocking probes return a busy error.
+/// mutracer-debug.h. Concurrent blocking probes return a busy error.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_probe_render_scene(
     input: *const u8,

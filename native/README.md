@@ -45,11 +45,15 @@ capture files:
 Examples include `baseline`, `textures`, `transforms`, `orthographic`, `emissive`,
 `alpha`, `v2-environment`, `v2-background`, `v2-hidden-background`, `v2-film`,
 `v2-medium`, `v2-bevel`, `v2-vertices`, `v2-multimaterial` and `v2-instances`.
-For caller-supplied data, use `mt_probe_render_scene` with the byte layout and
-ownership rules in [mutracer-scene.h](include/mutracer-scene.h). Add `native/include`
-to your C compiler's header search path.
+The example host uses `mt_probe_render_scene` from
+[mutracer-debug.h](include/mutracer-debug.h), a debug and validation entry point
+that may change without notice. Applications render caller-supplied data with
+the [context API](#keep-a-scene-alive-and-read-pixels). Build descriptors with the
+byte layout and ownership rules in [mutracer-scene.h](include/mutracer-scene.h)
+and the word offsets in [mutracer-layout.h](include/mutracer-layout.h). Add
+`native/include` to your C compiler's header search path.
 
-The output directory contains `render.png`, `render.rgba32f`, `normal.rgba32f`,
+The example's output directory contains `render.png`, `render.rgba32f`, `normal.rgba32f`,
 `albedo.rgba32f` and `result.json`. The PNG is a Reinhard/sRGB preview. Float files
 contain linear sample averages as little-endian f32 RGBA, bottom row first;
 dimensions are in `result.json`. Normal guides are not renormalized after averaging.
@@ -251,12 +255,10 @@ shares that profile.
 Additional examples are `v3-displacement-uv`, `v3-displacement-triplanar`,
 `v3-ies`, `v3-ies-shared` and `v3-rect-texture`.
 
-Scene commits copy their inputs and retain no caller storage. Raw probes and
-`mt_context_render` block until rendering finishes; jobs use the polling lifecycle
-above. Keep borrowed input/output storage valid until the call returns. Every
-raw probe call rebuilds the
-scene and restarts accumulation; context render calls retain the committed scene.
-Samples range from 1 to 4096. `mt_context_commit` defaults to Sobol, seed
+Scene commits copy their inputs and retain no caller storage.
+`mt_context_render` blocks until rendering finishes; jobs use the polling lifecycle
+above. Keep borrowed input/output storage valid until the call returns. Context
+render calls retain the committed scene. Samples range from 1 to 4096. `mt_context_commit` defaults to Sobol, seed
 12345 and six bounces. `mt_context_commit_with_settings` accepts the sampling
 pattern, sequence, bounce and quality options in the context header. Unknown
 or unsupported fields return an error.

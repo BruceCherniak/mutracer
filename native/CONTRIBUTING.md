@@ -117,6 +117,12 @@ A successful full commit recovers the scene; AOT OOM/abort traps terminate the
 process. Logs use `mutracer-log.h`, silent by default. Callbacks serialize on the
 emitting thread, cannot reenter the library and must outlive unregistration.
 
+Public headers in `include/` are the supported C API; `mutracer-debug.h` is
+the exception and holds validation-only entry points. The layout generator
+writes caller-facing descriptor offsets to `include/mutracer-layout.h` and host
+protocol records, resource IDs and shader layouts to the uninstalled
+`src/mutracer-internal-layout.h`.
+
 ## Shared source and typed resources
 
 Production native rendering accepts only version-4 raw descriptors. Prepared

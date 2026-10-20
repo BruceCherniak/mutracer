@@ -1,7 +1,7 @@
 /* A real native caller constructs raw geometry and editable scene descriptors.
  * No capture files, JavaScript-generated resources, or embedded GPU shaders.
  * Record fields use the MT_* word offsets from mutracer-layout.h. */
-#include "mutracer-scene.h"
+#include "mutracer-debug.h"
 #include "mutracer-material-properties.h"
 #include <math.h>
 #include <stdio.h>

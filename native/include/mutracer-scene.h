@@ -4,19 +4,13 @@
 #include <stdint.h>
 #include "mutracer-material-properties.h"
 #include "mutracer-layout.h"
-#include "mutracer-status.h"
-#ifdef __cplusplus
-extern "C" {
-#endif
-/* Experimental raw scene ABI v4, little endian; see native/README.md#platforms for
- * supported platforms. Every record is uint32 words; float fields contain IEEE
- * f32 bits. Offsets are words from the beginning of input. Arrays/tables must
- * fit length. Reserved words must be 0.
- * Caller owns all bytes and strings through the blocking call; none are retained.
- * Return MT_OK or an mt_status (NUL-terminated message if capacity > 0):
- * MT_ERROR_INVALID_ARGUMENT for a rejected descriptor, MT_ERROR_BUSY while
- * another probe runs.
- * Calls may run on arbitrary threads; keep borrowed bytes valid through return.
+/* Experimental raw scene descriptor ABI v4, little endian; see
+ * native/README.md#platforms for supported platforms. mt_context_commit in
+ * mutracer-context.h consumes it, copying the bytes; none are retained.
+ * mutracer-layout.h names every word offset below (MT_HEADER_*, MT_GEOMETRY_*,
+ * ...). Every record is uint32 words; float fields contain IEEE f32 bits.
+ * Offsets are words from the beginning of input. Arrays/tables must fit length.
+ * Reserved words must be 0. A rejected descriptor returns MT_ERROR_INVALID_ARGUMENT.
  *
  * Header[32]: version[4], total_words, width,height, geometry_count,mesh_count,
  * material_count,light_count,texture_count, geometry_offset,mesh_offset,
@@ -82,16 +76,6 @@ extern "C" {
  * Each geometry has <=4M vertices/12M indices; preparation has a conservative
  * 1 GiB budget based on input vertex/index counts.
  * Texture atlas budget 64 MiB, max side 4096/layers 256; sources may be scaled.
- * Only version 4 is accepted; earlier descriptor versions are rejected.
- * Contexts default to HWRT with reported software fallback when unavailable;
- * backend selection and fallback details are in mutracer-context.h.
- * Samples 1..4096, fixed seed 12345, bounces 6.
- * Result HDR/guides are little-endian f32 RGBA, bottom row first.
- * output_directory receives render.png, HDR/guides and result.json.
+ * Only version 4 (MT_VERSION_SCENE) is accepted; earlier versions are rejected.
  */
-int32_t mt_probe_render_scene(const uint8_t *input, size_t length,
-  const char *output_directory, uint32_t samples, char *error, size_t error_capacity);
-#ifdef __cplusplus
-}
-#endif
 #endif
