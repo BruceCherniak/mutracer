@@ -315,13 +315,22 @@ pub fn capture_display(
         return Ok(false);
     }
     let size = [scene.scene.width, scene.scene.height];
-    if display.as_ref().is_none_or(|d| d.size != size) {
-        *display = Some(crate::display::Display::new(scene.gpu.clone(), size));
+    if display
+        .as_ref()
+        .is_none_or(|d| d.size != size || d.owner != handle)
+    {
+        // Resource IDs from independent wgpu Instances can compare equal.
+        // Native context handles are process-unique and own a fixed device.
+        let mut next = crate::display::Display::new(scene.gpu.clone(), size);
+        next.owner = handle;
+        *display = Some(next);
     }
-    display
-        .as_mut()
-        .unwrap()
-        .capture(&scene.buffers[&scene.scene.color_output], scene.samples);
+    display.as_mut().unwrap().capture(
+        &scene.buffers[&scene.scene.color_output],
+        &scene.buffers[&scene.scene.normal_output.ok_or("No normal output")?],
+        &scene.buffers[&scene.scene.albedo_output.ok_or("No albedo output")?],
+        scene.samples,
+    );
     Ok(true)
 }
 

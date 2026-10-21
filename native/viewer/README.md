@@ -78,14 +78,19 @@ the output directory. See the [native guide](../README.md) for platform backends
   right rail. Click the active category to hide the inspector; **[** and **]**
   toggle the scene list and inspector. Click section headings to collapse their
   settings. Narrow windows hide the scene list to preserve viewport space.
-- Adjust environment intensity, tint, rotation and background visibility.
+- **Lighting** provides environment intensity, tint and rotation, plus Environment,
+  Color or Transparent backgrounds. The environment still lights the scene with
+  a transparent background, and exported PNGs keep its alpha channel.
   **Load HDR…** opens a local Radiance equirectangular environment; **Studio**
   restores the built-in light.
 - **Render** provides 4–16,384 maximum samples, 1–16 bounces, Sobol, Z-Sobol or
   Random sampling and clamping (0 disables it). Quality changes restart
   accumulation; more samples and bounces cost more rendering time. Choose a fixed
   resolution, pause/resume, restart, adjust exposure or save the displayed image
-  as PNG. The preview uses Reinhard/sRGB.
+  as PNG. **Color** offers AgX (default), ACES, Cineon, Reinhard and Linear tone
+  mapping, linear exposure (1 is unchanged), contrast, saturation, temperature
+  and tint. These affect both preview and PNG export. **Output** selects Final,
+  Normal or Albedo; guide channels bypass color controls and denoising.
 - **Lighting** also provides an optional directional **Key light**, disabled by
   default. Adjust its intensity, color, azimuth and elevation.
 - **Native OIDN** is on by default. It denoises completed previews after interaction
@@ -112,9 +117,10 @@ between zero and nonzero light or environment intensity can also require a
 rebuild. Full rebuilds run in the background while the previous image stays visible.
 Changes are combined at roughly 120 ms intervals while held, then applied when
 released. CPU/GPU contention can still reduce responsiveness.
-Exposure and denoising change only the displayed image, preserving the original
-HDR accumulation. Denoising does not block window interaction; a result for an
-older scene, camera or sample count cannot replace the current preview.
+Color controls, output channel and denoising change only the displayed image,
+preserving the original HDR accumulation. Denoising does not block window
+interaction; a result for an older scene, camera or sample count cannot replace
+the current preview.
 The first denoise can take longer than later runs. Choose a lower render
 resolution for more responsive interaction; a fixed frame rate is not guaranteed.
 

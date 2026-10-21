@@ -219,7 +219,11 @@ editing, cancellation, HDR environments, backend assertions and native OIDN.
 `--interaction-smoke DIRECTORY` checks continuous camera/held edits, retained
 previews, resize and stale-OIDN rejection. Material, environment, light, transform
 and geometry each have a corresponding `--NAME-smoke DIRECTORY` that compares
-incremental commits with full preparation. Test all three AOVs, invalid input,
+incremental commits with full preparation. `--parity-smoke DIRECTORY` compares
+viewer camera/render settings against fresh contexts on both backends, checks
+settings retention after edits/backend replacement, and exercises display controls,
+transparent PNG export, OIDN alpha preservation and guide channels. It needs the
+bundled OIDN runtime. Test all three AOVs, invalid input,
 rollback and restoration. `[MODEL] --edit-bench DIRECTORY` records descriptor
 build and commit times of material, transform, camera, light and environment
 edits at 1280×720 on both backends in `edit-bench.jsonl`; set

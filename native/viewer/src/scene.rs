@@ -1056,12 +1056,17 @@ fn write_background(w: &mut [u32], environment: &Environment, texture: u32) {
     let color = if environment.background {
         [0.; 3]
     } else {
-        [0.025f32, 0.025, 0.03]
+        environment.background_color
     };
     for (k, c) in color.iter().enumerate() {
         w[h::BACKGROUND_COLOR + k] = c.to_bits();
     }
-    w[h::BACKGROUND_COLOR + 3] = 1f32.to_bits();
+    w[h::BACKGROUND_COLOR + 3] = if environment.background {
+        1f32
+    } else {
+        environment.background_alpha
+    }
+    .to_bits();
     w[h::BACKGROUND_TEXTURE] = if environment.background { texture } else { 0 };
 }
 struct Wire(Vec<u32>);
@@ -1128,6 +1133,8 @@ pub struct Environment {
     pub color: [f32; 3],
     pub rotation: f32,
     pub background: bool,
+    pub background_color: [f32; 3],
+    pub background_alpha: f32,
     pub image: Option<Arc<image::Rgb32FImage>>,
     pub name: String,
 }
@@ -1138,6 +1145,8 @@ impl Default for Environment {
             color: [0.8, 0.88, 1.],
             rotation: 0.,
             background: true,
+            background_color: [0.025, 0.025, 0.03],
+            background_alpha: 1.,
             image: None,
             name: "Studio".into(),
         }
@@ -1309,6 +1318,8 @@ mod descriptor_tests {
             s.light.azimuth += 12.;
             s.light.elevation -= 3.;
             s.environment.background = step % 2 == 0;
+            s.environment.background_color = [step as f32 * 0.1, 0.1, 0.3];
+            s.environment.background_alpha = if step % 2 == 0 { 1. } else { 0. };
             assert_eq!(s.check(), allocation);
             // Snapshot moved to and back from a worker still owns the same buffer.
             let cached = s.descriptor.take();

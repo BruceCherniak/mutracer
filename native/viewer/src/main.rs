@@ -59,7 +59,7 @@ struct Viewer {
     settings: RenderSettings,
     picking_focus: bool,
     samples: u32,
-    exposure: f32,
+    display_settings: mutracer_native_probe::display::Settings,
     selected: usize,
     selected_mesh: Option<usize>,
     tab: usize,
@@ -75,6 +75,7 @@ struct Viewer {
     pixels: Vec<f32>,
     pixel_size: [u32; 2],
     frame_samples: u32,
+    frame_pending: bool,
     generation: u64,
     render_generation: u64,
     frame_generation: u64,
@@ -88,6 +89,7 @@ struct Viewer {
     /// Whether the last completed commit prepared the scene again.
     last_commit_full: bool,
     texture: Option<egui::TextureHandle>,
+    checker: Option<egui::TextureHandle>,
     display_dirty: bool,
     error: String,
 }
@@ -150,7 +152,7 @@ impl Viewer {
             settings: RenderSettings::default(),
             picking_focus: false,
             samples: 0,
-            exposure: 0.,
+            display_settings: mutracer_native_probe::display::Settings::default(),
             selected,
             selected_mesh: None,
             tab: 0,
@@ -171,6 +173,7 @@ impl Viewer {
             pixels: vec![],
             pixel_size: size,
             frame_samples: 0,
+            frame_pending: false,
             generation: 1,
             render_generation: 1,
             frame_generation: 0,
@@ -182,6 +185,7 @@ impl Viewer {
             last_denoise: None,
             last_scene_commit: std::time::Instant::now(),
             texture: None,
+            checker: None,
             display_dirty: false,
             error: String::new(),
         })
@@ -250,10 +254,11 @@ impl Viewer {
                             // Even a superseded snapshot is safe to reuse: the next
                             // submission patches all editable values from its model.
                             self.descriptor = Some(committed.descriptor);
-                            if let Some(renderer) = committed.replacement {
-                                let retired = std::mem::replace(&mut self.renderer, renderer);
-                                std::thread::spawn(move || drop(retired));
-                            }
+                            // Read publication metadata before retiring another context:
+                            // destruction also uses the native registry and can report busy.
+                            let retired = committed
+                                .replacement
+                                .map(|renderer| std::mem::replace(&mut self.renderer, renderer));
                             self.renderer.commit_finished();
                             // Full preparations restart the held-input throttle.
                             self.last_commit_full = !self.renderer.last_commit_incremental()?;
@@ -289,6 +294,9 @@ impl Viewer {
                                     self.change = Change::Scene;
                                 }
                             }
+                            if let Some(retired) = retired {
+                                std::thread::spawn(move || drop(retired));
+                            }
                         }
                         Err(error) => {
                             self.change = Change::None;
@@ -299,7 +307,7 @@ impl Viewer {
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     if self.display_dirty {
                         if let Some(display) = &self.gpu_display {
-                            display.compose(self.exposure);
+                            display.compose_with(&self.display_settings);
                             self.display_dirty = false;
                         }
                     }
@@ -315,16 +323,19 @@ impl Viewer {
         if self.change != Change::None || !self.running {
             self.renderer.cancel()?;
         }
-        let finished = self.renderer.poll()?;
+        self.frame_pending |= self.renderer.poll()?;
         // Read the completed old frame before applying pending input. Keep it on
         // screen until a newer frame arrives, including while a slider is held.
-        if finished {
+        if self.frame_pending {
             self.samples = self.renderer.samples()?;
             if self.samples > 0 {
+                let old_texture = self.gpu_display.as_ref().map(|d| d.texture.clone());
+                if !self.renderer.capture(&mut self.gpu_display)? {
+                    ctx.request_repaint_after(Duration::from_millis(16));
+                    return Ok(());
+                }
                 if self.gpu.is_some() {
-                    let old_size = self.gpu_display.as_ref().map(|d| d.size);
-                    self.renderer.capture(&mut self.gpu_display)?;
-                    if old_size != self.gpu_display.as_ref().map(|d| d.size) {
+                    if old_texture.as_ref() != self.gpu_display.as_ref().map(|d| &d.texture) {
                         if let Some(id) = self.gpu_texture.take() {
                             self.gpu
                                 .as_ref()
@@ -353,6 +364,7 @@ impl Viewer {
                 self.display_dirty = true;
             }
         }
+        self.frame_pending = false;
         let held = ctx.input(|i| i.pointer.any_down());
         if !self.renderer.busy() {
             // Edits commit the whole descriptor. While the last commit applied
@@ -444,6 +456,7 @@ impl Viewer {
             }
         }
         if self.denoise
+            && self.display_settings.output == 0
             && !held
             && !self.renderer.busy()
             && self.change == Change::None
@@ -481,9 +494,9 @@ impl Viewer {
             // Dispatch now, before the next input can cancel a queued job.
             self.renderer
                 .start((self.settings.max_samples - self.samples).min(if held { 1 } else { 4 }))?;
-            self.renderer.poll()?;
+            self.frame_pending |= self.renderer.poll()?;
         }
-        if self.display_dirty && self.gpu.is_some() {
+        if self.display_dirty {
             if let Some(display) = &mut self.gpu_display {
                 if self.denoise && !self.denoised.is_empty() && !display.using_denoised {
                     display
@@ -492,23 +505,27 @@ impl Viewer {
                 } else if !self.denoise || self.denoised.is_empty() {
                     display.original();
                 }
-                self.gpu_display.as_ref().unwrap().compose(self.exposure);
+                display.compose_with(&self.display_settings);
+                if self.gpu.is_none() {
+                    let rgba = display
+                        .read_rgba(&self.display_settings)
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                    let image = egui::ColorImage::from_rgba_unmultiplied(
+                        [self.pixel_size[0] as usize, self.pixel_size[1] as usize],
+                        &rgba,
+                    );
+                    if let Some(texture) = &mut self.texture {
+                        texture.set(image, egui::TextureOptions::LINEAR);
+                    } else {
+                        self.texture = Some(ctx.load_texture(
+                            "MuTracer render",
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        ));
+                    }
+                }
+                self.display_dirty = false;
             }
-            self.display_dirty = false;
-        }
-        if self.display_dirty && !self.pixels.is_empty() {
-            let pixels = renderer::display(self.display_pixels(), self.pixel_size, self.exposure);
-            let image = egui::ColorImage::from_rgba_unmultiplied(
-                [self.pixel_size[0] as usize, self.pixel_size[1] as usize],
-                &pixels,
-            );
-            if let Some(texture) = &mut self.texture {
-                texture.set(image, egui::TextureOptions::LINEAR);
-            } else {
-                self.texture =
-                    Some(ctx.load_texture("MuTracer render", image, egui::TextureOptions::LINEAR));
-            }
-            self.display_dirty = false;
         }
         if self.renderer.busy()
             || self.running && self.samples < self.settings.max_samples
@@ -518,12 +535,23 @@ impl Viewer {
         }
         Ok(())
     }
-    fn display_pixels(&self) -> &[f32] {
-        if self.denoise && !self.denoised.is_empty() {
-            &self.denoised
-        } else {
-            &self.pixels
-        }
+    fn save_image(&self, path: &Path) -> Result<()> {
+        let display = self
+            .gpu_display
+            .as_ref()
+            .context("No completed image to export")?;
+        let rgba = display
+            .read_rgba(&self.display_settings)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        image::save_buffer_with_format(
+            path,
+            &rgba,
+            display.size[0],
+            display.size[1],
+            image::ColorType::Rgba8,
+            image::ImageFormat::Png,
+        )?;
+        Ok(())
     }
     fn input_files(&mut self, ctx: &egui::Context) {
         let paths = ctx.input(|i| {

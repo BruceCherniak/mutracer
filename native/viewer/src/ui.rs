@@ -1,5 +1,5 @@
 //! Native viewer layout. Rendering and scene updates stay in Viewer.
-use crate::{Change, Viewer, default_model, renderer, scene::Environment};
+use crate::{Change, Viewer, default_model, scene::Environment};
 use crate::{controls, theme};
 use eframe::egui;
 use std::time::Duration;
@@ -72,16 +72,7 @@ impl Viewer {
                                 .add_filter("PNG", &["png"])
                                 .save_file()
                             {
-                                let linear = if let Some(display) = &self.gpu_display {
-                                    display
-                                        .read_linear()
-                                        .map_err(|e| anyhow::anyhow!(e.to_string()))
-                                } else {
-                                    Ok(self.display_pixels().to_vec())
-                                };
-                                if let Err(e) = linear.and_then(|pixels| {
-                                    renderer::save(&path, &pixels, self.pixel_size, self.exposure)
-                                }) {
+                                if let Err(e) = self.save_image(&path) {
                                     self.error = e.to_string();
                                 }
                             }
@@ -339,16 +330,52 @@ impl Viewer {
         if previous != self.settings {
             self.dirty(Change::Scene);
         }
-        controls::section(ui, "Display", |ui| {
-            if controls::parameter(
+        let old_display = self.display_settings;
+        controls::section(ui, "Color", |ui| {
+            controls::select(
+                ui,
+                "Tone mapping",
+                ["AgX", "ACES", "Cineon", "Reinhard", "Linear"]
+                    [self.display_settings.tone_mapping as usize],
+                |ui| {
+                    for (mode, name) in [
+                        (0, "AgX"),
+                        (1, "ACES"),
+                        (2, "Cineon"),
+                        (3, "Reinhard"),
+                        (4, "Linear"),
+                    ] {
+                        ui.selectable_value(&mut self.display_settings.tone_mapping, mode, name);
+                    }
+                },
+            );
+            controls::scalar(
                 ui,
                 "Exposure",
-                egui::Slider::new(&mut self.exposure, -4.0..=4.0),
-            )
-            .changed()
-            {
-                self.display_dirty = true;
-            }
+                &mut self.display_settings.exposure,
+                0.0..=4.0,
+            );
+            controls::scalar(
+                ui,
+                "Contrast",
+                &mut self.display_settings.contrast,
+                0.5..=1.5,
+            );
+            controls::scalar(
+                ui,
+                "Saturation",
+                &mut self.display_settings.saturation,
+                0.0..=2.0,
+            );
+            controls::scalar(
+                ui,
+                "Temperature",
+                &mut self.display_settings.temperature,
+                -1.0..=1.0,
+            );
+            controls::scalar(ui, "Tint", &mut self.display_settings.tint, -1.0..=1.0);
+        });
+        controls::section(ui, "Denoiser", |ui| {
             if controls::toggle(ui, "Native OIDN", &mut self.denoise).changed() {
                 self.display_dirty = true;
                 self.last_denoise = None;
@@ -357,6 +384,21 @@ impl Viewer {
                 ui.weak(&self.denoise_status);
             }
         });
+        controls::section_open(ui, "Output", false, |ui| {
+            controls::select(
+                ui,
+                "Channel",
+                ["Final", "Normal", "Albedo"][self.display_settings.output as usize],
+                |ui| {
+                    for (mode, name) in [(0, "Final"), (1, "Normal"), (2, "Albedo")] {
+                        ui.selectable_value(&mut self.display_settings.output, mode, name);
+                    }
+                },
+            );
+        });
+        if old_display != self.display_settings {
+            self.display_dirty = true;
+        }
         controls::section(ui, "Device", |ui| {
             let old = self.backend;
             controls::select(
@@ -582,7 +624,7 @@ impl Viewer {
             changed |= controls::parameter(
                 ui,
                 "Intensity",
-                egui::Slider::new(&mut self.environment.intensity, 0.0..=5.0),
+                egui::Slider::new(&mut self.environment.intensity, 0.0..=4.0),
             )
             .changed();
             changed |= controls::parameter(
@@ -592,8 +634,38 @@ impl Viewer {
             )
             .changed();
             changed |= controls::color(ui, "Tint", &mut self.environment.color).changed();
-            changed |= controls::toggle(ui, "Show environment", &mut self.environment.background)
-                .changed();
+        });
+        controls::section(ui, "Background", |ui| {
+            let old = if self.environment.background {
+                0
+            } else if self.environment.background_alpha > 0. {
+                1
+            } else {
+                2
+            };
+            let mut mode = old;
+            controls::select(
+                ui,
+                "Background",
+                ["Environment", "Color", "Transparent"][mode],
+                |ui| {
+                    for (value, name) in [(0, "Environment"), (1, "Color"), (2, "Transparent")] {
+                        ui.selectable_value(&mut mode, value, name);
+                    }
+                },
+            );
+            if mode != old {
+                self.environment.background = mode == 0;
+                self.environment.background_alpha = if mode == 2 { 0. } else { 1. };
+                changed = true;
+            }
+            if mode == 1 {
+                changed |=
+                    controls::color(ui, "Color", &mut self.environment.background_color).changed();
+            }
+            if mode == 2 {
+                ui.weak("The environment still lights the scene. PNG keeps transparency.");
+            }
         });
         if changed {
             self.dirty(Change::Environment);
@@ -822,6 +894,32 @@ impl Viewer {
                 let width = available.x.min(available.y * aspect);
                 let size = egui::vec2(width, width / aspect);
                 let rect = egui::Rect::from_center_size(ui.max_rect().center(), size);
+                if !self.environment.background && self.environment.background_alpha == 0. {
+                    let checker = self.checker.get_or_insert_with(|| {
+                        ctx.load_texture(
+                            "Transparency checker",
+                            egui::ColorImage::new(
+                                [2, 2],
+                                vec![
+                                    egui::Color32::from_gray(38),
+                                    egui::Color32::from_gray(48),
+                                    egui::Color32::from_gray(48),
+                                    egui::Color32::from_gray(38),
+                                ],
+                            ),
+                            egui::TextureOptions {
+                                wrap_mode: egui::TextureWrapMode::Repeat,
+                                ..egui::TextureOptions::NEAREST
+                            },
+                        )
+                    });
+                    ui.painter().image(
+                        checker.id(),
+                        rect,
+                        egui::Rect::from_min_size(egui::Pos2::ZERO, rect.size() / 24.),
+                        egui::Color32::WHITE,
+                    );
+                }
                 if let Some(texture) = self
                     .gpu_texture
                     .or_else(|| self.texture.as_ref().map(|t| t.id()))
