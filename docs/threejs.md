@@ -67,7 +67,7 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | `SpotLight` | `SpotLight` (radius `userData.mutracerRadius`, default 0.01; `penumbra` sets the inner angle, with the same smooth falloff as Three.js) |
 | `RectAreaLight` | `RectLight` |
 | `AmbientLight` | `AmbientLight` |
-| `scene.environment` (equirectangular float `DataTexture`, e.g. from `HDRLoader`/`RGBELoader`) | `EnvironmentLight` |
+| `scene.environment` (equirectangular float `DataTexture`, e.g. from `HDRLoader`/`RGBELoader`) | `EnvironmentLight`; orientation follows Three.js, so a `DataTexture` with `flipY = false` has its first row at the bottom |
 | `scene.background` color / texture | Background; the environment itself when `background === environment` |
 
 Three.js `opacity` maps to `geometryOpacity`; thin-shell choices map to

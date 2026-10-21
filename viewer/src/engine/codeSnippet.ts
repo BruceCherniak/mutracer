@@ -150,6 +150,8 @@ export function generateCode(snapshot: CodeSnapshot): string {
         '}',
         'const ambient = new THREE.DataTexture(pixels, 64, 32, THREE.RGBAFormat, THREE.FloatType);',
         'ambient.mapping = THREE.EquirectangularReflectionMapping;',
+        '// Rows start at the sky, as in an .hdr file.',
+        'ambient.flipY = true;',
         'ambient.needsUpdate = true;',
         'scene.environment = ambient;'
       );

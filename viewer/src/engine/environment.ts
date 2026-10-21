@@ -103,6 +103,8 @@ export class Environment {
       new Float32Array(source.data.length), source.width, source.height, THREE.RGBAFormat, THREE.FloatType
     );
     texture.mapping = THREE.EquirectangularReflectionMapping;
+    // Rows start at the sky, as in an .hdr file.
+    texture.flipY = true;
     return texture;
   }
 

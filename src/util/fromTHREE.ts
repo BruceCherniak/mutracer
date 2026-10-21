@@ -79,8 +79,23 @@ function convertDataTexture(threeTexture: THREE.DataTexture | null | undefined, 
     ? Float32Array.from(source, halfFloatToFloat)
     : source instanceof Float32Array || source instanceof Uint8Array || source instanceof Int32Array
       ? source : Float32Array.from(source as unknown as ArrayLike<number>);
-  texture.image = { data, width: threeTexture.image.width, height: threeTexture.image.height };
+  const { width, height } = threeTexture.image;
+  // Three.js equirect maps put the sky at v = 1, so with flipY = false the
+  // first row is the nadir. MuTracer environments start at the zenith and
+  // ignore flipY, so reorder the rows here instead.
+  texture.image = { data: threeTexture.flipY ? data : flipRows(data, width, height), width, height };
+  texture.flipY = false;
   return texture;
+}
+
+function flipRows<T extends Float32Array | Uint8Array | Int32Array>(data: T, width: number, height: number): T {
+  if (height <= 1) return data;
+  const rowLength = data.length / height;
+  const flipped = new (data.constructor as new (length: number) => T)(data.length);
+  for (let y = 0; y < height; y++) {
+    flipped.set(data.subarray((height - 1 - y) * rowLength, (height - y) * rowLength), y * rowLength);
+  }
+  return flipped;
 }
 
 function convertMaterial(

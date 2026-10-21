@@ -7,7 +7,7 @@ import Texture from './Texture.js';
 export default class EnvironmentLight {
   /** Light discriminator; always `EnvironmentLight`. */
   readonly type = 'EnvironmentLight' as const;
-  /** Equirectangular radiance map in linear color. */
+  /** Equirectangular radiance map in linear color. The first row is the zenith (+Y); `flipY` is ignored. */
   map: Texture;
   constructor(params: { /** Required equirectangular radiance map; no default. */ map: Texture }) {
     this.map = params.map;

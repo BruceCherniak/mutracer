@@ -863,6 +863,25 @@ describe('Three.js scene conversion', () => {
     expect(result.background).toBe(environmentLight.map);
   });
 
+  it('reorders Three.js equirect rows so the sky comes first', () => {
+    const sky = [0.5, 0.5, 0.5, 1], ground = [0, 0, 0, 1];
+    const convertFirstRow = (rows: number[][], flipY: boolean) => {
+      const scene = new THREE.Scene();
+      const source = new Float32Array(rows.flat());
+      const environment = new THREE.DataTexture(source, 1, 2, THREE.RGBAFormat, THREE.FloatType);
+      environment.flipY = flipY;
+      scene.environment = environment;
+      const light = fromTHREEScene(scene).lights.find((light) => light.type === 'EnvironmentLight');
+      if (!light || light.type !== 'EnvironmentLight') throw new Error('missing environment');
+      expect(Array.from(source)).toEqual(rows.flat());
+      return Array.from((light.map.image as { data: Float32Array }).data.slice(0, 4));
+    };
+    // flipY = false: Three.js samples row 0 at v = 0, the nadir.
+    expect(convertFirstRow([ground, sky], false)).toEqual(sky);
+    // flipY = true (HDRLoader): row 0 is already the top.
+    expect(convertFirstRow([sky, ground], true)).toEqual(sky);
+  });
+
   it('creates fresh one-shot environment lights and reads the current version', () => {
     const scene = new THREE.Scene();
     const pixels = new Float32Array([1, 0.5, 0.25, 1]);
