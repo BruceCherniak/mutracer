@@ -779,7 +779,7 @@ function prepareTransformUpdate(bytes: Uint8Array, token: number, native: boolea
   return packTransformUpdate(stage, buildTLAS(instances, state.blases), token);
 }
 function samePixelTexture(a: PixelTexture, b: PixelTexture): boolean {
-  if (a.pixels.width !== b.pixels.width || a.pixels.height !== b.pixels.height || a.flipY !== b.flipY || a.uvChannel !== b.uvChannel
+  if (a.pixels.width !== b.pixels.width || a.pixels.height !== b.pixels.height || a.flipY !== b.flipY || a.uvChannel !== b.uvChannel || a.wrapS !== b.wrapS || a.wrapT !== b.wrapT
     || !Object.is(a.uvScale[0], b.uvScale[0]) || !Object.is(a.uvScale[1], b.uvScale[1])
     || !Object.is(a.uvOffset[0], b.uvOffset[0]) || !Object.is(a.uvOffset[1], b.uvOffset[1])) return false;
   const x = a.pixels.data, y = b.pixels.data;

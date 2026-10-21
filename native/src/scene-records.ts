@@ -21,6 +21,8 @@ export function decodeTexture(bytes: Uint8Array, u: Uint32Array, f: Float32Array
   const texture = new PixelTexture({width: u[off + T.WIDTH], height: u[off + T.HEIGHT], data});
   texture.flipY = !!u[off + T.FLIP_Y]; texture.uvChannel = u[off + T.UV_CHANNEL] === 1 ? 1 : 0;
   texture.uvScale = [f[off + T.UV_SCALE], f[off + T.UV_SCALE + 1]]; texture.uvOffset = [f[off + T.UV_OFFSET], f[off + T.UV_OFFSET + 1]];
+  texture.wrapS = u[off + T.WRAP_S] === 1 ? 'clamp-to-edge' : u[off + T.WRAP_S] === 2 ? 'mirrored-repeat' : 'repeat';
+  texture.wrapT = u[off + T.WRAP_T] === 1 ? 'clamp-to-edge' : u[off + T.WRAP_T] === 2 ? 'mirrored-repeat' : 'repeat';
   return texture;
 }
 

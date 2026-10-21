@@ -12,10 +12,11 @@ pub struct Texture {
     pub source: usize,
     pub width: u32,
     pub height: u32,
-    pub pixels: Vec<u8>,
+    pub pixels: Arc<Vec<u8>>,
     pub uv: u32,
     pub scale: [f32; 2],
     pub offset: [f32; 2],
+    pub wrap: [u32; 2],
 }
 #[derive(Clone)]
 pub struct Material {
@@ -364,6 +365,49 @@ impl Model {
         model.rebuild_picking()?;
         Ok(model)
     }
+    pub fn set_texture_sampling(
+        &mut self,
+        material: usize,
+        slot: usize,
+        wrap: [u32; 2],
+        scale: [f32; 2],
+    ) -> Result<bool> {
+        ensure!(
+            wrap.iter().all(|v| *v <= 2) && scale.iter().all(|v| v.is_finite()),
+            "Invalid texture sampling"
+        );
+        let id = self.materials[material].maps[slot];
+        ensure!(id != u32::MAX, "Texture slot is empty");
+        let texture = &self.textures[id as usize];
+        if texture.wrap == wrap && texture.scale == scale {
+            return Ok(false);
+        }
+        let shared = self
+            .materials
+            .iter()
+            .flat_map(|m| m.maps)
+            .filter(|map| *map == id)
+            .count()
+            > 1;
+        let target = if shared {
+            // Sampling belongs to this material slot; share immutable pixels with the new record.
+            ensure!(
+                self.textures.len() < 255,
+                "Texture limit reached; cannot separate this shared map"
+            );
+            let texture = texture.clone();
+            let target = self.textures.len();
+            Arc::make_mut(&mut self.textures).push(texture);
+            self.materials[material].maps[slot] = target as u32;
+            target
+        } else {
+            id as usize
+        };
+        let texture = &mut Arc::make_mut(&mut self.textures)[target];
+        texture.wrap = wrap;
+        texture.scale = scale;
+        Ok(true)
+    }
     fn add_map(
         &mut self,
         texture: gltf::Texture<'_>,
@@ -381,13 +425,12 @@ impl Model {
                 .push("Texture rotation is ignored; offset and scale are applied.".into());
         }
         let sampler = texture.sampler();
-        if sampler.wrap_s() != gltf::texture::WrappingMode::Repeat
-            || sampler.wrap_t() != gltf::texture::WrappingMode::Repeat
-        {
-            self.warnings.push(
-                "Texture wrapping uses repeat; clamp/mirror samplers are unsupported.".into(),
-            );
-        }
+        let mode = |wrap| match wrap {
+            gltf::texture::WrappingMode::Repeat => 0,
+            gltf::texture::WrappingMode::ClampToEdge => 1,
+            gltf::texture::WrappingMode::MirroredRepeat => 2,
+        };
+        let wrap = [mode(sampler.wrap_s()), mode(sampler.wrap_t())];
         let source = texture.source().index();
         let image = &images[source];
         ensure!(
@@ -395,7 +438,11 @@ impl Model {
             "Source material texture exceeds 16M pixels"
         );
         if let Some(id) = self.textures.iter().position(|t| {
-            t.source == source && t.uv == uv && t.scale == scale && t.offset == offset
+            t.source == source
+                && t.uv == uv
+                && t.scale == scale
+                && t.offset == offset
+                && t.wrap == wrap
         }) {
             return Ok(id as u32);
         }
@@ -426,10 +473,11 @@ impl Model {
             source,
             width,
             height,
-            pixels,
+            pixels: Arc::new(pixels),
             uv,
             scale,
             offset,
+            wrap,
         });
         Ok(id)
     }
@@ -801,7 +849,17 @@ impl Model {
         }
         let w = &mut d.words;
         if !Arc::ptr_eq(&d.geometries, &self.geometries)
-            || !Arc::ptr_eq(&d.textures, &self.textures)
+            || d.textures.len() != self.textures.len()
+            || (!Arc::ptr_eq(&d.textures, &self.textures)
+                && !d
+                    .textures
+                    .iter()
+                    .zip(self.textures.iter())
+                    .all(|(old, new)| {
+                        old.width == new.width
+                            && old.height == new.height
+                            && Arc::ptr_eq(&old.pixels, &new.pixels)
+                    }))
             || w[h::WIDTH] != size[0]
             || w[h::HEIGHT] != size[1]
             || w[h::MESH_COUNT] as usize != self.meshes.len()
@@ -821,6 +879,14 @@ impl Model {
             for (k, v) in pixels.iter().enumerate() {
                 w[at + k] = v.to_bits();
             }
+        }
+        if !Arc::ptr_eq(&d.textures, &self.textures) {
+            // Sampling edits patch metadata without copying unchanged image payloads.
+            let texture_offset = w[h::TEXTURE_OFFSET] as usize;
+            for (i, texture) in self.textures.iter().enumerate() {
+                write_texture_sampling(w, texture_offset + i * tex::WORDS, texture);
+            }
+            d.textures = self.textures.clone();
         }
         d.environment = environment.clone();
         let at = w[h::CAMERA_OFFSET] as usize;
@@ -914,11 +980,7 @@ impl Model {
             w.0[o + tex::WIDTH] = t.width;
             w.0[o + tex::HEIGHT] = t.height;
             w.0[o + tex::PIXELS] = w.append_bytes(&t.pixels);
-            w.0[o + tex::UV_CHANNEL] = t.uv;
-            w.0[o + tex::UV_SCALE] = t.scale[0].to_bits();
-            w.0[o + tex::UV_SCALE + 1] = t.scale[1].to_bits();
-            w.0[o + tex::UV_OFFSET] = t.offset[0].to_bits();
-            w.0[o + tex::UV_OFFSET + 1] = t.offset[1].to_bits();
+            write_texture_sampling(&mut w.0, o, t);
         }
         let (width, height, pixels) = environment.pixels();
         let o = w.0[h::TEXTURE_OFFSET] as usize + self.textures.len() * tex::WORDS;
@@ -934,6 +996,16 @@ impl Model {
         w.0
     }
 }
+fn write_texture_sampling(words: &mut [u32], offset: usize, texture: &Texture) {
+    words[offset + tex::UV_CHANNEL] = texture.uv;
+    words[offset + tex::WRAP_S] = texture.wrap[0];
+    words[offset + tex::WRAP_T] = texture.wrap[1];
+    words[offset + tex::UV_SCALE] = texture.scale[0].to_bits();
+    words[offset + tex::UV_SCALE + 1] = texture.scale[1].to_bits();
+    words[offset + tex::UV_OFFSET] = texture.offset[0].to_bits();
+    words[offset + tex::UV_OFFSET + 1] = texture.offset[1].to_bits();
+}
+
 fn image_rgba(image: &gltf::image::Data) -> Result<Vec<u8>> {
     use gltf::image::Format::*;
     let (channels, bytes) = match image.format {
@@ -1293,6 +1365,95 @@ mod descriptor_tests {
     }
 
     #[test]
+    fn texture_sampling_edits_separate_shared_slots_and_pack_wrap_and_repeat() {
+        let mut s = Scene::new();
+        s.model.textures = Arc::new(vec![Texture {
+            source: 0,
+            width: 1,
+            height: 1,
+            pixels: Arc::new(vec![200, 80, 30, 255]),
+            uv: 0,
+            scale: [1.; 2],
+            offset: [0.; 2],
+            wrap: [0; 2],
+        }]);
+        s.model.materials[0].maps = [0, u32::MAX, 0, u32::MAX];
+        let snapshot = s.model.clone();
+        assert!(
+            s.model
+                .set_texture_sampling(0, 0, [1, 2], [-2., 0.])
+                .unwrap()
+        );
+        let id = s.model.materials[0].maps[0] as usize;
+        assert_ne!(id, 0);
+        assert_eq!(s.model.materials[0].maps[2], 0);
+        assert_eq!(snapshot.textures[0].wrap, [0; 2]);
+        assert_eq!(s.model.textures[0].scale, [1.; 2]);
+        assert!(Arc::ptr_eq(
+            &s.model.textures[0].pixels,
+            &s.model.textures[id].pixels
+        ));
+        assert!(
+            !s.model
+                .set_texture_sampling(0, 0, [1, 2], [-2., 0.])
+                .unwrap()
+        );
+        assert!(
+            s.model
+                .set_texture_sampling(0, 0, [2, 1], [25., -3.])
+                .unwrap()
+        );
+        assert_eq!(s.model.textures.len(), 2);
+        let camera = s.camera.bytes(s.size);
+        let bytes = s
+            .model
+            .descriptor_with_light(&camera, s.size, &s.environment, &s.light);
+        let words: Vec<u32> = bytes
+            .chunks_exact(4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .collect();
+        let record = words[h::TEXTURE_OFFSET] as usize + id * tex::WORDS;
+        assert_eq!(words[record + tex::WRAP_S], 2);
+        assert_eq!(words[record + tex::WRAP_T], 1);
+        assert_eq!(f32::from_bits(words[record + tex::UV_SCALE]), 25.);
+        assert_eq!(f32::from_bits(words[record + tex::UV_SCALE + 1]), -3.);
+        let allocation = s.check();
+        assert!(
+            s.model
+                .set_texture_sampling(0, 0, [0, 0], [0., -1.])
+                .unwrap()
+        );
+        assert_eq!(s.check(), allocation);
+        assert!(s.model.set_texture_sampling(0, 0, [3, 0], [1.; 2]).is_err());
+        assert!(
+            s.model
+                .set_texture_sampling(0, 0, [0; 2], [f32::NAN, 1.])
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn imported_maps_keep_independent_gltf_sampler_modes() {
+        let document = gltf::Gltf::from_slice(br#"{"asset":{"version":"2.0"},"images":[{"uri":"unused.png"}],"samplers":[{"wrapS":33071,"wrapT":33648},{}],"textures":[{"source":0,"sampler":0},{"source":0,"sampler":1}]}"#).unwrap();
+        let image = gltf::image::Data {
+            pixels: vec![255; 4],
+            format: gltf::image::Format::R8G8B8A8,
+            width: 1,
+            height: 1,
+        };
+        let mut model = Scene::new().model;
+        let pixels = vec![vec![255; 4]];
+        for texture in document.textures() {
+            model
+                .add_map(texture, 0, None, std::slice::from_ref(&image), &pixels)
+                .unwrap();
+        }
+        assert_eq!(model.textures.len(), 2);
+        assert_eq!(model.textures[0].wrap, [1, 2]);
+        assert_eq!(model.textures[1].wrap, [0, 0]);
+    }
+
+    #[test]
     fn editable_records_reuse_storage_and_match_fresh_descriptors() {
         let mut s = Scene::new();
         let allocation = s.check();
@@ -1407,17 +1568,20 @@ mod descriptor_tests {
             source: 0,
             width: 1,
             height: 1,
-            pixels: vec![128, 64, 32, 255],
+            pixels: Arc::new(vec![128, 64, 32, 255]),
             uv: 0,
             scale: [1.; 2],
             offset: [0.; 2],
+            wrap: [0; 2],
         });
         assert_ne!(s.check(), allocation);
         let allocation = s.check();
-        Arc::make_mut(&mut s.model.textures)
-            .last_mut()
-            .unwrap()
-            .pixels[0] = 255;
+        Arc::make_mut(
+            &mut Arc::make_mut(&mut s.model.textures)
+                .last_mut()
+                .unwrap()
+                .pixels,
+        )[0] = 255;
         assert_ne!(s.check(), allocation);
         let allocation = s.check();
         s.model.meshes.push(s.model.meshes[0].clone());

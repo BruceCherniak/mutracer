@@ -68,6 +68,9 @@ the output directory. See the [native guide](../README.md) for platform backends
   focuses on a clicked surface. Choose the scene unit to match the model; it
   defaults to metres. Projection, field of view, f-number and scene unit persist
   when opening another model. Orthographic views have no depth of field.
+- Sliders and numeric fields are separate. Drag a numeric field left or right
+  to adjust it, or click it to type. Enter or clicking elsewhere commits typed
+  edits; Escape cancels them. Text dragging selects text while editing.
 - Use the left **Scene** list to search and select objects, or click a surface in
   the viewport to open its **Material** panel. **Frame selection** fits the camera
   to that object. The right **Object** panel provides world position, local Y
@@ -87,6 +90,11 @@ the output directory. See the [native guide](../README.md) for platform backends
   right rail. Click the active category to hide the inspector; **[** and **]**
   toggle the scene list and inspector. Click section headings to collapse their
   settings. Narrow windows hide the scene list to preserve viewport space.
+- Under **Material → Textures**, expand an imported texture to change **Wrap S**
+  and **Wrap T** independently: Repeat, Clamp to edge or Mirrored repeat.
+  **Repeat S/T** are numeric fields; negative values flip an axis and zero samples
+  a constant coordinate. Sampling edits affect that slot of the selected material
+  and restart rendering. Other materials and slots keep their sampling settings.
 - **Lighting** switches between Environment and Studio. Environment provides
   intensity, tint and rotation; **Load HDR…** opens a local Radiance
   equirectangular map, and **Built-in** restores the built-in map. Switching to
@@ -160,9 +168,10 @@ strength are also supported.
 
 Material textures are limited to 512 pixels on their longest side; models with
 many images use a lower limit to fit the texture budget. Textures use
-repeat wrapping, filtering and offset/scale UV transforms; texture rotation and
-normal-map UV transforms are unsupported. Vertex-color alpha, occlusion and transmission
-textures are ignored. Unsupported optional extensions are reported in the panel;
+repeat, clamp-to-edge or mirrored-repeat wrapping on each axis, filtering and
+offset/scale UV transforms; texture rotation and imported normal-map UV transforms
+are unsupported. Vertex-color alpha, occlusion and transmission textures are
+ignored. Unsupported optional extensions are reported in the panel;
 unsupported required extensions return an error.
 Animations are not played. Sparse quantized attributes are unsupported.
 Draco and Basis/KTX2 assets need conversion before loading. This is a

@@ -96,6 +96,7 @@ const native = [
   '// Do not edit; run npm run generate:material-comparison after changing the schema.',
   "import type MaterialState from '../../src/scene/MaterialState.js';",
   "import type TextureState from '../../src/scene/TextureState.js';",
+  "import {textureWrapIndex} from '../../src/scene/TextureState.js';",
   '',
   'function pairX(value: [number, number] | Float32Array): number {',
   '  if (value instanceof Float32Array) return value[0];',
@@ -111,7 +112,8 @@ const native = [
   '  if (!texture) return true;',
   '  return texture.version === snapshot.textureNumbers[o] && texture.flipY === (snapshot.textureNumbers[o + 1] === 1) &&',
   '    texture.uvScale === snapshot.textureScales[slot] && texture.uvOffset === snapshot.textureOffsets[slot] &&',
-  '    texture.uvChannel === snapshot.textureNumbers[o + 2] && texture.image === snapshot.textureImages[slot];',
+  '    texture.uvChannel === snapshot.textureNumbers[o + 2] && textureWrapIndex(texture.wrapS) === snapshot.textureNumbers[o + 3] &&',
+  '    textureWrapIndex(texture.wrapT) === snapshot.textureNumbers[o + 4] && texture.image === snapshot.textureImages[slot];',
   '}',
   '',
   '/** Same fields as the Web material snapshot: parameters, then texture identity and metadata. */',
@@ -141,7 +143,7 @@ native.push(`  snapshot.strings = [${enums.map(field => `m.${field.key}`).join('
 for (const field of textures) {
   native.push(`  {`, `    const texture = m.${field.key};`,
     '    snapshot.textures.push(texture);',
-    '    snapshot.textureNumbers.push(texture ? texture.version : 0, texture && texture.flipY ? 1 : 0, texture ? texture.uvChannel : 0, 0, 0);',
+    '    snapshot.textureNumbers.push(texture ? texture.version : 0, texture && texture.flipY ? 1 : 0, texture ? texture.uvChannel : 0, texture ? textureWrapIndex(texture.wrapS) : 0, texture ? textureWrapIndex(texture.wrapT) : 0);',
     '    snapshot.textureScales.push(texture ? texture.uvScale : undefined);',
     '    snapshot.textureOffsets.push(texture ? texture.uvOffset : undefined);',
     '    snapshot.textureImages.push(texture ? texture.image : undefined);', '  }');

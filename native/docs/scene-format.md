@@ -87,7 +87,7 @@ offset from the start of the descriptor; the header occupies words 0..31.
 | 23 | `batch_offset` | 0, or `mesh_count` batch records for instancing. |
 
 Environment and background maps must be linear RGBA32F equirectangular
-textures; their flip and UV transform fields are ignored. Lighting and the
+textures; their flip, wrapping and UV transform fields are ignored. Lighting and the
 visible background are independent. A hidden background cannot also select a
 background map.
 
@@ -162,7 +162,10 @@ Displacement:
 `width`, `height`, `storage` (`MT_TEXTURE_STORAGE_RGBA8_SRGB`: one packed RGBA8
 sRGB word per pixel, or `MT_TEXTURE_STORAGE_RGBA32F`: four linear floats per
 pixel), `pixel_offset` (row-major pixels), `flip_y`, `uv_channel` (0 or 1),
-`uv_scale` and `uv_offset`. Supply each texture separately; the library packs
+`uv_scale`, `uv_offset`, `wrap_s` and `wrap_t`. Each wrap axis accepts
+`MT_TEXTURE_WRAP_REPEAT` (0, default), `MT_TEXTURE_WRAP_CLAMP_TO_EDGE` (1) or
+`MT_TEXTURE_WRAP_MIRRORED_REPEAT` (2). Negative scales flip an axis; zero samples
+a constant coordinate. Supply each texture separately; the library packs
 them into an atlas and may scale large sources to fit.
 
 ### Light (`mt_light_v4`, 28 words)

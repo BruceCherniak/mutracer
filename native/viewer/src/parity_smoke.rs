@@ -33,6 +33,127 @@ fn settle(viewer: &mut Viewer, ctx: &eframe::egui::Context) -> Result<()> {
     }
 }
 
+fn texture_sampling(
+    viewer: &mut Viewer,
+    ctx: &eframe::egui::Context,
+    out: &Path,
+    mode: u32,
+) -> Result<()> {
+    let Some((material, slot)) = viewer
+        .model
+        .materials
+        .iter()
+        .enumerate()
+        .find_map(|(i, m)| {
+            m.maps
+                .iter()
+                .position(|map| *map != u32::MAX)
+                .map(|slot| (i, slot))
+        })
+    else {
+        return Ok(());
+    };
+    let original = viewer.model.clone();
+    let mut images = Vec::new();
+    for s in 0..3 {
+        for t in 0..3 {
+            viewer
+                .model
+                .set_texture_sampling(material, slot, [s, t], [2.5, -1.5])?;
+            viewer.dirty(Change::Material);
+            settle(viewer, ctx)?;
+            ensure!(
+                !viewer.last_commit_full,
+                "Sampling-only wrap edit rebuilt the scene"
+            );
+            let mut fresh = Renderer::with_backend(mode)?;
+            fresh.commit_with_settings(
+                &viewer.model.descriptor_with_light(
+                    &viewer.camera.bytes(viewer.size),
+                    viewer.size,
+                    &viewer.environment,
+                    &viewer.light,
+                ),
+                &viewer.settings,
+            )?;
+            ensure!(
+                viewer.pixels == fresh.finish(viewer.samples)?
+                    && viewer.renderer.image(1)? == fresh.image(1)?
+                    && viewer.renderer.image(2)? == fresh.image(2)?,
+                "Texture wrapping/fresh mismatch: backend {mode}, {s}/{t}"
+            );
+            renderer::save(
+                &out.join(format!("wrap-{mode}-{s}-{t}.png")),
+                &viewer.pixels,
+                viewer.size,
+                0.,
+            )?;
+            images.push(viewer.pixels.clone());
+            println!("PASS texture wrap backend {mode}, {s}/{t}");
+        }
+    }
+    ensure!(
+        images.iter().skip(1).any(|image| image != &images[0]),
+        "Texture wrapping had no visible effect"
+    );
+    for scale in [[-2., 0.], [0., 0.], [25., -3.], [1., 1.]] {
+        viewer
+            .model
+            .set_texture_sampling(material, slot, [0, 0], scale)?;
+        viewer.dirty(Change::Material);
+        settle(viewer, ctx)?;
+        let mut fresh = Renderer::with_backend(mode)?;
+        fresh.commit_with_settings(
+            &viewer.model.descriptor_with_light(
+                &viewer.camera.bytes(viewer.size),
+                viewer.size,
+                &viewer.environment,
+                &viewer.light,
+            ),
+            &viewer.settings,
+        )?;
+        ensure!(
+            viewer.pixels == fresh.finish(viewer.samples)?
+                && viewer.renderer.image(1)? == fresh.image(1)?
+                && viewer.renderer.image(2)? == fresh.image(2)?,
+            "Texture repeat/fresh mismatch: backend {mode}, {scale:?}"
+        );
+        println!("PASS texture repeat backend {mode}, {scale:?}");
+    }
+    viewer.model = original;
+    viewer.dirty(Change::Material);
+    settle(viewer, ctx)
+}
+
+pub fn run_textures(path: &Path, out: &Path) -> Result<()> {
+    std::fs::create_dir_all(out)?;
+    for mode in [0, 1] {
+        let mut viewer = Viewer::new(path)?;
+        ensure!(
+            viewer
+                .model
+                .materials
+                .iter()
+                .any(|m| m.maps.iter().any(|map| *map != u32::MAX)),
+            "Texture smoke needs a model with an imported texture"
+        );
+        viewer.denoise = false;
+        viewer.focus.enabled = false;
+        viewer.backend = mode;
+        viewer.size = [96, 64];
+        viewer.settings.max_samples = 4;
+        let ctx = eframe::egui::Context::default();
+        viewer.dirty(Change::Scene);
+        settle(&mut viewer, &ctx)?;
+        ensure!(
+            viewer.renderer.backend()?.0 == mode,
+            "Requested backend unavailable"
+        );
+        texture_sampling(&mut viewer, &ctx, out, mode)?;
+    }
+    Ok(())
+}
+
 pub fn run(path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
     for mode in [0, 1] {

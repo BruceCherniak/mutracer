@@ -20,6 +20,7 @@
 enum { MT_LIGHT_TYPE_RECT = 0, MT_LIGHT_TYPE_SPHERE = 1, MT_LIGHT_TYPE_DIRECTIONAL = 2,
   MT_LIGHT_TYPE_SPOT = 3 };
 enum { MT_TEXTURE_STORAGE_RGBA8_SRGB = 0, MT_TEXTURE_STORAGE_RGBA32F = 1 };
+enum { MT_TEXTURE_WRAP_REPEAT = 0, MT_TEXTURE_WRAP_CLAMP_TO_EDGE = 1, MT_TEXTURE_WRAP_MIRRORED_REPEAT = 2 };
 enum { MT_CAMERA_PROJECTION_PERSPECTIVE = 0, MT_CAMERA_PROJECTION_ORTHOGRAPHIC = 1 };
 enum { MT_QUALITY_BEVEL = 1, MT_QUALITY_DISPERSION = 2, MT_QUALITY_HIDE_BACKGROUND = 4 };
 
@@ -77,7 +78,7 @@ typedef struct mt_texture_v4 {
   uint32_t pixel_offset; /* RGBA8 words or RGBA32F floats, row-major. */
   uint32_t flip_y, uv_channel; /* 0 or 1. */
   float uv_scale[2], uv_offset[2];
-  uint32_t reserved[2];
+  uint32_t wrap_s, wrap_t; /* MT_TEXTURE_WRAP_*, independently per axis; default repeat. */
 } mt_texture_v4;
 
 typedef struct mt_light_v4 {
@@ -130,6 +131,8 @@ MT_SCENE_ASSERT(material_extensions, MT_SCENE_FIELD(mt_material_v4, extension_of
 MT_SCENE_ASSERT(extension_size, sizeof(mt_material_extension_v4) == MT_EXTENSION_WORDS * MT_WORD_BYTES);
 MT_SCENE_ASSERT(texture_size, sizeof(mt_texture_v4) == MT_TEXTURE_WORDS * MT_WORD_BYTES);
 MT_SCENE_ASSERT(texture_uv_offset, MT_SCENE_FIELD(mt_texture_v4, uv_offset, MT_TEXTURE_UV_OFFSET));
+MT_SCENE_ASSERT(texture_wrap_s, MT_SCENE_FIELD(mt_texture_v4, wrap_s, MT_TEXTURE_WRAP_S));
+MT_SCENE_ASSERT(texture_wrap_t, MT_SCENE_FIELD(mt_texture_v4, wrap_t, MT_TEXTURE_WRAP_T));
 MT_SCENE_ASSERT(light_size, sizeof(mt_light_v4) == MT_LIGHT_WORDS * MT_WORD_BYTES);
 MT_SCENE_ASSERT(light_ies, MT_SCENE_FIELD(mt_light_v4, ies_bytes, MT_LIGHT_IES_BYTES));
 MT_SCENE_ASSERT(light_transform, MT_SCENE_FIELD(mt_light_v4, world_matrix, MT_LIGHT_TRANSFORM));

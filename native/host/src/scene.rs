@@ -572,6 +572,8 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
             || w.u(o + t::STORAGE) > 1
             || w.u(o + t::FLIP_Y) > 1
             || w.u(o + t::UV_CHANNEL) > 1
+            || w.u(o + t::WRAP_S) > 2
+            || w.u(o + t::WRAP_T) > 2
         {
             return Err("Invalid raw texture descriptor".into());
         }
@@ -586,7 +588,6 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
             w.finite(w.u(o + t::PIXELS), count)?;
         }
         w.finite(o + t::UV_SCALE, 4)?;
-        w.reserved(o + t::RESERVED, 2)?;
     }
     for i in 0..w.u(h::LIGHT_COUNT) {
         let o = w.u(h::LIGHT_OFFSET) + i * l::WORDS;
@@ -2230,6 +2231,48 @@ pub(crate) mod tests {
         }
         assert!(validate(&change(&change(&bytes, 21, 0), 22, 4)).is_ok());
     }
+    #[test]
+    fn texture_wrap_modes_accept_zero_defaults_and_reject_unknown_values() {
+        let bytes = input();
+        let offset = bytes.len() / 4;
+        let record = [
+            1,
+            1,
+            0,
+            (offset + t::WORDS) as u32,
+            0,
+            0,
+            1f32.to_bits(),
+            1f32.to_bits(),
+            0,
+            0,
+            0,
+            0,
+            0xffffffff,
+        ];
+        let bytes = change(
+            &change(&extend(bytes, &record), h::TEXTURE_COUNT, 1),
+            h::TEXTURE_OFFSET,
+            offset as u32,
+        );
+        for s in 0..3 {
+            for t_mode in 0..3 {
+                assert!(
+                    validate(&change(
+                        &change(&bytes, offset + t::WRAP_S, s),
+                        offset + t::WRAP_T,
+                        t_mode
+                    ))
+                    .is_ok()
+                );
+            }
+        }
+        for axis in [t::WRAP_S, t::WRAP_T] {
+            assert!(validate(&change(&bytes, offset + axis, 3)).is_err());
+            assert!(validate(&change(&bytes, offset + axis, u32::MAX)).is_err());
+        }
+    }
+
     #[test]
     fn material_extensions_validate_types_uniqueness_and_support() {
         let mut bytes = extend(input(), &[5, 0.6f32.to_bits(), 0, 0]);

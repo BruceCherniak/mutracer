@@ -537,6 +537,37 @@ impl Viewer {
                 }
             });
         });
+        controls::section_open(ui, "Textures", false, |ui| {
+            let maps = self.model.materials[self.selected].maps;
+            if maps.iter().all(|id| *id == u32::MAX) {
+                ui.weak("No imported textures.");
+            }
+            for (slot, label) in ["Base color", "Normal", "Metalness / roughness", "Emissive"]
+                .iter()
+                .enumerate()
+            {
+                let id = maps[slot];
+                if id == u32::MAX {
+                    continue;
+                }
+                ui.push_id((self.selected, slot), |ui| {
+                    controls::section_open(ui, label, false, |ui| {
+                        let texture = &self.model.textures[id as usize];
+                        let mut wrap = texture.wrap;
+                        let mut scale = texture.scale;
+                        if controls::texture_sampling(ui, &mut wrap, &mut scale) {
+                            match self
+                                .model
+                                .set_texture_sampling(self.selected, slot, wrap, scale)
+                            {
+                                Ok(edited) => changed |= edited,
+                                Err(error) => self.error = error.to_string(),
+                            }
+                        }
+                    });
+                });
+            }
+        });
         if changed {
             self.dirty(Change::Material);
         }

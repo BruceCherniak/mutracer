@@ -11,10 +11,11 @@ import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import Texture from '../../src/scene/Texture';
 import SphereLight from '../../src/scene/SphereLight';
 import type { Scene } from '../../src/scene/Scene';
+import type { TextureWrapMode } from '../../src/scene/TextureState';
 
 // One scene description, encoded as a native descriptor and built as Web objects.
 interface Spec {
-  textures: { pixels: number[] }[];
+  textures: { pixels: number[]; wrap?: [number, number]; scale?: [number, number] }[];
   geometries: { positions: number[]; indices: number[] }[];
   materials: { color: [number, number, number]; roughness: number; map?: number }[];
   meshes: { geometry: number; material: number; x: number; instances?: { transforms: number[]; colors?: number[] } }[];
@@ -48,7 +49,8 @@ function encode(spec: Spec): Uint8Array {
     for (let p = 0; p < 4; p++) words[pixels + p] = (texture.pixels[p * 4] | texture.pixels[p * 4 + 1] << 8 |
       texture.pixels[p * 4 + 2] << 16 | texture.pixels[p * 4 + 3] << 24) >>> 0;
     words[o + T.WIDTH] = 2; words[o + T.HEIGHT] = 2; words[o + T.PIXELS] = pixels;
-    words[o + T.UV_SCALE] = bits(1); words[o + T.UV_SCALE + 1] = bits(1);
+    words[o + T.UV_SCALE] = bits(texture.scale?.[0] ?? 1); words[o + T.UV_SCALE + 1] = bits(texture.scale?.[1] ?? 1);
+    words[o + T.WRAP_S] = texture.wrap?.[0] ?? 0; words[o + T.WRAP_T] = texture.wrap?.[1] ?? 0;
   });
   const geometryData = spec.geometries.map(g => ({ position: floats(g.positions), index: uints(g.indices), g }));
   const geometries = reserve(spec.geometries.length * G.WORDS);
@@ -105,6 +107,12 @@ class WebScene {
   textures: Texture[]; geometries: Geometry[]; materials: OpenPBRMaterial[]; meshes: Mesh[]; lights: SphereLight[]; scene: Scene;
   constructor(spec: Spec) {
     this.textures = spec.textures.map(t => new Texture({ data: new Uint8Array(t.pixels), width: 2, height: 2 }));
+    this.textures.forEach((texture, i) => {
+      const specTexture = spec.textures[i];
+      const modes: TextureWrapMode[] = ['repeat', 'clamp-to-edge', 'mirrored-repeat'];
+      texture.wrapS = modes[specTexture.wrap?.[0] ?? 0]; texture.wrapT = modes[specTexture.wrap?.[1] ?? 0];
+      texture.uvScale = specTexture.scale ?? [1, 1];
+    });
     this.geometries = spec.geometries.map(g => new Geometry({ position: new Attribute(new Float32Array(g.positions), 3),
       indices: new Attribute(new Uint32Array(g.indices), 1) }));
     this.materials = spec.materials.map(m => new OpenPBRMaterial({ baseColor: [...m.color], specularRoughness: m.roughness,
@@ -148,6 +156,9 @@ const edits: [string, (s: Spec) => void, (w: WebScene) => void][] = [
   ['material roughness', s => { s.materials[1].roughness = 0.9; }, w => { w.materials[1].specularRoughness = 0.9; }],
   ['material color', s => { s.materials[0].color = [1, 0, 0]; }, w => { w.materials[0].baseColor = [1, 0, 0]; }],
   ['texture pixels', s => { s.textures[0].pixels[0] = 7; }, w => { (w.textures[0].image as { data: Uint8Array }).data[0] = 7; w.textures[0].markUpdated(); }],
+  ['texture wrapping', s => { s.textures[0].wrap = [1, 2]; },
+    w => { w.textures[0].wrapS = 'clamp-to-edge'; w.textures[0].wrapT = 'mirrored-repeat'; }],
+  ['texture repeat', s => { s.textures[0].scale = [-2, 0]; }, w => { w.textures[0].uvScale = [-2, 0]; }],
   ['vertex positions', s => { s.geometries[1].positions[0] = 0.5; },
     w => { w.geometries[1].position.array[0] = 0.5; w.geometries[1].markVerticesUpdated(); }],
   ['index order', s => { s.geometries[1].indices = [0, 2, 1, 2, 3, 1]; },
@@ -171,6 +182,18 @@ const edits: [string, (s: Spec) => void, (w: WebScene) => void][] = [
 ];
 
 describe('native scene sync', () => {
+  it.each([0, 1, 2])('decodes and retains wrapping mode %s on either axis', mode => {
+    const spec = base(); spec.textures[0].wrap = [mode, 2 - mode]; spec.textures[0].scale = [-2, 0];
+    const synced = new SyncedScene(); synced.sync(encode(spec)); synced.accept();
+    const modes = ['repeat', 'clamp-to-edge', 'mirrored-repeat'];
+    expect(synced.textures[0].wrapS).toBe(modes[mode]);
+    expect(synced.textures[0].wrapT).toBe(modes[2 - mode]);
+    expect(synced.textures[0].uvScale).toEqual([-2, 0]);
+    spec.textures[0].wrap = [2 - mode, mode]; synced.sync(encode(spec));
+    expect(synced.textures[0].wrapS).toBe(modes[2 - mode]);
+    expect(synced.textures[0].wrapT).toBe(modes[mode]);
+  });
+
   it.each(edits)('classifies %s like the Web change detector', (_name, editSpec, editWeb) => {
     const spec = base(), web = new WebScene(spec), detector = new SceneChangeDetector(), synced = new SyncedScene();
     detector.detect(web.scene); detector.commit();

@@ -1921,6 +1921,7 @@ fn main() -> Result<()> {
     let mut geometry_out = None;
     let mut package_out = None;
     let mut parity_out = None;
+    let mut texture_out = None;
     let mut studio_out = None;
     let mut focus_out = None;
     let mut startup_out = None;
@@ -1935,6 +1936,11 @@ fn main() -> Result<()> {
             "--studio-smoke" => {
                 studio_out = Some(PathBuf::from(
                     args.next().context("--studio-smoke needs a directory")?,
+                ));
+            }
+            "--texture-smoke" => {
+                texture_out = Some(PathBuf::from(
+                    args.next().context("--texture-smoke needs a directory")?,
                 ));
             }
             "--parity-smoke" => {
@@ -2012,6 +2018,9 @@ fn main() -> Result<()> {
     }
     if let Some(out) = studio_out {
         return studio_smoke::run(&model, &out);
+    }
+    if let Some(out) = texture_out {
+        return parity_smoke::run_textures(&model, &out);
     }
     if let Some(out) = parity_out {
         return parity_smoke::run(&model, &out);

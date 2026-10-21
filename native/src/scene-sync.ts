@@ -185,6 +185,8 @@ export class SyncedScene {
         else { this.textures[i] = fresh; replaced.add(i); continue; }
         texture.markUpdated();
       }
+      if (texture.wrapS !== fresh.wrapS) texture.wrapS = fresh.wrapS;
+      if (texture.wrapT !== fresh.wrapT) texture.wrapT = fresh.wrapT;
       if (texture.flipY !== fresh.flipY) texture.flipY = fresh.flipY;
       if (texture.uvChannel !== fresh.uvChannel) texture.uvChannel = fresh.uvChannel;
       if (!Object.is(texture.uvScale[0], fresh.uvScale[0]) || !Object.is(texture.uvScale[1], fresh.uvScale[1])) texture.uvScale = fresh.uvScale;

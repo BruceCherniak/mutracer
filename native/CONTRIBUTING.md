@@ -223,7 +223,9 @@ incremental commits with full preparation. `--parity-smoke DIRECTORY` compares
 viewer camera/render settings against fresh contexts on both backends, checks
 settings retention after edits/backend replacement, and exercises display controls,
 transparent PNG export, OIDN alpha preservation and guide channels. It needs the
-bundled OIDN runtime. For Studio, first run
+bundled OIDN runtime. `--texture-smoke DIRECTORY` requires an imported texture and
+checks all nine S/T wrap combinations plus negative, zero and large repeats on
+Software and actual HWRT against fresh HDR/normal/albedo renders. For Studio, first run
 `node native/validation/viewer-studio-reference.mjs DIRECTORY`, then
 `--studio-smoke DIRECTORY`: it compares native rect-light records with the Web
 placement/ambient oracle and tests preset/parameter edits against fresh contexts

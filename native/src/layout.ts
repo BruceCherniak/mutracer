@@ -100,7 +100,8 @@ export const TEXTURE = {
   "UV_CHANNEL": 5,
   "UV_SCALE": 6,
   "UV_OFFSET": 8,
-  "RESERVED": 10,
+  "WRAP_S": 10,
+  "WRAP_T": 11,
   "WORDS": 12
 } as const;
 export const LIGHT = {

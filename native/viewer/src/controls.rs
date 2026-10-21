@@ -1,5 +1,5 @@
 //! Small egui wrappers for the native viewer. Keep egui's input, focus and value
-//! editing behavior, with the Web viewer's full-row controls and visual hierarchy.
+//! editing behavior, with separate sliders/numeric fields and the Web visual hierarchy.
 use crate::theme;
 use eframe::egui::{self, Align2, Color32, FontId, Response, Sense, Stroke, Ui};
 
@@ -115,8 +115,8 @@ fn property<R>(ui: &mut Ui, label: &str, contents: impl FnOnce(&mut Ui, egui::Id
     .inner
 }
 
-/// Visual wrapper only: egui still handles pointer/keyboard input, numeric editing
-/// and accessibility. Keep live lens values untouched until an actual edit.
+/// Native slider options, with a separate numeric field. Keep live lens values
+/// untouched until an actual edit; retain egui's text editing and accessibility.
 pub struct Scrub<'a, Num: egui::emath::Numeric> {
     value: &'a mut Num,
     range: std::ops::RangeInclusive<Num>,
@@ -154,6 +154,123 @@ impl<'a, Num: egui::emath::Numeric> Scrub<'a, Num> {
     }
 }
 
+#[derive(Clone, Copy)]
+struct NumericGesture {
+    start: egui::Pos2,
+    handled: bool,
+}
+
+fn numeric_value<Num: egui::emath::Numeric>(
+    ui: &mut Ui,
+    size: egui::Vec2,
+    scrub: Scrub<'_, Num>,
+    speed: f64,
+) -> Response {
+    let Scrub {
+        value,
+        range,
+        decimals,
+        prefix,
+        suffix,
+        logarithmic,
+    } = scrub;
+    let before = value.to_f64();
+    let min = range.start().to_f64();
+    let max = range.end().to_f64();
+    let key = ui.id().with("numeric-edit-generation");
+    let generation = ui.data(|data| data.get_temp::<u64>(key).unwrap_or(0));
+    let focused = ui.memory(|memory| memory.focused());
+    let mut response = ui
+        .push_id(generation, |ui| {
+            ui.add_sized(
+                size,
+                egui::DragValue::new(&mut *value)
+                    .range(range)
+                    .clamp_existing_to_range(false)
+                    .speed(speed)
+                    .max_decimals(decimals)
+                    .prefix(prefix)
+                    .suffix(suffix)
+                    .update_while_editing(false),
+            )
+        })
+        .inner;
+    // DragValue handles ordinary drags. A complete press/move/release can also
+    // arrive between frames; use its relative displacement instead of focusing.
+    let pointer_key = ui.id().with("numeric-pointer");
+    let mut gesture = ui.data(|data| data.get_temp::<NumericGesture>(pointer_key));
+    if let Some(current) = &mut gesture {
+        current.handled |= response.changed();
+    }
+    let fast_delta = ui.input(|input| {
+        let mut result = None;
+        for event in &input.events {
+            match event {
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    ..
+                } => {
+                    if *pressed {
+                        gesture = response.rect.contains(*pos).then_some(NumericGesture {
+                            start: *pos,
+                            handled: focused == Some(response.id) || response.changed(),
+                        });
+                    } else if let Some(current) = gesture.take() {
+                        let delta = *pos - current.start;
+                        if !current.handled && delta.x.abs() >= 4. {
+                            result = Some(
+                                (delta.x - delta.y) as f64
+                                    * if input.modifiers.shift { 0.1 } else { 1. },
+                            );
+                        }
+                    }
+                }
+                egui::Event::PointerGone => gesture = None,
+                _ => (),
+            }
+        }
+        result
+    });
+    ui.data_mut(|data| {
+        if let Some(current) = gesture {
+            data.insert_temp(pointer_key, current);
+        } else {
+            data.remove::<NumericGesture>(pointer_key);
+        }
+    });
+    let fast_drag = ui.is_enabled()
+        && focused != Some(response.id)
+        && !response.changed()
+        && fast_delta.is_some();
+    if fast_drag {
+        *value = Num::from_f64(egui::emath::round_to_decimals(
+            (if logarithmic {
+                before * 2f64.powf(fast_delta.unwrap() / 40.)
+            } else {
+                before + fast_delta.unwrap() * speed
+            })
+            .clamp(min, max),
+            decimals,
+        ));
+        if value.to_f64() != before {
+            response.mark_changed();
+        }
+        ui.ctx().request_repaint();
+    }
+    if fast_drag
+        || (ui.input(|input| input.key_pressed(egui::Key::Escape))
+            && (focused == Some(response.id) || response.has_focus() || response.lost_focus()))
+    {
+        // egui retains cancelled text until the following lost-focus frame.
+        // A fresh ID prevents that draft, or a coalesced drag's click, from editing later.
+        ui.memory_mut(|memory| memory.surrender_focus(response.id));
+        ui.data_mut(|data| data.insert_temp(key, generation.wrapping_add(1)));
+    }
+    response
+}
+
 pub fn parameter<Num: egui::emath::Numeric>(
     ui: &mut Ui,
     label: &str,
@@ -170,8 +287,12 @@ pub fn parameter<Num: egui::emath::Numeric>(
         } = scrub;
         let min = range.start().to_f64();
         let max = range.end().to_f64();
-        let (rect, _) =
+        let (row, _) =
             ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.), Sense::hover());
+        let value_width = (row.width() * 0.3).clamp(64., 100.);
+        let numeric =
+            egui::Rect::from_min_max(egui::pos2(row.right() - value_width, row.top()), row.max);
+        let rect = egui::Rect::from_min_max(row.min, egui::pos2(numeric.left() - 6., row.bottom()));
         ui.painter().rect_filled(rect, 9, theme::INPUT);
         let mut response = ui
             .scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
@@ -222,12 +343,11 @@ pub fn parameter<Num: egui::emath::Numeric>(
                 Stroke::new(1.5, theme::MUTED),
             );
         }
-        let value_width = (rect.width() * 0.36).clamp(66., 100.);
         let text = egui::WidgetText::from(egui::RichText::new(label).size(11.).color(theme::TEXT))
             .into_galley(
                 ui,
                 Some(egui::TextWrapMode::Truncate),
-                (rect.width() - value_width - 22.).max(1.),
+                (rect.width() - 20.).max(1.),
                 egui::TextStyle::Body,
             );
         ui.painter().galley(
@@ -235,29 +355,37 @@ pub fn parameter<Num: egui::emath::Numeric>(
             text,
             theme::TEXT,
         );
-        let numeric = egui::Rect::from_center_size(
-            rect.right_center() - egui::vec2(value_width * 0.5 + 4., 0.),
-            egui::vec2(value_width, 24.),
-        );
+        let speed = if logarithmic {
+            value.to_f64().abs().max(min) * std::f64::consts::LN_2 / 40.
+        } else {
+            let step = if Num::INTEGRAL || max - min >= 50. {
+                1.
+            } else if max - min >= 5. {
+                0.1
+            } else {
+                0.01
+            };
+            step / 4.
+        };
         let edit = ui
             .scope_builder(egui::UiBuilder::new().max_rect(numeric), |ui| {
-                ui.spacing_mut().button_padding = egui::vec2(2., 1.);
-                ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
-                ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::NONE;
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add(
-                        egui::DragValue::new(&mut *value)
-                            .range(range)
-                            .clamp_existing_to_range(false)
-                            .speed((max - min) / rect.width() as f64)
-                            .max_decimals(decimals)
-                            .prefix(prefix)
-                            .suffix(suffix),
-                    )
-                })
-                .inner
+                ui.spacing_mut().interact_size.y = 30.;
+                numeric_value(
+                    ui,
+                    numeric.size(),
+                    Scrub {
+                        value,
+                        range,
+                        logarithmic,
+                        decimals,
+                        prefix,
+                        suffix,
+                    },
+                    speed,
+                )
             })
-            .inner;
+            .inner
+            .on_hover_text(label);
         if edit.changed() {
             response.mark_changed();
         }
@@ -271,7 +399,7 @@ pub fn parameter<Num: egui::emath::Numeric>(
         ui.painter()
             .rect_stroke(rect, 9, Stroke::new(1., border), egui::StrokeKind::Inside);
         response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), value.to_f64(), label));
-        response.union(edit).on_hover_text(label)
+        response.on_hover_text(label)
     })
     .inner
 }
@@ -339,12 +467,65 @@ pub fn segmented<T: Copy + PartialEq>(
 
 pub fn number(ui: &mut Ui, label: &str, value: &mut f32, speed: f64) -> Response {
     property(ui, label, |ui, label_id| {
-        ui.add_sized(
-            [ui.available_width(), 24.],
-            egui::DragValue::new(value).speed(speed).range(-1e6..=1e6),
+        numeric_value(
+            ui,
+            egui::vec2(ui.available_width(), 24.),
+            Scrub::new(value, -1e6..=1e6).max_decimals(10),
+            speed,
         )
         .labelled_by(label_id)
     })
+}
+
+pub fn texture_sampling(ui: &mut Ui, wrap: &mut [u32; 2], scale: &mut [f32; 2]) -> bool {
+    let previous = (*wrap, *scale);
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.;
+        ui.columns(2, |columns| {
+            for axis in 0..2 {
+                let ui = &mut columns[axis];
+                let label = ui.label(
+                    egui::RichText::new(["Wrap S", "Wrap T"][axis])
+                        .small()
+                        .color(theme::MUTED),
+                );
+                egui::ComboBox::from_id_salt(("texture-wrap", axis))
+                    .selected_text(
+                        ["Repeat", "Clamp to edge", "Mirrored repeat"][wrap[axis] as usize],
+                    )
+                    .width(ui.available_width())
+                    .wrap_mode(egui::TextWrapMode::Truncate)
+                    .show_ui(ui, |ui| {
+                        for (mode, name) in ["Repeat", "Clamp to edge", "Mirrored repeat"]
+                            .iter()
+                            .enumerate()
+                        {
+                            ui.selectable_value(&mut wrap[axis], mode as u32, *name);
+                        }
+                    })
+                    .response
+                    .labelled_by(label.id);
+            }
+        });
+        ui.columns(2, |columns| {
+            for axis in 0..2 {
+                let ui = &mut columns[axis];
+                let label = ui.label(
+                    egui::RichText::new(["Repeat S", "Repeat T"][axis])
+                        .small()
+                        .color(theme::MUTED),
+                );
+                numeric_value(
+                    ui,
+                    egui::vec2(ui.available_width(), 30.),
+                    Scrub::new(&mut scale[axis], f32::NEG_INFINITY..=f32::INFINITY).max_decimals(4),
+                    0.025,
+                )
+                .labelled_by(label.id);
+            }
+        });
+    });
+    previous != (*wrap, *scale)
 }
 
 pub fn select(
@@ -700,7 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn full_row_scrub_preserves_idle_values_and_accepts_pointer_and_keyboard_edits() {
+    fn separate_slider_preserves_idle_values_and_accepts_pointer_and_keyboard_edits() {
         fn draw_scrub(ctx: &Context, value: &mut f32, events: Vec<Event>) -> Response {
             let mut response = None;
             let mut output = ctx.run_ui(
@@ -757,7 +938,7 @@ mod tests {
         );
         assert!(
             (value - 2.5).abs() < 0.1,
-            "Full-row pointer position: {value}"
+            "Slider pointer position: {value}"
         );
         ctx.memory_mut(|m| m.request_focus(response.id));
         let before = value;
@@ -773,6 +954,161 @@ mod tests {
             }],
         );
         assert!(response.changed() && value > before);
+    }
+
+    #[test]
+    fn numeric_field_click_does_not_seek_slider_and_supports_typing_dragging_and_disabled_state() {
+        fn frame(
+            ctx: &Context,
+            value: &mut f32,
+            enabled: bool,
+            events: Vec<Event>,
+        ) -> (Response, egui::Pos2) {
+            let mut result = None;
+            let mut output = ctx.run_ui(
+                RawInput {
+                    events,
+                    ..Default::default()
+                },
+                |root| {
+                    egui::CentralPanel::default().show(root, |ui| {
+                        ui.set_width(280.);
+                        ui.add_enabled_ui(enabled, |ui| {
+                            let response = parameter(
+                                ui,
+                                "Value",
+                                Scrub::new(value, 0.01..=10.).max_decimals(2),
+                            );
+                            let numeric =
+                                egui::pos2(ui.min_rect().right() - 20., response.rect.center().y);
+                            assert!(numeric.x > response.rect.right());
+                            result = Some((response, numeric));
+                        });
+                    });
+                },
+            );
+            output.textures_delta.clear();
+            result.unwrap()
+        }
+        let pointer = |pos, pressed| Event::PointerButton {
+            pos,
+            button: PointerButton::Primary,
+            pressed,
+            modifiers: Modifiers::NONE,
+        };
+        let enter = |key| Event::Key {
+            key,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: Modifiers::NONE,
+        };
+        for enabled in [true, false] {
+            let ctx = Context::default();
+            let mut value = 0.1234567;
+            let (_, pos) = frame(&ctx, &mut value, enabled, vec![]);
+            frame(
+                &ctx,
+                &mut value,
+                enabled,
+                vec![Event::PointerMoved(pos), pointer(pos, true)],
+            );
+            frame(&ctx, &mut value, enabled, vec![pointer(pos, false)]);
+            assert_eq!(
+                value, 0.1234567,
+                "Clicking the number must preserve the live value"
+            );
+            frame(&ctx, &mut value, enabled, vec![Event::Text("4.25".into())]);
+            assert_eq!(value, 0.1234567, "Typing waits for commit");
+            frame(&ctx, &mut value, enabled, vec![enter(Key::Enter)]);
+            assert_eq!(value, if enabled { 4.25 } else { 0.1234567 });
+            frame(
+                &ctx,
+                &mut value,
+                enabled,
+                vec![Event::PointerMoved(pos), pointer(pos, true)],
+            );
+            frame(&ctx, &mut value, enabled, vec![pointer(pos, false)]);
+            frame(&ctx, &mut value, enabled, vec![Event::Text("8.5".into())]);
+            frame(&ctx, &mut value, enabled, vec![enter(Key::Escape)]);
+            frame(&ctx, &mut value, enabled, vec![]);
+            assert_eq!(
+                value,
+                if enabled { 4.25 } else { 0.1234567 },
+                "Escape cancels typed edits"
+            );
+            let before = value;
+            frame(
+                &ctx,
+                &mut value,
+                enabled,
+                vec![Event::PointerMoved(pos), pointer(pos, true)],
+            );
+            frame(
+                &ctx,
+                &mut value,
+                enabled,
+                vec![Event::PointerMoved(pos + egui::vec2(-40., 0.))],
+            );
+            frame(
+                &ctx,
+                &mut value,
+                enabled,
+                vec![pointer(pos + egui::vec2(-40., 0.), false)],
+            );
+            if enabled {
+                assert!(
+                    value < before,
+                    "Dragging the numeric field must adjust its value: {before} -> {value}"
+                );
+            } else {
+                assert_eq!(value, before);
+            }
+            frame(&ctx, &mut value, enabled, vec![]);
+            let before = value;
+            let end = pos + egui::vec2(-24., 0.);
+            frame(
+                &ctx,
+                &mut value,
+                enabled,
+                vec![
+                    Event::PointerMoved(pos),
+                    pointer(pos, true),
+                    Event::PointerMoved(end),
+                    pointer(end, false),
+                ],
+            );
+            if enabled {
+                assert!(
+                    value < before,
+                    "Coalesced numeric drag must update the value"
+                );
+            } else {
+                assert_eq!(value, before);
+            }
+            frame(&ctx, &mut value, enabled, vec![]);
+            let before = value;
+            frame(
+                &ctx,
+                &mut value,
+                enabled,
+                vec![Event::PointerMoved(pos), pointer(pos, true)],
+            );
+            frame(
+                &ctx,
+                &mut value,
+                enabled,
+                vec![Event::PointerMoved(end), pointer(end, false)],
+            );
+            if enabled {
+                assert!(
+                    value < before,
+                    "A move coalesced with release must update the value"
+                );
+            } else {
+                assert_eq!(value, before);
+            }
+        }
     }
 
     #[test]
