@@ -248,7 +248,6 @@ function getBVHTraverseCode(
   return /* wgsl */ `
 var d = ray.d;
 var o = ray.o;
-var tlasStack: array<i32, TLAS_STACK_SIZE>;
 var tlasTop = -1;
 var invD = traversalInverse(d);
 var isHitMicroTriangle = false;
@@ -334,7 +333,6 @@ while (tlasTop >= 0) {
         // stack. The upper 8 bits identify intersected interior slots and the
         // lower 8 bits preserve the node's interior-slot mask for popcount
         // addressing. Triangle leaves are merged into a separate 24-bit mask.
-        var cwbvhStack: array<vec2u, BLAS_STACK_SIZE>;
         var cwbvhTop = -1;
         var cwbvhVisits = 0u;
         var nodeGroupBase = 0u;
@@ -424,7 +422,6 @@ while (tlasTop >= 0) {
       }
       ` : ''}
 
-      var blasStack: array<i32, BLAS_STACK_SIZE>;
       var blasTop = -1;
       if (blasLayout != 3u) {
         blasTop = 0;
@@ -855,6 +852,14 @@ export default function getIntersectCode({
   sceneIntersections?: string;
 }) {
   return /*wgsl*/ `
+
+// Scene queries run sequentially within each invocation. Share their private
+// traversal scratch instead of allocating arrays at every inlined query site.
+// Each traversal resets its stack tops and writes entries before reading them.
+// Never start another scene query while a traversal is still using these stacks.
+var<private> tlasStack: array<i32, TLAS_STACK_SIZE>;
+var<private> blasStack: array<i32, BLAS_STACK_SIZE>;
+${(blasLayoutMask & 8) !== 0 ? /* wgsl */ `var<private> cwbvhStack: array<vec2u, BLAS_STACK_SIZE>;` : ''}
 
 ${hasDisplacement ? displacementWgsl : ''}
 ${(blasLayoutMask & 8) !== 0 ? cwbvhTraversalWgsl : ''}

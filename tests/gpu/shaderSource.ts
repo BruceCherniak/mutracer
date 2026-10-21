@@ -8,6 +8,7 @@ export async function capture(layout: Engine['bvhLayout'] = 'bvh2', postProcess 
   document.body.append(canvas);
   const engine = new Engine({ canvas, backend: location.search.includes('webgl') ? 'webgl' : 'webgpu' });
   engine.bvhLayout = layout;
+  engine.bvhBuilder = layout === 'bvh2' ? 'builtin' : 'tinybvh';
   engine.display.setSize(48, 32);
   const info = await engine.init();
   const camera = new Camera({ projection: 'perspective', aspect: 1.5 });
@@ -71,6 +72,7 @@ export async function captureMaterials(
   document.body.append(canvas);
   const engine = new Engine({canvas, backend: location.search.includes('webgl') ? 'webgl' : 'webgpu'});
   engine.bvhLayout = layout;
+  engine.bvhBuilder = layout === 'bvh2' ? 'builtin' : 'tinybvh';
   engine.display.setSize(48, 32);
   const render = new Render(engine, {samplingPattern: 'sobol', bounces: 4});
   try {

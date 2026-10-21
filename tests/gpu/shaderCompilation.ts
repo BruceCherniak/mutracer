@@ -15,6 +15,7 @@ export async function capture(layout: Engine['bvhLayout'] = 'bvh2', names?: read
   document.body.append(canvas);
   const engine = new Engine({canvas, backend: location.search.includes('webgl') ? 'webgl' : 'webgpu'});
   engine.bvhLayout = layout;
+  engine.bvhBuilder = layout === 'bvh2' ? 'builtin' : 'tinybvh';
   engine.display.setSize(32, 24);
   const render = new Render(engine, {bounces: 4, allowMultipleSamplesPerFrame: true});
   try {
@@ -48,6 +49,7 @@ export async function capture(layout: Engine['bvhLayout'] = 'bvh2', names?: read
       {name: 'layers', params: {coatWeight: .7, thinFilmWeight: 1, thinFilmThickness: .4, fuzzWeight: .3, subsurfaceWeight: .4}},
       {name: 'map-alpha-transmission', params: {map, mapAlphaUsage: 'transmission'}},
       {name: 'metal', params: {baseMetalness: 1, specularRoughness: .2, specularColor: [.5, .8, 1]}},
+      {name: 'metal-subsurface', params: {baseMetalness: .4, subsurfaceWeight: .6, thinWalled: true}},
       {name: 'solid-glass', params: {transmissionWeight: 1, specularRoughness: .1}, quality: {bounces: 8, transmissiveOutputAlphaMin: .2}},
       {name: 'thin-glass', params: {transmissionWeight: 1, thinWalled: true, transmissionColor: [.7, .9, 1]}},
       {name: 'dispersion', params: {transmissionWeight: 1, transmissionDispersionScale: 1, coatWeight: .5}},
@@ -57,6 +59,7 @@ export async function capture(layout: Engine['bvhLayout'] = 'bvh2', names?: read
       {name: 'direction-frames', params: {coatWeight: .8, coatNormalMap: normal, anisotropyMap: map,
         specularAnisotropy: .8, specularAnisotropyModel: 'gltf', coatAnisotropy: .6, coatAnisotropyRotation: .4}},
       {name: 'stochastic-alpha-random', params: {alphaMode: 'blend', opacity: .4, map}, quality: {samplingPattern: 'random', directLightCandidates: 1}},
+      {name: 'alpha-mask', params: {alphaMode: 'mask', map, alphaCutoff: .7}},
       {name: 'source-over-random', params: {alphaMode: 'blend', opacity: .4, coatWeight: .5},
         quality: {samplingPattern: 'random', alphaBlendStrategy: 'deterministic-source-over'}},
       {name: 'source-over-zero', params: {alphaMode: 'blend', opacity: 0},
@@ -101,6 +104,7 @@ export async function capture(layout: Engine['bvhLayout'] = 'bvh2', names?: read
       {name: 'environment', lights: [environment]},
       {name: 'catcher', catcher: true},
       {name: 'bevel', params: {bevelSize: .08}, quality: {bounces: 1}},
+      {name: 'displacement', params: {displacementMap: map, displacementScale: .15}},
       {name: 'return-to-plain'}
     ];
     const captures = [];
@@ -118,8 +122,10 @@ export async function capture(layout: Engine['bvhLayout'] = 'bvh2', names?: read
       const pixels = await render.readPixels('hdr');
       const albedo = await render.readPixels('albedo');
       const normals = await render.readPixels('normal');
+      const depth = await engine.readDepthSamples({x: .5, y: .5, size: .3});
       captures.push({name: test.name, width: pixels.width, height: pixels.height,
         data: Array.from(pixels.data), albedo: Array.from(albedo.data), normal: Array.from(normals.data),
+        depth: depth && Array.from(depth),
         compilation: engine.getDiagnostics()?.shaderCompilation});
     }
     return {backend: engine.backend, adapter: info.adapterName, layout, captures};
