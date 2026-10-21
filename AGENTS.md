@@ -120,7 +120,10 @@ sample count) on a real GPU before and after, and compare
 
 ## Commit messages
 
+- Keep the subject concise. Use the body when needed to explain the problem,
+  resulting behavior, implementation decisions and reasons for the change.
 - For viewer changes, include the `viewer` scope in the commit subject, for
   example `fix(viewer): correct camera controls` or `feat(viewer): add model search`.
-- Keep the commit subject concise. Put implementation details, the reason for
-  the change in the commit body (description).
+- Do not include validation sections, check commands, test counts, pass/fail
+  summaries or documentation-review notes in commit messages. Report verification
+  in the task reply or evidence files instead.
