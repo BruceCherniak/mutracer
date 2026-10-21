@@ -3,10 +3,11 @@ import { materialParametersEqual, materialTexturesChanged } from './materialComp
 export { materialParametersEqual } from './materialComparison.generated.js';
 import Mesh from '../scene/Mesh.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
-import Geometry from '../scene/Geometry.js';
+import type Geometry from '../scene/Geometry.js';
 import OpenPBRMaterial, { materialTextureKeys } from '../scene/OpenPBRMaterial.js';
 import Texture from '../scene/Texture.js';
-import type { Scene, SceneBackground } from '../scene/Scene.js';
+import type { Scene, SceneBackground, SceneLight } from '../scene/Scene.js';
+import { SceneChangeTracker, type SceneSnapshotAdapter } from './sceneChangeCore.js';
 
 export interface SceneChanges {
   meshes: 'none' | 'incremental' | 'full';
@@ -79,158 +80,30 @@ export function snapshotMaterialParameters(material: OpenPBRMaterial, previous?:
   });
 }
 
-const geometryAttributes = ['position', 'normal', 'tangent', 'uv', 'uv1', 'color', 'indices', 'materialIndex'] as const;
-function captureGeometryStorage(geometry: Geometry, out: unknown[]) {
-  let i = 0;
-  for (const key of geometryAttributes) {
-    const attribute = geometry[key];
-    out[i++] = attribute?.array; out[i++] = attribute?.array.length; out[i++] = attribute?.itemSize;
-  }
-}
-function geometryStorageMatches(geometry: Geometry, storage: unknown[]) {
-  let i = 0;
-  for (const key of geometryAttributes) {
-    const attribute = geometry[key];
-    if (storage[i++] !== attribute?.array || storage[i++] !== attribute?.array.length || storage[i++] !== attribute?.itemSize) return false;
-  }
-  return true;
-}
+interface MaterialSnapshot { values: readonly unknown[]; textures: unknown[]; }
 
-interface MeshSnapshot {
-  mesh: Mesh;
-  geometry: Mesh['geometry'];
-  version: number;
-  instanceVersion?: number;
-  instanceCount?: number;
-  instanceTransforms?: Float32Array;
-  instanceColors?: Float32Array;
-  colorVersion?: number;
-  dynamic: boolean;
-  storage: unknown[];
-  materials: OpenPBRMaterial[];
-}
-interface Snapshot {
-  meshList: Mesh[];
-  meshes: MeshSnapshot[];
-  matrices: Float64Array;
-  materials: Map<OpenPBRMaterial, { values: readonly unknown[]; textures: unknown[] }>;
-  lightList: Scene['lights'];
-  lights: unknown[][];
-  background: unknown[];
-}
+// Web values may be loosely typed JS; the generated comparisons keep their
+// Object.is and array semantics. Detection rules live in sceneChangeCore.
+const webAdapter: SceneSnapshotAdapter<SceneLight, SceneBackground, MaterialSnapshot, unknown[], unknown[]> = {
+  validateMesh: mesh => { if (mesh instanceof InstancedMesh) mesh.validate(); },
+  captureMaterial: (material, previous, retired) => {
+    const item = retired ?? { values: [], textures: [] };
+    item.values = snapshotMaterialParameters(material as OpenPBRMaterial, previous?.values);
+    captureMaterialTextures(material as OpenPBRMaterial, item.textures);
+    return item;
+  },
+  materialMatches: (material, snapshot) => materialParametersEqual(material as OpenPBRMaterial, snapshot.values) &&
+    !materialTexturesChanged(material as OpenPBRMaterial, snapshot.textures),
+  captureLight: light => snapshotFields(light),
+  lightsEqual: snapshotsEqual,
+  captureBackground: backgroundSnapshot,
+  backgroundsEqual: snapshotsEqual
+};
 
 /** Detects edits without accepting them until the pipeline has received the scene. */
 export class SceneChangeDetector {
-  private _snapshot?: Snapshot;
-  private _pending?: Snapshot;
-  private _spare?: Snapshot;
-  private _seen = new Set<OpenPBRMaterial>();
-  detect(scene: Scene): SceneChanges {
-    const old = this._snapshot;
-    let full = !old || old.meshList !== scene.meshes || old.meshes.length !== scene.meshes.length;
-    const transforms: Mesh[] = [];
-    const colors: InstancedMesh[] = [];
-    const geometries = new Set<Geometry>();
-    const materials: OpenPBRMaterial[] = [];
-    const seen = this._seen;
-    seen.clear();
-    for (let i = 0; i < scene.meshes.length; i++) {
-      const mesh = scene.meshes[i];
-      const prev = old?.meshes[i];
-      let instanceChanged = false;
-      if (mesh instanceof InstancedMesh) {
-        mesh.validate();
-        if (prev?.instanceCount !== mesh.count) full = true;
-        if (prev?.mesh === mesh && (prev.colorVersion !== mesh.colorsVersion || prev.instanceColors !== mesh.colors)) colors.push(mesh);
-        if (prev?.mesh === mesh && (prev.instanceVersion !== mesh.transformsVersion || prev.instanceTransforms !== mesh.transforms)) {
-          transforms.push(mesh); instanceChanged = true;
-        }
-      }
-      if (!prev || prev.mesh !== mesh || prev.geometry !== mesh.geometry ||
-        prev.dynamic !== mesh.geometry.dynamic || !geometryStorageMatches(mesh.geometry, prev.storage) || prev.materials.length !== mesh.materials.length ||
-        prev.materials.some((m, k) => m !== mesh.materials[k])) full = true;
-      if (prev?.geometry === mesh.geometry && prev.version !== mesh.geometry.version) geometries.add(mesh.geometry);
-      if (prev?.mesh === mesh) {
-        for (let k = 0; k < 16; k++) {
-          if (!Object.is(mesh.transform[k], old!.matrices[i * 16 + k])) {
-            if (!instanceChanged) transforms.push(mesh);
-            break;
-          }
-        }
-      }
-      for (const material of mesh.materials) {
-        if (seen.has(material)) continue;
-        seen.add(material);
-        const prior = old?.materials.get(material);
-        if (!prior || !materialParametersEqual(material, prior.values) ||
-          materialTexturesChanged(material, prior.textures)) materials.push(material);
-      }
-    }
-    const lights = scene.lights.map(snapshotFields);
-    const background = backgroundSnapshot(scene.background);
-    const changes: SceneChanges = {
-      meshes: full ? 'full' : transforms.length || colors.length || materials.length || geometries.size ? 'incremental' : 'none',
-      transforms, colors, materials, geometries: [...geometries],
-      lights: !old || old.lightList !== scene.lights || lights.length !== old.lights.length ||
-        lights.some((light, i) => !snapshotsEqual(light, old.lights[i])),
-      background: !old || !snapshotsEqual(background, old.background)
-    };
-    if (changes.meshes !== 'none' || changes.lights || changes.background) {
-      // Write into the other buffer: detect never mutates committed state.
-      // Repeated detects without commit overwrite the same pending buffer.
-      let next = this._spare;
-      if (!next || next.meshList !== scene.meshes || next.meshes.length !== scene.meshes.length) {
-        next = { meshList: scene.meshes, meshes: [], matrices: new Float64Array(scene.meshes.length * 16),
-          materials: new Map(), lightList: scene.lights, lights: [], background: [] };
-        this._spare = next;
-      }
-      scene.meshes.forEach((mesh, i) => {
-        let item = next!.meshes[i];
-        if (!item) {
-          item = { mesh, geometry: mesh.geometry, version: mesh.geometry.version, dynamic: mesh.geometry.dynamic, storage: [],
-            materials: [] };
-          next!.meshes[i] = item;
-        }
-        item.mesh = mesh; item.geometry = mesh.geometry; item.version = mesh.geometry.version;
-        item.instanceVersion = mesh instanceof InstancedMesh ? mesh.transformsVersion : undefined;
-        item.colorVersion = mesh instanceof InstancedMesh ? mesh.colorsVersion : undefined;
-        item.instanceColors = mesh instanceof InstancedMesh ? mesh.colors : undefined;
-        item.instanceCount = mesh instanceof InstancedMesh ? mesh.count : undefined;
-        item.instanceTransforms = mesh instanceof InstancedMesh ? mesh.transforms : undefined;
-        item.dynamic = mesh.geometry.dynamic; captureGeometryStorage(mesh.geometry, item.storage);
-        item.materials.length = mesh.materials.length;
-        for (let k = 0; k < mesh.materials.length; k++) item.materials[k] = mesh.materials[k];
-        next!.matrices.set(mesh.transform, i * 16);
-      });
-      for (const material of next.materials.keys()) if (!seen.has(material)) next.materials.delete(material);
-      const changedMaterials = new Set(materials);
-      for (const material of seen) {
-        const previous = old?.materials.get(material);
-        if (previous && !changedMaterials.has(material)) {
-          next.materials.set(material, previous);
-        } else {
-          // Never overwrite a shared committed entry. The other buffer's
-          // retired entry can reuse its texture storage; parameter arrays and
-          // their reused vector snapshots remain immutable after capture.
-          let item = next.materials.get(material);
-          if (!item || item === previous) item = { values: [], textures: [] };
-          item.values = snapshotMaterialParameters(material, previous?.values);
-          captureMaterialTextures(material, item.textures);
-          next.materials.set(material, item);
-        }
-      }
-      next.lightList = scene.lights; next.lights = lights; next.background = background;
-      this._pending = next;
-    } else this._pending = old;
-    return changes;
-  }
-
-  commit() {
-    if (this._pending && this._pending !== this._snapshot) {
-      this._spare = this._snapshot;
-      this._snapshot = this._pending;
-    }
-    this._pending = undefined;
-  }
-  reset() { this._snapshot = this._pending = this._spare = undefined; this._seen.clear(); }
+  private _tracker = new SceneChangeTracker(webAdapter);
+  detect(scene: Scene): SceneChanges { return this._tracker.detect(scene) as SceneChanges; }
+  commit() { this._tracker.commit(); }
+  reset() { this._tracker.reset(); }
 }
