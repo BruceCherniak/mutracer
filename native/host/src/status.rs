@@ -2,7 +2,7 @@
 use std::ffi::c_char;
 
 /// Mirrors `MT_ABI_VERSION`.
-pub const ABI_VERSION: u32 = 1;
+pub const ABI_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
@@ -18,6 +18,7 @@ pub enum Status {
     BufferTooSmall = 8,
     ContextFailed = 9,
     Unavailable = 10,
+    Timeout = 11,
 }
 
 pub(crate) const FULL_COMMIT_PREFIX: &str = "Full scene commit required:";
@@ -121,6 +122,7 @@ mod tests {
             ("MT_ERROR_BUFFER_TOO_SMALL", Status::BufferTooSmall),
             ("MT_ERROR_CONTEXT_FAILED", Status::ContextFailed),
             ("MT_ERROR_UNAVAILABLE", Status::Unavailable),
+            ("MT_ERROR_TIMEOUT", Status::Timeout),
         ] {
             assert_eq!(value(name), status as i64, "{name}");
         }

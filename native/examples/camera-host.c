@@ -31,7 +31,7 @@ int main(int argc,char **argv){
  unsigned samples=(unsigned)strtoul(argv[3],NULL,10);if(samples<8||samples>4096)return 2;
  unsigned char camera[128],original[128];memcpy(original,source,128);memcpy(camera,original,128);
  unsigned char *a_pixels=malloc(size),*b_pixels=malloc(size),*initial=malloc(size*3);if(!a_pixels||!b_pixels||!initial)return 2;
- mt_context a=0,b=0;mt_render_job old=0,job=0;mt_context_info_v1 ci={.struct_size=sizeof(ci)};mt_job_info_v1 ji={.struct_size=sizeof(ji)};
+ mt_context a=0,b=0;mt_render_job old=0,job=0;mt_context_snapshot ci={.struct_size=sizeof(ci)};mt_job_snapshot ji={.struct_size=sizeof(ji)};
  OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&a,error,sizeof(error)));OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&b,error,sizeof(error)));
  FAILS(MT_ERROR_INVALID_STATE,mt_context_update_camera(a,camera,128,error,sizeof(error)));
  OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,MT_BACKEND_SOFTWARE));OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,MT_BACKEND_SOFTWARE));

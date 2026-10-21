@@ -270,7 +270,8 @@ destination after `MT_ERROR_BUFFER_TOO_SMALL`. Treat an unknown nonzero code as
 a failure; later versions may add codes. The same header names the backend,
 image kind, context/job state, sampling pattern and denoiser backend values.
 When loading the library dynamically, compare `mt_abi_version()` with the
-`MT_ABI_VERSION` you compiled against.
+`MT_ABI_VERSION` you compiled against. Structs exchanged with the library start
+with `struct_size`; set it to `sizeof` the struct before each call.
 
 Validation and preparation errors preserve the current scene.
 `MT_ERROR_CONTEXT_FAILED`, including a caught Rust panic, marks the context

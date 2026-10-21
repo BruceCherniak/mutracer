@@ -64,7 +64,9 @@ pub fn commit(bytes: &[u8]) {
                 "unexpected backend fallback in fuzzing"
             );
             assert_eq!(
-                unsafe { context::mt_context_wait(handle, error.as_mut_ptr(), error.len()) },
+                unsafe {
+                    context::mt_context_wait(handle, 30_000, error.as_mut_ptr(), error.len())
+                },
                 0,
                 "complete commit must reach GPU completion"
             );

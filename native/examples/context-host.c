@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-_Static_assert(sizeof(mt_context_info_v1)==32,"context info ABI");
+_Static_assert(sizeof(mt_context_snapshot)==20,"context snapshot ABI");
 static char error[4096];
 static unsigned checks;
 #define REQUIRE(test) do {checks++;if(!(test)){fprintf(stderr,"line %d: %s; %s\n",__LINE__,#test,error);return 1;}}while(0)
@@ -35,9 +35,9 @@ static int read_image(mt_context handle,uint32_t kind,unsigned char *pixels,size
 struct thread_input { mt_context context; const unsigned char *input; size_t length; };
 static void *other_thread(void *argument) {
   const struct thread_input *args=argument;
-  mt_context_info_v1 info={.struct_size=sizeof(info)};char message[128];
+  mt_context_snapshot info={.struct_size=sizeof(info)};char message[128];
   int code=mt_context_info(args->context,&info,message,sizeof(message));
-  return (void*)(uintptr_t)(code==0 && info.version==1);
+  return (void*)(uintptr_t)(code==0 && info.struct_size==sizeof(info));
 }
 int main(int argc,char **argv) {
   if(argc!=5)return 2;
@@ -45,7 +45,7 @@ int main(int argc,char **argv) {
   unsigned samples=(unsigned)strtoul(argv[4],NULL,10);if(samples<8||samples>4096)return 2;
   uint32_t *words=(uint32_t*)input;size_t size=(size_t)words[2]*words[3]*16;
   unsigned char *pixels=malloc(size),*other=malloc(size),*reference=malloc(size);if(!pixels||!other||!reference)return 2;
-  mt_context a=0,b=0,c=0;mt_context_info_v1 info={.struct_size=sizeof(info)};
+  mt_context a=0,b=0,c=0;mt_context_snapshot info={.struct_size=sizeof(info)};
   FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_create_with_backend(2,&c,error,sizeof(error)));REQUIRE(c==0);
   FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_create_with_backend(3,&c,error,sizeof(error)));REQUIRE(c==0);
   OK(mt_context_create(&c,error,sizeof(error)));OK(mt_context_commit(c,input,length,error,sizeof(error)));
@@ -55,8 +55,8 @@ int main(int argc,char **argv) {
   FAILS(MT_ERROR_INVALID_HANDLE,mt_context_info(0,&info,error,sizeof(error)));
   FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_create_with_backend(MT_BACKEND_SOFTWARE,NULL,error,sizeof(error)));
   OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&a,error,sizeof(error)));OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&b,error,sizeof(error)));REQUIRE(a!=b&&a&&b);
-  OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.state==MT_CONTEXT_EMPTY&&info.samples==0&&info.version==1);
-  FAILS(MT_ERROR_INVALID_STATE,mt_context_render(a,1,error,sizeof(error)));FAILS(MT_ERROR_INVALID_STATE,mt_context_reset(a,error,sizeof(error)));FAILS(MT_ERROR_INVALID_STATE,mt_context_wait(a,error,sizeof(error)));
+  OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.state==MT_CONTEXT_EMPTY&&info.samples==0&&info.struct_size==sizeof(info));
+  FAILS(MT_ERROR_INVALID_STATE,mt_context_render(a,1,error,sizeof(error)));FAILS(MT_ERROR_INVALID_STATE,mt_context_reset(a,error,sizeof(error)));FAILS(MT_ERROR_INVALID_STATE,mt_context_wait(a,MT_WAIT_INDEFINITELY,error,sizeof(error)));
   size_t written=999;FAILS(MT_ERROR_INVALID_STATE,mt_context_read_pixels(a,MT_IMAGE_HDR,NULL,0,&written,error,sizeof(error)));REQUIRE(written==0);
   info.struct_size=0;FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_info(a,&info,error,sizeof(error)));info.struct_size=sizeof(info);
   OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,MT_BACKEND_SOFTWARE));
@@ -65,7 +65,7 @@ int main(int argc,char **argv) {
   FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_render(a,0,error,sizeof(error)));FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_render(a,4097,error,sizeof(error)));
   OK(mt_context_render(a,samples/4,error,sizeof(error)));
   OK(mt_context_render(b,samples/4,error,sizeof(error)));
-  OK(mt_context_wait(a,error,sizeof(error)));OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.samples==samples/4);
+  OK(mt_context_wait(a,MT_WAIT_INDEFINITELY,error,sizeof(error)));OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.samples==samples/4);
   for(uint32_t kind=0;kind<3;kind++){OK(read_image(a,kind,pixels,size));OK(read_image(b,kind,other,size));REQUIRE(memcmp(pixels,other,size)==0);}
   OK(mt_context_render(b,1,error,sizeof(error)));
   OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.samples==samples/4);

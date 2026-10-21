@@ -55,13 +55,11 @@ extern "C" {
  * optional independent native denoising.
  */
 typedef uint64_t mt_context;
-typedef struct mt_context_info_v1 {
-  uint32_t struct_size; /* Set to sizeof(mt_context_info_v1). */
-  uint32_t version; /* Returned as 1. */
+typedef struct mt_context_snapshot {
+  uint32_t struct_size; /* Set to sizeof(mt_context_snapshot). */
   uint32_t width, height, samples;
   uint32_t state; /* mt_context_state. */
-  uint32_t reserved[2]; /* Returned as zero. */
-} mt_context_info_v1;
+} mt_context_snapshot;
 /* backend (mt_backend): MT_BACKEND_SOFTWARE, or MT_BACKEND_HWRT (also the
  * mt_context_create default). Other values return MT_ERROR_INVALID_ARGUMENT; no
  * usable GPU device returns MT_ERROR_UNAVAILABLE.
@@ -89,16 +87,16 @@ int32_t mt_context_cancel_commit(mt_context handle, char *error, size_t capacity
 int32_t mt_context_commit(mt_context handle, const uint8_t *input, size_t length, char *error, size_t capacity);
 /* Settings are copied by commit_with_settings. Initialize with
  * mt_render_settings_default, then change fields. Defaults: Sobol, seed 12345,
- * max_samples 64, bounces 6, direct-light candidates 2, bevel samples 8, clamping
- * 0, transmissive alpha minimum 1, sequence offset 0. These match commit.
+ * max_samples 64, bounces 6, direct-light candidates 2, bevel samples 8,
+ * sequence offset 0, clamping 0, transmissive alpha minimum 1. These match commit.
  * sampling_pattern (mt_sampling_pattern): MT_SAMPLING_SOBOL, MT_SAMPLING_ZSOBOL
  * or MT_SAMPLING_RANDOM. max_samples configures the
  * sequence; render still allows total 1..4096 samples. seed is any u32.
- * bounces round/clamp to 1..20 (NaN selects 1). Direct-light candidates round/
- * clamp to 1..16 (nonfinite selects 4); bevel samples to 1..32 (nonfinite selects
- * 8). clamping must be finite; 0 disables it. Transmissive alpha must be finite.
- * Scene quality flags still select bevel and dispersion. sample_sequence_offset
- * selects the first sequence index. reserved must be 0; struct_size must match.
+ * bounces clamp to 1..20, direct-light candidates to 1..16 and bevel samples to
+ * 1..32. clamping must be finite; 0 disables it. Transmissive alpha must be
+ * finite. Scene quality flags still select bevel and dispersion.
+ * sample_sequence_offset selects the first sequence index. struct_size must be
+ * sizeof(mt_render_settings).
  * Successful commit resets accumulation and expires the previous job. Rejection
  * preserves the old scene, settings and output. Jobs can progress during
  * preparation; successful publication drains/cancels the old job before replacing
@@ -107,19 +105,27 @@ int32_t mt_context_commit(mt_context handle, const uint8_t *input, size_t length
  */
 typedef struct mt_render_settings {
   uint32_t struct_size, sampling_pattern, seed, max_samples;
-  double bounces, direct_light_candidates, bevel_samples, clamping;
-  double transmissive_output_alpha_min;
-  uint32_t sample_sequence_offset, reserved;
+  uint32_t bounces, direct_light_candidates, bevel_samples, sample_sequence_offset;
+  double clamping, transmissive_output_alpha_min;
 } mt_render_settings;
+#if defined(__cplusplus) && __cplusplus >= 201103L
+static_assert(sizeof(mt_render_settings) == 48, "mt_render_settings layout");
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+_Static_assert(sizeof(mt_render_settings) == 48, "mt_render_settings layout");
+#endif
 /* Pure initialization, no device requirement. NULL returns MT_ERROR_INVALID_ARGUMENT. */
 int32_t mt_render_settings_default(mt_render_settings *output);
 int32_t mt_context_commit_with_settings(mt_context handle, const uint8_t *input, size_t length,
   const mt_render_settings *settings, char *error, size_t capacity);
 int32_t mt_context_render(mt_context handle, uint32_t additional_samples, char *error, size_t capacity);
 int32_t mt_context_reset(mt_context handle, char *error, size_t capacity);
-/* Wait up to 30 seconds for submitted GPU work without changing the scene or
- * samples. Requires a committed, healthy scene and no active render job. */
-int32_t mt_context_wait(mt_context handle, char *error, size_t capacity);
+/* Wait up to timeout_ms milliseconds for submitted GPU work without changing
+ * the scene or samples; MT_WAIT_INDEFINITELY has no deadline and 0 only checks.
+ * Expiry returns MT_ERROR_TIMEOUT and the work keeps running. Requires a
+ * committed, healthy scene and no active render job. Other calls on any context
+ * return MT_ERROR_BUSY while it waits. */
+#define MT_WAIT_INDEFINITELY UINT32_MAX
+int32_t mt_context_wait(mt_context handle, uint32_t timeout_ms, char *error, size_t capacity);
 /* Replace the camera with one mt_camera_v4 record from mutracer-scene.h
  * (exactly 128 bytes).
  * Uses the committed image dimensions/aspect and retains geometry, textures and
@@ -212,7 +218,7 @@ int32_t mt_context_update_environment(mt_context handle, const uint8_t *input, s
  */
 int32_t mt_context_update_light(mt_context handle, const uint8_t *input, size_t length,
   char *error, size_t capacity);
-int32_t mt_context_info(mt_context handle, mt_context_info_v1 *info, char *error, size_t capacity);
+int32_t mt_context_info(mt_context handle, mt_context_snapshot *info, char *error, size_t capacity);
 int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, size_t size,
   size_t *written, char *error, size_t capacity);
 /* One job per context. submit records the request without GPU dispatch. Poll
@@ -242,17 +248,15 @@ int32_t mt_context_read_pixels(mt_context handle, uint32_t kind, void *pixels, s
  * Handles are never reused. Save any terminal info before starting another job.
  */
 typedef uint64_t mt_render_job;
-typedef struct mt_job_info_v1 {
-  uint32_t struct_size; /* Set to sizeof(mt_job_info_v1). */
-  uint32_t version; /* Returned as 1. */
+typedef struct mt_job_snapshot {
+  uint32_t struct_size; /* Set to sizeof(mt_job_snapshot). */
   uint32_t state; /* mt_job_state. */
   uint32_t requested_samples, submitted_samples, completed_samples, base_samples;
-  uint32_t reserved; /* Returned as zero. */
-} mt_job_info_v1;
+} mt_job_snapshot;
 int32_t mt_context_submit(mt_context handle, uint32_t additional_samples, mt_render_job *job,
   char *error, size_t capacity);
 int32_t mt_job_poll(mt_render_job job, uint32_t max_new_samples, char *error, size_t capacity);
-int32_t mt_job_info(mt_render_job job, mt_job_info_v1 *info, char *error, size_t capacity);
+int32_t mt_job_info(mt_render_job job, mt_job_snapshot *info, char *error, size_t capacity);
 int32_t mt_job_cancel(mt_render_job job, char *error, size_t capacity);
 #ifdef __cplusplus
 }

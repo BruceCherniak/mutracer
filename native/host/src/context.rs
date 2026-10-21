@@ -101,12 +101,10 @@ thread_local! { static TOUCHED: std::cell::Cell<Option<(u64, bool)>> = const { s
 #[derive(Clone, Copy)]
 pub struct ContextInfo {
     pub struct_size: u32,
-    pub version: u32,
     pub width: u32,
     pub height: u32,
     pub samples: u32,
     pub state: u32,
-    pub reserved: [u32; 2],
 }
 fn action(
     error: *mut c_char,
@@ -725,16 +723,29 @@ pub unsafe extern "C" fn mt_context_reset(handle: u64, error: *mut c_char, capac
     })
 }
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn mt_context_wait(handle: u64, error: *mut c_char, capacity: usize) -> i32 {
+pub unsafe extern "C" fn mt_context_wait(
+    handle: u64,
+    timeout_ms: u32,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
     action(error, capacity, |registry| {
         let context = context(registry, handle)?;
         idle(context)?;
         let scene = ready(context)?;
-        scene.gpu.device.poll(wgpu::PollType::Wait {
+        // UINT32_MAX (MT_WAIT_INDEFINITELY) waits without a deadline.
+        let timeout = (timeout_ms != u32::MAX).then(|| Duration::from_millis(timeout_ms.into()));
+        match scene.gpu.device.poll(wgpu::PollType::Wait {
             submission_index: None,
-            timeout: Some(Duration::from_secs(30)),
-        })?;
-        Ok(())
+            timeout,
+        }) {
+            Ok(_) => Ok(()),
+            Err(wgpu::PollError::Timeout) => Err(fail(
+                Status::Timeout,
+                "Submitted GPU work did not complete before the timeout",
+            )),
+            Err(error) => Err(error.into()),
+        }
     })
 }
 #[unsafe(no_mangle)]
@@ -1034,7 +1045,6 @@ pub unsafe extern "C" fn mt_context_info(
         unsafe {
             *info = ContextInfo {
                 struct_size: std::mem::size_of::<ContextInfo>() as u32,
-                version: 1,
                 width,
                 height,
                 samples,
@@ -1047,7 +1057,6 @@ pub unsafe extern "C" fn mt_context_info(
                 } else {
                     0
                 },
-                reserved: [0, 0],
             };
         }
         Ok(())
@@ -1108,13 +1117,11 @@ pub unsafe extern "C" fn mt_context_read_pixels(
 #[repr(C)]
 pub struct JobInfo {
     pub struct_size: u32,
-    pub version: u32,
     pub state: u32,
     pub requested_samples: u32,
     pub submitted_samples: u32,
     pub completed_samples: u32,
     pub base_samples: u32,
-    pub reserved: u32,
 }
 fn job_context(registry: &mut Registry, id: u64) -> Result<&mut Context> {
     let (handle, context) = registry
@@ -1268,7 +1275,6 @@ pub unsafe extern "C" fn mt_job_info(
         unsafe {
             *info = JobInfo {
                 struct_size: std::mem::size_of::<JobInfo>() as u32,
-                version: 1,
                 state: if context.failed {
                     JobState::Failed as u32
                 } else {
@@ -1278,7 +1284,6 @@ pub unsafe extern "C" fn mt_job_info(
                 submitted_samples: job.submitted,
                 completed_samples: job.completed,
                 base_samples: job.base,
-                reserved: 0,
             };
         }
         Ok(())

@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-_Static_assert(sizeof(mt_render_settings)==64,"settings ABI");
+_Static_assert(sizeof(mt_render_settings)==48,"settings ABI");
 static char error[4096];
 static unsigned checks=0;
 #define REQUIRE(x) do {checks++;if(!(x)){fprintf(stderr,"settings check %u, line %d: %s\n",checks,__LINE__,#x);return 1;}} while(0)
@@ -29,7 +29,7 @@ int main(int argc,char **argv) {
  unsigned backend=(unsigned)strtoul(argv[3],NULL,10);if(backend>1)return 2;
  unsigned char *reference=malloc(size*3),*image=malloc(size),*default_hdr=malloc(size);if(!reference||!image||!default_hdr)return 2;
  mt_render_settings settings;FAILS(MT_ERROR_INVALID_ARGUMENT,mt_render_settings_default(NULL));
- OK(mt_render_settings_default(&settings));REQUIRE(settings.struct_size==sizeof(settings)&&settings.seed==12345&&settings.reserved==0);
+ OK(mt_render_settings_default(&settings));REQUIRE(settings.struct_size==sizeof(settings)&&settings.seed==12345&&settings.bounces==6&&settings.direct_light_candidates==2&&settings.bevel_samples==8);
  mt_context context=0;OK(mt_context_create_with_backend(backend,&context,error,sizeof(error)));
  OK(mt_context_commit(context,input,length,error,sizeof(error)));OK(backend_is(context,backend));
  uint32_t actual=99;char reason[512];OK(mt_context_backend(context,&actual,reason,sizeof(reason),error,sizeof(error)));REQUIRE(actual==backend);
@@ -37,14 +37,18 @@ int main(int argc,char **argv) {
  for(unsigned kind=0;kind<3;kind++)OK(pixels(context,kind,reference+kind*size,size));
  memcpy(default_hdr,reference,size);
  if(backend==0) {
-  settings.bounces=6.49;settings.direct_light_candidates=2.49;settings.bevel_samples=8.49;
-  OK(mt_context_commit_with_settings(context,input,length,&settings,error,sizeof(error)));OK(backend_is(context,backend));OK(mt_context_render(context,8,error,sizeof(error)));
+  /* Out-of-range counts clamp to 20 bounces, 16 candidates and 32 bevel samples. */
+  mt_render_settings limits=settings;limits.bounces=20;limits.direct_light_candidates=16;limits.bevel_samples=32;
+  OK(mt_context_commit_with_settings(context,input,length,&limits,error,sizeof(error)));OK(mt_context_render(context,8,error,sizeof(error)));
+  for(unsigned kind=0;kind<3;kind++)OK(pixels(context,kind,reference+kind*size,size));
+  limits.bounces=limits.direct_light_candidates=limits.bevel_samples=99;
+  OK(mt_context_commit_with_settings(context,input,length,&limits,error,sizeof(error)));OK(backend_is(context,backend));OK(mt_context_render(context,8,error,sizeof(error)));
   for(unsigned kind=0;kind<3;kind++){OK(pixels(context,kind,image,size));REQUIRE(memcmp(image,reference+kind*size,size)==0);}
  }
  for(unsigned pattern=0;pattern<3;pattern++) {
   OK(mt_render_settings_default(&settings));settings.seed=67890;settings.sampling_pattern=pattern; /* mt_sampling_pattern */settings.max_samples=65;
   if(pattern) {
-   settings.bounces=3.2;settings.direct_light_candidates=3.7;settings.bevel_samples=4.2;
+   settings.bounces=3;settings.direct_light_candidates=4;settings.bevel_samples=4;
    settings.clamping=.8;settings.transmissive_output_alpha_min=.4;settings.sample_sequence_offset=3;
   }
   OK(mt_context_commit_with_settings(context,input,length,&settings,error,sizeof(error)));OK(backend_is(context,backend));
@@ -59,13 +63,12 @@ int main(int argc,char **argv) {
   }
   mt_render_settings bad=settings;bad.sampling_pattern=3;FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_commit_with_settings(context,input,length,&bad,error,sizeof(error)));
   bad=settings;bad.struct_size--;FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_commit_with_settings(context,input,length,&bad,error,sizeof(error)));
-  bad=settings;bad.reserved=1;FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_commit_with_settings(context,input,length,&bad,error,sizeof(error)));
   bad=settings;bad.clamping=NAN;FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_commit_with_settings(context,input,length,&bad,error,sizeof(error)));
   FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_commit_with_settings(context,input,length,NULL,error,sizeof(error)));
   for(unsigned kind=0;kind<3;kind++){OK(pixels(context,kind,image,size));REQUIRE(memcmp(image,reference+kind*size,size)==0);}
   OK(mt_context_reset(context,error,sizeof(error)));
   mt_render_job job=0;OK(mt_context_submit(context,8,&job,error,sizeof(error)));
-  mt_job_info_v1 info={.struct_size=sizeof(info)};unsigned iteration=0;
+  mt_job_snapshot info={.struct_size=sizeof(info)};unsigned iteration=0;
   for(;iteration<60000;iteration++) {
    OK(mt_job_poll(job,3,error,sizeof(error)));OK(mt_job_info(job,&info,error,sizeof(error)));
    if(info.state==MT_JOB_COMPLETE)break;REQUIRE(info.state<=MT_JOB_COMPLETE);const struct timespec delay={0,1000000};nanosleep(&delay,NULL);

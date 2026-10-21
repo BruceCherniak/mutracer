@@ -27,10 +27,30 @@ fn call(operation: impl FnOnce(*mut i8, usize) -> i32) -> (i32, String) {
     let message = unsafe { CStr::from_ptr(error.as_ptr()) }.to_string_lossy();
     (code, message.into_owned())
 }
+/// A failed native call with its mt_status code.
+#[derive(Debug)]
+pub struct NativeError {
+    pub status: i32,
+    message: String,
+}
+impl std::fmt::Display for NativeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+impl std::error::Error for NativeError {}
+impl NativeError {
+    /// True when another native call held the library; retry on a later frame.
+    pub fn is_busy(error: &anyhow::Error) -> bool {
+        error
+            .downcast_ref::<NativeError>()
+            .is_some_and(|e| e.status == Status::Busy as i32)
+    }
+}
 fn check(operation: impl FnOnce(*mut i8, usize) -> i32) -> Result<()> {
     match call(operation) {
         (0, _) => Ok(()),
-        (_, message) => bail!(message),
+        (status, message) => Err(NativeError { status, message }.into()),
     }
 }
 /// False requests a full commit for a change the incremental update cannot express.
@@ -38,7 +58,7 @@ fn incremental(operation: impl FnOnce(*mut i8, usize) -> i32) -> Result<bool> {
     match call(operation) {
         (0, _) => Ok(true),
         (code, _) if code == Status::FullCommitRequired as i32 => Ok(false),
-        (_, message) => bail!(message),
+        (status, message) => Err(NativeError { status, message }.into()),
     }
 }
 impl Renderer {
@@ -203,13 +223,11 @@ impl Renderer {
     }
     pub fn samples(&self) -> Result<u32> {
         let mut info = native::ContextInfo {
-            struct_size: 32,
-            version: 0,
+            struct_size: std::mem::size_of::<native::ContextInfo>() as u32,
             width: 0,
             height: 0,
             samples: 0,
             state: 0,
-            reserved: [0; 2],
         };
         check(|e, n| unsafe { native::mt_context_info(self.handle, &mut info, e, n) })?;
         Ok(info.samples)
@@ -235,22 +253,21 @@ impl Renderer {
         let Some(job) = self.job else {
             return Ok(false);
         };
-        if let Err(error) = check(|e, n| unsafe { native::mt_job_poll(job, 1, e, n) }) {
-            if error.to_string().contains("Context registry is active") {
-                return Ok(false);
+        match call(|e, n| unsafe { native::mt_job_poll(job, 1, e, n) }) {
+            (0, _) => {}
+            (code, _) if code == Status::Busy as i32 => return Ok(false),
+            (status, message) => {
+                self.job = None;
+                return Err(NativeError { status, message }.into());
             }
-            self.job = None;
-            return Err(error);
         }
         let mut info = native::JobInfo {
-            struct_size: 32,
-            version: 0,
+            struct_size: std::mem::size_of::<native::JobInfo>() as u32,
             state: 0,
             requested_samples: 0,
             submitted_samples: 0,
             completed_samples: 0,
             base_samples: 0,
-            reserved: 0,
         };
         check(|e, n| unsafe { native::mt_job_info(job, &mut info, e, n) })?;
         match info.state {

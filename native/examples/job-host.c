@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-_Static_assert(sizeof(mt_job_info_v1)==32,"job info ABI");
+_Static_assert(sizeof(mt_job_snapshot)==24,"job snapshot ABI");
 static char error[4096];static unsigned checks;
 #define REQUIRE(test) do{checks++;if(!(test)){fprintf(stderr,"line %d: %s; %s\n",__LINE__,#test,error);return 1;}}while(0)
 #define OK(call) REQUIRE((call)==0)
@@ -23,7 +23,7 @@ static int read_image(mt_context context,unsigned kind,unsigned char *output,siz
 }
 static void pause_poll(void){const struct timespec delay={0,1000000};nanosleep(&delay,NULL);}
 static void *other_thread(void *input){char message[128];mt_render_job id=*(mt_render_job*)input;
- mt_job_info_v1 info={.struct_size=sizeof(info)};
+ mt_job_snapshot info={.struct_size=sizeof(info)};
  return (void*)(uintptr_t)(mt_job_info(id,&info,message,sizeof(message))==0);
 
 }
@@ -33,7 +33,7 @@ int main(int argc,char **argv){
  unsigned samples=(unsigned)strtoul(argv[4],NULL,10);if(samples<8||samples>4096)return 2;
  unsigned char *a_pixels=malloc(size),*b_pixels=malloc(size);if(!a_pixels||!b_pixels)return 2;
  mt_context a=0,b=0;mt_render_job old=0,job_a=0,job_b=0;
- mt_job_info_v1 info={.struct_size=sizeof(info)};mt_context_info_v1 context_info={.struct_size=sizeof(context_info)};
+ mt_job_snapshot info={.struct_size=sizeof(info)};mt_context_snapshot context_info={.struct_size=sizeof(context_info)};
  OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&a,error,sizeof(error)));OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&b,error,sizeof(error)));
  OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,MT_BACKEND_SOFTWARE));OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,MT_BACKEND_SOFTWARE));
  FAILS(MT_ERROR_INVALID_HANDLE,mt_job_info(0,&info,error,sizeof(error)));FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_submit(a,1,NULL,error,sizeof(error)));
@@ -66,7 +66,7 @@ int main(int argc,char **argv){
  OK(mt_context_submit(b,samples-3,&job_b,error,sizeof(error)));
  for(iteration=0;iteration<60000;iteration++){
   OK(mt_job_poll(job_a,8,error,sizeof(error)));OK(mt_job_poll(job_b,5,error,sizeof(error)));
-  mt_job_info_v1 other={.struct_size=sizeof(other)};OK(mt_job_info(job_a,&info,error,sizeof(error)));OK(mt_job_info(job_b,&other,error,sizeof(error)));
+  mt_job_snapshot other={.struct_size=sizeof(other)};OK(mt_job_info(job_a,&info,error,sizeof(error)));OK(mt_job_info(job_b,&other,error,sizeof(error)));
   REQUIRE(info.base_samples==3&&info.completed_samples<=info.submitted_samples&&info.submitted_samples<=samples-3);
   REQUIRE(other.base_samples==3&&other.completed_samples<=other.submitted_samples&&other.submitted_samples<=samples-3);
   if(info.state==MT_JOB_COMPLETE&&other.state==MT_JOB_COMPLETE)break;REQUIRE(info.state<=MT_JOB_COMPLETE&&other.state<=MT_JOB_COMPLETE);pause_poll();

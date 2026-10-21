@@ -1815,9 +1815,9 @@ pub(crate) mod tests {
         runtime::init();
         let settings = settings::RenderSettings {
             seed: 67890,
-            bounces: f64::NAN,
-            direct_light_candidates: f64::INFINITY,
-            bevel_samples: 17.7,
+            bounces: 0,
+            direct_light_candidates: 99,
+            bevel_samples: 17,
             sampling_pattern: 2,
             ..Default::default()
         };
@@ -1834,7 +1834,7 @@ pub(crate) mod tests {
                 |offset: usize| u32::from_le_bytes(uniform[offset..offset + 4].try_into().unwrap());
             assert_eq!(word(layout::ray_uniform::SEQUENCE_SEED), 67890);
             assert_eq!(word(layout::ray_uniform::BOUNCES), 1);
-            assert_eq!(word(layout::ray_uniform::DIRECT_LIGHT_CANDIDATES), 4);
+            assert_eq!(word(layout::ray_uniform::DIRECT_LIGHT_CANDIDATES), 16);
             let first = shader_stats();
             let (again, repeated, _) =
                 prepare_retained_with_settings(&input(), backend == 1, backend, &settings).unwrap();

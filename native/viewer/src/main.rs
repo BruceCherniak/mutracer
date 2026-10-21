@@ -1087,7 +1087,7 @@ impl eframe::App for Viewer {
             );
         }
         if let Err(e) = self.tick(&ctx) {
-            if e.to_string().contains("Context registry is active") {
+            if renderer::NativeError::is_busy(&e) {
                 ctx.request_repaint_after(Duration::from_millis(16));
             } else {
                 self.error = format!("Render stopped: {e:#}");

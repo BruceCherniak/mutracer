@@ -38,15 +38,24 @@ enum {
    * scene or destroy the context. */
   MT_ERROR_CONTEXT_FAILED = 9,
   /* A required device, GPU feature or runtime library is unavailable. */
-  MT_ERROR_UNAVAILABLE = 10
+  MT_ERROR_UNAVAILABLE = 10,
+  /* mt_context_wait reached its timeout; the GPU work is still running. */
+  MT_ERROR_TIMEOUT = 11
 };
 
 /* Incremented whenever any native C API declaration or record layout changes
  * incompatibly; the ABI stays experimental until a stable release. Compare it
  * with mt_abi_version() when loading the library dynamically. Scene descriptors
  * carry their own MT_VERSION_SCENE. */
-#define MT_ABI_VERSION 1u
+#define MT_ABI_VERSION 2u
 uint32_t mt_abi_version(void);
+
+/* Every struct passed to or filled by the library starts with uint32_t
+ * struct_size. Set it to sizeof(struct) before the call; an unsupported size
+ * returns MT_ERROR_INVALID_ARGUMENT and nothing is read or written. Later ABI
+ * versions only append fields and keep accepting older sizes, so the struct
+ * names carry no version suffix. Byte records (scene descriptors and update
+ * records) carry their own version word instead. */
 
 /* Context intersection backend: mt_context_create_with_backend, mt_context_backend. */
 typedef enum mt_backend { MT_BACKEND_SOFTWARE = 0, MT_BACKEND_HWRT = 1 } mt_backend;
@@ -54,12 +63,12 @@ typedef enum mt_backend { MT_BACKEND_SOFTWARE = 0, MT_BACKEND_HWRT = 1 } mt_back
 typedef enum mt_image_kind {
   MT_IMAGE_HDR = 0, MT_IMAGE_NORMAL = 1, MT_IMAGE_ALBEDO = 2
 } mt_image_kind;
-/* mt_context_info_v1.state. */
+/* mt_context_snapshot.state. */
 typedef enum mt_context_state {
   MT_CONTEXT_EMPTY = 0, MT_CONTEXT_COMMITTED = 1, MT_CONTEXT_FAILED = 2,
   MT_CONTEXT_JOB_ACTIVE = 3
 } mt_context_state;
-/* mt_job_info_v1.state. */
+/* mt_job_snapshot.state. */
 typedef enum mt_job_state {
   MT_JOB_QUEUED = 0, MT_JOB_RUNNING = 1, MT_JOB_COMPLETE = 2, MT_JOB_CANCELLED = 3,
   MT_JOB_FAILED = 4, MT_JOB_CANCELLING = 5
