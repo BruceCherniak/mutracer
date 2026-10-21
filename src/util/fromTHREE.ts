@@ -656,6 +656,8 @@ interface GeometryEntry { state: unknown[]; groups: Map<string, Geometry>; check
 interface ConversionStore {
   updateId: number;
   textures: TextureStore;
+  // Equirectangular conversion normalizes rows; material textures retain source pixels and flipY.
+  equirectTextures: TextureStore;
   materials: WeakMap<THREE.Material, { material: OpenPBRMaterial; hash: string }>;
   materialHooks: WeakMap<THREE.Material, {version: number; value: OpenPBRMaterial | null | undefined}>;
   lightHooks: WeakMap<THREE.Light, {version: number | undefined; value: SceneLight | null | undefined}>;
@@ -672,7 +674,8 @@ interface ConversionStore {
   background?: Scene['background'];
 }
 function createConversionStore(): ConversionStore {
-  return { updateId: 0, textures: new WeakMap(), materials: new WeakMap(), geometries: new WeakMap(),
+  return { updateId: 0, textures: new WeakMap(), equirectTextures: new WeakMap(),
+    materials: new WeakMap(), geometries: new WeakMap(),
     materialHooks: new WeakMap(), lightHooks: new WeakMap(),
     poseChanged: false, meshes: new WeakMap(), lights: new WeakMap(), deformedGeometries: new WeakMap(), deformations: new WeakMap(),
     instanceMeshes: new WeakMap(), projectionVariants: new Map(), warned: new WeakSet() };
@@ -1073,7 +1076,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   });
 
   const threeEnvironment = scene.environment as THREE.DataTexture | null;
-  const environmentMap = convertDataTexture(threeEnvironment, textureCache);
+  const environmentMap = convertDataTexture(threeEnvironment, store.equirectTextures);
   const environmentLight = threeEnvironment && environmentMap
     ? retainLight(store, threeEnvironment, new EnvironmentLight({map: environmentMap})) as EnvironmentLight
     : undefined;
@@ -1088,7 +1091,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
         center?: [number, number];
       }
     | undefined;
-  const groundedTexture = grounded && convertDataTexture(grounded.texture, textureCache);
+  const groundedTexture = grounded && convertDataTexture(grounded.texture, store.equirectTextures);
   const hideEnvironmentBackground =
     scene.userData.mutracerHiddenBackground === true;
   let background: GroundedSkyboxBackground | ColorRGBA | Texture | undefined =
@@ -1108,7 +1111,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             ? ([...(scene.background as THREE.Color).toArray(), 1] as ColorRGBA)
             : scene.background === scene.environment && environmentLight
               ? environmentLight.map
-              : convertDataTexture(scene.background as THREE.DataTexture, textureCache)
+              : convertDataTexture(scene.background as THREE.DataTexture, store.equirectTextures)
           : undefined;
 
   const oldBackground = store.background;

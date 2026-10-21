@@ -286,6 +286,71 @@ describe('THREESync', () => {
     sync.update();
   });
 
+  it.each([true, false])('preserves shared texture orientation across updates (material initially present: %s)', (materialFirst) => {
+    const source = new THREE.Scene();
+    const pixels = new Float32Array([
+      0, 0, 0, 1, 0.125, 0, 0, 1,
+      0.5, 0.25, 0.125, 1, 1, 0.5, 0.25, 1
+    ]);
+    const texture = new THREE.DataTexture(pixels, 2, 2, THREE.RGBAFormat, THREE.FloatType);
+    texture.mapping = THREE.EquirectangularReflectionMapping;
+    source.environment = source.background = texture;
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.MeshBasicMaterial({map: texture}));
+    if (materialFirst) source.add(mesh);
+    const sync = initializedSync(source);
+    const light = sync.scene.lights[0];
+    const environment = sync.scene.background as Texture;
+    if (!materialFirst) { source.add(mesh); sync.update(); }
+    const material = sync.scene.meshes[0].materials[0].map!;
+    const assertTextures = () => {
+      const data = texture.image.data as Float32Array;
+      expect(sync.scene.lights[0]).toBe(light);
+      expect(sync.scene.background).toBe(environment);
+      expect(light.type === 'EnvironmentLight' && light.map).toBe(environment);
+      expect(sync.scene.meshes[0].materials[0].map).toBe(material);
+      expect(material.image).toBe(texture.image);
+      expect(material.flipY).toBe(texture.flipY);
+      expect(environment.flipY).toBe(false);
+      expect(environment.image).toEqual({
+        data: texture.flipY ? data : new Float32Array([...data.slice(8), ...data.slice(0, 8)]),
+        width: 2, height: 2
+      });
+      expect(material).not.toBe(environment);
+    };
+    const assertUnchangedUpdate = () => {
+      const image = environment.image;
+      const versions = [material.version, environment.version];
+      sync.update();
+      assertTextures();
+      expect(environment.image).toBe(image);
+      expect([material.version, environment.version]).toEqual(versions);
+    };
+    try {
+      assertTextures();
+      assertUnchangedUpdate();
+      for (const value of [0.75, 0.25]) {
+        pixels[8] = value;
+        const versions = [material.version, environment.version];
+        texture.needsUpdate = true;
+        sync.update();
+        assertTextures();
+        expect([material.version, environment.version]).toEqual(versions.map(version => version + 1));
+        expect(pixels[8]).toBe(value);
+        assertUnchangedUpdate();
+      }
+      texture.image = {data: pixels.slice(), width: 2, height: 2};
+      sync.update();
+      assertTextures();
+      assertUnchangedUpdate();
+      for (const flipY of [true, false]) {
+        texture.flipY = flipY;
+        sync.update();
+        assertTextures();
+        assertUnchangedUpdate();
+      }
+    } finally { sync.dispose(); sync.engine.dispose(); }
+  });
+
   it('creates fresh resources across one-shot calls and supports disposal', () => {
     const { source, sync } = fixture();
     const a = fromTHREEScene(source), b = fromTHREEScene(source);

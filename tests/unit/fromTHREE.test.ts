@@ -911,6 +911,46 @@ describe('Three.js scene conversion', () => {
     expect(convertFirstRow([sky, ground], true)).toEqual(sky);
   });
 
+  it.each(['environment', 'background', 'grounded'] as const)(
+    'keeps a shared material texture independent of its %s conversion',
+    (target) => {
+      for (const flipY of [false, true]) {
+        const scene = new THREE.Scene();
+        const rows = [
+          [0, 0, 0, 1, 0.125, 0, 0, 1],
+          [0.5, 0.25, 0.125, 1, 1, 0.5, 0.25, 1]
+        ];
+        const pixels = new Float32Array(rows.flat());
+        const texture = new THREE.DataTexture(pixels, 2, 2, THREE.RGBAFormat, THREE.FloatType);
+        texture.flipY = flipY;
+        texture.mapping = THREE.EquirectangularReflectionMapping;
+        scene.add(new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.MeshBasicMaterial({map: texture})));
+        if (target === 'environment') scene.environment = scene.background = texture;
+        else if (target === 'background') scene.background = texture;
+        else scene.userData.mutracerGroundedSkybox = {texture, height: 1.7, radius: 40};
+
+        const result = fromTHREEScene(scene);
+        const background = result.background;
+        if (!background || Array.isArray(background)) throw new Error('missing textured background');
+        const equirect = 'map' in background ? background.map : background;
+        const materialMap = result.meshes[0].materials[0].map!;
+        expect(equirect.flipY).toBe(false);
+        expect(equirect.image).toEqual({
+          data: new Float32Array((flipY ? rows : [rows[1], rows[0]]).flat()), width: 2, height: 2
+        });
+        expect(materialMap.image).toBe(texture.image);
+        expect(materialMap.flipY).toBe(flipY);
+        expect(equirect).not.toBe(materialMap);
+        expect(Array.from(pixels)).toEqual(rows.flat());
+        expect(texture.flipY).toBe(flipY);
+        if (target === 'environment') {
+          const light = result.lights.find(light => light.type === 'EnvironmentLight');
+          expect(light?.map).toBe(equirect);
+        }
+      }
+    }
+  );
+
   it('creates fresh one-shot environment lights and reads the current version', () => {
     const scene = new THREE.Scene();
     const pixels = new Float32Array([1, 0.5, 0.25, 1]);
