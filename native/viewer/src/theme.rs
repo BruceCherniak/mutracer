@@ -44,7 +44,7 @@ pub fn install(ctx: &egui::Context) {
         &mut visuals.widgets.active,
         &mut visuals.widgets.open,
     ] {
-        widget.corner_radius = 12.into();
+        widget.corner_radius = 5.into();
         widget.expansion = 0.;
         widget.bg_stroke = Stroke::new(1., BORDER);
         widget.fg_stroke = Stroke::new(1., TEXT);
@@ -75,9 +75,10 @@ pub fn install(ctx: &egui::Context) {
         style
             .text_styles
             .insert(TextStyle::Monospace, FontId::monospace(11.));
-        style.spacing.item_spacing = egui::vec2(8., 8.);
-        style.spacing.button_padding = egui::vec2(12., 6.);
-        style.spacing.interact_size = egui::vec2(32., 30.);
+        style.spacing.item_spacing = egui::vec2(6., 4.);
+        style.spacing.button_padding = egui::vec2(8., 3.);
+        style.spacing.interact_size = egui::vec2(32., 24.);
+        style.spacing.slider_rail_height = 2.;
         style.spacing.slider_width = 130.;
         style.spacing.combo_width = 130.;
         style.spacing.window_margin = Margin::same(16);
@@ -87,12 +88,12 @@ pub fn install(ctx: &egui::Context) {
 pub fn panel() -> egui::Frame {
     egui::Frame::new()
         .fill(PANEL)
-        .corner_radius(16)
-        .inner_margin(12)
+        .corner_radius(8)
+        .inner_margin(10)
         .outer_margin(Margin {
             left: 0,
-            right: 8,
-            top: 8,
-            bottom: 8,
+            right: 6,
+            top: 6,
+            bottom: 6,
         })
 }

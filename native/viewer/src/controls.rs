@@ -4,52 +4,69 @@ use crate::theme;
 use eframe::egui::{self, Align2, Color32, FontId, Response, Sense, Stroke, Ui};
 
 pub fn button(ui: &mut Ui, label: &str) -> Response {
-    ui.add(egui::Button::new(label).min_size(egui::vec2(0., 32.)))
+    ui.add(egui::Button::new(label).min_size(egui::vec2(0., 24.)))
 }
 
 pub fn section(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) {
     egui::CollapsingHeader::new(egui::RichText::new(title).strong())
         .default_open(true)
-        .show(ui, contents);
-    ui.add_space(4.);
+        .show_unindented(ui, contents);
     ui.separator();
 }
 
 fn property<R>(ui: &mut Ui, label: &str, contents: impl FnOnce(&mut Ui, egui::Id) -> R) -> R {
     ui.push_id(label, |ui| {
-        let label_width = (ui.available_width() * 0.36).min(104.);
-        ui.horizontal(|ui| {
-            let label = ui
-                .allocate_ui_with_layout(
-                    egui::vec2(label_width, 30.),
-                    egui::Layout::left_to_right(egui::Align::Center),
-                    |ui| {
-                        ui.set_min_width(label_width);
-                        ui.add(
-                            egui::Label::new(egui::RichText::new(label).color(theme::MUTED))
-                                .truncate(),
+        egui::Frame::new()
+            .fill(theme::INPUT)
+            .stroke(Stroke::new(1., theme::BORDER))
+            .corner_radius(5)
+            .inner_margin(egui::Margin::symmetric(7, 0))
+            .show(ui, |ui| {
+                ui.set_min_width(ui.available_width());
+                let label_width = (ui.available_width() * 0.37).min(104.);
+                ui.horizontal(|ui| {
+                    let label = ui
+                        .allocate_ui_with_layout(
+                            egui::vec2(label_width, 24.),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_min_width(label_width);
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(label).size(11.).color(theme::MUTED),
+                                    )
+                                    .truncate(),
+                                )
+                                .on_hover_text(label)
+                            },
                         )
-                    },
-                )
-                .inner;
-            contents(ui, label.id)
-        })
-        .inner
+                        .inner;
+                    ui.visuals_mut().widgets.inactive.weak_bg_fill = Color32::TRANSPARENT;
+                    ui.visuals_mut().widgets.inactive.bg_stroke = Stroke::NONE;
+                    contents(ui, label.id)
+                })
+                .inner
+            })
+            .inner
     })
     .inner
 }
 
 pub fn parameter(ui: &mut Ui, label: &str, slider: egui::Slider<'_>) -> Response {
     property(ui, label, |ui, label_id| {
-        ui.spacing_mut().slider_width = (ui.available_width() - 66.).max(24.);
-        ui.add(slider).labelled_by(label_id)
+        ui.spacing_mut().interact_size = egui::vec2(36., 18.);
+        ui.spacing_mut().button_padding = egui::vec2(3., 1.);
+        ui.spacing_mut().slider_width = (ui.available_width() - 50.).max(24.);
+        ui.visuals_mut().selection.bg_fill = theme::SUBTLE;
+        ui.add(slider.handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 0.16 }))
+            .labelled_by(label_id)
     })
 }
 
 pub fn number(ui: &mut Ui, label: &str, value: &mut f32, speed: f64) -> Response {
     property(ui, label, |ui, label_id| {
         ui.add_sized(
-            [ui.available_width(), 30.],
+            [ui.available_width(), 24.],
             egui::DragValue::new(value).speed(speed).range(-1e6..=1e6),
         )
         .labelled_by(label_id)
@@ -81,7 +98,7 @@ pub fn color(ui: &mut Ui, label: &str, value: &mut [f32; 3]) -> Response {
 
 pub fn toggle(ui: &mut Ui, label: &str, value: &mut bool) -> Response {
     let (rect, mut response) =
-        ui.allocate_exact_size(egui::vec2(ui.available_width(), 30.), Sense::click());
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.), Sense::click());
     if response.clicked() {
         *value = !*value;
         response.mark_changed();
@@ -94,12 +111,12 @@ pub fn toggle(ui: &mut Ui, label: &str, value: &mut bool) -> Response {
         rect.left_center(),
         Align2::LEFT_CENTER,
         label,
-        FontId::proportional(12.),
+        FontId::proportional(11.),
         theme::MUTED,
     );
     let track = egui::Rect::from_center_size(
-        rect.right_center() - egui::vec2(16., 0.),
-        egui::vec2(32., 18.),
+        rect.right_center() - egui::vec2(14., 0.),
+        egui::vec2(28., 14.),
     );
     painter.rect_filled(
         track,
@@ -121,13 +138,13 @@ pub fn toggle(ui: &mut Ui, label: &str, value: &mut bool) -> Response {
     painter.circle_filled(
         egui::pos2(
             if *value {
-                track.right() - 9.
+                track.right() - 7.
             } else {
-                track.left() + 9.
+                track.left() + 7.
             },
             track.center().y,
         ),
-        6.,
+        5.,
         theme::TEXT,
     );
     response
@@ -144,8 +161,8 @@ pub enum Icon {
 
 pub fn category(ui: &mut Ui, label: &str, icon: Icon, selected: bool) -> Response {
     let response = ui.add_sized(
-        [ui.available_width(), 58.],
-        egui::Button::selectable(selected, "").corner_radius(12),
+        [ui.available_width(), 44.],
+        egui::Button::selectable(selected, "").corner_radius(6),
     );
     response.widget_info(|| {
         egui::WidgetInfo::selected(
@@ -162,13 +179,13 @@ pub fn category(ui: &mut Ui, label: &str, icon: Icon, selected: bool) -> Respons
     } else {
         theme::SUBTLE
     };
-    let center = response.rect.center_top() + egui::vec2(0., 20.);
+    let center = response.rect.center_top() + egui::vec2(0., 15.);
     paint_icon(ui, center, icon, color);
     ui.painter().text(
-        response.rect.center_bottom() - egui::vec2(0., 10.),
+        response.rect.center_bottom() - egui::vec2(0., 5.),
         Align2::CENTER_BOTTOM,
         label,
-        FontId::proportional(10.),
+        FontId::proportional(9.),
         color,
     );
     response.on_hover_text(label)
@@ -176,8 +193,8 @@ pub fn category(ui: &mut Ui, label: &str, icon: Icon, selected: bool) -> Respons
 
 pub fn tree_row(ui: &mut Ui, name: &str, material: &str, selected: bool) -> Response {
     let response = ui.add_sized(
-        [ui.available_width(), 36.],
-        egui::Button::selectable(selected, "").corner_radius(9),
+        [ui.available_width(), 26.],
+        egui::Button::selectable(selected, "").corner_radius(5),
     );
     response.widget_info(|| {
         egui::WidgetInfo::selected(

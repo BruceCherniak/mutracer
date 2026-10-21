@@ -31,12 +31,12 @@ impl Viewer {
     fn toolbar(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
         egui::Panel::top("toolbar")
-            .exact_size(52.)
+            .exact_size(42.)
             .resizable(false)
             .frame(
                 egui::Frame::new()
                     .fill(egui::Color32::from_rgb(0x14, 0x15, 0x17))
-                    .inner_margin(egui::Margin::symmetric(16, 10)),
+                    .inner_margin(egui::Margin::symmetric(12, 6)),
             )
             .show_separator_line(false)
             .show(root, |ui| {
@@ -139,10 +139,10 @@ impl Viewer {
     }
     fn inspector_rail(&mut self, root: &mut egui::Ui) {
         egui::Panel::right("inspector_rail")
-            .exact_size(72.)
+            .exact_size(60.)
             .resizable(false)
             .show_separator_line(false)
-            .frame(theme::panel().inner_margin(6))
+            .frame(theme::panel().inner_margin(4))
             .show(root, |ui| {
                 ui.spacing_mut().button_padding.x = 2.;
                 use controls::Icon;
@@ -165,22 +165,28 @@ impl Viewer {
     fn scene_panel(&mut self, root: &mut egui::Ui) {
         egui::Panel::left("scene")
             .resizable(true)
-            .default_size(252.)
+            .default_size(224.)
             .min_size(180.)
             .max_size(320.)
             .show_separator_line(false)
             .frame(theme::panel().outer_margin(egui::Margin {
-                left: 8,
+                left: 6,
                 right: 0,
-                top: 8,
-                bottom: 8,
+                top: 6,
+                bottom: 6,
             }))
             .show(root, |ui| {
-                ui.heading("Scene");
-                ui.add(
-                    egui::Label::new(egui::RichText::new(&self.model.name).color(theme::SUBTLE))
+                ui.horizontal(|ui| {
+                    ui.strong("Scene");
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(&self.model.name)
+                                .small()
+                                .color(theme::SUBTLE),
+                        )
                         .truncate(),
-                );
+                    );
+                });
                 ui.add(
                     egui::TextEdit::singleline(&mut self.object_query)
                         .hint_text("Search objects")
@@ -234,11 +240,11 @@ impl Viewer {
     fn inspector(&mut self, root: &mut egui::Ui) {
         egui::Panel::right("settings")
             .resizable(true)
-            .default_size(316.)
-            .min_size(270.)
+            .default_size(300.)
+            .min_size(250.)
             .max_size(420.)
             .show_separator_line(false)
-            .frame(theme::panel().inner_margin(14))
+            .frame(theme::panel().inner_margin(10))
             .show(root, |ui| {
                 let (title, subtitle) = match self.tab {
                     0 => ("Render", "Path tracing quality and display"),
@@ -247,8 +253,7 @@ impl Viewer {
                     3 => ("Object", "Position, rotation and scale"),
                     _ => ("Camera", "Framing and field of view"),
                 };
-                ui.strong(title);
-                ui.weak(subtitle);
+                ui.strong(title).on_hover_text(subtitle);
                 ui.separator();
                 egui::ScrollArea::vertical()
                     .id_salt(("inspector", self.tab))
@@ -341,19 +346,21 @@ impl Viewer {
     }
     fn material_settings(&mut self, ui: &mut egui::Ui) {
         if let Some(id) = self.selected_mesh {
-            ui.add(
-                egui::Label::new(
-                    egui::RichText::new(&self.model.meshes[id].name).color(theme::ACCENT),
-                )
-                .truncate(),
-            );
-            if controls::button(ui, "Frame selection").clicked() {
-                let (min, max) = self.model.mesh_bounds(id);
-                self.camera = Camera::fit((min + max) * 0.5, (max - min).length() * 0.5);
-                self.dirty(Change::Camera);
-            }
-        } else {
-            ui.weak("Select an object in the scene list or viewport.");
+            ui.horizontal(|ui| {
+                if controls::button(ui, "Frame selection").clicked() {
+                    let (min, max) = self.model.mesh_bounds(id);
+                    self.camera = Camera::fit((min + max) * 0.5, (max - min).length() * 0.5);
+                    self.dirty(Change::Camera);
+                }
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&self.model.meshes[id].name)
+                            .small()
+                            .color(theme::SUBTLE),
+                    )
+                    .truncate(),
+                );
+            });
         }
         let previous = self.selected;
         controls::select(
@@ -575,7 +582,7 @@ impl Viewer {
                 });
         }
         egui::CentralPanel::default()
-            .frame(theme::panel().fill(theme::WORKSPACE).outer_margin(8))
+            .frame(theme::panel().fill(theme::WORKSPACE).outer_margin(6))
             .show(root, |ui| {
                 let available = ui.available_size();
                 let aspect = self.pixel_size[0] as f32 / self.pixel_size[1] as f32;
