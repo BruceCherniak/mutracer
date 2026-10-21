@@ -8,12 +8,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Enumerated field values documented in mutracer-scene.h. */
-enum { LIGHT_RECT=0, LIGHT_SPHERE=1, LIGHT_DIRECTIONAL=2, LIGHT_SPOT=3 };
-enum { TEXTURE_RGBA8_SRGB=0, TEXTURE_RGBA32F=1 };
-enum { PROJECTION_PERSPECTIVE=0, PROJECTION_ORTHOGRAPHIC=1 };
-enum { QUALITY_BEVEL=1, QUALITY_DISPERSION=2, QUALITY_HIDE_BACKGROUND=4 };
-
 static uint32_t words[65536];
 static uint32_t used = MT_HEADER_WORDS;
 static uint32_t reserve(uint32_t count) {
@@ -83,7 +77,7 @@ static size_t make_scene(const char *variant) {
     vector(m+MT_MATERIAL_BASE_COLOR,colors[i][0],colors[i][1],colors[i][2]);value(m+MT_MATERIAL_ROUGHNESS,i==0?.65:i==1?.35:i==2?.2:.05);
     value(m+MT_MATERIAL_METALNESS,i==2?1:0);value(m+MT_MATERIAL_TRANSMISSION,i==3?1:0);value(m+MT_MATERIAL_IOR,1.5);
     vector(m+MT_MATERIAL_EMISSION_COLOR,1,1,1);value(m+MT_MATERIAL_OPACITY,1);
-    for(uint32_t k=MT_MATERIAL_MAP;k<=MT_MATERIAL_EMISSIVE_MAP;k++)words[m+k]=UINT32_MAX;
+    for(uint32_t k=MT_MATERIAL_MAP;k<=MT_MATERIAL_EMISSIVE_MAP;k++)words[m+k]=MT_NO_TEXTURE;
     uint32_t mo=meshes+i*MT_MESH_WORDS,world=mo+MT_MESH_TRANSFORM;
     words[mo+MT_MESH_GEOMETRY]=i?1:0;words[mo+MT_MESH_MATERIAL]=i;matrix(world,i?.55:5,i?((double)i-2)*1.2:0,i?.55:0,0);
     if(affine&&i){value(world,i==2?-.6:.6);value(world+5,.85);value(world+10,.38);value(world+4,.12);}
@@ -92,22 +86,22 @@ static size_t make_scene(const char *variant) {
   if(textured){
     uint32_t pixels=reserve(floating?64:16);
     words[textures+MT_TEXTURE_WIDTH]=4;words[textures+MT_TEXTURE_HEIGHT]=4;words[textures+MT_TEXTURE_PIXELS]=pixels;
-    words[textures+MT_TEXTURE_STORAGE]=floating?TEXTURE_RGBA32F:TEXTURE_RGBA8_SRGB;value(textures+MT_TEXTURE_UV_SCALE,3);value(textures+MT_TEXTURE_UV_SCALE+1,3);
+    words[textures+MT_TEXTURE_STORAGE]=floating?MT_TEXTURE_STORAGE_RGBA32F:MT_TEXTURE_STORAGE_RGBA8_SRGB;value(textures+MT_TEXTURE_UV_SCALE,3);value(textures+MT_TEXTURE_UV_SCALE+1,3);
     for(uint32_t i=0;i<16;i++){if(floating){vector(pixels+i*4,(i%4+i/4)%2?2:.1,.3,.7);value(pixels+i*4+3,1);}else words[pixels+i]=((i%4+i/4)%2)?0xff5080e0u:0xffe0d090u;}
     words[materials+MT_MATERIAL_MAP]=0;
     value(materials+MT_MATERIAL_WORDS+MT_MATERIAL_COAT_WEIGHT,.7);value(materials+MT_MATERIAL_WORDS+MT_MATERIAL_COAT_ROUGHNESS,.2);
   }
-  words[lights+MT_LIGHT_TYPE]=LIGHT_RECT;vector(lights+MT_LIGHT_COLOR,1,.9,.78);value(lights+MT_LIGHT_INTENSITY,7);
+  words[lights+MT_LIGHT_TYPE]=MT_LIGHT_TYPE_RECT;vector(lights+MT_LIGHT_COLOR,1,.9,.78);value(lights+MT_LIGHT_INTENSITY,7);
   value(lights+MT_LIGHT_SIZE,2.5);value(lights+MT_LIGHT_HEIGHT_OR_INNER,2.5);value(lights+MT_LIGHT_SPREAD_OR_OUTER,1);
   uint32_t lm=lights+MT_LIGHT_TRANSFORM;matrix(lm,1,-1.5,3,1.5);value(lm+5,cos(-pi/2));value(lm+6,sin(-pi/2));value(lm+9,-sin(-pi/2));value(lm+10,cos(-pi/2));
-  if(!strcmp(variant,"sphere-light")){words[lights+MT_LIGHT_TYPE]=LIGHT_SPHERE;value(lights+MT_LIGHT_SIZE,.35);value(lights+MT_LIGHT_INTENSITY,30);}
-  if(!strcmp(variant,"directional-light")){words[lights+MT_LIGHT_TYPE]=LIGHT_DIRECTIONAL;value(lights+MT_LIGHT_INTENSITY,3);}
+  if(!strcmp(variant,"sphere-light")){words[lights+MT_LIGHT_TYPE]=MT_LIGHT_TYPE_SPHERE;value(lights+MT_LIGHT_SIZE,.35);value(lights+MT_LIGHT_INTENSITY,30);}
+  if(!strcmp(variant,"directional-light")){words[lights+MT_LIGHT_TYPE]=MT_LIGHT_TYPE_DIRECTIONAL;value(lights+MT_LIGHT_INTENSITY,3);}
   if(!strcmp(variant,"spot-light")){
-    words[lights+MT_LIGHT_TYPE]=LIGHT_SPOT;value(lights+MT_LIGHT_SIZE,.2);value(lights+MT_LIGHT_HEIGHT_OR_INNER,20);
+    words[lights+MT_LIGHT_TYPE]=MT_LIGHT_TYPE_SPOT;value(lights+MT_LIGHT_SIZE,.2);value(lights+MT_LIGHT_HEIGHT_OR_INNER,20);
     value(lights+MT_LIGHT_SPREAD_OR_OUTER,35);value(lights+MT_LIGHT_INTENSITY,200);
   }
   if(!strcmp(variant,"alpha"))value(materials+MT_MATERIAL_WORDS+MT_MATERIAL_OPACITY,.4);
-  words[cam+MT_CAMERA_PROJECTION]=!strcmp(variant,"orthographic")?PROJECTION_ORTHOGRAPHIC:PROJECTION_PERSPECTIVE;
+  words[cam+MT_CAMERA_PROJECTION]=!strcmp(variant,"orthographic")?MT_CAMERA_PROJECTION_ORTHOGRAPHIC:MT_CAMERA_PROJECTION_PERSPECTIVE;
   value(cam+MT_CAMERA_FOV,40);value(cam+MT_CAMERA_NEAR,.1);value(cam+MT_CAMERA_FAR,100);
   value(cam+MT_CAMERA_LEFT,-2.6);value(cam+MT_CAMERA_RIGHT,2.6);value(cam+MT_CAMERA_BOTTOM,-1.75);value(cam+MT_CAMERA_TOP,1.75);
   value(cam+MT_CAMERA_ZOOM,1);value(cam+MT_CAMERA_FOCUS_DISTANCE,10);value(cam+MT_CAMERA_SENSOR_HEIGHT,24);value(cam+MT_CAMERA_METERS_PER_UNIT,1);
@@ -116,7 +110,7 @@ static size_t make_scene(const char *variant) {
   if(advanced){
     for(uint32_t t=0;t<4;t++){
       uint32_t o=textures+t*MT_TEXTURE_WORDS,w=t==0?32:4,h=t==0?16:4,pixels=reserve(w*h*4);
-      words[o+MT_TEXTURE_WIDTH]=w;words[o+MT_TEXTURE_HEIGHT]=h;words[o+MT_TEXTURE_STORAGE]=TEXTURE_RGBA32F;words[o+MT_TEXTURE_PIXELS]=pixels;
+      words[o+MT_TEXTURE_WIDTH]=w;words[o+MT_TEXTURE_HEIGHT]=h;words[o+MT_TEXTURE_STORAGE]=MT_TEXTURE_STORAGE_RGBA32F;words[o+MT_TEXTURE_PIXELS]=pixels;
       value(o+MT_TEXTURE_UV_SCALE,1);value(o+MT_TEXTURE_UV_SCALE+1,1);
       for(uint32_t y=0;y<h;y++)for(uint32_t x=0;x<w;x++){
         uint32_t k=pixels+(y*w+x)*4; double hot=(x>6&&x<10&&y>2&&y<6)?8:.1;
@@ -130,7 +124,7 @@ static size_t make_scene(const char *variant) {
     /* Map references are texture index plus one. */
     words[MT_HEADER_ENVIRONMENT_TEXTURE]=1;
     if(!strcmp(variant,"v2-background"))words[MT_HEADER_BACKGROUND_TEXTURE]=2;
-    if(!strcmp(variant,"v2-hidden-background"))words[MT_HEADER_QUALITY_FLAGS]=QUALITY_HIDE_BACKGROUND;
+    if(!strcmp(variant,"v2-hidden-background"))words[MT_HEADER_QUALITY_FLAGS]=MT_QUALITY_HIDE_BACKGROUND;
     if(!strcmp(variant,"v2-environment-only"))words[MT_HEADER_LIGHT_COUNT]=0;
     /* Material extensions use explicit wire IDs, including deliberate default
        overrides and values that enable shader variants absent in the base. */
@@ -165,7 +159,7 @@ static size_t make_scene(const char *variant) {
       value(extension(e,3,MT_MAT_TRANSMISSION_SCATTER_ANISOTROPY),.3);
       value(extension(e,4,MT_MAT_TRANSMISSION_DISPERSION_SCALE),.2);
       value(extension(e,5,MT_MAT_TRANSMISSION_DISPERSION_ABBE_NUMBER),30);
-      words[MT_HEADER_QUALITY_FLAGS]=QUALITY_DISPERSION;
+      words[MT_HEADER_QUALITY_FLAGS]=MT_QUALITY_DISPERSION;
     }
     if(!strcmp(variant,"v2-alpha")){
       e=reserve(4*MT_EXTENSION_WORDS);m=materials+MT_MATERIAL_WORDS;
@@ -179,7 +173,7 @@ static size_t make_scene(const char *variant) {
       e=reserve(MT_EXTENSION_WORDS);m=materials+MT_MATERIAL_WORDS;
       words[m+MT_MATERIAL_EXTENSION_COUNT]=1;words[m+MT_MATERIAL_EXTENSION_OFFSET]=e;
       value(extension(e,0,MT_MAT_BEVEL_SIZE),.03);
-      words[MT_HEADER_QUALITY_FLAGS]=QUALITY_BEVEL;
+      words[MT_HEADER_QUALITY_FLAGS]=MT_QUALITY_BEVEL;
     }
   }
   if(!strcmp(variant,"v2-vertices")||!strcmp(variant,"v2-multimaterial")){
@@ -203,7 +197,7 @@ static size_t make_scene(const char *variant) {
   if(!strcmp(variant,"v2-instances")||!strcmp(variant,"v2-empty-batch")){
     uint32_t descriptors=reserve(4*MT_BATCH_WORDS);words[MT_HEADER_BATCH_OFFSET]=descriptors;
     if(!strcmp(variant,"v2-instances")){
-      for(uint32_t i=0;i<4;i++)words[descriptors+i*MT_BATCH_WORDS+MT_BATCH_COUNT]=UINT32_MAX;
+      for(uint32_t i=0;i<4;i++)words[descriptors+i*MT_BATCH_WORDS+MT_BATCH_COUNT]=MT_BATCH_ORDINARY_MESH;
       uint32_t transforms=reserve(3*16),colors=reserve(3*3),io=descriptors+MT_BATCH_WORDS;
       words[io+MT_BATCH_COUNT]=3;words[io+MT_BATCH_TRANSFORMS]=transforms;words[io+MT_BATCH_COLORS]=colors;
       for(uint32_t i=0;i<3;i++){matrix(transforms+i*16,.7,i*.9,i*.9,-(double)i*.3);vector(colors+i*3,i==0?1:.3,i==1?1:.3,i==2?1:.3);}
@@ -220,14 +214,14 @@ static size_t make_scene(const char *variant) {
     value(extension(e,4,MT_MAT_DISPLACEMENT_UV_PROJECTION_SCALE),1);
     if(projected)words[geos+MT_GEOMETRY_WORDS+MT_GEOMETRY_UV]=0; /* exercise projective displacement without UVs */
     if(!strcmp(variant,"v3-displacement-bytes")) {
-      uint32_t o=textures+MT_TEXTURE_WORDS,pixels=reserve(16);words[o+MT_TEXTURE_STORAGE]=TEXTURE_RGBA8_SRGB;words[o+MT_TEXTURE_PIXELS]=pixels;
+      uint32_t o=textures+MT_TEXTURE_WORDS,pixels=reserve(16);words[o+MT_TEXTURE_STORAGE]=MT_TEXTURE_STORAGE_RGBA8_SRGB;words[o+MT_TEXTURE_PIXELS]=pixels;
       for(uint32_t i=0;i<16;i++)words[pixels+i]=(i%2)?0xffc06020u:0xff20c0e0u;
     }
   }
   if(displacement_or_photometric && (!strcmp(variant,"v3-ies")||!strcmp(variant,"v3-ies-shared"))) {
     const char *ies="IESNA:LM-63-2002\nTILT=NONE\n1 1000 1 5 3 1 2 0 0 0 1 1 20\n0 20 45 70 90\n0 90 180\n100 90 40 5 0 80 60 15 0 0 50 30 5 0 0\n";
     size_t len=strlen(ies);uint32_t text=reserve((uint32_t)((len+3)/4));memcpy(words+text,ies,len);
-    words[lights+MT_LIGHT_TYPE]=LIGHT_SPOT;value(lights+MT_LIGHT_INTENSITY,200);value(lights+MT_LIGHT_SIZE,.15);
+    words[lights+MT_LIGHT_TYPE]=MT_LIGHT_TYPE_SPOT;value(lights+MT_LIGHT_INTENSITY,200);value(lights+MT_LIGHT_SIZE,.15);
     value(lights+MT_LIGHT_HEIGHT_OR_INNER,20);value(lights+MT_LIGHT_SPREAD_OR_OUTER,70);
     words[lights+MT_LIGHT_IES_OFFSET]=text;words[lights+MT_LIGHT_IES_BYTES]=(uint32_t)len;
     if(light_count==2){

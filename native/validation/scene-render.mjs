@@ -45,13 +45,14 @@ if (!summarizeCoverage(composedDiagnostics, composed.status).passed)
 run('aot-build', compiler, ['build', '--lib', '--profile', 'native/src/render-core-profile.json', '-o', env.MUTRACER_AOT_ARCHIVE]);
 await prepareTinyBvh();
 run('native-build', 'cargo', ['build', '--release', '--locked', '--manifest-path', 'native/host/Cargo.toml']);
-const sceneHost=resolve(out,executable('scene-host'));
-run('scene-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-I', 'native/include', 'native/examples/scene-host.c',
-    ...(windows?[resolve(target,'release/libmutracer_native_probe.dll.a')]:['-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`]),
-    ...cLinkFlags,'-o',sceneHost]);
+const sceneHost=resolve(out,executable('scene-host')), minimalHost=resolve(out,executable('minimal-host'));
+const linkLibrary=windows?[resolve(target,'release/libmutracer_native_probe.dll.a')]:['-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`];
+run('scene-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-I', 'native/include', 'native/examples/scene-host.c', ...linkLibrary, ...cLinkFlags,'-o',sceneHost]);
+run('minimal-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-I', 'native/include', 'native/examples/minimal-host.c', ...linkLibrary, ...cLinkFlags,'-o',minimalHost]);
 run('core-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-Dmt_module_init=mt_core_init', '-Dmt_module_reset=mt_core_reset', '-Dmt_module_collect=mt_core_collect', '-Dmt_module_sink=mt_core_sink', '-Dmt_module_run=mt_core_scene', 'native/tests/module-host.c', env.MUTRACER_AOT_ARCHIVE, ...cLinkFlags, '-o', resolve(out, executable('core-host'))]);
 for (const variant of ['baseline', 'textures', 'transforms', 'orthographic', 'emissive', 'missing-normals', 'float-textures', 'sphere-light', 'directional-light', 'spot-light', 'alpha', 'v2-environment', 'v2-environment-only', 'v2-background', 'v2-hidden-background', 'v2-film', 'v2-medium', 'v2-alpha', 'v2-bevel', 'v2-vertices', 'v2-multimaterial', 'v2-instances', 'v2-empty-batch', 'v3-displacement-uv', 'v3-displacement-triplanar', 'v3-displacement-spherical', 'v3-displacement-cylindrical', 'v3-displacement-negative', 'v3-displacement-bytes', 'v3-displacement-zero', 'v3-ies', 'v3-ies-shared', 'v3-rect-texture'])
     run(`render-${variant}`, sceneHost, [resolve(out, variant === 'baseline' ? 'image' : variant), String(samples), variant, ...(variant === 'baseline' ? ['repeat'] : [])]);
+run('minimal-host', minimalHost, [String(Math.min(samples, 16))]);
 run('verify-scenes', process.execPath, ['native/validation/scene-verify.mjs']);
 // Both baseline renders execute in one C process with reset/collection between calls.
 for (const name of ['render', 'normal', 'albedo'])

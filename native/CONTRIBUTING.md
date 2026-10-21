@@ -10,6 +10,7 @@ notices are separate for the [native library](./THIRD_PARTY_NOTICES.md) and
 - `src/`: TypeScript AOT entry points, runtime adapters and shader generators.
 - `host/src/`: Rust library; `host/diagnostics/`: standalone diagnostic executables and shaders.
 - `include/`: public C headers; `schemas/`: frozen wire-property IDs and error codes.
+- `docs/`: user-facing reference for the C API, starting with the scene format.
 - `scripts/`: compiler lowering, contract generators, CI and viewer packaging.
 - `examples/`: C consumers; `tests/`: AOT fixtures and the C module test harness.
 - `validation/`: render/contract checks and browser reference tools;
@@ -121,7 +122,10 @@ Public headers in `include/` are the supported C API; `mutracer-debug.h` is
 the exception and holds validation-only entry points. The layout generator
 writes caller-facing descriptor offsets to `include/mutracer-layout.h` and host
 protocol records, resource IDs and shader layouts to the uninstalled
-`src/mutracer-internal-layout.h`.
+`src/mutracer-internal-layout.h`. The hand-written record structs in
+`include/mutracer-scene.h` assert their offsets against the generated public
+header, so a schema change that resizes a record or moves a checked field
+fails to compile until the structs and `docs/scene-format.md` are updated.
 
 ## Shared source and typed resources
 

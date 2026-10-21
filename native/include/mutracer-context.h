@@ -27,7 +27,8 @@ extern "C" {
  * scene. A failed commit preserves the previous scene,
  * samples and outputs. Successful commit resets samples to zero, including a
  * camera/material edit submitted through the same raw descriptor. Commit can
- * temporarily hold both scenes' resources. Descriptors are in mutracer-scene.h.
+ * temporarily hold both scenes' resources. Descriptors are documented in
+ * native/docs/scene-format.md; mutracer-scene-builder.h assembles them.
  *
  * render adds samples to the current accumulation, total 1..4096. The default
  * commit uses seed 12345, bounces 6 and Sobol, matching the raw probe. A commit
@@ -119,7 +120,8 @@ int32_t mt_context_reset(mt_context handle, char *error, size_t capacity);
 /* Wait up to 30 seconds for submitted GPU work without changing the scene or
  * samples. Requires a committed, healthy scene and no active render job. */
 int32_t mt_context_wait(mt_context handle, char *error, size_t capacity);
-/* Replace the Camera[32] record described in mutracer-scene.h (exactly 128 bytes).
+/* Replace the camera with one mt_camera_v4 record from mutracer-scene.h
+ * (exactly 128 bytes).
  * Uses the committed image dimensions/aspect and retains geometry, textures and
  * pipeline. Every successful call resets samples and expires the previous job,
  * even for identical input. Validation rejection preserves camera/samples/output
@@ -197,7 +199,7 @@ int32_t mt_context_update_environment(mt_context handle, const uint8_t *input, s
   char *error, size_t capacity);
 /* Update one analytic light; geometry, acceleration structures, textures and
  * pipeline are retained. Exactly 128 bytes / 32 words: version=1, original light
- * index, reserved[2]=0, then Light[28] from mutracer-scene.h. Light words8..11
+ * index, reserved[2]=0, then an mt_light_v4 record from mutracer-scene.h. Light words8..11
  * must be zero: existing rectangular textures and spot IES profiles are preserved.
  * Supports color, intensity, size/radius, spread/angles and affine transform.
  * Values follow the full scene's light validation. Type/count/attachment changes

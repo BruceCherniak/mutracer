@@ -48,10 +48,13 @@ Examples include `baseline`, `textures`, `transforms`, `orthographic`, `emissive
 The example host uses `mt_probe_render_scene` from
 [mutracer-debug.h](include/mutracer-debug.h), a debug and validation entry point
 that may change without notice. Applications render caller-supplied data with
-the [context API](#keep-a-scene-alive-and-read-pixels). Build descriptors with the
-byte layout and ownership rules in [mutracer-scene.h](include/mutracer-scene.h)
-and the word offsets in [mutracer-layout.h](include/mutracer-layout.h). Add
-`native/include` to your C compiler's header search path.
+the [context API](#keep-a-scene-alive-and-read-pixels).
+[examples/minimal-host.c](examples/minimal-host.c) is a complete program of
+about 50 lines: it builds a scene with the header-only builder in
+[mutracer-scene-builder.h](include/mutracer-scene-builder.h), commits it,
+renders and reads HDR pixels. The [scene format reference](docs/scene-format.md)
+documents every record. Add `native/include` to your C compiler's header search
+path.
 
 The example's output directory contains `render.png`, `render.rgba32f`, `normal.rgba32f`,
 `albedo.rgba32f` and `result.json`. The PNG is a Reinhard/sRGB preview. Float files
@@ -108,7 +111,7 @@ The header specifies byte lengths, ownership, errors and remaining limits.
 Transform inputs and GPU matrices use Float32; CPU matrix calculations keep
 Float64 intermediates. Input and GPU precision still limit large coordinates.
 
-For camera edits, `mt_context_update_camera` accepts the same 128-byte `Camera[32]`
+For camera edits, `mt_context_update_camera` accepts the same 128-byte `mt_camera_v4`
 record from the scene descriptor. It retains geometry, textures and the pipeline,
 uses the committed image dimensions, and restarts accumulation on every successful
 call. It supports perspective/orthographic projection, transform, zoom and lens
@@ -220,38 +223,18 @@ specifies job states, sample counters and handle lifetimes.
 
 ## Scene inputs and options
 
-Only scene descriptor **version 4** is accepted. It supports indexed triangles,
-generated or supplied
-normals, two UV sets, shared geometry, affine transforms, perspective and
-orthographic cameras, raw RGBA8 sRGB or RGBA32F linear textures, rectangular,
-spherical, directional and spot lights, and emissive meshes.
+Scenes are passed as raw descriptor **version 4**, documented in the
+[scene format reference](docs/scene-format.md). It supports indexed triangles
+with optional normals, tangents, two UV sets, vertex colors and per-vertex
+materials; shared geometry, material tables and instance batches; perspective
+and orthographic cameras with depth of field; RGBA8 sRGB and RGBA32F linear
+textures; rectangular, spherical, directional and spot lights, emissive meshes,
+rectangular-light textures and spot-light IES profiles; environment and
+background maps; and every OpenPBR material property through
+[material property IDs](include/mutracer-material-properties.h), including
+displacement. Displacement's cross-backend color and normal parity remains
+unresolved.
 
-It also accepts RGB vertex colors, XYZW tangents, per-vertex material
-indices, per-mesh material tables, local instance transforms and RGB instance
-multipliers. Empty instance batches are valid. A triangle's vertices must select
-the same material; duplicate vertices at material boundaries.
-
-The descriptor exposes all non-displacement material properties and texture slots
-through [material property IDs](include/mutracer-material-properties.h), including
-thin film, participating media, opacity, anisotropy, coat and fuzz. Omitted
-properties keep MuTracer defaults. Environment lighting and visible backgrounds
-can use separate linear RGBA32F equirectangular maps. Environment/background map
-roles ignore texture UV transforms and flip settings. Quality flags enable
-bevel, three dispersion wavelengths, or a hidden background; a hidden background
-cannot also select a background map.
-
-It accepts displacement, rectangular-light textures and spot-light IES.
-Displacement uses the first material of each mesh, with UV, triplanar, spherical
-or cylindrical projection, including negative amplitudes. Active displacement
-requires a square power-of-two texture, UVs for UV projection and a positive
-step size. Projection scale and position/UV components multiplied by that scale
-must have absolute values at most 1,000,000. Displacement's cross-backend color
-and normal parity remains unresolved.
-
-IES inputs are UTF-8 LM-63 Type C files with `TILT=NONE`, at most 16 KiB per
-profile. Submit source text through the light descriptor; profile preparation
-runs natively. Invalid profiles return an error. Reusing an offset/length pair
-shares that profile.
 Additional examples are `v3-displacement-uv`, `v3-displacement-triplanar`,
 `v3-ies`, `v3-ies-shared` and `v3-rect-texture`.
 
@@ -276,14 +259,8 @@ Build/run settings:
 
 ## Limits
 
-Input is limited to 512 MiB; output to 4,194,304 pixels and total raw textures
-to 16,777,216 pixels.
-There must be at least one geometry, mesh and material. Counts are limited to
-4096 geometries, 65536 meshes/materials/expanded instances, 64 analytic lights and
-256 textures. Geometry preparation has a conservative 1 GiB budget, including
-material-related expansion. Atlas storage is limited to 64 MiB, 4096 pixels per
-side and 256 layers; source textures can be scaled to fit. The header specifies
-the remaining validation and format constraints.
+Scene size, count and texture limits are listed in the
+[scene format reference](docs/scene-format.md#limits).
 
 Every C API call returns `MT_OK` (0) or a nonzero `mt_status` from
 [mutracer-status.h](include/mutracer-status.h), plus an optional message for

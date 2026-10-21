@@ -4,78 +4,140 @@
 #include <stdint.h>
 #include "mutracer-material-properties.h"
 #include "mutracer-layout.h"
-/* Experimental raw scene descriptor ABI v4, little endian; see
- * native/README.md#platforms for supported platforms. mt_context_commit in
- * mutracer-context.h consumes it, copying the bytes; none are retained.
- * mutracer-layout.h names every word offset below (MT_HEADER_*, MT_GEOMETRY_*,
- * ...). Every record is uint32 words; float fields contain IEEE f32 bits.
- * Offsets are words from the beginning of input. Arrays/tables must fit length.
- * Reserved words must be 0. A rejected descriptor returns MT_ERROR_INVALID_ARGUMENT.
- *
- * Header[32]: version[4], total_words, width,height, geometry_count,mesh_count,
- * material_count,light_count,texture_count, geometry_offset,mesh_offset,
- * material_offset,light_offset,texture_offset,camera_offset,reserved,
- * background_rgba[f32*4]. Header words20..22: environment_texture_plus_one,
- * background_texture_plus_one,
- * quality_flags; word23 is an optional batch table offset; words24..31 reserved.
- * Zero references disable the map.
- * Both maps require linear RGBA32F equirectangular pixels; flip_y/UV transforms
- * do not apply. Lighting and visible background are independent.
- * quality_flags: 1=enable bevel, 2=three dispersion wavelengths, 4=hide background
- * (incompatible with a background map). Other bits are rejected.
- * Geometry[12]: vertex_count,index_count,position_offset,index_offset,
- * normal_offset,uv_offset,uv1_offset,color_offset,tangent_offset,
- * material_index_offset,reserved[2]. Positions/normals: f32 XYZ;
- * UV: f32 XY; indices: u32 triangles. Optional attributes use offset 0.
- * Missing normals/tangents are generated.
- * Geometry words7..9: color_offset[f32 RGB],tangent_offset[f32 XYZW],
- * material_index_offset[u32 local material index per vertex]; words10..11 reserved.
- * A triangle's vertices must select the same material (duplicate shared vertices
- * when neighboring triangles use different materials). Offset 0 omits an attribute.
- * Mesh[20]: geometry_index,material_index,material_table_offset,
- * material_table_count,world_matrix[f32*16]. Zero count keeps
- * the single material_index; otherwise table entries are u32 material references.
- * A batch table has four words per mesh: count,local_matrix_offset,
- * color_offset,reserved. Count UINT32_MAX denotes an ordinary mesh and requires
- * zero offsets; count 0 is an empty batch and also requires zero offsets.
- * Other counts read count column-major local matrices and optional count RGB
- * multipliers. World matrix is applied outside the local instance transform.
- * Expanded instance count is limited to 65536 across all meshes.
- * Material[24]: base_rgb[f32*3],roughness,metalness,transmission,ior,
- * emission_rgb[f32*3],emission_luminance,coat_weight,coat_roughness,opacity
- * (all preceding scalar fields f32),thin_walled[u32],base_texture,
- * normal_texture,metallic_roughness_texture,emissive_texture,
- * extension_count,extension_offset,reserved[3].
- * Each extension has four words {property_id,x,y,z}; see the included material
- * property enum for types and enum values. Extensions override basic values.
- * Only the first material of a mesh supplies displacement inputs. Active displacement requires square power-of-two textures,
- * UVs for projection=none and a positive step size. Absolute projection scale and
- * position/UV components multiplied by it must not exceed 1,000,000.
- * Texture references use UINT32_MAX for absent; omitted material properties
- * retain MuTracer defaults. Supply each texture separately; the library packs them.
- * Texture[12]: width,height,encoding[0=RGBA8 sRGB,1=RGBA32F linear],pixel_offset,
- * flip_y[0/1],uv_channel[0/1],uv_scale[f32*2],uv_offset[f32*2],reserved[2].
- * Light[28]: type[0=rect,1=sphere,2=directional,3=spot],rgb[f32*3],intensity,
- * size_x_or_radius,size_y_or_inner_angle,spread_or_outer_angle (f32),
- * rect_texture_plus_one,ies_offset,ies_byte_length,reserved,world_matrix[f32*16].
- * Rect sizes >0; spot angles in degrees,
- * 0 <= inner <= outer < 90, with outer > 0.
- * Light words8..10: rect_texture_plus_one,ies_offset,ies_byte_length;
- * word11 reserved. Zero texture reference disables it; only rectangular lights
- * accept a texture. IES is UTF-8 LM-63 Type C/TILT=NONE source, <=16 KiB, only
- * for spot lights. Offsets remain words, length is bytes, no NUL terminator.
- * Reusing the same IES offset/length shares one profile. Empty IES needs offset0.
- * Invalid photometric source returns a recoverable error.
- * Camera[32]: projection[0=perspective,1=orthographic],fov,near,far,
- * left,right,bottom,top,zoom,f_stop,focus_distance,sensor_height,meters_per_unit
- * (f32),reserved[3],world_matrix[f32*16]. Aspect follows width/height.
- * Matrices are invertible affine, column-major camera/local-to-world.
- *
- * Limits: nonempty scenes, <=4096 geometries, <=65536 meshes/materials,
- * <=64 lights, <=256 textures, <=512 MiB input, <=4M output pixels, <=16M raw-texture pixels.
- * Each geometry has <=4M vertices/12M indices; preparation has a conservative
- * 1 GiB budget based on input vertex/index counts.
- * Texture atlas budget 64 MiB, max side 4096/layers 256; sources may be scaled.
- * Only version 4 (MT_VERSION_SCENE) is accepted; earlier versions are rejected.
+/* Raw scene descriptor v4 records. The format, validation rules and limits are
+ * in native/docs/scene-format.md; mt_context_commit (mutracer-context.h)
+ * consumes the descriptor. Every record is a run of little-endian 32-bit words:
+ * uint32_t fields, float fields as IEEE binary32. Offsets are word offsets from
+ * the start of the descriptor, and offset 0 omits an optional array. Reserved
+ * fields must be zero. The structs below have no padding and match the MT_*
+ * word offsets in mutracer-layout.h; copy them into the descriptor with memcpy
+ * (mutracer-scene-builder.h does this) rather than casting the word buffer.
  */
+
+/* Named field values. */
+#define MT_NO_TEXTURE UINT32_MAX /* Material texture slots and extension textures. */
+#define MT_BATCH_ORDINARY_MESH UINT32_MAX /* mt_batch_v4.count for a non-instanced mesh. */
+enum { MT_LIGHT_TYPE_RECT = 0, MT_LIGHT_TYPE_SPHERE = 1, MT_LIGHT_TYPE_DIRECTIONAL = 2,
+  MT_LIGHT_TYPE_SPOT = 3 };
+enum { MT_TEXTURE_STORAGE_RGBA8_SRGB = 0, MT_TEXTURE_STORAGE_RGBA32F = 1 };
+enum { MT_CAMERA_PROJECTION_PERSPECTIVE = 0, MT_CAMERA_PROJECTION_ORTHOGRAPHIC = 1 };
+enum { MT_QUALITY_BEVEL = 1, MT_QUALITY_DISPERSION = 2, MT_QUALITY_HIDE_BACKGROUND = 4 };
+
+typedef struct mt_scene_header_v4 {
+  uint32_t version; /* MT_VERSION_SCENE */
+  uint32_t total_words; /* Descriptor length in words. */
+  uint32_t width, height; /* Output pixels. */
+  uint32_t geometry_count, mesh_count, material_count, light_count, texture_count;
+  uint32_t geometry_offset, mesh_offset, material_offset, light_offset, texture_offset;
+  uint32_t camera_offset; /* One mt_camera_v4. */
+  uint32_t reserved0;
+  float background_color[4]; /* Linear RGBA when no background map is visible. */
+  uint32_t environment_texture_plus_one, background_texture_plus_one; /* 0 = none. */
+  uint32_t quality_flags; /* MT_QUALITY_* bits. */
+  uint32_t batch_offset; /* 0, or mesh_count mt_batch_v4 records. */
+  uint32_t reserved[8];
+} mt_scene_header_v4;
+
+typedef struct mt_geometry_v4 {
+  uint32_t vertex_count, index_count;
+  uint32_t position_offset; /* float XYZ per vertex. */
+  uint32_t index_offset; /* uint32_t, three per triangle. */
+  uint32_t normal_offset; /* Optional float XYZ; generated when 0. */
+  uint32_t uv_offset, uv1_offset; /* Optional float XY. */
+  uint32_t color_offset; /* Optional float RGB. */
+  uint32_t tangent_offset; /* Optional float XYZW; generated when 0. */
+  uint32_t material_index_offset; /* Optional uint32_t per vertex into the mesh table. */
+  uint32_t reserved[2];
+} mt_geometry_v4;
+
+typedef struct mt_mesh_v4 {
+  uint32_t geometry_index, material_index;
+  uint32_t material_table_offset, material_table_count; /* 0 count uses material_index. */
+  float world_matrix[16]; /* Column-major affine local-to-world. */
+} mt_mesh_v4;
+
+typedef struct mt_material_v4 {
+  float base_color[3], roughness, metalness, transmission, ior;
+  float emission_color[3], emission_luminance;
+  float coat_weight, coat_roughness, opacity;
+  uint32_t thin_walled; /* 0 or 1. */
+  uint32_t base_texture, normal_texture, metallic_roughness_texture, emissive_texture;
+  uint32_t extension_count, extension_offset; /* mt_material_extension_v4 array. */
+  uint32_t reserved[3];
+} mt_material_v4;
+
+typedef struct mt_material_extension_v4 {
+  uint32_t id; /* enum mt_material_property */
+  union { float f[3]; uint32_t u[3]; } value; /* Unused components zero. */
+} mt_material_extension_v4;
+
+typedef struct mt_texture_v4 {
+  uint32_t width, height;
+  uint32_t storage; /* MT_TEXTURE_STORAGE_* */
+  uint32_t pixel_offset; /* RGBA8 words or RGBA32F floats, row-major. */
+  uint32_t flip_y, uv_channel; /* 0 or 1. */
+  float uv_scale[2], uv_offset[2];
+  uint32_t reserved[2];
+} mt_texture_v4;
+
+typedef struct mt_light_v4 {
+  uint32_t type; /* MT_LIGHT_TYPE_* */
+  float color[3], intensity;
+  float size_or_radius; /* Rect width, sphere radius. */
+  float height_or_inner_angle; /* Rect height, spot inner angle in degrees. */
+  float spread_or_outer_angle; /* Rect spread, spot outer angle in degrees. */
+  uint32_t texture_plus_one; /* Rect lights only; 0 = none. */
+  uint32_t ies_offset, ies_bytes; /* Spot lights only; LM-63 text, byte length. */
+  uint32_t reserved;
+  float world_matrix[16];
+} mt_light_v4;
+
+typedef struct mt_camera_v4 {
+  uint32_t projection; /* MT_CAMERA_PROJECTION_* */
+  float fov; /* Vertical, degrees. */
+  float near_clip, far_clip, left, right, bottom, top, zoom;
+  float f_stop, focus_distance, sensor_height, meters_per_unit;
+  uint32_t reserved[3];
+  float world_matrix[16]; /* Camera-to-world; the camera looks down -Z. */
+} mt_camera_v4;
+
+typedef struct mt_batch_v4 {
+  uint32_t count; /* MT_BATCH_ORDINARY_MESH, 0 (empty) or instance count. */
+  uint32_t transforms_offset; /* count column-major float[16] local matrices. */
+  uint32_t colors_offset; /* Optional count float RGB multipliers. */
+  uint32_t reserved;
+} mt_batch_v4;
+
+/* Compile-time agreement between the structs and mutracer-layout.h. */
+#if defined(__cplusplus) && __cplusplus >= 201103L
+#define MT_SCENE_ASSERT(name, test) static_assert(test, #name)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define MT_SCENE_ASSERT(name, test) _Static_assert(test, #name)
+#else
+#define MT_SCENE_ASSERT(name, test) typedef char mt_scene_assert_##name[(test) ? 1 : -1]
+#endif
+#define MT_SCENE_FIELD(type, field, word) (offsetof(type, field) == (word) * MT_WORD_BYTES)
+MT_SCENE_ASSERT(header_size, sizeof(mt_scene_header_v4) == MT_HEADER_WORDS * MT_WORD_BYTES);
+MT_SCENE_ASSERT(header_background, MT_SCENE_FIELD(mt_scene_header_v4, background_color, MT_HEADER_BACKGROUND_COLOR));
+MT_SCENE_ASSERT(header_batch, MT_SCENE_FIELD(mt_scene_header_v4, batch_offset, MT_HEADER_BATCH_OFFSET));
+MT_SCENE_ASSERT(geometry_size, sizeof(mt_geometry_v4) == MT_GEOMETRY_WORDS * MT_WORD_BYTES);
+MT_SCENE_ASSERT(geometry_material_index, MT_SCENE_FIELD(mt_geometry_v4, material_index_offset, MT_GEOMETRY_MATERIAL_INDEX));
+MT_SCENE_ASSERT(mesh_size, sizeof(mt_mesh_v4) == MT_MESH_WORDS * MT_WORD_BYTES);
+MT_SCENE_ASSERT(mesh_transform, MT_SCENE_FIELD(mt_mesh_v4, world_matrix, MT_MESH_TRANSFORM));
+MT_SCENE_ASSERT(material_size, sizeof(mt_material_v4) == MT_MATERIAL_WORDS * MT_WORD_BYTES);
+MT_SCENE_ASSERT(material_thin_walled, MT_SCENE_FIELD(mt_material_v4, thin_walled, MT_MATERIAL_THIN_WALLED));
+MT_SCENE_ASSERT(material_extensions, MT_SCENE_FIELD(mt_material_v4, extension_offset, MT_MATERIAL_EXTENSION_OFFSET));
+MT_SCENE_ASSERT(extension_size, sizeof(mt_material_extension_v4) == MT_EXTENSION_WORDS * MT_WORD_BYTES);
+MT_SCENE_ASSERT(texture_size, sizeof(mt_texture_v4) == MT_TEXTURE_WORDS * MT_WORD_BYTES);
+MT_SCENE_ASSERT(texture_uv_offset, MT_SCENE_FIELD(mt_texture_v4, uv_offset, MT_TEXTURE_UV_OFFSET));
+MT_SCENE_ASSERT(light_size, sizeof(mt_light_v4) == MT_LIGHT_WORDS * MT_WORD_BYTES);
+MT_SCENE_ASSERT(light_ies, MT_SCENE_FIELD(mt_light_v4, ies_bytes, MT_LIGHT_IES_BYTES));
+MT_SCENE_ASSERT(light_transform, MT_SCENE_FIELD(mt_light_v4, world_matrix, MT_LIGHT_TRANSFORM));
+MT_SCENE_ASSERT(camera_size, sizeof(mt_camera_v4) == MT_CAMERA_WORDS * MT_WORD_BYTES);
+MT_SCENE_ASSERT(camera_units, MT_SCENE_FIELD(mt_camera_v4, meters_per_unit, MT_CAMERA_METERS_PER_UNIT));
+MT_SCENE_ASSERT(camera_transform, MT_SCENE_FIELD(mt_camera_v4, world_matrix, MT_CAMERA_TRANSFORM));
+MT_SCENE_ASSERT(batch_size, sizeof(mt_batch_v4) == MT_BATCH_WORDS * MT_WORD_BYTES);
+MT_SCENE_ASSERT(batch_colors, MT_SCENE_FIELD(mt_batch_v4, colors_offset, MT_BATCH_COLORS));
+#undef MT_SCENE_FIELD
+#undef MT_SCENE_ASSERT
 #endif
