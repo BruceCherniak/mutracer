@@ -463,6 +463,66 @@ impl Viewer {
         if previous != self.selected {
             self.selected_mesh = None;
         }
+        let width = (ui.available_width() - 18.) / 4.;
+        for presets in crate::material_presets::presets().chunks(4) {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.;
+                for preset in presets {
+                    let texture = preset.texture(ui.ctx());
+                    let response = ui.add_sized(
+                        [width, width + 24.],
+                        egui::Button::new("")
+                            .fill(theme::INPUT)
+                            .stroke(egui::Stroke::new(1., theme::BORDER))
+                            .corner_radius(9),
+                    );
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(
+                            egui::WidgetType::Button,
+                            ui.is_enabled(),
+                            format!("Apply {} preset", preset.label),
+                        )
+                    });
+                    egui::Image::from_texture(&texture)
+                        .corner_radius(egui::CornerRadius {
+                            nw: 8,
+                            ne: 8,
+                            sw: 0,
+                            se: 0,
+                        })
+                        .paint_at(
+                            ui,
+                            egui::Rect::from_min_size(
+                                response.rect.min + egui::vec2(1., 1.),
+                                egui::vec2(width - 2., width - 2.),
+                            ),
+                        );
+                    let label = egui::WidgetText::from(
+                        egui::RichText::new(&preset.label)
+                            .size(9.5)
+                            .color(theme::MUTED),
+                    )
+                    .into_galley(
+                        ui,
+                        Some(egui::TextWrapMode::Truncate),
+                        (width - 6.).max(1.),
+                        egui::TextStyle::Small,
+                    );
+                    ui.painter().galley(
+                        response.rect.center_bottom() - egui::vec2(label.size().x / 2., 18.),
+                        label,
+                        theme::MUTED,
+                    );
+                    if response
+                        .on_hover_text(format!("Apply {} preset", preset.label))
+                        .clicked()
+                    {
+                        preset.apply(&mut self.model.materials[self.selected]);
+                        self.dirty(Change::Material);
+                    }
+                }
+            });
+        }
         let material = &mut self.model.materials[self.selected];
         let mut changed = false;
         ui.push_id(self.selected, |ui| {

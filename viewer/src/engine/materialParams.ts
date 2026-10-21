@@ -1,4 +1,5 @@
 import type { OpenPBRMaterial } from '@meimu/mutracer';
+import presets from './material-presets.json' with { type: 'json' };
 
 type NumberKey = {
   [K in keyof OpenPBRMaterial]-?: OpenPBRMaterial[K] extends number ? K : never
@@ -140,51 +141,13 @@ export function textureSlots(material: OpenPBRMaterial) {
   return slots;
 }
 
-const ZERO_LAYERS: MaterialValues = {
-  baseMetalness: 0, transmissionWeight: 0, coatWeight: 0, subsurfaceWeight: 0, fuzzWeight: 0,
-  thinFilmWeight: 0, emissionLuminance: 0, specularAnisotropy: 0, thinWalled: false
-};
-
 export interface MaterialPreset {
   id: string;
   label: string;
   values: MaterialValues;
 }
 
-export const MATERIAL_PRESETS: MaterialPreset[] = [
-  {
-    id: 'white', label: 'White model',
-    values: { ...ZERO_LAYERS, baseColor: [1, 1, 1], specularRoughness: 0.8, specularIor: 1.5, specularWeight: 1, baseDiffuseRoughness: 0, opacity: 1 }
-  },
-  {
-    id: 'metal', label: 'Metal',
-    values: { ...ZERO_LAYERS, baseColor: [0.91, 0.92, 0.92], baseMetalness: 1, specularRoughness: 0.18 }
-  },
-  {
-    id: 'glass', label: 'Glass',
-    values: { ...ZERO_LAYERS, baseColor: [1, 1, 1], specularRoughness: 0, specularIor: 1.5, transmissionWeight: 1, transmissionColor: [1, 1, 1], transmissionDepth: 0 }
-  },
-  {
-    id: 'carpaint', label: 'Car paint',
-    values: { ...ZERO_LAYERS, baseColor: [0.45, 0.02, 0.015], baseMetalness: 0.3, specularRoughness: 0.4, coatWeight: 1, coatRoughness: 0.02, coatIor: 1.5 }
-  },
-  {
-    id: 'velvet', label: 'Velvet',
-    values: { ...ZERO_LAYERS, baseColor: [0.06, 0.02, 0.12], specularRoughness: 0.8, fuzzWeight: 1, fuzzColor: [0.6, 0.45, 0.85], fuzzRoughness: 0.4 }
-  },
-  {
-    id: 'skin', label: 'Skin',
-    values: { ...ZERO_LAYERS, baseColor: [0.8, 0.55, 0.45], specularRoughness: 0.45, specularIor: 1.4, subsurfaceWeight: 1, subsurfaceColor: [0.9, 0.6, 0.48], subsurfaceRadius: 0.2 }
-  },
-  {
-    id: 'plastic', label: 'Plastic',
-    values: { ...ZERO_LAYERS, baseColor: [0.05, 0.25, 0.7], specularRoughness: 0.32, specularIor: 1.46 }
-  },
-  {
-    id: 'soap', label: 'Soap film',
-    values: { ...ZERO_LAYERS, baseColor: [0.02, 0.02, 0.02], specularRoughness: 0.05, thinFilmWeight: 1, thinFilmThickness: 0.45, thinFilmIor: 1.33 }
-  }
-];
+export const MATERIAL_PRESETS = presets as MaterialPreset[];
 
 // sRGB <-> linear for color pickers; OpenPBR colors are linear.
 const toSRGB = (c: number) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);

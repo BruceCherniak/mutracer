@@ -49,6 +49,39 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             viewer.renderer.backend()?.0 == mode,
             "Requested backend unavailable"
         );
+        let original = viewer.model.materials[viewer.selected].clone();
+        for preset in crate::material_presets::presets() {
+            preset.apply(&mut viewer.model.materials[viewer.selected]);
+            viewer.dirty(Change::Material);
+            settle(&mut viewer, &ctx)?;
+            let mut fresh = Renderer::with_backend(mode)?;
+            fresh.commit_with_settings(
+                &viewer.model.descriptor_with_light(
+                    &viewer.camera.bytes(viewer.size),
+                    viewer.size,
+                    &viewer.environment,
+                    &viewer.light,
+                ),
+                &viewer.settings,
+            )?;
+            ensure!(
+                viewer.pixels == fresh.finish(viewer.samples)?
+                    && viewer.renderer.image(1)? == fresh.image(1)?
+                    && viewer.renderer.image(2)? == fresh.image(2)?,
+                "Material preset/fresh mismatch: backend {mode}, {}",
+                preset.id
+            );
+            renderer::save(
+                &out.join(format!("material-{mode}-{}.png", preset.id)),
+                &viewer.pixels,
+                viewer.size,
+                0.,
+            )?;
+            println!("PASS material preset backend {mode}, {}", preset.id);
+        }
+        viewer.model.materials[viewer.selected] = original;
+        viewer.dirty(Change::Material);
+        settle(&mut viewer, &ctx)?;
         let camera = viewer.camera.clone();
         let settings = viewer.settings;
         let baseline = viewer.pixels.clone();

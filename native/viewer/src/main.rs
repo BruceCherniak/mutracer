@@ -7,6 +7,7 @@ mod focus_smoke;
 mod geometry_smoke;
 mod import;
 mod input;
+mod material_presets;
 mod metrics;
 mod package_smoke;
 mod parity_smoke;

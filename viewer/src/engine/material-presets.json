@@ -1,0 +1,199 @@
+[
+  {
+    "id": "white",
+    "label": "White model",
+    "values": {
+      "baseMetalness": 0,
+      "transmissionWeight": 0,
+      "coatWeight": 0,
+      "subsurfaceWeight": 0,
+      "fuzzWeight": 0,
+      "thinFilmWeight": 0,
+      "emissionLuminance": 0,
+      "specularAnisotropy": 0,
+      "thinWalled": false,
+      "baseColor": [
+        1,
+        1,
+        1
+      ],
+      "specularRoughness": 0.8,
+      "specularIor": 1.5,
+      "specularWeight": 1,
+      "baseDiffuseRoughness": 0,
+      "opacity": 1
+    }
+  },
+  {
+    "id": "metal",
+    "label": "Metal",
+    "values": {
+      "baseMetalness": 1,
+      "transmissionWeight": 0,
+      "coatWeight": 0,
+      "subsurfaceWeight": 0,
+      "fuzzWeight": 0,
+      "thinFilmWeight": 0,
+      "emissionLuminance": 0,
+      "specularAnisotropy": 0,
+      "thinWalled": false,
+      "baseColor": [
+        0.91,
+        0.92,
+        0.92
+      ],
+      "specularRoughness": 0.18
+    }
+  },
+  {
+    "id": "glass",
+    "label": "Glass",
+    "values": {
+      "baseMetalness": 0,
+      "transmissionWeight": 1,
+      "coatWeight": 0,
+      "subsurfaceWeight": 0,
+      "fuzzWeight": 0,
+      "thinFilmWeight": 0,
+      "emissionLuminance": 0,
+      "specularAnisotropy": 0,
+      "thinWalled": false,
+      "baseColor": [
+        1,
+        1,
+        1
+      ],
+      "specularRoughness": 0,
+      "specularIor": 1.5,
+      "transmissionColor": [
+        1,
+        1,
+        1
+      ],
+      "transmissionDepth": 0
+    }
+  },
+  {
+    "id": "carpaint",
+    "label": "Car paint",
+    "values": {
+      "baseMetalness": 0.3,
+      "transmissionWeight": 0,
+      "coatWeight": 1,
+      "subsurfaceWeight": 0,
+      "fuzzWeight": 0,
+      "thinFilmWeight": 0,
+      "emissionLuminance": 0,
+      "specularAnisotropy": 0,
+      "thinWalled": false,
+      "baseColor": [
+        0.45,
+        0.02,
+        0.015
+      ],
+      "specularRoughness": 0.4,
+      "coatRoughness": 0.02,
+      "coatIor": 1.5
+    }
+  },
+  {
+    "id": "velvet",
+    "label": "Velvet",
+    "values": {
+      "baseMetalness": 0,
+      "transmissionWeight": 0,
+      "coatWeight": 0,
+      "subsurfaceWeight": 0,
+      "fuzzWeight": 1,
+      "thinFilmWeight": 0,
+      "emissionLuminance": 0,
+      "specularAnisotropy": 0,
+      "thinWalled": false,
+      "baseColor": [
+        0.06,
+        0.02,
+        0.12
+      ],
+      "specularRoughness": 0.8,
+      "fuzzColor": [
+        0.6,
+        0.45,
+        0.85
+      ],
+      "fuzzRoughness": 0.4
+    }
+  },
+  {
+    "id": "skin",
+    "label": "Skin",
+    "values": {
+      "baseMetalness": 0,
+      "transmissionWeight": 0,
+      "coatWeight": 0,
+      "subsurfaceWeight": 1,
+      "fuzzWeight": 0,
+      "thinFilmWeight": 0,
+      "emissionLuminance": 0,
+      "specularAnisotropy": 0,
+      "thinWalled": false,
+      "baseColor": [
+        0.8,
+        0.55,
+        0.45
+      ],
+      "specularRoughness": 0.45,
+      "specularIor": 1.4,
+      "subsurfaceColor": [
+        0.9,
+        0.6,
+        0.48
+      ],
+      "subsurfaceRadius": 0.2
+    }
+  },
+  {
+    "id": "plastic",
+    "label": "Plastic",
+    "values": {
+      "baseMetalness": 0,
+      "transmissionWeight": 0,
+      "coatWeight": 0,
+      "subsurfaceWeight": 0,
+      "fuzzWeight": 0,
+      "thinFilmWeight": 0,
+      "emissionLuminance": 0,
+      "specularAnisotropy": 0,
+      "thinWalled": false,
+      "baseColor": [
+        0.05,
+        0.25,
+        0.7
+      ],
+      "specularRoughness": 0.32,
+      "specularIor": 1.46
+    }
+  },
+  {
+    "id": "soap",
+    "label": "Soap film",
+    "values": {
+      "baseMetalness": 0,
+      "transmissionWeight": 0,
+      "coatWeight": 0,
+      "subsurfaceWeight": 0,
+      "fuzzWeight": 0,
+      "thinFilmWeight": 1,
+      "emissionLuminance": 0,
+      "specularAnisotropy": 0,
+      "thinWalled": false,
+      "baseColor": [
+        0.02,
+        0.02,
+        0.02
+      ],
+      "specularRoughness": 0.05,
+      "thinFilmThickness": 0.45,
+      "thinFilmIor": 1.33
+    }
+  }
+]

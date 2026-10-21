@@ -72,7 +72,9 @@ the output directory. See the [native guide](../README.md) for platform backends
   affects the selected object; objects sharing its geometry move independently.
 - The **Material** panel provides **Base**, **Transmission**, **Coat**,
   **Subsurface**, **Fuzz**, **Thin film**, **Emission** and **Advanced** groups.
-  Inactive layers start collapsed; open a heading to edit their parameters.
+  Click a thumbnail to apply White model, Metal, Glass, Car paint, Velvet, Skin,
+  Plastic or Soap film. Presets turn off layers they do not use. Inactive layers
+  start collapsed; open a heading to edit their parameters.
   Edits affect every object sharing that material. **Opacity** applies in Auto,
   Mask or Blend alpha mode; normal scale requires an imported normal map.
   Picking and autofocus can target transparent or cutout surfaces ahead of
