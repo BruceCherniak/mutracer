@@ -6,7 +6,9 @@ const root=resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const out=resolve(process.env.MUTRACER_NATIVE_OUTPUT??resolve(root,'.native-build/settings'));
 const target=resolve(process.env.CARGO_TARGET_DIR??resolve(out,'cargo-target')),camera=resolve(out,'camera'),context=resolve(camera,'jobs/context');
 mkdirSync(out,{recursive:true});
-const env={...process.env,CARGO_TARGET_DIR:target,MUTRACER_NATIVE_OUTPUT:camera,MUTRACER_NATIVE_SAMPLES:'64'};
+// Reused scene fixtures fix the sample count the chained hosts compare against.
+const samples=process.env.MUTRACER_NATIVE_SCENE_OUTPUT?process.env.MUTRACER_NATIVE_SAMPLES??'8':'64';
+const env={...process.env,CARGO_TARGET_DIR:target,MUTRACER_NATIVE_OUTPUT:camera,MUTRACER_NATIVE_SAMPLES:samples};
 function run(name,cmd,args){const p=spawnSync(cmd,args,{cwd:root,env,encoding:'utf8',timeout:600000,maxBuffer:32*1024*1024});
  writeFileSync(resolve(out,name+'.log'),(p.stdout??'')+(p.stderr??''));if(p.error||p.status!==0)throw Error(name+': '+(p.error?.message??p.stderr));return p.stdout;}
 run('camera',process.execPath,['native/validation/camera-render.mjs']);

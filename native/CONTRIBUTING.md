@@ -44,6 +44,12 @@ npm ci --prefix native/toolchain --include=optional
 MUTRACER_NATIVE_OUTPUT=/absolute/evidence npm run native:ci
 ```
 
+`npm run native:ci:hosts` also runs the context, job, camera and settings C hosts
+(`native:settings` chains the other three) against the fixtures, archive and Cargo
+target that the CI run just produced, at 8 samples. Run the `native:*` commands
+separately only when iterating on one host; each of them rebuilds and rerenders
+its whole chain.
+
 The GitHub Actions `CI` workflow runs on pull requests, pushes to `main` and `dev`, and
 manual dispatches. It validates native code and builds standalone viewers for
 macOS arm64, Linux x64 and Windows x64, including OIDN and licenses. Download

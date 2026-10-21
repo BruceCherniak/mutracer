@@ -1,5 +1,5 @@
 import {spawnSync} from 'node:child_process';
-import {mkdirSync,readFileSync,writeFileSync,copyFileSync} from 'node:fs';
+import {existsSync,mkdirSync,readFileSync,writeFileSync,copyFileSync,symlinkSync} from 'node:fs';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 const root=resolve(dirname(fileURLToPath(import.meta.url)), '../..');
@@ -8,6 +8,10 @@ const raw=resolve(out,'raw'),target=resolve(process.env.CARGO_TARGET_DIR??resolv
 const samples=Number(process.env.MUTRACER_NATIVE_SAMPLES??256);
 if(!Number.isInteger(samples)||samples<8||samples>4096)throw new Error('Context validation samples must be 8..4096');
 mkdirSync(out,{recursive:true});
+// native:ci passes its validated scene output (fixtures, archive and Cargo target)
+// so the chained C host checks reuse it instead of rebuilding and rerendering.
+const reuse=process.env.MUTRACER_NATIVE_SCENE_OUTPUT;
+if(reuse&&!existsSync(raw))symlinkSync(resolve(reuse),raw,process.platform==='win32'?'junction':'dir');
 const env={...process.env,CARGO_TARGET_DIR:target,MUTRACER_NATIVE_OUTPUT:raw,MUTRACER_NATIVE_SAMPLES:String(samples),MUTRACER_AOT_ARCHIVE:resolve(raw,'render-core.lib.a')};
 const checks=[];
 function run(name,command,args){
@@ -19,8 +23,10 @@ function run(name,command,args){
  return result;
 }
 // The raw driver gates the unchanged AOT graphs and existing one-shot C ABI first.
-run('raw-scene-validation',process.execPath,['native/validation/scene-render.mjs']);
-run('rust-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml']);
+if(!reuse){
+ run('raw-scene-validation',process.execPath,['native/validation/scene-render.mjs']);
+ run('rust-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml']);
+}
 const host=resolve(out,'context-host');
 run('context-host-build',process.env.CC??'cc',['-Wall','-Wextra','-Werror','-I','native/include','native/examples/context-host.c','-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`,'-pthread','-o',host]);
 const fixtures=JSON.parse(readFileSync(resolve(raw,'scene-verification.json'))).results;

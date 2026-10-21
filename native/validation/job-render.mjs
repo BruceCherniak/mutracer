@@ -20,7 +20,8 @@ function run(name,command,args){
 }
 // Revalidate blocking contexts and raw scenes before exercising asynchronous jobs.
 run('context-validation',process.execPath,['native/validation/context-render.mjs']);
-run('rust-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml']);
+// native:ci:hosts already ran the host tests.
+if(!process.env.MUTRACER_NATIVE_SCENE_OUTPUT)run('rust-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml']);
 const host=resolve(out,'job-host');
 run('job-host-build',process.env.CC??'cc',['-Wall','-Wextra','-Werror','-I','native/include','native/examples/job-host.c','-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`,'-pthread','-o',host]);
 const fixtures=JSON.parse(readFileSync(resolve(raw,'raw/scene-verification.json'))).results;

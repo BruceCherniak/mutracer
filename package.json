@@ -102,7 +102,8 @@
     "native:viewer:build": "node native/scripts/viewer-build.mjs --build-only",
     "native:viewer:package": "node native/scripts/viewer-package.mjs",
     "native:settings": "node native/validation/settings-render.mjs",
-    "native:ci": "node native/scripts/ci.mjs"
+    "native:ci": "node native/scripts/ci.mjs",
+    "native:ci:hosts": "node native/scripts/ci.mjs --hosts"
   },
   "dependencies": {
     "oidn-web": "^0.5.0",

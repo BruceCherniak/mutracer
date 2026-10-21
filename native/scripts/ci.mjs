@@ -46,5 +46,8 @@ run('storage-verify','npm',['run','native:storage:verify'],{MUTRACER_NATIVE_OUTP
 if(gpu.available){
  run('raw-gpu-fixtures','npm',['run','native:scene'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'fixtures'),MUTRACER_NATIVE_SAMPLES:'8'});
  run('ray-query-contracts',resolve(hostTarget,'release',executable('ray-query-probe')),[resolve(out,'ray-query')]);
+ // --hosts: the context, job, camera and settings C hosts, reusing the fixtures above.
+ if(process.argv.includes('--hosts'))run('c-hosts','npm',['run','native:settings'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'hosts'),
+   MUTRACER_NATIVE_SCENE_OUTPUT:resolve(out,'fixtures'),MUTRACER_NATIVE_SAMPLES:'8'});
 }else console.log('GPU execution skipped: no adapter; CPU/module/storage checks still ran.');
 writeFileSync(resolve(out,'summary.json'),JSON.stringify({passed:true,scriptc:'0.3.2',gpu,requiredModules:required.length,checks},null,2)+'\n');
