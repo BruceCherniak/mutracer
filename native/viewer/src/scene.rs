@@ -34,6 +34,60 @@ pub struct Material {
     pub double_sided: bool,
     pub normal_scale: f32,
     pub unlit: bool,
+    pub layers: MaterialLayers,
+}
+/// Editable OpenPBR layers; defaults match the shared MaterialState schema.
+#[derive(Clone)]
+pub struct MaterialLayers {
+    pub diffuse_roughness: f32,
+    pub specular_weight: f32,
+    pub anisotropy: f32,
+    pub transmission_color: [f32; 3],
+    pub transmission_depth: f32,
+    pub dispersion: f32,
+    pub thin_walled: bool,
+    pub coat_weight: f32,
+    pub coat_roughness: f32,
+    pub coat_ior: f32,
+    pub coat_color: [f32; 3],
+    pub subsurface_weight: f32,
+    pub subsurface_color: [f32; 3],
+    pub subsurface_radius: f32,
+    pub fuzz_weight: f32,
+    pub fuzz_color: [f32; 3],
+    pub fuzz_roughness: f32,
+    pub film_weight: f32,
+    pub film_thickness: f32,
+    pub film_ior: f32,
+    pub bevel: f32,
+}
+impl Default for MaterialLayers {
+    fn default() -> Self {
+        Self {
+            diffuse_roughness: 0.,
+            specular_weight: 1.,
+            anisotropy: 0.,
+            transmission_color: [1.; 3],
+            transmission_depth: 0.,
+            dispersion: 0.,
+            // Preserve the native glTF viewer's existing thin-surface interpretation.
+            thin_walled: true,
+            coat_weight: 0.,
+            coat_roughness: 0.,
+            coat_ior: 1.6,
+            coat_color: [1.; 3],
+            subsurface_weight: 0.,
+            subsurface_color: [0.8; 3],
+            subsurface_radius: 1.,
+            fuzz_weight: 0.,
+            fuzz_color: [1.; 3],
+            fuzz_roughness: 0.5,
+            film_weight: 0.,
+            film_thickness: 0.5,
+            film_ior: 1.4,
+            bevel: 0.,
+        }
+    }
 }
 impl Material {}
 #[derive(Clone)]
@@ -209,6 +263,7 @@ impl Model {
                 double_sided: material.double_sided(),
                 normal_scale: material.normal_texture().map(|t| t.scale()).unwrap_or(1.),
                 unlit: material.unlit(),
+                layers: MaterialLayers::default(),
             });
         }
         model.materials.push(Material {
@@ -227,6 +282,7 @@ impl Model {
             double_sided: false,
             normal_scale: 1.,
             unlit: false,
+            layers: MaterialLayers::default(),
         });
         let scene = document
             .default_scene()
@@ -923,7 +979,7 @@ impl Descriptor {
         compile_error!("Native descriptors assume a little-endian target");
     }
 }
-const MATERIAL_EXTENSIONS: usize = 6;
+const MATERIAL_EXTENSIONS: usize = 24;
 fn write_mesh(w: &mut [u32], o: usize, m: &Mesh) {
     w[o + wire_mesh::GEOMETRY] = m.geometry as u32;
     w[o + wire_mesh::MATERIAL] = m.material as u32;
@@ -945,44 +1001,55 @@ fn write_material(w: &mut [u32], o: usize, m: &Material) {
         (mat::EMISSION_COLOR + 1, m.emission[1]),
         (mat::EMISSION_COLOR + 2, m.emission[2]),
         (mat::EMISSION_LUMINANCE, m.emission_strength),
-        (mat::COAT_WEIGHT, 0.),
-        (mat::COAT_ROUGHNESS, 0.),
+        (mat::COAT_WEIGHT, m.layers.coat_weight),
+        (mat::COAT_ROUGHNESS, m.layers.coat_roughness),
         (mat::OPACITY, m.opacity),
     ] {
         w[o + field] = value.to_bits();
     }
-    w[o + mat::THIN_WALLED] = 1;
+    w[o + mat::THIN_WALLED] = u32::from(m.layers.thin_walled);
     for (k, v) in m.maps.iter().enumerate() {
         w[o + mat::MAP + k] = *v;
     }
-    let ext: [u32; MATERIAL_EXTENSIONS * 4] = [
-        38,
-        u32::from(m.double_sided),
-        0,
-        0,
-        41,
-        m.alpha_mode,
-        0,
-        0,
-        42,
-        m.alpha_cutoff.to_bits(),
-        0,
-        0,
-        45,
-        m.normal_scale.to_bits(),
-        m.normal_scale.to_bits(),
-        0,
-        52,
-        u32::from(m.unlit),
-        0,
-        0,
-        73,
-        1,
-        0,
-        0,
+    // Frozen IDs from native/schemas/material-properties.json. The first six
+    // records preserve the former descriptor for the default-image regression gate.
+    fn scalar(id: u32, v: f32) -> [u32; 4] {
+        [id, v.to_bits(), 0, 0]
+    }
+    fn color(id: u32, v: [f32; 3]) -> [u32; 4] {
+        [id, v[0].to_bits(), v[1].to_bits(), v[2].to_bits()]
+    }
+    let l = &m.layers;
+    let ext: [[u32; 4]; MATERIAL_EXTENSIONS] = [
+        [38, u32::from(m.double_sided), 0, 0],
+        [41, m.alpha_mode, 0, 0],
+        scalar(42, m.alpha_cutoff),
+        [45, m.normal_scale.to_bits(), m.normal_scale.to_bits(), 0],
+        [52, u32::from(m.unlit), 0, 0],
+        [73, 1, 0, 0],
+        scalar(3, l.diffuse_roughness),
+        scalar(5, l.specular_weight),
+        scalar(9, l.anisotropy),
+        color(11, l.transmission_color),
+        scalar(12, l.transmission_depth),
+        scalar(15, l.dispersion),
+        scalar(17, l.subsurface_weight),
+        color(18, l.subsurface_color),
+        scalar(19, l.subsurface_radius),
+        scalar(22, l.fuzz_weight),
+        color(23, l.fuzz_color),
+        scalar(24, l.fuzz_roughness),
+        color(26, l.coat_color),
+        scalar(29, l.coat_ior),
+        scalar(31, l.film_weight),
+        scalar(32, l.film_thickness),
+        scalar(33, l.film_ior),
+        scalar(53, l.bevel),
     ];
     let at = w[o + mat::EXTENSION_OFFSET] as usize;
-    w[at..at + ext.len()].copy_from_slice(&ext);
+    for (index, record) in ext.iter().enumerate() {
+        w[at + index * 4..at + (index + 1) * 4].copy_from_slice(record);
+    }
 }
 /// Background words; the environment map is texture `environment` (index + 1).
 fn write_background(w: &mut [u32], environment: &Environment, texture: u32) {
@@ -1214,6 +1281,29 @@ mod descriptor_tests {
             m.double_sided = step % 2 == 0;
             m.normal_scale = 0.5;
             m.unlit = step % 2 != 0;
+            m.layers = MaterialLayers {
+                diffuse_roughness: 0.2,
+                specular_weight: 0.8,
+                anisotropy: 0.3,
+                transmission_color: [0.3, 0.8, 0.5],
+                transmission_depth: 0.2,
+                dispersion: 0.1,
+                thin_walled: step % 2 == 0,
+                coat_weight: 0.4,
+                coat_roughness: 0.1,
+                coat_ior: 1.7,
+                coat_color: [0.9, 0.8, 0.7],
+                subsurface_weight: 0.2,
+                subsurface_color: [0.9, 0.5, 0.3],
+                subsurface_radius: 0.1,
+                fuzz_weight: 0.3,
+                fuzz_color: [0.8, 0.7, 0.6],
+                fuzz_roughness: 0.6,
+                film_weight: 0.5,
+                film_thickness: 0.4,
+                film_ior: 1.6,
+                bevel: 0.01,
+            };
             s.light.color = [0.3, 0.5, 0.8];
             s.light.intensity += 0.2;
             s.light.azimuth += 12.;

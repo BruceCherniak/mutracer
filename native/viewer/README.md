@@ -62,10 +62,14 @@ the output directory. See the [native guide](../README.md) for platform backends
   to that object. The right **Object** panel provides world position, local Y
   rotation and uniform scale controls. Each edit
   affects the selected object; objects sharing its geometry move independently.
-- Select a material and edit base color, roughness, metalness or transmission.
-  Edits affect every object sharing that material. Picking tests geometry, so
-  transparent surfaces can be selected ahead of objects behind them.
-  Imported base-color, normal, metallic/roughness and emissive maps remain active.
+- The **Material** panel provides **Base**, **Transmission**, **Coat**,
+  **Subsurface**, **Fuzz**, **Thin film**, **Emission** and **Advanced** groups.
+  Inactive layers start collapsed; open a heading to edit their parameters.
+  Edits affect every object sharing that material. **Opacity** applies in Auto,
+  Mask or Blend alpha mode; normal scale requires an imported normal map.
+  Picking tests geometry, so transparent surfaces can be selected ahead of objects
+  behind them. Imported base-color, normal, metallic/roughness and emissive maps
+  remain active.
 - Choose **Lighting**, **Material**, **Camera**, **Render** or **Object** on the
   right rail. Click the active category to hide the inspector; **[** and **]**
   toggle the scene list and inspector. Click section headings to collapse their

@@ -1322,6 +1322,155 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
     println!(
         "PASS {count} incremental material commits: HDR/normal/albedo byte-exact to full commits; baseline restored"
     );
+    material_layers_smoke(path, out)?;
+    Ok(())
+}
+// New viewer controls exercise the existing raw-scene OpenPBR contract on both
+// intersection paths. Fresh contexts are independent full-preparation oracles.
+fn material_layers_smoke(path: &Path, out: &Path) -> Result<()> {
+    use mutracer_native_probe::layout::{header as h, material as mat};
+    let original = Model::load(path)?;
+    let camera = Camera::fit(original.center, original.radius);
+    let size = [160, 106];
+    let environment = Environment::default();
+    let initial = original.descriptor(&camera.bytes(), size, &environment);
+    // The first six records are precisely the pre-layer viewer's properties.
+    let mut legacy = initial.clone();
+    let word = |data: &[u8], at: usize| {
+        u32::from_le_bytes(data[at * 4..at * 4 + 4].try_into().unwrap()) as usize
+    };
+    let offset = word(&legacy, h::MATERIAL_OFFSET);
+    for i in 0..original.materials.len() {
+        let at = (offset + i * mat::WORDS + mat::EXTENSION_COUNT) * 4;
+        legacy[at..at + 4].copy_from_slice(&6u32.to_le_bytes());
+    }
+    for mode in [0, 1] {
+        let mut retained = Renderer::with_backend(mode)?;
+        retained.commit(&legacy)?;
+        let baseline = retained.finish(8)?;
+        let baseline_normal = retained.image(1)?;
+        let baseline_albedo = retained.image(2)?;
+        ensure!(
+            retained.backend()?.0 == mode,
+            "Layer gate requires requested backend {mode}"
+        );
+        retained.commit(&initial)?;
+        ensure!(
+            retained.finish(8)? == baseline
+                && retained.image(1)? == baseline_normal
+                && retained.image(2)? == baseline_albedo,
+            "New layer defaults changed imported material output on backend {mode}"
+        );
+        let mut descriptor = None;
+        let id = original.meshes[0].material;
+        for case in 0..9 {
+            for step in 0..2 {
+                let mut model = original.clone();
+                let m = &mut model.materials[id];
+                let weight = 0.5 + step as f32 * 0.3;
+                match case {
+                    0 => {
+                        m.transmission = weight;
+                        m.layers.thin_walled = false;
+                        m.layers.transmission_color = [0.3, 0.7, 0.9];
+                        m.layers.transmission_depth = 0.2;
+                        m.layers.dispersion = 0.1;
+                    }
+                    1 => {
+                        m.layers.coat_weight = weight;
+                        m.layers.coat_roughness = 0.12;
+                        m.layers.coat_ior = 1.8;
+                        m.layers.coat_color = [0.7, 0.9, 1.];
+                    }
+                    2 => {
+                        m.layers.subsurface_weight = weight;
+                        m.layers.subsurface_color = [0.9, 0.3, 0.1];
+                        m.layers.subsurface_radius = 0.2;
+                    }
+                    3 => {
+                        m.layers.fuzz_weight = weight;
+                        m.layers.fuzz_color = [0.3, 0.6, 0.9];
+                        m.layers.fuzz_roughness = 0.3;
+                    }
+                    4 => {
+                        m.layers.film_weight = weight;
+                        m.layers.film_thickness = 0.45;
+                        m.layers.film_ior = 1.33;
+                    }
+                    5 => {
+                        m.emission = [1., 0.3, 0.1];
+                        m.emission_strength = weight * 4.;
+                    }
+                    6 => {
+                        m.layers.anisotropy = weight;
+                        m.layers.diffuse_roughness = 0.3;
+                        m.layers.specular_weight = 0.6;
+                        m.layers.bevel = 0.01;
+                    }
+                    7 => {
+                        m.alpha_mode = 3;
+                        m.opacity = weight;
+                        m.normal_scale = 0.7;
+                        m.double_sided = true;
+                    }
+                    _ => {
+                        m.unlit = true;
+                        m.color = [weight, 0.1, 0.3];
+                    }
+                }
+                retained.commit(model.update_descriptor(
+                    &mut descriptor,
+                    &camera.bytes(),
+                    size,
+                    &environment,
+                    &KeyLight::default(),
+                ))?;
+                let actual = retained.finish(8)?;
+                let mut fresh = Renderer::with_backend(mode)?;
+                fresh.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                ensure!(
+                    !fresh.last_commit_incremental()?,
+                    "Reference must prepare a fresh scene"
+                );
+                let expected = fresh.finish(8)?;
+                ensure!(
+                    actual.iter().all(|v| v.is_finite())
+                        && actual == expected
+                        && retained.image(1)? == fresh.image(1)?
+                        && retained.image(2)? == fresh.image(2)?,
+                    "Layer {case}/{step} differs from fresh preparation on backend {mode}"
+                );
+                ensure!(
+                    actual != baseline,
+                    "Layer {case}/{step} had no observable effect on backend {mode}"
+                );
+            }
+        }
+        let before = retained.pixels()?;
+        let mut bad = original.clone();
+        bad.materials[id].layers.coat_ior = f32::NAN;
+        ensure!(
+            retained
+                .commit(&bad.descriptor(&camera.bytes(), size, &environment))
+                .is_err()
+                && retained.pixels()? == before,
+            "Invalid layer changed the accepted scene"
+        );
+        retained.commit(&initial)?;
+        ensure!(
+            retained.finish(8)? == baseline,
+            "Layer edits failed to restore defaults on backend {mode}"
+        );
+        renderer::save(
+            &out.join(format!("layers-{mode}-restored.png")),
+            &baseline,
+            size,
+            0.,
+        )?;
+        println!(
+            "PASS backend {mode}: defaults match legacy; 18 layer edits finite and HDR/normal/albedo exact to fresh contexts; effects, rejection and restoration checked"
+        );
+    }
     Ok(())
 }
 fn environment_smoke(path: &Path, out: &Path) -> Result<()> {

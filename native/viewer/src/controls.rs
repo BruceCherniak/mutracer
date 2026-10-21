@@ -8,10 +8,18 @@ pub fn button(ui: &mut Ui, label: &str) -> Response {
 }
 
 pub fn section(ui: &mut Ui, title: &str, contents: impl FnOnce(&mut Ui)) {
-    egui::CollapsingHeader::new(egui::RichText::new(title).strong())
-        .default_open(true)
-        .show_unindented(ui, contents);
-    ui.separator();
+    section_open(ui, title, true, contents);
+}
+
+pub fn section_open(ui: &mut Ui, title: &str, open: bool, contents: impl FnOnce(&mut Ui)) {
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 2.;
+        ui.spacing_mut().interact_size.y = 20.;
+        egui::CollapsingHeader::new(egui::RichText::new(title).strong())
+            .default_open(open)
+            .show_unindented(ui, contents);
+        ui.add(egui::Separator::default().spacing(0.));
+    });
 }
 
 fn property<R>(ui: &mut Ui, label: &str, contents: impl FnOnce(&mut Ui, egui::Id) -> R) -> R {
@@ -61,6 +69,15 @@ pub fn parameter(ui: &mut Ui, label: &str, slider: egui::Slider<'_>) -> Response
         ui.add(slider.handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 0.16 }))
             .labelled_by(label_id)
     })
+}
+
+pub fn scalar(
+    ui: &mut Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+) -> bool {
+    parameter(ui, label, egui::Slider::new(value, range)).changed()
 }
 
 pub fn number(ui: &mut Ui, label: &str, value: &mut f32, speed: f64) -> Response {

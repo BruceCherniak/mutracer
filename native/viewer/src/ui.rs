@@ -380,31 +380,149 @@ impl Viewer {
         }
         let material = &mut self.model.materials[self.selected];
         let mut changed = false;
-        controls::section(ui, "Surface", |ui| {
-            changed |= controls::color(ui, "Base color", &mut material.color).changed();
-            changed |= controls::parameter(
+        ui.push_id(self.selected, |ui| {
+            controls::section(ui, "Base", |ui| {
+                changed |= controls::color(ui, "Color", &mut material.color).changed();
+                changed |= controls::scalar(ui, "Roughness", &mut material.roughness, 0.0..=1.0);
+                changed |= controls::scalar(ui, "Metalness", &mut material.metalness, 0.0..=1.0);
+                changed |= controls::scalar(ui, "IOR", &mut material.ior, 1.0..=3.0);
+            });
+            controls::section_open(ui, "Transmission", material.transmission > 0., |ui| {
+                changed |= controls::scalar(ui, "Weight", &mut material.transmission, 0.0..=1.0);
+                changed |=
+                    controls::color(ui, "Color", &mut material.layers.transmission_color).changed();
+                changed |= controls::scalar(
+                    ui,
+                    "Depth (m)",
+                    &mut material.layers.transmission_depth,
+                    0.0..=5.0,
+                );
+                changed |=
+                    controls::scalar(ui, "Dispersion", &mut material.layers.dispersion, 0.0..=1.0);
+                changed |=
+                    controls::toggle(ui, "Thin walled", &mut material.layers.thin_walled).changed();
+            });
+            controls::section_open(ui, "Coat", material.layers.coat_weight > 0., |ui| {
+                changed |=
+                    controls::scalar(ui, "Weight", &mut material.layers.coat_weight, 0.0..=1.0);
+                changed |= controls::scalar(
+                    ui,
+                    "Roughness",
+                    &mut material.layers.coat_roughness,
+                    0.0..=1.0,
+                );
+                changed |= controls::scalar(ui, "IOR", &mut material.layers.coat_ior, 1.0..=3.0);
+                changed |= controls::color(ui, "Tint", &mut material.layers.coat_color).changed();
+            });
+            controls::section_open(
                 ui,
-                "Roughness",
-                egui::Slider::new(&mut material.roughness, 0.0..=1.0),
-            )
-            .changed();
-            changed |= controls::parameter(
-                ui,
-                "Metalness",
-                egui::Slider::new(&mut material.metalness, 0.0..=1.0),
-            )
-            .changed();
-            changed |= controls::parameter(
-                ui,
-                "Transmission",
-                egui::Slider::new(&mut material.transmission, 0.0..=1.0),
-            )
-            .changed();
+                "Subsurface",
+                material.layers.subsurface_weight > 0.,
+                |ui| {
+                    changed |= controls::scalar(
+                        ui,
+                        "Weight",
+                        &mut material.layers.subsurface_weight,
+                        0.0..=1.0,
+                    );
+                    changed |= controls::color(ui, "Color", &mut material.layers.subsurface_color)
+                        .changed();
+                    changed |= controls::scalar(
+                        ui,
+                        "Radius",
+                        &mut material.layers.subsurface_radius,
+                        0.0..=2.0,
+                    );
+                },
+            );
+            controls::section_open(ui, "Fuzz", material.layers.fuzz_weight > 0., |ui| {
+                changed |=
+                    controls::scalar(ui, "Weight", &mut material.layers.fuzz_weight, 0.0..=1.0);
+                changed |= controls::color(ui, "Color", &mut material.layers.fuzz_color).changed();
+                changed |= controls::scalar(
+                    ui,
+                    "Roughness",
+                    &mut material.layers.fuzz_roughness,
+                    0.0..=1.0,
+                );
+            });
+            controls::section_open(ui, "Thin film", material.layers.film_weight > 0., |ui| {
+                changed |=
+                    controls::scalar(ui, "Weight", &mut material.layers.film_weight, 0.0..=1.0);
+                changed |= controls::scalar(
+                    ui,
+                    "Thickness (µm)",
+                    &mut material.layers.film_thickness,
+                    0.0..=2.0,
+                );
+                changed |= controls::scalar(ui, "IOR", &mut material.layers.film_ior, 1.0..=3.0);
+            });
+            let emitting =
+                material.emission_strength > 0. && material.emission.iter().any(|v| *v > 0.);
+            controls::section_open(ui, "Emission", emitting, |ui| {
+                changed |= controls::color(ui, "Color", &mut material.emission).changed();
+                changed |=
+                    controls::scalar(ui, "Luminance", &mut material.emission_strength, 0.0..=50.0);
+            });
+            controls::section_open(ui, "Advanced", false, |ui| {
+                changed |=
+                    controls::scalar(ui, "Anisotropy", &mut material.layers.anisotropy, 0.0..=1.0);
+                changed |= controls::scalar(
+                    ui,
+                    "Diffuse roughness",
+                    &mut material.layers.diffuse_roughness,
+                    0.0..=1.0,
+                );
+                changed |= controls::scalar(
+                    ui,
+                    "Specular weight",
+                    &mut material.layers.specular_weight,
+                    0.0..=1.0,
+                );
+                changed |= controls::scalar(ui, "Bevel", &mut material.layers.bevel, 0.0..=0.05);
+                let previous = material.alpha_mode;
+                controls::select(
+                    ui,
+                    "Alpha",
+                    ["Auto", "Opaque", "Mask", "Blend"][material.alpha_mode as usize],
+                    |ui| {
+                        for (value, label) in
+                            [(0, "Auto"), (1, "Opaque"), (2, "Mask"), (3, "Blend")]
+                        {
+                            ui.selectable_value(&mut material.alpha_mode, value, label);
+                        }
+                    },
+                );
+                changed |= previous != material.alpha_mode;
+                ui.add_enabled_ui(material.alpha_mode != 1, |ui| {
+                    changed |= controls::scalar(ui, "Opacity", &mut material.opacity, 0.0..=1.0);
+                })
+                .response
+                .on_hover_text("Opacity applies in Auto, Mask or Blend alpha mode.");
+                ui.add_enabled_ui(material.maps[1] != u32::MAX, |ui| {
+                    changed |= controls::scalar(
+                        ui,
+                        "Normal scale",
+                        &mut material.normal_scale,
+                        -2.0..=2.0,
+                    );
+                })
+                .response
+                .on_hover_text("Requires an imported normal map.");
+                changed |=
+                    controls::toggle(ui, "Double sided", &mut material.double_sided).changed();
+                changed |= controls::toggle(ui, "Unlit", &mut material.unlit).changed();
+                if material.alpha_mode == 2 {
+                    changed |=
+                        controls::scalar(ui, "Alpha cutoff", &mut material.alpha_cutoff, 0.0..=1.0);
+                }
+            });
         });
         if changed {
             self.dirty(Change::Material);
         }
     }
+
     fn lighting_settings(&mut self, ui: &mut egui::Ui) {
         let mut changed = false;
         controls::section(ui, "Environment", |ui| {
