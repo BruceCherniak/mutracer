@@ -747,15 +747,23 @@ fn openpbr_eval_subsurface_boundary(
 }
 
 fn openpbr_normalize_probabilities(prepared: ptr<function, OpenPbrPreparedBsdf>) {
-    // Fixed indices avoid dynamic array copies; retain the original sum order.
+    // Keep the loops dynamically bounded: explicit unrolling regresses Metal
+    // rendering performance. The uniform guard is four, covering all lobes.
+    let lobeCount = min(OPENPBR_LOBE_COUNT, i32(rtUniform.loopUnrollGuard * 2u));
     var total = (*prepared).probabilities[OPENPBR_LOBE_FUZZ];
-    ${LOBE_INDICES.slice(1).map(i => /* wgsl */ `total += (*prepared).probabilities[${i}];`).join('\n    ')}
+    for (var lobe = 1; lobe < lobeCount; lobe++) {
+        total += (*prepared).probabilities[lobe];
+    }
     if (total <= 1e-8) {
-        ${LOBE_INDICES.map(i => /* wgsl */ `(*prepared).probabilities[${i}] = 0.0;`).join('\n        ')}
+        for (var lobe = 0; lobe < lobeCount; lobe++) {
+            (*prepared).probabilities[lobe] = 0.0;
+        }
         return;
     }
     let inverseTotal = 1.0 / total;
-    ${LOBE_INDICES.map(i => /* wgsl */ `(*prepared).probabilities[${i}] *= inverseTotal;`).join('\n    ')}
+    for (var lobe = 0; lobe < lobeCount; lobe++) {
+        (*prepared).probabilities[lobe] *= inverseTotal;
+    }
 }
 
 // Adapted from Adobe c91aad1 impl/openpbr_lobe_utils.h and
