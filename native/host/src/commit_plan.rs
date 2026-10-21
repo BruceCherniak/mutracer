@@ -1,7 +1,7 @@
 //! Maps a descriptor sync to the retained incremental update paths. Anything a
 //! path cannot express exactly falls back to full preparation (`None`).
 use crate::layout::{
-    batch as b, camera as cam, geometry as g, header as h, light as l, material as mat, mesh as m,
+    batch as bt, camera as cam, geometry as g, header as h, light as l, material as mat, mesh as m,
     texture as t,
 };
 use crate::scene::SceneSync;
@@ -14,6 +14,12 @@ pub(crate) enum Step {
     Light(Vec<u8>),
     Environment(Vec<u8>),
     Camera(Vec<u8>),
+    /// Whole analytic light list; carries the full descriptor.
+    LightList(Vec<u8>),
+    /// Colors of every instance in one batch: `[1, mesh, count, 0]` then RGB.
+    InstanceColors(Vec<u8>),
+    /// Material table and atlas repack; carries the full descriptor.
+    Atlas(Vec<u8>),
 }
 
 struct Words<'a>(&'a [u8]);
@@ -42,29 +48,63 @@ fn same_span(a: &Words, ao: usize, b: &Words, bo: usize, count: usize) -> Option
     Some(a.span(ao, count)? == b.span(bo, count)?)
 }
 
-/// Texture records and pixels must be unchanged: atlas updates need a full commit.
-fn textures_unchanged(a: &Words, b: &Words) -> Option<bool> {
-    if a.u(h::TEXTURE_COUNT) != b.u(h::TEXTURE_COUNT) {
+/// Whether texture `index` has the same record and pixels in both descriptors.
+fn texture_unchanged(a: &Words, b: &Words, index: usize) -> Option<bool> {
+    let (ao, bo) = (
+        a.u(h::TEXTURE_OFFSET) + index * t::WORDS,
+        b.u(h::TEXTURE_OFFSET) + index * t::WORDS,
+    );
+    if (0..t::WORDS).any(|k| k != t::PIXELS && a.u(ao + k) != b.u(bo + k)) {
         return Some(false);
     }
-    for i in 0..b.u(h::TEXTURE_COUNT) {
-        let (ao, bo) = (
-            a.u(h::TEXTURE_OFFSET) + i * t::WORDS,
-            b.u(h::TEXTURE_OFFSET) + i * t::WORDS,
-        );
-        for k in 0..t::WORDS {
-            if k != t::PIXELS && a.u(ao + k) != b.u(bo + k) {
-                return Some(false);
+    let texels = b.u(bo + t::WIDTH)
+        * b.u(bo + t::HEIGHT)
+        * if b.u(bo + t::STORAGE) == 0 { 1 } else { 4 };
+    same_span(a, a.u(ao + t::PIXELS), b, b.u(bo + t::PIXELS), texels)
+}
+
+/// Whether a material map, texture-valued material property or light uses
+/// texture `index` (packed into the atlas).
+fn atlas_texture(w: &Words, index: usize) -> Option<bool> {
+    for i in 0..w.u(h::MATERIAL_COUNT) {
+        let o = w.u(h::MATERIAL_OFFSET) + i * mat::WORDS;
+        if (mat::MAP..=mat::EMISSIVE_MAP).any(|k| w.u(o + k) == index) {
+            return Some(true);
+        }
+        let extensions = w.u(o + mat::EXTENSION_OFFSET);
+        for e in 0..w.u(o + mat::EXTENSION_COUNT) {
+            let at = extensions + e * crate::layout::extension::WORDS;
+            w.span(at, crate::layout::extension::WORDS)?;
+            let kind = crate::material_properties::MATERIAL_PROPERTIES
+                .get(w.u(at + crate::layout::extension::ID))
+                .map(|&(kind, _)| kind);
+            if kind == Some(TEXTURE_PROPERTY) && w.u(at + crate::layout::extension::X) == index {
+                return Some(true);
             }
         }
-        let texels = b.u(bo + t::WIDTH)
-            * b.u(bo + t::HEIGHT)
-            * if b.u(bo + t::STORAGE) == 0 { 1 } else { 4 };
-        if !same_span(a, a.u(ao + t::PIXELS), b, b.u(bo + t::PIXELS), texels)? {
-            return Some(false);
+    }
+    Some((0..w.u(h::LIGHT_COUNT)).any(|i| {
+        w.u(w.u(h::LIGHT_OFFSET) + i * l::WORDS + l::TEXTURE) == index + 1
+    }))
+}
+
+/// Material property kind of texture references (see material_properties.rs).
+const TEXTURE_PROPERTY: u8 = 5;
+
+/// Changed textures, and whether any of them is packed into the atlas.
+/// Environment and background maps travel with the environment step.
+fn changed_textures(a: &Words, b: &Words) -> Option<(Vec<usize>, bool)> {
+    if a.u(h::TEXTURE_COUNT) != b.u(h::TEXTURE_COUNT) {
+        return None;
+    }
+    let (mut changed, mut atlas) = (Vec::new(), false);
+    for i in 0..b.u(h::TEXTURE_COUNT) {
+        if !texture_unchanged(a, b, i)? {
+            atlas |= atlas_texture(a, i)? || atlas_texture(b, i)?;
+            changed.push(i);
         }
     }
-    Some(true)
+    Some((changed, atlas))
 }
 
 fn geometry_step(a: &Words, b: &Words, index: usize) -> Option<Step> {
@@ -112,17 +152,65 @@ fn geometry_step(a: &Words, b: &Words, index: usize) -> Option<Step> {
     Some(Step::Geometry(bytes))
 }
 
-fn transform_step(b: &Words, index: usize) -> Option<Step> {
-    // Instance matrices need the range paths of a later phase.
-    if b.u(h::BATCH_OFFSET) != 0
-        && b.u(b.u(h::BATCH_OFFSET) + index * b::WORDS + b::COUNT) != u32::MAX as usize
-    {
+/// Above this many changed instances in one batch, full preparation is cheaper
+/// than one retained transform update (and TLAS refit) per instance.
+const MAX_INSTANCE_STEPS: usize = 64;
+
+fn transform_steps(a: &Words, b: &Words, index: usize, steps: &mut Vec<Step>) -> Option<()> {
+    let (am, bm) = (
+        a.u(h::MESH_OFFSET) + index * m::WORDS,
+        b.u(h::MESH_OFFSET) + index * m::WORDS,
+    );
+    let world = |words: &[u32]| -> Step {
+        let mut bytes = record(words);
+        bytes.extend_from_slice(b.span(bm + m::TRANSFORM, 16).unwrap_or_default());
+        Step::Transform(bytes)
+    };
+    let batch =
+        |w: &Words| (w.u(h::BATCH_OFFSET) != 0).then(|| w.u(h::BATCH_OFFSET) + index * bt::WORDS);
+    let instances = batch(b).filter(|&o| b.u(o + bt::COUNT) != u32::MAX as usize);
+    if a.span(am + m::TRANSFORM, 16)? != b.span(bm + m::TRANSFORM, 16)? {
+        b.span(bm + m::TRANSFORM, 16)?;
+        steps.push(world(&[1, index as u32, 0, 0]));
+    }
+    let Some(bo) = instances else { return Some(()) };
+    let ao = batch(a)?;
+    let count = b.u(bo + bt::COUNT);
+    if a.u(ao + bt::COUNT) != count {
         return None;
     }
-    let mo = b.u(h::MESH_OFFSET) + index * m::WORDS;
-    let mut bytes = record(&[1, index as u32, 0, 0]);
-    bytes.extend_from_slice(b.span(mo + m::TRANSFORM, 16)?);
-    Some(Step::Transform(bytes))
+    let (at, btr) = (a.u(ao + bt::TRANSFORMS), b.u(bo + bt::TRANSFORMS));
+    let mut changed = 0;
+    for k in 0..count {
+        let next = b.span(btr + k * 16, 16)?;
+        if a.span(at + k * 16, 16)? == next {
+            continue;
+        }
+        changed += 1;
+        if changed > MAX_INSTANCE_STEPS {
+            return None;
+        }
+        let mut bytes = record(&[1, index as u32, k as u32 + 1, 0]);
+        bytes.extend_from_slice(next);
+        steps.push(Step::Transform(bytes));
+    }
+    Some(())
+}
+
+/// Colors replace values only; adding or removing a batch's colors needs full preparation.
+fn instance_color_step(a: &Words, b: &Words, index: usize) -> Option<Step> {
+    let batch = |w: &Words| {
+        let o = (w.u(h::BATCH_OFFSET) != 0).then(|| w.u(h::BATCH_OFFSET) + index * bt::WORDS)?;
+        (w.u(o + bt::COUNT) != u32::MAX as usize && w.u(o + bt::COLORS) != 0).then_some(o)
+    };
+    let (ao, bo) = (batch(a)?, batch(b)?);
+    let count = b.u(bo + bt::COUNT);
+    if a.u(ao + bt::COUNT) != count {
+        return None;
+    }
+    let mut bytes = record(&[1, index as u32, count as u32, 0]);
+    bytes.extend_from_slice(b.span(b.u(bo + bt::COLORS), count * 3)?);
+    Some(Step::InstanceColors(bytes))
 }
 
 fn material_step(a: &Words, b: &Words, index: usize) -> Option<Step> {
@@ -152,35 +240,41 @@ fn material_step(a: &Words, b: &Words, index: usize) -> Option<Step> {
     Some(Step::Material(bytes))
 }
 
-fn light_steps(a: &Words, b: &Words, steps: &mut Vec<Step>) -> Option<()> {
-    if a.u(h::LIGHT_COUNT) != b.u(h::LIGHT_COUNT)
-        || a.u(h::ENVIRONMENT_TEXTURE) != b.u(h::ENVIRONMENT_TEXTURE)
-    {
+fn light_steps(a: &Words, b: &Words, next: &[u8], steps: &mut Vec<Step>) -> Option<()> {
+    if a.u(h::ENVIRONMENT_TEXTURE) != b.u(h::ENVIRONMENT_TEXTURE) {
         return None;
     }
-    for i in 0..b.u(h::LIGHT_COUNT) {
+    let mut list = a.u(h::LIGHT_COUNT) != b.u(h::LIGHT_COUNT);
+    let mut single = Vec::new();
+    for i in 0..b.u(h::LIGHT_COUNT).min(a.u(h::LIGHT_COUNT)) {
         let (ao, bo) = (
             a.u(h::LIGHT_OFFSET) + i * l::WORDS,
             b.u(h::LIGHT_OFFSET) + i * l::WORDS,
         );
         let ies = b.u(bo + l::IES_BYTES).div_ceil(4);
-        let same = (0..l::WORDS).all(|k| k == l::IES_OFFSET || a.u(ao + k) == b.u(bo + k))
+        let same_ies = a.u(ao + l::IES_BYTES) == b.u(bo + l::IES_BYTES)
             && same_span(a, a.u(ao + l::IES_OFFSET), b, b.u(bo + l::IES_OFFSET), ies)?;
-        if same {
+        if same_ies && (0..l::WORDS).all(|k| k == l::IES_OFFSET || a.u(ao + k) == b.u(bo + k)) {
             continue;
         }
-        // Attachments are preserved by the retained path, so they must not change.
-        if a.u(ao + l::TEXTURE) != b.u(bo + l::TEXTURE)
-            || a.u(ao + l::IES_BYTES) != b.u(bo + l::IES_BYTES)
-            || !same_span(a, a.u(ao + l::IES_OFFSET), b, b.u(bo + l::IES_OFFSET), ies)?
+        // Type and attachment changes rebuild the list; the single-light path keeps them.
+        if !same_ies
+            || a.u(ao + l::TYPE) != b.u(bo + l::TYPE)
+            || a.u(ao + l::TEXTURE) != b.u(bo + l::TEXTURE)
         {
-            return None;
+            list = true;
+            continue;
         }
         let mut words: Vec<u8> = b.span(bo, l::WORDS)?.to_vec();
         words[l::TEXTURE * 4..(l::RESERVED + 1) * 4].fill(0);
         let mut bytes = record(&[1, i as u32, 0, 0]);
         bytes.extend_from_slice(&words);
-        steps.push(Step::Light(bytes));
+        single.push(Step::Light(bytes));
+    }
+    if list {
+        steps.push(Step::LightList(next.to_vec()));
+    } else {
+        steps.extend(single);
     }
     Some(())
 }
@@ -226,26 +320,34 @@ pub(crate) fn plan(previous: &[u8], next: &[u8], sync: &SceneSync) -> Option<Vec
         || sync.resolution
         || sync.quality
         || sync.meshes == 2
-        || !sync.colors.is_empty()
-        || !textures_unchanged(&a, &b)?
     {
         return None;
     }
+    let (textures, atlas) = changed_textures(&a, &b)?;
+    // The environment map is a light to the sync, so its edits may not set `background`.
+    let environment_maps = textures
+        .iter()
+        .any(|&i| [h::ENVIRONMENT_TEXTURE, h::BACKGROUND_TEXTURE].iter().any(|&f| b.u(f) == i + 1));
     let mut steps = Vec::new();
+    if atlas {
+        steps.push(Step::Atlas(next.to_vec()));
+    }
     for &index in &sync.geometries {
         steps.push(geometry_step(&a, &b, index)?);
     }
     for &index in &sync.transforms {
-        steps.push(transform_step(&b, index)?);
+        transform_steps(&a, &b, index, &mut steps)?;
+    }
+    for &index in &sync.colors {
+        steps.push(instance_color_step(&a, &b, index)?);
     }
     for &index in &sync.materials {
         steps.push(material_step(&a, &b, index)?);
     }
     if sync.lights {
-        light_steps(&a, &b, &mut steps)?;
+        light_steps(&a, &b, next, &mut steps)?;
     }
-    // Environment pixel edits change textures and were excluded above.
-    if sync.background {
+    if sync.background || environment_maps {
         steps.push(environment_step(&a, &b)?);
     }
     if sync.camera {

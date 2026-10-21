@@ -84,9 +84,77 @@ impl Drop for Context {
 
 /// Edits that keep the descriptor valid. `true`: expected to stay incremental.
 type Edit = (&'static str, bool, fn(&mut Vec<u8>) -> bool);
+fn set_u(bytes: &mut [u8], i: usize, value: usize) {
+    bytes[i * 4..i * 4 + 4].copy_from_slice(&(value as u32).to_le_bytes());
+}
+/// First instanced mesh with at least one instance.
+fn first_batch(bytes: &[u8]) -> Option<usize> {
+    (0..u(bytes, h::MESH_COUNT))
+        .find(|&i| instanced(bytes, i) && u(bytes, u(bytes, h::BATCH_OFFSET) + i * 4) > 0)
+}
 fn instanced(bytes: &[u8], mesh: usize) -> bool {
     u(bytes, h::BATCH_OFFSET) != 0
         && u(bytes, u(bytes, h::BATCH_OFFSET) + mesh * 4) != u32::MAX as usize
+}
+/// First texture used by a material map (packed into the atlas).
+fn atlas_texture(bytes: &[u8]) -> Option<usize> {
+    (0..u(bytes, h::MATERIAL_COUNT))
+        .flat_map(|i| {
+            let o = u(bytes, h::MATERIAL_OFFSET) + i * mat::WORDS;
+            (mat::MAP..=mat::EMISSIVE_MAP).map(move |k| u(bytes, o + k))
+        })
+        .find(|&texture| texture < u(bytes, h::TEXTURE_COUNT))
+}
+/// Whether any material map or extension value word equals `value`; a texture
+/// also used by a material is packed into the atlas and needs a full commit.
+fn material_word(bytes: &[u8], value: usize) -> bool {
+    (0..u(bytes, h::MATERIAL_COUNT)).any(|i| {
+        let o = u(bytes, h::MATERIAL_OFFSET) + i * mat::WORDS;
+        let extensions = u(bytes, o + mat::EXTENSION_OFFSET);
+        (mat::MAP..=mat::EMISSIVE_MAP).any(|k| u(bytes, o + k) == value)
+            || (0..u(bytes, o + mat::EXTENSION_COUNT)).any(|e| u(bytes, extensions + e * 4 + 1) == value)
+    })
+}
+/// Texture of the first displacement map property (wire ID 59).
+fn displacement_texture(bytes: &[u8]) -> Option<usize> {
+    (0..u(bytes, h::MATERIAL_COUNT)).find_map(|i| {
+        let o = u(bytes, h::MATERIAL_OFFSET) + i * mat::WORDS;
+        let extensions = u(bytes, o + mat::EXTENSION_OFFSET);
+        (0..u(bytes, o + mat::EXTENSION_COUNT))
+            .map(|e| extensions + e * 4)
+            .find(|&at| u(bytes, at) == 59)
+            .map(|at| u(bytes, at + 1))
+    })
+}
+/// Record offset of the float map referenced by header word `field`.
+fn float_map(bytes: &[u8], field: usize) -> Option<usize> {
+    let reference = u(bytes, field);
+    let o = (reference != 0).then(|| u(bytes, h::TEXTURE_OFFSET) + (reference - 1) * t::WORDS)?;
+    (u(bytes, o + t::STORAGE) == 1).then_some(o)
+}
+/// Halves the width of a float map, appending the new pixels to the descriptor.
+fn resize_map(b: &mut Vec<u8>, field: usize) -> bool {
+    let Some(o) = float_map(b, field) else {
+        return false;
+    };
+    let (width, height, pixels) = (u(b, o + t::WIDTH), u(b, o + t::HEIGHT), u(b, o + t::PIXELS));
+    if width < 2 {
+        return false;
+    }
+    let next = width / 2;
+    let start = b.len() / 4;
+    for y in 0..height {
+        for x in 0..next {
+            let at = (pixels + (y * width + x * 2) * 4) * 4;
+            let texel = b[at..at + 16].to_vec();
+            b.extend_from_slice(&texel);
+        }
+    }
+    set_u(b, o + t::WIDTH, next);
+    set_u(b, o + t::PIXELS, start);
+    let words = b.len() / 4;
+    set_u(b, h::LENGTH, words);
+    true
 }
 fn edits() -> Vec<Edit> {
     vec![
@@ -182,15 +250,159 @@ fn edits() -> Vec<Edit> {
             add_f(b, c + cam::TRANSFORM + 13, 0.05);
             true
         }),
-        // Out of scope for this phase: these must fall back to full preparation.
-        ("texture pixel", false, |b| {
-            if u(b, h::TEXTURE_COUNT) == 0 {
+        ("instance matrix", true, |b| {
+            let Some(i) = first_batch(b) else {
+                return false;
+            };
+            let o = u(b, u(b, h::BATCH_OFFSET) + i * 4 + 1) + 12;
+            add_f(b, o, 0.3);
+            true
+        }),
+        ("instance color", true, |b| {
+            let Some(i) = first_batch(b) else {
+                return false;
+            };
+            let o = u(b, u(b, h::BATCH_OFFSET) + i * 4 + 2);
+            if o == 0 {
                 return false;
             }
-            let o = u(b, h::TEXTURE_OFFSET);
+            set_f(b, o + 1, 0.05);
+            true
+        }),
+        ("remove instance colors", false, |b| {
+            let Some(i) = first_batch(b) else {
+                return false;
+            };
+            let o = u(b, h::BATCH_OFFSET) + i * 4 + 2;
+            if u(b, o) == 0 {
+                return false;
+            }
+            set_u(b, o, 0);
+            true
+        }),
+        ("instance matrix and color", true, |b| {
+            let Some(i) = first_batch(b) else {
+                return false;
+            };
+            let batch = u(b, h::BATCH_OFFSET) + i * 4;
+            let matrix = u(b, batch + 1) + 16 + 12;
+            add_f(b, matrix, -0.2);
+            let colors = u(b, batch + 2);
+            if colors == 0 {
+                return false;
+            }
+            set_f(b, colors + 3, 0.1);
+            true
+        }),
+        ("instanced batch world matrix", true, |b| {
+            let Some(i) = first_batch(b) else {
+                return false;
+            };
+            let o = u(b, h::MESH_OFFSET) + i * m::WORDS + m::TRANSFORM + 14;
+            add_f(b, o, 0.2);
+            true
+        }),
+        ("add light", true, |b| {
+            if u(b, h::LIGHT_COUNT) == 0 {
+                return false;
+            }
+            // Relocate the light table to the end and append a moved copy of light 0.
+            let (count, offset) = (u(b, h::LIGHT_COUNT), u(b, h::LIGHT_OFFSET));
+            let table = b[offset * 4..(offset + count * l::WORDS) * 4].to_vec();
+            let at = b.len() / 4;
+            b.extend_from_slice(&table);
+            b.extend_from_slice(&table[..l::WORDS * 4]);
+            add_f(b, at + count * l::WORDS + l::TRANSFORM + 12, 0.5);
+            set_u(b, h::LIGHT_OFFSET, at);
+            set_u(b, h::LIGHT_COUNT, count + 1);
+            let words = b.len() / 4;
+            set_u(b, h::LENGTH, words);
+            true
+        }),
+        ("remove light", true, |b| {
+            let count = u(b, h::LIGHT_COUNT);
+            if count == 0
+                || u(
+                    b,
+                    u(b, h::LIGHT_OFFSET) + (count - 1) * l::WORDS + l::IES_BYTES,
+                ) != 0
+            {
+                return false;
+            }
+            set_u(b, h::LIGHT_COUNT, count - 1);
+            true
+        }),
+        // Removing the only IES profile shrinks the light-sampling texture, which is recreated.
+        ("remove IES light", true, |b| {
+            let count = u(b, h::LIGHT_COUNT);
+            if count != 1 || u(b, u(b, h::LIGHT_OFFSET) + l::IES_BYTES) == 0 {
+                return false;
+            }
+            set_u(b, h::LIGHT_COUNT, 0);
+            true
+        }),
+        ("light type", true, |b| {
+            if u(b, h::LIGHT_COUNT) == 0 {
+                return false;
+            }
+            let o = u(b, h::LIGHT_OFFSET);
+            // Sphere to directional keeps every field valid; other types are skipped.
+            if u(b, o + l::TYPE) != 1 {
+                return false;
+            }
+            set_u(b, o + l::TYPE, 2);
+            true
+        }),
+        // Out of scope for this phase: these must fall back to full preparation.
+        ("texture pixel", true, |b| {
+            let Some(i) = atlas_texture(b) else {
+                return false;
+            };
+            let o = u(b, h::TEXTURE_OFFSET) + i * t::WORDS;
             let p = u(b, o + t::PIXELS);
             b[p * 4] ^= 0x10;
             true
+        }),
+        ("rect light texture pixel", true, |b| {
+            let lights = u(b, h::LIGHT_OFFSET);
+            let light = (0..u(b, h::LIGHT_COUNT)).find(|&i| u(b, lights + i * l::WORDS + l::TEXTURE) != 0);
+            let Some(i) = light else { return false };
+            let texture = u(b, lights + i * l::WORDS + l::TEXTURE) - 1;
+            let p = u(b, u(b, h::TEXTURE_OFFSET) + texture * t::WORDS + t::PIXELS);
+            b[p * 4 + 1] ^= 0x20;
+            true
+        }),
+        // Displacement maps shape the acceleration structure: full preparation.
+        ("displacement texture pixel", false, |b| {
+            let Some(texture) = displacement_texture(b) else {
+                return false;
+            };
+            let p = u(b, u(b, h::TEXTURE_OFFSET) + texture * t::WORDS + t::PIXELS);
+            b[p * 4] ^= 0x40;
+            true
+        }),
+        ("texture uv offset", true, |b| {
+            let Some(i) = atlas_texture(b) else {
+                return false;
+            };
+            let offset = u(b, h::TEXTURE_OFFSET) + i * t::WORDS + t::UV_OFFSET;
+            add_f(b, offset, 0.25);
+            true
+        }),
+        ("environment pixel", true, |b| {
+            let Some(o) = float_map(b, h::ENVIRONMENT_TEXTURE) else {
+                return false;
+            };
+            let p = u(b, o + t::PIXELS);
+            set_f(b, p + 1, 2.5);
+            true
+        }),
+        ("environment size", true, |b| resize_map(b, h::ENVIRONMENT_TEXTURE)),
+        ("background size", true, |b| {
+            let background = u(b, h::BACKGROUND_TEXTURE);
+            background != u(b, h::ENVIRONMENT_TEXTURE)
+                && !material_word(b, background.wrapping_sub(1))
+                && resize_map(b, h::BACKGROUND_TEXTURE)
         }),
     ]
 }
@@ -214,9 +426,14 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             // The reference is a full commit of the edited descriptor to a new context.
             // An edit the renderer cannot render at all is reported, not counted.
             let stage = |name: &'static str| move |error: String| format!("{name}: {error}");
+            // Commit wall times in milliseconds; the full reference uses a new context.
+            let mut full_ms = 0.0;
+            let mut incremental_ms = 0.0;
             let reference = (|| -> Result<Vec<Vec<u8>>> {
                 let full = Context::new(backend)?;
+                let started = std::time::Instant::now();
                 full.commit(&edited).map_err(stage("full commit"))?;
+                full_ms = started.elapsed().as_secs_f64() * 1e3;
                 full.images(samples).map_err(stage("full render"))
             })();
             let b = match reference {
@@ -230,16 +447,38 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
             };
+            // Differing f32 count and largest absolute difference, per image.
+            let difference = |a: &[u8], b: &[u8]| -> (usize, f32) {
+                a.chunks_exact(4)
+                    .zip(b.chunks_exact(4))
+                    .fold((0, 0.0f32), |(n, max), (x, y)| {
+                        let x = f32::from_le_bytes(x.try_into().unwrap());
+                        let y = f32::from_le_bytes(y.try_into().unwrap());
+                        if x.to_bits() == y.to_bits() {
+                            (n, max)
+                        } else {
+                            (n + 1, max.max((x - y).abs()))
+                        }
+                    })
+            };
+            let mut differences = Vec::new();
             let outcome = (|| -> Result<(bool, [bool; 3])> {
                 let incremental = Context::new(backend)?;
                 incremental.commit(&base).map_err(stage("base commit"))?;
+                let started = std::time::Instant::now();
                 incremental
                     .commit(&edited)
                     .map_err(stage("edited commit"))?;
+                incremental_ms = started.elapsed().as_secs_f64() * 1e3;
                 let path_incremental = last_commit_incremental(incremental.0)?;
                 let a = incremental
                     .images(samples)
                     .map_err(stage("incremental render"))?;
+                for k in 0..3 {
+                    if a[k] != b[k] {
+                        differences.push(difference(&a[k], &b[k]));
+                    }
+                }
                 Ok((path_incremental, [a[0] == b[0], a[1] == b[1], a[2] == b[2]]))
             })();
             let (pass, json) = match outcome {
@@ -248,7 +487,8 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     (
                         pass,
                         serde_json::json!({"scene": path, "edit": name, "incremental": path_incremental,
-                        "expectedIncremental": expect_incremental, "hdr": same[0], "normal": same[1], "albedo": same[2], "pass": pass}),
+                        "expectedIncremental": expect_incremental, "hdr": same[0], "normal": same[1], "albedo": same[2],
+                        "differences": differences, "pass": pass, "fullMs": full_ms, "commitMs": incremental_ms}),
                     )
                 }
                 Err(error) => (

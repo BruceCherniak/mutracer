@@ -60,6 +60,27 @@ unsafe extern "C" {
     );
     fn mt_core_scene_accept_sync(token: u32, output: *mut *const u8, size: *mut usize);
     fn mt_core_scene_release_sync(token: u32, output: *mut *const u8, size: *mut usize);
+    fn mt_core_scene_light_list(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
+    fn mt_core_scene_instance_colors(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
+    fn mt_core_scene_atlas(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
     fn mt_core_scene_material(
         input: *const u8,
         length: usize,
@@ -674,7 +695,7 @@ pub(super) struct PreparedData {
     pub(super) settings: settings::RenderSettings,
     indexed: bool,
     material_count: usize,
-    light_count: usize,
+    light_count: std::sync::atomic::AtomicUsize,
     authoritative_shader: Vec<u8>,
     authoritative_indices: Vec<u8>,
     authoritative_as_indices: Vec<u8>,
@@ -1040,7 +1061,7 @@ impl PreparedState {
             return Err("Light descriptor must contain exactly 128 bytes".into());
         }
         let w = Words(bytes);
-        if w.u(0) != 1 || w.u(1) >= self.light_count {
+        if w.u(0) != 1 || w.u(1) >= self.light_count.load(std::sync::atomic::Ordering::Acquire) {
             return Err("Invalid light descriptor version/index".into());
         }
         w.reserved(2, 2)?;
@@ -1058,6 +1079,67 @@ impl PreparedState {
             );
         }
         lighting_result(pointer, size, &[7, 8, 24])
+    }
+    /// Replaces the analytic light list from a validated full descriptor.
+    pub(super) fn light_list(&self, bytes: &[u8]) -> Result<LightingUpdates> {
+        let state = self.clone();
+        let bytes = bytes.to_vec();
+        runtime::call(move || {
+            let mut pointer = std::ptr::null();
+            let mut size = 0;
+            unsafe {
+                mt_core_scene_light_list(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    state.token,
+                    &mut pointer,
+                    &mut size,
+                );
+            }
+            lighting_result(pointer, size, &[7, 8, 24])
+        })
+    }
+    /// Instance color update for one batch: `[1, mesh, count, 0]` then RGB per instance.
+    pub(super) fn instance_colors(&self, bytes: &[u8]) -> Result<LightingUpdates> {
+        let state = self.clone();
+        let bytes = bytes.to_vec();
+        runtime::call(move || {
+            let w = Words(&bytes);
+            if bytes.len() < 16 || bytes.len() % 4 != 0 || w.u(0) != 1 || w.u(3) != 0 || w.len() != 4 + w.u(2) * 3 {
+                return Err("Invalid instance color update".into());
+            }
+            w.finite(4, w.len() - 4)?;
+            let mut pointer = std::ptr::null();
+            let mut size = 0;
+            unsafe {
+                mt_core_scene_instance_colors(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    state.token,
+                    &mut pointer,
+                    &mut size,
+                );
+            }
+            lighting_result(pointer, size, &[1, 2, 7, 8, 24])
+        })
+    }
+    /// Repacks the material table and atlas from the full descriptor's textures.
+    pub(super) fn atlas(&self, bytes: &[u8]) -> Result<LightingUpdates> {
+        let state = self.clone();
+        let bytes = bytes.to_vec();
+        runtime::call(move || {
+            let mut pointer = std::ptr::null();
+            let mut size = 0;
+            unsafe {
+                mt_core_scene_atlas(bytes.as_ptr(), bytes.len(), state.token, &mut pointer, &mut size);
+            }
+            lighting_result(pointer, size, &[4, 5, 7, 8, 20, 24])
+        })
+    }
+    /// Records the committed analytic light count for single-light validation.
+    pub(super) fn set_light_count(&self, count: usize) {
+        self.light_count
+            .store(count, std::sync::atomic::Ordering::Release);
     }
     pub(super) fn accept_lighting(&self) -> Result<()> {
         let state = self.clone();
@@ -1205,29 +1287,34 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
             w.u(o + we::BYTE_OFFSET),
             w.u(o + we::DESTINATION),
         );
+        let metadata = matches!(id, 31 | 38 | 41 | 53);
+        // Texture destinations are array layers; the atlas is RGBA8 or RGBA16F.
+        let texture = !metadata && id >= crate::layout::resource::ATLAS;
+        let atlas = id == crate::layout::resource::ATLAS;
+        let format = w.u(o + we::FORMAT);
         if !ids.contains(&id)
             || offset < header_length
             || offset % WORD_BYTES != 0
-            || destination % WORD_BYTES != 0
+            || (!texture && destination % WORD_BYTES != 0)
             || (id != 31 && length % WORD_BYTES != 0)
             || offset > packet.len()
             || length > packet.len() - offset
-            || w.u(o + we::KIND)
-                != if matches!(id, 31 | 38 | 41 | 53) {
-                    3
-                } else {
-                    usize::from(id >= 21)
-                }
-            || w.u(o + we::FORMAT)
-                != if matches!(id, 31 | 38 | 41 | 53) {
-                    0
-                } else if id == 22 {
-                    4
-                } else if id >= 21 {
-                    2
-                } else {
-                    0
-                }
+            || w.u(o + we::KIND) != if metadata { 3 } else { usize::from(texture) }
+            || if atlas {
+                format != crate::layout::format::RGBA8_UNORM
+                    && format != crate::layout::format::RGBA16_FLOAT
+            } else {
+                format
+                    != if metadata {
+                        0
+                    } else if id == 22 {
+                        4
+                    } else if texture {
+                        2
+                    } else {
+                        0
+                    }
+            }
         {
             return Err("Invalid AOT scene write span/format".into());
         }
@@ -1263,7 +1350,7 @@ fn lighting_packet(packet: &[u8], ids: &[usize]) -> Result<LightingUpdates> {
             )?);
             continue;
         }
-        if id >= 7 || id == 3 {
+        if (id >= 7 || id == 3) && !atlas {
             w.finite(offset / WORD_BYTES, length / WORD_BYTES)?;
         }
         if id == 2 {
@@ -1369,11 +1456,11 @@ fn prepare_retained_with_settings_inner(
         authoritative_as_indices: Vec::new(),
         authoritative_bounds: Vec::new(),
         synced: std::sync::atomic::AtomicBool::new(false),
-        light_count: if bytes.len() >= 32 {
+        light_count: std::sync::atomic::AtomicUsize::new(if bytes.len() >= 32 {
             Words(bytes).u(7)
         } else {
             0
-        },
+        }),
         material_count: if bytes.len() >= 28 {
             Words(bytes).u(6)
         } else {

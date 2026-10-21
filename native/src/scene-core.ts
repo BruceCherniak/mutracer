@@ -10,7 +10,7 @@ import {displacementPrismAabbs} from '../../src/renderer/displacementPreparation
 import type {GeometryUpdateState} from '../../src/renderer/geometryUpdateState.js';
 import {vec3} from '../../src/math.js';
 import {markDeformedGeometry} from '../../src/scene/geometryChanges.js';
-import {PackedMeshInstances, sameInstanceMembership} from '../../src/renderer/packedMeshInstances.js';
+import {sameInstanceMembership} from '../../src/renderer/packedMeshInstances.js';
 import {hardwareOpaqueGeometryFlags} from './hwrt-eligibility.js';
 import {ERROR_CODE, VERSION, RESOURCE, KIND, FORMAT, HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, TEXTURE as T, LIGHT as L, CAMERA as C, BATCH as B, PACKET_HEADER as PH, PACKET_ENTRY as PE, WRITE_ENTRY as WE, WORD_BYTES, quantizeDisplacementRange} from './layout.js';
 import {nativePathIntersections} from './path-diagnostics.wgsl.js';
@@ -116,11 +116,21 @@ export function acceptSceneTransform(token: number): Uint8Array {
 // Pending light/environment candidates become authoritative only after the host
 // validates resource shapes and completes GPU writes. Rejected edits never alter
 // the inputs of a subsequent partial update.
-const pendingLighting = new Map<number, {lights: AnalyticLightState[]; rt: ArrayBuffer; environmentPower: number}>();
+const pendingLighting = new Map<number, {lights: AnalyticLightState[]; rt: ArrayBuffer; environmentPower: number; lightTextures?: number[];
+  maps?: {environmentWidth: number; environmentHeight: number; backgroundWidth: number; backgroundHeight: number};
+  atlas?: {table: MaterialData; textureIds: Map<TextureState, number>}}>();
 export function acceptSceneLighting(token: number): Uint8Array {
   const state = retainedScenes.get(token), pending = pendingLighting.get(token);
   if (!state || !pending) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
   state.lights = pending.lights; state.rt = pending.rt; state.environmentPower = pending.environmentPower;
+  if (pending.lightTextures) state.table.lightTexturesIndices = pending.lightTextures;
+  const atlas = pending.atlas;
+  if (atlas) { state.table = atlas.table; state.textureIds = atlas.textureIds; }
+  const maps = pending.maps;
+  if (maps) {
+    state.environmentWidth = maps.environmentWidth; state.environmentHeight = maps.environmentHeight;
+    state.backgroundWidth = maps.backgroundWidth; state.backgroundHeight = maps.backgroundHeight;
+  }
   retainedScenes.set(token, state);
   pendingLighting.delete(token);
   return new Uint8Array(new Uint32Array([1, 0, 0, 0]).buffer);
@@ -265,6 +275,37 @@ function prepareSceneSources(input: {meshes: MeshState[]; textureIds: Map<Textur
   }
   return {jobs, sources};
 }
+function newMaterialData(materials: MaterialState[], lights: AnalyticLightState[]): MaterialData {
+  return new MaterialData(materials, lights.map(light => light.type === 'RectLight' ? light.texture : undefined), texture => {
+    if (!(texture instanceof PixelTexture)) throw new Error('Native scene requires raw pixels.');
+    return Number(texture.pixels.data instanceof Float32Array);
+  }, {maxTextureDimension2D: 4096, maxTextureArrayLayers: 256, maxTextureArrayBytes: 64 * 1024 * 1024});
+}
+function packMapInfo(table: MaterialData, mapCount: number): Float32Array {
+  const mapInfo = new Float32Array(mapCount * 12);
+  mapInfo.set(table.bufferData.mapInfo); mapInfo.set(table.bufferData.mapTransform, mapCount * 4);
+  for (let i = 0; i < table.bufferData.mapUvChannel.length; i++) {
+    mapInfo[mapCount * 8 + i * 4] = table.bufferData.mapUvChannel[i];
+    mapInfo[mapCount * 8 + i * 4 + 1] = table.bufferData.mapColorLinear[i];
+  }
+  return mapInfo;
+}
+/** All atlas layers (at least two), layer after layer. */
+function packAtlas(table: MaterialData): Uint8Array {
+  const atlas = table.atlas, atlasLayers = Math.max(2, atlas.pages.length);
+  const atlasBytes = new Uint8Array(atlas.width * atlas.height * atlasLayers * atlas.bytesPerPixel);
+  for (let layer = 0; layer < atlas.pages.length; layer++) {
+    const data = atlas.floatStorage ? new Uint16Array(atlas.width * atlas.height * 4) : new Uint8Array(atlas.width * atlas.height * 4);
+    for (const placement of atlas.pages[layer].placements) {
+      const texture = table.textures[placement.index];
+      if (!(texture instanceof PixelTexture)) throw new Error('Native scene requires raw pixels.');
+      writeRawAtlasPlacement(data, atlas.width, placement, {image: texture.pixels, flipY: texture.flipY}, atlas.floatStorage);
+    }
+    // scriptc needs both typed-array arms narrowed before reading buffer.
+    atlasBytes.set(new Uint8Array(data instanceof Uint16Array ? data.buffer : data.buffer), layer * atlas.width * atlas.height * atlas.bytesPerPixel);
+  }
+  return atlasBytes;
+}
 function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: FlattendBVH, token: number, hardware?: HardwareScene): Uint8Array {
   const {width, height, environment, background, qualityFlags, environmentDistribution,
     materials, geometries, meshes, lights, backgroundColor, cameraUniform} = input;
@@ -272,10 +313,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const blas = hardware ? new Uint8Array(hardware.records.buffer) : new Uint8Array(concatBLASBuffers(blases));
   const bvh = new Uint8Array(tlas.buffer.byteLength + blas.byteLength);
   bvh.set(new Uint8Array(tlas.buffer)); bvh.set(blas, tlas.buffer.byteLength);
-  const table = new MaterialData(prepared.materials, lights.map(light => light.type === 'RectLight' ? light.texture : undefined), texture => {
-    if (!(texture instanceof PixelTexture)) throw new Error('Native scene requires raw pixels.');
-    return Number(texture.pixels.data instanceof Float32Array);
-  }, {maxTextureDimension2D: 4096, maxTextureArrayLayers: 256, maxTextureArrayBytes: 64 * 1024 * 1024});
+  const table = newMaterialData(prepared.materials, lights);
   const configuration = sceneConfigurations.get(token) ?? defaultSceneConfiguration();
   const geometry = prepared.geometry;
   const attributeLayout = sceneAttributeLayout(geometry);
@@ -290,24 +328,8 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
     hasAlpha: false, hasSceneAlpha: Boolean(constants.HAS_ALPHA),
     hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
     hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES), blasLayoutMask: 1};
-  const mapCount = Number(constants.NUM_MAPS), mapInfo = new Float32Array(mapCount * 12);
-  mapInfo.set(table.bufferData.mapInfo); mapInfo.set(table.bufferData.mapTransform, mapCount * 4);
-  for (let i = 0; i < table.bufferData.mapUvChannel.length; i++) {
-    mapInfo[mapCount * 8 + i * 4] = table.bufferData.mapUvChannel[i];
-    mapInfo[mapCount * 8 + i * 4 + 1] = table.bufferData.mapColorLinear[i];
-  }
-  const atlas = table.atlas, atlasLayers = Math.max(2, atlas.pages.length);
-  const atlasBytes = new Uint8Array(atlas.width * atlas.height * atlasLayers * atlas.bytesPerPixel);
-  for (let layer = 0; layer < atlas.pages.length; layer++) {
-    const data = atlas.floatStorage ? new Uint16Array(atlas.width * atlas.height * 4) : new Uint8Array(atlas.width * atlas.height * 4);
-    for (const placement of atlas.pages[layer].placements) {
-      const texture = table.textures[placement.index];
-      if (!(texture instanceof PixelTexture)) throw new Error('Native scene requires raw pixels.');
-      writeRawAtlasPlacement(data, atlas.width, placement, {image: texture.pixels, flipY: texture.flipY}, atlas.floatStorage);
-    }
-    // scriptc needs both typed-array arms narrowed before reading buffer.
-    atlasBytes.set(new Uint8Array(data instanceof Uint16Array ? data.buffer : data.buffer), layer * atlas.width * atlas.height * atlas.bytesPerPixel);
-  }
+  const mapInfo = packMapInfo(table, Number(constants.NUM_MAPS));
+  const atlas = table.atlas, atlasLayers = Math.max(2, atlas.pages.length), atlasBytes = packAtlas(table);
   const emissiveCache = new EmissiveTriangleCache();
   const emissive = emissiveCache.collect(prepared.emissiveBindings, prepared.materials);
   const {lightData, lightWidth, lightHeight, lightUniform, environmentPmf, choiceCount, totalWeight, emissiveTexels}
@@ -619,15 +641,15 @@ function incrementalTransform(stage: TransformStage, dirty: ReadonlySet<number>,
 }
 
 // Version 1: dimensions/visibility plus linear RGBA32F environment/background.
-// Resource shape or shader-feature changes use a full scene commit instead.
+// Map dimensions may change; adding or removing a map or changing visibility
+// changes shader features and uses a full scene commit instead.
 export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Uint8Array {
   pendingLighting.delete(token);
   const state = retainedScenes.get(token);
   if (!state) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, 12);
   const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
-  if (u[1] !== state.environmentWidth || u[2] !== state.environmentHeight
-    || u[8] !== state.backgroundWidth || u[9] !== state.backgroundHeight
+  if (!u[1] !== !state.environmentWidth || !u[8] !== !state.backgroundWidth
     || u[3] !== Number(!!(state.qualityFlags & 4))) {
     return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
   }
@@ -641,7 +663,8 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
   new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
   if (!background && !u[3]) rt.views.backgroundColor.set(f.slice(4, 8));
   packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
-  pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, environmentPower});
+  pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, environmentPower,
+    maps: {environmentWidth: u[1], environmentHeight: u[2], backgroundWidth: u[8], backgroundHeight: u[9]}});
   const parts: Uint8Array[] = [], records: number[][] = [];
   function add(id: number, kind: number, data: Uint8Array, width: number, height: number, format: number) {
     records.push(resourceRecord(id, kind, data.length, width, height, kind === KIND.TEXTURE ? 1 : 0, format)); parts.push(data);
@@ -682,6 +705,41 @@ export function sceneLightParameters(bytes: Uint8Array, token: number): Uint8Arr
   ], [new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer)]);
 }
 
+// Full descriptor: replaces the analytic light list (count, types, IES profiles,
+// rect-light textures already in the material atlas). Other attachments need a full commit.
+export function sceneLightListParameters(bytes: Uint8Array, token: number): Uint8Array {
+  pendingLighting.delete(token);
+  const state = retainedScenes.get(token);
+  if (!state) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  try {
+    const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+    const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+    const textures: PixelTexture[] = [];
+    for (const [texture, index] of state.textureIds) if (texture instanceof PixelTexture) textures[index] = texture;
+    const lights: AnalyticLightState[] = [], lightTextures: number[] = [], profiles = new Map<string, IESProfile>();
+    for (let i = 0; i < u[H.LIGHT_COUNT]; i++) {
+      const light = decodeLight(bytes, u, f, u[H.LIGHT_OFFSET] + i * L.WORDS, textures, profiles);
+      const texture = light.type === 'RectLight' ? light.texture : undefined;
+      const atlasIndex = texture ? state.table.textures.indexOf(texture) : -1;
+      if (texture && atlasIndex < 0) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+      lights.push(light); lightTextures.push(atlasIndex);
+    }
+    const table = state.table, committedTextures = table.lightTexturesIndices;
+    table.lightTexturesIndices = lightTextures;
+    const lighting = prepareNativeLightSampling(lights, table, state.emissive, state.environmentPower);
+    table.lightTexturesIndices = committedTextures;
+    const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
+    rt.views.lightsCount[0] = lights.length;
+    packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
+    pendingLighting.set(token, {lights, rt: rt.buffer, environmentPower: state.environmentPower, lightTextures});
+    return updatePacket([
+      [7, 0, rt.buffer.byteLength, 0, 0, 0, 0, 0],
+      [8, 0, lighting.lightUniform.byteLength, 0, 0, 0, 0, 0],
+      [24, 1, lighting.lightData.byteLength, lighting.lightWidth, lighting.lightHeight, 1, 2, 0]
+    ], [new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer)]);
+  } catch (error) { return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error); }
+}
+
 // Version 1, source mesh index, local instance index+1 (0=mesh world matrix),
 // reserved=0, matrix[16]. Candidate meshes never mutate accepted source state.
 function prepareTransformUpdate(bytes: Uint8Array, token: number, native: boolean): Uint8Array {
@@ -705,12 +763,140 @@ function prepareTransformUpdate(bytes: Uint8Array, token: number, native: boolea
   const changedSlots = dirtyPreparedInstanceIndices(state.bindings, new Set([previous]), state.instances);
   const dirty = new Set<number>();
   for (const slot of changedSlots) {
-    if (!u[2] || !(state.instances instanceof PackedMeshInstances) || state.instances.localIndices[slot] === u[2] - 1) dirty.add(slot);
+    if (!u[2] || Array.isArray(state.instances) || state.instances.localIndices[slot] === u[2] - 1) dirty.add(slot);
   }
   const instances = updateMeshInstanceTransforms(bindings, state.instances, dirty), stage = {meshes, bindings, instances};
   if (sameInstanceMembership(state.instances, instances)) return incrementalTransform(stage, dirty, token);
   if (native) {transformStages.set(token, stage); return state.hardware ? resourcePacket([], [], 0, 0) : requestInstances(instances);}
   return packTransformUpdate(stage, buildTLAS(instances, state.blases), token);
+}
+function samePixelTexture(a: PixelTexture, b: PixelTexture): boolean {
+  if (a.pixels.width !== b.pixels.width || a.pixels.height !== b.pixels.height || a.flipY !== b.flipY || a.uvChannel !== b.uvChannel
+    || !Object.is(a.uvScale[0], b.uvScale[0]) || !Object.is(a.uvScale[1], b.uvScale[1])
+    || !Object.is(a.uvOffset[0], b.uvOffset[0]) || !Object.is(a.uvOffset[1], b.uvOffset[1])) return false;
+  const x = a.pixels.data, y = b.pixels.data;
+  if (x instanceof Float32Array && y instanceof Float32Array) {
+    for (let i = 0; i < x.length; i++) if (!Object.is(x[i], y[i])) return false;
+    return true;
+  }
+  if (x instanceof Uint8Array && y instanceof Uint8Array) {
+    for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return false;
+    return true;
+  }
+  return false;
+}
+function swapTexture(texture: TextureState | undefined, swaps: Map<TextureState, TextureState>): TextureState | undefined {
+  if (!texture) return texture;
+  const next = swaps.get(texture);
+  return next ? next : texture;
+}
+function swapMaterialTextures(m: MaterialState, swaps: Map<TextureState, TextureState>) {
+  m.map = swapTexture(m.map, swaps); m.alphaMap = swapTexture(m.alphaMap, swaps); m.emissiveMap = swapTexture(m.emissiveMap, swaps);
+  m.normalMap = swapTexture(m.normalMap, swaps); m.metallicRoughnessMap = swapTexture(m.metallicRoughnessMap, swaps);
+  m.roughnessMap = swapTexture(m.roughnessMap, swaps); m.metalnessMap = swapTexture(m.metalnessMap, swaps);
+  m.transmissionMap = swapTexture(m.transmissionMap, swaps); m.thinFilmMap = swapTexture(m.thinFilmMap, swaps);
+  m.displacementMap = swapTexture(m.displacementMap, swaps); m.coatWeightMap = swapTexture(m.coatWeightMap, swaps);
+  m.coatRoughnessMap = swapTexture(m.coatRoughnessMap, swaps); m.fuzzColorMap = swapTexture(m.fuzzColorMap, swaps);
+  m.fuzzRoughnessMap = swapTexture(m.fuzzRoughnessMap, swaps); m.specularWeightMap = swapTexture(m.specularWeightMap, swaps);
+  m.specularColorMap = swapTexture(m.specularColorMap, swaps); m.anisotropyMap = swapTexture(m.anisotropyMap, swaps);
+  m.coatNormalMap = swapTexture(m.coatNormalMap, swaps);
+}
+function swapSceneTextures(state: {source: MaterialState[]; ordered: MaterialState[]; lights: AnalyticLightState[]}, swaps: Map<TextureState, TextureState>) {
+  for (const m of state.source) swapMaterialTextures(m, swaps);
+  for (const m of state.ordered) swapMaterialTextures(m, swaps);
+  for (const light of state.lights) if (light.type === 'RectLight') light.texture = swapTexture(light.texture, swaps);
+}
+function sameConstants(a: Record<string, boolean | number>, b: Record<string, boolean | number>): boolean {
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  for (const key of keys) if (a[key] !== b[key]) return false;
+  return true;
+}
+
+// Full descriptor. Changed textures (same count) repack the material table,
+// map info and atlas. Displacement maps, shader constant changes and atlas
+// shape changes use a full scene commit instead.
+export function sceneAtlasParameters(bytes: Uint8Array, token: number): Uint8Array {
+  pendingLighting.delete(token);
+  const state = retainedScenes.get(token);
+  if (!state) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  try {
+    const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+    const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+    const previous: TextureState[] = [];
+    for (const [texture, index] of state.textureIds) previous[index] = texture;
+    if (previous.length !== u[H.TEXTURE_COUNT]) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+    const swaps = new Map<TextureState, TextureState>(), restore = new Map<TextureState, TextureState>();
+    const textureIds = new Map<TextureState, number>();
+    for (let i = 0; i < previous.length; i++) {
+      const old = previous[i], fresh = decodeTexture(bytes, u, f, u[H.TEXTURE_OFFSET] + i * T.WORDS);
+      if (old instanceof PixelTexture && samePixelTexture(old, fresh)) { textureIds.set(old, i); continue; }
+      textureIds.set(fresh, i); swaps.set(old, fresh); restore.set(fresh, old);
+    }
+    for (const m of state.ordered) {
+      const displacement = m.displacementMap;
+      if (displacement && swaps.has(displacement)) return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+    }
+    const bevelSamples = (sceneConfigurations.get(token) ?? defaultSceneConfiguration()).bevelSamples;
+    const geometry = state.prepared.geometry;
+    const before = wgpuMaterialConstants(state.ordered, state.table, geometry, bevelSamples);
+    swapSceneTextures(state, swaps);
+    const table = newMaterialData(state.ordered, state.lights);
+    const after = wgpuMaterialConstants(state.ordered, table, geometry, bevelSamples);
+    const atlas = table.atlas, committed = state.table.atlas, layers = Math.max(2, atlas.pages.length);
+    if (!sameConstants(before, after) || atlas.width !== committed.width || atlas.height !== committed.height
+      || layers !== Math.max(2, committed.pages.length) || atlas.floatStorage !== committed.floatStorage) {
+      swapSceneTextures(state, restore);
+      return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+    }
+    const lighting = prepareNativeLightSampling(state.lights, table, state.emissive, state.environmentPower);
+    const rt = makeRayTraceUniform(); new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
+    packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
+    pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, environmentPower: state.environmentPower, atlas: {table, textureIds}});
+    const records: number[][] = [], parts: Uint8Array[] = [], destinations: number[] = [];
+    function add(id: number, kind: number, data: Uint8Array, width: number, height: number, format: number, destination: number) {
+      records.push(resourceRecord(id, kind, data.length, width, height, kind === KIND.TEXTURE ? 1 : 0, format)); parts.push(data); destinations.push(destination);
+    }
+    add(RESOURCE.MATERIALS, KIND.BUFFER, new Uint8Array(table.getBufferArray().buffer), 0, 0, 0, 0);
+    add(RESOURCE.MAP_INFO, KIND.BUFFER, new Uint8Array(packMapInfo(table, Number(after.NUM_MAPS)).buffer), 0, 0, 0, 0);
+    add(RESOURCE.TRACE_UNIFORM, KIND.BUFFER, new Uint8Array(rt.buffer), 0, 0, 0, 0);
+    add(RESOURCE.LIGHT_UNIFORM, KIND.BUFFER, new Uint8Array(lighting.lightUniform.buffer), 0, 0, 0, 0);
+    // Atlas layers are written one by one; the destination is the array layer.
+    const pixels = packAtlas(table), layerBytes = atlas.width * atlas.height * atlas.bytesPerPixel;
+    const format = atlas.floatStorage ? FORMAT.RGBA16_FLOAT : FORMAT.RGBA8_UNORM;
+    for (let layer = 0; layer < layers; layer++)
+      add(RESOURCE.ATLAS, KIND.TEXTURE, pixels.slice(layer * layerBytes, (layer + 1) * layerBytes), atlas.width, atlas.height, format, layer);
+    add(RESOURCE.LIGHT_SAMPLING, KIND.TEXTURE, new Uint8Array(lighting.lightData.buffer), lighting.lightWidth, lighting.lightHeight, FORMAT.RGBA32_FLOAT, 0);
+    return updatePacket(records, parts, destinations);
+  } catch (error) { return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error); }
+}
+
+// Version 1, source mesh index, instance count, reserved=0, linear RGB[count*3].
+// Membership is unchanged, so only that batch's instance records are rewritten.
+export function sceneInstanceColorParameters(bytes: Uint8Array, token: number): Uint8Array {
+  pendingTransforms.delete(token); transformStages.delete(token);
+  const state = retainedScenes.get(token);
+  const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
+  const previous = state?.meshes[u[1]], data = previous?.instanceData;
+  if (!state || !previous || !data) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
+  if (u[0] !== 1 || u[2] !== data.count || u.length !== 4 + data.count * 3 || !data.colors || Array.isArray(state.instances))
+    return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+  try {
+    const colors = new Float32Array(bytes.buffer, bytes.byteOffset + 16, data.count * 3).slice();
+    const mesh = new MeshState(previous.geometry, previous.materials);
+    mesh.transform = new Float32Array(matrixStorage(previous.transform));
+    mesh.setInstanceState(new InstanceState({count: data.count, transforms: data.transforms, colors}));
+    const meshes = state.meshes.slice(); meshes[u[1]] = mesh;
+    const bindings = state.bindings.map(b => ({mesh: b.mesh === previous ? mesh : b.mesh, geometry: b.geometry,
+      blasIndex: b.blasIndex, materialIndices: b.materialIndices, displacementScale: b.displacementScale, bvhBounds: b.bvhBounds}));
+    const dirty = dirtyPreparedInstanceIndices(state.bindings, new Set([previous]), state.instances);
+    const instances = state.instances.copy();
+    for (const slot of dirty) {
+      const local = instances.localIndices[slot];
+      for (let k = 0; k < 3; k++) instances.colors[slot * 3 + k] = colors[local * 3 + k];
+    }
+    return incrementalTransform({meshes, bindings, instances}, dirty, token);
+  } catch (error) { return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error); }
 }
 function packTransformUpdate(stage: TransformStage, tlas: FlattendBVH, token: number): Uint8Array {
   const state = retainedScenes.get(token);

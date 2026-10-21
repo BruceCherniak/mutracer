@@ -151,9 +151,8 @@ the record layout and lifetime rules.
 
 Use `mt_context_update_environment` to replace linear environment/background map
 pixels or a solid background color while retaining geometry, material textures
-and the pipeline. Map dimensions, map presence and background visibility must
-match the committed scene; changes require a full commit. Moving between zero
-and nonzero map power can also require a full commit. The call restarts
+and the pipeline. Maps may change dimensions; map presence and background
+visibility must match the committed scene, and changes require a full commit. The call restarts
 accumulation, rejects active jobs and preserves the scene on validation rejection.
 Its cost grows with map size and the number of emissive triangles. See
 [the context header](include/mutracer-context.h) for the record format and limits.
@@ -162,8 +161,7 @@ Use `mt_context_update_light` to change an existing rectangular, spherical,
 directional or spot light's color, intensity, size, spread/angles or transform.
 It retains geometry, acceleration structures, material textures and the pipeline;
 existing rectangular emission textures and spot IES profiles are preserved.
-Light type/count and attachment changes require a full commit. Some zero/nonzero
-power transitions also require a full commit. Successful updates restart
+Light type/count and attachment changes require a full commit. Successful updates restart
 accumulation. Active jobs reject updates; validation rejection preserves the scene.
 Update cost grows with the number of lights and emissive triangles. The
 [context header](include/mutracer-context.h) specifies the record and lifetime rules.

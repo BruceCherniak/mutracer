@@ -481,10 +481,11 @@ unsafe fn commit_with_settings(
         return status;
     }
     if let Some((retained, previous)) = candidate {
-        // Validation and sync failures are reported by full preparation.
-        let steps = retained
-            .sync(&previous, bytes)
+        // The TS core trusts validated descriptors only. Validation and sync
+        // failures fall through to full preparation, which reports them.
+        let steps = scene::validate(bytes)
             .ok()
+            .and_then(|()| retained.sync(&previous, bytes).ok())
             .and_then(|sync| commit_plan::plan(&previous, bytes, &sync));
         let mut finished = false;
         let status = action(error, capacity, |registry| {
@@ -749,7 +750,10 @@ fn apply_incremental(
             | commit_plan::Step::Material(b)
             | commit_plan::Step::Light(b)
             | commit_plan::Step::Environment(b)
-            | commit_plan::Step::Camera(b) => (b.as_ptr(), b.len()),
+            | commit_plan::Step::Camera(b)
+            | commit_plan::Step::LightList(b)
+            | commit_plan::Step::InstanceColors(b)
+            | commit_plan::Step::Atlas(b) => (b.as_ptr(), b.len()),
         };
         let applied = unsafe {
             match step {
@@ -759,6 +763,9 @@ fn apply_incremental(
                 commit_plan::Step::Light(_) => update_light_in(context, input, length),
                 commit_plan::Step::Environment(_) => update_environment_in(context, input, length),
                 commit_plan::Step::Camera(_) => update_camera_in(context, input, length),
+                commit_plan::Step::LightList(bytes) => update_light_list_in(context, bytes),
+                commit_plan::Step::InstanceColors(bytes) => update_instance_colors_in(context, bytes),
+                commit_plan::Step::Atlas(bytes) => update_atlas_in(context, bytes),
             }
         };
         match applied {
@@ -1143,11 +1150,40 @@ unsafe fn update_transform_in(
         .ok_or("No retained transform preparation")?
         .transform(bytes)
         .map_err(rejected)?;
+    apply_instance_writes(context, &packed)
+}
+/// Material table and atlas repack after texture edits (incremental commit only).
+fn update_atlas_in(context: &mut Context, bytes: &[u8]) -> Result<()> {
+    let scene = ready(context)?;
+    let retained = scene.retained.clone().ok_or("No retained material preparation")?;
+    let packed = retained.atlas(bytes).map_err(rejected)?;
     scene.validate_lighting(&packed)?;
+    context.failed = true;
+    context.scene.as_mut().unwrap().update_lighting(&packed)?;
+    retained.accept_lighting()?;
+    context.job = None;
+    context.failed = false;
+    Ok(())
+}
+/// Instance color update for one batch (incremental commit only).
+fn update_instance_colors_in(context: &mut Context, bytes: &[u8]) -> Result<()> {
+    let scene = ready(context)?;
+    let packed = scene
+        .retained
+        .as_ref()
+        .ok_or("No retained transform preparation")?
+        .instance_colors(bytes)
+        .map_err(rejected)?;
+    apply_instance_writes(context, &packed)
+}
+/// Applies prepared TLAS, instance and lighting writes, then accepts the transform stage.
+fn apply_instance_writes(context: &mut Context, packed: &scene::LightingUpdates) -> Result<()> {
+    let scene = ready(context)?;
+    scene.validate_lighting(packed)?;
     let hardware = scene
         .hardware
         .as_ref()
-        .map(|hw| hw.transform_plan(scene.scene.hwrt.as_ref().unwrap(), &packed))
+        .map(|hw| hw.transform_plan(scene.scene.hwrt.as_ref().unwrap(), packed))
         .transpose()?;
     context.failed = true;
     let scene = context.scene.as_mut().unwrap();
@@ -1159,7 +1195,7 @@ unsafe fn update_transform_in(
             scene.scene.hwrt.as_mut().unwrap(),
         )?;
     }
-    scene.update_lighting(&packed)?;
+    scene.update_lighting(packed)?;
     scene.retained.as_ref().unwrap().accept_transform()?;
     context.job = None;
     context.failed = false;
@@ -1216,6 +1252,25 @@ unsafe fn update_light_in(context: &mut Context, input: *const u8, length: usize
         .as_ref()
         .unwrap()
         .accept_lighting()?;
+    context.job = None;
+    context.failed = false;
+    Ok(())
+}
+/// Replaces the analytic light list from a validated full descriptor.
+fn update_light_list_in(context: &mut Context, bytes: &[u8]) -> Result<()> {
+    let scene = ready(context)?;
+    let retained = scene
+        .retained
+        .clone()
+        .ok_or("No retained light preparation")?;
+    let packed = retained.light_list(bytes)?;
+    scene.validate_lighting(&packed)?;
+    context.failed = true;
+    context.scene.as_mut().unwrap().update_lighting(&packed)?;
+    retained.accept_lighting()?;
+    retained.set_light_count(u32::from_le_bytes(
+        bytes[layout::header::LIGHT_COUNT * 4..][..4].try_into()?,
+    ) as usize);
     context.job = None;
     context.failed = false;
     Ok(())

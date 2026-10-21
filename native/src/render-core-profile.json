@@ -303,6 +303,33 @@
         "u32"
       ],
       "returns": "bytes"
+    },
+    {
+      "export": "sceneLightListParameters",
+      "symbol": "mt_core_scene_light_list",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "sceneInstanceColorParameters",
+      "symbol": "mt_core_scene_instance_colors",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
+    },
+    {
+      "export": "sceneAtlasParameters",
+      "symbol": "mt_core_scene_atlas",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
     }
   ]
 }

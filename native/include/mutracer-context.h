@@ -194,9 +194,8 @@ int32_t mt_context_update_material(mt_context handle, const uint8_t *input, size
  * followed by environment then background linear RGBA32F pixels, row-major.
  * Missing maps have both dimensions zero and no pixels. Each map is <=4M pixels,
  * each dimension <=16382. Floats must be finite; map pixels must be nonnegative.
- * Dimensions/map presence/hidden state must match the committed scene. Changes
- * to these, or switching between zero and nonzero map power, can return
- * MT_ERROR_FULL_COMMIT_REQUIRED.
+ * Map dimensions may change. Map presence and hidden state must match the
+ * committed scene; changing them returns MT_ERROR_FULL_COMMIT_REQUIRED.
  * Every successful call resets samples/expires the job, including identical input.
  * Rejects active jobs/failed scenes; validation rejection preserves scene/job.
  * GPU execution failure marks the scene failed. Caller input is copied.
@@ -209,8 +208,8 @@ int32_t mt_context_update_environment(mt_context handle, const uint8_t *input, s
  * must be zero: existing rectangular textures and spot IES profiles are preserved.
  * Supports color, intensity, size/radius, spread/angles and affine transform.
  * Values follow the full scene's light validation. Type/count/attachment changes
- * require full commit; type changes and some zero/nonzero power transitions
- * return MT_ERROR_FULL_COMMIT_REQUIRED. No addition/removal
+ * require full commit; type changes return MT_ERROR_FULL_COMMIT_REQUIRED.
+ * No addition/removal
  * through this call.
  * Successful calls reset samples/expire the last job, even for identical input.
  * Rejects active jobs/failed scenes. Validation rejection preserves scene/job;

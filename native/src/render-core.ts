@@ -105,3 +105,10 @@ export function syncNativeScene(bytes: Uint8Array, token: number): Uint8Array {
 }
 export function acceptNativeScene(token: number): Uint8Array { return acceptScene(token); }
 export function releaseNativeScene(token: number): Uint8Array { return releaseScene(token); }
+
+import {sceneLightListParameters as prepareLightList} from './scene-core.js';
+export function sceneLightListParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareLightList(bytes, token); }
+import {sceneInstanceColorParameters as prepareInstanceColors} from './scene-core.js';
+export function sceneInstanceColorParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareInstanceColors(bytes, token); }
+import {sceneAtlasParameters as prepareAtlas} from './scene-core.js';
+export function sceneAtlasParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareAtlas(bytes, token); }

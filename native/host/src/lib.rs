@@ -116,6 +116,13 @@ static ENTRY_LOCK: Mutex<()> = Mutex::new(());
 #[cfg(test)]
 static ABI_TEST_LOCK: Mutex<()> = Mutex::new(());
 
+/// Textures a retained lighting update may recreate at a new shape.
+const RESIZABLE_TEXTURES: [usize; 4] = [
+    layout::resource::ENVIRONMENT,
+    layout::resource::ENVIRONMENT_CDF,
+    layout::resource::BACKGROUND,
+    layout::resource::LIGHT_SAMPLING,
+];
 #[derive(Clone)]
 struct Scene {
     width: u32,
@@ -369,6 +376,7 @@ struct GpuScene {
     pipeline: wgpu::ComputePipeline,
     groups: Vec<wgpu::BindGroup>,
     textures: HashMap<usize, wgpu::Texture>,
+    samplers: HashMap<usize, wgpu::Sampler>,
     hardware: Option<hardware::Resources>,
     compile_seconds: f64,
     samples: u32,
@@ -685,6 +693,7 @@ impl GpuScene {
             pipeline,
             groups,
             textures: textures,
+            samplers,
             hardware,
             compile_seconds,
             samples: 0,
@@ -812,7 +821,7 @@ impl GpuScene {
     }
     fn validate_lighting(&self, updates: &scene::LightingUpdates) -> Result<()> {
         for (id, offset, width, height, data) in updates {
-            if *id < 21 {
+            if *id < layout::resource::ATLAS {
                 let size = self
                     .buffers
                     .get(id)
@@ -822,16 +831,19 @@ impl GpuScene {
                     return Err("Full scene commit required: scene write exceeds buffer".into());
                 }
             } else {
-                if *offset != 0 {
-                    return Err("Texture write destination must be zero".into());
-                }
                 let texture = self.textures.get(id).ok_or("Missing lighting texture")?;
-                if texture.width() != *width || texture.height() != *height {
-                    return Err(
-                        "Full scene commit required: light sampling texture shape changed".into(),
-                    );
+                // A texture write's destination is its array layer.
+                if *offset >= u64::from(texture.depth_or_array_layers()) {
+                    return Err("Texture write layer out of range".into());
                 }
-                let bpp = if *id == 22 { 8 } else { 16 };
+                // Environment, background and light sampling textures are
+                // recreated at the new shape; other textures need a full commit.
+                if (texture.width() != *width || texture.height() != *height)
+                    && !RESIZABLE_TEXTURES.contains(id)
+                {
+                    return Err("Full scene commit required: texture shape changed".into());
+                }
+                let bpp = texture.format().block_copy_size(None).unwrap_or(0) as usize;
                 if data.len() != *width as usize * *height as usize * bpp {
                     return Err("Lighting texture size mismatch".into());
                 }
@@ -992,18 +1004,60 @@ impl GpuScene {
                 json!({"nativeUploadProfile": {"writeBytes": updates.iter().map(|(_,_,_,_,data)| data.len()).sum::<usize>(), "resources": updates.iter().map(|(id,offset,_,_,data)| json!({"id": id,"offset":offset,"bytes": data.len()})).collect::<Vec<_>>()}})
             );
         }
+        let mut replaced = Vec::new();
+        for (id, _, width, height, _) in updates {
+            let Some(current) = self
+                .textures
+                .get(id)
+                .filter(|t| t.width() != *width || t.height() != *height)
+            else {
+                continue;
+            };
+            let texture = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("MuTracer texture"),
+                size: wgpu::Extent3d {
+                    width: *width,
+                    height: *height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: current.format(),
+                usage: current.usage(),
+                view_formats: &[],
+            });
+            if let Some(record) = self.scene.textures.iter_mut().find(|t| t.id == *id) {
+                (record.width, record.height) = (*width, *height);
+            }
+            self.textures.insert(*id, texture);
+            replaced.push(*id);
+        }
+        if !replaced.is_empty() {
+            self.rebind_textures(&replaced)?;
+        }
         for (id, offset, width, height, data) in updates {
-            if *id < 21 {
+            if *id < layout::resource::ATLAS {
                 self.gpu
                     .queue
                     .write_buffer(&self.buffers[id], *offset, data);
             } else {
+                let texture = &self.textures[id];
                 self.gpu.queue.write_texture(
-                    self.textures[id].as_image_copy(),
+                    wgpu::TexelCopyTextureInfo {
+                        texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: 0,
+                            y: 0,
+                            z: *offset as u32,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
                     data,
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
-                        bytes_per_row: Some(*width * if *id == 22 { 8 } else { 16 }),
+                        bytes_per_row: Some(*width * texture.format().block_copy_size(None).unwrap_or(0)),
                         rows_per_image: Some(*height),
                     },
                     wgpu::Extent3d {
@@ -1015,6 +1069,45 @@ impl GpuScene {
             }
         }
         self.reset_raw()
+    }
+    /// Rebuilds the bind groups that sample any of the `replaced` textures.
+    fn rebind_textures(&mut self, replaced: &[usize]) -> Result<()> {
+        let views: HashMap<_, _> = self
+            .textures
+            .iter()
+            .map(|(id, texture)| (*id, texture.create_view(&Default::default())))
+            .collect();
+        for (index, group) in self.scene.bind_groups.iter().enumerate() {
+            let uses = |entry: &Binding| {
+                matches!(entry.kind, BindingKind::Texture) && replaced.contains(&entry.id)
+            };
+            if !group.entries.iter().any(uses) {
+                continue;
+            }
+            if index == layout::group::SCENE {
+                return Err("Scene group textures cannot be resized".into());
+            }
+            let entries: Vec<_> = group
+                .entries
+                .iter()
+                .map(|entry| wgpu::BindGroupEntry {
+                    binding: entry.binding,
+                    resource: match entry.kind {
+                        BindingKind::Buffer => self.buffers[&entry.id].as_entire_binding(),
+                        BindingKind::Texture => wgpu::BindingResource::TextureView(&views[&entry.id]),
+                        BindingKind::Sampler => {
+                            wgpu::BindingResource::Sampler(&self.samplers[&entry.id])
+                        }
+                    },
+                })
+                .collect();
+            self.groups[index] = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("MuTracer capture resources"),
+                layout: &self.pipeline.get_bind_group_layout(index as u32),
+                entries: &entries,
+            });
+        }
+        Ok(())
     }
     fn update_material(&mut self, packed: &[u8]) -> Result<()> {
         let buffer = self
