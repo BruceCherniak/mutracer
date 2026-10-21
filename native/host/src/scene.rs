@@ -51,6 +51,15 @@ unsafe extern "C" {
         size: *mut usize,
     );
     fn mt_core_scene_release(token: u32, output: *mut *const u8, size: *mut usize);
+    fn mt_core_scene_sync(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
+    fn mt_core_scene_accept_sync(token: u32, output: *mut *const u8, size: *mut usize);
+    fn mt_core_scene_release_sync(token: u32, output: *mut *const u8, size: *mut usize);
     fn mt_core_scene_material(
         input: *const u8,
         length: usize,
@@ -670,6 +679,8 @@ pub(super) struct PreparedData {
     authoritative_indices: Vec<u8>,
     authoritative_as_indices: Vec<u8>,
     authoritative_bounds: Vec<u8>,
+    /// Whether the TS sync state mirrors the committed descriptor.
+    synced: std::sync::atomic::AtomicBool,
 }
 impl Drop for PreparedData {
     fn drop(&mut self) {
@@ -707,7 +718,131 @@ impl<'a> IntoIterator for &'a LightingUpdates {
         self.resources.iter()
     }
 }
+/// Change packet from the descriptor sync; see native/src/scene-sync.ts.
+pub(super) struct SceneSync {
+    pub meshes: u32,
+    pub lights: bool,
+    pub background: bool,
+    pub camera: bool,
+    pub resolution: bool,
+    pub quality: bool,
+    pub transforms: Vec<usize>,
+    pub colors: Vec<usize>,
+    pub geometries: Vec<usize>,
+    pub materials: Vec<usize>,
+}
+impl SceneSync {
+    fn parse(packet: &[u8]) -> Result<Self> {
+        let w = Words(packet);
+        if packet.len() < 44 || packet.len() % 4 != 0 || w.u(0) != 1 || w.u(1) > 2 {
+            return Err("Invalid native scene sync packet".into());
+        }
+        let mut at = 7;
+        let list = |at: &mut usize| -> Result<Vec<usize>> {
+            let count = if *at < w.len() { w.u(*at) } else { usize::MAX };
+            if count > w.len() - *at - 1 {
+                return Err("Invalid native scene sync list".into());
+            }
+            let items = (0..count).map(|i| w.u(*at + 1 + i)).collect();
+            *at += 1 + count;
+            Ok(items)
+        };
+        let transforms = list(&mut at)?;
+        let colors = list(&mut at)?;
+        let geometries = list(&mut at)?;
+        let materials = list(&mut at)?;
+        Ok(Self {
+            meshes: w.u(1) as u32,
+            lights: w.u(2) != 0,
+            background: w.u(3) != 0,
+            camera: w.u(4) != 0,
+            resolution: w.u(5) != 0,
+            quality: w.u(6) != 0,
+            transforms,
+            colors,
+            geometries,
+            materials,
+        })
+    }
+}
 impl PreparedState {
+    /// Diffs `next` against the synced descriptor; the first call syncs `previous`.
+    pub(super) fn sync(&self, previous: &[u8], next: &[u8]) -> Result<SceneSync> {
+        let state = self.clone();
+        let (previous, next) = (previous.to_vec(), next.to_vec());
+        runtime::call(move || {
+            if !state.synced.load(std::sync::atomic::Ordering::Acquire) {
+                state.sync_step(&previous)?;
+                state.accept_sync_inner()?;
+                state
+                    .synced
+                    .store(true, std::sync::atomic::Ordering::Release);
+            }
+            SceneSync::parse(&state.sync_step(&next)?)
+        })
+    }
+    fn sync_step(&self, bytes: &[u8]) -> Result<Vec<u8>> {
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            mt_core_scene_sync(
+                bytes.as_ptr(),
+                bytes.len(),
+                self.token,
+                &mut pointer,
+                &mut size,
+            );
+        }
+        if pointer.is_null() || size < 16 || size > MAX_PREPARED_BYTES {
+            return Err("Invalid AOT scene sync result".into());
+        }
+        let packet = unsafe {
+            let result = copy_core_result(pointer, size, size);
+            mt_core_collect();
+            result?
+        };
+        exception_packet(&packet)?;
+        Ok(packet)
+    }
+    /// Drops the sync state after an abandoned incremental commit; the next sync rebuilds it.
+    pub(super) fn reset_sync(&self) -> Result<()> {
+        let state = self.clone();
+        runtime::call(move || {
+            let mut pointer = std::ptr::null();
+            let mut size = 0;
+            unsafe {
+                mt_core_scene_release_sync(state.token, &mut pointer, &mut size);
+                let result = copy_core_result(pointer, size, 16);
+                mt_core_collect();
+                result?;
+            }
+            state
+                .synced
+                .store(false, std::sync::atomic::Ordering::Release);
+            Ok(())
+        })
+    }
+    /// Accepts the last sync once its changes have been applied.
+    pub(super) fn accept_sync(&self) -> Result<()> {
+        let state = self.clone();
+        runtime::call(move || state.accept_sync_inner())
+    }
+    fn accept_sync_inner(&self) -> Result<()> {
+        let mut pointer = std::ptr::null();
+        let mut size = 0;
+        unsafe {
+            mt_core_scene_accept_sync(self.token, &mut pointer, &mut size);
+        }
+        let packet = unsafe {
+            let result = copy_core_result(pointer, size, 16);
+            mt_core_collect();
+            result?
+        };
+        if packet[..4] != 1u32.to_le_bytes() {
+            return Err("Native scene sync acceptance failed".into());
+        }
+        Ok(())
+    }
     fn native_update(
         &self,
         begin: NativeStep,
@@ -1233,6 +1368,7 @@ fn prepare_retained_with_settings_inner(
         authoritative_indices: Vec::new(),
         authoritative_as_indices: Vec::new(),
         authoritative_bounds: Vec::new(),
+        synced: std::sync::atomic::AtomicBool::new(false),
         light_count: if bytes.len() >= 32 {
             Words(bytes).u(7)
         } else {

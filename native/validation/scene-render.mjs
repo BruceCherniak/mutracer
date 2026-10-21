@@ -54,6 +54,11 @@ for (const variant of ['baseline', 'textures', 'transforms', 'orthographic', 'em
     run(`render-${variant}`, sceneHost, [resolve(out, variant === 'baseline' ? 'image' : variant), String(samples), variant, ...(variant === 'baseline' ? ['repeat'] : [])]);
 run('minimal-host', minimalHost, [String(Math.min(samples, 16))]);
 run('verify-scenes', process.execPath, ['native/validation/scene-verify.mjs']);
+// Incremental commits must render exactly like full commits of the same descriptor.
+const fixtures = ['baseline', 'textures', 'transforms', 'orthographic', 'emissive', 'missing-normals', 'float-textures', 'sphere-light', 'directional-light', 'spot-light', 'alpha', 'v2-environment', 'v2-environment-only', 'v2-background', 'v2-hidden-background', 'v2-film', 'v2-medium', 'v2-alpha', 'v2-bevel', 'v2-vertices', 'v2-multimaterial', 'v2-instances', 'v2-empty-batch', 'v3-displacement-uv', 'v3-displacement-triplanar', 'v3-displacement-spherical', 'v3-displacement-cylindrical', 'v3-displacement-negative', 'v3-displacement-bytes', 'v3-displacement-zero', 'v3-ies', 'v3-ies-shared', 'v3-rect-texture']
+  .map(variant => resolve(out, variant === 'baseline' ? 'image' : variant, 'scene-input.bin'));
+const oracle = run('incremental-oracle', resolve(target, 'release', executable('incremental-oracle')), [String(Math.min(samples, 8)), '0', ...fixtures]);
+writeFileSync(resolve(out, 'incremental-oracle.jsonl'), oracle.stdout);
 // Both baseline renders execute in one C process with reset/collection between calls.
 for (const name of ['render', 'normal', 'albedo'])
     if (!readFileSync(resolve(out, `image/${name}.rgba32f`)).equals(readFileSync(resolve(out, `image/repeat/${name}.rgba32f`))))

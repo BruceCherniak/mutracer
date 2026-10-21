@@ -13,6 +13,7 @@ use std::{
 use wgpu::util::DeviceExt;
 #[macro_use]
 pub mod logging;
+mod commit_plan;
 pub mod context;
 pub mod denoise;
 mod denoise_ffi;

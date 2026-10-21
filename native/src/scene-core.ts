@@ -16,6 +16,7 @@ import {ERROR_CODE, VERSION, RESOURCE, KIND, FORMAT, HEADER as H, GEOMETRY as G,
 import {nativePathIntersections} from './path-diagnostics.wgsl.js';
 import type IESProfile from '../../src/scene/IESProfile.js';
 import {computeDisplacementMinmax, computeTrianglesDisplacementRange} from '../../src/renderer/displacementPreparation.js';
+import {releaseNativeScene} from './scene-sync.js';
 import {decodeTexture, decodeMaterial, decodeGeometry, decodeMeshMaterials, decodeInstances, decodeLight, lightFromRecord} from './scene-records.js';
 import { envMapDistribution } from '../../src/renderer/envMapDistribution.js';
 import Geometry, { Attribute } from '../../src/scene/Geometry.js';
@@ -129,7 +130,7 @@ export function retainedSceneParameters(bytes: Uint8Array, token: number): Uint8
   catch (error) { retainedScenes.delete(token); return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error);}
 }
 export function releaseSceneParameters(token: number): Uint8Array {
-  releaseGeometryKernelHints(token); sceneConfigurations.delete(token); retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
+  releaseNativeScene(token); releaseGeometryKernelHints(token); sceneConfigurations.delete(token); retainedScenes.delete(token); pendingLighting.delete(token); pendingTransforms.delete(token); pendingGeometry.delete(token); pendingBuilds.delete(token); transformStages.delete(token); geometryStages.delete(token);
   return new Uint8Array(16);
 }
 // Version 1: source material index and seven scalar parameters. Maps, emission,

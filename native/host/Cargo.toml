@@ -54,6 +54,10 @@ name = "closest-diagnostics"
 path = "diagnostics/closest-diagnostics.rs"
 
 [[bin]]
+name = "incremental-oracle"
+path = "diagnostics/incremental-oracle.rs"
+
+[[bin]]
 name = "gpu-availability"
 path = "diagnostics/gpu-availability.rs"
 

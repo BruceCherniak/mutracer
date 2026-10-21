@@ -3,7 +3,7 @@ use super::*;
 use crate::layout::{WORD_BYTES, settings as wire};
 
 #[repr(C)]
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct RenderSettings {
     pub struct_size: u32,
     pub sampling_pattern: u32,

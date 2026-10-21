@@ -20,6 +20,10 @@ struct Context {
     failed: bool,
     job: Option<RenderJob>,
     commit: Option<Arc<PendingCommit>>,
+    /// Descriptor of the committed scene; incremental commits diff against it.
+    descriptor: Option<Arc<Vec<u8>>>,
+    /// Whether the last successful commit used the incremental path.
+    incremental: bool,
 }
 struct PendingCommit {
     cancelled: AtomicBool,
@@ -282,6 +286,8 @@ pub fn create_on_device_with_gate(
             failed: false,
             job: None,
             commit: None,
+            descriptor: None,
+            incremental: false,
         },
     );
     Ok(handle)
@@ -352,6 +358,8 @@ pub unsafe extern "C" fn mt_context_create_with_backend(
                 failed: false,
                 job: None,
                 commit: None,
+                descriptor: None,
+                incremental: false,
             },
         );
         registry.next = next;
@@ -448,6 +456,57 @@ unsafe fn commit_with_settings(
     let mut snapshot = None;
     let cancel = Arc::new(PendingCommit::new());
     let _completion = Completion(cancel.clone());
+    // Incremental attempt: like full preparation, the sync runs outside the registry
+    // lock while the context is marked preparing, so render, poll, cancel and
+    // destroy stay available. Only the retained GPU updates hold the lock.
+    let mut candidate = None;
+    let status = action(error, capacity, |registry| {
+        let preparing = registry.contexts.values().any(|c| c.commit.is_some());
+        let context = context(registry, handle)?;
+        if context.commit.is_some() {
+            return Err(fail(
+                Status::InvalidState,
+                "Scene commit is already preparing",
+            ));
+        }
+        if !preparing {
+            candidate = incremental_candidate(context, bytes, &settings);
+            if candidate.is_some() {
+                context.commit = Some(cancel.clone());
+            }
+        }
+        Ok(())
+    });
+    if status != 0 {
+        return status;
+    }
+    if let Some((retained, previous)) = candidate {
+        // Validation and sync failures are reported by full preparation.
+        let steps = retained
+            .sync(&previous, bytes)
+            .ok()
+            .and_then(|sync| commit_plan::plan(&previous, bytes, &sync));
+        let mut finished = false;
+        let status = action(error, capacity, |registry| {
+            let context = context(registry, handle).or_else(|error| {
+                cancelled(&cancel)?;
+                Err(error)
+            })?;
+            context.commit = None;
+            if let Err(error) = cancelled(&cancel) {
+                retained.reset_sync()?;
+                return Err(error);
+            }
+            match &steps {
+                Some(steps) => finished = apply_incremental(context, &retained, bytes, steps)?,
+                None => retained.reset_sync()?,
+            }
+            Ok(())
+        });
+        if status != 0 || finished {
+            return status;
+        }
+    }
     let status = action(error, capacity, |registry| {
         let context = context(registry, handle)?;
         if context.commit.is_some() {
@@ -631,6 +690,8 @@ unsafe fn commit_with_settings(
         context.render_seed = seed;
         context.render_bounces = bounces;
         context.fallback_reason = fallback_reason;
+        context.descriptor = Some(Arc::new(bytes.to_vec()));
+        context.incremental = false;
         context.job = None;
         context.failed = false;
         Ok(())
@@ -648,6 +709,92 @@ unsafe fn commit_with_settings(
 
     drop(slot);
     write_result(error, capacity, result)
+}
+/// State an incremental commit needs, or None when only full preparation applies.
+fn incremental_candidate(
+    context: &Context,
+    bytes: &[u8],
+    settings: &settings::RenderSettings,
+) -> Option<(scene::PreparedState, Arc<Vec<u8>>)> {
+    if context.failed || bytes.len() % 4 != 0 {
+        return None;
+    }
+    let retained = context.scene.as_ref()?.retained.clone()?;
+    if retained.settings != *settings {
+        return None;
+    }
+    Some((retained, context.descriptor.clone()?))
+}
+/// Applies planned retained updates. Ok(false) leaves the scene for full preparation.
+fn apply_incremental(
+    context: &mut Context,
+    retained: &scene::PreparedState,
+    bytes: &[u8],
+    steps: &[commit_plan::Step],
+) -> Result<bool> {
+    // As with full publication, an unfinished job is cancelled and drained first.
+    if let Some(job) = context.job.as_mut() {
+        if job.active() {
+            job.cancelled = true;
+            while job_active(context) {
+                advance_job(context, 0)?;
+                std::thread::yield_now();
+            }
+        }
+    }
+    for step in steps {
+        let (input, length) = match step {
+            commit_plan::Step::Geometry(b)
+            | commit_plan::Step::Transform(b)
+            | commit_plan::Step::Material(b)
+            | commit_plan::Step::Light(b)
+            | commit_plan::Step::Environment(b)
+            | commit_plan::Step::Camera(b) => (b.as_ptr(), b.len()),
+        };
+        let applied = unsafe {
+            match step {
+                commit_plan::Step::Geometry(_) => update_geometry_in(context, input, length),
+                commit_plan::Step::Transform(_) => update_transform_in(context, input, length),
+                commit_plan::Step::Material(_) => update_material_in(context, input, length),
+                commit_plan::Step::Light(_) => update_light_in(context, input, length),
+                commit_plan::Step::Environment(_) => update_environment_in(context, input, length),
+                commit_plan::Step::Camera(_) => update_camera_in(context, input, length),
+            }
+        };
+        match applied {
+            Ok(()) => {}
+            // Full preparation follows. Earlier steps already changed the scene, so
+            // the descriptor no longer describes it if that preparation is rejected.
+            Err(error)
+                if classify(error.as_ref(), Status::Error) != Status::ContextFailed
+                    && !context.failed =>
+            {
+                retained.reset_sync()?;
+                context.descriptor = None;
+                return Ok(false);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    // A commit always restarts accumulation, including an identical descriptor.
+    context.failed = true;
+    context.scene.as_mut().unwrap().reset_raw()?;
+    context.failed = false;
+    retained.accept_sync()?;
+    context.descriptor = Some(Arc::new(bytes.to_vec()));
+    context.incremental = true;
+    context.job = None;
+    Ok(true)
+}
+/// Diagnostic: whether the last successful commit of `handle` was incremental.
+pub fn last_commit_incremental(handle: u64) -> std::result::Result<bool, String> {
+    let slot = REGISTRY.lock().map_err(|_| "Context registry poisoned")?;
+    let registry = slot.as_ref().ok_or("No context registry")?;
+    let context = registry
+        .contexts
+        .get(&handle)
+        .ok_or("Invalid or destroyed native context")?;
+    Ok(context.incremental)
 }
 struct CommitSnapshot {
     gpu: GpuDevice,
@@ -765,22 +912,29 @@ pub unsafe extern "C" fn mt_context_update_camera(
         }
         let context = context(registry, handle)?;
         idle(context)?;
-        let scene = ready(context)?;
-        if input.is_null() || length != 128 {
-            return Err(fail(
-                Status::InvalidArgument,
-                "Camera descriptor must contain exactly 128 bytes",
-            ));
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(input, length) };
-        let packed = scene::prepare_camera(bytes, scene.scene.width, scene.scene.height)
-            .map_err(rejected)?;
-        context.failed = true;
-        context.scene.as_mut().unwrap().update_camera(&packed)?;
-        context.job = None;
-        context.failed = false;
+        unsafe { update_camera_in(context, input, length) }?;
+        // The committed descriptor no longer describes the scene.
+        context.descriptor = None;
         Ok(())
     })
+}
+/// Validated camera update on an idle context; shared by the C entry point and incremental commit.
+unsafe fn update_camera_in(context: &mut Context, input: *const u8, length: usize) -> Result<()> {
+    let scene = ready(context)?;
+    if input.is_null() || length != 128 {
+        return Err(fail(
+            Status::InvalidArgument,
+            "Camera descriptor must contain exactly 128 bytes",
+        ));
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+    let packed =
+        scene::prepare_camera(bytes, scene.scene.width, scene.scene.height).map_err(rejected)?;
+    context.failed = true;
+    context.scene.as_mut().unwrap().update_camera(&packed)?;
+    context.job = None;
+    context.failed = false;
+    Ok(())
 }
 /// Patch basic scalar material parameters through the retained original TS packer.
 #[unsafe(no_mangle)]
@@ -800,26 +954,33 @@ pub unsafe extern "C" fn mt_context_update_material(
         }
         let context = context(registry, handle)?;
         idle(context)?;
-        let scene = ready(context)?;
-        if input.is_null() || length != 48 {
-            return Err(fail(
-                Status::InvalidArgument,
-                "Material descriptor must contain exactly 48 bytes",
-            ));
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(input, length) };
-        let packed = scene
-            .retained
-            .as_ref()
-            .ok_or("No retained material preparation")?
-            .material(bytes)
-            .map_err(rejected)?;
-        context.failed = true;
-        context.scene.as_mut().unwrap().update_material(&packed)?;
-        context.job = None;
-        context.failed = false;
+        unsafe { update_material_in(context, input, length) }?;
+        // The committed descriptor no longer describes the scene.
+        context.descriptor = None;
         Ok(())
     })
+}
+/// Validated material update on an idle context; shared by the C entry point and incremental commit.
+unsafe fn update_material_in(context: &mut Context, input: *const u8, length: usize) -> Result<()> {
+    let scene = ready(context)?;
+    if input.is_null() || length != 48 {
+        return Err(fail(
+            Status::InvalidArgument,
+            "Material descriptor must contain exactly 48 bytes",
+        ));
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+    let packed = scene
+        .retained
+        .as_ref()
+        .ok_or("No retained material preparation")?
+        .material(bytes)
+        .map_err(rejected)?;
+    context.failed = true;
+    context.scene.as_mut().unwrap().update_material(&packed)?;
+    context.job = None;
+    context.failed = false;
+    Ok(())
 }
 /// Refresh environment radiance, importance distribution and all light PMFs.
 #[unsafe(no_mangle)]
@@ -839,35 +1000,46 @@ pub unsafe extern "C" fn mt_context_update_environment(
         }
         let context = context(registry, handle)?;
         idle(context)?;
-        let scene = ready(context)?;
-        if input.is_null() || length < 48 || length > scene::MAX_BYTES {
-            return Err(fail(
-                Status::InvalidArgument,
-                "Invalid environment descriptor length",
-            ));
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(input, length) };
-        let packed = scene
-            .retained
-            .as_ref()
-            .ok_or("No retained environment preparation")?
-            .environment(bytes)
-            .map_err(rejected)?;
-        scene.validate_lighting(&packed)?;
-        context.failed = true;
-        context.scene.as_mut().unwrap().update_lighting(&packed)?;
-        context
-            .scene
-            .as_ref()
-            .unwrap()
-            .retained
-            .as_ref()
-            .unwrap()
-            .accept_lighting()?;
-        context.job = None;
-        context.failed = false;
+        unsafe { update_environment_in(context, input, length) }?;
+        // The committed descriptor no longer describes the scene.
+        context.descriptor = None;
         Ok(())
     })
+}
+/// Validated environment update on an idle context; shared by the C entry point and incremental commit.
+unsafe fn update_environment_in(
+    context: &mut Context,
+    input: *const u8,
+    length: usize,
+) -> Result<()> {
+    let scene = ready(context)?;
+    if input.is_null() || length < 48 || length > scene::MAX_BYTES {
+        return Err(fail(
+            Status::InvalidArgument,
+            "Invalid environment descriptor length",
+        ));
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+    let packed = scene
+        .retained
+        .as_ref()
+        .ok_or("No retained environment preparation")?
+        .environment(bytes)
+        .map_err(rejected)?;
+    scene.validate_lighting(&packed)?;
+    context.failed = true;
+    context.scene.as_mut().unwrap().update_lighting(&packed)?;
+    context
+        .scene
+        .as_ref()
+        .unwrap()
+        .retained
+        .as_ref()
+        .unwrap()
+        .accept_lighting()?;
+    context.job = None;
+    context.failed = false;
+    Ok(())
 }
 /// Update stable-topology vertices and all shared instances through original TS.
 #[unsafe(no_mangle)]
@@ -887,38 +1059,45 @@ pub unsafe extern "C" fn mt_context_update_geometry(
         }
         let context = context(registry, handle)?;
         idle(context)?;
-        let scene = ready(context)?;
-        if input.is_null() || length < 16 || length > scene::MAX_BYTES {
-            return Err(fail(
-                Status::InvalidArgument,
-                "Invalid geometry update length",
-            ));
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(input, length) };
-        let packed = scene
-            .retained
-            .as_ref()
-            .ok_or("No retained geometry preparation")?
-            .geometry(bytes)
-            .map_err(rejected)?;
-        scene.validate_lighting(&packed)?;
-        let hardware = scene.prepare_geometry_hardware(&packed)?;
-        context.failed = true;
-        let scene = context.scene.as_mut().unwrap();
-        if let Some((resources, capture, group, attributes)) = hardware {
-            if let Some(buffer) = attributes {
-                scene.buffers.insert(3, buffer);
-            }
-            scene.hardware = Some(resources);
-            scene.scene.hwrt = Some(capture);
-            scene.groups[0] = group;
-        }
-        scene.update_lighting(&packed)?;
-        scene.retained.as_ref().unwrap().accept_geometry()?;
-        context.job = None;
-        context.failed = false;
+        unsafe { update_geometry_in(context, input, length) }?;
+        // The committed descriptor no longer describes the scene.
+        context.descriptor = None;
         Ok(())
     })
+}
+/// Validated geometry update on an idle context; shared by the C entry point and incremental commit.
+unsafe fn update_geometry_in(context: &mut Context, input: *const u8, length: usize) -> Result<()> {
+    let scene = ready(context)?;
+    if input.is_null() || length < 16 || length > scene::MAX_BYTES {
+        return Err(fail(
+            Status::InvalidArgument,
+            "Invalid geometry update length",
+        ));
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+    let packed = scene
+        .retained
+        .as_ref()
+        .ok_or("No retained geometry preparation")?
+        .geometry(bytes)
+        .map_err(rejected)?;
+    scene.validate_lighting(&packed)?;
+    let hardware = scene.prepare_geometry_hardware(&packed)?;
+    context.failed = true;
+    let scene = context.scene.as_mut().unwrap();
+    if let Some((resources, capture, group, attributes)) = hardware {
+        if let Some(buffer) = attributes {
+            scene.buffers.insert(3, buffer);
+        }
+        scene.hardware = Some(resources);
+        scene.scene.hwrt = Some(capture);
+        scene.groups[0] = group;
+    }
+    scene.update_lighting(&packed)?;
+    scene.retained.as_ref().unwrap().accept_geometry()?;
+    context.job = None;
+    context.failed = false;
+    Ok(())
 }
 /// Update a mesh world matrix or one local instance matrix through shared TS.
 #[unsafe(no_mangle)]
@@ -938,42 +1117,53 @@ pub unsafe extern "C" fn mt_context_update_transform(
         }
         let context = context(registry, handle)?;
         idle(context)?;
-        let scene = ready(context)?;
-        if input.is_null() || length != 80 {
-            return Err(fail(
-                Status::InvalidArgument,
-                "Transform descriptor must contain exactly 80 bytes",
-            ));
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(input, length) };
-        let packed = scene
-            .retained
-            .as_ref()
-            .ok_or("No retained transform preparation")?
-            .transform(bytes)
-            .map_err(rejected)?;
-        scene.validate_lighting(&packed)?;
-        let hardware = scene
-            .hardware
-            .as_ref()
-            .map(|hw| hw.transform_plan(scene.scene.hwrt.as_ref().unwrap(), &packed))
-            .transpose()?;
-        context.failed = true;
-        let scene = context.scene.as_mut().unwrap();
-        if let Some(plan) = hardware {
-            scene.hardware.as_mut().unwrap().update_transforms(
-                &scene.gpu.device,
-                &scene.gpu.queue,
-                plan,
-                scene.scene.hwrt.as_mut().unwrap(),
-            )?;
-        }
-        scene.update_lighting(&packed)?;
-        scene.retained.as_ref().unwrap().accept_transform()?;
-        context.job = None;
-        context.failed = false;
+        unsafe { update_transform_in(context, input, length) }?;
+        // The committed descriptor no longer describes the scene.
+        context.descriptor = None;
         Ok(())
     })
+}
+/// Validated transform update on an idle context; shared by the C entry point and incremental commit.
+unsafe fn update_transform_in(
+    context: &mut Context,
+    input: *const u8,
+    length: usize,
+) -> Result<()> {
+    let scene = ready(context)?;
+    if input.is_null() || length != 80 {
+        return Err(fail(
+            Status::InvalidArgument,
+            "Transform descriptor must contain exactly 80 bytes",
+        ));
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+    let packed = scene
+        .retained
+        .as_ref()
+        .ok_or("No retained transform preparation")?
+        .transform(bytes)
+        .map_err(rejected)?;
+    scene.validate_lighting(&packed)?;
+    let hardware = scene
+        .hardware
+        .as_ref()
+        .map(|hw| hw.transform_plan(scene.scene.hwrt.as_ref().unwrap(), &packed))
+        .transpose()?;
+    context.failed = true;
+    let scene = context.scene.as_mut().unwrap();
+    if let Some(plan) = hardware {
+        scene.hardware.as_mut().unwrap().update_transforms(
+            &scene.gpu.device,
+            &scene.gpu.queue,
+            plan,
+            scene.scene.hwrt.as_mut().unwrap(),
+        )?;
+    }
+    scene.update_lighting(&packed)?;
+    scene.retained.as_ref().unwrap().accept_transform()?;
+    context.job = None;
+    context.failed = false;
+    Ok(())
 }
 /// Update one analytic light and refresh all light-selection probabilities.
 #[unsafe(no_mangle)]
@@ -993,35 +1183,42 @@ pub unsafe extern "C" fn mt_context_update_light(
         }
         let context = context(registry, handle)?;
         idle(context)?;
-        let scene = ready(context)?;
-        if input.is_null() || length != 128 {
-            return Err(fail(
-                Status::InvalidArgument,
-                "Light descriptor must contain exactly 128 bytes",
-            ));
-        }
-        let bytes = unsafe { std::slice::from_raw_parts(input, length) };
-        let packed = scene
-            .retained
-            .as_ref()
-            .ok_or("No retained light preparation")?
-            .light(bytes)
-            .map_err(rejected)?;
-        scene.validate_lighting(&packed)?;
-        context.failed = true;
-        context.scene.as_mut().unwrap().update_lighting(&packed)?;
-        context
-            .scene
-            .as_ref()
-            .unwrap()
-            .retained
-            .as_ref()
-            .unwrap()
-            .accept_lighting()?;
-        context.job = None;
-        context.failed = false;
+        unsafe { update_light_in(context, input, length) }?;
+        // The committed descriptor no longer describes the scene.
+        context.descriptor = None;
         Ok(())
     })
+}
+/// Validated light update on an idle context; shared by the C entry point and incremental commit.
+unsafe fn update_light_in(context: &mut Context, input: *const u8, length: usize) -> Result<()> {
+    let scene = ready(context)?;
+    if input.is_null() || length != 128 {
+        return Err(fail(
+            Status::InvalidArgument,
+            "Light descriptor must contain exactly 128 bytes",
+        ));
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(input, length) };
+    let packed = scene
+        .retained
+        .as_ref()
+        .ok_or("No retained light preparation")?
+        .light(bytes)
+        .map_err(rejected)?;
+    scene.validate_lighting(&packed)?;
+    context.failed = true;
+    context.scene.as_mut().unwrap().update_lighting(&packed)?;
+    context
+        .scene
+        .as_ref()
+        .unwrap()
+        .retained
+        .as_ref()
+        .unwrap()
+        .accept_lighting()?;
+    context.job = None;
+    context.failed = false;
+    Ok(())
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_info(
