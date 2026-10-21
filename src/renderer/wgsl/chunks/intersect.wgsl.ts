@@ -939,6 +939,12 @@ fn fetchAttributes(
   let i0 = index.x;
   let i1 = index.y;
   let i2 = index.z;
+  (*si).vertexColor = vec3f(1.0);
+  if (USE_VERTEX_COLOR) {
+    (*si).vertexColor = bary.x * attrBuffers[i0 * ATTR_STRIDE + COLOR_OFF].xyz
+      + bary.y * attrBuffers[i1 * ATTR_STRIDE + COLOR_OFF].xyz
+      + bary.z * attrBuffers[i2 * ATTR_STRIDE + COLOR_OFF].xyz;
+  }
   let isSphericalProj = uvProjection == ${uvProjectionConstants.spherical};
 
   var normal: vec3f = (*si).normal;

@@ -62,6 +62,7 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | `SkinnedMesh` / mesh with morph targets | CPU-deformed dynamic geometry |
 | `InstancedMesh` | One InstancedMesh per material group, with native colors, sharing geometry and BLAS |
 | Multi-material groups | One MuTracer mesh per group |
+| Geometry `color` with `material.vertexColors = true` | Linear RGB colors modulate base color and unlit output, including base-color textures and instance colors; RGBA inputs use RGB only (vertex alpha is unsupported) |
 | `DirectionalLight` | `DirectionalLight` |
 | `PointLight` | `SphereLight` (radius `userData.mutracerRadius`, default 0.25) |
 | `SpotLight` | `SpotLight` (radius `userData.mutracerRadius`, default 0.01; `penumbra` sets the inner angle, with the same smooth falloff as Three.js) |

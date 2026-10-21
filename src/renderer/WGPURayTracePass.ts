@@ -1022,8 +1022,6 @@ class WGPURayTracePass {
         ...MATERIAL_TEXTURE_DEFINES,
         'USE_ANISOTROPY_DIRECTIONS',
         'USE_COAT_NORMAL_FRAMES',
-        'COLOR_OFF',
-        'USE_VERTEX_COLOR',
         'HAS_ALPHA_BLEND',
         'HAS_ALPHA_MASK'
       ];

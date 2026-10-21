@@ -43,7 +43,7 @@ void main() {
     intersectScene(ray, si, false);
     if (!si.hit) return;
     OpenPbrResolvedMaterial material;
-    getMaterial(material, si.materialIndex, si.uv, si.uv1, si.instanceIndex);
+    getMaterial(material, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
     if (material.materialType != SHADOW_CATCHER && material.alpha > 0.0) {
       out_depth.r = max(dot(si.position - eye, forward), 0.0);
       return;

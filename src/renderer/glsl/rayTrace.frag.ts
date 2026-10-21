@@ -272,7 +272,7 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
 
   // Next ray hit
   intersectScene(path.ray, si, true);
-  getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex);
+  getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
   si.isTransparency = mat.transmissionWeight > 0.001 || mat.subsurfaceWeight > 0.001 || mat.alpha < 0.999;
 
   // Dynamic preview only becomes spectral when the primary visible surface
@@ -486,7 +486,7 @@ vec4 integrateOnePath(SurfaceInteraction si, Ray ray, OpenPbrResolvedMaterial ma
   backSi.albedoSampled = false;
   intersectScene(backRay, backSi, false);
   OpenPbrResolvedMaterial backMat;
-  getMaterial(backMat, backSi.materialIndex, backSi.uv, backSi.uv1, backSi.instanceIndex);
+  getMaterial(backMat, backSi.materialIndex, backSi.uv, backSi.uv1, backSi.instanceIndex, backSi.vertexColor);
   RayTraceAuxiliary backAux = outAux;
   if (backSi.hit && (backMat.materialType == STANDARD || backMat.materialType == UNLIT)) {
     backAux.albedo = backMat.transmissionWeight > 0.5
@@ -536,7 +536,7 @@ vec4 integrator(Ray ray, out RayTraceAuxiliary outAux) {
 #endif
 
   intersectScene(ray, si, false);
-  getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex);
+  getMaterial(mat, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
   si.isTransparency = mat.transmissionWeight > 0.001 || mat.subsurfaceWeight > 0.001 || mat.alpha < 0.999;
 
 #ifdef HAS_BEVEL

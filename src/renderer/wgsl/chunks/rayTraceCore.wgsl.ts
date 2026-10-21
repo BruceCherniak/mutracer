@@ -61,6 +61,7 @@ ${hasAnisotropyDirections ? /* wgsl */ `
 ` : /* wgsl */ ``}
   uv: vec2f,
   uv1: vec2f,
+  vertexColor: vec3f,
 
   triangleIndex: i32,
   instanceIndex: i32,

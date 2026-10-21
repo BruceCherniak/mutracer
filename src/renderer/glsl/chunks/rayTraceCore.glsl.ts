@@ -50,6 +50,7 @@ struct SurfaceInteraction {
   
   vec2 uv;
   vec2 uv1;
+  vec3 vertexColor;
 
 #ifdef USE_TANGENT
   vec3 tangent;

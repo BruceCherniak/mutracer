@@ -936,7 +936,7 @@ function mergeGeometry(
     uv1: uv1Attrib,
     materialIndex: materialIndexAttrib,
     color: hasColor
-      ? new Attribute(new Float32Array(3 * totalVertexCount), 3)
+      ? new Attribute(new Float32Array(3 * totalVertexCount).fill(1), 3)
       : undefined,
     tangent: hasTangent
       ? new Attribute(new Float32Array(4 * totalVertexCount), 4)

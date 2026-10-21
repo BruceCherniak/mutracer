@@ -134,7 +134,8 @@ fn getMaterial(
   materialIndex: i32,
   uv: vec2f,
   uv1: vec2f,
-  instanceIndex: i32
+  instanceIndex: i32,
+  vertexColor: vec3f
 ) {
   let matData = materialsBuffer[materialIndex];
 
@@ -271,9 +272,9 @@ ${hasAnisotropyDirections ? /* wgsl */ `
     (*ma).specularRoughness = mix((*ma).specularRoughness,
       pow(min(1.0, baseRoughness2 * baseRoughness2 + 2.0 * coatRoughness2 * coatRoughness2), 0.25), (*ma).coatWeight);
   }
-  let instanceColor = getInstanceColor(instanceIndex);
-  (*ma).baseColor *= instanceColor;
-  if ((*ma).materialType == UNLIT) { (*ma).emission *= instanceColor; }
+  let color = getInstanceColor(instanceIndex) * vertexColor;
+  (*ma).baseColor *= color;
+  if ((*ma).materialType == UNLIT) { (*ma).emission *= color; }
 
   (*ma).specularRoughness = clamp((*ma).specularRoughness, ROUGHNESS_MIN, 1.0);
   (*ma).baseMetalness = clamp((*ma).baseMetalness, 0.0, 1.0);

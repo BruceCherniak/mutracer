@@ -124,7 +124,8 @@ void getMaterial(
   int materialIndex,
   vec2 uv,
   vec2 uv1,
-  int instanceIndex
+  int instanceIndex,
+  vec3 vertexColor
 ) {
   int i = materialIndex * MAT_DATA_SIZE;
   vec4 colorAndMatType = fetchMatData(i + MAT_ROW_COLOR);
@@ -314,9 +315,9 @@ void getMaterial(
     mat.specularRoughness = mix(mat.specularRoughness,
       pow(min(1.0, baseRoughness2 * baseRoughness2 + 2.0 * coatRoughness2 * coatRoughness2), 0.25), mat.coatWeight);
   }
-  vec3 instanceColor = getInstanceColor(instanceIndex);
-  mat.baseColor *= instanceColor;
-  if (mat.materialType == UNLIT) mat.emission *= instanceColor;
+  vec3 color = getInstanceColor(instanceIndex) * vertexColor;
+  mat.baseColor *= color;
+  if (mat.materialType == UNLIT) mat.emission *= color;
 
   mat.specularRoughness = clamp(mat.specularRoughness, ROUGHNESS_MIN, 1.0);
   mat.baseMetalness = clamp(mat.baseMetalness, 0.0, 1.0);

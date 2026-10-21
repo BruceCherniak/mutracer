@@ -576,13 +576,15 @@ function copyFloatAttribute(
 
 function convertGeometry(
   threeGeometry: THREE.BufferGeometry,
-  drawRange?: { start: number; count: number }
+  drawRange: { start: number; count: number },
+  vertexColors: boolean
 ): Geometry | null {
   const positionAttrb = threeGeometry.getAttribute('position');
   const normalAttrb = threeGeometry.getAttribute('normal');
   const tangentAttrb = threeGeometry.getAttribute('tangent');
   const uvAttrb = threeGeometry.getAttribute('uv');
   const uv1Attrb = threeGeometry.getAttribute('uv1');
+  const colorAttrb = vertexColors && threeGeometry.getAttribute('color');
   const indexAttrb = threeGeometry.getIndex();
   const sourceCount = indexAttrb ? indexAttrb.array.length : positionAttrb.count;
   // Match Array.slice range handling without expanding the complete index stream.
@@ -620,6 +622,8 @@ function convertGeometry(
     uv1:
       uv1Attrb &&
       new Attribute(copyFloatAttribute(uv1Attrb), uv1Attrb.itemSize),
+    // MuTracer stores linear RGB only; omit Three.js's optional vertex alpha.
+    color: colorAttrb ? new Attribute(copyFloatAttribute(colorAttrb, 3), 3) : undefined,
     indices: new Attribute(indices, 1)
   });
   if (!geometry.normal) {
@@ -680,7 +684,7 @@ function createConversionStore(): ConversionStore {
     poseChanged: false, meshes: new WeakMap(), lights: new WeakMap(), deformedGeometries: new WeakMap(), deformations: new WeakMap(),
     instanceMeshes: new WeakMap(), projectionVariants: new Map(), warned: new WeakSet() };
 }
-const geometryAttributeNames = ['position', 'normal', 'tangent', 'uv', 'uv1', 'index'] as const;
+const geometryAttributeNames = ['position', 'normal', 'tangent', 'uv', 'uv1', 'color', 'index'] as const;
 function geometryState(geometry: THREE.BufferGeometry, deformation: boolean) {
   const state: unknown[] = [];
   for (let i = 0; i < geometryAttributeNames.length; i++) {
@@ -919,16 +923,21 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             ? group.count
             : (child.geometry.getIndex()?.count ??
               child.geometry.getAttribute('position').count);
-          const geometryKey = `${group.start}:${count}`;
+          const sourceMaterial = threeMaterials[group.materialIndex ?? 0];
+          // Geometry owns colors in MuTracer, so groups with different material
+          // switches need separate cached geometry even when their ranges match.
+          const vertexColors = sourceMaterial.vertexColors === true;
+          const geometryKey = `${group.start}:${count}:${vertexColors}`;
           let geometry = geometryEntry.groups.get(geometryKey);
           const newGeometry = !geometry;
           if (!geometry) {
-            const converted = convertGeometry(child.geometry, { start: group.start, count });
+            const converted = convertGeometry(child.geometry, { start: group.start, count }, vertexColors);
             if (!converted) return;
             geometry = converted;
             geometryEntry.groups.set(geometryKey, geometry);
           }
-          if (deformation && (deformed || newGeometry)) {
+          // A retained color variant may predate the current pose.
+          if (deformation && (deformed || newGeometry || store.meshes.get(child)?.get(groupIndex)?.geometry !== geometry)) {
             geometry.dynamic = true;
             geometry.position.array.set(deformation.position);
             if (deformation.normal) geometry.normal.array.set(deformation.normal);
@@ -937,7 +946,6 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             updateBoundingBox(geometry);
             if (!newGeometry) markDeformedGeometry(geometry);
           }
-          const sourceMaterial = threeMaterials[group.materialIndex ?? 0];
           let material = resolveMaterial(sourceMaterial)!;
           const baseMaterial = material;
           const autoUvProjection = !geometry.uv && baseMaterial.uvProjection === 'none' &&

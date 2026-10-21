@@ -418,7 +418,7 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
   }
 
   intersectScene((*path).ray, si, *depth, true, (*path).isNextRefraction);
-  getMaterial(ma, (*si).materialIndex, (*si).uv, (*si).uv1, (*si).instanceIndex);
+  getMaterial(ma, (*si).materialIndex, (*si).uv, (*si).uv1, (*si).instanceIndex, (*si).vertexColor);
 
   if (SPECTRAL) {
     // Is glass
@@ -652,7 +652,7 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
   backSi.albedoSampled = false;
   intersectScene(backRay, &backSi, 0, false, false);
   var backMa: OpenPbrResolvedMaterial;
-  getMaterial(&backMa, backSi.materialIndex, backSi.uv, backSi.uv1, backSi.instanceIndex);
+  getMaterial(&backMa, backSi.materialIndex, backSi.uv, backSi.uv1, backSi.instanceIndex, backSi.vertexColor);
   var backAux = *outAux;
   if (backSi.hit && backMa.materialType == STANDARD) {
     backAux.albedo = select(
@@ -711,7 +711,7 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
 
   // TODO not put tMax in ray. So we don't need to use pointer of ray here.
   intersectScene(ray, &si, 0, false, false);
-  getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex);
+  getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
 
   if (si.hit && ma.materialType == SHADOW_CATCHER) {
     (*outAux).isShadowCatcher = true;
