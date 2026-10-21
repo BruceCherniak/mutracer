@@ -14,7 +14,7 @@ export default class SpotLight extends SceneNode {
   radius: number = 0.01;
   /** Full-intensity cone half-angle in degrees. Default `30`. */
   innerAngle: number = 30;
-  /** Cutoff cone half-angle in degrees, at most 180. Default `45`. */
+  /** Cutoff cone half-angle in degrees, at most 180. Intensity falls off smoothly in cosine from the inner angle. Default `45`. */
   outerAngle: number = 45;
   /** Optional photometric emission profile. Default `undefined`. */
   iesProfile: IESProfile | undefined = undefined;
@@ -29,7 +29,7 @@ export default class SpotLight extends SceneNode {
     radius?: number;
     /** Full-intensity cone half-angle in degrees. Default `30`. */
     innerAngle?: number;
-    /** Cutoff cone half-angle in degrees, at most 180. Default `45`. */
+    /** Cutoff cone half-angle in degrees, at most 180. Intensity falls off smoothly in cosine from the inner angle. Default `45`. */
     outerAngle?: number;
     /** Optional photometric emission profile. Default `undefined`. */
     iesProfile?: IESProfile | undefined;

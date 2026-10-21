@@ -64,7 +64,7 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | Multi-material groups | One MuTracer mesh per group |
 | `DirectionalLight` | `DirectionalLight` |
 | `PointLight` | `SphereLight` (radius `userData.mutracerRadius`, default 0.25) |
-| `SpotLight` | `SpotLight` (radius `userData.mutracerRadius`, default 0.01; `penumbra` sets the inner angle) |
+| `SpotLight` | `SpotLight` (radius `userData.mutracerRadius`, default 0.01; `penumbra` sets the inner angle, with the same smooth falloff as Three.js) |
 | `RectAreaLight` | `RectLight` |
 | `AmbientLight` | `AmbientLight` |
 | `scene.environment` (equirectangular float `DataTexture`, e.g. from `HDRLoader`/`RGBELoader`) | `EnvironmentLight` |

@@ -313,8 +313,8 @@ fn evaluateSpotEmissionMultiplier(light: Light, lightToSurface: vec3f) -> f32 {
   let axis = normalize(light.u);
   let cosTheta = dot(axis, lightToSurface);
   var cone = select(0.0, 1.0, cosTheta >= light.v.x);
-  if (light.v.y > 1e-6) {
-    cone = smoothstep(light.v.x, light.v.x + light.v.y, cosTheta);
+  if (light.v.y > light.v.x + 1e-6) {
+    cone = smoothstep(light.v.x, light.v.y, cosTheta);
   }
   if (cone <= 0.0 || light.textureIndex < 0.0) { return cone; }
   let xAxis = light.iesReference;

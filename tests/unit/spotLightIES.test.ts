@@ -1,4 +1,4 @@
-import { getSpotLightRadiance } from '../../src/renderer/lightsUtil.js';
+import { getSpotLightRadiance, getSpotLightShapingFluxFactor } from '../../src/renderer/lightsUtil.js';
 import { describe, expect, it } from 'vitest';
 import SpotLight from '../../src/scene/SpotLight';
 import { IESParseError, parseIESProfile } from '../../src/scene/IESProfile';
@@ -66,7 +66,7 @@ describe('spot light and IES semantics', () => {
     expect(data[4]).toBeCloseTo(20 / (Math.PI * 0.25));
     expect(Array.from(data.slice(8, 11))).toEqual([0, -1, 0]);
     expect(data[12]).toBeCloseTo(Math.cos(Math.PI / 4));
-    expect(data[13]).toBeCloseTo(1 - 30 / 45);
+    expect(data[13]).toBeCloseTo(Math.cos(Math.PI / 6));
     expect(data[14]).toBe(0);
     expect(data[20]).toBeCloseTo(0); expect(data[21]).toBeCloseTo(0); expect(data[22]).toBeCloseTo(1);
     expect(data[15]).toBe(0);
@@ -85,6 +85,26 @@ describe('spot light and IES semantics', () => {
     expect(farIrradiance(4) / farIrradiance(8)).toBeCloseTo(4, 3);
     expect(estimateAnalyticLightPower(light)).toBeGreaterThan(0);
     expect(Number.isFinite(estimateAnalyticLightPower(light))).toBe(true);
+  });
+
+  it('integrates the inner-to-outer cosine smoothstep for spot selection power', () => {
+    const smoothstep = (a: number, b: number, x: number) => {
+      const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
+      return t * t * (3 - 2 * t);
+    };
+    for (const [innerAngle, outerAngle] of [[30, 45], [0, 60], [45, 45], [5, 170]]) {
+      const cosOuter = Math.cos(outerAngle * Math.PI / 180), cosInner = Math.cos(innerAngle * Math.PI / 180);
+      // Midpoint rule over cos(theta); the sphere has measure 2 in cos(theta).
+      let integral = 0;
+      const steps = 20000;
+      for (let i = 0; i < steps; i++) {
+        const mu = -1 + (i + 0.5) * 2 / steps;
+        const cone = cosInner > cosOuter ? smoothstep(cosOuter, cosInner, mu) : Number(mu >= cosOuter);
+        integral += cone * 2 / steps;
+      }
+      const light = new SpotLight({innerAngle, outerAngle});
+      expect(getSpotLightShapingFluxFactor(light)).toBeCloseTo(integral / 2, 4);
+    }
   });
 
   it('supports point-spot delta units and preserves angular shader shaping', () => {

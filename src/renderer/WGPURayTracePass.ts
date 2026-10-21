@@ -273,7 +273,7 @@ export function packAnalyticsLightsToBuffer(
       data[(off + 2) * 4 + 3] = light.radius;
       packVec3(off + 3, [
         Math.cos((light.outerAngle * Math.PI) / 180),
-        Math.min(1, Math.max(0, 1 - light.innerAngle / light.outerAngle)),
+        Math.cos((Math.min(light.innerAngle, light.outerAngle) * Math.PI) / 180),
         0
       ]);
     } else if (light.type === 'DirectionalLight') {
