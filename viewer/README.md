@@ -5,17 +5,21 @@ its .bin and textures) or a Radiance .hdr, browse the scene tree, edit OpenPBR
 materials, lighting, camera and render settings, play glTF animations and
 export PNGs.
 
+Drag a numeric input left or right to adjust its value, or click it to type.
+Enter or clicking elsewhere commits typed edits; Escape cancels them. While
+editing text, dragging selects text instead of changing the value.
+
 In the material panel, upload or drop a height image into the Displacement
 texture slot, then adjust Scale (`displacementScale`) in the Displacement
 section, which is expanded by default. Bias shifts the surface along its normal:
 `offset = texture × Scale + Bias`. Both use mesh-local units; Bias defaults to
 `0`. Set Bias to `-Scale / 2` for centered displacement. Scale's slider covers
 0–10% of the selected mesh's longest local side, and Bias covers the same
-distance in both directions, with precision adjusted to mesh size. Double-click
-to enter a value outside those ranges. Selecting another mesh changes the range
-without changing the material's values. A map is required even when Scale is
-`0` and Bias is nonzero. Meshes without UVs automatically use triplanar
-coordinates when a height map is applied.
+distance in both directions, with precision adjusted to mesh size. Use the
+separate numeric inputs to enter values outside those ranges. Selecting another
+mesh changes the range without changing the material's values. A map is required
+even when Scale is `0` and Bias is nonzero. Meshes without UVs automatically use
+triplanar coordinates when a height map is applied.
 Displacement requires WebGPU; its controls are disabled on WebGL 2.
 
 In the Poly Haven texture browser, enable Download displacement map before
@@ -26,9 +30,10 @@ their settings support undo, redo and restoration when reloading the cached
 model, like other material edits.
 
 Under Material → Textures, expand a loaded texture's Wrap & repeat controls.
-Choose Repeat, Clamp to edge or Mirrored repeat independently for S/T, and set
-each axis's repeat count. Negative values flip an axis; zero samples a constant
-coordinate. Edits support undo/redo and are restored with the cached model.
+Choose Repeat, Clamp to edge or Mirrored repeat independently for S/T, and use
+the Repeat S/T numeric inputs to set each axis's repeat count. Negative values
+flip an axis; zero samples a constant coordinate. Edits support undo/redo and
+are restored with the cached model.
 Uploaded images keep the UV transform and wrapping of the texture they replace.
 
 The Export dialog can download the current viewport PNG immediately, preserving

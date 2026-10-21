@@ -5,6 +5,8 @@ import {
 } from 'react-aria-components';
 import { ChevronDown } from 'lucide-react';
 import { decimalPlacesForStep } from './numberPrecision';
+import { NumberInput } from './NumberInput';
+export { NumberField } from './NumberInput';
 
 // ------------------------------------------------------------------ Section
 
@@ -68,7 +70,7 @@ export function Scrub({
   title?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [editing, setEditing] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
   const range = max - min;
   const effectiveStep = step ?? (range >= 50 ? 1 : range >= 5 ? 0.1 : 0.01);
@@ -78,14 +80,14 @@ export function Scrub({
   const quantize = (v: number) => Number((Math.round(v / effectiveStep) * effectiveStep).toFixed(decimals));
   const text = format ? format(value) : value.toFixed(decimals);
 
-  const setFromPointer = (event: PointerEvent) => {
+  const setFromPointer = (event: PointerEvent, force = false) => {
     const rect = ref.current!.getBoundingClientRect();
     const t = clamp((event.clientX - rect.left) / rect.width, 0, 1);
     const next = quantize(fromT(t));
-    if (next !== value) onChange(log ? Math.round(next) : next);
+    if (next !== value || force) onChange(log ? Math.round(next) : next);
   };
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key === 'Enter') return setEditing(true);
+    if (event.key === 'Enter') return inputRef.current?.focus();
     const dir = event.key === 'ArrowRight' || event.key === 'ArrowUp' ? 1
       : event.key === 'ArrowLeft' || event.key === 'ArrowDown' ? -1 : 0;
     if (!dir) return;
@@ -97,59 +99,41 @@ export function Scrub({
     }
   };
 
-  if (editing) {
-    return (
-      <div className="scrub" data-editing>
-        <span className="scrub__label">{label}</span>
-        <input
-          className="scrub__input mono"
-          autoFocus
-          defaultValue={format ? String(value) : value.toFixed(decimals)}
-          onFocus={(e) => e.currentTarget.select()}
-          onBlur={(e) => {
-            const parsed = Number(e.currentTarget.value);
-            if (Number.isFinite(parsed)) onChange(parsed);
-            setEditing(false);
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') e.currentTarget.blur();
-            if (e.key === 'Escape') setEditing(false);
-          }}
-        />
-      </div>
-    );
-  }
   return (
-    <div
-      ref={ref}
-      className="scrub"
-      role="slider"
-      tabIndex={disabled ? -1 : 0}
-      title={title}
-      aria-label={typeof label === 'string' ? label : undefined}
-      aria-valuemin={min}
-      aria-valuemax={max}
-      aria-valuenow={value}
-      aria-valuetext={`${text}${unit ?? ''}`}
-      aria-disabled={disabled || undefined}
-      data-disabled={disabled || undefined}
-      data-dragging={dragging || undefined}
-      style={{ '--p': `${clamp(toT(value), 0, 1) * 100}%` } as React.CSSProperties}
-      onPointerDown={(e) => {
-        if (disabled || e.button !== 0) return;
-        e.currentTarget.setPointerCapture(e.pointerId);
-        setDragging(true);
-        setFromPointer(e);
-      }}
-      onPointerMove={(e) => dragging && setFromPointer(e)}
-      onPointerUp={() => setDragging(false)}
-      onPointerCancel={() => setDragging(false)}
-      onDoubleClick={() => !disabled && setEditing(true)}
-      onKeyDown={disabled ? undefined : onKeyDown}
-    >
-      <div className="scrub__fill" />
-      <span className="scrub__label">{label}</span>
-      <span className="scrub__value">{text}{unit && <small>{unit}</small>}</span>
+    <div className="scrub-field" data-disabled={disabled || undefined}>
+      <div
+        ref={ref}
+        className="scrub"
+        role="slider"
+        tabIndex={disabled ? -1 : 0}
+        title={title}
+        aria-label={typeof label === 'string' ? label : undefined}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={value}
+        aria-valuetext={`${text}${unit ?? ''}`}
+        aria-disabled={disabled || undefined}
+        data-dragging={dragging || undefined}
+        style={{ '--p': `${clamp(toT(value), 0, 1) * 100}%` } as React.CSSProperties}
+        onPointerDown={(e) => {
+          if (disabled || e.button !== 0) return;
+          // Finish a typed edit before applying the slider's new position.
+          inputRef.current?.blur();
+          e.currentTarget.setPointerCapture(e.pointerId);
+          setDragging(true);
+          setFromPointer(e, true);
+        }}
+        onPointerMove={(e) => dragging && setFromPointer(e)}
+        onPointerUp={() => setDragging(false)}
+        onPointerCancel={() => setDragging(false)}
+        onLostPointerCapture={() => setDragging(false)}
+        onKeyDown={disabled ? undefined : onKeyDown}
+      >
+        <div className="scrub__fill" />
+        <span className="scrub__label">{label}</span>
+      </div>
+      <NumberInput inputRef={inputRef} label={label} value={value} min={min} max={max}
+        step={effectiveStep} onChange={onChange} unit={unit} disabled={disabled} log={log} format={format} title={title} />
     </div>
   );
 }
