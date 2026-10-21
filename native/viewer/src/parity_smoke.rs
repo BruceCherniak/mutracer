@@ -82,6 +82,55 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
         viewer.model.materials[viewer.selected] = original;
         viewer.dirty(Change::Material);
         settle(&mut viewer, &ctx)?;
+        for (i, scale) in [0.25, 0.5, 0.75, 1.].into_iter().enumerate() {
+            viewer.resolution.scale = Some(scale);
+            let now = Instant::now();
+            viewer
+                .resolution
+                .update(eframe::egui::vec2(100., 64.), 2., viewer.size, true, now);
+            let size = viewer
+                .resolution
+                .update(
+                    eframe::egui::vec2(100., 64.),
+                    2.,
+                    viewer.size,
+                    false,
+                    now + Duration::from_millis(200),
+                )
+                .unwrap();
+            viewer.size = size;
+            viewer.dirty(Change::Scene);
+            settle(&mut viewer, &ctx)?;
+            let mut fresh = Renderer::with_backend(mode)?;
+            fresh.commit_with_settings(
+                &viewer.model.descriptor_with_light(
+                    &viewer.camera.bytes(size),
+                    size,
+                    &viewer.environment,
+                    &viewer.light,
+                ),
+                &viewer.settings,
+            )?;
+            ensure!(
+                viewer.pixels.len() == size[0] as usize * size[1] as usize * 4
+                    && viewer.pixels == fresh.finish(viewer.samples)?
+                    && viewer.renderer.image(1)? == fresh.image(1)?
+                    && viewer.renderer.image(2)? == fresh.image(2)?,
+                "Scaled resolution/fresh mismatch: backend {mode}, {scale}"
+            );
+            let png = out.join(format!("resolution-{mode}-{i}.png"));
+            viewer.save_image(&png)?;
+            let exported = image::open(&png)?;
+            ensure!(
+                [exported.width(), exported.height()] == size,
+                "Resolution export size mismatch"
+            );
+        }
+        viewer.resolution.scale = None;
+        viewer.size = [96, 64];
+        viewer.dirty(Change::Scene);
+        settle(&mut viewer, &ctx)?;
+        println!("PASS viewport resolution scales and PNG sizes backend {mode}");
         let camera = viewer.camera.clone();
         let settings = viewer.settings;
         let baseline = viewer.pixels.clone();

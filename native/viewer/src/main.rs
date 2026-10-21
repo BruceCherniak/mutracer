@@ -1,6 +1,7 @@
 //! Small native example: glTF input → native MuTracer library → egui image.
 mod controls;
 mod denoise;
+mod dock;
 mod edit_bench;
 mod focus;
 mod focus_smoke;
@@ -13,6 +14,7 @@ mod package_smoke;
 mod parity_smoke;
 mod picking;
 mod renderer;
+mod resolution;
 mod scene;
 mod shell;
 mod studio;
@@ -62,6 +64,7 @@ struct Viewer {
     environment: Environment,
     light: KeyLight,
     size: [u32; 2],
+    resolution: resolution::Resolution,
     settings: RenderSettings,
     picking_focus: bool,
     focus: focus::AutoFocus,
@@ -134,6 +137,7 @@ impl Viewer {
         if let Some(gate) = &submission_gate {
             gate.pause();
         }
+        let relative_resolution = gpu.is_some() && metrics.is_none();
         Ok(Self {
             submission_gate,
             startup_smoke: None,
@@ -156,6 +160,11 @@ impl Viewer {
             environment,
             light: KeyLight::default(),
             size,
+            resolution: resolution::Resolution::new(if relative_resolution {
+                Some(0.5)
+            } else {
+                None
+            }),
             settings: RenderSettings::default(),
             picking_focus: false,
             focus: focus::AutoFocus::default(),
@@ -2095,6 +2104,7 @@ fn main() -> Result<()> {
             let mut viewer = Viewer::new_on_device(&model, cc.wgpu_render_state.clone())?;
             if let Some(path) = startup_out {
                 viewer.size = [64, 48];
+                viewer.resolution.scale = None;
                 viewer.settings.max_samples = 1;
                 viewer.backend = 0;
                 viewer.denoise = false;

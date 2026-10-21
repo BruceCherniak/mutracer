@@ -461,7 +461,12 @@ mod tests {
                                 drag = crate::input::ViewportDrag::default();
                             }
                             motions = ui.input(|i| {
-                                drag.motion(rect, !consumed && viewport.contains_pointer(), i)
+                                drag.motion(
+                                    rect,
+                                    !consumed && viewport.contains_pointer(),
+                                    Rect::NOTHING,
+                                    i,
+                                )
                             });
                             assert!(drag.take_click().is_none());
                         });

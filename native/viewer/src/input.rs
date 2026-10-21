@@ -11,7 +11,13 @@ impl ViewportDrag {
     }
     // Process ordered events: an entire fast drag can arrive in one UI frame,
     // in which case egui's frame-level dragged/drag_stopped flags are both false.
-    pub fn motion(&mut self, rect: Rect, can_start: bool, input: &InputState) -> Vec<(bool, Vec2)> {
+    pub fn motion(
+        &mut self,
+        rect: Rect,
+        can_start: bool,
+        excluded: Rect,
+        input: &InputState,
+    ) -> Vec<(bool, Vec2)> {
         self.click = None;
         let mut motion = Vec::new();
         for event in &input.events {
@@ -23,6 +29,7 @@ impl ViewportDrag {
                     modifiers,
                 } if can_start
                     && rect.contains(pos)
+                    && !excluded.contains(pos)
                     && self.active.is_none()
                     && matches!(
                         button,
@@ -89,7 +96,9 @@ mod tests {
                 egui::CentralPanel::default().show(ui, |ui| {
                     let rect = Rect::from_min_max(egui::pos2(10., 10.), egui::pos2(300., 300.));
                     let response = ui.interact(rect, ui.id().with("viewport"), egui::Sense::drag());
-                    motion = ui.input(|i| drag.motion(rect, response.contains_pointer(), i));
+                    motion = ui.input(|i| {
+                        drag.motion(rect, response.contains_pointer(), Rect::NOTHING, i)
+                    });
                 });
             },
         );
@@ -107,6 +116,32 @@ mod tests {
             },
         }
     }
+    #[test]
+    fn a_drag_starting_on_the_render_dock_does_not_orbit_or_select() {
+        let ctx = egui::Context::default();
+        let mut drag = ViewportDrag::default();
+        let from = egui::pos2(100., 180.);
+        let to = egui::pos2(150., 80.);
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                events: vec![
+                    Event::PointerMoved(from),
+                    button(from, PointerButton::Primary, true, false),
+                    Event::PointerMoved(to),
+                    button(to, PointerButton::Primary, false, false),
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                let rect = Rect::from_min_max(egui::pos2(0., 0.), egui::pos2(300., 200.));
+                let dock = Rect::from_min_max(egui::pos2(40., 160.), egui::pos2(260., 200.));
+                assert!(ui.input(|i| drag.motion(rect, true, dock, i)).is_empty());
+                assert!(drag.take_click().is_none());
+            },
+        );
+        output.textures_delta.clear();
+    }
+
     #[test]
     fn fast_orbit_and_pan_work_with_coalesced_and_separate_frames() {
         for combined in [false, true] {

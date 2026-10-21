@@ -2,13 +2,11 @@
 use crate::{Change, Viewer, scene::Environment};
 use crate::{controls, theme};
 use eframe::egui;
-use std::time::Duration;
 
 impl Viewer {
     pub(super) fn panels(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
         self.titlebar(root);
-        self.status_bar(root);
         self.inspector_rail(root);
         if self.inspector_open {
             self.inspector(root);
@@ -23,6 +21,14 @@ impl Viewer {
             ctx.data_mut(|data| data.insert_temp(egui::Id::new("smoke-grip"), grip));
         }
         if !ctx.egui_wants_keyboard_input() {
+            if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
+                self.running = !self.running;
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::D)) {
+                self.denoise = !self.denoise;
+                self.last_denoise = None;
+                self.display_dirty = true;
+            }
             if ctx.input(|i| i.key_pressed(egui::Key::OpenBracket)) {
                 self.scene_open = !self.scene_open;
             }
@@ -30,47 +36,6 @@ impl Viewer {
                 self.inspector_open = !self.inspector_open;
             }
         }
-    }
-    fn status_bar(&mut self, root: &mut egui::Ui) {
-        let ctx = root.ctx().clone();
-        egui::Panel::bottom("status")
-            .exact_size(28.)
-            .resizable(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(theme::BG)
-                    .inner_margin(egui::Margin::symmetric(16, 4)),
-            )
-            .show_separator_line(false)
-            .show(root, |ui| {
-                ui.horizontal(|ui| {
-                    if self.loading.is_some() {
-                        ui.spinner();
-                        ui.label(format!("Opening {}…", self.loading_name));
-                        ctx.request_repaint_after(Duration::from_millis(50));
-                    } else {
-                        ui.label(if !self.running {
-                            "Paused"
-                        } else if self.samples >= self.settings.max_samples {
-                            "Complete"
-                        } else {
-                            "Rendering"
-                        });
-                        ui.separator();
-                        ui.small(format!(
-                            "{} / {} samples",
-                            self.samples, self.settings.max_samples
-                        ));
-                    }
-                    if ui.available_width() > 380. {
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let hint =
-                                "Click: select · Drag: orbit · Shift-drag: pan · Scroll: zoom";
-                            ui.small(hint);
-                        });
-                    }
-                });
-            });
     }
     fn inspector_rail(&mut self, root: &mut egui::Ui) {
         egui::Panel::right("inspector_rail")
@@ -216,25 +181,6 @@ impl Viewer {
     fn render_settings(&mut self, ui: &mut egui::Ui) {
         let previous = self.settings;
         controls::section(ui, "Quality", |ui| {
-            ui.small(format!(
-                "{} / {} samples",
-                self.samples, self.settings.max_samples
-            ));
-            ui.add(
-                egui::ProgressBar::new(
-                    self.samples as f32 / self.settings.max_samples.max(1) as f32,
-                )
-                .fill(theme::ACCENT)
-                .desired_height(4.),
-            );
-            ui.horizontal(|ui| {
-                if controls::button(ui, if self.running { "Pause" } else { "Resume" }).clicked() {
-                    self.running = !self.running;
-                }
-                if controls::button(ui, "Restart").clicked() {
-                    self.dirty(Change::Reset);
-                }
-            });
             controls::parameter(
                 ui,
                 "Max samples",
@@ -260,25 +206,11 @@ impl Viewer {
                 "Clamping",
                 controls::Scrub::new(&mut self.settings.clamping, 0.0..=100.0),
             );
-            let old = self.size;
-            controls::select(
-                ui,
-                "Resolution",
-                format!("{} × {}", self.size[0], self.size[1]),
-                |ui| {
-                    for width in [320, 480, 640, 960] {
-                        let size = [width, width * 2 / 3];
-                        ui.selectable_value(
-                            &mut self.size,
-                            size,
-                            format!("{} × {}", size[0], size[1]),
-                        );
-                    }
-                },
-            );
-            if old != self.size {
-                self.dirty(Change::Scene);
-            }
+            let label = self.resolution_label();
+            ui.scope(|ui| {
+                ui.spacing_mut().combo_height = 320.;
+                controls::select(ui, "Resolution", label, |ui| self.resolution_choices(ui));
+            });
         });
         if previous != self.settings {
             self.dirty(Change::Scene);
@@ -995,6 +927,8 @@ impl Viewer {
             .frame(theme::panel().fill(theme::WORKSPACE).outer_margin(6))
             .show(root, |ui| {
                 let available = ui.available_size();
+                self.update_resolution(&ctx, available);
+                let dock_rect = self.render_dock(&ctx, ui.max_rect());
                 let aspect = self.pixel_size[0] as f32 / self.pixel_size[1] as f32;
                 let width = available.x.min(available.y * aspect);
                 let size = egui::vec2(width, width / aspect);
@@ -1060,8 +994,12 @@ impl Viewer {
                     self.drag = crate::input::ViewportDrag::default();
                 }
                 for (pan, delta) in ui.input(|i| {
-                    self.drag
-                        .motion(rect, !focus_drag && response.contains_pointer(), i)
+                    self.drag.motion(
+                        rect,
+                        !focus_drag && response.contains_pointer(),
+                        dock_rect,
+                        i,
+                    )
                 }) {
                     if pan {
                         self.camera.pan([delta.x, delta.y]);
@@ -1070,7 +1008,11 @@ impl Viewer {
                     }
                     self.dirty(Change::Camera);
                 }
-                if let Some(pos) = self.drag.take_click().filter(|p| rect.contains(*p)) {
+                if let Some(pos) = self
+                    .drag
+                    .take_click()
+                    .filter(|p| rect.contains(*p) && !dock_rect.contains(*p))
+                {
                     let uv = [
                         (pos.x - rect.min.x) / rect.width(),
                         (pos.y - rect.min.y) / rect.height(),
@@ -1101,7 +1043,9 @@ impl Viewer {
                         theme::ACCENT,
                     );
                 }
-                if response.hovered() {
+                if response.hovered()
+                    && !dock_rect.contains(ctx.pointer_hover_pos().unwrap_or(egui::Pos2::ZERO))
+                {
                     let scroll = ui.input(|i| i.smooth_scroll_delta.y);
                     if scroll != 0. {
                         self.camera.zoom(scroll);

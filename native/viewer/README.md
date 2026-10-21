@@ -99,14 +99,22 @@ the output directory. See the [native guide](../README.md) for platform backends
 - **Background** offers Environment, Color or Transparent in either lighting
   mode. A transparent background keeps the lighting, and exported PNGs retain
   alpha. In Studio, the Environment background shows the ambient fill.
+- The floating render toolbar shows progress and sample count, with pause/resume,
+  restart, maximum samples, **Res** and denoise controls. **Space** pauses or
+  resumes rendering; **D** toggles denoising. The settings button opens **Render**.
+- **Res** offers 25%, 50% (default), 75% or 100% of the viewport's pixel size,
+  including display scaling up to 2×. It updates after window or panel resizing
+  settles. Fixed 720p (1280 × 720), 1080p (1920 × 1080), 2K (2560 × 1440) and
+  4K (3840 × 2160) stay unchanged when resizing. The menu shows output dimensions;
+  PNG export uses the displayed frame's dimensions.
+  Going from 50% to 100% renders four times as many pixels and uses more memory.
 - **Render** provides 4–16,384 maximum samples, 1–16 bounces, Sobol, Z-Sobol or
   Random sampling and clamping (0 disables it). Quality changes restart
-  accumulation; more samples and bounces cost more rendering time. Choose a fixed
-  resolution, pause/resume, restart, adjust exposure or save the displayed image
-  as PNG. **Color** offers AgX (default), ACES, Cineon, Reinhard and Linear tone
-  mapping, linear exposure (1 is unchanged), contrast, saturation, temperature
-  and tint. These affect both preview and PNG export. **Output** selects Final,
-  Normal or Albedo; guide channels bypass color controls and denoising.
+  accumulation; more samples and bounces cost more rendering time. **Color**
+  offers AgX (default), ACES, Cineon, Reinhard and Linear tone mapping, linear
+  exposure (1 is unchanged), contrast, saturation, temperature and tint. These
+  affect both preview and PNG export. **Output** selects Final, Normal or Albedo;
+  guide channels bypass color controls and denoising.
 - **Lighting** also provides an optional directional **Key light**, disabled by
   default. Adjust its intensity, color, azimuth and elevation.
 - **Native OIDN** is on by default. It denoises completed previews after interaction
