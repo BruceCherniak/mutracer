@@ -9,6 +9,7 @@ mod package_smoke;
 mod picking;
 mod renderer;
 mod scene;
+mod theme;
 mod ui;
 use anyhow::{Context, Result, ensure};
 use eframe::egui;
@@ -578,7 +579,7 @@ impl eframe::App for Viewer {
             painter.rect_stroke(
                 rect.shrink(24.),
                 12.,
-                egui::Stroke::new(2_f32, egui::Color32::from_rgb(126, 190, 255)),
+                egui::Stroke::new(2_f32, theme::ACCENT),
                 egui::StrokeKind::Inside,
             );
             painter.text(
@@ -1830,15 +1831,7 @@ fn main() -> Result<()> {
         "MuTracer Native Viewer",
         options,
         Box::new(move |cc| {
-            let mut visuals = egui::Visuals::dark();
-            visuals.panel_fill = egui::Color32::from_rgb(27, 30, 36);
-            visuals.selection.bg_fill = egui::Color32::from_rgb(44, 91, 140);
-            cc.egui_ctx.set_visuals(visuals);
-            cc.egui_ctx.style_mut_of(egui::Theme::Dark, |style| {
-                style.spacing.item_spacing = egui::vec2(10., 10.);
-                style.spacing.button_padding = egui::vec2(10., 6.);
-                style.spacing.slider_width = 150.;
-            });
+            theme::install(&cc.egui_ctx);
             let mut viewer = Viewer::new_on_device(&model, cc.wgpu_render_state.clone())?;
             if let Some(path) = startup_out {
                 viewer.size = [64, 48];

@@ -1,5 +1,6 @@
 //! Native viewer layout. Rendering and scene updates stay in Viewer.
 use crate::renderer::Camera;
+use crate::theme;
 use crate::{Change, Viewer, default_model, renderer, scene::Environment};
 use eframe::egui;
 use std::time::Duration;
@@ -29,89 +30,116 @@ impl Viewer {
     }
     fn toolbar(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
-        egui::Panel::top("toolbar").show(root, |ui| {
-            ui.horizontal(|ui| {
-                ui.strong("MuTracer");
-                ui.separator();
-                ui.toggle_value(&mut self.scene_open, "Scene")
-                    .on_hover_text("Toggle scene list");
-                ui.toggle_value(&mut self.inspector_open, "Inspector")
-                    .on_hover_text("Toggle inspector");
-                if ui.button("Open GLTF / GLB…").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("glTF", &["gltf", "glb"])
-                        .pick_file()
-                    {
-                        self.load(path, &ctx);
-                    }
-                }
-                ui.label(
-                    egui::RichText::new(&self.model.name)
-                        .color(egui::Color32::from_rgb(190, 196, 208)),
-                );
-                if ui.small_button("Sample").clicked() {
-                    self.load(default_model(), &ctx);
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add_enabled(self.frame_samples > 0, egui::Button::new("Save PNG…"))
-                        .clicked()
-                    {
+        egui::Panel::top("toolbar")
+            .exact_size(52.)
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(egui::Color32::from_rgb(0x14, 0x15, 0x17))
+                    .inner_margin(egui::Margin::symmetric(16, 10)),
+            )
+            .show_separator_line(false)
+            .show(root, |ui| {
+                ui.horizontal(|ui| {
+                    ui.strong("MuTracer");
+                    ui.separator();
+                    ui.toggle_value(&mut self.scene_open, "Scene")
+                        .on_hover_text("Toggle scene list");
+                    ui.toggle_value(&mut self.inspector_open, "Inspector")
+                        .on_hover_text("Toggle inspector");
+                    if ui.button("Open GLTF / GLB…").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
-                            .set_file_name("mutracer.png")
-                            .add_filter("PNG", &["png"])
-                            .save_file()
+                            .add_filter("glTF", &["gltf", "glb"])
+                            .pick_file()
                         {
-                            let linear = if let Some(display) = &self.gpu_display {
-                                display
-                                    .read_linear()
-                                    .map_err(|e| anyhow::anyhow!(e.to_string()))
-                            } else {
-                                Ok(self.display_pixels().to_vec())
-                            };
-                            if let Err(e) = linear.and_then(|pixels| {
-                                renderer::save(&path, &pixels, self.pixel_size, self.exposure)
-                            }) {
-                                self.error = e.to_string();
-                            }
+                            self.load(path, &ctx);
                         }
                     }
+                    if ui.available_width() > 300. {
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(&self.model.name).color(theme::MUTED),
+                            )
+                            .truncate(),
+                        );
+                        if ui.small_button("Sample").clicked() {
+                            self.load(default_model(), &ctx);
+                        }
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add_enabled(self.frame_samples > 0, egui::Button::new("Save PNG…"))
+                            .clicked()
+                        {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .set_file_name("mutracer.png")
+                                .add_filter("PNG", &["png"])
+                                .save_file()
+                            {
+                                let linear = if let Some(display) = &self.gpu_display {
+                                    display
+                                        .read_linear()
+                                        .map_err(|e| anyhow::anyhow!(e.to_string()))
+                                } else {
+                                    Ok(self.display_pixels().to_vec())
+                                };
+                                if let Err(e) = linear.and_then(|pixels| {
+                                    renderer::save(&path, &pixels, self.pixel_size, self.exposure)
+                                }) {
+                                    self.error = e.to_string();
+                                }
+                            }
+                        }
+                    });
                 });
             });
-        });
     }
     fn status_bar(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
-        egui::Panel::bottom("status").show(root, |ui| {
-            ui.horizontal(|ui| {
-                if self.loading.is_some() {
-                    ui.spinner();
-                    ui.label(format!("Opening {}…", self.loading_name));
-                    ctx.request_repaint_after(Duration::from_millis(50));
-                } else {
-                    ui.label(if !self.running {
-                        "Paused"
-                    } else if self.samples >= self.target {
-                        "Complete"
+        egui::Panel::bottom("status")
+            .exact_size(28.)
+            .resizable(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::BG)
+                    .inner_margin(egui::Margin::symmetric(16, 4)),
+            )
+            .show_separator_line(false)
+            .show(root, |ui| {
+                ui.horizontal(|ui| {
+                    if self.loading.is_some() {
+                        ui.spinner();
+                        ui.label(format!("Opening {}…", self.loading_name));
+                        ctx.request_repaint_after(Duration::from_millis(50));
                     } else {
-                        "Rendering"
-                    });
-                    ui.separator();
-                    ui.small(format!("{} / {} samples", self.samples, self.target));
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.small(
+                        ui.label(if !self.running {
+                            "Paused"
+                        } else if self.samples >= self.target {
+                            "Complete"
+                        } else {
+                            "Rendering"
+                        });
+                        ui.separator();
+                        ui.small(format!("{} / {} samples", self.samples, self.target));
+                    }
+                    if ui.available_width() > 380. {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.small(
                         "Click: select   ·   Drag: orbit   ·   Shift-drag: pan   ·   Scroll: zoom",
                     );
+                        });
+                    }
                 });
             });
-        });
     }
     fn inspector_rail(&mut self, root: &mut egui::Ui) {
         egui::Panel::right("inspector_rail")
-            .exact_size(64.)
+            .exact_size(72.)
             .resizable(false)
+            .show_separator_line(false)
+            .frame(theme::panel().inner_margin(6))
             .show(root, |ui| {
+                ui.spacing_mut().button_padding.x = 2.;
                 for (tab, name) in [
                     (2, "Lighting"),
                     (1, "Material"),
@@ -139,6 +167,13 @@ impl Viewer {
             .default_size(252.)
             .min_size(180.)
             .max_size(320.)
+            .show_separator_line(false)
+            .frame(theme::panel().outer_margin(egui::Margin {
+                left: 8,
+                right: 0,
+                top: 8,
+                bottom: 8,
+            }))
             .show(root, |ui| {
                 ui.heading("Scene");
                 ui.label(&self.model.name);
@@ -148,17 +183,19 @@ impl Viewer {
                         .desired_width(f32::INFINITY),
                 );
                 ui.separator();
-                egui::Panel::bottom("scene_summary").show(ui, |ui| {
-                    ui.small(format!(
-                        "{} meshes · {} triangles",
-                        self.model.meshes.len(),
-                        self.model
-                            .geometries
-                            .iter()
-                            .map(|g| g.indices.len() / 3)
-                            .sum::<usize>()
-                    ));
-                });
+                egui::Panel::bottom("scene_summary")
+                    .frame(egui::Frame::new().inner_margin(egui::Margin::symmetric(0, 8)))
+                    .show(ui, |ui| {
+                        ui.small(format!(
+                            "{} meshes · {} triangles",
+                            self.model.meshes.len(),
+                            self.model
+                                .geometries
+                                .iter()
+                                .map(|g| g.indices.len() / 3)
+                                .sum::<usize>()
+                        ));
+                    });
                 egui::ScrollArea::vertical()
                     .id_salt("objects")
                     .auto_shrink([false, false])
@@ -187,6 +224,8 @@ impl Viewer {
             .default_size(316.)
             .min_size(270.)
             .max_size(420.)
+            .show_separator_line(false)
+            .frame(theme::panel().inner_margin(14))
             .show(root, |ui| {
                 egui::ScrollArea::vertical()
                     .id_salt(("inspector", self.tab))
@@ -265,10 +304,7 @@ impl Viewer {
         ui.heading("Material");
         ui.small("Click a surface in the image to select its material.");
         if let Some(id) = self.selected_mesh {
-            ui.label(
-                egui::RichText::new(&self.model.meshes[id].name)
-                    .color(egui::Color32::from_rgb(126, 190, 255)),
-            );
+            ui.label(egui::RichText::new(&self.model.meshes[id].name).color(theme::ACCENT));
             if ui.small_button("Frame selection").clicked() {
                 let (min, max) = self.model.mesh_bounds(id);
                 self.camera = Camera::fit((min + max) * 0.5, (max - min).length() * 0.5);
@@ -450,7 +486,7 @@ impl Viewer {
             ui.label("Select an object in the scene list or viewport to edit its transform.");
         }
         for warning in &self.model.warnings {
-            ui.colored_label(egui::Color32::YELLOW, warning);
+            ui.colored_label(theme::WARNING, warning);
         }
     }
     fn camera_settings(&mut self, ui: &mut egui::Ui) {
@@ -473,16 +509,13 @@ impl Viewer {
         let ctx = root.ctx().clone();
         if !self.error.is_empty() {
             egui::Window::new("Unable to complete action").collapsible(false).resizable(true).default_width(480.).show(&ctx,|ui|{
-                ui.colored_label(egui::Color32::LIGHT_RED,&self.error);
+                ui.colored_label(theme::ERROR,&self.error);
                 ui.small("The previous image is kept. You can open another model or change settings.");
                 if ui.button("Dismiss").clicked(){self.error.clear();}
             });
         }
         egui::CentralPanel::default()
-            .frame(
-                egui::Frame::central_panel(&ctx.style_of(egui::Theme::Dark))
-                    .fill(egui::Color32::from_rgb(18, 20, 24)),
-            )
+            .frame(theme::panel().fill(theme::WORKSPACE).outer_margin(8))
             .show(root, |ui| {
                 let available = ui.available_size();
                 let aspect = self.pixel_size[0] as f32 / self.pixel_size[1] as f32;
@@ -541,7 +574,7 @@ impl Viewer {
                         egui::Align2::LEFT_TOP,
                         &self.model.meshes[id].name,
                         egui::FontId::proportional(14.),
-                        egui::Color32::from_rgb(126, 190, 255),
+                        theme::ACCENT,
                     );
                 }
                 if response.hovered() {
