@@ -39,7 +39,10 @@ export function shaderCapabilitiesInclude(supported: ShaderCapabilities, require
 /** Retain support, not the scene's active flags. Commit only after compilation succeeds. */
 export function retainedShaderCapabilities(constants: Record<string, boolean | number>, previous?: ShaderCapabilities): ShaderCapabilities {
   let scene = wgpuSceneFeatureFlags(constants) | (previous?.SCENE_CAPABILITIES ?? 0);
-  const material = Number(constants.MATERIAL_CAPABILITIES ?? 0) | (previous?.MATERIAL_CAPABILITIES ?? 0);
+  // Metalness is a continuous base-material edit, including the first change
+  // from a dielectric to a metal. Keep that support in every base variant.
+  const material = MATERIAL_SHADER_CAPABILITIES.metal |
+    Number(constants.MATERIAL_CAPABILITIES ?? 0) | (previous?.MATERIAL_CAPABILITIES ?? 0);
   const commonSurface = WGPU_SCENE_FEATURE_BITS.HAS_COAT | WGPU_SCENE_FEATURE_BITS.HAS_FUZZ;
   // Activate this small group on first use, keeping a plain scene's initial
   // pipeline lean. Thin film, media, dispersion and alpha remain independent.

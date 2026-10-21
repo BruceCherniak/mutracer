@@ -124,14 +124,16 @@ supported feature does not by itself need another variant.
 
 Within compatible transport settings and data layouts, WebGPU retains prepared
 material, texture and lighting support for later edits. Turning a feature off
-and back on can reuse that support. Coat and fuzz are prepared together on the
-first use of either: switching between them or combining them does not itself
-require another shader. Metal, thin film and subsurface remain separate features.
-Transport and layout changes below can still require compilation.
+and back on can reuse that support. The base shader supports diffuse, dielectric
+and metal materials: changing `baseMetalness` between 0 and 1 does not itself
+require another shader. Coat and fuzz are prepared together on the first use of
+either: switching between them or combining them does not itself require another
+shader. Transmission, thin film and subsurface are prepared as needed; dispersion
+and other transport/layout changes below can still require compilation.
 
 | Change | When a different shader variant is needed |
 | --- | --- |
-| Material, texture or lighting features | Newly required support is not covered by a prepared shader: coat/fuzz, thin film, subsurface, metal, transmission, shadow catchers, a texture type, an analytic-light type, sampled emissive triangles or environment illumination |
+| Material, texture or lighting features | Newly required support is not covered by a prepared shader: coat/fuzz, thin film, subsurface, transmission, shadow catchers, a texture type, an analytic-light type, sampled emissive triangles or environment illumination |
 | Transport and transparency | Enabling/disabling medium or dispersion support, changing whether any non-opaque material exists, or changing whether deterministic primary BLEND splitting is needed |
 | Shading and geometry structure | Changing required UV/tangent/coat-normal frames, displacement or material-bevel support, vertex/BVH layouts or required traversal capacity |
 | Render settings | Changing `samplingPattern`, `bevelSamples`, or `alphaBlendStrategy` while BLEND materials exist |
@@ -141,8 +143,8 @@ With `alphaMode: 'auto'`, opacity, cutoff or alpha-map edits can change the
 resolved transparency mode. Texture edits can also enable independent coat-normal
 or anisotropy frames. These count as structural changes above.
 
-Within an unchanged feature/structure combination, colors, roughness, existing
-layer weights, light transforms/intensity, texture pixels and camera/output size
+Within an unchanged feature/structure combination, colors, roughness, metalness,
+existing layer weights, light transforms/intensity, texture pixels and camera/output size
 do not recompile the path tracer. Neither do changes to `bounces`,
 `directLightCandidates`, clamping, `dispersionWavelengths` (1 or 3), the render's
 bevel switch, sample count or seed. Data uploads, atlas/BVH work and accumulation

@@ -71,7 +71,8 @@ describe('shader capabilities', () => {
     expect(current.HAS_COAT).toBe(false);
     expect(wgpuSceneFeatureFlags(current)).toBe(WGPU_SCENE_FEATURE_BITS.USE_DIFFUSE_MAPS);
     expect(first).toEqual({SCENE_CAPABILITIES: WGPU_SCENE_FEATURE_BITS.HAS_COAT | WGPU_SCENE_FEATURE_BITS.HAS_FUZZ, MATERIAL_CAPABILITIES: 2, LIGHT_CAPABILITIES: 1});
-    expect(retainedShaderCapabilities({})).toEqual({SCENE_CAPABILITIES: 0, MATERIAL_CAPABILITIES: 0, LIGHT_CAPABILITIES: 0});
+    expect(retainedShaderCapabilities({})).toEqual({SCENE_CAPABILITIES: 0,
+      MATERIAL_CAPABILITIES: MATERIAL_SHADER_CAPABILITIES.metal, LIGHT_CAPABILITIES: 0});
   });
 });
 
@@ -84,6 +85,7 @@ function pipelinePass() {
     _pendingGeometryUpdates: new Set(), _dirtyColorMeshes: new Set(), _prevPipelineConstants: {},
     _constants: {NUM_MAPS: 20, TLAS_STACK_SIZE: 8, BLAS_STACK_SIZE: 32, NUM_UNIFORM_LIGHTS: 64},
     _rayTracePipelineLayout: {}, _blasLayoutMask: 1, _shaderCapabilities: new WGPUShaderCapabilities(),
+    _bevelSamples: 8, _hasDisplacement: false,
     _updateBindGroups: vi.fn(() => {pass._rayTraceBindGroups = [];})});
   return {pass, compile};
 }
@@ -117,9 +119,29 @@ describe('retained WebGPU pipeline capabilities', () => {
     expect(pass._retainedShaderCapabilities.SCENE_CAPABILITIES).toBe(WGPU_SCENE_FEATURE_BITS.HAS_THIN_FILM);
   });
 
-  it('compiles coat/fuzz support together while keeping plain and metal variants independent', async () => {
+  it('reuses the base pipeline throughout dielectric/metal edits, including an existing metalness map', async () => {
+    for (const map of [undefined, texture()]) {
+      const {pass, compile} = pipelinePass();
+      const material = new OpenPBRMaterial({metalnessMap: map});
+      const geometry = createPlaneGeometry();
+      let base: GPUComputePipeline | undefined;
+      for (const metalness of [0, .25, .5, 1, .5, 0]) {
+        material.baseMetalness = metalness;
+        pass._updateMaterialConstants([material], new MaterialTable([material], []), geometry);
+        await pass.updatePipeline();
+        base ??= pass._rayTracePipeline;
+        expect(pass._rayTracePipeline).toBe(base);
+        expect(pass._retainedShaderCapabilities.MATERIAL_CAPABILITIES).toBe(MATERIAL_SHADER_CAPABILITIES.metal);
+        expect(pass._retainedShaderCapabilities.SCENE_CAPABILITIES).toBe(wgpuSceneFeatureFlags(pass._constants));
+        expect(compile).toHaveBeenCalledTimes(1);
+      }
+    }
+  });
+
+  it('compiles coat/fuzz support together on first use while keeping metalness editable', async () => {
     const {pass, compile} = pipelinePass();
     await pass.updatePipeline();
+    const base = pass._rayTracePipeline;
     expect(pass._retainedShaderCapabilities.SCENE_CAPABILITIES).toBe(0);
     pass._constants.HAS_COAT = true;
     await pass.updatePipeline();
@@ -132,10 +154,29 @@ describe('retained WebGPU pipeline capabilities', () => {
     pass._constants.HAS_FUZZ = false;
     pass._constants.MATERIAL_CAPABILITIES = MATERIAL_SHADER_CAPABILITIES.metal;
     await pass.updatePipeline();
-    expect(pass._rayTracePipeline).not.toBe(coated);
+    expect(pass._rayTracePipeline).toBe(base);
     expect(pass._constants.HAS_COAT).toBe(false);
-    expect(compile).toHaveBeenCalledTimes(3);
+    expect(compile).toHaveBeenCalledTimes(2);
     expect(retainedShaderCapabilities({MATERIAL_CAPABILITIES: MATERIAL_SHADER_CAPABILITIES.metal}).SCENE_CAPABILITIES).toBe(0);
+  });
+
+  it('prepares transmission on demand and reuses both base and transmission pipelines', async () => {
+    const {pass, compile} = pipelinePass();
+    await pass.updatePipeline();
+    const base = pass._rayTracePipeline;
+    pass._constants.MATERIAL_CAPABILITIES = MATERIAL_SHADER_CAPABILITIES.transmission;
+    await pass.updatePipeline();
+    const transmission = pass._rayTracePipeline;
+    expect(transmission).not.toBe(base);
+    expect(pass._retainedShaderCapabilities.MATERIAL_CAPABILITIES)
+      .toBe(MATERIAL_SHADER_CAPABILITIES.metal | MATERIAL_SHADER_CAPABILITIES.transmission);
+    pass._constants.MATERIAL_CAPABILITIES = 0;
+    await pass.updatePipeline();
+    expect(pass._rayTracePipeline).toBe(base);
+    pass._constants.MATERIAL_CAPABILITIES = MATERIAL_SHADER_CAPABILITIES.transmission;
+    await pass.updatePipeline();
+    expect(pass._rayTracePipeline).toBe(transmission);
+    expect(compile).toHaveBeenCalledTimes(2);
   });
 
   it('reuses the expanded pipeline when a supported feature is removed or re-enabled', async () => {
