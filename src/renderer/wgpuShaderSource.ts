@@ -14,7 +14,7 @@ const definesKeys = ['NUM_MAPS', 'TLAS_STACK_SIZE', 'BLAS_STACK_SIZE', 'NUM_UNIF
 const constantsNotUsed = [
   ...Object.keys(WGPU_SCENE_FEATURE_BITS), 'USE_BACKGROUND', 'USE_BACKGROUND_MAP',
   'USE_GROUNDED_BACKGROUND', ...MATERIAL_TEXTURE_DEFINES, 'USE_ANISOTROPY_DIRECTIONS',
-  'USE_COAT_NORMAL_FRAMES', 'COLOR_OFF', 'USE_VERTEX_COLOR', 'HAS_ALPHA_BLEND', 'HAS_ALPHA_MASK'
+  'USE_COAT_NORMAL_FRAMES', 'HAS_ALPHA_BLEND', 'HAS_ALPHA_MASK'
 ];
 export function wgpuShaderPreamble(constants: Record<string, boolean | number>, bake = false): string {
   const defineCode = definesKeys.map(key => `const ${key} = ${constants[key]};`).join('\n');

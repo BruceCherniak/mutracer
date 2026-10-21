@@ -42,7 +42,7 @@ pub fn run(model_path: &Path, out: &Path) -> Result<()> {
     if gpu {
         let mut renderer = Renderer::with_backend(0)?;
         let camera = Camera::fit(model.center, model.radius);
-        renderer.commit(&model.descriptor(&camera.bytes(), size, &Environment::default()))?;
+        renderer.commit(&model.descriptor(&camera.bytes(size), size, &Environment::default()))?;
         let pixels = renderer.finish(4)?;
         ensure!(
             pixels.iter().all(|v| v.is_finite()),

@@ -34,6 +34,60 @@ pub struct Material {
     pub double_sided: bool,
     pub normal_scale: f32,
     pub unlit: bool,
+    pub layers: MaterialLayers,
+}
+/// Editable OpenPBR layers; defaults match the shared MaterialState schema.
+#[derive(Clone)]
+pub struct MaterialLayers {
+    pub diffuse_roughness: f32,
+    pub specular_weight: f32,
+    pub anisotropy: f32,
+    pub transmission_color: [f32; 3],
+    pub transmission_depth: f32,
+    pub dispersion: f32,
+    pub thin_walled: bool,
+    pub coat_weight: f32,
+    pub coat_roughness: f32,
+    pub coat_ior: f32,
+    pub coat_color: [f32; 3],
+    pub subsurface_weight: f32,
+    pub subsurface_color: [f32; 3],
+    pub subsurface_radius: f32,
+    pub fuzz_weight: f32,
+    pub fuzz_color: [f32; 3],
+    pub fuzz_roughness: f32,
+    pub film_weight: f32,
+    pub film_thickness: f32,
+    pub film_ior: f32,
+    pub bevel: f32,
+}
+impl Default for MaterialLayers {
+    fn default() -> Self {
+        Self {
+            diffuse_roughness: 0.,
+            specular_weight: 1.,
+            anisotropy: 0.,
+            transmission_color: [1.; 3],
+            transmission_depth: 0.,
+            dispersion: 0.,
+            // Preserve the native glTF viewer's existing thin-surface interpretation.
+            thin_walled: true,
+            coat_weight: 0.,
+            coat_roughness: 0.,
+            coat_ior: 1.6,
+            coat_color: [1.; 3],
+            subsurface_weight: 0.,
+            subsurface_color: [0.8; 3],
+            subsurface_radius: 1.,
+            fuzz_weight: 0.,
+            fuzz_color: [1.; 3],
+            fuzz_roughness: 0.5,
+            film_weight: 0.,
+            film_thickness: 0.5,
+            film_ior: 1.4,
+            bevel: 0.,
+        }
+    }
 }
 impl Material {}
 #[derive(Clone)]
@@ -66,6 +120,7 @@ pub struct Model {
     pub meshes: Vec<Mesh>,
     pub center: Vec3,
     pub radius: f32,
+    pub ground_y: f32,
     pub warnings: Vec<String>,
 }
 impl Model {
@@ -110,6 +165,7 @@ impl Model {
             meshes: vec![],
             center: Vec3::ZERO,
             radius: 1.,
+            ground_y: 0.,
             warnings: vec![],
         };
         for extension in document.extensions_used().filter(|e| !known.contains(e)) {
@@ -209,6 +265,7 @@ impl Model {
                 double_sided: material.double_sided(),
                 normal_scale: material.normal_texture().map(|t| t.scale()).unwrap_or(1.),
                 unlit: material.unlit(),
+                layers: MaterialLayers::default(),
             });
         }
         model.materials.push(Material {
@@ -227,6 +284,7 @@ impl Model {
             double_sided: false,
             normal_scale: 1.,
             unlit: false,
+            layers: MaterialLayers::default(),
         });
         let scene = document
             .default_scene()
@@ -284,6 +342,7 @@ impl Model {
         }
         model.center = (min + max) * 0.5;
         model.radius = (max - min).length() * 0.5;
+        model.ground_y = min.y;
         ensure!(
             model.center.is_finite() && model.radius.is_finite() && model.radius > 1e-8,
             "Invalid or degenerate model bounds"
@@ -734,6 +793,12 @@ impl Model {
         environment: &Environment,
         light: &KeyLight,
     ) -> bool {
+        let mut lights = environment
+            .studio
+            .records(self.center, self.radius, self.ground_y);
+        if light.enabled {
+            lights.push(light.record());
+        }
         let w = &mut d.words;
         if !Arc::ptr_eq(&d.geometries, &self.geometries)
             || !Arc::ptr_eq(&d.textures, &self.textures)
@@ -741,7 +806,7 @@ impl Model {
             || w[h::HEIGHT] != size[1]
             || w[h::MESH_COUNT] as usize != self.meshes.len()
             || w[h::MATERIAL_COUNT] as usize != self.materials.len()
-            || w[h::LIGHT_COUNT] != u32::from(light.enabled)
+            || w[h::LIGHT_COUNT] as usize != lights.len()
             || camera.len() != camera_wire::WORDS * 4
         {
             return false;
@@ -770,9 +835,10 @@ impl Model {
         for (i, m) in self.materials.iter().enumerate() {
             write_material(w, material_offset + i * mat::WORDS, m);
         }
-        if light.enabled {
-            let o = w[h::LIGHT_OFFSET] as usize;
-            w[o..o + light_wire::WORDS].copy_from_slice(&light.record());
+        let offset = w[h::LIGHT_OFFSET] as usize;
+        for (i, record) in lights.iter().enumerate() {
+            let o = offset + i * light_wire::WORDS;
+            w[o..o + light_wire::WORDS].copy_from_slice(record);
         }
         write_background(w, environment, self.textures.len() as u32 + 1);
         true
@@ -784,6 +850,12 @@ impl Model {
         environment: &Environment,
         light: &KeyLight,
     ) -> Vec<u32> {
+        let mut lights = environment
+            .studio
+            .records(self.center, self.radius, self.ground_y);
+        if light.enabled {
+            lights.push(light.record());
+        }
         let mut w = Wire(vec![0; h::WORDS]);
         w.0[h::VERSION] = mutracer_native_probe::layout::version::SCENE as u32;
         w.0[h::WIDTH] = size[0];
@@ -791,25 +863,22 @@ impl Model {
         w.0[h::GEOMETRY_COUNT] = self.geometries.len() as u32;
         w.0[h::MESH_COUNT] = self.meshes.len() as u32;
         w.0[h::MATERIAL_COUNT] = self.materials.len() as u32;
-        w.0[h::LIGHT_COUNT] = u32::from(light.enabled);
+        w.0[h::LIGHT_COUNT] = lights.len() as u32;
         w.0[h::TEXTURE_COUNT] = self.textures.len() as u32 + 1;
         for (header, count, stride) in [
             (h::GEOMETRY_OFFSET, self.geometries.len(), g::WORDS),
             (h::MESH_OFFSET, self.meshes.len(), wire_mesh::WORDS),
             (h::MATERIAL_OFFSET, self.materials.len(), mat::WORDS),
             (h::TEXTURE_OFFSET, self.textures.len() + 1, tex::WORDS),
-            (
-                h::LIGHT_OFFSET,
-                usize::from(light.enabled),
-                light_wire::WORDS,
-            ),
+            (h::LIGHT_OFFSET, lights.len(), light_wire::WORDS),
         ] {
             w.0[header] = w.0.len() as u32;
             w.0.resize(w.0.len() + count * stride, 0);
         }
-        if light.enabled {
-            let offset = w.0[h::LIGHT_OFFSET] as usize;
-            w.0[offset..offset + light_wire::WORDS].copy_from_slice(&light.record());
+        let offset = w.0[h::LIGHT_OFFSET] as usize;
+        for (i, record) in lights.iter().enumerate() {
+            let o = offset + i * light_wire::WORDS;
+            w.0[o..o + light_wire::WORDS].copy_from_slice(record);
         }
         w.0[h::CAMERA_OFFSET] = w.append_bytes(camera);
         for (i, g) in self.geometries.iter().enumerate() {
@@ -923,7 +992,7 @@ impl Descriptor {
         compile_error!("Native descriptors assume a little-endian target");
     }
 }
-const MATERIAL_EXTENSIONS: usize = 6;
+const MATERIAL_EXTENSIONS: usize = 24;
 fn write_mesh(w: &mut [u32], o: usize, m: &Mesh) {
     w[o + wire_mesh::GEOMETRY] = m.geometry as u32;
     w[o + wire_mesh::MATERIAL] = m.material as u32;
@@ -945,56 +1014,72 @@ fn write_material(w: &mut [u32], o: usize, m: &Material) {
         (mat::EMISSION_COLOR + 1, m.emission[1]),
         (mat::EMISSION_COLOR + 2, m.emission[2]),
         (mat::EMISSION_LUMINANCE, m.emission_strength),
-        (mat::COAT_WEIGHT, 0.),
-        (mat::COAT_ROUGHNESS, 0.),
+        (mat::COAT_WEIGHT, m.layers.coat_weight),
+        (mat::COAT_ROUGHNESS, m.layers.coat_roughness),
         (mat::OPACITY, m.opacity),
     ] {
         w[o + field] = value.to_bits();
     }
-    w[o + mat::THIN_WALLED] = 1;
+    w[o + mat::THIN_WALLED] = u32::from(m.layers.thin_walled);
     for (k, v) in m.maps.iter().enumerate() {
         w[o + mat::MAP + k] = *v;
     }
-    let ext: [u32; MATERIAL_EXTENSIONS * 4] = [
-        38,
-        u32::from(m.double_sided),
-        0,
-        0,
-        41,
-        m.alpha_mode,
-        0,
-        0,
-        42,
-        m.alpha_cutoff.to_bits(),
-        0,
-        0,
-        45,
-        m.normal_scale.to_bits(),
-        m.normal_scale.to_bits(),
-        0,
-        52,
-        u32::from(m.unlit),
-        0,
-        0,
-        73,
-        1,
-        0,
-        0,
+    // Frozen IDs from native/schemas/material-properties.json. The first six
+    // records preserve the former descriptor for the default-image regression gate.
+    fn scalar(id: u32, v: f32) -> [u32; 4] {
+        [id, v.to_bits(), 0, 0]
+    }
+    fn color(id: u32, v: [f32; 3]) -> [u32; 4] {
+        [id, v[0].to_bits(), v[1].to_bits(), v[2].to_bits()]
+    }
+    let l = &m.layers;
+    let ext: [[u32; 4]; MATERIAL_EXTENSIONS] = [
+        [38, u32::from(m.double_sided), 0, 0],
+        [41, m.alpha_mode, 0, 0],
+        scalar(42, m.alpha_cutoff),
+        [45, m.normal_scale.to_bits(), m.normal_scale.to_bits(), 0],
+        [52, u32::from(m.unlit), 0, 0],
+        [73, 1, 0, 0],
+        scalar(3, l.diffuse_roughness),
+        scalar(5, l.specular_weight),
+        scalar(9, l.anisotropy),
+        color(11, l.transmission_color),
+        scalar(12, l.transmission_depth),
+        scalar(15, l.dispersion),
+        scalar(17, l.subsurface_weight),
+        color(18, l.subsurface_color),
+        scalar(19, l.subsurface_radius),
+        scalar(22, l.fuzz_weight),
+        color(23, l.fuzz_color),
+        scalar(24, l.fuzz_roughness),
+        color(26, l.coat_color),
+        scalar(29, l.coat_ior),
+        scalar(31, l.film_weight),
+        scalar(32, l.film_thickness),
+        scalar(33, l.film_ior),
+        scalar(53, l.bevel),
     ];
     let at = w[o + mat::EXTENSION_OFFSET] as usize;
-    w[at..at + ext.len()].copy_from_slice(&ext);
+    for (index, record) in ext.iter().enumerate() {
+        w[at + index * 4..at + (index + 1) * 4].copy_from_slice(record);
+    }
 }
 /// Background words; the environment map is texture `environment` (index + 1).
 fn write_background(w: &mut [u32], environment: &Environment, texture: u32) {
     let color = if environment.background {
         [0.; 3]
     } else {
-        [0.025f32, 0.025, 0.03]
+        environment.background_color
     };
     for (k, c) in color.iter().enumerate() {
         w[h::BACKGROUND_COLOR + k] = c.to_bits();
     }
-    w[h::BACKGROUND_COLOR + 3] = 1f32.to_bits();
+    w[h::BACKGROUND_COLOR + 3] = if environment.background {
+        1f32
+    } else {
+        environment.background_alpha
+    }
+    .to_bits();
     w[h::BACKGROUND_TEXTURE] = if environment.background { texture } else { 0 };
 }
 struct Wire(Vec<u32>);
@@ -1060,7 +1145,10 @@ pub struct Environment {
     pub intensity: f32,
     pub color: [f32; 3],
     pub rotation: f32,
+    pub studio: crate::studio::Studio,
     pub background: bool,
+    pub background_color: [f32; 3],
+    pub background_alpha: f32,
     pub image: Option<Arc<image::Rgb32FImage>>,
     pub name: String,
 }
@@ -1070,9 +1158,12 @@ impl Default for Environment {
             intensity: 1.,
             color: [0.8, 0.88, 1.],
             rotation: 0.,
+            studio: crate::studio::Studio::default(),
             background: true,
+            background_color: [0.025, 0.025, 0.03],
+            background_alpha: 1.,
             image: None,
-            name: "Studio".into(),
+            name: "Built-in environment".into(),
         }
     }
 }
@@ -1101,6 +1192,12 @@ impl Environment {
     }
     /// Whether `pixels` would return the same map.
     fn same_pixels(&self, other: &Self) -> bool {
+        if self.studio.enabled != other.studio.enabled {
+            return false;
+        }
+        if self.studio.enabled {
+            return self.studio.same_ambient(&other.studio);
+        }
         self.intensity.to_bits() == other.intensity.to_bits()
             && self.color.map(f32::to_bits) == other.color.map(f32::to_bits)
             && self.rotation.to_bits() == other.rotation.to_bits()
@@ -1110,6 +1207,9 @@ impl Environment {
             }
     }
     fn pixels(&self) -> (u32, u32, Vec<f32>) {
+        if self.studio.enabled {
+            return self.studio.pixels();
+        }
         let (width, height) = self
             .image
             .as_ref()
@@ -1173,7 +1273,7 @@ mod descriptor_tests {
         }
         // Byte equality also checks every payload offset after a layout change.
         fn check(&mut self) -> usize {
-            let camera = self.camera.bytes();
+            let camera = self.camera.bytes(self.size);
             let expected = self.model.descriptor_with_light(
                 &camera,
                 self.size,
@@ -1214,11 +1314,36 @@ mod descriptor_tests {
             m.double_sided = step % 2 == 0;
             m.normal_scale = 0.5;
             m.unlit = step % 2 != 0;
+            m.layers = MaterialLayers {
+                diffuse_roughness: 0.2,
+                specular_weight: 0.8,
+                anisotropy: 0.3,
+                transmission_color: [0.3, 0.8, 0.5],
+                transmission_depth: 0.2,
+                dispersion: 0.1,
+                thin_walled: step % 2 == 0,
+                coat_weight: 0.4,
+                coat_roughness: 0.1,
+                coat_ior: 1.7,
+                coat_color: [0.9, 0.8, 0.7],
+                subsurface_weight: 0.2,
+                subsurface_color: [0.9, 0.5, 0.3],
+                subsurface_radius: 0.1,
+                fuzz_weight: 0.3,
+                fuzz_color: [0.8, 0.7, 0.6],
+                fuzz_roughness: 0.6,
+                film_weight: 0.5,
+                film_thickness: 0.4,
+                film_ior: 1.6,
+                bevel: 0.01,
+            };
             s.light.color = [0.3, 0.5, 0.8];
             s.light.intensity += 0.2;
             s.light.azimuth += 12.;
             s.light.elevation -= 3.;
             s.environment.background = step % 2 == 0;
+            s.environment.background_color = [step as f32 * 0.1, 0.1, 0.3];
+            s.environment.background_alpha = if step % 2 == 0 { 1. } else { 0. };
             assert_eq!(s.check(), allocation);
             // Snapshot moved to and back from a worker still owns the same buffer.
             let cached = s.descriptor.take();

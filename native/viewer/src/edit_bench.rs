@@ -17,7 +17,7 @@ impl Scene {
     fn descriptor<'a>(&self, cached: &'a mut Option<Descriptor>) -> &'a [u8] {
         self.model.update_descriptor(
             cached,
-            &self.camera.bytes(),
+            &self.camera.bytes(SIZE),
             SIZE,
             &self.environment,
             &self.light,

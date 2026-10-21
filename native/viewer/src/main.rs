@@ -1,17 +1,29 @@
 //! Small native example: glTF input → native MuTracer library → egui image.
+mod controls;
 mod denoise;
+mod dock;
 mod edit_bench;
+mod focus;
+mod focus_smoke;
 mod geometry_smoke;
 mod import;
 mod input;
+mod material_presets;
 mod metrics;
 mod package_smoke;
+mod parity_smoke;
 mod picking;
 mod renderer;
+mod resolution;
 mod scene;
+mod shell;
+mod studio;
+mod studio_smoke;
+mod theme;
+mod ui;
 use anyhow::{Context, Result, ensure};
 use eframe::egui;
-use renderer::{Camera, Renderer};
+use renderer::{Camera, RenderSettings, Renderer};
 use scene::{Descriptor, Environment, KeyLight, Model};
 use std::{
     path::{Path, PathBuf},
@@ -52,12 +64,18 @@ struct Viewer {
     environment: Environment,
     light: KeyLight,
     size: [u32; 2],
-    target: u32,
+    resolution: resolution::Resolution,
+    settings: RenderSettings,
+    picking_focus: bool,
+    focus: focus::AutoFocus,
     samples: u32,
-    exposure: f32,
+    display_settings: mutracer_native_probe::display::Settings,
     selected: usize,
     selected_mesh: Option<usize>,
     tab: usize,
+    scene_open: bool,
+    inspector_open: bool,
+    object_query: String,
     loading: Option<std::sync::mpsc::Receiver<Result<Model>>>,
     loading_name: String,
     queued_load: Option<PathBuf>,
@@ -67,6 +85,7 @@ struct Viewer {
     pixels: Vec<f32>,
     pixel_size: [u32; 2],
     frame_samples: u32,
+    frame_pending: bool,
     generation: u64,
     render_generation: u64,
     frame_generation: u64,
@@ -80,6 +99,7 @@ struct Viewer {
     /// Whether the last completed commit prepared the scene again.
     last_commit_full: bool,
     texture: Option<egui::TextureHandle>,
+    checker: Option<egui::TextureHandle>,
     display_dirty: bool,
     error: String,
 }
@@ -106,7 +126,7 @@ impl Viewer {
         if gpu.is_none() {
             renderer.commit(model.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &environment,
                 &KeyLight::default(),
@@ -117,6 +137,7 @@ impl Viewer {
         if let Some(gate) = &submission_gate {
             gate.pause();
         }
+        let relative_resolution = gpu.is_some() && metrics.is_none();
         Ok(Self {
             submission_gate,
             startup_smoke: None,
@@ -139,12 +160,22 @@ impl Viewer {
             environment,
             light: KeyLight::default(),
             size,
-            target: 64,
+            resolution: resolution::Resolution::new(if relative_resolution {
+                Some(0.5)
+            } else {
+                None
+            }),
+            settings: RenderSettings::default(),
+            picking_focus: false,
+            focus: focus::AutoFocus::default(),
             samples: 0,
-            exposure: 0.,
+            display_settings: mutracer_native_probe::display::Settings::default(),
             selected,
             selected_mesh: None,
             tab: 0,
+            scene_open: true,
+            inspector_open: true,
+            object_query: String::new(),
             loading: None,
             loading_name: String::new(),
             queued_load: None,
@@ -159,6 +190,7 @@ impl Viewer {
             pixels: vec![],
             pixel_size: size,
             frame_samples: 0,
+            frame_pending: false,
             generation: 1,
             render_generation: 1,
             frame_generation: 0,
@@ -170,6 +202,7 @@ impl Viewer {
             last_denoise: None,
             last_scene_commit: std::time::Instant::now(),
             texture: None,
+            checker: None,
             display_dirty: false,
             error: String::new(),
         })
@@ -182,6 +215,9 @@ impl Viewer {
         }
     }
     fn dirty(&mut self, change: Change) {
+        if matches!(change, Change::Camera | Change::Transform | Change::Scene) {
+            self.focus.request();
+        }
         self.change = self.change.max(change);
         self.generation += 1;
     }
@@ -217,7 +253,12 @@ impl Viewer {
         }
         match result {
             Ok(model) => {
-                let camera = Camera::fit(model.center, model.radius);
+                let mut camera = Camera::fit(model.center, model.radius);
+                camera.fov = self.camera.fov;
+                camera.orthographic = self.camera.orthographic;
+                camera.f_stop = self.camera.f_stop;
+                camera.meters_per_unit = self.camera.meters_per_unit;
+                camera.frame(model.center, model.radius);
                 if let Some(retired) = self.candidate.replace((model, camera)) {
                     std::thread::spawn(move || drop(retired));
                 }
@@ -238,10 +279,11 @@ impl Viewer {
                             // Even a superseded snapshot is safe to reuse: the next
                             // submission patches all editable values from its model.
                             self.descriptor = Some(committed.descriptor);
-                            if let Some(renderer) = committed.replacement {
-                                let retired = std::mem::replace(&mut self.renderer, renderer);
-                                std::thread::spawn(move || drop(retired));
-                            }
+                            // Read publication metadata before retiring another context:
+                            // destruction also uses the native registry and can report busy.
+                            let retired = committed
+                                .replacement
+                                .map(|renderer| std::mem::replace(&mut self.renderer, renderer));
                             self.renderer.commit_finished();
                             // Full preparations restart the held-input throttle.
                             self.last_commit_full = !self.renderer.last_commit_incremental()?;
@@ -258,6 +300,8 @@ impl Viewer {
                                     self.camera = camera;
                                     self.selected = self.model.meshes[0].material;
                                     self.selected_mesh = None;
+                                    self.picking_focus = false;
+                                    self.object_query.clear();
                                 }
                                 self.samples = 0;
                                 self.render_generation = generation;
@@ -275,6 +319,9 @@ impl Viewer {
                                     self.change = Change::Scene;
                                 }
                             }
+                            if let Some(retired) = retired {
+                                std::thread::spawn(move || drop(retired));
+                            }
                         }
                         Err(error) => {
                             self.change = Change::None;
@@ -285,7 +332,7 @@ impl Viewer {
                 Err(std::sync::mpsc::TryRecvError::Empty) => {
                     if self.display_dirty {
                         if let Some(display) = &self.gpu_display {
-                            display.compose(self.exposure);
+                            display.compose_with(&self.display_settings);
                             self.display_dirty = false;
                         }
                     }
@@ -298,19 +345,40 @@ impl Viewer {
                 }
             }
         }
+        let focus_ready =
+            self.loading.is_none() && self.candidate.is_none() && self.change != Change::Scene;
+        if self.focus.update(
+            &self.model,
+            &mut self.camera,
+            self.size[0] as f32 / self.size[1] as f32,
+            focus_ready,
+            ctx.input(|i| i.pointer.any_down()),
+            std::time::Instant::now(),
+            ctx,
+        ) {
+            // Lens pulls change the rendered camera, but must not request another measurement.
+            self.change = self.change.max(Change::Camera);
+            self.generation += 1;
+        }
+        if self.focus.working(&self.camera) {
+            ctx.request_repaint_after(Duration::from_millis(16));
+        }
         if self.change != Change::None || !self.running {
             self.renderer.cancel()?;
         }
-        let finished = self.renderer.poll()?;
+        self.frame_pending |= self.renderer.poll()?;
         // Read the completed old frame before applying pending input. Keep it on
         // screen until a newer frame arrives, including while a slider is held.
-        if finished {
+        if self.frame_pending {
             self.samples = self.renderer.samples()?;
             if self.samples > 0 {
+                let old_texture = self.gpu_display.as_ref().map(|d| d.texture.clone());
+                if !self.renderer.capture(&mut self.gpu_display)? {
+                    ctx.request_repaint_after(Duration::from_millis(16));
+                    return Ok(());
+                }
                 if self.gpu.is_some() {
-                    let old_size = self.gpu_display.as_ref().map(|d| d.size);
-                    self.renderer.capture(&mut self.gpu_display)?;
-                    if old_size != self.gpu_display.as_ref().map(|d| d.size) {
+                    if old_texture.as_ref() != self.gpu_display.as_ref().map(|d| &d.texture) {
                         if let Some(id) = self.gpu_texture.take() {
                             self.gpu
                                 .as_ref()
@@ -339,6 +407,7 @@ impl Viewer {
                 self.display_dirty = true;
             }
         }
+        self.frame_pending = false;
         let held = ctx.input(|i| i.pointer.any_down());
         if !self.renderer.busy() {
             // Edits commit the whole descriptor. While the last commit applied
@@ -358,13 +427,16 @@ impl Viewer {
                     | Change::Transform
                         if !background =>
                     {
-                        self.renderer.commit(self.model.update_descriptor(
-                            &mut self.descriptor,
-                            &self.camera.bytes(),
-                            self.size,
-                            &self.environment,
-                            &self.light,
-                        ))?;
+                        self.renderer.commit_with_settings(
+                            self.model.update_descriptor(
+                                &mut self.descriptor,
+                                &self.camera.bytes(self.size),
+                                self.size,
+                                &self.environment,
+                                &self.light,
+                            ),
+                            &self.settings,
+                        )?;
                         self.last_commit_full = !self.renderer.last_commit_incremental()?;
                         if self.last_commit_full {
                             self.last_scene_commit = std::time::Instant::now();
@@ -386,6 +458,7 @@ impl Viewer {
                             model.clone(),
                             camera.clone(),
                             self.size,
+                            self.settings,
                             self.environment.clone(),
                             self.light.clone(),
                             self.descriptor.take(),
@@ -426,12 +499,13 @@ impl Viewer {
             }
         }
         if self.denoise
+            && self.display_settings.output == 0
             && !held
             && !self.renderer.busy()
             && self.change == Change::None
             && self.frame_samples > 0
             && self.frame_generation == self.generation
-            && (self.samples >= self.target
+            && (self.samples >= self.settings.max_samples
                 || !self.running
                 || self.samples >= 8 && self.samples.is_power_of_two())
             && self.last_denoise != Some((self.generation, self.samples))
@@ -458,14 +532,14 @@ impl Viewer {
         if !self.renderer.busy()
             && self.change == Change::None
             && self.running
-            && self.samples < self.target
+            && self.samples < self.settings.max_samples
         {
             // Dispatch now, before the next input can cancel a queued job.
             self.renderer
-                .start((self.target - self.samples).min(if held { 1 } else { 4 }))?;
-            self.renderer.poll()?;
+                .start((self.settings.max_samples - self.samples).min(if held { 1 } else { 4 }))?;
+            self.frame_pending |= self.renderer.poll()?;
         }
-        if self.display_dirty && self.gpu.is_some() {
+        if self.display_dirty {
             if let Some(display) = &mut self.gpu_display {
                 if self.denoise && !self.denoised.is_empty() && !display.using_denoised {
                     display
@@ -474,38 +548,53 @@ impl Viewer {
                 } else if !self.denoise || self.denoised.is_empty() {
                     display.original();
                 }
-                self.gpu_display.as_ref().unwrap().compose(self.exposure);
+                display.compose_with(&self.display_settings);
+                if self.gpu.is_none() {
+                    let rgba = display
+                        .read_rgba(&self.display_settings)
+                        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+                    let image = egui::ColorImage::from_rgba_unmultiplied(
+                        [self.pixel_size[0] as usize, self.pixel_size[1] as usize],
+                        &rgba,
+                    );
+                    if let Some(texture) = &mut self.texture {
+                        texture.set(image, egui::TextureOptions::LINEAR);
+                    } else {
+                        self.texture = Some(ctx.load_texture(
+                            "MuTracer render",
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        ));
+                    }
+                }
+                self.display_dirty = false;
             }
-            self.display_dirty = false;
-        }
-        if self.display_dirty && !self.pixels.is_empty() {
-            let pixels = renderer::display(self.display_pixels(), self.pixel_size, self.exposure);
-            let image = egui::ColorImage::from_rgba_unmultiplied(
-                [self.pixel_size[0] as usize, self.pixel_size[1] as usize],
-                &pixels,
-            );
-            if let Some(texture) = &mut self.texture {
-                texture.set(image, egui::TextureOptions::LINEAR);
-            } else {
-                self.texture =
-                    Some(ctx.load_texture("MuTracer render", image, egui::TextureOptions::LINEAR));
-            }
-            self.display_dirty = false;
         }
         if self.renderer.busy()
-            || self.running && self.samples < self.target
+            || self.running && self.samples < self.settings.max_samples
             || self.change != Change::None
         {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
         Ok(())
     }
-    fn display_pixels(&self) -> &[f32] {
-        if self.denoise && !self.denoised.is_empty() {
-            &self.denoised
-        } else {
-            &self.pixels
-        }
+    fn save_image(&self, path: &Path) -> Result<()> {
+        let display = self
+            .gpu_display
+            .as_ref()
+            .context("No completed image to export")?;
+        let rgba = display
+            .read_rgba(&self.display_settings)
+            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        image::save_buffer_with_format(
+            path,
+            &rgba,
+            display.size[0],
+            display.size[1],
+            image::ColorType::Rgba8,
+            image::ImageFormat::Png,
+        )?;
+        Ok(())
     }
     fn input_files(&mut self, ctx: &egui::Context) {
         let paths = ctx.input(|i| {
@@ -527,497 +616,6 @@ impl Viewer {
             self.error="Drop a .gltf or .glb file. Keep external buffers and textures beside the .gltf file.".into();
         }
     }
-    fn panels(&mut self, root: &mut egui::Ui) {
-        let ctx = root.ctx().clone();
-        egui::Panel::top("toolbar").show(root, |ui| {
-            ui.horizontal(|ui| {
-                ui.strong("MuTracer");
-                ui.separator();
-                if ui.button("Open GLTF / GLB…").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("glTF", &["gltf", "glb"])
-                        .pick_file()
-                    {
-                        self.load(path, &ctx);
-                    }
-                }
-                ui.label(
-                    egui::RichText::new(&self.model.name)
-                        .color(egui::Color32::from_rgb(190, 196, 208)),
-                );
-                if ui.small_button("Sample").clicked() {
-                    self.load(default_model(), &ctx);
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add_enabled(self.frame_samples > 0, egui::Button::new("Save PNG…"))
-                        .clicked()
-                    {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .set_file_name("mutracer.png")
-                            .add_filter("PNG", &["png"])
-                            .save_file()
-                        {
-                            let linear = if let Some(display) = &self.gpu_display {
-                                display
-                                    .read_linear()
-                                    .map_err(|e| anyhow::anyhow!(e.to_string()))
-                            } else {
-                                Ok(self.display_pixels().to_vec())
-                            };
-                            if let Err(e) = linear.and_then(|pixels| {
-                                renderer::save(&path, &pixels, self.pixel_size, self.exposure)
-                            }) {
-                                self.error = e.to_string();
-                            }
-                        }
-                    }
-                });
-            });
-        });
-        egui::Panel::right("settings")
-            .resizable(true)
-            .default_size(300.)
-            .min_size(270.)
-            .max_size(420.)
-            .show(root, |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    ui.add_space(10.);
-                    ui.horizontal(|ui| {
-                        for (tab, name) in
-                            [(0, "Render"), (1, "Material"), (2, "Light"), (3, "Scene")]
-                        {
-                            ui.selectable_value(&mut self.tab, tab, name);
-                        }
-                    });
-                    ui.add_space(12.);
-                    if self.tab == 0 {
-                        ui.heading("Render");
-                        ui.add(
-                            egui::ProgressBar::new(self.samples as f32 / self.target.max(1) as f32)
-                                .show_percentage(),
-                        );
-                        ui.horizontal(|ui| {
-                            ui.label(format!("{} / {} samples", self.samples, self.target));
-                            if ui
-                                .button(if self.running { "Pause" } else { "Resume" })
-                                .clicked()
-                            {
-                                self.running = !self.running;
-                            }
-                            if ui.button("Restart").clicked() {
-                                self.dirty(Change::Reset);
-                            }
-                        });
-                        ui.add(
-                            egui::Slider::new(&mut self.target, 8..=1024)
-                                .logarithmic(true)
-                                .text("Samples"),
-                        );
-                        let old = self.size;
-                        egui::ComboBox::from_label("Resolution")
-                            .selected_text(format!("{} × {}", self.size[0], self.size[1]))
-                            .show_ui(ui, |ui| {
-                                for width in [320, 480, 640, 960] {
-                                    let size = [width, width * 2 / 3];
-                                    ui.selectable_value(
-                                        &mut self.size,
-                                        size,
-                                        format!("{} × {}", size[0], size[1]),
-                                    );
-                                }
-                            });
-                        if old != self.size {
-                            self.dirty(Change::Scene);
-                        }
-                        if ui
-                            .add(egui::Slider::new(&mut self.exposure, -4.0..=4.0).text("Exposure"))
-                            .changed()
-                        {
-                            self.display_dirty = true;
-                        }
-                        let old_backend = self.backend;
-                        egui::ComboBox::from_label("Ray tracing")
-                            .selected_text(["Software", "HWRT"][self.backend as usize])
-                            .show_ui(ui, |ui| {
-                                for (mode, name) in [(1, "HWRT"), (0, "Software")] {
-                                    ui.selectable_value(&mut self.backend, mode, name);
-                                }
-                            });
-                        if old_backend != self.backend {
-                            self.dirty(Change::Scene);
-                        }
-                        ui.small(&self.backend_status);
-                        if ui.checkbox(&mut self.denoise, "Native OIDN").changed() {
-                            self.display_dirty = true;
-                            self.last_denoise = None;
-                        }
-                        if self.denoise {
-                            ui.small(&self.denoise_status);
-                        }
-                        ui.add_space(14.);
-                        ui.heading("Camera");
-                        if ui.button("Fit model").clicked() {
-                            self.camera = Camera::fit(self.model.center, self.model.radius);
-                            self.dirty(Change::Camera);
-                        }
-                        if ui
-                            .add(
-                                egui::Slider::new(&mut self.camera.fov, 20.0..=90.0)
-                                    .text("Field of view"),
-                            )
-                            .changed()
-                        {
-                            self.dirty(Change::Camera);
-                        }
-                        ui.small(
-                            "Drag to orbit · Shift/right drag to pan\nScroll to zoom · F to fit",
-                        );
-                        ui.add_space(14.);
-                    }
-                    if self.tab == 1 {
-                        ui.heading("Material");
-                        ui.small("Click a surface in the image to select its material.");
-                        if let Some(id) = self.selected_mesh {
-                            ui.label(
-                                egui::RichText::new(&self.model.meshes[id].name)
-                                    .color(egui::Color32::from_rgb(126, 190, 255)),
-                            );
-                            if ui.small_button("Frame selection").clicked() {
-                                let (min, max) = self.model.mesh_bounds(id);
-                                self.camera =
-                                    Camera::fit((min + max) * 0.5, (max - min).length() * 0.5);
-                                self.dirty(Change::Camera);
-                            }
-                        }
-                        let previous_material = self.selected;
-                        egui::ComboBox::from_id_salt("material")
-                            .selected_text(&self.model.materials[self.selected].name)
-                            .width(230.)
-                            .show_ui(ui, |ui| {
-                                for (i, m) in self.model.materials.iter().enumerate() {
-                                    if !self.model.meshes.iter().any(|mesh| mesh.material == i) {
-                                        continue;
-                                    }
-                                    ui.selectable_value(&mut self.selected, i, &m.name);
-                                }
-                            });
-                        if previous_material != self.selected {
-                            self.selected_mesh = None;
-                        }
-                        let m = &mut self.model.materials[self.selected];
-                        let mut changed = false;
-                        ui.horizontal(|ui| {
-                            ui.label("Base color");
-                            changed |= ui.color_edit_button_rgb(&mut m.color).changed();
-                        });
-                        changed |= ui
-                            .add(egui::Slider::new(&mut m.roughness, 0.0..=1.0).text("Roughness"))
-                            .changed();
-                        changed |= ui
-                            .add(egui::Slider::new(&mut m.metalness, 0.0..=1.0).text("Metalness"))
-                            .changed();
-                        changed |= ui
-                            .add(
-                                egui::Slider::new(&mut m.transmission, 0.0..=1.0)
-                                    .text("Transmission"),
-                            )
-                            .changed();
-                        if changed {
-                            self.dirty(Change::Material);
-                        }
-                        ui.add_space(14.);
-                    }
-                    if self.tab == 2 {
-                        ui.heading("Environment");
-                        ui.label(&self.environment.name);
-                        let mut changed = false;
-                        changed |= ui
-                            .add(
-                                egui::Slider::new(&mut self.environment.intensity, 0.0..=5.0)
-                                    .text("Intensity"),
-                            )
-                            .changed();
-                        changed |= ui
-                            .add(
-                                egui::Slider::new(&mut self.environment.rotation, 0.0..=360.0)
-                                    .text("Rotation"),
-                            )
-                            .changed();
-                        ui.horizontal(|ui| {
-                            ui.label("Tint");
-                            changed |= ui
-                                .color_edit_button_rgb(&mut self.environment.color)
-                                .changed();
-                        });
-                        changed |= ui
-                            .checkbox(&mut self.environment.background, "Show environment")
-                            .changed();
-                        ui.horizontal(|ui| {
-                            if ui.button("Load HDR…").clicked() {
-                                if let Some(path) = rfd::FileDialog::new()
-                                    .add_filter("Radiance HDR", &["hdr"])
-                                    .pick_file()
-                                {
-                                    match self.environment.load(&path) {
-                                        Ok(()) => changed = true,
-                                        Err(e) => {
-                                            self.error =
-                                                format!("Could not load environment: {e:#}")
-                                        }
-                                    }
-                                }
-                            }
-                            if ui.button("Studio").clicked() {
-                                self.environment = Environment::default();
-                                changed = true;
-                            }
-                        });
-                        if changed {
-                            self.dirty(Change::Environment);
-                        }
-                        ui.add_space(14.);
-                        ui.heading("Key light");
-                        if ui
-                            .checkbox(&mut self.light.enabled, "Enable directional light")
-                            .changed()
-                        {
-                            self.dirty(Change::Scene);
-                        }
-                        let mut light_changed = false;
-                        ui.add_enabled_ui(self.light.enabled, |ui| {
-                            light_changed |= ui
-                                .add(
-                                    egui::Slider::new(&mut self.light.intensity, 0.0..=10.0)
-                                        .text("Intensity"),
-                                )
-                                .changed();
-                            ui.horizontal(|ui| {
-                                ui.label("Color");
-                                light_changed |=
-                                    ui.color_edit_button_rgb(&mut self.light.color).changed();
-                            });
-                            light_changed |= ui
-                                .add(
-                                    egui::Slider::new(&mut self.light.azimuth, 0.0..=360.0)
-                                        .text("Azimuth"),
-                                )
-                                .changed();
-                            light_changed |= ui
-                                .add(
-                                    egui::Slider::new(&mut self.light.elevation, 5.0..=85.0)
-                                        .text("Elevation"),
-                                )
-                                .changed();
-                        });
-                        if light_changed {
-                            self.dirty(Change::Light);
-                        }
-                        ui.add_space(14.);
-                    }
-                    if self.tab == 3 {
-                        ui.heading("Scene");
-                        ui.small(format!(
-                            "{} meshes · {} triangles",
-                            self.model.meshes.len(),
-                            self.model
-                                .geometries
-                                .iter()
-                                .map(|g| g.indices.len() / 3)
-                                .sum::<usize>()
-                        ));
-                        egui::ScrollArea::vertical()
-                            .id_salt("objects")
-                            .max_height(280.)
-                            .show(ui, |ui| {
-                                for (id, mesh) in self.model.meshes.iter().enumerate() {
-                                    if ui
-                                        .selectable_label(
-                                            self.selected_mesh == Some(id),
-                                            &mesh.name,
-                                        )
-                                        .clicked()
-                                    {
-                                        self.selected_mesh = Some(id);
-                                        self.selected = mesh.material;
-                                    }
-                                }
-                            });
-                        ui.separator();
-                        if let Some(id) = self.selected_mesh {
-                            ui.label("Object transform");
-                            let mesh = &mut self.model.meshes[id];
-                            let mut position = mesh.transform.w_axis.truncate();
-                            let mut changed = false;
-                            ui.horizontal(|ui| {
-                                for (label, value) in [
-                                    ("X", &mut position.x),
-                                    ("Y", &mut position.y),
-                                    ("Z", &mut position.z),
-                                ] {
-                                    changed |= ui
-                                        .add(
-                                            egui::DragValue::new(value)
-                                                .prefix(format!("{label} "))
-                                                .speed(self.model.radius as f64 * 0.005)
-                                                .range(-1e6..=1e6),
-                                        )
-                                        .changed();
-                                }
-                            });
-                            if changed {
-                                mesh.transform.w_axis = position.extend(1.);
-                            }
-                            ui.horizontal(|ui| {
-                                if ui.small_button("Rotate Y −15°").clicked() {
-                                    mesh.transform *=
-                                        glam::Mat4::from_rotation_y(-15f32.to_radians());
-                                    changed = true;
-                                }
-                                if ui.small_button("Rotate Y +15°").clicked() {
-                                    mesh.transform *=
-                                        glam::Mat4::from_rotation_y(15f32.to_radians());
-                                    changed = true;
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                for (label, scale) in [("Smaller", 1. / 1.1), ("Larger", 1.1)] {
-                                    if ui.small_button(label).clicked() {
-                                        let candidate = mesh.transform
-                                            * glam::Mat4::from_scale(glam::Vec3::splat(scale));
-                                        let determinant = candidate.determinant();
-                                        if candidate.is_finite()
-                                            && determinant.is_finite()
-                                            && determinant.abs() >= 1e-10
-                                            && determinant.abs() <= 1e12
-                                        {
-                                            mesh.transform = candidate;
-                                            changed = true;
-                                        }
-                                    }
-                                }
-                            });
-                            if changed {
-                                self.model.refresh_bounds();
-                                self.dirty(Change::Transform);
-                            }
-                            ui.separator();
-                        }
-                        for warning in &self.model.warnings {
-                            ui.colored_label(egui::Color32::YELLOW, warning);
-                        }
-                    }
-                });
-            });
-        egui::Panel::bottom("status").show(root, |ui| {
-            ui.horizontal(|ui| {
-                if self.loading.is_some() {
-                    ui.spinner();
-                    ui.label(format!("Opening {}…", self.loading_name));
-                    ctx.request_repaint_after(Duration::from_millis(50));
-                } else {
-                    ui.label(if !self.running {
-                        "Paused"
-                    } else if self.samples >= self.target {
-                        "Complete"
-                    } else {
-                        "Rendering"
-                    });
-                    ui.separator();
-                    ui.small(format!("{} / {} samples", self.samples, self.target));
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.small(
-                        "Click: select   ·   Drag: orbit   ·   Shift-drag: pan   ·   Scroll: zoom",
-                    );
-                });
-            });
-        });
-        if !self.error.is_empty() {
-            egui::Window::new("Unable to complete action").collapsible(false).resizable(true).default_width(480.).show(&ctx,|ui|{
-                ui.colored_label(egui::Color32::LIGHT_RED,&self.error);
-                ui.small("The previous image is kept. You can open another model or change settings.");
-                if ui.button("Dismiss").clicked(){self.error.clear();}
-            });
-        }
-        egui::CentralPanel::default()
-            .frame(
-                egui::Frame::central_panel(&ctx.style_of(egui::Theme::Dark))
-                    .fill(egui::Color32::from_rgb(18, 20, 24)),
-            )
-            .show(root, |ui| {
-                let available = ui.available_size();
-                let aspect = self.pixel_size[0] as f32 / self.pixel_size[1] as f32;
-                let width = available.x.min(available.y * aspect);
-                let size = egui::vec2(width, width / aspect);
-                let rect = egui::Rect::from_center_size(ui.max_rect().center(), size);
-                if let Some(texture) = self
-                    .gpu_texture
-                    .or_else(|| self.texture.as_ref().map(|t| t.id()))
-                {
-                    ui.painter().image(
-                        texture,
-                        rect,
-                        egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1., 1.)),
-                        egui::Color32::WHITE,
-                    );
-                } else {
-                    ui.painter().text(
-                        rect.center(),
-                        egui::Align2::CENTER_CENTER,
-                        if self.running {
-                            "Rendering…"
-                        } else {
-                            "Paused — Resume to render"
-                        },
-                        egui::FontId::proportional(18.),
-                        egui::Color32::GRAY,
-                    );
-                }
-                let response = ui.interact(rect, ui.id().with("viewport"), egui::Sense::drag());
-                for (pan, delta) in
-                    ui.input(|i| self.drag.motion(rect, response.contains_pointer(), i))
-                {
-                    if pan {
-                        self.camera.pan([delta.x, delta.y]);
-                    } else {
-                        self.camera.orbit([delta.x, delta.y]);
-                    }
-                    self.dirty(Change::Camera);
-                }
-                if let Some(pos) = self.drag.take_click().filter(|p| rect.contains(*p)) {
-                    let uv = [
-                        (pos.x - rect.min.x) / rect.width(),
-                        (pos.y - rect.min.y) / rect.height(),
-                    ];
-                    self.selected_mesh = self.model.pick(&self.camera, uv, aspect);
-                    if let Some(id) = self.selected_mesh {
-                        self.selected = self.model.meshes[id].material;
-                        self.tab = 1;
-                    }
-                }
-                if let Some(id) = self.selected_mesh {
-                    ui.painter().text(
-                        rect.left_top() + egui::vec2(14., 14.),
-                        egui::Align2::LEFT_TOP,
-                        &self.model.meshes[id].name,
-                        egui::FontId::proportional(14.),
-                        egui::Color32::from_rgb(126, 190, 255),
-                    );
-                }
-                if response.hovered() {
-                    let scroll = ui.input(|i| i.smooth_scroll_delta.y);
-                    if scroll != 0. {
-                        self.camera.zoom(scroll);
-                        self.dirty(Change::Camera);
-                    }
-                }
-            });
-        if ctx.input(|i| i.key_pressed(egui::Key::F)) && !ctx.egui_wants_keyboard_input() {
-            self.camera = Camera::fit(self.model.center, self.model.radius);
-            self.dirty(Change::Camera);
-        }
-    }
 }
 impl eframe::App for Viewer {
     fn ui(&mut self, root: &mut egui::Ui, _frame: &mut eframe::Frame) {
@@ -1030,7 +628,7 @@ impl eframe::App for Viewer {
         let mut pick_ms = 0.;
         if self.metrics.is_some() {
             self.denoise = false;
-            self.target = 8;
+            self.settings.max_samples = 8;
             let m = self.metrics.as_mut().unwrap();
             if self.commit.is_none()
                 && self.frame_samples > 0
@@ -1061,7 +659,7 @@ impl eframe::App for Viewer {
             painter.rect_stroke(
                 rect.shrink(24.),
                 12.,
-                egui::Stroke::new(2_f32, egui::Color32::from_rgb(126, 190, 255)),
+                egui::Stroke::new(2_f32, theme::ACCENT),
                 egui::StrokeKind::Inside,
             );
             painter.text(
@@ -1107,7 +705,7 @@ impl eframe::App for Viewer {
             // Exercise surface reconfiguration while scene preparation runs.
             match ctx.cumulative_frame_nr() {
                 2 => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1180., 780.)))
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(800., 560.)))
                 }
                 4 => {
                     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1200., 800.)))
@@ -1119,7 +717,7 @@ impl eframe::App for Viewer {
             }
             let passed = *frames >= 3 && self.error.is_empty();
             if passed || !self.error.is_empty() || started.elapsed() > Duration::from_secs(90) {
-                let report = serde_json::json!({"passed":passed,"frames":frames,"samples":self.frame_samples,"error":self.error});
+                let report = serde_json::json!({"passed":passed,"frames":frames,"samples":self.frame_samples,"error":self.error,"windowSize":[ctx.content_rect().width(),ctx.content_rect().height()],"grip":ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new("smoke-grip"))).map(|r| [r.min.x,r.min.y,r.max.x,r.max.y])});
                 if let Some(parent) = path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -1175,13 +773,13 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
     let mut environment = Environment::default();
     let size = [320, 216];
     let mut renderer = Renderer::with_backend(0)?;
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     let original = renderer.finish(16)?;
     renderer::save(&out.join("original.png"), &original, size, 0.)?;
     let normal = renderer.image(1)?;
     let albedo = renderer.image(2)?;
     let mut hardware = Renderer::with_backend(1)?;
-    hardware.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    hardware.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     let hardware_pixels = hardware.finish(16)?;
     let (backend, reason) = hardware.backend()?;
     let mut max_diff = 0f32;
@@ -1261,7 +859,7 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
         "Restart changed the original image"
     );
     camera.orbit([70., -20.]);
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     ensure!(
         renderer.last_commit_incremental()?,
         "Camera commit rebuilt the scene"
@@ -1270,7 +868,7 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
     ensure!(original != orbit, "Camera control did not change pixels");
     renderer::save(&out.join("orbit.png"), &orbit, size, 0.)?;
     camera = Camera::fit(model.center, model.radius);
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     ensure!(
         renderer.finish(16)? == original,
         "Restoring camera changed the original image"
@@ -1281,12 +879,12 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
         material.color = [0.05, 0.85, 0.15];
         material.roughness = 0.8;
     }
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     let material = renderer.finish(16)?;
     ensure!(material != original, "Material edit did not change pixels");
     renderer::save(&out.join("material.png"), &material, size, 0.)?;
     environment.intensity = 0.2;
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     let env = renderer.finish(16)?;
     ensure!(env != material, "Environment edit did not change pixels");
     renderer::save(&out.join("environment.png"), &env, size, 0.)?;
@@ -1297,7 +895,7 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
     }
     std::fs::write(&hdr_path, hdr)?;
     environment.load(&hdr_path)?;
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     let hdr = renderer.finish(16)?;
     ensure!(
         hdr != env,
@@ -1392,7 +990,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         format!("PASS 120 camera updates, {frames} changed previews, zero blank frames\n"),
     )?;
     println!("PASS 120 camera updates, {frames} changed previews, zero blank frames");
-    viewer.target = 8;
+    viewer.settings.max_samples = 8;
     viewer.denoise = true;
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while !viewer.denoiser.as_ref().is_some_and(|d| d.busy) {
@@ -1445,7 +1043,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         "PASS stale OIDN result ignored; resized preview retained; final native denoise completed"
     );
     viewer.denoise = false;
-    viewer.target = 12;
+    viewer.settings.max_samples = 12;
     while viewer.samples < 12 {
         viewer.tick(&ctx)?;
         ensure!(
@@ -1454,7 +1052,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
-    viewer.target = 8;
+    viewer.settings.max_samples = 8;
     viewer.denoise = true;
     while viewer.denoised.is_empty() {
         viewer.tick(&ctx)?;
@@ -1531,7 +1129,9 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     output.textures_delta.clear();
     viewer.light.enabled = true;
     viewer.dirty(Change::Scene);
-    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    while viewer.change != Change::None
+        || viewer.renderer.busy()
+        || viewer.samples < viewer.settings.max_samples
     {
         viewer.tick(&ctx)?;
         ensure!(
@@ -1586,7 +1186,9 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     output.textures_delta.clear();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    while viewer.change != Change::None
+        || viewer.renderer.busy()
+        || viewer.samples < viewer.settings.max_samples
     {
         viewer.tick(&ctx)?;
         ensure!(
@@ -1605,7 +1207,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     let mut reference = Renderer::with_backend(viewer.backend)?;
     reference.commit(&viewer.model.descriptor_with_light(
-        &viewer.camera.bytes(),
+        &viewer.camera.bytes(viewer.size),
         viewer.size,
         &viewer.environment,
         &viewer.light,
@@ -1625,7 +1227,9 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     viewer.model.materials[id].unlit = true;
     viewer.dirty(Change::Scene);
-    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    while viewer.change != Change::None
+        || viewer.renderer.busy()
+        || viewer.samples < viewer.settings.max_samples
     {
         viewer.tick(&ctx)?;
         ensure!(
@@ -1643,7 +1247,9 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         viewer.commit.is_some() && viewer.texture.is_some(),
         "Edit after a full preparation did not commit in the background with retained preview"
     );
-    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    while viewer.change != Change::None
+        || viewer.renderer.busy()
+        || viewer.samples < viewer.settings.max_samples
     {
         viewer.tick(&ctx)?;
         ensure!(
@@ -1657,7 +1263,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         "Unlit material color edit did not prepare the scene fully"
     );
     reference.commit(&viewer.model.descriptor_with_light(
-        &viewer.camera.bytes(),
+        &viewer.camera.bytes(viewer.size),
         viewer.size,
         &viewer.environment,
         &viewer.light,
@@ -1677,7 +1283,9 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         viewer.commit.is_some() && viewer.texture.is_some(),
         "Environment feature change did not commit in the background with retained preview"
     );
-    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    while viewer.change != Change::None
+        || viewer.renderer.busy()
+        || viewer.samples < viewer.settings.max_samples
     {
         viewer.tick(&ctx)?;
         ensure!(
@@ -1691,7 +1299,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         "Background visibility change did not prepare the scene fully"
     );
     reference.commit(&viewer.model.descriptor_with_light(
-        &viewer.camera.bytes(),
+        &viewer.camera.bytes(viewer.size),
         viewer.size,
         &viewer.environment,
         &viewer.light,
@@ -1715,7 +1323,7 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
     let size = [160, 106];
     let mut renderer = Renderer::with_backend(1)?;
     let mut reference = Renderer::with_backend(1)?;
-    let initial = model.descriptor(&camera.bytes(), size, &environment);
+    let initial = model.descriptor(&camera.bytes(size), size, &environment);
     renderer.commit(&initial)?;
     let baseline = renderer.finish(8)?;
     let id = model.meshes[0].material;
@@ -1725,7 +1333,7 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
         renderer
             .commit(bad.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &environment,
                 &KeyLight::default()
@@ -1761,7 +1369,7 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
             let started = std::time::Instant::now();
             renderer.commit(model.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &environment,
                 &KeyLight::default(),
@@ -1777,7 +1385,7 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
             );
             let actual = renderer.finish(8)?;
             let started = std::time::Instant::now();
-            reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+            reference.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
             full_ms.push(started.elapsed().as_secs_f64() * 1000.);
             let expected = reference.finish(8)?;
             ensure!(
@@ -1803,6 +1411,155 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
     println!(
         "PASS {count} incremental material commits: HDR/normal/albedo byte-exact to full commits; baseline restored"
     );
+    material_layers_smoke(path, out)?;
+    Ok(())
+}
+// New viewer controls exercise the existing raw-scene OpenPBR contract on both
+// intersection paths. Fresh contexts are independent full-preparation oracles.
+fn material_layers_smoke(path: &Path, out: &Path) -> Result<()> {
+    use mutracer_native_probe::layout::{header as h, material as mat};
+    let original = Model::load(path)?;
+    let camera = Camera::fit(original.center, original.radius);
+    let size = [160, 106];
+    let environment = Environment::default();
+    let initial = original.descriptor(&camera.bytes(size), size, &environment);
+    // The first six records are precisely the pre-layer viewer's properties.
+    let mut legacy = initial.clone();
+    let word = |data: &[u8], at: usize| {
+        u32::from_le_bytes(data[at * 4..at * 4 + 4].try_into().unwrap()) as usize
+    };
+    let offset = word(&legacy, h::MATERIAL_OFFSET);
+    for i in 0..original.materials.len() {
+        let at = (offset + i * mat::WORDS + mat::EXTENSION_COUNT) * 4;
+        legacy[at..at + 4].copy_from_slice(&6u32.to_le_bytes());
+    }
+    for mode in [0, 1] {
+        let mut retained = Renderer::with_backend(mode)?;
+        retained.commit(&legacy)?;
+        let baseline = retained.finish(8)?;
+        let baseline_normal = retained.image(1)?;
+        let baseline_albedo = retained.image(2)?;
+        ensure!(
+            retained.backend()?.0 == mode,
+            "Layer gate requires requested backend {mode}"
+        );
+        retained.commit(&initial)?;
+        ensure!(
+            retained.finish(8)? == baseline
+                && retained.image(1)? == baseline_normal
+                && retained.image(2)? == baseline_albedo,
+            "New layer defaults changed imported material output on backend {mode}"
+        );
+        let mut descriptor = None;
+        let id = original.meshes[0].material;
+        for case in 0..9 {
+            for step in 0..2 {
+                let mut model = original.clone();
+                let m = &mut model.materials[id];
+                let weight = 0.5 + step as f32 * 0.3;
+                match case {
+                    0 => {
+                        m.transmission = weight;
+                        m.layers.thin_walled = false;
+                        m.layers.transmission_color = [0.3, 0.7, 0.9];
+                        m.layers.transmission_depth = 0.2;
+                        m.layers.dispersion = 0.1;
+                    }
+                    1 => {
+                        m.layers.coat_weight = weight;
+                        m.layers.coat_roughness = 0.12;
+                        m.layers.coat_ior = 1.8;
+                        m.layers.coat_color = [0.7, 0.9, 1.];
+                    }
+                    2 => {
+                        m.layers.subsurface_weight = weight;
+                        m.layers.subsurface_color = [0.9, 0.3, 0.1];
+                        m.layers.subsurface_radius = 0.2;
+                    }
+                    3 => {
+                        m.layers.fuzz_weight = weight;
+                        m.layers.fuzz_color = [0.3, 0.6, 0.9];
+                        m.layers.fuzz_roughness = 0.3;
+                    }
+                    4 => {
+                        m.layers.film_weight = weight;
+                        m.layers.film_thickness = 0.45;
+                        m.layers.film_ior = 1.33;
+                    }
+                    5 => {
+                        m.emission = [1., 0.3, 0.1];
+                        m.emission_strength = weight * 4.;
+                    }
+                    6 => {
+                        m.layers.anisotropy = weight;
+                        m.layers.diffuse_roughness = 0.3;
+                        m.layers.specular_weight = 0.6;
+                        m.layers.bevel = 0.01;
+                    }
+                    7 => {
+                        m.alpha_mode = 3;
+                        m.opacity = weight;
+                        m.normal_scale = 0.7;
+                        m.double_sided = true;
+                    }
+                    _ => {
+                        m.unlit = true;
+                        m.color = [weight, 0.1, 0.3];
+                    }
+                }
+                retained.commit(model.update_descriptor(
+                    &mut descriptor,
+                    &camera.bytes(size),
+                    size,
+                    &environment,
+                    &KeyLight::default(),
+                ))?;
+                let actual = retained.finish(8)?;
+                let mut fresh = Renderer::with_backend(mode)?;
+                fresh.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
+                ensure!(
+                    !fresh.last_commit_incremental()?,
+                    "Reference must prepare a fresh scene"
+                );
+                let expected = fresh.finish(8)?;
+                ensure!(
+                    actual.iter().all(|v| v.is_finite())
+                        && actual == expected
+                        && retained.image(1)? == fresh.image(1)?
+                        && retained.image(2)? == fresh.image(2)?,
+                    "Layer {case}/{step} differs from fresh preparation on backend {mode}"
+                );
+                ensure!(
+                    actual != baseline,
+                    "Layer {case}/{step} had no observable effect on backend {mode}"
+                );
+            }
+        }
+        let before = retained.pixels()?;
+        let mut bad = original.clone();
+        bad.materials[id].layers.coat_ior = f32::NAN;
+        ensure!(
+            retained
+                .commit(&bad.descriptor(&camera.bytes(size), size, &environment))
+                .is_err()
+                && retained.pixels()? == before,
+            "Invalid layer changed the accepted scene"
+        );
+        retained.commit(&initial)?;
+        ensure!(
+            retained.finish(8)? == baseline,
+            "Layer edits failed to restore defaults on backend {mode}"
+        );
+        renderer::save(
+            &out.join(format!("layers-{mode}-restored.png")),
+            &baseline,
+            size,
+            0.,
+        )?;
+        println!(
+            "PASS backend {mode}: defaults match legacy; 18 layer edits finite and HDR/normal/albedo exact to fresh contexts; effects, rejection and restoration checked"
+        );
+    }
     Ok(())
 }
 fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
@@ -1816,7 +1573,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
     let mut reference = Renderer::with_backend(1)?;
     renderer.commit(model.update_descriptor(
         &mut descriptor,
-        &camera.bytes(),
+        &camera.bytes(size),
         size,
         &environment,
         &KeyLight::default(),
@@ -1828,7 +1585,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
         renderer
             .commit(model.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &bad,
                 &KeyLight::default()
@@ -1852,7 +1609,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
             )));
             renderer.commit(model.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &environment,
                 &KeyLight::default(),
@@ -1868,7 +1625,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
             environment.color = [0.2 + step as f32 * 0.1, 0.8, 0.4];
             renderer.commit(model.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &environment,
                 &KeyLight::default(),
@@ -1882,7 +1639,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
                 "Environment update did not reset samples"
             );
             let actual = renderer.finish(8)?;
-            reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+            reference.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
             ensure!(
                 actual == reference.finish(8)?
                     && renderer.image(1)? == reference.image(1)?
@@ -1895,7 +1652,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
     environment.background = false;
     renderer.commit(model.update_descriptor(
         &mut descriptor,
-        &camera.bytes(),
+        &camera.bytes(size),
         size,
         &environment,
         &KeyLight::default(),
@@ -1907,7 +1664,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
     environment = Environment::default();
     renderer.commit(model.update_descriptor(
         &mut descriptor,
-        &camera.bytes(),
+        &camera.bytes(size),
         size,
         &environment,
         &KeyLight::default(),
@@ -1936,7 +1693,7 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
     let mut reference = Renderer::with_backend(1)?;
     renderer.commit(model.update_descriptor(
         &mut descriptor,
-        &camera.bytes(),
+        &camera.bytes(size),
         size,
         &environment,
         &light,
@@ -1948,7 +1705,7 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
         renderer
             .commit(model.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &environment,
                 &bad
@@ -1968,7 +1725,7 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
             environment.background = false;
             renderer.commit(model.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &environment,
                 &light,
@@ -1990,7 +1747,7 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
         light.elevation = 10. + (step % 8) as f32 * 9.;
         renderer.commit(model.update_descriptor(
             &mut descriptor,
-            &camera.bytes(),
+            &camera.bytes(size),
             size,
             &environment,
             &light,
@@ -2005,7 +1762,7 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
         );
         let actual = renderer.finish(8)?;
         reference.commit(&model.descriptor_with_light(
-            &camera.bytes(),
+            &camera.bytes(size),
             size,
             &environment,
             &light,
@@ -2022,7 +1779,7 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
     light.enabled = false;
     renderer.commit(model.update_descriptor(
         &mut descriptor,
-        &camera.bytes(),
+        &camera.bytes(size),
         size,
         &environment,
         &light,
@@ -2055,7 +1812,7 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
         let mut reference = Renderer::with_backend(mode)?;
         renderer.commit(model.update_descriptor(
             &mut descriptor,
-            &camera.bytes(),
+            &camera.bytes(size),
             size,
             &environment,
             &KeyLight::default(),
@@ -2084,7 +1841,7 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
                     renderer
                         .commit(invalid.update_descriptor(
                             &mut descriptor,
-                            &camera.bytes(),
+                            &camera.bytes(size),
                             size,
                             &environment,
                             &KeyLight::default()
@@ -2095,7 +1852,7 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
                 );
                 renderer.commit(model.update_descriptor(
                     &mut descriptor,
-                    &camera.bytes(),
+                    &camera.bytes(size),
                     size,
                     &environment,
                     &KeyLight::default(),
@@ -2107,7 +1864,7 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
                 }
                 ensure!(renderer.samples()? == 0, "Transform did not reset samples");
                 let actual = renderer.finish(8)?;
-                reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                reference.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
                 ensure!(
                     actual == reference.finish(8)?
                         && renderer.image(1)? == reference.image(1)?
@@ -2118,13 +1875,13 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
                 environment.intensity = 0.5 + step as f32 * 0.2;
                 renderer.commit(model.update_descriptor(
                     &mut descriptor,
-                    &camera.bytes(),
+                    &camera.bytes(size),
                     size,
                     &environment,
                     &KeyLight::default(),
                 ))?;
                 let actual = renderer.finish(8)?;
-                reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                reference.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
                 ensure!(
                     actual == reference.finish(8)?
                         && renderer.image(1)? == reference.image(1)?
@@ -2163,10 +1920,28 @@ fn main() -> Result<()> {
     let mut transform_out = None;
     let mut geometry_out = None;
     let mut package_out = None;
+    let mut parity_out = None;
+    let mut studio_out = None;
+    let mut focus_out = None;
     let mut startup_out = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--focus-smoke" => {
+                focus_out = Some(PathBuf::from(
+                    args.next().context("--focus-smoke needs a directory")?,
+                ));
+            }
+            "--studio-smoke" => {
+                studio_out = Some(PathBuf::from(
+                    args.next().context("--studio-smoke needs a directory")?,
+                ));
+            }
+            "--parity-smoke" => {
+                parity_out = Some(PathBuf::from(
+                    args.next().context("--parity-smoke needs a directory")?,
+                ));
+            }
             "--startup-smoke" => {
                 startup_out = Some(PathBuf::from(
                     args.next().context("--startup-smoke needs a report path")?,
@@ -2232,6 +2007,15 @@ fn main() -> Result<()> {
         }
     }
     let model = model.unwrap_or_else(default_model);
+    if let Some(out) = focus_out {
+        return focus_smoke::run(&model, &out);
+    }
+    if let Some(out) = studio_out {
+        return studio_smoke::run(&model, &out);
+    }
+    if let Some(out) = parity_out {
+        return parity_smoke::run(&model, &out);
+    }
     if let Some(out) = package_out {
         return package_smoke::run(&model, &out);
     }
@@ -2268,7 +2052,7 @@ fn main() -> Result<()> {
         );
         let mut r = Renderer::with_backend(1)?;
         let c = Camera::fit(m.center, m.radius);
-        r.commit(&m.descriptor(&c.bytes(), [160, 106], &Environment::default()))?;
+        r.commit(&m.descriptor(&c.bytes([160, 106]), [160, 106], &Environment::default()))?;
         let pixels = r.finish(16)?;
         if let Some(out) = preview_out {
             std::fs::create_dir_all(&out)?;
@@ -2286,6 +2070,9 @@ fn main() -> Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_decorations(false)
+            .with_resizable(true)
+            .with_icon(shell::icon())
             .with_drag_and_drop(true)
             .with_inner_size([1200., 800.])
             .with_min_inner_size([800., 560.]),
@@ -2313,19 +2100,12 @@ fn main() -> Result<()> {
         "MuTracer Native Viewer",
         options,
         Box::new(move |cc| {
-            let mut visuals = egui::Visuals::dark();
-            visuals.panel_fill = egui::Color32::from_rgb(27, 30, 36);
-            visuals.selection.bg_fill = egui::Color32::from_rgb(44, 91, 140);
-            cc.egui_ctx.set_visuals(visuals);
-            cc.egui_ctx.style_mut_of(egui::Theme::Dark, |style| {
-                style.spacing.item_spacing = egui::vec2(10., 10.);
-                style.spacing.button_padding = egui::vec2(10., 6.);
-                style.spacing.slider_width = 150.;
-            });
+            theme::install(&cc.egui_ctx);
             let mut viewer = Viewer::new_on_device(&model, cc.wgpu_render_state.clone())?;
             if let Some(path) = startup_out {
                 viewer.size = [64, 48];
-                viewer.target = 1;
+                viewer.resolution.scale = None;
+                viewer.settings.max_samples = 1;
                 viewer.backend = 0;
                 viewer.denoise = false;
                 viewer.startup_smoke = Some((path, std::time::Instant::now(), 0));

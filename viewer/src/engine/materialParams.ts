@@ -1,4 +1,5 @@
 import type { OpenPBRMaterial } from '@meimu/mutracer';
+import presets from './material-presets.json';
 
 type NumberKey = {
   [K in keyof OpenPBRMaterial]-?: OpenPBRMaterial[K] extends number ? K : never
@@ -183,57 +184,7 @@ export interface MaterialPreset {
   values: MaterialValues;
 }
 
-const preset = (category: MaterialPresetCategory, id: string, label: string, values: MaterialValues): MaterialPreset =>
-  ({ id, label, category, values: { ...MATERIAL_BASE, ...values } });
-
-// Metal colors are linear F0 reflectances of the pure metals.
-export const MATERIAL_PRESETS: MaterialPreset[] = [
-  preset('basic', 'white', 'White model', { baseColor: [1, 1, 1], specularRoughness: 0.8 }),
-  preset('basic', 'plastic', 'Plastic', { baseColor: [0.05, 0.25, 0.7], specularRoughness: 0.32, specularIor: 1.46 }),
-  preset('basic', 'clay', 'Clay', { baseColor: [0.5, 0.22, 0.12], specularRoughness: 0.9, baseDiffuseRoughness: 1 }),
-  preset('basic', 'rubber', 'Rubber', { baseColor: [0.02, 0.02, 0.02], specularRoughness: 0.65, specularIor: 1.52 }),
-  preset('basic', 'ceramic', 'Ceramic', { baseColor: [0.85, 0.85, 0.82], specularRoughness: 0.5, coatWeight: 1, coatRoughness: 0.03, coatIor: 1.5 }),
-  preset('basic', 'carpaint', 'Car paint', { baseColor: [0.45, 0.02, 0.015], baseMetalness: 0.3, specularRoughness: 0.4, coatWeight: 1, coatRoughness: 0.02, coatIor: 1.5 }),
-  preset('basic', 'pearl', 'Pearl paint', {
-    baseColor: [0.8, 0.8, 0.82], baseMetalness: 0.4, specularRoughness: 0.35, coatWeight: 1, coatRoughness: 0.02, coatIor: 1.5,
-    thinFilmWeight: 0.6, thinFilmThickness: 0.4, thinFilmIor: 1.5
-  }),
-  preset('basic', 'glow', 'Glow', { baseColor: [0.02, 0.02, 0.02], specularRoughness: 0.4, emissionColor: [1, 0.45, 0.15], emissionLuminance: 2 }),
-
-  preset('metal', 'metal', 'Metal', { baseColor: [0.91, 0.92, 0.92], baseMetalness: 1, specularRoughness: 0.18 }),
-  preset('metal', 'chrome', 'Chrome', { baseColor: [0.55, 0.556, 0.554], baseMetalness: 1, specularRoughness: 0.02 }),
-  preset('metal', 'gold', 'Gold', { baseColor: [1, 0.71, 0.29], baseMetalness: 1, specularRoughness: 0.15 }),
-  preset('metal', 'copper', 'Copper', { baseColor: [0.95, 0.64, 0.54], baseMetalness: 1, specularRoughness: 0.25 }),
-  preset('metal', 'brass', 'Brass', { baseColor: [0.91, 0.78, 0.42], baseMetalness: 1, specularRoughness: 0.3 }),
-  preset('metal', 'iron', 'Cast iron', { baseColor: [0.56, 0.57, 0.58], baseMetalness: 1, specularRoughness: 0.55 }),
-  preset('metal', 'brushed', 'Brushed', { baseColor: [0.91, 0.92, 0.92], baseMetalness: 1, specularRoughness: 0.35, specularAnisotropy: 0.8 }),
-  preset('metal', 'anodized', 'Anodized', {
-    baseColor: [0.54, 0.5, 0.45], baseMetalness: 1, specularRoughness: 0.2, thinFilmWeight: 1, thinFilmThickness: 0.32, thinFilmIor: 2.2
-  }),
-
-  preset('glass', 'glass', 'Glass', { baseColor: [1, 1, 1], specularRoughness: 0, transmissionWeight: 1 }),
-  preset('glass', 'frosted', 'Frosted', { baseColor: [1, 1, 1], specularRoughness: 0.35, transmissionWeight: 1 }),
-  preset('glass', 'bottle', 'Bottle', { baseColor: [1, 1, 1], specularRoughness: 0, transmissionWeight: 1, transmissionColor: [0.2, 0.6, 0.25], transmissionDepth: 0.5 }),
-  preset('glass', 'acrylic', 'Acrylic', { baseColor: [1, 1, 1], specularRoughness: 0.02, specularIor: 1.49, transmissionWeight: 1, transmissionColor: [0.9, 0.08, 0.05], transmissionDepth: 0.3 }),
-  preset('glass', 'diamond', 'Diamond', { baseColor: [1, 1, 1], specularRoughness: 0, specularIor: 2.42, transmissionWeight: 1, transmissionDispersionScale: 1 }),
-  preset('glass', 'water', 'Water', { baseColor: [1, 1, 1], specularRoughness: 0, specularIor: 1.33, transmissionWeight: 1, transmissionColor: [0.9, 0.97, 1], transmissionDepth: 2 }),
-  preset('glass', 'honey', 'Honey', { baseColor: [1, 1, 1], specularRoughness: 0.05, transmissionWeight: 1, transmissionColor: [0.95, 0.6, 0.1], transmissionDepth: 0.6 }),
-  preset('glass', 'soap', 'Bubble', {
-    baseColor: [1, 1, 1], specularRoughness: 0, specularIor: 1.33, transmissionWeight: 1, thinWalled: true,
-    thinFilmWeight: 1, thinFilmThickness: 0.45, thinFilmIor: 1.33
-  }),
-
-  preset('soft', 'skin', 'Skin', { baseColor: [0.8, 0.55, 0.45], specularRoughness: 0.45, specularIor: 1.4, subsurfaceWeight: 1, subsurfaceColor: [0.9, 0.6, 0.48], subsurfaceRadius: 0.2 }),
-  preset('soft', 'wax', 'Wax', { baseColor: [0.85, 0.75, 0.55], specularRoughness: 0.35, specularIor: 1.45, subsurfaceWeight: 1, subsurfaceColor: [0.9, 0.75, 0.5], subsurfaceRadius: 0.3 }),
-  preset('soft', 'jade', 'Jade', { baseColor: [0.1, 0.45, 0.2], specularRoughness: 0.15, specularIor: 1.66, subsurfaceWeight: 1, subsurfaceColor: [0.15, 0.6, 0.25], subsurfaceRadius: 0.5 }),
-  preset('soft', 'marble', 'Marble', { baseColor: [0.85, 0.83, 0.8], specularRoughness: 0.2, subsurfaceWeight: 1, subsurfaceColor: [0.85, 0.83, 0.8], subsurfaceRadius: 0.15 }),
-  preset('soft', 'milk', 'Milk', { baseColor: [0.95, 0.93, 0.88], specularRoughness: 0.1, specularIor: 1.35, subsurfaceWeight: 1, subsurfaceColor: [0.95, 0.93, 0.88], subsurfaceRadius: 0.6 }),
-  preset('soft', 'velvet', 'Velvet', { baseColor: [0.06, 0.02, 0.12], specularRoughness: 0.8, fuzzWeight: 1, fuzzColor: [0.6, 0.45, 0.85], fuzzRoughness: 0.4 }),
-  preset('soft', 'cotton', 'Cotton', {
-    baseColor: [0.7, 0.68, 0.62], specularRoughness: 1, specularWeight: 0.5, baseDiffuseRoughness: 1, fuzzWeight: 1, fuzzColor: [1, 1, 1], fuzzRoughness: 0.8
-  }),
-  preset('soft', 'leather', 'Leather', { baseColor: [0.12, 0.045, 0.02], specularRoughness: 0.55, coatWeight: 0.4, coatRoughness: 0.35, coatIor: 1.5 })
-];
+export const MATERIAL_PRESETS = presets as MaterialPreset[];
 
 // sRGB <-> linear for color pickers; OpenPBR colors are linear.
 const toSRGB = (c: number) => (c <= 0.0031308 ? 12.92 * c : 1.055 * Math.pow(c, 1 / 2.4) - 0.055);
