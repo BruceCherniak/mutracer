@@ -78,11 +78,18 @@ the output directory. See the [native guide](../README.md) for platform backends
   right rail. Click the active category to hide the inspector; **[** and **]**
   toggle the scene list and inspector. Click section headings to collapse their
   settings. Narrow windows hide the scene list to preserve viewport space.
-- **Lighting** provides environment intensity, tint and rotation, plus Environment,
-  Color or Transparent backgrounds. The environment still lights the scene with
-  a transparent background, and exported PNGs keep its alpha channel.
-  **Load HDR…** opens a local Radiance equirectangular environment; **Studio**
-  restores the built-in light.
+- **Lighting** switches between Environment and Studio. Environment provides
+  intensity, tint and rotation; **Load HDR…** opens a local Radiance
+  equirectangular map, and **Built-in** restores the built-in map. Switching to
+  Studio and back preserves the selected environment.
+- **Studio** offers eight softbox presets, with intensity, rotation, size,
+  ambient fill and ambient color. The lights scale and move with the model's
+  bounds. Larger softboxes give softer shadows while keeping roughly the same
+  exposure. Changing the preset restarts rendering and can take longer than
+  adjusting the lights.
+- **Background** offers Environment, Color or Transparent in either lighting
+  mode. A transparent background keeps the lighting, and exported PNGs retain
+  alpha. In Studio, the Environment background shows the ambient fill.
 - **Render** provides 4–16,384 maximum samples, 1–16 bounces, Sobol, Z-Sobol or
   Random sampling and clamping (0 disables it). Quality changes restart
   accumulation; more samples and bounces cost more rendering time. Choose a fixed

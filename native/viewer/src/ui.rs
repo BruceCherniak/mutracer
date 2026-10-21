@@ -598,43 +598,82 @@ impl Viewer {
     }
 
     fn lighting_settings(&mut self, ui: &mut egui::Ui) {
+        let previous_studio = self.environment.studio.clone();
         let mut changed = false;
-        controls::section(ui, "Environment", |ui| {
-            ui.add(
-                egui::Label::new(egui::RichText::new(&self.environment.name).color(theme::MUTED))
+        let was_studio = self.environment.studio.enabled;
+        controls::select(
+            ui,
+            "Lighting",
+            if was_studio { "Studio" } else { "Environment" },
+            |ui| {
+                ui.selectable_value(&mut self.environment.studio.enabled, false, "Environment");
+                ui.selectable_value(&mut self.environment.studio.enabled, true, "Studio");
+            },
+        );
+        changed |= was_studio != self.environment.studio.enabled;
+        if self.environment.studio.enabled {
+            controls::section(ui, "Studio", |ui| {
+                let studio = &mut self.environment.studio;
+                let previous = studio.clone();
+                controls::select(
+                    ui,
+                    "Preset",
+                    &crate::studio::presets()[studio.preset].name,
+                    |ui| {
+                        for (i, preset) in crate::studio::presets().iter().enumerate() {
+                            ui.selectable_value(&mut studio.preset, i, &preset.name);
+                        }
+                    },
+                );
+                ui.weak(&crate::studio::presets()[studio.preset].tag);
+                controls::scalar(ui, "Intensity", &mut studio.intensity, 0.0..=4.0);
+                controls::scalar(ui, "Rotation", &mut studio.rotation, -180.0..=180.0);
+                controls::scalar(ui, "Size", &mut studio.size, 0.25..=3.0);
+                controls::scalar(ui, "Ambient", &mut studio.ambient, 0.0..=1.0);
+                controls::color(ui, "Ambient color", &mut studio.ambient_color);
+                changed |= previous != *studio;
+            });
+        } else {
+            controls::section(ui, "Environment", |ui| {
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(&self.environment.name).color(theme::MUTED),
+                    )
                     .truncate(),
-            );
-            ui.horizontal(|ui| {
-                if controls::button(ui, "Load HDR…").clicked() {
-                    if let Some(path) = rfd::FileDialog::new()
-                        .add_filter("Radiance HDR", &["hdr"])
-                        .pick_file()
-                    {
-                        match self.environment.load(&path) {
-                            Ok(()) => changed = true,
-                            Err(e) => self.error = format!("Could not load environment: {e:#}"),
+                );
+                ui.horizontal(|ui| {
+                    if controls::button(ui, "Load HDR…").clicked() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Radiance HDR", &["hdr"])
+                            .pick_file()
+                        {
+                            match self.environment.load(&path) {
+                                Ok(()) => changed = true,
+                                Err(e) => self.error = format!("Could not load environment: {e:#}"),
+                            }
                         }
                     }
-                }
-                if controls::button(ui, "Studio").clicked() {
-                    self.environment = Environment::default();
-                    changed = true;
-                }
+                    if controls::button(ui, "Built-in").clicked() {
+                        self.environment.image = None;
+                        self.environment.name = Environment::default().name;
+                        changed = true;
+                    }
+                });
+                changed |= controls::parameter(
+                    ui,
+                    "Intensity",
+                    egui::Slider::new(&mut self.environment.intensity, 0.0..=4.0),
+                )
+                .changed();
+                changed |= controls::parameter(
+                    ui,
+                    "Rotation",
+                    egui::Slider::new(&mut self.environment.rotation, 0.0..=360.0),
+                )
+                .changed();
+                changed |= controls::color(ui, "Tint", &mut self.environment.color).changed();
             });
-            changed |= controls::parameter(
-                ui,
-                "Intensity",
-                egui::Slider::new(&mut self.environment.intensity, 0.0..=4.0),
-            )
-            .changed();
-            changed |= controls::parameter(
-                ui,
-                "Rotation",
-                egui::Slider::new(&mut self.environment.rotation, 0.0..=360.0),
-            )
-            .changed();
-            changed |= controls::color(ui, "Tint", &mut self.environment.color).changed();
-        });
+        }
         controls::section(ui, "Background", |ui| {
             let old = if self.environment.background {
                 0
@@ -668,7 +707,15 @@ impl Viewer {
             }
         });
         if changed {
-            self.dirty(Change::Environment);
+            self.dirty(
+                if previous_studio.enabled != self.environment.studio.enabled
+                    || previous_studio.preset != self.environment.studio.preset
+                {
+                    Change::Scene
+                } else {
+                    Change::Environment
+                },
+            );
         }
         let mut light_changed = false;
         let was_enabled = self.light.enabled;

@@ -120,6 +120,7 @@ pub struct Model {
     pub meshes: Vec<Mesh>,
     pub center: Vec3,
     pub radius: f32,
+    pub ground_y: f32,
     pub warnings: Vec<String>,
 }
 impl Model {
@@ -164,6 +165,7 @@ impl Model {
             meshes: vec![],
             center: Vec3::ZERO,
             radius: 1.,
+            ground_y: 0.,
             warnings: vec![],
         };
         for extension in document.extensions_used().filter(|e| !known.contains(e)) {
@@ -340,6 +342,7 @@ impl Model {
         }
         model.center = (min + max) * 0.5;
         model.radius = (max - min).length() * 0.5;
+        model.ground_y = min.y;
         ensure!(
             model.center.is_finite() && model.radius.is_finite() && model.radius > 1e-8,
             "Invalid or degenerate model bounds"
@@ -790,6 +793,12 @@ impl Model {
         environment: &Environment,
         light: &KeyLight,
     ) -> bool {
+        let mut lights = environment
+            .studio
+            .records(self.center, self.radius, self.ground_y);
+        if light.enabled {
+            lights.push(light.record());
+        }
         let w = &mut d.words;
         if !Arc::ptr_eq(&d.geometries, &self.geometries)
             || !Arc::ptr_eq(&d.textures, &self.textures)
@@ -797,7 +806,7 @@ impl Model {
             || w[h::HEIGHT] != size[1]
             || w[h::MESH_COUNT] as usize != self.meshes.len()
             || w[h::MATERIAL_COUNT] as usize != self.materials.len()
-            || w[h::LIGHT_COUNT] != u32::from(light.enabled)
+            || w[h::LIGHT_COUNT] as usize != lights.len()
             || camera.len() != camera_wire::WORDS * 4
         {
             return false;
@@ -826,9 +835,10 @@ impl Model {
         for (i, m) in self.materials.iter().enumerate() {
             write_material(w, material_offset + i * mat::WORDS, m);
         }
-        if light.enabled {
-            let o = w[h::LIGHT_OFFSET] as usize;
-            w[o..o + light_wire::WORDS].copy_from_slice(&light.record());
+        let offset = w[h::LIGHT_OFFSET] as usize;
+        for (i, record) in lights.iter().enumerate() {
+            let o = offset + i * light_wire::WORDS;
+            w[o..o + light_wire::WORDS].copy_from_slice(record);
         }
         write_background(w, environment, self.textures.len() as u32 + 1);
         true
@@ -840,6 +850,12 @@ impl Model {
         environment: &Environment,
         light: &KeyLight,
     ) -> Vec<u32> {
+        let mut lights = environment
+            .studio
+            .records(self.center, self.radius, self.ground_y);
+        if light.enabled {
+            lights.push(light.record());
+        }
         let mut w = Wire(vec![0; h::WORDS]);
         w.0[h::VERSION] = mutracer_native_probe::layout::version::SCENE as u32;
         w.0[h::WIDTH] = size[0];
@@ -847,25 +863,22 @@ impl Model {
         w.0[h::GEOMETRY_COUNT] = self.geometries.len() as u32;
         w.0[h::MESH_COUNT] = self.meshes.len() as u32;
         w.0[h::MATERIAL_COUNT] = self.materials.len() as u32;
-        w.0[h::LIGHT_COUNT] = u32::from(light.enabled);
+        w.0[h::LIGHT_COUNT] = lights.len() as u32;
         w.0[h::TEXTURE_COUNT] = self.textures.len() as u32 + 1;
         for (header, count, stride) in [
             (h::GEOMETRY_OFFSET, self.geometries.len(), g::WORDS),
             (h::MESH_OFFSET, self.meshes.len(), wire_mesh::WORDS),
             (h::MATERIAL_OFFSET, self.materials.len(), mat::WORDS),
             (h::TEXTURE_OFFSET, self.textures.len() + 1, tex::WORDS),
-            (
-                h::LIGHT_OFFSET,
-                usize::from(light.enabled),
-                light_wire::WORDS,
-            ),
+            (h::LIGHT_OFFSET, lights.len(), light_wire::WORDS),
         ] {
             w.0[header] = w.0.len() as u32;
             w.0.resize(w.0.len() + count * stride, 0);
         }
-        if light.enabled {
-            let offset = w.0[h::LIGHT_OFFSET] as usize;
-            w.0[offset..offset + light_wire::WORDS].copy_from_slice(&light.record());
+        let offset = w.0[h::LIGHT_OFFSET] as usize;
+        for (i, record) in lights.iter().enumerate() {
+            let o = offset + i * light_wire::WORDS;
+            w.0[o..o + light_wire::WORDS].copy_from_slice(record);
         }
         w.0[h::CAMERA_OFFSET] = w.append_bytes(camera);
         for (i, g) in self.geometries.iter().enumerate() {
@@ -1132,6 +1145,7 @@ pub struct Environment {
     pub intensity: f32,
     pub color: [f32; 3],
     pub rotation: f32,
+    pub studio: crate::studio::Studio,
     pub background: bool,
     pub background_color: [f32; 3],
     pub background_alpha: f32,
@@ -1144,11 +1158,12 @@ impl Default for Environment {
             intensity: 1.,
             color: [0.8, 0.88, 1.],
             rotation: 0.,
+            studio: crate::studio::Studio::default(),
             background: true,
             background_color: [0.025, 0.025, 0.03],
             background_alpha: 1.,
             image: None,
-            name: "Studio".into(),
+            name: "Built-in environment".into(),
         }
     }
 }
@@ -1177,6 +1192,12 @@ impl Environment {
     }
     /// Whether `pixels` would return the same map.
     fn same_pixels(&self, other: &Self) -> bool {
+        if self.studio.enabled != other.studio.enabled {
+            return false;
+        }
+        if self.studio.enabled {
+            return self.studio.same_ambient(&other.studio);
+        }
         self.intensity.to_bits() == other.intensity.to_bits()
             && self.color.map(f32::to_bits) == other.color.map(f32::to_bits)
             && self.rotation.to_bits() == other.rotation.to_bits()
@@ -1186,6 +1207,9 @@ impl Environment {
             }
     }
     fn pixels(&self) -> (u32, u32, Vec<f32>) {
+        if self.studio.enabled {
+            return self.studio.pixels();
+        }
         let (width, height) = self
             .image
             .as_ref()

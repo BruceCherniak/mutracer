@@ -68,6 +68,7 @@ impl Model {
         }
         self.center = (min + max) * 0.5;
         self.radius = (max - min).length() * 0.5;
+        self.ground_y = min.y;
     }
     pub fn mesh_bounds(&self, id: usize) -> (Vec3, Vec3) {
         let mesh = &self.meshes[id];

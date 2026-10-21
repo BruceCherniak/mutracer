@@ -11,6 +11,8 @@ mod parity_smoke;
 mod picking;
 mod renderer;
 mod scene;
+mod studio;
+mod studio_smoke;
 mod theme;
 mod ui;
 use anyhow::{Context, Result, ensure};
@@ -1878,10 +1880,16 @@ fn main() -> Result<()> {
     let mut geometry_out = None;
     let mut package_out = None;
     let mut parity_out = None;
+    let mut studio_out = None;
     let mut startup_out = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--studio-smoke" => {
+                studio_out = Some(PathBuf::from(
+                    args.next().context("--studio-smoke needs a directory")?,
+                ));
+            }
             "--parity-smoke" => {
                 parity_out = Some(PathBuf::from(
                     args.next().context("--parity-smoke needs a directory")?,
@@ -1952,6 +1960,9 @@ fn main() -> Result<()> {
         }
     }
     let model = model.unwrap_or_else(default_model);
+    if let Some(out) = studio_out {
+        return studio_smoke::run(&model, &out);
+    }
     if let Some(out) = parity_out {
         return parity_smoke::run(&model, &out);
     }
