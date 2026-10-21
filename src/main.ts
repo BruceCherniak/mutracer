@@ -50,7 +50,7 @@ export type {
   UVProjection
 } from './scene/OpenPBRMaterial.js';
 export { default as Texture } from './scene/Texture.js';
-export type { TextureDataSource, TextureWrapMode } from './scene/Texture.js';
+export type { TextureDataSource, TextureWrapMode, TextureColorSpace } from './scene/Texture.js';
 export type { ColorRGB, ColorRGBA, Vec2, Vec3, Mat4 } from './types.js';
 
 // Lights

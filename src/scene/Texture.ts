@@ -1,12 +1,15 @@
-/** Raw RGBA pixels, rows top to bottom. Bytes encode sRGB color; float data is linear HDR. */
+/** Raw RGBA pixels, rows top to bottom. Color encoding defaults to sRGB for bytes and linear for floats. */
 export interface TextureDataSource {
-  /** Required RGBA pixels in row-major order. Uint8Array/Uint8ClampedArray encode sRGB color; Float32Array/Int32Array contain linear values. Data-map channels are always linear. */
+  /** Required RGBA pixels in row-major order. Uint8Array/Uint8ClampedArray default to sRGB color; Float32Array/Int32Array default to linear values. Texture.colorSpace can override color encoding; data-map channels are always linear. */
   data: Float32Array | Uint8Array | Uint8ClampedArray | Int32Array;
   /** Required pixel width. */
   width: number;
   /** Required pixel height. */
   height: number;
 }
+
+/** Transfer function for material color slots; data-map channels remain linear. */
+export type TextureColorSpace = 'srgb' | 'linear';
 
 /** Addressing of coordinates outside a material texture's [0, 1] range. */
 export type TextureWrapMode = 'repeat' | 'clamp-to-edge' | 'mirrored-repeat';
@@ -16,8 +19,8 @@ export function textureWrapIndex(mode: TextureWrapMode): number {
 }
 
 /**
- * Image used by materials, lights and backgrounds. 8-bit color textures are
- * treated as sRGB; float data as linear.
+ * Image used by materials, lights and backgrounds. Material color slots default
+ * to sRGB for images/bytes and linear for float data; colorSpace overrides this.
  */
 export default class Texture {
   /** Image or raw RGBA pixels supplied to the constructor; no default. */
@@ -37,6 +40,8 @@ export default class Texture {
   wrapS: TextureWrapMode = 'repeat';
   /** Vertical material-texture addressing after UV scale/offset. Default `'repeat'`. */
   wrapT: TextureWrapMode = 'repeat';
+  /** Material color encoding. Default undefined: sRGB for images/bytes, linear for float/integer HDR data. Data-map channels ignore this option. */
+  colorSpace?: TextureColorSpace;
   /** Geometry UV set used by this texture (Three.js Texture.channel). Default `0`. */
   uvChannel: 0 | 1 = 0;
   constructor(image: HTMLImageElement | HTMLCanvasElement | ImageBitmap | OffscreenCanvas | TextureDataSource) {
@@ -46,7 +51,7 @@ export default class Texture {
   /**
    * Call after editing image pixels or UV array elements in place. Increments
    * version so the next render refreshes all materials, lights and backgrounds
-   * using this texture. Assigning a new image, UV array, flipY, wrapS, wrapT or
+   * using this texture. Assigning a new image, UV array, flipY, wrapS, wrapT, colorSpace or
    * uvChannel is detected automatically.
    */
   markUpdated() {

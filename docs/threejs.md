@@ -83,6 +83,10 @@ half-float data. Missing color channels become zero and missing alpha becomes
 one. Decoded images use additional CPU memory and are reused until the source
 texture is updated; set `texture.needsUpdate = true` after pixel edits.
 
+Material color textures honor `LinearSRGBColorSpace` and `SRGBColorSpace`;
+`NoColorSpace` reads color channels as linear. Data-map channels are always
+linear. Color-space edits synchronize automatically.
+
 Material textures preserve independent `wrapS` and `wrapT`: repeat,
 clamp-to-edge and mirrored repeat. UV repeat and offset apply before wrapping;
 later wrap edits synchronize automatically. Displacement uses the same modes.

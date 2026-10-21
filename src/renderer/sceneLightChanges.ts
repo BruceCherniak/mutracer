@@ -30,7 +30,7 @@ export class RectLightTextureTracker {
   update(lights: readonly SceneLight[]) {
     const textures = lights.map(light => light.type === 'RectLight' ? light.texture : undefined);
     const next = textures.flatMap(texture => texture ? [texture, texture.version, texture.image,
-      texture.flipY, ...texture.uvScale, ...texture.uvOffset, texture.uvChannel, texture.wrapS, texture.wrapT] : [undefined]);
+      texture.flipY, ...texture.uvScale, ...texture.uvOffset, texture.uvChannel, texture.wrapS, texture.wrapT, texture.colorSpace] : [undefined]);
     const hasTexture = textures.some((texture): texture is Texture => !!texture);
     const changed = (this._hadTexture || hasTexture) && !snapshotsEqual(next, this._snapshot);
     this._snapshot = next;

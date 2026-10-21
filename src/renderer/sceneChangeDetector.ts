@@ -34,7 +34,7 @@ export function snapshotFields(object: object): unknown[] {
 
 function snapshotTexture(texture: Texture | undefined): unknown[] {
   return texture ? [texture, texture.version, texture.image, texture.flipY,
-    texture.uvScale, texture.uvOffset, texture.uvChannel, texture.wrapS, texture.wrapT] : [undefined];
+    texture.uvScale, texture.uvOffset, texture.uvChannel, texture.wrapS, texture.wrapT, texture.colorSpace] : [undefined];
 }
 
 export function snapshotsEqual(a: readonly unknown[], b: readonly unknown[]) {
@@ -55,7 +55,7 @@ function captureMaterialTextures(material: OpenPBRMaterial, out: unknown[]) {
     if (!texture) { out[i++] = undefined; continue; }
     out[i++] = texture; out[i++] = texture.version; out[i++] = texture.image;
     out[i++] = texture.flipY; out[i++] = texture.uvScale; out[i++] = texture.uvOffset;
-    out[i++] = texture.uvChannel; out[i++] = texture.wrapS; out[i++] = texture.wrapT;
+    out[i++] = texture.uvChannel; out[i++] = texture.wrapS; out[i++] = texture.wrapT; out[i++] = texture.colorSpace;
   }
   out.length = i;
 }

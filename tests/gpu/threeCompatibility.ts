@@ -45,6 +45,15 @@ async function run() {
           }
         }
       }
+    } else if (new URLSearchParams(location.search).get('suite') === 'color') {
+      for (const colorSpace of [THREE.LinearSRGBColorSpace,THREE.SRGBColorSpace,THREE.NoColorSpace]) {
+        const map=new THREE.DataTexture(new Uint8Array([128,64,32,255]),1,1);
+        map.colorSpace=colorSpace;
+        await capture(`byte color space ${colorSpace||'none'}`,map);
+      }
+      const hdr=new THREE.DataTexture(new Float32Array([2,.5,.25,1]),1,1,THREE.RGBAFormat,THREE.FloatType);
+      hdr.colorSpace=THREE.LinearSRGBColorSpace;
+      await capture('linear HDR color',hdr);
     } else {
     await capture('half-float RGBA', new THREE.DataTexture(new Uint16Array([0x4000, 0x3800, 0x3400, 0x3c00]), 1, 1, THREE.RGBAFormat, THREE.HalfFloatType));
     await capture('RedFormat', new THREE.DataTexture(new Uint8Array([255]), 1, 1, THREE.RedFormat));

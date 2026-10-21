@@ -39,7 +39,7 @@ function convertTexture(
   if (!threeTexture) return;
   const state = [threeTexture.version, threeTexture.image, threeTexture.flipY,
     threeTexture.repeat.x, threeTexture.repeat.y, threeTexture.offset.x,
-    threeTexture.offset.y, threeTexture.channel, threeTexture.wrapS, threeTexture.wrapT];
+    threeTexture.offset.y, threeTexture.channel, threeTexture.wrapS, threeTexture.wrapT, threeTexture.colorSpace];
   const cached = textureStore.get(threeTexture);
   if (cached && snapshotsEqual(cached.state, state)) return cached.texture;
   const image = convertTextureImage(threeTexture);
@@ -53,6 +53,9 @@ function convertTexture(
   const wrap = (value: number) => value === 1001 ? 'clamp-to-edge' as const
     : value === 1002 ? 'mirrored-repeat' as const : 'repeat' as const;
   texture.wrapS = wrap(threeTexture.wrapS); texture.wrapT = wrap(threeTexture.wrapT);
+  // Three.js NoColorSpace also reads color channels without a transfer function.
+  texture.colorSpace = threeTexture.colorSpace === 'srgb' ? 'srgb'
+    : threeTexture.colorSpace === 'srgb-linear' || threeTexture.colorSpace === '' ? 'linear' : undefined;
   if (cached) texture.markUpdated();
   else texture.version = threeTexture.version;
   textureStore.set(threeTexture, { texture, state });

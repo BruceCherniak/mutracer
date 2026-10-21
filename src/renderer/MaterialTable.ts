@@ -275,10 +275,12 @@ function makeTextureArray(
   );
   const mapColorLinear = textures.map(texture => {
     const image = texture.image;
-    return Number(isTextureDataSource(image) &&
+    return Number(texture.colorSpace ? texture.colorSpace === 'linear' : isTextureDataSource(image) &&
       !(image.data instanceof Uint8Array) && !(image.data instanceof Uint8ClampedArray));
   });
-  const floatStorage = mapColorLinear.some(Boolean);
+  // Storage precision depends on the pixels, independently of their transfer function.
+  const floatStorage = textures.some(({image}) => isTextureDataSource(image) &&
+    !(image.data instanceof Uint8Array) && !(image.data instanceof Uint8ClampedArray));
   const bytesPerPixel = floatStorage ? 8 : 4;
 
   const maxTextureArrayLayers = options.maxTextureArrayLayers ?? Infinity;
