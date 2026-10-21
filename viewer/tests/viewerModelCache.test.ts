@@ -121,7 +121,7 @@ describe('current model OPFS cache', () => {
       displacementUvProjection: 'triplanar' as const, displacementUvProjectionScale: 2 };
     await saveMaterialEdits({ modelId: 'first', materials: [
       { index: 0, name: 'Paint', values: { baseColor: [0.1, 0.2, 0.3], specularRoughness: 0.4 }, textures: [{ slot: 'normalMap', file: normal }, { slot: 'map', file: null }] },
-      { index: 3, name: 'Glass', values: {}, textures: [{ slot: 'map', file: base }] },
+      { index: 3, name: 'Glass', values: {}, textures: [{ slot: 'map', file: base }], sampling:{map:{uvScale:[-2,0],wrapS:'clamp-to-edge',wrapT:'mirrored-repeat'}} },
       { index: 4, name: 'Height', values: heightValues, textures: [{ slot: 'displacementMap', file: base }] }
     ] });
     expect(fs.files.size).toBe(2);
@@ -132,6 +132,7 @@ describe('current model OPFS cache', () => {
     expect([...new Uint8Array(await edits.materials[0].textures[0].file!.arrayBuffer())]).toEqual([1, 2, 3]);
     expect(edits.materials[0].textures[0].file!.type).toBe('image/png');
     expect(await edits.materials[1].textures[0].file!.text()).toBe('jpeg');
+    expect(edits.materials[1].sampling?.map).toEqual({uvScale:[-2,0],wrapS:'clamp-to-edge',wrapT:'mirrored-repeat'});
     expect(edits.materials[2].values).toEqual(heightValues);
     expect(edits.materials[2].textures[0].slot).toBe('displacementMap');
     expect(await edits.materials[2].textures[0].file!.text()).toBe('jpeg');

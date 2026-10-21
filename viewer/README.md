@@ -25,6 +25,12 @@ previous displacement map; leaving the option off clears it. Height maps and
 their settings support undo, redo and restoration when reloading the cached
 model, like other material edits.
 
+Under Material → Textures, expand a loaded texture's Wrap & repeat controls.
+Choose Repeat, Clamp to edge or Mirrored repeat independently for S/T, and set
+each axis's repeat count. Negative values flip an axis; zero samples a constant
+coordinate. Edits support undo/redo and are restored with the cached model.
+Uploaded images keep the UV transform and wrapping of the texture they replace.
+
 The Export dialog can download the current viewport PNG immediately, preserving
 its displayed appearance and pixel size without restarting the render. Render PNG
 instead renders a new image at Viewport, 1080p, 2K (2560 × 1440), 4K, or Square
@@ -99,8 +105,6 @@ Notes:
   step. Camera settings, which follow the view, and switches to or from an
   uploaded .hdr are not recorded. Opening a model drops its material steps and
   keeps the settings steps.
-  Uploaded images are decoded like GLTFLoader (no premultiplication or color
-  space conversion) and keep the UV transform of the texture they replace.
 - Material edits of the cached model, including the original files of uploaded
   textures, are saved in a second OPFS archive keyed by the model and by each
   material's traversal order. Reloads reapply them as materials are converted;

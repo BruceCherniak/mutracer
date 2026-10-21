@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { DEFAULT_JNLM_OPTIONS } from '@meimu/mutracer';
 import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, DisplayChannel } from '@meimu/mutracer';
+import type { TextureSampling } from './engine/modelCache';
 import type { MaterialValues, TextureKey } from './engine/materialParams';
 import { STUDIO_PRESETS } from './engine/studio';
 import { historyLabels, onHistoryChange, pushHistory, type HistoryItem } from './history';
@@ -217,6 +218,7 @@ export interface SelectedMaterial {
   textures: string[];
   /** Texture in each slot, as a thumbnail URL; `''` when it cannot be drawn. */
   maps: Partial<Record<TextureKey, string>>;
+  sampling: Partial<Record<TextureKey, TextureSampling>>;
   /** Suggested local-unit slider range for the selected mesh, without limiting typed values. */
   displacementRange: { min: number; max: number; step: number };
 }

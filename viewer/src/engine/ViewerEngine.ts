@@ -20,6 +20,7 @@ import { isMaterialXFile } from './droppedFiles';
 export const MATERIALX_IMPORT = import.meta.env.DEV;
 import { displacementHeightRange } from './displacementHeightRange';
 import { downloadPolyHavenMap, polyHavenMaps, type TextureResolution } from './polyHaven';
+import type { TextureSampling } from './modelCache';
 import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
 import { MaterialEditor, readPendingEdits, type PendingEdits } from './materialEditor';
 import { cameraSettings, readCameraState, writeCameraState } from './cameraState';
@@ -1011,6 +1012,10 @@ export class ViewerEngine {
    */
   setMaterialValues(materialId: string, values: MaterialValues, label = 'Edit material', mergeKey?: string) {
     this.materials.setValues(materialId, values, label, mergeKey);
+  }
+
+  setMaterialTextureSampling(materialId: string, slot: TextureKey, patch: Partial<TextureSampling>, label: string, mergeKey?: string) {
+    this.materials.setTextureSampling(materialId, slot, patch, label, mergeKey);
   }
 
   /** Replaces the texture in a slot with an image file, or removes it with `null`. */

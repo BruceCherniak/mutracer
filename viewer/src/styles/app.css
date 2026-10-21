@@ -800,3 +800,9 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 .tex-slot__label b { color: var(--cv-text); font-size: 11px; font-weight: 500; }
 .tex-slot__label small { overflow: hidden; color: var(--cv-text-3); font-size: 9.5px; white-space: nowrap; text-overflow: ellipsis; }
 .tex-slot:not([data-on]) .tex-slot__label b { color: var(--cv-text-2); }
+
+.tex-slot__settings { grid-column: 1 / -1; min-width: 0; margin: -3px 0 3px 43px; }
+.tex-slot__settings summary { cursor: pointer; color: var(--cv-text-3); font-size: 10px; padding: 4px 0; }
+.tex-slot__settings summary:focus-visible { outline: 2px solid var(--cv-focus); outline-offset: 2px; }
+.tex-slot__settings > div { display: grid; gap: 5px; padding-top: 3px; }
+.tex-slot__repeat { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 5px; }

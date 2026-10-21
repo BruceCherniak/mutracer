@@ -5,7 +5,7 @@ import {
   TEXTURE_KEYS, readMaterial, sameValue, textureSlots, writeMaterial,
   type MaterialValues, type TextureKey
 } from './materialParams';
-import { readMaterialEdits, saveMaterialEdits, type MaterialEdit as StoredEdit, type TextureTransform } from './modelCache';
+import { readMaterialEdits, saveMaterialEdits, type MaterialEdit as StoredEdit, type TextureTransform, type TextureSampling } from './modelCache';
 import { discardHistory, pushHistory, type HistoryItem } from '../history';
 
 /** Values and textures to set; `null` empties a texture slot. */
@@ -46,6 +46,7 @@ class MaterialEdit implements HistoryItem {
 interface PendingEdit {
   name: string;
   values: MaterialValues;
+  sampling?: StoredEdit['sampling'];
   textures: Partial<Record<TextureKey, { image: ImageBitmap; file: Blob; transform?: TextureTransform } | null>>;
 }
 
@@ -75,7 +76,7 @@ export async function readPendingEdits(modelId: string): Promise<PendingEdits | 
         // An unreadable image drops only that slot.
       }
     }));
-    pending.set(edit.index, { name: edit.name, values: edit.values, textures });
+    pending.set(edit.index, { name: edit.name, values: edit.values, textures, sampling:edit.sampling });
   }));
   return pending;
 }
@@ -161,16 +162,38 @@ export class MaterialEditor {
     const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
     if (!entry || !material) return null;
     const maps: Partial<Record<TextureKey, string>> = {};
+    const sampling: Partial<Record<TextureKey, TextureSampling>> = {};
     const record = material as unknown as Record<string, Texture | undefined>;
     for (const key of TEXTURE_KEYS) {
       const texture = record[key];
-      if (texture) maps[key] = this.thumbnail(texture);
+      if (texture) { maps[key] = this.thumbnail(texture); sampling[key] = textureSampling(texture); }
     }
-    return { name: entry.name, users: entry.meshes.size, values: readMaterial(material), textures: [...textureSlots(material)], maps };
+    return { name: entry.name, users: entry.meshes.size, values: readMaterial(material), textures: [...textureSlots(material)], maps, sampling };
   }
 
   setValues(materialId: string, values: MaterialValues, label: string, mergeKey?: string) {
     this.commit(materialId, { values, textures: {} }, label, mergeKey);
+  }
+
+  setTextureSampling(materialId: string, slot: TextureKey, patch: Partial<TextureSampling>, label: string, mergeKey?: string) {
+    const material = this.entries.get(materialId)?.converted.values().next().value as OpenPBRMaterial | undefined;
+    const texture = material?.[slot];
+    if (!texture) return;
+    const next = {...textureSampling(texture), ...patch};
+    if (!next.uvScale.every(Number.isFinite)) return;
+    if (sameSampling(texture, next)) return;
+    this.commit(materialId, {values:{}, textures:{[slot]:this.withSampling(texture, next)}}, label, mergeKey);
+  }
+
+  private withSampling(texture: Texture, sampling: TextureSampling) {
+    const copy = new Texture(texture.image);
+    copy.source = texture.source; copy.flipY = texture.flipY; copy.colorSpace = texture.colorSpace;
+    copy.uvOffset = [...texture.uvOffset]; copy.uvChannel = texture.uvChannel;
+    copy.uvScale = [...sampling.uvScale]; copy.wrapS = sampling.wrapS; copy.wrapT = sampling.wrapT;
+    const file = this.uploads.get(texture), transform = this.transforms.get(texture);
+    if (file) this.uploads.set(copy, file);
+    if (transform) this.transforms.set(copy, transform);
+    return copy;
   }
 
   async setTexture(materialId: string, slot: TextureKey, file: Blob | null, label: string) {
@@ -267,6 +290,10 @@ export class MaterialEditor {
       }
       textures[slot] = this.upload(upload.image, upload.file, material, slot, upload.transform);
     }
+    for (const [slot, sampling] of Object.entries(edit.sampling ?? {}) as [TextureKey, TextureSampling][]) {
+      const texture = textures[slot] === null ? undefined : textures[slot] ?? material[slot];
+      if (texture) textures[slot] = this.withSampling(texture, sampling);
+    }
     return { values: edit.values, textures };
   }
 
@@ -315,12 +342,18 @@ export class MaterialEditor {
         const file = texture ? this.uploads.get(texture) : null;
         if (file !== undefined) textures.push({ slot, file, transform: texture ? this.transforms.get(texture) : undefined });
       }
-      materials.push({ index: entry.index, name: this.order.get(materialId)?.name ?? '', values: changes.values, textures });
+      const sampling: NonNullable<StoredEdit['sampling']> = {};
+      for (const slot of TEXTURE_KEYS) {
+        const texture = material[slot], original = entry.initial.textures[slot];
+        if (texture && (!original || !sameSampling(texture, original))) sampling[slot] = textureSampling(texture);
+      }
+      materials.push({ index: entry.index, name: this.order.get(materialId)?.name ?? '', values: changes.values, textures,
+        ...(Object.keys(sampling).length ? {sampling} : {}) });
     }
     // Keep stored edits of materials that have not been converted yet.
     for (const [index, edit] of this.pending) {
       materials.push({
-        index, name: edit.name, values: edit.values,
+        index, name: edit.name, values: edit.values, sampling:edit.sampling,
         textures: Object.entries(edit.textures).map(([slot, upload]) =>
           ({ slot: slot as TextureKey, file: upload?.file ?? null, transform: upload?.transform }))
       });
@@ -393,6 +426,17 @@ function createTexture(image: ImageBitmap, material: OpenPBRMaterial, slot: Text
     texture.uvScale = [...reference.uvScale];
     texture.uvOffset = [...reference.uvOffset];
     texture.uvChannel = reference.uvChannel;
+    texture.wrapS = reference.wrapS;
+    texture.wrapT = reference.wrapT;
   }
   return texture;
+}
+
+function textureSampling(texture: Texture): TextureSampling {
+  return {uvScale:[...texture.uvScale], wrapS:texture.wrapS, wrapT:texture.wrapT};
+}
+
+function sameSampling(a: TextureSampling, b: TextureSampling) {
+  return a.uvScale[0] === b.uvScale[0] && a.uvScale[1] === b.uvScale[1]
+    && a.wrapS === b.wrapS && a.wrapT === b.wrapT;
 }

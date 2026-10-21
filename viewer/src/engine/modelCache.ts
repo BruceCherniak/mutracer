@@ -1,3 +1,4 @@
+import type { TextureWrapMode } from '@meimu/mutracer';
 import type { ModelSource } from './loadModel';
 import { DISPLACEMENT_PROJECTIONS, MATERIAL_KEYS, TEXTURE_KEYS, type MaterialValues, type TextureKey } from './materialParams';
 
@@ -112,6 +113,13 @@ export interface MaterialEdit {
   values: MaterialValues;
   /** `null` removes the loaded texture from the slot. */
   textures: { slot: TextureKey; file: Blob | null; transform?: TextureTransform }[];
+  sampling?: Partial<Record<TextureKey, TextureSampling>>;
+}
+
+export interface TextureSampling {
+  uvScale: [number, number];
+  wrapS: TextureWrapMode;
+  wrapT: TextureWrapMode;
 }
 
 /** UV repeat and orientation of an imported texture; uploads otherwise follow the texture they replace. */
@@ -125,6 +133,19 @@ function readTransform(value: unknown): TextureTransform | undefined {
   if (!t || !Array.isArray(t.uvScale) || t.uvScale.length !== 2 || !t.uvScale.every(Number.isFinite) ||
     typeof t.flipY !== 'boolean') return undefined;
   return { uvScale: [t.uvScale[0], t.uvScale[1]], flipY: t.flipY };
+}
+
+function readSampling(value: unknown): MaterialEdit['sampling'] {
+  if (!value || typeof value !== 'object') return undefined;
+  const sampling: NonNullable<MaterialEdit['sampling']> = {};
+  const wraps = ['repeat','clamp-to-edge','mirrored-repeat'];
+  for (const [slot, raw] of Object.entries(value)) {
+    const item = raw as TextureSampling | undefined;
+    if (!TEXTURE_KEYS.includes(slot as TextureKey) || !item || !Array.isArray(item.uvScale) ||
+      item.uvScale.length !== 2 || !item.uvScale.every(Number.isFinite) || !wraps.includes(item.wrapS) || !wraps.includes(item.wrapT)) continue;
+    sampling[slot as TextureKey] = {uvScale:[...item.uvScale], wrapS:item.wrapS, wrapT:item.wrapT};
+  }
+  return Object.keys(sampling).length ? sampling : undefined;
 }
 
 export interface MaterialEdits {
@@ -148,8 +169,8 @@ export function saveMaterialEdits(edits: MaterialEdits): Promise<void> {
       const blobs: Blob[] = [];
       const header = new TextEncoder().encode(JSON.stringify({
         version: 1, modelId: edits.modelId,
-        materials: edits.materials.map(({ index, name, values, textures }) => ({
-          index, name, values,
+        materials: edits.materials.map(({ index, name, values, textures, sampling }) => ({
+          index, name, values, sampling,
           textures: textures.map(({ slot, file, transform }) => {
             if (file) blobs.push(file);
             return { slot, file: file && { type: file.type, size: file.size }, transform };
@@ -206,7 +227,8 @@ export function readMaterialEdits(): Promise<MaterialEdits | null> {
           });
           offset += size;
         }
-        materials.push({ index: entry.index, name: entry.name, values, textures });
+        const sampling = readSampling(entry.sampling);
+        materials.push({ index: entry.index, name: entry.name, values, textures, ...(sampling ? {sampling} : {}) });
       }
       if (offset !== file.size) return null;
       return { modelId: header.modelId, materials };
