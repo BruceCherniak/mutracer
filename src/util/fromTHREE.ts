@@ -568,6 +568,12 @@ function convertMaterial(
       ? 'blend'
       : 'opaque';
 
+  if (standardMaterial.side === 1) {
+    // BackSide normals are reversed in converted geometry. Keep the source
+    // displacement direction and biased base surface unchanged.
+    material.displacementScale = -material.displacementScale;
+    material.displacementBias = -material.displacementBias;
+  }
   return material;
 }
 
@@ -615,7 +621,8 @@ function copyFloatAttribute(
 function convertGeometry(
   threeGeometry: THREE.BufferGeometry,
   drawRange: { start: number; count: number },
-  vertexColors: boolean
+  vertexColors: boolean,
+  backSide: boolean
 ): Geometry | null {
   const positionAttrb = threeGeometry.getAttribute('position');
   const normalAttrb = threeGeometry.getAttribute('normal');
@@ -644,6 +651,9 @@ function convertGeometry(
   } else {
     for (let index = 0; index < indexCount; index++) indices[index] = start + index;
   }
+  if (backSide) for (let i = 0; i < indices.length; i += 3) {
+    [indices[i+1], indices[i+2]] = [indices[i+2], indices[i+1]];
+  }
   const geometry = new Geometry({
     position: new Attribute(
       copyFloatAttribute(positionAttrb),
@@ -664,11 +674,25 @@ function convertGeometry(
     color: colorAttrb ? new Attribute(copyFloatAttribute(colorAttrb, 3), 3) : undefined,
     indices: new Attribute(indices, 1)
   });
-  if (!geometry.normal) {
-    generateVertexNormals(geometry);
+  // Generated normals already follow the reversed indices; authored normals do not.
+  if (backSide) {
+    if (normalAttrb) negateNormals(geometry);
+    reverseTangentHandedness(geometry);
   }
   updateBoundingBox(geometry);
   return geometry;
+}
+
+function negateNormals(geometry: Geometry) {
+  const normals = geometry.normal.array;
+  for (let i = 0; i < normals.length; i++) normals[i] = -normals[i];
+}
+
+function reverseTangentHandedness(geometry: Geometry) {
+  // Three.js FLIP_SIDED reverses N but preserves T and B. Reversing W
+  // preserves that bitangent when the renderer reconstructs cross(N,T)*W.
+  const tangent = geometry.tangent;
+  if (tangent?.itemSize === 4) for (let i = 3; i < tangent.array.length; i += 4) tangent.array[i] *= -1;
 }
 
 /** Options for one-shot conversion and persistent Three.js synchronization. */
@@ -962,24 +986,37 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             : (child.geometry.getIndex()?.count ??
               child.geometry.getAttribute('position').count);
           const sourceMaterial = threeMaterials[group.materialIndex ?? 0];
-          // Geometry owns colors in MuTracer, so groups with different material
-          // switches need separate cached geometry even when their ranges match.
+          // Vertex colors and BackSide orientation are baked into geometry, so
+          // groups with different switches cannot share the same cached variant.
           const vertexColors = sourceMaterial.vertexColors === true;
-          const geometryKey = `${group.start}:${count}:${vertexColors}`;
+          const backSide = sourceMaterial.side === 1;
+          const geometryKey = `${group.start}:${count}:${vertexColors}:${backSide}`;
           let geometry = geometryEntry.groups.get(geometryKey);
           const newGeometry = !geometry;
           if (!geometry) {
-            const converted = convertGeometry(child.geometry, { start: group.start, count }, vertexColors);
+            const converted = convertGeometry(child.geometry, { start: group.start, count }, vertexColors, backSide);
             if (!converted) return;
             geometry = converted;
             geometryEntry.groups.set(geometryKey, geometry);
           }
-          // A retained color variant may predate the current pose.
+          // A retained color/side variant may predate the current pose.
           if (deformation && (deformed || newGeometry || store.meshes.get(child)?.get(groupIndex)?.geometry !== geometry)) {
             geometry.dynamic = true;
             geometry.position.array.set(deformation.position);
-            if (deformation.normal) geometry.normal.array.set(deformation.normal);
-            if (deformation.tangent && geometry.tangent) geometry.tangent.array.set(deformation.tangent);
+            if (deformation.normal) {
+              geometry.normal.array.set(deformation.normal);
+              if (backSide) negateNormals(geometry);
+            } else {
+              // Retain resident attribute storage so a pose change can refit its BVH.
+              const normal = geometry.normal;
+              generateVertexNormals(geometry);
+              normal.array.set(geometry.normal.array);
+              geometry.normal = normal;
+            }
+            if (deformation.tangent && geometry.tangent) {
+              geometry.tangent.array.set(deformation.tangent);
+              if (backSide) reverseTangentHandedness(geometry);
+            }
             if (!child.geometry.getAttribute('tangent')) updateDynamicTangents(geometry);
             updateBoundingBox(geometry);
             if (!newGeometry) markDeformedGeometry(geometry);

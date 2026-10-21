@@ -12,7 +12,7 @@ async function run() {
   const scene = new THREE.Scene();
   const geometry = new THREE.PlaneGeometry(8, 8);
   const material = new THREE.MeshBasicMaterial({ toneMapped: false });
-  scene.add(new THREE.Mesh(geometry, material));
+  const mesh = new THREE.Mesh(geometry, material); scene.add(mesh);
   const engine = new Engine({canvas: document.createElement('canvas'), backend: webgl ? 'webgl' : 'webgpu'});
   engine.display.setSize(16, 16);
   const render = new Render(engine), sync = new THREESync(engine, {scene, camera});
@@ -32,7 +32,19 @@ async function run() {
     const row = document.createElement('pre'); row.textContent = JSON.stringify(results.at(-1)); document.body.append(row);
   };
   try {
-    if (new URLSearchParams(location.search).get('suite') === 'wrap') {
+    if (new URLSearchParams(location.search).get('suite') === 'side') {
+      scene.background=new THREE.Color(0,0,0); material.color.setRGB(.75,.5,.25);
+      for (const scale of [1,-1]) {
+        mesh.scale.x=scale;
+        for (const side of [THREE.FrontSide,THREE.BackSide,THREE.DoubleSide]) {
+          material.side=side; material.needsUpdate=true;
+          for (const z of [2,-2]) {
+            camera.position.z=z; camera.lookAt(0,0,0);
+            await capture(`side ${side} camera z=${z} scale=${scale}`,new THREE.DataTexture(new Uint8Array([255,255,255,255]),1,1));
+          }
+        }
+      }
+    } else if (new URLSearchParams(location.search).get('suite') === 'wrap') {
       for (const wrapS of [THREE.RepeatWrapping, THREE.ClampToEdgeWrapping, THREE.MirroredRepeatWrapping]) {
         for (const wrapT of [THREE.RepeatWrapping, THREE.ClampToEdgeWrapping, THREE.MirroredRepeatWrapping]) {
           for (const [u, v] of [[-.125, 1.125], [1, 0]]) {

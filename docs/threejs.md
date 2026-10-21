@@ -83,6 +83,10 @@ half-float data. Missing color channels become zero and missing alpha becomes
 one. Decoded images use additional CPU memory and are reused until the source
 texture is updated; set `texture.needsUpdate = true` after pixel edits.
 
+`FrontSide`, `BackSide` and `DoubleSide` preserve the rendered face and normal
+orientation. Later `material.side` edits synchronize automatically. Using both
+front and back sides of shared geometry requires additional geometry memory.
+
 Material color textures honor `LinearSRGBColorSpace` and `SRGBColorSpace`;
 `NoColorSpace` reads color channels as linear. Data-map channels are always
 linear. Color-space edits synchronize automatically.
