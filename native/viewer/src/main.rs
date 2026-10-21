@@ -14,6 +14,7 @@ mod parity_smoke;
 mod picking;
 mod renderer;
 mod scene;
+mod shell;
 mod studio;
 mod studio_smoke;
 mod theme;
@@ -707,7 +708,7 @@ impl eframe::App for Viewer {
             }
             let passed = *frames >= 3 && self.error.is_empty();
             if passed || !self.error.is_empty() || started.elapsed() > Duration::from_secs(90) {
-                let report = serde_json::json!({"passed":passed,"frames":frames,"samples":self.frame_samples,"error":self.error});
+                let report = serde_json::json!({"passed":passed,"frames":frames,"samples":self.frame_samples,"error":self.error,"windowSize":[ctx.content_rect().width(),ctx.content_rect().height()],"grip":ctx.data(|data| data.get_temp::<egui::Rect>(egui::Id::new("smoke-grip"))).map(|r| [r.min.x,r.min.y,r.max.x,r.max.y])});
                 if let Some(parent) = path.parent() {
                     let _ = std::fs::create_dir_all(parent);
                 }
@@ -2060,6 +2061,9 @@ fn main() -> Result<()> {
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
+            .with_decorations(false)
+            .with_resizable(true)
+            .with_icon(shell::icon())
             .with_drag_and_drop(true)
             .with_inner_size([1200., 800.])
             .with_min_inner_size([800., 560.]),

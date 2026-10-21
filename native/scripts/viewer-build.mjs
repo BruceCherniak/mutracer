@@ -1,7 +1,7 @@
 import {prepareTinyBvh} from '../../scripts/fetch-tinybvh.mjs';
 import {spawnCompiler} from './compiler.mjs';
 import {spawnSync} from 'node:child_process';
-import {mkdirSync,copyFileSync,cpSync,writeFileSync,renameSync} from 'node:fs';
+import {mkdirSync,copyFileSync,cpSync,writeFileSync,renameSync,readFileSync} from 'node:fs';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {bundleOIDN} from './viewer-oidn.mjs';
@@ -32,16 +32,25 @@ const staged=resolve(bin,'.mutracer-viewer.build');
 copyFileSync(resolve(target,'release',executable('mutracer-viewer')),staged);
 renameSync(staged,resolve(bin,executable('mutracer-viewer')));
 copyFileSync(resolve(root,'native/viewer/assets/sample.glb'),resolve(resources,'sample.glb'));
-if(mac)writeFileSync(resolve(contents,'Info.plist'),`<?xml version="1.0" encoding="UTF-8"?>
+if(mac) {
+  // ic08 carries the existing 256px PNG without another image tool or dependency.
+  const png=readFileSync(resolve(root,'site/src/assets/mutracer-logo.png'));
+  if(png.readUInt32BE(16)!==256||png.readUInt32BE(20)!==256)throw new Error('App icon requires the shared 256px logo.');
+  const header=Buffer.alloc(16);header.write('icns');header.writeUInt32BE(png.length+16,4);
+  header.write('ic08',8);header.writeUInt32BE(png.length+8,12);
+  writeFileSync(resolve(resources,'MuTracer.icns'),Buffer.concat([header,png]));
+  writeFileSync(resolve(contents,'Info.plist'),`<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
 <key>CFBundleExecutable</key><string>mutracer-viewer</string>
 <key>CFBundleIdentifier</key><string>com.meimu.mutracer.native-viewer</string>
 <key>CFBundleName</key><string>MuTracer</string>
+<key>CFBundleIconFile</key><string>MuTracer.icns</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>0.0.0</string>
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>\n`);
+}
 bundleOIDN(out, contents);
 // Mirror component notice paths, including shared renderer attribution, in the
 // standalone package. OIDN's upstream runtime notices keep their existing folder.

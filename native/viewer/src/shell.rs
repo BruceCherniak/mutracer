@@ -1,0 +1,392 @@
+//! Window chrome and shared Web branding. Keep platform operations in egui.
+use crate::{Change, Viewer, default_model, theme};
+use eframe::egui::{self, Color32, Sense, Stroke};
+use std::sync::OnceLock;
+
+fn logo_image() -> &'static egui::ColorImage {
+    static IMAGE: OnceLock<egui::ColorImage> = OnceLock::new();
+    IMAGE.get_or_init(|| {
+        let image =
+            image::load_from_memory(include_bytes!("../../../site/src/assets/mutracer-logo.png"))
+                .expect("MuTracer logo")
+                .into_rgba8();
+        egui::ColorImage::from_rgba_unmultiplied(
+            [image.width() as usize, image.height() as usize],
+            image.as_raw(),
+        )
+    })
+}
+pub fn icon() -> egui::IconData {
+    let image = logo_image();
+    egui::IconData {
+        rgba: image.pixels.iter().flat_map(|p| p.to_array()).collect(),
+        width: image.size[0] as u32,
+        height: image.size[1] as u32,
+    }
+}
+fn logo(ctx: &egui::Context) -> egui::TextureHandle {
+    let id = egui::Id::new("brand-logo");
+    if let Some(image) = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id)) {
+        return image;
+    }
+    let image = ctx.load_texture(
+        "MuTracer logo",
+        logo_image().clone(),
+        egui::TextureOptions::LINEAR,
+    );
+    ctx.data_mut(|data| data.insert_temp(id, image.clone()));
+    image
+}
+fn zoom(ctx: &egui::Context) {
+    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(
+        !ctx.input(|i| i.viewport().maximized.unwrap_or(false)),
+    ));
+}
+fn panel_button(ui: &mut egui::Ui, label: &str, right: bool, open: &mut bool) {
+    let response = ui.add_sized(
+        [26., 28.],
+        egui::Button::new("").frame(false).fill(if *open {
+            theme::ACCENT_SURFACE
+        } else {
+            Color32::TRANSPARENT
+        }),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, ui.is_enabled(), *open, label)
+    });
+    let rect = egui::Rect::from_center_size(response.rect.center(), egui::vec2(15., 13.));
+    let stroke = Stroke::new(1.2, if *open { theme::ACCENT } else { theme::MUTED });
+    ui.painter()
+        .rect_stroke(rect, 2, stroke, egui::StrokeKind::Inside);
+    let x = if right {
+        rect.right() - 5.
+    } else {
+        rect.left() + 5.
+    };
+    ui.painter().line_segment(
+        [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+        stroke,
+    );
+    if response.on_hover_text(label).clicked() {
+        *open = !*open;
+    }
+}
+fn header_button(ui: &mut egui::Ui, label: &str, export: bool, sample: bool) -> egui::Response {
+    let response = ui.add_sized(
+        [86., 32.],
+        egui::Button::new("").corner_radius(10).fill(if export {
+            theme::ACCENT_SOLID
+        } else {
+            theme::CONTROL
+        }),
+    );
+    response.widget_info(|| {
+        egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), label)
+    });
+    let c = response.rect.left_center() + egui::vec2(17., 0.);
+    let p = ui.painter();
+    let stroke = Stroke::new(1.2, theme::TEXT);
+    if sample {
+        p.add(egui::Shape::closed_line(
+            vec![
+                c + egui::vec2(0., -6.),
+                c + egui::vec2(5., 0.),
+                c + egui::vec2(0., 6.),
+                c + egui::vec2(-5., 0.),
+            ],
+            stroke,
+        ));
+    } else {
+        let sign = if export { 1. } else { -1. };
+        p.line_segment([c + egui::vec2(0., -5.), c + egui::vec2(0., 5.)], stroke);
+        p.add(egui::Shape::line(
+            vec![
+                c + egui::vec2(-3., 2. * sign),
+                c + egui::vec2(0., 5. * sign),
+                c + egui::vec2(3., 2. * sign),
+            ],
+            stroke,
+        ));
+        p.line_segment([c + egui::vec2(-6., 6.), c + egui::vec2(-6., 3.)], stroke);
+        p.line_segment([c + egui::vec2(-6., 6.), c + egui::vec2(6., 6.)], stroke);
+        p.line_segment([c + egui::vec2(6., 6.), c + egui::vec2(6., 3.)], stroke);
+    }
+    p.text(
+        c + egui::vec2(13., 0.),
+        egui::Align2::LEFT_CENTER,
+        label,
+        egui::FontId::proportional(11.5),
+        theme::TEXT,
+    );
+    response
+}
+
+impl Viewer {
+    pub(super) fn titlebar(&mut self, root: &mut egui::Ui) {
+        let ctx = root.ctx().clone();
+        egui::Panel::top("toolbar")
+            .exact_size(52.)
+            .resizable(false)
+            .show_separator_line(false)
+            .frame(
+                egui::Frame::new()
+                    .fill(Color32::from_rgb(0x14, 0x15, 0x17))
+                    .inner_margin(egui::Margin::symmetric(12, 6)),
+            )
+            .show(root, |ui| {
+                let rect = ui.max_rect();
+                let drag = ui.interact(rect, ui.id().with("window-drag"), Sense::click_and_drag());
+                if drag.double_clicked() {
+                    zoom(&ctx);
+                } else if drag.drag_started() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                }
+                let compact = rect.width() < 1000.;
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    ui.horizontal_centered(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.;
+                        for (label, color, action) in [
+                            (
+                                "Close window",
+                                Color32::from_rgb(0xff, 0x5f, 0x57),
+                                egui::ViewportCommand::Close,
+                            ),
+                            (
+                                "Minimize window",
+                                Color32::from_rgb(0xfe, 0xbc, 0x2e),
+                                egui::ViewportCommand::Minimized(true),
+                            ),
+                            (
+                                "Zoom window",
+                                Color32::from_rgb(0x28, 0xc8, 0x40),
+                                egui::ViewportCommand::Maximized(
+                                    !ctx.input(|i| i.viewport().maximized.unwrap_or(false)),
+                                ),
+                            ),
+                        ] {
+                            let response =
+                                ui.add_sized([18., 28.], egui::Button::new("").frame(false));
+                            response.widget_info(|| {
+                                egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label)
+                            });
+                            ui.painter()
+                                .circle_filled(response.rect.center(), 5., color);
+                            if response.on_hover_text(label).clicked() {
+                                ctx.send_viewport_cmd(action);
+                            }
+                        }
+                        ui.add_space(12.);
+                        ui.add(
+                            egui::Image::from_texture(&logo(&ctx))
+                                .fit_to_exact_size(egui::vec2(30., 30.))
+                                .corner_radius(9),
+                        );
+                        ui.add_space(8.);
+                        ui.vertical(|ui| {
+                            ui.add_space(3.);
+                            ui.label(
+                                egui::RichText::new(if compact {
+                                    "MuTracer"
+                                } else {
+                                    "MuTracer Viewer"
+                                })
+                                .size(13.)
+                                .strong(),
+                            );
+                            ui.label(
+                                egui::RichText::new("PATH TRACER")
+                                    .monospace()
+                                    .size(9.)
+                                    .color(theme::SUBTLE),
+                            );
+                        });
+                        ui.add_space(8.);
+                        panel_button(ui, "Toggle scene panel ([)", false, &mut self.scene_open);
+                    });
+                });
+                let center = egui::Rect::from_center_size(rect.center(), egui::vec2(180., 32.));
+                ui.scope_builder(egui::UiBuilder::new().max_rect(center), |ui| {
+                    ui.horizontal_centered(|ui| {
+                        ui.spacing_mut().item_spacing.x = 8.;
+                        if header_button(ui, "Open…", false, false).clicked() {
+                            self.open_model(&ctx);
+                        }
+                        if header_button(ui, "Sample", false, true).clicked() {
+                            self.load(default_model(), &ctx);
+                        }
+                    });
+                });
+                ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        panel_button(ui, "Toggle inspector (])", true, &mut self.inspector_open);
+                        if ui
+                            .add_enabled_ui(self.frame_samples > 0, |ui| {
+                                header_button(ui, "Export…", true, false)
+                            })
+                            .inner
+                            .clicked()
+                        {
+                            self.export_image();
+                        }
+                        if !compact {
+                            let old = self.backend;
+                            egui::ComboBox::from_id_salt("header-backend")
+                                .width(98.)
+                                .selected_text(if self.backend == 1 {
+                                    "HWRT"
+                                } else {
+                                    "Software"
+                                })
+                                .show_ui(ui, |ui| {
+                                    ui.selectable_value(&mut self.backend, 1, "HWRT");
+                                    ui.selectable_value(&mut self.backend, 0, "Software BVH");
+                                })
+                                .response
+                                .on_hover_text(&self.backend_status);
+                            if old != self.backend {
+                                self.dirty(Change::Scene);
+                            }
+                        }
+                    });
+                });
+                ui.painter().hline(
+                    rect.x_range(),
+                    rect.bottom() + 5.,
+                    Stroke::new(1., Color32::from_white_alpha(14)),
+                );
+            });
+        if !ctx.egui_wants_keyboard_input()
+            && ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::O))
+        {
+            self.open_model(&ctx);
+        }
+    }
+    fn open_model(&mut self, ctx: &egui::Context) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("glTF", &["gltf", "glb"])
+            .pick_file()
+        {
+            self.load(path, ctx);
+        }
+    }
+    fn export_image(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .set_file_name("mutracer.png")
+            .add_filter("PNG", &["png"])
+            .save_file()
+        {
+            if let Err(error) = self.save_image(&path) {
+                self.error = error.to_string();
+            }
+        }
+    }
+}
+
+/// A small explicit grip is also available on macOS, where winit's native
+/// drag_resize_window is unsupported. Keep it inset: macOS consumes pointer
+/// presses at the outer window edge. The top-left remains fixed during resize.
+pub fn resize_grip(ui: &mut egui::Ui) -> egui::Rect {
+    let ctx = ui.ctx().clone();
+    let id = egui::Id::new("window-resize-grip");
+    egui::Area::new(id)
+        .order(egui::Order::Foreground)
+        .movable(false)
+        .constrain(false)
+        .default_size(egui::vec2(16., 16.))
+        .fixed_pos(ctx.content_rect().right_bottom() - egui::vec2(32., 32.))
+        .show(&ctx, |ui| {
+            let (rect, response) = ui.allocate_exact_size(egui::vec2(16., 16.), Sense::drag());
+            if response.hovered() || response.dragged() {
+                ctx.set_cursor_icon(egui::CursorIcon::ResizeNwSe);
+            }
+            for offset in [4., 8., 12.] {
+                ui.painter().line_segment(
+                    [
+                        rect.right_bottom() - egui::vec2(offset, 2.),
+                        rect.right_bottom() - egui::vec2(2., offset),
+                    ],
+                    Stroke::new(1., theme::SUBTLE),
+                );
+            }
+            let mut active = ctx.data(|data| data.get_temp::<(egui::Vec2, egui::Pos2)>(id));
+            let events = ctx.input(|i| i.events.clone());
+            for event in events {
+                match event {
+                    egui::Event::PointerButton {
+                        pos,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        ..
+                    } if rect.contains(pos) => active = Some((ctx.content_rect().size(), pos)),
+                    egui::Event::PointerMoved(pos) if active.is_some() => {
+                        let (size, origin) = active.unwrap();
+                        ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(
+                            (size + (pos - origin)).max(egui::vec2(800., 560.)),
+                        ));
+                    }
+                    egui::Event::PointerButton {
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        ..
+                    }
+                    | egui::Event::PointerGone
+                    | egui::Event::WindowFocused(false) => active = None,
+                    _ => {}
+                }
+            }
+            ctx.data_mut(|data| {
+                if let Some(active) = active {
+                    data.insert_temp(id, active);
+                } else {
+                    data.remove::<(egui::Vec2, egui::Pos2)>(id);
+                }
+            });
+        })
+        .response
+        .rect
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn resize_grip_handles_a_coalesced_drag_and_keeps_the_window_minimum() {
+        let ctx = egui::Context::default();
+        let draw = |events| {
+            let mut rect = egui::Rect::NOTHING;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1200., 800.),
+                    )),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    rect = resize_grip(ui);
+                },
+            );
+            output.textures_delta.clear();
+            (rect, output)
+        };
+        draw(vec![]);
+        let (rect, _) = draw(vec![]);
+        assert_eq!(rect.right_bottom(), egui::pos2(1184., 784.));
+        let from = rect.center();
+        let to = from - egui::vec2(1000., 1000.);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let (_, output) = draw(vec![
+            egui::Event::PointerMoved(from),
+            button(from, true),
+            egui::Event::PointerMoved(to),
+            button(to, false),
+        ]);
+        assert!(output.viewport_output[&egui::ViewportId::ROOT].commands.iter().any(|command| matches!(command, egui::ViewportCommand::InnerSize(size) if *size == egui::vec2(800., 560.))));
+    }
+}

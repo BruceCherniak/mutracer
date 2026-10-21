@@ -55,6 +55,9 @@ the output directory. See the [native guide](../README.md) for platform backends
 
 ## Controls
 
+- Drag empty space in the top bar to move the window; double-click it to zoom.
+  The three window buttons close, minimize or zoom; drag the bottom-right grip
+  to resize. **Open…** or **⌘O / Ctrl+O** opens a model, and **Export…** saves the image.
 - Drag the image to orbit; right-drag or Shift-drag to pan; scroll to zoom.
   **Fit to model** or **F** restores framing. **Camera** offers perspective and
   orthographic projection, with a 35° default field of view. Perspective views

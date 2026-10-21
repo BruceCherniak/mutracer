@@ -1,5 +1,5 @@
 //! Native viewer layout. Rendering and scene updates stay in Viewer.
-use crate::{Change, Viewer, default_model, scene::Environment};
+use crate::{Change, Viewer, scene::Environment};
 use crate::{controls, theme};
 use eframe::egui;
 use std::time::Duration;
@@ -7,7 +7,7 @@ use std::time::Duration;
 impl Viewer {
     pub(super) fn panels(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
-        self.toolbar(root);
+        self.titlebar(root);
         self.status_bar(root);
         self.inspector_rail(root);
         if self.inspector_open {
@@ -18,6 +18,10 @@ impl Viewer {
             self.scene_panel(root);
         }
         self.viewport(root);
+        let grip = crate::shell::resize_grip(root);
+        if self.startup_smoke.is_some() {
+            ctx.data_mut(|data| data.insert_temp(egui::Id::new("smoke-grip"), grip));
+        }
         if !ctx.egui_wants_keyboard_input() {
             if ctx.input(|i| i.key_pressed(egui::Key::OpenBracket)) {
                 self.scene_open = !self.scene_open;
@@ -26,68 +30,6 @@ impl Viewer {
                 self.inspector_open = !self.inspector_open;
             }
         }
-    }
-    fn toolbar(&mut self, root: &mut egui::Ui) {
-        let ctx = root.ctx().clone();
-        egui::Panel::top("toolbar")
-            .exact_size(42.)
-            .resizable(false)
-            .frame(
-                egui::Frame::new()
-                    .fill(egui::Color32::from_rgb(0x14, 0x15, 0x17))
-                    .inner_margin(egui::Margin::symmetric(12, 6)),
-            )
-            .show_separator_line(false)
-            .show(root, |ui| {
-                ui.horizontal(|ui| {
-                    ui.strong("MuTracer");
-                    ui.separator();
-                    ui.toggle_value(&mut self.scene_open, "Scene")
-                        .on_hover_text("Toggle scene list");
-                    ui.toggle_value(&mut self.inspector_open, "Inspector")
-                        .on_hover_text("Toggle inspector");
-                    if controls::button(ui, "Open GLTF / GLB…").clicked() {
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("glTF", &["gltf", "glb"])
-                            .pick_file()
-                        {
-                            self.load(path, &ctx);
-                        }
-                    }
-                    if ui.available_width() > 360. && controls::button(ui, "Sample").clicked() {
-                        self.load(default_model(), &ctx);
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add_enabled(
-                                self.frame_samples > 0,
-                                egui::Button::new("Save PNG…")
-                                    .fill(theme::ACCENT_SURFACE)
-                                    .stroke(egui::Stroke::new(1., theme::ACCENT)),
-                            )
-                            .clicked()
-                        {
-                            if let Some(path) = rfd::FileDialog::new()
-                                .set_file_name("mutracer.png")
-                                .add_filter("PNG", &["png"])
-                                .save_file()
-                            {
-                                if let Err(e) = self.save_image(&path) {
-                                    self.error = e.to_string();
-                                }
-                            }
-                        }
-                        if ui.available_width() > 100. {
-                            ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(&self.model.name).color(theme::MUTED),
-                                )
-                                .truncate(),
-                            );
-                        }
-                    });
-                });
-            });
     }
     fn status_bar(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
