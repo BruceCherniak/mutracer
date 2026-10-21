@@ -7,7 +7,7 @@ import {
   MATERIAL_GROUPS, MATERIAL_PRESET_CATEGORIES, MATERIAL_PRESETS, TEXTURE_SLOTS, hexToLinear, linearToHex,
   type MaterialGroup, type MaterialPresetCategory, type MaterialParam, type MaterialValues, type TextureKey
 } from '../../engine/materialParams';
-import { ColorField, Hint, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';
+import { ColorField, Hint, NumberField, Scrub, Section, Segmented, Select, Switch } from '../ui/controls';
 import { PolyHavenLogo } from '../PolyHavenLogo';
 import { toPathedFiles } from '../../engine/droppedFiles';
 
@@ -90,7 +90,7 @@ export function MaterialPanel() {
                 onChange={(values) => set(values, paramLabel(group, param), `${material.id}:${param.key}`)} />
             ))}
             {group.id === 'displacement' && <Hint>{webgl ? 'Displacement requires WebGPU.' :
-              'Offset = texture × Scale + Bias, in mesh-local units. Sliders follow object size. Double-click to enter any value. A displacement texture is required.'}</Hint>}
+              'Offset = texture × Scale + Bias, in mesh-local units. Sliders follow object size. Use the numeric inputs to enter any value. A displacement texture is required.'}</Hint>}
           </Section>
         );
       })}
@@ -228,12 +228,20 @@ function TextureSlots({ material }: { material: SelectedMaterial }) {
             {sampling && <details className="tex-slot__settings">
               <summary>Wrap &amp; repeat</summary>
               <div role="group" aria-label={`${label} texture sampling`}>
-                <Select label={`${label} wrap S`} prefix="Wrap S" value={sampling.wrapS} options={wraps} disabled={disabled}
-                  onChange={wrapS => getEngine()?.setMaterialTextureSampling(material.id,key,{wrapS},`${label} wrap S`)} />
-                <Select label={`${label} wrap T`} prefix="Wrap T" value={sampling.wrapT} options={wraps} disabled={disabled}
-                  onChange={wrapT => getEngine()?.setMaterialTextureSampling(material.id,key,{wrapT},`${label} wrap T`)} />
+                <div className="tex-slot__wrap">
+                  <div className="tex-slot__wrap-axis">
+                    <span className="field-label">Wrap S</span>
+                    <Select label={`${label} wrap S`} value={sampling.wrapS} options={wraps} disabled={disabled}
+                      onChange={wrapS => getEngine()?.setMaterialTextureSampling(material.id,key,{wrapS},`${label} wrap S`)} />
+                  </div>
+                  <div className="tex-slot__wrap-axis">
+                    <span className="field-label">Wrap T</span>
+                    <Select label={`${label} wrap T`} value={sampling.wrapT} options={wraps} disabled={disabled}
+                      onChange={wrapT => getEngine()?.setMaterialTextureSampling(material.id,key,{wrapT},`${label} wrap T`)} />
+                  </div>
+                </div>
                 <div className="tex-slot__repeat">
-                  {[0,1].map(axis => <Scrub key={axis} label={`Repeat ${axis===0?'S':'T'}`} value={sampling.uvScale[axis]} min={-20} max={20} step={.1} disabled={disabled}
+                  {[0,1].map(axis => <NumberField key={axis} label={`Repeat ${axis===0?'S':'T'}`} value={sampling.uvScale[axis]} step={.1} disabled={disabled}
                     onChange={value => {
                       const uvScale:[number,number]=[...sampling.uvScale]; uvScale[axis]=value;
                       getEngine()?.setMaterialTextureSampling(material.id,key,{uvScale},`${label} repeat ${axis===0?'S':'T'}`,`${material.id}:${key}:repeat:${axis}`);
