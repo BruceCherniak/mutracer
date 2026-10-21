@@ -20,6 +20,24 @@ function gpu() {
 }
 
 describe('shader generation independent of source formatting', () => {
+  it('preserves specialized RGB, spectral and source-over shaders through the build transform', () => {
+    gpu();
+    for (const spectral of [false, true]) for (const hasAlpha of [false, true]) {
+      for (const full of [false, true]) for (const dynamicEnvironment of [false, true]) {
+        const options = {hasDisplacement: false, hasAlpha, hasSceneAlpha: hasAlpha,
+          hasAnisotropyDirections: full, hasCoatNormals: full, blasLayoutMask: full ? 15 : 1,
+          spectral, sceneCapabilities: full ? 0x7fffff : 0, materialCapabilities: full ? 3 : 0,
+          lightCapabilities: full ? 31 : 1, dynamicEnvironment};
+        const source = rayTrace(options), compact = compactRayTrace(options);
+        expect(tokens(compact)).toEqual(tokens(source));
+        expect(renameShaderIdentifiers(compact, shaderIdentifierMap)).toBe(compact);
+        const parsed = makeShaderDataDefinitions(compact);
+        expect(Object.keys(parsed.entryPoints).sort()).toEqual(['depthQuery', 'main']);
+        expect(parsed.uniforms.rtUniform.size).toBe(makeRayTraceUniform().buffer.byteLength);
+      }
+    }
+  });
+
   it('preserves tokens, entry points and uniform contracts for every BLAS mask and structural variant', () => {
     gpu();
     for (let blasLayoutMask = 0; blasLayoutMask < 16; blasLayoutMask++) {

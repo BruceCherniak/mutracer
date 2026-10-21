@@ -1,12 +1,11 @@
 import {initialSceneConstants, sceneAttributeLayout, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, traceSampling, writeTraceSampling} from './sceneAssembly.js';
 import {rayTraceBindGroupLayouts} from './sceneLayoutSchema.js';
 import { wgpuMaterialConstants } from './wgpuMaterialConstants.js';
-import { wgpuShaderSource } from './wgpuShaderSource.js';
+import { wgpuShaderSource, wgpuPipelineConstantKeys, WGPU_SHADER_DEFINE_KEYS } from './wgpuShaderSource.js';
 import { makeRayTraceUniform, WGPU_SCENE_BUFFER_MIN_BYTES } from './wgpuSceneUniform.js';
 import { constants } from './webgl.js';
 import { MATERIAL_FLOAT_COUNT } from './materialLayoutSchema.js';
 import { normalizeBounces } from './pathLimits.js';
-import { MATERIAL_TEXTURE_DEFINES } from './materialTextureSlots.js';
 import { updateMeshInstanceColors } from './prepareMeshBVH.js';
 import { updateTLASInstanceColors } from './bvhAccel.js';
 import { getMaterialHashKey } from '../scene/openPbrSchema.js';
@@ -25,7 +24,9 @@ import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged,
 import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges.js';
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges.js';
 import { WGPUShaderCache, retainedShaderCapacity } from './WGPUShaderCache.js';
-import { WGPU_SCENE_FEATURE_BITS, wgpuSceneFeatureFlags } from './WGPUSceneFeatures.js';
+import { WGPUShaderCapabilities } from './WGPUShaderCapabilities.js';
+import { wgpuSceneFeatureFlags } from './WGPUSceneFeatures.js';
+import {lightShaderCapabilities, retainedShaderCapabilities, type ShaderCapabilities} from './shaderCapabilities.js';
 import { type TexturePixelSource as TexturePixelSource, mat4 } from '../math.js';
 import Mesh from '../scene/Mesh.js';
 import DirectionalLight from '../scene/DirectionalLight.js';
@@ -308,8 +309,12 @@ class WGPURayTracePass {
   private _compiledSceneHasAlpha = true;
   private _alphaBlendStrategy: AlphaBlendStrategy = 'stochastic';
   private _constants = initialSceneConstants();
+  private _retainedShaderCapabilities?: ShaderCapabilities;
+  private _retainedShaderStructure?: string;
+  private _shaderCapabilities = new WGPUShaderCapabilities();
   private _prevPipelineConstants: Record<string, boolean | number> = {};
   private _prevDefinesCode = '';
+  private _prevPipelineInputs?: string;
 
   private _hasTransmission = false;
   private _hasShadowCatcher = false;
@@ -723,15 +728,23 @@ class WGPURayTracePass {
       }
 
       const device = this._device;
-      const constants = this._constants;
-      this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(constants);
+      const pipelineInputs = JSON.stringify([this._constants, this._hasDisplacement,
+        this._alphaBlendStrategy, this._blasLayoutMask, this._bakePipelineConstants]);
+      // Steady rendering must not repeat capability selection and cache-key
+      // preparation. Dirty resources still take the normal bind-group path.
+      if (pipelineInputs === this._prevPipelineInputs && this._rayTracePipeline &&
+        this._rayTraceBindGroups && !this._needsUpdateBindGroups) return;
+      this._rtUniform.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(this._constants);
+      const requiredCapabilities = retainedShaderCapabilities(this._constants);
+      const constants: Record<string, boolean | number> = { ...this._constants, ...requiredCapabilities };
       const hasAlpha = Boolean(constants.HAS_ALPHA_BLEND) &&
         this._alphaBlendStrategy === 'deterministic-source-over';
       const hasSceneAlpha = Boolean(constants.HAS_ALPHA);
-      const pipelineSignature = JSON.stringify({
-        constants: Object.keys(constants)
-          .sort()
-          .map((key) => [key, constants[key]]),
+      const pipelineConstantsKeys = wgpuPipelineConstantKeys(constants);
+      const defineCode = WGPU_SHADER_DEFINE_KEYS
+        .map((key) => `const ${key} = ${constants[key]};`)
+        .join('\n');
+      const structure = {
         hasDisplacement: this._hasDisplacement,
         hasAlpha,
         hasSceneAlpha,
@@ -739,56 +752,30 @@ class WGPURayTracePass {
         hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
         blasLayoutMask: this._blasLayoutMask,
         bakePipelineConstants: this._bakePipelineConstants
+      };
+      const structureKey = JSON.stringify({
+        ...structure, defineCode,
+        constants: pipelineConstantsKeys
+          .filter(key => !(key in requiredCapabilities))
+          .map(key => [key, constants[key]])
+      });
+      // Prefer an existing compatible pipeline, including an earlier lean
+      // variant. Only grow the current variant when it cannot cover an edit;
+      // do not carry unused capabilities across different transport/layouts.
+      const capabilities = this._shaderCapabilities.find(structureKey, requiredCapabilities) ??
+        retainedShaderCapabilities(this._constants,
+          structureKey === this._retainedShaderStructure ? this._retainedShaderCapabilities : undefined);
+      Object.assign(constants, capabilities);
+      const pipelineSignature = JSON.stringify({
+        ...structure,
+        constants: Object.keys(constants).sort().map(key => [key, constants[key]])
       });
       attemptedPipelineSignature = pipelineSignature;
       if (pipelineSignature === this._failedPipelineSignature) {
         return;
       }
       this._pipelineError = undefined;
-      // TODO hardcoded defines that will be replaced in the code.
-      const definesKeys = [
-        'NUM_MAPS',
-        'TLAS_STACK_SIZE',
-        'BLAS_STACK_SIZE',
-        'NUM_UNIFORM_LIGHTS'
-      ];
-      // Scene feature flags and background selection are runtime uniforms so
-      // interactive edits do not recompile the path tracer.
-      const constantsNotUsed = [
-        ...Object.keys(WGPU_SCENE_FEATURE_BITS),
-        'USE_BACKGROUND',
-        'USE_BACKGROUND_MAP',
-        'USE_GROUNDED_BACKGROUND',
-        ...MATERIAL_TEXTURE_DEFINES,
-        'USE_ANISOTROPY_DIRECTIONS',
-        'USE_COAT_NORMAL_FRAMES',
-        'HAS_ALPHA_BLEND',
-        'HAS_ALPHA_MASK'
-      ];
-      const defines = definesKeys.reduce(
-        (obj, key) => {
-          obj[key] = constants[key] as number;
-          return obj;
-        },
-        {} as Record<string, number>
-      );
-      const pipelineConstantsKeys = Object.keys(constants)
-        .sort()
-        .filter(
-          (key) =>
-            !definesKeys.includes(key) && !constantsNotUsed.includes(key)
-        );
-      const defineCode = definesKeys
-        .map((key) => `const ${key} = ${defines[key]};`)
-        .join('\n');
-      const previousPipelineConstantsKeys = Object.keys(
-        this._prevPipelineConstants
-      )
-        .filter(
-          (key) =>
-            !definesKeys.includes(key) && !constantsNotUsed.includes(key)
-        )
-        .sort();
+      const previousPipelineConstantsKeys = wgpuPipelineConstantKeys(this._prevPipelineConstants);
       const needsCreateShaderModule =
         !this._rayTracePipelineLayout ||
         !this._computeShaderModule ||
@@ -826,7 +813,8 @@ class WGPURayTracePass {
           hasDisplacement: this._hasDisplacement, hasAlpha, hasSceneAlpha,
           hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
           hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
-          blasLayoutMask: this._blasLayoutMask
+          blasLayoutMask: this._blasLayoutMask,
+          dynamicEnvironment: true
         }, this._bakePipelineConstants);
 
         sourceBytes = rayTraceShaderCode.length;
@@ -872,7 +860,7 @@ class WGPURayTracePass {
         // NOTE must before creating pipeline.
         // Because createComputePipelineAsync is async.
         // The constants may be changed after the pipeline is created(in setMesh).
-        this._prevPipelineConstants = { ...this._constants };
+        this._prevPipelineConstants = { ...constants };
         this._prevDefinesCode = defineCode;
         this._needsUpdateBindGroups = true;
 
@@ -882,7 +870,7 @@ class WGPURayTracePass {
           const pipelineConstants = !this._bakePipelineConstants
             ? pipelineConstantsKeys.reduce(
                 (obj, key) => {
-                  obj[key] = +this._constants[key];
+                  obj[key] = +constants[key];
                   return obj;
                 },
                 {} as Record<string, number>
@@ -1017,6 +1005,10 @@ class WGPURayTracePass {
 
         this._updateBindGroups();
       }
+      this._retainedShaderCapabilities = capabilities;
+      this._retainedShaderStructure = structureKey;
+      this._shaderCapabilities.remember(structureKey, capabilities);
+      this._prevPipelineInputs = pipelineInputs;
       this._failedPipelineSignature = undefined;
     } catch (error) {
       this._pipelineError = error;
@@ -1799,6 +1791,7 @@ class WGPURayTracePass {
   }
 
   private _updateLightSamplingData() {
+    this._constants.LIGHT_CAPABILITIES = lightShaderCapabilities(this._analyticLights.map(light => light.type), this._emissiveTriangles.length);
     const lighting = prepareSceneLightSampling(this._analyticLights, this._emissiveTriangles,
       estimateEnvironmentPower(this._envImageSource), this._device.limits.maxTextureDimension2D, this._lightChoices, this._lightSamplingScratch);
     this._analyticLightSelectionPmfs = lighting.analyticPmfs;
@@ -2425,6 +2418,7 @@ class WGPURayTracePass {
 
   dispose() {
     this._shaderCache.clear();
+    this._shaderCapabilities.clear();
     const buffers = new Set<GPUBuffer | undefined>([
       ...Array.from(this._targetOutputs.values()).flatMap(target => target.buffers),
       this._mapInfoUniform,

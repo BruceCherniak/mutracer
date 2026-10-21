@@ -32,6 +32,7 @@ export function materialParameters(bytes: Uint8Array): Uint8Array {
     displacementMapIndex: [],
     uvScale: [],
     displacementStepSize: [],
+    displacementBias: [],
     displacementUvProjection: [],
     displacementUvProjectionScale: [],
     alpha: [],
@@ -83,11 +84,13 @@ export function materialParameters(bytes: Uint8Array): Uint8Array {
     thinFilmMapChannel: [],
     mapInfo: [],
     mapTransform: [],
+    mapWrap: [],
     mapUvChannel: [],
     mapColorLinear: [],
   };
   for (let i = 0; i < count; i++) {
     const value = (seed + i * 7) * .03125;
+    data.displacementBias.push(-value);
     data.color.push([value + 0, value * .5, -value]);
     data.type.push(0);
     data.roughness.push(value + 2);
