@@ -9,16 +9,21 @@ export interface WGPUShaderFeatures {
   hasAnisotropyDirections: boolean;
   hasCoatNormals: boolean;
   blasLayoutMask: number;
+  /** Environment presence changes background/MIS semantics independently of packed material data. */
+  dynamicEnvironment?: boolean;
 }
-const definesKeys = ['NUM_MAPS', 'TLAS_STACK_SIZE', 'BLAS_STACK_SIZE', 'NUM_UNIFORM_LIGHTS'];
+export const WGPU_SHADER_DEFINE_KEYS = ['NUM_MAPS', 'TLAS_STACK_SIZE', 'BLAS_STACK_SIZE', 'NUM_UNIFORM_LIGHTS'];
 const constantsNotUsed = [
   ...Object.keys(WGPU_SCENE_FEATURE_BITS), 'USE_BACKGROUND', 'USE_BACKGROUND_MAP',
   'USE_GROUNDED_BACKGROUND', ...MATERIAL_TEXTURE_DEFINES, 'USE_ANISOTROPY_DIRECTIONS',
   'USE_COAT_NORMAL_FRAMES', 'COLOR_OFF', 'USE_VERTEX_COLOR', 'HAS_ALPHA_BLEND', 'HAS_ALPHA_MASK'
 ];
+export function wgpuPipelineConstantKeys(constants: Record<string, boolean | number>) {
+  return Object.keys(constants).sort().filter(key => !WGPU_SHADER_DEFINE_KEYS.includes(key) && !constantsNotUsed.includes(key));
+}
 export function wgpuShaderPreamble(constants: Record<string, boolean | number>, bake = false): string {
-  const defineCode = definesKeys.map(key => `const ${key} = ${constants[key]};`).join('\n');
-  const keys = Object.keys(constants).sort().filter(key => !definesKeys.includes(key) && !constantsNotUsed.includes(key));
+  const defineCode = WGPU_SHADER_DEFINE_KEYS.map(key => `const ${key} = ${constants[key]};`).join('\n');
+  const keys = wgpuPipelineConstantKeys(constants);
   const constantsCode = keys.map(key => {
     const value = constants[key];
     return `${bake ? 'const' : 'override'} ${key} = ${typeof value === 'boolean' ? (value ? 'true' : 'false') : value.toString()};`;

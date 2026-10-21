@@ -1,9 +1,11 @@
-import {describe, expect, it} from 'vitest';
+import {describe, expect, it, vi} from 'vitest';
 import {lightShaderCapabilities, LIGHT_SHADER_CAPABILITIES, MATERIAL_SHADER_CAPABILITIES,
-  updateSceneShaderCapabilities} from '../../src/renderer/shaderCapabilities';
-import {WGPU_SCENE_FEATURE_BITS} from '../../src/renderer/WGPUSceneFeatures';
+  updateSceneShaderCapabilities, retainedShaderCapabilities} from '../../src/renderer/shaderCapabilities';
+import {WGPU_SCENE_FEATURE_BITS, wgpuSceneFeatureFlags} from '../../src/renderer/WGPUSceneFeatures';
 import {wgpuMaterialConstants} from '../../src/renderer/wgpuMaterialConstants';
-import WGPURayTracePass from '../../src/renderer/WGPURayTracePass';
+import WGPURayTracePass, {makeRayTraceUniform} from '../../src/renderer/WGPURayTracePass';
+import {WGPUShaderCache} from '../../src/renderer/WGPUShaderCache';
+import {WGPUShaderCapabilities} from '../../src/renderer/WGPUShaderCapabilities';
 import MaterialTable from '../../src/renderer/MaterialTable';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import Texture from '../../src/scene/Texture';
@@ -58,5 +60,137 @@ describe('shader capabilities', () => {
       expect(lightShaderCapabilities([type, type], 0)).toBe(LIGHT_SHADER_CAPABILITIES[type]);
     }
     expect(lightShaderCapabilities(kinds, 8)).toBe(31);
+  });
+
+  it('retains support across edits without retaining active values or mutating history', () => {
+    const first = retainedShaderCapabilities({HAS_COAT: true, MATERIAL_CAPABILITIES: 2, LIGHT_CAPABILITIES: 1});
+    const current = {HAS_COAT: false, USE_DIFFUSE_MAPS: true, MATERIAL_CAPABILITIES: 1, LIGHT_CAPABILITIES: 4};
+    const next = retainedShaderCapabilities(current, first);
+    expect(next).toEqual({SCENE_CAPABILITIES: WGPU_SCENE_FEATURE_BITS.HAS_COAT | WGPU_SCENE_FEATURE_BITS.HAS_FUZZ | WGPU_SCENE_FEATURE_BITS.USE_DIFFUSE_MAPS,
+      MATERIAL_CAPABILITIES: 3, LIGHT_CAPABILITIES: 5});
+    expect(current.HAS_COAT).toBe(false);
+    expect(wgpuSceneFeatureFlags(current)).toBe(WGPU_SCENE_FEATURE_BITS.USE_DIFFUSE_MAPS);
+    expect(first).toEqual({SCENE_CAPABILITIES: WGPU_SCENE_FEATURE_BITS.HAS_COAT | WGPU_SCENE_FEATURE_BITS.HAS_FUZZ, MATERIAL_CAPABILITIES: 2, LIGHT_CAPABILITIES: 1});
+    expect(retainedShaderCapabilities({})).toEqual({SCENE_CAPABILITIES: 0, MATERIAL_CAPABILITIES: 0, LIGHT_CAPABILITIES: 0});
+  });
+});
+
+function pipelinePass() {
+  const compile = vi.fn(async (_descriptor: GPUComputePipelineDescriptor) => ({} as GPUComputePipeline));
+  const device = {createShaderModule: () => ({getCompilationInfo: async () => ({messages: []})}),
+    createComputePipelineAsync: compile, pushErrorScope() {}, popErrorScope: async () => null} as unknown as GPUDevice;
+  const pass = Object.create(WGPURayTracePass.prototype) as any;
+  Object.assign(pass, {_device: device, _shaderCache: new WGPUShaderCache(device), _rtUniform: makeRayTraceUniform(),
+    _pendingGeometryUpdates: new Set(), _dirtyColorMeshes: new Set(), _prevPipelineConstants: {},
+    _constants: {NUM_MAPS: 20, TLAS_STACK_SIZE: 8, BLAS_STACK_SIZE: 32, NUM_UNIFORM_LIGHTS: 64},
+    _rayTracePipelineLayout: {}, _blasLayoutMask: 1, _shaderCapabilities: new WGPUShaderCapabilities(),
+    _updateBindGroups: vi.fn(() => {pass._rayTraceBindGroups = [];})});
+  return {pass, compile};
+}
+
+describe('retained WebGPU pipeline capabilities', () => {
+  it('skips steady capability lookup but still updates dirty resource bindings', async () => {
+    const {pass, compile} = pipelinePass();
+    const find = vi.spyOn(pass._shaderCapabilities, 'find');
+    await pass.updatePipeline();
+    await pass.updatePipeline();
+    expect(find).toHaveBeenCalledTimes(1);
+    expect(pass._updateBindGroups).toHaveBeenCalledTimes(1);
+    pass._needsUpdateBindGroups = true;
+    await pass.updatePipeline();
+    expect(find).toHaveBeenCalledTimes(2);
+    expect(pass._updateBindGroups).toHaveBeenCalledTimes(2);
+    expect(compile).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not mark inputs changed during an asynchronous compile as already prepared', async () => {
+    const {pass, compile} = pipelinePass();
+    let finish!: (pipeline: GPUComputePipeline) => void;
+    compile.mockImplementationOnce(() => new Promise(resolve => {finish = resolve;}));
+    const pending = pass.updatePipeline();
+    pass._constants.HAS_THIN_FILM = true;
+    finish({} as GPUComputePipeline);
+    await pending;
+    expect(pass._retainedShaderCapabilities.SCENE_CAPABILITIES).toBe(0);
+    await pass.updatePipeline();
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(pass._retainedShaderCapabilities.SCENE_CAPABILITIES).toBe(WGPU_SCENE_FEATURE_BITS.HAS_THIN_FILM);
+  });
+
+  it('compiles coat/fuzz support together while keeping plain and metal variants independent', async () => {
+    const {pass, compile} = pipelinePass();
+    await pass.updatePipeline();
+    expect(pass._retainedShaderCapabilities.SCENE_CAPABILITIES).toBe(0);
+    pass._constants.HAS_COAT = true;
+    await pass.updatePipeline();
+    const coated = pass._rayTracePipeline;
+    pass._constants.HAS_COAT = false;
+    pass._constants.HAS_FUZZ = true;
+    await pass.updatePipeline();
+    expect(pass._rayTracePipeline).toBe(coated);
+    expect(pass._rtUniform.views.sceneFeatureFlags[0]).toBe(WGPU_SCENE_FEATURE_BITS.HAS_FUZZ);
+    pass._constants.HAS_FUZZ = false;
+    pass._constants.MATERIAL_CAPABILITIES = MATERIAL_SHADER_CAPABILITIES.metal;
+    await pass.updatePipeline();
+    expect(pass._rayTracePipeline).not.toBe(coated);
+    expect(pass._constants.HAS_COAT).toBe(false);
+    expect(compile).toHaveBeenCalledTimes(3);
+    expect(retainedShaderCapabilities({MATERIAL_CAPABILITIES: MATERIAL_SHADER_CAPABILITIES.metal}).SCENE_CAPABILITIES).toBe(0);
+  });
+
+  it('reuses the expanded pipeline when a supported feature is removed or re-enabled', async () => {
+    const {pass, compile} = pipelinePass();
+    pass._constants.HAS_THIN_FILM = true;
+    await pass.updatePipeline();
+    expect(compile).toHaveBeenCalledTimes(1);
+    pass._constants.HAS_THIN_FILM = false;
+    await pass.updatePipeline();
+    expect(compile).toHaveBeenCalledTimes(1);
+    expect(pass._rtUniform.views.sceneFeatureFlags[0]).toBe(0);
+    pass._constants.HAS_SUBSURFACE = true;
+    await pass.updatePipeline();
+    expect(compile).toHaveBeenCalledTimes(2);
+    pass._constants.HAS_THIN_FILM = true;
+    pass._constants.HAS_SUBSURFACE = false;
+    await pass.updatePipeline();
+    expect(compile).toHaveBeenCalledTimes(2);
+    expect(pass._rtUniform.views.sceneFeatureFlags[0]).toBe(WGPU_SCENE_FEATURE_BITS.HAS_THIN_FILM);
+  });
+
+  it('does not retain failed capabilities and can recover with the previous supported scene', async () => {
+    const {pass, compile} = pipelinePass();
+    await pass.updatePipeline();
+    const supported = pass._retainedShaderCapabilities;
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      pass._constants.HAS_THIN_FILM = true;
+      compile.mockRejectedValueOnce(new Error('test compilation failure'));
+      await pass.updatePipeline();
+      expect(pass.getPipelineError()).toBeDefined();
+      expect(pass._retainedShaderCapabilities).toEqual(supported);
+      pass._constants.HAS_THIN_FILM = false;
+      await pass.updatePipeline();
+      expect(pass.getPipelineError()).toBeUndefined();
+      expect(pass._rayTracePipeline).toBeDefined();
+      expect(compile).toHaveBeenCalledTimes(2);
+    } finally {error.mockRestore();}
+  });
+
+  it('keeps transport support separate and returns to an earlier lean pipeline', async () => {
+    const {pass, compile} = pipelinePass();
+    Object.assign(pass._constants, {HAS_MEDIUM: false, HAS_THIN_FILM: false, HAS_SUBSURFACE: false});
+    await pass.updatePipeline();
+    const plain = pass._rayTracePipeline;
+    pass._constants.HAS_THIN_FILM = true;
+    await pass.updatePipeline();
+    expect(compile).toHaveBeenCalledTimes(2);
+    Object.assign(pass._constants, {HAS_THIN_FILM: false, HAS_MEDIUM: true, HAS_SUBSURFACE: true});
+    await pass.updatePipeline();
+    expect(compile).toHaveBeenCalledTimes(3);
+    expect(pass._retainedShaderCapabilities.SCENE_CAPABILITIES).toBe(WGPU_SCENE_FEATURE_BITS.HAS_SUBSURFACE);
+    Object.assign(pass._constants, {HAS_MEDIUM: false, HAS_SUBSURFACE: false});
+    await pass.updatePipeline();
+    expect(pass._rayTracePipeline).toBe(plain);
+    expect(compile).toHaveBeenCalledTimes(3);
   });
 });

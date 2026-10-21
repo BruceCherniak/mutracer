@@ -23,11 +23,11 @@ describe('shader generation independent of source formatting', () => {
   it('preserves specialized RGB, spectral and source-over shaders through the build transform', () => {
     gpu();
     for (const spectral of [false, true]) for (const hasAlpha of [false, true]) {
-      for (const full of [false, true]) {
+      for (const full of [false, true]) for (const dynamicEnvironment of [false, true]) {
         const options = {hasDisplacement: false, hasAlpha, hasSceneAlpha: hasAlpha,
           hasAnisotropyDirections: full, hasCoatNormals: full, blasLayoutMask: full ? 15 : 1,
           spectral, sceneCapabilities: full ? 0x7fffff : 0, materialCapabilities: full ? 3 : 0,
-          lightCapabilities: full ? 31 : 1};
+          lightCapabilities: full ? 31 : 1, dynamicEnvironment};
         const source = rayTrace(options), compact = compactRayTrace(options);
         expect(tokens(compact)).toEqual(tokens(source));
         expect(renameShaderIdentifiers(compact, shaderIdentifierMap)).toBe(compact);

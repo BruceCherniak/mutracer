@@ -120,11 +120,18 @@ rebuild the texture atlas. Displacement settings that move geometry require a
 
 WebGPU can compile a new path-tracing shader for the following changes. Feature
 presence is scene-wide: adding another material or light that uses an already
-enabled feature does not by itself need another variant.
+supported feature does not by itself need another variant.
+
+Within compatible transport settings and data layouts, WebGPU retains prepared
+material, texture and lighting support for later edits. Turning a feature off
+and back on can reuse that support. Coat and fuzz are prepared together on the
+first use of either: switching between them or combining them does not itself
+require another shader. Metal, thin film and subsurface remain separate features.
+Transport and layout changes below can still require compilation.
 
 | Change | When a different shader variant is needed |
 | --- | --- |
-| Material, texture or lighting features | First use or last removal of coat, thin film, fuzz, subsurface, metal, transmission, shadow catchers, a texture type, an analytic-light type, sampled emissive triangles or environment illumination |
+| Material, texture or lighting features | Newly required support is not covered by a prepared shader: coat/fuzz, thin film, subsurface, metal, transmission, shadow catchers, a texture type, an analytic-light type, sampled emissive triangles or environment illumination |
 | Transport and transparency | Enabling/disabling medium or dispersion support, changing whether any non-opaque material exists, or changing whether deterministic primary BLEND splitting is needed |
 | Shading and geometry structure | Changing required UV/tangent/coat-normal frames, displacement or material-bevel support, vertex/BVH layouts or required traversal capacity |
 | Render settings | Changing `samplingPattern`, `bevelSamples`, or `alphaBlendStrategy` while BLEND materials exist |
@@ -141,7 +148,9 @@ do not recompile the path tracer. Neither do changes to `bounces`,
 bevel switch, sample count or seed. Data uploads, atlas/BVH work and accumulation
 restarts may still be needed.
 
-Returning to a cached combination reuses its pipeline. Compilation time depends
+Returning to a cached compatible combination reuses its pipeline. Prepared
+combinations may be discarded after many different edits; recreating the Engine
+or recovering a lost device also requires preparing shaders again. Compilation time depends
 on the feature combination, BVH layout, browser and GPU driver. Denoising and
 post-processing passes have their own shaders and initialization costs.
 

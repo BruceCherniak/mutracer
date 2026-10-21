@@ -37,6 +37,8 @@ export interface RayTraceShaderOptions {
   /** Defined only when pipeline constants are baked into the source. */
   spectral?: boolean;
   sceneCapabilities?: number;
+  /** Retained environment support must still respect the current illumination state. */
+  dynamicEnvironment?: boolean;
   materialCapabilities?: number;
   lightCapabilities?: number;
 }
@@ -51,6 +53,7 @@ export default function rayTraceCompute({
   blasLayoutMask = 1,
   spectral,
   sceneCapabilities,
+  dynamicEnvironment = false,
   materialCapabilities = ALL_MATERIAL_SHADER_CAPABILITIES,
   lightCapabilities
 }: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false) {
@@ -1161,7 +1164,10 @@ ${pathDiagnostic ? '  mtPathEnd(outAux.normal, outAux.albedo);\n' : ''}}
   );
   specializedSource = specializedSource.replace(
     new RegExp(`\\b(?:${Object.keys(WGPU_SCENE_FEATURE_BITS).join('|')})\\b`, 'g'),
-    name => sceneCapabilities === undefined
+    // Material weights and absent texture indices already disable retained
+    // material capabilities. Environment presence also changes background/MIS
+    // behavior, so its active flag must remain dynamic when support is retained.
+    name => sceneCapabilities === undefined || dynamicEnvironment && name === 'USE_ENVMAP' && (sceneCapabilities & WGPU_SCENE_FEATURE_BITS[name]) !== 0
       ? /* wgsl */ `((rtUniform.sceneFeatureFlags & ${WGPU_SCENE_FEATURE_BITS[name]}u) != 0u)`
       : (sceneCapabilities & WGPU_SCENE_FEATURE_BITS[name]) !== 0 ? /* wgsl */ `true` : /* wgsl */ `false`
   );

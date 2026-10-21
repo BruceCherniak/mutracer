@@ -1,4 +1,4 @@
-import {wgpuSceneFeatureFlags} from './WGPUSceneFeatures.js';
+import {wgpuSceneFeatureFlags, WGPU_SCENE_FEATURE_BITS} from './WGPUSceneFeatures.js';
 
 export const MATERIAL_SHADER_CAPABILITIES = {transmission: 1, metal: 2} as const;
 export const LIGHT_SHADER_CAPABILITIES = {
@@ -22,4 +22,33 @@ export function lightShaderCapabilities(types: readonly string[], emissiveCount:
 
 export function updateSceneShaderCapabilities(constants: Record<string, boolean | number>) {
   constants.SCENE_CAPABILITIES = wgpuSceneFeatureFlags(constants);
+}
+
+export interface ShaderCapabilities {
+  SCENE_CAPABILITIES: number;
+  MATERIAL_CAPABILITIES: number;
+  LIGHT_CAPABILITIES: number;
+}
+
+export function shaderCapabilitiesInclude(supported: ShaderCapabilities, required: ShaderCapabilities) {
+  return (supported.SCENE_CAPABILITIES & required.SCENE_CAPABILITIES) === required.SCENE_CAPABILITIES &&
+    (supported.MATERIAL_CAPABILITIES & required.MATERIAL_CAPABILITIES) === required.MATERIAL_CAPABILITIES &&
+    (supported.LIGHT_CAPABILITIES & required.LIGHT_CAPABILITIES) === required.LIGHT_CAPABILITIES;
+}
+
+/** Retain support, not the scene's active flags. Commit only after compilation succeeds. */
+export function retainedShaderCapabilities(constants: Record<string, boolean | number>, previous?: ShaderCapabilities): ShaderCapabilities {
+  let scene = wgpuSceneFeatureFlags(constants) | (previous?.SCENE_CAPABILITIES ?? 0);
+  const material = Number(constants.MATERIAL_CAPABILITIES ?? 0) | (previous?.MATERIAL_CAPABILITIES ?? 0);
+  const commonSurface = WGPU_SCENE_FEATURE_BITS.HAS_COAT | WGPU_SCENE_FEATURE_BITS.HAS_FUZZ;
+  // Activate this small group on first use, keeping a plain scene's initial
+  // pipeline lean. Thin film, media, dispersion and alpha remain independent.
+  if ((scene & commonSurface) !== 0) {
+    scene |= commonSurface;
+  }
+  return {
+    SCENE_CAPABILITIES: scene,
+    MATERIAL_CAPABILITIES: material,
+    LIGHT_CAPABILITIES: Number(constants.LIGHT_CAPABILITIES ?? 0) | (previous?.LIGHT_CAPABILITIES ?? 0)
+  };
 }
