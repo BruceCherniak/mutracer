@@ -22,6 +22,8 @@ export default class MeshState extends SceneNode {
     return state ? {count: state.count, transforms: state.transforms, colors: state.colors,
       transformsVersion: state.transformsVersion, colorsVersion: state.colorsVersion} : undefined;
   }
+  /** @internal Mutable instance state for in-place native updates. */
+  get instanceState(): InstanceState | undefined { return this._instances; }
   /** @internal */
   setInstanceState(state: InstanceState | undefined) { this._instances = state; }
 

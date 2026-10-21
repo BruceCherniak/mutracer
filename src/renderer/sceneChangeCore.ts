@@ -43,6 +43,10 @@ function sameIndices(a: Uint16Array | Uint32Array, b: Uint16Array | Uint32Array)
   if (b instanceof Uint16Array) return false;
   return a === b;
 }
+function indexLength(indices: Uint16Array | Uint32Array): number {
+  if (indices instanceof Uint16Array) return indices.length;
+  return indices.length;
+}
 function matrixEquals(matrix: Mat4, previous: Float64Array, offset: number): boolean {
   if (matrix instanceof Float32Array) {
     for (let k = 0; k < 16; k++) if (!Object.is(matrix[k], previous[offset + k])) return false;
@@ -70,13 +74,13 @@ class GeometryStorage {
   constructor(geometry: Geometry) {
     this.position = geometry.position.array; this.positionSize = geometry.position.itemSize;
     this.normal = geometry.normal.array; this.normalSize = geometry.normal.itemSize;
-    this.indices = geometry.indices.array; this.indicesLength = geometry.indices.array.length; this.indicesSize = geometry.indices.itemSize;
+    this.indices = geometry.indices.array; this.indicesLength = indexLength(geometry.indices.array); this.indicesSize = geometry.indices.itemSize;
     this.capture(geometry);
   }
   capture(geometry: Geometry) {
     this.position = geometry.position.array; this.positionSize = geometry.position.itemSize;
     this.normal = geometry.normal.array; this.normalSize = geometry.normal.itemSize;
-    this.indices = geometry.indices.array; this.indicesLength = geometry.indices.array.length; this.indicesSize = geometry.indices.itemSize;
+    this.indices = geometry.indices.array; this.indicesLength = indexLength(geometry.indices.array); this.indicesSize = geometry.indices.itemSize;
     const tangent = geometry.tangent, uv = geometry.uv, uv1 = geometry.uv1, color = geometry.color, materialIndex = geometry.materialIndex;
     this.tangent = tangent ? tangent.array : undefined; this.tangentSize = tangent ? tangent.itemSize : 0;
     this.uv = uv ? uv.array : undefined; this.uvSize = uv ? uv.itemSize : 0;
@@ -96,7 +100,7 @@ class GeometryStorage {
       lengths[0] === geometry.position.array.length &&
       this.normal === geometry.normal.array && this.normalSize === geometry.normal.itemSize &&
       lengths[1] === geometry.normal.array.length &&
-      sameIndices(this.indices, geometry.indices.array) && this.indicesLength === geometry.indices.array.length &&
+      sameIndices(this.indices, geometry.indices.array) && this.indicesLength === indexLength(geometry.indices.array) &&
       this.indicesSize === geometry.indices.itemSize &&
       sameFloat32(this.tangent, tangent ? tangent.array : undefined) && this.tangentSize === (tangent ? tangent.itemSize : 0) &&
       lengths[2] === (tangent ? tangent.array.length : -1) &&

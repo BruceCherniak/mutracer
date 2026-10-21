@@ -1,8 +1,7 @@
 /// <reference lib="esnext" />
 /// <reference path="./browser-types.d.ts" />
 import {sceneErrorPacket} from './scene-errors.js';
-import {takeGeometryKernelHints, releaseGeometryKernelHints, rememberKernelBounds, geometryKernelBounds, encodeGeometryKernelHints, type GeometryKernelHint} from './geometry-kernel-hints.js';
-import {installGeneratedVertexTangents} from '../../src/util/geometry.js';
+import {takeGeometryKernelHints, releaseGeometryKernelHints, geometryKernelBounds, encodeGeometryKernelHints, type GeometryKernelHint} from './geometry-kernel-hints.js';
 import {matrixStorage} from '../../src/math/storage.js';
 import {initialSceneConstants, sceneAttributeLayout, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, writeTraceSampling} from '../../src/renderer/sceneAssembly.js';
 import {defaultSceneConfiguration, decodeSceneConfiguration} from './scene-configuration.js';
@@ -15,9 +14,9 @@ import {PackedMeshInstances, sameInstanceMembership} from '../../src/renderer/pa
 import {hardwareOpaqueGeometryFlags} from './hwrt-eligibility.js';
 import {ERROR_CODE, VERSION, RESOURCE, KIND, FORMAT, HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, TEXTURE as T, LIGHT as L, CAMERA as C, BATCH as B, PACKET_HEADER as PH, PACKET_ENTRY as PE, WRITE_ENTRY as WE, WORD_BYTES, quantizeDisplacementRange} from './layout.js';
 import {nativePathIntersections} from './path-diagnostics.wgsl.js';
-import IESProfile, {parseIESProfile} from '../../src/scene/IESProfile.js';
+import type IESProfile from '../../src/scene/IESProfile.js';
 import {computeDisplacementMinmax, computeTrianglesDisplacementRange} from '../../src/renderer/displacementPreparation.js';
-import { applyNativeMaterialProperties } from './material-properties.js';
+import {decodeTexture, decodeMaterial, decodeGeometry, decodeMeshMaterials, decodeInstances, decodeLight, lightFromRecord} from './scene-records.js';
 import { envMapDistribution } from '../../src/renderer/envMapDistribution.js';
 import Geometry, { Attribute } from '../../src/scene/Geometry.js';
 import {computeGeometryBounds} from '../../src/renderer/geometryBvhBounds.js';
@@ -28,7 +27,7 @@ import MaterialState from '../../src/scene/MaterialState.js';
 import PixelTexture from '../../src/scene/PixelTexture.js';
 import type TextureState from '../../src/scene/TextureState.js';
 import { sceneCameraParameters } from './camera-core.js';
-import { InstanceState, RectLightState, SphereLight, DirectionalLight, SpotLight,
+import { InstanceState,
   EmissiveTriangleCache, estimateEnvironmentPower } from '../../src/renderer/lightCore.js';
 export * from '../../src/renderer/lightCore.js';
 import type { EmissiveTriangle } from '../../src/renderer/lightSampling.js';
@@ -184,13 +183,7 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   const textures: PixelTexture[] = [];
   const textureIds = new Map<TextureState, number>();
   for (let i = 0; i < u[H.TEXTURE_COUNT]; i++) {
-    const off = u[H.TEXTURE_OFFSET] + i * T.WORDS;
-    const data = u[off + T.STORAGE] === 0
-      ? new Uint8Array(bytes.buffer, bytes.byteOffset + u[off + T.PIXELS] * 4, u[off + T.WIDTH] * u[off + T.HEIGHT] * 4).slice()
-      : new Float32Array(f.slice(u[off + T.PIXELS], u[off + T.PIXELS] + u[off + T.WIDTH] * u[off + T.HEIGHT] * 4));
-    const texture = new PixelTexture({width: u[off + T.WIDTH], height: u[off + T.HEIGHT], data});
-    texture.flipY = !!u[off + T.FLIP_Y]; texture.uvChannel = u[off + T.UV_CHANNEL] === 1 ? 1 : 0;
-    texture.uvScale = [f[off + T.UV_SCALE], f[off + T.UV_SCALE + 1]]; texture.uvOffset = [f[off + T.UV_OFFSET], f[off + T.UV_OFFSET + 1]];
+    const texture = decodeTexture(bytes, u, f, u[H.TEXTURE_OFFSET] + i * T.WORDS);
     textures.push(texture); textureIds.set(texture, i);
   }
   const environment = nativeFloatImage(u[H.ENVIRONMENT_TEXTURE] ? textures[u[H.ENVIRONMENT_TEXTURE] - 1] : undefined);
@@ -198,59 +191,20 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   const qualityFlags = u[H.QUALITY_FLAGS];
   const environmentDistribution = environment ? envMapDistribution(environment) : undefined;
   const materials: MaterialState[] = [];
-  for (let i = 0; i < u[H.MATERIAL_COUNT]; i++) {
-    const off = u[H.MATERIAL_OFFSET] + i * MAT.WORDS;
-    const m = new MaterialState({baseColor: [f[off + MAT.BASE_COLOR], f[off + MAT.BASE_COLOR + 1], f[off + MAT.BASE_COLOR + 2]],
-      specularRoughness: f[off + MAT.ROUGHNESS], baseMetalness: f[off + MAT.METALNESS], transmissionWeight: f[off + MAT.TRANSMISSION],
-      specularIor: f[off + MAT.IOR], emissionColor: [f[off + MAT.EMISSION_COLOR], f[off + MAT.EMISSION_COLOR + 1], f[off + MAT.EMISSION_COLOR + 2]],
-      emissionLuminance: f[off + MAT.EMISSION_LUMINANCE], coatWeight: f[off + MAT.COAT_WEIGHT], coatRoughness: f[off + MAT.COAT_ROUGHNESS],
-      geometryOpacity: f[off + MAT.OPACITY], geometryThinWalled: !!u[off + MAT.THIN_WALLED]});
-    m.map = u[off + MAT.MAP] === 0xffffffff ? undefined : textures[u[off + MAT.MAP]];
-    m.normalMap = u[off + MAT.NORMAL_MAP] === 0xffffffff ? undefined : textures[u[off + MAT.NORMAL_MAP]];
-    m.metallicRoughnessMap = u[off + MAT.METALLIC_ROUGHNESS_MAP] === 0xffffffff ? undefined : textures[u[off + MAT.METALLIC_ROUGHNESS_MAP]];
-    m.emissiveMap = u[off + MAT.EMISSIVE_MAP] === 0xffffffff ? undefined : textures[u[off + MAT.EMISSIVE_MAP]];
-    applyNativeMaterialProperties(m, textures, u, f, u[off + MAT.EXTENSION_OFFSET], u[off + MAT.EXTENSION_COUNT]);
-    materials.push(m);
-  }
+  for (let i = 0; i < u[H.MATERIAL_COUNT]; i++) materials.push(decodeMaterial(u, f, u[H.MATERIAL_OFFSET] + i * MAT.WORDS, textures));
   if (kernelHints && kernelHints.length !== u[H.GEOMETRY_COUNT]) throw new Error('Kernel geometry count mismatch');
   const geometries: Geometry[] = [];
   for (let i = 0; i < u[H.GEOMETRY_COUNT]; i++) {
-    const off = u[H.GEOMETRY_OFFSET] + i * G.WORDS, count = u[off + G.VERTEX_COUNT], indexCount = u[off + G.INDEX_COUNT];
-    // Let the shared constructor generate normals only when the input omits
-    // them. Assigning authored normals afterwards needlessly traversed all faces.
-    const geometry = new Geometry({position: new Attribute(f.slice(u[off + G.POSITION], u[off + G.POSITION] + count * 3), 3),
-      indices: new Attribute(u.slice(u[off + G.INDICES], u[off + G.INDICES] + indexCount), 1),
-      normal: u[off + G.NORMAL] ? new Attribute(f.slice(u[off + G.NORMAL], u[off + G.NORMAL] + count * 3), 3) : undefined});
-    if (u[off + G.UV]) geometry.uv = new Attribute(f.slice(u[off + G.UV], u[off + G.UV] + count * 2), 2);
-    if (u[off + G.UV1]) geometry.uv1 = new Attribute(f.slice(u[off + G.UV1], u[off + G.UV1] + count * 2), 2);
-
-    if (u[off + G.COLOR]) geometry.color = new Attribute(f.slice(u[off + G.COLOR], u[off + G.COLOR] + count * 3), 3);
-    if (u[off + G.TANGENT]) geometry.tangent = new Attribute(f.slice(u[off + G.TANGENT], u[off + G.TANGENT] + count * 4), 4);
-    if (u[off + G.MATERIAL_INDEX]) geometry.materialIndex = new Attribute(new Int32Array(u.slice(u[off + G.MATERIAL_INDEX], u[off + G.MATERIAL_INDEX] + count)), 1);
-
     const hint = kernelHints && i < kernelHints.length ? kernelHints[i] : undefined;
-    if (hint) {
-      if (hint.vertexCount !== count) throw new Error('Kernel vertex count mismatch');
-      if(hint.bounds) rememberKernelBounds(geometry, hint.bounds);
-      if (!geometry.tangent && hint.tangents) installGeneratedVertexTangents(geometry,hint.tangents);
-    }
-    if (!geometry.tangent && geometry.uv) generateVertexTangents(geometry);
-    geometries.push(geometry);
+    geometries.push(decodeGeometry(u, f, u[H.GEOMETRY_OFFSET] + i * G.WORDS, hint));
   }
   const meshes: MeshState[] = [];
   for (let i = 0; i < u[H.MESH_COUNT]; i++) {
     const off = u[H.MESH_OFFSET] + i * M.WORDS;
-    const meshMaterials: MaterialState[] = [];
-    if (u[off + M.MATERIAL_COUNT]) {
-      for (let k = 0; k < u[off + M.MATERIAL_COUNT]; k++) meshMaterials.push(materials[u[u[off + M.MATERIAL_TABLE] + k]]);
-    } else meshMaterials.push(materials[u[off + M.MATERIAL]]);
-    const mesh = new MeshState(geometries[u[off + M.GEOMETRY]], meshMaterials);
+    const mesh = new MeshState(geometries[u[off + M.GEOMETRY]], decodeMeshMaterials(u, off, materials));
     if (u[H.BATCH_OFFSET]) {
-      const io = u[H.BATCH_OFFSET] + i * B.WORDS, instanceCount = u[io + B.COUNT];
-      // Count UINT32_MAX denotes an ordinary mesh; zero is an empty batch.
-      if (instanceCount !== 0xffffffff) mesh.setInstanceState(new InstanceState({count: instanceCount,
-        transforms: f.slice(u[io + B.TRANSFORMS], u[io + B.TRANSFORMS] + instanceCount * 16),
-        colors: u[io + B.COLORS] ? f.slice(u[io + B.COLORS], u[io + B.COLORS] + instanceCount * 3) : undefined}));
+      const instances = decodeInstances(u, f, u[H.BATCH_OFFSET] + i * B.WORDS);
+      if (instances) mesh.setInstanceState(instances);
     }
     mesh.transform = f.slice(off + M.TRANSFORM, off + M.TRANSFORM + 16);
     meshes.push(mesh);
@@ -258,18 +212,7 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   const lights: AnalyticLightState[] = [];
   const iesProfiles = new Map<string, IESProfile>();
   for (let i = 0; i < u[H.LIGHT_COUNT]; i++) {
-    const off = u[H.LIGHT_OFFSET] + i * L.WORDS;
-    const light = lightFromRecord(u, f, off, u[off + L.TEXTURE] ? textures[u[off + L.TEXTURE] - 1] : undefined);
-    if (light.type === 'SpotLight' && u[off + L.IES_BYTES]) {
-      const key = `${u[off + L.IES_OFFSET]}:${u[off + L.IES_BYTES]}`;
-      let profile = iesProfiles.get(key);
-      if (!profile) {
-        profile = parseIESProfile(new TextDecoder().decode(bytes.subarray(u[off + L.IES_OFFSET] * 4, u[off + L.IES_OFFSET] * 4 + u[off + L.IES_BYTES])), 'native scene');
-        iesProfiles.set(key, profile);
-      }
-      light.iesProfile = profile;
-    }
-    lights.push(light);
+    lights.push(decodeLight(bytes, u, f, u[H.LIGHT_OFFSET] + i * L.WORDS, textures, iesProfiles));
   }
   return {width, height, environment, background, qualityFlags, environmentDistribution,
     materials, geometries, meshes, lights, textureIds, backgroundColor: f.slice(H.BACKGROUND_COLOR, H.BACKGROUND_COLOR + 4),
@@ -714,16 +657,6 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
 function packLightingUniform(rt: ReturnType<typeof makeRayTraceUniform>, environmentPmf: number, choiceCount: number,
   totalWeight: number, lightWidth: number, emissiveTexels: number) {
   writeTraceLighting(rt.views, {environmentPmf, choiceCount, totalWeight, lightWidth, emissiveTexels});
-}
-function lightFromRecord(u: Uint32Array, f: Float32Array, off: number, texture: TextureState | undefined): AnalyticLightState {
-  let light: AnalyticLightState;
-  if (u[off + L.TYPE] === 0) light = new RectLightState({size: [f[off + L.SIZE], f[off + L.HEIGHT_OR_INNER]], spread: f[off + L.SPREAD_OR_OUTER], texture});
-  else if (u[off + L.TYPE] === 1) light = new SphereLight({radius: f[off + L.SIZE]});
-  else if (u[off + L.TYPE] === 2) light = new DirectionalLight();
-  else light = new SpotLight({radius: f[off + L.SIZE], innerAngle: f[off + L.HEIGHT_OR_INNER], outerAngle: f[off + L.SPREAD_OR_OUTER]});
-  light.color = [f[off + L.COLOR], f[off + L.COLOR + 1], f[off + L.COLOR + 2]]; light.intensity = f[off + L.INTENSITY];
-  light.transform = f.slice(off + L.TRANSFORM, off + L.TRANSFORM + 16);
-  return light;
 }
 // Version1,index,reserved[2], followed by Light[28]. Attachments remain committed.
 export function sceneLightParameters(bytes: Uint8Array, token: number): Uint8Array {

@@ -95,3 +95,13 @@ import {geometryKernelReference as referenceKernels} from './scene-core.js';
 export function receiveGeometryKernelHints(bytes:Uint8Array,token:number):Uint8Array {return receiveKernelHints(bytes,token);}
 export function geometryKernelReference(bytes:Uint8Array,withBounds:number):Uint8Array {return referenceKernels(bytes,withBounds);}
 export function geometryKernelHypot(x: number,y: number,z: number): number {return Math.hypot(x,y,z);}
+
+// Incremental sync (descriptor diff + shared change detection); the host wires it in a later phase.
+import {syncNativeScene as syncScene, acceptNativeScene as acceptScene, releaseNativeScene as releaseScene} from './scene-sync.js';
+import {sceneErrorPacket} from './scene-errors.js';
+import {ERROR_CODE} from './layout.js';
+export function syncNativeScene(bytes: Uint8Array, token: number): Uint8Array {
+  try { return syncScene(bytes, token); } catch (error) { return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error); }
+}
+export function acceptNativeScene(token: number): Uint8Array { return acceptScene(token); }
+export function releaseNativeScene(token: number): Uint8Array { return releaseScene(token); }
