@@ -62,12 +62,13 @@ then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 | `SkinnedMesh` / mesh with morph targets | CPU-deformed dynamic geometry |
 | `InstancedMesh` | One InstancedMesh per material group, with native colors, sharing geometry and BLAS |
 | Multi-material groups | One MuTracer mesh per group |
+| Geometry `color` with `material.vertexColors = true` | Linear RGB colors modulate base color and unlit output, including base-color textures and instance colors; RGBA inputs use RGB only (vertex alpha is unsupported) |
 | `DirectionalLight` | `DirectionalLight` |
 | `PointLight` | `SphereLight` (radius `userData.mutracerRadius`, default 0.25) |
-| `SpotLight` | `SpotLight` (radius `userData.mutracerRadius`, default 0.01; `penumbra` sets the inner angle) |
+| `SpotLight` | `SpotLight` (radius `userData.mutracerRadius`, default 0.01; `penumbra` sets the inner angle, with the same smooth falloff as Three.js) |
 | `RectAreaLight` | `RectLight` |
 | `AmbientLight` | `AmbientLight` |
-| `scene.environment` (equirectangular float `DataTexture`, e.g. from `HDRLoader`/`RGBELoader`) | `EnvironmentLight` |
+| `scene.environment` (equirectangular float `DataTexture`, e.g. from `HDRLoader`/`RGBELoader`) | `EnvironmentLight`; orientation follows Three.js, so a `DataTexture` with `flipY = false` has its first row at the bottom |
 | `scene.background` color / texture | Background; the environment itself when `background === environment` |
 
 Three.js `opacity` maps to `geometryOpacity`; thin-shell choices map to
@@ -76,6 +77,28 @@ names](./materials.md#compatibility-names), using the constructor's equal-value
 or conflict rule. These overrides apply after standard conversion; alpha mode
 still follows the source material flags and resolved coverage. Naming does not
 change transmission, volume or anisotropy conversion semantics.
+
+Material `DataTexture` inputs support Red, RG, RGB and RGBA layouts, including
+half-float data. Missing color channels become zero and missing alpha becomes
+one. Decoded images use additional CPU memory and are reused until the source
+texture is updated; set `texture.needsUpdate = true` after pixel edits.
+
+`FrontSide`, `BackSide` and `DoubleSide` preserve the rendered face and normal
+orientation. Later `material.side` edits synchronize automatically. Using both
+front and back sides of shared geometry requires additional geometry memory.
+
+Material color textures honor `LinearSRGBColorSpace` and `SRGBColorSpace`;
+`NoColorSpace` reads color channels as linear. Data-map channels are always
+linear. Color-space edits synchronize automatically.
+
+Material textures preserve independent `wrapS` and `wrapT`: repeat,
+clamp-to-edge and mirrored repeat. UV repeat and offset apply before wrapping;
+later wrap edits synchronize automatically. Displacement uses the same modes.
+
+`scene.environmentIntensity` controls environment lighting, including zero;
+`scene.environmentRotation` rotates it using the source Euler order. Both
+synchronize automatically. They do not change ambient lights or an explicitly
+assigned `scene.background` texture.
 
 Thin-film ranges keep their endpoint order, including minimum greater than
 maximum, and retain the converter's 0–20 µm endpoint clamp. The converter uses
@@ -93,7 +116,10 @@ copying pixels. General `KHR_texture_transform` rotation remains unsupported.
 Clearcoat normals are deferred to the independent coat-frame implementation.
 Anisotropy direction and source-model mapping are described [below](#anisotropy-source-conversion). The conversion preserves OpenPBR layering: glTF sheen
 layer order differs, and specular weight/color also affect metals in OpenPBR;
-these imports do not imply identical glTF BRDFs.
+these imports do not imply identical glTF BRDFs. A fully metallic material
+(`metalness` 1 without `metalnessMap`) ignores `specularIntensity`,
+`specularColor` and their maps, as in glTF. Partially metallic or
+metalness-mapped materials keep them, so their metal lobe is scaled too.
 
 Invisible objects are skipped. Other material types are skipped with a console
 warning unless `convertMaterial` supplies an OpenPBR material. `BatchedMesh`, instanced morph targets (`morphTexture`) and skinned
@@ -103,6 +129,16 @@ converted as an ordinary mesh, without per-instance matrices or colors.
 Meshes without UVs get automatic triplanar texture and displacement
 projection; explicit
 `mutracerUvProjection` settings take precedence.
+
+Three.js `displacementScale` and `displacementBias` retain their local-unit
+semantics. Without a displacement map, Three.js's inactive default height of `1`
+is replaced by MuTracer's default `0.1`; other explicitly configured heights
+are preserved. `userData.mutracerOpenPBR.displacementScale` can explicitly set
+any height, including `1`, before a map is assigned; `displacementBias` in the
+same metadata overrides the Three.js bias. The same metadata object's
+`displacementStepSize` overrides marching quality: `0` uses automatic steps,
+and a positive value is a fixed local-unit step. See
+[displacement](materials.md#displacement) for scaling and cost.
 
 ## Skinning and morph targets
 
@@ -169,7 +205,7 @@ Renderer-specific settings without a Three.js equivalent:
 | `mutracerThinFilmMap` | material | Native R thickness texture with minimum 0; takes precedence over `iridescenceThicknessMap` |
 | `mutracerRadius` | point / spot light | Emitter radius |
 | `mutracerIesProfile`, `mutracerIesRotation` | spot light | `IESProfile` instance; rotation becomes local-Z transform rotation |
-| `mutracerGroundedSkybox: { texture, height, radius, groundHeight?, center? }` | scene | Grounded skybox background |
+| `mutracerGroundedSkybox: { texture, height, radius, groundHeight?, center?, rotation?, intensity? }` | scene | Grounded skybox background; rotation/intensity options follow [SceneBackground](./api.md#scene-types) |
 | `mutracerHiddenBackground: true` | scene | Transparent background while keeping environment lighting |
 
 Directional and spot lights use their world position and target to build a

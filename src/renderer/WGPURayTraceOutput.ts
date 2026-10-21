@@ -64,6 +64,8 @@ fn main(@builtin(position) coord: vec4f) -> FSOutput {
   ${layers ? `
   let shadow = shadowCatcherBuffer[idx];
   let foregroundHit = max(hit - shadow.mask.b, 0.0);
+  // Separated background includes flat primary misses as well as catcher
+  // samples. Neither belongs in the hit-normalized geometry color/alpha.
   output.foreground = vec4f(
     (color.rgb - shadow.background.rgb)
       / select(total, foregroundHit, foregroundHit > 0.0),

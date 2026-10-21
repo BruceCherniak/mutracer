@@ -1,10 +1,12 @@
 import TextureState from './TextureState.js';
+export type { TextureColorSpace, TextureWrapMode } from './TextureState.js';
+export { textureWrapIndex } from './TextureState.js';
 import type { TextureDataSource } from './textureData.js';
 export type { TextureDataSource } from './textureData.js';
 
 /**
- * Image used by materials, lights and backgrounds. 8-bit color textures are
- * treated as sRGB; float data as linear.
+ * Image used by materials, lights and backgrounds. Material color slots default
+ * to sRGB for images/bytes and linear for float data; colorSpace overrides this.
  */
 export default class Texture extends TextureState {
   /** Image or raw RGBA pixels supplied to the constructor; no default. */

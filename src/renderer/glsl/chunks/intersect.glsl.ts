@@ -576,6 +576,12 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
   ivec2 i0 = unpackTexel(index.x, vertexColumns);
   ivec2 i1 = unpackTexel(index.y, vertexColumns);
   ivec2 i2 = unpackTexel(index.z, vertexColumns);
+  si.vertexColor = vec3(1.0);
+#ifdef USE_VERTEX_COLOR
+  si.vertexColor = barycentric.x * texelFetch(colorBuffer, i0, 0).rgb
+    + barycentric.y * texelFetch(colorBuffer, i1, 0).rgb
+    + barycentric.z * texelFetch(colorBuffer, i2, 0).rgb;
+#endif
 
   vec3 n0 = texelFetch(normalBuffer, i0, 0).xyz;
   vec3 n1 = texelFetch(normalBuffer, i1, 0).xyz;

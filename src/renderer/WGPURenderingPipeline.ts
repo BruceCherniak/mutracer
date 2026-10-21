@@ -391,7 +391,7 @@ output.color = color;
         data: 0.25
       }
     ],
-    outputs: ['color', 'denoiseColor'],
+    outputs: ['color', 'denoiseColor', 'denoiseAlbedo'],
     inputs: [
       'colorTex',
       'foregroundTex',
@@ -406,7 +406,8 @@ output.color = color;
     color: {
       format: composeColorFormat
     },
-    denoiseColor: { format: 'rgba32float' }
+    denoiseColor: { format: 'rgba32float' },
+    denoiseAlbedo: { format: 'rgba8unorm' }
   });
   const compositeDenoiseDisplayPass = scratch.get('compositeDenoiseDisplayPass', () => new WGPUFullQuadPass(
     'OIDN composed display', device, {
@@ -622,7 +623,7 @@ output.color = color;
 
   function prepareComposition() {
     composePass.setSize(renderWidth, renderHeight);
-    composePass.setOutputParams({ color: { format: composeColorFormat }, denoiseColor: { format: 'rgba32float' } });
+    composePass.setOutputParams({ color: { format: composeColorFormat }, denoiseColor: { format: 'rgba32float' }, denoiseAlbedo: { format: 'rgba8unorm' } });
     composePass.setUniform('exposure', exposure);
     composePass.setUniform('toneMappingParams', [toneMappingMode, vignette]);
     composePass.setUniform('colorGradingParams', [contrast, saturation, temperature, tint]);
@@ -1046,7 +1047,8 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       composeColorFormat = nextComposeColorFormat;
       composePass.setOutputParams({
         color: { format: composeColorFormat },
-        denoiseColor: { format: 'rgba32float' }
+        denoiseColor: { format: 'rgba32float' },
+        denoiseAlbedo: { format: 'rgba8unorm' }
       });
 
     }
@@ -1230,7 +1232,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       if (!auxiliaryDenoisers) {
         return {
           albedo: {
-            data: copyGuide('OIDN raw albedo', getFrameInput('albedo')),
+            data: copyGuide('OIDN raw albedo', composePass.getOutput('denoiseAlbedo')),
             ...size
           },
           normal: {
@@ -1244,7 +1246,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       const encodeEncoder = device.createCommandEncoder();
       oidnAlbedoEncodePass.createPass(encodeEncoder, {
         albedo: {
-          texture: getFrameInput('albedo'),
+          texture: composePass.getOutput('denoiseAlbedo'),
           channels: 4
         }
       });
@@ -1271,7 +1273,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       oidnAlbedoDecodePass.setUniform('preserveSurfaceTexture', +false);
       oidnAlbedoDecodePass.createPass(decodeEncoder, {
         albedo: { buffer: albedoOutput.data, channels: 4 },
-        rawAlbedo: { texture: getFrameInput('albedo'), channels: 4 },
+        rawAlbedo: { texture: composePass.getOutput('denoiseAlbedo'), channels: 4 },
         rawNormal: { texture: getFrameInput('normal'), channels: 4 }
       });
       device.queue.submit([decodeEncoder.finish()]);

@@ -37,4 +37,17 @@ describe('Poly Haven texture sets', () => {
     expect(filterTextures(list, '', 'wall').map((t) => t.id)).toEqual(['brick']);
     expect(filterTextures(list, 'red', 'wood')).toEqual([]);
   });
+
+  it('only includes a height map when displacement is requested, with resolution fallback', async () => {
+    mockFiles({ Diffuse: sizes('diff', '1k'), Displacement: sizes('height', '1k', '2k') });
+    expect((await polyHavenMaps('height-option', '4k')).urls).not.toHaveProperty('displacementMap');
+    expect((await polyHavenMaps('height-option', '4k', true)).urls.displacementMap).toBe('https://dl/height_2k.jpg');
+    // The cached file metadata can serve both choices without downloading the image.
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts sets without a supported displacement image', async () => {
+    mockFiles({ Diffuse: sizes('diff', '1k'), Displacement: { '1k': { exr: { url: 'https://dl/height.exr', size: 1 } } } });
+    expect((await polyHavenMaps('height-exr-only', '1k', true)).urls).toEqual({ map: 'https://dl/diff_1k.jpg' });
+  });
 });

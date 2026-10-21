@@ -198,13 +198,33 @@ start.
 
 ## Displacement
 
-`displacementMap` (red channel) with `displacementScale` (local units)
-ray-marches the height field in the shader. `displacementStepSize` controls the
-ray-marching step (default `0.01`). No extra triangles are generated.
-`displacementUvProjection` (default `'none'`) and `displacementUvProjectionScale`
-(default `1`) control height-map coordinates.
+Assign a `displacementMap` and adjust `displacementScale` (height) and
+`displacementBias`. The red channel supplies linear height; the offset along
+the normal is `red × displacementScale + displacementBias`. Bias defaults to
+`0`, so black leaves the surface in place and white uses the full height.
+For centered displacement, use a bias of `-displacementScale / 2`. Displacement
+requires WebGPU; WebGL 2 renders the original surface. No extra triangles are
+generated.
 
-The remaining `displacement*` properties are documented in the type declarations.
+`displacementScale` defaults to `0.1`; both height and bias use mesh-local
+units. Height `0` removes map variation while bias still offsets the surface;
+set both to `0` or remove the map to disable displacement. The offset follows
+the mesh transform, like Three.js displacement or Blender's Object Space mode:
+scaling an object also scales its displacement.
+Baking a scale into vertex positions requires scaling both `displacementScale`
+and `displacementBias` by the same amount to preserve the result.
+
+`displacementStepSize` defaults to `0`, which automatically uses 1/32 of the
+absolute displacement height. A positive value sets a fixed step in mesh-local
+units. Smaller steps capture finer detail at a higher rendering cost; set
+`0.01` explicitly to retain the previous fixed-step default. When baking an
+object scale into vertices, scale an explicit step by the same amount; an
+automatic step follows the height. `displacementUvProjection` (default `'none'`)
+and `displacementUvProjectionScale` (default `1`) control height-map coordinates.
+
+Choose the height for your model's local dimensions. The library does not infer
+physical units or resize the model. Changing displacement settings can trigger
+an expensive [full mesh update](updates.md#full-mesh-updates).
 
 ## Known limitations
 

@@ -158,7 +158,7 @@ function openPbrMedium(material: MaterialState) {
 }
 
 
-export type MaterialParameterData = Omit<BufferData, MaterialTextureIndex | 'mapInfo' | 'mapTransform' | 'mapUvChannel' | 'mapColorLinear'>;
+export type MaterialParameterData = Omit<BufferData, MaterialTextureIndex | 'mapInfo' | 'mapTransform' | 'mapWrap' | 'mapUvChannel' | 'mapColorLinear'>;
 
 export function packMaterialParams(materials: MaterialState[]) {
   const media = materials.map(openPbrMedium);
@@ -205,8 +205,9 @@ export function packMaterialParams(materials: MaterialState[]) {
       (m) => uvProjectionConstants[m.displacementUvProjection] || 0
     ),
     displacementUvProjectionScale: materials.map((m) => m.displacementUvProjectionScale || 1),
+    displacementBias: materials.map(m => m.displacementBias),
     displacementStepSize: materials.map(
-      (m) => m.displacementStepSize || 0.01
+      (m) => Number.isFinite(m.displacementStepSize) && m.displacementStepSize > 0 ? m.displacementStepSize : 0
     ),
 
     // Alpha
@@ -268,7 +269,7 @@ export function createMaterialBufferData(materials: MaterialState[]): BufferData
     specularColorMapIndex: [],
     anisotropyMapIndex: [],
     coatNormalMapIndex: [],
-    mapInfo: [], mapTransform: [], mapUvChannel: [], mapColorLinear: [] };
+    mapInfo: [], mapTransform: [], mapWrap: [], mapUvChannel: [], mapColorLinear: [] };
 }
 
 export function repackMaterialParams(data: BufferData, materials: MaterialState[]) {

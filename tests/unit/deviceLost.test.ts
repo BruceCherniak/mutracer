@@ -59,6 +59,17 @@ it('rejects active convergence on loss, without touching its released target in 
   const loss = render.converge({samples:100, samplesPerBatch:1,onProgress: () => first.lose()});
   await expect(loss).rejects.toThrow('device lost');expect(render.status).toBe('preparing');expect(pipeline.dispose).toHaveBeenCalled();expect(targets[0].setOfflineRenderOptions).toHaveBeenCalledTimes(1);
 });
+it('unblocks the inference lease on device loss even when the old queue never completes', async () => {
+  const {engine, first} = setup(); engine.update(); await engine.init();
+  vi.spyOn(first.device.queue, 'onSubmittedWorkDone').mockReturnValue(new Promise(() => {}));
+  const nextWork = vi.fn(async () => 7);
+  const firstWork = engine._enqueueDenoise(async () => 42);
+  const next = engine._enqueueDenoise(nextWork);
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(nextWork).not.toHaveBeenCalled();
+  first.lose();
+  expect(await firstWork).toBe(42); expect(await next).toBe(7);
+});
 it('reloads device-bound OIDN networks', async () => {
   const {engine,first,second} = setup(true);engine.update();await engine.init();
   const old = {dispose:vi.fn(),prepareForImage:vi.fn(async()=>{}),tileExecute:vi.fn()};const next = {...old,dispose:vi.fn(),prepareForImage:vi.fn(async()=>{})};

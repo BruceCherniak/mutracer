@@ -24,6 +24,8 @@ const environment = new THREE.DataTexture(
   sky.data, sky.width, sky.height, THREE.RGBAFormat, THREE.FloatType
 );
 environment.mapping = THREE.EquirectangularReflectionMapping;
+// Rows start at the sky, as in an .hdr file.
+environment.flipY = true;
 environment.needsUpdate = true;
 threeScene.environment = environment;
 threeScene.background = environment;

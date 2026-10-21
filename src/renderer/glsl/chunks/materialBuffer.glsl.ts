@@ -17,6 +17,7 @@ export default createShaderMixin({
     mapTransform: Shader.arrayUniform('vec4', 'NUM_MAPS'),
     mapUvChannel: Shader.arrayUniform('float', 'NUM_MAPS'),
     mapColorLinear: Shader.arrayUniform('float', 'NUM_MAPS'),
+    mapWrap: Shader.arrayUniform('vec2', 'NUM_MAPS'),
     map: Shader.uniform('sampler2DArray')
   },
   defines: {
@@ -79,9 +80,20 @@ vec2 getMapOffset(int index) {
   return vec2(fract(mapInfo[index].z), mapInfo[index].w);
 }
 
-vec2 getMapUV(int index, vec2 uv) {
+float wrapMapCoordinate(float value, float mode) {
+  if (mode < 0.5) return fract(value);
+  if (mode < 1.5) return clamp(value, 0.0, 1.0);
+  return 1.0 - abs(1.0 - (value - 2.0 * floor(value * 0.5)));
+}
+
+vec2 wrappedMapUv(int index, vec2 uv) {
   vec4 transform = mapTransform[index];
-  vec2 repeatedUv = fract(uv * transform.xy + transform.zw);
+  vec2 value = uv * transform.xy + transform.zw;
+  return vec2(wrapMapCoordinate(value.x, mapWrap[index].x), wrapMapCoordinate(value.y, mapWrap[index].y));
+}
+
+vec2 getMapUV(int index, vec2 uv) {
+  vec2 repeatedUv = wrappedMapUv(index, uv);
   vec2 atlasTexel = 1.0 / vec2(textureSize(map, 0).xy);
   vec2 firstTexelCenter = getMapOffset(index);
   vec2 sourceExtent = getMapSize(index) + atlasTexel;
@@ -98,7 +110,26 @@ vec2 getMapUvSet(int index, vec2 uv, vec2 uv1) {
   return mapUvChannel[index] > 0.5 ? uv1 : uv;
 }
 
+vec4 loadMapTexel(int index, ivec2 coordinate, ivec2 size, ivec2 origin, vec2 modes) {
+  ivec2 p = clamp(coordinate, ivec2(0), size - 1);
+  if (modes.x < 0.5) p.x = ((coordinate.x % size.x) + size.x) % size.x;
+  if (modes.y < 0.5) p.y = ((coordinate.y % size.y) + size.y) % size.y;
+  return texelFetch(map, ivec3(origin + p, int(getMapLayer(index))), 0);
+}
+
 vec4 sampleMap(int index, vec2 uv) {
+  ivec2 size = ivec2(round(getMapSize(index) * vec2(textureSize(map, 0).xy) + 1.0));
+  vec2 texel = wrappedMapUv(index, uv) * vec2(size) - 0.5;
+  vec2 modes = mapWrap[index];
+  if ((size.x > 1 && modes.x < 0.5 && (texel.x < 0.0 || texel.x > float(size.x - 1))) ||
+      (size.y > 1 && modes.y < 0.5 && (texel.y < 0.0 || texel.y > float(size.y - 1)))) {
+    ivec2 base = ivec2(floor(texel));
+    vec2 weight = fract(texel);
+    ivec2 origin = ivec2(round(getMapOffset(index) * vec2(textureSize(map, 0).xy) - 0.5));
+    return mix(
+      mix(loadMapTexel(index, base, size, origin, modes), loadMapTexel(index, base + ivec2(1, 0), size, origin, modes), weight.x),
+      mix(loadMapTexel(index, base + ivec2(0, 1), size, origin, modes), loadMapTexel(index, base + ivec2(1, 1), size, origin, modes), weight.x), weight.y);
+  }
   return texture(map, vec3(getMapUV(index, uv), getMapLayer(index)));
 }
 #endif
@@ -124,7 +155,8 @@ void getMaterial(
   int materialIndex,
   vec2 uv,
   vec2 uv1,
-  int instanceIndex
+  int instanceIndex,
+  vec3 vertexColor
 ) {
   int i = materialIndex * MAT_DATA_SIZE;
   vec4 colorAndMatType = fetchMatData(i + MAT_ROW_COLOR);
@@ -314,9 +346,9 @@ void getMaterial(
     mat.specularRoughness = mix(mat.specularRoughness,
       pow(min(1.0, baseRoughness2 * baseRoughness2 + 2.0 * coatRoughness2 * coatRoughness2), 0.25), mat.coatWeight);
   }
-  vec3 instanceColor = getInstanceColor(instanceIndex);
-  mat.baseColor *= instanceColor;
-  if (mat.materialType == UNLIT) mat.emission *= instanceColor;
+  vec3 color = getInstanceColor(instanceIndex) * vertexColor;
+  mat.baseColor *= color;
+  if (mat.materialType == UNLIT) mat.emission *= color;
 
   mat.specularRoughness = clamp(mat.specularRoughness, ROUGHNESS_MIN, 1.0);
   mat.baseMetalness = clamp(mat.baseMetalness, 0.0, 1.0);

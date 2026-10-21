@@ -248,6 +248,61 @@ export const PUBLIC_MODEL_PRESETS = [
     }
   },
   {
+    "id": "porsche-992-gt3-r",
+    "name": "2024 Porsche 992 GT3 R",
+    "tag": "Racing car / paint",
+    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/porsche-992-gt3-r/model.glb",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/porsche-992-gt3-r/thumbnail.webp",
+    "license": "CC-BY 4.0",
+    "credit": "Dave",
+    "sourceUrl": "https://sketchfab.com/3d-models/2024-porsche-992-gt3-r-b76c9b2ae2d548c3869426eac4ab8a19",
+    "licenseUrl": "http://creativecommons.org/licenses/by/4.0/",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/porsche-992-gt3-r/attribution.json",
+    "sizeMB": 9.87,
+    "camera": {
+      "position": [
+        0.2712064430369904,
+        0.1287580106001691,
+        0.44102664120744955
+      ],
+      "target": [
+        -0.025,
+        0,
+        0.018
+      ],
+      "fov": 35,
+      "space": "grounded"
+    }
+  },
+  {
+    "id": "meet-mat",
+    "name": "Meet MAT",
+    "tag": "Character / materials",
+    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/meet-mat/model.glb",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/meet-mat/thumbnail.webp",
+    "license": "CC-BY-NC 4.0",
+    "credit": "Adobe substance 3D",
+    "sourceUrl": "https://sketchfab.com/3d-models/meet-mat-6d467069570e48c99a5fd5e6db53561b",
+    "licenseUrl": "http://creativecommons.org/licenses/by-nc/4.0/",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/meet-mat/attribution.json",
+    "sizeMB": 0.56,
+    "nonCommercial": true,
+    "camera": {
+      "position": [
+        3.3921231599736066,
+        2.7297770828719106,
+        4.8444539295400695
+      ],
+      "target": [
+        0,
+        1.255254701417779,
+        2.220446049250313e-16
+      ],
+      "fov": 35,
+      "space": "grounded"
+    }
+  },
+  {
     "id": "dragon",
     "name": "Dragon",
     "tag": "Glass / sculpture",
@@ -268,6 +323,33 @@ export const PUBLIC_MODEL_PRESETS = [
       "target": [
         0,
         9.203124034404755,
+        0
+      ],
+      "fov": 35,
+      "space": "grounded"
+    }
+  },
+  {
+    "id": "standard-shader-ball",
+    "name": "Standard Shader Ball",
+    "tag": "Glass / transmission",
+    "url": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/standard-shader-ball/model.glb",
+    "thumbnail": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/standard-shader-ball/thumbnail.webp",
+    "license": "CC-BY 4.0",
+    "credit": "Chris Rydalch",
+    "sourceUrl": "https://github.com/usd-wg/assets/tree/main/full_assets/StandardShaderBall",
+    "licenseUrl": "https://creativecommons.org/licenses/by/4.0/",
+    "attributionUrl": "https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/standard-shader-ball/attribution.json",
+    "sizeMB": 0.7,
+    "camera": {
+      "position": [
+        2.62,
+        13.75,
+        14.86
+      ],
+      "target": [
+        0,
+        5,
         0
       ],
       "fov": 35,

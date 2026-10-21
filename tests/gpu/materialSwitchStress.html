@@ -1,0 +1,14 @@
+<!doctype html><html lang="en"><meta charset="utf-8"><title>Material switch GPU stress</title>
+<style>
+body{margin:0;background:#222;color:white;font:13px monospace}
+canvas{width:100vw;height:100vh;display:block}
+aside{position:fixed;top:0;left:0;max-width:650px;padding:12px;background:#000c}
+pre{white-space:pre-wrap;max-height:45vh;overflow:auto}
+</style>
+<canvas></canvas><aside>
+<p>Full-window material preset stress: standard OIDN with progressive denoising.
+Use ?model=meet-mat for the reported model, ?iterations=128 to set the switch count.
+Viewer settings may be supplied in the URL hash. The default model uses procedural spheres.</p>
+<button id="run">Run stress test</button> <button id="download" disabled>Download report</button>
+<pre id="report">Ready</pre>
+</aside><script type="module" src="./materialSwitchStress.ts"></script></html>

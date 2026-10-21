@@ -52,6 +52,45 @@ describe('per-render denoising', () => {
     camera.position = [1, 0, 0]; engine.update(); done(true); await settle();
     expect(targets[1].performDenoise).not.toHaveBeenCalled(); engine.dispose();
   });
+  it('keeps cancelled inference on the shared scratch lease until its submitted GPU work completes', async () => {
+    const {engine, targets} = renderFixture();
+    const render = new Render(engine, {maxSamples: 1, denoiser: {type: 'jnlm'}});
+    let gpuDone!: () => void;
+    const gpuPending = new Promise<undefined>(resolve => {gpuDone = () => resolve(undefined);});
+    vi.spyOn(engine.device!.queue, 'onSubmittedWorkDone').mockReturnValue(gpuPending);
+    render.refine();
+    let cancelled!: () => void;
+    vi.mocked(targets[0].performDenoise!).mockImplementationOnce(() => new Promise(resolve => {cancelled = () => resolve(false);}));
+    await settle();
+    render.restart(); cancelled(); render.refine(); await settle();
+    // Cancellation cannot retract already-submitted filter passes.
+    // Repeated edits must not enqueue the next inference on top of those passes.
+    expect(targets[0].performDenoise).toHaveBeenCalledTimes(1);
+    gpuDone(); await settle();
+    expect(targets[0].performDenoise).toHaveBeenCalledTimes(2);
+    engine.dispose();
+  });
+
+  it('releases the inference lease when disposed while GPU completion is pending', async () => {
+    const {engine} = renderFixture();
+    vi.spyOn(engine.device!.queue, 'onSubmittedWorkDone').mockReturnValue(new Promise(() => {}));
+    const work = engine._enqueueDenoise(async () => 42);
+    await settle(); engine.dispose();
+    expect(await work).toBe(42);
+  });
+  it('drains submitted work before reusing scratch after an inference error', async () => {
+    const {engine} = renderFixture();
+    let gpuDone!: () => void;
+    vi.spyOn(engine.device!.queue, 'onSubmittedWorkDone').mockReturnValue(new Promise<undefined>(resolve => {gpuDone = () => resolve(undefined);}));
+    const error = new Error('Inference failed after submission');
+    const failed = engine._enqueueDenoise(async () => {throw error;});
+    const rejection = expect(failed).rejects.toBe(error);
+    const nextWork = vi.fn(async () => 7);
+    const next = engine._enqueueDenoise(nextWork);
+    await settle(); expect(nextWork).not.toHaveBeenCalled();
+    gpuDone(); await rejection; expect(await next).toBe(7);
+    engine.dispose();
+  });
   it('fails soft for OIDN on WebGL', async () => {
     const {engine} = renderFixture({backend: 'webgl'}); const error = vi.fn(); engine.on('error', error);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -80,6 +119,42 @@ it('denoises again after display settings change without tracing another sample'
   engine.display.shadowCatcherAlpha = .5; engine.display.present(render); render.refine(); await settle();
   expect(render.samples).toBe(1); expect(targets[0].trace).toHaveBeenCalledOnce();
   expect(targets[0].performDenoise).toHaveBeenCalledTimes(2); engine.dispose();
+});
+
+it.each(['exposure', 'tone mapping', 'HDR'] as const)('cancels the first OIDN inference before applying changed %s settings', async setting => {
+  const {engine, targets} = renderFixture();
+  loadOIDNNetwork.mockResolvedValue(filter());
+  const render = new Render(engine, {maxSamples: 1});
+  await render.setDenoiser({type: 'oidn'});
+  render.refine();
+  const target = targets[0];
+  let finish!: (complete: boolean) => void;
+  let signal!: AbortSignal;
+  vi.mocked(target.performDenoise!).mockImplementation((_filter, _alpha, _schedule, inputSignal) => {
+    signal = inputSignal!;
+    return new Promise(resolve => {finish = resolve;});
+  });
+  await settle();
+  expect(render.denoising).toBe(true);
+  expect(signal.aborted).toBe(false);
+  vi.mocked(target.cancelDenoise!).mockClear();
+  if (setting === 'exposure') engine.display.toneMappingExposure = 2;
+  else if (setting === 'tone mapping') engine.display.toneMapping = 'aces';
+  else engine.display.hdrOutputEnabled = true;
+  engine.display.present(render);
+  expect(signal.aborted).toBe(true);
+  expect(target.cancelDenoise).toHaveBeenCalled();
+  const cancelOrder = vi.mocked(target.cancelDenoise!).mock.invocationCallOrder[0];
+  expect(cancelOrder).toBeLessThan(vi.mocked(target.setToneMappingParams).mock.invocationCallOrder.at(-1)!);
+  expect(cancelOrder).toBeLessThan(vi.mocked(target.drawPostProcess).mock.invocationCallOrder.at(-1)!);
+  const composed = vi.mocked(target.drawPostProcess).mock.calls.length;
+  finish(true); await settle();
+  expect(target.drawPostProcess).toHaveBeenCalledTimes(composed);
+  vi.mocked(target.performDenoise!).mockResolvedValue(true);
+  render.refine(); await settle();
+  expect(target.performDenoise).toHaveBeenCalledTimes(2);
+  expect(target.trace).toHaveBeenCalledOnce();
+  engine.dispose();
 });
 
 it('recomposes the requested render after waiting for the shared inference lease', async () => {

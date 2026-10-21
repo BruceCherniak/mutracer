@@ -287,6 +287,8 @@ function packMapInfo(table: MaterialData, mapCount: number): Float32Array {
   for (let i = 0; i < table.bufferData.mapUvChannel.length; i++) {
     mapInfo[mapCount * 8 + i * 4] = table.bufferData.mapUvChannel[i];
     mapInfo[mapCount * 8 + i * 4 + 1] = table.bufferData.mapColorLinear[i];
+    mapInfo[mapCount * 8 + i * 4 + 2] = table.bufferData.mapWrap[i * 2];
+    mapInfo[mapCount * 8 + i * 4 + 3] = table.bufferData.mapWrap[i * 2 + 1];
   }
   return mapInfo;
 }

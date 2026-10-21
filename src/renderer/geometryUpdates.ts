@@ -58,7 +58,7 @@ function copyRegion(source: Geometry, merged: Geometry, region: GeometryUpdateRe
       }
     }
     else if (attribute) target.array.set(attribute.array, offset);
-    else target.array.fill(0, offset, offset + count * target.itemSize);
+    else target.array.fill(name === 'color' ? 1 : 0, offset, offset + count * target.itemSize);
   }
   if (!topologyChanged) return;
   writeMaterialIndices(source, materialIndices, merged.materialIndex!.array, vertexOffset);

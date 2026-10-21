@@ -89,7 +89,7 @@ export const openPbrSchema = [
   {key: 'displacementUvProjectionScale', type: 'float', default: 1, category: 'geometry'},
   {key: 'displacementMap', type: 'texture', default: undefined, category: 'texture'},
   {key: 'displacementScale', type: 'float', default: 0.1, category: 'geometry'},
-  {key: 'displacementStepSize', type: 'float', default: 0.01, category: 'geometry'},
+  {key: 'displacementStepSize', type: 'float', default: 0, category: 'geometry'},
   {key: 'thinFilmThicknessMinimum', type: 'float', default: 0, category: 'param'},
   {key: 'thinFilmMapChannel', type: 'enum', default: 'r', category: 'param'},
   {key: 'coatWeightMap', type: 'texture', default: undefined, category: 'texture'},
@@ -104,6 +104,7 @@ export const openPbrSchema = [
   {key: 'specularAnisotropyModel', type: 'enum', default: 'openpbr', category: 'param'},
   {key: 'coatNormalMap', type: 'texture', default: undefined, category: 'texture'},
   {key: 'coatNormalScale', type: 'vec2', default: [1, 1], category: 'param'},
+  {key: 'displacementBias', type: 'float', default: 0, category: 'geometry'},
 ] as const satisfies readonly Field[];
 type SchemaTextureName = Extract<typeof openPbrSchema[number], {type: 'texture'}>['key'];
 const textureNamesMatch: [Exclude<MaterialTextureName, SchemaTextureName> | Exclude<SchemaTextureName, MaterialTextureName>] extends [never] ? true : never = true;
@@ -115,13 +116,13 @@ type CategoryKeys<T extends readonly Field[], C extends Field['category'], R ext
 // Fixed tuple literals preserve the typed key-order contract in native builds;
 // satisfies checks every position against the schema at compile time.
 export const materialKeys = [
-  'baseWeight', 'baseColor', 'baseDiffuseRoughness', 'baseMetalness', 'specularWeight', 'specularColor', 'specularRoughness', 'specularIor', 'specularAnisotropy', 'transmissionWeight', 'transmissionColor', 'transmissionDepth', 'transmissionScatter', 'transmissionScatterAnisotropy', 'transmissionDispersionScale', 'transmissionDispersionAbbeNumber', 'subsurfaceWeight', 'subsurfaceColor', 'subsurfaceRadius', 'subsurfaceRadiusScale', 'subsurfaceAnisotropy', 'fuzzWeight', 'fuzzColor', 'fuzzRoughness', 'coatWeight', 'coatColor', 'coatRoughness', 'coatAnisotropy', 'coatIor', 'coatDarkening', 'thinFilmWeight', 'thinFilmThickness', 'thinFilmIor', 'emissionColor', 'emissionLuminance', 'opacity', 'thinWalled', 'doubleSided', 'map', 'alphaMap', 'alphaMode', 'alphaCutoff', 'emissiveMap', 'normalMap', 'normalScale', 'metallicRoughnessMap', 'roughnessMap', 'metalnessMap', 'transmissionMap', 'thinFilmMap', 'shadowCatcher', 'unlit', 'bevelSize', 'mapAlphaUsage', 'uvProjection', 'uvProjectionScale', 'displacementUvProjection', 'displacementUvProjectionScale', 'displacementMap', 'displacementScale', 'displacementStepSize', 'thinFilmThicknessMinimum', 'thinFilmMapChannel', 'coatWeightMap', 'coatRoughnessMap', 'fuzzColorMap', 'fuzzRoughnessMap', 'specularWeightMap', 'specularColorMap', 'anisotropyMap', 'specularAnisotropyRotation', 'coatAnisotropyRotation', 'specularAnisotropyModel', 'coatNormalMap', 'coatNormalScale'
+  'baseWeight', 'baseColor', 'baseDiffuseRoughness', 'baseMetalness', 'specularWeight', 'specularColor', 'specularRoughness', 'specularIor', 'specularAnisotropy', 'transmissionWeight', 'transmissionColor', 'transmissionDepth', 'transmissionScatter', 'transmissionScatterAnisotropy', 'transmissionDispersionScale', 'transmissionDispersionAbbeNumber', 'subsurfaceWeight', 'subsurfaceColor', 'subsurfaceRadius', 'subsurfaceRadiusScale', 'subsurfaceAnisotropy', 'fuzzWeight', 'fuzzColor', 'fuzzRoughness', 'coatWeight', 'coatColor', 'coatRoughness', 'coatAnisotropy', 'coatIor', 'coatDarkening', 'thinFilmWeight', 'thinFilmThickness', 'thinFilmIor', 'emissionColor', 'emissionLuminance', 'opacity', 'thinWalled', 'doubleSided', 'map', 'alphaMap', 'alphaMode', 'alphaCutoff', 'emissiveMap', 'normalMap', 'normalScale', 'metallicRoughnessMap', 'roughnessMap', 'metalnessMap', 'transmissionMap', 'thinFilmMap', 'shadowCatcher', 'unlit', 'bevelSize', 'mapAlphaUsage', 'uvProjection', 'uvProjectionScale', 'displacementUvProjection', 'displacementUvProjectionScale', 'displacementMap', 'displacementScale', 'displacementStepSize', 'thinFilmThicknessMinimum', 'thinFilmMapChannel', 'coatWeightMap', 'coatRoughnessMap', 'fuzzColorMap', 'fuzzRoughnessMap', 'specularWeightMap', 'specularColorMap', 'anisotropyMap', 'specularAnisotropyRotation', 'coatAnisotropyRotation', 'specularAnisotropyModel', 'coatNormalMap', 'coatNormalScale', 'displacementBias'
 ] as const satisfies Keys<typeof openPbrSchema>;
 export const materialTextureKeys = [
   'map', 'alphaMap', 'emissiveMap', 'normalMap', 'metallicRoughnessMap', 'roughnessMap', 'metalnessMap', 'transmissionMap', 'thinFilmMap', 'displacementMap', 'coatWeightMap', 'coatRoughnessMap', 'fuzzColorMap', 'fuzzRoughnessMap', 'specularWeightMap', 'specularColorMap', 'anisotropyMap', 'coatNormalMap'
 ] as const satisfies CategoryKeys<typeof openPbrSchema, 'texture'>;
 export const materialGeometryKeys = [
-  'displacementUvProjection', 'displacementUvProjectionScale', 'displacementScale', 'displacementStepSize'
+  'displacementUvProjection', 'displacementUvProjectionScale', 'displacementScale', 'displacementStepSize', 'displacementBias'
 ] as const satisfies CategoryKeys<typeof openPbrSchema, 'geometry'>;
 export const materialParamKeys = [
   'baseWeight', 'baseColor', 'baseDiffuseRoughness', 'baseMetalness', 'specularWeight', 'specularColor', 'specularRoughness', 'specularIor', 'specularAnisotropy', 'transmissionWeight', 'transmissionColor', 'transmissionDepth', 'transmissionScatter', 'transmissionScatterAnisotropy', 'transmissionDispersionScale', 'transmissionDispersionAbbeNumber', 'subsurfaceWeight', 'subsurfaceColor', 'subsurfaceRadius', 'subsurfaceRadiusScale', 'subsurfaceAnisotropy', 'fuzzWeight', 'fuzzColor', 'fuzzRoughness', 'coatWeight', 'coatColor', 'coatRoughness', 'coatAnisotropy', 'coatIor', 'coatDarkening', 'thinFilmWeight', 'thinFilmThickness', 'thinFilmIor', 'emissionColor', 'emissionLuminance', 'opacity', 'thinWalled', 'doubleSided', 'alphaMode', 'alphaCutoff', 'normalScale', 'shadowCatcher', 'unlit', 'bevelSize', 'mapAlphaUsage', 'uvProjection', 'uvProjectionScale', 'thinFilmThicknessMinimum', 'thinFilmMapChannel', 'specularAnisotropyRotation', 'coatAnisotropyRotation', 'specularAnisotropyModel', 'coatNormalScale'
@@ -197,6 +198,7 @@ export function applyMaterialParams(material: MaterialState, input: MaterialStat
   if (params.displacementUvProjectionScale !== undefined) material.displacementUvProjectionScale = params.displacementUvProjectionScale as MaterialState['displacementUvProjectionScale'];
   if (params.displacementMap !== undefined) material.displacementMap = params.displacementMap as MaterialState['displacementMap'];
   if (params.displacementScale !== undefined) material.displacementScale = params.displacementScale as MaterialState['displacementScale'];
+  if (params.displacementBias !== undefined) material.displacementBias = params.displacementBias as MaterialState['displacementBias'];
   if (params.displacementStepSize !== undefined) material.displacementStepSize = params.displacementStepSize as MaterialState['displacementStepSize'];
   if (params.thinFilmThicknessMinimum !== undefined) material.thinFilmThicknessMinimum = params.thinFilmThicknessMinimum as MaterialState['thinFilmThicknessMinimum'];
   if (params.thinFilmMapChannel !== undefined) material.thinFilmMapChannel = params.thinFilmMapChannel as MaterialState['thinFilmMapChannel'];
@@ -314,5 +316,6 @@ export function getMaterialHashKey(material: MaterialState) {
     hashScalar(material.specularAnisotropyModel),
     hashTexture(material.coatNormalMap),
     hashVec2(material.coatNormalScale),
+    hashScalar(material.displacementBias),
   ].join('_');
 }

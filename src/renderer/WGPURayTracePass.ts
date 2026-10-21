@@ -39,7 +39,7 @@ import type { SceneBackground, SceneLight } from '../scene/Scene.js';
 import { numberArraysEqual } from './util.js';
 import Camera from '../scene/Camera.js';
 import {
-  generateBackgroundMapFromSceneBackground
+  generateBackgroundMapFromSceneBackground, environmentRotation, backgroundMapTransform
 } from './envMapCreation.js';
 import { WORKGROUP_SIZE } from './wgsl/rayTrace.compute.js';
 import Geometry from '../scene/Geometry.js';
@@ -762,8 +762,6 @@ class WGPURayTracePass {
         ...MATERIAL_TEXTURE_DEFINES,
         'USE_ANISOTROPY_DIRECTIONS',
         'USE_COAT_NORMAL_FRAMES',
-        'COLOR_OFF',
-        'USE_VERTEX_COLOR',
         'HAS_ALPHA_BLEND',
         'HAS_ALPHA_MASK'
       ];
@@ -1726,6 +1724,7 @@ class WGPURayTracePass {
   }
 
   setBackground(background?: SceneBackground) {
+    this._rtUniform.views.backgroundMapTransform.set(backgroundMapTransform(background));
     this._constants.USE_BACKGROUND = !!background;
     const backgroundImage =
       background && !Array.isArray(background)
@@ -1886,7 +1885,7 @@ class WGPURayTracePass {
         (mesh) =>
           mesh.geometry === geometry &&
           !!mesh.materials[0]?.displacementMap &&
-          Math.abs(mesh.materials[0].displacementScale) > 1e-6
+          (mesh.materials[0].displacementScale !== 0 || mesh.materials[0].displacementBias !== 0)
       );
       if (usesDisplacement || geometryTopologyChanged(this._preparedMeshData, geometry) || !getGeometryBvh(geometry) || !refitBLAS(getGeometryBvh(geometry)!, geometry)) {
         setGeometryBvh(geometry, undefined);
@@ -2205,6 +2204,8 @@ class WGPURayTracePass {
     for (let i = 0; i < mapUvChannel.length; i++) {
       mapInfoData[numMaps * 8 + i * 4] = mapUvChannel[i];
       mapInfoData[numMaps * 8 + i * 4 + 1] = mapColorLinear[i];
+      mapInfoData[numMaps * 8 + i * 4 + 2] = materialData.bufferData.mapWrap[i * 2];
+      mapInfoData[numMaps * 8 + i * 4 + 3] = materialData.bufferData.mapWrap[i * 2 + 1];
     }
     let mapInfoUniform = this._mapInfoUniform;
     if (!mapInfoUniform || mapInfoUniform.size !== mapInfoData.byteLength) {
@@ -2296,6 +2297,7 @@ class WGPURayTracePass {
     const numAnalyticLights = analyticLights.length;
 
     const envImage = this._sceneEnvironment.update(lights);
+    this._rtUniform.views.environmentRotation.set(environmentRotation(lights));
 
     this._rtUniform.views.lightsCount[0] = numAnalyticLights;
 

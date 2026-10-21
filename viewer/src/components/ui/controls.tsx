@@ -4,6 +4,7 @@ import {
   Switch as AriaSwitch, ToggleButton, ToggleButtonGroup, type Key
 } from 'react-aria-components';
 import { ChevronDown } from 'lucide-react';
+import { decimalPlacesForStep } from './numberPrecision';
 
 // ------------------------------------------------------------------ Section
 
@@ -71,7 +72,7 @@ export function Scrub({
   const [dragging, setDragging] = useState(false);
   const range = max - min;
   const effectiveStep = step ?? (range >= 50 ? 1 : range >= 5 ? 0.1 : 0.01);
-  const decimals = effectiveStep >= 1 ? 0 : effectiveStep >= 0.1 ? 1 : effectiveStep >= 0.01 ? 2 : 3;
+  const decimals = decimalPlacesForStep(effectiveStep);
   const toT = (v: number) => (log ? Math.log(v / min) / Math.log(max / min) : (v - min) / range);
   const fromT = (t: number) => (log ? min * Math.pow(max / min, t) : min + t * range);
   const quantize = (v: number) => Number((Math.round(v / effectiveStep) * effectiveStep).toFixed(decimals));
@@ -103,7 +104,7 @@ export function Scrub({
         <input
           className="scrub__input mono"
           autoFocus
-          defaultValue={value.toFixed(decimals)}
+          defaultValue={format ? String(value) : value.toFixed(decimals)}
           onFocus={(e) => e.currentTarget.select()}
           onBlur={(e) => {
             const parsed = Number(e.currentTarget.value);

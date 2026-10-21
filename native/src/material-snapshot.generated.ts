@@ -22,7 +22,7 @@ function sameTexture(texture: TextureState | undefined, snapshot: NativeMaterial
 
 /** Same fields as the Web material snapshot: parameters, then texture identity and metadata. */
 export class NativeMaterialSnapshot {
-  numbers = new Float64Array(72);
+  numbers = new Float64Array(73);
   strings: string[] = [];
   textures: (TextureState | undefined)[] = [];
   textureNumbers: number[] = [];
@@ -105,6 +105,7 @@ export function captureNativeMaterial(m: MaterialState, snapshot: NativeMaterial
   n[69] = m.coatAnisotropyRotation;
   n[70] = pairX(m.coatNormalScale);
   n[71] = pairY(m.coatNormalScale);
+  n[72] = m.displacementBias;
   snapshot.strings = [m.alphaMode, m.mapAlphaUsage, m.uvProjection, m.displacementUvProjection, m.thinFilmMapChannel, m.specularAnisotropyModel];
   snapshot.textures.length = 0; snapshot.textureNumbers.length = 0; snapshot.textureScales.length = 0;
   snapshot.textureOffsets.length = 0; snapshot.textureImages.length = 0;
@@ -329,6 +330,7 @@ export function nativeMaterialMatches(m: MaterialState, snapshot: NativeMaterial
   if (!Object.is(m.coatAnisotropyRotation, n[69])) return false;
   if (!Object.is(pairX(m.coatNormalScale), n[70])) return false;
   if (!Object.is(pairY(m.coatNormalScale), n[71])) return false;
+  if (!Object.is(m.displacementBias, n[72])) return false;
   if (m.alphaMode !== snapshot.strings[0]) return false;
   if (m.mapAlphaUsage !== snapshot.strings[1]) return false;
   if (m.uvProjection !== snapshot.strings[2]) return false;
@@ -415,6 +417,7 @@ export function syncNativeMaterial(target: MaterialState, source: MaterialState)
   if (!Object.is(target.coatAnisotropyRotation, source.coatAnisotropyRotation)) target.coatAnisotropyRotation = source.coatAnisotropyRotation;
   if (!Object.is(target.specularAnisotropyModel, source.specularAnisotropyModel)) target.specularAnisotropyModel = source.specularAnisotropyModel;
   if (!(Object.is(pairX(target.coatNormalScale), pairX(source.coatNormalScale)) && Object.is(pairY(target.coatNormalScale), pairY(source.coatNormalScale)))) target.coatNormalScale = source.coatNormalScale;
+  if (!Object.is(target.displacementBias, source.displacementBias)) target.displacementBias = source.displacementBias;
   if (target.map !== source.map) target.map = source.map;
   if (target.alphaMap !== source.alphaMap) target.alphaMap = source.alphaMap;
   if (target.emissiveMap !== source.emissiveMap) target.emissiveMap = source.emissiveMap;

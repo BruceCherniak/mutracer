@@ -5,6 +5,11 @@ import Mesh from '../../src/scene/Mesh';
 import OpenPBRMaterial from '../../src/scene/OpenPBRMaterial';
 import {
   getTrianglesDisplacementRange,
+  getBvhBounds,
+  getPreparedMeshGeometry,
+  getMeshBlasInput,
+  captureMeshBlasSnapshot,
+  meshBlasSnapshotIsCurrent,
   updateMeshInstances
 } from '../../src/renderer/prepareMeshBVH';
 
@@ -24,6 +29,70 @@ describe('merged renderer geometry', () => {
       0, 1, 2, 3, 4, 5
     ]);
   });
+});
+
+it('rebuilds UV displacement bounds when a height map is added or its height changes', () => {
+  const geometry = triangleGeometry();
+  const material = new OpenPBRMaterial();
+  const mesh = new Mesh(geometry, material);
+  updateMeshInstances([mesh]);
+  expect(getBvhBounds(getPreparedMeshGeometry(mesh))[1][2]).toBe(0);
+
+  material.displacementMap = heightTexture([1, 1, 1, 1], 2);
+  material.displacementScale = .2;
+  updateMeshInstances([mesh]);
+  expect(getBvhBounds(getPreparedMeshGeometry(mesh))[1][2]).toBeCloseTo(.2);
+
+  material.displacementScale = .4;
+  updateMeshInstances([mesh]);
+  expect(getBvhBounds(getPreparedMeshGeometry(mesh))[1][2]).toBeCloseTo(.4);
+
+  material.displacementMap = undefined;
+  updateMeshInstances([mesh]);
+  expect(getPreparedMeshGeometry(mesh)).toBe(geometry);
+  expect(getBvhBounds(geometry)[1][2]).toBe(0);
+});
+
+it('isolates shared geometry by height map and refreshes same-size image replacements', () => {
+  const geometry = triangleGeometry();
+  const first = new OpenPBRMaterial(), second = new OpenPBRMaterial();
+  first.displacementMap = heightTexture([1, 1, 1, 1], 2);
+  second.displacementMap = heightTexture([.5, .5, .5, .5], 2);
+  first.displacementScale = second.displacementScale = .4;
+  const a = new Mesh(geometry, first), b = new Mesh(geometry, second);
+  const ordinary = new Mesh(geometry, new OpenPBRMaterial());
+  const prepared = updateMeshInstances([a, b, ordinary]);
+  expect(prepared.geometries).toHaveLength(3);
+  expect(getBvhBounds(getPreparedMeshGeometry(a))[1][2]).toBeCloseTo(.4);
+  // Bounds conservatively pad quantized height samples.
+  expect(getBvhBounds(getPreparedMeshGeometry(b))[1][2]).toBeCloseTo(.2, 1);
+  expect(getBvhBounds(geometry)[1][2]).toBe(0);
+  first.displacementMap.image = heightTexture([.25, .25, .25, .25], 2).image;
+  updateMeshInstances([a]);
+  expect(getBvhBounds(getPreparedMeshGeometry(a))[1][2]).toBeCloseTo(.1, 1);
+});
+
+it('uses undisplaced bounds on a backend without height-field intersection', () => {
+  const material = new OpenPBRMaterial();
+  material.displacementMap = heightTexture([1, 1, 1, 1], 2);
+  material.displacementScale = .4;
+  const mesh = new Mesh(triangleGeometry(), material);
+  updateMeshInstances([mesh]);
+  const prepared = updateMeshInstances([mesh], { displacement: false });
+  expect(prepared.geometries[0]).toBe(mesh.geometry);
+  expect(getBvhBounds(prepared.geometries[0])[1][2]).toBe(0);
+  expect(prepared.instanceBindings[0].displacementScale).toBe(0);
+  expect(material.displacementMap).toBeDefined();
+});
+
+it('prepares height prisms for local heights smaller than a microunit', () => {
+  const material = new OpenPBRMaterial();
+  material.displacementMap = heightTexture([1, 1, 1, 1], 2);
+  material.displacementScale = 1e-7;
+  const geometry = triangleGeometry(), mesh = new Mesh(geometry, material);
+  updateMeshInstances([mesh]);
+  expect(getPreparedMeshGeometry(mesh)).not.toBe(geometry);
+  expect(getBvhBounds(getPreparedMeshGeometry(mesh))[1][2]).toBeCloseTo(1e-7, 12);
 });
 
 it('assigns material slots by identity and retains them after parameter edits', () => {
@@ -116,3 +185,30 @@ function triangleGeometry() {
 function heightTexture(values: number[], width: number, height = width) {
   return new Texture({ data: new Float32Array(values), width, height });
 }
+
+
+it.each([-.3, .2])('adds signed bias %s to height bounds without modifying source vertices', (bias) => {
+  const geometry = triangleGeometry();
+  const original = geometry.position.array.slice();
+  const material = new OpenPBRMaterial({ displacementMap: heightTexture([1, 1, 1, 1], 2), displacementScale: .2 });
+  const mesh = new Mesh(geometry, material);
+  updateMeshInstances([mesh]);
+  const target = getPreparedMeshGeometry(mesh), snapshot = captureMeshBlasSnapshot(mesh, target);
+  material.displacementBias = bias;
+  expect(meshBlasSnapshotIsCurrent(mesh, target, snapshot)).toBe(false);
+  updateMeshInstances([mesh]);
+  expect(getBvhBounds(getPreparedMeshGeometry(mesh))[1][2]).toBeCloseTo(.2 + bias);
+  expect(geometry.position.array).toEqual(original);
+  expect(getPreparedMeshGeometry(mesh).position.array).toEqual(original);
+  // Worker/TinyBVH builds receive the same biased base used by the shader.
+  expect(getMeshBlasInput(mesh).geometry.position.array[2]).toBeCloseTo(bias);
+  material.displacementScale = 0;
+  updateMeshInstances([mesh]);
+  const [min, max] = getBvhBounds(getPreparedMeshGeometry(mesh));
+  expect(min[2]).toBeCloseTo(bias); expect(max[2]).toBeCloseTo(bias);
+  const unsupported = updateMeshInstances([mesh], { displacement: false });
+  expect(getBvhBounds(unsupported.geometries[0])[1][2]).toBe(0);
+  material.displacementMap = undefined;
+  updateMeshInstances([mesh]);
+  expect(getPreparedMeshGeometry(mesh)).toBe(geometry);
+});

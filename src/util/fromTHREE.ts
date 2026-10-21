@@ -39,10 +39,10 @@ function convertTexture(
   if (!threeTexture) return;
   const state = [threeTexture.version, threeTexture.image, threeTexture.flipY,
     threeTexture.repeat.x, threeTexture.repeat.y, threeTexture.offset.x,
-    threeTexture.offset.y, threeTexture.channel];
+    threeTexture.offset.y, threeTexture.channel, threeTexture.wrapS, threeTexture.wrapT, threeTexture.colorSpace];
   const cached = textureStore.get(threeTexture);
   if (cached && snapshotsEqual(cached.state, state)) return cached.texture;
-  const image = threeTexture.image as Texture['image'];
+  const image = convertTextureImage(threeTexture);
   const texture = cached?.texture ?? new Texture(image);
   texture.image = image;
   texture.source = threeTexture;
@@ -50,6 +50,12 @@ function convertTexture(
   texture.uvScale = [threeTexture.repeat.x, threeTexture.repeat.y];
   texture.uvOffset = [threeTexture.offset.x, threeTexture.offset.y];
   texture.uvChannel = threeTexture.channel === 1 ? 1 : 0;
+  const wrap = (value: number) => value === 1001 ? 'clamp-to-edge' as const
+    : value === 1002 ? 'mirrored-repeat' as const : 'repeat' as const;
+  texture.wrapS = wrap(threeTexture.wrapS); texture.wrapT = wrap(threeTexture.wrapT);
+  // Three.js NoColorSpace also reads color channels without a transfer function.
+  texture.colorSpace = threeTexture.colorSpace === 'srgb' ? 'srgb'
+    : threeTexture.colorSpace === 'srgb-linear' || threeTexture.colorSpace === '' ? 'linear' : undefined;
   if (cached) texture.markUpdated();
   else texture.version = threeTexture.version;
   textureStore.set(threeTexture, { texture, state });
@@ -69,18 +75,65 @@ function halfFloatToFloat(value: number) {
   return sign * Math.pow(2, exponent - 15) * (1 + fraction / 0x400);
 }
 
+/** Decode Three.js storage into the RGBA byte/float images used by MuTracer. */
+function convertTextureImage(texture: THREE.Texture): Texture['image'] {
+  const image = texture.image as THREE.DataTexture['image'];
+  if (!image?.data) return image as Texture['image'];
+  // Three.js enums are kept numeric to retain the optional, type-only peer import.
+  const channels = texture.format === 1028 ? 1 : texture.format === 1030 ? 2
+    : texture.format === 1022 ? 3 : texture.format === 1023 ? 4 : 0;
+  if (!channels) throw new Error(`Unsupported Three.js data texture format: ${texture.format}`);
+  const data = image.data as ArrayLike<number>;
+  if (data.length !== image.width * image.height * channels) {
+    throw new Error('Three.js data texture length does not match its format and dimensions.');
+  }
+  const half = texture.type === 1016;
+  if (channels === 4 && !half && (data instanceof Float32Array || data instanceof Uint8Array ||
+    data instanceof Uint8ClampedArray || data instanceof Int32Array)) return image as Texture['image'];
+  const bytes = data instanceof Uint8Array || data instanceof Uint8ClampedArray;
+  const result = bytes ? new Uint8Array(image.width * image.height * 4)
+    : new Float32Array(image.width * image.height * 4);
+  const read = (index: number) => {
+    const value = data[index];
+    if (half) return halfFloatToFloat(value);
+    if (data instanceof Uint16Array) return value / 65535;
+    if (data instanceof Uint32Array) return value / 4294967295;
+    if (data instanceof Int8Array) return Math.max(-1, value / 127);
+    if (data instanceof Int16Array) return Math.max(-1, value / 32767);
+    return value;
+  };
+  for (let i = 0; i < image.width * image.height; i++) {
+    result[i * 4] = read(i * channels);
+    result[i * 4 + 1] = channels > 1 ? read(i * channels + 1) : 0;
+    result[i * 4 + 2] = channels > 2 ? read(i * channels + 2) : 0;
+    result[i * 4 + 3] = channels === 4 ? read(i * channels + 3) : bytes ? 255 : 1;
+  }
+  return { width: image.width, height: image.height, data: result };
+}
+
 function convertDataTexture(threeTexture: THREE.DataTexture | null | undefined, textureStore: TextureStore) {
   if (!threeTexture?.image?.data || !threeTexture.image.width || !threeTexture.image.height) return;
   const previous = textureStore.get(threeTexture);
   const texture = convertTexture(threeTexture, textureStore)!;
   if (previous?.state === textureStore.get(threeTexture)?.state) return texture;
-  const source = threeTexture.image.data as ArrayBufferView;
-  const data = source instanceof Uint16Array
-    ? Float32Array.from(source, halfFloatToFloat)
-    : source instanceof Float32Array || source instanceof Uint8Array || source instanceof Int32Array
-      ? source : Float32Array.from(source as unknown as ArrayLike<number>);
-  texture.image = { data, width: threeTexture.image.width, height: threeTexture.image.height };
+  const data = (texture.image as import('../scene/Texture.js').TextureDataSource).data;
+  const { width, height } = threeTexture.image;
+  // Three.js equirect maps put the sky at v = 1, so with flipY = false the
+  // first row is the nadir. MuTracer environments start at the zenith and
+  // ignore flipY, so reorder the rows here instead.
+  texture.image = { data: threeTexture.flipY ? data : flipRows(data, width, height), width, height };
+  texture.flipY = false;
   return texture;
+}
+
+function flipRows<T extends Float32Array | Uint8Array | Uint8ClampedArray | Int32Array>(data: T, width: number, height: number): T {
+  if (height <= 1) return data;
+  const rowLength = data.length / height;
+  const flipped = new (data.constructor as new (length: number) => T)(data.length);
+  for (let y = 0; y < height; y++) {
+    flipped.set(data.subarray((height - 1 - y) * rowLength, (height - y) * rowLength), y * rowLength);
+  }
+  return flipped;
 }
 
 function convertMaterial(
@@ -176,15 +229,20 @@ function convertMaterial(
     standardMaterial.displacementMap,
     textureCache
   );
+  const displacementBias = Number(standardMaterial.displacementBias);
+  if (Number.isFinite(displacementBias)) material.displacementBias = displacementBias;
   const displacementScale = Number(standardMaterial.displacementScale);
-  material.displacementScale = Number.isFinite(displacementScale)
+  // Three.js stores 1 even without a height map. Do not turn that inactive
+  // default into MuTracer's height when a texture is added after conversion.
+  material.displacementScale = Number.isFinite(displacementScale) &&
+    (standardMaterial.displacementMap != null || displacementScale !== 1)
     ? displacementScale
     : material.displacementScale;
   const displacementStepSize = Number(
     standardMaterial.userData.mutracerDisplacementStepSize
   );
   if (Number.isFinite(displacementStepSize)) {
-    material.displacementStepSize = Math.max(0.000001, displacementStepSize);
+    material.displacementStepSize = Math.max(0, displacementStepSize);
   }
   const uvProjection = standardMaterial.userData
     .mutracerDisplacementUvProjection;
@@ -228,8 +286,12 @@ function convertMaterial(
       textureCache
     );
     material.specularIor = physicalMaterial.ior;
-    material.specularWeight = physicalMaterial.specularIntensity;
-    if (physicalMaterial.specularColor) {
+    // glTF specular (KHR_materials_specular) only scales the dielectric
+    // lobe, while OpenPBR applies it to metals too. A fully metallic
+    // surface has no dielectric part, so keep the OpenPBR defaults there.
+    const fullyMetallic = physicalMaterial.metalness === 1 && !physicalMaterial.metalnessMap;
+    material.specularWeight = fullyMetallic ? 1 : physicalMaterial.specularIntensity;
+    if (physicalMaterial.specularColor && !fullyMetallic) {
       material.specularColor =
         physicalMaterial.specularColor.toArray() as ColorRGB;
     }
@@ -239,8 +301,10 @@ function convertMaterial(
     material.coatNormalScale = physicalMaterial.clearcoatNormalScale.toArray();
     material.fuzzColorMap = convertTexture(physicalMaterial.sheenColorMap, textureCache);
     material.fuzzRoughnessMap = convertTexture(physicalMaterial.sheenRoughnessMap, textureCache);
-    material.specularWeightMap = convertTexture(physicalMaterial.specularIntensityMap, textureCache);
-    material.specularColorMap = convertTexture(physicalMaterial.specularColorMap, textureCache);
+    if (!fullyMetallic) {
+      material.specularWeightMap = convertTexture(physicalMaterial.specularIntensityMap, textureCache);
+      material.specularColorMap = convertTexture(physicalMaterial.specularColorMap, textureCache);
+    }
     material.coatWeight = physicalMaterial.clearcoat;
     material.coatRoughness = physicalMaterial.clearcoatRoughness;
     // MeshPhysicalMaterial's clearcoat BRDF uses the fixed dielectric F0
@@ -336,6 +400,12 @@ function convertMaterial(
       : fallback;
   };
   if (openPbr) {
+    for (const key of ['displacementScale', 'displacementBias', 'displacementStepSize'] as const) {
+      const value = openPbr[key];
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        material[key] = key === 'displacementStepSize' ? Math.max(0, value) : value;
+      }
+    }
     if (openPbr.specularAnisotropyModel !== undefined) {
       specularAnisotropyModelIndex(openPbr.specularAnisotropyModel);
       material.specularAnisotropyModel = openPbr.specularAnisotropyModel as 'openpbr' | 'gltf';
@@ -498,6 +568,12 @@ function convertMaterial(
       ? 'blend'
       : 'opaque';
 
+  if (standardMaterial.side === 1) {
+    // BackSide normals are reversed in converted geometry. Keep the source
+    // displacement direction and biased base surface unchanged.
+    material.displacementScale = -material.displacementScale;
+    material.displacementBias = -material.displacementBias;
+  }
   return material;
 }
 
@@ -544,13 +620,16 @@ function copyFloatAttribute(
 
 function convertGeometry(
   threeGeometry: THREE.BufferGeometry,
-  drawRange?: { start: number; count: number }
+  drawRange: { start: number; count: number },
+  vertexColors: boolean,
+  backSide: boolean
 ): Geometry | null {
   const positionAttrb = threeGeometry.getAttribute('position');
   const normalAttrb = threeGeometry.getAttribute('normal');
   const tangentAttrb = threeGeometry.getAttribute('tangent');
   const uvAttrb = threeGeometry.getAttribute('uv');
   const uv1Attrb = threeGeometry.getAttribute('uv1');
+  const colorAttrb = vertexColors && threeGeometry.getAttribute('color');
   const indexAttrb = threeGeometry.getIndex();
   const sourceCount = indexAttrb ? indexAttrb.array.length : positionAttrb.count;
   // Match Array.slice range handling without expanding the complete index stream.
@@ -572,6 +651,13 @@ function convertGeometry(
   } else {
     for (let index = 0; index < indexCount; index++) indices[index] = start + index;
   }
+  if (backSide) {
+    for (let i = 0; i < indices.length; i += 3) {
+      const tmp = indices[i + 1];
+      indices[i + 1] = indices[i + 2];
+      indices[i + 2] = tmp;
+    }
+  }
   const geometry = new Geometry({
     position: new Attribute(
       copyFloatAttribute(positionAttrb),
@@ -588,13 +674,29 @@ function convertGeometry(
     uv1:
       uv1Attrb &&
       new Attribute(copyFloatAttribute(uv1Attrb), uv1Attrb.itemSize),
+    // MuTracer stores linear RGB only; omit Three.js's optional vertex alpha.
+    color: colorAttrb ? new Attribute(copyFloatAttribute(colorAttrb, 3), 3) : undefined,
     indices: new Attribute(indices, 1)
   });
-  if (!geometry.normal) {
-    generateVertexNormals(geometry);
+  // Generated normals already follow the reversed indices; authored normals do not.
+  if (backSide) {
+    if (normalAttrb) negateNormals(geometry);
+    reverseTangentHandedness(geometry);
   }
   updateBoundingBox(geometry);
   return geometry;
+}
+
+function negateNormals(geometry: Geometry) {
+  const normals = geometry.normal.array;
+  for (let i = 0; i < normals.length; i++) normals[i] = -normals[i];
+}
+
+function reverseTangentHandedness(geometry: Geometry) {
+  // Three.js FLIP_SIDED reverses N but preserves T and B. Reversing W
+  // preserves that bitangent when the renderer reconstructs cross(N,T)*W.
+  const tangent = geometry.tangent;
+  if (tangent?.itemSize === 4) for (let i = 3; i < tangent.array.length; i += 4) tangent.array[i] *= -1;
 }
 
 /** Options for one-shot conversion and persistent Three.js synchronization. */
@@ -624,6 +726,8 @@ interface GeometryEntry { state: unknown[]; groups: Map<string, Geometry>; check
 interface ConversionStore {
   updateId: number;
   textures: TextureStore;
+  // Equirectangular conversion normalizes rows; material textures retain source pixels and flipY.
+  equirectTextures: TextureStore;
   materials: WeakMap<THREE.Material, { material: OpenPBRMaterial; hash: string }>;
   materialHooks: WeakMap<THREE.Material, {version: number; value: OpenPBRMaterial | null | undefined}>;
   lightHooks: WeakMap<THREE.Light, {version: number | undefined; value: SceneLight | null | undefined}>;
@@ -640,12 +744,13 @@ interface ConversionStore {
   background?: Scene['background'];
 }
 function createConversionStore(): ConversionStore {
-  return { updateId: 0, textures: new WeakMap(), materials: new WeakMap(), geometries: new WeakMap(),
+  return { updateId: 0, textures: new WeakMap(), equirectTextures: new WeakMap(),
+    materials: new WeakMap(), geometries: new WeakMap(),
     materialHooks: new WeakMap(), lightHooks: new WeakMap(),
     poseChanged: false, meshes: new WeakMap(), lights: new WeakMap(), deformedGeometries: new WeakMap(), deformations: new WeakMap(),
     instanceMeshes: new WeakMap(), projectionVariants: new Map(), warned: new WeakSet() };
 }
-const geometryAttributeNames = ['position', 'normal', 'tangent', 'uv', 'uv1', 'index'] as const;
+const geometryAttributeNames = ['position', 'normal', 'tangent', 'uv', 'uv1', 'color', 'index'] as const;
 function geometryState(geometry: THREE.BufferGeometry, deformation: boolean) {
   const state: unknown[] = [];
   for (let i = 0; i < geometryAttributeNames.length; i++) {
@@ -884,25 +989,42 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             ? group.count
             : (child.geometry.getIndex()?.count ??
               child.geometry.getAttribute('position').count);
-          const geometryKey = `${group.start}:${count}`;
+          const sourceMaterial = threeMaterials[group.materialIndex ?? 0];
+          // Vertex colors and BackSide orientation are baked into geometry, so
+          // groups with different switches cannot share the same cached variant.
+          const vertexColors = sourceMaterial.vertexColors === true;
+          const backSide = sourceMaterial.side === 1;
+          const geometryKey = `${group.start}:${count}:${vertexColors}:${backSide}`;
           let geometry = geometryEntry.groups.get(geometryKey);
           const newGeometry = !geometry;
           if (!geometry) {
-            const converted = convertGeometry(child.geometry, { start: group.start, count });
+            const converted = convertGeometry(child.geometry, { start: group.start, count }, vertexColors, backSide);
             if (!converted) return;
             geometry = converted;
             geometryEntry.groups.set(geometryKey, geometry);
           }
-          if (deformation && (deformed || newGeometry)) {
+          // A retained color/side variant may predate the current pose.
+          if (deformation && (deformed || newGeometry || store.meshes.get(child)?.get(groupIndex)?.geometry !== geometry)) {
             geometry.dynamic = true;
             geometry.position.array.set(deformation.position);
-            if (deformation.normal) geometry.normal.array.set(deformation.normal);
-            if (deformation.tangent && geometry.tangent) geometry.tangent.array.set(deformation.tangent);
+            if (deformation.normal) {
+              geometry.normal.array.set(deformation.normal);
+              if (backSide) negateNormals(geometry);
+            } else {
+              // Retain resident attribute storage so a pose change can refit its BVH.
+              const normal = geometry.normal;
+              generateVertexNormals(geometry);
+              normal.array.set(geometry.normal.array);
+              geometry.normal = normal;
+            }
+            if (deformation.tangent && geometry.tangent) {
+              geometry.tangent.array.set(deformation.tangent);
+              if (backSide) reverseTangentHandedness(geometry);
+            }
             if (!child.geometry.getAttribute('tangent')) updateDynamicTangents(geometry);
             updateBoundingBox(geometry);
             if (!newGeometry) markDeformedGeometry(geometry);
           }
-          const sourceMaterial = threeMaterials[group.materialIndex ?? 0];
           let material = resolveMaterial(sourceMaterial)!;
           const baseMaterial = material;
           const autoUvProjection = !geometry.uv && baseMaterial.uvProjection === 'none' &&
@@ -1041,11 +1163,14 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   });
 
   const threeEnvironment = scene.environment as THREE.DataTexture | null;
-  const environmentMap = convertDataTexture(threeEnvironment, textureCache);
+  const environmentMap = convertDataTexture(threeEnvironment, store.equirectTextures);
   const environmentLight = threeEnvironment && environmentMap
-    ? retainLight(store, threeEnvironment, new EnvironmentLight({map: environmentMap})) as EnvironmentLight
+    ? retainLight(store, threeEnvironment, new EnvironmentLight({map: environmentMap, intensity: scene.environmentIntensity})) as EnvironmentLight
     : undefined;
-  if (environmentLight) lights.push(environmentLight);
+  if (environmentLight) {
+    environmentLight.transform = scene.matrix.clone().makeRotationFromEuler(scene.environmentRotation).elements.slice();
+    lights.push(environmentLight);
+  }
 
   const grounded = scene.userData.mutracerGroundedSkybox as
     | {
@@ -1054,9 +1179,11 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
         radius: number;
         groundHeight?: number;
         center?: [number, number];
+        rotation?: number;
+        intensity?: number;
       }
     | undefined;
-  const groundedTexture = grounded && convertDataTexture(grounded.texture, textureCache);
+  const groundedTexture = grounded && convertDataTexture(grounded.texture, store.equirectTextures);
   const hideEnvironmentBackground =
     scene.userData.mutracerHiddenBackground === true;
   let background: GroundedSkyboxBackground | ColorRGBA | Texture | undefined =
@@ -1069,14 +1196,16 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             height: grounded.height,
             radius: grounded.radius,
             groundHeight: grounded.groundHeight,
-            center: grounded.center
+            center: grounded.center,
+            rotation: grounded.rotation,
+            intensity: grounded.intensity
           }
         : scene.background
           ? (scene.background as THREE.Color).isColor
             ? ([...(scene.background as THREE.Color).toArray(), 1] as ColorRGBA)
             : scene.background === scene.environment && environmentLight
               ? environmentLight.map
-              : convertDataTexture(scene.background as THREE.DataTexture, textureCache)
+              : convertDataTexture(scene.background as THREE.DataTexture, store.equirectTextures)
           : undefined;
 
   const oldBackground = store.background;

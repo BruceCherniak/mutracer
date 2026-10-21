@@ -50,6 +50,7 @@ struct SurfaceInteraction {
   
   vec2 uv;
   vec2 uv1;
+  vec3 vertexColor;
 
 #ifdef USE_TANGENT
   vec3 tangent;
@@ -274,8 +275,8 @@ float sampleIESProfile(int baseTexel, vec2 uv) {
 float evaluateSpotEmissionMultiplier(Light light, vec3 lightToSurface) {
   vec3 axis = normalize(light.u);
   float cosTheta = dot(axis, lightToSurface);
-  float cone = light.v.y > 1e-6
-    ? smoothstep(light.v.x, light.v.x + light.v.y, cosTheta)
+  float cone = light.v.y > light.v.x + 1e-6
+    ? smoothstep(light.v.x, light.v.y, cosTheta)
     : step(light.v.x, cosTheta);
   if (cone <= 0.0 || light.textureIndex < 0) return cone;
   vec3 xAxis = light.iesReference;

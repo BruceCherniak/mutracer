@@ -310,11 +310,12 @@ Public spatial values use `Vec2` (`[number, number] | Float32Array`), `Vec3` (`[
 | `InstancedMesh`, `InstancedMeshOptions` | `new InstancedMesh(geometry, material \| material[], {count, transforms?, colors?})`; local Float32 column-major matrices default to identity, multiplied by inherited transform; count selects the active prefix; `colors` defaults to undefined (white linear RGB); `markUpdated(): this` notifies both matrices and colors; `markTransformsUpdated(start = 0, count = this.count - start): this` and `markColorsUpdated(start = 0, count = this.count - start): this` notify each separately. Each advances version once, initially 0. See [updates and costs](./updates.md#instanced-meshes) |
 | `Geometry`, `GeometryAttribute` | Triangle data: required `position`; optional `normal` and `indices` are generated at construction; `vertexCount` / `triangleCount` getters; optional `uv`, `uv1`, `tangent`, `color`, `materialIndex` (raw per-vertex indices, itemSize 1; all three corners of each triangle must match; invalid indices fall back to material 0 with one warning); `dynamic` (default `false`) for [deforming geometry](./updates.md#dynamic-geometry) |
 | `OpenPBRMaterial` | `new OpenPBRMaterial(params?)`; see [materials](./materials.md) |
-| `Texture` | HTMLImageElement, HTMLCanvasElement, ImageBitmap, OffscreenCanvas or `{ data, width, height }`; `Uint8Array`/`Uint8ClampedArray` color is sRGB; `Float32Array`/`Int32Array` color is linear |
+| `Texture` | HTMLImageElement, HTMLCanvasElement, ImageBitmap, OffscreenCanvas or `{ data, width, height }`; `colorSpace`: `'srgb'` or `'linear'`; default undefined uses sRGB for images/bytes and linear for `Float32Array`/`Int32Array`; independent `wrapS` / `wrapT`: `'repeat'` (default), `'clamp-to-edge'`, `'mirrored-repeat'`, applied after UV scale/offset for material textures |
 | `Camera` | `new Camera({ projection: 'perspective', ... })` or orthographic; `position`, `lookAt()`, `copy(source)`, `clone()`; aspect defaults to automatic; depth of field with `fStop`, `focusDistance`, `sensorHeight`, `metersPerUnit` ([details](./getting-started.md#depth-of-field)) |
 | `RectLight`, `SphereLight`, `SpotLight`, `DirectionalLight`, `EnvironmentLight`, `AmbientLight` | Parameter-object constructors; analytic lights use `transform`, `position`, `lookAt()` and rigid axes. See [lights](./getting-started.md#lights) |
+| `EnvironmentLight` | `new EnvironmentLight({map, intensity?})`; `intensity` defaults to `1`, scales environment radiance, and accepts `0` to disable lighting. Ambient lights and explicit background textures retain their own brightness. `transform` rotates the environment from local to world space (identity by default); translation and positive axis scale are ignored. An explicit background texture keeps its own orientation |
 | `IESProfile`, `parseIESProfile(text)` | Photometric profiles for `SpotLight` |
-| `SceneBackground` | `[r, g, b, a]`, `Texture` or `GroundedSkyboxBackground` |
+| `SceneBackground` | `[r, g, b, a]`, `Texture` or `GroundedSkyboxBackground`; grounded backgrounds accept `rotation` around +Y in radians (default `0`) and `intensity` (default `1`). These affect only the background; the ground stays level and alpha is preserved |
 
 `OpenPBRMaterial` accepts canonical `specularRoughnessAnisotropy` (default `0`),
 `coatRoughnessAnisotropy` (`0`), `subsurfaceScatterAnisotropy` (`0`),
@@ -336,21 +337,22 @@ They follow the existing material/texture update mechanism.
 
 Raw texture sources contain exactly `width * height * 4` RGBA values, with
 rows ordered from top to bottom. `Uint8Array` and `Uint8ClampedArray` store
-8-bit values: color slots decode RGB from sRGB, while data slots (roughness,
-normal, coat weight, etc.) read normalized channels directly. `Float32Array`
-(and `Int32Array` with linear integer values) supplies linear color and data
-channels, including HDR colors above 1. These sources can share a material
+8-bit values; color slots decode RGB from sRGB by default. `Float32Array`
+(and `Int32Array` with integer HDR values) defaults to linear color, including
+values above 1. Set `texture.colorSpace` to `'srgb'` or `'linear'` to override
+color decoding. Data slots (roughness, normal, coat weight, etc.) always read
+channels directly, normalizing bytes to [0, 1]. These sources can share a material
 texture array with Canvas images and other image sources on both backends.
 
-Material arrays containing linear raw sources use half-float storage (finite
+Material arrays containing float/integer HDR sources use half-float storage (finite
 range up to 65504, rounded to half-float precision) and twice the bytes per
 pixel of an 8-bit array. Raw sources retain straight alpha and their original
 RGB even at zero alpha; Canvas composition can discard transparent RGB and
 round partially transparent colors. When the atlas budget requires resizing,
 raw sources use nearest-neighbor downsampling; image sources use Canvas
 resampling. Equal dimensions and opaque pixels allow exact byte/image
-comparisons. Float colors interpolate in linear space, while 8-bit color
-samples interpolate before sRGB decoding; gradients can therefore differ even
+comparisons. Linear color samples interpolate in linear space, while sRGB color
+samples interpolate before decoding; gradients can therefore differ even
 when their endpoint colors agree. Half-float and 8-bit filtering also have
 different precision.
 

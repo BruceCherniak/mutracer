@@ -1,4 +1,5 @@
 import ts from 'typescript';
+import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
 
 // The store reads the URL hash on import.
@@ -69,13 +70,15 @@ describe('viewer code snippet', () => {
     expect(studio).toContain('new THREE.RectAreaLight');
     expect(studio).toContain('[4, 1, 2, 1, 2, 3, 0, 0, 0, 1], // Key');
     expect(studio).not.toContain('Placeholders');
-    expect(studio).toContain('scene.background = ambient;');
+    expect(studio).toContain('scene.environmentIntensity = 0.1;');
+    expect(studio).not.toContain('scene.background = ambient;');
     expect(studio).not.toContain('HDRLoader');
 
     const grounded = generateCode(snapshot({ background: 'grounded', envIntensity: 2, envRotation: -90 }));
-    expect(grounded).toContain('mutracerGroundedSkybox = { texture: environment, height: 1.6, radius: 32 }');
-    expect(grounded).toContain('(270 / 360)');
-    expect(grounded).toContain('setDataType(THREE.FloatType)');
+    expect(grounded).toContain('mutracerGroundedSkybox = { texture: environment, height: 1.6, radius: 32, intensity: scene.environmentIntensity, rotation: scene.environmentRotation.y }');
+    expect(grounded).toContain('scene.environmentRotation.y = THREE.MathUtils.degToRad(270);');
+    expect(grounded).toContain('scene.environmentIntensity = 2;');
+    expect(grounded).not.toContain('setDataType');
 
     const lens = generateCode(snapshot({ fStop: 2.8, previewEnabled: false }, { animation: { clip: 1, speed: 2, loop: false } }));
     expect(syntaxErrors(lens)).toEqual([]);
@@ -108,4 +111,28 @@ describe('viewer code snippet', () => {
     expect(markdown).toContain('```js\n' + code.trimEnd() + '\n```');
     expect(formatForAgent(code, { modelName: null, credit: null, viewerUrl: null, changedSettings: {} })).not.toContain('```json');
   });
+});
+
+async function generatedScene(settings:Partial<Settings>) {
+  const source=new THREE.DataTexture(new Float32Array([2,1,.5,1]),1,1,THREE.RGBAFormat,THREE.FloatType);
+  class Loader {async loadAsync() {return source;}}
+  const code=generateCode(snapshot(settings));
+  const body=code.slice(code.indexOf('const scene ='),code.indexOf('const gltf ='));
+  const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
+  const scene:THREE.Scene=await new AsyncFunction('THREE','HDRLoader',`${body}\nreturn scene;`)(THREE,Loader);
+  return {scene,source};
+}
+
+it('generates lighting parameters and leaves HDR pixels and environment backgrounds intact',async () => {
+  const {scene,source}=await generatedScene({lighting:'environment',background:'environment',envIntensity:2,envRotation:-90});
+  expect(scene.environment).toBe(source); expect(scene.environmentIntensity).toBe(2);
+  expect(scene.environmentRotation.y).toBeCloseTo(Math.PI*1.5); expect(scene.background).toBeNull();
+  expect(source.image.data).toEqual(new Float32Array([2,1,.5,1]));
+});
+
+it('generates matching Grounded parameters and resets studio orientation',async () => {
+  const {scene,source}=await generatedScene({lighting:'environment',background:'grounded',envIntensity:.5,envRotation:90});
+  expect(scene.userData.mutracerGroundedSkybox).toMatchObject({texture:source,intensity:.5,rotation:Math.PI/2,height:1.6,radius:32});
+  const studio=await generatedScene({lighting:'studio',background:'environment',studioAmbient:.2,envIntensity:3,envRotation:90});
+  expect(studio.scene.environmentIntensity).toBe(.2); expect(studio.scene.environmentRotation.y).toBe(0);
 });

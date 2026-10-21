@@ -295,7 +295,9 @@ pub mod ray_uniform {
     pub const SEQUENCE_SEED: usize = 156;
     pub const Z_SOBOL_LOG_SPP: usize = 160;
     pub const SAMPLE_SEQUENCE_OFFSET: usize = 164;
-    pub const BYTES: usize = 176;
+    pub const ENVIRONMENT_ROTATION: usize = 176;
+    pub const BACKGROUND_MAP_TRANSFORM: usize = 240;
+    pub const BYTES: usize = 256;
 }
 pub mod uniform_size {
     pub const CAMERA_BYTES: usize = 144;

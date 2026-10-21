@@ -1,4 +1,5 @@
 import type TextureState from '../scene/TextureState.js';
+import { textureWrapIndex } from '../scene/TextureState.js';
 
 export const DEFAULT_MAX_TEXTURE_ARRAY_BYTES = 384 * 1024 * 1024;
 
@@ -126,11 +127,12 @@ function packTextureAtlas(
 }
 
 
-export function planTextureAtlas(textures: TextureState[], mapColorLinear: number[], options: MaterialTableOptions = {}) {
-  const floatStorage = mapColorLinear.some(value => !!value), bytesPerPixel = floatStorage ? 8 : 4;
+export function planTextureAtlas(textures: TextureState[], mapColorLinear: number[], options: MaterialTableOptions = {},
+  floatStorage = mapColorLinear.some(value => !!value)) {
+  const bytesPerPixel = floatStorage ? 8 : 4;
   if (!textures.length) return { pages: [] as AtlasPage[], placements: [] as AtlasPlacement[],
     width: 1, height: 1, floatStorage, bytesPerPixel, mapInfo: [] as number[],
-    mapTransform: [] as number[], mapUvChannel: [] as number[], mapColorLinear,
+    mapTransform: [] as number[], mapWrap: [] as number[], mapUvChannel: [] as number[], mapColorLinear,
     stats: {estimatedBytes: 0, height: 1, layers: 0, packTimeMs: 0, scale: 1,
       sourcePixels: 0, textureCount: 0, width: 1} };
   const maxTextureArrayLayers = options.maxTextureArrayLayers ?? Infinity;
@@ -220,6 +222,7 @@ export function planTextureAtlas(textures: TextureState[], mapColorLinear: numbe
   return { pages: packed.pages, placements: packed.placements, width: atlasWidth, height: atlasHeight,
     floatStorage, bytesPerPixel, mapInfo,
     mapTransform: textures.flatMap(texture => [texture.uvScale[0], texture.uvScale[1], texture.uvOffset[0], texture.uvOffset[1]]),
+    mapWrap: textures.flatMap(texture => [textureWrapIndex(texture.wrapS), textureWrapIndex(texture.wrapT)]),
     mapUvChannel: textures.map(texture => texture.uvChannel), mapColorLinear,
     stats: { estimatedBytes: atlasWidth * atlasHeight * packed.pages.length * bytesPerPixel,
       height: atlasHeight, layers: packed.pages.length, packTimeMs: 0, scale, sourcePixels,

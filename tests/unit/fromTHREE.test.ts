@@ -363,6 +363,7 @@ describe('Three.js scene conversion', () => {
     const material = new THREE.MeshStandardMaterial({
       displacementMap,
       displacementScale: 0.25,
+      displacementBias: -.125,
     });
     material.userData.mutracerUvProjection = 'spherical';
     material.userData.mutracerUvProjectionScale = [1.5, 2.5];
@@ -376,14 +377,49 @@ describe('Three.js scene conversion', () => {
 
     const converted = fromTHREEScene(scene).meshes[0].materials[0];
 
-    expect(converted.displacementMap?.image).toBe(displacementMap.image);
+    expect(converted.displacementMap?.image).toMatchObject({width: 1, height: 1,
+      data: new Uint8Array([128, 0, 0, 255])});
     expect(converted).toMatchObject({
       displacementScale: 0.25,
+      displacementBias: -.125,
       uvProjection: 'spherical',
       uvProjectionScale: [1.5, 2.5],
       displacementStepSize: 0.004,
       displacementUvProjection: 'cylindrical',
       displacementUvProjectionScale: 2.5
+    });
+  });
+
+  it('uses native displacement defaults before a map is assigned and preserves authored Three.js heights', () => {
+    const source = new THREE.MeshStandardMaterial();
+    const scene = new THREE.Scene();
+    scene.add(new THREE.Mesh(new THREE.BoxGeometry(), source));
+    const defaults = new OpenPBRMaterial();
+    let converted = fromTHREEScene(scene).meshes[0].materials[0];
+    expect(source.displacementScale).toBe(1);
+    expect(converted.displacementScale).toBe(defaults.displacementScale);
+    expect(converted.displacementStepSize).toBe(0);
+
+    source.displacementScale = .025;
+    expect(fromTHREEScene(scene).meshes[0].materials[0].displacementScale).toBe(.025);
+    source.displacementScale = 1;
+    source.displacementMap = new THREE.DataTexture(new Uint8Array(16), 2, 2);
+    converted = fromTHREEScene(scene).meshes[0].materials[0];
+    expect(converted.displacementScale).toBe(1);
+    source.displacementScale = 0;
+    expect(fromTHREEScene(scene).meshes[0].materials[0].displacementScale).toBe(0);
+  });
+
+  it('preserves explicit small marching steps and supports automatic step metadata', () => {
+    const source = new THREE.MeshStandardMaterial();
+    const scene = new THREE.Scene(); scene.add(new THREE.Mesh(new THREE.BoxGeometry(), source));
+    source.userData.mutracerDisplacementStepSize = 1e-9;
+    expect(fromTHREEScene(scene).meshes[0].materials[0].displacementStepSize).toBe(1e-9);
+    source.userData.mutracerDisplacementStepSize = 0;
+    expect(fromTHREEScene(scene).meshes[0].materials[0].displacementStepSize).toBe(0);
+    source.userData.mutracerOpenPBR = { displacementScale: .003, displacementBias: -.001, displacementStepSize: .00002 };
+    expect(fromTHREEScene(scene).meshes[0].materials[0]).toMatchObject({
+      displacementScale: .003, displacementBias: -.001, displacementStepSize: .00002
     });
   });
 
@@ -499,6 +535,35 @@ describe('Three.js scene conversion', () => {
     scene.add(new THREE.Mesh(new THREE.SphereGeometry(), material));
 
     expect(fromTHREEScene(scene).meshes[0].materials[0].coatDarkening).toBe(coatDarkening);
+  });
+
+  it('keeps glTF specular off fully metallic materials only', () => {
+    const convert = (params: THREE.MeshPhysicalMaterialParameters, metalnessMap = false) => {
+      const material = new THREE.MeshPhysicalMaterial({
+        specularIntensity: 0,
+        specularColor: new THREE.Color(0.2, 0.4, 0.6),
+        specularIntensityMap: new THREE.Texture(),
+        specularColorMap: new THREE.Texture(),
+        ...params
+      });
+      if (metalnessMap) material.metalnessMap = new THREE.Texture();
+      const scene = new THREE.Scene();
+      scene.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
+      return fromTHREEScene(scene).meshes[0].materials[0];
+    };
+    // KHR_materials_specular does not affect the glTF metal BRDF.
+    const metal = convert({metalness: 1});
+    expect(metal.specularWeight).toBe(1);
+    expect(metal.specularColor).toEqual(new OpenPBRMaterial().specularColor);
+    expect(metal.specularWeightMap).toBeUndefined();
+    expect(metal.specularColorMap).toBeUndefined();
+    // No single OpenPBR value matches a dielectric/metal blend, so these keep the source.
+    for (const material of [convert({metalness: 0.5}), convert({metalness: 1}, true)]) {
+      expect(material.specularWeight).toBe(0);
+      expect(material.specularColor[0]).toBeCloseTo(0.2);
+      expect(material.specularWeightMap).toBeDefined();
+      expect(material.specularColorMap).toBeDefined();
+    }
   });
 
   it('converts canonical viewer OpenPBR metadata', () => {
@@ -827,6 +892,65 @@ describe('Three.js scene conversion', () => {
     expect(Array.from(image.data.slice(0, 4))).toEqual([1, 0.5, 0.25, 1]);
     expect(result.background).toBe(environmentLight.map);
   });
+
+  it('reorders Three.js equirect rows so the sky comes first', () => {
+    const sky = [0.5, 0.5, 0.5, 1], ground = [0, 0, 0, 1];
+    const convertFirstRow = (rows: number[][], flipY: boolean) => {
+      const scene = new THREE.Scene();
+      const source = new Float32Array(rows.flat());
+      const environment = new THREE.DataTexture(source, 1, 2, THREE.RGBAFormat, THREE.FloatType);
+      environment.flipY = flipY;
+      scene.environment = environment;
+      const light = fromTHREEScene(scene).lights.find((light) => light.type === 'EnvironmentLight');
+      if (!light || light.type !== 'EnvironmentLight') throw new Error('missing environment');
+      expect(Array.from(source)).toEqual(rows.flat());
+      return Array.from((light.map.image as { data: Float32Array }).data.slice(0, 4));
+    };
+    // flipY = false: Three.js samples row 0 at v = 0, the nadir.
+    expect(convertFirstRow([ground, sky], false)).toEqual(sky);
+    // flipY = true (HDRLoader): row 0 is already the top.
+    expect(convertFirstRow([sky, ground], true)).toEqual(sky);
+  });
+
+  it.each(['environment', 'background', 'grounded'] as const)(
+    'keeps a shared material texture independent of its %s conversion',
+    (target) => {
+      for (const flipY of [false, true]) {
+        const scene = new THREE.Scene();
+        const rows = [
+          [0, 0, 0, 1, 0.125, 0, 0, 1],
+          [0.5, 0.25, 0.125, 1, 1, 0.5, 0.25, 1]
+        ];
+        const pixels = new Float32Array(rows.flat());
+        const texture = new THREE.DataTexture(pixels, 2, 2, THREE.RGBAFormat, THREE.FloatType);
+        texture.flipY = flipY;
+        texture.mapping = THREE.EquirectangularReflectionMapping;
+        scene.add(new THREE.Mesh(new THREE.PlaneGeometry(), new THREE.MeshBasicMaterial({map: texture})));
+        if (target === 'environment') scene.environment = scene.background = texture;
+        else if (target === 'background') scene.background = texture;
+        else scene.userData.mutracerGroundedSkybox = {texture, height: 1.7, radius: 40};
+
+        const result = fromTHREEScene(scene);
+        const background = result.background;
+        if (!background || Array.isArray(background)) throw new Error('missing textured background');
+        const equirect = 'map' in background ? background.map : background;
+        const materialMap = result.meshes[0].materials[0].map!;
+        expect(equirect.flipY).toBe(false);
+        expect(equirect.image).toEqual({
+          data: new Float32Array((flipY ? rows : [rows[1], rows[0]]).flat()), width: 2, height: 2
+        });
+        expect(materialMap.image).toBe(texture.image);
+        expect(materialMap.flipY).toBe(flipY);
+        expect(equirect).not.toBe(materialMap);
+        expect(Array.from(pixels)).toEqual(rows.flat());
+        expect(texture.flipY).toBe(flipY);
+        if (target === 'environment') {
+          const light = result.lights.find(light => light.type === 'EnvironmentLight');
+          expect(light?.map).toBe(equirect);
+        }
+      }
+    }
+  );
 
   it('creates fresh one-shot environment lights and reads the current version', () => {
     const scene = new THREE.Scene();

@@ -50,7 +50,7 @@ export function packLightsData(
       packVec3(off + 2, getRectLightUOrV(light, 0));
       data[(off + 2) * 4 + 3] = light.spread;
       packVec3(off + 3, getRectLightUOrV(light, 1));
-      data[(off + 3) * 4 + 3] = texturesIndices[i];
+      data[(off + 3) * 4 + 3] = texturesIndices[i] ?? -1;
       packVec3(off + 4, [
         light.spread,
         getRectLightArea(light),
@@ -66,7 +66,7 @@ export function packLightsData(
       packVec3(off + 2, getLightDirection(light));
       packVec3(off + 3, [
         Math.cos((light.outerAngle * Math.PI) / 180),
-        Math.min(1, Math.max(0, 1 - light.innerAngle / light.outerAngle)),
+        Math.cos((Math.min(light.innerAngle, light.outerAngle) * Math.PI) / 180),
         0
       ]);
       data[(off + 3) * 4 + 3] = iesProfileTexelOffset(i) ?? -1;
@@ -129,12 +129,9 @@ export function getSpotLightRadiance(light: SpotLight) {
 }
 
 export function getSpotLightShapingFluxFactor(light: SpotLight) {
-    const cosConeAngle = Math.cos((light.outerAngle * Math.PI) / 180);
-    const softness = Math.min(
-      1,
-      Math.max(0, 1 - light.innerAngle / light.outerAngle)
-    );
-    return (1 - cosConeAngle) * (1 - 0.5 * softness) * 0.5;
+    const cosOuter = Math.cos((light.outerAngle * Math.PI) / 180);
+    const cosInner = Math.cos((Math.min(light.innerAngle, light.outerAngle) * Math.PI) / 180);
+    return 0.5 * (1 - 0.5 * (cosInner + cosOuter));
 }
 
 const warnedLights = new WeakSet<SceneLight>();

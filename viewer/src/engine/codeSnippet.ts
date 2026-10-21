@@ -137,7 +137,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
     );
     if (s.studioAmbient > 0) {
       // THREE.Color converts the sRGB hex to linear RGB.
-      const tint = new THREE.Color(s.studioAmbientColor).multiplyScalar(s.studioAmbient);
+      const tint = new THREE.Color(s.studioAmbientColor);
       env = 'ambient';
       out(
         '',
@@ -150,40 +150,35 @@ export function generateCode(snapshot: CodeSnapshot): string {
         '}',
         'const ambient = new THREE.DataTexture(pixels, 64, 32, THREE.RGBAFormat, THREE.FloatType);',
         'ambient.mapping = THREE.EquirectangularReflectionMapping;',
+        '// Rows start at the sky, as in an .hdr file.',
+        'ambient.flipY = true;',
         'ambient.needsUpdate = true;',
         'scene.environment = ambient;'
       );
     }
   } else {
     env = 'environment';
-    const rotation = ((s.envRotation % 360) + 360) % 360;
-    const bake = s.envIntensity !== 1 || rotation !== 0;
     out(
       ...(snapshot.environmentUrl ? [] : ['// Replace with your own equirectangular .hdr.']),
-      `const environment = await new HDRLoader()${bake ? '.setDataType(THREE.FloatType)' : ''}.loadAsync('${snapshot.environmentUrl ?? './environment.hdr'}');`,
+      `const environment = await new HDRLoader().loadAsync('${snapshot.environmentUrl ?? './environment.hdr'}');`,
       'environment.mapping = THREE.EquirectangularReflectionMapping;'
     );
-    if (bake) {
-      out(
-        '// MuTracer reads environment pixels as they are: bake intensity and rotation in.',
-        'const { data, width, height } = environment.image;',
-        `const source = data.slice(), shift = Math.round((${num(rotation)} / 360) * width) % width;`,
-        'for (let i = 0; i < width * height; i++) {',
-        '  const x = i % width, from = (i - x + ((x + shift) % width)) * 4;',
-        `  for (let c = 0; c < 3; c++) data[i * 4 + c] = source[from + c] * ${num(s.envIntensity)};`,
-        '}'
-      );
-    }
     out('scene.environment = environment;');
+  }
+  const intensity = studio ? s.studioAmbient : s.envIntensity;
+  const rotation = studio ? 0 : ((s.envRotation % 360) + 360) % 360;
+  if (env) {
+    if (intensity !== 1) out(`scene.environmentIntensity = ${num(intensity)};`);
+    if (rotation !== 0) out(`scene.environmentRotation.y = THREE.MathUtils.degToRad(${num(rotation)});`);
   }
   if (s.background === 'transparent') {
     out('scene.userData.mutracerHiddenBackground = true;');
   } else if (s.background === 'color') {
     out(`scene.background = new THREE.Color('${s.backgroundColor}');`);
   } else if (s.background === 'grounded' && !studio) {
-    out(`scene.userData.mutracerGroundedSkybox = { texture: environment, height: ${num(snapshot.grounded.height)}, radius: ${num(snapshot.grounded.radius)} };`);
-  } else if (env) {
-    out(`scene.background = ${env};`);
+    out(`scene.userData.mutracerGroundedSkybox = { texture: environment, height: ${num(snapshot.grounded.height)}, radius: ${num(snapshot.grounded.radius)}, intensity: scene.environmentIntensity, rotation: scene.environmentRotation.y };`);
+  } else if (studio && !env) {
+    out('scene.background = new THREE.Color(0, 0, 0);');
   }
 
   // Model, standing on the ground at the origin.

@@ -32,7 +32,7 @@ import {
   type FlattendBVH
 } from './bvhAccel.js';
 import {
-  generateBackgroundMapFromSceneBackground
+  generateBackgroundMapFromSceneBackground, environmentRotation, backgroundMapTransform
 } from './envMapCreation.js';
 import {
   envMapDistribution,
@@ -194,6 +194,7 @@ class WebGLRayTracePass {
   private _hasBackground = false;
   private _groundedBackgroundParams = new Float32Array([0, 0, 0, 0]);
   private _groundedBackgroundCenter = new Float32Array([0, 0]);
+  private _backgroundMapTransform = backgroundMapTransform();
 
   private _bounces = 2;
   private _bevelSamples = DEFAULT_BEVEL_SAMPLES;
@@ -378,6 +379,7 @@ class WebGLRayTracePass {
   }
 
   setBackground(background?: SceneBackground) {
+    this._backgroundMapTransform.set(backgroundMapTransform(background));
     const backgroundImage =
       background && generateBackgroundMapFromSceneBackground(background)!;
 
@@ -547,7 +549,9 @@ class WebGLRayTracePass {
     this._pendingGeometryUpdates.clear();
     this._needsUpdateMeshData = false;
 
-    const res = updateMeshInstances(this._meshes);
+    // GLSL intersects the original triangles, so its BVH must bound those
+    // triangles rather than WebGPU's displaced height prisms.
+    const res = updateMeshInstances(this._meshes, { displacement: false });
     this._preparedMeshData = res;
     this._membershipCache.capture(res);
     this._pendingMembershipData = undefined;
@@ -809,6 +813,9 @@ class WebGLRayTracePass {
     const numAnalyticLights = analyticLights.length;
 
     const envImage = this._sceneEnvironment.update(lights);
+    const rotation = environmentRotation(lights);
+    const rotation3 = [rotation[0], rotation[1], rotation[2], rotation[4], rotation[5], rotation[6], rotation[8], rotation[9], rotation[10]];
+    this._tracePasses.forEach(pass => pass.setUniform('environmentRotation', rotation3));
 
     const envWeight = estimateEnvironmentPower(envImage);
     const analyticWeights = analyticLights.map(estimateAnalyticLightPower);
@@ -1011,6 +1018,7 @@ class WebGLRayTracePass {
       pass.setUniform('iesProfileColumns', this._iesProfileColumns);
       pass.setUniform('groundedBackgroundParams', this._groundedBackgroundParams);
       pass.setUniform('groundedBackgroundCenter', this._groundedBackgroundCenter);
+      pass.setUniform('backgroundMapTransform', this._backgroundMapTransform);
 
       pass.setDefines({
         // Double bounce fix on intel mac

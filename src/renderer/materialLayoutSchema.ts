@@ -64,7 +64,7 @@ export const MATERIAL_LAYOUT: readonly { readonly name: string; readonly fields:
   ] },
   { name: 'DISPLACEMENT', fields: [
     field('displacementStepSize', 'displacementStepSize', 'f32'),
-    field('_padding', null, 'f32', true),
+    field('displacementBias', 'displacementBias', 'f32'),
     field('displacementUvProjection', 'displacementUvProjection', 'f32'),
     field('displacementUvProjectionScale', 'displacementUvProjectionScale', 'f32')
   ] },

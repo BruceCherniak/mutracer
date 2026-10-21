@@ -492,6 +492,7 @@ export default class Engine {
   dispose() {
     if (this._disposed) return;
     this._disposed = true; this._bvhPreparationRevision++;
+    this._lossController?.abort(new Error('Engine is disposed.')); this._lossController = undefined;
     this._contextRestore?.reject(new Error('Engine is disposed.')); this._contextRestore = undefined;
     if (this._webglListening) {
       this.display.canvas.removeEventListener('webglcontextlost', this._onContextLost);
@@ -571,6 +572,20 @@ export default class Engine {
     this._customPrepared.set(denoiser, {device, width, height});
   }
   /** @internal */ _enqueueDenoise<T>(work: () => Promise<T>): Promise<T> {
-    const task = this._denoiseTail.then(work); this._denoiseTail = task.catch(() => {}); return task;
+    const task = this._denoiseTail.then(async () => {
+      const device = this._gpuDevice, generation = this._deviceRevision;
+      try { return await work(); }
+      finally {
+        // Cancelling tiled OIDN stops future tiles, not the commands already
+        // submitted. Keep the shared scratch lease until those commands finish
+        // so rapid edits cannot pile up inference or resize its inputs in flight.
+        // A lost/disposed device must release the lease without waiting for a
+        // queue that may never complete.
+        if (device && device === this._gpuDevice && generation === this._deviceRevision && !this._disposed) {
+          await this._awaitDevice(device.queue.onSubmittedWorkDone()).catch(() => {});
+        }
+      }
+    });
+    this._denoiseTail = task.catch(() => {}); return task;
   }
 }

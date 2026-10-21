@@ -10,13 +10,21 @@ import { Environment, createSky, loadHDR, parseHDR } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
   createMaterialSpheres, isHDRFile, loadModelFromFiles, loadModelFromURL, loadModelFromSource,
-  type LoadedModel, type PathedFile
+  isModelFile, type LoadedModel, type PathedFile
 } from './loadModel';
-import type { MaterialValues, TextureKey } from './materialParams';
+import { MATERIAL_BASE, TEXTURE_KEYS, type MaterialValues, type TextureKey } from './materialParams';
+import type { MapPlan } from './materialx';
+import { isMaterialXFile } from './droppedFiles';
+
+/** MaterialX import is still experimental: only development builds offer it. */
+export const MATERIALX_IMPORT = import.meta.env.DEV;
+import { displacementHeightRange } from './displacementHeightRange';
 import { downloadPolyHavenMap, polyHavenMaps, type TextureResolution } from './polyHaven';
+import type { TextureSampling } from './modelCache';
 import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
 import { MaterialEditor, readPendingEdits, type PendingEdits } from './materialEditor';
 import { cameraSettings, readCameraState, writeCameraState } from './cameraState';
+import { URL_SETTINGS_FIELDS } from '../urlSettings';
 import { readModelCamera } from './modelCamera';
 import { pushHistory, recordGroup } from '../history';
 import { groundModel } from './modelGrounding';
@@ -256,6 +264,11 @@ export class ViewerEngine {
   }
 
   async loadFiles(files: PathedFile[]) {
+    if (MATERIALX_IMPORT && files.some((f) => isMaterialXFile(f.path)) && !files.some((f) => isModelFile(f.path))) {
+      const material = get().material;
+      if (!material) return showToast('Select a material to apply the MaterialX file to', 'error');
+      return this.importMaterialX(material.id, files);
+    }
     const hdr = files.find((f) => isHDRFile(f.path));
     const models = files.filter((f) => !isHDRFile(f.path));
     if (hdr) {
@@ -266,7 +279,8 @@ export class ViewerEngine {
       }
     }
     if (!models.some((f) => /\.(glb|gltf)$/i.test(f.path))) {
-      if (!hdr) showToast('Drop a .glb, a .gltf with its files, or an .hdr environment', 'error');
+      if (!hdr) showToast(MATERIALX_IMPORT ? 'Drop a .glb, a .gltf with its files, an .hdr environment, or a MaterialX .mtlx or .zip'
+        : 'Drop a .glb, a .gltf with its files, or an .hdr environment', 'error');
       return;
     }
     const main = models.find((f) => /\.(glb|gltf)$/i.test(f.path))!;
@@ -457,7 +471,7 @@ export class ViewerEngine {
       onMeshConverted: (mesh, source, group) => {
         if (source === this.ground) return;
         const material = toArray(source.material)[group.materialIndex ?? 0];
-        if (material) this.materials.onConverted(material, mesh.materials[0], source.uuid);
+        if (material) this.materials.onConverted(material, mesh.materials[0], source.uuid, !!mesh.geometry.uv);
       }
     });
   }
@@ -519,21 +533,25 @@ export class ViewerEngine {
   private applyBackground() {
     const { background, backgroundColor, groundedHeight, groundedRadius, lighting } = this.settings;
     const studio = lighting === 'studio';
-    const environment = studio ? this.studioAmbient.texture : this.environment.texture;
-    this.scene.environment = environment;
+    const environment = studio ? this.studioAmbient : this.environment;
+    const intensity = studio ? this.settings.studioAmbient : this.settings.envIntensity;
+    const rotation = studio ? 0 : this.settings.envRotation;
+    environment.apply(this.scene, intensity, rotation);
     this.studioRig.visible = studio;
     this.scene.userData.mutracerHiddenBackground = background === 'transparent';
     // Projects the environment onto a ground disc and dome around the model.
     // The studio ambient is a plain gradient, so it is shown as a backdrop.
     const grounded = autoGroundedSkybox(get().modelRadius, groundedHeight);
     this.scene.userData.mutracerGroundedSkybox = background === 'grounded' && !studio ? {
-      texture: environment,
+      texture: environment.texture,
+      intensity,
+      rotation: this.scene.environmentRotation.y,
       height: grounded.height,
       radius: groundedRadius ?? grounded.radius,
       groundHeight: 0
     } : undefined;
-    this.scene.background = background === 'environment' || background === 'grounded' ? environment
-      : background === 'color' ? new THREE.Color(backgroundColor) : null;
+    // An omitted background follows the environment's intensity and orientation.
+    this.scene.background = background === 'color' ? new THREE.Color(backgroundColor) : null;
   }
 
   /** Rebuilds the studio rect lights around the current model. */
@@ -576,15 +594,15 @@ export class ViewerEngine {
     this.controls.enabled = s.cameraIndex < 0;
 
     if ((changed('envId') || changed('envResolution')) && s.envId !== 'custom') void this.applyEnvironmentPreset(s.envId);
-    if (changed('envIntensity') || changed('envRotation')) this.environment.set(s.envIntensity, s.envRotation);
     if (changed('studioPreset') || changed('studioIntensity') || changed('studioRotation') || changed('studioSize')) this.applyStudioRig();
-    if (changed('studioAmbient') || changed('studioAmbientColor')) {
+    if (changed('studioAmbientColor')) {
       // THREE.Color converts the sRGB hex to linear RGB.
       const tint = new THREE.Color(s.studioAmbientColor);
-      this.studioAmbient.set(s.studioAmbient, 0, [tint.r, tint.g, tint.b]);
+      this.studioAmbient.setTint([tint.r, tint.g, tint.b]);
     }
     if (changed('lighting') || changed('background') || changed('backgroundColor') || changed('groundedHeight') ||
-      changed('groundedRadius')) this.applyBackground();
+      changed('groundedRadius') || changed('envIntensity') || changed('envRotation') ||
+      changed('studioAmbient') || changed('studioAmbientColor')) this.applyBackground();
     if (changed('cameraIndex')) this.needsResize = true;
     // A focus distance set elsewhere (the slider, fitting) ends a running pull.
     if (prev && changed('focusDistance') && !this.writingFocus) {
@@ -617,9 +635,7 @@ export class ViewerEngine {
         void this.updateDenoiser();
       }
     }
-    if (prev && (changed('lighting') || changed('studioPreset') || changed('studioIntensity') || changed('studioRotation') ||
-      changed('studioSize') || changed('studioAmbient') || changed('studioAmbientColor') || changed('envId') || changed('envResolution') || changed('envIntensity') || changed('envRotation') || changed('exposure') ||
-      changed('toneMapping') || changed('background'))) {
+    if (prev && URL_SETTINGS_FIELDS.some(changed)) {
       writeHash(s, get().model?.presetId ?? null);
     }
   }
@@ -982,7 +998,12 @@ export class ViewerEngine {
 
   private publishMaterial(materialId: string | null, meshName?: string) {
     const description = materialId ? this.materials.describe(materialId) : null;
-    set({ material: materialId && description ? { id: materialId, meshName: meshName ?? '', ...description } : null });
+    const objectId = get().selection.objectId;
+    const mesh = objectId ? this.modelGroup.getObjectByProperty('uuid', objectId) as THREE.Mesh | undefined : undefined;
+    set({ material: materialId && description ? {
+      id: materialId, meshName: meshName ?? '', ...description,
+      displacementRange: displacementHeightRange(mesh?.geometry)
+    } : null });
   }
 
   /**
@@ -991,6 +1012,10 @@ export class ViewerEngine {
    */
   setMaterialValues(materialId: string, values: MaterialValues, label = 'Edit material', mergeKey?: string) {
     this.materials.setValues(materialId, values, label, mergeKey);
+  }
+
+  setMaterialTextureSampling(materialId: string, slot: TextureKey, patch: Partial<TextureSampling>, label: string, mergeKey?: string) {
+    this.materials.setTextureSampling(materialId, slot, patch, label, mergeKey);
   }
 
   /** Replaces the texture in a slot with an image file, or removes it with `null`. */
@@ -1011,19 +1036,24 @@ export class ViewerEngine {
    */
   async applyPolyHavenTexture(
     materialId: string, id: string, name: string, resolution: TextureResolution,
-    onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal
+    onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal, displacement = false
   ) {
     try {
-      const { urls, metal } = await polyHavenMaps(id, resolution);
+      const { urls, metal } = await polyHavenMaps(id, resolution, displacement && this.engine.backend === 'webgpu');
       if (signal?.aborted) return false;
       const entries = Object.entries(urls) as [TextureKey, string][];
       const loaded = new Array<number>(entries.length).fill(0);
       const totals = new Array<number>(entries.length).fill(0);
       const report = () => onProgress?.(loaded.reduce((a, b) => a + b, 0), totals.reduce((a, b) => a + b, 0));
       const merge = { key: `${materialId}:polyhaven:${++this.polyHavenPicks}`, ms: Infinity };
+      // The maps carry the color, roughness and metalness; the other layers would hide them.
+      const values: MaterialValues = {
+        ...MATERIAL_BASE, baseColor: [1, 1, 1], baseMetalness: metal ? 1 : 0,
+        ...(urls.metallicRoughnessMap || urls.roughnessMap ? { specularRoughness: 1 } : {})
+      };
       // The first map to land also clears the slots of the previous set.
       let pending: Partial<Record<TextureKey, Blob | null>> | null = {
-        map: null, normalMap: null, metallicRoughnessMap: null, roughnessMap: null, metalnessMap: null
+        map: null, normalMap: null, metallicRoughnessMap: null, roughnessMap: null, metalnessMap: null, displacementMap: null
       };
       // Maps are applied in arrival order, one at a time.
       let applying = Promise.resolve();
@@ -1038,7 +1068,7 @@ export class ViewerEngine {
           const first = pending;
           pending = null;
           await this.materials.setTextures(materialId, { ...first, [slot]: blob },
-            first ? { baseColor: [1, 1, 1], specularRoughness: 1, baseMetalness: metal ? 1 : 0 } : {},
+            first ? values : {},
             `${name} textures`, merge);
         });
         await applying;
@@ -1046,6 +1076,39 @@ export class ViewerEngine {
       return !signal?.aborted;
     } catch (error) {
       if (!signal?.aborted) showToast(`Could not load ${name} from Poly Haven: ${(error as Error).message}`, 'error');
+      return false;
+    }
+  }
+
+  /**
+   * Imports a MaterialX document, with its textures or as a zip, into a
+   * material as one undo step. The import replaces the whole material: every
+   * value starts from the neutral base and every texture slot is set or cleared.
+   */
+  async importMaterialX(materialId: string, files: PathedFile[]) {
+    let name = files[0]?.file.name ?? 'MaterialX';
+    try {
+      // Loaded on demand, so production bundles leave the importer and fflate out.
+      const [{ parseMaterialX }, { loadMapImage, readMaterialXPackage }] = await Promise.all([import('./materialx'), import('./materialxFiles')]);
+      const pkg = await readMaterialXPackage(files);
+      const material = parseMaterialX(pkg.text);
+      name = material.name;
+      const warnings = [...material.warnings];
+      const maps: Partial<Record<TextureKey, Blob | null>> = Object.fromEntries(TEXTURE_KEYS.map((key) => [key, null]));
+      await Promise.all((Object.entries(material.maps) as [TextureKey, MapPlan][]).map(async ([slot, plan]) => {
+        try {
+          maps[slot] = await loadMapImage(plan, pkg);
+        } catch (error) {
+          warnings.push(`texture ${(error as Error).message}`);
+        }
+      }));
+      // MaterialX images have their origin at the bottom left.
+      await this.materials.setTextures(materialId, maps, { ...MATERIAL_BASE, ...material.values }, `${name} MaterialX`,
+        undefined, { uvScale: material.uvScale, flipY: true });
+      showToast(warnings.length ? `Imported ${name}. Not supported: ${warnings.join('; ')}` : `Imported ${name}`);
+      return true;
+    } catch (error) {
+      showToast(`Could not import ${name}: ${(error as Error).message}`, 'error');
       return false;
     }
   }

@@ -31,6 +31,10 @@ export interface GroundedSkyboxBackground {
   groundHeight?: number;
   /** Capture X/Z center in scene units. Default `[0, 0]`. */
   center?: [number, number];
+  /** Background rotation around +Y in radians, about the capture center. Default `0`; ground stays level. */
+  rotation?: number;
+  /** Nonnegative background RGB multiplier. Default `1`; lighting and alpha are unchanged. */
+  intensity?: number;
 }
 
 /**

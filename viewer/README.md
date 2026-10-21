@@ -5,6 +5,32 @@ its .bin and textures) or a Radiance .hdr, browse the scene tree, edit OpenPBR
 materials, lighting, camera and render settings, play glTF animations and
 export PNGs.
 
+In the material panel, upload or drop a height image into the Displacement
+texture slot, then adjust Scale (`displacementScale`) in the Displacement
+section, which is expanded by default. Bias shifts the surface along its normal:
+`offset = texture × Scale + Bias`. Both use mesh-local units; Bias defaults to
+`0`. Set Bias to `-Scale / 2` for centered displacement. Scale's slider covers
+0–10% of the selected mesh's longest local side, and Bias covers the same
+distance in both directions, with precision adjusted to mesh size. Double-click
+to enter a value outside those ranges. Selecting another mesh changes the range
+without changing the material's values. A map is required even when Scale is
+`0` and Bias is nonzero. Meshes without UVs automatically use triplanar
+coordinates when a height map is applied.
+Displacement requires WebGPU; its controls are disabled on WebGL 2.
+
+In the Poly Haven texture browser, enable Download displacement map before
+choosing a set to include its height map when available. This option is off by
+default and adds download and rendering time. Applying a set replaces the
+previous displacement map; leaving the option off clears it. Height maps and
+their settings support undo, redo and restoration when reloading the cached
+model, like other material edits.
+
+Under Material → Textures, expand a loaded texture's Wrap & repeat controls.
+Choose Repeat, Clamp to edge or Mirrored repeat independently for S/T, and set
+each axis's repeat count. Negative values flip an axis; zero samples a constant
+coordinate. Edits support undo/redo and are restored with the cached model.
+Uploaded images keep the UV transform and wrapping of the texture they replace.
+
 The Export dialog can download the current viewport PNG immediately, preserving
 its displayed appearance and pixel size without restarting the render. Render PNG
 instead renders a new image at Viewport, 1080p, 2K (2560 × 1440), 4K, or Square
@@ -28,9 +54,11 @@ npm run typecheck:viewer
 npm run test:viewer       # source aliases; no prior build:lib needed
 ```
 
-Add `?webgl` to force the WebGL 2 backend. The URL hash keeps the example
-model, lighting (environment or studio preset), exposure and tone mapping, so a
-view can be shared.
+Add `?webgl` to force the WebGL 2 backend. The URL keeps the example model,
+lighting, render and display settings so a view can be shared. URL parameters
+override saved preferences; for example, `?hdrOutputEnabled=true` opens with
+HDR output enabled. See [sharing viewer settings](../docs/viewer.md) for options
+and precedence.
 
 ## Deployment
 
@@ -45,7 +73,6 @@ src/
                            animation, export. No React.
   engine/loadModel.ts      GLTFLoader for URLs, files and dropped folders;
                            the procedural material-sphere scene
-  engine/environment.ts    Procedural sky, HDR loading, baked intensity/rotation
   engine/codeSnippet.ts    Standalone program generated from the current view
   engine/studio.ts         Studio lighting presets: rect-light rigs scaled to
                            the model, and their dim ambient fill
@@ -78,15 +105,13 @@ Notes:
   step. Camera settings, which follow the view, and switches to or from an
   uploaded .hdr are not recorded. Opening a model drops its material steps and
   keeps the settings steps.
-  Uploaded images are decoded like GLTFLoader (no premultiplication or color
-  space conversion) and keep the UV transform of the texture they replace.
 - Material edits of the cached model, including the original files of uploaded
   textures, are saved in a second OPFS archive keyed by the model and by each
   material's traversal order. Reloads reapply them as materials are converted;
   opening any model (including choosing the same example again) discards them
   and the undo history.
-- `EnvironmentLight` has no intensity or rotation, so both are baked into a copy
-  of the HDR pixels.
+- Environment intensity and rotation apply to the lighting and HDRI background,
+  including Grounded mode. Rotation keeps the ground level.
 - Downloaded HDR files are cached by URL (including resolution and query string)
   in the browser's origin private file system (OPFS), and reused across reloads.
   Invalid cached files are downloaded again; unavailable or full storage falls
@@ -123,18 +148,12 @@ in the active glTF scene's `extras.mutracerCamera`: `{position: [x,y,z], target:
 viewer centers X/Z and grounds Y. Fresh loads apply this view; a restored saved
 user view takes precedence. Invalid camera metadata falls back to automatic fit.
 
-Example models are loaded on demand. Material spheres are procedural; Toy Car
+Example models are loaded on demand. Downloads retry temporary network or server
+failures up to twice; samples hosted on jsDelivr use GitHub as the final fallback.
+Material spheres are procedural; Toy Car
 and Sheen Chair come from [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets)
-(CC0). All ten examples use the public selection in
-[mutracer-assets](https://github.com/pissang/mutracer-assets). Their metadata is
-copied from that repository's `presets.json` into `engine/publicModelPresets.ts`;
-Downloaded GLBs and all model previews stay in the assets repository or R2.
-The original samples share the review list; their procedural/Khronos model
-sources are preserved and only their previews/credits are hosted there. GitHub
-downloads are pinned to immutable asset tags, published with the resources before
-deployment.
-When publishing a new asset release, update this metadata and its pinned version
-together. R2 permits browser reads from the production site only.
+(CC0). Model previews and credits are available in
+[mutracer-assets](https://github.com/pissang/mutracer-assets).
 
 The sample site is a free, noncommercial technical demonstration. Each Sketchfab
 asset retains its own CC BY, CC BY-NC or CC BY-NC-SA 4.0 license, displayed with

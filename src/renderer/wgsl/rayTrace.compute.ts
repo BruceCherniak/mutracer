@@ -236,14 +236,17 @@ fn groundedBackgroundDirection(origin: vec3f, direction: vec3f) -> vec3f {
 fn sampleSceneBackground(ray: Ray) -> vec4f {
   var bg = vec4f(0.0);
   if (USE_BACKGROUND_MAP) {
-    let backgroundDirection = groundedBackgroundDirection(ray.o, ray.d);
-    bg = textureLinear(backgroundMap, cartesianToEquirect(backgroundDirection));
+    let d = groundedBackgroundDirection(ray.o, ray.d);
+    let t = rtUniform.backgroundMapTransform;
+    let backgroundDirection = vec3f(t.x * d.x - t.y * d.z, d.y, t.y * d.x + t.x * d.z);
+    let backgroundSample = textureLinear(backgroundMap, cartesianToEquirect(backgroundDirection));
+    bg = vec4f(backgroundSample.rgb * t.z, backgroundSample.a);
   }
   else if (USE_BACKGROUND) {
     bg = rtUniform.backgroundColor;
   }
   else if (USE_ENVMAP) {
-    bg = textureLinear(envMap, cartesianToEquirect(ray.d));
+    bg = textureLinear(envMap, environmentUv(ray.d));
   }
   return bg;
 }
@@ -277,13 +280,13 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
             (*si).wavelength
           );
           let backgroundMisWeight = select(bsdfMISWeight((*path).scatteringPdf,
-            envMapPdf(cartesianToEquirect((*path).ray.d)) * rtUniform.envLightPmf),
+            envMapPdf(environmentUv((*path).ray.d)) * rtUniform.envLightPmf),
             1.0, (*path).scatteringIsDelta);
           (*path).li += backgroundMisWeight * (*path).beta * bg.rgb * bg.a;
           (*path).alpha = max((*path).alpha, bg.a);
         }
         else {
-          let envUv = cartesianToEquirect((*path).ray.d);
+          let envUv = environmentUv((*path).ray.d);
           var emission = textureLinear(envMap, envUv).rgb;
           if (SPECTRAL) {
             emission = sampling_spectral_rgb_filter(emission, (*si).wavelength);
@@ -418,7 +421,7 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
   }
 
   intersectScene((*path).ray, si, *depth, true, (*path).isNextRefraction);
-  getMaterial(ma, (*si).materialIndex, (*si).uv, (*si).uv1, (*si).instanceIndex);
+  getMaterial(ma, (*si).materialIndex, (*si).uv, (*si).uv1, (*si).instanceIndex, (*si).vertexColor);
 
   if (SPECTRAL) {
     // Is glass
@@ -467,14 +470,14 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
           (*si).wavelength
         );
         let backgroundMisWeight = select(bsdfMISWeight((*path).scatteringPdf,
-            envMapPdf(cartesianToEquirect((*path).ray.d)) * rtUniform.envLightPmf),
+            envMapPdf(environmentUv((*path).ray.d)) * rtUniform.envLightPmf),
             1.0, (*path).scatteringIsDelta);
           (*path).li += backgroundMisWeight * (*path).beta * bg.rgb * bg.a;
         (*path).alpha = max((*path).alpha, bg.a);
         (*path).abort = true;
         return;
       }
-      let _uv = cartesianToEquirect((*path).ray.d);
+      let _uv = environmentUv((*path).ray.d);
       var emission = textureLinear(envMap, _uv).rgb;
       let misWeight = bsdfMISWeight(
         (*path).scatteringPdf,
@@ -652,7 +655,7 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
   backSi.albedoSampled = false;
   intersectScene(backRay, &backSi, 0, false, false);
   var backMa: OpenPbrResolvedMaterial;
-  getMaterial(&backMa, backSi.materialIndex, backSi.uv, backSi.uv1, backSi.instanceIndex);
+  getMaterial(&backMa, backSi.materialIndex, backSi.uv, backSi.uv1, backSi.instanceIndex, backSi.vertexColor);
   var backAux = *outAux;
   if (backSi.hit && backMa.materialType == STANDARD) {
     backAux.albedo = select(
@@ -711,9 +714,9 @@ fn integrator(uv: vec2f, ray: Ray, outAux: ptr<function, RayTraceAuxiliary>) -> 
 
   // TODO not put tMax in ray. So we don't need to use pointer of ray here.
   intersectScene(ray, &si, 0, false, false);
-  getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex);
+  getMaterial(&ma, si.materialIndex, si.uv, si.uv1, si.instanceIndex, si.vertexColor);
 
-  if (ma.materialType == SHADOW_CATCHER) {
+  if (si.hit && ma.materialType == SHADOW_CATCHER) {
     (*outAux).isShadowCatcher = true;
     // The composed denoising input includes this receiver's shadow. Supply
     // neutral reflectance and its shading normal, independent of visibility.
@@ -928,6 +931,15 @@ ${pathDiagnostic ? '  mtPathBegin(coord);\n' : ''}  var liAndAlpha = integrator(
     ));
   }
   else {
+    if (HAS_SHADOW_CATCHER && outAux.isBlank && USE_BACKGROUND && !USE_BACKGROUND_MAP && rtUniform.backgroundColor.a >= 0.99999) {
+      // A primary miss sees the same opaque display backdrop as a catcher
+      // hit, but must never receive its shadow. Keep that radiance and alpha
+      // out of the geometry layer before hit-count normalization/tone mapping.
+      // Red/blue still count only actual catcher hits; green counts all
+      // background alpha removed from the foreground during normalization.
+      outShadowCatcher[idx].background += liAndAlpha;
+      outShadowCatcher[idx].mask.g += liAndAlpha.a;
+    }
     outColor[idx] += liAndAlpha;
     outAlbedo[idx] += vec4f(outAux.albedo, select(1.0, 0.0, outAux.isBlank));
     accumulateNormalOrVariance(idx, liAndAlpha.rgb, outAux.normal);

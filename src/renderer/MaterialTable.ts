@@ -161,8 +161,11 @@ class MaterialTable {
       lights.map(light => light.type === 'RectLight' ? light.texture : undefined),
       texture => {
         const image = (texture as Texture).image;
-        return Number(isTextureDataSource(image) && !(image.data instanceof Uint8Array) && !(image.data instanceof Uint8ClampedArray));
-      }, options);
+        return Number(texture.colorSpace ? texture.colorSpace === 'linear' : isTextureDataSource(image) && !(image.data instanceof Uint8Array) && !(image.data instanceof Uint8ClampedArray));
+      }, options, texture => {
+        const image = (texture as Texture).image;
+        return isTextureDataSource(image) && !(image.data instanceof Uint8Array) && !(image.data instanceof Uint8ClampedArray);
+      });
     const {texture, stats} = makeTextureArray(data.textures as Texture[], data.atlas);
     this.texture = texture;
     this.textureAtlasStats = {...stats, packTimeMs: performance.now() - packStart};
@@ -208,6 +211,7 @@ class MaterialTable {
     pass.setUniform('map', this.texture || null);
     pass.setUniform('mapInfo', this.bufferData.mapInfo);
     pass.setUniform('mapTransform', this.bufferData.mapTransform);
+    pass.setUniform('mapWrap', this.bufferData.mapWrap);
     pass.setUniform('mapUvChannel', this.bufferData.mapUvChannel);
     pass.setUniform('mapColorLinear', this.bufferData.mapColorLinear);
     pass.setUniforms({

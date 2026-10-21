@@ -58,6 +58,7 @@ export function packMaterialBuffer(data: BufferData): Float32Array {
     displacementMapIndex: data.displacementMapIndex?.flat() ?? [],
     uvScale: flattenVectors(data.uvScale),
     displacementStepSize: data.displacementStepSize?.flat() ?? [],
+    displacementBias: data.displacementBias?.flat() ?? [],
     displacementUvProjection: data.displacementUvProjection?.flat() ?? [],
     displacementUvProjectionScale: data.displacementUvProjectionScale?.flat() ?? [],
     alpha: data.alpha?.flat() ?? [],

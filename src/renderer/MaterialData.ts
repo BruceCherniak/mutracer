@@ -17,7 +17,8 @@ export default class MaterialData {
   defines: Record<string, number> = {};
   atlas: TextureAtlasPlan;
   constructor(materials: MaterialState[], lightTextures: (TextureState | undefined)[],
-    colorLinear: (texture: TextureState) => number, options: MaterialTableOptions = {}) {
+    colorLinear: (texture: TextureState) => number, options: MaterialTableOptions = {},
+    floatStorage?: (texture: TextureState) => boolean) {
     const maps = mergeTexturesFromMaterials(materials, MATERIAL_TEXTURE_NAMES);
     this.displacementMaps = maps.indices.displacementMap.map(index => maps.textures[index]).filter(texture => !!texture);
     this.textures = maps.textures.slice();
@@ -44,8 +45,10 @@ export default class MaterialData {
     this.bufferData.specularColorMapIndex = maps.indices.specularColorMap;
     this.bufferData.anisotropyMapIndex = maps.indices.anisotropyMap;
     this.bufferData.coatNormalMapIndex = maps.indices.coatNormalMap;
-    this.atlas = planTextureAtlas(this.textures, this.textures.map(colorLinear), options);
+    this.atlas = planTextureAtlas(this.textures, this.textures.map(colorLinear), options,
+      floatStorage ? this.textures.some(floatStorage) : undefined);
     this.bufferData.mapInfo = this.atlas.mapInfo; this.bufferData.mapTransform = this.atlas.mapTransform;
+    this.bufferData.mapWrap = this.atlas.mapWrap;
     this.bufferData.mapUvChannel = this.atlas.mapUvChannel; this.bufferData.mapColorLinear = this.atlas.mapColorLinear;
     this.defines = {NUM_MAPS: this.textures.length};
     for (const slot of MATERIAL_TEXTURE_SLOTS) {

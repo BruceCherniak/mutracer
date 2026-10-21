@@ -26,6 +26,7 @@ export interface BufferData extends Record<MaterialTextureIndex, number[]> {
   type: (typeof ShadowCatcherMaterial | typeof UnlitMaterial | 0)[];
   mapInfo: number[];
   mapTransform: number[];
+  mapWrap: number[];
   mapUvChannel: number[];
   mapColorLinear: number[];
 
@@ -43,6 +44,7 @@ export interface BufferData extends Record<MaterialTextureIndex, number[]> {
 
   // For PDM displacement.
   displacementStepSize: number[];
+  displacementBias: number[];
 
   // Alpha
   alpha: number[];

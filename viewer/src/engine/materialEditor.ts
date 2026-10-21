@@ -5,7 +5,7 @@ import {
   TEXTURE_KEYS, readMaterial, sameValue, textureSlots, writeMaterial,
   type MaterialValues, type TextureKey
 } from './materialParams';
-import { readMaterialEdits, saveMaterialEdits, type MaterialEdit as StoredEdit } from './modelCache';
+import { readMaterialEdits, saveMaterialEdits, type MaterialEdit as StoredEdit, type TextureTransform, type TextureSampling } from './modelCache';
 import { discardHistory, pushHistory, type HistoryItem } from '../history';
 
 /** Values and textures to set; `null` empties a texture slot. */
@@ -20,6 +20,7 @@ interface Entry {
   index: number;
   converted: Set<OpenPBRMaterial>;
   meshes: Set<string>;
+  needsDisplacementProjection?: boolean;
   initial?: MaterialPatch;
 }
 
@@ -45,7 +46,8 @@ class MaterialEdit implements HistoryItem {
 interface PendingEdit {
   name: string;
   values: MaterialValues;
-  textures: Partial<Record<TextureKey, { image: ImageBitmap; file: Blob } | null>>;
+  sampling?: StoredEdit['sampling'];
+  textures: Partial<Record<TextureKey, { image: ImageBitmap; file: Blob; transform?: TextureTransform } | null>>;
 }
 
 export type PendingEdits = Map<number, PendingEdit>;
@@ -63,18 +65,18 @@ export async function readPendingEdits(modelId: string): Promise<PendingEdits | 
   const pending: PendingEdits = new Map();
   await Promise.all(edits.materials.map(async (edit) => {
     const textures: PendingEdit['textures'] = {};
-    await Promise.all(edit.textures.map(async ({ slot, file }) => {
+    await Promise.all(edit.textures.map(async ({ slot, file, transform }) => {
       if (!file) {
         textures[slot] = null;
         return;
       }
       try {
-        textures[slot] = { image: await decodeImage(file), file };
+        textures[slot] = { image: await decodeImage(file), file, transform };
       } catch {
         // An unreadable image drops only that slot.
       }
     }));
-    pending.set(edit.index, { name: edit.name, values: edit.values, textures });
+    pending.set(edit.index, { name: edit.name, values: edit.values, textures, sampling:edit.sampling });
   }));
   return pending;
 }
@@ -94,6 +96,7 @@ export class MaterialEditor {
   private pending: PendingEdits = new Map();
   /** Original files of uploaded textures, for persistence. */
   private uploads = new WeakMap<Texture, Blob>();
+  private transforms = new WeakMap<Texture, TextureTransform>();
   private thumbs = new WeakMap<Texture, string>();
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
   /** Set once the model is identified; edits are only saved for a known model. */
@@ -124,13 +127,14 @@ export class MaterialEditor {
     this.entries.clear();
   }
 
-  onConverted(source: THREE.Material, converted: OpenPBRMaterial | undefined, meshId: string) {
+  onConverted(source: THREE.Material, converted: OpenPBRMaterial | undefined, meshId: string, hasUVs = true) {
     let entry = this.entries.get(source.uuid);
     if (!entry) {
       entry = { name: source.name || 'Material', index: this.order.get(source.uuid)?.index ?? -1, converted: new Set(), meshes: new Set() };
       this.entries.set(source.uuid, entry);
     }
     entry.meshes.add(meshId);
+    if (!hasUVs) entry.needsDisplacementProjection = true;
     if (!converted || entry.converted.has(converted)) return;
     const first = entry.converted.values().next().value as OpenPBRMaterial | undefined;
     entry.converted.add(converted);
@@ -158,26 +162,51 @@ export class MaterialEditor {
     const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
     if (!entry || !material) return null;
     const maps: Partial<Record<TextureKey, string>> = {};
+    const sampling: Partial<Record<TextureKey, TextureSampling>> = {};
     const record = material as unknown as Record<string, Texture | undefined>;
     for (const key of TEXTURE_KEYS) {
       const texture = record[key];
-      if (texture) maps[key] = this.thumbnail(texture);
+      if (texture) { maps[key] = this.thumbnail(texture); sampling[key] = textureSampling(texture); }
     }
-    return { name: entry.name, users: entry.meshes.size, values: readMaterial(material), textures: [...textureSlots(material)], maps };
+    return { name: entry.name, users: entry.meshes.size, values: readMaterial(material), textures: [...textureSlots(material)], maps, sampling };
   }
 
   setValues(materialId: string, values: MaterialValues, label: string, mergeKey?: string) {
     this.commit(materialId, { values, textures: {} }, label, mergeKey);
   }
 
+  setTextureSampling(materialId: string, slot: TextureKey, patch: Partial<TextureSampling>, label: string, mergeKey?: string) {
+    const material = this.entries.get(materialId)?.converted.values().next().value as OpenPBRMaterial | undefined;
+    const texture = material?.[slot];
+    if (!texture) return;
+    const next = {...textureSampling(texture), ...patch};
+    if (!next.uvScale.every(Number.isFinite)) return;
+    if (sameSampling(texture, next)) return;
+    this.commit(materialId, {values:{}, textures:{[slot]:this.withSampling(texture, next)}}, label, mergeKey);
+  }
+
+  private withSampling(texture: Texture, sampling: TextureSampling) {
+    const copy = new Texture(texture.image);
+    copy.source = texture.source; copy.flipY = texture.flipY; copy.colorSpace = texture.colorSpace;
+    copy.uvOffset = [...texture.uvOffset]; copy.uvChannel = texture.uvChannel;
+    copy.uvScale = [...sampling.uvScale]; copy.wrapS = sampling.wrapS; copy.wrapT = sampling.wrapT;
+    const file = this.uploads.get(texture), transform = this.transforms.get(texture);
+    if (file) this.uploads.set(copy, file);
+    if (transform) this.transforms.set(copy, transform);
+    return copy;
+  }
+
   async setTexture(materialId: string, slot: TextureKey, file: Blob | null, label: string) {
     await this.setTextures(materialId, { [slot]: file }, {}, label);
   }
 
-  /** Replaces several texture slots and values as one undo step; `null` empties a slot. */
+  /**
+   * Replaces several texture slots and values as one undo step; `null` empties a slot.
+   * New textures take `transform`, or else the UV transform of the texture they replace.
+   */
   async setTextures(
     materialId: string, files: Partial<Record<TextureKey, Blob | null>>, values: MaterialValues, label: string,
-    merge?: { key: string; ms?: number }
+    merge?: { key: string; ms?: number }, transform?: TextureTransform
   ) {
     const entry = this.entries.get(materialId);
     const material = entry?.converted.values().next().value as OpenPBRMaterial | undefined;
@@ -193,10 +222,13 @@ export class MaterialEditor {
         textures[slot] = null;
         return;
       }
-      const texture = createTexture(image, material, slot);
-      this.uploads.set(texture, file);
-      textures[slot] = texture;
+      textures[slot] = this.upload(image, file, material, slot, transform);
     });
+    // Newly uploaded heights also work on meshes that had no textures or UVs when converted.
+    if (textures.displacementMap && entry.needsDisplacementProjection &&
+      (values.displacementUvProjection ?? material.displacementUvProjection) === 'none') {
+      values = { ...values, displacementUvProjection: 'triplanar' };
+    }
     this.commit(materialId, { values, textures }, label, merge?.key, merge?.ms);
   }
 
@@ -256,11 +288,25 @@ export class MaterialEditor {
         textures[slot] = null;
         continue;
       }
-      const texture = createTexture(upload.image, material, slot);
-      this.uploads.set(texture, upload.file);
-      textures[slot] = texture;
+      textures[slot] = this.upload(upload.image, upload.file, material, slot, upload.transform);
+    }
+    for (const [slot, sampling] of Object.entries(edit.sampling ?? {}) as [TextureKey, TextureSampling][]) {
+      const texture = textures[slot] === null ? undefined : textures[slot] ?? material[slot];
+      if (texture) textures[slot] = this.withSampling(texture, sampling);
     }
     return { values: edit.values, textures };
+  }
+
+  private upload(image: ImageBitmap, file: Blob, material: OpenPBRMaterial, slot: TextureKey, transform?: TextureTransform) {
+    const texture = createTexture(image, material, slot);
+    if (transform) {
+      texture.uvScale = [...transform.uvScale];
+      texture.uvOffset = [0, 0];
+      texture.flipY = transform.flipY;
+      this.transforms.set(texture, transform);
+    }
+    this.uploads.set(texture, file);
+    return texture;
   }
 
   /** Refreshes the published selection and schedules saving. */
@@ -294,15 +340,22 @@ export class MaterialEditor {
       const textures: StoredEdit['textures'] = [];
       for (const [slot, texture] of Object.entries(changes.textures) as [TextureKey, Texture | null][]) {
         const file = texture ? this.uploads.get(texture) : null;
-        if (file !== undefined) textures.push({ slot, file });
+        if (file !== undefined) textures.push({ slot, file, transform: texture ? this.transforms.get(texture) : undefined });
       }
-      materials.push({ index: entry.index, name: this.order.get(materialId)?.name ?? '', values: changes.values, textures });
+      const sampling: NonNullable<StoredEdit['sampling']> = {};
+      for (const slot of TEXTURE_KEYS) {
+        const texture = material[slot], original = entry.initial.textures[slot];
+        if (texture && (!original || !sameSampling(texture, original))) sampling[slot] = textureSampling(texture);
+      }
+      materials.push({ index: entry.index, name: this.order.get(materialId)?.name ?? '', values: changes.values, textures,
+        ...(Object.keys(sampling).length ? {sampling} : {}) });
     }
     // Keep stored edits of materials that have not been converted yet.
     for (const [index, edit] of this.pending) {
       materials.push({
-        index, name: edit.name, values: edit.values,
-        textures: Object.entries(edit.textures).map(([slot, upload]) => ({ slot: slot as TextureKey, file: upload?.file ?? null }))
+        index, name: edit.name, values: edit.values, sampling:edit.sampling,
+        textures: Object.entries(edit.textures).map(([slot, upload]) =>
+          ({ slot: slot as TextureKey, file: upload?.file ?? null, transform: upload?.transform }))
       });
     }
     return saveMaterialEdits({ modelId: this.modelId, materials });
@@ -373,6 +426,17 @@ function createTexture(image: ImageBitmap, material: OpenPBRMaterial, slot: Text
     texture.uvScale = [...reference.uvScale];
     texture.uvOffset = [...reference.uvOffset];
     texture.uvChannel = reference.uvChannel;
+    texture.wrapS = reference.wrapS;
+    texture.wrapT = reference.wrapT;
   }
   return texture;
+}
+
+function textureSampling(texture: Texture): TextureSampling {
+  return {uvScale:[...texture.uvScale], wrapS:texture.wrapS, wrapT:texture.wrapT};
+}
+
+function sameSampling(a: TextureSampling, b: TextureSampling) {
+  return a.uvScale[0] === b.uvScale[0] && a.uvScale[1] === b.uvScale[1]
+    && a.wrapS === b.wrapS && a.wrapT === b.wrapT;
 }

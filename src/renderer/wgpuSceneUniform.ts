@@ -10,7 +10,7 @@ const PIXELS_PER_LIGHT = 6;
 
 export function makeRayTraceUniform() {
   // Created from https://webgpufundamentals.org/webgpu/lessons/resources/wgsl-offset-computer.html
-  const RayTraceUniformValues = new ArrayBuffer(176);
+  const RayTraceUniformValues = new ArrayBuffer(256);
   const RayTraceUniformViews = {
     outputSize: new Float32Array(RayTraceUniformValues, 0, 2),
     sampleCount: new Float32Array(RayTraceUniformValues, 8, 1),
@@ -40,11 +40,15 @@ export function makeRayTraceUniform() {
     sceneFeatureFlags: new Uint32Array(RayTraceUniformValues, 152, 1),
     sequenceSeed: new Uint32Array(RayTraceUniformValues, 156, 1),
     zSobolLogSPP: new Uint32Array(RayTraceUniformValues, 160, 1),
-    sampleSequenceOffset: new Uint32Array(RayTraceUniformValues, 164, 1)
+    sampleSequenceOffset: new Uint32Array(RayTraceUniformValues, 164, 1),
+    environmentRotation: new Float32Array(RayTraceUniformValues, 176, 16),
+    backgroundMapTransform: new Float32Array(RayTraceUniformValues, 240, 4)
   };
   // Fixed runtime trip bounds discourage thin-film loop unrolling. Keep 4 for
   // 2 polarizations/substrates and 3 channels, independent of BSDF budgets.
   RayTraceUniformViews.loopUnrollGuard[0] = 4;
+  RayTraceUniformViews.environmentRotation.set([1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]);
+  RayTraceUniformViews.backgroundMapTransform.set([1,0,1,0]);
   RayTraceUniformViews.bevel[0] = 1;
   RayTraceUniformViews.dispersionWavelengths[0] = 3;
   return {
@@ -113,7 +117,7 @@ export function packWgpuAnalyticLights(
       data[(off + 2) * 4 + 3] = light.radius;
       packVec3(off + 3, [
         Math.cos((light.outerAngle * Math.PI) / 180),
-        Math.min(1, Math.max(0, 1 - light.innerAngle / light.outerAngle)),
+        Math.cos((Math.min(light.innerAngle, light.outerAngle) * Math.PI) / 180),
         0
       ]);
     } else if (light.type === 'DirectionalLight') {
@@ -121,7 +125,7 @@ export function packWgpuAnalyticLights(
     }
     data[(off + 3) * 4 + 3] = light.type === 'SpotLight'
       ? iesProfileTexelOffset(i) ?? -1
-      : texturesIndices[i];
+      : texturesIndices[i] ?? -1;
     data[(off + 4) * 4] = selectionPmfs[i] ?? 0;
     packVec3(off + 5, getRigidLightFrame(light).x);
   }

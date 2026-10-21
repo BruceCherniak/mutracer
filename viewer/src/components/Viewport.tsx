@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Check, ChevronDown, ChevronUp, Crosshair, Focus, Maximize, Move, Pause, Play, Repeat as Loop, Upload } from 'lucide-react';
-import { ViewerEngine, getEngine, setEngine } from '../engine/ViewerEngine';
+import { MATERIALX_IMPORT, ViewerEngine, getEngine, setEngine } from '../engine/ViewerEngine';
 import { HANDOFF_HASH, readDroppedItems, takeStashedFiles } from '../engine/droppedFiles';
 import { FOCUS_AREA_SIZE } from '../engine/areaFocus';
 import { hashModelPreset, setUi, useViewer } from '../store';
@@ -77,7 +77,7 @@ export function Viewport() {
       <LoadingCard />
       {dragging && (
         <div className="drop-layer">
-          <div><Upload size={28} />Drop to open<small>.glb · .gltf with .bin and textures · folder · .hdr</small></div>
+          <div><Upload size={28} />Drop to open<small>.glb · .gltf with .bin and textures · folder · .hdr{MATERIALX_IMPORT && ' · MaterialX .mtlx or .zip'}</small></div>
         </div>
       )}
     </section>
