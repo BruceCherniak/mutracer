@@ -80,30 +80,23 @@ export async function loadHDR(url: string, onProgress?: (loaded: number, total: 
   return data;
 }
 
-/**
- * Owns the environment DataTexture. MuTracer's EnvironmentLight has no intensity
- * or rotation, so both are baked into a copy of the source pixels; the scene
- * sync refreshes the MuTracer texture in place after `needsUpdate`.
- */
+/** Owns source radiance; intensity and orientation are scene parameters. */
 export class Environment {
   texture: THREE.DataTexture;
   private source: EquirectData;
-  private intensity = 1;
-  private rotation = 0;
   private tint: [number, number, number] = [1, 1, 1];
 
   constructor(source: EquirectData) {
     this.source = source;
     this.texture = this.createTexture(source);
-    this.bake();
+    this.applyTint();
   }
 
   private createTexture(source: EquirectData) {
-    const texture = new THREE.DataTexture(
-      new Float32Array(source.data.length), source.width, source.height, THREE.RGBAFormat, THREE.FloatType
-    );
+    const texture = new THREE.DataTexture(source.data, source.width, source.height, THREE.RGBAFormat, THREE.FloatType);
     texture.mapping = THREE.EquirectangularReflectionMapping;
-    // Rows start at the sky, as in an .hdr file.
+    texture.colorSpace = THREE.LinearSRGBColorSpace;
+    // Source rows start at the sky, as in an .hdr file.
     texture.flipY = true;
     return texture;
   }
@@ -116,33 +109,29 @@ export class Environment {
       this.texture.dispose();
       this.texture = this.createTexture(source);
     }
-    this.bake();
+    this.applyTint();
   }
 
-  /** `tint` is a linear RGB multiplier. */
-  set(intensity: number, rotationDegrees: number, tint: [number, number, number] = [1, 1, 1]) {
-    if (intensity === this.intensity && rotationDegrees === this.rotation && tint.every((c, i) => c === this.tint[i])) return;
-    this.intensity = intensity;
-    this.rotation = rotationDegrees;
-    this.tint = tint;
-    this.bake();
+  /** Color edits change radiance; intensity and orientation remain scene parameters. */
+  setTint(tint: [number, number, number]) {
+    if (tint.every((c, i) => c === this.tint[i])) return;
+    this.tint = [...tint];
+    this.applyTint();
   }
 
-  private bake() {
-    const { data: src, width, height } = this.source;
-    const dst = (this.texture.image as EquirectData).data;
-    const shift = Math.round((((this.rotation % 360) + 360) % 360) / 360 * width) % width;
-    const [kr, kg, kb] = this.tint.map((c) => c * this.intensity);
-    for (let row = 0; row < height; row++) {
-      const rowOffset = row * width;
-      for (let col = 0; col < width; col++) {
-        const s = (rowOffset + ((col + shift) % width)) * 4;
-        const d = (rowOffset + col) * 4;
-        dst[d] = src[s] * kr;
-        dst[d + 1] = src[s + 1] * kg;
-        dst[d + 2] = src[s + 2] * kb;
-        dst[d + 3] = 1;
-      }
+  apply(scene: THREE.Scene, intensity: number, rotationDegrees = 0) {
+    scene.environment = this.texture;
+    scene.environmentIntensity = intensity;
+    scene.environmentRotation.set(0, THREE.MathUtils.degToRad(((rotationDegrees % 360) + 360) % 360), 0);
+  }
+
+  private applyTint() {
+    const {data, width, height} = this.source;
+    if (this.tint.every(c => c === 1)) this.texture.image = {data, width, height};
+    else {
+      const tinted = new Float32Array(data.length);
+      for (let i = 0; i < data.length; i++) tinted[i] = data[i] * (i % 4 === 3 ? 1 : this.tint[i % 4]);
+      this.texture.image = {data:tinted, width, height};
     }
     this.texture.needsUpdate = true;
   }

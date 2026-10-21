@@ -67,7 +67,6 @@ src/
                            animation, export. No React.
   engine/loadModel.ts      GLTFLoader for URLs, files and dropped folders;
                            the procedural material-sphere scene
-  engine/environment.ts    Procedural sky, HDR loading, baked intensity/rotation
   engine/codeSnippet.ts    Standalone program generated from the current view
   engine/studio.ts         Studio lighting presets: rect-light rigs scaled to
                            the model, and their dim ambient fill
@@ -107,8 +106,8 @@ Notes:
   material's traversal order. Reloads reapply them as materials are converted;
   opening any model (including choosing the same example again) discards them
   and the undo history.
-- `EnvironmentLight` has no intensity or rotation, so both are baked into a copy
-  of the HDR pixels.
+- Environment intensity and rotation apply to the lighting and HDRI background,
+  including Grounded mode. Rotation keeps the ground level.
 - Downloaded HDR files are cached by URL (including resolution and query string)
   in the browser's origin private file system (OPFS), and reused across reloads.
   Invalid cached files are downloaded again; unavailable or full storage falls

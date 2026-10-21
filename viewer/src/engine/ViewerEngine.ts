@@ -532,21 +532,25 @@ export class ViewerEngine {
   private applyBackground() {
     const { background, backgroundColor, groundedHeight, groundedRadius, lighting } = this.settings;
     const studio = lighting === 'studio';
-    const environment = studio ? this.studioAmbient.texture : this.environment.texture;
-    this.scene.environment = environment;
+    const environment = studio ? this.studioAmbient : this.environment;
+    const intensity = studio ? this.settings.studioAmbient : this.settings.envIntensity;
+    const rotation = studio ? 0 : this.settings.envRotation;
+    environment.apply(this.scene, intensity, rotation);
     this.studioRig.visible = studio;
     this.scene.userData.mutracerHiddenBackground = background === 'transparent';
     // Projects the environment onto a ground disc and dome around the model.
     // The studio ambient is a plain gradient, so it is shown as a backdrop.
     const grounded = autoGroundedSkybox(get().modelRadius, groundedHeight);
     this.scene.userData.mutracerGroundedSkybox = background === 'grounded' && !studio ? {
-      texture: environment,
+      texture: environment.texture,
+      intensity,
+      rotation: this.scene.environmentRotation.y,
       height: grounded.height,
       radius: groundedRadius ?? grounded.radius,
       groundHeight: 0
     } : undefined;
-    this.scene.background = background === 'environment' || background === 'grounded' ? environment
-      : background === 'color' ? new THREE.Color(backgroundColor) : null;
+    // An omitted background follows the environment's intensity and orientation.
+    this.scene.background = background === 'color' ? new THREE.Color(backgroundColor) : null;
   }
 
   /** Rebuilds the studio rect lights around the current model. */
@@ -589,15 +593,15 @@ export class ViewerEngine {
     this.controls.enabled = s.cameraIndex < 0;
 
     if ((changed('envId') || changed('envResolution')) && s.envId !== 'custom') void this.applyEnvironmentPreset(s.envId);
-    if (changed('envIntensity') || changed('envRotation')) this.environment.set(s.envIntensity, s.envRotation);
     if (changed('studioPreset') || changed('studioIntensity') || changed('studioRotation') || changed('studioSize')) this.applyStudioRig();
-    if (changed('studioAmbient') || changed('studioAmbientColor')) {
+    if (changed('studioAmbientColor')) {
       // THREE.Color converts the sRGB hex to linear RGB.
       const tint = new THREE.Color(s.studioAmbientColor);
-      this.studioAmbient.set(s.studioAmbient, 0, [tint.r, tint.g, tint.b]);
+      this.studioAmbient.setTint([tint.r, tint.g, tint.b]);
     }
     if (changed('lighting') || changed('background') || changed('backgroundColor') || changed('groundedHeight') ||
-      changed('groundedRadius')) this.applyBackground();
+      changed('groundedRadius') || changed('envIntensity') || changed('envRotation') ||
+      changed('studioAmbient') || changed('studioAmbientColor')) this.applyBackground();
     if (changed('cameraIndex')) this.needsResize = true;
     // A focus distance set elsewhere (the slider, fitting) ends a running pull.
     if (prev && changed('focusDistance') && !this.writingFocus) {
