@@ -43,7 +43,7 @@ export async function capture(layout: Engine['bvhLayout'] = 'bvh2', names?: read
     const sun = new DirectionalLight({intensity: 1}); sun.position = [-2, 3, 2]; sun.lookAt([0, 0, 0]);
     const environment = new EnvironmentLight({map: envMap});
     const cases: {name: string; params?: OpenPBRMaterialParams; quality?: Quality;
-      lights?: SceneLight[]; emission?: boolean; catcher?: boolean}[] = [
+      lights?: SceneLight[]; emission?: boolean; catcher?: boolean; dispersiveEmitter?: boolean}[] = [
       {name: 'plain'},
       {name: 'layers', params: {coatWeight: .7, thinFilmWeight: 1, thinFilmThickness: .4, fuzzWeight: .3, subsurfaceWeight: .4}},
       {name: 'map-alpha-transmission', params: {map, mapAlphaUsage: 'transmission'}},
@@ -68,6 +68,30 @@ export async function capture(layout: Engine['bvhLayout'] = 'bvh2', names?: read
       {name: 'source-over-dispersion', params: {alphaMode: 'blend', opacity: .4,
         transmissionWeight: .8, transmissionDispersionScale: 1},
         quality: {alphaBlendStrategy: 'deterministic-source-over'}},
+      {name: 'source-over-dispersion-random', params: {alphaMode: 'blend', opacity: .4,
+        transmissionWeight: .8, transmissionDispersionScale: 1, coatWeight: .5},
+        quality: {alphaBlendStrategy: 'deterministic-source-over', samplingPattern: 'random', directLightCandidates: 2}},
+      {name: 'source-over-dispersion-hero', params: {alphaMode: 'blend', opacity: .4,
+        transmissionWeight: .8, transmissionDispersionScale: 1},
+        quality: {alphaBlendStrategy: 'deterministic-source-over', dispersionWavelengths: 1}},
+      {name: 'source-over-dispersion-zero', params: {alphaMode: 'blend', opacity: 0,
+        transmissionWeight: .8, transmissionDispersionScale: 1},
+        quality: {alphaBlendStrategy: 'deterministic-source-over'}},
+      {name: 'source-over-dispersion-zero-bounces', params: {alphaMode: 'blend', opacity: .4,
+        transmissionWeight: .8, transmissionDispersionScale: 1},
+        quality: {alphaBlendStrategy: 'deterministic-source-over', bounces: 0}},
+      {name: 'source-over-dispersion-one', params: {alphaMode: 'blend', opacity: 1,
+        transmissionWeight: .8, transmissionDispersionScale: 1},
+        quality: {alphaBlendStrategy: 'deterministic-source-over'}},
+      {name: 'source-over-dispersion-depth', params: {alphaMode: 'blend', opacity: .4,
+        transmissionWeight: .8, transmissionDispersionScale: 1, specularRoughness: .3},
+        quality: {alphaBlendStrategy: 'deterministic-source-over', bounces: 20, transmissiveOutputAlphaMin: .2}},
+      {name: 'source-over-spectral-back', params: {alphaMode: 'blend', opacity: .4}, dispersiveEmitter: true,
+        quality: {alphaBlendStrategy: 'deterministic-source-over'}},
+      {name: 'source-over-spectral-back-hero', params: {alphaMode: 'blend', opacity: .4}, dispersiveEmitter: true,
+        quality: {alphaBlendStrategy: 'deterministic-source-over', dispersionWavelengths: 1}},
+      {name: 'source-over-spectral-unlit', params: {alphaMode: 'blend', opacity: .3, unlit: true}, dispersiveEmitter: true,
+        quality: {alphaBlendStrategy: 'deterministic-source-over'}},
       {name: 'maximum-depth-glass', params: {transmissionWeight: 1, specularRoughness: .3},
         quality: {bounces: 20, transmissiveOutputAlphaMin: .2}},
       {name: 'index-matched-glass', params: {transmissionWeight: 1, specularIor: 1}},
@@ -84,7 +108,8 @@ export async function capture(layout: Engine['bvhLayout'] = 'bvh2', names?: read
       if (names && !names.includes(test.name)) continue;
       sphere.materials[0] = new OpenPBRMaterial({baseColor: [.6, .3, .15], ...test.params});
       ground.materials[0] = new OpenPBRMaterial({baseColor: [.4, .4, .4], shadowCatcher: !!test.catcher});
-      emitter.materials[0] = new OpenPBRMaterial({emissionColor: [1, .7, .3], emissionLuminance: test.emission ? 4 : 0});
+      emitter.materials[0] = new OpenPBRMaterial({emissionColor: [1, .7, .3], emissionLuminance: test.emission ? 4 : 0,
+        ...(test.dispersiveEmitter ? {transmissionWeight: 1, transmissionDispersionScale: 1} : {})});
       Object.assign(render, {samplingPattern: 'sobol', bounces: 4, dispersionWavelengths: 3,
         alphaBlendStrategy: 'stochastic', directLightCandidates: 4, transmissiveOutputAlphaMin: 1}, test.quality);
       engine.scene = {meshes: [sphere, ground, emitter], lights: test.lights ?? [sphereLight], background: [.1, .15, .2, 1]};

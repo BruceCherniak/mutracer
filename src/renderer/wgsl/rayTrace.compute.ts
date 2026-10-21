@@ -565,16 +565,6 @@ fn completeVertex(path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<
   *depth = *depth + 1;
 }
 
-fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: ptr<function, SurfaceInteraction>, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>) {
-  var sampleIgnored = false;
-  shadeVertex(uv, path, depth, si, ma, outAux, &sampleIgnored);
-  if ((*path).abort) { return; }
-  intersectScene((*path).ray, si, *depth, true, (*path).isNextRefraction);
-  getMaterial(ma, (*si).materialIndex, (*si).uv, (*si).uv1, (*si).instanceIndex);
-
-  completeVertex(path, depth, si, ma, sampleIgnored);
-}
-
 fn initCameraRay(coord: vec2f) -> Ray {
   let origin = cameraUniform.viewProjectionInv * vec4f(coord * 2.0 - 1.0, -1.0, 1.0);
   let center = cameraUniform.viewProjectionInv * vec4f(coord * 2.0 - 1.0, 1.0, 1.0);
@@ -687,7 +677,7 @@ fn getBevelNormal(source: SurfaceInteraction, radius: f32) -> vec3f {
   return source.normal;
 }
 
-fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>) -> vec4f {
+fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, ma: ptr<function, OpenPbrResolvedMaterial>, outAux: ptr<function, RayTraceAuxiliary>, initialQuery: bool) -> vec4f {
   var path: Path;
   path.ray = ray;
   path.li = vec3f(0.0);
@@ -699,18 +689,35 @@ fn integrateOnePathSample(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray:
   path.isNextRefraction = false;
   path.abort = false;
 
-  let isNotTransparent = (*ma).transmissionWeight < 0.001 && (*ma).subsurfaceWeight < 0.001 && (*ma).alpha > 0.99;
   let bounceLimit = max(rtUniform.bounces, 0);
+  let eventLimit = min(bounceLimit * 3, ${MAX_PATH_EVENTS});
   var depth = 0;
-  // Transparent paths may take up to three times the configured bounces.
-  for (var idx: i32 = 0; idx < min(bounceLimit * 3, ${MAX_PATH_EVENTS}); idx = idx + 1) {
-    if (isNotTransparent && idx > bounceLimit) {
-      path.abort = true;
+  var sampleIgnored = false;
+  var isNotTransparent = false;
+  // Back branches and subsequent bounces share one query/material call site.
+  // Keep wavelength/branch loops separate so GPU lanes reconverge between
+  // paths. Include the final query, which the legacy bounce completed before
+  // testing its event budget. Even a zero-bounce back branch resolves guides.
+  for (var event = 0; event <= eventLimit; event++) {
+    if ((event != 0) | initialQuery) {
+      intersectScene(path.ray, si, depth, event != 0, path.isNextRefraction);
+      getMaterial(ma, (*si).materialIndex, (*si).uv, (*si).uv1, (*si).instanceIndex);
     }
-    if (path.abort) {
-      break;
+    if (event == 0) {
+      if (initialQuery & (*si).hit & ((*ma).materialType == STANDARD)) {
+        (*outAux).albedo = select((*ma).baseColor, vec3f(1.0), (*ma).transmissionWeight > 0.5);
+        (*outAux).normal = select((*si).normal, -(*si).normal,
+          dot((*si).normal, (*si).position - cameraUniform.viewInv[3].xyz) > 0.0);
+        (*si).albedoSampled = (*ma).transmissionWeight > 0.5;
+      }
+      isNotTransparent = ((*ma).transmissionWeight < 0.001) & ((*ma).subsurfaceWeight < 0.001) & ((*ma).alpha > 0.99);
+    } else {
+      completeVertex(&path, &depth, si, ma, sampleIgnored);
     }
-    bounce(uv, &path, &depth, si, ma, outAux);
+    if (isNotTransparent & (event > bounceLimit)) { path.abort = true; }
+    if (path.abort | (event >= eventLimit)) { break; }
+    shadeVertex(uv, &path, &depth, si, ma, outAux, &sampleIgnored);
+    if (path.abort) { break; }
   }
 
   return vec4f(path.li, path.alpha);
@@ -730,14 +737,6 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
   if (split) {
     branchRay.o = (*si).position + ray.d * (EPS * 0.02);
     branchSi.albedoSampled = false;
-    intersectScene(branchRay, &branchSi, 0, false, false);
-    getMaterial(&branchMa, branchSi.materialIndex, branchSi.uv, branchSi.uv1, branchSi.instanceIndex);
-    if (branchSi.hit & (branchMa.materialType == STANDARD)) {
-      branchAux.albedo = select(branchMa.baseColor, vec3f(1.0), branchMa.transmissionWeight > 0.5);
-      branchAux.normal = select(branchSi.normal, -branchSi.normal,
-        dot(branchSi.normal, branchSi.position - cameraUniform.viewInv[3].xyz) > 0.0);
-      branchSi.albedoSampled = branchMa.transmissionWeight > 0.5;
-    }
   }
   var back: vec4f;
   var backAux: RayTraceAuxiliary;
@@ -745,7 +744,7 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
   // four; a dynamic bound keeps DXC from cloning that graph for each branch.
   let branchCount = select(1u, rtUniform.loopUnrollGuard >> 1u, split & (coverage > 0.0));
   for (var branch = 0u; branch < branchCount; branch++) {
-    let result = integrateOnePathSample(uv, &branchSi, branchRay, &branchMa, &branchAux);
+    let result = integrateOnePathSample(uv, &branchSi, branchRay, &branchMa, &branchAux, split & (branch == 0u));
     if (!split | (coverage <= 0.0)) { *outAux = branchAux; return result; }
     if (branch == 0u) {
       back = result; backAux = branchAux;
@@ -760,7 +759,7 @@ fn integrateOnePath(uv: vec2f, si: ptr<function, SurfaceInteraction>, ray: Ray, 
       return mix(back, result, coverage);
     }
   }
-  return vec4f(0.0);` : /* wgsl */ `return integrateOnePathSample(uv, si, ray, ma, outAux);`}
+  return vec4f(0.0);` : /* wgsl */ `return integrateOnePathSample(uv, si, ray, ma, outAux, false);`}
 }
 
 // Path tracing integrator as described in
