@@ -1,6 +1,6 @@
 import { prepareSceneMeshes, computeGeometryNormals, type PreparedMeshInstanceBinding as SharedInstanceBinding } from './scenePreparation.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
-import { meshInstanceCount, PackedMeshInstances, type MeshInstances } from './meshInstances.js';
+import { meshInstanceCount, type MeshInstances } from './meshInstances.js';
 import {createCanvas} from '../util/canvas.js';
 import { getGeometryBvh, setGeometryBvh, geometryBvhConfigMatches, type BvhBuildConfig } from './geometryBvh.js';
 import { computeDisplacementMinmax, computeTrianglesDisplacementRange, conservativeTrianglesDisplacementRange } from './displacementPreparation.js';
@@ -259,7 +259,7 @@ export {dirtyPreparedInstanceIndices as dirtyMeshInstanceIndices} from './sceneP
 /** Refreshes color storage without computing transforms or bounds. Returns packed source slots. */
 export function updateMeshInstanceColors(bindings: PreparedMeshInstanceBinding[], instances: MeshInstances, meshes: ReadonlySet<Mesh>) {
   const dirty = new Set<number>();
-  if (!(instances instanceof PackedMeshInstances)) return dirty;
+  if (Array.isArray(instances)) return dirty;
   let sourceStart = 0, packedIndex = 0;
   for (const {mesh} of bindings) {
     const count = meshInstanceCount(mesh), sourceEnd = sourceStart + count;

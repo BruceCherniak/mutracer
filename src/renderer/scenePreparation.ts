@@ -61,7 +61,7 @@ export function updateMeshInstanceTransforms<M extends MeshState>(
 ) {
   // Dirty indices are packed source slots, as consumed by refitTLAS. Preserve
   // the previous candidate until membership and GPU validation have succeeded.
-  if (current instanceof PackedMeshInstances && dirtyIndices && current.bindingSlots.length === bindings.length &&
+  if (current && !Array.isArray(current) && dirtyIndices && current.bindingSlots.length === bindings.length &&
     current.bindingSlots.every((slots, i) => slots.length === meshInstanceCount(bindings[i].mesh))) {
     const next = current.copy(), matrix = new Float64Array(16);
     const boundsScratch = makeBounds(), pointScratch = vec3.create();
@@ -125,8 +125,8 @@ export function updateMeshInstanceTransforms<M extends MeshState>(
       ),
       displacementScale
     }) satisfies TLASInstance;
-  if (!current || !dirtyIndices || current instanceof PackedMeshInstances) return bindings.map(update);
-  const next = (current as TLASInstance[]).slice();
+  if (!current || !dirtyIndices || !Array.isArray(current)) return bindings.map(update);
+  const next = current.slice();
   dirtyIndices.forEach((index) => {
     const binding = bindings[index];
     if (binding) next[index] = update(binding);
@@ -139,7 +139,7 @@ export function dirtyPreparedInstanceIndices<M extends MeshState>(bindings: Prep
   const dirty = new Set<number>();
   for (let i = 0; i < bindings.length; i++) {
     if (!meshes.has(bindings[i].mesh)) continue;
-    if (instances instanceof PackedMeshInstances) {
+    if (!Array.isArray(instances)) {
       for (const slot of instances.bindingSlots[i] ?? []) dirty.add(slot);
     } else dirty.add(i);
   }
