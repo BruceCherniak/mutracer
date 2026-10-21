@@ -57,20 +57,25 @@ the output directory. See the [native guide](../README.md) for platform backends
 
 - Drag the image to orbit; right-drag or Shift-drag to pan; scroll to zoom.
   **Fit model** or **F** restores framing.
-- Click a surface to select its object and open the **Material** panel. **Frame selection**
-  fits the camera to that object. The **Scene** panel lists selectable objects and
-  provides world position, local Y rotation and uniform scale controls. Each edit
+- Use the left **Scene** list to search and select objects, or click a surface in
+  the viewport to open its **Material** panel. **Frame selection** fits the camera
+  to that object. The right **Object** panel provides world position, local Y
+  rotation and uniform scale controls. Each edit
   affects the selected object; objects sharing its geometry move independently.
 - Select a material and edit base color, roughness, metalness or transmission.
   Edits affect every object sharing that material. Picking tests geometry, so
   transparent surfaces can be selected ahead of objects behind them.
   Imported base-color, normal, metallic/roughness and emissive maps remain active.
+- Choose **Lighting**, **Material**, **Camera**, **Render** or **Object** on the
+  right rail. Click the active category to hide the inspector; **[** and **]**
+  toggle the scene list and inspector. Narrow windows hide the scene list to
+  preserve viewport space.
 - Adjust environment intensity, tint, rotation and background visibility.
   **Load HDR…** opens a local Radiance equirectangular environment; **Studio**
   restores the built-in light.
 - Choose sample count and resolution, pause/resume, restart accumulation, adjust
   exposure or save the displayed image as PNG. The preview uses Reinhard/sRGB.
-- **Light** also provides an optional directional **Key light**, disabled by
+- **Lighting** also provides an optional directional **Key light**, disabled by
   default. Adjust its intensity, color, azimuth and elevation. Each edit commits
   the scene again; the library keeps the prepared geometry where it can.
 - **Native OIDN** is on by default. It denoises completed previews after interaction
