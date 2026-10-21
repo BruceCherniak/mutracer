@@ -58,9 +58,13 @@ the output directory. See the [native guide](../README.md) for platform backends
 - Drag the image to orbit; right-drag or Shift-drag to pan; scroll to zoom.
   **Fit to model** or **F** restores framing. **Camera** offers perspective and
   orthographic projection, with a 35° default field of view. Perspective views
-  support depth of field: enable it, choose an f-number, then set focus distance
-  or use **Pick focus point** and click a surface. Choose the scene unit to match
-  the model; it defaults to metres. Orthographic views have no depth of field.
+  support depth of field: enable it and choose an f-number. **Area autofocus**
+  is on by default; drag the focus frame's center to choose its target. It focuses
+  after the view settles and keeps the current distance when the area is empty.
+  Adjusting **Focus (m)** switches to manual focus; **Pick focus point** then
+  focuses on a clicked surface. Choose the scene unit to match the model; it
+  defaults to metres. Projection, field of view, f-number and scene unit persist
+  when opening another model. Orthographic views have no depth of field.
 - Use the left **Scene** list to search and select objects, or click a surface in
   the viewport to open its **Material** panel. **Frame selection** fits the camera
   to that object. The right **Object** panel provides world position, local Y
@@ -71,9 +75,9 @@ the output directory. See the [native guide](../README.md) for platform backends
   Inactive layers start collapsed; open a heading to edit their parameters.
   Edits affect every object sharing that material. **Opacity** applies in Auto,
   Mask or Blend alpha mode; normal scale requires an imported normal map.
-  Picking tests geometry, so transparent surfaces can be selected ahead of objects
-  behind them. Imported base-color, normal, metallic/roughness and emissive maps
-  remain active.
+  Picking and autofocus can target transparent or cutout surfaces ahead of
+  objects behind them. Imported base-color, normal, metallic/roughness and
+  emissive maps remain active.
 - Choose **Lighting**, **Material**, **Camera**, **Render** or **Object** on the
   right rail. Click the active category to hide the inspector; **[** and **]**
   toggle the scene list and inspector. Click section headings to collapse their

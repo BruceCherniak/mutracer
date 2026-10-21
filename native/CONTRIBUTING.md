@@ -227,7 +227,12 @@ bundled OIDN runtime. For Studio, first run
 `node native/validation/viewer-studio-reference.mjs DIRECTORY`, then
 `--studio-smoke DIRECTORY`: it compares native rect-light records with the Web
 placement/ambient oracle and tests preset/parameter edits against fresh contexts
-on Software and actual HWRT. Test all three AOVs, invalid input,
+on Software and actual HWRT. For autofocus, generate
+`node native/validation/viewer-focus-reference.mjs DIRECTORY`, then run
+`--focus-smoke DIRECTORY` to check depth clusters, focus pulls, opaque geometry,
+stale camera/model queries, misses, manual overrides and orthographic views.
+Autofocus uses immutable CPU picking geometry; it does not add GPU readbacks or
+inspect alpha textures. Test all three AOVs, invalid input,
 rollback and restoration. `[MODEL] --edit-bench DIRECTORY` records descriptor
 build and commit times of material, transform, camera, light and environment
 edits at 1280×720 on both backends in `edit-bench.jsonl`; set

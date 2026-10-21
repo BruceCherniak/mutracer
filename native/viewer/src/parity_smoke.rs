@@ -38,6 +38,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
     for mode in [0, 1] {
         let mut viewer = Viewer::new(path)?;
         viewer.denoise = false;
+        viewer.focus.enabled = false;
         viewer.backend = mode;
         viewer.size = [96, 64];
         viewer.settings.max_samples = 4;

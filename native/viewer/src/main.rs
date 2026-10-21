@@ -2,6 +2,8 @@
 mod controls;
 mod denoise;
 mod edit_bench;
+mod focus;
+mod focus_smoke;
 mod geometry_smoke;
 mod import;
 mod input;
@@ -60,6 +62,7 @@ struct Viewer {
     size: [u32; 2],
     settings: RenderSettings,
     picking_focus: bool,
+    focus: focus::AutoFocus,
     samples: u32,
     display_settings: mutracer_native_probe::display::Settings,
     selected: usize,
@@ -153,6 +156,7 @@ impl Viewer {
             size,
             settings: RenderSettings::default(),
             picking_focus: false,
+            focus: focus::AutoFocus::default(),
             samples: 0,
             display_settings: mutracer_native_probe::display::Settings::default(),
             selected,
@@ -200,6 +204,9 @@ impl Viewer {
         }
     }
     fn dirty(&mut self, change: Change) {
+        if matches!(change, Change::Camera | Change::Transform | Change::Scene) {
+            self.focus.request();
+        }
         self.change = self.change.max(change);
         self.generation += 1;
     }
@@ -235,7 +242,12 @@ impl Viewer {
         }
         match result {
             Ok(model) => {
-                let camera = Camera::fit(model.center, model.radius);
+                let mut camera = Camera::fit(model.center, model.radius);
+                camera.fov = self.camera.fov;
+                camera.orthographic = self.camera.orthographic;
+                camera.f_stop = self.camera.f_stop;
+                camera.meters_per_unit = self.camera.meters_per_unit;
+                camera.frame(model.center, model.radius);
                 if let Some(retired) = self.candidate.replace((model, camera)) {
                     std::thread::spawn(move || drop(retired));
                 }
@@ -321,6 +333,24 @@ impl Viewer {
                     return Err(error.into());
                 }
             }
+        }
+        let focus_ready =
+            self.loading.is_none() && self.candidate.is_none() && self.change != Change::Scene;
+        if self.focus.update(
+            &self.model,
+            &mut self.camera,
+            self.size[0] as f32 / self.size[1] as f32,
+            focus_ready,
+            ctx.input(|i| i.pointer.any_down()),
+            std::time::Instant::now(),
+            ctx,
+        ) {
+            // Lens pulls change the rendered camera, but must not request another measurement.
+            self.change = self.change.max(Change::Camera);
+            self.generation += 1;
+        }
+        if self.focus.working(&self.camera) {
+            ctx.request_repaint_after(Duration::from_millis(16));
         }
         if self.change != Change::None || !self.running {
             self.renderer.cancel()?;
@@ -1881,10 +1911,16 @@ fn main() -> Result<()> {
     let mut package_out = None;
     let mut parity_out = None;
     let mut studio_out = None;
+    let mut focus_out = None;
     let mut startup_out = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--focus-smoke" => {
+                focus_out = Some(PathBuf::from(
+                    args.next().context("--focus-smoke needs a directory")?,
+                ));
+            }
             "--studio-smoke" => {
                 studio_out = Some(PathBuf::from(
                     args.next().context("--studio-smoke needs a directory")?,
@@ -1960,6 +1996,9 @@ fn main() -> Result<()> {
         }
     }
     let model = model.unwrap_or_else(default_model);
+    if let Some(out) = focus_out {
+        return focus_smoke::run(&model, &out);
+    }
     if let Some(out) = studio_out {
         return studio_smoke::run(&model, &out);
     }

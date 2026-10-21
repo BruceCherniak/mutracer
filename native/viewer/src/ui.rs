@@ -864,6 +864,13 @@ impl Viewer {
                         egui::Slider::new(&mut self.camera.f_stop, 0.7..=22.).logarithmic(true),
                     )
                     .changed();
+                    if controls::toggle(ui, "Area autofocus", &mut self.focus.enabled).changed() {
+                        self.focus.request();
+                        self.picking_focus = false;
+                    }
+                    ui.add_enabled_ui(self.focus.enabled, |ui| {
+                        controls::toggle(ui, "Show focus frame", &mut self.focus.show_frame);
+                    });
                     let unit = self.camera.meters_per_unit;
                     let mut focus = self.camera.focus_distance * unit;
                     let min = self.model.radius * 0.05 * unit;
@@ -873,18 +880,29 @@ impl Viewer {
                         "Focus (m)",
                         egui::Slider::new(&mut focus, min..=max)
                             .logarithmic(true)
-                            .max_decimals(4),
+                            // Autofocus values must not be rounded by an idle slider.
+                            .max_decimals(4)
+                            .clamping(egui::SliderClamping::Edits),
                     )
                     .changed()
                     {
                         self.camera.focus_distance = focus / unit;
+                        self.focus.manual();
                         changed = true;
                     }
-                    if ui
-                        .selectable_label(self.picking_focus, "Pick focus point")
-                        .clicked()
+                    if !self.focus.enabled
+                        && ui
+                            .selectable_label(self.picking_focus, "Pick focus point")
+                            .clicked()
                     {
                         self.picking_focus = !self.picking_focus;
+                    }
+                    if self.focus.enabled {
+                        ui.weak(match self.focus.status {
+                            crate::focus::Status::Locked => "Focus locked",
+                            crate::focus::Status::Missed => "No surface in focus area · focus kept",
+                            _ => "Focusing…",
+                        });
                     }
                     let old = self.camera.meters_per_unit;
                     controls::select(
@@ -997,9 +1015,14 @@ impl Viewer {
                 if self.picking_focus && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
                     self.picking_focus = false;
                 }
-                for (pan, delta) in
-                    ui.input(|i| self.drag.motion(rect, response.contains_pointer(), i))
-                {
+                let focus_drag = self.focus.frame(ui, rect, &self.camera);
+                if focus_drag {
+                    self.drag = crate::input::ViewportDrag::default();
+                }
+                for (pan, delta) in ui.input(|i| {
+                    self.drag
+                        .motion(rect, !focus_drag && response.contains_pointer(), i)
+                }) {
                     if pan {
                         self.camera.pan([delta.x, delta.y]);
                     } else {
