@@ -118,11 +118,32 @@ or BVHs. Emission edits also refresh light-sampling state, and texture edits
 rebuild the texture atlas. Displacement settings that move geometry require a
 [full mesh update](#full-mesh-updates).
 
-WebGPU compiles support for the material layers, texture types and light types
-used by the scene. Changing that combination can compile a new shader variant;
-returning to a cached combination reuses its pipeline. Ordinary parameter changes
-within the same combination keep the shader. Compilation time depends on the
-combination of features, BVH layout, browser and GPU driver.
+WebGPU can compile a new path-tracing shader for the following changes. Feature
+presence is scene-wide: adding another material or light that uses an already
+enabled feature does not by itself need another variant.
+
+| Change | When a different shader variant is needed |
+| --- | --- |
+| Material, texture or lighting features | First use or last removal of coat, thin film, fuzz, subsurface, metal, transmission, shadow catchers, a texture type, an analytic-light type, sampled emissive triangles or environment illumination |
+| Transport and transparency | Enabling/disabling medium or dispersion support, changing whether any non-opaque material exists, or changing whether deterministic primary BLEND splitting is needed |
+| Shading and geometry structure | Changing required UV/tangent/coat-normal frames, displacement or material-bevel support, vertex/BVH layouts or required traversal capacity |
+| Render settings | Changing `samplingPattern`, `bevelSamples`, or `alphaBlendStrategy` while BLEND materials exist |
+| Texture capacity | Increasing the texture count beyond the current capacity; first use or last removal of UV1 texture sampling also changes the shader |
+
+With `alphaMode: 'auto'`, opacity, cutoff or alpha-map edits can change the
+resolved transparency mode. Texture edits can also enable independent coat-normal
+or anisotropy frames. These count as structural changes above.
+
+Within an unchanged feature/structure combination, colors, roughness, existing
+layer weights, light transforms/intensity, texture pixels and camera/output size
+do not recompile the path tracer. Neither do changes to `bounces`,
+`directLightCandidates`, clamping, `dispersionWavelengths` (1 or 3), the render's
+bevel switch, sample count or seed. Data uploads, atlas/BVH work and accumulation
+restarts may still be needed.
+
+Returning to a cached combination reuses its pipeline. Compilation time depends
+on the feature combination, BVH layout, browser and GPU driver. Denoising and
+post-processing passes have their own shaders and initialization costs.
 
 Analytic-light edits keep the environment map. Ambient and environment edits
 rebuild it. Rect-light texture edits require a full mesh update, because those
