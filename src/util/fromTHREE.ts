@@ -651,8 +651,12 @@ function convertGeometry(
   } else {
     for (let index = 0; index < indexCount; index++) indices[index] = start + index;
   }
-  if (backSide) for (let i = 0; i < indices.length; i += 3) {
-    [indices[i+1], indices[i+2]] = [indices[i+2], indices[i+1]];
+  if (backSide) {
+    for (let i = 0; i < indices.length; i += 3) {
+      const tmp = indices[i + 1];
+      indices[i + 1] = indices[i + 2];
+      indices[i + 2] = tmp;
+    }
   }
   const geometry = new Geometry({
     position: new Attribute(
