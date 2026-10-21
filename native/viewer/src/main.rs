@@ -1,4 +1,5 @@
 //! Small native example: glTF input → native MuTracer library → egui image.
+mod controls;
 mod denoise;
 mod edit_bench;
 mod geometry_smoke;
@@ -625,7 +626,7 @@ impl eframe::App for Viewer {
             // Exercise surface reconfiguration while scene preparation runs.
             match ctx.cumulative_frame_nr() {
                 2 => {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1180., 780.)))
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(800., 560.)))
                 }
                 4 => {
                     ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(1200., 800.)))

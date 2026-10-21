@@ -68,16 +68,15 @@ the output directory. See the [native guide](../README.md) for platform backends
   Imported base-color, normal, metallic/roughness and emissive maps remain active.
 - Choose **Lighting**, **Material**, **Camera**, **Render** or **Object** on the
   right rail. Click the active category to hide the inspector; **[** and **]**
-  toggle the scene list and inspector. Narrow windows hide the scene list to
-  preserve viewport space.
+  toggle the scene list and inspector. Click section headings to collapse their
+  settings. Narrow windows hide the scene list to preserve viewport space.
 - Adjust environment intensity, tint, rotation and background visibility.
   **Load HDR…** opens a local Radiance equirectangular environment; **Studio**
   restores the built-in light.
 - Choose sample count and resolution, pause/resume, restart accumulation, adjust
   exposure or save the displayed image as PNG. The preview uses Reinhard/sRGB.
 - **Lighting** also provides an optional directional **Key light**, disabled by
-  default. Adjust its intensity, color, azimuth and elevation. Each edit commits
-  the scene again; the library keeps the prepared geometry where it can.
+  default. Adjust its intensity, color, azimuth and elevation.
 - **Native OIDN** is on by default. It denoises completed previews after interaction
   pauses, trying Metal, then CUDA, then HIP, then CPU. CUDA requires a supported
   NVIDIA GPU and driver; HIP requires a supported AMD GPU and compatible AMD

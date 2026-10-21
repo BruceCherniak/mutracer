@@ -1,7 +1,7 @@
 //! Native viewer layout. Rendering and scene updates stay in Viewer.
 use crate::renderer::Camera;
-use crate::theme;
 use crate::{Change, Viewer, default_model, renderer, scene::Environment};
+use crate::{controls, theme};
 use eframe::egui;
 use std::time::Duration;
 
@@ -14,7 +14,7 @@ impl Viewer {
         if self.inspector_open {
             self.inspector(root);
         }
-        // Give narrow windows back their viewport; the toolbar restores the list.
+        // Narrow windows keep the viewport usable; hiding the inspector makes room for the list.
         if self.scene_open && root.available_width() > 600. {
             self.scene_panel(root);
         }
@@ -47,7 +47,7 @@ impl Viewer {
                         .on_hover_text("Toggle scene list");
                     ui.toggle_value(&mut self.inspector_open, "Inspector")
                         .on_hover_text("Toggle inspector");
-                    if ui.button("Open GLTF / GLB…").clicked() {
+                    if controls::button(ui, "Open GLTF / GLB…").clicked() {
                         if let Some(path) = rfd::FileDialog::new()
                             .add_filter("glTF", &["gltf", "glb"])
                             .pick_file()
@@ -55,20 +55,17 @@ impl Viewer {
                             self.load(path, &ctx);
                         }
                     }
-                    if ui.available_width() > 300. {
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(&self.model.name).color(theme::MUTED),
-                            )
-                            .truncate(),
-                        );
-                        if ui.small_button("Sample").clicked() {
-                            self.load(default_model(), &ctx);
-                        }
+                    if ui.available_width() > 360. && controls::button(ui, "Sample").clicked() {
+                        self.load(default_model(), &ctx);
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui
-                            .add_enabled(self.frame_samples > 0, egui::Button::new("Save PNG…"))
+                            .add_enabled(
+                                self.frame_samples > 0,
+                                egui::Button::new("Save PNG…")
+                                    .fill(theme::ACCENT_SURFACE)
+                                    .stroke(egui::Stroke::new(1., theme::ACCENT)),
+                            )
                             .clicked()
                         {
                             if let Some(path) = rfd::FileDialog::new()
@@ -89,6 +86,14 @@ impl Viewer {
                                     self.error = e.to_string();
                                 }
                             }
+                        }
+                        if ui.available_width() > 100. {
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(&self.model.name).color(theme::MUTED),
+                                )
+                                .truncate(),
+                            );
                         }
                     });
                 });
@@ -124,9 +129,9 @@ impl Viewer {
                     }
                     if ui.available_width() > 380. {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            ui.small(
-                        "Click: select   ·   Drag: orbit   ·   Shift-drag: pan   ·   Scroll: zoom",
-                    );
+                            let hint =
+                                "Click: select · Drag: orbit · Shift-drag: pan · Scroll: zoom";
+                            ui.small(hint);
                         });
                     }
                 });
@@ -140,19 +145,15 @@ impl Viewer {
             .frame(theme::panel().inner_margin(6))
             .show(root, |ui| {
                 ui.spacing_mut().button_padding.x = 2.;
-                for (tab, name) in [
-                    (2, "Lighting"),
-                    (1, "Material"),
-                    (4, "Camera"),
-                    (0, "Render"),
-                    (3, "Object"),
+                use controls::Icon;
+                for (tab, name, icon) in [
+                    (2, "Lighting", Icon::Lighting),
+                    (1, "Material", Icon::Material),
+                    (4, "Camera", Icon::Camera),
+                    (0, "Render", Icon::Render),
+                    (3, "Object", Icon::Object),
                 ] {
-                    if ui
-                        .add_sized(
-                            [ui.available_width(), 48.],
-                            egui::Button::new(egui::RichText::new(name).size(10.))
-                                .selected(self.inspector_open && self.tab == tab),
-                        )
+                    if controls::category(ui, name, icon, self.inspector_open && self.tab == tab)
                         .clicked()
                     {
                         self.inspector_open = !(self.inspector_open && self.tab == tab);
@@ -176,7 +177,10 @@ impl Viewer {
             }))
             .show(root, |ui| {
                 ui.heading("Scene");
-                ui.label(&self.model.name);
+                ui.add(
+                    egui::Label::new(egui::RichText::new(&self.model.name).color(theme::SUBTLE))
+                        .truncate(),
+                );
                 ui.add(
                     egui::TextEdit::singleline(&mut self.object_query)
                         .hint_text("Search objects")
@@ -201,19 +205,28 @@ impl Viewer {
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
                         let query = self.object_query.to_lowercase();
+                        let mut visible = 0;
                         for (id, mesh) in self.model.meshes.iter().enumerate() {
                             if !mesh.name.to_lowercase().contains(&query) {
                                 continue;
                             }
-                            if ui
-                                .selectable_label(self.selected_mesh == Some(id), &mesh.name)
-                                .clicked()
+                            visible += 1;
+                            if controls::tree_row(
+                                ui,
+                                &mesh.name,
+                                &self.model.materials[mesh.material].name,
+                                self.selected_mesh == Some(id),
+                            )
+                            .clicked()
                             {
                                 self.selected_mesh = Some(id);
                                 self.selected = mesh.material;
                                 self.tab = 1;
                                 self.inspector_open = true;
                             }
+                        }
+                        if visible == 0 {
+                            ui.weak("No matching objects");
                         }
                     });
             });
@@ -227,6 +240,16 @@ impl Viewer {
             .show_separator_line(false)
             .frame(theme::panel().inner_margin(14))
             .show(root, |ui| {
+                let (title, subtitle) = match self.tab {
+                    0 => ("Render", "Path tracing quality and display"),
+                    1 => ("Material", "Edits apply to objects sharing this material"),
+                    2 => ("Lighting", "Environment, background and key light"),
+                    3 => ("Object", "Position, rotation and scale"),
+                    _ => ("Camera", "Framing and field of view"),
+                };
+                ui.strong(title);
+                ui.weak(subtitle);
+                ui.separator();
                 egui::ScrollArea::vertical()
                     .id_salt(("inspector", self.tab))
                     .auto_shrink([false, false])
@@ -240,279 +263,316 @@ impl Viewer {
             });
     }
     fn render_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Render");
-        ui.add(
-            egui::ProgressBar::new(self.samples as f32 / self.target.max(1) as f32)
-                .show_percentage(),
-        );
-        ui.horizontal(|ui| {
-            ui.label(format!("{} / {} samples", self.samples, self.target));
-            if ui
-                .button(if self.running { "Pause" } else { "Resume" })
-                .clicked()
-            {
-                self.running = !self.running;
-            }
-            if ui.button("Restart").clicked() {
-                self.dirty(Change::Reset);
+        controls::section(ui, "Sampling", |ui| {
+            ui.small(format!("{} / {} samples", self.samples, self.target));
+            ui.add(
+                egui::ProgressBar::new(self.samples as f32 / self.target.max(1) as f32)
+                    .fill(theme::ACCENT)
+                    .desired_height(4.),
+            );
+            ui.horizontal(|ui| {
+                if controls::button(ui, if self.running { "Pause" } else { "Resume" }).clicked() {
+                    self.running = !self.running;
+                }
+                if controls::button(ui, "Restart").clicked() {
+                    self.dirty(Change::Reset);
+                }
+            });
+            controls::parameter(
+                ui,
+                "Samples",
+                egui::Slider::new(&mut self.target, 8..=1024).logarithmic(true),
+            );
+            let old = self.size;
+            controls::select(
+                ui,
+                "Resolution",
+                format!("{} × {}", self.size[0], self.size[1]),
+                |ui| {
+                    for width in [320, 480, 640, 960] {
+                        let size = [width, width * 2 / 3];
+                        ui.selectable_value(
+                            &mut self.size,
+                            size,
+                            format!("{} × {}", size[0], size[1]),
+                        );
+                    }
+                },
+            );
+            if old != self.size {
+                self.dirty(Change::Scene);
             }
         });
-        ui.add(
-            egui::Slider::new(&mut self.target, 8..=1024)
-                .logarithmic(true)
-                .text("Samples"),
-        );
-        let old = self.size;
-        egui::ComboBox::from_label("Resolution")
-            .selected_text(format!("{} × {}", self.size[0], self.size[1]))
-            .show_ui(ui, |ui| {
-                for width in [320, 480, 640, 960] {
-                    let size = [width, width * 2 / 3];
-                    ui.selectable_value(&mut self.size, size, format!("{} × {}", size[0], size[1]));
-                }
-            });
-        if old != self.size {
-            self.dirty(Change::Scene);
-        }
-        if ui
-            .add(egui::Slider::new(&mut self.exposure, -4.0..=4.0).text("Exposure"))
+        controls::section(ui, "Display", |ui| {
+            if controls::parameter(
+                ui,
+                "Exposure",
+                egui::Slider::new(&mut self.exposure, -4.0..=4.0),
+            )
             .changed()
-        {
-            self.display_dirty = true;
-        }
-        let old_backend = self.backend;
-        egui::ComboBox::from_label("Ray tracing")
-            .selected_text(["Software", "HWRT"][self.backend as usize])
-            .show_ui(ui, |ui| {
-                for (mode, name) in [(1, "HWRT"), (0, "Software")] {
-                    ui.selectable_value(&mut self.backend, mode, name);
-                }
-            });
-        if old_backend != self.backend {
-            self.dirty(Change::Scene);
-        }
-        ui.small(&self.backend_status);
-        if ui.checkbox(&mut self.denoise, "Native OIDN").changed() {
-            self.display_dirty = true;
-            self.last_denoise = None;
-        }
-        if self.denoise {
-            ui.small(&self.denoise_status);
-        }
+            {
+                self.display_dirty = true;
+            }
+            if controls::toggle(ui, "Native OIDN", &mut self.denoise).changed() {
+                self.display_dirty = true;
+                self.last_denoise = None;
+            }
+            if self.denoise {
+                ui.weak(&self.denoise_status);
+            }
+        });
+        controls::section(ui, "Device", |ui| {
+            let old = self.backend;
+            controls::select(
+                ui,
+                "Ray tracing",
+                ["Software", "HWRT"][self.backend as usize],
+                |ui| {
+                    for (mode, name) in [(1, "HWRT"), (0, "Software")] {
+                        ui.selectable_value(&mut self.backend, mode, name);
+                    }
+                },
+            );
+            if old != self.backend {
+                self.dirty(Change::Scene);
+            }
+            ui.weak(&self.backend_status);
+        });
     }
     fn material_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Material");
-        ui.small("Click a surface in the image to select its material.");
         if let Some(id) = self.selected_mesh {
-            ui.label(egui::RichText::new(&self.model.meshes[id].name).color(theme::ACCENT));
-            if ui.small_button("Frame selection").clicked() {
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(&self.model.meshes[id].name).color(theme::ACCENT),
+                )
+                .truncate(),
+            );
+            if controls::button(ui, "Frame selection").clicked() {
                 let (min, max) = self.model.mesh_bounds(id);
                 self.camera = Camera::fit((min + max) * 0.5, (max - min).length() * 0.5);
                 self.dirty(Change::Camera);
             }
+        } else {
+            ui.weak("Select an object in the scene list or viewport.");
         }
-        let previous_material = self.selected;
-        egui::ComboBox::from_id_salt("material")
-            .selected_text(&self.model.materials[self.selected].name)
-            .width(230.)
-            .show_ui(ui, |ui| {
-                for (i, m) in self.model.materials.iter().enumerate() {
-                    if !self.model.meshes.iter().any(|mesh| mesh.material == i) {
-                        continue;
+        let previous = self.selected;
+        controls::select(
+            ui,
+            "Material",
+            &self.model.materials[self.selected].name,
+            |ui| {
+                for (i, material) in self.model.materials.iter().enumerate() {
+                    if self.model.meshes.iter().any(|mesh| mesh.material == i) {
+                        ui.selectable_value(&mut self.selected, i, &material.name);
                     }
-                    ui.selectable_value(&mut self.selected, i, &m.name);
                 }
-            });
-        if previous_material != self.selected {
+            },
+        );
+        if previous != self.selected {
             self.selected_mesh = None;
         }
-        let m = &mut self.model.materials[self.selected];
+        let material = &mut self.model.materials[self.selected];
         let mut changed = false;
-        ui.horizontal(|ui| {
-            ui.label("Base color");
-            changed |= ui.color_edit_button_rgb(&mut m.color).changed();
+        controls::section(ui, "Surface", |ui| {
+            changed |= controls::color(ui, "Base color", &mut material.color).changed();
+            changed |= controls::parameter(
+                ui,
+                "Roughness",
+                egui::Slider::new(&mut material.roughness, 0.0..=1.0),
+            )
+            .changed();
+            changed |= controls::parameter(
+                ui,
+                "Metalness",
+                egui::Slider::new(&mut material.metalness, 0.0..=1.0),
+            )
+            .changed();
+            changed |= controls::parameter(
+                ui,
+                "Transmission",
+                egui::Slider::new(&mut material.transmission, 0.0..=1.0),
+            )
+            .changed();
         });
-        changed |= ui
-            .add(egui::Slider::new(&mut m.roughness, 0.0..=1.0).text("Roughness"))
-            .changed();
-        changed |= ui
-            .add(egui::Slider::new(&mut m.metalness, 0.0..=1.0).text("Metalness"))
-            .changed();
-        changed |= ui
-            .add(egui::Slider::new(&mut m.transmission, 0.0..=1.0).text("Transmission"))
-            .changed();
         if changed {
             self.dirty(Change::Material);
         }
-        ui.add_space(14.);
     }
     fn lighting_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Environment");
-        ui.label(&self.environment.name);
         let mut changed = false;
-        changed |= ui
-            .add(egui::Slider::new(&mut self.environment.intensity, 0.0..=5.0).text("Intensity"))
-            .changed();
-        changed |= ui
-            .add(egui::Slider::new(&mut self.environment.rotation, 0.0..=360.0).text("Rotation"))
-            .changed();
-        ui.horizontal(|ui| {
-            ui.label("Tint");
-            changed |= ui
-                .color_edit_button_rgb(&mut self.environment.color)
-                .changed();
-        });
-        changed |= ui
-            .checkbox(&mut self.environment.background, "Show environment")
-            .changed();
-        ui.horizontal(|ui| {
-            if ui.button("Load HDR…").clicked() {
-                if let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Radiance HDR", &["hdr"])
-                    .pick_file()
-                {
-                    match self.environment.load(&path) {
-                        Ok(()) => changed = true,
-                        Err(e) => self.error = format!("Could not load environment: {e:#}"),
+        controls::section(ui, "Environment", |ui| {
+            ui.add(
+                egui::Label::new(egui::RichText::new(&self.environment.name).color(theme::MUTED))
+                    .truncate(),
+            );
+            ui.horizontal(|ui| {
+                if controls::button(ui, "Load HDR…").clicked() {
+                    if let Some(path) = rfd::FileDialog::new()
+                        .add_filter("Radiance HDR", &["hdr"])
+                        .pick_file()
+                    {
+                        match self.environment.load(&path) {
+                            Ok(()) => changed = true,
+                            Err(e) => self.error = format!("Could not load environment: {e:#}"),
+                        }
                     }
                 }
-            }
-            if ui.button("Studio").clicked() {
-                self.environment = Environment::default();
-                changed = true;
-            }
+                if controls::button(ui, "Studio").clicked() {
+                    self.environment = Environment::default();
+                    changed = true;
+                }
+            });
+            changed |= controls::parameter(
+                ui,
+                "Intensity",
+                egui::Slider::new(&mut self.environment.intensity, 0.0..=5.0),
+            )
+            .changed();
+            changed |= controls::parameter(
+                ui,
+                "Rotation",
+                egui::Slider::new(&mut self.environment.rotation, 0.0..=360.0),
+            )
+            .changed();
+            changed |= controls::color(ui, "Tint", &mut self.environment.color).changed();
+            changed |= controls::toggle(ui, "Show environment", &mut self.environment.background)
+                .changed();
         });
         if changed {
             self.dirty(Change::Environment);
         }
-        ui.add_space(14.);
-        ui.heading("Key light");
-        if ui
-            .checkbox(&mut self.light.enabled, "Enable directional light")
-            .changed()
-        {
-            self.dirty(Change::Scene);
-        }
         let mut light_changed = false;
-        ui.add_enabled_ui(self.light.enabled, |ui| {
-            light_changed |= ui
-                .add(egui::Slider::new(&mut self.light.intensity, 0.0..=10.0).text("Intensity"))
+        let was_enabled = self.light.enabled;
+        controls::section(ui, "Key light", |ui| {
+            controls::toggle(ui, "Directional light", &mut self.light.enabled);
+            ui.add_enabled_ui(self.light.enabled, |ui| {
+                light_changed |= controls::parameter(
+                    ui,
+                    "Intensity",
+                    egui::Slider::new(&mut self.light.intensity, 0.0..=10.0),
+                )
                 .changed();
-            ui.horizontal(|ui| {
-                ui.label("Color");
-                light_changed |= ui.color_edit_button_rgb(&mut self.light.color).changed();
+                light_changed |= controls::color(ui, "Color", &mut self.light.color).changed();
+                light_changed |= controls::parameter(
+                    ui,
+                    "Azimuth",
+                    egui::Slider::new(&mut self.light.azimuth, 0.0..=360.0),
+                )
+                .changed();
+                light_changed |= controls::parameter(
+                    ui,
+                    "Elevation",
+                    egui::Slider::new(&mut self.light.elevation, 5.0..=85.0),
+                )
+                .changed();
             });
-            light_changed |= ui
-                .add(egui::Slider::new(&mut self.light.azimuth, 0.0..=360.0).text("Azimuth"))
-                .changed();
-            light_changed |= ui
-                .add(egui::Slider::new(&mut self.light.elevation, 5.0..=85.0).text("Elevation"))
-                .changed();
         });
-        if light_changed {
+        if was_enabled != self.light.enabled {
+            self.dirty(Change::Scene);
+        } else if light_changed {
             self.dirty(Change::Light);
         }
-        ui.add_space(14.);
     }
     fn object_settings(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Scene");
-        ui.small(format!(
-            "{} meshes · {} triangles",
-            self.model.meshes.len(),
-            self.model
-                .geometries
-                .iter()
-                .map(|g| g.indices.len() / 3)
-                .sum::<usize>()
-        ));
         if let Some(id) = self.selected_mesh {
-            ui.label("Object transform");
+            ui.add(
+                egui::Label::new(
+                    egui::RichText::new(&self.model.meshes[id].name).color(theme::ACCENT),
+                )
+                .truncate(),
+            );
             let mesh = &mut self.model.meshes[id];
             let mut position = mesh.transform.w_axis.truncate();
             let mut changed = false;
-            ui.horizontal(|ui| {
+            controls::section(ui, "Transform", |ui| {
+                ui.weak("World position");
                 for (label, value) in [
                     ("X", &mut position.x),
                     ("Y", &mut position.y),
                     ("Z", &mut position.z),
                 ] {
-                    changed |= ui
-                        .add(
-                            egui::DragValue::new(value)
-                                .prefix(format!("{label} "))
-                                .speed(self.model.radius as f64 * 0.005)
-                                .range(-1e6..=1e6),
-                        )
+                    changed |= controls::number(ui, label, value, self.model.radius as f64 * 0.005)
                         .changed();
                 }
-            });
-            if changed {
-                mesh.transform.w_axis = position.extend(1.);
-            }
-            ui.horizontal(|ui| {
-                if ui.small_button("Rotate Y −15°").clicked() {
-                    mesh.transform *= glam::Mat4::from_rotation_y(-15f32.to_radians());
-                    changed = true;
+                if changed {
+                    mesh.transform.w_axis = position.extend(1.);
                 }
-                if ui.small_button("Rotate Y +15°").clicked() {
-                    mesh.transform *= glam::Mat4::from_rotation_y(15f32.to_radians());
-                    changed = true;
-                }
-            });
-            ui.horizontal(|ui| {
-                for (label, scale) in [("Smaller", 1. / 1.1), ("Larger", 1.1)] {
-                    if ui.small_button(label).clicked() {
-                        let candidate =
-                            mesh.transform * glam::Mat4::from_scale(glam::Vec3::splat(scale));
-                        let determinant = candidate.determinant();
-                        if candidate.is_finite()
-                            && determinant.is_finite()
-                            && determinant.abs() >= 1e-10
-                            && determinant.abs() <= 1e12
-                        {
-                            mesh.transform = candidate;
+                ui.horizontal(|ui| {
+                    for (label, degrees) in [("Y −15°", -15f32), ("Y +15°", 15f32)] {
+                        if controls::button(ui, label).clicked() {
+                            mesh.transform *= glam::Mat4::from_rotation_y(degrees.to_radians());
                             changed = true;
                         }
                     }
-                }
+                });
+                ui.horizontal(|ui| {
+                    for (label, scale) in [("Smaller", 1. / 1.1), ("Larger", 1.1)] {
+                        if controls::button(ui, label).clicked() {
+                            let candidate =
+                                mesh.transform * glam::Mat4::from_scale(glam::Vec3::splat(scale));
+                            let determinant = candidate.determinant();
+                            if candidate.is_finite()
+                                && determinant.is_finite()
+                                && determinant.abs() >= 1e-10
+                                && determinant.abs() <= 1e12
+                            {
+                                mesh.transform = candidate;
+                                changed = true;
+                            }
+                        }
+                    }
+                });
             });
             if changed {
                 self.model.refresh_bounds();
                 self.dirty(Change::Transform);
             }
-            ui.separator();
+        } else {
+            ui.weak("Select an object in the scene list or viewport to edit its transform.");
         }
-        if self.selected_mesh.is_none() {
-            ui.label("Select an object in the scene list or viewport to edit its transform.");
-        }
-        for warning in &self.model.warnings {
-            ui.colored_label(theme::WARNING, warning);
-        }
+        controls::section(ui, "Scene info", |ui| {
+            ui.weak(format!(
+                "{} meshes · {} triangles",
+                self.model.meshes.len(),
+                self.model
+                    .geometries
+                    .iter()
+                    .map(|g| g.indices.len() / 3)
+                    .sum::<usize>()
+            ));
+            for warning in &self.model.warnings {
+                ui.colored_label(theme::WARNING, warning);
+            }
+        });
     }
     fn camera_settings(&mut self, ui: &mut egui::Ui) {
-        ui.add_space(14.);
-        ui.heading("Camera");
-        if ui.button("Fit model").clicked() {
-            self.camera = Camera::fit(self.model.center, self.model.radius);
-            self.dirty(Change::Camera);
-        }
-        if ui
-            .add(egui::Slider::new(&mut self.camera.fov, 20.0..=90.0).text("Field of view"))
+        controls::section(ui, "Framing", |ui| {
+            if controls::button(ui, "Fit model").clicked() {
+                self.camera = Camera::fit(self.model.center, self.model.radius);
+                self.dirty(Change::Camera);
+            }
+            if controls::parameter(
+                ui,
+                "Field of view",
+                egui::Slider::new(&mut self.camera.fov, 20.0..=90.0),
+            )
             .changed()
-        {
-            self.dirty(Change::Camera);
-        }
-        ui.small("Drag to orbit · Shift/right drag to pan\nScroll to zoom · F to fit");
-        ui.add_space(14.);
+            {
+                self.dirty(Change::Camera);
+            }
+            ui.weak("Drag to orbit · Shift/right drag to pan\nScroll to zoom · F to fit");
+        });
     }
     fn viewport(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
         if !self.error.is_empty() {
-            egui::Window::new("Unable to complete action").collapsible(false).resizable(true).default_width(480.).show(&ctx,|ui|{
-                ui.colored_label(theme::ERROR,&self.error);
-                ui.small("The previous image is kept. You can open another model or change settings.");
-                if ui.button("Dismiss").clicked(){self.error.clear();}
-            });
+            egui::Window::new("Unable to complete action")
+                .collapsible(false).resizable(true).default_width(480.)
+                .show(&ctx, |ui| {
+                    ui.colored_label(theme::ERROR, &self.error);
+                    ui.small("The previous image is kept. You can open another model or change settings.");
+                    if controls::button(ui, "Dismiss").clicked() { self.error.clear(); }
+                });
         }
         egui::CentralPanel::default()
             .frame(theme::panel().fill(theme::WORKSPACE).outer_margin(8))
