@@ -1240,7 +1240,7 @@ mod descriptor_tests {
         }
         // Byte equality also checks every payload offset after a layout change.
         fn check(&mut self) -> usize {
-            let camera = self.camera.bytes();
+            let camera = self.camera.bytes(self.size);
             let expected = self.model.descriptor_with_light(
                 &camera,
                 self.size,

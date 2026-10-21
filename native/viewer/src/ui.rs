@@ -1,5 +1,4 @@
 //! Native viewer layout. Rendering and scene updates stay in Viewer.
-use crate::renderer::Camera;
 use crate::{Change, Viewer, default_model, renderer, scene::Environment};
 use crate::{controls, theme};
 use eframe::egui;
@@ -119,13 +118,16 @@ impl Viewer {
                     } else {
                         ui.label(if !self.running {
                             "Paused"
-                        } else if self.samples >= self.target {
+                        } else if self.samples >= self.settings.max_samples {
                             "Complete"
                         } else {
                             "Rendering"
                         });
                         ui.separator();
-                        ui.small(format!("{} / {} samples", self.samples, self.target));
+                        ui.small(format!(
+                            "{} / {} samples",
+                            self.samples, self.settings.max_samples
+                        ));
                     }
                     if ui.available_width() > 380. {
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -268,12 +270,18 @@ impl Viewer {
             });
     }
     fn render_settings(&mut self, ui: &mut egui::Ui) {
-        controls::section(ui, "Sampling", |ui| {
-            ui.small(format!("{} / {} samples", self.samples, self.target));
+        let previous = self.settings;
+        controls::section(ui, "Quality", |ui| {
+            ui.small(format!(
+                "{} / {} samples",
+                self.samples, self.settings.max_samples
+            ));
             ui.add(
-                egui::ProgressBar::new(self.samples as f32 / self.target.max(1) as f32)
-                    .fill(theme::ACCENT)
-                    .desired_height(4.),
+                egui::ProgressBar::new(
+                    self.samples as f32 / self.settings.max_samples.max(1) as f32,
+                )
+                .fill(theme::ACCENT)
+                .desired_height(4.),
             );
             ui.horizontal(|ui| {
                 if controls::button(ui, if self.running { "Pause" } else { "Resume" }).clicked() {
@@ -285,8 +293,28 @@ impl Viewer {
             });
             controls::parameter(
                 ui,
-                "Samples",
-                egui::Slider::new(&mut self.target, 8..=1024).logarithmic(true),
+                "Max samples",
+                egui::Slider::new(&mut self.settings.max_samples, 4..=16384).logarithmic(true),
+            );
+            controls::parameter(
+                ui,
+                "Bounces",
+                egui::Slider::new(&mut self.settings.bounces, 1..=16),
+            );
+            controls::select(
+                ui,
+                "Sampling",
+                ["Sobol", "Z-Sobol", "Random"][self.settings.sampling_pattern as usize],
+                |ui| {
+                    for (mode, name) in [(0, "Sobol"), (1, "Z-Sobol"), (2, "Random")] {
+                        ui.selectable_value(&mut self.settings.sampling_pattern, mode, name);
+                    }
+                },
+            );
+            controls::parameter(
+                ui,
+                "Clamping",
+                egui::Slider::new(&mut self.settings.clamping, 0.0..=100.0),
             );
             let old = self.size;
             controls::select(
@@ -308,6 +336,9 @@ impl Viewer {
                 self.dirty(Change::Scene);
             }
         });
+        if previous != self.settings {
+            self.dirty(Change::Scene);
+        }
         controls::section(ui, "Display", |ui| {
             if controls::parameter(
                 ui,
@@ -349,7 +380,8 @@ impl Viewer {
             ui.horizontal(|ui| {
                 if controls::button(ui, "Frame selection").clicked() {
                     let (min, max) = self.model.mesh_bounds(id);
-                    self.camera = Camera::fit((min + max) * 0.5, (max - min).length() * 0.5);
+                    self.camera
+                        .frame((min + max) * 0.5, (max - min).length() * 0.5);
                     self.dirty(Change::Camera);
                 }
                 ui.add(
@@ -671,22 +703,105 @@ impl Viewer {
         });
     }
     fn camera_settings(&mut self, ui: &mut egui::Ui) {
-        controls::section(ui, "Framing", |ui| {
-            if controls::button(ui, "Fit model").clicked() {
-                self.camera = Camera::fit(self.model.center, self.model.radius);
-                self.dirty(Change::Camera);
-            }
-            if controls::parameter(
+        let mut changed = false;
+        controls::section(ui, "View", |ui| {
+            let before = self.camera.orthographic;
+            controls::select(
                 ui,
-                "Field of view",
-                egui::Slider::new(&mut self.camera.fov, 20.0..=90.0),
-            )
-            .changed()
-            {
-                self.dirty(Change::Camera);
+                "Projection",
+                if before {
+                    "Orthographic"
+                } else {
+                    "Perspective"
+                },
+                |ui| {
+                    ui.selectable_value(&mut self.camera.orthographic, false, "Perspective");
+                    ui.selectable_value(&mut self.camera.orthographic, true, "Orthographic");
+                },
+            );
+            changed |= before != self.camera.orthographic;
+            ui.add_enabled_ui(!self.camera.orthographic, |ui| {
+                changed |=
+                    controls::scalar(ui, "Field of view", &mut self.camera.fov, 10.0..=100.0);
+            });
+            if controls::button(ui, "Fit to model · F").clicked() {
+                self.camera.frame(self.model.center, self.model.radius);
+                changed = true;
             }
             ui.weak("Drag to orbit · Shift/right drag to pan\nScroll to zoom · F to fit");
         });
+        controls::section(ui, "Depth of field", |ui| {
+            ui.add_enabled_ui(!self.camera.orthographic, |ui| {
+                let mut enabled = self.camera.f_stop > 0.;
+                if controls::toggle(ui, "Depth of field", &mut enabled).changed() {
+                    self.camera.f_stop = if enabled { 2.8 } else { 0. };
+                    self.picking_focus = false;
+                    changed = true;
+                }
+                if enabled {
+                    changed |= controls::parameter(
+                        ui,
+                        "f-number",
+                        egui::Slider::new(&mut self.camera.f_stop, 0.7..=22.).logarithmic(true),
+                    )
+                    .changed();
+                    let unit = self.camera.meters_per_unit;
+                    let mut focus = self.camera.focus_distance * unit;
+                    let min = self.model.radius * 0.05 * unit;
+                    let max = (self.model.radius * 60.).max(self.camera.focus_distance * 2.) * unit;
+                    if controls::parameter(
+                        ui,
+                        "Focus (m)",
+                        egui::Slider::new(&mut focus, min..=max)
+                            .logarithmic(true)
+                            .max_decimals(4),
+                    )
+                    .changed()
+                    {
+                        self.camera.focus_distance = focus / unit;
+                        changed = true;
+                    }
+                    if ui
+                        .selectable_label(self.picking_focus, "Pick focus point")
+                        .clicked()
+                    {
+                        self.picking_focus = !self.picking_focus;
+                    }
+                    let old = self.camera.meters_per_unit;
+                    controls::select(
+                        ui,
+                        "Scene unit",
+                        match old {
+                            0.001 => "Millimetres",
+                            0.01 => "Centimetres",
+                            0.0254 => "Inches",
+                            _ => "Metres",
+                        },
+                        |ui| {
+                            for (value, name) in [
+                                (0.001, "Millimetres"),
+                                (0.01, "Centimetres"),
+                                (0.0254, "Inches"),
+                                (1., "Metres"),
+                            ] {
+                                ui.selectable_value(&mut self.camera.meters_per_unit, value, name);
+                            }
+                        },
+                    );
+                    changed |= old != self.camera.meters_per_unit;
+                    if self.picking_focus {
+                        ui.weak("Click a surface in the viewport to focus.");
+                    }
+                }
+            });
+            if self.camera.orthographic {
+                self.picking_focus = false;
+                ui.weak("Orthographic views have no depth of field.");
+            }
+        });
+        if changed {
+            self.dirty(Change::Camera);
+        }
     }
     fn viewport(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
@@ -731,6 +846,12 @@ impl Viewer {
                     );
                 }
                 let response = ui.interact(rect, ui.id().with("viewport"), egui::Sense::drag());
+                if self.picking_focus && response.hovered() {
+                    ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+                }
+                if self.picking_focus && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    self.picking_focus = false;
+                }
                 for (pan, delta) in
                     ui.input(|i| self.drag.motion(rect, response.contains_pointer(), i))
                 {
@@ -746,11 +867,21 @@ impl Viewer {
                         (pos.x - rect.min.x) / rect.width(),
                         (pos.y - rect.min.y) / rect.height(),
                     ];
-                    self.selected_mesh = self.model.pick(&self.camera, uv, aspect);
-                    if let Some(id) = self.selected_mesh {
-                        self.selected = self.model.meshes[id].material;
-                        self.tab = 1;
-                        self.inspector_open = true;
+                    if self.picking_focus {
+                        if let Some((_, point)) = self.model.pick_hit(&self.camera, uv, aspect) {
+                            let forward = (self.camera.target - self.camera.eye()).normalize();
+                            self.camera.focus_distance =
+                                (point - self.camera.eye()).dot(forward).max(1e-5);
+                            self.picking_focus = false;
+                            self.dirty(Change::Camera);
+                        }
+                    } else {
+                        self.selected_mesh = self.model.pick(&self.camera, uv, aspect);
+                        if let Some(id) = self.selected_mesh {
+                            self.selected = self.model.meshes[id].material;
+                            self.tab = 1;
+                            self.inspector_open = true;
+                        }
                     }
                 }
                 if let Some(id) = self.selected_mesh {
@@ -771,7 +902,7 @@ impl Viewer {
                 }
             });
         if ctx.input(|i| i.key_pressed(egui::Key::F)) && !ctx.egui_wants_keyboard_input() {
-            self.camera = Camera::fit(self.model.center, self.model.radius);
+            self.camera.frame(self.model.center, self.model.radius);
             self.dirty(Change::Camera);
         }
     }

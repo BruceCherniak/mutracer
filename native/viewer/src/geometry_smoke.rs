@@ -20,7 +20,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
         let mut reference = Renderer::with_backend(mode)?;
         renderer.commit(model.update_descriptor(
             &mut descriptor,
-            &camera.bytes(),
+            &camera.bytes(size),
             size,
             &environment,
             &KeyLight::default(),
@@ -46,7 +46,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                     renderer
                         .commit(invalid.update_descriptor(
                             &mut descriptor,
-                            &camera.bytes(),
+                            &camera.bytes(size),
                             size,
                             &environment,
                             &KeyLight::default()
@@ -57,7 +57,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 );
                 renderer.commit(model.update_descriptor(
                     &mut descriptor,
-                    &camera.bytes(),
+                    &camera.bytes(size),
                     size,
                     &environment,
                     &KeyLight::default(),
@@ -69,7 +69,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 }
                 ensure!(renderer.samples()? == 0, "Geometry did not reset samples");
                 let actual = renderer.finish(8)?;
-                reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                reference.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
                 ensure!(
                     actual == reference.finish(8)?
                         && renderer.image(1)? == reference.image(1)?
@@ -79,13 +79,13 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 environment.intensity = 0.5 + step as f32 * 0.15;
                 renderer.commit(model.update_descriptor(
                     &mut descriptor,
-                    &camera.bytes(),
+                    &camera.bytes(size),
                     size,
                     &environment,
                     &KeyLight::default(),
                 ))?;
                 let actual = renderer.finish(8)?;
-                reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                reference.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
                 ensure!(
                     actual == reference.finish(8)?
                         && renderer.image(1)? == reference.image(1)?

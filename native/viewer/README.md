@@ -56,7 +56,11 @@ the output directory. See the [native guide](../README.md) for platform backends
 ## Controls
 
 - Drag the image to orbit; right-drag or Shift-drag to pan; scroll to zoom.
-  **Fit model** or **F** restores framing.
+  **Fit to model** or **F** restores framing. **Camera** offers perspective and
+  orthographic projection, with a 35° default field of view. Perspective views
+  support depth of field: enable it, choose an f-number, then set focus distance
+  or use **Pick focus point** and click a surface. Choose the scene unit to match
+  the model; it defaults to metres. Orthographic views have no depth of field.
 - Use the left **Scene** list to search and select objects, or click a surface in
   the viewport to open its **Material** panel. **Frame selection** fits the camera
   to that object. The right **Object** panel provides world position, local Y
@@ -77,8 +81,11 @@ the output directory. See the [native guide](../README.md) for platform backends
 - Adjust environment intensity, tint, rotation and background visibility.
   **Load HDR…** opens a local Radiance equirectangular environment; **Studio**
   restores the built-in light.
-- Choose sample count and resolution, pause/resume, restart accumulation, adjust
-  exposure or save the displayed image as PNG. The preview uses Reinhard/sRGB.
+- **Render** provides 4–16,384 maximum samples, 1–16 bounces, Sobol, Z-Sobol or
+  Random sampling and clamping (0 disables it). Quality changes restart
+  accumulation; more samples and bounces cost more rendering time. Choose a fixed
+  resolution, pause/resume, restart, adjust exposure or save the displayed image
+  as PNG. The preview uses Reinhard/sRGB.
 - **Lighting** also provides an optional directional **Key light**, disabled by
   default. Adjust its intensity, color, azimuth and elevation.
 - **Native OIDN** is on by default. It denoises completed previews after interaction
@@ -135,7 +142,7 @@ File size is limited to 128 MiB, combined model buffers to 512 MiB and source
 material images to 64M pixels each, and environments to 4M pixels. The native
 library imposes additional scene/texture budgets described in
 [the native guide](../README.md#limits).
-Rendering uses wgpu with six bounces. HWRT support and fallbacks follow
+Rendering uses wgpu with six bounces by default. HWRT support and fallbacks follow
 [the native intersection limits](../README.md#intersection-backend).
 HWRT has an unresolved intermittent whole-scene miss on macOS/Metal; choose
 Software when image correctness is critical. Coplanar overlapping surfaces can

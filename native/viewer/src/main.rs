@@ -7,6 +7,7 @@ mod import;
 mod input;
 mod metrics;
 mod package_smoke;
+mod parity_smoke;
 mod picking;
 mod renderer;
 mod scene;
@@ -14,7 +15,7 @@ mod theme;
 mod ui;
 use anyhow::{Context, Result, ensure};
 use eframe::egui;
-use renderer::{Camera, Renderer};
+use renderer::{Camera, RenderSettings, Renderer};
 use scene::{Descriptor, Environment, KeyLight, Model};
 use std::{
     path::{Path, PathBuf},
@@ -55,7 +56,8 @@ struct Viewer {
     environment: Environment,
     light: KeyLight,
     size: [u32; 2],
-    target: u32,
+    settings: RenderSettings,
+    picking_focus: bool,
     samples: u32,
     exposure: f32,
     selected: usize,
@@ -112,7 +114,7 @@ impl Viewer {
         if gpu.is_none() {
             renderer.commit(model.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &environment,
                 &KeyLight::default(),
@@ -145,7 +147,8 @@ impl Viewer {
             environment,
             light: KeyLight::default(),
             size,
-            target: 64,
+            settings: RenderSettings::default(),
+            picking_focus: false,
             samples: 0,
             exposure: 0.,
             selected,
@@ -267,6 +270,7 @@ impl Viewer {
                                     self.camera = camera;
                                     self.selected = self.model.meshes[0].material;
                                     self.selected_mesh = None;
+                                    self.picking_focus = false;
                                     self.object_query.clear();
                                 }
                                 self.samples = 0;
@@ -368,13 +372,16 @@ impl Viewer {
                     | Change::Transform
                         if !background =>
                     {
-                        self.renderer.commit(self.model.update_descriptor(
-                            &mut self.descriptor,
-                            &self.camera.bytes(),
-                            self.size,
-                            &self.environment,
-                            &self.light,
-                        ))?;
+                        self.renderer.commit_with_settings(
+                            self.model.update_descriptor(
+                                &mut self.descriptor,
+                                &self.camera.bytes(self.size),
+                                self.size,
+                                &self.environment,
+                                &self.light,
+                            ),
+                            &self.settings,
+                        )?;
                         self.last_commit_full = !self.renderer.last_commit_incremental()?;
                         if self.last_commit_full {
                             self.last_scene_commit = std::time::Instant::now();
@@ -396,6 +403,7 @@ impl Viewer {
                             model.clone(),
                             camera.clone(),
                             self.size,
+                            self.settings,
                             self.environment.clone(),
                             self.light.clone(),
                             self.descriptor.take(),
@@ -441,7 +449,7 @@ impl Viewer {
             && self.change == Change::None
             && self.frame_samples > 0
             && self.frame_generation == self.generation
-            && (self.samples >= self.target
+            && (self.samples >= self.settings.max_samples
                 || !self.running
                 || self.samples >= 8 && self.samples.is_power_of_two())
             && self.last_denoise != Some((self.generation, self.samples))
@@ -468,11 +476,11 @@ impl Viewer {
         if !self.renderer.busy()
             && self.change == Change::None
             && self.running
-            && self.samples < self.target
+            && self.samples < self.settings.max_samples
         {
             // Dispatch now, before the next input can cancel a queued job.
             self.renderer
-                .start((self.target - self.samples).min(if held { 1 } else { 4 }))?;
+                .start((self.settings.max_samples - self.samples).min(if held { 1 } else { 4 }))?;
             self.renderer.poll()?;
         }
         if self.display_dirty && self.gpu.is_some() {
@@ -503,7 +511,7 @@ impl Viewer {
             self.display_dirty = false;
         }
         if self.renderer.busy()
-            || self.running && self.samples < self.target
+            || self.running && self.samples < self.settings.max_samples
             || self.change != Change::None
         {
             ctx.request_repaint_after(Duration::from_millis(16));
@@ -549,7 +557,7 @@ impl eframe::App for Viewer {
         let mut pick_ms = 0.;
         if self.metrics.is_some() {
             self.denoise = false;
-            self.target = 8;
+            self.settings.max_samples = 8;
             let m = self.metrics.as_mut().unwrap();
             if self.commit.is_none()
                 && self.frame_samples > 0
@@ -694,13 +702,13 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
     let mut environment = Environment::default();
     let size = [320, 216];
     let mut renderer = Renderer::with_backend(0)?;
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     let original = renderer.finish(16)?;
     renderer::save(&out.join("original.png"), &original, size, 0.)?;
     let normal = renderer.image(1)?;
     let albedo = renderer.image(2)?;
     let mut hardware = Renderer::with_backend(1)?;
-    hardware.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    hardware.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     let hardware_pixels = hardware.finish(16)?;
     let (backend, reason) = hardware.backend()?;
     let mut max_diff = 0f32;
@@ -780,7 +788,7 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
         "Restart changed the original image"
     );
     camera.orbit([70., -20.]);
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     ensure!(
         renderer.last_commit_incremental()?,
         "Camera commit rebuilt the scene"
@@ -789,7 +797,7 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
     ensure!(original != orbit, "Camera control did not change pixels");
     renderer::save(&out.join("orbit.png"), &orbit, size, 0.)?;
     camera = Camera::fit(model.center, model.radius);
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     ensure!(
         renderer.finish(16)? == original,
         "Restoring camera changed the original image"
@@ -800,12 +808,12 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
         material.color = [0.05, 0.85, 0.15];
         material.roughness = 0.8;
     }
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     let material = renderer.finish(16)?;
     ensure!(material != original, "Material edit did not change pixels");
     renderer::save(&out.join("material.png"), &material, size, 0.)?;
     environment.intensity = 0.2;
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     let env = renderer.finish(16)?;
     ensure!(env != material, "Environment edit did not change pixels");
     renderer::save(&out.join("environment.png"), &env, size, 0.)?;
@@ -816,7 +824,7 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
     }
     std::fs::write(&hdr_path, hdr)?;
     environment.load(&hdr_path)?;
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     let hdr = renderer.finish(16)?;
     ensure!(
         hdr != env,
@@ -911,7 +919,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         format!("PASS 120 camera updates, {frames} changed previews, zero blank frames\n"),
     )?;
     println!("PASS 120 camera updates, {frames} changed previews, zero blank frames");
-    viewer.target = 8;
+    viewer.settings.max_samples = 8;
     viewer.denoise = true;
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
     while !viewer.denoiser.as_ref().is_some_and(|d| d.busy) {
@@ -964,7 +972,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         "PASS stale OIDN result ignored; resized preview retained; final native denoise completed"
     );
     viewer.denoise = false;
-    viewer.target = 12;
+    viewer.settings.max_samples = 12;
     while viewer.samples < 12 {
         viewer.tick(&ctx)?;
         ensure!(
@@ -973,7 +981,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
-    viewer.target = 8;
+    viewer.settings.max_samples = 8;
     viewer.denoise = true;
     while viewer.denoised.is_empty() {
         viewer.tick(&ctx)?;
@@ -1050,7 +1058,9 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     output.textures_delta.clear();
     viewer.light.enabled = true;
     viewer.dirty(Change::Scene);
-    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    while viewer.change != Change::None
+        || viewer.renderer.busy()
+        || viewer.samples < viewer.settings.max_samples
     {
         viewer.tick(&ctx)?;
         ensure!(
@@ -1105,7 +1115,9 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     output.textures_delta.clear();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    while viewer.change != Change::None
+        || viewer.renderer.busy()
+        || viewer.samples < viewer.settings.max_samples
     {
         viewer.tick(&ctx)?;
         ensure!(
@@ -1124,7 +1136,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     let mut reference = Renderer::with_backend(viewer.backend)?;
     reference.commit(&viewer.model.descriptor_with_light(
-        &viewer.camera.bytes(),
+        &viewer.camera.bytes(viewer.size),
         viewer.size,
         &viewer.environment,
         &viewer.light,
@@ -1144,7 +1156,9 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     viewer.model.materials[id].unlit = true;
     viewer.dirty(Change::Scene);
-    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    while viewer.change != Change::None
+        || viewer.renderer.busy()
+        || viewer.samples < viewer.settings.max_samples
     {
         viewer.tick(&ctx)?;
         ensure!(
@@ -1162,7 +1176,9 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         viewer.commit.is_some() && viewer.texture.is_some(),
         "Edit after a full preparation did not commit in the background with retained preview"
     );
-    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    while viewer.change != Change::None
+        || viewer.renderer.busy()
+        || viewer.samples < viewer.settings.max_samples
     {
         viewer.tick(&ctx)?;
         ensure!(
@@ -1176,7 +1192,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         "Unlit material color edit did not prepare the scene fully"
     );
     reference.commit(&viewer.model.descriptor_with_light(
-        &viewer.camera.bytes(),
+        &viewer.camera.bytes(viewer.size),
         viewer.size,
         &viewer.environment,
         &viewer.light,
@@ -1196,7 +1212,9 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         viewer.commit.is_some() && viewer.texture.is_some(),
         "Environment feature change did not commit in the background with retained preview"
     );
-    while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
+    while viewer.change != Change::None
+        || viewer.renderer.busy()
+        || viewer.samples < viewer.settings.max_samples
     {
         viewer.tick(&ctx)?;
         ensure!(
@@ -1210,7 +1228,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         "Background visibility change did not prepare the scene fully"
     );
     reference.commit(&viewer.model.descriptor_with_light(
-        &viewer.camera.bytes(),
+        &viewer.camera.bytes(viewer.size),
         viewer.size,
         &viewer.environment,
         &viewer.light,
@@ -1234,7 +1252,7 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
     let size = [160, 106];
     let mut renderer = Renderer::with_backend(1)?;
     let mut reference = Renderer::with_backend(1)?;
-    let initial = model.descriptor(&camera.bytes(), size, &environment);
+    let initial = model.descriptor(&camera.bytes(size), size, &environment);
     renderer.commit(&initial)?;
     let baseline = renderer.finish(8)?;
     let id = model.meshes[0].material;
@@ -1244,7 +1262,7 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
         renderer
             .commit(bad.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &environment,
                 &KeyLight::default()
@@ -1280,7 +1298,7 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
             let started = std::time::Instant::now();
             renderer.commit(model.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &environment,
                 &KeyLight::default(),
@@ -1296,7 +1314,7 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
             );
             let actual = renderer.finish(8)?;
             let started = std::time::Instant::now();
-            reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+            reference.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
             full_ms.push(started.elapsed().as_secs_f64() * 1000.);
             let expected = reference.finish(8)?;
             ensure!(
@@ -1333,7 +1351,7 @@ fn material_layers_smoke(path: &Path, out: &Path) -> Result<()> {
     let camera = Camera::fit(original.center, original.radius);
     let size = [160, 106];
     let environment = Environment::default();
-    let initial = original.descriptor(&camera.bytes(), size, &environment);
+    let initial = original.descriptor(&camera.bytes(size), size, &environment);
     // The first six records are precisely the pre-layer viewer's properties.
     let mut legacy = initial.clone();
     let word = |data: &[u8], at: usize| {
@@ -1420,14 +1438,14 @@ fn material_layers_smoke(path: &Path, out: &Path) -> Result<()> {
                 }
                 retained.commit(model.update_descriptor(
                     &mut descriptor,
-                    &camera.bytes(),
+                    &camera.bytes(size),
                     size,
                     &environment,
                     &KeyLight::default(),
                 ))?;
                 let actual = retained.finish(8)?;
                 let mut fresh = Renderer::with_backend(mode)?;
-                fresh.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                fresh.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
                 ensure!(
                     !fresh.last_commit_incremental()?,
                     "Reference must prepare a fresh scene"
@@ -1451,7 +1469,7 @@ fn material_layers_smoke(path: &Path, out: &Path) -> Result<()> {
         bad.materials[id].layers.coat_ior = f32::NAN;
         ensure!(
             retained
-                .commit(&bad.descriptor(&camera.bytes(), size, &environment))
+                .commit(&bad.descriptor(&camera.bytes(size), size, &environment))
                 .is_err()
                 && retained.pixels()? == before,
             "Invalid layer changed the accepted scene"
@@ -1484,7 +1502,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
     let mut reference = Renderer::with_backend(1)?;
     renderer.commit(model.update_descriptor(
         &mut descriptor,
-        &camera.bytes(),
+        &camera.bytes(size),
         size,
         &environment,
         &KeyLight::default(),
@@ -1496,7 +1514,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
         renderer
             .commit(model.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &bad,
                 &KeyLight::default()
@@ -1520,7 +1538,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
             )));
             renderer.commit(model.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &environment,
                 &KeyLight::default(),
@@ -1536,7 +1554,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
             environment.color = [0.2 + step as f32 * 0.1, 0.8, 0.4];
             renderer.commit(model.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &environment,
                 &KeyLight::default(),
@@ -1550,7 +1568,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
                 "Environment update did not reset samples"
             );
             let actual = renderer.finish(8)?;
-            reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+            reference.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
             ensure!(
                 actual == reference.finish(8)?
                     && renderer.image(1)? == reference.image(1)?
@@ -1563,7 +1581,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
     environment.background = false;
     renderer.commit(model.update_descriptor(
         &mut descriptor,
-        &camera.bytes(),
+        &camera.bytes(size),
         size,
         &environment,
         &KeyLight::default(),
@@ -1575,7 +1593,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
     environment = Environment::default();
     renderer.commit(model.update_descriptor(
         &mut descriptor,
-        &camera.bytes(),
+        &camera.bytes(size),
         size,
         &environment,
         &KeyLight::default(),
@@ -1604,7 +1622,7 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
     let mut reference = Renderer::with_backend(1)?;
     renderer.commit(model.update_descriptor(
         &mut descriptor,
-        &camera.bytes(),
+        &camera.bytes(size),
         size,
         &environment,
         &light,
@@ -1616,7 +1634,7 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
         renderer
             .commit(model.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &environment,
                 &bad
@@ -1636,7 +1654,7 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
             environment.background = false;
             renderer.commit(model.update_descriptor(
                 &mut descriptor,
-                &camera.bytes(),
+                &camera.bytes(size),
                 size,
                 &environment,
                 &light,
@@ -1658,7 +1676,7 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
         light.elevation = 10. + (step % 8) as f32 * 9.;
         renderer.commit(model.update_descriptor(
             &mut descriptor,
-            &camera.bytes(),
+            &camera.bytes(size),
             size,
             &environment,
             &light,
@@ -1673,7 +1691,7 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
         );
         let actual = renderer.finish(8)?;
         reference.commit(&model.descriptor_with_light(
-            &camera.bytes(),
+            &camera.bytes(size),
             size,
             &environment,
             &light,
@@ -1690,7 +1708,7 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
     light.enabled = false;
     renderer.commit(model.update_descriptor(
         &mut descriptor,
-        &camera.bytes(),
+        &camera.bytes(size),
         size,
         &environment,
         &light,
@@ -1723,7 +1741,7 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
         let mut reference = Renderer::with_backend(mode)?;
         renderer.commit(model.update_descriptor(
             &mut descriptor,
-            &camera.bytes(),
+            &camera.bytes(size),
             size,
             &environment,
             &KeyLight::default(),
@@ -1752,7 +1770,7 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
                     renderer
                         .commit(invalid.update_descriptor(
                             &mut descriptor,
-                            &camera.bytes(),
+                            &camera.bytes(size),
                             size,
                             &environment,
                             &KeyLight::default()
@@ -1763,7 +1781,7 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
                 );
                 renderer.commit(model.update_descriptor(
                     &mut descriptor,
-                    &camera.bytes(),
+                    &camera.bytes(size),
                     size,
                     &environment,
                     &KeyLight::default(),
@@ -1775,7 +1793,7 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
                 }
                 ensure!(renderer.samples()? == 0, "Transform did not reset samples");
                 let actual = renderer.finish(8)?;
-                reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                reference.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
                 ensure!(
                     actual == reference.finish(8)?
                         && renderer.image(1)? == reference.image(1)?
@@ -1786,13 +1804,13 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
                 environment.intensity = 0.5 + step as f32 * 0.2;
                 renderer.commit(model.update_descriptor(
                     &mut descriptor,
-                    &camera.bytes(),
+                    &camera.bytes(size),
                     size,
                     &environment,
                     &KeyLight::default(),
                 ))?;
                 let actual = renderer.finish(8)?;
-                reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                reference.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
                 ensure!(
                     actual == reference.finish(8)?
                         && renderer.image(1)? == reference.image(1)?
@@ -1831,10 +1849,16 @@ fn main() -> Result<()> {
     let mut transform_out = None;
     let mut geometry_out = None;
     let mut package_out = None;
+    let mut parity_out = None;
     let mut startup_out = None;
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
+            "--parity-smoke" => {
+                parity_out = Some(PathBuf::from(
+                    args.next().context("--parity-smoke needs a directory")?,
+                ));
+            }
             "--startup-smoke" => {
                 startup_out = Some(PathBuf::from(
                     args.next().context("--startup-smoke needs a report path")?,
@@ -1900,6 +1924,9 @@ fn main() -> Result<()> {
         }
     }
     let model = model.unwrap_or_else(default_model);
+    if let Some(out) = parity_out {
+        return parity_smoke::run(&model, &out);
+    }
     if let Some(out) = package_out {
         return package_smoke::run(&model, &out);
     }
@@ -1936,7 +1963,7 @@ fn main() -> Result<()> {
         );
         let mut r = Renderer::with_backend(1)?;
         let c = Camera::fit(m.center, m.radius);
-        r.commit(&m.descriptor(&c.bytes(), [160, 106], &Environment::default()))?;
+        r.commit(&m.descriptor(&c.bytes([160, 106]), [160, 106], &Environment::default()))?;
         let pixels = r.finish(16)?;
         if let Some(out) = preview_out {
             std::fs::create_dir_all(&out)?;
@@ -1985,7 +2012,7 @@ fn main() -> Result<()> {
             let mut viewer = Viewer::new_on_device(&model, cc.wgpu_render_state.clone())?;
             if let Some(path) = startup_out {
                 viewer.size = [64, 48];
-                viewer.target = 1;
+                viewer.settings.max_samples = 1;
                 viewer.backend = 0;
                 viewer.denoise = false;
                 viewer.startup_smoke = Some((path, std::time::Instant::now(), 0));

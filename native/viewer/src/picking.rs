@@ -20,16 +20,11 @@ fn bounds(origin: Vec3, direction: Vec3, min: Vec3, max: Vec3, nearest: f32) -> 
 }
 impl Model {
     pub fn pick(&self, camera: &Camera, uv: [f32; 2], aspect: f32) -> Option<usize> {
-        let eye = camera.eye();
-        let forward = (camera.target - eye).normalize();
-        let right = forward.cross(Vec3::Y).normalize();
-        let up = right.cross(forward);
-        let half = (camera.fov.to_radians() * 0.5).tan();
-        let direction = (forward
-            + right * ((uv[0] * 2. - 1.) * aspect * half)
-            + up * ((1. - uv[1] * 2.) * half))
-            .normalize();
-        let origin = eye + direction * (camera.radius * 0.0001);
+        self.pick_hit(camera, uv, aspect).map(|(id, _)| id)
+    }
+    pub fn pick_hit(&self, camera: &Camera, uv: [f32; 2], aspect: f32) -> Option<(usize, Vec3)> {
+        let (origin, direction) = camera.ray(uv, aspect);
+        let origin = origin + direction * (camera.radius * 0.0001).max(0.00001);
         let mut nearest = f32::INFINITY;
         let mut selected = None;
         for (id, mesh) in self.meshes.iter().enumerate() {
@@ -49,7 +44,7 @@ impl Model {
                 selected = Some(id);
             }
         }
-        selected
+        selected.map(|id| (id, origin + direction * nearest))
     }
     pub fn rebuild_picking(&mut self) -> anyhow::Result<()> {
         self.picking = std::sync::Arc::new(
@@ -181,45 +176,52 @@ mod transformed_tests {
         let mut camera = Camera::fit(Vec3::ZERO, 2.);
         camera.yaw = 0.;
         camera.pitch = 0.;
-        for y in 0..21 {
-            for x in 0..21 {
-                let uv = [x as f32 / 20., y as f32 / 20.];
-                let eye = camera.eye();
-                let f = (camera.target - eye).normalize();
-                let r = f.cross(Vec3::Y).normalize();
-                let u = r.cross(f);
-                let half = (camera.fov.to_radians() * 0.5).tan();
-                let d = (f + r * ((uv[0] * 2. - 1.) * half) + u * ((1. - uv[1] * 2.) * half))
-                    .normalize();
-                let mut expected = None;
-                let mut nearest = f32::INFINITY;
-                for (id, mesh) in model.meshes.iter().enumerate() {
-                    let a = mesh.transform.transform_point3(vertices[0]);
-                    let b = mesh.transform.transform_point3(vertices[1]);
-                    let c = mesh.transform.transform_point3(vertices[2]);
-                    let e1 = b - a;
-                    let e2 = c - a;
-                    let p = d.cross(e2);
-                    let det = e1.dot(p);
-                    if det.abs() < 1e-10 {
-                        continue;
+        for orthographic in [false, true] {
+            camera.orthographic = orthographic;
+            for y in 0..21 {
+                for x in 0..21 {
+                    let uv = [x as f32 / 20., y as f32 / 20.];
+                    let eye = camera.eye();
+                    let f = (camera.target - eye).normalize();
+                    let r = f.cross(Vec3::Y).normalize();
+                    let u = r.cross(f);
+                    let half = (camera.fov.to_radians() * 0.5).tan();
+                    let offset = r * ((uv[0] * 2. - 1.) * half) + u * ((1. - uv[1] * 2.) * half);
+                    let (eye, d) = if orthographic {
+                        (eye + offset * camera.distance, f)
+                    } else {
+                        (eye, (f + offset).normalize())
+                    };
+                    let mut expected = None;
+                    let mut nearest = f32::INFINITY;
+                    for (id, mesh) in model.meshes.iter().enumerate() {
+                        let a = mesh.transform.transform_point3(vertices[0]);
+                        let b = mesh.transform.transform_point3(vertices[1]);
+                        let c = mesh.transform.transform_point3(vertices[2]);
+                        let e1 = b - a;
+                        let e2 = c - a;
+                        let p = d.cross(e2);
+                        let det = e1.dot(p);
+                        if det.abs() < 1e-10 {
+                            continue;
+                        }
+                        let s = eye - a;
+                        let q = s.cross(e1);
+                        let u = s.dot(p) / det;
+                        let v = d.dot(q) / det;
+                        let t = e2.dot(q) / det;
+                        if u >= 0.
+                            && v >= 0.
+                            && u + v <= 1.
+                            && t > camera.radius * 0.0001
+                            && t < nearest
+                        {
+                            nearest = t;
+                            expected = Some(id);
+                        }
                     }
-                    let s = eye - a;
-                    let q = s.cross(e1);
-                    let u = s.dot(p) / det;
-                    let v = d.dot(q) / det;
-                    let t = e2.dot(q) / det;
-                    if u >= 0.
-                        && v >= 0.
-                        && u + v <= 1.
-                        && t > camera.radius * 0.0001
-                        && t < nearest
-                    {
-                        nearest = t;
-                        expected = Some(id);
-                    }
+                    assert_eq!(model.pick(&camera, uv, 1.), expected, "uv={uv:?}");
                 }
-                assert_eq!(model.pick(&camera, uv, 1.), expected, "uv={uv:?}");
             }
         }
     }

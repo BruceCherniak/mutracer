@@ -3,6 +3,7 @@ use anyhow::{Result, bail, ensure};
 use glam::{Affine3A, Mat4, Vec3};
 use mutracer_native_probe::context as native;
 use mutracer_native_probe::layout::camera as camera_wire;
+pub use mutracer_native_probe::settings::RenderSettings;
 use mutracer_native_probe::status::Status;
 use std::{
     ffi::CStr,
@@ -105,6 +106,7 @@ impl Renderer {
         model: crate::scene::Model,
         camera: Camera,
         size: [u32; 2],
+        settings: RenderSettings,
         environment: crate::scene::Environment,
         light: crate::scene::KeyLight,
         mut descriptor: Option<crate::scene::Descriptor>,
@@ -119,7 +121,7 @@ impl Renderer {
                 || -> Result<SceneCommit> {
                     let bytes = model.update_descriptor(
                         &mut descriptor,
-                        &camera.bytes(),
+                        &camera.bytes(size),
                         size,
                         &environment,
                         &light,
@@ -142,11 +144,18 @@ impl Renderer {
                         } else {
                             Self::with_backend(mode)?
                         };
-                        candidate.commit(bytes)?;
+                        candidate.commit_with_settings(bytes, &settings)?;
                         Some(candidate)
                     } else {
                         check(|e, n| unsafe {
-                            native::mt_context_commit(current, bytes.as_ptr(), bytes.len(), e, n)
+                            native::mt_context_commit_with_settings(
+                                current,
+                                bytes.as_ptr(),
+                                bytes.len(),
+                                &settings,
+                                e,
+                                n,
+                            )
                         })?;
                         None
                     };
@@ -187,9 +196,19 @@ impl Renderer {
     }
 
     pub fn commit(&mut self, bytes: &[u8]) -> Result<()> {
+        self.commit_with_settings(bytes, &RenderSettings::default())
+    }
+    pub fn commit_with_settings(&mut self, bytes: &[u8], settings: &RenderSettings) -> Result<()> {
         ensure!(self.job.is_none(), "Drain current job before committing");
         check(|e, n| unsafe {
-            native::mt_context_commit(self.handle, bytes.as_ptr(), bytes.len(), e, n)
+            native::mt_context_commit_with_settings(
+                self.handle,
+                bytes.as_ptr(),
+                bytes.len(),
+                settings,
+                e,
+                n,
+            )
         })
     }
     pub fn reset(&mut self) -> Result<()> {
@@ -340,6 +359,10 @@ pub struct Camera {
     pub distance: f32,
     pub radius: f32,
     pub fov: f32,
+    pub orthographic: bool,
+    pub f_stop: f32,
+    pub focus_distance: f32,
+    pub meters_per_unit: f32,
 }
 impl Camera {
     pub fn fit(center: Vec3, radius: f32) -> Self {
@@ -347,9 +370,36 @@ impl Camera {
             target: center,
             yaw: 0.6,
             pitch: 0.3,
-            distance: radius * 2.8,
+            distance: radius * 3.6,
             radius,
-            fov: 45.,
+            fov: 35.,
+            orthographic: false,
+            f_stop: 0.,
+            focus_distance: radius * 3.6,
+            meters_per_unit: 1.,
+        }
+    }
+    pub fn frame(&mut self, center: Vec3, radius: f32) {
+        self.target = center;
+        self.radius = radius.max(1e-5);
+        self.distance = self.radius * 1.15 / (self.fov.to_radians() * 0.5).tan();
+        self.focus_distance = self.distance;
+    }
+    pub fn half_height(&self) -> f32 {
+        self.distance * (self.fov.to_radians() * 0.5).tan()
+    }
+    /// Pinhole ray used for selection and focus, independent of the aperture.
+    pub fn ray(&self, uv: [f32; 2], aspect: f32) -> (Vec3, Vec3) {
+        let eye = self.eye();
+        let forward = (self.target - eye).normalize();
+        let right = forward.cross(Vec3::Y).normalize();
+        let up = right.cross(forward);
+        let offset = (right * ((uv[0] * 2. - 1.) * aspect) + up * (1. - uv[1] * 2.))
+            * (self.fov.to_radians() * 0.5).tan();
+        if self.orthographic {
+            (eye + offset * self.distance, forward)
+        } else {
+            (eye, (forward + offset).normalize())
         }
     }
     pub fn eye(&self) -> Vec3 {
@@ -374,19 +424,21 @@ impl Camera {
         self.distance =
             (self.distance * (-delta * 0.002).exp()).clamp(self.radius * 0.03, self.radius * 100.);
     }
-    pub fn bytes(&self) -> Vec<u8> {
+    pub fn bytes(&self, size: [u32; 2]) -> Vec<u8> {
         let mut f = [0f32; camera_wire::WORDS];
+        f[camera_wire::PROJECTION] = f32::from_bits(u32::from(self.orthographic));
         f[camera_wire::FOV] = self.fov;
         f[camera_wire::NEAR] = (self.radius * 0.0001).max(0.00001);
         f[camera_wire::FAR] = (self.radius * 1000.).max(100.);
-        f[camera_wire::LEFT] = -1.;
-        f[camera_wire::RIGHT] = 1.;
-        f[camera_wire::BOTTOM] = -1.;
-        f[camera_wire::TOP] = 1.;
+        f[camera_wire::LEFT] = -self.half_height() * size[0] as f32 / size[1] as f32;
+        f[camera_wire::RIGHT] = self.half_height() * size[0] as f32 / size[1] as f32;
+        f[camera_wire::BOTTOM] = -self.half_height();
+        f[camera_wire::TOP] = self.half_height();
         f[camera_wire::ZOOM] = 1.;
-        f[camera_wire::FOCUS_DISTANCE] = self.distance;
+        f[camera_wire::F_STOP] = if self.orthographic { 0. } else { self.f_stop };
+        f[camera_wire::FOCUS_DISTANCE] = self.focus_distance;
         f[camera_wire::SENSOR_HEIGHT] = 24.;
-        f[camera_wire::METERS_PER_UNIT] = 1.;
+        f[camera_wire::METERS_PER_UNIT] = self.meters_per_unit;
         // A general Mat4 inverse can round the homogeneous 1 away from 1.0,
         // which violates the native ABI's exact affine-transform contract.
         let world = Mat4::from(Affine3A::look_at_rh(self.eye(), self.target, Vec3::Y).inverse());
@@ -433,6 +485,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn projection_rays_and_wire_bounds_agree_at_wide_and_tall_aspects() {
+        let mut camera = Camera::fit(Vec3::ZERO, 2.);
+        camera.yaw = 0.;
+        camera.pitch = 0.;
+        for size in [[300, 100], [100, 300]] {
+            let aspect = size[0] as f32 / size[1] as f32;
+            let (_, perspective) = camera.ray([0.8, 0.3], aspect);
+            camera.orthographic = true;
+            camera.f_stop = 2.8;
+            let bytes = camera.bytes(size);
+            let f: Vec<f32> = bytes
+                .chunks_exact(4)
+                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                .collect();
+            assert_eq!(f[camera_wire::PROJECTION].to_bits(), 1);
+            assert_eq!(f[camera_wire::F_STOP], 0.);
+            assert_eq!(f[camera_wire::RIGHT] / f[camera_wire::TOP], aspect);
+            let (origin, direction) = camera.ray([0.8, 0.3], aspect);
+            let target = origin + direction * camera.distance;
+            assert!((target - camera.eye()).normalize().distance(perspective) < 1e-6);
+            assert!((origin.x - 0.6 * f[camera_wire::RIGHT]).abs() < 1e-5);
+            assert!((origin.y - 0.4 * f[camera_wire::TOP]).abs() < 1e-5);
+            camera.orthographic = false;
+        }
+        camera.f_stop = 1.4;
+        camera.meters_per_unit = 0.01;
+        camera.frame(Vec3::ONE, 3.);
+        assert_eq!(camera.f_stop, 1.4);
+        assert_eq!(camera.meters_per_unit, 0.01);
+        assert_eq!(camera.focus_distance, camera.distance);
+    }
+    #[test]
     fn camera_controls_preserve_the_affine_wire_contract() {
         for (center, radius) in [(Vec3::ZERO, 1.), (Vec3::new(2., -3., 5.), 12.)] {
             let mut camera = Camera::fit(center, radius);
@@ -443,7 +527,7 @@ mod tests {
                     2 => camera.zoom(60.),
                     _ => camera.zoom(-60.),
                 }
-                let bytes = camera.bytes();
+                let bytes = camera.bytes([300, 200]);
                 let f: Vec<f32> = bytes
                     .chunks_exact(4)
                     .map(|word| f32::from_le_bytes(word.try_into().unwrap()))

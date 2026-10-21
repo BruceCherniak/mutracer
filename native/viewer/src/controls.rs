@@ -64,7 +64,7 @@ pub fn parameter(ui: &mut Ui, label: &str, slider: egui::Slider<'_>) -> Response
     property(ui, label, |ui, label_id| {
         ui.spacing_mut().interact_size = egui::vec2(36., 18.);
         ui.spacing_mut().button_padding = egui::vec2(3., 1.);
-        ui.spacing_mut().slider_width = (ui.available_width() - 50.).max(24.);
+        ui.spacing_mut().slider_width = (ui.available_width() - 76.).max(24.);
         ui.visuals_mut().selection.bg_fill = theme::SUBTLE;
         ui.add(slider.handle_shape(egui::style::HandleShape::Rect { aspect_ratio: 0.16 }))
             .labelled_by(label_id)
