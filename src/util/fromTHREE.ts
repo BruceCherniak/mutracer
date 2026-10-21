@@ -1121,7 +1121,7 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   const threeEnvironment = scene.environment as THREE.DataTexture | null;
   const environmentMap = convertDataTexture(threeEnvironment, store.equirectTextures);
   const environmentLight = threeEnvironment && environmentMap
-    ? retainLight(store, threeEnvironment, new EnvironmentLight({map: environmentMap})) as EnvironmentLight
+    ? retainLight(store, threeEnvironment, new EnvironmentLight({map: environmentMap, intensity: scene.environmentIntensity})) as EnvironmentLight
     : undefined;
   if (environmentLight) lights.push(environmentLight);
 

@@ -9,7 +9,13 @@ export default class EnvironmentLight {
   readonly type = 'EnvironmentLight' as const;
   /** Equirectangular radiance map in linear color. The first row is the zenith (+Y); `flipY` is ignored. */
   map: Texture;
-  constructor(params: { /** Required equirectangular radiance map; no default. */ map: Texture }) {
+  /** Nonnegative radiance multiplier; zero disables this light. Default `1`. */
+  intensity = 1;
+  constructor(params: {
+    /** Required equirectangular radiance map; no default. */ map: Texture;
+    /** Nonnegative radiance multiplier; zero disables this light. Default `1`. */ intensity?: number;
+  }) {
     this.map = params.map;
+    this.intensity = params.intensity ?? 1;
   }
 }

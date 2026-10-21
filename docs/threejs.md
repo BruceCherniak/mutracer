@@ -87,6 +87,10 @@ Material textures preserve independent `wrapS` and `wrapT`: repeat,
 clamp-to-edge and mirrored repeat. UV repeat and offset apply before wrapping;
 later wrap edits synchronize automatically. Displacement uses the same modes.
 
+`scene.environmentIntensity` controls environment lighting and synchronizes
+automatically, including zero. It does not scale ambient lights or an explicitly
+assigned `scene.background` texture.
+
 Thin-film ranges keep their endpoint order, including minimum greater than
 maximum, and retain the converter's 0–20 µm endpoint clamp. The converter uses
 Three.js's actual range defaults. `mutracerOpenPBR` may explicitly override the

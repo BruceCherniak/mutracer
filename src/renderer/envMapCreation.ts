@@ -63,6 +63,11 @@ export function generateEnvMapFromSceneComponents(
   return envImage;
 }
 
+const scaledEnvironments = new WeakMap<EnvironmentLight, {
+  data: TextureDataSource['data']; width: number; height: number; version: number;
+  intensity: number; image: EnvironmentMapSource;
+}>();
+
 export function initializeEnvMap(environmentLights: EnvironmentLight[]) {
   let envImage: EnvironmentMapSource;
 
@@ -79,6 +84,20 @@ export function initializeEnvMap(environmentLights: EnvironmentLight[]) {
         (environmentLight.map.image as TextureDataSource).data,
       distributionCacheVersion: environmentLight.map.version
     };
+    const intensity = Number.isFinite(environmentLight.intensity) ? Math.max(0, environmentLight.intensity) : 1;
+    if (intensity !== 1 || !(envImage.data instanceof Float32Array)) {
+      const previous = scaledEnvironments.get(environmentLight);
+      if (previous && previous.data === envImage.data && previous.width === envImage.width &&
+        previous.height === envImage.height && previous.version === environmentLight.map.version && previous.intensity === intensity) {
+        return previous.image;
+      }
+      const scale = envImage.data instanceof Uint8Array || envImage.data instanceof Uint8ClampedArray ? 1 / 255 : 1;
+      const data = Float32Array.from(envImage.data, (value, index) => value * scale * (index % 4 === 3 ? 1 : intensity));
+      const image = {width: envImage.width, height: envImage.height, data};
+      scaledEnvironments.set(environmentLight, {data: envImage.data, width: envImage.width, height: envImage.height,
+        version: environmentLight.map.version, intensity, image});
+      envImage = image;
+    }
   } else {
     // initialize blank map
     envImage = generateSolidMap(
