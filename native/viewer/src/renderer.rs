@@ -21,6 +21,10 @@ pub struct Renderer {
         Arc<mutracer_native_probe::submission::SubmissionGate>,
     )>,
 }
+pub struct SceneCommit {
+    pub replacement: Option<Renderer>,
+    pub descriptor: crate::scene::Descriptor,
+}
 fn call(operation: impl FnOnce(*mut i8, usize) -> i32) -> (i32, String) {
     let mut error = [0i8; 4096];
     let code = operation(error.as_mut_ptr(), error.len());
@@ -103,18 +107,24 @@ impl Renderer {
         size: [u32; 2],
         environment: crate::scene::Environment,
         light: crate::scene::KeyLight,
+        mut descriptor: Option<crate::scene::Descriptor>,
         ctx: eframe::egui::Context,
-    ) -> std::sync::mpsc::Receiver<Result<Option<Self>>> {
+    ) -> std::sync::mpsc::Receiver<Result<SceneCommit>> {
         let current = self.handle;
         let shared = self.shared.clone();
         let replace = mode != self.mode;
         let (send, receive) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                || -> Result<Option<Self>> {
-                    let bytes =
-                        model.descriptor_with_light(&camera.bytes(), size, &environment, &light);
-                    if replace {
+                || -> Result<SceneCommit> {
+                    let bytes = model.update_descriptor(
+                        &mut descriptor,
+                        &camera.bytes(),
+                        size,
+                        &environment,
+                        &light,
+                    );
+                    let replacement = if replace {
                         let mut candidate = if let Some((adapter, device, queue, gate)) = shared {
                             Self {
                                 handle: native::create_on_device_with_gate(
@@ -132,14 +142,18 @@ impl Renderer {
                         } else {
                             Self::with_backend(mode)?
                         };
-                        candidate.commit(&bytes)?;
-                        Ok(Some(candidate))
+                        candidate.commit(bytes)?;
+                        Some(candidate)
                     } else {
                         check(|e, n| unsafe {
                             native::mt_context_commit(current, bytes.as_ptr(), bytes.len(), e, n)
                         })?;
-                        Ok(None)
-                    }
+                        None
+                    };
+                    Ok(SceneCommit {
+                        replacement,
+                        descriptor: descriptor.take().unwrap(),
+                    })
                 },
             ))
             .unwrap_or_else(|_| Err(anyhow::anyhow!("Scene preparation panicked")));

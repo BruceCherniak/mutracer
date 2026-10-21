@@ -1,7 +1,7 @@
 //! Real-device check of incremental geometry commits, used by --geometry-smoke.
 use crate::{
     renderer::{self, Camera, Renderer},
-    scene::{Environment, Model},
+    scene::{Environment, KeyLight, Model},
 };
 use anyhow::{Result, ensure};
 use std::path::Path;
@@ -15,9 +15,16 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
         let camera = Camera::fit(model.center, model.radius);
         let mut environment = Environment::default();
         let size = [160, 104];
+        let mut descriptor = None;
         let mut renderer = Renderer::with_backend(mode)?;
         let mut reference = Renderer::with_backend(mode)?;
-        renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+        renderer.commit(model.update_descriptor(
+            &mut descriptor,
+            &camera.bytes(),
+            size,
+            &environment,
+            &KeyLight::default(),
+        ))?;
         renderer.finish(8)?;
         for gi in 0..model.geometries.len().min(3) {
             let positions = model.geometries[gi].positions.clone();
@@ -37,12 +44,24 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 std::sync::Arc::make_mut(&mut invalid.geometries)[gi].positions[0] = f32::NAN;
                 ensure!(
                     renderer
-                        .commit(&invalid.descriptor(&camera.bytes(), size, &environment))
+                        .commit(invalid.update_descriptor(
+                            &mut descriptor,
+                            &camera.bytes(),
+                            size,
+                            &environment,
+                            &KeyLight::default()
+                        ))
                         .is_err()
                         && renderer.pixels()? == before,
                     "Invalid geometry mutated scene"
                 );
-                renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                renderer.commit(model.update_descriptor(
+                    &mut descriptor,
+                    &camera.bytes(),
+                    size,
+                    &environment,
+                    &KeyLight::default(),
+                ))?;
                 if renderer.last_commit_incremental()? {
                     partial += 1;
                 } else {
@@ -58,7 +77,13 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                     "Geometry full/partial mismatch {mode}/{gi}/{step}"
                 );
                 environment.intensity = 0.5 + step as f32 * 0.15;
-                renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                renderer.commit(model.update_descriptor(
+                    &mut descriptor,
+                    &camera.bytes(),
+                    size,
+                    &environment,
+                    &KeyLight::default(),
+                ))?;
                 let actual = renderer.finish(8)?;
                 reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
                 ensure!(

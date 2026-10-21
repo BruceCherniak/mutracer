@@ -2,8 +2,8 @@
 use anyhow::{Context, Result, bail, ensure};
 use glam::{Mat4, Vec3};
 use mutracer_native_probe::layout::{
-    geometry as g, header as h, light as light_wire, material as mat, mesh as wire_mesh,
-    texture as tex,
+    camera as camera_wire, geometry as g, header as h, light as light_wire, material as mat,
+    mesh as wire_mesh, texture as tex,
 };
 use std::{collections::HashMap, path::Path, sync::Arc};
 
@@ -696,6 +696,94 @@ impl Model {
         environment: &Environment,
         light: &KeyLight,
     ) -> Vec<u8> {
+        self.words(camera, size, environment, light)
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect()
+    }
+    /// Brings `cached` up to date with this model and returns its bytes. Camera,
+    /// mesh, material, light and environment edits are written into the cached
+    /// words; a different layout (counts, geometry, textures, image size, light
+    /// presence or map size) rebuilds it.
+    pub fn update_descriptor<'a>(
+        &self,
+        cached: &'a mut Option<Descriptor>,
+        camera: &[u8],
+        size: [u32; 2],
+        environment: &Environment,
+        light: &KeyLight,
+    ) -> &'a [u8] {
+        let patched = cached
+            .as_mut()
+            .is_some_and(|d| self.patch(d, camera, size, environment, light));
+        if !patched {
+            *cached = Some(Descriptor {
+                words: self.words(camera, size, environment, light),
+                geometries: self.geometries.clone(),
+                textures: self.textures.clone(),
+                environment: environment.clone(),
+            });
+        }
+        cached.as_ref().unwrap().bytes()
+    }
+    fn patch(
+        &self,
+        d: &mut Descriptor,
+        camera: &[u8],
+        size: [u32; 2],
+        environment: &Environment,
+        light: &KeyLight,
+    ) -> bool {
+        let w = &mut d.words;
+        if !Arc::ptr_eq(&d.geometries, &self.geometries)
+            || !Arc::ptr_eq(&d.textures, &self.textures)
+            || w[h::WIDTH] != size[0]
+            || w[h::HEIGHT] != size[1]
+            || w[h::MESH_COUNT] as usize != self.meshes.len()
+            || w[h::MATERIAL_COUNT] as usize != self.materials.len()
+            || w[h::LIGHT_COUNT] != u32::from(light.enabled)
+            || camera.len() != camera_wire::WORDS * 4
+        {
+            return false;
+        }
+        if !d.environment.same_pixels(environment) {
+            let (width, height, pixels) = environment.pixels();
+            let o = w[h::TEXTURE_OFFSET] as usize + self.textures.len() * tex::WORDS;
+            if w[o + tex::WIDTH] != width || w[o + tex::HEIGHT] != height {
+                return false;
+            }
+            let at = w[o + tex::PIXELS] as usize;
+            for (k, v) in pixels.iter().enumerate() {
+                w[at + k] = v.to_bits();
+            }
+        }
+        d.environment = environment.clone();
+        let at = w[h::CAMERA_OFFSET] as usize;
+        for (k, b) in camera.chunks_exact(4).enumerate() {
+            w[at + k] = u32::from_le_bytes(b.try_into().unwrap());
+        }
+        let mesh_offset = w[h::MESH_OFFSET] as usize;
+        for (i, m) in self.meshes.iter().enumerate() {
+            write_mesh(w, mesh_offset + i * wire_mesh::WORDS, m);
+        }
+        let material_offset = w[h::MATERIAL_OFFSET] as usize;
+        for (i, m) in self.materials.iter().enumerate() {
+            write_material(w, material_offset + i * mat::WORDS, m);
+        }
+        if light.enabled {
+            let o = w[h::LIGHT_OFFSET] as usize;
+            w[o..o + light_wire::WORDS].copy_from_slice(&light.record());
+        }
+        write_background(w, environment, self.textures.len() as u32 + 1);
+        true
+    }
+    fn words(
+        &self,
+        camera: &[u8],
+        size: [u32; 2],
+        environment: &Environment,
+        light: &KeyLight,
+    ) -> Vec<u32> {
         let mut w = Wire(vec![0; h::WORDS]);
         w.0[h::VERSION] = mutracer_native_probe::layout::version::SCENE as u32;
         w.0[h::WIDTH] = size[0];
@@ -724,7 +812,6 @@ impl Model {
             w.0[offset..offset + light_wire::WORDS].copy_from_slice(&light.record());
         }
         w.0[h::CAMERA_OFFSET] = w.append_bytes(camera);
-        w.0[h::BACKGROUND_COLOR + 3] = 1f32.to_bits();
         for (i, g) in self.geometries.iter().enumerate() {
             let o = w.0[h::GEOMETRY_OFFSET] as usize + i * g::WORDS;
             w.0[o + g::VERTEX_COUNT] = g.positions.len() as u32 / 3;
@@ -743,66 +830,15 @@ impl Model {
                 }
             }
         }
+        let mesh_offset = w.0[h::MESH_OFFSET] as usize;
         for (i, m) in self.meshes.iter().enumerate() {
-            let o = w.0[h::MESH_OFFSET] as usize + i * wire_mesh::WORDS;
-            w.0[o + wire_mesh::GEOMETRY] = m.geometry as u32;
-            w.0[o + wire_mesh::MATERIAL] = m.material as u32;
-            for (k, v) in m.transform.to_cols_array().iter().enumerate() {
-                w.0[o + wire_mesh::TRANSFORM + k] = v.to_bits();
-            }
+            write_mesh(&mut w.0, mesh_offset + i * wire_mesh::WORDS, m);
         }
-        for (i, m) in self.materials.iter().enumerate() {
+        for i in 0..self.materials.len() {
             let o = w.0[h::MATERIAL_OFFSET] as usize + i * mat::WORDS;
-            for (field, value) in [
-                (mat::BASE_COLOR, m.color[0]),
-                (mat::BASE_COLOR + 1, m.color[1]),
-                (mat::BASE_COLOR + 2, m.color[2]),
-                (mat::ROUGHNESS, m.roughness),
-                (mat::METALNESS, m.metalness),
-                (mat::TRANSMISSION, m.transmission),
-                (mat::IOR, m.ior),
-                (mat::EMISSION_COLOR, m.emission[0]),
-                (mat::EMISSION_COLOR + 1, m.emission[1]),
-                (mat::EMISSION_COLOR + 2, m.emission[2]),
-                (mat::EMISSION_LUMINANCE, m.emission_strength),
-                (mat::COAT_WEIGHT, 0.),
-                (mat::COAT_ROUGHNESS, 0.),
-                (mat::OPACITY, m.opacity),
-            ] {
-                w.0[o + field] = value.to_bits();
-            }
-            w.0[o + mat::THIN_WALLED] = 1;
-            for (k, v) in m.maps.iter().enumerate() {
-                w.0[o + mat::MAP + k] = *v;
-            }
-            let ext = [
-                38,
-                u32::from(m.double_sided),
-                0,
-                0,
-                41,
-                m.alpha_mode,
-                0,
-                0,
-                42,
-                m.alpha_cutoff.to_bits(),
-                0,
-                0,
-                45,
-                m.normal_scale.to_bits(),
-                m.normal_scale.to_bits(),
-                0,
-                52,
-                u32::from(m.unlit),
-                0,
-                0,
-                73,
-                1,
-                0,
-                0,
-            ];
-            w.0[o + mat::EXTENSION_COUNT] = 6;
-            w.0[o + mat::EXTENSION_OFFSET] = w.append(&ext);
+            w.0[o + mat::EXTENSION_COUNT] = MATERIAL_EXTENSIONS as u32;
+            w.0[o + mat::EXTENSION_OFFSET] = w.append(&[0; MATERIAL_EXTENSIONS * 4]);
+            write_material(&mut w.0, o, &self.materials[i]);
         }
         for (i, t) in self.textures.iter().enumerate() {
             let o = w.0[h::TEXTURE_OFFSET] as usize + i * tex::WORDS;
@@ -824,15 +860,9 @@ impl Model {
         w.0[o + tex::UV_SCALE] = 1f32.to_bits();
         w.0[o + tex::UV_SCALE + 1] = 1f32.to_bits();
         w.0[h::ENVIRONMENT_TEXTURE] = self.textures.len() as u32 + 1;
-        if environment.background {
-            w.0[h::BACKGROUND_TEXTURE] = w.0[h::ENVIRONMENT_TEXTURE];
-        } else {
-            w.0[h::BACKGROUND_COLOR] = 0.025f32.to_bits();
-            w.0[h::BACKGROUND_COLOR + 1] = 0.025f32.to_bits();
-            w.0[h::BACKGROUND_COLOR + 2] = 0.03f32.to_bits();
-        }
+        write_background(&mut w.0, environment, self.textures.len() as u32 + 1);
         w.0[h::LENGTH] = w.0.len() as u32;
-        w.0.into_iter().flat_map(u32::to_le_bytes).collect()
+        w.0
     }
 }
 fn image_rgba(image: &gltf::image::Data) -> Result<Vec<u8>> {
@@ -872,6 +902,100 @@ fn image_rgba(image: &gltf::image::Data) -> Result<Vec<u8>> {
         });
     }
     Ok(result)
+}
+/// A scene descriptor the viewer keeps between commits; see `Model::update_descriptor`.
+pub struct Descriptor {
+    words: Vec<u32>,
+    geometries: Arc<Vec<Geometry>>,
+    textures: Arc<Vec<Texture>>,
+    environment: Environment,
+}
+impl Descriptor {
+    pub fn bytes(&self) -> &[u8] {
+        // Descriptor words are little-endian; on such targets the words are the bytes.
+        #[cfg(target_endian = "little")]
+        unsafe {
+            // SAFETY: every initialized u32 is four readable bytes, the slice
+            // borrows the vector, and u8 has no alignment/validity restrictions.
+            std::slice::from_raw_parts(self.words.as_ptr().cast::<u8>(), self.words.len() * 4)
+        }
+        #[cfg(not(target_endian = "little"))]
+        compile_error!("Native descriptors assume a little-endian target");
+    }
+}
+const MATERIAL_EXTENSIONS: usize = 6;
+fn write_mesh(w: &mut [u32], o: usize, m: &Mesh) {
+    w[o + wire_mesh::GEOMETRY] = m.geometry as u32;
+    w[o + wire_mesh::MATERIAL] = m.material as u32;
+    for (k, v) in m.transform.to_cols_array().iter().enumerate() {
+        w[o + wire_mesh::TRANSFORM + k] = v.to_bits();
+    }
+}
+/// Material record and its extension values; the extension block is already allocated.
+fn write_material(w: &mut [u32], o: usize, m: &Material) {
+    for (field, value) in [
+        (mat::BASE_COLOR, m.color[0]),
+        (mat::BASE_COLOR + 1, m.color[1]),
+        (mat::BASE_COLOR + 2, m.color[2]),
+        (mat::ROUGHNESS, m.roughness),
+        (mat::METALNESS, m.metalness),
+        (mat::TRANSMISSION, m.transmission),
+        (mat::IOR, m.ior),
+        (mat::EMISSION_COLOR, m.emission[0]),
+        (mat::EMISSION_COLOR + 1, m.emission[1]),
+        (mat::EMISSION_COLOR + 2, m.emission[2]),
+        (mat::EMISSION_LUMINANCE, m.emission_strength),
+        (mat::COAT_WEIGHT, 0.),
+        (mat::COAT_ROUGHNESS, 0.),
+        (mat::OPACITY, m.opacity),
+    ] {
+        w[o + field] = value.to_bits();
+    }
+    w[o + mat::THIN_WALLED] = 1;
+    for (k, v) in m.maps.iter().enumerate() {
+        w[o + mat::MAP + k] = *v;
+    }
+    let ext: [u32; MATERIAL_EXTENSIONS * 4] = [
+        38,
+        u32::from(m.double_sided),
+        0,
+        0,
+        41,
+        m.alpha_mode,
+        0,
+        0,
+        42,
+        m.alpha_cutoff.to_bits(),
+        0,
+        0,
+        45,
+        m.normal_scale.to_bits(),
+        m.normal_scale.to_bits(),
+        0,
+        52,
+        u32::from(m.unlit),
+        0,
+        0,
+        73,
+        1,
+        0,
+        0,
+    ];
+    let at = w[o + mat::EXTENSION_OFFSET] as usize;
+    w[at..at + ext.len()].copy_from_slice(&ext);
+}
+/// Background words; the environment map is texture `environment` (index + 1).
+fn write_background(w: &mut [u32], environment: &Environment, texture: u32) {
+    let color = if environment.background {
+        [0.; 3]
+    } else {
+        [0.025f32, 0.025, 0.03]
+    };
+    for (k, c) in color.iter().enumerate() {
+        w[h::BACKGROUND_COLOR + k] = c.to_bits();
+    }
+    w[h::BACKGROUND_COLOR + 3] = 1f32.to_bits();
+    w[h::BACKGROUND_TEXTURE] = if environment.background { texture } else { 0 };
 }
 struct Wire(Vec<u32>);
 impl Wire {
@@ -975,6 +1099,16 @@ impl Environment {
             .into();
         Ok(())
     }
+    /// Whether `pixels` would return the same map.
+    fn same_pixels(&self, other: &Self) -> bool {
+        self.intensity.to_bits() == other.intensity.to_bits()
+            && self.color.map(f32::to_bits) == other.color.map(f32::to_bits)
+            && self.rotation.to_bits() == other.rotation.to_bits()
+            && match (&self.image, &other.image) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (a, b) => a.is_none() && b.is_none(),
+            }
+    }
     fn pixels(&self) -> (u32, u32, Vec<f32>) {
         let (width, height) = self
             .image
@@ -1004,5 +1138,181 @@ impl Environment {
             }
         }
         (width, height, pixels)
+    }
+}
+
+#[cfg(test)]
+mod descriptor_tests {
+    use super::*;
+    use crate::renderer::Camera;
+
+    struct Scene {
+        model: Model,
+        camera: Camera,
+        environment: Environment,
+        light: KeyLight,
+        size: [u32; 2],
+        descriptor: Option<Descriptor>,
+    }
+    impl Scene {
+        fn new() -> Self {
+            let model =
+                Model::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sample.glb"))
+                    .unwrap();
+            Self {
+                camera: Camera::fit(model.center, model.radius),
+                model,
+                environment: Environment::default(),
+                light: KeyLight {
+                    enabled: true,
+                    ..KeyLight::default()
+                },
+                size: [160, 104],
+                descriptor: None,
+            }
+        }
+        // Byte equality also checks every payload offset after a layout change.
+        fn check(&mut self) -> usize {
+            let camera = self.camera.bytes();
+            let expected = self.model.descriptor_with_light(
+                &camera,
+                self.size,
+                &self.environment,
+                &self.light,
+            );
+            let actual = self.model.update_descriptor(
+                &mut self.descriptor,
+                &camera,
+                self.size,
+                &self.environment,
+                &self.light,
+            );
+            assert_eq!(actual, expected);
+            actual.as_ptr() as usize
+        }
+    }
+
+    #[test]
+    fn editable_records_reuse_storage_and_match_fresh_descriptors() {
+        let mut s = Scene::new();
+        let allocation = s.check();
+        for step in 0..4 {
+            s.camera.orbit([0.2, -0.1]);
+            s.model.meshes[0].transform.w_axis.x += 0.1;
+            let m = &mut s.model.materials[0];
+            m.color = [0.1, 0.2, 0.3];
+            m.roughness = 0.2 + step as f32 * 0.1;
+            m.metalness = 0.6;
+            m.opacity = 0.8;
+            m.transmission = 0.3;
+            m.ior = 1.7;
+            m.emission = [0.3, 0.4, 0.5];
+            m.emission_strength = 2.;
+            m.maps = [u32::MAX; 4];
+            m.alpha_mode = step % 3;
+            m.alpha_cutoff = 0.4;
+            m.double_sided = step % 2 == 0;
+            m.normal_scale = 0.5;
+            m.unlit = step % 2 != 0;
+            s.light.color = [0.3, 0.5, 0.8];
+            s.light.intensity += 0.2;
+            s.light.azimuth += 12.;
+            s.light.elevation -= 3.;
+            s.environment.background = step % 2 == 0;
+            assert_eq!(s.check(), allocation);
+            // Snapshot moved to and back from a worker still owns the same buffer.
+            let cached = s.descriptor.take();
+            s.descriptor = std::thread::spawn(move || cached).join().unwrap();
+            assert_eq!(s.check(), allocation);
+        }
+        s.model.meshes.reverse();
+        s.model.materials.reverse();
+        assert_eq!(s.check(), allocation);
+    }
+
+    #[test]
+    fn environment_edits_replace_only_pixels_until_dimensions_change() {
+        let mut s = Scene::new();
+        let allocation = s.check();
+        for step in 0..4 {
+            s.environment.rotation = step as f32 * 47.;
+            s.environment.intensity = step as f32 * 0.4;
+            s.environment.color = [0.2, 0.6, 0.9];
+            assert_eq!(s.check(), allocation);
+        }
+        s.environment.intensity = -0.;
+        s.check();
+        s.environment.intensity = 0.;
+        assert_eq!(s.check(), allocation);
+        s.environment.image = Some(Arc::new(image::Rgb32FImage::from_pixel(
+            64,
+            32,
+            image::Rgb([2., 1., 0.5]),
+        )));
+        assert_eq!(s.check(), allocation);
+        s.environment.intensity = 1.;
+        s.check();
+        Arc::make_mut(s.environment.image.as_mut().unwrap()).put_pixel(
+            0,
+            0,
+            image::Rgb([4., 3., 2.]),
+        );
+        assert_eq!(s.check(), allocation);
+        s.environment.image = Some(Arc::new(image::Rgb32FImage::new(8, 4)));
+        assert_ne!(s.check(), allocation);
+        s.environment.image = None;
+        s.check();
+    }
+
+    #[test]
+    fn structural_changes_and_rejected_values_do_not_leave_stale_payloads() {
+        let mut s = Scene::new();
+        s.check();
+        s.model.materials[0].roughness = f32::NAN;
+        s.check();
+        s.model.materials[0].roughness = 0.4;
+        s.check();
+        // The retained Arc forces copy-on-write even for an otherwise unique model.
+        let allocation = s.check();
+        Arc::make_mut(&mut s.model.geometries)[0].positions[0] += 0.5;
+        assert_ne!(s.check(), allocation);
+        let allocation = s.check();
+        let textures = Arc::make_mut(&mut s.model.textures);
+        textures.push(Texture {
+            source: 0,
+            width: 1,
+            height: 1,
+            pixels: vec![128, 64, 32, 255],
+            uv: 0,
+            scale: [1.; 2],
+            offset: [0.; 2],
+        });
+        assert_ne!(s.check(), allocation);
+        let allocation = s.check();
+        Arc::make_mut(&mut s.model.textures)
+            .last_mut()
+            .unwrap()
+            .pixels[0] = 255;
+        assert_ne!(s.check(), allocation);
+        let allocation = s.check();
+        s.model.meshes.push(s.model.meshes[0].clone());
+        s.model.materials.push(s.model.materials[0].clone());
+        assert_ne!(s.check(), allocation);
+        s.model.meshes.pop();
+        s.model.materials.pop();
+        s.check();
+        let allocation = s.check();
+        s.light.enabled = false;
+        assert_ne!(s.check(), allocation);
+        s.light.enabled = true;
+        s.check();
+        let allocation = s.check();
+        s.size = [320, 208];
+        assert_ne!(s.check(), allocation);
+        // A new model with matching counts must not inherit old geometry/textures.
+        let allocation = s.check();
+        let other = Scene::new();
+        s.model = other.model;
+        assert_ne!(s.check(), allocation);
     }
 }

@@ -12,7 +12,7 @@ mod scene;
 use anyhow::{Context, Result, ensure};
 use eframe::egui;
 use renderer::{Camera, Renderer};
-use scene::{Environment, KeyLight, Model};
+use scene::{Descriptor, Environment, KeyLight, Model};
 use std::{
     path::{Path, PathBuf},
     time::Duration,
@@ -38,7 +38,7 @@ struct Viewer {
     gpu_display: Option<mutracer_native_probe::display::Display>,
     gpu_texture: Option<egui::TextureId>,
     commit: Option<(
-        std::sync::mpsc::Receiver<Result<Option<Renderer>>>,
+        std::sync::mpsc::Receiver<Result<renderer::SceneCommit>>,
         u64,
         Option<(Model, Camera)>,
         [u32; 2],
@@ -46,6 +46,7 @@ struct Viewer {
     backend: u32,
     backend_status: String,
     model: Model,
+    descriptor: Option<Descriptor>,
     camera: Camera,
     drag: input::ViewportDrag,
     environment: Environment,
@@ -101,8 +102,15 @@ impl Viewer {
         } else {
             [480, 320]
         };
+        let mut descriptor = None;
         if gpu.is_none() {
-            renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+            renderer.commit(model.update_descriptor(
+                &mut descriptor,
+                &camera.bytes(),
+                size,
+                &environment,
+                &KeyLight::default(),
+            ))?;
         }
         let selected = model.meshes[0].material;
         let submission_gate = renderer.shared.as_ref().map(|shared| shared.3.clone());
@@ -125,6 +133,7 @@ impl Viewer {
             gpu_texture: None,
             commit: None,
             model,
+            descriptor,
             camera,
             drag: input::ViewportDrag::default(),
             environment,
@@ -225,8 +234,11 @@ impl Viewer {
                 Ok(result) => {
                     let (_, generation, candidate, size) = self.commit.take().unwrap();
                     match result {
-                        Ok(replacement) => {
-                            if let Some(renderer) = replacement {
+                        Ok(committed) => {
+                            // Even a superseded snapshot is safe to reuse: the next
+                            // submission patches all editable values from its model.
+                            self.descriptor = Some(committed.descriptor);
+                            if let Some(renderer) = committed.replacement {
                                 let retired = std::mem::replace(&mut self.renderer, renderer);
                                 std::thread::spawn(move || drop(retired));
                             }
@@ -346,7 +358,8 @@ impl Viewer {
                     | Change::Transform
                         if !background =>
                     {
-                        self.renderer.commit(&self.model.descriptor_with_light(
+                        self.renderer.commit(self.model.update_descriptor(
+                            &mut self.descriptor,
                             &self.camera.bytes(),
                             self.size,
                             &self.environment,
@@ -375,6 +388,7 @@ impl Viewer {
                             self.size,
                             self.environment.clone(),
                             self.light.clone(),
+                            self.descriptor.take(),
                             ctx.clone(),
                         );
                         self.commit = Some((receive, self.generation, candidate, self.size));
@@ -1694,6 +1708,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
 }
 fn material_smoke(path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
+    let mut descriptor = None;
     let mut model = Model::load(path)?;
     let camera = Camera::fit(model.center, model.radius);
     let environment = Environment::default();
@@ -1708,7 +1723,13 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
     bad.materials[id].roughness = f32::NAN;
     ensure!(
         renderer
-            .commit(&bad.descriptor(&camera.bytes(), size, &environment))
+            .commit(bad.update_descriptor(
+                &mut descriptor,
+                &camera.bytes(),
+                size,
+                &environment,
+                &KeyLight::default()
+            ))
             .is_err()
             && renderer.pixels()? == baseline,
         "Invalid material modified the scene"
@@ -1738,7 +1759,13 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
             m.transmission = m.roughness * 0.6;
             m.ior = 1.1 + step as f32 * 0.15;
             let started = std::time::Instant::now();
-            renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+            renderer.commit(model.update_descriptor(
+                &mut descriptor,
+                &camera.bytes(),
+                size,
+                &environment,
+                &KeyLight::default(),
+            ))?;
             partial_ms.push(started.elapsed().as_secs_f64() * 1000.);
             ensure!(
                 renderer.last_commit_incremental()?,
@@ -1780,19 +1807,32 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
 }
 fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
+    let mut descriptor = None;
     let model = Model::load(path)?;
     let camera = Camera::fit(model.center, model.radius);
     let mut environment = Environment::default();
     let size = [160, 106];
     let mut renderer = Renderer::with_backend(1)?;
     let mut reference = Renderer::with_backend(1)?;
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(model.update_descriptor(
+        &mut descriptor,
+        &camera.bytes(),
+        size,
+        &environment,
+        &KeyLight::default(),
+    ))?;
     let original = renderer.finish(8)?;
     let mut bad = environment.clone();
     bad.intensity = f32::NAN;
     ensure!(
         renderer
-            .commit(&model.descriptor(&camera.bytes(), size, &bad))
+            .commit(model.update_descriptor(
+                &mut descriptor,
+                &camera.bytes(),
+                size,
+                &bad,
+                &KeyLight::default()
+            ))
             .is_err()
             && renderer.pixels()? == original,
         "Invalid environment changed scene"
@@ -1810,7 +1850,13 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
                 8,
                 |x, y| image::Rgb([0.1 + x as f32 * 0.2, 0.2 + y as f32 * 0.3, 0.5]),
             )));
-            renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+            renderer.commit(model.update_descriptor(
+                &mut descriptor,
+                &camera.bytes(),
+                size,
+                &environment,
+                &KeyLight::default(),
+            ))?;
             ensure!(
                 renderer.last_commit_incremental()?,
                 "Map resize rebuilt the scene"
@@ -1820,7 +1866,13 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
             environment.intensity = if step == 0 { 0. } else { step as f32 * 0.4 };
             environment.rotation = step as f32 * 57.;
             environment.color = [0.2 + step as f32 * 0.1, 0.8, 0.4];
-            renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+            renderer.commit(model.update_descriptor(
+                &mut descriptor,
+                &camera.bytes(),
+                size,
+                &environment,
+                &KeyLight::default(),
+            ))?;
             ensure!(
                 renderer.last_commit_incremental()?,
                 "Expected an incremental environment commit"
@@ -1841,13 +1893,25 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
     }
     renderer::save(&out.join("partial.png"), &renderer.pixels()?, size, 0.)?;
     environment.background = false;
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(model.update_descriptor(
+        &mut descriptor,
+        &camera.bytes(),
+        size,
+        &environment,
+        &KeyLight::default(),
+    ))?;
     ensure!(
         !renderer.last_commit_incremental()?,
         "Background visibility changes the shader and needs a full preparation"
     );
     environment = Environment::default();
-    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    renderer.commit(model.update_descriptor(
+        &mut descriptor,
+        &camera.bytes(),
+        size,
+        &environment,
+        &KeyLight::default(),
+    ))?;
     ensure!(
         renderer.finish(8)? == original,
         "Environment baseline restore differs"
@@ -1859,6 +1923,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
 }
 fn light_smoke(path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
+    let mut descriptor = None;
     let model = Model::load(path)?;
     let camera = Camera::fit(model.center, model.radius);
     let mut environment = Environment::default();
@@ -1869,13 +1934,25 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
     let size = [160, 106];
     let mut renderer = Renderer::with_backend(1)?;
     let mut reference = Renderer::with_backend(1)?;
-    renderer.commit(&model.descriptor_with_light(&camera.bytes(), size, &environment, &light))?;
+    renderer.commit(model.update_descriptor(
+        &mut descriptor,
+        &camera.bytes(),
+        size,
+        &environment,
+        &light,
+    ))?;
     let before = renderer.finish(8)?;
     let mut bad = light.clone();
     bad.intensity = f32::NAN;
     ensure!(
         renderer
-            .commit(&model.descriptor_with_light(&camera.bytes(), size, &environment, &bad))
+            .commit(model.update_descriptor(
+                &mut descriptor,
+                &camera.bytes(),
+                size,
+                &environment,
+                &bad
+            ))
             .is_err()
             && renderer.pixels()? == before,
         "Invalid light modified scene"
@@ -1889,7 +1966,8 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
         if step == 9 {
             // Hiding the background changes the shader: a full preparation.
             environment.background = false;
-            renderer.commit(&model.descriptor_with_light(
+            renderer.commit(model.update_descriptor(
+                &mut descriptor,
                 &camera.bytes(),
                 size,
                 &environment,
@@ -1910,7 +1988,8 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
         light.color = [0.2 + step as f32 * 0.03, 0.8, 0.4];
         light.azimuth = step as f32 * 21.;
         light.elevation = 10. + (step % 8) as f32 * 9.;
-        renderer.commit(&model.descriptor_with_light(
+        renderer.commit(model.update_descriptor(
+            &mut descriptor,
             &camera.bytes(),
             size,
             &environment,
@@ -1941,7 +2020,13 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
     let before = renderer.pixels()?;
     renderer::save(&out.join("partial.png"), &before, size, 0.)?;
     light.enabled = false;
-    renderer.commit(&model.descriptor_with_light(&camera.bytes(), size, &environment, &light))?;
+    renderer.commit(model.update_descriptor(
+        &mut descriptor,
+        &camera.bytes(),
+        size,
+        &environment,
+        &light,
+    ))?;
     ensure!(
         renderer.last_commit_incremental()?,
         "Removing the key light rebuilt the scene"
@@ -1957,6 +2042,7 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
 }
 fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
+    let mut descriptor = None;
     let mut model = Model::load(path)?;
     let camera = Camera::fit(model.center, model.radius);
     let mut environment = Environment::default();
@@ -1967,7 +2053,13 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
     for mode in [0, 1] {
         let mut renderer = Renderer::with_backend(mode)?;
         let mut reference = Renderer::with_backend(mode)?;
-        renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+        renderer.commit(model.update_descriptor(
+            &mut descriptor,
+            &camera.bytes(),
+            size,
+            &environment,
+            &KeyLight::default(),
+        ))?;
         renderer.finish(8)?;
         for (id, original) in originals.iter().enumerate().take(3) {
             for step in 0..8 {
@@ -1990,12 +2082,24 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
                 invalid.meshes[id].transform.x_axis.x = f32::NAN;
                 ensure!(
                     renderer
-                        .commit(&invalid.descriptor(&camera.bytes(), size, &environment))
+                        .commit(invalid.update_descriptor(
+                            &mut descriptor,
+                            &camera.bytes(),
+                            size,
+                            &environment,
+                            &KeyLight::default()
+                        ))
                         .is_err()
                         && renderer.pixels()? == before,
                     "Invalid transform mutated scene"
                 );
-                renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                renderer.commit(model.update_descriptor(
+                    &mut descriptor,
+                    &camera.bytes(),
+                    size,
+                    &environment,
+                    &KeyLight::default(),
+                ))?;
                 if renderer.last_commit_incremental()? {
                     partial += 1;
                 } else {
@@ -2012,7 +2116,13 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
                 );
                 // Accepted transform lighting must survive subsequent environment edits.
                 environment.intensity = 0.5 + step as f32 * 0.2;
-                renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                renderer.commit(model.update_descriptor(
+                    &mut descriptor,
+                    &camera.bytes(),
+                    size,
+                    &environment,
+                    &KeyLight::default(),
+                ))?;
                 let actual = renderer.finish(8)?;
                 reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
                 ensure!(

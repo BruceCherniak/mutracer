@@ -1,6 +1,6 @@
 //! `--edit-bench DIRECTORY`: commit latency of interactive edits on one model.
 use crate::renderer::{Camera, Renderer};
-use crate::scene::{Environment, KeyLight, Model};
+use crate::scene::{Descriptor, Environment, KeyLight, Model};
 use anyhow::Result;
 use std::{path::Path, time::Instant};
 
@@ -14,9 +14,14 @@ struct Scene {
     light: KeyLight,
 }
 impl Scene {
-    fn descriptor(&self) -> Vec<u8> {
-        self.model
-            .descriptor_with_light(&self.camera.bytes(), SIZE, &self.environment, &self.light)
+    fn descriptor<'a>(&self, cached: &'a mut Option<Descriptor>) -> &'a [u8] {
+        self.model.update_descriptor(
+            cached,
+            &self.camera.bytes(),
+            SIZE,
+            &self.environment,
+            &self.light,
+        )
     }
     /// Applies edit `kind` for iteration `i`; alternating values keep every commit a change.
     fn edit(&mut self, kind: &str, i: usize) {
@@ -52,10 +57,11 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
     let mut rows = Vec::new();
     for mode in [0, 1] {
         let mut renderer = Renderer::with_backend(mode)?;
+        let mut descriptor = None;
         let started = Instant::now();
-        let bytes = scene.descriptor();
+        let bytes = scene.descriptor(&mut descriptor);
         let build = started.elapsed().as_secs_f64() * 1e3;
-        renderer.commit(&bytes)?;
+        renderer.commit(bytes)?;
         let initial = started.elapsed().as_secs_f64() * 1e3 - build;
         rows.push(
             serde_json::json!({"mode": mode, "kind": "initial", "descriptorBytes": bytes.len(),
@@ -65,9 +71,9 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             for i in 0..ITERATIONS {
                 scene.edit(kind, i);
                 let started = Instant::now();
-                let bytes = scene.descriptor();
+                let bytes = scene.descriptor(&mut descriptor);
                 let build = started.elapsed().as_secs_f64() * 1e3;
-                renderer.commit(&bytes)?;
+                renderer.commit(bytes)?;
                 let commit = started.elapsed().as_secs_f64() * 1e3 - build;
                 rows.push(
                     serde_json::json!({"mode": mode, "kind": kind, "iteration": i, "buildMs": build,
