@@ -3,7 +3,7 @@
 //! a new context. Usage: incremental-oracle SAMPLES BACKEND SCENE.bin...
 //! Prints one JSON line per fixture and edit; exits nonzero on any mismatch or
 //! when an edit that should be incremental fell back to full preparation.
-use mutracer_native_probe::context::{self as native, last_commit_incremental};
+use mutracer_native_probe::context as native;
 use mutracer_native_probe::layout::{
     camera as cam, geometry as g, header as h, light as l, material as mat, mesh as m, texture as t,
 };
@@ -42,6 +42,19 @@ impl Context {
     }
     fn commit(&self, bytes: &[u8]) -> Result<()> {
         call(|e, n| unsafe { native::mt_context_commit(self.0, bytes.as_ptr(), bytes.len(), e, n) })
+    }
+    /// Whether the last successful commit took the incremental path.
+    fn incremental(&self) -> Result<bool> {
+        let mut info = native::ContextInfo {
+            struct_size: std::mem::size_of::<native::ContextInfo>() as u32,
+            width: 0,
+            height: 0,
+            samples: 0,
+            state: 0,
+            last_commit: 0,
+        };
+        call(|e, n| unsafe { native::mt_context_info(self.0, &mut info, e, n) })?;
+        Ok(info.last_commit == native::COMMIT_INCREMENTAL)
     }
     fn images(&self, samples: u32) -> Result<Vec<Vec<u8>>> {
         call(|e, n| unsafe { native::mt_context_render(self.0, samples, e, n) })?;
@@ -112,7 +125,8 @@ fn material_word(bytes: &[u8], value: usize) -> bool {
         let o = u(bytes, h::MATERIAL_OFFSET) + i * mat::WORDS;
         let extensions = u(bytes, o + mat::EXTENSION_OFFSET);
         (mat::MAP..=mat::EMISSIVE_MAP).any(|k| u(bytes, o + k) == value)
-            || (0..u(bytes, o + mat::EXTENSION_COUNT)).any(|e| u(bytes, extensions + e * 4 + 1) == value)
+            || (0..u(bytes, o + mat::EXTENSION_COUNT))
+                .any(|e| u(bytes, extensions + e * 4 + 1) == value)
     })
 }
 /// Texture of the first displacement map property (wire ID 59).
@@ -365,7 +379,8 @@ fn edits() -> Vec<Edit> {
         }),
         ("rect light texture pixel", true, |b| {
             let lights = u(b, h::LIGHT_OFFSET);
-            let light = (0..u(b, h::LIGHT_COUNT)).find(|&i| u(b, lights + i * l::WORDS + l::TEXTURE) != 0);
+            let light =
+                (0..u(b, h::LIGHT_COUNT)).find(|&i| u(b, lights + i * l::WORDS + l::TEXTURE) != 0);
             let Some(i) = light else { return false };
             let texture = u(b, lights + i * l::WORDS + l::TEXTURE) - 1;
             let p = u(b, u(b, h::TEXTURE_OFFSET) + texture * t::WORDS + t::PIXELS);
@@ -397,7 +412,9 @@ fn edits() -> Vec<Edit> {
             set_f(b, p + 1, 2.5);
             true
         }),
-        ("environment size", true, |b| resize_map(b, h::ENVIRONMENT_TEXTURE)),
+        ("environment size", true, |b| {
+            resize_map(b, h::ENVIRONMENT_TEXTURE)
+        }),
         ("background size", true, |b| {
             let background = u(b, h::BACKGROUND_TEXTURE);
             background != u(b, h::ENVIRONMENT_TEXTURE)
@@ -470,7 +487,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
                     .commit(&edited)
                     .map_err(stage("edited commit"))?;
                 incremental_ms = started.elapsed().as_secs_f64() * 1e3;
-                let path_incremental = last_commit_incremental(incremental.0)?;
+                let path_incremental = incremental.incremental()?;
                 let a = incremental
                     .images(samples)
                     .map_err(stage("incremental render"))?;

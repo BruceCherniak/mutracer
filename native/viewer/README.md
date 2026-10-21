@@ -71,8 +71,8 @@ the output directory. See the [native guide](../README.md) for platform backends
 - Choose sample count and resolution, pause/resume, restart accumulation, adjust
   exposure or save the displayed image as PNG. The preview uses Reinhard/sRGB.
 - **Light** also provides an optional directional **Key light**, disabled by
-  default. Adjust its intensity, color, azimuth and elevation. Enabling or
-  disabling it rebuilds the scene; other edits use partial updates where possible.
+  default. Adjust its intensity, color, azimuth and elevation. Each edit commits
+  the scene again; the library keeps the prepared geometry where it can.
 - **Native OIDN** is on by default. It denoises completed previews after interaction
   pauses, trying Metal, then CUDA, then HIP, then CPU. CUDA requires a supported
   NVIDIA GPU and driver; HIP requires a supported AMD GPU and compatible AMD

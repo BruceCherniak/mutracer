@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-_Static_assert(sizeof(mt_context_snapshot)==20,"context snapshot ABI");
+_Static_assert(sizeof(mt_context_snapshot)==24,"context snapshot ABI");
 static char error[4096];
 static unsigned checks;
 #define REQUIRE(test) do {checks++;if(!(test)){fprintf(stderr,"line %d: %s; %s\n",__LINE__,#test,error);return 1;}}while(0)

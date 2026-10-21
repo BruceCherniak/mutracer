@@ -193,8 +193,8 @@ them into an atlas and may scale large sources to fit.
 `bottom`, `top`, `zoom`, then lens fields `f_stop` (0 disables depth of field),
 `focus_distance`, `sensor_height` and `meters_per_unit`, and a camera-to-world
 `world_matrix`. The camera looks down its local -Z axis. The aspect ratio
-follows `width` and `height`. `mt_context_update_camera` accepts this record
-on its own.
+follows `width` and `height`. A commit that changes only this record is
+incremental.
 
 ## Limits
 

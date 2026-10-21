@@ -218,8 +218,12 @@ success. The stronger
 editing, cancellation, HDR environments, backend assertions and native OIDN.
 `--interaction-smoke DIRECTORY` checks continuous camera/held edits, retained
 previews, resize and stale-OIDN rejection. Material, environment, light, transform
-and geometry each have a corresponding `--NAME-smoke DIRECTORY` full/partial
-comparison. Test all three AOVs, invalid/busy calls, rollback and restoration.
+and geometry each have a corresponding `--NAME-smoke DIRECTORY` that compares
+incremental commits with full preparation. Test all three AOVs, invalid input,
+rollback and restoration. `[MODEL] --edit-bench DIRECTORY` records descriptor
+build and commit times of material, transform, camera, light and environment
+edits at 1280×720 on both backends in `edit-bench.jsonl`; set
+`MUTRACER_NATIVE_PROFILE=1` for a per-commit phase breakdown on stderr.
 
 Inspect the real window as well: file dialogs, panel changes, orbit/pan/zoom/fit,
 pause/restart, resolution/exposure and PNG export are not covered by headless
@@ -284,7 +288,7 @@ available to browser fixtures and legacy stateless AOT comparison exports.
 Compare native and Wasm on identical inputs, including degenerate triangles and
 all displacement projections. SIMD/Bonsai and scalar builds can choose different
 trees: validate primitive identity, conservative bounds and GPU output, and keep
-byte comparisons for matching builder configurations. Full and partial
+byte comparisons for matching builder configurations. Full and incremental
 results must agree on HDR/normal/albedo, survive failed candidates/other contexts,
 and preserve HWRT identity mapping after TLAS leaf reordering. Compare against
 the chosen builder reference: switching from built-in SAH to TinyBVH can change

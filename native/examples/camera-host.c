@@ -1,4 +1,4 @@
-/* Compare partial camera commands with complete scene commits on real GPUs. */
+/* Compare incremental camera commits with complete scene preparation on real GPUs. */
 #include "mutracer-context.h"
 #include <math.h>
 #include <pthread.h>
@@ -21,25 +21,30 @@ static unsigned char *load(const char *path,size_t *size){
 static int read_image(mt_context context,unsigned kind,unsigned char *output,size_t size){size_t written=0;
  return mt_context_read_pixels(context,kind,output,size,&written,error,sizeof(error))||written!=size;
 }
-struct thread_args {mt_context context;const unsigned char *camera;};
+struct thread_args {mt_context context;const unsigned char *input;size_t length;};
 static void *other_thread(void *input){struct thread_args *args=input;char message[128];
- return (void*)(uintptr_t)(mt_context_update_camera(args->context,args->camera,128,message,sizeof(message))==0);
+ return (void*)(uintptr_t)(mt_context_commit(args->context,args->input,args->length,message,sizeof(message))==0);
+}
+static int last_commit(mt_context context,uint32_t expected){mt_context_snapshot info={.struct_size=sizeof(info)};
+ return mt_context_info(context,&info,error,sizeof(error))||info.last_commit!=expected;
 }
 int main(int argc,char **argv){
  if(argc!=4)return 2;size_t length=0;unsigned char *input=load(argv[1],&length);if(!input||length<128)return 2;
- uint32_t *words=(uint32_t*)input;size_t size=(size_t)words[2]*words[3]*16;unsigned char *source=input+words[14]*4;
+ /* The edited descriptor differs from the committed one only in its camera record. */
+ unsigned char *edited=malloc(length);if(!edited)return 2;memcpy(edited,input,length);
+ uint32_t *words=(uint32_t*)input;size_t size=(size_t)words[2]*words[3]*16;unsigned char *source=edited+words[14]*4;
  unsigned samples=(unsigned)strtoul(argv[3],NULL,10);if(samples<8||samples>4096)return 2;
  unsigned char camera[128],original[128];memcpy(original,source,128);memcpy(camera,original,128);
  unsigned char *a_pixels=malloc(size),*b_pixels=malloc(size),*initial=malloc(size*3);if(!a_pixels||!b_pixels||!initial)return 2;
  mt_context a=0,b=0;mt_render_job old=0,job=0;mt_context_snapshot ci={.struct_size=sizeof(ci)};mt_job_snapshot ji={.struct_size=sizeof(ji)};
  OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&a,error,sizeof(error)));OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&b,error,sizeof(error)));
- FAILS(MT_ERROR_INVALID_STATE,mt_context_update_camera(a,camera,128,error,sizeof(error)));
- OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,MT_BACKEND_SOFTWARE));OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,MT_BACKEND_SOFTWARE));
+ OK(last_commit(a,MT_COMMIT_NONE));
+ OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,MT_BACKEND_SOFTWARE));OK(last_commit(a,MT_COMMIT_FULL));
  OK(mt_context_render(a,samples,error,sizeof(error)));
  for(unsigned kind=0;kind<3;kind++)OK(read_image(a,kind,initial+kind*size,size));
- OK(mt_context_submit(a,1,&old,error,sizeof(error)));FAILS(MT_ERROR_INVALID_STATE,mt_context_update_camera(a,camera,128,error,sizeof(error)));
- OK(mt_job_cancel(old,error,sizeof(error)));FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_update_camera(a,NULL,128,error,sizeof(error)));
- FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_update_camera(a,camera,124,error,sizeof(error)));FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_update_camera(a,camera,132,error,sizeof(error)));
+ OK(mt_context_submit(a,1,&old,error,sizeof(error)));OK(mt_job_cancel(old,error,sizeof(error)));
+ FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_commit(a,NULL,length,error,sizeof(error)));
+ FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_commit(a,edited,length-4,error,sizeof(error)));
  /* Invalid lenses/projections, unknown fields, singular/non-affine transforms and NaNs. */
  const unsigned slots[]={0,1,2,3,8,9,10,11,12,13,16,19,31,28};
  const float values[]={0,NAN,0,0,0,-1,0,0,0,0,0,1,0,INFINITY};
@@ -47,7 +52,7 @@ int main(int argc,char **argv){
   memcpy(camera,original,128);if(k==0){uint32_t v=2;memcpy(camera,&v,4);}
   else if(k==9){uint32_t v=1;memcpy(camera+slots[k]*4,&v,4);}else memcpy(camera+slots[k]*4,&values[k],4);
   if(k==10)memset(camera+64,0,64);
-  FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_update_camera(a,camera,128,error,sizeof(error)));
+  memcpy(source,camera,128);FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_commit(a,edited,length,error,sizeof(error)));
   OK(mt_context_info(a,&ci,error,sizeof(error)));REQUIRE(ci.samples==samples&&ci.state==MT_CONTEXT_COMMITTED);
   OK(mt_job_info(old,&ji,error,sizeof(error)));REQUIRE(ji.state==MT_JOB_CANCELLED);
   OK(read_image(a,0,a_pixels,size));REQUIRE(memcmp(a_pixels,initial,size)==0);
@@ -60,8 +65,10 @@ int main(int argc,char **argv){
   if(variant==3){projection=1;f[2]=.01f;f[3]=100;f[4]=-3;f[5]=3;f[6]=-2;f[7]=2;f[8]=1.1f;}
   if(variant==4){f[20]+=.07f;f[28]-=.2f;}
   memcpy(camera,f,128);memcpy(camera,&projection,4);memcpy(source,camera,128);
-  OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,MT_BACKEND_SOFTWARE));
-  OK(mt_context_update_camera(a,camera,128,error,sizeof(error)));memset(camera,0,128);
+  /* The reference prepares the edited scene from scratch on a new context. */
+  OK(mt_context_destroy(b,error,sizeof(error)));OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&b,error,sizeof(error)));
+  OK(mt_context_commit(b,edited,length,error,sizeof(error)));OK(backend_is(b,MT_BACKEND_SOFTWARE));OK(last_commit(b,MT_COMMIT_FULL));
+  OK(mt_context_commit(a,edited,length,error,sizeof(error)));OK(last_commit(a,MT_COMMIT_INCREMENTAL));memset(camera,0,128);
   OK(mt_context_info(a,&ci,error,sizeof(error)));REQUIRE(ci.samples==0&&ci.state==MT_CONTEXT_COMMITTED);
   size_t written=0;FAILS(MT_ERROR_INVALID_STATE,mt_context_read_pixels(a,MT_IMAGE_HDR,NULL,0,&written,error,sizeof(error)));
   FAILS(MT_ERROR_INVALID_HANDLE,mt_job_info(variant?job:old,&ji,error,sizeof(error)));
@@ -78,11 +85,11 @@ int main(int argc,char **argv){
    FILE *file=fopen(path,"wb");REQUIRE(file&&fwrite(a_pixels,1,size,file)==size);fclose(file);
   }
  }
- memcpy(camera,original,128);pthread_t thread;void *thread_result=NULL;struct thread_args args={a,camera};
+ memcpy(source,original,128);pthread_t thread;void *thread_result=NULL;struct thread_args args={a,edited,length};
  REQUIRE(pthread_create(&thread,NULL,other_thread,&args)==0);REQUIRE(pthread_join(thread,&thread_result)==0);REQUIRE((uintptr_t)thread_result==1);
  OK(mt_context_render(a,samples,error,sizeof(error)));
  OK(read_image(a,0,a_pixels,size));REQUIRE(memcmp(a_pixels,initial,size)==0);
- OK(mt_context_update_camera(a,camera,128,error,sizeof(error)));OK(mt_context_info(a,&ci,error,sizeof(error)));REQUIRE(ci.samples==0);
- OK(mt_context_destroy(a,error,sizeof(error)));FAILS(MT_ERROR_INVALID_HANDLE,mt_context_update_camera(a,camera,128,error,sizeof(error)));OK(mt_context_destroy(b,error,sizeof(error)));
- free(input);free(initial);free(a_pixels);free(b_pixels);printf("PASS %u camera checks\n",checks);return 0;
+ OK(mt_context_commit(a,edited,length,error,sizeof(error)));OK(mt_context_info(a,&ci,error,sizeof(error)));REQUIRE(ci.samples==0);
+ OK(mt_context_destroy(a,error,sizeof(error)));FAILS(MT_ERROR_INVALID_HANDLE,mt_context_commit(a,edited,length,error,sizeof(error)));OK(mt_context_destroy(b,error,sizeof(error)));
+ free(edited);free(input);free(initial);free(a_pixels);free(b_pixels);printf("PASS %u camera checks\n",checks);return 0;
 }

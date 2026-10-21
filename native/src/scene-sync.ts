@@ -122,7 +122,7 @@ export class NativeSceneChanges {
 
 /** Retained objects mirroring the last synced descriptor; indices identify records. */
 export class SyncedScene {
-  bytes = new Uint32Array(0);
+  bytes: Uint32Array<ArrayBufferLike> = new Uint32Array(0);
   textures: PixelTexture[] = [];
   materials: MaterialState[] = [];
   geometries: Geometry[] = [];
@@ -133,31 +133,42 @@ export class SyncedScene {
   background = new NativeBackground();
   tracker = new SceneChangeTracker<NativeLight, NativeBackground, NativeMaterialSnapshot, NativeLightSnapshot, NativeBackgroundSnapshot>(nativeAdapter);
 
-  /** Applies the descriptor to the retained objects and returns the pending changes. */
-  sync(bytes: Uint8Array): NativeSceneChanges {
+  /**
+   * Applies the descriptor to the retained objects and returns the pending
+   * changes. An `owned` descriptor is kept for the next comparison instead of
+   * a copy; the caller must not modify it afterwards. `unchanged` holds one
+   * byte per geometry, then per texture; 1 skips comparing that record because
+   * the host found it identical to the previous descriptor.
+   */
+  sync(bytes: Uint8Array, owned = false, unchanged?: Uint8Array): NativeSceneChanges {
     const u = new Uint32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
     const f = new Float32Array(bytes.buffer, bytes.byteOffset, bytes.byteLength / 4);
     if (u[H.VERSION] !== VERSION.SCENE) throw new Error('Unsupported native scene version');
     const old = this.bytes, first = old.length === 0;
-    const replaced = this.syncTextures(bytes, u, f, old, first);
+    const geometries = u[H.GEOMETRY_COUNT];
+    const hints = !first && unchanged && old[H.GEOMETRY_COUNT] === geometries && old[H.TEXTURE_COUNT] === u[H.TEXTURE_COUNT] &&
+      unchanged.length === geometries + u[H.TEXTURE_COUNT] ? unchanged : undefined;
+    const replaced = this.syncTextures(bytes, u, f, old, first, hints, geometries);
     this.syncMaterials(u, f, old, first, replaced);
-    this.syncGeometries(u, f, old, first);
+    this.syncGeometries(u, f, old, first, hints);
     this.syncMeshes(u, f, old, first);
     this.syncLights(bytes, u, f, old, first, replaced);
     this.syncBackground(u, f);
     const camera = first || !sameWords(old, old[H.CAMERA_OFFSET], u, u[H.CAMERA_OFFSET], C.WORDS);
     const resolution = first || old[H.WIDTH] !== u[H.WIDTH] || old[H.HEIGHT] !== u[H.HEIGHT];
     const quality = first || ((old[H.QUALITY_FLAGS] ^ u[H.QUALITY_FLAGS]) & 3) !== 0;
-    this.bytes = u.slice();
+    this.bytes = owned ? u : u.slice();
     const changes = this.tracker.detect({meshes: this.meshes, lights: this.lights, background: this.background});
     return new NativeSceneChanges(changes, camera, resolution, quality);
   }
   /** Accepts the last detected changes once the host has applied them. */
   accept() { this.tracker.commit(); }
 
-  private syncTextures(bytes: Uint8Array, u: Uint32Array, f: Float32Array, old: Uint32Array, first: boolean): Set<number> {
+  private syncTextures(bytes: Uint8Array, u: Uint32Array, f: Float32Array, old: Uint32Array, first: boolean,
+    unchanged: Uint8Array | undefined, hintOffset: number): Set<number> {
     const replaced = new Set<number>(), count = u[H.TEXTURE_COUNT];
     for (let i = 0; i < count; i++) {
+      if (unchanged && unchanged[hintOffset + i]) continue;
       const off = u[H.TEXTURE_OFFSET] + i * T.WORDS;
       const pixels = u[off + T.WIDTH] * u[off + T.HEIGHT] * (u[off + T.STORAGE] === 0 ? 1 : 4);
       if (first || i >= old[H.TEXTURE_COUNT]) { this.textures[i] = decodeTexture(bytes, u, f, off); replaced.add(i); continue; }
@@ -196,9 +207,10 @@ export class SyncedScene {
     this.materials.length = count;
   }
 
-  private syncGeometries(u: Uint32Array, f: Float32Array, old: Uint32Array, first: boolean) {
+  private syncGeometries(u: Uint32Array, f: Float32Array, old: Uint32Array, first: boolean, unchanged: Uint8Array | undefined) {
     const count = u[H.GEOMETRY_COUNT];
     for (let i = 0; i < count; i++) {
+      if (unchanged && unchanged[i]) continue;
       const off = u[H.GEOMETRY_OFFSET] + i * G.WORDS, vertices = u[off + G.VERTEX_COUNT];
       if (first || i >= old[H.GEOMETRY_COUNT]) { this.geometries[i] = decodeGeometry(u, f, off, undefined); continue; }
       const prior = old[H.GEOMETRY_OFFSET] + i * G.WORDS;
@@ -325,10 +337,18 @@ function indexOf<T>(list: T[], item: T): number { return list.indexOf(item); }
  * changed transforms (mesh indices), instance colors (mesh indices), geometries
  * and materials (record indices)].
  */
-export function syncNativeScene(bytes: Uint8Array, token: number): Uint8Array {
+const unchangedHints = new Map<number, Uint8Array>();
+/** Stores unchanged-record hints (see SyncedScene.sync) for the token's next sync. */
+export function receiveNativeSyncHints(bytes: Uint8Array, token: number): Uint8Array {
+  unchangedHints.set(token, bytes);
+  return new Uint8Array(new Uint32Array([1, 0, 0, 0]).buffer);
+}
+export function syncNativeScene(bytes: Uint8Array, token: number, owned = false): Uint8Array {
   let scene = syncedScenes.get(token);
   if (!scene) { scene = new SyncedScene(); syncedScenes.set(token, scene); }
-  const changes = scene.sync(bytes), set = changes.scene;
+  const unchanged = unchangedHints.get(token);
+  unchangedHints.delete(token);
+  const changes = scene.sync(bytes, owned, unchanged), set = changes.scene;
   const words: number[] = [1, set.meshes === 'none' ? 0 : set.meshes === 'incremental' ? 1 : 2, set.lights ? 1 : 0,
     set.background ? 1 : 0, changes.camera ? 1 : 0, changes.resolution ? 1 : 0, changes.quality ? 1 : 0];
   words.push(set.transforms.length); for (const mesh of set.transforms) words.push(indexOf(scene.meshes, mesh));
@@ -343,6 +363,6 @@ export function acceptNativeScene(token: number): Uint8Array {
   return new Uint8Array(new Uint32Array([scene ? 1 : 0, 0, 0, 0]).buffer);
 }
 export function releaseNativeScene(token: number): Uint8Array {
-  syncedScenes.delete(token);
+  syncedScenes.delete(token); unchangedHints.delete(token);
   return new Uint8Array(16);
 }

@@ -100,10 +100,13 @@ export function geometryKernelHypot(x: number,y: number,z: number): number {retu
 import {syncNativeScene as syncScene, acceptNativeScene as acceptScene, releaseNativeScene as releaseScene} from './scene-sync.js';
 import {sceneErrorPacket} from './scene-errors.js';
 import {ERROR_CODE} from './layout.js';
+// The export wrapper copies the host's input, so the sync may keep it.
 export function syncNativeScene(bytes: Uint8Array, token: number): Uint8Array {
-  try { return syncScene(bytes, token); } catch (error) { return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error); }
+  try { return syncScene(bytes, token, true); } catch (error) { return sceneErrorPacket(ERROR_CODE.RETAINED_SCENE, error); }
 }
 export function acceptNativeScene(token: number): Uint8Array { return acceptScene(token); }
+import {receiveNativeSyncHints as receiveSyncHints} from './scene-sync.js';
+export function receiveNativeSyncHints(bytes: Uint8Array, token: number): Uint8Array { return receiveSyncHints(bytes, token); }
 export function releaseNativeScene(token: number): Uint8Array { return releaseScene(token); }
 
 import {sceneLightListParameters as prepareLightList} from './scene-core.js';

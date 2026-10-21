@@ -1,4 +1,4 @@
-//! Real-device check of the stable-topology geometry API, used by --geometry-smoke.
+//! Real-device check of incremental geometry commits, used by --geometry-smoke.
 use crate::{
     renderer::{self, Camera, Renderer},
     scene::{Environment, Model},
@@ -30,27 +30,22 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 }
                 // Omitted normals request the original TS smooth-normal generator;
                 // supplied normals/tangents are passed exactly as caller attributes.
-                geometry.normals = if step % 2 == 0 {
-                    vec![]
-                } else {
-                    normals.clone()
-                };
-                let bytes = geometry.update_bytes(gi);
+                // Adding or removing normals prepares the mesh fully (steps 0 and 4).
+                geometry.normals = if step < 4 { vec![] } else { normals.clone() };
                 let before = renderer.pixels()?;
-                let mut invalid = bytes.clone();
-                invalid[16..20].copy_from_slice(&f32::NAN.to_le_bytes());
+                let mut invalid = model.clone();
+                std::sync::Arc::make_mut(&mut invalid.geometries)[gi].positions[0] = f32::NAN;
                 ensure!(
-                    renderer.geometry(&invalid).is_err() && renderer.pixels()? == before,
+                    renderer
+                        .commit(&invalid.descriptor(&camera.bytes(), size, &environment))
+                        .is_err()
+                        && renderer.pixels()? == before,
                     "Invalid geometry mutated scene"
                 );
-                if renderer.geometry(&bytes)? {
+                renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                if renderer.last_commit_incremental()? {
                     partial += 1;
                 } else {
-                    ensure!(
-                        renderer.pixels()? == before,
-                        "Rejected geometry changed scene"
-                    );
-                    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
                     fallback += 1;
                 }
                 ensure!(renderer.samples()? == 0, "Geometry did not reset samples");
@@ -63,9 +58,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                     "Geometry full/partial mismatch {mode}/{gi}/{step}"
                 );
                 environment.intensity = 0.5 + step as f32 * 0.15;
-                if !renderer.environment(&environment.update_bytes())? {
-                    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
-                }
+                renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
                 let actual = renderer.finish(8)?;
                 reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
                 ensure!(
@@ -84,9 +77,9 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             0.,
         )?;
     }
-    ensure!(partial > 0, "No partial geometry updates executed");
+    ensure!(partial > 0, "No incremental geometry commits executed");
     println!(
-        "PASS {partial} partial geometry edits, {fallback} full fallbacks; software/auto HDR/normal/albedo exact; generated/explicit normals and retained environments"
+        "PASS {partial} incremental geometry commits, {fallback} full commits; software/auto HDR/normal/albedo exact; generated/explicit normals and retained environments"
     );
     Ok(())
 }

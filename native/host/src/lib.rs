@@ -1057,7 +1057,9 @@ impl GpuScene {
                     data,
                     wgpu::TexelCopyBufferLayout {
                         offset: 0,
-                        bytes_per_row: Some(*width * texture.format().block_copy_size(None).unwrap_or(0)),
+                        bytes_per_row: Some(
+                            *width * texture.format().block_copy_size(None).unwrap_or(0),
+                        ),
                         rows_per_image: Some(*height),
                     },
                     wgpu::Extent3d {
@@ -1094,18 +1096,23 @@ impl GpuScene {
                     binding: entry.binding,
                     resource: match entry.kind {
                         BindingKind::Buffer => self.buffers[&entry.id].as_entire_binding(),
-                        BindingKind::Texture => wgpu::BindingResource::TextureView(&views[&entry.id]),
+                        BindingKind::Texture => {
+                            wgpu::BindingResource::TextureView(&views[&entry.id])
+                        }
                         BindingKind::Sampler => {
                             wgpu::BindingResource::Sampler(&self.samplers[&entry.id])
                         }
                     },
                 })
                 .collect();
-            self.groups[index] = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("MuTracer capture resources"),
-                layout: &self.pipeline.get_bind_group_layout(index as u32),
-                entries: &entries,
-            });
+            self.groups[index] = self
+                .gpu
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("MuTracer capture resources"),
+                    layout: &self.pipeline.get_bind_group_layout(index as u32),
+                    entries: &entries,
+                });
         }
         Ok(())
     }

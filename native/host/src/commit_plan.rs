@@ -57,9 +57,8 @@ fn texture_unchanged(a: &Words, b: &Words, index: usize) -> Option<bool> {
     if (0..t::WORDS).any(|k| k != t::PIXELS && a.u(ao + k) != b.u(bo + k)) {
         return Some(false);
     }
-    let texels = b.u(bo + t::WIDTH)
-        * b.u(bo + t::HEIGHT)
-        * if b.u(bo + t::STORAGE) == 0 { 1 } else { 4 };
+    let texels =
+        b.u(bo + t::WIDTH) * b.u(bo + t::HEIGHT) * if b.u(bo + t::STORAGE) == 0 { 1 } else { 4 };
     same_span(a, a.u(ao + t::PIXELS), b, b.u(bo + t::PIXELS), texels)
 }
 
@@ -83,9 +82,10 @@ fn atlas_texture(w: &Words, index: usize) -> Option<bool> {
             }
         }
     }
-    Some((0..w.u(h::LIGHT_COUNT)).any(|i| {
-        w.u(w.u(h::LIGHT_OFFSET) + i * l::WORDS + l::TEXTURE) == index + 1
-    }))
+    Some(
+        (0..w.u(h::LIGHT_COUNT))
+            .any(|i| w.u(w.u(h::LIGHT_OFFSET) + i * l::WORDS + l::TEXTURE) == index + 1),
+    )
 }
 
 /// Material property kind of texture references (see material_properties.rs).
@@ -105,6 +105,53 @@ fn changed_textures(a: &Words, b: &Words) -> Option<(Vec<usize>, bool)> {
         }
     }
     Some((changed, atlas))
+}
+
+/// Whether geometry `index` has the same record and attribute contents.
+fn geometry_unchanged(a: &Words, b: &Words, index: usize) -> Option<bool> {
+    let (ao, bo) = (
+        a.u(h::GEOMETRY_OFFSET) + index * g::WORDS,
+        b.u(h::GEOMETRY_OFFSET) + index * g::WORDS,
+    );
+    let (vertices, indices) = (b.u(bo + g::VERTEX_COUNT), b.u(bo + g::INDEX_COUNT));
+    let spans = [
+        (g::POSITION, vertices * 3),
+        (g::INDICES, indices),
+        (g::NORMAL, vertices * 3),
+        (g::UV, vertices * 2),
+        (g::UV1, vertices * 2),
+        (g::COLOR, vertices * 3),
+        (g::TANGENT, vertices * 4),
+        (g::MATERIAL_INDEX, vertices),
+    ];
+    if (0..g::WORDS).any(|k| spans.iter().all(|&(f, _)| f != k) && a.u(ao + k) != b.u(bo + k)) {
+        return Some(false);
+    }
+    for (field, count) in spans {
+        if !same_span(a, a.u(ao + field), b, b.u(bo + field), count)? {
+            return Some(false);
+        }
+    }
+    Some(true)
+}
+
+/// One byte per geometry, then per texture: 1 when its record and data are
+/// unchanged. Empty when the counts differ (no hints apply).
+pub(crate) fn unchanged_records(previous: &[u8], next: &[u8]) -> Vec<u8> {
+    let (a, b) = (Words(previous), Words(next));
+    if a.len() < h::WORDS
+        || b.len() < h::WORDS
+        || a.u(h::GEOMETRY_COUNT) != b.u(h::GEOMETRY_COUNT)
+        || a.u(h::TEXTURE_COUNT) != b.u(h::TEXTURE_COUNT)
+    {
+        return Vec::new();
+    }
+    let geometries = (0..b.u(h::GEOMETRY_COUNT)).map(|i| geometry_unchanged(&a, &b, i));
+    let textures = (0..b.u(h::TEXTURE_COUNT)).map(|i| texture_unchanged(&a, &b, i));
+    geometries
+        .chain(textures)
+        .map(|same| u8::from(same == Some(true)))
+        .collect()
 }
 
 fn geometry_step(a: &Words, b: &Words, index: usize) -> Option<Step> {
@@ -325,9 +372,11 @@ pub(crate) fn plan(previous: &[u8], next: &[u8], sync: &SceneSync) -> Option<Vec
     }
     let (textures, atlas) = changed_textures(&a, &b)?;
     // The environment map is a light to the sync, so its edits may not set `background`.
-    let environment_maps = textures
-        .iter()
-        .any(|&i| [h::ENVIRONMENT_TEXTURE, h::BACKGROUND_TEXTURE].iter().any(|&f| b.u(f) == i + 1));
+    let environment_maps = textures.iter().any(|&i| {
+        [h::ENVIRONMENT_TEXTURE, h::BACKGROUND_TEXTURE]
+            .iter()
+            .any(|&f| b.u(f) == i + 1)
+    });
     let mut steps = Vec::new();
     if atlas {
         steps.push(Step::Atlas(next.to_vec()));
@@ -356,4 +405,53 @@ pub(crate) fn plan(previous: &[u8], next: &[u8], sync: &SceneSync) -> Option<Vec
         ));
     }
     Some(steps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::scene::{tests::input, validate_changed};
+
+    fn word(bytes: &[u8], index: usize) -> usize {
+        u32::from_le_bytes(bytes[index * 4..index * 4 + 4].try_into().unwrap()) as usize
+    }
+    fn set(bytes: &mut [u8], index: usize, value: u32) {
+        bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes());
+    }
+    fn position(bytes: &[u8]) -> usize {
+        word(bytes, word(bytes, h::GEOMETRY_OFFSET) + g::POSITION)
+    }
+
+    #[test]
+    fn unchanged_records_mark_identical_geometry_and_textures() {
+        let base = input();
+        let (geometries, textures) = (
+            word(&base, h::GEOMETRY_COUNT),
+            word(&base, h::TEXTURE_COUNT),
+        );
+        assert_eq!(
+            unchanged_records(&base, &base),
+            vec![1; geometries + textures]
+        );
+        let mut moved = base.clone();
+        set(&mut moved, position(&base), 0.5f32.to_bits());
+        let hints = unchanged_records(&base, &moved);
+        assert_eq!(hints[0], 0);
+        assert!(hints[1..].iter().all(|&same| same == 1));
+        let mut fewer = base.clone();
+        set(&mut fewer, h::GEOMETRY_COUNT, geometries as u32 - 1);
+        assert!(unchanged_records(&base, &fewer).is_empty());
+    }
+
+    #[test]
+    fn validation_scans_every_geometry_not_marked_unchanged() {
+        let base = input();
+        let mut invalid = base.clone();
+        set(&mut invalid, position(&base), f32::NAN.to_bits());
+        let hints = unchanged_records(&base, &invalid);
+        assert_eq!(hints[0], 0);
+        assert!(validate_changed(&invalid, &hints).is_err());
+        // A hint is trusted: element scans of hinted records are skipped.
+        assert!(validate_changed(&invalid, &vec![1; hints.len()]).is_ok());
+    }
 }

@@ -1,5 +1,6 @@
 //! Small native example: glTF input → native MuTracer library → egui image.
 mod denoise;
+mod edit_bench;
 mod geometry_smoke;
 mod import;
 mod input;
@@ -61,11 +62,6 @@ struct Viewer {
     queued_load: Option<PathBuf>,
     running: bool,
     change: Change,
-    pending_materials: std::collections::BTreeSet<usize>,
-    pending_camera: bool,
-    pending_environment: bool,
-    pending_light: bool,
-    pending_transforms: std::collections::BTreeSet<usize>,
     candidate: Option<(Model, Camera)>,
     pixels: Vec<f32>,
     pixel_size: [u32; 2],
@@ -80,6 +76,8 @@ struct Viewer {
     denoise_status: String,
     last_denoise: Option<(u64, u32)>,
     last_scene_commit: std::time::Instant,
+    /// Whether the last completed commit prepared the scene again.
+    last_commit_full: bool,
     texture: Option<egui::TextureHandle>,
     display_dirty: bool,
     error: String,
@@ -147,11 +145,7 @@ impl Viewer {
             } else {
                 Change::None
             },
-            pending_materials: Default::default(),
-            pending_camera: false,
-            pending_environment: false,
-            pending_light: false,
-            pending_transforms: Default::default(),
+            last_commit_full: true,
             candidate: None,
             pixels: vec![],
             pixel_size: size,
@@ -179,15 +173,6 @@ impl Viewer {
         }
     }
     fn dirty(&mut self, change: Change) {
-        if change == Change::Camera {
-            self.pending_camera = true;
-        }
-        if change == Change::Environment {
-            self.pending_environment = true;
-        }
-        if change == Change::Light {
-            self.pending_light = true;
-        }
         self.change = self.change.max(change);
         self.generation += 1;
     }
@@ -246,6 +231,11 @@ impl Viewer {
                                 std::thread::spawn(move || drop(retired));
                             }
                             self.renderer.commit_finished();
+                            // Full preparations restart the held-input throttle.
+                            self.last_commit_full = !self.renderer.last_commit_incremental()?;
+                            if self.last_commit_full {
+                                self.last_scene_commit = std::time::Instant::now();
+                            }
                             if let Ok(backend) = self.renderer.backend() {
                                 self.backend_status = Self::describe_backend(backend);
                             }
@@ -262,12 +252,16 @@ impl Viewer {
                                 self.render_size = size;
                             } else {
                                 // Preserve a loaded candidate until the newest snapshot commits.
+                                let loaded = candidate.is_some();
                                 if self.candidate.is_none() {
                                     self.candidate = candidate;
                                 } else {
                                     std::thread::spawn(move || drop(candidate));
                                 }
-                                self.change = Change::Scene;
+                                // Newer edits are already pending; a model needs a scene commit.
+                                if loaded || self.change == Change::None {
+                                    self.change = Change::Scene;
+                                }
                             }
                         }
                         Err(error) => {
@@ -335,12 +329,40 @@ impl Viewer {
         }
         let held = ctx.input(|i| i.pointer.any_down());
         if !self.renderer.busy() {
-            let deferred = self.change == Change::Scene
-                && held
-                && self.last_scene_commit.elapsed() < Duration::from_millis(120);
+            // Edits commit the whole descriptor. While the last commit applied
+            // incrementally, edits commit on this thread like the frame they
+            // belong to; scene changes and edits after a full preparation use
+            // the worker and are throttled while input is held.
+            let edit = self.change != Change::Scene && self.change != Change::Reset;
+            let background = self.change == Change::Scene || (edit && self.last_commit_full);
+            let deferred =
+                background && held && self.last_scene_commit.elapsed() < Duration::from_millis(120);
             if !deferred {
                 match self.change {
-                    Change::Scene => {
+                    Change::Camera
+                    | Change::Material
+                    | Change::Environment
+                    | Change::Light
+                    | Change::Transform
+                        if !background =>
+                    {
+                        self.renderer.commit(&self.model.descriptor_with_light(
+                            &self.camera.bytes(),
+                            self.size,
+                            &self.environment,
+                            &self.light,
+                        ))?;
+                        self.last_commit_full = !self.renderer.last_commit_incremental()?;
+                        if self.last_commit_full {
+                            self.last_scene_commit = std::time::Instant::now();
+                        }
+                    }
+                    Change::Scene
+                    | Change::Camera
+                    | Change::Material
+                    | Change::Environment
+                    | Change::Light
+                    | Change::Transform => {
                         let candidate = self.candidate.take();
                         let (model, camera) = candidate
                             .as_ref()
@@ -356,70 +378,22 @@ impl Viewer {
                             ctx.clone(),
                         );
                         self.commit = Some((receive, self.generation, candidate, self.size));
-                        self.last_scene_commit = std::time::Instant::now();
+                        if self.change == Change::Scene {
+                            self.last_scene_commit = std::time::Instant::now();
+                        }
                         self.samples = 0;
                         self.change = Change::None;
-                        self.pending_materials.clear();
-                        self.pending_transforms.clear();
-                        self.pending_camera = false;
-                        self.pending_environment = false;
-                        self.pending_light = false;
                         ctx.request_repaint_after(Duration::from_millis(16));
                         return Ok(());
                     }
-                    Change::Material | Change::Environment | Change::Light | Change::Transform => {
-                        for &id in &self.pending_materials {
-                            if !self
-                                .renderer
-                                .material(&self.model.materials[id].update_bytes(id))?
-                            {
-                                // Apply the existing held-input rebuild throttle next tick.
-                                self.change = Change::Scene;
-                                return Ok(());
-                            }
-                        }
-                        if self.pending_environment
-                            && !self
-                                .renderer
-                                .environment(&self.environment.update_bytes())?
-                        {
-                            self.change = Change::Scene;
-                            return Ok(());
-                        }
-                        if self.pending_light && !self.renderer.light(&self.light.update_bytes())? {
-                            self.change = Change::Scene;
-                            return Ok(());
-                        }
-                        for &id in &self.pending_transforms {
-                            if !self
-                                .renderer
-                                .transform(&self.model.meshes[id].update_bytes(id))?
-                            {
-                                self.change = Change::Scene;
-                                return Ok(());
-                            }
-                        }
-                        if self.pending_camera {
-                            self.renderer.camera(&self.camera.bytes())?;
-                        }
-                    }
-                    Change::Camera => self.renderer.camera(&self.camera.bytes())?,
                     Change::Reset => self.renderer.reset()?,
                     Change::None => {}
                 }
                 if self.change != Change::None {
                     self.samples = 0;
-                    if self.change == Change::Scene {
-                        self.last_scene_commit = std::time::Instant::now();
-                    }
                     self.render_generation = self.generation;
                     self.render_size = self.size;
                     self.change = Change::None;
-                    self.pending_materials.clear();
-                    self.pending_transforms.clear();
-                    self.pending_camera = false;
-                    self.pending_environment = false;
-                    self.pending_light = false;
                     self.error.clear();
                 }
             }
@@ -736,7 +710,6 @@ impl Viewer {
                             )
                             .changed();
                         if changed {
-                            self.pending_materials.insert(self.selected);
                             self.dirty(Change::Material);
                         }
                         ui.add_space(14.);
@@ -912,7 +885,6 @@ impl Viewer {
                             });
                             if changed {
                                 self.model.refresh_bounds();
-                                self.pending_transforms.insert(id);
                                 self.dirty(Change::Transform);
                             }
                             ui.separator();
@@ -1275,12 +1247,16 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
         "Restart changed the original image"
     );
     camera.orbit([70., -20.]);
-    renderer.camera(&camera.bytes())?;
+    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+    ensure!(
+        renderer.last_commit_incremental()?,
+        "Camera commit rebuilt the scene"
+    );
     let orbit = renderer.finish(16)?;
     ensure!(original != orbit, "Camera control did not change pixels");
     renderer::save(&out.join("orbit.png"), &orbit, size, 0.)?;
     camera = Camera::fit(model.center, model.radius);
-    renderer.camera(&camera.bytes())?;
+    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
     ensure!(
         renderer.finish(16)? == original,
         "Restoring camera changed the original image"
@@ -1557,7 +1533,6 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
             glam::Mat4::from_translation(glam::Vec3::new(step as f32 * 0.002, 0., 0.))
                 * original_transform;
         viewer.model.refresh_bounds();
-        viewer.pending_transforms.insert(0);
         viewer.dirty(Change::Transform);
         viewer.light.azimuth = step as f32 * 7.;
         viewer.light.intensity = 0.5 + step as f32 / 40.;
@@ -1567,7 +1542,6 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         viewer.dirty(Change::Environment);
         viewer.model.materials[id].color = [0.1 + step as f32 / 100., 0.4, 0.7];
         viewer.model.materials[id].roughness = (step % 20) as f32 / 20.;
-        viewer.pending_materials.insert(id);
         viewer.dirty(Change::Material);
         if step % 5 == 0 {
             viewer.camera.orbit([1., 0.]);
@@ -1646,13 +1620,14 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
+    // The previous commit prepared the scene fully, so this edit commits on the
+    // worker while the preview stays on screen.
     viewer.model.materials[id].color = [0.1, 0.7, 0.2];
-    viewer.pending_materials.insert(id);
     viewer.dirty(Change::Material);
     viewer.tick(&ctx)?;
     ensure!(
-        viewer.change == Change::Scene && viewer.texture.is_some(),
-        "Unsupported material did not schedule a full rebuild with retained preview"
+        viewer.commit.is_some() && viewer.texture.is_some(),
+        "Edit after a full preparation did not commit in the background with retained preview"
     );
     while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
     {
@@ -1663,6 +1638,10 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
+    ensure!(
+        viewer.last_commit_full,
+        "Unlit material color edit did not prepare the scene fully"
+    );
     reference.commit(&viewer.model.descriptor_with_light(
         &viewer.camera.bytes(),
         viewer.size,
@@ -1674,15 +1653,15 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         "Unlit full-commit fallback mismatch"
     );
     println!(
-        "PASS unsupported material update falls back to full commit; preview retained; final HDR byte-exact"
+        "PASS unlit material edit prepares the scene fully on the worker; preview retained; final HDR byte-exact"
     );
 
     viewer.environment.background = !viewer.environment.background;
     viewer.dirty(Change::Environment);
     viewer.tick(&ctx)?;
     ensure!(
-        viewer.change == Change::Scene && viewer.texture.is_some(),
-        "Environment feature change did not retain preview and schedule full commit"
+        viewer.commit.is_some() && viewer.texture.is_some(),
+        "Environment feature change did not commit in the background with retained preview"
     );
     while viewer.change != Change::None || viewer.renderer.busy() || viewer.samples < viewer.target
     {
@@ -1693,6 +1672,10 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
+    ensure!(
+        viewer.last_commit_full,
+        "Background visibility change did not prepare the scene fully"
+    );
     reference.commit(&viewer.model.descriptor_with_light(
         &viewer.camera.bytes(),
         viewer.size,
@@ -1704,7 +1687,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         "Environment full-commit fallback mismatch"
     );
     println!(
-        "PASS environment feature change falls back to full commit; preview retained; HDR byte-exact"
+        "PASS background visibility change prepares the scene fully; preview retained; HDR byte-exact"
     );
 
     Ok(())
@@ -1721,19 +1704,16 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
     renderer.commit(&initial)?;
     let baseline = renderer.finish(8)?;
     let id = model.meshes[0].material;
-    let mut bad = model.materials[id].update_bytes(id);
-    bad[16..20].copy_from_slice(&f32::NAN.to_le_bytes());
+    let mut bad = model.clone();
+    bad.materials[id].roughness = f32::NAN;
     ensure!(
-        renderer.material(&bad).is_err() && renderer.pixels()? == baseline,
+        renderer
+            .commit(&bad.descriptor(&camera.bytes(), size, &environment))
+            .is_err()
+            && renderer.pixels()? == baseline,
         "Invalid material modified the scene"
     );
     renderer.start(1)?;
-    ensure!(
-        renderer
-            .material(&model.materials[id].update_bytes(id))
-            .is_err(),
-        "Active job accepted material update"
-    );
     renderer.cancel()?;
     while !renderer.poll()? {
         std::thread::sleep(Duration::from_millis(1));
@@ -1758,14 +1738,15 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
             m.transmission = m.roughness * 0.6;
             m.ior = 1.1 + step as f32 * 0.15;
             let started = std::time::Instant::now();
-            ensure!(
-                renderer.material(&m.update_bytes(id))?,
-                "Expected supported partial material update"
-            );
+            renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
             partial_ms.push(started.elapsed().as_secs_f64() * 1000.);
             ensure!(
+                renderer.last_commit_incremental()?,
+                "Expected an incremental material commit"
+            );
+            ensure!(
                 renderer.samples()? == 0,
-                "Partial material did not reset samples"
+                "Material commit did not reset samples"
             );
             let actual = renderer.finish(8)?;
             let started = std::time::Instant::now();
@@ -1790,10 +1771,10 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     std::fs::write(
         out.join("timings.txt"),
-        format!("partial ms {partial_ms:?}\nfull commit ms {full_ms:?}\n"),
+        format!("incremental commit ms {partial_ms:?}\nfull commit ms {full_ms:?}\n"),
     )?;
     println!(
-        "PASS {count} basic material updates: HDR/normal/albedo byte-exact to full commits; baseline restored"
+        "PASS {count} incremental material commits: HDR/normal/albedo byte-exact to full commits; baseline restored"
     );
     Ok(())
 }
@@ -1807,43 +1788,42 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
     let mut reference = Renderer::with_backend(1)?;
     renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
     let original = renderer.finish(8)?;
-    let mut bad = environment.update_bytes();
-    bad[48..52].copy_from_slice(&f32::NAN.to_le_bytes());
+    let mut bad = environment.clone();
+    bad.intensity = f32::NAN;
     ensure!(
-        renderer.environment(&bad).is_err() && renderer.pixels()? == original,
+        renderer
+            .commit(&model.descriptor(&camera.bytes(), size, &bad))
+            .is_err()
+            && renderer.pixels()? == original,
         "Invalid environment changed scene"
     );
     renderer.start(1)?;
-    ensure!(
-        renderer.environment(&environment.update_bytes()).is_err(),
-        "Active job accepted environment update"
-    );
     renderer.cancel()?;
     while !renderer.poll()? {
         std::thread::sleep(Duration::from_millis(1));
     }
     for mode in 0..2 {
         if mode == 1 {
-            // Different dimensions require a full commit. Subsequent HDR edits
-            // use the same partial path as the procedural studio environment.
+            // A map with different dimensions still commits incrementally.
             environment.image = Some(std::sync::Arc::new(image::Rgb32FImage::from_fn(
                 16,
                 8,
                 |x, y| image::Rgb([0.1 + x as f32 * 0.2, 0.2 + y as f32 * 0.3, 0.5]),
             )));
-            ensure!(
-                !renderer.environment(&environment.update_bytes())?,
-                "Map resize accepted partial update"
-            );
             renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+            ensure!(
+                renderer.last_commit_incremental()?,
+                "Map resize rebuilt the scene"
+            );
         }
         for step in 0..8 {
             environment.intensity = if step == 0 { 0. } else { step as f32 * 0.4 };
             environment.rotation = step as f32 * 57.;
             environment.color = [0.2 + step as f32 * 0.1, 0.8, 0.4];
+            renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
             ensure!(
-                renderer.environment(&environment.update_bytes())?,
-                "Expected partial environment update"
+                renderer.last_commit_incremental()?,
+                "Expected an incremental environment commit"
             );
             ensure!(
                 renderer.samples()? == 0,
@@ -1860,11 +1840,11 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
         }
     }
     renderer::save(&out.join("partial.png"), &renderer.pixels()?, size, 0.)?;
-    let current = renderer.pixels()?;
     environment.background = false;
+    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
     ensure!(
-        !renderer.environment(&environment.update_bytes())? && renderer.pixels()? == current,
-        "Background feature rejection changed scene"
+        !renderer.last_commit_incremental()?,
+        "Background visibility changes the shader and needs a full preparation"
     );
     environment = Environment::default();
     renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
@@ -1873,7 +1853,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
         "Environment baseline restore differs"
     );
     println!(
-        "PASS 16 studio/HDR environment updates: HDR/normal/albedo byte-exact to full commits; invalid/active-job/shape/feature rejection; original restored"
+        "PASS 17 incremental studio/HDR environment commits including a map resize: HDR/normal/albedo byte-exact to full commits; invalid input rejected; visibility change prepared fully; original restored"
     );
     Ok(())
 }
@@ -1891,23 +1871,23 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
     let mut reference = Renderer::with_backend(1)?;
     renderer.commit(&model.descriptor_with_light(&camera.bytes(), size, &environment, &light))?;
     let before = renderer.finish(8)?;
-    let mut bad = light.update_bytes();
-    bad[20..24].copy_from_slice(&f32::NAN.to_le_bytes());
+    let mut bad = light.clone();
+    bad.intensity = f32::NAN;
     ensure!(
-        renderer.light(&bad).is_err() && renderer.pixels()? == before,
+        renderer
+            .commit(&model.descriptor_with_light(&camera.bytes(), size, &environment, &bad))
+            .is_err()
+            && renderer.pixels()? == before,
         "Invalid light modified scene"
     );
     renderer.start(1)?;
-    ensure!(
-        renderer.light(&light.update_bytes()).is_err(),
-        "Active job accepted light update"
-    );
     renderer.cancel()?;
     while !renderer.poll()? {
         std::thread::sleep(Duration::from_millis(1));
     }
     for step in 0..18 {
         if step == 9 {
+            // Hiding the background changes the shader: a full preparation.
             environment.background = false;
             renderer.commit(&model.descriptor_with_light(
                 &camera.bytes(),
@@ -1915,21 +1895,13 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
                 &environment,
                 &light,
             ))?;
+            ensure!(
+                !renderer.last_commit_incremental()?,
+                "Background visibility commit stayed incremental"
+            );
         }
         environment.intensity = 0.3 + step as f32 * 0.1;
         environment.rotation = step as f32 * 31.;
-        let env_bytes = environment.update_bytes();
-        if !environment.background {
-            let full = model.descriptor_with_light(&camera.bytes(), size, &environment, &light);
-            ensure!(
-                env_bytes[16..32] == full[64..80],
-                "Partial background color differs from full descriptor"
-            );
-        }
-        ensure!(
-            renderer.environment(&env_bytes)?,
-            "Expected partial environment before light update"
-        );
         light.intensity = if step % 6 == 0 {
             0.
         } else {
@@ -1938,13 +1910,19 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
         light.color = [0.2 + step as f32 * 0.03, 0.8, 0.4];
         light.azimuth = step as f32 * 21.;
         light.elevation = 10. + (step % 8) as f32 * 9.;
+        renderer.commit(&model.descriptor_with_light(
+            &camera.bytes(),
+            size,
+            &environment,
+            &light,
+        ))?;
         ensure!(
-            renderer.light(&light.update_bytes())?,
-            "Expected partial light update"
+            renderer.last_commit_incremental()?,
+            "Expected an incremental light/environment commit"
         );
         ensure!(
             renderer.samples()? == 0,
-            "Light update did not reset samples"
+            "Light commit did not reset samples"
         );
         let actual = renderer.finish(8)?;
         reference.commit(&model.descriptor_with_light(
@@ -1957,25 +1935,23 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
             actual == reference.finish(8)?
                 && renderer.image(1)? == reference.image(1)?
                 && renderer.image(2)? == reference.image(2)?,
-            "Partial light/environment differed from full commit at {step}"
+            "Incremental light/environment differed from full commit at {step}"
         );
     }
     let before = renderer.pixels()?;
-    let mut different_type = light.update_bytes();
-    different_type[16..20].copy_from_slice(&1u32.to_le_bytes());
-    ensure!(
-        !renderer.light(&different_type)? && renderer.pixels()? == before,
-        "Light type rejection changed scene"
-    );
     renderer::save(&out.join("partial.png"), &before, size, 0.)?;
     light.enabled = false;
     renderer.commit(&model.descriptor_with_light(&camera.bytes(), size, &environment, &light))?;
+    ensure!(
+        renderer.last_commit_incremental()?,
+        "Removing the key light rebuilt the scene"
+    );
     ensure!(
         renderer.finish(8)? != before,
         "Removing key light had no effect"
     );
     println!(
-        "PASS18 key-light updates interleaved with environment edits: HDR/normal/albedo byte-exact; invalid/busy/type rejection; removal renders"
+        "PASS 18 incremental key-light and environment commits: HDR/normal/albedo byte-exact; invalid input rejected; light removal incremental"
     );
     Ok(())
 }
@@ -2009,22 +1985,20 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
                 )) * *original
                     * glam::Mat4::from_rotation_y(step as f32 * 0.15)
                     * glam::Mat4::from_scale(scale);
-                let update = model.meshes[id].update_bytes(id);
                 let before = renderer.pixels()?;
-                let mut invalid = update.clone();
-                invalid[16..20].copy_from_slice(&f32::NAN.to_le_bytes());
+                let mut invalid = model.clone();
+                invalid.meshes[id].transform.x_axis.x = f32::NAN;
                 ensure!(
-                    renderer.transform(&invalid).is_err() && renderer.pixels()? == before,
+                    renderer
+                        .commit(&invalid.descriptor(&camera.bytes(), size, &environment))
+                        .is_err()
+                        && renderer.pixels()? == before,
                     "Invalid transform mutated scene"
                 );
-                if renderer.transform(&update)? {
+                renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
+                if renderer.last_commit_incremental()? {
                     partial += 1;
                 } else {
-                    ensure!(
-                        renderer.pixels()? == before,
-                        "Rejected transform changed output"
-                    );
-                    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
                     fallback += 1;
                 }
                 ensure!(renderer.samples()? == 0, "Transform did not reset samples");
@@ -2038,9 +2012,7 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
                 );
                 // Accepted transform lighting must survive subsequent environment edits.
                 environment.intensity = 0.5 + step as f32 * 0.2;
-                if !renderer.environment(&environment.update_bytes())? {
-                    renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
-                }
+                renderer.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
                 let actual = renderer.finish(8)?;
                 reference.commit(&model.descriptor(&camera.bytes(), size, &environment))?;
                 ensure!(
@@ -2062,9 +2034,9 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
             mesh.transform = *original;
         }
     }
-    ensure!(partial > 0, "No partial transforms executed");
+    ensure!(partial > 0, "No incremental transform commits executed");
     println!(
-        "PASS {partial} partial transforms, {fallback} explicit full fallbacks; software/auto HDR/normal/albedo exact; interleaved environment and invalid-update preservation"
+        "PASS {partial} incremental transform commits, {fallback} full commits; software/auto HDR/normal/albedo exact; interleaved environment and invalid-update preservation"
     );
     Ok(())
 }
@@ -2075,6 +2047,7 @@ fn main() -> Result<()> {
     let mut inspect = false;
     let mut preview_out = None;
     let mut material_out = None;
+    let mut edit_bench_out = None;
     let mut environment_out = None;
     let mut light_out = None;
     let mut transform_out = None;
@@ -2087,6 +2060,11 @@ fn main() -> Result<()> {
             "--startup-smoke" => {
                 startup_out = Some(PathBuf::from(
                     args.next().context("--startup-smoke needs a report path")?,
+                ));
+            }
+            "--edit-bench" => {
+                edit_bench_out = Some(PathBuf::from(
+                    args.next().context("--edit-bench needs a directory")?,
                 ));
             }
             "--package-smoke" => {
@@ -2158,6 +2136,9 @@ fn main() -> Result<()> {
     }
     if let Some(out) = environment_out {
         return environment_smoke(&model, &out);
+    }
+    if let Some(out) = edit_bench_out {
+        return edit_bench::run(&model, &out);
     }
     if let Some(out) = material_out {
         return material_smoke(&model, &out);

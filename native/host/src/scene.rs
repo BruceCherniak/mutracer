@@ -58,6 +58,13 @@ unsafe extern "C" {
         output: *mut *const u8,
         size: *mut usize,
     );
+    fn mt_core_scene_sync_hints(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
     fn mt_core_scene_accept_sync(token: u32, output: *mut *const u8, size: *mut usize);
     fn mt_core_scene_release_sync(token: u32, output: *mut *const u8, size: *mut usize);
     fn mt_core_scene_light_list(
@@ -244,6 +251,12 @@ pub(super) fn fuzz_budget(bytes: &[u8]) -> bool {
     true
 }
 pub(super) fn validate(bytes: &[u8]) -> Result<()> {
+    validate_changed(bytes, &[])
+}
+/// Like `validate`, but skips per-element scans of geometries and textures
+/// marked unchanged (`commit_plan::unchanged_records`) against a descriptor
+/// that already passed validation; spans and references are still checked.
+pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     if bytes.len() < h::WORDS * WORD_BYTES || bytes.len() > MAX_BYTES || bytes.len() % 4 != 0 {
         return Err("Invalid scene byte length".into());
     }
@@ -317,23 +330,27 @@ pub(super) fn validate(bytes: &[u8]) -> Result<()> {
         if geometry_words > MAX_PREPARED_BYTES / 4 {
             return Err("Prepared geometry exceeds probe budget".into());
         }
+        let scan = unchanged.get(i) != Some(&1);
         w.span(w.u(o + g::POSITION), v * 3)?;
-        w.finite(w.u(o + g::POSITION), v * 3)?;
+        if scan {
+            w.finite(w.u(o + g::POSITION), v * 3)?;
+        }
         w.span(w.u(o + g::INDICES), n)?;
-        if (0..n).any(|k| w.u(w.u(o + g::INDICES) + k) >= v) {
+        if scan && (0..n).any(|k| w.u(w.u(o + g::INDICES) + k) >= v) {
             return Err("Geometry index is out of range".into());
         }
-        for (field, stride) in [(g::NORMAL, 3), (g::UV, 2), (g::UV1, 2)] {
+        for (field, stride) in [
+            (g::NORMAL, 3),
+            (g::UV, 2),
+            (g::UV1, 2),
+            (g::COLOR, 3),
+            (g::TANGENT, 4),
+        ] {
             if w.u(o + field) != 0 {
                 w.span(w.u(o + field), v * stride)?;
-                w.finite(w.u(o + field), v * stride)?;
-            }
-        }
-
-        for (field, stride) in [(g::COLOR, 3), (g::TANGENT, 4)] {
-            if w.u(o + field) != 0 {
-                w.span(w.u(o + field), v * stride)?;
-                w.finite(w.u(o + field), v * stride)?;
+                if scan {
+                    w.finite(w.u(o + field), v * stride)?;
+                }
             }
         }
         if w.u(o + g::MATERIAL_INDEX) != 0 {
@@ -564,7 +581,8 @@ pub(super) fn validate(bytes: &[u8]) -> Result<()> {
         }
         let count = width * height * if w.u(o + t::STORAGE) == 0 { 1 } else { 4 };
         w.span(w.u(o + t::PIXELS), count)?;
-        if w.u(o + t::STORAGE) == 1 {
+        let scan = unchanged.get(w.u(h::GEOMETRY_COUNT) + i) != Some(&1);
+        if scan && w.u(o + t::STORAGE) == 1 {
             w.finite(w.u(o + t::PIXELS), count)?;
         }
         w.finite(o + t::UV_SCALE, 4)?;
@@ -788,9 +806,15 @@ impl SceneSync {
 }
 impl PreparedState {
     /// Diffs `next` against the synced descriptor; the first call syncs `previous`.
-    pub(super) fn sync(&self, previous: &[u8], next: &[u8]) -> Result<SceneSync> {
+    /// `unchanged` (see `commit_plan::unchanged_records`) lets the sync skip
+    /// comparing records the host found identical to `previous`.
+    pub(super) fn sync(
+        &self,
+        previous: Arc<Vec<u8>>,
+        next: Arc<Vec<u8>>,
+        unchanged: Vec<u8>,
+    ) -> Result<SceneSync> {
         let state = self.clone();
-        let (previous, next) = (previous.to_vec(), next.to_vec());
         runtime::call(move || {
             if !state.synced.load(std::sync::atomic::Ordering::Acquire) {
                 state.sync_step(&previous)?;
@@ -798,6 +822,27 @@ impl PreparedState {
                 state
                     .synced
                     .store(true, std::sync::atomic::Ordering::Release);
+            }
+            if !unchanged.is_empty() {
+                let mut pointer = std::ptr::null();
+                let mut size = 0;
+                unsafe {
+                    mt_core_scene_sync_hints(
+                        unchanged.as_ptr(),
+                        unchanged.len(),
+                        state.token,
+                        &mut pointer,
+                        &mut size,
+                    );
+                }
+                let packet = unsafe {
+                    let result = copy_core_result(pointer, size, 16);
+                    mt_core_collect();
+                    result?
+                };
+                if packet[..4] != 1u32.to_le_bytes() {
+                    return Err("Native sync hints rejected".into());
+                }
             }
             SceneSync::parse(&state.sync_step(&next)?)
         })
@@ -1105,7 +1150,12 @@ impl PreparedState {
         let bytes = bytes.to_vec();
         runtime::call(move || {
             let w = Words(&bytes);
-            if bytes.len() < 16 || bytes.len() % 4 != 0 || w.u(0) != 1 || w.u(3) != 0 || w.len() != 4 + w.u(2) * 3 {
+            if bytes.len() < 16
+                || bytes.len() % 4 != 0
+                || w.u(0) != 1
+                || w.u(3) != 0
+                || w.len() != 4 + w.u(2) * 3
+            {
                 return Err("Invalid instance color update".into());
             }
             w.finite(4, w.len() - 4)?;
@@ -1131,7 +1181,13 @@ impl PreparedState {
             let mut pointer = std::ptr::null();
             let mut size = 0;
             unsafe {
-                mt_core_scene_atlas(bytes.as_ptr(), bytes.len(), state.token, &mut pointer, &mut size);
+                mt_core_scene_atlas(
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    state.token,
+                    &mut pointer,
+                    &mut size,
+                );
             }
             lighting_result(pointer, size, &[4, 5, 7, 8, 20, 24])
         })

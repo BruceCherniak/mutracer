@@ -330,6 +330,15 @@
         "u32"
       ],
       "returns": "bytes"
+    },
+    {
+      "export": "receiveNativeSyncHints",
+      "symbol": "mt_core_scene_sync_hints",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
     }
   ]
 }

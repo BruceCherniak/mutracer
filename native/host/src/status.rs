@@ -2,7 +2,7 @@
 use std::ffi::c_char;
 
 /// Mirrors `MT_ABI_VERSION`.
-pub const ABI_VERSION: u32 = 2;
+pub const ABI_VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
@@ -125,6 +125,13 @@ mod tests {
             ("MT_ERROR_TIMEOUT", Status::Timeout),
         ] {
             assert_eq!(value(name), status as i64, "{name}");
+        }
+        for (name, kind) in [
+            ("MT_COMMIT_NONE", crate::context::COMMIT_NONE),
+            ("MT_COMMIT_FULL", crate::context::COMMIT_FULL),
+            ("MT_COMMIT_INCREMENTAL", crate::context::COMMIT_INCREMENTAL),
+        ] {
+            assert_eq!(value(name), kind as i64, "{name}");
         }
         assert_eq!(value("#define MT_ABI_VERSION"), ABI_VERSION as i64);
         assert_eq!(mt_abi_version(), ABI_VERSION);

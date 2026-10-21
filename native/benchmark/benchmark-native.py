@@ -22,7 +22,7 @@ if hasattr(lib,'mt_set_log_callback'):
  assert lib.mt_set_log_callback(native_log,None)==0
 
 u=c.c_uint32;h=c.c_uint64;n=c.c_size_t;v=c.c_void_p
-sigs={'create_with_backend':[u,c.POINTER(h)],'commit':[h,v,n],'render':[h,u],'reset':[h],'read_pixels':[h,u,v,n,c.POINTER(n)],'destroy':[h],'backend':[h,c.POINTER(u),v,n],'update_transform':[h,v,n],'update_geometry':[h,v,n]}
+sigs={'create_with_backend':[u,c.POINTER(h)],'commit':[h,v,n],'render':[h,u],'reset':[h],'read_pixels':[h,u,v,n,c.POINTER(n)],'destroy':[h],'backend':[h,c.POINTER(u),v,n],'info':[h,v]}
 for key,args in sigs.items():getattr(lib,'mt_context_'+key).argtypes=args+[v,n];getattr(lib,'mt_context_'+key).restype=c.c_int32
 err=c.create_string_buffer(4096)
 def call(key,*args):
@@ -31,32 +31,30 @@ def call(key,*args):
 def clock():return time.perf_counter()*1000
 def backend():
  active=u();reason=c.create_string_buffer(1024);call('backend',ctx,c.byref(active),reason,len(reason));return dict(active=active.value,reason=reason.value.decode())
+class Snapshot(c.Structure):_fields_=[('struct_size',u),('width',u),('height',u),('samples',u),('state',u),('last_commit',u)]
+def last_commit():
+ info=Snapshot(struct_size=c.sizeof(Snapshot));call('info',ctx,c.byref(info));return info.last_commit
 def run():
  t=clock()
  for i in range(8):call('render',ctx,8)
  return clock()-t
 def measure_edits(raw,ctx):
+ # Each edit commits a descriptor that differs from the committed one in one value.
  def u32(i):return struct.unpack_from('<I',raw,i*4)[0]
- def floats(offset,count):return list(struct.unpack_from('<'+'f'*count,raw,offset*4))
  geometry=max(range(u32(4)),key=lambda i:u32(u32(9)+i*12+1))
  mesh=next(i for i in range(u32(5)) if u32(u32(10)+i*20)==geometry)
- mo=u32(10)+mesh*20;matrix=floats(mo+4,16);changed=matrix.copy();changed[12]+=0.0001
- transform=struct.pack('<IIII16f',1,mesh,0,0,*changed);restoreTransform=struct.pack('<IIII16f',1,mesh,0,0,*matrix)
- go=u32(9)+geometry*12;count=u32(go);positions=floats(u32(go+2),count*3);normal=floats(u32(go+4),count*3) if u32(go+4) else []
- tangent=floats(u32(go+8),count*4) if u32(0)>=2 and u32(go+8) else [];flags=bool(normal)|(bool(tangent)<<1)
- original=struct.pack('<IIII',1,geometry,count,flags)+struct.pack('<'+'f'*(len(positions)+len(normal)+len(tangent)),*(positions+normal+tangent))
- positions[(count//2)*3]+=0.0001
- edit=struct.pack('<IIII',1,geometry,count,flags)+struct.pack('<'+'f'*(len(positions)+len(normal)+len(tangent)),*(positions+normal+tangent))
+ offsets={'transform':u32(10)+mesh*20+4+12,'geometry':u32(u32(9)+geometry*12+2)+(u32(u32(9)+geometry*12)//2)*3}
  records={}
- for kind,data,restore in [('transform',transform,restoreTransform),('geometry',edit,original)]:
+ for kind,word in offsets.items():
+  original=struct.unpack_from('<f',raw,word*4)[0];edited=bytearray(raw);struct.pack_into('<f',edited,word*4,original+0.0001);edited=bytes(edited)
   records[kind]=[]
   for i in range(12):
    t=clock()
-   try:call('update_'+kind,ctx,data,len(data))
+   try:call('commit',ctx,edited,len(edited))
    except RuntimeError as e:
     records[kind].append(dict(iteration=i,error=str(e)));break
-   elapsed=clock()-t;records[kind].append(dict(iteration=i,ms=elapsed));assert backend()==initialBackend
-   call('update_'+kind,ctx,restore,len(restore))
+   elapsed=clock()-t;records[kind].append(dict(iteration=i,ms=elapsed,incremental=last_commit()==2));assert backend()==initialBackend
+   call('commit',ctx,raw,len(raw))
  return dict(geometry=geometry,mesh=mesh,edits=records)
 
 ctx=h();raw=p.Path(case['input']).read_bytes();assert hashlib.sha256(raw).hexdigest()==case['sha256'];t=clock();call('create_with_backend',mode,c.byref(ctx));deviceMs=clock()-t

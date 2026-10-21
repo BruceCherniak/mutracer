@@ -134,8 +134,8 @@ function normalizeWeb(changes: SceneChanges, web: WebScene): Normalized {
     colors: changes.colors.map(m => web.meshes.indexOf(m)).sort(), geometries: changes.geometries.map(g => web.geometries.indexOf(g)).sort(),
     materials: changes.materials.map(m => web.materials.indexOf(m)).sort(), lights: changes.lights, background: changes.background };
 }
-function normalizeNative(scene: SyncedScene, bytes: Uint8Array): Normalized {
-  const { scene: changes } = scene.sync(bytes);
+function normalizeNative(scene: SyncedScene, bytes: Uint8Array, unchanged?: Uint8Array): Normalized {
+  const { scene: changes } = scene.sync(bytes, false, unchanged);
   return { meshes: changes.meshes, transforms: changes.transforms.map(m => scene.meshes.indexOf(m)).sort(),
     colors: changes.colors.map(m => scene.meshes.indexOf(m)).sort(), geometries: changes.geometries.map(g => scene.geometries.indexOf(g)).sort(),
     materials: changes.materials.map(m => scene.materials.indexOf(m)).sort(), lights: changes.lights, background: changes.background };
@@ -178,6 +178,20 @@ describe('native scene sync', () => {
     editSpec(spec); editWeb(web);
     const expected = partial(normalizeWeb(detector.detect(web.scene), web));
     expect(partial(normalizeNative(synced, encode(spec)))).toEqual(expected);
+  });
+  it.each(edits)('classifies %s the same with unchanged-record hints', (_name, editSpec) => {
+    const spec = base(), plain = new SyncedScene(), hinted = new SyncedScene();
+    plain.sync(encode(spec)); plain.accept();
+    hinted.sync(encode(spec)); hinted.accept();
+    const before = JSON.stringify(spec);
+    editSpec(spec);
+    const previous = JSON.parse(before) as Spec;
+    // The host marks records whose contents it found identical.
+    const same = (a: unknown, b: unknown) => Number(JSON.stringify(a) === JSON.stringify(b));
+    const hints = previous.geometries.length === spec.geometries.length && previous.textures.length === spec.textures.length
+      ? new Uint8Array([...spec.geometries.map((g, i) => same(g, previous.geometries[i])), ...spec.textures.map((t, i) => same(t, previous.textures[i]))])
+      : undefined;
+    expect(partial(normalizeNative(hinted, encode(spec), hints))).toEqual(partial(normalizeNative(plain, encode(spec))));
   });
   it('reports only camera, resolution and quality edits outside the scene', () => {
     const spec = base(), synced = new SyncedScene();

@@ -53,14 +53,6 @@ fn check(operation: impl FnOnce(*mut i8, usize) -> i32) -> Result<()> {
         (status, message) => Err(NativeError { status, message }.into()),
     }
 }
-/// False requests a full commit for a change the incremental update cannot express.
-fn incremental(operation: impl FnOnce(*mut i8, usize) -> i32) -> Result<bool> {
-    match call(operation) {
-        (0, _) => Ok(true),
-        (code, _) if code == Status::FullCommitRequired as i32 => Ok(false),
-        (status, message) => Err(NativeError { status, message }.into()),
-    }
-}
 impl Renderer {
     pub fn new() -> Result<Self> {
         Self::with_backend(1)
@@ -186,51 +178,27 @@ impl Renderer {
             native::mt_context_commit(self.handle, bytes.as_ptr(), bytes.len(), e, n)
         })
     }
-    /// False requests a full commit for an unsupported feature change.
-    pub fn material(&mut self, bytes: &[u8]) -> Result<bool> {
-        incremental(|e, n| unsafe {
-            native::mt_context_update_material(self.handle, bytes.as_ptr(), bytes.len(), e, n)
-        })
-    }
-    /// False requests a full commit when resource shapes or shader features change.
-    pub fn environment(&mut self, bytes: &[u8]) -> Result<bool> {
-        incremental(|e, n| unsafe {
-            native::mt_context_update_environment(self.handle, bytes.as_ptr(), bytes.len(), e, n)
-        })
-    }
-    pub fn light(&mut self, bytes: &[u8]) -> Result<bool> {
-        incremental(|e, n| unsafe {
-            native::mt_context_update_light(self.handle, bytes.as_ptr(), bytes.len(), e, n)
-        })
-    }
-    pub fn geometry(&mut self, bytes: &[u8]) -> Result<bool> {
-        incremental(|e, n| unsafe {
-            native::mt_context_update_geometry(self.handle, bytes.as_ptr(), bytes.len(), e, n)
-        })
-    }
-    pub fn transform(&mut self, bytes: &[u8]) -> Result<bool> {
-        incremental(|e, n| unsafe {
-            native::mt_context_update_transform(self.handle, bytes.as_ptr(), bytes.len(), e, n)
-        })
-    }
-    pub fn camera(&mut self, bytes: &[u8]) -> Result<()> {
-        check(|e, n| unsafe {
-            native::mt_context_update_camera(self.handle, bytes.as_ptr(), bytes.len(), e, n)
-        })
-    }
     pub fn reset(&mut self) -> Result<()> {
         check(|e, n| unsafe { native::mt_context_reset(self.handle, e, n) })
     }
-    pub fn samples(&self) -> Result<u32> {
+    fn info(&self) -> Result<native::ContextInfo> {
         let mut info = native::ContextInfo {
             struct_size: std::mem::size_of::<native::ContextInfo>() as u32,
             width: 0,
             height: 0,
             samples: 0,
             state: 0,
+            last_commit: 0,
         };
         check(|e, n| unsafe { native::mt_context_info(self.handle, &mut info, e, n) })?;
-        Ok(info.samples)
+        Ok(info)
+    }
+    pub fn samples(&self) -> Result<u32> {
+        Ok(self.info()?.samples)
+    }
+    /// Whether the last successful commit kept the prepared scene (MT_COMMIT_INCREMENTAL).
+    pub fn last_commit_incremental(&self) -> Result<bool> {
+        Ok(self.info()?.last_commit == native::COMMIT_INCREMENTAL)
     }
     pub fn busy(&self) -> bool {
         self.job.is_some()

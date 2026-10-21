@@ -97,9 +97,8 @@ copies HDR, normal or albedo pixels into caller-owned memory. The context API
 has no file output. The command above builds the C consumer and saves its
 verified images under `.native-build/context-core/`.
 
-Commit replaces the full scene and restarts accumulation; submit topology,
-texture, emission and light type/count/attachment edits in the updated descriptor.
-A rejected commit retains the previous scene.
+Commit replaces the full scene and restarts accumulation. A rejected commit
+retains the previous scene.
 Reset clears sampling while keeping the committed scene. Contexts have independent
 accumulation. Calls may come from any thread; overlapping operations can return
 `MT_ERROR_BUSY`. There is no fixed context-count limit, but GPU memory limits apply. Full
@@ -111,60 +110,32 @@ The header specifies byte lengths, ownership, errors and remaining limits.
 Transform inputs and GPU matrices use Float32; CPU matrix calculations keep
 Float64 intermediates. Input and GPU precision still limit large coordinates.
 
-For camera edits, `mt_context_update_camera` accepts the same 128-byte `mt_camera_v4`
-record from the scene descriptor. It retains geometry, textures and the pipeline,
-uses the committed image dimensions, and restarts accumulation on every successful
-call. It supports perspective/orthographic projection, transform, zoom and lens
-fields. The header specifies rejection, job lifetime and thread rules. Run
-`npm run native:camera` to build and verify this C usage; results are saved under
-`.native-build/camera-core/`.
+### Editing a scene
 
-Use `mt_context_update_transform` to replace a mesh world matrix or a single
-instance's local matrix without re-uploading vertices or textures. A mesh world
-edit also moves all instances in its batch. Lighting and shadow placement follow
-the new transform. Updates restart accumulation and reject active jobs. Edits
-that need larger GPU resources or a deeper traversal stack require a full commit;
-validation rejection preserves the scene and samples. Cost grows with instance
-count, acceleration-structure data and emissive triangles. See
-[the context header](include/mutracer-context.h) for the 80-byte record and lifetime rules.
+To change a committed scene, edit the descriptor and commit it again. The
+library compares it with the committed descriptor and, when it can, applies
+only the difference: geometry, acceleration structures and pipelines stay
+prepared, and only the changed data is uploaded. This incremental commit covers
+the camera, mesh and instance matrices, instance colors, vertex positions with
+unchanged topology, material parameters and textures, adding, removing and
+changing lights, and environment and background map pixels and sizes. Several
+edits can share one commit. The rendered images are identical to a full
+preparation of the same descriptor.
 
-Use `mt_context_update_geometry` for vertex positions with unchanged topology.
-All objects sharing the original geometry change together. Supply normals or omit
-them to generate smooth normals; generated tangents update automatically, while
-authored tangents require replacement values. UVs, colors, indices, materials
-and textures stay unchanged. Displacement, unused geometry and edits that change
-GPU resource sizes or the required shader variant require a full commit. Successful
-updates restart accumulation;
-validation rejection preserves the scene and samples. Updates reject active jobs.
-CPU copying cost can grow with the scene. GPU uploads cover changed geometry
-and affected instances; HWRT rebuilds affected acceleration structures. Temporary
-copies increase memory use. See
-[the context header](include/mutracer-context.h) for flags, limits and record layout.
+These edits prepare the scene again: index or vertex counts, adding, removing
+or reordering meshes, instance counts, texture counts, displacement map pixels,
+adding or removing a map, hiding the background, render settings or resolution,
+and material changes that need another shader variant (for example enabling a
+medium, or a texture atlas that grows). `mt_context_snapshot.last_commit`
+reports `MT_COMMIT_INCREMENTAL` or `MT_COMMIT_FULL` for the last successful
+commit. Every successful commit restarts accumulation and expires the previous
+job.
 
-Basic material parameters can be updated with `mt_context_update_material` using
-the original descriptor's material index. Color, roughness, metalness,
-transmission and IOR updates retain geometry, textures and pipelines, then reset
-accumulation. Unlit/unused materials and medium shader-feature changes require
-a full scene commit; rejection preserves the current scene and samples. These
-updates reject active jobs. See [the context header](include/mutracer-context.h) for
-the record layout and lifetime rules.
-
-Use `mt_context_update_environment` to replace linear environment/background map
-pixels or a solid background color while retaining geometry, material textures
-and the pipeline. Maps may change dimensions; map presence and background
-visibility must match the committed scene, and changes require a full commit. The call restarts
-accumulation, rejects active jobs and preserves the scene on validation rejection.
-Its cost grows with map size and the number of emissive triangles. See
-[the context header](include/mutracer-context.h) for the record format and limits.
-
-Use `mt_context_update_light` to change an existing rectangular, spherical,
-directional or spot light's color, intensity, size, spread/angles or transform.
-It retains geometry, acceleration structures, material textures and the pipeline;
-existing rectangular emission textures and spot IES profiles are preserved.
-Light type/count and attachment changes require a full commit. Successful updates restart
-accumulation. Active jobs reject updates; validation rejection preserves the scene.
-Update cost grows with the number of lights and emissive triangles. The
-[context header](include/mutracer-context.h) specifies the record and lifetime rules.
+An incremental commit still reads the whole descriptor: on a 42 MB scene an
+edit commits in about 4 ms, plus the time your application takes to write the
+descriptor; a 14 MB scene takes about 2 ms. Keep one descriptor buffer and
+change values in place where possible. Run `npm run native:camera` to build and
+verify camera edits from C; results are saved under `.native-build/camera-core/`.
 
 ## Intersection backend
 
@@ -213,9 +184,8 @@ Cancel stops further submissions. An already submitted batch finishes before
 poll reports cancellation, so keep polling after cancel. Completed samples stay
 accumulated and a later job can continue them. Full completion takes precedence
 over late cancellation. One context accepts one active job; while active, render,
-any incremental scene update, reset, readback and destroy return errors. A full
-commit can prepare alongside the active job; successful publication drains the
-old job before replacing the scene. Finish or cancel and drain a job before
+reset, readback and destroy return errors. A commit can prepare alongside the
+active job; successful publication drains the old job before replacing the scene. Finish or cancel and drain a job before
 using the other calls. The header
 specifies job states, sample counters and handle lifetimes.
 
@@ -262,8 +232,7 @@ Scene size, count and texture limits are listed in the
 
 Every C API call returns `MT_OK` (0) or a nonzero `mt_status` from
 [mutracer-status.h](include/mutracer-status.h), plus an optional message for
-people. Branch on the code rather than the message: retry `MT_ERROR_BUSY`,
-submit a full commit after `MT_ERROR_FULL_COMMIT_REQUIRED`, and enlarge the
+people. Branch on the code rather than the message: retry `MT_ERROR_BUSY` and enlarge the
 destination after `MT_ERROR_BUFFER_TOO_SMALL`. Treat an unknown nonzero code as
 a failure; later versions may add codes. The same header names the backend,
 image kind, context/job state, sampling pattern and denoiser backend values.

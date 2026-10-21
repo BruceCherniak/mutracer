@@ -35,28 +35,7 @@ pub struct Material {
     pub normal_scale: f32,
     pub unlit: bool,
 }
-impl Material {
-    pub fn update_bytes(&self, index: usize) -> Vec<u8> {
-        let mut words = vec![0u32; 12];
-        words[0] = 1;
-        words[1] = index as u32;
-        for (k, v) in [
-            self.color[0],
-            self.color[1],
-            self.color[2],
-            self.roughness,
-            self.metalness,
-            self.transmission,
-            self.ior,
-        ]
-        .iter()
-        .enumerate()
-        {
-            words[4 + k] = v.to_bits();
-        }
-        words.into_iter().flat_map(u32::to_le_bytes).collect()
-    }
-}
+impl Material {}
 #[derive(Clone)]
 pub struct Geometry {
     pub min: Vec3,
@@ -68,23 +47,7 @@ pub struct Geometry {
     pub colors: Vec<f32>,
     pub tangents: Vec<f32>,
 }
-impl Geometry {
-    pub fn update_bytes(&self, index: usize) -> Vec<u8> {
-        let flags =
-            u32::from(!self.normals.is_empty()) | (u32::from(!self.tangents.is_empty()) << 1);
-        [1, index as u32, (self.positions.len() / 3) as u32, flags]
-            .into_iter()
-            .flat_map(u32::to_le_bytes)
-            .chain(
-                self.positions
-                    .iter()
-                    .chain(&self.normals)
-                    .chain(&self.tangents)
-                    .flat_map(|value| value.to_le_bytes()),
-            )
-            .collect()
-    }
-}
+impl Geometry {}
 #[derive(Clone)]
 pub struct Mesh {
     pub name: String,
@@ -92,20 +55,7 @@ pub struct Mesh {
     pub material: usize,
     pub transform: Mat4,
 }
-impl Mesh {
-    pub fn update_bytes(&self, index: usize) -> Vec<u8> {
-        [1u32, index as u32, 0, 0]
-            .into_iter()
-            .flat_map(u32::to_le_bytes)
-            .chain(
-                self.transform
-                    .to_cols_array()
-                    .into_iter()
-                    .flat_map(f32::to_le_bytes),
-            )
-            .collect()
-    }
-}
+impl Mesh {}
 #[derive(Clone)]
 pub struct Model {
     pub name: String,
@@ -979,11 +929,6 @@ impl KeyLight {
         }
         words
     }
-    pub fn update_bytes(&self) -> Vec<u8> {
-        let mut words = vec![1, 0, 0, 0];
-        words.extend(self.record());
-        words.into_iter().flat_map(u32::to_le_bytes).collect()
-    }
 }
 
 #[derive(Clone)]
@@ -1029,28 +974,6 @@ impl Environment {
             .to_string_lossy()
             .into();
         Ok(())
-    }
-    pub fn update_bytes(&self) -> Vec<u8> {
-        let (width, height, pixels) = self.pixels();
-        let mut words = vec![
-            1,
-            width,
-            height,
-            0,
-            0.025f32.to_bits(),
-            0.025f32.to_bits(),
-            0.03f32.to_bits(),
-            1f32.to_bits(),
-            if self.background { width } else { 0 },
-            if self.background { height } else { 0 },
-            0,
-            0,
-        ];
-        words.extend(pixels.iter().map(|v| v.to_bits()));
-        if self.background {
-            words.extend(pixels.iter().map(|v| v.to_bits()));
-        }
-        words.into_iter().flat_map(u32::to_le_bytes).collect()
     }
     fn pixels(&self) -> (u32, u32, Vec<f32>) {
         let (width, height) = self

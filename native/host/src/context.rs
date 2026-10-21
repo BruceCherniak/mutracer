@@ -22,8 +22,8 @@ struct Context {
     commit: Option<Arc<PendingCommit>>,
     /// Descriptor of the committed scene; incremental commits diff against it.
     descriptor: Option<Arc<Vec<u8>>>,
-    /// Whether the last successful commit used the incremental path.
-    incremental: bool,
+    /// Path of the last successful commit (`mt_commit_kind`).
+    last_commit: u32,
 }
 struct PendingCommit {
     cancelled: AtomicBool,
@@ -101,6 +101,12 @@ static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
 // The context an ABI call resolved, and whether it was already failed then.
 thread_local! { static TOUCHED: std::cell::Cell<Option<(u64, bool)>> = const { std::cell::Cell::new(None) }; }
 
+/// `mt_commit_kind` values reported in `ContextInfo::last_commit`.
+pub const COMMIT_NONE: u32 = 0;
+pub const COMMIT_FULL: u32 = 1;
+pub const COMMIT_INCREMENTAL: u32 = 2;
+/// `mt_context_snapshot` size before `last_commit` was appended.
+const CONTEXT_INFO_ABI2_SIZE: usize = 20;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ContextInfo {
@@ -109,6 +115,7 @@ pub struct ContextInfo {
     pub height: u32,
     pub samples: u32,
     pub state: u32,
+    pub last_commit: u32,
 }
 fn action(
     error: *mut c_char,
@@ -287,7 +294,7 @@ pub fn create_on_device_with_gate(
             job: None,
             commit: None,
             descriptor: None,
-            incremental: false,
+            last_commit: COMMIT_NONE,
         },
     );
     Ok(handle)
@@ -359,7 +366,7 @@ pub unsafe extern "C" fn mt_context_create_with_backend(
                 job: None,
                 commit: None,
                 descriptor: None,
-                incremental: false,
+                last_commit: COMMIT_NONE,
             },
         );
         registry.next = next;
@@ -483,10 +490,25 @@ unsafe fn commit_with_settings(
     if let Some((retained, previous)) = candidate {
         // The TS core trusts validated descriptors only. Validation and sync
         // failures fall through to full preparation, which reports them.
-        let steps = scene::validate(bytes)
-            .ok()
-            .and_then(|()| retained.sync(&previous, bytes).ok())
-            .and_then(|sync| commit_plan::plan(&previous, bytes, &sync));
+        let started = std::time::Instant::now();
+        // Records identical to the validated previous descriptor skip element scans.
+        let unchanged = commit_plan::unchanged_records(&previous, bytes);
+        let hinted = started.elapsed();
+        let valid = scene::validate_changed(bytes, &unchanged).is_ok();
+        let validated = started.elapsed();
+        // One copy of the caller's descriptor serves the sync and, once applied, the context.
+        let next = Arc::new(bytes.to_vec());
+        let copied = started.elapsed();
+        let sync = valid
+            .then(|| {
+                retained
+                    .sync(previous.clone(), next.clone(), unchanged)
+                    .ok()
+            })
+            .flatten();
+        let synced = started.elapsed();
+        let steps = sync.and_then(|sync| commit_plan::plan(&previous, bytes, &sync));
+        let planned = started.elapsed();
         let mut finished = false;
         let status = action(error, capacity, |registry| {
             let context = context(registry, handle).or_else(|error| {
@@ -499,8 +521,18 @@ unsafe fn commit_with_settings(
                 return Err(error);
             }
             match &steps {
-                Some(steps) => finished = apply_incremental(context, &retained, bytes, steps)?,
+                Some(steps) => finished = apply_incremental(context, &retained, &next, steps)?,
                 None => retained.reset_sync()?,
+            }
+            if crate::profiling::enabled() {
+                let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+                native_log!(
+                    "{}",
+                    serde_json::json!({"nativeCommitProfile": {"bytes": bytes.len(),
+                    "hintMs": ms(hinted), "validateMs": ms(validated - hinted), "copyMs": ms(copied - validated), "syncMs": ms(synced - copied),
+                    "planMs": ms(planned - synced), "applyMs": ms(started.elapsed() - planned),
+                    "steps": steps.as_ref().map(Vec::len), "incremental": finished}})
+                );
             }
             Ok(())
         });
@@ -692,7 +724,7 @@ unsafe fn commit_with_settings(
         context.render_bounces = bounces;
         context.fallback_reason = fallback_reason;
         context.descriptor = Some(Arc::new(bytes.to_vec()));
-        context.incremental = false;
+        context.last_commit = COMMIT_FULL;
         context.job = None;
         context.failed = false;
         Ok(())
@@ -730,7 +762,7 @@ fn incremental_candidate(
 fn apply_incremental(
     context: &mut Context,
     retained: &scene::PreparedState,
-    bytes: &[u8],
+    descriptor: &Arc<Vec<u8>>,
     steps: &[commit_plan::Step],
 ) -> Result<bool> {
     // As with full publication, an unfinished job is cancelled and drained first.
@@ -764,7 +796,9 @@ fn apply_incremental(
                 commit_plan::Step::Environment(_) => update_environment_in(context, input, length),
                 commit_plan::Step::Camera(_) => update_camera_in(context, input, length),
                 commit_plan::Step::LightList(bytes) => update_light_list_in(context, bytes),
-                commit_plan::Step::InstanceColors(bytes) => update_instance_colors_in(context, bytes),
+                commit_plan::Step::InstanceColors(bytes) => {
+                    update_instance_colors_in(context, bytes)
+                }
                 commit_plan::Step::Atlas(bytes) => update_atlas_in(context, bytes),
             }
         };
@@ -783,25 +817,18 @@ fn apply_incremental(
             Err(error) => return Err(error),
         }
     }
-    // A commit always restarts accumulation, including an identical descriptor.
-    context.failed = true;
-    context.scene.as_mut().unwrap().reset_raw()?;
-    context.failed = false;
+    // A commit always restarts accumulation, including an identical descriptor;
+    // every retained update step already did.
+    if steps.is_empty() {
+        context.failed = true;
+        context.scene.as_mut().unwrap().reset_raw()?;
+        context.failed = false;
+    }
     retained.accept_sync()?;
-    context.descriptor = Some(Arc::new(bytes.to_vec()));
-    context.incremental = true;
+    context.descriptor = Some(descriptor.clone());
+    context.last_commit = COMMIT_INCREMENTAL;
     context.job = None;
     Ok(true)
-}
-/// Diagnostic: whether the last successful commit of `handle` was incremental.
-pub fn last_commit_incremental(handle: u64) -> std::result::Result<bool, String> {
-    let slot = REGISTRY.lock().map_err(|_| "Context registry poisoned")?;
-    let registry = slot.as_ref().ok_or("No context registry")?;
-    let context = registry
-        .contexts
-        .get(&handle)
-        .ok_or("Invalid or destroyed native context")?;
-    Ok(context.incremental)
 }
 struct CommitSnapshot {
     gpu: GpuDevice,
@@ -902,30 +929,7 @@ pub unsafe extern "C" fn mt_context_wait(
         }
     })
 }
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mt_context_update_camera(
-    handle: u64,
-    input: *const u8,
-    length: usize,
-    error: *mut c_char,
-    capacity: usize,
-) -> i32 {
-    action(error, capacity, |registry| {
-        if registry.contexts.values().any(|c| c.commit.is_some()) {
-            return Err(fail(
-                Status::InvalidState,
-                "Scene commit is preparing; retry incremental edits after it finishes",
-            ));
-        }
-        let context = context(registry, handle)?;
-        idle(context)?;
-        unsafe { update_camera_in(context, input, length) }?;
-        // The committed descriptor no longer describes the scene.
-        context.descriptor = None;
-        Ok(())
-    })
-}
-/// Validated camera update on an idle context; shared by the C entry point and incremental commit.
+/// Validated camera update on an idle context; used by incremental commit.
 unsafe fn update_camera_in(context: &mut Context, input: *const u8, length: usize) -> Result<()> {
     let scene = ready(context)?;
     if input.is_null() || length != 128 {
@@ -943,31 +947,7 @@ unsafe fn update_camera_in(context: &mut Context, input: *const u8, length: usiz
     context.failed = false;
     Ok(())
 }
-/// Patch basic scalar material parameters through the retained original TS packer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mt_context_update_material(
-    handle: u64,
-    input: *const u8,
-    length: usize,
-    error: *mut c_char,
-    capacity: usize,
-) -> i32 {
-    action(error, capacity, |registry| {
-        if registry.contexts.values().any(|c| c.commit.is_some()) {
-            return Err(fail(
-                Status::InvalidState,
-                "Scene commit is preparing; retry incremental edits after it finishes",
-            ));
-        }
-        let context = context(registry, handle)?;
-        idle(context)?;
-        unsafe { update_material_in(context, input, length) }?;
-        // The committed descriptor no longer describes the scene.
-        context.descriptor = None;
-        Ok(())
-    })
-}
-/// Validated material update on an idle context; shared by the C entry point and incremental commit.
+/// Validated material update on an idle context; used by incremental commit.
 unsafe fn update_material_in(context: &mut Context, input: *const u8, length: usize) -> Result<()> {
     let scene = ready(context)?;
     if input.is_null() || length != 48 {
@@ -989,31 +969,7 @@ unsafe fn update_material_in(context: &mut Context, input: *const u8, length: us
     context.failed = false;
     Ok(())
 }
-/// Refresh environment radiance, importance distribution and all light PMFs.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mt_context_update_environment(
-    handle: u64,
-    input: *const u8,
-    length: usize,
-    error: *mut c_char,
-    capacity: usize,
-) -> i32 {
-    action(error, capacity, |registry| {
-        if registry.contexts.values().any(|c| c.commit.is_some()) {
-            return Err(fail(
-                Status::InvalidState,
-                "Scene commit is preparing; retry incremental edits after it finishes",
-            ));
-        }
-        let context = context(registry, handle)?;
-        idle(context)?;
-        unsafe { update_environment_in(context, input, length) }?;
-        // The committed descriptor no longer describes the scene.
-        context.descriptor = None;
-        Ok(())
-    })
-}
-/// Validated environment update on an idle context; shared by the C entry point and incremental commit.
+/// Validated environment update on an idle context; used by incremental commit.
 unsafe fn update_environment_in(
     context: &mut Context,
     input: *const u8,
@@ -1048,31 +1004,7 @@ unsafe fn update_environment_in(
     context.failed = false;
     Ok(())
 }
-/// Update stable-topology vertices and all shared instances through original TS.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mt_context_update_geometry(
-    handle: u64,
-    input: *const u8,
-    length: usize,
-    error: *mut c_char,
-    capacity: usize,
-) -> i32 {
-    action(error, capacity, |registry| {
-        if registry.contexts.values().any(|c| c.commit.is_some()) {
-            return Err(fail(
-                Status::InvalidState,
-                "Scene commit is preparing; retry incremental edits after it finishes",
-            ));
-        }
-        let context = context(registry, handle)?;
-        idle(context)?;
-        unsafe { update_geometry_in(context, input, length) }?;
-        // The committed descriptor no longer describes the scene.
-        context.descriptor = None;
-        Ok(())
-    })
-}
-/// Validated geometry update on an idle context; shared by the C entry point and incremental commit.
+/// Validated geometry update on an idle context; used by incremental commit.
 unsafe fn update_geometry_in(context: &mut Context, input: *const u8, length: usize) -> Result<()> {
     let scene = ready(context)?;
     if input.is_null() || length < 16 || length > scene::MAX_BYTES {
@@ -1106,31 +1038,7 @@ unsafe fn update_geometry_in(context: &mut Context, input: *const u8, length: us
     context.failed = false;
     Ok(())
 }
-/// Update a mesh world matrix or one local instance matrix through shared TS.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mt_context_update_transform(
-    handle: u64,
-    input: *const u8,
-    length: usize,
-    error: *mut c_char,
-    capacity: usize,
-) -> i32 {
-    action(error, capacity, |registry| {
-        if registry.contexts.values().any(|c| c.commit.is_some()) {
-            return Err(fail(
-                Status::InvalidState,
-                "Scene commit is preparing; retry incremental edits after it finishes",
-            ));
-        }
-        let context = context(registry, handle)?;
-        idle(context)?;
-        unsafe { update_transform_in(context, input, length) }?;
-        // The committed descriptor no longer describes the scene.
-        context.descriptor = None;
-        Ok(())
-    })
-}
-/// Validated transform update on an idle context; shared by the C entry point and incremental commit.
+/// Validated transform update on an idle context; used by incremental commit.
 unsafe fn update_transform_in(
     context: &mut Context,
     input: *const u8,
@@ -1155,7 +1063,10 @@ unsafe fn update_transform_in(
 /// Material table and atlas repack after texture edits (incremental commit only).
 fn update_atlas_in(context: &mut Context, bytes: &[u8]) -> Result<()> {
     let scene = ready(context)?;
-    let retained = scene.retained.clone().ok_or("No retained material preparation")?;
+    let retained = scene
+        .retained
+        .clone()
+        .ok_or("No retained material preparation")?;
     let packed = retained.atlas(bytes).map_err(rejected)?;
     scene.validate_lighting(&packed)?;
     context.failed = true;
@@ -1201,31 +1112,7 @@ fn apply_instance_writes(context: &mut Context, packed: &scene::LightingUpdates)
     context.failed = false;
     Ok(())
 }
-/// Update one analytic light and refresh all light-selection probabilities.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mt_context_update_light(
-    handle: u64,
-    input: *const u8,
-    length: usize,
-    error: *mut c_char,
-    capacity: usize,
-) -> i32 {
-    action(error, capacity, |registry| {
-        if registry.contexts.values().any(|c| c.commit.is_some()) {
-            return Err(fail(
-                Status::InvalidState,
-                "Scene commit is preparing; retry incremental edits after it finishes",
-            ));
-        }
-        let context = context(registry, handle)?;
-        idle(context)?;
-        unsafe { update_light_in(context, input, length) }?;
-        // The committed descriptor no longer describes the scene.
-        context.descriptor = None;
-        Ok(())
-    })
-}
-/// Validated light update on an idle context; shared by the C entry point and incremental commit.
+/// Validated light update on an idle context; used by incremental commit.
 unsafe fn update_light_in(context: &mut Context, input: *const u8, length: usize) -> Result<()> {
     let scene = ready(context)?;
     if input.is_null() || length != 128 {
@@ -1284,9 +1171,13 @@ pub unsafe extern "C" fn mt_context_info(
 ) -> i32 {
     action(error, capacity, |registry| {
         let context = context(registry, handle)?;
-        if info.is_null()
-            || unsafe { (*info).struct_size } != std::mem::size_of::<ContextInfo>() as u32
-        {
+        // ABI 2 snapshots end before last_commit; they receive the fields they have.
+        let size = if info.is_null() {
+            0
+        } else {
+            (unsafe { (*info).struct_size }) as usize
+        };
+        if size != std::mem::size_of::<ContextInfo>() && size != CONTEXT_INFO_ABI2_SIZE {
             return Err(fail(Status::InvalidArgument, "Context info size mismatch"));
         }
         let (width, height, samples) = context
@@ -1294,22 +1185,28 @@ pub unsafe extern "C" fn mt_context_info(
             .as_ref()
             .map(|s| (s.scene.width, s.scene.height, s.samples))
             .unwrap_or((0, 0, 0));
+        let filled = ContextInfo {
+            struct_size: size as u32,
+            width,
+            height,
+            samples,
+            state: if context.failed {
+                2
+            } else if context.job.as_ref().is_some_and(|j| j.active()) {
+                3
+            } else if context.scene.is_some() {
+                1
+            } else {
+                0
+            },
+            last_commit: context.last_commit,
+        };
         unsafe {
-            *info = ContextInfo {
-                struct_size: std::mem::size_of::<ContextInfo>() as u32,
-                width,
-                height,
-                samples,
-                state: if context.failed {
-                    2
-                } else if context.job.as_ref().is_some_and(|j| j.active()) {
-                    3
-                } else if context.scene.is_some() {
-                    1
-                } else {
-                    0
-                },
-            };
+            std::ptr::copy_nonoverlapping(
+                (&raw const filled).cast::<u8>(),
+                info.cast::<u8>(),
+                size,
+            );
         }
         Ok(())
     })
@@ -2130,6 +2027,63 @@ mod tests {
                 0
             );
             assert!(!REGISTRY.lock().unwrap().as_ref().unwrap().contexts[&handle].failed);
+            assert_eq!(
+                mt_context_destroy(handle, error.as_mut_ptr(), error.len()),
+                0
+            );
+        }
+    }
+    #[test]
+    fn snapshot_reports_the_path_of_the_last_successful_commit() {
+        let _test = ABI_TEST_LOCK.lock().unwrap();
+        let mut handle = 0;
+        let mut error = [0i8; 512];
+        if unsafe {
+            mt_context_create_with_backend(0, &mut handle, error.as_mut_ptr(), error.len())
+        } != 0
+        {
+            return;
+        }
+        let info = |size: usize| {
+            let mut info = ContextInfo {
+                struct_size: size as u32,
+                width: 0,
+                height: 0,
+                samples: 0,
+                state: 0,
+                last_commit: 99,
+            };
+            let mut error = [0i8; 128];
+            let status =
+                unsafe { mt_context_info(handle, &mut info, error.as_mut_ptr(), error.len()) };
+            (status, info.last_commit)
+        };
+        let size = std::mem::size_of::<ContextInfo>();
+        assert_eq!(info(size), (0, COMMIT_NONE));
+        // An ABI 2 snapshot is filled up to its own size.
+        assert_eq!(info(size - 4), (0, 99));
+        assert_eq!(info(size + 4).0, Status::InvalidArgument as i32);
+        let input = scene::tests::input();
+        let commit = |bytes: &[u8]| {
+            let mut error = [0i8; 512];
+            unsafe {
+                mt_context_commit(
+                    handle,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    error.as_mut_ptr(),
+                    error.len(),
+                )
+            }
+        };
+        assert_eq!(commit(&input), 0);
+        assert_eq!(info(size), (0, COMMIT_FULL));
+        assert_eq!(commit(&input), 0);
+        assert_eq!(info(size), (0, COMMIT_INCREMENTAL));
+        // A rejected commit keeps the scene and the reported path.
+        assert_ne!(commit(&input[..input.len() - 4]), 0);
+        assert_eq!(info(size), (0, COMMIT_INCREMENTAL));
+        unsafe {
             assert_eq!(
                 mt_context_destroy(handle, error.as_mut_ptr(), error.len()),
                 0
