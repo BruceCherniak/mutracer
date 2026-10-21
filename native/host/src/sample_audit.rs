@@ -8,7 +8,20 @@ pub(super) fn install(scene: &mut Scene, assets: &mut Assets) -> Result<()> {
         .and_then(|h| h.shader)
         .unwrap_or(scene.shader);
     let shader = String::from_utf8(assets.get(&id).ok_or("Missing validation shader")?.clone())?;
-    let primary = "\n  intersectScene(ray, &si, 0, false, false);";
+    let direct = "\n  intersectScene(ray, &si, 0, false, false);";
+    let fused = "intersectScene(path.ray, &si, depth, event != 0, path.isNextRefraction);";
+    let (primary, first_query) = if shader.contains(direct) {
+        (direct, "true")
+    } else {
+        (
+            fused,
+            if shader.contains("var primaryReady = false;") {
+                "!primaryReady"
+            } else {
+                "event == 0"
+            },
+        )
+    };
     let tail = "    accumulateDenoiseMoments(idx, dot(liAndAlpha.rgb, luminance));\n  }\n}";
     if shader.matches(primary).count() != 1
         || shader.matches(tail).count() != 1
@@ -23,8 +36,9 @@ pub(super) fn install(scene: &mut Scene, assets: &mut Assets) -> Result<()> {
         layout::group::OUTPUT,
         layout::hwrt_binding::DIAGNOSTIC
     );
-    // Observe the existing primary intersection: no extra query or RNG call.
-    let shader = shader.replacen("fn integrator(", &(declaration + "fn integrator("), 1).replace(primary, &format!("{primary}\n  mtPrimaryHit = u32(si.hit);\n  mtInteriorHit = u32(si.hit && min(min(si.barycentrics.x, si.barycentrics.y), 1.0 - si.barycentrics.x - si.barycentrics.y) > 0.001);"))
+    // Observe only the first query in both legacy and fused path loops, including
+    // alpha/spectral primary reuse. No extra query or RNG call is introduced.
+    let shader = shader.replacen("fn integrator(", &(declaration + "fn integrator("), 1).replace(primary, &format!("{primary}\n  if ({first_query}) {{\n    mtPrimaryHit = u32(si.hit);\n    mtInteriorHit = u32(si.hit && min(min(si.barycentrics.x, si.barycentrics.y), 1.0 - si.barycentrics.x - si.barycentrics.y) > 0.001);\n  }}"))
         .replace(tail, "    accumulateDenoiseMoments(idx, dot(liAndAlpha.rgb, luminance));\n  }\n  mtSampleAudit[idx] = vec4u(mtSampleAudit[idx].x + 1u, pixelSampleIndex, mtPrimaryHit, mtInteriorHit);\n}");
     assets.insert(id, shader.into_bytes());
     let size = scene.width as usize * scene.height as usize * 16;
