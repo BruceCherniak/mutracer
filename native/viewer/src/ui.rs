@@ -237,7 +237,7 @@ impl Viewer {
             .min_size(250.)
             .max_size(420.)
             .show_separator_line(false)
-            .frame(theme::panel().inner_margin(10))
+            .frame(theme::panel().inner_margin(12))
             .show(root, |ui| {
                 let (title, subtitle) = match self.tab {
                     0 => ("Render", "Path tracing quality and display"),
@@ -246,17 +246,28 @@ impl Viewer {
                     3 => ("Object", "Position, rotation and scale"),
                     _ => ("Camera", "Framing and field of view"),
                 };
-                ui.strong(title).on_hover_text(subtitle);
-                ui.separator();
+                let icon = match self.tab {
+                    0 => controls::Icon::Render,
+                    1 => controls::Icon::Material,
+                    2 => controls::Icon::Lighting,
+                    3 => controls::Icon::Object,
+                    _ => controls::Icon::Camera,
+                };
+                controls::heading(ui, title, subtitle, icon);
+                ui.add(egui::Separator::default().spacing(0.));
                 egui::ScrollArea::vertical()
                     .id_salt(("inspector", self.tab))
                     .auto_shrink([false, false])
-                    .show(ui, |ui| match self.tab {
-                        0 => self.render_settings(ui),
-                        1 => self.material_settings(ui),
-                        2 => self.lighting_settings(ui),
-                        3 => self.object_settings(ui),
-                        _ => self.camera_settings(ui),
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing.y = 7.;
+                        ui.add_space(5.);
+                        match self.tab {
+                            0 => self.render_settings(ui),
+                            1 => self.material_settings(ui),
+                            2 => self.lighting_settings(ui),
+                            3 => self.object_settings(ui),
+                            _ => self.camera_settings(ui),
+                        }
                     });
             });
     }
@@ -285,12 +296,12 @@ impl Viewer {
             controls::parameter(
                 ui,
                 "Max samples",
-                egui::Slider::new(&mut self.settings.max_samples, 4..=16384).logarithmic(true),
+                controls::Scrub::new(&mut self.settings.max_samples, 4..=16384).logarithmic(true),
             );
             controls::parameter(
                 ui,
                 "Bounces",
-                egui::Slider::new(&mut self.settings.bounces, 1..=16),
+                controls::Scrub::new(&mut self.settings.bounces, 1..=16),
             );
             controls::select(
                 ui,
@@ -305,7 +316,7 @@ impl Viewer {
             controls::parameter(
                 ui,
                 "Clamping",
-                egui::Slider::new(&mut self.settings.clamping, 0.0..=100.0),
+                controls::Scrub::new(&mut self.settings.clamping, 0.0..=100.0),
             );
             let old = self.size;
             controls::select(
@@ -601,34 +612,50 @@ impl Viewer {
         let previous_studio = self.environment.studio.clone();
         let mut changed = false;
         let was_studio = self.environment.studio.enabled;
-        controls::select(
+        controls::segmented(
             ui,
             "Lighting",
-            if was_studio { "Studio" } else { "Environment" },
-            |ui| {
-                ui.selectable_value(&mut self.environment.studio.enabled, false, "Environment");
-                ui.selectable_value(&mut self.environment.studio.enabled, true, "Studio");
-            },
+            &mut self.environment.studio.enabled,
+            &[(false, "Environment"), (true, "Studio")],
         );
         changed |= was_studio != self.environment.studio.enabled;
         if self.environment.studio.enabled {
             controls::section(ui, "Studio", |ui| {
                 let studio = &mut self.environment.studio;
                 let previous = studio.clone();
-                controls::select(
-                    ui,
-                    "Preset",
-                    &crate::studio::presets()[studio.preset].name,
-                    |ui| {
-                        for (i, preset) in crate::studio::presets().iter().enumerate() {
-                            ui.selectable_value(&mut studio.preset, i, &preset.name);
+                let width = (ui.available_width() - 6.) / 2.;
+                for row in crate::studio::presets().chunks(2).enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 6.;
+                        for (column, preset) in row.1.iter().enumerate() {
+                            let id = row.0 * 2 + column;
+                            if controls::preset_card(
+                                ui,
+                                width,
+                                &preset.name,
+                                &preset.tag,
+                                studio.preset == id,
+                            )
+                            .clicked()
+                            {
+                                studio.preset = id;
+                            }
                         }
-                    },
-                );
-                ui.weak(&crate::studio::presets()[studio.preset].tag);
+                    });
+                }
                 controls::scalar(ui, "Intensity", &mut studio.intensity, 0.0..=4.0);
-                controls::scalar(ui, "Rotation", &mut studio.rotation, -180.0..=180.0);
-                controls::scalar(ui, "Size", &mut studio.size, 0.25..=3.0);
+                controls::parameter(
+                    ui,
+                    "Rotation",
+                    controls::Scrub::new(&mut studio.rotation, -180.0..=180.0)
+                        .max_decimals(0)
+                        .suffix("°"),
+                );
+                controls::parameter(
+                    ui,
+                    "Size",
+                    controls::Scrub::new(&mut studio.size, 0.25..=3.0).suffix("×"),
+                );
                 controls::scalar(ui, "Ambient", &mut studio.ambient, 0.0..=1.0);
                 controls::color(ui, "Ambient color", &mut studio.ambient_color);
                 changed |= previous != *studio;
@@ -662,13 +689,13 @@ impl Viewer {
                 changed |= controls::parameter(
                     ui,
                     "Intensity",
-                    egui::Slider::new(&mut self.environment.intensity, 0.0..=4.0),
+                    controls::Scrub::new(&mut self.environment.intensity, 0.0..=4.0),
                 )
                 .changed();
                 changed |= controls::parameter(
                     ui,
                     "Rotation",
-                    egui::Slider::new(&mut self.environment.rotation, 0.0..=360.0),
+                    controls::Scrub::new(&mut self.environment.rotation, 0.0..=360.0).suffix("°"),
                 )
                 .changed();
                 changed |= controls::color(ui, "Tint", &mut self.environment.color).changed();
@@ -683,15 +710,22 @@ impl Viewer {
                 2
             };
             let mut mode = old;
-            controls::select(
+            controls::segmented(
                 ui,
                 "Background",
-                ["Environment", "Color", "Transparent"][mode],
-                |ui| {
-                    for (value, name) in [(0, "Environment"), (1, "Color"), (2, "Transparent")] {
-                        ui.selectable_value(&mut mode, value, name);
-                    }
-                },
+                &mut mode,
+                &[
+                    (
+                        0,
+                        if self.environment.studio.enabled {
+                            "Studio"
+                        } else {
+                            "Environment"
+                        },
+                    ),
+                    (1, "Color"),
+                    (2, "Transparent"),
+                ],
             );
             if mode != old {
                 self.environment.background = mode == 0;
@@ -725,20 +759,20 @@ impl Viewer {
                 light_changed |= controls::parameter(
                     ui,
                     "Intensity",
-                    egui::Slider::new(&mut self.light.intensity, 0.0..=10.0),
+                    controls::Scrub::new(&mut self.light.intensity, 0.0..=10.0),
                 )
                 .changed();
                 light_changed |= controls::color(ui, "Color", &mut self.light.color).changed();
                 light_changed |= controls::parameter(
                     ui,
                     "Azimuth",
-                    egui::Slider::new(&mut self.light.azimuth, 0.0..=360.0),
+                    controls::Scrub::new(&mut self.light.azimuth, 0.0..=360.0).suffix("°"),
                 )
                 .changed();
                 light_changed |= controls::parameter(
                     ui,
                     "Elevation",
-                    egui::Slider::new(&mut self.light.elevation, 5.0..=85.0),
+                    controls::Scrub::new(&mut self.light.elevation, 5.0..=85.0).suffix("°"),
                 )
                 .changed();
             });
@@ -825,29 +859,33 @@ impl Viewer {
         let mut changed = false;
         controls::section(ui, "View", |ui| {
             let before = self.camera.orthographic;
-            controls::select(
+            controls::segmented(
                 ui,
                 "Projection",
-                if before {
-                    "Orthographic"
-                } else {
-                    "Perspective"
-                },
-                |ui| {
-                    ui.selectable_value(&mut self.camera.orthographic, false, "Perspective");
-                    ui.selectable_value(&mut self.camera.orthographic, true, "Orthographic");
-                },
+                &mut self.camera.orthographic,
+                &[(false, "Perspective"), (true, "Orthographic")],
             );
             changed |= before != self.camera.orthographic;
             ui.add_enabled_ui(!self.camera.orthographic, |ui| {
-                changed |=
-                    controls::scalar(ui, "Field of view", &mut self.camera.fov, 10.0..=100.0);
+                changed |= controls::parameter(
+                    ui,
+                    "Field of view",
+                    controls::Scrub::new(&mut self.camera.fov, 10.0..=100.0)
+                        .max_decimals(0)
+                        .suffix("°"),
+                )
+                .changed();
             });
-            if controls::button(ui, "Fit to model · F").clicked() {
+            if ui
+                .add_sized(
+                    [ui.available_width(), 30.],
+                    egui::Button::new("Fit to model · F"),
+                )
+                .clicked()
+            {
                 self.camera.frame(self.model.center, self.model.radius);
                 changed = true;
             }
-            ui.weak("Drag to orbit · Shift/right drag to pan\nScroll to zoom · F to fit");
         });
         controls::section(ui, "Depth of field", |ui| {
             ui.add_enabled_ui(!self.camera.orthographic, |ui| {
@@ -861,7 +899,9 @@ impl Viewer {
                     changed |= controls::parameter(
                         ui,
                         "f-number",
-                        egui::Slider::new(&mut self.camera.f_stop, 0.7..=22.).logarithmic(true),
+                        controls::Scrub::new(&mut self.camera.f_stop, 0.7..=22.)
+                            .logarithmic(true)
+                            .prefix("f/"),
                     )
                     .changed();
                     if controls::toggle(ui, "Area autofocus", &mut self.focus.enabled).changed() {
@@ -878,11 +918,9 @@ impl Viewer {
                     if controls::parameter(
                         ui,
                         "Focus (m)",
-                        egui::Slider::new(&mut focus, min..=max)
+                        controls::Scrub::new(&mut focus, min..=max)
                             .logarithmic(true)
-                            // Autofocus values must not be rounded by an idle slider.
-                            .max_decimals(4)
-                            .clamping(egui::SliderClamping::Edits),
+                            .max_decimals(4),
                     )
                     .changed()
                     {
