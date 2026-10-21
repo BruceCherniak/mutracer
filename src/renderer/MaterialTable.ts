@@ -24,7 +24,7 @@ import OpenPBRMaterial, {
 } from '../scene/OpenPBRMaterial.js';
 import { ColorRGB } from '../types.js';
 import { mergeTexturesFromMaterials } from './texturesFromMaterials.js';
-import Texture, { isTextureDataSource } from '../scene/Texture.js';
+import Texture, { isTextureDataSource, textureWrapIndex } from '../scene/Texture.js';
 import { commonNearestFloatProps, setDataTexture } from './dataTextureUtil.js';
 import { SceneLight } from '../scene/Scene.js';
 
@@ -246,6 +246,7 @@ function makeTextureArray(
       mapTransform: [] as number[],
       mapUvChannel: [] as number[],
       mapColorLinear: [] as number[],
+      mapWrap: [] as number[],
       stats: {
         estimatedBytes: 0,
         height: 1,
@@ -413,6 +414,7 @@ function makeTextureArray(
       texture.uvOffset[1]
     ]),
     mapUvChannel: textures.map((texture) => texture.uvChannel),
+    mapWrap: textures.flatMap(texture => [textureWrapIndex(texture.wrapS), textureWrapIndex(texture.wrapT)]),
     mapColorLinear,
     stats: {
       estimatedBytes: atlasWidth * atlasHeight * pages.length * bytesPerPixel,
@@ -450,6 +452,7 @@ export interface BufferData extends Record<MaterialTextureIndex, number[]> {
   type: (typeof ShadowCatcherMaterial | typeof UnlitMaterial | 0)[];
   mapInfo: number[];
   mapTransform: number[];
+  mapWrap: number[];
   mapUvChannel: number[];
   mapColorLinear: number[];
 
@@ -667,7 +670,7 @@ class MaterialTable {
         lightTexturesIndices.push(-1);
       }
     }
-    const { mapInfo, mapTransform, mapUvChannel, mapColorLinear, stats, texture } = makeTextureArray(
+    const { mapInfo, mapTransform, mapUvChannel, mapColorLinear, mapWrap, stats, texture } = makeTextureArray(
       allTextures,
       false,
       options
@@ -677,6 +680,7 @@ class MaterialTable {
     this.textureAtlasStats = stats;
     bufferData.mapInfo = mapInfo;
     bufferData.mapTransform = mapTransform;
+    bufferData.mapWrap = mapWrap;
     bufferData.mapUvChannel = mapUvChannel;
     bufferData.mapColorLinear = mapColorLinear;
     for (const slot of MATERIAL_TEXTURE_SLOTS) {
@@ -822,6 +826,7 @@ class MaterialTable {
     pass.setUniform('map', this.texture || null);
     pass.setUniform('mapInfo', this.bufferData.mapInfo);
     pass.setUniform('mapTransform', this.bufferData.mapTransform);
+    pass.setUniform('mapWrap', this.bufferData.mapWrap);
     pass.setUniform('mapUvChannel', this.bufferData.mapUvChannel);
     pass.setUniform('mapColorLinear', this.bufferData.mapColorLinear);
     pass.setUniforms({

@@ -165,9 +165,6 @@ fn triangleBarycentric(p: vec3f, p0: vec3f, p1: vec3f, p2: vec3f) -> vec3f {
   return vec3f(u, v, w);
 }
 
-fn wrapUv(uv: vec2f) -> vec2f {
-  return (uv % 1.0 + 1.0) % 1.0;
-}
 
 
 fn intersectDisplacement(
@@ -278,10 +275,10 @@ fn intersectDisplacement(
     var uv: vec2f;
     if (uvProjection > 0) {
       let n = normalize(_nA * b.x + _nB * b.y + _nC * b.z);
-      uv = wrapUv(projectUV(uvProjection, projPos - (_nA * b.x + _nB * b.y + _nC * b.z) * hBias, n) * uvScale);
+      uv = projectUV(uvProjection, projPos - (_nA * b.x + _nB * b.y + _nC * b.z) * hBias, n) * uvScale;
     }
     else {
-      uv = wrapUv(_tcA * b.x + _tcB * b.y + _tcC * b.z);
+      uv = _tcA * b.x + _tcB * b.y + _tcC * b.z;
     }
     let h = sampleMap(heightMapIndex, uv).x;
     // Heights are measured in mesh-local units, independently of ray length.
@@ -339,9 +336,9 @@ fn intersectDisplacement(
       uv_c = _tcA * b.x + _tcB * (b.y + dby) + _tcC * (b.z - dby);
     }
 
-    let s_a = p_a + hSign * N * sampleMap(heightMapIndex, wrapUv(uv_a)).x * hScale;
-    let s_b = p_b + hSign * N * sampleMap(heightMapIndex, wrapUv(uv_b)).x * hScale;
-    let s_c = p_c + hSign * N * sampleMap(heightMapIndex, wrapUv(uv_c)).x * hScale;
+    let s_a = p_a + hSign * N * sampleMap(heightMapIndex, uv_a).x * hScale;
+    let s_b = p_b + hSign * N * sampleMap(heightMapIndex, uv_b).x * hScale;
+    let s_c = p_c + hSign * N * sampleMap(heightMapIndex, uv_c).x * hScale;
 
     let N_s = -hSign * normalize(cross(s_c - s_a, s_b - s_a));
 

@@ -39,7 +39,7 @@ function convertTexture(
   if (!threeTexture) return;
   const state = [threeTexture.version, threeTexture.image, threeTexture.flipY,
     threeTexture.repeat.x, threeTexture.repeat.y, threeTexture.offset.x,
-    threeTexture.offset.y, threeTexture.channel];
+    threeTexture.offset.y, threeTexture.channel, threeTexture.wrapS, threeTexture.wrapT];
   const cached = textureStore.get(threeTexture);
   if (cached && snapshotsEqual(cached.state, state)) return cached.texture;
   const image = convertTextureImage(threeTexture);
@@ -50,6 +50,9 @@ function convertTexture(
   texture.uvScale = [threeTexture.repeat.x, threeTexture.repeat.y];
   texture.uvOffset = [threeTexture.offset.x, threeTexture.offset.y];
   texture.uvChannel = threeTexture.channel === 1 ? 1 : 0;
+  const wrap = (value: number) => value === 1001 ? 'clamp-to-edge' as const
+    : value === 1002 ? 'mirrored-repeat' as const : 'repeat' as const;
+  texture.wrapS = wrap(threeTexture.wrapS); texture.wrapT = wrap(threeTexture.wrapT);
   if (cached) texture.markUpdated();
   else texture.version = threeTexture.version;
   textureStore.set(threeTexture, { texture, state });

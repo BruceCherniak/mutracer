@@ -67,9 +67,21 @@ fn getMapOffset(idx: i32) -> vec2f {
   return vec2f(fract(mapInfo[idx].z), mapInfo[idx].w);
 }
 
-fn getMapUV(idx: i32, uv: vec2f) -> vec2f {
+fn wrapMapCoordinate(value: f32, mode: f32) -> f32 {
+  if (mode < 0.5) { return fract(value); }
+  if (mode < 1.5) { return clamp(value, 0.0, 1.0); }
+  return 1.0 - abs(1.0 - (value - 2.0 * floor(value * 0.5)));
+}
+
+fn wrappedMapUv(idx: i32, uv: vec2f) -> vec2f {
   let transform = mapInfo[idx + NUM_MAPS];
-  let repeatedUv = fract(uv * transform.xy + transform.zw);
+  let modes = mapInfo[idx + NUM_MAPS * 2].zw;
+  let value = uv * transform.xy + transform.zw;
+  return vec2f(wrapMapCoordinate(value.x, modes.x), wrapMapCoordinate(value.y, modes.y));
+}
+
+fn getMapUV(idx: i32, uv: vec2f) -> vec2f {
+  let repeatedUv = wrappedMapUv(idx, uv);
   let atlasTexel = 1.0 / vec2f(textureDimensions(map).xy);
   let firstTexelCenter = getMapOffset(idx);
   let sourceExtent = getMapSize(idx) + atlasTexel;
@@ -87,7 +99,28 @@ fn getMapUvSet(idx: i32, uv: vec2f, uv1: vec2f) -> vec2f {
 }
 
 fn sampleMap(idx: i32, uv: vec2f) -> vec4f {
+  let size = vec2i(round(getMapSize(idx) * vec2f(textureDimensions(map).xy) + vec2f(1.0)));
+  let texel = wrappedMapUv(idx, uv) * vec2f(size) - vec2f(0.5);
+  let modes = mapInfo[idx + NUM_MAPS * 2].zw;
+  // Repeat filtering must cross the logical image boundary, never another
+  // atlas placement. Interior/clamped/mirrored footprints use hardware filtering.
+  if ((size.x > 1 && modes.x < 0.5 && (texel.x < 0.0 || texel.x > f32(size.x - 1))) ||
+      (size.y > 1 && modes.y < 0.5 && (texel.y < 0.0 || texel.y > f32(size.y - 1)))) {
+    let base = vec2i(floor(texel));
+    let weight = fract(texel);
+    let origin = vec2i(round(getMapOffset(idx) * vec2f(textureDimensions(map).xy) - vec2f(0.5)));
+    return mix(
+      mix(loadMapTexel(idx, base, size, origin, modes), loadMapTexel(idx, base + vec2i(1, 0), size, origin, modes), weight.x),
+      mix(loadMapTexel(idx, base + vec2i(0, 1), size, origin, modes), loadMapTexel(idx, base + vec2i(1, 1), size, origin, modes), weight.x), weight.y);
+  }
   return textureSampleLevel(map, mapSampler, getMapUV(idx, uv), getMapLayer(idx), 0.0);
+}
+
+fn loadMapTexel(idx: i32, coordinate: vec2i, size: vec2i, origin: vec2i, modes: vec2f) -> vec4f {
+  var p = clamp(coordinate, vec2i(0), size - vec2i(1));
+  if (modes.x < 0.5) { p.x = ((coordinate.x % size.x) + size.x) % size.x; }
+  if (modes.y < 0.5) { p.y = ((coordinate.y % size.y) + size.y) % size.y; }
+  return textureLoad(map, origin + p, getMapLayer(idx), 0);
 }
 
 

@@ -2615,6 +2615,8 @@ ${rayTraceCompute({
     for (let i = 0; i < mapUvChannel.length; i++) {
       mapInfoData[numMaps * 8 + i * 4] = mapUvChannel[i];
       mapInfoData[numMaps * 8 + i * 4 + 1] = mapColorLinear[i];
+      mapInfoData[numMaps * 8 + i * 4 + 2] = materialData.bufferData.mapWrap[i * 2];
+      mapInfoData[numMaps * 8 + i * 4 + 3] = materialData.bufferData.mapWrap[i * 2 + 1];
     }
     let mapInfoUniform = this._mapInfoUniform;
     if (!mapInfoUniform || mapInfoUniform.size !== mapInfoData.byteLength) {

@@ -242,7 +242,7 @@ export function getPreparedMeshGeometryCacheKey(mesh: Mesh) {
   const scale = getMeshDisplacementScale(mesh);
   if (texture && (scale !== 0 || material.displacementBias !== 0)) {
     return ['displacement', source.version, getDisplacementTextureDataCacheKey(texture),
-      +texture.flipY, texture.uvScale.join(','), texture.uvOffset.join(','), texture.uvChannel,
+      +texture.flipY, texture.uvScale.join(','), texture.uvOffset.join(','), texture.uvChannel, texture.wrapS, texture.wrapT,
       scale, material.displacementBias, material.displacementUvProjectionScale, material.displacementUvProjection].join('|');
   }
   return undefined;
