@@ -3,6 +3,24 @@
 All notable changes to MuTracer will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.1.4 - 2026-10-21
+
+### Added
+
+- Environment lighting supports intensity and rotation, including automatic synchronization from Three.js scenes.
+- Grounded skybox backgrounds support independent intensity and rotation while keeping the ground level.
+- Material textures support independent repeat, clamp-to-edge and mirrored-repeat wrapping on each axis, including Three.js conversion and viewer controls with undo/redo.
+- Material color textures support explicit sRGB or linear decoding and preserve Three.js color-space settings.
+- The viewer includes a glass shader ball sample.
+
+### Fixed
+
+- Three.js conversion preserves vertex colors, back-facing materials and material data textures with half-float, Red, RG, RGB or RGBA inputs.
+- Converted equirectangular environments follow Three.js orientation and remain correct when the same texture is also used by a material.
+- Fully metallic glTF materials without a metalness map ignore specular intensity, color and maps, matching glTF behavior.
+- Spot lights use the correct smooth falloff within the inner and outer cones on WebGPU and WebGL 2.
+- Rapid material edits in the viewer remain stable while GPU denoising is active.
+
 ## 0.1.3 - 2026-10-19
 
 ### Changed
