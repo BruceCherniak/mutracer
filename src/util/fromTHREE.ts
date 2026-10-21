@@ -1179,6 +1179,8 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
         radius: number;
         groundHeight?: number;
         center?: [number, number];
+        rotation?: number;
+        intensity?: number;
       }
     | undefined;
   const groundedTexture = grounded && convertDataTexture(grounded.texture, store.equirectTextures);
@@ -1194,7 +1196,9 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
             height: grounded.height,
             radius: grounded.radius,
             groundHeight: grounded.groundHeight,
-            center: grounded.center
+            center: grounded.center,
+            rotation: grounded.rotation,
+            intensity: grounded.intensity
           }
         : scene.background
           ? (scene.background as THREE.Color).isColor

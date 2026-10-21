@@ -315,7 +315,7 @@ Public spatial values use `Vec2` (`[number, number] | Float32Array`), `Vec3` (`[
 | `RectLight`, `SphereLight`, `SpotLight`, `DirectionalLight`, `EnvironmentLight`, `AmbientLight` | Parameter-object constructors; analytic lights use `transform`, `position`, `lookAt()` and rigid axes. See [lights](./getting-started.md#lights) |
 | `EnvironmentLight` | `new EnvironmentLight({map, intensity?})`; `intensity` defaults to `1`, scales environment radiance, and accepts `0` to disable lighting. Ambient lights and explicit background textures retain their own brightness. `transform` rotates the environment from local to world space (identity by default); translation and positive axis scale are ignored. An explicit background texture keeps its own orientation |
 | `IESProfile`, `parseIESProfile(text)` | Photometric profiles for `SpotLight` |
-| `SceneBackground` | `[r, g, b, a]`, `Texture` or `GroundedSkyboxBackground` |
+| `SceneBackground` | `[r, g, b, a]`, `Texture` or `GroundedSkyboxBackground`; grounded backgrounds accept `rotation` around +Y in radians (default `0`) and `intensity` (default `1`). These affect only the background; the ground stays level and alpha is preserved |
 
 `OpenPBRMaterial` accepts canonical `specularRoughnessAnisotropy` (default `0`),
 `coatRoughnessAnisotropy` (`0`), `subsurfaceScatterAnisotropy` (`0`),

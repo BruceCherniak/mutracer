@@ -236,8 +236,11 @@ fn groundedBackgroundDirection(origin: vec3f, direction: vec3f) -> vec3f {
 fn sampleSceneBackground(ray: Ray) -> vec4f {
   var bg = vec4f(0.0);
   if (USE_BACKGROUND_MAP) {
-    let backgroundDirection = groundedBackgroundDirection(ray.o, ray.d);
-    bg = textureLinear(backgroundMap, cartesianToEquirect(backgroundDirection));
+    let d = groundedBackgroundDirection(ray.o, ray.d);
+    let t = rtUniform.backgroundMapTransform;
+    let backgroundDirection = vec3f(t.x * d.x - t.y * d.z, d.y, t.y * d.x + t.x * d.z);
+    let backgroundSample = textureLinear(backgroundMap, cartesianToEquirect(backgroundDirection));
+    bg = vec4f(backgroundSample.rgb * t.z, backgroundSample.a);
   }
   else if (USE_BACKGROUND) {
     bg = rtUniform.backgroundColor;

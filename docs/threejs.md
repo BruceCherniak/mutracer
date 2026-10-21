@@ -205,7 +205,7 @@ Renderer-specific settings without a Three.js equivalent:
 | `mutracerThinFilmMap` | material | Native R thickness texture with minimum 0; takes precedence over `iridescenceThicknessMap` |
 | `mutracerRadius` | point / spot light | Emitter radius |
 | `mutracerIesProfile`, `mutracerIesRotation` | spot light | `IESProfile` instance; rotation becomes local-Z transform rotation |
-| `mutracerGroundedSkybox: { texture, height, radius, groundHeight?, center? }` | scene | Grounded skybox background |
+| `mutracerGroundedSkybox: { texture, height, radius, groundHeight?, center?, rotation?, intensity? }` | scene | Grounded skybox background; rotation/intensity options follow [SceneBackground](./api.md#scene-types) |
 | `mutracerHiddenBackground: true` | scene | Transparent background while keeping environment lighting |
 
 Directional and spot lights use their world position and target to build a

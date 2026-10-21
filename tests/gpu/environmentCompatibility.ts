@@ -28,7 +28,27 @@ async function run() {
       const row={name,maxError:Math.max(...actual.map((value,index)=>Math.abs(value-expected[index])))};
       results.push(row); const output=document.createElement('pre');output.textContent=JSON.stringify(row);document.body.append(output);
     };
-    if (location.search.includes('rotation')) {
+    if (location.search.includes('grounded')) {
+      source.remove(...source.children.filter(child=>child!==mesh));
+      mesh.position.x=100; camera.position.set(1,2,4); camera.lookAt(0,0,0);
+      // Matching edge texels isolate rotation from the existing clamped longitude seam.
+      const groundPixels=new Float32Array([1,.2,.3,1, 1,.2,.3,1, .1,2,4,1, 1,.2,.3,1,
+        .2,.3,.4,1, .2,.3,.4,1, 3,.1,.2,1, .2,.3,.4,1]);
+      for(let i=3;i<groundPixels.length;i+=4) groundPixels[i]=.75;
+      const groundMap=new THREE.DataTexture(groundPixels,4,2,THREE.RGBAFormat,THREE.FloatType);
+      source.environment=original;
+      for (const intensity of [0,.5,2]) {
+        const shifted=new Float32Array(groundPixels.length);
+        for(let y=0;y<2;y++) for(let x=0;x<4;x++) for(let c=0;c<4;c++) shifted[(y*4+x)*4+c]=groundPixels[(y*4+(x+1)%4)*4+c]*(c===3?1:intensity);
+        const baked=new THREE.DataTexture(shifted,4,2,THREE.RGBAFormat,THREE.FloatType);
+        source.userData.mutracerGroundedSkybox={texture:baked,height:1.6,radius:30,center:[.4,-.3]};
+        const expected=await capture();
+        source.userData.mutracerGroundedSkybox={texture:groundMap,height:1.6,radius:30,center:[.4,-.3],rotation:Math.PI/2,intensity};
+        record(`grounded rotation and intensity ${intensity}`,expected,await capture());
+        baked.dispose();
+      }
+      groundMap.dispose();
+    } else if (location.search.includes('rotation')) {
       mesh.material.dispose(); mesh.material=webgl?new THREE.MeshStandardMaterial({roughness:1}):new THREE.MeshPhysicalMaterial({roughness:.5,metalness:1,anisotropy:.5}); mesh.geometry.computeTangents();
       source.environment=original; source.remove(...source.children.filter(child=>child!==mesh));
       camera.matrixAutoUpdate=false; mesh.matrixAutoUpdate=false;

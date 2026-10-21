@@ -29,6 +29,15 @@ export function environmentRotation(lights: readonly SceneLight[]): Float32Array
   return matrix;
 }
 
+/** Cosine/sine of inverse-lookup yaw and radiance scale; independent of lighting. */
+export function backgroundMapTransform(background?: SceneBackground): Float32Array {
+  const grounded = background && !Array.isArray(background) && 'type' in background && background.type === 'GroundedSkybox' ? background : undefined;
+  const angle = grounded?.rotation ?? 0;
+  return new Float32Array([Math.cos(angle), Math.sin(angle), Math.max(0, grounded?.intensity ?? 1), 0]);
+}
+
+const backgroundImages = new WeakMap<Texture, {image: Texture['image']; version: number; result: EnvironmentMapSource}>();
+
 const DEFAULT_MAP_RESOLUTION = {
   width: 8,
   height: 4
@@ -49,11 +58,10 @@ export function generateBackgroundMapFromSceneBackground(
       'map' in background ? background.map : (background as Texture);
     if (!isTextureDataSource(texture.image)) return;
     // Is rgbe data
-    backgroundImage = {
-      width: texture.image.width,
-      height: texture.image.height,
-      data: texture.image.data
-    };
+    const cached = backgroundImages.get(texture);
+    if (cached?.image === texture.image && cached.version === texture.version) return cached.result;
+    backgroundImage = {width: texture.image.width, height: texture.image.height, data: texture.image.data};
+    backgroundImages.set(texture, {image:texture.image, version:texture.version, result:backgroundImage});
   }
   return backgroundImage;
 }
