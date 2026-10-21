@@ -78,6 +78,11 @@ or conflict rule. These overrides apply after standard conversion; alpha mode
 still follows the source material flags and resolved coverage. Naming does not
 change transmission, volume or anisotropy conversion semantics.
 
+Material `DataTexture` inputs support Red, RG, RGB and RGBA layouts, including
+half-float data. Missing color channels become zero and missing alpha becomes
+one. Decoded images use additional CPU memory and are reused until the source
+texture is updated; set `texture.needsUpdate = true` after pixel edits.
+
 Thin-film ranges keep their endpoint order, including minimum greater than
 maximum, and retain the converter's 0–20 µm endpoint clamp. The converter uses
 Three.js's actual range defaults. `mutracerOpenPBR` may explicitly override the

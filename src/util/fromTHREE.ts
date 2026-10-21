@@ -42,7 +42,7 @@ function convertTexture(
     threeTexture.offset.y, threeTexture.channel];
   const cached = textureStore.get(threeTexture);
   if (cached && snapshotsEqual(cached.state, state)) return cached.texture;
-  const image = threeTexture.image as Texture['image'];
+  const image = convertTextureImage(threeTexture);
   const texture = cached?.texture ?? new Texture(image);
   texture.image = image;
   texture.source = threeTexture;
@@ -69,16 +69,48 @@ function halfFloatToFloat(value: number) {
   return sign * Math.pow(2, exponent - 15) * (1 + fraction / 0x400);
 }
 
+/** Decode Three.js storage into the RGBA byte/float images used by MuTracer. */
+function convertTextureImage(texture: THREE.Texture): Texture['image'] {
+  const image = texture.image as THREE.DataTexture['image'];
+  if (!image?.data) return image as Texture['image'];
+  // Three.js enums are kept numeric to retain the optional, type-only peer import.
+  const channels = texture.format === 1028 ? 1 : texture.format === 1030 ? 2
+    : texture.format === 1022 ? 3 : texture.format === 1023 ? 4 : 0;
+  if (!channels) throw new Error(`Unsupported Three.js data texture format: ${texture.format}`);
+  const data = image.data as ArrayLike<number>;
+  if (data.length !== image.width * image.height * channels) {
+    throw new Error('Three.js data texture length does not match its format and dimensions.');
+  }
+  const half = texture.type === 1016;
+  if (channels === 4 && !half && (data instanceof Float32Array || data instanceof Uint8Array ||
+    data instanceof Uint8ClampedArray || data instanceof Int32Array)) return image as Texture['image'];
+  const bytes = data instanceof Uint8Array || data instanceof Uint8ClampedArray;
+  const result = bytes ? new Uint8Array(image.width * image.height * 4)
+    : new Float32Array(image.width * image.height * 4);
+  const read = (index: number) => {
+    const value = data[index];
+    if (half) return halfFloatToFloat(value);
+    if (data instanceof Uint16Array) return value / 65535;
+    if (data instanceof Uint32Array) return value / 4294967295;
+    if (data instanceof Int8Array) return Math.max(-1, value / 127);
+    if (data instanceof Int16Array) return Math.max(-1, value / 32767);
+    return value;
+  };
+  for (let i = 0; i < image.width * image.height; i++) {
+    result[i * 4] = read(i * channels);
+    result[i * 4 + 1] = channels > 1 ? read(i * channels + 1) : 0;
+    result[i * 4 + 2] = channels > 2 ? read(i * channels + 2) : 0;
+    result[i * 4 + 3] = channels === 4 ? read(i * channels + 3) : bytes ? 255 : 1;
+  }
+  return { width: image.width, height: image.height, data: result };
+}
+
 function convertDataTexture(threeTexture: THREE.DataTexture | null | undefined, textureStore: TextureStore) {
   if (!threeTexture?.image?.data || !threeTexture.image.width || !threeTexture.image.height) return;
   const previous = textureStore.get(threeTexture);
   const texture = convertTexture(threeTexture, textureStore)!;
   if (previous?.state === textureStore.get(threeTexture)?.state) return texture;
-  const source = threeTexture.image.data as ArrayBufferView;
-  const data = source instanceof Uint16Array
-    ? Float32Array.from(source, halfFloatToFloat)
-    : source instanceof Float32Array || source instanceof Uint8Array || source instanceof Int32Array
-      ? source : Float32Array.from(source as unknown as ArrayLike<number>);
+  const data = (texture.image as import('../scene/Texture.js').TextureDataSource).data;
   const { width, height } = threeTexture.image;
   // Three.js equirect maps put the sky at v = 1, so with flipY = false the
   // first row is the nadir. MuTracer environments start at the zenith and
@@ -88,7 +120,7 @@ function convertDataTexture(threeTexture: THREE.DataTexture | null | undefined, 
   return texture;
 }
 
-function flipRows<T extends Float32Array | Uint8Array | Int32Array>(data: T, width: number, height: number): T {
+function flipRows<T extends Float32Array | Uint8Array | Uint8ClampedArray | Int32Array>(data: T, width: number, height: number): T {
   if (height <= 1) return data;
   const rowLength = data.length / height;
   const flipped = new (data.constructor as new (length: number) => T)(data.length);

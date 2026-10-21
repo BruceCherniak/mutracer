@@ -377,7 +377,8 @@ describe('Three.js scene conversion', () => {
 
     const converted = fromTHREEScene(scene).meshes[0].materials[0];
 
-    expect(converted.displacementMap?.image).toBe(displacementMap.image);
+    expect(converted.displacementMap?.image).toMatchObject({width: 1, height: 1,
+      data: new Uint8Array([128, 0, 0, 255])});
     expect(converted).toMatchObject({
       displacementScale: 0.25,
       displacementBias: -.125,
