@@ -93,7 +93,10 @@ copying pixels. General `KHR_texture_transform` rotation remains unsupported.
 Clearcoat normals are deferred to the independent coat-frame implementation.
 Anisotropy direction and source-model mapping are described [below](#anisotropy-source-conversion). The conversion preserves OpenPBR layering: glTF sheen
 layer order differs, and specular weight/color also affect metals in OpenPBR;
-these imports do not imply identical glTF BRDFs.
+these imports do not imply identical glTF BRDFs. A fully metallic material
+(`metalness` 1 without `metalnessMap`) ignores `specularIntensity`,
+`specularColor` and their maps, as in glTF. Partially metallic or
+metalness-mapped materials keep them, so their metal lobe is scaled too.
 
 Invisible objects are skipped. Other material types are skipped with a console
 warning unless `convertMaterial` supplies an OpenPBR material. `BatchedMesh`, instanced morph targets (`morphTexture`) and skinned

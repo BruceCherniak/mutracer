@@ -248,8 +248,12 @@ function convertMaterial(
       textureCache
     );
     material.specularIor = physicalMaterial.ior;
-    material.specularWeight = physicalMaterial.specularIntensity;
-    if (physicalMaterial.specularColor) {
+    // glTF specular (KHR_materials_specular) only scales the dielectric
+    // lobe, while OpenPBR applies it to metals too. A fully metallic
+    // surface has no dielectric part, so keep the OpenPBR defaults there.
+    const fullyMetallic = physicalMaterial.metalness === 1 && !physicalMaterial.metalnessMap;
+    material.specularWeight = fullyMetallic ? 1 : physicalMaterial.specularIntensity;
+    if (physicalMaterial.specularColor && !fullyMetallic) {
       material.specularColor =
         physicalMaterial.specularColor.toArray() as ColorRGB;
     }
@@ -259,8 +263,10 @@ function convertMaterial(
     material.coatNormalScale = physicalMaterial.clearcoatNormalScale.toArray();
     material.fuzzColorMap = convertTexture(physicalMaterial.sheenColorMap, textureCache);
     material.fuzzRoughnessMap = convertTexture(physicalMaterial.sheenRoughnessMap, textureCache);
-    material.specularWeightMap = convertTexture(physicalMaterial.specularIntensityMap, textureCache);
-    material.specularColorMap = convertTexture(physicalMaterial.specularColorMap, textureCache);
+    if (!fullyMetallic) {
+      material.specularWeightMap = convertTexture(physicalMaterial.specularIntensityMap, textureCache);
+      material.specularColorMap = convertTexture(physicalMaterial.specularColorMap, textureCache);
+    }
     material.coatWeight = physicalMaterial.clearcoat;
     material.coatRoughness = physicalMaterial.clearcoatRoughness;
     // MeshPhysicalMaterial's clearcoat BRDF uses the fixed dielectric F0

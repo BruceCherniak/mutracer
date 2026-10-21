@@ -536,6 +536,35 @@ describe('Three.js scene conversion', () => {
     expect(fromTHREEScene(scene).meshes[0].materials[0].coatDarkening).toBe(coatDarkening);
   });
 
+  it('keeps glTF specular off fully metallic materials only', () => {
+    const convert = (params: THREE.MeshPhysicalMaterialParameters, metalnessMap = false) => {
+      const material = new THREE.MeshPhysicalMaterial({
+        specularIntensity: 0,
+        specularColor: new THREE.Color(0.2, 0.4, 0.6),
+        specularIntensityMap: new THREE.Texture(),
+        specularColorMap: new THREE.Texture(),
+        ...params
+      });
+      if (metalnessMap) material.metalnessMap = new THREE.Texture();
+      const scene = new THREE.Scene();
+      scene.add(new THREE.Mesh(new THREE.BoxGeometry(), material));
+      return fromTHREEScene(scene).meshes[0].materials[0];
+    };
+    // KHR_materials_specular does not affect the glTF metal BRDF.
+    const metal = convert({metalness: 1});
+    expect(metal.specularWeight).toBe(1);
+    expect(metal.specularColor).toEqual(new OpenPBRMaterial().specularColor);
+    expect(metal.specularWeightMap).toBeUndefined();
+    expect(metal.specularColorMap).toBeUndefined();
+    // No single OpenPBR value matches a dielectric/metal blend, so these keep the source.
+    for (const material of [convert({metalness: 0.5}), convert({metalness: 1}, true)]) {
+      expect(material.specularWeight).toBe(0);
+      expect(material.specularColor[0]).toBeCloseTo(0.2);
+      expect(material.specularWeightMap).toBeDefined();
+      expect(material.specularColorMap).toBeDefined();
+    }
+  });
+
   it('converts canonical viewer OpenPBR metadata', () => {
     const material = new THREE.MeshPhysicalMaterial({
       transmission: 0.7,
