@@ -35,7 +35,7 @@ import { SceneBackground, SceneLight } from '../scene/Scene.js';
 import { numberArraysEqual } from './util.js';
 import Camera from '../scene/Camera.js';
 import {
-  generateBackgroundMapFromSceneBackground
+  generateBackgroundMapFromSceneBackground, environmentRotation
 } from './envMapCreation.js';
 import rayTraceCompute, { WORKGROUP_SIZE } from './wgsl/rayTrace.compute.js';
 import Geometry from '../scene/Geometry.js';
@@ -171,7 +171,7 @@ export function isWebGPUPipelineSpecializationFailure(...errors: unknown[]) {
 /** CPU-side views over the `RayTraceUniform` WGSL struct. */
 export function makeRayTraceUniform() {
   // Created from https://webgpufundamentals.org/webgpu/lessons/resources/wgsl-offset-computer.html
-  const RayTraceUniformValues = new ArrayBuffer(176);
+  const RayTraceUniformValues = new ArrayBuffer(240);
   const RayTraceUniformViews = {
     outputSize: new Float32Array(RayTraceUniformValues, 0, 2),
     sampleCount: new Float32Array(RayTraceUniformValues, 8, 1),
@@ -201,11 +201,13 @@ export function makeRayTraceUniform() {
     sceneFeatureFlags: new Uint32Array(RayTraceUniformValues, 152, 1),
     sequenceSeed: new Uint32Array(RayTraceUniformValues, 156, 1),
     zSobolLogSPP: new Uint32Array(RayTraceUniformValues, 160, 1),
-    sampleSequenceOffset: new Uint32Array(RayTraceUniformValues, 164, 1)
+    sampleSequenceOffset: new Uint32Array(RayTraceUniformValues, 164, 1),
+    environmentRotation: new Float32Array(RayTraceUniformValues, 176, 16)
   };
   // Fixed runtime trip bounds discourage thin-film loop unrolling. Keep 4 for
   // 2 polarizations/substrates and 3 channels, independent of BSDF budgets.
   RayTraceUniformViews.loopUnrollGuard[0] = 4;
+  RayTraceUniformViews.environmentRotation.set(environmentRotation([]));
   RayTraceUniformViews.bevel[0] = 1;
   RayTraceUniformViews.dispersionWavelengths[0] = 3;
   return {
@@ -2708,6 +2710,7 @@ ${rayTraceCompute({
     const numAnalyticLights = analyticLights.length;
 
     const envImage = this._sceneEnvironment.update(lights);
+    this._rtUniform.views.environmentRotation.set(environmentRotation(lights));
 
     this._rtUniform.views.lightsCount[0] = numAnalyticLights;
 

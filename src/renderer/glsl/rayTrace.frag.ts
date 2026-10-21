@@ -146,12 +146,12 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
         bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathWavelength);
         float backgroundMisWeight = path.scatteringIsDelta ? 1.0
           : sampling_power_heuristic(path.scatteringPdf,
-              envMapPdf(cartesianToEquirect(path.ray.d)) * envLightSelectionPmf);
+              envMapPdf(environmentUv(path.ray.d)) * envLightSelectionPmf);
         path.li += backgroundMisWeight * path.beta * bg.rgb * bg.a;
         path.alpha = max(path.alpha, bg.a);
       }
       else {
-        vec2 envUv = cartesianToEquirect(path.ray.d);
+        vec2 envUv = environmentUv(path.ray.d);
         vec3 emission = textureLinear(envMap, envUv).rgb;
         emission = sampling_spectral_rgb_filter(emission, pathWavelength);
         path.li += path.beta * emission *
@@ -324,13 +324,13 @@ ${intelMac ? doubleTransmissionCheckCode : ''}
       bg.rgb = sampling_spectral_rgb_filter(bg.rgb, pathWavelength);
       float backgroundMisWeight = path.scatteringIsDelta ? 1.0
           : sampling_power_heuristic(path.scatteringPdf,
-              envMapPdf(cartesianToEquirect(path.ray.d)) * envLightSelectionPmf);
+              envMapPdf(environmentUv(path.ray.d)) * envLightSelectionPmf);
         path.li += backgroundMisWeight * path.beta * bg.rgb * bg.a;
       path.alpha = max(path.alpha, bg.a);
       path.abort = true;
       return;
     }
-    vec2 uv = cartesianToEquirect(path.ray.d);
+    vec2 uv = environmentUv(path.ray.d);
     vec3 emission = textureLinear(envMap, uv).rgb;
     float misWeight = sampling_power_heuristic(
       path.scatteringPdf,

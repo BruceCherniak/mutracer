@@ -1,4 +1,4 @@
-// Fixed-sequence HDR comparison against explicitly scaled source radiance.
+// Fixed-sequence HDR comparisons against equivalent source radiance and scene orientations.
 import * as THREE from 'three';
 import { Engine, Render, THREESync } from '../../src/main.js';
 
@@ -17,21 +17,45 @@ async function run() {
     .2,.3,.4,1, .5,.4,.3,1, .1,.2,.3,1, .4,.2,.1,1]);
   const original = new THREE.DataTexture(pixels,4,2,THREE.RGBAFormat,THREE.FloatType);
   const capture = async () => {
+    camera.matrixWorldNeedsUpdate=true; mesh.matrixWorldNeedsUpdate=true;
     sync.update(); engine.update();
     await render.converge({samples:32,sampleSequenceOffset:0,timeoutMs:60_000});
     return (await render.readPixels('hdr')).data;
   };
   const results: {name:string;maxError:number}[]=[];
   try {
-    for (const intensity of [0,.5,2]) {
+    const record = (name:string, expected:Float32Array, actual:Float32Array) => {
+      const row={name,maxError:Math.max(...actual.map((value,index)=>Math.abs(value-expected[index])))};
+      results.push(row); const output=document.createElement('pre');output.textContent=JSON.stringify(row);document.body.append(output);
+    };
+    if (location.search.includes('rotation')) {
+      mesh.material.dispose(); mesh.material=webgl?new THREE.MeshStandardMaterial({roughness:1}):new THREE.MeshPhysicalMaterial({roughness:.5,metalness:1,anisotropy:.5}); mesh.geometry.computeTangents();
+      source.environment=original; source.remove(...source.children.filter(child=>child!==mesh));
+      camera.matrixAutoUpdate=false; mesh.matrixAutoUpdate=false;
+      const base=new THREE.Matrix4().makeTranslation(0,0,2);
+      render.bounces=webgl?3:1;
+      for (const kind of ['lighting','background','explicit background']) {
+        const baseMesh=kind==='lighting'?new THREE.Matrix4():new THREE.Matrix4().makeTranslation(100,0,0);
+        source.background=kind==='lighting'?new THREE.Color(0,0,0):kind==='explicit background'?original:null;
+        const rotations=webgl&&kind==='lighting'?[new THREE.Euler(0,Math.PI/2,0),new THREE.Euler(0,.7,0)]:[new THREE.Euler(0,Math.PI/2,0),new THREE.Euler(.3,.7,-.2,'ZYX')];
+        for (const euler of rotations) {
+          const inverse=new THREE.Matrix4().makeRotationFromEuler(euler).invert();
+          source.environmentRotation.set(0,0,0);
+          mesh.matrix.copy(kind==='explicit background'?baseMesh:inverse.clone().multiply(baseMesh));
+          camera.matrix.copy(kind==='explicit background'?base:inverse.clone().multiply(base));
+          const expected=await capture();
+          mesh.matrix.copy(baseMesh); camera.matrix.copy(base); source.environmentRotation.copy(euler);
+          record(`${kind} rotation ${euler.order} ${euler.y}`,expected,await capture());
+        }
+      }
+    } else for (const intensity of [0,.5,2]) {
       source.environmentIntensity=1;
       const scaled = new THREE.DataTexture(pixels.map((value,index)=>index%4===3?value:value*intensity),4,2,THREE.RGBAFormat,THREE.FloatType);
       source.environment=scaled;
       const expected=await capture();
       source.environment=original; source.environmentIntensity=intensity;
       const actual=await capture();
-      const row={name:`environment intensity ${intensity} with ambient`,maxError:Math.max(...actual.map((value,index)=>Math.abs(value-expected[index])))};
-      results.push(row); const output=document.createElement('pre');output.textContent=JSON.stringify(row);document.body.append(output);
+      record(`environment intensity ${intensity} with ambient`,expected,actual);
       scaled.dispose();
     }
     document.querySelector('#summary')!.textContent=JSON.stringify({backend:engine.backend,passed:results.every(r=>Number.isFinite(r.maxError)&&r.maxError<.002)});

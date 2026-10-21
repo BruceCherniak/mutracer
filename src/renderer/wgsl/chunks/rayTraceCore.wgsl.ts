@@ -264,6 +264,7 @@ struct RayTraceUniform {
   sequenceSeed: u32,
   zSobolLogSPP: u32,
   sampleSequenceOffset: u32,
+  environmentRotation: mat4x4f,
 }
 
 // Buffers

@@ -87,8 +87,9 @@ Material textures preserve independent `wrapS` and `wrapT`: repeat,
 clamp-to-edge and mirrored repeat. UV repeat and offset apply before wrapping;
 later wrap edits synchronize automatically. Displacement uses the same modes.
 
-`scene.environmentIntensity` controls environment lighting and synchronizes
-automatically, including zero. It does not scale ambient lights or an explicitly
+`scene.environmentIntensity` controls environment lighting, including zero;
+`scene.environmentRotation` rotates it using the source Euler order. Both
+synchronize automatically. They do not change ambient lights or an explicitly
 assigned `scene.background` texture.
 
 Thin-film ranges keep their endpoint order, including minimum greater than

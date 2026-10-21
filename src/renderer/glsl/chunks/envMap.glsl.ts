@@ -9,6 +9,7 @@ import { createShaderMixin, glsl, Shader } from '../../shader.js';
 
 export default createShaderMixin({
   uniforms: {
+    environmentRotation: Shader.uniform('mat3', [1,0,0, 0,1,0, 0,0,1]),
     envMap: Shader.uniform('sampler2D'),
     envMapDistribution: Shader.uniform('sampler2D'),
     backgroundMap: Shader.uniform('sampler2D'),
@@ -18,8 +19,12 @@ export default createShaderMixin({
   main: glsl`
 vec2 cartesianToEquirect(vec3 pointOnSphere) {
   float phi = mod(atan(-pointOnSphere.z, -pointOnSphere.x), TWOPI);
-  float theta = acos(pointOnSphere.y);
+  float theta = acos(clamp(pointOnSphere.y, -1.0, 1.0));
   return vec2(phi * 0.5 * INVPI, theta * INVPI);
+}
+
+vec2 environmentUv(vec3 worldDirection) {
+  return cartesianToEquirect(transpose(environmentRotation) * worldDirection);
 }
 
 float getEnvmapV(float u, out int vOffset, out float pdf) {
@@ -93,7 +98,7 @@ vec3 sampleEnvmap(vec2 random, out vec2 uv, out float pdf) {
 
   pdf = partialPdf.x * partialPdf.y * INVPI2 / (2.0 * sinTheta);
 
-  return dir;
+  return environmentRotation * dir;
 }
 
 float envMapPdf(vec2 uv) {
@@ -188,7 +193,11 @@ vec3 groundedBackgroundDirection(vec3 origin, vec3 d) {
 
 vec4 sampleBackgroundFromRay(vec3 origin, vec3 d) {
   d = groundedBackgroundDirection(origin, d);
+#ifdef USE_BACKGROUND
   vec2 uv = cartesianToEquirect(d);
+#else
+  vec2 uv = environmentUv(d);
+#endif
   return textureLinear(backgroundMap, uv);
 }`
 });

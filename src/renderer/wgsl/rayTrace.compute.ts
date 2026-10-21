@@ -243,7 +243,7 @@ fn sampleSceneBackground(ray: Ray) -> vec4f {
     bg = rtUniform.backgroundColor;
   }
   else if (USE_ENVMAP) {
-    bg = textureLinear(envMap, cartesianToEquirect(ray.d));
+    bg = textureLinear(envMap, environmentUv(ray.d));
   }
   return bg;
 }
@@ -277,13 +277,13 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
             (*si).wavelength
           );
           let backgroundMisWeight = select(bsdfMISWeight((*path).scatteringPdf,
-            envMapPdf(cartesianToEquirect((*path).ray.d)) * rtUniform.envLightPmf),
+            envMapPdf(environmentUv((*path).ray.d)) * rtUniform.envLightPmf),
             1.0, (*path).scatteringIsDelta);
           (*path).li += backgroundMisWeight * (*path).beta * bg.rgb * bg.a;
           (*path).alpha = max((*path).alpha, bg.a);
         }
         else {
-          let envUv = cartesianToEquirect((*path).ray.d);
+          let envUv = environmentUv((*path).ray.d);
           var emission = textureLinear(envMap, envUv).rgb;
           if (SPECTRAL) {
             emission = sampling_spectral_rgb_filter(emission, (*si).wavelength);
@@ -467,14 +467,14 @@ fn bounce(uv: vec2f, path: ptr<function, Path>, depth: ptr<function, i32>, si: p
           (*si).wavelength
         );
         let backgroundMisWeight = select(bsdfMISWeight((*path).scatteringPdf,
-            envMapPdf(cartesianToEquirect((*path).ray.d)) * rtUniform.envLightPmf),
+            envMapPdf(environmentUv((*path).ray.d)) * rtUniform.envLightPmf),
             1.0, (*path).scatteringIsDelta);
           (*path).li += backgroundMisWeight * (*path).beta * bg.rgb * bg.a;
         (*path).alpha = max((*path).alpha, bg.a);
         (*path).abort = true;
         return;
       }
-      let _uv = cartesianToEquirect((*path).ray.d);
+      let _uv = environmentUv((*path).ray.d);
       var emission = textureLinear(envMap, _uv).rgb;
       let misWeight = bsdfMISWeight(
         (*path).scatteringPdf,

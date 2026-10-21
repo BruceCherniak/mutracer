@@ -34,8 +34,16 @@ fn cartesianToEquirect(pointOnSphere: vec3f) -> vec2f {
   if (phi < 0.0) {
     phi += TWOPI;
   }
-  let theta = acos(pointOnSphere.y);
+  let theta = acos(clamp(pointOnSphere.y, -1.0, 1.0));
   return vec2f(phi * 0.5 * INVPI, theta * INVPI);
+}
+
+fn environmentOrientation() -> mat3x3f {
+  return mat3x3f(rtUniform.environmentRotation[0].xyz, rtUniform.environmentRotation[1].xyz, rtUniform.environmentRotation[2].xyz);
+}
+
+fn environmentUv(worldDirection: vec3f) -> vec2f {
+  return cartesianToEquirect(transpose(environmentOrientation()) * worldDirection);
 }
 
 fn getEnvmapV(u: f32, vOffset: ptr<function, i32>, pdf: ptr<function, vec2f>) -> f32 {
@@ -109,7 +117,7 @@ fn sampleEnvmap(random: vec2f, uv: ptr<function, vec2f>, pdf: ptr<function, f32>
 
   *pdf = partialPdf.x * partialPdf.y * INVPI2 / (2.0 * sinTheta);
 
-  return dir;
+  return environmentOrientation() * dir;
 }
 
 fn envMapPdf(_uv: vec2f) -> f32 {

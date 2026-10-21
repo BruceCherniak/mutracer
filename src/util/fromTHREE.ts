@@ -1123,7 +1123,10 @@ function convertScene(scene: THREE.Scene, options: FromTHREESceneOptions, store:
   const environmentLight = threeEnvironment && environmentMap
     ? retainLight(store, threeEnvironment, new EnvironmentLight({map: environmentMap, intensity: scene.environmentIntensity})) as EnvironmentLight
     : undefined;
-  if (environmentLight) lights.push(environmentLight);
+  if (environmentLight) {
+    environmentLight.transform = scene.matrix.clone().makeRotationFromEuler(scene.environmentRotation).elements.slice();
+    lights.push(environmentLight);
+  }
 
   const grounded = scene.userData.mutracerGroundedSkybox as
     | {

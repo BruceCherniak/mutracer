@@ -11,7 +11,9 @@ export class SceneEnvironmentCache {
   update(lights: readonly SceneLight[]) {
     const ambient = lights.filter(light => light.type === 'AmbientLight');
     const environment = lights.filter(light => light.type === 'EnvironmentLight');
-    const next = [...ambient, ...environment].map(snapshotFields);
+    // Orientation changes only the shader directions, not the radiance or its CDF.
+    const next = [...ambient.map(snapshotFields), ...environment.map(light =>
+      [light, light.map, light.map.image, light.map.version, light.map.source, light.intensity])];
     if (next.length !== this._snapshot.length ||
       next.some((value, i) => !snapshotsEqual(value, this._snapshot[i]))) {
       this._image = next.length ? generateEnvMapFromSceneComponents(ambient, environment) : undefined;
