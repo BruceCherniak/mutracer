@@ -34,7 +34,7 @@ impl From<RenderStatus> for RenderLoopStatus {
     }
 }
 
-/// Activity state embedded in a [`Sync`] implementation.
+/// Activity state embedded in a [`LoopSync`] implementation.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SyncActivity {
     active: bool,
@@ -57,7 +57,7 @@ impl SyncActivity {
 }
 /// External scene, camera or interaction source. `update` writes the latest
 /// state to the engine before each tick's commit; activity marks motion.
-pub trait Sync: Send {
+pub trait LoopSync: Send {
     /// Writes the latest external state to the engine before its commit.
     fn update(&mut self);
     fn activity(&self) -> &SyncActivity;
@@ -80,7 +80,7 @@ pub trait Sync: Send {
     }
 }
 /// A sync shared between the loop and the code that marks its activity.
-pub type SharedSync = Arc<Mutex<dyn Sync>>;
+pub type SharedSync = Arc<Mutex<dyn LoopSync>>;
 
 /// Which render the loop refines this tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -247,8 +247,8 @@ pub(super) fn loop_status(status: RenderStatus, previewing: bool) -> RenderLoopS
     }
 }
 
-type StatusListener = Box<dyn FnMut(RenderLoopStatus, RenderLoopStatus) + Send>;
-type SampleListener = Box<dyn FnMut(&SampleEvent) + Send>;
+type StatusListener = Arc<Mutex<dyn FnMut(RenderLoopStatus, RenderLoopStatus) + Send>>;
+type SampleListener = Arc<Mutex<dyn FnMut(&SampleEvent) + Send>>;
 #[derive(Default)]
 struct Listeners {
     next: u64,
@@ -279,23 +279,26 @@ impl Drop for LoopSubscription {
         }
     }
 }
-/// Updates the status and calls status listeners outside the lock.
+/// Updates the status and calls status listeners outside the lock. A listener
+/// removed by an earlier callback of the same dispatch is skipped.
 fn set_status(shared: &Mutex<Shared>, status: RenderLoopStatus) -> RenderLoopStatus {
-    let (previous, mut listeners) = {
+    let (previous, listeners) = {
         let mut shared = shared.lock().unwrap_or_else(|e| e.into_inner());
         if shared.status == status {
             return status;
         }
         let previous = std::mem::replace(&mut shared.status, status);
-        (previous, std::mem::take(&mut shared.listeners.status))
+        (previous, shared.listeners.status.clone())
     };
-    for (_, listener) in &mut listeners {
-        listener(status, previous);
+    for (id, listener) in listeners {
+        if registered(shared, |l| l.status.iter().any(|(i, _)| *i == id)) {
+            (listener.lock().unwrap_or_else(|e| e.into_inner()))(status, previous);
+        }
     }
-    let mut shared = shared.lock().unwrap_or_else(|e| e.into_inner());
-    listeners.append(&mut shared.listeners.status);
-    shared.listeners.status = listeners;
     status
+}
+fn registered(shared: &Mutex<Shared>, test: impl FnOnce(&Listeners) -> bool) -> bool {
+    test(&shared.lock().unwrap_or_else(|e| e.into_inner()).listeners)
 }
 
 /// Built-in interactive policy implemented entirely through the L1 API.
@@ -383,16 +386,17 @@ impl RenderLoop {
             let Some(shared) = forward.upgrade() else {
                 return;
             };
-            let mut listeners = {
-                let mut shared = shared.lock().unwrap_or_else(|e| e.into_inner());
-                std::mem::take(&mut shared.listeners.samples)
-            };
-            for (_, listener) in &mut listeners {
-                listener(event);
+            let listeners = shared
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .listeners
+                .samples
+                .clone();
+            for (id, listener) in listeners {
+                if registered(&shared, |l| l.samples.iter().any(|(i, _)| *i == id)) {
+                    (listener.lock().unwrap_or_else(|e| e.into_inner()))(event);
+                }
             }
-            let mut shared = shared.lock().unwrap_or_else(|e| e.into_inner());
-            listeners.append(&mut shared.listeners.samples);
-            shared.listeners.samples = listeners;
         });
         let mut syncs: Vec<SharedSync> = Vec::new();
         for sync in options.syncs {
@@ -458,7 +462,10 @@ impl RenderLoop {
         let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
         shared.listeners.next += 1;
         let id = shared.listeners.next;
-        shared.listeners.status.push((id, Box::new(listener)));
+        shared
+            .listeners
+            .status
+            .push((id, Arc::new(Mutex::new(listener))));
         LoopSubscription {
             shared: Arc::downgrade(&self.shared),
             id,
@@ -472,7 +479,10 @@ impl RenderLoop {
         let mut shared = self.shared.lock().unwrap_or_else(|e| e.into_inner());
         shared.listeners.next += 1;
         let id = shared.listeners.next;
-        shared.listeners.samples.push((id, Box::new(listener)));
+        shared
+            .listeners
+            .samples
+            .push((id, Arc::new(Mutex::new(listener))));
         LoopSubscription {
             shared: Arc::downgrade(&self.shared),
             id,

@@ -207,7 +207,7 @@ struct CameraSync {
     step: u32,
     base: Camera,
 }
-impl Sync for CameraSync {
+impl LoopSync for CameraSync {
     fn update(&mut self) {
         if self.moving {
             self.step += 1;
@@ -569,4 +569,77 @@ fn sync_activity_and_consecutive_edits_drive_changing() {
     assert!(!render_loop.changing());
     sync.lock().unwrap().dispose();
     assert!(!sync.lock().unwrap().active());
+}
+
+#[test]
+fn unsubscribing_inside_a_callback_stops_later_events() {
+    let _test = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = software_engine(Backend::Software) else {
+        return;
+    };
+    engine.display().set_size(8, 6).unwrap();
+    engine.set_scene(&lit_scene()).unwrap();
+    let mut render_loop = RenderLoop::new(
+        &engine,
+        RenderLoopOptions {
+            final_render: LoopRender::Settings(RenderSettings {
+                max_samples: 4,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    // Each callback drops its own subscription on its first call.
+    fn once<S: Send + 'static>() -> (Arc<Mutex<Option<S>>>, Arc<Mutex<u32>>) {
+        (Arc::new(Mutex::new(None)), Arc::new(Mutex::new(0)))
+    }
+    let (status_slot, status_calls) = once::<LoopSubscription>();
+    let (slot, calls) = (status_slot.clone(), status_calls.clone());
+    *status_slot.lock().unwrap() = Some(render_loop.on_status(move |_, _| {
+        *calls.lock().unwrap() += 1;
+        slot.lock().unwrap().take();
+    }));
+    let (loop_sample_slot, loop_sample_calls) = once::<LoopSubscription>();
+    let (slot, calls) = (loop_sample_slot.clone(), loop_sample_calls.clone());
+    *loop_sample_slot.lock().unwrap() = Some(render_loop.on_sample(move |_| {
+        *calls.lock().unwrap() += 1;
+        slot.lock().unwrap().take();
+    }));
+    let (render_slot, render_calls) = once::<Subscription>();
+    let (slot, calls) = (render_slot.clone(), render_calls.clone());
+    *render_slot.lock().unwrap() = Some(render_loop.final_render().on_sample(move |_| {
+        *calls.lock().unwrap() += 1;
+        slot.lock().unwrap().take();
+    }));
+    let (engine_slot, engine_calls) = once::<Subscription>();
+    let (slot, calls) = (engine_slot.clone(), engine_calls.clone());
+    *engine_slot.lock().unwrap() = Some(engine.on(move |_| {
+        *calls.lock().unwrap() += 1;
+        slot.lock().unwrap().take();
+    }));
+    // Control listeners that stay subscribed.
+    let statuses = Arc::new(Mutex::new(0));
+    let counted = statuses.clone();
+    let _statuses = render_loop.on_status(move |_, _| *counted.lock().unwrap() += 1);
+    let samples = Arc::new(Mutex::new(0));
+    let counted = samples.clone();
+    let _samples = render_loop.on_sample(move |_| *counted.lock().unwrap() += 1);
+    let progress = Arc::new(Mutex::new(0));
+    let counted = progress.clone();
+    let _progress = engine.on(move |_| *counted.lock().unwrap() += 1);
+    tick_until(&mut render_loop, |_, s| s == RenderLoopStatus::Finished);
+    assert!(*statuses.lock().unwrap() >= 2);
+    assert_eq!(*samples.lock().unwrap(), 4);
+    assert!(*progress.lock().unwrap() >= 2);
+    for (name, calls) in [
+        ("loop status", &status_calls),
+        ("loop sample", &loop_sample_calls),
+        ("render sample", &render_calls),
+        ("engine", &engine_calls),
+    ] {
+        assert_eq!(*calls.lock().unwrap(), 1, "{name}");
+    }
 }

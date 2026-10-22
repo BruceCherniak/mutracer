@@ -401,14 +401,22 @@ impl Engine {
                 let listeners = self.inner.listeners.lock().unwrap();
                 (listeners.engine.clone(), listeners.samples.clone())
             };
+            // A listener removed by an earlier callback is no longer called.
+            let registered = |id: u64| {
+                let listeners = self.inner.listeners.lock().unwrap();
+                listeners.engine.iter().any(|(i, _)| *i == id)
+                    || listeners.samples.iter().any(|(i, _, _)| *i == id)
+            };
             for event in &engine {
-                for (_, listener) in &engine_listeners {
-                    (listener.lock().unwrap())(event);
+                for (id, listener) in &engine_listeners {
+                    if registered(*id) {
+                        (listener.lock().unwrap())(event);
+                    }
                 }
             }
             for (render, event) in &samples {
-                for (_, owner, listener) in &sample_listeners {
-                    if owner == render {
+                for (id, owner, listener) in &sample_listeners {
+                    if owner == render && registered(*id) {
                         (listener.lock().unwrap())(event);
                     }
                 }

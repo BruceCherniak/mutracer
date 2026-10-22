@@ -30,8 +30,8 @@ pub use render::{
     SampleEvent, SamplingPattern,
 };
 pub use render_loop::{
-    LoopRender, LoopSubscription, RenderLoop, RenderLoopOptions, RenderLoopStatus, SelectInfo,
-    Selection, SharedSync, Sync, SyncActivity, select_default,
+    LoopRender, LoopSubscription, LoopSync, RenderLoop, RenderLoopOptions, RenderLoopStatus,
+    SelectInfo, Selection, SharedSync, SyncActivity, select_default,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;

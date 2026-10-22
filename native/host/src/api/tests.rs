@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn handles_can_move_between_threads() {
-    fn shared<T: Send + std::marker::Sync>() {}
+    fn shared<T: Send + Sync>() {}
     shared::<Engine>();
     shared::<Render>();
     shared::<Display>();
