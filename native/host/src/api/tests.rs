@@ -1,5 +1,5 @@
 use super::display::{Selection, select};
-use super::engine::{camera_offset, override_descriptor};
+use super::engine::{camera_offset, override_descriptor, override_shared};
 use super::render::{Readiness, flip_rows};
 use super::*;
 use crate::context;
@@ -180,6 +180,20 @@ fn descriptor_override_replaces_only_render_owned_fields() {
             assert_eq!(a, b, "word {index}");
         }
     }
+    // The shared variant reuses the scene when nothing changes and copies otherwise.
+    let shared = Arc::new(bytes.clone());
+    let same = override_shared(&shared, [33, 21], 2, Some(&camera)).unwrap();
+    assert!(Arc::ptr_eq(&same, &shared));
+    for (size, quality, camera) in [([34, 21], 2, Some(&camera)), ([33, 21], 0, None)] {
+        let other = override_shared(&shared, size, quality, camera).unwrap();
+        assert!(!Arc::ptr_eq(&other, &shared));
+        assert_eq!(
+            *other,
+            override_descriptor(&shared, size, quality, camera).unwrap()
+        );
+    }
+    let unaligned = Arc::new(scene[..scene.len() - 2].to_vec());
+    assert!(override_shared(&unaligned, [1, 1], 0, None).is_err());
     let kept = override_descriptor(&scene, [1, 1], 0, None).unwrap();
     assert_eq!(&kept[at..at + 128], &scene[at..at + 128]);
     assert_eq!(word(&kept, h::QUALITY_FLAGS), 4);
@@ -1826,3 +1840,48 @@ fn denoise_current_filters_paused_samples_and_progressive_resumes() {
     assert_eq!(uploads(), (5, true), "one upload per denoised image");
 }
 
+/// A shared scene reaches the L0 context without copies, and `update` treats a new
+/// Arc as a change without comparing bytes.
+#[test]
+fn shared_scenes_are_committed_without_copies() {
+    let _test = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = software_engine(Backend::Software) else {
+        return;
+    };
+    let settings = RenderSettings {
+        max_samples: 3,
+        size: RenderSize::Fixed {
+            width: 16,
+            height: 12,
+        },
+        ..Default::default()
+    };
+    // Already the render's size and quality bits, so the render needs no override.
+    let bytes = expected_descriptor(&lit_scene(), [16, 12], settings.quality(), None);
+    let scene = Arc::new(bytes.clone());
+    engine.set_scene_shared(scene.clone()).unwrap();
+    let render = Render::new(&engine, settings.clone()).unwrap();
+    assert!(engine.update().unwrap());
+    assert_eq!(finish(&render), RenderStatus::Finished);
+    // The caller, the engine's pending and committed scene, and the L0 context.
+    assert_eq!(Arc::strong_count(&scene), 4);
+    let expected = oracle(0, &bytes, &settings.l0(3, 0), 3);
+    assert_bytes(&images(&render), &expected, "shared scene");
+    // The same Arc changes nothing; an equal new one is a change.
+    engine.set_scene_shared(scene.clone()).unwrap();
+    assert!(!engine.update().unwrap());
+    assert_eq!(render.samples(), 3);
+    let next = Arc::new(bytes.clone());
+    engine.set_scene_shared(next.clone()).unwrap();
+    assert!(engine.update().unwrap());
+    assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Incremental));
+    assert_eq!(Arc::strong_count(&scene), 1);
+    assert_eq!(Arc::strong_count(&next), 4);
+    assert_eq!(finish(&render), RenderStatus::Finished);
+    assert_bytes(&images(&render), &expected, "shared scene after an edit");
+    // A copied scene with equal bytes is unchanged, as before.
+    engine.set_scene(&bytes).unwrap();
+    assert!(!engine.update().unwrap());
+}

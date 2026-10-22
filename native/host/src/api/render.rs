@@ -1,7 +1,7 @@
 //! Independent accumulations. Each render commits the engine scene to its own L0 context.
 use super::engine::{
     Camera, Engine, EngineEvent, ProgressStage, QUALITY_BEVEL, QUALITY_DISPERSION, State,
-    Subscription, override_descriptor,
+    Subscription, override_shared,
 };
 use super::{Result, Status, error, l0, l0_blocking, l0_result};
 use crate::context::{self, CommitOutcome, CommitPath};
@@ -648,7 +648,7 @@ fn commit_step(
         drain(render)?;
     }
     let camera = key.camera_override.as_ref().or(engine_camera.as_ref());
-    let bytes = override_descriptor(&scene, key.size, key.quality, camera)?;
+    let bytes = override_shared(&scene, key.size, key.quality, camera)?;
     let settings = key.settings;
     let mut outcome = CommitOutcome::Done;
     let mut message = [0 as std::ffi::c_char; 1024];

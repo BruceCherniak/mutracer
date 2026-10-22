@@ -204,6 +204,27 @@ pub(super) fn camera_offset(scene: &[u8]) -> Result<usize> {
     }
     Ok(offset * WORD_BYTES)
 }
+/// [`override_descriptor`] sharing `scene` when it already has these values.
+pub(super) fn override_shared(
+    scene: &Arc<Vec<u8>>,
+    size: [u32; 2],
+    quality: u32,
+    camera: Option<&[u8; 128]>,
+) -> Result<Arc<Vec<u8>>> {
+    let camera_at = camera_offset(scene)?;
+    let word =
+        |index: usize| u32::from_le_bytes(scene[index * 4..index * 4 + 4].try_into().unwrap());
+    let flags = word(header::QUALITY_FLAGS);
+    let same = word(header::WIDTH) == size[0]
+        && word(header::HEIGHT) == size[1]
+        && ((flags & !(QUALITY_BEVEL | QUALITY_DISPERSION)) | quality) == flags
+        && camera.is_none_or(|camera| scene[camera_at..camera_at + 128] == camera[..]);
+    if same {
+        Ok(scene.clone())
+    } else {
+        override_descriptor(scene, size, quality, camera).map(Arc::new)
+    }
+}
 /// The descriptor a render commits: the engine scene with this render's size,
 /// bevel/dispersion quality bits and camera. Other quality bits stay the scene's.
 pub(super) fn override_descriptor(
@@ -266,6 +287,8 @@ impl Drop for Subscription {
 pub(super) struct State {
     pub(super) disposed: bool,
     source_scene: Option<Arc<Vec<u8>>>,
+    /// Set by `set_scene_shared`: a new Arc is a changed scene, without comparing bytes.
+    source_shared: bool,
     source_camera: Option<Camera>,
     /// Committed by `update`; renders read only these.
     pub(super) scene: Option<Arc<Vec<u8>>>,
@@ -342,6 +365,7 @@ impl Engine {
                 state: Mutex::new(State {
                     disposed: false,
                     source_scene: None,
+                    source_shared: false,
                     source_camera: None,
                     scene: None,
                     camera: None,
@@ -429,7 +453,19 @@ impl Engine {
     /// record are replaced per render; the scene's other fields are used as given.
     pub fn set_scene(&self, descriptor: &[u8]) -> Result<()> {
         camera_offset(descriptor)?;
-        self.live()?.source_scene = Some(Arc::new(descriptor.to_vec()));
+        let mut state = self.live()?;
+        state.source_scene = Some(Arc::new(descriptor.to_vec()));
+        state.source_shared = false;
+        Ok(())
+    }
+    /// Like [`Engine::set_scene`], without copying: renders share the descriptor,
+    /// which must not change afterwards. `update` treats a new Arc as a changed
+    /// scene without comparing bytes; passing the committed Arc again changes nothing.
+    pub fn set_scene_shared(&self, descriptor: Arc<Vec<u8>>) -> Result<()> {
+        camera_offset(&descriptor)?;
+        let mut state = self.live()?;
+        state.source_scene = Some(descriptor);
+        state.source_shared = true;
         Ok(())
     }
     /// Records the camera for every render; `None` uses the scene's camera record.
@@ -448,10 +484,10 @@ impl Engine {
             state.last_error = None;
             let mut changed = false;
             if let Some(source) = state.source_scene.clone() {
-                let same = state
-                    .scene
-                    .as_ref()
-                    .is_some_and(|scene| Arc::ptr_eq(scene, &source) || **scene == *source);
+                let shared = state.source_shared;
+                let same = state.scene.as_ref().is_some_and(|scene| {
+                    Arc::ptr_eq(scene, &source) || !shared && **scene == *source
+                });
                 if !same {
                     state.scene = Some(source.clone());
                     state.scene_revision += 1;

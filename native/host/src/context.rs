@@ -455,6 +455,7 @@ pub unsafe extern "C" fn mt_context_commit_with_settings(
             input,
             length,
             settings,
+            None,
             CommitPath::Any,
             &mut CommitOutcome::Done,
             error,
@@ -481,10 +482,11 @@ pub(crate) enum CommitOutcome {
     /// Another context is preparing, so the incremental path was not attempted.
     Blocked,
 }
-/// L1 entry point: borrowed descriptor and settings, with an explicit commit path.
+/// L1 entry point: a shared descriptor, which the context keeps without copying,
+/// and borrowed settings, with an explicit commit path.
 pub(crate) fn commit_path(
     handle: u64,
-    bytes: &[u8],
+    bytes: &Arc<Vec<u8>>,
     settings: &settings::RenderSettings,
     path: CommitPath,
     outcome: &mut CommitOutcome,
@@ -496,6 +498,7 @@ pub(crate) fn commit_path(
             bytes.as_ptr(),
             bytes.len(),
             settings,
+            Some(bytes),
             path,
             outcome,
             error.as_mut_ptr(),
@@ -510,6 +513,8 @@ unsafe fn commit_with_settings(
     input: *const u8,
     length: usize,
     settings: *const settings::RenderSettings,
+    // The same bytes as `input`, already owned; the C ABI copies `input` instead.
+    shared: Option<&Arc<Vec<u8>>>,
     path: CommitPath,
     outcome: &mut CommitOutcome,
     error: *mut c_char,
@@ -569,7 +574,7 @@ unsafe fn commit_with_settings(
         let valid = scene::validate_changed(bytes, &unchanged).is_ok();
         let validated = started.elapsed();
         // One copy of the caller's descriptor serves the sync and, once applied, the context.
-        let next = Arc::new(bytes.to_vec());
+        let next = shared.cloned().unwrap_or_else(|| Arc::new(bytes.to_vec()));
         let copied = started.elapsed();
         let sync = valid
             .then(|| {
@@ -803,7 +808,7 @@ unsafe fn commit_with_settings(
         context.render_seed = seed;
         context.render_bounces = bounces;
         context.fallback_reason = fallback_reason;
-        context.descriptor = Some(Arc::new(bytes.to_vec()));
+        context.descriptor = Some(shared.cloned().unwrap_or_else(|| Arc::new(bytes.to_vec())));
         context.last_commit = COMMIT_FULL;
         context.job = None;
         context.failed = false;
