@@ -1,4 +1,5 @@
 //! Small native example: glTF input → native MuTracer library → egui image.
+mod animation;
 mod controls;
 mod denoise;
 mod dock;
@@ -59,6 +60,7 @@ struct Viewer {
     backend: u32,
     backend_status: String,
     model: Model,
+    animation_clock: std::time::Instant,
     descriptor: Option<Descriptor>,
     camera: Camera,
     drag: input::ViewportDrag,
@@ -156,6 +158,7 @@ impl Viewer {
             gpu_texture: None,
             commit: None,
             model,
+            animation_clock: std::time::Instant::now(),
             descriptor,
             camera,
             drag: input::ViewportDrag::default(),
@@ -311,6 +314,7 @@ impl Viewer {
                                     self.selected_mesh = None;
                                     self.picking_focus = false;
                                     self.object_query.clear();
+                                    self.animation_clock = std::time::Instant::now();
                                 }
                                 self.samples = 0;
                                 self.render_generation = generation;
@@ -417,7 +421,30 @@ impl Viewer {
             }
         }
         self.frame_pending = false;
-        let held = ctx.input(|i| i.pointer.any_down());
+        // A moving pose must get a displayed sample before the next pose can
+        // replace it, including when preparation falls back to the worker.
+        // Explicit seeks can supersede that pose, like any other user edit.
+        let now = std::time::Instant::now();
+        let animation_ready = self.loading.is_none()
+            && self.candidate.is_none()
+            && self.change != Change::Scene
+            && !self.renderer.busy();
+        if let Some(animation) = &mut self.model.animation {
+            if !animation.playing || !self.running || !animation_ready {
+                self.animation_clock = now;
+            } else if !animation.pending
+                && self.frame_samples > 0
+                && self.frame_generation == self.render_generation
+            {
+                animation.advance(now.duration_since(self.animation_clock).as_secs_f32());
+                self.animation_clock = now;
+            }
+        }
+        if animation_ready && self.model.apply_animation()? {
+            self.dirty(Change::Transform);
+        }
+        let playing = self.model.animation.as_ref().is_some_and(|a| a.playing);
+        let held = ctx.input(|i| i.pointer.any_down()) || playing && self.running;
         if !self.renderer.busy() {
             // Edits commit the whole descriptor. While the last commit applied
             // incrementally, edits commit on this thread like the frame they
@@ -495,7 +522,14 @@ impl Viewer {
             }
         }
         if let Some(output) = self.denoiser.as_mut().and_then(|d| d.poll()) {
-            if output.generation == self.generation && output.samples == self.frame_samples {
+            if playing {
+                self.last_denoise = None;
+                self.denoise_status.clear();
+            }
+            if !playing
+                && output.generation == self.generation
+                && output.samples == self.frame_samples
+            {
                 match output.pixels {
                     Ok(pixels) => {
                         self.denoised = pixels;
@@ -508,6 +542,7 @@ impl Viewer {
             }
         }
         if self.denoise
+            && !playing
             && self.display_settings.output == 0
             && !held
             && !self.renderer.busy()
@@ -582,6 +617,11 @@ impl Viewer {
         if self.renderer.busy()
             || self.running && self.samples < self.settings.max_samples
             || self.change != Change::None
+            || self
+                .model
+                .animation
+                .as_ref()
+                .is_some_and(|a| a.pending || a.playing && self.running)
         {
             ctx.request_repaint_after(Duration::from_millis(16));
         }

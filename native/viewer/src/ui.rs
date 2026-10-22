@@ -24,7 +24,7 @@ impl Viewer {
         }
         if !ctx.egui_wants_keyboard_input() {
             if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
-                self.running = !self.running;
+                self.toggle_animation_or_render();
             }
             if ctx.input(|i| i.key_pressed(egui::Key::D)) {
                 self.denoise = !self.denoise;
@@ -869,6 +869,7 @@ impl Viewer {
                 .truncate(),
             );
             let mesh = &mut self.model.meshes[id];
+            let before = mesh.transform;
             let mut position = mesh.transform.w_axis.truncate();
             let mut changed = false;
             controls::section(ui, "Transform", |ui| {
@@ -911,6 +912,9 @@ impl Viewer {
                 });
             });
             if changed {
+                if let Some(animation) = &mut self.model.animation {
+                    animation.edit_transform(id, before, self.model.meshes[id].transform);
+                }
                 self.model.refresh_bounds();
                 self.dirty(Change::Transform);
             }

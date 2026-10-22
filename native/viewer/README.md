@@ -127,8 +127,17 @@ the output directory. See the [native guide](../README.md) for platform backends
   mode. A transparent background keeps the lighting, and exported PNGs retain
   alpha. In Studio, the Environment background shows the ambient fill.
 - The floating render toolbar shows progress and sample count, with pause/resume,
-  restart, maximum samples, **Res** and denoise controls. **Space** pauses or
-  resumes rendering; **D** toggles denoising. The settings button opens **Render**.
+  restart, maximum samples, **Res** and denoise controls. For models without
+  animation, **Space** pauses or resumes rendering. **D** toggles denoising.
+  The settings button opens **Render**.
+- Animated models show a timeline in the toolbar. The first clip starts paused
+  at time zero, at 1× speed with **Loop** enabled. Use its play button or **Space**
+  to play/pause, drag the timeline to pause at a chosen time, or select another
+  clip to return to its start. Speeds are 0.25×, 0.5×, 1× and 2×. With looping
+  disabled, playback stops at the end; playing again restarts the clip.
+  Pausing rendering also freezes playback; playing a clip resumes rendering.
+  Each changed pose restarts accumulation. Pause animation to let the image
+  converge and denoise. Deforming large meshes can reduce playback speed.
 - **Res** offers 25%, 50% (default), 75% or 100% of the viewport's pixel size,
   including display scaling up to 2×. It updates after window or panel resizing
   settles. Fixed 720p (1280 × 720), 1080p (1920 × 1080), 2K (2560 × 1440) and
@@ -178,12 +187,15 @@ resolution for more responsive interaction; a fixed frame rate is not guaranteed
 ## Supported inputs and limits
 
 The example displays the default glTF scene, or the first scene if none is marked
-default. Static triangle meshes, strips and fans, node transforms, shared mesh
+default. Triangle meshes, strips and fans, node transforms, shared mesh
 instances, RGB vertex colors, two UV sets and core metallic/roughness PBR are
 supported. Missing normals and tangents are generated. Meshopt compression,
-quantized geometry, WebP textures, mesh instancing, the initial static pose of skinned meshes (up to four joint influences) and default
-morph weights are supported. Scalar transmission/IOR, unlit materials and emissive
-strength are also supported.
+quantized geometry, WebP textures, mesh instancing, skinned meshes (up to four
+joint influences) and morph targets are supported. Animation clips support node
+translation/rotation/scale, skeletal motion and morph weights with STEP, LINEAR
+or CUBICSPLINE interpolation. Model camera, light and material animation are not
+used. Scalar transmission/IOR, unlit materials and emissive strength are also
+supported.
 
 Imported model textures are limited to 512 pixels on their longest side; models
 with many images use a lower limit. Uploaded and downloaded textures can reach
@@ -196,9 +208,8 @@ UV transforms are unsupported. Imported vertex-color alpha, occlusion and transm
 are ignored. Transmission maps can be assigned manually in **Textures**.
 Unsupported optional extensions are reported in the panel; unsupported required
 extensions return an error.
-Animations are not played. Sparse quantized attributes are unsupported.
-Draco and Basis/KTX2 assets need conversion before loading. This is a
-static sample viewer, not full glTF feature coverage.
+Sparse quantized attributes are unsupported. Draco and Basis/KTX2 assets need
+conversion before loading.
 
 File size is limited to 128 MiB, combined model buffers to 512 MiB and source
 material images to 64M pixels each, and environments to 4M pixels. The native
