@@ -48,7 +48,8 @@ Examples include `baseline`, `textures`, `transforms`, `orthographic`, `emissive
 The example host uses `mt_probe_render_scene` from
 [mutracer-debug.h](include/mutracer-debug.h), a debug and validation entry point
 that may change without notice. Applications render caller-supplied data with
-the [context API](#keep-a-scene-alive-and-read-pixels).
+the [engine API](#render-with-the-engine-api) or the lower-level
+[context API](#keep-a-scene-alive-and-read-pixels).
 [examples/minimal-host.c](examples/minimal-host.c) is a complete program of
 about 50 lines: it builds a scene with the header-only builder in
 [mutracer-scene-builder.h](include/mutracer-scene-builder.h), commits it,
@@ -60,6 +61,56 @@ The example's output directory contains `render.png`, `render.rgba32f`, `normal.
 `albedo.rgba32f` and `result.json`. The PNG is a Reinhard/sRGB preview. Float files
 contain linear sample averages as little-endian f32 RGBA, bottom row first;
 dimensions are in `result.json`. Normal guides are not renormalized after averaging.
+
+## Render with the engine API
+
+```sh
+npm run native:engine
+```
+
+[mutracer-engine.h](include/mutracer-engine.h) provides the object model of the
+browser library. An engine owns the device and the committed scene and camera.
+Each render is an independent accumulation with its own size and settings. The
+display tone-maps, presents and exports images, and a render loop runs the
+interactive policy. Rust hosts use the same objects through
+`mutracer_native_probe::api`.
+[examples/engine-host.c](examples/engine-host.c) renders one descriptor through
+an engine, a render and a render loop and compares the images with a fresh
+context. The command above builds it, runs it on four scenes with both backends
+and saves the results under `.native-build/engine/`.
+
+An interactive host creates an engine, sets the scene, creates a render loop and
+calls `mt_render_loop_tick` every frame while `mt_render_loop_needs_tick`
+reports work. An offline host creates a render, calls `mt_engine_update`, then
+`mt_render_converge`, and reads the image with `mt_render_read_pixels` (linear
+floats) or `mt_display_read_pixels` (RGBA8 or PNG with the display settings).
+
+`mt_engine_set_scene` and `mt_engine_set_camera` only record the inputs;
+`mt_engine_update` commits them to every render. Edits that a context applies
+incrementally ([Editing a scene](#editing-a-scene)) finish during the call. Full
+preparation runs on a library thread while the previous image stays readable
+and presentable, and the render reports `MT_RENDER_PREPARING` until it is
+published. The engine replaces each render's width, height, bevel and
+dispersion quality bits and, when set, the camera record of the descriptor.
+
+Render options default to the browser library's values (2048 samples, 3
+bounces, 4 light candidates, bevel, 3 dispersion wavelengths); context
+settings keep their own defaults. Images are top row first. Use an engine and
+its objects from one thread at a time; only `mt_render_cancel` may be called
+from another thread. Callbacks run synchronously inside the calls that produce
+them. The header documents every option, default, error and lifetime.
+
+Differences from the browser library:
+
+- Every render prepares and holds its own copy of the scene, and changing a
+  render's size, sampling pattern or bevel samples prepares it again. Adaptive
+  resolution is therefore unavailable, and a render loop has no preview render
+  unless you request one.
+- Converge blocks its thread. The host drives the loop with
+  `mt_render_loop_tick` instead of start and stop.
+- Denoising uses OIDN only. Tiles, alpha blend strategies, adaptive sampling,
+  vignette, bloom, shadow catchers, depth readback and device-loss events are
+  not available.
 
 ## Denoise caller-owned images
 
@@ -90,7 +141,9 @@ and memory ownership. Browser/native denoising parity is not guaranteed.
 npm run native:context
 ```
 
-Use [mutracer-context.h](include/mutracer-context.h) for
+The lower-level context API under the engine API: one context holds one scene,
+one resolution and one accumulation. Use
+[mutracer-context.h](include/mutracer-context.h) for
 `create → commit → render → read_pixels → destroy`. Rendering adds samples;
 for example, two calls with 32 samples produce 64 accumulated samples. Readback
 copies HDR, normal or albedo pixels into caller-owned memory. The context API
@@ -219,7 +272,7 @@ Build/run settings:
 - `MUTRACER_NATIVE_OUTPUT`: output directory; defaults are `.native-build/scene-core/`
   for `native:scene`, `.native-build/context-core/` for `native:context` and
   `.native-build/job-core/` for `native:jobs`; `native:camera` uses
-  `.native-build/camera-core/`.
+  `.native-build/camera-core/` and `native:engine` uses `.native-build/engine/`.
 - `MUTRACER_NATIVE_SAMPLES`: verification samples, default 256; range 1..4096
   for scene verification, 8..4096 for context, job and camera verification.
 - `CARGO_TARGET_DIR`: optional reusable Cargo build directory.
@@ -256,4 +309,5 @@ Raw scenes support the [intersection modes above](#intersection-backend).
 Topology-changing geometry updates, texture/emission material updates, device-loss recovery,
 browser display parity and a stable release ABI remain pending.
 The viewer provides [native OIDN controls](./viewer/README.md#controls).
-This library does not yet replace the full browser Engine/Render API.
+The engine API covers part of the browser Engine/Render/Display API; see
+[its differences](#render-with-the-engine-api).

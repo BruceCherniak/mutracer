@@ -31,9 +31,11 @@ Use scriptc **0.3.2**, Rust with locked dependencies and a C++20 compiler. Set
 `MUTRACER_SCRIPTC` to the compiler and `MUTRACER_NATIVE_OUTPUT` to an evidence
 folder outside the checkout. `npm run native:scene` builds the composed AOT
 archive and verifies raw-scene preparation and rendering on 33 fixtures.
-`native:context`, `native:jobs`, `native:camera` and `native:settings` build on that
-gate and validate retained scenes, polling/cancellation, camera updates and render
-settings respectively. Use `MUTRACER_NATIVE_SAMPLES` to select the fixture sample
+`native:context`, `native:jobs`, `native:camera`, `native:settings` and `native:engine`
+build on that gate and validate retained scenes, polling/cancellation, camera updates,
+render settings and the engine C API respectively. The engine host compares every
+image with a fresh context in the same process; software must match byte for byte,
+and HWRT differences are counted in `engine-verification.json`. Use `MUTRACER_NATIVE_SAMPLES` to select the fixture sample
 count; cross-stage byte comparisons must use the same count and seed.
 
 The native CI jobs install platform optional packages from `native/toolchain/`.
@@ -44,8 +46,8 @@ npm ci --prefix native/toolchain --include=optional
 MUTRACER_NATIVE_OUTPUT=/absolute/evidence npm run native:ci
 ```
 
-`npm run native:ci:hosts` also runs the context, job, camera and settings C hosts
-(`native:settings` chains the other three) against the fixtures, archive and Cargo
+`npm run native:ci:hosts` also runs the context, job, camera, settings and engine C
+hosts (`native:engine` chains the other four) against the fixtures, archive and Cargo
 target that the CI run just produced, at 8 samples. Run the `native:*` commands
 separately only when iterating on one host; each of them rebuilds and rerenders
 its whole chain.

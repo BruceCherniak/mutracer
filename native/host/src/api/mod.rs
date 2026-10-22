@@ -14,6 +14,7 @@
 //! owns one L0 context on the engine device: N renders prepare and hold N copies
 //! of the scene, and changing a render's size, sampling pattern, sample cap or
 //! bevel samples fully prepares that render again.
+mod abi;
 mod display;
 mod engine;
 mod render;
