@@ -1,6 +1,6 @@
 import {expect, it, vi} from 'vitest';
-import {retainedSceneParameters, sceneMaterialParameters, releaseSceneParameters} from '../../native/src/scene-core';
-import {HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, CAMERA as C, VERSION} from '../../native/src/layout';
+import {retainedSceneParameters, sceneMaterialParameters, sceneLightListParameters, releaseSceneParameters} from '../../native/src/scene-core';
+import {HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, CAMERA as C, LIGHT as L, VERSION} from '../../native/src/layout';
 import * as shaderSource from '../../src/renderer/wgpuShaderSource';
 import {MATERIAL_SHADER_CAPABILITIES, LIGHT_SHADER_CAPABILITIES} from '../../src/renderer/shaderCapabilities';
 import {materialLayoutFields} from '../../src/renderer/materialLayoutSchema';
@@ -27,7 +27,7 @@ function triangleScene() {
   return bytes;
 }
 
-it('keeps native scalar transport edits available in the original pipeline', () => {
+it('keeps native scalar transport and light-list edits available in the original pipeline', () => {
   const token = 4810, generate = vi.spyOn(shaderSource, 'wgpuShaderSource');
   try {
     const scene = retainedSceneParameters(triangleScene(), token);
@@ -48,5 +48,25 @@ it('keeps native scalar transport edits available in the original pipeline', () 
     // Vertex updates can make previously degenerate emissive triangles sampleable.
     expect(Number(constants.LIGHT_CAPABILITIES) & LIGHT_SHADER_CAPABILITIES.emissive)
       .toBe(LIGHT_SHADER_CAPABILITIES.emissive);
+
+    // A retained light list can introduce types absent from the original scene.
+    for (const type of ['RectLight', 'SphereLight', 'DirectionalLight', 'SpotLight'] as const) {
+      const base = triangleScene();
+      const edited = new Uint8Array(base.length + L.WORDS * 4);
+      edited.set(base);
+      const u = new Uint32Array(edited.buffer), f = new Float32Array(edited.buffer), light = base.length / 4;
+      u[H.LENGTH] = edited.length; u[H.LIGHT_COUNT] = 1; u[H.LIGHT_OFFSET] = light;
+      u[light + L.TYPE] = ['RectLight', 'SphereLight', 'DirectionalLight', 'SpotLight'].indexOf(type);
+      f.set([1, 1, 1], light + L.COLOR); f[light + L.INTENSITY] = 1;
+      f.set([1, .5, 1], light + 5);
+      f.set([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 3, 1], light + L.TRANSFORM);
+      const lighting = sceneLightListParameters(edited, token);
+      const packet = new Uint32Array(lighting.buffer);
+      expect(packet[0]).toBe(VERSION.RESOURCE_WRITES);
+      expect(packet[1]).toBe(3);
+      expect(Number(constants.LIGHT_CAPABILITIES) & LIGHT_SHADER_CAPABILITIES[type])
+        .toBe(LIGHT_SHADER_CAPABILITIES[type]);
+      expect(generate.mock.calls.length).toBe(shaderCalls);
+    }
   } finally {releaseSceneParameters(token); vi.restoreAllMocks();}
 });

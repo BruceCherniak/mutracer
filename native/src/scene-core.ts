@@ -44,7 +44,7 @@ import MaterialData from '../../src/renderer/MaterialData.js';
 import { materialUsesMedium } from '../../src/renderer/materialParams.js';
 import { writeRawAtlasPlacement } from '../../src/renderer/textureAtlasPixels.js';
 import { wgpuMaterialConstants } from '../../src/renderer/wgpuMaterialConstants.js';
-import { ALL_MATERIAL_SHADER_CAPABILITIES, lightShaderCapabilities, updateSceneShaderCapabilities } from '../../src/renderer/shaderCapabilities.js';
+import { ALL_MATERIAL_SHADER_CAPABILITIES, ALL_LIGHT_SHADER_CAPABILITIES, updateSceneShaderCapabilities } from '../../src/renderer/shaderCapabilities.js';
 import { wgpuSceneFeatureFlags } from '../../src/renderer/WGPUSceneFeatures.js';
 import { nativeIntersections, nativeHitDiagnostics } from './intersections.wgsl.js';
 import { wgpuShaderSource } from '../../src/renderer/wgpuShaderSource.js';
@@ -337,9 +337,10 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const emissiveCache = new EmissiveTriangleCache();
   const emissive = emissiveCache.collect(prepared.emissiveBindings, prepared.materials);
   // Native scalar edits can enable metal/transmission without replacing the
-  // pipeline, and deformation can turn a degenerate emitter into a light.
+  // pipeline. Light-list edits can change types, and deformation can turn a
+  // degenerate emitter into a light, so retain every light implementation too.
   constants.MATERIAL_CAPABILITIES = ALL_MATERIAL_SHADER_CAPABILITIES;
-  constants.LIGHT_CAPABILITIES = lightShaderCapabilities(lights.map(light => light.type), 1);
+  constants.LIGHT_CAPABILITIES = ALL_LIGHT_SHADER_CAPABILITIES;
   updateSceneShaderCapabilities(constants);
   const {lightData, lightWidth, lightHeight, lightUniform, environmentPmf, choiceCount, totalWeight, emissiveTexels}
     = prepareNativeLightSampling(lights, table, emissive, estimateEnvironmentPower(environment));
