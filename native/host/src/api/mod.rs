@@ -1,6 +1,8 @@
 //! L1 object model matching the browser library: [`Engine`] owns the device and
 //! the committed scene/camera, each [`Render`] is an independently configured
 //! accumulation and [`Display`] composes, presents and exports images.
+//! [`RenderLoop`] implements the browser preview/final policy on top of them;
+//! the host calls [`RenderLoop::tick`] each frame while [`RenderLoop::needs_tick`].
 //!
 //! An engine and its renders/display may be used from any thread, one thread at
 //! a time; calls serialize on an internal lock. Full scene preparation and
@@ -15,6 +17,7 @@
 mod display;
 mod engine;
 mod render;
+mod render_loop;
 
 pub use crate::status::{Status, StatusError as Error};
 pub use display::{Channel, Display, DisplaySettings, Presented, ToneMapping};
@@ -25,6 +28,10 @@ pub use render::{
     CancelToken, ConvergeOptions, ConvergeProgress, ConvergeResult, ConvergeStage, DenoiseSchedule,
     DenoiserOptions, Image, PixelKind, Render, RenderSettings, RenderSize, RenderStatus,
     SampleEvent, SamplingPattern,
+};
+pub use render_loop::{
+    LoopRender, LoopSubscription, RenderLoop, RenderLoopOptions, RenderLoopStatus, SelectInfo,
+    Selection, SharedSync, Sync, SyncActivity, select_default,
 };
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -90,5 +97,7 @@ fn l0_blocking(mut operation: impl FnMut(*mut std::ffi::c_char, usize) -> i32) -
     }
 }
 
+#[cfg(test)]
+mod loop_tests;
 #[cfg(test)]
 mod tests;

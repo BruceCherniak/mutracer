@@ -507,6 +507,15 @@ impl Engine {
             id,
         }
     }
+    /// Whether `set_scene`/`set_camera` recorded inputs that `update` has not committed.
+    pub(super) fn inputs_pending(&self) -> bool {
+        let state = self.lock();
+        let scene = match (&state.source_scene, &state.scene) {
+            (Some(source), Some(scene)) => !Arc::ptr_eq(source, scene),
+            (source, _) => source.is_some(),
+        };
+        scene || state.source_camera.map(|c| c.to_bytes()) != state.camera
+    }
     /// Message of the last error since the previous `update`, if any.
     pub fn last_error(&self) -> Option<String> {
         self.lock().last_error.clone()

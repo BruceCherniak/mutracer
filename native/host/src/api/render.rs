@@ -1005,6 +1005,13 @@ impl Render {
     pub(super) fn engine(&self) -> &Engine {
         &self.engine
     }
+    /// Browser `_complete`: a captured image of the current inputs.
+    pub(super) fn complete(&self) -> bool {
+        readiness(&self.engine.lock(), self.id).complete
+    }
+    pub(super) fn fallback_id(&self) -> Option<u64> {
+        self.get(|_, r| r.fallback).flatten()
+    }
     fn with<T>(&self, f: impl FnOnce(&mut State, u64) -> Result<T>) -> Result<T> {
         let result = {
             let mut state = self.engine.live()?;
@@ -1398,6 +1405,10 @@ impl Render {
                 && r.samples >= r.settings.max_samples
         })
         .unwrap_or(false)
+    }
+    /// The denoiser configuration. Default none.
+    pub fn denoiser(&self) -> Option<DenoiserOptions> {
+        self.get(|_, r| r.denoise.options.clone()).flatten()
     }
     /// Whether OIDN is running on this render's samples.
     pub fn denoising(&self) -> bool {

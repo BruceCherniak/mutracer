@@ -9,11 +9,13 @@ use std::time::{Duration, Instant};
 
 #[test]
 fn handles_can_move_between_threads() {
-    fn shared<T: Send + Sync>() {}
+    fn shared<T: Send + std::marker::Sync>() {}
     shared::<Engine>();
     shared::<Render>();
     shared::<Display>();
     shared::<CancelToken>();
+    fn movable<T: Send>() {}
+    movable::<RenderLoop>();
 }
 
 #[test]
@@ -387,11 +389,11 @@ pub(super) fn lit_scene() -> Vec<u8> {
 // ---- GPU oracle: L1 images equal a fresh L0 context given the same overridden
 // descriptor and settings, byte for byte (software; fixed seed).
 
-fn software_engine(backend: Backend) -> Option<Engine> {
+pub(super) fn software_engine(backend: Backend) -> Option<Engine> {
     Engine::new(EngineOptions { backend }).ok()
 }
 /// Independent expectation of `override_descriptor`.
-fn expected_descriptor(
+pub(super) fn expected_descriptor(
     scene: &[u8],
     size: [u32; 2],
     quality: u32,
@@ -417,7 +419,7 @@ fn l0_check(code: i32, error: &[i8]) {
     assert_eq!(code, 0, "{}", String::from_utf8_lossy(&message));
 }
 /// HDR, normal and albedo of a new L0 context, top row first.
-fn oracle(
+pub(super) fn oracle(
     backend: u32,
     descriptor: &[u8],
     settings: &crate::settings::RenderSettings,
@@ -483,11 +485,11 @@ fn oracle(
     }
     images
 }
-fn images(render: &Render) -> [Vec<f32>; 3] {
+pub(super) fn images(render: &Render) -> [Vec<f32>; 3] {
     [PixelKind::Hdr, PixelKind::Normal, PixelKind::Albedo]
         .map(|kind| render.read_pixels(kind).unwrap().data)
 }
-fn assert_bytes(actual: &[Vec<f32>; 3], expected: &[Vec<f32>; 3], what: &str) {
+pub(super) fn assert_bytes(actual: &[Vec<f32>; 3], expected: &[Vec<f32>; 3], what: &str) {
     for (kind, (a, b)) in ["hdr", "normal", "albedo"]
         .iter()
         .zip(actual.iter().zip(expected))
@@ -505,7 +507,7 @@ fn assert_bytes(actual: &[Vec<f32>; 3], expected: &[Vec<f32>; 3], what: &str) {
         );
     }
 }
-fn finish(render: &Render) -> RenderStatus {
+pub(super) fn finish(render: &Render) -> RenderStatus {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {
         let status = render.refine().unwrap();
