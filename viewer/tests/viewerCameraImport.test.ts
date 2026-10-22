@@ -191,11 +191,44 @@ describe('imported camera choice', () => {
     });
     const data = model(2);
     const cached: CachedModel = {
-      id: 'preset:research-test', meta: { name: data.name, presetId: 'research-test', credit: null, sourceUrl: null }
+      id: 'uploaded-model', meta: { name: data.name, presetId: null, credit: null, sourceUrl: null }
     };
     await viewer.load(data.name, async () => data, cached.meta, cached);
     expect(viewer.restoreCamera).toHaveBeenCalledWith(cached.id);
     expect(useViewer.getState().settings.cameraIndex).toBe(restored ? 1 : -1);
     expect(useViewer.getState().toast !== null).toBe(!restored);
+  });
+
+  it.each([false, true])('automatically applies the first research-scene camera on fresh/cached loads (%s)', async (cached) => {
+    const viewer = engine(), data = model(2);
+    const saved: CachedModel = {
+      id: 'preset:research-cornell-box', meta: { name: data.name, presetId: 'research-cornell-box', credit: null, sourceUrl: null }
+    };
+    await viewer.load(data.name, async () => data, saved.meta, cached ? saved : undefined);
+    expect(useViewer.getState().settings.cameraIndex).toBe(0);
+    expect(useViewer.getState().cameras).toEqual(['View 1', 'View 2']);
+    expect(useViewer.getState().toast).toBeNull();
+  });
+
+  it.each([-1, 1])('preserves a restored research-scene camera choice (%s)', async (cameraIndex) => {
+    const viewer = engine(), data = model(2);
+    const saved: CachedModel = {
+      id: 'preset:research-cornell-box', meta: { name: data.name, presetId: 'research-cornell-box', credit: null, sourceUrl: null }
+    };
+    viewer.restoreCamera.mockImplementation(() => {
+      setSettings({ cameraIndex });
+      return true;
+    });
+    await viewer.load(data.name, async () => data, saved.meta, saved);
+    expect(useViewer.getState().settings.cameraIndex).toBe(cameraIndex);
+    expect(useViewer.getState().toast).toBeNull();
+  });
+
+  it('keeps Orbit when a research scene has no camera', async () => {
+    const viewer = engine(), data = model(0);
+    await viewer.load(data.name, async () => data,
+      { name: data.name, presetId: 'research-cornell-box', credit: null, sourceUrl: null });
+    expect(useViewer.getState().settings.cameraIndex).toBe(-1);
+    expect(useViewer.getState().toast).toBeNull();
   });
 });

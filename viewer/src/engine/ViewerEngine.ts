@@ -343,15 +343,19 @@ export class ViewerEngine {
     });
     this.awaitingFirstSample = true;
     writeHash(this.settings, meta.presetId);
-    this.saveCamera();
     if (!cameraRestored && this.modelCameras.length) {
-      const count = this.modelCameras.length;
-      // An old prompt must never select a camera in a replacement model.
-      const valid = () => token === this.loadToken && model === this.model;
-      showToast(`This model includes ${count === 1 ? 'a camera' : `${count} cameras`}. Apply ${count === 1 ? 'it' : 'the first'}?`, 'info', [
-        { label: 'Apply camera', onClick: () => { if (valid()) setSettings({ cameraIndex: 0 }); } }
-      ]);
+      if (MODEL_PRESETS.find((preset) => preset.id === meta.presetId)?.category === 'research') {
+        setSettings({ cameraIndex: 0 });
+      } else {
+        const count = this.modelCameras.length;
+        // An old prompt must never select a camera in a replacement model.
+        const valid = () => token === this.loadToken && model === this.model;
+        showToast(`This model includes ${count === 1 ? 'a camera' : `${count} cameras`}. Apply ${count === 1 ? 'it' : 'the first'}?`, 'info', [
+          { label: 'Apply camera', onClick: () => { if (valid()) setSettings({ cameraIndex: 0 }); } }
+        ]);
+      }
     }
+    this.saveCamera();
     if (persist) {
       if (model.source || meta.presetId) await saveModelCache({ id, meta: { name, ...meta }, source: model.source });
       else await clearModelCache();

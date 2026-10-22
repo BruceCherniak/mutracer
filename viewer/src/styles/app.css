@@ -288,6 +288,7 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .ring__svg { position: absolute; inset: 0; width: 100%; height: 100%; rotate: -90deg; }
 .ring__track { fill: none; stroke: rgb(255 255 255 / 0.1); stroke-width: 2.25; }
 .ring__arc { fill: none; stroke: var(--cv-accent); stroke-width: 2.25; stroke-linecap: round; transition: stroke-dashoffset 220ms linear; }
+.ring[data-phase='finished'] .ring__arc { stroke: var(--cv-success); }
 .ring[data-phase='paused'] { color: var(--cv-text-2); }
 .ring[data-phase='paused'] .ring__arc { stroke: var(--cv-text-3); }
 .ring[data-phase='error'] .ring__arc { stroke: var(--cv-error); }

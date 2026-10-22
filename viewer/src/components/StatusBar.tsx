@@ -1,5 +1,5 @@
 import { Button, Dialog, DialogTrigger, Heading, Popover } from 'react-aria-components';
-import { Pause, Play, SlidersHorizontal, X } from 'lucide-react';
+import { Check, Pause, Play, SlidersHorizontal, X } from 'lucide-react';
 import { setSettings, useViewer, type RenderPhase } from '../store';
 import { Field, Select, Switch } from './ui/controls';
 import { ViewControls } from './ViewControls';
@@ -41,6 +41,7 @@ function ProgressRing({ progress, phase }: { progress: number; phase: RenderPhas
         />
       </svg>
       {phase === 'converging' && <span className="ring__pct">{Math.floor(progress * 100)}</span>}
+      {phase === 'finished' && <Check size={13} strokeWidth={3.25} />}
       {phase === 'paused' && <Pause size={11} strokeWidth={3} />}
     </span>
   );
@@ -73,7 +74,7 @@ export function StatusBar() {
     <div className="float dock" role="status" data-phase={phase}>
       <ViewControls />
       <div className="dock__summary">
-        {phase !== 'finished' && <ProgressRing progress={progress} phase={phase} />}
+        <ProgressRing progress={progress} phase={phase} />
         <div className="dock__status" title={done && msPerSample ? `${elapsed.toFixed(1)} s · ${msPerSample.toFixed(1)} ms per sample` : undefined}>
           <b>{playing && (phase === 'previewing' || phase === 'converging') ? 'Playing' : LABELS[phase]}</b>
           <span className="mono"><span className="dock__spp">{samples}</span><span className="dock__unit"> spp</span>{time && <span className="dock__time"> · {time}</span>}</span>
