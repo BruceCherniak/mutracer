@@ -72,21 +72,16 @@ export function CodeDialog() {
         <Dialog aria-label="Code">
           <header className="code-head">
             <span className="code-head__icon"><Code2 size={16} /></span>
-            <div>
-              <Heading slot="title" className="dialog__title">Code</Heading>
-              <p className="hint">The least <code>@meimu/mutracer</code> + Three.js code that renders this view.</p>
-            </div>
+            <Heading slot="title" className="dialog__title">Code</Heading>
             <button className="icon-btn icon-btn--bare sm" aria-label="Close" onClick={close}><X size={14} /></button>
           </header>
-          <ul className="code-chips" aria-label="Notes">
-            <li>Library defaults left out</li>
-            <li>No material edits or hidden objects</li>
-            {placeholders && <li data-tone="warn">Replace {placeholders}</li>}
-          </ul>
+          <div className="code-notes">
+            <p className="hint">Material edits and object visibility are not included.</p>
+            {placeholders && <p className="hint hint--warn">Replace {placeholders}.</p>}
+          </div>
           <div className="code-panel">
             <div className="code-panel__bar">
               <span className="code-panel__file"><i />scene.js</span>
-              <span className="code-panel__meta mono">{lineCount} lines</span>
               <div className="code-font-size">
                 <Scrub label="Size" value={fontSize} min={9} max={20} step={0.5} unit="px" onChange={changeFontSize} />
               </div>
@@ -99,7 +94,6 @@ export function CodeDialog() {
             </div>
           </div>
           <div className="actions">
-            <span className="code-foot mono">window.mutracerViewer.code()</span>
             <button className="btn" onClick={() => copy('agent')}
               title="Copy as Markdown with the model, viewer link and changed settings, for a coding agent">
               {copied === 'agent' ? <Check size={15} /> : <Bot size={15} />}{copied === 'agent' ? 'Copied' : 'Copy for agent'}

@@ -106,9 +106,16 @@ for (const preset of MODEL_PRESETS) {
   const tag = document.createElement('span');
   tag.className = 'tag';
   tag.textContent = preset.tag;
-  const license = document.createElement('span');
-  license.textContent = preset.url ? `${preset.license}${preset.sizeMB ? ` · ${preset.sizeMB} MB` : ''}` : 'Procedural';
-  meta.append(tag, license);
+  meta.append(tag);
+  const info = [
+    !preset.licenseUrl ? (preset.url ? preset.license : 'Procedural') : '',
+    preset.sizeMB ? `${preset.sizeMB} MB` : ''
+  ].filter(Boolean).join(' · ');
+  if (info) {
+    const detail = document.createElement('span');
+    detail.textContent = info;
+    meta.append(detail);
+  }
   a.append(thumb, name, meta);
   li.append(a);
   if (preset.licenseUrl) {
