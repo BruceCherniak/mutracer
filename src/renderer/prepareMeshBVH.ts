@@ -3,9 +3,9 @@ import InstancedMesh from '../scene/InstancedMesh.js';
 import { meshInstanceCount, type MeshInstances } from './meshInstances.js';
 import {createCanvas} from '../util/canvas.js';
 import { getGeometryBvh, setGeometryBvh, geometryBvhConfigMatches, type BvhBuildConfig } from './geometryBvh.js';
-import { computeDisplacementMinmax, computeTrianglesDisplacementRange, conservativeTrianglesDisplacementRange } from './displacementPreparation.js';
+import { displacementBaseGeometry, computeDisplacementMinmax, computeTrianglesDisplacementRange, conservativeTrianglesDisplacementRange } from './displacementPreparation.js';
 export { sphericalProjectionTriangle, triplanarProjectionTriangle } from './displacementPreparation.js';
-import Geometry, { Attribute } from '../scene/Geometry.js';
+import Geometry from '../scene/Geometry.js';
 import Mesh from '../scene/Mesh.js';
 import OpenPBRMaterial from '../scene/OpenPBRMaterial.js';
 import { buildBLAS } from './bvhAccel.js';
@@ -213,20 +213,7 @@ export function getMeshBlasInput(mesh: Mesh) {
   // attributes for texture coordinates and shading. This same input works for
   // built-in, TinyBVH and Worker builds; the shader offsets its base identically.
   const bias = heightMap ? getMeshDisplacementMaterial(mesh).displacementBias : 0;
-  if (bias !== 0) {
-    const positions = geometry.position.array.slice();
-    const normals = geometry.normal.array;
-    for (let vertex = 0; vertex < geometry.vertexCount; vertex++) {
-      const p = vertex * geometry.position.itemSize, n = vertex * geometry.normal.itemSize;
-      const length = Math.hypot(normals[n], normals[n + 1], normals[n + 2]);
-      if (length > 0) {
-        for (let axis = 0; axis < 3; axis++) positions[p + axis] += normals[n + axis] / length * bias;
-      }
-    }
-    return { geometry: new Geometry({ ...geometry, position: new Attribute(positions, geometry.position.itemSize) }),
-      displacementScale, trianglesDisplacement };
-  }
-  return { geometry, displacementScale, trianglesDisplacement };
+  return { geometry: displacementBaseGeometry(geometry, bias), displacementScale, trianglesDisplacement };
 }
 
 /** Whether a static mesh still needs a BLAS before it can be rendered. */

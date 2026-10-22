@@ -6,6 +6,7 @@ use std::sync::OnceLock;
 pub struct Preset {
     pub id: String,
     pub label: String,
+    pub category: String,
     values: serde_json::Map<String, serde_json::Value>,
     thumbnail: &'static [u8],
 }
@@ -22,45 +23,137 @@ pub fn presets() -> &'static [Preset] {
                 include_bytes!("../../../viewer/src/assets/thumbnails/material-white.webp"),
             ),
             (
-                "metal",
-                include_bytes!("../../../viewer/src/assets/thumbnails/material-metal.webp"),
+                "plastic",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-plastic.webp"),
             ),
             (
-                "glass",
-                include_bytes!("../../../viewer/src/assets/thumbnails/material-glass.webp"),
+                "clay",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-clay.webp"),
+            ),
+            (
+                "rubber",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-rubber.webp"),
+            ),
+            (
+                "ceramic",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-ceramic.webp"),
             ),
             (
                 "carpaint",
                 include_bytes!("../../../viewer/src/assets/thumbnails/material-carpaint.webp"),
             ),
             (
-                "velvet",
-                include_bytes!("../../../viewer/src/assets/thumbnails/material-velvet.webp"),
+                "pearl",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-pearl.webp"),
+            ),
+            (
+                "glow",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-glow.webp"),
+            ),
+            (
+                "metal",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-metal.webp"),
+            ),
+            (
+                "chrome",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-chrome.webp"),
+            ),
+            (
+                "gold",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-gold.webp"),
+            ),
+            (
+                "copper",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-copper.webp"),
+            ),
+            (
+                "brass",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-brass.webp"),
+            ),
+            (
+                "iron",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-iron.webp"),
+            ),
+            (
+                "brushed",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-brushed.webp"),
+            ),
+            (
+                "anodized",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-anodized.webp"),
+            ),
+            (
+                "glass",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-glass.webp"),
+            ),
+            (
+                "frosted",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-frosted.webp"),
+            ),
+            (
+                "bottle",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-bottle.webp"),
+            ),
+            (
+                "acrylic",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-acrylic.webp"),
+            ),
+            (
+                "diamond",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-diamond.webp"),
+            ),
+            (
+                "water",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-water.webp"),
+            ),
+            (
+                "honey",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-honey.webp"),
+            ),
+            (
+                "soap",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-soap.webp"),
             ),
             (
                 "skin",
                 include_bytes!("../../../viewer/src/assets/thumbnails/material-skin.webp"),
             ),
             (
-                "plastic",
-                include_bytes!("../../../viewer/src/assets/thumbnails/material-plastic.webp"),
+                "wax",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-wax.webp"),
             ),
             (
-                "soap",
-                include_bytes!("../../../viewer/src/assets/thumbnails/material-soap.webp"),
+                "jade",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-jade.webp"),
+            ),
+            (
+                "marble",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-marble.webp"),
+            ),
+            (
+                "milk",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-milk.webp"),
+            ),
+            (
+                "velvet",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-velvet.webp"),
+            ),
+            (
+                "cotton",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-cotton.webp"),
+            ),
+            (
+                "leather",
+                include_bytes!("../../../viewer/src/assets/thumbnails/material-leather.webp"),
             ),
         ];
         data.into_iter()
-            .filter(|value| {
-                thumbnails
-                    .iter()
-                    .any(|(id, _)| Some(*id) == value["id"].as_str())
-            })
             .map(|value| {
                 let id = value["id"].as_str().unwrap();
                 Preset {
                     id: id.into(),
                     label: value["label"].as_str().unwrap().into(),
+                    category: value["category"].as_str().unwrap().into(),
                     values: value["values"].as_object().unwrap().clone(),
                     thumbnail: thumbnails
                         .iter()
@@ -104,8 +197,14 @@ impl Preset {
                     material.layers.coat_color =
                         std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
                 }
-                // These properties retain their shared defaults in the native viewer.
-                "specularColor" | "subsurfaceRadiusScale" => {}
+                "specularColor" => {
+                    material.layers.specular_color =
+                        std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
+                }
+                "subsurfaceRadiusScale" => {
+                    material.layers.subsurface_radius_scale =
+                        std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
+                }
                 "coatWeight" => material.layers.coat_weight = value.as_f64().unwrap() as f32,
                 "coatRoughness" => material.layers.coat_roughness = value.as_f64().unwrap() as f32,
                 "coatIor" => material.layers.coat_ior = value.as_f64().unwrap() as f32,
@@ -130,6 +229,9 @@ impl Preset {
                     material.layers.film_thickness = value.as_f64().unwrap() as f32
                 }
                 "thinFilmIor" => material.layers.film_ior = value.as_f64().unwrap() as f32,
+                "emissionColor" => {
+                    material.emission = std::array::from_fn(|i| value[i].as_f64().unwrap() as f32)
+                }
                 "emissionLuminance" => material.emission_strength = value.as_f64().unwrap() as f32,
                 "specularAnisotropy" => material.layers.anisotropy = value.as_f64().unwrap() as f32,
                 "thinWalled" => material.layers.thin_walled = value.as_bool().unwrap(),
@@ -159,76 +261,47 @@ impl Preset {
 mod tests {
     use super::*;
     #[test]
-    fn presets_replace_active_layers_without_discarding_imported_material_properties() {
+    fn every_web_preset_applies_all_values_and_keeps_textures() {
         let model = crate::scene::Model::load(
             &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sample.glb"),
         )
         .unwrap();
+        let data: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+            "../../../viewer/src/engine/material-presets.json"
+        ))
+        .unwrap();
+        assert_eq!(presets().len(), data.len());
         for preset in presets() {
             let mut material = model.materials[0].clone();
-            material.maps = [7, 8, 9, 10];
-            material.layers.coat_weight = 1.;
-            material.layers.fuzz_weight = 1.;
-            material.layers.subsurface_weight = 1.;
-            material.layers.film_weight = 1.;
-            material.emission_strength = 50.;
+            material.maps = [7; 9];
+            material.layers.specular_color = [0.1; 3];
+            material.layers.subsurface_radius_scale = [0.2; 3];
+            // Read the packed contract independently of Preset::apply's assignments.
             preset.apply(&mut material);
-            assert_eq!(material.maps, [7, 8, 9, 10]);
+            assert_eq!(material.maps, [7; 9]);
             assert_eq!(material.alpha_mode, model.materials[0].alpha_mode);
-            assert_eq!(material.double_sided, model.materials[0].double_sided);
-            assert_eq!(material.layers.thin_walled, preset.id == "soap");
-            assert_eq!(material.emission_strength, 0.);
-            assert_eq!(
-                material.layers.coat_weight,
-                if preset.id == "carpaint" { 1. } else { 0. }
-            );
-            assert_eq!(
-                material.layers.fuzz_weight,
-                if preset.id == "velvet" { 1. } else { 0. }
-            );
-            assert_eq!(
-                material.layers.subsurface_weight,
-                if preset.id == "skin" { 1. } else { 0. }
-            );
-            assert_eq!(
-                material.layers.film_weight,
-                if preset.id == "soap" { 1. } else { 0. }
-            );
-            assert_eq!(
-                material.transmission,
-                if matches!(preset.id.as_str(), "glass" | "soap") {
-                    1.
+            let values = crate::scene::material_values(&material);
+            for (key, expected) in &preset.values {
+                let actual = &values[key];
+                if let Some(expected) = expected.as_array() {
+                    for (a, b) in actual.as_array().unwrap().iter().zip(expected) {
+                        assert!(
+                            (a.as_f64().unwrap() - b.as_f64().unwrap()).abs() < 1e-6,
+                            "{}: {key}",
+                            preset.id
+                        );
+                    }
+                } else if let Some(expected) = expected.as_f64() {
+                    assert!(
+                        (actual.as_f64().unwrap() - expected).abs() < 1e-6,
+                        "{}: {key}",
+                        preset.id
+                    );
                 } else {
-                    0.
+                    assert_eq!(actual, expected, "{}: {key}", preset.id);
                 }
-            );
-            assert_eq!(
-                material.metalness,
-                match preset.id.as_str() {
-                    "metal" => 1.,
-                    "carpaint" => 0.3,
-                    _ => 0.,
-                }
-            );
+            }
             assert!(image::load_from_memory(preset.thumbnail).is_ok());
         }
-        let mut material = model.materials[0].clone();
-        presets()
-            .iter()
-            .find(|p| p.id == "glass")
-            .unwrap()
-            .apply(&mut material);
-        assert_eq!(material.ior, 1.5);
-        assert_eq!(material.roughness, 0.);
-        assert_eq!(material.layers.transmission_depth, 0.);
-        presets()
-            .iter()
-            .find(|p| p.id == "plastic")
-            .unwrap()
-            .apply(&mut material);
-        assert_eq!(material.transmission, 0.);
-        assert_eq!(material.color, [0.05, 0.25, 0.7]);
-        assert_eq!(material.ior, 1.46);
-        assert_eq!(material.roughness, 0.32);
     }
 }

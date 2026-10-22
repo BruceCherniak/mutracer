@@ -153,7 +153,9 @@ Displacement:
 - Only the first material of a mesh supplies displacement inputs.
 - Active displacement needs a square power-of-two texture, a positive step size,
   and UVs when the projection is `none`. Triplanar, spherical and cylindrical
-  projections work without UVs, and negative amplitudes are allowed.
+  projections work without UVs, and negative amplitudes are allowed. Set
+  `MT_MAT_DISPLACEMENT_BIAS` for a constant normal offset in mesh-local units;
+  the resulting offset is `height × scale + bias`.
 - The absolute projection scale, and each position or UV component multiplied by
   it, must not exceed 1,000,000.
 

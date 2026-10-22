@@ -29,7 +29,7 @@ pub struct Material {
     pub ior: f32,
     pub emission: [f32; 3],
     pub emission_strength: f32,
-    pub maps: [u32; 4],
+    pub maps: [u32; 9],
     pub alpha_mode: u32,
     pub alpha_cutoff: f32,
     pub double_sided: bool,
@@ -42,6 +42,7 @@ pub struct Material {
 pub struct MaterialLayers {
     pub diffuse_roughness: f32,
     pub specular_weight: f32,
+    pub specular_color: [f32; 3],
     pub anisotropy: f32,
     pub transmission_color: [f32; 3],
     pub transmission_depth: f32,
@@ -54,6 +55,7 @@ pub struct MaterialLayers {
     pub subsurface_weight: f32,
     pub subsurface_color: [f32; 3],
     pub subsurface_radius: f32,
+    pub subsurface_radius_scale: [f32; 3],
     pub fuzz_weight: f32,
     pub fuzz_color: [f32; 3],
     pub fuzz_roughness: f32,
@@ -61,12 +63,18 @@ pub struct MaterialLayers {
     pub film_thickness: f32,
     pub film_ior: f32,
     pub bevel: f32,
+    pub displacement_scale: f32,
+    pub displacement_bias: f32,
+    pub displacement_step: f32,
+    pub displacement_projection: u32,
+    pub displacement_projection_scale: f32,
 }
 impl Default for MaterialLayers {
     fn default() -> Self {
         Self {
             diffuse_roughness: 0.,
             specular_weight: 1.,
+            specular_color: [1.; 3],
             anisotropy: 0.,
             transmission_color: [1.; 3],
             transmission_depth: 0.,
@@ -80,6 +88,7 @@ impl Default for MaterialLayers {
             subsurface_weight: 0.,
             subsurface_color: [0.8; 3],
             subsurface_radius: 1.,
+            subsurface_radius_scale: [1., 0.5, 0.25],
             fuzz_weight: 0.,
             fuzz_color: [1.; 3],
             fuzz_roughness: 0.5,
@@ -87,6 +96,11 @@ impl Default for MaterialLayers {
             film_thickness: 0.5,
             film_ior: 1.4,
             bevel: 0.,
+            displacement_scale: 0.,
+            displacement_bias: 0.,
+            displacement_step: 0.,
+            displacement_projection: 0,
+            displacement_projection_scale: 1.,
         }
     }
 }
@@ -183,7 +197,7 @@ impl Model {
         for material in document.materials() {
             let pbr = material.pbr_metallic_roughness();
             let base = pbr.base_color_factor();
-            let mut maps = [u32::MAX; 4];
+            let mut maps = [u32::MAX; 9];
             if let Some(info) = pbr.base_color_texture() {
                 maps[0] = model.add_map(
                     info.texture(),
@@ -279,7 +293,7 @@ impl Model {
             ior: 1.5,
             emission: [0.; 3],
             emission_strength: 1.,
-            maps: [u32::MAX; 4],
+            maps: [u32::MAX; 9],
             alpha_mode: 1,
             alpha_cutoff: 0.5,
             double_sided: false,
@@ -365,6 +379,145 @@ impl Model {
         model.rebuild_picking()?;
         Ok(model)
     }
+    /// Replaces slots atomically. Existing slots provide UV sampling, then base color.
+    pub fn replace_textures(
+        &mut self,
+        material: usize,
+        images: Vec<(usize, Option<image::RgbaImage>)>,
+    ) -> Result<()> {
+        ensure!(material < self.materials.len(), "Unknown material");
+        ensure!(
+            images.iter().all(|(slot, _)| *slot < 9),
+            "Unknown texture slot"
+        );
+        let mut candidate = self.clone();
+        let references: Vec<_> = images
+            .iter()
+            .map(|(slot, _)| {
+                let maps = self.materials[material].maps;
+                let id = if maps[*slot] != u32::MAX {
+                    maps[*slot]
+                } else {
+                    maps[0]
+                };
+                self.textures.get(id as usize).cloned()
+            })
+            .collect();
+        for (slot, _) in &images {
+            candidate.materials[material].maps[*slot] = u32::MAX;
+        }
+        candidate.compact_textures();
+        let used: u64 = candidate
+            .textures
+            .iter()
+            .map(|t| t.width as u64 * t.height as u64)
+            .sum();
+        let count = images.iter().filter(|(_, image)| image.is_some()).count();
+        // Reserve the maximum supported environment image (4M pixels).
+        let available = 12_582_912u64.saturating_sub(used);
+        ensure!(
+            count == 0 || available >= count as u64,
+            "Material texture budget is full"
+        );
+        let per_image = if count == 0 {
+            available
+        } else {
+            available / count as u64
+        };
+        let edge = if count == 0 {
+            4096
+        } else {
+            ((available / count as u64) as f64)
+                .sqrt()
+                .floor()
+                .min(4096.) as u32
+        };
+        for ((slot, image), reference) in images.into_iter().zip(references) {
+            let Some(mut image) = image else { continue };
+            ensure!(image.width() > 0 && image.height() > 0, "Empty texture");
+            if slot == 8 {
+                let size = image
+                    .width()
+                    .max(image.height())
+                    .min(edge)
+                    .next_power_of_two();
+                let size = if size > edge { size / 2 } else { size };
+                image = image::imageops::resize(
+                    &image,
+                    size,
+                    size,
+                    image::imageops::FilterType::Triangle,
+                );
+            } else if image.width().max(image.height()) > 4096
+                || image.width() as u64 * image.height() as u64 > per_image
+            {
+                let factor = (4096. / image.width().max(image.height()) as f64).min(
+                    (per_image as f64 / (image.width() as f64 * image.height() as f64)).sqrt(),
+                );
+                image = image::imageops::resize(
+                    &image,
+                    (image.width() as f64 * factor).floor().max(1.) as u32,
+                    (image.height() as f64 * factor).floor().max(1.) as u32,
+                    image::imageops::FilterType::Triangle,
+                );
+            }
+            ensure!(candidate.textures.len() < 255, "Texture limit reached");
+            let uv = reference.as_ref().map_or(0, |t| t.uv);
+            let uv = if candidate
+                .meshes
+                .iter()
+                .filter(|m| m.material == material)
+                .any(|m| candidate.geometries[m.geometry].uv[uv as usize].is_empty())
+            {
+                0
+            } else {
+                uv
+            };
+            let id = candidate.textures.len() as u32;
+            Arc::make_mut(&mut candidate.textures).push(Texture {
+                source: usize::MAX,
+                width: image.width(),
+                height: image.height(),
+                pixels: Arc::new(image.into_raw()),
+                uv,
+                scale: reference.as_ref().map_or([1.; 2], |t| t.scale),
+                offset: reference.as_ref().map_or([0.; 2], |t| t.offset),
+                wrap: reference.as_ref().map_or([0; 2], |t| t.wrap),
+            });
+            candidate.materials[material].maps[slot] = id;
+            if slot == 8
+                && candidate.materials[material].layers.displacement_projection == 0
+                && candidate
+                    .meshes
+                    .iter()
+                    .filter(|m| m.material == material)
+                    .any(|m| candidate.geometries[m.geometry].uv[0].is_empty())
+            {
+                candidate.materials[material].layers.displacement_projection = 1;
+            }
+        }
+        self.materials = candidate.materials;
+        self.textures = candidate.textures;
+        Ok(())
+    }
+    fn compact_textures(&mut self) {
+        let mut ids = vec![u32::MAX; self.textures.len()];
+        let mut textures = Vec::new();
+        for material in &mut self.materials {
+            for id in &mut material.maps {
+                if *id == u32::MAX {
+                    continue;
+                }
+                let old = *id as usize;
+                if ids[old] == u32::MAX {
+                    ids[old] = textures.len() as u32;
+                    textures.push(self.textures[old].clone());
+                }
+                *id = ids[old];
+            }
+        }
+        self.textures = Arc::new(textures);
+    }
     pub fn set_texture_sampling(
         &mut self,
         material: usize,
@@ -375,6 +528,10 @@ impl Model {
         ensure!(
             wrap.iter().all(|v| *v <= 2) && scale.iter().all(|v| v.is_finite()),
             "Invalid texture sampling"
+        );
+        ensure!(
+            material < self.materials.len() && slot < 9,
+            "Unknown material texture slot"
         );
         let id = self.materials[material].maps[slot];
         ensure!(id != u32::MAX, "Texture slot is empty");
@@ -1064,7 +1221,7 @@ impl Descriptor {
         compile_error!("Native descriptors assume a little-endian target");
     }
 }
-const MATERIAL_EXTENSIONS: usize = 24;
+const MATERIAL_EXTENSIONS: usize = 36;
 fn write_mesh(w: &mut [u32], o: usize, m: &Mesh) {
     w[o + wire_mesh::GEOMETRY] = m.geometry as u32;
     w[o + wire_mesh::MATERIAL] = m.material as u32;
@@ -1093,7 +1250,7 @@ fn write_material(w: &mut [u32], o: usize, m: &Material) {
         w[o + field] = value.to_bits();
     }
     w[o + mat::THIN_WALLED] = u32::from(m.layers.thin_walled);
-    for (k, v) in m.maps.iter().enumerate() {
+    for (k, v) in m.maps[..4].iter().enumerate() {
         w[o + mat::MAP + k] = *v;
     }
     // Frozen IDs from native/schemas/material-properties.json. The first six
@@ -1130,11 +1287,85 @@ fn write_material(w: &mut [u32], o: usize, m: &Material) {
         scalar(32, l.film_thickness),
         scalar(33, l.film_ior),
         scalar(53, l.bevel),
+        color(6, l.specular_color),
+        color(20, l.subsurface_radius_scale),
+        [47, m.maps[4], 0, 0],
+        [48, m.maps[5], 0, 0],
+        [49, m.maps[6], 0, 0],
+        [50, m.maps[7], 0, 0],
+        [59, m.maps[8], 0, 0],
+        scalar(60, l.displacement_scale),
+        scalar(76, l.displacement_bias),
+        scalar(
+            61,
+            if l.displacement_step > 0. {
+                l.displacement_step
+            } else if l.displacement_scale.abs() > 1e-6 {
+                l.displacement_scale.abs() / 32.
+            } else {
+                0.01
+            },
+        ),
+        [57, l.displacement_projection, 0, 0],
+        scalar(58, l.displacement_projection_scale),
     ];
     let at = w[o + mat::EXTENSION_OFFSET] as usize;
     for (index, record) in ext.iter().enumerate() {
         w[at + index * 4..at + (index + 1) * 4].copy_from_slice(record);
     }
+}
+#[cfg(test)]
+pub fn material_values(material: &Material) -> serde_json::Map<String, serde_json::Value> {
+    // Decode the actual descriptor rather than repeating the preset-to-field mapping.
+    let mut w = vec![0; mat::WORDS + MATERIAL_EXTENSIONS * 4];
+    w[mat::EXTENSION_OFFSET] = mat::WORDS as u32;
+    write_material(&mut w, 0, material);
+    let schema: Vec<serde_json::Value> =
+        serde_json::from_str(include_str!("../../schemas/material-properties.json")).unwrap();
+    let mut values = serde_json::Map::new();
+    for (key, offset, count) in [
+        ("baseColor", mat::BASE_COLOR, 3),
+        ("specularRoughness", mat::ROUGHNESS, 1),
+        ("baseMetalness", mat::METALNESS, 1),
+        ("transmissionWeight", mat::TRANSMISSION, 1),
+        ("specularIor", mat::IOR, 1),
+        ("emissionColor", mat::EMISSION_COLOR, 3),
+        ("emissionLuminance", mat::EMISSION_LUMINANCE, 1),
+        ("coatWeight", mat::COAT_WEIGHT, 1),
+        ("coatRoughness", mat::COAT_ROUGHNESS, 1),
+        ("opacity", mat::OPACITY, 1),
+    ] {
+        values.insert(
+            key.into(),
+            if count == 1 {
+                serde_json::json!(f32::from_bits(w[offset]))
+            } else {
+                serde_json::json!(
+                    (0..count)
+                        .map(|i| f32::from_bits(w[offset + i]))
+                        .collect::<Vec<_>>()
+                )
+            },
+        );
+    }
+    values.insert(
+        "thinWalled".into(),
+        serde_json::json!(w[mat::THIN_WALLED] != 0),
+    );
+    for ext in w[mat::WORDS..].chunks_exact(4) {
+        let field = &schema[ext[0] as usize - 1];
+        let value = match field["type"].as_str().unwrap() {
+            "color" => serde_json::json!([
+                f32::from_bits(ext[1]),
+                f32::from_bits(ext[2]),
+                f32::from_bits(ext[3])
+            ]),
+            "float" => serde_json::json!(f32::from_bits(ext[1])),
+            _ => serde_json::json!(ext[1]),
+        };
+        values.insert(field["key"].as_str().unwrap().into(), value);
+    }
+    values
 }
 /// Background words; the environment map is texture `environment` (index + 1).
 fn write_background(w: &mut [u32], environment: &Environment, texture: u32) {
@@ -1377,7 +1608,9 @@ mod descriptor_tests {
             offset: [0.; 2],
             wrap: [0; 2],
         }]);
-        s.model.materials[0].maps = [0, u32::MAX, 0, u32::MAX];
+        s.model.materials[0].maps = [u32::MAX; 9];
+        s.model.materials[0].maps[0] = 0;
+        s.model.materials[0].maps[2] = 0;
         let snapshot = s.model.clone();
         assert!(
             s.model
@@ -1469,7 +1702,7 @@ mod descriptor_tests {
             m.ior = 1.7;
             m.emission = [0.3, 0.4, 0.5];
             m.emission_strength = 2.;
-            m.maps = [u32::MAX; 4];
+            m.maps = [u32::MAX; 9];
             m.alpha_mode = step % 3;
             m.alpha_cutoff = 0.4;
             m.double_sided = step % 2 == 0;
@@ -1497,6 +1730,13 @@ mod descriptor_tests {
                 film_thickness: 0.4,
                 film_ior: 1.6,
                 bevel: 0.01,
+                specular_color: [0.3, 0.7, 0.9],
+                subsurface_radius_scale: [1., 0.6, 0.2],
+                displacement_scale: 0.02,
+                displacement_bias: -0.01,
+                displacement_step: 0.,
+                displacement_projection: 1,
+                displacement_projection_scale: 2.,
             };
             s.light.color = [0.3, 0.5, 0.8];
             s.light.intensity += 0.2;

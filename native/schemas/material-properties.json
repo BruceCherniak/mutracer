@@ -486,5 +486,11 @@
     "key": "coatNormalScale",
     "type": "vec2",
     "supported": true
+  },
+  {
+    "id": 76,
+    "key": "displacementBias",
+    "type": "float",
+    "supported": true
   }
 ]

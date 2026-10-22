@@ -19,6 +19,7 @@ mod scene;
 mod shell;
 mod studio;
 mod studio_smoke;
+mod textures;
 mod theme;
 mod ui;
 use anyhow::{Context, Result, ensure};
@@ -72,6 +73,7 @@ struct Viewer {
     display_settings: mutracer_native_probe::display::Settings,
     selected: usize,
     selected_mesh: Option<usize>,
+    texture_browser: textures::Browser,
     tab: usize,
     scene_open: bool,
     inspector_open: bool,
@@ -172,6 +174,7 @@ impl Viewer {
             display_settings: mutracer_native_probe::display::Settings::default(),
             selected,
             selected_mesh: None,
+            texture_browser: textures::Browser::default(),
             tab: 0,
             scene_open: true,
             inspector_open: true,
@@ -222,6 +225,7 @@ impl Viewer {
         self.generation += 1;
     }
     fn load(&mut self, path: PathBuf, ctx: &egui::Context) {
+        self.texture_browser.new_model();
         if self.loading.is_some() {
             self.queued_load = Some(path);
             return;
@@ -269,6 +273,10 @@ impl Viewer {
         }
     }
     fn tick(&mut self, ctx: &egui::Context) -> Result<()> {
+        self.receive_textures();
+        if self.texture_browser.busy() {
+            ctx.request_repaint_after(Duration::from_millis(100));
+        }
         if self.commit.is_some() {
             let completed = self.commit.as_ref().unwrap().0.try_recv();
             match completed {
@@ -297,6 +305,7 @@ impl Viewer {
                                 if let Some((model, camera)) = candidate {
                                     let retired = std::mem::replace(&mut self.model, model);
                                     std::thread::spawn(move || drop(retired));
+                                    self.texture_browser.new_model();
                                     self.camera = camera;
                                     self.selected = self.model.meshes[0].material;
                                     self.selected_mesh = None;
@@ -607,6 +616,26 @@ impl Viewer {
         if paths.is_empty() {
             return;
         }
+        let drop = ctx.input(|i| i.pointer.hover_pos()).and_then(|pos| {
+            self.texture_browser
+                .drop_targets
+                .iter()
+                .find(|(rect, _, _)| rect.contains(pos))
+                .copied()
+        });
+        if let Some((_, material, slot)) = drop {
+            if let Some(path) = paths.iter().find(|p| {
+                p.extension().is_some_and(|e| {
+                    ["png", "jpg", "jpeg", "webp"]
+                        .iter()
+                        .any(|ext| e.eq_ignore_ascii_case(ext))
+                })
+            }) {
+                self.texture_browser
+                    .upload(&self.model, material, slot, path.clone(), ctx);
+                return;
+            }
+        }
         if let Some(path) = paths.iter().find(|p| {
             p.extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("glb") || e.eq_ignore_ascii_case("gltf"))
@@ -665,7 +694,21 @@ impl eframe::App for Viewer {
             painter.text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                "Drop a GLTF or GLB to open",
+                if ctx.input(|i| {
+                    i.raw.hovered_files.iter().any(|f| {
+                        f.path.as_ref().is_some_and(|p| {
+                            p.extension().is_some_and(|e| {
+                                ["png", "jpg", "jpeg", "webp"]
+                                    .iter()
+                                    .any(|ext| e.eq_ignore_ascii_case(ext))
+                            })
+                        })
+                    })
+                }) {
+                    "Drop an image on a texture slot"
+                } else {
+                    "Drop a GLTF or GLB to open"
+                },
                 egui::FontId::proportional(26.),
                 egui::Color32::WHITE,
             );
@@ -1922,6 +1965,7 @@ fn main() -> Result<()> {
     let mut package_out = None;
     let mut parity_out = None;
     let mut texture_out = None;
+    let mut texture_editor_out = None;
     let mut studio_out = None;
     let mut focus_out = None;
     let mut startup_out = None;
@@ -1936,6 +1980,12 @@ fn main() -> Result<()> {
             "--studio-smoke" => {
                 studio_out = Some(PathBuf::from(
                     args.next().context("--studio-smoke needs a directory")?,
+                ));
+            }
+            "--texture-editor-smoke" => {
+                texture_editor_out = Some(PathBuf::from(
+                    args.next()
+                        .context("--texture-editor-smoke needs a directory")?,
                 ));
             }
             "--texture-smoke" => {
@@ -2018,6 +2068,9 @@ fn main() -> Result<()> {
     }
     if let Some(out) = studio_out {
         return studio_smoke::run(&model, &out);
+    }
+    if let Some(out) = texture_editor_out {
+        return textures::smoke(&model, &out);
     }
     if let Some(out) = texture_out {
         return parity_smoke::run_textures(&model, &out);

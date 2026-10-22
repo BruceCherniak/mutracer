@@ -6,6 +6,7 @@ use eframe::egui;
 impl Viewer {
     pub(super) fn panels(&mut self, root: &mut egui::Ui) {
         let ctx = root.ctx().clone();
+        self.texture_browser.drop_targets.clear();
         self.titlebar(root);
         self.inspector_rail(root);
         if self.inspector_open {
@@ -15,6 +16,7 @@ impl Viewer {
         if self.scene_open && root.available_width() > 600. {
             self.scene_panel(root);
         }
+        self.texture_browser_panel(root);
         self.viewport(root);
         let grip = crate::shell::resize_grip(root);
         if self.startup_smoke.is_some() {
@@ -321,24 +323,23 @@ impl Viewer {
                 );
             });
         }
-        let previous = self.selected;
-        controls::select(
+        let material_name = &self.model.materials[self.selected].name;
+        ui.add(egui::Label::new(egui::RichText::new(material_name).strong()).truncate())
+            .on_hover_text(material_name);
+        ui.add_space(6.);
+        controls::segmented(
             ui,
-            "Material",
-            &self.model.materials[self.selected].name,
-            |ui| {
-                for (i, material) in self.model.materials.iter().enumerate() {
-                    if self.model.meshes.iter().any(|mesh| mesh.material == i) {
-                        ui.selectable_value(&mut self.selected, i, &material.name);
-                    }
-                }
-            },
+            "Preset category",
+            &mut self.texture_browser.preset_category,
+            &[(0, "Basic"), (1, "Metal"), (2, "Glass"), (3, "Soft")],
         );
-        if previous != self.selected {
-            self.selected_mesh = None;
-        }
+        let category = ["basic", "metal", "glass", "soft"][self.texture_browser.preset_category];
+        let presets: Vec<_> = crate::material_presets::presets()
+            .iter()
+            .filter(|p| p.category == category)
+            .collect();
         let width = (ui.available_width() - 18.) / 4.;
-        for presets in crate::material_presets::presets().chunks(4) {
+        for presets in presets.chunks(4) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.;
                 for preset in presets {
@@ -391,11 +392,15 @@ impl Viewer {
                         .on_hover_text(format!("Apply {} preset", preset.label))
                         .clicked()
                     {
+                        self.texture_browser.cancel();
                         preset.apply(&mut self.model.materials[self.selected]);
                         self.dirty(Change::Material);
                     }
                 }
             });
+        }
+        if crate::textures::browse_button(ui, self.texture_browser.open).clicked() {
+            self.texture_browser.open = !self.texture_browser.open;
         }
         let material = &mut self.model.materials[self.selected];
         let mut changed = false;
@@ -527,7 +532,7 @@ impl Viewer {
                     );
                 })
                 .response
-                .on_hover_text("Requires an imported normal map.");
+                .on_hover_text("Requires a normal map.");
                 changed |=
                     controls::toggle(ui, "Double sided", &mut material.double_sided).changed();
                 changed |= controls::toggle(ui, "Unlit", &mut material.unlit).changed();
@@ -537,34 +542,141 @@ impl Viewer {
                 }
             });
         });
-        controls::section_open(ui, "Textures", false, |ui| {
-            let maps = self.model.materials[self.selected].maps;
-            if maps.iter().all(|id| *id == u32::MAX) {
-                ui.weak("No imported textures.");
-            }
-            for (slot, label) in ["Base color", "Normal", "Metalness / roughness", "Emissive"]
-                .iter()
-                .enumerate()
-            {
-                let id = maps[slot];
-                if id == u32::MAX {
-                    continue;
-                }
+        controls::section_open(ui, "Displacement", true, |ui| {
+            let material = &mut self.model.materials[self.selected];
+            changed |= controls::scalar(
+                ui,
+                "Scale",
+                &mut material.layers.displacement_scale,
+                -self.model.radius * 0.1..=self.model.radius * 0.1,
+            );
+            changed |= controls::scalar(
+                ui,
+                "Bias",
+                &mut material.layers.displacement_bias,
+                -self.model.radius * 0.1..=self.model.radius * 0.1,
+            );
+            changed |= controls::scalar(
+                ui,
+                "Step size",
+                &mut material.layers.displacement_step,
+                0. ..=self.model.radius * 0.01,
+            );
+            let before = material.layers.displacement_projection;
+            controls::select(
+                ui,
+                "Projection",
+                ["UV", "Triplanar", "Spherical", "Cylindrical"][before as usize],
+                |ui| {
+                    for (id, label) in [
+                        (0, "UV"),
+                        (1, "Triplanar"),
+                        (2, "Spherical"),
+                        (3, "Cylindrical"),
+                    ] {
+                        ui.selectable_value(
+                            &mut material.layers.displacement_projection,
+                            id,
+                            label,
+                        );
+                    }
+                },
+            );
+            changed |= before != material.layers.displacement_projection;
+            changed |= controls::scalar(
+                ui,
+                "Projection scale",
+                &mut material.layers.displacement_projection_scale,
+                0.01..=10.,
+            );
+            ui.small("Offset = texture × Scale + Bias, in mesh-local units. Requires a displacement texture. Adds preparation and render time.");
+        });
+        let textured = self.model.materials[self.selected]
+            .maps
+            .iter()
+            .any(|id| *id != u32::MAX);
+        controls::section_open(ui, "Textures", textured, |ui| {
+            for &(slot, label, hint) in crate::textures::SLOTS {
+                let id = self.model.materials[self.selected].maps[slot];
                 ui.push_id((self.selected, slot), |ui| {
-                    controls::section_open(ui, label, false, |ui| {
-                        let texture = &self.model.textures[id as usize];
-                        let mut wrap = texture.wrap;
-                        let mut scale = texture.scale;
-                        if controls::texture_sampling(ui, &mut wrap, &mut scale) {
+                    let row = ui.horizontal(|ui| {
+                        let response = if let Some(texture) = self.model.textures.get(id as usize) {
+                            let handle = self.texture_browser.preview(
+                                self.selected,
+                                slot,
+                                texture,
+                                ui.ctx(),
+                            );
+                            ui.add(egui::Button::image(
+                                egui::Image::from_texture(&handle)
+                                    .fit_to_exact_size(egui::vec2(40., 40.)),
+                            ))
+                        } else {
+                            ui.add_sized([40., 40.], egui::Button::new("+"))
+                        };
+                        if response
+                            .on_hover_text(format!("Upload or replace {label}"))
+                            .clicked()
+                        {
+                            if let Some(path) = rfd::FileDialog::new()
+                                .add_filter("Image", &["png", "jpg", "jpeg", "webp"])
+                                .pick_file()
+                            {
+                                self.texture_browser.upload(
+                                    &self.model,
+                                    self.selected,
+                                    slot,
+                                    path,
+                                    ui.ctx(),
+                                );
+                            }
+                        }
+                        ui.vertical(|ui| {
+                            ui.label(label);
+                            ui.small(hint);
+                            if let Some(texture) = self.model.textures.get(id as usize) {
+                                ui.small(format!("{} × {}", texture.width, texture.height));
+                            }
+                        });
+                        if id != u32::MAX
+                            && controls::button(ui, "×")
+                                .on_hover_text(format!("Remove {label}"))
+                                .clicked()
+                        {
+                            self.texture_browser.cancel();
                             match self
                                 .model
-                                .set_texture_sampling(self.selected, slot, wrap, scale)
+                                .replace_textures(self.selected, vec![(slot, None)])
                             {
-                                Ok(edited) => changed |= edited,
-                                Err(error) => self.error = error.to_string(),
+                                Ok(()) => changed = true,
+                                Err(e) => self.error = e.to_string(),
                             }
                         }
                     });
+                    self.texture_browser.drop_targets.push((
+                        row.response.rect,
+                        self.selected,
+                        slot,
+                    ));
+                    let id = self.model.materials[self.selected].maps[slot];
+                    if let Some(texture) = self.model.textures.get(id as usize) {
+                        let mut wrap = texture.wrap;
+                        let mut scale = texture.scale;
+                        controls::section_open(ui, "Wrap & repeat", false, |ui| {
+                            if controls::texture_sampling(ui, &mut wrap, &mut scale) {
+                                self.texture_browser.cancel();
+                                match self.model.set_texture_sampling(
+                                    self.selected,
+                                    slot,
+                                    wrap,
+                                    scale,
+                                ) {
+                                    Ok(edited) => changed |= edited,
+                                    Err(e) => self.error = e.to_string(),
+                                }
+                            }
+                        });
+                    }
                 });
             }
         });

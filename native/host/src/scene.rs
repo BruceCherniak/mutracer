@@ -232,7 +232,7 @@ pub(super) fn fuzz_budget(bytes: &[u8]) -> bool {
             let entry = w.u(o + mat::EXTENSION_OFFSET) + j * ext::WORDS;
             let id = w.u(entry + ext::ID);
             let value = w.f(entry + ext::X);
-            if matches!(id, 58 | 60) && value.abs() > 2. || id == 61 && value < 0.125 {
+            if matches!(id, 58 | 60 | 76) && value.abs() > 2. || id == 61 && value < 0.125 {
                 return false;
             }
         }
@@ -428,7 +428,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     }
     let mut displacement = Vec::new();
     for i in 0..w.u(h::MATERIAL_COUNT) {
-        let mut disp = (u32::MAX as usize, 0.1f32, 0usize, 1f32, 0.01f32);
+        let mut disp = (u32::MAX as usize, 0.1f32, 0usize, 1f32, 0.01f32, 0f32);
         let o = w.u(h::MATERIAL_OFFSET) + i * mat::WORDS;
         w.finite(o + mat::BASE_COLOR, mat::THIN_WALLED - mat::BASE_COLOR)?;
         if [
@@ -466,13 +466,13 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         w.reserved(o + mat::RESERVED, 3)?;
         let count = w.u(o + mat::EXTENSION_COUNT);
         let offset = w.u(o + mat::EXTENSION_OFFSET);
-        if count > 75 || count == 0 && offset != 0 {
+        if count >= material_properties::MATERIAL_PROPERTIES.len() || count == 0 && offset != 0 {
             return Err("Invalid material extension count/offset".into());
         }
         if count != 0 {
             w.span(offset, count * ext::WORDS)?;
         }
-        let mut seen = [false; 76];
+        let mut seen = vec![false; material_properties::MATERIAL_PROPERTIES.len()];
         for i in 0..count {
             let entry = offset + i * ext::WORDS;
             let id = w.u(entry + ext::ID);
@@ -489,6 +489,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
                 59 => disp.0 = w.u(entry + ext::X),
                 60 => disp.1 = w.f(entry + ext::X),
                 61 => disp.4 = w.f(entry + ext::X),
+                76 => disp.5 = w.f(entry + ext::X),
                 _ => {}
             }
             let components = if kind == 1 {
@@ -526,8 +527,8 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         } else {
             w.u(mesh + m::MATERIAL)
         };
-        let (texture, scale, projection, uv_scale, _) = displacement[material];
-        if texture == u32::MAX as usize || scale.abs() <= 1e-6 {
+        let (texture, scale, projection, uv_scale, _, bias) = displacement[material];
+        if texture == u32::MAX as usize || (scale.abs() <= 1e-6 && bias == 0.) {
             continue;
         }
         if uv_scale.abs() > 1_000_000.0 {
@@ -2040,8 +2041,11 @@ pub(crate) mod tests {
     fn generated_software_and_hardware_shaders_compile_for_vulkan_and_dx12() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let _entry = ENTRY_LOCK.lock().unwrap();
-        for hardware in [false, true] {
-            let (scene, assets, _) = prepare_retained(&input(), hardware).unwrap();
+        for (hardware, bytes) in [false, true]
+            .into_iter()
+            .flat_map(|hardware| [input(), displacement_input()].map(|bytes| (hardware, bytes)))
+        {
+            let (scene, assets, _) = prepare_retained(&bytes, hardware).unwrap();
             let source = std::str::from_utf8(&assets[&scene.shader]).unwrap();
             let module = naga::front::wgsl::parse_str(source).unwrap();
             let info = naga::valid::Validator::new(
@@ -2049,7 +2053,7 @@ pub(crate) mod tests {
                 naga::valid::Capabilities::all(),
             )
             .validate(&module)
-            .unwrap();
+            .unwrap_or_else(|error| panic!("{}", error.emit_to_string(source)));
             let (module, info) = naga::back::pipeline_constants::process_overrides(
                 &module,
                 &info,
@@ -2279,13 +2283,14 @@ pub(crate) mod tests {
         bytes = change(&bytes, 83, 1);
         bytes = change(&bytes, 84, 132);
         assert!(validate(&bytes).is_ok());
+        assert!(validate(&change(&change(&bytes, 132, 76), 133, (-0.2f32).to_bits())).is_ok());
         for (word, value) in [
             (132, 0),
             (132, 59),
-            (132, 76),
+            (132, 77),
             (133, f32::NAN.to_bits()),
             (134, 1),
-            (83, 76),
+            (83, 77),
             (84, 135),
         ] {
             assert!(validate(&change(&bytes, word, value)).is_err());
@@ -2356,8 +2361,7 @@ pub(crate) mod tests {
         assert!(validate(&change(&no_arrays, 132, 0)).is_ok());
         assert!(validate(&change(&no_arrays, 132, u32::MAX)).is_ok());
     }
-    #[test]
-    fn displacement_checks_projection_uv_texture_and_numeric_limits() {
+    fn displacement_input() -> Vec<u8> {
         let mut payload = vec![0u32; 54];
         payload[6..10].copy_from_slice(&[2, 2, 1, 150]);
         payload[12] = 1f32.to_bits();
@@ -2388,6 +2392,12 @@ pub(crate) mod tests {
         for (word, value) in [(8, 1), (13, 138), (37, 132), (83, 5), (84, 166)] {
             bytes = change(&bytes, word, value);
         }
+        bytes
+    }
+
+    #[test]
+    fn displacement_checks_projection_uv_texture_and_numeric_limits() {
+        let bytes = displacement_input();
         assert!(validate(&bytes).is_ok());
         for (word, value) in [
             (0, 2),

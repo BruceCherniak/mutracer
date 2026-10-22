@@ -15,6 +15,7 @@ image = { version = "=0.25.8", default-features = false, features = ["png", "jpe
 rfd = "=0.15.4"
 
 serde_json = "1"
+ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
 meshopt = "=0.6.2"
 base64 = "0.22"
 percent-encoding = "2"

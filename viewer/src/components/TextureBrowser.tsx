@@ -152,11 +152,6 @@ export function TextureBrowser() {
           );
         })}
       </div>
-      <p className="hint tex-browser__foot">
-        By <a href="https://polyhaven.com/textures" target="_blank" rel="noreferrer">Poly Haven</a> (CC0). A set replaces the
-        base color, normal and roughness/metalness maps. Displacement is optional (WebGPU only), adds download
-        and render time, and replaces the previous height map; leaving it off clears that map.
-      </p>
     </section>
   );
 }

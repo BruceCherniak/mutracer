@@ -1,8 +1,25 @@
-import Geometry from '../scene/Geometry.js';
+import Geometry, {Attribute} from '../scene/Geometry.js';
 import MaterialState from '../scene/MaterialState.js';
 import { vec2, vec3 } from '../math.js';
 import { read, write } from '../math/access.js';
 import { attributeValue, attributeLength } from '../scene/attributeData.js';
+
+// Use the same normal offset for software BLASes and native procedural AABBs.
+export function displacementBaseGeometry(geometry: Geometry, bias: number): Geometry {
+  if (bias === 0) return geometry;
+  const positions = geometry.position.array.slice();
+  const normals = geometry.normal.array;
+  for (let vertex = 0; vertex < geometry.vertexCount; vertex++) {
+    const p = vertex * geometry.position.itemSize, n = vertex * geometry.normal.itemSize;
+    const length = Math.hypot(normals[n], normals[n + 1], normals[n + 2]);
+    if (length > 0) {
+      for (let axis = 0; axis < 3; axis++) positions[p + axis] += normals[n + axis] / length * bias;
+    }
+  }
+  const result = new Geometry(geometry);
+  result.position = new Attribute(positions, geometry.position.itemSize);
+  return result;
+}
 
 // Shared CPU displacement math. Pixel acquisition and caching belong to adapters.
 export function computeDisplacementMinmax(w: number, sourceChannels: number,

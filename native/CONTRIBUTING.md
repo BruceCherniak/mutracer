@@ -225,7 +225,13 @@ settings retention after edits/backend replacement, and exercises display contro
 transparent PNG export, OIDN alpha preservation and guide channels. It needs the
 bundled OIDN runtime. `--texture-smoke DIRECTORY` requires an imported texture and
 checks all nine S/T wrap combinations plus negative, zero and large repeats on
-Software and actual HWRT against fresh HDR/normal/albedo renders. For Studio, first run
+Software and actual HWRT against fresh HDR/normal/albedo renders.
+`--texture-editor-smoke DIRECTORY` also checks all shared material presets and
+upload/replacement/removal/sampling of all nine slots, including displacement
+scale/bias, against fresh contexts on both backends. Run the ignored
+`live_polyhaven_catalog_and_texture_download` viewer test explicitly to check
+catalog parsing, file selection and image downloads against the live service.
+For Studio, first run
 `node native/validation/viewer-studio-reference.mjs DIRECTORY`, then
 `--studio-smoke DIRECTORY`: it compares native rect-light records with the Web
 placement/ambient oracle and tests preset/parameter edits against fresh contexts

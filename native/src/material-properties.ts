@@ -81,6 +81,7 @@ export function applyNativeMaterialProperties(material: MaterialState, textures:
       case 73: material.specularAnisotropyModel = u[o + E.X] === 0 ? 'openpbr' : 'gltf'; break;
       case 74: material.coatNormalMap = u[o + E.X] === 0xffffffff ? undefined : textures[u[o + E.X]]; break;
       case 75: material.coatNormalScale = [f[o + E.X], f[o + E.Y]]; break;
+      case 76: material.displacementBias = f[o + E.X]; break;
       default: throw new Error('Unsupported native material property.');
     }
   }

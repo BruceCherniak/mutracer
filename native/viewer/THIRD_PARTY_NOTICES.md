@@ -44,3 +44,11 @@ WebP decoding uses [image-webp 0.2.4](https://github.com/image-rs/image-webp)
 under MIT ([license](./LICENSES/Image-webp-MIT.txt)). These codecs do not ship in
 the npm library. The licenses accompany the native app.
 
+## Poly Haven texture downloads
+
+The viewer downloads CC0 textures from [Poly Haven](https://polyhaven.com/textures).
+Its native HTTPS client uses [ureq](https://github.com/algesten/ureq) (MIT/Apache-2.0),
+[rustls](https://github.com/rustls/rustls) (Apache-2.0/ISC/MIT), and their HTTP/TLS
+dependencies. Their copyright notices and license texts are retained in
+[HTTP-TLS.txt](./LICENSES/HTTP-TLS.txt), which accompanies the native app.
+
