@@ -240,7 +240,7 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 .float .select:hover, .float .select[data-hovered] { background: rgb(255 255 255 / 0.06); }
 .viewport-tools { display: flex; align-items: center; gap: 4px; }
 .camera-controls { height: 46px; padding: 6px 8px; margin-left: auto; min-width: 0; max-width: 100%; }
-.viewport-camera { min-width: 0; width: 220px; max-width: calc(100cqw - 80px); }
+.viewport-camera { min-width: 0; width: max-content; max-width: calc(100cqw - 80px); }
 .camera-controls .select { width: 100%; font-family: var(--cv-mono); }
 .camera-controls .select .muted { font-family: system-ui, sans-serif; }
 .viewport-camera .select > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
@@ -589,7 +589,7 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .examples [role='dialog'] { outline: none; display: flex; min-height: 0; width: 100%; }
 .example-tabs { display: flex; flex-direction: column; min-height: 0; width: 100%; }
 .example-tabs__list { display: flex; flex: none; gap: 4px; margin-bottom: 10px; }
-.example-tabs__list [role='tab'] { cursor: pointer; padding: 7px 12px; border-radius: 8px; color: var(--cv-text-3); font-size: 12px; }
+.example-tabs__list [role='tab'] { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; padding: 7px 12px; border-radius: 8px; color: var(--cv-text-3); font-size: 12px; }
 .example-tabs__list [role='tab'][data-selected] { background: var(--cv-accent-surface); color: var(--cv-accent-hover); }
 .example-tabs [role='tabpanel'] { outline: none; overflow-y: auto; min-height: 0; overscroll-behavior: contain; }
 .example-note { margin: 0 4px 10px; }
@@ -766,7 +766,6 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
   .dock { flex-wrap: nowrap; justify-content: flex-start; width: fit-content; max-width: 100%; height: 44px; min-height: 44px;
     padding: 5px 7px; gap: 4px; border: 1px solid rgb(255 255 255 / 0.08); border-radius: var(--cv-radius-floating); background: rgb(29 31 36 / 0.96); }
   .camera-controls { order: 3; height: 44px; }
-  .camera-controls .viewport-camera { width: 180px; }
   .camera-controls .select { font-size: 11px; }
   .camera-controls .select .muted { display: none; }
   .dock__summary { display: flex; align-items: center; gap: 3px; flex: none; }

@@ -1,8 +1,8 @@
 # Using the viewer
 
-Open **Examples → Sample models** for individual models, or
-**Examples → Rendering benchmarks** to try the scenes from
-[glTF Research Scenes](https://github.com/ErfanMo77/gltf-research-scenes).
+Open **Examples → MuTracer collection** for models curated for this viewer, or
+**Examples → glTF Research Scenes** for the independently maintained
+[glTF Research Scenes](https://github.com/ErfanMo77/gltf-research-scenes) collection.
 Scenes download on demand from GitHub; cards show approximate download sizes
 and link to each scene's source and license. Large scenes need more memory.
 
