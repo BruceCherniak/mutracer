@@ -449,7 +449,11 @@ fn oracle_audited(
     settings: &crate::settings::RenderSettings,
     samples: u32,
     audit: bool,
-) -> ([Vec<f32>; 3], Vec<Option<[usize; 3]>>) {
+) -> (
+    [Vec<f32>; 3],
+    Vec<Option<[usize; 3]>>,
+    crate::sample_audit::History,
+) {
     let mut hits = Vec::new();
     let mut error = [0i8; 1024];
     let mut handle = 0;
@@ -490,7 +494,40 @@ fn oracle_audited(
         }
     }
     let size = [word(descriptor, h::WIDTH), word(descriptor, h::HEIGHT)];
-    let images = [0, 1, 2].map(|kind| {
+    let images = context_images(handle, size);
+    let history = if context::AUDIT_HISTORY_SAMPLES.load(std::sync::atomic::Ordering::Relaxed) > 0 {
+        assert_hardware_context(handle);
+        context::audit_history(handle, samples)
+    } else {
+        Default::default()
+    };
+    unsafe {
+        l0_check(
+            context::mt_context_destroy(handle, error.as_mut_ptr(), error.len()),
+            &error,
+        );
+    }
+    (images, hits, history)
+}
+fn assert_hardware_context(handle: u64) {
+    let mut backend = 0;
+    let mut reason = [0; 1024];
+    l0(|e, n| unsafe {
+        context::mt_context_backend(
+            handle,
+            &mut backend,
+            reason.as_mut_ptr(),
+            reason.len(),
+            e,
+            n,
+        )
+    })
+    .unwrap();
+    assert_eq!(backend, 1, "HWRT test fell back to software: {reason:?}");
+}
+fn context_images(handle: u64, size: [u32; 2]) -> [Vec<f32>; 3] {
+    let mut error = [0i8; 1024];
+    [0, 1, 2].map(|kind| {
         let mut bytes = vec![0u8; size[0] as usize * size[1] as usize * 16];
         let mut written = 0;
         unsafe {
@@ -512,14 +549,7 @@ fn oracle_audited(
             .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
             .collect();
         flip_rows(&data, size[0], size[1])
-    });
-    unsafe {
-        l0_check(
-            context::mt_context_destroy(handle, error.as_mut_ptr(), error.len()),
-            &error,
-        );
-    }
-    (images, hits)
+    })
 }
 pub(super) fn images(render: &Render) -> [Vec<f32>; 3] {
     [PixelKind::Hdr, PixelKind::Normal, PixelKind::Albedo]
@@ -1909,9 +1939,16 @@ fn shared_scenes_are_committed_without_copies() {
 }
 
 /// Loop repro of the viewer's intermittent HWRT mismatches: full preparations of an
-/// L1 render presented every frame, one sample per batch, against fresh L0
-/// contexts. `MT_LOOP_ITERATIONS` (default 200); `MT_LOOP_EXTRA=1` keeps a second
-/// HWRT engine rendering meanwhile. Prints mismatches with per-sample primary hits.
+/// L1 render presented every frame against fresh L0
+/// contexts. `MT_LOOP_ITERATIONS` (default 2000); `MT_LOOP_EXTRA=1` keeps a second
+/// HWRT engine rendering meanwhile. `MT_LOOP_L0=1` bypasses the upper API and
+/// uses the old viewer's L0 job polling (one sample per poll). `MT_LOOP_REAL_CAP=1`
+/// uses the actual Sobol cap in the L0 control. `MT_LOOP_BATCHED=1` enables L1
+/// time-budget batches; `MT_LOOP_ORACLE_BATCH=1` batches the oracle. The complete
+/// GPU history is read after the render, including samples inside a batch.
+/// `MUTRACER_TEST_CAPTURE` saves mismatching AOVs and full audit records for replay.
+/// Mismatches fail the test; this remains ignored because it needs real HWRT and
+/// the Metal fault is intermittent.
 #[test]
 #[ignore]
 fn hardware_loop_against_fresh_l0_contexts() {
@@ -1921,9 +1958,22 @@ fn hardware_loop_against_fresh_l0_contexts() {
     let iterations: usize = std::env::var("MT_LOOP_ITERATIONS")
         .ok()
         .and_then(|v| v.parse().ok())
-        .unwrap_or(200);
+        .unwrap_or(2000);
+    let direct = std::env::var_os("MT_LOOP_L0").is_some();
+    let real_cap = std::env::var_os("MT_LOOP_REAL_CAP").is_some();
+    assert!(!real_cap || direct, "MT_LOOP_REAL_CAP requires MT_LOOP_L0");
+    assert!(iterations > 0, "MT_LOOP_ITERATIONS must be positive");
     let extra = std::env::var_os("MT_LOOP_EXTRA").is_some();
     context::AUDIT_PREPARATIONS.store(true, std::sync::atomic::Ordering::Relaxed);
+    context::AUDIT_HISTORY_SAMPLES.store(4, std::sync::atomic::Ordering::Relaxed);
+    struct AuditGuard;
+    impl Drop for AuditGuard {
+        fn drop(&mut self) {
+            context::AUDIT_PREPARATIONS.store(false, std::sync::atomic::Ordering::Relaxed);
+            context::AUDIT_HISTORY_SAMPLES.store(0, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    let _audit = AuditGuard;
     let engine = software_engine(Backend::Hardware).unwrap();
     assert!(engine.info().hardware_ray_query, "no hardware ray queries");
     let scene = lit_scene();
@@ -1954,42 +2004,80 @@ fn hardware_loop_against_fresh_l0_contexts() {
             bounces: 3 + (i % 2) as u32,
             ..base.clone()
         };
-        render.set_settings(settings.clone()).unwrap();
-        engine.update().unwrap();
-        let mut hits = Vec::new();
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
-            let status = render.refine().unwrap();
-            assert_ne!(status, RenderStatus::Error, "{:?}", engine.last_error());
-            while !render.collect().unwrap() {
-                std::thread::sleep(Duration::from_micros(200));
-            }
-            let samples = render.samples();
-            if samples > hits.len() as u32 {
-                let handle = engine.lock().renders[&render.id()].context();
-                hits.push(context::audit_sample(handle, samples - 1));
-            }
-            display.present(&render).unwrap();
-            if let Some((_, other)) = &other {
-                if other.refine().unwrap() == RenderStatus::Finished {
-                    other.restart().unwrap();
+        let descriptor = expected_descriptor(&scene, [96, 64], settings.quality(), None);
+        let l0_settings = settings.l0(
+            if real_cap {
+                settings.max_samples
+            } else {
+                settings.sample_cap(settings.max_samples)
+            },
+            0,
+        );
+        let handle = engine.lock().renders[&render.id()].context();
+        let actual = if direct {
+            l0(|e, n| unsafe {
+                context::mt_context_commit_with_settings(
+                    handle,
+                    descriptor.as_ptr(),
+                    descriptor.len(),
+                    &l0_settings,
+                    e,
+                    n,
+                )
+            })
+            .unwrap();
+            let mut job = 0;
+            l0(|e, n| unsafe {
+                context::mt_context_submit(handle, settings.max_samples, &mut job, e, n)
+            })
+            .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                assert!(Instant::now() < deadline, "L0 iteration {i} did not finish");
+                l0(|e, n| unsafe { context::mt_job_poll(job, 1, e, n) }).unwrap();
+                if l0_samples(handle).unwrap() == settings.max_samples {
+                    break;
                 }
+                std::thread::sleep(Duration::from_millis(2));
             }
-            if samples >= settings.max_samples {
-                break;
+            context_images(handle, [96, 64])
+        } else {
+            render.set_settings(settings.clone()).unwrap();
+            engine.update().unwrap();
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                let status = render.refine().unwrap();
+                assert_ne!(status, RenderStatus::Error, "{:?}", engine.last_error());
+                while !render.collect().unwrap() {
+                    assert!(Instant::now() < deadline, "iteration {i} did not finish");
+                    std::thread::sleep(Duration::from_micros(200));
+                }
+                let samples = render.samples();
+                display.present(&render).unwrap();
+                if let Some((_, other)) = &other {
+                    if other.refine().unwrap() == RenderStatus::Finished {
+                        other.restart().unwrap();
+                    }
+                }
+                if samples >= settings.max_samples {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "iteration {i} did not finish");
             }
-            assert!(Instant::now() < deadline, "iteration {i} did not finish");
-        }
-        let (expected, oracle_hits) = oracle_audited(
+            images(&render)
+        };
+        assert_hardware_context(handle);
+        let hits = context::audit_history(handle, settings.max_samples);
+        let (expected, oracle_hits, oracle_history) = oracle_audited(
             1,
-            &expected_descriptor(&scene, [96, 64], settings.quality(), None),
-            &settings.l0(settings.sample_cap(settings.max_samples), 0),
+            &descriptor,
+            &l0_settings,
             settings.max_samples,
             std::env::var_os("MT_LOOP_ORACLE_BATCH").is_none(),
         );
-        let actual = images(&render);
         let differ: Vec<usize> = (0..3)
             .map(|k| {
+                assert_eq!(actual[k].len(), expected[k].len(), "AOV {k} dimensions");
                 actual[k]
                     .iter()
                     .zip(&expected[k])
@@ -1998,20 +2086,80 @@ fn hardware_loop_against_fresh_l0_contexts() {
             })
             .collect();
         if differ.iter().any(|&d| d > 0) {
-            failures.push(format!(
-                "iteration {i}: differing floats {differ:?}, L1 audit {hits:?}, oracle audit {oracle_hits:?}"
-            ));
+            let counts = actual[1]
+                .chunks_exact(4)
+                .map(|p| p[3] * settings.max_samples as f32)
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), count| {
+                    (min.min(count), max.max(count))
+                });
+            let failure = format!(
+                "iteration {i}: differing floats {differ:?}, GPU count range {counts:?}, history {hits:?}, oracle history {oracle_history:?}, last-sample audit {oracle_hits:?}"
+            );
+            println!("{failure}");
+            if let Some(root) = std::env::var_os("MUTRACER_TEST_CAPTURE") {
+                let stamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos();
+                let directory = std::path::PathBuf::from(root)
+                    .join(format!("hardware-loop-{}-{i}-{stamp}", std::process::id()));
+                std::fs::create_dir_all(&directory).unwrap();
+                std::fs::write(directory.join("scene.bin"), &descriptor).unwrap();
+                std::fs::write(directory.join("actual-audit.bin"), &hits.records).unwrap();
+                std::fs::write(directory.join("oracle-audit.bin"), &oracle_history.records)
+                    .unwrap();
+                for (side, images) in [("actual", &actual), ("oracle", &expected)] {
+                    for (kind, image) in images.iter().enumerate() {
+                        let bytes: Vec<_> = image.iter().flat_map(|v| v.to_le_bytes()).collect();
+                        std::fs::write(directory.join(format!("{side}-aov{kind}.bin")), bytes)
+                            .unwrap();
+                    }
+                }
+                let metadata = serde_json::json!({
+                    "iteration": i,
+                    "width": 96,
+                    "height": 64,
+                    "samples": settings.max_samples,
+                    "l0Control": direct,
+                    "actual": hits.samples,
+                    "oracle": oracle_history.samples,
+                    "settings": {
+                        "samplingPattern": l0_settings.sampling_pattern,
+                        "seed": l0_settings.seed,
+                        "maxSamples": l0_settings.max_samples,
+                        "bounces": l0_settings.bounces,
+                        "directLightCandidates": l0_settings.direct_light_candidates,
+                        "bevelSamples": l0_settings.bevel_samples,
+                        "sampleSequenceOffset": l0_settings.sample_sequence_offset,
+                        "clamping": l0_settings.clamping,
+                        "transmissiveOutputAlphaMin": l0_settings.transmissive_output_alpha_min,
+                    },
+                    "differingFloats": differ,
+                    "actualGpuCountRange": counts,
+                    "aovRowOrder": "top-first",
+                    "auditRowOrder": "bottom-first",
+                    "auditLayout": "u32x4: execution count, pixel sample index, primary hit, interior hit; first plane = last sample; following planes indexed by submitted sample",
+                });
+                std::fs::write(
+                    directory.join("failure.json"),
+                    serde_json::to_vec_pretty(&metadata).unwrap(),
+                )
+                .unwrap();
+                println!("captured {}", directory.display());
+            }
+            failures.push(failure);
         } else if typical.is_none() {
             typical = Some(format!("{hits:?}"));
         }
     }
-    context::AUDIT_PREPARATIONS.store(false, std::sync::atomic::Ordering::Relaxed);
     println!(
-        "hardware loop: {} of {iterations} mismatched (extra engine {extra}); passing audit {}",
+        "hardware loop: {} of {iterations} mismatched (extra engine {extra}, L0 {direct}, real cap {real_cap}); passing audit {}",
         failures.len(),
         typical.unwrap_or_default()
     );
-    for failure in &failures {
-        println!("{failure}");
-    }
+    assert!(
+        failures.is_empty(),
+        "{} HWRT image mismatches; see per-sample history above",
+        failures.len()
+    );
 }

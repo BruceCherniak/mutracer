@@ -2,6 +2,13 @@
 use super::*;
 
 pub(super) fn install(scene: &mut Scene, assets: &mut Assets) -> Result<()> {
+    install_history(scene, assets, 0)
+}
+
+// Keep the ordinary last-sample audit in the first plane. Additional planes
+// observe every submitted sample without readbacks between dispatches, which
+// would change the scheduling of the fault this instrumentation measures.
+pub(super) fn install_history(scene: &mut Scene, assets: &mut Assets, samples: u32) -> Result<()> {
     let id = scene
         .hwrt
         .as_ref()
@@ -40,8 +47,17 @@ pub(super) fn install(scene: &mut Scene, assets: &mut Assets) -> Result<()> {
     // alpha/spectral primary reuse. No extra query or RNG call is introduced.
     let shader = shader.replacen("fn integrator(", &(declaration + "fn integrator("), 1).replace(primary, &format!("{primary}\n  if ({first_query}) {{\n    mtPrimaryHit = u32(si.hit);\n    mtInteriorHit = u32(si.hit && min(min(si.barycentrics.x, si.barycentrics.y), 1.0 - si.barycentrics.x - si.barycentrics.y) > 0.001);\n  }}"))
         .replace(tail, "    accumulateDenoiseMoments(idx, dot(liAndAlpha.rgb, luminance));\n  }\n  mtSampleAudit[idx] = vec4u(mtSampleAudit[idx].x + 1u, pixelSampleIndex, mtPrimaryHit, mtInteriorHit);\n}");
+    let pixels = scene.width as usize * scene.height as usize;
+    let shader = if samples > 0 {
+        shader.replace(
+            "mtSampleAudit[idx] = vec4u(mtSampleAudit[idx].x + 1u, pixelSampleIndex, mtPrimaryHit, mtInteriorHit);",
+            &format!("mtSampleAudit[idx] = vec4u(mtSampleAudit[idx].x + 1u, pixelSampleIndex, mtPrimaryHit, mtInteriorHit);\n  let submitted = u32(rtUniform.sampleCount);\n  if (submitted < {samples}u) {{ mtSampleAudit[(submitted + 1u) * {pixels}u + idx] = mtSampleAudit[idx]; }}"),
+        )
+    } else {
+        shader
+    };
     assets.insert(id, shader.into_bytes());
-    let size = scene.width as usize * scene.height as usize * 16;
+    let size = pixels * 16 * (samples as usize + 1);
     assets.insert(AssetId::Diagnostic(52), vec![0; size]);
     scene.buffers.push(Buffer {
         id: layout::resource::QUERY_COUNTS,
@@ -120,7 +136,82 @@ pub(super) fn read(state: &GpuScene, sample: u32) -> Result<Sample> {
             .normal_output
             .ok_or("Missing normal accumulator")?],
     )?;
-    Ok(classify(&data, &normal, sample)?)
+    classify(
+        data.get(..normal.len())
+            .ok_or("Short sample audit buffer")?,
+        &normal,
+        sample,
+    )
+}
+
+#[cfg(test)]
+#[derive(Debug, serde::Serialize)]
+pub(crate) struct HistorySample {
+    pub sample: u32,
+    pub primary_hits: usize,
+    pub unwritten_pixels: usize,
+    pub wrong_sequence_pixels: usize,
+}
+
+#[cfg(test)]
+#[derive(Default)]
+pub(crate) struct History {
+    pub samples: Vec<HistorySample>,
+    pub records: Vec<u8>,
+}
+
+#[cfg(test)]
+impl std::fmt::Debug for History {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.samples.fmt(f)
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn read_history(state: &GpuScene, samples: u32) -> Result<History> {
+    let data =
+        hit_diagnostics::read_raw(&state.gpu, &state.buffers[&layout::resource::QUERY_COUNTS])?;
+    let samples = summarize_history(
+        &data,
+        state.scene.width as usize * state.scene.height as usize,
+        samples,
+    )?;
+    Ok(History {
+        samples,
+        records: data,
+    })
+}
+
+#[cfg(test)]
+fn summarize_history(data: &[u8], pixels: usize, samples: u32) -> Result<Vec<HistorySample>> {
+    let plane = pixels * 16;
+    if data.len() < plane * (samples as usize + 1) {
+        return Err("Sample history was not installed".into());
+    }
+    Ok((0..samples)
+        .map(|sample| {
+            let mut summary = HistorySample {
+                sample,
+                primary_hits: 0,
+                unwritten_pixels: 0,
+                wrong_sequence_pixels: 0,
+            };
+            let start = plane * (sample as usize + 1);
+            for record in data[start..start + plane].chunks_exact(16) {
+                let w: [u32; 4] = std::array::from_fn(|i| {
+                    u32::from_le_bytes(record[i * 4..i * 4 + 4].try_into().unwrap())
+                });
+                if w[0] == 0 {
+                    summary.unwritten_pixels += 1;
+                } else {
+                    summary.primary_hits += w[2] as usize;
+                    summary.wrong_sequence_pixels +=
+                        usize::from(w[0] != sample + 1 || w[1] != sample);
+                }
+            }
+            summary
+        })
+        .collect())
 }
 
 fn classify(data: &[u8], normal: &[u8], sample: u32) -> Result<Sample> {
@@ -297,7 +388,7 @@ mod tests {
                 .and_then(|h| h.shader)
                 .unwrap_or(scene.shader);
             let original = String::from_utf8(assets[&id].clone()).unwrap();
-            install(&mut scene, &mut assets).unwrap();
+            install_history(&mut scene, &mut assets, 4).unwrap();
             let mut state = GpuScene::new(
                 scene,
                 &RenderOptions {
@@ -312,6 +403,10 @@ mod tests {
                 state.add_samples(1, 6., 12345).unwrap();
                 let audit = read(&state, sample).unwrap();
                 assert_eq!(audit.short_pixels + audit.invalid_pixels, 0);
+            }
+            for sample in read_history(&state, 4).unwrap().samples {
+                assert_eq!(sample.unwritten_pixels, 0, "{sample:?}");
+                assert_eq!(sample.wrong_sequence_pixels, 0, "{sample:?}");
             }
             let audited: Vec<_> = (0..3).map(|k| state.read_pixels(k).unwrap()).collect();
             ordinary_pipeline(&mut state, original);
@@ -339,6 +434,29 @@ mod tests {
                 .collect(),
         )
     }
+    #[test]
+    fn history_distinguishes_misses_omissions_and_their_later_sequence_shift() {
+        let data: Vec<_> = [
+            record(3, 2, 1).0,
+            record(1, 0, 1).0,
+            record(2, 1, 0).0,
+            record(0, 0, 0).0,
+            record(3, 2, 1).0,
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let history = summarize_history(&data, 1, 4).unwrap();
+        assert_eq!(history[0].primary_hits, 1);
+        assert_eq!(history[1].primary_hits, 0);
+        assert_eq!(history[1].unwritten_pixels, 0);
+        assert_eq!(history[1].wrong_sequence_pixels, 0);
+        assert_eq!(history[2].unwritten_pixels, 1);
+        assert_eq!(history[3].primary_hits, 1);
+        assert_eq!(history[3].wrong_sequence_pixels, 1);
+        assert!(summarize_history(&data[..64], 1, 4).is_err());
+    }
+
     #[test]
     fn ordinary_accumulator_requires_finite_integral_counts() {
         let (_, normal) = record(1, 0, 1);

@@ -184,6 +184,23 @@ settings and sample count, byte for byte on Software. The HWRT variant is
 `--ignored` while the Metal HWRT miss is open; with `MUTRACER_OIDN_LIBRARY` set,
 converged OIDN is compared with direct CPU filtering of the same inputs.
 
+To reproduce repeated full-preparation HWRT failures, run the ignored loop with
+the AOT archive and a separate host Cargo target configured as above:
+
+```sh
+MT_LOOP_ITERATIONS=2000 MT_LOOP_BATCHED=1 cargo test \
+  --manifest-path native/host/Cargo.toml --lib \
+  hardware_loop_against_fresh_l0_contexts -- --ignored --nocapture
+```
+
+The loop fails on HDR/normal/albedo mismatches and records every submitted
+sample's primary hits, missing writes and sequence counts on both sides. It reads
+the history after each render, preserving the batch's ordinary GPU submissions.
+`MT_LOOP_L0=1 MT_LOOP_REAL_CAP=1` selects a direct L0 control with one sample per
+job poll and the actual Sobol cap. Set `MUTRACER_TEST_CAPTURE` to an evidence
+directory outside the checkout to save mismatching AOVs, descriptors and raw
+per-pixel audit records. A zero-failure run does not establish a fix.
+
 The staged TS adapters reuse the original camera math, material repacking,
 environment distributions, light PMFs and emissive caches. Acknowledge candidate
 state only after layout validation and GPU upload/reset. Transform and vertex

@@ -102,6 +102,18 @@ static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
 #[cfg(test)]
 pub(crate) static AUDIT_PREPARATIONS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+#[cfg(test)]
+pub(crate) static AUDIT_HISTORY_SAMPLES: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(0);
+#[cfg(test)]
+pub(crate) fn audit_history(handle: u64, samples: u32) -> crate::sample_audit::History {
+    let slot = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    let scene = slot.as_ref().unwrap().contexts[&handle]
+        .scene
+        .as_ref()
+        .unwrap();
+    crate::sample_audit::read_history(scene, samples).unwrap()
+}
 /// Tests: primary hits, short and invalid pixels of a context's last traced
 /// sample (`sample` = its index), when the audit is installed.
 #[cfg(test)]
@@ -711,7 +723,11 @@ unsafe fn commit_with_settings(
                         options.flags |= 4;
                         #[cfg(test)]
                         if AUDIT_PREPARATIONS.load(std::sync::atomic::Ordering::Relaxed) {
-                            crate::sample_audit::install(&mut scene, &mut assets)?;
+                            crate::sample_audit::install_history(
+                                &mut scene,
+                                &mut assets,
+                                AUDIT_HISTORY_SAMPLES.load(std::sync::atomic::Ordering::Relaxed),
+                            )?;
                         }
                     }
                     Err(error) => {

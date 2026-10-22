@@ -154,8 +154,8 @@ Coplanar or overlapping surfaces can resolve to different triangles in software
 and HWRT, changing the image.
 
 On Apple M4 Max with macOS 27.0.1, a sample can occasionally see an empty scene
-or fail to accumulate without a reported error. This occurs with small
-64-ray dispatches while other GPU users, including ordinary background apps,
+or fail to accumulate without a reported error. This has been observed at
+8×8 and 96×64 while other GPU users, including ordinary background apps,
 are active. At 1920×1080, about 620,000 dispatches over three hours, mostly
 under additional GPU load, showed no occurrences; this does not guarantee
 absence at other resolutions or workloads. An affected sample can cause an
