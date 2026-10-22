@@ -98,6 +98,20 @@ struct Registry {
     contexts: HashMap<u64, Context>,
 }
 static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
+/// Tests: install the per-sample primary-hit audit in hardware preparations.
+#[cfg(test)]
+pub(crate) static AUDIT_PREPARATIONS: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+/// Tests: primary hits, short and invalid pixels of a context's last traced
+/// sample (`sample` = its index), when the audit is installed.
+#[cfg(test)]
+pub(crate) fn audit_sample(handle: u64, sample: u32) -> Option<[usize; 3]> {
+    let slot = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    let scene = slot.as_ref()?.contexts.get(&handle)?.scene.as_ref()?;
+    scene.buffers.get(&layout::resource::QUERY_COUNTS)?;
+    let a = crate::sample_audit::read(scene, sample).ok()?;
+    Some([a.primary_hits, a.short_pixels, a.invalid_pixels])
+}
 // The context an ABI call resolved, and whether it was already failed then.
 thread_local! { static TOUCHED: std::cell::Cell<Option<(u64, bool)>> = const { std::cell::Cell::new(None) }; }
 
@@ -695,6 +709,10 @@ unsafe fn commit_with_settings(
                     Ok(capture) => {
                         scene.hwrt = Some(capture);
                         options.flags |= 4;
+                        #[cfg(test)]
+                        if AUDIT_PREPARATIONS.load(std::sync::atomic::Ordering::Relaxed) {
+                            crate::sample_audit::install(&mut scene, &mut assets)?;
+                        }
                     }
                     Err(error) => {
                         fallback_reason = error.to_string();

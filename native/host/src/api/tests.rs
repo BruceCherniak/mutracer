@@ -439,6 +439,18 @@ pub(super) fn oracle(
     settings: &crate::settings::RenderSettings,
     samples: u32,
 ) -> [Vec<f32>; 3] {
+    oracle_audited(backend, descriptor, settings, samples, false).0
+}
+/// [`oracle`]; with `audit`, traces one sample per call and returns each sample's
+/// audit when the preparation installed it.
+fn oracle_audited(
+    backend: u32,
+    descriptor: &[u8],
+    settings: &crate::settings::RenderSettings,
+    samples: u32,
+    audit: bool,
+) -> ([Vec<f32>; 3], Vec<Option<[usize; 3]>>) {
+    let mut hits = Vec::new();
     let mut error = [0i8; 1024];
     let mut handle = 0;
     unsafe {
@@ -462,10 +474,20 @@ pub(super) fn oracle(
             ),
             &error,
         );
-        l0_check(
-            context::mt_context_render(handle, samples, error.as_mut_ptr(), error.len()),
-            &error,
-        );
+        if audit {
+            for sample in 0..samples {
+                l0_check(
+                    context::mt_context_render(handle, 1, error.as_mut_ptr(), error.len()),
+                    &error,
+                );
+                hits.push(context::audit_sample(handle, sample));
+            }
+        } else {
+            l0_check(
+                context::mt_context_render(handle, samples, error.as_mut_ptr(), error.len()),
+                &error,
+            );
+        }
     }
     let size = [word(descriptor, h::WIDTH), word(descriptor, h::HEIGHT)];
     let images = [0, 1, 2].map(|kind| {
@@ -497,7 +519,7 @@ pub(super) fn oracle(
             &error,
         );
     }
-    images
+    (images, hits)
 }
 pub(super) fn images(render: &Render) -> [Vec<f32>; 3] {
     [PixelKind::Hdr, PixelKind::Normal, PixelKind::Albedo]
@@ -1884,4 +1906,112 @@ fn shared_scenes_are_committed_without_copies() {
     // A copied scene with equal bytes is unchanged, as before.
     engine.set_scene(&bytes).unwrap();
     assert!(!engine.update().unwrap());
+}
+
+/// Loop repro of the viewer's intermittent HWRT mismatches: full preparations of an
+/// L1 render presented every frame, one sample per batch, against fresh L0
+/// contexts. `MT_LOOP_ITERATIONS` (default 200); `MT_LOOP_EXTRA=1` keeps a second
+/// HWRT engine rendering meanwhile. Prints mismatches with per-sample primary hits.
+#[test]
+#[ignore]
+fn hardware_loop_against_fresh_l0_contexts() {
+    let _test = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let iterations: usize = std::env::var("MT_LOOP_ITERATIONS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(200);
+    let extra = std::env::var_os("MT_LOOP_EXTRA").is_some();
+    context::AUDIT_PREPARATIONS.store(true, std::sync::atomic::Ordering::Relaxed);
+    let engine = software_engine(Backend::Hardware).unwrap();
+    assert!(engine.info().hardware_ray_query, "no hardware ray queries");
+    let scene = lit_scene();
+    engine.set_scene(&scene).unwrap();
+    let other = extra.then(|| {
+        let other = software_engine(Backend::Hardware).unwrap();
+        other.set_scene(&scene).unwrap();
+        let render = Render::new(&other, RenderSettings::default()).unwrap();
+        (other, render)
+    });
+    let base = RenderSettings {
+        max_samples: 4,
+        allow_multiple_samples_per_frame: std::env::var_os("MT_LOOP_BATCHED").is_some(),
+        time_budget_ms: 1000.,
+        size: RenderSize::Fixed {
+            width: 96,
+            height: 64,
+        },
+        ..Default::default()
+    };
+    let render = Render::new(&engine, base.clone()).unwrap();
+    let display = engine.display();
+    display.set_size(96, 64).unwrap();
+    let mut failures = Vec::new();
+    let mut typical = None;
+    for i in 0..iterations {
+        let settings = RenderSettings {
+            bounces: 3 + (i % 2) as u32,
+            ..base.clone()
+        };
+        render.set_settings(settings.clone()).unwrap();
+        engine.update().unwrap();
+        let mut hits = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let status = render.refine().unwrap();
+            assert_ne!(status, RenderStatus::Error, "{:?}", engine.last_error());
+            while !render.collect().unwrap() {
+                std::thread::sleep(Duration::from_micros(200));
+            }
+            let samples = render.samples();
+            if samples > hits.len() as u32 {
+                let handle = engine.lock().renders[&render.id()].context();
+                hits.push(context::audit_sample(handle, samples - 1));
+            }
+            display.present(&render).unwrap();
+            if let Some((_, other)) = &other {
+                if other.refine().unwrap() == RenderStatus::Finished {
+                    other.restart().unwrap();
+                }
+            }
+            if samples >= settings.max_samples {
+                break;
+            }
+            assert!(Instant::now() < deadline, "iteration {i} did not finish");
+        }
+        let (expected, oracle_hits) = oracle_audited(
+            1,
+            &expected_descriptor(&scene, [96, 64], settings.quality(), None),
+            &settings.l0(settings.sample_cap(settings.max_samples), 0),
+            settings.max_samples,
+            std::env::var_os("MT_LOOP_ORACLE_BATCH").is_none(),
+        );
+        let actual = images(&render);
+        let differ: Vec<usize> = (0..3)
+            .map(|k| {
+                actual[k]
+                    .iter()
+                    .zip(&expected[k])
+                    .filter(|(a, b)| a.to_bits() != b.to_bits())
+                    .count()
+            })
+            .collect();
+        if differ.iter().any(|&d| d > 0) {
+            failures.push(format!(
+                "iteration {i}: differing floats {differ:?}, L1 audit {hits:?}, oracle audit {oracle_hits:?}"
+            ));
+        } else if typical.is_none() {
+            typical = Some(format!("{hits:?}"));
+        }
+    }
+    context::AUDIT_PREPARATIONS.store(false, std::sync::atomic::Ordering::Relaxed);
+    println!(
+        "hardware loop: {} of {iterations} mismatched (extra engine {extra}); passing audit {}",
+        failures.len(),
+        typical.unwrap_or_default()
+    );
+    for failure in &failures {
+        println!("{failure}");
+    }
 }
