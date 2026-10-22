@@ -29,6 +29,18 @@ function syntaxErrors(code: string) {
 }
 
 describe('viewer code snippet', () => {
+  it('recreates metadata lights without adding an HDRI to an emissive scene', () => {
+    const code = generateCode(snapshot({ envId: 'model', background: 'grounded' }, {
+      environmentUrl: null, blackEnvironment: true,
+      metadataLights: [{ color: [8, 4, 2], intensity: 1, position: [1, 3, 0], target: [0, 1, 0] }]
+    }));
+    expect(syntaxErrors(code)).toEqual([]);
+    expect(code).not.toContain('HDRLoader');
+    expect(code).not.toContain('texture: environment');
+    expect(code).toContain('new THREE.DirectionalLight(new THREE.Color(8, 4, 2), 1)');
+    expect(code).toContain('light.position.set(1, 3, 0)');
+    expect(code).toContain('light.target.position.set(0, 1, 0)');
+  });
   it('leaves library defaults out', () => {
     const code = generateCode(snapshot({ toneMapping: 'agx', exposure: 1, denoise: false, groundOpacity: 1 }));
     expect(syntaxErrors(code)).toEqual([]);

@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, ChevronDown, ChevronUp, Crosshair, Focus, Maximize, Move, Pause, Play, Repeat as Loop, Upload } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Move, Pause, Play, Repeat as Loop, Upload } from 'lucide-react';
 import { MATERIALX_IMPORT, ViewerEngine, getEngine, setEngine } from '../engine/ViewerEngine';
 import { HANDOFF_HASH, readDroppedItems, takeStashedFiles } from '../engine/droppedFiles';
 import { FOCUS_AREA_SIZE } from '../engine/areaFocus';
 import { hashModelPreset, setUi, useViewer } from '../store';
 import { MODEL_PRESETS } from '../engine/presets';
 import { StatusBar } from './StatusBar';
+import { CameraControls } from './ViewControls';
 import { Select } from './ui/controls';
 
 export function Viewport() {
@@ -59,12 +60,12 @@ export function Viewport() {
         <>
           <SelectionBox />
           <FocusFrame />
-          <TopBar />
           <div className="viewport-bottom">
             <Credit />
             <AnimationBar />
             <div className="viewport-footer">
               <StatusBar />
+              <CameraControls />
               <button className="btn panel-toggle" aria-label={inspectorOpen ? 'Hide inspector' : 'Show inspector'} aria-expanded={inspectorOpen}
                 onClick={() => setUi({ right: !inspectorOpen })}>
                 {inspectorOpen ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
@@ -81,25 +82,6 @@ export function Viewport() {
         </div>
       )}
     </section>
-  );
-}
-
-function TopBar() {
-  const picking = useViewer((s) => s.pickingFocus);
-  const autoFocus = useViewer((s) => s.settings.autoFocus);
-  const focusFrame = useViewer((s) => s.ui.focusFrame);
-  const depthOfField = useViewer((s) => s.settings.fStop > 0 &&
-    !(s.settings.cameraIndex < 0 && s.settings.projection === 'orthographic'));
-  const canShowFrame = depthOfField && autoFocus;
-  return (
-    <div className="float viewport-tools" role="group" aria-label="View controls">
-      {depthOfField && !autoFocus && <button className="icon-btn icon-btn--bare" title="Pick focus point" aria-label="Pick focus point" data-active={picking || undefined}
-        onClick={() => useViewer.setState({ pickingFocus: !picking })}><Crosshair size={16} /></button>}
-      {canShowFrame && <button className="icon-btn icon-btn--bare" aria-label="Show focus frame" aria-pressed={focusFrame}
-        title={focusFrame ? 'Hide focus frame' : 'Show focus frame'} data-active={focusFrame || undefined}
-        onClick={() => setUi({ focusFrame: !focusFrame })}><Focus size={16}>{!focusFrame && <path d="m3 3 18 18" />}</Focus></button>}
-      <button className="icon-btn icon-btn--bare" title="Fit to model (F)" aria-label="Fit to model" onClick={() => getEngine()?.fit()}><Maximize size={16} /></button>
-    </div>
   );
 }
 

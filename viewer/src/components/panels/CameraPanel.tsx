@@ -5,21 +5,11 @@ import { Hint, Scrub, Section, Segmented, Select, Switch } from '../ui/controls'
 
 export function CameraPanel() {
   const s = useViewer((state) => state.settings);
-  const cameras = useViewer((state) => state.cameras);
   const orbit = s.cameraIndex < 0;
   const orthographic = orbit && s.projection === 'orthographic';
   return (
     <>
       <Section title="View" icon={<Camera size={14} />}>
-        {cameras.length > 0 && (
-          <Select
-            label="Camera"
-            prefix="Camera"
-            value={String(s.cameraIndex)}
-            options={[{ value: '-1', label: 'Orbit' }, ...cameras.map((name, i) => ({ value: String(i), label: name }))]}
-            onChange={(v) => setSettings({ cameraIndex: Number(v) })}
-          />
-        )}
         <Segmented
           label="Projection"
           value={s.projection}
@@ -31,13 +21,13 @@ export function CameraPanel() {
           onChange={(v) => setSettings({ projection: v })}
         />
         <Scrub label="Field of view" value={s.fov} min={10} max={100} step={1} unit="°" disabled={!orbit || orthographic} onChange={(v) => setSettings({ fov: v })} />
-        <Switch label="Auto-rotate" checked={s.autoRotate} disabled={!orbit} onChange={(v) => setSettings({ autoRotate: v })}>
+        <Switch label="Auto-rotate" checked={s.autoRotate} onChange={(v) => setSettings({ autoRotate: v })}>
           <span className="field-label">Auto-rotate</span>
         </Switch>
-        <button className="btn btn--wide" disabled={!orbit} onClick={() => getEngine()?.fit()}>
+        <button className="btn btn--wide" onClick={() => getEngine()?.fit()}>
           <Maximize size={15} />Fit to model<kbd>F</kbd>
         </button>
-        {!orbit && <Hint>Model cameras are fixed. Switch to Orbit to move the view.</Hint>}
+        {!orbit && <Hint>Drag, pan or zoom to continue from this camera in Orbit.</Hint>}
       </Section>
 
       <Section

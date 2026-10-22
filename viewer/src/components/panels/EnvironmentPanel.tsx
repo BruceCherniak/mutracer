@@ -1,6 +1,6 @@
 import { useId } from 'react';
 import { Button, FileTrigger } from 'react-aria-components';
-import { Globe, Image, Lamp, Square, Upload } from 'lucide-react';
+import { Globe, Image, Lamp, Square, Sun, Upload } from 'lucide-react';
 import { autoGroundedSkybox, setSettings, useViewer } from '../../store';
 import { ENVIRONMENT_PRESETS, ENV_RESOLUTIONS } from '../../engine/presets';
 import { STUDIO_PRESETS, findStudioPreset, type StudioPreset } from '../../engine/studio';
@@ -16,6 +16,7 @@ export function EnvironmentPanel() {
   const s = useViewer((state) => state.settings);
   const envLoading = useViewer((state) => state.envLoading);
   const modelRadius = useViewer((state) => state.modelRadius);
+  const modelLighting = useViewer((state) => state.modelLighting);
   const grounded = autoGroundedSkybox(modelRadius, s.groundedHeight);
   const groundedAuto = s.groundedHeight === null && s.groundedRadius === null;
   const loadingFraction = envLoading?.total ? envLoading.loaded / envLoading.total : 0;
@@ -47,9 +48,13 @@ export function EnvironmentPanel() {
       {studio ? <StudioSection /> : <Section
         title="Environment"
         icon={<Globe size={14} />}
-        value={envLoading ? `Loading ${Math.round(loadingFraction * 100)}%` : current?.name ?? 'Custom HDR'}
+        value={envLoading ? `Loading ${Math.round(loadingFraction * 100)}%` : s.envId === 'model' ? 'Scene lighting' : current?.name ?? 'Custom HDR'}
       >
         <div className="env-grid" role="radiogroup" aria-label="Environment map">
+          {modelLighting?.available && <button className="env env--upload" role="radio" aria-checked={s.envId === 'model'}
+            data-on={s.envId === 'model' || undefined} onClick={() => setSettings({ envId: 'model', envIntensity: 1, envRotation: 0 })}>
+            <div><Sun size={16} />Scene lighting</div>
+          </button>}
           {ENVIRONMENT_PRESETS.map((preset) => (
             <button
               key={preset.id}
@@ -92,9 +97,11 @@ export function EnvironmentPanel() {
           />
         </Field>
         <Hint>HDRIs by <a href="https://polyhaven.com/hdris" target="_blank" rel="noreferrer">Poly Haven</a> (CC0), loaded on demand.</Hint>
+        {modelLighting?.available && <Hint>Scene lights stay active when you add an environment or studio lighting.</Hint>}
         <Scrub label="Intensity" value={s.envIntensity} min={0} max={4} step={0.01} onChange={(v) => setSettings({ envIntensity: v })} />
         <Scrub label="Rotation" value={s.envRotation} min={0} max={360} step={1} unit="°" onChange={(v) => setSettings({ envRotation: v })} />
       </Section>}
+      {modelLighting?.warnings.map((warning) => <Hint key={warning}>{warning}</Hint>)}
 
       <Section title="Background" icon={<Image size={14} />}>
         <div className="bg-cards" data-count={backgrounds.length} role="radiogroup" aria-label="Background">

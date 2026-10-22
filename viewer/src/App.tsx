@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { X } from 'lucide-react';
+import { Toast } from './components/Toast';
 import { setSettings, setUi, useViewer } from './store';
 import { getEngine } from './engine/ViewerEngine';
 import { redo, undo } from './history';
@@ -90,22 +90,6 @@ export function App() {
       <ExportDialog />
       <CodeDialog />
       <Toast />
-    </div>
-  );
-}
-
-function Toast() {
-  const toast = useViewer((s) => s.toast);
-  useEffect(() => {
-    if (!toast) return;
-    const timer = setTimeout(() => useViewer.setState({ toast: null }), toast.tone === 'error' ? 7000 : 3500);
-    return () => clearTimeout(timer);
-  }, [toast]);
-  if (!toast) return null;
-  return (
-    <div className="toast" role={toast.tone === 'error' ? 'alert' : 'status'} data-tone={toast.tone} key={toast.id}>
-      <span>{toast.message}</span>
-      <button className="icon-btn icon-btn--bare xs" aria-label="Dismiss" onClick={() => useViewer.setState({ toast: null })}><X size={12} /></button>
     </div>
   );
 }
