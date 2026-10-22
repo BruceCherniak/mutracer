@@ -208,6 +208,8 @@ struct Viewer {
     display_settings: mutracer_native_probe::display::Settings,
     applied_display: Option<api::DisplaySettings>,
     applied_denoise: Option<bool>,
+    /// Paused with the current samples denoised and presented.
+    paused_denoised: bool,
     selected: usize,
     selected_mesh: Option<usize>,
     texture_browser: textures::Browser,
@@ -297,6 +299,7 @@ impl Viewer {
             display_settings: mutracer_native_probe::display::Settings::default(),
             applied_display: None,
             applied_denoise: None,
+            paused_denoised: false,
             selected,
             selected_mesh: None,
             texture_browser: textures::Browser::default(),
@@ -591,9 +594,9 @@ impl Viewer {
             }
             self.change = Change::None;
         }
-        // Denoising follows the final channel while accumulating, as before:
-        // not while input is held or paused.
-        let denoise = self.denoise && self.display_settings.output == 0 && !held && self.running;
+        // Denoising follows the final channel, as before: not while input is held.
+        // Paused, the current samples are filtered once.
+        let denoise = self.denoise && self.display_settings.output == 0 && !held;
         if self.applied_denoise != Some(denoise) {
             self.final_render()
                 .set_denoiser(denoise.then(|| api::DenoiserOptions {
@@ -627,15 +630,29 @@ impl Viewer {
             {
                 target.engine.update()?;
             }
-            if display_changed {
+            let denoised = denoise && self.final_render().denoise_current()?;
+            if display_changed || denoised && !self.paused_denoised {
                 if let Some(presented) =
                     self.target.engine.display().present(self.final_render())?
                 {
                     self.present_frame(ctx, presented)?;
                 }
             }
+            self.paused_denoised = denoised;
+            // Wait for the batch in flight and the filter, unless denoising failed.
+            let render = self.final_render();
+            if denoise
+                && !denoised
+                && render.samples() > 0
+                && render.denoise_report().is_none_or(|r| r.error.is_none())
+            {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
             self.target.render_loop.status()
         };
+        if self.running {
+            self.paused_denoised = false;
+        }
         // Swap in a replacement engine once it shows an image.
         if self
             .replacement
@@ -1266,6 +1283,71 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         std::thread::sleep(Duration::from_millis(2));
     }
     println!("PASS native denoise after lowering target below completed samples");
+    // Paused, the current samples are denoised once and shown without tracing;
+    // resuming continues the progressive points.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    viewer.settings.max_samples = 64;
+    viewer.dirty(Change::Scene);
+    while viewer.preparing() || viewer.change != Change::None || viewer.samples < 6 {
+        viewer.tick(&ctx)?;
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Samples before pause timed out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    viewer.running = false;
+    let frames = viewer.frames;
+    let paused = loop {
+        viewer.tick(&ctx)?;
+        let samples = viewer.samples;
+        if viewer.final_render().denoise_report().map(|r| r.samples) == Some(samples)
+            && viewer.frames > frames
+        {
+            break samples;
+        }
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Paused denoise timed out: {}",
+            viewer.denoise_status
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    let shown = viewer.read_rgba(&viewer.display_settings)?;
+    for _ in 0..20 {
+        viewer.tick(&ctx)?;
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    ensure!(
+        viewer.samples == paused && viewer.final_render().samples() == paused,
+        "Traced while paused"
+    );
+    ensure!(
+        viewer.read_rgba(&viewer.display_settings)? == shown
+            && viewer
+                .denoised()?
+                .is_some_and(|d| d.len() == viewer.hdr().unwrap().len()),
+        "Paused denoised image not kept"
+    );
+    viewer.running = true;
+    while viewer
+        .final_render()
+        .denoise_report()
+        .is_none_or(|r| r.samples <= paused)
+    {
+        viewer.tick(&ctx)?;
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Progressive denoise after resume timed out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let resumed = viewer.final_render().denoise_report().unwrap().samples;
+    ensure!(
+        resumed == (paused * 2).min(64),
+        "Resumed denoise at {resumed} samples after a pause at {paused}"
+    );
+    println!("PASS paused denoise at {paused} samples without tracing; resumed at {resumed}");
     viewer.denoise = false;
     let old = viewer.pixels.clone();
     let old_name = viewer.model.name.clone();
