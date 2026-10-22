@@ -255,7 +255,8 @@ Autofocus uses immutable CPU picking geometry; it does not add GPU readbacks or
 inspect alpha textures. Test all three AOVs, invalid input,
 rollback and restoration. `[MODEL] --edit-bench DIRECTORY` records descriptor
 build and commit times of material, transform, camera, light and environment
-edits at 1280×720 on both backends in `edit-bench.jsonl`; set
+edits at 1280×720 on both backends in `edit-bench.jsonl`, through a bare L0 context
+(`"path": "l0"`) and the viewer's engine path (`"path": "l1"`); set
 `MUTRACER_NATIVE_PROFILE=1` for a per-commit phase breakdown on stderr.
 
 Inspect the real window as well: file dialogs, panel changes, orbit/pan/zoom/fit,

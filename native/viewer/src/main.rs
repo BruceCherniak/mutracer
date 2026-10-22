@@ -175,7 +175,7 @@ fn bottom_first(image: api::Image) -> Vec<f32> {
         .collect()
 }
 type SceneBuild = (
-    std::sync::mpsc::Receiver<Result<Descriptor>>,
+    std::sync::mpsc::Receiver<Result<(Descriptor, Arc<Vec<u8>>)>>,
     Option<(Model, Camera)>,
     [u32; 2],
 );
@@ -452,25 +452,27 @@ impl Viewer {
         }
     }
     /// Hands the model's descriptor and the render settings to the editing target.
+    /// The engine shares one copy of the patched descriptor with the render.
     fn push(&mut self, held: bool) -> Result<()> {
-        let bytes = self
-            .model
-            .update_descriptor(
-                &mut self.descriptor,
-                &self.camera.bytes(self.size),
-                self.size,
-                &self.environment,
-                &self.light,
-            )
-            .to_vec();
-        self.push_bytes(&bytes, self.size, held)
+        let bytes = Arc::new(
+            self.model
+                .update_descriptor(
+                    &mut self.descriptor,
+                    &self.camera.bytes(self.size),
+                    self.size,
+                    &self.environment,
+                    &self.light,
+                )
+                .to_vec(),
+        );
+        self.push_bytes(bytes, self.size, held)
     }
-    fn push_bytes(&mut self, bytes: &[u8], size: [u32; 2], held: bool) -> Result<()> {
+    fn push_bytes(&mut self, bytes: Arc<Vec<u8>>, size: [u32; 2], held: bool) -> Result<()> {
         let settings = render_settings(&self.settings, size, held);
         let target = self.replacement.as_mut().unwrap_or(&mut self.target);
         target.final_render().set_settings(settings)?;
         target.engine.display().set_size(size[0], size[1])?;
-        target.engine.set_scene(bytes)?;
+        target.engine.set_scene_shared(bytes)?;
         target.pushed = true;
         self.error.clear();
         Ok(())
@@ -497,10 +499,9 @@ impl Viewer {
             match receive.try_recv() {
                 Ok(result) => {
                     let (_, candidate, size) = self.scene_build.take().unwrap();
-                    let descriptor = result?;
-                    let bytes = descriptor.bytes().to_vec();
+                    let (descriptor, bytes) = result?;
                     self.descriptor = Some(descriptor);
-                    self.push_bytes(&bytes, size, held)?;
+                    self.push_bytes(bytes, size, held)?;
                     if let Some(candidate) = candidate {
                         if let Some(retired) = self.pending_model.replace(candidate) {
                             std::thread::spawn(move || drop(retired));
@@ -581,7 +582,9 @@ impl Viewer {
                                 &environment,
                                 &light,
                             );
-                            descriptor.unwrap()
+                            let descriptor = descriptor.unwrap();
+                            let bytes = Arc::new(descriptor.bytes().to_vec());
+                            (descriptor, bytes)
                         }))
                         .map_err(|_| anyhow::anyhow!("Scene assembly panicked"));
                         let _ = send.send(result);
