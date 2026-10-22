@@ -246,6 +246,19 @@ build and commit times of material, transform, camera, light and environment
 edits at 1280×720 on both backends in `edit-bench.jsonl`; set
 `MUTRACER_NATIVE_PROFILE=1` for a per-commit phase breakdown on stderr.
 
+The viewer Rust suite includes CPU animation cases. With the AOT archive and
+viewer Cargo target configured as above, run the ignored real-device case:
+
+```sh
+cargo test --release --locked --manifest-path native/viewer/Cargo.toml \
+  gpu_animated_poses -- --ignored --nocapture
+```
+
+It compares animated HDR/normal/albedo against fresh scenes on Software and
+actual HWRT, then exercises playback, pause, seeking and clip switching.
+`MUTRACER_ANIMATION_EVIDENCE` optionally saves the procedural glTF fixture,
+evaluated poses, images and a JSON report outside the checkout.
+
 Inspect the real window as well: file dialogs, panel changes, orbit/pan/zoom/fit,
 pause/restart, resolution/exposure and PNG export are not covered by headless
 smokes. `MUTRACER_VIEWER_METRICS=/absolute/result.json` runs a 1280×720 real-window

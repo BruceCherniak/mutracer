@@ -691,7 +691,7 @@ mod tests {
             id
         }
         fn floats(&mut self, values: &[f32], kind: &str, count: usize) -> usize {
-            self.accessor(
+            let id = self.accessor(
                 &values
                     .iter()
                     .flat_map(|v| v.to_le_bytes())
@@ -699,7 +699,31 @@ mod tests {
                 kind,
                 count,
                 5126,
-            )
+            );
+            let width = values.len() / count;
+            let min: Vec<_> = (0..width)
+                .map(|k| {
+                    values
+                        .iter()
+                        .skip(k)
+                        .step_by(width)
+                        .copied()
+                        .fold(f32::INFINITY, f32::min)
+                })
+                .collect();
+            let max: Vec<_> = (0..width)
+                .map(|k| {
+                    values
+                        .iter()
+                        .skip(k)
+                        .step_by(width)
+                        .copied()
+                        .fold(f32::NEG_INFINITY, f32::max)
+                })
+                .collect();
+            self.json["accessors"][id]["min"] = json!(min);
+            self.json["accessors"][id]["max"] = json!(max);
+            id
         }
         fn clip(
             &mut self,
@@ -722,10 +746,13 @@ mod tests {
                 .unwrap()
                 .document
         }
-        fn load(&mut self) -> Model {
+        fn save(&mut self, path: &std::path::Path) {
             use base64::Engine;
             self.json["buffers"] = json!([{"byteLength": self.bytes.len(),
                 "uri": format!("data:application/octet-stream;base64,{}", base64::engine::general_purpose::STANDARD.encode(&self.bytes))}]);
+            std::fs::write(path, serde_json::to_vec(&self.json).unwrap()).unwrap();
+        }
+        fn load(&mut self) -> Model {
             let nonce = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
@@ -734,7 +761,7 @@ mod tests {
                 "mutracer-animation-{}-{nonce}.gltf",
                 std::process::id()
             )));
-            std::fs::write(&file.0, serde_json::to_vec(&self.json).unwrap()).unwrap();
+            self.save(&file.0);
             Model::load(&file.0).unwrap()
         }
     }
@@ -895,8 +922,7 @@ mod tests {
         assert!(Arc::ptr_eq(&picking, &model.picking));
     }
 
-    #[test]
-    fn morph_is_applied_before_skin_and_picking_snapshots_keep_their_pose() {
+    fn skinned_morph_fixture() -> Fixture {
         let mut fixture = Fixture::new();
         let morph = fixture.floats(&[2., 0., 0., 2., 0., 0., 2., 0., 0.], "VEC3", 3);
         fixture.json["meshes"][0]["primitives"][0]["targets"] = json!([{"POSITION": morph}]);
@@ -928,7 +954,12 @@ mod tests {
         joint_channel["sampler"] = json!(1);
         clip["channels"].as_array_mut().unwrap().push(joint_channel);
         fixture.json["animations"] = json!([clip]);
-        let mut model = fixture.load();
+        fixture
+    }
+
+    #[test]
+    fn morph_is_applied_before_skin_and_picking_snapshots_keep_their_pose() {
+        let mut model = skinned_morph_fixture().load();
         let snapshot = model.clone();
         seek(&mut model, 0.5);
         let geometry = &model.geometries[0];
@@ -1017,5 +1048,225 @@ mod tests {
         assert!(Arc::ptr_eq(&model.geometries, &before.geometries));
         assert!(Arc::ptr_eq(&model.picking, &before.picking));
         assert!(!model.animation.as_ref().unwrap().playing);
+    }
+
+    #[test]
+    #[ignore = "requires a real GPU with software BVH and HWRT"]
+    fn gpu_animated_poses_match_fresh_scenes_and_playback_keeps_presenting() {
+        use crate::{
+            Change, Viewer,
+            renderer::Renderer,
+            scene::{Environment, KeyLight},
+        };
+        use std::time::{Duration, Instant};
+
+        fn tick(viewer: &mut Viewer, ctx: &eframe::egui::Context) {
+            if let Err(error) = viewer.tick(ctx) {
+                assert!(crate::renderer::NativeError::is_busy(&error), "{error:#}");
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        fn settle(viewer: &mut Viewer, ctx: &eframe::egui::Context) {
+            let deadline = Instant::now() + Duration::from_secs(30);
+            loop {
+                tick(viewer, ctx);
+                if viewer.commit.is_none()
+                    && viewer.change == Change::None
+                    && !viewer.renderer.busy()
+                    && !viewer.frame_pending
+                    && viewer.frame_generation == viewer.generation
+                    && viewer.samples == viewer.settings.max_samples
+                {
+                    return;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "Animation did not settle: {}",
+                    viewer.error
+                );
+            }
+        }
+
+        let mut fixture = skinned_morph_fixture();
+        let second = fixture.clip(
+            0,
+            "translation",
+            &[0., 1.],
+            &[1., 0., 0., 2., 0., 0.],
+            "LINEAR",
+            "VEC3",
+            2,
+        );
+        fixture.json["animations"]
+            .as_array_mut()
+            .unwrap()
+            .push(second);
+        let file = File(std::env::temp_dir().join(format!(
+            "mutracer-animation-gpu-{}.gltf",
+            std::process::id()
+        )));
+        fixture.save(&file.0);
+        let evidence = std::env::var_os("MUTRACER_ANIMATION_EVIDENCE").map(PathBuf::from);
+        if let Some(out) = &evidence {
+            std::fs::create_dir_all(out).unwrap();
+            fixture.save(&out.join("animated.gltf"));
+        }
+        let size = [96, 64];
+        let mut camera = Camera::fit(Vec3::new(2., 1., 0.), 2.);
+        camera.yaw = 0.;
+        camera.pitch = 0.;
+        let mut report = Vec::new();
+        for mode in [0, 1] {
+            let mut model = Model::load(&file.0).unwrap();
+            let environment = Environment::default();
+            let light = KeyLight::default();
+            let mut retained = Renderer::with_backend(mode).unwrap();
+            let mut fresh = Renderer::with_backend(mode).unwrap();
+            let mut descriptor = None;
+            let mut previous = Vec::new();
+            let mut changed = 0;
+            let mut incremental = 0;
+            for (frame, time) in [0., 0.25, 0.5, 0.75, 1., 0.].into_iter().enumerate() {
+                seek(&mut model, time);
+                retained
+                    .commit(model.update_descriptor(
+                        &mut descriptor,
+                        &camera.bytes(size),
+                        size,
+                        &environment,
+                        &light,
+                    ))
+                    .unwrap();
+                incremental += usize::from(retained.last_commit_incremental().unwrap());
+                assert_eq!(retained.samples().unwrap(), 0);
+                let actual = retained.finish(4).unwrap();
+                assert_eq!(
+                    retained.backend().unwrap().0,
+                    mode,
+                    "Unexpected backend fallback"
+                );
+                fresh
+                    .commit(&model.descriptor_with_light(
+                        &camera.bytes(size),
+                        size,
+                        &environment,
+                        &light,
+                    ))
+                    .unwrap();
+                assert_eq!(
+                    actual,
+                    fresh.finish(4).unwrap(),
+                    "HDR differs: backend {mode}, time {time}"
+                );
+                assert_eq!(
+                    retained.image(1).unwrap(),
+                    fresh.image(1).unwrap(),
+                    "Normal differs: backend {mode}, time {time}"
+                );
+                assert_eq!(
+                    retained.image(2).unwrap(),
+                    fresh.image(2).unwrap(),
+                    "Albedo differs: backend {mode}, time {time}"
+                );
+                if !previous.is_empty() && actual != previous {
+                    changed += 1;
+                }
+                previous = actual;
+                if let Some(out) = &evidence {
+                    crate::renderer::save(
+                        &out.join(format!("mode-{mode}-pose-{frame}.png")),
+                        &previous,
+                        size,
+                        0.,
+                    )
+                    .unwrap();
+                    let positions: Vec<_> = model.geometries.iter().map(|g| &g.positions).collect();
+                    let transforms: Vec<_> = model
+                        .meshes
+                        .iter()
+                        .map(|m| m.transform.to_cols_array())
+                        .collect();
+                    std::fs::write(
+                        out.join(format!("mode-{mode}-pose-{frame}.json")),
+                        serde_json::to_vec_pretty(
+                            &json!({"time":time,"positions":positions,"transforms":transforms}),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap();
+                }
+            }
+            assert!(
+                changed >= 4,
+                "Animated poses did not change the rendered image"
+            );
+            assert!(incremental > 0, "No incremental animation commits");
+            drop(retained);
+            drop(fresh);
+
+            let ctx = eframe::egui::Context::default();
+            let mut viewer = Viewer::new(&file.0).unwrap();
+            viewer.backend = mode;
+            viewer.size = size;
+            viewer.camera = camera.clone();
+            viewer.settings.max_samples = 4;
+            viewer.denoise = false;
+            viewer.focus.enabled = false;
+            viewer.dirty(Change::Scene);
+            settle(&mut viewer, &ctx);
+            let mut generations = std::collections::HashSet::new();
+            let deadline = Instant::now() + Duration::from_secs(30);
+            viewer.toggle_animation_or_render();
+            while generations.len() < 6 {
+                tick(&mut viewer, &ctx);
+                assert!(viewer.texture.is_some(), "Playback blanked the viewport");
+                if viewer.frame_samples > 0 {
+                    generations.insert(viewer.frame_generation);
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "Playback stopped presenting: {}",
+                    viewer.error
+                );
+            }
+            viewer.toggle_animation_or_render();
+            let paused = viewer.model.animation.as_ref().unwrap().time;
+            assert!(paused > 0., "Playback clock did not advance");
+            settle(&mut viewer, &ctx);
+            assert_eq!(viewer.model.animation.as_ref().unwrap().time, paused);
+            viewer.model.animation.as_mut().unwrap().seek(0.75);
+            // The old frame has already converged; seeking must still schedule a new pose.
+            settle(&mut viewer, &ctx);
+            assert_eq!(viewer.model.animation.as_ref().unwrap().time, 0.75);
+            viewer.model.animation.as_mut().unwrap().select(1);
+            settle(&mut viewer, &ctx);
+            assert_eq!(viewer.model.animation.as_ref().unwrap().time, 0.);
+            let mut reference = Renderer::with_backend(mode).unwrap();
+            reference
+                .commit_with_settings(
+                    &viewer.model.descriptor_with_light(
+                        &viewer.camera.bytes(size),
+                        size,
+                        &viewer.environment,
+                        &viewer.light,
+                    ),
+                    &viewer.settings,
+                )
+                .unwrap();
+            assert_eq!(
+                viewer.pixels,
+                reference.finish(4).unwrap(),
+                "Final paused pose differs from fresh scene"
+            );
+            assert_eq!(viewer.renderer.backend().unwrap().0, mode);
+            report.push(json!({"backend":mode,"poses":6,"changedImages":changed,"incrementalCommits":incremental,"displayedGenerations":generations.len(),"pausedTime":paused}));
+        }
+        if let Some(out) = evidence {
+            std::fs::write(
+                out.join("report.json"),
+                serde_json::to_vec_pretty(&report).unwrap(),
+            )
+            .unwrap();
+        }
     }
 }
