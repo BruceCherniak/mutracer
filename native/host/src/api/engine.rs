@@ -5,7 +5,10 @@ use super::{Result, Status, error};
 use crate::GpuDevice;
 use crate::layout::{WORD_BYTES, camera as camera_wire, header};
 use std::collections::BTreeMap;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{
+    Arc, Mutex, MutexGuard,
+    atomic::{AtomicBool, Ordering},
+};
 
 /// Intersection backend for every render of an engine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -285,6 +288,8 @@ impl State {
 pub(super) struct Inner {
     state: Mutex<State>,
     listeners: Mutex<Listeners>,
+    /// Set while `flush` runs callbacks; nested flushes leave events to it.
+    dispatching: AtomicBool,
     pub(super) gpu: GpuDevice,
     pub(super) backend: Backend,
 }
@@ -350,6 +355,7 @@ impl Engine {
                     sample_events: Vec::new(),
                 }),
                 listeners: Mutex::new(Listeners::default()),
+                dispatching: AtomicBool::new(false),
                 gpu,
                 backend: options.backend,
             }),
@@ -366,30 +372,45 @@ impl Engine {
         Ok(state)
     }
     /// Delivers queued events on the calling thread without holding the engine lock.
+    /// A callback may call back into the API: events it causes are queued and
+    /// delivered by the outer call after the current ones, in order.
     pub(super) fn flush(&self) {
-        let (engine, samples) = {
-            let mut state = self.lock();
-            (
-                std::mem::take(&mut state.engine_events),
-                std::mem::take(&mut state.sample_events),
-            )
-        };
-        if engine.is_empty() && samples.is_empty() {
+        if self.inner.dispatching.swap(true, Ordering::Acquire) {
             return;
         }
-        let (engine_listeners, sample_listeners) = {
-            let listeners = self.inner.listeners.lock().unwrap();
-            (listeners.engine.clone(), listeners.samples.clone())
-        };
-        for event in &engine {
-            for (_, listener) in &engine_listeners {
-                (listener.lock().unwrap())(event);
+        // Cleared on return and if a callback panics.
+        struct Dispatching<'a>(&'a AtomicBool);
+        impl Drop for Dispatching<'_> {
+            fn drop(&mut self) {
+                self.0.store(false, Ordering::Release);
             }
         }
-        for (render, event) in &samples {
-            for (_, owner, listener) in &sample_listeners {
-                if owner == render {
+        let _dispatching = Dispatching(&self.inner.dispatching);
+        loop {
+            let (engine, samples) = {
+                let mut state = self.lock();
+                (
+                    std::mem::take(&mut state.engine_events),
+                    std::mem::take(&mut state.sample_events),
+                )
+            };
+            if engine.is_empty() && samples.is_empty() {
+                break;
+            }
+            let (engine_listeners, sample_listeners) = {
+                let listeners = self.inner.listeners.lock().unwrap();
+                (listeners.engine.clone(), listeners.samples.clone())
+            };
+            for event in &engine {
+                for (_, listener) in &engine_listeners {
                     (listener.lock().unwrap())(event);
+                }
+            }
+            for (render, event) in &samples {
+                for (_, owner, listener) in &sample_listeners {
+                    if owner == render {
+                        (listener.lock().unwrap())(event);
+                    }
                 }
             }
         }

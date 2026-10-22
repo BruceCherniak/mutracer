@@ -46,7 +46,8 @@ impl Default for RenderSize {
 /// Per-render execution and image-quality settings. Defaults match the browser library.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderSettings {
-    /// Maximum complete samples, 1–4096. Default 2048.
+    /// Maximum complete samples, 1–4096. Default 2048. Raising it continues the
+    /// accumulation; with [`SamplingPattern::ZSobol`] a change restarts it.
     pub max_samples: u32,
     /// Maximum scattering depth, clamped to 1–20. Default 3.
     pub bounces: u32,
@@ -119,6 +120,16 @@ impl RenderSettings {
                 invalid("Fixed width and height must be positive")
             }
             _ => Ok(()),
+        }
+    }
+    /// The L0 sample cap. Only ZSobol depends on it (its Morton sample bits);
+    /// Sobol and Random use a fixed cap, so raising `max_samples` continues the
+    /// accumulation instead of preparing again, as in the browser library.
+    pub(super) fn sample_cap(&self, samples: u32) -> u32 {
+        if self.sampling_pattern == SamplingPattern::ZSobol {
+            samples
+        } else {
+            MAX_TOTAL_SAMPLES
         }
     }
     /// The L0 settings record; `cap` and `offset` differ only for converge.
@@ -367,6 +378,10 @@ impl RenderState {
     pub(super) fn context(&self) -> u64 {
         self.context
     }
+    #[cfg(test)]
+    pub(super) fn in_flight(&self) -> bool {
+        self.job.is_some()
+    }
     pub(super) fn presented_samples(&self) -> u32 {
         self.captured
     }
@@ -421,7 +436,9 @@ fn desired(state: &State, render: &RenderState) -> Option<TargetKey> {
         camera: state.camera_revision,
         size: render.settings.resolve_size(state.display.size),
         quality: render.settings.quality(),
-        settings: render.settings.l0(render.settings.max_samples, 0),
+        settings: render
+            .settings
+            .l0(render.settings.sample_cap(render.settings.max_samples), 0),
         camera_override: None,
     })
 }
@@ -566,11 +583,14 @@ fn commit_step(
         return Ok(Step::Failed);
     }
     render.error = false;
-    // A publication drains the L0 job; never count its samples.
+    // Cancel and drain the in-flight batch first: an active L0 job would block
+    // reads of the previous image and context destruction during preparation.
+    // Its samples are never counted.
     if let Some(flight) = render.job.as_mut() {
         flight.cancelled = true;
         let job = flight.job;
-        let _ = l0(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
+        let _ = l0_blocking(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
+        drain(render)?;
     }
     let camera = key.camera_override.as_ref().or(engine_camera.as_ref());
     let bytes = override_descriptor(&scene, key.size, key.quality, camera)?;
@@ -588,7 +608,6 @@ fn commit_step(
     match l0_result(code, &message) {
         Ok(()) => match outcome {
             CommitOutcome::Done => {
-                render.job = None;
                 render.publish(key.clone(), false);
                 return Ok(Step::Published);
             }
@@ -632,7 +651,6 @@ fn commit_step(
             let _ = send.send(outcome);
         })
         .map_err(|e| error(Status::Error, format!("Starting scene preparation: {e}")))?;
-    render.job = None;
     render.pending = Some(Pending {
         key: key.clone(),
         result,
@@ -829,6 +847,10 @@ fn read_l0(context: u64, kind: u32) -> Result<Vec<f32>> {
         .collect())
 }
 fn context_size(context: u64) -> Result<[u32; 2]> {
+    let info = context_info(context)?;
+    Ok([info.width, info.height])
+}
+fn context_info(context: u64) -> Result<context::ContextInfo> {
     let mut info = context::ContextInfo {
         struct_size: std::mem::size_of::<context::ContextInfo>() as u32,
         width: 0,
@@ -838,7 +860,7 @@ fn context_size(context: u64) -> Result<[u32; 2]> {
         last_commit: 0,
     };
     l0_blocking(|e, n| unsafe { context::mt_context_info(context, &mut info, e, n) })?;
-    Ok([info.width, info.height])
+    Ok(info)
 }
 /// L0 images are bottom row first; L1 images are top row first.
 pub(super) fn flip_rows(data: &[f32], width: u32, height: u32) -> Vec<f32> {
@@ -1116,9 +1138,10 @@ impl Render {
             let render = state.renders.get_mut(&id).unwrap();
             render.busy = true;
             cancel_denoise(render);
-            key.settings = render
-                .settings
-                .l0(options.samples, options.sample_sequence_offset);
+            key.settings = render.settings.l0(
+                render.settings.sample_cap(options.samples),
+                options.sample_sequence_offset,
+            );
             key.camera_override = options.camera.map(|c| c.to_bytes());
             Ok(key)
         })?;
@@ -1128,7 +1151,22 @@ impl Render {
             render.busy = false;
             match &result {
                 Ok(_) => render.status = RenderStatus::Finished,
-                Err(_) => render.status = RenderStatus::Error,
+                Err(_) => {
+                    render.status = RenderStatus::Error;
+                    // A batch submitted before the failure must not count later.
+                    if let Some(flight) = render.job.as_mut() {
+                        flight.cancelled = true;
+                        let job = flight.job;
+                        let _ = l0_blocking(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
+                        drain(render)?;
+                    }
+                    // L0 keeps a cancelled batch that had already finished; the
+                    // partial accumulation stays valid for the same key.
+                    if render.published.is_some() && render.pending.is_none() {
+                        render.samples = context_info(render.context)?.samples;
+                        render.needs_capture = render.samples > 0;
+                    }
+                }
             }
             Ok(())
         });

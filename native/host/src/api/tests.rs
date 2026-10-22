@@ -997,22 +997,25 @@ fn converge_matches_l0_and_reports_progress_and_cancellation() {
         Status::Cancelled
     );
     assert_eq!(render.status(), RenderStatus::Error);
-    // Refine afterwards returns to the interactive settings.
+    // The cancelled converge used the interactive key (Sobol, offset 0, no camera),
+    // so refine keeps its partial accumulation, as in the browser library.
     let interactive = RenderSettings {
         max_samples: 2,
         ..settings
     };
     render.set_settings(interactive.clone()).unwrap();
     assert_eq!(finish(&render), RenderStatus::Finished);
+    let kept = render.samples();
+    assert!(kept >= 2, "{kept}");
     assert_bytes(
         &images(&render),
         &oracle(
             0,
             &expected_descriptor(&scene, [12, 9], 3, None),
-            &interactive.l0(2, 0),
-            2,
+            &interactive.l0(interactive.sample_cap(2), 0),
+            kept,
         ),
-        "refine after converge",
+        "refine after cancelled converge",
     );
 }
 
@@ -1276,4 +1279,295 @@ fn converged_oidn_matches_direct_filtering_of_the_same_inputs() {
         render.read_pixels(PixelKind::Denoised).unwrap(),
         render.read_pixels(PixelKind::Hdr).unwrap()
     );
+}
+
+#[test]
+fn sample_cap_changes_images_only_for_zsobol() {
+    let _test = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if software_engine(Backend::Software).is_none() {
+        return;
+    }
+    let descriptor = expected_descriptor(&lit_scene(), [16, 12], 3, None);
+    for (pattern, independent) in [
+        (SamplingPattern::Sobol, true),
+        (SamplingPattern::Random, true),
+        (SamplingPattern::ZSobol, false),
+    ] {
+        let settings = RenderSettings {
+            sampling_pattern: pattern,
+            ..Default::default()
+        };
+        let small = oracle(0, &descriptor, &settings.l0(5, 0), 5);
+        for cap in [6, 64, 4096] {
+            let large = oracle(0, &descriptor, &settings.l0(cap, 0), 5);
+            if independent {
+                assert_bytes(&large, &small, &format!("{pattern:?} cap {cap}"));
+            } else if cap == 4096 {
+                assert_ne!(large[0], small[0], "zsobol cap had no effect");
+            }
+        }
+    }
+}
+
+fn l0_samples(handle: u64) -> std::result::Result<u32, Status> {
+    let mut info = context::ContextInfo {
+        struct_size: std::mem::size_of::<context::ContextInfo>() as u32,
+        width: 0,
+        height: 0,
+        samples: 0,
+        state: 0,
+        last_commit: 0,
+    };
+    let mut error = [0i8; 256];
+    let code =
+        unsafe { context::mt_context_info(handle, &mut info, error.as_mut_ptr(), error.len()) };
+    if code == 0 {
+        Ok(info.samples)
+    } else {
+        Err(super::status_from(code))
+    }
+}
+/// Holds the AOT runtime thread until the returned sender is used or dropped.
+fn hold_runtime() -> mpsc::SyncSender<()> {
+    let (started, entered) = mpsc::sync_channel(1);
+    let (resume, resumed) = mpsc::sync_channel::<()>(1);
+    crate::runtime::enqueue(move || {
+        started.send(()).unwrap();
+        let _ = resumed.recv_timeout(Duration::from_secs(60));
+    });
+    entered.recv().unwrap();
+    resume
+}
+/// Refines until a batch is in flight right after the call.
+fn refine_until_in_flight(render: &Render) {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        render.refine().unwrap();
+        let busy = render.engine().lock().renders[&render.id()].in_flight();
+        if busy && render.samples() > 0 {
+            return;
+        }
+        assert!(Instant::now() < deadline, "no batch in flight");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[test]
+fn full_preparation_with_a_batch_in_flight_keeps_reads_and_releases_the_context() {
+    let _test = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = software_engine(Backend::Software) else {
+        return;
+    };
+    let display = engine.display();
+    display.set_size(64, 48).unwrap();
+    let settings = RenderSettings {
+        allow_multiple_samples_per_frame: true,
+        time_budget_ms: 1000.,
+        ..Default::default()
+    };
+    let scene = lit_scene();
+    engine.set_scene(&scene).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(&engine, settings.clone()).unwrap();
+    let handle = render.engine().lock().renders[&render.id()].context();
+    refine_until_in_flight(&render);
+
+    // A settings change while a batch runs: full preparation, held on the runtime.
+    // (A size change would first try the incremental path on this thread, which
+    // itself needs the held runtime.)
+    let resume = hold_runtime();
+    render
+        .set_settings(RenderSettings {
+            bevel_samples: 5,
+            ..settings.clone()
+        })
+        .unwrap();
+    assert_eq!(render.refine().unwrap(), RenderStatus::Preparing);
+    assert!(!render.engine().lock().renders[&render.id()].in_flight());
+    let previous = l0_samples(handle).unwrap();
+    assert!(previous > 0);
+    // Read during preparation; the oracle needs the runtime, so compare afterwards.
+    let during = images(&render);
+    // Dropping the render while it prepares destroys its context once the
+    // cancelled preparation retires.
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(200));
+        resume.send(()).unwrap();
+    });
+    drop(render);
+    release.join().unwrap();
+    assert_eq!(l0_samples(handle), Err(Status::InvalidHandle));
+    assert_bytes(
+        &during,
+        &oracle(
+            0,
+            &expected_descriptor(&scene, [64, 48], 3, None),
+            &settings.l0(settings.sample_cap(settings.max_samples), 0),
+            previous,
+        ),
+        "previous image while preparing",
+    );
+
+    // A rejected full preparation keeps the previous image readable.
+    let render = Render::new(&engine, settings.clone()).unwrap();
+    refine_until_in_flight(&render);
+    render
+        .set_settings(RenderSettings {
+            size: RenderSize::Fixed {
+                width: 5000,
+                height: 4,
+            },
+            ..settings.clone()
+        })
+        .unwrap();
+    assert_eq!(finish(&render), RenderStatus::Error);
+    assert!(engine.last_error().is_some());
+    let handle = render.engine().lock().renders[&render.id()].context();
+    let previous = l0_samples(handle).unwrap();
+    assert_bytes(
+        &images(&render),
+        &oracle(
+            0,
+            &expected_descriptor(&scene, [64, 48], 3, None),
+            &settings.l0(settings.sample_cap(settings.max_samples), 0),
+            previous,
+        ),
+        "previous image after a rejected preparation",
+    );
+    drop(render);
+    assert_eq!(l0_samples(handle), Err(Status::InvalidHandle));
+}
+
+#[test]
+fn callbacks_may_call_back_into_the_api() {
+    let _test = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = software_engine(Backend::Software) else {
+        return;
+    };
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || {
+        let render = Arc::new(
+            Render::new(
+                &engine,
+                RenderSettings {
+                    max_samples: 4,
+                    size: RenderSize::Fixed {
+                        width: 16,
+                        height: 12,
+                    },
+                    ..Default::default()
+                },
+            )
+            .unwrap(),
+        );
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let (reader, recorded) = (render.clone(), seen.clone());
+        let samples = render.on_sample(move |event| {
+            recorded.lock().unwrap().push(event.samples);
+            // Waits for the next in-flight batch, whose event is queued meanwhile.
+            assert!(!reader.read_pixels(PixelKind::Hdr).unwrap().data.is_empty());
+        });
+        let updates = Arc::new(Mutex::new(0));
+        let (updater, counted) = (engine.clone(), updates.clone());
+        let progress = engine.on(move |event| {
+            if matches!(event, EngineEvent::Progress { .. }) {
+                assert!(!updater.update().unwrap());
+                *counted.lock().unwrap() += 1;
+            }
+        });
+        engine.set_scene(&lit_scene()).unwrap();
+        engine.update().unwrap();
+        let status = finish(&render);
+        let seen = seen.lock().unwrap().clone();
+        let updates = *updates.lock().unwrap();
+        drop((samples, progress));
+        done.send((status, seen, updates)).unwrap();
+    });
+    let (status, seen, updates) = finished
+        .recv_timeout(Duration::from_secs(120))
+        .expect("a callback that calls the API deadlocked");
+    assert_eq!(status, RenderStatus::Finished);
+    assert_eq!(seen, vec![1, 2, 3, 4]);
+    assert_eq!(updates, 2);
+}
+
+#[test]
+fn raising_max_samples_continues_except_for_zsobol() {
+    let _test = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = software_engine(Backend::Software) else {
+        return;
+    };
+    let preparations = Arc::new(Mutex::new(0));
+    let counted = preparations.clone();
+    let _progress = engine.on(move |event| {
+        if *event
+            == (EngineEvent::Progress {
+                stage: ProgressStage::Preparation,
+                progress: 0.,
+            })
+        {
+            *counted.lock().unwrap() += 1;
+        }
+    });
+    let scene = lit_scene();
+    engine.set_scene(&scene).unwrap();
+    engine.update().unwrap();
+    let descriptor = expected_descriptor(&scene, [16, 12], 3, None);
+    for pattern in [
+        SamplingPattern::Sobol,
+        SamplingPattern::Random,
+        SamplingPattern::ZSobol,
+    ] {
+        let settings = RenderSettings {
+            sampling_pattern: pattern,
+            max_samples: 3,
+            size: RenderSize::Fixed {
+                width: 16,
+                height: 12,
+            },
+            ..Default::default()
+        };
+        let render = Render::new(&engine, settings.clone()).unwrap();
+        assert_eq!(finish(&render), RenderStatus::Finished);
+        let before = *preparations.lock().unwrap();
+        let raised = RenderSettings {
+            max_samples: 6,
+            ..settings.clone()
+        };
+        render.set_settings(raised.clone()).unwrap();
+        let status = render.refine().unwrap();
+        if pattern == SamplingPattern::ZSobol {
+            assert_eq!(status, RenderStatus::Preparing);
+            assert_eq!(render.samples(), 0);
+        } else {
+            assert_eq!(status, RenderStatus::Converging);
+            assert!(render.samples() >= 3, "{pattern:?} restarted");
+        }
+        assert_eq!(finish(&render), RenderStatus::Finished);
+        let prepared = *preparations.lock().unwrap() - before;
+        assert_eq!(prepared, usize::from(pattern == SamplingPattern::ZSobol));
+        assert_bytes(
+            &images(&render),
+            &oracle(0, &descriptor, &raised.l0(6, 0), 6),
+            &format!("{pattern:?} after raising max_samples"),
+        );
+        // Converge without offset or camera reuses the prepared scene unless ZSobol.
+        let before = *preparations.lock().unwrap();
+        render.converge(ConvergeOptions::new(5)).unwrap();
+        let prepared = *preparations.lock().unwrap() - before;
+        assert_eq!(prepared, usize::from(pattern == SamplingPattern::ZSobol));
+        assert_bytes(
+            &images(&render),
+            &oracle(0, &descriptor, &raised.l0(5, 0), 5),
+            &format!("{pattern:?} converge"),
+        );
+    }
 }
