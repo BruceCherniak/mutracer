@@ -643,3 +643,46 @@ fn unsubscribing_inside_a_callback_stops_later_events() {
         assert_eq!(*calls.lock().unwrap(), 1, "{name}");
     }
 }
+
+#[test]
+fn collect_accounts_a_batch_without_submitting_another() {
+    let _test = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = software_engine(Backend::Software) else {
+        return;
+    };
+    engine.set_scene(&lit_scene()).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 8,
+            size: RenderSize::Fixed {
+                width: 16,
+                height: 12,
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    // Refine until one batch is in flight.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while !render.engine().lock().renders[&render.id()].in_flight() {
+        render.refine().unwrap();
+        assert!(Instant::now() < deadline);
+    }
+    let before = render.samples();
+    while !render.collect().unwrap() {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(render.samples(), before + 1);
+    assert!(!render.engine().lock().renders[&render.id()].in_flight());
+    assert!(render.complete());
+    // Collecting again changes nothing; the next refine continues.
+    assert!(render.collect().unwrap());
+    assert_eq!(render.samples(), before + 1);
+    render.refine().unwrap();
+    assert!(render.engine().lock().renders[&render.id()].in_flight());
+}

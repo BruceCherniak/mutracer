@@ -1451,6 +1451,12 @@ impl Render {
             })
         })
     }
+    /// Accounts a finished batch and captures it without submitting another, so a
+    /// host can present the last frame before committing new input. Returns
+    /// whether no batch is in flight. Does not wait for the GPU.
+    pub fn collect(&self) -> Result<bool> {
+        self.with(|state, id| collect(state, id))
+    }
     /// Discards only this render's accumulation and denoised image.
     pub fn restart(&self) -> Result<()> {
         self.with(|state, id| {
