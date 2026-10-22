@@ -223,7 +223,7 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 .viewport-bottom { position: absolute; inset: auto 12px 12px; display: flex; flex-direction: column; align-items: center; gap: 8px; pointer-events: none; }
 .viewport-bottom > * { pointer-events: auto; }
 .viewport-bottom > .float, .viewport-bottom > .credit, .viewport-footer > .float { position: static; translate: none; }
-.viewport-footer { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px; width: 100%; }
+.viewport-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; width: 100%; }
 .viewport-bottom > .viewport-footer { pointer-events: none; }
 .viewport-footer > * { pointer-events: auto; }
 .panel-toggle { display: none; }
@@ -239,7 +239,7 @@ kbd { font: 10.5px var(--cv-mono); color: var(--cv-text-4); }
 .float .select { height: 28px; background: transparent; }
 .float .select:hover, .float .select[data-hovered] { background: rgb(255 255 255 / 0.06); }
 .viewport-tools { display: flex; align-items: center; gap: 4px; }
-.camera-controls { height: 46px; padding: 6px 8px; margin-left: auto; min-width: 0; max-width: 100%; }
+.camera-controls { height: 46px; padding: 6px 8px; min-width: 0; max-width: 100%; }
 .viewport-camera { min-width: 0; width: max-content; max-width: calc(100cqw - 80px); }
 .camera-controls .select { width: 100%; font-family: var(--cv-mono); }
 .camera-controls .select .muted { font-family: system-ui, sans-serif; }
@@ -763,7 +763,7 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
   .float .icon-btn { width: 32px; height: 32px; }
   .viewport-bottom { position: absolute; inset: auto 8px 8px; display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; }
   .viewport-bottom > * { position: static; translate: none; pointer-events: auto; }
-  .viewport-footer { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; }
+  .viewport-footer { display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%; }
   .viewport-footer .dock { position: static; translate: none; flex: 0 1 auto; min-width: 0; max-width: calc(100% - 70px); }
   .dock { flex-wrap: nowrap; justify-content: flex-start; width: fit-content; max-width: 100%; height: 44px; min-height: 44px;
     padding: 5px 7px; gap: 4px; border: 1px solid rgb(255 255 255 / 0.08); border-radius: var(--cv-radius-floating); background: rgb(29 31 36 / 0.96); }
