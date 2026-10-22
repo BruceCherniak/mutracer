@@ -191,7 +191,7 @@ export function Switch({
 // ------------------------------------------------------------------- Select
 
 export function Select<T extends string>({
-  value, options, onChange, label, prefix, disabled
+  value, options, onChange, label, prefix, disabled, placement
 }: {
   value: T;
   options: { value: T; label: string; disabled?: boolean; hint?: string }[];
@@ -200,6 +200,7 @@ export function Select<T extends string>({
   /** Inline muted label inside the trigger. */
   prefix?: string;
   disabled?: boolean;
+  placement?: 'top' | 'bottom';
 }) {
   return (
     <AriaSelect
@@ -213,7 +214,7 @@ export function Select<T extends string>({
         <span>{prefix && <span className="muted">{prefix}&nbsp;&nbsp;</span>}<SelectValue>{({ selectedText }) => selectedText}</SelectValue></span>
         <ChevronDown size={13} />
       </Button>
-      <Popover className="popover menu" offset={6}>
+      <Popover className="popover menu" offset={6} placement={placement}>
         <ListBox className="listbox">
           {options.map((o) => (
             <ListBoxItem key={o.value} id={o.value} className="menu-item" textValue={o.label} isDisabled={o.disabled}>

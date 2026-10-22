@@ -1579,15 +1579,17 @@ pub unsafe extern "C" fn mt_job_cancel(id: u64, error: *mut c_char, capacity: us
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn preparation_does_not_block_render_and_cancellation_preserves_old_scene() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let mut handle = 0;
         let mut error = [0i8; 512];
         unsafe {
-            if mt_context_create_with_backend(0, &mut handle, error.as_mut_ptr(), error.len()) != 0
-            {
-                return;
-            }
+            assert_eq!(
+                mt_context_create_with_backend(0, &mut handle, error.as_mut_ptr(), error.len()),
+                0,
+                "GPU validation requires a working device"
+            );
             let input = scene::tests::input();
             assert_eq!(
                 mt_context_commit(
@@ -1755,16 +1757,18 @@ mod tests {
         .unwrap();
     }
     #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn destroy_cancels_and_drains_an_unpublished_candidate() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let mut handle = 0;
         let mut error = [0i8; 512];
-        if unsafe {
-            mt_context_create_with_backend(0, &mut handle, error.as_mut_ptr(), error.len())
-        } != 0
-        {
-            return;
-        }
+        assert_eq!(
+            unsafe {
+                mt_context_create_with_backend(0, &mut handle, error.as_mut_ptr(), error.len())
+            },
+            0,
+            "GPU validation requires a working device"
+        );
         let (entered, started) = mpsc::sync_channel(1);
         let (resume, resumed) = mpsc::sync_channel(1);
         runtime::enqueue(move || {
@@ -1829,12 +1833,15 @@ mod tests {
         );
     }
     #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn shared_device_preview_survives_reset_and_context_destruction() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let Ok(adapter) = pollster::block_on(instance.request_adapter(&Default::default())) else {
-            return;
-        };
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))
+        .expect("GPU validation requires an adapter");
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             required_limits: adapter.limits(),
             ..Default::default()
@@ -1879,15 +1886,12 @@ mod tests {
         assert_eq!(display.read_linear().unwrap(), before);
     }
     #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn changed_blas_and_tlas_are_ready_after_interleaved_retained_edits() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let _entry = ENTRY_LOCK.lock().unwrap();
-        let Ok(gpu) = GpuDevice::with_backend(1) else {
-            return;
-        };
-        if !gpu.hardware_ray_query {
-            return;
-        }
+        let gpu = GpuDevice::with_backend(1).expect("GPU validation requires a working device");
+        assert!(gpu.hardware_ray_query, "GPU validation requires HWRT");
         let make = |input: &[u8]| {
             let (mut scene, mut assets, retained) = scene::prepare_retained(input, true).unwrap();
             scene.hwrt = Some(
@@ -2025,15 +2029,12 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn rejected_hardware_candidate_can_render_the_rebuilt_software_scene() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let _entry = ENTRY_LOCK.lock().unwrap();
-        let Ok(gpu) = GpuDevice::with_backend(1) else {
-            return;
-        };
-        if !gpu.hardware_ray_query {
-            return;
-        }
+        let gpu = GpuDevice::with_backend(1).expect("GPU validation requires a working device");
+        assert!(gpu.hardware_ray_query, "GPU validation requires HWRT");
         let mut input = scene::tests::input();
         input[118 * 4..119 * 4].copy_from_slice(&3f32.to_le_bytes());
         let (mut direct, mut assets, mut retained) = scene::prepare_retained(&input, true).unwrap();
@@ -2115,16 +2116,18 @@ mod tests {
         );
     }
     #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn panic_marks_the_touched_context_failed_and_commit_recovers_it() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let mut handle = 0;
         let mut error = [0i8; 512];
-        if unsafe {
-            mt_context_create_with_backend(0, &mut handle, error.as_mut_ptr(), error.len())
-        } != 0
-        {
-            return;
-        }
+        assert_eq!(
+            unsafe {
+                mt_context_create_with_backend(0, &mut handle, error.as_mut_ptr(), error.len())
+            },
+            0,
+            "GPU validation requires a working device"
+        );
         assert_eq!(
             action(error.as_mut_ptr(), error.len(), |registry| {
                 let _ = context(registry, handle)?;
@@ -2153,16 +2156,18 @@ mod tests {
         }
     }
     #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn snapshot_reports_the_path_of_the_last_successful_commit() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let mut handle = 0;
         let mut error = [0i8; 512];
-        if unsafe {
-            mt_context_create_with_backend(0, &mut handle, error.as_mut_ptr(), error.len())
-        } != 0
-        {
-            return;
-        }
+        assert_eq!(
+            unsafe {
+                mt_context_create_with_backend(0, &mut handle, error.as_mut_ptr(), error.len())
+            },
+            0,
+            "GPU validation requires a working device"
+        );
         let info = |size: usize| {
             let mut info = ContextInfo {
                 struct_size: size as u32,
@@ -2279,15 +2284,18 @@ mod tests {
         drop(held);
     }
     #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn scene_state_errors_and_short_reads_report_status_codes() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let mut handle = 0;
         let mut error = [0i8; 512];
         let (e, n) = (error.as_mut_ptr(), error.len());
         unsafe {
-            if mt_context_create_with_backend(0, &mut handle, e, n) != 0 {
-                return;
-            }
+            assert_eq!(
+                mt_context_create_with_backend(0, &mut handle, e, n),
+                0,
+                "GPU validation requires a working device"
+            );
             assert_eq!(
                 mt_context_render(handle, 1, e, n),
                 Status::InvalidState as i32

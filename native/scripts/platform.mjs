@@ -12,14 +12,19 @@ export const cLinkFlags = windows
 
 export function nativeToolchainEnv(environment=process.env) {
   const env={...environment};
-  if(windows&&env.VCToolsInstallDir) {
-    const tools=resolve(env.VCToolsInstallDir,'bin/Hostx64/x64');
+  if(windows) {
     const path=Object.keys(env).find(key=>key.toLowerCase()==='path');
     const previous=path?env[path]:'';
     for(const key of Object.keys(env))if(key.toLowerCase()==='path')delete env[key];
-    // Git Bash prepends its Unix link.exe; OIDN's CMake build needs MSVC.
-    env.PATH=tools+delimiter+previous;
-    env.CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER??=resolve(tools,'link.exe');
+    // Normalize Path even outside a Developer shell: object spreads lose
+    // process.env's case-insensitive lookup before scripts prepend directories.
+    env.PATH=previous;
+    if(env.VCToolsInstallDir) {
+      const tools=resolve(env.VCToolsInstallDir,'bin/Hostx64/x64');
+      // Git Bash prepends its Unix link.exe; OIDN's CMake build needs MSVC.
+      env.PATH=tools+delimiter+previous;
+      env.CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER??=resolve(tools,'link.exe');
+    }
   }
   return env;
 }

@@ -331,10 +331,9 @@ impl Display {
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn display_settings_alpha_channels_and_export_preserve_linear_data() {
-        let Ok(gpu) = GpuDevice::with_backend(0) else {
-            return;
-        };
+        let gpu = GpuDevice::with_backend(0).expect("GPU validation requires a working device");
         // Non-aligned width and two different rows exercise readback padding/orientation.
         let mut display = Display::new(gpu.clone(), [3, 2]);
         let pixels: Vec<f32> = vec![
@@ -372,7 +371,8 @@ mod tests {
         };
         let baseline = display.read_rgba(&settings).unwrap();
         assert_eq!(&baseline[20..24], &[0, 0, 0, 0]);
-        assert_eq!(baseline[19], 128);
+        // Half-range values can quantize to either adjacent rgba8unorm code.
+        assert!(baseline[19].abs_diff(128) <= 1);
         let srgb = |v: f32| {
             if v <= 0.0031308 {
                 12.92 * v
@@ -420,7 +420,9 @@ mod tests {
         assert_eq!(display.read_linear().unwrap(), pixels);
         settings.output = 1;
         let normal = display.read_rgba(&settings).unwrap();
-        assert_eq!(&normal[12..16], &[128, 128, 255, 255]);
+        assert!(normal[12].abs_diff(128) <= 1);
+        assert!(normal[13].abs_diff(128) <= 1);
+        assert_eq!(&normal[14..16], &[255, 255]);
         settings.exposure = 0.;
         settings.saturation = 0.;
         assert_eq!(display.read_rgba(&settings).unwrap(), normal);
@@ -428,15 +430,14 @@ mod tests {
         let albedo = display.read_rgba(&settings).unwrap();
         assert_ne!(albedo, normal);
         assert!((albedo[12] as f32 - srgb(0.2) * 255.).abs() <= 1.);
-        assert_eq!(albedo[19], 128);
+        assert!(albedo[19].abs_diff(128) <= 1);
         assert_eq!(display.read_linear().unwrap(), pixels);
     }
 
     #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn gpu_preview_matches_reinhard_srgb_and_bottom_up_hdr() {
-        let Ok(gpu) = GpuDevice::with_backend(0) else {
-            return;
-        };
+        let gpu = GpuDevice::with_backend(0).expect("GPU validation requires a working device");
         let size = [64, 2];
         let mut display = Display::new(gpu.clone(), size);
         let pixels: Vec<f32> = (0..128)

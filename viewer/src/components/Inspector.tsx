@@ -6,11 +6,11 @@ import { CameraPanel } from './panels/CameraPanel';
 import { RenderPanel } from './panels/RenderPanel';
 import { SceneTree } from './SceneTree';
 
-export const TABS: { id: InspectorTab; label: string; title: string; subtitle: string; Icon: typeof Globe }[] = [
-  { id: 'environment', label: 'Lighting', title: 'Lighting', subtitle: 'Environment or studio lights, background and ground', Icon: Globe },
-  { id: 'material', label: 'Material', title: 'Material', subtitle: 'OpenPBR · edits apply instantly', Icon: Palette },
-  { id: 'camera', label: 'Camera', title: 'Camera', subtitle: 'Drag to orbit, right-drag to pan, scroll to zoom', Icon: Camera },
-  { id: 'render', label: 'Render', title: 'Render', subtitle: 'Path tracing quality and display', Icon: Aperture }
+export const TABS: { id: InspectorTab; label: string; Icon: typeof Globe }[] = [
+  { id: 'environment', label: 'Lighting', Icon: Globe },
+  { id: 'material', label: 'Material', Icon: Palette },
+  { id: 'camera', label: 'Camera', Icon: Camera },
+  { id: 'render', label: 'Render', Icon: Aperture }
 ];
 
 const PANELS: Record<InspectorTab, () => JSX.Element> = {
@@ -40,10 +40,10 @@ export function Inspector({ mobile }: { mobile: boolean }) {
   const current = TABS.find((t) => t.id === ui.tab)!;
   const Panel = PANELS[ui.tab];
   return (
-    <section className="panel inspector" aria-label={current.title}>
+    <section className="panel inspector" aria-label={current.label}>
       <div className="insp-head">
         <span className="badge"><current.Icon size={16} /></span>
-        <div className="copy"><strong>{current.title}</strong><small>{current.subtitle}</small></div>
+        <div className="copy"><strong>{current.label}</strong></div>
       </div>
       <div className="insp-body" role="tabpanel"><Panel /></div>
     </section>

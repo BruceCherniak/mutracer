@@ -354,16 +354,17 @@ pub(super) fn retry_event(
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn instrumentation_preserves_aovs_on_the_same_acceleration_structures() {
         let _test = ABI_TEST_LOCK.lock().unwrap();
         let _entry = ENTRY_LOCK.lock().unwrap();
         for backend in [0, 1] {
-            let Ok(gpu) = GpuDevice::with_backend(backend) else {
-                continue;
-            };
-            if backend == 1 && !gpu.hardware_ray_query {
-                continue;
-            }
+            let gpu =
+                GpuDevice::with_backend(backend).expect("GPU validation requires a working device");
+            assert!(
+                backend == 0 || gpu.hardware_ray_query,
+                "GPU validation requires HWRT"
+            );
             let mut input = scene::tests::input();
             input[118 * 4..119 * 4].copy_from_slice(&3f32.to_le_bytes());
             let (mut scene, mut assets, _retained) = scene::prepare_retained_with_settings(

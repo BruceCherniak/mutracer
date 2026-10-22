@@ -136,13 +136,8 @@ Notes:
   `dist-viewer/`, and the site build shares one copy with the examples.
 - Opening the viewer with `#open=files` loads files that the home page stashed
   in IndexedDB (`engine/droppedFiles.ts`).
-- All example-model previews are managed in the independent
-  [mutracer-assets](https://github.com/pissang/mutracer-assets) repository, including
-  Material spheres, Toy Car and Sheen Chair. They use 720 × 405 WebP (quality 80%),
-  Studio Light and OIDN standard; their saved cameras also apply on fresh loads.
-  Render and review them through that repository's import pipeline. The viewer's
-  `await generateThumbnails()` console tool only generates local material swatches
-  in `src/assets/thumbnails/` (checker cyclorama, dimmed environment light).
+- For sample models, rendering benchmarks, imported lighting and camera choices, see the
+  [viewer guide](../docs/viewer.md).
 - The visual language comes from DropMesh (same author).
 
 ## Assets
@@ -157,7 +152,7 @@ Example models are loaded on demand. Downloads retry temporary network or server
 failures up to twice; samples hosted on jsDelivr use GitHub as the final fallback.
 Material spheres are procedural; Toy Car
 and Sheen Chair come from [Khronos glTF Sample Assets](https://github.com/KhronosGroup/glTF-Sample-Assets)
-(CC0). Model previews and credits are available in
+(CC0). Additional model previews and credits are available in
 [mutracer-assets](https://github.com/pissang/mutracer-assets).
 
 The sample site is a free, noncommercial technical demonstration. Each Sketchfab

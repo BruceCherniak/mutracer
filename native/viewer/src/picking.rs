@@ -52,6 +52,7 @@ impl Model {
                 .iter()
                 .map(|g| {
                     mutracer_native_probe::picking::PickBvh::new(&g.positions, &g.indices)
+                        .map(std::sync::Arc::new)
                         .map_err(anyhow::Error::msg)
                 })
                 .collect::<anyhow::Result<Vec<_>>>()?,

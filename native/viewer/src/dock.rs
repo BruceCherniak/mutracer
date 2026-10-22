@@ -65,6 +65,17 @@ fn action(ui: &mut egui::Ui, label: &str, icon: Action) -> egui::Response {
     response.on_hover_text(label)
 }
 impl Viewer {
+    pub(super) fn toggle_animation_or_render(&mut self) {
+        if let Some(animation) = &mut self.model.animation {
+            animation.toggle();
+            self.animation_clock = Instant::now();
+            if animation.playing {
+                self.running = true;
+            }
+        } else {
+            self.running = !self.running;
+        }
+    }
     pub(super) fn update_resolution(&mut self, ctx: &egui::Context, viewport: egui::Vec2) {
         if let Some(size) = self.resolution.update(
             viewport,
@@ -120,7 +131,12 @@ impl Viewer {
         let available = (viewport.width() - 24.).max(1.);
         let compact = available < 440.;
         let width = available.min(if compact { 280. } else { 452. });
-        let height = if compact { 80. } else { 46. };
+        let height = if compact { 80. } else { 46. }
+            + if self.model.animation.is_some() {
+                72.
+            } else {
+                0.
+            };
         let position = viewport.center_bottom() - egui::vec2(width * 0.5, height + 12.);
         egui::Area::new(egui::Id::new("render-dock"))
             .order(egui::Order::Foreground)
@@ -153,20 +169,115 @@ impl Viewer {
                                 self.dock_settings(ui, compact);
                             });
                         }
+                        if self.model.animation.is_some() {
+                            ui.separator();
+                            self.animation_controls(ui);
+                        }
                     });
             })
             .response
             .rect
     }
+    fn animation_controls(&mut self, ui: &mut egui::Ui) {
+        let enabled = self.loading.is_none()
+            && self.candidate.is_none()
+            && self.pending_model.is_none()
+            && !self
+                .scene_build
+                .as_ref()
+                .is_some_and(|(_, candidate, _)| candidate.is_some());
+        ui.add_enabled_ui(enabled, |ui| {
+            let animation = self.model.animation.as_mut().unwrap();
+            ui.horizontal(|ui| {
+                if action(
+                    ui,
+                    if animation.playing {
+                        "Pause animation (Space)"
+                    } else {
+                        "Play animation (Space)"
+                    },
+                    if animation.playing {
+                        Action::Pause
+                    } else {
+                        Action::Play
+                    },
+                )
+                .clicked()
+                {
+                    animation.toggle();
+                    self.animation_clock = Instant::now();
+                    if animation.playing {
+                        self.running = true;
+                    }
+                }
+                let mut time = animation.time;
+                let duration = animation.duration();
+                ui.spacing_mut().slider_width = (ui.available_width() - 120.).max(32.);
+                if ui
+                    .add(
+                        egui::Slider::new(&mut time, 0.0..=duration)
+                            .show_value(false)
+                            .step_by(0.001),
+                    )
+                    .on_hover_text("Animation time")
+                    .changed()
+                {
+                    animation.seek(time);
+                    self.animation_clock = Instant::now();
+                }
+                ui.monospace(format!("{:.2} / {:.2} s", animation.time, duration));
+            });
+            ui.horizontal(|ui| {
+                let previous = animation.clip;
+                if animation.clips().len() > 1 {
+                    let mut clip = previous;
+                    egui::ComboBox::from_id_salt("animation-clip")
+                        .width((ui.available_width() - 126.).clamp(60., 220.))
+                        .truncate()
+                        .selected_text(&animation.clips()[clip].name)
+                        .show_ui(ui, |ui| {
+                            for (id, option) in animation.clips().iter().enumerate() {
+                                ui.selectable_value(&mut clip, id, &option.name);
+                            }
+                        })
+                        .response
+                        .on_hover_text("Animation clip");
+                    if clip != previous {
+                        animation.select(clip);
+                        self.animation_clock = Instant::now();
+                    }
+                } else {
+                    ui.add_sized(
+                        [(ui.available_width() - 126.).max(1.), 28.],
+                        egui::Label::new(&animation.clips()[previous].name).truncate(),
+                    );
+                }
+                egui::ComboBox::from_id_salt("animation-speed")
+                    .width(52.)
+                    .selected_text(format!("{}×", animation.speed))
+                    .show_ui(ui, |ui| {
+                        for speed in [0.25, 0.5, 1., 2.] {
+                            ui.selectable_value(&mut animation.speed, speed, format!("{speed}×"));
+                        }
+                    })
+                    .response
+                    .on_hover_text("Playback speed");
+                ui.toggle_value(&mut animation.looping, "Loop");
+            });
+        });
+    }
     fn dock_status(&mut self, ui: &mut egui::Ui) {
         let preparing = self.loading.is_some() || self.preparing() || self.candidate.is_some();
-        let done = self.samples >= self.settings.max_samples;
+        let animating = self.running && self.model.animation.as_ref().is_some_and(|a| a.playing);
+        let done = !animating && self.samples >= self.settings.max_samples;
         let label = if self.loading.is_some() {
             "Opening"
         } else if preparing {
             "Preparing"
         } else if !self.running {
             "Paused"
+        } else if animating {
+            "Animating"
         } else if done {
             "Done"
         } else {
@@ -232,9 +343,17 @@ impl Viewer {
         if action(
             ui,
             if self.running {
-                "Pause rendering (Space)"
+                if self.model.animation.is_some() {
+                    "Pause rendering"
+                } else {
+                    "Pause rendering (Space)"
+                }
             } else {
-                "Resume rendering (Space)"
+                if self.model.animation.is_some() {
+                    "Resume rendering"
+                } else {
+                    "Resume rendering (Space)"
+                }
             },
             if self.running {
                 Action::Pause

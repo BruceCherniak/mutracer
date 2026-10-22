@@ -10,6 +10,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const out = resolve(process.env.MUTRACER_NATIVE_OUTPUT ?? resolve(root, '.native-build/scene-core'));
 const target = resolve(process.env.CARGO_TARGET_DIR ?? resolve(out, 'cargo-target'));
 const compiler = process.env.MUTRACER_SCRIPTC ?? 'scriptc';
+const staticOnly = process.argv.includes('--static');
 const samples = Number(process.env.MUTRACER_NATIVE_SAMPLES ?? '256');
 if (!Number.isInteger(samples) || samples < 1 || samples > 4096)
     throw new Error('Samples must be 1..4096');
@@ -50,15 +51,31 @@ const linkLibrary=windows?[resolve(target,'release/libmutracer_native_probe.dll.
 run('scene-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-I', 'native/include', 'native/examples/scene-host.c', ...linkLibrary, ...cLinkFlags,'-o',sceneHost]);
 run('minimal-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-I', 'native/include', 'native/examples/minimal-host.c', ...linkLibrary, ...cLinkFlags,'-o',minimalHost]);
 run('core-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-Dmt_module_init=mt_core_init', '-Dmt_module_reset=mt_core_reset', '-Dmt_module_collect=mt_core_collect', '-Dmt_module_sink=mt_core_sink', '-Dmt_module_run=mt_core_scene', 'native/tests/module-host.c', env.MUTRACER_AOT_ARCHIVE, ...cLinkFlags, '-o', resolve(out, executable('core-host'))]);
-for (const variant of ['baseline', 'textures', 'transforms', 'orthographic', 'emissive', 'missing-normals', 'float-textures', 'sphere-light', 'directional-light', 'spot-light', 'alpha', 'v2-environment', 'v2-environment-only', 'v2-background', 'v2-hidden-background', 'v2-film', 'v2-medium', 'v2-alpha', 'v2-bevel', 'v2-vertices', 'v2-multimaterial', 'v2-instances', 'v2-empty-batch', 'v3-displacement-uv', 'v3-displacement-triplanar', 'v3-displacement-spherical', 'v3-displacement-cylindrical', 'v3-displacement-negative', 'v3-displacement-bytes', 'v3-displacement-zero', 'v3-ies', 'v3-ies-shared', 'v3-rect-texture'])
-    run(`render-${variant}`, sceneHost, [resolve(out, variant === 'baseline' ? 'image' : variant), String(samples), variant, ...(variant === 'baseline' ? ['repeat'] : [])]);
-run('minimal-host', minimalHost, [String(Math.min(samples, 16))]);
+for (const variant of ['baseline', 'textures', 'transforms', 'orthographic', 'emissive', 'missing-normals', 'float-textures', 'sphere-light', 'directional-light', 'spot-light', 'alpha', 'v2-environment', 'v2-environment-only', 'v2-background', 'v2-hidden-background', 'v2-film', 'v2-medium', 'v2-alpha', 'v2-bevel', 'v2-vertices', 'v2-multimaterial', 'v2-instances', 'v2-empty-batch', 'v3-displacement-uv', 'v3-displacement-triplanar', 'v3-displacement-spherical', 'v3-displacement-cylindrical', 'v3-displacement-negative', 'v3-displacement-bytes', 'v3-displacement-zero', 'v3-ies', 'v3-ies-shared', 'v3-rect-texture']) {
+    const directory=resolve(out,variant==='baseline'?'image':variant);
+    if(staticOnly){
+        mkdirSync(directory,{recursive:true});
+        run(`fixture-${variant}`,sceneHost,[resolve(directory,'scene-input.bin'),'0',variant]);
+    }else run(`render-${variant}`,sceneHost,[directory,String(samples),variant,...(variant==='baseline'?['repeat']:[])]);
+}
+if(!staticOnly)run('minimal-host', minimalHost, [String(Math.min(samples, 16))]);
 run('verify-scenes', process.execPath, ['native/validation/scene-verify.mjs']);
+if(staticOnly){
+    writeFileSync(resolve(out,'summary.json'),JSON.stringify({passed:true,gpuValidated:false,checks},null,2)+'\n');
+    console.log('Scene packets/resources/WGSL verified without a GPU; rendering NOT VALIDATED.');
+    process.exit(0);
+}
 // Incremental commits must render exactly like full commits of the same descriptor.
 const fixtures = ['baseline', 'textures', 'transforms', 'orthographic', 'emissive', 'missing-normals', 'float-textures', 'sphere-light', 'directional-light', 'spot-light', 'alpha', 'v2-environment', 'v2-environment-only', 'v2-background', 'v2-hidden-background', 'v2-film', 'v2-medium', 'v2-alpha', 'v2-bevel', 'v2-vertices', 'v2-multimaterial', 'v2-instances', 'v2-empty-batch', 'v3-displacement-uv', 'v3-displacement-triplanar', 'v3-displacement-spherical', 'v3-displacement-cylindrical', 'v3-displacement-negative', 'v3-displacement-bytes', 'v3-displacement-zero', 'v3-ies', 'v3-ies-shared', 'v3-rect-texture']
   .map(variant => resolve(out, variant === 'baseline' ? 'image' : variant, 'scene-input.bin'));
-const oracle = run('incremental-oracle', resolve(target, 'release', executable('incremental-oracle')), [String(Math.min(samples, 8)), '0', ...fixtures]);
-writeFileSync(resolve(out, 'incremental-oracle.jsonl'), oracle.stdout);
+// Each scene has many paired full/incremental renders. Bound each fixture
+// separately so a healthy real-GPU run is not limited to five minutes in total.
+let oracleOutput = '';
+for (const [i, fixture] of fixtures.entries()) {
+    const oracle = run(`incremental-oracle-${i}`, resolve(target, 'release', executable('incremental-oracle')), [String(Math.min(samples, 8)), '0', fixture]);
+    oracleOutput += oracle.stdout;
+    writeFileSync(resolve(out, 'incremental-oracle.jsonl'), oracleOutput);
+}
 // Both baseline renders execute in one C process with reset/collection between calls.
 for (const name of ['render', 'normal', 'albedo'])
     if (!readFileSync(resolve(out, `image/${name}.rgba32f`)).equals(readFileSync(resolve(out, `image/repeat/${name}.rgba32f`))))

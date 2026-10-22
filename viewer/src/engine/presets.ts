@@ -1,8 +1,9 @@
 import type { EnvResolution } from '../store';
 import type { ModelCamera } from './modelCamera';
 import { PUBLIC_MODEL_PRESETS } from './publicModelPresets';
+import { RESEARCH_MODEL_PRESETS } from './researchModelPresets';
 
-// Material swatches stay local; all model previews are managed in mutracer-assets.
+// Material swatches stay local.
 const THUMBNAILS = import.meta.glob<string>('../assets/thumbnails/material-*.webp', { eager: true, query: '?url', import: 'default' });
 export const thumbnailUrl = (name: string): string | undefined => THUMBNAILS[`../assets/thumbnails/${name}.webp`];
 
@@ -14,7 +15,7 @@ export interface ModelPreset {
   /** `null` builds the procedural material-sphere scene. */
   url: string | null;
   thumbnail?: string;
-  license: 'CC0' | 'CC-BY 3.0' | 'CC-BY 4.0' | 'CC-BY-NC 4.0' | 'CC-BY-NC-SA 4.0';
+  license: 'CC0' | 'CC-BY 3.0' | 'CC-BY 4.0' | 'CC-BY-NC 4.0' | 'CC-BY-NC-SA 4.0' | 'Mixed (see source)';
   licenseUrl?: string;
   attributionUrl?: string;
   nonCommercial?: boolean;
@@ -24,10 +25,10 @@ export interface ModelPreset {
   sizeMB?: number;
   /** Default preview view in grounded model coordinates. */
   camera?: ModelCamera;
+  category?: 'research';
 }
 
-// Generated from the reviewed public selection in mutracer-assets/presets.json.
-export const MODEL_PRESETS: ModelPreset[] = PUBLIC_MODEL_PRESETS;
+export const MODEL_PRESETS: ModelPreset[] = [...PUBLIC_MODEL_PRESETS, ...RESEARCH_MODEL_PRESETS];
 
 export interface EnvironmentPreset {
   id: string;

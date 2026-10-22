@@ -24,7 +24,7 @@ import type { TextureSampling } from './modelCache';
 import { clearMaterialEdits, clearModelCache, readModelCache, saveModelCache, type CachedModel } from './modelCache';
 import { MaterialEditor, readPendingEdits, type PendingEdits } from './materialEditor';
 import { cameraSettings, readCameraState, writeCameraState } from './cameraState';
-import { URL_SETTINGS_FIELDS } from '../urlSettings';
+import { readURLSettings, URL_SETTINGS_FIELDS } from '../urlSettings';
 import { readModelCamera } from './modelCamera';
 import { pushHistory, recordGroup } from '../history';
 import { groundModel } from './modelGrounding';
@@ -46,6 +46,8 @@ export interface ExportOptions {
 const OIDN_WEIGHTS = new URL('/oidn/weights/', document.baseURI).href;
 const get = useViewer.getState;
 const set = useViewer.setState;
+const INITIAL_LIGHTING = Object.fromEntries(Object.entries(readURLSettings())
+  .filter(([key]) => ['lighting', 'envId', 'envIntensity', 'envRotation'].includes(key)));
 
 type ViewCamera = THREE.PerspectiveCamera | THREE.OrthographicCamera;
 const isOrthographic = (camera: THREE.Object3D): camera is THREE.OrthographicCamera =>
@@ -78,6 +80,7 @@ export class ViewerEngine {
   private readonly ground: THREE.Mesh;
   private readonly modelGroup = new THREE.Group();
   private readonly environment = new Environment(createSky());
+  private modelEnvironment: Environment | null = null;
   private readonly studioAmbient = new Environment(createStudioAmbient());
   private readonly studioRig = new THREE.Group();
   private sync: THREESync;
@@ -150,6 +153,7 @@ export class ViewerEngine {
     this.controls.dampingFactor = 0.2;
     this.controls.addEventListener('start', () => {
       this.dragging = true;
+      this.beginOrbit();
     });
     this.controls.addEventListener('change', () => {
       if (get().paused) set({ paused: false });
@@ -247,6 +251,7 @@ export class ViewerEngine {
     const restored = restoreCamera ? { id: `preset:${preset.id}`, meta: { name: preset.name, ...meta } } : undefined;
     return this.load(preset.name, async (progress) => {
       const model = preset.url ? await loadModelFromURL(preset.url, progress) : createMaterialSpheres();
+      if (preset.category === 'research' && model.lighting) model.lighting.useByDefault = true;
       if (preset.camera) model.root.userData.mutracerCamera = preset.camera;
       return model;
     }, meta, restored);
@@ -297,7 +302,7 @@ export class ViewerEngine {
   ) {
     const token = ++this.loadToken;
     this.awaitingFirstSample = false;
-    set({ loading: { name, stage: 'download', loaded: 0, total: 0 } });
+    set({ loading: { name, stage: 'download', loaded: 0, total: 0 }, toast: null });
     let model: LoadedModel;
     try {
       model = await loader((stage, loaded = 0, total = 0) => {
@@ -321,7 +326,14 @@ export class ViewerEngine {
     this.materials.flush();
     this.modelId = null; // Fit must not overwrite the saved view before restoration.
     this.setModel(model, edits);
-    if (restored) this.restoreCamera(id);
+    const cameraRestored = restored ? this.restoreCamera(id) : false;
+    const authoredLighting = model.lighting?.available && model.lighting.useByDefault !== false;
+    if (authoredLighting && !cameraRestored) {
+      set({ settings: { ...get().settings, lighting: 'environment', envId: 'model', envIntensity: 1, envRotation: 0,
+        ...(restored ? INITIAL_LIGHTING : {}) } });
+    } else if ((!model.lighting?.available || !cameraRestored && !authoredLighting) && get().settings.envId === 'model') {
+      set({ settings: { ...get().settings, envId: 'sky', envIntensity: 1, envRotation: 0 } });
+    }
     this.modelId = id;
     this.materials.modelId = id;
     if (!edits) void clearMaterialEdits();
@@ -332,6 +344,14 @@ export class ViewerEngine {
     this.awaitingFirstSample = true;
     writeHash(this.settings, meta.presetId);
     this.saveCamera();
+    if (!cameraRestored && this.modelCameras.length) {
+      const count = this.modelCameras.length;
+      // An old prompt must never select a camera in a replacement model.
+      const valid = () => token === this.loadToken && model === this.model;
+      showToast(`This model includes ${count === 1 ? 'a camera' : `${count} cameras`}. Apply ${count === 1 ? 'it' : 'the first'}?`, 'info', [
+        { label: 'Apply camera', onClick: () => { if (valid()) setSettings({ cameraIndex: 0 }); } }
+      ]);
+    }
     if (persist) {
       if (model.source || meta.presetId) await saveModelCache({ id, meta: { name, ...meta }, source: model.source });
       else await clearModelCache();
@@ -342,6 +362,9 @@ export class ViewerEngine {
   private setModel(model: LoadedModel, edits: PendingEdits | null = null) {
     this.clearModel();
     this.model = model;
+    if (model.lighting?.available) this.modelEnvironment = new Environment(model.lighting.environment ?? {
+      width: 1, height: 1, data: new Float32Array([0, 0, 0, 1])
+    });
     const root = model.root;
     this.materials.setModel(root, edits);
     // Stand the model on the ground at the origin; keep its units.
@@ -392,11 +415,11 @@ export class ViewerEngine {
       tree,
       sceneInfo: { meshes, triangles, materials: materialIds.size },
       cameras: this.modelCameras.map((c, i) => c.name || `Camera ${i + 1}`),
+      modelLighting: model.lighting ? { available: model.lighting.available, warnings: model.lighting.warnings } : null,
       selection: { objectId: null, materialId: null },
       material: null,
       selectionRect: null
     });
-    if (this.settings.cameraIndex >= this.modelCameras.length) useViewer.setState((s) => ({ settings: { ...s.settings, cameraIndex: -1 } }));
   }
 
   /** Frames the model, or uses the view stored with it. */
@@ -438,6 +461,8 @@ export class ViewerEngine {
   }
 
   private clearModel() {
+    this.modelEnvironment?.dispose();
+    this.modelEnvironment = null;
     if (!this.model) return;
     this.mixer?.stopAllAction();
     this.mixer = null;
@@ -533,7 +558,7 @@ export class ViewerEngine {
   private applyBackground() {
     const { background, backgroundColor, groundedHeight, groundedRadius, lighting } = this.settings;
     const studio = lighting === 'studio';
-    const environment = studio ? this.studioAmbient : this.environment;
+    const environment = studio ? this.studioAmbient : this.settings.envId === 'model' && this.modelEnvironment ? this.modelEnvironment : this.environment;
     const intensity = studio ? this.settings.studioAmbient : this.settings.envIntensity;
     const rotation = studio ? 0 : this.settings.envRotation;
     environment.apply(this.scene, intensity, rotation);
@@ -569,6 +594,11 @@ export class ViewerEngine {
   // ---------------------------------------------------------------- settings
 
   private applySettings(s: Settings, prev: Settings | null) {
+    // Old links, saved settings or undo must not select an empty lighting setup.
+    if (s.envId === 'model' && this.model && !this.model.lighting?.available) {
+      setSettings({ envId: 'sky', envIntensity: 1, envRotation: 0 }, { record: false });
+      return;
+    }
     const changed = (key: keyof Settings) => !prev || prev[key] !== s[key];
     const r = this.final, display = this.engine.display;
     this.engine.bvhBuilder = s.bvhBuilder;
@@ -591,7 +621,7 @@ export class ViewerEngine {
     Object.assign(display, displaySettings);
     this.ground.visible = s.groundShadow;
     this.controls.autoRotate = s.autoRotate;
-    this.controls.enabled = s.cameraIndex < 0;
+    this.controls.enabled = true;
 
     if ((changed('envId') || changed('envResolution')) && s.envId !== 'custom') void this.applyEnvironmentPreset(s.envId);
     if (changed('studioPreset') || changed('studioIntensity') || changed('studioRotation') || changed('studioSize')) this.applyStudioRig();
@@ -600,7 +630,7 @@ export class ViewerEngine {
       const tint = new THREE.Color(s.studioAmbientColor);
       this.studioAmbient.setTint([tint.r, tint.g, tint.b]);
     }
-    if (changed('lighting') || changed('background') || changed('backgroundColor') || changed('groundedHeight') ||
+    if (changed('lighting') || changed('envId') || changed('background') || changed('backgroundColor') || changed('groundedHeight') ||
       changed('groundedRadius') || changed('envIntensity') || changed('envRotation') ||
       changed('studioAmbient') || changed('studioAmbientColor')) this.applyBackground();
     if (changed('cameraIndex')) this.needsResize = true;
@@ -635,6 +665,7 @@ export class ViewerEngine {
         void this.updateDenoiser();
       }
     }
+    if (s.autoRotate && s.cameraIndex >= 0) this.beginOrbit();
     if (prev && URL_SETTINGS_FIELDS.some(changed)) {
       writeHash(s, get().model?.presetId ?? null);
     }
@@ -718,7 +749,7 @@ export class ViewerEngine {
 
   private restoreCamera(modelId: string) {
     const saved = readCameraState(modelId);
-    if (!saved) return;
+    if (!saved) return false;
     // Flush any damping from fitting without rotating the saved view.
     this.controls.autoRotate = false;
     this.controls.enableDamping = false;
@@ -745,10 +776,60 @@ export class ViewerEngine {
     this.controls.enableDamping = true;
     this.controls.autoRotate = this.settings.autoRotate;
     this.needsResize = true;
+    return true;
   }
 
   private activeCamera(): ViewCamera {
     return this.modelCameras[this.settings.cameraIndex] ?? this.camera;
+  }
+
+  /** Starts an orbit gesture at the authored camera's current world-space view. */
+  private beginOrbit() {
+    const source = this.modelCameras[this.settings.cameraIndex];
+    if (!source) return;
+    source.updateWorldMatrix(true, false);
+    const position = source.getWorldPosition(new THREE.Vector3());
+    const quaternion = source.getWorldQuaternion(new THREE.Quaternion());
+    const direction = source.getWorldDirection(new THREE.Vector3());
+    const center = this.modelBounds().getCenter(new THREE.Vector3());
+    const depth = center.clone().sub(position).dot(direction);
+    const distance = depth > 1e-4 ? depth : Math.max(center.distanceTo(position), 1e-3);
+    const autoRotate = this.settings.autoRotate;
+    const damping = this.controls.enableDamping;
+    this.controls.autoRotate = false;
+    this.controls.enableDamping = false;
+    this.controls.update();
+    // Switch projection before copying the view, so its framing conversion
+    // cannot replace the authored pose. Keep the source camera untouched.
+    setSettings({ cameraIndex: -1, projection: isOrthographic(source) ? 'orthographic' : 'perspective',
+      ...(!isOrthographic(source) ? { fov: source.fov } : {}) });
+    if (isOrthographic(source)) this.orthographicCamera.copy(source, false);
+    else this.perspectiveCamera.copy(source, false);
+    const camera = this.camera;
+    camera.position.copy(position);
+    camera.quaternion.copy(quaternion);
+    camera.up.set(0, 1, 0).applyQuaternion(quaternion);
+    camera.matrixAutoUpdate = true;
+    camera.matrixWorldAutoUpdate = true;
+    setAspect(camera, this.viewAspect());
+    this.controls.object = camera;
+    this.controls.target.copy(position).addScaledVector(direction, distance);
+    this.controls.autoRotate = false;
+    this.controls.enableDamping = false;
+    this.controls.update();
+    camera.updateMatrixWorld(true);
+    this.controls.enableDamping = damping;
+    this.controls.autoRotate = autoRotate;
+    this.needsResize = true;
+    this.requestAutofocus();
+  }
+
+  /** Applies a camera identified by its scene-tree object, including duplicate names. */
+  applyModelCamera(objectId: string) {
+    const index = this.modelCameras.findIndex((camera) => camera.uuid === objectId);
+    if (index < 0) return;
+    setSettings({ cameraIndex: index });
+    set({ toast: null });
   }
 
   private modelBounds() {
@@ -765,6 +846,9 @@ export class ViewerEngine {
    * `margin` is the fraction of the frame the model may fill.
    */
   fit(aspect?: number, margin = 0.85) {
+    // Fitting also leaves the selected model camera. A reload restores the saved
+    // camera only after the new model has been fitted.
+    setSettings({ cameraIndex: -1 });
     if (this.needsResize) this.resize();
     const box = this.modelBounds();
     const center = box.getCenter(new THREE.Vector3());
@@ -1143,7 +1227,7 @@ export class ViewerEngine {
         name: m.name || 'Material',
         color: (m as THREE.MeshStandardMaterial).color ? '#' + (m as THREE.MeshStandardMaterial).color.getHexString() : '#888'
       })) : [],
-      children: object.children.map((child) => this.buildTree(child))
+      children: object.children.filter((child) => !child.userData.mutracerMetadataLightTarget).map((child) => this.buildTree(child))
     };
   }
 
@@ -1301,11 +1385,20 @@ export class ViewerEngine {
     const env = ENVIRONMENT_PRESETS.find((p) => p.id === s.envId);
     const grounded = autoGroundedSkybox(state.modelRadius, s.groundedHeight);
     const anim = state.animation;
+    const metadataLights: NonNullable<Parameters<typeof generateCode>[0]['metadataLights']> = [];
+    this.model?.root.traverse((object) => {
+      if (!object.userData.mutracerMetadataLight) return;
+      const light = object as THREE.DirectionalLight;
+      metadataLights.push({ color: [light.color.r, light.color.g, light.color.b], intensity: light.intensity,
+        position: light.getWorldPosition(new THREE.Vector3()).toArray(), target: light.target.getWorldPosition(new THREE.Vector3()).toArray() });
+    });
     return generateCode({
       settings: s,
       webgpu: this.engine.backend === 'webgpu',
       modelUrl: preset ? preset.url : state.model?.sourceUrl ?? null,
       environmentUrl: env ? environmentUrl(env, s.envResolution) : null,
+      blackEnvironment: s.envId === 'model' && !this.model?.lighting?.environment,
+      metadataLights,
       camera: {
         projection: isOrthographic(camera) ? 'orthographic' : 'perspective',
         fov: isOrthographic(camera) ? 0 : camera.fov,

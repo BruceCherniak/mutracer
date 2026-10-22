@@ -108,12 +108,12 @@ or a source `THREE.Texture`. `THREESync` converts parameter edits without
 rewriting texture pixels. The iridescence strength texture is not supported;
 `thinFilmMap` represents thickness only.
 
-The six layer maps reuse the texture conversion cache, source UV channel,
-scale, offset and flipY. `mutracerOpenPBR` can override them with a MuTracer
+The six layer maps preserve the source UV channel, scale, offset and `flipY`.
+`mutracerOpenPBR` can override them with a MuTracer
 `Texture` or `THREE.Texture`; explicit `null` clears an imported map, while
-unknown JSON objects are ignored. `THREESync` follows texture edits without
-copying pixels. General `KHR_texture_transform` rotation remains unsupported.
-Clearcoat normals are deferred to the independent coat-frame implementation.
+unknown JSON objects are ignored. `THREESync` follows texture edits.
+General `KHR_texture_transform` rotation remains unsupported.
+See [coat normal conversion](#coat-normal-conversion) for clearcoat normal maps.
 Anisotropy direction and source-model mapping are described [below](#anisotropy-source-conversion). The conversion preserves OpenPBR layering: glTF sheen
 layer order differs, and specular weight/color also affect metals in OpenPBR;
 these imports do not imply identical glTF BRDFs. A fully metallic material

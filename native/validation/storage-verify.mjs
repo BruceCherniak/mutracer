@@ -5,6 +5,7 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {build} from 'esbuild';
 import {spawnCompiler} from '../scripts/compiler.mjs';
 import {archiveName,cCompiler,cLinkFlags,executable} from '../scripts/platform.mjs';
+import {compareStorageBytes} from './storage-comparison.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const out = resolve(process.env.MUTRACER_NATIVE_OUTPUT ?? resolve(root, '.native-build/storage-typed'));
 mkdirSync(out, {recursive:true});
@@ -31,9 +32,11 @@ for (let storage = 0; storage < 4; storage++) for (let target = 0; target < 2; t
   writeFileSync(prefix + '.input', bytes);
   const run = spawnSync(host, [prefix + '.input', prefix + '.output'], {encoding:'utf8'});
   if (run.status !== 0) throw new Error(`C storage consumer: ${run.stderr}`);
-  const actual = readFileSync(prefix + '.output'), exact = actual.equals(expected);
-  cases.push({storage, target, floating, flip, width, height, exact});
-  if (!exact) {writeFileSync(prefix + '.expected', expected);throw new Error(`Storage case ${cases.length - 1} differs`);}
+  const actual = readFileSync(prefix + '.output'), comparison = compareStorageBytes(actual, expected);
+  cases.push({storage, target, floating, flip, width, height, exact: comparison.byteIdentical,
+    matched: comparison.matched, powerUlps: comparison.powerUlps});
+  if (!comparison.matched) {writeFileSync(prefix + '.expected', expected);throw new Error(`Storage case ${cases.length - 1} differs`);}
 }
 writeFileSync(resolve(out, 'results.json'), JSON.stringify(cases, null, 2));
-console.log(`PASS ${cases.length} storage cases/${cases.length * 2} C calls: four formats, byte/half targets, subarrays, resizing, orientation, environment distribution and power equal Web TS.`);
+const rounded = cases.filter(result => !result.exact).length;
+console.log(`PASS ${cases.length} storage cases/${cases.length * 2} C calls: four formats, byte/half targets, subarrays, resizing, orientation and environment CDF byte-exact; environment power ${rounded ? `${rounded} cases within 1 ULP (Windows libm)` : 'byte-exact'}.`);

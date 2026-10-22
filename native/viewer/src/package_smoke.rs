@@ -1,4 +1,4 @@
-//! Relocated-package gate: bundled assets/OIDN, plus rendering when an adapter exists.
+//! Relocated-package CPU gate; rendering is an explicit real-GPU validation mode.
 use crate::{
     renderer::{Camera, Renderer},
     scene::{Environment, Model},
@@ -33,13 +33,22 @@ pub fn run(model_path: &Path, out: &Path) -> Result<()> {
         "OIDN changed alpha"
     );
 
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let gpu = match pollster::block_on(instance.request_adapter(&Default::default())) {
-        Ok(_) => true,
-        Err(wgpu::RequestAdapterError::NotFound { .. }) => false,
-        Err(error) => return Err(error.into()),
-    };
+    let gpu = std::env::var("MUTRACER_NATIVE_GPU_VALIDATION").is_ok_and(|value| value == "1");
     if gpu {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            ..Default::default()
+        }))?;
+        ensure!(
+            matches!(
+                adapter.get_info().device_type,
+                wgpu::DeviceType::IntegratedGpu
+                    | wgpu::DeviceType::DiscreteGpu
+                    | wgpu::DeviceType::VirtualGpu
+            ),
+            "Packaged GPU validation requires a real GPU"
+        );
         let mut renderer = Renderer::with_backend(0)?;
         let camera = Camera::fit(model.center, model.radius);
         renderer.commit(&model.descriptor(&camera.bytes(size), size, &Environment::default()))?;
@@ -71,8 +80,7 @@ pub fn run(model_path: &Path, out: &Path) -> Result<()> {
         );
         crate::renderer::save(&out.join("render.png"), &pixels, size, 0.0)?;
     }
-    let summary =
-        serde_json::json!({"passed":true,"gpu":gpu,"oidn":denoiser.backend,"model":model_path});
+    let summary = serde_json::json!({"passed":true,"gpu":gpu,"gpuValidation":if gpu {"passed"} else {"not-run (CPU-only)"},"oidn":denoiser.backend,"model":model_path});
     std::fs::write(
         out.join("summary.json"),
         serde_json::to_vec_pretty(&summary)?,

@@ -131,7 +131,8 @@ pub struct Model {
     pub materials: Vec<Material>,
     pub textures: Arc<Vec<Texture>>,
     pub geometries: Arc<Vec<Geometry>>,
-    pub picking: Arc<Vec<mutracer_native_probe::picking::PickBvh>>,
+    pub picking: Arc<Vec<Arc<mutracer_native_probe::picking::PickBvh>>>,
+    pub animation: Option<crate::animation::Animation>,
     pub meshes: Vec<Mesh>,
     pub center: Vec3,
     pub radius: f32,
@@ -177,6 +178,7 @@ impl Model {
             textures: Arc::new(vec![]),
             geometries: Arc::new(vec![]),
             picking: Arc::new(vec![]),
+            animation: crate::animation::Animation::load(&document, &buffers)?,
             meshes: vec![],
             center: Vec3::ZERO,
             radius: 1.,
@@ -187,11 +189,6 @@ impl Model {
             model.warnings.push(format!(
                 "Unsupported optional extension is ignored: {extension}"
             ));
-        }
-        if document.animations().len() > 0 {
-            model
-                .warnings
-                .push("Animations are not played; showing the scene's static pose.".into());
         }
         let rgba: Vec<Vec<u8>> = images.iter().map(image_rgba).collect::<Result<_>>()?;
         for material in document.materials() {
@@ -377,6 +374,9 @@ impl Model {
         model.warnings.sort();
         model.warnings.dedup();
         model.rebuild_picking()?;
+        if model.apply_animation()? {
+            model.refresh_bounds();
+        }
         Ok(model)
     }
     /// Replaces slots atomically. Existing slots provide UV sampling, then base color.
@@ -740,6 +740,15 @@ impl Model {
                                 .all(|&i| (i as usize) < geometry.positions.len() / 3),
                         "Invalid triangle indices"
                     );
+                    if let Some(animation) = &mut self.animation {
+                        animation.bind_geometry(
+                            &node,
+                            &primitive,
+                            buffers,
+                            self.geometries.len(),
+                            &geometry,
+                        )?;
+                    }
                     let weights = node.weights().or_else(|| mesh.weights()).unwrap_or(&[]);
                     for (i, (positions, normals, tangents)) in
                         reader.read_morph_targets().enumerate()
@@ -822,10 +831,6 @@ impl Model {
                                 }
                             }
                         }
-                        self.warnings.push(
-                            "Skinned meshes use the initial static pose; animation is not played."
-                                .into(),
-                        );
                     }
                     geometry.min = Vec3::splat(f32::INFINITY);
                     geometry.max = Vec3::splat(f32::NEG_INFINITY);
@@ -934,6 +939,9 @@ impl Model {
                             .unwrap_or(self.materials.len() - 1),
                         transform: matrix,
                     });
+                    if let Some(animation) = &mut self.animation {
+                        animation.bind_mesh(node.index(), local);
+                    }
                 }
             }
         }

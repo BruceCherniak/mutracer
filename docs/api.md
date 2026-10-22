@@ -333,7 +333,8 @@ one. See [thin-film textures](./materials.md#textures) for range behavior.
 `undefined`. Channels and color decoding are listed in [material textures](./materials.md#textures).
 They follow the existing material/texture update mechanism.
 
-`coatNormalMap` defaults to `undefined`, retaining the shared shading normal. With a map, linear RGB supplies an independent coat normal; `coatNormalScale` defaults to `[1, 1]` and scales its decoded XY. See [coat normals](./materials.md#coat-normals) for frame, sampling and update behavior.
+`coatNormalMap` defaults to `undefined`; `coatNormalScale` defaults to `[1, 1]`.
+See [coat normals](./materials.md#coat-normals) for independent base and coat normal mapping.
 
 Raw texture sources contain exactly `width * height * 4` RGBA values, with
 rows ordered from top to bottom. `Uint8Array` and `Uint8ClampedArray` store

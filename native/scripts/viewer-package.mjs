@@ -10,6 +10,7 @@ const root=resolve(dirname(fileURLToPath(import.meta.url)),'../..');
 const out=resolve(process.env.MUTRACER_NATIVE_OUTPUT??resolve(root,'.native-build/viewer'));
 const dist=resolve(process.env.MUTRACER_NATIVE_DIST??resolve(out,'dist'));
 const platform=viewerPlatform(),mac=platform==='macos-arm64';
+const gpuValidation=process.argv.includes('--gpu')||process.env.MUTRACER_NATIVE_GUI_SMOKE==='1';
 const appName=mac?'MuTracer.app':'MuTracer',app=resolve(out,appName);
 function run(command,args,options={}) {
   const result=spawnSync(command,args,{stdio:'inherit',...options});
@@ -31,6 +32,7 @@ if(mac)run('ditto',['-x','-k',archive,relocated]);
 else run(nativeTar,['-xf',archive,'-C',relocated]);
 const binary=resolve(relocated,appName,mac?'Contents/MacOS/mutracer-viewer':executable('mutracer-viewer'));
 const env={...process.env};delete env.MUTRACER_OIDN_LIBRARY;
+env.MUTRACER_NATIVE_GPU_VALIDATION=gpuValidation?'1':'0';
 for(const key of ['LD_LIBRARY_PATH','DYLD_LIBRARY_PATH','DYLD_FALLBACK_LIBRARY_PATH'])delete env[key];
 if(process.platform==='win32') {
   // Developer PATH entries must not supply missing packaged DLLs.
@@ -46,7 +48,8 @@ writeFileSync(resolve(out,'package-smoke.log'),(smoke.stdout??'')+(smoke.stderr?
 if(smoke.error||smoke.status!==0)throw smoke.error??new Error(`Relocated package smoke failed; see ${out}/package-smoke.log`);
 const summary=JSON.parse(readFileSync(resolve(out,'package-smoke/summary.json'),'utf8'));
 if(!summary.passed||summary.oidn!=='OIDN CPU')throw new Error('Incomplete relocated package smoke');
-if(summary.gpu&&process.env.MUTRACER_NATIVE_GUI_SMOKE==='1') {
+if(gpuValidation) {
+  if(!summary.gpu||summary.gpuValidation!=='passed')throw new Error('Packaged GPU rendering was not validated');
   const args=[binary,'--startup-smoke',resolve(out,'startup-smoke-summary.json')];
   const command=process.platform==='linux'?'xvfb-run':args.shift();
   if(process.platform==='linux')args.unshift('-a');

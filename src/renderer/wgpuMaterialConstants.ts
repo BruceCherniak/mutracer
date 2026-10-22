@@ -21,6 +21,10 @@ export function wgpuMaterialConstants(materials: MaterialState[], materialData: 
     20
   );
 
+  // Either layer's map requires independent normals, including a smooth
+  // coat over a mapped base. Unmapped materials retain the shared path.
+  const USE_COAT_NORMAL_FRAMES = materials.some(m => m.coatWeight > 0 && (!!m.normalMap || !!m.coatNormalMap));
+
   return {
     MATERIAL_CAPABILITIES:
       (materials.some(m => m.transmissionWeight !== 0 || !!m.map && m.mapAlphaUsage === 'transmission')
@@ -34,8 +38,8 @@ export function wgpuMaterialConstants(materials: MaterialState[], materialData: 
     USE_TANGENT: mergedGeometry.tangent != null &&
       materials.some(material => material.specularAnisotropy > 0 || material.coatAnisotropy > 0 || (!!material.coatNormalMap && material.coatWeight > 0)),
 
-    USE_COAT_NORMAL_FRAMES: materials.some(m => !!m.coatNormalMap && m.coatWeight > 0),
-    USE_ANISOTROPY_DIRECTIONS: materials.some(m => (!!m.coatNormalMap && m.coatWeight > 0) ||
+    USE_COAT_NORMAL_FRAMES,
+    USE_ANISOTROPY_DIRECTIONS: USE_COAT_NORMAL_FRAMES || materials.some(m =>
       m.specularAnisotropy > 0 && (m.specularAnisotropyModel === 'gltf' || !!m.anisotropyMap || m.specularAnisotropyRotation !== 0) ||
       m.coatAnisotropy > 0 && m.coatAnisotropyRotation !== 0),
     HAS_MEDIUM,

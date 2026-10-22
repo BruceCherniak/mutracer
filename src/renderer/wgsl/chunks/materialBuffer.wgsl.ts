@@ -264,7 +264,8 @@ fn getMaterial(
   ${simpleTextureSample('coatWeightMap', 'wgsl')}
 
 ${hasCoatNormals ? /* wgsl */ `
-  (*ma).coatNormalEnabled = USE_COAT_NORMAL_MAPS && matData.coatNormalMapIndex >= 0.0 && (*ma).coatWeight > 0.0;
+  // Independent coat shading also applies when the coat has no normal map.
+  (*ma).coatNormalEnabled = (*ma).coatWeight > 0.0 && (matData.normalMapIndex >= 0.0 || matData.coatNormalMapIndex >= 0.0);
 ` : ''}
 
   ${simpleTextureSample('coatRoughnessMap', 'wgsl')}

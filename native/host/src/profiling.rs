@@ -110,14 +110,12 @@ fn timestamp_milliseconds(bytes: &[u8], period: f32) -> Result<f64> {
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn zero_timestamp_readback_does_not_prevent_real_gpu_rendering() {
         let _test = crate::ABI_TEST_LOCK.lock().unwrap();
-        let Ok(gpu) = crate::GpuDevice::with_backend(1) else {
-            return;
-        };
-        if !gpu.hardware_ray_query {
-            return;
-        }
+        let gpu =
+            crate::GpuDevice::with_backend(1).expect("GPU validation requires a working device");
+        assert!(gpu.hardware_ray_query, "GPU validation requires HWRT");
         let Some(timer) = GpuTimer::new(&gpu.device, 1, false) else {
             return;
         };

@@ -33,11 +33,23 @@ export async function fetchWithProgress(
   signal?: AbortSignal
 ): Promise<ArrayBuffer> {
   const fallback = sampleOrigin(url);
+  let resource = url;
   for (let attempt = 0; ; attempt++) {
     signal?.throwIfAborted();
-    const address = attempt === 2 && fallback ? fallback : url;
+    const address = attempt === 2 && fallback ? fallback : resource;
     try {
-      return await fetchOnce(address, onProgress, signal);
+      const bytes = await fetchOnce(address, onProgress, signal);
+      // GitHub raw serves pointer text for LFS files. Keep the original URL
+      // for relative glTF resources and caches; fetch the bytes from GitHub's
+      // media endpoint without relying on the authenticated LFS batch API.
+      const parsed = new URL(address, 'https://localhost/');
+      if (parsed.protocol === 'https:' && parsed.hostname === 'raw.githubusercontent.com' && bytes.byteLength < 1024 &&
+        /^version https:\/\/git-lfs.github.com\/spec\/v1\r?\noid sha256:[a-f0-9]{64}\r?\nsize \d+\s*$/.test(new TextDecoder().decode(bytes))) {
+        resource = `https://media.githubusercontent.com/media${parsed.pathname}${parsed.search}`;
+        onProgress?.(0, 0);
+        return await fetchOnce(resource, onProgress, signal);
+      }
+      return bytes;
     } catch (error) {
       signal?.throwIfAborted();
       const transient = error instanceof DownloadError

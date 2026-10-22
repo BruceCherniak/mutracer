@@ -65,6 +65,7 @@ sample count) on a real GPU before and after, and compare
   generated shader validity). Do not add tests that only restate source text.
 - Use Three.js `GLTFLoader` with `THREESync` in examples and comparisons.
 - Keep examples small: procedural or CC0 assets only, no large models.
+- Avoid unnecessary secondary labels and descriptions. Let the layout do the explaining.
 - Code adapted from another project needs a compatible license, a source
   comment, an entry in `THIRD_PARTY_NOTICES.md` and the license text in
   `LICENSES/`. Do not copy code from sources whose license does not allow

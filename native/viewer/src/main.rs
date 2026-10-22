@@ -1,4 +1,5 @@
 //! Small native example: glTF input → native MuTracer library → egui image.
+mod animation;
 mod controls;
 mod dock;
 mod edit_bench;
@@ -194,6 +195,10 @@ struct Viewer {
     backend: u32,
     backend_status: String,
     model: Model,
+    /// The last presented image shows the last pushed inputs, including the
+    /// current animation pose.
+    pose_presented: bool,
+    animation_clock: std::time::Instant,
     descriptor: Option<Descriptor>,
     camera: Camera,
     drag: input::ViewportDrag,
@@ -282,6 +287,8 @@ impl Viewer {
             pending_model: None,
             model,
             descriptor: None,
+            animation_clock: std::time::Instant::now(),
+            pose_presented: false,
             camera,
             drag: input::ViewportDrag::default(),
             environment: Environment::default(),
@@ -474,6 +481,7 @@ impl Viewer {
         target.engine.display().set_size(size[0], size[1])?;
         target.engine.set_scene_shared(bytes)?;
         target.pushed = true;
+        self.pose_presented = false;
         self.error.clear();
         Ok(())
     }
@@ -482,7 +490,9 @@ impl Viewer {
         if self.texture_browser.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
-        let held = ctx.input(|i| i.pointer.any_down());
+        // Playback renders like held input: one sample per frame and no denoising.
+        let playing = self.running && self.model.animation.as_ref().is_some_and(|a| a.playing);
+        let held = ctx.input(|i| i.pointer.any_down()) || playing;
         // A backend switch prepares a second engine; the current image stays.
         if self.backend == self.target.backend {
             self.replacement = None;
@@ -535,6 +545,26 @@ impl Viewer {
         }
         if self.focus.working(&self.camera) {
             ctx.request_repaint_after(Duration::from_millis(16));
+        }
+        // A moving pose must get a presented sample before the next pose can
+        // replace it. Explicit seeks can supersede that pose, like any other edit.
+        let now = std::time::Instant::now();
+        let animation_ready = self.loading.is_none()
+            && self.candidate.is_none()
+            && self.pending_model.is_none()
+            && self.scene_build.is_none()
+            && self.change != Change::Scene
+            && !self.editing().preparing();
+        if let Some(animation) = &mut self.model.animation {
+            if !animation.playing || !self.running || !animation_ready {
+                self.animation_clock = now;
+            } else if !animation.pending && self.frame_samples > 0 && self.pose_presented {
+                animation.advance(now.duration_since(self.animation_clock).as_secs_f32());
+                self.animation_clock = now;
+            }
+        }
+        if animation_ready && self.model.apply_animation()? {
+            self.dirty(Change::Transform);
         }
         // Edits wait while a scene is assembled or a full preparation runs, so held
         // input never cancels a preparation; the latest state commits afterwards.
@@ -681,12 +711,15 @@ impl Viewer {
             self.selected_mesh = None;
             self.picking_focus = false;
             self.object_query.clear();
+            self.animation_clock = std::time::Instant::now();
         }
         let presentations = self.target.render_loop.presentations();
         if presentations != self.seen_presentations {
             self.seen_presentations = presentations;
             if let Some(presented) = self.target.render_loop.last_presented() {
                 self.present_frame(ctx, presented)?;
+                // The loop presents only complete images of the committed inputs.
+                self.pose_presented = self.change == Change::None;
             }
         }
         self.samples = self.final_render().samples();
@@ -712,6 +745,11 @@ impl Viewer {
             || self.scene_build.is_some()
             || self.pending_model.is_some()
             || self.change != Change::None
+            || self
+                .model
+                .animation
+                .as_ref()
+                .is_some_and(|a| a.pending || a.playing && self.running)
         {
             ctx.request_repaint_after(Duration::from_millis(16));
         }

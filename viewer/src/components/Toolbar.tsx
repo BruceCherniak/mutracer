@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import {
-  Button, Dialog, DialogTrigger, Heading, Menu, MenuItem, MenuTrigger, Modal, ModalOverlay, Popover, Separator
+  Button, Dialog, DialogTrigger, Heading, Menu, MenuItem, MenuTrigger, Modal, ModalOverlay, Popover, Separator,
+  Tabs, TabList, Tab, TabPanel
 } from 'react-aria-components';
 import {
   ChevronDown, Code2, Download, FileUp, Folder, Globe, HelpCircle, Link, MoreHorizontal, PanelLeft, PanelRight, Redo2, RotateCcw, Sparkles, Undo2, Upload, X
@@ -8,6 +9,7 @@ import {
 import { setUi, useViewer } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
 import { MODEL_PRESETS } from '../engine/presets';
+import { RESEARCH_SCENES_SOURCE } from '../engine/researchModelPresets';
 import { toPathedFiles } from '../engine/loadModel';
 import { redo, undo } from '../history';
 import { BrandMark } from './BrandMark';
@@ -20,7 +22,7 @@ export function Toolbar({ mobile }: { mobile: boolean }) {
       <div className="brand">
         <a className="brand__home" href="../" title="MuTracer home">
           <BrandMark />
-          <div><strong>{mobile ? 'MuTracer' : 'MuTracer Viewer'}</strong><small>PATH TRACER</small></div>
+          <strong>{mobile ? 'MuTracer' : 'MuTracer Viewer'}</strong>
         </a>
         <span className="divider hide-m" />
         <button className="icon-btn icon-btn--bare sm hide-m" aria-label="Toggle scene panel" title="Toggle scene panel ([)"
@@ -194,19 +196,38 @@ function ExamplesMenu() {
         <Dialog aria-label="Examples">
           {({ close }) => (
             <>
-              <h4>Examples <span>Khronos &amp; Sketchfab · loaded on demand</span></h4>
-              <div className="ex-grid">
-                {MODEL_PRESETS.map((preset) => (
-                  <button key={preset.id} className="ex" data-on={current === preset.id || undefined}
-                    onClick={() => { void getEngine()?.loadPreset(preset.id); close(); }}>
-                    <span className="thumb"><img src={preset.thumbnail} alt="" loading="lazy" /></span>
-                    <div>
-                      <b>{preset.name}</b>
-                      <small><span className="tag">{preset.tag}</span><span>{preset.license}{preset.sizeMB ? ` · ${preset.sizeMB} MB` : ''}</span></small>
+              <Tabs className="example-tabs" defaultSelectedKey={current?.startsWith('research-') ? 'research' : 'models'}>
+                <TabList aria-label="Example collections" className="example-tabs__list">
+                  <Tab id="models">Sample models</Tab>
+                  <Tab id="research">Rendering benchmarks</Tab>
+                </TabList>
+                {(['models', 'research'] as const).map((collection) => (
+                  <TabPanel key={collection} id={collection}>
+                    {collection === 'research' && <p className="hint example-note">
+                      <a href={RESEARCH_SCENES_SOURCE} target="_blank" rel="noopener noreferrer">glTF Research Scenes ↗</a>
+                      {' · '}Original scene lighting; large scenes need more memory.
+                    </p>}
+                    <div className="ex-grid">
+                      {MODEL_PRESETS.filter((preset) => (preset.category === 'research') === (collection === 'research')).map((preset) => (
+                        <div key={preset.id} className="ex-entry">
+                          <button className="ex" data-on={current === preset.id || undefined}
+                            onClick={() => { void getEngine()?.loadPreset(preset.id); close(); }}>
+                            <span className="thumb"><img src={preset.thumbnail} alt="" loading="lazy" /></span>
+                            <div>
+                              <b>{preset.name}</b>
+                              <small><span className="tag">{preset.tag}</span><span>{preset.license}{preset.sizeMB ? ` · ${preset.sizeMB} MB` : ''}</span></small>
+                            </div>
+                          </button>
+                          {collection === 'research' && <div className="ex-links">
+                            <a href={preset.sourceUrl} target="_blank" rel="noopener noreferrer" aria-label={`${preset.name} source`}>Source ↗</a>
+                            <a href={preset.licenseUrl} target="_blank" rel="noopener noreferrer" aria-label={`${preset.name} license`}>License ↗</a>
+                          </div>}
+                        </div>
+                      ))}
                     </div>
-                  </button>
+                  </TabPanel>
                 ))}
-              </div>
+              </Tabs>
             </>
           )}
         </Dialog>

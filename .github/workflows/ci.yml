@@ -94,11 +94,11 @@ jobs:
         uses: mlugg/setup-zig@v2
         with:
           version: 0.15.2
-      - name: Install Linux windowing, Vulkan and packaging dependencies
+      - name: Install Linux windowing and packaging dependencies
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev mesa-vulkan-drivers libvulkan1 patchelf xvfb
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev libvulkan1 patchelf
       - run: npm ci
       - name: Install pinned native compiler for this platform
         run: |
@@ -108,7 +108,7 @@ jobs:
       - name: Install pinned DX12 shader compiler
         if: runner.os == 'Windows'
         run: node native/scripts/fetch-dxc.mjs >> "$GITHUB_PATH"
-      - name: Build and validate native modules and GPU contracts
+      - name: Build and validate CPU modules and static WGSL contracts
         run: npm run native:ci
       - name: Build standalone native app
         env:
@@ -118,11 +118,10 @@ jobs:
           set -o pipefail
           mkdir -p "$MUTRACER_NATIVE_OUTPUT"
           npm run native:viewer:build 2>&1 | tee "$MUTRACER_NATIVE_OUTPUT/build.log"
-      - name: Package and verify relocated app
+      - name: Package and verify relocated app, assets and CPU OIDN
         env:
           MUTRACER_NATIVE_OUTPUT: ${{ runner.temp }}/mutracer-native/viewer
           MUTRACER_NATIVE_DIST: ${{ runner.temp }}/native-dist
-          MUTRACER_NATIVE_GUI_SMOKE: '1'
         run: npm run native:viewer:package
       - name: Upload native app
         uses: actions/upload-artifact@v4
