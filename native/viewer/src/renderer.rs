@@ -7,24 +7,14 @@ pub use mutracer_native_probe::settings::RenderSettings;
 use mutracer_native_probe::status::Status;
 use std::{
     ffi::CStr,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
+/// A plain L0 context: the viewer's fresh-context oracle and direct smokes.
+/// Interactive rendering uses the library's Engine/Render/RenderLoop.
 pub struct Renderer {
     handle: u64,
-    pub mode: u32,
     job: Option<u64>,
-    pub shared: Option<(
-        wgpu::Adapter,
-        wgpu::Device,
-        wgpu::Queue,
-        Arc<mutracer_native_probe::submission::SubmissionGate>,
-    )>,
-}
-pub struct SceneCommit {
-    pub replacement: Option<Renderer>,
-    pub descriptor: crate::scene::Descriptor,
 }
 fn call(operation: impl FnOnce(*mut i8, usize) -> i32) -> (i32, String) {
     let mut error = [0i8; 4096];
@@ -59,120 +49,10 @@ fn check(operation: impl FnOnce(*mut i8, usize) -> i32) -> Result<()> {
     }
 }
 impl Renderer {
-    pub fn new() -> Result<Self> {
-        Self::with_backend(1)
-    }
     pub fn with_backend(mode: u32) -> Result<Self> {
         let mut handle = 0;
         check(|e, n| unsafe { native::mt_context_create_with_backend(mode, &mut handle, e, n) })?;
-        Ok(Self {
-            handle,
-            mode,
-            job: None,
-            shared: None,
-        })
-    }
-    pub fn on_device(state: &eframe::egui_wgpu::RenderState, mode: u32) -> Result<Self> {
-        let gate = Arc::new(mutracer_native_probe::submission::SubmissionGate::default());
-        let handle = native::create_on_device_with_gate(
-            &state.adapter,
-            &state.device,
-            &state.queue,
-            mode,
-            Some(gate.clone()),
-        )
-        .map_err(anyhow::Error::msg)?;
-        Ok(Self {
-            handle,
-            mode,
-            job: None,
-            shared: Some((
-                state.adapter.clone(),
-                state.device.clone(),
-                state.queue.clone(),
-                gate,
-            )),
-        })
-    }
-    pub fn capture(
-        &self,
-        display: &mut Option<mutracer_native_probe::display::Display>,
-    ) -> Result<bool> {
-        native::capture_display(self.handle, display).map_err(anyhow::Error::msg)
-    }
-    pub fn commit_worker(
-        &self,
-        mode: u32,
-        model: crate::scene::Model,
-        camera: Camera,
-        size: [u32; 2],
-        settings: RenderSettings,
-        environment: crate::scene::Environment,
-        light: crate::scene::KeyLight,
-        mut descriptor: Option<crate::scene::Descriptor>,
-        ctx: eframe::egui::Context,
-    ) -> std::sync::mpsc::Receiver<Result<SceneCommit>> {
-        let current = self.handle;
-        let shared = self.shared.clone();
-        let replace = mode != self.mode;
-        let (send, receive) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                || -> Result<SceneCommit> {
-                    let bytes = model.update_descriptor(
-                        &mut descriptor,
-                        &camera.bytes(size),
-                        size,
-                        &environment,
-                        &light,
-                    );
-                    let replacement = if replace {
-                        let mut candidate = if let Some((adapter, device, queue, gate)) = shared {
-                            Self {
-                                handle: native::create_on_device_with_gate(
-                                    &adapter,
-                                    &device,
-                                    &queue,
-                                    mode,
-                                    Some(gate.clone()),
-                                )
-                                .map_err(anyhow::Error::msg)?,
-                                mode,
-                                job: None,
-                                shared: Some((adapter, device, queue, gate)),
-                            }
-                        } else {
-                            Self::with_backend(mode)?
-                        };
-                        candidate.commit_with_settings(bytes, &settings)?;
-                        Some(candidate)
-                    } else {
-                        check(|e, n| unsafe {
-                            native::mt_context_commit_with_settings(
-                                current,
-                                bytes.as_ptr(),
-                                bytes.len(),
-                                &settings,
-                                e,
-                                n,
-                            )
-                        })?;
-                        None
-                    };
-                    Ok(SceneCommit {
-                        replacement,
-                        descriptor: descriptor.take().unwrap(),
-                    })
-                },
-            ))
-            .unwrap_or_else(|_| Err(anyhow::anyhow!("Scene preparation panicked")));
-            let _ = send.send(result);
-            ctx.request_repaint();
-        });
-        receive
-    }
-    pub fn commit_finished(&mut self) {
-        self.job = None;
+        Ok(Self { handle, job: None })
     }
     pub fn backend(&self) -> Result<(u32, String)> {
         let mut active = 0;

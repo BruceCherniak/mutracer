@@ -12,24 +12,15 @@ use std::{
 };
 
 fn tick(viewer: &mut Viewer, ctx: &eframe::egui::Context) -> Result<()> {
-    if let Err(error) = viewer.tick(ctx) {
-        if !crate::renderer::NativeError::is_busy(&error) {
-            return Err(error);
-        }
-    }
-    Ok(())
+    viewer.tick(ctx)
 }
 fn settle(viewer: &mut Viewer, ctx: &eframe::egui::Context) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         viewer.receive_model(ctx);
         tick(viewer, ctx)?;
-        if viewer.commit.is_none()
-            && viewer.loading.is_none()
-            && viewer.change == Change::None
-            && !viewer.renderer.busy()
-            && !viewer.frame_pending
-            && viewer.frame_generation == viewer.generation
+        if viewer.loading.is_none()
+            && viewer.settled()
             && viewer.samples == viewer.settings.max_samples
             && !viewer.focus.working(&viewer.camera)
         {
@@ -79,9 +70,9 @@ fn compare(viewer: &Viewer) -> Result<()> {
         &viewer.settings,
     )?;
     ensure!(
-        viewer.pixels == fresh.finish(viewer.samples)?
-            && viewer.renderer.image(1)? == fresh.image(1)?
-            && viewer.renderer.image(2)? == fresh.image(2)?,
+        viewer.hdr()? == fresh.finish(viewer.samples)?
+            && viewer.image(1)? == fresh.image(1)?
+            && viewer.image(2)? == fresh.image(2)?,
         "Focused viewer differs from full commit"
     );
     Ok(())
@@ -175,7 +166,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
         viewer.dirty(Change::Scene);
         settle(&mut viewer, &ctx)?;
         ensure!(
-            viewer.renderer.backend()?.0 == backend && viewer.focus.status == Status::Locked,
+            viewer.render_backend()? == backend && viewer.focus.status == Status::Locked,
             "Autofocus did not lock on requested backend"
         );
         let expected =

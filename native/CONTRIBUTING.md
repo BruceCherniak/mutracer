@@ -214,7 +214,11 @@ adapter/device/queue. `src/display-shader.ts` generates the display WGSL through
 Web TS generator; `scripts/generate-display.mjs --check` detects stale output. Normal
 preview capture, tonemap and presentation stay on the GPU. Only OIDN/export reads
 pixels back. The immutable owned picking BVH is built while loading a model on
-a worker. Descriptor assembly and full commits also run off the UI thread.
+a worker. The viewer renders through `api::Engine::on_device`, a `RenderLoop`
+without preview and the engine `Display`. Descriptor assembly for scene and layout
+changes and full preparation run off the UI thread. New input waits until the
+batch in flight is collected and shown (`Render::collect`) and while a full
+preparation runs, so held edits keep updating without cancelling preparations.
 The viewer pauses native queue submissions outside its UI callback so eframe can
 reconfigure the shared surface safely; CPU preparation continues while paused.
 
@@ -261,7 +265,8 @@ interaction/three-full-commit sequence, reports UI/picking/frame intervals and
 closes automatically. Use LEGO, keep the Mac unlocked and nominal, and retain
 outliers. This opt-in contributor instrument does not change normal usage.
 
-OIDN uses the library's `denoise.rs` for both the C ABI and viewer worker. The
+OIDN uses the library's `denoise.rs` for the C ABI and for the Rust API's render
+denoiser, which the viewer runs with the progressive schedule. The
 build pins 2.5.1 source/weights and official ABI-matched CPU modules (plus Metal
 on macOS and CUDA/HIP on Windows/Linux), omits three large models and packages
 component notices. Check CPU/Metal/CUDA/HIP/Auto,

@@ -12,16 +12,8 @@ use std::{
 fn settle(viewer: &mut Viewer, ctx: &eframe::egui::Context) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(60);
     loop {
-        if let Err(error) = viewer.tick(ctx) {
-            if !renderer::NativeError::is_busy(&error) {
-                return Err(error);
-            }
-        }
-        if viewer.commit.is_none()
-            && viewer.change == Change::None
-            && !viewer.renderer.busy()
-            && viewer.samples >= viewer.settings.max_samples
-        {
+        viewer.tick(ctx)?;
+        if viewer.settled() {
             ensure!(
                 viewer.samples == viewer.settings.max_samples,
                 "Viewer overshot the sample target"
@@ -77,18 +69,18 @@ fn texture_sampling(
                 &viewer.settings,
             )?;
             ensure!(
-                viewer.pixels == fresh.finish(viewer.samples)?
-                    && viewer.renderer.image(1)? == fresh.image(1)?
-                    && viewer.renderer.image(2)? == fresh.image(2)?,
+                viewer.hdr()? == fresh.finish(viewer.samples)?
+                    && viewer.image(1)? == fresh.image(1)?
+                    && viewer.image(2)? == fresh.image(2)?,
                 "Texture wrapping/fresh mismatch: backend {mode}, {s}/{t}"
             );
             renderer::save(
                 &out.join(format!("wrap-{mode}-{s}-{t}.png")),
-                &viewer.pixels,
+                &viewer.hdr()?,
                 viewer.size,
                 0.,
             )?;
-            images.push(viewer.pixels.clone());
+            images.push(viewer.hdr()?);
             println!("PASS texture wrap backend {mode}, {s}/{t}");
         }
     }
@@ -113,9 +105,9 @@ fn texture_sampling(
             &viewer.settings,
         )?;
         ensure!(
-            viewer.pixels == fresh.finish(viewer.samples)?
-                && viewer.renderer.image(1)? == fresh.image(1)?
-                && viewer.renderer.image(2)? == fresh.image(2)?,
+            viewer.hdr()? == fresh.finish(viewer.samples)?
+                && viewer.image(1)? == fresh.image(1)?
+                && viewer.image(2)? == fresh.image(2)?,
             "Texture repeat/fresh mismatch: backend {mode}, {scale:?}"
         );
         println!("PASS texture repeat backend {mode}, {scale:?}");
@@ -146,7 +138,7 @@ pub fn run_textures(path: &Path, out: &Path) -> Result<()> {
         viewer.dirty(Change::Scene);
         settle(&mut viewer, &ctx)?;
         ensure!(
-            viewer.renderer.backend()?.0 == mode,
+            viewer.render_backend()? == mode,
             "Requested backend unavailable"
         );
         texture_sampling(&mut viewer, &ctx, out, mode)?;
@@ -167,7 +159,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
         viewer.dirty(Change::Scene);
         settle(&mut viewer, &ctx)?;
         ensure!(
-            viewer.renderer.backend()?.0 == mode,
+            viewer.render_backend()? == mode,
             "Requested backend unavailable"
         );
         let original = viewer.model.materials[viewer.selected].clone();
@@ -186,15 +178,15 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 &viewer.settings,
             )?;
             ensure!(
-                viewer.pixels == fresh.finish(viewer.samples)?
-                    && viewer.renderer.image(1)? == fresh.image(1)?
-                    && viewer.renderer.image(2)? == fresh.image(2)?,
+                viewer.hdr()? == fresh.finish(viewer.samples)?
+                    && viewer.image(1)? == fresh.image(1)?
+                    && viewer.image(2)? == fresh.image(2)?,
                 "Material preset/fresh mismatch: backend {mode}, {}",
                 preset.id
             );
             renderer::save(
                 &out.join(format!("material-{mode}-{}.png", preset.id)),
-                &viewer.pixels,
+                &viewer.hdr()?,
                 viewer.size,
                 0.,
             )?;
@@ -233,10 +225,10 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 &viewer.settings,
             )?;
             ensure!(
-                viewer.pixels.len() == size[0] as usize * size[1] as usize * 4
-                    && viewer.pixels == fresh.finish(viewer.samples)?
-                    && viewer.renderer.image(1)? == fresh.image(1)?
-                    && viewer.renderer.image(2)? == fresh.image(2)?,
+                viewer.hdr()?.len() == size[0] as usize * size[1] as usize * 4
+                    && viewer.hdr()? == fresh.finish(viewer.samples)?
+                    && viewer.image(1)? == fresh.image(1)?
+                    && viewer.image(2)? == fresh.image(2)?,
                 "Scaled resolution/fresh mismatch: backend {mode}, {scale}"
             );
             let png = out.join(format!("resolution-{mode}-{i}.png"));
@@ -254,7 +246,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
         println!("PASS viewport resolution scales and PNG sizes backend {mode}");
         let camera = viewer.camera.clone();
         let settings = viewer.settings;
-        let baseline = viewer.pixels.clone();
+        let baseline = viewer.hdr()?;
         for case in 0..10 {
             viewer.camera = camera.clone();
             viewer.settings = settings;
@@ -297,19 +289,19 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 &viewer.settings,
             )?;
             ensure!(
-                viewer.pixels == fresh.finish(viewer.samples)?
-                    && viewer.renderer.image(1)? == fresh.image(1)?
-                    && viewer.renderer.image(2)? == fresh.image(2)?,
+                viewer.hdr()? == fresh.finish(viewer.samples)?
+                    && viewer.image(1)? == fresh.image(1)?
+                    && viewer.image(2)? == fresh.image(2)?,
                 "Viewer/fresh mismatch: backend {mode}, case {case}"
             );
             ensure!(
-                viewer.pixels != baseline,
+                viewer.hdr()? != baseline,
                 "Control had no effect: backend {mode}, case {case}"
             );
             if case == 0 || case == 3 {
                 renderer::save(
                     &out.join(format!("camera-{mode}-{case}.png")),
-                    &viewer.pixels,
+                    &viewer.hdr()?,
                     viewer.size,
                     0.,
                 )?;
@@ -337,7 +329,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 &viewer.settings,
             )?;
             ensure!(
-                viewer.pixels == fresh.finish(viewer.samples)?,
+                viewer.hdr()? == fresh.finish(viewer.samples)?,
                 "Settings lost after an edit"
             );
         }
@@ -355,20 +347,15 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             &viewer.settings,
         )?;
         ensure!(
-            viewer.pixels == fresh.finish(viewer.samples)?,
+            viewer.hdr()? == fresh.finish(viewer.samples)?,
             "Settings lost after backend switch"
         );
         println!("PASS retained settings after edits and backend switch {mode}");
         let display = mutracer_native_probe::display::Settings::default();
-        let hdr = viewer.renderer.pixels()?;
+        let hdr = viewer.hdr()?;
         let generation = viewer.generation;
         let samples = viewer.samples;
-        let before = viewer
-            .gpu_display
-            .as_ref()
-            .unwrap()
-            .read_rgba(&display)
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let before = viewer.read_rgba(&display)?;
         for case in 0..12 {
             viewer.display_settings = display;
             match case {
@@ -381,23 +368,17 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 10 => viewer.display_settings.output = 1,
                 _ => viewer.display_settings.output = 2,
             }
-            viewer.display_dirty = true;
             viewer.tick(&ctx)?;
             ensure!(
                 viewer.generation == generation
                     && viewer.samples == samples
-                    && viewer.renderer.pixels()? == hdr,
+                    && viewer.hdr()? == hdr,
                 "Display control restarted or mutated HDR"
             );
             let png = out.join(format!("display-{mode}-{case}.png"));
             viewer.save_image(&png)?;
             let exported = image::open(&png)?.into_rgba8();
-            let rgba = viewer
-                .gpu_display
-                .as_ref()
-                .unwrap()
-                .read_rgba(&viewer.display_settings)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let rgba = viewer.read_rgba(&viewer.display_settings)?;
             ensure!(
                 exported.as_raw() == &rgba,
                 "PNG differs from current composition"
@@ -414,12 +395,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             viewer.environment.background_alpha = if transparent { 0. } else { 1. };
             viewer.dirty(Change::Environment);
             settle(&mut viewer, &ctx)?;
-            let rgba = viewer
-                .gpu_display
-                .as_ref()
-                .unwrap()
-                .read_rgba(&display)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+            let rgba = viewer.read_rgba(&display)?;
             if transparent {
                 ensure!(
                     rgba.chunks_exact(4).any(|p| p[3] == 0)
@@ -443,7 +419,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
         // OIDN must preserve alpha, and AOVs bypass both denoising and color controls.
         viewer.denoise = true;
         let deadline = Instant::now() + Duration::from_secs(30);
-        while viewer.denoised.is_empty() {
+        while viewer.denoised()?.is_none() {
             viewer.tick(&ctx)?;
             ensure!(
                 Instant::now() < deadline,
@@ -454,34 +430,22 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
         }
         ensure!(
             viewer
-                .denoised
+                .denoised()?
+                .unwrap()
                 .chunks_exact(4)
-                .zip(viewer.pixels.chunks_exact(4))
+                .zip(viewer.hdr()?.chunks_exact(4))
                 .all(|(a, b)| a[3] == b[3]),
             "Denoise changed alpha"
         );
         viewer.save_image(&out.join(format!("denoised-transparent-{mode}.png")))?;
         viewer.display_settings.output = 1;
-        viewer.display_dirty = true;
         viewer.tick(&ctx)?;
-        let normal = viewer
-            .gpu_display
-            .as_ref()
-            .unwrap()
-            .read_rgba(&viewer.display_settings)
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
+        let normal = viewer.read_rgba(&viewer.display_settings)?;
         viewer.denoise = false;
         viewer.display_settings.exposure = 0.;
-        viewer.display_dirty = true;
         viewer.tick(&ctx)?;
         ensure!(
-            viewer
-                .gpu_display
-                .as_ref()
-                .unwrap()
-                .read_rgba(&viewer.display_settings)
-                .map_err(|e| anyhow::anyhow!(e.to_string()))?
-                == normal,
+            viewer.read_rgba(&viewer.display_settings)? == normal,
             "AOV affected by denoise or exposure"
         );
         println!(

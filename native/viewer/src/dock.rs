@@ -159,7 +159,7 @@ impl Viewer {
             .rect
     }
     fn dock_status(&mut self, ui: &mut egui::Ui) {
-        let preparing = self.loading.is_some() || self.commit.is_some() || self.candidate.is_some();
+        let preparing = self.loading.is_some() || self.preparing() || self.candidate.is_some();
         let done = self.samples >= self.settings.max_samples;
         let label = if self.loading.is_some() {
             "Opening"
@@ -292,14 +292,8 @@ impl Viewer {
             .show_ui(ui, |ui| self.resolution_choices(ui))
             .response
             .on_hover_text(self.resolution_label());
-        if ui
-            .checkbox(&mut self.denoise, "Denoise")
-            .on_hover_text(&self.denoise_status)
-            .changed()
-        {
-            self.display_dirty = true;
-            self.last_denoise = None;
-        }
+        ui.checkbox(&mut self.denoise, "Denoise")
+            .on_hover_text(&self.denoise_status);
         if action(ui, "Render settings", Action::Settings).clicked() {
             self.tab = 0;
             self.inspector_open = true;
