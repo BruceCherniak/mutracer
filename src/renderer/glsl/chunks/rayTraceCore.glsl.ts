@@ -42,7 +42,7 @@ struct SurfaceInteraction {
   bool hit;
   vec3 position;
   vec3 normal; // material shading normal
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
   vec3 coatNormal;
 #endif
   vec3 vertexNormal; // interpolated mesh normal before normal mapping
@@ -126,7 +126,7 @@ struct OpenPbrResolvedMaterial {
   vec3 directionBitangent;
   vec3 geometryTangent;
   vec3 geometryBitangent;
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
   vec3 coatNormal;
   bool coatNormalEnabled;
   vec3 geometricNormal;

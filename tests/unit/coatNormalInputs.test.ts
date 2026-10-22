@@ -1,4 +1,4 @@
-import {describe, expect, it} from 'vitest';
+import {describe, expect, it, vi} from 'vitest';
 import * as THREE from 'three';
 import Material, {getMaterialHashKey} from '../../src/scene/OpenPBRMaterial';
 import Texture from '../../src/scene/Texture';
@@ -10,6 +10,9 @@ import {materialTextureFeatures} from '../../src/renderer/materialTextureSlots';
 import {wgpuSceneFeatureFlags} from '../../src/renderer/WGPUSceneFeatures';
 import {fromTHREEScene, THREESync} from '../../src/util/fromTHREE';
 import Engine from '../../src/Engine';
+import WebGLRayTracePass from '../../src/renderer/WebGLRayTracePass';
+import WGPURayTracePass from '../../src/renderer/WGPURayTracePass';
+import {createPlaneGeometry} from '../../src/util/commonGeometry';
 
 const image = () => new Texture({width: 2, height: 2, data: new Uint8Array(16).fill(128)});
 function sceneFor(source: THREE.MeshPhysicalMaterial) {
@@ -22,6 +25,29 @@ function convert(source: THREE.MeshPhysicalMaterial) {
 }
 
 describe('independent coat normal inputs', () => {
+  it.each(['webgpu', 'webgl'] as const)('%s retains independent coat frames without a coat normal texture', backend => {
+    const geometry = createPlaneGeometry();
+    const plain = new Material(), coated = new Material({normalMap: image(), coatWeight: 1});
+    const pass = Object.create((backend === 'webgpu' ? WGPURayTracePass : WebGLRayTracePass).prototype) as any;
+    const setDefines = vi.fn();
+    pass._constants = {}; pass._tracePasses = [{setDefines, setUniforms: vi.fn()}];
+    const update = (materials: Material[]) => {
+      const table = new MaterialTable(materials, []);
+      // Texture sampling is independent of the coat shading frame contract.
+      expect(materialTextureFeatures(table.defines).USE_COAT_NORMAL_MAPS).toBe(false);
+      if (backend === 'webgl') table.setToPass = vi.fn();
+      pass._updateMaterialConstants(materials, table, geometry);
+      return backend === 'webgpu' ? pass._constants : setDefines.mock.lastCall![0];
+    };
+    expect(update([plain]).USE_COAT_NORMAL_FRAMES).toBe(false);
+    expect(update([plain, coated]).USE_COAT_NORMAL_FRAMES).toBe(true);
+    coated.normalMap = undefined;
+    expect(update([coated]).USE_COAT_NORMAL_FRAMES).toBe(false);
+    coated.normalMap = image();
+    coated.coatWeight = 0;
+    expect(update([plain, coated]).USE_COAT_NORMAL_FRAMES).toBe(false);
+  });
+
   it('appends the slot to the public sequence and owns independent scale storage', () => {
     expect(MATERIAL_TEXTURE_NAMES).toEqual([
       'map', 'alphaMap', 'normalMap', 'emissiveMap', 'metallicRoughnessMap',

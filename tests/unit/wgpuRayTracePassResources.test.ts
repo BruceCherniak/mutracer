@@ -109,7 +109,10 @@ describe('WGPURayTracePass output resource lifetime', () => {
     expect(update()).toEqual([true, true, true]);
     geometry.tangent = undefined;
     expect(update()).toEqual([true, true, false]); // UV/fallback frame still works
+    material.normalMap = new Texture({width: 1, height: 1, data: new Uint8Array(4)});
     material.coatNormalMap = undefined;
+    expect(update()).toEqual([true, true, false]); // absent map retains the smooth coat frame
+    material.coatWeight = 0;
     expect(update()).toEqual([false, false, false]);
   });
 

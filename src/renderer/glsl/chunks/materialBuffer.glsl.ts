@@ -297,8 +297,9 @@ void getMaterial(
   ${thinFilmTextureSample('glsl')}
 
   ${simpleTextureSample('coatWeightMap', 'glsl')}
-#ifdef NUM_COAT_NORMAL_MAPS
-  mat.coatNormalEnabled = fetchMatData(i + MAT_ROW_LAYER_MAPS).z >= 0.0 && mat.coatWeight > 0.0;
+#ifdef USE_COAT_NORMAL_FRAMES
+  // Independent coat shading also applies when the coat has no normal map.
+  mat.coatNormalEnabled = mat.coatWeight > 0.0 && (roughnessAndNormal.y >= 0.0 || fetchMatData(i + MAT_ROW_LAYER_MAPS).z >= 0.0);
 #endif
 
   ${simpleTextureSample('coatRoughnessMap', 'glsl')}

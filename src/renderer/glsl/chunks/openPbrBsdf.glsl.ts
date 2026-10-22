@@ -40,7 +40,7 @@ struct OpenPbrPreparedBsdf {
     OpenPbrBasis basis;
     OpenPbrBasis coatBasis;
     bool directionFrames;
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
     vec3 coatViewLocal;
 #endif
     vec3 viewLocal;
@@ -964,7 +964,7 @@ OpenPbrPreparedBsdf openpbr_prepare(
     );
     prepared.coatBasis = prepared.basis;
     prepared.directionFrames = false;
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
     // Adobe c91aad1 openpbr_prepare_lobes: geometry_coat_basis is independent
     // of the base shading basis; coat passage uses the same coat cosine.
     if (material.coatNormalEnabled) {
@@ -981,7 +981,7 @@ OpenPbrPreparedBsdf openpbr_prepare(
         prepared.directionFrames = true;
     }
     prepared.viewLocal = openpbr_to_local(prepared.basis, viewDirection);
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
     prepared.coatViewLocal = openpbr_to_local(prepared.coatBasis, viewDirection);
 #endif
     prepared.diffuseColor = material.baseColor;
@@ -1093,7 +1093,7 @@ OpenPbrPreparedBsdf openpbr_prepare(
     prepared.probabilities[OPENPBR_LOBE_COAT] = 0.0;
     prepared.coatBaseScale = vec3(1.0);
     if (material.coatWeight > 0.0 && !material.inside) {
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
         float coatViewCosine = material.coatNormalEnabled ? max(prepared.coatViewLocal.z, 0.0) : viewCosine;
         float coatEnergy = openpbr_coat_energy(material, coatViewCosine);
 #else
@@ -1101,7 +1101,7 @@ OpenPbrPreparedBsdf openpbr_prepare(
 #endif
         prepared.probabilities[OPENPBR_LOBE_COAT] = prepared.weights[OPENPBR_LOBE_COAT] * coatEnergy;
         prepared.coatBaseScale = openpbr_coat_passage(material,
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
             coatViewCosine
 #else
             viewCosine
@@ -1199,7 +1199,7 @@ vec3 openpbr_eval_prepared(
     vec3 viewLocal = prepared.viewLocal;
     vec3 lightLocal = openpbr_to_local(prepared.basis, lightDirection);
     bool reflection = lightLocal.z * viewLocal.z > 0.0;
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
     bool independentCoat = material.coatNormalEnabled;
     bool geometricReflection = dot(material.geometricNormal, lightDirection) > 0.0;
     float coatLightCosine = dot(prepared.coatBasis.normal, lightDirection);
@@ -1229,7 +1229,7 @@ vec3 openpbr_eval_prepared(
             abs(lightLocal.z)
         );
 
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
     if (!independentCoat || (lightLocal.z != 0.0 && reflection == geometricReflection)) {
 #endif
     if (reflection) {
@@ -1436,24 +1436,24 @@ vec3 openpbr_eval_prepared(
         }
     }
 
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
     } // base hemisphere support
 #endif
     if (material.coatWeight > 0.0) {
         response *= openpbr_coat_base_scale(prepared,
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
             independentCoat ? coatLightCosine : lightLocal.z
 #else
             lightLocal.z
 #endif
         );
     }
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
     if (independentCoat) { response *= abs(lightLocal.z); }
 #endif
 
     if (
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
         (independentCoat ? coatReflection : reflection)
 #else
         reflection
@@ -1465,7 +1465,7 @@ vec3 openpbr_eval_prepared(
         float coatViewHalf = viewHalf;
         if (prepared.directionFrames) {
             coatView = openpbr_to_local(prepared.coatBasis, openpbr_to_world(prepared.basis, viewLocal));
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
             if (independentCoat) { coatView = prepared.coatViewLocal; }
 #endif
             coatLight = openpbr_to_local(prepared.coatBasis, lightDirection);
@@ -1483,7 +1483,7 @@ vec3 openpbr_eval_prepared(
         coatMaterial.alphaX = coatAlpha.x;
         coatMaterial.alphaY = coatAlpha.y;
         response += prepared.weights[OPENPBR_LOBE_COAT]
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
             * (independentCoat ? max(coatLightCosine, 0.0) : 1.0)
 #endif
             * openpbr_eval_microfacet_reflection(
@@ -1498,7 +1498,7 @@ vec3 openpbr_eval_prepared(
     }
 
     if (
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
         (independentCoat ? geometricReflection : reflection)
 #else
         reflection
@@ -1513,7 +1513,7 @@ vec3 openpbr_eval_prepared(
             vec3(1.0 - prepared.weights[OPENPBR_LOBE_FUZZ] * fuzzAlbedo)
         );
         response += prepared.weights[OPENPBR_LOBE_FUZZ]
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
             * (independentCoat ? max(lightLocal.z, 0.0) : 1.0)
 #endif
             * openpbr_eval_fuzz(
@@ -1525,7 +1525,7 @@ vec3 openpbr_eval_prepared(
         pdf += prepared.probabilities[OPENPBR_LOBE_FUZZ] * lobePdf;
     }
 
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
     if (independentCoat) { return response; }
 #endif
     return response * abs(lightLocal.z);
@@ -1592,7 +1592,7 @@ vec3 openpbr_sample_prepared(
         pdf = 1.0;
         isTransmissionEvent = true;
         return (openpbr_transmission_tint(prepared.material) * openpbr_coat_base_scale(prepared,
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
             prepared.material.coatNormalEnabled ? dot(prepared.coatBasis.normal, lightDirection) : -prepared.viewLocal.z
 #else
             -prepared.viewLocal.z
@@ -1618,7 +1618,7 @@ vec3 openpbr_sample_prepared(
     else if (lobeSample < cdf[OPENPBR_LOBE_COAT]) {
         vec3 coatView = viewLocal;
         if (prepared.directionFrames) { coatView = openpbr_to_local(prepared.coatBasis, openpbr_to_world(prepared.basis, viewLocal)); }
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
         if (material.coatNormalEnabled) { coatView = prepared.coatViewLocal; }
 #endif
         vec3 halfVector = sampling_ggx_visible_normal(
@@ -1631,7 +1631,7 @@ vec3 openpbr_sample_prepared(
             halfVector = -halfVector;
         }
         lightLocal = normalize(reflect(-coatView, halfVector));
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
         if (material.coatNormalEnabled) {
             lightDirection = openpbr_to_world(prepared.coatBasis, lightLocal);
             if (lightLocal.z <= 0.0 || dot(material.geometricNormal, lightDirection) <= 0.0) { return vec3(0.0); }
@@ -1747,7 +1747,7 @@ vec3 openpbr_sample_prepared(
     if (lightLocal.z == 0.0 || (lightLocal.z < 0.0) != isTransmissionEvent) {
         return vec3(0.0);
     }
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
     if (material.coatNormalEnabled &&
         ((dot(material.geometricNormal, lightDirection) <= 0.0) != isTransmissionEvent)) { return vec3(0.0); }
 #endif
