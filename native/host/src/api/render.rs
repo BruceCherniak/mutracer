@@ -211,10 +211,53 @@ pub enum DenoiseSchedule {
     /// Once, when the render reaches `max_samples`.
     #[default]
     Converged,
-    /// Not supported yet; rejected by [`Render::set_denoiser`].
+    /// At 1 sample, then at twice the last denoised count (at least 4) up to
+    /// `max_samples`; after 10 s without a result, at the next sample. Sampling
+    /// pauses while a filter runs; the last denoised image stays presented until
+    /// the next one.
     Progressive,
-    /// Not supported yet; rejected by [`Render::set_denoiser`].
+    /// After every complete batch; sampling pauses while a filter runs.
     EverySample,
+}
+/// How a commit reached the published scene.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CommitKind {
+    /// Scene preparation from the descriptor.
+    Full,
+    /// Retained updates of the previous scene.
+    Incremental,
+}
+/// The last finished denoising run.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DenoiseReport {
+    /// Complete samples of the filtered image.
+    pub samples: u32,
+    /// OIDN device, for example "OIDN Metal" or "OIDN CPU".
+    pub backend: String,
+    /// Filter wall time, excluding the input readback.
+    pub milliseconds: f64,
+    /// Load or execution failure; denoising then stops until the denoiser is set again.
+    pub error: Option<String>,
+}
+/// Browser `_nextSampleTarget`: the sample count to trace toward before the next filter.
+pub(super) fn sample_target(
+    schedule: Option<DenoiseSchedule>,
+    samples: u32,
+    max_samples: u32,
+    denoised: u32,
+    since_denoise: Option<Duration>,
+) -> u32 {
+    match schedule {
+        None | Some(DenoiseSchedule::Converged) => max_samples,
+        Some(DenoiseSchedule::EverySample) => max_samples.min(samples + 1),
+        Some(DenoiseSchedule::Progressive) if denoised == 0 => 1,
+        Some(DenoiseSchedule::Progressive)
+            if since_denoise.is_some_and(|d| d >= Duration::from_secs(10)) =>
+        {
+            max_samples.min(samples + 1)
+        }
+        Some(DenoiseSchedule::Progressive) => max_samples.min(denoised.saturating_mul(2).max(4)),
+    }
 }
 /// Open Image Denoise on a library thread.
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -308,12 +351,16 @@ struct Flight {
     /// Abandoned by a commit or restart; its samples are never counted.
     cancelled: bool,
 }
-type DenoiseResult = std::result::Result<Vec<f32>, String>;
+/// Pixels or an error, the OIDN device and the filter time in milliseconds.
+type DenoiseResult = (std::result::Result<Vec<f32>, String>, String, f64);
 #[derive(Default)]
 struct Denoise {
     options: Option<DenoiserOptions>,
+    /// Kept across `set_denoiser` calls with the same library and backend.
     filter: Arc<Mutex<Option<crate::denoise::Denoiser>>>,
     worker: Option<(u32, mpsc::Receiver<DenoiseResult>)>,
+    last: Option<Instant>,
+    report: Option<DenoiseReport>,
     /// Samples of the denoised image and its pixels, bottom row first like L0.
     denoised: Option<(u32, Vec<f32>)>,
     failed: bool,
@@ -396,6 +443,7 @@ impl RenderState {
 fn cancel_denoise(render: &mut RenderState) {
     render.denoise.worker = None;
     render.denoise.denoised = None;
+    render.denoise.report = None;
     if let Some(capture) = render.capture.as_mut() {
         capture.original();
     }
@@ -767,6 +815,19 @@ fn capture(render: &mut RenderState) -> Result<bool> {
             render.needs_capture = false;
             render.capture_key = render.published.clone();
             render.captured = render.samples;
+            // Progressive schedules keep presenting the last denoised image.
+            let preserve = render
+                .denoise
+                .options
+                .as_ref()
+                .is_some_and(|o| o.schedule != DenoiseSchedule::Converged);
+            if let (true, Some((_, pixels)), Some(capture)) =
+                (preserve, &render.denoise.denoised, render.capture.as_mut())
+            {
+                capture
+                    .upload(pixels)
+                    .map_err(|e| error(Status::Error, e.to_string()))?;
+            }
             Ok(true)
         }
         Ok(false) => Ok(false),
@@ -810,14 +871,22 @@ fn batch_size(render: &RenderState, remaining: u32) -> u32 {
 }
 /// Advances one render by at most one batch toward `limit` without blocking.
 fn advance(state: &mut State, id: u64, limit: u32) -> Result<()> {
+    if collect(state, id)? {
+        submit_toward(state.renders.get_mut(&id).unwrap(), limit)?;
+    }
+    Ok(())
+}
+/// Accounts a finished batch and captures it. Returns whether no batch is in
+/// flight and the accumulation is captured.
+fn collect(state: &mut State, id: u64) -> Result<bool> {
     let render = state.renders.get_mut(&id).unwrap();
     if let Some(event) = observe(render)? {
         state.sample_events.push((id, event));
     }
     let render = state.renders.get_mut(&id).unwrap();
-    if render.job.is_some() || !capture(render)? {
-        return Ok(());
-    }
+    Ok(render.job.is_none() && capture(render)?)
+}
+fn submit_toward(render: &mut RenderState, limit: u32) -> Result<()> {
     if render.samples < limit {
         let count = batch_size(render, limit - render.samples);
         submit(render, count)?;
@@ -870,7 +939,19 @@ pub(super) fn flip_rows(data: &[f32], width: u32, height: u32) -> Vec<f32> {
         .flat_map(|y| data[y * row..(y + 1) * row].iter().copied())
         .collect()
 }
-/// Starts or collects converged OIDN filtering.
+fn denoised_samples(render: &RenderState) -> u32 {
+    render.denoise.denoised.as_ref().map_or(0, |d| d.0)
+}
+fn next_target(render: &RenderState) -> u32 {
+    sample_target(
+        render.denoise.options.as_ref().map(|o| o.schedule),
+        render.samples,
+        render.settings.max_samples,
+        denoised_samples(render),
+        render.denoise.last.map(|t| t.elapsed()),
+    )
+}
+/// Starts or collects OIDN filtering according to the denoise schedule.
 fn denoise(state: &mut State, id: u64) -> Result<()> {
     let render = state.renders.get_mut(&id).unwrap();
     let Some(options) = render.denoise.options.clone() else {
@@ -878,37 +959,50 @@ fn denoise(state: &mut State, id: u64) -> Result<()> {
     };
     if let Some((samples, worker)) = &render.denoise.worker {
         let samples = *samples;
-        match worker.try_recv() {
+        let (outcome, backend, milliseconds) = match worker.try_recv() {
             Err(mpsc::TryRecvError::Empty) => return Ok(()),
-            Ok(Ok(pixels)) => {
-                render.denoise.worker = None;
+            Ok(result) => result,
+            Err(mpsc::TryRecvError::Disconnected) => (
+                Err("Denoising thread stopped".to_owned()),
+                String::new(),
+                0.,
+            ),
+        };
+        render.denoise.worker = None;
+        render.denoise.report = Some(DenoiseReport {
+            samples,
+            backend,
+            milliseconds,
+            error: outcome.as_ref().err().cloned(),
+        });
+        match outcome {
+            Ok(pixels) => {
                 if let Some(capture) = render.capture.as_mut() {
                     capture
                         .upload(&pixels)
                         .map_err(|e| error(Status::Error, e.to_string()))?;
                 }
                 render.denoise.denoised = Some((samples, pixels));
-                return Ok(());
+                render.denoise.last = Some(Instant::now());
             }
-            Ok(Err(message)) => {
-                render.denoise.worker = None;
+            Err(message) => {
                 render.denoise.failed = true;
                 state.report(message);
-                return Ok(());
-            }
-            Err(mpsc::TryRecvError::Disconnected) => {
-                render.denoise.worker = None;
-                render.denoise.failed = true;
-                state.report("Denoising thread stopped".into());
-                return Ok(());
             }
         }
+        return Ok(());
     }
-    if render.denoise.failed
-        || render.samples < render.settings.max_samples
+    let due = match options.schedule {
+        DenoiseSchedule::Converged => render.samples >= render.settings.max_samples,
+        DenoiseSchedule::Progressive => render.samples >= next_target(render),
+        DenoiseSchedule::EverySample => true,
+    };
+    if !due
+        || render.denoise.failed
+        || render.samples == 0
         || render.job.is_some()
         || render.needs_capture
-        || render.denoise.denoised.as_ref().map(|d| d.0) == Some(render.samples)
+        || denoised_samples(render) == render.samples
     {
         return Ok(());
     }
@@ -947,13 +1041,21 @@ fn run_oidn(
             Some(path) => crate::denoise::Denoiser::from_library(path, options.backend),
             None => crate::denoise::Denoiser::with_backend(options.backend),
         };
-        *filter = Some(created.map_err(|e| format!("{e:#}"))?);
+        match created {
+            Ok(created) => *filter = Some(created),
+            Err(e) => return (Err(format!("{e:#}")), String::new(), 0.),
+        }
     }
-    filter
-        .as_mut()
-        .unwrap()
+    let filter = filter.as_mut().unwrap();
+    let started = Instant::now();
+    let result = filter
         .run(size, color, normal, albedo)
-        .map_err(|e| format!("{e:#}"))
+        .map_err(|e| format!("{e:#}"));
+    (
+        result,
+        filter.backend.to_owned(),
+        started.elapsed().as_secs_f64() * 1e3,
+    )
 }
 
 /// One independently configured image and its accumulation, owned by an engine.
@@ -1072,16 +1174,10 @@ impl Render {
             Ok(())
         })
     }
-    /// Replaces the denoiser; `None` disables denoising. Default none.
-    /// Only [`DenoiseSchedule::Converged`] is supported.
+    /// Replaces the denoiser; `None` disables denoising. Default none. A loaded
+    /// OIDN device is kept while the library and backend stay the same.
     pub fn set_denoiser(&self, options: Option<DenoiserOptions>) -> Result<()> {
         if let Some(options) = &options {
-            if options.schedule != DenoiseSchedule::Converged {
-                return Err(error(
-                    Status::InvalidArgument,
-                    "Only the converged denoise schedule is supported",
-                ));
-            }
             if options.backend > 4 {
                 return Err(error(Status::InvalidArgument, "Unknown OIDN backend"));
             }
@@ -1092,8 +1188,14 @@ impl Render {
                 return Ok(());
             }
             cancel_denoise(render);
+            let device = |o: &DenoiserOptions| (o.library.clone(), o.backend);
+            let filter = match (&render.denoise.options, &options) {
+                (Some(old), Some(new)) if device(old) != device(new) => Default::default(),
+                _ => render.denoise.filter.clone(),
+            };
             render.denoise = Denoise {
                 options,
+                filter,
                 ..Default::default()
             };
             Ok(())
@@ -1289,11 +1391,20 @@ impl Render {
                 });
             }
             let (size, color, normal, albedo) = denoise_inputs(context)?;
-            let pixels = run_oidn(&filter, &denoiser, size, &color, &normal, &albedo)
-                .map_err(|message| error(Status::Error, message))?;
+            let (outcome, backend, milliseconds) =
+                run_oidn(&filter, &denoiser, size, &color, &normal, &albedo);
+            let report = DenoiseReport {
+                samples,
+                backend,
+                milliseconds,
+                error: outcome.as_ref().err().cloned(),
+            };
+            let pixels = outcome.map_err(|message| error(Status::Error, message))?;
             self.with(|state, id| {
                 check(state)?;
                 let render = state.renders.get_mut(&id).unwrap();
+                render.denoise.report = Some(report);
+                render.denoise.last = Some(Instant::now());
                 if let Some(capture) = render.capture.as_mut() {
                     capture
                         .upload(&pixels)
@@ -1315,8 +1426,8 @@ impl Render {
             }
             let render = &state.renders[&id];
             if kind == PixelKind::Denoised {
-                if let Some((samples, pixels)) = &render.denoise.denoised {
-                    if *samples == render.samples {
+                if let Some((_, pixels)) = &render.denoise.denoised {
+                    {
                         let [width, height] = context_size(render.context)?;
                         return Ok(Image {
                             width,
@@ -1406,9 +1517,55 @@ impl Render {
         })
         .unwrap_or(false)
     }
+    /// The last finished denoising run of this render's current inputs.
+    pub fn denoise_report(&self) -> Option<DenoiseReport> {
+        self.get(|_, r| r.denoise.report.clone()).flatten()
+    }
     /// The denoiser configuration. Default none.
     pub fn denoiser(&self) -> Option<DenoiserOptions> {
         self.get(|_, r| r.denoise.options.clone()).flatten()
+    }
+    /// The intersection backend actually used by the published scene and, for
+    /// a software fallback of a hardware engine, the reason.
+    pub fn backend(&self) -> Result<(super::Backend, String)> {
+        self.with(|state, id| {
+            let context = state.renders[&id].context;
+            let mut active = 0;
+            let mut reason = [0 as std::ffi::c_char; 512];
+            l0_blocking(|e, n| unsafe {
+                context::mt_context_backend(
+                    context,
+                    &mut active,
+                    reason.as_mut_ptr(),
+                    reason.len(),
+                    e,
+                    n,
+                )
+            })?;
+            let bytes: Vec<u8> = reason
+                .iter()
+                .take_while(|c| **c != 0)
+                .map(|c| *c as u8)
+                .collect();
+            let backend = if active == 1 {
+                super::Backend::Hardware
+            } else {
+                super::Backend::Software
+            };
+            Ok((backend, String::from_utf8_lossy(&bytes).into_owned()))
+        })
+    }
+    /// How the last successful commit reached the published scene, if any.
+    pub fn last_commit(&self) -> Result<Option<CommitKind>> {
+        self.with(|state, id| {
+            Ok(
+                match context_info(state.renders[&id].context)?.last_commit {
+                    context::COMMIT_FULL => Some(CommitKind::Full),
+                    context::COMMIT_INCREMENTAL => Some(CommitKind::Incremental),
+                    _ => None,
+                },
+            )
+        })
     }
     /// Whether OIDN is running on this render's samples.
     pub fn denoising(&self) -> bool {
@@ -1470,11 +1627,16 @@ fn refine(state: &mut State, id: u64) -> Result<RenderStatus> {
             RenderStatus::Preparing
         });
     }
+    // Collect the finished batch and start a due filter before tracing further;
+    // samples may also have completed in read_pixels since the last refine.
     denoise(state, id)?;
-    if state.renders[&id].denoise.worker.is_none() {
-        let limit = state.renders[&id].settings.max_samples;
-        advance(state, id, limit)?;
+    if state.renders[&id].denoise.worker.is_none() && collect(state, id)? {
         denoise(state, id)?;
+        let render = state.renders.get_mut(&id).unwrap();
+        if render.denoise.worker.is_none() {
+            let limit = next_target(render);
+            submit_toward(render, limit)?;
+        }
     }
     let render = state.renders.get_mut(&id).unwrap();
     let converged = render.samples >= render.settings.max_samples;

@@ -1207,16 +1207,16 @@ fn converged_oidn_matches_direct_filtering_of_the_same_inputs() {
         library: Some(library.clone().into()),
         schedule: DenoiseSchedule::Converged,
     };
-    for schedule in [DenoiseSchedule::Progressive, DenoiseSchedule::EverySample] {
-        let rejected = DenoiserOptions {
-            schedule,
-            ..options.clone()
-        };
-        assert_eq!(
-            render.set_denoiser(Some(rejected)).unwrap_err().status,
-            Status::InvalidArgument
-        );
-    }
+    assert_eq!(
+        render
+            .set_denoiser(Some(DenoiserOptions {
+                backend: 5,
+                ..options.clone()
+            }))
+            .unwrap_err()
+            .status,
+        Status::InvalidArgument
+    );
     render.set_denoiser(Some(options.clone())).unwrap();
     let scene = lit_scene();
     engine.set_scene(&scene).unwrap();
@@ -1571,5 +1571,126 @@ fn raising_max_samples_continues_except_for_zsobol() {
             &oracle(0, &descriptor, &raised.l0(5, 0), 5),
             &format!("{pattern:?} converge"),
         );
+    }
+}
+
+#[test]
+fn denoise_schedules_choose_the_browser_sample_targets() {
+    use super::render::sample_target;
+    let converged = Some(DenoiseSchedule::Converged);
+    let progressive = Some(DenoiseSchedule::Progressive);
+    let every = Some(DenoiseSchedule::EverySample);
+    assert_eq!(sample_target(None, 3, 64, 0, None), 64);
+    assert_eq!(sample_target(converged, 3, 64, 2, None), 64);
+    assert_eq!(sample_target(every, 3, 64, 3, None), 4);
+    assert_eq!(sample_target(every, 64, 64, 64, None), 64);
+    // Progressive: 1, then max(4, 2 × denoised), capped at max_samples.
+    assert_eq!(sample_target(progressive, 0, 64, 0, None), 1);
+    let recent = Some(Duration::from_secs(1));
+    assert_eq!(sample_target(progressive, 1, 64, 1, recent), 4);
+    assert_eq!(sample_target(progressive, 4, 64, 4, recent), 8);
+    assert_eq!(sample_target(progressive, 40, 64, 40, recent), 64);
+    assert_eq!(sample_target(progressive, 2, 3, 1, recent), 3);
+    // Ten seconds without a result: the next sample.
+    let stale = Some(Duration::from_secs(10));
+    assert_eq!(sample_target(progressive, 9, 64, 8, stale), 10);
+}
+
+/// Needs `MUTRACER_OIDN_LIBRARY`; CPU OIDN makes direct filtering a byte oracle.
+#[test]
+fn progressive_denoising_pauses_sampling_and_keeps_the_last_result() {
+    let _test = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Some(library) = std::env::var_os("MUTRACER_OIDN_LIBRARY") else {
+        return;
+    };
+    let Some(engine) = software_engine(Backend::Software) else {
+        return;
+    };
+    let scene = lit_scene();
+    engine.set_scene(&scene).unwrap();
+    engine.update().unwrap();
+    for (schedule, expected) in [
+        (DenoiseSchedule::Progressive, vec![1, 4, 8, 10]),
+        (DenoiseSchedule::EverySample, vec![1, 2, 3]),
+    ] {
+        let settings = RenderSettings {
+            max_samples: *expected.last().unwrap(),
+            allow_multiple_samples_per_frame: true,
+            time_budget_ms: 1000.,
+            size: RenderSize::Fixed {
+                width: 16,
+                height: 12,
+            },
+            ..Default::default()
+        };
+        let render = Render::new(&engine, settings.clone()).unwrap();
+        render
+            .set_denoiser(Some(DenoiserOptions {
+                backend: 1,
+                library: Some(library.clone().into()),
+                schedule,
+            }))
+            .unwrap();
+        let mut denoised_at = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(120);
+        loop {
+            let before = render.samples();
+            let filtering = render.denoising();
+            let status = render.refine().unwrap();
+            assert_ne!(status, RenderStatus::Error, "{:?}", engine.last_error());
+            if filtering && render.denoising() {
+                // Sampling pauses while the filter runs.
+                assert_eq!(
+                    render.samples(),
+                    before,
+                    "{schedule:?} traced while denoising"
+                );
+            }
+            if let Some(report) = render.denoise_report() {
+                assert!(report.error.is_none(), "{report:?}");
+                if denoised_at.last() != Some(&report.samples) {
+                    denoised_at.push(report.samples);
+                    // Every result equals direct filtering of the same inputs.
+                    let inputs = oracle(
+                        0,
+                        &expected_descriptor(&scene, [16, 12], 3, None),
+                        &settings.l0(settings.sample_cap(settings.max_samples), 0),
+                        report.samples,
+                    )
+                    .map(|image| flip_rows(&image, 16, 12));
+                    let mut filter =
+                        crate::denoise::Denoiser::from_library(library.as_ref(), 1).unwrap();
+                    let expected = flip_rows(
+                        &filter
+                            .run([16, 12], &inputs[0], &inputs[1], &inputs[2])
+                            .unwrap(),
+                        16,
+                        12,
+                    );
+                    let actual = render.read_pixels(PixelKind::Denoised).unwrap().data;
+                    assert_eq!(
+                        actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        "{schedule:?} at {}",
+                        report.samples
+                    );
+                    assert_eq!(report.backend, "OIDN CPU");
+                }
+            }
+            if status == RenderStatus::Finished && !render.denoising() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "{schedule:?} did not finish");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        assert_eq!(denoised_at, expected, "{schedule:?} denoise points");
+        // The presented image is the last denoised one.
+        let presented = engine.display().present(&render).unwrap().unwrap();
+        assert_eq!(presented.samples, settings.max_samples);
+        // Disabling and re-enabling keeps the device and filters again.
+        render.set_denoiser(None).unwrap();
+        assert!(render.denoise_report().is_none());
     }
 }

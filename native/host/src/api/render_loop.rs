@@ -320,6 +320,7 @@ pub struct RenderLoop {
     preview_frame_owner: Option<u64>,
     presented: Option<u64>,
     finished_image: Option<ImageState>,
+    last_presented: Option<super::Presented>,
     _final_samples: super::Subscription,
 }
 impl RenderLoop {
@@ -418,12 +419,17 @@ impl RenderLoop {
             preview_frame_owner: None,
             presented: None,
             finished_image: None,
+            last_presented: None,
             _final_samples: final_samples,
         })
     }
     #[cfg(test)]
     pub(super) fn presented(&self) -> Option<u64> {
         self.presented
+    }
+    /// The image the display shows since this loop's last successful presentation.
+    pub fn last_presented(&self) -> Option<super::Presented> {
+        self.last_presented
     }
     pub fn preview(&self) -> Option<&Arc<Render>> {
         self.preview.as_ref()
@@ -502,7 +508,11 @@ impl RenderLoop {
         set_status(&self.shared, status)
     }
     fn present(&mut self, render: &Render) -> Result<Option<u64>> {
-        let shown = self.display.present(render)?.map(|presented| {
+        let presented = self.display.present(render)?;
+        if presented.is_some() {
+            self.last_presented = presented;
+        }
+        let shown = presented.map(|presented| {
             if presented.fallback {
                 render.fallback_id().unwrap_or(render.id())
             } else {
