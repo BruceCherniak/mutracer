@@ -457,7 +457,8 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
 .seg[data-disabled] { opacity: 0.45; }
 
 /* Switch */
-.switch-field { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 26px; outline: none; }
+/* Keep the hidden input inside the scrolled label so focusing it cannot scroll the page. */
+.switch-field { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 26px; outline: none; }
 .section__body .switch-field { min-height: 30px; }
 .switch { display: flex; flex: none; width: 34px; height: 20px; padding: 2px; border-radius: 99px; corner-shape: round;
   border: 0; background: #30343b; transition: background 160ms ease; }
