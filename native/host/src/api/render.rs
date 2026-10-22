@@ -429,6 +429,13 @@ impl RenderState {
     pub(super) fn in_flight(&self) -> bool {
         self.job.is_some()
     }
+    /// CPU uploads into the display and whether it shows a denoised image.
+    #[cfg(test)]
+    pub(super) fn display_uploads(&self) -> (u32, bool) {
+        self.capture
+            .as_ref()
+            .map_or((0, false), |c| (c.uploads, c.using_denoised))
+    }
     pub(super) fn presented_samples(&self) -> u32 {
         self.captured
     }
@@ -815,18 +822,17 @@ fn capture(render: &mut RenderState) -> Result<bool> {
             render.needs_capture = false;
             render.capture_key = render.published.clone();
             render.captured = render.samples;
-            // Progressive schedules keep presenting the last denoised image.
+            // Progressive schedules keep presenting the last denoised image, which
+            // the display holds on the GPU since its upload.
             let preserve = render
                 .denoise
                 .options
                 .as_ref()
                 .is_some_and(|o| o.schedule != DenoiseSchedule::Converged);
-            if let (true, Some((_, pixels)), Some(capture)) =
+            if let (true, Some(_), Some(capture)) =
                 (preserve, &render.denoise.denoised, render.capture.as_mut())
             {
-                capture
-                    .upload(pixels)
-                    .map_err(|e| error(Status::Error, e.to_string()))?;
+                capture.show_denoised();
             }
             Ok(true)
         }
@@ -951,8 +957,9 @@ fn next_target(render: &RenderState) -> u32 {
         render.denoise.last.map(|t| t.elapsed()),
     )
 }
-/// Starts or collects OIDN filtering according to the denoise schedule.
-fn denoise(state: &mut State, id: u64) -> Result<()> {
+/// Starts or collects OIDN filtering according to the denoise schedule; `force`
+/// filters the current samples whatever the schedule (browser `_maybeDenoise(true)`).
+fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
     let render = state.renders.get_mut(&id).unwrap();
     let Some(options) = render.denoise.options.clone() else {
         return Ok(());
@@ -992,11 +999,12 @@ fn denoise(state: &mut State, id: u64) -> Result<()> {
         }
         return Ok(());
     }
-    let due = match options.schedule {
-        DenoiseSchedule::Converged => render.samples >= render.settings.max_samples,
-        DenoiseSchedule::Progressive => render.samples >= next_target(render),
-        DenoiseSchedule::EverySample => true,
-    };
+    let due = force
+        || match options.schedule {
+            DenoiseSchedule::Converged => render.samples >= render.settings.max_samples,
+            DenoiseSchedule::Progressive => render.samples >= next_target(render),
+            DenoiseSchedule::EverySample => true,
+        };
     if !due
         || render.denoise.failed
         || render.samples == 0
@@ -1457,6 +1465,23 @@ impl Render {
     pub fn collect(&self) -> Result<bool> {
         self.with(|state, id| collect(state, id))
     }
+    /// Filters the complete samples now without tracing, whatever the denoise
+    /// schedule, like the browser's filter at the end of `converge`; a host calls
+    /// it while it stops refining (for example when paused). Collects a finished
+    /// batch first. The filter runs on a library thread; call again to collect its
+    /// result, which is then presented like a scheduled one. Returns whether the
+    /// denoised image is of the current samples. Needs a denoiser
+    /// ([`Render::set_denoiser`]); does not wait for the GPU.
+    pub fn denoise_current(&self) -> Result<bool> {
+        self.with(|state, id| {
+            if state.renders[&id].denoise.options.is_none() || !collect(state, id)? {
+                return Ok(false);
+            }
+            denoise(state, id, true)?;
+            let render = &state.renders[&id];
+            Ok(render.samples > 0 && denoised_samples(render) == render.samples)
+        })
+    }
     /// Discards only this render's accumulation and denoised image.
     pub fn restart(&self) -> Result<()> {
         self.with(|state, id| {
@@ -1635,9 +1660,9 @@ fn refine(state: &mut State, id: u64) -> Result<RenderStatus> {
     }
     // Collect the finished batch and start a due filter before tracing further;
     // samples may also have completed in read_pixels since the last refine.
-    denoise(state, id)?;
+    denoise(state, id, false)?;
     if state.renders[&id].denoise.worker.is_none() && collect(state, id)? {
-        denoise(state, id)?;
+        denoise(state, id, false)?;
         let render = state.renders.get_mut(&id).unwrap();
         if render.denoise.worker.is_none() {
             let limit = next_target(render);

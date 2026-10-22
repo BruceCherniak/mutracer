@@ -1694,3 +1694,135 @@ fn progressive_denoising_pauses_sampling_and_keeps_the_last_result() {
         assert!(render.denoise_report().is_none());
     }
 }
+
+/// Pausing filters the current samples once without tracing; resuming continues
+/// the progressive points from there. Denoised images are uploaded once each and
+/// stay presented through later captures.
+#[test]
+fn denoise_current_filters_paused_samples_and_progressive_resumes() {
+    let _test = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Some(library) = std::env::var_os("MUTRACER_OIDN_LIBRARY") else {
+        return;
+    };
+    let Some(engine) = software_engine(Backend::Software) else {
+        return;
+    };
+    let scene = lit_scene();
+    engine.set_scene(&scene).unwrap();
+    engine.update().unwrap();
+    // One sample per batch, so the pause lands between progressive points.
+    let settings = RenderSettings {
+        max_samples: 12,
+        allow_multiple_samples_per_frame: false,
+        size: RenderSize::Fixed {
+            width: 16,
+            height: 12,
+        },
+        ..Default::default()
+    };
+    let render = Render::new(&engine, settings.clone()).unwrap();
+    assert!(!render.denoise_current().unwrap(), "no denoiser");
+    render
+        .set_denoiser(Some(DenoiserOptions {
+            backend: 1,
+            library: Some(library.clone().into()),
+            schedule: DenoiseSchedule::Progressive,
+        }))
+        .unwrap();
+    let mut filter = crate::denoise::Denoiser::from_library(library.as_ref(), 1).unwrap();
+    let mut check = |samples: u32| {
+        let inputs = oracle(
+            0,
+            &expected_descriptor(&scene, [16, 12], 3, None),
+            &settings.l0(settings.sample_cap(settings.max_samples), 0),
+            samples,
+        )
+        .map(|image| flip_rows(&image, 16, 12));
+        let expected = flip_rows(
+            &filter
+                .run([16, 12], &inputs[0], &inputs[1], &inputs[2])
+                .unwrap(),
+            16,
+            12,
+        );
+        let actual = render.read_pixels(PixelKind::Denoised).unwrap().data;
+        assert_eq!(
+            actual.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+            "denoised at {samples}"
+        );
+    };
+    let uploads = || engine.lock().renders[&render.id()].display_uploads();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    let mut denoised_at = Vec::new();
+    let record = |render: &Render, denoised_at: &mut Vec<u32>| {
+        if let Some(report) = render.denoise_report() {
+            assert!(report.error.is_none(), "{report:?}");
+            if denoised_at.last() != Some(&report.samples) {
+                denoised_at.push(report.samples);
+                return Some(report.samples);
+            }
+        }
+        None
+    };
+    // Run until the 4-sample result is shown and one more sample is in flight.
+    loop {
+        assert_ne!(render.refine().unwrap(), RenderStatus::Error);
+        let in_flight = engine.lock().renders[&render.id()].in_flight();
+        if let Some(samples) = record(&render, &mut denoised_at) {
+            if samples == 4 && render.samples() == 4 && in_flight {
+                // Reading pixels would wait for the batch in flight.
+                break;
+            }
+            check(samples);
+        }
+        assert!(Instant::now() < deadline, "did not reach 4 samples");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(denoised_at, [1, 4]);
+    // Paused: the batch in flight is collected, then its samples are filtered once.
+    while !render.denoise_current().unwrap() {
+        assert!(render.samples() <= 5, "traced while paused");
+        assert!(Instant::now() < deadline, "paused filter did not finish");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!(render.samples(), 5);
+    assert_eq!(record(&render, &mut denoised_at), Some(5));
+    check(5);
+    assert!(uploads().1, "display shows the denoised image");
+    for _ in 0..3 {
+        assert!(render.denoise_current().unwrap());
+        assert!(!render.denoising());
+    }
+    assert_eq!(render.samples(), 5);
+    let shown = engine.display().read_rgba8(&render).unwrap();
+    // Resumed: progressive points continue from the paused result. Captures in
+    // between keep the denoised image without uploading it again.
+    let mut compared = false;
+    loop {
+        let status = render.refine().unwrap();
+        assert_ne!(status, RenderStatus::Error, "{:?}", engine.last_error());
+        let presented = engine.lock().renders[&render.id()].presented_samples();
+        if !compared && presented > 5 && denoised_at.last() == Some(&5) {
+            assert_eq!(engine.display().read_rgba8(&render).unwrap(), shown);
+            compared = true;
+        }
+        if let Some(samples) = record(&render, &mut denoised_at) {
+            check(samples);
+        }
+        if status == RenderStatus::Finished && !render.denoising() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "did not finish");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        compared,
+        "no capture between the paused and the next result"
+    );
+    assert_eq!(denoised_at, [1, 4, 5, 10, 12]);
+    assert_eq!(uploads(), (5, true), "one upload per denoised image");
+}
+

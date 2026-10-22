@@ -39,6 +39,10 @@ pub struct Display {
     albedo: wgpu::Buffer,
     original_samples: u32,
     pub using_denoised: bool,
+    /// The last uploaded denoised image, kept on the GPU until `original`.
+    denoised: Option<wgpu::Buffer>,
+    /// Uploads from CPU pixels, for tests.
+    pub(crate) uploads: u32,
     params: wgpu::Buffer,
     pipeline: wgpu::ComputePipeline,
     group: wgpu::BindGroup,
@@ -143,6 +147,8 @@ impl Display {
             albedo,
             original_samples: 0,
             using_denoised: false,
+            denoised: None,
+            uploads: 0,
             params,
             pipeline,
             group,
@@ -166,20 +172,44 @@ impl Display {
         self.original_samples = samples;
         self.using_denoised = false;
     }
-    /// Replace the preview with a caller-owned linear denoised result.
+    /// Replace the preview with a caller-owned linear denoised result. The image
+    /// stays on the GPU, so [`Display::show_denoised`] can show it again after a capture.
     pub fn upload(&mut self, pixels: &[f32]) -> Result<()> {
         if pixels.len() != self.size[0] as usize * self.size[1] as usize * 4
             || pixels.iter().any(|v| !v.is_finite())
         {
             return Err("Invalid display image".into());
         }
+        let denoised = self.denoised.get_or_insert_with(|| {
+            self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Denoised preview"),
+                size: self.linear.size(),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            })
+        });
         let bytes: Vec<_> = pixels.iter().flat_map(|v| v.to_le_bytes()).collect();
-        self.gpu.queue.write_buffer(&self.linear, 0, &bytes);
-        self.samples = 1;
-        self.using_denoised = true;
+        self.gpu.queue.write_buffer(denoised, 0, &bytes);
+        self.uploads += 1;
+        self.show_denoised();
         Ok(())
     }
+    /// Shows the last uploaded denoised image again, for example after a capture
+    /// replaced it with newer samples. Returns false when there is none.
+    pub fn show_denoised(&mut self) -> bool {
+        let Some(denoised) = &self.denoised else {
+            return false;
+        };
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(denoised, 0, &self.linear, 0, self.linear.size());
+        self.gpu.queue.submit([encoder.finish()]);
+        self.samples = 1;
+        self.using_denoised = true;
+        true
+    }
+    /// Shows the captured samples and forgets the denoised image.
     pub fn original(&mut self) {
+        self.denoised = None;
         if !self.using_denoised {
             return;
         }
