@@ -1,10 +1,11 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 // The bundled typings point at the uninstalled meshoptimizer package.
 import * as meshopt from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { fetchWithProgress } from './fetchWithProgress';
 import type { PathedFile } from './droppedFiles';
+import { loadModelLighting, type ModelLighting } from './modelLighting';
 
 export { isHDRFile, isModelFile, readDroppedItems, toPathedFiles, type PathedFile } from './droppedFiles';
 
@@ -12,6 +13,7 @@ export interface LoadedModel {
   name: string;
   root: THREE.Object3D;
   animations: THREE.AnimationClip[];
+  lighting?: ModelLighting;
   /** Original files, including external buffers/textures, for reloads from OPFS. */
   source?: ModelSource;
   /** Releases blob URLs created for local files. */
@@ -37,7 +39,7 @@ function createLoader(manager?: THREE.LoadingManager) {
 }
 
 function parse(loader: GLTFLoader, data: ArrayBuffer, path: string) {
-  return new Promise<{ scene: THREE.Group; animations: THREE.AnimationClip[] }>((resolve, reject) =>
+  return new Promise<GLTF>((resolve, reject) =>
     loader.parse(data, path, resolve, reject));
 }
 
@@ -55,14 +57,25 @@ export async function loadModelFromURL(url: string, onProgress: LoadProgress, si
   }
   const json = JSON.parse(new TextDecoder().decode(jsonBytes));
   const urls = new Set<string>();
+  const sizes = new Map<string, number>();
+  const downloaded = new Map<string, number>();
   for (const resource of [...(json.buffers ?? []), ...(json.images ?? [])]) {
-    if (typeof resource.uri === 'string' && !resource.uri.startsWith('data:')) urls.add(new URL(resource.uri, base).href);
+    if (typeof resource.uri === 'string' && !resource.uri.startsWith('data:')) {
+      const address = new URL(resource.uri, base).href;
+      urls.add(address);
+      sizes.set(address, resource.byteLength ?? 0);
+    }
   }
   await Promise.all([...urls].map(async (address) => {
-    const bytes = await fetchWithProgress(address, undefined, signal);
+    const bytes = await fetchWithProgress(address, (loaded, total) => {
+      downloaded.set(address, loaded);
+      sizes.set(address, Math.max(sizes.get(address) ?? 0, total, loaded));
+      onProgress('download', buffer.byteLength + [...downloaded.values()].reduce((a, b) => a + b, 0),
+        buffer.byteLength + [...sizes.values()].reduce((a, b) => a + b, 0));
+    }, signal);
     files.push({ path: address, file: new File([bytes], new URL(address).pathname.split('/').pop() || 'resource') });
   }));
-  return loadModelFromSource({ files, mainPath, base }, onProgress);
+  return loadModelFromSource({ files, mainPath, base }, onProgress, signal);
 }
 
 /**
@@ -77,7 +90,7 @@ export async function loadModelFromFiles(files: PathedFile[], onProgress: LoadPr
 }
 
 /** Parses the same bytes for downloaded, dropped and restored models. */
-export async function loadModelFromSource(source: ModelSource, onProgress: LoadProgress): Promise<LoadedModel> {
+export async function loadModelFromSource(source: ModelSource, onProgress: LoadProgress, signal?: AbortSignal): Promise<LoadedModel> {
   const { files, mainPath, base } = source;
   const main = files.find((file) => file.path === mainPath);
   if (!main) throw new Error('Missing main model file');
@@ -104,17 +117,30 @@ export async function loadModelFromSource(source: ModelSource, onProgress: LoadP
   let gltf: Awaited<ReturnType<typeof parse>>;
   try {
     gltf = await parse(createLoader(manager), await main.file.arrayBuffer(), base);
+    const mainAddress = new URL(mainPath, 'https://model.local/');
+    const lighting = await loadModelLighting(gltf.scene, gltf.userData, async (path) => {
+      const address = new URL(path, mainAddress);
+      const cached = files.find((entry) => new URL(entry.path, 'https://model.local/').href === address.href);
+      if (cached) return cached.file.arrayBuffer();
+      if (!base) throw new Error('Include the environment map with the dropped folder');
+      const bytes = await fetchWithProgress(address.href, (loaded, total) => onProgress('download', loaded, total), signal);
+      files.push({ path: address.href, file: new File([bytes], decodeURIComponent(address.pathname.split('/').pop()!)) });
+      onProgress('parse');
+      return bytes;
+    });
+    signal?.throwIfAborted();
+    return {
+      name: main.file.name,
+      root: gltf.scene,
+      animations: gltf.animations,
+      lighting,
+      source,
+      revoke: () => created.forEach((url) => URL.revokeObjectURL(url))
+    };
   } catch (error) {
     created.forEach((url) => URL.revokeObjectURL(url));
     throw error;
   }
-  return {
-    name: main.file.name,
-    root: gltf.scene,
-    animations: gltf.animations,
-    source,
-    revoke: () => created.forEach((url) => URL.revokeObjectURL(url))
-  };
 }
 
 /** Default scene: one sphere per OpenPBR feature, readable without a download. */

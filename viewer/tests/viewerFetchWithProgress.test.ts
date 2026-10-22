@@ -40,6 +40,41 @@ describe('viewer downloads', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  const lfsRaw = 'https://raw.githubusercontent.com/ErfanMo77/gltf-research-scenes/main/scenes/test/mesh.bin';
+  const lfsMedia = lfsRaw.replace('raw.githubusercontent.com/', 'media.githubusercontent.com/media/');
+  const pointer = `version https://git-lfs.github.com/spec/v1\noid sha256:${'a'.repeat(64)}\nsize 3\n`;
+
+  it('resolves GitHub LFS pointers and reports progress for the real payload', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(pointer))
+      .mockResolvedValueOnce(new Response(new Uint8Array([1, 2, 3]), { headers: { 'content-length': '3' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const progress = vi.fn();
+    expect(new Uint8Array(await fetchWithProgress(lfsRaw, progress))).toEqual(new Uint8Array([1, 2, 3]));
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([lfsRaw, lfsMedia]);
+    expect(progress).toHaveBeenCalledWith(0, 0);
+    expect(progress).toHaveBeenLastCalledWith(3, 3);
+  });
+
+  it('retries the LFS media download after a transient failure', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(pointer))
+      .mockResolvedValueOnce(new Response(null, { status: 503 }))
+      .mockResolvedValueOnce(new Response('abc'));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = fetchWithProgress(lfsRaw);
+    await vi.runAllTimersAsync();
+    expect(new TextDecoder().decode(await result)).toBe('abc');
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([lfsRaw, lfsMedia, lfsMedia]);
+  });
+
+  it('leaves LFS-like contents from other servers untouched', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(pointer));
+    vi.stubGlobal('fetch', fetchMock);
+    expect(new TextDecoder().decode(await fetchWithProgress('https://example.com/mesh.bin'))).toBe(pointer);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
   it.each([
     sample,
     'https://cdn.jsdelivr.net/gh/another/repo@main/model.glb',

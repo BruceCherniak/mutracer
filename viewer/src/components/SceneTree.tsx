@@ -1,26 +1,13 @@
-import { useMemo, useState, type KeyboardEvent } from 'react';
-import { Box, Camera, ChevronDown, Eye, EyeOff, Folder, Lightbulb, Search, X } from 'lucide-react';
-import { useViewer, type TreeNode } from '../store';
+import { useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { Box, Camera, ChevronDown, Eye, EyeOff, Folder, Lightbulb, Search, Video, X } from 'lucide-react';
+import { useViewer } from '../store';
+import { flattenTree, indexTree, revealTreeRow, treeAncestors, treeWindow, TREE_ROW_HEIGHT } from './sceneTreeRows';
 import { getEngine } from '../engine/ViewerEngine';
 
 const ICONS = { group: Folder, mesh: Box, light: Lightbulb, camera: Camera };
 
-interface Row {
-  key: string;
-  node: TreeNode;
-  depth: number;
-  material?: TreeNode['materials'][number];
-  hasChildren: boolean;
-}
-
 function formatCount(n: number) {
   return n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}k` : String(n);
-}
-
-function matches(node: TreeNode, query: string): boolean {
-  return node.name.toLowerCase().includes(query) ||
-    node.materials.some((m) => m.name.toLowerCase().includes(query)) ||
-    node.children.some((c) => matches(c, query));
 }
 
 export function SceneTree() {
@@ -31,50 +18,94 @@ export function SceneTree() {
   const [query, setQuery] = useState('');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
 
-  const rows = useMemo(() => {
-    const out: Row[] = [];
-    const q = query.trim().toLowerCase();
-    const walk = (node: TreeNode, depth: number) => {
-      if (q && !matches(node, q)) return;
-      // Single-material meshes show their material inline; deeper levels start collapsed.
-      const showMaterials = node.materials.length > 0;
-      const hasChildren = node.children.length > 0 || showMaterials;
-      out.push({ key: node.id, node, depth, hasChildren });
-      const isCollapsed = collapsed[node.id] ?? (!q && depth >= 2);
-      if (isCollapsed) return;
-      if (showMaterials) {
-        for (const material of node.materials) {
-          out.push({ key: `${node.id}:${material.id}`, node, depth: depth + 1, material, hasChildren: false });
-        }
-      }
-      node.children.forEach((child) => walk(child, depth + 1));
-    };
-    tree.forEach((node) => walk(node, 0));
-    return out;
-  }, [tree, query, collapsed]);
+  const treeRef = useRef<HTMLDivElement>(null);
+  const pendingReveal = useRef(false);
+  const [activeKey, setActiveKey] = useState<string>();
+  const [viewport, setViewport] = useState({ top: 0, height: 0 });
+  const treeId = useId();
+  const index = useMemo(() => indexTree(tree), [tree]);
+  const ancestors = useMemo(() => new Set(treeAncestors(index, selection.objectId)), [index, selection.objectId]);
+  const rows = useMemo(() => flattenTree(tree, collapsed, query), [tree, query, collapsed]);
+  const window = treeWindow(rows.length, viewport.top, viewport.height);
+  const activeRow = rows.find((row) => row.key === activeKey) ?? rows[0];
+  const rowId = (key: string) => `${treeId}-${encodeURIComponent(key)}`;
 
-  const ancestors = useMemo(() => {
-    const set = new Set<string>();
-    const find = (node: TreeNode, path: string[]): boolean => {
-      if (node.id === selection.objectId) {
-        path.forEach((id) => set.add(id));
-        return true;
-      }
-      return node.children.some((c) => find(c, [...path, node.id]));
-    };
-    tree.forEach((n) => find(n, []));
-    return set;
-  }, [tree, selection.objectId]);
+  useLayoutEffect(() => {
+    const element = treeRef.current!;
+    const measure = () => setViewport({ top: element.scrollTop, height: element.clientHeight });
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    measure();
+    return () => observer.disconnect();
+  }, []);
 
-  const toggle = (id: string, depth: number) =>
-    setCollapsed((c) => ({ ...c, [id]: !(c[id] ?? depth >= 2) }));
+  // Viewport picks may refer to descendants of collapsed or filtered branches.
+  // Only react to a new selection, so manually collapsing/scrolling remains possible.
+  useLayoutEffect(() => {
+    if (!selection.objectId || !index.has(selection.objectId)) return;
+    const path = treeAncestors(index, selection.objectId);
+    setCollapsed((current) => {
+      const closed = path.filter((id) => current[id] !== false);
+      return closed.length ? { ...current, ...Object.fromEntries(closed.map((id) => [id, false])) } : current;
+    });
+    setQuery('');
+    setActiveKey((key) => key === `${selection.objectId}:${selection.materialId}` ? key : selection.objectId!);
+    pendingReveal.current = true;
+  }, [selection, index]);
+
+  useLayoutEffect(() => {
+    const element = treeRef.current!;
+    let top = treeWindow(rows.length, element.scrollTop, element.clientHeight).top;
+    if (pendingReveal.current && !query && element.clientHeight > 0) {
+      const selected = rows.findIndex((row) => row.key === selection.objectId);
+      if (selected >= 0) {
+        top = revealTreeRow(selected, top, element.clientHeight);
+        pendingReveal.current = false;
+      }
+    }
+    element.scrollTop = top;
+    setViewport((current) => current.top === top ? current : { ...current, top });
+  }, [rows, selection, query, viewport.height]);
+
+  const toggle = (row: typeof rows[number]) =>
+    setCollapsed((current) => ({ ...current, [row.node.id]: row.expanded }));
+
+  const focusRow = (i: number) => {
+    const row = rows[i];
+    if (!row) return;
+    setActiveKey(row.key);
+    const element = treeRef.current!;
+    element.scrollTop = revealTreeRow(i, element.scrollTop, element.clientHeight);
+    setViewport((current) => ({ ...current, top: element.scrollTop }));
+  };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+    if (event.target !== event.currentTarget || !activeRow) return;
+    const i = rows.indexOf(activeRow);
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End', 'ArrowLeft', 'ArrowRight', 'Enter', ' '].includes(event.key)) return;
     event.preventDefault();
-    const items = [...event.currentTarget.querySelectorAll<HTMLElement>('[role="treeitem"]')];
-    const index = items.indexOf(document.activeElement as HTMLElement);
-    items[Math.min(items.length - 1, Math.max(0, index + (event.key === 'ArrowDown' ? 1 : -1)))]?.focus();
+    event.stopPropagation();
+    if (event.key === 'ArrowDown') focusRow(Math.min(rows.length - 1, i + 1));
+    if (event.key === 'ArrowUp') focusRow(Math.max(0, i - 1));
+    if (event.key === 'Home') focusRow(0);
+    if (event.key === 'End') focusRow(rows.length - 1);
+    if (event.key === 'ArrowRight') {
+      if (activeRow.hasChildren && !activeRow.expanded) toggle(activeRow);
+      else if (activeRow.expanded) focusRow(i + 1);
+    }
+    if (event.key === 'ArrowLeft') {
+      if (activeRow.expanded) toggle(activeRow);
+      else focusRow(rows.findIndex((row) => row.key === activeRow.parentKey));
+    }
+    if (event.key === 'Enter' || event.key === ' ') {
+      if (activeRow.material) getEngine()?.selectMaterial(activeRow.material.id, activeRow.node.id);
+      else getEngine()?.select(activeRow.node.id, activeRow.node.kind === 'mesh' ? undefined : null);
+    }
+  };
+
+  const activate = (key: string) => {
+    setActiveKey(key);
+    treeRef.current?.focus({ preventScroll: true });
   };
 
   return (
@@ -88,77 +119,87 @@ export function SceneTree() {
         <input placeholder="Search objects" value={query} onChange={(e) => setQuery(e.currentTarget.value)} />
         {query ? <button className="icon-btn icon-btn--bare xs" aria-label="Clear search" onClick={() => setQuery('')}><X size={12} /></button> : <kbd>/</kbd>}
       </label>
-      <div className="tree" role="tree" aria-label="Scene objects" onKeyDown={onKeyDown}>
+      <div ref={treeRef} className="tree" role="tree" aria-label="Scene objects" tabIndex={0}
+        aria-activedescendant={activeRow && rows.indexOf(activeRow) >= window.start && rows.indexOf(activeRow) < window.end ? rowId(activeRow.key) : undefined}
+        onKeyDown={onKeyDown} onScroll={(e) => setViewport({ top: e.currentTarget.scrollTop, height: e.currentTarget.clientHeight })}>
         {rows.length === 0 && <div className="tree-empty">{query ? 'No matching objects' : 'Nothing loaded yet'}</div>}
-        {rows.map((row) => {
-          const { node, depth, material } = row;
-          if (material) {
-            const selected = selection.materialId === material.id && selection.objectId === node.id;
-            // The mesh row carries the selection; the active material is marked, not filled.
+        <div className="tree-space" role="presentation" style={{ height: rows.length * TREE_ROW_HEIGHT }}>
+          {rows.slice(window.start, window.end).map((row, offset) => {
+            const { node, depth, material } = row;
+            if (material) {
+              const selected = selection.materialId === material.id && selection.objectId === node.id;
+              // The mesh row carries the selection; the active material is marked, not filled.
+              return (
+                <div
+                  key={row.key}
+                  role="treeitem"
+                  id={rowId(row.key)}
+                  aria-level={depth + 1} aria-posinset={row.position} aria-setsize={row.siblings}
+                  data-focused={row.key === activeRow?.key || undefined}
+                  aria-selected={selected}
+                  className="tree-row material"
+                  data-current={selected || undefined}
+                  data-hidden={!node.visible || undefined}
+                  style={{ paddingLeft: 2 + depth * 14, top: (window.start + offset) * TREE_ROW_HEIGHT }}
+                  onClick={() => { activate(row.key); getEngine()?.selectMaterial(material.id, node.id); }}
+                >
+                  <span className="chev" />
+                  <span className="ico"><i className="swatch" style={{ background: material.color }} /></span>
+                  <span className="label">{material.name}</span>
+                  <span className="meta">material</span>
+                  <span className="eye" />
+                </div>
+              );
+            }
+            const Icon = ICONS[node.kind];
+            const selected = selection.objectId === node.id;
+            const isCollapsed = !row.expanded;
             return (
               <div
                 key={row.key}
                 role="treeitem"
-                tabIndex={0}
+                id={rowId(row.key)}
+                aria-level={depth + 1} aria-posinset={row.position} aria-setsize={row.siblings}
+                data-focused={row.key === activeRow?.key || undefined}
                 aria-selected={selected}
-                className="tree-row material"
-                data-current={selected || undefined}
+                aria-expanded={row.hasChildren ? !isCollapsed : undefined}
+                className={`tree-row ${node.kind}`}
+                data-selected={selected || undefined}
+                data-ancestor={ancestors.has(node.id) || undefined}
                 data-hidden={!node.visible || undefined}
-                style={{ paddingLeft: 2 + depth * 14 }}
-                onClick={() => getEngine()?.selectMaterial(material.id, node.id)}
-                onKeyDown={(e) => e.key === 'Enter' && getEngine()?.selectMaterial(material.id, node.id)}
+                data-collapsed={isCollapsed || undefined}
+                style={{ paddingLeft: 2 + depth * 14, top: (window.start + offset) * TREE_ROW_HEIGHT }}
+                onClick={() => { activate(row.key); getEngine()?.select(node.id, node.kind === 'mesh' ? undefined : null); }}
               >
-                <span className="chev" />
-                <span className="ico"><i className="swatch" style={{ background: material.color }} /></span>
-                <span className="label">{material.name}</span>
-                <span className="meta">material</span>
-                <span className="eye" />
+                <span className="chev">
+                  {row.hasChildren && (
+                    <button aria-label={isCollapsed ? 'Expand' : 'Collapse'} tabIndex={-1} onClick={(e) => { e.stopPropagation(); activate(row.key); toggle(row); }}>
+                      <ChevronDown size={13} />
+                    </button>
+                  )}
+                </span>
+                <span className="ico"><Icon size={13} /></span>
+                <span className="label">{node.name}</span>
+                <span className="meta">{node.kind === 'mesh' ? formatCount(node.triangles) : node.kind === 'group' ? node.children.length || '' : node.kind}</span>
+                {node.kind === 'camera' && <button
+                  className="tree-camera-action"
+                  aria-label={`Apply camera ${node.name}`}
+                  title={`Apply camera ${node.name}`}
+                  onClick={(e) => { e.stopPropagation(); getEngine()?.applyModelCamera(node.id); }}
+                  onKeyDown={(e) => e.stopPropagation()}
+                ><Video size={13} /></button>}
+                <button
+                  className="eye"
+                  aria-label={node.visible ? `Hide ${node.name}` : `Show ${node.name}`}
+                  tabIndex={-1}
+                  onClick={(e) => { e.stopPropagation(); getEngine()?.setVisible(node.id, !node.visible); }}
+                >
+                  {node.visible ? <Eye size={13} /> : <EyeOff size={13} />}
+                </button>
               </div>
             );
-          }
-          const Icon = ICONS[node.kind];
-          const selected = selection.objectId === node.id;
-          const isCollapsed = collapsed[node.id] ?? (!query && depth >= 2);
-          return (
-            <div
-              key={row.key}
-              role="treeitem"
-              tabIndex={0}
-              aria-selected={selected}
-              aria-expanded={row.hasChildren ? !isCollapsed : undefined}
-              className={`tree-row ${node.kind}`}
-              data-selected={selected || undefined}
-              data-ancestor={ancestors.has(node.id) || undefined}
-              data-hidden={!node.visible || undefined}
-              data-collapsed={isCollapsed || undefined}
-              style={{ paddingLeft: 2 + depth * 14 }}
-              onClick={() => getEngine()?.select(node.id, node.kind === 'mesh' ? undefined : null)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') getEngine()?.select(node.id);
-                if ((e.key === 'ArrowRight' && isCollapsed) || (e.key === 'ArrowLeft' && !isCollapsed)) toggle(node.id, depth);
-              }}
-            >
-              <span className="chev">
-                {row.hasChildren && (
-                  <button aria-label={isCollapsed ? 'Expand' : 'Collapse'} tabIndex={-1} onClick={(e) => { e.stopPropagation(); toggle(node.id, depth); }}>
-                    <ChevronDown size={13} />
-                  </button>
-                )}
-              </span>
-              <span className="ico"><Icon size={13} /></span>
-              <span className="label">{node.name}</span>
-              <span className="meta">{node.kind === 'mesh' ? formatCount(node.triangles) : node.kind === 'group' ? node.children.length || '' : node.kind}</span>
-              <button
-                className="eye"
-                aria-label={node.visible ? `Hide ${node.name}` : `Show ${node.name}`}
-                tabIndex={-1}
-                onClick={(e) => { e.stopPropagation(); getEngine()?.setVisible(node.id, !node.visible); }}
-              >
-                {node.visible ? <Eye size={13} /> : <EyeOff size={13} />}
-              </button>
-            </div>
-          );
-        })}
+          })}
+        </div>
       </div>
       <div className="scene-foot">
         <div><b>{info.meshes}</b><span>meshes</span></div>

@@ -253,12 +253,13 @@ export interface ViewerState {
   tree: TreeNode[];
   sceneInfo: { meshes: number; triangles: number; materials: number };
   cameras: string[];
+  modelLighting: { available: boolean; warnings: string[] } | null;
   loading: LoadingState | null;
   envLoading: EnvLoadingState | null;
   /** Bounding radius of the loaded model in scene units. */
   modelRadius: number;
   error: string | null;
-  toast: { id: number; message: string; tone: 'info' | 'error' } | null;
+  toast: { id: number; message: string; tone: 'info' | 'error'; actions?: { label: string; onClick(): void }[] } | null;
   animation: AnimationState | null;
   selection: { objectId: string | null; materialId: string | null };
   material: SelectedMaterial | null;
@@ -362,6 +363,7 @@ export const useViewer = create<ViewerState>(() => ({
   tree: [],
   sceneInfo: { meshes: 0, triangles: 0, materials: 0 },
   cameras: [],
+  modelLighting: null,
   loading: null,
   envLoading: null,
   modelRadius: 1,
@@ -468,8 +470,8 @@ export function setUi(patch: Partial<ViewerState['ui']>) {
 }
 
 let toastId = 0;
-export function showToast(message: string, tone: 'info' | 'error' = 'info') {
-  useViewer.setState({ toast: { id: ++toastId, message, tone } });
+export function showToast(message: string, tone: 'info' | 'error' = 'info', actions?: NonNullable<ViewerState['toast']>['actions']) {
+  useViewer.setState({ toast: { id: ++toastId, message, tone, actions } });
 }
 
 useViewer.subscribe((state, prev) => {
