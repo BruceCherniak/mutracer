@@ -161,7 +161,21 @@ describe('viewer cached model loading', () => {
       if (String(request).endsWith('sky.pfm')) return new Response(pfm);
       return previousFetch(request, options);
     }));
-    const model = await loadModelFromURL('https://example.com/room/gltf/scene.gltf', vi.fn());
+    const progress = vi.fn();
+    const model = await loadModelFromURL('https://example.com/room/gltf/scene.gltf', progress);
+    const stages = progress.mock.calls.map(([stage]) => stage);
+    const firstParse = stages.indexOf('parse');
+    expect(firstParse).toBeGreaterThan(0);
+    expect(stages.slice(firstParse)).not.toContain('download');
+    const downloaded = progress.mock.calls.filter(([stage]) => stage === 'download').map(([, loaded]) => loaded);
+    expect(downloaded).toEqual([...downloaded].sort((a, b) => a - b));
+    expect(downloaded.at(-1)).toBe(model.source!.files.reduce((sum, { file }) => sum + file.size, 0));
+    expect(fetchSpyURLs()).toEqual([
+      'https://example.com/room/gltf/scene.gltf',
+      'https://example.com/room/gltf/mesh.bin',
+      'https://example.com/room/gltf/textures/base.png',
+      'https://example.com/room/source/textures/sky.pfm'
+    ]);
     expect(model.source!.files.some((entry) => entry.path === 'https://example.com/room/source/textures/sky.pfm')).toBe(true);
     expect(model.lighting?.environment?.data.slice(0, 4)).toEqual(new Float32Array([1, 2, 3, 1]));
     model.revoke(); requests.length = 0;
@@ -171,6 +185,28 @@ describe('viewer cached model loading', () => {
     expect(fetchSpy.mock.calls.every(([address]) => (address instanceof Request ? address.url : String(address)).startsWith('blob:'))).toBe(true);
     expect(cached.lighting?.environment?.data).toEqual(model.lighting?.environment?.data);
     cached.revoke();
+  });
+
+  function fetchSpyURLs() {
+    return vi.mocked(fetch).mock.calls.map(([request]) => request instanceof Request ? request.url : String(request))
+      .filter((address) => !address.startsWith('blob:'));
+  }
+
+  it('does not download a missing optional environment again during parsing', async () => {
+    const data = { ...json, extras: { pbrt: { light_sources: [
+      { pbrt: 'infinite', gltf: 'metadata_only', source: 'missing.pfm' }
+    ] } } };
+    network(JSON.stringify(data));
+    const previousFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', vi.fn(async (request: RequestInfo | URL, options?: RequestInit) => {
+      if (String(request).endsWith('missing.pfm')) return new Response(null, { status: 404 });
+      return previousFetch(request, options);
+    }));
+    const model = await loadModelFromURL('https://example.com/room/gltf/scene.gltf', vi.fn());
+    expect(fetchSpyURLs().filter((address) => address.endsWith('missing.pfm'))).toHaveLength(1);
+    expect(model.lighting?.warnings[0]).toContain('404');
+    expect(model.lighting?.environment).toBeNull();
+    model.revoke();
   });
 
   it('releases dependency blob URLs when parsing fails', async () => {

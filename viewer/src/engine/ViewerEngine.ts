@@ -109,6 +109,7 @@ export class ViewerEngine {
   private modelId: string | null = null;
   private cameraSaveTimer: ReturnType<typeof setTimeout> | undefined;
   private envToken = 0;
+  private envAbort?: AbortController;
   private dragging = false;
   private awaitingFirstSample = false;
   private exporting = false;
@@ -205,7 +206,7 @@ export class ViewerEngine {
     clearTimeout(this.denoiserUpdateTimer);
     this.saveCamera();
     ++this.loadToken;
-    ++this.envToken;
+    this.cancelEnvironmentDownload();
     window.removeEventListener('pagehide', this.saveCamera);
     window.removeEventListener('pagehide', this.flushMaterials);
     this.materials.flush();
@@ -331,6 +332,8 @@ export class ViewerEngine {
     if (authoredLighting && !cameraRestored) {
       set({ settings: { ...get().settings, lighting: 'environment', envId: 'model', envIntensity: 1, envRotation: 0,
         ...(restored ? INITIAL_LIGHTING : {}) } });
+      // A pending custom HDRI can exist even when the selection was already 'model'.
+      if (get().settings.envId === 'model') this.cancelEnvironmentDownload();
     } else if ((!model.lighting?.available || !cameraRestored && !authoredLighting) && get().settings.envId === 'model') {
       set({ settings: { ...get().settings, envId: 'sky', envIntensity: 1, envRotation: 0 } });
     }
@@ -509,7 +512,10 @@ export class ViewerEngine {
 
   private async applyEnvironmentPreset(id: string) {
     const preset = ENVIRONMENT_PRESETS.find((p) => p.id === id);
-    if (!preset) return; // 'custom': pixels were set directly
+    if (!preset) {
+      this.cancelEnvironmentDownload();
+      return; // Scene lighting or custom pixels are already available.
+    }
     const url = environmentUrl(preset, this.settings.envResolution);
     if (!url) {
       this.setEnvironmentData(createSky(), id);
@@ -534,25 +540,36 @@ export class ViewerEngine {
 
   /** Downloads an .hdr with progress. Resolves quietly when a newer request supersedes it. */
   private async downloadEnvironment(url: string, id: string, name: string) {
-    const token = ++this.envToken;
+    this.cancelEnvironmentDownload();
+    const token = this.envToken;
+    const controller = new AbortController();
+    this.envAbort = controller;
     const current = () => token === this.envToken;
     set({ envLoading: { id, name, loaded: 0, total: 0 } });
     try {
       const data = await loadHDR(url, (loaded, total) => {
         if (current()) set({ envLoading: { id, name, loaded, total } });
-      });
+      }, controller.signal);
       if (current()) this.setEnvironmentData(data, id);
     } catch (error) {
       if (current()) {
         set({ envLoading: null });
         throw error;
       }
+    } finally {
+      if (this.envAbort === controller) this.envAbort = undefined;
     }
   }
 
-  private setEnvironmentData(data: ReturnType<typeof createSky>, id: string) {
+  private cancelEnvironmentDownload() {
     this.envToken++;
+    this.envAbort?.abort();
+    this.envAbort = undefined;
     set({ envLoading: null });
+  }
+
+  private setEnvironmentData(data: ReturnType<typeof createSky>, id: string) {
+    this.cancelEnvironmentDownload();
     this.environment.setSource(data);
     this.applyBackground();
     if (get().settings.envId !== id) useViewer.setState((s) => ({ settings: { ...s.settings, envId: id } }));

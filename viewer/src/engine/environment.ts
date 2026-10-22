@@ -58,9 +58,11 @@ export function parseHDR(buffer: ArrayBuffer): EquirectData {
   return { data: image.data as Float32Array, width: image.width, height: image.height };
 }
 
-export async function loadHDR(url: string, onProgress?: (loaded: number, total: number) => void) {
+export async function loadHDR(url: string, onProgress?: (loaded: number, total: number) => void, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   const cache = await openHDRCache(url);
   const cached = await cache?.read();
+  signal?.throwIfAborted();
   if (cached) {
     let data: EquirectData | undefined;
     try {
@@ -73,7 +75,8 @@ export async function loadHDR(url: string, onProgress?: (loaded: number, total: 
       return data;
     }
   }
-  const buffer = await fetchWithProgress(url, onProgress);
+  const buffer = await fetchWithProgress(url, onProgress, signal);
+  signal?.throwIfAborted();
   const data = parseHDR(buffer);
   // Validate before persisting so an error response cannot poison future loads.
   await cache?.write(buffer);

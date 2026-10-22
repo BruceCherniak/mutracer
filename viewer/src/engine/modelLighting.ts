@@ -14,6 +14,14 @@ const vector = (value: unknown): value is [number, number, number] =>
   Array.isArray(value) && value.length === 3 && value.every(Number.isFinite);
 const rgb = (value: unknown): value is [number, number, number] => vector(value) && value.every((v) => v >= 0);
 
+/** Environment files needed alongside the glTF buffers and images. */
+export function modelEnvironmentPaths(metadata: Record<string, unknown>): string[] {
+  const entries = (metadata.pbrt as { light_sources?: Record<string, unknown>[] } | undefined)?.light_sources;
+  if (!Array.isArray(entries)) return [];
+  return entries.filter((entry) => entry && entry.gltf === 'metadata_only' && entry.pbrt === 'infinite' && typeof entry.source === 'string')
+    .map((entry) => `../source/${entry.source}`);
+}
+
 /** PFM stores floating-point RGB (or grey) rows from bottom to top. */
 export function parsePFM(buffer: ArrayBuffer): EquirectData {
   const bytes = new Uint8Array(buffer);

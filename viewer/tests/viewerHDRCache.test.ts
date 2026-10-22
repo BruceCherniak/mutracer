@@ -113,6 +113,20 @@ describe('viewer HDR filesystem cache', () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it('aborts an active environment download without caching its partial bytes', async () => {
+    const fs = mockFilesystem();
+    const controller = new AbortController();
+    vi.stubGlobal('fetch', vi.fn(async (_url: string, { signal }: RequestInit) => {
+      controller.abort();
+      signal!.throwIfAborted();
+      return new Response(onePixelHDR());
+    }));
+    await expect(loadHDR(url, undefined, controller.signal)).rejects.toMatchObject({ name: 'AbortError' });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetch).mock.calls[0][1]?.signal).toBe(controller.signal);
+    expect(fs.files.size).toBe(0);
+  });
+
   it('falls back when private storage cannot be opened or read', async () => {
     const fs = mockFilesystem();
     fs.getDirectory.mockRejectedValueOnce(new Error('Storage denied'));
