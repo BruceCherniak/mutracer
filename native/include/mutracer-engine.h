@@ -36,6 +36,14 @@ extern "C" {
  */
 typedef uint64_t mt_engine;
 typedef uint64_t mt_display;
+/* Record sizes; no record has implicit padding. Reserved fields must be 0. */
+#if defined(__cplusplus) && __cplusplus >= 201103L
+#define MT_ENGINE_LAYOUT(type, size) static_assert(sizeof(type) == (size), #type " layout")
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#define MT_ENGINE_LAYOUT(type, size) _Static_assert(sizeof(type) == (size), #type " layout")
+#else
+#define MT_ENGINE_LAYOUT(type, size)
+#endif
 typedef uint64_t mt_render;
 typedef uint64_t mt_render_loop;
 
@@ -45,6 +53,7 @@ typedef struct mt_engine_options {
   uint32_t struct_size;
   uint32_t backend; /* mt_backend. Default MT_BACKEND_HWRT. */
 } mt_engine_options;
+MT_ENGINE_LAYOUT(mt_engine_options, 8);
 int32_t mt_engine_options_default(mt_engine_options *output);
 /* Creates a device of its own. No usable GPU returns MT_ERROR_UNAVAILABLE. */
 int32_t mt_engine_create(const mt_engine_options *options, mt_engine *output, char *error, size_t capacity);
@@ -70,6 +79,7 @@ typedef struct mt_engine_snapshot {
   uint32_t hardware_ray_query; /* 1 when the device supports ray queries. */
   char adapter_name[256]; /* NUL terminated, truncated UTF-8. */
 } mt_engine_snapshot;
+MT_ENGINE_LAYOUT(mt_engine_snapshot, 268);
 int32_t mt_engine_info(mt_engine engine, mt_engine_snapshot *output, char *error, size_t capacity);
 
 typedef enum mt_engine_event_kind {
@@ -86,6 +96,7 @@ typedef struct mt_engine_event {
   uint32_t recovering;
   const char *message; /* Errors and device loss; valid during the callback only. */
 } mt_engine_event;
+MT_ENGINE_LAYOUT(mt_engine_event, 16 + sizeof(void *));
 typedef void (*mt_engine_callback)(const mt_engine_event *event, void *user);
 /* Replaces the engine's event callback; NULL removes it. Default none. */
 int32_t mt_engine_set_callback(mt_engine engine, mt_engine_callback callback, void *user, char *error, size_t capacity);
@@ -113,6 +124,7 @@ typedef struct mt_display_settings {
   float temperature; /* White balance shift, -1..1. Default 0. */
   float tint; /* Green/magenta, -1..1. Default 0. */
 } mt_display_settings;
+MT_ENGINE_LAYOUT(mt_display_settings, 32);
 int32_t mt_display_settings_default(mt_display_settings *output);
 /* Display size in pixels; scale-sized renders follow it at their next refine.
  * Default 300x150 (the browser canvas default). */
@@ -126,6 +138,7 @@ typedef struct mt_presented {
   uint32_t width, height; /* Render image size before scaling to the display. */
   uint32_t samples;
 } mt_presented;
+MT_ENGINE_LAYOUT(mt_presented, 20);
 /* Composes the render's complete image, or its fallback's, into the display
  * image; smaller images are scaled linearly. shown receives 0 and the previous
  * image stays when neither is ready, for example during preparation. presented
@@ -174,12 +187,13 @@ typedef struct mt_render_options {
   /* Fixed size; 0x0 uses resolution_scale of the display size. Default 0x0. */
   uint32_t width, height;
   uint32_t seed; /* Default 12345. */
-  uint32_t reserved; /* Must be 0. */
+  uint32_t reserved[2]; /* Must be 0. */
   double resolution_scale; /* Positive. Default 1. */
   double clamping; /* Per-sample radiance clamp, finite, 0 disables. Default 0. */
   double transmissive_output_alpha_min; /* Finite. Default 1. */
   double time_budget_ms; /* Positive. Default 21. */
 } mt_render_options;
+MT_ENGINE_LAYOUT(mt_render_options, 88);
 int32_t mt_render_options_default(mt_render_options *output);
 /* Changing a render's size, sampling pattern, ZSobol max_samples or bevel samples
  * prepares the scene again for that render; every render holds its own copy of
@@ -213,6 +227,7 @@ typedef struct mt_render_denoiser {
   uint32_t reserved; /* Must be 0. */
   const char *library; /* NULL uses the mutracer-denoise.h search. Default NULL. */
 } mt_render_denoiser;
+MT_ENGINE_LAYOUT(mt_render_denoiser, 16 + sizeof(void *));
 int32_t mt_render_denoiser_default(mt_render_denoiser *output);
 /* Replaces the denoiser; NULL disables denoising. Default none. */
 int32_t mt_render_set_denoiser(mt_render render, const mt_render_denoiser *denoiser, char *error, size_t capacity);
@@ -248,6 +263,7 @@ typedef struct mt_converge_options {
   mt_converge_callback progress; /* After every complete batch. Default NULL. */
   void *user;
 } mt_converge_options;
+MT_ENGINE_LAYOUT(mt_converge_options, 160 + 2 * sizeof(void *));
 int32_t mt_converge_options_default(uint32_t samples, mt_converge_options *output);
 /* Renders exactly options->samples samples, blocking until they complete, then
  * denoises when a denoiser is set. samples (optional) receives the count.
@@ -273,6 +289,7 @@ typedef struct mt_render_snapshot {
   char denoise_device[64]; /* For example "OIDN CPU"; empty for none. */
   char message[256]; /* Fallback or denoising failure reason; empty for none. */
 } mt_render_snapshot;
+MT_ENGINE_LAYOUT(mt_render_snapshot, 364);
 int32_t mt_render_info(mt_render render, mt_render_snapshot *output, char *error, size_t capacity);
 
 /* kind (mt_image_kind): HDR, NORMAL, ALBEDO or DENOISED (the denoised image when
@@ -313,6 +330,7 @@ typedef struct mt_render_loop_options {
   mt_loop_select_callback select; /* Default NULL: preview while changing. */
   void *select_user;
 } mt_render_loop_options;
+MT_ENGINE_LAYOUT(mt_render_loop_options, 24 + 4 * sizeof(void *));
 int32_t mt_render_loop_options_default(mt_render_loop_options *output);
 /* The loop presents on the engine display and creates its renders; the final
  * render presents the preview as fallback. */
@@ -340,7 +358,9 @@ typedef struct mt_render_loop_snapshot {
   uint32_t changing;
   uint64_t presentations; /* Successful presentations so far. */
   mt_presented last_presented; /* samples 0 before the first presentation. */
+  uint32_t reserved; /* 0. */
 } mt_render_loop_snapshot;
+MT_ENGINE_LAYOUT(mt_render_loop_snapshot, 48);
 int32_t mt_render_loop_info(mt_render_loop loop, mt_render_loop_snapshot *output, char *error, size_t capacity);
 
 typedef enum mt_loop_event_kind { MT_LOOP_EVENT_STATUS = 0, MT_LOOP_EVENT_SAMPLE = 1 } mt_loop_event_kind;
@@ -360,10 +380,12 @@ typedef struct mt_loop_sync {
   uint32_t (*active)(void *user); /* NULL: never active. */
   void *user;
 } mt_loop_sync;
+MT_ENGINE_LAYOUT(mt_loop_sync, 8 + 3 * sizeof(void *));
 /* Syncs update in the order added. id receives a handle for remove_sync. */
 int32_t mt_render_loop_add_sync(mt_render_loop loop, const mt_loop_sync *sync, uint64_t *id,
   char *error, size_t capacity);
 int32_t mt_render_loop_remove_sync(mt_render_loop loop, uint64_t id, char *error, size_t capacity);
+#undef MT_ENGINE_LAYOUT
 #ifdef __cplusplus
 }
 #endif

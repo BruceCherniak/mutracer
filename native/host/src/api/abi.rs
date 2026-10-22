@@ -263,7 +263,7 @@ pub struct MtRenderOptions {
     width: u32,
     height: u32,
     seed: u32,
-    reserved: u32,
+    reserved: [u32; 2],
     resolution_scale: f64,
     clamping: f64,
     transmissive_output_alpha_min: f64,
@@ -326,6 +326,7 @@ pub struct MtRenderLoopSnapshot {
     changing: u32,
     presentations: u64,
     last_presented: MtPresented,
+    reserved: u32,
 }
 #[repr(C)]
 pub struct MtLoopSync {
@@ -367,7 +368,7 @@ fn render_options(settings: &RenderSettings) -> MtRenderOptions {
         width,
         height,
         seed: settings.seed,
-        reserved: 0,
+        reserved: [0; 2],
         resolution_scale: scale,
         clamping: settings.clamping,
         transmissive_output_alpha_min: settings.transmissive_output_alpha_min,
@@ -375,7 +376,10 @@ fn render_options(settings: &RenderSettings) -> MtRenderOptions {
     }
 }
 fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
-    if options.reserved != 0 || options.bevel > 1 || options.allow_multiple_samples_per_frame > 1 {
+    if options.reserved != [0; 2]
+        || options.bevel > 1
+        || options.allow_multiple_samples_per_frame > 1
+    {
         return Err(invalid("Reserved fields must be 0 and flags 0 or 1"));
     }
     let size = match (options.width, options.height) {
@@ -1416,6 +1420,7 @@ pub unsafe extern "C" fn mt_render_loop_info(
             changing: render_loop.changing() as u32,
             presentations: render_loop.presentations(),
             last_presented: presented_record(render_loop.last_presented()),
+            reserved: 0,
         };
         unsafe { output.write(snapshot) };
         Ok(())
@@ -1592,6 +1597,66 @@ mod tests {
         assert_eq!(value("MT_DENOISE_EVERY_SAMPLE"), 2);
         assert_eq!(value("MT_LOOP_SELECT_FINAL"), 1);
     }
+    /// Sizes and field offsets of mutracer-engine.h (64-bit pointers).
+    #[test]
+    fn records_match_the_header_layouts() {
+        use std::mem::{offset_of, size_of};
+        let pointer = size_of::<*const u8>();
+        assert_eq!(size_of::<MtEngineOptions>(), 8);
+        assert_eq!(size_of::<MtEngineSnapshot>(), 268);
+        assert_eq!(offset_of!(MtEngineSnapshot, adapter_name), 12);
+        assert_eq!(size_of::<MtEngineEvent>(), 16 + pointer);
+        assert_eq!(offset_of!(MtEngineEvent, message), 16);
+        assert_eq!(size_of::<MtDisplaySettings>(), 32);
+        assert_eq!(offset_of!(MtDisplaySettings, tone_mapping_exposure), 12);
+        assert_eq!(offset_of!(MtDisplaySettings, tint), 28);
+        assert_eq!(size_of::<MtPresented>(), 20);
+        assert_eq!(size_of::<MtRenderOptions>(), 88);
+        assert_eq!(offset_of!(MtRenderOptions, seed), 44);
+        assert_eq!(offset_of!(MtRenderOptions, reserved), 48);
+        assert_eq!(offset_of!(MtRenderOptions, resolution_scale), 56);
+        assert_eq!(offset_of!(MtRenderOptions, time_budget_ms), 80);
+        assert_eq!(size_of::<MtRenderDenoiser>(), 16 + pointer);
+        assert_eq!(offset_of!(MtRenderDenoiser, library), 16);
+        assert_eq!(size_of::<MtConvergeOptions>(), 160 + 2 * pointer);
+        assert_eq!(offset_of!(MtConvergeOptions, timeout_ms), 24);
+        assert_eq!(offset_of!(MtConvergeOptions, camera), 32);
+        assert_eq!(offset_of!(MtConvergeOptions, progress), 160);
+        assert_eq!(offset_of!(MtConvergeOptions, user), 160 + pointer);
+        assert_eq!(size_of::<MtRenderSnapshot>(), 364);
+        assert_eq!(offset_of!(MtRenderSnapshot, denoise_ms), 40);
+        assert_eq!(offset_of!(MtRenderSnapshot, denoise_device), 44);
+        assert_eq!(offset_of!(MtRenderSnapshot, message), 108);
+        assert_eq!(size_of::<MtRenderLoopOptions>(), 24 + 4 * pointer);
+        assert_eq!(offset_of!(MtRenderLoopOptions, idle_ms), 16);
+        assert_eq!(offset_of!(MtRenderLoopOptions, preview_options), 24);
+        assert_eq!(
+            offset_of!(MtRenderLoopOptions, select_user),
+            24 + 3 * pointer
+        );
+        assert_eq!(size_of::<MtRenderLoopSnapshot>(), 48);
+        assert_eq!(offset_of!(MtRenderLoopSnapshot, presentations), 16);
+        assert_eq!(offset_of!(MtRenderLoopSnapshot, last_presented), 24);
+        assert_eq!(offset_of!(MtRenderLoopSnapshot, reserved), 44);
+        assert_eq!(size_of::<MtLoopSync>(), 8 + 3 * pointer);
+        assert_eq!(offset_of!(MtLoopSync, user), 8 + 2 * pointer);
+        // The header asserts the same sizes in C.
+        let header = include_str!("../../../include/mutracer-engine.h");
+        for name in [
+            "mt_engine_options, 8",
+            "mt_engine_snapshot, 268",
+            "mt_display_settings, 32",
+            "mt_presented, 20",
+            "mt_render_options, 88",
+            "mt_render_snapshot, 364",
+            "mt_render_loop_snapshot, 48",
+        ] {
+            assert!(
+                header.contains(&format!("MT_ENGINE_LAYOUT({name})")),
+                "{name}"
+            );
+        }
+    }
     #[test]
     fn render_options_round_trip_and_reject_invalid_records() {
         let mut options = render_options(&RenderSettings::default());
@@ -1610,7 +1675,7 @@ mod tests {
         );
         for edit in [
             |o: &mut MtRenderOptions| o.width = 0,
-            |o: &mut MtRenderOptions| o.reserved = 1,
+            |o: &mut MtRenderOptions| o.reserved[1] = 1,
             |o: &mut MtRenderOptions| o.bevel = 2,
             |o: &mut MtRenderOptions| o.sampling_pattern = 3,
             |o: &mut MtRenderOptions| o.max_samples = 0,
