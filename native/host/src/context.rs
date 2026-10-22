@@ -272,6 +272,13 @@ pub fn create_on_device_with_gate(
         pipelines: Arc::new(Mutex::new(HashMap::new())),
         pipeline_cache: None,
     };
+    create_with_gpu(gpu, backend)
+}
+/// Context on an existing device; L1 engines share one device across renders.
+pub(crate) fn create_with_gpu(gpu: GpuDevice, backend: u32) -> std::result::Result<u64, String> {
+    if backend > 1 {
+        return Err("Unknown native intersection backend".into());
+    }
     let mut slot = REGISTRY.lock().map_err(|_| "Context registry poisoned")?;
     let registry = slot.get_or_insert_with(|| Registry {
         next: 1,
@@ -443,18 +450,72 @@ pub unsafe extern "C" fn mt_context_commit_with_settings(
     capacity: usize,
 ) -> i32 {
     platform_scope(|| unsafe {
-        commit_with_settings(handle, input, length, settings, error, capacity)
+        commit_with_settings(
+            handle,
+            input,
+            length,
+            settings,
+            CommitPath::Any,
+            &mut CommitOutcome::Done,
+            error,
+            capacity,
+        )
+    })
+}
+/// Which commit paths one call may take. The C ABI always uses `Any`.
+#[derive(Clone, Copy, PartialEq)]
+pub(crate) enum CommitPath {
+    Any,
+    /// Apply an incremental commit on the calling thread or report why not.
+    IncrementalOnly,
+    /// Skip the incremental attempt; used after `IncrementalOnly` reported `NeedsFull`.
+    FullOnly,
+}
+/// Result of a successful (status 0) commit call.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) enum CommitOutcome {
+    Done,
+    /// Only full preparation applies. A partially applied incremental edit has
+    /// already cleared the retained descriptor; the scene must be fully prepared.
+    NeedsFull,
+    /// Another context is preparing, so the incremental path was not attempted.
+    Blocked,
+}
+/// L1 entry point: borrowed descriptor and settings, with an explicit commit path.
+pub(crate) fn commit_path(
+    handle: u64,
+    bytes: &[u8],
+    settings: &settings::RenderSettings,
+    path: CommitPath,
+    outcome: &mut CommitOutcome,
+    error: &mut [c_char],
+) -> i32 {
+    platform_scope(|| unsafe {
+        commit_with_settings(
+            handle,
+            bytes.as_ptr(),
+            bytes.len(),
+            settings,
+            path,
+            outcome,
+            error.as_mut_ptr(),
+            error.len(),
+        )
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 unsafe fn commit_with_settings(
     handle: u64,
     input: *const u8,
     length: usize,
     settings: *const settings::RenderSettings,
+    path: CommitPath,
+    outcome: &mut CommitOutcome,
     error: *mut c_char,
     capacity: usize,
 ) -> i32 {
+    *outcome = CommitOutcome::Done;
     // Caller buffers are borrowed only by this synchronous invocation. Every
     // runtime message owns its input; the registry is free during preparation.
     if settings.is_null() || input.is_null() || length > scene::MAX_BYTES {
@@ -476,6 +537,7 @@ unsafe fn commit_with_settings(
     // lock while the context is marked preparing, so render, poll, cancel and
     // destroy stay available. Only the retained GPU updates hold the lock.
     let mut candidate = None;
+    let mut blocked = false;
     let status = action(error, capacity, |registry| {
         let preparing = registry.contexts.values().any(|c| c.commit.is_some());
         let context = context(registry, handle)?;
@@ -485,7 +547,8 @@ unsafe fn commit_with_settings(
                 "Scene commit is already preparing",
             ));
         }
-        if !preparing {
+        blocked = preparing;
+        if !preparing && path != CommitPath::FullOnly {
             candidate = incremental_candidate(context, bytes, &settings);
             if candidate.is_some() {
                 context.commit = Some(cancel.clone());
@@ -548,6 +611,14 @@ unsafe fn commit_with_settings(
         if status != 0 || finished {
             return status;
         }
+    }
+    if path == CommitPath::IncrementalOnly {
+        *outcome = if blocked {
+            CommitOutcome::Blocked
+        } else {
+            CommitOutcome::NeedsFull
+        };
+        return 0;
     }
     let status = action(error, capacity, |registry| {
         let context = context(registry, handle)?;

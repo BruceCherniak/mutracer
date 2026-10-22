@@ -1,0 +1,1448 @@
+//! Independent accumulations. Each render commits the engine scene to its own L0 context.
+use super::engine::{
+    Camera, Engine, EngineEvent, ProgressStage, QUALITY_BEVEL, QUALITY_DISPERSION, State,
+    Subscription, override_descriptor,
+};
+use super::{Result, Status, error, l0, l0_blocking, l0_result};
+use crate::context::{self, CommitOutcome, CommitPath};
+use crate::display::Display as Capture;
+use crate::settings::RenderSettings as L0Settings;
+use std::path::PathBuf;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+    mpsc,
+};
+use std::time::{Duration, Instant};
+
+/// L0 limit on accumulated samples per context.
+const MAX_TOTAL_SAMPLES: u32 = 4096;
+/// L0 limit on samples dispatched by one job poll.
+const MAX_BATCH: u32 = 64;
+
+/// Sampling sequence.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum SamplingPattern {
+    #[default]
+    Sobol,
+    ZSobol,
+    Random,
+}
+/// Fixed dimensions or a display-relative scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RenderSize {
+    /// Display-relative scale; the size follows [`super::Display::set_size`] at the next refine.
+    Scale(f64),
+    Fixed {
+        width: u32,
+        height: u32,
+    },
+}
+impl Default for RenderSize {
+    fn default() -> Self {
+        Self::Scale(1.)
+    }
+}
+/// Per-render execution and image-quality settings. Defaults match the browser library.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RenderSettings {
+    /// Maximum complete samples, 1–4096. Default 2048.
+    pub max_samples: u32,
+    /// Maximum scattering depth, clamped to 1–20. Default 3.
+    pub bounces: u32,
+    /// Per-sample radiance clamp; 0 disables it. Default 0.
+    pub clamping: f64,
+    /// Default [`SamplingPattern::Sobol`].
+    pub sampling_pattern: SamplingPattern,
+    /// Light candidates per vertex, clamped to 1–16. Default 4.
+    pub direct_light_candidates: u32,
+    /// Rounded material edges. Default true.
+    pub bevel: bool,
+    /// Bevel probes, clamped to 1–32. Default 8.
+    pub bevel_samples: u32,
+    /// Dispersion wavelengths per sample, 1 or 3. Default 3.
+    pub dispersion_wavelengths: u32,
+    /// Minimum transmissive path alpha. Default 1.
+    pub transmissive_output_alpha_min: f64,
+    /// Interactive frame budget in milliseconds for [`Render::refine`]. Default 21.
+    pub time_budget_ms: f64,
+    /// Let one refine submit several samples when the measured sample time fits the
+    /// budget. Default false (one sample per refine).
+    pub allow_multiple_samples_per_frame: bool,
+    /// Size of the image. Default `Scale(1.0)`.
+    pub size: RenderSize,
+    /// Random sequence seed. Default 12345.
+    pub seed: u32,
+}
+impl Default for RenderSettings {
+    fn default() -> Self {
+        Self {
+            max_samples: 2048,
+            bounces: 3,
+            clamping: 0.,
+            sampling_pattern: SamplingPattern::Sobol,
+            direct_light_candidates: 4,
+            bevel: true,
+            bevel_samples: 8,
+            dispersion_wavelengths: 3,
+            transmissive_output_alpha_min: 1.,
+            time_budget_ms: 21.,
+            allow_multiple_samples_per_frame: false,
+            size: RenderSize::Scale(1.),
+            seed: 12345,
+        }
+    }
+}
+impl RenderSettings {
+    pub fn validate(&self) -> Result<()> {
+        let invalid = |message: &str| Err(error(Status::InvalidArgument, message));
+        if !(1..=MAX_TOTAL_SAMPLES).contains(&self.max_samples) {
+            return invalid("max_samples must be 1..4096");
+        }
+        if self.dispersion_wavelengths != 1 && self.dispersion_wavelengths != 3 {
+            return invalid("dispersion_wavelengths must be 1 or 3");
+        }
+        if !self.clamping.is_finite() || self.clamping < 0. {
+            return invalid("clamping must be finite and non-negative");
+        }
+        if !self.transmissive_output_alpha_min.is_finite() {
+            return invalid("transmissive_output_alpha_min must be finite");
+        }
+        if !self.time_budget_ms.is_finite() || self.time_budget_ms <= 0. {
+            return invalid("time_budget_ms must be positive");
+        }
+        match self.size {
+            RenderSize::Scale(scale) if !scale.is_finite() || scale <= 0. => {
+                invalid("Resolution scale must be positive")
+            }
+            RenderSize::Fixed { width, height } if width == 0 || height == 0 => {
+                invalid("Fixed width and height must be positive")
+            }
+            _ => Ok(()),
+        }
+    }
+    /// The L0 settings record; `cap` and `offset` differ only for converge.
+    pub(super) fn l0(&self, cap: u32, offset: u32) -> L0Settings {
+        L0Settings {
+            sampling_pattern: match self.sampling_pattern {
+                SamplingPattern::Sobol => 0,
+                SamplingPattern::ZSobol => 1,
+                SamplingPattern::Random => 2,
+            },
+            seed: self.seed,
+            max_samples: cap,
+            bounces: self.bounces,
+            direct_light_candidates: self.direct_light_candidates,
+            bevel_samples: self.bevel_samples,
+            sample_sequence_offset: offset,
+            clamping: self.clamping,
+            transmissive_output_alpha_min: self.transmissive_output_alpha_min,
+            ..L0Settings::default()
+        }
+    }
+    pub(super) fn quality(&self) -> u32 {
+        (if self.bevel { QUALITY_BEVEL } else { 0 })
+            | (if self.dispersion_wavelengths == 3 {
+                QUALITY_DISPERSION
+            } else {
+                0
+            })
+    }
+    pub(super) fn resolve_size(&self, display: [u32; 2]) -> [u32; 2] {
+        match self.size {
+            RenderSize::Fixed { width, height } => [width, height],
+            RenderSize::Scale(scale) => display.map(|v| ((v as f64 * scale).round() as u32).max(1)),
+        }
+    }
+}
+
+/// Execution state of one render, matching the browser `RenderStatus`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RenderStatus {
+    /// No committed scene yet, or scene preparation is running.
+    Preparing,
+    /// Reserved: pipeline compilation is currently part of preparation.
+    Compiling,
+    Converging,
+    Denoising,
+    Finished,
+    Error,
+}
+/// One complete batch of samples.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SampleEvent {
+    /// Complete samples since the last restart.
+    pub samples: u32,
+    /// Whether this batch is the first after a restart.
+    pub is_first_frame: bool,
+    /// Wall time from submission to observed completion of the batch.
+    pub frame_time_ms: f64,
+}
+/// Image read by [`Render::read_pixels`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PixelKind {
+    Hdr,
+    /// Denoised HDR when a denoised image is available, otherwise HDR.
+    Denoised,
+    Albedo,
+    Normal,
+}
+/// Linear RGBA f32 pixels, top row first.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Image {
+    pub width: u32,
+    pub height: u32,
+    pub data: Vec<f32>,
+}
+/// When a render filters its complete samples.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum DenoiseSchedule {
+    /// Once, when the render reaches `max_samples`.
+    #[default]
+    Converged,
+    /// Not supported yet; rejected by [`Render::set_denoiser`].
+    Progressive,
+    /// Not supported yet; rejected by [`Render::set_denoiser`].
+    EverySample,
+}
+/// Open Image Denoise on a library thread.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct DenoiserOptions {
+    /// 0 GPU (Metal/CUDA/HIP) then CPU, 1 CPU, 2 Metal, 3 CUDA, 4 HIP. Default 0.
+    pub backend: u32,
+    /// OIDN library path. Default the bundled library or `MUTRACER_OIDN_LIBRARY`.
+    pub library: Option<PathBuf>,
+    /// Default [`DenoiseSchedule::Converged`].
+    pub schedule: DenoiseSchedule,
+}
+/// Cross-thread cancellation for [`Render::converge`].
+#[derive(Clone, Debug, Default)]
+pub struct CancelToken(Arc<AtomicBool>);
+impl CancelToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn cancel(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConvergeStage {
+    Final,
+    Denoising,
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConvergeProgress {
+    pub stage: ConvergeStage,
+    pub samples: u32,
+    pub target_samples: u32,
+}
+/// Deterministic offline rendering options.
+pub struct ConvergeOptions {
+    /// Final complete samples, 1–4096. Required.
+    pub samples: u32,
+    /// Camera for this output only. Default the committed engine camera.
+    pub camera: Option<Camera>,
+    /// Deterministic sequence base. Default 0.
+    pub sample_sequence_offset: u32,
+    /// Maximum samples per submitted batch, clamped to 1–64. Default 8.
+    pub samples_per_batch: u32,
+    /// Timeout for preparation and rendering. Default 600000.
+    pub timeout_ms: u64,
+    /// Called after every complete batch and before denoising. Default none.
+    pub on_progress: Option<Box<dyn FnMut(ConvergeProgress) + Send>>,
+    /// Default none.
+    pub cancel: Option<CancelToken>,
+}
+impl ConvergeOptions {
+    pub fn new(samples: u32) -> Self {
+        Self {
+            samples,
+            camera: None,
+            sample_sequence_offset: 0,
+            samples_per_batch: 8,
+            timeout_ms: 600_000,
+            on_progress: None,
+            cancel: None,
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConvergeResult {
+    pub samples: u32,
+}
+
+/// What a render's L0 context must hold to be current.
+#[derive(Clone, PartialEq)]
+pub(super) struct TargetKey {
+    scene: u64,
+    camera: u64,
+    size: [u32; 2],
+    quality: u32,
+    settings: L0Settings,
+    camera_override: Option<[u8; 128]>,
+}
+struct Pending {
+    key: TargetKey,
+    result: mpsc::Receiver<Result<()>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+struct Flight {
+    job: u64,
+    count: u32,
+    started: Instant,
+    /// Abandoned by a commit or restart; its samples are never counted.
+    cancelled: bool,
+}
+type DenoiseResult = std::result::Result<Vec<f32>, String>;
+#[derive(Default)]
+struct Denoise {
+    options: Option<DenoiserOptions>,
+    filter: Arc<Mutex<Option<crate::denoise::Denoiser>>>,
+    worker: Option<(u32, mpsc::Receiver<DenoiseResult>)>,
+    /// Samples of the denoised image and its pixels, bottom row first like L0.
+    denoised: Option<(u32, Vec<f32>)>,
+    failed: bool,
+}
+
+pub(super) struct RenderState {
+    pub(super) settings: RenderSettings,
+    pub(super) fallback: Option<u64>,
+    context: u64,
+    published: Option<TargetKey>,
+    pending: Option<Pending>,
+    failed: Option<(TargetKey, String)>,
+    job: Option<Flight>,
+    /// Complete samples in the published accumulation.
+    samples: u32,
+    first_frame: bool,
+    sample_ms: Option<f64>,
+    pub(super) capture: Option<Capture>,
+    capture_key: Option<TargetKey>,
+    captured: u32,
+    needs_capture: bool,
+    status: RenderStatus,
+    error: bool,
+    busy: bool,
+    denoise: Denoise,
+}
+impl RenderState {
+    /// Destroys the L0 context once preparation and GPU work have drained.
+    pub(super) fn release(mut self) {
+        let context = self.context;
+        if let Some(flight) = self.job.as_mut() {
+            flight.cancelled = true;
+            let job = flight.job;
+            let _ = l0_blocking(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
+        }
+        let _ = drain(&mut self);
+        if self.pending.is_some() {
+            let _ = l0_blocking(|e, n| unsafe { context::mt_context_cancel_commit(context, e, n) });
+        }
+        // Destroy waits for a cancelled candidate to retire.
+        let _ = l0_blocking(|e, n| unsafe { context::mt_context_destroy(context, e, n) });
+        if let Some(mut pending) = self.pending.take() {
+            if let Some(thread) = pending.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+    fn publish(&mut self, key: TargetKey, full: bool) {
+        self.published = Some(key);
+        self.failed = None;
+        self.error = false;
+        self.samples = 0;
+        self.first_frame = true;
+        self.needs_capture = false;
+        self.status = RenderStatus::Converging;
+        if full {
+            self.sample_ms = None;
+        }
+        cancel_denoise(self);
+    }
+    #[cfg(test)]
+    pub(super) fn context(&self) -> u64 {
+        self.context
+    }
+    pub(super) fn presented_samples(&self) -> u32 {
+        self.captured
+    }
+    fn current(&self, state_scene: u64, state_camera: u64) -> bool {
+        self.pending.is_none()
+            && self
+                .published
+                .as_ref()
+                .is_some_and(|k| k.scene == state_scene && k.camera == state_camera)
+    }
+}
+fn cancel_denoise(render: &mut RenderState) {
+    render.denoise.worker = None;
+    render.denoise.denoised = None;
+    if let Some(capture) = render.capture.as_mut() {
+        capture.original();
+    }
+}
+
+/// Readiness of one render for presentation (browser `_complete` / `_presentable`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub(super) struct Readiness {
+    pub(super) complete: bool,
+    pub(super) presentable: bool,
+}
+pub(super) fn readiness(state: &State, id: u64) -> Readiness {
+    let Some(render) = state.renders.get(&id) else {
+        return Readiness::default();
+    };
+    let complete = render.current(state.scene_revision, state.camera_revision)
+        && render.capture_key == render.published
+        && render.captured > 0;
+    let denoise = &render.denoise;
+    let presentable = complete
+        && (denoise.worker.is_none()
+            || denoise.denoised.is_some()
+            || (denoise
+                .options
+                .as_ref()
+                .is_some_and(|o| o.schedule == DenoiseSchedule::Converged)
+                && render.settings.max_samples > 1));
+    Readiness {
+        complete,
+        presentable,
+    }
+}
+
+fn desired(state: &State, render: &RenderState) -> Option<TargetKey> {
+    state.scene.as_ref()?;
+    Some(TargetKey {
+        scene: state.scene_revision,
+        camera: state.camera_revision,
+        size: render.settings.resolve_size(state.display.size),
+        quality: render.settings.quality(),
+        settings: render.settings.l0(render.settings.max_samples, 0),
+        camera_override: None,
+    })
+}
+
+/// Called by `Engine::update` for every render.
+pub(super) fn synchronize(state: &mut State, id: u64, inputs_changed: bool) {
+    if inputs_changed {
+        if let Some(render) = state.renders.get_mut(&id) {
+            cancel_denoise(render);
+        }
+    }
+    let Some(key) = state.renders.get(&id).and_then(|r| desired(state, r)) else {
+        return;
+    };
+    if state.renders[&id].busy {
+        return;
+    }
+    if let Err(e) = commit(state, id, key, false) {
+        state.report(e.message);
+    }
+}
+
+enum Step {
+    Published,
+    Waiting,
+    /// Reported through an engine error event; `failed` holds the message.
+    Failed,
+}
+/// Bring the render's L0 context to `key`. Returns whether it is published;
+/// `false` with `error` set means the commit failed and was reported.
+/// Non-blocking callers retry later; blocking callers wait for preparation.
+fn commit(state: &mut State, id: u64, key: TargetKey, blocking: bool) -> Result<bool> {
+    loop {
+        let mut events = Vec::new();
+        let step = commit_step(state, id, &key, blocking, &mut events);
+        for event in events {
+            if let EngineEvent::Error { message } = &event {
+                state.last_error = Some(message.clone());
+            }
+            state.engine_events.push(event);
+        }
+        match step? {
+            Step::Published => return Ok(true),
+            Step::Failed => return Ok(false),
+            Step::Waiting if !blocking => return Ok(false),
+            Step::Waiting => {
+                if state.renders[&id].pending.is_none() {
+                    std::thread::sleep(Duration::from_micros(200));
+                }
+            }
+        }
+    }
+}
+/// Collects a finished background preparation. Returns whether one is still running.
+/// A preparation for another key than `key` is cancelled first.
+fn poll_pending(
+    render: &mut RenderState,
+    key: Option<&TargetKey>,
+    blocking: bool,
+    events: &mut Vec<EngineEvent>,
+) -> bool {
+    let Some(pending) = render.pending.as_mut() else {
+        return false;
+    };
+    if key.is_some_and(|key| pending.key != *key) {
+        let context = render.context;
+        let _ = l0(|e, n| unsafe { context::mt_context_cancel_commit(context, e, n) });
+    }
+    let received = if blocking {
+        pending
+            .result
+            .recv()
+            .map_err(|_| mpsc::TryRecvError::Disconnected)
+    } else {
+        pending.result.try_recv()
+    };
+    let outcome = match received {
+        Ok(outcome) => outcome,
+        Err(mpsc::TryRecvError::Empty) => return true,
+        Err(mpsc::TryRecvError::Disconnected) => Err(error(
+            Status::ContextFailed,
+            "Scene preparation thread stopped",
+        )),
+    };
+    let mut pending = render.pending.take().unwrap();
+    if let Some(thread) = pending.thread.take() {
+        let _ = thread.join();
+    }
+    match outcome {
+        Ok(()) => {
+            render.publish(pending.key, true);
+            events.push(EngineEvent::Progress {
+                stage: ProgressStage::Preparation,
+                progress: 1.,
+            });
+        }
+        Err(e) if e.status == Status::Cancelled => {}
+        Err(e) => {
+            render.failed = Some((pending.key, e.message.clone()));
+            events.push(EngineEvent::Error { message: e.message });
+        }
+    }
+    false
+}
+fn commit_step(
+    state: &mut State,
+    id: u64,
+    key: &TargetKey,
+    blocking: bool,
+    events: &mut Vec<EngineEvent>,
+) -> Result<Step> {
+    // Publish other renders' finished preparations, so a deferred incremental
+    // commit never waits on a preparation nobody collects.
+    let others: Vec<u64> = state
+        .renders
+        .iter()
+        .filter(|(other, r)| **other != id && r.pending.is_some())
+        .map(|(other, _)| *other)
+        .collect();
+    for other in others {
+        poll_pending(state.renders.get_mut(&other).unwrap(), None, false, events);
+    }
+    let others_pending = state
+        .renders
+        .iter()
+        .any(|(other, r)| *other != id && r.pending.is_some());
+    let scene = state.scene.clone().expect("committed scene");
+    let engine_camera = state.camera;
+    let render = state.renders.get_mut(&id).unwrap();
+    if poll_pending(render, Some(key), blocking, events) {
+        return Ok(Step::Waiting);
+    }
+    if render.published.as_ref() == Some(key) {
+        return Ok(Step::Published);
+    }
+    if render
+        .failed
+        .as_ref()
+        .is_some_and(|(failed, _)| failed == key)
+    {
+        render.error = true;
+        return Ok(Step::Failed);
+    }
+    render.error = false;
+    // A publication drains the L0 job; never count its samples.
+    if let Some(flight) = render.job.as_mut() {
+        flight.cancelled = true;
+        let job = flight.job;
+        let _ = l0(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
+    }
+    let camera = key.camera_override.as_ref().or(engine_camera.as_ref());
+    let bytes = override_descriptor(&scene, key.size, key.quality, camera)?;
+    let settings = key.settings;
+    let mut outcome = CommitOutcome::Done;
+    let mut message = [0 as std::ffi::c_char; 1024];
+    let code = context::commit_path(
+        render.context,
+        &bytes,
+        &settings,
+        CommitPath::IncrementalOnly,
+        &mut outcome,
+        &mut message,
+    );
+    match l0_result(code, &message) {
+        Ok(()) => match outcome {
+            CommitOutcome::Done => {
+                render.job = None;
+                render.publish(key.clone(), false);
+                return Ok(Step::Published);
+            }
+            CommitOutcome::NeedsFull => {}
+            // Another render of this engine is preparing; try incrementally after it publishes.
+            CommitOutcome::Blocked if others_pending && !blocking => return Ok(Step::Waiting),
+            CommitOutcome::Blocked => {}
+        },
+        Err(e) if e.status == Status::Busy => return Ok(Step::Waiting),
+        Err(e) => {
+            render.failed = Some((key.clone(), e.message.clone()));
+            render.error = true;
+            events.push(EngineEvent::Error { message: e.message });
+            return Ok(Step::Failed);
+        }
+    }
+    // Full preparation on a library thread; the old scene stays readable.
+    let (send, result) = mpsc::channel();
+    let context = render.context;
+    let thread = std::thread::Builder::new()
+        .name("MuTracer scene preparation".into())
+        .spawn(move || {
+            let outcome = loop {
+                let mut ignored = CommitOutcome::Done;
+                let mut message = [0 as std::ffi::c_char; 1024];
+                let code = context::commit_path(
+                    context,
+                    &bytes,
+                    &settings,
+                    CommitPath::FullOnly,
+                    &mut ignored,
+                    &mut message,
+                );
+                match l0_result(code, &message) {
+                    Err(e) if e.status == Status::Busy => {
+                        std::thread::sleep(Duration::from_micros(200))
+                    }
+                    result => break result,
+                }
+            };
+            let _ = send.send(outcome);
+        })
+        .map_err(|e| error(Status::Error, format!("Starting scene preparation: {e}")))?;
+    render.job = None;
+    render.pending = Some(Pending {
+        key: key.clone(),
+        result,
+        thread: Some(thread),
+    });
+    events.push(EngineEvent::Progress {
+        stage: ProgressStage::Preparation,
+        progress: 0.,
+    });
+    Ok(Step::Waiting)
+}
+
+enum Poll {
+    Idle,
+    Running,
+    /// Completed samples of an uncancelled batch.
+    Completed(u32, f64),
+}
+/// Observes the in-flight batch without waiting for the GPU.
+fn poll_job(render: &mut RenderState) -> Result<Poll> {
+    let Some(flight) = render.job.as_ref() else {
+        return Ok(Poll::Idle);
+    };
+    let job = flight.job;
+    let budget = flight.count.min(MAX_BATCH);
+    match l0(|e, n| unsafe { context::mt_job_poll(job, budget, e, n) }) {
+        Ok(()) => {}
+        Err(e) if e.status == Status::Busy => return Ok(Poll::Running),
+        // A publication replaced the job.
+        Err(e) if e.status == Status::InvalidHandle && flight.cancelled => {
+            render.job = None;
+            return Ok(Poll::Idle);
+        }
+        Err(e) => {
+            render.job = None;
+            return Err(e);
+        }
+    }
+    let mut info = context::JobInfo {
+        struct_size: std::mem::size_of::<context::JobInfo>() as u32,
+        state: 0,
+        requested_samples: 0,
+        submitted_samples: 0,
+        completed_samples: 0,
+        base_samples: 0,
+    };
+    match l0(|e, n| unsafe { context::mt_job_info(job, &mut info, e, n) }) {
+        Ok(()) => {}
+        Err(e) if e.status == Status::Busy => return Ok(Poll::Running),
+        Err(e) => {
+            render.job = None;
+            return Err(e);
+        }
+    }
+    match info.state {
+        2 | 3 => {
+            let flight = render.job.take().unwrap();
+            if flight.cancelled || info.state == 3 {
+                return Ok(Poll::Idle);
+            }
+            Ok(Poll::Completed(
+                info.completed_samples,
+                flight.started.elapsed().as_secs_f64() * 1e3,
+            ))
+        }
+        4 => {
+            render.job = None;
+            Err(error(Status::ContextFailed, "Native render job failed"))
+        }
+        _ => Ok(Poll::Running),
+    }
+}
+/// Waits for the in-flight batch, if any.
+fn drain(render: &mut RenderState) -> Result<Vec<SampleEvent>> {
+    let mut events = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while render.job.is_some() {
+        if let Some(event) = observe(render)? {
+            events.push(event);
+        }
+        if render.job.is_some() {
+            if Instant::now() > deadline {
+                return Err(error(Status::Timeout, "Render batch did not complete"));
+            }
+            std::thread::sleep(Duration::from_micros(100));
+        }
+    }
+    Ok(events)
+}
+/// Polls the batch and accounts completed samples.
+fn observe(render: &mut RenderState) -> Result<Option<SampleEvent>> {
+    match poll_job(render)? {
+        Poll::Completed(count, elapsed) => {
+            render.samples += count;
+            render.sample_ms = Some(elapsed / count.max(1) as f64);
+            render.needs_capture = true;
+            let event = SampleEvent {
+                samples: render.samples,
+                is_first_frame: render.first_frame,
+                frame_time_ms: elapsed,
+            };
+            render.first_frame = false;
+            Ok(Some(event))
+        }
+        _ => Ok(None),
+    }
+}
+fn capture(render: &mut RenderState) -> Result<bool> {
+    if !render.needs_capture {
+        return Ok(true);
+    }
+    match context::capture_display(render.context, &mut render.capture) {
+        Ok(true) => {
+            render.needs_capture = false;
+            render.capture_key = render.published.clone();
+            render.captured = render.samples;
+            Ok(true)
+        }
+        Ok(false) => Ok(false),
+        Err(message) => Err(error(Status::Error, message)),
+    }
+}
+fn submit(render: &mut RenderState, count: u32) -> Result<()> {
+    let mut job = 0;
+    let context = render.context;
+    match l0(|e, n| unsafe { context::mt_context_submit(context, count, &mut job, e, n) }) {
+        Ok(()) => {}
+        Err(e) if e.status == Status::Busy => return Ok(()),
+        Err(e) => return Err(e),
+    }
+    render.job = Some(Flight {
+        job,
+        count,
+        started: Instant::now(),
+        cancelled: false,
+    });
+    // Dispatch now; a busy registry dispatches at the next poll instead.
+    match l0(|e, n| unsafe { context::mt_job_poll(job, count.min(MAX_BATCH), e, n) }) {
+        Err(e) if e.status != Status::Busy => {
+            render.job = None;
+            Err(e)
+        }
+        _ => Ok(()),
+    }
+}
+fn batch_size(render: &RenderState, remaining: u32) -> u32 {
+    let count = match (
+        render.settings.allow_multiple_samples_per_frame,
+        render.sample_ms,
+    ) {
+        (true, Some(ms)) if ms > 0. => {
+            ((render.settings.time_budget_ms / ms).floor() as u32).clamp(1, MAX_BATCH)
+        }
+        _ => 1,
+    };
+    count.min(remaining).max(1)
+}
+/// Advances one render by at most one batch toward `limit` without blocking.
+fn advance(state: &mut State, id: u64, limit: u32) -> Result<()> {
+    let render = state.renders.get_mut(&id).unwrap();
+    if let Some(event) = observe(render)? {
+        state.sample_events.push((id, event));
+    }
+    let render = state.renders.get_mut(&id).unwrap();
+    if render.job.is_some() || !capture(render)? {
+        return Ok(());
+    }
+    if render.samples < limit {
+        let count = batch_size(render, limit - render.samples);
+        submit(render, count)?;
+    }
+    Ok(())
+}
+fn read_l0(context: u64, kind: u32) -> Result<Vec<f32>> {
+    let mut size = 0;
+    l0_blocking(|e, n| unsafe {
+        context::mt_context_read_pixels(context, kind, std::ptr::null_mut(), 0, &mut size, e, n)
+    })?;
+    let mut bytes = vec![0u8; size];
+    l0_blocking(|e, n| unsafe {
+        context::mt_context_read_pixels(
+            context,
+            kind,
+            bytes.as_mut_ptr(),
+            bytes.len(),
+            &mut size,
+            e,
+            n,
+        )
+    })?;
+    Ok(bytes
+        .chunks_exact(4)
+        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+        .collect())
+}
+fn context_size(context: u64) -> Result<[u32; 2]> {
+    let mut info = context::ContextInfo {
+        struct_size: std::mem::size_of::<context::ContextInfo>() as u32,
+        width: 0,
+        height: 0,
+        samples: 0,
+        state: 0,
+        last_commit: 0,
+    };
+    l0_blocking(|e, n| unsafe { context::mt_context_info(context, &mut info, e, n) })?;
+    Ok([info.width, info.height])
+}
+/// L0 images are bottom row first; L1 images are top row first.
+pub(super) fn flip_rows(data: &[f32], width: u32, height: u32) -> Vec<f32> {
+    let row = width as usize * 4;
+    (0..height as usize)
+        .rev()
+        .flat_map(|y| data[y * row..(y + 1) * row].iter().copied())
+        .collect()
+}
+/// Starts or collects converged OIDN filtering.
+fn denoise(state: &mut State, id: u64) -> Result<()> {
+    let render = state.renders.get_mut(&id).unwrap();
+    let Some(options) = render.denoise.options.clone() else {
+        return Ok(());
+    };
+    if let Some((samples, worker)) = &render.denoise.worker {
+        let samples = *samples;
+        match worker.try_recv() {
+            Err(mpsc::TryRecvError::Empty) => return Ok(()),
+            Ok(Ok(pixels)) => {
+                render.denoise.worker = None;
+                if let Some(capture) = render.capture.as_mut() {
+                    capture
+                        .upload(&pixels)
+                        .map_err(|e| error(Status::Error, e.to_string()))?;
+                }
+                render.denoise.denoised = Some((samples, pixels));
+                return Ok(());
+            }
+            Ok(Err(message)) => {
+                render.denoise.worker = None;
+                render.denoise.failed = true;
+                state.report(message);
+                return Ok(());
+            }
+            Err(mpsc::TryRecvError::Disconnected) => {
+                render.denoise.worker = None;
+                render.denoise.failed = true;
+                state.report("Denoising thread stopped".into());
+                return Ok(());
+            }
+        }
+    }
+    if render.denoise.failed
+        || render.samples < render.settings.max_samples
+        || render.job.is_some()
+        || render.needs_capture
+        || render.denoise.denoised.as_ref().map(|d| d.0) == Some(render.samples)
+    {
+        return Ok(());
+    }
+    let (size, color, normal, albedo) = denoise_inputs(render.context)?;
+    let filter = render.denoise.filter.clone();
+    let (send, receive) = mpsc::channel();
+    std::thread::Builder::new()
+        .name("MuTracer OIDN".into())
+        .spawn(move || {
+            let _ = send.send(run_oidn(&filter, &options, size, &color, &normal, &albedo));
+        })
+        .map_err(|e| error(Status::Error, format!("Starting denoising: {e}")))?;
+    render.denoise.worker = Some((render.samples, receive));
+    Ok(())
+}
+type DenoiseInputs = ([u32; 2], Vec<f32>, Vec<f32>, Vec<f32>);
+fn denoise_inputs(context: u64) -> Result<DenoiseInputs> {
+    Ok((
+        context_size(context)?,
+        read_l0(context, 0)?,
+        read_l0(context, 1)?,
+        read_l0(context, 2)?,
+    ))
+}
+fn run_oidn(
+    filter: &Mutex<Option<crate::denoise::Denoiser>>,
+    options: &DenoiserOptions,
+    size: [u32; 2],
+    color: &[f32],
+    normal: &[f32],
+    albedo: &[f32],
+) -> DenoiseResult {
+    let mut filter = filter.lock().unwrap_or_else(|e| e.into_inner());
+    if filter.is_none() {
+        let created = match &options.library {
+            Some(path) => crate::denoise::Denoiser::from_library(path, options.backend),
+            None => crate::denoise::Denoiser::with_backend(options.backend),
+        };
+        *filter = Some(created.map_err(|e| format!("{e:#}"))?);
+    }
+    filter
+        .as_mut()
+        .unwrap()
+        .run(size, color, normal, albedo)
+        .map_err(|e| format!("{e:#}"))
+}
+
+/// One independently configured image and its accumulation, owned by an engine.
+/// Dropping a render releases it.
+pub struct Render {
+    engine: Engine,
+    id: u64,
+}
+impl Render {
+    pub fn new(engine: &Engine, settings: RenderSettings) -> Result<Self> {
+        settings.validate()?;
+        let mut state = engine.live()?;
+        let context =
+            context::create_with_gpu(engine.inner.gpu.clone(), engine.inner.backend.code())
+                .map_err(|e| error(Status::Unavailable, e))?;
+        let id = state.next_render;
+        state.next_render += 1;
+        state.renders.insert(
+            id,
+            RenderState {
+                settings,
+                fallback: None,
+                context,
+                published: None,
+                pending: None,
+                failed: None,
+                job: None,
+                samples: 0,
+                first_frame: true,
+                sample_ms: None,
+                capture: None,
+                capture_key: None,
+                captured: 0,
+                needs_capture: false,
+                status: RenderStatus::Preparing,
+                error: false,
+                busy: false,
+                denoise: Denoise::default(),
+            },
+        );
+        Ok(Self {
+            engine: engine.clone(),
+            id,
+        })
+    }
+    pub(super) fn id(&self) -> u64 {
+        self.id
+    }
+    pub(super) fn engine(&self) -> &Engine {
+        &self.engine
+    }
+    fn with<T>(&self, f: impl FnOnce(&mut State, u64) -> Result<T>) -> Result<T> {
+        let result = {
+            let mut state = self.engine.live()?;
+            if !state.renders.contains_key(&self.id) {
+                return Err(error(Status::InvalidHandle, "Render is disposed"));
+            }
+            f(&mut state, self.id)
+        };
+        self.engine.flush();
+        result
+    }
+    fn get<T>(&self, f: impl FnOnce(&State, &RenderState) -> T) -> Option<T> {
+        let state = self.engine.lock();
+        state.renders.get(&self.id).map(|r| f(&state, r))
+    }
+    pub fn settings(&self) -> Result<RenderSettings> {
+        self.with(|state, id| Ok(state.renders[&id].settings.clone()))
+    }
+    /// Validated, then applied at the next refine or engine update.
+    pub fn set_settings(&self, settings: RenderSettings) -> Result<()> {
+        settings.validate()?;
+        self.with(|state, id| {
+            state.renders.get_mut(&id).unwrap().settings = settings;
+            Ok(())
+        })
+    }
+    /// Single-level fallback presented until this render has a complete image.
+    /// It must belong to the same engine and have no fallback of its own. Default none.
+    pub fn set_fallback(&self, fallback: Option<&Render>) -> Result<()> {
+        if let Some(fallback) = fallback {
+            if !Arc::ptr_eq(&fallback.engine.inner, &self.engine.inner) || fallback.id == self.id {
+                return Err(error(
+                    Status::InvalidArgument,
+                    "Fallback must be another render on the same engine",
+                ));
+            }
+        }
+        self.with(|state, id| {
+            if let Some(fallback) = fallback {
+                let target = state
+                    .renders
+                    .get(&fallback.id)
+                    .ok_or_else(|| error(Status::InvalidHandle, "Fallback render is disposed"))?;
+                if target.fallback.is_some() {
+                    return Err(error(
+                        Status::InvalidArgument,
+                        "A fallback render cannot have its own fallback",
+                    ));
+                }
+                if state.renders.values().any(|r| r.fallback == Some(id)) {
+                    return Err(error(
+                        Status::InvalidArgument,
+                        "Fallback renders cannot have their own fallback",
+                    ));
+                }
+            }
+            state.renders.get_mut(&id).unwrap().fallback = fallback.map(|f| f.id);
+            Ok(())
+        })
+    }
+    /// Replaces the denoiser; `None` disables denoising. Default none.
+    /// Only [`DenoiseSchedule::Converged`] is supported.
+    pub fn set_denoiser(&self, options: Option<DenoiserOptions>) -> Result<()> {
+        if let Some(options) = &options {
+            if options.schedule != DenoiseSchedule::Converged {
+                return Err(error(
+                    Status::InvalidArgument,
+                    "Only the converged denoise schedule is supported",
+                ));
+            }
+            if options.backend > 4 {
+                return Err(error(Status::InvalidArgument, "Unknown OIDN backend"));
+            }
+        }
+        self.with(|state, id| {
+            let render = state.renders.get_mut(&id).unwrap();
+            if render.denoise.options == options {
+                return Ok(());
+            }
+            cancel_denoise(render);
+            render.denoise = Denoise {
+                options,
+                ..Default::default()
+            };
+            Ok(())
+        })
+    }
+    /// Advances this render within its frame budget without waiting for the GPU:
+    /// collects the finished batch, submits the next one and starts denoising when
+    /// converged. Render failures return `Ok(RenderStatus::Error)` and an engine error event.
+    pub fn refine(&self) -> Result<RenderStatus> {
+        self.with(|state, id| {
+            if state.renders[&id].busy {
+                return Err(error(
+                    Status::InvalidState,
+                    "Cannot refine a render while converge is running",
+                ));
+            }
+            match refine(state, id) {
+                Ok(status) => Ok(status),
+                Err(e) => {
+                    let render = state.renders.get_mut(&id).unwrap();
+                    render.error = true;
+                    render.status = RenderStatus::Error;
+                    state.report(e.message);
+                    Ok(RenderStatus::Error)
+                }
+            }
+        })
+    }
+    /// Renders exactly `options.samples` samples, blocking until they complete.
+    /// The engine lock is released between batches, so the progress callback may
+    /// use the API; refine on this render is rejected meanwhile.
+    pub fn converge(&self, mut options: ConvergeOptions) -> Result<ConvergeResult> {
+        if !(1..=MAX_TOTAL_SAMPLES).contains(&options.samples) {
+            return Err(error(Status::InvalidArgument, "samples must be 1..4096"));
+        }
+        let started = Instant::now();
+        let timeout = Duration::from_millis(options.timeout_ms.max(1));
+        let batch = options.samples_per_batch.clamp(1, MAX_BATCH);
+        let key = self.with(|state, id| {
+            if state.renders[&id].busy {
+                return Err(error(Status::InvalidState, "Converge is already running"));
+            }
+            let mut key = desired(state, &state.renders[&id]).ok_or_else(|| {
+                error(
+                    Status::InvalidState,
+                    "Commit a scene with engine.update() before converge",
+                )
+            })?;
+            let render = state.renders.get_mut(&id).unwrap();
+            render.busy = true;
+            cancel_denoise(render);
+            key.settings = render
+                .settings
+                .l0(options.samples, options.sample_sequence_offset);
+            key.camera_override = options.camera.map(|c| c.to_bytes());
+            Ok(key)
+        })?;
+        let result = self.run_converge(&mut options, key, started, timeout, batch);
+        let _ = self.with(|state, id| {
+            let render = state.renders.get_mut(&id).unwrap();
+            render.busy = false;
+            match &result {
+                Ok(_) => render.status = RenderStatus::Finished,
+                Err(_) => render.status = RenderStatus::Error,
+            }
+            Ok(())
+        });
+        result
+    }
+    fn run_converge(
+        &self,
+        options: &mut ConvergeOptions,
+        key: TargetKey,
+        started: Instant,
+        timeout: Duration,
+        batch: u32,
+    ) -> Result<ConvergeResult> {
+        let target = options.samples;
+        let cancel = options.cancel.clone();
+        let check = |state: &State| -> Result<()> {
+            if cancel.as_ref().is_some_and(|c| c.is_cancelled()) {
+                return Err(error(Status::Cancelled, "Convergence cancelled"));
+            }
+            if started.elapsed() > timeout {
+                return Err(error(Status::Timeout, "Timed out rendering convergence"));
+            }
+            if state.scene_revision != key.scene || state.camera_revision != key.camera {
+                return Err(error(
+                    Status::InvalidState,
+                    "Engine inputs changed during converge",
+                ));
+            }
+            Ok(())
+        };
+        // Commit (blocking through full preparation), then restart the accumulation.
+        self.with(|state, id| {
+            check(state)?;
+            let render = state.renders.get_mut(&id).unwrap();
+            if let Some(flight) = render.job.as_mut() {
+                flight.cancelled = true;
+            }
+            drain(render)?;
+            let was_published = render.published.as_ref() == Some(&key);
+            if !commit(state, id, key.clone(), true)? {
+                let render = &state.renders[&id];
+                let message = render.failed.as_ref().map(|f| f.1.clone());
+                return Err(error(
+                    Status::Error,
+                    message.unwrap_or_else(|| "Scene commit failed".into()),
+                ));
+            }
+            let render = state.renders.get_mut(&id).unwrap();
+            if was_published {
+                let context = render.context;
+                l0_blocking(|e, n| unsafe { context::mt_context_reset(context, e, n) })?;
+                render.publish(key.clone(), false);
+            }
+            Ok(())
+        })?;
+        let mut reported = 0;
+        loop {
+            let (samples, done) = self.with(|state, id| {
+                check(state)?;
+                let render = state.renders.get_mut(&id).unwrap();
+                if let Some(event) = observe(render)? {
+                    state.sample_events.push((id, event));
+                }
+                let render = state.renders.get_mut(&id).unwrap();
+                if render.job.is_none() && render.samples < target {
+                    let count = batch.min(target - render.samples);
+                    submit(render, count)?;
+                }
+                Ok((render.samples, render.samples >= target))
+            })?;
+            if samples != reported {
+                reported = samples;
+                if let Some(progress) = options.on_progress.as_mut() {
+                    progress(ConvergeProgress {
+                        stage: ConvergeStage::Final,
+                        samples,
+                        target_samples: target,
+                    });
+                }
+            }
+            if done {
+                break;
+            }
+            std::thread::sleep(Duration::from_micros(100));
+        }
+        loop {
+            let captured = self.with(|state, id| {
+                check(state)?;
+                capture(state.renders.get_mut(&id).unwrap())
+            })?;
+            if captured {
+                break;
+            }
+            std::thread::sleep(Duration::from_micros(200));
+        }
+        let denoise = self.with(|state, id| {
+            let render = &state.renders[&id];
+            Ok(render.denoise.options.clone().map(|denoiser| {
+                (
+                    denoiser,
+                    render.denoise.filter.clone(),
+                    render.context,
+                    render.samples,
+                )
+            }))
+        })?;
+        if let Some((denoiser, filter, context, samples)) = denoise {
+            if let Some(progress) = options.on_progress.as_mut() {
+                progress(ConvergeProgress {
+                    stage: ConvergeStage::Denoising,
+                    samples,
+                    target_samples: target,
+                });
+            }
+            let (size, color, normal, albedo) = denoise_inputs(context)?;
+            let pixels = run_oidn(&filter, &denoiser, size, &color, &normal, &albedo)
+                .map_err(|message| error(Status::Error, message))?;
+            self.with(|state, id| {
+                check(state)?;
+                let render = state.renders.get_mut(&id).unwrap();
+                if let Some(capture) = render.capture.as_mut() {
+                    capture
+                        .upload(&pixels)
+                        .map_err(|e| error(Status::Error, e.to_string()))?;
+                }
+                render.denoise.denoised = Some((samples, pixels));
+                Ok(())
+            })?;
+        }
+        Ok(ConvergeResult { samples: target })
+    }
+    /// Waits for the in-flight batch, then reads this render's linear RGBA f32
+    /// image, top row first. During preparation it reads the previous image.
+    pub fn read_pixels(&self, kind: PixelKind) -> Result<Image> {
+        self.with(|state, id| {
+            let render = state.renders.get_mut(&id).unwrap();
+            for event in drain(render)? {
+                state.sample_events.push((id, event));
+            }
+            let render = &state.renders[&id];
+            if kind == PixelKind::Denoised {
+                if let Some((samples, pixels)) = &render.denoise.denoised {
+                    if *samples == render.samples {
+                        let [width, height] = context_size(render.context)?;
+                        return Ok(Image {
+                            width,
+                            height,
+                            data: flip_rows(pixels, width, height),
+                        });
+                    }
+                }
+            }
+            let code = match kind {
+                PixelKind::Hdr | PixelKind::Denoised => 0,
+                PixelKind::Normal => 1,
+                PixelKind::Albedo => 2,
+            };
+            let [width, height] = context_size(render.context)?;
+            let data = read_l0(render.context, code)?;
+            Ok(Image {
+                width,
+                height,
+                data: flip_rows(&data, width, height),
+            })
+        })
+    }
+    /// Discards only this render's accumulation and denoised image.
+    pub fn restart(&self) -> Result<()> {
+        self.with(|state, id| {
+            let render = state.renders.get_mut(&id).unwrap();
+            if let Some(flight) = render.job.as_mut() {
+                flight.cancelled = true;
+                let job = flight.job;
+                let _ = l0(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
+            }
+            drain(render)?;
+            if render.published.is_some() && render.pending.is_none() {
+                let context = render.context;
+                l0_blocking(|e, n| unsafe { context::mt_context_reset(context, e, n) })?;
+                let key = render.published.clone().unwrap();
+                render.publish(key, false);
+                render.capture_key = None;
+            }
+            Ok(())
+        })
+    }
+    /// Complete samples of the current inputs; 0 while preparing or stale.
+    pub fn samples(&self) -> u32 {
+        self.get(|state, r| {
+            if r.current(state.scene_revision, state.camera_revision) {
+                r.samples
+            } else {
+                0
+            }
+        })
+        .unwrap_or(0)
+    }
+    pub fn status(&self) -> RenderStatus {
+        self.get(|state, r| {
+            if r.error {
+                RenderStatus::Error
+            } else if !r.current(state.scene_revision, state.camera_revision) {
+                RenderStatus::Preparing
+            } else {
+                r.status
+            }
+        })
+        .unwrap_or(RenderStatus::Error)
+    }
+    /// Actual width of the published image, else the requested width.
+    pub fn width(&self) -> u32 {
+        self.size()[0]
+    }
+    pub fn height(&self) -> u32 {
+        self.size()[1]
+    }
+    fn size(&self) -> [u32; 2] {
+        self.get(|state, r| {
+            r.published
+                .as_ref()
+                .map(|k| k.size)
+                .unwrap_or_else(|| r.settings.resolve_size(state.display.size))
+        })
+        .unwrap_or([0, 0])
+    }
+    pub fn converged(&self) -> bool {
+        self.get(|state, r| {
+            r.current(state.scene_revision, state.camera_revision)
+                && r.samples >= r.settings.max_samples
+        })
+        .unwrap_or(false)
+    }
+    /// Whether OIDN is running on this render's samples.
+    pub fn denoising(&self) -> bool {
+        self.get(|_, r| r.denoise.worker.is_some()).unwrap_or(false)
+    }
+    /// Subscribes to completed batches of this render.
+    pub fn on_sample(&self, listener: impl FnMut(&SampleEvent) + Send + 'static) -> Subscription {
+        self.engine.on_sample(self.id, listener)
+    }
+}
+impl Drop for Render {
+    fn drop(&mut self) {
+        let removed = {
+            let mut state = self.engine.lock();
+            for render in state.renders.values_mut() {
+                if render.fallback == Some(self.id) {
+                    render.fallback = None;
+                }
+            }
+            state.renders.remove(&self.id)
+        };
+        if let Some(render) = removed {
+            render.release();
+        }
+    }
+}
+
+fn refine(state: &mut State, id: u64) -> Result<RenderStatus> {
+    let Some(key) = desired(state, &state.renders[&id]) else {
+        state.renders.get_mut(&id).unwrap().status = RenderStatus::Preparing;
+        return Ok(RenderStatus::Preparing);
+    };
+    let ready = commit(state, id, key, false)?;
+    // The fallback is refined while this render has no complete sample, including
+    // while this render prepares.
+    let render = &state.renders[&id];
+    let can_complete = ready
+        && render
+            .sample_ms
+            .is_some_and(|ms| ms <= render.settings.time_budget_ms);
+    if let Some(fallback) = render.fallback {
+        if (!ready || render.samples == 0)
+            && !can_complete
+            && !readiness(state, fallback).complete
+            && !state.renders[&fallback].busy
+        {
+            // A fallback failure is reported but never stops the primary render.
+            if let Err(e) = refine_one(state, fallback) {
+                state.renders.get_mut(&fallback).unwrap().error = true;
+                state.report(e.message);
+            }
+        }
+    }
+    if !ready {
+        let render = &state.renders[&id];
+        return Ok(if render.error {
+            RenderStatus::Error
+        } else {
+            RenderStatus::Preparing
+        });
+    }
+    denoise(state, id)?;
+    if state.renders[&id].denoise.worker.is_none() {
+        let limit = state.renders[&id].settings.max_samples;
+        advance(state, id, limit)?;
+        denoise(state, id)?;
+    }
+    let render = state.renders.get_mut(&id).unwrap();
+    let converged = render.samples >= render.settings.max_samples;
+    render.status = match (render.denoise.worker.is_some(), converged) {
+        (true, true) => RenderStatus::Denoising,
+        (false, true) => RenderStatus::Finished,
+        _ => RenderStatus::Converging,
+    };
+    Ok(render.status)
+}
+/// One sample of a fallback render.
+fn refine_one(state: &mut State, id: u64) -> Result<()> {
+    let Some(key) = desired(state, &state.renders[&id]) else {
+        return Ok(());
+    };
+    if commit(state, id, key, false)? {
+        advance(state, id, 1)?;
+    }
+    Ok(())
+}

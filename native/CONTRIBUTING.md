@@ -176,6 +176,14 @@ rollback and continued rendering of the previous scene. Use ThreadSanitizer and
 state which Rust/C++ dependencies it instruments; AOT, Metal and OIDN are outside
 that coverage.
 
+The Rust `api` module (Engine/Render/Display) gives each render its own L0 context
+and commits through the crate-internal `CommitPath`: incremental on the calling
+thread, full preparation on a library thread. Its tests compare every render's
+HDR/normal/albedo with a fresh L0 context given the same overridden descriptor,
+settings and sample count, byte for byte on Software. The HWRT variant is
+`--ignored` while the Metal HWRT miss is open; with `MUTRACER_OIDN_LIBRARY` set,
+converged OIDN is compared with direct CPU filtering of the same inputs.
+
 The staged TS adapters reuse the original camera math, material repacking,
 environment distributions, light PMFs and emissive caches. Acknowledge candidate
 state only after layout validation and GPU upload/reset. Transform and vertex
