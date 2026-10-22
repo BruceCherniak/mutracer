@@ -78,23 +78,42 @@ the output directory. See the [native guide](../README.md) for platform backends
   affects the selected object; objects sharing its geometry move independently.
 - The **Material** panel provides **Base**, **Transmission**, **Coat**,
   **Subsurface**, **Fuzz**, **Thin film**, **Emission** and **Advanced** groups.
-  Click a thumbnail to apply White model, Metal, Glass, Car paint, Velvet, Skin,
-  Plastic or Bubble. Presets turn off layers they do not use. Inactive layers
+  Choose **Basic**, **Metal**, **Glass** or **Soft**, then click a thumbnail to
+  apply one of the same 32 presets as the web viewer. Presets keep textures and
+  displacement settings and turn off layers they do not use. Inactive layers
   start collapsed; open a heading to edit their parameters.
   Edits affect every object sharing that material. **Opacity** applies in Auto,
-  Mask or Blend alpha mode; normal scale requires an imported normal map.
+  Mask or Blend alpha mode; normal scale requires a normal map.
   Picking and autofocus can target transparent or cutout surfaces ahead of
-  objects behind them. Imported base-color, normal, metallic/roughness and
-  emissive maps remain active.
+  objects behind them.
 - Choose **Lighting**, **Material**, **Camera**, **Render** or **Object** on the
   right rail. Click the active category to hide the inspector; **[** and **]**
   toggle the scene list and inspector. Click section headings to collapse their
   settings. Narrow windows hide the scene list to preserve viewport space.
-- Under **Material → Textures**, expand an imported texture to change **Wrap S**
-  and **Wrap T** independently: Repeat, Clamp to edge or Mirrored repeat.
-  **Repeat S/T** are numeric fields; negative values flip an axis and zero samples
-  a constant coordinate. Sampling edits affect that slot of the selected material
-  and restart rendering. Other materials and slots keep their sampling settings.
+- Under **Material → Textures**, click a swatch or drop a PNG, JPEG or WebP image
+  onto a slot to upload or replace it; **×** removes it. Slots match the web viewer:
+  base color, combined metal/rough, separate roughness and metalness, normal,
+  displacement, emission, transmission and thin film. Channel hints and actual
+  image dimensions appear beside each slot. Replacement keeps that slot's UV
+  settings, or inherits the base-color map's settings when the slot is empty.
+  Expand **Wrap & repeat** to set **Wrap S/T** independently to Repeat, Clamp to
+  edge or Mirrored repeat. Negative **Repeat S/T** values flip an axis; zero
+  samples a constant coordinate. Edits affect the selected material and restart
+  rendering; materials sharing it change together.
+- **Browse Poly Haven textures** opens a searchable CC0 catalog with category
+  filters and 1K/2K/4K downloads (roughly 3/12/45 MB per set). Clicking a set
+  downloads it in the background and replaces color, normal and roughness/metalness
+  maps, resetting other material layers. **Download displacement map** is off by
+  default; leaving it off clears the previous displacement map. A new pick cancels
+  the previous request. A set applies after all maps finish; a failed or cancelled
+  download keeps the previous textures. Closing the browser lets the download
+  finish on its original material; opening another model cancels it.
+- **Displacement** uses `texture × Scale + Bias` in mesh-local units and works on
+  both native ray-tracing backends. **Step size** 0 selects an automatic step;
+  smaller positive values take longer to render. Choose UV, Triplanar, Spherical
+  or Cylindrical projection; meshes without UVs automatically use Triplanar for
+  a newly uploaded displacement map. A displacement map is required, and edits
+  can increase scene preparation and render time.
 - **Lighting** switches between Environment and Studio. Environment provides
   intensity, tint and rotation; **Load HDR…** opens a local Radiance
   equirectangular map, and **Built-in** restores the built-in map. Switching to
@@ -166,13 +185,17 @@ quantized geometry, WebP textures, mesh instancing, the initial static pose of s
 morph weights are supported. Scalar transmission/IOR, unlit materials and emissive
 strength are also supported.
 
-Material textures are limited to 512 pixels on their longest side; models with
-many images use a lower limit to fit the texture budget. Textures use
-repeat, clamp-to-edge or mirrored-repeat wrapping on each axis, filtering and
-offset/scale UV transforms; texture rotation and imported normal-map UV transforms
-are unsupported. Vertex-color alpha, occlusion and transmission textures are
-ignored. Unsupported optional extensions are reported in the panel;
-unsupported required extensions return an error.
+Imported model textures are limited to 512 pixels on their longest side; models
+with many images use a lower limit. Uploaded and downloaded textures can reach
+4096 pixels per side and shrink as needed to share a 12M-pixel material budget.
+Download resolution controls transfer size; the displayed slot dimensions show
+what is actually used. Displacement images are resized to a square power of two.
+Textures use repeat, clamp-to-edge or mirrored-repeat wrapping on each axis,
+filtering and offset/scale UV transforms. Texture rotation and imported normal-map
+UV transforms are unsupported. Imported vertex-color alpha, occlusion and transmission textures
+are ignored. Transmission maps can be assigned manually in **Textures**.
+Unsupported optional extensions are reported in the panel; unsupported required
+extensions return an error.
 Animations are not played. Sparse quantized attributes are unsupported.
 Draco and Basis/KTX2 assets need conversion before loading. This is a
 static sample viewer, not full glTF feature coverage.

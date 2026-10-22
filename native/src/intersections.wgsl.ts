@@ -60,7 +60,7 @@ ${diagnostic ? `    mtCandidateCount++;
     if (instance == mtWantedInstance && record == mtWantedRecord) { mtWantedSeen++; }` : ''}
     if (!shadow && record == skipRecord) { continue; }
     let index = mtIndices(instance, record);
-    let tri = mtTriangle(index);
+    var tri = mtTriangle(index);
     let w2l = mtWorldToLocal(instance);
     let o = (w2l * vec4f(ray.o, 1.0)).xyz;
     let d = (w2l * vec4f(ray.d, 0.0)).xyz;
@@ -72,19 +72,24 @@ ${diagnostic ? `    mtCandidateCount++;
     let materialIndex = i32(unpackMaterialIndex(bitcast<i32>(insData.z)).x);
     if (candidate.kind == RAY_QUERY_INTERSECTION_AABB) {
 ${features.hasDisplacement ? /* wgsl */ `
+      let matData = materialsBuffer[materialIndex];
+      let n0 = normalize(attrBuffers[index.x * ATTR_STRIDE + NORMAL_OFF]${vector});
+      let n1 = normalize(attrBuffers[index.y * ATTR_STRIDE + NORMAL_OFF]${vector});
+      let n2 = normalize(attrBuffers[index.z * ATTR_STRIDE + NORMAL_OFF]${vector});
+      tri.p0 += n0 * matData.displacementBias;
+      tri.p1 += n1 * matData.displacementBias;
+      tri.p2 += n2 * matData.displacementBias;
+      normal = normalize(cross(tri.p1 - tri.p0, tri.p2 - tri.p0));
       let minMaxH = bitcast<i32>(bvhBuffer[record].w);
       if (abs(insData.w) > 0.0 && minMaxH > 0) {
-        let matData = materialsBuffer[materialIndex];
         let map = i32(matData.displacementMapIndex);
         let hit = intersectDisplacement(o, d, generated.t, tri.p0, tri.p1, tri.p2,
-          normalize(attrBuffers[index.x * ATTR_STRIDE + NORMAL_OFF]${vector}),
-          normalize(attrBuffers[index.y * ATTR_STRIDE + NORMAL_OFF]${vector}),
-          normalize(attrBuffers[index.z * ATTR_STRIDE + NORMAL_OFF]${vector}),
+          n0, n1, n2,
           attrBuffers[index.x * ATTR_STRIDE + UV_OFF].xy,
           attrBuffers[index.y * ATTR_STRIDE + UV_OFF].xy,
           attrBuffers[index.z * ATTR_STRIDE + UV_OFF].xy,
           map, getMapSize(map), f32(minMaxH >> 8) / 255.0, f32(minMaxH & 255) / 255.0,
-          insData.w, matData.displacementStepSize, i32(matData.displacementUvProjection),
+          insData.w, matData.displacementBias, matData.displacementStepSize, i32(matData.displacementUvProjection),
           vec2f(matData.displacementUvProjectionScale), shadow, isRefractionRay);
         t = hit.t; barycentric = hit.barycentric; normal = hit.normal; micro = true;
       } else {

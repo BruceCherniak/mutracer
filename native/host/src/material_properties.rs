@@ -77,4 +77,5 @@ pub(super) const MATERIAL_PROPERTIES: &[(u8, u8)] = &[
     (4, 2), // 73: specularAnisotropyModel
     (5, 0), // 74: coatNormalMap
     (2, 0), // 75: coatNormalScale
+    (0, 0), // 76: displacementBias
 ];

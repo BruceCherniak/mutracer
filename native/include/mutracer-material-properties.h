@@ -82,5 +82,6 @@ enum mt_material_property {
   MT_MAT_SPECULAR_ANISOTROPY_MODEL = 73, /* enum: 0=openpbr, 1=gltf */
   MT_MAT_COAT_NORMAL_MAP = 74, /* texture */
   MT_MAT_COAT_NORMAL_SCALE = 75, /* vec2 */
+  MT_MAT_DISPLACEMENT_BIAS = 76, /* float */
 };
 #endif

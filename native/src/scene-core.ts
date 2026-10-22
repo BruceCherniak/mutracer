@@ -6,7 +6,7 @@ import {matrixStorage} from '../../src/math/storage.js';
 import {initialSceneConstants, sceneAttributeLayout, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, writeTraceSampling} from '../../src/renderer/sceneAssembly.js';
 import {defaultSceneConfiguration, decodeSceneConfiguration} from './scene-configuration.js';
 import {nativeShaderVariant} from './shader-variants.js';
-import {displacementPrismAabbs} from '../../src/renderer/displacementPreparation.js';
+import {displacementBaseGeometry, displacementPrismAabbs} from '../../src/renderer/displacementPreparation.js';
 import type {GeometryUpdateState} from '../../src/renderer/geometryUpdateState.js';
 import {vec3} from '../../src/math.js';
 import {markDeformedGeometry} from '../../src/scene/geometryChanges.js';
@@ -182,7 +182,7 @@ type DecodedScene = ReturnType<typeof decodeScene>;
 type PreparedScene = ReturnType<typeof prepareSceneMeshes<MeshState>>;
 function buildSceneParameters(bytes: Uint8Array, token = 0): Uint8Array {
   const input = decodeScene(bytes, token), build = prepareSceneSources(input);
-  for (const job of build.jobs) setGeometryBvh(job.geometry, buildBLAS(job.geometry, job.displacementScale, job.ranges));
+  for (const job of build.jobs) setGeometryBvh(job.geometry, buildBLAS(job.bvhGeometry, job.displacementScale, job.ranges));
   const prepared = prepareSceneMeshes(input.meshes, mesh => build.sources.get(mesh)!);
   return composeScene(input, prepared, buildTLAS(prepared.instances, prepared.blases), token);
 }
@@ -235,18 +235,19 @@ function prepareSceneSources(input: {meshes: MeshState[]; textureIds: Map<Textur
   const minmaxCache = new Map<PixelTexture, Uint8Array[]>();
   const projectedGeometry = new Map<Geometry, Map<string, Geometry>>();
   const seen = new Set<Geometry>();
-  const jobs: {geometry: Geometry; displacementScale: number; ranges: Float32Array | undefined}[] = [];
+  const jobs: {geometry: Geometry; bvhGeometry: Geometry; displacementScale: number; displacementBias: number; ranges: Float32Array | undefined}[] = [];
   const sources = new Map<MeshState, {geometry: Geometry; displacementScale: number}>();
   for (const mesh of meshes) {
     if (!mesh.geometry.position.array.length) continue;
     const material = mesh.materials[0];
     const texture = material.displacementMap;
     const displacementScale = texture ? material.displacementScale : 0;
+    const displacementBias = texture ? material.displacementBias : 0;
     let geometry = mesh.geometry;
-    if (texture && material.displacementUvProjection !== 'none' && Math.abs(displacementScale) > 1e-6) {
+    if (texture && (Math.abs(displacementScale) > 1e-6 || displacementBias !== 0)) {
       // Match browser projective-geometry sharing by source, texture and projection values.
       const key = [textureIds.get(texture), Number(texture.flipY), texture.uvScale.join(','), texture.uvOffset.join(','),
-        displacementScale, material.displacementUvProjectionScale, material.displacementUvProjection].join('|');
+        displacementScale, displacementBias, material.displacementUvProjectionScale, material.displacementUvProjection].join('|');
       let entries = projectedGeometry.get(geometry);
       if (!entries) { entries = new Map<string, Geometry>(); projectedGeometry.set(geometry, entries); }
       let copy = entries.get(key);
@@ -270,7 +271,7 @@ function prepareSceneSources(input: {meshes: MeshState[]; textureIds: Map<Textur
         }
         ranges = computeTrianglesDisplacementRange(geometry, minmax, texture.pixels.width, texture.flipY, material);
       }
-      seen.add(geometry); jobs.push({geometry, displacementScale, ranges});
+      seen.add(geometry); jobs.push({geometry, bvhGeometry: displacementBaseGeometry(geometry, displacementBias), displacementScale, displacementBias, ranges});
     }
     sources.set(mesh, {geometry, displacementScale});
   }
@@ -464,7 +465,7 @@ function linearTlas(instances: MeshInstances, bindings: PreparedMeshInstanceBind
 function hardwareScene(prepared: PreparedScene, build: SceneSources): HardwareScene {
   const opaque = hardwareOpaqueGeometryFlags(prepared.materials, prepared.instanceBindings, prepared.geometries.length);
   const count = attributeLength(prepared.geometry.indexArray) / 3;
-  const records = new Uint32Array(build.jobs.some(j => !!j.ranges) ? count * 4 : 0), boxes: number[] = [], geometries: HardwareGeometry[] = [];
+  const records = new Uint32Array(build.jobs.some(j => !!j.ranges || j.displacementBias !== 0) ? count * 4 : 0), boxes: number[] = [], geometries: HardwareGeometry[] = [];
   for (const geometry of prepared.geometries) {
     const region = prepared.geometryRegions.get(geometry)!, indexCount = geometry.indexArray.length;
     // Material-index clones share source positions and displacement ranges.
@@ -472,11 +473,11 @@ function hardwareScene(prepared: PreparedScene, build: SceneSources): HardwareSc
     const source = build.sources.get(binding.mesh)!.geometry;
     const job = build.jobs.find(j => j.geometry === source)!;
     const ranges = job?.ranges;
-    const procedural = !!ranges && Math.abs(job.displacementScale) > 1e-6;
+    const procedural = (!!ranges && Math.abs(job.displacementScale) > 1e-6) || job.displacementBias !== 0;
     geometries.push({opaque: !procedural && opaque[geometries.length], indexOffset: region.indexOffset, indexCount, vertexOffset: region.vertexOffset, vertexCount: geometry.vertexCount,
       procedural, dynamic: geometry.dynamic, boundsOffset: boxes.length / 6});
-    if (!ranges) continue;
-    const prisms = procedural ? displacementPrismAabbs(geometry, job.displacementScale) : undefined;
+    if (!ranges && job.displacementBias === 0) continue;
+    const prisms = procedural ? displacementPrismAabbs(displacementBaseGeometry(geometry, job.displacementBias), job.displacementScale) : undefined;
     for (let t = 0; t < indexCount / 3; t++) {
       const record = region.indexOffset / 3 + t;
       if (ranges) {
@@ -511,7 +512,7 @@ function build_nativeSceneBegin(bytes: Uint8Array, token: number): Uint8Array {
   pendingBuilds.set(token, {input, build, prepared: undefined});
   const records: number[][] = [], parts: Uint8Array[] = [];
   for (let i = 0; i < build.jobs.length; i++) {
-    const job = build.jobs[i], geometry = job.geometry, sourceIndices = geometry.indexArray;
+    const job = build.jobs[i], geometry = job.bvhGeometry, sourceIndices = geometry.indexArray;
     const indices = sourceIndices instanceof Uint32Array ? sourceIndices : new Uint32Array(sourceIndices);
     const positions = new Uint8Array(geometry.position.array.buffer);
     const normals = job.ranges ? new Uint8Array(geometry.normal.array.buffer) : new Uint8Array(0);
@@ -943,6 +944,10 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
   const previous = state.geometries[words[1]], count = words[2], flags = words[3];
   if (!previous || count !== previous.vertexCount || !!(flags & 2) !== !!(previous.tangent && !hasGeneratedVertexTangents(previous)))
     throw new Error('Invalid retained vertex update');
+  for (const binding of state.bindings) if (binding.mesh.geometry === previous) {
+    for (const material of binding.mesh.materials) if (material.displacementMap && material.displacementBias !== 0)
+      return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
+  }
   const geometry = new Geometry(previous);
   geometry.position = new Attribute(values.slice(4, 4 + count * 3), 3);
   if (flags & 1) geometry.normal = new Attribute(values.slice(4 + count * 3, 4 + count * 6), 3);
