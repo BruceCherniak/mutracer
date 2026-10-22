@@ -5,6 +5,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
 import { referenceScene, textureBytes } from './scene-reference.mjs';
+import {executable} from '../scripts/platform.mjs';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const out = resolve(process.env.MUTRACER_NATIVE_OUTPUT ?? resolve(root, '.native-build/scene-core'));
 mkdirSync(out, { recursive: true });
@@ -22,7 +23,7 @@ async function verifyScene(input, directory, variant, capture = true) {
     mkdirSync(directory, {recursive:true});
     writeFileSync(resolve(directory, 'scene-input.bin'), input);
     const actual = resolve(directory, 'packet.bin');
-    const run = spawnSync(resolve(out, 'core-host'), [resolve(directory, 'scene-input.bin'), actual], { encoding: 'utf8', timeout: 90000 });
+    const run = spawnSync(resolve(out, executable('core-host')), [resolve(directory, 'scene-input.bin'), actual], { encoding: 'utf8', timeout: 90000 });
     if (run.status !== 0)
         throw new Error(`Native packet ${variant}: ${run.stderr}`);
     const packet = readFileSync(actual), expected = sceneParameters(input);
@@ -31,7 +32,7 @@ async function verifyScene(input, directory, variant, capture = true) {
         const first = packet.findIndex((v, i) => v !== expected[i]);
         throw new Error(`Native/JS packet ${variant} differs at byte ${first}; ${packet.length}/${expected.length}`);
     }
-    const { pass, device, camera } = await referenceScene(input, source);
+    const { pass, device, camera, nativeShader } = await referenceScene(input, source);
     const header = new Uint32Array(packet.buffer, packet.byteOffset, packet.byteLength / 4);
     const records = new Map();
     for (let i = 0; i < header[1]; i++) {
@@ -62,8 +63,8 @@ async function verifyScene(input, directory, variant, capture = true) {
         resources.push({ id, bytes: native.length, byteIdentical: true, reference: id === 6 ? 'independent Float64 camera' : 'browser' });
     }
     const shader = device.resources.findLast(r => r.kind === 'pipeline').descriptor.compute.module.descriptor.code;
-    if (!records.get(30).equals(Buffer.from(shader))) {
-        writeFileSync(resolve(directory, 'reference.wgsl'), shader);
+    if (!records.get(30).equals(Buffer.from(nativeShader))) {
+        writeFileSync(resolve(directory, 'reference.wgsl'), nativeShader);
         throw new Error(`Browser WGSL ${variant} differs`);
     }
     if (capture) {
@@ -77,7 +78,8 @@ async function verifyScene(input, directory, variant, capture = true) {
     const bindGroups = pass._rayTraceBindGroups.map(g => ({ layout: g.descriptor.layout.descriptor.entries, entries: g.descriptor.entries.map(({ binding, resource: r }) => ({ binding, ...(r.buffer ? { kind: 'buffer', id: r.buffer.id } : r.kind === 'view' ? { kind: 'texture', id: r.texture.id, options: r.options } : { kind: 'sampler', id: r.id }) })) }));
     save('scene.json', JSON.stringify({ format: 1, width: header[2], height: header[3], samples: 64, shader: save('raytrace.wgsl', shader), entryPoint: 'main', buffers, textures, samplers, bindGroups, rtUniform: pass._uniforms.rtUniform.id, colorOutput: pass.getOutputBuffer().color.id, normalOutput: pass.getOutputBuffer().normal.id, albedoOutput: pass.getOutputBuffer().albedo.id }, null, 2));
     }
-    return { variant, packetBytes: packet.length, nativeJavaScriptPacketIdentical: true, resources, fullShaderIdentical: true };
+    return { variant, packetBytes: packet.length, nativeJavaScriptPacketIdentical: true, resources,
+        shaderPolicy: 'native retained material/light capabilities and baked environment', fullShaderIdentical: true };
 }
 for (const variant of process.argv.slice(2).length ? process.argv.slice(2) : ['baseline', 'textures', 'transforms', 'orthographic', 'emissive', 'missing-normals', 'float-textures', 'sphere-light', 'directional-light', 'spot-light', 'alpha', 'v2-environment', 'v2-environment-only', 'v2-background', 'v2-hidden-background', 'v2-film', 'v2-medium', 'v2-alpha', 'v2-bevel', 'v2-vertices', 'v2-multimaterial', 'v2-instances', 'v2-empty-batch', 'v3-displacement-uv', 'v3-displacement-triplanar', 'v3-displacement-spherical', 'v3-displacement-cylindrical', 'v3-displacement-negative', 'v3-displacement-bytes', 'v3-displacement-zero', 'v3-ies', 'v3-ies-shared', 'v3-rect-texture']) {
     const directory = resolve(out, variant === 'baseline' ? 'image' : variant);

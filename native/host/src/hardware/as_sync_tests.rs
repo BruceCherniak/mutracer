@@ -4,14 +4,11 @@ use super::*;
 // must be traversable on the first query; this does not reproduce the known
 // intermittent whole-dispatch miss reliably.
 #[test]
+#[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn large_and_small_blas_complete_before_tlas_encoding() {
     let _test = crate::ABI_TEST_LOCK.lock().unwrap();
-    let Ok(gpu) = crate::GpuDevice::with_backend(1) else {
-        return;
-    };
-    if !gpu.hardware_ray_query {
-        return;
-    }
+    let gpu = crate::GpuDevice::with_backend(1).expect("GPU validation requires a working device");
+    assert!(gpu.hardware_ray_query, "GPU validation requires HWRT");
     let triangles = 512 * 512;
     let mut positions = Vec::<f32>::with_capacity(triangles * 9);
     for y in 0..512 {

@@ -100,7 +100,18 @@ export async function referenceScene(bytes, sourceRoot) {
     if (!pass.isPipelineReady())
         throw pass.getPipelineError() ?? new Error('Reference pipeline not ready');
     pass.createPass(device.createCommandEncoder(), true, [1, 1]);
-    return { device, pass, camera };
+    // Match native's retained scalar-edit support and baked environment policy
+    // when comparing shader source. The independent browser capture below
+    // keeps its own lean pipeline and dynamic environment implementation.
+    const {wgpuShaderSource} = await load('renderer/wgpuShaderSource.js');
+    const {ALL_MATERIAL_SHADER_CAPABILITIES, ALL_LIGHT_SHADER_CAPABILITIES, updateSceneShaderCapabilities} = await load('renderer/shaderCapabilities.js');
+    const constants = {...pass._constants, MATERIAL_CAPABILITIES: ALL_MATERIAL_SHADER_CAPABILITIES,
+        LIGHT_CAPABILITIES: ALL_LIGHT_SHADER_CAPABILITIES};
+    updateSceneShaderCapabilities(constants);
+    const nativeShader = wgpuShaderSource(constants, {hasDisplacement:pass._hasDisplacement, hasAlpha:false,
+        hasSceneAlpha:Boolean(constants.HAS_ALPHA),hasAnisotropyDirections:Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
+        hasCoatNormals:Boolean(constants.USE_COAT_NORMAL_FRAMES),blasLayoutMask:1}, true);
+    return { device, pass, camera, nativeShader };
 }
 export function textureBytes(texture) {
     const bpp = { rgba8unorm: 4, rgba16float: 8, rgba32float: 16, r32float: 4, rg32float: 8 }[texture.format];

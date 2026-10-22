@@ -753,10 +753,10 @@ mod tests {
             std::fs::write(path, serde_json::to_vec(&self.json).unwrap()).unwrap();
         }
         fn load(&mut self) -> Model {
-            let nonce = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos();
+            // Parallel tests can receive the same clock timestamp on macOS.
+            static NEXT_FIXTURE: std::sync::atomic::AtomicU64 =
+                std::sync::atomic::AtomicU64::new(0);
+            let nonce = NEXT_FIXTURE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
             let file = File(std::env::temp_dir().join(format!(
                 "mutracer-animation-{}-{nonce}.gltf",
                 std::process::id()
@@ -920,6 +920,38 @@ mod tests {
             Vec3::new(5., 3., 0.),
         );
         assert!(Arc::ptr_eq(&picking, &model.picking));
+    }
+
+    #[test]
+    fn concurrent_fixture_loads_keep_independent_animation_data() {
+        let barrier = std::sync::Barrier::new(8);
+        std::thread::scope(|scope| {
+            for index in 0..8 {
+                let barrier = &barrier;
+                scope.spawn(move || {
+                    barrier.wait();
+                    for round in 0..4 {
+                        let mut fixture = Fixture::new();
+                        let x = (index * 4 + round + 1) as f32;
+                        let clip = fixture.clip(
+                            0,
+                            "translation",
+                            &[0., 1.],
+                            &[x, 0., 0., x + 1., 0., 0.],
+                            "LINEAR",
+                            "VEC3",
+                            2,
+                        );
+                        fixture.json["animations"] = json!([clip]);
+                        let model = fixture.load();
+                        close(
+                            model.meshes[0].transform.w_axis.truncate(),
+                            Vec3::new(x, 0., 0.),
+                        );
+                    }
+                });
+            }
+        });
     }
 
     fn skinned_morph_fixture() -> Fixture {

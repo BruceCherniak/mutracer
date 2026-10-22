@@ -1202,13 +1202,11 @@ pub fn isolate_diagnostic(
 mod tests {
     use super::*;
     #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn retired_indices_are_reused_for_every_geometry_size() {
-        let Ok(gpu) = crate::GpuDevice::with_backend(1) else {
-            return;
-        };
-        if !gpu.hardware_ray_query {
-            return;
-        }
+        let gpu =
+            crate::GpuDevice::with_backend(1).expect("GPU validation requires a working device");
+        assert!(gpu.hardware_ray_query, "GPU validation requires HWRT");
         let mut assets = HashMap::new();
         let triangle = [-1f32, 0., 0., 1., 0., 0., 0., 1., 0.];
         assets.insert(

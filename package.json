@@ -97,13 +97,15 @@
     "native:jobs": "node native/validation/job-render.mjs",
     "native:context": "node native/validation/context-render.mjs",
     "native:scene": "node native/validation/scene-render.mjs",
+    "native:scene:static": "node native/validation/scene-render.mjs --static",
     "native:scene:verify": "node native/validation/scene-verify.mjs",
     "native:viewer": "node native/scripts/viewer-build.mjs",
     "native:viewer:build": "node native/scripts/viewer-build.mjs --build-only",
     "native:viewer:package": "node native/scripts/viewer-package.mjs",
     "native:settings": "node native/validation/settings-render.mjs",
     "native:ci": "node native/scripts/ci.mjs",
-    "native:ci:hosts": "node native/scripts/ci.mjs --hosts"
+    "native:ci:gpu": "node native/scripts/ci.mjs --gpu",
+    "native:ci:hosts": "node native/scripts/ci.mjs --gpu --hosts"
   },
   "dependencies": {
     "@webgpu/types": "^0.1.40",

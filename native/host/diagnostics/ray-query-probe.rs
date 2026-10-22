@@ -45,7 +45,10 @@ fn run() -> Result<()> {
     let directory = Path::new(&directory);
     fs::create_dir_all(directory)?;
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-    let adapter = pollster::block_on(instance.request_adapter(&Default::default()))?;
+    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        power_preference: wgpu::PowerPreference::HighPerformance,
+        ..Default::default()
+    }))?;
     let limits = adapter.limits();
     let features = adapter.features();
     if !features.contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY) {

@@ -23,7 +23,7 @@ The existing `npm run native:*` commands remain the entry points. Additional
 precision checks run with `node native/validation/matrix-verify.mjs` and
 `node native/validation/vector-verify.mjs`. `native:check` is a compiler-capability
 probe that reports the incomplete browser API port and exits with status 1;
-`native:ci` validates the supported native implementation.
+`native:ci` validates CPU behavior and static shader contracts without creating a GPU device.
 
 ## Build and CI
 
@@ -44,14 +44,30 @@ npm ci --prefix native/toolchain --include=optional
 MUTRACER_NATIVE_OUTPUT=/absolute/evidence npm run native:ci
 ```
 
-`npm run native:ci:hosts` also runs the context, job, camera and settings C hosts
-(`native:settings` chains the other three) against the fixtures, archive and Cargo
-target that the CI run just produced, at 8 samples. Run the `native:*` commands
-separately only when iterating on one host; each of them rebuilds and rerenders
-its whole chain.
+`npm run native:ci` runs the Rust CPU suites, AOT module/storage contracts and
+`native:scene:static`: all scene descriptors, native/JavaScript packet and resource
+comparisons, and WGSL source contracts. Rust's default suites explicitly ignore
+device-dependent tests; the CPU suite still parses, validates and emits SPIR-V/HLSL
+for generated software and hardware WGSL using Naga. Reports mark GPU rendering
+and windows as **not validated**.
+
+On a machine with a real GPU and hardware ray-query support, run
+`npm run native:ci:gpu` before a native release. This also runs the ignored host GPU
+tests, animated-pose rendering, all 33 rendered fixtures, ray-query execution,
+and the packaged render/AOV and window-startup checks. Software/unknown adapters
+and missing ray-query support are errors in this mode. This is a local or dedicated
+GPU-runner command; the ordinary GitHub-hosted workflow does not invoke it.
+The incremental oracle reports full-reference render errors as skipped cases.
+Review those records before release: any skips leave `gpu.validated` false in the
+summary, even when the supported checks finish successfully.
+
+`npm run native:ci:hosts` adds the context, job, camera and settings C hosts to that
+real-GPU validation, reusing its fixtures, archive and Cargo target at 8 samples.
+Run the `native:*` commands separately only when iterating on one host; each of
+them rebuilds and rerenders its whole chain.
 
 The GitHub Actions `CI` workflow runs on pull requests, pushes to `main` and `dev`, and
-manual dispatches. It validates native code and builds standalone viewers for
+manual dispatches. It validates CPU/static contracts and builds standalone viewers for
 macOS arm64, Linux x64 and Windows x64, including OIDN and licenses. Download
 `native-macos-arm64`, `native-linux-x64` or `native-windows-x64` from the run's
 artifacts for the app archive and SHA-256 checksum (retained for 14 days).
@@ -69,9 +85,11 @@ package suffix; the host, viewer and C harnesses use the GNU toolchain to match.
 Linux builds need a C++20 compiler, CMake, patchelf, and the X11/Wayland development
 libraries installed by the workflow. `npm run native:viewer:package` archives the
 built app, extracts it to a new directory and validates the bundled sample and
-CPU OIDN without an override library path. It also checks rendering and all AOVs
-when an adapter exists. Set `MUTRACER_NATIVE_GUI_SMOKE=1` to require a real window
-and displayed frames on those adapters; Linux uses `xvfb-run`.
+CPU OIDN without an override library path. Its default CPU-only package check does
+not discover adapters or open a window. Add `-- --gpu` to check rendering, all AOVs
+and real-window startup on a hardware adapter. Linux GPU validation additionally
+needs `xvfb-run`.
+`MUTRACER_NATIVE_GUI_SMOKE=1` also selects this explicit GPU package mode.
 
 Push a `native-v*` tag, for example `native-v0.1.0`, to run the same checks and
 publish macOS and Linux app archives and checksums to that tag's GitHub Release after
@@ -83,9 +101,9 @@ Apple-notarized.
 
 The compiler resolver restores executable permissions for the platform archive's
 compiler, TypeScript server, LLVM code generator and comptime helper. Root Web
-dependencies do not include this compiler. CI skips GPU execution only when
-adapter discovery reports no adapter; device initialization/execution failures
-remain failures. Rust CPU tests, module contracts and storage checks still run.
+dependencies do not include this compiler. Ordinary CI does not probe for GPUs;
+finding a software adapter cannot turn CPU checks into a rendering gate. Explicit
+GPU validation requires hardware and propagates device/execution failures.
 The optional MaterialTable whole-module probe has known compiler blockers;
 all 14 required modules must build and verify.
 
@@ -211,7 +229,9 @@ The viewer pauses native queue submissions outside its UI callback so eframe can
 reconfigure the shared surface safely; CPU preparation continues while paused.
 
 The packaged executable accepts `[MODEL] --package-smoke DIRECTORY` for the
-portable package gate. `--startup-smoke REPORT.json` opens a window and closes
+portable CPU package gate. The packaging script sets
+`MUTRACER_NATIVE_GPU_VALIDATION=1` only for its explicit GPU mode.
+`--startup-smoke REPORT.json` opens a window and closes
 after resizing the window and presenting rendered frames; its report must confirm
 success. The stronger
 `[MODEL] --smoke-out DIRECTORY` requires actual HWRT for load/render,
