@@ -58,7 +58,7 @@ export default class OpenPBRMaterial extends MaterialState {
   declare specularColorMap?: Texture;
   /** Linear RG tangent direction and B strength multiplier for the base specular layer. Default `undefined`. */
   declare anisotropyMap?: Texture;
-  /** Independent tangent-space coat normal in linear RGB. Without a map, coat shares the existing shading normal. Default `undefined`. */
+  /** Independent tangent-space coat normal in linear RGB. Without a map, coat uses the surface normal before base normal mapping. Default `undefined`. */
   declare coatNormalMap?: Texture;
   /** Height texture (red channel) for displacement. Default `undefined`. */
   declare displacementMap?: Texture;

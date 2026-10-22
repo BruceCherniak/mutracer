@@ -260,41 +260,32 @@ with coat, and the finite path-event budget can truncate deep glass paths.
 ## Coat normals
 
 Set `coatNormalMap` to give the coat a tangent-space normal independently of
-`normalMap`. The renderer decodes linear RGB as `2 * RGB - 1`, multiplies XY
-by `coatNormalScale`, then normalizes. The scale defaults to `[1, 1]` and can
-be negative or zero. A missing map (the default), zero coat weight or zero sampled coat coverage retains the existing shared
-shading normal, including the base normal map.
+`normalMap`. Without a coat map (the default), the coat uses the interpolated
+surface normal before base normal mapping. A bumpy base can therefore have a
+smooth coat. Assign the same texture to both maps to perturb both layers.
 
-The coat TBN starts from the interpolated geometry normal before base normal
-mapping. It uses the coat texture's UV0/UV1 selection and geometric
-tangent handedness; generated tangents use UV1 differentials when that set is
-selected. Degenerate frames and zero decoded vectors use stable fallbacks.
-The texture's scale, offset and `flipY` follow the ordinary atlas sampling
-rules. As with other slots, sharing an image never changes its color space.
+The map decodes linear RGB as `2 * RGB - 1`, multiplies XY by
+`coatNormalScale`, then normalizes. The scale defaults to `[1, 1]` and can be
+negative or zero. UV0/UV1 selection, scale, offset and `flipY` follow the
+ordinary texture rules. Zero coat weight or zero sampled coat coverage
+disables the coat without changing the base normal.
 
-Base lobes keep their base frame. Coat reflection, its sampling PDF, directional
-albedo and passage absorption use the coat frame; the renderer combines their
-responses and densities for the same world direction. Each frame is corrected
-against the geometric/view hemisphere independently. Triangle normals still
-control reflection versus transmission, medium boundaries and ray offsets.
-A coat reflection can contribute below the base shading hemisphere when it
-remains above the coat and geometric hemispheres. As before, solid interior
-hits omit coat reflection; thin surfaces are treated as exterior hits.
+Replacing the map or editing its scale is detected by `engine.update()`. Call
+`texture.markUpdated()` after pixel or UV-array element edits; see [scene updates](./updates.md).
+
+Coat reflections can remain visible where the base normal points away from
+the light. Solid interior hits omit coat reflection; thin surfaces are
+treated as exterior hits.
 
 Strongly tilted shading normals lose some lobe support when clipped to the
 geometric hemisphere. A unit white environment can therefore render below
 unit radiance; the renderer does not renormalize the clipped lobes.
 
-Replacing the map or editing its scale is detected by `engine.update()`. Call
-`texture.markUpdated()` after pixel or UV-array element edits; see [scene updates](./updates.md).
-These edits update material parameters/textures without rebuilding geometry. Normal maps do not alter
-emission's existing normal-incidence absorption or light-selection proposals.
-
 ## Anisotropy directions
 
 Set `specularAnisotropyRotation` or provide `anisotropyMap` to orient the base specular lobe. The map reads linear `2 * RG - 1`, normalizes the direction, multiplies strength by B, and then applies the rotation. A decoded squared length at or below `1e-4` falls back to `(1, 0)` before rotation (including the two central RGBA8 codes). Without a map the direction is `(1, 0)` and the strength multiplier is one. The rotation defaults to zero; the map defaults to undefined.
 
-`coatAnisotropyRotation` defaults to zero and uses the geometry tangent independently of the base map. Base and coat evaluation, sampling and PDF use their respective directions. The coat uses the shared shading normal unless `coatNormalMap` selects an [independent normal](#coat-normals). Zero strength ignores the new direction and retains the original isotropic path.
+`coatAnisotropyRotation` defaults to zero and uses the geometry tangent independently of the base map. Base and coat use their respective directions and [normals](#coat-normals). Zero anisotropy strength ignores the direction.
 
 Provided tangent XYZ and optional W handedness are preserved. For XYZ tangents the sign comes from triangle UV derivatives. Missing or degenerate tangents use UV derivatives and then a stable orthonormal fallback; missing tangents produce one diagnostic per geometry. The direction texture's selected UV set is used for derivative fallback, including UV1. A provided XYZW tangent remains authoritative. Directions are reorthogonalized against the final shading normal, including normal maps and back faces, and instance transforms preserve mirrored handedness. UV scale, offset and flipY affect texel lookup; they do not rotate the encoded direction.
 

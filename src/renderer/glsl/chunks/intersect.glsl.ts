@@ -656,15 +656,17 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
     vec2 secondaryUv = vec2(0.0);
   #endif
 
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
   si.coatNormal = normal;
+#ifdef NUM_COAT_NORMAL_MAPS
   float coatNormalIndex = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_LAYER_MAPS).z;
+#endif
 #endif
   vec4 directionMaterial = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_DIRECTION_NORMAL);
   float coatRotation = fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_FILM_TEXTURE).x;
   if (directionMaterial.x >= 0.0 || directionMaterial.y != 0.0 || coatRotation != 0.0
-#ifdef NUM_COAT_NORMAL_MAPS
-    || coatNormalIndex >= 0.0
+#ifdef USE_COAT_NORMAL_FRAMES
+    || fetchMatData(si.materialIndex * MAT_DATA_SIZE + MAT_ROW_COAT).w > 0.0
 #endif
   ) {
     vec3 dp1 = tri.p0 - tri.p2;
@@ -689,7 +691,7 @@ void fetchAttributes(inout SurfaceInteraction si, Triangle tri, vec3 barycentric
 #endif
     si.directionTangent = directionAxes[0];
     si.directionBitangent = directionAxes[1];
-#ifdef NUM_COAT_NORMAL_MAPS
+#if defined(USE_COAT_NORMAL_FRAMES) && defined(NUM_COAT_NORMAL_MAPS)
     if (coatNormalIndex >= 0.0) {
       int coatIndex = int(coatNormalIndex);
       mat2x3 coatAxes = geometryAxes;
@@ -931,7 +933,7 @@ ${getBVHTraverseCode(glsl`
     si.faceNormal = normalize(normalTransform * hitFaceNormal);
     si.vertexNormal = normalize(normalTransform * si.vertexNormal);
     si.normal = normalize(normalTransform * si.normal);
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
     si.coatNormal = normalize(normalTransform * si.coatNormal);
 #endif
 #ifdef USE_TANGENT
@@ -999,7 +1001,7 @@ ${getBVHTraverseCode(
     si.faceNormal = normalize(normalTransform * hitFaceNormal);
     si.vertexNormal = normalize(normalTransform * si.vertexNormal);
     si.normal = normalize(normalTransform * si.normal);
-#ifdef NUM_COAT_NORMAL_MAPS
+#ifdef USE_COAT_NORMAL_FRAMES
     si.coatNormal = normalize(normalTransform * si.coatNormal);
 #endif
 #ifdef USE_TANGENT

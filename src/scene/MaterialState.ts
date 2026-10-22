@@ -176,7 +176,7 @@ export default class MaterialState {
   specularAnisotropyModel: 'openpbr' | 'gltf' = 'openpbr';
   /** Linear RG tangent direction and B strength multiplier for the base specular layer. Default `undefined`. */
   anisotropyMap?: TextureState;
-  /** Independent tangent-space coat normal in linear RGB. Without a map, coat shares the existing shading normal. Default `undefined`. */
+  /** Independent tangent-space coat normal in linear RGB. Without a map, coat uses the surface normal before base normal mapping. Default `undefined`. */
   coatNormalMap?: TextureState;
   /** XY strength of coatNormalMap; independent of normalScale. Default `[1, 1]`. */
   coatNormalScale: Vec2 = materialDefault('coatNormalScale');
