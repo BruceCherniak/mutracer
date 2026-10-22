@@ -342,7 +342,8 @@ mod tests {
         };
         let baseline = display.read_rgba(&settings).unwrap();
         assert_eq!(&baseline[20..24], &[0, 0, 0, 0]);
-        assert_eq!(baseline[19], 128);
+        // Half-range values can quantize to either adjacent rgba8unorm code.
+        assert!(baseline[19].abs_diff(128) <= 1);
         let srgb = |v: f32| {
             if v <= 0.0031308 {
                 12.92 * v
@@ -390,7 +391,9 @@ mod tests {
         assert_eq!(display.read_linear().unwrap(), pixels);
         settings.output = 1;
         let normal = display.read_rgba(&settings).unwrap();
-        assert_eq!(&normal[12..16], &[128, 128, 255, 255]);
+        assert!(normal[12].abs_diff(128) <= 1);
+        assert!(normal[13].abs_diff(128) <= 1);
+        assert_eq!(&normal[14..16], &[255, 255]);
         settings.exposure = 0.;
         settings.saturation = 0.;
         assert_eq!(display.read_rgba(&settings).unwrap(), normal);
@@ -398,7 +401,7 @@ mod tests {
         let albedo = display.read_rgba(&settings).unwrap();
         assert_ne!(albedo, normal);
         assert!((albedo[12] as f32 - srgb(0.2) * 255.).abs() <= 1.);
-        assert_eq!(albedo[19], 128);
+        assert!(albedo[19].abs_diff(128) <= 1);
         assert_eq!(display.read_linear().unwrap(), pixels);
     }
 

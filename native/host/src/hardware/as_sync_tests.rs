@@ -137,9 +137,15 @@ fn large_and_small_blas_complete_before_tlas_encoding() {
                 u32::from_le_bytes(hit[k * 4..k * 4 + 4].try_into().unwrap())
             });
             assert_eq!(
-                values,
-                [1, if i < 64 { 7 } else { 11 }, 3f32.to_bits(), 0],
+                [values[0], values[1], values[3]],
+                [1, if i < 64 { 7 } else { 11 }, 0],
                 "iteration={iteration}, ray={i}"
+            );
+            // Keep hit identity exact while allowing ray-query distance rounding.
+            let distance = f32::from_bits(values[2]);
+            assert!(
+                (distance - 3.).abs() <= 1e-6,
+                "iteration={iteration}, ray={i}, distance={distance:?}"
             );
         }
     }
