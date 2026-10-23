@@ -24,6 +24,18 @@ struct Context {
     descriptor: Option<Arc<Vec<u8>>>,
     /// Path of the last successful commit (`mt_commit_kind`).
     last_commit: u32,
+    /// Render target on another context's scene; such a context holds no scene.
+    link: Option<Link>,
+    /// Size of the own target of a scene shared by linked targets, replacing the
+    /// descriptor's size in full preparation; the kept descriptor is unchanged.
+    own_size: Option<[u32; 2]>,
+}
+/// S2: a context that renders `target` on the scene of context `scene`.
+/// `current` is cleared when that scene is committed again, until `set_target`.
+struct Link {
+    scene: u64,
+    target: Target,
+    current: bool,
 }
 struct PendingCommit {
     cancelled: AtomicBool,
@@ -102,6 +114,9 @@ static REGISTRY: Mutex<Option<Registry>> = Mutex::new(None);
 #[cfg(test)]
 pub(crate) static AUDIT_PREPARATIONS: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
+/// Tests: the next full preparation waits for this gate (or its sender's drop).
+#[cfg(test)]
+pub(crate) static PREPARATION_GATE: Mutex<Option<mpsc::Receiver<()>>> = Mutex::new(None);
 #[cfg(test)]
 pub(crate) static AUDIT_HISTORY_SAMPLES: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(0);
@@ -230,6 +245,118 @@ fn ready(context: &mut Context) -> Result<&mut GpuScene> {
         .as_mut()
         .ok_or_else(|| fail(Status::InvalidState, "No committed scene"))
 }
+/// The context for `handle` and, when it is a linked render target, the scene
+/// it renders. The target must be current.
+fn with_scene(
+    registry: &mut Registry,
+    handle: u64,
+) -> Result<(&mut Context, Option<&mut GpuScene>)> {
+    let Some(owner) = context(registry, handle)?.link.as_ref().map(|l| l.scene) else {
+        return Ok((registry.contexts.get_mut(&handle).unwrap(), None));
+    };
+    let [Some(context), Some(scene)] = registry.contexts.get_disjoint_mut([&handle, &owner]) else {
+        return Err(fail(
+            Status::InvalidState,
+            "The render target's scene was destroyed",
+        ));
+    };
+    if context.failed {
+        return Err(fail(
+            Status::InvalidState,
+            "Render target failed; set it again before rendering or reading",
+        ));
+    }
+    if !context.link.as_ref().unwrap().current {
+        return Err(fail(
+            Status::InvalidState,
+            "The scene was committed again; set the render target first",
+        ));
+    }
+    Ok((context, Some(ready(scene)?)))
+}
+/// Before the scene of `owner` changes: drain the jobs of the targets linked to
+/// it and mark them stale until they are set again.
+fn retire_targets(registry: &mut Registry, owner: u64) -> Result<()> {
+    for context in registry
+        .contexts
+        .values_mut()
+        .filter(|c| c.link.as_ref().is_some_and(|l| l.scene == owner))
+    {
+        if let Some(job) = context.job.as_mut().filter(|j| j.active()) {
+            job.cancelled = true;
+            while job_active(context) {
+                advance_job(context, None, 0)?;
+                std::thread::yield_now();
+            }
+        }
+        context.link.as_mut().unwrap().current = false;
+    }
+    Ok(())
+}
+/// Links context `handle` to the scene of context `owner` as a render target
+/// with its own size, settings, quality flags and camera, restarting its
+/// accumulation. Buffers of the previous target are reused when sizes match.
+/// The owner must hold a retained scene; a pending commit of it reports Busy.
+pub(crate) fn set_target(
+    handle: u64,
+    owner: u64,
+    settings: &settings::RenderSettings,
+    size: [u32; 2],
+    quality: u32,
+    camera: &[u8; 128],
+    error: &mut [c_char],
+) -> i32 {
+    action(error.as_mut_ptr(), error.len(), |registry| {
+        if handle == owner {
+            return Err(fail(
+                Status::InvalidArgument,
+                "A context cannot target itself",
+            ));
+        }
+        let current = context(registry, handle)?;
+        if current.scene.is_some() || current.commit.is_some() {
+            return Err(fail(
+                Status::InvalidState,
+                "Context holds its own scene and cannot become a render target",
+            ));
+        }
+        idle(current)?;
+        let [Some(current), Some(source)] = registry.contexts.get_disjoint_mut([&handle, &owner])
+        else {
+            return Err(fail(Status::InvalidHandle, "Invalid scene context"));
+        };
+        if source.commit.is_some() {
+            return Err(fail(Status::Busy, "The scene is being committed"));
+        }
+        let scene = ready(source)?;
+        let packet = scene
+            .retained
+            .as_ref()
+            .ok_or("No retained scene")?
+            .target(settings, size, quality, scene.hwrt_shader, camera)
+            .map_err(rejected)?;
+        let previous = current.link.take().map(|l| l.target);
+        current.job = None;
+        current.failed = true;
+        let target = scene.target(packet, size, previous)?;
+        current.link = Some(Link {
+            scene: owner,
+            target,
+            current: true,
+        });
+        current.failed = false;
+        Ok(())
+    })
+}
+/// GPU bytes held by a linked render target (A/B measurements).
+#[cfg(test)]
+pub(crate) fn target_bytes(handle: u64) -> u64 {
+    let slot = REGISTRY.lock().unwrap_or_else(|e| e.into_inner());
+    slot.as_ref()
+        .and_then(|r| r.contexts.get(&handle))
+        .and_then(|c| c.link.as_ref())
+        .map_or(0, |l| l.target.bytes())
+}
 // Direct AS preparation deliberately omits the software BVH. Re-run the shared
 // TS preparation only when hardware capture/upload fails, replacing its retained
 // state too so later edits operate on the same representation as the fallback.
@@ -300,6 +427,22 @@ pub fn create_on_device_with_gate(
     };
     create_with_gpu(gpu, backend)
 }
+/// A context whose scene renders only through linked targets: full preparation
+/// gives it a minimal own target whatever the descriptor's size.
+pub(crate) fn create_scene_with_gpu(
+    gpu: GpuDevice,
+    backend: u32,
+) -> std::result::Result<u64, String> {
+    let handle = create_with_gpu(gpu, backend)?;
+    let mut slot = REGISTRY.lock().map_err(|_| "Context registry poisoned")?;
+    slot.as_mut()
+        .unwrap()
+        .contexts
+        .get_mut(&handle)
+        .unwrap()
+        .own_size = Some([1, 1]);
+    Ok(handle)
+}
 /// Context on an existing device; L1 engines share one device across renders.
 pub(crate) fn create_with_gpu(gpu: GpuDevice, backend: u32) -> std::result::Result<u64, String> {
     if backend > 1 {
@@ -328,6 +471,8 @@ pub(crate) fn create_with_gpu(gpu: GpuDevice, backend: u32) -> std::result::Resu
             commit: None,
             descriptor: None,
             last_commit: COMMIT_NONE,
+            link: None,
+            own_size: None,
         },
     );
     Ok(handle)
@@ -342,12 +487,36 @@ pub fn capture_display(
         return Ok(false);
     };
     let registry = slot.as_mut().ok_or("No context registry")?;
-    let state = context(registry, handle).map_err(|e| e.to_string())?;
-    let scene = ready(state).map_err(|e| e.to_string())?;
-    if scene.samples == 0 {
+    let (state, linked) = with_scene(registry, handle).map_err(|e| e.to_string())?;
+    let (scene, outputs, samples, size) = match linked {
+        Some(scene) => {
+            let target = &state.link.as_ref().unwrap().target;
+            let outputs = [0, 1, 2].map(|kind| target.output(kind).unwrap().clone());
+            (
+                scene,
+                outputs,
+                target.samples,
+                [target.width, target.height],
+            )
+        }
+        None => {
+            let scene = ready(state).map_err(|e| e.to_string())?;
+            let outputs = [
+                Some(scene.scene.color_output),
+                scene.scene.normal_output,
+                scene.scene.albedo_output,
+            ]
+            .map(|id| id.and_then(|id| scene.buffers.get(&id).cloned()));
+            let [Some(color), Some(normal), Some(albedo)] = outputs else {
+                return Err("No normal or albedo output".into());
+            };
+            let (samples, size) = (scene.samples, [scene.scene.width, scene.scene.height]);
+            (&mut *scene, [color, normal, albedo], samples, size)
+        }
+    };
+    if samples == 0 {
         return Ok(false);
     }
-    let size = [scene.scene.width, scene.scene.height];
     if display
         .as_ref()
         .is_none_or(|d| d.size != size || d.owner != handle)
@@ -358,12 +527,11 @@ pub fn capture_display(
         next.owner = handle;
         *display = Some(next);
     }
-    display.as_mut().unwrap().capture(
-        &scene.buffers[&scene.scene.color_output],
-        &scene.buffers[&scene.scene.normal_output.ok_or("No normal output")?],
-        &scene.buffers[&scene.scene.albedo_output.ok_or("No albedo output")?],
-        scene.samples,
-    );
+    let [color, normal, albedo] = &outputs;
+    display
+        .as_mut()
+        .unwrap()
+        .capture(color, normal, albedo, samples);
     Ok(true)
 }
 
@@ -409,6 +577,8 @@ pub unsafe extern "C" fn mt_context_create_with_backend(
                 commit: None,
                 descriptor: None,
                 last_commit: COMMIT_NONE,
+                link: None,
+                own_size: None,
             },
         );
         registry.next = next;
@@ -569,9 +739,16 @@ unsafe fn commit_with_settings(
     // destroy stay available. Only the retained GPU updates hold the lock.
     let mut candidate = None;
     let mut blocked = false;
+    let mut scene_only = false;
     let status = action(error, capacity, |registry| {
         let preparing = registry.contexts.values().any(|c| c.commit.is_some());
         let context = context(registry, handle)?;
+        if context.link.is_some() {
+            return Err(fail(
+                Status::InvalidState,
+                "A render target context renders another context's scene",
+            ));
+        }
         if context.commit.is_some() {
             return Err(fail(
                 Status::InvalidState,
@@ -579,6 +756,7 @@ unsafe fn commit_with_settings(
             ));
         }
         blocked = preparing;
+        scene_only = context.own_size.is_some();
         if !preparing && path != CommitPath::FullOnly {
             candidate = incremental_candidate(context, bytes, &settings);
             if candidate.is_some() {
@@ -610,7 +788,7 @@ unsafe fn commit_with_settings(
             })
             .flatten();
         let synced = started.elapsed();
-        let steps = sync.and_then(|sync| commit_plan::plan(&previous, bytes, &sync));
+        let steps = sync.and_then(|sync| commit_plan::plan(&previous, bytes, &sync, scene_only));
         let planned = started.elapsed();
         let mut finished = false;
         let status = action(error, capacity, |registry| {
@@ -624,7 +802,11 @@ unsafe fn commit_with_settings(
                 return Err(error);
             }
             match &steps {
-                Some(steps) => finished = apply_incremental(context, &retained, &next, steps)?,
+                Some(steps) => {
+                    retire_targets(registry, handle)?;
+                    let context = registry.contexts.get_mut(&handle).unwrap();
+                    finished = apply_incremental(context, &retained, &next, steps)?
+                }
                 None => retained.reset_sync()?,
             }
             if crate::profiling::enabled() {
@@ -664,6 +846,7 @@ unsafe fn commit_with_settings(
             backend: context.backend,
             spare_buffers: std::mem::take(&mut context.spare_buffers),
             spare_hardware: std::mem::take(&mut context.spare_hardware),
+            own_size: context.own_size,
         });
         context.commit = Some(cancel.clone());
         Ok(())
@@ -672,9 +855,28 @@ unsafe fn commit_with_settings(
         return status;
     }
     let snapshot = snapshot.unwrap();
+    let resized;
+    let bytes = match snapshot.own_size {
+        Some(size) => {
+            let mut copy = bytes.to_vec();
+            for (word, value) in [
+                (layout::header::WIDTH, size[0]),
+                (layout::header::HEIGHT, size[1]),
+            ] {
+                copy[word * 4..word * 4 + 4].copy_from_slice(&value.to_le_bytes());
+            }
+            resized = copy;
+            &resized[..]
+        }
+        None => bytes,
+    };
     let outcome = std::panic::catch_unwind(AssertUnwindSafe(|| -> Result<_> {
         let result = (|| -> Result<_> {
             let profile = std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1");
+            #[cfg(test)]
+            if let Some(gate) = PREPARATION_GATE.lock().unwrap().take() {
+                let _ = gate.recv_timeout(Duration::from_secs(60));
+            }
             let started = Instant::now();
             let (mut scene, mut assets, mut retained) = scene::prepare_retained_with_settings(
                 bytes,
@@ -824,12 +1026,14 @@ unsafe fn commit_with_settings(
         }
         let (candidate, seed, bounces, fallback_reason) = result?;
         cancelled(&cancel)?;
+        retire_targets(registry, handle)?;
+        let context = registry.contexts.get_mut(&handle).unwrap();
         // A pending render batch owns the old scene until its fence completes.
         if let Some(job) = context.job.as_mut() {
             if job.active() {
                 job.cancelled = true;
                 while job_active(context) {
-                    advance_job(context, 0)?;
+                    advance_job(context, None, 0)?;
                     std::thread::yield_now();
                 }
             }
@@ -889,7 +1093,7 @@ fn apply_incremental(
         if job.active() {
             job.cancelled = true;
             while job_active(context) {
-                advance_job(context, 0)?;
+                advance_job(context, None, 0)?;
                 std::thread::yield_now();
             }
         }
@@ -950,6 +1154,7 @@ fn apply_incremental(
     Ok(true)
 }
 struct CommitSnapshot {
+    own_size: Option<[u32; 2]>,
     gpu: GpuDevice,
     backend: u32,
     spare_buffers: HashMap<usize, wgpu::Buffer>,
@@ -1012,8 +1217,15 @@ pub unsafe extern "C" fn mt_context_render(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_reset(handle: u64, error: *mut c_char, capacity: usize) -> i32 {
     action(error, capacity, |registry| {
-        let context = context(registry, handle)?;
+        let (context, linked) = with_scene(registry, handle)?;
         idle(context)?;
+        if let Some(scene) = linked {
+            context.failed = true;
+            scene.reset_target(&mut context.link.as_mut().unwrap().target)?;
+            context.job = None;
+            context.failed = false;
+            return Ok(());
+        }
         ready(context)?;
         context.failed = true;
         context.scene.as_mut().unwrap().reset_raw()?;
@@ -1032,10 +1244,12 @@ pub unsafe extern "C" fn mt_context_wait(
     action(error, capacity, |registry| {
         let context = context(registry, handle)?;
         idle(context)?;
-        let scene = ready(context)?;
+        if context.link.is_none() {
+            ready(context)?;
+        }
         // UINT32_MAX (MT_WAIT_INDEFINITELY) waits without a deadline.
         let timeout = (timeout_ms != u32::MAX).then(|| Duration::from_millis(timeout_ms.into()));
-        match scene.gpu.device.poll(wgpu::PollType::Wait {
+        match context.gpu.device.poll(wgpu::PollType::Wait {
             submission_index: None,
             timeout,
         }) {
@@ -1299,11 +1513,14 @@ pub unsafe extern "C" fn mt_context_info(
         if size != std::mem::size_of::<ContextInfo>() && size != CONTEXT_INFO_ABI2_SIZE {
             return Err(fail(Status::InvalidArgument, "Context info size mismatch"));
         }
-        let (width, height, samples) = context
-            .scene
-            .as_ref()
-            .map(|s| (s.scene.width, s.scene.height, s.samples))
-            .unwrap_or((0, 0, 0));
+        let (width, height, samples) = match &context.link {
+            Some(link) => (link.target.width, link.target.height, link.target.samples),
+            None => context
+                .scene
+                .as_ref()
+                .map(|s| (s.scene.width, s.scene.height, s.samples))
+                .unwrap_or((0, 0, 0)),
+        };
         let filled = ContextInfo {
             struct_size: size as u32,
             width,
@@ -1313,7 +1530,7 @@ pub unsafe extern "C" fn mt_context_info(
                 2
             } else if context.job.as_ref().is_some_and(|j| j.active()) {
                 3
-            } else if context.scene.is_some() {
+            } else if context.scene.is_some() || context.link.as_ref().is_some_and(|l| l.current) {
                 1
             } else {
                 0
@@ -1347,16 +1564,22 @@ pub unsafe extern "C" fn mt_context_read_pixels(
         unsafe {
             *written = 0;
         }
-        let context = context(registry, handle)?;
+        let (context, linked) = with_scene(registry, handle)?;
         idle(context)?;
-        let scene = ready(context)?;
+        let (samples, width, height) = match (&linked, &context.link) {
+            (Some(_), Some(link)) => (link.target.samples, link.target.width, link.target.height),
+            _ => {
+                let scene = ready(context)?;
+                (scene.samples, scene.scene.width, scene.scene.height)
+            }
+        };
         if kind > 2 {
             return Err(fail(Status::InvalidArgument, "Unknown image kind"));
         }
-        if scene.samples == 0 {
+        if samples == 0 {
             return Err(fail(Status::InvalidState, "No completed samples"));
         }
-        let required = scene.scene.width as usize * scene.scene.height as usize * 16;
+        let required = width as usize * height as usize * 16;
         unsafe {
             *written = required;
         }
@@ -1373,7 +1596,10 @@ pub unsafe extern "C" fn mt_context_read_pixels(
             ));
         }
         context.failed = true;
-        let values = context.scene.as_ref().unwrap().read_pixels(kind)?;
+        let values = match linked {
+            Some(scene) => scene.read_target(&context.link.as_ref().unwrap().target, kind)?,
+            None => context.scene.as_ref().unwrap().read_pixels(kind)?,
+        };
         unsafe {
             std::ptr::copy_nonoverlapping(values.as_ptr(), pixels, values.len());
         }
@@ -1392,6 +1618,10 @@ pub struct JobInfo {
     pub base_samples: u32,
 }
 fn job_context(registry: &mut Registry, id: u64) -> Result<&mut Context> {
+    let handle = job_handle(registry, id)?;
+    Ok(registry.contexts.get_mut(&handle).unwrap())
+}
+fn job_handle(registry: &mut Registry, id: u64) -> Result<u64> {
     let (handle, context) = registry
         .contexts
         .iter_mut()
@@ -1400,7 +1630,7 @@ fn job_context(registry: &mut Registry, id: u64) -> Result<&mut Context> {
     if TOUCHED.get().is_none() {
         TOUCHED.set(Some((*handle, context.failed)));
     }
-    Ok(context)
+    Ok(*handle)
 }
 
 #[unsafe(no_mangle)]
@@ -1417,16 +1647,18 @@ pub unsafe extern "C" fn mt_context_submit(
         }
         let id = registry.next;
         let next = id.checked_add(1).ok_or("Native handles exhausted")?;
-        let context = context(registry, handle)?;
+        let (context, linked) = with_scene(registry, handle)?;
         idle(context)?;
-        let scene = ready(context)?;
-        if additional == 0 || additional > 4096 - scene.samples {
+        let base = match (linked, &context.link) {
+            (Some(_), Some(link)) => link.target.samples,
+            _ => ready(context)?.samples,
+        };
+        if additional == 0 || additional > 4096 - base {
             return Err(fail(
                 Status::InvalidArgument,
                 "Total samples must be 1..4096",
             ));
         }
-        let base = scene.samples;
         context.job = Some(RenderJob {
             id,
             base,
@@ -1444,20 +1676,32 @@ pub unsafe extern "C" fn mt_context_submit(
         Ok(())
     })
 }
-fn advance_job(context: &mut Context, budget: u32) -> Result<()> {
-    let scene = context.scene.as_mut().ok_or("No committed scene")?;
-    let job = context.job.as_mut().ok_or("Missing render job")?;
+/// `owner` is the scene a linked context renders; it is needed only to dispatch.
+fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> Result<()> {
+    let Context {
+        scene: own,
+        job,
+        link,
+        gpu,
+        render_bounces,
+        render_seed,
+        ..
+    } = context;
+    let job = job.as_mut().ok_or("Missing render job")?;
     if !job.active() {
         return Ok(());
     }
-    scene.gpu.device.poll(wgpu::PollType::Poll)?;
+    gpu.device.poll(wgpu::PollType::Poll)?;
     if job
         .flight
         .as_ref()
         .is_some_and(|f| f.done.load(Ordering::Acquire))
     {
         let flight = job.flight.take().unwrap();
-        scene.samples = flight.end;
+        match link {
+            Some(link) => link.target.samples = flight.end,
+            None => own.as_mut().ok_or("No committed scene")?.samples = flight.end,
+        }
         job.completed = flight.end - job.base;
     }
     if job.flight.is_some() {
@@ -1475,17 +1719,20 @@ fn advance_job(context: &mut Context, budget: u32) -> Result<()> {
         return Ok(());
     }
     let count = budget.min(job.requested - job.submitted);
-    scene.dispatch_samples(
-        job.base + job.submitted,
-        count,
-        context.render_bounces,
-        context.render_seed,
-    )?;
+    let start = job.base + job.submitted;
+    match (link, owner) {
+        (Some(link), Some(scene)) => scene.dispatch_target(&link.target, start, count)?,
+        (None, _) => own.as_ref().ok_or("No committed scene")?.dispatch_samples(
+            start,
+            count,
+            *render_bounces,
+            *render_seed,
+        )?,
+        (Some(_), None) => return Err("Missing render target scene".into()),
+    }
     let done = Arc::new(AtomicBool::new(false));
     let signal = done.clone();
-    scene
-        .gpu
-        .queue
+    gpu.queue
         .on_submitted_work_done(move || signal.store(true, Ordering::Release));
     job.submitted += count;
     job.flight = Some(Flight {
@@ -1509,7 +1756,16 @@ pub unsafe extern "C" fn mt_job_poll(
                 "Poll dispatch budget must be 0..64 samples",
             ));
         }
-        let context = job_context(registry, id)?;
+        let handle = job_handle(registry, id)?;
+        let active = registry.contexts[&handle]
+            .job
+            .as_ref()
+            .is_some_and(|j| j.active());
+        let (context, owner) = if active && registry.contexts[&handle].link.is_some() {
+            with_scene(registry, handle)?
+        } else {
+            (registry.contexts.get_mut(&handle).unwrap(), None)
+        };
         if context.failed {
             return Err(fail(
                 Status::InvalidState,
@@ -1517,7 +1773,7 @@ pub unsafe extern "C" fn mt_job_poll(
             ));
         }
         context.failed = true;
-        let result = advance_job(context, budget);
+        let result = advance_job(context, owner.as_deref(), budget);
         if result.is_err() {
             context.job.as_mut().unwrap().state = JobState::Failed;
         } else {

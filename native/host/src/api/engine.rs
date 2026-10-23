@@ -204,57 +204,6 @@ pub(super) fn camera_offset(scene: &[u8]) -> Result<usize> {
     }
     Ok(offset * WORD_BYTES)
 }
-/// [`override_descriptor`] sharing `scene` when it already has these values.
-pub(super) fn override_shared(
-    scene: &Arc<Vec<u8>>,
-    size: [u32; 2],
-    quality: u32,
-    camera: Option<&[u8; 128]>,
-) -> Result<Arc<Vec<u8>>> {
-    let camera_at = camera_offset(scene)?;
-    let word =
-        |index: usize| u32::from_le_bytes(scene[index * 4..index * 4 + 4].try_into().unwrap());
-    let flags = word(header::QUALITY_FLAGS);
-    let same = word(header::WIDTH) == size[0]
-        && word(header::HEIGHT) == size[1]
-        && ((flags & !(QUALITY_BEVEL | QUALITY_DISPERSION)) | quality) == flags
-        && camera.is_none_or(|camera| scene[camera_at..camera_at + 128] == camera[..]);
-    if same {
-        Ok(scene.clone())
-    } else {
-        override_descriptor(scene, size, quality, camera).map(Arc::new)
-    }
-}
-/// The descriptor a render commits: the engine scene with this render's size,
-/// bevel/dispersion quality bits and camera. Other quality bits stay the scene's.
-pub(super) fn override_descriptor(
-    scene: &[u8],
-    size: [u32; 2],
-    quality: u32,
-    camera: Option<&[u8; 128]>,
-) -> Result<Vec<u8>> {
-    let camera_at = camera_offset(scene)?;
-    let mut bytes = scene.to_vec();
-    let mut word = |index: usize, value: u32| {
-        bytes[index * 4..index * 4 + 4].copy_from_slice(&value.to_le_bytes())
-    };
-    word(header::WIDTH, size[0]);
-    word(header::HEIGHT, size[1]);
-    let flags = u32::from_le_bytes(
-        scene[header::QUALITY_FLAGS * 4..header::QUALITY_FLAGS * 4 + 4]
-            .try_into()
-            .unwrap(),
-    );
-    word(
-        header::QUALITY_FLAGS,
-        (flags & !(QUALITY_BEVEL | QUALITY_DISPERSION)) | quality,
-    );
-    if let Some(camera) = camera {
-        bytes[camera_at..camera_at + 128].copy_from_slice(camera);
-    }
-    Ok(bytes)
-}
-
 type EngineListener = Arc<Mutex<dyn FnMut(&EngineEvent) + Send>>;
 type SampleListener = Arc<Mutex<dyn FnMut(&SampleEvent) + Send>>;
 #[derive(Default)]
@@ -297,6 +246,10 @@ pub(super) struct State {
     pub(super) camera_revision: u64,
     pub(super) renders: BTreeMap<u64, RenderState>,
     pub(super) next_render: u64,
+    /// The scene prepared once for every render.
+    pub(super) shared: super::render::SharedScene,
+    pub(super) gpu: GpuDevice,
+    pub(super) backend: Backend,
     pub(super) display: DisplayState,
     pub(super) last_error: Option<String>,
     pub(super) engine_events: Vec<EngineEvent>,
@@ -322,6 +275,7 @@ impl Drop for Inner {
         for (_, render) in std::mem::take(&mut state.renders) {
             render.release();
         }
+        state.shared.release();
     }
 }
 
@@ -373,6 +327,9 @@ impl Engine {
                     camera_revision: 0,
                     renders: BTreeMap::new(),
                     next_render: 1,
+                    shared: Default::default(),
+                    gpu: gpu.clone(),
+                    backend: options.backend,
                     display: DisplayState::default(),
                     last_error: None,
                     engine_events: Vec::new(),
@@ -475,8 +432,8 @@ impl Engine {
         Ok(())
     }
     /// The sole commit point. Returns whether the scene or camera changed.
-    /// Incremental edits are applied to every render on this thread; a render that
-    /// needs full preparation starts it on a library thread and reports
+    /// The scene is prepared once for all renders. Incremental edits are applied
+    /// on this thread; full preparation runs on a library thread and renders report
     /// [`super::RenderStatus::Preparing`] until it is published.
     pub fn update(&self) -> Result<bool> {
         let changed = {
@@ -567,15 +524,19 @@ impl Engine {
     /// Releases every render's resources. Later calls on the engine, its renders
     /// and display return [`Status::InvalidHandle`]. Dropping the last handle also releases.
     pub fn dispose(&self) {
-        let renders = {
+        let (renders, mut shared) = {
             let mut state = self.lock();
             state.disposed = true;
             state.display = DisplayState::default();
-            std::mem::take(&mut state.renders)
+            (
+                std::mem::take(&mut state.renders),
+                std::mem::take(&mut state.shared),
+            )
         };
         for (_, render) in renders {
             render.release();
         }
+        shared.release();
         let mut listeners = self.inner.listeners.lock().unwrap();
         listeners.engine.clear();
         listeners.samples.clear();

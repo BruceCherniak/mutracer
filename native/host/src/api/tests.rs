@@ -1,5 +1,5 @@
 use super::display::{Selection, select};
-use super::engine::{camera_offset, override_descriptor, override_shared};
+use super::engine::camera_offset;
 use super::render::{Readiness, flip_rows};
 use super::*;
 use crate::context;
@@ -156,60 +156,21 @@ fn set_word(bytes: &mut [u8], index: usize, value: u32) {
 }
 
 #[test]
-fn descriptor_override_replaces_only_render_owned_fields() {
-    let mut scene = lit_scene();
-    set_word(&mut scene, h::QUALITY_FLAGS, 4 | 1);
-    let camera = Camera {
-        fov: 30.,
-        ..Default::default()
-    }
-    .to_bytes();
-    let bytes = override_descriptor(&scene, [33, 21], 2, Some(&camera)).unwrap();
-    assert_eq!(bytes.len(), scene.len());
-    assert_eq!(word(&bytes, h::WIDTH), 33);
-    assert_eq!(word(&bytes, h::HEIGHT), 21);
-    // The hidden-background bit belongs to the scene; bevel/dispersion to the render.
-    assert_eq!(word(&bytes, h::QUALITY_FLAGS), 4 | 2);
-    let at = camera_offset(&scene).unwrap();
-    assert_eq!(&bytes[at..at + 128], &camera);
-    for (index, (a, b)) in scene.chunks(4).zip(bytes.chunks(4)).enumerate() {
-        let camera_words = at / 4..at / 4 + 32;
-        if ![h::WIDTH, h::HEIGHT, h::QUALITY_FLAGS].contains(&index)
-            && !camera_words.contains(&index)
-        {
-            assert_eq!(a, b, "word {index}");
-        }
-    }
-    // The shared variant reuses the scene when nothing changes and copies otherwise.
-    let shared = Arc::new(bytes.clone());
-    let same = override_shared(&shared, [33, 21], 2, Some(&camera)).unwrap();
-    assert!(Arc::ptr_eq(&same, &shared));
-    for (size, quality, camera) in [([34, 21], 2, Some(&camera)), ([33, 21], 0, None)] {
-        let other = override_shared(&shared, size, quality, camera).unwrap();
-        assert!(!Arc::ptr_eq(&other, &shared));
-        assert_eq!(
-            *other,
-            override_descriptor(&shared, size, quality, camera).unwrap()
-        );
-    }
-    let unaligned = Arc::new(scene[..scene.len() - 2].to_vec());
-    assert!(override_shared(&unaligned, [1, 1], 0, None).is_err());
-    let kept = override_descriptor(&scene, [1, 1], 0, None).unwrap();
-    assert_eq!(&kept[at..at + 128], &scene[at..at + 128]);
-    assert_eq!(word(&kept, h::QUALITY_FLAGS), 4);
-
-    assert!(override_descriptor(&scene[..64], [1, 1], 0, None).is_err());
-    assert!(override_descriptor(&scene[..scene.len() - 2], [1, 1], 0, None).is_err());
+fn scene_header_checks_reject_malformed_descriptors() {
+    let scene = lit_scene();
+    assert_eq!(camera_offset(&scene).unwrap(), 160 * 4);
+    assert!(camera_offset(&scene[..64]).is_err());
+    assert!(camera_offset(&scene[..scene.len() - 2]).is_err());
     let mut version = scene.clone();
     set_word(&mut version, h::VERSION, 3);
-    assert!(override_descriptor(&version, [1, 1], 0, None).is_err());
+    assert!(camera_offset(&version).is_err());
     let mut outside = scene.clone();
     set_word(
         &mut outside,
         h::CAMERA_OFFSET,
         (scene.len() / 4 - 31) as u32,
     );
-    let failure = override_descriptor(&outside, [1, 1], 0, None).unwrap_err();
+    let failure = camera_offset(&outside).unwrap_err();
     assert_eq!(failure.status, Status::InvalidArgument);
 }
 
@@ -406,7 +367,8 @@ pub(super) fn lit_scene() -> Vec<u8> {
 pub(super) fn software_engine(backend: Backend) -> Option<Engine> {
     Engine::new(EngineOptions { backend }).ok()
 }
-/// Independent expectation of `override_descriptor`.
+/// The descriptor a fresh L0 context commits to reproduce a render: the scene with
+/// the render's size, bevel/dispersion bits and camera.
 pub(super) fn expected_descriptor(
     scene: &[u8],
     size: [u32; 2],
@@ -587,8 +549,9 @@ pub(super) fn finish(render: &Render) -> RenderStatus {
         std::thread::sleep(Duration::from_millis(1));
     }
 }
+/// `last_commit` of the engine's shared scene context.
 fn last_commit(render: &Render) -> u32 {
-    let handle = render.engine().lock().renders[&render.id()].context();
+    let handle = render.engine().lock().shared.context().unwrap();
     let mut info = context::ContextInfo {
         struct_size: std::mem::size_of::<context::ContextInfo>() as u32,
         width: 0,
@@ -811,7 +774,7 @@ fn primary_oracle(backend: Backend) -> Option<Vec<String>> {
     );
     notes.push("incremental material and camera edits: COMMIT_INCREMENTAL, exact".into());
 
-    // Settings change: full preparation of this render only.
+    // Settings change: a new target on the same scene, without preparation.
     let changed = RenderSettings {
         max_samples: 4,
         bounces: 2,
@@ -820,7 +783,7 @@ fn primary_oracle(backend: Backend) -> Option<Vec<String>> {
     };
     a.set_settings(changed.clone()).unwrap();
     assert_eq!(finish(&a), RenderStatus::Finished);
-    assert_eq!(last_commit(&a), context::COMMIT_FULL);
+    assert_eq!(last_commit(&a), context::COMMIT_INCREMENTAL);
     assert_bytes(
         &images(&a),
         &oracle(
@@ -847,7 +810,7 @@ fn primary_oracle(backend: Backend) -> Option<Vec<String>> {
         ),
         "render A after display resize",
     );
-    notes.push("settings change and display resize: full preparation, exact".into());
+    notes.push("settings change and display resize: target only, no preparation, exact".into());
 
     // Restart keeps settings and reproduces the same accumulation.
     a.restart().unwrap();
@@ -905,6 +868,240 @@ fn hardware_renders_match_fresh_l0_contexts() {
     }
 }
 
+/// S2 oracle: renders with different sizes, settings and shader variants share
+/// one prepared scene. Every image equals a fresh L0 context committed with the
+/// render's descriptor and settings, through incremental edits of every kind,
+/// full preparation, converge with a sequence offset and camera, and restart;
+/// the scene is prepared exactly once per full commit whatever the render count.
+fn shared_scene_oracle(backend: Backend) -> Option<Vec<String>> {
+    let engine = software_engine(backend)?;
+    let code = backend.code();
+    let mut notes = Vec::new();
+    engine.display().set_size(16, 12).unwrap();
+    let preparations = Arc::new(Mutex::new(0));
+    let errors = Arc::new(Mutex::new(Vec::new()));
+    let (counted, failed) = (preparations.clone(), errors.clone());
+    let _events = engine.on(move |event| match event {
+        EngineEvent::Progress {
+            stage: ProgressStage::Preparation,
+            progress,
+        } if *progress == 0. => *counted.lock().unwrap() += 1,
+        EngineEvent::Error { message } => failed.lock().unwrap().push(message.clone()),
+        _ => {}
+    });
+    let settings = [
+        RenderSettings {
+            max_samples: 4,
+            ..Default::default()
+        },
+        RenderSettings {
+            max_samples: 3,
+            bounces: 5,
+            bevel: false,
+            dispersion_wavelengths: 1,
+            direct_light_candidates: 2,
+            clamping: 2.5,
+            seed: 99,
+            transmissive_output_alpha_min: 0.5,
+            sampling_pattern: SamplingPattern::Random,
+            size: RenderSize::Fixed {
+                width: 10,
+                height: 7,
+            },
+            ..Default::default()
+        },
+        RenderSettings {
+            max_samples: 4,
+            sampling_pattern: SamplingPattern::ZSobol,
+            bevel_samples: 3,
+            seed: 3,
+            size: RenderSize::Fixed {
+                width: 12,
+                height: 9,
+            },
+            ..Default::default()
+        },
+        RenderSettings {
+            max_samples: 2,
+            bounces: 1,
+            bevel_samples: 12,
+            direct_light_candidates: 8,
+            size: RenderSize::Scale(0.5),
+            ..Default::default()
+        },
+    ];
+    let renders: Vec<Render> = settings
+        .iter()
+        .map(|s| Render::new(&engine, s.clone()).unwrap())
+        .collect();
+    let check = |scene: &[u8], camera: Option<&Camera>, what: &str| {
+        for (index, (render, settings)) in renders.iter().zip(&settings).enumerate() {
+            assert_eq!(
+                finish(render),
+                RenderStatus::Finished,
+                "{what}: render {index}"
+            );
+            let size = settings.resolve_size([16, 12]);
+            let cap = settings.sample_cap(settings.max_samples);
+            assert_bytes(
+                &images(render),
+                &oracle(
+                    code,
+                    &expected_descriptor(scene, size, settings.quality(), camera),
+                    &settings.l0(cap, 0),
+                    settings.max_samples,
+                ),
+                &format!("{what}: render {index}"),
+            );
+        }
+    };
+    let mut scene = lit_scene();
+    engine.set_scene(&scene).unwrap();
+    engine.update().unwrap();
+    check(&scene, None, "first commit");
+    assert_eq!(*preparations.lock().unwrap(), 1);
+    assert_eq!(renders[0].last_commit().unwrap(), Some(CommitKind::Full));
+    notes.push("4 renders (sizes, bounces, bevel, dispersion, candidates, clamping, seed, alpha, Random/ZSobol, bevel samples 3/12): one preparation, exact".into());
+
+    // Incremental edits of every kind reach every target.
+    let mut camera = Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap();
+    camera.world_matrix[12] = -0.25;
+    camera.fov = 38.;
+    let edits: [(&str, fn(&mut Vec<u8>)); 5] = [
+        ("material", |s| set_word(s, 84 + 1, 0.3f32.to_bits())),
+        ("light", |s| set_word(s, 136, 5f32.to_bits())),
+        ("environment", |s| set_word(s, 16, 0.3f32.to_bits())),
+        ("transform", |s| set_word(s, 64 + 4 + 12, 0.2f32.to_bits())),
+        ("descriptor camera", |s| {
+            set_word(s, 160 + 1, 50f32.to_bits())
+        }),
+    ];
+    let all = || renders.iter().map(images).collect::<Vec<_>>();
+    for (what, edit) in edits {
+        let before = all();
+        edit(&mut scene);
+        engine.set_scene(&scene).unwrap();
+        assert!(engine.update().unwrap());
+        assert_eq!(
+            renders[0].last_commit().unwrap(),
+            Some(CommitKind::Incremental),
+            "{what}"
+        );
+        check(&scene, None, what);
+        assert_ne!(all(), before, "{what} edit changes no image");
+    }
+    let before = all();
+    engine.set_camera(Some(camera)).unwrap();
+    engine.update().unwrap();
+    check(&scene, Some(&camera), "engine camera");
+    assert_ne!(all(), before, "engine camera changes no image");
+    assert_eq!(*preparations.lock().unwrap(), 1);
+    notes.push("material, light, environment, transform, descriptor and engine camera edits: incremental, every render exact".into());
+
+    // Settings and display size change only the targets.
+    renders[0]
+        .set_settings(RenderSettings {
+            bevel_samples: 6,
+            sampling_pattern: SamplingPattern::ZSobol,
+            ..settings[0].clone()
+        })
+        .unwrap();
+    renders[0].set_settings(settings[0].clone()).unwrap();
+    engine.display().set_size(18, 10).unwrap();
+    for render in &renders {
+        finish(render);
+    }
+    assert_eq!(*preparations.lock().unwrap(), 1);
+    engine.display().set_size(16, 12).unwrap();
+
+    // Full preparation: every target follows the new scene.
+    scene = full_edit(&scene);
+    engine.set_scene(&scene).unwrap();
+    engine.update().unwrap();
+    check(&scene, Some(&camera), "full preparation");
+    assert_eq!(*preparations.lock().unwrap(), 2);
+    assert_eq!(renders[0].last_commit().unwrap(), Some(CommitKind::Full));
+    notes.push("full preparation: one for all renders, exact".into());
+
+    // Converge with a sequence offset and its own camera, without preparation.
+    let mut other = camera;
+    other.world_matrix[13] = 0.3;
+    let mut options = ConvergeOptions::new(5);
+    options.sample_sequence_offset = 7;
+    options.camera = Some(other);
+    options.samples_per_batch = 2;
+    renders[1].converge(options).unwrap();
+    assert_bytes(
+        &images(&renders[1]),
+        &oracle(
+            code,
+            &expected_descriptor(&scene, [10, 7], settings[1].quality(), Some(&other)),
+            &settings[1].l0(settings[1].sample_cap(5), 7),
+            5,
+        ),
+        "converge with offset and camera",
+    );
+    let mut options = ConvergeOptions::new(3);
+    options.sample_sequence_offset = 2;
+    renders[2].converge(options).unwrap();
+    assert_bytes(
+        &images(&renders[2]),
+        &oracle(
+            code,
+            &expected_descriptor(&scene, [12, 9], settings[2].quality(), Some(&camera)),
+            &settings[2].l0(settings[2].sample_cap(3), 2),
+            3,
+        ),
+        "ZSobol converge with offset",
+    );
+    assert_eq!(*preparations.lock().unwrap(), 2);
+    notes.push("converge with sample_sequence_offset and camera: no preparation, exact".into());
+
+    // Restart reproduces each accumulation; other renders keep theirs.
+    let kept = images(&renders[3]);
+    renders[0].restart().unwrap();
+    assert_eq!(renders[0].samples(), 0);
+    assert_eq!(renders[3].samples(), 2);
+    assert_bytes(
+        &images(&renders[3]),
+        &kept,
+        "untouched render after restart",
+    );
+    check(&scene, Some(&camera), "restart");
+    assert_eq!(*preparations.lock().unwrap(), 2);
+    assert!(
+        errors.lock().unwrap().is_empty(),
+        "{:?}",
+        errors.lock().unwrap()
+    );
+    notes.push("restart and the untouched renders after converge: exact".into());
+    Some(notes)
+}
+
+#[test]
+fn shared_scene_renders_match_fresh_l0_contexts() {
+    let _test = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(notes) = shared_scene_oracle(Backend::Software) {
+        for note in notes {
+            println!("software S2 oracle: {note}");
+        }
+    }
+}
+
+/// HWRT is an open problem on Metal (whole-sample misses); run explicitly.
+#[test]
+#[ignore]
+fn hardware_shared_scene_renders_match_fresh_l0_contexts() {
+    let _test = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    for note in shared_scene_oracle(Backend::Hardware).unwrap() {
+        println!("hardware S2 oracle: {note}");
+    }
+}
+
 #[test]
 fn full_preparation_keeps_the_previous_image_and_publishes_atomically() {
     let _test = crate::ABI_TEST_LOCK
@@ -919,19 +1116,16 @@ fn full_preparation_keeps_the_previous_image_and_publishes_atomically() {
         max_samples: 3,
         ..Default::default()
     };
-    let render = Render::new(&engine, settings.clone()).unwrap();
-    let other = Render::new(
-        &engine,
-        RenderSettings {
-            max_samples: 2,
-            size: RenderSize::Fixed {
-                width: 8,
-                height: 6,
-            },
-            ..Default::default()
+    let small = RenderSettings {
+        max_samples: 2,
+        size: RenderSize::Fixed {
+            width: 8,
+            height: 6,
         },
-    )
-    .unwrap();
+        ..Default::default()
+    };
+    let render = Render::new(&engine, settings.clone()).unwrap();
+    let other = Render::new(&engine, small.clone()).unwrap();
     let scene = lit_scene();
     engine.set_scene(&scene).unwrap();
     engine.update().unwrap();
@@ -940,15 +1134,13 @@ fn full_preparation_keeps_the_previous_image_and_publishes_atomically() {
     assert!(display.present(&render).unwrap().is_some());
     let shown = display.read_rgba8(&render).unwrap();
     let before = images(&render);
+    let other_before = images(&other);
 
-    // Hold the AOT runtime so the full preparation cannot finish.
-    let (started, entered) = mpsc::sync_channel(1);
-    let (resume, resumed) = mpsc::sync_channel::<()>(1);
-    crate::runtime::enqueue(move || {
-        started.send(()).unwrap();
-        let _ = resumed.recv_timeout(Duration::from_secs(60));
-    });
-    entered.recv().unwrap();
+    // A shader feature edit needs full preparation of the shared scene; hold it.
+    let resume = hold_preparation();
+    let edited = full_edit(&scene);
+    engine.set_scene(&edited).unwrap();
+    engine.update().unwrap();
     let changed = RenderSettings {
         bevel_samples: 4,
         ..settings.clone()
@@ -956,32 +1148,46 @@ fn full_preparation_keeps_the_previous_image_and_publishes_atomically() {
     render.set_settings(changed.clone()).unwrap();
     for _ in 0..20 {
         assert_eq!(render.refine().unwrap(), RenderStatus::Preparing);
+        assert_eq!(other.refine().unwrap(), RenderStatus::Preparing);
         std::thread::sleep(Duration::from_millis(2));
     }
-    assert_eq!(render.status(), RenderStatus::Preparing);
     assert_eq!(render.samples(), 0);
     assert!(display.present(&render).unwrap().is_none());
     assert!(display.read_rgba8(&render).is_err());
-    // The previous accumulation stays readable; the other render keeps working.
+    // Every render keeps its previous accumulation readable.
     assert_bytes(
         &images(&render),
         &before,
         "previous image during preparation",
     );
-    other.restart().unwrap();
-    assert_eq!(finish(&other), RenderStatus::Finished);
-    assert!(display.present(&other).unwrap().is_some());
+    assert_bytes(
+        &images(&other),
+        &other_before,
+        "other render's previous image during preparation",
+    );
     resume.send(()).unwrap();
     assert_eq!(finish(&render), RenderStatus::Finished);
+    assert_eq!(finish(&other), RenderStatus::Finished);
+    assert_eq!(render.last_commit().unwrap(), Some(CommitKind::Full));
     assert_bytes(
         &images(&render),
         &oracle(
             0,
-            &expected_descriptor(&scene, [16, 12], 3, None),
-            &changed.l0(3, 0),
+            &expected_descriptor(&edited, [16, 12], 3, None),
+            &changed.l0(4096, 0),
             3,
         ),
         "after preparation",
+    );
+    assert_bytes(
+        &images(&other),
+        &oracle(
+            0,
+            &expected_descriptor(&edited, [8, 6], 3, None),
+            &small.l0(4096, 0),
+            2,
+        ),
+        "other render after preparation",
     );
     assert!(display.present(&render).unwrap().is_some());
     assert_ne!(display.read_rgba8(&render).unwrap(), shown);
@@ -1134,31 +1340,24 @@ fn fallback_is_presented_until_the_render_is_complete() {
     assert_eq!(finish(&main), RenderStatus::Finished);
     assert!(!display.present(&main).unwrap().unwrap().fallback);
 
-    // While the main render prepares, refining it refines the fallback, which is shown.
-    let (started, entered) = mpsc::sync_channel(1);
-    let (resume, resumed) = mpsc::sync_channel::<()>(1);
-    crate::runtime::enqueue(move || {
-        started.send(()).unwrap();
-        let _ = resumed.recv_timeout(Duration::from_secs(60));
-    });
-    entered.recv().unwrap();
+    // While the main render has no sample of its new target and cannot finish one
+    // within its budget, refining it refines the fallback, which is shown.
     main.set_settings(RenderSettings {
         max_samples: 4,
         bevel_samples: 5,
+        time_budget_ms: 1e-6,
         ..Default::default()
     })
     .unwrap();
     preview.restart().unwrap();
     assert_eq!(preview.samples(), 0);
+    assert_eq!(main.refine().unwrap(), RenderStatus::Converging);
     let deadline = Instant::now() + Duration::from_secs(60);
-    let presented = loop {
-        assert_eq!(main.refine().unwrap(), RenderStatus::Preparing);
-        if let Some(presented) = display.present(&main).unwrap() {
-            break presented;
-        }
-        assert!(Instant::now() < deadline, "fallback never presented");
+    while !preview.collect().unwrap() {
+        assert!(Instant::now() < deadline, "fallback sample never completed");
         std::thread::sleep(Duration::from_millis(1));
-    };
+    }
+    let presented = display.present(&main).unwrap().unwrap();
     assert_eq!(
         presented,
         Presented {
@@ -1174,7 +1373,6 @@ fn fallback_is_presented_until_the_render_is_complete() {
         main.refine().unwrap();
     }
     assert_eq!(preview.samples(), 1);
-    resume.send(()).unwrap();
     assert_eq!(finish(&main), RenderStatus::Finished);
     assert!(!display.present(&main).unwrap().unwrap().fallback);
     // Dropping the fallback detaches it.
@@ -1397,16 +1595,19 @@ fn l0_samples(handle: u64) -> std::result::Result<u32, Status> {
         Err(super::status_from(code))
     }
 }
-/// Holds the AOT runtime thread until the returned sender is used or dropped.
-fn hold_runtime() -> mpsc::SyncSender<()> {
-    let (started, entered) = mpsc::sync_channel(1);
-    let (resume, resumed) = mpsc::sync_channel::<()>(1);
-    crate::runtime::enqueue(move || {
-        started.send(()).unwrap();
-        let _ = resumed.recv_timeout(Duration::from_secs(60));
-    });
-    entered.recv().unwrap();
+/// Holds the next full preparation until the returned sender is used or dropped.
+fn hold_preparation() -> mpsc::SyncSender<()> {
+    let (resume, resumed) = mpsc::sync_channel(1);
+    *context::PREPARATION_GATE.lock().unwrap() = Some(resumed);
     resume
+}
+/// `scene` with the background hidden: a shader feature change that only full
+/// preparation applies.
+fn full_edit(scene: &[u8]) -> Vec<u8> {
+    let mut edited = scene.to_vec();
+    let flags = word(&edited, h::QUALITY_FLAGS);
+    set_word(&mut edited, h::QUALITY_FLAGS, flags ^ 4);
+    edited
 }
 /// Refines until a batch is in flight right after the call.
 fn refine_until_in_flight(render: &Render) {
@@ -1444,31 +1645,19 @@ fn full_preparation_with_a_batch_in_flight_keeps_reads_and_releases_the_context(
     let handle = render.engine().lock().renders[&render.id()].context();
     refine_until_in_flight(&render);
 
-    // A settings change while a batch runs: full preparation, held on the runtime.
-    // (A size change would first try the incremental path on this thread, which
-    // itself needs the held runtime.)
-    let resume = hold_runtime();
-    render
-        .set_settings(RenderSettings {
-            bevel_samples: 5,
-            ..settings.clone()
-        })
-        .unwrap();
+    // A full preparation while a batch runs: the batch completes on the previous
+    // scene and stays readable.
+    let resume = hold_preparation();
+    engine.set_scene(&full_edit(&scene)).unwrap();
+    engine.update().unwrap();
     assert_eq!(render.refine().unwrap(), RenderStatus::Preparing);
-    assert!(!render.engine().lock().renders[&render.id()].in_flight());
+    let during = images(&render);
     let previous = l0_samples(handle).unwrap();
     assert!(previous > 0);
-    // Read during preparation; the oracle needs the runtime, so compare afterwards.
-    let during = images(&render);
-    // Dropping the render while it prepares destroys its context once the
-    // cancelled preparation retires.
-    let release = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(200));
-        resume.send(()).unwrap();
-    });
+    // Dropping the render while the scene prepares destroys its target context.
     drop(render);
-    release.join().unwrap();
     assert_eq!(l0_samples(handle), Err(Status::InvalidHandle));
+    resume.send(()).unwrap();
     assert_bytes(
         &during,
         &oracle(
@@ -1479,8 +1668,9 @@ fn full_preparation_with_a_batch_in_flight_keeps_reads_and_releases_the_context(
         ),
         "previous image while preparing",
     );
+    let scene = full_edit(&scene);
 
-    // A rejected full preparation keeps the previous image readable.
+    // A rejected render target keeps the previous image readable.
     let render = Render::new(&engine, settings.clone()).unwrap();
     refine_until_in_flight(&render);
     render
@@ -1611,27 +1801,23 @@ fn raising_max_samples_continues_except_for_zsobol() {
             ..settings.clone()
         };
         render.set_settings(raised.clone()).unwrap();
-        let status = render.refine().unwrap();
+        assert_eq!(render.refine().unwrap(), RenderStatus::Converging);
+        // ZSobol restarts its target; the shared scene is never prepared again.
         if pattern == SamplingPattern::ZSobol {
-            assert_eq!(status, RenderStatus::Preparing);
             assert_eq!(render.samples(), 0);
         } else {
-            assert_eq!(status, RenderStatus::Converging);
             assert!(render.samples() >= 3, "{pattern:?} restarted");
         }
         assert_eq!(finish(&render), RenderStatus::Finished);
-        let prepared = *preparations.lock().unwrap() - before;
-        assert_eq!(prepared, usize::from(pattern == SamplingPattern::ZSobol));
+        assert_eq!(*preparations.lock().unwrap(), before);
         assert_bytes(
             &images(&render),
             &oracle(0, &descriptor, &raised.l0(6, 0), 6),
             &format!("{pattern:?} after raising max_samples"),
         );
-        // Converge without offset or camera reuses the prepared scene unless ZSobol.
-        let before = *preparations.lock().unwrap();
+        // Converge reuses the prepared scene.
         render.converge(ConvergeOptions::new(5)).unwrap();
-        let prepared = *preparations.lock().unwrap() - before;
-        assert_eq!(prepared, usize::from(pattern == SamplingPattern::ZSobol));
+        assert_eq!(*preparations.lock().unwrap(), before);
         assert_bytes(
             &images(&render),
             &oracle(0, &descriptor, &raised.l0(5, 0), 5),

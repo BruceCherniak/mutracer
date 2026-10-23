@@ -1,7 +1,8 @@
-//! Independent accumulations. Each render commits the engine scene to its own L0 context.
+//! Independent accumulations. The engine prepares its scene once in a shared L0
+//! context; each render's L0 context is a target linked to it (S2).
 use super::engine::{
     Camera, Engine, EngineEvent, ProgressStage, QUALITY_BEVEL, QUALITY_DISPERSION, State,
-    Subscription, override_shared,
+    Subscription,
 };
 use super::{Result, Status, error, l0, l0_blocking, l0_result};
 use crate::context::{self, CommitOutcome, CommitPath};
@@ -339,10 +340,47 @@ pub(super) struct TargetKey {
     settings: L0Settings,
     camera_override: Option<[u8; 128]>,
 }
+/// Full preparation of the shared scene on a library thread.
 struct Pending {
-    key: TargetKey,
+    revision: u64,
     result: mpsc::Receiver<Result<()>>,
     thread: Option<std::thread::JoinHandle<()>>,
+}
+/// The engine's prepared scene: one L0 context committed with fixed settings,
+/// whose 1×1 own target is never rendered. Renders link their targets to it.
+#[derive(Default)]
+pub(super) struct SharedScene {
+    context: Option<u64>,
+    /// Scene revision of the published scene.
+    published: Option<u64>,
+    /// Full preparations published so far.
+    generation: u64,
+    pending: Option<Pending>,
+    failed: Option<(u64, String)>,
+}
+impl SharedScene {
+    /// Destroys the scene context once its preparation has drained; renders first.
+    pub(super) fn release(&mut self) {
+        let Some(context) = self.context.take() else {
+            return;
+        };
+        if self.pending.is_some() {
+            let _ = l0_blocking(|e, n| unsafe { context::mt_context_cancel_commit(context, e, n) });
+        }
+        let _ = l0_blocking(|e, n| unsafe { context::mt_context_destroy(context, e, n) });
+        if let Some(mut pending) = self.pending.take() {
+            if let Some(thread) = pending.thread.take() {
+                let _ = thread.join();
+            }
+        }
+    }
+    pub(super) fn context(&self) -> Option<u64> {
+        self.context
+    }
+}
+/// Scene commits use fixed settings; render settings only shape targets.
+fn scene_settings() -> L0Settings {
+    RenderSettings::default().l0(MAX_TOTAL_SAMPLES, 0)
 }
 struct Flight {
     job: u64,
@@ -369,9 +407,11 @@ struct Denoise {
 pub(super) struct RenderState {
     pub(super) settings: RenderSettings,
     pub(super) fallback: Option<u64>,
+    /// L0 context linked as a target to the engine's shared scene.
     context: u64,
     published: Option<TargetKey>,
-    pending: Option<Pending>,
+    /// `SharedScene::generation` of the published target.
+    generation: u64,
     failed: Option<(TargetKey, String)>,
     job: Option<Flight>,
     /// Complete samples in the published accumulation.
@@ -388,7 +428,7 @@ pub(super) struct RenderState {
     denoise: Denoise,
 }
 impl RenderState {
-    /// Destroys the L0 context once preparation and GPU work have drained.
+    /// Destroys the target context once its GPU work has drained.
     pub(super) fn release(mut self) {
         let context = self.context;
         if let Some(flight) = self.job.as_mut() {
@@ -397,16 +437,7 @@ impl RenderState {
             let _ = l0_blocking(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
         }
         let _ = drain(&mut self);
-        if self.pending.is_some() {
-            let _ = l0_blocking(|e, n| unsafe { context::mt_context_cancel_commit(context, e, n) });
-        }
-        // Destroy waits for a cancelled candidate to retire.
         let _ = l0_blocking(|e, n| unsafe { context::mt_context_destroy(context, e, n) });
-        if let Some(mut pending) = self.pending.take() {
-            if let Some(thread) = pending.thread.take() {
-                let _ = thread.join();
-            }
-        }
     }
     fn publish(&mut self, key: TargetKey, full: bool) {
         self.published = Some(key);
@@ -440,11 +471,9 @@ impl RenderState {
         self.captured
     }
     fn current(&self, state_scene: u64, state_camera: u64) -> bool {
-        self.pending.is_none()
-            && self
-                .published
-                .as_ref()
-                .is_some_and(|k| k.scene == state_scene && k.camera == state_camera)
+        self.published
+            .as_ref()
+            .is_some_and(|k| k.scene == state_scene && k.camera == state_camera)
     }
 }
 fn cancel_denoise(render: &mut RenderState) {
@@ -540,120 +569,99 @@ fn commit(state: &mut State, id: u64, key: TargetKey, blocking: bool) -> Result<
             Step::Failed => return Ok(false),
             Step::Waiting if !blocking => return Ok(false),
             Step::Waiting => {
-                if state.renders[&id].pending.is_none() {
+                if state.shared.pending.is_none() {
                     std::thread::sleep(Duration::from_micros(200));
                 }
             }
         }
     }
 }
-/// Collects a finished background preparation. Returns whether one is still running.
-/// A preparation for another key than `key` is cancelled first.
-fn poll_pending(
-    render: &mut RenderState,
-    key: Option<&TargetKey>,
-    blocking: bool,
-    events: &mut Vec<EngineEvent>,
-) -> bool {
-    let Some(pending) = render.pending.as_mut() else {
-        return false;
-    };
-    if key.is_some_and(|key| pending.key != *key) {
-        let context = render.context;
-        let _ = l0(|e, n| unsafe { context::mt_context_cancel_commit(context, e, n) });
-    }
-    let received = if blocking {
-        pending
-            .result
-            .recv()
-            .map_err(|_| mpsc::TryRecvError::Disconnected)
-    } else {
-        pending.result.try_recv()
-    };
-    let outcome = match received {
-        Ok(outcome) => outcome,
-        Err(mpsc::TryRecvError::Empty) => return true,
-        Err(mpsc::TryRecvError::Disconnected) => Err(error(
-            Status::ContextFailed,
-            "Scene preparation thread stopped",
-        )),
-    };
-    let mut pending = render.pending.take().unwrap();
-    if let Some(thread) = pending.thread.take() {
-        let _ = thread.join();
-    }
-    match outcome {
-        Ok(()) => {
-            render.publish(pending.key, true);
-            events.push(EngineEvent::Progress {
-                stage: ProgressStage::Preparation,
-                progress: 1.,
-            });
-        }
-        Err(e) if e.status == Status::Cancelled => {}
-        Err(e) => {
-            render.failed = Some((pending.key, e.message.clone()));
-            events.push(EngineEvent::Error { message: e.message });
-        }
-    }
-    false
+enum SceneStep {
+    Published,
+    Waiting,
+    Failed(String),
 }
-fn commit_step(
+/// Brings the shared scene to the engine's scene revision. Incremental commits
+/// apply on this thread; full preparation runs on a library thread while the
+/// previous scene stays published. After each publication every render's target
+/// is set again.
+fn scene_step(
     state: &mut State,
-    id: u64,
-    key: &TargetKey,
     blocking: bool,
     events: &mut Vec<EngineEvent>,
-) -> Result<Step> {
-    // Publish other renders' finished preparations, so a deferred incremental
-    // commit never waits on a preparation nobody collects.
-    let others: Vec<u64> = state
-        .renders
-        .iter()
-        .filter(|(other, r)| **other != id && r.pending.is_some())
-        .map(|(other, _)| *other)
-        .collect();
-    for other in others {
-        poll_pending(state.renders.get_mut(&other).unwrap(), None, false, events);
+) -> Result<SceneStep> {
+    let revision = state.scene_revision;
+    let shared = &mut state.shared;
+    if let Some(pending) = shared.pending.as_mut() {
+        if pending.revision != revision {
+            let context = shared.context.unwrap();
+            let _ = l0(|e, n| unsafe { context::mt_context_cancel_commit(context, e, n) });
+        }
+        let received = if blocking {
+            pending
+                .result
+                .recv()
+                .map_err(|_| mpsc::TryRecvError::Disconnected)
+        } else {
+            pending.result.try_recv()
+        };
+        let outcome = match received {
+            Ok(outcome) => outcome,
+            Err(mpsc::TryRecvError::Empty) => return Ok(SceneStep::Waiting),
+            Err(mpsc::TryRecvError::Disconnected) => Err(error(
+                Status::ContextFailed,
+                "Scene preparation thread stopped",
+            )),
+        };
+        let mut pending = shared.pending.take().unwrap();
+        if let Some(thread) = pending.thread.take() {
+            let _ = thread.join();
+        }
+        match outcome {
+            Ok(()) => {
+                shared.published = Some(pending.revision);
+                shared.failed = None;
+                shared.generation += 1;
+                events.push(EngineEvent::Progress {
+                    stage: ProgressStage::Preparation,
+                    progress: 1.,
+                });
+                refresh_targets(state, events);
+            }
+            Err(e) if e.status == Status::Cancelled => {}
+            Err(e) => {
+                shared.failed = Some((pending.revision, e.message.clone()));
+                events.push(EngineEvent::Error { message: e.message });
+            }
+        }
     }
-    let others_pending = state
-        .renders
-        .iter()
-        .any(|(other, r)| *other != id && r.pending.is_some());
-    let scene = state.scene.clone().expect("committed scene");
-    let engine_camera = state.camera;
-    let render = state.renders.get_mut(&id).unwrap();
-    if poll_pending(render, Some(key), blocking, events) {
-        return Ok(Step::Waiting);
+    let shared = &mut state.shared;
+    if shared.published == Some(revision) {
+        return Ok(SceneStep::Published);
     }
-    if render.published.as_ref() == Some(key) {
-        return Ok(Step::Published);
+    if let Some((_, message)) = shared.failed.as_ref().filter(|(r, _)| *r == revision) {
+        return Ok(SceneStep::Failed(message.clone()));
     }
-    if render
-        .failed
-        .as_ref()
-        .is_some_and(|(failed, _)| failed == key)
-    {
-        render.error = true;
-        return Ok(Step::Failed);
+    if shared.pending.is_some() {
+        return Ok(SceneStep::Waiting);
     }
-    render.error = false;
-    // Cancel and drain the in-flight batch first: an active L0 job would block
-    // reads of the previous image and context destruction during preparation.
-    // Its samples are never counted.
-    if let Some(flight) = render.job.as_mut() {
-        flight.cancelled = true;
-        let job = flight.job;
-        let _ = l0_blocking(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
-        drain(render)?;
-    }
-    let camera = key.camera_override.as_ref().or(engine_camera.as_ref());
-    let bytes = override_shared(&scene, key.size, key.quality, camera)?;
-    let settings = key.settings;
+    let context = match shared.context {
+        Some(context) => context,
+        None => {
+            let context = context::create_scene_with_gpu(state.gpu.clone(), state.backend.code())
+                .map_err(|e| error(Status::Unavailable, e))?;
+            state.shared.context = Some(context);
+            context
+        }
+    };
+    // The descriptor as given: its size and quality bits only shape the
+    // context's own target, which L0 keeps minimal.
+    let bytes = state.scene.clone().expect("committed scene");
+    let settings = scene_settings();
     let mut outcome = CommitOutcome::Done;
     let mut message = [0 as std::ffi::c_char; 1024];
     let code = context::commit_path(
-        render.context,
+        context,
         &bytes,
         &settings,
         CommitPath::IncrementalOnly,
@@ -663,25 +671,26 @@ fn commit_step(
     match l0_result(code, &message) {
         Ok(()) => match outcome {
             CommitOutcome::Done => {
-                render.publish(key.clone(), false);
-                return Ok(Step::Published);
+                state.shared.published = Some(revision);
+                state.shared.failed = None;
+                refresh_targets(state, events);
+                return Ok(SceneStep::Published);
             }
             CommitOutcome::NeedsFull => {}
-            // Another render of this engine is preparing; try incrementally after it publishes.
-            CommitOutcome::Blocked if others_pending && !blocking => return Ok(Step::Waiting),
+            // Another engine is preparing; try incrementally after it publishes.
+            CommitOutcome::Blocked if !blocking => return Ok(SceneStep::Waiting),
             CommitOutcome::Blocked => {}
         },
-        Err(e) if e.status == Status::Busy => return Ok(Step::Waiting),
+        Err(e) if e.status == Status::Busy => return Ok(SceneStep::Waiting),
         Err(e) => {
-            render.failed = Some((key.clone(), e.message.clone()));
-            render.error = true;
-            events.push(EngineEvent::Error { message: e.message });
-            return Ok(Step::Failed);
+            state.shared.failed = Some((revision, e.message.clone()));
+            events.push(EngineEvent::Error {
+                message: e.message.clone(),
+            });
+            return Ok(SceneStep::Failed(e.message));
         }
     }
-    // Full preparation on a library thread; the old scene stays readable.
     let (send, result) = mpsc::channel();
-    let context = render.context;
     let thread = std::thread::Builder::new()
         .name("MuTracer scene preparation".into())
         .spawn(move || {
@@ -706,8 +715,8 @@ fn commit_step(
             let _ = send.send(outcome);
         })
         .map_err(|e| error(Status::Error, format!("Starting scene preparation: {e}")))?;
-    render.pending = Some(Pending {
-        key: key.clone(),
+    state.shared.pending = Some(Pending {
+        revision,
         result,
         thread: Some(thread),
     });
@@ -715,7 +724,119 @@ fn commit_step(
         stage: ProgressStage::Preparation,
         progress: 0.,
     });
-    Ok(Step::Waiting)
+    Ok(SceneStep::Waiting)
+}
+/// Sets the target of every render that is not converging on the published scene.
+fn refresh_targets(state: &mut State, events: &mut Vec<EngineEvent>) {
+    let ids: Vec<u64> = state.renders.keys().copied().collect();
+    for id in ids {
+        if state.renders[&id].busy {
+            continue;
+        }
+        if let Some(key) = desired(state, &state.renders[&id]) {
+            if let Err(e) = target_step(state, id, &key, events) {
+                state.renders.get_mut(&id).unwrap().error = true;
+                events.push(EngineEvent::Error { message: e.message });
+            }
+        }
+    }
+}
+/// Links the render's L0 context to the published shared scene with `key`.
+fn target_step(
+    state: &mut State,
+    id: u64,
+    key: &TargetKey,
+    events: &mut Vec<EngineEvent>,
+) -> Result<Step> {
+    let scene_context = state.shared.context.expect("published shared scene");
+    let generation = state.shared.generation;
+    let camera = match key.camera_override.or(state.camera) {
+        Some(camera) => camera,
+        None => {
+            let scene = state.scene.as_ref().expect("committed scene");
+            let at = super::engine::camera_offset(scene)?;
+            scene[at..at + 128].try_into().unwrap()
+        }
+    };
+    let render = state.renders.get_mut(&id).unwrap();
+    if render.published.as_ref() == Some(key) {
+        return Ok(Step::Published);
+    }
+    if render
+        .failed
+        .as_ref()
+        .is_some_and(|(failed, _)| failed == key)
+    {
+        render.error = true;
+        return Ok(Step::Failed);
+    }
+    render.error = false;
+    // An active L0 job blocks setting the target; its samples are never counted.
+    if let Some(flight) = render.job.as_mut() {
+        flight.cancelled = true;
+        let job = flight.job;
+        let _ = l0_blocking(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
+        drain(render)?;
+    }
+    let mut message = [0 as std::ffi::c_char; 1024];
+    let code = context::set_target(
+        render.context,
+        scene_context,
+        &key.settings,
+        key.size,
+        key.quality,
+        &camera,
+        &mut message,
+    );
+    match l0_result(code, &message) {
+        Ok(()) => {
+            let full = render.generation != generation
+                || render.published.as_ref().is_none_or(|k| k.size != key.size);
+            render.generation = generation;
+            render.publish(key.clone(), full);
+            Ok(Step::Published)
+        }
+        Err(e) if e.status == Status::Busy => Ok(Step::Waiting),
+        Err(e) => {
+            render.failed = Some((key.clone(), e.message.clone()));
+            render.error = true;
+            events.push(EngineEvent::Error { message: e.message });
+            Ok(Step::Failed)
+        }
+    }
+}
+fn commit_step(
+    state: &mut State,
+    id: u64,
+    key: &TargetKey,
+    blocking: bool,
+    events: &mut Vec<EngineEvent>,
+) -> Result<Step> {
+    let render = state.renders.get_mut(&id).unwrap();
+    if render
+        .failed
+        .as_ref()
+        .is_none_or(|(failed, _)| failed != key)
+    {
+        render.error = false;
+    }
+    match scene_step(state, blocking, events)? {
+        SceneStep::Published => {}
+        SceneStep::Waiting => return Ok(Step::Waiting),
+        SceneStep::Failed(message) => {
+            let render = state.renders.get_mut(&id).unwrap();
+            render.failed = Some((key.clone(), message));
+            render.error = true;
+            return Ok(Step::Failed);
+        }
+    }
+    if state.shared.published != Some(key.scene) {
+        return Err(error(
+            Status::InvalidState,
+            "Engine inputs changed during the commit",
+        ));
+    }
+    target_step(state, id, key, events)
 }
 
 enum Poll {
@@ -1088,7 +1209,7 @@ impl Render {
                 fallback: None,
                 context,
                 published: None,
-                pending: None,
+                generation: 0,
                 failed: None,
                 job: None,
                 samples: 0,
@@ -1279,7 +1400,7 @@ impl Render {
                     }
                     // L0 keeps a cancelled batch that had already finished; the
                     // partial accumulation stays valid for the same key.
-                    if render.published.is_some() && render.pending.is_none() {
+                    if render.published.is_some() {
                         render.samples = context_info(render.context)?.samples;
                         render.needs_capture = render.samples > 0;
                     }
@@ -1492,7 +1613,7 @@ impl Render {
                 let _ = l0(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
             }
             drain(render)?;
-            if render.published.is_some() && render.pending.is_none() {
+            if render.published.is_some() {
                 let context = render.context;
                 l0_blocking(|e, n| unsafe { context::mt_context_reset(context, e, n) })?;
                 let key = render.published.clone().unwrap();
@@ -1559,8 +1680,11 @@ impl Render {
     /// The intersection backend actually used by the published scene and, for
     /// a software fallback of a hardware engine, the reason.
     pub fn backend(&self) -> Result<(super::Backend, String)> {
-        self.with(|state, id| {
-            let context = state.renders[&id].context;
+        self.with(|state, _| {
+            let context = state
+                .shared
+                .context()
+                .ok_or_else(|| error(Status::InvalidState, "No committed scene"))?;
             let mut active = 0;
             let mut reason = [0 as std::ffi::c_char; 512];
             l0_blocking(|e, n| unsafe {
@@ -1586,16 +1710,18 @@ impl Render {
             Ok((backend, String::from_utf8_lossy(&bytes).into_owned()))
         })
     }
-    /// How the last successful commit reached the published scene, if any.
+    /// How the last successful commit reached the published scene, if any. The
+    /// scene is shared by the engine's renders; render settings never commit it.
     pub fn last_commit(&self) -> Result<Option<CommitKind>> {
-        self.with(|state, id| {
-            Ok(
-                match context_info(state.renders[&id].context)?.last_commit {
-                    context::COMMIT_FULL => Some(CommitKind::Full),
-                    context::COMMIT_INCREMENTAL => Some(CommitKind::Incremental),
-                    _ => None,
-                },
-            )
+        self.with(|state, _| {
+            let Some(context) = state.shared.context() else {
+                return Ok(None);
+            };
+            Ok(match context_info(context)?.last_commit {
+                context::COMMIT_FULL => Some(CommitKind::Full),
+                context::COMMIT_INCREMENTAL => Some(CommitKind::Incremental),
+                _ => None,
+            })
         })
     }
     /// Whether OIDN is running on this render's samples.

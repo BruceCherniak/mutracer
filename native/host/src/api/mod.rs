@@ -10,10 +10,10 @@
 //! thread inside `update`, `refine` and `converge`, after the internal lock is
 //! released, so they may call back into the API.
 //!
-//! The L0 context/job API stays available. In this implementation every render
-//! owns one L0 context on the engine device: N renders prepare and hold N copies
-//! of the scene, and changing a render's size, sampling pattern, sample cap or
-//! bevel samples fully prepares that render again.
+//! The L0 context/job API stays available. An engine prepares and holds its scene
+//! once, whatever the number of renders; a render holds only its camera, settings
+//! uniforms and accumulation, so changing its size or settings, a converge
+//! camera or sequence offset never prepares the scene again.
 mod abi;
 mod display;
 mod engine;

@@ -359,13 +359,19 @@ fn environment_step(a: &Words, b: &Words) -> Option<Step> {
 }
 
 /// Ordered retained updates equivalent to committing `next` over `previous`,
-/// or `None` when only full preparation reproduces it.
-pub(crate) fn plan(previous: &[u8], next: &[u8], sync: &SceneSync) -> Option<Vec<Step>> {
+/// or `None` when only full preparation reproduces it. With `scene_only` the
+/// header size and bevel/dispersion bits are ignored: they shape only the own
+/// target of a scene that renders through linked targets.
+pub(crate) fn plan(
+    previous: &[u8],
+    next: &[u8],
+    sync: &SceneSync,
+    scene_only: bool,
+) -> Option<Vec<Step>> {
     let (a, b) = (Words(previous), Words(next));
     if a.len() < h::WORDS
         || b.len() < h::WORDS
-        || sync.resolution
-        || sync.quality
+        || !scene_only && (sync.resolution || sync.quality)
         || sync.meshes == 2
     {
         return None;
