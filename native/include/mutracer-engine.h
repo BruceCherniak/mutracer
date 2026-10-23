@@ -17,13 +17,14 @@ extern "C" {
  * Return MT_OK (0) or a nonzero mt_status. If error is non-NULL and
  * capacity > 0, it receives a truncated NUL-terminated UTF-8 message. Records
  * start with struct_size (see mutracer-status.h); initialize them with the
- * matching mt_*_default function. Inputs are copied; no caller pointer is
+ * matching mt_*_default function when provided. Inputs are copied; no caller pointer is
  * retained except callback user pointers.
  *
  * Threads: an engine and everything created from it may be called from any
  * thread, one thread at a time. Only mt_render_cancel may be called concurrently,
  * from any thread. Full scene preparation and denoising run on library threads.
  * Callbacks run synchronously on the calling thread inside mt_engine_update,
+ * mt_engine_read_depth_samples,
  * mt_render_refine, mt_render_converge and the render loop calls, and may call
  * back into this API, except into the render loop that is running them
  * (MT_ERROR_INVALID_STATE).
@@ -72,6 +73,26 @@ int32_t mt_engine_set_camera(mt_engine engine, const mt_camera_v4 *camera, char 
  * MT_RENDER_PREPARING until it is published. A failing render reports an error
  * event and does not stop the others. */
 int32_t mt_engine_update(mt_engine engine, uint32_t *changed, char *error, size_t capacity);
+
+enum { MT_DEPTH_SAMPLE_GRID = 7, MT_DEPTH_SAMPLE_COUNT = 49 };
+typedef struct mt_depth_sample_area {
+  uint32_t struct_size; /* sizeof(mt_depth_sample_area). */
+  float x; /* Required: 0..1 from the left. */
+  float y; /* Required: 0..1 from the top. */
+  float size; /* Required: nonnegative half height / viewport height; 0 = one point. */
+} mt_depth_sample_area;
+MT_ENGINE_LAYOUT(mt_depth_sample_area, 16);
+/* Blocking pinhole query from the committed engine camera, using display aspect.
+ * No render or completed beauty sample is required. Top-row-first camera-forward
+ * depths in scene units; misses/out-of-viewport rays = 0. Skips alpha holes and
+ * invisible catchers through at most 32 layers. No jitter/DOF or accumulation.
+ * count/written are numbers of floats, not bytes. written is required: 0 while
+ * the committed scene is unready/preparing (retry later), 49 on success.
+ * NULL samples + count 0 queries readiness/size; otherwise count must be >=49.
+ * A short destination returns BUFFER_TOO_SMALL with written=49, without a copy.
+ * Queries can compile a GPU pipeline and wait for readback; no automatic update. */
+int32_t mt_engine_read_depth_samples(mt_engine engine, const mt_depth_sample_area *area,
+  float *samples, size_t count, size_t *written, char *error, size_t capacity);
 
 typedef struct mt_engine_snapshot {
   uint32_t struct_size;

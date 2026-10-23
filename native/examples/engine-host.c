@@ -4,6 +4,7 @@
  * Prints "PASS <n> engine checks"; with BACKEND 1 (HWRT) image differences are
  * reported as "HWRT-DIFFERENCE" (known Metal limitation) instead of failing. */
 #include <stdio.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
@@ -159,6 +160,12 @@ int main(int argc, char **argv) {
   mt_engine_snapshot info = {.struct_size = sizeof info};
   OK(mt_engine_info(engine, &info, error, sizeof error));
   REQUIRE(info.backend == backend && info.adapter_name[0] != 0, "engine info");
+  mt_depth_sample_area area = {.struct_size = sizeof area, .x = .5f, .y = .5f, .size = .07f};
+  float depths[MT_DEPTH_SAMPLE_COUNT + 2];
+  size_t depth_count = 123;
+  for (unsigned i = 0; i < MT_DEPTH_SAMPLE_COUNT + 2; i++) depths[i] = -123.f;
+  OK(mt_engine_read_depth_samples(engine, &area, depths + 1, MT_DEPTH_SAMPLE_COUNT, &depth_count, error, sizeof error));
+  REQUIRE(depth_count == 0 && depths[1] == -123.f, "depth unready leaves destination unchanged");
   OK(mt_engine_set_scene(engine, scene, length, error, sizeof error));
 
   /* A fixed-size render whose quality bits match the scene's: no descriptor override. */
@@ -188,6 +195,17 @@ int main(int argc, char **argv) {
   converge.user = &progress;
   uint32_t converged = 0;
   OK(mt_render_converge(render, &converge, &converged, error, sizeof error));
+  OK(mt_engine_read_depth_samples(engine, &area, NULL, 0, &depth_count, error, sizeof error));
+  REQUIRE(depth_count == MT_DEPTH_SAMPLE_COUNT, "depth size is floats");
+  STATUS(mt_engine_read_depth_samples(engine, &area, depths + 1, MT_DEPTH_SAMPLE_COUNT - 1, &depth_count, error, sizeof error), MT_ERROR_BUFFER_TOO_SMALL);
+  REQUIRE(depth_count == MT_DEPTH_SAMPLE_COUNT && depths[1] == -123.f, "short depth destination untouched");
+  OK(mt_engine_read_depth_samples(engine, &area, depths + 1, MT_DEPTH_SAMPLE_COUNT, &depth_count, error, sizeof error));
+  REQUIRE(depth_count == MT_DEPTH_SAMPLE_COUNT && depths[0] == -123.f && depths[MT_DEPTH_SAMPLE_COUNT + 1] == -123.f, "depth canaries");
+  for (unsigned i = 1; i <= MT_DEPTH_SAMPLE_COUNT; i++) REQUIRE(isfinite(depths[i]) && depths[i] >= 0.f, "finite depth");
+  area.x = -1.f;
+  STATUS(mt_engine_read_depth_samples(engine, &area, depths, MT_DEPTH_SAMPLE_COUNT, &depth_count, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);
+  area.x = .5f;
+
   REQUIRE(converged == samples && progress > 0, "converge samples and progress");
   mt_render_snapshot snapshot = {.struct_size = sizeof snapshot};
   OK(mt_render_info(render, &snapshot, error, sizeof error));

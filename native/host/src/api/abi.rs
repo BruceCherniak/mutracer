@@ -208,6 +208,15 @@ fn fill(buffer: &mut [c_char], text: &str) {
 // ---- Records (layouts mirror mutracer-engine.h) ----
 
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MtDepthSampleArea {
+    struct_size: u32,
+    x: f32,
+    y: f32,
+    size: f32,
+}
+
+#[repr(C)]
 pub struct MtEngineOptions {
     struct_size: u32,
     backend: u32,
@@ -741,6 +750,51 @@ pub unsafe extern "C" fn mt_engine_update(
     call(error_out, capacity, || {
         let result = engine_of(handle)?.update()?;
         unsafe { write_optional(changed, result as u32) };
+        Ok(())
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_engine_read_depth_samples(
+    handle: u64,
+    area: *const MtDepthSampleArea,
+    samples: *mut f32,
+    count: usize,
+    written: *mut usize,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        unsafe {
+            write_required(written, 0)?;
+        }
+        let area = unsafe { record(area)? };
+        let area = DepthSampleArea {
+            x: area.x,
+            y: area.y,
+            size: area.size,
+        };
+        area.pack(1.)?;
+        if samples.is_null() && count != 0 {
+            return Err(invalid("Null depth destination"));
+        }
+        let Some(depths) = engine_of(handle)?.read_depth_samples(area)? else {
+            return Ok(());
+        };
+        unsafe {
+            write_required(written, DEPTH_SAMPLE_COUNT)?;
+        }
+        if samples.is_null() {
+            return Ok(());
+        }
+        if count < DEPTH_SAMPLE_COUNT {
+            return Err(error(
+                Status::BufferTooSmall,
+                "Depth destination needs 49 floats",
+            ));
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(depths.as_ptr(), samples, DEPTH_SAMPLE_COUNT);
+        }
         Ok(())
     })
 }
@@ -1866,6 +1920,9 @@ mod tests {
         use std::mem::{offset_of, size_of};
         let pointer = size_of::<*const u8>();
         assert_eq!(size_of::<MtEngineOptions>(), 8);
+        assert_eq!(size_of::<MtDepthSampleArea>(), 16);
+        assert_eq!(offset_of!(MtDepthSampleArea, x), 4);
+        assert_eq!(offset_of!(MtDepthSampleArea, size), 12);
         assert_eq!(size_of::<MtEngineSnapshot>(), 268);
         assert_eq!(offset_of!(MtEngineSnapshot, adapter_name), 12);
         assert_eq!(size_of::<MtEngineEvent>(), 16 + pointer);
@@ -1912,6 +1969,7 @@ mod tests {
         let header = include_str!("../../../include/mutracer-engine.h");
         for name in [
             "mt_engine_options, 8",
+            "mt_depth_sample_area, 16",
             "mt_engine_snapshot, 268",
             "mt_display_settings, 68",
             "mt_presented, 20",

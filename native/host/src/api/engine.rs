@@ -45,7 +45,7 @@ pub struct EngineInfo {
 /// Progress stage reported by [`EngineEvent::Progress`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProgressStage {
-    /// Full scene preparation of a render on a library thread (0 at start, 1 at publication).
+    /// Scene preparation (0 at start, 1 when ready).
     Preparation,
 }
 /// Engine notifications, delivered to [`Engine::on`] subscribers.

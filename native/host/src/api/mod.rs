@@ -5,16 +5,17 @@
 //! the host calls [`RenderLoop::tick`] each frame while [`RenderLoop::needs_tick`].
 //!
 //! An engine and its renders/display may be used from any thread, one thread at
-//! a time; calls serialize on an internal lock. Full scene preparation and
-//! denoising run on library threads. Callbacks run synchronously on the calling
-//! thread inside `update`, `refine`, `converge` and loop `tick`, after the internal
-//! lock is released, so they may call back into the API.
+//! a time. Full scene preparation and denoising run on library threads.
+//! Callbacks run synchronously on the calling
+//! thread inside `update`, `read_depth_samples`, `refine`, `converge` and loop
+//! `tick`, and may call back into the API.
 //!
 //! The L0 context/job API stays available. An engine prepares and holds its scene
 //! once, whatever the number of renders; a render holds only its camera, settings
 //! uniforms and accumulation, so changing its size or settings, a converge
 //! camera or sequence offset never prepares the scene again.
 mod abi;
+mod depth;
 mod display;
 mod engine;
 mod post_process;
@@ -24,6 +25,7 @@ mod surface;
 
 pub use crate::device_loss::DeviceLossNotifier;
 pub use crate::status::{Status, StatusError as Error};
+pub use depth::{DEPTH_SAMPLE_COUNT, DEPTH_SAMPLE_GRID, DepthSampleArea};
 pub use display::{Channel, Display, DisplaySettings, Presented, ToneMapping};
 pub use engine::{
     Backend, Camera, Engine, EngineEvent, EngineInfo, EngineOptions, ProgressStage, Subscription,
@@ -104,6 +106,8 @@ fn l0_blocking(mut operation: impl FnMut(*mut std::ffi::c_char, usize) -> i32) -
     }
 }
 
+#[cfg(test)]
+mod depth_tests;
 #[cfg(test)]
 mod device_loss_tests;
 #[cfg(test)]

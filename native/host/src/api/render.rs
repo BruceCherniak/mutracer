@@ -719,7 +719,7 @@ fn commit(state: &mut State, id: u64, key: TargetKey, blocking: bool) -> Result<
         }
     }
 }
-enum SceneStep {
+pub(super) enum SceneStep {
     Published,
     Waiting,
     Failed(String),
@@ -728,7 +728,7 @@ enum SceneStep {
 /// apply on this thread; full preparation runs on a library thread while the
 /// previous scene stays published. After each publication every render's target
 /// is set again.
-fn scene_step(
+pub(super) fn scene_step(
     state: &mut State,
     blocking: bool,
     events: &mut Vec<EngineEvent>,

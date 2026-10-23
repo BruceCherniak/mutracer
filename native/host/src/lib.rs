@@ -18,6 +18,7 @@ mod commit_plan;
 pub mod context;
 pub mod denoise;
 mod denoise_ffi;
+mod depth;
 mod device_loss;
 pub mod display;
 mod hardware;
@@ -491,6 +492,8 @@ impl Target {
     }
 }
 struct GpuScene {
+    depth_shader: wgpu::ShaderModule,
+    depth_pipeline: Arc<std::sync::OnceLock<depth::Pipeline>>,
     display_trace: Vec<u8>,
     retained: Option<scene::PreparedState>,
     gpu: GpuDevice,
@@ -680,7 +683,9 @@ impl GpuScene {
         let shader_started = Instant::now();
         let (compiled, cache_hit) = compile_pipeline(&gpu, &scene, source, hardware.is_some())?;
         let CachedPipeline {
-            layouts, pipeline, ..
+            layouts,
+            pipeline,
+            _shader: depth_shader,
         } = compiled;
         let compile_seconds = shader_started.elapsed().as_secs_f64();
         if std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1") {
@@ -738,6 +743,8 @@ impl GpuScene {
         let frames = runtime::frames(bounces, seed)?;
         let display_trace = read(&AssetId::Packet(scene.rt_uniform))?.into_owned();
         Ok(Self {
+            depth_shader,
+            depth_pipeline: Default::default(),
             display_trace,
             retained: None,
             frames,

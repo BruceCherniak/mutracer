@@ -538,6 +538,22 @@ pub(crate) fn create_with_gpu(gpu: GpuDevice, backend: u32) -> std::result::Resu
     );
     Ok(handle)
 }
+/// Clone only the resources needed by a depth query. Compilation, AOT camera
+/// packing, submission and readback must all run outside REGISTRY.
+pub(crate) fn depth_query(handle: u64) -> Result<Option<crate::depth::Query>> {
+    let mut slot = match REGISTRY.try_lock() {
+        Ok(slot) => slot,
+        Err(std::sync::TryLockError::WouldBlock) => return Ok(None),
+        Err(_) => return Err("Context registry is poisoned".into()),
+    };
+    let registry = slot.as_mut().ok_or("No context registry")?;
+    let current = context(registry, handle)?;
+    if current.commit.is_some() {
+        return Ok(None);
+    }
+    let scene = ready(current)?;
+    Ok(Some(crate::depth::Query::snapshot(scene)))
+}
 /// Capture the last completed accumulation without a CPU image readback.
 /// A busy publication returns false so the UI can retain its stable old frame.
 pub fn capture_display(

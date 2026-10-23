@@ -108,8 +108,40 @@ Differences from the browser library:
   display frame later.
 - Converge blocks its thread. The host drives the loop with
   `mt_render_loop_tick` instead of start and stop.
-- Denoising uses OIDN only. Tiles, alpha blend strategies, adaptive sampling
-  and depth readback are not available.
+- Denoising uses OIDN only. Tiles, alpha blend strategies and adaptive sampling
+  are not available.
+
+### Depth samples
+
+Query a square 7×7 grid from the committed engine camera with Rust
+`Engine::read_depth_samples` or C `mt_engine_read_depth_samples`:
+
+```rust
+use mutracer_native_probe::api::DepthSampleArea;
+let samples = engine.read_depth_samples(DepthSampleArea {
+    x: 0.5, y: 0.5, size: 0.07,
+})?;
+// Some([f32; 49]) when ready; None while the scene is unready/preparing.
+```
+
+Commit scene/camera changes with `engine.update()` first. Queries need no Render
+or completed beauty sample; retry later while preparation is pending. The camera
+comes from the last update, falling back to the scene descriptor's camera, and
+uses the current Display width/height ratio. Render sizes and converge camera
+overrides do not affect it.
+
+`x` and `y` are finite centers in 0–1, from the left and top. `size` is the
+nonnegative half height divided by viewport height; 0 repeats one point 49 times.
+The grid is top-row-first. Depth is distance along camera forward in scene units,
+not distance along the ray. A miss or out-of-viewport sample is 0. Pinhole rays
+have no jitter or depth of field, skip alpha holes and invisible shadow catchers
+through at most 32 layers, and stop on other surfaces with positive alpha.
+
+The call blocks for GPU readback and can compile a query pipeline on first use;
+query as needed rather than every display frame. Querying a ready scene leaves
+render samples, images and denoising unchanged. C `count`/`written` are float
+counts, not byte counts: allow 49 floats; `written = 0` means retry later. C buffer and size-query
+rules are in [`mutracer-engine.h`](include/mutracer-engine.h).
 
 ### Display effects
 
