@@ -82,6 +82,35 @@ error event; scheduled filtering stops until the filter is set again. Converge
 returns an error. The original accumulation remains available. Cancellation and
 timeout also stop converge's wait even when the callback does not cooperate.
 
+## C window presentation
+
+Create a real native window, fill `mt_native_window`, then call
+`mt_engine_create_for_window`. It creates and owns a surface-compatible adapter
+and device. Obtain the display and present/tick normally. Use
+`mt_display_resize_window` for physical dimensions (zero suspends),
+`mt_display_detach_window` before releasing native handles, and
+`mt_display_attach_window` to replace or restore an attachment on the same device.
+The host owns the event loop and keeps native handles alive until detachment,
+replacement or engine destruction returns.
+
+Supported handle kinds are macOS NSView (1), Win32 HWND (2), Linux Xlib
+Display/Window on screen 0 (3), and Wayland display/surface (4). AppKit requires
+the main thread. All calls on a window engine and its objects, including
+destruction, must use its creating window thread; `mt_render_cancel` is the
+cross-thread exception. The C window consumer is verified on macOS Metal;
+Windows/Linux window paths remain experimental and runtime-unverified.
+External native GPU device handles are not imported through C; Rust
+`Engine::on_device` supports host-owned wgpu device sharing.
+
+C window options are fixed to vsync and automatic alpha, with SDR initially.
+Display settings can request HDR,
+with SDR fallback. Query `mt_display_surface_info` for attachment, negotiated
+format, HDR status/fallback and last presentation result. Offscreen `mt_presented`
+can succeed when the window frame is skipped: retry timeout/outdated later, wait
+for expose after occlusion and reattach after loss. Device loss remains terminal.
+Window acquisition/configuration may block; rendering to the window adds a GPU
+draw without CPU readback. Pixel/PNG export stays SDR.
+
 ## Browser API counterparts
 
 | Native API | Browser API / difference |
@@ -90,3 +119,4 @@ timeout also stop converge's wait even when the callback does not cooperate.
 | clear scene + update | `engine.scene = undefined; engine.update()`; native empty renders use Idle |
 | Compiling / compilation progress | `Render.status === 'compiling'`, progress stage `shaders` |
 | CustomDenoiser / C callback | `type: 'custom'` and `Denoiser`; native work uses threads and owned data |
+| native window + Display | browser canvas + Display; native host owns window events and thread affinity |

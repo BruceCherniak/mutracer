@@ -501,3 +501,18 @@ standalone wgpu program with two live BLAS/TLAS pairs and alternating bindings.
 A persistent residency set has not fixed the real host test. Keep those probes
 outside the repository and distinguish resource lifetime changes from residency.
 Phase 3 acceptance still requires the plan's repair gate.
+
+## C window consumer
+
+On macOS, build the host cdylib with the current AOT archive and run the real C
+consumer (AppKit window glue is in a separate Objective-C file):
+
+```sh
+node native/scripts/window-host.mjs /absolute/libmutracer_native_probe.dylib /absolute/scene-input.bin /absolute/evidence/c-window
+```
+
+This creates a real window, presents through the C SDK and checks suspension,
+resize, detach/reattach, clear/reload, diagnostics, callback execution and final
+callback release. It requires an unlocked desktop. Windows/Linux raw-handle
+paths are not covered by this AppKit consumer. Keep its report separate from the
+Rust surface gate until those platforms have their own real-window consumers.

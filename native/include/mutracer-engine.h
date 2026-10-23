@@ -59,6 +59,47 @@ int32_t mt_engine_options_default(mt_engine_options *output);
 /* Creates a device of its own. No usable GPU returns MT_ERROR_UNAVAILABLE. */
 int32_t mt_engine_create(const mt_engine_options *options, mt_engine *output, char *error, size_t capacity);
 int32_t mt_engine_destroy(mt_engine engine, char *error, size_t capacity);
+/* Window engines own their adapter/device. External native GPU device handles
+ * cannot be imported through C; use Rust Engine::on_device for device sharing.
+ * All engine/display/render/loop calls (including destroy) stay on the creating
+ * window thread for this engine's lifetime; mt_render_cancel may cross threads.
+ * macOS: kind 1, window=NSView*, call on main thread. Windows: kind 2,
+ * window=HWND. Linux: kind 3, display=Display*, window_id=Xlib Window (screen 0);
+ * kind 4, display=wl_display*, window=wl_surface*. Other kinds return UNAVAILABLE.
+ * Host owns handles and keeps them valid until detach/replacement/destroy returns.
+ * No window event loop is created: pump native events and call present/tick.
+ * Width/height are physical pixels; zero suspends presentation. Default vsync,
+ * automatic alpha, SDR; Display settings can request HDR with SDR fallback.
+ * create selects a surface-compatible adapter. Reattach uses that same device;
+ * incompatible windows fail without replacing the old attachment. */
+typedef enum mt_window_kind { MT_WINDOW_APPKIT=1, MT_WINDOW_WIN32=2, MT_WINDOW_XLIB=3, MT_WINDOW_WAYLAND=4 } mt_window_kind;
+typedef struct mt_native_window {
+  uint32_t struct_size, kind, width, height;
+  void *display, *window;
+  uint64_t window_id;
+} mt_native_window;
+MT_ENGINE_LAYOUT(mt_native_window, 24 + 2 * sizeof(void *));
+int32_t mt_engine_create_for_window(const mt_engine_options *options, const mt_native_window *window,
+  mt_engine *output, char *error, size_t capacity);
+int32_t mt_display_attach_window(mt_display display, const mt_native_window *window, char *error, size_t capacity);
+int32_t mt_display_detach_window(mt_display display, char *error, size_t capacity);
+int32_t mt_display_resize_window(mt_display display, uint32_t width, uint32_t height, char *error, size_t capacity);
+typedef enum mt_surface_status {
+  MT_SURFACE_READY=0, MT_SURFACE_PRESENTED=1, MT_SURFACE_TIMEOUT=2,
+  MT_SURFACE_OCCLUDED=3, MT_SURFACE_OUTDATED=4, MT_SURFACE_LOST=5,
+  MT_SURFACE_SUSPENDED=6, MT_SURFACE_ERROR=7
+} mt_surface_status;
+/* presented describes the last acquisition, separate from offscreen mt_presented.
+ * Timeout/outdated retry later; occluded waits for expose/restore; lost needs
+ * reattach. Validation errors also return an error. Device loss is terminal.
+ * Surface info queries CPU state without acquiring a frame. */
+typedef struct mt_surface_info {
+  uint32_t struct_size, attached, width, height, status, hdr_requested, hdr_active, reserved;
+  char format[64], hdr_unavailable_reason[256];
+} mt_surface_info;
+MT_ENGINE_LAYOUT(mt_surface_info, 352);
+int32_t mt_display_surface_info(mt_display display, mt_surface_info *output, char *error, size_t capacity);
+
 /* Records a scene descriptor (native/docs/scene-format.md), copied; it takes
  * effect at the next mt_engine_update. Width, height, the bevel and dispersion
  * quality bits and (after mt_engine_set_camera) the camera record are replaced

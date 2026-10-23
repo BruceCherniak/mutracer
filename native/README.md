@@ -297,9 +297,8 @@ system's presentation notification rules (such as winit `pre_present_notify`).
 While attached, call the engine and its objects, including disposal, on the
 window thread.
 Share one `SubmissionGate` across native engines using that device, and
-coordinate other queue users with surface configuration. This window API is
-Rust-only; C keeps
-offscreen presentation and pixel/PNG export.
+coordinate other queue users with surface configuration. C hosts can create a
+[window engine](docs/engine-lifecycle.md#c-window-presentation) with native handles.
 
 Default options select SDR RGBA/BGRA8, vsync and automatic alpha, preferring an
 opaque window when supported.

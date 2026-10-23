@@ -362,7 +362,7 @@ impl Engine {
         let gpu = GpuDevice::on_device(adapter, device, queue, gate);
         Self::with_gpu(gpu, options, Some(adapter.clone()))
     }
-    fn with_gpu(
+    pub(super) fn with_gpu(
         mut gpu: GpuDevice,
         options: EngineOptions,
         adapter: Option<wgpu::Adapter>,

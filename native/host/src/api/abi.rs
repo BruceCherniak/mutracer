@@ -25,6 +25,7 @@ struct EngineEntry {
     engine: Engine,
     display: u64,
     callback: Option<Subscription>,
+    window: Option<(wgpu::Instance, std::thread::ThreadId)>,
 }
 struct RenderEntry {
     engine: u64,
@@ -84,9 +85,46 @@ fn insert(object: Object) -> Result<u64> {
 fn invalid_handle() -> Error {
     error(Status::InvalidHandle, "Unknown or destroyed handle")
 }
+fn check_window_thread(e: &EngineEntry) -> Result<()> {
+    if e.window
+        .as_ref()
+        .is_some_and(|(_, t)| *t != std::thread::current().id())
+    {
+        return Err(error(
+            Status::InvalidState,
+            "Window engine must be used on its creating thread",
+        ));
+    }
+    Ok(())
+}
+fn check_owner_thread(r: &Registry, owner: u64) -> Result<()> {
+    match r.objects.get(&owner) {
+        Some(Object::Engine(e)) => check_window_thread(e),
+        _ => Err(invalid_handle()),
+    }
+}
+fn register_engine(engine: Engine, window: Option<wgpu::Instance>) -> Result<u64> {
+    let handle = insert(Object::Engine(EngineEntry {
+        engine,
+        display: 0,
+        callback: None,
+        window: window.map(|i| (i, std::thread::current().id())),
+    }))?;
+    let display = insert(Object::Display { engine: handle })?;
+    registry(|r| {
+        if let Some(Object::Engine(e)) = r.objects.get_mut(&handle) {
+            e.display = display;
+        }
+        Ok(())
+    })?;
+    Ok(handle)
+}
 fn engine_of(handle: u64) -> Result<Engine> {
     registry(|r| match r.objects.get(&handle) {
-        Some(Object::Engine(e)) => Ok(e.engine.clone()),
+        Some(Object::Engine(e)) => {
+            check_window_thread(e)?;
+            Ok(e.engine.clone())
+        }
         _ => Err(invalid_handle()),
     })
 }
@@ -96,20 +134,29 @@ fn display_of(handle: u64) -> Result<Display> {
             return Err(invalid_handle());
         };
         match r.objects.get(engine) {
-            Some(Object::Engine(e)) => Ok(e.engine.display()),
+            Some(Object::Engine(e)) => {
+                check_window_thread(e)?;
+                Ok(e.engine.display())
+            }
             _ => Err(invalid_handle()),
         }
     })
 }
 fn render_of(handle: u64) -> Result<Arc<Render>> {
     registry(|r| match r.objects.get(&handle) {
-        Some(Object::Render(e)) => Ok(e.render.clone()),
+        Some(Object::Render(e)) => {
+            check_owner_thread(r, e.engine)?;
+            Ok(e.render.clone())
+        }
         _ => Err(invalid_handle()),
     })
 }
 fn loop_of(handle: u64) -> Result<Arc<Mutex<RenderLoop>>> {
     registry(|r| match r.objects.get(&handle) {
-        Some(Object::Loop(e)) => Ok(e.render_loop.clone()),
+        Some(Object::Loop(e)) => {
+            check_owner_thread(r, e.engine)?;
+            Ok(e.render_loop.clone())
+        }
         _ => Err(invalid_handle()),
     })
 }
@@ -204,6 +251,8 @@ fn fill(buffer: &mut [c_char], text: &str) {
         *end = 0;
     }
 }
+
+include!("abi_window.rs");
 
 // ---- Records (layouts mirror mutracer-engine.h) ----
 
@@ -674,18 +723,7 @@ pub unsafe extern "C" fn mt_engine_create(
         let engine = Engine::new(EngineOptions {
             backend: backend_from(options.backend)?,
         })?;
-        let handle = insert(Object::Engine(EngineEntry {
-            engine,
-            display: 0,
-            callback: None,
-        }))?;
-        let display = insert(Object::Display { engine: handle })?;
-        registry(|r| {
-            if let Some(Object::Engine(e)) = r.objects.get_mut(&handle) {
-                e.display = display;
-            }
-            Ok(())
-        })?;
+        let handle = register_engine(engine, None)?;
         unsafe { output.write(handle) };
         Ok(())
     })
@@ -697,6 +735,7 @@ pub unsafe extern "C" fn mt_engine_destroy(
     capacity: usize,
 ) -> i32 {
     call(error_out, capacity, || {
+        engine_of(handle)?;
         // Loops first, then renders, then the engine; dropped outside the registry.
         let mut removed = registry(|r| {
             if !matches!(r.objects.get(&handle), Some(Object::Engine(_))) {
@@ -896,7 +935,10 @@ pub unsafe extern "C" fn mt_engine_display(
 ) -> i32 {
     call(error_out, capacity, || {
         let display = registry(|r| match r.objects.get(&handle) {
-            Some(Object::Engine(e)) => Ok(e.display),
+            Some(Object::Engine(e)) => {
+                check_window_thread(e)?;
+                Ok(e.display)
+            }
             _ => Err(invalid_handle()),
         })?;
         unsafe { write_required(output, display) }
@@ -1049,6 +1091,7 @@ pub unsafe extern "C" fn mt_render_destroy(
     capacity: usize,
 ) -> i32 {
     call(error_out, capacity, || {
+        render_of(handle)?;
         let removed = registry(|r| match r.objects.get(&handle) {
             Some(Object::Render(e)) if e.owner.is_some() => Err(error(
                 Status::InvalidState,
@@ -1601,6 +1644,7 @@ pub unsafe extern "C" fn mt_render_loop_destroy(
     capacity: usize,
 ) -> i32 {
     call(error_out, capacity, || {
+        loop_of(handle)?;
         let removed = registry(|r| {
             let Some(Object::Loop(l)) = r.objects.get(&handle) else {
                 return Err(invalid_handle());
@@ -1625,6 +1669,7 @@ pub unsafe extern "C" fn mt_render_loop_render(
     capacity: usize,
 ) -> i32 {
     call(error_out, capacity, || {
+        loop_of(handle)?;
         let render = registry(|r| match r.objects.get(&handle) {
             Some(Object::Loop(l)) => match which {
                 0 => l

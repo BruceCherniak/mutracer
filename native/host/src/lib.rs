@@ -326,6 +326,9 @@ impl GpuDevice {
             compatible_surface: None,
             ..Default::default()
         }))?;
+        Self::for_adapter(&adapter, mode)
+    }
+    fn for_adapter(adapter: &wgpu::Adapter, mode: u32) -> Result<Self> {
         let info = adapter.get_info();
         native_log!(
             "Native adapter: {} ({:?}, {:?})",

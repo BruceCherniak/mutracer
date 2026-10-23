@@ -96,6 +96,12 @@ if(gpuValidation){
  const surfaceReport=JSON.parse(readFileSync(resolve(out,'surface/summary.json'),'utf8'));
  if(!surfaceReport.passed)throw Error('Window/HDR surface validation failed.');
  gpu.hdrPresentation=surfaceReport.results.map(r=>({backend:r.activeBackend,...r.hdr}));
+ if(process.platform==='darwin'){
+  await run('c-window',process.execPath,['native/scripts/window-host.mjs',
+   resolve(hostTarget,'release/libmutracer_native_probe.dylib'),resolve(out,'fixtures/image/scene-input.bin'),resolve(out,'c-window')]);
+  gpu.cWindow=JSON.parse(readFileSync(resolve(out,'c-window/summary.json'),'utf8'));
+  if(gpu.cWindow.passed!==true)throw Error('C window presentation was not validated.');
+ }
  await run('ray-query-contracts',resolve(hostTarget,'release',executable('ray-query-probe')),[resolve(out,'ray-query')]);
  if(!JSON.parse(readFileSync(resolve(out,'ray-query/result.json'),'utf8')).supported)throw Error('HWRT execution was not validated.');
  // --hosts: the context, job, camera, settings and engine C hosts, reusing the fixtures above.
