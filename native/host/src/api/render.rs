@@ -504,6 +504,18 @@ pub(super) struct RenderState {
     adaptive: Adaptive,
 }
 impl RenderState {
+    pub(super) fn device_lost(&mut self) {
+        self.error = true;
+        self.status = RenderStatus::Error;
+        self.busy = false;
+        if let Some(flight) = self.job.as_mut() {
+            flight.cancelled = true;
+        }
+        // Drop the receiver, never join a foreign CPU/GPU filter on the API thread.
+        self.denoise.worker = None;
+        self.denoise.denoised = None;
+        self.denoise.failed = true;
+    }
     /// Image size for a display size: the configured size, scaled down by
     /// adaptive resolution.
     fn image_size(&self, display: [u32; 2]) -> [u32; 2] {
@@ -612,6 +624,9 @@ pub(super) struct Readiness {
     pub(super) presentable: bool,
 }
 pub(super) fn readiness(state: &State, id: u64) -> Readiness {
+    if state.device_failed {
+        return Readiness::default();
+    }
     let Some(render) = state.renders.get(&id) else {
         return Readiness::default();
     };
@@ -676,6 +691,11 @@ enum Step {
 /// Non-blocking callers retry later; blocking callers wait for preparation.
 fn commit(state: &mut State, id: u64, key: TargetKey, blocking: bool) -> Result<bool> {
     loop {
+        state
+            .gpu
+            .loss
+            .check()
+            .map_err(|e| error(Status::Unavailable, e.to_string()))?;
         let mut events = Vec::new();
         let step = commit_step(state, id, &key, blocking, &mut events);
         for event in events {
@@ -710,6 +730,7 @@ fn scene_step(
     blocking: bool,
     events: &mut Vec<EngineEvent>,
 ) -> Result<SceneStep> {
+    let loss = state.gpu.loss.clone();
     let revision = state.scene_revision;
     let shared = &mut state.shared;
     if let Some(pending) = shared.pending.as_mut() {
@@ -718,10 +739,18 @@ fn scene_step(
             let _ = l0(|e, n| unsafe { context::mt_context_cancel_commit(context, e, n) });
         }
         let received = if blocking {
-            pending
-                .result
-                .recv()
-                .map_err(|_| mpsc::TryRecvError::Disconnected)
+            loop {
+                let _ = state.gpu.device.poll(wgpu::PollType::Poll);
+                loss.check()
+                    .map_err(|e| error(Status::Unavailable, e.to_string()))?;
+                match pending.result.recv_timeout(Duration::from_millis(2)) {
+                    Ok(value) => break Ok(value),
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        break Err(mpsc::TryRecvError::Disconnected);
+                    }
+                }
+            }
         } else {
             pending.result.try_recv()
         };
@@ -811,20 +840,26 @@ fn scene_step(
         }
     }
     let (send, result) = mpsc::channel();
+    let gpu = state.gpu.clone();
     let thread = std::thread::Builder::new()
         .name("MuTracer scene preparation".into())
         .spawn(move || {
             let outcome = loop {
+                if let Err(e) = loss.check() {
+                    break Err(error(Status::Unavailable, e.to_string()));
+                }
                 let mut ignored = CommitOutcome::Done;
                 let mut message = [0 as std::ffi::c_char; 1024];
-                let code = context::commit_path(
-                    context,
-                    &bytes,
-                    &settings,
-                    CommitPath::FullOnly,
-                    &mut ignored,
-                    &mut message,
-                );
+                let code = crate::runtime::with_loss(&gpu, || {
+                    context::commit_path(
+                        context,
+                        &bytes,
+                        &settings,
+                        CommitPath::FullOnly,
+                        &mut ignored,
+                        &mut message,
+                    )
+                });
                 match l0_result(code, &message) {
                     Err(e) if e.status == Status::Busy => {
                         std::thread::sleep(Duration::from_micros(200))
@@ -1370,13 +1405,21 @@ impl Render {
         self.get(|_, r| r.fallback).flatten()
     }
     fn with<T>(&self, f: impl FnOnce(&mut State, u64) -> Result<T>) -> Result<T> {
-        let result = {
+        let result = (|| {
             let mut state = self.engine.live()?;
             if !state.renders.contains_key(&self.id) {
                 return Err(error(Status::InvalidHandle, "Render is disposed"));
             }
-            f(&mut state, self.id)
-        };
+            let result =
+                crate::runtime::with_loss(&self.engine.inner.gpu, || f(&mut state, self.id));
+            self.engine
+                .inner
+                .gpu
+                .loss
+                .check()
+                .map_err(|e| error(Status::Unavailable, e.to_string()))?;
+            result
+        })();
         self.engine.flush();
         result
     }
@@ -1467,8 +1510,10 @@ impl Render {
     }
     /// Advances this render within its frame budget without waiting for the GPU:
     /// collects the finished batch, submits the next one and starts denoising when
-    /// converged. Render failures return `Ok(RenderStatus::Error)` and an engine error event.
+    /// converged. Render failures return `Ok(RenderStatus::Error)` and an engine error event;
+    /// terminal device loss returns `Err(Status::Unavailable)`.
     pub fn refine(&self) -> Result<RenderStatus> {
+        self.engine.poll_device();
         self.with(|state, id| {
             if state.renders[&id].busy {
                 return Err(error(
@@ -1492,6 +1537,7 @@ impl Render {
     /// The engine lock is released between batches, so the progress callback may
     /// use the API; refine on this render is rejected meanwhile.
     pub fn converge(&self, mut options: ConvergeOptions) -> Result<ConvergeResult> {
+        self.engine.poll_device();
         if !(1..=MAX_TOTAL_SAMPLES).contains(&options.samples) {
             return Err(error(Status::InvalidArgument, "samples must be 1..4096"));
         }
@@ -1654,9 +1700,26 @@ impl Render {
                     target_samples: target,
                 });
             }
-            let (size, color, normal, albedo) = denoise_inputs(context)?;
-            let (outcome, backend, milliseconds) =
-                run_oidn(&filter, &denoiser, size, &color, &normal, &albedo);
+            let (size, color, normal, albedo) =
+                crate::runtime::with_loss(&self.engine.inner.gpu, || denoise_inputs(context))?;
+            let (send, receive) = mpsc::channel();
+            std::thread::Builder::new()
+                .name("MuTracer converge OIDN".into())
+                .spawn(move || {
+                    let _ = send.send(run_oidn(&filter, &denoiser, size, &color, &normal, &albedo));
+                })
+                .map_err(|e| error(Status::Error, format!("Starting denoising: {e}")))?;
+            let (outcome, backend, milliseconds) = loop {
+                self.engine.poll_device();
+                self.engine.check_device()?;
+                match receive.recv_timeout(Duration::from_millis(2)) {
+                    Ok(value) => break value,
+                    Err(mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        return Err(error(Status::Error, "Denoising thread stopped"));
+                    }
+                }
+            };
             let report = DenoiseReport {
                 samples,
                 backend,
@@ -1799,7 +1862,8 @@ impl Render {
     }
     pub fn converged(&self) -> bool {
         self.get(|state, r| {
-            r.current(state.scene_revision, state.camera_revision)
+            !state.device_failed
+                && r.current(state.scene_revision, state.camera_revision)
                 && r.samples >= r.settings.max_samples
         })
         .unwrap_or(false)

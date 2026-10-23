@@ -7,8 +7,8 @@
 //! An engine and its renders/display may be used from any thread, one thread at
 //! a time; calls serialize on an internal lock. Full scene preparation and
 //! denoising run on library threads. Callbacks run synchronously on the calling
-//! thread inside `update`, `refine` and `converge`, after the internal lock is
-//! released, so they may call back into the API.
+//! thread inside `update`, `refine`, `converge` and loop `tick`, after the internal
+//! lock is released, so they may call back into the API.
 //!
 //! The L0 context/job API stays available. An engine prepares and holds its scene
 //! once, whatever the number of renders; a render holds only its camera, settings
@@ -20,6 +20,7 @@ mod engine;
 mod render;
 mod render_loop;
 
+pub use crate::device_loss::DeviceLossNotifier;
 pub use crate::status::{Status, StatusError as Error};
 pub use display::{Channel, Display, DisplaySettings, Presented, ToneMapping};
 pub use engine::{
@@ -89,6 +90,7 @@ fn l0(operation: impl FnOnce(*mut std::ffi::c_char, usize) -> i32) -> Result<()>
 fn l0_blocking(mut operation: impl FnMut(*mut std::ffi::c_char, usize) -> i32) -> Result<()> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
     loop {
+        crate::runtime::check_loss().map_err(|e| error(Status::Unavailable, e.to_string()))?;
         match l0(&mut operation) {
             Err(e) if e.status == Status::Busy && std::time::Instant::now() < deadline => {
                 std::thread::sleep(std::time::Duration::from_micros(200));
@@ -98,6 +100,8 @@ fn l0_blocking(mut operation: impl FnMut(*mut std::ffi::c_char, usize) -> i32) -
     }
 }
 
+#[cfg(test)]
+mod device_loss_tests;
 #[cfg(test)]
 mod loop_tests;
 #[cfg(test)]

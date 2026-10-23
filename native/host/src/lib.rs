@@ -18,6 +18,7 @@ mod commit_plan;
 pub mod context;
 pub mod denoise;
 mod denoise_ffi;
+mod device_loss;
 pub mod display;
 mod hardware;
 pub mod hit_diagnostics;
@@ -281,6 +282,7 @@ struct CachedPipeline {
 }
 #[derive(Clone)]
 struct GpuDevice {
+    loss: device_loss::DeviceLossNotifier,
     device: wgpu::Device,
     queue: GpuQueue,
     info: wgpu::AdapterInfo,
@@ -359,7 +361,13 @@ impl GpuDevice {
                 })
             })
         };
+        let loss = device_loss::DeviceLossNotifier::default();
+        let notify = loss.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            notify.notify(format!("{reason:?}: {message}"));
+        });
         Ok(Self {
+            loss,
             pipelines: Arc::new(Mutex::new(HashMap::new())),
             pipeline_cache,
             device,

@@ -86,7 +86,7 @@ typedef enum mt_engine_event_kind {
   /* Scene preparation: progress 0 when it starts, 1 when it is published. */
   MT_ENGINE_EVENT_PROGRESS = 0,
   MT_ENGINE_EVENT_ERROR = 1,
-  /* Not reported yet; reserved for device loss (recovering is always 0). */
+  /* Terminal device loss; recovering is always 0. See README's Device loss. */
   MT_ENGINE_EVENT_DEVICE_LOST = 2
 } mt_engine_event_kind;
 typedef struct mt_engine_event {

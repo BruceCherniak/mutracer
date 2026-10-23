@@ -1223,6 +1223,7 @@ impl PreparedState {
         quality: u32,
         hardware: bool,
         camera: &[u8],
+        loss: &crate::device_loss::DeviceLossNotifier,
     ) -> Result<TargetPacket> {
         if camera.len() != cam::WORDS * WORD_BYTES {
             return Err("Camera descriptor must contain exactly 128 bytes".into());
@@ -1252,7 +1253,9 @@ impl PreparedState {
         }
         input.extend_from_slice(camera);
         let state = self.clone();
-        let packet = runtime::call(move || native_step(mt_core_scene_target, &input, state.token))?;
+        let packet = runtime::call_with_loss(loss, move || {
+            native_step(mt_core_scene_target, &input, state.token)
+        })?;
         let w = Words(&packet);
         let (shader, camera, trace) = (w.u(1), w.u(2), w.u(3));
         if camera != 144 || trace != 256 || packet.len() != 16 + camera + trace + shader {
@@ -1269,8 +1272,7 @@ impl PreparedState {
         let word = |at: usize| -> [u8; 4] { trace_bytes[at..at + 4].try_into().unwrap() };
         let seed = u32::from_le_bytes(word(layout::ray_uniform::SEQUENCE_SEED));
         let bounces = i32::from_le_bytes(word(layout::ray_uniform::BOUNCES)) as f32;
-        let frames = runtime::frames(bounces, seed)
-            .map_err(|e| fail(Status::ContextFailed, e.to_string()))?;
+        let frames = runtime::frames_with_loss(loss, bounces, seed)?;
         Ok(TargetPacket {
             camera: camera_bytes,
             trace: trace_bytes,

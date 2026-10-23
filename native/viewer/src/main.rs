@@ -182,11 +182,35 @@ type SceneBuild = (
     Option<(Model, Camera)>,
     [u32; 2],
 );
+/// The viewer owns the shared device's callback. Keep only the active engines'
+/// notification handles, and replay terminal loss to a later backend candidate.
+#[derive(Default)]
+struct DeviceLossForwarder {
+    reason: Option<String>,
+    engines: Vec<api::DeviceLossNotifier>,
+}
+impl DeviceLossForwarder {
+    fn notify(&mut self, reason: String) {
+        let reason = self.reason.get_or_insert(reason);
+        for engine in &self.engines {
+            engine.notify(reason.clone());
+        }
+    }
+    fn watch(&mut self, engines: impl IntoIterator<Item = api::DeviceLossNotifier>) {
+        self.engines = engines.into_iter().collect();
+        if let Some(reason) = &self.reason {
+            for engine in &self.engines {
+                engine.notify(reason.clone());
+            }
+        }
+    }
+}
 struct Viewer {
     submission_gate: Option<std::sync::Arc<mutracer_native_probe::submission::SubmissionGate>>,
     startup_smoke: Option<(PathBuf, std::time::Instant, u32)>,
     metrics: Option<metrics::Metrics>,
     gpu: Option<eframe::egui_wgpu::RenderState>,
+    gpu_loss: Arc<Mutex<DeviceLossForwarder>>,
     target: Target,
     replacement: Option<Target>,
     gpu_texture: Option<(egui::TextureId, wgpu::Texture)>,
@@ -270,6 +294,19 @@ impl Viewer {
             1,
             render_settings(&settings, size, false),
         )?;
+        let gpu_loss = Arc::new(Mutex::new(DeviceLossForwarder::default()));
+        gpu_loss
+            .lock()
+            .unwrap()
+            .watch([target.engine.device_loss_notifier()]);
+        if let Some(gpu) = &gpu {
+            let loss = gpu_loss.clone();
+            gpu.device.set_device_lost_callback(move |reason, message| {
+                loss.lock()
+                    .unwrap()
+                    .notify(format!("{reason:?}: {message}"));
+            });
+        }
         let selected = model.meshes[0].material;
         if let Some(gate) = &submission_gate {
             gate.pause();
@@ -284,6 +321,7 @@ impl Viewer {
             target,
             replacement: None,
             gpu: gpu.clone(),
+            gpu_loss,
             gpu_texture: None,
             scene_build: None,
             pending_model: None,
@@ -507,6 +545,13 @@ impl Viewer {
             )?);
             self.change = self.change.max(Change::Scene);
         }
+        self.gpu_loss.lock().unwrap().watch(
+            std::iter::once(self.target.engine.device_loss_notifier()).chain(
+                self.replacement
+                    .as_ref()
+                    .map(|target| target.engine.device_loss_notifier()),
+            ),
+        );
         if let Some((receive, _, _)) = &self.scene_build {
             match receive.try_recv() {
                 Ok(result) => {

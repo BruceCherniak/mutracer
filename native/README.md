@@ -109,8 +109,40 @@ Differences from the browser library:
 - Converge blocks its thread. The host drives the loop with
   `mt_render_loop_tick` instead of start and stop.
 - Denoising uses OIDN only. Tiles, alpha blend strategies, adaptive sampling,
-  vignette, bloom, shadow catchers, depth readback and device-loss events are
-  not available.
+  vignette, bloom, shadow catchers and depth readback are not available.
+
+### Device loss
+
+Device loss is terminal for an engine. Its renders and render loops enter
+`Error`; rendering, scene updates, presentation and readback return
+`MT_ERROR_UNAVAILABLE` (`Status::Unavailable` in Rust). `last_error` keeps the
+loss message until disposal. Dispose the engine and create a new one to render
+again; there is no automatic recovery.
+
+After receiving the device notification, the next `update`, `refine`, `converge`
+or render-loop `tick` delivers one `DeviceLost` event with `recovering = false`,
+then one `Error` event, on the calling thread. Pending convergence returns
+without waiting for an already running scene preparation or denoiser to finish;
+their late results are discarded. Disposal can still wait for scene preparation
+to release its resources.
+`needs_tick` requests one final tick to deliver undelivered loss events, then
+returns false.
+
+`Engine::new` handles device notifications automatically. Rust hosts using
+`Engine::on_device` must forward their wgpu device-loss callback to the notifier
+of every engine sharing that device. `on_device` preserves the host's callback.
+For example, add this notification to the host's existing callback handling:
+
+```rust
+let loss = engine.device_loss_notifier();
+device.set_device_lost_callback(move |reason, message| {
+    loss.notify(format!("{reason:?}: {message}"));
+    // Keep the application's other device-loss handling here.
+});
+```
+
+Notifier clones are safe to call from any thread, keep the first reason, and
+may outlive the engine. A notifier does not invoke user callbacks.
 
 ## Denoise caller-owned images
 

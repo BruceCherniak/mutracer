@@ -192,9 +192,15 @@ impl Display {
     /// The presentation texture: display-sized premultiplied RGBA8 (sRGB-encoded
     /// values in an `Rgba8Unorm` texture), top row first, with TEXTURE_BINDING and
     /// COPY_SRC usage. It is replaced when the display size changes and keeps the
-    /// last presented image otherwise. `None` before the first present.
+    /// last presented image otherwise. `None` before the first present, after
+    /// device loss or after disposal.
     pub fn texture(&self) -> Option<wgpu::Texture> {
-        self.engine.lock().display.texture.clone()
+        let state = self.engine.lock();
+        if state.device_failed || state.disposed {
+            None
+        } else {
+            state.display.texture.clone()
+        }
     }
     /// Composes and shows the render's complete image, or its fallback's. Smaller
     /// images are scaled linearly to the display size. Returns `None` and keeps the

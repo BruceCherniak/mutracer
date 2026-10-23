@@ -468,6 +468,9 @@ impl RenderLoop {
     }
     /// Current presented/execution state. Default `Preparing`.
     pub fn status(&self) -> RenderLoopStatus {
+        if self.engine.check_device().is_err() {
+            return RenderLoopStatus::Error;
+        }
         self.shared.lock().unwrap_or_else(|e| e.into_inner()).status
     }
     /// Called with (status, previous) on every transition.
@@ -549,8 +552,14 @@ impl RenderLoop {
     /// Whether the host should schedule another tick. False only when the final
     /// image is finished for unchanged inputs and nothing is changing, or after an
     /// error. Call `tick` again after editing engine inputs, renders or the display
-    /// even when this is false, and while a sync has new input.
+    /// even when this is false, and while a sync has new input. Device loss schedules
+    /// one final tick to deliver its engine events before becoming idle.
     pub fn needs_tick(&self) -> bool {
+        self.engine.poll_device();
+        if self.engine.check_device().is_err() {
+            let state = self.engine.lock();
+            return !state.disposed && !state.engine_events.is_empty();
+        }
         let status = self.status();
         if status == RenderLoopStatus::Error {
             return self.engine.inputs_pending();
@@ -567,6 +576,16 @@ impl RenderLoop {
     /// One frame: updates syncs, commits engine inputs, refines the selected
     /// render and presents it. Does not wait for the GPU.
     pub fn tick(&mut self) -> Result<RenderLoopStatus> {
+        self.engine.poll_device();
+        let result = self.tick_inner();
+        if result.is_err() {
+            self.set_status(RenderLoopStatus::Error);
+        }
+        self.engine.flush();
+        result
+    }
+    fn tick_inner(&mut self) -> Result<RenderLoopStatus> {
+        self.engine.check_device()?;
         for sync in &self.syncs {
             sync.lock().unwrap_or_else(|e| e.into_inner()).update();
         }

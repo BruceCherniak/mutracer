@@ -1556,6 +1556,102 @@ mod tests {
             .unwrap()
     }
     #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+    fn device_loss_owned_device_delivers_c_event_once_and_keeps_failure_sticky() {
+        let _test = crate::ABI_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        struct Events {
+            engine: u64,
+            loss: u32,
+            errors: u32,
+            recovered: bool,
+            reentry: i32,
+        }
+        extern "C" fn callback(event: *const MtEngineEvent, user: *mut c_void) {
+            let event = unsafe { &*event };
+            let state = unsafe { &mut *(user as *mut Events) };
+            if event.kind == 2 {
+                state.loss += 1;
+                state.recovered |= event.recovering != 0;
+                assert!(!event.message.is_null());
+                let mut message = [0; 256];
+                state.reentry = unsafe {
+                    mt_engine_update(
+                        state.engine,
+                        std::ptr::null_mut(),
+                        message.as_mut_ptr(),
+                        message.len(),
+                    )
+                };
+            } else if event.kind == 1 {
+                state.errors += 1;
+            }
+        }
+        let options = MtEngineOptions {
+            struct_size: std::mem::size_of::<MtEngineOptions>() as u32,
+            backend: 0,
+        };
+        let mut handle = 0;
+        let mut error = [0; 512];
+        unsafe {
+            assert_eq!(
+                mt_engine_create(&options, &mut handle, error.as_mut_ptr(), error.len()),
+                0
+            );
+        }
+        let engine = engine_of(handle).unwrap();
+        let mut events = Events {
+            engine: handle,
+            loss: 0,
+            errors: 0,
+            recovered: false,
+            reentry: 0,
+        };
+        unsafe {
+            assert_eq!(
+                mt_engine_set_callback(
+                    handle,
+                    Some(callback),
+                    (&mut events as *mut Events).cast(),
+                    error.as_mut_ptr(),
+                    error.len()
+                ),
+                0
+            );
+        }
+        engine.inner.gpu.device.destroy();
+        for _ in 0..2 {
+            unsafe {
+                assert_eq!(
+                    mt_engine_update(
+                        handle,
+                        std::ptr::null_mut(),
+                        error.as_mut_ptr(),
+                        error.len()
+                    ),
+                    Status::Unavailable as i32
+                );
+            }
+        }
+        assert_eq!(
+            (events.loss, events.errors, events.recovered, events.reentry),
+            (1, 1, false, Status::Unavailable as i32)
+        );
+        assert!(engine.last_error().unwrap().contains("GPU device lost"));
+        unsafe {
+            assert_eq!(
+                mt_engine_destroy(handle, error.as_mut_ptr(), error.len()),
+                0
+            );
+        }
+        engine
+            .device_loss_notifier()
+            .notify("ignored after disposal");
+        engine.flush();
+        assert_eq!(events.loss, 1);
+    }
+    #[test]
     fn header_enums_match_the_conversions() {
         for (name, status) in [
             ("MT_RENDER_PREPARING", RenderStatus::Preparing),

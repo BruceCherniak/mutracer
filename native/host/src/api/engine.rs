@@ -58,7 +58,7 @@ pub enum EngineEvent {
     Error {
         message: String,
     },
-    /// Reserved: device loss is not recoverable yet and is not reported.
+    /// Terminal device loss. `recovering` is always false; create a new engine.
     DeviceLost {
         reason: String,
         recovering: bool,
@@ -235,6 +235,7 @@ impl Drop for Subscription {
 
 pub(super) struct State {
     pub(super) disposed: bool,
+    pub(super) device_failed: bool,
     source_scene: Option<Arc<Vec<u8>>>,
     /// Set by `set_scene_shared`: a new Arc is a changed scene, without comparing bytes.
     source_shared: bool,
@@ -256,6 +257,30 @@ pub(super) struct State {
     pub(super) sample_events: Vec<(u64, SampleEvent)>,
 }
 impl State {
+    fn observe_device_loss(&mut self) {
+        if self.disposed || self.device_failed {
+            return;
+        }
+        let Some(reason) = self.gpu.loss.reason() else {
+            return;
+        };
+        let reason = reason.to_owned();
+        self.device_failed = true;
+        self.last_error = self.gpu.loss.message();
+        for render in self.renders.values_mut() {
+            render.device_lost();
+        }
+        // Work queued before the loss must not report fresh progress/completion.
+        self.sample_events.clear();
+        self.engine_events.clear();
+        self.engine_events.push(EngineEvent::DeviceLost {
+            reason,
+            recovering: false,
+        });
+        self.engine_events.push(EngineEvent::Error {
+            message: self.last_error.clone().unwrap(),
+        });
+    }
     pub(super) fn report(&mut self, message: String) {
         self.last_error = Some(message.clone());
         self.engine_events.push(EngineEvent::Error { message });
@@ -294,6 +319,8 @@ impl Engine {
     /// Shares the caller's device and queue, for example an egui-wgpu render state.
     /// Request the adapter limits and the optional ray-query feature when creating
     /// the device. The optional gate coordinates submissions with surface configuration.
+    /// Forward device loss through [`Engine::device_loss_notifier`]; this constructor
+    /// does not replace the host's wgpu device-loss callback.
     pub fn on_device(
         adapter: &wgpu::Adapter,
         device: &wgpu::Device,
@@ -302,6 +329,7 @@ impl Engine {
         gate: Option<Arc<crate::submission::SubmissionGate>>,
     ) -> Self {
         let gpu = GpuDevice {
+            loss: Default::default(),
             device: device.clone(),
             queue: crate::GpuQueue::new(queue.clone(), gate),
             info: adapter.get_info(),
@@ -318,6 +346,7 @@ impl Engine {
             inner: Arc::new(Inner {
                 state: Mutex::new(State {
                     disposed: false,
+                    device_failed: false,
                     source_scene: None,
                     source_shared: false,
                     source_camera: None,
@@ -343,14 +372,45 @@ impl Engine {
         }
     }
     pub(super) fn lock(&self) -> MutexGuard<'_, State> {
-        self.inner.state.lock().unwrap_or_else(|e| e.into_inner())
+        let mut state = self.inner.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.observe_device_loss();
+        state
     }
     pub(super) fn live(&self) -> Result<MutexGuard<'_, State>> {
         let state = self.lock();
         if state.disposed {
             return Err(error(Status::InvalidHandle, "Engine is disposed"));
         }
+        self.inner
+            .gpu
+            .loss
+            .check()
+            .map_err(|e| error(Status::Unavailable, e.to_string()))?;
         Ok(state)
+    }
+    /// Notification handle for the host's wgpu device-loss callback. Clones own
+    /// no engine/device and may outlive this engine. For [`Engine::on_device`],
+    /// forward the host callback to every engine sharing the device; MuTracer
+    /// leaves that callback unchanged. Engines created by [`Engine::new`] wire it automatically.
+    pub fn device_loss_notifier(&self) -> super::DeviceLossNotifier {
+        self.inner.gpu.loss.clone()
+    }
+    pub(super) fn check_device(&self) -> Result<()> {
+        let state = self.lock();
+        if state.disposed {
+            return Err(error(Status::InvalidHandle, "Engine is disposed"));
+        }
+        self.inner
+            .gpu
+            .loss
+            .check()
+            .map_err(|e| error(Status::Unavailable, e.to_string()))
+    }
+    pub(super) fn poll_device(&self) {
+        let disposed = self.lock().disposed;
+        if !disposed && self.inner.gpu.loss.reason().is_none() {
+            let _ = self.inner.gpu.device.poll(wgpu::PollType::Poll);
+        }
     }
     /// Delivers queued events on the calling thread without holding the engine lock.
     /// A callback may call back into the API: events it causes are queued and
@@ -436,7 +496,8 @@ impl Engine {
     /// on this thread; full preparation runs on a library thread and renders report
     /// [`super::RenderStatus::Preparing`] until it is published.
     pub fn update(&self) -> Result<bool> {
-        let changed = {
+        self.poll_device();
+        let changed = crate::runtime::with_loss(&self.inner.gpu, || {
             let mut state = self.live()?;
             state.last_error = None;
             let mut changed = false;
@@ -463,10 +524,16 @@ impl Engine {
             for id in ids {
                 super::render::synchronize(&mut state, id, changed);
             }
-            changed
-        };
+            state.observe_device_loss();
+            self.inner
+                .gpu
+                .loss
+                .check()
+                .map_err(|e| error(Status::Unavailable, e.to_string()))?;
+            Ok(changed)
+        });
         self.flush();
-        Ok(changed)
+        changed
     }
     pub fn info(&self) -> EngineInfo {
         EngineInfo {
@@ -481,7 +548,7 @@ impl Engine {
             engine: self.clone(),
         }
     }
-    /// Subscribes to progress and error events.
+    /// Subscribes to progress, error and device-loss events.
     pub fn on(&self, listener: impl FnMut(&EngineEvent) + Send + 'static) -> Subscription {
         let mut listeners = self.inner.listeners.lock().unwrap();
         listeners.next += 1;
@@ -517,7 +584,8 @@ impl Engine {
         };
         scene || state.source_camera.map(|c| c.to_bytes()) != state.camera
     }
-    /// Message of the last error since the previous `update`, if any.
+    /// Message of the last error since the previous successful `update`.
+    /// Device-loss errors persist until disposal.
     pub fn last_error(&self) -> Option<String> {
         self.lock().last_error.clone()
     }
@@ -527,6 +595,8 @@ impl Engine {
         let (renders, mut shared) = {
             let mut state = self.lock();
             state.disposed = true;
+            state.engine_events.clear();
+            state.sample_events.clear();
             state.display = DisplayState::default();
             (
                 std::mem::take(&mut state.renders),

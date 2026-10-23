@@ -236,6 +236,7 @@ fn context(registry: &mut Registry, handle: u64) -> Result<&mut Context> {
 }
 
 fn ready(context: &mut Context) -> Result<&mut GpuScene> {
+    context.gpu.loss.check()?;
     if context.failed {
         return Err(fail(
             Status::InvalidState,
@@ -313,10 +314,13 @@ pub(crate) fn set_target(
     let status = action(error.as_mut_ptr(), error.len(), |registry| {
         let (current, source) = target_contexts(registry, handle, owner)?;
         let publication = source.publication.clone();
+        let loss = source.gpu.loss.clone();
+        loss.check()?;
         let scene = ready(source)?;
         snapshot = Some((
             scene.retained.as_ref().ok_or("No retained scene")?.clone(),
             scene.hwrt_shader,
+            loss,
             publication,
             current.publication.clone(),
         ));
@@ -325,16 +329,17 @@ pub(crate) fn set_target(
     if status != 0 {
         return status;
     }
-    let (retained, hardware, scene_publication, target_publication) = snapshot.unwrap();
+    let (retained, hardware, loss, scene_publication, target_publication) = snapshot.unwrap();
     // Both the target packet and its packed sample sequence wait for the shared
     // AOT thread. Keep the registry free for other contexts' render/poll/cancel.
     let packet = std::panic::catch_unwind(AssertUnwindSafe(|| {
         retained
-            .target(settings, size, quality, hardware, camera)
+            .target(settings, size, quality, hardware, camera, &loss)
             .map_err(rejected)
     }));
     action(error.as_mut_ptr(), error.len(), |registry| {
         let (current, source) = target_contexts(registry, handle, owner)?;
+        loss.check()?;
         if !Arc::ptr_eq(&source.publication, &scene_publication)
             || !Arc::ptr_eq(&current.publication, &target_publication)
         {
@@ -470,6 +475,7 @@ pub fn create_on_device_with_gate(
         return Err("Unknown native intersection backend".into());
     }
     let gpu = GpuDevice {
+        loss: Default::default(),
         device: device.clone(),
         queue: GpuQueue::new(queue.clone(), gate),
         info: adapter.get_info(),
@@ -933,6 +939,7 @@ unsafe fn commit_with_settings(
             if let Some(gate) = PREPARATION_GATE.lock().unwrap().take() {
                 let _ = gate.recv_timeout(Duration::from_secs(60));
             }
+            snapshot.gpu.loss.check()?;
             let started = Instant::now();
             let (mut scene, mut assets, mut retained) = scene::prepare_retained_with_settings(
                 bytes,
@@ -944,6 +951,7 @@ unsafe fn commit_with_settings(
             )
             .map_err(rejected)?;
             cancelled(&cancel)?;
+            snapshot.gpu.loss.check()?;
             let prepared = Instant::now();
             let uniform = assets
                 .get(&AssetId::Packet(7))
@@ -1054,8 +1062,10 @@ unsafe fn commit_with_settings(
         })();
         // write_buffer queues staging allocations until the next submission.
         // Flush even rejected/cancelled candidates; a client need not render.
-        snapshot.gpu.queue.submit([]);
-        snapshot.gpu.device.poll(wgpu::PollType::Poll)?;
+        if snapshot.gpu.loss.reason().is_none() {
+            snapshot.gpu.queue.submit([]);
+            snapshot.gpu.device.poll(wgpu::PollType::Poll)?;
+        }
         result
     }));
     let panicked = outcome.is_err();
@@ -1080,6 +1090,7 @@ unsafe fn commit_with_settings(
         if panicked {
             context.failed = true;
         }
+        snapshot.gpu.loss.check()?;
         let (candidate, seed, bounces, fallback_reason) = result?;
         cancelled(&cancel)?;
         retire_targets(registry, handle)?;
@@ -1734,6 +1745,14 @@ pub unsafe extern "C" fn mt_context_submit(
 }
 /// `owner` is the scene a linked context renders; it is needed only to dispatch.
 fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> Result<()> {
+    if let Err(error) = context.gpu.loss.check() {
+        context.failed = true;
+        if let Some(job) = context.job.as_mut() {
+            job.state = JobState::Failed;
+            job.flight = None;
+        }
+        return Err(error);
+    }
     let Context {
         scene: own,
         job,
@@ -1748,6 +1767,7 @@ fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> 
         return Ok(());
     }
     gpu.device.poll(wgpu::PollType::Poll)?;
+    gpu.loss.check()?;
     if job
         .flight
         .as_ref()
