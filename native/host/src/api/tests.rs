@@ -2150,8 +2150,13 @@ fn hardware_loop_against_fresh_l0_contexts() {
     assert!(!real_cap || direct, "MT_LOOP_REAL_CAP requires MT_LOOP_L0");
     assert!(iterations > 0, "MT_LOOP_ITERATIONS must be positive");
     let extra = std::env::var_os("MT_LOOP_EXTRA").is_some();
-    context::AUDIT_PREPARATIONS.store(true, std::sync::atomic::Ordering::Relaxed);
-    context::AUDIT_HISTORY_SAMPLES.store(4, std::sync::atomic::Ordering::Relaxed);
+    // The audit instruments a context's own outputs; render targets reject it,
+    // so only the L0 mode and the oracle record it.
+    context::AUDIT_PREPARATIONS.store(direct, std::sync::atomic::Ordering::Relaxed);
+    context::AUDIT_HISTORY_SAMPLES.store(
+        if direct { 4 } else { 0 },
+        std::sync::atomic::Ordering::Relaxed,
+    );
     struct AuditGuard;
     impl Drop for AuditGuard {
         fn drop(&mut self) {
@@ -2185,10 +2190,22 @@ fn hardware_loop_against_fresh_l0_contexts() {
     display.set_size(96, 64).unwrap();
     let mut failures = Vec::new();
     let mut typical = None;
+    // A plain context for the L0 mode: render contexts are targets of the shared scene.
+    let mut direct_handle = 0;
+    if direct {
+        l0(|e, n| unsafe { context::mt_context_create_with_backend(1, &mut direct_handle, e, n) })
+            .unwrap();
+    }
     for i in 0..iterations {
         let settings = RenderSettings {
             bounces: 3 + (i % 2) as u32,
             ..base.clone()
+        };
+        // Alternate a shader feature so every L1 iteration fully prepares the scene.
+        let scene = if i % 2 == 1 {
+            full_edit(&scene)
+        } else {
+            scene.clone()
         };
         let descriptor = expected_descriptor(&scene, [96, 64], settings.quality(), None);
         let l0_settings = settings.l0(
@@ -2199,7 +2216,11 @@ fn hardware_loop_against_fresh_l0_contexts() {
             },
             0,
         );
-        let handle = engine.lock().renders[&render.id()].context();
+        let handle = if direct {
+            direct_handle
+        } else {
+            engine.lock().shared.context().unwrap_or(0)
+        };
         let actual = if direct {
             l0(|e, n| unsafe {
                 context::mt_context_commit_with_settings(
@@ -2229,6 +2250,7 @@ fn hardware_loop_against_fresh_l0_contexts() {
             context_images(handle, [96, 64])
         } else {
             render.set_settings(settings.clone()).unwrap();
+            engine.set_scene(&scene).unwrap();
             engine.update().unwrap();
             let deadline = Instant::now() + Duration::from_secs(60);
             loop {
@@ -2252,8 +2274,17 @@ fn hardware_loop_against_fresh_l0_contexts() {
             }
             images(&render)
         };
+        let handle = if direct {
+            direct_handle
+        } else {
+            engine.lock().shared.context().unwrap()
+        };
         assert_hardware_context(handle);
-        let hits = context::audit_history(handle, settings.max_samples);
+        let hits = if direct {
+            context::audit_history(handle, settings.max_samples)
+        } else {
+            Default::default()
+        };
         let (expected, oracle_hits, oracle_history) = oracle_audited(
             1,
             &descriptor,
@@ -2337,6 +2368,9 @@ fn hardware_loop_against_fresh_l0_contexts() {
         } else if typical.is_none() {
             typical = Some(format!("{hits:?}"));
         }
+    }
+    if direct {
+        l0(|e, n| unsafe { context::mt_context_destroy(direct_handle, e, n) }).unwrap();
     }
     println!(
         "hardware loop: {} of {iterations} mismatched (extra engine {extra}, L0 {direct}, real cap {real_cap}); passing audit {}",

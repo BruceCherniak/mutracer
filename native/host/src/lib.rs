@@ -914,6 +914,9 @@ impl GpuScene {
         previous: Option<Target>,
     ) -> Result<Target> {
         use layout::resource as res;
+        if self.scene.bind_groups[layout::group::OUTPUT].entries.len() != 4 {
+            return Err("Render targets do not support instrumented scene outputs".into());
+        }
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
         let word =
