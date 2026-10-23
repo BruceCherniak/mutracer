@@ -235,6 +235,9 @@ pub struct SampleEvent {
 /// Image read by [`Render::read_pixels`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PixelKind {
+    /// Resolved linear ray color and path coverage, matching TS WebGPU HDR readback.
+    /// RGB uses surface-hit normalization, with per-sample color restored for an
+    /// opaque visible flat background. Display settings and denoising do not affect it.
     Hdr,
     /// Denoised HDR when a denoised image is available, otherwise HDR.
     Denoised,
@@ -1812,6 +1815,8 @@ impl Render {
     }
     /// Waits for the in-flight batch, then reads this render's linear RGBA f32
     /// image, top row first. During preparation it reads the previous image.
+    /// HDR uses the TS WebGPU readback semantics of [`PixelKind::Hdr`]; L0 keeps
+    /// raw per-sample averages. HDR temporarily reads 48 GPU bytes per pixel.
     pub fn read_pixels(&self, kind: PixelKind) -> Result<Image> {
         self.with(|state, id| {
             let render = state.renders.get_mut(&id).unwrap();
@@ -1837,7 +1842,13 @@ impl Render {
                 PixelKind::Albedo => 2,
             };
             let [width, height] = context_size(render.context)?;
-            let data = read_l0(render.context, code)?;
+            let data = if code == 0 {
+                let mut data = Vec::new();
+                l0_blocking(|e, n| context::read_hdr(render.context, &mut data, e, n))?;
+                data
+            } else {
+                read_l0(render.context, code)?
+            };
             Ok(Image {
                 width,
                 height,

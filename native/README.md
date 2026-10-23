@@ -217,14 +217,23 @@ use their own device and queue through `Engine::on_device`. Encode and submit
 commands using the image before the next refine/converge, display present/resize,
 restart, disposal or device loss; do not retain, write or destroy it.
 
-HDR is top-row-first RGBA32Float resolved ray color and coverage, before denoising
-and display settings. RGB is normalized by surface hits as on WebGPU;
-`read_pixels(PixelKind::Hdr)` keeps the native per-sample average. Display is the
-latest composition including passes, in straight-alpha, sRGB-encoded RGBA8Unorm
-at the actual render size. Before a complete captured sample, the method returns
-`None`; Display also needs a previous presentation or export. Borrowing HDR or
-an unfiltered display image can enqueue a GPU resolve. RGBA32Float sampling requires an unfilterable texture binding unless
-the host enabled float32 filtering.
+HDR is top-row-first RGBA32Float resolved ray color and path coverage, before
+denoising and display settings. GPU HDR RGB is normalized by surface hits as on
+WebGPU. Rust `read_pixels(PixelKind::Hdr)` and C `mt_render_read_pixels` with
+`MT_IMAGE_HDR` match TS WebGPU CPU readback: transparent edges keep that
+normalization; an opaque, visible flat background restores per-sample RGB.
+Alpha remains path coverage in both outputs. CPU/GPU floating-point rounding can
+differ. L0 `mt_context_read_pixels` keeps its raw per-sample averages.
+
+Display is the latest composition including passes, in straight-alpha,
+sRGB-encoded RGBA8Unorm at the actual render size. `get_output_texture` returns
+`None` before a complete captured sample; Display also needs a previous
+presentation or export. Borrowing HDR or an unfiltered display image can enqueue
+a GPU resolve. RGBA32Float sampling requires an unfilterable texture binding
+unless the host enabled float32 filtering.
+
+HDR CPU readback blocks for the current batch and GPU readback. It temporarily
+copies color and both coverage guides (up to 48 GPU bytes per pixel).
 
 Add synchronous passes with `Display::add_post_process`. For example, an identity
 pass copies its input to its output:

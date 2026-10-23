@@ -344,7 +344,11 @@ int32_t mt_render_info(mt_render render, mt_render_snapshot *output, char *error
 /* kind (mt_image_kind): HDR, NORMAL, ALBEDO or DENOISED (the denoised image when
  * one exists, otherwise HDR). Linear little-endian f32 RGBA, top row first,
  * width*height*16 bytes. Waits for the batch in flight. During preparation it
- * reads the previous image. Size queries and short destinations follow
+ * reads the previous image. HDR matches TS WebGPU readback: RGB is normalized
+ * by surface hits, restoring per-sample RGB for an opaque visible flat
+ * background; alpha stays path coverage. Display settings do not affect HDR.
+ * L0 mt_context_read_pixels keeps raw per-sample averages. HDR temporarily copies
+ * up to 48 GPU bytes per pixel. Size queries and short destinations follow
  * mt_display_read_pixels. */
 int32_t mt_render_read_pixels(mt_render render, uint32_t kind, void *pixels, size_t size, size_t *written,
   char *error, size_t capacity);

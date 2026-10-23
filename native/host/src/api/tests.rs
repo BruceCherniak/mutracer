@@ -399,7 +399,7 @@ fn l0_check(code: i32, error: &[i8]) {
         .collect();
     assert_eq!(code, 0, "{}", String::from_utf8_lossy(&message));
 }
-/// HDR, normal and albedo of a new L0 context, top row first.
+/// Fresh L0 accumulation with the L1 HDR conversion; top row first.
 pub(super) fn oracle(
     backend: u32,
     descriptor: &[u8],
@@ -416,6 +416,28 @@ fn oracle_audited(
     settings: &crate::settings::RenderSettings,
     samples: u32,
     audit: bool,
+) -> (
+    [Vec<f32>; 3],
+    Vec<Option<[usize; 3]>>,
+    crate::sample_audit::History,
+) {
+    oracle_inputs(backend, descriptor, settings, samples, audit, true)
+}
+fn raw_oracle(
+    backend: u32,
+    descriptor: &[u8],
+    settings: &crate::settings::RenderSettings,
+    samples: u32,
+) -> [Vec<f32>; 3] {
+    oracle_inputs(backend, descriptor, settings, samples, false, false).0
+}
+fn oracle_inputs(
+    backend: u32,
+    descriptor: &[u8],
+    settings: &crate::settings::RenderSettings,
+    samples: u32,
+    audit: bool,
+    resolved: bool,
 ) -> (
     [Vec<f32>; 3],
     Vec<Option<[usize; 3]>>,
@@ -456,7 +478,7 @@ fn oracle_audited(
         }
     }
     let size = [word(descriptor, h::WIDTH), word(descriptor, h::HEIGHT)];
-    let images = context_images(handle, size);
+    let images = context_outputs(handle, size, resolved);
     let history = if context::AUDIT_HISTORY_SAMPLES.load(std::sync::atomic::Ordering::Relaxed) > 0 {
         assert_hardware_context(handle);
         context::audit_history(handle, samples)
@@ -487,9 +509,17 @@ fn assert_hardware_context(handle: u64) {
     .unwrap();
     assert_eq!(backend, 1, "HWRT test fell back to software: {reason:?}");
 }
-fn context_images(handle: u64, size: [u32; 2]) -> [Vec<f32>; 3] {
+pub(super) fn context_images(handle: u64, size: [u32; 2]) -> [Vec<f32>; 3] {
+    context_outputs(handle, size, true)
+}
+pub(super) fn context_outputs(handle: u64, size: [u32; 2], resolved: bool) -> [Vec<f32>; 3] {
     let mut error = [0i8; 1024];
     [0, 1, 2].map(|kind| {
+        if kind == 0 && resolved {
+            let mut pixels = Vec::new();
+            l0_blocking(|e, n| context::read_hdr(handle, &mut pixels, e, n)).unwrap();
+            return flip_rows(&pixels, size[0], size[1]);
+        }
         let mut bytes = vec![0u8; size[0] as usize * size[1] as usize * 16];
         let mut written = 0;
         unsafe {
@@ -1638,7 +1668,7 @@ fn converged_oidn_matches_direct_filtering_of_the_same_inputs() {
     }
     assert!(statuses.contains(&RenderStatus::Denoising), "{statuses:?}");
     assert!(!render.denoising());
-    let inputs = oracle(
+    let inputs = raw_oracle(
         0,
         &expected_descriptor(&scene, [16, 12], 3, None),
         &settings.l0(4, 0),
@@ -2042,7 +2072,7 @@ fn progressive_denoising_pauses_sampling_and_keeps_the_last_result() {
                 if denoised_at.last() != Some(&report.samples) {
                     denoised_at.push(report.samples);
                     // Every result equals direct filtering of the same inputs.
-                    let inputs = oracle(
+                    let inputs = raw_oracle(
                         0,
                         &expected_descriptor(&scene, [16, 12], 3, None),
                         &settings.l0(settings.sample_cap(settings.max_samples), 0),
@@ -2122,7 +2152,7 @@ fn denoise_current_filters_paused_samples_and_progressive_resumes() {
         .unwrap();
     let mut filter = crate::denoise::Denoiser::from_library(library.as_ref(), 1).unwrap();
     let mut check = |samples: u32| {
-        let inputs = oracle(
+        let inputs = raw_oracle(
             0,
             &expected_descriptor(&scene, [16, 12], 3, None),
             &settings.l0(settings.sample_cap(settings.max_samples), 0),

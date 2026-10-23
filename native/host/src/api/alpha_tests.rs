@@ -131,29 +131,7 @@ fn fresh(
         assert!(info.state < 2 && std::time::Instant::now() < deadline);
         std::thread::sleep(std::time::Duration::from_micros(100));
     }
-    let result = std::array::from_fn(|kind| {
-        let mut bytes = vec![0u8; 8 * 6 * 16];
-        let mut written = 0;
-        unsafe {
-            super::l0_blocking(|e, n| {
-                crate::context::mt_context_read_pixels(
-                    target,
-                    kind as u32,
-                    bytes.as_mut_ptr().cast(),
-                    bytes.len(),
-                    &mut written,
-                    e,
-                    n,
-                )
-            })
-            .unwrap();
-        }
-        let floats: Vec<_> = bytes
-            .chunks_exact(4)
-            .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
-            .collect();
-        super::render::flip_rows(&floats, 8, 6)
-    });
+    let result = super::tests::context_images(target, [8, 6]);
     for handle in [target, owner] {
         unsafe {
             super::l0_blocking(|e, n| crate::context::mt_context_destroy(handle, e, n)).unwrap();

@@ -1631,6 +1631,32 @@ pub unsafe extern "C" fn mt_context_info(
         Ok(())
     })
 }
+/// Internal L1 HDR conversion; never changes the public L0 readback contract.
+pub(crate) fn read_hdr(
+    handle: u64,
+    output: &mut Vec<f32>,
+    error: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    action(error, capacity, |registry| {
+        let (context, linked) = with_scene(registry, handle)?;
+        idle(context)?;
+        let samples = context.link.as_ref().map_or_else(
+            || context.scene.as_ref().map_or(0, |s| s.samples),
+            |l| l.target.samples,
+        );
+        if samples == 0 {
+            return Err(fail(Status::InvalidState, "No completed samples"));
+        }
+        context.failed = true;
+        *output = match linked {
+            Some(scene) => scene.read_hdr(Some(&context.link.as_ref().unwrap().target))?,
+            None => context.scene.as_ref().unwrap().read_hdr(None)?,
+        };
+        context.failed = false;
+        Ok(())
+    })
+}
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_context_read_pixels(
     handle: u64,

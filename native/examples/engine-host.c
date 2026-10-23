@@ -60,6 +60,30 @@ static float *oracle(const uint8_t *scene, size_t length, uint32_t backend, uint
   size_t size = (size_t)width * height * 16, written = 0;
   float *bottom = malloc(size), *top = malloc(size);
   OK(mt_context_read_pixels(context, kind, bottom, size, &written, error, sizeof error));
+  if (kind == MT_IMAGE_HDR) {
+    /* L0 stays per-sample. Convert the independent oracle to the L1 contract. */
+    float *normal = malloc(size), *albedo = malloc(size);
+    REQUIRE(normal && albedo, "HDR reference guides");
+    OK(mt_context_read_pixels(context, MT_IMAGE_NORMAL, normal, size, &written, error, sizeof error));
+    OK(mt_context_read_pixels(context, MT_IMAGE_ALBEDO, albedo, size, &written, error, sizeof error));
+    const mt_scene_header_v4 *header = (const mt_scene_header_v4 *)scene;
+    int flat = !(header->quality_flags & MT_QUALITY_HIDE_BACKGROUND)
+      && !header->background_texture_plus_one && header->background_color[3] >= 0.99999f;
+    for (size_t i = 0; i < size / sizeof(float); i += 4) {
+      float count = normal[i + 3], hit = albedo[i + 3];
+      if (count <= 0) { memset(bottom + i, 0, 4 * sizeof(float)); continue; }
+      float total = count > 1.0f / samples ? count : 1.0f / samples;
+      float divisor = hit > 0 ? hit : total;
+      for (unsigned c = 0; c < 3; c++) bottom[i + c] /= divisor;
+      bottom[i + 3] /= total;
+      float coverage = hit / total;
+      if (coverage < 0) coverage = 0;
+      if (coverage > 1) coverage = 1;
+      if (flat && coverage > 0)
+        for (unsigned c = 0; c < 3; c++) bottom[i + c] *= coverage;
+    }
+    free(normal); free(albedo);
+  }
   for (uint32_t y = 0; y < height; y++)
     memcpy(top + (size_t)y * width * 4, bottom + (size_t)(height - 1 - y) * width * 4, (size_t)width * 16);
   free(bottom);

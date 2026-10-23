@@ -10,6 +10,10 @@ pub(crate) struct Metadata {
     flat_background: [f32; 4],
 }
 impl Metadata {
+    pub(crate) fn opaque_background(self) -> bool {
+        self.flat_background[3] > 0.5
+    }
+
     pub(crate) fn from_trace(trace: &[u8]) -> Self {
         use crate::layout::ray_uniform as u;
         if trace.len() < u::SCENE_FEATURE_FLAGS + 4 {
@@ -688,6 +692,38 @@ mod tests {
             buffer.unmap();
             data
         };
+        assert_eq!(read(&texture), expected);
+        // CPU HDR follows rawOutputPass: straight coverage for transparent/mapped
+        // backgrounds, per-sample RGB for opaque flat backgrounds. Readback must
+        // not overwrite the separately borrowed GPU texture or accumulation.
+        let inputs = [&raw, &normal, &albedo].map(|data| {
+            wgpu::util::DeviceExt::create_buffer_init(
+                &gpu.device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("HDR readback fixture"),
+                    contents: &data
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect::<Vec<_>>(),
+                    usage: wgpu::BufferUsages::COPY_SRC,
+                },
+            )
+        });
+        let inputs = [&inputs[0], &inputs[1], &inputs[2]];
+        let transparent = crate::hdr::read(&gpu, inputs, [2, 2], 4, false).unwrap();
+        assert_eq!(
+            transparent,
+            vec![
+                4., 2., 1., 0.25, 4., 2., 1., 1., 1.5, 0.75, 0.375, 0.5, 0., 0., 0., 0.
+            ]
+        );
+        let flat = crate::hdr::read(&gpu, inputs, [2, 2], 4, true).unwrap();
+        assert_eq!(
+            flat,
+            vec![
+                1., 0.5, 0.25, 0.25, 2., 1., 0.5, 1., 1.5, 0.75, 0.375, 0.5, 0., 0., 0., 0.
+            ]
+        );
         assert_eq!(read(&texture), expected);
         display.upload(&[0.75; 16]).unwrap();
         assert_eq!(read(&display.hdr_texture()), expected);

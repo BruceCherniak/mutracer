@@ -1586,7 +1586,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         &viewer.light,
     ))?;
     ensure!(
-        reference.finish(viewer.samples)? == viewer.hdr()?,
+        reference.finish_l1(viewer.samples)? == viewer.hdr()?,
         "Combined transform/light/environment/material/camera updates differ from full commit"
     );
     renderer::save(
@@ -1636,7 +1636,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         &viewer.light,
     ))?;
     ensure!(
-        reference.finish(viewer.samples)? == viewer.hdr()?,
+        reference.finish_l1(viewer.samples)? == viewer.hdr()?,
         "Unlit full-commit fallback mismatch"
     );
     println!(
@@ -1669,7 +1669,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         &viewer.light,
     ))?;
     ensure!(
-        reference.finish(viewer.samples)? == viewer.hdr()?,
+        reference.finish_l1(viewer.samples)? == viewer.hdr()?,
         "Environment full-commit fallback mismatch"
     );
     println!(

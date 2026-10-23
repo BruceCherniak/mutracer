@@ -118,6 +118,8 @@ mod display_effects_tests;
 #[cfg(test)]
 mod gpu_output_tests;
 #[cfg(test)]
+mod hdr_tests;
+#[cfg(test)]
 mod loop_tests;
 #[cfg(test)]
 mod tests;

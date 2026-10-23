@@ -69,7 +69,7 @@ fn texture_sampling(
                 &viewer.settings,
             )?;
             ensure!(
-                viewer.hdr()? == fresh.finish(viewer.samples)?
+                viewer.hdr()? == fresh.finish_l1(viewer.samples)?
                     && viewer.image(1)? == fresh.image(1)?
                     && viewer.image(2)? == fresh.image(2)?,
                 "Texture wrapping/fresh mismatch: backend {mode}, {s}/{t}"
@@ -105,7 +105,7 @@ fn texture_sampling(
             &viewer.settings,
         )?;
         ensure!(
-            viewer.hdr()? == fresh.finish(viewer.samples)?
+            viewer.hdr()? == fresh.finish_l1(viewer.samples)?
                 && viewer.image(1)? == fresh.image(1)?
                 && viewer.image(2)? == fresh.image(2)?,
             "Texture repeat/fresh mismatch: backend {mode}, {scale:?}"
@@ -178,7 +178,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 &viewer.settings,
             )?;
             ensure!(
-                viewer.hdr()? == fresh.finish(viewer.samples)?
+                viewer.hdr()? == fresh.finish_l1(viewer.samples)?
                     && viewer.image(1)? == fresh.image(1)?
                     && viewer.image(2)? == fresh.image(2)?,
                 "Material preset/fresh mismatch: backend {mode}, {}",
@@ -226,7 +226,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             )?;
             ensure!(
                 viewer.hdr()?.len() == size[0] as usize * size[1] as usize * 4
-                    && viewer.hdr()? == fresh.finish(viewer.samples)?
+                    && viewer.hdr()? == fresh.finish_l1(viewer.samples)?
                     && viewer.image(1)? == fresh.image(1)?
                     && viewer.image(2)? == fresh.image(2)?,
                 "Scaled resolution/fresh mismatch: backend {mode}, {scale}"
@@ -289,7 +289,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 &viewer.settings,
             )?;
             ensure!(
-                viewer.hdr()? == fresh.finish(viewer.samples)?
+                viewer.hdr()? == fresh.finish_l1(viewer.samples)?
                     && viewer.image(1)? == fresh.image(1)?
                     && viewer.image(2)? == fresh.image(2)?,
                 "Viewer/fresh mismatch: backend {mode}, case {case}"
@@ -329,7 +329,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 &viewer.settings,
             )?;
             ensure!(
-                viewer.hdr()? == fresh.finish(viewer.samples)?,
+                viewer.hdr()? == fresh.finish_l1(viewer.samples)?,
                 "Settings lost after an edit"
             );
         }
@@ -347,7 +347,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             &viewer.settings,
         )?;
         ensure!(
-            viewer.hdr()? == fresh.finish(viewer.samples)?,
+            viewer.hdr()? == fresh.finish_l1(viewer.samples)?,
             "Settings lost after backend switch"
         );
         println!("PASS retained settings after edits and backend switch {mode}");

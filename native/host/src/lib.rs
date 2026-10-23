@@ -22,6 +22,7 @@ mod depth;
 mod device_loss;
 pub mod display;
 mod hardware;
+mod hdr;
 pub mod hit_diagnostics;
 pub mod image_diagnostics;
 pub mod picking;
@@ -880,6 +881,32 @@ impl GpuScene {
             self.scene.width,
             self.scene.height,
             self.samples,
+        )
+    }
+    /// L1 readback; the public L0 read_pixels method above remains a raw average.
+    fn read_hdr(&self, target: Option<&Target>) -> Result<Vec<f32>> {
+        let (buffers, size, samples) = match target {
+            Some(target) => (
+                [target.output(0)?, target.output(1)?, target.output(2)?],
+                [target.width, target.height],
+                target.samples,
+            ),
+            None => (
+                [
+                    &self.buffers[&self.scene.color_output],
+                    &self.buffers[&self.scene.normal_output.ok_or("No normal output")?],
+                    &self.buffers[&self.scene.albedo_output.ok_or("No albedo output")?],
+                ],
+                [self.scene.width, self.scene.height],
+                self.samples,
+            ),
+        };
+        hdr::read(
+            &self.gpu,
+            buffers,
+            size,
+            samples,
+            display::Metadata::from_trace(&self.display_trace).opaque_background(),
         )
     }
     fn reset_raw(&mut self) -> Result<()> {
