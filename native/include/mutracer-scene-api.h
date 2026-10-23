@@ -17,6 +17,8 @@ extern "C" {
  * struct_size validation and error buffers follow mutracer-engine.h.
  * Handles are scene-scoped and never reused. Deleting a resource invalidates
  * its handle; a remaining reference makes encoding fail INVALID_HANDLE.
+ * After a caught panic, further scene calls return MT_ERROR_CONTEXT_FAILED;
+ * destroy and recreate the scene.
  * Destroying a scene invalidates its objects. Engines retain submitted snapshots
  * independently, so a scene can be destroyed after set_scene_object returns.
  * Initialize every descriptor with its matching *_default(). Reserved fields 0.

@@ -136,9 +136,13 @@ fn with_scene<T>(id: u64, f: impl FnOnce(&mut Entry) -> Result<T>) -> Result<T> 
         .and_then(|s| s.get(&id))
         .cloned()
         .ok_or_else(invalid_handle)?;
-    let mut entry = entry
-        .try_lock()
-        .map_err(|_| api::error(Status::Busy, "Scene is in use"))?;
+    let mut entry = entry.try_lock().map_err(|e| match e {
+        std::sync::TryLockError::WouldBlock => api::error(Status::Busy, "Scene is in use"),
+        std::sync::TryLockError::Poisoned(_) => api::error(
+            Status::ContextFailed,
+            "Scene panicked; destroy and recreate it",
+        ),
+    })?;
     f(&mut entry)
 }
 fn call(error: *mut c_char, capacity: usize, f: impl FnOnce() -> Result<()>) -> i32 {
@@ -365,9 +369,15 @@ pub extern "C" fn mt_scene_destroy(scene: u64, error: *mut c_char, cap: usize) -
             .and_then(|r| r.get(&scene))
             .cloned()
             .ok_or_else(invalid_handle)?;
-        let _guard = entry
-            .try_lock()
-            .map_err(|_| api::error(Status::Busy, "Scene is in use"))?;
+        // A caught panic fails the builder, but its owned resources must remain
+        // destroyable. Never read or mutate a poisoned candidate again.
+        let _guard = match entry.try_lock() {
+            Ok(guard) => guard,
+            Err(std::sync::TryLockError::Poisoned(poison)) => poison.into_inner(),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                return Err(api::error(Status::Busy, "Scene is in use"));
+            }
+        };
         SCENES
             .lock()
             .unwrap_or_else(|e| e.into_inner())
@@ -940,6 +950,29 @@ pub unsafe extern "C" fn mt_scene_find(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_scene_rejects_use_and_remains_destroyable() {
+        let mut s = 0;
+        assert_eq!(
+            unsafe { mt_scene_create(&mut s, std::ptr::null_mut(), 0) },
+            0
+        );
+        assert_eq!(
+            call(std::ptr::null_mut(), 0, || with_scene(s, |_| panic!(
+                "injected scene failure"
+            ))),
+            Status::Error as i32
+        );
+        assert_eq!(
+            call(std::ptr::null_mut(), 0, || with_scene(s, |_| Ok(()))),
+            Status::ContextFailed as i32
+        );
+        assert_eq!(mt_scene_destroy(s, std::ptr::null_mut(), 0), 0);
+        assert_eq!(
+            mt_scene_destroy(s, std::ptr::null_mut(), 0),
+            Status::InvalidHandle as i32
+        );
+    }
     #[test]
     fn c_defaults_records_and_handle_lifetimes() {
         unsafe {
