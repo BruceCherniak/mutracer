@@ -140,7 +140,9 @@ fn display_effects_vignette_and_disjoint_catcher_layers_match_reference() {
             let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
                 label: None,
                 size: (count * 48) as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
             put(&gpu, &buffer, &shadow_values.repeat(count));
@@ -575,7 +577,9 @@ fn hdr_display_preserves_extended_radiance_grading_bloom_and_coverage() {
     display.shadow = Some(gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
         size: 48 * 48,
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        usage: wgpu::BufferUsages::STORAGE
+            | wgpu::BufferUsages::COPY_DST
+            | wgpu::BufferUsages::COPY_SRC,
         mapped_at_creation: false,
     }));
     put(
@@ -609,5 +613,122 @@ fn hdr_display_preserves_extended_radiance_grading_bloom_and_coverage() {
     for p in read_half(&gpu, &hdr) {
         assert!((p[0] - decode(0.5)).abs() < 0.001);
         assert_eq!(p[2], 1.);
+    }
+}
+
+#[test]
+#[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+fn retained_denoising_freezes_composition_inputs_but_not_raw_capture() {
+    let gpu = GpuDevice::with_backend(0).unwrap();
+    let count = 48;
+    for catcher in [false, true] {
+        let mut source = snapshot(&gpu, [8, 6], 5, &[[0.6, 0.2, 0.1, 0.5]; 48]);
+        let guide = || {
+            gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: (count * 16) as u64,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            })
+        };
+        let normal = guide();
+        let albedo = guide();
+        put(&gpu, &normal, &[0., 0., 5., 5.].repeat(count));
+        put(&gpu, &albedo, &[1., 1., 1., 2.5].repeat(count));
+        let shadow = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (count * 48) as u64,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        });
+        put(
+            &gpu,
+            &shadow,
+            &[2.5, 0., 0., 1.25, 0.5, 0.25, 0.125, 2.5, 0., 0., 0., 0.].repeat(count),
+        );
+        let metadata = Metadata {
+            has_catcher: catcher,
+            flat_background: [0.1, 0.2, 0.3, 1.],
+        };
+        let mut display = Display::new(gpu.clone(), [8, 6]);
+        display.capture(&source.raw, &normal, &albedo, &shadow, metadata, 5);
+        display
+            .upload(&[0.5, 0.25, 0.125, 0.5].repeat(count))
+            .unwrap();
+        let settings: Vec<_> = [0., 0.4]
+            .into_iter()
+            .flat_map(|bloom| {
+                [0, 3].into_iter().map(move |output| Settings {
+                    bloom_intensity: bloom,
+                    output,
+                    ..Default::default()
+                })
+            })
+            .collect();
+        let before: Vec<_> = settings
+            .iter()
+            .map(|s| {
+                let straight = display.compose_straight(s);
+                (
+                    display.read_rgba(s).unwrap(),
+                    display.read_image(&straight).unwrap(),
+                    read_half(&gpu, &display.compose_hdr(s)),
+                )
+            })
+            .collect();
+        // Cross the bloom threshold while changing coverage, normals, colors,
+        // catcher layers and background. None belongs to the retained result.
+        update(&mut source, 10, &[[0.1, 0.8, 0.4, 1.]; 48]);
+        put(&gpu, &normal, &[0., 10., 0., 10.].repeat(count));
+        put(&gpu, &albedo, &[3., 4., 5., 10.].repeat(count));
+        put(&gpu, &shadow, &[0.; 12].repeat(count));
+        display.capture(
+            &source.raw,
+            &normal,
+            &albedo,
+            &shadow,
+            Metadata::default(),
+            10,
+        );
+        assert!(display.show_denoised());
+        for (s, expected) in settings.iter().zip(&before) {
+            let straight = display.compose_straight(s);
+            assert_eq!(display.read_rgba(s).unwrap(), expected.0);
+            assert_eq!(display.read_image(&straight).unwrap(), expected.1);
+            assert_eq!(read_half(&gpu, &display.compose_hdr(s)), expected.2);
+        }
+        assert_eq!(display.uploads, 1);
+        // Raw HDR input keeps advancing while the denoised image is shown.
+        let raw = crate::read_average(&gpu.device, &gpu.queue, &display.raw, 8, 6, 10).unwrap();
+        assert_eq!(
+            raw,
+            [0.1f32, 0.8, 0.4, 1.]
+                .repeat(count)
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<_>>()
+        );
+        let guides: Vec<_> = [1, 2, 4]
+            .into_iter()
+            .map(|output| {
+                let s = Settings {
+                    output,
+                    ..Default::default()
+                };
+                (
+                    s,
+                    display.read_rgba(&s).unwrap(),
+                    read_half(&gpu, &display.compose_hdr(&s)),
+                )
+            })
+            .collect();
+        display.original();
+        for (s, rgba, hdr) in guides {
+            assert_eq!(display.read_rgba(&s).unwrap(), rgba);
+            assert_eq!(read_half(&gpu, &display.compose_hdr(&s)), hdr);
+        }
+        assert_ne!(display.read_rgba(&settings[0]).unwrap(), before[0].0);
     }
 }

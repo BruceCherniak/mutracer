@@ -86,6 +86,17 @@ impl Default for Settings {
         }
     }
 }
+// Composition depends on coverage and catcher layers as well as filtered color.
+// Freeze them together so later captures cannot change a retained result.
+struct Denoised {
+    color: wgpu::Buffer,
+    raw: wgpu::Buffer,
+    albedo: wgpu::Buffer,
+    shadow: Option<wgpu::Buffer>,
+    samples: u32,
+    metadata: Metadata,
+    revision: u64,
+}
 pub struct Display {
     gpu: GpuDevice,
     pub(super) owner: u64,
@@ -98,7 +109,7 @@ pub struct Display {
     original_samples: u32,
     pub using_denoised: bool,
     /// The last uploaded denoised image, kept on the GPU until `original`.
-    denoised: Option<wgpu::Buffer>,
+    denoised: Option<Denoised>,
     /// Uploads from CPU pixels, for tests.
     pub(crate) uploads: u32,
     params: wgpu::Buffer,
@@ -137,7 +148,9 @@ impl Display {
             device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some(label),
                 size: linear.size(),
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             })
         };
@@ -251,7 +264,9 @@ impl Display {
                 self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
                     label: Some("Stable catcher accumulation"),
                     size: shadow.size(),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    usage: wgpu::BufferUsages::STORAGE
+                        | wgpu::BufferUsages::COPY_DST
+                        | wgpu::BufferUsages::COPY_SRC,
                     mapped_at_creation: false,
                 })
             });
@@ -274,16 +289,58 @@ impl Display {
         {
             return Err("Invalid display image".into());
         }
-        let denoised = self.denoised.get_or_insert_with(|| {
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        let allocate = |size| {
             self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("Denoised preview"),
-                size: self.linear.size(),
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                label: Some("Denoised composition snapshot"),
+                size,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             })
-        });
+        };
+        let previous = self.denoised.take();
+        let snapshot = |source: &wgpu::Buffer,
+                        previous: Option<&wgpu::Buffer>,
+                        encoder: &mut wgpu::CommandEncoder| {
+            let buffer = previous
+                .filter(|b| b.size() == source.size())
+                .cloned()
+                .unwrap_or_else(|| allocate(source.size()));
+            encoder.copy_buffer_to_buffer(source, 0, &buffer, 0, source.size());
+            buffer
+        };
+        let frozen = Denoised {
+            color: previous
+                .as_ref()
+                .map(|d| d.color.clone())
+                .unwrap_or_else(|| allocate(self.linear.size())),
+            raw: snapshot(&self.raw, previous.as_ref().map(|d| &d.raw), &mut encoder),
+            albedo: snapshot(
+                &self.albedo,
+                previous.as_ref().map(|d| &d.albedo),
+                &mut encoder,
+            ),
+            shadow: self
+                .shadow
+                .as_ref()
+                .filter(|_| self.metadata.has_catcher)
+                .map(|s| {
+                    snapshot(
+                        s,
+                        previous.as_ref().and_then(|d| d.shadow.as_ref()),
+                        &mut encoder,
+                    )
+                }),
+            samples: self.original_samples,
+            metadata: self.metadata,
+            revision: self.image_revision + 1,
+        };
+        self.gpu.queue.submit([encoder.finish()]);
         let bytes: Vec<_> = pixels.iter().flat_map(|v| v.to_le_bytes()).collect();
-        self.gpu.queue.write_buffer(denoised, 0, &bytes);
+        self.gpu.queue.write_buffer(&frozen.color, 0, &bytes);
+        self.denoised = Some(frozen);
         self.uploads += 1;
         self.denoise_revision += 1;
         self.image_revision += 1;
@@ -297,7 +354,7 @@ impl Display {
             return false;
         };
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
-        encoder.copy_buffer_to_buffer(denoised, 0, &self.linear, 0, self.linear.size());
+        encoder.copy_buffer_to_buffer(&denoised.color, 0, &self.linear, 0, self.linear.size());
         self.gpu.queue.submit([encoder.finish()]);
         self.samples = 1;
         self.using_denoised = true;
@@ -449,6 +506,64 @@ impl Display {
         effects.compose(self, settings, false, target);
         target.clone()
     }
+    fn shown(&self, settings: &Settings) -> Option<&Denoised> {
+        self.denoised
+            .as_ref()
+            .filter(|_| self.using_denoised && matches!(settings.output, 0 | 3))
+    }
+    fn shown_samples(&self, settings: &Settings) -> u32 {
+        self.shown(settings)
+            .map_or(self.original_samples, |d| d.samples)
+    }
+    fn shown_metadata(&self, settings: &Settings) -> Metadata {
+        self.shown(settings).map_or(self.metadata, |d| d.metadata)
+    }
+    fn shown_raw(&self, settings: &Settings) -> &wgpu::Buffer {
+        self.shown(settings).map_or(&self.raw, |d| &d.raw)
+    }
+    fn shown_albedo(&self, settings: &Settings) -> &wgpu::Buffer {
+        self.shown(settings).map_or(&self.albedo, |d| &d.albedo)
+    }
+    fn shown_shadow(&self, settings: &Settings) -> Option<&wgpu::Buffer> {
+        self.shown(settings)
+            .map_or(self.shadow.as_ref(), |d| d.shadow.as_ref())
+    }
+    fn shown_revision(&self, settings: &Settings) -> u64 {
+        self.shown(settings)
+            .map_or(self.image_revision, |d| d.revision)
+    }
+    fn shown_group(&self, target: &wgpu::Texture, settings: &Settings) -> wgpu::BindGroup {
+        self.gpu
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Retained denoised composition"),
+                layout: &self.pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.linear.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(
+                            &target.create_view(&Default::default()),
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: self.params.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: self.normal.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: self.shown_albedo(settings).as_entire_binding(),
+                    },
+                ],
+            })
+    }
     fn compose_inner(&self, settings: &Settings, premultiply: bool) {
         self.compose_into(settings, premultiply, &self.group, &self.texture);
     }
@@ -474,8 +589,8 @@ impl Display {
         }
         if settings.vignette != 0.
             || settings.bloom_intensity > 0.
-            || self.metadata.has_catcher
-            || self.metadata.flat_background[3] > 0.
+            || self.shown_metadata(settings).has_catcher
+            || self.shown_metadata(settings).flat_background[3] > 0.
             || settings.output >= 3
         {
             let mut slot = self.effects.lock().unwrap_or_else(|e| e.into_inner());
@@ -483,6 +598,10 @@ impl Display {
             effects.compose(self, settings, premultiply, target);
             return;
         }
+        let retained_group = self
+            .shown(settings)
+            .map(|_| self.shown_group(target, settings));
+        let group = retained_group.as_ref().unwrap_or(group);
         let bytes: Vec<_> = [
             self.size[0],
             self.size[1],
@@ -491,7 +610,7 @@ impl Display {
             settings.tone_mapping,
             settings.output,
             u32::from(settings.preserve_alpha) | (u32::from(premultiply) << 1),
-            (self.original_samples.max(1) as f32).to_bits(),
+            (self.shown_samples(settings).max(1) as f32).to_bits(),
             settings.contrast.to_bits(),
             settings.saturation.to_bits(),
             settings.temperature.to_bits(),
@@ -739,7 +858,6 @@ mod tests {
             0.4, 0.2, 0.1, 1., 0.4, 0.2, 0.1, 0.5, 0., 0., 0., 0., 2., 0.3, 0.1, 1., 0.1, 0.4, 0.8,
             1., 0.9, 0.2, 0.7, 1.,
         ];
-        display.upload(&pixels).unwrap();
         let auxiliary: Vec<f32> = pixels
             .chunks_exact(4)
             .flat_map(|p| [0.2, 0.3, 0.4, p[3]])
@@ -764,6 +882,7 @@ mod tests {
                 .flat_map(|v| v.to_le_bytes())
                 .collect::<Vec<_>>(),
         );
+        display.upload(&pixels).unwrap();
         let mut settings = Settings {
             tone_mapping: 3,
             ..Settings::default()

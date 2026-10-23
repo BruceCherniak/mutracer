@@ -94,7 +94,7 @@ impl Effects {
         }
         let final_channel = settings.output == 0 || settings.output == 3;
         let enabled =
-            final_channel && settings.bloom_intensity > 0. && display.original_samples >= 10;
+            final_channel && settings.bloom_intensity > 0. && display.shown_samples(settings) >= 10;
         let mut words = vec![
             display.size[0],
             display.size[1],
@@ -103,7 +103,7 @@ impl Effects {
             settings.tone_mapping,
             settings.output,
             u32::from(settings.preserve_alpha) | (u32::from(premultiply) << 1),
-            (display.original_samples.max(1) as f32).to_bits(),
+            (display.shown_samples(settings).max(1) as f32).to_bits(),
         ];
         words.extend(
             [
@@ -126,9 +126,14 @@ impl Effects {
             ]
             .map(f32::to_bits),
         );
-        words.extend(display.metadata.flat_background.map(f32::to_bits));
+        words.extend(
+            display
+                .shown_metadata(settings)
+                .flat_background
+                .map(f32::to_bits),
+        );
         words.extend([
-            u32::from(display.metadata.has_catcher),
+            u32::from(display.shown_metadata(settings).has_catcher),
             u32::from(display.using_denoised),
             0,
             0,
@@ -143,7 +148,8 @@ impl Effects {
                 display.using_denoised,
             );
             if self.key != Some(key)
-                || (display.original_samples % 10 == 0 && self.revision != display.image_revision)
+                || (display.shown_samples(settings) % 10 == 0
+                    && self.revision != display.shown_revision(settings))
             {
                 let normalized = self.normalized.get_or_insert_with(|| {
                     image(device, display.size, wgpu::TextureFormat::Rgba32Float)
@@ -159,7 +165,7 @@ impl Effects {
                         },
                         wgpu::BindGroupEntry {
                             binding: 3,
-                            resource: display.albedo.as_entire_binding(),
+                            resource: display.shown_albedo(settings).as_entire_binding(),
                         },
                         wgpu::BindGroupEntry {
                             binding: 6,
@@ -186,7 +192,7 @@ impl Effects {
                     .get_or_insert_with(|| Bloom::new(device, display.size));
                 bloom.run(gpu, &mut encoder, normalized, settings);
                 self.key = Some(key);
-                self.revision = display.image_revision;
+                self.revision = display.shown_revision(settings);
                 #[cfg(test)]
                 {
                     self.bloom_runs += 1;
@@ -215,7 +221,7 @@ impl Effects {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: display.raw.as_entire_binding(),
+                    resource: display.shown_raw(settings).as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
@@ -223,13 +229,12 @@ impl Effects {
                 },
                 wgpu::BindGroupEntry {
                     binding: 3,
-                    resource: display.albedo.as_entire_binding(),
+                    resource: display.shown_albedo(settings).as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
                     binding: 4,
                     resource: display
-                        .shadow
-                        .as_ref()
+                        .shown_shadow(settings)
                         .unwrap_or(&self.zero)
                         .as_entire_binding(),
                 },

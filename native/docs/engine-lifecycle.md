@@ -58,6 +58,13 @@ same converged, progressive or every-sample schedules as OIDN. Passing None/NULL
 disables filtering. Existing `set_denoiser` / `mt_render_set_denoiser` OIDN calls
 remain available and replace a custom filter.
 
+Progressive and every-sample schedules keep the last filtered image, including
+its coverage and catcher layers, visible until the next result. Display settings
+still apply to that image; raw HDR and guide readback continue to follow newly
+completed samples. Retaining a filtered result adds 48 bytes per render pixel
+in GPU buffers, plus 48 bytes for catcher scenes. Disabling the filter or
+restarting the render releases these buffers.
+
 Inputs are owned linear RGBA32F color, normal and albedo arrays, bottom row
 first. Color is the raw per-sample average including background; alpha is path
 coverage. Return the same layout and size with finite values. This differs from
