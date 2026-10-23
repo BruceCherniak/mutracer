@@ -23,7 +23,8 @@ extern "C" {
  * Threads: an engine and everything created from it may be called from any
  * thread, one thread at a time. Only mt_render_cancel may be called concurrently,
  * from any thread. Full scene preparation and denoising run on library threads.
- * Event/progress callbacks run synchronously on the calling thread inside mt_engine_update,
+ * Event/progress callbacks run synchronously on the calling thread inside
+ * mt_engine_update,
  * mt_engine_read_depth_samples,
  * mt_render_refine, mt_render_converge and the render loop calls, and may call
  * back into this API, except into the render loop that is running them
@@ -89,7 +90,7 @@ typedef enum mt_surface_status {
   MT_SURFACE_OCCLUDED=3, MT_SURFACE_OUTDATED=4, MT_SURFACE_LOST=5,
   MT_SURFACE_SUSPENDED=6, MT_SURFACE_ERROR=7
 } mt_surface_status;
-/* presented describes the last acquisition, separate from offscreen mt_presented.
+/* status describes the last acquisition, separate from offscreen mt_presented.
  * Timeout/outdated retry later; occluded waits for expose/restore; lost needs
  * reattach. Validation errors also return an error. Device loss is terminal.
  * Surface info queries CPU state without acquiring a frame. */
@@ -111,11 +112,11 @@ int32_t mt_engine_set_scene(mt_engine engine, const uint8_t *descriptor, size_t 
  * present transparent black (opaque windows show black); skipped frames follow
  * the normal surface retry contract. */
 int32_t mt_engine_clear_scene(mt_engine engine, char *error, size_t capacity);
-/* CPU snapshot, O(render count), no GPU polling/readback. Lifetime path-tracing
+/* CPU snapshot, O(render count), no GPU polling/readback. Engine-lifetime path-tracing
  * cache counters exclude display/depth pipelines. completed counts exited compile
  * attempts, including failures; hits reuse an existing variant. Cache max 32.
  * sampling/denoising count renders with pending work, refreshed by API collection.
- * Device/capability/error details remain in mt_engine_info / mt_engine_last_error.
+ * Device/capability details are in mt_engine_info. Errors use call buffers/events.
  * Logging is an optional stream; this query works with logging disabled. */
 typedef struct mt_engine_diagnostics_info {
   uint32_t struct_size, has_scene, preparing, compiling;
@@ -130,8 +131,8 @@ int32_t mt_engine_set_camera(mt_engine engine, const mt_camera_v4 *camera, char 
 /* The sole commit point. changed (optional) receives 1 when the scene or camera
  * changed. Incremental edits are applied to every render on this thread; a render
  * that needs full preparation starts it on a library thread and reports
- * MT_RENDER_PREPARING or MT_RENDER_COMPILING until it is published. A failing render reports an error
- * event and does not stop the others. */
+ * MT_RENDER_PREPARING or MT_RENDER_COMPILING until it is published. A failing
+ * render reports an error event and does not stop the others. */
 int32_t mt_engine_update(mt_engine engine, uint32_t *changed, char *error, size_t capacity);
 
 enum { MT_DEPTH_SAMPLE_GRID = 7, MT_DEPTH_SAMPLE_COUNT = 49 };
@@ -354,8 +355,8 @@ int32_t mt_render_set_denoiser(mt_render render, const mt_render_denoiser *denoi
  * Cancellation is cooperative. Cancel/destroy/replacement do not wait for the
  * callback; stale outputs are discarded. Callbacks may overlap, may reenter
  * the API, and must not unwind. Own user data until release, called once after
- * the last worker retires (on an unspecified thread). Do not unload callback
- * code before release. Registration transfers user ownership, even if a live
+ * the last worker retires, on a library thread. Keep callback code loaded until
+ * release returns; omit release only for process-lifetime code and user data. Registration transfers user ownership, even if a live
  * render fails during registration; invalid records/handles do not transfer it.
  * NULL disables filtering. Default none. */
 typedef struct mt_denoise_input {
@@ -368,7 +369,7 @@ uint32_t mt_denoise_cancelled(const void *cancel);
 typedef int32_t (*mt_custom_denoise_callback)(const mt_denoise_input *input, float *output, char *error, size_t capacity, void *user);
 typedef void (*mt_custom_denoise_release)(void *user);
 typedef struct mt_custom_denoiser {
-  uint32_t struct_size, schedule; /* mt_denoise_schedule. */
+  uint32_t struct_size, schedule; /* mt_denoise_schedule. Default MT_DENOISE_CONVERGED. */
   mt_custom_denoise_callback callback;
   mt_custom_denoise_release release;
   void *user;

@@ -102,7 +102,8 @@ bounces, 4 light candidates, bevel, 3 dispersion wavelengths); context
 settings keep their own defaults. Images are top row first. Use an engine and
 its objects from one thread at a time; only `mt_render_cancel` may be called
 from another thread. Event/progress callbacks run synchronously inside the calls
-that produce them; custom denoiser callbacks run on library threads. The header documents every option, default, error and lifetime.
+that produce them; custom denoiser callbacks run on library threads. The header
+documents every option, default, error and lifetime.
 
 Differences from the browser library:
 

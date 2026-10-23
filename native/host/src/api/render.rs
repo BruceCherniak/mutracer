@@ -210,7 +210,7 @@ impl RenderSettings {
     }
 }
 
-/// Execution state of one render, matching the browser `RenderStatus`.
+/// Execution state of one render; native Idle means no committed scene.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderStatus {
     /// Scene preparation is running.
@@ -280,7 +280,7 @@ pub enum CommitKind {
 pub struct DenoiseReport {
     /// Complete samples of the filtered image.
     pub samples: u32,
-    /// OIDN device, for example "OIDN Metal" or "OIDN CPU".
+    /// Filter backend: for example "OIDN Metal", "OIDN CPU" or "custom".
     pub backend: String,
     /// Filter wall time, excluding the input readback.
     pub milliseconds: f64,

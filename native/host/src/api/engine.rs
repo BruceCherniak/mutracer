@@ -50,7 +50,7 @@ pub struct Diagnostics {
     pub has_scene: bool,
     pub preparing: bool,
     pub compiling: bool,
-    /// Device-lifetime cache misses begun and exited (including failed attempts).
+    /// Engine-lifetime cache misses begun and exited (including failed attempts).
     pub compilations_started: u64,
     pub compilations_completed: u64,
     pub pipeline_cache_hits: u64,

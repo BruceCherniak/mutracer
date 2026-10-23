@@ -12,8 +12,8 @@ images remain available. After update, all renders have zero samples, no readabl
 old image and `Idle` / `MT_RENDER_IDLE` status. The render loop becomes idle and
 stops requesting ticks after pending window presentation completes. An attached
 window is cleared to transparent black (opaque windows show black); skipped
-frames retry through the normal surface status contract. Render handles, settings, camera override and configured
-denoisers remain reusable: set another scene and update to resume rendering.
+frames retry through the normal surface status contract. Render handles, settings,
+camera override and configured denoisers remain reusable: set another scene and update to resume rendering.
 
 Clear cancels pending preparation, sampling, convergence and denoising. It can
 wait for preparation and submitted GPU work to retire, but never joins a user
@@ -24,7 +24,8 @@ remain reusable. A converge interrupted by a scene change returns an error.
 
 Call `engine.diagnostics()` / `mt_engine_diagnostics` for current CPU observations.
 Rust includes device information, the last error and per-render samples; C uses
-`mt_engine_info`, `mt_engine_last_error` and `mt_render_info` for those details.
+`mt_engine_info` and `mt_render_info` for device and sample details. C errors
+are returned in call error buffers and delivered through engine error events.
 The query takes O(render count), copies CPU data and does not poll or wait for
 GPU completion. It may wait for another API operation using the same engine.
 It works with logging disabled; logging is an optional event stream.
@@ -36,16 +37,17 @@ Pending sampling/denoising counts include work not yet collected. Compilation
 counters refresh at compile entry/exit: started and completed count attempts,
 including failed attempts; cache hits count reused path-tracing variants.
 Cached variants exclude display, depth and postprocessing pipelines and GPU
-driver caches. Counts last for the engine device's lifetime, including clears;
-they are independent observations during concurrent work, not a GPU memory budget.
+driver caches. At most 32 variants are cached; eviction can require recompilation.
+Counts start with each engine and survive scene clears. During concurrent work
+they are independent observations. GPU memory estimates are unavailable.
 
 `Compiling` / `MT_RENDER_COMPILING` means a path-tracing pipeline cache miss is
 being compiled. Cache hits do not enter this stage. Full scene compilation runs
 on the preparation thread; first-use render variants can compile on the calling
 thread and block it. Compilation progress events report 0 on entry and 1 on
 exit, including failed attempts, on the next event-delivering API call; callbacks
-stay on that caller's thread. C uses `MT_ENGINE_EVENT_COMPILATION`. The shared
-device's active compilation is visible to all its renders. Preparation includes
+stay on that caller's thread. C uses `MT_ENGINE_EVENT_COMPILATION`. An engine's
+active compilation is visible to all its renders. Preparation includes
 resource work outside this compilation interval.
 
 ## Custom denoisers
@@ -74,12 +76,13 @@ joining callbacks; cancelled results are discarded. A stuck callback retains its
 inputs and filter indefinitely. Replacements can overlap old calls, so filters
 must support concurrent access. C user data remains owned until its release
 callback runs after the last reference retires; release also runs off-thread.
-Keep callback code loaded until release. Filter callbacks must not unwind across
+Keep callback code loaded until release returns. Omit the C release callback
+only for process-lifetime code and user data. Filter callbacks must not unwind across
 C. Window engines reject callback reentry from worker threads.
 
 Errors, invalid output and caught Rust panics produce a denoise report and engine
 error event; scheduled filtering stops until the filter is set again. Converge
-returns an error. The original accumulation remains available. Cancellation and
+returns an error. Filter failures leave the original accumulation available. Cancellation and
 timeout also stop converge's wait even when the callback does not cooperate.
 
 ## C window presentation
@@ -103,8 +106,7 @@ External native GPU device handles are not imported through C; Rust
 `Engine::on_device` supports host-owned wgpu device sharing.
 
 C window options are fixed to vsync and automatic alpha, with SDR initially.
-Display settings can request HDR,
-with SDR fallback. Query `mt_display_surface_info` for attachment, negotiated
+Display settings can request HDR, with SDR fallback. Query `mt_display_surface_info` for attachment, negotiated
 format, HDR status/fallback and last presentation result. Offscreen `mt_presented`
 can succeed when the window frame is skipped: retry timeout/outdated later, wait
 for expose after occlusion and reattach after loss. Device loss remains terminal.

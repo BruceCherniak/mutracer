@@ -9,8 +9,8 @@ pub struct DenoiseInput {
     pub albedo: Vec<f32>,
     /// Opt-in copies on the rendering device, STORAGE | COPY_SRC buffers.
     pub buffers: Option<DenoiseBuffers>,
-    /// Cloned rendering device/queue for optional GPU filtering. Input is read
-    /// back before dispatch; GPU filters must upload it. Never destroy the device.
+    /// Cloned rendering device for optional GPU filtering. Input is read back
+    /// before dispatch; opt-in buffers upload on the worker. Never destroy the device.
     pub device: wgpu::Device,
     pub gpu: DenoiseGpu,
 }
