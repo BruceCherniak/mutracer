@@ -15,12 +15,19 @@ import { ExamplesMenu } from './ExamplesBrowser';
 export function Toolbar({ mobile }: { mobile: boolean }) {
   const backend = useViewer((s) => s.backend);
   const ui = useViewer((s) => s.ui);
+  const developmentVersion = location.hostname === 'mutracer-dev.meimu-studio.com'
+    || (location.hostname.startsWith('mutracer-dev.') && location.hostname.endsWith('.workers.dev'));
   return (
     <header className="header">
       <div className="brand">
         <a className="brand__home" href="../" title="MuTracer home">
           <BrandMark />
-          <strong>{mobile ? 'MuTracer' : 'MuTracer Viewer'}</strong>
+          <span className="brand__name">
+            <strong>{mobile ? 'MuTracer' : 'MuTracer Viewer'}</strong>
+            {developmentVersion && <span className="brand__version" title="This is a development version.">
+              {mobile ? 'Development' : 'Development version'}
+            </span>}
+          </span>
         </a>
         <span className="divider hide-m" />
         <button className="icon-btn icon-btn--bare sm hide-m" aria-label="Toggle scene panel" title="Toggle scene panel ([)"
