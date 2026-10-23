@@ -919,11 +919,6 @@ impl GpuScene {
         }
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
-        let word =
-            |offset: usize| -> Result<[u8; 4]> { Ok(packet.trace[offset..offset + 4].try_into()?) };
-        let seed = u32::from_le_bytes(word(layout::ray_uniform::SEQUENCE_SEED)?);
-        let bounces = i32::from_le_bytes(word(layout::ray_uniform::BOUNCES)?) as f32;
-        let frames = runtime::frames(bounces, seed)?;
         let (pipeline, layouts) = match packet.shader {
             Some(source) => {
                 let (compiled, _) =
@@ -1021,7 +1016,7 @@ impl GpuScene {
             pipeline,
             groups: [frame, output],
             samples: 0,
-            frames,
+            frames: packet.frames,
         })
     }
     /// Submits samples `start..start + additional` of a target without waiting.

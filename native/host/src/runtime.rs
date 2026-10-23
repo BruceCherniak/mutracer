@@ -5,6 +5,10 @@ use std::sync::OnceLock;
 
 type Task = Box<dyn FnOnce() + Send>;
 static THREAD: OnceLock<mpsc::Sender<Task>> = OnceLock::new();
+/// Tests: pause the next synchronous AOT call after it reaches the runtime thread.
+#[cfg(test)]
+pub(crate) static CALL_GATE: Mutex<Option<(mpsc::SyncSender<()>, mpsc::Receiver<()>)>> =
+    Mutex::new(None);
 thread_local! { static IS_RUNTIME: std::cell::Cell<bool> = const { std::cell::Cell::new(false) }; }
 
 fn sender() -> &'static mpsc::Sender<Task> {
@@ -40,7 +44,17 @@ pub(super) fn run<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) 
     let (reply, result) = mpsc::sync_channel(1);
     sender
         .send(Box::new(move || {
-            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(body));
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                #[cfg(test)]
+                {
+                    let gate = CALL_GATE.lock().unwrap().take();
+                    if let Some((entered, resume)) = gate {
+                        entered.send(()).unwrap();
+                        resume.recv_timeout(Duration::from_secs(15)).unwrap();
+                    }
+                }
+                body()
+            }));
             let _ = reply.send(outcome);
         }))
         .expect("MuTracer AOT runtime stopped");

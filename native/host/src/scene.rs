@@ -749,6 +749,8 @@ impl Drop for PreparedData {
 pub(super) struct TargetPacket {
     pub camera: Vec<u8>,
     pub trace: Vec<u8>,
+    /// Prepared before GPU publication so it never waits for AOT under REGISTRY.
+    pub frames: Vec<[u8; 16]>,
     pub shader: Option<String>,
 }
 // Buffer records have zero dimensions; texture records carry their exact extent.
@@ -1263,9 +1265,16 @@ impl PreparedState {
         {
             return Err("Camera produces non-finite GPU parameters".into());
         }
+        let trace_bytes = packet[16 + camera..16 + camera + trace].to_vec();
+        let word = |at: usize| -> [u8; 4] { trace_bytes[at..at + 4].try_into().unwrap() };
+        let seed = u32::from_le_bytes(word(layout::ray_uniform::SEQUENCE_SEED));
+        let bounces = i32::from_le_bytes(word(layout::ray_uniform::BOUNCES)) as f32;
+        let frames = runtime::frames(bounces, seed)
+            .map_err(|e| fail(Status::ContextFailed, e.to_string()))?;
         Ok(TargetPacket {
             camera: camera_bytes,
-            trace: packet[16 + camera..16 + camera + trace].to_vec(),
+            trace: trace_bytes,
+            frames,
             shader: (shader > 0)
                 .then(|| String::from_utf8(packet[16 + camera + trace..].to_vec()))
                 .transpose()?,

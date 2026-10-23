@@ -29,6 +29,8 @@ struct Context {
     /// Size of the own target of a scene shared by linked targets, replacing the
     /// descriptor's size in full preparation; the kept descriptor is unchanged.
     own_size: Option<[u32; 2]>,
+    /// Identity of the published scene/target; snapshots keep old identities alive.
+    publication: Arc<()>,
 }
 /// S2: a context that renders `target` on the scene of context `scene`.
 /// `current` is cleared when that scene is committed again, until `set_target`.
@@ -277,6 +279,7 @@ fn with_scene(
 /// Before the scene of `owner` changes: drain the jobs of the targets linked to
 /// it and mark them stale until they are set again.
 fn retire_targets(registry: &mut Registry, owner: u64) -> Result<()> {
+    registry.contexts.get_mut(&owner).unwrap().publication = Arc::new(());
     for context in registry
         .contexts
         .values_mut()
@@ -306,35 +309,56 @@ pub(crate) fn set_target(
     camera: &[u8; 128],
     error: &mut [c_char],
 ) -> i32 {
+    let mut snapshot = None;
+    let status = action(error.as_mut_ptr(), error.len(), |registry| {
+        let (current, source) = target_contexts(registry, handle, owner)?;
+        let publication = source.publication.clone();
+        let scene = ready(source)?;
+        snapshot = Some((
+            scene.retained.as_ref().ok_or("No retained scene")?.clone(),
+            scene.hwrt_shader,
+            publication,
+            current.publication.clone(),
+        ));
+        Ok(())
+    });
+    if status != 0 {
+        return status;
+    }
+    let (retained, hardware, scene_publication, target_publication) = snapshot.unwrap();
+    // Both the target packet and its packed sample sequence wait for the shared
+    // AOT thread. Keep the registry free for other contexts' render/poll/cancel.
+    let packet = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        retained
+            .target(settings, size, quality, hardware, camera)
+            .map_err(rejected)
+    }));
     action(error.as_mut_ptr(), error.len(), |registry| {
-        if handle == owner {
+        let (current, source) = target_contexts(registry, handle, owner)?;
+        if !Arc::ptr_eq(&source.publication, &scene_publication)
+            || !Arc::ptr_eq(&current.publication, &target_publication)
+        {
             return Err(fail(
-                Status::InvalidArgument,
-                "A context cannot target itself",
+                Status::Busy,
+                "Scene or render target changed during target preparation",
             ));
-        }
-        let current = context(registry, handle)?;
-        if current.scene.is_some() || current.commit.is_some() {
-            return Err(fail(
-                Status::InvalidState,
-                "Context holds its own scene and cannot become a render target",
-            ));
-        }
-        idle(current)?;
-        let [Some(current), Some(source)] = registry.contexts.get_disjoint_mut([&handle, &owner])
-        else {
-            return Err(fail(Status::InvalidHandle, "Invalid scene context"));
-        };
-        if source.commit.is_some() {
-            return Err(fail(Status::Busy, "The scene is being committed"));
         }
         let scene = ready(source)?;
-        let packet = scene
-            .retained
-            .as_ref()
-            .ok_or("No retained scene")?
-            .target(settings, size, quality, scene.hwrt_shader, camera)
-            .map_err(rejected)?;
+        let packet = packet
+            .unwrap_or_else(|_| {
+                current.failed = true;
+                Err(fail(
+                    Status::ContextFailed,
+                    "Native target preparation panicked; context marked failed",
+                ))
+            })
+            .map_err(|error| {
+                if classify(error.as_ref(), Status::Error) == Status::ContextFailed {
+                    current.failed = true;
+                }
+                error
+            })?;
+        current.publication = Arc::new(());
         let previous = current.link.take().map(|l| l.target);
         current.job = None;
         current.failed = true;
@@ -347,6 +371,36 @@ pub(crate) fn set_target(
         current.failed = false;
         Ok(())
     })
+}
+// Checked both before AOT preparation and before publication. Handles may have
+// been destroyed, jobs started, or scene commits begun while the registry was free.
+fn target_contexts(
+    registry: &mut Registry,
+    handle: u64,
+    owner: u64,
+) -> Result<(&mut Context, &mut Context)> {
+    if handle == owner {
+        return Err(fail(
+            Status::InvalidArgument,
+            "A context cannot target itself",
+        ));
+    }
+    let current = context(registry, handle)?;
+    if current.scene.is_some() || current.commit.is_some() {
+        return Err(fail(
+            Status::InvalidState,
+            "Context holds its own scene and cannot become a render target",
+        ));
+    }
+    idle(current)?;
+    let [Some(current), Some(source)] = registry.contexts.get_disjoint_mut([&handle, &owner])
+    else {
+        return Err(fail(Status::InvalidHandle, "Invalid scene context"));
+    };
+    if source.commit.is_some() {
+        return Err(fail(Status::Busy, "The scene is being committed"));
+    }
+    Ok((current, source))
 }
 /// GPU bytes held by a linked render target (A/B measurements).
 #[cfg(test)]
@@ -473,6 +527,7 @@ pub(crate) fn create_with_gpu(gpu: GpuDevice, backend: u32) -> std::result::Resu
             last_commit: COMMIT_NONE,
             link: None,
             own_size: None,
+            publication: Arc::new(()),
         },
     );
     Ok(handle)
@@ -579,6 +634,7 @@ pub unsafe extern "C" fn mt_context_create_with_backend(
                 last_commit: COMMIT_NONE,
                 link: None,
                 own_size: None,
+                publication: Arc::new(()),
             },
         );
         registry.next = next;
@@ -1830,6 +1886,9 @@ pub unsafe extern "C" fn mt_job_cancel(id: u64, error: *mut c_char, capacity: us
         Ok(())
     })
 }
+
+#[cfg(test)]
+mod target_tests;
 
 #[cfg(test)]
 mod tests {
