@@ -14,14 +14,16 @@ const target=resolve(process.env.CARGO_TARGET_DIR??resolve(out,'cargo-target'));
 const compiler=process.env.MUTRACER_SCRIPTC??'scriptc';
 const platform=viewerPlatform(),mac=platform==='macos-arm64';
 mkdirSync(out,{recursive:true});
-const env={...nativeToolchainEnv(),CARGO_TARGET_DIR:target,MUTRACER_AOT_ARCHIVE:resolve(out,archiveName('render-core'))};
+// native:ci passes the archive it already built.
+const prebuilt=process.env.MUTRACER_AOT_PREBUILT;
+const env={...nativeToolchainEnv(),CARGO_TARGET_DIR:target,MUTRACER_AOT_ARCHIVE:resolve(prebuilt??resolve(out,archiveName('render-core')))};
 function run(command,args){const r=(command===compiler?spawnCompiler:spawnSync)(command,args,{cwd:root,env,stdio:'inherit'});if(r.error||r.status!==0)throw new Error(`${command} failed: ${r.error?.message??r.status}`);}
 const version=spawnCompiler(compiler,['--version'],{encoding:'utf8'});if(version.status!==0||version.stdout.trim()!=='0.3.2')throw new Error('Set MUTRACER_SCRIPTC to scriptc 0.3.2.');
 const coverage=spawnCompiler(compiler,['coverage','native/src/render-core.ts','--print','diagnostics','--fail-on','blockers'],{cwd:root,encoding:'utf8',maxBuffer:32*1024*1024});
 writeFileSync(resolve(out,'coverage.json'),coverage.stdout??'');
 if(coverage.nativeMatrixPrecision!==64)throw new Error('Native viewer requires Float64 CPU matrix storage.');
 if(coverage.error||!summarizeCoverage(JSON.parse(coverage.stdout),coverage.status).passed)throw new Error('AOT compilation graph failed; see coverage.json.');
-run(compiler,['build','--lib','--profile','native/src/render-core-profile.json','-o',env.MUTRACER_AOT_ARCHIVE]);
+if(!prebuilt)run(compiler,['build','--lib','--profile','native/src/render-core-profile.json','-o',env.MUTRACER_AOT_ARCHIVE]);
 run(process.execPath,['native/scripts/generate-display.mjs','--check']);
 await prepareTinyBvh();
 run('cargo',['build','--release','--locked','--manifest-path','native/viewer/Cargo.toml']);

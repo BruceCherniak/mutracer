@@ -61,6 +61,12 @@ The incremental oracle reports full-reference render errors as skipped cases.
 Review those records before release: any skips leave `gpu.validated` false in the
 summary, even when the supported checks finish successfully.
 
+Each ignored host test runs in its own process. `api::tests::hardware_*` reproduce
+the open Metal HWRT miss: they run `MT_LOOP_ITERATIONS` (default 200 here) and their
+failures are reported in `summary.json` without stopping CI; any other failure does.
+CPU-only module and viewer builds run beside the GPU steps, and each step's duration
+is printed and recorded in `checks.json`.
+
 `npm run native:ci:hosts` adds the context, job, camera and settings C hosts to that
 real-GPU validation, reusing its fixtures, archive and Cargo target at 8 samples.
 Run the `native:*` commands separately only when iterating on one host; each of
