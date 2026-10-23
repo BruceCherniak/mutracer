@@ -10,6 +10,7 @@ import { Inspector, InspectorRail, TABS } from './components/Inspector';
 import { ExportDialog } from './components/ExportDialog';
 import { CodeDialog } from './components/CodeDialog';
 import { TextureBrowser } from './components/TextureBrowser';
+import { ExamplesPanel } from './components/ExamplesBrowser';
 
 const MOBILE_QUERY = '(max-width: 768px), (max-width: 1024px) and (max-height: 500px) and (orientation: landscape) and (pointer: coarse)';
 
@@ -74,7 +75,9 @@ export function App() {
   useShortcuts();
   const left = ui.left && !ui.hidden && !mobile;
   const right = ui.right && !ui.hidden && !mobile;
-  const browse = right && ui.textureBrowser && ui.tab === 'material';
+  const textures = right && ui.textureBrowser && ui.tab === 'material';
+  const examples = right && ui.examplesPinned && !textures;
+  const browse = textures || examples;
   return (
     <div className="app" data-hidden={ui.hidden || undefined}>
       {!ui.hidden && <Toolbar mobile={mobile} />}
@@ -82,7 +85,8 @@ export function App() {
         data-sheet={(mobile && ui.right && !ui.hidden) || undefined}>
         {left && <SceneTree />}
         <Viewport />
-        {browse && <TextureBrowser />}
+        {textures && <TextureBrowser />}
+        {examples && <ExamplesPanel />}
         {right && <Inspector mobile={false} />}
         {!mobile && !ui.hidden && <InspectorRail />}
         {mobile && ui.right && !ui.hidden && <Inspector mobile />}

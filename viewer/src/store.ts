@@ -270,7 +270,12 @@ export interface ViewerState {
   focusArea: FocusAreaState;
   lens: LensInfo;
   paused: boolean;
-  ui: { tab: InspectorTab; left: boolean; right: boolean; hidden: boolean; focusFrame: boolean; exportOpen: boolean; codeOpen: boolean; helpOpen: boolean; textureBrowser: boolean; mobileTab: InspectorTab | 'scene' };
+  ui: {
+    tab: InspectorTab; left: boolean; right: boolean; hidden: boolean; focusFrame: boolean;
+    exportOpen: boolean; codeOpen: boolean; helpOpen: boolean; textureBrowser: boolean;
+    examplesPinned: boolean; examplesOpen: boolean; examplesCollection: 'models' | 'research' | null;
+    mobileTab: InspectorTab | 'scene';
+  };
   export: { stage: 'pilot' | 'final' | 'denoising'; samples: number; target: number } | null;
 }
 
@@ -388,6 +393,9 @@ export const useViewer = create<ViewerState>(() => ({
     codeOpen: false,
     helpOpen: false,
     textureBrowser: false,
+    examplesPinned: storedUi.examplesPinned === true,
+    examplesOpen: false,
+    examplesCollection: null,
     mobileTab: storedUi.tab ?? 'material'
   },
   export: null
@@ -476,8 +484,8 @@ export function showToast(message: string, tone: 'info' | 'error' = 'info', acti
 
 useViewer.subscribe((state, prev) => {
   if (state.ui !== prev.ui) {
-    const { tab, left, right, focusFrame } = state.ui;
-    writeStorage(UI_KEY, { tab, left, right, focusFrame });
+    const { tab, left, right, focusFrame, examplesPinned } = state.ui;
+    writeStorage(UI_KEY, { tab, left, right, focusFrame, examplesPinned });
   }
   if (state.settings !== prev.settings) {
     writeStorage(RENDER_KEY, Object.fromEntries(RENDER_FIELDS.map((key) => [key, state.settings[key]])));

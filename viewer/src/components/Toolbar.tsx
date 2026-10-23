@@ -1,18 +1,16 @@
 import { useRef, useState } from 'react';
 import {
-  Button, Dialog, DialogTrigger, Heading, Menu, MenuItem, MenuTrigger, Modal, ModalOverlay, Popover, Separator,
-  Tabs, TabList, Tab, TabPanel
+  Button, Dialog, DialogTrigger, Heading, Menu, MenuItem, MenuTrigger, Modal, ModalOverlay, Popover, Separator
 } from 'react-aria-components';
 import {
-  ChevronDown, Code2, Download, ExternalLink, FileUp, Folder, Globe, HelpCircle, Link, MoreHorizontal, PanelLeft, PanelRight, Redo2, RotateCcw, Sparkles, Undo2, Upload, X
+  ChevronDown, Code2, Download, FileUp, Folder, Globe, HelpCircle, Link, MoreHorizontal, PanelLeft, PanelRight, Redo2, RotateCcw, Undo2, Upload, X
 } from 'lucide-react';
 import { setUi, useViewer } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
-import { MODEL_PRESETS } from '../engine/presets';
-import { RESEARCH_SCENES_SOURCE } from '../engine/researchModelPresets';
 import { toPathedFiles } from '../engine/loadModel';
 import { redo, undo } from '../history';
 import { BrandMark } from './BrandMark';
+import { ExamplesMenu } from './ExamplesBrowser';
 
 export function Toolbar({ mobile }: { mobile: boolean }) {
   const backend = useViewer((s) => s.backend);
@@ -30,7 +28,7 @@ export function Toolbar({ mobile }: { mobile: boolean }) {
       </div>
       <div className="header__center">
         <OpenMenu />
-        <ExamplesMenu />
+        <ExamplesMenu mobile={mobile} />
       </div>
       <div className="header__right">
         <HistoryButtons />
@@ -184,58 +182,6 @@ function UrlDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open:
         </Dialog>
       </Modal>
     </ModalOverlay>
-  );
-}
-
-function ExamplesMenu() {
-  const current = useViewer((s) => s.model?.presetId);
-  return (
-    <DialogTrigger>
-      <Button className="btn" aria-label="Examples"><Sparkles size={15} /><span className="hide-xs">Examples</span><ChevronDown size={13} className="chev" /></Button>
-      <Popover className="popover examples" offset={8}>
-        <Dialog aria-label="Examples">
-          {({ close }) => (
-            <>
-              <Tabs className="example-tabs" defaultSelectedKey={current?.startsWith('research-') ? 'research' : 'models'}>
-                <TabList aria-label="Example collections" className="example-tabs__list">
-                  <Tab id="models">MuTracer collection</Tab>
-                  <Tab id="research">
-                    <span title="Independently maintained by glTF Research Scenes contributors">glTF Research Scenes</span>
-                    <ExternalLink size={12} aria-hidden="true" />
-                  </Tab>
-                </TabList>
-                {(['models', 'research'] as const).map((collection) => (
-                  <TabPanel key={collection} id={collection}>
-                    {collection === 'research' && <p className="hint example-note">
-                      <a href={RESEARCH_SCENES_SOURCE} target="_blank" rel="noopener noreferrer">glTF Research Scenes ↗</a>
-                      {' · '}Original scene lighting; large scenes need more memory.
-                    </p>}
-                    <div className="ex-grid">
-                      {MODEL_PRESETS.filter((preset) => (preset.category === 'research') === (collection === 'research')).map((preset) => (
-                        <div key={preset.id} className="ex-entry">
-                          <button className="ex" data-on={current === preset.id || undefined}
-                            onClick={() => { void getEngine()?.loadPreset(preset.id); close(); }}>
-                            <span className="thumb"><img src={preset.thumbnail} alt="" loading="lazy" /></span>
-                            <div>
-                              <b>{preset.name}</b>
-                              <small><span className="tag">{preset.tag}</span><span>{preset.license}{preset.sizeMB ? ` · ${preset.sizeMB} MB` : ''}</span></small>
-                            </div>
-                          </button>
-                          {collection === 'research' && <div className="ex-links">
-                            <a href={preset.sourceUrl} target="_blank" rel="noopener noreferrer" aria-label={`${preset.name} source`}>Source ↗</a>
-                            <a href={preset.licenseUrl} target="_blank" rel="noopener noreferrer" aria-label={`${preset.name} license`}>License ↗</a>
-                          </div>}
-                        </div>
-                      ))}
-                    </div>
-                  </TabPanel>
-                ))}
-              </Tabs>
-            </>
-          )}
-        </Dialog>
-      </Popover>
-    </DialogTrigger>
   );
 }
 
