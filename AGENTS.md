@@ -101,6 +101,13 @@ sample count) on a real GPU before and after, and compare
   rules in `docs/updates.md`, BVH preparation in `docs/bvh.md`, options and
   defaults in TSDoc and `docs/api.md`.
 - Order each guide as usage, options, then caveats.
+- Native API reference lives on the declarations: the C headers in
+  `native/include/` and the Rust `///` comments in `native/host/src/` give each
+  call's and field's options, defaults, ranges, errors, ownership and thread
+  rules. `native/docs/` covers only workflows, behavior that spans several calls,
+  and costs and limits; it names the symbols instead of restating their details.
+  `native/docs/scene-format.md` stays the descriptor layout and validation
+  reference.
 - User-facing documentation (READMEs, `docs/`, `llms.txt` and public API comments)
   covers only behavior, usage, costs and limits that affect user decisions. Put
   internal implementation, maintenance and release details in code comments,

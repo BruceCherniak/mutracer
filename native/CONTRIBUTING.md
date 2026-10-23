@@ -1,8 +1,9 @@
 # Native contributor guide
 
 This guide covers building, validating and maintaining the native SDK and viewer.
-Public behavior, costs and limits belong in [README.md](README.md),
-[docs/](docs) and the C headers. License notices are separate for the
+Per-call and per-field API details belong on the declarations (C headers and
+Rust doc comments); workflows, behavior across calls, costs and limits belong in
+[README.md](README.md) and [docs/](docs). License notices are separate for the
 [native library](THIRD_PARTY_NOTICES.md) and the
 [viewer](viewer/THIRD_PARTY_NOTICES.md).
 

@@ -7,6 +7,7 @@
 - Build: `npm ci`, `npm ci --prefix native/toolchain --include=optional`, `export MUTRACER_SCRIPTC="$(node native/toolchain/compiler.mjs)"`, `npm run native:scene:static`; Rust needs `MUTRACER_AOT_ARCHIVE`, C links `mutracer_native_probe`; [build and link](README.md#build-and-link).
 - Pick an API: Scene + Engine for most apps; Context for one low-level accumulation and polling jobs; descriptors for binary scenes; [API table](README.md#apis).
 - Minimal program: build a Scene, `Engine::new`, `Render::new`, `set_scene_object`, `update`, `converge`, `read_pixels`; the default scene is unlit and black; [quick start](README.md#quick-start).
+- API reference: options, defaults, errors and lifetimes live on each C declaration in `include/*.h` and on the Rust items in `host/src/api/` and `host/src/scene_api/`; the guides cover workflows and behavior across calls.
 - C conventions: check every `mt_status`, initialize records with `*_default()`, query sizes with NULL/0, compare `mt_abi_version()`; engine images are top row first, context images bottom row first; [conventions](README.md#c-api-conventions).
 
 ## Scenes
@@ -19,7 +20,6 @@
 ## Rendering
 
 - Engine/Render/Display/RenderLoop object model, offline and interactive flows, `update` semantics, clearing: [engine](docs/engine.md).
-- Render option defaults match the browser library (2048 samples, 3 bounces); context defaults differ; [render options](docs/engine.md#render-options), [context settings](docs/context.md#settings).
 - Threads: engine objects one thread at a time, only `mt_render_cancel` concurrent; window engines stay on the window thread; [threads](docs/engine.md#threads-and-callbacks).
 - Device loss is terminal; Rust `Engine::on_device` hosts must forward loss notifications; [device loss](docs/engine.md#device-loss).
 - HWRT is the default backend with software fallback; known Metal HWRT sample miss; [backends](README.md#ray-tracing-backends).
@@ -27,9 +27,9 @@
 
 ## Display and output
 
-- Tone mapping, effects, shadow catchers, RGBA8/PNG export: [display settings](docs/display.md#display-settings).
+- Composition order, effects, shadow catchers, RGBA8/PNG export: [composition](docs/display.md#composition).
 - Rust GPU textures and custom passes: [GPU images](docs/display.md#gpu-images-rust), [passes](docs/display.md#custom-display-passes-rust).
-- Windows: Rust `attach_surface` with `Engine::on_device`; C `mt_engine_create_for_window`; HDR is Rust-only and falls back to SDR; [windows](docs/display.md#window-presentation-rust), [C windows](docs/display.md#c-window-presentation), [HDR](docs/display.md#hdr-window-output-rust).
+- Windows: Rust `attach_surface` with `Engine::on_device`; C `mt_engine_create_for_window`; HDR falls back to SDR and exports stay SDR; [windows](docs/display.md#window-presentation), [HDR](docs/display.md#hdr-window-output).
 
 ## Denoising
 

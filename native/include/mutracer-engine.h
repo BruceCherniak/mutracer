@@ -213,7 +213,8 @@ typedef struct mt_display_settings {
   float bloom_threshold; /* Nonnegative luminance threshold. Default 1. */
   float bloom_radius; /* 0..1. Default 0.6. */
   float shadow_catcher_color[3]; /* Nonnegative linear RGB. Default black. */
-  float shadow_catcher_alpha; /* 0..1. Default 1. */
+  float shadow_catcher_alpha; /* 0..1. Default 1. Lower values subtract from the
+    estimated shadow opacity, so faint shadows disappear first. */
   uint32_t hdr_output_enabled; /* 0 or 1; default 0. Request Rust HDR window output.
     Unsupported surfaces fall back to SDR; C pixel/PNG export remains SDR. */
 } mt_display_settings;

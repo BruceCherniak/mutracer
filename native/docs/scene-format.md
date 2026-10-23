@@ -74,135 +74,79 @@ offset from the start of the descriptor; the header occupies words 0..31.
 - All floats must be finite.
 - Matrices are 16 floats, column-major, invertible and affine.
 
-### Header (`mt_scene_header_v4`, 32 words)
+Each record's fields are listed in `mutracer-scene.h`. The sections below give
+the rules the validator enforces.
 
-| Words | Field | Meaning |
-| --- | --- | --- |
-| 0 | `version` | `MT_VERSION_SCENE` (4). Other versions are rejected. |
-| 1 | `total_words` | Descriptor length in words. |
-| 2–3 | `width`, `height` | Output size in pixels. |
-| 4–8 | `*_count` | Geometry, mesh, material, light and texture counts. |
-| 9–14 | `*_offset` | Geometry, mesh, material, light, texture tables and the single camera record. |
-| 16–19 | `background_color` | Linear RGBA shown where no background map is visible. |
-| 20 | `environment_texture_plus_one` | Texture index + 1 lighting the scene; 0 for none. |
-| 21 | `background_texture_plus_one` | Texture index + 1 shown as the visible background; 0 for none. |
-| 22 | `quality_flags` | `MT_QUALITY_BEVEL`, `MT_QUALITY_DISPERSION` (three wavelengths), `MT_QUALITY_HIDE_BACKGROUND`. Other bits are rejected. |
-| 23 | `batch_offset` | 0, or `mesh_count` batch records for instancing. |
+### Header
 
-Environment and background maps must be linear RGBA32F equirectangular
-textures; their flip, wrapping and UV transform fields are ignored. Lighting and the
-visible background are independent. A hidden background cannot also select a
-background map.
+- `version` must be `MT_VERSION_SCENE` (4); `total_words` is the descriptor
+  length. `quality_flags` accepts only the `MT_QUALITY_*` bits.
+- Environment and background maps (`*_texture_plus_one`, 0 for none) must be
+  linear RGBA32F equirectangular textures; their flip, wrap and UV transform
+  fields are ignored. Lighting and the visible background are independent, but
+  `MT_QUALITY_HIDE_BACKGROUND` cannot be combined with a background map.
 
-### Geometry (`mt_geometry_v4`, 12 words)
+### Geometry and meshes
 
-`vertex_count` and `index_count`, then offsets to: positions (float XYZ),
-indices (`uint32_t`, three per triangle), normals (float XYZ), two UV sets
-(float XY), vertex colors (float RGB), tangents (float XYZW) and per-vertex
-material indices (`uint32_t` into the mesh's material table). Positions and
-indices are required. Missing normals and tangents are generated.
+- Positions and indices are required; missing normals and tangents are
+  generated.
+- All three vertices of a triangle must select the same material. Duplicate
+  shared vertices where neighboring triangles use different materials.
+- A mesh with `material_table_count` 0 uses `material_index`; otherwise the
+  geometry's per-vertex material indices select entries of the mesh's table.
+  Several meshes may share one geometry.
 
-All three vertices of a triangle must select the same material. Duplicate
-shared vertices where neighboring triangles use different materials.
+### Batches
 
-### Mesh (`mt_mesh_v4`, 20 words)
+When `batch_offset` is nonzero, every mesh has one `mt_batch_v4`:
 
-`geometry_index`, `material_index`, `material_table_offset`,
-`material_table_count` and a local-to-world `world_matrix`. With a table count
-of 0 the mesh uses `material_index`; otherwise the table holds `uint32_t`
-material indices selected by the geometry's per-vertex material indices.
-Several meshes may share one geometry.
+- `MT_BATCH_ORDINARY_MESH` or 0 (empty, renders nothing): both offsets must
+  be 0.
+- Otherwise `count` local matrices and optional RGB multipliers. The mesh world
+  matrix is applied outside each local matrix.
+- At most 65,536 instances in total across all meshes.
 
-### Batch (`mt_batch_v4`, 4 words, one per mesh)
+### Materials
 
-When `batch_offset` is nonzero, each mesh has a batch record:
+- Start from `mt_material_v4_default()`; its values match the browser
+  `OpenPBRMaterial`.
+- Other OpenPBR properties (thin film, participating media, anisotropy, coat,
+  fuzz, alpha modes, displacement and further texture slots) go in the
+  `mt_material_extension_v4` array, built with `mt_extension_float` and
+  `mt_extension_uint`. Each ID appears at most once, unused components are 0,
+  and extensions override the basic fields. The
+  [property header](../include/mutracer-material-properties.h) gives each ID's
+  type and enum values.
+- Displacement: only the first material of a mesh supplies it. Active
+  displacement needs a square power-of-two texture, a positive step size, and
+  UVs when the projection is `none`. The offset is `height × scale + bias` in
+  mesh-local units. The absolute projection scale, and each position or UV
+  component multiplied by it, must not exceed 1,000,000.
 
-- `count = MT_BATCH_ORDINARY_MESH`: an ordinary mesh; both offsets must be 0.
-- `count = 0`: an empty batch that renders nothing; both offsets must be 0.
-- Otherwise `count` instances, with `count` column-major local matrices at
-  `transforms_offset` and optional `count` RGB multipliers at `colors_offset`.
-  The mesh world matrix is applied outside each local matrix.
+### Textures
 
-The expanded instance count across all meshes is at most 65,536.
+- RGBA8 sRGB storage uses one packed word per pixel; RGBA32F uses four linear
+  floats. Pixels are row-major.
+- Negative UV scales flip an axis; zero samples a constant coordinate.
+- The library packs all textures into an atlas and may scale large sources to
+  fit.
 
-### Material (`mt_material_v4`, 24 words)
+### Lights
 
-| Field | Default |
-| --- | --- |
-| `base_color` (linear RGB) | 0.8, 0.8, 0.8 |
-| `roughness`, `metalness`, `transmission` | 0.3, 0, 0 |
-| `ior` | 1.5 |
-| `emission_color` (linear RGB), `emission_luminance` | 1, 1, 1 and 0 |
-| `coat_weight`, `coat_roughness` | 0, 0 |
-| `opacity` | 1 |
-| `thin_walled` | 0 |
-| `base_texture`, `normal_texture`, `metallic_roughness_texture`, `emissive_texture` | `MT_NO_TEXTURE` |
+- Rectangular lights need positive width and height. Spot angles are in degrees,
+  with 0 ≤ inner ≤ outer < 90 and outer > 0.
+- Rectangular, spot and directional lights emit along their local -Z axis;
+  local +X is the IES reference direction.
+- Only rectangular lights accept a texture. Only spot lights accept an IES
+  profile: UTF-8 LM-63 Type C text with `TILT=NONE`, at most 16 KiB, without a
+  terminating NUL (offset 0 and length 0 for none). Lights with the same offset
+  and length share one profile.
 
-The defaults are those of `mt_material_v4_default()` and match the browser
-`OpenPBRMaterial`.
+### Camera
 
-`extension_count` and `extension_offset` select an array of
-`mt_material_extension_v4` entries `{id, value[3]}` that set any other OpenPBR
-property: thin film, participating media, anisotropy, coat, fuzz, alpha modes,
-displacement and further texture slots. Each ID appears at most once. Float,
-color and vec2 properties use `value.f`; bool, enum and texture properties use
-`value.u` (`mt_extension_float` and `mt_extension_uint` build entries). Unused
-components must be 0. Extensions override the basic fields, and omitted
-properties keep their defaults. The property header lists each ID's type and
-enum values; use OpenPBR's documented ranges.
-
-Displacement:
-
-- Only the first material of a mesh supplies displacement inputs.
-- Active displacement needs a square power-of-two texture, a positive step size,
-  and UVs when the projection is `none`. Triplanar, spherical and cylindrical
-  projections work without UVs, and negative amplitudes are allowed. Set
-  `MT_MAT_DISPLACEMENT_BIAS` for a constant normal offset in mesh-local units;
-  the resulting offset is `height × scale + bias`.
-- The absolute projection scale, and each position or UV component multiplied by
-  it, must not exceed 1,000,000.
-
-### Texture (`mt_texture_v4`, 12 words)
-
-`width`, `height`, `storage` (`MT_TEXTURE_STORAGE_RGBA8_SRGB`: one packed RGBA8
-sRGB word per pixel, or `MT_TEXTURE_STORAGE_RGBA32F`: four linear floats per
-pixel), `pixel_offset` (row-major pixels), `flip_y`, `uv_channel` (0 or 1),
-`uv_scale`, `uv_offset`, `wrap_s` and `wrap_t`. Each wrap axis accepts
-`MT_TEXTURE_WRAP_REPEAT` (0, default), `MT_TEXTURE_WRAP_CLAMP_TO_EDGE` (1) or
-`MT_TEXTURE_WRAP_MIRRORED_REPEAT` (2). Negative scales flip an axis; zero samples
-a constant coordinate. Supply each texture separately; the library packs
-them into an atlas and may scale large sources to fit.
-
-### Light (`mt_light_v4`, 28 words)
-
-| Type | `size_or_radius` | `height_or_inner_angle` | `spread_or_outer_angle` |
-| --- | --- | --- | --- |
-| `MT_LIGHT_TYPE_RECT` | width > 0 | height > 0 | spread |
-| `MT_LIGHT_TYPE_SPHERE` | radius | — | — |
-| `MT_LIGHT_TYPE_DIRECTIONAL` | — | — | — |
-| `MT_LIGHT_TYPE_SPOT` | source radius | inner angle | outer angle |
-
-- Every light has a linear RGB `color`, an `intensity` and a light-to-world
-  matrix. Rectangular, spot and directional lights emit along their local -Z
-  axis; local +X is the IES reference direction.
-- Spot angles are in degrees, with 0 ≤ inner ≤ outer < 90 and outer > 0.
-- Only rectangular lights accept `texture_plus_one` (texture index + 1, 0 for
-  none).
-- Only spot lights accept an IES profile: `ies_offset` is a word offset and
-  `ies_bytes` a byte length of UTF-8 LM-63 Type C text with `TILT=NONE`, at most
-  16 KiB, without a terminating NUL. Use offset 0 with length 0 for none.
-  Lights that reuse the same offset and length share one profile, and an
-  invalid profile is rejected.
-
-### Camera (`mt_camera_v4`, 32 words)
-
-`projection` (`MT_CAMERA_PROJECTION_PERSPECTIVE` or `_ORTHOGRAPHIC`), vertical
-`fov` in degrees, `near_clip`, `far_clip`, orthographic `left`, `right`,
-`bottom`, `top`, `zoom`, then lens fields `f_stop` (0 disables depth of field),
-`focus_distance`, `sensor_height` and `meters_per_unit`, and a camera-to-world
-`world_matrix`. The camera looks down its local -Z axis. The aspect ratio
-follows `width` and `height`. A commit that changes only this record is
-incremental.
+The camera looks down its local -Z axis, its aspect ratio follows the header's
+`width` and `height`, and `f_stop` 0 disables depth of field. A commit that
+changes only the camera is incremental.
 
 ## Limits
 

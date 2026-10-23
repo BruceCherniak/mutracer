@@ -31,9 +31,11 @@ Built-in denoising also needs the [OIDN runtime](docs/denoising.md#oidn-runtime)
 | One low-level accumulation with polling jobs | — | `mutracer-context.h` | [Context](docs/context.md) |
 | Read or write binary scene descriptors | `Scene::descriptor` | `mutracer-scene.h`, `mutracer-scene-builder.h` | [Scene format](docs/scene-format.md) |
 
-Most applications build a Scene and render it with an Engine. The headers in
-[`include/`](include) are the C reference for every option, default, error and
-lifetime.
+Most applications build a Scene and render it with an Engine. The API reference
+is on the declarations: the headers in [`include/`](include) and the Rust doc
+comments in [`host/src/api/`](host/src/api) and
+[`host/src/scene_api/`](host/src/scene_api) give every option, default, error
+and lifetime. The guides cover workflows and behavior across calls.
 
 ## Build and link
 

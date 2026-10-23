@@ -53,7 +53,8 @@ pub struct DisplaySettings {
     pub bloom_radius: f32,
     /// Nonnegative linear RGB shadow-catcher color. Default black.
     pub shadow_catcher_color: [f32; 3],
-    /// Shadow-catcher opacity in 0..1. Default 1.
+    /// Shadow-catcher opacity in 0..1. Default 1. Lower values subtract from the
+    /// estimated shadow opacity, so faint shadows disappear first.
     pub shadow_catcher_alpha: f32,
     /// Request extended-range window presentation. Default false. Unsupported
     /// surfaces fall back to SDR; pixel/PNG export remains SDR.
