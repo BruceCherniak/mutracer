@@ -92,6 +92,9 @@ if(gpuValidation){
  const surfaceEnv={CARGO_TARGET_DIR:viewerTarget,MUTRACER_NATIVE_GPU_VALIDATION:'1'};
  if(process.platform==='linux'&&!env.XDG_RUNTIME_DIR){surfaceEnv.XDG_RUNTIME_DIR=resolve(out,'surface/runtime');mkdirSync(surfaceEnv.XDG_RUNTIME_DIR,{recursive:true,mode:0o700});}
  await run('viewer-gpu-surface',process.platform==='linux'?'xvfb-run':'cargo',process.platform==='linux'?['-a','cargo',...surfaceArgs]:surfaceArgs,surfaceEnv);
+ const surfaceReport=JSON.parse(readFileSync(resolve(out,'surface/summary.json'),'utf8'));
+ if(!surfaceReport.passed)throw Error('Window/HDR surface validation failed.');
+ gpu.hdrPresentation=surfaceReport.results.map(r=>({backend:r.activeBackend,...r.hdr}));
  await run('ray-query-contracts',resolve(hostTarget,'release',executable('ray-query-probe')),[resolve(out,'ray-query')]);
  if(!JSON.parse(readFileSync(resolve(out,'ray-query/result.json'),'utf8')).supported)throw Error('HWRT execution was not validated.');
  // --hosts: the context, job, camera, settings and engine C hosts, reusing the fixtures above.

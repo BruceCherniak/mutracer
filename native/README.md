@@ -149,8 +149,8 @@ that filtered color, while shadow opacity remains unfiltered, so shadow noise
 can remain after denoising.
 
 C callers using the current header get all effect defaults. Other FFI bindings
-should initialize the 64-byte record with `mt_display_settings_default_sized`.
-Existing 32-byte records remain accepted with default effect values.
+should initialize the current 68-byte record with `mt_display_settings_default_sized`.
+Existing 32- and 64-byte records remain accepted; omitted fields use defaults.
 
 ### Rust GPU images and display passes
 
@@ -238,7 +238,7 @@ opaque window when supported.
 and queued-frame limit. Presentation adds a fullscreen GPU draw and window
 framebuffers, with no CPU pixel readback. Frame acquisition and reconfiguration
 can block. Effects, custom passes and scaling are included; pixel and PNG exports
-remain unchanged. HDR surface output is not available yet.
+remain unchanged.
 
 Inspect `surface_info().status` after presentation. `Display::present` still
 reports the offscreen image when a window frame is skipped. Timeout or occlusion
@@ -253,6 +253,54 @@ positive display/render size. Restoring a positive size resumes presentation;
 scale-sized renders resize at their next refine. Attachment, resize and pending
 window frames wake a finished render loop. Device loss releases the attachment
 and follows the terminal behavior below.
+
+### HDR window output
+
+Request HDR after attaching a window surface, or before attachment:
+
+```rust
+let mut settings = display.settings();
+settings.hdr_output_enabled = true;
+display.set_settings(settings)?;
+render_loop.tick()?;
+let info = display.surface_info().unwrap();
+// info.hdr_active reports the negotiated output route.
+```
+
+The default is false. With `SurfaceOptions::format = None`, HDR uses
+RGBA16Float with extended linear sRGB (scRGB) when supported. An explicit SDR
+surface format pins output to SDR. Unsupported HDR requests also fall back to
+SDR; `surface_info()` reports the requested/active state, color space and fallback
+reason. Changes apply to the window on the next presentation. A finished render
+loop wakes on changes without restarting accumulation.
+Changing HDR mode inside a display pass is rejected.
+
+HDR preserves values above 1 and bypasses the display tone mapper. Exposure,
+grading, vignette, bloom and catcher composition still apply. The HDR window
+image uses linear values, with 1 representing SDR reference white. Actual
+brightness above white depends on the OS and display's available headroom;
+`display_hdr_info()` queries that live information on the window thread, with
+unknown fields left unset. Negotiating HDR does not prove that the panel can
+currently show brighter highlights. HDR10/PQ, HLG and wide-gamut output are not
+provided.
+
+`Display::texture()`, pixel/PNG export and existing `add_post_process` callbacks
+keep their SDR RGBA8 behavior. Register HDR-window passes separately with
+`add_hdr_post_process`: they receive straight-alpha linear RGBA16Float images
+and run before scaling, only while HDR output is active. Their order, failure
+fallback, removal and callback lifetime follow the SDR pass rules. HDR passes do
+not change SDR exports; SDR passes affect the SDR preview/exports only.
+`Display::hdr_texture()` borrows the latest display-sized premultiplied linear
+RGBA16Float window image until the next present/resize. It returns `None` before
+an HDR image is presented or while HDR is inactive. Do not write, destroy or
+retain it.
+
+HDR keeps the SDR preview alongside the floating window image, adding a GPU
+composition and scale per presentation. Its caches add 8 bytes per render pixel,
+16 more when HDR passes run, and 8 bytes per display pixel. Render caches remain
+until size replacement or disposal; the display HDR image is released on disable
+or detach. C accepts the HDR request field in its 68-byte settings record, but
+its offscreen pixel/PNG exports remain SDR.
 
 ### Device loss
 

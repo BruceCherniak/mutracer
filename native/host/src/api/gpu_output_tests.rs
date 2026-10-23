@@ -20,7 +20,7 @@ fn fixture() -> (Engine, Render) {
     .unwrap();
     (engine, render)
 }
-fn bytes(engine: &Engine, texture: &wgpu::Texture, channels: u32) -> Vec<u8> {
+pub(super) fn bytes(engine: &Engine, texture: &wgpu::Texture, channels: u32) -> Vec<u8> {
     let gpu = &engine.inner.gpu;
     let stride = (texture.width() * channels).div_ceil(256) * 256;
     let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -396,4 +396,96 @@ fn gpu_output_pass_failure_discards_commands_and_allows_callback_reentry() {
         Status::Unavailable
     );
     engine.dispose();
+}
+
+#[test]
+#[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+fn hdr_passes_keep_extended_pixels_order_failure_and_sdr_exports_independent() {
+    let _lock = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let (engine, render) = fixture();
+    render.converge(ConvergeOptions::new(2)).unwrap();
+    let display = engine.display();
+    let raw = render.read_pixels(PixelKind::Hdr).unwrap();
+    let sdr = display.read_rgba8(&render).unwrap().2;
+    let before = display
+        .compose_mode(&render, false, true)
+        .unwrap()
+        .unwrap()
+        .texture;
+    let baseline = bytes(&engine, &before, 8);
+    let order = Arc::new(Mutex::new(Vec::new()));
+    let seen = order.clone();
+    let a = display
+        .add_hdr_post_process(move |ctx| {
+            assert_eq!(ctx.input.format(), wgpu::TextureFormat::Rgba16Float);
+            assert_eq!(ctx.output.format(), wgpu::TextureFormat::Rgba16Float);
+            assert_eq!(ctx.render.samples(), 2);
+            let display = ctx.render.engine().display();
+            let mut settings = display.settings();
+            settings.hdr_output_enabled = !settings.hdr_output_enabled;
+            assert_eq!(
+                display.set_settings(settings).unwrap_err().status,
+                Status::InvalidState
+            );
+            seen.lock().unwrap().push(1);
+            color_pass(
+                ctx,
+                wgpu::Color {
+                    r: 4.,
+                    g: 2.,
+                    b: 0.5,
+                    a: 0.25,
+                },
+            )
+        })
+        .unwrap();
+    let seen = order.clone();
+    let b = display
+        .add_hdr_post_process(move |ctx| {
+            seen.lock().unwrap().push(2);
+            ctx.encoder.copy_texture_to_texture(
+                ctx.input.as_image_copy(),
+                ctx.output.as_image_copy(),
+                ctx.input.size(),
+            );
+            Ok(())
+        })
+        .unwrap();
+    let hdr = display.compose_mode(&render, false, true).unwrap().unwrap();
+    assert!(!hdr.premultiplied);
+    assert_eq!(*order.lock().unwrap(), [1, 2]);
+    let expected: Vec<u8> = [0x4400u16, 0x4000, 0x3800, 0x3400]
+        .into_iter()
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    for pixel in bytes(&engine, &hdr.texture, 8).chunks_exact(8) {
+        assert_eq!(pixel, expected);
+    }
+    assert_eq!(display.read_rgba8(&render).unwrap().2, sdr);
+    assert_eq!(*order.lock().unwrap(), [1, 2]); // SDR export must not run HDR callbacks.
+    let bad = display
+        .add_hdr_post_process(|_| Err(error(Status::Error, "HDR pass failure")))
+        .unwrap();
+    let failed = display.compose_mode(&render, false, true).unwrap().unwrap();
+    assert_eq!(bytes(&engine, &failed.texture, 8), baseline);
+    assert!(engine.last_error().unwrap().contains("HDR pass failure"));
+    bad.remove();
+    a.remove();
+    b.remove();
+    assert_eq!(
+        bytes(
+            &engine,
+            &display
+                .compose_mode(&render, false, true)
+                .unwrap()
+                .unwrap()
+                .texture,
+            8
+        ),
+        baseline
+    );
+    assert_eq!(render.read_pixels(PixelKind::Hdr).unwrap(), raw);
+    assert_eq!(display.read_rgba8(&render).unwrap().2, sdr);
 }

@@ -103,6 +103,7 @@ pub struct Display {
     samples: u32,
     hdr: Option<(wgpu::Texture, wgpu::ComputePipeline, wgpu::BindGroup)>,
     composed: Option<(wgpu::Texture, wgpu::BindGroup)>,
+    composed_hdr: Option<wgpu::Texture>,
     metadata: Metadata,
     shadow: Option<wgpu::Buffer>,
     effects: std::sync::Mutex<Option<effects::Effects>>,
@@ -218,6 +219,7 @@ impl Display {
             samples: 0,
             hdr: None,
             composed: None,
+            composed_hdr: None,
             metadata: Metadata::default(),
             shadow: None,
             effects: Default::default(),
@@ -429,6 +431,20 @@ impl Display {
         self.compose_into(settings, false, group, texture);
         texture.clone()
     }
+    pub(crate) fn compose_hdr(&mut self, settings: &Settings) -> wgpu::Texture {
+        if self.composed_hdr.is_none() {
+            self.composed_hdr = Some(image(
+                &self.gpu.device,
+                self.size,
+                wgpu::TextureFormat::Rgba16Float,
+            ));
+        }
+        let target = self.composed_hdr.as_ref().unwrap();
+        let mut slot = self.effects.lock().unwrap_or_else(|e| e.into_inner());
+        let effects = slot.get_or_insert_with(|| effects::Effects::new(&self.gpu.device));
+        effects.compose(self, settings, false, target);
+        target.clone()
+    }
     fn compose_inner(&self, settings: &Settings, premultiply: bool) {
         self.compose_into(settings, premultiply, &self.group, &self.texture);
     }
@@ -578,7 +594,10 @@ pub(crate) fn image(
             | wgpu::TextureUsages::STORAGE_BINDING
             | wgpu::TextureUsages::COPY_SRC
             | wgpu::TextureUsages::COPY_DST
-            | if format == wgpu::TextureFormat::Rgba8Unorm {
+            | if matches!(
+                format,
+                wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba16Float
+            ) {
                 wgpu::TextureUsages::RENDER_ATTACHMENT
             } else {
                 wgpu::TextureUsages::empty()

@@ -168,6 +168,7 @@ fn display_settings(settings: &mutracer_native_probe::display::Settings) -> api:
         bloom_radius: settings.bloom_radius,
         shadow_catcher_color: settings.shadow_catcher_color,
         shadow_catcher_alpha: settings.shadow_catcher_alpha,
+        hdr_output_enabled: false,
         channel: match settings.output {
             1 => api::Channel::Normal,
             2 => api::Channel::Albedo,

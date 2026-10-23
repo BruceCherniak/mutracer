@@ -18,6 +18,7 @@ pub(super) fn uniform(device: &wgpu::Device, words: &[u32]) -> wgpu::Buffer {
 pub(super) struct Effects {
     pipeline: wgpu::ComputePipeline,
     normalize: wgpu::ComputePipeline,
+    hdr_pipeline: Option<wgpu::ComputePipeline>,
     dummy: wgpu::Texture,
     zero: wgpu::Buffer,
     normalized: Option<wgpu::Texture>,
@@ -46,6 +47,7 @@ impl Effects {
         Self {
             pipeline: pipeline("main"),
             normalize: pipeline("normalize"),
+            hdr_pipeline: None,
             dummy: image(device, [1, 1], wgpu::TextureFormat::Rgba16Float),
             zero: device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("Empty catcher"),
@@ -73,6 +75,23 @@ impl Effects {
     ) {
         let gpu = &display.gpu;
         let device = &gpu.device;
+        let hdr = target.format() == wgpu::TextureFormat::Rgba16Float;
+        if hdr && self.hdr_pipeline.is_none() {
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("HDR display composition"),
+                source: wgpu::ShaderSource::Wgsl(include_str!("../display-hdr.wgsl").into()),
+            });
+            self.hdr_pipeline = Some(device.create_compute_pipeline(
+                &wgpu::ComputePipelineDescriptor {
+                    label: Some("HDR display composition"),
+                    layout: None,
+                    module: &shader,
+                    entry_point: Some("main"),
+                    compilation_options: Default::default(),
+                    cache: None,
+                },
+            ));
+        }
         let final_channel = settings.output == 0 || settings.output == 3;
         let enabled =
             final_channel && settings.bloom_intensity > 0. && display.original_samples >= 10;
@@ -179,11 +198,16 @@ impl Effects {
         } else {
             &self.dummy
         };
+        let pipeline = if hdr {
+            self.hdr_pipeline.as_ref().unwrap()
+        } else {
+            &self.pipeline
+        };
         let bloom_view = bloom.create_view(&Default::default());
         let output_view = target.create_view(&Default::default());
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
-            layout: &self.pipeline.get_bind_group_layout(0),
+            layout: &pipeline.get_bind_group_layout(0),
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -225,7 +249,7 @@ impl Effects {
         });
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(display.size[0].div_ceil(8), display.size[1].div_ceil(8), 1);
         }

@@ -1,12 +1,13 @@
-//! SDR window presentation of the existing premultiplied display image.
+//! SDR and extended-linear-sRGB window presentation.
 use super::{Display, Result, Status, error};
 use crate::GpuDevice;
 
-/// Window presentation options. HDR output is not supported by this interface.
+/// Window presentation options. HDR is requested through DisplaySettings.
 #[derive(Clone, Debug)]
 pub struct SurfaceOptions {
     /// Default None: prefer a supported sRGB RGBA/BGRA8 format, then unorm.
-    /// Explicit formats must be one of those four SDR formats.
+    /// Explicit formats must be one of those four SDR formats and pin output
+    /// to SDR even when HDR is requested; leave None to negotiate HDR.
     pub format: Option<wgpu::TextureFormat>,
     /// Default Fifo (vsync). Unsupported explicit modes return InvalidArgument.
     pub present_mode: wgpu::PresentMode,
@@ -55,6 +56,13 @@ pub struct SurfaceInfo {
     pub present_mode: wgpu::PresentMode,
     pub alpha_mode: wgpu::CompositeAlphaMode,
     pub status: SurfaceStatus,
+    pub color_space: wgpu::SurfaceColorSpace,
+    /// Requested by DisplaySettings; active means negotiated scRGB FP16 output,
+    /// not a guarantee of panel headroom or visible HDR brightness.
+    pub hdr_requested: bool,
+    pub hdr_active: bool,
+    /// None when HDR is active or disabled; otherwise the SDR fallback reason.
+    pub hdr_unavailable_reason: Option<String>,
 }
 const FORMATS: [wgpu::TextureFormat; 4] = [
     wgpu::TextureFormat::Bgra8UnormSrgb,
@@ -80,6 +88,15 @@ fn configuration(
             .find(|f| caps.formats.contains(f))
             .ok_or_else(|| error(Status::Unavailable, "No compatible SDR window format"))?,
     };
+    configuration_for_format(caps, options, size, format, wgpu::SurfaceColorSpace::Auto)
+}
+fn configuration_for_format(
+    caps: &wgpu::SurfaceCapabilities,
+    options: &SurfaceOptions,
+    size: [u32; 2],
+    format: wgpu::TextureFormat,
+    color_space: wgpu::SurfaceColorSpace,
+) -> Result<wgpu::SurfaceConfiguration> {
     let present_mode = match options.present_mode {
         wgpu::PresentMode::AutoVsync => [wgpu::PresentMode::FifoRelaxed, wgpu::PresentMode::Fifo]
             .into_iter()
@@ -115,7 +132,7 @@ fn configuration(
     Ok(wgpu::SurfaceConfiguration {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
         format,
-        color_space: wgpu::SurfaceColorSpace::Auto,
+        color_space,
         width: size[0],
         height: size[1],
         present_mode,
@@ -123,6 +140,36 @@ fn configuration(
         desired_maximum_frame_latency: options.desired_maximum_frame_latency,
         view_formats: vec![],
     })
+}
+fn negotiate(
+    caps: &wgpu::SurfaceCapabilities,
+    options: &SurfaceOptions,
+    size: [u32; 2],
+    hdr: bool,
+) -> Result<(wgpu::SurfaceConfiguration, Option<String>)> {
+    let supported = caps
+        .color_spaces(wgpu::TextureFormat::Rgba16Float)
+        .contains(wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR);
+    if hdr && options.format.is_none() && supported {
+        return Ok((
+            configuration_for_format(
+                caps,
+                options,
+                size,
+                wgpu::TextureFormat::Rgba16Float,
+                wgpu::SurfaceColorSpace::ExtendedSrgbLinear,
+            )?,
+            None,
+        ));
+    }
+    let reason = if !hdr {
+        None
+    } else if options.format.is_some() {
+        Some("An explicit SDR surface format was selected".to_string())
+    } else {
+        Some("Surface does not support extended linear sRGB RGBA16Float".to_string())
+    };
+    Ok((configuration(caps, options, size)?, reason))
 }
 impl Display {
     /// Attaches an owned window surface, replacing any previous attachment. The
@@ -153,16 +200,15 @@ impl Display {
                 "Window presentation requires Engine::on_device",
             )
         })?;
-        let config = configuration(
-            &surface.get_capabilities(adapter),
-            &options,
-            state.display.size,
-        )?;
+        let caps = surface.get_capabilities(adapter);
+        let requested = state.display.settings.hdr_output_enabled;
+        let (config, hdr_reason) = negotiate(&caps, &options, state.display.size, requested)?;
         let blit = SurfaceBlit::new(
             &self.engine.inner.gpu.device,
             config.format,
             config.alpha_mode,
         );
+        state.display.hdr_texture = None;
         state.display.surface = Some(SurfaceTarget {
             surface,
             size: state.display.size,
@@ -170,6 +216,10 @@ impl Display {
             blit,
             status: SurfaceStatus::Ready,
             dirty: true,
+            caps,
+            options,
+            hdr_requested: requested,
+            hdr_reason,
         });
         Ok(())
     }
@@ -183,6 +233,7 @@ impl Display {
                 "Cannot detach a surface during composition",
             ));
         }
+        state.display.hdr_texture = None;
         Ok(state.display.surface.take().map(|s| s.surface))
     }
     /// Physical window size. Zero width or height suspends window presentation
@@ -218,6 +269,18 @@ impl Display {
             .resize([width, height]);
         Ok(())
     }
+    /// Queries live OS HDR/headroom information for the attached window. Call on
+    /// the window thread. Unknown fields stay None; negotiated HDR output does
+    /// not guarantee available panel headroom. Queries the OS on every call.
+    pub fn display_hdr_info(&self) -> Option<wgpu::DisplayHdrInfo> {
+        let state = self.engine.lock();
+        let surface = state.display.surface.as_ref()?;
+        Some(
+            surface
+                .surface
+                .display_hdr_info(self.engine.inner.adapter.as_ref()?),
+        )
+    }
     /// None without an attachment, after disposal or after device loss.
     pub fn surface_info(&self) -> Option<SurfaceInfo> {
         let state = self.engine.lock();
@@ -227,6 +290,10 @@ impl Display {
             present_mode: s.config.present_mode,
             alpha_mode: s.config.alpha_mode,
             status: s.status,
+            color_space: s.config.color_space,
+            hdr_requested: s.hdr_requested,
+            hdr_active: s.hdr_active(),
+            hdr_unavailable_reason: s.hdr_reason.clone(),
         })
     }
 }
@@ -237,8 +304,38 @@ pub(super) struct SurfaceTarget {
     blit: SurfaceBlit,
     status: SurfaceStatus,
     dirty: bool,
+    caps: wgpu::SurfaceCapabilities,
+    options: SurfaceOptions,
+    hdr_requested: bool,
+    hdr_reason: Option<String>,
 }
 impl SurfaceTarget {
+    pub(super) fn hdr_active(&self) -> bool {
+        self.config.color_space == wgpu::SurfaceColorSpace::ExtendedSrgbLinear
+    }
+    pub(super) fn set_hdr(&mut self, requested: bool, gpu: &GpuDevice) -> Result<()> {
+        if self.hdr_requested == requested {
+            return Ok(());
+        }
+        let (config, reason) = negotiate(
+            &self.caps,
+            &self.options,
+            [self.config.width, self.config.height],
+            requested,
+        )?;
+        if self.config.format != config.format || self.config.color_space != config.color_space {
+            self.blit = SurfaceBlit::new(&gpu.device, config.format, config.alpha_mode);
+            self.config = config;
+            self.dirty = true;
+            if !matches!(self.status, SurfaceStatus::Lost | SurfaceStatus::Suspended) {
+                self.status = SurfaceStatus::Ready;
+            }
+        }
+        self.hdr_requested = requested;
+        self.hdr_reason = reason;
+        Ok(())
+    }
+
     pub(super) fn resize(&mut self, size: [u32; 2]) {
         if self.size != size {
             self.size = size;
@@ -321,6 +418,7 @@ const BLIT: &str = r#"
 override srgb_attachment: bool = false;
 override straight_alpha: bool = false;
 override opaque: bool = false;
+override linear_input: bool = false;
 @vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
   let xy = vec2f(f32((i << 1u) & 2u), f32(i & 2u));
   return vec4f(xy * 2.0 - 1.0, 0.0, 1.0);
@@ -328,7 +426,7 @@ override opaque: bool = false;
 @fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
   var pixel = textureLoad(image, vec2i(p.xy), 0);
   if (straight_alpha) { pixel = vec4f(select(vec3f(0.0), pixel.rgb / max(pixel.a, 0.000001), pixel.a > 0.0), pixel.a); }
-  if (srgb_attachment) {
+  if (srgb_attachment && !linear_input) {
     pixel = vec4f(select(pow((pixel.rgb + 0.055) / 1.055, vec3f(2.4)), pixel.rgb / 12.92, pixel.rgb <= vec3f(0.04045)), pixel.a);
   }
   if (opaque) { pixel.a = 1.0; }
@@ -364,6 +462,14 @@ impl SurfaceBlit {
                     compilation_options: wgpu::PipelineCompilationOptions {
                         constants: &[
                             ("srgb_attachment", if format.is_srgb() { 1. } else { 0. }),
+                            (
+                                "linear_input",
+                                if format == wgpu::TextureFormat::Rgba16Float {
+                                    1.
+                                } else {
+                                    0.
+                                },
+                            ),
                             (
                                 "straight_alpha",
                                 if alpha == wgpu::CompositeAlphaMode::PostMultiplied {

@@ -507,3 +507,107 @@ fn display_effects_bloom_matches_reference_pyramid_and_refresh_policy() {
         runs + 3
     );
 }
+
+#[test]
+#[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+fn hdr_display_preserves_extended_radiance_grading_bloom_and_coverage() {
+    let gpu = GpuDevice::with_backend(0).unwrap();
+    let mut display = snapshot(&gpu, [8, 6], 32, &[[4., 0.5, 0.25, 0.5]; 48]);
+    let mut settings = Settings {
+        exposure: 2.,
+        ..Default::default()
+    };
+    let sdr = display.read_rgba(&settings).unwrap();
+    let hdr = display.compose_hdr(&settings);
+    for pixel in read_half(&gpu, &hdr) {
+        for (v, e) in pixel.into_iter().zip([8., 1., 0.5, 0.5]) {
+            assert!((v - e).abs() < 0.01, "{v} != {e}");
+        }
+    }
+    assert_eq!(display.read_rgba(&settings).unwrap(), sdr);
+    settings.contrast = 0.5;
+    settings.vignette = 0.8;
+    let hdr = display.compose_hdr(&settings);
+    for (i, p) in read_half(&gpu, &hdr).into_iter().enumerate() {
+        let (x, y) = ((i % 8) as f64, (i / 8) as f64);
+        let t =
+            ((((x / 8. - 0.5).powi(2) + (y / 6. - 0.5).powi(2)).sqrt() - 0.2) / 0.52).clamp(0., 1.);
+        let w = 1. - 0.8 * t * t * (3. - 2. * t);
+        for (v, e) in p[..3]
+            .iter()
+            .zip([8., 1., 0.5].map(|v| ((v - 0.18) * 0.5 + 0.18) * w))
+        {
+            assert!((v - e).abs() < 0.01, "{v} != {e}");
+        }
+        assert_eq!(p[3], 0.5);
+    }
+    settings = Settings {
+        exposure: 2.,
+        bloom_intensity: 0.5,
+        bloom_threshold: 1.,
+        ..Default::default()
+    };
+    let hdr = display.compose_hdr(&settings);
+    // Constant bright input remains constant through all bloom levels.
+    for pixel in read_half(&gpu, &hdr) {
+        for (v, e) in
+            pixel
+                .into_iter()
+                .zip([12., 1.5, 0.75, 2. * 0.2125 + 0.25 * 0.7154 + 0.125 * 0.0721])
+        {
+            assert!((v - e).abs() < 0.02, "{v} != {e}");
+        }
+    }
+    // Denoised values are used in HDR too, without replacing the raw samples.
+    display
+        .upload(&[2f32, 0.25, 0.125, 0.5].repeat(48))
+        .unwrap();
+    settings.bloom_intensity = 0.;
+    let hdr = display.compose_hdr(&settings);
+    for p in read_half(&gpu, &hdr) {
+        assert!((p[0] - 4.).abs() < 0.01);
+        assert_eq!(p[3], 0.5);
+    }
+    display.original();
+    put(&gpu, &display.raw, &[32., 4., 2., 8.].repeat(48));
+    put(&gpu, &display.linear, &[32., 4., 2., 8.].repeat(48));
+    put(&gpu, &display.albedo, &[0., 0., 0., 8.].repeat(48));
+    display.shadow = Some(gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: 48 * 48,
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    }));
+    put(
+        &gpu,
+        display.shadow.as_ref().unwrap(),
+        &[8., 0., 0., 6., 0., 0., 0., 0., 0., 0., 0., 0.].repeat(48),
+    );
+    display.metadata = Metadata {
+        has_catcher: true,
+        flat_background: [0.; 4],
+    };
+    let decode = |v: f64| {
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let hdr = display.compose_hdr(&settings);
+    for p in read_half(&gpu, &hdr) {
+        for (v, e) in p[..3]
+            .iter()
+            .zip([8., 1., 0.5].map(|v| decode(srgb(v) * 0.25 / 0.4375)))
+        {
+            assert!((v - e).abs() < 0.02, "{v} != {e}");
+        }
+        assert_eq!(p[3], 0.4375);
+    }
+    settings.output = 1;
+    let hdr = display.compose_hdr(&settings);
+    for p in read_half(&gpu, &hdr) {
+        assert!((p[0] - decode(0.5)).abs() < 0.001);
+        assert_eq!(p[2], 1.);
+    }
+}

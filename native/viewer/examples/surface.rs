@@ -25,6 +25,9 @@ struct Host {
     phase: u32,
     backend: api::Backend,
     original: Option<api::Image>,
+    hdr_pass: Option<api::PostProcessSubscription>,
+    hdr_calls: Arc<std::sync::atomic::AtomicU32>,
+    hdr_report: Option<serde_json::Value>,
 }
 impl Host {
     fn engine(
@@ -112,6 +115,9 @@ impl Host {
             phase: 0,
             backend,
             original: None,
+            hdr_pass: None,
+            hdr_calls: Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            hdr_report: None,
         })
     }
     fn frame(&mut self, scene: &[u8], results: &mut Vec<serde_json::Value>) -> Result<bool> {
@@ -179,7 +185,8 @@ impl Host {
                     wgpu::TextureFormat::Rgba8Unorm,
                 ]
                 .into_iter()
-                .find(|f| surface.get_capabilities(&self.adapter).formats.contains(f));
+                .find(|f| surface.get_capabilities(&self.adapter).formats.contains(f))
+                .or(Some(info.format));
                 display.attach_surface(
                     surface,
                     api::SurfaceOptions {
@@ -190,13 +197,85 @@ impl Host {
                 ensure!(self.render_loop.needs_tick());
                 self.phase = 2;
             }
+            2 => {
+                let exported = display.read_rgba8(render)?.2;
+                let mut settings = display.settings();
+                settings.hdr_output_enabled = true;
+                display.set_settings(settings)?;
+                ensure!(display.read_rgba8(render)?.2 == exported);
+                let info = display.surface_info().unwrap();
+                ensure!(
+                    info.hdr_requested && !info.hdr_active && info.hdr_unavailable_reason.is_some()
+                );
+                let surface = display.detach_surface()?.unwrap();
+                display.attach_surface(surface, Default::default())?;
+                settings.tone_mapping_exposure = 64.;
+                display.set_settings(settings)?;
+                let calls = self.hdr_calls.clone();
+                self.hdr_pass = Some(display.add_hdr_post_process(move |ctx| {
+                    ensure_hdr_format(ctx.input, ctx.output)?;
+                    calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    ctx.encoder.copy_texture_to_texture(
+                        ctx.input.as_image_copy(),
+                        ctx.output.as_image_copy(),
+                        ctx.input.size(),
+                    );
+                    Ok(())
+                })?);
+                self.phase = 3;
+            }
+            3 => {
+                let mut peak = None;
+                if info.hdr_active {
+                    ensure!(
+                        info.format == wgpu::TextureFormat::Rgba16Float
+                            && info.color_space == wgpu::SurfaceColorSpace::ExtendedSrgbLinear
+                    );
+                    let texture = display.hdr_texture().expect("HDR window image");
+                    let value = hdr_peak(&self.device, &self.queue, &texture)?;
+                    ensure!(value > 1. && value.is_finite(), "HDR peak was {value}");
+                    peak = Some(value);
+                    ensure!(self.hdr_calls.load(std::sync::atomic::Ordering::Relaxed) > 0);
+                } else {
+                    ensure!(info.hdr_unavailable_reason.is_some());
+                    ensure!(display.hdr_texture().is_none());
+                    ensure!(self.hdr_calls.load(std::sync::atomic::Ordering::Relaxed) == 0);
+                }
+                self.hdr_report = Some(
+                    serde_json::json!({"active":info.hdr_active,"format":format!("{:?}",info.format),"colorSpace":format!("{:?}",info.color_space),"fallback":info.hdr_unavailable_reason,"peak":peak,"headroom":display.display_hdr_info().and_then(|i|i.tone_map_headroom()),"display":format!("{:?}",display.display_hdr_info())}),
+                );
+                let _ = self.window.request_inner_size(PhysicalSize::new(96, 72));
+                display.resize_surface(96, 72)?;
+                self.phase = 4;
+            }
+            4 => {
+                if self.window.inner_size() != PhysicalSize::new(96, 72) {
+                    return Ok(false);
+                }
+                if info.hdr_active {
+                    let image = display.hdr_texture().unwrap();
+                    ensure!([image.width(), image.height()] == [96, 72]);
+                }
+                ensure!(
+                    render.read_pixels(api::PixelKind::Hdr)? == *self.original.as_ref().unwrap()
+                );
+                let exported = display.read_rgba8(render)?.2;
+                let mut settings = display.settings();
+                settings.hdr_output_enabled = false;
+                display.set_settings(settings)?;
+                ensure!(display.hdr_texture().is_none());
+                ensure!(self.render_loop.needs_tick());
+                ensure!(display.read_rgba8(render)?.2 == exported);
+                self.phase = 5;
+            }
             _ => {
+                ensure!(!info.hdr_requested && !info.hdr_active);
                 ensure!(
                     render.read_pixels(api::PixelKind::Hdr)? == *self.original.as_ref().unwrap()
                 );
                 let rgba = display.read_rgba8(render)?.2;
                 ensure!(rgba.iter().any(|v| *v > 0));
-                results.push(serde_json::json!({"backend":format!("{:?}", self.backend),"activeBackend":format!("{:?}",active_backend),"hardwareRayQuery":self.engine.info().hardware_ray_query,"format":format!("{:?}",info.format),"size":info.size,"samples":render.samples(),"suspendRestore":true,"detachReattach":true,"rawUnchanged":true}));
+                results.push(serde_json::json!({"backend":format!("{:?}", self.backend),"activeBackend":format!("{:?}",active_backend),"hardwareRayQuery":self.engine.info().hardware_ray_query,"format":format!("{:?}",info.format),"size":info.size,"samples":render.samples(),"suspendRestore":true,"detachReattach":true,"rawUnchanged":true,"hdr":self.hdr_report,"hdrResizeAndToggle":true}));
                 // A terminal device-loss notification must release the attachment,
                 // while the independent window remains owned by this host.
                 self.engine
@@ -204,6 +283,7 @@ impl Host {
                     .notify("surface smoke device loss");
                 ensure!(display.surface_info().is_none());
                 ensure!(self.render_loop.tick().unwrap_err().status == api::Status::Unavailable);
+                self.hdr_pass = None;
                 self.engine.dispose();
                 if self.backend == api::Backend::Hardware {
                     return Ok(true);
@@ -219,11 +299,75 @@ impl Host {
                     self.backend,
                 )?;
                 self.original = None;
+                self.hdr_report = None;
+                self.hdr_calls
+                    .store(0, std::sync::atomic::Ordering::Relaxed);
                 self.phase = 0;
             }
         }
         Ok(false)
     }
+}
+fn ensure_hdr_format(input: &wgpu::Texture, output: &wgpu::Texture) -> api::Result<()> {
+    if input.format() != wgpu::TextureFormat::Rgba16Float || output.format() != input.format() {
+        return Err(api::Error {
+            status: api::Status::InvalidState,
+            message: "HDR callback image format".into(),
+        });
+    }
+    Ok(())
+}
+fn hdr_peak(device: &wgpu::Device, queue: &wgpu::Queue, texture: &wgpu::Texture) -> Result<f64> {
+    let stride = (texture.width() * 8).div_ceil(256) * 256;
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: stride as u64 * texture.height() as u64,
+        usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let mut encoder = device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        texture.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride),
+                rows_per_image: None,
+            },
+        },
+        texture.size(),
+    );
+    queue.submit([encoder.finish()]);
+    let (send, recv) = std::sync::mpsc::channel();
+    buffer.map_async(wgpu::MapMode::Read, .., move |r| {
+        let _ = send.send(r);
+    });
+    device.poll(wgpu::PollType::Wait {
+        submission_index: None,
+        timeout: Some(Duration::from_secs(10)),
+    })?;
+    recv.recv_timeout(Duration::from_secs(5))??;
+    let mapped = buffer.get_mapped_range(..)?;
+    let mut peak = 0f64;
+    for row in mapped.chunks_exact(stride as usize) {
+        for p in row[..texture.width() as usize * 8].chunks_exact(8) {
+            for c in 0..3 {
+                let n = u16::from_le_bytes(p[c * 2..c * 2 + 2].try_into().unwrap());
+                let e = (n >> 10) & 31;
+                let f = (n & 1023) as f64;
+                let value = if e == 0 {
+                    f * 2f64.powi(-24)
+                } else if e == 31 {
+                    f64::INFINITY
+                } else {
+                    (1. + f / 1024.) * 2f64.powi(e as i32 - 15)
+                };
+                peak = peak.max(value);
+            }
+        }
+    }
+    Ok(peak)
 }
 struct App {
     scene: Vec<u8>,

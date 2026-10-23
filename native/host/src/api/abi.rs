@@ -244,6 +244,7 @@ pub struct MtDisplaySettings {
     bloom_radius: f32,
     shadow_catcher_color: [f32; 3],
     shadow_catcher_alpha: f32,
+    hdr_output_enabled: u32,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -444,6 +445,7 @@ fn display_record(settings: &DisplaySettings) -> MtDisplaySettings {
         bloom_radius: settings.bloom_radius,
         shadow_catcher_color: settings.shadow_catcher_color,
         shadow_catcher_alpha: settings.shadow_catcher_alpha,
+        hdr_output_enabled: u32::from(settings.hdr_output_enabled),
     }
 }
 fn display_settings(record: &MtDisplaySettings) -> Result<DisplaySettings> {
@@ -475,6 +477,11 @@ fn display_settings(record: &MtDisplaySettings) -> Result<DisplaySettings> {
         bloom_radius: record.bloom_radius,
         shadow_catcher_color: record.shadow_catcher_color,
         shadow_catcher_alpha: record.shadow_catcher_alpha,
+        hdr_output_enabled: match record.hdr_output_enabled {
+            0 => false,
+            1 => true,
+            _ => return Err(invalid("Invalid HDR output flag")),
+        },
     })
 }
 // The original default symbol has no capacity argument and old callers pass
@@ -482,7 +489,8 @@ fn display_settings(record: &MtDisplaySettings) -> Result<DisplaySettings> {
 fn display_record_size(size: u32) -> Result<usize> {
     match size {
         32 => Ok(32),
-        64.. => Ok(64),
+        64 => Ok(64),
+        68.. => Ok(68),
         _ => Err(invalid("Unsupported display struct_size")),
     }
 }
@@ -1824,6 +1832,27 @@ mod tests {
                 .unwrap(),
             settings
         );
+        let hdr = DisplaySettings {
+            hdr_output_enabled: true,
+            ..settings
+        };
+        unsafe { init_display_record(newer.as_mut_ptr().cast(), display_record(&hdr), 68) }
+            .unwrap();
+        assert_eq!(newer[0], 68);
+        assert_eq!(newer[16], 1);
+        assert_eq!(newer[17..], [0xdeadbeef; 3]);
+        assert_eq!(
+            display_settings(&unsafe { read_display_record(newer.as_ptr().cast()) }.unwrap())
+                .unwrap(),
+            hdr
+        );
+        newer[16] = 2;
+        assert!(
+            display_settings(&unsafe { read_display_record(newer.as_ptr().cast()) }.unwrap())
+                .is_err()
+        );
+        newer[0] = 66;
+        assert!(unsafe { read_display_record(newer.as_ptr().cast()) }.is_err());
         assert!(
             unsafe {
                 init_display_record(newer.as_mut_ptr().cast(), display_record(&settings), 48)
@@ -1841,9 +1870,10 @@ mod tests {
         assert_eq!(offset_of!(MtEngineSnapshot, adapter_name), 12);
         assert_eq!(size_of::<MtEngineEvent>(), 16 + pointer);
         assert_eq!(offset_of!(MtEngineEvent, message), 16);
-        assert_eq!(size_of::<MtDisplaySettings>(), 64);
+        assert_eq!(size_of::<MtDisplaySettings>(), 68);
         assert_eq!(offset_of!(MtDisplaySettings, vignette), 32);
         assert_eq!(offset_of!(MtDisplaySettings, shadow_catcher_alpha), 60);
+        assert_eq!(offset_of!(MtDisplaySettings, hdr_output_enabled), 64);
         assert_eq!(offset_of!(MtDisplaySettings, tone_mapping_exposure), 12);
         assert_eq!(offset_of!(MtDisplaySettings, tint), 28);
         assert_eq!(size_of::<MtPresented>(), 20);
@@ -1883,7 +1913,7 @@ mod tests {
         for name in [
             "mt_engine_options, 8",
             "mt_engine_snapshot, 268",
-            "mt_display_settings, 64",
+            "mt_display_settings, 68",
             "mt_presented, 20",
             "mt_render_options, 104",
             "mt_render_snapshot, 364",

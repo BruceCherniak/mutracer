@@ -57,11 +57,51 @@ fn surface_options_negotiate_supported_sdr_and_reject_invalid_requests() {
     )
     .unwrap();
     assert_eq!(fallback.present_mode, wgpu::PresentMode::Fifo);
+    let (sdr, reason) = negotiate(&caps, &options, [320, 240], true).unwrap();
+    assert_ne!(sdr.format, wgpu::TextureFormat::Rgba16Float);
+    assert!(reason.is_some());
+    let mut caps = caps;
+    caps.format_capabilities
+        .push(wgpu::SurfaceFormatCapabilities {
+            format: wgpu::TextureFormat::Rgba16Float,
+            color_spaces: wgpu::SurfaceColorSpaces::EXTENDED_SRGB_LINEAR,
+        });
+    let (hdr, reason) = negotiate(&caps, &options, [320, 240], true).unwrap();
+    assert_eq!(hdr.format, wgpu::TextureFormat::Rgba16Float);
+    assert_eq!(hdr.color_space, wgpu::SurfaceColorSpace::ExtendedSrgbLinear);
+    assert!(reason.is_none());
+    let old_formats = std::mem::take(&mut caps.formats);
+    assert_eq!(
+        negotiate(&caps, &options, [320, 240], true)
+            .unwrap()
+            .0
+            .format,
+        wgpu::TextureFormat::Rgba16Float
+    );
+    assert!(negotiate(&caps, &options, [320, 240], false).is_err());
+    caps.formats = old_formats;
+
+    let (pinned, reason) = negotiate(
+        &caps,
+        &SurfaceOptions {
+            format: Some(wgpu::TextureFormat::Bgra8Unorm),
+            ..Default::default()
+        },
+        [320, 240],
+        true,
+    )
+    .unwrap();
+    assert_eq!(pinned.format, wgpu::TextureFormat::Bgra8Unorm);
+    assert!(reason.unwrap().contains("explicit SDR"));
 }
 #[test]
 #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
 fn surface_sdr_blit_preserves_encoded_pixels_orientation_and_alpha_modes() {
-    let gpu = GpuDevice::with_backend(0).unwrap();
+    let engine = crate::api::Engine::new(crate::api::EngineOptions {
+        backend: crate::api::Backend::Software,
+    })
+    .unwrap();
+    let gpu = engine.inner.gpu.clone();
     let size = [8, 4];
     let pixels: Vec<u8> = (0..32)
         .flat_map(|i| {
@@ -142,6 +182,54 @@ fn surface_sdr_blit_preserves_encoded_pixels_orientation_and_alpha_modes() {
                     );
                 }
             }
+        }
+    }
+    let source = crate::display::image(&gpu.device, size, wgpu::TextureFormat::Rgba16Float);
+    let view = source.create_view(&Default::default());
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    {
+        let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 4.,
+                        g: 1.,
+                        b: 0.5,
+                        a: 0.5,
+                    }),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+    }
+    gpu.queue.submit([encoder.finish()]);
+    for (alpha, want) in [
+        (
+            wgpu::CompositeAlphaMode::PreMultiplied,
+            [0x4400u16, 0x3c00, 0x3800, 0x3800],
+        ),
+        (
+            wgpu::CompositeAlphaMode::PostMultiplied,
+            [0x4800, 0x4000, 0x3c00, 0x3800],
+        ),
+        (
+            wgpu::CompositeAlphaMode::Opaque,
+            [0x4400, 0x3c00, 0x3800, 0x3c00],
+        ),
+    ] {
+        let target = crate::display::image(&gpu.device, size, wgpu::TextureFormat::Rgba16Float);
+        SurfaceBlit::new(&gpu.device, wgpu::TextureFormat::Rgba16Float, alpha).draw(
+            &gpu,
+            &source,
+            &target.create_view(&Default::default()),
+        );
+        let expected: Vec<_> = want.into_iter().flat_map(u16::to_le_bytes).collect();
+        for p in crate::api::gpu_output_tests::bytes(&engine, &target, 8).chunks_exact(8) {
+            assert_eq!(p, expected);
         }
     }
 }

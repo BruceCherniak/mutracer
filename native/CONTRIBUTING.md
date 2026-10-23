@@ -56,7 +56,7 @@ and windows as **not validated**.
 On a machine with a real GPU and hardware ray-query support, run
 `npm run native:ci:gpu` before a native release. This also runs the ignored host GPU
 tests, animated-pose rendering, all 33 rendered fixtures, ray-query execution,
-the standalone `viewer/examples/surface.rs` window lifecycle smoke,
+the standalone `viewer/examples/surface.rs` window/HDR negotiation and lifecycle smoke,
 and the packaged render/AOV and window-startup checks. Software/unknown adapters
 and missing ray-query support are errors in this mode. This is a local or dedicated
 GPU-runner command; the ordinary GitHub-hosted workflow does not invoke it.

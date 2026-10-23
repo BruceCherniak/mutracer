@@ -421,15 +421,10 @@ fn oracle_audited(
     let mut error = [0i8; 1024];
     let mut handle = 0;
     unsafe {
-        l0_check(
-            context::mt_context_create_with_backend(
-                backend,
-                &mut handle,
-                error.as_mut_ptr(),
-                error.len(),
-            ),
-            &error,
-        );
+        // A pending engine preparation can briefly publish under REGISTRY while
+        // this fresh oracle is created. Retry only L0 Busy, as L1 callers do.
+        l0_blocking(|e, n| context::mt_context_create_with_backend(backend, &mut handle, e, n))
+            .unwrap();
         l0_check(
             context::mt_context_commit_with_settings(
                 handle,

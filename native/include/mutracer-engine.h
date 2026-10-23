@@ -131,12 +131,14 @@ typedef struct mt_display_settings {
   float bloom_radius; /* 0..1. Default 0.6. */
   float shadow_catcher_color[3]; /* Nonnegative linear RGB. Default black. */
   float shadow_catcher_alpha; /* 0..1. Default 1. */
+  uint32_t hdr_output_enabled; /* 0 or 1; default 0. Request Rust HDR window output.
+    Unsupported surfaces fall back to SDR; C pixel/PNG export remains SDR. */
 } mt_display_settings;
-MT_ENGINE_LAYOUT(mt_display_settings, 64);
+MT_ENGINE_LAYOUT(mt_display_settings, 68);
 /* The original symbol initializes the legacy 32-byte record. New C/C++ calls
  * use the sized entry point through this macro; other FFI bindings should call
  * _sized explicitly. Set/get accept 32-byte records with default effect values,
- * or 64-byte records including all effects. */
+ * 64-byte records including effects, or 68-byte records including the HDR request. */
 int32_t mt_display_settings_default(mt_display_settings *output);
 int32_t mt_display_settings_default_sized(mt_display_settings *output, uint32_t size);
 #define mt_display_settings_default(output) mt_display_settings_default_sized((output), (uint32_t)sizeof(*(output)))

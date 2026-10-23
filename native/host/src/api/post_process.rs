@@ -22,7 +22,8 @@ pub struct PostProcessContext<'a> {
     pub device: &'a wgpu::Device,
     /// Record commands here; the library finishes and submits this encoder.
     pub encoder: &'a mut wgpu::CommandEncoder,
-    /// Composed straight-alpha RGBA8Unorm; no additional color conversion.
+    /// Straight-alpha RGBA8Unorm for SDR registrations; linear RGBA16Float
+    /// for add_hdr_post_process. Check input.format() when sharing pass code.
     pub input: &'a wgpu::Texture,
     /// Fully write this image. Same format/size as input; storage, render and copy writes supported.
     pub output: &'a wgpu::Texture,
@@ -49,9 +50,10 @@ impl PostProcessSubscription {
             let engine = Engine { inner };
             let mut state = engine.lock();
             let display = &mut state.display;
-            let count = display.passes.len();
+            let count = display.passes.len() + display.hdr_passes.len();
             display.passes.retain(|(id, _)| *id != self.id);
-            if display.passes.len() != count {
+            display.hdr_passes.retain(|(id, _)| *id != self.id);
+            if display.passes.len() + display.hdr_passes.len() != count {
                 display.pass_revision += 1;
             }
         }
@@ -67,6 +69,7 @@ pub(super) struct OutputState {
     pub(super) epoch: u64,
     pub(super) latest: Option<(DisplaySettings, Option<wgpu::Texture>)>,
     targets: Option<[wgpu::Texture; 2]>,
+    hdr_targets: Option<[wgpu::Texture; 2]>,
 }
 impl OutputState {
     pub(super) fn invalidate(&mut self) {
@@ -112,7 +115,37 @@ impl Display {
             id,
         })
     }
+    /// Registers a separate HDR-window pass. Input/output are straight-alpha
+    /// linear scRGB RGBA16Float, including values above 1. Runs only for active
+    /// HDR window presentation, after HDR composition and before scaling.
+    /// Failure/reentry/removal follow add_post_process. SDR export and SDR passes
+    /// remain independent. Keep the subscription until removal.
+    pub fn add_hdr_post_process(
+        &self,
+        pass: impl FnMut(PostProcessContext<'_>) -> Result<()> + Send + 'static,
+    ) -> Result<PostProcessSubscription> {
+        let mut state = self.engine.live()?;
+        let display = &mut state.display;
+        let id = display.next_pass;
+        display.next_pass += 1;
+        display
+            .hdr_passes
+            .push((id, Arc::new(Mutex::new(Box::new(pass)))));
+        display.pass_revision += 1;
+        Ok(PostProcessSubscription {
+            inner: Arc::downgrade(&self.engine.inner),
+            id,
+        })
+    }
     pub(super) fn compose(&self, render: &Render, fallback: bool) -> Result<Option<Composed>> {
+        self.compose_mode(render, fallback, false)
+    }
+    pub(super) fn compose_mode(
+        &self,
+        render: &Render,
+        fallback: bool,
+        hdr: bool,
+    ) -> Result<Option<Composed>> {
         self.check(render)?;
         let mut state = self.engine.live()?;
         if state.display.processing {
@@ -143,35 +176,46 @@ impl Display {
             id
         };
         let settings = state.display.settings;
-        let passes = state.display.passes.clone();
+        let passes = if hdr {
+            state.display.hdr_passes.clone()
+        } else {
+            state.display.passes.clone()
+        };
         let pass_revision = state.display.pass_revision;
         let r = state.renders.get_mut(&selected).unwrap();
         let samples = r.presented_samples();
         let capture = r.capture.as_mut().unwrap();
         let size = capture.size;
-        let original = if passes.is_empty() {
+        let original = if hdr {
+            capture.compose_hdr(&settings.composition())
+        } else if passes.is_empty() {
             capture.compose_with(&settings.composition());
             capture.texture.clone()
         } else {
             capture.compose_straight(&settings.composition())
         };
+        let format = if hdr {
+            wgpu::TextureFormat::Rgba16Float
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        };
+        let target_cache = if hdr {
+            &mut r.output.hdr_targets
+        } else {
+            &mut r.output.targets
+        };
         let targets = if passes.is_empty() {
             None
         } else {
-            if r.output
-                .targets
+            if target_cache
                 .as_ref()
                 .is_none_or(|t| [t[0].width(), t[0].height()] != size)
             {
-                r.output.targets = Some(std::array::from_fn(|_| {
-                    crate::display::image(
-                        &self.engine.inner.gpu.device,
-                        size,
-                        wgpu::TextureFormat::Rgba8Unorm,
-                    )
+                *target_cache = Some(std::array::from_fn(|_| {
+                    crate::display::image(&self.engine.inner.gpu.device, size, format)
                 }));
             }
-            r.output.targets.clone()
+            target_cache.clone()
         };
         let epoch = r.output.epoch;
         state.display.processing = true;
@@ -229,15 +273,17 @@ impl Display {
             .renders
             .get_mut(&selected)
             .ok_or_else(|| error(Status::InvalidHandle, "Render is disposed"))?;
-        let premultiplied = passes.is_empty() || failure.is_some();
-        if failure.is_some() {
+        let premultiplied = !hdr && (passes.is_empty() || failure.is_some());
+        if failure.is_some() && !hdr {
             // Keep native presentation bit-identical to the unfiltered path,
             // including premultiplication before RGBA8 quantization.
             let capture = r.capture.as_mut().unwrap();
             capture.compose_with(&settings.composition());
             image = capture.texture.clone();
         }
-        r.output.latest = Some((settings, (!premultiplied).then(|| image.clone())));
+        if !hdr {
+            r.output.latest = Some((settings, (!premultiplied).then(|| image.clone())));
+        }
         if let Some(message) = failure {
             state.report(format!("Display post-process: {message}"));
         }

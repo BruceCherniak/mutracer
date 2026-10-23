@@ -54,6 +54,9 @@ pub struct DisplaySettings {
     pub shadow_catcher_color: [f32; 3],
     /// Shadow-catcher opacity in 0..1. Default 1.
     pub shadow_catcher_alpha: f32,
+    /// Request extended-range window presentation. Default false. Unsupported
+    /// surfaces fall back to SDR; pixel/PNG export remains SDR.
+    pub hdr_output_enabled: bool,
 }
 impl Default for DisplaySettings {
     fn default() -> Self {
@@ -71,6 +74,7 @@ impl Default for DisplaySettings {
             bloom_radius: 0.6,
             shadow_catcher_color: [0.; 3],
             shadow_catcher_alpha: 1.,
+            hdr_output_enabled: false,
         }
     }
 }
@@ -186,7 +190,10 @@ pub(super) struct DisplayState {
     texture: Option<wgpu::Texture>,
     pub(super) surface: Option<super::surface::SurfaceTarget>,
     blit: Option<Blit>,
+    pub(super) hdr_texture: Option<wgpu::Texture>,
+    hdr_blit: Option<Blit>,
     pub(super) passes: Vec<super::post_process::Entry>,
+    pub(super) hdr_passes: Vec<super::post_process::Entry>,
     pub(super) next_pass: u64,
     pub(super) pass_revision: u64,
     presented_pass_revision: u64,
@@ -201,7 +208,10 @@ impl Default for DisplayState {
             texture: None,
             surface: None,
             blit: None,
+            hdr_texture: None,
+            hdr_blit: None,
             passes: Vec::new(),
+            hdr_passes: Vec::new(),
             next_pass: 1,
             pass_revision: 0,
             presented_pass_revision: 0,
@@ -288,7 +298,22 @@ impl Display {
     }
     pub fn set_settings(&self, settings: DisplaySettings) -> Result<()> {
         settings.validate()?;
-        self.engine.live()?.display.settings = settings;
+        let mut state = self.engine.live()?;
+        if state.display.processing
+            && settings.hdr_output_enabled != state.display.settings.hdr_output_enabled
+        {
+            return Err(error(
+                Status::InvalidState,
+                "Cannot switch HDR mode during a display pass",
+            ));
+        }
+        if let Some(surface) = &mut state.display.surface {
+            surface.set_hdr(settings.hdr_output_enabled, &self.engine.inner.gpu)?;
+        }
+        if !settings.hdr_output_enabled {
+            state.display.hdr_texture = None;
+        }
+        state.display.settings = settings;
         Ok(())
     }
     /// The presentation texture: display-sized premultiplied RGBA8 (sRGB-encoded
@@ -302,6 +327,25 @@ impl Display {
             None
         } else {
             state.display.texture.clone()
+        }
+    }
+    /// Latest window HDR image: display-sized, premultiplied linear scRGB
+    /// RGBA16Float. None until an HDR presentation, or after HDR is disabled,
+    /// detach, device loss or disposal. Borrow only until the next present/resize;
+    /// do not write, destroy or retain the image. Values above 1 are preserved.
+    pub fn hdr_texture(&self) -> Option<wgpu::Texture> {
+        let state = self.engine.lock();
+        if state.device_failed
+            || state.disposed
+            || !state
+                .display
+                .surface
+                .as_ref()
+                .is_some_and(|s| s.hdr_active())
+        {
+            None
+        } else {
+            state.display.hdr_texture.clone()
         }
     }
     /// Composes and shows the render's complete image, or its fallback's. Smaller
@@ -318,6 +362,19 @@ impl Display {
     fn present_inner(&self, render: &Render) -> Result<Option<Presented>> {
         let Some(composed) = self.compose(render, true)? else {
             return Ok(None);
+        };
+        let hdr_active = self
+            .engine
+            .live()?
+            .display
+            .surface
+            .as_ref()
+            .is_some_and(|s| s.hdr_active());
+        let hdr_composed = if hdr_active {
+            let selected = Render::view(&self.engine, composed.id);
+            self.compose_mode(&selected, false, true)?
+        } else {
+            None
         };
         let mut state = self.engine.live()?;
         let state = &mut *state;
@@ -428,8 +485,88 @@ impl Display {
         }
         gpu.queue.submit([encoder.finish()]);
         state.display.presented_pass_revision = composed.pass_revision;
-        if let Some(surface) = &mut state.display.surface {
-            surface.present(gpu, target)?;
+        if let Some(hdr) = hdr_composed {
+            if state
+                .display
+                .hdr_texture
+                .as_ref()
+                .is_none_or(|t| [t.width(), t.height()] != size)
+            {
+                state.display.hdr_texture = Some(crate::display::image(
+                    &gpu.device,
+                    size,
+                    wgpu::TextureFormat::Rgba16Float,
+                ));
+            }
+            let blit = state.display.hdr_blit.get_or_insert_with(|| {
+                let shader = gpu
+                    .device
+                    .create_shader_module(wgpu::ShaderModuleDescriptor {
+                        label: Some("HDR alpha-aware scale"),
+                        source: wgpu::ShaderSource::Wgsl(
+                            BLIT.replace("rgba8unorm", "rgba16float").into(),
+                        ),
+                    });
+                let pipeline =
+                    gpu.device
+                        .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                            label: Some("HDR scale"),
+                            layout: None,
+                            module: &shader,
+                            entry_point: Some("main"),
+                            compilation_options: wgpu::PipelineCompilationOptions {
+                                constants: &[("premultiply", 1.)],
+                                ..Default::default()
+                            },
+                            cache: None,
+                        });
+                Blit {
+                    straight: pipeline.clone(),
+                    pipeline,
+                    sampler: gpu.device.create_sampler(&wgpu::SamplerDescriptor {
+                        mag_filter: wgpu::FilterMode::Linear,
+                        min_filter: wgpu::FilterMode::Linear,
+                        ..Default::default()
+                    }),
+                }
+            });
+            let target = state.display.hdr_texture.as_ref().unwrap();
+            let input = hdr.texture.create_view(&Default::default());
+            let output = target.create_view(&Default::default());
+            let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &blit.pipeline.get_bind_group_layout(0),
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&input),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&blit.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&output),
+                    },
+                ],
+            });
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(&blit.pipeline);
+                pass.set_bind_group(0, &group, &[]);
+                pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
+            }
+            gpu.queue.submit([encoder.finish()]);
+            if let Some(surface) = &mut state.display.surface {
+                surface.present(gpu, target)?;
+            }
+        } else {
+            state.display.hdr_texture = None;
+            if let Some(surface) = &mut state.display.surface {
+                surface.present(gpu, target)?;
+            }
         }
         Ok(Some(composed.presented))
     }
