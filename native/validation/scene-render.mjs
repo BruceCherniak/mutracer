@@ -15,7 +15,9 @@ const samples = Number(process.env.MUTRACER_NATIVE_SAMPLES ?? '256');
 if (!Number.isInteger(samples) || samples < 1 || samples > 4096)
     throw new Error('Samples must be 1..4096');
 mkdirSync(out, { recursive: true });
-const env = { ...nativeToolchainEnv(), MUTRACER_NATIVE_OUTPUT: out, CARGO_TARGET_DIR: target, MUTRACER_AOT_ARCHIVE: resolve(out, archiveName('render-core')) };
+// native:ci passes the archive it already built; the Cargo build script keys on its path.
+const prebuilt = process.env.MUTRACER_AOT_PREBUILT;
+const env = { ...nativeToolchainEnv(), MUTRACER_NATIVE_OUTPUT: out, CARGO_TARGET_DIR: target, MUTRACER_AOT_ARCHIVE: resolve(prebuilt ?? resolve(out, archiveName('render-core'))) };
 if(windows)env.PATH=resolve(target,'release')+delimiter+env.PATH;
 const checks = [];
 function run(name, command, args, check = true) {
@@ -43,7 +45,8 @@ const composedDiagnostics = JSON.parse(composed.stdout);
 writeFileSync(resolve(out, 'render-core-coverage.json'), JSON.stringify(composedDiagnostics, null, 2));
 if (!summarizeCoverage(composedDiagnostics, composed.status).passed)
     throw new Error('Full AOT entry graph has compiler diagnostics');
-run('aot-build', compiler, ['build', '--lib', '--profile', 'native/src/render-core-profile.json', '-o', env.MUTRACER_AOT_ARCHIVE]);
+if (!prebuilt)
+    run('aot-build', compiler, ['build', '--lib', '--profile', 'native/src/render-core-profile.json', '-o', env.MUTRACER_AOT_ARCHIVE]);
 await prepareTinyBvh();
 run('native-build', 'cargo', ['build', '--release', '--locked', '--manifest-path', 'native/host/Cargo.toml']);
 const sceneHost=resolve(out,executable('scene-host')), minimalHost=resolve(out,executable('minimal-host'));
