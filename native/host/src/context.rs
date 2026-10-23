@@ -481,17 +481,7 @@ pub fn create_on_device_with_gate(
     if backend > 1 {
         return Err("Unknown native intersection backend".into());
     }
-    let gpu = GpuDevice {
-        loss: Default::default(),
-        device: device.clone(),
-        queue: GpuQueue::new(queue.clone(), gate),
-        info: adapter.get_info(),
-        hardware_ray_query: device
-            .features()
-            .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY),
-        pipelines: Arc::new(Mutex::new(HashMap::new())),
-        pipeline_cache: None,
-    };
+    let gpu = GpuDevice::on_device(adapter, device, queue, gate);
     create_with_gpu(gpu, backend)
 }
 /// A context whose scene renders only through linked targets: full preparation

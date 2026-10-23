@@ -330,17 +330,7 @@ impl Engine {
         options: EngineOptions,
         gate: Option<Arc<crate::submission::SubmissionGate>>,
     ) -> Self {
-        let gpu = GpuDevice {
-            loss: Default::default(),
-            device: device.clone(),
-            queue: crate::GpuQueue::new(queue.clone(), gate),
-            info: adapter.get_info(),
-            hardware_ray_query: device
-                .features()
-                .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY),
-            pipelines: Arc::new(Mutex::new(Default::default())),
-            pipeline_cache: None,
-        };
+        let gpu = GpuDevice::on_device(adapter, device, queue, gate);
         Self::with_gpu(gpu, options, Some(adapter.clone()))
     }
     fn with_gpu(

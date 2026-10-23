@@ -432,7 +432,7 @@ struct Flight {
     job: u64,
     count: u32,
     started: Instant,
-    /// Abandoned by a commit or restart; its samples are never counted.
+    /// Cancellation requested; publication may have expired the L0 job.
     cancelled: bool,
     /// Resolution scale the batch was traced at.
     scale: f64,
@@ -948,13 +948,9 @@ fn target_step(
         return Ok(Step::Failed);
     }
     render.error = false;
-    // An active L0 job blocks setting the target; its samples are never counted.
-    if let Some(flight) = render.job.as_mut() {
-        flight.cancelled = true;
-        let job = flight.job;
-        let _ = l0_blocking(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
-        drain(render)?;
-    }
+    // Retain completed samples until publication succeeds. A rejected target
+    // leaves the old accumulation (including a finished cancelled batch) valid.
+    let retained_events = cancel_batch(render)?;
     let mut message = [0 as std::ffi::c_char; 1024];
     let code = context::set_target(
         render.context,
@@ -966,7 +962,13 @@ fn target_step(
         &camera,
         &mut message,
     );
-    match l0_result(code, &message) {
+    let result = l0_result(code, &message);
+    if result.is_err() {
+        state
+            .sample_events
+            .extend(retained_events.into_iter().map(|event| (id, event)));
+    }
+    match result {
         Ok(()) => {
             let full = render.generation != generation
                 || render.published.as_ref().is_none_or(|k| k.size != key.size);
@@ -1020,7 +1022,7 @@ fn commit_step(
 enum Poll {
     Idle,
     Running,
-    /// Completed samples of an uncancelled batch.
+    /// Total retained samples, elapsed batch time and resolution scale.
     Completed(u32, f64, f64),
 }
 /// Observes the in-flight batch without waiting for the GPU.
@@ -1062,11 +1064,12 @@ fn poll_job(render: &mut RenderState) -> Result<Poll> {
     match info.state {
         2 | 3 => {
             let flight = render.job.take().unwrap();
-            if flight.cancelled || info.state == 3 {
+            let samples = info.base_samples + info.completed_samples;
+            if samples <= render.samples {
                 return Ok(Poll::Idle);
             }
             Ok(Poll::Completed(
-                info.completed_samples,
+                samples,
                 flight.started.elapsed().as_secs_f64() * 1e3,
                 flight.scale,
             ))
@@ -1077,6 +1080,18 @@ fn poll_job(render: &mut RenderState) -> Result<Poll> {
         }
         _ => Ok(Poll::Running),
     }
+}
+/// Cancels further dispatch and retains any samples L0 already submitted.
+fn cancel_batch(render: &mut RenderState) -> Result<Vec<SampleEvent>> {
+    if let Some(flight) = render.job.as_mut() {
+        flight.cancelled = true;
+        let job = flight.job;
+        match l0_blocking(|e, n| unsafe { context::mt_job_cancel(job, e, n) }) {
+            Err(e) if e.status != Status::InvalidHandle => return Err(e),
+            _ => {}
+        }
+    }
+    drain(render)
 }
 /// Waits for the in-flight batch, if any.
 fn drain(render: &mut RenderState) -> Result<Vec<SampleEvent>> {
@@ -1098,9 +1113,10 @@ fn drain(render: &mut RenderState) -> Result<Vec<SampleEvent>> {
 /// Polls the batch and accounts completed samples.
 fn observe(render: &mut RenderState) -> Result<Option<SampleEvent>> {
     match poll_job(render)? {
-        Poll::Completed(count, elapsed, scale) => {
+        Poll::Completed(samples, elapsed, scale) => {
+            let count = samples - render.samples;
             render.adaptive.frame = Some((elapsed, scale));
-            render.samples += count;
+            render.samples = samples;
             render.sample_ms = Some(elapsed / count.max(1) as f64);
             render.needs_capture = true;
             let event = SampleEvent {
@@ -1544,9 +1560,10 @@ impl Render {
             Ok(())
         })
     }
-    /// Advances this render within its frame budget without waiting for the GPU:
-    /// collects the finished batch, submits the next one and starts denoising when
-    /// converged. Render failures return `Ok(RenderStatus::Error)` and an engine error event;
+    /// Collects a finished batch without waiting for it, submits the next one and
+    /// starts due denoising. Preparation, shader compilation, target changes and
+    /// denoising input readback may block; the frame budget is not a hard deadline.
+    /// Render failures return `Ok(RenderStatus::Error)` and an engine error event;
     /// terminal device loss returns `Err(Status::Unavailable)`.
     pub fn refine(&self) -> Result<RenderStatus> {
         self.engine.poll_device();
@@ -1609,18 +1626,21 @@ impl Render {
                 Ok(_) => render.status = RenderStatus::Finished,
                 Err(_) => {
                     render.status = RenderStatus::Error;
-                    // A batch submitted before the failure must not count later.
+                    // Stop further dispatch and collect retained samples now.
                     if let Some(flight) = render.job.as_mut() {
                         flight.cancelled = true;
                         let job = flight.job;
                         let _ = l0_blocking(|e, n| unsafe { context::mt_job_cancel(job, e, n) });
-                        drain(render)?;
+                        for event in drain(render)? {
+                            state.sample_events.push((id, event));
+                        }
                     }
                     // L0 keeps a cancelled batch that had already finished; the
                     // partial accumulation stays valid for the same key.
                     if render.published.is_some() {
                         render.samples = context_info(render.context)?.samples;
                         render.needs_capture = render.samples > 0;
+                        capture(render)?;
                     }
                 }
             }
@@ -1660,9 +1680,15 @@ impl Render {
             if let Some(flight) = render.job.as_mut() {
                 flight.cancelled = true;
             }
-            drain(render)?;
+            let retained_events = drain(render)?;
             let was_published = render.published.as_ref() == Some(&key);
-            if !commit(state, id, key.clone(), true)? {
+            let committed = commit(state, id, key.clone(), true);
+            if !matches!(&committed, Ok(true)) {
+                state
+                    .sample_events
+                    .extend(retained_events.into_iter().map(|event| (id, event)));
+            }
+            if !committed? {
                 let render = &state.renders[&id];
                 let message = render.failed.as_ref().map(|f| f.1.clone());
                 return Err(error(
@@ -2057,6 +2083,15 @@ fn refine(state: &mut State, id: u64) -> Result<RenderStatus> {
         }
     }
     if !ready {
+        // A failed commit preserves the previous accumulation. Keep its completed
+        // batch, capture and sample events in sync even while the new inputs fail.
+        if state.renders[&id].error {
+            let render = state.renders.get_mut(&id).unwrap();
+            for event in cancel_batch(render)? {
+                state.sample_events.push((id, event));
+            }
+            capture(render)?;
+        }
         let render = &state.renders[&id];
         return Ok(if render.error {
             RenderStatus::Error
@@ -2097,4 +2132,199 @@ fn refine_one(state: &mut State, id: u64) -> Result<()> {
         state.renders.get_mut(&id).unwrap().adapt_resolution();
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    use crate::api::{Backend, PixelKind, tests::*};
+
+    /// Queue without dispatch, or finish exactly `dispatched` L0 samples without
+    /// observing them in L1. No timing race decides which samples survive cancel.
+    fn batch(render: &Render, dispatched: u32) {
+        render
+            .with(|state, id| {
+                let r = state.renders.get_mut(&id).unwrap();
+                let mut job = 0;
+                l0_blocking(|e, n| unsafe {
+                    context::mt_context_submit(r.context, 4, &mut job, e, n)
+                })?;
+                r.job = Some(Flight {
+                    job,
+                    count: 4,
+                    started: Instant::now(),
+                    cancelled: false,
+                    scale: 1.,
+                });
+                if dispatched > 0 {
+                    l0_blocking(|e, n| unsafe { context::mt_job_poll(job, dispatched, e, n) })?;
+                    state
+                        .gpu
+                        .device
+                        .poll(wgpu::PollType::wait_indefinitely())
+                        .unwrap();
+                }
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn rejected_targets_retain_only_completed_cancelled_samples() {
+        let _test = crate::ABI_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some(engine) = software_engine(Backend::Software) else {
+            return;
+        };
+        engine.display().set_size(16, 12).unwrap();
+        engine.set_scene(&lit_scene()).unwrap();
+        engine.update().unwrap();
+        for dispatched in [0, 1, 4] {
+            let settings = RenderSettings {
+                max_samples: 1,
+                ..Default::default()
+            };
+            let render = Render::new(&engine, settings.clone()).unwrap();
+            render.converge(ConvergeOptions::new(1)).unwrap();
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let observed = events.clone();
+            let _subscription =
+                render.on_sample(move |event| observed.lock().unwrap().push(event.clone()));
+            batch(&render, dispatched);
+            render
+                .set_settings(RenderSettings {
+                    size: RenderSize::Fixed {
+                        width: 5000,
+                        height: 4,
+                    },
+                    ..settings.clone()
+                })
+                .unwrap();
+            assert_eq!(render.refine().unwrap(), RenderStatus::Error);
+            let retained = 1 + dispatched;
+            assert_eq!(render.samples(), retained);
+            assert_eq!(
+                context_info(engine.lock().renders[&render.id()].context)
+                    .unwrap()
+                    .samples,
+                retained
+            );
+            let image = render.read_pixels(PixelKind::Hdr).unwrap();
+            assert_eq!([image.width, image.height], [16, 12]);
+            let presented = engine.display().present(&render).unwrap().unwrap();
+            assert_eq!(presented.samples, retained);
+            assert!(!presented.fallback);
+            assert_eq!(render.refine().unwrap(), RenderStatus::Error);
+            let observed = events.lock().unwrap();
+            assert_eq!(observed.len(), usize::from(dispatched > 0));
+            if dispatched > 0 {
+                assert_eq!(observed[0].samples, retained);
+                assert!(!observed[0].is_first_frame);
+            }
+            drop(observed);
+            // A successful new target resets the old cancelled batch exactly once.
+            batch(&render, 4);
+            let previous_events = events.lock().unwrap().len();
+            render
+                .set_settings(RenderSettings {
+                    seed: 7,
+                    ..settings
+                })
+                .unwrap();
+            engine.update().unwrap();
+            assert_eq!(render.samples(), 0);
+            assert_eq!(events.lock().unwrap().len(), previous_events);
+            assert_eq!(
+                context_info(engine.lock().renders[&render.id()].context)
+                    .unwrap()
+                    .samples,
+                0
+            );
+            render.converge(ConvergeOptions::new(1)).unwrap();
+            assert_eq!(render.samples(), 1);
+            assert_eq!(events.lock().unwrap().last().unwrap().samples, 1);
+            assert!(events.lock().unwrap().last().unwrap().is_first_frame);
+        }
+    }
+    #[test]
+    fn rejected_scenes_keep_previous_batch_capture_and_events() {
+        let _test = crate::ABI_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some(engine) = software_engine(Backend::Software) else {
+            return;
+        };
+        engine.display().set_size(16, 12).unwrap();
+        let scene = lit_scene();
+        for dispatched in [0, 1, 4] {
+            engine.set_scene(&scene).unwrap();
+            engine.update().unwrap();
+            let render = Render::new(&engine, RenderSettings::default()).unwrap();
+            render.converge(ConvergeOptions::new(1)).unwrap();
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let observed = events.clone();
+            let _subscription =
+                render.on_sample(move |event| observed.lock().unwrap().push(event.clone()));
+            batch(&render, dispatched);
+            let mut broken = scene.clone();
+            broken[44 * 4..45 * 4].copy_from_slice(&9u32.to_le_bytes());
+            engine.set_scene(&broken).unwrap();
+            engine.update().unwrap();
+            assert_eq!(finish(&render), RenderStatus::Error);
+            // Public samples are zero for stale inputs, but the readable previous
+            // image and its capture still describe the retained accumulation.
+            assert_eq!(render.samples(), 0);
+            let state = engine.lock();
+            let r = &state.renders[&render.id()];
+            assert_eq!(r.samples, 1 + dispatched);
+            assert_eq!(r.captured, r.samples);
+            assert_eq!(context_info(r.context).unwrap().samples, r.samples);
+            drop(state);
+            assert_eq!(
+                render.read_pixels(PixelKind::Hdr).unwrap().data.len(),
+                16 * 12 * 4
+            );
+            assert_eq!(render.refine().unwrap(), RenderStatus::Error);
+            assert_eq!(events.lock().unwrap().len(), usize::from(dispatched > 0));
+        }
+    }
+
+    #[test]
+    fn converge_target_failure_captures_retained_samples_once() {
+        let _test = crate::ABI_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some(engine) = software_engine(Backend::Software) else {
+            return;
+        };
+        engine.display().set_size(16, 12).unwrap();
+        engine.set_scene(&lit_scene()).unwrap();
+        engine.update().unwrap();
+        let render = Render::new(&engine, RenderSettings::default()).unwrap();
+        render.converge(ConvergeOptions::new(1)).unwrap();
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let observed = events.clone();
+        let _subscription =
+            render.on_sample(move |event| observed.lock().unwrap().push(event.samples));
+        batch(&render, 4);
+        render
+            .set_settings(RenderSettings {
+                size: RenderSize::Fixed {
+                    width: 5000,
+                    height: 4,
+                },
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(render.converge(ConvergeOptions::new(8)).is_err());
+        assert_eq!(render.samples(), 5);
+        assert_eq!(
+            engine.display().present(&render).unwrap().unwrap().samples,
+            5
+        );
+        assert_eq!(*events.lock().unwrap(), vec![5]);
+        assert_eq!(render.refine().unwrap(), RenderStatus::Error);
+        assert_eq!(*events.lock().unwrap(), vec![5]);
+    }
 }

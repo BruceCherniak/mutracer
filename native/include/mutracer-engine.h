@@ -281,8 +281,9 @@ int32_t mt_render_denoiser_default(mt_render_denoiser *output);
 /* Replaces the denoiser; NULL disables denoising. Default none. */
 int32_t mt_render_set_denoiser(mt_render render, const mt_render_denoiser *denoiser, char *error, size_t capacity);
 
-/* Advances the render within its frame budget without waiting for the GPU:
- * collects the finished batch, submits the next one and starts a due filter.
+/* Collects a finished batch without waiting for it, submits the next one and
+ * starts a due filter. Preparation, shader compilation, target changes and
+ * denoising input readback may block; the frame budget is not a hard deadline.
  * status (optional) receives mt_render_status. A render failure returns MT_OK
  * with MT_RENDER_ERROR and an error event. */
 int32_t mt_render_refine(mt_render render, uint32_t *status, char *error, size_t capacity);

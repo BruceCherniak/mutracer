@@ -293,6 +293,25 @@ struct GpuDevice {
     pipeline_cache: Option<wgpu::PipelineCache>,
 }
 impl GpuDevice {
+    /// Wraps a host-owned device without replacing its device-loss callback.
+    fn on_device(
+        adapter: &wgpu::Adapter,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        gate: Option<Arc<submission::SubmissionGate>>,
+    ) -> Self {
+        Self {
+            loss: Default::default(),
+            device: device.clone(),
+            queue: GpuQueue::new(queue.clone(), gate),
+            info: adapter.get_info(),
+            hardware_ray_query: device
+                .features()
+                .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY),
+            pipelines: Arc::new(Mutex::new(HashMap::new())),
+            pipeline_cache: None,
+        }
+    }
     fn new(use_hwrt: bool) -> Result<Self> {
         Self::with_backend(if use_hwrt { 1 } else { 0 })
     }

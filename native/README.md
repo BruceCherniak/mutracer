@@ -1,8 +1,8 @@
 # Experimental native renderer
 
-MuTracer's experimental C interface accepts raw scene data and renders through
-native machine code and wgpu, without a JavaScript engine or Node at runtime.
-It supports part of MuTracer and has an unstable ABI.
+MuTracer's Rust/C SDK and native viewer are experimental, with unstable APIs and
+ABI. They support a subset of MuTracer's features and do not require a JavaScript
+engine or Node at runtime.
 
 ## Platforms
 
