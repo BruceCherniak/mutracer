@@ -286,6 +286,8 @@ pub struct MtRenderOptions {
     time_budget_ms: f64,
     adaptive_target_frame_ms: f64,
     adaptive_min_scale: f64,
+    alpha_blend_strategy: u32,
+    reserved_tail: u32,
 }
 #[repr(C)]
 pub struct MtRenderDenoiser {
@@ -395,10 +397,13 @@ fn render_options(settings: &RenderSettings) -> MtRenderOptions {
             .adaptive_resolution
             .map_or(0., |a| a.target_frame_ms),
         adaptive_min_scale: settings.adaptive_resolution.map_or(0., |a| a.min_scale),
+        alpha_blend_strategy: settings.alpha_blend_strategy as u32,
+        reserved_tail: 0,
     }
 }
 fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
     if options.reserved != [0; 2]
+        || options.reserved_tail != 0
         || options.bevel > 1
         || options.allow_multiple_samples_per_frame > 1
     {
@@ -419,6 +424,11 @@ fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
             2 => SamplingPattern::Random,
             _ => return Err(invalid("Unknown sampling pattern")),
         },
+        alpha_blend_strategy: match options.alpha_blend_strategy {
+            0 => AlphaBlendStrategy::Stochastic,
+            1 => AlphaBlendStrategy::DeterministicSourceOver,
+            _ => return Err(invalid("Unknown alpha blend strategy")),
+        },
         direct_light_candidates: options.direct_light_candidates,
         bevel: options.bevel != 0,
         bevel_samples: options.bevel_samples,
@@ -437,6 +447,48 @@ fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
     };
     settings.validate()?;
     Ok(settings)
+}
+// The unsized default symbol must keep writing only the original 104 bytes.
+fn render_record_size(size: u32) -> Result<usize> {
+    match size {
+        104 => Ok(104),
+        112.. => Ok(112),
+        _ => Err(invalid("Unsupported render struct_size")),
+    }
+}
+unsafe fn read_render_record(pointer: *const MtRenderOptions) -> Result<MtRenderOptions> {
+    if pointer.is_null() {
+        return Err(invalid("Null record"));
+    }
+    let size = render_record_size(unsafe { pointer.cast::<u32>().read() })?;
+    let mut value = render_options(&RenderSettings::default());
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            pointer.cast::<u8>(),
+            (&mut value as *mut MtRenderOptions).cast::<u8>(),
+            size,
+        );
+    }
+    Ok(value)
+}
+unsafe fn init_render_record(
+    pointer: *mut MtRenderOptions,
+    mut value: MtRenderOptions,
+    size: u32,
+) -> Result<()> {
+    if pointer.is_null() {
+        return Err(invalid("Null record"));
+    }
+    let size = render_record_size(size)?;
+    value.struct_size = size as u32;
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            (&value as *const MtRenderOptions).cast::<u8>(),
+            pointer.cast::<u8>(),
+            size,
+        );
+    }
+    Ok(())
 }
 fn display_record(settings: &DisplaySettings) -> MtDisplaySettings {
     MtDisplaySettings {
@@ -1004,11 +1056,17 @@ pub unsafe extern "C" fn mt_display_read_pixels(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_render_options_default(output: *mut MtRenderOptions) -> i32 {
-    if output.is_null() {
-        return Status::InvalidArgument as i32;
+    unsafe { mt_render_options_default_sized(output, 104) }
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_render_options_default_sized(
+    output: *mut MtRenderOptions,
+    size: u32,
+) -> i32 {
+    match unsafe { init_render_record(output, render_options(&RenderSettings::default()), size) } {
+        Ok(()) => 0,
+        Err(e) => e.status as i32,
     }
-    unsafe { output.write(render_options(&RenderSettings::default())) };
-    0
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_render_create(
@@ -1019,7 +1077,7 @@ pub unsafe extern "C" fn mt_render_create(
     capacity: usize,
 ) -> i32 {
     call(error_out, capacity, || {
-        let settings = render_settings(unsafe { record(options)? })?;
+        let settings = render_settings(&unsafe { read_render_record(options)? })?;
         if output.is_null() {
             return Err(invalid("Null output"));
         }
@@ -1056,7 +1114,7 @@ pub unsafe extern "C" fn mt_render_set_options(
     capacity: usize,
 ) -> i32 {
     call(error_out, capacity, || {
-        let settings = render_settings(unsafe { record(options)? })?;
+        let settings = render_settings(&unsafe { read_render_record(options)? })?;
         render_of(handle)?.set_settings(settings)
     })
 }
@@ -1069,7 +1127,16 @@ pub unsafe extern "C" fn mt_render_get_options(
 ) -> i32 {
     call(error_out, capacity, || {
         let settings = render_of(handle)?.settings()?;
-        unsafe { write_record(output, render_options(&settings)) }
+        if output.is_null() {
+            return Err(invalid("Null output"));
+        }
+        unsafe {
+            init_render_record(
+                output,
+                render_options(&settings),
+                output.cast::<u32>().read(),
+            )
+        }
     })
 }
 #[unsafe(no_mangle)]
@@ -1410,7 +1477,7 @@ pub unsafe extern "C" fn mt_render_loop_create(
             Ok(if pointer.is_null() {
                 LoopRender::Default
             } else {
-                LoopRender::Settings(render_settings(unsafe { record(pointer)? })?)
+                LoopRender::Settings(render_settings(&unsafe { read_render_record(pointer)? })?)
             })
         };
         let select = options.select.map(|select| {
@@ -1934,9 +2001,11 @@ mod tests {
         assert_eq!(offset_of!(MtDisplaySettings, tone_mapping_exposure), 12);
         assert_eq!(offset_of!(MtDisplaySettings, tint), 28);
         assert_eq!(size_of::<MtPresented>(), 20);
-        assert_eq!(size_of::<MtRenderOptions>(), 104);
+        assert_eq!(size_of::<MtRenderOptions>(), 112);
         assert_eq!(offset_of!(MtRenderOptions, adaptive_target_frame_ms), 88);
         assert_eq!(offset_of!(MtRenderOptions, adaptive_min_scale), 96);
+        assert_eq!(offset_of!(MtRenderOptions, alpha_blend_strategy), 104);
+        assert_eq!(offset_of!(MtRenderOptions, reserved_tail), 108);
         assert_eq!(offset_of!(MtRenderOptions, seed), 44);
         assert_eq!(offset_of!(MtRenderOptions, reserved), 48);
         assert_eq!(offset_of!(MtRenderOptions, resolution_scale), 56);
@@ -1973,7 +2042,7 @@ mod tests {
             "mt_engine_snapshot, 268",
             "mt_display_settings, 68",
             "mt_presented, 20",
-            "mt_render_options, 104",
+            "mt_render_options, 112",
             "mt_render_snapshot, 364",
             "mt_render_loop_snapshot, 48",
         ] {
@@ -1981,6 +2050,57 @@ mod tests {
                 header.contains(&format!("MT_ENGINE_LAYOUT({name})")),
                 "{name}"
             );
+        }
+    }
+    #[test]
+    fn render_options_legacy_capacity_and_appended_alpha_are_compatible() {
+        let mut old = [0xdeadbeefu64; 15];
+        assert_eq!(
+            unsafe { mt_render_options_default(old.as_mut_ptr().cast()) },
+            0
+        );
+        assert_eq!(old[0] as u32, 104);
+        assert_eq!(old[13..], [0xdeadbeef; 2]);
+        let record = unsafe { read_render_record(old.as_ptr().cast()) }.unwrap();
+        assert_eq!(render_settings(&record).unwrap(), RenderSettings::default());
+        let settings = RenderSettings {
+            alpha_blend_strategy: AlphaBlendStrategy::DeterministicSourceOver,
+            ..Default::default()
+        };
+        unsafe { init_render_record(old.as_mut_ptr().cast(), render_options(&settings), 104) }
+            .unwrap();
+        assert_eq!(old[13..], [0xdeadbeef; 2]);
+        assert_eq!(
+            unsafe { read_render_record(old.as_ptr().cast()) }
+                .unwrap()
+                .alpha_blend_strategy,
+            0
+        );
+        let mut current = [0xdeadbeefu64; 16];
+        assert_eq!(
+            unsafe { mt_render_options_default_sized(current.as_mut_ptr().cast(), 112) },
+            0
+        );
+        assert_eq!(current[0] as u32, 112);
+        assert_eq!(current[14..], [0xdeadbeef; 2]);
+        unsafe { init_render_record(current.as_mut_ptr().cast(), render_options(&settings), 112) }
+            .unwrap();
+        assert_eq!(
+            render_settings(&unsafe { read_render_record(current.as_ptr().cast()) }.unwrap())
+                .unwrap(),
+            settings
+        );
+        assert_eq!(current[14..], [0xdeadbeef; 2]);
+        for size in [0, 103, 105, 108, 111] {
+            assert!(
+                unsafe {
+                    init_render_record(current.as_mut_ptr().cast(), render_options(&settings), size)
+                }
+                .is_err()
+            );
+            let mut bad = current;
+            bad[0] = (bad[0] & !0xffffffff) | size as u64;
+            assert!(unsafe { read_render_record(bad.as_ptr().cast()) }.is_err());
         }
     }
     #[test]
@@ -2005,6 +2125,8 @@ mod tests {
             |o: &mut MtRenderOptions| o.bevel = 2,
             |o: &mut MtRenderOptions| o.sampling_pattern = 3,
             |o: &mut MtRenderOptions| o.max_samples = 0,
+            |o: &mut MtRenderOptions| o.alpha_blend_strategy = 2,
+            |o: &mut MtRenderOptions| o.reserved_tail = 1,
         ] {
             let mut invalid = options;
             edit(&mut invalid);

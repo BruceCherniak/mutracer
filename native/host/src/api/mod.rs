@@ -32,9 +32,10 @@ pub use engine::{
 };
 pub use post_process::{OutputKind, PostProcessContext, PostProcessSubscription};
 pub use render::{
-    AdaptiveResolution, CancelToken, CommitKind, ConvergeOptions, ConvergeProgress, ConvergeResult,
-    ConvergeStage, DenoiseReport, DenoiseSchedule, DenoiserOptions, Image, PixelKind, Render,
-    RenderSettings, RenderSize, RenderStatus, SampleEvent, SamplingPattern,
+    AdaptiveResolution, AlphaBlendStrategy, CancelToken, CommitKind, ConvergeOptions,
+    ConvergeProgress, ConvergeResult, ConvergeStage, DenoiseReport, DenoiseSchedule,
+    DenoiserOptions, Image, PixelKind, Render, RenderSettings, RenderSize, RenderStatus,
+    SampleEvent, SamplingPattern,
 };
 pub use render_loop::{
     LoopRender, LoopSubscription, LoopSync, RenderLoop, RenderLoopOptions, RenderLoopStatus,
@@ -106,6 +107,8 @@ fn l0_blocking(mut operation: impl FnMut(*mut std::ffi::c_char, usize) -> i32) -
     }
 }
 
+#[cfg(test)]
+mod alpha_tests;
 #[cfg(test)]
 mod depth_tests;
 #[cfg(test)]

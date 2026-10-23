@@ -1221,6 +1221,7 @@ impl PreparedState {
         settings: &settings::RenderSettings,
         size: [u32; 2],
         quality: u32,
+        alpha_blend_strategy: u32,
         hardware: bool,
         camera: &[u8],
         loss: &crate::device_loss::DeviceLossNotifier,
@@ -1236,10 +1237,11 @@ impl PreparedState {
             || size[1] > 4096
             || size[0] * size[1] > 4_194_304
             || quality > 3
+            || alpha_blend_strategy > 1
         {
             return Err(fail(
                 Status::InvalidArgument,
-                "Invalid render target size or quality",
+                "Invalid render target size, quality or alpha strategy",
             ));
         }
         let mut input = settings.wire(15)?;
@@ -1248,7 +1250,16 @@ impl PreparedState {
         } else {
             res::SOFTWARE_SHADER
         } as u32;
-        for word in [size[0], size[1], quality, shader, 1, 0, 0, 0] {
+        for word in [
+            size[0],
+            size[1],
+            quality,
+            shader,
+            1,
+            alpha_blend_strategy,
+            0,
+            0,
+        ] {
             input.extend_from_slice(&word.to_le_bytes());
         }
         input.extend_from_slice(camera);

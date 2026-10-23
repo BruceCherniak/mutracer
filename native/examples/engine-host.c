@@ -148,6 +148,7 @@ int main(int argc, char **argv) {
   REQUIRE(engine_options.struct_size == sizeof engine_options && display_settings.struct_size == sizeof display_settings
     && options.struct_size == sizeof options && denoiser.struct_size == sizeof denoiser
     && converge.struct_size == sizeof converge && loop_options.struct_size == sizeof loop_options, "record sizes");
+  REQUIRE(options.alpha_blend_strategy == MT_ALPHA_BLEND_STOCHASTIC && options.reserved_tail == 0, "alpha defaults");
   REQUIRE(engine_options.backend == MT_BACKEND_HWRT && options.max_samples == 2048 && options.bounces == 3
     && options.direct_light_candidates == 4 && options.bevel == 1 && options.dispersion_wavelengths == 3
     && options.resolution_scale == 1.0 && options.time_budget_ms == 21.0 && options.seed == 12345
@@ -183,6 +184,22 @@ int main(int argc, char **argv) {
     && read_back.dispersion_wavelengths == options.dispersion_wavelengths && read_back.width == width
     && read_back.height == height && read_back.seed == options.seed && read_back.clamping == options.clamping
     && read_back.time_budget_ms == options.time_budget_ms, "options round trip");
+  /* Both current and legacy option capacities keep the existing prefix. */
+  uint64_t legacy[15];
+  for (unsigned i = 0; i < 15; i++) legacy[i] = UINT64_C(0xfeedbeefdeadbeef);
+  const uint32_t legacy_size = 104;
+  memcpy(legacy, &legacy_size, sizeof legacy_size);
+  OK(mt_render_get_options(render, (mt_render_options *)legacy, error, sizeof error));
+  REQUIRE(legacy[13] == UINT64_C(0xfeedbeefdeadbeef) && legacy[14] == UINT64_C(0xfeedbeefdeadbeef), "legacy render options canaries");
+  OK(mt_render_set_options(render, (mt_render_options *)legacy, error, sizeof error));
+  options.alpha_blend_strategy = MT_ALPHA_BLEND_DETERMINISTIC_SOURCE_OVER;
+  OK(mt_render_set_options(render, &options, error, sizeof error));
+  OK(mt_render_get_options(render, &read_back, error, sizeof error));
+  REQUIRE(read_back.alpha_blend_strategy == MT_ALPHA_BLEND_DETERMINISTIC_SOURCE_OVER, "alpha strategy round trip");
+  options.alpha_blend_strategy = 2;
+  STATUS(mt_render_set_options(render, &options, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);
+  options.alpha_blend_strategy = MT_ALPHA_BLEND_STOCHASTIC;
+  OK(mt_render_set_options(render, &options, error, sizeof error));
   uint32_t changed = 0;
   OK(mt_engine_update(engine, &changed, error, sizeof error));
   REQUIRE(changed == 1, "first update changes");

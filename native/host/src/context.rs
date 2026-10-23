@@ -307,6 +307,7 @@ pub(crate) fn set_target(
     settings: &settings::RenderSettings,
     size: [u32; 2],
     quality: u32,
+    alpha_blend_strategy: u32,
     camera: &[u8; 128],
     error: &mut [c_char],
 ) -> i32 {
@@ -334,7 +335,15 @@ pub(crate) fn set_target(
     // AOT thread. Keep the registry free for other contexts' render/poll/cancel.
     let packet = std::panic::catch_unwind(AssertUnwindSafe(|| {
         retained
-            .target(settings, size, quality, hardware, camera, &loss)
+            .target(
+                settings,
+                size,
+                quality,
+                alpha_blend_strategy,
+                hardware,
+                camera,
+                &loss,
+            )
             .map_err(rejected)
     }));
     action(error.as_mut_ptr(), error.len(), |registry| {

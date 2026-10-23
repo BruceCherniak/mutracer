@@ -65,6 +65,7 @@ impl Fixture {
             &settings::RenderSettings::default(),
             size,
             0,
+            0,
             &self.camera,
             error,
         )
@@ -78,6 +79,7 @@ impl Fixture {
                 owner,
                 &settings::RenderSettings::default(),
                 [16, 8],
+                0,
                 0,
                 &camera,
                 &mut error,

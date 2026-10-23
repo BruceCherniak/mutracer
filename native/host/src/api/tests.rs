@@ -25,6 +25,10 @@ fn defaults_match_the_browser_library() {
     assert_eq!(settings.bounces, 3);
     assert_eq!(settings.clamping, 0.);
     assert_eq!(settings.sampling_pattern, SamplingPattern::Sobol);
+    assert_eq!(
+        settings.alpha_blend_strategy,
+        AlphaBlendStrategy::Stochastic
+    );
     assert_eq!(settings.direct_light_candidates, 4);
     assert!(settings.bevel);
     assert_eq!(settings.bevel_samples, 8);

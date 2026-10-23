@@ -209,6 +209,10 @@ typedef enum mt_render_status {
 } mt_render_status;
 
 /* Defaults match the browser library (they differ from mt_render_settings). */
+typedef enum mt_alpha_blend_strategy {
+  MT_ALPHA_BLEND_STOCHASTIC = 0,
+  MT_ALPHA_BLEND_DETERMINISTIC_SOURCE_OVER = 1
+} mt_alpha_blend_strategy;
 typedef struct mt_render_options {
   uint32_t struct_size;
   uint32_t max_samples; /* 1..4096. Default 2048. */
@@ -235,9 +239,21 @@ typedef struct mt_render_options {
    * Both 0 turn it off. Default 0. */
   double adaptive_target_frame_ms;
   double adaptive_min_scale;
+  /* Primary-ray blend policy, both native backends. Default STOCHASTIC.
+   * Deterministic source-over blends front/back branches every sample at extra
+   * GPU cost; secondary coverage remains stochastic. */
+  uint32_t alpha_blend_strategy; /* mt_alpha_blend_strategy. */
+  uint32_t reserved_tail; /* Must be 0. */
 } mt_render_options;
-MT_ENGINE_LAYOUT(mt_render_options, 104);
+MT_ENGINE_LAYOUT(mt_render_options, 112);
+/* The original default symbol writes 104 bytes. Current C/C++ calls use _sized
+ * through this macro; other FFI bindings must call _sized explicitly.
+ * Set/get/create and loop options accept legacy 104-byte records (stochastic)
+ * and current 112-byte records. All earlier fields keep their offsets. */
 int32_t mt_render_options_default(mt_render_options *output);
+int32_t mt_render_options_default_sized(mt_render_options *output, uint32_t size);
+#define mt_render_options_default(output) \
+  mt_render_options_default_sized((output), (uint32_t)sizeof(*(output)))
 /* The renders of an engine share one prepared scene. Changing a render's size or
  * settings restarts only its accumulation. */
 int32_t mt_render_create(mt_engine engine, const mt_render_options *options, mt_render *output,

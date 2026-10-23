@@ -29,6 +29,17 @@ pub enum SamplingPattern {
     ZSobol,
     Random,
 }
+/// Primary-ray coverage policy for blend materials; both native backends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[repr(u32)]
+pub enum AlphaBlendStrategy {
+    /// Randomly accept coverage per sample. Default; secondary hits also use it.
+    #[default]
+    Stochastic = 0,
+    /// Blend the primary front/back branches every sample. Secondary coverage
+    /// stays stochastic; this can cost extra GPU work.
+    DeterministicSourceOver = 1,
+}
 /// Fixed dimensions or a display-relative scale.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum RenderSize {
@@ -56,6 +67,8 @@ pub struct RenderSettings {
     pub clamping: f64,
     /// Default [`SamplingPattern::Sobol`].
     pub sampling_pattern: SamplingPattern,
+    /// Primary-ray blend policy. Default [`AlphaBlendStrategy::Stochastic`].
+    pub alpha_blend_strategy: AlphaBlendStrategy,
     /// Light candidates per vertex, clamped to 1–16. Default 4.
     pub direct_light_candidates: u32,
     /// Rounded material edges. Default true.
@@ -95,6 +108,7 @@ impl Default for RenderSettings {
             bounces: 3,
             clamping: 0.,
             sampling_pattern: SamplingPattern::Sobol,
+            alpha_blend_strategy: AlphaBlendStrategy::Stochastic,
             direct_light_candidates: 4,
             bevel: true,
             bevel_samples: 8,
@@ -366,6 +380,7 @@ pub(super) struct TargetKey {
     size: [u32; 2],
     quality: u32,
     settings: L0Settings,
+    alpha_blend_strategy: AlphaBlendStrategy,
     camera_override: Option<[u8; 128]>,
 }
 /// Full preparation of the shared scene on a library thread.
@@ -658,6 +673,7 @@ fn desired(state: &State, render: &RenderState) -> Option<TargetKey> {
         camera: state.camera_revision,
         size: render.image_size(state.display.size),
         quality: render.settings.quality(),
+        alpha_blend_strategy: render.settings.alpha_blend_strategy,
         settings: render
             .settings
             .l0(render.settings.sample_cap(render.settings.max_samples), 0),
@@ -943,6 +959,7 @@ fn target_step(
         &key.settings,
         key.size,
         key.quality,
+        key.alpha_blend_strategy as u32,
         &camera,
         &mut message,
     );

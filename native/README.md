@@ -108,8 +108,35 @@ Differences from the browser library:
   display frame later.
 - Converge blocks its thread. The host drives the loop with
   `mt_render_loop_tick` instead of start and stop.
-- Denoising uses OIDN only. Tiles, alpha blend strategies and adaptive sampling
-  are not available.
+- Denoising uses OIDN only. Tiles and adaptive sampling are not available.
+
+### Alpha blend strategy
+
+Set Rust `RenderSettings::alpha_blend_strategy` to
+`AlphaBlendStrategy::DeterministicSourceOver`, or set the C render option:
+
+```c
+mt_render_options options;
+mt_render_options_default(&options);
+options.alpha_blend_strategy = MT_ALPHA_BLEND_DETERMINISTIC_SOURCE_OVER;
+mt_render_set_options(render, &options, error, sizeof(error));
+```
+
+The default, `Stochastic` / `MT_ALPHA_BLEND_STOCHASTIC`, randomly accepts or skips
+blend coverage. Deterministic source-over combines front and back contributions
+on primary rays each sample, reducing coverage noise at extra GPU cost. Secondary
+rays keep stochastic coverage. Both strategies support RGB and spectral rendering
+on both native backends; opaque and masked materials keep their existing behavior.
+Coverage controls visibility, independently of physical transmission.
+
+Changing the strategy takes effect on the next update or refine and restarts only
+that Render. First use of a strategy can compile a shader and block the call.
+
+C render options are now 112 bytes. Existing 104-byte records remain accepted and
+select stochastic coverage. C/C++ code using this header initializes the current
+size automatically; other FFI bindings must call `mt_render_options_default_sized`
+with their record size. The original `mt_render_options_default` symbol initializes
+only the legacy 104 bytes.
 
 ### Depth samples
 

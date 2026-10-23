@@ -163,10 +163,10 @@ export function acceptSceneLighting(token: number): Uint8Array {
 /**
  * One render target of a retained scene, without preparing the scene again.
  * Input: render settings record, then width, height, quality flags, production shader id,
- * camera flag (0 = the descriptor camera), reserved×3 and one camera record.
+ * camera flag (0 = the descriptor camera), alpha blend strategy, reserved×2 and one camera record.
  * Output: version 1, shader byte length, then the camera uniform, the trace uniform (the
- * scene's current one with this target's fields) and, when the sampling pattern or bevel
- * samples differ from the scene's, the production shader with those constants patched.
+ * scene's current one with this target's fields) and, when sampling, bevel samples or
+ * alpha strategy need a variant, the specialized production shader.
  */
 export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Array {
   try {
@@ -177,14 +177,18 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     const configuration = decodeSceneConfiguration(bytes.subarray(0, settingsBytes));
     const u = new Uint32Array(bytes.buffer, bytes.byteOffset + settingsBytes, 8);
     const [width, height, qualityFlags, shaderId] = [u[0], u[1], u[2], u[3]];
-    if (!width || !height || (shaderId !== RESOURCE.SOFTWARE_SHADER && shaderId !== RESOURCE.HWRT_SHADER)) throw new Error('Invalid target request');
+    if (!width || !height || u[5] > 1 || u[6] || u[7] || (shaderId !== RESOURCE.SOFTWARE_SHADER && shaderId !== RESOURCE.HWRT_SHADER)) throw new Error('Invalid target request');
     const camera = sceneCameraParameters(bytes.subarray(settingsBytes + 8 * WORD_BYTES), width, height);
     const rt = makeRayTraceUniform();
     new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
     writeTargetTrace(rt.views, configuration, width, height, qualityFlags);
     const {constants} = state.shader;
-    const variant = constants.SAMPLING_PATTERN !== configuration.sampling.code || constants.BEVEL_SAMPLES !== configuration.bevelSamples;
+    // Match WGPURayTracePass: deterministic source-over specializes only scenes
+    // with blend coverage. The shared scene retains the stochastic base shader.
+    const hasAlpha = u[5] === 1 && Boolean(constants.HAS_ALPHA_BLEND);
+    const variant = constants.SAMPLING_PATTERN !== configuration.sampling.code || constants.BEVEL_SAMPLES !== configuration.bevelSamples || hasAlpha !== state.shader.features.hasAlpha;
     const shader = variant ? productionShader(shaderId, {...state.shader,
+      features: {...state.shader.features, hasAlpha},
       constants: {...constants, SAMPLING_PATTERN: configuration.sampling.code, BEVEL_SAMPLES: configuration.bevelSamples}}) : new Uint8Array(0);
     const result = new Uint8Array(4 * WORD_BYTES + camera.byteLength + 256 + shader.byteLength);
     new Uint32Array(result.buffer, 0, 4).set([1, shader.byteLength, camera.byteLength, 256]);
