@@ -162,9 +162,17 @@ fn display_settings(settings: &mutracer_native_probe::display::Settings) -> api:
         saturation: settings.saturation,
         temperature: settings.temperature,
         tint: settings.tint,
+        vignette: settings.vignette,
+        bloom_intensity: settings.bloom_intensity,
+        bloom_threshold: settings.bloom_threshold,
+        bloom_radius: settings.bloom_radius,
+        shadow_catcher_color: settings.shadow_catcher_color,
+        shadow_catcher_alpha: settings.shadow_catcher_alpha,
         channel: match settings.output {
             1 => api::Channel::Normal,
             2 => api::Channel::Albedo,
+            3 => api::Channel::Shadow,
+            4 => api::Channel::ShadowCatcher,
             _ => api::Channel::Final,
         },
     }

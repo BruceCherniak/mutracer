@@ -1,8 +1,44 @@
 //! GPU-only stable preview. Copy before the next trace or scene publication.
 use crate::{GpuDevice, Result};
+mod bloom;
+mod effects;
+#[cfg(test)]
+mod effects_tests;
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Metadata {
+    has_catcher: bool,
+    flat_background: [f32; 4],
+}
+impl Metadata {
+    pub(crate) fn from_trace(trace: &[u8]) -> Self {
+        use crate::layout::ray_uniform as u;
+        if trace.len() < u::SCENE_FEATURE_FLAGS + 4 {
+            return Self::default();
+        }
+        let word = |at| u32::from_le_bytes(trace[at..at + 4].try_into().unwrap());
+        // WGPU_SCENE_FEATURE_BITS.HAS_SHADOW_CATCHER (WGPUSceneFeatures.ts).
+        let has_catcher = word(u::SCENE_FEATURE_FLAGS) & (1 << 14) != 0;
+        let mut flat_background = [0.; 4];
+        if word(u::BACKGROUND_FLAGS) & 3 == 1 {
+            for (i, v) in flat_background.iter_mut().enumerate() {
+                *v = f32::from_bits(word(u::BACKGROUND_COLOR + i * 4));
+            }
+            if flat_background[3] >= 0.99999 {
+                flat_background[3] = 1.;
+            } else {
+                flat_background = [0.; 4];
+            }
+        }
+        Self {
+            has_catcher,
+            flat_background,
+        }
+    }
+}
 
 /// Display-only settings. Tone modes: AgX/ACES/Cineon/Reinhard/Linear (0–4).
-/// Output modes: final/normal/albedo (0–2). Exposure is a linear multiplier.
+/// Output modes: final/normal/albedo/shadow/shadow-catcher (0–4). Shadow aliases
+/// final; shadow-catcher shows the raw mask. Exposure is a linear multiplier.
 #[derive(Clone, Copy, PartialEq)]
 pub struct Settings {
     pub tone_mapping: u32,
@@ -13,6 +49,18 @@ pub struct Settings {
     pub tint: f32,
     pub output: u32,
     pub preserve_alpha: bool,
+    /// Vignette strength in 0..1. Default 0.
+    pub vignette: f32,
+    /// Nonnegative bloom intensity; 0 disables it. Default 0.
+    pub bloom_intensity: f32,
+    /// Nonnegative bloom luminance threshold. Default 1.
+    pub bloom_threshold: f32,
+    /// Bloom radius in 0..1. Default 0.6.
+    pub bloom_radius: f32,
+    /// Nonnegative linear RGB shadow-catcher color. Default black.
+    pub shadow_catcher_color: [f32; 3],
+    /// Shadow-catcher opacity in 0..1. Default 1.
+    pub shadow_catcher_alpha: f32,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -25,6 +73,12 @@ impl Default for Settings {
             tint: 0.,
             output: 0,
             preserve_alpha: true,
+            vignette: 0.,
+            bloom_intensity: 0.,
+            bloom_threshold: 1.,
+            bloom_radius: 0.6,
+            shadow_catcher_color: [0.; 3],
+            shadow_catcher_alpha: 1.,
         }
     }
 }
@@ -49,6 +103,11 @@ pub struct Display {
     samples: u32,
     hdr: Option<(wgpu::Texture, wgpu::ComputePipeline, wgpu::BindGroup)>,
     composed: Option<(wgpu::Texture, wgpu::BindGroup)>,
+    metadata: Metadata,
+    shadow: Option<wgpu::Buffer>,
+    effects: std::sync::Mutex<Option<effects::Effects>>,
+    image_revision: u64,
+    denoise_revision: u64,
 }
 impl Display {
     pub(super) fn new(gpu: GpuDevice, size: [u32; 2]) -> Self {
@@ -159,6 +218,11 @@ impl Display {
             samples: 0,
             hdr: None,
             composed: None,
+            metadata: Metadata::default(),
+            shadow: None,
+            effects: Default::default(),
+            image_revision: 0,
+            denoise_revision: 0,
         }
     }
     pub(super) fn capture(
@@ -166,9 +230,27 @@ impl Display {
         source: &wgpu::Buffer,
         normal: &wgpu::Buffer,
         albedo: &wgpu::Buffer,
+        shadow: &wgpu::Buffer,
+        metadata: Metadata,
         samples: u32,
     ) {
+        self.metadata = metadata;
+        self.image_revision += 1;
+        if samples < self.original_samples {
+            self.reset_effects();
+        }
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        if metadata.has_catcher {
+            let target = self.shadow.get_or_insert_with(|| {
+                self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Stable catcher accumulation"),
+                    size: shadow.size(),
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            });
+            encoder.copy_buffer_to_buffer(shadow, 0, target, 0, target.size());
+        }
         encoder.copy_buffer_to_buffer(source, 0, &self.raw, 0, self.raw.size());
         encoder.copy_buffer_to_buffer(normal, 0, &self.normal, 0, self.normal.size());
         encoder.copy_buffer_to_buffer(albedo, 0, &self.albedo, 0, self.albedo.size());
@@ -197,6 +279,8 @@ impl Display {
         let bytes: Vec<_> = pixels.iter().flat_map(|v| v.to_le_bytes()).collect();
         self.gpu.queue.write_buffer(denoised, 0, &bytes);
         self.uploads += 1;
+        self.denoise_revision += 1;
+        self.image_revision += 1;
         self.show_denoised();
         Ok(())
     }
@@ -215,6 +299,7 @@ impl Display {
     }
     /// Shows the captured samples and forgets the denoised image.
     pub fn original(&mut self) {
+        self.reset_effects();
         self.denoised = None;
         if !self.using_denoised {
             return;
@@ -341,14 +426,41 @@ impl Display {
             self.composed = Some((texture, group));
         }
         let (texture, group) = self.composed.as_ref().unwrap();
-        self.compose_into(settings, false, group);
+        self.compose_into(settings, false, group, texture);
         texture.clone()
     }
     fn compose_inner(&self, settings: &Settings, premultiply: bool) {
-        self.compose_into(settings, premultiply, &self.group);
+        self.compose_into(settings, premultiply, &self.group, &self.texture);
     }
-    fn compose_into(&self, settings: &Settings, premultiply: bool, group: &wgpu::BindGroup) {
+    fn reset_effects(&mut self) {
+        if let Some(effects) = self
+            .effects
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
+            effects.reset();
+        }
+    }
+    fn compose_into(
+        &self,
+        settings: &Settings,
+        premultiply: bool,
+        group: &wgpu::BindGroup,
+        target: &wgpu::Texture,
+    ) {
         if self.samples == 0 {
+            return;
+        }
+        if settings.vignette != 0.
+            || settings.bloom_intensity > 0.
+            || self.metadata.has_catcher
+            || self.metadata.flat_background[3] > 0.
+            || settings.output >= 3
+        {
+            let mut slot = self.effects.lock().unwrap_or_else(|e| e.into_inner());
+            let effects = slot.get_or_insert_with(|| effects::Effects::new(&self.gpu.device));
+            effects.compose(self, settings, premultiply, target);
             return;
         }
         let bytes: Vec<_> = [

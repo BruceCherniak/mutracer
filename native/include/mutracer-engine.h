@@ -112,7 +112,9 @@ typedef enum mt_tone_mapping {
   MT_TONE_MAPPING_REINHARD = 3, MT_TONE_MAPPING_LINEAR = 4
 } mt_tone_mapping;
 typedef enum mt_display_channel {
-  MT_CHANNEL_FINAL = 0, MT_CHANNEL_NORMAL = 1, MT_CHANNEL_ALBEDO = 2
+  MT_CHANNEL_FINAL = 0, MT_CHANNEL_NORMAL = 1, MT_CHANNEL_ALBEDO = 2,
+  MT_CHANNEL_SHADOW = 3, /* Compatibility alias for the final image, as on WebGPU. */
+  MT_CHANNEL_SHADOW_CATCHER = 4
 } mt_display_channel;
 typedef struct mt_display_settings {
   uint32_t struct_size;
@@ -123,9 +125,21 @@ typedef struct mt_display_settings {
   float saturation; /* Default 1. */
   float temperature; /* White balance shift, -1..1. Default 0. */
   float tint; /* Green/magenta, -1..1. Default 0. */
+  float vignette; /* 0..1. Default 0. */
+  float bloom_intensity; /* Nonnegative; 0 disables bloom. Default 0. */
+  float bloom_threshold; /* Nonnegative luminance threshold. Default 1. */
+  float bloom_radius; /* 0..1. Default 0.6. */
+  float shadow_catcher_color[3]; /* Nonnegative linear RGB. Default black. */
+  float shadow_catcher_alpha; /* 0..1. Default 1. */
 } mt_display_settings;
-MT_ENGINE_LAYOUT(mt_display_settings, 32);
+MT_ENGINE_LAYOUT(mt_display_settings, 64);
+/* The original symbol initializes the legacy 32-byte record. New C/C++ calls
+ * use the sized entry point through this macro; other FFI bindings should call
+ * _sized explicitly. Set/get accept 32-byte records with default effect values,
+ * or 64-byte records including all effects. */
 int32_t mt_display_settings_default(mt_display_settings *output);
+int32_t mt_display_settings_default_sized(mt_display_settings *output, uint32_t size);
+#define mt_display_settings_default(output) mt_display_settings_default_sized((output), (uint32_t)sizeof(*(output)))
 /* Display size in pixels; scale-sized renders follow it at their next refine.
  * Default 300x150 (the browser canvas default). */
 int32_t mt_display_set_size(mt_display display, uint32_t width, uint32_t height, char *error, size_t capacity);

@@ -20,6 +20,10 @@ pub enum Channel {
     Final,
     Normal,
     Albedo,
+    /// Compatibility channel: same image as Final, matching the WebGPU pipeline.
+    Shadow,
+    /// Raw catcher coverage, background alpha/hits and shadow opacity.
+    ShadowCatcher,
 }
 /// Display-only settings shared by every render presented on the engine display.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -38,6 +42,18 @@ pub struct DisplaySettings {
     pub tint: f32,
     /// Default [`Channel::Final`].
     pub channel: Channel,
+    /// Vignette strength in 0..1. Default 0.
+    pub vignette: f32,
+    /// Nonnegative bloom intensity; 0 disables it. Default 0.
+    pub bloom_intensity: f32,
+    /// Nonnegative bloom luminance threshold. Default 1.
+    pub bloom_threshold: f32,
+    /// Bloom radius in 0..1. Default 0.6.
+    pub bloom_radius: f32,
+    /// Nonnegative linear RGB shadow-catcher color. Default black.
+    pub shadow_catcher_color: [f32; 3],
+    /// Shadow-catcher opacity in 0..1. Default 1.
+    pub shadow_catcher_alpha: f32,
 }
 impl Default for DisplaySettings {
     fn default() -> Self {
@@ -49,6 +65,12 @@ impl Default for DisplaySettings {
             temperature: 0.,
             tint: 0.,
             channel: Channel::Final,
+            vignette: 0.,
+            bloom_intensity: 0.,
+            bloom_threshold: 1.,
+            bloom_radius: 0.6,
+            shadow_catcher_color: [0.; 3],
+            shadow_catcher_alpha: 1.,
         }
     }
 }
@@ -60,11 +82,31 @@ impl DisplaySettings {
             self.saturation,
             self.temperature,
             self.tint,
+            self.vignette,
+            self.bloom_intensity,
+            self.bloom_threshold,
+            self.bloom_radius,
+            self.shadow_catcher_color[0],
+            self.shadow_catcher_color[1],
+            self.shadow_catcher_color[2],
+            self.shadow_catcher_alpha,
         ];
         if values.iter().any(|v| !v.is_finite()) {
             return Err(error(
                 Status::InvalidArgument,
                 "Display settings must be finite",
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.vignette)
+            || !(0.0..=1.0).contains(&self.bloom_radius)
+            || !(0.0..=1.0).contains(&self.shadow_catcher_alpha)
+            || self.bloom_intensity < 0.
+            || self.bloom_threshold < 0.
+            || self.shadow_catcher_color.iter().any(|v| *v < 0.)
+        {
+            return Err(error(
+                Status::InvalidArgument,
+                "Invalid display effect settings",
             ));
         }
         Ok(())
@@ -79,6 +121,12 @@ impl DisplaySettings {
             tint: self.tint,
             output: self.channel as u32,
             preserve_alpha: true,
+            vignette: self.vignette,
+            bloom_intensity: self.bloom_intensity,
+            bloom_threshold: self.bloom_threshold,
+            bloom_radius: self.bloom_radius,
+            shadow_catcher_color: self.shadow_catcher_color,
+            shadow_catcher_alpha: self.shadow_catcher_alpha,
         }
     }
 }

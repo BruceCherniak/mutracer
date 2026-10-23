@@ -238,6 +238,12 @@ pub struct MtDisplaySettings {
     saturation: f32,
     temperature: f32,
     tint: f32,
+    vignette: f32,
+    bloom_intensity: f32,
+    bloom_threshold: f32,
+    bloom_radius: f32,
+    shadow_catcher_color: [f32; 3],
+    shadow_catcher_alpha: f32,
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -432,6 +438,12 @@ fn display_record(settings: &DisplaySettings) -> MtDisplaySettings {
         saturation: settings.saturation,
         temperature: settings.temperature,
         tint: settings.tint,
+        vignette: settings.vignette,
+        bloom_intensity: settings.bloom_intensity,
+        bloom_threshold: settings.bloom_threshold,
+        bloom_radius: settings.bloom_radius,
+        shadow_catcher_color: settings.shadow_catcher_color,
+        shadow_catcher_alpha: settings.shadow_catcher_alpha,
     }
 }
 fn display_settings(record: &MtDisplaySettings) -> Result<DisplaySettings> {
@@ -448,6 +460,8 @@ fn display_settings(record: &MtDisplaySettings) -> Result<DisplaySettings> {
             0 => Channel::Final,
             1 => Channel::Normal,
             2 => Channel::Albedo,
+            3 => Channel::Shadow,
+            4 => Channel::ShadowCatcher,
             _ => return Err(invalid("Unknown display channel")),
         },
         tone_mapping_exposure: record.tone_mapping_exposure,
@@ -455,8 +469,58 @@ fn display_settings(record: &MtDisplaySettings) -> Result<DisplaySettings> {
         saturation: record.saturation,
         temperature: record.temperature,
         tint: record.tint,
+        vignette: record.vignette,
+        bloom_intensity: record.bloom_intensity,
+        bloom_threshold: record.bloom_threshold,
+        bloom_radius: record.bloom_radius,
+        shadow_catcher_color: record.shadow_catcher_color,
+        shadow_catcher_alpha: record.shadow_catcher_alpha,
     })
 }
+// The original default symbol has no capacity argument and old callers pass
+// uninitialized 32-byte records. It must never write the appended fields.
+fn display_record_size(size: u32) -> Result<usize> {
+    match size {
+        32 => Ok(32),
+        64.. => Ok(64),
+        _ => Err(invalid("Unsupported display struct_size")),
+    }
+}
+unsafe fn read_display_record(pointer: *const MtDisplaySettings) -> Result<MtDisplaySettings> {
+    if pointer.is_null() {
+        return Err(invalid("Null record"));
+    }
+    let size = display_record_size(unsafe { pointer.cast::<u32>().read() })?;
+    let mut value = display_record(&DisplaySettings::default());
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            pointer.cast::<u8>(),
+            (&mut value as *mut MtDisplaySettings).cast::<u8>(),
+            size,
+        );
+    }
+    Ok(value)
+}
+unsafe fn init_display_record(
+    pointer: *mut MtDisplaySettings,
+    mut value: MtDisplaySettings,
+    size: u32,
+) -> Result<()> {
+    if pointer.is_null() {
+        return Err(invalid("Null record"));
+    }
+    let size = display_record_size(size)?;
+    value.struct_size = size as u32;
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            (&value as *const MtDisplaySettings).cast::<u8>(),
+            pointer.cast::<u8>(),
+            size,
+        );
+    }
+    Ok(())
+}
+
 fn presented_record(presented: Option<Presented>) -> MtPresented {
     let p = presented.unwrap_or(Presented {
         fallback: false,
@@ -752,11 +816,18 @@ pub unsafe extern "C" fn mt_engine_display(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_display_settings_default(output: *mut MtDisplaySettings) -> i32 {
-    if output.is_null() {
-        return Status::InvalidArgument as i32;
+    unsafe { mt_display_settings_default_sized(output, 32) }
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_display_settings_default_sized(
+    output: *mut MtDisplaySettings,
+    size: u32,
+) -> i32 {
+    match unsafe { init_display_record(output, display_record(&DisplaySettings::default()), size) }
+    {
+        Ok(()) => 0,
+        Err(e) => e.status as i32,
     }
-    unsafe { output.write(display_record(&DisplaySettings::default())) };
-    0
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_display_set_size(
@@ -778,7 +849,7 @@ pub unsafe extern "C" fn mt_display_set_settings(
     capacity: usize,
 ) -> i32 {
     call(error_out, capacity, || {
-        let settings = display_settings(unsafe { record(settings)? })?;
+        let settings = display_settings(&unsafe { read_display_record(settings)? })?;
         display_of(handle)?.set_settings(settings)
     })
 }
@@ -791,7 +862,16 @@ pub unsafe extern "C" fn mt_display_get_settings(
 ) -> i32 {
     call(error_out, capacity, || {
         let settings = display_of(handle)?.settings();
-        unsafe { write_record(output, display_record(&settings)) }
+        if output.is_null() {
+            return Err(invalid("Null record"));
+        }
+        unsafe {
+            init_display_record(
+                output,
+                display_record(&settings),
+                output.cast::<u32>().read(),
+            )
+        }
     })
 }
 #[unsafe(no_mangle)]
@@ -1691,6 +1771,8 @@ mod tests {
             ("MT_CHANNEL_FINAL", Channel::Final),
             ("MT_CHANNEL_NORMAL", Channel::Normal),
             ("MT_CHANNEL_ALBEDO", Channel::Albedo),
+            ("MT_CHANNEL_SHADOW", Channel::Shadow),
+            ("MT_CHANNEL_SHADOW_CATCHER", Channel::ShadowCatcher),
         ] {
             let mut record = display_record(&DisplaySettings::default());
             record.channel = value(name);
@@ -1705,6 +1787,50 @@ mod tests {
         assert_eq!(value("MT_DENOISE_EVERY_SAMPLE"), 2);
         assert_eq!(value("MT_LOOP_SELECT_FINAL"), 1);
     }
+    #[test]
+    fn display_effects_c_records_preserve_legacy_prefix_and_defaults() {
+        let mut old = [0xdeadbeefu32; 16];
+        assert_eq!(
+            unsafe { mt_display_settings_default(old.as_mut_ptr().cast()) },
+            0
+        );
+        assert_eq!(old[0], 32);
+        assert_eq!(old[8..], [0xdeadbeef; 8]);
+        let legacy = unsafe { read_display_record(old.as_ptr().cast()) }.unwrap();
+        let defaults = display_settings(&legacy).unwrap();
+        assert_eq!(defaults.bloom_threshold, 1.);
+        assert_eq!(defaults.bloom_radius, 0.6);
+        let mut newer = [0xdeadbeefu32; 20];
+        assert_eq!(
+            unsafe { mt_display_settings_default_sized(newer.as_mut_ptr().cast(), 64) },
+            0
+        );
+        assert_eq!(newer[0], 64);
+        assert_eq!(newer[16..], [0xdeadbeef; 4]);
+        let settings = DisplaySettings {
+            vignette: 0.5,
+            bloom_intensity: 2.,
+            bloom_radius: 0.8,
+            shadow_catcher_color: [0.1, 0.2, 0.3],
+            ..Default::default()
+        };
+        unsafe { init_display_record(old.as_mut_ptr().cast(), display_record(&settings), 32) }
+            .unwrap();
+        assert_eq!(old[8..], [0xdeadbeef; 8]);
+        unsafe { init_display_record(newer.as_mut_ptr().cast(), display_record(&settings), 64) }
+            .unwrap();
+        assert_eq!(
+            display_settings(&unsafe { read_display_record(newer.as_ptr().cast()) }.unwrap())
+                .unwrap(),
+            settings
+        );
+        assert!(
+            unsafe {
+                init_display_record(newer.as_mut_ptr().cast(), display_record(&settings), 48)
+            }
+            .is_err()
+        );
+    }
     /// Sizes and field offsets of mutracer-engine.h (64-bit pointers).
     #[test]
     fn records_match_the_header_layouts() {
@@ -1715,7 +1841,9 @@ mod tests {
         assert_eq!(offset_of!(MtEngineSnapshot, adapter_name), 12);
         assert_eq!(size_of::<MtEngineEvent>(), 16 + pointer);
         assert_eq!(offset_of!(MtEngineEvent, message), 16);
-        assert_eq!(size_of::<MtDisplaySettings>(), 32);
+        assert_eq!(size_of::<MtDisplaySettings>(), 64);
+        assert_eq!(offset_of!(MtDisplaySettings, vignette), 32);
+        assert_eq!(offset_of!(MtDisplaySettings, shadow_catcher_alpha), 60);
         assert_eq!(offset_of!(MtDisplaySettings, tone_mapping_exposure), 12);
         assert_eq!(offset_of!(MtDisplaySettings, tint), 28);
         assert_eq!(size_of::<MtPresented>(), 20);
@@ -1755,7 +1883,7 @@ mod tests {
         for name in [
             "mt_engine_options, 8",
             "mt_engine_snapshot, 268",
-            "mt_display_settings, 32",
+            "mt_display_settings, 64",
             "mt_presented, 20",
             "mt_render_options, 104",
             "mt_render_snapshot, 364",

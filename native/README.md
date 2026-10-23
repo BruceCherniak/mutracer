@@ -108,8 +108,49 @@ Differences from the browser library:
   display frame later.
 - Converge blocks its thread. The host drives the loop with
   `mt_render_loop_tick` instead of start and stop.
-- Denoising uses OIDN only. Tiles, alpha blend strategies, adaptive sampling,
-  vignette, bloom, shadow catchers and depth readback are not available.
+- Denoising uses OIDN only. Tiles, alpha blend strategies, adaptive sampling
+  and depth readback are not available.
+
+### Display effects
+
+Set effects through Rust `DisplaySettings` or C `mt_display_settings` before
+presentation or pixel/PNG export. They do not restart accumulation or change HDR
+readback. For example:
+
+```c
+mt_display_settings settings;
+mt_display_settings_default(&settings);
+settings.vignette = 0.4f;
+settings.bloom_intensity = 0.2f;
+mt_display_set_settings(display, &settings, error, sizeof(error));
+```
+
+Vignette strength is 0–1 (default 0). Bloom intensity is nonnegative (default 0,
+disabled), its luminance threshold defaults to 1, and its radius is 0–1 (default
+0.6). Bloom starts at ten samples and refreshes every ten samples, or when its
+threshold, radius or denoised input changes. It adds GPU work and retains roughly
+51 bytes per render pixel in image caches; very small images cost more per pixel.
+These caches remain until the render changes size or is disposed.
+
+Materials marked as shadow catchers show the background with received shadows.
+`shadow_catcher_color` defaults to black and `shadow_catcher_alpha` to 1 (range
+0–1). Reducing alpha subtracts from the estimated shadow opacity, so faint
+shadows disappear first. Catcher scenes retain an additional 48 bytes per render
+pixel. The `ShadowCatcher` / `MT_CHANNEL_SHADOW_CATCHER` channel shows raw coverage,
+background alpha/hits and shadow opacity; `Shadow` / `MT_CHANNEL_SHADOW` shows the
+same image as `Final`, matching the browser WebGPU pipeline.
+
+Effects apply before custom display passes and scaling. Normal and albedo
+channels bypass them. An opaque, solid background keeps its color independently
+of exposure, grading and vignette; it can still receive bloom spill and catcher
+shadows. Transparent and mapped backgrounds use the display transforms. Native
+output keeps its sRGB transfer. OIDN filters the original HDR; catcher layers use
+that filtered color, while shadow opacity remains unfiltered, so shadow noise
+can remain after denoising.
+
+C callers using the current header get all effect defaults. Other FFI bindings
+should initialize the 64-byte record with `mt_display_settings_default_sized`.
+Existing 32-byte records remain accepted with default effect values.
 
 ### Rust GPU images and display passes
 

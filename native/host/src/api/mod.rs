@@ -105,6 +105,8 @@ fn l0_blocking(mut operation: impl FnMut(*mut std::ffi::c_char, usize) -> i32) -
 #[cfg(test)]
 mod device_loss_tests;
 #[cfg(test)]
+mod display_effects_tests;
+#[cfg(test)]
 mod gpu_output_tests;
 #[cfg(test)]
 mod loop_tests;

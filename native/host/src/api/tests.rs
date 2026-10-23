@@ -247,6 +247,7 @@ fn display_settings_map_to_the_shared_composition() {
         temperature: -0.25,
         tint: 0.75,
         channel: Channel::Albedo,
+        ..Default::default()
     };
     let composition = settings.composition();
     assert_eq!(composition.tone_mapping, 3);

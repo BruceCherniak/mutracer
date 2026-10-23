@@ -477,6 +477,7 @@ impl Target {
             0 => layout::resource::COLOR,
             1 => layout::resource::NORMAL,
             2 => layout::resource::ALBEDO,
+            3 => layout::resource::SHADOW_CATCHER,
             _ => return Err("Unknown image kind".into()),
         };
         self.buffers
@@ -490,6 +491,7 @@ impl Target {
     }
 }
 struct GpuScene {
+    display_trace: Vec<u8>,
     retained: Option<scene::PreparedState>,
     gpu: GpuDevice,
     scene: Scene,
@@ -734,7 +736,9 @@ impl GpuScene {
         let bounces = options.bounces;
         let seed = options.seed;
         let frames = runtime::frames(bounces, seed)?;
+        let display_trace = read(&AssetId::Packet(scene.rt_uniform))?.into_owned();
         Ok(Self {
+            display_trace,
             retained: None,
             frames,
             frame_key: (bounces.to_bits(), seed),
@@ -1295,6 +1299,10 @@ impl GpuScene {
             self.rebind_textures(&replaced)?;
         }
         for (id, offset, width, height, data) in updates {
+            if *id == self.scene.rt_uniform {
+                let at = *offset as usize;
+                self.display_trace[at..at + data.len()].copy_from_slice(data);
+            }
             if *id < layout::resource::ATLAS {
                 self.gpu
                     .queue

@@ -552,7 +552,7 @@ pub fn capture_display(
     let (scene, outputs, samples, size) = match linked {
         Some(scene) => {
             let target = &state.link.as_ref().unwrap().target;
-            let outputs = [0, 1, 2].map(|kind| target.output(kind).unwrap().clone());
+            let outputs = [0, 1, 2, 3].map(|kind| target.output(kind).unwrap().clone());
             (
                 scene,
                 outputs,
@@ -566,13 +566,14 @@ pub fn capture_display(
                 Some(scene.scene.color_output),
                 scene.scene.normal_output,
                 scene.scene.albedo_output,
+                Some(crate::layout::resource::SHADOW_CATCHER),
             ]
             .map(|id| id.and_then(|id| scene.buffers.get(&id).cloned()));
-            let [Some(color), Some(normal), Some(albedo)] = outputs else {
+            let [Some(color), Some(normal), Some(albedo), Some(shadow)] = outputs else {
                 return Err("No normal or albedo output".into());
             };
             let (samples, size) = (scene.samples, [scene.scene.width, scene.scene.height]);
-            (&mut *scene, [color, normal, albedo], samples, size)
+            (&mut *scene, [color, normal, albedo, shadow], samples, size)
         }
     };
     if samples == 0 {
@@ -588,11 +589,12 @@ pub fn capture_display(
         next.owner = handle;
         *display = Some(next);
     }
-    let [color, normal, albedo] = &outputs;
+    let [color, normal, albedo, shadow] = &outputs;
+    let metadata = crate::display::Metadata::from_trace(&scene.display_trace);
     display
         .as_mut()
         .unwrap()
-        .capture(color, normal, albedo, samples);
+        .capture(color, normal, albedo, shadow, metadata, samples);
     Ok(true)
 }
 
