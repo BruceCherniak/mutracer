@@ -39,6 +39,7 @@ pub mod preparation_diagnostics;
 mod profiling;
 mod runtime;
 mod scene;
+pub mod scene_api;
 pub mod settings;
 pub mod status;
 pub mod submission;

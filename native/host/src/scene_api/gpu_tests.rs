@@ -1,0 +1,133 @@
+use super::*;
+use crate::api::{
+    Backend, ConvergeOptions, Engine, EngineOptions, PixelKind, Render, RenderSettings, RenderSize,
+};
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn software_scene_object_incremental_matches_full() {
+    let mut s = Scene::new();
+    let g = s
+        .add_geometry(Geometry::new(
+            vec![-1., -1., 0., 1., -1., 0., 0., 1., 0.],
+            vec![0, 1, 2],
+        ))
+        .unwrap();
+    s.geometry_mut(g).unwrap().uv[0] = vec![0., 0., 1., 0., 0.5, 1.].into();
+    let t = s
+        .add_texture(Texture::rgba8(1, 1, vec![255, 200, 150, 255]))
+        .unwrap();
+    let mut material = OpenPbrMaterial::default();
+    material.textures[0] = Some(t);
+    let mat = s.add_material(material).unwrap();
+    let mesh = s.add_mesh(Mesh::new(g, mat)).unwrap();
+    let hdr = s
+        .add_texture(Texture {
+            pixels: TexturePixels::Rgba32F(vec![0.4, 0.5, 0.6, 1.].into()),
+            ..Texture::rgba8(1, 1, vec![])
+        })
+        .unwrap();
+    s.set_environment(Environment {
+        texture: Some(hdr),
+        background: Some(hdr),
+        ..Environment::default()
+    })
+    .unwrap();
+    let light = s
+        .add_light(Light::Directional {
+            color: [1.; 3],
+            intensity: 2.,
+            transform: Mat4::IDENTITY,
+        })
+        .unwrap();
+    let mut camera = Camera::default();
+    camera.world_matrix[14] = 3.;
+    s.set_default_camera(Some(camera));
+    let engine = Engine::new(EngineOptions {
+        backend: Backend::Software,
+    })
+    .unwrap();
+    let settings = RenderSettings {
+        max_samples: 8,
+        size: RenderSize::Fixed {
+            width: 32,
+            height: 24,
+        },
+        ..Default::default()
+    };
+    let render = Render::new(&engine, settings.clone()).unwrap();
+    engine.set_scene_object(&s).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(8)).unwrap();
+    for edit in 0..10 {
+        match edit {
+            0 => s.material_mut(mat).unwrap().values.roughness = 0.6,
+            1 => {
+                s.mesh_mut(mesh).unwrap().transform = Mat4::from_translation(Vec3::new(0.1, 0., 0.))
+            }
+            2 => {
+                Arc::make_mut(&mut s.geometry_mut(g).unwrap().positions)[0] -= 0.2;
+            }
+            3 => s.texture_mut(t).unwrap().scale = [2., 3.],
+            4 => {
+                s.texture_mut(t).unwrap().pixels =
+                    TexturePixels::Rgba8(vec![150, 200, 255, 255].into())
+            }
+            5 => {
+                *s.light_mut(light).unwrap() = Light::Directional {
+                    color: [1., 0.8, 0.7],
+                    intensity: 3.,
+                    transform: Mat4::IDENTITY,
+                }
+            }
+            6 => {
+                s.add_light(Light::Sphere {
+                    color: [1.; 3],
+                    intensity: 1.,
+                    radius: 0.1,
+                    transform: Mat4::from_translation(Vec3::new(0., 1., 2.)),
+                })
+                .unwrap();
+            }
+            7 => s.remove_light(light).unwrap(),
+            8 => {
+                s.texture_mut(hdr).unwrap().pixels =
+                    TexturePixels::Rgba32F(vec![0.7, 0.5, 0.2, 1.].into())
+            }
+            9 => {
+                camera.fov = 50.;
+                s.set_default_camera(Some(camera));
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(
+            s.pending_commit_kind().unwrap(),
+            CommitKind::Incremental,
+            "edit {edit} prediction"
+        );
+        engine.set_scene_object(&s).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(8)).unwrap();
+        assert_eq!(
+            render.last_commit().unwrap(),
+            Some(CommitKind::Incremental),
+            "edit {edit} actual"
+        );
+        let fresh = Engine::new(EngineOptions {
+            backend: Backend::Software,
+        })
+        .unwrap();
+        let reference = Render::new(&fresh, settings.clone()).unwrap();
+        fresh.set_scene_object(&s).unwrap();
+        fresh.update().unwrap();
+        reference.converge(ConvergeOptions::new(8)).unwrap();
+        for kind in [PixelKind::Hdr, PixelKind::Normal, PixelKind::Albedo] {
+            let a = render.read_pixels(kind).unwrap();
+            let b = reference.read_pixels(kind).unwrap();
+            assert_eq!(
+                a.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                b.data.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                "edit {edit} {kind:?}"
+            );
+        }
+    }
+}

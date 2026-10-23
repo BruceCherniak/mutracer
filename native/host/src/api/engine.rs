@@ -529,6 +529,10 @@ impl Engine {
         state.source_shared = true;
         Ok(())
     }
+    /// Records a checked scene snapshot, shared by all renders. Takes effect at update.
+    pub fn set_scene_object(&self, scene: &crate::scene_api::Scene) -> Result<()> {
+        self.set_scene_shared(scene.descriptor()?)
+    }
     /// Records an empty scene, committed by the next update. Cancels old work,
     /// drops all render images and scene resources; renders can be reused.
     /// Update may wait for scene preparation and submitted GPU work to retire.

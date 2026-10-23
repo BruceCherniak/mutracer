@@ -1810,6 +1810,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "cc",
+ "glam",
  "libloading",
  "objc2 0.6.5",
  "objc2-metal 0.3.2",

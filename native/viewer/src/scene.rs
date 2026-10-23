@@ -1853,3 +1853,105 @@ mod descriptor_tests {
         assert_ne!(s.check(), allocation);
     }
 }
+
+#[test]
+fn scene_api_matches_legacy_viewer_encoding() {
+    use mutracer_native_probe::scene_api::{self as api, encoder};
+    let model =
+        Model::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sample.glb")).unwrap();
+    let camera = crate::renderer::Camera::fit(model.center, model.radius);
+    let environment = Environment::default();
+    let textures: Vec<_> = model
+        .textures
+        .iter()
+        .map(|t| encoder::Texture {
+            source: t.source,
+            width: t.width,
+            height: t.height,
+            pixels: t.pixels.as_slice().into(),
+            uv: t.uv,
+            scale: t.scale,
+            offset: t.offset,
+            wrap: t.wrap,
+            storage: 0,
+            flip_y: false,
+        })
+        .collect();
+    let geometries: Vec<_> = model
+        .geometries
+        .iter()
+        .map(|g| encoder::Geometry {
+            min: g.min,
+            max: g.max,
+            positions: g.positions.as_slice().into(),
+            indices: g.indices.as_slice().into(),
+            normals: g.normals.as_slice().into(),
+            uv: [g.uv[0].as_slice().into(), g.uv[1].as_slice().into()],
+            colors: g.colors.as_slice().into(),
+            tangents: g.tangents.as_slice().into(),
+            material_indices: Arc::from([]),
+        })
+        .collect();
+    let materials: Vec<_> = model
+        .materials
+        .iter()
+        .map(|m| encoder::Material {
+            name: m.name.clone(),
+            color: m.color,
+            roughness: m.roughness,
+            metalness: m.metalness,
+            opacity: m.opacity,
+            transmission: m.transmission,
+            ior: m.ior,
+            emission: m.emission,
+            emission_strength: m.emission_strength,
+            maps: m.maps,
+            alpha_mode: m.alpha_mode,
+            alpha_cutoff: m.alpha_cutoff,
+            double_sided: m.double_sided,
+            normal_scale: m.normal_scale,
+            unlit: m.unlit,
+            layers: encoder::MaterialLayers::default(),
+        })
+        .collect();
+    let meshes: Vec<_> = model
+        .meshes
+        .iter()
+        .map(|m| encoder::Mesh {
+            name: m.name.clone(),
+            geometry: m.geometry,
+            material: m.material,
+            transform: m.transform,
+            materials: vec![],
+            instances: None,
+        })
+        .collect();
+    let (width, height, pixels) = environment.pixels();
+    let env = encoder::Environment {
+        enabled: true,
+        width,
+        height,
+        pixels: pixels.into(),
+        background: true,
+        background_color: [0.; 3],
+        background_alpha: 1.,
+    };
+    let data = encoder::SceneData {
+        geometries: &geometries,
+        materials: &materials,
+        textures: &textures,
+        meshes: &meshes,
+        lights: vec![],
+        ies: vec![],
+        properties: &[],
+    };
+    let scene = api::Scene::from_indexed(&data, &env).unwrap();
+    let mut cached = None;
+    let actual = scene
+        .update_descriptor(&mut cached, &camera.bytes([160, 104]), [160, 104])
+        .unwrap();
+    assert_eq!(
+        actual,
+        model.descriptor(&camera.bytes([160, 104]), [160, 104], &environment)
+    );
+}
