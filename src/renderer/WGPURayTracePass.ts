@@ -27,6 +27,7 @@ import { mergeRefitRanges } from './bvhAccel.js';
 import { updatePreparedGeometries, canUpdateGeometries, geometryTopologyChanged, packVertexAttributes } from './geometryUpdates.js';
 import { SceneEnvironmentCache, RectLightTextureTracker } from './sceneLightChanges.js';
 import { MaterialChangeTracker, materialIsEmissive, type MaterialUpdateLevel } from './materialChanges.js';
+import { WGPUEnvMapDistribution } from './WGPUEnvMapDistribution.js';
 import { WGPUShaderCache, retainedShaderCapacity } from './WGPUShaderCache.js';
 import { WGPUShaderCapabilities } from './WGPUShaderCapabilities.js';
 import { wgpuSceneFeatureFlags } from './WGPUSceneFeatures.js';
@@ -303,6 +304,7 @@ class WGPURayTracePass {
   private _envImageSource: EnvironmentMapSource | undefined;
   private _envTex?: GPUTexture;
   private _envDistributionTex?: GPUTexture;
+  private _envDistribution?: WGPUEnvMapDistribution;
   private _backgroundImageSource: TexturePixelSource | undefined;
   private _backgroundTex?: GPUTexture;
 
@@ -1445,38 +1447,47 @@ class WGPURayTracePass {
     ) {
       this._envImageSource = envImage;
 
-      this._envTex?.destroy();
-      this._envDistributionTex?.destroy();
-
-      const distribution = envImage && envMapDistribution(envImage);
-      const usage =
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.RENDER_ATTACHMENT;
-      this._envTex = device.createTexture({
-        format: 'rgba32float',
-        usage,
-        label: 'Env',
-        size: {
-          width: envImage ? envImage.width : 1,
-          height: envImage ? envImage.height : 1,
-          depthOrArrayLayers: 1
-        }
-      });
-      this._envDistributionTex = device.createTexture({
-        format: 'rg32float',
-        usage,
-        label: 'Env Distribution',
-        size: {
-          width: distribution ? distribution.width : 1,
-          height: distribution ? distribution.height : 1,
-          depthOrArrayLayers: 1
-        }
-      });
-      if (envImage && distribution) {
+      const gpuDistribution = envImage && envImage.width * envImage.height >= 65536 &&
+        WGPUEnvMapDistribution.supported(device, envImage.width, envImage.height);
+      const distribution = envImage && !gpuDistribution ? envMapDistribution(envImage) : undefined;
+      const distributionWidth = envImage ? envImage.width + 2 : 1;
+      const distributionHeight = envImage ? envImage.height + 1 : 1;
+      const width = envImage?.width ?? 1;
+      const height = envImage?.height ?? 1;
+      const resized = !this._envTex || this._envTex.width !== width || this._envTex.height !== height ||
+        !this._envDistributionTex || this._envDistributionTex.width !== distributionWidth || this._envDistributionTex.height !== distributionHeight;
+      if (resized) {
+        this._envTex?.destroy();
+        this._envDistributionTex?.destroy();
+        const usage =
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.COPY_DST |
+          GPUTextureUsage.RENDER_ATTACHMENT;
+        this._envTex = device.createTexture({
+          format: 'rgba32float',
+          usage,
+          label: 'Env',
+          size: {
+            width,
+            height,
+            depthOrArrayLayers: 1
+          }
+        });
+        this._envDistributionTex = device.createTexture({
+          format: 'rg32float',
+          usage: usage | GPUTextureUsage.STORAGE_BINDING,
+          label: 'Env Distribution',
+          size: {
+            width: distributionWidth,
+            height: distributionHeight,
+            depthOrArrayLayers: 1
+          }
+        });
+      }
+      if (envImage) {
         device.queue.writeTexture(
           {
-            texture: this._envTex
+            texture: this._envTex!
           },
           envImage.data.buffer,
           {
@@ -1488,23 +1499,20 @@ class WGPURayTracePass {
             depthOrArrayLayers: 1
           }
         );
-        device.queue.writeTexture(
-          {
-            texture: this._envDistributionTex
-          },
-          distribution.data.buffer,
-          {
-            bytesPerRow: distribution.width * 4 * 2
-          },
-          {
-            width: distribution.width,
-            height: distribution.height,
-            depthOrArrayLayers: 1
-          }
-        );
-      }
+        if (gpuDistribution) {
+          this._envDistribution ??= new WGPUEnvMapDistribution(device);
+          this._envDistribution.build(this._envTex!, this._envDistributionTex!);
+        } else if (distribution) {
+          this._envDistribution?.dispose();
+          device.queue.writeTexture(
+            { texture: this._envDistributionTex! }, distribution.data.buffer,
+            { bytesPerRow: distribution.width * 4 * 2 },
+            { width: distribution.width, height: distribution.height, depthOrArrayLayers: 1 }
+          );
+        }
+      } else this._envDistribution?.dispose();
 
-      this._needsUpdateBindGroups = true;
+      this._needsUpdateBindGroups ||= resized;
     }
 
     this._constants.USE_ENVMAP = !!envImage;
@@ -2469,6 +2477,7 @@ class WGPURayTracePass {
 
   dispose() {
     this._disposed = true;
+    this._envDistribution?.dispose();
     this._bindless?.dispose(); this._retiredBindless.forEach(textures => textures.dispose()); this._retiredBindless.clear();
     this._shaderCache.clear();
     this._shaderCapabilities.clear();

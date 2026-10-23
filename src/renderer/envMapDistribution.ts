@@ -70,25 +70,25 @@ export function envMapDistribution(
   // sharp HDR sun from leaking into a neighbouring low-PDF cell and producing
   // fireflies. This only changes the importance distribution, not the
   // radiance integral, so the estimator remains unbiased.
-  const filteredLuminance = (x: number, y: number) => {
-    let maximum = 0;
-    for (let dy = -1; dy <= 1; dy++) {
-      const sourceY = Math.min(image.height - 1, Math.max(0, y + dy));
-      for (let dx = -1; dx <= 1; dx++) {
-        const sourceX = Math.min(image.width - 1, Math.max(0, x + dx));
-        maximum = Math.max(
-          maximum,
-          luminance[sourceY * image.width + sourceX]
-        );
-      }
+  // A separable max filter has the same clamped 3×3 footprint, with three
+  // reads per pass instead of nine clamped reads for every output texel.
+  const horizontal = new Float32Array(image.width * image.height);
+  for (let y = 0; y < image.height; y++) {
+    const row = y * image.width;
+    for (let x = 0; x < image.width; x++) {
+      horizontal[row + x] = Math.max(0,
+        luminance[row + Math.max(0, x - 1)], luminance[row + x],
+        luminance[row + Math.min(image.width - 1, x + 1)]);
     }
-    return Math.max(maximum, 1e-12);
-  };
+  }
 
   for (let y = 0; y < image.height; y++) {
     const sinTheta = Math.sin((Math.PI * (y + 0.5)) / image.height);
+    const above = Math.max(0, y - 1) * image.width;
+    const row = y * image.width;
+    const below = Math.min(image.height - 1, y + 1) * image.width;
     for (let x = 0; x < image.width; x++) {
-      const weight = filteredLuminance(x, y) * sinTheta;
+      const weight = Math.max(horizontal[above + x], horizontal[row + x], horizontal[below + x], 1e-12) * sinTheta;
       cdf.set(x + 2, y, 0, cdf.get(x + 1, y, 0) + weight / image.width);
       cdf.set(x + 1, y, 1, weight);
     }

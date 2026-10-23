@@ -8,6 +8,7 @@ import {
 import { DEFAULT_SETTINGS, autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
 import { Environment, loadHDR, parseHDR, type EquirectData } from './environment';
 import { SkyBaker } from './sky';
+import { SkyWorker } from './skyWorker';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
   createMaterialSpheres, isHDRFile, loadModelFromFiles, loadModelFromURL, loadModelFromSource,
@@ -83,7 +84,9 @@ export class ViewerEngine {
   private readonly skyBaker = new SkyBaker();
   /** Last procedural sky, reused when it is selected again. */
   private sky = { hours: get().settings.skyTime, data: this.skyBaker.bake(get().settings.skyTime) };
+  private readonly skyWorker = new SkyWorker(this.skyBaker);
   private skyFrame = 0;
+  private skyPending = false;
   private readonly environment = new Environment(this.sky.data);
   private modelEnvironment: Environment | null = null;
   private readonly studioAmbient = new Environment(createStudioAmbient());
@@ -225,6 +228,7 @@ export class ViewerEngine {
     this.loop.dispose(); this.sync.dispose(); this.viewSync.dispose();
     this.environment.dispose();
     cancelAnimationFrame(this.skyFrame);
+    this.skyWorker.dispose();
     this.skyBaker.dispose();
     this.studioAmbient.dispose();
     this.engine.dispose();
@@ -539,19 +543,32 @@ export class ViewerEngine {
     }
   }
 
-  /** Bakes at most once per frame while the time is scrubbed, always for the latest time. */
+  /** Coalesces edits while a worker bake is running, then requests the latest time. */
   private applySky(id: string) {
+    this.cancelEnvironmentDownload();
     if (this.sky.hours === this.settings.skyTime) {
       this.setEnvironmentData(this.sky.data, id);
       return;
     }
-    if (this.skyFrame) return;
-    this.skyFrame = requestAnimationFrame(() => {
+    if (this.skyFrame || this.skyPending) return;
+    this.skyFrame = requestAnimationFrame(async () => {
       this.skyFrame = 0;
-      if (this.settings.envId !== id) return;
+      if (this.disposed || this.settings.envId !== id) return;
       const hours = this.settings.skyTime;
-      this.sky = { hours, data: this.skyBaker.bake(hours) };
-      this.setEnvironmentData(this.sky.data, id);
+      this.skyPending = true;
+      try {
+        const data = await this.skyWorker.bake(hours);
+        if (this.disposed) return;
+        this.sky = { hours, data };
+        // A superseded result must not overwrite a newer time or HDRI selection.
+        if (this.settings.envId === id && this.settings.skyTime === hours) this.setEnvironmentData(data, id);
+      } catch (error) {
+        if (!this.disposed) showToast(`Could not update the sky: ${(error as Error).message}`, 'error');
+        return;
+      } finally {
+        this.skyPending = false;
+      }
+      if (!this.disposed && this.settings.envId === id && this.settings.skyTime !== hours) this.applySky(id);
     });
   }
 
