@@ -339,6 +339,15 @@
         "u32"
       ],
       "returns": "bytes"
+    },
+    {
+      "export": "sceneTargetParameters",
+      "symbol": "mt_core_scene_target",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
     }
   ]
 }
