@@ -328,6 +328,8 @@ export class ViewerEngine {
     this.modelId = null; // Fit must not overwrite the saved view before restoration.
     this.setModel(model, edits);
     const cameraRestored = restored ? this.restoreCamera(id) : false;
+    const researchScene = MODEL_PRESETS.find((preset) => preset.id === meta.presetId)?.category === 'research';
+    if (researchScene) setSettings({ groundShadow: false }, { record: false });
     const authoredLighting = model.lighting?.available && model.lighting.useByDefault !== false;
     if (authoredLighting && !cameraRestored) {
       set({ settings: { ...get().settings, lighting: 'environment', envId: 'model', envIntensity: 1, envRotation: 0,
@@ -347,7 +349,7 @@ export class ViewerEngine {
     this.awaitingFirstSample = true;
     writeHash(this.settings, meta.presetId);
     if (!cameraRestored && this.modelCameras.length) {
-      if (MODEL_PRESETS.find((preset) => preset.id === meta.presetId)?.category === 'research') {
+      if (researchScene) {
         setSettings({ cameraIndex: 0 });
       } else {
         const count = this.modelCameras.length;

@@ -134,6 +134,7 @@ describe('imported camera choice', () => {
     const viewer = engine(), data = model(2);
     data.root.children[1].name = data.root.children[2].name = 'Duplicate';
     await viewer.loadModel(data);
+    expect(useViewer.getState().settings.groundShadow).toBe(true);
     viewer.applyModelCamera(data.root.children[2].uuid);
     expect(useViewer.getState().settings.cameraIndex).toBe(1);
     expect(useViewer.getState().toast).toBeNull();
@@ -251,8 +252,11 @@ describe('imported camera choice', () => {
     };
     await viewer.load(data.name, async () => data, saved.meta, cached ? saved : undefined);
     expect(useViewer.getState().settings.cameraIndex).toBe(0);
+    expect(useViewer.getState().settings.groundShadow).toBe(false);
     expect(useViewer.getState().cameras).toEqual(['View 1', 'View 2']);
     expect(useViewer.getState().toast).toBeNull();
+    setSettings({ groundShadow: true });
+    expect(useViewer.getState().settings.groundShadow).toBe(true);
   });
 
   it.each([-1, 1])('preserves a restored research-scene camera choice (%s)', async (cameraIndex) => {
@@ -266,6 +270,7 @@ describe('imported camera choice', () => {
     });
     await viewer.load(data.name, async () => data, saved.meta, saved);
     expect(useViewer.getState().settings.cameraIndex).toBe(cameraIndex);
+    expect(useViewer.getState().settings.groundShadow).toBe(false);
     expect(useViewer.getState().toast).toBeNull();
   });
 
@@ -274,6 +279,7 @@ describe('imported camera choice', () => {
     await viewer.load(data.name, async () => data,
       { name: data.name, presetId: 'research-cornell-box', credit: null, sourceUrl: null });
     expect(useViewer.getState().settings.cameraIndex).toBe(-1);
+    expect(useViewer.getState().settings.groundShadow).toBe(false);
     expect(useViewer.getState().toast).toBeNull();
   });
 });
