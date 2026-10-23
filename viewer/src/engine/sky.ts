@@ -1,5 +1,6 @@
 /**
- * Physically based clear sky for the viewer's default environment.
+ * Physically based clear sky for the viewer's default environment, baked on
+ * the GPU into an equirectangular radiance map.
  *
  * Integrates single scattering through a spherical Rayleigh, Mie and ozone
  * atmosphere and adds multiple scattering with the isotropic approximation
@@ -8,8 +9,10 @@
  * "Precomputed Atmospheric Scattering" (2008/2017). Formulas only; no code is
  * taken from either reference.
  *
- * The sky depends only on view elevation and azimuth relative to the sun, so
- * it is integrated into a small table and then expanded to the full map.
+ * WebGL 2 passes: transmittance table, multiple scattering by altitude, a
+ * sky-view table by elevation and azimuth relative to the sun, irradiance and
+ * exposure, then the map itself with an anti-aliased, limb-darkened sun disk.
+ * Distances are in kilometers so float32 keeps the horizon precise.
  */
 
 export interface SkyData {
@@ -17,48 +20,6 @@ export interface SkyData {
   width: number;
   height: number;
 }
-
-export interface PhysicalSkyOptions {
-  width?: number;
-  height?: number;
-  /** Sun elevation above the horizon, in degrees. */
-  sunElevation?: number;
-  /** Sun azimuth around +Y, in degrees. */
-  sunAzimuth?: number;
-  /** Apparent sun radius, in degrees. Larger than the real 0.27° so the disk spans several texels. */
-  sunRadius?: number;
-  /** Aerosol density relative to a very clean atmosphere (optical depth about 0.005). */
-  turbidity?: number;
-  /** Linear ground albedo. */
-  groundAlbedo?: [number, number, number];
-  /** Sun plus sky irradiance on a horizontal plane with the sun at 33°; lower suns are dimmer. */
-  illuminance?: number;
-}
-
-type Vec3 = [number, number, number];
-
-const EARTH_RADIUS = 6360e3;
-const TOP_RADIUS = 6460e3;
-const CAMERA_ALTITUDE = 200;
-const RAYLEIGH_SCATTERING: Vec3 = [5.802e-6, 13.558e-6, 33.1e-6];
-const RAYLEIGH_HEIGHT = 8000;
-const MIE_SCATTERING = 3.996e-6;
-const MIE_EXTINCTION = 4.44e-6;
-const MIE_HEIGHT = 1200;
-const MIE_G = 0.8;
-const OZONE_ABSORPTION: Vec3 = [0.65e-6, 1.881e-6, 0.085e-6];
-
-// Table resolution: view elevation (denser at the horizon) by relative azimuth.
-const ELEVATIONS = 192;
-const AZIMUTHS = 96;
-const VIEW_STEPS = 40;
-const MS_ALTITUDES = 32;
-const MS_DIRECTIONS = 64;
-const MS_STEPS = 20;
-const T_ALTITUDES = 64;
-const T_ANGLES = 256;
-// Horizontal illuminance of this atmosphere for unit solar irradiance and a 33° sun.
-const REFERENCE_ILLUMINANCE = 0.488;
 
 const LATITUDE = 40;
 /** Local solar time of the default sky, in hours. */
@@ -85,317 +46,431 @@ export function sunPosition(hours: number) {
   };
 }
 
-class Atmosphere {
-  private readonly transmittance = new Float32Array(T_ALTITUDES * T_ANGLES * 3);
-  private readonly multiple = new Float32Array(MS_ALTITUDES * 3);
-  private readonly mie: number;
+/** Apparent sun radius in degrees; larger than the real 0.27° so the disk reads at map resolution. */
+const SUN_RADIUS = 0.4;
+/** Aerosol density relative to a very clean atmosphere (optical depth about 0.005). */
+const TURBIDITY = 5;
+const GROUND_ALBEDO = [0.2, 0.18, 0.15];
+/** Sun plus sky irradiance on a horizontal plane with the sun at 33°. */
+const ILLUMINANCE = Math.PI;
+/** Horizontal illuminance of this atmosphere for unit solar irradiance and a 33° sun. */
+const REFERENCE_ILLUMINANCE = 0.488;
 
-  constructor(readonly sun: Vec3, turbidity: number, readonly albedo: Vec3) {
-    this.mie = turbidity;
-    for (let i = 0; i < T_ALTITUDES; i++) {
-      const r = EARTH_RADIUS + altitudeAt(i / (T_ALTITUDES - 1));
-      for (let j = 0; j < T_ANGLES; j++) {
-        const t = this.integrateTransmittance(r, (j / (T_ANGLES - 1)) * 2 - 1);
-        this.transmittance.set(t, (i * T_ANGLES + j) * 3);
-      }
-    }
-    this.integrateMultipleScattering();
-  }
+const T_SIZE = [256, 64] as const; // cos(view zenith) × altitude
+const MS_SIZE = [32, 1] as const; // altitude
+const SV_SIZE = [96, 192] as const; // relative azimuth × elevation
 
-  /** Scattering, extinction for one channel and density terms at a radius. */
-  private medium(r: number) {
-    const h = Math.max(r - EARTH_RADIUS, 0);
-    const rayleigh = Math.exp(-h / RAYLEIGH_HEIGHT);
-    const mie = Math.exp(-h / MIE_HEIGHT) * this.mie;
-    const ozone = Math.max(0, 1 - Math.abs(h - 25000) / 15000);
-    return { rayleigh, mie, ozone };
-  }
+const COMMON = /* glsl */ `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+out vec4 color;
+const float PI = 3.14159265358979;
+const float R_GROUND = 6360.0;
+const float R_TOP = 6460.0;
+const float CAMERA_ALTITUDE = 0.2;
+const vec3 RAYLEIGH = vec3(5.802e-3, 13.558e-3, 33.1e-3);
+const float MIE_SCATTERING = 3.996e-3;
+const float MIE_EXTINCTION = 4.44e-3;
+const float MIE_G = 0.8;
+const vec3 OZONE = vec3(0.65e-3, 1.881e-3, 0.085e-3);
+const ivec2 T_SIZE = ivec2(${T_SIZE[0]}, ${T_SIZE[1]});
+const int MS_ALTITUDES = ${MS_SIZE[0]};
+const ivec2 SV_SIZE = ivec2(${SV_SIZE[0]}, ${SV_SIZE[1]});
+uniform vec3 uSun; // atmosphere frame: the sun's azimuth is +X
+uniform float uTurbidity;
+uniform vec3 uAlbedo;
 
-  private extinction(r: number): Vec3 {
-    const { rayleigh, mie, ozone } = this.medium(r);
-    return [0, 1, 2].map((c) => RAYLEIGH_SCATTERING[c] * rayleigh + MIE_EXTINCTION * mie + OZONE_ABSORPTION[c] * ozone) as Vec3;
-  }
+// (R - r)(R + r) + r²μ² avoids cancelling planet-sized squares.
+float discriminant(float r, float mu, float radius) { return (radius - r) * (radius + r) + r * r * mu * mu; }
+bool hitsGround(float r, float mu) { return mu < 0.0 && discriminant(r, mu, R_GROUND) >= 0.0; }
+float distanceToGround(float r, float mu) { return max(-r * mu - sqrt(max(discriminant(r, mu, R_GROUND), 0.0)), 0.0); }
+float distanceToTop(float r, float mu) { return max(-r * mu + sqrt(max(discriminant(r, mu, R_TOP), 0.0)), 0.0); }
 
-  private integrateTransmittance(r: number, mu: number): Vec3 {
-    if (hitsGround(r, mu)) return [0, 0, 0];
-    const length = distanceToTop(r, mu);
-    const depth: Vec3 = [0, 0, 0];
-    const steps = 48;
-    for (let i = 0; i < steps; i++) {
-      const t = ((i + 0.5) / steps) * length;
-      const e = this.extinction(radiusAt(r, mu, t));
-      for (let c = 0; c < 3; c++) depth[c] += e[c] * (length / steps);
-    }
-    return depth.map((d) => Math.exp(-d)) as Vec3;
-  }
+/** Rayleigh, Mie and ozone densities. */
+vec3 densities(float r) {
+  float h = max(r - R_GROUND, 0.0);
+  return vec3(exp(-h / 8.0), exp(-h / 1.2) * uTurbidity, max(0.0, 1.0 - abs(h - 25.0) / 15.0));
+}
+vec3 extinction(vec3 d) { return RAYLEIGH * d.x + MIE_EXTINCTION * d.y + OZONE * d.z; }
 
-  /** Transmittance from a point toward the top of the atmosphere. */
-  transmittanceTo(r: number, mu: number): Vec3 {
-    const u = altitudeCoord(r - EARTH_RADIUS) * (T_ALTITUDES - 1);
-    const v = ((Math.min(Math.max(mu, -1), 1) + 1) / 2) * (T_ANGLES - 1);
-    return bilinear(this.transmittance, T_ANGLES, u, v);
-  }
+float altitudeAt(float x) { return x * x * (R_TOP - R_GROUND); }
+float altitudeCoord(float h) { return sqrt(clamp(h / (R_TOP - R_GROUND), 0.0, 1.0)); }
 
-  private multipleAt(r: number): Vec3 {
-    const u = altitudeCoord(r - EARTH_RADIUS) * (MS_ALTITUDES - 1);
-    const i = Math.min(Math.floor(u), MS_ALTITUDES - 2), f = u - i;
-    return [0, 1, 2].map((c) => this.multiple[i * 3 + c] * (1 - f) + this.multiple[(i + 1) * 3 + c] * f) as Vec3;
-  }
+/** Bilinear lookup in texel-index space; float textures need not be filterable. */
+vec3 fetchLinear(sampler2D table, vec2 p) {
+  ivec2 size = textureSize(table, 0);
+  vec2 q = clamp(p, vec2(0.0), vec2(size - 1));
+  ivec2 i = min(ivec2(floor(q)), max(size - 2, ivec2(0)));
+  vec2 f = clamp(q - vec2(i), 0.0, 1.0);
+  ivec2 j = min(i + 1, size - 1);
+  vec3 a = texelFetch(table, i, 0).rgb, b = texelFetch(table, ivec2(j.x, i.y), 0).rgb;
+  vec3 c = texelFetch(table, ivec2(i.x, j.y), 0).rgb, d = texelFetch(table, j, 0).rgb;
+  return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+`;
 
-  /** Isotropic second-order radiance and its geometric series (Hillaire 2020, eq. 5-9). */
-  private integrateMultipleScattering() {
-    for (let a = 0; a < MS_ALTITUDES; a++) {
-      const r = EARTH_RADIUS + altitudeAt(a / (MS_ALTITUDES - 1));
-      const second: Vec3 = [0, 0, 0];
-      const transfer: Vec3 = [0, 0, 0];
-      for (let d = 0; d < MS_DIRECTIONS; d++) {
-        // Fibonacci sphere; the planet is symmetric about the local vertical.
-        const mu = 1 - (2 * (d + 0.5)) / MS_DIRECTIONS;
-        const phi = d * Math.PI * (3 - Math.sqrt(5));
-        const s = Math.sqrt(1 - mu * mu);
-        const dir: Vec3 = [s * Math.cos(phi), mu, s * Math.sin(phi)];
-        const { radiance, throughput } = this.march([0, r, 0], dir, MS_STEPS, false);
-        for (let c = 0; c < 3; c++) {
-          second[c] += radiance[c] / MS_DIRECTIONS;
-          transfer[c] += throughput[c] / MS_DIRECTIONS;
-        }
-      }
-      for (let c = 0; c < 3; c++) this.multiple[a * 3 + c] = second[c] / (1 - transfer[c]);
-    }
-  }
+const ATMOSPHERE = /* glsl */ `
+uniform sampler2D uTransmittance;
+uniform sampler2D uMultiple;
+uniform bool uFull;
+uniform vec3 uSkyIrradiance;
 
-  /**
-   * Radiance arriving at `origin` from direction `dir`, for unit solar
-   * irradiance. Without `full` it uses isotropic phase and no multiple
-   * scattering, and also returns the scattered fraction for the series.
-   */
-  march(origin: Vec3, dir: Vec3, steps: number, full: boolean, skyIrradiance?: Vec3) {
-    const r = Math.hypot(...origin);
-    const mu = dot(origin, dir) / r;
-    const ground = hitsGround(r, mu);
-    const length = ground ? distanceToGround(r, mu) : distanceToTop(r, mu);
-    const nu = dot(dir, this.sun);
-    const rayleighPhase = full ? (3 / (16 * Math.PI)) * (1 + nu * nu) : 1 / (4 * Math.PI);
-    const miePhase = full ? cornetteShanks(nu) : 1 / (4 * Math.PI);
-    const radiance: Vec3 = [0, 0, 0];
-    const throughput: Vec3 = [0, 0, 0];
-    const view: Vec3 = [1, 1, 1];
-    let previous = 0;
-    for (let i = 0; i < steps; i++) {
-      // Quadratic spacing keeps long horizon rays resolved near the camera.
-      const next = length * ((i + 1) / steps) ** 2;
-      const dt = next - previous;
-      const t = (previous + next) / 2;
-      previous = next;
-      const p: Vec3 = [origin[0] + dir[0] * t, origin[1] + dir[1] * t, origin[2] + dir[2] * t];
-      const pr = Math.hypot(...p);
-      const { rayleigh, mie } = this.medium(pr);
-      const extinction = this.extinction(pr);
-      const sunT = this.transmittanceTo(pr, dot(p, this.sun) / pr);
-      const ms = full ? this.multipleAt(pr) : [0, 0, 0];
-      for (let c = 0; c < 3; c++) {
-        const scatterR = RAYLEIGH_SCATTERING[c] * rayleigh;
-        const scatterM = MIE_SCATTERING * mie;
-        const source = sunT[c] * (scatterR * rayleighPhase + scatterM * miePhase) + (scatterR + scatterM) * ms[c];
-        // Analytic integration of the source over the segment's extinction.
-        const segment = Math.exp(-extinction[c] * dt);
-        const weight = extinction[c] > 0 ? (1 - segment) / extinction[c] : dt;
-        radiance[c] += view[c] * source * weight;
-        throughput[c] += view[c] * (scatterR + scatterM) * weight;
-        view[c] *= segment;
-      }
-    }
-    if (ground) {
-      const p: Vec3 = [origin[0] + dir[0] * length, origin[1] + dir[1] * length, origin[2] + dir[2] * length];
-      const pr = Math.hypot(...p);
-      const cosSun = dot(p, this.sun) / pr;
-      const sunT = this.transmittanceTo(pr, cosSun);
-      for (let c = 0; c < 3; c++) {
-        const irradiance = sunT[c] * Math.max(cosSun, 0) + (skyIrradiance?.[c] ?? 0);
-        radiance[c] += view[c] * (this.albedo[c] / Math.PI) * irradiance;
-      }
-    }
-    return { radiance, throughput, transmittance: view };
-  }
+/** Transmittance from a point toward the top of the atmosphere. */
+vec3 transmittanceTo(float r, float mu) {
+  return fetchLinear(uTransmittance, vec2((clamp(mu, -1.0, 1.0) + 1.0) * 0.5 * float(T_SIZE.x - 1),
+    altitudeCoord(r - R_GROUND) * float(T_SIZE.y - 1)));
 }
 
-/** Clear sky at a local solar time, in hours. */
-export function createSkyAt(hours = DEFAULT_SKY_TIME, width = 1024, height = 512): SkyData {
-  const { elevation, azimuth } = sunPosition(hours);
-  return createPhysicalSky({ width, height, sunElevation: elevation, sunAzimuth: azimuth });
+float cornetteShanks(float nu) {
+  float g2 = MIE_G * MIE_G;
+  return 3.0 / (8.0 * PI) * ((1.0 - g2) * (1.0 + nu * nu)) / ((2.0 + g2) * pow(1.0 + g2 - 2.0 * MIE_G * nu, 1.5));
 }
 
-/** Builds an equirectangular map with v = 0 at +Y and u following atan2(-z, -x). */
-export function createPhysicalSky({
-  width = 1024,
-  height = 512,
-  sunElevation = 33,
-  sunAzimuth = 50,
-  sunRadius = 0.4,
-  turbidity = 5,
-  groundAlbedo = [0.2, 0.18, 0.15],
-  illuminance = Math.PI
-}: PhysicalSkyOptions = {}): SkyData {
-  const elevation = deg(sunElevation);
-  const azimuth = deg(sunAzimuth);
-  const sun: Vec3 = [Math.cos(elevation) * Math.cos(azimuth), Math.sin(elevation), Math.cos(elevation) * Math.sin(azimuth)];
-  // Atmosphere frame: the sun's azimuth is +X so tables only need |Δφ|.
-  const localSun: Vec3 = [Math.cos(elevation), Math.sin(elevation), 0];
-  const atmosphere = new Atmosphere(localSun, turbidity, groundAlbedo);
-  const origin: Vec3 = [0, EARTH_RADIUS + CAMERA_ALTITUDE, 0];
-  const table = new Float32Array(ELEVATIONS * AZIMUTHS * 3);
-  const fill = (row: number, skyIrradiance?: Vec3) => {
-    const e = elevationAt(row);
-    for (let col = 0; col < AZIMUTHS; col++) {
-      const phi = (col / (AZIMUTHS - 1)) * Math.PI;
-      const dir: Vec3 = [Math.cos(e) * Math.cos(phi), Math.sin(e), Math.cos(e) * Math.sin(phi)];
-      table.set(atmosphere.march(origin, dir, VIEW_STEPS, true, skyIrradiance).radiance, (row * AZIMUTHS + col) * 3);
+/**
+ * Radiance arriving at origin from dir, for unit solar irradiance. Without
+ * uFull it uses isotropic phase and no multiple scattering, and returns the
+ * scattered fraction for the multiple-scattering series.
+ */
+void march(vec3 origin, vec3 dir, int steps, out vec3 radiance, out vec3 throughput) {
+  float r = length(origin);
+  float mu = dot(origin, dir) / r;
+  bool ground = hitsGround(r, mu);
+  float len = ground ? distanceToGround(r, mu) : distanceToTop(r, mu);
+  float nu = dot(dir, uSun);
+  float rayleighPhase = uFull ? 3.0 / (16.0 * PI) * (1.0 + nu * nu) : 1.0 / (4.0 * PI);
+  float miePhase = uFull ? cornetteShanks(nu) : 1.0 / (4.0 * PI);
+  radiance = vec3(0.0);
+  throughput = vec3(0.0);
+  vec3 view = vec3(1.0);
+  float previous = 0.0;
+  for (int i = 0; i < steps; i++) {
+    // Quadratic spacing keeps long horizon rays resolved near the camera.
+    float s = float(i + 1) / float(steps);
+    float next = len * s * s;
+    float dt = next - previous;
+    vec3 p = origin + dir * (0.5 * (previous + next));
+    previous = next;
+    float pr = length(p);
+    vec3 d = densities(pr);
+    vec3 e = extinction(d);
+    vec3 sunT = transmittanceTo(pr, dot(p, uSun) / pr);
+    vec3 scatterR = RAYLEIGH * d.x;
+    float scatterM = MIE_SCATTERING * d.y;
+    vec3 ms = vec3(0.0);
+    if (uFull) {
+      float x = altitudeCoord(pr - R_GROUND) * float(MS_ALTITUDES - 1);
+      ms = fetchLinear(uMultiple, vec2(x, 0.0));
     }
-  };
-  // Upper rows first: the ground below is lit by that sky.
-  const horizon = ELEVATIONS / 2;
-  for (let row = horizon; row < ELEVATIONS; row++) fill(row);
-  const sky = skyIrradiance(table);
-  for (let row = 0; row < horizon; row++) fill(row, sky);
+    vec3 source = sunT * (scatterR * rayleighPhase + scatterM * miePhase) + (scatterR + scatterM) * ms;
+    // Analytic integration of the source over the segment's extinction.
+    vec3 segment = exp(-e * dt);
+    vec3 weight = (1.0 - segment) / max(e, vec3(1e-9));
+    radiance += view * source * weight;
+    throughput += view * (scatterR + scatterM) * weight;
+    view *= segment;
+  }
+  if (ground) {
+    vec3 p = origin + dir * len;
+    float pr = length(p);
+    float cosSun = dot(p, uSun) / pr;
+    vec3 irradiance = transmittanceTo(pr, cosSun) * max(cosSun, 0.0) + uSkyIrradiance;
+    radiance += view * uAlbedo / PI * irradiance;
+  }
+}
+`;
 
-  const sunTransmittance = atmosphere.transmittanceTo(EARTH_RADIUS + CAMERA_ALTITUDE, Math.sin(elevation));
-  const data = new Float32Array(width * height * 4);
-  const cosRadius = Math.cos(deg(sunRadius));
-  const disk = new Float32Array(width * height);
-  let diskIrradiance = 0;
-  for (let row = 0; row < height; row++) {
-    const theta = ((row + 0.5) / height) * Math.PI;
-    const texelSolidAngle = (2 * Math.PI / width) * (Math.PI / height) * Math.sin(theta);
-    for (let col = 0; col < width; col++) {
-      const phi = ((col + 0.5) / width) * 2 * Math.PI;
-      const dir = equirectDirection(theta, phi);
-      const relative = Math.abs(wrapAngle(Math.atan2(dir[2], dir[0]) - azimuth));
-      const radiance = sampleTable(table, Math.asin(Math.min(Math.max(dir[1], -1), 1)), relative);
-      const o = (row * width + col) * 4;
-      data.set(radiance, o);
-      data[o + 3] = 1;
-      // Supersample texels near the sun for an anti-aliased, limb-darkened disk.
-      if (dot(dir, sun) > Math.cos(deg(sunRadius) + 2 * Math.PI / height * 2)) {
-        let coverage = 0;
-        const n = 8;
-        for (let sy = 0; sy < n; sy++) {
-          for (let sx = 0; sx < n; sx++) {
-            const d = equirectDirection(((row + (sy + 0.5) / n) / height) * Math.PI, ((col + (sx + 0.5) / n) / width) * 2 * Math.PI);
-            const c = dot(d, sun);
-            if (c <= cosRadius) continue;
-            const limb = Math.sqrt(Math.max(0, 1 - (Math.acos(Math.min(c, 1)) / deg(sunRadius)) ** 2));
-            coverage += (1 - 0.6 * (1 - limb)) / (n * n);
-          }
-        }
-        disk[row * width + col] = coverage;
-        diskIrradiance += coverage * texelSolidAngle;
-      }
+const TRANSMITTANCE = COMMON + /* glsl */ `
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  float mu = float(p.x) / float(T_SIZE.x - 1) * 2.0 - 1.0;
+  float r = R_GROUND + altitudeAt(float(p.y) / float(T_SIZE.y - 1));
+  if (hitsGround(r, mu)) { color = vec4(0.0, 0.0, 0.0, 1.0); return; }
+  float len = distanceToTop(r, mu);
+  vec3 depth = vec3(0.0);
+  const int STEPS = 48;
+  for (int i = 0; i < STEPS; i++) {
+    float t = (float(i) + 0.5) / float(STEPS) * len;
+    depth += extinction(densities(sqrt(t * t + 2.0 * r * mu * t + r * r))) * (len / float(STEPS));
+  }
+  color = vec4(exp(-depth), 1.0);
+}
+`;
+
+const MULTIPLE = COMMON + ATMOSPHERE + /* glsl */ `
+void main() {
+  float r = R_GROUND + altitudeAt(floor(gl_FragCoord.x) / float(MS_ALTITUDES - 1));
+  const int DIRECTIONS = 64;
+  vec3 second = vec3(0.0), transfer = vec3(0.0);
+  for (int i = 0; i < DIRECTIONS; i++) {
+    // Fibonacci sphere; the planet is symmetric about the local vertical.
+    float mu = 1.0 - 2.0 * (float(i) + 0.5) / float(DIRECTIONS);
+    float phi = float(i) * PI * (3.0 - sqrt(5.0));
+    float s = sqrt(1.0 - mu * mu);
+    vec3 radiance, throughput;
+    march(vec3(0.0, r, 0.0), vec3(s * cos(phi), mu, s * sin(phi)), 20, radiance, throughput);
+    second += radiance / float(DIRECTIONS);
+    transfer += throughput / float(DIRECTIONS);
+  }
+  color = vec4(second / (1.0 - transfer), 1.0);
+}
+`;
+
+// Elevation rows are spaced by the square root so the horizon gets most of them.
+const ELEVATION_MAPPING = /* glsl */ `
+float elevationAt(float row) {
+  float x = row / float(SV_SIZE.y - 1) * 2.0 - 1.0;
+  return sign(x) * x * x * (PI / 2.0);
+}
+float elevationCoord(float e) {
+  float x = sign(e) * sqrt(abs(e) / (PI / 2.0));
+  return clamp((x + 1.0) * 0.5, 0.0, 1.0) * float(SV_SIZE.y - 1);
+}
+`;
+
+const SKY_VIEW = COMMON + ATMOSPHERE + ELEVATION_MAPPING + /* glsl */ `
+void main() {
+  ivec2 p = ivec2(gl_FragCoord.xy);
+  float e = elevationAt(float(p.y));
+  float phi = float(p.x) / float(SV_SIZE.x - 1) * PI;
+  vec3 radiance, throughput;
+  march(vec3(0.0, R_GROUND + CAMERA_ALTITUDE, 0.0), vec3(cos(e) * cos(phi), sin(e), cos(e) * sin(phi)), 40, radiance, throughput);
+  color = vec4(radiance, 1.0);
+}
+`;
+
+/** Texel 0: sky irradiance on the ground. Texel 1: sun transmittance at the camera and the exposure scale. */
+const IRRADIANCE = COMMON + ELEVATION_MAPPING + /* glsl */ `
+uniform sampler2D uTransmittance;
+uniform sampler2D uSkyView;
+void main() {
+  vec3 sky = vec3(0.0);
+  const int ROWS = 128, COLUMNS = 48;
+  for (int i = 0; i < ROWS; i++) {
+    float e = (float(i) + 0.5) / float(ROWS) * (PI / 2.0);
+    // Mirror-symmetric in azimuth: 2 × half circle, dω = cos e de dφ, cosine = sin e.
+    float weight = 2.0 * sin(e) * cos(e) * (PI / 2.0 / float(ROWS)) * (PI / float(COLUMNS));
+    for (int j = 0; j < COLUMNS; j++) {
+      float phi = (float(j) + 0.5) / float(COLUMNS) * PI;
+      sky += fetchLinear(uSkyView, vec2(phi / PI * float(SV_SIZE.x - 1), elevationCoord(e))) * weight;
     }
   }
-  // The disk carries the transmitted unit solar irradiance, independent of its size.
-  if (diskIrradiance > 0) {
-    for (let i = 0; i < disk.length; i++) {
-      if (!disk[i]) continue;
-      for (let c = 0; c < 3; c++) data[i * 4 + c] += (disk[i] / diskIrradiance) * sunTransmittance[c];
-    }
-  }
-  const horizontal = luminance(sky) + luminance(sunTransmittance) * Math.sin(elevation);
+  if (int(gl_FragCoord.x) == 0) { color = vec4(sky, 1.0); return; }
+  float r = R_GROUND + CAMERA_ALTITUDE;
+  vec3 sunT = fetchLinear(uTransmittance, vec2((uSun.y + 1.0) * 0.5 * float(T_SIZE.x - 1), altitudeCoord(CAMERA_ALTITUDE) * float(T_SIZE.y - 1)));
+  vec3 luma = vec3(0.2126, 0.7152, 0.0722);
+  float horizontal = dot(sky, luma) + dot(sunT, luma) * max(uSun.y, 0.0);
   // Half of the change from the reference is compensated, like a camera's
   // partial auto-exposure: low suns stay readable but still look dimmer.
-  const scale = illuminance / Math.sqrt(Math.max(horizontal, REFERENCE_ILLUMINANCE * 1e-3) * REFERENCE_ILLUMINANCE);
-  for (let i = 0; i < data.length; i++) if (i % 4 !== 3) data[i] *= scale;
-  return { data, width, height };
+  const float REFERENCE = ${REFERENCE_ILLUMINANCE};
+  float scale = ${ILLUMINANCE} / sqrt(max(horizontal, REFERENCE * 1e-3) * REFERENCE);
+  color = vec4(sunT, scale);
+}
+`;
+
+const MAP = COMMON + ELEVATION_MAPPING + /* glsl */ `
+uniform sampler2D uSkyView;
+uniform sampler2D uIrradiance;
+uniform vec2 uSize;
+uniform float uAzimuth;
+uniform vec3 uSunWorld;
+uniform float uSunRadius;
+
+// v = 0 is +Y and u follows atan2(-z, -x), as MuTracer reads equirect maps.
+vec3 mapDirection(vec2 texel) {
+  float theta = texel.y / uSize.y * PI;
+  float phi = texel.x / uSize.x * 2.0 * PI;
+  return vec3(-sin(theta) * cos(phi), cos(theta), -sin(theta) * sin(phi));
 }
 
-function skyIrradiance(table: Float32Array): Vec3 {
-  const result: Vec3 = [0, 0, 0];
-  const rows = 256, cols = 64;
-  for (let i = 0; i < rows; i++) {
-    const e = ((i + 0.5) / rows) * (Math.PI / 2);
-    for (let j = 0; j < cols; j++) {
-      const phi = ((j + 0.5) / cols) * Math.PI;
-      const radiance = sampleTable(table, e, phi);
-      // Mirror-symmetric in azimuth: 2 × half-circle, dω = cos e de dφ, cosine = sin e.
-      const weight = 2 * Math.sin(e) * Math.cos(e) * (Math.PI / 2 / rows) * (Math.PI / cols);
-      for (let c = 0; c < 3; c++) result[c] += radiance[c] * weight;
+void main() {
+  vec3 dir = mapDirection(gl_FragCoord.xy);
+  float relative = abs(atan(dir.z, dir.x) - uAzimuth);
+  relative = min(mod(relative, 2.0 * PI), 2.0 * PI - mod(relative, 2.0 * PI));
+  float e = asin(clamp(dir.y, -1.0, 1.0));
+  vec3 radiance = fetchLinear(uSkyView, vec2(relative / PI * float(SV_SIZE.x - 1), elevationCoord(e)));
+  vec4 sun = texelFetch(uIrradiance, ivec2(1, 0), 0);
+  // Supersample texels near the sun for an anti-aliased, limb-darkened disk
+  // that carries the transmitted unit solar irradiance.
+  float texelAngle = PI / uSize.y;
+  if (acos(clamp(dot(dir, uSunWorld), -1.0, 1.0)) < uSunRadius + 3.0 * texelAngle / max(sqrt(1.0 - dir.y * dir.y), 0.05)) {
+    const int N = 6;
+    const float LIMB = 0.6;
+    float coverage = 0.0;
+    for (int y = 0; y < N; y++) for (int x = 0; x < N; x++) {
+      vec3 d = mapDirection(gl_FragCoord.xy - 0.5 + (vec2(x, y) + 0.5) / float(N));
+      // Chord length keeps small angles precise in float32.
+      float angle = 2.0 * asin(min(length(d - uSunWorld) * 0.5, 1.0));
+      float t = angle / uSunRadius;
+      if (t < 1.0) coverage += 1.0 - LIMB * (1.0 - sqrt(1.0 - t * t));
     }
+    float solidAngle = 2.0 * PI * (1.0 - cos(uSunRadius));
+    radiance += coverage / float(N * N) / (solidAngle * (1.0 - LIMB / 3.0)) * sun.rgb;
   }
-  return result;
+  color = vec4(radiance * sun.a, 1.0);
 }
+`;
 
-function sampleTable(table: Float32Array, elevation: number, relativeAzimuth: number): Vec3 {
-  const u = elevationCoord(elevation) * (ELEVATIONS - 1);
-  const v = (relativeAzimuth / Math.PI) * (AZIMUTHS - 1);
-  return bilinear(table, AZIMUTHS, u, v);
+const VERTEX = /* glsl */ `#version 300 es
+void main() {
+  vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0);
+  gl_Position = vec4(p, 0.0, 1.0);
 }
+`;
 
-/** Elevation rows are spaced by sqrt so the horizon band gets most of them. */
-function elevationAt(row: number) {
-  const x = (row / (ELEVATIONS - 1)) * 2 - 1;
-  return Math.sign(x) * x * x * (Math.PI / 2);
-}
+interface Target { texture: WebGLTexture; framebuffer: WebGLFramebuffer; width: number; height: number }
 
-function elevationCoord(elevation: number) {
-  const x = Math.sign(elevation) * Math.sqrt(Math.abs(elevation) / (Math.PI / 2));
-  return Math.min(Math.max((x + 1) / 2, 0), 1);
-}
+/** Bakes skies with its own WebGL 2 context; requires float render targets. */
+export class SkyBaker {
+  private readonly gl: WebGL2RenderingContext;
+  private readonly programs: Record<'transmittance' | 'multiple' | 'skyView' | 'irradiance' | 'map', WebGLProgram>;
+  private readonly targets: Record<'transmittance' | 'multiple' | 'skyView' | 'irradiance', Target>;
+  private map?: Target;
 
-function altitudeAt(x: number) {
-  return x * x * (TOP_RADIUS - EARTH_RADIUS);
-}
-
-function altitudeCoord(altitude: number) {
-  return Math.sqrt(Math.min(Math.max(altitude / (TOP_RADIUS - EARTH_RADIUS), 0), 1));
-}
-
-function bilinear(table: Float32Array, columns: number, u: number, v: number): Vec3 {
-  const rows = table.length / 3 / columns;
-  const i = Math.min(Math.max(Math.floor(u), 0), rows - 2), fi = Math.min(Math.max(u - i, 0), 1);
-  const j = Math.min(Math.max(Math.floor(v), 0), columns - 2), fj = Math.min(Math.max(v - j, 0), 1);
-  const out: Vec3 = [0, 0, 0];
-  for (let c = 0; c < 3; c++) {
-    const a = table[(i * columns + j) * 3 + c], b = table[(i * columns + j + 1) * 3 + c];
-    const d = table[((i + 1) * columns + j) * 3 + c], e = table[((i + 1) * columns + j + 1) * 3 + c];
-    out[c] = (a * (1 - fj) + b * fj) * (1 - fi) + (d * (1 - fj) + e * fj) * fi;
+  constructor() {
+    const canvas = typeof OffscreenCanvas !== 'undefined' ? new OffscreenCanvas(1, 1) : document.createElement('canvas');
+    const gl = canvas.getContext('webgl2', { antialias: false, depth: false, stencil: false, alpha: false }) as WebGL2RenderingContext | null;
+    if (!gl) throw new Error('The procedural sky needs WebGL 2.');
+    if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('The procedural sky needs float render targets (EXT_color_buffer_float).');
+    this.gl = gl;
+    gl.bindVertexArray(gl.createVertexArray());
+    this.programs = {
+      transmittance: this.program(TRANSMITTANCE),
+      multiple: this.program(MULTIPLE),
+      skyView: this.program(SKY_VIEW),
+      irradiance: this.program(IRRADIANCE),
+      map: this.program(MAP)
+    };
+    this.targets = {
+      transmittance: this.target(...T_SIZE),
+      multiple: this.target(...MS_SIZE),
+      skyView: this.target(...SV_SIZE),
+      irradiance: this.target(2, 1)
+    };
   }
-  return out;
-}
 
-function hitsGround(r: number, mu: number) {
-  return mu < 0 && r * r * (mu * mu - 1) + EARTH_RADIUS * EARTH_RADIUS >= 0;
-}
+  /** Clear sky at a local solar time, in hours. */
+  bake(hours: number, width = 2048, height = 1024): SkyData {
+    const gl = this.gl;
+    if (gl.isContextLost()) throw new Error('The procedural sky lost its WebGL context.');
+    const { elevation, azimuth } = sunPosition(hours);
+    const e = deg(elevation), a = deg(azimuth);
+    const shared = (program: WebGLProgram) => {
+      gl.useProgram(program);
+      this.uniform(program, 'uSun', (l) => gl.uniform3f(l, Math.cos(e), Math.sin(e), 0));
+      this.uniform(program, 'uTurbidity', (l) => gl.uniform1f(l, TURBIDITY));
+      this.uniform(program, 'uAlbedo', (l) => gl.uniform3fv(l, GROUND_ALBEDO));
+      return program;
+    };
+    const { transmittance, multiple, skyView, irradiance } = this.targets;
+    const atmosphere = (program: WebGLProgram, full: boolean, sky: number[]) => {
+      shared(program);
+      this.bind(program, 'uTransmittance', 0, transmittance);
+      // The multiple-scattering pass declares but never reads its own target;
+      // bind another texture so WebGL sees no feedback loop.
+      this.bind(program, 'uMultiple', 1, full ? multiple : irradiance);
+      this.uniform(program, 'uFull', (l) => gl.uniform1i(l, full ? 1 : 0));
+      this.uniform(program, 'uSkyIrradiance', (l) => gl.uniform3fv(l, sky));
+    };
 
-function distanceToGround(r: number, mu: number) {
-  return Math.max(-r * mu - Math.sqrt(Math.max(r * r * (mu * mu - 1) + EARTH_RADIUS * EARTH_RADIUS, 0)), 0);
-}
+    this.draw(shared(this.programs.transmittance), transmittance);
+    atmosphere(this.programs.multiple, false, [0, 0, 0]);
+    this.draw(this.programs.multiple, multiple);
+    // Upward views first: the ground seen below is lit by that sky.
+    atmosphere(this.programs.skyView, true, [0, 0, 0]);
+    this.draw(this.programs.skyView, skyView);
+    shared(this.programs.irradiance);
+    this.bind(this.programs.irradiance, 'uTransmittance', 0, transmittance);
+    this.bind(this.programs.irradiance, 'uSkyView', 1, skyView);
+    this.draw(this.programs.irradiance, irradiance);
+    const sky = this.read(irradiance).subarray(0, 3);
+    atmosphere(this.programs.skyView, true, Array.from(sky));
+    this.draw(this.programs.skyView, skyView);
 
-function distanceToTop(r: number, mu: number) {
-  return Math.max(-r * mu + Math.sqrt(Math.max(r * r * (mu * mu - 1) + TOP_RADIUS * TOP_RADIUS, 0)), 0);
-}
+    if (!this.map || this.map.width !== width || this.map.height !== height) {
+      if (this.map) this.release(this.map);
+      this.map = this.target(width, height);
+    }
+    const map = shared(this.programs.map);
+    this.bind(map, 'uSkyView', 0, skyView);
+    this.bind(map, 'uIrradiance', 1, irradiance);
+    this.uniform(map, 'uSize', (l) => gl.uniform2f(l, width, height));
+    this.uniform(map, 'uAzimuth', (l) => gl.uniform1f(l, a));
+    this.uniform(map, 'uSunWorld', (l) => gl.uniform3f(l, Math.cos(e) * Math.cos(a), Math.sin(e), Math.cos(e) * Math.sin(a)));
+    this.uniform(map, 'uSunRadius', (l) => gl.uniform1f(l, deg(SUN_RADIUS)));
+    this.draw(map, this.map);
+    // Row 0 is the zenith, as in an .hdr file.
+    return { data: this.read(this.map), width, height };
+  }
 
-function radiusAt(r: number, mu: number, t: number) {
-  return Math.sqrt(t * t + 2 * r * mu * t + r * r);
-}
+  dispose() {
+    this.gl.getExtension('WEBGL_lose_context')?.loseContext();
+  }
 
-function cornetteShanks(nu: number) {
-  const g2 = MIE_G * MIE_G;
-  return (3 / (8 * Math.PI)) * ((1 - g2) * (1 + nu * nu)) / ((2 + g2) * Math.pow(1 + g2 - 2 * MIE_G * nu, 1.5));
-}
+  private program(fragment: string) {
+    const gl = this.gl;
+    const compile = (type: number, source: string) => {
+      const shader = gl.createShader(type)!;
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) throw new Error(`Sky shader: ${gl.getShaderInfoLog(shader)}`);
+      return shader;
+    };
+    const program = gl.createProgram()!;
+    gl.attachShader(program, compile(gl.VERTEX_SHADER, VERTEX));
+    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, fragment));
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) throw new Error(`Sky program: ${gl.getProgramInfoLog(program)}`);
+    return program;
+  }
 
-function equirectDirection(theta: number, phi: number): Vec3 {
-  return [-Math.sin(theta) * Math.cos(phi), Math.cos(theta), -Math.sin(theta) * Math.sin(phi)];
-}
+  private target(width: number, height: number): Target {
+    const gl = this.gl;
+    const texture = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA32F, width, height);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    const framebuffer = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('The procedural sky cannot render to float textures.');
+    return { texture, framebuffer, width, height };
+  }
 
-function wrapAngle(a: number) {
-  return Math.atan2(Math.sin(a), Math.cos(a));
-}
+  private release(target: Target) {
+    this.gl.deleteFramebuffer(target.framebuffer);
+    this.gl.deleteTexture(target.texture);
+  }
 
-function luminance(c: Vec3) {
-  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-}
+  private uniform(program: WebGLProgram, name: string, set: (location: WebGLUniformLocation) => void) {
+    const location = this.gl.getUniformLocation(program, name);
+    if (location) set(location);
+  }
 
-function dot(a: Vec3, b: Vec3) {
-  return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  private bind(program: WebGLProgram, name: string, unit: number, target: Target) {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, target.texture);
+    this.uniform(program, name, (l) => gl.uniform1i(l, unit));
+  }
+
+  private draw(program: WebGLProgram, target: Target) {
+    const gl = this.gl;
+    gl.useProgram(program);
+    // A texture cannot be sampled while it is the render target.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+    gl.viewport(0, 0, target.width, target.height);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  private read(target: Target) {
+    const gl = this.gl;
+    const data = new Float32Array(target.width * target.height * 4);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+    gl.readPixels(0, 0, target.width, target.height, gl.RGBA, gl.FLOAT, data);
+    return data;
+  }
 }
 
 function deg(d: number) {

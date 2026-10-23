@@ -2,70 +2,11 @@ import * as THREE from 'three';
 import { parseRGBE } from '@meimu/mutracer';
 import { fetchWithProgress } from './fetchWithProgress';
 import { openHDRCache } from './hdrCache';
-import { DEFAULT_SKY_TIME, createSkyAt } from './sky';
 
 export interface EquirectData {
   data: Float32Array;
   width: number;
   height: number;
-}
-
-/**
- * Physically based clear sky at a local solar time. Same mapping as
- * examples/shared/sky.ts (v = 0 is +Y, u follows atan2(-z, -x)).
- */
-export function createSky(hours = DEFAULT_SKY_TIME, width = 1024, height = 512): EquirectData {
-  return createSkyAt(hours, width, height);
-}
-
-/**
- * Builds skies off the main thread, one at a time. A request that has not
- * started when a newer one arrives resolves to `undefined`.
- */
-export class SkyGenerator {
-  private worker?: Worker;
-  private busy = false;
-  private queued?: { hours: number; resolve: (sky?: EquirectData) => void };
-
-  generate(hours: number): Promise<EquirectData | undefined> {
-    if (typeof Worker === 'undefined') return Promise.resolve(createSky(hours));
-    return new Promise((resolve) => {
-      this.queued?.resolve(undefined);
-      this.queued = { hours, resolve };
-      this.next();
-    });
-  }
-
-  private next() {
-    if (this.busy || !this.queued) return;
-    const { hours, resolve } = this.queued;
-    this.queued = undefined;
-    this.busy = true;
-    const done = (sky: EquirectData) => {
-      this.busy = false;
-      resolve(sky);
-      this.next();
-    };
-    try {
-      this.worker ??= new Worker(new URL('./sky.worker.ts', import.meta.url), { type: 'module' });
-      this.worker.onmessage = (event: MessageEvent<EquirectData>) => done(event.data);
-      this.worker.onerror = () => {
-        this.worker?.terminate();
-        this.worker = undefined;
-        done(createSky(hours));
-      };
-      this.worker.postMessage(hours);
-    } catch {
-      done(createSky(hours));
-    }
-  }
-
-  dispose() {
-    this.worker?.terminate();
-    this.worker = undefined;
-    this.queued?.resolve(undefined);
-    this.queued = undefined;
-  }
 }
 
 export function parseHDR(buffer: ArrayBuffer): EquirectData {

@@ -6,7 +6,8 @@ import {
   fromTHREECamera,
 } from '@meimu/mutracer';
 import { DEFAULT_SETTINGS, autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
-import { Environment, SkyGenerator, createSky, loadHDR, parseHDR } from './environment';
+import { Environment, loadHDR, parseHDR, type EquirectData } from './environment';
+import { SkyBaker } from './sky';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
   createMaterialSpheres, isHDRFile, loadModelFromFiles, loadModelFromURL, loadModelFromSource,
@@ -79,9 +80,10 @@ export class ViewerEngine {
   private readonly controls: OrbitControls;
   private readonly ground: THREE.Mesh;
   private readonly modelGroup = new THREE.Group();
+  private readonly skyBaker = new SkyBaker();
   /** Last procedural sky, reused when it is selected again. */
-  private sky = { hours: get().settings.skyTime, data: createSky(get().settings.skyTime) };
-  private readonly skyGenerator = new SkyGenerator();
+  private sky = { hours: get().settings.skyTime, data: this.skyBaker.bake(get().settings.skyTime) };
+  private skyFrame = 0;
   private readonly environment = new Environment(this.sky.data);
   private modelEnvironment: Environment | null = null;
   private readonly studioAmbient = new Environment(createStudioAmbient());
@@ -222,7 +224,8 @@ export class ViewerEngine {
     this.clearModel();
     this.loop.dispose(); this.sync.dispose(); this.viewSync.dispose();
     this.environment.dispose();
-    this.skyGenerator.dispose();
+    cancelAnimationFrame(this.skyFrame);
+    this.skyBaker.dispose();
     this.studioAmbient.dispose();
     this.engine.dispose();
   }
@@ -524,7 +527,7 @@ export class ViewerEngine {
     }
     const url = environmentUrl(preset, this.settings.envResolution);
     if (!url) {
-      await this.applySky(id);
+      this.applySky(id);
       return;
     }
     const name = `${preset.name} ${this.settings.envResolution.toUpperCase()}`;
@@ -536,15 +539,20 @@ export class ViewerEngine {
     }
   }
 
-  private async applySky(id: string) {
-    const hours = this.settings.skyTime;
-    if (this.sky.hours !== hours) {
-      // Superseded requests resolve empty; finished ones still show while scrubbing.
-      const data = await this.skyGenerator.generate(hours);
-      if (!data) return;
-      this.sky = { hours, data };
+  /** Bakes at most once per frame while the time is scrubbed, always for the latest time. */
+  private applySky(id: string) {
+    if (this.sky.hours === this.settings.skyTime) {
+      this.setEnvironmentData(this.sky.data, id);
+      return;
     }
-    if (this.settings.envId === id) this.setEnvironmentData(this.sky.data, id);
+    if (this.skyFrame) return;
+    this.skyFrame = requestAnimationFrame(() => {
+      this.skyFrame = 0;
+      if (this.settings.envId !== id) return;
+      const hours = this.settings.skyTime;
+      this.sky = { hours, data: this.skyBaker.bake(hours) };
+      this.setEnvironmentData(this.sky.data, id);
+    });
   }
 
   private async loadEnvironmentFromURL(url: string) {
@@ -585,7 +593,7 @@ export class ViewerEngine {
     set({ envLoading: null });
   }
 
-  private setEnvironmentData(data: ReturnType<typeof createSky>, id: string) {
+  private setEnvironmentData(data: EquirectData, id: string) {
     this.cancelEnvironmentDownload();
     this.environment.setSource(data);
     this.applyBackground();
