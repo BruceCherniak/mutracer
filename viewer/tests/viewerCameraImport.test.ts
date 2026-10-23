@@ -63,7 +63,7 @@ beforeEach(() => {
 });
 
 describe('imported camera choice', () => {
-  it.each(['perspective', 'orthographic'] as const)('continues orbiting a transformed %s scene camera without changing its view', async (projection) => {
+  it.each(['perspective', 'orthographic'] as const)('continues orbiting a transformed %s scene camera from its view around world up', async (projection) => {
     const viewer = engine();
     const data = model(0);
     const source = projection === 'perspective'
@@ -100,7 +100,7 @@ describe('imported camera choice', () => {
     controls.addEventListener('start', () => orbit.beginOrbit());
     source.updateWorldMatrix(true, false);
     const position = source.getWorldPosition(new THREE.Vector3());
-    const quaternion = source.getWorldQuaternion(new THREE.Quaternion());
+    const direction = source.getWorldDirection(new THREE.Vector3());
     const sourceMatrix = source.matrixWorld.clone();
     const unsubscribe = useViewer.subscribe((state, previous) => {
       if (state.settings !== previous.settings) orbit.applySettings(state.settings, previous.settings);
@@ -110,7 +110,10 @@ describe('imported camera choice', () => {
     expect(useViewer.getState().settings).toMatchObject({ cameraIndex: -1, projection });
     expect(camera).not.toBe(source);
     expect(camera.position.distanceTo(position)).toBeLessThan(1e-8);
-    expect(Math.abs(camera.quaternion.dot(quaternion))).toBeCloseTo(1, 8);
+    expect(camera.getWorldDirection(new THREE.Vector3()).dot(direction)).toBeCloseTo(1, 8);
+    // The authored roll is dropped so orbiting keeps the horizon level.
+    expect(camera.up.toArray()).toEqual([0, 1, 0]);
+    expect(new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion).y).toBeCloseTo(0, 8);
     expect(camera.zoom).toBe(source.zoom);
     expect(camera.near).toBe(source.near);
     expect(camera.far).toBe(source.far);
