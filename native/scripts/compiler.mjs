@@ -14,7 +14,6 @@ let staged, nativeMatrices = false;
 const snapshots = new Map();
 const loweredGraphs = new Set();
 const originals = new Map();
-const compilerVersions = new Map();
 // scriptc 0.3.2 cannot index numeric storage unions. Lower these two access
 // adapters only in generated compiler inputs, keeping Web hot loops branch-free.
 function narrowAccess(source, constructors, parameter = 'array', names) {
@@ -138,21 +137,7 @@ export function spawnCompiler(compiler, args, options = {}, matrixPrecision) {
     auditNumericAccess(staged, compiledEntry, nativeMatrices);
     loweredGraphs.add(compiledEntry);
   }
-  let command = compiler, commandArgs = mapped;
-  if (args[0] === 'build' && args.includes('--lib')) {
-    if (!compilerVersions.has(compiler)) {
-      const version = spawnSync(compiler, ['--version'], {...options, stdio:'pipe', encoding:'utf8'});
-      compilerVersions.set(compiler, version.status === 0 ? version.stdout.trim() : '');
-    }
-    // The 0.4.2 native compiler fails internally on macOS arm64 for these graphs.
-    // Keep its matching official Node compiler as a build-time workaround;
-    // the archive still contains AOT code and the 0.4.2 native runtime.
-    if (compilerVersions.get(compiler) === '0.4.2') {
-      command = process.execPath;
-      commandArgs = [resolve(root, 'native/toolchain/library.mjs'), ...mapped];
-    }
-  }
-  let result = spawnSync(command, commandArgs, options);
+  let result = spawnSync(compiler, mapped, options);
   if(process.platform==='win32'&&args[0]==='build'&&args.includes('--lib')&&result.status===0) {
     // The program uses MSVC's x64 probe name; the runtime pack uses MinGW's.
     // Both preserve RSP and use the same RAX size argument. Normalize the name

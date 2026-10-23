@@ -24,16 +24,16 @@ not included in release downloads.
 
 ## Build and open
 
-Install Node **24+**, Rust, CMake, a C++20 compiler, project npm dependencies and the
-[native compiler toolchain](../README.md#render-a-scene), then run from the repository
-root. Linux also needs patchelf and X11/Wayland development libraries. Experimental
-Windows build prerequisites are in the [contributor guide](../CONTRIBUTING.md#build-and-ci).
-The first build downloads OIDN and model weights (about 80–95 MiB depending on
-platform). The app includes regular/small models and omits the three large weight
-sets. Denoising needs no runtime download:
+Install Rust, CMake, a C++20 compiler, project npm dependencies and scriptc
+**0.3.2**, then run from the repository root. Linux also needs patchelf and
+X11/Wayland development libraries. Experimental Windows build prerequisites are
+in the [contributor guide](../CONTRIBUTING.md#build-and-ci).
+The first build downloads the native OIDN SDK, source and regular model
+weights (about 80–95 MiB depending on platform). The app includes regular/small
+models and omits the three large weight sets. Denoising needs no runtime download:
 
 ```sh
-export MUTRACER_SCRIPTC="$(node native/toolchain/compiler.mjs)"
+export MUTRACER_SCRIPTC=/absolute/path/to/node_modules/.bin/scriptc
 npm run native:viewer
 ```
 

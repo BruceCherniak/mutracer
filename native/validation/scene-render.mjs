@@ -28,8 +28,8 @@ function run(name, command, args, check = true) {
         throw new Error(`${name}: ${result.error?.message || result.stderr || result.stdout}`);
     return result;
 }
-if (run('compiler-version', compiler, ['--version']).stdout.trim() !== '0.4.2')
-    throw new Error('Requires scriptc 0.4.2');
+if (run('compiler-version', compiler, ['--version']).stdout.trim() !== '0.3.2')
+    throw new Error('Requires scriptc 0.3.2');
 run('material-property-contract', process.execPath, ['native/scripts/generate-material-properties.mjs', '--check']);
 const coverage = run('scene-coverage', compiler, ['coverage', 'native/src/scene-core.ts', '--print', 'diagnostics', '--fail-on', 'blockers'], false);
 const diagnostics = JSON.parse(coverage.stdout);

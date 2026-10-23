@@ -24,13 +24,12 @@ and environment controls. See [viewer usage and limits](./viewer/README.md).
 
 ## Render a scene
 
-Building requires Node **24+**, Rust, a C++20 compiler (Xcode Command Line Tools on macOS)
-and project npm dependencies. Install the pinned scriptc **0.4.2** toolchain below. See the
+Building requires Rust, a C++20 compiler (Xcode Command Line Tools on macOS), project npm
+dependencies and a separately installed scriptc **0.3.2**. See the
 [platform prerequisites](./viewer/README.md#build-and-open) for Windows and Linux.
 
 ```sh
-npm ci --prefix native/toolchain --include=optional
-export MUTRACER_SCRIPTC="$(node native/toolchain/compiler.mjs)"
+export MUTRACER_SCRIPTC=/absolute/path/to/node_modules/.bin/scriptc
 npm run native:scene
 ```
 

@@ -27,8 +27,8 @@ probe that reports the incomplete browser API port and exits with status 1;
 
 ## Build and CI
 
-Use Node **24+**, scriptc **0.4.2**, Rust with locked dependencies and a C++20 compiler.
-Set `MUTRACER_SCRIPTC` to the compiler and `MUTRACER_NATIVE_OUTPUT` to an evidence
+Use scriptc **0.3.2**, Rust with locked dependencies and a C++20 compiler. Set
+`MUTRACER_SCRIPTC` to the compiler and `MUTRACER_NATIVE_OUTPUT` to an evidence
 folder outside the checkout. `npm run native:scene` builds the composed AOT
 archive and verifies raw-scene preparation and rendering on 33 fixtures.
 `native:context`, `native:jobs`, `native:camera` and `native:settings` build on that
@@ -36,7 +36,7 @@ gate and validate retained scenes, polling/cancellation, camera updates and rend
 settings respectively. Use `MUTRACER_NATIVE_SAMPLES` to select the fixture sample
 count; cross-stage byte comparisons must use the same count and seed.
 
-The native CI jobs install the pinned compiler packages from `native/toolchain/`.
+The native CI jobs install platform optional packages from `native/toolchain/`.
 For the same local run:
 
 ```sh
@@ -80,7 +80,7 @@ available from CI artifacts. A single-target dispatch never publishes a release.
 Windows builds need an x64 MSVC Developer environment for OIDN, MinGW-w64 GCC,
 Ninja, CMake and Zig 0.15.2 for scriptc's library archiver. Install Rust's
 `stable-x86_64-pc-windows-gnu` toolchain and select it with `RUSTUP_TOOLCHAIN`.
-The scriptc Windows archive references MinGW CRT helpers despite its `msvc`
+The scriptc 0.3.2 Windows archive references MinGW CRT helpers despite its `msvc`
 package suffix; the host, viewer and C harnesses use the GNU toolchain to match.
 Linux builds need a C++20 compiler, CMake, patchelf, and the X11/Wayland development
 libraries installed by the workflow. `npm run native:viewer:package` archives the
@@ -100,11 +100,7 @@ the release job requires `contents: write`. The app is ad-hoc signed and is not
 Apple-notarized.
 
 The compiler resolver restores executable permissions for the platform archive's
-compiler, TypeScript servers, LLVM code generator and comptime helper. Library
-builds on 0.4.2 use its official Node compiler package because the native compiler
-throws an internal null-union error on macOS arm64 during LLVM emission for several
-required graphs. Both paths produce AOT archives with the 0.4.2 runtime; Node is
-needed only while building. Coverage still uses the native compiler. Root Web
+compiler, TypeScript server, LLVM code generator and comptime helper. Root Web
 dependencies do not include this compiler. Ordinary CI does not probe for GPUs;
 finding a software adapter cannot turn CPU checks into a rendering gate. Explicit
 GPU validation requires hardware and propagates device/execution failures.

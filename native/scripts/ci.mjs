@@ -26,7 +26,7 @@ function run(name,command,args,extra={},allowFailure=false,timeout=900000){
  console.log(`${name}: ${result.status}`);return result;
 }
 const version=run('compiler-version',compiler,['--version']);
-if(version.stdout.trim()!=='0.4.2')throw Error('Native CI requires scriptc0.4.2.');
+if(version.stdout.trim()!=='0.3.2')throw Error('Native CI requires scriptc0.3.2.');
 run('aot-build',compiler,['build','--lib','--profile','native/src/render-core-profile.json','-o',archive]);
 await prepareTinyBvh();
 run('native-build','cargo',['build','--release','--locked','--manifest-path','native/host/Cargo.toml']);
@@ -69,4 +69,4 @@ if(gpuValidation){
  run('scene-static','npm',['run','native:scene:static'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'fixtures')});
  console.log('GPU rendering, HWRT execution and windows NOT VALIDATED (CPU-only CI).');
 }
-writeFileSync(resolve(out,'summary.json'),JSON.stringify({passed:true,scriptc:'0.4.2',gpu,requiredModules:required.length,checks},null,2)+'\n');
+writeFileSync(resolve(out,'summary.json'),JSON.stringify({passed:true,scriptc:'0.3.2',gpu,requiredModules:required.length,checks},null,2)+'\n');
