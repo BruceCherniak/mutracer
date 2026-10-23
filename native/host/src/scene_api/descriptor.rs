@@ -56,16 +56,10 @@ impl Scene {
         let mut scene = Scene::new();
         let mut textures = Vec::new();
         for t in data.textures {
-            let pixels = if t.storage == 0 {
-                TexturePixels::Rgba8(t.pixels.clone())
+            let pixels = if let Some(p) = &t.float_pixels {
+                TexturePixels::Rgba32F(p.clone())
             } else {
-                TexturePixels::Rgba32F(
-                    t.pixels
-                        .chunks_exact(4)
-                        .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                        .collect::<Vec<_>>()
-                        .into(),
-                )
+                TexturePixels::Rgba8(t.pixels.clone())
             };
             textures.push(scene.add_texture(Texture {
                 pixels,

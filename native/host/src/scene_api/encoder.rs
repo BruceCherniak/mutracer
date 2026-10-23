@@ -7,6 +7,7 @@ use glam::{Mat4, Vec3};
 use std::sync::Arc;
 #[derive(Clone)]
 pub struct Texture {
+    pub float_pixels: Option<Arc<[f32]>>,
     pub storage: u32,
     pub flip_y: bool,
     pub source: usize,
@@ -233,7 +234,11 @@ impl SceneData<'_> {
             w.0[o + tex::HEIGHT] = t.height;
             w.0[o + tex::STORAGE] = t.storage;
             w.0[o + tex::FLIP_Y] = u32::from(t.flip_y);
-            w.0[o + tex::PIXELS] = w.append_bytes(&t.pixels);
+            w.0[o + tex::PIXELS] = if let Some(p) = &t.float_pixels {
+                w.append_floats(p)
+            } else {
+                w.append_bytes(&t.pixels)
+            };
             write_texture_sampling(&mut w.0, o, t);
         }
         if environment.enabled {
@@ -653,6 +658,16 @@ impl SceneData<'_> {
             write_texture_sampling(w, o, t);
             w[o + tex::FLIP_Y] = u32::from(t.flip_y);
             let at = w[o + tex::PIXELS] as usize;
+            if let Some(p) = &t.float_pixels {
+                if !previous
+                    .and_then(|(_, t)| t.get(i))
+                    .and_then(|t| t.float_pixels.as_ref())
+                    .is_some_and(|a| Arc::ptr_eq(a, p))
+                {
+                    floats(w, at, p);
+                }
+                continue;
+            }
             if previous
                 .and_then(|(_, t)| t.get(i))
                 .is_some_and(|a| Arc::ptr_eq(&a.pixels, &t.pixels))

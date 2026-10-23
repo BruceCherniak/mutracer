@@ -91,6 +91,7 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Arc;
     use crate::scene::{Geometry, Mesh};
     #[test]
     fn nearest_instance_is_picked_and_empty_pixels_miss() {
@@ -99,12 +100,13 @@ mod tests {
         )
         .unwrap();
         model.geometries = vec![Geometry {
-            positions: vec![-1., -1., 0., 1., -1., 0., 0., 1., 0.],
-            indices: vec![0, 1, 2],
-            normals: vec![],
-            uv: [vec![], vec![]],
-            colors: vec![],
-            tangents: vec![],
+            material_indices: Arc::from([]),
+            positions: vec![-1., -1., 0., 1., -1., 0., 0., 1., 0.].into(),
+            indices: vec![0, 1, 2].into(),
+            normals: vec![].into(),
+            uv: [vec![].into(), vec![].into()],
+            colors: vec![].into(),
+            tangents: vec![].into(),
             min: Vec3::new(-1., -1., 0.),
             max: Vec3::new(1., 1., 0.),
         }]
@@ -112,6 +114,8 @@ mod tests {
         model.rebuild_picking().unwrap();
         model.meshes = [0., 1.]
             .map(|z| Mesh {
+                materials: vec![],
+                instances: None,
                 name: format!("{z}"),
                 geometry: 0,
                 material: 0,
@@ -136,6 +140,7 @@ mod tests {
 #[cfg(test)]
 mod transformed_tests {
     use super::*;
+    use crate::Arc;
     #[test]
     fn bvh_matches_world_triangle_oracle_under_mirrors_and_nonuniform_scales() {
         let mut model = Model::load(
@@ -148,12 +153,13 @@ mod transformed_tests {
             Vec3::new(0., 1., 0.),
         ];
         model.geometries = vec![crate::scene::Geometry {
+            material_indices: Arc::from([]),
             positions: vertices.iter().flat_map(|v| v.to_array()).collect(),
-            indices: vec![0, 1, 2],
-            normals: vec![],
-            uv: [vec![], vec![]],
-            colors: vec![],
-            tangents: vec![],
+            indices: vec![0, 1, 2].into(),
+            normals: vec![].into(),
+            uv: [vec![].into(), vec![].into()],
+            colors: vec![].into(),
+            tangents: vec![].into(),
             min: Vec3::new(-1., -1., 0.),
             max: Vec3::new(1., 1., 0.),
         }]
@@ -164,6 +170,8 @@ mod transformed_tests {
         ]
         .into_iter()
         .map(|(x, z, scale)| crate::scene::Mesh {
+            materials: vec![],
+            instances: None,
             name: String::new(),
             geometry: 0,
             material: 0,

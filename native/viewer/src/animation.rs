@@ -532,7 +532,7 @@ impl Animation {
                 ] {
                     for (vertex, delta) in deltas.iter().enumerate() {
                         for k in 0..3 {
-                            if let Some(v) = attribute.get_mut(vertex * stride + k) {
+                            if let Some(v) = Arc::make_mut(attribute).get_mut(vertex * stride + k) {
                                 *v += weight * delta[k];
                             }
                         }
@@ -559,14 +559,15 @@ impl Animation {
                     let p = matrix.transform_point3(Vec3::from_slice(
                         &geometry.positions[vertex * 3..vertex * 3 + 3],
                     ));
-                    geometry.positions[vertex * 3..vertex * 3 + 3].copy_from_slice(&p.to_array());
+                    Arc::make_mut(&mut geometry.positions)[vertex * 3..vertex * 3 + 3]
+                        .copy_from_slice(&p.to_array());
                     for (data, stride) in [(&mut geometry.normals, 3), (&mut geometry.tangents, 4)]
                     {
                         if !data.is_empty() {
                             let n = matrix.transform_vector3(Vec3::from_slice(
                                 &data[vertex * stride..vertex * stride + 3],
                             ));
-                            data[vertex * stride..vertex * stride + 3]
+                            Arc::make_mut(data)[vertex * stride..vertex * stride + 3]
                                 .copy_from_slice(&n.to_array());
                         }
                     }
@@ -576,13 +577,13 @@ impl Animation {
                 geometry
                     .positions
                     .iter()
-                    .chain(&geometry.normals)
-                    .chain(&geometry.tangents)
+                    .chain(geometry.normals.iter())
+                    .chain(geometry.tangents.iter())
                     .all(|v| v.is_finite()),
                 "Animation produced non-finite vertices"
             );
             for (data, stride) in [(&mut geometry.normals, 3), (&mut geometry.tangents, 4)] {
-                for vertex in data.chunks_exact_mut(stride) {
+                for vertex in Arc::make_mut(data).chunks_exact_mut(stride) {
                     let n = Vec3::from_slice(vertex).normalize_or_zero();
                     vertex[..3].copy_from_slice(&n.to_array());
                 }
@@ -1219,7 +1220,7 @@ mod tests {
                     std::fs::write(
                         out.join(format!("mode-{mode}-pose-{frame}.json")),
                         serde_json::to_vec_pretty(
-                            &json!({"time":time,"positions":positions,"transforms":transforms}),
+                            &json!({"time":time,"positions":positions.iter().map(|p|p.as_ref()).collect::<Vec<_>>(),"transforms":transforms}),
                         )
                         .unwrap(),
                     )

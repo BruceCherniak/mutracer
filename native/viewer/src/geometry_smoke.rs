@@ -32,16 +32,23 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             for step in 0..8 {
                 let geometry = &mut std::sync::Arc::make_mut(&mut model.geometries)[gi];
                 geometry.positions.clone_from(&positions);
-                for vertex in geometry.positions.chunks_exact_mut(3) {
+                for vertex in std::sync::Arc::make_mut(&mut geometry.positions).chunks_exact_mut(3)
+                {
                     vertex[1] += model.radius * 0.015 * step as f32 * (vertex[0] + vertex[2]).sin();
                 }
                 // Omitted normals request the original TS smooth-normal generator;
                 // supplied normals/tangents are passed exactly as caller attributes.
                 // Adding or removing normals prepares the mesh fully (steps 0 and 4).
-                geometry.normals = if step < 4 { vec![] } else { normals.clone() };
+                geometry.normals = if step < 4 {
+                    vec![].into()
+                } else {
+                    normals.clone()
+                };
                 let before = renderer.pixels()?;
                 let mut invalid = model.clone();
-                std::sync::Arc::make_mut(&mut invalid.geometries)[gi].positions[0] = f32::NAN;
+                std::sync::Arc::make_mut(
+                    &mut std::sync::Arc::make_mut(&mut invalid.geometries)[gi].positions,
+                )[0] = f32::NAN;
                 ensure!(
                     renderer
                         .commit(invalid.update_descriptor(

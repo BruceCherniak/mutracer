@@ -442,17 +442,12 @@ impl Scene {
             background_index: 0,
         };
         for (_, t) in self.textures.iter() {
-            let (storage, pixels) = match &t.pixels {
-                TexturePixels::Rgba8(p) => (0, p.clone()),
-                TexturePixels::Rgba32F(p) => (
-                    1,
-                    p.iter()
-                        .flat_map(|v| v.to_le_bytes())
-                        .collect::<Vec<_>>()
-                        .into(),
-                ),
+            let (storage, pixels, float_pixels) = match &t.pixels {
+                TexturePixels::Rgba8(p) => (0, p.clone(), None),
+                TexturePixels::Rgba32F(p) => (1, Arc::from([]), Some(p.clone())),
             };
             r.textures.push(encoder::Texture {
+                float_pixels,
                 storage,
                 flip_y: t.flip_y,
                 source: usize::MAX,

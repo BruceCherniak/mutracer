@@ -1,4 +1,5 @@
 //! Autofocus behavior and real-device viewer/fresh-context agreement.
+use crate::Arc;
 use crate::{
     Change, Viewer,
     focus::{self, Status},
@@ -117,16 +118,19 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             let z = plane["z"].as_f64().unwrap() as f32;
             let id = geometries.len();
             geometries.push(Geometry {
+                material_indices: Arc::from([]),
                 min: glam::Vec3::new(-w, -h, z),
                 max: glam::Vec3::new(w, h, z),
-                positions: vec![-w, -h, z, w, -h, z, w, h, z, -w, h, z],
-                indices: vec![0, 1, 2, 0, 2, 3],
-                normals: vec![],
-                uv: [vec![], vec![]],
-                colors: vec![],
-                tangents: vec![],
+                positions: vec![-w, -h, z, w, -h, z, w, h, z, -w, h, z].into(),
+                indices: vec![0, 1, 2, 0, 2, 3].into(),
+                normals: vec![].into(),
+                uv: [vec![].into(), vec![].into()],
+                colors: vec![].into(),
+                tangents: vec![].into(),
             });
             model.meshes.push(Mesh {
+                materials: vec![],
+                instances: None,
                 name: "plane".into(),
                 geometry: id,
                 material: 0,

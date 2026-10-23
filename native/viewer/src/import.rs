@@ -493,7 +493,7 @@ mod tests {
         let model = crate::scene::Model::load(&path).unwrap();
         assert_eq!(
             model.geometries[0].positions,
-            [-1., 0., 0., 1., 0., 0., 0., 1., 0.]
+            [-1., 0., 0., 1., 0., 0., 0., 1., 0.].into()
         );
         assert_eq!(model.meshes.len(), 2);
         assert_eq!(
@@ -524,7 +524,7 @@ mod tests {
         let model = crate::scene::Model::load(&path).unwrap();
         assert_eq!(
             model.geometries[0].positions,
-            [-1., 2., 0., 1., 2., 0., 0., 3., 0.]
+            [-1., 2., 0., 1., 2., 0., 0., 3., 0.].into()
         );
         std::fs::remove_file(path).unwrap();
     }

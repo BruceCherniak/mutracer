@@ -84,7 +84,7 @@ pub struct Browser {
     pick: Option<Pick>,
     applied: HashMap<usize, String>,
     thumbs: HashMap<String, egui::TextureHandle>,
-    previews: HashMap<(usize, usize), (std::sync::Weak<Vec<u8>>, egui::TextureHandle)>,
+    previews: HashMap<(usize, usize), (std::sync::Weak<[u8]>, egui::TextureHandle)>,
     requested: HashSet<String>,
     thumb_queue: Option<mpsc::SyncSender<String>>,
     thumb_results: Option<mpsc::Receiver<(String, Result<egui::ColorImage>)>>,
@@ -213,7 +213,7 @@ impl Browser {
         let image = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
             texture.width,
             texture.height,
-            texture.pixels.as_slice(),
+            texture.pixels.as_ref(),
         )
         .unwrap();
         let image = image::imageops::thumbnail(&image, 64, 64);
@@ -978,14 +978,15 @@ fn bias_oracle(original: &Model, mode: u32, out: &std::path::Path) -> Result<()>
     use glam::{Mat4, Vec3};
     let mut model = original.clone();
     let geometry = Geometry {
+        material_indices: Arc::from([]),
         min: Vec3::new(-1., -1., 0.),
         max: Vec3::new(1., 1., 0.),
-        positions: vec![-1., -1., 0., 1., -1., 0., 1., 1., 0., -1., 1., 0.],
-        indices: vec![0, 1, 2, 0, 2, 3],
-        normals: [0., 0., 1.].repeat(4),
-        uv: [vec![0., 0., 1., 0., 1., 1., 0., 1.], vec![]],
-        colors: vec![],
-        tangents: vec![],
+        positions: vec![-1., -1., 0., 1., -1., 0., 1., 1., 0., -1., 1., 0.].into(),
+        indices: vec![0, 1, 2, 0, 2, 3].into(),
+        normals: [0., 0., 1.].repeat(4).into(),
+        uv: [vec![0., 0., 1., 0., 1., 1., 0., 1.].into(), vec![].into()],
+        colors: vec![].into(),
+        tangents: vec![].into(),
     };
     model.geometries = Arc::new(vec![geometry]);
     model.meshes.truncate(1);
@@ -1016,9 +1017,8 @@ fn bias_oracle(original: &Model, mode: u32, out: &std::path::Path) -> Result<()>
     let mut oracle = model.clone();
     oracle.materials[0].maps[8] = u32::MAX;
     oracle.materials[0].layers.displacement_bias = 0.;
-    for p in Arc::make_mut(&mut oracle.geometries)[0]
-        .positions
-        .chunks_exact_mut(3)
+    for p in
+        Arc::make_mut(&mut Arc::make_mut(&mut oracle.geometries)[0].positions).chunks_exact_mut(3)
     {
         p[2] += 0.125;
     }
