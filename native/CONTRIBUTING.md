@@ -61,9 +61,13 @@ The incremental oracle reports full-reference render errors as skipped cases.
 Review those records before release: any skips leave `gpu.validated` false in the
 summary, even when the supported checks finish successfully.
 
-Each ignored host test runs in its own process. `api::tests::hardware_*` reproduce
-the open Metal HWRT miss: they run `MT_LOOP_ITERATIONS` (default 200 here) and their
-failures are reported in `summary.json` without stopping CI; any other failure does.
+Each ignored host test runs in its own process. Only the known image-mismatch
+assertions in the engine API's `hardware_renders_match_fresh_l0_contexts`,
+`hardware_shared_scene_renders_match_fresh_l0_contexts` and
+`hardware_loop_against_fresh_l0_contexts` tests on a hardware Metal adapter are
+reported without stopping CI; they leave `gpu.validated` false. Other test
+failures stop CI after the ignored tests finish. The loop runs `MT_LOOP_ITERATIONS`
+(default 200 in CI), which must be a positive safe integer.
 CPU-only module and viewer builds run beside the GPU steps, and each step's duration
 is printed and recorded in `checks.json`.
 

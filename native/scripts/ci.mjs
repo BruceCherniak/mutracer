@@ -6,9 +6,11 @@ import {tmpdir} from 'node:os';
 import {resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnCompiler} from './compiler.mjs';
+import {classifyHostGpuResult,hwrtLoopIterations} from './host-gpu-results.mjs';
 import {archiveName,executable,nativeToolchainEnv,windows} from './platform.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const gpuValidation=process.argv.includes('--gpu')||process.argv.includes('--hosts');
+const loopIterations=gpuValidation?hwrtLoopIterations(process.env.MT_LOOP_ITERATIONS):undefined;
 const out=resolve(process.env.MUTRACER_NATIVE_OUTPUT??mkdtempSync(resolve(tmpdir(),'mutracer-native-ci-')));
 mkdirSync(out,{recursive:true});
 const compiler=process.env.MUTRACER_SCRIPTC??spawnSync(process.execPath,['native/toolchain/compiler.mjs'],{cwd:root,encoding:'utf8'}).stdout?.trim();
@@ -17,9 +19,6 @@ const hostTarget=resolve(out,'host-target'),viewerTarget=resolve(out,'viewer-tar
 const env={...nativeToolchainEnv(),MUTRACER_SCRIPTC:compiler,MUTRACER_AOT_ARCHIVE:archive,CARGO_TARGET_DIR:hostTarget,MUTRACER_NATIVE_OUTPUT:out};
 // Scene and viewer builds link the archive built here instead of recompiling it.
 const prebuilt={MUTRACER_AOT_PREBUILT:archive};
-// Ignored host tests that reproduce the open Metal HWRT whole-sample miss. Their
-// failures are recorded in summary.json; any other ignored test failure fails CI.
-const knownOpenHwrt=/^api::tests::hardware_/;
 const checks=[],ciStarted=performance.now();
 const seconds=started=>Math.round((performance.now()-started)/100)/10;
 function record(name,command,args,exitCode,started,fields={}){
@@ -98,8 +97,11 @@ if(gpuValidation){
  const oracle=readFileSync(resolve(out,'fixtures/incremental-oracle.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line));
  gpu.oracle={passed:oracle.filter(row=>row.pass===true).length,skipped:oracle.filter(row=>row.skipped===true).length};
  if(gpu.oracle.passed+gpu.oracle.skipped!==oracle.length)throw Error('Incomplete incremental render results.');
- gpu.validated=gpu.oracle.skipped===0;
- if(!gpu.validated)gpu.reason=`${gpu.oracle.skipped} full-reference renders failed; review skipped oracle cases before release`;
+ gpu.validated=gpu.oracle.skipped===0&&hostGpuTests.knownOpenHwrtFailures===0;
+ if(!gpu.validated)gpu.reason=[
+  gpu.oracle.skipped&&`${gpu.oracle.skipped} full-reference renders failed`,
+  hostGpuTests.knownOpenHwrtFailures&&`${hostGpuTests.knownOpenHwrtFailures} known-open Metal HWRT image mismatches`,
+ ].filter(Boolean).join('; ')+'; review failures before release';
  console.log(`GPU validation coverage: ${JSON.stringify(gpu)}`);
 }else{
  await run('scene-static','npm',['run','native:scene:static'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'fixtures'),...prebuilt});
@@ -118,18 +120,16 @@ async function runHostGpuTests(){
  const listing=await run('host-gpu-tests-list','cargo',[...cargo,'--','--ignored','--list','--format=terse'],{},{log:resolve(logs,'list.log')});
  const tests=[...listing.output.matchAll(/^(\S+): test$/gm)].map(match=>match[1]);
  if(!tests.length)throw Error('No ignored host GPU tests were listed.');
- const iterations=process.env.MT_LOOP_ITERATIONS??'200',results=[];
+ const results=[];
  for(const test of tests){
-  const hwrt=knownOpenHwrt.test(test),log=resolve(logs,test.replace(/[^\w.-]+/g,'_')+'.log');
+  const log=resolve(logs,test.replace(/[^\w.-]+/g,'_')+'.log');
   const result=await run(`host-gpu-test ${test}`,'cargo',[...cargo,'--','--ignored','--exact',test,'--test-threads=1'],
-   hwrt?{MT_LOOP_ITERATIONS:iterations}:{},{allowFailure:true,log,fields:{hwrtKnownOpen:hwrt||undefined}});
-  // libtest prints the panic message on the line after "panicked at".
-  const failure=result.status===0?undefined:/panicked at [^\n]*\n([^\n]*)/.exec(result.output)?.[1]??`exit ${result.status}`;
-  results.push({test,status:result.status===0?'passed':hwrt?'known-open-hwrt-failure':'failed',seconds:result.check.seconds,failure,log});
+   {MT_LOOP_ITERATIONS:String(loopIterations)},{allowFailure:true,log});
+  results.push({test,...classifyHostGpuResult(test,result,gpu),seconds:result.check.seconds,log});
  }
  const failed=results.filter(r=>r.status==='failed'),open=results.filter(r=>r.status==='known-open-hwrt-failure');
  const summary={tests:results.length,passed:results.length-failed.length-open.length,failed:failed.length,knownOpenHwrtFailures:open.length,
-  hwrtLoopIterations:Number(iterations),seconds:seconds(started),results};
+  hwrtLoopIterations:loopIterations,seconds:seconds(started),results};
  writeFileSync(resolve(logs,'summary.json'),JSON.stringify(summary,null,2)+'\n');
  for(const r of open)console.log(`host-gpu-tests: known-open HWRT failure in ${r.test}: ${r.failure}`);
  console.log(`host-gpu-tests: ${summary.passed}/${summary.tests} passed, ${open.length} known-open HWRT failures (${summary.seconds} s)`);
