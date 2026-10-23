@@ -6,16 +6,15 @@ use mutracer_native_probe::layout::light as light_wire;
 use mutracer_native_probe::layout::{header as h, texture as tex};
 use std::{path::Path, sync::Arc};
 
-pub use mutracer_native_probe::scene_api::Descriptor;
+pub use mutracer_native_probe::scene_api::viewer_support::Descriptor;
 #[cfg(test)]
-pub use mutracer_native_probe::scene_api::encoder::material_values;
-pub use mutracer_native_probe::scene_api::encoder::{
-    Geometry, Material, MaterialLayers, Mesh, Texture,
-};
+pub use mutracer_native_probe::scene_api::viewer_support::material_values;
+pub use mutracer_native_probe::scene_api::viewer_support::{Material, Mesh, Texture};
+pub use mutracer_native_probe::scene_api::{Geometry, MaterialLayers};
 #[derive(Clone)]
-pub struct Model(pub mutracer_native_probe::scene_api::gltf::Model);
+pub struct Model(pub mutracer_native_probe::scene_api::viewer_support::Model);
 impl std::ops::Deref for Model {
-    type Target = mutracer_native_probe::scene_api::gltf::Model;
+    type Target = mutracer_native_probe::scene_api::viewer_support::Model;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -27,16 +26,16 @@ impl std::ops::DerefMut for Model {
 }
 impl Model {
     pub fn load(path: &Path) -> Result<Self> {
-        Ok(Self(mutracer_native_probe::scene_api::gltf::Model::load(
-            path,
-        )?))
+        Ok(Self(
+            mutracer_native_probe::scene_api::viewer_support::Model::load(path)?,
+        ))
     }
     fn scene_object(
         &self,
         environment: &Environment,
         light: &KeyLight,
     ) -> mutracer_native_probe::scene_api::Scene {
-        use mutracer_native_probe::scene_api::{Scene, encoder};
+        use mutracer_native_probe::scene_api::viewer_support as encoder;
         let mut lights = environment
             .studio
             .records(self.center, self.radius, self.ground_y);
@@ -61,18 +60,16 @@ impl Model {
                 environment.background_alpha
             },
         };
-        Scene::from_indexed(
-            &encoder::SceneData {
-                properties: &[],
-                geometries: &self.geometries,
-                materials: &self.materials,
-                textures: &self.textures,
-                meshes: &self.meshes,
-                lights,
-                ies: vec![],
-            },
-            &env,
-        )
+        encoder::SceneData {
+            properties: &[],
+            geometries: &self.geometries,
+            materials: &self.materials,
+            textures: &self.textures,
+            meshes: &self.meshes,
+            lights,
+            ies: vec![],
+        }
+        .to_scene(&env)
         .expect("Validated imported scene")
     }
     pub fn descriptor(&self, camera: &[u8], size: [u32; 2], environment: &Environment) -> Vec<u8> {

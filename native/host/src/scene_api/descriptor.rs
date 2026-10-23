@@ -2,11 +2,13 @@
 use super::*;
 /// Reusable descriptor buffer. Dimensions and quality belong to its consumer,
 /// not to the Scene. Bytes remain valid until the next update.
+#[cfg(feature = "viewer-support")]
 pub struct Descriptor {
     words: Vec<u32>,
     geometries: Vec<Geometry>,
     textures: Vec<encoder::Texture>,
 }
+#[cfg(feature = "viewer-support")]
 impl Descriptor {
     pub fn bytes(&self) -> &[u8] {
         #[cfg(target_endian = "little")]
@@ -49,7 +51,7 @@ impl Scene {
     /// Builds a scene from decoded indexed records, resolving all references to
     /// checked handles. Large vertex/image arrays remain shared.
     #[doc(hidden)]
-    pub fn from_indexed(
+    pub(crate) fn from_indexed(
         data: &encoder::SceneData<'_>,
         environment: &encoder::Environment,
     ) -> Result<Self> {
@@ -177,6 +179,7 @@ impl Scene {
     /// Encodes with consumer dimensions; quality flags default zero. Reuses the
     /// caller's cache for stable layouts, including edited vertex/image arrays.
     #[doc(hidden)]
+    #[cfg(feature = "viewer-support")]
     pub fn update_descriptor<'a>(
         &self,
         cached: &'a mut Option<Descriptor>,
@@ -211,5 +214,12 @@ impl Scene {
         d.words[h::ENVIRONMENT_TEXTURE] = r.environment_index;
         d.words[h::BACKGROUND_TEXTURE] = r.background_index;
         Ok(d.bytes())
+    }
+}
+
+#[cfg(feature = "viewer-support")]
+impl encoder::SceneData<'_> {
+    pub fn to_scene(&self, environment: &encoder::Environment) -> Result<Scene> {
+        Scene::from_indexed(self, environment)
     }
 }

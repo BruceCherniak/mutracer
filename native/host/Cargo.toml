@@ -43,6 +43,7 @@ naga = { version = "=30.0.1", features = ["spv-out", "hlsl-out"] }
 [features]
 default = ["gltf"]
 gltf = ["dep:gltf", "dep:image", "dep:meshopt", "dep:base64", "dep:percent-encoding"]
+viewer-support = ["gltf"]
 fuzzing = []
 # Opt-in stage-gate observations; never enabled by the native API/viewer.
 validation = []

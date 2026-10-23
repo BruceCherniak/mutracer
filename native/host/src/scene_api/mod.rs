@@ -1,10 +1,12 @@
 //! Scene construction with checked, generational handles. Arrays are shared; edits
 //! take effect when the scene is passed to `Engine::set_scene_object` and updated.
+mod encoder;
+mod types;
+#[cfg(feature = "viewer-support")]
 #[doc(hidden)]
-pub mod encoder;
+pub mod viewer_support;
 use crate::api::{self, Camera, CommitKind, Result, Status};
 use crate::layout::{header as h, light as l, mesh as m};
-pub use encoder::{Geometry, MaterialLayers};
 use glam::{Mat4, Vec3};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -13,6 +15,7 @@ use std::{
         atomic::{AtomicU64, Ordering},
     },
 };
+pub use types::{Geometry, MaterialLayers};
 
 static NEXT_SCENE: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -881,13 +884,15 @@ mod tests {
         assert_eq!(*a, b);
     }
 }
+#[cfg(any(feature = "gltf", feature = "viewer-support"))]
 mod descriptor;
 #[cfg(test)]
 mod gpu_tests;
-pub use descriptor::Descriptor;
 
 #[cfg(feature = "gltf")]
-pub mod gltf;
+mod gltf;
+#[cfg(feature = "gltf")]
+pub use gltf::{ImportedScene, Names};
 
 mod abi;
 impl OpenPbrMaterial {

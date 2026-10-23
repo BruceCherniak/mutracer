@@ -1,8 +1,11 @@
 //! glTF/GLB import with local resources, meshopt, quantized attributes and WebP.
+#[cfg_attr(not(feature = "viewer-support"), allow(dead_code))]
 mod animation;
 mod decode;
+#[cfg_attr(not(feature = "viewer-support"), allow(dead_code))]
 mod model;
 use super::*;
+#[cfg(feature = "viewer-support")]
 pub use animation::{Animation, Clip};
 use anyhow::Context;
 #[doc(hidden)]
