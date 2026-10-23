@@ -86,6 +86,7 @@
     "build:site": "node scripts/build-site.mjs",
     "typecheck:site": "tsc --noEmit -p site/tsconfig.json",
     "deploy": "wrangler deploy",
+    "deploy:dev": "wrangler deploy --env dev",
     "pack:oidn-weights": "node scripts/pack-oidn-weights.mjs",
     "check:lib-esm": "node scripts/check-lib-esm.mjs",
     "test:viewer": "vitest run --config viewer/vitest.config.ts",
