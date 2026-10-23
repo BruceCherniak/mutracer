@@ -873,7 +873,7 @@ pub unsafe extern "C" fn mt_scene_import_gltf(
         #[cfg(feature = "gltf")]
         {
             let path = unsafe { text(path) }?;
-            let import = Scene::import_gltf(path).map_err(|e| invalid(&e.to_string()))?;
+            let import = Scene::import_gltf(path)?;
             unsafe { output(out, register(imported(import))) }
         }
         #[cfg(not(feature = "gltf"))]
@@ -910,8 +910,7 @@ pub unsafe extern "C" fn mt_scene_import_gltf_bytes(
             } else {
                 Some(std::path::Path::new(unsafe { text(base) }?))
             };
-            let import =
-                Scene::import_gltf_bytes(bytes, base).map_err(|e| invalid(&e.to_string()))?;
+            let import = Scene::import_gltf_bytes(bytes, base)?;
             unsafe { output(out, register(imported(import))) }
         }
         #[cfg(not(feature = "gltf"))]
@@ -1019,6 +1018,44 @@ mod tests {
                 Status::InvalidHandle as i32
             );
             mt_scene_destroy(other, std::ptr::null_mut(), 0);
+        }
+    }
+}
+
+#[cfg(all(test, not(feature = "gltf")))]
+mod unavailable_tests {
+    use super::*;
+    #[test]
+    fn imports_without_gltf_return_unavailable() {
+        let mut scene = 0;
+        let mut error = [0i8; 256];
+        for status in [
+            unsafe {
+                mt_scene_import_gltf(
+                    std::ptr::null(),
+                    &mut scene,
+                    error.as_mut_ptr(),
+                    error.len(),
+                )
+            },
+            unsafe {
+                mt_scene_import_gltf_bytes(
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    &mut scene,
+                    error.as_mut_ptr(),
+                    error.len(),
+                )
+            },
+        ] {
+            assert_eq!(status, Status::Unavailable as i32);
+            assert!(
+                unsafe { CStr::from_ptr(error.as_ptr()) }
+                    .to_str()
+                    .unwrap()
+                    .contains("without gltf")
+            );
         }
     }
 }

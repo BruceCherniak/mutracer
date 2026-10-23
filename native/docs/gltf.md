@@ -17,6 +17,11 @@ C's `mt_scene_import_gltf` and `mt_scene_import_gltf_bytes` create a scene handl
 `mt_scene_find` resolves a name and zero-based occurrence to a handle. A build
 without `gltf` returns `MT_ERROR_UNAVAILABLE` from these import calls.
 
+Import failures, including missing files, invalid glTF/GLB, unsupported required
+extensions and exceeded limits, return Rust `api::Status::InvalidArgument` or C
+`MT_ERROR_INVALID_ARGUMENT`. Messages include the complete cause chain; C error
+buffers must be large enough to receive it without truncation.
+
 ## Resource options
 
 Path import resolves local resources beside the model. Byte import resolves
