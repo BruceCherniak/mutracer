@@ -492,6 +492,8 @@ type DenoiseResult = (std::result::Result<Vec<f32>, String>, String, f64);
 #[derive(Default)]
 struct Denoise {
     options: Option<DenoiserOptions>,
+    custom: super::custom_denoise::Filter,
+    cancel: CancelToken,
     /// Kept across `set_denoiser` calls with the same library and backend.
     filter: Arc<Mutex<Option<crate::denoise::Denoiser>>>,
     worker: Option<(u32, mpsc::Receiver<DenoiseResult>)>,
@@ -525,6 +527,7 @@ pub(super) struct RenderState {
     error: bool,
     busy: bool,
     denoise: Denoise,
+    denoiser_revision: u64,
     adaptive: Adaptive,
 }
 impl RenderState {
@@ -551,6 +554,7 @@ impl RenderState {
             flight.cancelled = true;
         }
         // Drop the receiver, never join a foreign CPU/GPU filter on the API thread.
+        self.denoise.cancel.cancel();
         self.denoise.worker = None;
         self.denoise.denoised = None;
         self.denoise.failed = true;
@@ -651,6 +655,7 @@ impl RenderState {
 }
 fn cancel_denoise(render: &mut RenderState) {
     render.output.invalidate();
+    render.denoise.cancel.cancel();
     render.denoise.worker = None;
     render.denoise.denoised = None;
     render.denoise.report = None;
@@ -1397,11 +1402,84 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
     }
     let (size, color, normal, albedo) = denoise_inputs(render.context)?;
     let filter = render.denoise.filter.clone();
+    let custom = render.denoise.custom.0.clone();
+    let gpu = state.gpu.clone();
+    let cancel = CancelToken::new();
+    render.denoise.cancel = cancel.clone();
     let (send, receive) = mpsc::channel();
     std::thread::Builder::new()
-        .name("MuTracer OIDN".into())
+        .name("MuTracer denoising".into())
         .spawn(move || {
-            let _ = send.send(run_oidn(&filter, &options, size, &color, &normal, &albedo));
+            let result = if let Some(custom) = custom {
+                let started = Instant::now();
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let buffers = if custom.gpu_inputs() {
+                        use wgpu::util::DeviceExt;
+                        let upload = |values: &[f32]| {
+                            let bytes: Vec<u8> =
+                                values.iter().flat_map(|v| v.to_le_bytes()).collect();
+                            gpu.device
+                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                    label: Some("MuTracer custom denoiser input"),
+                                    contents: &bytes,
+                                    usage: wgpu::BufferUsages::STORAGE
+                                        | wgpu::BufferUsages::COPY_SRC,
+                                })
+                        };
+                        Some(super::DenoiseBuffers {
+                            color: upload(&color),
+                            normal: upload(&normal),
+                            albedo: upload(&albedo),
+                        })
+                    } else {
+                        None
+                    };
+                    let input = super::DenoiseInput {
+                        size,
+                        color,
+                        normal,
+                        albedo,
+                        buffers,
+                        device: gpu.device.clone(),
+                        gpu: super::DenoiseGpu(gpu.queue.clone()),
+                    };
+                    let pixels = match custom.denoise(input, cancel.clone())? {
+                        super::DenoiseOutput::Cpu(pixels) => pixels,
+                        super::DenoiseOutput::Gpu(buffer) => {
+                            if buffer.size() < size[0] as u64 * size[1] as u64 * 16
+                                || !buffer.usage().contains(wgpu::BufferUsages::COPY_SRC)
+                            {
+                                return Err("Invalid custom denoiser GPU output buffer".into());
+                            }
+                            let bytes = crate::read_average(
+                                &gpu.device,
+                                &gpu.queue,
+                                &buffer,
+                                size[0],
+                                size[1],
+                                1,
+                            )
+                            .map_err(|e| e.to_string())?;
+                            bytes
+                                .chunks_exact(4)
+                                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                                .collect()
+                        }
+                    };
+                    super::custom_denoise::validate(pixels, size)
+                }))
+                .unwrap_or_else(|_| Err("Custom denoiser panicked".into()));
+                (
+                    result,
+                    "custom".into(),
+                    started.elapsed().as_secs_f64() * 1000.,
+                )
+            } else {
+                run_oidn(&filter, &options, size, &color, &normal, &albedo)
+            };
+            if !cancel.is_cancelled() {
+                let _ = send.send(result);
+            }
         })
         .map_err(|e| error(Status::Error, format!("Starting denoising: {e}")))?;
     render.denoise.worker = Some((render.samples, receive));
@@ -1492,6 +1570,7 @@ impl Render {
                 error: false,
                 busy: false,
                 denoise: Denoise::default(),
+                denoiser_revision: 0,
                 adaptive,
             },
         );
@@ -1608,7 +1687,7 @@ impl Render {
         }
         self.with(|state, id| {
             let render = state.renders.get_mut(&id).unwrap();
-            if render.denoise.options == options {
+            if render.denoise.custom.0.is_none() && render.denoise.options == options {
                 return Ok(());
             }
             cancel_denoise(render);
@@ -1617,9 +1696,35 @@ impl Render {
                 (Some(old), Some(new)) if device(old) != device(new) => Default::default(),
                 _ => render.denoise.filter.clone(),
             };
+            render.denoiser_revision += 1;
             render.denoise = Denoise {
                 options,
                 filter,
+                ..Default::default()
+            };
+            Ok(())
+        })
+    }
+    /// Installs a user filter with the given schedule, replacing OIDN. None
+    /// disables it. Callbacks own their data, run off-thread and may overlap after
+    /// cancellation. Readback happens before dispatch; GPU output is read back on
+    /// the worker. Replacement and destruction never wait for the callback.
+    pub fn set_custom_denoiser(
+        &self,
+        filter: Option<Arc<dyn super::CustomDenoiser>>,
+        schedule: DenoiseSchedule,
+    ) -> Result<()> {
+        let filter = super::custom_denoise::Filter(filter);
+        self.with(|state, id| {
+            let render = state.renders.get_mut(&id).unwrap();
+            cancel_denoise(render);
+            render.denoiser_revision += 1;
+            render.denoise = Denoise {
+                options: filter.0.as_ref().map(|_| DenoiserOptions {
+                    schedule,
+                    ..Default::default()
+                }),
+                custom: filter,
                 ..Default::default()
             };
             Ok(())
@@ -1810,66 +1915,43 @@ impl Render {
             }
             std::thread::sleep(Duration::from_micros(200));
         }
-        let denoise = self.with(|state, id| {
-            let render = &state.renders[&id];
-            Ok(render.denoise.options.clone().map(|denoiser| {
-                (
-                    denoiser,
-                    render.denoise.filter.clone(),
-                    render.context,
-                    render.samples,
-                )
-            }))
-        })?;
-        if let Some((denoiser, filter, context, samples)) = denoise {
+        let filtering = self.with(|state, id| Ok(state.renders[&id].denoise.options.is_some()))?;
+        if filtering {
             if let Some(progress) = options.on_progress.as_mut() {
                 progress(ConvergeProgress {
                     stage: ConvergeStage::Denoising,
-                    samples,
+                    samples: target,
                     target_samples: target,
                 });
             }
-            let (size, color, normal, albedo) =
-                crate::runtime::with_loss(&self.engine.inner.gpu, || denoise_inputs(context))?;
-            let (send, receive) = mpsc::channel();
-            std::thread::Builder::new()
-                .name("MuTracer converge OIDN".into())
-                .spawn(move || {
-                    let _ = send.send(run_oidn(&filter, &denoiser, size, &color, &normal, &albedo));
-                })
-                .map_err(|e| error(Status::Error, format!("Starting denoising: {e}")))?;
-            let (outcome, backend, milliseconds) = loop {
+            loop {
                 self.engine.poll_device();
-                self.engine.check_device()?;
-                match receive.recv_timeout(Duration::from_millis(2)) {
-                    Ok(value) => break value,
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        return Err(error(Status::Error, "Denoising thread stopped"));
+                let done = self.with(|state, id| {
+                    check(state)?;
+                    denoise(state, id, true)?;
+                    let render = &state.renders[&id];
+                    if let Some(message) =
+                        render.denoise.report.as_ref().and_then(|r| r.error.clone())
+                    {
+                        return Err(error(Status::Error, message));
+                    }
+                    Ok(render.denoise.options.is_none()
+                        || denoised_samples(render) == render.samples)
+                });
+                match done {
+                    Ok(true) => break,
+                    Ok(false) => std::thread::sleep(Duration::from_millis(2)),
+                    Err(e) => {
+                        let _ = self.with(|state, id| {
+                            let r = state.renders.get_mut(&id).unwrap();
+                            r.denoise.cancel.cancel();
+                            r.denoise.worker = None;
+                            Ok(())
+                        });
+                        return Err(e);
                     }
                 }
-            };
-            let report = DenoiseReport {
-                samples,
-                backend,
-                milliseconds,
-                error: outcome.as_ref().err().cloned(),
-            };
-            let pixels = outcome.map_err(|message| error(Status::Error, message))?;
-            self.with(|state, id| {
-                check(state)?;
-                let render = state.renders.get_mut(&id).unwrap();
-                render.denoise.report = Some(report);
-                render.denoise.last = Some(Instant::now());
-                if let Some(capture) = render.capture.as_mut() {
-                    capture
-                        .upload(&pixels)
-                        .map_err(|e| error(Status::Error, e.to_string()))?;
-                }
-                render.output.invalidate();
-                render.denoise.denoised = Some((samples, pixels));
-                Ok(())
-            })?;
+            }
         }
         Ok(ConvergeResult { samples: target })
     }
@@ -1960,7 +2042,7 @@ impl Render {
     /// batch first. The filter runs on a library thread; call again to collect its
     /// result, which is then presented like a scheduled one. Returns whether the
     /// denoised image is of the current samples. Needs a denoiser
-    /// ([`Render::set_denoiser`]). Input
+    /// ([`Render::set_denoiser`] or [`Render::set_custom_denoiser`]). Input
     /// readback may block; the call does not wait for the filter callback.
     pub fn denoise_current(&self) -> Result<bool> {
         self.with(|state, id| {
@@ -2060,9 +2142,24 @@ impl Render {
     pub fn denoise_report(&self) -> Option<DenoiseReport> {
         self.get(|_, r| r.denoise.report.clone()).flatten()
     }
-    /// The denoiser configuration. Default none.
+    /// OIDN configuration; None for custom filtering or disabled denoising.
     pub fn denoiser(&self) -> Option<DenoiserOptions> {
-        self.get(|_, r| r.denoise.options.clone()).flatten()
+        self.get(|_, r| {
+            if r.denoise.custom.0.is_none() {
+                r.denoise.options.clone()
+            } else {
+                None
+            }
+        })
+        .flatten()
+    }
+    /// Active schedule for either OIDN or custom filtering. Default None.
+    pub fn denoise_schedule(&self) -> Option<DenoiseSchedule> {
+        self.get(|_, r| r.denoise.options.as_ref().map(|o| o.schedule))
+            .flatten()
+    }
+    pub(super) fn denoiser_revision(&self) -> u64 {
+        self.get(|_, r| r.denoiser_revision).unwrap_or(0)
     }
     /// The intersection backend actually used by the published scene and, for
     /// a software fallback of a hardware engine, the reason.

@@ -66,7 +66,7 @@ int32_t mt_engine_destroy(mt_engine engine, char *error, size_t capacity);
 int32_t mt_engine_set_scene(mt_engine engine, const uint8_t *descriptor, size_t length, char *error, size_t capacity);
 /* Records an empty scene for update: cancels work, releases scene and images,
  * keeps reusable render handles/settings. Update may wait for preparation/GPU
- * retirement; it never waits for a denoiser worker. Attached windows
+ * retirement; it never waits for a custom denoiser callback. Attached windows
  * present transparent black (opaque windows show black); skipped frames follow
  * the normal surface retry contract. */
 int32_t mt_engine_clear_scene(mt_engine engine, char *error, size_t capacity);
@@ -302,6 +302,39 @@ MT_ENGINE_LAYOUT(mt_render_denoiser, 16 + sizeof(void *));
 int32_t mt_render_denoiser_default(mt_render_denoiser *output);
 /* Replaces the denoiser; NULL disables denoising. Default none. */
 int32_t mt_render_set_denoiser(mt_render render, const mt_render_denoiser *denoiser, char *error, size_t capacity);
+
+/* Custom filters replace OIDN. Worker inputs/output are linear RGBA32F,
+ * bottom row first, raw per-sample color (including background) + path coverage
+ * alpha; normal/albedo are L0 guides. count is floats (width*height*4).
+ * Fill every output float; return 0, or a nonzero error and a bounded UTF-8
+ * message. Input, output, error and cancel pointers expire on callback return.
+ * Input readback can block the API thread. C callbacks receive CPU memory;
+ * GPU filtering requires the host's own upload/readback. No C wgpu handles.
+ * Cancellation is cooperative. Cancel/destroy/replacement do not wait for the
+ * callback; stale outputs are discarded. Callbacks may overlap, may reenter
+ * the API, and must not unwind. Own user data until release, called once after
+ * the last worker retires (on an unspecified thread). Do not unload callback
+ * code before release. Registration transfers user ownership, even if a live
+ * render fails during registration; invalid records/handles do not transfer it.
+ * NULL disables filtering. Default none. */
+typedef struct mt_denoise_input {
+  uint32_t struct_size, width, height, reserved;
+  size_t count;
+  const float *color, *normal, *albedo;
+  const void *cancel;
+} mt_denoise_input;
+uint32_t mt_denoise_cancelled(const void *cancel);
+typedef int32_t (*mt_custom_denoise_callback)(const mt_denoise_input *input, float *output, char *error, size_t capacity, void *user);
+typedef void (*mt_custom_denoise_release)(void *user);
+typedef struct mt_custom_denoiser {
+  uint32_t struct_size, schedule; /* mt_denoise_schedule. */
+  mt_custom_denoise_callback callback;
+  mt_custom_denoise_release release;
+  void *user;
+} mt_custom_denoiser;
+MT_ENGINE_LAYOUT(mt_custom_denoiser, 8 + 3 * sizeof(void *));
+MT_ENGINE_LAYOUT(mt_denoise_input, 16 + 5 * sizeof(void *));
+int32_t mt_render_set_custom_denoiser(mt_render render, const mt_custom_denoiser *denoiser, char *error, size_t capacity);
 
 /* Collects a finished batch without waiting for it, submits the next one and
  * starts a due filter. Preparation, shader compilation, target changes and

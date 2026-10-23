@@ -13,7 +13,7 @@ engine or Node at runtime.
 | Windows x64 | DX12 or Vulkan | Experimental; CI builds only, no release packages |
 
 The headers in [`include/`](include) and the [native viewer](./viewer/README.md)
-follow this table. Native denoising backends depend on the OIDN runtime; see
+follow this table. Built-in native denoising depends on the OIDN runtime; see
 [Denoise caller-owned images](#denoise-caller-owned-images). Performance varies
 by scene and hardware.
 
@@ -101,8 +101,8 @@ Render options default to the browser library's values (2048 samples, 3
 bounces, 4 light candidates, bevel, 3 dispersion wavelengths); context
 settings keep their own defaults. Images are top row first. Use an engine and
 its objects from one thread at a time; only `mt_render_cancel` may be called
-from another thread. Callbacks run synchronously inside the calls that produce
-them. The header documents every option, default, error and lifetime.
+from another thread. Event/progress callbacks run synchronously inside the calls
+that produce them; custom denoiser callbacks run on library threads. The header documents every option, default, error and lifetime.
 
 Differences from the browser library:
 
@@ -110,7 +110,8 @@ Differences from the browser library:
   display frame later.
 - Converge blocks its thread. The host drives the loop with
   `mt_render_loop_tick` instead of start and stop.
-- Denoising uses OIDN only. Tiles and adaptive sampling are not available.
+- Denoising uses OIDN or a [custom filter](docs/engine-lifecycle.md#custom-denoisers).
+  Tiles and adaptive sampling are not available.
 
 ### Alpha blend strategy
 

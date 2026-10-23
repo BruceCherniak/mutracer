@@ -1098,6 +1098,122 @@ pub unsafe extern "C" fn mt_render_set_fallback(
         render.set_fallback(fallback.as_deref())
     })
 }
+#[repr(C)]
+pub struct MtDenoiseInput {
+    struct_size: u32,
+    width: u32,
+    height: u32,
+    reserved: u32,
+    count: usize,
+    color: *const f32,
+    normal: *const f32,
+    albedo: *const f32,
+    cancel: *const c_void,
+}
+type DenoiseCallback =
+    unsafe extern "C" fn(*const MtDenoiseInput, *mut f32, *mut c_char, usize, *mut c_void) -> i32;
+type DenoiseRelease = unsafe extern "C" fn(*mut c_void);
+#[repr(C)]
+pub struct MtCustomDenoiser {
+    struct_size: u32,
+    schedule: u32,
+    callback: Option<DenoiseCallback>,
+    release: Option<DenoiseRelease>,
+    user: *mut c_void,
+}
+struct CFilter {
+    callback: DenoiseCallback,
+    release: Option<DenoiseRelease>,
+    user: User,
+}
+// Pointer is opaque; the host guarantees concurrent worker access and lifetime.
+unsafe impl Sync for CFilter {}
+impl Drop for CFilter {
+    fn drop(&mut self) {
+        if let Some(release) = self.release {
+            unsafe { release(self.user.0) };
+        }
+    }
+}
+impl CustomDenoiser for CFilter {
+    fn denoise(
+        &self,
+        input: DenoiseInput,
+        cancel: CancelToken,
+    ) -> std::result::Result<DenoiseOutput, String> {
+        let record = MtDenoiseInput {
+            struct_size: std::mem::size_of::<MtDenoiseInput>() as u32,
+            width: input.size[0],
+            height: input.size[1],
+            reserved: 0,
+            count: input.color.len(),
+            color: input.color.as_ptr(),
+            normal: input.normal.as_ptr(),
+            albedo: input.albedo.as_ptr(),
+            cancel: &cancel as *const CancelToken as *const c_void,
+        };
+        let mut output = vec![f32::NAN; input.color.len()];
+        let mut message = [0 as c_char; 1024];
+        let result = unsafe {
+            (self.callback)(
+                &record,
+                output.as_mut_ptr(),
+                message.as_mut_ptr(),
+                message.len(),
+                self.user.0,
+            )
+        };
+        if result != 0 {
+            let bytes: Vec<u8> = message
+                .iter()
+                .take_while(|&&c| c != 0)
+                .map(|&c| c as u8)
+                .collect();
+            return Err(format!(
+                "Custom denoiser ({result}): {}",
+                String::from_utf8_lossy(&bytes)
+            ));
+        }
+        Ok(DenoiseOutput::Cpu(output))
+    }
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_denoise_cancelled(token: *const c_void) -> u32 {
+    if token.is_null() {
+        return 1;
+    }
+    unsafe { (*(token as *const CancelToken)).is_cancelled() as u32 }
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_render_set_custom_denoiser(
+    handle: u64,
+    options: *const MtCustomDenoiser,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        let render = render_of(handle)?;
+        if options.is_null() {
+            return render.set_custom_denoiser(None, DenoiseSchedule::Converged);
+        }
+        let options = unsafe { record(options)? };
+        let schedule = match options.schedule {
+            0 => DenoiseSchedule::Converged,
+            1 => DenoiseSchedule::Progressive,
+            2 => DenoiseSchedule::EverySample,
+            _ => return Err(invalid("Unknown denoise schedule")),
+        };
+        let callback = options
+            .callback
+            .ok_or_else(|| invalid("Null denoiser callback"))?;
+        let filter = Arc::new(CFilter {
+            callback,
+            release: options.release,
+            user: User(options.user),
+        });
+        render.set_custom_denoiser(Some(filter), schedule)
+    })
+}
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_render_denoiser_default(output: *mut MtRenderDenoiser) -> i32 {
     if output.is_null() {
@@ -1173,7 +1289,7 @@ pub unsafe extern "C" fn mt_render_denoise_current(
 ) -> i32 {
     call(error_out, capacity, || {
         let render = render_of(handle)?;
-        if render.denoiser().is_none() {
+        if render.denoise_schedule().is_none() {
             return Err(error(Status::InvalidState, "No denoiser is set"));
         }
         let result = render.denoise_current()?;

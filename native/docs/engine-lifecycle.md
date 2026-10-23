@@ -16,8 +16,8 @@ frames retry through the normal surface status contract. Render handles, setting
 denoisers remain reusable: set another scene and update to resume rendering.
 
 Clear cancels pending preparation, sampling, convergence and denoising. It can
-wait for preparation and submitted GPU work to retire, but never joins a denoiser
-worker. It releases scene and image resources; device pipeline caches
+wait for preparation and submitted GPU work to retire, but never joins a user
+filter callback. It releases scene and image resources; device pipeline caches
 remain reusable. A converge interrupted by a scene change returns an error.
 
 ## Diagnostics and compilation
@@ -47,3 +47,46 @@ exit, including failed attempts, on the next event-delivering API call; callback
 stay on that caller's thread. C uses `MT_ENGINE_EVENT_COMPILATION`. The shared
 device's active compilation is visible to all its renders. Preparation includes
 resource work outside this compilation interval.
+
+## Custom denoisers
+
+Install a Rust `Arc<dyn CustomDenoiser>` with `render.set_custom_denoiser`, or
+register `mt_custom_denoiser` with `mt_render_set_custom_denoiser`. Choose the
+same converged, progressive or every-sample schedules as OIDN. Passing None/NULL
+disables filtering. Existing `set_denoiser` / `mt_render_set_denoiser` OIDN calls
+remain available and replace a custom filter.
+
+Inputs are owned linear RGBA32F color, normal and albedo arrays, bottom row
+first. Color is the raw per-sample average including background; alpha is path
+coverage. Return the same layout and size with finite values. This differs from
+L1 HDR export's surface-hit normalization. Input readback can block the API call;
+filtering runs on a library thread. Rust filters can request GPU input buffers
+with `gpu_inputs()`, use the supplied device and coordinated GPU submission
+access, and return a CPU array or a COPY_SRC GPU buffer on that device. GPU input
+currently adds an upload after readback; GPU output adds worker-side readback.
+C callbacks use CPU arrays and must perform their own GPU transfers if needed.
+
+The worker owns input data until callback return. Rust output ownership transfers
+to the library. C writes the provided output and retains none of its input,
+output, cancellation or error pointers after return. Poll the cancellation token
+to stop cooperatively. Cancel, clear, replacement and destruction return without
+joining callbacks; cancelled results are discarded. A stuck callback retains its
+inputs and filter indefinitely. Replacements can overlap old calls, so filters
+must support concurrent access. C user data remains owned until its release
+callback runs after the last reference retires; release also runs off-thread.
+Keep callback code loaded until release. Filter callbacks must not unwind across
+C. Window engines reject callback reentry from worker threads.
+
+Errors, invalid output and caught Rust panics produce a denoise report and engine
+error event; scheduled filtering stops until the filter is set again. Converge
+returns an error. The original accumulation remains available. Cancellation and
+timeout also stop converge's wait even when the callback does not cooperate.
+
+## Browser API counterparts
+
+| Native API | Browser API / difference |
+| --- | --- |
+| diagnostics | `Engine.getDiagnostics()`; backend-specific counters differ |
+| clear scene + update | `engine.scene = undefined; engine.update()`; native empty renders use Idle |
+| Compiling / compilation progress | `Render.status === 'compiling'`, progress stage `shaders` |
+| CustomDenoiser / C callback | `type: 'custom'` and `Denoiser`; native work uses threads and owned data |

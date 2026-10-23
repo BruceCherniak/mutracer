@@ -15,6 +15,8 @@
 //! uniforms and accumulation, so changing its size or settings, a converge
 //! camera or sequence offset never prepares the scene again.
 mod abi;
+mod custom_denoise;
+pub use custom_denoise::{CustomDenoiser, DenoiseBuffers, DenoiseGpu, DenoiseInput, DenoiseOutput};
 mod depth;
 mod display;
 mod engine;
@@ -124,6 +126,9 @@ mod hdr_tests;
 mod loop_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod backlog_tests;
 
 #[cfg(test)]
 mod lifecycle_tests;

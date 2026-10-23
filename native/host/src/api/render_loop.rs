@@ -4,7 +4,7 @@
 //! and after editing engine inputs, render settings or the display.
 use super::display::DisplaySettings;
 use super::engine::Engine;
-use super::render::{ConvergeOptions, ConvergeResult, ConvergeStage, DenoiserOptions, SampleEvent};
+use super::render::{ConvergeOptions, ConvergeResult, ConvergeStage, SampleEvent};
 use super::{Display, Render, RenderSettings, RenderSize, RenderStatus, Result, Status, error};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
@@ -177,7 +177,7 @@ pub(super) struct ImageState {
     samples: u32,
     size: [u32; 2],
     settings: RenderSettings,
-    denoiser: Option<DenoiserOptions>,
+    denoiser_revision: u64,
     denoising: bool,
     display_size: [u32; 2],
     display: DisplaySettings,
@@ -188,7 +188,7 @@ fn image_state(render: &Render, display: &Display) -> Result<ImageState> {
         samples: render.samples(),
         size: [render.width(), render.height()],
         settings: render.settings()?,
-        denoiser: render.denoiser(),
+        denoiser_revision: render.denoiser_revision(),
         denoising: render.denoising(),
         display_size: display.size(),
         display: display.settings(),
