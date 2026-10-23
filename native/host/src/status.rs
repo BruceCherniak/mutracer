@@ -2,7 +2,7 @@
 use std::ffi::c_char;
 
 /// Mirrors `MT_ABI_VERSION`.
-pub const ABI_VERSION: u32 = 6;
+pub const ABI_VERSION: u32 = 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]
@@ -134,6 +134,7 @@ mod tests {
             assert_eq!(value(name), kind as i64, "{name}");
         }
         assert_eq!(value("#define MT_ABI_VERSION"), ABI_VERSION as i64);
+        assert_eq!(ABI_VERSION, 7);
         assert_eq!(mt_abi_version(), ABI_VERSION);
     }
     #[test]

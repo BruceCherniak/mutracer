@@ -66,20 +66,20 @@ For example, after creating an engine:
 #include "mutracer-scene-api.h"
 mt_scene scene;
 mt_scene_create(&scene, error, sizeof error);
-mt_geometry_desc geometry;
-mt_geometry_desc_default(&geometry);
+mt_scene_geometry_desc geometry;
+mt_scene_geometry_desc_default(&geometry);
 geometry.positions = positions; geometry.vertex_count = 3;
 geometry.indices = indices; geometry.index_count = 3;
-mt_geometry_id g;
+mt_scene_geometry_id g;
 mt_scene_add_geometry(scene, &geometry, &g, error, sizeof error);
 mt_scene_material_desc material;
 mt_scene_material_desc_default(&material);
-mt_material_id m;
+mt_scene_material_id m;
 mt_scene_add_material(scene, &material, &m, error, sizeof error);
 mt_scene_mesh_desc mesh;
 mt_scene_mesh_desc_default(&mesh);
 mesh.geometry = g; mesh.material = m;
-mt_mesh_id object;
+mt_scene_mesh_id object;
 mt_scene_add_mesh(scene, &mesh, &object, error, sizeof error);
 mt_engine_set_scene_object(engine, scene, error, sizeof error);
 mt_engine_update(engine, &changed, error, sizeof error);
@@ -102,7 +102,7 @@ add lighting or emission for a visible surface.
 
 Use `material_mut`, `mesh_mut`, `geometry_mut`, `texture_mut`, `light_mut` and
 `set_environment` for Rust edits. C has matching resource setters;
-`mt_material_set_float`, `mt_material_set_uint` and `mt_material_set_texture`
+`mt_scene_material_set_float`, `mt_scene_material_set_uint` and `mt_scene_material_set_texture`
 accept [material property IDs](include/mutracer-material-properties.h).
 `Instances` / `mt_scene_add_instances` creates a mesh with local matrices and
 optional RGB multipliers. See [editing rules and costs](#editing-a-scene).

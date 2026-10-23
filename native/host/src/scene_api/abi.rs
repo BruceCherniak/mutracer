@@ -188,7 +188,7 @@ unsafe fn text<'a>(p: *const c_char) -> Result<&'a str> {
 }
 macro_rules! defaults {($($fn:ident,$ty:ty,$value:expr);*$(;)?)=>{$(#[unsafe(no_mangle)]pub unsafe extern "C" fn $fn(out:*mut $ty)->i32 {call(std::ptr::null_mut(),0,||unsafe{output(out,$value)})})*};}
 defaults! {
- mt_geometry_desc_default,GeometryDesc,GeometryDesc{struct_size:size_of::<GeometryDesc>() as u32,vertex_count:0,index_count:0,reserved:0,positions:std::ptr::null(),indices:std::ptr::null(),normals:std::ptr::null(),uv:std::ptr::null(),uv1:std::ptr::null(),colors:std::ptr::null(),tangents:std::ptr::null(),material_indices:std::ptr::null()};
+ mt_scene_geometry_desc_default,GeometryDesc,GeometryDesc{struct_size:size_of::<GeometryDesc>() as u32,vertex_count:0,index_count:0,reserved:0,positions:std::ptr::null(),indices:std::ptr::null(),normals:std::ptr::null(),uv:std::ptr::null(),uv1:std::ptr::null(),colors:std::ptr::null(),tangents:std::ptr::null(),material_indices:std::ptr::null()};
  mt_scene_material_desc_default,MaterialDesc,MaterialDesc{struct_size:80,double_sided:0,color:[0.8;3],roughness:0.3,metalness:0.,opacity:1.,transmission:0.,ior:1.5,emission:[1.;3],emission_strength:0.,thin_walled:0,alpha_mode:0,alpha_cutoff:0.5,normal_scale:1.,unlit:0,reserved:0};
  mt_scene_texture_desc_default,TextureDesc,TextureDesc{struct_size:size_of::<TextureDesc>() as u32,storage:0,width:0,height:0,uv_channel:0,flip_y:0,wrap_s:0,wrap_t:0,scale:[1.;2],offset:[0.;2],pixels:std::ptr::null(),pixel_bytes:0};
  mt_scene_mesh_desc_default,MeshDesc,MeshDesc{struct_size:size_of::<MeshDesc>() as u32,reserved:0,geometry:0,material:0,world_matrix:Mat4::IDENTITY.to_cols_array(),materials:std::ptr::null(),material_count:0};
@@ -643,7 +643,7 @@ pub unsafe extern "C" fn mt_scene_set_light(
 macro_rules! remove {($($fn:ident,$get:ident,$rm:ident);*)=>{$(#[unsafe(no_mangle)]pub extern "C" fn $fn(scene:u64,id:u64,error:*mut c_char,cap:usize)->i32 {call(error,cap,||with_scene(scene,|e|{let k=e.$get(id)?;e.scene.$rm(k)?;e.resources.remove(&id);Ok(())}))})*};}
 remove! {mt_scene_remove_geometry,geometry,remove_geometry;mt_scene_remove_material,material,remove_material;mt_scene_remove_texture,texture,remove_texture;mt_scene_remove_mesh,mesh,remove_mesh;mt_scene_remove_light,light,remove_light}
 #[unsafe(no_mangle)]
-pub extern "C" fn mt_material_set_float(
+pub extern "C" fn mt_scene_material_set_float(
     scene: u64,
     id: u64,
     property: u32,
@@ -661,7 +661,7 @@ pub extern "C" fn mt_material_set_float(
     })
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn mt_material_set_uint(
+pub extern "C" fn mt_scene_material_set_uint(
     scene: u64,
     id: u64,
     property: u32,
@@ -677,7 +677,7 @@ pub extern "C" fn mt_material_set_uint(
     })
 }
 #[unsafe(no_mangle)]
-pub extern "C" fn mt_material_set_texture(
+pub extern "C" fn mt_scene_material_set_texture(
     scene: u64,
     id: u64,
     property: u32,
@@ -995,22 +995,22 @@ mod tests {
                 0
             );
             assert_eq!(
-                mt_material_set_float(s, m, 7, 0.6, 0., 0., std::ptr::null_mut(), 0),
+                mt_scene_material_set_float(s, m, 7, 0.6, 0., 0., std::ptr::null_mut(), 0),
                 0
             );
             assert_eq!(
-                mt_material_set_uint(s, m, 7, 1, std::ptr::null_mut(), 0),
+                mt_scene_material_set_uint(s, m, 7, 1, std::ptr::null_mut(), 0),
                 Status::InvalidArgument as i32
             );
             let mut other = 0;
             mt_scene_create(&mut other, std::ptr::null_mut(), 0);
             assert_eq!(
-                mt_material_set_uint(other, m, 37, 1, std::ptr::null_mut(), 0),
+                mt_scene_material_set_uint(other, m, 37, 1, std::ptr::null_mut(), 0),
                 Status::InvalidHandle as i32
             );
             assert_eq!(mt_scene_remove_material(s, m, std::ptr::null_mut(), 0), 0);
             assert_eq!(
-                mt_material_set_float(s, m, 7, 0.5, 0., 0., std::ptr::null_mut(), 0),
+                mt_scene_material_set_float(s, m, 7, 0.5, 0., 0., std::ptr::null_mut(), 0),
                 Status::InvalidHandle as i32
             );
             assert_eq!(mt_scene_destroy(s, std::ptr::null_mut(), 0), 0);

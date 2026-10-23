@@ -70,15 +70,15 @@ static float *render(uint32_t backend,mt_scene scene,const void *bytes,size_t le
 int main(int argc,char **argv) {
   uint32_t backend=argc>1?(uint32_t)atoi(argv[1]):0;REQUIRE(mt_abi_version()==MT_ABI_VERSION);
   mt_scene s;CHECK(mt_scene_create(&s,error,sizeof error));
-  mt_geometry_desc gd;CHECK(mt_geometry_desc_default(&gd));gd.vertex_count=4;gd.index_count=6;gd.positions=positions;gd.indices=indices;
-  mt_geometry_id g;CHECK(mt_scene_add_geometry(s,&gd,&g,error,sizeof error));
+  mt_scene_geometry_desc gd;CHECK(mt_scene_geometry_desc_default(&gd));gd.vertex_count=4;gd.index_count=6;gd.positions=positions;gd.indices=indices;
+  mt_scene_geometry_id g;CHECK(mt_scene_add_geometry(s,&gd,&g,error,sizeof error));
   mt_scene_material_desc md;CHECK(mt_scene_material_desc_default(&md));md.color[1]=md.color[2]=.1f;
-  mt_material_id m;CHECK(mt_scene_add_material(s,&md,&m,error,sizeof error));
+  mt_scene_material_id m;CHECK(mt_scene_add_material(s,&md,&m,error,sizeof error));
   mt_scene_mesh_desc mesh;CHECK(mt_scene_mesh_desc_default(&mesh));mesh.geometry=g;mesh.material=m;
-  mt_mesh_id mi;CHECK(mt_scene_add_mesh(s,&mesh,&mi,error,sizeof error));
+  mt_scene_mesh_id mi;CHECK(mt_scene_add_mesh(s,&mesh,&mi,error,sizeof error));
   mt_scene_light_desc ld;CHECK(mt_scene_light_desc_default(&ld));ld.intensity=10;
   const float at[]={0,2,0},target[]={0,0,.001f};mt_scene_look_at(ld.world_matrix,at,target);
-  mt_light_id li;CHECK(mt_scene_add_light(s,&ld,&li,error,sizeof error));
+  mt_scene_light_id li;CHECK(mt_scene_add_light(s,&ld,&li,error,sizeof error));
   mt_camera_v4 camera=mt_camera_v4_default();const float eye[]={0,2,3},origin[]={0,0,0};mt_scene_look_at(camera.world_matrix,eye,origin);
   CHECK(mt_scene_set_default_camera(s,&camera,error,sizeof error));
   size_t len=0;CHECK(mt_scene_encode(s,NULL,0,&len,error,sizeof error));void *encoded=malloc(len);REQUIRE(encoded);CHECK(mt_scene_encode(s,encoded,len,&len,error,sizeof error));
@@ -87,7 +87,7 @@ int main(int argc,char **argv) {
   REQUIRE(len==clen);REQUIRE(memcmp(encoded,mt_scene_builder_bytes(&canonical),len)==0);
   float *a=render(backend,s,NULL,0),*b=render(backend,0,mt_scene_builder_bytes(&canonical),clen),*c=render(backend,0,mt_scene_builder_bytes(&original),olen);
   REQUIRE(memcmp(a,b,64*48*16)==0);REQUIRE(memcmp(a,c,64*48*16)==0);free(a);free(b);free(c);
-  CHECK(mt_material_set_float(s,m,MT_MAT_SPECULAR_ROUGHNESS,.6f,0,0,error,sizeof error));uint32_t kind=0;CHECK(mt_scene_pending_commit_kind(s,&kind,error,sizeof error));REQUIRE(kind==MT_COMMIT_INCREMENTAL);
+  CHECK(mt_scene_material_set_float(s,m,MT_MAT_SPECULAR_ROUGHNESS,.6f,0,0,error,sizeof error));uint32_t kind=0;CHECK(mt_scene_pending_commit_kind(s,&kind,error,sizeof error));REQUIRE(kind==MT_COMMIT_INCREMENTAL);
   CHECK(mt_scene_remove_mesh(s,mi,error,sizeof error));REQUIRE(mt_scene_set_mesh_transform(s,mi,mesh.world_matrix,error,sizeof error)==MT_ERROR_INVALID_HANDLE);
   CHECK(mt_scene_destroy(s,error,sizeof error));REQUIRE(mt_scene_destroy(s,error,sizeof error)==MT_ERROR_INVALID_HANDLE);
   if(argc>2){
