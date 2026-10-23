@@ -3,6 +3,9 @@ use crate::scene_api::encoder::{Geometry, Material, MaterialLayers, Mesh, Textur
 use anyhow::{Context, Result, bail, ensure};
 use glam::{Mat4, Vec3};
 use std::{collections::HashMap, path::Path, sync::Arc};
+
+const TEXTURE_BUDGET_WARNING: &str =
+    "Material textures were reduced to share the 12M-pixel texture budget.";
 #[derive(Clone)]
 pub struct Model {
     pub name: String,
@@ -32,7 +35,7 @@ impl Model {
             bytes.len() <= 128 * 1024 * 1024,
             "Model file exceeds 128 MiB"
         );
-        let (document, buffers, images) = super::decode::load_bytes(bytes, path)
+        let (document, buffers, images, resized) = super::decode::load_bytes(bytes, path)
             .context("Loading GLTF/GLB and its buffers/images")?;
         let path = path.unwrap_or(Path::new("memory.glb"));
         ensure!(
@@ -75,6 +78,9 @@ impl Model {
             node_names: vec![],
             mesh_names: vec![],
         };
+        if resized {
+            model.warnings.push(TEXTURE_BUDGET_WARNING.into());
+        }
         for extension in document.extensions_used().filter(|e| !known.contains(e)) {
             model.warnings.push(format!(
                 "Unsupported optional extension is ignored: {extension}"
@@ -304,7 +310,7 @@ impl Model {
             .sum();
         let count = images.iter().filter(|(_, image)| image.is_some()).count();
         // Reserve the maximum supported environment image (4M pixels).
-        let available = 12_582_912u64.saturating_sub(used);
+        let available = super::decode::MATERIAL_TEXEL_BUDGET.saturating_sub(used);
         ensure!(
             count == 0 || available >= count as u64,
             "Material texture budget is full"
@@ -497,14 +503,25 @@ impl Model {
             return Ok(id as u32);
         }
         let id = self.textures.len() as u32;
-        let (width, height, pixels) = if image.width.max(image.height) > 512 {
-            let factor = 512. / image.width.max(image.height) as f32;
-            let width = (image.width as f32 * factor).round().max(1.) as u32;
-            let height = (image.height as f32 * factor).round().max(1.) as u32;
+        // Decoding shares the budget among source images; copies of one image
+        // with different sampling can still exceed it.
+        let used: u64 = self
+            .textures
+            .iter()
+            .map(|t| t.width as u64 * t.height as u64)
+            .sum();
+        let available = super::decode::MATERIAL_TEXEL_BUDGET.saturating_sub(used);
+        let texels = image.width as u64 * image.height as u64;
+        ensure!(available > 0, "Material texture budget is full");
+        let (width, height, pixels) = if texels > available {
+            let factor = (available as f64 / texels as f64).sqrt();
+            let width = (image.width as f64 * factor).floor().max(1.) as u32;
+            let height = (image.height as f64 * factor).floor().max(1.) as u32;
             let input = image::RgbaImage::from_raw(image.width, image.height, rgba[source].clone())
                 .context("Invalid decoded texture size")?;
-            self.warnings
-                .push("Material textures are limited to 512 pixels on the longest side.".into());
+            if !self.warnings.iter().any(|w| w == TEXTURE_BUDGET_WARNING) {
+                self.warnings.push(TEXTURE_BUDGET_WARNING.into());
+            }
             (
                 width,
                 height,
@@ -968,5 +985,49 @@ mod tests {
         assert_eq!(model.textures.len(), 2);
         assert_eq!(model.textures[0].wrap, [1, 2]);
         assert_eq!(model.textures[1].wrap, [0, 0]);
+    }
+    #[test]
+    fn sampler_copies_of_one_image_share_the_texture_budget() {
+        let samplers: Vec<_> = (0..9)
+            .map(|i| {
+                let modes = [10497, 33071, 33648];
+                serde_json::json!({"wrapS": modes[i % 3], "wrapT": modes[i / 3]})
+            })
+            .collect();
+        let textures: Vec<_> = (0..9)
+            .map(|i| serde_json::json!({"source": 0, "sampler": i}))
+            .collect();
+        let json = serde_json::json!({"asset":{"version":"2.0"},"images":[{"uri":"unused.png"}],
+            "samplers":samplers,"textures":textures});
+        let document = gltf::Gltf::from_slice(&serde_json::to_vec(&json).unwrap()).unwrap();
+        let (width, height) = (1500, 1500);
+        let image = gltf::image::Data {
+            pixels: vec![255; width * height * 4],
+            format: gltf::image::Format::R8G8B8A8,
+            width: width as u32,
+            height: height as u32,
+        };
+        let mut model =
+            Model::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../viewer/assets/sample.glb"))
+                .unwrap();
+        let pixels = vec![image.pixels.clone()];
+        for texture in document.textures() {
+            if let Err(e) = model.add_map(texture, 0, None, std::slice::from_ref(&image), &pixels) {
+                assert_eq!(e.to_string(), "Material texture budget is full");
+                break;
+            }
+        }
+        let used: u64 = model
+            .textures
+            .iter()
+            .map(|t| t.width as u64 * t.height as u64)
+            .sum();
+        assert!(used <= super::super::decode::MATERIAL_TEXEL_BUDGET);
+        assert_eq!(
+            (model.textures[0].width, model.textures[0].height),
+            (1500, 1500)
+        );
+        assert!(model.textures.iter().any(|t| t.width < 1500));
+        assert!(model.warnings.iter().any(|w| w == TEXTURE_BUDGET_WARNING));
     }
 }

@@ -6,12 +6,19 @@ use base64::Engine;
 use serde_json::{Value, json};
 use std::path::Path;
 
+/// Decoded document, buffers, RGBA8 images and whether any image was reduced.
 type Import = (
     gltf::Document,
     Vec<gltf::buffer::Data>,
     Vec<gltf::image::Data>,
+    bool,
 );
 const MAX_BUFFER: usize = 512 * 1024 * 1024;
+/// Texture pixels shared by all material textures: the descriptor allows 16M and
+/// 4M stay reserved for the largest supported environment image.
+pub(super) const MATERIAL_TEXEL_BUDGET: u64 = 12_582_912;
+/// Longest texture side the atlas stores without scaling.
+pub(super) const MAX_TEXTURE_EDGE: u32 = 4096;
 fn number(v: &Value, name: &str) -> Result<usize> {
     v[name]
         .as_u64()
@@ -354,8 +361,12 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
     let root = serde_json::from_value(j.clone()).context("Parsing decoded glTF")?;
     let document = gltf::Document::from_json(root).context("Validating decoded glTF")?;
     let mut images = Vec::new();
-    let image_count = document.images().len().max(1);
-    let edge = ((12_582_912 / image_count) as f64).sqrt().floor().min(512.) as u32;
+    let mut resized = false;
+    let image_count = document.images().len().max(1) as u64;
+    let edge = ((MATERIAL_TEXEL_BUDGET / image_count) as f64)
+        .sqrt()
+        .floor()
+        .min(MAX_TEXTURE_EDGE as f64) as u32;
     for image in document.images() {
         let data = match image.source() {
             gltf::image::Source::Uri { uri: name, .. } => uri(path, name)?,
@@ -369,6 +380,7 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
         );
         let image = image::load_from_memory(&data)?;
         let rgba = if w.max(h) > edge {
+            resized = true;
             image
                 .resize(edge, edge, image::imageops::FilterType::Triangle)
                 .into_rgba8()
@@ -382,11 +394,11 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
             pixels: rgba.into_raw(),
         });
     }
-    Ok((document, buffers, images))
+    Ok((document, buffers, images, resized))
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     pub(crate) fn model_file(mut root: Value, bytes: &[u8]) -> std::path::PathBuf {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -488,7 +500,7 @@ mod tests {
             }),
             &bytes,
         );
-        let (_, _, images) = load_bytes(&std::fs::read(&path).unwrap(), Some(&path)).unwrap();
+        let (_, _, images, _) = load_bytes(&std::fs::read(&path).unwrap(), Some(&path)).unwrap();
         assert_eq!(images[0].pixels, [255, 10, 0, 255]);
         let model = crate::scene_api::gltf::Model::load(&path).unwrap();
         assert_eq!(
@@ -501,6 +513,45 @@ mod tests {
             glam::Vec3::new(3., 0., 0.)
         );
         std::fs::remove_file(path).unwrap();
+    }
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::RgbaImage::from_pixel(width, height, image::Rgba([200, 100, 50, 255]))
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        bytes
+    }
+    /// Image sizes after decoding `count` image entries that share one PNG.
+    fn decoded(width: u32, height: u32, count: usize) -> (Vec<(u32, u32)>, bool) {
+        let bytes = png(width, height);
+        let path = model_file(
+            json!({
+                "bufferViews":[{"buffer":0,"byteLength":bytes.len()}],
+                "images":vec![json!({"bufferView":0,"mimeType":"image/png"}); count],
+            }),
+            &bytes,
+        );
+        let (_, _, images, resized) =
+            load_bytes(&std::fs::read(&path).unwrap(), Some(&path)).unwrap();
+        std::fs::remove_file(path).unwrap();
+        (
+            images.iter().map(|i| (i.width, i.height)).collect(),
+            resized,
+        )
+    }
+    #[test]
+    fn images_keep_their_size_within_the_shared_budget() {
+        assert_eq!(decoded(1024, 600, 1), (vec![(1024, 600)], false));
+        // 100 images share 12M pixels: at most 354 pixels per side each.
+        let (sizes, resized) = decoded(400, 200, 100);
+        assert!(resized);
+        assert!(
+            sizes.iter().all(|&(w, h)| w == 354 && h == 177),
+            "{sizes:?}"
+        );
     }
     #[test]
     fn skin_initial_pose_is_baked_per_node() {

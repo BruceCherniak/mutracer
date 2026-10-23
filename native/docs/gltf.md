@@ -55,7 +55,7 @@ and Basis/KTX2 assets require conversion before import.
 ## Limits
 
 Model files are limited to 128 MiB, combined model buffers to 512 MiB and source
-material images to 64M pixels each. Imported textures shrink to at most 512
-pixels on their longest side; models with many images use a lower limit to fit
-the shared 12M-pixel material budget. The node hierarchy is limited to 512 levels.
+material images to 64M pixels each. Imported material textures share a 12M-pixel
+budget and keep at most 4,096 pixels on their longest side; larger or more numerous
+images are reduced to fit, with a warning. The node hierarchy is limited to 512 levels.
 Additional [native scene and texture limits](scene-format.md#limits) apply.

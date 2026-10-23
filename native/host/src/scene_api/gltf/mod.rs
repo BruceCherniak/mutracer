@@ -123,6 +123,73 @@ mod tests {
         );
         assert!(!a.names.meshes.is_empty());
     }
+    #[test]
+    #[ignore = "requires a real GPU; run separately"]
+    fn large_imported_texture_keeps_its_size_and_renders() {
+        use crate::api::{
+            Backend, ConvergeOptions, Engine, EngineOptions, PixelKind, Render, RenderSettings,
+            RenderSize,
+        };
+        let mut png = Vec::new();
+        image::RgbaImage::from_fn(2048, 1024, |x, _| image::Rgba([(x / 8) as u8, 0, 0, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut bytes: Vec<u8> = [
+            -1f32, -1., 0., 1., -1., 0., 0., 1., 0., 0., 0., 1., 0., 0.5, 1.,
+        ]
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect();
+        bytes.extend(&png);
+        let path = super::decode::tests::model_file(
+            serde_json::json!({
+                "bufferViews":[{"buffer":0,"byteLength":36},{"buffer":0,"byteOffset":36,"byteLength":24},
+                    {"buffer":0,"byteOffset":60,"byteLength":png.len()}],
+                "accessors":[{"bufferView":0,"componentType":5126,"type":"VEC3","count":3,"min":[-1,-1,0],"max":[1,1,0]},
+                    {"bufferView":1,"componentType":5126,"type":"VEC2","count":3}],
+                "images":[{"bufferView":2,"mimeType":"image/png"}],"textures":[{"source":0}],
+                "materials":[{"name":"textured","pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],
+                "meshes":[{"primitives":[{"attributes":{"POSITION":0,"TEXCOORD_0":1},"material":0}]}],
+                "nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}],"scene":0
+            }),
+            &bytes,
+        );
+        let mut imported = Scene::import_gltf(&path).unwrap();
+        std::fs::remove_file(path).unwrap();
+        assert!(imported.warnings.is_empty(), "{:?}", imported.warnings);
+        let material = imported.names.materials["textured"][0];
+        let texture = imported.scene.material_mut(material).unwrap().textures[0].unwrap();
+        let t = imported.scene.texture_mut(texture).unwrap();
+        assert_eq!((t.width, t.height), (2048, 1024));
+        let mut camera = crate::api::Camera::default();
+        camera.world_matrix[14] = 3.;
+        imported.scene.set_default_camera(Some(camera));
+        let engine = Engine::new(EngineOptions {
+            backend: Backend::Software,
+        })
+        .unwrap();
+        let render = Render::new(
+            &engine,
+            RenderSettings {
+                max_samples: 4,
+                size: RenderSize::Fixed {
+                    width: 32,
+                    height: 24,
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        engine.set_scene_object(&imported.scene).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(4)).unwrap();
+        assert_eq!(engine.last_error(), None);
+        let albedo = render.read_pixels(PixelKind::Albedo).unwrap();
+        assert!(
+            albedo.data.chunks(4).any(|p| p[0] > 0.),
+            "texture missing from albedo"
+        );
+    }
 }
 
 #[cfg(test)]
