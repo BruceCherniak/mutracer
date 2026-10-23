@@ -28,14 +28,13 @@ export function ViewControls() {
 export function CameraControls() {
   const cameras = useViewer((s) => s.cameras);
   const cameraIndex = useViewer((s) => s.settings.cameraIndex);
-  if (!cameras.length) return null;
   return (
-    <div className="float camera-controls" role="group" aria-label="Scene cameras">
-      <div className="viewport-camera">
+    <div className="float camera-controls" role="group" aria-label="Camera controls">
+      {cameras.length > 0 && <div className="viewport-camera">
         <Select label="Camera" prefix="Camera" value={String(cameraIndex)} placement="top"
           options={[{ value: '-1', label: 'Orbit' }, ...cameras.map((name, i) => ({ value: String(i), label: name }))]}
           onChange={(v) => setSettings({ cameraIndex: Number(v) })} />
-      </div>
+      </div>}
       <button className="icon-btn icon-btn--bare" title="Fit to model (F)" aria-label="Fit to model"
         onClick={() => getEngine()?.fit()}><Maximize size={16} /></button>
     </div>

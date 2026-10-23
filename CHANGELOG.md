@@ -3,6 +3,12 @@
 All notable changes to MuTracer will be documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## 0.1.5 - 2026-10-22
+
+### Fixed
+
+- Coat normals remain independent of base normal maps on WebGPU and WebGL 2. A material without a coat normal map keeps a smooth coat over a bumpy base; assign the same texture to both maps to perturb both layers.
+
 ## 0.1.4 - 2026-10-21
 
 ### Added

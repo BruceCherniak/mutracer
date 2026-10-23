@@ -99,7 +99,7 @@ export const DEFAULT_SETTINGS: Settings = {
   studioAmbient: 0.1,
   studioAmbientColor: '#ffffff',
   studioSize: 1,
-  envId: 'studio_small_09',
+  envId: 'sky',
   envIntensity: 1,
   envRotation: 0,
   envResolution: '1k',

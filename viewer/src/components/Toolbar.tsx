@@ -4,7 +4,7 @@ import {
   Tabs, TabList, Tab, TabPanel
 } from 'react-aria-components';
 import {
-  ChevronDown, Code2, Download, FileUp, Folder, Globe, HelpCircle, Link, MoreHorizontal, PanelLeft, PanelRight, Redo2, RotateCcw, Sparkles, Undo2, Upload, X
+  ChevronDown, Code2, Download, ExternalLink, FileUp, Folder, Globe, HelpCircle, Link, MoreHorizontal, PanelLeft, PanelRight, Redo2, RotateCcw, Sparkles, Undo2, Upload, X
 } from 'lucide-react';
 import { setUi, useViewer } from '../store';
 import { getEngine } from '../engine/ViewerEngine';
@@ -198,8 +198,11 @@ function ExamplesMenu() {
             <>
               <Tabs className="example-tabs" defaultSelectedKey={current?.startsWith('research-') ? 'research' : 'models'}>
                 <TabList aria-label="Example collections" className="example-tabs__list">
-                  <Tab id="models">Sample models</Tab>
-                  <Tab id="research">Rendering benchmarks</Tab>
+                  <Tab id="models">MuTracer collection</Tab>
+                  <Tab id="research">
+                    <span title="Independently maintained by glTF Research Scenes contributors">glTF Research Scenes</span>
+                    <ExternalLink size={12} aria-hidden="true" />
+                  </Tab>
                 </TabList>
                 {(['models', 'research'] as const).map((collection) => (
                   <TabPanel key={collection} id={collection}>

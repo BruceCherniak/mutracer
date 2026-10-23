@@ -14,7 +14,12 @@ vi.hoisted(() => {
 vi.mock('../src/engine/modelCache', () => ({
   clearMaterialEdits: vi.fn(), clearModelCache: vi.fn(), saveModelCache: vi.fn(), readMaterialEdits: vi.fn()
 }));
+vi.mock('../src/engine/environment', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../src/engine/environment')>(),
+  loadHDR: vi.fn()
+}));
 import { ViewerEngine } from '../src/engine/ViewerEngine';
+import { Environment, loadHDR, type EquirectData } from '../src/engine/environment';
 import { DEFAULT_SETTINGS, setSettings, useViewer, type Settings } from '../src/store';
 
 // Exercise the real load/setModel/resetView path; replace GPU synchronization
@@ -22,7 +27,7 @@ import { DEFAULT_SETTINGS, setSettings, useViewer, type Settings } from '../src/
 function engine() {
   const viewer = Object.create(ViewerEngine.prototype);
   Object.assign(viewer, {
-    loadToken: 0, model: null, modelId: null, modelCameras: [],
+    loadToken: 0, envToken: 0, model: null, modelId: null, modelCameras: [],
     modelGroup: new THREE.Group(), hiddenAtLoad: new Set(), ground: new THREE.Mesh(),
     canvas: { clientWidth: 800, clientHeight: 600 }, needsResize: false,
     perspectiveCamera: new THREE.PerspectiveCamera(35, 4 / 3),
@@ -147,6 +152,46 @@ describe('imported camera choice', () => {
     expect(useViewer.getState().settings.envId).toBe('sky');
   });
 
+  it.each([false, true])('cancels an older HDRI and keeps the imported environment when it later settles (failure: %s)', async (failure) => {
+    const viewer = engine(), scene = new THREE.Scene();
+    const pixels = { width: 1, height: 1, data: new Float32Array([5, 2, 1, 1]) };
+    Object.assign(viewer, {
+      scene, engine: { display: {} }, final: {}, preview: {}, studioRig: new THREE.Group(),
+      environment: new Environment({ ...pixels, data: new Float32Array([1, 1, 1, 1]) }),
+      studioAmbient: new Environment(pixels),
+      applyBackground: (ViewerEngine.prototype as unknown as { applyBackground(): void }).applyBackground
+    });
+    const environment = viewer as unknown as {
+      applyEnvironmentPreset(id: string): Promise<void>;
+      applySettings(settings: Settings, previous: Settings): void;
+    };
+    let resolve!: (data: EquirectData) => void;
+    let reject!: (error: Error) => void;
+    vi.mocked(loadHDR).mockReturnValueOnce(new Promise((yes, no) => { resolve = yes; reject = no; }));
+    setSettings({ envId: 'studio_small_09' });
+    const unsubscribe = useViewer.subscribe((state, previous) => {
+      if (state.settings !== previous.settings) environment.applySettings(state.settings, previous.settings);
+    });
+    try {
+      const pending = environment.applyEnvironmentPreset('studio_small_09');
+      const signal = vi.mocked(loadHDR).mock.calls.at(-1)![2]!;
+      expect(signal.aborted).toBe(false);
+      const data = model(0);
+      data.lighting = { available: true, useByDefault: true, environment: pixels, warnings: [] };
+      await viewer.loadModel(data);
+      const texture = scene.environment;
+      expect(texture?.image.data).toEqual(pixels.data);
+      expect(signal.aborted).toBe(true);
+      if (failure) reject(new Error('Old environment failed'));
+      else resolve({ ...pixels, data: new Float32Array([9, 9, 9, 1]) });
+      await pending;
+      expect(useViewer.getState().settings).toMatchObject({ lighting: 'environment', envId: 'model', envIntensity: 1 });
+      expect(scene.environment).toBe(texture);
+      expect(useViewer.getState().envLoading).toBeNull();
+      expect(useViewer.getState().toast).toBeNull();
+    } finally { unsubscribe(); }
+  });
+
   it('rejects stale scene-lighting settings when the current model has no lights', async () => {
     const viewer = engine();
     await viewer.loadModel(model(0));
@@ -191,11 +236,44 @@ describe('imported camera choice', () => {
     });
     const data = model(2);
     const cached: CachedModel = {
-      id: 'preset:research-test', meta: { name: data.name, presetId: 'research-test', credit: null, sourceUrl: null }
+      id: 'uploaded-model', meta: { name: data.name, presetId: null, credit: null, sourceUrl: null }
     };
     await viewer.load(data.name, async () => data, cached.meta, cached);
     expect(viewer.restoreCamera).toHaveBeenCalledWith(cached.id);
     expect(useViewer.getState().settings.cameraIndex).toBe(restored ? 1 : -1);
     expect(useViewer.getState().toast !== null).toBe(!restored);
+  });
+
+  it.each([false, true])('automatically applies the first research-scene camera on fresh/cached loads (%s)', async (cached) => {
+    const viewer = engine(), data = model(2);
+    const saved: CachedModel = {
+      id: 'preset:research-cornell-box', meta: { name: data.name, presetId: 'research-cornell-box', credit: null, sourceUrl: null }
+    };
+    await viewer.load(data.name, async () => data, saved.meta, cached ? saved : undefined);
+    expect(useViewer.getState().settings.cameraIndex).toBe(0);
+    expect(useViewer.getState().cameras).toEqual(['View 1', 'View 2']);
+    expect(useViewer.getState().toast).toBeNull();
+  });
+
+  it.each([-1, 1])('preserves a restored research-scene camera choice (%s)', async (cameraIndex) => {
+    const viewer = engine(), data = model(2);
+    const saved: CachedModel = {
+      id: 'preset:research-cornell-box', meta: { name: data.name, presetId: 'research-cornell-box', credit: null, sourceUrl: null }
+    };
+    viewer.restoreCamera.mockImplementation(() => {
+      setSettings({ cameraIndex });
+      return true;
+    });
+    await viewer.load(data.name, async () => data, saved.meta, saved);
+    expect(useViewer.getState().settings.cameraIndex).toBe(cameraIndex);
+    expect(useViewer.getState().toast).toBeNull();
+  });
+
+  it('keeps Orbit when a research scene has no camera', async () => {
+    const viewer = engine(), data = model(0);
+    await viewer.load(data.name, async () => data,
+      { name: data.name, presetId: 'research-cornell-box', credit: null, sourceUrl: null });
+    expect(useViewer.getState().settings.cameraIndex).toBe(-1);
+    expect(useViewer.getState().toast).toBeNull();
   });
 });
