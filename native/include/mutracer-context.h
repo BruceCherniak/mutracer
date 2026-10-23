@@ -87,7 +87,7 @@ int32_t mt_context_destroy(mt_context handle, char *error, size_t capacity);
 int32_t mt_context_cancel_commit(mt_context handle, char *error, size_t capacity);
 /* Commit the complete scene descriptor; the input is copied. Submit the edited
  * descriptor again to update a scene. Supported edits reuse prepared resources;
- * other edits prepare the scene again. See native/README.md "Editing a scene"
+ * other edits prepare the scene again. See native/docs/scene.md "Edit a scene"
  * for the incremental scope and limits. Both paths render the same scene;
  * mt_context_snapshot.last_commit reports which ran. Every successful commit
  * restarts accumulation. Comparison cost grows with descriptor size. */

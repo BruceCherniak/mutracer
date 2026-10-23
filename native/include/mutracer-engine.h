@@ -11,7 +11,7 @@ extern "C" {
  * engine owns the device and the committed scene and camera, each render is an
  * independently configured accumulation, the display composes, presents and
  * exports images, and a render loop implements the interactive policy. See
- * native/README.md for usage and the differences from the browser library.
+ * native/docs/engine.md for usage and the differences from the browser library.
  * mt_context (mutracer-context.h) stays available as the lower-level API.
  *
  * Return MT_OK (0) or a nonzero mt_status. If error is non-NULL and
@@ -168,7 +168,7 @@ typedef enum mt_engine_event_kind {
   /* Scene preparation: progress 0 when it starts, 1 when it is published. */
   MT_ENGINE_EVENT_PROGRESS = 0,
   MT_ENGINE_EVENT_ERROR = 1,
-  /* Terminal device loss; recovering is always 0. See README's Device loss. */
+  /* Terminal device loss; recovering is always 0. See native/docs/engine.md#device-loss. */
   MT_ENGINE_EVENT_DEVICE_LOST = 2,
   MT_ENGINE_EVENT_COMPILATION = 3 /* Cache miss: 0 before compile, 1 after exit. */
 } mt_engine_event_kind;

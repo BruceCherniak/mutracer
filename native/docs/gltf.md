@@ -1,11 +1,7 @@
-# Import glTF scenes
+# Import glTF
 
-Use `Scene::import_gltf(path)` or `Scene::import_gltf_bytes(bytes, base_directory)`
-with the `gltf` Cargo feature (enabled by default). Both return `ImportedScene`:
-`scene`, `names` and `warnings`. Names contain node, mesh, geometry and material
-handles; duplicate names have multiple handles in traversal order. Names are
-case-sensitive. The imported scene uses the default scene, or the first scene
-when no default is marked, and the first animation clip's initial pose.
+The default `gltf` Cargo feature, also enabled in C builds, imports glTF and
+GLB files into a [Scene](scene.md).
 
 ```rust
 let imported = mutracer_native_probe::scene_api::Scene::import_gltf("model.glb")?;
@@ -13,49 +9,58 @@ engine.set_scene_object(&imported.scene)?;
 engine.update()?;
 ```
 
-C's `mt_scene_import_gltf` and `mt_scene_import_gltf_bytes` create a scene handle.
-`mt_scene_find` resolves a name and zero-based occurrence to a handle. A build
-without `gltf` returns `MT_ERROR_UNAVAILABLE` from these import calls.
+- Rust `Scene::import_gltf(path)` and `Scene::import_gltf_bytes(bytes,
+  base_directory)` return `ImportedScene { scene, names, warnings }`. `names`
+  maps case-sensitive node, mesh, geometry and material names to handles;
+  duplicates list every handle in traversal order.
+- C `mt_scene_import_gltf` and `mt_scene_import_gltf_bytes` create a scene
+  handle. `mt_scene_find` resolves a name and zero-based occurrence to a handle;
+  a node name returns its mesh handle. Without the `gltf` feature these calls
+  return `MT_ERROR_UNAVAILABLE`.
+- The import uses the default scene (or the first scene) at the first animation
+  clip's initial pose. Imported meshes have world matrices, so moving one does
+  not move other meshes from the same node. The
+  [viewer](../viewer/README.md) also plays animations.
 
-Import failures, including missing files, invalid glTF/GLB, unsupported required
-extensions and exceeded limits, return Rust `api::Status::InvalidArgument` or C
-`MT_ERROR_INVALID_ARGUMENT`. Messages include the complete cause chain; C error
-buffers must be large enough to receive it without truncation.
+## Resources
 
-## Resource options
-
-Path import resolves local resources beside the model. Byte import resolves
+Path import loads external files beside the model. Byte import resolves
 external URIs under `base_directory`; omit it only when every resource is
-embedded. Base64 data URIs are supported; network URLs are rejected. Keep model
-resources available until the import returns. Imported meshes have world
-matrices, so changing one mesh does not move other meshes from the same node.
-The object API returns a scene at the initial animation pose; the viewer also
-provides playback controls.
+embedded. Base64 data URIs work; network URLs are rejected. Resources must stay
+available until the import returns.
 
 ## Supported inputs
 
-Supported geometry includes triangles, strips and fans, node transforms, shared
-geometry, RGB vertex colors, two UV sets, mesh instancing, skins with up to four
-joint influences, and morph targets. Missing normals and tangents are generated.
-Meshopt compression, quantized attributes and WebP textures are supported.
-Animation supports node translation/rotation/scale, skeletal motion and morph
-weights with STEP, LINEAR and CUBICSPLINE interpolation. Model cameras, lights,
-and camera/light/material animation are ignored.
+- Geometry: triangles, strips and fans; node transforms; shared geometry; RGB
+  vertex colors; two UV sets; mesh instancing; skins with up to four joint
+  influences; morph targets. Missing normals and tangents are generated.
+- Compression: Meshopt, quantized attributes and WebP textures. Draco and
+  Basis/KTX2 assets must be converted first. Sparse quantized attributes are
+  unsupported.
+- Animation: node translation, rotation and scale, skeletal motion and morph
+  weights, with STEP, LINEAR and CUBICSPLINE interpolation.
+- Materials: core metallic/roughness PBR, scalar transmission and IOR, unlit
+  materials and emissive strength.
+- Textures: repeat, clamp-to-edge and mirrored-repeat per axis, and offset/scale
+  UV transforms.
 
-Materials support core metallic/roughness PBR, scalar transmission/IOR, unlit
-materials and emissive strength. Texture sampling supports repeat, clamp-to-edge
-and mirrored-repeat on each axis, plus offset/scale UV transforms. Texture
-rotation and imported normal-map UV transforms are unsupported. Imported vertex
-alpha, occlusion textures and transmission textures are ignored; transmission
-maps can be assigned after import. Unsupported optional extensions produce Rust
-warnings (shown in the viewer); C imports ignore them. Unsupported required
-extensions return an error. Sparse quantized attributes are unsupported. Draco
-and Basis/KTX2 assets require conversion before import.
+Ignored: model cameras and lights; camera, light and material animation; vertex
+alpha; occlusion and transmission textures (transmission maps can be assigned
+after import); texture rotation; UV transforms on normal maps. Unsupported
+optional extensions produce Rust warnings (C ignores them); unsupported required
+extensions fail the import.
 
-## Limits
+## Errors and limits
 
-Model files are limited to 128 MiB, combined model buffers to 512 MiB and source
-material images to 64M pixels each. Imported material textures share a 12M-pixel
-budget and keep at most 4,096 pixels on their longest side; larger or more numerous
-images are reduced to fit, with a warning. The node hierarchy is limited to 512 levels.
-Additional [native scene and texture limits](scene-format.md#limits) apply.
+Failures, including missing files, invalid glTF/GLB, unsupported required
+extensions and exceeded limits, return Rust `api::Status::InvalidArgument` or C
+`MT_ERROR_INVALID_ARGUMENT`. The message holds the complete cause chain, so give
+C a large error buffer.
+
+- Model files up to 128 MiB, combined buffers up to 512 MiB, and each source
+  image up to 64M pixels.
+- Material textures share a 12M-pixel budget and keep at most 4,096 pixels on
+  their longest side; larger or more numerous images are reduced to fit, with a
+  warning.
+- Node hierarchies up to 512 levels.
+- The [scene limits](scene-format.md#limits) also apply.

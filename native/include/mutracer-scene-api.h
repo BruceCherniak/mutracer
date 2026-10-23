@@ -133,11 +133,11 @@ int32_t mt_engine_set_scene_object(mt_engine engine, mt_scene scene, char *error
 int32_t mt_scene_encode(mt_scene scene, void *output, size_t output_bytes, size_t *written, char *error, size_t capacity);
 /* Predicts the next scene snapshot; Full before its first encoding. Shader and
  * atlas requirements can make the actual commit Full.
- * Scope and costs: native/README.md "Editing a scene". */
+ * Scope and costs: native/docs/scene.md "Edit a scene". */
 int32_t mt_scene_pending_commit_kind(mt_scene scene, uint32_t *kind, char *error, size_t capacity);
 /* Imports create a new scene. Byte import resolves external URIs under
  * base_directory; NULL requires embedded resources. Missing gltf feature returns
- * UNAVAILABLE. Limits/extension behavior: native/README.md glTF import. */
+ * UNAVAILABLE. Limits/extension behavior: native/docs/gltf.md. */
 int32_t mt_scene_import_gltf(const char *path, mt_scene *out, char *error, size_t capacity);
 int32_t mt_scene_import_gltf_bytes(const void *bytes, size_t byte_count, const char *base_directory, mt_scene *out, char *error, size_t capacity);
 /* Duplicate names use zero-based occurrence in traversal order. Object kind:

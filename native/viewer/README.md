@@ -1,209 +1,216 @@
 # MuTracer native viewer
 
-A small standalone viewer for macOS arm64, Linux x64 and Windows x64. It loads local
-GLTF/GLB models and renders with the native MuTracer library. The app requires no browser,
-JavaScript engine or Node installation at runtime.
+A standalone glTF/GLB viewer built on the [native SDK](../README.md). It runs
+without a browser, JavaScript engine or Node.
 
-## Download and open
+## Download
 
-Download the matching archive from [GitHub Releases](https://github.com/pissang/mutracer/releases):
-`MuTracer-macos-arm64.zip` or `MuTracer-linux-x64.tar.gz`.
-Extract the whole archive, then open `MuTracer.app` on macOS or `mutracer-viewer`
-on Linux. Keep the executable, sample, OIDN libraries
-and licenses together. SHA-256 checksum files accompany the downloads.
+| Platform | Archive | Open |
+| --- | --- | --- |
+| macOS arm64 | `MuTracer-macos-arm64.zip` from [GitHub Releases](https://github.com/pissang/mutracer/releases) | `MuTracer.app` |
+| Linux x64 | `MuTracer-linux-x64.tar.gz` from [GitHub Releases](https://github.com/pissang/mutracer/releases) | `mutracer-viewer` |
+| Windows x64 | `MuTracer-windows-x64.zip` from the `native-windows-x64` artifact of a [CI run](https://github.com/pissang/mutracer/actions/workflows/ci.yml) | `mutracer-viewer.exe` |
 
-The macOS app is ad-hoc signed and not Apple-notarized.
-Linux packages target Ubuntu 24.04 x64 and require a Vulkan driver and an X11 or
-Wayland desktop. X11 sessions also need `libxkbcommon-x11-0`. See
-[platform support and validation status](../README.md#platforms).
+Extract the whole archive and keep its files together: the executable, sample,
+OIDN libraries and licenses. Each archive has a SHA-256 checksum file.
 
-On Windows, download `MuTracer-windows-x64.zip` from
-the `native-windows-x64` artifact of a [CI run](https://github.com/pissang/mutracer/actions/workflows/ci.yml).
-Extract the whole archive and open `mutracer-viewer.exe`. Windows packages are
-not included in release downloads.
+- macOS: the app is ad-hoc signed and not notarized by Apple.
+- Linux: targets Ubuntu 24.04 and needs a Vulkan driver and an X11 or Wayland
+  desktop. X11 sessions also need `libxkbcommon-x11-0`.
 
-## Build and open
+## Build from source
 
-Install Rust, CMake, a C++20 compiler, project npm dependencies and scriptc
-**0.3.2**, then run from the repository root. Linux also needs patchelf and
-X11/Wayland development libraries. Windows build prerequisites are
-in the [contributor guide](../CONTRIBUTING.md#build-and-ci).
-The first build downloads the native OIDN SDK, source and regular model
-weights (about 80–95 MiB depending on platform). The app includes regular/small
-models and omits the three large weight sets. Denoising needs no runtime download:
+Install the [SDK build requirements](../README.md#build-and-link) and CMake.
+Linux also needs patchelf and the X11/Wayland development libraries; Windows
+needs the [contributor setup](../CONTRIBUTING.md#windows). Then, from the
+repository root:
 
-```sh
-export MUTRACER_SCRIPTC=/absolute/path/to/node_modules/.bin/scriptc
+```bash
+npm ci
+npm ci --prefix native/toolchain --include=optional
+export MUTRACER_SCRIPTC="$(node native/toolchain/compiler.mjs)"
 npm run native:viewer
 ```
 
-The app opens with the included procedural sample. Use **Open GLTF / GLB…** or
-drop a `.gltf` or `.glb` file anywhere in the window. A drop target appears
-while dragging. Loading keeps the previous image visible; failures show an error
-without replacing the model. Keep external `.bin` files and images beside their
-`.gltf` file. You can also open a model at launch:
-
-```sh
-npm run native:viewer -- /absolute/path/model.glb
-```
-
-`npm run native:viewer:build` builds without opening the app. The result is
+Add `-- /absolute/path/model.glb` to open a model at launch.
+`npm run native:viewer:build` builds without opening the app, into
 `.native-build/viewer/MuTracer.app` on macOS or `.native-build/viewer/MuTracer/`
-on Windows/Linux. The output includes its sample and runtime libraries and can
-be opened without project files or build tools. `MUTRACER_NATIVE_OUTPUT` changes
-the output directory. See the [native guide](../README.md) for platform backends.
+on Windows and Linux (`MUTRACER_NATIVE_OUTPUT` changes the directory). The
+result runs without project files or build tools.
 
-## Controls
+The first build downloads the OIDN SDK, source and model weights (about
+80–95 MiB). The app includes the regular and small OIDN models and needs no
+download at runtime.
 
-- Drag empty space in the top bar to move the window; double-click it to zoom.
-  The three window buttons close, minimize or zoom; drag the bottom-right grip
-  to resize. **Open…** or **⌘O / Ctrl+O** opens a model, and **Export…** saves the image.
-- Drag the image to orbit; right-drag or Shift-drag to pan; scroll to zoom.
-  **Fit to model** or **F** restores framing. **Camera** offers perspective and
-  orthographic projection, with a 35° default field of view. Perspective views
-  support depth of field: enable it and choose an f-number. **Area autofocus**
-  is on by default; drag the focus frame's center to choose its target. It focuses
-  after the view settles and keeps the current distance when the area is empty.
-  Adjusting **Focus (m)** switches to manual focus; **Pick focus point** then
-  focuses on a clicked surface. Choose the scene unit to match the model; it
-  defaults to metres. Projection, field of view, f-number and scene unit persist
-  when opening another model. Orthographic views have no depth of field.
-- Sliders and numeric fields are separate. Drag a numeric field left or right
-  to adjust it, or click it to type. Enter or clicking elsewhere commits typed
-  edits; Escape cancels them. Text dragging selects text while editing.
-- Use the left **Scene** list to search and select objects, or click a surface in
-  the viewport to open its **Material** panel. **Frame selection** fits the camera
-  to that object. The right **Object** panel provides world position, local Y
-  rotation and uniform scale controls. Each edit
-  affects the selected object; objects sharing its geometry move independently.
-- The **Material** panel provides **Base**, **Transmission**, **Coat**,
-  **Subsurface**, **Fuzz**, **Thin film**, **Emission** and **Advanced** groups.
-  Choose **Basic**, **Metal**, **Glass** or **Soft**, then click a thumbnail to
-  apply one of the same 32 presets as the web viewer. Presets keep textures and
-  displacement settings and turn off layers they do not use. Inactive layers
-  start collapsed; open a heading to edit their parameters.
-  Edits affect every object sharing that material. **Opacity** applies in Auto,
-  Mask or Blend alpha mode; normal scale requires a normal map.
-  Picking and autofocus can target transparent or cutout surfaces ahead of
-  objects behind them.
-- Choose **Lighting**, **Material**, **Camera**, **Render** or **Object** on the
-  right rail. Click the active category to hide the inspector; **[** and **]**
-  toggle the scene list and inspector. Click section headings to collapse their
-  settings. Narrow windows hide the scene list to preserve viewport space.
-- Under **Material → Textures**, click a swatch or drop a PNG, JPEG or WebP image
-  onto a slot to upload or replace it; **×** removes it. Slots match the web viewer:
-  base color, combined metal/rough, separate roughness and metalness, normal,
-  displacement, emission, transmission and thin film. Channel hints and actual
-  image dimensions appear beside each slot. Replacement keeps that slot's UV
-  settings, or inherits the base-color map's settings when the slot is empty.
-  Expand **Wrap & repeat** to set **Wrap S/T** independently to Repeat, Clamp to
-  edge or Mirrored repeat. Negative **Repeat S/T** values flip an axis; zero
-  samples a constant coordinate. Edits affect the selected material and restart
-  rendering; materials sharing it change together.
-- **Browse Poly Haven textures** opens a searchable CC0 catalog with category
-  filters and 1K/2K/4K downloads (roughly 3/12/45 MB per set). Clicking a set
-  downloads it in the background and replaces color, normal and roughness/metalness
-  maps, resetting other material layers. **Download displacement map** is off by
-  default; leaving it off clears the previous displacement map. A new pick cancels
-  the previous request. A set applies after all maps finish; a failed or cancelled
-  download keeps the previous textures. Closing the browser lets the download
-  finish on its original material; opening another model cancels it.
-- **Displacement** uses `texture × Scale + Bias` in mesh-local units and works on
-  both native ray-tracing backends. **Step size** 0 selects an automatic step;
-  smaller positive values take longer to render. Choose UV, Triplanar, Spherical
-  or Cylindrical projection; meshes without UVs automatically use Triplanar for
-  a newly uploaded displacement map. A displacement map is required, and edits
-  can increase scene preparation and render time.
-- **Lighting** switches between Environment and Studio. Environment provides
-  intensity, tint and rotation; **Load HDR…** opens a local Radiance
-  equirectangular map, and **Built-in** restores the built-in map. Switching to
-  Studio and back preserves the selected environment.
-- **Studio** offers eight softbox presets, with intensity, rotation, size,
-  ambient fill and ambient color. The lights scale and move with the model's
-  bounds. Larger softboxes give softer shadows while keeping roughly the same
-  exposure. Changing the preset restarts rendering and can take longer than
-  adjusting the lights.
-- **Background** offers Environment, Color or Transparent in either lighting
-  mode. A transparent background keeps the lighting, and exported PNGs retain
-  alpha. In Studio, the Environment background shows the ambient fill.
-- The floating render toolbar shows progress and sample count, with pause/resume,
-  restart, maximum samples, **Res** and denoise controls. For models without
-  animation, **Space** pauses or resumes rendering. **D** toggles denoising.
-  The settings button opens **Render**.
-  Interaction uses a lower-resolution preview; after input stops, the image
-  converges at the selected resolution and render settings. Sample counts,
-  denoising and PNG export use the final image; export is available once it has
-  a complete sample. Pausing keeps the last image visible without further tracing.
+## Use
+
+### Files and window
+
+- The app opens with a procedural sample. Use **Open…** (**⌘O** / **Ctrl+O**)
+  or drop a `.gltf` or `.glb` file anywhere in the window. Keep external `.bin`
+  files and images beside their `.gltf`. While loading, the previous model stays
+  visible; a failed load shows an error and keeps it.
+- **Export…** saves a PNG.
+- Drag empty space in the top bar to move the window and double-click it to
+  zoom. The three window buttons close, minimize or zoom; the bottom-right grip
+  resizes.
+- The right rail opens **Lighting**, **Material**, **Camera**, **Render** and
+  **Object**; click the active category to hide the inspector. **[** and **]**
+  toggle the scene list and inspector. Section headings collapse. Narrow windows
+  hide the scene list.
+- Sliders and numeric fields are separate. Drag a numeric field left or right,
+  or click it to type; Enter or clicking elsewhere commits and Escape cancels.
+
+### Camera
+
+- Drag to orbit, right-drag or Shift-drag to pan, scroll to zoom. **Fit to
+  model** or **F** restores the framing.
+- Choose perspective (35° default field of view) or orthographic projection.
+- Perspective views support depth of field: enable it and choose an f-number.
+  **Area autofocus** is on by default; drag the focus frame's center to choose
+  the target. It focuses once the view settles and keeps the current distance
+  when the area is empty. Adjusting **Focus (m)** switches to manual focus, and
+  **Pick focus point** then focuses on a clicked surface.
+- Set the scene unit to match the model (default metres).
+- Projection, field of view, f-number and scene unit persist across models.
+
+### Objects
+
+- Search and select objects in the left **Scene** list, or click a surface in
+  the viewport to open its material. **Frame selection** fits the camera to the
+  object.
+- The **Object** panel edits world position, local Y rotation and uniform scale
+  of the selected object. Objects that share its geometry stay in place.
+- Picking and autofocus can hit transparent or cutout surfaces in front of other
+  objects.
+
+### Materials
+
+- Groups: **Base**, **Transmission**, **Coat**, **Subsurface**, **Fuzz**,
+  **Thin film**, **Emission** and **Advanced**. Inactive layers start collapsed.
+- Presets: choose **Basic**, **Metal**, **Glass** or **Soft**, then a thumbnail,
+  to apply one of the web viewer's 32 presets. Presets keep textures and
+  displacement and turn off layers they do not use.
+- Edits apply to every object that shares the material. **Opacity** applies in
+  Auto, Mask or Blend alpha mode; normal scale needs a normal map.
+
+**Textures** (under **Material → Textures**):
+
+- Click a swatch or drop a PNG, JPEG or WebP image onto a slot to upload or
+  replace it; **×** removes it. Slots match the web viewer: base color, combined
+  metal/rough, roughness, metalness, normal, displacement, emission,
+  transmission and thin film. Each slot shows its channel use and actual image
+  size.
+- A replacement keeps the slot's UV settings, or takes the base color map's
+  settings when the slot was empty.
+- **Wrap & repeat** sets **Wrap S/T** to Repeat, Clamp to edge or Mirrored
+  repeat. A negative **Repeat S/T** flips an axis; zero samples a constant
+  coordinate.
+
+**Poly Haven** (**Browse Poly Haven textures**):
+
+- Search the CC0 catalog, filter by category and download 1K, 2K or 4K sets
+  (about 3, 12 or 45 MB). A set replaces the color, normal and
+  roughness/metalness maps and resets other material layers.
+- **Download displacement map** is off by default; leaving it off clears the
+  previous displacement map.
+- A set applies once all maps finish; a failed or cancelled download keeps the
+  previous textures. A new pick cancels the previous download, and opening
+  another model cancels it. Closing the browser lets a download finish on its
+  original material.
+
+**Displacement**:
+
+- Height is `texture × Scale + Bias` in mesh-local units and works on both ray
+  tracing backends. A displacement map is required.
+- Projection: UV, Triplanar, Spherical or Cylindrical. Meshes without UVs use
+  Triplanar when a displacement map is uploaded.
+- **Step size** 0 is automatic; smaller positive values render more slowly.
+  Displacement increases preparation and render time.
+
+### Lighting and background
+
+- **Environment**: intensity, tint and rotation. **Load HDR…** opens a local
+  Radiance equirectangular map; **Built-in** restores the default map.
+- **Studio**: eight softbox presets with intensity, rotation, size, ambient fill
+  and ambient color. Lights follow the model's bounds; larger softboxes give
+  softer shadows at about the same exposure. Changing the preset takes longer
+  than adjusting the lights. Switching to Studio and back keeps the selected
+  environment.
+- **Key light**: an optional directional light, off by default, with intensity,
+  color, azimuth and elevation.
+- **Background**: Environment, Color or Transparent, in either lighting mode.
+  A transparent background keeps the lighting and exported PNGs keep alpha. In
+  Studio, the Environment background shows the ambient fill.
+
+### Rendering
+
+- The floating toolbar shows progress and samples, with pause/resume, restart,
+  maximum samples, **Res** and denoise controls; its settings button opens
+  **Render**. **Space** pauses or resumes models without animation; **D**
+  toggles denoising.
+- Interaction renders a lower-resolution preview. When input stops, the image
+  converges at the selected resolution and settings. Sample counts, denoising
+  and export use that final image; export is available after one complete
+  sample. Pausing keeps the last image.
+- **Res**: 25%, 50% (default), 75% or 100% of the viewport's pixel size,
+  including display scaling up to 2×, updated after resizing settles; or a
+  fixed 720p, 1080p, 2K or 4K. The menu shows the output size, which PNG export
+  uses. 100% renders four times the pixels of 50% and uses more memory.
+- **Render** panel: 4–4096 maximum samples, 1–16 bounces (default 6), Sobol,
+  Z-Sobol or Random sampling, and clamping (0 disables it). These restart
+  rendering; more samples and bounces take longer.
+- **Color**: AgX (default), ACES, Cineon, Reinhard or Linear tone mapping,
+  exposure (1 is unchanged), contrast, saturation, temperature and tint, for
+  both preview and export. **Output** selects Final, Normal or Albedo; guide
+  channels skip color controls and denoising.
+- **Native OIDN** is on by default. It denoises final samples after
+  interaction pauses, using the first available
+  [OIDN backend](../docs/denoising.md#oidn-runtime). Toggle it to compare;
+  export uses the latest denoised result when there is one.
+- **Ray tracing**: **HWRT** (default) or **Software**. The panel shows the path
+  in use, any fallback reason and how many geometries use a software BVH.
+
+### Animation
+
 - Animated models show a timeline in the toolbar. The first clip starts paused
-  at time zero, at 1× speed with **Loop** enabled. Use its play button or **Space**
-  to play/pause, drag the timeline to pause at a chosen time, or select another
-  clip to return to its start. Speeds are 0.25×, 0.5×, 1× and 2×. With looping
-  disabled, playback stops at the end; playing again restarts the clip.
-  Pausing rendering also freezes playback; playing a clip resumes rendering.
-  Each changed pose restarts accumulation. Pause animation to let the image
-  converge and denoise. Deforming large meshes can reduce playback speed.
-- **Res** offers 25%, 50% (default), 75% or 100% of the viewport's pixel size,
-  including display scaling up to 2×. It updates after window or panel resizing
-  settles. Fixed 720p (1280 × 720), 1080p (1920 × 1080), 2K (2560 × 1440) and
-  4K (3840 × 2160) stay unchanged when resizing. The menu shows output dimensions;
-  PNG export uses the selected final dimensions.
-  Going from 50% to 100% renders four times as many pixels and uses more memory.
-- **Render** provides 4–4096 maximum samples, 1–16 bounces, Sobol, Z-Sobol or
-  Random sampling and clamping (0 disables it). Quality changes restart
-  accumulation; more samples and bounces cost more rendering time. **Color**
-  offers AgX (default), ACES, Cineon, Reinhard and Linear tone mapping, linear
-  exposure (1 is unchanged), contrast, saturation, temperature and tint. These
-  affect both preview and PNG export. **Output** selects Final, Normal or Albedo;
-  guide channels bypass color controls and denoising.
-- **Lighting** also provides an optional directional **Key light**, disabled by
-  default. Adjust its intensity, color, azimuth and elevation.
-- **Native OIDN** is on by default. It denoises completed final samples after interaction
-  pauses, trying Metal, then CUDA, then HIP, then CPU. CUDA requires a supported
-  NVIDIA GPU and driver; HIP requires a supported AMD GPU and compatible AMD
-  driver/HIP runtime. Other devices fall back to CPU. Toggle it to compare
-  the unfiltered image; PNG export uses the final image's latest denoised result
-  when one is available.
-- **Ray tracing** defaults to **HWRT**, with **Software** as the other option.
-  Unsupported devices and acceleration-structure limits or allocation failures
-  fall back to Software. The panel reports the actual path, fallback reason and
-  the number of geometries using a software BVH.
+  at time zero, at 1× with **Loop** on.
+- Play/pause with its button or **Space**; drag the timeline to pause at a
+  time; select another clip to start it from the beginning. Speeds are 0.25×,
+  0.5×, 1× and 2×. Without looping, playback stops at the end and playing again
+  restarts the clip.
+- Pausing rendering also pauses playback; playing a clip resumes rendering.
+  Each new pose restarts accumulation, so pause the animation to let the image
+  converge and denoise. Deforming large meshes can slow playback.
 
-Camera changes restart accumulation while retaining the scene. The previous
-image remains visible until a newer preview arrives, including while dragging.
-Basic color, roughness, metalness and transmission edits retain the scene's
-geometry and textures and restart accumulation. Environment intensity, tint and
-rotation also retain the scene when map dimensions and background mode stay the
-same. Key-light color, intensity and direction edits retain the scene as well.
-Object transforms retain vertices and textures; changes to resource sizes
-require a rebuild.
-Loading a different-sized HDR, switching background mode, or changing shader
-features or unlit materials can require a rebuild. Moving
-between zero and nonzero light or environment intensity can also require a
-rebuild. Full rebuilds run in the background while the previous image stays visible.
-Resolution changes restart accumulation. While editing, new input waits for the
-current frame and any pending scene preparation, then the latest state is applied.
-CPU/GPU contention can still reduce responsiveness.
-Color controls, output channel and denoising change only the displayed image,
-preserving the original HDR accumulation. Denoising does not block window
-interaction; a result for an older scene, camera or sample count cannot replace
-the current preview.
-The first denoise can take longer than later runs. Choose a lower render
-resolution for more responsive interaction; a fixed frame rate is not guaranteed.
+### Responsiveness
 
-## Supported inputs and limits
+- Camera moves, basic material edits (color, roughness, metalness,
+  transmission), environment intensity, tint and rotation, key light edits and
+  object transforms keep the prepared scene and only restart accumulation. The
+  previous image stays until a newer preview arrives.
+- A different-sized HDR, a background mode switch, shader feature or unlit
+  changes, moving a light or the environment between zero and nonzero
+  intensity, and resource size changes rebuild the scene in the background
+  while the previous image stays visible.
+- Color controls, the output channel and denoising change only the displayed
+  image.
+- During continuous edits, new input waits for the current frame and any scene
+  preparation, then applies the latest state. CPU or GPU contention can still
+  slow interaction; a lower resolution helps, and no frame rate is guaranteed.
+- The first denoise can be slower than later ones. A result for an older scene,
+  camera or sample count never replaces the current preview.
 
-Model loading uses the SDK's [glTF importer](../docs/gltf.md), including its
-supported extensions, ignored inputs and resource limits.
+## Limits
 
-Uploaded and downloaded textures can reach 4096 pixels per side and shrink as
-needed to share a 12M-pixel material budget. Download resolution controls transfer
-size; slot dimensions show what is actually used. Displacement images resize to
-a square power of two. HDR environments are limited to 4M pixels.
-Rendering uses wgpu with six bounces by default. HWRT support and fallbacks follow
-[the native intersection limits](../README.md#intersection-backend).
-HWRT has an unresolved intermittent whole-scene miss on macOS/Metal; choose
-Software when image correctness is critical. Coplanar overlapping surfaces can
-also look different between the two backends. Device-loss recovery is not
-implemented.
-Native OIDN output can differ from browser OIDN output. Custom OIDN model
-weights are not supported by this example.
+- Models follow the SDK's [glTF import support and limits](../docs/gltf.md).
+- Uploaded and downloaded textures can be up to 4,096 pixels per side and
+  shrink to share a 12M-pixel material budget; slot sizes show what is used.
+  Displacement images are resized to a square power of two. HDR environments
+  are limited to 4M pixels.
+- HWRT can occasionally drop a sample on macOS; choose Software when exact
+  output matters. Coplanar overlapping surfaces can differ between backends.
+  See [ray tracing backends](../README.md#ray-tracing-backends).
+- Device-loss recovery is not implemented.
+- Native OIDN output can differ from browser OIDN. Custom OIDN weights are not
+  supported.

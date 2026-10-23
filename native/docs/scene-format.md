@@ -1,13 +1,14 @@
 # Native scene descriptor format (v4)
 
-`mt_context_commit` takes a scene as one byte buffer: the raw scene descriptor.
-This page is the reference for its layout, values and validation rules. The
-record structs are in [`mutracer-scene.h`](../include/mutracer-scene.h), the word
-offsets in [`mutracer-layout.h`](../include/mutracer-layout.h), and material
-property IDs in
-[`mutracer-material-properties.h`](../include/mutracer-material-properties.h).
+`mt_context_commit` and `mt_engine_set_scene` take a scene as one byte buffer:
+the raw scene descriptor. This page is the reference for its layout, values and
+validation rules. The record structs are in
+[`mutracer-scene.h`](../include/mutracer-scene.h), the word offsets in
+[`mutracer-layout.h`](../include/mutracer-layout.h), and material property IDs
+in [`mutracer-material-properties.h`](../include/mutracer-material-properties.h).
 
-For handle-based construction without offsets, use the [Scene API](../README.md#render-a-scene).
+Most applications should build scenes with the [Scene API](scene.md) instead,
+which needs no offsets and can export descriptors.
 
 ## Usage
 
