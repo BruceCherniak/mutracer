@@ -80,7 +80,7 @@ fn software_scene_object_incremental_matches_full() {
     engine.set_scene_object(&s).unwrap();
     engine.update().unwrap();
     render.converge(ConvergeOptions::new(8)).unwrap();
-    for edit in 0..15 {
+    for edit in 0..16 {
         match edit {
             0 => s.material_mut(mat).unwrap().values.roughness = 0.6,
             1 => {
@@ -152,11 +152,17 @@ fn software_scene_object_incremental_matches_full() {
                 })
                 .unwrap();
             }
+            15 => s.material_mut(mat).unwrap().values.emission_strength = 2.,
             _ => unreachable!(),
         }
+        let expected = if edit == 15 {
+            CommitKind::Full
+        } else {
+            CommitKind::Incremental
+        };
         assert_eq!(
             s.pending_commit_kind().unwrap(),
-            CommitKind::Incremental,
+            expected,
             "edit {edit} prediction"
         );
         engine.set_scene_object(&s).unwrap();
@@ -164,7 +170,7 @@ fn software_scene_object_incremental_matches_full() {
         render.converge(ConvergeOptions::new(8)).unwrap();
         assert_eq!(
             render.last_commit().unwrap(),
-            Some(CommitKind::Incremental),
+            Some(expected),
             "edit {edit} actual"
         );
         let fresh = Engine::new(EngineOptions {

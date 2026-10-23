@@ -1014,3 +1014,6 @@ impl References for Light {
 }
 #[cfg(test)]
 mod oracle_tests;
+
+#[cfg(test)]
+mod commit_kind_tests;

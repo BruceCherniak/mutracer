@@ -131,6 +131,9 @@ int32_t mt_engine_set_scene_object(mt_engine engine, mt_scene scene, char *error
 /* Copies a v4 snapshot (dimensions 1x1, quality 0) for advanced consumers and
  * byte comparison. NULL output, capacity 0 queries bytes. written is required. */
 int32_t mt_scene_encode(mt_scene scene, void *output, size_t output_bytes, size_t *written, char *error, size_t capacity);
+/* Predicts the next scene snapshot; Full before its first encoding. Shader,
+ * displacement and atlas requirements can make the actual commit Full.
+ * Scope and costs: native/README.md "Editing a scene". */
 int32_t mt_scene_pending_commit_kind(mt_scene scene, uint32_t *kind, char *error, size_t capacity);
 /* Imports create a new scene. Byte import resolves external URIs under
  * base_directory; NULL requires embedded resources. Missing gltf feature returns

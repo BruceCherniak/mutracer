@@ -522,31 +522,44 @@ Float64 intermediates. Input and GPU precision still limit large coordinates.
 ### Editing a scene
 
 Edit a Scene, call `set_scene_object` and update the engine again. Advanced
-descriptor callers can edit their buffer and commit it again. The library
-compares the new inputs with the committed scene and, when it can, applies
-only the difference: geometry, acceleration structures and pipelines stay
-prepared, and only the changed data is uploaded. This incremental commit covers
-the camera, mesh and instance matrices, instance colors, vertex positions with
-unchanged topology, material parameters and textures, adding, removing and
-changing lights, and environment and background map pixels and sizes. Several
-edits can share one commit. The rendered images are identical to a full
-preparation of the same descriptor.
+descriptor callers can edit their buffer and commit it again. Several edits can
+share one commit. The library compares the new inputs with the committed scene
+and reuses prepared resources when the edits support an incremental commit.
 
-These edits prepare the scene again: index or vertex counts, adding, removing
-or reordering meshes, instance counts, texture counts, displacement map pixels,
-adding or removing a map, hiding the background, render settings or resolution,
-and material changes that need another shader variant (for example enabling a
-medium, or a texture atlas that grows). `mt_context_snapshot.last_commit`
-reports `MT_COMMIT_INCREMENTAL` or `MT_COMMIT_FULL` for the last successful
-commit. Every successful commit restarts accumulation and expires the previous
-job.
+Incremental commits cover:
 
-`Scene::pending_commit_kind()` / `mt_scene_pending_commit_kind` predicts the
-next snapshot's commit from the current edits. It reports Full before the first
-snapshot. The engine's actual result also depends on shader and texture-atlas
-requirements. Keep a Scene and edit it in place to reuse its encoding storage;
-unchanged shared vertex and image arrays are not rewritten. Commit comparison
-still scans scene data, so edit cost grows with scene size.
+- Camera changes; mesh and instance matrices; existing instance colors.
+- Vertex positions, normals and tangents when topology and the presence of
+  normal/tangent arrays stay unchanged.
+- Material base color, roughness, metalness, transmission and IOR, provided the
+  edit does not require a new shader variant.
+- Existing texture sampling parameters and pixels, including environment and
+  background map pixels and sizes, when the texture atlas still fits. Displacement
+  map pixel changes require full preparation.
+- Adding, removing and changing lights; background color changes.
+
+Full preparation is required for other material edits, including emission color
+or strength, coat, opacity, thin-walled, other OpenPBR properties and adding,
+removing or changing a material's map references. It is also required for changed
+triangle indices or vertex/index counts; geometry UVs; adding, removing or
+reordering mesh references; changed instance counts or the presence of instance
+colors; changed texture counts; adding/removing environment or background maps;
+and render settings or resolution changes in a descriptor commit. A new shader
+variant or a texture atlas that grows can also require full preparation.
+
+`Scene::pending_commit_kind()` / `mt_scene_pending_commit_kind` predicts the next
+scene snapshot's commit and reports Full before the first snapshot. Render
+settings and resolution belong to each render and are outside this prediction.
+The engine's actual result also depends on shader, displacement and texture-atlas
+requirements; the prediction can report Incremental before these require Full.
+`mt_context_snapshot.last_commit` reports `MT_COMMIT_INCREMENTAL` or
+`MT_COMMIT_FULL` for the last successful commit. Every successful commit restarts
+accumulation and expires the previous job. Both commit paths render the same
+scene as full preparation.
+
+Keep a Scene and edit it in place to reuse its encoding storage; unchanged shared
+vertex and image arrays are not rewritten. Commit comparison still scans scene
+data, so edit cost grows with scene size.
 
 ## Intersection backend
 
@@ -649,8 +662,8 @@ messages. Callbacks run serially on the emitting thread; message storage is vali
 only during the callback. Unregister before releasing the callback or its data.
 
 Raw scenes support the [intersection modes above](#intersection-backend).
-Topology-changing geometry updates, texture/emission material updates, device-loss recovery,
-browser display parity and a stable release ABI remain pending.
+See [Editing a scene](#editing-a-scene) for incremental and full commit support.
+Device-loss recovery, browser display parity and a stable release ABI remain pending.
 The viewer provides [native OIDN controls](./viewer/README.md#controls).
 The engine API covers part of the browser Engine/Render/Display API; see
 [its differences](#render-with-the-engine-api).

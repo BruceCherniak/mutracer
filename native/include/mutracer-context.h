@@ -85,16 +85,12 @@ int32_t mt_context_destroy(mt_context handle, char *error, size_t capacity);
  * after its current preparation step finishes. It preserves the old scene. Already
  * submitted GPU work cannot be interrupted. */
 int32_t mt_context_cancel_commit(mt_context handle, char *error, size_t capacity);
-/* Commit the complete scene descriptor; the input is copied. Editing a scene means
- * committing the edited descriptor again. When the edit keeps the committed
- * geometry topology, mesh list and instance counts, and needs no new shader
- * variant, the commit is incremental: geometry, acceleration structures and
- * pipelines are kept and only changed data is uploaded (transforms, instance
- * matrices and colors, vertex positions, material parameters and textures,
- * lights, environment and background maps, camera). Otherwise the scene is
- * prepared again. Both paths render identical images; mt_context_snapshot's
- * last_commit reports which one ran. Incremental cost grows with the descriptor
- * size (one comparison and copy) plus the changed data. */
+/* Commit the complete scene descriptor; the input is copied. Submit the edited
+ * descriptor again to update a scene. Supported edits reuse prepared resources;
+ * other edits prepare the scene again. See native/README.md "Editing a scene"
+ * for the incremental scope and limits. Both paths render the same scene;
+ * mt_context_snapshot.last_commit reports which ran. Every successful commit
+ * restarts accumulation. Comparison cost grows with descriptor size. */
 int32_t mt_context_commit(mt_context handle, const uint8_t *input, size_t length, char *error, size_t capacity);
 /* Settings are copied by commit_with_settings. Initialize with
  * mt_render_settings_default, then change fields. Defaults: Sobol, seed 12345,
