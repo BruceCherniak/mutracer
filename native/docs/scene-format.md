@@ -7,6 +7,8 @@ offsets in [`mutracer-layout.h`](../include/mutracer-layout.h), and material
 property IDs in
 [`mutracer-material-properties.h`](../include/mutracer-material-properties.h).
 
+For handle-based construction without offsets, use the [Scene API](../README.md#render-a-scene).
+
 ## Usage
 
 Fill the record structs and assemble them with the header-only builder in

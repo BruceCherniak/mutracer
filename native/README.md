@@ -24,43 +24,107 @@ and environment controls. See [viewer usage and limits](./viewer/README.md).
 
 ## Render a scene
 
-Building requires Rust, a C++20 compiler (Xcode Command Line Tools on macOS), project npm
-dependencies and a separately installed scriptc **0.3.2**. See the
-[platform prerequisites](./viewer/README.md#build-and-open) for Windows and Linux.
+Use the Rust `scene_api::Scene` or C
+[mutracer-scene-api.h](include/mutracer-scene-api.h) to build a scene with
+geometry, materials, textures, meshes, instances and lights. Handles belong to
+one scene; deleted or foreign handles return `InvalidHandle` /
+`MT_ERROR_INVALID_HANDLE`. Meshes hold world matrices, with no parent hierarchy.
 
-```sh
-export MUTRACER_SCRIPTC=/absolute/path/to/node_modules/.bin/scriptc
-npm run native:scene
+```rust
+use mutracer_native_probe::{api, scene_api::{Scene, Geometry, OpenPbrMaterial, Mesh}};
+
+let mut scene = Scene::new();
+let geometry = scene.add_geometry(Geometry::new(
+    vec![-1., -1., -3., 1., -1., -3., 0., 1., -3.], vec![0, 1, 2],
+))?;
+let mut material = OpenPbrMaterial::default();
+material.values.emission_strength = 1.;
+let material = scene.add_material(material)?;
+scene.add_mesh(Mesh::new(geometry, material))?;
+
+let engine = api::Engine::new(Default::default())?;
+let render = api::Render::new(&engine, api::RenderSettings {
+    max_samples: 8,
+    size: api::RenderSize::Fixed { width: 64, height: 48 },
+    ..Default::default()
+})?;
+engine.set_scene_object(&scene)?;
+engine.update()?;
+render.converge(api::ConvergeOptions::new(8))?;
+let hdr = render.read_pixels(api::PixelKind::Hdr)?;
+
+scene.material_mut(material)?.values.roughness = 0.6;
+engine.set_scene_object(&scene)?;
+engine.update()?;
 ```
 
-The command builds the library and C example, renders the supported example
-scenes and verifies scene preparation. Node is required for this build and
-verification command. The resulting C consumer renders without Node or prepared
-capture files:
+C applications initialize descriptors with their matching `*_default()` functions,
+add resources and submit the scene to an engine. Check every returned status.
+For example, after creating an engine:
 
-```sh
-.native-build/scene-core/scene-host /absolute/output/directory 256 v2-environment
+```c
+#include "mutracer-scene-api.h"
+mt_scene scene;
+mt_scene_create(&scene, error, sizeof error);
+mt_geometry_desc geometry;
+mt_geometry_desc_default(&geometry);
+geometry.positions = positions; geometry.vertex_count = 3;
+geometry.indices = indices; geometry.index_count = 3;
+mt_geometry_id g;
+mt_scene_add_geometry(scene, &geometry, &g, error, sizeof error);
+mt_scene_material_desc material;
+mt_scene_material_desc_default(&material);
+mt_material_id m;
+mt_scene_add_material(scene, &material, &m, error, sizeof error);
+mt_scene_mesh_desc mesh;
+mt_scene_mesh_desc_default(&mesh);
+mesh.geometry = g; mesh.material = m;
+mt_mesh_id object;
+mt_scene_add_mesh(scene, &mesh, &object, error, sizeof error);
+mt_engine_set_scene_object(engine, scene, error, sizeof error);
+mt_engine_update(engine, &changed, error, sizeof error);
 ```
 
-Examples include `baseline`, `textures`, `transforms`, `orthographic`, `emissive`,
-`alpha`, `v2-environment`, `v2-background`, `v2-hidden-background`, `v2-film`,
-`v2-medium`, `v2-bevel`, `v2-vertices`, `v2-multimaterial` and `v2-instances`.
-The example host uses `mt_probe_render_scene` from
-[mutracer-debug.h](include/mutracer-debug.h), a debug and validation entry point
-that may change without notice. Applications render caller-supplied data with
-the [engine API](#render-with-the-engine-api) or the lower-level
-[context API](#keep-a-scene-alive-and-read-pixels).
-[examples/minimal-host.c](examples/minimal-host.c) is a complete program of
-about 50 lines: it builds a scene with the header-only builder in
-[mutracer-scene-builder.h](include/mutracer-scene-builder.h), commits it,
-renders and reads HDR pixels. The [scene format reference](docs/scene-format.md)
-documents every record. Add `native/include` to your C compiler's header search
-path.
+[examples/scene-api-host.c](examples/scene-api-host.c) is a complete C consumer.
+Add `native/include` to the compiler's header search path and link the native
+library. Building requires Rust, a C++20 compiler, project npm dependencies and
+scriptc **0.3.2**; see [platform prerequisites](./viewer/README.md#build-and-open).
 
-The example's output directory contains `render.png`, `render.rgba32f`, `normal.rgba32f`,
-`albedo.rgba32f` and `result.json`. The PNG is a Reinhard/sRGB preview. Float files
-contain linear sample averages as little-endian f32 RGBA, bottom row first;
-dimensions are in `result.json`. Normal guides are not renormalized after averaging.
+Rust geometry, image and instance arrays use `Arc` so scenes can share them;
+use `Arc::make_mut` to edit an array. C inputs are copied during each call.
+Submitted snapshots stay valid after editing or destroying the source scene.
+Snapshot creation can allocate another descriptor while an older snapshot is
+still in use. Width, height and quality are render settings. A scene's optional
+default camera is overridden by `Engine::set_camera` / `mt_engine_set_camera`.
+Without a camera, the fallback is a 45-degree perspective camera at the origin,
+looking along -Z. The default environment is black and materials emit no light;
+add lighting or emission for a visible surface.
+
+Use `material_mut`, `mesh_mut`, `geometry_mut`, `texture_mut`, `light_mut` and
+`set_environment` for Rust edits. C has matching resource setters;
+`mt_material_set_float`, `mt_material_set_uint` and `mt_material_set_texture`
+accept [material property IDs](include/mutracer-material-properties.h).
+`Instances` / `mt_scene_add_instances` creates a mesh with local matrices and
+optional RGB multipliers. See [editing rules and costs](#editing-a-scene).
+
+### Import glTF
+
+With the `gltf` Cargo feature (enabled by default, including C builds),
+`Scene::import_gltf(path)` and `Scene::import_gltf_bytes(bytes, base_directory)`
+return a scene, warnings and name-to-handle maps. Duplicate names return every
+matching handle in traversal order. C uses `mt_scene_import_gltf` or
+`mt_scene_import_gltf_bytes`, then `mt_scene_find` with an occurrence index.
+See [glTF usage and limits](docs/gltf.md).
+
+### Binary descriptors
+
+For applications recording or supplying binary scenes, the v4 descriptor and
+header-only builder remain available. See the
+[scene format reference](docs/scene-format.md) and
+[examples/minimal-host.c](examples/minimal-host.c).
+`Scene::descriptor()` / `mt_scene_encode` exports a snapshot with placeholder
+1×1 dimensions and quality flags 0; the engine substitutes each render's
+settings. The lower-level context API consumes the dimensions in the descriptor.
 
 ## Render with the engine API
 
@@ -85,8 +149,8 @@ reports work. An offline host creates a render, calls `mt_engine_update`, then
 `mt_render_converge`, and reads the image with `mt_render_read_pixels` (linear
 floats) or `mt_display_read_pixels` (RGBA8 or PNG with the display settings).
 
-`mt_engine_set_scene` and `mt_engine_set_camera` only record the inputs;
-`mt_engine_update` commits them. The engine prepares its scene once for all
+`mt_engine_set_scene_object`, `mt_engine_set_scene` and `mt_engine_set_camera`
+only record the inputs; `mt_engine_update` commits them. The engine prepares its scene once for all
 renders. Edits that a context applies incrementally
 ([Editing a scene](#editing-a-scene)) finish during the call. Full preparation
 runs on a library thread while the previous images stay readable and
@@ -457,8 +521,9 @@ Float64 intermediates. Input and GPU precision still limit large coordinates.
 
 ### Editing a scene
 
-To change a committed scene, edit the descriptor and commit it again. The
-library compares it with the committed descriptor and, when it can, applies
+Edit a Scene, call `set_scene_object` and update the engine again. Advanced
+descriptor callers can edit their buffer and commit it again. The library
+compares the new inputs with the committed scene and, when it can, applies
 only the difference: geometry, acceleration structures and pipelines stay
 prepared, and only the changed data is uploaded. This incremental commit covers
 the camera, mesh and instance matrices, instance colors, vertex positions with
@@ -476,11 +541,12 @@ reports `MT_COMMIT_INCREMENTAL` or `MT_COMMIT_FULL` for the last successful
 commit. Every successful commit restarts accumulation and expires the previous
 job.
 
-An incremental commit still reads the whole descriptor: on a 42 MB scene an
-edit commits in about 4 ms, plus the time your application takes to write the
-descriptor; a 14 MB scene takes about 2 ms. Keep one descriptor buffer and
-change values in place where possible. Run `npm run native:camera` to build and
-verify camera edits from C; results are saved under `.native-build/camera-core/`.
+`Scene::pending_commit_kind()` / `mt_scene_pending_commit_kind` predicts the
+next snapshot's commit from the current edits. It reports Full before the first
+snapshot. The engine's actual result also depends on shader and texture-atlas
+requirements. Keep a Scene and edit it in place to reuse its encoding storage;
+unchanged shared vertex and image arrays are not rewritten. Commit comparison
+still scans scene data, so edit cost grows with scene size.
 
 ## Intersection backend
 
@@ -536,9 +602,8 @@ specifies job states, sample counters and handle lifetimes.
 
 ## Scene inputs and options
 
-Scenes are passed as raw descriptor **version 4**, documented in the
-[scene format reference](docs/scene-format.md). It supports indexed triangles
-with optional normals, tangents, two UV sets, vertex colors and per-vertex
+Scene objects and advanced [version-4 descriptors](docs/scene-format.md)
+support indexed triangles with optional normals, tangents, two UV sets, vertex colors and per-vertex
 materials; shared geometry, material tables and instance batches; perspective
 and orthographic cameras with depth of field; RGBA8 sRGB and RGBA32F linear
 textures; rectangular, spherical, directional and spot lights, emissive meshes,
@@ -548,27 +613,13 @@ background maps; and every OpenPBR material property through
 displacement. Displacement's cross-backend color and normal parity remains
 unresolved.
 
-Additional examples are `v3-displacement-uv`, `v3-displacement-triplanar`,
-`v3-ies`, `v3-ies-shared` and `v3-rect-texture`.
-
-Scene commits copy their inputs and retain no caller storage.
+Lower-level context commits copy their descriptor and retain no caller storage.
 `mt_context_render` blocks until rendering finishes; jobs use the polling lifecycle
 above. Keep borrowed input/output storage valid until the call returns. Context
 render calls retain the committed scene. Samples range from 1 to 4096. `mt_context_commit` defaults to Sobol, seed
 12345 and six bounces. `mt_context_commit_with_settings` accepts the sampling
 pattern, sequence, bounce and quality options in the context header. Unknown
 or unsupported fields return an error.
-
-Build/run settings:
-
-- `MUTRACER_NATIVE_OUTPUT`: output directory; defaults are `.native-build/scene-core/`
-  for `native:scene`, `.native-build/context-core/` for `native:context` and
-  `.native-build/job-core/` for `native:jobs`; `native:camera` uses
-  `.native-build/camera-core/` and `native:engine` uses `.native-build/engine/`.
-- `MUTRACER_NATIVE_SAMPLES`: verification samples, default 256; range 1..4096
-  for scene verification, 8..4096 for context, job and camera verification.
-- `CARGO_TARGET_DIR`: optional reusable Cargo build directory.
-- `CC`: C compiler executable, default `cc`.
 
 ## Limits
 
