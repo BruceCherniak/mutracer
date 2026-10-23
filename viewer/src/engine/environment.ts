@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { parseRGBE } from '@meimu/mutracer';
 import { fetchWithProgress } from './fetchWithProgress';
 import { openHDRCache } from './hdrCache';
+import { DEFAULT_SKY_TIME, createSkyAt } from './sky';
 
 export interface EquirectData {
   data: Float32Array;
@@ -10,45 +11,61 @@ export interface EquirectData {
 }
 
 /**
- * Procedural equirectangular sky: zenith-to-horizon gradient, darker ground
- * and a small sun. Same mapping as examples/shared/sky.ts (v = 0 is +Y, u
- * follows atan2(-z, -x)). Used offline and as the default.
+ * Physically based clear sky at a local solar time. Same mapping as
+ * examples/shared/sky.ts (v = 0 is +Y, u follows atan2(-z, -x)).
  */
-export function createSky(width = 1024, height = 512): EquirectData {
-  const data = new Float32Array(width * height * 4);
-  const elevation = (32 * Math.PI) / 180;
-  const azimuth = (50 * Math.PI) / 180;
-  const sun = [Math.cos(elevation) * Math.cos(azimuth), Math.sin(elevation), Math.cos(elevation) * Math.sin(azimuth)];
-  const sunCos = Math.cos((0.6 * Math.PI) / 180);
-  const zenith = [0.18, 0.36, 0.78];
-  const horizon = [0.85, 0.85, 0.82];
-  const ground = [0.16, 0.15, 0.14];
-  for (let row = 0; row < height; row++) {
-    const theta = ((row + 0.5) / height) * Math.PI;
-    const y = Math.cos(theta);
-    for (let col = 0; col < width; col++) {
-      const phi = ((col + 0.5) / width) * 2 * Math.PI;
-      const x = -Math.sin(theta) * Math.cos(phi);
-      const z = -Math.sin(theta) * Math.sin(phi);
-      let color: number[];
-      if (y >= 0) {
-        const t = Math.pow(1 - y, 4);
-        color = zenith.map((c, i) => c + (horizon[i] - c) * t);
-      } else {
-        const t = Math.min(1, -y * 8);
-        color = horizon.map((c, i) => c + (ground[i] - c) * t);
-      }
-      const cosToSun = x * sun[0] + y * sun[1] + z * sun[2];
-      const glow = Math.pow(Math.max(cosToSun, 0), 64) * 2;
-      const disk = cosToSun > sunCos ? 2000 : 0;
-      const o = (row * width + col) * 4;
-      data[o] = color[0] + glow + disk;
-      data[o + 1] = color[1] + glow * 0.9 + disk * 0.95;
-      data[o + 2] = color[2] + glow * 0.75 + disk * 0.85;
-      data[o + 3] = 1;
+export function createSky(hours = DEFAULT_SKY_TIME, width = 1024, height = 512): EquirectData {
+  return createSkyAt(hours, width, height);
+}
+
+/**
+ * Builds skies off the main thread, one at a time. A request that has not
+ * started when a newer one arrives resolves to `undefined`.
+ */
+export class SkyGenerator {
+  private worker?: Worker;
+  private busy = false;
+  private queued?: { hours: number; resolve: (sky?: EquirectData) => void };
+
+  generate(hours: number): Promise<EquirectData | undefined> {
+    if (typeof Worker === 'undefined') return Promise.resolve(createSky(hours));
+    return new Promise((resolve) => {
+      this.queued?.resolve(undefined);
+      this.queued = { hours, resolve };
+      this.next();
+    });
+  }
+
+  private next() {
+    if (this.busy || !this.queued) return;
+    const { hours, resolve } = this.queued;
+    this.queued = undefined;
+    this.busy = true;
+    const done = (sky: EquirectData) => {
+      this.busy = false;
+      resolve(sky);
+      this.next();
+    };
+    try {
+      this.worker ??= new Worker(new URL('./sky.worker.ts', import.meta.url), { type: 'module' });
+      this.worker.onmessage = (event: MessageEvent<EquirectData>) => done(event.data);
+      this.worker.onerror = () => {
+        this.worker?.terminate();
+        this.worker = undefined;
+        done(createSky(hours));
+      };
+      this.worker.postMessage(hours);
+    } catch {
+      done(createSky(hours));
     }
   }
-  return { data, width, height };
+
+  dispose() {
+    this.worker?.terminate();
+    this.worker = undefined;
+    this.queued?.resolve(undefined);
+    this.queued = undefined;
+  }
 }
 
 export function parseHDR(buffer: ArrayBuffer): EquirectData {

@@ -4,6 +4,7 @@ import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, DisplayChanne
 import type { TextureSampling } from './engine/modelCache';
 import type { MaterialValues, TextureKey } from './engine/materialParams';
 import { STUDIO_PRESETS } from './engine/studio';
+import { DEFAULT_SKY_TIME, SKY_TIME_RANGE } from './engine/sky';
 import { historyLabels, onHistoryChange, pushHistory, type HistoryItem } from './history';
 import { readURLSettings, URL_SETTINGS_FIELDS } from './urlSettings';
 
@@ -27,6 +28,8 @@ export interface Settings {
   envId: string;
   envIntensity: number;
   envRotation: number;
+  /** Local solar time of the procedural sky, in hours. */
+  skyTime: number;
   envResolution: EnvResolution;
   background: 'environment' | 'grounded' | 'color' | 'transparent';
   /**
@@ -102,6 +105,7 @@ export const DEFAULT_SETTINGS: Settings = {
   envId: 'sky',
   envIntensity: 1,
   envRotation: 0,
+  skyTime: DEFAULT_SKY_TIME,
   envResolution: '1k',
   background: 'environment',
   backgroundColor: '#2a2b30',
@@ -339,6 +343,7 @@ function validateSettings(settings: Settings): Settings {
     studioIntensity: number('studioIntensity', 0, 20),
     studioAmbient: number('studioAmbient', 0, 2),
     studioSize: number('studioSize', 0.1, 4),
+    skyTime: number('skyTime', SKY_TIME_RANGE[0], SKY_TIME_RANGE[1]),
     studioAmbientColor: /^#[0-9a-f]{6}$/i.test(settings.studioAmbientColor) ? settings.studioAmbientColor : DEFAULT_SETTINGS.studioAmbientColor,
     toneMapping: allowed.includes(settings.toneMapping) ? settings.toneMapping : 'agx',
     hdrOutputEnabled: settings.hdrOutputEnabled === true,
@@ -407,7 +412,7 @@ const UNDOABLE_EXCLUDED = new Set<keyof Settings>(['cameraIndex', 'projection', 
 const SETTING_LABELS: Partial<Record<keyof Settings, string>> = {
   lighting: 'Lighting mode', studioPreset: 'Studio preset', studioIntensity: 'Studio intensity', studioRotation: 'Studio rotation',
   studioSize: 'Studio light size', studioAmbient: 'Studio ambient', studioAmbientColor: 'Ambient color', envId: 'Environment',
-  envIntensity: 'Environment intensity', envRotation: 'Environment rotation', envResolution: 'Environment resolution',
+  envIntensity: 'Environment intensity', envRotation: 'Environment rotation', skyTime: 'Time of day', envResolution: 'Environment resolution',
   background: 'Background', backgroundColor: 'Background color', groundedHeight: 'Grounded height', groundedRadius: 'Grounded radius',
   groundShadow: 'Ground shadow', groundOpacity: 'Ground opacity', maxSamples: 'Samples', resolutionScale: 'Resolution',
   bvhBuilder: 'BVH builder', denoise: 'Denoise', denoiseModel: 'Denoiser', denoiseWhileConverging: 'Denoise while converging',

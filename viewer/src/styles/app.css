@@ -505,6 +505,22 @@ button:focus-visible, button[data-focus-visible] { outline: 2px solid var(--cv-f
   background: linear-gradient(transparent, rgb(0 0 0 / 0.72)); font-size: 10.5px; font-weight: 500; }
 .env[data-on]::after { content: ''; position: absolute; inset: auto 0 0; height: 3px; background: var(--cv-accent); }
 .env__bar { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--cv-accent); transition: width 200ms ease; }
+.sun-time { position: relative; overflow: hidden; border: 1px solid var(--cv-control-border); border-radius: var(--cv-radius-compact);
+  cursor: ew-resize; touch-action: none; user-select: none; outline: none; background: var(--cv-input); }
+.sun-time:hover { border-color: var(--cv-control-border-hover); }
+.sun-time:focus-visible { border-color: var(--cv-accent); outline: 2px solid var(--cv-accent); outline-offset: 2px; }
+.sun-time svg { display: block; width: 100%; height: auto; }
+.sun-time__path { fill: none; stroke: rgb(255 255 255 / 0.55); stroke-width: 1; stroke-dasharray: 2 3; }
+.sun-time__sun { stroke: rgb(255 255 255 / 0.9); stroke-width: 1; transition: r 0.15s; }
+.sun-time[data-dragging] .sun-time__sun, .sun-time:hover .sun-time__sun { r: 7.5; }
+.sun-time__horizon { stroke: rgb(255 255 255 / 0.28); stroke-width: 1; }
+.sun-time__tick line { stroke: rgb(255 255 255 / 0.3); }
+.sun-time__tick text { fill: rgb(255 255 255 / 0.42); font: 9px var(--cv-mono); }
+.sun-time__cursor { stroke: var(--cv-accent); stroke-width: 1.5; opacity: 0; transition: opacity 0.15s; }
+.sun-time[data-dragging] .sun-time__cursor, .sun-time:focus-visible .sun-time__cursor { opacity: 1; }
+.sun-time__value { position: absolute; top: 7px; left: 9px; padding: 2px 6px; border-radius: var(--cv-radius-detail);
+  background: rgb(0 0 0 / 0.28); color: #fff; font-size: 11px; font-variant-numeric: tabular-nums; pointer-events: none;
+  backdrop-filter: blur(4px); }
 .env-loading { display: grid; gap: 6px; font-size: 11px; color: var(--cv-text-3); }
 .env-loading > div:first-child { display: flex; justify-content: space-between; gap: 8px; white-space: nowrap; }
 .env-loading > div:first-child span:first-child { overflow: hidden; text-overflow: ellipsis; color: var(--cv-text-2); }

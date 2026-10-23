@@ -6,7 +6,7 @@ import {
   fromTHREECamera,
 } from '@meimu/mutracer';
 import { DEFAULT_SETTINGS, autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
-import { Environment, createSky, loadHDR, parseHDR } from './environment';
+import { Environment, SkyGenerator, createSky, loadHDR, parseHDR } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
   createMaterialSpheres, isHDRFile, loadModelFromFiles, loadModelFromURL, loadModelFromSource,
@@ -79,7 +79,10 @@ export class ViewerEngine {
   private readonly controls: OrbitControls;
   private readonly ground: THREE.Mesh;
   private readonly modelGroup = new THREE.Group();
-  private readonly environment = new Environment(createSky());
+  /** Last procedural sky, reused when it is selected again. */
+  private sky = { hours: get().settings.skyTime, data: createSky(get().settings.skyTime) };
+  private readonly skyGenerator = new SkyGenerator();
+  private readonly environment = new Environment(this.sky.data);
   private modelEnvironment: Environment | null = null;
   private readonly studioAmbient = new Environment(createStudioAmbient());
   private readonly studioRig = new THREE.Group();
@@ -219,6 +222,7 @@ export class ViewerEngine {
     this.clearModel();
     this.loop.dispose(); this.sync.dispose(); this.viewSync.dispose();
     this.environment.dispose();
+    this.skyGenerator.dispose();
     this.studioAmbient.dispose();
     this.engine.dispose();
   }
@@ -520,7 +524,7 @@ export class ViewerEngine {
     }
     const url = environmentUrl(preset, this.settings.envResolution);
     if (!url) {
-      this.setEnvironmentData(createSky(), id);
+      await this.applySky(id);
       return;
     }
     const name = `${preset.name} ${this.settings.envResolution.toUpperCase()}`;
@@ -530,6 +534,17 @@ export class ViewerEngine {
       showToast(`Could not load ${preset.name}: ${(error as Error).message}. Using the procedural sky.`, 'error');
       useViewer.setState((s) => ({ settings: { ...s.settings, envId: 'sky' } }));
     }
+  }
+
+  private async applySky(id: string) {
+    const hours = this.settings.skyTime;
+    if (this.sky.hours !== hours) {
+      // Superseded requests resolve empty; finished ones still show while scrubbing.
+      const data = await this.skyGenerator.generate(hours);
+      if (!data) return;
+      this.sky = { hours, data };
+    }
+    if (this.settings.envId === id) this.setEnvironmentData(this.sky.data, id);
   }
 
   private async loadEnvironmentFromURL(url: string) {
@@ -646,7 +661,7 @@ export class ViewerEngine {
     this.controls.autoRotate = s.autoRotate;
     this.controls.enabled = true;
 
-    if ((changed('envId') || changed('envResolution')) && s.envId !== 'custom') void this.applyEnvironmentPreset(s.envId);
+    if ((changed('envId') || changed('envResolution') || (changed('skyTime') && s.envId === 'sky')) && s.envId !== 'custom') void this.applyEnvironmentPreset(s.envId);
     if (changed('studioPreset') || changed('studioIntensity') || changed('studioRotation') || changed('studioSize')) this.applyStudioRig();
     if (changed('studioAmbientColor')) {
       // THREE.Color converts the sRGB hex to linear RGB.

@@ -1,5 +1,6 @@
 import type { Settings } from './store';
 import { STUDIO_PRESETS } from './engine/studio';
+import { SKY_TIME_RANGE } from './engine/sky';
 
 type Parser = (raw: string) => Settings[keyof Settings] | undefined;
 const boolean: Parser = (raw) => raw === 'true' || raw === '1' ? true : raw === 'false' || raw === '0' ? false : undefined;
@@ -19,7 +20,7 @@ const parsers = {
   studioIntensity: number(0, 20), studioRotation: number(0, 360),
   studioSize: number(0.1, 4), studioAmbient: number(0, 2), studioAmbientColor: color,
   envId: (raw: string) => /^[a-z0-9_-]+$/i.test(raw) ? raw : undefined,
-  envIntensity: number(0), envRotation: number(0, 360), envResolution: choice('1k', '2k', '4k'),
+  envIntensity: number(0), envRotation: number(0, 360), skyTime: number(SKY_TIME_RANGE[0], SKY_TIME_RANGE[1]), envResolution: choice('1k', '2k', '4k'),
   background: choice('environment', 'grounded', 'color', 'transparent'), backgroundColor: color,
   groundedHeight: nullable(number(Number.MIN_VALUE)), groundedRadius: nullable(number(Number.MIN_VALUE)),
   groundShadow: boolean, groundOpacity: number(0, 1),

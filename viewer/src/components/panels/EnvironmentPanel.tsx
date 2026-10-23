@@ -7,6 +7,7 @@ import { STUDIO_PRESETS, findStudioPreset, type StudioPreset } from '../../engin
 import { getEngine } from '../../engine/ViewerEngine';
 import { toPathedFiles } from '../../engine/loadModel';
 import { ColorField, Field, Hint, Scrub, Section, Segmented, Switch } from '../ui/controls';
+import { SunTime } from './SunTime';
 
 const formatMB = (bytes: number) => (bytes / 1048576).toFixed(1);
 
@@ -75,6 +76,7 @@ export function EnvironmentPanel() {
             </Button>
           </FileTrigger>
         </div>
+        {s.envId === 'sky' && <SunTime value={s.skyTime} onChange={(v) => setSettings({ skyTime: v })} />}
         {envLoading && (
           <div className="env-loading" role="progressbar" aria-label={`Loading ${envLoading.name}`}
             aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(loadingFraction * 100)}>
