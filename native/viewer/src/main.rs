@@ -87,6 +87,8 @@ impl Target {
         let render_loop = api::RenderLoop::new(
             &engine,
             api::RenderLoopOptions {
+                // The viewer presents only the final render.
+                preview: None,
                 final_render: api::LoopRender::Settings(settings),
                 ..Default::default()
             },
