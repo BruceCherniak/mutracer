@@ -111,6 +111,57 @@ Differences from the browser library:
 - Denoising uses OIDN only. Tiles, alpha blend strategies, adaptive sampling,
   vignette, bloom, shadow catchers and depth readback are not available.
 
+### Rust GPU images and display passes
+
+Use `Render::get_output_texture` with `OutputKind::Hdr` or `OutputKind::Display`
+to borrow an image on the engine's device without a CPU readback. GPU hosts can
+use their own device and queue through `Engine::on_device`. Encode and submit
+commands using the image before the next refine/converge, display present/resize,
+restart, disposal or device loss; do not retain, write or destroy it.
+
+HDR is top-row-first RGBA32Float resolved ray color and coverage, before denoising
+and display settings. RGB is normalized by surface hits as on WebGPU;
+`read_pixels(PixelKind::Hdr)` keeps the native per-sample average. Display is the
+latest composition including passes, in straight-alpha, sRGB-encoded RGBA8Unorm
+at the actual render size. Before a complete captured sample, the method returns
+`None`; Display also needs a previous presentation or export. Borrowing HDR or
+an unfiltered display image can enqueue a GPU resolve. RGBA32Float sampling requires an unfilterable texture binding unless
+the host enabled float32 filtering.
+
+Add synchronous passes with `Display::add_post_process`. For example, an identity
+pass copies its input to its output:
+
+```rust
+let display = engine.display();
+let pass = display.add_post_process(|ctx| {
+    ctx.encoder.copy_texture_to_texture(
+        ctx.input.as_image_copy(), ctx.output.as_image_copy(), ctx.input.size(),
+    );
+    Ok(())
+})?;
+display.present(&render)?;
+// Remove this pass with pass.remove(), or by dropping pass.
+```
+
+Passes run in registration order after composition and before display scaling,
+on every presentation and export. Each receives the selected complete render
+(including a fallback), its actual size, and borrowed straight-alpha RGBA8Unorm
+input/output textures. Fully write the output with storage, render or copy
+commands in the supplied encoder. Passes do not trace or invalidate denoising.
+The default is no passes. Registration and removal take effect on the next
+composition; a finished render loop wakes to present those changes.
+
+A returned error or callback panic discards the whole chain, uses the original
+composition and reports an engine error. Render inspection and pass registration
+are allowed in a callback; nested composition is rejected. Changing or releasing
+the selected image during a callback rejects that composition. Images and encoder
+are borrowed only for the call. GPU commands must follow wgpu's validation rules.
+
+Extra image caches are allocated on demand per render: HDR uses 16 bytes per
+pixel; straight display composition uses 4, with two additional 4-byte images
+when passes run. These caches remain until replaced for another size or released
+with the render. These interfaces are Rust-only; the C API keeps CPU pixel export.
+
 ### Device loss
 
 Device loss is terminal for an engine. Its renders and render loops enter

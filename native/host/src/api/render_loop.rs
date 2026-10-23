@@ -179,6 +179,7 @@ pub(super) struct ImageState {
     denoising: bool,
     display_size: [u32; 2],
     display: DisplaySettings,
+    pass_revision: u64,
 }
 fn image_state(render: &Render, display: &Display) -> Result<ImageState> {
     Ok(ImageState {
@@ -189,6 +190,7 @@ fn image_state(render: &Render, display: &Display) -> Result<ImageState> {
         denoising: render.denoising(),
         display_size: display.size(),
         display: display.settings(),
+        pass_revision: render.engine().lock().display.pass_revision,
     })
 }
 /// Pending-preview decision at the start of a tick (browser `_tick` prologue).
@@ -570,6 +572,7 @@ impl RenderLoop {
             && self.preview_frame_owner.is_none()
             && !self.engine.inputs_pending()
             && !self.syncs_active()
+            && !self.display.passes_pending()
             && image_state(&self.final_render, &self.display).ok() == self.finished_image;
         !idle
     }
@@ -653,6 +656,7 @@ impl RenderLoop {
             && current_is_final
             && status == RenderLoopStatus::Finished
             && self.final_render.status() == RenderStatus::Finished
+            && !self.display.passes_pending()
             && Some(&state) == self.finished_image.as_ref()
         {
             return Ok(status);

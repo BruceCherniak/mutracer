@@ -494,6 +494,7 @@ pub(super) struct RenderState {
     first_frame: bool,
     sample_ms: Option<f64>,
     pub(super) capture: Option<Capture>,
+    pub(super) output: super::post_process::OutputState,
     capture_key: Option<TargetKey>,
     captured: u32,
     needs_capture: bool,
@@ -571,6 +572,7 @@ impl RenderState {
         let _ = l0_blocking(|e, n| unsafe { context::mt_context_destroy(context, e, n) });
     }
     fn publish(&mut self, key: TargetKey, full: bool) {
+        self.output.invalidate();
         self.published = Some(key);
         self.failed = None;
         self.error = false;
@@ -609,6 +611,7 @@ impl RenderState {
     }
 }
 fn cancel_denoise(render: &mut RenderState) {
+    render.output.invalidate();
     render.denoise.worker = None;
     render.denoise.denoised = None;
     render.denoise.report = None;
@@ -1100,6 +1103,7 @@ fn capture(render: &mut RenderState) -> Result<bool> {
             render.needs_capture = false;
             render.capture_key = render.published.clone();
             render.captured = render.samples;
+            render.output.invalidate();
             // Progressive schedules keep presenting the last denoised image, which
             // the display holds on the GPU since its upload.
             let preserve = render
@@ -1269,6 +1273,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                         .upload(&pixels)
                         .map_err(|e| error(Status::Error, e.to_string()))?;
                 }
+                render.output.invalidate();
                 render.denoise.denoised = Some((samples, pixels));
                 render.denoise.last = Some(Instant::now());
             }
@@ -1351,6 +1356,8 @@ fn run_oidn(
 pub struct Render {
     engine: Engine,
     id: u64,
+    // Callback views borrow the registered render and must not retire it on drop.
+    owned: bool,
 }
 impl Render {
     pub fn new(engine: &Engine, settings: RenderSettings) -> Result<Self> {
@@ -1376,6 +1383,7 @@ impl Render {
                 first_frame: true,
                 sample_ms: None,
                 capture: None,
+                output: Default::default(),
                 capture_key: None,
                 captured: 0,
                 needs_capture: false,
@@ -1389,7 +1397,15 @@ impl Render {
         Ok(Self {
             engine: engine.clone(),
             id,
+            owned: true,
         })
+    }
+    pub(super) fn view(engine: &Engine, id: u64) -> Self {
+        Self {
+            engine: engine.clone(),
+            id,
+            owned: false,
+        }
     }
     pub(super) fn id(&self) -> u64 {
         self.id
@@ -1515,6 +1531,7 @@ impl Render {
     pub fn refine(&self) -> Result<RenderStatus> {
         self.engine.poll_device();
         self.with(|state, id| {
+            state.renders.get_mut(&id).unwrap().output.invalidate();
             if state.renders[&id].busy {
                 return Err(error(
                     Status::InvalidState,
@@ -1737,11 +1754,44 @@ impl Render {
                         .upload(&pixels)
                         .map_err(|e| error(Status::Error, e.to_string()))?;
                 }
+                render.output.invalidate();
                 render.denoise.denoised = Some((samples, pixels));
                 Ok(())
             })?;
         }
         Ok(ConvergeResult { samples: target })
+    }
+    /// Borrows an output texture without CPU readback or waiting for another sample.
+    /// `None` before a complete captured image; Display also needs a previous compose.
+    /// HDR resolves lazily and is independent of denoising. Textures support
+    /// TEXTURE_BINDING and COPY_SRC; HDR is unfilterable unless the host enabled
+    /// float32 filtering. Do not retain, write or destroy the handle. It is valid
+    /// only until the next refine/converge, present/resize, restart, disposal or device loss.
+    pub fn get_output_texture(&self, kind: super::OutputKind) -> Result<Option<wgpu::Texture>> {
+        self.with(|state, id| {
+            if kind == super::OutputKind::Display && state.display.processing {
+                return Err(error(
+                    Status::InvalidState,
+                    "Display composition is already running",
+                ));
+            }
+            if !readiness(state, id).complete {
+                return Ok(None);
+            }
+            let render = state.renders.get_mut(&id).unwrap();
+            let capture = render.capture.as_mut().unwrap();
+            match kind {
+                super::OutputKind::Hdr => Ok(Some(capture.hdr_texture())),
+                super::OutputKind::Display => match &render.output.latest {
+                    None => Ok(None),
+                    Some((settings, image)) => {
+                        Ok(Some(image.clone().unwrap_or_else(|| {
+                            capture.compose_straight(&settings.composition())
+                        })))
+                    }
+                },
+            }
+        })
     }
     /// Waits for the in-flight batch, then reads this render's linear RGBA f32
     /// image, top row first. During preparation it reads the previous image.
@@ -1934,6 +1984,9 @@ impl Render {
 }
 impl Drop for Render {
     fn drop(&mut self) {
+        if !self.owned {
+            return;
+        }
         let removed = {
             let mut state = self.engine.lock();
             for render in state.renders.values_mut() {

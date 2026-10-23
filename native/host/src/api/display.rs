@@ -129,6 +129,7 @@ pub(super) fn select(
 
 struct Blit {
     pipeline: wgpu::ComputePipeline,
+    straight: wgpu::ComputePipeline,
     sampler: wgpu::Sampler,
 }
 pub(super) struct DisplayState {
@@ -136,6 +137,11 @@ pub(super) struct DisplayState {
     pub(super) settings: DisplaySettings,
     texture: Option<wgpu::Texture>,
     blit: Option<Blit>,
+    pub(super) passes: Vec<super::post_process::Entry>,
+    pub(super) next_pass: u64,
+    pub(super) pass_revision: u64,
+    presented_pass_revision: u64,
+    pub(super) processing: bool,
 }
 impl Default for DisplayState {
     /// The browser's default canvas size.
@@ -145,6 +151,11 @@ impl Default for DisplayState {
             settings: DisplaySettings::default(),
             texture: None,
             blit: None,
+            passes: Vec::new(),
+            next_pass: 1,
+            pass_revision: 0,
+            presented_pass_revision: 0,
+            processing: false,
         }
     }
 }
@@ -152,12 +163,27 @@ const BLIT: &str = r#"
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var source_sampler: sampler;
 @group(0) @binding(2) var output: texture_storage_2d<rgba8unorm, write>;
+override premultiply: bool = false;
+fn premultiplied_pixel(pixel: vec2i) -> vec4f {
+  let size = vec2i(textureDimensions(source));
+  let rgba = textureLoad(source, clamp(pixel, vec2i(0), size - vec2i(1)), 0);
+  return vec4f(rgba.rgb * rgba.a, rgba.a);
+}
 @compute @workgroup_size(8, 8)
 fn main(@builtin(global_invocation_id) id: vec3u) {
   let size = textureDimensions(output);
   if (id.x >= size.x || id.y >= size.y) { return; }
   let uv = (vec2f(id.xy) + 0.5) / vec2f(size);
-  textureStore(output, id.xy, textureSampleLevel(source, source_sampler, uv, 0.0));
+  var color = textureSampleLevel(source, source_sampler, uv, 0.0);
+  if (premultiply) {
+    // Interpolate premultiplied texels so transparent colors cannot create halos.
+    let pixel = uv * vec2f(textureDimensions(source)) - 0.5;
+    let base = vec2i(floor(pixel));
+    let weight = fract(pixel);
+    color = mix(mix(premultiplied_pixel(base), premultiplied_pixel(base + vec2i(1, 0)), weight.x),
+      mix(premultiplied_pixel(base + vec2i(0, 1)), premultiplied_pixel(base + vec2i(1, 1)), weight.x), weight.y);
+  }
+  textureStore(output, id.xy, color);
 }
 "#;
 
@@ -166,6 +192,10 @@ pub struct Display {
     pub(super) engine: Engine,
 }
 impl Display {
+    pub(super) fn passes_pending(&self) -> bool {
+        let state = self.engine.lock();
+        state.display.pass_revision != state.display.presented_pass_revision
+    }
     /// Default 300×150, the browser canvas default.
     pub fn size(&self) -> [u32; 2] {
         self.engine.lock().display.size
@@ -207,26 +237,17 @@ impl Display {
     /// previous image when neither is ready, for example during scene preparation.
     /// Does not trace.
     pub fn present(&self, render: &Render) -> Result<Option<Presented>> {
-        self.check(render)?;
+        let result = self.present_inner(render);
+        self.engine.flush();
+        result
+    }
+    fn present_inner(&self, render: &Render) -> Result<Option<Presented>> {
+        let Some(composed) = self.compose(render, true)? else {
+            return Ok(None);
+        };
         let mut state = self.engine.live()?;
         let state = &mut *state;
-        let id = render.id();
-        let Some(primary) = state.renders.get(&id) else {
-            return Err(error(Status::InvalidHandle, "Render is disposed"));
-        };
-        let fallback = primary.fallback;
-        let selection = select(
-            state.display.settings.channel == Channel::Final,
-            readiness(state, id),
-            fallback.map(|f| readiness(state, f)),
-        );
-        let selected = match selection {
-            None => return Ok(None),
-            Some(Selection::Render) => id,
-            Some(Selection::Fallback) => fallback.unwrap(),
-        };
         let gpu = &self.engine.inner.gpu;
-        let settings = state.display.settings.composition();
         let size = state.display.size;
         if state
             .display
@@ -253,6 +274,24 @@ impl Display {
             }));
         }
         let blit = state.display.blit.get_or_insert_with(|| Blit {
+            straight: gpu
+                .device
+                .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                    label: Some("MuTracer straight-alpha display scale"),
+                    layout: None,
+                    module: &gpu
+                        .device
+                        .create_shader_module(wgpu::ShaderModuleDescriptor {
+                            label: None,
+                            source: wgpu::ShaderSource::Wgsl(BLIT.into()),
+                        }),
+                    entry_point: Some("main"),
+                    compilation_options: wgpu::PipelineCompilationOptions {
+                        constants: &[("premultiply", 1.)],
+                        ..Default::default()
+                    },
+                    cache: None,
+                }),
             pipeline: gpu
                 .device
                 .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
@@ -275,22 +314,24 @@ impl Display {
             }),
         });
         let target = state.display.texture.as_ref().unwrap();
-        let render_state = &state.renders[&selected];
-        let capture = render_state.capture.as_ref().unwrap();
-        capture.compose_with(&settings);
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        if capture.size == size {
+        if composed.premultiplied && [composed.texture.width(), composed.texture.height()] == size {
             encoder.copy_texture_to_texture(
-                capture.texture.as_image_copy(),
+                composed.texture.as_image_copy(),
                 target.as_image_copy(),
                 target.size(),
             );
         } else {
-            let source = capture.texture.create_view(&Default::default());
+            let source = composed.texture.create_view(&Default::default());
+            let pipeline = if composed.premultiplied {
+                &blit.pipeline
+            } else {
+                &blit.straight
+            };
             let output = target.create_view(&Default::default());
             let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
-                layout: &blit.pipeline.get_bind_group_layout(0),
+                layout: &pipeline.get_bind_group_layout(0),
                 entries: &[
                     wgpu::BindGroupEntry {
                         binding: 0,
@@ -307,28 +348,32 @@ impl Display {
                 ],
             });
             let mut pass = encoder.begin_compute_pass(&Default::default());
-            pass.set_pipeline(&blit.pipeline);
+            pass.set_pipeline(pipeline);
             pass.set_bind_group(0, &group, &[]);
             pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
         }
         gpu.queue.submit([encoder.finish()]);
-        Ok(Some(Presented {
-            fallback: selected != id,
-            width: capture.size[0],
-            height: capture.size[1],
-            samples: render_state.presented_samples(),
-        }))
+        state.display.presented_pass_revision = composed.pass_revision;
+        Ok(Some(composed.presented))
     }
+
     /// The render's complete image composed with these settings at its own size:
     /// straight-alpha RGBA8, top row first. Leaves the presentation texture unchanged.
     pub fn read_rgba8(&self, render: &Render) -> Result<(u32, u32, Vec<u8>)> {
-        self.check(render)?;
-        let state = self.engine.live()?;
-        let capture = Self::complete(&state, render.id())?;
-        let rgba = capture
-            .read_rgba(&state.display.settings.composition())
+        let result = (|| {
+            let composed = self.compose(render, false)?.unwrap();
+            let state = self.engine.live()?;
+            let capture = Self::complete(&state, composed.id)?;
+            let rgba = if composed.premultiplied {
+                capture.read_rgba(&composed.settings.composition())
+            } else {
+                capture.read_image(&composed.texture)
+            }
             .map_err(|e| error(Status::Error, e.to_string()))?;
-        Ok((capture.size[0], capture.size[1], rgba))
+            Ok((capture.size[0], capture.size[1], rgba))
+        })();
+        self.engine.flush();
+        result
     }
     /// [`Display::read_rgba8`] encoded as PNG.
     pub fn encode_png(&self, render: &Render) -> Result<Vec<u8>> {
@@ -343,7 +388,7 @@ impl Display {
             .map_err(|e| error(Status::Error, format!("PNG encoding failed: {e}")))?;
         Ok(bytes)
     }
-    fn check(&self, render: &Render) -> Result<()> {
+    pub(super) fn check(&self, render: &Render) -> Result<()> {
         if !std::sync::Arc::ptr_eq(&render.engine().inner, &self.engine.inner) {
             return Err(error(
                 Status::InvalidArgument,

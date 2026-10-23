@@ -17,6 +17,7 @@
 mod abi;
 mod display;
 mod engine;
+mod post_process;
 mod render;
 mod render_loop;
 
@@ -26,6 +27,7 @@ pub use display::{Channel, Display, DisplaySettings, Presented, ToneMapping};
 pub use engine::{
     Backend, Camera, Engine, EngineEvent, EngineInfo, EngineOptions, ProgressStage, Subscription,
 };
+pub use post_process::{OutputKind, PostProcessContext, PostProcessSubscription};
 pub use render::{
     AdaptiveResolution, CancelToken, CommitKind, ConvergeOptions, ConvergeProgress, ConvergeResult,
     ConvergeStage, DenoiseReport, DenoiseSchedule, DenoiserOptions, Image, PixelKind, Render,
@@ -102,6 +104,8 @@ fn l0_blocking(mut operation: impl FnMut(*mut std::ffi::c_char, usize) -> i32) -
 
 #[cfg(test)]
 mod device_loss_tests;
+#[cfg(test)]
+mod gpu_output_tests;
 #[cfg(test)]
 mod loop_tests;
 #[cfg(test)]

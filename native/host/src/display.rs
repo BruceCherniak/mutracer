@@ -47,6 +47,8 @@ pub struct Display {
     pipeline: wgpu::ComputePipeline,
     group: wgpu::BindGroup,
     samples: u32,
+    hdr: Option<(wgpu::Texture, wgpu::ComputePipeline, wgpu::BindGroup)>,
+    composed: Option<(wgpu::Texture, wgpu::BindGroup)>,
 }
 impl Display {
     pub(super) fn new(gpu: GpuDevice, size: [u32; 2]) -> Self {
@@ -62,7 +64,9 @@ impl Display {
         let raw = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Unfiltered preview"),
             size: linear.size(),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let auxiliary = |label| {
@@ -153,6 +157,8 @@ impl Display {
             pipeline,
             group,
             samples: 0,
+            hdr: None,
+            composed: None,
         }
     }
     pub(super) fn capture(
@@ -231,7 +237,117 @@ impl Display {
     pub fn compose_with(&self, settings: &Settings) {
         self.compose_inner(settings, true);
     }
+    /// Resolved raw ray color, without denoising or display transforms. Match
+    /// WebGPU's hit normalization and per-pixel coverage, including blank pixels.
+    pub(crate) fn hdr_texture(&mut self) -> wgpu::Texture {
+        if self.hdr.is_none() {
+            let texture = image(
+                &self.gpu.device,
+                self.size,
+                wgpu::TextureFormat::Rgba32Float,
+            );
+            let pipeline =
+                self.gpu
+                    .device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("MuTracer HDR resolve"),
+                        layout: None,
+                        module: &self.gpu.device.create_shader_module(
+                            wgpu::ShaderModuleDescriptor {
+                                label: Some("MuTracer HDR resolve"),
+                                source: wgpu::ShaderSource::Wgsl(
+                                    include_str!("hdr-output.wgsl").into(),
+                                ),
+                            },
+                        ),
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    });
+            let group = self
+                .gpu
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &pipeline.get_bind_group_layout(0),
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.raw.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: self.normal.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: self.albedo.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(
+                                &texture.create_view(&Default::default()),
+                            ),
+                        },
+                    ],
+                });
+            self.hdr = Some((texture, pipeline, group));
+        }
+        let (texture, pipeline, group) = self.hdr.as_ref().unwrap();
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, group, &[]);
+            pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
+        }
+        self.gpu.queue.submit([encoder.finish()]);
+        texture.clone()
+    }
+    pub(crate) fn compose_straight(&mut self, settings: &Settings) -> wgpu::Texture {
+        if self.composed.is_none() {
+            let texture = image(&self.gpu.device, self.size, wgpu::TextureFormat::Rgba8Unorm);
+            let group = self
+                .gpu
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &self.pipeline.get_bind_group_layout(0),
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.linear.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                &texture.create_view(&Default::default()),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: self.params.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: self.normal.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: self.albedo.as_entire_binding(),
+                        },
+                    ],
+                });
+            self.composed = Some((texture, group));
+        }
+        let (texture, group) = self.composed.as_ref().unwrap();
+        self.compose_into(settings, false, group);
+        texture.clone()
+    }
     fn compose_inner(&self, settings: &Settings, premultiply: bool) {
+        self.compose_into(settings, premultiply, &self.group);
+    }
+    fn compose_into(&self, settings: &Settings, premultiply: bool, group: &wgpu::BindGroup) {
         if self.samples == 0 {
             return;
         }
@@ -257,7 +373,7 @@ impl Display {
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.group, &[]);
+            pass.set_bind_group(0, group, &[]);
             pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
         }
         self.gpu.queue.submit([encoder.finish()]);
@@ -271,6 +387,9 @@ impl Display {
         result
     }
     fn read_texture(&self) -> Result<Vec<u8>> {
+        self.read_image(&self.texture)
+    }
+    pub(crate) fn read_image(&self, texture: &wgpu::Texture) -> Result<Vec<u8>> {
         let stride = (self.size[0] * 4).div_ceil(256) * 256;
         let buffer = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Display export readback"),
@@ -280,7 +399,7 @@ impl Display {
         });
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         encoder.copy_texture_to_buffer(
-            self.texture.as_image_copy(),
+            texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
                 layout: wgpu::TexelCopyBufferLayout {
@@ -327,9 +446,122 @@ impl Display {
     }
 }
 
+pub(crate) fn image(
+    device: &wgpu::Device,
+    size: [u32; 2],
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("MuTracer borrowed output"),
+        size: wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST
+            | if format == wgpu::TextureFormat::Rgba8Unorm {
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+            } else {
+                wgpu::TextureUsages::empty()
+            },
+        view_formats: &[],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+    fn gpu_output_hdr_matches_web_hit_normalization_and_ignores_denoising() {
+        let gpu = GpuDevice::with_backend(0).unwrap();
+        let mut display = Display::new(gpu.clone(), [2, 2]);
+        let raw: Vec<f32> = vec![
+            4., 2., 1., 1., 8., 4., 2., 4., 6., 3., 1.5, 2., 99., 99., 99., 99.,
+        ];
+        let normal: Vec<f32> = vec![
+            0., 0., 2., 4., 0., 0., 3., 4., 0., 0., 0., 4., 0., 0., 0., 0.,
+        ];
+        let albedo: Vec<f32> = vec![
+            0., 0., 0., 1., 0., 0., 0., 2., 0., 0., 0., 0., 0., 0., 0., 0.,
+        ];
+        for (target, data) in [
+            (&display.raw, &raw),
+            (&display.normal, &normal),
+            (&display.albedo, &albedo),
+        ] {
+            gpu.queue.write_buffer(
+                target,
+                0,
+                &data
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect::<Vec<_>>(),
+            );
+        }
+        let expected: Vec<f32> = vec![
+            1.5, 0.75, 0.375, 0.5, 0., 0., 0., 0., 4., 2., 1., 0.25, 4., 2., 1., 1.,
+        ];
+        // Read on this capture's own device (no cross-device texture use).
+        let texture = display.hdr_texture();
+        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 512,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let read = |texture: &wgpu::Texture| {
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            encoder.copy_texture_to_buffer(
+                texture.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(256),
+                        rows_per_image: None,
+                    },
+                },
+                texture.size(),
+            );
+            gpu.queue.submit([encoder.finish()]);
+            let (send, receive) = std::sync::mpsc::channel();
+            buffer.map_async(wgpu::MapMode::Read, .., move |r| {
+                let _ = send.send(r);
+            });
+            gpu.device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(5)),
+                })
+                .unwrap();
+            receive.recv().unwrap().unwrap();
+            let data: Vec<f32> = {
+                let mapped = buffer.get_mapped_range(..).unwrap();
+                mapped
+                    .chunks_exact(256)
+                    .flat_map(|row| {
+                        row[..32]
+                            .chunks_exact(4)
+                            .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+                    })
+                    .collect()
+            };
+            buffer.unmap();
+            data
+        };
+        assert_eq!(read(&texture), expected);
+        display.upload(&[0.75; 16]).unwrap();
+        assert_eq!(read(&display.hdr_texture()), expected);
+    }
+
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn display_settings_alpha_channels_and_export_preserve_linear_data() {
