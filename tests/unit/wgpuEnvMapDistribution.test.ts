@@ -18,7 +18,7 @@ function fixture() {
   const texture = (width: number, height: number) => ({ width, height, createView: () => ({}) }) as GPUTexture;
   return { device, buffers, texture };
 }
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => { vi.unstubAllGlobals(); });
 
 describe('WebGPU environment distribution resources', () => {
   it('reuses scan buffers across edits and releases them on resize and disposal', () => {

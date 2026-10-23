@@ -1,3 +1,4 @@
+import { isProceduralSkyImage } from '../scene/skyParameters.js';
 import type Texture from '../scene/Texture.js';
 import {isTextureDataSource} from '../scene/Texture.js';
 import {textureWrapIndex} from '../scene/TextureState.js';
@@ -34,6 +35,7 @@ export function independentTexturePixels(texture: Texture, size: TextureExtent, 
     const canvas = createCanvas(size.width, size.height), context = canvas.getContext('2d');
     if (!context) throw new Error('Unable to prepare material texture pixels.');
     if (texture.flipY) {context.translate(0, size.height); context.scale(1, -1);}
+    if (isProceduralSkyImage(texture.image)) throw new Error('ProceduralSky is only supported as an environment or background.');
     context.drawImage(texture.image, 0, 0, size.width, size.height);
     const pixels = context.getImageData(0, 0, size.width, size.height).data;
     for (let i = 0; i < pixels.length; i++) data[i] = floatStorage ? float16Bits(pixels[i] / 255) : pixels[i];

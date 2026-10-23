@@ -1,3 +1,4 @@
+import { isProceduralSkyImage } from '../scene/skyParameters.js';
 import { prepareSceneMeshes, computeGeometryNormals, type PreparedMeshInstanceBinding as SharedInstanceBinding } from './scenePreparation.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
 import { meshInstanceCount, type MeshInstances } from './meshInstances.js';
@@ -132,6 +133,7 @@ export function computeMinmaxCPU(
     if (!ctx) throw new Error('The displacement texture is not CPU-readable.');
     canvas.width = w;
     canvas.height = w;
+    if (isProceduralSkyImage(heightImage)) throw new Error('ProceduralSky is only supported as an environment or background.');
     ctx.drawImage(heightImage, 0, 0, w, w);
     heightPixels = ctx.getImageData(0, 0, w, w).data;
     sourceChannels = 4;

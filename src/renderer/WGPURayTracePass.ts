@@ -1,3 +1,5 @@
+import { proceduralEnvironmentPower } from './proceduralEnvironmentPower.js';
+import { WGPUSkyBaker } from './WGPUSkyBaker.js';
 import {initialSceneConstants, sceneAttributeLayout, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, traceSampling, writeTraceSampling} from './sceneAssembly.js';
 import {rayTraceBindGroupLayouts} from './sceneLayoutSchema.js';
 import {WGPUBindlessMaterialData} from './WGPUBindlessMaterialData.js';
@@ -32,7 +34,7 @@ import { WGPUShaderCache, retainedShaderCapacity } from './WGPUShaderCache.js';
 import { WGPUShaderCapabilities } from './WGPUShaderCapabilities.js';
 import { wgpuSceneFeatureFlags } from './WGPUSceneFeatures.js';
 import {lightShaderCapabilities, retainedShaderCapabilities, type ShaderCapabilities} from './shaderCapabilities.js';
-import { type TexturePixelSource as TexturePixelSource, mat4 } from '../math.js';
+import { mat4 } from '../math.js';
 import Mesh from '../scene/Mesh.js';
 import DirectionalLight from '../scene/DirectionalLight.js';
 import SphereLight from '../scene/SphereLight.js';
@@ -52,7 +54,7 @@ import Geometry from '../scene/Geometry.js';
 import {
   envMapDistribution,
   environmentMapSourcesMatch,
-  type EnvironmentMapSource
+  type EnvironmentSource
 } from './envMapDistribution.js';
 import {
   updateMeshInstances,
@@ -301,11 +303,12 @@ class WGPURayTracePass {
   private _mapsSampler: GPUSampler;
   private _maps?: GPUTexture;
 
-  private _envImageSource: EnvironmentMapSource | undefined;
+  private _envImageSource: EnvironmentSource | undefined;
   private _envTex?: GPUTexture;
   private _envDistributionTex?: GPUTexture;
   private _envDistribution?: WGPUEnvMapDistribution;
-  private _backgroundImageSource: TexturePixelSource | undefined;
+  private _skyBaker?: WGPUSkyBaker;
+  private _backgroundImageSource: EnvironmentSource | undefined;
   private _backgroundTex?: GPUTexture;
 
   private _rayTracePipelineLayout?: GPUPipelineLayout;
@@ -1438,7 +1441,7 @@ class WGPURayTracePass {
     writeTraceQuality(this._rtUniform.views, options);
   }
 
-  private _setEnvMap(envImage: EnvironmentMapSource | undefined) {
+  private _setEnvMap(envImage: EnvironmentSource | undefined) {
     const device = this._device;
     // Always create env tex
     if (
@@ -1447,9 +1450,12 @@ class WGPURayTracePass {
     ) {
       this._envImageSource = envImage;
 
-      const gpuDistribution = envImage && envImage.width * envImage.height >= 65536 &&
+      const sky = envImage && 'sky' in envImage ? envImage : undefined;
+      if (sky && (sky.width + 2 > device.limits.maxTextureDimension2D || sky.height + 1 > device.limits.maxTextureDimension2D)) throw new RangeError('ProceduralSky resolution exceeds the device texture size limit.');
+      const gpuDistribution = envImage && (sky || envImage.width * envImage.height >= 65536) &&
         WGPUEnvMapDistribution.supported(device, envImage.width, envImage.height);
-      const distribution = envImage && !gpuDistribution ? envMapDistribution(envImage) : undefined;
+      if (sky && !gpuDistribution) throw new RangeError('ProceduralSky resolution exceeds the GPU sampling storage limit; reduce resolution.');
+      const distribution = envImage && !('sky' in envImage) && !gpuDistribution ? envMapDistribution(envImage) : undefined;
       const distributionWidth = envImage ? envImage.width + 2 : 1;
       const distributionHeight = envImage ? envImage.height + 1 : 1;
       const width = envImage?.width ?? 1;
@@ -1465,7 +1471,7 @@ class WGPURayTracePass {
           GPUTextureUsage.RENDER_ATTACHMENT;
         this._envTex = device.createTexture({
           format: 'rgba32float',
-          usage,
+          usage: usage | GPUTextureUsage.STORAGE_BINDING,
           label: 'Env',
           size: {
             width,
@@ -1485,7 +1491,10 @@ class WGPURayTracePass {
         });
       }
       if (envImage) {
-        device.queue.writeTexture(
+        if ('sky' in envImage) {
+          this._skyBaker ??= new WGPUSkyBaker(device);
+          this._skyBaker.bake(envImage, this._envTex!);
+        } else device.queue.writeTexture(
           {
             texture: this._envTex!
           },
@@ -1789,27 +1798,32 @@ class WGPURayTracePass {
   }
 
   private _setBackgroundMap(
-    backgroundImage: TexturePixelSource | undefined
+    backgroundImage: EnvironmentSource | undefined
   ) {
     if (backgroundImage === this._backgroundImageSource && this._backgroundTex) {
       return;
     }
     this._backgroundImageSource = backgroundImage;
-    this._backgroundTex?.destroy();
-
     const width = backgroundImage?.width ?? 1;
     const height = backgroundImage?.height ?? 1;
-    this._backgroundTex = this._device.createTexture({
-      format: 'rgba32float',
-      usage:
-        GPUTextureUsage.TEXTURE_BINDING |
-        GPUTextureUsage.COPY_DST |
-        GPUTextureUsage.RENDER_ATTACHMENT,
-      label: 'Background',
-      size: { width, height, depthOrArrayLayers: 1 }
-    });
-
-    if (backgroundImage) {
+    if (backgroundImage && 'sky' in backgroundImage && (width > this._device.limits.maxTextureDimension2D || height > this._device.limits.maxTextureDimension2D)) throw new RangeError('ProceduralSky resolution exceeds the device texture size limit.');
+    const resized = !this._backgroundTex || this._backgroundTex.width !== width || this._backgroundTex.height !== height;
+    if (resized) {
+      this._backgroundTex?.destroy();
+      this._backgroundTex = this._device.createTexture({
+        format: 'rgba32float',
+        usage:
+          GPUTextureUsage.TEXTURE_BINDING |
+          GPUTextureUsage.COPY_DST |
+          GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.STORAGE_BINDING,
+        label: 'Background',
+        size: { width, height, depthOrArrayLayers: 1 }
+      });
+    }
+    if (backgroundImage && 'sky' in backgroundImage) {
+      this._skyBaker ??= new WGPUSkyBaker(this._device);
+      this._skyBaker.bake(backgroundImage, this._backgroundTex!);
+    } else if (backgroundImage) {
       const source = backgroundImage.data;
       const data =
         source instanceof Float32Array
@@ -1818,19 +1832,19 @@ class WGPURayTracePass {
             ? Float32Array.from(source, value => value / 255)
             : Float32Array.from(source);
       this._device.queue.writeTexture(
-        { texture: this._backgroundTex },
+        { texture: this._backgroundTex! },
         data.buffer,
         { bytesPerRow: width * 4 * 4 },
         { width, height, depthOrArrayLayers: 1 }
       );
     }
-    this._needsUpdateBindGroups = true;
+    this._needsUpdateBindGroups ||= resized;
   }
 
   private _updateLightSamplingData() {
     this._constants.LIGHT_CAPABILITIES = lightShaderCapabilities(this._analyticLights.map(light => light.type), this._emissiveTriangles.length);
     const lighting = prepareSceneLightSampling(this._analyticLights, this._emissiveTriangles,
-      estimateEnvironmentPower(this._envImageSource), this._device.limits.maxTextureDimension2D, this._lightChoices, this._lightSamplingScratch);
+      this._envImageSource && 'sky' in this._envImageSource ? proceduralEnvironmentPower(this._envImageSource) : estimateEnvironmentPower(this._envImageSource), this._device.limits.maxTextureDimension2D, this._lightChoices, this._lightSamplingScratch);
     this._analyticLightSelectionPmfs = lighting.analyticPmfs;
     this._iesProfileTexelOffsets = lighting.profiles.offsets;
     this._lightDomainDiagnostics = lighting.domains;
@@ -2478,6 +2492,7 @@ class WGPURayTracePass {
   dispose() {
     this._disposed = true;
     this._envDistribution?.dispose();
+    this._skyBaker?.dispose();
     this._bindless?.dispose(); this._retiredBindless.forEach(textures => textures.dispose()); this._retiredBindless.clear();
     this._shaderCache.clear();
     this._shaderCapabilities.clear();

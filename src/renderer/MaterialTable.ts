@@ -1,3 +1,4 @@
+import { isProceduralSkyImage } from '../scene/skyParameters.js';
 import MaterialData from './MaterialData.js';
 import { packMaterialBuffer } from './materialLayout.js';
 import { repackMaterialParams } from './materialParams.js';
@@ -166,6 +167,7 @@ class MaterialTable {
         const image = (texture as Texture).image;
         return isTextureDataSource(image) && !(image.data instanceof Uint8Array) && !(image.data instanceof Uint8ClampedArray);
       });
+    if (data.textures.some(texture => isProceduralSkyImage(texture.image))) throw new Error('ProceduralSky is only supported as an environment or background.');
     const {texture, stats} = makeTextureArray(data.textures as Texture[], data.atlas);
     this.texture = texture;
     this.textureAtlasStats = {...stats, packTimeMs: performance.now() - packStart};

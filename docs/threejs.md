@@ -45,6 +45,10 @@ For an application-owned animation frame, update the animation mixer first,
 then call `loop.tick()`. With first-layer frame control, call `sync.update()`,
 `engine.update()`, `render.refine()` and `engine.display.present(render)` in order.
 
+For a library-generated sky, pass `environment: new ProceduralSky()` in the
+conversion or sync options. See [ProceduralSky](./api.md#proceduralsky) for
+configuration and backend limits.
+
 ## What is converted
 
 | Three.js | MuTracer |

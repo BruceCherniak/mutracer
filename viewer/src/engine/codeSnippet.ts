@@ -88,7 +88,8 @@ function denoiser(settings: Settings, webgpu: boolean, preview: boolean) {
 export function generateCode(snapshot: CodeSnapshot): string {
   const s = snapshot.settings;
   const studio = s.lighting === 'studio';
-  const hdr = !studio && !snapshot.blackEnvironment;
+  const procedural = !studio && s.envId === 'sky' && !snapshot.environmentUrl && !snapshot.blackEnvironment;
+  const hdr = !studio && !procedural && !snapshot.blackEnvironment;
   const cam = snapshot.camera;
   const ortho = cam.projection === 'orthographic';
   const lens = !ortho && s.fStop > 0;
@@ -96,6 +97,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
   const out = (...rows: string[]) => lines.push(...rows);
   const imports = ['Engine', 'RenderLoop', 'THREESync'];
   if (lens || snapshot.animation) imports.push('Sync');
+  if (procedural) imports.push('ProceduralSky');
 
   const placeholders = [
     ...(snapshot.modelUrl ? [] : ['./model.glb']),
@@ -161,6 +163,9 @@ export function generateCode(snapshot: CodeSnapshot): string {
         'scene.environment = ambient;'
       );
     }
+  } else if (procedural) {
+    env = 'environment';
+    out(`const environment = new ProceduralSky({ time: ${num(s.skyTime)} });`);
   } else if (hdr) {
     env = 'environment';
     out(
@@ -241,7 +246,7 @@ export function generateCode(snapshot: CodeSnapshot): string {
   out(
     '',
     'const engine = new Engine({ canvas });',
-    'const sync = new THREESync(engine, { scene, camera, controls });'
+    `const sync = new THREESync(engine, { scene, camera, controls${procedural ? ', environment' : ''} });`
   );
   if (lens) {
     syncs.push('lens');

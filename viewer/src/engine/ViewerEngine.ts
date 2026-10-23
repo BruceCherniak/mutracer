@@ -1,14 +1,12 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import {
-  Engine, Render, RenderLoop, Sync,
+  Engine, Render, RenderLoop, Sync, ProceduralSky,
   THREESync, type DisplaySettings,
   fromTHREECamera,
 } from '@meimu/mutracer';
 import { DEFAULT_SETTINGS, autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
 import { Environment, loadHDR, parseHDR, type EquirectData } from './environment';
-import { SkyBaker } from './sky';
-import { SkyWorker } from './skyWorker';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
   createMaterialSpheres, isHDRFile, loadModelFromFiles, loadModelFromURL, loadModelFromSource,
@@ -81,13 +79,8 @@ export class ViewerEngine {
   private readonly controls: OrbitControls;
   private readonly ground: THREE.Mesh;
   private readonly modelGroup = new THREE.Group();
-  private readonly skyBaker = new SkyBaker();
-  /** Last procedural sky, reused when it is selected again. */
-  private sky = { hours: get().settings.skyTime, data: this.skyBaker.bake(get().settings.skyTime) };
-  private readonly skyWorker = new SkyWorker(this.skyBaker);
-  private skyFrame = 0;
-  private skyPending = false;
-  private readonly environment = new Environment(this.sky.data);
+  private readonly sky = new ProceduralSky({ time: get().settings.skyTime });
+  private readonly environment = new Environment({ data: new Float32Array([0, 0, 0, 1]), width: 1, height: 1 });
   private modelEnvironment: Environment | null = null;
   private readonly studioAmbient = new Environment(createStudioAmbient());
   private readonly studioRig = new THREE.Group();
@@ -227,9 +220,6 @@ export class ViewerEngine {
     this.clearModel();
     this.loop.dispose(); this.sync.dispose(); this.viewSync.dispose();
     this.environment.dispose();
-    cancelAnimationFrame(this.skyFrame);
-    this.skyWorker.dispose();
-    this.skyBaker.dispose();
     this.studioAmbient.dispose();
     this.engine.dispose();
   }
@@ -512,6 +502,7 @@ export class ViewerEngine {
     const owner = this;
     return new THREESync(this.engine, {
       scene: this.scene, get camera() {return owner.activeCamera();}, controls: this.controls,
+      get environment() { return owner.settings.lighting !== 'studio' && owner.settings.envId === 'sky' ? owner.sky : undefined; },
       get updateControls() {return owner.settings.cameraIndex < 0;},
       onMeshConverted: (mesh, source, group) => {
         if (source === this.ground) return;
@@ -543,33 +534,10 @@ export class ViewerEngine {
     }
   }
 
-  /** Coalesces edits while a worker bake is running, then requests the latest time. */
-  private applySky(id: string) {
+  private applySky(_id: string) {
     this.cancelEnvironmentDownload();
-    if (this.sky.hours === this.settings.skyTime) {
-      this.setEnvironmentData(this.sky.data, id);
-      return;
-    }
-    if (this.skyFrame || this.skyPending) return;
-    this.skyFrame = requestAnimationFrame(async () => {
-      this.skyFrame = 0;
-      if (this.disposed || this.settings.envId !== id) return;
-      const hours = this.settings.skyTime;
-      this.skyPending = true;
-      try {
-        const data = await this.skyWorker.bake(hours);
-        if (this.disposed) return;
-        this.sky = { hours, data };
-        // A superseded result must not overwrite a newer time or HDRI selection.
-        if (this.settings.envId === id && this.settings.skyTime === hours) this.setEnvironmentData(data, id);
-      } catch (error) {
-        if (!this.disposed) showToast(`Could not update the sky: ${(error as Error).message}`, 'error');
-        return;
-      } finally {
-        this.skyPending = false;
-      }
-      if (!this.disposed && this.settings.envId === id && this.settings.skyTime !== hours) this.applySky(id);
-    });
+    this.sky.time = this.settings.skyTime;
+    this.applyBackground();
   }
 
   private async loadEnvironmentFromURL(url: string) {
@@ -631,7 +599,7 @@ export class ViewerEngine {
     // The studio ambient is a plain gradient, so it is shown as a backdrop.
     const grounded = autoGroundedSkybox(get().modelRadius, groundedHeight);
     this.scene.userData.mutracerGroundedSkybox = background === 'grounded' && !studio ? {
-      texture: environment.texture,
+      texture: this.settings.envId === 'sky' ? this.sky : environment.texture,
       intensity,
       rotation: this.scene.environmentRotation.y,
       height: grounded.height,

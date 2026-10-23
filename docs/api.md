@@ -334,6 +334,7 @@ Public spatial values use `Vec2` (`[number, number] | Float32Array`), `Vec3` (`[
 | `Geometry`, `GeometryAttribute` | Triangle data: required `position`; optional `normal` and `indices` are generated at construction; `vertexCount` / `triangleCount` getters; optional `uv`, `uv1`, `tangent`, `color`, `materialIndex` (raw per-vertex indices, itemSize 1; all three corners of each triangle must match; invalid indices fall back to material 0 with one warning); `dynamic` (default `false`) for [deforming geometry](./updates.md#dynamic-geometry) |
 | `OpenPBRMaterial` | `new OpenPBRMaterial(params?)`; see [materials](./materials.md) |
 | `Texture` | HTMLImageElement, HTMLCanvasElement, ImageBitmap, OffscreenCanvas or `{ data, width, height }`; `colorSpace`: `'srgb'` or `'linear'`; default undefined uses sRGB for images/bytes and linear for `Float32Array`/`Int32Array`; independent `wrapS` / `wrapT`: `'repeat'` (default), `'clamp-to-edge'`, `'mirrored-repeat'`, applied after UV scale/offset for material textures |
+| `ProceduralSky`, `ProceduralSkyOptions` | Clear-sky environment texture; [usage and options](#proceduralsky) |
 | `Camera` | `new Camera({ projection: 'perspective', ... })` or orthographic; `position`, `lookAt()`, `copy(source)`, `clone()`; aspect defaults to automatic; depth of field with `fStop`, `focusDistance`, `sensorHeight`, `metersPerUnit` ([details](./getting-started.md#depth-of-field)) |
 | `RectLight`, `SphereLight`, `SpotLight`, `DirectionalLight`, `EnvironmentLight`, `AmbientLight` | Parameter-object constructors; analytic lights use `transform`, `position`, `lookAt()` and rigid axes. See [lights](./getting-started.md#lights) |
 | `EnvironmentLight` | `new EnvironmentLight({map, intensity?})`; `intensity` defaults to `1`, scales environment radiance, and accepts `0` to disable lighting. Ambient lights and explicit background textures retain their own brightness. `transform` rotates the environment from local to world space (identity by default); translation and positive axis scale are ignored. An explicit background texture keeps its own orientation |
@@ -385,6 +386,42 @@ and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 (initially `0`) and `markVerticesUpdated(): this`, which advances only
 `version`. See [scene updates](./updates.md) for when to call each.
 
+### ProceduralSky
+
+Use the sky as an environment map, an explicit background, or the map of a
+`GroundedSkyboxBackground`:
+
+```ts
+import { ProceduralSky, EnvironmentLight } from '@meimu/mutracer';
+
+const sky = new ProceduralSky({ resolution: [2048, 1024], time: 15 });
+scene.lights.push(new EnvironmentLight({ map: sky }));
+// With no explicit scene.background, the environment is also the background.
+sky.time = 9;
+engine.update();
+```
+
+| Option / property | Default | Behavior |
+| --- | --- | --- |
+| `resolution` | `[2048, 1024]` | Positive integer equirectangular width and height; assign a new pair to resize |
+| `time` | `15` | Local solar time in hours, from `0` to `24`, for an equinox at latitude 40° |
+
+Time and resolution assignments follow the normal [scene update rules](./updates.md).
+Use `EnvironmentLight.intensity` and `transform` for brightness and rotation.
+With Three.js, pass the sky as the `environment` option to `THREESync` or
+`fromTHREEScene`; the Three.js scene still supplies intensity and rotation.
+
+WebGPU generates and samples the sky on the rendering device without a CPU
+pixel round trip. Sky lighting needs 8 bytes of temporary GPU storage per
+texel, in addition to the radiance and sampling textures; its resolution must
+fit the device's texture and storage-binding limits. WebGL 2 requires float
+render targets and uses CPU readback, so frequent time edits can be slower.
+Resources are released with the engine; a sky description needs no separate disposal.
+
+This is a clear atmosphere without clouds, stars, moonlight or artificial
+light. Very low resolutions can blur or miss the small sun disk. Use the sky
+for environments and backgrounds, not material texture slots.
+
 ## Helpers
 
 | Export | Description |
@@ -396,7 +433,7 @@ and `markUpdated(): this`. `Geometry` also has the read-only `topologyVersion`
 | `THREESync` | Keeps a `THREE.Scene` in sync: `new THREESync(engine, {scene?, camera?, controls?, updateControls?})`; RenderLoop calls update; dispose when done; conversion hooks `convertMaterial` / `convertLight`; see [Three.js](./threejs.md#custom-conversion) |
 | `fromTHREECamera(camera, options?)` | Converts a Three.js camera; one-shot conversion; THREESync retains and updates cameras. Reads `focus` and the film height; `FromTHREECameraOptions` sets `fStop` (default `0`), `focusDistance` and `metersPerUnit` (default `1`) |
 | `fromTHREEScene` | One-shot Three.js scene conversion with FromTHREESceneOptions conversion hooks; every call reruns hooks and creates fresh default objects |
-| `FromTHREESceneOptions` | Optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |
+| `FromTHREESceneOptions` | Optional `environment` overrides the Three.js environment with a MuTracer `Texture` or `ProceduralSky` (default undefined); optional `onMeshConverted(mesh, source, group, groupIndex)` callback; default: none |
 | `VERSION` | Library version |
 
 `@meimu/mutracer/oidn` exports weight constants (`OIDN_MODEL_FILENAMES`,

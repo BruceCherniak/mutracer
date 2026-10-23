@@ -1,3 +1,4 @@
+import type { ProceduralSkyImage } from '../scene/skyParameters.js';
 // Portions adapted from ray-tracing-renderer@0.10.15
 // (https://github.com/hoverinc/ray-tracing-renderer).
 // Copyright (c) 2019 HOVER, MIT license; see LICENSES/RayTracingRenderer-MIT.txt.
@@ -15,6 +16,16 @@ export interface EnvironmentMapSource extends TextureDataSource {
   distributionCacheVersion?: number;
 }
 
+/** GPU-generated radiance, including the scene's linear intensity and ambient fill. */
+export interface ProceduralEnvironmentSource {
+  sky: ProceduralSkyImage;
+  width: number;
+  height: number;
+  intensity: number;
+  ambient: [number, number, number];
+}
+export type EnvironmentSource = EnvironmentMapSource | ProceduralEnvironmentSource;
+
 interface DistributionCacheEntry {
   width: number;
   height: number;
@@ -24,13 +35,13 @@ interface DistributionCacheEntry {
 
 const distributionCache = new WeakMap<object, DistributionCacheEntry>();
 
-function distributionCacheIdentity(image: EnvironmentMapSource) {
-  return image.distributionCacheKey ?? image.data;
+function distributionCacheIdentity(image: EnvironmentSource) {
+  return 'sky' in image ? image : image.distributionCacheKey ?? image.data;
 }
 
 export function environmentMapSourcesMatch(
-  first: EnvironmentMapSource | undefined,
-  second: EnvironmentMapSource | undefined
+  first: EnvironmentSource | undefined,
+  second: EnvironmentSource | undefined
 ) {
   if (first === second) return true;
   if (!first || !second) return false;
@@ -38,8 +49,8 @@ export function environmentMapSourcesMatch(
     distributionCacheIdentity(first) === distributionCacheIdentity(second) &&
     first.width === second.width &&
     first.height === second.height &&
-    (first.distributionCacheVersion ?? 0) ===
-      (second.distributionCacheVersion ?? 0)
+    ('sky' in first ? 0 : first.distributionCacheVersion ?? 0) ===
+      ('sky' in second ? 0 : second.distributionCacheVersion ?? 0)
   );
 }
 

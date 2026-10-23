@@ -1,3 +1,4 @@
+import { WebGLSkySource } from './WebGLSkySource.js';
 import { normalizeBounces } from './pathLimits.js';
 import { updateMeshInstanceColors } from './prepareMeshBVH.js';
 import { updateTLASInstanceColors } from './bvhAccel.js';
@@ -188,6 +189,7 @@ class WebGLRayTracePass {
   private _envMap = new WebGLTexture2D(commonLinearFloatProps);
   private _envMapDistribution = new WebGLTexture2D(commonLinearFloatProps);
   private _envImageSource?: EnvironmentMapSource;
+  private readonly _skySource = new WebGLSkySource();
   private _backgroundTex = new WebGLTexture2D(commonLinearFloatProps);
 
   private _hasEnvMap = false;
@@ -381,7 +383,7 @@ class WebGLRayTracePass {
   setBackground(background?: SceneBackground) {
     this._backgroundMapTransform.set(backgroundMapTransform(background));
     const backgroundImage =
-      background && generateBackgroundMapFromSceneBackground(background)!;
+      background ? this._skySource.resolve(generateBackgroundMapFromSceneBackground(background)) : undefined;
 
     if (backgroundImage) {
       this._backgroundTex.source = backgroundImage;
@@ -813,7 +815,7 @@ class WebGLRayTracePass {
     ) as AnalyticLight[];
     const numAnalyticLights = analyticLights.length;
 
-    const envImage = this._sceneEnvironment.update(lights);
+    const envImage = this._skySource.resolve(this._sceneEnvironment.update(lights));
     const rotation = environmentRotation(lights);
     const rotation3 = [rotation[0], rotation[1], rotation[2], rotation[4], rotation[5], rotation[6], rotation[8], rotation[9], rotation[10]];
     this._tracePasses.forEach(pass => pass.setUniform('environmentRotation', rotation3));
@@ -1067,6 +1069,7 @@ class WebGLRayTracePass {
   }
 
   dispose() {
+    this._skySource.dispose();
     this._depthAbort.abort();
     this._materialData?.dispose(this._renderer.gl);
     this._materialData = undefined;

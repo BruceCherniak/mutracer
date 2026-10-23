@@ -29,6 +29,15 @@ function syntaxErrors(code: string) {
 }
 
 describe('viewer code snippet', () => {
+  it('uses the library sky with the selected solar time and grounded background', () => {
+    const code = generateCode(snapshot({ envId: 'sky', skyTime: 9, background: 'grounded' }, { environmentUrl: null }));
+    expect(syntaxErrors(code)).toEqual([]);
+    expect(code).toContain('new ProceduralSky({ time: 9 })');
+    expect(code).toContain('scene, camera, controls, environment');
+    expect(code).toContain('texture: environment');
+    expect(code).not.toContain('HDRLoader');
+    expect(code).not.toContain('./environment.hdr');
+  });
   it('recreates metadata lights without adding an HDRI to an emissive scene', () => {
     const code = generateCode(snapshot({ envId: 'model', background: 'grounded' }, {
       environmentUrl: null, blackEnvironment: true,
