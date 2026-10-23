@@ -197,9 +197,14 @@ rollback and continued rendering of the previous scene. Use ThreadSanitizer and
 state which Rust/C++ dependencies it instruments; AOT, Metal and OIDN are outside
 that coverage.
 
-The Rust `api` module (Engine/Render/Display) gives each render its own L0 context
-and commits through the crate-internal `CommitPath`: incremental on the calling
-thread, full preparation on a library thread. Its tests compare every render's
+The Rust `api` module (Engine/Render/Display) commits each engine's scene once to
+an L0 context through the crate-internal `CommitPath` (incremental on the calling
+thread, full preparation on a library thread). Each render's L0 context is a
+crate-internal target linked to that scene (`context::set_target`): camera and
+trace uniforms derived by the `sceneTargetParameters` AOT entry, its own
+accumulation and, for another sampling pattern or bevel sample count, a shader
+variant. Every scene publication drains linked targets and sets them again. Its
+tests compare every render's
 HDR/normal/albedo with a fresh L0 context given the same overridden descriptor,
 settings and sample count, byte for byte on Software. The HWRT variant is
 `--ignored` while the Metal HWRT miss is open; with `MUTRACER_OIDN_LIBRARY` set,

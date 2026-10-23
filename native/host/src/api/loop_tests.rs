@@ -193,8 +193,16 @@ fn sync_activity_tracks_flags_and_deadlines() {
     assert!(!preview.bevel);
     assert_eq!(preview.dispersion_wavelengths, 1);
     assert_eq!(preview.direct_light_candidates, 2);
+    assert_eq!(
+        preview.adaptive_resolution,
+        Some(AdaptiveResolution {
+            target_frame_ms: 80.,
+            min_scale: 0.125
+        })
+    );
+    assert!(preview.validate().is_ok());
     let options = RenderLoopOptions::default();
-    assert!(options.preview.is_none());
+    assert!(matches!(options.preview, Some(LoopRender::Default)));
     assert_eq!(options.idle_ms, 150.);
     assert!(!options.coalesce_scene_updates);
 }
@@ -304,7 +312,9 @@ fn loop_converge_matches_a_fresh_l0_context() {
     let scene = lit_scene();
     engine.set_scene(&scene).unwrap();
     let mut render_loop = RenderLoop::new(&engine, RenderLoopOptions::default()).unwrap();
-    assert!(render_loop.preview().is_none());
+    let preview = render_loop.preview().unwrap().clone();
+    assert_eq!(preview.settings().unwrap(), RenderLoop::preview_settings());
+    assert_eq!(render_loop.final_render().fallback_id(), Some(preview.id()));
     assert_eq!(render_loop.status(), RenderLoopStatus::Preparing);
     let statuses = Arc::new(Mutex::new(Vec::new()));
     let recorded = statuses.clone();

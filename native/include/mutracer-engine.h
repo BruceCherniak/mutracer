@@ -192,12 +192,17 @@ typedef struct mt_render_options {
   double clamping; /* Per-sample radiance clamp, finite, 0 disables. Default 0. */
   double transmissive_output_alpha_min; /* Finite. Default 1. */
   double time_budget_ms; /* Positive. Default 21. */
+  /* Adapt the scale of a scale-based render to frame timing (the browser's
+   * adaptiveResolution): between adaptive_min_scale (positive, at most
+   * resolution_scale) and resolution_scale, aiming at adaptive_target_frame_ms.
+   * Both 0 turn it off. Default 0. */
+  double adaptive_target_frame_ms;
+  double adaptive_min_scale;
 } mt_render_options;
-MT_ENGINE_LAYOUT(mt_render_options, 88);
+MT_ENGINE_LAYOUT(mt_render_options, 104);
 int32_t mt_render_options_default(mt_render_options *output);
-/* Changing a render's size, sampling pattern, ZSobol max_samples or bevel samples
- * prepares the scene again for that render; every render holds its own copy of
- * the scene. */
+/* The renders of an engine share one prepared scene. Changing a render's size or
+ * settings restarts only its accumulation. */
 int32_t mt_render_create(mt_engine engine, const mt_render_options *options, mt_render *output,
   char *error, size_t capacity);
 /* Renders owned by a render loop return MT_ERROR_INVALID_STATE. */
@@ -282,7 +287,7 @@ typedef struct mt_render_snapshot {
   uint32_t width, height;
   uint32_t converged; /* samples reached max_samples. */
   uint32_t denoising; /* A filter is queued or running. */
-  uint32_t last_commit; /* mt_commit_kind. */
+  uint32_t last_commit; /* mt_commit_kind of the engine's shared scene. */
   uint32_t backend; /* mt_backend actually used after preparation. */
   uint32_t denoised_samples; /* Samples of the last denoising run, 0 for none. */
   float denoise_ms; /* Its filter time. */
@@ -318,7 +323,7 @@ typedef uint32_t (*mt_loop_select_callback)(uint32_t changing, void *user);
 typedef struct mt_render_loop_options {
   uint32_t struct_size;
   /* 1 creates a preview render (preview_options, or the browser preview
-   * defaults when NULL). Default 0: every render prepares its own scene. */
+   * defaults when NULL); 0 none. Default 1. */
   uint32_t preview;
   /* Hold preview inference before committing the latest camera/scene. Default 0. */
   uint32_t coalesce_scene_updates;

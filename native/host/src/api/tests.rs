@@ -1103,6 +1103,143 @@ fn hardware_shared_scene_renders_match_fresh_l0_contexts() {
 }
 
 #[test]
+fn next_preview_scale_matches_the_browser_rule() {
+    use super::render::next_preview_scale;
+    // On target: kept. Four times too slow: half the scale, on the 1/16 grid.
+    assert_eq!(next_preview_scale(0.5, 80., 80., 0.5, 0.5, 0.125), 0.5);
+    assert_eq!(next_preview_scale(0.5, 320., 80., 0.5, 0.5, 0.125), 0.25);
+    // Below 0.25 the grid is 1/128; the minimum bounds it.
+    assert_eq!(
+        next_preview_scale(0.25, 1000., 80., 0.5, 0.25, 0.125),
+        0.125
+    );
+    assert_eq!(
+        next_preview_scale(0.25, 200., 80., 0.5, 0.25, 0.01),
+        0.15625
+    );
+    // Within 15% of the current scale: kept.
+    assert_eq!(next_preview_scale(0.5, 75., 80., 0.5, 0.5, 0.125), 0.5);
+    // Faster: up to the maximum.
+    assert_eq!(next_preview_scale(0.25, 20., 80., 0.5, 0.25, 0.125), 0.5);
+    assert_eq!(next_preview_scale(0.25, 1., 80., 0.5, 0.25, 0.125), 0.5);
+}
+
+#[test]
+fn adaptive_resolution_follows_frame_time_without_preparation() {
+    let _test = crate::ABI_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = software_engine(Backend::Software) else {
+        return;
+    };
+    let display = engine.display();
+    display.set_size(64, 48).unwrap();
+    let invalid = |size, target, min| {
+        RenderSettings {
+            size,
+            adaptive_resolution: Some(AdaptiveResolution {
+                target_frame_ms: target,
+                min_scale: min,
+            }),
+            ..Default::default()
+        }
+        .validate()
+        .unwrap_err()
+        .status
+    };
+    let fixed = RenderSize::Fixed {
+        width: 4,
+        height: 4,
+    };
+    assert_eq!(invalid(fixed, 80., 0.1), Status::InvalidArgument);
+    assert_eq!(
+        invalid(RenderSize::Scale(0.5), 80., 0.6),
+        Status::InvalidArgument
+    );
+    assert_eq!(
+        invalid(RenderSize::Scale(0.5), 0., 0.1),
+        Status::InvalidArgument
+    );
+    let preparations = Arc::new(Mutex::new(0));
+    let counted = preparations.clone();
+    let _progress = engine.on(move |event| {
+        if matches!(event, EngineEvent::Progress { progress, .. } if *progress == 0.) {
+            *counted.lock().unwrap() += 1;
+        }
+    });
+    let scene = lit_scene();
+    engine.set_scene(&scene).unwrap();
+    engine.update().unwrap();
+    // An unreachable frame time shrinks the image to the minimum scale.
+    let slow = RenderSettings {
+        max_samples: 4096,
+        size: RenderSize::Scale(0.5),
+        adaptive_resolution: Some(AdaptiveResolution {
+            target_frame_ms: 1e-6,
+            min_scale: 0.125,
+        }),
+        ..Default::default()
+    };
+    let render = Render::new(&engine, slow.clone()).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while render.width() != 8 {
+        render.refine().unwrap();
+        assert!(Instant::now() < deadline, "scale never reached its minimum");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert_eq!((render.width(), render.height()), (8, 6));
+    // A generous frame time grows it back, at most 25% per four fast batches.
+    let mut widths = vec![8];
+    render
+        .set_settings(RenderSettings {
+            adaptive_resolution: Some(AdaptiveResolution {
+                target_frame_ms: 1e9,
+                min_scale: 0.125,
+            }),
+            ..slow.clone()
+        })
+        .unwrap();
+    // It stops within 15% of the maximum, like the browser.
+    while (render.width() as f64) < 32. / 1.15 {
+        render.refine().unwrap();
+        if widths.last() != Some(&render.width()) {
+            widths.push(render.width());
+        }
+        assert!(
+            Instant::now() < deadline,
+            "scale never returned: {widths:?}"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    assert!(
+        widths
+            .windows(2)
+            .all(|w| w[1] as f64 <= w[0] as f64 * 1.25 + 1.),
+        "{widths:?}"
+    );
+    assert_eq!(*preparations.lock().unwrap(), 1);
+    // Each adapted size renders exactly like a fresh context of that size.
+    render
+        .set_settings(RenderSettings {
+            max_samples: 3,
+            adaptive_resolution: None,
+            ..slow
+        })
+        .unwrap();
+    assert_eq!(finish(&render), RenderStatus::Finished);
+    assert_bytes(
+        &images(&render),
+        &oracle(
+            0,
+            &expected_descriptor(&scene, [32, 24], 3, None),
+            &RenderSettings::default().l0(4096, 0),
+            3,
+        ),
+        "after adaptation",
+    );
+}
+
+#[test]
 fn full_preparation_keeps_the_previous_image_and_publishes_atomically() {
     let _test = crate::ABI_TEST_LOCK
         .lock()

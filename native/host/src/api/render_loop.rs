@@ -114,8 +114,8 @@ pub enum LoopRender {
 pub struct RenderLoopOptions {
     /// Default the engine display.
     pub display: Option<Display>,
-    /// Preview render, or `None` to disable. Default `None` while every render
-    /// prepares its own scene; `Some(LoopRender::Default)` uses the browser preview defaults.
+    /// Preview render, or `None` to disable. Default `Some(LoopRender::Default)`,
+    /// the browser preview defaults ([`RenderLoop::preview_settings`]).
     pub preview: Option<LoopRender>,
     /// Default a new render whose fallback is the preview.
     pub final_render: LoopRender,
@@ -132,7 +132,7 @@ impl Default for RenderLoopOptions {
     fn default() -> Self {
         Self {
             display: None,
-            preview: None,
+            preview: Some(LoopRender::Default),
             final_render: LoopRender::Default,
             syncs: Vec::new(),
             idle_ms: 150.,
@@ -325,12 +325,16 @@ pub struct RenderLoop {
     _final_samples: super::Subscription,
 }
 impl RenderLoop {
-    /// The browser preview defaults without `adaptiveResolution`, which needs a
-    /// shared scene: half resolution, 80 ms budget, 2 bounces, no bevel,
-    /// 1 wavelength, 2 light candidates.
+    /// The browser preview defaults: half resolution adapting down to 1/8 for
+    /// 80 ms frames, 80 ms budget, 2 bounces, no bevel, 1 wavelength, 2 light
+    /// candidates.
     pub fn preview_settings() -> RenderSettings {
         RenderSettings {
             size: RenderSize::Scale(0.5),
+            adaptive_resolution: Some(super::AdaptiveResolution {
+                target_frame_ms: 80.,
+                min_scale: 0.125,
+            }),
             time_budget_ms: 80.,
             bounces: 2,
             bevel: false,

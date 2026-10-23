@@ -268,6 +268,8 @@ pub struct MtRenderOptions {
     clamping: f64,
     transmissive_output_alpha_min: f64,
     time_budget_ms: f64,
+    adaptive_target_frame_ms: f64,
+    adaptive_min_scale: f64,
 }
 #[repr(C)]
 pub struct MtRenderDenoiser {
@@ -373,6 +375,10 @@ fn render_options(settings: &RenderSettings) -> MtRenderOptions {
         clamping: settings.clamping,
         transmissive_output_alpha_min: settings.transmissive_output_alpha_min,
         time_budget_ms: settings.time_budget_ms,
+        adaptive_target_frame_ms: settings
+            .adaptive_resolution
+            .map_or(0., |a| a.target_frame_ms),
+        adaptive_min_scale: settings.adaptive_resolution.map_or(0., |a| a.min_scale),
     }
 }
 fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
@@ -406,6 +412,12 @@ fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
         allow_multiple_samples_per_frame: options.allow_multiple_samples_per_frame != 0,
         size,
         seed: options.seed,
+        adaptive_resolution: (options.adaptive_target_frame_ms != 0.
+            || options.adaptive_min_scale != 0.)
+            .then_some(AdaptiveResolution {
+                target_frame_ms: options.adaptive_target_frame_ms,
+                min_scale: options.adaptive_min_scale,
+            }),
     };
     settings.validate()?;
     Ok(settings)
@@ -1224,7 +1236,7 @@ pub unsafe extern "C" fn mt_render_loop_options_default(output: *mut MtRenderLoo
     unsafe {
         output.write(MtRenderLoopOptions {
             struct_size: std::mem::size_of::<MtRenderLoopOptions>() as u32,
-            preview: 0,
+            preview: 1,
             coalesce_scene_updates: 0,
             reserved: 0,
             idle_ms: 150.,
@@ -1611,7 +1623,9 @@ mod tests {
         assert_eq!(offset_of!(MtDisplaySettings, tone_mapping_exposure), 12);
         assert_eq!(offset_of!(MtDisplaySettings, tint), 28);
         assert_eq!(size_of::<MtPresented>(), 20);
-        assert_eq!(size_of::<MtRenderOptions>(), 88);
+        assert_eq!(size_of::<MtRenderOptions>(), 104);
+        assert_eq!(offset_of!(MtRenderOptions, adaptive_target_frame_ms), 88);
+        assert_eq!(offset_of!(MtRenderOptions, adaptive_min_scale), 96);
         assert_eq!(offset_of!(MtRenderOptions, seed), 44);
         assert_eq!(offset_of!(MtRenderOptions, reserved), 48);
         assert_eq!(offset_of!(MtRenderOptions, resolution_scale), 56);
@@ -1647,7 +1661,7 @@ mod tests {
             "mt_engine_snapshot, 268",
             "mt_display_settings, 32",
             "mt_presented, 20",
-            "mt_render_options, 88",
+            "mt_render_options, 104",
             "mt_render_snapshot, 364",
             "mt_render_loop_snapshot, 48",
         ] {

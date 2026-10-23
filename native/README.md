@@ -86,12 +86,14 @@ reports work. An offline host creates a render, calls `mt_engine_update`, then
 floats) or `mt_display_read_pixels` (RGBA8 or PNG with the display settings).
 
 `mt_engine_set_scene` and `mt_engine_set_camera` only record the inputs;
-`mt_engine_update` commits them to every render. Edits that a context applies
-incrementally ([Editing a scene](#editing-a-scene)) finish during the call. Full
-preparation runs on a library thread while the previous image stays readable
-and presentable, and the render reports `MT_RENDER_PREPARING` until it is
-published. The engine replaces each render's width, height, bevel and
-dispersion quality bits and, when set, the camera record of the descriptor.
+`mt_engine_update` commits them. The engine prepares its scene once for all
+renders. Edits that a context applies incrementally
+([Editing a scene](#editing-a-scene)) finish during the call. Full preparation
+runs on a library thread while the previous images stay readable and
+presentable, and renders report `MT_RENDER_PREPARING` until it is published.
+Each render uses its own width, height, bevel and dispersion settings and, when
+set, the engine camera instead of the descriptor's. Changing a render's size or
+settings restarts only that render.
 
 Render options default to the browser library's values (2048 samples, 3
 bounces, 4 light candidates, bevel, 3 dispersion wavelengths); context
@@ -102,10 +104,8 @@ them. The header documents every option, default, error and lifetime.
 
 Differences from the browser library:
 
-- Every render prepares and holds its own copy of the scene, and changing a
-  render's size, sampling pattern or bevel samples prepares it again. Adaptive
-  resolution is therefore unavailable, and a render loop has no preview render
-  unless you request one.
+- Adaptive resolution evaluates each batch when it completes rather than one
+  display frame later.
 - Converge blocks its thread. The host drives the loop with
   `mt_render_loop_tick` instead of start and stop.
 - Denoising uses OIDN only. Tiles, alpha blend strategies, adaptive sampling,

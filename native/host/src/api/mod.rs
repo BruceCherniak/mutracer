@@ -26,9 +26,9 @@ pub use engine::{
     Backend, Camera, Engine, EngineEvent, EngineInfo, EngineOptions, ProgressStage, Subscription,
 };
 pub use render::{
-    CancelToken, CommitKind, ConvergeOptions, ConvergeProgress, ConvergeResult, ConvergeStage,
-    DenoiseReport, DenoiseSchedule, DenoiserOptions, Image, PixelKind, Render, RenderSettings,
-    RenderSize, RenderStatus, SampleEvent, SamplingPattern,
+    AdaptiveResolution, CancelToken, CommitKind, ConvergeOptions, ConvergeProgress, ConvergeResult,
+    ConvergeStage, DenoiseReport, DenoiseSchedule, DenoiserOptions, Image, PixelKind, Render,
+    RenderSettings, RenderSize, RenderStatus, SampleEvent, SamplingPattern,
 };
 pub use render_loop::{
     LoopRender, LoopSubscription, LoopSync, RenderLoop, RenderLoopOptions, RenderLoopStatus,

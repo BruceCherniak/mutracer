@@ -75,6 +75,18 @@ pub struct RenderSettings {
     pub size: RenderSize,
     /// Random sequence seed. Default 12345.
     pub seed: u32,
+    /// Adapts the scale of a [`RenderSize::Scale`] render to frame timing, between
+    /// `min_scale` and that scale. Default `None`.
+    pub adaptive_resolution: Option<AdaptiveResolution>,
+}
+/// Browser `adaptiveResolution`: after each observed batch the scale moves
+/// toward `target_frame_ms`; it grows only after four fast batches, by at most 25%.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AdaptiveResolution {
+    /// Positive frame time to aim for, in milliseconds.
+    pub target_frame_ms: f64,
+    /// Positive lower bound, at most the render's scale.
+    pub min_scale: f64,
 }
 impl Default for RenderSettings {
     fn default() -> Self {
@@ -92,6 +104,7 @@ impl Default for RenderSettings {
             allow_multiple_samples_per_frame: false,
             size: RenderSize::Scale(1.),
             seed: 12345,
+            adaptive_resolution: None,
         }
     }
 }
@@ -121,6 +134,21 @@ impl RenderSettings {
                 invalid("Fixed width and height must be positive")
             }
             _ => Ok(()),
+        }?;
+        match (self.adaptive_resolution, self.size) {
+            (None, _) => Ok(()),
+            (Some(a), RenderSize::Scale(scale))
+                if a.target_frame_ms.is_finite()
+                    && a.target_frame_ms > 0.
+                    && a.min_scale.is_finite()
+                    && a.min_scale > 0.
+                    && a.min_scale <= scale =>
+            {
+                Ok(())
+            }
+            _ => invalid(
+                "adaptive_resolution requires a scale-based render with positive target_frame_ms and min_scale <= its scale",
+            ),
         }
     }
     /// The L0 sample cap. Only ZSobol depends on it (its Morton sample bits);
@@ -388,6 +416,53 @@ struct Flight {
     started: Instant,
     /// Abandoned by a commit or restart; its samples are never counted.
     cancelled: bool,
+    /// Resolution scale the batch was traced at.
+    scale: f64,
+}
+/// Browser adaptive-resolution state of one render.
+struct Adaptive {
+    /// Current scale; the image uses min(scale, the configured scale).
+    scale: f64,
+    /// The configured scale it was reset to.
+    configured: f64,
+    fast_frames: u32,
+    /// Time and scale of the last observed batch, not yet evaluated.
+    frame: Option<(f64, f64)>,
+}
+impl Adaptive {
+    fn new(settings: &RenderSettings) -> Self {
+        let configured = match settings.size {
+            RenderSize::Scale(scale) => scale,
+            RenderSize::Fixed { .. } => 1.,
+        };
+        Self {
+            scale: configured,
+            configured,
+            fast_frames: 0,
+            frame: None,
+        }
+    }
+}
+/// Browser `nextPreviewScale`: the scale whose frame time would meet the target,
+/// rounded to 1/16 (1/128 below 0.25), kept unless it differs by at least 15%.
+pub(super) fn next_preview_scale(
+    measured_scale: f64,
+    frame_ms: f64,
+    target_ms: f64,
+    max_scale: f64,
+    current_scale: f64,
+    min_scale: f64,
+) -> f64 {
+    let raw = measured_scale * (target_ms / frame_ms.max(0.1)).sqrt();
+    let steps = if raw < 0.25 { 128. } else { 16. };
+    let next = ((raw * steps).round() / steps)
+        .max(min_scale)
+        .min(min_scale.max(max_scale));
+    if (next / current_scale).ln().abs() >= 1.15f64.ln() {
+        next
+    } else {
+        current_scale
+    }
 }
 /// Pixels or an error, the OIDN device and the filter time in milliseconds.
 type DenoiseResult = (std::result::Result<Vec<f32>, String>, String, f64);
@@ -426,8 +501,52 @@ pub(super) struct RenderState {
     error: bool,
     busy: bool,
     denoise: Denoise,
+    adaptive: Adaptive,
 }
 impl RenderState {
+    /// Image size for a display size: the configured size, scaled down by
+    /// adaptive resolution.
+    fn image_size(&self, display: [u32; 2]) -> [u32; 2] {
+        match (self.settings.adaptive_resolution, self.settings.size) {
+            (Some(_), RenderSize::Scale(scale)) => {
+                let scale = self.adaptive.scale.min(scale);
+                display.map(|v| ((v as f64 * scale).round() as u32).max(1))
+            }
+            _ => self.settings.resolve_size(display),
+        }
+    }
+    /// Browser `_adaptResolution`, evaluated on the batch observed last.
+    fn adapt_resolution(&mut self) {
+        let (Some(adaptive), RenderSize::Scale(max_scale)) =
+            (self.settings.adaptive_resolution, self.settings.size)
+        else {
+            return;
+        };
+        if self.busy || self.samples == 0 {
+            return;
+        }
+        let Some((elapsed, scale)) = self.adaptive.frame.take() else {
+            return;
+        };
+        let next = next_preview_scale(
+            scale,
+            elapsed,
+            adaptive.target_frame_ms,
+            max_scale,
+            self.adaptive.scale,
+            adaptive.min_scale,
+        );
+        if next > self.adaptive.scale {
+            self.adaptive.fast_frames += 1;
+            if self.adaptive.fast_frames < 4 {
+                return;
+            }
+            self.adaptive.scale = next.min(self.adaptive.scale * 1.25);
+        } else {
+            self.adaptive.scale = next;
+        }
+        self.adaptive.fast_frames = 0;
+    }
     /// Destroys the target context once its GPU work has drained.
     pub(super) fn release(mut self) {
         let context = self.context;
@@ -446,6 +565,7 @@ impl RenderState {
         self.samples = 0;
         self.first_frame = true;
         self.needs_capture = false;
+        self.adaptive.frame = None;
         self.status = RenderStatus::Converging;
         if full {
             self.sample_ms = None;
@@ -518,7 +638,7 @@ fn desired(state: &State, render: &RenderState) -> Option<TargetKey> {
     Some(TargetKey {
         scene: state.scene_revision,
         camera: state.camera_revision,
-        size: render.settings.resolve_size(state.display.size),
+        size: render.image_size(state.display.size),
         quality: render.settings.quality(),
         settings: render
             .settings
@@ -843,7 +963,7 @@ enum Poll {
     Idle,
     Running,
     /// Completed samples of an uncancelled batch.
-    Completed(u32, f64),
+    Completed(u32, f64, f64),
 }
 /// Observes the in-flight batch without waiting for the GPU.
 fn poll_job(render: &mut RenderState) -> Result<Poll> {
@@ -890,6 +1010,7 @@ fn poll_job(render: &mut RenderState) -> Result<Poll> {
             Ok(Poll::Completed(
                 info.completed_samples,
                 flight.started.elapsed().as_secs_f64() * 1e3,
+                flight.scale,
             ))
         }
         4 => {
@@ -919,7 +1040,8 @@ fn drain(render: &mut RenderState) -> Result<Vec<SampleEvent>> {
 /// Polls the batch and accounts completed samples.
 fn observe(render: &mut RenderState) -> Result<Option<SampleEvent>> {
     match poll_job(render)? {
-        Poll::Completed(count, elapsed) => {
+        Poll::Completed(count, elapsed, scale) => {
+            render.adaptive.frame = Some((elapsed, scale));
             render.samples += count;
             render.sample_ms = Some(elapsed / count.max(1) as f64);
             render.needs_capture = true;
@@ -969,11 +1091,13 @@ fn submit(render: &mut RenderState, count: u32) -> Result<()> {
         Err(e) if e.status == Status::Busy => return Ok(()),
         Err(e) => return Err(e),
     }
+    let scale = render.adaptive.scale.min(render.adaptive.configured);
     render.job = Some(Flight {
         job,
         count,
         started: Instant::now(),
         cancelled: false,
+        scale,
     });
     // Dispatch now; a busy registry dispatches at the next poll instead.
     match l0(|e, n| unsafe { context::mt_job_poll(job, count.min(MAX_BATCH), e, n) }) {
@@ -1196,6 +1320,7 @@ pub struct Render {
 impl Render {
     pub fn new(engine: &Engine, settings: RenderSettings) -> Result<Self> {
         settings.validate()?;
+        let adaptive = Adaptive::new(&settings);
         let mut state = engine.live()?;
         let context =
             context::create_with_gpu(engine.inner.gpu.clone(), engine.inner.backend.code())
@@ -1223,6 +1348,7 @@ impl Render {
                 error: false,
                 busy: false,
                 denoise: Denoise::default(),
+                adaptive,
             },
         );
         Ok(Self {
@@ -1265,7 +1391,16 @@ impl Render {
     pub fn set_settings(&self, settings: RenderSettings) -> Result<()> {
         settings.validate()?;
         self.with(|state, id| {
-            state.renders.get_mut(&id).unwrap().settings = settings;
+            let render = state.renders.get_mut(&id).unwrap();
+            // As in the browser, only a new configured scale resets the adaptive one;
+            // a new controller drops the batch not yet evaluated.
+            if Adaptive::new(&settings).configured != render.adaptive.configured {
+                render.adaptive = Adaptive::new(&settings);
+            } else if settings.adaptive_resolution != render.settings.adaptive_resolution {
+                render.adaptive.frame = None;
+                render.adaptive.fast_frames = 0;
+            }
+            render.settings = settings;
             Ok(())
         })
     }
@@ -1796,6 +1931,9 @@ fn refine(state: &mut State, id: u64) -> Result<RenderStatus> {
         }
     }
     let render = state.renders.get_mut(&id).unwrap();
+    if render.denoise.worker.is_none() {
+        render.adapt_resolution();
+    }
     let converged = render.samples >= render.settings.max_samples;
     render.status = match (render.denoise.worker.is_some(), converged) {
         (true, true) => RenderStatus::Denoising,
@@ -1811,6 +1949,7 @@ fn refine_one(state: &mut State, id: u64) -> Result<()> {
     };
     if commit(state, id, key, false)? {
         advance(state, id, 1)?;
+        state.renders.get_mut(&id).unwrap().adapt_resolution();
     }
     Ok(())
 }
