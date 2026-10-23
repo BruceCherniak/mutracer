@@ -205,9 +205,9 @@ output keeps its sRGB transfer. OIDN filters the original HDR; catcher layers us
 that filtered color, while shadow opacity remains unfiltered, so shadow noise
 can remain after denoising.
 
-C callers using the current header get all effect defaults. Other FFI bindings
-should initialize the current 68-byte record with `mt_display_settings_default_sized`.
-Existing 32- and 64-byte records remain accepted; omitted fields use defaults.
+C and FFI callers initialize the current 68-byte settings record with
+`mt_display_settings_default` before editing fields. Set/get require its
+`struct_size` to match; old record sizes are rejected.
 
 ### Rust GPU images and display passes
 

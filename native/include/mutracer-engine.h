@@ -156,13 +156,9 @@ typedef struct mt_display_settings {
     Unsupported surfaces fall back to SDR; C pixel/PNG export remains SDR. */
 } mt_display_settings;
 MT_ENGINE_LAYOUT(mt_display_settings, 68);
-/* The original symbol initializes the legacy 32-byte record. New C/C++ calls
- * use the sized entry point through this macro; other FFI bindings should call
- * _sized explicitly. Set/get accept 32-byte records with default effect values,
- * 64-byte records including effects, or 68-byte records including the HDR request. */
+/* Initializes the full current record, including struct_size. Set/get require
+ * struct_size == sizeof(mt_display_settings). */
 int32_t mt_display_settings_default(mt_display_settings *output);
-int32_t mt_display_settings_default_sized(mt_display_settings *output, uint32_t size);
-#define mt_display_settings_default(output) mt_display_settings_default_sized((output), (uint32_t)sizeof(*(output)))
 /* Display size in pixels; scale-sized renders follow it at their next refine.
  * Default 300x150 (the browser canvas default). */
 int32_t mt_display_set_size(mt_display display, uint32_t width, uint32_t height, char *error, size_t capacity);

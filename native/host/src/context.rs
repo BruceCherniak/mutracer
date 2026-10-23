@@ -148,8 +148,6 @@ thread_local! { static TOUCHED: std::cell::Cell<Option<(u64, bool)>> = const { s
 pub const COMMIT_NONE: u32 = 0;
 pub const COMMIT_FULL: u32 = 1;
 pub const COMMIT_INCREMENTAL: u32 = 2;
-/// `mt_context_snapshot` size before `last_commit` was appended.
-const CONTEXT_INFO_ABI2_SIZE: usize = 20;
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ContextInfo {
@@ -1598,13 +1596,9 @@ pub unsafe extern "C" fn mt_context_info(
 ) -> i32 {
     action(error, capacity, |registry| {
         let context = context(registry, handle)?;
-        // ABI 2 snapshots end before last_commit; they receive the fields they have.
-        let size = if info.is_null() {
-            0
-        } else {
-            (unsafe { (*info).struct_size }) as usize
-        };
-        if size != std::mem::size_of::<ContextInfo>() && size != CONTEXT_INFO_ABI2_SIZE {
+        if info.is_null()
+            || unsafe { info.cast::<u32>().read() } as usize != std::mem::size_of::<ContextInfo>()
+        {
             return Err(fail(Status::InvalidArgument, "Context info size mismatch"));
         }
         let (width, height, samples) = match &context.link {
@@ -1616,7 +1610,7 @@ pub unsafe extern "C" fn mt_context_info(
                 .unwrap_or((0, 0, 0)),
         };
         let filled = ContextInfo {
-            struct_size: size as u32,
+            struct_size: std::mem::size_of::<ContextInfo>() as u32,
             width,
             height,
             samples,
@@ -1632,11 +1626,7 @@ pub unsafe extern "C" fn mt_context_info(
             last_commit: context.last_commit,
         };
         unsafe {
-            std::ptr::copy_nonoverlapping(
-                (&raw const filled).cast::<u8>(),
-                info.cast::<u8>(),
-                size,
-            );
+            info.write(filled);
         }
         Ok(())
     })
@@ -2546,8 +2536,8 @@ mod tests {
         };
         let size = std::mem::size_of::<ContextInfo>();
         assert_eq!(info(size), (0, COMMIT_NONE));
-        // An ABI 2 snapshot is filled up to its own size.
-        assert_eq!(info(size - 4), (0, 99));
+        // Old and oversized snapshots are rejected without writing the record.
+        assert_eq!(info(size - 4), (Status::InvalidArgument as i32, 99));
         assert_eq!(info(size + 4).0, Status::InvalidArgument as i32);
         let input = scene::tests::input();
         let commit = |bytes: &[u8]| {

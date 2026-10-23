@@ -128,7 +128,7 @@ int main(int argc, char **argv) {
   const char *out = argv[2];
   uint32_t samples = (uint32_t)atoi(argv[3]), backend = (uint32_t)atoi(argv[4]);
   strict = backend == MT_BACKEND_SOFTWARE;
-  REQUIRE(mt_abi_version() == MT_ABI_VERSION && MT_ABI_VERSION == 4u, "ABI version");
+  REQUIRE(mt_abi_version() == MT_ABI_VERSION, "ABI version");
   const mt_scene_header_v4 *header = (const mt_scene_header_v4 *)scene;
   uint32_t width = header->width, height = header->height;
 
@@ -244,6 +244,18 @@ int main(int argc, char **argv) {
   OK(mt_engine_display(engine, &again, error, sizeof error));
   REQUIRE(display == again, "one display per engine");
   OK(mt_display_set_size(display, width, height, error, sizeof error));
+  for (uint32_t size = 32; size <= 64; size += 32) {
+    mt_display_settings invalid = display_settings;
+    invalid.struct_size = size;
+    STATUS(mt_display_set_settings(display, &invalid, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);
+    mt_display_settings untouched = invalid;
+    STATUS(mt_display_get_settings(display, &invalid, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);
+    REQUIRE(memcmp(&invalid, &untouched, sizeof invalid) == 0, "rejected display record unchanged");
+  }
+  display_settings.vignette = 0.2f;
+  display_settings.bloom_intensity = 0.1f;
+  display_settings.shadow_catcher_color[0] = 0.25f;
+  display_settings.hdr_output_enabled = 1;
   display_settings.tone_mapping = MT_TONE_MAPPING_REINHARD;
   display_settings.tone_mapping_exposure = 1.5f;
   OK(mt_display_set_settings(display, &display_settings, error, sizeof error));

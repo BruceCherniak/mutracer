@@ -503,51 +503,6 @@ fn display_settings(record: &MtDisplaySettings) -> Result<DisplaySettings> {
         },
     })
 }
-// The original default symbol has no capacity argument and old callers pass
-// uninitialized 32-byte records. It must never write the appended fields.
-fn display_record_size(size: u32) -> Result<usize> {
-    match size {
-        32 => Ok(32),
-        64 => Ok(64),
-        68.. => Ok(68),
-        _ => Err(invalid("Unsupported display struct_size")),
-    }
-}
-unsafe fn read_display_record(pointer: *const MtDisplaySettings) -> Result<MtDisplaySettings> {
-    if pointer.is_null() {
-        return Err(invalid("Null record"));
-    }
-    let size = display_record_size(unsafe { pointer.cast::<u32>().read() })?;
-    let mut value = display_record(&DisplaySettings::default());
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            pointer.cast::<u8>(),
-            (&mut value as *mut MtDisplaySettings).cast::<u8>(),
-            size,
-        );
-    }
-    Ok(value)
-}
-unsafe fn init_display_record(
-    pointer: *mut MtDisplaySettings,
-    mut value: MtDisplaySettings,
-    size: u32,
-) -> Result<()> {
-    if pointer.is_null() {
-        return Err(invalid("Null record"));
-    }
-    let size = display_record_size(size)?;
-    value.struct_size = size as u32;
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            (&value as *const MtDisplaySettings).cast::<u8>(),
-            pointer.cast::<u8>(),
-            size,
-        );
-    }
-    Ok(())
-}
-
 fn presented_record(presented: Option<Presented>) -> MtPresented {
     let p = presented.unwrap_or(Presented {
         fallback: false,
@@ -888,18 +843,11 @@ pub unsafe extern "C" fn mt_engine_display(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_display_settings_default(output: *mut MtDisplaySettings) -> i32 {
-    unsafe { mt_display_settings_default_sized(output, 32) }
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mt_display_settings_default_sized(
-    output: *mut MtDisplaySettings,
-    size: u32,
-) -> i32 {
-    match unsafe { init_display_record(output, display_record(&DisplaySettings::default()), size) }
-    {
-        Ok(()) => 0,
-        Err(e) => e.status as i32,
+    if output.is_null() {
+        return Status::InvalidArgument as i32;
     }
+    unsafe { output.write(display_record(&DisplaySettings::default())) };
+    0
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_display_set_size(
@@ -921,7 +869,7 @@ pub unsafe extern "C" fn mt_display_set_settings(
     capacity: usize,
 ) -> i32 {
     call(error_out, capacity, || {
-        let settings = display_settings(&unsafe { read_display_record(settings)? })?;
+        let settings = display_settings(unsafe { record(settings)? })?;
         display_of(handle)?.set_settings(settings)
     })
 }
@@ -934,16 +882,7 @@ pub unsafe extern "C" fn mt_display_get_settings(
 ) -> i32 {
     call(error_out, capacity, || {
         let settings = display_of(handle)?.settings();
-        if output.is_null() {
-            return Err(invalid("Null record"));
-        }
-        unsafe {
-            init_display_record(
-                output,
-                display_record(&settings),
-                output.cast::<u32>().read(),
-            )
-        }
+        unsafe { write_record(output, display_record(&settings)) }
     })
 }
 #[unsafe(no_mangle)]
@@ -1860,69 +1799,47 @@ mod tests {
         assert_eq!(value("MT_LOOP_SELECT_FINAL"), 1);
     }
     #[test]
-    fn display_effects_c_records_preserve_legacy_prefix_and_defaults() {
-        let mut old = [0xdeadbeefu32; 16];
+    fn display_settings_use_the_current_record_and_preserve_effects() {
+        let mut output = [0xdeadbeefu32; 20];
         assert_eq!(
-            unsafe { mt_display_settings_default(old.as_mut_ptr().cast()) },
+            unsafe { mt_display_settings_default(output.as_mut_ptr().cast()) },
             0
         );
-        assert_eq!(old[0], 32);
-        assert_eq!(old[8..], [0xdeadbeef; 8]);
-        let legacy = unsafe { read_display_record(old.as_ptr().cast()) }.unwrap();
-        let defaults = display_settings(&legacy).unwrap();
-        assert_eq!(defaults.bloom_threshold, 1.);
-        assert_eq!(defaults.bloom_radius, 0.6);
-        let mut newer = [0xdeadbeefu32; 20];
+        let current = unsafe { record::<MtDisplaySettings>(output.as_ptr().cast()) }.unwrap();
         assert_eq!(
-            unsafe { mt_display_settings_default_sized(newer.as_mut_ptr().cast(), 64) },
-            0
+            display_settings(current).unwrap(),
+            DisplaySettings::default()
         );
-        assert_eq!(newer[0], 64);
-        assert_eq!(newer[16..], [0xdeadbeef; 4]);
+        assert_eq!(output[17..], [0xdeadbeef; 3]);
+        assert_eq!(
+            unsafe { mt_display_settings_default(std::ptr::null_mut()) },
+            Status::InvalidArgument as i32
+        );
         let settings = DisplaySettings {
             vignette: 0.5,
             bloom_intensity: 2.,
             bloom_radius: 0.8,
             shadow_catcher_color: [0.1, 0.2, 0.3],
+            hdr_output_enabled: true,
             ..Default::default()
         };
-        unsafe { init_display_record(old.as_mut_ptr().cast(), display_record(&settings), 32) }
-            .unwrap();
-        assert_eq!(old[8..], [0xdeadbeef; 8]);
-        unsafe { init_display_record(newer.as_mut_ptr().cast(), display_record(&settings), 64) }
-            .unwrap();
-        assert_eq!(
-            display_settings(&unsafe { read_display_record(newer.as_ptr().cast()) }.unwrap())
-                .unwrap(),
-            settings
-        );
-        let hdr = DisplaySettings {
-            hdr_output_enabled: true,
-            ..settings
-        };
-        unsafe { init_display_record(newer.as_mut_ptr().cast(), display_record(&hdr), 68) }
-            .unwrap();
-        assert_eq!(newer[0], 68);
-        assert_eq!(newer[16], 1);
-        assert_eq!(newer[17..], [0xdeadbeef; 3]);
-        assert_eq!(
-            display_settings(&unsafe { read_display_record(newer.as_ptr().cast()) }.unwrap())
-                .unwrap(),
-            hdr
-        );
-        newer[16] = 2;
-        assert!(
-            display_settings(&unsafe { read_display_record(newer.as_ptr().cast()) }.unwrap())
-                .is_err()
-        );
-        newer[0] = 66;
-        assert!(unsafe { read_display_record(newer.as_ptr().cast()) }.is_err());
-        assert!(
-            unsafe {
-                init_display_record(newer.as_mut_ptr().cast(), display_record(&settings), 48)
-            }
-            .is_err()
-        );
+        unsafe { write_record(output.as_mut_ptr().cast(), display_record(&settings)) }.unwrap();
+        let current = unsafe { record::<MtDisplaySettings>(output.as_ptr().cast()) }.unwrap();
+        assert_eq!(display_settings(current).unwrap(), settings);
+        assert_eq!(output[17..], [0xdeadbeef; 3]);
+        let mut invalid = display_record(&settings);
+        invalid.hdr_output_enabled = 2;
+        assert!(display_settings(&invalid).is_err());
+        for size in [0, 32, 48, 64, 66, 72] {
+            output[0] = size;
+            let before = output;
+            assert!(unsafe { record::<MtDisplaySettings>(output.as_ptr().cast()) }.is_err());
+            assert!(
+                unsafe { write_record(output.as_mut_ptr().cast(), display_record(&settings)) }
+                    .is_err()
+            );
+            assert_eq!(output, before);
+        }
     }
     /// Sizes and field offsets of mutracer-engine.h (64-bit pointers).
     #[test]
