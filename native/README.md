@@ -132,11 +132,9 @@ Coverage controls visibility, independently of physical transmission.
 Changing the strategy takes effect on the next update or refine and restarts only
 that Render. First use of a strategy can compile a shader and block the call.
 
-C render options are now 112 bytes. Existing 104-byte records remain accepted and
-select stochastic coverage. C/C++ code using this header initializes the current
-size automatically; other FFI bindings must call `mt_render_options_default_sized`
-with their record size. The original `mt_render_options_default` symbol initializes
-only the legacy 104 bytes.
+Initialize C render options with `mt_render_options_default` before editing
+fields. C and FFI callers must use the current 112-byte record; other option
+calls require its `struct_size` to match.
 
 ### Depth samples
 

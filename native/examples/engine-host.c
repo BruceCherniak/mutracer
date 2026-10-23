@@ -184,14 +184,6 @@ int main(int argc, char **argv) {
     && read_back.dispersion_wavelengths == options.dispersion_wavelengths && read_back.width == width
     && read_back.height == height && read_back.seed == options.seed && read_back.clamping == options.clamping
     && read_back.time_budget_ms == options.time_budget_ms, "options round trip");
-  /* Both current and legacy option capacities keep the existing prefix. */
-  uint64_t legacy[15];
-  for (unsigned i = 0; i < 15; i++) legacy[i] = UINT64_C(0xfeedbeefdeadbeef);
-  const uint32_t legacy_size = 104;
-  memcpy(legacy, &legacy_size, sizeof legacy_size);
-  OK(mt_render_get_options(render, (mt_render_options *)legacy, error, sizeof error));
-  REQUIRE(legacy[13] == UINT64_C(0xfeedbeefdeadbeef) && legacy[14] == UINT64_C(0xfeedbeefdeadbeef), "legacy render options canaries");
-  OK(mt_render_set_options(render, (mt_render_options *)legacy, error, sizeof error));
   options.alpha_blend_strategy = MT_ALPHA_BLEND_DETERMINISTIC_SOURCE_OVER;
   OK(mt_render_set_options(render, &options, error, sizeof error));
   OK(mt_render_get_options(render, &read_back, error, sizeof error));

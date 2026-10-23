@@ -448,48 +448,6 @@ fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
     settings.validate()?;
     Ok(settings)
 }
-// The unsized default symbol must keep writing only the original 104 bytes.
-fn render_record_size(size: u32) -> Result<usize> {
-    match size {
-        104 => Ok(104),
-        112.. => Ok(112),
-        _ => Err(invalid("Unsupported render struct_size")),
-    }
-}
-unsafe fn read_render_record(pointer: *const MtRenderOptions) -> Result<MtRenderOptions> {
-    if pointer.is_null() {
-        return Err(invalid("Null record"));
-    }
-    let size = render_record_size(unsafe { pointer.cast::<u32>().read() })?;
-    let mut value = render_options(&RenderSettings::default());
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            pointer.cast::<u8>(),
-            (&mut value as *mut MtRenderOptions).cast::<u8>(),
-            size,
-        );
-    }
-    Ok(value)
-}
-unsafe fn init_render_record(
-    pointer: *mut MtRenderOptions,
-    mut value: MtRenderOptions,
-    size: u32,
-) -> Result<()> {
-    if pointer.is_null() {
-        return Err(invalid("Null record"));
-    }
-    let size = render_record_size(size)?;
-    value.struct_size = size as u32;
-    unsafe {
-        std::ptr::copy_nonoverlapping(
-            (&value as *const MtRenderOptions).cast::<u8>(),
-            pointer.cast::<u8>(),
-            size,
-        );
-    }
-    Ok(())
-}
 fn display_record(settings: &DisplaySettings) -> MtDisplaySettings {
     MtDisplaySettings {
         struct_size: std::mem::size_of::<MtDisplaySettings>() as u32,
@@ -1056,17 +1014,11 @@ pub unsafe extern "C" fn mt_display_read_pixels(
 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_render_options_default(output: *mut MtRenderOptions) -> i32 {
-    unsafe { mt_render_options_default_sized(output, 104) }
-}
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn mt_render_options_default_sized(
-    output: *mut MtRenderOptions,
-    size: u32,
-) -> i32 {
-    match unsafe { init_render_record(output, render_options(&RenderSettings::default()), size) } {
-        Ok(()) => 0,
-        Err(e) => e.status as i32,
+    if output.is_null() {
+        return Status::InvalidArgument as i32;
     }
+    unsafe { output.write(render_options(&RenderSettings::default())) };
+    0
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_render_create(
@@ -1077,7 +1029,7 @@ pub unsafe extern "C" fn mt_render_create(
     capacity: usize,
 ) -> i32 {
     call(error_out, capacity, || {
-        let settings = render_settings(&unsafe { read_render_record(options)? })?;
+        let settings = render_settings(unsafe { record(options)? })?;
         if output.is_null() {
             return Err(invalid("Null output"));
         }
@@ -1114,7 +1066,7 @@ pub unsafe extern "C" fn mt_render_set_options(
     capacity: usize,
 ) -> i32 {
     call(error_out, capacity, || {
-        let settings = render_settings(&unsafe { read_render_record(options)? })?;
+        let settings = render_settings(unsafe { record(options)? })?;
         render_of(handle)?.set_settings(settings)
     })
 }
@@ -1127,16 +1079,7 @@ pub unsafe extern "C" fn mt_render_get_options(
 ) -> i32 {
     call(error_out, capacity, || {
         let settings = render_of(handle)?.settings()?;
-        if output.is_null() {
-            return Err(invalid("Null output"));
-        }
-        unsafe {
-            init_render_record(
-                output,
-                render_options(&settings),
-                output.cast::<u32>().read(),
-            )
-        }
+        unsafe { write_record(output, render_options(&settings)) }
     })
 }
 #[unsafe(no_mangle)]
@@ -1477,7 +1420,7 @@ pub unsafe extern "C" fn mt_render_loop_create(
             Ok(if pointer.is_null() {
                 LoopRender::Default
             } else {
-                LoopRender::Settings(render_settings(&unsafe { read_render_record(pointer)? })?)
+                LoopRender::Settings(render_settings(unsafe { record(pointer)? })?)
             })
         };
         let select = options.select.map(|select| {
@@ -2053,54 +1996,22 @@ mod tests {
         }
     }
     #[test]
-    fn render_options_legacy_capacity_and_appended_alpha_are_compatible() {
-        let mut old = [0xdeadbeefu64; 15];
+    fn render_options_default_initializes_the_current_record() {
+        let mut output = [0xdeadbeefu64; 16];
         assert_eq!(
-            unsafe { mt_render_options_default(old.as_mut_ptr().cast()) },
+            unsafe { mt_render_options_default(output.as_mut_ptr().cast()) },
             0
         );
-        assert_eq!(old[0] as u32, 104);
-        assert_eq!(old[13..], [0xdeadbeef; 2]);
-        let record = unsafe { read_render_record(old.as_ptr().cast()) }.unwrap();
-        assert_eq!(render_settings(&record).unwrap(), RenderSettings::default());
-        let settings = RenderSettings {
-            alpha_blend_strategy: AlphaBlendStrategy::DeterministicSourceOver,
-            ..Default::default()
-        };
-        unsafe { init_render_record(old.as_mut_ptr().cast(), render_options(&settings), 104) }
-            .unwrap();
-        assert_eq!(old[13..], [0xdeadbeef; 2]);
+        let current = unsafe { record::<MtRenderOptions>(output.as_ptr().cast()) }.unwrap();
+        assert_eq!(render_settings(current).unwrap(), RenderSettings::default());
+        assert_eq!(output[14..], [0xdeadbeef; 2]);
         assert_eq!(
-            unsafe { read_render_record(old.as_ptr().cast()) }
-                .unwrap()
-                .alpha_blend_strategy,
-            0
+            unsafe { mt_render_options_default(std::ptr::null_mut()) },
+            Status::InvalidArgument as i32
         );
-        let mut current = [0xdeadbeefu64; 16];
-        assert_eq!(
-            unsafe { mt_render_options_default_sized(current.as_mut_ptr().cast(), 112) },
-            0
-        );
-        assert_eq!(current[0] as u32, 112);
-        assert_eq!(current[14..], [0xdeadbeef; 2]);
-        unsafe { init_render_record(current.as_mut_ptr().cast(), render_options(&settings), 112) }
-            .unwrap();
-        assert_eq!(
-            render_settings(&unsafe { read_render_record(current.as_ptr().cast()) }.unwrap())
-                .unwrap(),
-            settings
-        );
-        assert_eq!(current[14..], [0xdeadbeef; 2]);
-        for size in [0, 103, 105, 108, 111] {
-            assert!(
-                unsafe {
-                    init_render_record(current.as_mut_ptr().cast(), render_options(&settings), size)
-                }
-                .is_err()
-            );
-            let mut bad = current;
-            bad[0] = (bad[0] & !0xffffffff) | size as u64;
-            assert!(unsafe { read_render_record(bad.as_ptr().cast()) }.is_err());
+        for size in [0, 104, 108, 111, 113] {
+            output[0] = (output[0] & !0xffffffff) | size as u64;
+            assert!(unsafe { record::<MtRenderOptions>(output.as_ptr().cast()) }.is_err());
         }
     }
     #[test]

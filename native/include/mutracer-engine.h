@@ -246,14 +246,9 @@ typedef struct mt_render_options {
   uint32_t reserved_tail; /* Must be 0. */
 } mt_render_options;
 MT_ENGINE_LAYOUT(mt_render_options, 112);
-/* The original default symbol writes 104 bytes. Current C/C++ calls use _sized
- * through this macro; other FFI bindings must call _sized explicitly.
- * Set/get/create and loop options accept legacy 104-byte records (stochastic)
- * and current 112-byte records. All earlier fields keep their offsets. */
+/* Initializes the full current record, including struct_size. Other render
+ * option calls require struct_size == sizeof(mt_render_options). */
 int32_t mt_render_options_default(mt_render_options *output);
-int32_t mt_render_options_default_sized(mt_render_options *output, uint32_t size);
-#define mt_render_options_default(output) \
-  mt_render_options_default_sized((output), (uint32_t)sizeof(*(output)))
 /* The renders of an engine share one prepared scene. Changing a render's size or
  * settings restarts only its accumulation. */
 int32_t mt_render_create(mt_engine engine, const mt_render_options *options, mt_render *output,
