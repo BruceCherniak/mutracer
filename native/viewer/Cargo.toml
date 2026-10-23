@@ -30,3 +30,6 @@ wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vul
 
 [target.'cfg(target_os = "linux")'.dependencies]
 wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan"] }
+
+[dev-dependencies]
+winit = { version = "=0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland"] }

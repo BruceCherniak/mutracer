@@ -31,9 +31,11 @@ Use scriptc **0.3.2**, Rust with locked dependencies and a C++20 compiler. Set
 `MUTRACER_SCRIPTC` to the compiler and `MUTRACER_NATIVE_OUTPUT` to an evidence
 folder outside the checkout. `npm run native:scene` builds the composed AOT
 archive and verifies raw-scene preparation and rendering on 33 fixtures.
-`native:context`, `native:jobs`, `native:camera` and `native:settings` build on that
-gate and validate retained scenes, polling/cancellation, camera updates and render
-settings respectively. Use `MUTRACER_NATIVE_SAMPLES` to select the fixture sample
+`native:context`, `native:jobs`, `native:camera`, `native:settings` and `native:engine`
+build on that gate and validate retained scenes, polling/cancellation, camera updates,
+render settings and the engine C API respectively. The engine host compares every
+image with a fresh context in the same process; software must match byte for byte,
+and HWRT differences are counted in `engine-verification.json`. Use `MUTRACER_NATIVE_SAMPLES` to select the fixture sample
 count; cross-stage byte comparisons must use the same count and seed.
 
 The native CI jobs install platform optional packages from `native/toolchain/`.
@@ -54,6 +56,7 @@ and windows as **not validated**.
 On a machine with a real GPU and hardware ray-query support, run
 `npm run native:ci:gpu` before a native release. This also runs the ignored host GPU
 tests, animated-pose rendering, all 33 rendered fixtures, ray-query execution,
+the standalone `viewer/examples/surface.rs` window/HDR negotiation and lifecycle smoke,
 and the packaged render/AOV and window-startup checks. Software/unknown adapters
 and missing ray-query support are errors in this mode. This is a local or dedicated
 GPU-runner command; the ordinary GitHub-hosted workflow does not invoke it.
@@ -61,8 +64,19 @@ The incremental oracle reports full-reference render errors as skipped cases.
 Review those records before release: any skips leave `gpu.validated` false in the
 summary, even when the supported checks finish successfully.
 
-`npm run native:ci:hosts` adds the context, job, camera and settings C hosts to that
-real-GPU validation, reusing its fixtures, archive and Cargo target at 8 samples.
+Each ignored host test runs in its own process. Only the known image-mismatch
+assertions in the engine API's `hardware_renders_match_fresh_l0_contexts`,
+`hardware_shared_scene_renders_match_fresh_l0_contexts` and
+`hardware_loop_against_fresh_l0_contexts` tests on a hardware Metal adapter are
+reported without stopping CI; they leave `gpu.validated` false. Other test
+failures stop CI after the ignored tests finish. The loop runs `MT_LOOP_ITERATIONS`
+(default 200 in CI), which must be a positive safe integer.
+CPU-only module and viewer builds run beside the GPU steps, and each step's duration
+is printed and recorded in `checks.json`.
+
+`npm run native:ci:hosts` adds the context, job, camera, settings and engine C hosts
+(`native:engine` chains the other four) to that real-GPU validation, reusing its
+fixtures, archive and Cargo target at 8 samples.
 Run the `native:*` commands separately only when iterating on one host; each of
 them rebuilds and rerenders its whole chain.
 
@@ -194,6 +208,36 @@ rollback and continued rendering of the previous scene. Use ThreadSanitizer and
 state which Rust/C++ dependencies it instruments; AOT, Metal and OIDN are outside
 that coverage.
 
+The Rust `api` module (Engine/Render/Display) commits each engine's scene once to
+an L0 context through the crate-internal `CommitPath` (incremental on the calling
+thread, full preparation on a library thread). Each render's L0 context is a
+crate-internal target linked to that scene (`context::set_target`): camera and
+trace uniforms derived by the `sceneTargetParameters` AOT entry, its own
+accumulation and, for another sampling pattern or bevel sample count, a shader
+variant. Every scene publication drains linked targets and sets them again. Its
+tests compare every render's
+HDR/normal/albedo with a fresh L0 context given the same overridden descriptor,
+settings and sample count, byte for byte on Software. The HWRT variant is
+`--ignored` while the Metal HWRT miss is open; with `MUTRACER_OIDN_LIBRARY` set,
+converged OIDN is compared with direct CPU filtering of the same inputs.
+
+To reproduce repeated full-preparation HWRT failures, run the ignored loop with
+the AOT archive and a separate host Cargo target configured as above:
+
+```sh
+MT_LOOP_ITERATIONS=2000 MT_LOOP_BATCHED=1 cargo test \
+  --manifest-path native/host/Cargo.toml --lib \
+  hardware_loop_against_fresh_l0_contexts -- --ignored --nocapture
+```
+
+The loop fails on HDR/normal/albedo mismatches and records every submitted
+sample's primary hits, missing writes and sequence counts on both sides. It reads
+the history after each render, preserving the batch's ordinary GPU submissions.
+`MT_LOOP_L0=1 MT_LOOP_REAL_CAP=1` selects a direct L0 control with one sample per
+job poll and the actual Sobol cap. Set `MUTRACER_TEST_CAPTURE` to an evidence
+directory outside the checkout to save mismatching AOVs, descriptors and raw
+per-pixel audit records. A zero-failure run does not establish a fix.
+
 The staged TS adapters reuse the original camera math, material repacking,
 environment distributions, light PMFs and emissive caches. Acknowledge candidate
 state only after layout validation and GPU upload/reset. Transform and vertex
@@ -224,7 +268,11 @@ adapter/device/queue. `src/display-shader.ts` generates the display WGSL through
 Web TS generator; `scripts/generate-display.mjs --check` detects stale output. Normal
 preview capture, tonemap and presentation stay on the GPU. Only OIDN/export reads
 pixels back. The immutable owned picking BVH is built while loading a model on
-a worker. Descriptor assembly and full commits also run off the UI thread.
+a worker. The viewer renders through `api::Engine::on_device`, a `RenderLoop`
+without preview and the engine `Display`. Descriptor assembly for scene and layout
+changes and full preparation run off the UI thread. New input waits until the
+batch in flight is collected and shown (`Render::collect`) and while a full
+preparation runs, so held edits keep updating without cancelling preparations.
 The viewer pauses native queue submissions outside its UI callback so eframe can
 reconfigure the shared surface safely; CPU preparation continues while paused.
 
@@ -263,7 +311,8 @@ Autofocus uses immutable CPU picking geometry; it does not add GPU readbacks or
 inspect alpha textures. Test all three AOVs, invalid input,
 rollback and restoration. `[MODEL] --edit-bench DIRECTORY` records descriptor
 build and commit times of material, transform, camera, light and environment
-edits at 1280×720 on both backends in `edit-bench.jsonl`; set
+edits at 1280×720 on both backends in `edit-bench.jsonl`, through a bare L0 context
+(`"path": "l0"`) and the viewer's engine path (`"path": "l1"`); set
 `MUTRACER_NATIVE_PROFILE=1` for a per-commit phase breakdown on stderr.
 
 The viewer Rust suite includes CPU animation cases. With the AOT archive and
@@ -286,7 +335,8 @@ interaction/three-full-commit sequence, reports UI/picking/frame intervals and
 closes automatically. Use LEGO, keep the Mac unlocked and nominal, and retain
 outliers. This opt-in contributor instrument does not change normal usage.
 
-OIDN uses the library's `denoise.rs` for both the C ABI and viewer worker. The
+OIDN uses the library's `denoise.rs` for the C ABI and for the Rust API's render
+denoiser, which the viewer runs with the progressive schedule. The
 build pins 2.5.1 source/weights and official ABI-matched CPU modules (plus Metal
 on macOS and CUDA/HIP on Windows/Linux), omits three large models and packages
 component notices. Check CPU/Metal/CUDA/HIP/Auto,

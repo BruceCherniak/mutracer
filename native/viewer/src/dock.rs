@@ -181,10 +181,11 @@ impl Viewer {
     fn animation_controls(&mut self, ui: &mut egui::Ui) {
         let enabled = self.loading.is_none()
             && self.candidate.is_none()
+            && self.pending_model.is_none()
             && !self
-                .commit
+                .scene_build
                 .as_ref()
-                .is_some_and(|(_, _, candidate, _)| candidate.is_some());
+                .is_some_and(|(_, candidate, _)| candidate.is_some());
         ui.add_enabled_ui(enabled, |ui| {
             let animation = self.model.animation.as_mut().unwrap();
             ui.horizontal(|ui| {
@@ -266,7 +267,7 @@ impl Viewer {
         });
     }
     fn dock_status(&mut self, ui: &mut egui::Ui) {
-        let preparing = self.loading.is_some() || self.commit.is_some() || self.candidate.is_some();
+        let preparing = self.loading.is_some() || self.preparing() || self.candidate.is_some();
         let animating = self.running && self.model.animation.as_ref().is_some_and(|a| a.playing);
         let done = !animating && self.samples >= self.settings.max_samples;
         let label = if self.loading.is_some() {
@@ -410,14 +411,8 @@ impl Viewer {
             .show_ui(ui, |ui| self.resolution_choices(ui))
             .response
             .on_hover_text(self.resolution_label());
-        if ui
-            .checkbox(&mut self.denoise, "Denoise")
-            .on_hover_text(&self.denoise_status)
-            .changed()
-        {
-            self.display_dirty = true;
-            self.last_denoise = None;
-        }
+        ui.checkbox(&mut self.denoise, "Denoise")
+            .on_hover_text(&self.denoise_status);
         if action(ui, "Render settings", Action::Settings).clicked() {
             self.tab = 0;
             self.inspector_open = true;

@@ -7,24 +7,15 @@ pub use mutracer_native_probe::settings::RenderSettings;
 use mutracer_native_probe::status::Status;
 use std::{
     ffi::CStr,
-    sync::Arc,
     time::{Duration, Instant},
 };
 
+/// A plain L0 context: the viewer's fresh-context oracle and direct smokes.
+/// Interactive rendering uses the library's Engine/Render/RenderLoop.
 pub struct Renderer {
     handle: u64,
-    pub mode: u32,
     job: Option<u64>,
-    pub shared: Option<(
-        wgpu::Adapter,
-        wgpu::Device,
-        wgpu::Queue,
-        Arc<mutracer_native_probe::submission::SubmissionGate>,
-    )>,
-}
-pub struct SceneCommit {
-    pub replacement: Option<Renderer>,
-    pub descriptor: crate::scene::Descriptor,
+    opaque_background: bool,
 }
 fn call(operation: impl FnOnce(*mut i8, usize) -> i32) -> (i32, String) {
     let mut error = [0i8; 4096];
@@ -59,120 +50,14 @@ fn check(operation: impl FnOnce(*mut i8, usize) -> i32) -> Result<()> {
     }
 }
 impl Renderer {
-    pub fn new() -> Result<Self> {
-        Self::with_backend(1)
-    }
     pub fn with_backend(mode: u32) -> Result<Self> {
         let mut handle = 0;
         check(|e, n| unsafe { native::mt_context_create_with_backend(mode, &mut handle, e, n) })?;
         Ok(Self {
             handle,
-            mode,
             job: None,
-            shared: None,
+            opaque_background: false,
         })
-    }
-    pub fn on_device(state: &eframe::egui_wgpu::RenderState, mode: u32) -> Result<Self> {
-        let gate = Arc::new(mutracer_native_probe::submission::SubmissionGate::default());
-        let handle = native::create_on_device_with_gate(
-            &state.adapter,
-            &state.device,
-            &state.queue,
-            mode,
-            Some(gate.clone()),
-        )
-        .map_err(anyhow::Error::msg)?;
-        Ok(Self {
-            handle,
-            mode,
-            job: None,
-            shared: Some((
-                state.adapter.clone(),
-                state.device.clone(),
-                state.queue.clone(),
-                gate,
-            )),
-        })
-    }
-    pub fn capture(
-        &self,
-        display: &mut Option<mutracer_native_probe::display::Display>,
-    ) -> Result<bool> {
-        native::capture_display(self.handle, display).map_err(anyhow::Error::msg)
-    }
-    pub fn commit_worker(
-        &self,
-        mode: u32,
-        model: crate::scene::Model,
-        camera: Camera,
-        size: [u32; 2],
-        settings: RenderSettings,
-        environment: crate::scene::Environment,
-        light: crate::scene::KeyLight,
-        mut descriptor: Option<crate::scene::Descriptor>,
-        ctx: eframe::egui::Context,
-    ) -> std::sync::mpsc::Receiver<Result<SceneCommit>> {
-        let current = self.handle;
-        let shared = self.shared.clone();
-        let replace = mode != self.mode;
-        let (send, receive) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(
-                || -> Result<SceneCommit> {
-                    let bytes = model.update_descriptor(
-                        &mut descriptor,
-                        &camera.bytes(size),
-                        size,
-                        &environment,
-                        &light,
-                    );
-                    let replacement = if replace {
-                        let mut candidate = if let Some((adapter, device, queue, gate)) = shared {
-                            Self {
-                                handle: native::create_on_device_with_gate(
-                                    &adapter,
-                                    &device,
-                                    &queue,
-                                    mode,
-                                    Some(gate.clone()),
-                                )
-                                .map_err(anyhow::Error::msg)?,
-                                mode,
-                                job: None,
-                                shared: Some((adapter, device, queue, gate)),
-                            }
-                        } else {
-                            Self::with_backend(mode)?
-                        };
-                        candidate.commit_with_settings(bytes, &settings)?;
-                        Some(candidate)
-                    } else {
-                        check(|e, n| unsafe {
-                            native::mt_context_commit_with_settings(
-                                current,
-                                bytes.as_ptr(),
-                                bytes.len(),
-                                &settings,
-                                e,
-                                n,
-                            )
-                        })?;
-                        None
-                    };
-                    Ok(SceneCommit {
-                        replacement,
-                        descriptor: descriptor.take().unwrap(),
-                    })
-                },
-            ))
-            .unwrap_or_else(|_| Err(anyhow::anyhow!("Scene preparation panicked")));
-            let _ = send.send(result);
-            ctx.request_repaint();
-        });
-        receive
-    }
-    pub fn commit_finished(&mut self) {
-        self.job = None;
     }
     pub fn backend(&self) -> Result<(u32, String)> {
         let mut active = 0;
@@ -209,7 +94,13 @@ impl Renderer {
                 e,
                 n,
             )
-        })
+        })?;
+        let word = |at: usize| u32::from_le_bytes(bytes[at * 4..at * 4 + 4].try_into().unwrap());
+        use mutracer_native_probe::layout::header as h;
+        self.opaque_background = word(h::QUALITY_FLAGS) & 4 == 0
+            && word(h::BACKGROUND_TEXTURE) == 0
+            && f32::from_bits(word(h::BACKGROUND_COLOR + 3)) >= 0.99999;
+        Ok(())
     }
     pub fn reset(&mut self) -> Result<()> {
         check(|e, n| unsafe { native::mt_context_reset(self.handle, e, n) })
@@ -317,6 +208,33 @@ impl Renderer {
     }
     pub fn pixels(&self) -> Result<Vec<f32>> {
         self.image(0)
+    }
+    /// Fresh L0 oracle converted for comparisons with the viewer's L1 HDR.
+    /// Direct L0 smokes continue to use finish/image without this conversion.
+    pub fn finish_l1(&mut self, samples: u32) -> Result<Vec<f32>> {
+        let mut color = self.finish(samples)?;
+        let normal = self.image(1)?;
+        let albedo = self.image(2)?;
+        let minimum = 1. / self.samples()? as f32;
+        for (i, pixel) in color.chunks_exact_mut(4).enumerate() {
+            let count = normal[i * 4 + 3];
+            let hit = albedo[i * 4 + 3];
+            if count <= 0. {
+                pixel.fill(0.);
+                continue;
+            }
+            let total = count.max(minimum);
+            let divisor = if hit > 0. { hit } else { total };
+            let coverage = (hit / total).clamp(0., 1.);
+            for value in &mut pixel[..3] {
+                *value /= divisor;
+                if self.opaque_background && coverage > 0. {
+                    *value *= coverage;
+                }
+            }
+            pixel[3] /= total;
+        }
+        Ok(color)
     }
     pub fn finish(&mut self, samples: u32) -> Result<Vec<f32>> {
         self.start(samples)?;
@@ -483,6 +401,65 @@ pub fn save(path: &std::path::Path, pixels: &[f32], size: [u32; 2], exposure: f3
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "requires a real GPU"]
+    fn l0_oracle_converts_hdr_to_l1_without_changing_raw_readback() {
+        use mutracer_native_probe::{api, layout::header as h};
+        let model = crate::Model::load(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sample.glb"),
+        )
+        .unwrap();
+        let size = [13, 9];
+        let camera = Camera::fit(model.center, model.radius);
+        let mut descriptor =
+            model.descriptor(&camera.bytes(size), size, &crate::Environment::default());
+        let quality = u32::from_le_bytes(
+            descriptor[h::QUALITY_FLAGS * 4..h::QUALITY_FLAGS * 4 + 4]
+                .try_into()
+                .unwrap(),
+        );
+        let engine = api::Engine::new(api::EngineOptions {
+            backend: api::Backend::Software,
+        })
+        .unwrap();
+        let render = api::Render::new(
+            &engine,
+            api::RenderSettings {
+                max_samples: 7,
+                size: api::RenderSize::Fixed {
+                    width: size[0],
+                    height: size[1],
+                },
+                bevel: quality & 1 != 0,
+                dispersion_wavelengths: if quality & 2 != 0 { 3 } else { 1 },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut reference = Renderer::with_backend(0).unwrap();
+        let settings = RenderSettings {
+            max_samples: 4096,
+            bounces: 3,
+            direct_light_candidates: 4,
+            ..Default::default()
+        };
+        for alpha in [0f32, 1.] {
+            let at = (h::BACKGROUND_COLOR + 3) * 4;
+            descriptor[at..at + 4].copy_from_slice(&alpha.to_le_bytes());
+            reference
+                .commit_with_settings(&descriptor, &settings)
+                .unwrap();
+            engine.set_scene(&descriptor).unwrap();
+            engine.update().unwrap();
+            render.converge(api::ConvergeOptions::new(7)).unwrap();
+            let expected = reference.finish_l1(7).unwrap();
+            let actual = crate::bottom_first(render.read_pixels(api::PixelKind::Hdr).unwrap());
+            assert_eq!(actual, expected);
+            let raw = reference.image(0).unwrap();
+            assert_eq!(reference.pixels().unwrap(), raw);
+        }
+    }
 
     #[test]
     fn projection_rays_and_wire_bounds_agree_at_wide_and_tall_aspects() {

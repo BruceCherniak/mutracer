@@ -140,6 +140,13 @@ unsafe extern "C" {
         output: *mut *const u8,
         size: *mut usize,
     );
+    fn mt_core_scene_target(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
     fn mt_core_scene_camera(
         input: *const u8,
         length: usize,
@@ -738,6 +745,14 @@ impl Drop for PreparedData {
         });
     }
 }
+/// Target-owned uniforms; `shader` is a pattern/bevel-sample variant of the scene shader.
+pub(super) struct TargetPacket {
+    pub camera: Vec<u8>,
+    pub trace: Vec<u8>,
+    /// Prepared before GPU publication so it never waits for AOT under REGISTRY.
+    pub frames: Vec<[u8; 16]>,
+    pub shader: Option<String>,
+}
 // Buffer records have zero dimensions; texture records carry their exact extent.
 pub(super) struct LightingUpdates {
     resources: Vec<(usize, u64, u32, u32, Vec<u8>)>,
@@ -1198,6 +1213,85 @@ impl PreparedState {
     pub(super) fn set_light_count(&self, count: usize) {
         self.light_count
             .store(count, std::sync::atomic::Ordering::Release);
+    }
+    /// Camera and trace uniforms of a render target on this scene, plus the
+    /// production shader when the target's sampling pattern or bevel samples differ.
+    pub(super) fn target(
+        &self,
+        settings: &settings::RenderSettings,
+        size: [u32; 2],
+        quality: u32,
+        alpha_blend_strategy: u32,
+        hardware: bool,
+        camera: &[u8],
+        loss: &crate::device_loss::DeviceLossNotifier,
+    ) -> Result<TargetPacket> {
+        if camera.len() != cam::WORDS * WORD_BYTES {
+            return Err("Camera descriptor must contain exactly 128 bytes".into());
+        }
+        validate_camera(&Words(camera), 0)?;
+        // The descriptor limits of a scene of this size.
+        if size[0] == 0
+            || size[1] == 0
+            || size[0] > 4096
+            || size[1] > 4096
+            || size[0] * size[1] > 4_194_304
+            || quality > 3
+            || alpha_blend_strategy > 1
+        {
+            return Err(fail(
+                Status::InvalidArgument,
+                "Invalid render target size, quality or alpha strategy",
+            ));
+        }
+        let mut input = settings.wire(15)?;
+        let shader = if hardware {
+            res::HWRT_SHADER
+        } else {
+            res::SOFTWARE_SHADER
+        } as u32;
+        for word in [
+            size[0],
+            size[1],
+            quality,
+            shader,
+            1,
+            alpha_blend_strategy,
+            0,
+            0,
+        ] {
+            input.extend_from_slice(&word.to_le_bytes());
+        }
+        input.extend_from_slice(camera);
+        let state = self.clone();
+        let packet = runtime::call_with_loss(loss, move || {
+            native_step(mt_core_scene_target, &input, state.token)
+        })?;
+        let w = Words(&packet);
+        let (shader, camera, trace) = (w.u(1), w.u(2), w.u(3));
+        if camera != 144 || trace != 256 || packet.len() != 16 + camera + trace + shader {
+            return Err("Invalid native render target packet".into());
+        }
+        let camera_bytes = packet[16..16 + camera].to_vec();
+        if !camera_bytes
+            .chunks_exact(4)
+            .all(|b| f32::from_le_bytes(b.try_into().unwrap()).is_finite())
+        {
+            return Err("Camera produces non-finite GPU parameters".into());
+        }
+        let trace_bytes = packet[16 + camera..16 + camera + trace].to_vec();
+        let word = |at: usize| -> [u8; 4] { trace_bytes[at..at + 4].try_into().unwrap() };
+        let seed = u32::from_le_bytes(word(layout::ray_uniform::SEQUENCE_SEED));
+        let bounces = i32::from_le_bytes(word(layout::ray_uniform::BOUNCES)) as f32;
+        let frames = runtime::frames_with_loss(loss, bounces, seed)?;
+        Ok(TargetPacket {
+            camera: camera_bytes,
+            trace: trace_bytes,
+            frames,
+            shader: (shader > 0)
+                .then(|| String::from_utf8(packet[16 + camera + trace..].to_vec()))
+                .transpose()?,
+        })
     }
     pub(super) fn accept_lighting(&self) -> Result<()> {
         let state = self.clone();

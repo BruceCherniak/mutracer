@@ -1102,11 +1102,9 @@ mod tests {
             let deadline = Instant::now() + Duration::from_secs(30);
             loop {
                 tick(viewer, ctx);
-                if viewer.commit.is_none()
-                    && viewer.change == Change::None
-                    && !viewer.renderer.busy()
-                    && !viewer.frame_pending
-                    && viewer.frame_generation == viewer.generation
+                if viewer.settled()
+                    && viewer.pose_presented
+                    && viewer.model.animation.as_ref().is_none_or(|a| !a.pending)
                     && viewer.samples == viewer.settings.max_samples
                 {
                     return;
@@ -1246,14 +1244,15 @@ mod tests {
             viewer.focus.enabled = false;
             viewer.dirty(Change::Scene);
             settle(&mut viewer, &ctx);
+            // Distinct poses whose image was presented.
             let mut generations = std::collections::HashSet::new();
             let deadline = Instant::now() + Duration::from_secs(30);
             viewer.toggle_animation_or_render();
             while generations.len() < 6 {
                 tick(&mut viewer, &ctx);
                 assert!(viewer.texture.is_some(), "Playback blanked the viewport");
-                if viewer.frame_samples > 0 {
-                    generations.insert(viewer.frame_generation);
+                if viewer.frame_samples > 0 && viewer.pose_presented {
+                    generations.insert(viewer.model.animation.as_ref().unwrap().time.to_bits());
                 }
                 assert!(
                     Instant::now() < deadline,
@@ -1286,11 +1285,11 @@ mod tests {
                 )
                 .unwrap();
             assert_eq!(
-                viewer.pixels,
+                viewer.hdr().unwrap(),
                 reference.finish(4).unwrap(),
                 "Final paused pose differs from fresh scene"
             );
-            assert_eq!(viewer.renderer.backend().unwrap().0, mode);
+            assert_eq!(viewer.render_backend().unwrap(), mode);
             report.push(json!({"backend":mode,"poses":6,"changedImages":changed,"incrementalCommits":incremental,"displayedGenerations":generations.len(),"pausedTime":paused}));
         }
         if let Some(out) = evidence {

@@ -1,11 +1,15 @@
-//! `--edit-bench DIRECTORY`: commit latency of interactive edits on one model.
-use crate::renderer::{Camera, Renderer};
+//! `--edit-bench DIRECTORY`: commit latency of interactive edits on one model,
+//! through a bare L0 context (`"path": "l0"`) and the way the viewer hands edits to
+//! its engine (`"path": "l1"`).
+use crate::renderer::{Camera, RenderSettings, Renderer};
 use crate::scene::{Descriptor, Environment, KeyLight, Model};
-use anyhow::Result;
+use anyhow::{Result, ensure};
+use mutracer_native_probe::api;
 use std::{path::Path, time::Instant};
 
 const ITERATIONS: usize = 12;
 const SIZE: [u32; 2] = [1280, 720];
+const KINDS: [&str; 5] = ["material", "transform", "camera", "light", "environment"];
 
 struct Scene {
     model: Model,
@@ -56,6 +60,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
     };
     let mut rows = Vec::new();
     for mode in [0, 1] {
+        rows.extend(l1(&mut scene, mode)?);
         let mut renderer = Renderer::with_backend(mode)?;
         let mut descriptor = None;
         let started = Instant::now();
@@ -64,10 +69,10 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
         renderer.commit(bytes)?;
         let initial = started.elapsed().as_secs_f64() * 1e3 - build;
         rows.push(
-            serde_json::json!({"mode": mode, "kind": "initial", "descriptorBytes": bytes.len(),
-            "buildMs": build, "commitMs": initial}),
+            serde_json::json!({"path": "l0", "mode": mode, "kind": "initial",
+            "descriptorBytes": bytes.len(), "buildMs": build, "commitMs": initial}),
         );
-        for kind in ["material", "transform", "camera", "light", "environment"] {
+        for kind in KINDS {
             for i in 0..ITERATIONS {
                 scene.edit(kind, i);
                 let started = Instant::now();
@@ -76,8 +81,9 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 renderer.commit(bytes)?;
                 let commit = started.elapsed().as_secs_f64() * 1e3 - build;
                 rows.push(
-                    serde_json::json!({"mode": mode, "kind": kind, "iteration": i, "buildMs": build,
-                    "commitMs": commit, "incremental": renderer.last_commit_incremental()?}),
+                    serde_json::json!({"path": "l0", "mode": mode, "kind": kind, "iteration": i,
+                    "buildMs": build, "commitMs": commit,
+                    "incremental": renderer.last_commit_incremental()?}),
                 );
             }
         }
@@ -90,4 +96,64 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
     std::fs::write(out.join("edit-bench.jsonl"), text + "\n")?;
     println!("{}", out.join("edit-bench.jsonl").display());
     Ok(())
+}
+
+/// Hands the descriptor to the engine as `Viewer::push` does.
+fn push(engine: &api::Engine, bytes: &[u8]) -> Result<()> {
+    engine.set_scene_shared(std::sync::Arc::new(bytes.to_vec()))?;
+    Ok(())
+}
+
+/// The viewer's edit path: patch the cached descriptor, push it, then `Engine::update`
+/// commits the final render (incrementally on this thread when it can).
+fn l1(scene: &mut Scene, mode: u32) -> Result<Vec<serde_json::Value>> {
+    let engine = api::Engine::new(api::EngineOptions {
+        backend: if mode == 1 {
+            api::Backend::Hardware
+        } else {
+            api::Backend::Software
+        },
+    })?;
+    let render = api::Render::new(
+        &engine,
+        crate::render_settings(&RenderSettings::default(), SIZE, false),
+    )?;
+    let mut rows = Vec::new();
+    let mut descriptor = None;
+    let started = Instant::now();
+    let bytes = scene.descriptor(&mut descriptor);
+    let build = started.elapsed().as_secs_f64() * 1e3;
+    push(&engine, bytes)?;
+    engine.update()?;
+    while render.status() == api::RenderStatus::Preparing {
+        render.refine()?;
+    }
+    let initial = started.elapsed().as_secs_f64() * 1e3 - build;
+    ensure!(engine.last_error().is_none(), "{:?}", engine.last_error());
+    rows.push(
+        serde_json::json!({"path": "l1", "mode": mode, "kind": "initial",
+        "descriptorBytes": bytes.len(), "buildMs": build, "commitMs": initial}),
+    );
+    for kind in KINDS {
+        for i in 0..ITERATIONS {
+            scene.edit(kind, i);
+            let started = Instant::now();
+            let bytes = scene.descriptor(&mut descriptor);
+            let build = started.elapsed().as_secs_f64() * 1e3;
+            push(&engine, bytes)?;
+            engine.update()?;
+            let commit = started.elapsed().as_secs_f64() * 1e3 - build;
+            let incremental = render.status() != api::RenderStatus::Preparing
+                && render.last_commit()? == Some(api::CommitKind::Incremental);
+            while render.status() == api::RenderStatus::Preparing {
+                render.refine()?;
+            }
+            ensure!(engine.last_error().is_none(), "{:?}", engine.last_error());
+            rows.push(
+                serde_json::json!({"path": "l1", "mode": mode, "kind": kind, "iteration": i,
+                "buildMs": build, "commitMs": commit, "incremental": incremental}),
+            );
+        }
+    }
+    Ok(rows)
 }

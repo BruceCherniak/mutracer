@@ -12,7 +12,7 @@ import {vec3} from '../../src/math.js';
 import {markDeformedGeometry} from '../../src/scene/geometryChanges.js';
 import {sameInstanceMembership} from '../../src/renderer/packedMeshInstances.js';
 import {hardwareOpaqueGeometryFlags} from './hwrt-eligibility.js';
-import {ERROR_CODE, VERSION, RESOURCE, KIND, FORMAT, HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, TEXTURE as T, LIGHT as L, CAMERA as C, BATCH as B, PACKET_HEADER as PH, PACKET_ENTRY as PE, WRITE_ENTRY as WE, WORD_BYTES, quantizeDisplacementRange} from './layout.js';
+import {ERROR_CODE, VERSION, RESOURCE, KIND, FORMAT, HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, TEXTURE as T, LIGHT as L, CAMERA as C, BATCH as B, SETTINGS as S, PACKET_HEADER as PH, PACKET_ENTRY as PE, WRITE_ENTRY as WE, WORD_BYTES, quantizeDisplacementRange} from './layout.js';
 import {nativePathIntersections} from './path-diagnostics.wgsl.js';
 import type IESProfile from '../../src/scene/IESProfile.js';
 import {computeDisplacementMinmax, computeTrianglesDisplacementRange} from '../../src/renderer/displacementPreparation.js';
@@ -75,7 +75,31 @@ const retainedScenes = new Map<number, {source: MaterialState[]; ordered: Materi
   environmentWidth: number; environmentHeight: number; backgroundWidth: number; backgroundHeight: number;
   qualityFlags: number; environmentPower: number; meshes: MeshState[];
   textureIds: Map<TextureState, number>; nativeLayout: NativeLayout; hardware?: HardwareScene; prepared: PreparedScene; instances: MeshInstances; tlas: FlattendBVH; emissiveCache: EmissiveTriangleCache;
-  bindings: PreparedMeshInstanceBinding[]; blases: BLASInstance[]; tlasStack: number; blasStack: number; geometries: Geometry[]}>();
+  bindings: PreparedMeshInstanceBinding[]; blases: BLASInstance[]; tlasStack: number; blasStack: number; geometries: Geometry[];
+  shader: SceneShader}>();
+/** Inputs of the production shader, retained so targets can request pattern/bevel-sample variants. */
+interface SceneShader {
+  constants: Record<string, boolean | number>; features: Parameters<typeof wgpuShaderSource>[1];
+  variantFlags: number; isEmpty: boolean; hardware: boolean; opaqueClosest: boolean;
+}
+/** Trace-uniform fields owned by one target: size, sampling and per-render quality. */
+function writeTargetTrace(views: ReturnType<typeof makeRayTraceUniform>['views'],
+  configuration: ReturnType<typeof defaultSceneConfiguration>, width: number, height: number, qualityFlags: number) {
+  views.outputSize.set([width, height]); views.scaleOffset.set([1, 1, 0, 0]); views.jitter.set([.5, .5]);
+  writeTraceSampling(views, configuration.sampling);
+  views.clamping[0] = configuration.clamping; views.transmissiveOutputAlphaMin[0] = configuration.transmissiveAlphaMin;
+  views.sampleSequenceOffset[0] = configuration.sequenceOffset;
+  writeTraceQuality(views, {bounces: configuration.bounces, bevel: !!(qualityFlags & 1), dispersionWavelengths: qualityFlags & 2 ? 3 : 1,
+    directLightCandidates: configuration.directLightCandidates});
+}
+/** Production WGSL: the software shader, or the ray-query shader for hardware scenes. */
+function productionShader(id: number, shader: SceneShader): Uint8Array {
+  const {constants, features, variantFlags, isEmpty, hardware, opaqueClosest} = shader;
+  return nativeShaderVariant(id, constants, features, variantFlags, id === RESOURCE.HWRT_SHADER
+    ? () => 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
+      nativeIntersections(features, isEmpty, false, false, hardware, opaqueClosest))
+    : () => wgpuShaderSource(constants, features, true));
+}
 type FloatGeometryPatch = {target: Float32Array; offset: number; data: Float32Array};
 type UintGeometryPatch = {target: Uint32Array; offset: number; data: Uint32Array};
 const pendingGeometry = new Map<number, {meshes: MeshState[]; bindings: PreparedMeshInstanceBinding[];
@@ -135,6 +159,43 @@ export function acceptSceneLighting(token: number): Uint8Array {
   retainedScenes.set(token, state);
   pendingLighting.delete(token);
   return new Uint8Array(new Uint32Array([1, 0, 0, 0]).buffer);
+}
+/**
+ * One render target of a retained scene, without preparing the scene again.
+ * Input: render settings record, then width, height, quality flags, production shader id,
+ * camera flag (0 = the descriptor camera), alpha blend strategy, reserved×2 and one camera record.
+ * Output: version 1, shader byte length, then the camera uniform, the trace uniform (the
+ * scene's current one with this target's fields) and, when sampling, bevel samples or
+ * alpha strategy need a variant, the specialized production shader.
+ */
+export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Array {
+  try {
+    const state = retainedScenes.get(token);
+    if (!state) throw new Error('No retained scene');
+    const settingsBytes = S.WORDS * WORD_BYTES;
+    if (bytes.byteLength !== settingsBytes + 8 * WORD_BYTES + C.WORDS * WORD_BYTES) throw new Error('Invalid target request');
+    const configuration = decodeSceneConfiguration(bytes.subarray(0, settingsBytes));
+    const u = new Uint32Array(bytes.buffer, bytes.byteOffset + settingsBytes, 8);
+    const [width, height, qualityFlags, shaderId] = [u[0], u[1], u[2], u[3]];
+    if (!width || !height || u[5] > 1 || u[6] || u[7] || (shaderId !== RESOURCE.SOFTWARE_SHADER && shaderId !== RESOURCE.HWRT_SHADER)) throw new Error('Invalid target request');
+    const camera = sceneCameraParameters(bytes.subarray(settingsBytes + 8 * WORD_BYTES), width, height);
+    const rt = makeRayTraceUniform();
+    new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
+    writeTargetTrace(rt.views, configuration, width, height, qualityFlags);
+    const {constants} = state.shader;
+    // Match WGPURayTracePass: deterministic source-over specializes only scenes
+    // with blend coverage. The shared scene retains the stochastic base shader.
+    const hasAlpha = u[5] === 1 && Boolean(constants.HAS_ALPHA_BLEND);
+    const variant = constants.SAMPLING_PATTERN !== configuration.sampling.code || constants.BEVEL_SAMPLES !== configuration.bevelSamples || hasAlpha !== state.shader.features.hasAlpha;
+    const shader = variant ? productionShader(shaderId, {...state.shader,
+      features: {...state.shader.features, hasAlpha},
+      constants: {...constants, SAMPLING_PATTERN: configuration.sampling.code, BEVEL_SAMPLES: configuration.bevelSamples}}) : new Uint8Array(0);
+    const result = new Uint8Array(4 * WORD_BYTES + camera.byteLength + 256 + shader.byteLength);
+    new Uint32Array(result.buffer, 0, 4).set([1, shader.byteLength, camera.byteLength, 256]);
+    result.set(camera, 4 * WORD_BYTES); result.set(new Uint8Array(rt.buffer), 4 * WORD_BYTES + camera.byteLength);
+    result.set(shader, 4 * WORD_BYTES + camera.byteLength + 256);
+    return result;
+  } catch (error) { return sceneErrorPacket(ERROR_CODE.CONFIGURE, error); }
 }
 export function retainedSceneParameters(bytes: Uint8Array, token: number): Uint8Array {
   try { return buildSceneParameters(bytes, token); }
@@ -345,18 +406,13 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const {lightData, lightWidth, lightHeight, lightUniform, environmentPmf, choiceCount, totalWeight, emissiveTexels}
     = prepareNativeLightSampling(lights, table, emissive, estimateEnvironmentPower(environment));
   const rt = makeRayTraceUniform();
-  rt.views.outputSize.set([width, height]); rt.views.scaleOffset.set([1, 1, 0, 0]);
-  rt.views.lightsCount[0] = lights.length; rt.views.transmissiveOutputAlphaMin[0] = 1;
-  rt.views.jitter.set([.5, .5]);
+  rt.views.lightsCount[0] = lights.length;
   if (!background && !(qualityFlags & 4)) rt.views.backgroundColor.set(backgroundColor);
   rt.views.backgroundFlags[0] = (qualityFlags & 4 ? 0 : 1) | (background ? 2 : 0); rt.views.blasOffset[0] = tlas.buffer.byteLength / 16;
   rt.views.isEmpty[0] = Number(meshInstancesLength(prepared.instances) === 0); rt.views.bevel[0] = Number(!!(qualityFlags & 1));
   rt.views.dispersionWavelengths[0] = qualityFlags & 2 ? 3 : 1; rt.views.lightChoiceCount[0] = choiceCount;
   writeTraceLighting(rt.views, {environmentPmf, choiceCount, totalWeight, lightWidth, emissiveTexels});
-  writeTraceSampling(rt.views, configuration.sampling);
-  rt.views.clamping[0] = configuration.clamping; rt.views.transmissiveOutputAlphaMin[0] = configuration.transmissiveAlphaMin;
-  rt.views.sampleSequenceOffset[0] = configuration.sequenceOffset;
-  writeTraceQuality(rt.views, {bounces: configuration.bounces, bevel: !!(qualityFlags & 1), dispersionWavelengths: qualityFlags & 2 ? 3 : 1, directLightCandidates: configuration.directLightCandidates});
+  writeTargetTrace(rt.views, configuration, width, height, qualityFlags);
   rt.views.sceneFeatureFlags[0] = wgpuSceneFeatureFlags(constants);
   // Output packet: version, count, width, height, then 8-word resource descriptors
   // (id, kind[0=buffer,1=texture,2=WGSL,3=metadata], length, width,height,layers,format,offset).
@@ -394,9 +450,9 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   function shader(id: number, source: () => string) {
     add(id, KIND.WGSL, nativeShaderVariant(id, constants, features, variantFlags, source), 0, 0, 0, 0);
   }
-  if (configuration.variants & 1) shader(RESOURCE.SOFTWARE_SHADER, () => wgpuShaderSource(constants, features, true));
-  if (configuration.variants & 2) shader(RESOURCE.HWRT_SHADER, () => 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
-    nativeIntersections(features, nativeLayout.isEmpty, false, false, !!hardware, opaqueClosest)));
+  const sceneShader: SceneShader = {constants, features, variantFlags, isEmpty: nativeLayout.isEmpty, hardware: !!hardware, opaqueClosest};
+  if (configuration.variants & 1) add(RESOURCE.SOFTWARE_SHADER, KIND.WGSL, productionShader(RESOURCE.SOFTWARE_SHADER, sceneShader), 0, 0, 0, 0);
+  if (configuration.variants & 2) add(RESOURCE.HWRT_SHADER, KIND.WGSL, productionShader(RESOURCE.HWRT_SHADER, sceneShader), 0, 0, 0, 0);
   if (configuration.variants & 4) {
     shader(RESOURCE.SOFTWARE_HIT_SHADER, () => wgpuShaderSource(constants, features, true) + nativeHitDiagnostics(features, false, 'software'));
     shader(RESOURCE.HIT_SHADER, () => 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
@@ -438,7 +494,8 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   if (token) retainedScenes.set(token, {source: materials, ordered: prepared.materials, table, lights, emissive,
     rt: rt.buffer, environmentWidth: environment?.width ?? 0, environmentHeight: environment?.height ?? 0,
     backgroundWidth: background?.width ?? 0, backgroundHeight: background?.height ?? 0, qualityFlags, environmentPower: estimateEnvironmentPower(environment),
-    textureIds: input.textureIds, nativeLayout, hardware, prepared, instances: prepared.instances, tlas, emissiveCache, meshes, bindings: prepared.instanceBindings, blases, geometries, tlasStack: Number(constants.TLAS_STACK_SIZE), blasStack: Number(constants.BLAS_STACK_SIZE)});
+    textureIds: input.textureIds, nativeLayout, hardware, prepared, instances: prepared.instances, tlas, emissiveCache, meshes, bindings: prepared.instanceBindings, blases, geometries, tlasStack: Number(constants.TLAS_STACK_SIZE), blasStack: Number(constants.BLAS_STACK_SIZE),
+    shader: sceneShader});
   return resourcePacket(records, parts, width, height);
 }
 

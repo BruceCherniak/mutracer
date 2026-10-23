@@ -28,8 +28,6 @@ impl Viewer {
             }
             if ctx.input(|i| i.key_pressed(egui::Key::D)) {
                 self.denoise = !self.denoise;
-                self.last_denoise = None;
-                self.display_dirty = true;
             }
             if ctx.input(|i| i.key_pressed(egui::Key::OpenBracket)) {
                 self.scene_open = !self.scene_open;
@@ -217,7 +215,6 @@ impl Viewer {
         if previous != self.settings {
             self.dirty(Change::Scene);
         }
-        let old_display = self.display_settings;
         controls::section(ui, "Color", |ui| {
             controls::select(
                 ui,
@@ -263,10 +260,7 @@ impl Viewer {
             controls::scalar(ui, "Tint", &mut self.display_settings.tint, -1.0..=1.0);
         });
         controls::section(ui, "Denoiser", |ui| {
-            if controls::toggle(ui, "Native OIDN", &mut self.denoise).changed() {
-                self.display_dirty = true;
-                self.last_denoise = None;
-            }
+            controls::toggle(ui, "Native OIDN", &mut self.denoise);
             if self.denoise {
                 ui.weak(&self.denoise_status);
             }
@@ -283,9 +277,6 @@ impl Viewer {
                 },
             );
         });
-        if old_display != self.display_settings {
-            self.display_dirty = true;
-        }
         controls::section(ui, "Device", |ui| {
             let old = self.backend;
             controls::select(
@@ -1108,6 +1099,8 @@ impl Viewer {
                 }
                 if let Some(texture) = self
                     .gpu_texture
+                    .as_ref()
+                    .map(|(id, _)| *id)
                     .or_else(|| self.texture.as_ref().map(|t| t.id()))
                 {
                     ui.painter().image(

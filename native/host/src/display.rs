@@ -1,8 +1,48 @@
 //! GPU-only stable preview. Copy before the next trace or scene publication.
 use crate::{GpuDevice, Result};
+mod bloom;
+mod effects;
+#[cfg(test)]
+mod effects_tests;
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Metadata {
+    has_catcher: bool,
+    flat_background: [f32; 4],
+}
+impl Metadata {
+    pub(crate) fn opaque_background(self) -> bool {
+        self.flat_background[3] > 0.5
+    }
+
+    pub(crate) fn from_trace(trace: &[u8]) -> Self {
+        use crate::layout::ray_uniform as u;
+        if trace.len() < u::SCENE_FEATURE_FLAGS + 4 {
+            return Self::default();
+        }
+        let word = |at| u32::from_le_bytes(trace[at..at + 4].try_into().unwrap());
+        // WGPU_SCENE_FEATURE_BITS.HAS_SHADOW_CATCHER (WGPUSceneFeatures.ts).
+        let has_catcher = word(u::SCENE_FEATURE_FLAGS) & (1 << 14) != 0;
+        let mut flat_background = [0.; 4];
+        if word(u::BACKGROUND_FLAGS) & 3 == 1 {
+            for (i, v) in flat_background.iter_mut().enumerate() {
+                *v = f32::from_bits(word(u::BACKGROUND_COLOR + i * 4));
+            }
+            if flat_background[3] >= 0.99999 {
+                flat_background[3] = 1.;
+            } else {
+                flat_background = [0.; 4];
+            }
+        }
+        Self {
+            has_catcher,
+            flat_background,
+        }
+    }
+}
 
 /// Display-only settings. Tone modes: AgX/ACES/Cineon/Reinhard/Linear (0–4).
-/// Output modes: final/normal/albedo (0–2). Exposure is a linear multiplier.
+/// Output modes: final/normal/albedo/shadow/shadow-catcher (0–4). Shadow aliases
+/// final; shadow-catcher shows the raw mask. Exposure is a linear multiplier.
 #[derive(Clone, Copy, PartialEq)]
 pub struct Settings {
     pub tone_mapping: u32,
@@ -13,6 +53,18 @@ pub struct Settings {
     pub tint: f32,
     pub output: u32,
     pub preserve_alpha: bool,
+    /// Vignette strength in 0..1. Default 0.
+    pub vignette: f32,
+    /// Nonnegative bloom intensity; 0 disables it. Default 0.
+    pub bloom_intensity: f32,
+    /// Nonnegative bloom luminance threshold. Default 1.
+    pub bloom_threshold: f32,
+    /// Bloom radius in 0..1. Default 0.6.
+    pub bloom_radius: f32,
+    /// Nonnegative linear RGB shadow-catcher color. Default black.
+    pub shadow_catcher_color: [f32; 3],
+    /// Shadow-catcher opacity in 0..1. Default 1.
+    pub shadow_catcher_alpha: f32,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -25,6 +77,12 @@ impl Default for Settings {
             tint: 0.,
             output: 0,
             preserve_alpha: true,
+            vignette: 0.,
+            bloom_intensity: 0.,
+            bloom_threshold: 1.,
+            bloom_radius: 0.6,
+            shadow_catcher_color: [0.; 3],
+            shadow_catcher_alpha: 1.,
         }
     }
 }
@@ -39,10 +97,22 @@ pub struct Display {
     albedo: wgpu::Buffer,
     original_samples: u32,
     pub using_denoised: bool,
+    /// The last uploaded denoised image, kept on the GPU until `original`.
+    denoised: Option<wgpu::Buffer>,
+    /// Uploads from CPU pixels, for tests.
+    pub(crate) uploads: u32,
     params: wgpu::Buffer,
     pipeline: wgpu::ComputePipeline,
     group: wgpu::BindGroup,
     samples: u32,
+    hdr: Option<(wgpu::Texture, wgpu::ComputePipeline, wgpu::BindGroup)>,
+    composed: Option<(wgpu::Texture, wgpu::BindGroup)>,
+    composed_hdr: Option<wgpu::Texture>,
+    metadata: Metadata,
+    shadow: Option<wgpu::Buffer>,
+    effects: std::sync::Mutex<Option<effects::Effects>>,
+    image_revision: u64,
+    denoise_revision: u64,
 }
 impl Display {
     pub(super) fn new(gpu: GpuDevice, size: [u32; 2]) -> Self {
@@ -58,7 +128,9 @@ impl Display {
         let raw = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Unfiltered preview"),
             size: linear.size(),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+            usage: wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST
+                | wgpu::BufferUsages::COPY_SRC,
             mapped_at_creation: false,
         });
         let auxiliary = |label| {
@@ -143,10 +215,20 @@ impl Display {
             albedo,
             original_samples: 0,
             using_denoised: false,
+            denoised: None,
+            uploads: 0,
             params,
             pipeline,
             group,
             samples: 0,
+            hdr: None,
+            composed: None,
+            composed_hdr: None,
+            metadata: Metadata::default(),
+            shadow: None,
+            effects: Default::default(),
+            image_revision: 0,
+            denoise_revision: 0,
         }
     }
     pub(super) fn capture(
@@ -154,9 +236,27 @@ impl Display {
         source: &wgpu::Buffer,
         normal: &wgpu::Buffer,
         albedo: &wgpu::Buffer,
+        shadow: &wgpu::Buffer,
+        metadata: Metadata,
         samples: u32,
     ) {
+        self.metadata = metadata;
+        self.image_revision += 1;
+        if samples < self.original_samples {
+            self.reset_effects();
+        }
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        if metadata.has_catcher {
+            let target = self.shadow.get_or_insert_with(|| {
+                self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("Stable catcher accumulation"),
+                    size: shadow.size(),
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                })
+            });
+            encoder.copy_buffer_to_buffer(shadow, 0, target, 0, target.size());
+        }
         encoder.copy_buffer_to_buffer(source, 0, &self.raw, 0, self.raw.size());
         encoder.copy_buffer_to_buffer(normal, 0, &self.normal, 0, self.normal.size());
         encoder.copy_buffer_to_buffer(albedo, 0, &self.albedo, 0, self.albedo.size());
@@ -166,20 +266,47 @@ impl Display {
         self.original_samples = samples;
         self.using_denoised = false;
     }
-    /// Replace the preview with a caller-owned linear denoised result.
+    /// Replace the preview with a caller-owned linear denoised result. The image
+    /// stays on the GPU, so [`Display::show_denoised`] can show it again after a capture.
     pub fn upload(&mut self, pixels: &[f32]) -> Result<()> {
         if pixels.len() != self.size[0] as usize * self.size[1] as usize * 4
             || pixels.iter().any(|v| !v.is_finite())
         {
             return Err("Invalid display image".into());
         }
+        let denoised = self.denoised.get_or_insert_with(|| {
+            self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Denoised preview"),
+                size: self.linear.size(),
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            })
+        });
         let bytes: Vec<_> = pixels.iter().flat_map(|v| v.to_le_bytes()).collect();
-        self.gpu.queue.write_buffer(&self.linear, 0, &bytes);
-        self.samples = 1;
-        self.using_denoised = true;
+        self.gpu.queue.write_buffer(denoised, 0, &bytes);
+        self.uploads += 1;
+        self.denoise_revision += 1;
+        self.image_revision += 1;
+        self.show_denoised();
         Ok(())
     }
+    /// Shows the last uploaded denoised image again, for example after a capture
+    /// replaced it with newer samples. Returns false when there is none.
+    pub fn show_denoised(&mut self) -> bool {
+        let Some(denoised) = &self.denoised else {
+            return false;
+        };
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(denoised, 0, &self.linear, 0, self.linear.size());
+        self.gpu.queue.submit([encoder.finish()]);
+        self.samples = 1;
+        self.using_denoised = true;
+        true
+    }
+    /// Shows the captured samples and forgets the denoised image.
     pub fn original(&mut self) {
+        self.reset_effects();
+        self.denoised = None;
         if !self.using_denoised {
             return;
         }
@@ -201,8 +328,159 @@ impl Display {
     pub fn compose_with(&self, settings: &Settings) {
         self.compose_inner(settings, true);
     }
+    /// Resolved raw ray color, without denoising or display transforms. Match
+    /// WebGPU's hit normalization and per-pixel coverage, including blank pixels.
+    pub(crate) fn hdr_texture(&mut self) -> wgpu::Texture {
+        if self.hdr.is_none() {
+            let texture = image(
+                &self.gpu.device,
+                self.size,
+                wgpu::TextureFormat::Rgba32Float,
+            );
+            let pipeline =
+                self.gpu
+                    .device
+                    .create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                        label: Some("MuTracer HDR resolve"),
+                        layout: None,
+                        module: &self.gpu.device.create_shader_module(
+                            wgpu::ShaderModuleDescriptor {
+                                label: Some("MuTracer HDR resolve"),
+                                source: wgpu::ShaderSource::Wgsl(
+                                    include_str!("hdr-output.wgsl").into(),
+                                ),
+                            },
+                        ),
+                        entry_point: Some("main"),
+                        compilation_options: Default::default(),
+                        cache: None,
+                    });
+            let group = self
+                .gpu
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &pipeline.get_bind_group_layout(0),
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.raw.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: self.normal.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: self.albedo.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::TextureView(
+                                &texture.create_view(&Default::default()),
+                            ),
+                        },
+                    ],
+                });
+            self.hdr = Some((texture, pipeline, group));
+        }
+        let (texture, pipeline, group) = self.hdr.as_ref().unwrap();
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, group, &[]);
+            pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
+        }
+        self.gpu.queue.submit([encoder.finish()]);
+        texture.clone()
+    }
+    pub(crate) fn compose_straight(&mut self, settings: &Settings) -> wgpu::Texture {
+        if self.composed.is_none() {
+            let texture = image(&self.gpu.device, self.size, wgpu::TextureFormat::Rgba8Unorm);
+            let group = self
+                .gpu
+                .device
+                .create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: None,
+                    layout: &self.pipeline.get_bind_group_layout(0),
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: self.linear.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(
+                                &texture.create_view(&Default::default()),
+                            ),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: self.params.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: self.normal.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: self.albedo.as_entire_binding(),
+                        },
+                    ],
+                });
+            self.composed = Some((texture, group));
+        }
+        let (texture, group) = self.composed.as_ref().unwrap();
+        self.compose_into(settings, false, group, texture);
+        texture.clone()
+    }
+    pub(crate) fn compose_hdr(&mut self, settings: &Settings) -> wgpu::Texture {
+        if self.composed_hdr.is_none() {
+            self.composed_hdr = Some(image(
+                &self.gpu.device,
+                self.size,
+                wgpu::TextureFormat::Rgba16Float,
+            ));
+        }
+        let target = self.composed_hdr.as_ref().unwrap();
+        let mut slot = self.effects.lock().unwrap_or_else(|e| e.into_inner());
+        let effects = slot.get_or_insert_with(|| effects::Effects::new(&self.gpu.device));
+        effects.compose(self, settings, false, target);
+        target.clone()
+    }
     fn compose_inner(&self, settings: &Settings, premultiply: bool) {
+        self.compose_into(settings, premultiply, &self.group, &self.texture);
+    }
+    fn reset_effects(&mut self) {
+        if let Some(effects) = self
+            .effects
+            .get_mut()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_mut()
+        {
+            effects.reset();
+        }
+    }
+    fn compose_into(
+        &self,
+        settings: &Settings,
+        premultiply: bool,
+        group: &wgpu::BindGroup,
+        target: &wgpu::Texture,
+    ) {
         if self.samples == 0 {
+            return;
+        }
+        if settings.vignette != 0.
+            || settings.bloom_intensity > 0.
+            || self.metadata.has_catcher
+            || self.metadata.flat_background[3] > 0.
+            || settings.output >= 3
+        {
+            let mut slot = self.effects.lock().unwrap_or_else(|e| e.into_inner());
+            let effects = slot.get_or_insert_with(|| effects::Effects::new(&self.gpu.device));
+            effects.compose(self, settings, premultiply, target);
             return;
         }
         let bytes: Vec<_> = [
@@ -227,7 +505,7 @@ impl Display {
         {
             let mut pass = encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.group, &[]);
+            pass.set_bind_group(0, group, &[]);
             pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
         }
         self.gpu.queue.submit([encoder.finish()]);
@@ -241,6 +519,9 @@ impl Display {
         result
     }
     fn read_texture(&self) -> Result<Vec<u8>> {
+        self.read_image(&self.texture)
+    }
+    pub(crate) fn read_image(&self, texture: &wgpu::Texture) -> Result<Vec<u8>> {
         let stride = (self.size[0] * 4).div_ceil(256) * 256;
         let buffer = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Display export readback"),
@@ -250,7 +531,7 @@ impl Display {
         });
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         encoder.copy_texture_to_buffer(
-            self.texture.as_image_copy(),
+            texture.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &buffer,
                 layout: wgpu::TexelCopyBufferLayout {
@@ -297,9 +578,157 @@ impl Display {
     }
 }
 
+pub(crate) fn image(
+    device: &wgpu::Device,
+    size: [u32; 2],
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("MuTracer borrowed output"),
+        size: wgpu::Extent3d {
+            width: size[0],
+            height: size[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+            | wgpu::TextureUsages::COPY_DST
+            | if matches!(
+                format,
+                wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba16Float
+            ) {
+                wgpu::TextureUsages::RENDER_ATTACHMENT
+            } else {
+                wgpu::TextureUsages::empty()
+            },
+        view_formats: &[],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
+    fn gpu_output_hdr_matches_web_hit_normalization_and_ignores_denoising() {
+        let gpu = GpuDevice::with_backend(0).unwrap();
+        let mut display = Display::new(gpu.clone(), [2, 2]);
+        let raw: Vec<f32> = vec![
+            4., 2., 1., 1., 8., 4., 2., 4., 6., 3., 1.5, 2., 99., 99., 99., 99.,
+        ];
+        let normal: Vec<f32> = vec![
+            0., 0., 2., 4., 0., 0., 3., 4., 0., 0., 0., 4., 0., 0., 0., 0.,
+        ];
+        let albedo: Vec<f32> = vec![
+            0., 0., 0., 1., 0., 0., 0., 2., 0., 0., 0., 0., 0., 0., 0., 0.,
+        ];
+        for (target, data) in [
+            (&display.raw, &raw),
+            (&display.normal, &normal),
+            (&display.albedo, &albedo),
+        ] {
+            gpu.queue.write_buffer(
+                target,
+                0,
+                &data
+                    .iter()
+                    .flat_map(|v| v.to_le_bytes())
+                    .collect::<Vec<_>>(),
+            );
+        }
+        let expected: Vec<f32> = vec![
+            1.5, 0.75, 0.375, 0.5, 0., 0., 0., 0., 4., 2., 1., 0.25, 4., 2., 1., 1.,
+        ];
+        // Read on this capture's own device (no cross-device texture use).
+        let texture = display.hdr_texture();
+        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 512,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let read = |texture: &wgpu::Texture| {
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            encoder.copy_texture_to_buffer(
+                texture.as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &buffer,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(256),
+                        rows_per_image: None,
+                    },
+                },
+                texture.size(),
+            );
+            gpu.queue.submit([encoder.finish()]);
+            let (send, receive) = std::sync::mpsc::channel();
+            buffer.map_async(wgpu::MapMode::Read, .., move |r| {
+                let _ = send.send(r);
+            });
+            gpu.device
+                .poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(5)),
+                })
+                .unwrap();
+            receive.recv().unwrap().unwrap();
+            let data: Vec<f32> = {
+                let mapped = buffer.get_mapped_range(..).unwrap();
+                mapped
+                    .chunks_exact(256)
+                    .flat_map(|row| {
+                        row[..32]
+                            .chunks_exact(4)
+                            .map(|v| f32::from_le_bytes(v.try_into().unwrap()))
+                    })
+                    .collect()
+            };
+            buffer.unmap();
+            data
+        };
+        assert_eq!(read(&texture), expected);
+        // CPU HDR follows rawOutputPass: straight coverage for transparent/mapped
+        // backgrounds, per-sample RGB for opaque flat backgrounds. Readback must
+        // not overwrite the separately borrowed GPU texture or accumulation.
+        let inputs = [&raw, &normal, &albedo].map(|data| {
+            wgpu::util::DeviceExt::create_buffer_init(
+                &gpu.device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("HDR readback fixture"),
+                    contents: &data
+                        .iter()
+                        .flat_map(|v| v.to_le_bytes())
+                        .collect::<Vec<_>>(),
+                    usage: wgpu::BufferUsages::COPY_SRC,
+                },
+            )
+        });
+        let inputs = [&inputs[0], &inputs[1], &inputs[2]];
+        let transparent = crate::hdr::read(&gpu, inputs, [2, 2], 4, false).unwrap();
+        assert_eq!(
+            transparent,
+            vec![
+                4., 2., 1., 0.25, 4., 2., 1., 1., 1.5, 0.75, 0.375, 0.5, 0., 0., 0., 0.
+            ]
+        );
+        let flat = crate::hdr::read(&gpu, inputs, [2, 2], 4, true).unwrap();
+        assert_eq!(
+            flat,
+            vec![
+                1., 0.5, 0.25, 0.25, 2., 1., 0.5, 1., 1.5, 0.75, 0.375, 0.5, 0., 0., 0., 0.
+            ]
+        );
+        assert_eq!(read(&texture), expected);
+        display.upload(&[0.75; 16]).unwrap();
+        assert_eq!(read(&display.hdr_texture()), expected);
+    }
+
     #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn display_settings_alpha_channels_and_export_preserve_linear_data() {

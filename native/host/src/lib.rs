@@ -13,12 +13,16 @@ use std::{
 use wgpu::util::DeviceExt;
 #[macro_use]
 pub mod logging;
+pub mod api;
 mod commit_plan;
 pub mod context;
 pub mod denoise;
 mod denoise_ffi;
+mod depth;
+mod device_loss;
 pub mod display;
 mod hardware;
+mod hdr;
 pub mod hit_diagnostics;
 pub mod image_diagnostics;
 pub mod picking;
@@ -280,6 +284,7 @@ struct CachedPipeline {
 }
 #[derive(Clone)]
 struct GpuDevice {
+    loss: device_loss::DeviceLossNotifier,
     device: wgpu::Device,
     queue: GpuQueue,
     info: wgpu::AdapterInfo,
@@ -358,7 +363,13 @@ impl GpuDevice {
                 })
             })
         };
+        let loss = device_loss::DeviceLossNotifier::default();
+        let notify = loss.clone();
+        device.set_device_lost_callback(move |reason, message| {
+            notify.notify(format!("{reason:?}: {message}"));
+        });
         Ok(Self {
+            loss,
             pipelines: Arc::new(Mutex::new(HashMap::new())),
             pipeline_cache,
             device,
@@ -368,12 +379,132 @@ impl GpuDevice {
         })
     }
 }
+/// Compiles (or reuses) the pipeline of `source` for the scene's group layouts.
+/// Returns the pipeline and whether the device cache already held it.
+fn compile_pipeline(
+    gpu: &GpuDevice,
+    scene: &Scene,
+    source: String,
+    hardware: bool,
+) -> Result<(CachedPipeline, bool)> {
+    let device = &gpu.device;
+    let key = PipelineKey {
+        source,
+        entry: scene.entry_point.clone(),
+        layout: scene.bind_groups.iter().map(|g| g.layout.clone()).collect(),
+        hardware,
+    };
+    let mut cache = gpu.pipelines.lock().unwrap();
+    if let Some(cached) = cache.get(&key) {
+        return Ok((cached.clone(), true));
+    }
+    let layouts: Vec<_> = scene
+        .bind_groups
+        .iter()
+        .enumerate()
+        .map(|(index, group)| {
+            let mut entries: Vec<_> = group.layout.clone();
+            if index == layout::group::SCENE && hardware {
+                entries.extend([
+                    wgpu::BindGroupLayoutEntry {
+                        binding: layout::hwrt_binding::ACCELERATION as u32,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::AccelerationStructure {
+                            vertex_return: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: layout::hwrt_binding::INDICES as u32,
+                        visibility: wgpu::ShaderStages::COMPUTE,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Storage { read_only: true },
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                ]);
+            }
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("MuTracer capture layout"),
+                entries: &entries,
+            })
+        })
+        .collect();
+    let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("MuTracer capture pipeline layout"),
+        bind_group_layouts: &layouts.iter().map(Some).collect::<Vec<_>>(),
+        ..Default::default()
+    });
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("MuTracer path tracer"),
+        source: wgpu::ShaderSource::Wgsl(key.source.as_str().into()),
+    });
+    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some("MuTracer native path tracer"),
+        layout: Some(&layout),
+        module: &shader,
+        entry_point: Some(&scene.entry_point),
+        compilation_options: Default::default(),
+        cache: gpu.pipeline_cache.as_ref(),
+    });
+    let compiled = CachedPipeline {
+        _shader: shader,
+        layouts,
+        pipeline,
+    };
+    if cache.len() >= 32 {
+        cache.clear();
+    }
+    cache.insert(key, compiled.clone());
+    Ok((compiled, false))
+}
+/// One render's view of a shared scene (S2): its camera and trace uniforms,
+/// accumulation outputs 10..13, the FRAME/OUTPUT groups binding them, and the
+/// pipeline of its pattern/bevel-sample variant when it differs from the scene's.
+struct Target {
+    width: u32,
+    height: u32,
+    buffers: HashMap<usize, wgpu::Buffer>,
+    pipeline: Option<wgpu::ComputePipeline>,
+    /// FRAME and OUTPUT groups.
+    groups: [wgpu::BindGroup; 2],
+    samples: u32,
+    frames: Vec<[u8; 16]>,
+}
+impl Target {
+    fn output(&self, kind: u32) -> Result<&wgpu::Buffer> {
+        let id = match kind {
+            0 => layout::resource::COLOR,
+            1 => layout::resource::NORMAL,
+            2 => layout::resource::ALBEDO,
+            3 => layout::resource::SHADOW_CATCHER,
+            _ => return Err("Unknown image kind".into()),
+        };
+        self.buffers
+            .get(&id)
+            .ok_or_else(|| "Missing output buffer".into())
+    }
+    /// GPU bytes owned by this target.
+    #[cfg(test)]
+    fn bytes(&self) -> u64 {
+        self.buffers.values().map(|b| b.size()).sum()
+    }
+}
 struct GpuScene {
+    depth_shader: wgpu::ShaderModule,
+    depth_pipeline: Arc<std::sync::OnceLock<depth::Pipeline>>,
+    display_trace: Vec<u8>,
     retained: Option<scene::PreparedState>,
     gpu: GpuDevice,
     scene: Scene,
     buffers: HashMap<usize, wgpu::Buffer>,
     pipeline: wgpu::ComputePipeline,
+    /// Layouts of `pipeline`; render targets bind their frame/output groups with them.
+    layouts: Vec<wgpu::BindGroupLayout>,
+    /// Whether `pipeline` is the HWRT production shader.
+    hwrt_shader: bool,
     groups: Vec<wgpu::BindGroup>,
     textures: HashMap<usize, wgpu::Texture>,
     samplers: HashMap<usize, wgpu::Sampler>,
@@ -550,84 +681,12 @@ impl GpuScene {
             })?
             .into_owned(),
         )?;
-        let key = PipelineKey {
-            source,
-            entry: scene.entry_point.clone(),
-            layout: scene.bind_groups.iter().map(|g| g.layout.clone()).collect(),
-            hardware: hardware.is_some(),
-        };
         let shader_started = Instant::now();
-        let mut cache = gpu.pipelines.lock().unwrap();
-        let cached = cache.get(&key).cloned();
-        let cache_hit = cached.is_some();
-        let compiled = if let Some(cached) = cached {
-            cached
-        } else {
-            let layouts: Vec<_> = scene
-                .bind_groups
-                .iter()
-                .enumerate()
-                .map(|(index, group)| {
-                    let mut entries: Vec<_> = group.layout.clone();
-                    if index == layout::group::SCENE && hardware.is_some() {
-                        entries.extend([
-                            wgpu::BindGroupLayoutEntry {
-                                binding: layout::hwrt_binding::ACCELERATION as u32,
-                                visibility: wgpu::ShaderStages::COMPUTE,
-                                ty: wgpu::BindingType::AccelerationStructure {
-                                    vertex_return: false,
-                                },
-                                count: None,
-                            },
-                            wgpu::BindGroupLayoutEntry {
-                                binding: layout::hwrt_binding::INDICES as u32,
-                                visibility: wgpu::ShaderStages::COMPUTE,
-                                ty: wgpu::BindingType::Buffer {
-                                    ty: wgpu::BufferBindingType::Storage { read_only: true },
-                                    has_dynamic_offset: false,
-                                    min_binding_size: None,
-                                },
-                                count: None,
-                            },
-                        ]);
-                    }
-                    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                        label: Some("MuTracer capture layout"),
-                        entries: &entries,
-                    })
-                })
-                .collect();
-            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("MuTracer capture pipeline layout"),
-                bind_group_layouts: &layouts.iter().map(Some).collect::<Vec<_>>(),
-                ..Default::default()
-            });
-            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("MuTracer path tracer"),
-                source: wgpu::ShaderSource::Wgsl(key.source.as_str().into()),
-            });
-            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("MuTracer native path tracer"),
-                layout: Some(&layout),
-                module: &shader,
-                entry_point: Some(&scene.entry_point),
-                compilation_options: Default::default(),
-                cache: gpu.pipeline_cache.as_ref(),
-            });
-            let compiled = CachedPipeline {
-                _shader: shader,
-                layouts,
-                pipeline,
-            };
-            if cache.len() >= 32 {
-                cache.clear();
-            }
-            cache.insert(key, compiled.clone());
-            compiled
-        };
-        drop(cache);
+        let (compiled, cache_hit) = compile_pipeline(&gpu, &scene, source, hardware.is_some())?;
         let CachedPipeline {
-            layouts, pipeline, ..
+            layouts,
+            pipeline,
+            _shader: depth_shader,
         } = compiled;
         let compile_seconds = shader_started.elapsed().as_secs_f64();
         if std::env::var_os("MUTRACER_NATIVE_PROFILE").is_some_and(|v| v == "1") {
@@ -640,7 +699,7 @@ impl GpuScene {
         let groups: Vec<_> = scene
             .bind_groups
             .iter()
-            .zip(&layouts)
+            .zip(layouts.iter())
             .enumerate()
             .map(|(index, (group, layout))| {
                 let mut entries: Vec<_> = group
@@ -683,7 +742,11 @@ impl GpuScene {
         let bounces = options.bounces;
         let seed = options.seed;
         let frames = runtime::frames(bounces, seed)?;
+        let display_trace = read(&AssetId::Packet(scene.rt_uniform))?.into_owned();
         Ok(Self {
+            depth_shader,
+            depth_pipeline: Default::default(),
+            display_trace,
             retained: None,
             frames,
             frame_key: (bounces.to_bits(), seed),
@@ -691,6 +754,8 @@ impl GpuScene {
             scene,
             buffers,
             pipeline,
+            layouts,
+            hwrt_shader: use_hwrt,
             groups,
             textures: textures,
             samplers,
@@ -716,14 +781,38 @@ impl GpuScene {
         if additional == 0 || end > 4096 {
             return Err("Total samples must be 1..4096".into());
         }
+        if self.frame_key != (bounces.to_bits(), seed) {
+            return Err("Frame settings do not match the prepared sequence".into());
+        }
+        let groups: Vec<_> = self.groups.iter().collect();
+        self.encode_samples(
+            &self.pipeline,
+            &groups,
+            &self.buffers[&self.scene.rt_uniform],
+            &self.frames,
+            [self.scene.width, self.scene.height],
+            start..end,
+            timer,
+        );
+        Ok(())
+    }
+    /// Submits one dispatch per sample, writing that sample's frame words first.
+    #[allow(clippy::too_many_arguments)]
+    fn encode_samples(
+        &self,
+        pipeline: &wgpu::ComputePipeline,
+        groups: &[&wgpu::BindGroup],
+        uniform: &wgpu::Buffer,
+        frames: &[[u8; 16]],
+        size: [u32; 2],
+        samples: std::ops::Range<u32>,
+        timer: Option<&profiling::GpuTimer>,
+    ) {
         let device = &self.gpu.device;
         let queue = &self.gpu.queue;
-        for sample in start..end {
-            if self.frame_key != (bounces.to_bits(), seed) {
-                return Err("Frame settings do not match the prepared sequence".into());
-            }
-            let frame = &self.frames[sample as usize];
-            let uniform = &self.buffers[&self.scene.rt_uniform];
+        let (start, end) = (samples.start, samples.end);
+        for sample in samples {
+            let frame = &frames[sample as usize];
             queue.write_buffer(
                 uniform,
                 layout::ray_uniform::SAMPLE_COUNT as u64,
@@ -742,15 +831,11 @@ impl GpuScene {
                     timestamp_writes: timer.map(|t| t.pass(sample - start)),
                     ..Default::default()
                 });
-                pass.set_pipeline(&self.pipeline);
-                for (index, group) in self.groups.iter().enumerate() {
-                    pass.set_bind_group(index as u32, group, &[]);
+                pass.set_pipeline(pipeline);
+                for (index, group) in groups.iter().enumerate() {
+                    pass.set_bind_group(index as u32, *group, &[]);
                 }
-                pass.dispatch_workgroups(
-                    self.scene.width.div_ceil(8),
-                    self.scene.height.div_ceil(8),
-                    1,
-                );
+                pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
             }
             if sample + 1 == end {
                 if let Some(t) = timer {
@@ -759,7 +844,6 @@ impl GpuScene {
             }
             queue.submit([encoder.finish()]);
         }
-        Ok(())
     }
     fn add_samples(&mut self, additional: u32, bounces: f32, seed: u32) -> Result<()> {
         let timer = profiling::GpuTimer::new(&self.gpu.device, additional, false);
@@ -799,6 +883,32 @@ impl GpuScene {
             self.samples,
         )
     }
+    /// L1 readback; the public L0 read_pixels method above remains a raw average.
+    fn read_hdr(&self, target: Option<&Target>) -> Result<Vec<f32>> {
+        let (buffers, size, samples) = match target {
+            Some(target) => (
+                [target.output(0)?, target.output(1)?, target.output(2)?],
+                [target.width, target.height],
+                target.samples,
+            ),
+            None => (
+                [
+                    &self.buffers[&self.scene.color_output],
+                    &self.buffers[&self.scene.normal_output.ok_or("No normal output")?],
+                    &self.buffers[&self.scene.albedo_output.ok_or("No albedo output")?],
+                ],
+                [self.scene.width, self.scene.height],
+                self.samples,
+            ),
+        };
+        hdr::read(
+            &self.gpu,
+            buffers,
+            size,
+            samples,
+            display::Metadata::from_trace(&self.display_trace).opaque_background(),
+        )
+    }
     fn reset_raw(&mut self) -> Result<()> {
         // The raw resource protocol reserves 10..13 for accumulation and ray scratch.
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
@@ -817,6 +927,192 @@ impl GpuScene {
             timeout: Some(Duration::from_secs(30)),
         })?;
         self.samples = 0;
+        Ok(())
+    }
+    /// Builds a render target from its AOT packet, reusing `previous` buffers of
+    /// the same size. The accumulation restarts.
+    fn target(
+        &self,
+        packet: scene::TargetPacket,
+        size: [u32; 2],
+        previous: Option<Target>,
+    ) -> Result<Target> {
+        let memory_scope = self
+            .gpu
+            .device
+            .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+        let validation_scope = self
+            .gpu
+            .device
+            .push_error_scope(wgpu::ErrorFilter::Validation);
+        let result = self.build_target(packet, size, previous);
+        let validation = pollster::block_on(validation_scope.pop());
+        let memory = pollster::block_on(memory_scope.pop());
+        if let Some(error) = validation.or(memory) {
+            return Err(error.to_string().into());
+        }
+        result
+    }
+    fn build_target(
+        &self,
+        packet: scene::TargetPacket,
+        size: [u32; 2],
+        previous: Option<Target>,
+    ) -> Result<Target> {
+        use layout::resource as res;
+        if self.scene.bind_groups[layout::group::OUTPUT].entries.len() != 4 {
+            return Err("Render targets do not support instrumented scene outputs".into());
+        }
+        let device = &self.gpu.device;
+        let queue = &self.gpu.queue;
+        let (pipeline, layouts) = match packet.shader {
+            Some(source) => {
+                let (compiled, _) =
+                    compile_pipeline(&self.gpu, &self.scene, source, self.hardware.is_some())?;
+                (Some(compiled.pipeline), compiled.layouts)
+            }
+            None => (None, self.layouts.clone()),
+        };
+        let pixels = size[0] as u64 * size[1] as u64;
+        let mut reusable = previous.map(|t| t.buffers).unwrap_or_default();
+        let mut buffers = HashMap::new();
+        let mut clear = Vec::new();
+        for (id, bytes, usage) in [
+            (res::CAMERA, 144, self.buffers[&res::CAMERA].usage()),
+            (
+                res::TRACE_UNIFORM,
+                256,
+                self.buffers[&res::TRACE_UNIFORM].usage(),
+            ),
+            (res::COLOR, pixels * 16, self.buffers[&res::COLOR].usage()),
+            (res::NORMAL, pixels * 16, self.buffers[&res::NORMAL].usage()),
+            (res::ALBEDO, pixels * 16, self.buffers[&res::ALBEDO].usage()),
+            (
+                res::SHADOW_CATCHER,
+                pixels * 48,
+                self.buffers[&res::SHADOW_CATCHER].usage(),
+            ),
+        ] {
+            let buffer = match reusable.remove(&id).filter(|b| b.size() == bytes) {
+                Some(buffer) => {
+                    clear.push(id);
+                    buffer
+                }
+                None => device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("MuTracer render target"),
+                    size: bytes,
+                    usage,
+                    mapped_at_creation: false,
+                }),
+            };
+            buffers.insert(id, buffer);
+        }
+        queue.write_buffer(&buffers[&res::CAMERA], 0, &packet.camera);
+        queue.write_buffer(&buffers[&res::TRACE_UNIFORM], 0, &packet.trace);
+        if !clear.is_empty() {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            for id in clear.into_iter().filter(|id| *id >= res::COLOR) {
+                encoder.clear_buffer(&buffers[&id], 0, None);
+            }
+            queue.submit([encoder.finish()]);
+        }
+        let group = |index: usize, entries: &[(usize, &wgpu::Buffer)]| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("MuTracer render target resources"),
+                layout: &layouts[index],
+                entries: &entries
+                    .iter()
+                    .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                        binding: *binding as u32,
+                        resource: buffer.as_entire_binding(),
+                    })
+                    .collect::<Vec<_>>(),
+            })
+        };
+        let frame = group(
+            layout::group::FRAME,
+            &[
+                (layout::frame_binding::CAMERA, &buffers[&res::CAMERA]),
+                (
+                    layout::frame_binding::TRACE_UNIFORM,
+                    &buffers[&res::TRACE_UNIFORM],
+                ),
+                (
+                    layout::frame_binding::LIGHT_UNIFORM,
+                    &self.buffers[&res::LIGHT_UNIFORM],
+                ),
+            ],
+        );
+        let output = group(
+            layout::group::OUTPUT,
+            &[
+                (layout::output_binding::COLOR, &buffers[&res::COLOR]),
+                (layout::output_binding::NORMAL, &buffers[&res::NORMAL]),
+                (layout::output_binding::ALBEDO, &buffers[&res::ALBEDO]),
+                (
+                    layout::output_binding::SHADOW_CATCHER,
+                    &buffers[&res::SHADOW_CATCHER],
+                ),
+            ],
+        );
+        Ok(Target {
+            width: size[0],
+            height: size[1],
+            buffers,
+            pipeline,
+            groups: [frame, output],
+            samples: 0,
+            frames: packet.frames,
+        })
+    }
+    /// Submits samples `start..start + additional` of a target without waiting.
+    fn dispatch_target(&self, target: &Target, start: u32, additional: u32) -> Result<()> {
+        let end = start
+            .checked_add(additional)
+            .ok_or("Sample count overflow")?;
+        if additional == 0 || end > 4096 {
+            return Err("Total samples must be 1..4096".into());
+        }
+        self.encode_samples(
+            target.pipeline.as_ref().unwrap_or(&self.pipeline),
+            &[
+                &self.groups[layout::group::SCENE],
+                &self.groups[layout::group::TEXTURES],
+                &target.groups[0],
+                &target.groups[1],
+            ],
+            &target.buffers[&layout::resource::TRACE_UNIFORM],
+            &target.frames,
+            [target.width, target.height],
+            start..end,
+            None,
+        );
+        Ok(())
+    }
+    fn read_target(&self, target: &Target, kind: u32) -> Result<Vec<u8>> {
+        if target.samples == 0 {
+            return Err("No completed samples".into());
+        }
+        read_average(
+            &self.gpu.device,
+            &self.gpu.queue,
+            target.output(kind)?,
+            target.width,
+            target.height,
+            target.samples,
+        )
+    }
+    fn reset_target(&self, target: &mut Target) -> Result<()> {
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        for id in layout::resource::COLOR..=layout::resource::SHADOW_CATCHER {
+            encoder.clear_buffer(&target.buffers[&id], 0, None);
+        }
+        self.gpu.queue.submit([encoder.finish()]);
+        self.gpu.device.poll(wgpu::PollType::Wait {
+            submission_index: None,
+            timeout: Some(Duration::from_secs(30)),
+        })?;
+        target.samples = 0;
         Ok(())
     }
     fn validate_lighting(&self, updates: &scene::LightingUpdates) -> Result<()> {
@@ -1037,6 +1333,10 @@ impl GpuScene {
             self.rebind_textures(&replaced)?;
         }
         for (id, offset, width, height, data) in updates {
+            if *id == self.scene.rt_uniform {
+                let at = *offset as usize;
+                self.display_trace[at..at + data.len()].copy_from_slice(data);
+            }
             if *id < layout::resource::ATLAS {
                 self.gpu
                     .queue

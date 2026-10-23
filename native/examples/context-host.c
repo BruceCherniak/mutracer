@@ -58,7 +58,15 @@ int main(int argc,char **argv) {
   OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.state==MT_CONTEXT_EMPTY&&info.samples==0&&info.struct_size==sizeof(info));
   FAILS(MT_ERROR_INVALID_STATE,mt_context_render(a,1,error,sizeof(error)));FAILS(MT_ERROR_INVALID_STATE,mt_context_reset(a,error,sizeof(error)));FAILS(MT_ERROR_INVALID_STATE,mt_context_wait(a,MT_WAIT_INDEFINITELY,error,sizeof(error)));
   size_t written=999;FAILS(MT_ERROR_INVALID_STATE,mt_context_read_pixels(a,MT_IMAGE_HDR,NULL,0,&written,error,sizeof(error)));REQUIRE(written==0);
-  info.struct_size=0;FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_info(a,&info,error,sizeof(error)));info.struct_size=sizeof(info);
+  const uint32_t invalid_sizes[] = {0, 20, 28};
+  for (size_t i = 0; i < sizeof invalid_sizes / sizeof invalid_sizes[0]; i++) {
+    info.struct_size = invalid_sizes[i];
+    mt_context_snapshot untouched = info;
+    FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_info(a,&info,error,sizeof(error)));
+    REQUIRE(memcmp(&info,&untouched,sizeof info)==0);
+  }
+  FAILS(MT_ERROR_INVALID_ARGUMENT,mt_context_info(a,NULL,error,sizeof(error)));
+  info.struct_size=sizeof(info);
   OK(mt_context_commit(a,input,length,error,sizeof(error)));OK(backend_is(a,MT_BACKEND_SOFTWARE));
   OK(mt_context_commit(b,input,length,error,sizeof(error)));OK(backend_is(b,MT_BACKEND_SOFTWARE));
   OK(mt_context_info(a,&info,error,sizeof(error)));REQUIRE(info.state==MT_CONTEXT_COMMITTED&&info.samples==0&&info.width==words[2]&&info.height==words[3]);

@@ -1,7 +1,6 @@
 //! Small native example: glTF input → native MuTracer library → egui image.
 mod animation;
 mod controls;
-mod denoise;
 mod dock;
 mod edit_bench;
 mod focus;
@@ -25,10 +24,15 @@ mod theme;
 mod ui;
 use anyhow::{Context, Result, ensure};
 use eframe::egui;
+use mutracer_native_probe::api;
 use renderer::{Camera, RenderSettings, Renderer};
 use scene::{Descriptor, Environment, KeyLight, Model};
 use std::{
     path::{Path, PathBuf},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, Ordering},
+    },
     time::Duration,
 };
 
@@ -43,23 +47,192 @@ enum Change {
     Transform,
     Scene,
 }
+/// One engine and its render loop. A backend switch prepares a second target
+/// while the current one keeps its image on screen.
+struct Target {
+    engine: api::Engine,
+    render_loop: api::RenderLoop,
+    backend: u32,
+    /// Whether a scene was handed to the engine.
+    pushed: bool,
+    /// Scene preparations started (full commits), counted from engine events.
+    preparations: Arc<AtomicU32>,
+    errors: Arc<Mutex<Vec<String>>>,
+    _events: api::Subscription,
+}
+impl Target {
+    fn new(
+        gpu: Option<&eframe::egui_wgpu::RenderState>,
+        gate: Option<&Arc<mutracer_native_probe::submission::SubmissionGate>>,
+        backend: u32,
+        settings: api::RenderSettings,
+    ) -> Result<Self> {
+        let options = api::EngineOptions {
+            backend: if backend == 1 {
+                api::Backend::Hardware
+            } else {
+                api::Backend::Software
+            },
+        };
+        let engine = match gpu {
+            Some(gpu) => api::Engine::on_device(
+                &gpu.adapter,
+                &gpu.device,
+                &gpu.queue,
+                options,
+                gate.cloned(),
+            ),
+            None => api::Engine::new(options)?,
+        };
+        let render_loop = api::RenderLoop::new(
+            &engine,
+            api::RenderLoopOptions {
+                // The viewer presents only the final render.
+                preview: None,
+                final_render: api::LoopRender::Settings(settings),
+                ..Default::default()
+            },
+        )?;
+        let preparations = Arc::new(AtomicU32::new(0));
+        let errors = Arc::new(Mutex::new(Vec::new()));
+        let (counted, reported) = (preparations.clone(), errors.clone());
+        let events = engine.on(move |event| match event {
+            api::EngineEvent::Progress { progress, .. } if *progress == 0. => {
+                counted.fetch_add(1, Ordering::Relaxed);
+            }
+            api::EngineEvent::Error { message } => reported.lock().unwrap().push(message.clone()),
+            _ => {}
+        });
+        Ok(Self {
+            engine,
+            render_loop,
+            backend,
+            pushed: false,
+            preparations,
+            errors,
+            _events: events,
+        })
+    }
+    fn final_render(&self) -> &api::Render {
+        self.render_loop.final_render()
+    }
+    /// A pushed scene is still being prepared; its edits wait.
+    fn preparing(&self) -> bool {
+        self.pushed && self.final_render().status() == api::RenderStatus::Preparing
+    }
+}
+/// The viewer's render settings as an L1 render. Viewer descriptors keep the
+/// bevel and dispersion quality bits clear, so the render does too.
+fn render_settings(settings: &RenderSettings, size: [u32; 2], held: bool) -> api::RenderSettings {
+    api::RenderSettings {
+        max_samples: settings.max_samples.clamp(1, 4096),
+        bounces: settings.bounces,
+        clamping: settings.clamping,
+        sampling_pattern: match settings.sampling_pattern {
+            1 => api::SamplingPattern::ZSobol,
+            2 => api::SamplingPattern::Random,
+            _ => api::SamplingPattern::Sobol,
+        },
+        direct_light_candidates: settings.direct_light_candidates,
+        bevel: false,
+        bevel_samples: settings.bevel_samples,
+        dispersion_wavelengths: 1,
+        transmissive_output_alpha_min: settings.transmissive_output_alpha_min,
+        // Held input traces one sample per frame, as before.
+        allow_multiple_samples_per_frame: !held,
+        size: api::RenderSize::Fixed {
+            width: size[0],
+            height: size[1],
+        },
+        seed: settings.seed,
+        ..Default::default()
+    }
+}
+fn display_settings(settings: &mutracer_native_probe::display::Settings) -> api::DisplaySettings {
+    api::DisplaySettings {
+        tone_mapping: match settings.tone_mapping {
+            1 => api::ToneMapping::Aces,
+            2 => api::ToneMapping::Cineon,
+            3 => api::ToneMapping::Reinhard,
+            4 => api::ToneMapping::Linear,
+            _ => api::ToneMapping::Agx,
+        },
+        tone_mapping_exposure: settings.exposure,
+        contrast: settings.contrast,
+        saturation: settings.saturation,
+        temperature: settings.temperature,
+        tint: settings.tint,
+        vignette: settings.vignette,
+        bloom_intensity: settings.bloom_intensity,
+        bloom_threshold: settings.bloom_threshold,
+        bloom_radius: settings.bloom_radius,
+        shadow_catcher_color: settings.shadow_catcher_color,
+        shadow_catcher_alpha: settings.shadow_catcher_alpha,
+        hdr_output_enabled: false,
+        channel: match settings.output {
+            1 => api::Channel::Normal,
+            2 => api::Channel::Albedo,
+            3 => api::Channel::Shadow,
+            4 => api::Channel::ShadowCatcher,
+            _ => api::Channel::Final,
+        },
+    }
+}
+/// L1 images are top row first; the L0 helpers and saved files use bottom first.
+fn bottom_first(image: api::Image) -> Vec<f32> {
+    let row = image.width as usize * 4;
+    (0..image.height as usize)
+        .rev()
+        .flat_map(|y| image.data[y * row..(y + 1) * row].iter().copied())
+        .collect()
+}
+type SceneBuild = (
+    std::sync::mpsc::Receiver<Result<(Descriptor, Arc<Vec<u8>>)>>,
+    Option<(Model, Camera)>,
+    [u32; 2],
+);
+/// The viewer owns the shared device's callback. Keep only the active engines'
+/// notification handles, and replay terminal loss to a later backend candidate.
+#[derive(Default)]
+struct DeviceLossForwarder {
+    reason: Option<String>,
+    engines: Vec<api::DeviceLossNotifier>,
+}
+impl DeviceLossForwarder {
+    fn notify(&mut self, reason: String) {
+        let reason = self.reason.get_or_insert(reason);
+        for engine in &self.engines {
+            engine.notify(reason.clone());
+        }
+    }
+    fn watch(&mut self, engines: impl IntoIterator<Item = api::DeviceLossNotifier>) {
+        self.engines = engines.into_iter().collect();
+        if let Some(reason) = &self.reason {
+            for engine in &self.engines {
+                engine.notify(reason.clone());
+            }
+        }
+    }
+}
 struct Viewer {
     submission_gate: Option<std::sync::Arc<mutracer_native_probe::submission::SubmissionGate>>,
     startup_smoke: Option<(PathBuf, std::time::Instant, u32)>,
     metrics: Option<metrics::Metrics>,
-    renderer: Renderer,
     gpu: Option<eframe::egui_wgpu::RenderState>,
-    gpu_display: Option<mutracer_native_probe::display::Display>,
-    gpu_texture: Option<egui::TextureId>,
-    commit: Option<(
-        std::sync::mpsc::Receiver<Result<renderer::SceneCommit>>,
-        u64,
-        Option<(Model, Camera)>,
-        [u32; 2],
-    )>,
+    gpu_loss: Arc<Mutex<DeviceLossForwarder>>,
+    target: Target,
+    replacement: Option<Target>,
+    gpu_texture: Option<(egui::TextureId, wgpu::Texture)>,
+    /// Descriptor assembly for scene and layout changes, off the UI thread.
+    scene_build: Option<SceneBuild>,
+    /// A loaded model whose scene was pushed; swapped in once it is published.
+    pending_model: Option<(Model, Camera)>,
     backend: u32,
     backend_status: String,
     model: Model,
+    /// The last presented image shows the last pushed inputs, including the
+    /// current animation pose.
+    pose_presented: bool,
     animation_clock: std::time::Instant,
     descriptor: Option<Descriptor>,
     camera: Camera,
@@ -73,6 +246,10 @@ struct Viewer {
     focus: focus::AutoFocus,
     samples: u32,
     display_settings: mutracer_native_probe::display::Settings,
+    applied_display: Option<api::DisplaySettings>,
+    applied_denoise: Option<bool>,
+    /// Paused with the current samples denoised and presented.
+    paused_denoised: bool,
     selected: usize,
     selected_mesh: Option<usize>,
     texture_browser: textures::Browser,
@@ -86,25 +263,21 @@ struct Viewer {
     running: bool,
     change: Change,
     candidate: Option<(Model, Camera)>,
+    /// Headless only: HDR of the presented frame, bottom row first.
     pixels: Vec<f32>,
     pixel_size: [u32; 2],
     frame_samples: u32,
-    frame_pending: bool,
+    /// The active loop's presentation count already shown.
+    seen_presentations: u64,
+    /// Presented frames, counting display-only recompositions too.
+    frames: u64,
     generation: u64,
-    render_generation: u64,
-    frame_generation: u64,
-    render_size: [u32; 2],
     denoise: bool,
-    denoised: Vec<f32>,
-    denoiser: Option<denoise::Worker>,
     denoise_status: String,
-    last_denoise: Option<(u64, u32)>,
-    last_scene_commit: std::time::Instant,
-    /// Whether the last completed commit prepared the scene again.
+    /// Whether the last published commit prepared the scene again.
     last_commit_full: bool,
     texture: Option<egui::TextureHandle>,
     checker: Option<egui::TextureHandle>,
-    display_dirty: bool,
     error: String,
 }
 impl Viewer {
@@ -114,30 +287,36 @@ impl Viewer {
     fn new_on_device(path: &Path, gpu: Option<eframe::egui_wgpu::RenderState>) -> Result<Self> {
         let model = Model::load(path)?;
         let camera = Camera::fit(model.center, model.radius);
-        let mut renderer = if let Some(gpu) = &gpu {
-            Renderer::on_device(gpu, 1)?
-        } else {
-            Renderer::new()?
-        };
-        let environment = Environment::default();
         let metrics = metrics::Metrics::from_env();
         let size = if metrics.is_some() {
             [1280, 720]
         } else {
             [480, 320]
         };
-        let mut descriptor = None;
-        if gpu.is_none() {
-            renderer.commit(model.update_descriptor(
-                &mut descriptor,
-                &camera.bytes(size),
-                size,
-                &environment,
-                &KeyLight::default(),
-            ))?;
+        let settings = RenderSettings::default();
+        let submission_gate = gpu
+            .is_some()
+            .then(|| Arc::new(mutracer_native_probe::submission::SubmissionGate::default()));
+        let target = Target::new(
+            gpu.as_ref(),
+            submission_gate.as_ref(),
+            1,
+            render_settings(&settings, size, false),
+        )?;
+        let gpu_loss = Arc::new(Mutex::new(DeviceLossForwarder::default()));
+        gpu_loss
+            .lock()
+            .unwrap()
+            .watch([target.engine.device_loss_notifier()]);
+        if let Some(gpu) = &gpu {
+            let loss = gpu_loss.clone();
+            gpu.device.set_device_lost_callback(move |reason, message| {
+                loss.lock()
+                    .unwrap()
+                    .notify(format!("{reason:?}: {message}"));
+            });
         }
         let selected = model.meshes[0].material;
-        let submission_gate = renderer.shared.as_ref().map(|shared| shared.3.clone());
         if let Some(gate) = &submission_gate {
             gate.pause();
         }
@@ -147,22 +326,21 @@ impl Viewer {
             startup_smoke: None,
             metrics,
             backend: 1,
-            backend_status: if gpu.is_some() {
-                "Preparing scene…".into()
-            } else {
-                Self::describe_backend(renderer.backend()?)
-            },
-            renderer,
+            backend_status: "Preparing scene…".into(),
+            target,
+            replacement: None,
             gpu: gpu.clone(),
-            gpu_display: None,
+            gpu_loss,
             gpu_texture: None,
-            commit: None,
+            scene_build: None,
+            pending_model: None,
             model,
+            descriptor: None,
             animation_clock: std::time::Instant::now(),
-            descriptor,
+            pose_presented: false,
             camera,
             drag: input::ViewportDrag::default(),
-            environment,
+            environment: Environment::default(),
             light: KeyLight::default(),
             size,
             resolution: resolution::Resolution::new(if relative_resolution {
@@ -170,11 +348,14 @@ impl Viewer {
             } else {
                 None
             }),
-            settings: RenderSettings::default(),
+            settings,
             picking_focus: false,
             focus: focus::AutoFocus::default(),
             samples: 0,
             display_settings: mutracer_native_probe::display::Settings::default(),
+            applied_display: None,
+            applied_denoise: None,
+            paused_denoised: false,
             selected,
             selected_mesh: None,
             texture_browser: textures::Browser::default(),
@@ -186,36 +367,25 @@ impl Viewer {
             loading_name: String::new(),
             queued_load: None,
             running: true,
-            change: if gpu.is_some() {
-                Change::Scene
-            } else {
-                Change::None
-            },
+            change: Change::Scene,
             last_commit_full: true,
             candidate: None,
             pixels: vec![],
             pixel_size: size,
             frame_samples: 0,
-            frame_pending: false,
+            seen_presentations: 0,
+            frames: 0,
             generation: 1,
-            render_generation: 1,
-            frame_generation: 0,
-            render_size: size,
             denoise: true,
-            denoised: vec![],
-            denoiser: None,
             denoise_status: String::new(),
-            last_denoise: None,
-            last_scene_commit: std::time::Instant::now(),
             texture: None,
             checker: None,
-            display_dirty: false,
             error: String::new(),
         })
     }
-    fn describe_backend((active, reason): (u32, String)) -> String {
+    fn describe_backend((active, reason): (api::Backend, String)) -> String {
         match active {
-            1 => format!("HWRT · {reason}"),
+            api::Backend::Hardware => format!("HWRT · {reason}"),
             _ if !reason.is_empty() => format!("Software BVH · {reason}"),
             _ => "Software BVH".into(),
         }
@@ -226,6 +396,68 @@ impl Viewer {
         }
         self.change = self.change.max(change);
         self.generation += 1;
+    }
+    /// The target that receives edits: a pending backend replacement, else the active one.
+    fn editing(&self) -> &Target {
+        self.replacement.as_ref().unwrap_or(&self.target)
+    }
+    fn final_render(&self) -> &api::Render {
+        self.target.final_render()
+    }
+    /// A scene is being assembled or prepared, or a backend switch is pending.
+    fn preparing(&self) -> bool {
+        self.scene_build.is_some()
+            || self.replacement.is_some()
+            || !self.target.pushed
+            || self.target.preparing()
+    }
+    /// Inputs are committed, the final image is finished and on screen.
+    fn settled(&self) -> bool {
+        !self.preparing()
+            && self.change == Change::None
+            && self.pending_model.is_none()
+            && self.final_render().status() == api::RenderStatus::Finished
+            && !self.final_render().denoising()
+            && self.frame_samples == self.samples
+    }
+    /// HDR (0), normal (1) or albedo (2) of the active final render, bottom row first.
+    fn image(&self, kind: u32) -> Result<Vec<f32>> {
+        let kind = match kind {
+            0 => api::PixelKind::Hdr,
+            1 => api::PixelKind::Normal,
+            _ => api::PixelKind::Albedo,
+        };
+        Ok(bottom_first(self.final_render().read_pixels(kind)?))
+    }
+    /// The backend the published scene uses: 0 software, 1 HWRT.
+    fn render_backend(&self) -> Result<u32> {
+        Ok(u32::from(
+            self.final_render().backend()?.0 == api::Backend::Hardware,
+        ))
+    }
+    fn hdr(&self) -> Result<Vec<f32>> {
+        self.image(0)
+    }
+    /// The denoised image when one exists, bottom row first.
+    fn denoised(&self) -> Result<Option<Vec<f32>>> {
+        if self
+            .final_render()
+            .denoise_report()
+            .is_none_or(|r| r.error.is_some())
+        {
+            return Ok(None);
+        }
+        Ok(Some(bottom_first(
+            self.final_render().read_pixels(api::PixelKind::Denoised)?,
+        )))
+    }
+    /// The finished image composed with `settings`, straight alpha, top row first.
+    fn read_rgba(&self, settings: &mutracer_native_probe::display::Settings) -> Result<Vec<u8>> {
+        let display = self.target.engine.display();
+        display.set_settings(display_settings(settings))?;
+        let result = display.read_rgba8(self.final_render());
+        display.set_settings(display_settings(&self.display_settings))?;
+        Ok(result?.2)
     }
     fn load(&mut self, path: PathBuf, ctx: &egui::Context) {
         self.texture_browser.new_model();
@@ -275,97 +507,91 @@ impl Viewer {
             Err(error) => self.error = format!("Could not open {}: {error:#}", self.loading_name),
         }
     }
+    /// Hands the model's descriptor and the render settings to the editing target.
+    /// The engine shares one copy of the patched descriptor with the render.
+    fn push(&mut self, held: bool) -> Result<()> {
+        let bytes = Arc::new(
+            self.model
+                .update_descriptor(
+                    &mut self.descriptor,
+                    &self.camera.bytes(self.size),
+                    self.size,
+                    &self.environment,
+                    &self.light,
+                )
+                .to_vec(),
+        );
+        self.push_bytes(bytes, self.size, held)
+    }
+    fn push_bytes(&mut self, bytes: Arc<Vec<u8>>, size: [u32; 2], held: bool) -> Result<()> {
+        let settings = render_settings(&self.settings, size, held);
+        let target = self.replacement.as_mut().unwrap_or(&mut self.target);
+        target.final_render().set_settings(settings)?;
+        target.engine.display().set_size(size[0], size[1])?;
+        target.engine.set_scene_shared(bytes)?;
+        target.pushed = true;
+        self.pose_presented = false;
+        self.error.clear();
+        Ok(())
+    }
     fn tick(&mut self, ctx: &egui::Context) -> Result<()> {
         self.receive_textures();
         if self.texture_browser.busy() {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
-        if self.commit.is_some() {
-            let completed = self.commit.as_ref().unwrap().0.try_recv();
-            match completed {
+        // Playback renders like held input: one sample per frame and no denoising.
+        let playing = self.running && self.model.animation.as_ref().is_some_and(|a| a.playing);
+        let held = ctx.input(|i| i.pointer.any_down()) || playing;
+        // A backend switch prepares a second engine; the current image stays.
+        if self.backend == self.target.backend {
+            self.replacement = None;
+        } else if self.replacement.as_ref().map(|r| r.backend) != Some(self.backend) {
+            self.replacement = Some(Target::new(
+                self.gpu.as_ref(),
+                self.submission_gate.as_ref(),
+                self.backend,
+                render_settings(&self.settings, self.size, held),
+            )?);
+            self.change = self.change.max(Change::Scene);
+        }
+        self.gpu_loss.lock().unwrap().watch(
+            std::iter::once(self.target.engine.device_loss_notifier()).chain(
+                self.replacement
+                    .as_ref()
+                    .map(|target| target.engine.device_loss_notifier()),
+            ),
+        );
+        if let Some((receive, _, _)) = &self.scene_build {
+            match receive.try_recv() {
                 Ok(result) => {
-                    let (_, generation, candidate, size) = self.commit.take().unwrap();
-                    match result {
-                        Ok(committed) => {
-                            // Even a superseded snapshot is safe to reuse: the next
-                            // submission patches all editable values from its model.
-                            self.descriptor = Some(committed.descriptor);
-                            // Read publication metadata before retiring another context:
-                            // destruction also uses the native registry and can report busy.
-                            let retired = committed
-                                .replacement
-                                .map(|renderer| std::mem::replace(&mut self.renderer, renderer));
-                            self.renderer.commit_finished();
-                            // Full preparations restart the held-input throttle.
-                            self.last_commit_full = !self.renderer.last_commit_incremental()?;
-                            if self.last_commit_full {
-                                self.last_scene_commit = std::time::Instant::now();
-                            }
-                            if let Ok(backend) = self.renderer.backend() {
-                                self.backend_status = Self::describe_backend(backend);
-                            }
-                            if generation == self.generation {
-                                if let Some((model, camera)) = candidate {
-                                    let retired = std::mem::replace(&mut self.model, model);
-                                    std::thread::spawn(move || drop(retired));
-                                    self.texture_browser.new_model();
-                                    self.camera = camera;
-                                    self.selected = self.model.meshes[0].material;
-                                    self.selected_mesh = None;
-                                    self.picking_focus = false;
-                                    self.object_query.clear();
-                                    self.animation_clock = std::time::Instant::now();
-                                }
-                                self.samples = 0;
-                                self.render_generation = generation;
-                                self.render_size = size;
-                            } else {
-                                // Preserve a loaded candidate until the newest snapshot commits.
-                                let loaded = candidate.is_some();
-                                if self.candidate.is_none() {
-                                    self.candidate = candidate;
-                                } else {
-                                    std::thread::spawn(move || drop(candidate));
-                                }
-                                // Newer edits are already pending; a model needs a scene commit.
-                                if loaded || self.change == Change::None {
-                                    self.change = Change::Scene;
-                                }
-                            }
-                            if let Some(retired) = retired {
-                                std::thread::spawn(move || drop(retired));
-                            }
-                        }
-                        Err(error) => {
-                            self.change = Change::None;
-                            return Err(error);
+                    let (_, candidate, size) = self.scene_build.take().unwrap();
+                    let (descriptor, bytes) = result?;
+                    self.descriptor = Some(descriptor);
+                    self.push_bytes(bytes, size, held)?;
+                    if let Some(candidate) = candidate {
+                        if let Some(retired) = self.pending_model.replace(candidate) {
+                            std::thread::spawn(move || drop(retired));
                         }
                     }
                 }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {
-                    if self.display_dirty {
-                        if let Some(display) = &self.gpu_display {
-                            display.compose_with(&self.display_settings);
-                            self.display_dirty = false;
-                        }
-                    }
-                    ctx.request_repaint_after(Duration::from_millis(16));
-                    return Ok(());
-                }
-                Err(error) => {
-                    self.commit = None;
-                    return Err(error.into());
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(_) => {
+                    self.scene_build = None;
+                    anyhow::bail!("Scene assembly stopped");
                 }
             }
         }
-        let focus_ready =
-            self.loading.is_none() && self.candidate.is_none() && self.change != Change::Scene;
+        let focus_ready = self.loading.is_none()
+            && self.candidate.is_none()
+            && self.pending_model.is_none()
+            && self.scene_build.is_none()
+            && self.change != Change::Scene;
         if self.focus.update(
             &self.model,
             &mut self.camera,
             self.size[0] as f32 / self.size[1] as f32,
             focus_ready,
-            ctx.input(|i| i.pointer.any_down()),
+            held,
             std::time::Instant::now(),
             ctx,
         ) {
@@ -376,66 +602,19 @@ impl Viewer {
         if self.focus.working(&self.camera) {
             ctx.request_repaint_after(Duration::from_millis(16));
         }
-        if self.change != Change::None || !self.running {
-            self.renderer.cancel()?;
-        }
-        self.frame_pending |= self.renderer.poll()?;
-        // Read the completed old frame before applying pending input. Keep it on
-        // screen until a newer frame arrives, including while a slider is held.
-        if self.frame_pending {
-            self.samples = self.renderer.samples()?;
-            if self.samples > 0 {
-                let old_texture = self.gpu_display.as_ref().map(|d| d.texture.clone());
-                if !self.renderer.capture(&mut self.gpu_display)? {
-                    ctx.request_repaint_after(Duration::from_millis(16));
-                    return Ok(());
-                }
-                if self.gpu.is_some() {
-                    if old_texture.as_ref() != self.gpu_display.as_ref().map(|d| &d.texture) {
-                        if let Some(id) = self.gpu_texture.take() {
-                            self.gpu
-                                .as_ref()
-                                .unwrap()
-                                .renderer
-                                .write()
-                                .free_texture(&id);
-                        }
-                    }
-                    if self.gpu_texture.is_none() {
-                        let display = self.gpu_display.as_ref().unwrap();
-                        let gpu = self.gpu.as_ref().unwrap();
-                        self.gpu_texture = Some(gpu.renderer.write().register_native_texture(
-                            &gpu.device,
-                            &display.texture.create_view(&Default::default()),
-                            wgpu::FilterMode::Linear,
-                        ));
-                    }
-                } else {
-                    self.pixels = self.renderer.pixels()?;
-                }
-                self.pixel_size = self.render_size;
-                self.frame_samples = self.samples;
-                self.frame_generation = self.render_generation;
-                self.denoised.clear();
-                self.display_dirty = true;
-            }
-        }
-        self.frame_pending = false;
-        // A moving pose must get a displayed sample before the next pose can
-        // replace it, including when preparation falls back to the worker.
-        // Explicit seeks can supersede that pose, like any other user edit.
+        // A moving pose must get a presented sample before the next pose can
+        // replace it. Explicit seeks can supersede that pose, like any other edit.
         let now = std::time::Instant::now();
         let animation_ready = self.loading.is_none()
             && self.candidate.is_none()
+            && self.pending_model.is_none()
+            && self.scene_build.is_none()
             && self.change != Change::Scene
-            && !self.renderer.busy();
+            && !self.editing().preparing();
         if let Some(animation) = &mut self.model.animation {
             if !animation.playing || !self.running || !animation_ready {
                 self.animation_clock = now;
-            } else if !animation.pending
-                && self.frame_samples > 0
-                && self.frame_generation == self.render_generation
-            {
+            } else if !animation.pending && self.frame_samples > 0 && self.pose_presented {
                 animation.advance(now.duration_since(self.animation_clock).as_secs_f32());
                 self.animation_clock = now;
             }
@@ -443,179 +622,184 @@ impl Viewer {
         if animation_ready && self.model.apply_animation()? {
             self.dirty(Change::Transform);
         }
-        let playing = self.model.animation.as_ref().is_some_and(|a| a.playing);
-        let held = ctx.input(|i| i.pointer.any_down()) || playing && self.running;
-        if !self.renderer.busy() {
-            // Edits commit the whole descriptor. While the last commit applied
-            // incrementally, edits commit on this thread like the frame they
-            // belong to; scene changes and edits after a full preparation use
-            // the worker and are throttled while input is held.
-            let edit = self.change != Change::Scene && self.change != Change::Reset;
-            let background = self.change == Change::Scene || (edit && self.last_commit_full);
-            let deferred =
-                background && held && self.last_scene_commit.elapsed() < Duration::from_millis(120);
-            if !deferred {
-                match self.change {
-                    Change::Camera
-                    | Change::Material
-                    | Change::Environment
-                    | Change::Light
-                    | Change::Transform
-                        if !background =>
+        // Edits wait while a scene is assembled or a full preparation runs, so held
+        // input never cancels a preparation; the latest state commits afterwards.
+        // Before applying input, the batch in flight finishes and is shown, so
+        // continuous edits keep updating the image.
+        let mut holding = false;
+        if self.change != Change::None && self.scene_build.is_none() && !self.editing().preparing()
+        {
+            if self.running && self.replacement.is_none() && self.target.pushed {
+                if self.final_render().collect()? {
+                    if let Some(presented) =
+                        self.target.engine.display().present(self.final_render())?
                     {
-                        self.renderer.commit_with_settings(
-                            self.model.update_descriptor(
-                                &mut self.descriptor,
-                                &self.camera.bytes(self.size),
-                                self.size,
-                                &self.environment,
-                                &self.light,
-                            ),
-                            &self.settings,
-                        )?;
-                        self.last_commit_full = !self.renderer.last_commit_incremental()?;
-                        if self.last_commit_full {
-                            self.last_scene_commit = std::time::Instant::now();
-                        }
+                        self.present_frame(ctx, presented)?;
                     }
-                    Change::Scene
-                    | Change::Camera
-                    | Change::Material
-                    | Change::Environment
-                    | Change::Light
-                    | Change::Transform => {
-                        let candidate = self.candidate.take();
-                        let (model, camera) = candidate
-                            .as_ref()
-                            .map(|(m, c)| (m, c))
-                            .unwrap_or((&self.model, &self.camera));
-                        let receive = self.renderer.commit_worker(
-                            self.backend,
-                            model.clone(),
-                            camera.clone(),
-                            self.size,
-                            self.settings,
-                            self.environment.clone(),
-                            self.light.clone(),
-                            self.descriptor.take(),
-                            ctx.clone(),
-                        );
-                        self.commit = Some((receive, self.generation, candidate, self.size));
-                        if self.change == Change::Scene {
-                            self.last_scene_commit = std::time::Instant::now();
-                        }
-                        self.samples = 0;
-                        self.change = Change::None;
-                        ctx.request_repaint_after(Duration::from_millis(16));
-                        return Ok(());
-                    }
-                    Change::Reset => self.renderer.reset()?,
-                    Change::None => {}
-                }
-                if self.change != Change::None {
-                    self.samples = 0;
-                    self.render_generation = self.generation;
-                    self.render_size = self.size;
-                    self.change = Change::None;
-                    self.error.clear();
+                } else {
+                    holding = true;
                 }
             }
         }
-        if let Some(output) = self.denoiser.as_mut().and_then(|d| d.poll()) {
-            if playing {
-                self.last_denoise = None;
-                self.denoise_status.clear();
+        if !holding
+            && self.change != Change::None
+            && self.scene_build.is_none()
+            && !self.editing().preparing()
+        {
+            match self.change {
+                Change::Scene => {
+                    // Layout changes and new models assemble their descriptor off this thread.
+                    let candidate = self.candidate.take();
+                    let (model, camera) = candidate
+                        .as_ref()
+                        .map(|(m, c)| (m.clone(), c.clone()))
+                        .unwrap_or_else(|| (self.model.clone(), self.camera.clone()));
+                    let (environment, light, size) =
+                        (self.environment.clone(), self.light.clone(), self.size);
+                    let mut descriptor = self.descriptor.take();
+                    let (send, receive) = std::sync::mpsc::channel();
+                    let ctx = ctx.clone();
+                    std::thread::spawn(move || {
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            model.update_descriptor(
+                                &mut descriptor,
+                                &camera.bytes(size),
+                                size,
+                                &environment,
+                                &light,
+                            );
+                            let descriptor = descriptor.unwrap();
+                            let bytes = Arc::new(descriptor.bytes().to_vec());
+                            (descriptor, bytes)
+                        }))
+                        .map_err(|_| anyhow::anyhow!("Scene assembly panicked"));
+                        let _ = send.send(result);
+                        ctx.request_repaint();
+                    });
+                    self.scene_build = Some((receive, candidate, size));
+                }
+                Change::Reset => self.final_render().restart()?,
+                _ => self.push(held)?,
             }
-            if !playing
-                && output.generation == self.generation
-                && output.samples == self.frame_samples
+            self.change = Change::None;
+        }
+        // Denoising follows the final channel, as before: not while input is held.
+        // Paused, the current samples are filtered once.
+        let denoise = self.denoise && self.display_settings.output == 0 && !held;
+        if self.applied_denoise != Some(denoise) {
+            self.final_render()
+                .set_denoiser(denoise.then(|| api::DenoiserOptions {
+                    schedule: api::DenoiseSchedule::Progressive,
+                    ..Default::default()
+                }))?;
+            self.applied_denoise = Some(denoise);
+        }
+        let display = display_settings(&self.display_settings);
+        let display_changed = self.applied_display != Some(display);
+        if display_changed {
+            self.target.engine.display().set_settings(display)?;
+            if let Some(replacement) = &self.replacement {
+                replacement.engine.display().set_settings(display)?;
+            }
+            self.applied_display = Some(display);
+        }
+        let status = if holding {
+            ctx.request_repaint_after(Duration::from_millis(1));
+            self.target.render_loop.status()
+        } else if self.running {
+            if let Some(replacement) = &mut self.replacement {
+                replacement.render_loop.tick()?;
+            }
+            self.target.render_loop.tick()?
+        } else {
+            // Paused: commit edits and recompose, but never trace.
+            for target in [Some(&self.target), self.replacement.as_ref()]
+                .into_iter()
+                .flatten()
             {
-                match output.pixels {
-                    Ok(pixels) => {
-                        self.denoised = pixels;
-                        self.denoise_status =
-                            format!("{} · {:.0} ms", output.backend, output.milliseconds);
-                        self.display_dirty = true;
-                    }
-                    Err(error) => self.denoise_status = error,
+                target.engine.update()?;
+            }
+            let denoised = denoise && self.final_render().denoise_current()?;
+            if display_changed || denoised && !self.paused_denoised {
+                if let Some(presented) =
+                    self.target.engine.display().present(self.final_render())?
+                {
+                    self.present_frame(ctx, presented)?;
                 }
             }
+            self.paused_denoised = denoised;
+            // Wait for the batch in flight and the filter, unless denoising failed.
+            let render = self.final_render();
+            if denoise
+                && !denoised
+                && render.samples() > 0
+                && render.denoise_report().is_none_or(|r| r.error.is_none())
+            {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
+            self.target.render_loop.status()
+        };
+        if self.running {
+            self.paused_denoised = false;
         }
-        if self.denoise
-            && !playing
-            && self.display_settings.output == 0
-            && !held
-            && !self.renderer.busy()
-            && self.change == Change::None
-            && self.frame_samples > 0
-            && self.frame_generation == self.generation
-            && (self.samples >= self.settings.max_samples
-                || !self.running
-                || self.samples >= 8 && self.samples.is_power_of_two())
-            && self.last_denoise != Some((self.generation, self.samples))
+        // Swap in a replacement engine once it shows an image.
+        if self
+            .replacement
+            .as_ref()
+            .is_some_and(|r| r.render_loop.last_presented().is_some())
         {
-            let worker = self
-                .denoiser
-                .get_or_insert_with(|| denoise::Worker::new(ctx.clone()));
-            if !worker.busy {
-                if self.gpu.is_some() {
-                    self.pixels = self.renderer.pixels()?;
-                }
-                worker.submit(denoise::Request {
-                    generation: self.generation,
-                    samples: self.samples,
-                    size: self.pixel_size,
-                    color: self.pixels.clone(),
-                    normal: self.renderer.image(1)?,
-                    albedo: self.renderer.image(2)?,
-                })?;
-                self.last_denoise = Some((self.generation, self.samples));
-                self.denoise_status = "Denoising…".into();
+            let retired = std::mem::replace(&mut self.target, self.replacement.take().unwrap());
+            if let (Some(gpu), Some((id, _))) = (&self.gpu, self.gpu_texture.take()) {
+                gpu.renderer.write().free_texture(&id);
+            }
+            self.seen_presentations = 0;
+            self.applied_denoise = None;
+            drop(retired);
+        }
+        // Swap a loaded model in once its scene is published.
+        if self.pending_model.is_some() && self.scene_build.is_none() && !self.target.preparing() {
+            let (model, camera) = self.pending_model.take().unwrap();
+            let retired = std::mem::replace(&mut self.model, model);
+            std::thread::spawn(move || drop(retired));
+            self.texture_browser.new_model();
+            self.camera = camera;
+            self.selected = self.model.meshes[0].material;
+            self.selected_mesh = None;
+            self.picking_focus = false;
+            self.object_query.clear();
+            self.animation_clock = std::time::Instant::now();
+        }
+        let presentations = self.target.render_loop.presentations();
+        if presentations != self.seen_presentations {
+            self.seen_presentations = presentations;
+            if let Some(presented) = self.target.render_loop.last_presented() {
+                self.present_frame(ctx, presented)?;
+                // The loop presents only complete images of the committed inputs.
+                self.pose_presented = self.change == Change::None;
             }
         }
-        if !self.renderer.busy()
-            && self.change == Change::None
-            && self.running
-            && self.samples < self.settings.max_samples
-        {
-            // Dispatch now, before the next input can cancel a queued job.
-            self.renderer
-                .start((self.settings.max_samples - self.samples).min(if held { 1 } else { 4 }))?;
-            self.frame_pending |= self.renderer.poll()?;
+        self.samples = self.final_render().samples();
+        if !self.target.preparing() {
+            self.last_commit_full =
+                self.final_render().last_commit()? == Some(api::CommitKind::Full);
         }
-        if self.display_dirty {
-            if let Some(display) = &mut self.gpu_display {
-                if self.denoise && !self.denoised.is_empty() && !display.using_denoised {
-                    display
-                        .upload(&self.denoised)
-                        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                } else if !self.denoise || self.denoised.is_empty() {
-                    display.original();
-                }
-                display.compose_with(&self.display_settings);
-                if self.gpu.is_none() {
-                    let rgba = display
-                        .read_rgba(&self.display_settings)
-                        .map_err(|e| anyhow::anyhow!(e.to_string()))?;
-                    let image = egui::ColorImage::from_rgba_unmultiplied(
-                        [self.pixel_size[0] as usize, self.pixel_size[1] as usize],
-                        &rgba,
-                    );
-                    if let Some(texture) = &mut self.texture {
-                        texture.set(image, egui::TextureOptions::LINEAR);
-                    } else {
-                        self.texture = Some(ctx.load_texture(
-                            "MuTracer render",
-                            image,
-                            egui::TextureOptions::LINEAR,
-                        ));
-                    }
-                }
-                self.display_dirty = false;
+        if let Some(report) = self.final_render().denoise_report() {
+            self.denoise_status = match report.error {
+                Some(error) => error,
+                None => format!("{} · {:.0} ms", report.backend, report.milliseconds),
+            };
+        }
+        let errors = std::mem::take(&mut *self.target.errors.lock().unwrap());
+        if let Some(error) = errors.into_iter().last() {
+            if status == api::RenderLoopStatus::Error {
+                anyhow::bail!(error);
             }
+            self.error = error;
         }
-        if self.renderer.busy()
-            || self.running && self.samples < self.settings.max_samples
+        if self.target.render_loop.needs_tick()
+            || self.replacement.is_some()
+            || self.scene_build.is_some()
+            || self.pending_model.is_some()
             || self.change != Change::None
             || self
                 .model
@@ -627,19 +811,62 @@ impl Viewer {
         }
         Ok(())
     }
+    /// Shows the frame the loop presented: registers the display texture with
+    /// egui, or reads it back without a shared device.
+    fn present_frame(&mut self, ctx: &egui::Context, presented: api::Presented) -> Result<()> {
+        let display = self.target.engine.display();
+        if let Some(gpu) = &self.gpu {
+            let texture = display.texture().context("No presentation texture")?;
+            if self.gpu_texture.as_ref().is_none_or(|(_, t)| *t != texture) {
+                let mut renderer = gpu.renderer.write();
+                if let Some((id, _)) = self.gpu_texture.take() {
+                    renderer.free_texture(&id);
+                }
+                let id = renderer.register_native_texture(
+                    &gpu.device,
+                    &texture.create_view(&Default::default()),
+                    wgpu::FilterMode::Linear,
+                );
+                self.gpu_texture = Some((id, texture));
+            }
+        } else {
+            let (width, height, rgba) = display.read_rgba8(self.final_render())?;
+            let image =
+                egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &rgba);
+            match &mut self.texture {
+                Some(texture) => texture.set(image, egui::TextureOptions::LINEAR),
+                None => {
+                    self.texture = Some(ctx.load_texture(
+                        "MuTracer render",
+                        image,
+                        egui::TextureOptions::LINEAR,
+                    ))
+                }
+            }
+            self.pixels = self.hdr()?;
+        }
+        self.pixel_size = [presented.width, presented.height];
+        self.frame_samples = presented.samples;
+        if presented.samples > 0 {
+            if let Ok(backend) = self.final_render().backend() {
+                self.backend_status = Self::describe_backend(backend);
+            }
+        }
+        self.frames += 1;
+        Ok(())
+    }
     fn save_image(&self, path: &Path) -> Result<()> {
-        let display = self
-            .gpu_display
-            .as_ref()
+        let (width, height, rgba) = self
+            .target
+            .engine
+            .display()
+            .read_rgba8(self.final_render())
             .context("No completed image to export")?;
-        let rgba = display
-            .read_rgba(&self.display_settings)
-            .map_err(|e| anyhow::anyhow!(e.to_string()))?;
         image::save_buffer_with_format(
             path,
             &rgba,
-            display.size[0],
-            display.size[1],
+            width,
+            height,
             image::ColorType::Rgba8,
             image::ImageFormat::Png,
         )?;
@@ -693,13 +920,14 @@ impl eframe::App for Viewer {
         }
         let ctx = root.ctx().clone();
         let frame_started = std::time::Instant::now();
-        let during_commit = self.commit.is_some();
+        let during_commit = self.preparing();
         let mut pick_ms = 0.;
         if self.metrics.is_some() {
             self.denoise = false;
             self.settings.max_samples = 8;
+            let preparing = self.preparing();
             let m = self.metrics.as_mut().unwrap();
-            if self.commit.is_none()
+            if !preparing
                 && self.frame_samples > 0
                 && m.commits < 3
                 && m.frames.len() >= (m.commits as usize + 1) * 70
@@ -707,7 +935,7 @@ impl eframe::App for Viewer {
                 m.commits += 1;
                 self.environment.color[0] = 1. - m.commits as f32 * 0.01;
                 self.dirty(Change::Scene);
-            } else if self.commit.is_none() && self.frame_samples > 0 && m.frames.len() % 3 == 0 {
+            } else if !preparing && self.frame_samples > 0 && m.frames.len() % 3 == 0 {
                 self.camera.yaw += 0.01;
                 self.dirty(Change::Camera);
             }
@@ -759,7 +987,7 @@ impl eframe::App for Viewer {
             } else {
                 self.error = format!("Render stopped: {e:#}");
                 self.running = false;
-                self.backend = self.renderer.mode;
+                self.backend = self.target.backend;
                 self.change = Change::None;
             }
         }
@@ -769,10 +997,11 @@ impl eframe::App for Viewer {
         if self.change != Change::None {
             ctx.request_repaint();
         }
+        let preparing = self.preparing();
         if let Some(metrics) = &mut self.metrics {
             let done = metrics.record(
                 frame_started.elapsed().as_secs_f64() * 1000.,
-                during_commit || self.commit.is_some(),
+                during_commit || preparing,
                 pick_ms,
                 self.gpu_texture.is_some(),
                 self.pixels.is_empty(),
@@ -882,7 +1111,7 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
     )?;
     drop(hardware);
 
-    let mut oidn = denoise::Denoiser::new()?;
+    let mut oidn = mutracer_native_probe::denoise::Denoiser::new()?;
     let start = std::time::Instant::now();
     let denoised = oidn.run(size, &original, &normal, &albedo)?;
     let denoise_ms = start.elapsed().as_secs_f64() * 1000.;
@@ -1038,7 +1267,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
             viewer.texture.is_some() && !viewer.pixels.is_empty(),
             "Interaction blanked preview"
         );
-        let _ = ctx.end_pass();
+        ctx.end_pass().textures_delta.clear();
         if viewer.pixels != last {
             frames += 1;
             last = viewer.pixels.clone();
@@ -1074,9 +1303,10 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     )?;
     println!("PASS 120 camera updates, {frames} changed previews, zero blank frames");
     viewer.settings.max_samples = 8;
+    viewer.dirty(Change::Scene);
     viewer.denoise = true;
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while !viewer.denoiser.as_ref().is_some_and(|d| d.busy) {
+    while !viewer.final_render().denoising() {
         viewer.tick(&ctx)?;
         ensure!(
             std::time::Instant::now() < deadline,
@@ -1087,10 +1317,11 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     viewer.denoise = false;
     viewer.size = [320, 213];
     viewer.dirty(Change::Scene);
-    while viewer.denoiser.as_ref().is_some_and(|d| d.busy) {
+    let stale = viewer.final_render().denoise_report().map(|r| r.samples);
+    while viewer.preparing() || viewer.change != Change::None {
         viewer.tick(&ctx)?;
         ensure!(
-            viewer.denoised.is_empty(),
+            viewer.final_render().denoise_report().map(|r| r.samples) == stale,
             "Stale denoise replaced a changed scene"
         );
         ensure!(
@@ -1104,7 +1335,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         std::thread::sleep(Duration::from_millis(2));
     }
     viewer.denoise = true;
-    while viewer.denoised.is_empty() {
+    while !viewer.settled() || viewer.denoised()?.is_none() {
         viewer.tick(&ctx)?;
         ensure!(
             std::time::Instant::now() < deadline,
@@ -1112,13 +1343,14 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
+    let denoised = viewer.denoised()?.unwrap();
     ensure!(
-        viewer.pixel_size == [320, 213] && viewer.denoised.len() == 320 * 213 * 4,
+        viewer.pixel_size == [320, 213] && denoised.len() == 320 * 213 * 4,
         "Wrong denoise dimensions"
     );
     renderer::save(
         &out.join("interactive-denoised.png"),
-        &viewer.denoised,
+        &denoised,
         viewer.pixel_size,
         0.,
     )?;
@@ -1127,6 +1359,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     viewer.denoise = false;
     viewer.settings.max_samples = 12;
+    viewer.dirty(Change::Scene);
     while viewer.samples < 12 {
         viewer.tick(&ctx)?;
         ensure!(
@@ -1136,8 +1369,9 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         std::thread::sleep(Duration::from_millis(2));
     }
     viewer.settings.max_samples = 8;
+    viewer.dirty(Change::Scene);
     viewer.denoise = true;
-    while viewer.denoised.is_empty() {
+    while viewer.denoised()?.is_none() {
         viewer.tick(&ctx)?;
         ensure!(
             std::time::Instant::now() < deadline,
@@ -1146,6 +1380,71 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         std::thread::sleep(Duration::from_millis(2));
     }
     println!("PASS native denoise after lowering target below completed samples");
+    // Paused, the current samples are denoised once and shown without tracing;
+    // resuming continues the progressive points.
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    viewer.settings.max_samples = 64;
+    viewer.dirty(Change::Scene);
+    while viewer.preparing() || viewer.change != Change::None || viewer.samples < 6 {
+        viewer.tick(&ctx)?;
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Samples before pause timed out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    viewer.running = false;
+    let frames = viewer.frames;
+    let paused = loop {
+        viewer.tick(&ctx)?;
+        let samples = viewer.samples;
+        if viewer.final_render().denoise_report().map(|r| r.samples) == Some(samples)
+            && viewer.frames > frames
+        {
+            break samples;
+        }
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Paused denoise timed out: {}",
+            viewer.denoise_status
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    };
+    let shown = viewer.read_rgba(&viewer.display_settings)?;
+    for _ in 0..20 {
+        viewer.tick(&ctx)?;
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    ensure!(
+        viewer.samples == paused && viewer.final_render().samples() == paused,
+        "Traced while paused"
+    );
+    ensure!(
+        viewer.read_rgba(&viewer.display_settings)? == shown
+            && viewer
+                .denoised()?
+                .is_some_and(|d| d.len() == viewer.hdr().unwrap().len()),
+        "Paused denoised image not kept"
+    );
+    viewer.running = true;
+    while viewer
+        .final_render()
+        .denoise_report()
+        .is_none_or(|r| r.samples <= paused)
+    {
+        viewer.tick(&ctx)?;
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Progressive denoise after resume timed out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    let resumed = viewer.final_render().denoise_report().unwrap().samples;
+    ensure!(
+        resumed == (paused * 2).min(64),
+        "Resumed denoise at {resumed} samples after a pause at {paused}"
+    );
+    println!("PASS paused denoise at {paused} samples without tracing; resumed at {resumed}");
     viewer.denoise = false;
     let old = viewer.pixels.clone();
     let old_name = viewer.model.name.clone();
@@ -1162,10 +1461,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         "Drop did not retain preview while loading"
     );
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while viewer.loading.is_some()
-        || viewer.change != Change::None
-        || viewer.frame_generation != viewer.generation
-    {
+    while viewer.loading.is_some() || !viewer.settled() {
         viewer.receive_model(&ctx);
         viewer.tick(&ctx)?;
         ensure!(
@@ -1212,10 +1508,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     output.textures_delta.clear();
     viewer.light.enabled = true;
     viewer.dirty(Change::Scene);
-    while viewer.change != Change::None
-        || viewer.renderer.busy()
-        || viewer.samples < viewer.settings.max_samples
-    {
+    while !viewer.settled() {
         viewer.tick(&ctx)?;
         ensure!(
             std::time::Instant::now() < deadline,
@@ -1223,7 +1516,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         );
         std::thread::sleep(Duration::from_millis(2));
     }
-    let last_commit = viewer.last_scene_commit;
+    let preparations = viewer.target.preparations.load(Ordering::Relaxed);
     let original_transform = viewer.model.meshes[0].transform;
     for step in 0..80 {
         viewer.model.meshes[0].transform =
@@ -1269,10 +1562,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     output.textures_delta.clear();
     let deadline = std::time::Instant::now() + Duration::from_secs(30);
-    while viewer.change != Change::None
-        || viewer.renderer.busy()
-        || viewer.samples < viewer.settings.max_samples
-    {
+    while !viewer.settled() {
         viewer.tick(&ctx)?;
         ensure!(
             std::time::Instant::now() < deadline,
@@ -1285,7 +1575,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         "Held environment/material edits starved previews"
     );
     ensure!(
-        viewer.last_scene_commit == last_commit,
+        viewer.target.preparations.load(Ordering::Relaxed) == preparations,
         "Partial edits rebuilt the scene"
     );
     let mut reference = Renderer::with_backend(viewer.backend)?;
@@ -1296,12 +1586,12 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         &viewer.light,
     ))?;
     ensure!(
-        reference.finish(viewer.samples)? == viewer.pixels,
+        reference.finish_l1(viewer.samples)? == viewer.hdr()?,
         "Combined transform/light/environment/material/camera updates differ from full commit"
     );
     renderer::save(
         &out.join("interactive-material.png"),
-        &viewer.pixels,
+        &viewer.hdr()?,
         viewer.pixel_size,
         0.,
     )?;
@@ -1310,10 +1600,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     viewer.model.materials[id].unlit = true;
     viewer.dirty(Change::Scene);
-    while viewer.change != Change::None
-        || viewer.renderer.busy()
-        || viewer.samples < viewer.settings.max_samples
-    {
+    while !viewer.settled() {
         viewer.tick(&ctx)?;
         ensure!(
             std::time::Instant::now() < deadline,
@@ -1327,13 +1614,10 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     viewer.dirty(Change::Material);
     viewer.tick(&ctx)?;
     ensure!(
-        viewer.commit.is_some() && viewer.texture.is_some(),
+        viewer.preparing() && viewer.texture.is_some(),
         "Edit after a full preparation did not commit in the background with retained preview"
     );
-    while viewer.change != Change::None
-        || viewer.renderer.busy()
-        || viewer.samples < viewer.settings.max_samples
-    {
+    while !viewer.settled() {
         viewer.tick(&ctx)?;
         ensure!(
             std::time::Instant::now() < deadline,
@@ -1352,7 +1636,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         &viewer.light,
     ))?;
     ensure!(
-        reference.finish(viewer.samples)? == viewer.pixels,
+        reference.finish_l1(viewer.samples)? == viewer.hdr()?,
         "Unlit full-commit fallback mismatch"
     );
     println!(
@@ -1363,13 +1647,10 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     viewer.dirty(Change::Environment);
     viewer.tick(&ctx)?;
     ensure!(
-        viewer.commit.is_some() && viewer.texture.is_some(),
+        viewer.preparing() && viewer.texture.is_some(),
         "Environment feature change did not commit in the background with retained preview"
     );
-    while viewer.change != Change::None
-        || viewer.renderer.busy()
-        || viewer.samples < viewer.settings.max_samples
-    {
+    while !viewer.settled() {
         viewer.tick(&ctx)?;
         ensure!(
             std::time::Instant::now() < deadline,
@@ -1388,7 +1669,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         &viewer.light,
     ))?;
     ensure!(
-        reference.finish(viewer.samples)? == viewer.pixels,
+        reference.finish_l1(viewer.samples)? == viewer.hdr()?,
         "Environment full-commit fallback mismatch"
     );
     println!(

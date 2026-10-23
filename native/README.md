@@ -48,7 +48,8 @@ Examples include `baseline`, `textures`, `transforms`, `orthographic`, `emissive
 The example host uses `mt_probe_render_scene` from
 [mutracer-debug.h](include/mutracer-debug.h), a debug and validation entry point
 that may change without notice. Applications render caller-supplied data with
-the [context API](#keep-a-scene-alive-and-read-pixels).
+the [engine API](#render-with-the-engine-api) or the lower-level
+[context API](#keep-a-scene-alive-and-read-pixels).
 [examples/minimal-host.c](examples/minimal-host.c) is a complete program of
 about 50 lines: it builds a scene with the header-only builder in
 [mutracer-scene-builder.h](include/mutracer-scene-builder.h), commits it,
@@ -60,6 +61,345 @@ The example's output directory contains `render.png`, `render.rgba32f`, `normal.
 `albedo.rgba32f` and `result.json`. The PNG is a Reinhard/sRGB preview. Float files
 contain linear sample averages as little-endian f32 RGBA, bottom row first;
 dimensions are in `result.json`. Normal guides are not renormalized after averaging.
+
+## Render with the engine API
+
+```sh
+npm run native:engine
+```
+
+[mutracer-engine.h](include/mutracer-engine.h) provides the object model of the
+browser library. An engine owns the device and the committed scene and camera.
+Each render is an independent accumulation with its own size and settings. The
+display tone-maps, presents and exports images, and a render loop runs the
+interactive policy. Rust hosts use the same objects through
+`mutracer_native_probe::api`.
+[examples/engine-host.c](examples/engine-host.c) renders one descriptor through
+an engine, a render and a render loop and compares the images with a fresh
+context. The command above builds it, runs it on four scenes with both backends
+and saves the results under `.native-build/engine/`.
+
+An interactive host creates an engine, sets the scene, creates a render loop and
+calls `mt_render_loop_tick` every frame while `mt_render_loop_needs_tick`
+reports work. An offline host creates a render, calls `mt_engine_update`, then
+`mt_render_converge`, and reads the image with `mt_render_read_pixels` (linear
+floats) or `mt_display_read_pixels` (RGBA8 or PNG with the display settings).
+
+`mt_engine_set_scene` and `mt_engine_set_camera` only record the inputs;
+`mt_engine_update` commits them. The engine prepares its scene once for all
+renders. Edits that a context applies incrementally
+([Editing a scene](#editing-a-scene)) finish during the call. Full preparation
+runs on a library thread while the previous images stay readable and
+presentable, and renders report `MT_RENDER_PREPARING` until it is published.
+Each render uses its own width, height, bevel and dispersion settings and, when
+set, the engine camera instead of the descriptor's. Changing a render's size or
+settings restarts only that render.
+
+Render options default to the browser library's values (2048 samples, 3
+bounces, 4 light candidates, bevel, 3 dispersion wavelengths); context
+settings keep their own defaults. Images are top row first. Use an engine and
+its objects from one thread at a time; only `mt_render_cancel` may be called
+from another thread. Callbacks run synchronously inside the calls that produce
+them. The header documents every option, default, error and lifetime.
+
+Differences from the browser library:
+
+- Adaptive resolution evaluates each batch when it completes rather than one
+  display frame later.
+- Converge blocks its thread. The host drives the loop with
+  `mt_render_loop_tick` instead of start and stop.
+- Denoising uses OIDN only. Tiles and adaptive sampling are not available.
+
+### Alpha blend strategy
+
+Set Rust `RenderSettings::alpha_blend_strategy` to
+`AlphaBlendStrategy::DeterministicSourceOver`, or set the C render option:
+
+```c
+mt_render_options options;
+mt_render_options_default(&options);
+options.alpha_blend_strategy = MT_ALPHA_BLEND_DETERMINISTIC_SOURCE_OVER;
+mt_render_set_options(render, &options, error, sizeof(error));
+```
+
+The default, `Stochastic` / `MT_ALPHA_BLEND_STOCHASTIC`, randomly accepts or skips
+blend coverage. Deterministic source-over combines front and back contributions
+on primary rays each sample, reducing coverage noise at extra GPU cost. Secondary
+rays keep stochastic coverage. Both strategies support RGB and spectral rendering
+on both native backends; opaque and masked materials keep their existing behavior.
+Coverage controls visibility, independently of physical transmission.
+
+Changing the strategy takes effect on the next update or refine and restarts only
+that Render. First use of a strategy can compile a shader and block the call.
+
+Initialize C render options with `mt_render_options_default` before editing
+fields. C and FFI callers must use the current 112-byte record; other option
+calls require its `struct_size` to match.
+
+### Depth samples
+
+Query a square 7×7 grid from the committed engine camera with Rust
+`Engine::read_depth_samples` or C `mt_engine_read_depth_samples`:
+
+```rust
+use mutracer_native_probe::api::DepthSampleArea;
+let samples = engine.read_depth_samples(DepthSampleArea {
+    x: 0.5, y: 0.5, size: 0.07,
+})?;
+// Some([f32; 49]) when ready; None while the scene is unready/preparing.
+```
+
+Commit scene/camera changes with `engine.update()` first. Queries need no Render
+or completed beauty sample; retry later while preparation is pending. The camera
+comes from the last update, falling back to the scene descriptor's camera, and
+uses the current Display width/height ratio. Render sizes and converge camera
+overrides do not affect it.
+
+`x` and `y` are finite centers in 0–1, from the left and top. `size` is the
+nonnegative half height divided by viewport height; 0 repeats one point 49 times.
+The grid is top-row-first. Depth is distance along camera forward in scene units,
+not distance along the ray. A miss or out-of-viewport sample is 0. Pinhole rays
+have no jitter or depth of field, skip alpha holes and invisible shadow catchers
+through at most 32 layers, and stop on other surfaces with positive alpha.
+
+The call blocks for GPU readback and can compile a query pipeline on first use;
+query as needed rather than every display frame. Querying a ready scene leaves
+render samples, images and denoising unchanged. C `count`/`written` are float
+counts, not byte counts: allow 49 floats; `written = 0` means retry later. C buffer and size-query
+rules are in [`mutracer-engine.h`](include/mutracer-engine.h).
+
+### Display effects
+
+Set effects through Rust `DisplaySettings` or C `mt_display_settings` before
+presentation or pixel/PNG export. They do not restart accumulation or change HDR
+readback. For example:
+
+```c
+mt_display_settings settings;
+mt_display_settings_default(&settings);
+settings.vignette = 0.4f;
+settings.bloom_intensity = 0.2f;
+mt_display_set_settings(display, &settings, error, sizeof(error));
+```
+
+Vignette strength is 0–1 (default 0). Bloom intensity is nonnegative (default 0,
+disabled), its luminance threshold defaults to 1, and its radius is 0–1 (default
+0.6). Bloom starts at ten samples and refreshes every ten samples, or when its
+threshold, radius or denoised input changes. It adds GPU work and retains roughly
+51 bytes per render pixel in image caches; very small images cost more per pixel.
+These caches remain until the render changes size or is disposed.
+
+Materials marked as shadow catchers show the background with received shadows.
+`shadow_catcher_color` defaults to black and `shadow_catcher_alpha` to 1 (range
+0–1). Reducing alpha subtracts from the estimated shadow opacity, so faint
+shadows disappear first. Catcher scenes retain an additional 48 bytes per render
+pixel. The `ShadowCatcher` / `MT_CHANNEL_SHADOW_CATCHER` channel shows raw coverage,
+background alpha/hits and shadow opacity; `Shadow` / `MT_CHANNEL_SHADOW` shows the
+same image as `Final`, matching the browser WebGPU pipeline.
+
+Effects apply before custom display passes and scaling. Normal and albedo
+channels bypass them. An opaque, solid background keeps its color independently
+of exposure, grading and vignette; it can still receive bloom spill and catcher
+shadows. Transparent and mapped backgrounds use the display transforms. Native
+output keeps its sRGB transfer. OIDN filters the original HDR; catcher layers use
+that filtered color, while shadow opacity remains unfiltered, so shadow noise
+can remain after denoising.
+
+C and FFI callers initialize the current 68-byte settings record with
+`mt_display_settings_default` before editing fields. Set/get require its
+`struct_size` to match; old record sizes are rejected.
+
+### Rust GPU images and display passes
+
+Use `Render::get_output_texture` with `OutputKind::Hdr` or `OutputKind::Display`
+to borrow an image on the engine's device without a CPU readback. GPU hosts can
+use their own device and queue through `Engine::on_device`. Encode and submit
+commands using the image before the next refine/converge, display present/resize,
+restart, disposal or device loss; do not retain, write or destroy it.
+
+HDR is top-row-first RGBA32Float resolved ray color and path coverage, before
+denoising and display settings. GPU HDR RGB is normalized by surface hits as on
+WebGPU. Rust `read_pixels(PixelKind::Hdr)` and C `mt_render_read_pixels` with
+`MT_IMAGE_HDR` match TS WebGPU CPU readback: transparent edges keep that
+normalization; an opaque, visible flat background restores per-sample RGB.
+Alpha remains path coverage in both outputs. CPU/GPU floating-point rounding can
+differ. L0 `mt_context_read_pixels` keeps its raw per-sample averages.
+
+Display is the latest composition including passes, in straight-alpha,
+sRGB-encoded RGBA8Unorm at the actual render size. `get_output_texture` returns
+`None` before a complete captured sample; Display also needs a previous
+presentation or export. Borrowing HDR or an unfiltered display image can enqueue
+a GPU resolve. RGBA32Float sampling requires an unfilterable texture binding
+unless the host enabled float32 filtering.
+
+HDR CPU readback blocks for the current batch and GPU readback. It temporarily
+copies color and both coverage guides (up to 48 GPU bytes per pixel).
+
+Add synchronous passes with `Display::add_post_process`. For example, an identity
+pass copies its input to its output:
+
+```rust
+let display = engine.display();
+let pass = display.add_post_process(|ctx| {
+    ctx.encoder.copy_texture_to_texture(
+        ctx.input.as_image_copy(), ctx.output.as_image_copy(), ctx.input.size(),
+    );
+    Ok(())
+})?;
+display.present(&render)?;
+// Remove this pass with pass.remove(), or by dropping pass.
+```
+
+Passes run in registration order after composition and before display scaling,
+on every presentation and export. Each receives the selected complete render
+(including a fallback), its actual size, and borrowed straight-alpha RGBA8Unorm
+input/output textures. Fully write the output with storage, render or copy
+commands in the supplied encoder. Passes do not trace or invalidate denoising.
+The default is no passes. Registration and removal take effect on the next
+composition; a finished render loop wakes to present those changes.
+
+A returned error or callback panic discards the whole chain, uses the original
+composition and reports an engine error. Render inspection and pass registration
+are allowed in a callback; nested composition is rejected. Changing or releasing
+the selected image during a callback rejects that composition. Images and encoder
+are borrowed only for the call. GPU commands must follow wgpu's validation rules.
+
+Extra image caches are allocated on demand per render: HDR uses 16 bytes per
+pixel; straight display composition uses 4, with two additional 4-byte images
+when passes run. These caches remain until replaced for another size or released
+with the render. These interfaces are Rust-only; the C API keeps CPU pixel export.
+
+### Rust window presentation
+
+Create a wgpu surface from an owned window (for example `Arc<winit::window::Window>`),
+select a compatible adapter with `compatible_surface`, and create the engine
+with `Engine::on_device` using that adapter's device and queue. The instance,
+adapter and surface must belong together. Attach the surface to the display:
+
+```rust
+use mutracer_native_probe::api::SurfaceOptions;
+
+let display = engine.display();
+display.set_size(width, height)?; // physical pixels
+display.attach_surface(surface, SurfaceOptions::default())?;
+// Display::present and RenderLoop::tick now also present to the window.
+render_loop.tick()?;
+// On window resize, including zero dimensions when minimized:
+display.resize_surface(new_width, new_height)?;
+```
+
+The [complete window example](viewer/examples/surface.rs) shows device creation
+and event handling. The host owns the event loop and must follow its window
+system's presentation notification rules (such as winit `pre_present_notify`).
+While attached, call the engine and its objects, including disposal, on the
+window thread.
+Share one `SubmissionGate` across native engines using that device, and
+coordinate other queue users with surface configuration. This window API is
+Rust-only; C keeps
+offscreen presentation and pixel/PNG export.
+
+Default options select SDR RGBA/BGRA8, vsync and automatic alpha, preferring an
+opaque window when supported.
+`SurfaceOptions` also accepts an explicit supported format, present/alpha mode
+and queued-frame limit. Presentation adds a fullscreen GPU draw and window
+framebuffers, with no CPU pixel readback. Frame acquisition and reconfiguration
+can block. Effects, custom passes and scaling are included; pixel and PNG exports
+remain unchanged.
+
+Inspect `surface_info().status` after presentation. `Display::present` still
+reports the offscreen image when a window frame is skipped. Timeout or occlusion
+skips a frame; schedule a later frame, or wait for an expose/restore event while
+occluded rather than polling continuously. An outdated surface is reconfigured
+and retried once. A lost surface must be recreated by the host and attached
+again; it does not make the engine unusable. `detach_surface` returns the window
+surface and leaves rendering usable offscreen.
+
+A zero window dimension suspends window presentation while keeping the last
+positive display/render size. Restoring a positive size resumes presentation;
+scale-sized renders resize at their next refine. Attachment, resize and pending
+window frames wake a finished render loop. Device loss releases the attachment
+and follows the terminal behavior below.
+
+### HDR window output
+
+Request HDR after attaching a window surface, or before attachment:
+
+```rust
+let mut settings = display.settings();
+settings.hdr_output_enabled = true;
+display.set_settings(settings)?;
+render_loop.tick()?;
+let info = display.surface_info().unwrap();
+// info.hdr_active reports the negotiated output route.
+```
+
+The default is false. With `SurfaceOptions::format = None`, HDR uses
+RGBA16Float with extended linear sRGB (scRGB) when supported. An explicit SDR
+surface format pins output to SDR. Unsupported HDR requests also fall back to
+SDR; `surface_info()` reports the requested/active state, color space and fallback
+reason. Changes apply to the window on the next presentation. A finished render
+loop wakes on changes without restarting accumulation.
+Changing HDR mode inside a display pass is rejected.
+
+HDR preserves values above 1 and bypasses the display tone mapper. Exposure,
+grading, vignette, bloom and catcher composition still apply. The HDR window
+image uses linear values, with 1 representing SDR reference white. Actual
+brightness above white depends on the OS and display's available headroom;
+`display_hdr_info()` queries that live information on the window thread, with
+unknown fields left unset. Negotiating HDR does not prove that the panel can
+currently show brighter highlights. HDR10/PQ, HLG and wide-gamut output are not
+provided.
+
+`Display::texture()`, pixel/PNG export and existing `add_post_process` callbacks
+keep their SDR RGBA8 behavior. Register HDR-window passes separately with
+`add_hdr_post_process`: they receive straight-alpha linear RGBA16Float images
+and run before scaling, only while HDR output is active. Their order, failure
+fallback, removal and callback lifetime follow the SDR pass rules. HDR passes do
+not change SDR exports; SDR passes affect the SDR preview/exports only.
+`Display::hdr_texture()` borrows the latest display-sized premultiplied linear
+RGBA16Float window image until the next present/resize. It returns `None` before
+an HDR image is presented or while HDR is inactive. Do not write, destroy or
+retain it.
+
+HDR keeps the SDR preview alongside the floating window image, adding a GPU
+composition and scale per presentation. Its caches add 8 bytes per render pixel,
+16 more when HDR passes run, and 8 bytes per display pixel. Render caches remain
+until size replacement or disposal; the display HDR image is released on disable
+or detach. C accepts the HDR request field in its 68-byte settings record, but
+its offscreen pixel/PNG exports remain SDR.
+
+### Device loss
+
+Device loss is terminal for an engine. Its renders and render loops enter
+`Error`; rendering, scene updates, presentation and readback return
+`MT_ERROR_UNAVAILABLE` (`Status::Unavailable` in Rust). `last_error` keeps the
+loss message until disposal. Dispose the engine and create a new one to render
+again; there is no automatic recovery.
+
+After receiving the device notification, the next `update`, `refine`, `converge`
+or render-loop `tick` delivers one `DeviceLost` event with `recovering = false`,
+then one `Error` event, on the calling thread. Pending convergence returns
+without waiting for an already running scene preparation or denoiser to finish;
+their late results are discarded. Disposal can still wait for scene preparation
+to release its resources.
+`needs_tick` requests one final tick to deliver undelivered loss events, then
+returns false.
+
+`Engine::new` handles device notifications automatically. Rust hosts using
+`Engine::on_device` must forward their wgpu device-loss callback to the notifier
+of every engine sharing that device. `on_device` preserves the host's callback.
+For example, add this notification to the host's existing callback handling:
+
+```rust
+let loss = engine.device_loss_notifier();
+device.set_device_lost_callback(move |reason, message| {
+    loss.notify(format!("{reason:?}: {message}"));
+    // Keep the application's other device-loss handling here.
+});
+```
+
+Notifier clones are safe to call from any thread, keep the first reason, and
+may outlive the engine. A notifier does not invoke user callbacks.
 
 ## Denoise caller-owned images
 
@@ -90,7 +430,9 @@ and memory ownership. Browser/native denoising parity is not guaranteed.
 npm run native:context
 ```
 
-Use [mutracer-context.h](include/mutracer-context.h) for
+The lower-level context API under the engine API: one context holds one scene,
+one resolution and one accumulation. Use
+[mutracer-context.h](include/mutracer-context.h) for
 `create → commit → render → read_pixels → destroy`. Rendering adds samples;
 for example, two calls with 32 samples produce 64 accumulated samples. Readback
 copies HDR, normal or albedo pixels into caller-owned memory. The context API
@@ -154,8 +496,8 @@ Coplanar or overlapping surfaces can resolve to different triangles in software
 and HWRT, changing the image.
 
 On Apple M4 Max with macOS 27.0.1, a sample can occasionally see an empty scene
-or fail to accumulate without a reported error. This occurs with small
-64-ray dispatches while other GPU users, including ordinary background apps,
+or fail to accumulate without a reported error. This has been observed at
+8×8 and 96×64 while other GPU users, including ordinary background apps,
 are active. At 1920×1080, about 620,000 dispatches over three hours, mostly
 under additional GPU load, showed no occurrences; this does not guarantee
 absence at other resolutions or workloads. An affected sample can cause an
@@ -219,7 +561,7 @@ Build/run settings:
 - `MUTRACER_NATIVE_OUTPUT`: output directory; defaults are `.native-build/scene-core/`
   for `native:scene`, `.native-build/context-core/` for `native:context` and
   `.native-build/job-core/` for `native:jobs`; `native:camera` uses
-  `.native-build/camera-core/`.
+  `.native-build/camera-core/` and `native:engine` uses `.native-build/engine/`.
 - `MUTRACER_NATIVE_SAMPLES`: verification samples, default 256; range 1..4096
   for scene verification, 8..4096 for context, job and camera verification.
 - `CARGO_TARGET_DIR`: optional reusable Cargo build directory.
@@ -256,4 +598,5 @@ Raw scenes support the [intersection modes above](#intersection-backend).
 Topology-changing geometry updates, texture/emission material updates, device-loss recovery,
 browser display parity and a stable release ABI remain pending.
 The viewer provides [native OIDN controls](./viewer/README.md#controls).
-This library does not yet replace the full browser Engine/Render API.
+The engine API covers part of the browser Engine/Render/Display API; see
+[its differences](#render-with-the-engine-api).

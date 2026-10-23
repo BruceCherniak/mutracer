@@ -58,6 +58,9 @@ export function sceneMaterialParameters(bytes: Uint8Array, token: number): Uint8
 export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareEnvironment(bytes, token); }
 
 export function sceneLightParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareLight(bytes, token); }
+
+import {sceneTargetParameters as prepareTarget} from './scene-core.js';
+export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareTarget(bytes, token); }
 export function acceptSceneLighting(token: number): Uint8Array { return acceptLighting(token); }
 
 import {sceneTransformParameters as prepareTransform, acceptSceneTransform as acceptTransform} from './scene-core.js';
