@@ -220,7 +220,7 @@ impl Viewer {
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         panel_button(ui, "Toggle inspector (])", true, &mut self.inspector_open);
                         if ui
-                            .add_enabled_ui(self.frame_samples > 0, |ui| {
+                            .add_enabled_ui(self.can_export(), |ui| {
                                 header_button(ui, "Export…", true, false)
                             })
                             .inner

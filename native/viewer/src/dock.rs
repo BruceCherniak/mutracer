@@ -379,9 +379,7 @@ impl Viewer {
                 format!("Samples {}", previous)
             })
             .show_ui(ui, |ui| {
-                for value in [
-                    4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192, 16384,
-                ] {
+                for value in [4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096] {
                     ui.selectable_value(&mut self.settings.max_samples, value, value.to_string());
                 }
             });

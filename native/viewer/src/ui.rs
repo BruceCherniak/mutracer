@@ -184,7 +184,7 @@ impl Viewer {
             controls::parameter(
                 ui,
                 "Max samples",
-                controls::Scrub::new(&mut self.settings.max_samples, 4..=16384).logarithmic(true),
+                controls::Scrub::new(&mut self.settings.max_samples, 4..=4096).logarithmic(true),
             );
             controls::parameter(
                 ui,

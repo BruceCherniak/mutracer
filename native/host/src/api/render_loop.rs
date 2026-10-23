@@ -439,6 +439,15 @@ impl RenderLoop {
     pub fn last_presented(&self) -> Option<super::Presented> {
         self.last_presented
     }
+    /// Source of this loop's last successful presentation, including fallback
+    /// selection. Default `None`. Direct calls to [`Display::present`] do not
+    /// update it; later input changes may restart this render's accumulation.
+    pub fn presented_render(&self) -> Option<&Arc<Render>> {
+        self.presented.map(|id| match &self.preview {
+            Some(preview) if preview.id() == id => preview,
+            _ => &self.final_render,
+        })
+    }
     /// Successful presentations by this loop, to tell when the display changed.
     pub fn presentations(&self) -> u64 {
         self.presentations

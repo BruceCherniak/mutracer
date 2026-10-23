@@ -52,6 +52,7 @@ enum Change {
 struct Target {
     engine: api::Engine,
     render_loop: api::RenderLoop,
+    activity: api::SharedSync,
     backend: u32,
     /// Whether a scene was handed to the engine.
     pushed: bool,
@@ -59,6 +60,17 @@ struct Target {
     preparations: Arc<AtomicU32>,
     errors: Arc<Mutex<Vec<String>>>,
     _events: api::Subscription,
+}
+#[derive(Default)]
+struct InputActivity(api::SyncActivity);
+impl api::LoopSync for InputActivity {
+    fn update(&mut self) {}
+    fn activity(&self) -> &api::SyncActivity {
+        &self.0
+    }
+    fn activity_mut(&mut self) -> &mut api::SyncActivity {
+        &mut self.0
+    }
 }
 impl Target {
     fn new(
@@ -84,12 +96,12 @@ impl Target {
             ),
             None => api::Engine::new(options)?,
         };
+        let activity: api::SharedSync = Arc::new(Mutex::new(InputActivity::default()));
         let render_loop = api::RenderLoop::new(
             &engine,
             api::RenderLoopOptions {
-                // The viewer presents only the final render.
-                preview: None,
                 final_render: api::LoopRender::Settings(settings),
+                syncs: vec![activity.clone()],
                 ..Default::default()
             },
         )?;
@@ -106,6 +118,7 @@ impl Target {
         Ok(Self {
             engine,
             render_loop,
+            activity,
             backend,
             pushed: false,
             preparations,
@@ -115,6 +128,14 @@ impl Target {
     }
     fn final_render(&self) -> &api::Render {
         self.render_loop.final_render()
+    }
+    /// The channel whose pending frame must finish before accepting another edit.
+    fn collecting_render(&self) -> &api::Render {
+        if self.render_loop.status() == api::RenderLoopStatus::Previewing {
+            self.render_loop.preview().unwrap()
+        } else {
+            self.final_render()
+        }
     }
     /// A pushed scene is still being prepared; its edits wait.
     fn preparing(&self) -> bool {
@@ -248,8 +269,6 @@ struct Viewer {
     display_settings: mutracer_native_probe::display::Settings,
     applied_display: Option<api::DisplaySettings>,
     applied_denoise: Option<bool>,
-    /// Paused with the current samples denoised and presented.
-    paused_denoised: bool,
     selected: usize,
     selected_mesh: Option<usize>,
     texture_browser: textures::Browser,
@@ -267,6 +286,7 @@ struct Viewer {
     pixels: Vec<f32>,
     pixel_size: [u32; 2],
     frame_samples: u32,
+    frame_preview: bool,
     /// The active loop's presentation count already shown.
     seen_presentations: u64,
     /// Presented frames, counting display-only recompositions too.
@@ -355,7 +375,6 @@ impl Viewer {
             display_settings: mutracer_native_probe::display::Settings::default(),
             applied_display: None,
             applied_denoise: None,
-            paused_denoised: false,
             selected,
             selected_mesh: None,
             texture_browser: textures::Browser::default(),
@@ -373,6 +392,7 @@ impl Viewer {
             pixels: vec![],
             pixel_size: size,
             frame_samples: 0,
+            frame_preview: false,
             seen_presentations: 0,
             frames: 0,
             generation: 1,
@@ -418,6 +438,7 @@ impl Viewer {
             && self.pending_model.is_none()
             && self.final_render().status() == api::RenderStatus::Finished
             && !self.final_render().denoising()
+            && !self.frame_preview
             && self.frame_samples == self.samples
     }
     /// HDR (0), normal (1) or albedo (2) of the active final render, bottom row first.
@@ -527,6 +548,17 @@ impl Viewer {
         let settings = render_settings(&self.settings, size, held);
         let target = self.replacement.as_mut().unwrap_or(&mut self.target);
         target.final_render().set_settings(settings)?;
+        target
+            .render_loop
+            .preview()
+            .unwrap()
+            .set_settings(api::RenderSettings {
+                sampling_pattern: target.final_render().settings()?.sampling_pattern,
+                seed: self.settings.seed,
+                clamping: self.settings.clamping,
+                transmissive_output_alpha_min: self.settings.transmissive_output_alpha_min,
+                ..api::RenderLoop::preview_settings()
+            })?;
         target.engine.display().set_size(size[0], size[1])?;
         target.engine.set_scene_shared(bytes)?;
         target.pushed = true;
@@ -561,6 +593,15 @@ impl Viewer {
                     .map(|target| target.engine.device_loss_notifier()),
             ),
         );
+        for target in [Some(&self.target), self.replacement.as_ref()]
+            .into_iter()
+            .flatten()
+        {
+            target.activity.lock().unwrap().set_active(held);
+            let mut settings = target.final_render().settings()?;
+            settings.allow_multiple_samples_per_frame = !held;
+            target.final_render().set_settings(settings)?;
+        }
         if let Some((receive, _, _)) = &self.scene_build {
             match receive.try_recv() {
                 Ok(result) => {
@@ -630,11 +671,11 @@ impl Viewer {
         if self.change != Change::None && self.scene_build.is_none() && !self.editing().preparing()
         {
             if self.running && self.replacement.is_none() && self.target.pushed {
-                if self.final_render().collect()? {
-                    if let Some(presented) =
-                        self.target.engine.display().present(self.final_render())?
-                    {
-                        self.present_frame(ctx, presented)?;
+                let render = self.target.collecting_render();
+                let preview = !std::ptr::eq(render, self.final_render());
+                if render.collect()? {
+                    if let Some(presented) = self.target.engine.display().present(render)? {
+                        self.present_frame(ctx, presented, preview || presented.fallback)?;
                     }
                 } else {
                     holding = true;
@@ -719,15 +760,15 @@ impl Viewer {
             {
                 target.engine.update()?;
             }
+            let preview_done = self.target.render_loop.preview().unwrap().collect()?;
+            let final_done = self.final_render().collect()?;
             let denoised = denoise && self.final_render().denoise_current()?;
-            if display_changed || denoised && !self.paused_denoised {
-                if let Some(presented) =
-                    self.target.engine.display().present(self.final_render())?
-                {
-                    self.present_frame(ctx, presented)?;
-                }
+            if let Some(presented) = self.target.engine.display().present(self.final_render())? {
+                self.present_frame(ctx, presented, presented.fallback)?;
             }
-            self.paused_denoised = denoised;
+            if !preview_done || !final_done {
+                ctx.request_repaint_after(Duration::from_millis(16));
+            }
             // Wait for the batch in flight and the filter, unless denoising failed.
             let render = self.final_render();
             if denoise
@@ -739,9 +780,6 @@ impl Viewer {
             }
             self.target.render_loop.status()
         };
-        if self.running {
-            self.paused_denoised = false;
-        }
         // Swap in a replacement engine once it shows an image.
         if self
             .replacement
@@ -773,9 +811,19 @@ impl Viewer {
         if presentations != self.seen_presentations {
             self.seen_presentations = presentations;
             if let Some(presented) = self.target.render_loop.last_presented() {
-                self.present_frame(ctx, presented)?;
+                let preview = self
+                    .target
+                    .render_loop
+                    .presented_render()
+                    .is_some_and(|r| !Arc::ptr_eq(r, self.target.render_loop.final_render()));
+                self.present_frame(ctx, presented, preview)?;
                 // The loop presents only complete images of the committed inputs.
-                self.pose_presented = self.change == Change::None;
+                self.pose_presented = self.change == Change::None
+                    && self
+                        .target
+                        .render_loop
+                        .presented_render()
+                        .is_some_and(|r| r.samples() > 0);
             }
         }
         self.samples = self.final_render().samples();
@@ -796,7 +844,7 @@ impl Viewer {
             }
             self.error = error;
         }
-        if self.target.render_loop.needs_tick()
+        if self.running && self.target.render_loop.needs_tick()
             || self.replacement.is_some()
             || self.scene_build.is_some()
             || self.pending_model.is_some()
@@ -813,7 +861,12 @@ impl Viewer {
     }
     /// Shows the frame the loop presented: registers the display texture with
     /// egui, or reads it back without a shared device.
-    fn present_frame(&mut self, ctx: &egui::Context, presented: api::Presented) -> Result<()> {
+    fn present_frame(
+        &mut self,
+        ctx: &egui::Context,
+        presented: api::Presented,
+        preview: bool,
+    ) -> Result<()> {
         let display = self.target.engine.display();
         if let Some(gpu) = &self.gpu {
             let texture = display.texture().context("No presentation texture")?;
@@ -830,7 +883,19 @@ impl Viewer {
                 self.gpu_texture = Some((id, texture));
             }
         } else {
-            let (width, height, rgba) = display.read_rgba8(self.final_render())?;
+            let render = if preview {
+                self.target.render_loop.preview().unwrap()
+            } else {
+                self.target.render_loop.final_render()
+            };
+            // A loop tick can present a completed preview and then commit the
+            // next input. Its source is already restarted; retain the CPU copy
+            // collected before that commit, just as the GPU texture is retained.
+            if render.samples() == 0 && self.texture.is_some() {
+                return Ok(());
+            }
+            let (width, height, rgba) = display.read_rgba8(render)?;
+            let pixels = bottom_first(render.read_pixels(api::PixelKind::Hdr)?);
             let image =
                 egui::ColorImage::from_rgba_unmultiplied([width as usize, height as usize], &rgba);
             match &mut self.texture {
@@ -843,10 +908,11 @@ impl Viewer {
                     ))
                 }
             }
-            self.pixels = self.hdr()?;
+            self.pixels = pixels;
         }
         self.pixel_size = [presented.width, presented.height];
         self.frame_samples = presented.samples;
+        self.frame_preview = preview;
         if presented.samples > 0 {
             if let Ok(backend) = self.final_render().backend() {
                 self.backend_status = Self::describe_backend(backend);
@@ -856,6 +922,7 @@ impl Viewer {
         Ok(())
     }
     fn save_image(&self, path: &Path) -> Result<()> {
+        ensure!(self.can_export(), "No completed final image to export");
         let (width, height, rgba) = self
             .target
             .engine
@@ -871,6 +938,9 @@ impl Viewer {
             image::ImageFormat::Png,
         )?;
         Ok(())
+    }
+    fn can_export(&self) -> bool {
+        !self.preparing() && self.change == Change::None && self.final_render().samples() > 0
     }
     fn input_files(&mut self, ctx: &egui::Context) {
         let paths = ctx.input(|i| {
@@ -1230,8 +1300,16 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
     Ok(())
 }
 fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
+    for backend in [0, 1] {
+        interaction_backend_smoke(path, &out.join(format!("backend-{backend}")), backend)?;
+    }
+    Ok(())
+}
+fn interaction_backend_smoke(path: &Path, out: &Path, backend: u32) -> Result<()> {
     std::fs::create_dir_all(out)?;
     let mut viewer = Viewer::new(path)?;
+    viewer.backend = backend;
+    viewer.focus.enabled = false;
     viewer.denoise = false;
     let ctx = egui::Context::default();
     let deadline = std::time::Instant::now() + Duration::from_secs(20);
@@ -1245,6 +1323,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     }
     let before = viewer.pixels.clone();
     let mut frames = 0;
+    let mut previews = 0;
     let mut last = viewer.pixels.clone();
     for step in 0..120 {
         ctx.begin_pass(egui::RawInput {
@@ -1262,11 +1341,26 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         });
         viewer.camera.orbit([1., 0.]);
         viewer.dirty(Change::Camera);
+        if step >= 60 {
+            viewer.model.materials[viewer.selected].roughness = 0.2 + step as f32 / 200.;
+            viewer.dirty(Change::Material);
+        }
         viewer.tick(&ctx)?;
         ensure!(
             viewer.texture.is_some() && !viewer.pixels.is_empty(),
             "Interaction blanked preview"
         );
+        ensure!(
+            viewer.pixels.len() == (viewer.pixel_size[0] * viewer.pixel_size[1] * 4) as usize,
+            "Presented channel and pixel dimensions disagree"
+        );
+        if viewer.frame_preview {
+            ensure!(
+                viewer.pixel_size[0] < viewer.size[0] && viewer.pixel_size[1] < viewer.size[1],
+                "Preview did not reduce resolution"
+            );
+            previews += 1;
+        }
         ctx.end_pass().textures_delta.clear();
         if viewer.pixels != last {
             frames += 1;
@@ -1274,6 +1368,38 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         }
         std::thread::sleep(Duration::from_millis(5));
     }
+    // Finish accepting the latest edit, pause on a preview, and recompose it
+    // without tracing or exporting it as a full-resolution final image.
+    while viewer.change != Change::None || !viewer.frame_preview {
+        viewer.tick(&ctx)?;
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Pending preview timed out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
+    viewer.running = false;
+    viewer.tick(&ctx)?;
+    let paused_preview = viewer.target.render_loop.preview().unwrap().samples();
+    let paused_final = viewer.final_render().samples();
+    viewer.display_settings.exposure = 1.25;
+    for _ in 0..3 {
+        viewer.tick(&ctx)?;
+    }
+    ensure!(
+        viewer.target.render_loop.preview().unwrap().samples() == paused_preview
+            && viewer.final_render().samples() == paused_final
+            && viewer.frame_preview,
+        "Paused preview traced or lost its presentation source"
+    );
+    ensure!(
+        !viewer.can_export()
+            && viewer
+                .save_image(&out.join("unexpected-preview.png"))
+                .is_err(),
+        "Preview became a final export"
+    );
+    viewer.running = true;
     let mut output = ctx.run_ui(
         egui::RawInput {
             events: vec![egui::Event::PointerButton {
@@ -1288,7 +1414,7 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     output.textures_delta.clear();
     ensure!(
-        frames >= 3 && last != before,
+        frames >= 3 && previews > 0 && last != before,
         "Continuous input starved preview rendering: {frames} updates"
     );
     renderer::save(
@@ -1299,9 +1425,13 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     )?;
     std::fs::write(
         out.join("interaction.txt"),
-        format!("PASS 120 camera updates, {frames} changed previews, zero blank frames\n"),
+        format!(
+            "PASS backend {backend}: 120 camera/material updates, {frames} changed frames, {previews} reduced previews, zero blank frames; paused preview retained, final export rejected\n"
+        ),
     )?;
-    println!("PASS 120 camera updates, {frames} changed previews, zero blank frames");
+    println!(
+        "PASS backend {backend}: 120 camera/material updates, {frames} changed frames, {previews} reduced previews, zero blank frames; paused preview retained, final export rejected"
+    );
     viewer.settings.max_samples = 8;
     viewer.dirty(Change::Scene);
     viewer.denoise = true;
@@ -1493,6 +1623,16 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
     let id = viewer.model.meshes[0].material;
     let mut previews = 0;
     let mut previous = viewer.pixels.clone();
+    viewer.light.enabled = true;
+    viewer.dirty(Change::Scene);
+    while !viewer.settled() {
+        viewer.tick(&ctx)?;
+        ensure!(
+            std::time::Instant::now() < deadline,
+            "Key light setup timed out"
+        );
+        std::thread::sleep(Duration::from_millis(2));
+    }
     let mut output = ctx.run_ui(
         egui::RawInput {
             events: vec![egui::Event::PointerButton {
@@ -1506,16 +1646,6 @@ fn interaction_smoke(path: &Path, out: &Path) -> Result<()> {
         |_| {},
     );
     output.textures_delta.clear();
-    viewer.light.enabled = true;
-    viewer.dirty(Change::Scene);
-    while !viewer.settled() {
-        viewer.tick(&ctx)?;
-        ensure!(
-            std::time::Instant::now() < deadline,
-            "Key light setup timed out"
-        );
-        std::thread::sleep(Duration::from_millis(2));
-    }
     let preparations = viewer.target.preparations.load(Ordering::Relaxed);
     let original_transform = viewer.model.meshes[0].transform;
     for step in 0..80 {

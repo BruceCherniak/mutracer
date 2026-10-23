@@ -488,22 +488,35 @@ fn final_render_presents_the_preview_until_it_is_complete() {
     .unwrap();
     let preview = render_loop.preview().unwrap().clone();
     let final_render = render_loop.final_render().clone();
+    assert!(render_loop.presented_render().is_none());
     tick_until(&mut render_loop, |l, _| {
         l.presented() == Some(preview.id()) && preview.samples() == 1
     });
     assert_eq!(render_loop.status(), RenderLoopStatus::Previewing);
     assert_eq!(render_loop.samples(), 0);
+    assert!(Arc::ptr_eq(
+        render_loop.presented_render().unwrap(),
+        &preview
+    ));
     *selection.lock().unwrap() = Selection::Final;
     // The final render has no complete image: its fallback is presented.
     assert_eq!(render_loop.tick().unwrap(), RenderLoopStatus::Previewing);
     assert!(!final_render.complete());
     assert_eq!(render_loop.presented(), Some(preview.id()));
+    assert!(Arc::ptr_eq(
+        render_loop.presented_render().unwrap(),
+        &preview
+    ));
     let shown = engine.display().present(&final_render).unwrap().unwrap();
     assert!(shown.fallback);
     let statuses = tick_until(&mut render_loop, |l, s| {
         s == RenderLoopStatus::Finished && l.presented() == Some(final_render.id())
     });
     assert!(!statuses.contains(&RenderLoopStatus::Error));
+    assert!(Arc::ptr_eq(
+        render_loop.presented_render().unwrap(),
+        &final_render
+    ));
     assert!(
         !engine
             .display()

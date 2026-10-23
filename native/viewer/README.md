@@ -130,6 +130,10 @@ the output directory. See the [native guide](../README.md) for platform backends
   restart, maximum samples, **Res** and denoise controls. For models without
   animation, **Space** pauses or resumes rendering. **D** toggles denoising.
   The settings button opens **Render**.
+  Interaction uses a lower-resolution preview; after input stops, the image
+  converges at the selected resolution and render settings. Sample counts,
+  denoising and PNG export use the final image; export is available once it has
+  a complete sample. Pausing keeps the last image visible without further tracing.
 - Animated models show a timeline in the toolbar. The first clip starts paused
   at time zero, at 1× speed with **Loop** enabled. Use its play button or **Space**
   to play/pause, drag the timeline to pause at a chosen time, or select another
@@ -142,9 +146,9 @@ the output directory. See the [native guide](../README.md) for platform backends
   including display scaling up to 2×. It updates after window or panel resizing
   settles. Fixed 720p (1280 × 720), 1080p (1920 × 1080), 2K (2560 × 1440) and
   4K (3840 × 2160) stay unchanged when resizing. The menu shows output dimensions;
-  PNG export uses the displayed frame's dimensions.
+  PNG export uses the selected final dimensions.
   Going from 50% to 100% renders four times as many pixels and uses more memory.
-- **Render** provides 4–16,384 maximum samples, 1–16 bounces, Sobol, Z-Sobol or
+- **Render** provides 4–4096 maximum samples, 1–16 bounces, Sobol, Z-Sobol or
   Random sampling and clamping (0 disables it). Quality changes restart
   accumulation; more samples and bounces cost more rendering time. **Color**
   offers AgX (default), ACES, Cineon, Reinhard and Linear tone mapping, linear
@@ -153,11 +157,12 @@ the output directory. See the [native guide](../README.md) for platform backends
   guide channels bypass color controls and denoising.
 - **Lighting** also provides an optional directional **Key light**, disabled by
   default. Adjust its intensity, color, azimuth and elevation.
-- **Native OIDN** is on by default. It denoises completed previews after interaction
+- **Native OIDN** is on by default. It denoises completed final samples after interaction
   pauses, trying Metal, then CUDA, then HIP, then CPU. CUDA requires a supported
   NVIDIA GPU and driver; HIP requires a supported AMD GPU and compatible AMD
   driver/HIP runtime. Other devices fall back to CPU. Toggle it to compare
-  the unfiltered image; PNG export uses the currently displayed result.
+  the unfiltered image; PNG export uses the final image's latest denoised result
+  when one is available.
 - **Ray tracing** defaults to **HWRT**, with **Software** as the other option.
   Unsupported devices and acceleration-structure limits or allocation failures
   fall back to Software. The panel reports the actual path, fallback reason and
@@ -171,12 +176,13 @@ rotation also retain the scene when map dimensions and background mode stay the
 same. Key-light color, intensity and direction edits retain the scene as well.
 Object transforms retain vertices and textures; changes to resource sizes
 require a rebuild.
-Loading a different-sized HDR, switching background mode, changing shader
-features or unlit materials, and changing resolution rebuild the scene. Moving
+Loading a different-sized HDR, switching background mode, or changing shader
+features or unlit materials can require a rebuild. Moving
 between zero and nonzero light or environment intensity can also require a
 rebuild. Full rebuilds run in the background while the previous image stays visible.
-Changes are combined at roughly 120 ms intervals while held, then applied when
-released. CPU/GPU contention can still reduce responsiveness.
+Resolution changes restart accumulation. While editing, new input waits for the
+current frame and any pending scene preparation, then the latest state is applied.
+CPU/GPU contention can still reduce responsiveness.
 Color controls, output channel and denoising change only the displayed image,
 preserving the original HDR accumulation. Denoising does not block window
 interaction; a result for an older scene, camera or sample count cannot replace

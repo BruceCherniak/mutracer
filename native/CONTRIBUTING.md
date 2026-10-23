@@ -269,10 +269,11 @@ Web TS generator; `scripts/generate-display.mjs --check` detects stale output. N
 preview capture, tonemap and presentation stay on the GPU. Only OIDN/export reads
 pixels back. The immutable owned picking BVH is built while loading a model on
 a worker. The viewer renders through `api::Engine::on_device`, a `RenderLoop`
-without preview and the engine `Display`. Descriptor assembly for scene and layout
-changes and full preparation run off the UI thread. New input waits until the
-batch in flight is collected and shown (`Render::collect`) and while a full
-preparation runs, so held edits keep updating without cancelling preparations.
+with its default preview and the engine `Display`. Descriptor assembly for scene
+and layout changes and full preparation run off the UI thread. New input waits
+until the selected channel's batch in flight is collected and shown
+(`Render::collect`) and while a full preparation runs, so held edits keep updating
+without cancelling preparations.
 The viewer pauses native queue submissions outside its UI callback so eframe can
 reconfigure the shared surface safely; CPU preparation continues while paused.
 
