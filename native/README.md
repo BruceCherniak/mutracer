@@ -203,6 +203,57 @@ pixel; straight display composition uses 4, with two additional 4-byte images
 when passes run. These caches remain until replaced for another size or released
 with the render. These interfaces are Rust-only; the C API keeps CPU pixel export.
 
+### Rust window presentation
+
+Create a wgpu surface from an owned window (for example `Arc<winit::window::Window>`),
+select a compatible adapter with `compatible_surface`, and create the engine
+with `Engine::on_device` using that adapter's device and queue. The instance,
+adapter and surface must belong together. Attach the surface to the display:
+
+```rust
+use mutracer_native_probe::api::SurfaceOptions;
+
+let display = engine.display();
+display.set_size(width, height)?; // physical pixels
+display.attach_surface(surface, SurfaceOptions::default())?;
+// Display::present and RenderLoop::tick now also present to the window.
+render_loop.tick()?;
+// On window resize, including zero dimensions when minimized:
+display.resize_surface(new_width, new_height)?;
+```
+
+The [complete window example](viewer/examples/surface.rs) shows device creation
+and event handling. The host owns the event loop and must follow its window
+system's presentation notification rules (such as winit `pre_present_notify`).
+While attached, call the engine and its objects, including disposal, on the
+window thread.
+Share one `SubmissionGate` across native engines using that device, and
+coordinate other queue users with surface configuration. This window API is
+Rust-only; C keeps
+offscreen presentation and pixel/PNG export.
+
+Default options select SDR RGBA/BGRA8, vsync and automatic alpha, preferring an
+opaque window when supported.
+`SurfaceOptions` also accepts an explicit supported format, present/alpha mode
+and queued-frame limit. Presentation adds a fullscreen GPU draw and window
+framebuffers, with no CPU pixel readback. Frame acquisition and reconfiguration
+can block. Effects, custom passes and scaling are included; pixel and PNG exports
+remain unchanged. HDR surface output is not available yet.
+
+Inspect `surface_info().status` after presentation. `Display::present` still
+reports the offscreen image when a window frame is skipped. Timeout or occlusion
+skips a frame; schedule a later frame, or wait for an expose/restore event while
+occluded rather than polling continuously. An outdated surface is reconfigured
+and retried once. A lost surface must be recreated by the host and attached
+again; it does not make the engine unusable. `detach_surface` returns the window
+surface and leaves rendering usable offscreen.
+
+A zero window dimension suspends window presentation while keeping the last
+positive display/render size. Restoring a positive size resumes presentation;
+scale-sized renders resize at their next refine. Attachment, resize and pending
+window frames wake a finished render loop. Device loss releases the attachment
+and follows the terminal behavior below.
+
 ### Device loss
 
 Device loss is terminal for an engine. Its renders and render loops enter

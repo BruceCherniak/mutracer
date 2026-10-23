@@ -20,6 +20,7 @@ mod engine;
 mod post_process;
 mod render;
 mod render_loop;
+mod surface;
 
 pub use crate::device_loss::DeviceLossNotifier;
 pub use crate::status::{Status, StatusError as Error};
@@ -37,6 +38,7 @@ pub use render_loop::{
     LoopRender, LoopSubscription, LoopSync, RenderLoop, RenderLoopOptions, RenderLoopStatus,
     SelectInfo, Selection, SharedSync, SyncActivity, select_default,
 };
+pub use surface::{SurfaceInfo, SurfaceOptions, SurfaceStatus};
 
 pub type Result<T> = std::result::Result<T, Error>;
 

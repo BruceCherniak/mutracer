@@ -87,6 +87,11 @@ if(gpuValidation){
  hostGpuTests=await runHostGpuTests();
  await run('viewer-gpu-animation','cargo',['test','--locked','--manifest-path','native/viewer/Cargo.toml','gpu_animated_poses','--','--ignored','--nocapture'],{CARGO_TARGET_DIR:viewerTarget});
  await run('raw-gpu-fixtures','npm',['run','native:scene'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'fixtures'),MUTRACER_NATIVE_SAMPLES:'8',...prebuilt},{timeout:1800000});
+ // A standalone window uses the SDK surface path, separate from egui's surface.
+ const surfaceArgs=['run','--locked','--manifest-path','native/viewer/Cargo.toml','--example','surface','--',resolve(out,'fixtures/image/scene-input.bin'),resolve(out,'surface/summary.json')];
+ const surfaceEnv={CARGO_TARGET_DIR:viewerTarget,MUTRACER_NATIVE_GPU_VALIDATION:'1'};
+ if(process.platform==='linux'&&!env.XDG_RUNTIME_DIR){surfaceEnv.XDG_RUNTIME_DIR=resolve(out,'surface/runtime');mkdirSync(surfaceEnv.XDG_RUNTIME_DIR,{recursive:true,mode:0o700});}
+ await run('viewer-gpu-surface',process.platform==='linux'?'xvfb-run':'cargo',process.platform==='linux'?['-a','cargo',...surfaceArgs]:surfaceArgs,surfaceEnv);
  await run('ray-query-contracts',resolve(hostTarget,'release',executable('ray-query-probe')),[resolve(out,'ray-query')]);
  if(!JSON.parse(readFileSync(resolve(out,'ray-query/result.json'),'utf8')).supported)throw Error('HWRT execution was not validated.');
  // --hosts: the context, job, camera, settings and engine C hosts, reusing the fixtures above.

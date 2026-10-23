@@ -4,6 +4,7 @@ use std::sync::{Arc, Condvar, Mutex};
 #[derive(Default)]
 struct State {
     paused: bool,
+    configuring: bool,
     active: usize,
 }
 
@@ -28,13 +29,34 @@ impl SubmissionGate {
         self.state.lock().unwrap().paused = false;
         self.changed.notify_all();
     }
+    // Separate from the host's pause flag: configuration must not resume a
+    // queue that the embedding UI intentionally left paused. The guard also
+    // serializes configurations and releases waiters on unwinding.
+    fn configuration(&self) -> Configuration<'_> {
+        let mut state = self.state.lock().unwrap();
+        while state.configuring {
+            state = self.changed.wait(state).unwrap();
+        }
+        state.configuring = true;
+        while state.active != 0 {
+            state = self.changed.wait(state).unwrap();
+        }
+        Configuration(self)
+    }
     fn enter(&self) -> Submission<'_> {
         let mut state = self.state.lock().unwrap();
-        while state.paused {
+        while state.paused || state.configuring {
             state = self.changed.wait(state).unwrap();
         }
         state.active += 1;
         Submission(self)
+    }
+}
+struct Configuration<'a>(&'a SubmissionGate);
+impl Drop for Configuration<'_> {
+    fn drop(&mut self) {
+        self.0.state.lock().unwrap().configuring = false;
+        self.0.changed.notify_all();
     }
 }
 struct Submission<'a>(&'a SubmissionGate);
@@ -53,6 +75,22 @@ pub(crate) struct GpuQueue {
 impl GpuQueue {
     pub(crate) fn new(queue: wgpu::Queue, gate: Option<Arc<SubmissionGate>>) -> Self {
         Self { queue, gate }
+    }
+    pub(crate) fn ensure_gate(&mut self) {
+        self.gate.get_or_insert_with(Default::default);
+    }
+    pub(crate) fn configure_surface(
+        &self,
+        surface: &wgpu::Surface<'_>,
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+    ) {
+        let _configuration = self.gate.as_ref().map(|gate| gate.configuration());
+        surface.configure(device, config);
+    }
+    pub(crate) fn present(&self, frame: wgpu::SurfaceTexture) {
+        let _submission = self.gate.as_ref().map(|gate| gate.enter());
+        self.queue.present(frame);
     }
     pub(crate) fn submit(
         &self,
@@ -103,5 +141,42 @@ mod tests {
         did_submit.recv_timeout(Duration::from_secs(5)).unwrap();
         worker.join().unwrap();
         gate.pause();
+    }
+    #[test]
+    fn configuration_drains_submissions_and_preserves_host_pause() {
+        let gate = Arc::new(SubmissionGate::default());
+        let active = gate.enter();
+        let (configured, did_configure) = mpsc::channel();
+        let (release, released) = mpsc::channel();
+        let other = gate.clone();
+        let worker = std::thread::spawn(move || {
+            let _guard = other.configuration();
+            configured.send(()).unwrap();
+            released.recv().unwrap();
+        });
+        while !gate.state.lock().unwrap().configuring {
+            std::thread::yield_now();
+        }
+        assert!(did_configure.try_recv().is_err());
+        drop(active);
+        did_configure.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (submitted, did_submit) = mpsc::channel();
+        let other = gate.clone();
+        let submitter = std::thread::spawn(move || {
+            let _guard = other.enter();
+            submitted.send(()).unwrap();
+        });
+        assert!(did_submit.try_recv().is_err());
+        release.send(()).unwrap();
+        worker.join().unwrap();
+        did_submit.recv_timeout(Duration::from_secs(5)).unwrap();
+        submitter.join().unwrap();
+        gate.pause();
+        {
+            let _guard = gate.configuration();
+        }
+        assert!(gate.state.lock().unwrap().paused);
+        assert!(!gate.state.lock().unwrap().configuring);
+        gate.resume();
     }
 }

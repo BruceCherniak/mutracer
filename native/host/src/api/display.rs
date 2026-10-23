@@ -184,6 +184,7 @@ pub(super) struct DisplayState {
     pub(super) size: [u32; 2],
     pub(super) settings: DisplaySettings,
     texture: Option<wgpu::Texture>,
+    pub(super) surface: Option<super::surface::SurfaceTarget>,
     blit: Option<Blit>,
     pub(super) passes: Vec<super::post_process::Entry>,
     pub(super) next_pass: u64,
@@ -198,6 +199,7 @@ impl Default for DisplayState {
             size: [300, 150],
             settings: DisplaySettings::default(),
             texture: None,
+            surface: None,
             blit: None,
             passes: Vec::new(),
             next_pass: 1,
@@ -235,7 +237,7 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
 }
 "#;
 
-/// Offscreen presentation and shared display settings; obtained from [`Engine::display`].
+/// Offscreen or window presentation and shared display settings; obtained from [`Engine::display`].
 pub struct Display {
     pub(super) engine: Engine,
 }
@@ -243,6 +245,11 @@ impl Display {
     pub(super) fn passes_pending(&self) -> bool {
         let state = self.engine.lock();
         state.display.pass_revision != state.display.presented_pass_revision
+            || state
+                .display
+                .surface
+                .as_ref()
+                .is_some_and(|surface| surface.pending())
     }
     /// Default 300×150, the browser canvas default.
     pub fn size(&self) -> [u32; 2] {
@@ -256,7 +263,24 @@ impl Display {
                 "Display dimensions must be positive",
             ));
         }
-        self.engine.live()?.display.size = [width, height];
+        let mut state = self.engine.live()?;
+        let max = self
+            .engine
+            .inner
+            .gpu
+            .device
+            .limits()
+            .max_texture_dimension_2d;
+        if width > max || height > max {
+            return Err(error(
+                Status::InvalidArgument,
+                "Display size exceeds device limits",
+            ));
+        }
+        state.display.size = [width, height];
+        if let Some(surface) = &mut state.display.surface {
+            surface.resize([width, height]);
+        }
         Ok(())
     }
     pub fn settings(&self) -> DisplaySettings {
@@ -283,7 +307,9 @@ impl Display {
     /// Composes and shows the render's complete image, or its fallback's. Smaller
     /// images are scaled linearly to the display size. Returns `None` and keeps the
     /// previous image when neither is ready, for example during scene preparation.
-    /// Does not trace.
+    /// With a window attachment, also attempts window presentation. The return
+    /// value describes the offscreen image; surface_info reports skipped/lost
+    /// window frames. Does not trace. Window acquisition/configuration may block.
     pub fn present(&self, render: &Render) -> Result<Option<Presented>> {
         let result = self.present_inner(render);
         self.engine.flush();
@@ -402,6 +428,9 @@ impl Display {
         }
         gpu.queue.submit([encoder.finish()]);
         state.display.presented_pass_revision = composed.pass_revision;
+        if let Some(surface) = &mut state.display.surface {
+            surface.present(gpu, target)?;
+        }
         Ok(Some(composed.presented))
     }
 

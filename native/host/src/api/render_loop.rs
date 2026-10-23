@@ -577,7 +577,8 @@ impl RenderLoop {
         !idle
     }
     /// One frame: updates syncs, commits engine inputs, refines the selected
-    /// render and presents it. Does not wait for the GPU.
+    /// render and presents it. An attached window can block for frame acquisition
+    /// or surface reconfiguration.
     pub fn tick(&mut self) -> Result<RenderLoopStatus> {
         self.engine.poll_device();
         let result = self.tick_inner();

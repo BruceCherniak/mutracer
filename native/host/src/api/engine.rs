@@ -266,6 +266,7 @@ impl State {
         };
         let reason = reason.to_owned();
         self.device_failed = true;
+        self.display.surface = None;
         self.last_error = self.gpu.loss.message();
         for render in self.renders.values_mut() {
             render.device_lost();
@@ -292,6 +293,7 @@ pub(super) struct Inner {
     /// Set while `flush` runs callbacks; nested flushes leave events to it.
     dispatching: AtomicBool,
     pub(super) gpu: GpuDevice,
+    pub(super) adapter: Option<wgpu::Adapter>,
     pub(super) backend: Backend,
 }
 impl Drop for Inner {
@@ -314,7 +316,7 @@ impl Engine {
     pub fn new(options: EngineOptions) -> Result<Self> {
         let gpu = GpuDevice::with_backend(options.backend.code())
             .map_err(|e| error(Status::Unavailable, format!("GPU device unavailable: {e}")))?;
-        Ok(Self::with_gpu(gpu, options))
+        Ok(Self::with_gpu(gpu, options, None))
     }
     /// Shares the caller's device and queue, for example an egui-wgpu render state.
     /// Request the adapter limits and the optional ray-query feature when creating
@@ -339,9 +341,18 @@ impl Engine {
             pipelines: Arc::new(Mutex::new(Default::default())),
             pipeline_cache: None,
         };
-        Self::with_gpu(gpu, options)
+        Self::with_gpu(gpu, options, Some(adapter.clone()))
     }
-    fn with_gpu(gpu: GpuDevice, options: EngineOptions) -> Self {
+    fn with_gpu(
+        mut gpu: GpuDevice,
+        options: EngineOptions,
+        adapter: Option<wgpu::Adapter>,
+    ) -> Self {
+        // Only shared-device engines can attach a surface. Keep the headless
+        // queue path unchanged; it has no surface configuration to coordinate.
+        if adapter.is_some() {
+            gpu.queue.ensure_gate();
+        }
         Self {
             inner: Arc::new(Inner {
                 state: Mutex::new(State {
@@ -367,6 +378,7 @@ impl Engine {
                 listeners: Mutex::new(Listeners::default()),
                 dispatching: AtomicBool::new(false),
                 gpu,
+                adapter,
                 backend: options.backend,
             }),
         }
