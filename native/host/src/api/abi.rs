@@ -119,7 +119,7 @@ fn register_engine(engine: Engine, window: Option<wgpu::Instance>) -> Result<u64
     })?;
     Ok(handle)
 }
-fn engine_of(handle: u64) -> Result<Engine> {
+pub(crate) fn engine_of(handle: u64) -> Result<Engine> {
     registry(|r| match r.objects.get(&handle) {
         Some(Object::Engine(e)) => {
             check_window_thread(e)?;

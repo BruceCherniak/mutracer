@@ -144,7 +144,8 @@ pub struct OpenPbrMaterial {
     pub values: encoder::Material,
     pub textures: [Option<TextureId>; 9],
     /// Frozen material property IDs; values are three raw words (unused words zero).
-    pub properties: BTreeMap<u32, [u32; 3]>,
+    pub(crate) properties: BTreeMap<u32, [u32; 3]>,
+    pub(crate) texture_properties: BTreeMap<u32, Option<TextureId>>,
 }
 impl Default for OpenPbrMaterial {
     fn default() -> Self {
@@ -171,7 +172,8 @@ impl Default for OpenPbrMaterial {
                 },
             },
             textures: [None; 9],
-            properties: BTreeMap::new(),
+            properties: BTreeMap::from([(73, [0; 3])]),
+            texture_properties: BTreeMap::new(),
         }
     }
 }
@@ -309,7 +311,7 @@ pub struct Scene {
     lights: Arena<Light>,
     environment: Environment,
     camera: Option<Camera>,
-    dirty: Dirty,
+    dirty: Mutex<Dirty>,
     revision: u64,
     cache: Mutex<Option<Cache>>,
 }
@@ -329,10 +331,10 @@ impl Scene {
             lights: Arena::new(owner),
             environment: Environment::default(),
             camera: None,
-            dirty: Dirty {
+            dirty: Mutex::new(Dirty {
                 structure: true,
                 ..Dirty::default()
-            },
+            }),
             revision: 1,
             cache: Mutex::new(None),
         }
@@ -348,22 +350,22 @@ impl Scene {
             self.textures.get(id.0)?;
         }
         self.environment = environment;
-        self.dirty.environment = true;
+        self.dirty.get_mut().unwrap().environment = true;
         self.changed();
         Ok(())
     }
     /// Optional fallback camera, default the standard 45 degree perspective camera.
     pub fn set_default_camera(&mut self, camera: Option<Camera>) {
         self.camera = camera;
-        self.dirty.camera = true;
+        self.dirty.get_mut().unwrap().camera = true;
         self.changed();
     }
 }
 macro_rules! resources {($($name:ident,$add:ident,$get:ident,$edit:ident,$remove:ident,$ty:ty,$id:ident,$dirty:ident);* $(;)?)=>{$(impl Scene {
-    pub fn $add(&mut self,value:$ty)->Result<$id> {let k=self.$name.add(value);self.dirty.structure=true;self.changed();Ok($id(k))}
+    pub fn $add(&mut self,value:$ty)->Result<$id> {value.validate_references(self)?;let k=self.$name.add(value);self.dirty.get_mut().unwrap().structure=true;self.changed();Ok($id(k))}
     pub fn $get(&self,id:$id)->Result<&$ty> {self.$name.get(id.0)}
-    pub fn $edit(&mut self,id:$id)->Result<&mut $ty> {self.$name.get(id.0)?;self.dirty.$dirty.insert(id.0);self.changed();self.$name.get_mut(id.0)}
-    pub fn $remove(&mut self,id:$id)->Result<()> {self.$name.remove(id.0)?;self.dirty.structure=true;self.changed();Ok(())}
+    pub fn $edit(&mut self,id:$id)->Result<&mut $ty> {self.$name.get(id.0)?;self.dirty.get_mut().unwrap().$dirty.insert(id.0);self.changed();self.$name.get_mut(id.0)}
+    pub fn $remove(&mut self,id:$id)->Result<()> {self.$name.remove(id.0)?;self.dirty.get_mut().unwrap().structure=true;self.changed();Ok(())}
 })*};}
 resources! {
  geometries,add_geometry,geometry,geometry_mut,remove_geometry,Geometry,GeometryId,geometry;
@@ -469,7 +471,21 @@ impl Scene {
                     .map_or(u32::MAX, |i| i as u32);
             }
             r.materials.push(v);
-            r.properties.push(material.properties.clone());
+            let mut properties = material.properties.clone();
+            for (&id, texture) in &material.texture_properties {
+                properties.insert(
+                    id,
+                    [
+                        texture
+                            .map(|id| index(&self.textures, id.0))
+                            .transpose()?
+                            .map_or(u32::MAX, |i| i as u32),
+                        0,
+                        0,
+                    ],
+                );
+            }
+            r.properties.push(properties);
         }
         for (_, mesh) in self.meshes.iter() {
             r.meshes.push(encoder::Mesh {
@@ -635,8 +651,10 @@ impl Scene {
             .unwrap_or_default();
         bytes.clear();
         bytes.extend(words.iter().flat_map(|w| w.to_le_bytes()));
-        crate::scene::validate(&bytes)
-            .map_err(|e| api::error(Status::InvalidArgument, e.to_string()))?;
+        if let Err(e) = crate::scene::validate(&bytes) {
+            *cache = None;
+            return Err(api::error(Status::InvalidArgument, e.to_string()));
+        }
         let r = self.resolve()?;
         let bytes = Arc::new(bytes);
         *cache = Some(Cache {
@@ -646,6 +664,7 @@ impl Scene {
             geometries: r.geometries,
             textures: r.textures,
         });
+        *self.dirty.lock().unwrap() = Dirty::default();
         Ok(bytes)
     }
     /// Predicts the next descriptor commit using the retained update planner.
@@ -688,6 +707,31 @@ fn predict(previous: &[u8], next: &[u8]) -> CommitKind {
             structural = true;
         }
     }
+    let mut colors = Vec::new();
+    for i in 0..n {
+        let (aa, bb) = (a[h::BATCH_OFFSET] as usize, b[h::BATCH_OFFSET] as usize);
+        if (aa == 0) != (bb == 0) {
+            structural = true;
+            continue;
+        }
+        if aa != 0 {
+            let ao = aa + i * crate::layout::batch::WORDS;
+            let bo = bb + i * crate::layout::batch::WORDS;
+            if a[ao] != b[bo] {
+                structural = true;
+                continue;
+            }
+            if b[bo] != u32::MAX {
+                let (ac, bc) = (a[ao + 2] as usize, b[bo + 2] as usize);
+                let count = b[bo] as usize * 3;
+                if (ac == 0) != (bc == 0) {
+                    structural = true;
+                } else if ac != 0 && a[ac..ac + count] != b[bc..bc + count] {
+                    colors.push(i);
+                }
+            }
+        }
+    }
     let sync = crate::scene::SceneSync {
         meshes: if structural { 2 } else { 1 },
         lights: true,
@@ -696,7 +740,7 @@ fn predict(previous: &[u8], next: &[u8]) -> CommitKind {
         resolution: false,
         quality: false,
         transforms: (0..n).collect(),
-        colors: vec![],
+        colors,
         geometries: (0..b[h::GEOMETRY_COUNT] as usize).collect(),
         materials: (0..b[h::MATERIAL_COUNT] as usize).collect(),
     };
@@ -844,3 +888,124 @@ pub use descriptor::Descriptor;
 
 #[cfg(feature = "gltf")]
 pub mod gltf;
+
+mod abi;
+impl OpenPbrMaterial {
+    /// Sets a float/color/vec2 property by its frozen native property ID. Unused
+    /// components must be zero; values must be finite.
+    pub fn set_float(&mut self, id: u32, value: [f32; 3]) -> Result<()> {
+        let kind = crate::material_properties::MATERIAL_PROPERTIES
+            .get(id as usize)
+            .map(|v| v.0);
+        let count = match kind {
+            Some(0) => 1,
+            Some(1) => 3,
+            Some(2) => 2,
+            _ => return Err(invalid("Expected a float, color or vec2 material property")),
+        };
+        if value.iter().any(|v| !v.is_finite()) || value[count..].iter().any(|v| *v != 0.) {
+            return Err(invalid("Invalid material property value"));
+        }
+        match id {
+            2 => self.values.color = value,
+            4 => self.values.metalness = value[0],
+            7 => self.values.roughness = value[0],
+            8 => self.values.ior = value[0],
+            10 => self.values.transmission = value[0],
+            25 => self.values.layers.coat_weight = value[0],
+            27 => self.values.layers.coat_roughness = value[0],
+            34 => self.values.emission = value,
+            35 => self.values.emission_strength = value[0],
+            36 => self.values.opacity = value[0],
+            _ => {
+                self.properties.insert(id, value.map(f32::to_bits));
+            }
+        }
+        Ok(())
+    }
+    /// Sets a boolean/enum property. Texture IDs use `set_texture` instead.
+    pub fn set_uint(&mut self, id: u32, value: u32) -> Result<()> {
+        let (kind, count) = crate::material_properties::MATERIAL_PROPERTIES
+            .get(id as usize)
+            .copied()
+            .ok_or_else(|| invalid("Unknown material property"))?;
+        if !((kind == 3 && value <= 1) || (kind == 4 && value < u32::from(count))) {
+            return Err(invalid("Invalid boolean/enum material property"));
+        }
+        if id == 37 {
+            self.values.layers.thin_walled = value != 0;
+        } else {
+            self.properties.insert(id, [value, 0, 0]);
+        }
+        Ok(())
+    }
+    /// Sets a texture-valued property with a scene handle; None clears it.
+    pub fn set_texture(&mut self, id: u32, texture: Option<TextureId>) -> Result<()> {
+        if crate::material_properties::MATERIAL_PROPERTIES
+            .get(id as usize)
+            .map(|v| v.0)
+            != Some(5)
+        {
+            return Err(invalid("Expected a texture material property"));
+        }
+        if let Some(slot) = [39, 44, 46, 43, 47, 48, 49, 50, 59]
+            .iter()
+            .position(|p| *p == id)
+        {
+            self.textures[slot] = texture;
+        } else {
+            self.texture_properties.insert(id, texture);
+        }
+        Ok(())
+    }
+}
+trait References {
+    fn validate_references(&self, scene: &Scene) -> Result<()>;
+}
+impl References for Geometry {
+    fn validate_references(&self, _: &Scene) -> Result<()> {
+        Ok(())
+    }
+}
+impl References for Texture {
+    fn validate_references(&self, _: &Scene) -> Result<()> {
+        Ok(())
+    }
+}
+impl References for OpenPbrMaterial {
+    fn validate_references(&self, s: &Scene) -> Result<()> {
+        for id in self
+            .textures
+            .iter()
+            .copied()
+            .chain(self.texture_properties.values().copied())
+            .flatten()
+        {
+            s.textures.get(id.0)?;
+        }
+        Ok(())
+    }
+}
+impl References for Mesh {
+    fn validate_references(&self, s: &Scene) -> Result<()> {
+        s.geometries.get(self.geometry.0)?;
+        s.materials.get(self.material.0)?;
+        for id in &self.materials {
+            s.materials.get(id.0)?;
+        }
+        Ok(())
+    }
+}
+impl References for Light {
+    fn validate_references(&self, s: &Scene) -> Result<()> {
+        if let Self::Rect {
+            texture: Some(id), ..
+        } = self
+        {
+            s.textures.get(id.0)?;
+        }
+        Ok(())
+    }
+}
+#[cfg(test)]
+mod oracle_tests;

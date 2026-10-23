@@ -14,7 +14,7 @@
 //! once, whatever the number of renders; a render holds only its camera, settings
 //! uniforms and accumulation, so changing its size or settings, a converge
 //! camera or sequence offset never prepares the scene again.
-mod abi;
+pub(crate) mod abi;
 mod custom_denoise;
 pub use custom_denoise::{CustomDenoiser, DenoiseBuffers, DenoiseGpu, DenoiseInput, DenoiseOutput};
 mod depth;

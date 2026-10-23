@@ -84,6 +84,7 @@ impl Scene {
                 values: m.clone(),
                 textures: maps,
                 properties: data.properties.get(i).cloned().unwrap_or_default(),
+                texture_properties: BTreeMap::new(),
             })?);
         }
         let mut geometries = Vec::new();

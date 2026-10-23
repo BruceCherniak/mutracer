@@ -2,7 +2,7 @@
 use std::ffi::c_char;
 
 /// Mirrors `MT_ABI_VERSION`.
-pub const ABI_VERSION: u32 = 5;
+pub const ABI_VERSION: u32 = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(i32)]

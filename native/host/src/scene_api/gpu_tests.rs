@@ -39,6 +39,28 @@ fn software_scene_object_incremental_matches_full() {
             transform: Mat4::IDENTITY,
         })
         .unwrap();
+    s.mesh_mut(mesh).unwrap().instances = Some(Instances {
+        transforms: vec![
+            Mat4::IDENTITY,
+            Mat4::from_translation(Vec3::new(0.3, 0., -0.2)),
+        ]
+        .into(),
+        colors: Some(vec![1.; 6].into()),
+    });
+    let ies: Arc<[u8]> =
+        b"IESNA:LM-63-2002\nTILT=NONE\n1 1000 1 3 1 1 2 0 0 0 1 1 20\n0 45 90\n0\n100 50 0\n"
+            .as_slice()
+            .into();
+    let spot = s
+        .add_light(Light::Spot {
+            color: [1.; 3],
+            intensity: 1.,
+            inner: 10.,
+            outer: 30.,
+            transform: Mat4::from_translation(Vec3::new(0., 0., 2.)),
+            ies: ies.clone(),
+        })
+        .unwrap();
     let mut camera = Camera::default();
     camera.world_matrix[14] = 3.;
     s.set_default_camera(Some(camera));
@@ -58,7 +80,7 @@ fn software_scene_object_incremental_matches_full() {
     engine.set_scene_object(&s).unwrap();
     engine.update().unwrap();
     render.converge(ConvergeOptions::new(8)).unwrap();
-    for edit in 0..10 {
+    for edit in 0..15 {
         match edit {
             0 => s.material_mut(mat).unwrap().values.roughness = 0.6,
             1 => {
@@ -96,6 +118,39 @@ fn software_scene_object_incremental_matches_full() {
             9 => {
                 camera.fov = 50.;
                 s.set_default_camera(Some(camera));
+            }
+            10 => {
+                let i = s.mesh_mut(mesh).unwrap().instances.as_mut().unwrap();
+                Arc::make_mut(&mut i.transforms)[1] =
+                    Mat4::from_translation(Vec3::new(0.4, 0., -0.2));
+            }
+            11 => {
+                let i = s.mesh_mut(mesh).unwrap().instances.as_mut().unwrap();
+                Arc::make_mut(i.colors.as_mut().unwrap())[0] = 0.6;
+            }
+            12 => {
+                let t = s.texture_mut(hdr).unwrap();
+                t.width = 2;
+                t.pixels =
+                    TexturePixels::Rgba32F(vec![0.4, 0.5, 0.6, 1., 0.7, 0.8, 0.9, 1.].into());
+            }
+            13 => {
+                *s.light_mut(spot).unwrap() = Light::Spot {
+                    color: [0.8, 1., 0.9],
+                    intensity: 2.,
+                    inner: 12.,
+                    outer: 40.,
+                    transform: Mat4::from_translation(Vec3::new(0., 0., 2.)),
+                    ies: ies.clone(),
+                };
+            }
+            14 => {
+                s.set_environment(Environment {
+                    texture: Some(hdr),
+                    background: Some(hdr),
+                    color: [0.1, 0.2, 0.3, 1.],
+                })
+                .unwrap();
             }
             _ => unreachable!(),
         }

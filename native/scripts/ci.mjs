@@ -110,6 +110,7 @@ if(gpuValidation){
   await run('c-hosts','npm',['run','native:engine'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'hosts'),
     MUTRACER_NATIVE_SCENE_OUTPUT:resolve(out,'fixtures'),MUTRACER_NATIVE_SAMPLES:'8'});
   cHosts=JSON.parse(readFileSync(resolve(out,'hosts/engine-verification.json'),'utf8'));
+  await run('scene-api-c-host',process.execPath,['native/validation/scene-api-render.mjs'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'scene-api-host')});
  }
  await joinLane(viewerLane);
  await run('viewer-gpu-package','npm',['run','native:viewer:package','--','--gpu'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'viewer')});
