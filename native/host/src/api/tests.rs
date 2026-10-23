@@ -630,8 +630,8 @@ fn primary_oracle(backend: Backend) -> Option<Vec<String>> {
     };
     let a = Render::new(&engine, first.clone()).unwrap();
     let b = Render::new(&engine, second.clone()).unwrap();
-    assert_eq!(a.status(), RenderStatus::Preparing);
-    assert_eq!(a.refine().unwrap(), RenderStatus::Preparing);
+    assert_eq!(a.status(), RenderStatus::Idle);
+    assert_eq!(a.refine().unwrap(), RenderStatus::Idle);
     assert!(display.present(&a).unwrap().is_none());
     let samples = Arc::new(Mutex::new(Vec::new()));
     let seen = samples.clone();
@@ -1193,7 +1193,7 @@ fn adaptive_resolution_follows_frame_time_without_preparation() {
     let preparations = Arc::new(Mutex::new(0));
     let counted = preparations.clone();
     let _progress = engine.on(move |event| {
-        if matches!(event, EngineEvent::Progress { progress, .. } if *progress == 0.) {
+        if matches!(event, EngineEvent::Progress { stage: ProgressStage::Preparation, progress } if *progress == 0.) {
             *counted.lock().unwrap() += 1;
         }
     });
@@ -1919,7 +1919,7 @@ fn callbacks_may_call_back_into_the_api() {
         .expect("a callback that calls the API deadlocked");
     assert_eq!(status, RenderStatus::Finished);
     assert_eq!(seen, vec![1, 2, 3, 4]);
-    assert_eq!(updates, 2);
+    assert_eq!(updates, 4);
 }
 
 #[test]

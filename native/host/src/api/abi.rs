@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Copy)]
 struct User(*mut c_void);
 // SAFETY: the pointer is only handed back to the caller's callbacks, which the
-// header documents as running on the calling thread of the API call.
+// header documents as running on caller or custom-filter worker threads.
 unsafe impl Send for User {}
 
 type EngineCallback = extern "C" fn(*const MtEngineEvent, *mut c_void);
@@ -227,6 +227,59 @@ pub struct MtEngineSnapshot {
     backend: u32,
     hardware_ray_query: u32,
     adapter_name: [c_char; 256],
+}
+#[repr(C)]
+pub struct MtDiagnostics {
+    struct_size: u32,
+    has_scene: u32,
+    preparing: u32,
+    compiling: u32,
+    scene_revision: u64,
+    compilations_started: u64,
+    compilations_completed: u64,
+    pipeline_cache_hits: u64,
+    cached_pipelines: u32,
+    renders: u32,
+    sampling: u32,
+    denoising: u32,
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_engine_diagnostics(
+    handle: u64,
+    output: *mut MtDiagnostics,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        let d = engine_of(handle)?.diagnostics();
+        unsafe {
+            write_record(
+                output,
+                MtDiagnostics {
+                    struct_size: std::mem::size_of::<MtDiagnostics>() as u32,
+                    has_scene: d.has_scene as u32,
+                    preparing: d.preparing as u32,
+                    compiling: d.compiling as u32,
+                    scene_revision: d.scene_revision,
+                    compilations_started: d.compilations_started,
+                    compilations_completed: d.compilations_completed,
+                    pipeline_cache_hits: d.pipeline_cache_hits,
+                    cached_pipelines: d.cached_pipelines as u32,
+                    renders: d.renders.len() as u32,
+                    sampling: d.renders.iter().filter(|r| r.sampling).count() as u32,
+                    denoising: d.renders.iter().filter(|r| r.denoising).count() as u32,
+                },
+            )
+        }
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_engine_clear_scene(
+    handle: u64,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || engine_of(handle)?.clear_scene())
 }
 #[repr(C)]
 pub struct MtEngineEvent {
@@ -526,6 +579,7 @@ fn render_status(status: RenderStatus) -> u32 {
         RenderStatus::Denoising => 3,
         RenderStatus::Finished => 4,
         RenderStatus::Error => 5,
+        RenderStatus::Idle => 6,
     }
 }
 fn loop_status(status: RenderLoopStatus) -> u32 {
@@ -537,6 +591,7 @@ fn loop_status(status: RenderLoopStatus) -> u32 {
         RenderLoopStatus::Finished => 4,
         RenderLoopStatus::Error => 5,
         RenderLoopStatus::Previewing => 6,
+        RenderLoopStatus::Idle => 7,
     }
 }
 unsafe fn converge_options(
@@ -797,7 +852,16 @@ pub unsafe extern "C" fn mt_engine_set_callback(
             engine.on(move |event| {
                 let user = user;
                 let (kind, progress, recovering, message) = match event {
-                    EngineEvent::Progress { progress, .. } => (0, *progress, false, None),
+                    EngineEvent::Progress { stage, progress } => (
+                        if *stage == ProgressStage::Compilation {
+                            3
+                        } else {
+                            0
+                        },
+                        *progress,
+                        false,
+                        None,
+                    ),
                     EngineEvent::Error { message } => (1, 0., false, Some(message.clone())),
                     EngineEvent::DeviceLost { reason, recovering } => {
                         (2, 0., *recovering, Some(reason.clone()))

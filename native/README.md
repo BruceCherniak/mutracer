@@ -90,7 +90,9 @@ floats) or `mt_display_read_pixels` (RGBA8 or PNG with the display settings).
 renders. Edits that a context applies incrementally
 ([Editing a scene](#editing-a-scene)) finish during the call. Full preparation
 runs on a library thread while the previous images stay readable and
-presentable, and renders report `MT_RENDER_PREPARING` until it is published.
+presentable. Renders report `MT_RENDER_PREPARING` or `MT_RENDER_COMPILING`
+until publication; see [lifecycle and extensions](docs/engine-lifecycle.md) for
+clearing scenes, diagnostics and compilation progress.
 Each render uses its own width, height, bevel and dispersion settings and, when
 set, the engine camera instead of the descriptor's. Changing a render's size or
 settings restarts only that render.

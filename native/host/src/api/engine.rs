@@ -42,11 +42,40 @@ pub struct EngineInfo {
     /// Whether the device has hardware ray queries enabled.
     pub hardware_ray_query: bool,
 }
+/// CPU-only engine snapshot. No GPU polling, readback or memory estimation.
+#[derive(Clone, Debug)]
+pub struct Diagnostics {
+    pub info: EngineInfo,
+    pub scene_revision: u64,
+    pub has_scene: bool,
+    pub preparing: bool,
+    pub compiling: bool,
+    /// Device-lifetime cache misses begun and exited (including failed attempts).
+    pub compilations_started: u64,
+    pub compilations_completed: u64,
+    pub pipeline_cache_hits: u64,
+    /// Cached path-tracing variants; excludes display/depth/postprocess pipelines.
+    pub cached_pipelines: usize,
+    pub renders: Vec<RenderDiagnostics>,
+    pub last_error: Option<String>,
+}
+/// Per-render CPU counters. Captured samples may describe a retained old image.
+#[derive(Clone, Debug)]
+pub struct RenderDiagnostics {
+    pub id: u64,
+    pub samples: u32,
+    pub captured_samples: u32,
+    pub denoised_samples: u32,
+    pub sampling: bool,
+    pub denoising: bool,
+}
 /// Progress stage reported by [`EngineEvent::Progress`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProgressStage {
     /// Scene preparation (0 at start, 1 when ready).
     Preparation,
+    /// Actual path-tracing pipeline cache-miss compilation.
+    Compilation,
 }
 /// Engine notifications, delivered to [`Engine::on`] subscribers.
 #[derive(Clone, Debug, PartialEq)]
@@ -338,6 +367,9 @@ impl Engine {
         options: EngineOptions,
         adapter: Option<wgpu::Adapter>,
     ) -> Self {
+        gpu.compilation
+            .events_enabled
+            .store(true, Ordering::Relaxed);
         // Only shared-device engines can attach a surface. Keep the headless
         // queue path unchanged; it has no surface configuration to coordinate.
         if adapter.is_some() {
@@ -430,8 +462,18 @@ impl Engine {
         }
         let _dispatching = Dispatching(&self.inner.dispatching);
         loop {
+            let compilation =
+                std::mem::take(&mut *self.inner.gpu.compilation.events.lock().unwrap());
             let (engine, samples) = {
                 let mut state = self.lock();
+                if !state.device_failed && !state.disposed {
+                    state
+                        .engine_events
+                        .extend(compilation.into_iter().map(|done| EngineEvent::Progress {
+                            stage: ProgressStage::Compilation,
+                            progress: if done { 1. } else { 0. },
+                        }));
+                }
                 (
                     std::mem::take(&mut state.engine_events),
                     std::mem::take(&mut state.sample_events),
@@ -487,6 +529,13 @@ impl Engine {
         state.source_shared = true;
         Ok(())
     }
+    /// Records an empty scene, committed by the next update. Cancels old work,
+    /// drops all render images and scene resources; renders can be reused.
+    /// Update may wait for scene preparation and submitted GPU work to retire.
+    pub fn clear_scene(&self) -> Result<()> {
+        self.live()?.source_scene = None;
+        Ok(())
+    }
     /// Records the camera for every render; `None` uses the scene's camera record.
     /// Takes effect at the next [`Engine::update`]. Default `None`.
     pub fn set_camera(&self, camera: Option<Camera>) -> Result<()> {
@@ -503,19 +552,22 @@ impl Engine {
             let mut state = self.live()?;
             state.last_error = None;
             let mut changed = false;
-            if let Some(source) = state.source_scene.clone() {
-                let shared = state.source_shared;
-                let same = state.scene.as_ref().is_some_and(|scene| {
-                    Arc::ptr_eq(scene, &source) || !shared && **scene == *source
-                });
-                if !same {
-                    state.scene = Some(source.clone());
-                    state.scene_revision += 1;
-                    changed = true;
+            let same = match (&state.source_scene, &state.scene) {
+                (Some(source), Some(scene)) => {
+                    Arc::ptr_eq(source, scene) || !state.source_shared && **source == **scene
                 }
-                // Keep the committed Arc so an unchanged scene compares by pointer next time.
-                state.source_scene = state.scene.clone();
+                (None, None) => true,
+                _ => false,
+            };
+            if !same {
+                state.scene = state.source_scene.clone();
+                state.scene_revision += 1;
+                changed = true;
+                if state.scene.is_none() {
+                    super::render::clear_scene(&mut state)?;
+                }
             }
+            state.source_scene = state.scene.clone();
             let camera = state.source_camera.map(|c| c.to_bytes());
             if camera != state.camera {
                 state.camera = camera;
@@ -536,6 +588,30 @@ impl Engine {
         });
         self.flush();
         changed
+    }
+    /// Returns cached CPU observations in O(number of renders), without waiting
+    /// for GPU completion. Sample counters refresh on collect/refine/converge;
+    /// compilation counters refresh at the actual cache-miss boundary.
+    pub fn diagnostics(&self) -> Diagnostics {
+        let state = self.lock();
+        let c = &self.inner.gpu.compilation;
+        Diagnostics {
+            info: self.info(),
+            scene_revision: state.scene_revision,
+            has_scene: state.scene.is_some(),
+            preparing: state.shared.is_pending(),
+            compiling: c.active.load(Ordering::Acquire) > 0,
+            compilations_started: c.started.load(Ordering::Relaxed),
+            compilations_completed: c.completed.load(Ordering::Relaxed),
+            pipeline_cache_hits: c.hits.load(Ordering::Relaxed),
+            cached_pipelines: c.cached.load(Ordering::Acquire),
+            renders: state
+                .renders
+                .iter()
+                .map(|(&id, r)| r.diagnostics(id, state.scene_revision, state.camera_revision))
+                .collect(),
+            last_error: state.last_error.clone(),
+        }
     }
     pub fn info(&self) -> EngineInfo {
         EngineInfo {
@@ -577,12 +653,16 @@ impl Engine {
             id,
         }
     }
+    pub(super) fn empty_source(&self) -> bool {
+        self.lock().source_scene.is_none()
+    }
     /// Whether `set_scene`/`set_camera` recorded inputs that `update` has not committed.
     pub(super) fn inputs_pending(&self) -> bool {
         let state = self.lock();
         let scene = match (&state.source_scene, &state.scene) {
             (Some(source), Some(scene)) => !Arc::ptr_eq(source, scene),
-            (source, _) => source.is_some(),
+            (None, None) => false,
+            _ => true,
         };
         scene || state.source_camera.map(|c| c.to_bytes()) != state.camera
     }

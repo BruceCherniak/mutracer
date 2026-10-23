@@ -2,6 +2,7 @@
 use super::engine::{Engine, State};
 use super::render::{Readiness, Render, readiness};
 use super::{Result, Status, error};
+use crate::GpuDevice;
 
 /// Tone mapping transform.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -219,6 +220,35 @@ impl Default for DisplayState {
         }
     }
 }
+impl DisplayState {
+    pub(super) fn clear_image(&mut self, gpu: &GpuDevice) -> Result<()> {
+        self.texture = None;
+        self.hdr_texture = None;
+        self.present_empty(gpu)
+    }
+    pub(super) fn present_empty(&mut self, gpu: &GpuDevice) -> Result<()> {
+        if let Some(surface) = &mut self.surface {
+            // wgpu initializes unwritten texels to transparent black. This image
+            // is transient: empty scenes still have no readable render output.
+            let empty = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("MuTracer empty window"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            surface.present(gpu, &empty)?;
+        }
+        Ok(())
+    }
+}
 const BLIT: &str = r#"
 @group(0) @binding(0) var source: texture_2d<f32>;
 @group(0) @binding(1) var source_sampler: sampler;
@@ -351,6 +381,7 @@ impl Display {
     /// Composes and shows the render's complete image, or its fallback's. Smaller
     /// images are scaled linearly to the display size. Returns `None` and keeps the
     /// previous image when neither is ready, for example during scene preparation.
+    /// An empty committed scene clears an attached window to transparent black.
     /// With a window attachment, also attempts window presentation. The return
     /// value describes the offscreen image; surface_info reports skipped/lost
     /// window frames. Does not trace. Window acquisition/configuration may block.
@@ -361,6 +392,10 @@ impl Display {
     }
     fn present_inner(&self, render: &Render) -> Result<Option<Presented>> {
         let Some(composed) = self.compose(render, true)? else {
+            let mut state = self.engine.live()?;
+            if state.scene.is_none() {
+                state.display.present_empty(&self.engine.inner.gpu)?;
+            }
             return Ok(None);
         };
         let hdr_active = self

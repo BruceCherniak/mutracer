@@ -15,6 +15,7 @@ use wgpu::util::DeviceExt;
 pub mod logging;
 pub mod api;
 mod commit_plan;
+mod compilation;
 pub mod context;
 pub mod denoise;
 mod denoise_ffi;
@@ -291,6 +292,7 @@ struct GpuDevice {
     hardware_ray_query: bool,
     pipelines: Arc<Mutex<HashMap<PipelineKey, CachedPipeline>>>,
     pipeline_cache: Option<wgpu::PipelineCache>,
+    compilation: Arc<compilation::Compilation>,
 }
 impl GpuDevice {
     /// Wraps a host-owned device without replacing its device-loss callback.
@@ -309,6 +311,7 @@ impl GpuDevice {
                 .features()
                 .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY),
             pipelines: Arc::new(Mutex::new(HashMap::new())),
+            compilation: Default::default(),
             pipeline_cache: None,
         }
     }
@@ -390,6 +393,7 @@ impl GpuDevice {
         Ok(Self {
             loss,
             pipelines: Arc::new(Mutex::new(HashMap::new())),
+            compilation: Default::default(),
             pipeline_cache,
             device,
             queue: GpuQueue::new(queue, None),
@@ -415,8 +419,12 @@ fn compile_pipeline(
     };
     let mut cache = gpu.pipelines.lock().unwrap();
     if let Some(cached) = cache.get(&key) {
+        gpu.compilation
+            .hits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         return Ok((cached.clone(), true));
     }
+    let _compiling = gpu.compilation.begin();
     let layouts: Vec<_> = scene
         .bind_groups
         .iter()
@@ -477,6 +485,9 @@ fn compile_pipeline(
         cache.clear();
     }
     cache.insert(key, compiled.clone());
+    gpu.compilation
+        .cached
+        .store(cache.len(), std::sync::atomic::Ordering::Release);
     Ok((compiled, false))
 }
 /// One render's view of a shared scene (S2): its camera and trace uniforms,
@@ -553,6 +564,9 @@ impl GpuScene {
         let memory = pollster::block_on(memory_scope.pop());
         if let Some(error) = validation.or(memory) {
             gpu.pipelines.lock().unwrap().clear();
+            gpu.compilation
+                .cached
+                .store(0, std::sync::atomic::Ordering::Release);
             return Err(error.to_string().into());
         }
         result

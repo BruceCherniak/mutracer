@@ -12,6 +12,7 @@ use std::time::{Duration, Instant};
 /// Presentation state; preview images never count as final completion.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderLoopStatus {
+    Idle,
     Preparing,
     Compiling,
     Converging,
@@ -24,6 +25,7 @@ pub enum RenderLoopStatus {
 impl From<RenderStatus> for RenderLoopStatus {
     fn from(status: RenderStatus) -> Self {
         match status {
+            RenderStatus::Idle => Self::Idle,
             RenderStatus::Preparing => Self::Preparing,
             RenderStatus::Compiling => Self::Compiling,
             RenderStatus::Converging => Self::Converging,
@@ -572,8 +574,11 @@ impl RenderLoop {
             return !state.disposed && !state.engine_events.is_empty();
         }
         let status = self.status();
+        if status == RenderLoopStatus::Idle {
+            return self.engine.inputs_pending() || self.syncs_active() || self.window_pending();
+        }
         if status == RenderLoopStatus::Error {
-            return self.engine.inputs_pending();
+            return self.engine.inputs_pending() || self.syncs_active();
         }
         let idle = status == RenderLoopStatus::Finished
             && self.final_render.status() == RenderStatus::Finished
@@ -584,6 +589,14 @@ impl RenderLoop {
             && !self.display.passes_pending()
             && image_state(&self.final_render, &self.display).ok() == self.finished_image;
         !idle
+    }
+    fn window_pending(&self) -> bool {
+        self.engine
+            .lock()
+            .display
+            .surface
+            .as_ref()
+            .is_some_and(|s| s.pending())
     }
     /// One frame: updates syncs, commits engine inputs, refines the selected
     /// render and presents it. An attached window can block for frame acquisition
@@ -601,6 +614,16 @@ impl RenderLoop {
         self.engine.check_device()?;
         for sync in &self.syncs {
             sync.lock().unwrap_or_else(|e| e.into_inner()).update();
+        }
+        if self.engine.empty_source() {
+            self.engine.update()?;
+            if self.window_pending() {
+                self.display.present(&self.final_render)?;
+            }
+            self.preview_frame_owner = None;
+            self.presented = None;
+            self.finished_image = None;
+            return Ok(self.set_status(RenderLoopStatus::Idle));
         }
         let preview_state = self
             .preview

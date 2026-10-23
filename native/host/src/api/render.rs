@@ -213,9 +213,11 @@ impl RenderSettings {
 /// Execution state of one render, matching the browser `RenderStatus`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderStatus {
-    /// No committed scene yet, or scene preparation is running.
+    /// Scene preparation is running.
     Preparing,
-    /// Reserved: pipeline compilation is currently part of preparation.
+    /// No committed scene; no work is scheduled.
+    Idle,
+    /// A shared path-tracing pipeline is being compiled on a cache miss.
     Compiling,
     Converging,
     Denoising,
@@ -405,6 +407,9 @@ pub(super) struct SharedScene {
     failed: Option<(u64, String)>,
 }
 impl SharedScene {
+    pub(super) fn is_pending(&self) -> bool {
+        self.pending.is_some()
+    }
     /// Destroys the scene context once its preparation has drained; renders first.
     pub(super) fn release(&mut self) {
         let Some(context) = self.context.take() else {
@@ -523,6 +528,21 @@ pub(super) struct RenderState {
     adaptive: Adaptive,
 }
 impl RenderState {
+    pub(super) fn diagnostics(&self, id: u64, scene: u64, camera: u64) -> super::RenderDiagnostics {
+        super::RenderDiagnostics {
+            id,
+            samples: if self.current(scene, camera) {
+                self.samples
+            } else {
+                0
+            },
+            captured_samples: self.captured,
+            denoised_samples: denoised_samples(self),
+            sampling: self.job.is_some(),
+            denoising: self.denoise.worker.is_some(),
+        }
+    }
+
     pub(super) fn device_lost(&mut self) {
         self.error = true;
         self.status = RenderStatus::Error;
@@ -580,6 +600,7 @@ impl RenderState {
     }
     /// Destroys the target context once its GPU work has drained.
     pub(super) fn release(mut self) {
+        cancel_denoise(&mut self);
         let context = self.context;
         if let Some(flight) = self.job.as_mut() {
             flight.cancelled = true;
@@ -684,6 +705,37 @@ fn desired(state: &State, render: &RenderState) -> Option<TargetKey> {
     })
 }
 
+/// Clear retires targets before their shared scene. Keep render handles/settings.
+pub(super) fn clear_scene(state: &mut State) -> Result<()> {
+    for render in state.renders.values_mut() {
+        cancel_denoise(render);
+        if let Some(flight) = render.job.as_mut() {
+            flight.cancelled = true;
+            let _ = l0_blocking(|e, n| unsafe { context::mt_job_cancel(flight.job, e, n) });
+        }
+        drain(render)?;
+        l0_blocking(|e, n| unsafe { context::mt_context_destroy(render.context, e, n) })?;
+        render.context = context::create_with_gpu(state.gpu.clone(), state.backend.code())
+            .map_err(|e| error(Status::Unavailable, e))?;
+        render.published = None;
+        render.failed = None;
+        render.capture = None;
+        render.capture_key = None;
+        render.captured = 0;
+        render.samples = 0;
+        render.needs_capture = false;
+        render.error = false;
+        render.status = RenderStatus::Idle;
+        render.output.invalidate();
+    }
+    state.shared.release();
+    state.shared = SharedScene::default();
+    state.sample_events.clear();
+    // Keep window, settings and dimensions, but discard any composed old image.
+    state.display.clear_image(&state.gpu)?;
+    Ok(())
+}
+
 /// Called by `Engine::update` for every render.
 pub(super) fn synchronize(state: &mut State, id: u64, inputs_changed: bool) {
     if inputs_changed {
@@ -784,6 +836,14 @@ pub(super) fn scene_step(
                 "Scene preparation thread stopped",
             )),
         };
+        events.extend(
+            std::mem::take(&mut *state.gpu.compilation.events.lock().unwrap())
+                .into_iter()
+                .map(|done| EngineEvent::Progress {
+                    stage: ProgressStage::Compilation,
+                    progress: if done { 1. } else { 0. },
+                }),
+        );
         let mut pending = shared.pending.take().unwrap();
         if let Some(thread) = pending.thread.take() {
             let _ = thread.join();
@@ -1405,6 +1465,11 @@ impl Render {
                 .map_err(|e| error(Status::Unavailable, e))?;
         let id = state.next_render;
         state.next_render += 1;
+        let initial_status = if state.scene.is_some() {
+            RenderStatus::Preparing
+        } else {
+            RenderStatus::Idle
+        };
         state.renders.insert(
             id,
             RenderState {
@@ -1423,7 +1488,7 @@ impl Render {
                 capture_key: None,
                 captured: 0,
                 needs_capture: false,
-                status: RenderStatus::Preparing,
+                status: initial_status,
                 error: false,
                 busy: false,
                 denoise: Denoise::default(),
@@ -1624,6 +1689,7 @@ impl Render {
             render.busy = false;
             match &result {
                 Ok(_) => render.status = RenderStatus::Finished,
+                Err(_) if render.published.is_none() => render.status = RenderStatus::Idle,
                 Err(_) => {
                     render.status = RenderStatus::Error;
                     // Stop further dispatch and collect retained samples now.
@@ -1894,7 +1960,8 @@ impl Render {
     /// batch first. The filter runs on a library thread; call again to collect its
     /// result, which is then presented like a scheduled one. Returns whether the
     /// denoised image is of the current samples. Needs a denoiser
-    /// ([`Render::set_denoiser`]); does not wait for the GPU.
+    /// ([`Render::set_denoiser`]). Input
+    /// readback may block; the call does not wait for the filter callback.
     pub fn denoise_current(&self) -> Result<bool> {
         self.with(|state, id| {
             if state.renders[&id].denoise.options.is_none() || !collect(state, id)? {
@@ -1937,9 +2004,22 @@ impl Render {
         .unwrap_or(0)
     }
     pub fn status(&self) -> RenderStatus {
+        if self
+            .engine
+            .inner
+            .gpu
+            .compilation
+            .active
+            .load(Ordering::Acquire)
+            > 0
+        {
+            return RenderStatus::Compiling;
+        }
         self.get(|state, r| {
             if r.error {
                 RenderStatus::Error
+            } else if state.scene.is_none() {
+                RenderStatus::Idle
             } else if !r.current(state.scene_revision, state.camera_revision) {
                 RenderStatus::Preparing
             } else {
@@ -1947,6 +2027,10 @@ impl Render {
             }
         })
         .unwrap_or(RenderStatus::Error)
+    }
+    /// CPU snapshot; completed samples update when work is collected, not on query.
+    pub fn diagnostics(&self) -> Option<super::RenderDiagnostics> {
+        self.get(|state, r| r.diagnostics(self.id, state.scene_revision, state.camera_revision))
     }
     /// Actual width of the published image, else the requested width.
     pub fn width(&self) -> u32 {
@@ -2058,8 +2142,8 @@ impl Drop for Render {
 
 fn refine(state: &mut State, id: u64) -> Result<RenderStatus> {
     let Some(key) = desired(state, &state.renders[&id]) else {
-        state.renders.get_mut(&id).unwrap().status = RenderStatus::Preparing;
-        return Ok(RenderStatus::Preparing);
+        state.renders.get_mut(&id).unwrap().status = RenderStatus::Idle;
+        return Ok(RenderStatus::Idle);
     };
     let ready = commit(state, id, key, false)?;
     // The fallback is refined while this render has no complete sample, including
@@ -2095,6 +2179,8 @@ fn refine(state: &mut State, id: u64) -> Result<RenderStatus> {
         let render = &state.renders[&id];
         return Ok(if render.error {
             RenderStatus::Error
+        } else if state.gpu.compilation.active.load(Ordering::Acquire) > 0 {
+            RenderStatus::Compiling
         } else {
             RenderStatus::Preparing
         });

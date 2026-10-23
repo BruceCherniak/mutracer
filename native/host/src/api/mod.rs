@@ -6,7 +6,7 @@
 //!
 //! An engine and its renders/display may be used from any thread, one thread at
 //! a time. Full scene preparation and denoising run on library threads.
-//! Callbacks run synchronously on the calling
+//! Event/progress callbacks run synchronously on the calling
 //! thread inside `update`, `read_depth_samples`, `refine`, `converge` and loop
 //! `tick`, and may call back into the API.
 //!
@@ -28,7 +28,8 @@ pub use crate::status::{Status, StatusError as Error};
 pub use depth::{DEPTH_SAMPLE_COUNT, DEPTH_SAMPLE_GRID, DepthSampleArea};
 pub use display::{Channel, Display, DisplaySettings, Presented, ToneMapping};
 pub use engine::{
-    Backend, Camera, Engine, EngineEvent, EngineInfo, EngineOptions, ProgressStage, Subscription,
+    Backend, Camera, Diagnostics, Engine, EngineEvent, EngineInfo, EngineOptions, ProgressStage,
+    RenderDiagnostics, Subscription,
 };
 pub use post_process::{OutputKind, PostProcessContext, PostProcessSubscription};
 pub use render::{
@@ -123,3 +124,6 @@ mod hdr_tests;
 mod loop_tests;
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod lifecycle_tests;

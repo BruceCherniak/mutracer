@@ -23,7 +23,7 @@ extern "C" {
  * Threads: an engine and everything created from it may be called from any
  * thread, one thread at a time. Only mt_render_cancel may be called concurrently,
  * from any thread. Full scene preparation and denoising run on library threads.
- * Callbacks run synchronously on the calling thread inside mt_engine_update,
+ * Event/progress callbacks run synchronously on the calling thread inside mt_engine_update,
  * mt_engine_read_depth_samples,
  * mt_render_refine, mt_render_converge and the render loop calls, and may call
  * back into this API, except into the render loop that is running them
@@ -64,13 +64,32 @@ int32_t mt_engine_destroy(mt_engine engine, char *error, size_t capacity);
  * quality bits and (after mt_engine_set_camera) the camera record are replaced
  * per render; the other fields are used as given. */
 int32_t mt_engine_set_scene(mt_engine engine, const uint8_t *descriptor, size_t length, char *error, size_t capacity);
+/* Records an empty scene for update: cancels work, releases scene and images,
+ * keeps reusable render handles/settings. Update may wait for preparation/GPU
+ * retirement; it never waits for a denoiser worker. Attached windows
+ * present transparent black (opaque windows show black); skipped frames follow
+ * the normal surface retry contract. */
+int32_t mt_engine_clear_scene(mt_engine engine, char *error, size_t capacity);
+/* CPU snapshot, O(render count), no GPU polling/readback. Lifetime path-tracing
+ * cache counters exclude display/depth pipelines. completed counts exited compile
+ * attempts, including failures; hits reuse an existing variant. Cache max 32.
+ * sampling/denoising count renders with pending work, refreshed by API collection.
+ * Device/capability/error details remain in mt_engine_info / mt_engine_last_error.
+ * Logging is an optional stream; this query works with logging disabled. */
+typedef struct mt_engine_diagnostics_info {
+  uint32_t struct_size, has_scene, preparing, compiling;
+  uint64_t scene_revision, compilations_started, compilations_completed, pipeline_cache_hits;
+  uint32_t cached_pipelines, renders, sampling, denoising;
+} mt_engine_diagnostics_info;
+MT_ENGINE_LAYOUT(mt_engine_diagnostics_info, 64);
+int32_t mt_engine_diagnostics(mt_engine engine, mt_engine_diagnostics_info *output, char *error, size_t capacity);
 /* Records the camera for every render; NULL uses the scene's camera record.
  * Takes effect at the next mt_engine_update. Default NULL. */
 int32_t mt_engine_set_camera(mt_engine engine, const mt_camera_v4 *camera, char *error, size_t capacity);
 /* The sole commit point. changed (optional) receives 1 when the scene or camera
  * changed. Incremental edits are applied to every render on this thread; a render
  * that needs full preparation starts it on a library thread and reports
- * MT_RENDER_PREPARING until it is published. A failing render reports an error
+ * MT_RENDER_PREPARING or MT_RENDER_COMPILING until it is published. A failing render reports an error
  * event and does not stop the others. */
 int32_t mt_engine_update(mt_engine engine, uint32_t *changed, char *error, size_t capacity);
 
@@ -108,7 +127,8 @@ typedef enum mt_engine_event_kind {
   MT_ENGINE_EVENT_PROGRESS = 0,
   MT_ENGINE_EVENT_ERROR = 1,
   /* Terminal device loss; recovering is always 0. See README's Device loss. */
-  MT_ENGINE_EVENT_DEVICE_LOST = 2
+  MT_ENGINE_EVENT_DEVICE_LOST = 2,
+  MT_ENGINE_EVENT_COMPILATION = 3 /* Cache miss: 0 before compile, 1 after exit. */
 } mt_engine_event_kind;
 typedef struct mt_engine_event {
   uint32_t struct_size;
@@ -175,7 +195,8 @@ MT_ENGINE_LAYOUT(mt_presented, 20);
 /* Composes the render's complete image, or its fallback's, into the display
  * image; smaller images are scaled linearly. shown receives 0 and the previous
  * image stays when neither is ready, for example during preparation. presented
- * is optional. Does not trace. */
+ * is optional. An empty committed scene clears an attached window to transparent
+ * black and returns shown=0. Does not trace. */
 int32_t mt_display_present(mt_display display, mt_render render, uint32_t *shown, mt_presented *presented,
   char *error, size_t capacity);
 
@@ -197,11 +218,12 @@ int32_t mt_display_read_pixels(mt_display display, mt_render render, uint32_t fo
 
 typedef enum mt_render_status {
   MT_RENDER_PREPARING = 0,
-  MT_RENDER_COMPILING = 1, /* Reserved; preparation includes pipeline compilation. */
+  MT_RENDER_COMPILING = 1, /* Actual path-tracing cache-miss compilation. */
   MT_RENDER_CONVERGING = 2,
   MT_RENDER_DENOISING = 3,
   MT_RENDER_FINISHED = 4,
-  MT_RENDER_ERROR = 5
+  MT_RENDER_ERROR = 5,
+  MT_RENDER_IDLE = 6
 } mt_render_status;
 
 /* Defaults match the browser library (they differ from mt_render_settings). */
@@ -290,7 +312,8 @@ int32_t mt_render_refine(mt_render render, uint32_t *status, char *error, size_t
 /* Filters the current complete samples now without tracing, like the end of
  * converge; for hosts that stop refining (for example when paused). Call again
  * to collect the result; done (optional) receives 1 when the denoised image is
- * of the current samples. Requires a denoiser. */
+ * of the current samples. Requires a denoiser. Input readback may block;
+ * the call does not wait for the filter callback. */
 int32_t mt_render_denoise_current(mt_render render, uint32_t *done, char *error, size_t capacity);
 /* Collects and captures a finished batch without submitting another, so a host
  * can present the last frame before committing new input. idle (optional)
@@ -364,7 +387,8 @@ typedef enum mt_render_loop_status {
   MT_LOOP_PREPARING = 0, MT_LOOP_COMPILING = 1, MT_LOOP_CONVERGING = 2, MT_LOOP_DENOISING = 3,
   MT_LOOP_FINISHED = 4, MT_LOOP_ERROR = 5,
   /* The display shows a preview image. */
-  MT_LOOP_PREVIEWING = 6
+  MT_LOOP_PREVIEWING = 6,
+  MT_LOOP_IDLE = 7
 } mt_render_loop_status;
 typedef enum mt_loop_selection { MT_LOOP_SELECT_PREVIEW = 0, MT_LOOP_SELECT_FINAL = 1 } mt_loop_selection;
 /* Returns mt_loop_selection; changing is 1 while the scene or a sync is changing. */
