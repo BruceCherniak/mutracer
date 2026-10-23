@@ -747,7 +747,9 @@ fn predict(previous: &[u8], next: &[u8]) -> CommitKind {
         geometries: (0..b[h::GEOMETRY_COUNT] as usize).collect(),
         materials: (0..b[h::MATERIAL_COUNT] as usize).collect(),
     };
-    if crate::commit_plan::plan(previous, next, &sync, true).is_some() {
+    if !crate::commit_plan::displacement_map_changed(previous, next)
+        && crate::commit_plan::plan(previous, next, &sync, true).is_some()
+    {
         CommitKind::Incremental
     } else {
         CommitKind::Full

@@ -192,3 +192,88 @@ fn software_scene_object_incremental_matches_full() {
         }
     }
 }
+
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn software_displacement_map_edits_match_prediction() {
+    for scale in [0.1, 0.] {
+        let mut s = Scene::new();
+        let g = s
+            .add_geometry(Geometry::new(
+                vec![-1., -1., 0., 1., -1., 0., 0., 1., 0.],
+                vec![0, 1, 2],
+            ))
+            .unwrap();
+        s.geometry_mut(g).unwrap().uv[0] = vec![0., 0., 1., 0., 0.5, 1.].into();
+        let color = s
+            .add_texture(Texture::rgba8(1, 1, vec![255, 200, 150, 255]))
+            .unwrap();
+        let height = s.add_texture(Texture::rgba8(1, 1, vec![128; 4])).unwrap();
+        let mut material = OpenPbrMaterial::default();
+        material.textures[0] = Some(color);
+        material.textures[8] = Some(height);
+        material.values.layers.displacement_scale = scale;
+        let mat = s.add_material(material).unwrap();
+        s.add_mesh(Mesh::new(g, mat)).unwrap();
+        s.add_light(Light::Directional {
+            color: [1.; 3],
+            intensity: 2.,
+            transform: Mat4::IDENTITY,
+        })
+        .unwrap();
+        let mut camera = Camera::default();
+        camera.world_matrix[14] = 3.;
+        s.set_default_camera(Some(camera));
+        let engine = Engine::new(EngineOptions {
+            backend: Backend::Software,
+        })
+        .unwrap();
+        let render = Render::new(
+            &engine,
+            RenderSettings {
+                max_samples: 4,
+                size: RenderSize::Fixed {
+                    width: 16,
+                    height: 12,
+                },
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        engine.set_scene_object(&s).unwrap();
+        engine.update().unwrap();
+        render.converge(ConvergeOptions::new(4)).unwrap();
+        for edit in 0..3 {
+            let expected = match edit {
+                0 => {
+                    s.texture_mut(color).unwrap().pixels =
+                        TexturePixels::Rgba8(vec![100, 150, 200, 255].into());
+                    CommitKind::Incremental
+                }
+                1 => {
+                    s.texture_mut(height).unwrap().pixels =
+                        TexturePixels::Rgba8(vec![200; 4].into());
+                    CommitKind::Full
+                }
+                2 => {
+                    s.texture_mut(height).unwrap().scale = [2., 2.];
+                    CommitKind::Full
+                }
+                _ => unreachable!(),
+            };
+            assert_eq!(
+                s.pending_commit_kind().unwrap(),
+                expected,
+                "scale {scale} edit {edit} prediction"
+            );
+            engine.set_scene_object(&s).unwrap();
+            engine.update().unwrap();
+            render.converge(ConvergeOptions::new(4)).unwrap();
+            assert_eq!(
+                render.last_commit().unwrap(),
+                Some(expected),
+                "scale {scale} edit {edit} actual"
+            );
+        }
+    }
+}

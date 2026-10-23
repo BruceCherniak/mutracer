@@ -191,17 +191,31 @@ fn texture_parameters_and_pixels() {
     for &(name, edit) in edits {
         Fixture::new().check(name, Incremental, edit);
     }
-    let mut f = Fixture::new();
-    f.scene.material_mut(f.material).unwrap().textures[8] = Some(f.texture);
-    f.scene
-        .material_mut(f.material)
-        .unwrap()
-        .values
-        .layers
-        .displacement_scale = 0.1;
-    f.check("displacement map pixels", Incremental, |f| {
-        f.scene.texture_mut(f.texture).unwrap().pixels = TexturePixels::Rgba8(vec![100; 4].into())
-    });
+    // Height maps shape the displaced BLAS: any change prepares again, whatever the scale.
+    let displaced: &[(&str, f32, fn(&mut Fixture))] = &[
+        ("displacement map pixels", 0.1, |f| {
+            f.scene.texture_mut(f.texture).unwrap().pixels =
+                TexturePixels::Rgba8(vec![100; 4].into())
+        }),
+        ("displacement map scale", 0.1, |f| {
+            f.scene.texture_mut(f.texture).unwrap().scale = [2., 2.]
+        }),
+        ("zero-scale displacement map pixels", 0., |f| {
+            f.scene.texture_mut(f.texture).unwrap().pixels =
+                TexturePixels::Rgba8(vec![100; 4].into())
+        }),
+    ];
+    for &(name, scale, edit) in displaced {
+        let mut f = Fixture::new();
+        f.scene.material_mut(f.material).unwrap().textures[8] = Some(f.texture);
+        f.scene
+            .material_mut(f.material)
+            .unwrap()
+            .values
+            .layers
+            .displacement_scale = scale;
+        f.check(name, Full, edit);
+    }
 }
 
 #[test]

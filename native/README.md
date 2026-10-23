@@ -534,8 +534,8 @@ Incremental commits cover:
 - Material base color, roughness, metalness, transmission and IOR, provided the
   edit does not require a new shader variant.
 - Existing texture sampling parameters and pixels, including environment and
-  background map pixels and sizes, when the texture atlas still fits. Displacement
-  map pixel changes require full preparation.
+  background map pixels and sizes, when the texture atlas still fits. Changes to a
+  texture used as a displacement map require full preparation.
 - Adding, removing and changing lights; background color changes.
 
 Full preparation is required for other material edits, including emission color
@@ -550,8 +550,8 @@ variant or a texture atlas that grows can also require full preparation.
 `Scene::pending_commit_kind()` / `mt_scene_pending_commit_kind` predicts the next
 scene snapshot's commit and reports Full before the first snapshot. Render
 settings and resolution belong to each render and are outside this prediction.
-The engine's actual result also depends on shader, displacement and texture-atlas
-requirements; the prediction can report Incremental before these require Full.
+The engine's actual result also depends on shader and texture-atlas requirements;
+the prediction can report Incremental before these require Full.
 `mt_context_snapshot.last_commit` reports `MT_COMMIT_INCREMENTAL` or
 `MT_COMMIT_FULL` for the last successful commit. Every successful commit restarts
 accumulation and expires the previous job. Both commit paths render the same

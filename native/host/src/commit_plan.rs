@@ -90,6 +90,43 @@ fn atlas_texture(w: &Words, index: usize) -> Option<bool> {
 
 /// Material property kind of texture references (see material_properties.rs).
 const TEXTURE_PROPERTY: u8 = 5;
+/// `MT_MAT_DISPLACEMENT_MAP` in mutracer-material-properties.h.
+const DISPLACEMENT_MAP_PROPERTY: usize = 59;
+
+/// Whether a material uses texture `index` as its displacement map.
+fn displacement_texture(w: &Words, index: usize) -> Option<bool> {
+    for i in 0..w.u(h::MATERIAL_COUNT) {
+        let o = w.u(h::MATERIAL_OFFSET) + i * mat::WORDS;
+        let extensions = w.u(o + mat::EXTENSION_OFFSET);
+        for e in 0..w.u(o + mat::EXTENSION_COUNT) {
+            let at = extensions + e * crate::layout::extension::WORDS;
+            w.span(at, crate::layout::extension::WORDS)?;
+            if w.u(at + crate::layout::extension::ID) == DISPLACEMENT_MAP_PROPERTY
+                && w.u(at + crate::layout::extension::X) == index
+            {
+                return Some(true);
+            }
+        }
+    }
+    Some(false)
+}
+
+/// Whether a changed texture is a displacement map in either descriptor. Height
+/// maps shape the displaced acceleration structures, so the scene sync prepares
+/// these meshes again, as the browser library does.
+pub(crate) fn displacement_map_changed(previous: &[u8], next: &[u8]) -> bool {
+    let (a, b) = (Words(previous), Words(next));
+    let changed = || -> Option<bool> {
+        let (textures, _) = changed_textures(&a, &b)?;
+        for index in textures {
+            if displacement_texture(&a, index)? || displacement_texture(&b, index)? {
+                return Some(true);
+            }
+        }
+        Some(false)
+    };
+    changed().unwrap_or(false)
+}
 
 /// Changed textures, and whether any of them is packed into the atlas.
 /// Environment and background maps travel with the environment step.
