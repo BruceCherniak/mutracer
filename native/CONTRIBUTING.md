@@ -77,6 +77,8 @@ is printed and recorded in `checks.json`.
 `npm run native:ci:hosts` adds the context, job, camera, settings and engine C hosts
 (`native:engine` chains the other four) to that real-GPU validation, reusing its
 fixtures, archive and Cargo target at 8 samples.
+C engine HWRT differences are counted in `gpu.cHosts.hardwareDifferences` and
+leave `gpu.validated` false; their per-fixture records and logs remain in `hosts/`.
 Run the `native:*` commands separately only when iterating on one host; each of
 them rebuilds and rerenders its whole chain.
 

@@ -7,6 +7,7 @@ import {resolve,dirname} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnCompiler} from './compiler.mjs';
 import {classifyHostGpuResult,hwrtLoopIterations} from './host-gpu-results.mjs';
+import {gpuValidationCoverage} from './ci-gpu-summary.mjs';
 import {archiveName,executable,nativeToolchainEnv,windows} from './platform.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const gpuValidation=process.argv.includes('--gpu')||process.argv.includes('--hosts');
@@ -98,18 +99,18 @@ if(gpuValidation){
  await run('ray-query-contracts',resolve(hostTarget,'release',executable('ray-query-probe')),[resolve(out,'ray-query')]);
  if(!JSON.parse(readFileSync(resolve(out,'ray-query/result.json'),'utf8')).supported)throw Error('HWRT execution was not validated.');
  // --hosts: the context, job, camera, settings and engine C hosts, reusing the fixtures above.
- if(process.argv.includes('--hosts'))await run('c-hosts','npm',['run','native:engine'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'hosts'),
-   MUTRACER_NATIVE_SCENE_OUTPUT:resolve(out,'fixtures'),MUTRACER_NATIVE_SAMPLES:'8'});
+ let cHosts;
+ if(process.argv.includes('--hosts')){
+  await run('c-hosts','npm',['run','native:engine'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'hosts'),
+    MUTRACER_NATIVE_SCENE_OUTPUT:resolve(out,'fixtures'),MUTRACER_NATIVE_SAMPLES:'8'});
+  cHosts=JSON.parse(readFileSync(resolve(out,'hosts/engine-verification.json'),'utf8'));
+ }
  await joinLane(viewerLane);
  await run('viewer-gpu-package','npm',['run','native:viewer:package','--','--gpu'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'viewer')});
  const oracle=readFileSync(resolve(out,'fixtures/incremental-oracle.jsonl'),'utf8').trim().split('\n').map(line=>JSON.parse(line));
  gpu.oracle={passed:oracle.filter(row=>row.pass===true).length,skipped:oracle.filter(row=>row.skipped===true).length};
  if(gpu.oracle.passed+gpu.oracle.skipped!==oracle.length)throw Error('Incomplete incremental render results.');
- gpu.validated=gpu.oracle.skipped===0&&hostGpuTests.knownOpenHwrtFailures===0;
- if(!gpu.validated)gpu.reason=[
-  gpu.oracle.skipped&&`${gpu.oracle.skipped} full-reference renders failed`,
-  hostGpuTests.knownOpenHwrtFailures&&`${hostGpuTests.knownOpenHwrtFailures} known-open Metal HWRT image mismatches`,
- ].filter(Boolean).join('; ')+'; review failures before release';
+ Object.assign(gpu,gpuValidationCoverage(gpu.oracle,hostGpuTests,cHosts));
  console.log(`GPU validation coverage: ${JSON.stringify(gpu)}`);
 }else{
  await run('scene-static','npm',['run','native:scene:static'],{MUTRACER_NATIVE_OUTPUT:resolve(out,'fixtures'),...prebuilt});
