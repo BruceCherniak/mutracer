@@ -51,6 +51,14 @@ post-processing, render the examples (or a fixed-seed scene with a fixed
 sample count) on a real GPU before and after, and compare
 `render.readPixels('hdr')` pixels. Test both WebGPU and WebGL 2 (`?webgl`).
 
+## Site deployment
+
+- `main`: `npm run deploy` publishes `mutracer` at `mutracer.meimu-studio.com`.
+- `dev`: `npm run deploy:dev` publishes `mutracer-dev` at `mutracer-dev.meimu-studio.com`.
+- The `mutracer-dev` Workers Builds connection watches only `dev` and runs
+  `npm run deploy:dev`; leave its separate build command empty because Wrangler
+  already runs the type checks and site build.
+
 ## Rules
 
 - Exports from `src/main.ts` and `src/oidn.ts` are public contracts. Keep
