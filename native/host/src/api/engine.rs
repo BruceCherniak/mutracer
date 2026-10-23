@@ -146,6 +146,7 @@ impl Default for Camera {
     }
 }
 impl Camera {
+    /// Encodes the camera as a 128-byte `mt_camera_v4` record.
     pub fn to_bytes(&self) -> [u8; 128] {
         let mut bytes = [0; 128];
         let mut word = |index: usize, value: u32| {
@@ -179,6 +180,7 @@ impl Camera {
         }
         bytes
     }
+    /// Decodes a 128-byte `mt_camera_v4` record; `None` for any other length.
     pub fn from_bytes(bytes: &[u8]) -> Option<Self> {
         if bytes.len() != 128 {
             return None;
@@ -248,6 +250,7 @@ pub struct Subscription {
     id: u64,
 }
 impl Subscription {
+    /// Keeps the callback registered for the engine's lifetime.
     pub fn detach(self) {
         std::mem::forget(self);
     }
@@ -617,6 +620,7 @@ impl Engine {
             last_error: state.last_error.clone(),
         }
     }
+    /// Adapter name, requested backend and hardware ray-query support.
     pub fn info(&self) -> EngineInfo {
         EngineInfo {
             adapter_name: self.inner.gpu.info.name.clone(),

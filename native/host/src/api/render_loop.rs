@@ -43,16 +43,21 @@ pub struct SyncActivity {
     until: Option<Instant>,
 }
 impl SyncActivity {
+    /// Whether the sync is active: set active, or inside an
+    /// [`SyncActivity::activate_for`] window.
     pub fn active(&self) -> bool {
         self.active || self.until.is_some_and(|until| Instant::now() < until)
     }
+    /// Marks the sync active until set inactive, for example during a drag.
     pub fn set_active(&mut self, active: bool) {
         self.active = active;
     }
+    /// Keeps the sync active for `duration` from now, extending a longer window.
     pub fn activate_for(&mut self, duration: Duration) {
         let until = Instant::now() + duration;
         self.until = Some(self.until.map_or(until, |current| current.max(until)));
     }
+    /// Clears the active flag and any timed window.
     pub fn clear(&mut self) {
         *self = Self::default();
     }
@@ -270,6 +275,7 @@ pub struct LoopSubscription {
     id: u64,
 }
 impl LoopSubscription {
+    /// Keeps the callback registered for the loop's lifetime.
     pub fn detach(self) {
         std::mem::forget(self);
     }
@@ -347,6 +353,8 @@ impl RenderLoop {
             ..Default::default()
         }
     }
+    /// Creates a loop presenting to the engine's display. Renders passed in the
+    /// options must belong to `engine`.
     pub fn new(engine: &Engine, options: RenderLoopOptions) -> Result<Self> {
         let same = |render: &Render| Arc::ptr_eq(&render.engine().inner, &engine.inner);
         for choice in options.preview.iter().chain([&options.final_render]) {
@@ -454,12 +462,15 @@ impl RenderLoop {
     pub fn presentations(&self) -> u64 {
         self.presentations
     }
+    /// The preview render, if the loop has one.
     pub fn preview(&self) -> Option<&Arc<Render>> {
         self.preview.as_ref()
     }
+    /// The final render.
     pub fn final_render(&self) -> &Arc<Render> {
         &self.final_render
     }
+    /// The engine display this loop presents to.
     pub fn display(&self) -> &Display {
         &self.display
     }

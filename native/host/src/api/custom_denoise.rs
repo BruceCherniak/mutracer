@@ -3,15 +3,20 @@ use super::CancelToken;
 /// Owned linear RGBA32F images, bottom row first. RGB color is a raw per-sample
 /// average (including background); alpha is path coverage. Guides match L0 AOVs.
 pub struct DenoiseInput {
+    /// Width and height in pixels.
     pub size: [u32; 2],
+    /// RGBA color, `width * height * 4` floats.
     pub color: Vec<f32>,
+    /// Normal guide, same layout.
     pub normal: Vec<f32>,
+    /// Albedo guide, same layout.
     pub albedo: Vec<f32>,
     /// Opt-in copies on the rendering device, STORAGE | COPY_SRC buffers.
     pub buffers: Option<DenoiseBuffers>,
     /// Cloned rendering device for optional GPU filtering. Input is read back
     /// before dispatch; opt-in buffers upload on the worker. Never destroy the device.
     pub device: wgpu::Device,
+    /// Queue access for GPU filtering on `device`.
     pub gpu: DenoiseGpu,
 }
 /// Owned copies with the same layout as CPU inputs. Do not destroy these buffers
@@ -24,16 +29,20 @@ pub struct DenoiseBuffers {
 /// Submission access coordinated with window reconfiguration.
 pub struct DenoiseGpu(pub(crate) crate::GpuQueue);
 impl DenoiseGpu {
+    /// Submits command buffers on the rendering queue, coordinated with window
+    /// reconfiguration.
     pub fn submit(
         &self,
         commands: impl IntoIterator<Item = wgpu::CommandBuffer>,
     ) -> wgpu::SubmissionIndex {
         self.0.submit(commands)
     }
+    /// Queues a buffer write on the rendering queue.
     pub fn write_buffer(&self, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) {
         self.0.write_buffer(buffer, offset, data);
     }
 }
+/// Filtered image returned by [`CustomDenoiser::denoise`].
 pub enum DenoiseOutput {
     /// Exactly width*height*4 finite values, same orientation and alpha semantics.
     Cpu(Vec<f32>),
@@ -52,6 +61,9 @@ pub trait CustomDenoiser: Send + Sync + 'static {
     fn gpu_inputs(&self) -> bool {
         false
     }
+    /// Filters one image on a library thread and returns the same size and
+    /// layout, or an error message. Poll `cancel` to stop early; results of
+    /// cancelled calls are discarded.
     fn denoise(
         &self,
         input: DenoiseInput,

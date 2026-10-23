@@ -57,7 +57,9 @@ and runs CPU-only checks. Set `MUTRACER_NATIVE_OUTPUT` to use another directory.
 
 - **Rust**: depend on the `mutracer-native-probe` crate in `native/host` by path,
   and set `MUTRACER_AOT_ARCHIVE` to the archive's absolute path when building.
-  The default `gltf` feature provides [glTF import](docs/gltf.md).
+  The default `gltf` feature provides [glTF import](docs/gltf.md). With the
+  same variable set, `cargo doc --no-deps --manifest-path native/host/Cargo.toml --open`
+  builds and opens the Rust API reference.
 - **C**: add `native/include` to the include path and link the shared library
   `mutracer_native_probe`:
 

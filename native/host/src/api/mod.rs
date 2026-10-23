@@ -46,6 +46,7 @@ pub use render_loop::{
 };
 pub use surface::{SurfaceInfo, SurfaceOptions, SurfaceStatus};
 
+/// Result of a native API call; an error carries a [`Status`] and a message.
 pub type Result<T> = std::result::Result<T, Error>;
 
 pub(crate) fn error(status: Status, message: impl Into<String>) -> Error {

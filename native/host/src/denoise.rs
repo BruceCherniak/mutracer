@@ -1,5 +1,5 @@
 //! Native OIDN adapter shared by library callers and the viewer worker.
-//! ABI reference: https://github.com/RenderKit/oidn/blob/v2.5.1/include/OpenImageDenoise/oidn.h
+//! ABI reference: <https://github.com/RenderKit/oidn/blob/v2.5.1/include/OpenImageDenoise/oidn.h>
 use anyhow::{Context, Result, bail, ensure};
 use libloading::Library;
 use std::{

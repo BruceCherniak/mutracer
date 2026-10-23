@@ -1,7 +1,10 @@
 use glam::Vec3;
 use std::sync::Arc;
 
-/// Editable OpenPBR layer parameters.
+/// Editable OpenPBR layer parameters, named after the OpenPBR inputs.
+/// `displacement_projection` is 0 UV, 1 triplanar, 2 spherical or 3 cylindrical.
+/// `Default` makes surfaces thin-walled; [`super::OpenPbrMaterial::default`] makes
+/// them solid.
 #[derive(Clone)]
 pub struct MaterialLayers {
     pub diffuse_roughness: f32,
@@ -68,16 +71,27 @@ impl Default for MaterialLayers {
         }
     }
 }
+/// Indexed triangles. Arrays are shared; edit one with `Arc::make_mut`. Empty
+/// optional arrays are absent.
 #[derive(Clone)]
 pub struct Geometry {
+    /// Optional per-vertex index into the mesh's material table.
     pub material_indices: Arc<[u32]>,
+    /// Bounds of `positions` from [`Geometry::new`]; edits do not update them.
     pub min: Vec3,
+    /// See `min`.
     pub max: Vec3,
+    /// XYZ per vertex.
     pub positions: Arc<[f32]>,
+    /// Three per triangle.
     pub indices: Arc<[u32]>,
+    /// Optional XYZ per vertex; generated when absent.
     pub normals: Arc<[f32]>,
+    /// Optional XY per vertex for UV sets 0 and 1.
     pub uv: [Arc<[f32]>; 2],
+    /// Optional RGB per vertex.
     pub colors: Arc<[f32]>,
+    /// Optional XYZW per vertex; generated when absent.
     pub tangents: Arc<[f32]>,
 }
 impl Geometry {}

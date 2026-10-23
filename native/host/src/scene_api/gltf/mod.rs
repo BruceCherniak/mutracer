@@ -24,9 +24,12 @@ pub struct Names {
     pub geometries: BTreeMap<String, Vec<GeometryId>>,
     pub materials: BTreeMap<String, Vec<MaterialId>>,
 }
+/// Result of a glTF import.
 pub struct ImportedScene {
     pub scene: Scene,
+    /// Handles by node, mesh, geometry and material name.
     pub names: Names,
+    /// Non-fatal issues, such as unsupported optional extensions.
     pub warnings: Vec<String>,
 }
 impl Scene {

@@ -25,6 +25,8 @@ struct Key {
     generation: u32,
 }
 macro_rules! ids { ($($id:ident),*) => {$ (
+    /// Scene-scoped handle. It becomes invalid when its resource is removed, and
+    /// other scenes reject it.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct $id(Key);
 )*}; }
@@ -144,7 +146,12 @@ impl Geometry {
 /// no emission, transmission, maps or coating; solid surfaces.
 #[derive(Clone)]
 pub struct OpenPbrMaterial {
+    /// Common OpenPBR values. Other properties use [`OpenPbrMaterial::set_float`]
+    /// and [`OpenPbrMaterial::set_uint`].
     pub values: encoder::Material,
+    /// Texture slots: base color, normal, metallic-roughness, emissive, roughness,
+    /// metalness, transmission, thin film and displacement. [`OpenPbrMaterial::set_texture`]
+    /// with those property IDs writes the same slots.
     pub textures: [Option<TextureId>; 9],
     /// Frozen material property IDs; values are three raw words (unused words zero).
     pub(crate) properties: BTreeMap<u32, [u32; 3]>,
@@ -186,18 +193,25 @@ pub struct Texture {
     pub pixels: TexturePixels,
     pub width: u32,
     pub height: u32,
+    /// UV set, 0 or 1.
     pub uv: u32,
+    /// UV scale; a negative value flips an axis and zero samples a constant coordinate.
     pub scale: [f32; 2],
     pub offset: [f32; 2],
+    /// S and T wrap modes: 0 repeat, 1 clamp to edge, 2 mirrored repeat.
     pub wrap: [u32; 2],
     pub flip_y: bool,
 }
+/// Row-major RGBA pixel storage.
 #[derive(Clone)]
 pub enum TexturePixels {
+    /// Four sRGB bytes per pixel.
     Rgba8(Arc<[u8]>),
+    /// Four linear floats per pixel; required for environment and background maps.
     Rgba32F(Arc<[f32]>),
 }
 impl Texture {
+    /// An sRGB RGBA8 texture with the default sampling.
     pub fn rgba8(width: u32, height: u32, pixels: impl Into<Arc<[u8]>>) -> Self {
         Self {
             width,
@@ -217,12 +231,17 @@ pub struct Instances {
     pub transforms: Arc<[Mat4]>,
     pub colors: Option<Arc<[f32]>>,
 }
+/// Geometry placed with a material and a world matrix, optionally instanced.
 #[derive(Clone)]
 pub struct Mesh {
     pub geometry: GeometryId,
+    /// Material used when `materials` is empty.
     pub material: MaterialId,
+    /// Material table selected by the geometry's per-vertex material indices.
     pub materials: Vec<MaterialId>,
+    /// Column-major local-to-world matrix.
     pub transform: Mat4,
+    /// Local instance matrices inside `transform`; `None` for an ordinary mesh.
     pub instances: Option<Instances>,
 }
 impl Mesh {
@@ -237,8 +256,11 @@ impl Mesh {
         }
     }
 }
+/// Analytic light with a linear RGB color. Rectangular, spot and directional
+/// lights emit along the local -Z axis of `transform`.
 #[derive(Clone)]
 pub enum Light {
+    /// `width` × `height` rectangle with `spread` and an optional texture.
     Rect {
         color: [f32; 3],
         intensity: f32,
@@ -248,17 +270,21 @@ pub enum Light {
         transform: Mat4,
         texture: Option<TextureId>,
     },
+    /// Sphere of `radius`.
     Sphere {
         color: [f32; 3],
         intensity: f32,
         radius: f32,
         transform: Mat4,
     },
+    /// Parallel light.
     Directional {
         color: [f32; 3],
         intensity: f32,
         transform: Mat4,
     },
+    /// Cone with `inner` and `outer` angles in degrees; `ies` is LM-63 profile
+    /// text, empty for none.
     Spot {
         color: [f32; 3],
         intensity: f32,
@@ -324,6 +350,7 @@ impl Default for Scene {
     }
 }
 impl Scene {
+    /// An empty scene with no camera and a black environment.
     pub fn new() -> Self {
         let owner = NEXT_SCENE.fetch_add(1, Ordering::Relaxed);
         Self {
@@ -345,6 +372,8 @@ impl Scene {
     fn changed(&mut self) {
         self.revision += 1;
     }
+    /// Sets the environment map, background map and background color. Map
+    /// handles must belong to this scene and use RGBA32F pixels.
     pub fn set_environment(&mut self, environment: Environment) -> Result<()> {
         for id in [environment.texture, environment.background]
             .into_iter()
@@ -365,9 +394,13 @@ impl Scene {
     }
 }
 macro_rules! resources {($($name:ident,$add:ident,$get:ident,$edit:ident,$remove:ident,$ty:ty,$id:ident,$dirty:ident);* $(;)?)=>{$(impl Scene {
+    #[doc = concat!("Adds a [`", stringify!($ty), "`] and returns its handle. Resources it references must belong to this scene.")]
     pub fn $add(&mut self,value:$ty)->Result<$id> {value.validate_references(self)?;let k=self.$name.add(value);self.dirty.get_mut().unwrap().structure=true;self.changed();Ok($id(k))}
+    #[doc = concat!("Borrows a [`", stringify!($ty), "`] by handle.")]
     pub fn $get(&self,id:$id)->Result<&$ty> {self.$name.get(id.0)}
+    #[doc = concat!("Mutably borrows a [`", stringify!($ty), "`] and marks it changed for the next snapshot.")]
     pub fn $edit(&mut self,id:$id)->Result<&mut $ty> {self.$name.get(id.0)?;self.dirty.get_mut().unwrap().$dirty.insert(id.0);self.changed();self.$name.get_mut(id.0)}
+    #[doc = concat!("Removes a [`", stringify!($ty), "`]; encoding returns InvalidHandle while other resources still reference it.")]
     pub fn $remove(&mut self,id:$id)->Result<()> {self.$name.remove(id.0)?;self.dirty.get_mut().unwrap().structure=true;self.changed();Ok(())}
 })*};}
 resources! {

@@ -19,19 +19,27 @@ pub struct Texture {
     pub offset: [f32; 2],
     pub wrap: [u32; 2],
 }
+/// Common OpenPBR values of [`super::OpenPbrMaterial`]; defaults match the browser
+/// `OpenPBRMaterial`.
 #[derive(Clone)]
 pub struct Material {
     pub name: String,
+    /// Linear base color.
     pub color: [f32; 3],
     pub roughness: f32,
     pub metalness: f32,
     pub opacity: f32,
     pub transmission: f32,
     pub ior: f32,
+    /// Linear emission color.
     pub emission: [f32; 3],
+    /// Emission luminance; 0 emits no light.
     pub emission_strength: f32,
+    /// Filled from [`super::OpenPbrMaterial::textures`] when encoding.
     pub maps: [u32; 9],
+    /// 0 auto, 1 opaque, 2 mask, 3 blend.
     pub alpha_mode: u32,
+    /// Mask threshold.
     pub alpha_cutoff: f32,
     pub double_sided: bool,
     pub normal_scale: f32,

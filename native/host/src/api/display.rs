@@ -324,9 +324,13 @@ impl Display {
         }
         Ok(())
     }
+    /// Current display settings.
     pub fn settings(&self) -> DisplaySettings {
         self.engine.lock().display.settings
     }
+    /// Validates the settings and uses them from the next presentation or export,
+    /// without restarting accumulation. Changing HDR output inside a display pass
+    /// is rejected.
     pub fn set_settings(&self, settings: DisplaySettings) -> Result<()> {
         settings.validate()?;
         let mut state = self.engine.live()?;

@@ -123,6 +123,8 @@ impl Default for RenderSettings {
     }
 }
 impl RenderSettings {
+    /// Checks ranges and combinations; [`Render::new`] and [`Render::set_settings`]
+    /// call it and return its `InvalidArgument` error.
     pub fn validate(&self) -> Result<()> {
         let invalid = |message: &str| Err(error(Status::InvalidArgument, message));
         if !(1..=MAX_TOTAL_SAMPLES).contains(&self.max_samples) {
@@ -321,25 +323,35 @@ pub struct DenoiserOptions {
 #[derive(Clone, Debug, Default)]
 pub struct CancelToken(Arc<AtomicBool>);
 impl CancelToken {
+    /// A token that is not cancelled.
     pub fn new() -> Self {
         Self::default()
     }
+    /// Requests cancellation from any thread; the converge call using this token
+    /// returns [`Status::Cancelled`].
     pub fn cancel(&self) {
         self.0.store(true, Ordering::Release);
     }
+    /// Whether [`CancelToken::cancel`] was called.
     pub fn is_cancelled(&self) -> bool {
         self.0.load(Ordering::Acquire)
     }
 }
+/// Stage reported by [`ConvergeProgress`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConvergeStage {
+    /// Rendering the requested samples.
     Final,
+    /// Waiting for the denoiser after the last sample.
     Denoising,
 }
+/// Progress passed to [`ConvergeOptions::on_progress`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConvergeProgress {
     pub stage: ConvergeStage,
+    /// Complete samples so far.
     pub samples: u32,
+    /// The requested [`ConvergeOptions::samples`].
     pub target_samples: u32,
 }
 /// Deterministic offline rendering options.
@@ -360,6 +372,7 @@ pub struct ConvergeOptions {
     pub cancel: Option<CancelToken>,
 }
 impl ConvergeOptions {
+    /// Options for `samples` final samples, with the defaults listed on each field.
     pub fn new(samples: u32) -> Self {
         Self {
             samples,
@@ -372,8 +385,10 @@ impl ConvergeOptions {
         }
     }
 }
+/// Result of [`Render::converge`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ConvergeResult {
+    /// Complete samples rendered.
     pub samples: u32,
 }
 
@@ -1534,6 +1549,8 @@ pub struct Render {
     owned: bool,
 }
 impl Render {
+    /// Creates a render of the engine's scene with validated `settings`. It shares
+    /// the engine's prepared scene and keeps its own accumulation.
     pub fn new(engine: &Engine, settings: RenderSettings) -> Result<Self> {
         settings.validate()?;
         let adaptive = Adaptive::new(&settings);
@@ -1623,6 +1640,7 @@ impl Render {
         let state = self.engine.lock();
         state.renders.get(&self.id).map(|r| f(&state, r))
     }
+    /// The latest settings from [`Render::new`] or [`Render::set_settings`].
     pub fn settings(&self) -> Result<RenderSettings> {
         self.with(|state, id| Ok(state.renders[&id].settings.clone()))
     }
@@ -2085,6 +2103,9 @@ impl Render {
         })
         .unwrap_or(0)
     }
+    /// `Compiling` while the engine compiles a path-tracing pipeline, `Idle`
+    /// without a scene, `Preparing` until the current scene and camera are
+    /// published, then the render's own status.
     pub fn status(&self) -> RenderStatus {
         if self
             .engine
@@ -2118,6 +2139,7 @@ impl Render {
     pub fn width(&self) -> u32 {
         self.size()[0]
     }
+    /// Actual height of the published image, else the requested height.
     pub fn height(&self) -> u32 {
         self.size()[1]
     }
@@ -2130,6 +2152,7 @@ impl Render {
         })
         .unwrap_or([0, 0])
     }
+    /// Whether the current scene and camera reached `max_samples`.
     pub fn converged(&self) -> bool {
         self.get(|state, r| {
             !state.device_failed

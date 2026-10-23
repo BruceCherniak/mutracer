@@ -174,7 +174,7 @@ fn negotiate(
 impl Display {
     /// Attaches an owned window surface, replacing any previous attachment. The
     /// engine must come from Engine::on_device with an adapter selected for this
-    /// surface. Use an owned window handle (for example Arc<Window>) to create a
+    /// surface. Use an owned window handle (for example `Arc<Window>`) to create a
     /// 'static surface. The display keeps it alive until detach/dispose/device loss.
     /// Default options give SDR, vsync and automatic alpha. Window size starts
     /// at Display::size; call resize_surface with physical dimensions on resize.

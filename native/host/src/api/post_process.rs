@@ -45,6 +45,7 @@ pub struct PostProcessSubscription {
     id: u64,
 }
 impl PostProcessSubscription {
+    /// Removes the pass from the next composition. Repeated calls do nothing.
     pub fn remove(&self) {
         if let Some(inner) = self.inner.upgrade() {
             let engine = Engine { inner };
