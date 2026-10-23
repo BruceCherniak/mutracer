@@ -1,5 +1,9 @@
 import {initialSceneConstants, sceneAttributeLayout, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, traceSampling, writeTraceSampling} from './sceneAssembly.js';
 import {rayTraceBindGroupLayouts} from './sceneLayoutSchema.js';
+import {WGPUBindlessMaterialData} from './WGPUBindlessMaterialData.js';
+import {WGPUBindlessTextures} from './WGPUBindlessTextures.js';
+import {bindlessBindGroupLayouts, bindlessShaderSource} from './wgpuBindlessSource.js';
+import {bindlessLimitReason, resourceTableLayout, setResourceTable, type MaterialTextureSelection} from './wgpuBindless.js';
 import { wgpuMaterialConstants } from './wgpuMaterialConstants.js';
 import { wgpuShaderSource, wgpuPipelineConstantKeys, WGPU_SHADER_DEFINE_KEYS } from './wgpuShaderSource.js';
 import { makeRayTraceUniform, WGPU_SCENE_BUFFER_MIN_BYTES } from './wgpuSceneUniform.js';
@@ -176,7 +180,10 @@ class WGPURayTracePass {
   private _iesProfileTexelOffsets = new Int32Array(0);
   private _materialChanges = new MaterialChangeTracker();
   private _pendingMaterialUpdate?: { level: MaterialUpdateLevel; emission: boolean; emissiveMap: boolean; materials: Set<OpenPBRMaterial> };
-  private _materialData: MaterialTable | undefined;
+  private _materialData: MaterialTable | WGPUBindlessMaterialData | undefined;
+  private _bindless?: WGPUBindlessTextures;
+  private _retiredBindless = new Set<WGPUBindlessTextures>();
+  private _disposed = false;
   private _maxTextureArrayBytes = DEFAULT_MAX_TEXTURE_ARRAY_BYTES;
   private _pendingGeometryUpdates = new Set<Geometry>();
   private _needsUpdateMeshData = true;
@@ -240,7 +247,7 @@ class WGPURayTracePass {
     const output = this._targetOutputs.get(target);
     [this._outColorBuffer, this._outNormalBuffer, this._outAlbedoBuffer, this._outShadowCatcherBuffer] = output?.buffers ?? [];
     if (output?.bindGroup && output.pipeline === this._rayTracePipeline && this._rayTraceBindGroups) {
-      this._rayTraceBindGroups[3] = output.bindGroup;
+      this._rayTraceBindGroups[this._bindless ? 2 : 3] = output.bindGroup;
     } else {
       this._needsUpdateBindGroups = true;
     }
@@ -350,9 +357,10 @@ class WGPURayTracePass {
 
 
 
-  constructor(device: GPUDevice) {
+  constructor(device: GPUDevice, private _textureSelection: MaterialTextureSelection = {requested: 'atlas'}) {
     this._device = device;
     this._shaderCache = new WGPUShaderCache(device);
+    if (_textureSelection.support) this._bindless = new WGPUBindlessTextures(device);
 
     this._uniforms = {
       cameraUniform: this._uniformBuffer(36 * 4),
@@ -661,10 +669,11 @@ class WGPURayTracePass {
   }
 
   private _createPipelineLayout() {
-    this._rayTracePipelineLayout = this._shaderCache.createPipelineLayout({
+    const descriptor = {
       label: 'Ray Trace Pipeline Layout',
-      bindGroupLayouts: rayTraceBindGroupLayouts().map(layout => this._shaderCache.createBindGroupLayout(layout))
-    });
+      bindGroupLayouts: (this._bindless ? bindlessBindGroupLayouts() : rayTraceBindGroupLayouts()).map(layout => this._shaderCache.createBindGroupLayout(layout))
+    };
+    this._rayTracePipelineLayout = this._shaderCache.createPipelineLayout(this._bindless ? resourceTableLayout(descriptor) : descriptor);
   }
 
   private _updateGPUBuffer(
@@ -714,6 +723,8 @@ class WGPURayTracePass {
     let compilationStartedAt: number | undefined;
     let pipelineCompilationStartedAt: number | undefined;
     try {
+      if (this._bindless?.retirement) await this._bindless.retirement;
+      if (this._disposed) return;
       if (this._needsUpdateMeshData) {
         this._updateMeshData();
       } else if (this._needsUpdateMeshMembership) {
@@ -809,13 +820,14 @@ class WGPURayTracePass {
         this._shaderCompilationDiagnostics?.modules[0]?.sourceFingerprint ?? '';
       if (needsCreateShaderModule) {
         const sourceGenerationStartedAt = shaderCompilationNow();
-        const rayTraceShaderCode = wgpuShaderSource(constants, {
+        let rayTraceShaderCode = wgpuShaderSource(constants, {
           hasDisplacement: this._hasDisplacement, hasAlpha, hasSceneAlpha,
           hasAnisotropyDirections: Boolean(constants.USE_ANISOTROPY_DIRECTIONS),
           hasCoatNormals: Boolean(constants.USE_COAT_NORMAL_FRAMES),
           blasLayoutMask: this._blasLayoutMask,
           dynamicEnvironment: true
         }, this._bakePipelineConstants);
+        if (this._bindless) rayTraceShaderCode = bindlessShaderSource(rayTraceShaderCode, this._textureSelection.support!.enable);
 
         sourceBytes = rayTraceShaderCode.length;
         sourceLines = shaderSourceLineCount(rayTraceShaderCode);
@@ -999,6 +1011,9 @@ class WGPURayTracePass {
         }
       }
 
+      // Compilation can complete after Engine disposal/device loss has released
+      // the material table and its textures. Never bind that retired generation.
+      if (this._disposed) return;
       // TODO rebind when lights, materials, bvh changed.
       if (this._needsUpdateBindGroups) {
         this._needsUpdateBindGroups = false;
@@ -1011,6 +1026,7 @@ class WGPURayTracePass {
       this._prevPipelineInputs = pipelineInputs;
       this._failedPipelineSignature = undefined;
     } catch (error) {
+      if (this._disposed) return;
       this._pipelineError = error;
       const failedAt = shaderCompilationNow();
       if (this._shaderCompilationDiagnostics?.status === 'compiling') {
@@ -1043,6 +1059,7 @@ class WGPURayTracePass {
   async readDepthSamples(area: DepthSampleArea, aspect?: number): Promise<Float32Array | undefined> {
     const tracePipeline = this._rayTracePipeline;
     const groups = this._rayTraceBindGroups;
+    const textures = this._bindless, textureRevision = textures?.revision;
     if (!tracePipeline || !groups || !this._depthCompute || this._isCompilingShader) return;
     const packed = packDepthSampleArea(area, aspect ?? this._width / this._height);
     if (this._depthTracePipeline !== tracePipeline || !this._depthPipeline) {
@@ -1053,10 +1070,11 @@ class WGPURayTracePass {
           { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } }
         ]
       });
-      const layout = this._shaderCache.createPipelineLayout({
+      const descriptor = {
         label: 'Depth query layout',
-        bindGroupLayouts: [0, 1, 2].map(i => tracePipeline.getBindGroupLayout(i)).concat(outputLayout)
-      });
+        bindGroupLayouts: (textures ? [0, 1] : [0, 1, 2]).map(i => tracePipeline.getBindGroupLayout(i)).concat(outputLayout)
+      };
+      const layout = this._shaderCache.createPipelineLayout(textures ? resourceTableLayout(descriptor) : descriptor);
       this._depthTracePipeline = tracePipeline;
       this._depthPipeline = this._shaderCache.createComputePipelineAsync({
         label: 'Depth query', layout,
@@ -1066,7 +1084,7 @@ class WGPURayTracePass {
     }
     const pipeline = await this._depthPipeline;
     // Scene uploads can replace the buffers while the small query compiles.
-    if (tracePipeline !== this._rayTracePipeline || groups !== this._rayTraceBindGroups) return;
+    if (tracePipeline !== this._rayTracePipeline || groups !== this._rayTraceBindGroups || textures !== this._bindless || textureRevision !== textures?.revision) return;
     const device = this._device;
     const bytes = DEPTH_SAMPLE_COUNT * 16;
     const output = device.createBuffer({ label: 'Depth samples', size: bytes,
@@ -1077,15 +1095,16 @@ class WGPURayTracePass {
       usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     try {
       device.queue.writeBuffer(params, 0, packed);
-      const outputGroup = device.createBindGroup({ layout: pipeline.getBindGroupLayout(3), entries: [
+      const outputGroup = device.createBindGroup({ layout: pipeline.getBindGroupLayout(textures ? 2 : 3), entries: [
         { binding: 0, resource: { buffer: output } },
         { binding: 4, resource: { buffer: params } }
       ] });
       const encoder = device.createCommandEncoder({ label: 'Depth query' });
       const pass = encoder.beginComputePass();
+      if (textures?.table) setResourceTable(pass, textures.table);
       pass.setPipeline(pipeline);
-      for (let i = 0; i < 3; i++) pass.setBindGroup(i, groups[i]);
-      pass.setBindGroup(3, outputGroup);
+      for (let i = 0; i < (textures ? 2 : 3); i++) pass.setBindGroup(i, groups[i]);
+      pass.setBindGroup(textures ? 2 : 3, outputGroup);
       pass.dispatchWorkgroups(1);
       pass.end();
       encoder.copyBufferToBuffer(output, 0, readback, 0, bytes);
@@ -1122,9 +1141,7 @@ class WGPURayTracePass {
     if (!this._bvhBuffer || !this._instancesBuffer) {
       throw new Error('WebGPU BVH buffers are not ready.');
     }
-    const bufferBindGroup = _device.createBindGroup({
-      layout: bindGroupPipeline.getBindGroupLayout(0),
-      entries: [
+    const bufferEntries: GPUBindGroupEntry[] = [
         this._bvhBuffer,
         this._instancesBuffer,
         this._attrBuffers,
@@ -1137,23 +1154,20 @@ class WGPURayTracePass {
               buffer: buffer!
             }
           }) satisfies GPUBindGroupEntry
-      )
-    });
-    const texturesBindGroup = _device.createBindGroup({
-      layout: bindGroupPipeline.getBindGroupLayout(1),
-      entries: [
-        {
+      );
+    const textureEntries: GPUBindGroupEntry[] = [
+        ...(this._bindless ? [] : [{
           binding: 0,
           resource: this._mapsSampler
         },
         {
           binding: 1,
           resource: this._maps!.createView()
-        },
+        }]),
         {
           binding: 3,
           resource: {
-            buffer: this._mapInfoUniform
+            buffer: this._bindless?.metadata ?? this._mapInfoUniform
           }
         },
         { binding: 4, resource: this._envTex!.createView() },
@@ -1165,10 +1179,14 @@ class WGPURayTracePass {
           binding: 10,
           resource: this._adaptiveSamplingTexture.createView()
         }
-      ]
+      ];
+    const bufferBindGroup = _device.createBindGroup({layout: bindGroupPipeline.getBindGroupLayout(0),
+      entries: this._bindless ? bufferEntries.concat(textureEntries.map(e => ({...e, binding: e.binding + 4}))) : bufferEntries});
+    const texturesBindGroup = this._bindless ? undefined : _device.createBindGroup({
+      layout: bindGroupPipeline.getBindGroupLayout(1), entries: textureEntries
     });
     const uniformBindGroup = _device.createBindGroup({
-      layout: bindGroupPipeline.getBindGroupLayout(2),
+      layout: bindGroupPipeline.getBindGroupLayout(this._bindless ? 1 : 2),
       entries: Object.keys(this._uniforms).map(
         (key, i) =>
           ({
@@ -1181,7 +1199,7 @@ class WGPURayTracePass {
     });
     const target = this._targetOutputs.get(this._activeTarget)!;
     const outputBindGroup = target.pipeline === bindGroupPipeline && target.bindGroup || _device.createBindGroup({
-      layout: bindGroupPipeline.getBindGroupLayout(3),
+      layout: bindGroupPipeline.getBindGroupLayout(this._bindless ? 2 : 3),
       entries: [
         this._outColorBuffer,
         this._outNormalBuffer,
@@ -1199,7 +1217,7 @@ class WGPURayTracePass {
     target.pipeline = bindGroupPipeline;
     this._rayTraceBindGroups = [
       bufferBindGroup,
-      texturesBindGroup,
+      ...(texturesBindGroup ? [texturesBindGroup] : []),
       uniformBindGroup,
       outputBindGroup
     ];
@@ -1261,6 +1279,7 @@ class WGPURayTracePass {
     }
 
     const pass = encoder.beginComputePass(descriptor);
+    if (this._bindless?.table) setResourceTable(pass, this._bindless.table);
     if (!this._rayTracePipeline || !this._rayTraceBindGroups) {
       throw new Error('WebGPU ray tracing pass was submitted before it was ready.');
     }
@@ -1289,8 +1308,18 @@ class WGPURayTracePass {
   }
 
   getDiagnostics() {
+    const atlas = this._materialData instanceof MaterialTable ? this._materialData.textureAtlasStats : undefined;
     return {
-      textureAtlas: this._materialData?.textureAtlasStats,
+      textureAtlas: atlas,
+      materialTextures: {
+        requested: this._textureSelection.requested,
+        active: this._bindless ? 'bindless' as const : 'atlas' as const,
+        fallbackReason: this._textureSelection.fallbackReason,
+        ...(this._bindless?.diagnostics ?? {
+          textureCount: atlas?.textureCount ?? 0, estimatedBytes: atlas?.estimatedBytes ?? 0,
+          scale: atlas?.scale ?? 1, metadataBytes: 0, resourceTableCapacity: 0, retiredBytes: 0
+        })
+      },
       shaderCompilation: this._shaderCompilationDiagnostics,
       lightSampling: {
         emissiveTriangles: this._emissiveTriangles.length,
@@ -1898,7 +1927,7 @@ class WGPURayTracePass {
     this._tlas = tlas;
     this._uploadBVH(tlas, res.blases);
 
-    const materialData = (this._materialData = new MaterialTable(
+    const materialData = (this._materialData = this._createMaterialData(
       materials,
       this._analyticLights,
       {
@@ -1972,7 +2001,7 @@ class WGPURayTracePass {
     this._needsRefitTLAS = false;
   }
 
-  private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MaterialTable, mergedGeometry: Geometry) {
+  private _updateMaterialConstants(materials: OpenPBRMaterial[], materialData: MaterialTable | WGPUBindlessMaterialData, mergedGeometry: Geometry) {
     const hasTransmission = materials.some((m) => m.transmissionWeight > 0);
     if (hasTransmission !== this._hasTransmission) {
       this._hasTransmission = hasTransmission;
@@ -1989,6 +2018,8 @@ class WGPURayTracePass {
 
     Object.assign(this._constants, wgpuMaterialConstants(materials, materialData, mergedGeometry,
       this._bevelSamples, Number(this._constants.NUM_MAPS ?? 0)));
+    // Runtime storage metadata has no texture-count specialization.
+    if (this._bindless) this._constants.NUM_MAPS = 20;
   }
 
   private _updateGeometryData() {
@@ -2031,7 +2062,7 @@ class WGPURayTracePass {
     const res = this._preparedMeshData!;
     let materialData = this._materialData!;
     if (update.level === 'textures') {
-      materialData = this._materialData = new MaterialTable(res.materials, this._analyticLights, {
+      materialData = this._materialData = this._createMaterialData(res.materials, this._analyticLights, {
         maxTextureArrayBytes: this._maxTextureArrayBytes,
         maxTextureArrayLayers: this._device.limits.maxTextureArrayLayers,
         maxTextureDimension2D: this._device.limits.maxTextureDimension2D
@@ -2179,7 +2210,27 @@ class WGPURayTracePass {
     this._needsRefitTLAS = false;
   }
 
-  private _updateTextures(materialData: MaterialTable) {
+  private _createMaterialData(...args: ConstructorParameters<typeof MaterialTable>): MaterialTable | WGPUBindlessMaterialData {
+    if (this._bindless) {
+      const data = new WGPUBindlessMaterialData(args[0], args[1]);
+      const reason = bindlessLimitReason(this._device, data.textures.length);
+      if (!reason) return data;
+      this._textureSelection.fallbackReason = reason;
+      const retired = this._bindless;
+      this._retiredBindless.add(retired);
+      void this._device.queue.onSubmittedWorkDone().catch(() => {}).then(() => {retired.dispose(); this._retiredBindless.delete(retired);});
+      this._bindless = undefined;
+      this._computeShaderModule = undefined; this._rayTracePipelineLayout = undefined;
+    }
+    return new MaterialTable(...args);
+  }
+
+  private _updateTextures(materialData: MaterialTable | WGPUBindlessMaterialData) {
+    if (materialData instanceof WGPUBindlessMaterialData) {
+      this._bindless!.update(materialData.textures, this._maxTextureArrayBytes);
+      this._needsUpdateBindGroups = true;
+      return;
+    }
     // Textures
     // TODO Avoid zero length array.
     const mapInfo = materialData.bufferData.mapInfo ?? [0, 0, 0, 0];
@@ -2417,6 +2468,8 @@ class WGPURayTracePass {
   }
 
   dispose() {
+    this._disposed = true;
+    this._bindless?.dispose(); this._retiredBindless.forEach(textures => textures.dispose()); this._retiredBindless.clear();
     this._shaderCache.clear();
     this._shaderCapabilities.clear();
     const buffers = new Set<GPUBuffer | undefined>([

@@ -5,7 +5,7 @@ See [progressive rendering](./progressive-rendering.md) for complete examples.
 
 ## Engine
 
-`new Engine({canvas?, backend?, device?})` manages the device and one GPU
+`new Engine({canvas?, backend?, device?, textureBinding?})` manages the device and one GPU
 scene. `scene` and `camera` default to undefined. Assign them and call
 `update()` to commit edits before rendering; see [updates](./updates.md).
 
@@ -14,6 +14,7 @@ scene. `scene` and `camera` default to undefined. Assign them and call
 | `canvas` | new HTML canvas, or OffscreenCanvas without document | Accepts either canvas type; default `engine.display.canvas` |
 | `device` | undefined | Caller-owned WebGPU device; see [requirements](#device-requirements) |
 | `backend` | `'auto'` | Automatic WebGPU/WebGL selection; `'webgpu'` requires WebGPU; `'webgl'` forces WebGL 2 |
+| `textureBinding` | `'atlas'` | Constructor-only; `'auto'` tries experimental WebGPU bindless textures, with atlas fallback; see [texture bindings](#texture-bindings) |
 | `bvhBuilder` | `'builtin'` | JavaScript or `'tinybvh'` WebAssembly |
 | `bvhWorkerCount` | `'auto'` | Hardware concurrency minus one, clamped 1–4; or positive integer |
 | `bvhLayout` | `'bvh2'` | Static TinyBVH layout; see [BVH](./bvh.md) |
@@ -40,6 +41,28 @@ Events are `progress` (`{stage: 'device' | 'bvh' | 'shaders', progress}`),
 `error` (`Error`), and `devicelost` (`{reason, recovering}`). Each error object
 is reported once; console errors are deduplicated by message. Invalid light
 values are clamped and reported while rendering continues.
+
+### Texture bindings
+
+Use `new Engine({textureBinding: 'auto'})` to try bindless material textures
+on WebGPU. The default `'atlas'` uses the existing texture atlas. This option
+is fixed at construction. Check `engine.getDiagnostics()?.materialTextures`
+for the active mode, fallback reason, scale and estimated texture bytes.
+
+Bindless requires a resource-table feature enabled on the device and sufficient
+device limits. Chrome currently exposes an experimental implementation behind
+Unsafe WebGPU Support. Devices without it, including WebGL 2, use atlas textures.
+Caller-owned devices must enable `sampling-resource-table` or
+`chromium-experimental-sampling-resource-table` when available;
+`getRecommendedDeviceDescriptor()` does not request these experimental features.
+
+`textureAtlasBudgetBytes` applies to both modes. Bindless keeps independent
+textures and scales them together to fit the estimated pixel budget, preserving
+the current LOD 0 filtering and color rules. GPU allocation overhead, resource
+tables and metadata add memory beyond that estimate. Replacing textures can
+temporarily retain the previous GPU resources. Benefits depend on scene texture
+sizes and editing patterns; bindless does not guarantee faster rendering.
+See [texture updates](./updates.md#materials-textures-and-lights).
 
 ### Device requirements
 

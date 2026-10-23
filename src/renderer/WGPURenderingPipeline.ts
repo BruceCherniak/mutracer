@@ -16,6 +16,7 @@ import Camera from '../scene/Camera.js';
 
 import { WGPUFullQuadPass } from './WGPUFullQuadPass.js';
 import WGPURayTracePass from './WGPURayTracePass.js';
+import type {MaterialTextureSelection} from './wgpuBindless.js';
 import {
   composeMain,
   composeDefine,
@@ -96,6 +97,7 @@ out_normal[index] = vec4f(clamp(in_normal[index].rgb, vec3f(0.0), vec3f(1.0)), 1
 
 export interface WGPURenderingPipelineOptions {
   presentationFormat?: GPUTextureFormat;
+  materialTextures?: MaterialTextureSelection;
 }
 
 function createTimeQuery(device: GPUDevice) {
@@ -1682,7 +1684,7 @@ width: renderWidth, height: renderHeight,
 
 /** Independent render targets, without preview or presentation policy. */
 export function makeWGPURenderTargets(canvas: HTMLCanvasElement | OffscreenCanvas, device: GPUDevice, options: WGPURenderingPipelineOptions = {}): RenderPipeline {
-  const rayTracePass = new WGPURayTracePass(device);
+  const rayTracePass = new WGPURayTracePass(device, options.materialTextures);
   const customJobs = new Set<Promise<unknown>>();
   const scratch = new ScratchPool(work => {
     // A cancelled custom filter can keep submitting GPU work until its promise settles.

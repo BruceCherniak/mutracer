@@ -3,6 +3,7 @@ import { bvhConfig, engineSettingsKey, workerCount, textureBudget } from './sett
 import {createCanvas} from './util/canvas.js';
 import Camera from './scene/Camera.js';
 import {getRecommendedDeviceDescriptor, validateDevice} from './renderer/deviceRequirements.js';
+import {probeBindless, resourceTableFeature, type MaterialTextureSelection} from './renderer/wgpuBindless.js';
 import { cameraSnapshot } from './renderer/cameraSnapshot.js';
 import type { Scene } from './scene/Scene.js';
 import type Mesh from './scene/Mesh.js';
@@ -41,6 +42,7 @@ export interface EngineParams {
   /** Default display canvas. Default a new HTML canvas, or OffscreenCanvas without document. */ canvas?: HTMLCanvasElement | OffscreenCanvas;
   /** Backend selection. Default auto, with WebGL fallback. webgpu requires WebGPU. */ backend?: 'auto' | 'webgpu' | 'webgl';
   /** Caller-owned WebGPU device. Default undefined uses a shared device. Implies webgpu; incompatible with webgl. */ device?: GPUDevice;
+  /** Material texture bindings. Default atlas; auto tries WebGPU bindless textures and falls back to atlas when unavailable. Fixed at construction. */ textureBinding?: 'atlas' | 'auto';
 }
 /** Material-atlas device limits. */
 export interface TextureAtlasLimits { maxTextureArrayLayers: number; maxTextureDimension2D: number; }
@@ -58,25 +60,36 @@ interface EngineEvents {
   error: Error;
   devicelost: { reason: string; recovering: boolean };
 }
-let globalGPUDevice: GPUDevice | null = null;
-let globalGPUAdapterInfo: GPUAdapterInfo | null = null;
-let globalGPURequest: Promise<GPUDevice> | undefined;
-async function sharedDevice(gpu: GPU): Promise<GPUDevice> {
-  if (globalGPUDevice) return globalGPUDevice;
-  if (!globalGPURequest) {
-    const request = (async () => {
-      const adapter = await gpu.requestAdapter({powerPreference: 'high-performance'}) ?? await gpu.requestAdapter();
+interface SharedDevice {device: GPUDevice; adapterInfo?: GPUAdapterInfo; fallbackReason?: string;}
+const sharedDevices = new Map<string, Promise<SharedDevice>>();
+async function sharedDevice(gpu: GPU, mode: 'atlas' | 'auto'): Promise<SharedDevice> {
+  let request = sharedDevices.get(mode);
+  if (!request) {
+    request = (async () => {
+      let adapter = await gpu.requestAdapter({powerPreference: 'high-performance'}) ?? await gpu.requestAdapter();
       if (!adapter) throw new Error('No WebGPU adapter is available');
-      const device = await adapter.requestDevice(getRecommendedDeviceDescriptor(adapter));
-      globalGPUAdapterInfo = (adapter as GPUAdapter & {info?: GPUAdapterInfo}).info ?? null;
-      globalGPUDevice = device;
-      void device.lost.then(() => { if (globalGPUDevice === device) globalGPUDevice = null; });
-      return device;
+      const descriptor = getRecommendedDeviceDescriptor(adapter);
+      const support = mode === 'auto' ? resourceTableFeature(adapter.features) : undefined;
+      let device: GPUDevice, fallbackReason: string | undefined;
+      try {
+        device = await adapter.requestDevice(support ? {...descriptor, requiredFeatures: [...descriptor.requiredFeatures ?? [], support.feature]} : descriptor);
+      } catch (error) {
+        if (!support) throw error;
+        fallbackReason = error instanceof Error ? error.message : String(error);
+        const retry = await gpu.requestAdapter({powerPreference: 'high-performance'}) ?? await gpu.requestAdapter();
+        if (!retry) throw new Error('No WebGPU adapter is available for atlas fallback');
+        device = await retry.requestDevice(getRecommendedDeviceDescriptor(retry));
+        adapter = retry;
+      }
+      const current = request;
+      void device.lost.then(() => { if (sharedDevices.get(mode) === current) sharedDevices.delete(mode); });
+      return {device, adapterInfo: (adapter as GPUAdapter & {info?: GPUAdapterInfo}).info, fallbackReason};
     })();
-    globalGPURequest = request;
-    void request.finally(() => { if (globalGPURequest === request) globalGPURequest = undefined; }).catch(() => {});
+    sharedDevices.set(mode, request);
+    const current = request;
+    void request.catch(() => { if (sharedDevices.get(mode) === current) sharedDevices.delete(mode); });
   }
-  return globalGPURequest;
+  return request;
 }
 
 /** Shared device, committed scene/camera, CPU preparation and denoiser ownership. */
@@ -118,6 +131,7 @@ export default class Engine {
   private _contextRestore?: {promise: Promise<void>; resolve: () => void; reject: (error: Error) => void};
   private _gpuAdapterInfo?: GPUAdapterInfo;
   private _backendChoice: NonNullable<EngineParams['backend']>;
+  private readonly _textureBinding: 'atlas' | 'auto';
   private _initPromise?: Promise<EngineInfo>;
   private _info?: EngineInfo;
   private _pipelineInitError?: Error;
@@ -160,6 +174,7 @@ export default class Engine {
   constructor(params: EngineParams = {}) {
     if (params.device && params.backend === 'webgl') throw new Error('A supplied GPUDevice cannot use the webgl backend.');
     this._suppliedDevice = params.device;
+    this._textureBinding = params.textureBinding ?? 'atlas';
     this._ownsDeviceSelection = !params.device;
     this._backendChoice = params.device ? 'webgpu' : params.backend ?? 'auto';
     this._sceneChangeDetector = new SceneChangeDetector();
@@ -325,15 +340,22 @@ export default class Engine {
       if (preferWebGPU && (this._suppliedDevice || (typeof navigator !== 'undefined' && navigator.gpu))) {
         try {
           const gpu = typeof navigator !== 'undefined' ? navigator.gpu : undefined;
-          const gpuDevice = this._suppliedDevice ?? await sharedDevice(gpu!);
+          const shared = this._suppliedDevice ? undefined : await sharedDevice(gpu!, this._textureBinding);
+          const gpuDevice = this._suppliedDevice ?? shared!.device;
           const gpuAdapterInfo = this._suppliedDevice
-            ? (gpuDevice as GPUDevice & {adapterInfo?: GPUAdapterInfo}).adapterInfo : globalGPUAdapterInfo;
+            ? (gpuDevice as GPUDevice & {adapterInfo?: GPUAdapterInfo}).adapterInfo : shared?.adapterInfo;
+          const materialTextures: MaterialTextureSelection = {requested: this._textureBinding};
+          if (this._textureBinding === 'auto') {
+            const support = resourceTableFeature(gpuDevice.features);
+            materialTextures.fallbackReason = shared?.fallbackReason ?? (support ? await probeBindless(gpuDevice, support) : 'Resource-table feature is not enabled on this device.');
+            if (!materialTextures.fallbackReason) materialTextures.support = support;
+          }
           if (this._disposed) return;
           validateDevice(gpuDevice);
           this._gpuAdapterInfo = gpuAdapterInfo ?? undefined;
           this._gpuDevice = gpuDevice;
           this._pipeline = makeWGPURenderTargets(this.display.canvas, gpuDevice, {
-            presentationFormat: gpu?.getPreferredCanvasFormat() ?? 'bgra8unorm'
+            presentationFormat: gpu?.getPreferredCanvasFormat() ?? 'bgra8unorm', materialTextures
           });
           this._watchDevice(gpuDevice);
           gpuCreated = true;
@@ -403,7 +425,6 @@ export default class Engine {
   private _watchDevice(device: GPUDevice) {
     void device.lost.then(info => {
       if (this._disposed || this._gpuDevice !== device) return;
-      if (globalGPUDevice === device) globalGPUDevice = null;
       const recovering = this._ownsDeviceSelection;
       const error = new Error(`WebGPU device lost (${info.reason}): ${info.message || 'device is unavailable'}`);
       this._invalidateDevice(error, recovering);
@@ -471,7 +492,13 @@ export default class Engine {
   getDiagnostics(): EngineDiagnostics | undefined {
     if (!this._pipeline && !this._lastBvhBuild) return;
     const values = this._pipeline?.getDiagnostics();
-    return { ...values, bvh: {...values?.bvh, lastBuild: this._lastBvhBuild}, backend: this.backend, adapterName: this._adapterName(), width: this.display.canvas.width, height: this.display.canvas.height,
+    const materialTextures = values?.materialTextures ?? (this._pipeline ? {
+      requested: this._textureBinding, active: 'atlas' as const,
+      fallbackReason: this._textureBinding === 'auto' ? 'Bindless textures require a supported WebGPU device.' : undefined,
+      textureCount: values?.textureAtlas?.textureCount ?? 0, estimatedBytes: values?.textureAtlas?.estimatedBytes ?? 0,
+      scale: values?.textureAtlas?.scale ?? 1, metadataBytes: 0, resourceTableCapacity: 0, retiredBytes: 0
+    } : undefined);
+    return { ...values, materialTextures, bvh: {...values?.bvh, lastBuild: this._lastBvhBuild}, backend: this.backend, adapterName: this._adapterName(), width: this.display.canvas.width, height: this.display.canvas.height,
       lastError: this.lastError?.message, webgpuFallbackReason: this._webgpuFallbackReason,
       presentedTarget: this._presented?.label, presentedComplete: this._presented?.presentationComplete ?? false };
   }

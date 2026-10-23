@@ -135,6 +135,22 @@ export interface RenderingDiagnostics {
     peakDisplayValue?: number;
   };
   textureAtlas?: TextureAtlasStats;
+  /** Material texture storage selection and estimated payload; driver allocation overhead is excluded. */
+  materialTextures?: {
+    requested: 'atlas' | 'auto';
+    active: 'atlas' | 'bindless';
+    /** Reason auto selected atlas; undefined when no fallback occurred. */
+    fallbackReason?: string;
+    textureCount: number;
+    estimatedBytes: number;
+    scale: number;
+    /** Metadata buffer bytes; zero for atlas. */
+    metadataBytes: number;
+    /** Resource-table slots; zero for atlas. */
+    resourceTableCapacity: number;
+    /** Payload and metadata waiting for previous GPU submissions; zero when none. */
+    retiredBytes: number;
+  };
   /** Shader compilation measurements: current WebGPU batch or cumulative WebGL programs. */
   shaderCompilation?: ShaderCompilationDiagnostics;
   /** Light-selection table summary (WebGPU). */

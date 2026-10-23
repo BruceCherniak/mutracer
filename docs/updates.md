@@ -114,8 +114,12 @@ The notification range is validated.
 ## Materials, textures and lights
 
 Material parameter edits repack material parameters without touching geometry
-or BVHs. Emission edits also refresh light-sampling state, and texture edits
-rebuild the texture atlas. Displacement settings that move geometry require a
+or BVHs. Emission edits also refresh light-sampling state. With atlas bindings,
+texture edits rebuild the texture atlas. With [bindless bindings](./api.md#texture-bindings),
+UV assignments, wrap and color-space edits update sampling metadata, while pixel edits
+upload the changed images. Dimension, budget or shared storage-precision changes
+can require more images to be uploaded. `Texture.markUpdated()` invalidates image
+pixels as well as in-place UV edits. Displacement settings that move geometry require a
 [full mesh update](#full-mesh-updates).
 
 WebGPU can compile a new path-tracing shader for the following changes. Feature
@@ -137,7 +141,7 @@ and other transport/layout changes below can still require compilation.
 | Transport and transparency | Enabling/disabling medium or dispersion support, changing whether any non-opaque material exists, or changing whether deterministic primary BLEND splitting is needed |
 | Shading and geometry structure | Changing required UV/tangent/coat-normal frames, displacement or material-bevel support, vertex/BVH layouts or required traversal capacity |
 | Render settings | Changing `samplingPattern`, `bevelSamples`, or `alphaBlendStrategy` while BLEND materials exist |
-| Texture capacity | Increasing the texture count beyond the current capacity; first use or last removal of UV1 texture sampling also changes the shader |
+| Texture capacity | Atlas: increasing the texture count beyond the current capacity. Both modes: first use or last removal of UV1 texture sampling also changes the shader |
 
 With `alphaMode: 'auto'`, opacity, cutoff or alpha-map edits can change the
 resolved transparency mode. Texture edits can also enable independent coat-normal
