@@ -1,8 +1,8 @@
 # MuTracer native viewer
 
-A small standalone viewer for macOS arm64 and Linux x64. It loads local GLTF/GLB models and
-renders with the native MuTracer library. The app requires no browser,
-JavaScript engine, Node installation or prepared GPU capture at runtime.
+A small standalone viewer for macOS arm64, Linux x64 and Windows x64. It loads local
+GLTF/GLB models and renders with the native MuTracer library. The app requires no browser,
+JavaScript engine or Node installation at runtime.
 
 ## Download and open
 
@@ -14,10 +14,10 @@ and licenses together. SHA-256 checksum files accompany the downloads.
 
 The macOS app is ad-hoc signed and not Apple-notarized.
 Linux packages target Ubuntu 24.04 x64 and require a Vulkan driver and an X11 or
-Wayland desktop. X11 sessions also need `libxkbcommon-x11-0`. Physical GPU behavior
-outside the tested macOS hardware remains unverified.
+Wayland desktop. X11 sessions also need `libxkbcommon-x11-0`. See
+[platform support and validation status](../README.md#platforms).
 
-Windows support remains experimental. Download `MuTracer-windows-x64.zip` from
+On Windows, download `MuTracer-windows-x64.zip` from
 the `native-windows-x64` artifact of a [CI run](https://github.com/pissang/mutracer/actions/workflows/ci.yml).
 Extract the whole archive and open `mutracer-viewer.exe`. Windows packages are
 not included in release downloads.
@@ -26,7 +26,7 @@ not included in release downloads.
 
 Install Rust, CMake, a C++20 compiler, project npm dependencies and scriptc
 **0.3.2**, then run from the repository root. Linux also needs patchelf and
-X11/Wayland development libraries. Experimental Windows build prerequisites are
+X11/Wayland development libraries. Windows build prerequisites are
 in the [contributor guide](../CONTRIBUTING.md#build-and-ci).
 The first build downloads the native OIDN SDK, source and regular model
 weights (about 80–95 MiB depending on platform). The app includes regular/small

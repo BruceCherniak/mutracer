@@ -90,8 +90,8 @@ artifacts for the app archive and SHA-256 checksum (retained for 14 days).
 The corresponding `native-PLATFORM-diagnostics` artifact retains logs and check
 summaries for seven days, including failed runs.
 Manual dispatch defaults to `release` (all three platforms); `native_platform` can
-select one target for diagnosis. Windows x64 remains experimental; its app is
-available from CI artifacts. A single-target dispatch never publishes a release.
+select one target for diagnosis. The Windows x64 app is available from CI artifacts.
+A single-target dispatch never publishes a release.
 
 Windows builds need an x64 MSVC Developer environment for OIDN, MinGW-w64 GCC,
 Ninja, CMake and Zig 0.15.2 for scriptc's library archiver. Install Rust's

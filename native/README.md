@@ -10,7 +10,7 @@ engine or Node at runtime.
 | --- | --- | --- |
 | macOS arm64 | Metal | Supported; physical GPU rendering verified |
 | Linux x64 | Vulkan | Supported; hardware-specific behavior and performance unverified |
-| Windows x64 | DX12 or Vulkan | Experimental; CI builds only, no release packages |
+| Windows x64 | DX12 or Vulkan | Supported; physical GPU rendering verified; CI packages only |
 
 The headers in [`include/`](include) and the [native viewer](./viewer/README.md)
 follow this table. Built-in native denoising depends on the OIDN runtime; see

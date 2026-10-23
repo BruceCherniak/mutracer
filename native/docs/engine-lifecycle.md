@@ -107,8 +107,7 @@ Supported handle kinds are macOS NSView (1), Win32 HWND (2), Linux Xlib
 Display/Window on screen 0 (3), and Wayland display/surface (4). AppKit requires
 the main thread. All calls on a window engine and its objects, including
 destruction, must use its creating window thread; `mt_render_cancel` is the
-cross-thread exception. The C window consumer is verified on macOS Metal;
-Windows/Linux window paths remain experimental and runtime-unverified.
+cross-thread exception. See [platform support and validation status](../README.md#platforms).
 External native GPU device handles are not imported through C; Rust
 `Engine::on_device` supports host-owned wgpu device sharing.
 
