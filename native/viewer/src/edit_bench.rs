@@ -104,6 +104,14 @@ fn push(engine: &api::Engine, bytes: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Whether the render is still preparing the scene or compiling its pipelines.
+fn pending(render: &api::Render) -> bool {
+    matches!(
+        render.status(),
+        api::RenderStatus::Preparing | api::RenderStatus::Compiling
+    )
+}
+
 /// The viewer's edit path: patch the cached descriptor, push it, then `Engine::update`
 /// commits the final render (incrementally on this thread when it can).
 fn l1(scene: &mut Scene, mode: u32) -> Result<Vec<serde_json::Value>> {
@@ -125,7 +133,7 @@ fn l1(scene: &mut Scene, mode: u32) -> Result<Vec<serde_json::Value>> {
     let build = started.elapsed().as_secs_f64() * 1e3;
     push(&engine, bytes)?;
     engine.update()?;
-    while render.status() == api::RenderStatus::Preparing {
+    while pending(&render) {
         render.refine()?;
     }
     let initial = started.elapsed().as_secs_f64() * 1e3 - build;
@@ -143,9 +151,9 @@ fn l1(scene: &mut Scene, mode: u32) -> Result<Vec<serde_json::Value>> {
             push(&engine, bytes)?;
             engine.update()?;
             let commit = started.elapsed().as_secs_f64() * 1e3 - build;
-            let incremental = render.status() != api::RenderStatus::Preparing
-                && render.last_commit()? == Some(api::CommitKind::Incremental);
-            while render.status() == api::RenderStatus::Preparing {
+            let incremental =
+                !pending(&render) && render.last_commit()? == Some(api::CommitKind::Incremental);
+            while pending(&render) {
                 render.refine()?;
             }
             ensure!(engine.last_error().is_none(), "{:?}", engine.last_error());
