@@ -411,12 +411,9 @@ Use `EnvironmentLight.intensity` and `transform` for brightness and rotation.
 With Three.js, pass the sky as the `environment` option to `THREESync` or
 `fromTHREEScene`; the Three.js scene still supplies intensity and rotation.
 
-WebGPU generates and samples the sky on the rendering device without a CPU
-pixel round trip. Sky lighting needs 8 bytes of temporary GPU storage per
-texel, in addition to the radiance and sampling textures; its resolution must
-fit the device's texture and storage-binding limits. WebGL 2 requires float
-render targets and uses CPU readback, so frequent time edits can be slower.
-Resources are released with the engine; a sky description needs no separate disposal.
+Higher resolutions use more memory and can exceed device limits. Frequent
+time edits can be slower with WebGL 2. Dispose the engine when finished;
+`ProceduralSky` needs no separate disposal.
 
 This is a clear atmosphere without clouds, stars, moonlight or artificial
 light. Very low resolutions can blur or miss the small sun disk. Use the sky

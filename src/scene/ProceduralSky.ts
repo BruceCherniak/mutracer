@@ -3,8 +3,7 @@ import { DEFAULT_SKY_TIME, type ProceduralSkyImage } from './skyParameters.js';
 
 /** Settings for a clear Earth sky, with local solar time on an equinox at latitude 40°. */
 export interface ProceduralSkyOptions {
-  /** Equirectangular pixel width and height, positive integers. Default `[2048, 1024]`.
-   * Limited by the active device's maximum texture size; WebGPU lighting also needs 8 bytes per texel within its storage-binding limit. */
+  /** Equirectangular pixel width and height, positive integers. Default `[2048, 1024]`; limited by the active device. */
   resolution?: readonly [number, number];
   /** Local solar time in hours, from `0` to `24`. Default `15`. Night has no stars, moon or artificial light. */
   time?: number;
@@ -12,9 +11,8 @@ export interface ProceduralSkyOptions {
 
 /**
  * Clear-sky HDR environment for EnvironmentLight.map and scene backgrounds.
- * Change time or resolution, then call engine.update(). WebGPU generates the
- * map directly on the rendering device; WebGL 2 requires float render targets
- * and reads the generated map back to CPU memory. Not a material texture.
+ * Change time or resolution, then call engine.update(). Supports environments
+ * and backgrounds only; cannot be used in material texture slots.
  */
 export default class ProceduralSky extends Texture {
   declare image: ProceduralSkyImage;

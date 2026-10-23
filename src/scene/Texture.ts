@@ -10,7 +10,7 @@ export type { TextureDataSource } from './textureData.js';
  * to sRGB for images/bytes and linear for float data; colorSpace overrides this.
  */
 export default class Texture extends TextureState {
-  /** Source image, raw RGBA pixels or procedural sky description; no default. */
+  /** Texture source supplied to the constructor; no default. */
   declare image: HTMLImageElement | HTMLCanvasElement | ImageBitmap | OffscreenCanvas | TextureDataSource | ProceduralSkyImage;
   /** Optional stable identity of the texture in an adapter such as Three.js. */
   source?: object;
