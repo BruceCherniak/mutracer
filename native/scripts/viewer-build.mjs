@@ -16,7 +16,7 @@ const platform=viewerPlatform(),mac=platform==='macos-arm64';
 mkdirSync(out,{recursive:true});
 const env={...nativeToolchainEnv(),CARGO_TARGET_DIR:target,MUTRACER_AOT_ARCHIVE:resolve(out,archiveName('render-core'))};
 function run(command,args){const r=(command===compiler?spawnCompiler:spawnSync)(command,args,{cwd:root,env,stdio:'inherit'});if(r.error||r.status!==0)throw new Error(`${command} failed: ${r.error?.message??r.status}`);}
-const version=spawnCompiler(compiler,['--version'],{encoding:'utf8'});if(version.status!==0||version.stdout.trim()!=='0.3.2')throw new Error('Set MUTRACER_SCRIPTC to scriptc 0.3.2.');
+const version=spawnCompiler(compiler,['--version'],{encoding:'utf8'});if(version.status!==0||version.stdout.trim()!=='0.4.2')throw new Error('Set MUTRACER_SCRIPTC to scriptc 0.4.2.');
 const coverage=spawnCompiler(compiler,['coverage','native/src/render-core.ts','--print','diagnostics','--fail-on','blockers'],{cwd:root,encoding:'utf8',maxBuffer:32*1024*1024});
 writeFileSync(resolve(out,'coverage.json'),coverage.stdout??'');
 if(coverage.nativeMatrixPrecision!==64)throw new Error('Native viewer requires Float64 CPU matrix storage.');

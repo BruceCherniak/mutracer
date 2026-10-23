@@ -72,7 +72,7 @@ jobs:
             native/toolchain/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
-          # scriptc 0.3.2's Windows archive requires MinGW CRT helpers.
+          # scriptc's Windows archive requires MinGW CRT helpers.
           toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
       - uses: actions/cache/restore@v4
         id: native_cache
