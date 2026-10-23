@@ -265,9 +265,16 @@ int main(int argc, char **argv) {
   uint64_t sync_id = 0;
   OK(mt_render_loop_add_sync(render_loop, &sync, &sync_id, error, sizeof error));
   OK(mt_render_loop_set_callback(render_loop, on_loop, &loop_events, error, sizeof error));
-  mt_render final_render, none;
+  mt_render final_render, preview;
   OK(mt_render_loop_render(render_loop, MT_LOOP_SELECT_FINAL, &final_render, error, sizeof error));
-  STATUS(mt_render_loop_render(render_loop, MT_LOOP_SELECT_PREVIEW, &none, error, sizeof error), MT_ERROR_INVALID_STATE);
+  /* The default loop has the browser preview: half scale adapting down to 1/8 for 80 ms frames. */
+  OK(mt_render_loop_render(render_loop, MT_LOOP_SELECT_PREVIEW, &preview, error, sizeof error));
+  mt_render_options preview_options = {.struct_size = sizeof preview_options};
+  OK(mt_render_get_options(preview, &preview_options, error, sizeof error));
+  REQUIRE(loop_options.preview == 1 && preview_options.resolution_scale == 0.5
+    && preview_options.adaptive_target_frame_ms == 80.0 && preview_options.adaptive_min_scale == 0.125
+    && preview_options.bounces == 2 && preview_options.bevel == 0, "default preview");
+  STATUS(mt_render_destroy(preview, error, sizeof error), MT_ERROR_INVALID_STATE);
   STATUS(mt_render_destroy(final_render, error, sizeof error), MT_ERROR_INVALID_STATE);
   uint32_t needs = 1;
   for (int i = 0; i < 600000 && needs; i++) {
