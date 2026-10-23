@@ -31,9 +31,9 @@ impl Scene {
     fn edit(&mut self, kind: &str, i: usize) {
         let flip = if i % 2 == 0 { 1.0 } else { -1.0 };
         match kind {
-            "material" => self.model.materials[0].roughness = if i % 2 == 0 { 0.3 } else { 0.6 },
+            "material" => self.model.0.materials[0].roughness = if i % 2 == 0 { 0.3 } else { 0.6 },
             "transform" => {
-                let mesh = &mut self.model.meshes[0];
+                let mesh = &mut self.model.0.meshes[0];
                 mesh.transform.w_axis.x += 0.001 * flip;
             }
             "camera" => self.camera.orbit([0.002 * flip, 0.0]),
@@ -48,7 +48,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
     mutracer_native_probe::logging::stderr();
     let model = Model::load(path)?;
-    let camera = Camera::fit(model.center, model.radius);
+    let camera = Camera::fit(model.0.center, model.0.radius);
     let mut scene = Scene {
         model,
         camera,

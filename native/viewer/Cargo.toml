@@ -5,20 +5,17 @@ edition = "2024"
 publish = false
 
 [dependencies]
+percent-encoding = "2"
 mutracer-native-probe = { path = "../host" }
 anyhow = "1"
 pollster = "=0.4.0"
 eframe = { version = "=0.36.0", default-features = false, features = ["default_fonts", "wgpu", "x11", "wayland"] }
-gltf = { version = "=1.4.1", features = ["KHR_materials_ior", "KHR_materials_transmission", "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_texture_transform", "extensions"] }
 glam = "=0.30.9"
 image = { version = "=0.25.8", default-features = false, features = ["png", "jpeg", "hdr", "webp"] }
 rfd = "=0.15.4"
 
 serde_json = "1"
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls"] }
-meshopt = "=0.6.2"
-base64 = "0.22"
-percent-encoding = "2"
 
 wgpu = { version = "=30.0.1", default-features = false, features = ["std", "wgsl"] }
 
@@ -32,4 +29,6 @@ wgpu = { version = "=30.0.1", default-features = false, features = ["dx12", "vul
 wgpu = { version = "=30.0.1", default-features = false, features = ["vulkan"] }
 
 [dev-dependencies]
+base64 = "0.22"
+gltf = { version = "=1.4.1", features = ["KHR_materials_ior", "KHR_materials_transmission", "KHR_materials_emissive_strength", "KHR_materials_unlit", "KHR_texture_transform", "extensions"] }
 winit = { version = "=0.30.13", default-features = false, features = ["rwh_06", "x11", "wayland"] }

@@ -34,15 +34,7 @@ This runtime is not part of the npm library.
 
 ## Native glTF codecs
 
-The native viewer uses [meshopt-rs 0.6.2](https://github.com/gwihlidal/meshopt-rs)
-(MIT, Copyright 2018 Graham Wihlidal;
-[license](./LICENSES/Meshopt-rs-MIT.txt)) and its bundled
-[meshoptimizer 0.25](https://github.com/zeux/meshoptimizer/tree/v0.25)
-(MIT, Copyright 2016-2025 Arseny Kapoulkine;
-[license](./LICENSES/Meshoptimizer-MIT.txt)) for Meshopt decoding.
-WebP decoding uses [image-webp 0.2.4](https://github.com/image-rs/image-webp)
-under MIT ([license](./LICENSES/Image-webp-MIT.txt)). These codecs do not ship in
-the npm library. The licenses accompany the native app.
+The viewer uses the native SDK glTF importer; see its [codec notices](../THIRD_PARTY_NOTICES.md#native-gltf-codecs).
 
 ## Poly Haven texture downloads
 

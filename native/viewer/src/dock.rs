@@ -66,7 +66,7 @@ fn action(ui: &mut egui::Ui, label: &str, icon: Action) -> egui::Response {
 }
 impl Viewer {
     pub(super) fn toggle_animation_or_render(&mut self) {
-        if let Some(animation) = &mut self.model.animation {
+        if let Some(animation) = &mut self.model.0.animation {
             animation.toggle();
             self.animation_clock = Instant::now();
             if animation.playing {
@@ -132,7 +132,7 @@ impl Viewer {
         let compact = available < 440.;
         let width = available.min(if compact { 280. } else { 452. });
         let height = if compact { 80. } else { 46. }
-            + if self.model.animation.is_some() {
+            + if self.model.0.animation.is_some() {
                 72.
             } else {
                 0.
@@ -169,7 +169,7 @@ impl Viewer {
                                 self.dock_settings(ui, compact);
                             });
                         }
-                        if self.model.animation.is_some() {
+                        if self.model.0.animation.is_some() {
                             ui.separator();
                             self.animation_controls(ui);
                         }
@@ -187,7 +187,7 @@ impl Viewer {
                 .as_ref()
                 .is_some_and(|(_, candidate, _)| candidate.is_some());
         ui.add_enabled_ui(enabled, |ui| {
-            let animation = self.model.animation.as_mut().unwrap();
+            let animation = self.model.0.animation.as_mut().unwrap();
             ui.horizontal(|ui| {
                 if action(
                     ui,
@@ -268,7 +268,7 @@ impl Viewer {
     }
     fn dock_status(&mut self, ui: &mut egui::Ui) {
         let preparing = self.loading.is_some() || self.preparing() || self.candidate.is_some();
-        let animating = self.running && self.model.animation.as_ref().is_some_and(|a| a.playing);
+        let animating = self.running && self.model.0.animation.as_ref().is_some_and(|a| a.playing);
         let done = !animating && self.samples >= self.settings.max_samples;
         let label = if self.loading.is_some() {
             "Opening"
@@ -343,13 +343,13 @@ impl Viewer {
         if action(
             ui,
             if self.running {
-                if self.model.animation.is_some() {
+                if self.model.0.animation.is_some() {
                     "Pause rendering"
                 } else {
                     "Pause rendering (Space)"
                 }
             } else {
-                if self.model.animation.is_some() {
+                if self.model.0.animation.is_some() {
                     "Resume rendering"
                 } else {
                     "Resume rendering (Space)"

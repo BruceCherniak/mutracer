@@ -80,7 +80,7 @@ impl Viewer {
                     ui.strong("Scene");
                     ui.add(
                         egui::Label::new(
-                            egui::RichText::new(&self.model.name)
+                            egui::RichText::new(&self.model.0.name)
                                 .small()
                                 .color(theme::SUBTLE),
                         )
@@ -98,7 +98,7 @@ impl Viewer {
                     .show(ui, |ui| {
                         ui.small(format!(
                             "{} meshes · {} triangles",
-                            self.model.meshes.len(),
+                            self.model.0.meshes.len(),
                             self.model
                                 .geometries
                                 .iter()
@@ -112,7 +112,7 @@ impl Viewer {
                     .show(ui, |ui| {
                         let query = self.object_query.to_lowercase();
                         let mut visible = 0;
-                        for (id, mesh) in self.model.meshes.iter().enumerate() {
+                        for (id, mesh) in self.model.0.meshes.iter().enumerate() {
                             if !mesh.name.to_lowercase().contains(&query) {
                                 continue;
                             }
@@ -120,7 +120,7 @@ impl Viewer {
                             if controls::tree_row(
                                 ui,
                                 &mesh.name,
-                                &self.model.materials[mesh.material].name,
+                                &self.model.0.materials[mesh.material].name,
                                 self.selected_mesh == Some(id),
                             )
                             .clicked()
@@ -306,7 +306,7 @@ impl Viewer {
                 }
                 ui.add(
                     egui::Label::new(
-                        egui::RichText::new(&self.model.meshes[id].name)
+                        egui::RichText::new(&self.model.0.meshes[id].name)
                             .small()
                             .color(theme::SUBTLE),
                     )
@@ -314,7 +314,7 @@ impl Viewer {
                 );
             });
         }
-        let material_name = &self.model.materials[self.selected].name;
+        let material_name = &self.model.0.materials[self.selected].name;
         ui.add(egui::Label::new(egui::RichText::new(material_name).strong()).truncate())
             .on_hover_text(material_name);
         ui.add_space(6.);
@@ -384,7 +384,7 @@ impl Viewer {
                         .clicked()
                     {
                         self.texture_browser.cancel();
-                        preset.apply(&mut self.model.materials[self.selected]);
+                        preset.apply(&mut self.model.0.materials[self.selected]);
                         self.dirty(Change::Material);
                     }
                 }
@@ -393,7 +393,7 @@ impl Viewer {
         if crate::textures::browse_button(ui, self.texture_browser.open).clicked() {
             self.texture_browser.open = !self.texture_browser.open;
         }
-        let material = &mut self.model.materials[self.selected];
+        let material = &mut self.model.0.materials[self.selected];
         let mut changed = false;
         ui.push_id(self.selected, |ui| {
             controls::section(ui, "Base", |ui| {
@@ -534,24 +534,24 @@ impl Viewer {
             });
         });
         controls::section_open(ui, "Displacement", true, |ui| {
-            let material = &mut self.model.materials[self.selected];
+            let material = &mut self.model.0.materials[self.selected];
             changed |= controls::scalar(
                 ui,
                 "Scale",
                 &mut material.layers.displacement_scale,
-                -self.model.radius * 0.1..=self.model.radius * 0.1,
+                -self.model.0.radius * 0.1..=self.model.0.radius * 0.1,
             );
             changed |= controls::scalar(
                 ui,
                 "Bias",
                 &mut material.layers.displacement_bias,
-                -self.model.radius * 0.1..=self.model.radius * 0.1,
+                -self.model.0.radius * 0.1..=self.model.0.radius * 0.1,
             );
             changed |= controls::scalar(
                 ui,
                 "Step size",
                 &mut material.layers.displacement_step,
-                0. ..=self.model.radius * 0.01,
+                0. ..=self.model.0.radius * 0.01,
             );
             let before = material.layers.displacement_projection;
             controls::select(
@@ -582,16 +582,17 @@ impl Viewer {
             );
             ui.small("Offset = texture × Scale + Bias, in mesh-local units. Requires a displacement texture. Adds preparation and render time.");
         });
-        let textured = self.model.materials[self.selected]
+        let textured = self.model.0.materials[self.selected]
             .maps
             .iter()
             .any(|id| *id != u32::MAX);
         controls::section_open(ui, "Textures", textured, |ui| {
             for &(slot, label, hint) in crate::textures::SLOTS {
-                let id = self.model.materials[self.selected].maps[slot];
+                let id = self.model.0.materials[self.selected].maps[slot];
                 ui.push_id((self.selected, slot), |ui| {
                     let row = ui.horizontal(|ui| {
-                        let response = if let Some(texture) = self.model.textures.get(id as usize) {
+                        let response = if let Some(texture) = self.model.0.textures.get(id as usize)
+                        {
                             let handle = self.texture_browser.preview(
                                 self.selected,
                                 slot,
@@ -625,7 +626,7 @@ impl Viewer {
                         ui.vertical(|ui| {
                             ui.label(label);
                             ui.small(hint);
-                            if let Some(texture) = self.model.textures.get(id as usize) {
+                            if let Some(texture) = self.model.0.textures.get(id as usize) {
                                 ui.small(format!("{} × {}", texture.width, texture.height));
                             }
                         });
@@ -649,8 +650,8 @@ impl Viewer {
                         self.selected,
                         slot,
                     ));
-                    let id = self.model.materials[self.selected].maps[slot];
-                    if let Some(texture) = self.model.textures.get(id as usize) {
+                    let id = self.model.0.materials[self.selected].maps[slot];
+                    if let Some(texture) = self.model.0.textures.get(id as usize) {
                         let mut wrap = texture.wrap;
                         let mut scale = texture.scale;
                         controls::section_open(ui, "Wrap & repeat", false, |ui| {
@@ -855,11 +856,11 @@ impl Viewer {
         if let Some(id) = self.selected_mesh {
             ui.add(
                 egui::Label::new(
-                    egui::RichText::new(&self.model.meshes[id].name).color(theme::ACCENT),
+                    egui::RichText::new(&self.model.0.meshes[id].name).color(theme::ACCENT),
                 )
                 .truncate(),
             );
-            let mesh = &mut self.model.meshes[id];
+            let mesh = &mut self.model.0.meshes[id];
             let before = mesh.transform;
             let mut position = mesh.transform.w_axis.truncate();
             let mut changed = false;
@@ -870,8 +871,9 @@ impl Viewer {
                     ("Y", &mut position.y),
                     ("Z", &mut position.z),
                 ] {
-                    changed |= controls::number(ui, label, value, self.model.radius as f64 * 0.005)
-                        .changed();
+                    changed |=
+                        controls::number(ui, label, value, self.model.0.radius as f64 * 0.005)
+                            .changed();
                 }
                 if changed {
                     mesh.transform.w_axis = position.extend(1.);
@@ -903,8 +905,8 @@ impl Viewer {
                 });
             });
             if changed {
-                if let Some(animation) = &mut self.model.animation {
-                    animation.edit_transform(id, before, self.model.meshes[id].transform);
+                if let Some(animation) = &mut self.model.0.animation {
+                    animation.edit_transform(id, before, self.model.0.meshes[id].transform);
                 }
                 self.model.refresh_bounds();
                 self.dirty(Change::Transform);
@@ -915,14 +917,14 @@ impl Viewer {
         controls::section(ui, "Scene info", |ui| {
             ui.weak(format!(
                 "{} meshes · {} triangles",
-                self.model.meshes.len(),
+                self.model.0.meshes.len(),
                 self.model
                     .geometries
                     .iter()
                     .map(|g| g.indices.len() / 3)
                     .sum::<usize>()
             ));
-            for warning in &self.model.warnings {
+            for warning in &self.model.0.warnings {
                 ui.colored_label(theme::WARNING, warning);
             }
         });
@@ -955,7 +957,7 @@ impl Viewer {
                 )
                 .clicked()
             {
-                self.camera.frame(self.model.center, self.model.radius);
+                self.camera.frame(self.model.0.center, self.model.0.radius);
                 changed = true;
             }
         });
@@ -985,8 +987,9 @@ impl Viewer {
                     });
                     let unit = self.camera.meters_per_unit;
                     let mut focus = self.camera.focus_distance * unit;
-                    let min = self.model.radius * 0.05 * unit;
-                    let max = (self.model.radius * 60.).max(self.camera.focus_distance * 2.) * unit;
+                    let min = self.model.0.radius * 0.05 * unit;
+                    let max =
+                        (self.model.0.radius * 60.).max(self.camera.focus_distance * 2.) * unit;
                     if controls::parameter(
                         ui,
                         "Focus (m)",
@@ -1168,7 +1171,7 @@ impl Viewer {
                     } else {
                         self.selected_mesh = self.model.pick(&self.camera, uv, aspect);
                         if let Some(id) = self.selected_mesh {
-                            self.selected = self.model.meshes[id].material;
+                            self.selected = self.model.0.meshes[id].material;
                             self.tab = 1;
                             self.inspector_open = true;
                         }
@@ -1178,7 +1181,7 @@ impl Viewer {
                     ui.painter().text(
                         rect.left_top() + egui::vec2(14., 14.),
                         egui::Align2::LEFT_TOP,
-                        &self.model.meshes[id].name,
+                        &self.model.0.meshes[id].name,
                         egui::FontId::proportional(14.),
                         theme::ACCENT,
                     );
@@ -1194,7 +1197,7 @@ impl Viewer {
                 }
             });
         if ctx.input(|i| i.key_pressed(egui::Key::F)) && !ctx.egui_wants_keyboard_input() {
-            self.camera.frame(self.model.center, self.model.radius);
+            self.camera.frame(self.model.0.center, self.model.0.radius);
             self.dirty(Change::Camera);
         }
     }

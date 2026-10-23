@@ -841,3 +841,6 @@ mod descriptor;
 #[cfg(test)]
 mod gpu_tests;
 pub use descriptor::Descriptor;
+
+#[cfg(feature = "gltf")]
+pub mod gltf;

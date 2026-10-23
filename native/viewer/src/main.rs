@@ -6,7 +6,6 @@ mod edit_bench;
 mod focus;
 mod focus_smoke;
 mod geometry_smoke;
-mod import;
 mod input;
 mod material_presets;
 mod metrics;
@@ -306,7 +305,7 @@ impl Viewer {
     }
     fn new_on_device(path: &Path, gpu: Option<eframe::egui_wgpu::RenderState>) -> Result<Self> {
         let model = Model::load(path)?;
-        let camera = Camera::fit(model.center, model.radius);
+        let camera = Camera::fit(model.0.center, model.0.radius);
         let metrics = metrics::Metrics::from_env();
         let size = if metrics.is_some() {
             [1280, 720]
@@ -336,7 +335,7 @@ impl Viewer {
                     .notify(format!("{reason:?}: {message}"));
             });
         }
-        let selected = model.meshes[0].material;
+        let selected = model.0.meshes[0].material;
         if let Some(gate) = &submission_gate {
             gate.pause();
         }
@@ -513,12 +512,12 @@ impl Viewer {
         }
         match result {
             Ok(model) => {
-                let mut camera = Camera::fit(model.center, model.radius);
+                let mut camera = Camera::fit(model.0.center, model.0.radius);
                 camera.fov = self.camera.fov;
                 camera.orthographic = self.camera.orthographic;
                 camera.f_stop = self.camera.f_stop;
                 camera.meters_per_unit = self.camera.meters_per_unit;
-                camera.frame(model.center, model.radius);
+                camera.frame(model.0.center, model.0.radius);
                 if let Some(retired) = self.candidate.replace((model, camera)) {
                     std::thread::spawn(move || drop(retired));
                 }
@@ -572,7 +571,7 @@ impl Viewer {
             ctx.request_repaint_after(Duration::from_millis(100));
         }
         // Playback renders like held input: one sample per frame and no denoising.
-        let playing = self.running && self.model.animation.as_ref().is_some_and(|a| a.playing);
+        let playing = self.running && self.model.0.animation.as_ref().is_some_and(|a| a.playing);
         let held = ctx.input(|i| i.pointer.any_down()) || playing;
         // A backend switch prepares a second engine; the current image stays.
         if self.backend == self.target.backend {
@@ -652,7 +651,7 @@ impl Viewer {
             && self.scene_build.is_none()
             && self.change != Change::Scene
             && !self.editing().preparing();
-        if let Some(animation) = &mut self.model.animation {
+        if let Some(animation) = &mut self.model.0.animation {
             if !animation.playing || !self.running || !animation_ready {
                 self.animation_clock = now;
             } else if !animation.pending && self.frame_samples > 0 && self.pose_presented {
@@ -801,7 +800,7 @@ impl Viewer {
             std::thread::spawn(move || drop(retired));
             self.texture_browser.new_model();
             self.camera = camera;
-            self.selected = self.model.meshes[0].material;
+            self.selected = self.model.0.meshes[0].material;
             self.selected_mesh = None;
             self.picking_focus = false;
             self.object_query.clear();
@@ -1151,7 +1150,7 @@ fn default_model() -> PathBuf {
 fn smoke(path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
     let mut model = Model::load(path)?;
-    let mut camera = Camera::fit(model.center, model.radius);
+    let mut camera = Camera::fit(model.0.center, model.0.radius);
     let mut environment = Environment::default();
     let size = [320, 216];
     let mut renderer = Renderer::with_backend(0)?;
@@ -1249,7 +1248,7 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
     let orbit = renderer.finish(16)?;
     ensure!(original != orbit, "Camera control did not change pixels");
     renderer::save(&out.join("orbit.png"), &orbit, size, 0.)?;
-    camera = Camera::fit(model.center, model.radius);
+    camera = Camera::fit(model.0.center, model.0.radius);
     renderer.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
     ensure!(
         renderer.finish(16)? == original,
@@ -1257,7 +1256,7 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
     );
     // Imported mesh order does not imply visibility in the fitted camera. Edit
     // every material so this model-agnostic smoke always reaches visible surfaces.
-    for material in &mut model.materials {
+    for material in &mut model.0.materials {
         material.color = [0.05, 0.85, 0.15];
         material.roughness = 0.8;
     }
@@ -1293,9 +1292,9 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
     )?;
     println!(
         "PASS native viewer: {} meshes, {} materials, {} textures; glTF/render/orbit/restore/material/environment",
-        model.meshes.len(),
-        model.materials.len(),
-        model.textures.len()
+        model.0.meshes.len(),
+        model.0.materials.len(),
+        model.0.textures.len()
     );
     Ok(())
 }
@@ -1342,7 +1341,7 @@ fn interaction_backend_smoke(path: &Path, out: &Path, backend: u32) -> Result<()
         viewer.camera.orbit([1., 0.]);
         viewer.dirty(Change::Camera);
         if step >= 60 {
-            viewer.model.materials[viewer.selected].roughness = 0.2 + step as f32 / 200.;
+            viewer.model.0.materials[viewer.selected].roughness = 0.2 + step as f32 / 200.;
             viewer.dirty(Change::Material);
         }
         viewer.tick(&ctx)?;
@@ -1577,7 +1576,7 @@ fn interaction_backend_smoke(path: &Path, out: &Path, backend: u32) -> Result<()
     println!("PASS paused denoise at {paused} samples without tracing; resumed at {resumed}");
     viewer.denoise = false;
     let old = viewer.pixels.clone();
-    let old_name = viewer.model.name.clone();
+    let old_name = viewer.model.0.name.clone();
     let mut output = ctx.run_ui(
         egui::RawInput {
             dropped_files: vec![dropped_file(path.to_path_buf())],
@@ -1602,7 +1601,7 @@ fn interaction_backend_smoke(path: &Path, out: &Path, backend: u32) -> Result<()
         std::thread::sleep(Duration::from_millis(2));
     }
     ensure!(
-        viewer.model.name == old_name && !viewer.pixels.is_empty(),
+        viewer.model.0.name == old_name && !viewer.pixels.is_empty(),
         "Dropped model did not replace scene"
     );
     let mut output = ctx.run_ui(
@@ -1614,13 +1613,13 @@ fn interaction_backend_smoke(path: &Path, out: &Path, backend: u32) -> Result<()
     );
     output.textures_delta.clear();
     ensure!(
-        !viewer.error.is_empty() && viewer.model.name == old_name,
+        !viewer.error.is_empty() && viewer.model.0.name == old_name,
         "Invalid drop was not rejected transactionally"
     );
     println!("PASS native file-drop event loads and renders; invalid drop preserves scene");
     viewer.error.clear();
     viewer.denoise = false;
-    let id = viewer.model.meshes[0].material;
+    let id = viewer.model.0.meshes[0].material;
     let mut previews = 0;
     let mut previous = viewer.pixels.clone();
     viewer.light.enabled = true;
@@ -1647,9 +1646,9 @@ fn interaction_backend_smoke(path: &Path, out: &Path, backend: u32) -> Result<()
     );
     output.textures_delta.clear();
     let preparations = viewer.target.preparations.load(Ordering::Relaxed);
-    let original_transform = viewer.model.meshes[0].transform;
+    let original_transform = viewer.model.0.meshes[0].transform;
     for step in 0..80 {
-        viewer.model.meshes[0].transform =
+        viewer.model.0.meshes[0].transform =
             glam::Mat4::from_translation(glam::Vec3::new(step as f32 * 0.002, 0., 0.))
                 * original_transform;
         viewer.model.refresh_bounds();
@@ -1660,8 +1659,8 @@ fn interaction_backend_smoke(path: &Path, out: &Path, backend: u32) -> Result<()
         viewer.environment.intensity = 0.3 + step as f32 * 0.02;
         viewer.environment.rotation = step as f32 * 9.;
         viewer.dirty(Change::Environment);
-        viewer.model.materials[id].color = [0.1 + step as f32 / 100., 0.4, 0.7];
-        viewer.model.materials[id].roughness = (step % 20) as f32 / 20.;
+        viewer.model.0.materials[id].color = [0.1 + step as f32 / 100., 0.4, 0.7];
+        viewer.model.0.materials[id].roughness = (step % 20) as f32 / 20.;
         viewer.dirty(Change::Material);
         if step % 5 == 0 {
             viewer.camera.orbit([1., 0.]);
@@ -1728,7 +1727,7 @@ fn interaction_backend_smoke(path: &Path, out: &Path, backend: u32) -> Result<()
     println!(
         "PASS 80 held transform/light/environment/material updates plus camera motion: {previews} changed previews, zero blanks, final HDR byte-exact to full commit"
     );
-    viewer.model.materials[id].unlit = true;
+    viewer.model.0.materials[id].unlit = true;
     viewer.dirty(Change::Scene);
     while !viewer.settled() {
         viewer.tick(&ctx)?;
@@ -1740,7 +1739,7 @@ fn interaction_backend_smoke(path: &Path, out: &Path, backend: u32) -> Result<()
     }
     // The previous commit prepared the scene fully, so this edit commits on the
     // worker while the preview stays on screen.
-    viewer.model.materials[id].color = [0.1, 0.7, 0.2];
+    viewer.model.0.materials[id].color = [0.1, 0.7, 0.2];
     viewer.dirty(Change::Material);
     viewer.tick(&ctx)?;
     ensure!(
@@ -1812,7 +1811,7 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
     let mut descriptor = None;
     let mut model = Model::load(path)?;
-    let camera = Camera::fit(model.center, model.radius);
+    let camera = Camera::fit(model.0.center, model.0.radius);
     let environment = Environment::default();
     let size = [160, 106];
     let mut renderer = Renderer::with_backend(1)?;
@@ -1820,7 +1819,7 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
     let initial = model.descriptor(&camera.bytes(size), size, &environment);
     renderer.commit(&initial)?;
     let baseline = renderer.finish(8)?;
-    let id = model.meshes[0].material;
+    let id = model.0.meshes[0].material;
     let mut bad = model.clone();
     bad.materials[id].roughness = f32::NAN;
     ensure!(
@@ -1847,14 +1846,14 @@ fn material_smoke(path: &Path, out: &Path) -> Result<()> {
     );
     let mut partial_ms = Vec::new();
     let mut full_ms = Vec::new();
-    let used: std::collections::BTreeSet<_> = model.meshes.iter().map(|m| m.material).collect();
+    let used: std::collections::BTreeSet<_> = model.0.meshes.iter().map(|m| m.material).collect();
     let mut count = 0;
     for &id in used.iter().take(3) {
-        if model.materials[id].unlit {
+        if model.0.materials[id].unlit {
             continue;
         }
         for step in 0..6 {
-            let m = &mut model.materials[id];
+            let m = &mut model.0.materials[id];
             m.color = [0.2 + step as f32 * 0.1, 0.35, 0.8];
             m.roughness = step as f32 / 5.;
             m.metalness = 1. - m.roughness;
@@ -1949,7 +1948,7 @@ fn material_layers_smoke(path: &Path, out: &Path) -> Result<()> {
         for case in 0..9 {
             for step in 0..2 {
                 let mut model = original.clone();
-                let m = &mut model.materials[id];
+                let m = &mut model.0.materials[id];
                 let weight = 0.5 + step as f32 * 0.3;
                 match case {
                     0 => {
@@ -2060,7 +2059,7 @@ fn environment_smoke(path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
     let mut descriptor = None;
     let model = Model::load(path)?;
-    let camera = Camera::fit(model.center, model.radius);
+    let camera = Camera::fit(model.0.center, model.0.radius);
     let mut environment = Environment::default();
     let size = [160, 106];
     let mut renderer = Renderer::with_backend(1)?;
@@ -2176,7 +2175,7 @@ fn light_smoke(path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
     let mut descriptor = None;
     let model = Model::load(path)?;
-    let camera = Camera::fit(model.center, model.radius);
+    let camera = Camera::fit(model.0.center, model.0.radius);
     let mut environment = Environment::default();
     let mut light = KeyLight {
         enabled: true,
@@ -2295,10 +2294,10 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
     let mut descriptor = None;
     let mut model = Model::load(path)?;
-    let camera = Camera::fit(model.center, model.radius);
+    let camera = Camera::fit(model.0.center, model.0.radius);
     let mut environment = Environment::default();
     let size = [160, 104];
-    let originals: Vec<_> = model.meshes.iter().map(|m| m.transform).collect();
+    let originals: Vec<_> = model.0.meshes.iter().map(|m| m.transform).collect();
     let mut partial = 0;
     let mut fallback = 0;
     for mode in [0, 1] {
@@ -2321,8 +2320,8 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
                 } else {
                     glam::Vec3::splat(1. + step as f32 * 0.03)
                 };
-                model.meshes[id].transform = glam::Mat4::from_translation(glam::Vec3::new(
-                    step as f32 * model.radius * 0.025,
+                model.0.meshes[id].transform = glam::Mat4::from_translation(glam::Vec3::new(
+                    step as f32 * model.0.radius * 0.025,
                     0.,
                     0.,
                 )) * *original
@@ -2391,7 +2390,7 @@ fn transform_smoke(path: &Path, out: &Path) -> Result<()> {
             size,
             0.,
         )?;
-        for (mesh, original) in model.meshes.iter_mut().zip(&originals) {
+        for (mesh, original) in model.0.meshes.iter_mut().zip(&originals) {
             mesh.transform = *original;
         }
     }

@@ -12,7 +12,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
     let mut fallback = 0;
     for mode in [0, 1] {
         let mut model = Model::load(path)?;
-        let camera = Camera::fit(model.center, model.radius);
+        let camera = Camera::fit(model.0.center, model.0.radius);
         let mut environment = Environment::default();
         let size = [160, 104];
         let mut descriptor = None;
@@ -26,15 +26,16 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             &KeyLight::default(),
         ))?;
         renderer.finish(8)?;
-        for gi in 0..model.geometries.len().min(3) {
-            let positions = model.geometries[gi].positions.clone();
-            let normals = model.geometries[gi].normals.clone();
+        for gi in 0..model.0.geometries.len().min(3) {
+            let positions = model.0.geometries[gi].positions.clone();
+            let normals = model.0.geometries[gi].normals.clone();
             for step in 0..8 {
-                let geometry = &mut std::sync::Arc::make_mut(&mut model.geometries)[gi];
+                let geometry = &mut std::sync::Arc::make_mut(&mut model.0.geometries)[gi];
                 geometry.positions.clone_from(&positions);
                 for vertex in std::sync::Arc::make_mut(&mut geometry.positions).chunks_exact_mut(3)
                 {
-                    vertex[1] += model.radius * 0.015 * step as f32 * (vertex[0] + vertex[2]).sin();
+                    vertex[1] +=
+                        model.0.radius * 0.015 * step as f32 * (vertex[0] + vertex[2]).sin();
                 }
                 // Omitted normals request the original TS smooth-normal generator;
                 // supplied normals/tangents are passed exactly as caller attributes.

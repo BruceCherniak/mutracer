@@ -111,7 +111,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
     for case in data["surfaces"].as_array().unwrap() {
         let mut model = sample.clone();
         let mut geometries = vec![];
-        model.meshes.clear();
+        model.0.meshes.clear();
         for plane in case["planes"].as_array().unwrap() {
             let w = plane["width"].as_f64().unwrap() as f32 / 2.;
             let h = plane["height"].as_f64().unwrap() as f32 / 2.;
@@ -128,7 +128,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 colors: vec![].into(),
                 tangents: vec![].into(),
             });
-            model.meshes.push(Mesh {
+            model.0.meshes.push(Mesh {
                 materials: vec![],
                 instances: None,
                 name: "plane".into(),
@@ -137,7 +137,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 transform: glam::Mat4::IDENTITY,
             });
         }
-        model.geometries = geometries.into();
+        model.0.geometries = geometries.into();
         model.rebuild_picking()?;
         let mut camera = Camera::fit(glam::Vec3::ZERO, 2.);
         camera.yaw = 0.;
@@ -209,12 +209,12 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
         // Replace a model while its old query is in flight; fit and refocus the new bounds.
         measuring(&mut viewer, &ctx)?;
         let mut model = viewer.model.clone();
-        for mesh in &mut model.meshes {
+        for mesh in &mut model.0.meshes {
             mesh.transform = glam::Mat4::from_scale(glam::Vec3::splat(2.)) * mesh.transform;
         }
         model.refresh_bounds();
         let mut camera = viewer.camera.clone();
-        camera.frame(model.center, model.radius);
+        camera.frame(model.0.center, model.0.radius);
         viewer.candidate = Some((model, camera));
         viewer.dirty(Change::Scene);
         settle(&mut viewer, &ctx)?;

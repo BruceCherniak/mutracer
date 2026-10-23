@@ -63,7 +63,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
     ensure!(ambient == actual, "Web Studio ambient mismatch");
     println!("PASS 24 Web Studio placement/power/ground fixtures and ambient pixels");
     let model = Model::load(path)?;
-    let camera = Camera::fit(model.center, model.radius);
+    let camera = Camera::fit(model.0.center, model.0.radius);
     let size = [128, 84];
     for mode in [0, 1] {
         let mut retained = Renderer::with_backend(mode)?;
@@ -89,10 +89,10 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 10 => environment.studio.size = 2.,
                 11 => environment.studio.ambient = 0.3,
                 12 => environment.studio.ambient_color = [0.6, 0.8, 1.],
-                13 => model.materials[0].roughness = 0.8,
+                13 => model.0.materials[0].roughness = 0.8,
                 14 => camera.orbit([15., 5.]),
                 _ => {
-                    model.meshes[0].transform.w_axis.x += model.radius * 0.3;
+                    model.0.meshes[0].transform.w_axis.x += model.0.radius * 0.3;
                     model.refresh_bounds();
                 }
             }

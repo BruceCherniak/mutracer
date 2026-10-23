@@ -411,7 +411,7 @@ mod tests {
         )
         .unwrap();
         let size = [13, 9];
-        let camera = Camera::fit(model.center, model.radius);
+        let camera = Camera::fit(model.0.center, model.0.radius);
         let mut descriptor =
             model.descriptor(&camera.bytes(size), size, &crate::Environment::default());
         let quality = u32::from_le_bytes(

@@ -46,3 +46,24 @@ Copyright © 2015 Simonas Kazlauskas, ISC License
 ([text](./LICENSES/Libloading-ISC.txt)). The library caller supplies the OIDN
 runtime; the viewer bundles a runtime covered by its
 [separate notices](./viewer/THIRD_PARTY_NOTICES.md).
+
+## Native glTF codecs
+
+The native SDK glTF feature uses [meshopt-rs 0.6.2](https://github.com/gwihlidal/meshopt-rs)
+(MIT, Copyright 2018 Graham Wihlidal;
+[license](./LICENSES/Meshopt-rs-MIT.txt)) and its bundled
+[meshoptimizer 0.25](https://github.com/zeux/meshoptimizer/tree/v0.25)
+(MIT, Copyright 2016-2025 Arseny Kapoulkine;
+[license](./LICENSES/Meshoptimizer-MIT.txt)) for Meshopt decoding.
+WebP decoding uses [image-webp 0.2.4](https://github.com/image-rs/image-webp)
+under MIT ([license](./LICENSES/Image-webp-MIT.txt)). These codecs do not ship in
+the npm library. The licenses accompany the native SDK and app.
+
+
+The importer and scene API also use these MIT-licensed Rust libraries:
+
+- gltf 1.4.1: MIT ([license](./LICENSES/gltf-1.4.1-MIT.txt)).
+- image 0.25.8: MIT ([license](./LICENSES/image-0.25.8-MIT.txt)).
+- base64 0.22.1: MIT ([license](./LICENSES/base64-0.22.1-MIT.txt)).
+- percent-encoding 2.3.2: MIT ([license](./LICENSES/percent-encoding-2.3.2-MIT.txt)).
+- glam 0.30.9: MIT ([license](./LICENSES/glam-0.30.9-MIT.txt)).

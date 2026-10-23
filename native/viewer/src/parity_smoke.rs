@@ -162,9 +162,9 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             viewer.render_backend()? == mode,
             "Requested backend unavailable"
         );
-        let original = viewer.model.materials[viewer.selected].clone();
+        let original = viewer.model.0.materials[viewer.selected].clone();
         for preset in crate::material_presets::presets() {
-            preset.apply(&mut viewer.model.materials[viewer.selected]);
+            preset.apply(&mut viewer.model.0.materials[viewer.selected]);
             viewer.dirty(Change::Material);
             settle(&mut viewer, &ctx)?;
             let mut fresh = Renderer::with_backend(mode)?;
@@ -192,7 +192,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             )?;
             println!("PASS material preset backend {mode}, {}", preset.id);
         }
-        viewer.model.materials[viewer.selected] = original;
+        viewer.model.0.materials[viewer.selected] = original;
         viewer.dirty(Change::Material);
         settle(&mut viewer, &ctx)?;
         for (i, scale) in [0.25, 0.5, 0.75, 1.].into_iter().enumerate() {
@@ -313,7 +313,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
         for change in [Change::Camera, Change::Material, Change::Environment] {
             match change {
                 Change::Camera => viewer.camera.orbit([8., 2.]),
-                Change::Material => viewer.model.materials[0].roughness = 0.85,
+                Change::Material => viewer.model.0.materials[0].roughness = 0.85,
                 _ => viewer.environment.rotation = 75.,
             }
             viewer.dirty(change);

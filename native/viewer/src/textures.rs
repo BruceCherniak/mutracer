@@ -497,7 +497,7 @@ impl Viewer {
         match result {
             Ok(prepared) => {
                 // Only texture operations are merged; values edited during the download survive.
-                let target = &mut self.model.materials[pick.material];
+                let target = &mut self.model.0.materials[pick.material];
                 let projection = target.layers.displacement_projection;
                 if let Some((metal, rough)) = prepared.neutral {
                     let previous_roughness = target.roughness;
@@ -510,19 +510,19 @@ impl Viewer {
                     target.roughness = if rough { 1. } else { previous_roughness };
                 }
                 // The request owns a snapshot of the texture table. Sampling/removal/upload cancels it.
-                self.model.textures = prepared.model.textures;
+                self.model.0.textures = prepared.model.0.textures;
                 for (target, source) in self
                     .model
                     .materials
                     .iter_mut()
-                    .zip(&prepared.model.materials)
+                    .zip(&prepared.model.0.materials)
                 {
                     target.maps = source.maps;
                 }
                 if prepared.slots.contains(&8) && projection == 0 {
-                    self.model.materials[pick.material]
+                    self.model.0.materials[pick.material]
                         .layers
-                        .displacement_projection = prepared.model.materials[pick.material]
+                        .displacement_projection = prepared.model.0.materials[pick.material]
                         .layers
                         .displacement_projection;
                 }
@@ -554,7 +554,7 @@ impl Viewer {
                 });
                 ui.small(format!(
                     "Apply to {}",
-                    self.model.materials[self.selected].name
+                    self.model.0.materials[self.selected].name
                 ));
                 ui.add(
                     egui::TextEdit::singleline(&mut self.texture_browser.query)
@@ -772,11 +772,11 @@ mod tests {
             .replace_textures(0, (0..9).map(|slot| (slot, Some(image()))).collect())
             .unwrap();
         for slot in 0..9 {
-            let texture = &model.textures[model.materials[0].maps[slot] as usize];
+            let texture = &model.0.textures[model.0.materials[0].maps[slot] as usize];
             assert_eq!(texture.wrap, [2, 1]);
             assert_eq!(texture.scale, [-2., 3.]);
         }
-        let values = crate::scene::material_values(&model.materials[0]);
+        let values = crate::scene::material_values(&model.0.materials[0]);
         for (key, slot) in [
             ("roughnessMap", 4),
             ("metalnessMap", 5),
@@ -786,21 +786,21 @@ mod tests {
         ] {
             assert_eq!(
                 values[key].as_u64().unwrap(),
-                model.materials[0].maps[slot] as u64
+                model.0.materials[0].maps[slot] as u64
             );
         }
         for _ in 0..260 {
             model.replace_textures(0, vec![(0, Some(image()))]).unwrap();
         }
-        assert_eq!(model.textures.len(), 9);
+        assert_eq!(model.0.textures.len(), 9);
         assert_eq!(source.textures.len(), 1); // worker snapshots retain their own pixels and IDs.
         model
             .replace_textures(0, (0..9).map(|slot| (slot, None)).collect())
             .unwrap();
-        assert!(model.textures.is_empty());
-        let before = model.materials[0].maps;
+        assert!(model.0.textures.is_empty());
+        let before = model.0.materials[0].maps;
         assert!(model.replace_textures(0, vec![(9, Some(image()))]).is_err());
-        assert_eq!(model.materials[0].maps, before);
+        assert_eq!(model.0.materials[0].maps, before);
     }
     #[test]
     fn failed_or_cancelled_requests_leave_material_untouched() {
@@ -902,18 +902,18 @@ pub fn smoke(path: &std::path::Path, out: &std::path::Path) -> Result<()> {
             Ok(actual)
         };
         for preset in crate::material_presets::presets() {
-            preset.apply(&mut model.materials[material]);
+            preset.apply(&mut model.0.materials[material]);
             check(&model, &format!("preset {}", preset.id))?;
         }
         crate::material_presets::presets()
             .iter()
             .find(|p| p.id == "white")
             .unwrap()
-            .apply(&mut model.materials[material]);
+            .apply(&mut model.0.materials[material]);
         let baseline = check(&model, "no textures")?;
         for &(slot, label, _) in SLOTS {
             model.replace_textures(material, vec![(slot, Some(image()))])?;
-            let m = &mut model.materials[material];
+            let m = &mut model.0.materials[material];
             m.roughness = 0.6;
             m.metalness = 0.5;
             m.transmission = 0.3;
@@ -935,13 +935,13 @@ pub fn smoke(path: &std::path::Path, out: &std::path::Path) -> Result<()> {
                     size,
                     0.,
                 )?;
-                model.materials[material].layers.displacement_scale = 0.;
+                model.0.materials[material].layers.displacement_scale = 0.;
                 let biased = check(&model, "bias without height scale")?;
                 ensure!(
                     biased.iter().all(|v| v.is_finite()),
                     "Non-finite bias output"
                 );
-                model.materials[material].layers.displacement_scale = original.radius * 0.01;
+                model.0.materials[material].layers.displacement_scale = original.radius * 0.01;
             }
             model.set_texture_sampling(material, slot, [2, 1], [-2., 3.])?;
             check(&model, &format!("sampling {label}"))?;
@@ -955,7 +955,7 @@ pub fn smoke(path: &std::path::Path, out: &std::path::Path) -> Result<()> {
             .iter()
             .find(|p| p.id == "white")
             .unwrap()
-            .apply(&mut model.materials[material]);
+            .apply(&mut model.0.materials[material]);
         ensure!(
             check(&model, "restore")? == baseline,
             "Editor did not restore baseline"
@@ -988,19 +988,19 @@ fn bias_oracle(original: &Model, mode: u32, out: &std::path::Path) -> Result<()>
         colors: vec![].into(),
         tangents: vec![].into(),
     };
-    model.geometries = Arc::new(vec![geometry]);
-    model.meshes.truncate(1);
-    model.meshes[0].geometry = 0;
-    model.meshes[0].material = 0;
-    model.meshes[0].transform = Mat4::IDENTITY;
-    model.materials.truncate(1);
-    model.materials[0].maps = [u32::MAX; 9];
-    model.textures = Arc::new(vec![]);
+    model.0.geometries = Arc::new(vec![geometry]);
+    model.0.meshes.truncate(1);
+    model.0.meshes[0].geometry = 0;
+    model.0.meshes[0].material = 0;
+    model.0.meshes[0].transform = Mat4::IDENTITY;
+    model.0.materials.truncate(1);
+    model.0.materials[0].maps = [u32::MAX; 9];
+    model.0.textures = Arc::new(vec![]);
     crate::material_presets::presets()
         .iter()
         .find(|p| p.id == "white")
         .unwrap()
-        .apply(&mut model.materials[0]);
+        .apply(&mut model.0.materials[0]);
     model.replace_textures(
         0,
         vec![(
@@ -1012,8 +1012,8 @@ fn bias_oracle(original: &Model, mode: u32, out: &std::path::Path) -> Result<()>
             )),
         )],
     )?;
-    model.materials[0].double_sided = true;
-    model.materials[0].layers.displacement_bias = 0.125;
+    model.0.materials[0].double_sided = true;
+    model.0.materials[0].layers.displacement_bias = 0.125;
     let mut oracle = model.clone();
     oracle.materials[0].maps[8] = u32::MAX;
     oracle.materials[0].layers.displacement_bias = 0.;

@@ -18,7 +18,7 @@ fn number(v: &Value, name: &str) -> Result<usize> {
         .and_then(|n| usize::try_from(n).ok())
         .with_context(|| format!("Invalid {name}"))
 }
-fn uri(path: &Path, name: &str) -> Result<Vec<u8>> {
+fn uri(path: Option<&Path>, name: &str) -> Result<Vec<u8>> {
     if let Some(data) = name.strip_prefix("data:") {
         let (header, value) = data.split_once(',').context("Invalid data URI")?;
         ensure!(
@@ -31,6 +31,7 @@ fn uri(path: &Path, name: &str) -> Result<Vec<u8>> {
             !name.contains("://"),
             "Only local model resources are supported"
         );
+        let path = path.context("External resources require a base path")?;
         let decoded = percent_encoding::percent_decode_str(name).decode_utf8()?;
         let p = path
             .parent()
@@ -154,8 +155,7 @@ fn component(bytes: &[u8], kind: usize, normalized: bool) -> Result<f32> {
     ensure!(v.is_finite(), "Non-finite quantized component");
     Ok(v)
 }
-pub fn load(path: &Path) -> Result<Import> {
-    let bytes = std::fs::read(path)?;
+pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
     let (mut j, blob): (Value, Option<Vec<u8>>) = if bytes.starts_with(b"glTF") {
         let glb = gltf::Glb::from_slice(&bytes)?;
         (
@@ -488,9 +488,9 @@ mod tests {
             }),
             &bytes,
         );
-        let (_, _, images) = load(&path).unwrap();
+        let (_, _, images) = load_bytes(&std::fs::read(&path).unwrap(), Some(&path)).unwrap();
         assert_eq!(images[0].pixels, [255, 10, 0, 255]);
-        let model = crate::scene::Model::load(&path).unwrap();
+        let model = crate::scene_api::gltf::Model::load(&path).unwrap();
         assert_eq!(
             model.geometries[0].positions,
             [-1., 0., 0., 1., 0., 0., 0., 1., 0.].into()
@@ -521,7 +521,7 @@ mod tests {
             "skins":[{"joints":[1]}],"nodes":[{"mesh":0,"skin":0},{"translation":[0,2,0]}],"scenes":[{"nodes":[0,1]}],"scene":0}),
             &bytes,
         );
-        let model = crate::scene::Model::load(&path).unwrap();
+        let model = crate::scene_api::gltf::Model::load(&path).unwrap();
         assert_eq!(
             model.geometries[0].positions,
             [-1., 2., 0., 1., 2., 0., 0., 3., 0.].into()

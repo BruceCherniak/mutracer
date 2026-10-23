@@ -46,48 +46,8 @@ impl Model {
         }
         selected.map(|id| (id, origin + direction * nearest))
     }
-    pub fn rebuild_picking(&mut self) -> anyhow::Result<()> {
-        self.picking = std::sync::Arc::new(
-            self.geometries
-                .iter()
-                .map(|g| {
-                    mutracer_native_probe::picking::PickBvh::new(&g.positions, &g.indices)
-                        .map(std::sync::Arc::new)
-                        .map_err(anyhow::Error::msg)
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?,
-        );
-        Ok(())
-    }
-    pub fn refresh_bounds(&mut self) {
-        let mut min = Vec3::splat(f32::INFINITY);
-        let mut max = Vec3::splat(f32::NEG_INFINITY);
-        for id in 0..self.meshes.len() {
-            let (lo, hi) = self.mesh_bounds(id);
-            min = min.min(lo);
-            max = max.max(hi);
-        }
-        self.center = (min + max) * 0.5;
-        self.radius = (max - min).length() * 0.5;
-        self.ground_y = min.y;
-    }
-    pub fn mesh_bounds(&self, id: usize) -> (Vec3, Vec3) {
-        let mesh = &self.meshes[id];
-        let geometry = &self.geometries[mesh.geometry];
-        let mut min = Vec3::splat(f32::INFINITY);
-        let mut max = Vec3::splat(f32::NEG_INFINITY);
-        for x in [geometry.min.x, geometry.max.x] {
-            for y in [geometry.min.y, geometry.max.y] {
-                for z in [geometry.min.z, geometry.max.z] {
-                    let p = mesh.transform.transform_point3(Vec3::new(x, y, z));
-                    min = min.min(p);
-                    max = max.max(p);
-                }
-            }
-        }
-        (min, max)
-    }
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -99,7 +59,7 @@ mod tests {
             &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/sample.glb"),
         )
         .unwrap();
-        model.geometries = vec![Geometry {
+        model.0.geometries = vec![Geometry {
             material_indices: Arc::from([]),
             positions: vec![-1., -1., 0., 1., -1., 0., 0., 1., 0.].into(),
             indices: vec![0, 1, 2].into(),
@@ -112,7 +72,7 @@ mod tests {
         }]
         .into();
         model.rebuild_picking().unwrap();
-        model.meshes = [0., 1.]
+        model.0.meshes = [0., 1.]
             .map(|z| Mesh {
                 materials: vec![],
                 instances: None,
@@ -128,7 +88,7 @@ mod tests {
         camera.pitch = 0.;
         assert_eq!(model.pick(&camera, [0.5, 0.5], 1.5), Some(1));
         assert_eq!(model.pick(&camera, [0., 0.], 1.5), None);
-        model.meshes[1].transform = glam::Mat4::from_scale_rotation_translation(
+        model.0.meshes[1].transform = glam::Mat4::from_scale_rotation_translation(
             Vec3::new(-0.5, 2., 1.),
             glam::Quat::IDENTITY,
             Vec3::new(0., 0., 1.),
@@ -152,7 +112,7 @@ mod transformed_tests {
             Vec3::new(1., -1., 0.),
             Vec3::new(0., 1., 0.),
         ];
-        model.geometries = vec![crate::scene::Geometry {
+        model.0.geometries = vec![crate::scene::Geometry {
             material_indices: Arc::from([]),
             positions: vertices.iter().flat_map(|v| v.to_array()).collect(),
             indices: vec![0, 1, 2].into(),
@@ -164,7 +124,7 @@ mod transformed_tests {
             max: Vec3::new(1., 1., 0.),
         }]
         .into();
-        model.meshes = [
+        model.0.meshes = [
             (-0.4, 0.5, Vec3::new(-1.4, 0.5, 2.)),
             (0.3, -0.5, Vec3::new(0.7, 1.8, 0.3)),
         ]
@@ -204,7 +164,7 @@ mod transformed_tests {
                     };
                     let mut expected = None;
                     let mut nearest = f32::INFINITY;
-                    for (id, mesh) in model.meshes.iter().enumerate() {
+                    for (id, mesh) in model.0.meshes.iter().enumerate() {
                         let a = mesh.transform.transform_point3(vertices[0]);
                         let b = mesh.transform.transform_point3(vertices[1]);
                         let c = mesh.transform.transform_point3(vertices[2]);

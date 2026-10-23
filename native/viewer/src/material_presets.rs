@@ -272,14 +272,14 @@ mod tests {
         .unwrap();
         assert_eq!(presets().len(), data.len());
         for preset in presets() {
-            let mut material = model.materials[0].clone();
+            let mut material = model.0.materials[0].clone();
             material.maps = [7; 9];
             material.layers.specular_color = [0.1; 3];
             material.layers.subsurface_radius_scale = [0.2; 3];
             // Read the packed contract independently of Preset::apply's assignments.
             preset.apply(&mut material);
             assert_eq!(material.maps, [7; 9]);
-            assert_eq!(material.alpha_mode, model.materials[0].alpha_mode);
+            assert_eq!(material.alpha_mode, model.0.materials[0].alpha_mode);
             let values = crate::scene::material_values(&material);
             for (key, expected) in &preset.values {
                 let actual = &values[key];

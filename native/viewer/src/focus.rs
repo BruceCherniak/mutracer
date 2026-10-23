@@ -349,7 +349,7 @@ mod tests {
     #[test]
     fn current_depth_pulls_once_misses_keep_distance_and_stale_results_are_ignored() {
         let model = model();
-        let mut camera = Camera::fit(model.center, model.radius);
+        let mut camera = Camera::fit(model.0.center, model.0.radius);
         camera.f_stop = 2.8;
         let ctx = egui::Context::default();
         let now = Instant::now();
@@ -411,7 +411,7 @@ mod tests {
     #[test]
     fn orthographic_and_disabled_lenses_do_not_query_or_change_focus() {
         let model = model();
-        let mut camera = Camera::fit(model.center, model.radius);
+        let mut camera = Camera::fit(model.0.center, model.0.radius);
         let ctx = egui::Context::default();
         let mut focus = AutoFocus::default();
         let now = Instant::now() + Duration::from_secs(1);

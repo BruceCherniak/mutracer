@@ -50,7 +50,7 @@ pub fn run(model_path: &Path, out: &Path) -> Result<()> {
             "Packaged GPU validation requires a real GPU"
         );
         let mut renderer = Renderer::with_backend(0)?;
-        let camera = Camera::fit(model.center, model.radius);
+        let camera = Camera::fit(model.0.center, model.0.radius);
         renderer.commit(&model.descriptor(&camera.bytes(size), size, &Environment::default()))?;
         let pixels = renderer.finish(4)?;
         ensure!(
