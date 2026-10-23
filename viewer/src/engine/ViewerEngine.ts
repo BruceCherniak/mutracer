@@ -782,7 +782,8 @@ export class ViewerEngine {
     } }));
     const camera = this.camera;
     camera.position.fromArray(saved.position);
-    camera.up.fromArray(saved.up);
+    // Earlier versions saved a tilted up after orbiting from a scene camera.
+    camera.up.set(0, 1, 0);
     this.controls.target.fromArray(saved.target);
     camera.near = saved.near;
     camera.far = saved.far;
@@ -829,7 +830,9 @@ export class ViewerEngine {
     const camera = this.camera;
     camera.position.copy(position);
     camera.quaternion.copy(quaternion);
-    camera.up.set(0, 1, 0).applyQuaternion(quaternion);
+    // OrbitControls orbits around world +Y; a tilted up would roll every
+    // later frame. The view direction is kept and only authored roll is dropped.
+    camera.up.set(0, 1, 0);
     camera.matrixAutoUpdate = true;
     camera.matrixWorldAutoUpdate = true;
     setAspect(camera, this.viewAspect());
