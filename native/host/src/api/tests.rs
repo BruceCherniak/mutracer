@@ -448,20 +448,21 @@ fn oracle_inputs(
     let mut handle = 0;
     unsafe {
         // A pending engine preparation can briefly publish under REGISTRY while
-        // this fresh oracle is created. Retry only L0 Busy, as L1 callers do.
+        // this fresh oracle is created or committed. Retry only L0 Busy, as L1
+        // callers do; publication can race either registry acquisition.
         l0_blocking(|e, n| context::mt_context_create_with_backend(backend, &mut handle, e, n))
             .unwrap();
-        l0_check(
+        l0_blocking(|e, n| {
             context::mt_context_commit_with_settings(
                 handle,
                 descriptor.as_ptr(),
                 descriptor.len(),
                 settings,
-                error.as_mut_ptr(),
-                error.len(),
-            ),
-            &error,
-        );
+                e,
+                n,
+            )
+        })
+        .unwrap();
         if audit {
             for sample in 0..samples {
                 l0_check(

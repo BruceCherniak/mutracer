@@ -1,7 +1,8 @@
 use super::CancelToken;
 
-/// Owned linear RGBA32F images, bottom row first. RGB color is a raw per-sample
-/// average (including background); alpha is path coverage. Guides match L0 AOVs.
+/// Custom-filter inputs. Cpu mode supplies owned linear RGBA32F images, bottom
+/// row first: raw per-sample averaged color/background and coverage alpha, with
+/// existing L0 guides. ResidentGpu instead supplies `resident` and empty arrays.
 pub struct DenoiseInput {
     pub size: [u32; 2],
     pub color: Vec<f32>,
@@ -9,10 +10,13 @@ pub struct DenoiseInput {
     pub albedo: Vec<f32>,
     /// Opt-in copies on the rendering device, STORAGE | COPY_SRC buffers.
     pub buffers: Option<DenoiseBuffers>,
-    /// Cloned rendering device for optional GPU filtering. Input is read back
-    /// before dispatch; opt-in buffers upload on the worker. Never destroy the device.
+    /// Cloned rendering device for optional GPU filtering. Cpu mode reads back
+    /// on the worker; opt-in buffers upload there. Never destroy the device.
     pub device: wgpu::Device,
     pub gpu: DenoiseGpu,
+    /// Present only for ResidentGpu mode. CPU arrays are empty and `buffers` is
+    /// None in that mode; the owned snapshot is in this object's buffers.
+    pub resident: Option<super::GpuDenoiseInput>,
 }
 /// Owned copies with the same layout as CPU inputs. Do not destroy these buffers
 /// while submitted work still uses them; submit through DenoiseGpu.
@@ -22,12 +26,19 @@ pub struct DenoiseBuffers {
     pub albedo: wgpu::Buffer,
 }
 /// Submission access coordinated with window reconfiguration.
-pub struct DenoiseGpu(pub(crate) crate::GpuQueue);
+pub struct DenoiseGpu(
+    pub(crate) crate::GpuQueue,
+    pub(super) Option<std::sync::Arc<super::custom_gpu_submission::SubmissionLease>>,
+);
 impl DenoiseGpu {
+    pub(super) fn duplicate(&self) -> Self {
+        Self(self.0.clone(), self.1.clone())
+    }
     pub fn submit(
         &self,
         commands: impl IntoIterator<Item = wgpu::CommandBuffer>,
     ) -> wgpu::SubmissionIndex {
+        let _retirement = self.1.as_ref().map(|lease| lease.begin(&self.0));
         self.0.submit(commands)
     }
     pub fn write_buffer(&self, buffer: &wgpu::Buffer, offset: u64, data: &[u8]) {
@@ -40,6 +51,9 @@ pub enum DenoiseOutput {
     /// Same layout in a COPY_SRC buffer on the input device, at offset zero.
     /// Submit all writes before returning; ownership transfers to the worker.
     Gpu(wgpu::Buffer),
+    /// GPU-resident result sealed to this invocation. No scheduling readback or
+    /// CPU upload; construct with GpuDenoiseInput::submit.
+    Resident(super::GpuDenoiseOutput),
 }
 /// User filter invoked on detached library threads. Calls may overlap after
 /// cancellation/replacement. Keep all referenced resources owned by this object.
@@ -47,8 +61,15 @@ pub enum DenoiseOutput {
 /// callback, and cancelled results are discarded. A stuck callback keeps its
 /// inputs and Arc alive; hosts must stop it before unloading callback code.
 pub trait CustomDenoiser: Send + Sync + 'static {
+    /// Default Cpu. ResidentGpu supplies GPU averages of existing accumulation
+    /// guides; it does not opt into temporal sampling or RR-specific inputs.
+    /// Called once per invocation on the worker.
+    fn input_mode(&self) -> super::DenoiseInputMode {
+        super::DenoiseInputMode::Cpu
+    }
     /// Default false. True additionally uploads CPU inputs as GPU storage buffers
     /// on the worker. This is a readback+upload path, with extra memory/copy cost.
+    /// Applies only to Cpu mode; ResidentGpu already supplies GPU snapshots.
     fn gpu_inputs(&self) -> bool {
         false
     }

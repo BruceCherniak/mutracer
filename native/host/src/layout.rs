@@ -249,6 +249,8 @@ pub mod resource {
     pub const PATH_EVENTS: usize = 50;
     pub const PATH_PARAMETERS: usize = 51;
     pub const QUERY_COUNTS: usize = 52;
+    pub const SOFTWARE_FRAME_SHADER: usize = 54;
+    pub const HWRT_FRAME_SHADER: usize = 55;
 }
 pub mod sampler {
     pub const MATERIAL: usize = 40;

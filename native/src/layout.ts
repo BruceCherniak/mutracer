@@ -248,7 +248,9 @@ export const RESOURCE = {
   "AS_INDICES": 42,
   "PATH_EVENTS": 50,
   "PATH_PARAMETERS": 51,
-  "QUERY_COUNTS": 52
+  "QUERY_COUNTS": 52,
+  "SOFTWARE_FRAME_SHADER": 54,
+  "HWRT_FRAME_SHADER": 55
 } as const;
 export const SAMPLER = {
   "MATERIAL": 40

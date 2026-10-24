@@ -61,21 +61,52 @@ remain available and replace a custom filter.
 Progressive and every-sample schedules keep the last filtered image, including
 its coverage and catcher layers, visible until the next result. Display settings
 still apply to that image; raw HDR and guide readback continue to follow newly
-completed samples. Retaining a filtered result adds 48 bytes per render pixel
-in GPU buffers, plus 48 bytes for catcher scenes. Disabling the filter or
-restarting the render releases these buffers.
+completed samples. Retained composition adds 48 bytes per render pixel in GPU
+buffers, plus 48 bytes for catcher scenes. A sealed GPU result also retains
+16 bytes per pixel. Disabling the filter or restarting the render releases these
+buffers.
 
-Inputs are owned linear RGBA32F color, normal and albedo arrays, bottom row
-first. Color is the raw per-sample average including background; alpha is path
-coverage. Return the same layout and size with finite values. This differs from
-L1 HDR export's surface-hit normalization. Input readback can block the API call;
-filtering runs on a library thread. Rust filters can request GPU input buffers
-with `gpu_inputs()`, use the supplied device and coordinated GPU submission
-access, and return a CPU array or a COPY_SRC GPU buffer on that device. GPU input
-currently adds an upload after readback; GPU output adds worker-side readback.
+By default inputs are owned linear RGBA32F color, normal and albedo arrays,
+bottom row first. Color is the raw per-sample average including background;
+alpha is path coverage. Return the same layout and size with finite values.
+This differs from L1 HDR export's surface-hit normalization. Custom invocations
+freeze 48 bytes per pixel in GPU input snapshots so cancellation or later
+rendering cannot overwrite their inputs. Filtering and CPU input readback run
+on a library thread. Rust `gpu_inputs()` additionally uploads these
+CPU arrays; returning `DenoiseOutput::Gpu` reads that buffer back on the worker.
 C callbacks use CPU arrays and must perform their own GPU transfers if needed.
 
-The worker owns input data until callback return. Rust output ownership transfers
+For same-device filtering without image readback or CPU upload, return
+`DenoiseInputMode::ResidentGpu` from `CustomDenoiser::input_mode()`. The callback
+receives `input.resident` with immutable GPU color/normal/albedo buffers, size,
+sample count and a unique device/target/generation/frame identity; CPU arrays
+are empty. These are the existing accumulation guides, not temporal depth,
+motion or RR first-surface inputs. Normal filtering does not change sampling.
+See the [GPU identity example](../host/examples/custom-gpu-denoiser.rs).
+
+Record work in separate command buffers and call
+`resident.submit(commands, output_buffer)`, then return the sealed result as
+`DenoiseOutput::Resident`. Use the supplied device and queue; never destroy them
+or mutate the input buffers. Output must contain finite RGBA32F values with the
+input orientation and coverage. The library copies it into an owned result and
+passes it to Display on the GPU. Explicit pixel reads still read back and check
+finite values. GPU snapshots and output retention add device memory and copy
+costs; this mode does not remove the existing retained composition buffers.
+
+Save `resident.status()` before submitting when acceptance or resource retirement
+matters. Acceptance becomes Accepted only after the result is published, or
+Rejected after cancellation, replacement or failure. GPU retirement is a
+separate completion flag; rejecting a result cannot cancel submitted GPU work.
+The input lease and filter stay alive until that work completes, including when
+the engine is disposed. Release of the library's last filter reference runs
+off-thread.
+Early submissions through `input.gpu` or `resident.gpu` also retain the snapshot
+and filter when the callback fails before sealing its output. Finish submissions
+before closing the resident frame; its submission handles cannot be reused later.
+Returning a CPU image from ResidentGpu keeps the same publication status, with
+the CPU upload cost of a CPU result.
+
+In Cpu mode the worker owns input data until callback return. Rust output ownership transfers
 to the library. C writes the provided output and retains none of its input,
 output, cancellation or error pointers after return. Poll the cancellation token
 to stop cooperatively. Cancel, clear, replacement and destruction return without

@@ -71,10 +71,26 @@ impl Drop for Submission<'_> {
 pub(crate) struct GpuQueue {
     queue: wgpu::Queue,
     gate: Option<Arc<SubmissionGate>>,
+    #[cfg(test)]
+    readbacks: Arc<std::sync::atomic::AtomicU64>,
 }
 impl GpuQueue {
     pub(crate) fn new(queue: wgpu::Queue, gate: Option<Arc<SubmissionGate>>) -> Self {
-        Self { queue, gate }
+        Self {
+            queue,
+            gate,
+            #[cfg(test)]
+            readbacks: Default::default(),
+        }
+    }
+    #[cfg(test)]
+    pub(crate) fn record_readback(&self) {
+        self.readbacks
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    #[cfg(test)]
+    pub(crate) fn readback_count(&self) -> u64 {
+        self.readbacks.load(std::sync::atomic::Ordering::Relaxed)
     }
     pub(crate) fn ensure_gate(&mut self) {
         self.gate.get_or_insert_with(Default::default);

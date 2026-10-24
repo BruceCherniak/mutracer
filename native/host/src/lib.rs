@@ -1,5 +1,6 @@
 //! Headless native experiments for raw descriptors and prepared MuTracer scenes.
 //! Blocking probes and persistent contexts expose experimental subsets of MuTracer.
+#![recursion_limit = "256"]
 use serde_json::json;
 use std::{
     borrow::Cow,
@@ -19,6 +20,7 @@ mod compilation;
 pub mod context;
 pub mod denoise;
 mod denoise_ffi;
+mod denoiser_inputs;
 mod depth;
 mod device_loss;
 pub mod display;
@@ -237,6 +239,8 @@ fn read_average(
     height: u32,
     samples: u32,
 ) -> Result<Vec<u8>> {
+    #[cfg(test)]
+    queue.record_readback();
     let readback = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("MuTracer native HDR readback"),
         size: width as u64 * height as u64 * 16,
@@ -286,6 +290,9 @@ struct CachedPipeline {
 }
 #[derive(Clone)]
 struct GpuDevice {
+    /// Clones share this identity; a recreated device never accepts old frames.
+    frame_device: denoiser_inputs::DeviceKey,
+    custom_snapshot_pipeline: Arc<std::sync::OnceLock<wgpu::ComputePipeline>>,
     loss: device_loss::DeviceLossNotifier,
     device: wgpu::Device,
     queue: GpuQueue,
@@ -304,6 +311,8 @@ impl GpuDevice {
         gate: Option<Arc<submission::SubmissionGate>>,
     ) -> Self {
         Self {
+            frame_device: denoiser_inputs::DeviceKey::new(),
+            custom_snapshot_pipeline: Default::default(),
             loss: Default::default(),
             device: device.clone(),
             queue: GpuQueue::new(queue.clone(), gate),
@@ -395,6 +404,8 @@ impl GpuDevice {
             notify.notify(format!("{reason:?}: {message}"));
         });
         Ok(Self {
+            frame_device: denoiser_inputs::DeviceKey::new(),
+            custom_snapshot_pipeline: Default::default(),
             loss,
             pipelines: Arc::new(Mutex::new(HashMap::new())),
             compilation: Default::default(),
@@ -506,8 +517,19 @@ struct Target {
     groups: [wgpu::BindGroup; 2],
     samples: u32,
     frames: Vec<[u8; 16]>,
+    /// Disabled targets allocate no frame guides or geometry history.
+    frame_inputs: Option<Box<denoiser_inputs::GpuFrameHistory>>,
 }
 impl Target {
+    #[allow(dead_code)]
+    fn enable_frame_inputs(&mut self, gpu: &GpuDevice) -> &mut denoiser_inputs::GpuFrameHistory {
+        self.frame_inputs.get_or_insert_with(|| {
+            Box::new(denoiser_inputs::GpuFrameHistory::new(
+                gpu.frame_device,
+                [self.width, self.height],
+            ))
+        })
+    }
     fn output(&self, kind: u32) -> Result<&wgpu::Buffer> {
         let id = match kind {
             0 => layout::resource::COLOR,
@@ -1011,7 +1033,12 @@ impl GpuScene {
             None => (None, self.layouts.clone()),
         };
         let pixels = size[0] as u64 * size[1] as u64;
-        let mut reusable = previous.map(|t| t.buffers).unwrap_or_default();
+        let (mut reusable, mut frame_inputs) = previous
+            .map(|t| (t.buffers, t.frame_inputs))
+            .unwrap_or_default();
+        if let Some(history) = &mut frame_inputs {
+            history.resize(size);
+        }
         let mut buffers = HashMap::new();
         let mut clear = Vec::new();
         for (id, bytes, usage) in [
@@ -1100,6 +1127,7 @@ impl GpuScene {
             groups: [frame, output],
             samples: 0,
             frames: packet.frames,
+            frame_inputs,
         })
     }
     /// Submits samples `start..start + additional` of a target without waiting.

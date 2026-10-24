@@ -1668,6 +1668,13 @@ pub(super) fn prepare(bytes: &[u8]) -> Result<(Scene, Assets)> {
         1,
     )
 }
+/// Explicit frame-input preparation; ordinary scenes do not generate this PSO.
+pub(super) fn prepare_frame_inputs(
+    bytes: &[u8],
+    settings: &settings::RenderSettings,
+) -> Result<(Scene, Assets)> {
+    prepare_impl(bytes, 0, false, false, settings, 17)
+}
 type NativeStep = unsafe extern "C" fn(*const u8, usize, u32, *mut *const u8, *mut usize);
 fn native_step(step: NativeStep, bytes: &[u8], token: u32) -> Result<Vec<u8>> {
     let mut pointer = std::ptr::null();
@@ -1898,6 +1905,8 @@ fn prepare_impl_with_kernels_inner(
                 && id != res::SOFTWARE_PATH_SHADER
                 && id != res::HWRT_PATH_SHADER
                 && id != res::SOFTWARE_HIT_SHADER
+                && id != res::SOFTWARE_FRAME_SHADER
+                && id != res::HWRT_FRAME_SHADER
             {
                 return Err("Unknown native shader variant".into());
             }

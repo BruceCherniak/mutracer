@@ -289,6 +289,54 @@ impl Display {
         {
             return Err("Invalid display image".into());
         }
+        use wgpu::util::DeviceExt;
+        let bytes: Vec<_> = pixels.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let source = self
+            .gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("CPU denoiser upload"),
+                contents: &bytes,
+                usage: wgpu::BufferUsages::COPY_SRC,
+            });
+        self.upload_gpu(&source)?;
+        self.uploads += 1;
+        Ok(())
+    }
+    pub(crate) fn denoise_buffers(&mut self) -> Result<crate::api::DenoiseBuffers> {
+        if self.original_samples == 0 {
+            return Err("No completed denoiser input".into());
+        }
+        let copy = |source: &wgpu::Buffer, encoder: &mut wgpu::CommandEncoder| {
+            let buffer = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Custom immutable raw guide snapshot"),
+                size: source.size(),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            encoder.copy_buffer_to_buffer(source, 0, &buffer, 0, source.size());
+            buffer
+        };
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        let buffers = crate::api::DenoiseBuffers {
+            color: copy(&self.raw, &mut encoder),
+            normal: copy(&self.normal, &mut encoder),
+            albedo: copy(&self.albedo, &mut encoder),
+        };
+        self.gpu.queue.submit([encoder.finish()]);
+        Ok(buffers)
+    }
+    /// A same-device GPU result follows the identical composition path as CPU
+    /// filtering. Raw accumulation and HDR exports continue using `raw`.
+    pub(crate) fn upload_gpu(&mut self, source: &wgpu::Buffer) -> Result<()> {
+        self.gpu.loss.check()?;
+        if source.size() < self.linear.size()
+            || !source.usage().contains(wgpu::BufferUsages::COPY_SRC)
+        {
+            return Err("Invalid display GPU image".into());
+        }
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         let allocate = |size| {
             self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -337,11 +385,9 @@ impl Display {
             metadata: self.metadata,
             revision: self.image_revision + 1,
         };
+        encoder.copy_buffer_to_buffer(source, 0, &frozen.color, 0, self.linear.size());
         self.gpu.queue.submit([encoder.finish()]);
-        let bytes: Vec<_> = pixels.iter().flat_map(|v| v.to_le_bytes()).collect();
-        self.gpu.queue.write_buffer(&frozen.color, 0, &bytes);
         self.denoised = Some(frozen);
-        self.uploads += 1;
         self.denoise_revision += 1;
         self.image_revision += 1;
         self.show_denoised();

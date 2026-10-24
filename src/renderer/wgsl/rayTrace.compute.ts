@@ -22,6 +22,16 @@ import envMapWgsl from './chunks/envMap.wgsl.js';
 import uvProjectionWgsl from './chunks/uvProjection.wgsl.js';
 export const WORKGROUP_SIZE = 8;
 
+/** Native input instrumentation; omitted hooks preserve the production source. */
+export interface RayTraceInputHooks {
+  declarations: string;
+  begin: string;
+  primarySurface: string;
+  unclampedColor: string;
+  end: string;
+  uniformJitter: boolean;
+}
+
 export interface RayTraceShaderOptions {
   hasDisplacement: boolean;
   /** Include direction frames only when used, preserving the legacy shader arithmetic otherwise. */
@@ -56,7 +66,7 @@ export default function rayTraceCompute({
   dynamicEnvironment = false,
   materialCapabilities = ALL_MATERIAL_SHADER_CAPABILITIES,
   lightCapabilities
-}: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false) {
+}: RayTraceShaderOptions, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks) {
   hasAnisotropyDirections ||= hasCoatNormals;
   const deterministicPrimaryAlpha = hasAlpha;
   const hasShadowCatcher = sceneCapabilities === undefined || (sceneCapabilities & WGPU_SCENE_FEATURE_BITS.HAS_SHADOW_CATCHER) !== 0;
@@ -71,7 +81,7 @@ export default function rayTraceCompute({
   si.barycentrics = vec2f(0.0);
 
 `;
-  const primaryGuides = /* wgsl */ `  if (${hasShadowCatcher ? /* wgsl */ `si.hit && ma.materialType == SHADOW_CATCHER` : /* wgsl */ `false`}) {
+  const primaryGuides = /* wgsl */ `${inputHooks?.primarySurface ?? ''}  if (${hasShadowCatcher ? /* wgsl */ `si.hit && ma.materialType == SHADOW_CATCHER` : /* wgsl */ `false`}) {
     (*outAux).isShadowCatcher = true;
     // The composed denoising input includes this receiver's shadow. Supply
     // neutral reflectance and its shading normal, independent of visibility.
@@ -132,7 +142,7 @@ ${envMapWgsl}
 
 ${samplingWgsl}
 ${createOpenPbrBsdfWgsl(hasAnisotropyDirections, hasCoatNormals)}
-${sampleLightWgsl}
+${sampleLightWgsl}${inputHooks?.declarations ?? ''}
 
 // Index of the path vertex currently being shaded.
 var<private> bounceIndex: u32 = 0u;
@@ -1089,7 +1099,7 @@ ${pathDiagnostic ? `  if (globalId.y >= mtPathParameters.y) { return; }
   samplingPixel = coord;
   pixelSampleIndex = u32(outNormal[idx].a) + rtUniform.sampleSequenceOffset;
   samplingBounce = 0u; hashedCounter = 0u;
-  if (SAMPLING_PATTERN == 0 || SAMPLING_PATTERN == 1) {
+  if (${inputHooks?.uniformJitter ? 'false' : 'SAMPLING_PATTERN == 0 || SAMPLING_PATTERN == 1'}) {
     jitter = (sample2D(CAMERA_PIXEL) - 0.5) / outputSize;
   }
   rng_initialize(coord, i32(pixelSampleIndex ^ sampleHash(rtUniform.sequenceSeed)));
@@ -1111,8 +1121,8 @@ ${pathDiagnostic ? `  if (globalId.y >= mtPathParameters.y) { return; }
   outAux.normal = vec3f(0.0);
   outAux.isBlank = false;
   outAux.isShadowCatcher = false;
-${pathDiagnostic ? '  mtPathBegin(coord);\n' : ''}  var liAndAlpha = integrator(uv + jitter, cam, &outAux);
-
+${pathDiagnostic ? '  mtPathBegin(coord);\n' : ''}${inputHooks?.begin ?? ''}  var liAndAlpha = integrator(uv + jitter, cam, &outAux);
+${inputHooks?.unclampedColor ?? ''}
   // Clamp at Integration Level to reduce fireflies.
   // TODO Path level configuration?
   if (rtUniform.clamping > 0.0) {
@@ -1158,7 +1168,7 @@ ${pathDiagnostic ? '  mtPathBegin(coord);\n' : ''}  var liAndAlpha = integrator(
     accumulateNormalOrVariance(idx, liAndAlpha.rgb, outAux.normal);
     accumulateDenoiseMoments(idx, dot(liAndAlpha.rgb, luminance));
   }
-${pathDiagnostic ? '  mtPathEnd(outAux.normal, outAux.albedo);\n' : ''}}
+${pathDiagnostic ? '  mtPathEnd(outAux.normal, outAux.albedo);\n' : ''}${inputHooks?.end ?? ''}}
 `;
   // The query entry point shares the exact BVH and material implementation.
   // It has no effect on the beauty entry point or its bindings.
