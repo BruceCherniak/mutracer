@@ -99,6 +99,12 @@ fn backlog_custom_cancel_clear_and_dispose_do_not_join_callbacks() {
         let (engine, render) = fixture();
         engine.set_scene(&crate::scene::tests::input()).unwrap();
         engine.update().unwrap();
+        if action == 3 {
+            // Exercise timeout while the callback is held, after compilation and
+            // target preparation. A cold shader under concurrent CI build load
+            // can otherwise consume the timeout before any callback is invoked.
+            render.converge(ConvergeOptions::new(1)).unwrap();
+        }
         let (entered, receive) = mpsc::channel();
         let (release, released) = mpsc::channel();
         render
@@ -121,7 +127,14 @@ fn backlog_custom_cancel_clear_and_dispose_do_not_join_callbacks() {
             }
             other.converge(options)
         });
-        let callback_cancel = receive.recv_timeout(Duration::from_secs(30)).unwrap();
+        let callback_cancel = receive
+            .recv_timeout(Duration::from_secs(30))
+            .unwrap_or_else(|error| {
+                panic!(
+                    "Callback entry failed for action {action}: {error}; converge finished: {}",
+                    worker.is_finished()
+                )
+            });
         let started = Instant::now();
         match action {
             0 => token.cancel(),

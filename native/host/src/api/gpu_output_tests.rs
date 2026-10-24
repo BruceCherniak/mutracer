@@ -150,10 +150,20 @@ fn gpu_output_borrows_and_ordered_passes_cover_export_fallback_and_lifecycle() {
             Ok(())
         })
         .unwrap();
-    assert_eq!(
-        display.read_rgba8(&render).unwrap().2,
-        [64, 128, 191, 128].repeat(54)
-    );
+    let processed = display.read_rgba8(&render).unwrap().2;
+    assert_eq!(processed.len(), 54 * 4);
+    // UNORM clears can select either adjacent integer code (in particular
+    // 0.5 * 255 is a tie). Keep exact export/texture identity below.
+    // https://docs.vulkan.org/spec/latest/chapters/fundamentals.html
+    for pixel in processed.chunks_exact(4) {
+        for (actual, (lower, upper)) in
+            pixel
+                .iter()
+                .zip([(63, 64), (127, 128), (191, 192), (127, 128)])
+        {
+            assert!((*actual >= lower) && (*actual <= upper));
+        }
+    }
     assert_eq!(*seen.lock().unwrap(), [1, 2]);
     display.set_size(18, 12).unwrap();
     let pending = Render::new(&engine, RenderSettings::default()).unwrap();
@@ -174,7 +184,7 @@ fn gpu_output_borrows_and_ordered_passes_cover_export_fallback_and_lifecycle() {
                 .unwrap(),
             4
         ),
-        [64, 128, 191, 128].repeat(54)
+        processed
     );
     assert_eq!(
         bytes(
