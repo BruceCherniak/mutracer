@@ -150,47 +150,47 @@ fn intersectCwbvhInterior(
   let padding = depthSlabPadding(invD, o);
   let originTerm = (n0.xyz - o) * invD;
   let adjustedInvD = quantizationScale * invD;
-  let minX0 = unpackCwbvhBytes(bitcast<u32>(n2.x));
-  let minX1 = unpackCwbvhBytes(bitcast<u32>(n2.y));
-  let minY0 = unpackCwbvhBytes(bitcast<u32>(n2.z));
-  let minY1 = unpackCwbvhBytes(bitcast<u32>(n2.w));
-  let minZ0 = unpackCwbvhBytes(bitcast<u32>(n3.x));
-  let minZ1 = unpackCwbvhBytes(bitcast<u32>(n3.y));
-  let maxX0 = unpackCwbvhBytes(bitcast<u32>(n3.z));
-  let maxX1 = unpackCwbvhBytes(bitcast<u32>(n3.w));
-  let maxY0 = unpackCwbvhBytes(bitcast<u32>(n4.x));
-  let maxY1 = unpackCwbvhBytes(bitcast<u32>(n4.y));
-  let maxZ0 = unpackCwbvhBytes(bitcast<u32>(n4.z));
-  let maxZ1 = unpackCwbvhBytes(bitcast<u32>(n4.w));
+  // Pick each axis' entry and exit planes from the ray direction once, as in
+  // the CWBVH paper, instead of ordering every child's slab pair. This halves
+  // the slab arithmetic and the decoded values kept live at once.
+  let words2 = bitcast<vec4u>(n2);
+  let words3 = bitcast<vec4u>(n3);
+  let words4 = bitcast<vec4u>(n4);
+  let negative = invD < vec3f(0.0);
+  let nearX = select(words2.xy, words3.zw, negative.x);
+  let farX = select(words3.zw, words2.xy, negative.x);
+  let nearY = select(words2.zw, words4.xy, negative.y);
+  let farY = select(words4.xy, words2.zw, negative.y);
+  let nearZ = select(words3.xy, words4.zw, negative.z);
+  let farZ = select(words4.zw, words3.xy, negative.z);
 
-  let minTx0 = minX0 * adjustedInvD.x + originTerm.x;
-  let minTy0 = minY0 * adjustedInvD.y + originTerm.y;
-  let minTz0 = minZ0 * adjustedInvD.z + originTerm.z;
-  let maxTx0 = maxX0 * adjustedInvD.x + originTerm.x;
-  let maxTy0 = maxY0 * adjustedInvD.y + originTerm.y;
-  let maxTz0 = maxZ0 * adjustedInvD.z + originTerm.z;
   let near0 = max(
-    max((min(minTx0, maxTx0) - vec4f(padding.x)), (min(minTy0, maxTy0) - vec4f(padding.y))),
-    (min(minTz0, maxTz0) - vec4f(padding.z))
+    max(
+      unpackCwbvhBytes(nearX.x) * adjustedInvD.x + originTerm.x - vec4f(padding.x),
+      unpackCwbvhBytes(nearY.x) * adjustedInvD.y + originTerm.y - vec4f(padding.y)
+    ),
+    unpackCwbvhBytes(nearZ.x) * adjustedInvD.z + originTerm.z - vec4f(padding.z)
   );
   let far0 = min(
-    min((max(minTx0, maxTx0) + vec4f(padding.x)), (max(minTy0, maxTy0) + vec4f(padding.y))),
-    (max(minTz0, maxTz0) + vec4f(padding.z))
+    min(
+      unpackCwbvhBytes(farX.x) * adjustedInvD.x + originTerm.x + vec4f(padding.x),
+      unpackCwbvhBytes(farY.x) * adjustedInvD.y + originTerm.y + vec4f(padding.y)
+    ),
+    unpackCwbvhBytes(farZ.x) * adjustedInvD.z + originTerm.z + vec4f(padding.z)
   );
-
-  let minTx1 = minX1 * adjustedInvD.x + originTerm.x;
-  let minTy1 = minY1 * adjustedInvD.y + originTerm.y;
-  let minTz1 = minZ1 * adjustedInvD.z + originTerm.z;
-  let maxTx1 = maxX1 * adjustedInvD.x + originTerm.x;
-  let maxTy1 = maxY1 * adjustedInvD.y + originTerm.y;
-  let maxTz1 = maxZ1 * adjustedInvD.z + originTerm.z;
   let near1 = max(
-    max((min(minTx1, maxTx1) - vec4f(padding.x)), (min(minTy1, maxTy1) - vec4f(padding.y))),
-    (min(minTz1, maxTz1) - vec4f(padding.z))
+    max(
+      unpackCwbvhBytes(nearX.y) * adjustedInvD.x + originTerm.x - vec4f(padding.x),
+      unpackCwbvhBytes(nearY.y) * adjustedInvD.y + originTerm.y - vec4f(padding.y)
+    ),
+    unpackCwbvhBytes(nearZ.y) * adjustedInvD.z + originTerm.z - vec4f(padding.z)
   );
   let far1 = min(
-    min((max(minTx1, maxTx1) + vec4f(padding.x)), (max(minTy1, maxTy1) + vec4f(padding.y))),
-    (max(minTz1, maxTz1) + vec4f(padding.z))
+    min(
+      unpackCwbvhBytes(farX.y) * adjustedInvD.x + originTerm.x + vec4f(padding.x),
+      unpackCwbvhBytes(farY.y) * adjustedInvD.y + originTerm.y + vec4f(padding.y)
+    ),
+    unpackCwbvhBytes(farZ.y) * adjustedInvD.z + originTerm.z + vec4f(padding.z)
   );
 
   let hits0 = (near0 <= min(far0, vec4f(tMax))) & (far0 > vec4f(0.0));
@@ -493,26 +493,29 @@ while (tlasTop >= 0) {
               bitcast<u32>(wide1.z), bitcast<u32>(wide1.w),
               bitcast<u32>(wide2.x), bitcast<u32>(wide2.y)
             );
-            let childMinX = unpack4x8unorm(bitcast<u32>(wide2.z));
-            let childMinY = unpack4x8unorm(bitcast<u32>(wide2.w));
-            let childMinZ = unpack4x8unorm(bitcast<u32>(wide3.x));
-            let childMaxX = unpack4x8unorm(bitcast<u32>(wide3.y));
-            let childMaxY = unpack4x8unorm(bitcast<u32>(wide3.z));
-            let childMaxZ = unpack4x8unorm(bitcast<u32>(wide3.w));
-            let tx0 = (nodeMin.x + childMinX * nodeExtent.x - o.x) * invD.x;
-            let tx1 = (nodeMin.x + childMaxX * nodeExtent.x - o.x) * invD.x;
-            let ty0 = (nodeMin.y + childMinY * nodeExtent.y - o.y) * invD.y;
-            let ty1 = (nodeMin.y + childMaxY * nodeExtent.y - o.y) * invD.y;
-            let tz0 = (nodeMin.z + childMinZ * nodeExtent.z - o.z) * invD.z;
-            let tz1 = (nodeMin.z + childMaxZ * nodeExtent.z - o.z) * invD.z;
+            // Pick each axis' entry and exit planes from the ray direction
+            // instead of ordering every child's slab pair.
+            let negative = invD < vec3f(0.0);
+            let nearX = unpack4x8unorm(bitcast<u32>(select(wide2.z, wide3.y, negative.x)));
+            let farX = unpack4x8unorm(bitcast<u32>(select(wide3.y, wide2.z, negative.x)));
+            let nearY = unpack4x8unorm(bitcast<u32>(select(wide2.w, wide3.z, negative.y)));
+            let farY = unpack4x8unorm(bitcast<u32>(select(wide3.z, wide2.w, negative.y)));
+            let nearZ = unpack4x8unorm(bitcast<u32>(select(wide3.x, wide3.w, negative.z)));
+            let farZ = unpack4x8unorm(bitcast<u32>(select(wide3.w, wide3.x, negative.z)));
             let padding = depthSlabPadding(invD, o);
             let tNear = max(
-              max((min(tx0, tx1) - vec4f(padding.x)), (min(ty0, ty1) - vec4f(padding.y))),
-              (min(tz0, tz1) - vec4f(padding.z))
+              max(
+                (nodeMin.x + nearX * nodeExtent.x - o.x) * invD.x - vec4f(padding.x),
+                (nodeMin.y + nearY * nodeExtent.y - o.y) * invD.y - vec4f(padding.y)
+              ),
+              (nodeMin.z + nearZ * nodeExtent.z - o.z) * invD.z - vec4f(padding.z)
             );
             let tFar = min(
-              min((max(tx0, tx1) + vec4f(padding.x)), (max(ty0, ty1) + vec4f(padding.y))),
-              (max(tz0, tz1) + vec4f(padding.z))
+              min(
+                (nodeMin.x + farX * nodeExtent.x - o.x) * invD.x + vec4f(padding.x),
+                (nodeMin.y + farY * nodeExtent.y - o.y) * invD.y + vec4f(padding.y)
+              ),
+              (nodeMin.z + farZ * nodeExtent.z - o.z) * invD.z + vec4f(padding.z)
             );
             var distance = select(tFar, tNear, tNear > vec4f(0.0));
             distance = select(
