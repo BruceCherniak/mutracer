@@ -7,79 +7,73 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- Coat normals remain independent of base normal maps on WebGPU and WebGL 2. A material without a coat normal map keeps a smooth coat over a bumpy base; assign the same texture to both maps to perturb both layers.
+- Coat normals no longer inherit the base normal map. Assign the same texture to both maps to perturb both layers.
 
 ## 0.1.4 - 2026-10-21
 
 ### Added
 
-- Environment lighting supports intensity and rotation, including automatic synchronization from Three.js scenes.
-- Grounded skybox backgrounds support independent intensity and rotation while keeping the ground level.
-- Material textures support independent repeat, clamp-to-edge and mirrored-repeat wrapping on each axis, including Three.js conversion and viewer controls with undo/redo.
-- Material color textures support explicit sRGB or linear decoding and preserve Three.js color-space settings.
-- The viewer includes a glass shader ball sample.
+- Environment and grounded skybox intensity and rotation, synchronized from Three.js scenes.
+- Per-axis texture wrapping (repeat, clamp-to-edge, mirrored-repeat).
+- Explicit sRGB or linear decoding for color textures, preserved from Three.js.
 
 ### Fixed
 
-- Three.js conversion preserves vertex colors, back-facing materials and material data textures with half-float, Red, RG, RGB or RGBA inputs.
-- Converted equirectangular environments follow Three.js orientation and remain correct when the same texture is also used by a material.
-- Fully metallic glTF materials without a metalness map ignore specular intensity, color and maps, matching glTF behavior.
-- Spot lights use the correct smooth falloff within the inner and outer cones on WebGPU and WebGL 2.
-- Rapid material edits in the viewer remain stable while GPU denoising is active.
+- Three.js conversion keeps vertex colors, back-side materials and half-float or R/RG/RGB/RGBA data textures.
+- Converted equirectangular environments match Three.js orientation.
+- Fully metallic glTF materials without a metalness map ignore specular settings, as in glTF.
+- Spot light falloff between the inner and outer cones.
 
 ## 0.1.3 - 2026-10-19
 
 ### Changed
 
-- Installing the library no longer pulls in `webgpu-utils`.
+- `webgpu-utils` is no longer a dependency.
 
 ### Fixed
 
-- Adding untextured lights after a scene update works correctly on WebGPU and WebGL 2.
-- WebGPU shadow catchers blend seamlessly into opaque flat backgrounds at receiver edges, including with bloom and HDR output.
-- WebGPU OIDN denoising reduces colored artifacts around foreground silhouettes over shadow catchers with textured or translucent backgrounds.
+- Adding untextured lights after a scene update.
+- WebGPU shadow catcher edges over opaque flat backgrounds, and OIDN artifacts around silhouettes over shadow catchers.
 
 ## 0.1.2 - 2026-10-16
 
 ### Added
 
-- WebGPU displacement supports `displacementBias` (default `0`) for signed height offsets in mesh-local units, including conversion from Three.js materials.
+- `displacementBias` (default `0`) for signed displacement offsets on WebGPU.
 
 ### Changed
 
-- `displacementStepSize` now defaults to `0`, automatically using 1/32 of the absolute displacement height. Set `0.01` explicitly to retain the previous fixed step; smaller steps capture finer detail at a higher rendering cost.
-- Converting a Three.js material without a displacement map now uses MuTracer's default height of `0.1` instead of Three.js's inactive default of `1`. Other configured heights are preserved.
+- `displacementStepSize` defaults to `0` (1/32 of the displacement height). Set `0.01` for the previous behavior.
+- Three.js materials without a displacement map convert with MuTracer's default height `0.1` instead of `1`.
 
 ### Fixed
 
-- Editing displacement maps, image sources or height settings updates the rendered surface correctly, including meshes that share geometry.
-- Displacement remains consistent when object transforms scale the mesh, including small displacement heights.
-- WebGL 2 renders the original surface correctly when displacement settings are present; displacement requires WebGPU.
-- Clicking or holding a stationary view with Three.js controls preserves accumulated samples and completed renders.
+- Displacement updates after map, image or height edits, including shared geometry, and stays consistent under scaled transforms.
+- WebGL 2 renders the undisplaced surface when displacement settings are present.
+- Stationary clicks with Three.js controls keep accumulated samples.
 
 ## 0.1.1 - 2026-10-14
 
 ### Changed
 
-- Interactive previews adapt resolution to tracing, denoising and display latency.
+- Interactive previews adapt resolution to frame latency.
 
 ### Fixed
 
-- Denoised previews remain responsive and finish during continuous interaction, with stable transitions to the final render.
-- Three.js camera controls settle reliably and account for elapsed time when damping.
-- Animation and incremental geometry updates retain prepared BVHs.
-- Shadow catcher denoising receives auxiliary albedo and normal guides on both WebGPU and WebGL 2, reducing color artifacts.
+- Denoised previews stay responsive during interaction and transition smoothly to the final render.
+- Three.js camera damping settles reliably.
+- Animation and incremental geometry updates keep prepared BVHs.
+- Shadow catcher denoising uses albedo and normal guides.
 
 ## 0.1.0 - 2026-10-14
 
 ### Added
 
-- Progressive browser path tracing on WebGPU with a WebGL 2 fallback.
-- Area, sphere, spot/IES, directional and environment lights with multiple importance sampling.
-- OpenPBR 1.1 materials including coat, fuzz, thin film, transmission, subsurface and emission.
-- Static BLAS construction in a Worker with the TypeScript binned SAH builder or optional TinyBVH WebAssembly, selectable `bvhLayout`, and instance-transform refits.
-- OIDN denoising for final images and converging previews; bundled standard/small networks and an independent complete weights package.
-- Three.js scene conversion and retained synchronization with THREESceneSync.
+- Progressive path tracing on WebGPU with a WebGL 2 fallback.
+- Area, sphere, spot/IES, directional and environment lights with MIS.
+- OpenPBR 1.1 materials.
+- Worker-built static BVHs (TypeScript SAH or TinyBVH WebAssembly) with instance refits.
+- OIDN denoising for previews and final images.
+- Three.js scene conversion and synchronization with `THREESceneSync`.
 - Sobol, ZSobol and random sampling, deterministic offline rendering and adaptive sampling.
 - Tone mapping, color grading, bloom, shadow catchers, transparent backgrounds and depth of field.
-- API documentation, procedural examples and a viewer for exploring scenes and exporting images.
