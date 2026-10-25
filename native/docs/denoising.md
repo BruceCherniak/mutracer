@@ -25,7 +25,7 @@ Set a built-in backend with `Render::set_denoiser` / `mt_render_set_denoiser`, o
 Select `DENOISE_OIDN_WEBGPU` in Rust or `MT_DENOISE_OIDN_WEBGPU` in C as the
 backend of `set_denoiser`. It uses the rendering device and keeps inputs and
 output on the GPU. Reading `Denoised` pixels still transfers that requested
-image to the CPU. Progressive and EverySample use the same schedules as OIDN.
+image to the CPU.
 
 ```rust
 render.set_denoiser(Some(DenoiserOptions {
@@ -52,7 +52,6 @@ Matrix kernels require cooperative-matrix support; Windows requires Vulkan for
 these kernels. DX12 and devices without that support use implicit GEMM.
 A caller-owned device uses only the features enabled by its host.
 
-The native runtime and standard weights are included. Windows builds use MSVC.
 After device loss, create a new engine.
 
 ## Custom denoisers
