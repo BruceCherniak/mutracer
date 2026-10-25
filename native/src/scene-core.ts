@@ -1320,7 +1320,7 @@ export function sceneAovParameters(bytes: Uint8Array, token: number): Uint8Array
     const words=packed.words, floats=new Float32Array(words.buffer);
     floats.set(packed.frame.viewProjection);
     for(let i=0;i<packed.frame.instances.length;i++) {
-      const instance=packed.frame.instances[i],offset=36+i*24;
+      const instance=packed.frame.instances[i],offset=52+i*24;
       floats.set(instance.transform,offset+4);
       // Content revisions survive full publications and detect vertex edits.
       const mesh=state.meshes.find(mesh=>mesh.aovId===instance.object)!;

@@ -3,7 +3,8 @@ use super::*;
 use crate::denoiser_inputs as frame;
 pub use crate::denoiser_inputs::{
     CameraSnapshot as TemporalCamera, FrameMetadata as TemporalMetadata,
-    GlassCapabilities as TemporalGlassCapabilities, Guide as TemporalGuide,
+    GlassCapabilities as TemporalGlassCapabilities, GlassCapability as TemporalGlassCapability,
+    GlassKind as TemporalGlassKind, GlassMotion as TemporalGlassMotion, Guide as TemporalGuide,
     InputCapabilities as TemporalCapabilities, Projection as TemporalProjection,
     ResetReason as TemporalResetReason, Support as TemporalSupport,
 };
@@ -18,15 +19,20 @@ pub struct TemporalFrame {
     pub(crate) frame: Arc<frame::GpuFrame>,
 }
 impl TemporalFrame {
+    /// Current unjittered camera, jitter, sequence and capability declarations.
     pub fn metadata(&self) -> &TemporalMetadata {
         &self.frame.current.metadata
     }
+    /// Last accepted frame metadata; None after a reset or before acceptance.
     pub fn previous_metadata(&self) -> Option<&TemporalMetadata> {
         self.frame.previous.as_ref().map(|p| &p.metadata)
     }
+    /// Reasons the consumer must discard its temporal history. Empty when reusable.
     pub fn reset_reasons(&self) -> &[TemporalResetReason] {
         &self.frame.reset_reasons
     }
+    /// Borrowed immutable texture, top row first, with the format declared by
+    /// `TemporalGuide::format`. Unsupported guides return None.
     pub fn guide(&self, kind: TemporalGuide) -> Option<&wgpu::Texture> {
         self.frame.current.resources.guide(kind).map(|g| &g.texture)
     }
@@ -150,12 +156,12 @@ impl State {
         if let Some(previous) = self.history.previous_snapshot() {
             let old = &previous.geometry.aov_words;
             let mut topology = std::collections::HashMap::new();
-            if old.len() >= 36 {
-                for o in (36..old[16] as usize).step_by(24) {
+            if old.len() >= 52 {
+                for o in (52..old[16] as usize).step_by(24) {
                     topology.insert((old[o], old[o + 1]), (old[o + 20], old[o + 22]));
                 }
             }
-            if (36..words[16] as usize).step_by(24).any(|o| {
+            if (52..words[16] as usize).step_by(24).any(|o| {
                 topology
                     .get(&(words[o], words[o + 1]))
                     .is_some_and(|v| *v != (words[o + 20], words[o + 22]))
@@ -204,3 +210,4 @@ fn halton(mut index: u32, base: u32) -> f32 {
 }
 
 pub use crate::denoiser_inputs::FramePixelRecord as TemporalPixelRecord;
+pub use crate::denoiser_inputs::validity as temporal_validity;

@@ -6,14 +6,24 @@ use std::sync::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+/// Separate one-sample guide textures, top row first. Use the validity texture
+/// before consuming surface data; missing guides return None.
 pub enum Guide {
+    /// Linear HDR radiance, alpha 1, before display exposure.
     NoisyColor,
+    /// Oriented world shading normal xyz (not encoded), specular roughness w.
     NormalRoughness,
+    /// Directional diffuse reflectance RGB; validity is in the validity texture.
     DiffuseAlbedo,
+    /// Directional specular reflectance RGB; validity is in the validity texture.
     SpecularAlbedo,
+    /// Camera-forward distance in scene units, zero on miss.
     LinearDepth,
+    /// Previous-current unjittered input pixels, x right and y down.
     Motion,
+    /// Not currently produced; consult capabilities before requesting it.
     SpecularHitDistance,
+    /// `temporal_validity` bit flags, not an SDK-specific validity encoding.
     Validity,
 }
 impl Guide {

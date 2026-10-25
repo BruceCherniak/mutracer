@@ -35,7 +35,7 @@ fn stableMatrix(offset:u32)->mat4x4f {
 }
 fn stableIdentity(pixel:FramePixel)->vec4u {
   if(correspondence.enabled.y==0u || (pixel.identity.w&1u)==0u){return vec4u(0xffffffffu);}
-  let o=36u+pixel.identity.x*24u;
+  let o=52u+pixel.identity.x*24u;
   return vec4u(stableMetadata[o],stableMetadata[o+1u],stableMetadata[stableMetadata[16u]+u32(pixel.barycentricsFace.w)],stableMetadata[stableMetadata[17u]+pixel.identity.y]);
 }
 // Returns prev-current in unjittered input pixels. The lookup into the previous
@@ -47,7 +47,7 @@ fn cameraMotion(pixel: FramePixel, size: vec2u) -> vec3f {
     var oldPosition=position;
     var oldNormal=pixel.geometricNormal.xyz;
     if(correspondence.enabled.y!=0u){
-      let offset=36u+pixel.identity.x*24u;
+      let offset=52u+pixel.identity.x*24u;
       if(stableMetadata[offset+2u]==0u){return vec3f(0.0);}
       let transform=stableMatrix(offset+4u);oldPosition=transform*position;
       let a=transform[0].xyz;let b=transform[1].xyz;let c=transform[2].xyz;

@@ -24,7 +24,7 @@ fn aov_options_validate_without_a_device() {
 fn independent_surface_aovs_preserve_beauty_and_exact_ids() {
     let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
     let engine = Engine::new(EngineOptions {
-        backend: Backend::Software,
+        backend: aov_test_backend(),
     })
     .unwrap();
     let mut descriptor = tests::lit_scene();
@@ -206,7 +206,7 @@ impl CustomDenoiser for AovFilter {
 fn custom_filters_receive_only_declared_aovs_in_cpu_and_resident_modes() {
     let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
     let engine = Engine::new(EngineOptions {
-        backend: Backend::Software,
+        backend: aov_test_backend(),
     })
     .unwrap();
     engine.display().set_size(16, 12).unwrap();
@@ -317,7 +317,7 @@ impl CustomDenoiser for TemporalFilter {
 fn temporal_resident_frames_advance_only_after_acceptance_and_support_rigid_motion() {
     let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
     let engine = Engine::new(EngineOptions {
-        backend: Backend::Software,
+        backend: aov_test_backend(),
     })
     .unwrap();
     let mut scene = tests::lit_scene();
@@ -401,7 +401,7 @@ impl CustomDenoiser for RejectTemporal {
 fn temporal_rejection_resets_the_next_frame_and_pinhole_limits_are_enforced() {
     let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
     let engine = Engine::new(EngineOptions {
-        backend: Backend::Software,
+        backend: aov_test_backend(),
     })
     .unwrap();
     let scene = tests::lit_scene();
@@ -439,4 +439,115 @@ fn temporal_rejection_resets_the_next_frame_and_pinhole_limits_are_enforced() {
     engine.update().unwrap();
     let failure = render.converge(ConvergeOptions::new(2)).unwrap_err();
     assert!(failure.message.contains("pinhole"));
+}
+
+#[test]
+#[ignore = "requires real GPU"]
+fn surface_aov_plane_matches_cross_backend_fixture_with_uint32_ids() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = Engine::new(EngineOptions {
+        backend: aov_test_backend(),
+    })
+    .unwrap();
+    let mut words: Vec<_> = tests::lit_scene()
+        .chunks_exact(4)
+        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+        .collect();
+    // Rotate the shared edge away from exact pixel centers: ties have no unique
+    // surface triangle and depend on camera matrix rounding across hosts.
+    let rotation = glam::Mat4::from_rotation_z(0.17);
+    for (i, v) in rotation.to_cols_array().iter().enumerate() {
+        words[48 + i] = v.to_bits();
+    }
+    words[5] = 1;
+    words[6] = 1;
+    words[7] = 0;
+    for (i, v) in [-10f32, 10., 0., 10., 10., 0., -10., -10., 0., 10., -10., 0.]
+        .iter()
+        .enumerate()
+    {
+        words[192 + i] = v.to_bits();
+    }
+    words[204..210].copy_from_slice(&[0, 2, 1, 2, 3, 1]);
+    words[84..89].copy_from_slice(&[
+        1f32.to_bits(),
+        1f32.to_bits(),
+        1f32.to_bits(),
+        0.4f32.to_bits(),
+        0.2f32.to_bits(),
+    ]);
+    let mut camera = Camera::default();
+    camera.far_clip = 100.;
+    camera.world_matrix[14] = 4.;
+    words[160..192].copy_from_slice(
+        &camera
+            .to_bytes()
+            .chunks_exact(4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .collect::<Vec<_>>(),
+    );
+    words[24] = words.len() as u32;
+    words.push(0xfffffffe);
+    words[25] = words.len() as u32;
+    words.push(0x800001ff);
+    words[1] = words.len() as u32;
+    let descriptor: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+    engine.display().set_size(48, 32).unwrap();
+    engine.set_scene(&descriptor).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            seed: 0,
+            aovs: 127,
+            aov_samples: 4,
+            max_samples: 4,
+            bounces: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    for kind in [
+        PixelKind::Id,
+        PixelKind::Depth,
+        PixelKind::Position,
+        PixelKind::DiffuseAlbedo,
+        PixelKind::SpecularAlbedo,
+    ] {
+        let image = render.read_pixels(kind).unwrap();
+        if kind == PixelKind::Id {
+            assert!(
+                image
+                    .id_data
+                    .as_ref()
+                    .unwrap()
+                    .chunks_exact(4)
+                    .all(|p| p[0] == 0xfffffffe && p[1] == 0 && p[2] == 0x800001ff && p[3] < 2)
+            );
+        }
+        if kind == PixelKind::Depth {
+            assert!(
+                image
+                    .data
+                    .chunks_exact(4)
+                    .all(|p| (p[0] - 4.).abs() < 1e-4 && p[3] == 1.)
+            );
+        }
+        if let Ok(directory) = std::env::var("MUTRACER_AOV_EVIDENCE") {
+            let bytes: Vec<_> = if let Some(ids) = image.id_data {
+                ids.into_iter().flat_map(u32::to_le_bytes).collect()
+            } else {
+                image.data.into_iter().flat_map(f32::to_le_bytes).collect()
+            };
+            std::fs::write(format!("{directory}/cross-native-{kind:?}.bin"), bytes).unwrap();
+        }
+    }
+}
+fn aov_test_backend() -> Backend {
+    if std::env::var_os("MUTRACER_AOV_HWRT").is_some() {
+        Backend::Hardware
+    } else {
+        Backend::Software
+    }
 }

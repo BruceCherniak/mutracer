@@ -3,8 +3,8 @@ import {Engine, Render, THREESync, fromTHREECamera} from '../../src/main.js';
 async function captureAovs() {
   const engine = new Engine({canvas: document.createElement('canvas'), backend: location.search.includes('webgl') ? 'webgl' : 'webgpu'});
   const render = new Render(engine, {width: 48, height: 32, bounces: 1});
-  const root = new THREE.Scene(), mesh = new THREE.Mesh(new THREE.PlaneGeometry(20,20), new THREE.MeshStandardMaterial({roughness: .4, metalness: .2}));
-  root.add(mesh, new THREE.AmbientLight());
+  const root = new THREE.Scene(), mesh: THREE.Mesh<THREE.BufferGeometry> = new THREE.Mesh(new THREE.PlaneGeometry(20,20), new THREE.MeshStandardMaterial({roughness: .4, metalness: .2}));
+  mesh.rotation.z=.17; root.add(mesh, new THREE.AmbientLight());
   const camera = new THREE.PerspectiveCamera(45, 1.5, .1, 100); camera.position.z = 4; camera.updateMatrixWorld();
   const sync = new THREESync(engine, {scene: root}); sync.update();
   engine.scene = sync.scene; engine.camera = fromTHREECamera(camera); engine.update();
@@ -13,7 +13,7 @@ async function captureAovs() {
     const info = await engine.init();
     engine.device?.addEventListener('uncapturederror', event => errors.push((event as GPUUncapturedErrorEvent).error.message));
     await render.converge({samples: 4}); const before = await render.readPixels('hdr');
-    const source = sync.scene.meshes[0]; source.aovId = 101; source.materials[0].aovId = 202; engine.update();
+    const source = sync.scene!.meshes[0]; source.aovId = 0xfffffffe; source.materials[0].aovId = 0x800001ff; engine.update();
     render.aovs = ['depth', 'position', 'roughness', 'id', 'motion', 'diffuseAlbedo', 'specularAlbedo'];
     await render.converge({samples: 4}); const after = await render.readPixels('hdr');
     const depth = await render.readPixels('depth'), position = await render.readPixels('position'), ids = await render.readPixels('id'), roughness = await render.readPixels('roughness');
@@ -21,7 +21,7 @@ async function captureAovs() {
     check(before.data.every((v,i) => Object.is(v, after.data[i])), 'AOV changed beauty');
     check(depth.data.every((v,i) => i%4 !== 0 || Math.abs(v-4) < .001), 'Depth mismatch');
     check(position.data.every((v,i) => i%4 !== 2 || Math.abs(v) < .001), 'Position mismatch');
-    check(ids.data.every((v,i) => i%4 === 0 ? v === 101 : i%4 === 2 ? v === 202 : i%4 === 1 ? v === 0 : v < 2), 'ID mismatch');
+    check(ids.data.every((v,i) => i%4 === 0 ? v === 0xfffffffe : i%4 === 2 ? v === 0x800001ff : i%4 === 1 ? v === 0 : v < 2), 'ID mismatch');
     check(roughness.data.every((v,i) => i%4 !== 0 || Math.abs(v-.4) < .001), 'Roughness mismatch');
     const diffuse=await render.readPixels('diffuseAlbedo'),specular=await render.readPixels('specularAlbedo');
     check(diffuse.data.every(Number.isFinite)&&specular.data.every(Number.isFinite),'Nonfinite reflectance');
@@ -68,8 +68,30 @@ async function captureAovs() {
     const unsupportedRoughness=await render.readPixels('roughness'),unsupportedDiffuse=await render.readPixels('diffuseAlbedo');
     check(unsupportedRoughness.data.every((v,i)=>i%4!==2||v===1),'Unsupported coat flag missing');
     check(unsupportedDiffuse.data.every(v=>v===0),'Unsupported reflectance must have zero validity');
+    // Two disconnected surfaces in one object must reject disoccluded history,
+    // even where perspective NDC depths differ by less than 0.001.
+    const farGeometry=new THREE.BufferGeometry();
+    farGeometry.setAttribute('position',new THREE.Float32BufferAttribute([
+      -100,-100,0,100,-100,0,100,100,0,-100,100,0,
+      -3,-20,10,3,-20,10,3,20,10,-3,20,10],3));
+    farGeometry.setIndex([0,1,2,0,2,3,4,5,6,4,6,7]);farGeometry.computeVertexNormals();
+    mesh.geometry=farGeometry;mesh.position.set(0,0,0);mesh.rotation.z=0;sync.update();engine.scene=sync.scene;
+    camera.position.set(0,0,110);camera.far=1000;camera.updateProjectionMatrix();camera.updateMatrixWorld();
+    engine.camera=fromTHREECamera(camera);engine.update();await render.converge({samples:4});
+    const farPreviousDepth=await render.readPixels('depth');
+    camera.position.x=18;camera.updateMatrixWorld();engine.camera=fromTHREECamera(camera);engine.update();await render.converge({samples:4});
+    const occlusionMotion=await render.readPixels('motion'),farDepth=await render.readPixels('depth');let disoccluded=0;
+    for(let y=0;y<32;y++)for(let x=0;x<48;x++){
+      const slope=(x+.5-24)/focal,currentFront=18+slope*100;
+      const behind=18+slope*110,oldPixel=behind*focal/110+24;
+      const oldFront=(Math.floor(oldPixel)+.5-24)*100/focal;
+      if(Math.abs(currentFront)>3 && Math.abs(oldFront)<3 && Math.abs((15.5-y)*100/focal)<18){
+        check(occlusionMotion.data[(y*48+x)*4+3]===0,`Far same-object disocclusion must be invalid at ${x},${y}; motion=${Array.from(occlusionMotion.data.slice((y*48+x)*4,(y*48+x)*4+4))}; old depth=${farPreviousDepth.data[(y*48+Math.floor(oldPixel))*4]}; current depth=${farDepth.data[(y*48+x)*4]}`);disoccluded++;
+      }
+    }
+    check(disoccluded>0,'Far occlusion fixture did not cover disocclusion');
     if (errors.length) throw new Error(errors.join('\n'));
-    return {customCalls,motion:{cameraExpected:expected,cameraValid:validCamera.length,objectValid:validObject.length},hdr: Array.from(after.data), backend: engine.backend, adapter: info.adapterName, hdrIdentical: true, depth: Array.from(depth.data.slice(0,4)), ids: Array.from(ids.data.slice(0,4)), roughness: Array.from(roughness.data.slice(0,4)), pixels: {diffuse:Array.from(diffuse.data),specular:Array.from(specular.data),id: Array.from(ids.data), depth: Array.from(depth.data), position: Array.from(position.data)}};
+    return {customCalls,disoccluded,motion:{cameraExpected:expected,cameraValid:validCamera.length,objectValid:validObject.length},hdr: Array.from(after.data), backend: engine.backend, adapter: info.adapterName, hdrIdentical: true, depth: Array.from(depth.data.slice(0,4)), ids: Array.from(ids.data.slice(0,4)), roughness: Array.from(roughness.data.slice(0,4)), pixels: {diffuse:Array.from(diffuse.data),specular:Array.from(specular.data),id: Array.from(ids.data), depth: Array.from(depth.data), position: Array.from(position.data)}};
   } finally {render.dispose(); engine.dispose(); sync.dispose();}
 }
 Object.assign(window, {captureAovs});

@@ -20,6 +20,7 @@ fn aovMatrix(offset: u32) -> mat4x4f {
     bitcast<vec4f>(vec4u(aovScene[offset+8u], aovScene[offset+9u], aovScene[offset+10u], aovScene[offset+11u])),
     bitcast<vec4f>(vec4u(aovScene[offset+12u], aovScene[offset+13u], aovScene[offset+14u], aovScene[offset+15u])));
 }
+fn aovVector(offset:u32)->vec3f {return bitcast<vec3f>(vec3u(aovScene[offset],aovScene[offset+1u],aovScene[offset+2u]));}
 fn aovSurface(rayInput: Ray, si: ptr<function, SurfaceInteraction>, material: ptr<function, OpenPbrResolvedMaterial>) -> bool {
   var ray = rayInput;
   (*si).triangleIndex = -1;
@@ -90,21 +91,22 @@ fn aovTraceCenter(@builtin(global_invocation_id) id: vec3u) {
   let ray = initCameraRay(uv);
   var si: SurfaceInteraction; var material: OpenPbrResolvedMaterial;
   if (!aovSurface(ray, &si, &material)) { return; }
-  let offset = 36u + u32(si.instanceIndex) * 24u;
+  let offset = 52u + u32(si.instanceIndex) * 24u;
   let materialOffset = aovScene[16u];
   let primitiveOffset = aovScene[17u];
   aovCenter[index].identity = vec4u(aovScene[offset], aovScene[offset+1u],
     aovScene[materialOffset + u32(si.materialIndex)], aovScene[primitiveOffset + u32(si.triangleIndex)]);
-  let clip = aovMatrix(20u) * vec4f(si.position,1.0);
-  aovCenter[index].motion.z = clip.z / clip.w;
+  aovCenter[index].motion.z = dot(si.position-aovVector(36u),aovVector(40u));
   if (aovScene[offset+2u] == 0u) { return; }
-  let oldClip = aovMatrix(0u) * aovMatrix(offset+4u) * vec4f(si.position,1.0);
+  let oldWorld = aovMatrix(offset+4u) * vec4f(si.position,1.0);
+  let oldClip = aovMatrix(0u) * oldWorld;
   if (oldClip.w <= 0.0) { return; }
   let oldNdc=oldClip.xyz/oldClip.w;
   let oldPixel=(oldNdc.xy*0.5+0.5)*vec2f(size);
   if (any(oldPixel < vec2f(0.0)) || any(oldPixel >= vec2f(size)) || abs(oldNdc.z)>1.0) { return; }
   let previous=aovPrevious[u32(oldPixel.x)+u32(oldPixel.y)*size.x];
-  if (any(previous.identity.xy != aovCenter[index].identity.xy) || abs(previous.motion.z-oldNdc.z)>0.001) { return; }
+  let oldDepth=dot(oldWorld.xyz-aovVector(44u),aovVector(48u));
+  if (any(previous.identity.xy != aovCenter[index].identity.xy) || abs(previous.motion.z-oldDepth)>max(1e-4,abs(oldDepth)*1e-3)) { return; }
   let motion=(oldPixel-(vec2f(id.xy)+0.5))*vec2f(1.0,-1.0);
   aovCenter[index].motion=vec4f(motion,aovCenter[index].motion.z,3.0);
 }

@@ -151,7 +151,8 @@ mod aov_tests;
 
 mod temporal;
 pub use temporal::{
-    TemporalCamera, TemporalCapabilities, TemporalFrame, TemporalGlassCapabilities, TemporalGuide,
+    TemporalCamera, TemporalCapabilities, TemporalFrame, TemporalGlassCapabilities,
+    TemporalGlassCapability, TemporalGlassKind, TemporalGlassMotion, TemporalGuide,
     TemporalMetadata, TemporalPixelRecord, TemporalProjection, TemporalResetReason,
-    TemporalSupport,
+    TemporalSupport, temporal_validity,
 };

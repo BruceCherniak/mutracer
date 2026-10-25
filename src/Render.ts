@@ -327,6 +327,8 @@ export default class Render {
   /** @internal */ get _presentable() { return this._complete && (!this._denoisePending || this._denoisedSamples > 0 || (this._schedule() === 'converged' && this.maxSamples > 1)); }
   /** @internal */ get _output() { if (this._disposed) throw new Error('Render is disposed.'); return this._target; }
   private _validate() {
+    aovMask(this.aovs);
+    if (!Number.isInteger(this.aovSamples) || this.aovSamples < 1) throw new Error('aovSamples must be a positive integer.');
     if (!Number.isFinite(this.maxSamples) || this.maxSamples < 1) throw new Error('maxSamples must be positive.');
     if (this.dispersionWavelengths !== 1 && this.dispersionWavelengths !== 3) throw new Error('dispersionWavelengths must be 1 or 3.');
     const adaptive = this.adaptiveResolution;
@@ -545,9 +547,10 @@ export default class Render {
       }
     });
   }
-  /** Reads native RGBA float32, top row first. Default hdr. Custom denoised output is resolved linear HDR ray color before display background/catcher composition; built-ins retain their native display-space output. Unavailable denoised output falls back to hdr. */
+  /** Reads native RGBA, top row first; id uses uint32, other kinds float32. Default hdr. AOV reads require explicit aovs enablement. Custom denoised output is resolved linear HDR ray color before display background/catcher composition; built-ins retain their native display-space output. Unavailable denoised output falls back to hdr. */
   readPixels(kind: 'id'): Promise<{width: number; height: number; data: Uint32Array}>;
   readPixels(kind?: 'hdr' | 'denoised' | 'albedo' | 'normal' | Exclude<AovKind, 'id'>): Promise<{width: number; height: number; data: Float32Array}>;
+  readPixels(kind: 'hdr' | 'denoised' | 'albedo' | 'normal' | AovKind): Promise<{width: number; height: number; data: Float32Array | Uint32Array}>;
   async readPixels(kind: 'hdr' | 'denoised' | 'albedo' | 'normal' | AovKind = 'hdr'): Promise<{width: number; height: number; data: Float32Array | Uint32Array}> {
     if (this._disposed) throw new Error('Render is disposed.');
     const target = this._target;

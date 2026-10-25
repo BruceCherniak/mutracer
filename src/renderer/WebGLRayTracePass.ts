@@ -1066,7 +1066,7 @@ class WebGLRayTracePass {
   // WebGL has uniform per-pixel counts; setSampleCount already includes offset.
   setSampleSequenceOffset(_offset: number) {}
 
-  renderAovs(state: WebGLAov, camera: Camera, width: number, height: number, samples: number, cap: number, kinds: readonly AovKind[]) {
+  renderAovs(state: WebGLAov, camera: Camera, width: number, height: number, samples: number, cap: number, kinds: readonly AovKind[], sequenceOffset = 0) {
     if (!kinds.length || !this._preparedMeshData || !this._tlas) return;
     const gl = this._renderer.gl;
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('AOV requires EXT_color_buffer_float');
@@ -1080,7 +1080,7 @@ class WebGLRayTracePass {
       const output=state.accumulation[state.samples%2], previous=state.accumulation[(state.samples+1)%2];
       this._aovPass.setUniform('aovMask',aovMask(kinds));
       this._aovPass.setUniform('aovSample',state.samples);
-      this._aovPass.setUniform('sampleCount',state.samples);
+      this._aovPass.setUniform('sampleCount',state.samples+sequenceOffset);
       this._aovPass.createPass({previousGeometry:previous.geometry,previousPosition:previous.position,previousDiffuse:previous.diffuse,previousSpecular:previous.specular},output);
       state.samples++;
     }

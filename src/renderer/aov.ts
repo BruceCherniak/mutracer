@@ -32,6 +32,7 @@ export interface AovInstanceSnapshot {
 }
 export interface AovFrameSnapshot {
   width: number; height: number; projection: string;
+  cameraEye?: Float32Array; cameraForward?: Float32Array;
   viewProjection: Float32Array; instances: readonly AovInstanceSnapshot[];
 }
 /** Per-render history; camera pose and rigid transforms may change without resetting. */
@@ -48,7 +49,7 @@ export class AovHistory {
     return old && old.topology === instance.topology && old.vertices === instance.vertices ? old : undefined;
   }
   accept(frame: AovFrameSnapshot) {
-    this.frame = {...frame, viewProjection: frame.viewProjection.slice(),
+    this.frame = {...frame, cameraEye: frame.cameraEye?.slice(), cameraForward: frame.cameraForward?.slice(), viewProjection: frame.viewProjection.slice(),
       instances: frame.instances.map(i => ({...i, transform: i.transform.slice()}))};
     this.instances.clear();
     for (const instance of this.frame.instances) this.instances.set(`${instance.object}:${instance.instance}`,instance);

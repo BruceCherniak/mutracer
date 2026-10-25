@@ -12,6 +12,7 @@ import cameraRay from './chunks/cameraRay.glsl.js';
 import rand from './chunks/rand.glsl.js';
 const surface = /* glsl */ `
 uint aovWord(int index) { ivec2 size = textureSize(aovScene,0); uvec4 v = texelFetch(aovScene, ivec2((index/4)%size.x, (index/4)/size.x),0); return v[index%4]; }
+vec3 aovVector(int offset){return vec3(uintBitsToFloat(aovWord(offset)),uintBitsToFloat(aovWord(offset+1)),uintBitsToFloat(aovWord(offset+2)));}
 mat4 aovMatrix(int offset) { mat4 m; for (int i=0;i<4;i++) for(int j=0;j<4;j++) m[i][j]=uintBitsToFloat(aovWord(offset+i*4+j)); return m; }
 Ray aovRay(vec2 uv) {
   vec4 origin = viewProjectionInv*vec4(uv*2.0-1.0,-1.0,1.0);
@@ -56,19 +57,20 @@ ${surface}
 void main() {
   ${center ? /* glsl */ `
   out_id=uvec4(0xffffffffu); out_motion=vec4(0.0);
-  Ray ray=aovRay(v_Texcoord);
+  Ray ray=aovRay((floor(gl_FragCoord.xy)+0.5)/viewportSize);
   SurfaceInteraction si; OpenPbrResolvedMaterial material;
   if(!aovSurface(ray,si,material)) return;
-  int offset=36+si.instanceIndex*24;
+  int offset=52+si.instanceIndex*24;
   out_id=uvec4(aovWord(offset),aovWord(offset+1),aovWord(int(aovWord(16))+si.materialIndex),aovWord(int(aovWord(17))+si.triangleIndex));
-  vec4 clip=aovMatrix(20)*vec4(si.position,1.0);out_motion.z=clip.z/clip.w;
+  out_motion.z=dot(si.position-aovVector(36),aovVector(40));
   if(aovWord(offset+2)==0u)return;
-  vec4 oldClip=aovMatrix(0)*aovMatrix(offset+4)*vec4(si.position,1.0);
+  vec4 oldWorld=aovMatrix(offset+4)*vec4(si.position,1.0);
+  vec4 oldClip=aovMatrix(0)*oldWorld;
   if(oldClip.w<=0.0)return;
   vec3 oldNdc=oldClip.xyz/oldClip.w;vec2 oldPixel=(oldNdc.xy*0.5+0.5)*viewportSize;
   if(any(lessThan(oldPixel,vec2(0.0)))||any(greaterThanEqual(oldPixel,viewportSize))||abs(oldNdc.z)>1.0)return;
   uvec4 identity=texelFetch(previousId,ivec2(oldPixel),0);float oldDepth=texelFetch(previousMotion,ivec2(oldPixel),0).z;
-  if(any(notEqual(identity.xy,out_id.xy))||abs(oldDepth-oldNdc.z)>0.001)return;
+  if(any(notEqual(identity.xy,out_id.xy))||abs(oldDepth-dot(oldWorld.xyz-aovVector(44),aovVector(48)))>max(1e-4,abs(oldDepth)*1e-3))return;
   out_motion=vec4((oldPixel-gl_FragCoord.xy)*vec2(1.0,-1.0),out_motion.z,3.0);
   ` : /* glsl */ `
   ivec2 coord=ivec2(gl_FragCoord.xy);
@@ -76,7 +78,7 @@ void main() {
   out_position=aovSample==0 ? vec4(0.0) : texelFetch(previousPosition,coord,0);
   out_diffuse=aovSample==0 ? vec4(0.0) : texelFetch(previousDiffuse,coord,0);
   out_specular=aovSample==0 ? vec4(0.0) : texelFetch(previousSpecular,coord,0);
-  initRandom(); pixelSampleIndex=uint(aovSample);
+  initRandom(); samplingPixel=uvec2(floor(gl_FragCoord.xy));
   rng_initialize(floor(gl_FragCoord.xy),int(pixelSampleIndex ^ sampleHash(uint(sequenceSeed))));
   Ray ray=aovRay((floor(gl_FragCoord.xy)+sample2D(CAMERA_PIXEL))/viewportSize);
   if(cameraApertureRadius>0.0) {

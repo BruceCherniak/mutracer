@@ -400,13 +400,14 @@ pub(crate) fn read_denoise_aov(gpu: &GpuDevice, aov: &api::GpuAov) -> Result<api
 pub(crate) fn reproject_metadata(current: &[u32], previous: Option<&[u32]>) -> Vec<u32> {
     let mut words = current.to_vec();
     words[..16].fill(0);
-    if let Some(old) = previous.filter(|p| p.len() >= 36 && p[18] == words[18]) {
+    if let Some(old) = previous.filter(|p| p.len() >= 52 && p[18] == words[18]) {
         words[..16].copy_from_slice(&old[20..36]);
+        words[44..52].copy_from_slice(&old[36..44]);
         let mut records = HashMap::new();
-        for offset in (36..old[16] as usize).step_by(24) {
+        for offset in (52..old[16] as usize).step_by(24) {
             records.insert((old[offset], old[offset + 1]), offset);
         }
-        for offset in (36..words[16] as usize).step_by(24) {
+        for offset in (52..words[16] as usize).step_by(24) {
             if let Some(&prior) = records.get(&(words[offset], words[offset + 1])) {
                 if words[offset + 20..offset + 23] == old[prior + 20..prior + 23] {
                     let matrix = glam::Mat4::from_cols_array(&std::array::from_fn(|i| {

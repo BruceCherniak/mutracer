@@ -204,8 +204,9 @@ impl InputCapabilities {
     }
 }
 
-/// Internal validity, converted to SDK conventions by the eventual bridge.
-pub(crate) mod validity {
+/// Bit flags in temporal validity textures and `TemporalPixelRecord::identity[3]`.
+/// These describe MuTracer surfaces and must be mapped to the consumer SDK.
+pub mod validity {
     pub const PRIMARY_HIT: u32 = 1 << 0;
     /// Primary-surface correspondence only, never optical reflection/refraction.
     pub const MOTION: u32 = 1 << 1;

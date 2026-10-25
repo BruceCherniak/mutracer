@@ -1,29 +1,45 @@
 //! Initial real 1-spp producer. Directional reflectance uses an opt-in numerical
-//! baseline; motion and optical branch records are not yet advertised.
+//! baseline; optical branch records remain unverified.
 use super::*;
 use crate::{CachedPipeline, GpuScene, Result, compile_pipeline, layout, storage_layout};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
+/// Packed 240-byte primary-surface record, bottom row first. Read using byte
+/// copies or an aligned cast; never write the borrowed GPU buffer. Identity uses
+/// publication-local indices; use TemporalFrame::stable_ids for stable identity.
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FramePixelRecord {
+    /// Linear HDR radiance, alpha 1.
     pub noisy_color: [f32; 4],
+    /// Oriented world shading normal xyz, specular roughness w.
     pub normal_roughness: [f32; 4],
+    /// World position xyz, linear camera-forward depth w.
     pub position_depth: [f32; 4],
+    /// Original unflipped geometric normal xyz, zero w.
     pub geometric_normal: [f32; 4],
     /// Resolved base color; not a directional diffuse reflectance.
     pub base_color_metalness: [f32; 4],
+    /// Transmission color RGB, transmission weight w.
     pub transmission: [f32; 4],
+    /// Roughness xy, incident IOR z and transmitted IOR w.
     pub roughness_ior: [f32; 4],
+    /// Medium extinction RGB and medium type w.
     pub absorption: [f32; 4],
     /// Publication-local instance/primitive indices, thin-wall flag, validity.
     pub identity: [u32; 4],
+    /// Barycentrics xy, front-face boolean z, resolved material index w.
     pub barycentrics_face: [f32; 4],
+    /// Radiance before per-sample clamping, alpha 1.
     pub unclamped_radiance: [f32; 4],
+    /// Final RNG words for reproducibility, opaque to consumers.
     pub rng_state: [u32; 4],
+    /// Counter, bounce, sample index and seed.
     pub rng_dimensions: [u32; 4],
+    /// Directional reflectance RGB, zero w; REFLECTANCE validity is required.
     pub diffuse_albedo: [f32; 4],
+    /// Directional reflectance RGB, zero w; REFLECTANCE validity is required.
     pub specular_albedo: [f32; 4],
 }
 
@@ -300,7 +316,7 @@ impl FrameProducer {
                 previous.map(|p| p.geometry.aov_words.as_slice()),
             )
         } else {
-            vec![0; 36]
+            vec![0; 52]
         };
         let metadata_bytes: Vec<_> = metadata_words
             .iter()

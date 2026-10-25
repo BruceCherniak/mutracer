@@ -330,7 +330,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     }
 
     if (sampleCount !== frameSampleCount) {
-      if(execution?.aovs?.length) rayTracePass.renderAovs(aov,camera,renderWidth,renderHeight,sampleCount,execution.aovSamples ?? 16,execution.aovs);
+      if(execution?.aovs?.length) rayTracePass.renderAovs(aov,camera,renderWidth,renderHeight,sampleCount,execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset);
       sampleRenderedCallback(
         sampleCount,
         frameSampleCount === 0,
@@ -551,7 +551,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     async readAov(kind) {
       if(!execution?.aovs?.includes(kind) || !aovCamera || sampleCount<1) throw new Error('AOV output is not ready');
       rayTracePass.setCamera(aovCamera);
-      rayTracePass.renderAovs(aov,aovCamera,renderWidth,renderHeight,sampleCount,execution.aovSamples ?? 16,execution.aovs);
+      rayTracePass.renderAovs(aov,aovCamera,renderWidth,renderHeight,sampleCount,execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset);
       return aov.read(kind);
     },
     async readOutput(kind) {

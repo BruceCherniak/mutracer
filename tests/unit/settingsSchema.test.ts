@@ -6,6 +6,7 @@ import { bvhConfig, engineSchema, workerCount } from '../../src/settings/engine'
 import { renderFixture } from '../helpers/renderPipeline';
 
 const renderChanges: Record<string, unknown> = {
+  aovs: ['depth'], aovSamples: 8,
   bounces: 5, clamping: 2, bevel: false, bevelSamples: 12, dispersionWavelengths: 1,
   directLightCandidates: 8, alphaBlendStrategy: 'deterministic-source-over', transmissiveOutputAlphaMin: .3,
   samplingPattern: 'random', timeBudgetMs: 50, maxTiles: 2, allowMultipleSamplesPerFrame: true,
