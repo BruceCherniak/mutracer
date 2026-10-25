@@ -1,12 +1,14 @@
 import { create } from 'zustand';
 import { DEFAULT_JNLM_OPTIONS } from '@meimu/mutracer';
-import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, DisplayChannel } from '@meimu/mutracer';
+import type { BVHBuilder, OIDNModel, SamplingPattern, ToneMapping, DisplayChannel, AovKind, AovIdComponent } from '@meimu/mutracer';
 import type { TextureSampling } from './engine/modelCache';
 import type { MaterialValues, TextureKey } from './engine/materialParams';
 import { STUDIO_PRESETS } from './engine/studio';
 import { DEFAULT_SKY_TIME, SKY_TIME_RANGE } from './engine/sky';
 import { historyLabels, onHistoryChange, pushHistory, type HistoryItem } from './history';
 import { readURLSettings, URL_SETTINGS_FIELDS } from './urlSettings';
+
+export const VIEWER_AOVS: AovKind[] = ['depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion'];
 
 export type EnvResolution = '1k' | '2k' | '4k';
 
@@ -75,6 +77,11 @@ export interface Settings {
   bloomRadius: number;
   vignette: number;
   output: DisplayChannel;
+  aovsEnabled: boolean;
+  aovDepthFar: number;
+  aovPositionScale: number;
+  aovMotionScale: number;
+  aovIdComponent: AovIdComponent;
   previewEnabled: boolean;
   previewMaxResolutionScale: number;
 
@@ -143,6 +150,11 @@ export const DEFAULT_SETTINGS: Settings = {
   bloomRadius: 0.6,
   vignette: 0,
   output: 'final',
+  aovsEnabled: false,
+  aovDepthFar: 10,
+  aovPositionScale: 1,
+  aovMotionScale: 16,
+  aovIdComponent: 'object',
   previewEnabled: true,
   previewMaxResolutionScale: 0.5,
   cameraIndex: -1,

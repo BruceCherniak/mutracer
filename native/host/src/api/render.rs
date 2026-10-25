@@ -649,6 +649,30 @@ pub(super) struct RenderState {
     adaptive: Adaptive,
 }
 impl RenderState {
+    pub(super) fn visualize_aov(
+        &mut self,
+        kind: PixelKind,
+        options: &super::AovDisplayOptions,
+        hdr: bool,
+    ) -> Result<wgpu::Texture> {
+        if self.settings.aovs & kind.aov_mask() == 0 {
+            return Err(error(
+                Status::InvalidState,
+                "AOV is not enabled on the selected render",
+            ));
+        }
+        if self.capture_key != self.published || self.needs_capture {
+            return Err(error(
+                Status::InvalidState,
+                "AOV for the captured image is not ready",
+            ));
+        }
+        self.aov
+            .as_mut()
+            .ok_or_else(|| error(Status::InvalidState, "AOV output is not ready"))?
+            .visualize(kind.aov_mask().trailing_zeros(), options, hdr)
+            .map_err(|e| error(Status::Error, e.to_string()))
+    }
     pub(super) fn diagnostics(&self, id: u64, scene: u64, camera: u64) -> super::RenderDiagnostics {
         super::RenderDiagnostics {
             id,

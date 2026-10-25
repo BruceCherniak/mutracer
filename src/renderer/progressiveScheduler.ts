@@ -15,9 +15,11 @@ export function loopImageState(render: Render, display: Display): string {
     render.samplingPattern, render.directLightCandidates, render.bevel, render.bevelSamples,
     render.dispersionWavelengths, render.alphaBlendStrategy, render.transmissiveOutputAlphaMin,
     render.resolutionScale, render.adaptiveResolution, render.denoiser, render.denoising,
+    render.aovs, render.aovSamples,
     display.canvas.width, display.canvas.height, display.toneMapping, display.toneMappingExposure,
     display.contrast, display.saturation, display.temperature, display.tint, display.vignette,
     display.bloomIntensity, display.bloomThreshold, display.bloomRadius, display.hdrOutputEnabled,
     display.channel, display.shadowCatcherColor, display.shadowCatcherAlpha,
+    display.aovDepthRange, display.aovPositionScale, display.aovMotionScale, display.aovIdComponent,
   ]);
 }

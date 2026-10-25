@@ -44,7 +44,8 @@ export type DisplayChannel =
   | 'shadow'
   | 'albedo'
   | 'normal'
-  | 'shadowCatcher';
+  | 'shadowCatcher'
+  | import('./aov.js').AovKind;
 
 /** Primary-ray policy for glTF BLEND materials. */
 export type AlphaBlendStrategy =
@@ -256,7 +257,9 @@ export interface RenderPasses {
     cb: (sampleCount: number, isFirstFrame: boolean, frameTime: number) => void
   ): void;
   setOutput(output: DisplayChannel): boolean;
+  setAovDisplayOptions?(options: import('./aovDisplay.js').AovDisplayOptions): void;
   dispose(): void;
+  aovReady?(kind: import('./aov.js').AovKind): boolean;
   readAov?(kind: import('./aov.js').AovKind): Promise<{width: number; height: number; data: Float32Array | Uint32Array}>;
   readOutput(kind: 'hdr' | 'denoised' | 'albedo' | 'normal'): Promise<{
     data: Float32Array;

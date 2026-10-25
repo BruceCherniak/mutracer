@@ -1,8 +1,13 @@
+import displayShader from './glsl/aovDisplay.frag.js';
+import {WebGLFullQuadPass} from './WebGLFullQuadPass.js';
+import {AOV_KINDS} from './aov.js';
+import {AOV_ID_COMPONENTS, validateAovDisplay, type AovDisplayOptions} from './aovDisplay.js';
 import {AovHistory, type AovKind, type AovFrameSnapshot} from './aov.js';
 import {Texture2D, FrameBuffer, type WebGLDevice} from './webgl.js';
 import {readRgbaPixels} from './WebGLReadback.js';
 const names = ['geometry','position','diffuse','specular'] as const;
 export class WebGLAov {
+  private displayPass?: WebGLFullQuadPass<string,'color'>;
   readonly history=new AovHistory();
   width=0; height=0; samples=0; centerReady=false; frame?: AovFrameSnapshot;
   readonly accumulation: Record<typeof names[number],Texture2D>[]=[];
@@ -23,6 +28,13 @@ export class WebGLAov {
     const width=Math.min(1024,Math.max(1,Math.ceil(words.length/4))),height=Math.ceil(words.length/(width*4));
     const data=new Uint32Array(width*height*4);data.set(words);
     this.scene.source={data,width,height};
+  }
+  visualize(kind:AovKind,options:AovDisplayOptions):Texture2D {
+    if(!this.samples || !this.center)throw new Error('AOV output is not ready');
+    validateAovDisplay(options);
+    this.displayPass??=new WebGLFullQuadPass('AOV display',this.renderer,{shader:displayShader,outputs:['color']});
+    const pass=this.displayPass;pass.setSize(this.width,this.height);pass.setUniforms({kind:AOV_KINDS.indexOf(kind),samples:this.samples,mapping:[...options.depthRange,options.positionScale,options.motionScale],idComponent:AOV_ID_COMPONENTS.indexOf(options.idComponent)});
+    pass.createPass({...this.accumulation[(this.samples-1)%2],identity:this.center.id,motion:this.center.motion});return pass.getOutput('color');
   }
   async read(kind:AovKind){
     const gl=this.renderer.gl, framebuffer=new FrameBuffer(), width=this.width,height=this.height;
@@ -49,6 +61,6 @@ export class WebGLAov {
       return {width,height,data};
     }finally{framebuffer.dispose(this.renderer);}
   }
-  get bytes(){return this.width*this.height*(2*64+64)+this.scene.width*this.scene.height*16;}
-  dispose(){const gl=this.renderer.gl;for(const set of this.accumulation)for(const texture of Object.values(set))texture.dispose(gl);this.accumulation.length=0;this.center?.id.dispose(gl);this.center?.motion.dispose(gl);this.center=undefined;this.previousCenter?.id.dispose(gl);this.previousCenter?.motion.dispose(gl);this.previousCenter=undefined;this.scene.dispose(gl);}
+  get bytes(){return this.width*this.height*(2*64+64+(this.displayPass?4:0))+this.scene.width*this.scene.height*16;}
+  dispose(){this.displayPass?.dispose();this.displayPass=undefined;const gl=this.renderer.gl;for(const set of this.accumulation)for(const texture of Object.values(set))texture.dispose(gl);this.accumulation.length=0;this.center?.id.dispose(gl);this.center?.motion.dispose(gl);this.center=undefined;this.previousCenter?.id.dispose(gl);this.previousCenter?.motion.dispose(gl);this.previousCenter=undefined;this.scene.dispose(gl);}
 }

@@ -3,12 +3,13 @@
 An engine's Display (`engine.display()` / `mt_engine_display`) composes a
 render's image with display settings, presents it, and exports RGBA8 or PNG
 (`mt_display_read_pixels`). Settings, defaults and ranges are documented on
-`DisplaySettings` / `mt_display_settings`.
+`DisplaySettings` / `mt_display_settings` and
+`AovDisplayOptions` / `mt_display_aov_options`.
 
 ## Composition
 
-Display settings never restart accumulation or change HDR readback. Each
-presentation or export composes the denoised or raw color with tone mapping,
+Display settings never restart accumulation or change HDR readback. The final
+channel composes denoised or raw color with tone mapping,
 grading and effects (vignette, bloom, shadow catchers), then runs
 [custom passes](#custom-display-passes-rust), then scales to the display size.
 
@@ -23,6 +24,39 @@ grading and effects (vignette, bloom, shadow catchers), then runs
 - Memory per render pixel, kept until the render is resized or disposed: bloom
   about 51 bytes, shadow catcher scenes 48 bytes. Very small images cost more
   per pixel.
+
+## AOV channels
+
+Enable the desired [surface outputs](denoising.md#surface-outputs) on the render,
+then select the matching `Channel` / `MT_CHANNEL_*` value. A missing render bit
+reports `InvalidState` / `MT_ERROR_INVALID_STATE` on composition, even when a
+custom denoiser requests the same output. An enabled output awaiting sampling
+keeps the current presentation; export reports `InvalidState` until it is ready.
+Selection never enables tracing.
+
+```rust
+let mut settings = engine.display().settings();
+settings.channel = Channel::Depth;
+settings.aov.depth_range = [0., 20.];
+engine.display().set_settings(settings)?;
+engine.display().present(&render)?;
+```
+
+In C, initialize `mt_display_aov_options` with
+`mt_display_aov_options_default`, edit it and call `mt_display_set_aov_options`.
+The mapping and ordinary display settings are independent; updating either
+preserves the other.
+
+AOV images bypass tone mapping, grading, effects and denoising; custom display
+passes still run. Channel and mapping changes retain raw pixels, beauty samples
+and completed denoising. PNG and RGBA8 export use the same visualization.
+Background and invalid reflectance or motion are transparent; accumulated
+channels use their coverage as alpha. Normal and albedo retain their existing guide meaning.
+The declaration comments describe each channel's color mapping.
+
+Visualization retains 4 GPU bytes per render pixel for SDR and another 8 when
+HDR is used, until the AOV resources are resized or disposed. HDR windows show
+the same mapped colors in linear light, within SDR white.
 
 ## GPU images (Rust)
 

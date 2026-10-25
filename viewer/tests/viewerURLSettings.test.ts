@@ -34,6 +34,12 @@ describe('viewer URL settings', () => {
     expect(useViewer.getState().settings.hdrOutputEnabled).toBe(false);
   });
 
+  it('preserves explicit AOV opt-in and mapping settings in links', () => {
+    expect(readURLSettings('?aovsEnabled=true&output=depth&aovDepthFar=20&aovIdComponent=primitive', ''))
+      .toEqual({aovsEnabled: true, output: 'depth', aovDepthFar: 20, aovIdComponent: 'primitive'});
+    expect(readURLSettings('?aovPositionScale=0&aovMotionScale=Infinity&aovIdComponent=bad', '')).toEqual({});
+  });
+
   it('gives valid query values priority over the hash', () => {
     expect(readURLSettings('?hdrOutputEnabled=1&toneMapping=aces', '#hdrOutputEnabled=false&toneMapping=linear'))
       .toEqual({ hdrOutputEnabled: true, toneMapping: 'aces' });

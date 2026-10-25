@@ -1,3 +1,5 @@
+import {aovDisplayShader} from './wgsl/aovDisplay.wgsl.js';
+import {packAovDisplay, type AovDisplayOptions} from './aovDisplay.js';
 import resolveWGSL from './wgsl/aovResolve.wgsl.js';
 import {AovHistory, AOV_KINDS, AOV_LAYOUT, type AovKind, type AovFrameSnapshot} from './aov.js';
 /** One target's optional AOV allocations and accepted frame history. */
@@ -6,6 +8,8 @@ export class WGPUAov {
   width = 0; height = 0; samples = 0; centerReady = false;
   accumulation?: GPUBuffer; center?: GPUBuffer; previousCenter?: GPUBuffer; scene?: GPUBuffer;
   frame?: AovFrameSnapshot;
+  private displayPipeline?: GPUComputePipeline;
+  private displayTexture?: GPUTexture;
   private resolvePipeline?: GPUComputePipeline;
   constructor(readonly device: GPUDevice) {}
   reset() {
@@ -30,7 +34,7 @@ export class WGPUAov {
     }
     this.device.queue.writeBuffer(this.scene, 0, words);
   }
-  get bytes() { return (this.accumulation?.size ?? 0) + (this.center?.size ?? 0) + (this.previousCenter?.size ?? 0) + (this.scene?.size ?? 0); }
+  get bytes() { return (this.accumulation?.size ?? 0) + (this.center?.size ?? 0) + (this.previousCenter?.size ?? 0) + (this.scene?.size ?? 0) + (this.displayTexture ? this.width*this.height*8 : 0); }
   snapshot(kinds: readonly AovKind[]): Partial<Record<AovKind,GPUBuffer>> {
     if(!this.accumulation || !this.center || !this.samples) throw new Error('AOV output is not ready');
     const device=this.device;
@@ -45,6 +49,20 @@ export class WGPUAov {
       const encoder=device.createCommandEncoder(),pass=encoder.beginComputePass();pass.setPipeline(this.resolvePipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width*this.height/64));pass.end();device.queue.submit([encoder.finish()]);parameters.destroy();buffers[kind]=output;
     }
     return buffers;
+  }
+  visualize(kind: AovKind, options: AovDisplayOptions, linear: boolean): GPUTexture {
+    if(!this.accumulation || !this.center || !this.samples) throw new Error('AOV output is not ready');
+    const device=this.device;
+    this.displayPipeline ??= device.createComputePipeline({label:'AOV visualization',layout:'auto',compute:{module:device.createShaderModule({code:aovDisplayShader('rgba16float')}),entryPoint:'main'}});
+    if(!this.displayTexture || this.displayTexture.width!==this.width || this.displayTexture.height!==this.height){
+      this.displayTexture?.destroy();
+      this.displayTexture=device.createTexture({label:'AOV display image',size:[this.width,this.height],format:'rgba16float',usage:GPUTextureUsage.STORAGE_BINDING|GPUTextureUsage.TEXTURE_BINDING|GPUTextureUsage.COPY_SRC});
+    }
+    const words=packAovDisplay(this.width,this.height,this.samples,kind,options,linear);
+    const parameters=device.createBuffer({size:48,usage:GPUBufferUsage.UNIFORM,mappedAtCreation:true});new Uint32Array(parameters.getMappedRange()).set(words);parameters.unmap();
+    const group=device.createBindGroup({layout:this.displayPipeline.getBindGroupLayout(0),entries:[{binding:0,resource:{buffer:this.accumulation}},{binding:1,resource:{buffer:this.center}},{binding:2,resource:this.displayTexture.createView()},{binding:3,resource:{buffer:parameters}}]});
+    const encoder=device.createCommandEncoder(),pass=encoder.beginComputePass();pass.setPipeline(this.displayPipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width/8),Math.ceil(this.height/8));pass.end();device.queue.submit([encoder.finish()]);parameters.destroy();
+    return this.displayTexture;
   }
   async read(kind: AovKind) {
     const center = kind === 'id' || kind === 'motion';
@@ -75,9 +93,10 @@ export class WGPUAov {
     } finally { if (staging.mapState === 'mapped') staging.unmap(); staging.destroy(); }
   }
   dispose() {
+    const texture=this.displayTexture;this.displayTexture=undefined;
     const buffers=[this.accumulation,this.center,this.scene,this.previousCenter];
     this.accumulation=this.center=this.scene=this.previousCenter=undefined;
-    void this.device.queue.onSubmittedWorkDone().catch(()=>undefined).then(()=>buffers.forEach(buffer=>buffer?.destroy()));
+    void this.device.queue.onSubmittedWorkDone().catch(()=>undefined).then(()=>{texture?.destroy();buffers.forEach(buffer=>buffer?.destroy());});
   }
 }
 export const isAovKind = (kind: string): kind is AovKind => (AOV_KINDS as readonly string[]).includes(kind);

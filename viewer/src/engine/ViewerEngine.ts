@@ -5,7 +5,7 @@ import {
   THREESync, type DisplaySettings,
   fromTHREECamera,
 } from '@meimu/mutracer';
-import { DEFAULT_SETTINGS, autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
+import { VIEWER_AOVS, DEFAULT_SETTINGS, autoGroundedSkybox, resetSettings, setSettings, useViewer, showToast, writeHash, type RenderPhase, type Settings, type TreeNode } from '../store';
 import { Environment, loadHDR, parseHDR, type EquirectData } from './environment';
 import { ENVIRONMENT_PRESETS, MODEL_PRESETS, environmentUrl } from './presets';
 import {
@@ -633,6 +633,7 @@ export class ViewerEngine {
     const changed = (key: keyof Settings) => !prev || prev[key] !== s[key];
     const r = this.final, display = this.engine.display;
     this.engine.bvhBuilder = s.bvhBuilder;
+    r.aovs = this.preview.aovs = s.aovsEnabled ? VIEWER_AOVS : [];
     r.maxSamples = s.maxSamples; r.bounces = s.bounces; r.resolutionScale = s.resolutionScale;
     r.samplingPattern = s.samplingPattern; r.clamping = s.clamping;
     this.preview.bounces = Math.min(2, s.bounces);
@@ -647,7 +648,9 @@ export class ViewerEngine {
       contrast: s.contrast, saturation: s.saturation,
       temperature: s.temperature, tint: s.tint,
       bloomIntensity: s.bloomIntensity, bloomThreshold: s.bloomThreshold, bloomRadius: s.bloomRadius,
-      vignette: s.vignette, channel: s.output, shadowCatcherAlpha: s.groundOpacity,
+      vignette: s.vignette, channel: !s.aovsEnabled && VIEWER_AOVS.includes(s.output as typeof VIEWER_AOVS[number]) ? 'final' : s.output, shadowCatcherAlpha: s.groundOpacity,
+      aovDepthRange: [0, s.aovDepthFar], aovPositionScale: s.aovPositionScale,
+      aovMotionScale: s.aovMotionScale, aovIdComponent: s.aovIdComponent,
     };
     Object.assign(display, displaySettings);
     this.ground.visible = s.groundShadow;
@@ -1385,6 +1388,7 @@ export class ViewerEngine {
       if (options.transparent && background !== 'transparent') { this.settings = {...this.settings, background: 'transparent'}; this.applyBackground(); }
       this.sync.update(); this.viewSync.update(); this.engine.update();
       image = new Render(this.engine, {width: options.width, height: options.height,
+        aovs: this.final.aovs, aovSamples: this.final.aovSamples,
         maxSamples: options.samples, bounces: this.final.bounces, clamping: this.final.clamping,
         samplingPattern: this.final.samplingPattern, bevel: this.final.bevel, bevelSamples: this.final.bevelSamples,
         dispersionWavelengths: this.final.dispersionWavelengths, directLightCandidates: this.final.directLightCandidates,

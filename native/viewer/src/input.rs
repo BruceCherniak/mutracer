@@ -6,6 +6,9 @@ pub struct ViewportDrag {
     click: Option<Pos2>,
 }
 impl ViewportDrag {
+    pub fn active(&self) -> bool {
+        self.active.is_some()
+    }
     pub fn take_click(&mut self) -> Option<Pos2> {
         self.click.take()
     }

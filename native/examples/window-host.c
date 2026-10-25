@@ -49,6 +49,9 @@ static void present(mt_display display, mt_render render) {
     OK(mt_display_surface_info(display,&info,message,sizeof message));
     if (info.status==MT_SURFACE_PRESENTED) { CHECK(shown); return; }
   }
+  mt_display_settings settings; OK(mt_display_settings_default(&settings));
+  OK(mt_display_get_settings(display,&settings,message,sizeof message));
+  fprintf(stderr,"window pending: channel=%u shown=%u status=%u\n",settings.channel,shown,info.status);
   CHECK(0 && "window never presented");
 }
 int main(int argc, char **argv) {
@@ -64,7 +67,7 @@ int main(int argc, char **argv) {
   OK(mt_engine_create_for_window(&options,&native,&engine,message,sizeof message));
   OK(mt_engine_display(engine,&display,message,sizeof message));
   OK(mt_engine_set_callback(engine,event,NULL,message,sizeof message));
-  mt_render_options render_options; OK(mt_render_options_default(&render_options)); render_options.max_samples=2;
+  mt_render_options render_options; OK(mt_render_options_default(&render_options)); render_options.max_samples=2; render_options.aovs=127;
   OK(mt_render_create(engine,&render_options,&render,message,sizeof message));
   uint64_t handles[2]={engine,render};
   pthread_t thread; CHECK(pthread_create(&thread,NULL,wrong_thread,handles)==0); CHECK(pthread_join(thread,NULL)==0);
@@ -96,6 +99,30 @@ int main(int argc, char **argv) {
   OK(mt_display_set_settings(display,&settings,message,sizeof message)); present(display,render);
   OK(mt_display_surface_info(display,&info,message,sizeof message)); CHECK(info.hdr_requested);
   CHECK(info.hdr_active || info.hdr_unavailable_reason[0]);
+  mt_display_aov_options mapping; OK(mt_display_aov_options_default(&mapping));
+  CHECK(sizeof(settings)==68 && sizeof(mapping)==24);
+  mapping.depth_range[1]=20; mapping.id_component=2;
+  OK(mt_display_set_aov_options(display,&mapping,message,sizeof message));
+  /* The existing settings call must preserve the separate mapping record. */
+  OK(mt_display_set_settings(display,&settings,message,sizeof message));
+  mt_display_aov_options actual; OK(mt_display_aov_options_default(&actual));
+  OK(mt_display_get_aov_options(display,&actual,message,sizeof message));
+  CHECK(actual.depth_range[1]==20 && actual.id_component==2);
+  mapping.motion_scale=0;
+  CHECK(mt_display_set_aov_options(display,&mapping,message,sizeof message)==MT_ERROR_INVALID_ARGUMENT);
+  OK(mt_display_get_aov_options(display,&actual,message,sizeof message));
+  CHECK(actual.motion_scale==16 && actual.depth_range[1]==20);
+  actual.struct_size=0; actual.motion_scale=42;
+  CHECK(mt_display_get_aov_options(display,&actual,message,sizeof message)==MT_ERROR_INVALID_ARGUMENT);
+  CHECK(actual.motion_scale==42);
+  int calls_before_channels=atomic_load(&calls);
+  for (uint32_t channel=MT_CHANNEL_DEPTH;channel<=MT_CHANNEL_MOTION;channel++) {
+    settings.channel=channel;
+    OK(mt_display_set_settings(display,&settings,message,sizeof message)); present(display,render);
+  }
+  CHECK(atomic_load(&calls)==calls_before_channels);
+  settings.channel=MT_CHANNEL_FINAL;
+  OK(mt_display_set_settings(display,&settings,message,sizeof message));
   OK(mt_display_resize_window(display,96,64,message,sizeof message));
   OK(mt_engine_clear_scene(engine,message,sizeof message)); OK(mt_engine_update(engine,NULL,message,sizeof message));
   uint32_t status=0;
@@ -106,6 +133,6 @@ int main(int argc, char **argv) {
   OK(mt_render_converge(render,&converge,NULL,message,sizeof message)); present(display,render);
   OK(mt_render_set_custom_denoiser(render,NULL,message,sizeof message)); for (int i=0;i<1000 && !atomic_load(&releases);i++) { mt_example_window_pump(); } CHECK(atomic_load(&releases)==1);
   OK(mt_engine_destroy(engine,message,sizeof message)); mt_example_window_destroy(window); free(scene);
-  puts("PASS C window presentation, suspension, resize, detach/reattach, clear/reload, diagnostics and custom denoising");
+  puts("PASS C window presentation, suspension, resize, detach/reattach, clear/reload, diagnostics, seven AOV channels/mapping records and custom denoising");
   return 0;
 }

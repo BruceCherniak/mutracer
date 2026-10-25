@@ -1,3 +1,4 @@
+import {displayAovKind, DEFAULT_AOV_DISPLAY, type AovDisplayOptions} from './aovDisplay.js';
 import {WGPUAov} from './WGPUAov.js';
 import {DisplayPostProcess} from './DisplayPostProcess.js';
 import {customDenoiseLayersMain, customDenoiseCoverageMain} from './wgsl/customDenoise.wgsl.js';
@@ -200,6 +201,7 @@ function makeWGPUAccumulationTarget(
   let hdrOutputRequested = false;
   let hdrOutputActive = false;
   let output: DisplayChannel = 'final';
+  let aovDisplayOptions: AovDisplayOptions = DEFAULT_AOV_DISPLAY;
   let shadowCatcherColor = vec3.create();
   let shadowCatcherAlpha = 1;
 
@@ -745,6 +747,11 @@ output.color = color;
       (denoiseValid && denoisedBuffer ? (denoisedHDR ? composePass.getOutput('color') : denoisedDisplayLinear
         ? compositeDenoiseDisplayPass.getOutput('color') : denoisedTexture) : undefined) ||
       composePass.getOutput('color');
+    const aovKind = displayAovKind(output);
+    if (aovKind) {
+      if (!execution?.aovs?.includes(aovKind)) throw new Error(`AOV ${aovKind} is not enabled`);
+      displayTexture = aov.visualize(aovKind, aovDisplayOptions, hdrOutputActive);
+    }
     const activeHDRPeakMeter = hdrOutputActive
       ? (hdrPeakMeter ??= scratch.get('hdrPeak', () => new WGPUHDRPeakMeter(device)))
       : undefined;
@@ -912,13 +919,14 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       return false;
     }
 
+    if (sampleCount !== frameSampleCount && execution?.aovs?.length) {
+      rayTracePass.renderAovs(aov, camera, sampleCount, execution.aovSamples ?? 16, execution.aovs);
+    }
     if (sampleCount !== frameSampleCount && (!deferPostProcess || sampleCount >= renderSampleTarget)) {
       const encoder = device.createCommandEncoder();
       drawPostProcess(encoder, sampleCount >= renderSampleTarget, true);
     }
     if (sampleCount !== frameSampleCount) {
-      if (execution?.aovs?.length) rayTracePass.renderAovs(aov, camera, sampleCount, execution.aovSamples ?? 16, execution.aovs);
-
       sampleRenderedCallback(
         sampleCount,
         frameSampleCount === 0,
@@ -1550,9 +1558,10 @@ width: renderWidth, height: renderHeight,
       const bytesPerRow = Math.ceil(width * 16 / 256) * 256;
       const buffer = device.createBuffer({ size: bytesPerRow * height, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
       const encoder = device.createCommandEncoder();
-      readbackPass.setSize(width, height);
-      readbackPass.createPass(encoder, { inputTex: image });
-      encoder.copyTextureToBuffer({ texture: readbackPass.getOutput('color') }, { buffer, bytesPerRow }, { width, height });
+      const presentationReadback=hdrOutputActive && displayAovKind(output) ? scratch.get('AOV encoded readback',()=>new WGPUFullQuadPass('AOV encoded readback',device,{textureWillBeRead:true,inputs:['inputTex'],outputs:['color'],fsMain:`let c=load_inputTex(uv,0);let rgb=select(1.055*pow(max(c.rgb,vec3f(0.0)),vec3f(1.0/2.4))-0.055,12.92*c.rgb,c.rgb<=vec3f(0.0031308));output.color=vec4f(rgb,c.a);`})) : readbackPass;
+      presentationReadback.setOutputParams({color:{format:'rgba32float'}});presentationReadback.setSize(width,height);
+      presentationReadback.createPass(encoder,{inputTex:image});
+      encoder.copyTextureToBuffer({texture:presentationReadback.getOutput('color')},{buffer,bytesPerRow},{width,height});
       device.queue.submit([encoder.finish()]);
       try {
         await buffer.mapAsync(GPUMapMode.READ);
@@ -1562,6 +1571,7 @@ width: renderWidth, height: renderHeight,
         return { width, height, data };
       } finally { buffer.unmap(); buffer.destroy(); }
     },
+    aovReady(kind) { return !!execution?.aovs?.includes(kind) && aov.samples > 0; },
     async readAov(kind) {
       if (!execution?.aovs?.includes(kind) || !aovCamera || sampleCount < 1) throw new Error('AOV output is not ready');
       rayTracePass.setCamera(aovCamera);
@@ -1691,6 +1701,7 @@ width: renderWidth, height: renderHeight,
       sampleRenderedCallback = cb;
     },
 
+    setAovDisplayOptions(options: AovDisplayOptions) { aovDisplayOptions={...options,depthRange:[...options.depthRange]}; },
     setOutput(nextOutput: DisplayChannel) {
       if (output === nextOutput) return false;
       output = nextOutput;

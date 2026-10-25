@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { DEFAULT_JNLM_OPTIONS, VERSION, type DenoiserOptions } from '@meimu/mutracer';
-import type { Settings } from '../store';
+import { VIEWER_AOVS, type Settings } from '../store';
 import { getDenoiserOptions } from './denoiserSettings';
 
 type Vec3 = [number, number, number];
@@ -57,6 +57,7 @@ const DISPLAY_DEFAULTS: [keyof Settings, string, unknown][] = [
 const num = (value: number) => String(Number(value.toPrecision(6)));
 const vec = (values: readonly number[]) => values.map(num).join(', ');
 const literal = (value: unknown): string => {
+  if (Array.isArray(value)) return `[${value.map(literal).join(', ')}]`;
   if (typeof value === 'number') return num(value);
   if (typeof value === 'string') return `'${value}'`;
   if (typeof value === 'boolean' || value === null) return String(value);
@@ -274,6 +275,12 @@ export function generateCode(snapshot: CodeSnapshot): string {
 
   const display: Record<string, unknown> = {};
   for (const [key, name, fallback] of DISPLAY_DEFAULTS) if (s[key] !== fallback) display[name] = s[key];
+  if (s.aovsEnabled) {
+    if (s.aovDepthFar !== 10) display.aovDepthRange = [0, s.aovDepthFar];
+    if (s.aovPositionScale !== 1) display.aovPositionScale = s.aovPositionScale;
+    if (s.aovMotionScale !== 16) display.aovMotionScale = s.aovMotionScale;
+    if (s.aovIdComponent !== 'object') display.aovIdComponent = s.aovIdComponent;
+  } else if (VIEWER_AOVS.includes(s.output as typeof VIEWER_AOVS[number])) delete display.channel;
   if (s.groundShadow && s.groundOpacity !== 1) display.shadowCatcherAlpha = s.groundOpacity;
   if (Object.keys(display).length) out(`Object.assign(engine.display, ${object(display)});`);
 
@@ -281,12 +288,14 @@ export function generateCode(snapshot: CodeSnapshot): string {
   for (const [key, fallback] of Object.entries(RENDER_DEFAULTS) as [keyof typeof RENDER_DEFAULTS, unknown][]) {
     if (s[key] !== fallback) final[key] = s[key];
   }
+  if (s.aovsEnabled) final.aovs = VIEWER_AOVS;
   final.denoiser = denoiser(s, snapshot.webgpu, false);
   let preview: Record<string, unknown> | false = false;
   if (s.previewEnabled) {
     const scale = s.previewMaxResolutionScale;
     const minScale = Math.min(PREVIEW_DEFAULTS.minScale, scale);
     preview = {
+      aovs: s.aovsEnabled ? VIEWER_AOVS : undefined,
       resolutionScale: scale !== PREVIEW_DEFAULTS.resolutionScale ? scale : undefined,
       adaptiveResolution: minScale !== PREVIEW_DEFAULTS.minScale ? {targetFrameMs: 80, minScale} : undefined,
       bounces: Math.min(PREVIEW_DEFAULTS.bounces, s.bounces) !== PREVIEW_DEFAULTS.bounces ? s.bounces : undefined,

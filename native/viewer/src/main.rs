@@ -189,11 +189,19 @@ fn display_settings(settings: &mutracer_native_probe::display::Settings) -> api:
         shadow_catcher_color: settings.shadow_catcher_color,
         shadow_catcher_alpha: settings.shadow_catcher_alpha,
         hdr_output_enabled: false,
+        aov: Default::default(),
         channel: match settings.output {
             1 => api::Channel::Normal,
             2 => api::Channel::Albedo,
             3 => api::Channel::Shadow,
             4 => api::Channel::ShadowCatcher,
+            5 => api::Channel::Depth,
+            6 => api::Channel::Position,
+            7 => api::Channel::Roughness,
+            8 => api::Channel::DiffuseAlbedo,
+            9 => api::Channel::SpecularAlbedo,
+            10 => api::Channel::Id,
+            11 => api::Channel::Motion,
             _ => api::Channel::Final,
         },
     }
@@ -267,6 +275,8 @@ struct Viewer {
     samples: u32,
     display_settings: mutracer_native_probe::display::Settings,
     applied_display: Option<api::DisplaySettings>,
+    aovs_enabled: bool,
+    aov_display: api::AovDisplayOptions,
     applied_denoise: Option<bool>,
     selected: usize,
     selected_mesh: Option<usize>,
@@ -373,6 +383,8 @@ impl Viewer {
             samples: 0,
             display_settings: mutracer_native_probe::display::Settings::default(),
             applied_display: None,
+            aovs_enabled: false,
+            aov_display: Default::default(),
             applied_denoise: None,
             selected,
             selected_mesh: None,
@@ -544,7 +556,8 @@ impl Viewer {
         self.push_bytes(bytes, self.size, held)
     }
     fn push_bytes(&mut self, bytes: Arc<Vec<u8>>, size: [u32; 2], held: bool) -> Result<()> {
-        let settings = render_settings(&self.settings, size, held);
+        let mut settings = render_settings(&self.settings, size, held);
+        settings.aovs = if self.aovs_enabled { 127 } else { 0 };
         let target = self.replacement.as_mut().unwrap_or(&mut self.target);
         target.final_render().set_settings(settings)?;
         target
@@ -552,6 +565,7 @@ impl Viewer {
             .preview()
             .unwrap()
             .set_settings(api::RenderSettings {
+                aovs: if self.aovs_enabled { 127 } else { 0 },
                 sampling_pattern: target.final_render().settings()?.sampling_pattern,
                 seed: self.settings.seed,
                 clamping: self.settings.clamping,
@@ -572,7 +586,11 @@ impl Viewer {
         }
         // Playback renders like held input: one sample per frame and no denoising.
         let playing = self.running && self.model.0.animation.as_ref().is_some_and(|a| a.playing);
-        let held = ctx.input(|i| i.pointer.any_down()) || playing;
+        // Display controls recompose only; they must not select the preview or
+        // suspend the completed final denoiser while their pointer is held.
+        let held = ctx.input(|i| i.pointer.any_down())
+            && (self.drag.active() || self.change != Change::None)
+            || playing;
         // A backend switch prepares a second engine; the current image stays.
         if self.backend == self.target.backend {
             self.replacement = None;
@@ -599,7 +617,22 @@ impl Viewer {
             target.activity.lock().unwrap().set_active(held);
             let mut settings = target.final_render().settings()?;
             settings.allow_multiple_samples_per_frame = !held;
+            let aovs = if self.aovs_enabled { 127 } else { 0 };
+            let aovs_changed = settings.aovs != aovs;
+            settings.aovs = aovs;
+            if let Some(preview) = target.render_loop.preview() {
+                let mut preview_settings = preview.settings()?;
+                let preview_aovs_changed = preview_settings.aovs != aovs;
+                preview_settings.aovs = aovs;
+                preview.set_settings(preview_settings)?;
+                if preview_aovs_changed {
+                    preview.restart()?;
+                }
+            }
             target.final_render().set_settings(settings)?;
+            if aovs_changed {
+                target.final_render().restart()?;
+            }
         }
         if let Some((receive, _, _)) = &self.scene_build {
             match receive.try_recv() {
@@ -723,9 +756,9 @@ impl Viewer {
             }
             self.change = Change::None;
         }
-        // Denoising follows the final channel, as before: not while input is held.
+        // Keep the final denoiser across channel changes; held input suspends it.
         // Paused, the current samples are filtered once.
-        let denoise = self.denoise && self.display_settings.output == 0 && !held;
+        let denoise = self.denoise && !held;
         if self.applied_denoise != Some(denoise) {
             self.final_render()
                 .set_denoiser(denoise.then(|| api::DenoiserOptions {
@@ -736,7 +769,8 @@ impl Viewer {
                 }))?;
             self.applied_denoise = Some(denoise);
         }
-        let display = display_settings(&self.display_settings);
+        let mut display = display_settings(&self.display_settings);
+        display.aov = self.aov_display;
         let display_changed = self.applied_display != Some(display);
         if display_changed {
             self.target.engine.display().set_settings(display)?;

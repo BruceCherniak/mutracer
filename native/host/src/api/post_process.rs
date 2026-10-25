@@ -192,15 +192,30 @@ impl Display {
         let pass_revision = state.display.pass_revision;
         let r = state.renders.get_mut(&selected).unwrap();
         let samples = r.presented_samples();
-        let capture = r.capture.as_mut().unwrap();
-        let size = capture.size;
-        let original = if hdr {
-            capture.compose_hdr(&settings.composition())
-        } else if passes.is_empty() {
-            capture.compose_with(&settings.composition());
-            capture.texture.clone()
+        let size = r.capture.as_ref().unwrap().size;
+        let aov_kind = settings.channel.aov_kind();
+        let original = if let Some(kind) = aov_kind {
+            match r.visualize_aov(kind, &settings.aov, hdr) {
+                Ok(image) => image,
+                Err(e)
+                    if fallback
+                        && e.status == Status::InvalidState
+                        && r.settings.aovs & kind.aov_mask() != 0 =>
+                {
+                    return Ok(None);
+                }
+                Err(e) => return Err(e),
+            }
         } else {
-            capture.compose_straight(&settings.composition())
+            let capture = r.capture.as_mut().unwrap();
+            if hdr {
+                capture.compose_hdr(&settings.composition())
+            } else if passes.is_empty() {
+                capture.compose_with(&settings.composition());
+                capture.texture.clone()
+            } else {
+                capture.compose_straight(&settings.composition())
+            }
         };
         let format = if hdr {
             wgpu::TextureFormat::Rgba16Float
@@ -284,8 +299,8 @@ impl Display {
             .renders
             .get_mut(&selected)
             .ok_or_else(|| error(Status::InvalidHandle, "Render is disposed"))?;
-        let premultiplied = !hdr && (passes.is_empty() || failure.is_some());
-        if failure.is_some() && !hdr {
+        let premultiplied = !hdr && aov_kind.is_none() && (passes.is_empty() || failure.is_some());
+        if failure.is_some() && !hdr && aov_kind.is_none() {
             // Keep native presentation bit-identical to the unfiltered path,
             // including premultiplication before RGBA8 quantization.
             let capture = r.capture.as_mut().unwrap();

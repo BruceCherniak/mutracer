@@ -40,7 +40,9 @@ mod surface;
 pub use crate::device_loss::DeviceLossNotifier;
 pub use crate::status::{Status, StatusError as Error};
 pub use depth::{DEPTH_SAMPLE_COUNT, DEPTH_SAMPLE_GRID, DepthSampleArea};
-pub use display::{Channel, Display, DisplaySettings, Presented, ToneMapping};
+pub use display::{
+    AovDisplayOptions, AovIdComponent, Channel, Display, DisplaySettings, Presented, ToneMapping,
+};
 pub use engine::{
     Backend, Camera, Diagnostics, Engine, EngineEvent, EngineInfo, EngineOptions, ProgressStage,
     RenderDiagnostics, Subscription,
@@ -156,3 +158,6 @@ pub use temporal::{
     TemporalMetadata, TemporalPixelRecord, TemporalProjection, TemporalResetReason,
     TemporalSupport, temporal_validity,
 };
+
+#[cfg(test)]
+mod aov_display_tests;

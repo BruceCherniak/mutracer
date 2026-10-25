@@ -46,6 +46,7 @@ pub(crate) struct Output {
     trace: wgpu::ComputePipeline,
     center_trace: wgpu::ComputePipeline,
     resolve: std::sync::OnceLock<wgpu::ComputePipeline>,
+    visualizations: HashMap<wgpu::TextureFormat, (wgpu::Texture, wgpu::ComputePipeline)>,
 }
 impl Output {
     pub(crate) fn new(
@@ -143,6 +144,7 @@ impl Output {
         });
         Ok(Self {
             generation,
+            visualizations: HashMap::new(),
             previous_center,
             current_words,
             samples: 0,
@@ -267,6 +269,93 @@ impl Output {
             });
         }
         Ok(result)
+    }
+    pub(crate) fn visualize(
+        &mut self,
+        kind: u32,
+        options: &api::AovDisplayOptions,
+        hdr: bool,
+    ) -> Result<wgpu::Texture> {
+        if self.samples == 0 {
+            return Err("AOV output is not ready".into());
+        }
+        let format = if hdr {
+            wgpu::TextureFormat::Rgba16Float
+        } else {
+            wgpu::TextureFormat::Rgba8Unorm
+        };
+        let device = &self.gpu.device;
+        let (texture, pipeline) = self.visualizations.entry(format).or_insert_with(|| {
+            let source = if hdr {
+                include_str!("aov-display-hdr.wgsl")
+            } else {
+                include_str!("aov-display.wgsl")
+            };
+            let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("AOV visualization"),
+                layout: None,
+                module: &device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("AOV visualization"),
+                    source: wgpu::ShaderSource::Wgsl(source.into()),
+                }),
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            });
+            (crate::display::image(device, self.size, format), pipeline)
+        });
+        let words = [
+            self.size[0],
+            self.size[1],
+            self.samples,
+            kind,
+            options.depth_range[0].to_bits(),
+            options.depth_range[1].to_bits(),
+            options.position_scale.to_bits(),
+            options.motion_scale.to_bits(),
+            options.id_component as u32,
+            u32::from(hdr),
+            0,
+            0,
+        ];
+        let bytes: Vec<_> = words.into_iter().flat_map(u32::to_le_bytes).collect();
+        let parameters = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("AOV display parameters"),
+            contents: &bytes,
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let view = texture.create_view(&Default::default());
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &pipeline.get_bind_group_layout(0),
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.accumulated.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.center.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: parameters.as_entire_binding(),
+                },
+            ],
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_compute_pass(&Default::default());
+            pass.set_pipeline(pipeline);
+            pass.set_bind_group(0, &group, &[]);
+            pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
+        }
+        self.gpu.queue.submit([encoder.finish()]);
+        Ok(texture.clone())
     }
     pub(crate) fn read(&self, kind: u32) -> Result<api::Image> {
         let center = kind >= 9;

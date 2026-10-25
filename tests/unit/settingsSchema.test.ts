@@ -12,6 +12,7 @@ const renderChanges: Record<string, unknown> = {
   samplingPattern: 'random', timeBudgetMs: 50, maxTiles: 2, allowMultipleSamplesPerFrame: true,
 };
 const displayChanges: Record<string, unknown> = {
+  aovDepthRange:[1,20],aovPositionScale:2,aovMotionScale:32,aovIdComponent:'material',
   toneMapping: 'linear', toneMappingExposure: 2, contrast: 2, saturation: .5, temperature: .2,
   tint: .1, vignette: .4, bloomIntensity: .5, bloomThreshold: 2, bloomRadius: .2,
   hdrOutputEnabled: true, channel: 'normal', shadowCatcherColor: [.2, .4, .6], shadowCatcherAlpha: .5,
@@ -59,12 +60,13 @@ describe('settings schemas', () => {
       const {engine, targets} = renderFixture(); const render = new Render(engine); render.refine();
       engine.display.present(render); const invalidate = vi.spyOn(render, '_displayChanged');
       Object.assign(engine.display, {[field.key]: displayChanges[field.key]}); engine.display.present(render);
-      expect(invalidate).toHaveBeenCalledOnce(); expect(render.samples).toBe(1);
+      if(field.group==='channel'||field.group==='aov')expect(invalidate).not.toHaveBeenCalled();else expect(invalidate).toHaveBeenCalledOnce(); expect(render.samples).toBe(1);
       expect(targets[0].restartSamples).toHaveBeenCalledOnce();
       const target = targets[0];
       if (field.group === 'toneMapping') expect(target.setToneMappingParams).toHaveBeenLastCalledWith(expect.objectContaining({[field.parameter]: displayChanges[field.key]}));
       else if (field.group === 'bloom') expect(target.setBloomParams).toHaveBeenLastCalledWith(expect.objectContaining({[field.parameter]: displayChanges[field.key]}));
       else if (field.group === 'hdr') expect(target.setHDROutputEnabled).toHaveBeenLastCalledWith(displayChanges[field.key]);
+      else if (field.group === 'aov') expect(target.setAovDisplayOptions).toHaveBeenLastCalledWith(expect.objectContaining({[field.parameter]:displayChanges[field.key]}));
       else if (field.group === 'channel') expect(target.setOutput).toHaveBeenLastCalledWith(displayChanges[field.key]);
       else expect(target.setShadowCatcherParams).toHaveBeenLastCalledWith(engine.display.shadowCatcherColor, engine.display.shadowCatcherAlpha);
       engine.dispose();

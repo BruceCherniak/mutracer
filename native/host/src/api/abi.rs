@@ -364,6 +364,24 @@ pub struct MtDisplaySettings {
     hdr_output_enabled: u32,
 }
 #[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MtAovDisplayOptions {
+    struct_size: u32,
+    depth_range: [f32; 2],
+    position_scale: f32,
+    motion_scale: f32,
+    id_component: u32,
+}
+fn aov_display_record(options: AovDisplayOptions) -> MtAovDisplayOptions {
+    MtAovDisplayOptions {
+        struct_size: 24,
+        depth_range: options.depth_range,
+        position_scale: options.position_scale,
+        motion_scale: options.motion_scale,
+        id_component: options.id_component as u32,
+    }
+}
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct MtPresented {
     struct_size: u32,
@@ -598,8 +616,16 @@ fn display_settings(record: &MtDisplaySettings) -> Result<DisplaySettings> {
             2 => Channel::Albedo,
             3 => Channel::Shadow,
             4 => Channel::ShadowCatcher,
+            5 => Channel::Depth,
+            6 => Channel::Position,
+            7 => Channel::Roughness,
+            8 => Channel::DiffuseAlbedo,
+            9 => Channel::SpecularAlbedo,
+            10 => Channel::Id,
+            11 => Channel::Motion,
             _ => return Err(invalid("Unknown display channel")),
         },
+        aov: AovDisplayOptions::default(),
         tone_mapping_exposure: record.tone_mapping_exposure,
         contrast: record.contrast,
         saturation: record.saturation,
@@ -1076,6 +1102,54 @@ pub unsafe extern "C" fn mt_display_settings_default(output: *mut MtDisplaySetti
     0
 }
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_display_aov_options_default(output: *mut MtAovDisplayOptions) -> i32 {
+    if output.is_null() {
+        return Status::InvalidArgument as i32;
+    }
+    unsafe { output.write(aov_display_record(AovDisplayOptions::default())) };
+    0
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_display_set_aov_options(
+    handle: u64,
+    options: *const MtAovDisplayOptions,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        let options = unsafe { record(options)? };
+        let display = display_of(handle)?;
+        let mut settings = display.settings();
+        settings.aov = AovDisplayOptions {
+            depth_range: options.depth_range,
+            position_scale: options.position_scale,
+            motion_scale: options.motion_scale,
+            id_component: match options.id_component {
+                0 => AovIdComponent::Object,
+                1 => AovIdComponent::Instance,
+                2 => AovIdComponent::Material,
+                3 => AovIdComponent::Primitive,
+                _ => return Err(invalid("Unknown AOV ID component")),
+            },
+        };
+        display.set_settings(settings)
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_display_get_aov_options(
+    handle: u64,
+    output: *mut MtAovDisplayOptions,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || unsafe {
+        write_record(
+            output,
+            aov_display_record(display_of(handle)?.settings().aov),
+        )
+    })
+}
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_display_set_size(
     handle: u64,
     width: u32,
@@ -1095,8 +1169,10 @@ pub unsafe extern "C" fn mt_display_set_settings(
     capacity: usize,
 ) -> i32 {
     call(error_out, capacity, || {
-        let settings = display_settings(unsafe { record(settings)? })?;
-        display_of(handle)?.set_settings(settings)
+        let mut settings = display_settings(unsafe { record(settings)? })?;
+        let display = display_of(handle)?;
+        settings.aov = display.settings().aov;
+        display.set_settings(settings)
     })
 }
 #[unsafe(no_mangle)]
@@ -2233,6 +2309,35 @@ mod tests {
         assert_eq!(value("MT_DENOISE_EVERY_SAMPLE"), 2);
         assert_eq!(value("MT_DENOISE_OIDN_WEBGPU"), 5);
         assert_eq!(value("MT_LOOP_SELECT_FINAL"), 1);
+    }
+    #[test]
+    fn aov_display_options_extend_channels_without_changing_the_existing_record() {
+        let mut words = [0xdeadbeefu32; 8];
+        assert_eq!(
+            unsafe { mt_display_aov_options_default(words.as_mut_ptr().cast()) },
+            0
+        );
+        let options = unsafe { record::<MtAovDisplayOptions>(words.as_ptr().cast()) }.unwrap();
+        assert_eq!(options.depth_range, [0., 10.]);
+        assert_eq!(options.position_scale, 1.);
+        assert_eq!(options.motion_scale, 16.);
+        assert_eq!(options.id_component, 0);
+        assert_eq!(words[6..], [0xdeadbeef; 2]);
+        assert_eq!(std::mem::size_of::<MtDisplaySettings>(), 68);
+        assert_eq!(std::mem::size_of::<MtAovDisplayOptions>(), 24);
+        for (channel, kind) in [
+            (5, PixelKind::Depth),
+            (6, PixelKind::Position),
+            (7, PixelKind::Roughness),
+            (8, PixelKind::DiffuseAlbedo),
+            (9, PixelKind::SpecularAlbedo),
+            (10, PixelKind::Id),
+            (11, PixelKind::Motion),
+        ] {
+            let mut r = display_record(&DisplaySettings::default());
+            r.channel = channel;
+            assert_eq!(display_settings(&r).unwrap().channel.aov_kind(), Some(kind));
+        }
     }
     #[test]
     fn display_settings_use_the_current_record_and_preserve_effects() {

@@ -25,6 +25,77 @@ pub enum Channel {
     Shadow,
     /// Raw catcher coverage, background alpha/hits and shadow opacity.
     ShadowCatcher,
+    /// Camera-forward depth as clamped grayscale using aov.depth_range.
+    /// All AOV channels require their bit in the selected render's aovs mask.
+    Depth,
+    /// World xyz as RGB: origin 0.5, ±aov.position_scale maps to 0/1, clamped.
+    Position,
+    /// RGB = roughness, metalness, unsupported-reflectance fraction.
+    Roughness,
+    /// Supported diffuse reflectance clamped to [0,1], then sRGB encoded.
+    DiffuseAlbedo,
+    /// Supported specular reflectance clamped to [0,1], then sRGB encoded.
+    SpecularAlbedo,
+    /// Stable pseudocolor of aov.id_component; palette colors can collide.
+    Id,
+    /// Direction as hue (+x red, +y yellow-green), displacement/scale as brightness.
+    /// Invalid history is transparent; valid zero motion is opaque black.
+    Motion,
+}
+impl Channel {
+    pub(super) fn aov_kind(self) -> Option<super::PixelKind> {
+        let value = self as u32;
+        (value >= 5).then(|| super::PixelKind::from_aov_index(value - 5))
+    }
+}
+/// Stable ID lane used by the display palette. Default Object.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AovIdComponent {
+    #[default]
+    Object,
+    Instance,
+    Material,
+    Primitive,
+}
+/// Display-only AOV visualization; raw AOV values are unchanged.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AovDisplayOptions {
+    /// Scene-unit depths mapped to black/white, 0 <= near < far. Default [0,10].
+    pub depth_range: [f32; 2],
+    /// Positive scene-unit half-range around the origin for position RGB. Default 1.
+    pub position_scale: f32,
+    /// Positive input-pixel displacement mapped to full motion brightness. Default 16.
+    pub motion_scale: f32,
+    /// Stable ID lane to colorize. Default Object.
+    pub id_component: AovIdComponent,
+}
+impl Default for AovDisplayOptions {
+    fn default() -> Self {
+        Self {
+            depth_range: [0., 10.],
+            position_scale: 1.,
+            motion_scale: 16.,
+            id_component: AovIdComponent::Object,
+        }
+    }
+}
+impl AovDisplayOptions {
+    pub(super) fn validate(&self) -> Result<()> {
+        if self.depth_range.iter().any(|v| !v.is_finite())
+            || self.depth_range[0] < 0.
+            || self.depth_range[1] <= self.depth_range[0]
+            || !self.position_scale.is_finite()
+            || self.position_scale <= 0.
+            || !self.motion_scale.is_finite()
+            || self.motion_scale <= 0.
+        {
+            return Err(error(
+                Status::InvalidArgument,
+                "Invalid AOV display range or scale",
+            ));
+        }
+        Ok(())
+    }
 }
 /// Display-only settings shared by every render presented on the engine display.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -43,6 +114,8 @@ pub struct DisplaySettings {
     pub tint: f32,
     /// Default [`Channel::Final`].
     pub channel: Channel,
+    /// AOV visualization options. Default AovDisplayOptions::default().
+    pub aov: AovDisplayOptions,
     /// Vignette strength in 0..1. Default 0.
     pub vignette: f32,
     /// Nonnegative bloom intensity; 0 disables it. Default 0.
@@ -70,6 +143,7 @@ impl Default for DisplaySettings {
             temperature: 0.,
             tint: 0.,
             channel: Channel::Final,
+            aov: AovDisplayOptions::default(),
             vignette: 0.,
             bloom_intensity: 0.,
             bloom_threshold: 1.,
@@ -82,6 +156,7 @@ impl Default for DisplaySettings {
 }
 impl DisplaySettings {
     fn validate(&self) -> Result<()> {
+        self.aov.validate()?;
         let values = [
             self.tone_mapping_exposure,
             self.contrast,

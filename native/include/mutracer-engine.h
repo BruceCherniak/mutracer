@@ -219,7 +219,16 @@ typedef enum mt_tone_mapping {
 typedef enum mt_display_channel {
   MT_CHANNEL_FINAL = 0, MT_CHANNEL_NORMAL = 1, MT_CHANNEL_ALBEDO = 2,
   MT_CHANNEL_SHADOW = 3, /* Compatibility alias for the final image, as on WebGPU. */
-  MT_CHANNEL_SHADOW_CATCHER = 4
+  MT_CHANNEL_SHADOW_CATCHER = 4,
+  /* AOV visualization; requires corresponding MT_AOV_* bit on the selected render. */
+  MT_CHANNEL_DEPTH = 5, /* Camera-forward depth as clamped grayscale using depth_range. */
+  MT_CHANNEL_POSITION = 6, /* World xyz as RGB: origin 0.5; ±position_scale maps to 0/1, clamped. */
+  MT_CHANNEL_ROUGHNESS = 7, /* RGB = roughness, metalness, unsupported-reflectance fraction. */
+  MT_CHANNEL_DIFFUSE_ALBEDO = 8, /* Supported reflectance clamped to [0,1], then sRGB encoded. */
+  MT_CHANNEL_SPECULAR_ALBEDO = 9, /* Same mapping for specular reflectance. */
+  MT_CHANNEL_ID = 10, /* Stable pseudocolor of id_component; palette colors can collide. */
+  MT_CHANNEL_MOTION = 11 /* Direction as hue (+x red, +y yellow-green), displacement/scale
+    as brightness. Invalid history transparent; valid zero motion opaque black. */
 } mt_display_channel;
 typedef struct mt_display_settings {
   uint32_t struct_size;
@@ -241,6 +250,26 @@ typedef struct mt_display_settings {
     Unsupported surfaces fall back to SDR; C pixel/PNG export remains SDR. */
 } mt_display_settings;
 MT_ENGINE_LAYOUT(mt_display_settings, 68);
+/* Display-only AOV mapping. Does not enable AOVs or change raw pixels/samples.
+ * Initialize with mt_display_aov_options_default. Missing AOVs report
+ * MT_ERROR_INVALID_STATE on present/export. All floats must be finite. */
+typedef struct mt_display_aov_options {
+  uint32_t struct_size;
+  float depth_range[2]; /* Scene-unit depths mapped to black/white; 0 <= near < far. Default {0,10}. */
+  float position_scale; /* Positive scene-unit half-range around origin, mapped to RGB. Default 1. */
+  float motion_scale; /* Positive input-pixel displacement mapped to full brightness. Default 16. */
+  uint32_t id_component; /* 0 object (default), 1 local instance, 2 material, 3 primitive. */
+} mt_display_aov_options;
+MT_ENGINE_LAYOUT(mt_display_aov_options, 24);
+/* Initializes the full record, including struct_size. Null output is invalid. */
+int32_t mt_display_aov_options_default(mt_display_aov_options *output);
+/* Uses the mapping from the next present/export; borrows the record during the
+ * call. Invalid values/size report MT_ERROR_INVALID_ARGUMENT, preserving settings.
+ * mt_display_set_settings preserves this separate mapping configuration. */
+int32_t mt_display_set_aov_options(mt_display display, const mt_display_aov_options *options, char *error, size_t capacity);
+/* Writes the current mapping; output.struct_size must equal sizeof(*output).
+ * Output is borrowed only for this call. Invalid size preserves the output. */
+int32_t mt_display_get_aov_options(mt_display display, mt_display_aov_options *output, char *error, size_t capacity);
 /* Initializes the full current record, including struct_size. Set/get require
  * struct_size == sizeof(mt_display_settings). */
 int32_t mt_display_settings_default(mt_display_settings *output);

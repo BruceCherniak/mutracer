@@ -252,10 +252,16 @@ quality defaults to the browser encoder value.
 | `temperature`, `tint`, `vignette` | `0` |
 | `bloomIntensity`, `bloomThreshold`, `bloomRadius` | `0`, `1`, `0.6` |
 | `hdrOutputEnabled` | `false`; WebGPU only |
-| `channel: DisplayChannel` | `'final'`; also albedo, normal, shadow, shadowCatcher |
+| `channel: DisplayChannel` | `'final'`; also albedo, normal, shadow, shadowCatcher and the seven [AOV kinds](#aov-visualization) |
+| `aovDepthRange` | `[0, 10]`; finite scene-unit black/white depths, `0 <= near < far` |
+| `aovPositionScale` | `1`; finite positive scene-unit half-range around the origin |
+| `aovMotionScale` | `16`; finite positive pixel displacement for full brightness |
+| `aovIdComponent: AovIdComponent` | `'object'`; also instance, material, primitive |
 | `shadowCatcherColor`, `shadowCatcherAlpha` | `[0, 0, 0]`, `1` |
 
 All display settings apply at composition and retain accumulated samples.
+AOV mapping numbers must remain finite in float32; depth endpoints must remain
+distinct after conversion.
 Use the exported `DisplaySettings` type for a partial batch:
 
 ```ts
@@ -364,6 +370,42 @@ custom denoiser AOV snapshot adds 16 bytes per pixel. Readback adds a CPU copy.
 WebGPU dimensions remain subject to device buffer limits. A full-frame AOV
 sample runs independently of tile/adaptive sampling and may exceed the render's
 time budget at large resolutions. WebGL requires `EXT_color_buffer_float`.
+
+### AOV visualization
+
+Select an enabled surface output on Display to present or export it:
+
+```ts
+engine.display.channel = 'depth'; // render.aovs must include 'depth'
+engine.display.aovDepthRange = [0, 20];
+engine.display.present(render);
+const png = await engine.display.toBlob(render);
+```
+
+| Channel | Display mapping |
+| --- | --- |
+| `depth` | Black at the near depth, white at the far depth, clamped outside the range |
+| `position` | World xyz mapped to RGB; origin is 0.5 and ±position scale maps to 0/1 |
+| `roughness` | RGB = roughness, metalness, unsupported-reflectance fraction |
+| `diffuseAlbedo`, `specularAlbedo` | Linear reflectance RGB clamped to [0, 1], then sRGB encoded |
+| `id` | Stable pseudocolor for the selected uint32 ID component; colors can collide |
+| `motion` | Direction as hue (+x is red, +y is yellow-green), displacement/scale as brightness |
+
+AOV channels bypass tone mapping, grading, bloom, vignette and denoising;
+registered display passes still run. Background and invalid reflectance or
+motion are transparent; accumulated outputs use their coverage as alpha. Zero valid motion
+is opaque black. The first frame's invalid motion is transparent.
+Selecting a kind absent from `render.aovs` rejects, even if a custom denoiser
+requests it. An enabled output awaiting sampling keeps the current canvas;
+export rejects until that output is ready. Selection does not enable tracing.
+Changing the channel or mapping preserves beauty samples, raw AOV values and completed denoising.
+The existing `normal` and `albedo` channels keep their OIDN-guide meaning.
+
+These mappings also apply to PNG export. Raw `render.readPixels(kind)` retains
+the [surface formats](#surface-outputs) above. WebGPU HDR presentation decodes
+the mapped colors to linear light; the visualization stays within SDR white.
+Visualization retains an extra 8 GPU bytes per render pixel on WebGPU or 4 on
+WebGL until the AOV resources are resized or disposed.
 
 ### Depth sampling
 

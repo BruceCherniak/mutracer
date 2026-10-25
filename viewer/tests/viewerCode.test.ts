@@ -71,6 +71,17 @@ describe('viewer code snippet', () => {
     expect(code).toContain('coalesceSceneUpdates: true');
   });
 
+  it('declares AOVs on both renders and retains the display mapping', () => {
+    const code = generateCode(snapshot({aovsEnabled: true, output: 'depth', aovDepthFar: 20}));
+    expect(syntaxErrors(code)).toEqual([]);
+    expect(code).toContain("channel: 'depth'");
+    expect(code).toMatch(/aovDepthRange: \[0,\s*20\]/);
+    expect(code.match(/aovs: \[/g)).toHaveLength(2);
+    const disabled = generateCode(snapshot({aovsEnabled: false, output: 'depth'}));
+    expect(disabled).not.toContain("channel: 'depth'");
+    expect(disabled).not.toContain('aovs:');
+  });
+
   it('uses JNLM on WebGL like the viewer', () => {
     const code = generateCode(snapshot({ denoise: true, denoiseWhileConverging: false }, { webgpu: false }));
     expect(code).toContain("denoiser: { type: 'jnlm' }");

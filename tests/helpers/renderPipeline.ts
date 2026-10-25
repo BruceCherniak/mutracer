@@ -47,7 +47,7 @@ export function renderFixture(options: {tiles?: number; fits?: boolean; backend?
         setVarianceMoments: vi.fn((value: boolean) => {variance = value;}), setAdaptiveSamplingTargets: vi.fn(),
         cancelDenoise: vi.fn(), performDenoise: vi.fn(async () => true), setPreserveDenoisedOutput: vi.fn(),
         setToneMappingParams: vi.fn(() => false), setBloomParams: vi.fn(() => false), setHDROutputEnabled: vi.fn(() => false),
-        setOutput: vi.fn(() => false), setShadowCatcherParams: vi.fn(() => false),
+        setAovDisplayOptions:vi.fn(), setOutput: vi.fn(() => false), setShadowCatcherParams: vi.fn(() => false),
         drawPostProcess: vi.fn(), dispose: vi.fn(),
       } as unknown as RenderTarget;
       targets.push(target); return target;

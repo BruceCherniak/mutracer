@@ -1,6 +1,6 @@
 //! Native viewer layout. Rendering and scene updates stay in Viewer.
 use crate::{Change, Viewer, scene::Environment};
-use crate::{controls, theme};
+use crate::{api, controls, theme};
 use eframe::egui;
 
 impl Viewer {
@@ -266,16 +266,81 @@ impl Viewer {
             }
         });
         controls::section_open(ui, "Output", false, |ui| {
-            controls::select(
-                ui,
-                "Channel",
-                ["Final", "Normal", "Albedo"][self.display_settings.output as usize],
-                |ui| {
-                    for (mode, name) in [(0, "Final"), (1, "Normal"), (2, "Albedo")] {
+            controls::toggle(ui, "AOV channels", &mut self.aovs_enabled);
+            if !self.aovs_enabled && self.display_settings.output >= 5 {
+                self.display_settings.output = 0;
+            }
+            let channels = [
+                (0, "Final"),
+                (1, "Normal"),
+                (2, "Albedo"),
+                (5, "Depth"),
+                (6, "Position"),
+                (7, "Roughness"),
+                (8, "Diffuse reflectance"),
+                (9, "Specular reflectance"),
+                (10, "ID"),
+                (11, "Motion"),
+            ];
+            let label = channels
+                .iter()
+                .find(|(v, _)| *v == self.display_settings.output)
+                .map_or("Final", |(_, label)| *label);
+            controls::select(ui, "Channel", label, |ui| {
+                for (mode, name) in channels {
+                    if mode < 5 || self.aovs_enabled {
                         ui.selectable_value(&mut self.display_settings.output, mode, name);
                     }
-                },
-            );
+                }
+            });
+            if self.aovs_enabled {
+                ui.weak("Adds surface tracing and GPU memory.");
+                match self.display_settings.output {
+                    5 => {
+                        controls::scalar(
+                            ui,
+                            "Depth range",
+                            &mut self.aov_display.depth_range[1],
+                            0.01..=10000.,
+                        );
+                    }
+                    6 => {
+                        controls::scalar(
+                            ui,
+                            "Position scale",
+                            &mut self.aov_display.position_scale,
+                            0.001..=10000.,
+                        );
+                    }
+                    11 => {
+                        controls::scalar(
+                            ui,
+                            "Motion scale",
+                            &mut self.aov_display.motion_scale,
+                            0.01..=1000.,
+                        );
+                    }
+                    10 => {
+                        let components = [
+                            (api::AovIdComponent::Object, "Object"),
+                            (api::AovIdComponent::Instance, "Instance"),
+                            (api::AovIdComponent::Material, "Material"),
+                            (api::AovIdComponent::Primitive, "Primitive"),
+                        ];
+                        let label = components[self.aov_display.id_component as usize].1;
+                        controls::select(ui, "ID component", label, |ui| {
+                            for (value, name) in components {
+                                ui.selectable_value(
+                                    &mut self.aov_display.id_component,
+                                    value,
+                                    name,
+                                );
+                            }
+                        });
+                    }
+                    _ => {}
+                }
+            }
         });
         controls::section(ui, "Device", |ui| {
             let old = self.backend;
