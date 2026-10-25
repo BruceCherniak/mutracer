@@ -1,4 +1,4 @@
-import rayTraceCompute from './wgsl/rayTrace.compute.js';
+import rayTraceCompute, {type RayTraceInputHooks} from './wgsl/rayTrace.compute.js';
 import { WGPU_SCENE_FEATURE_BITS } from './WGPUSceneFeatures.js';
 import { MATERIAL_TEXTURE_DEFINES } from './materialTextureSlots.js';
 
@@ -30,12 +30,12 @@ export function wgpuShaderPreamble(constants: Record<string, boolean | number>, 
   }).join('\n');
   return `\n${defineCode}\n${constantsCode}\n`;
 }
-export function wgpuShaderSource(constants: Record<string, boolean | number>, features: WGPUShaderFeatures, bake = false, sceneIntersections = '', pathDiagnostic = false): string {
+export function wgpuShaderSource(constants: Record<string, boolean | number>, features: WGPUShaderFeatures, bake = false, sceneIntersections = '', pathDiagnostic = false, inputHooks?: RayTraceInputHooks): string {
   return wgpuShaderPreamble(constants, bake) + rayTraceCompute({
     ...features,
     spectral: bake ? Boolean(constants.SPECTRAL) : undefined,
     sceneCapabilities: bake && constants.SCENE_CAPABILITIES !== undefined ? Number(constants.SCENE_CAPABILITIES) : undefined,
     materialCapabilities: bake && constants.MATERIAL_CAPABILITIES !== undefined ? Number(constants.MATERIAL_CAPABILITIES) : undefined,
     lightCapabilities: bake && constants.LIGHT_CAPABILITIES !== undefined ? Number(constants.LIGHT_CAPABILITIES) : undefined
-  }, sceneIntersections, pathDiagnostic);
+  }, sceneIntersections, pathDiagnostic, inputHooks);
 }

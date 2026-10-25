@@ -16,7 +16,17 @@
 //! camera or sequence offset never prepares the scene again.
 pub(crate) mod abi;
 mod custom_denoise;
+pub(crate) mod custom_gpu;
+#[cfg(test)]
+mod custom_gpu_failure_tests;
+mod custom_gpu_submission;
+#[cfg(test)]
+mod custom_gpu_tests;
 pub use custom_denoise::{CustomDenoiser, DenoiseBuffers, DenoiseGpu, DenoiseInput, DenoiseOutput};
+pub use custom_gpu::{
+    DenoiseAcceptance, DenoiseFrameId, DenoiseFrameStatus, DenoiseInputMode, GpuDenoiseInput,
+    GpuDenoiseOutput,
+};
 mod depth;
 mod display;
 mod engine;

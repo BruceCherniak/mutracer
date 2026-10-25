@@ -517,13 +517,23 @@ pub(super) fn next_preview_scale(
 }
 /// Pixels or an error, the OIDN device and the filter time in milliseconds.
 enum DenoisedImage {
-    Cpu(Vec<f32>),
+    Cpu(Vec<f32>, Option<super::DenoiseFrameStatus>),
+    /// oidn-webgpu: retained HDR pixels and the display preview.
     Gpu {
         pixels: wgpu::Buffer,
         preview: wgpu::Buffer,
     },
+    /// A sealed custom GPU filter result.
+    Resident(super::GpuDenoiseOutput),
 }
 type DenoiseResult = (std::result::Result<DenoisedImage, String>, String, f64);
+impl Drop for DenoisedImage {
+    fn drop(&mut self) {
+        if let Self::Cpu(_, Some(status)) = self {
+            status.reject();
+        }
+    }
+}
 #[derive(Default)]
 struct Denoise {
     options: Option<DenoiserOptions>,
@@ -533,6 +543,7 @@ struct Denoise {
     filter: Arc<Mutex<Option<crate::denoise::Denoiser>>>,
     gpu_filter: Option<crate::oidn_webgpu::Denoiser>,
     worker: Option<(u32, mpsc::Receiver<DenoiseResult>)>,
+    frame_status: Option<super::DenoiseFrameStatus>,
     last: Option<Instant>,
     report: Option<DenoiseReport>,
     /// Samples of the denoised image and its pixels, bottom row first like L0.
@@ -549,6 +560,8 @@ pub(super) struct RenderState {
     /// `SharedScene::generation` of the published target.
     generation: u64,
     failed: Option<(TargetKey, String)>,
+    /// Changes whenever this render publishes a new target/camera/size packet.
+    input_generation: u64,
     job: Option<Flight>,
     /// Complete samples in the published accumulation.
     samples: u32,
@@ -591,6 +604,9 @@ impl RenderState {
         }
         // Drop the receiver, never join a foreign CPU/GPU filter on the API thread.
         self.denoise.cancel.cancel();
+        if let Some(status) = self.denoise.frame_status.take() {
+            status.reject();
+        }
         self.denoise.worker = None;
         self.denoise.denoised = None;
         self.denoise.gpu_filter = None;
@@ -652,6 +668,10 @@ impl RenderState {
         let _ = l0_blocking(|e, n| unsafe { context::mt_context_destroy(context, e, n) });
     }
     fn publish(&mut self, key: TargetKey, full: bool) {
+        self.input_generation = self
+            .input_generation
+            .checked_add(1)
+            .expect("Custom input generation exhausted");
         self.output.invalidate();
         self.published = Some(key);
         self.failed = None;
@@ -693,6 +713,9 @@ impl RenderState {
 fn cancel_denoise(render: &mut RenderState) {
     render.output.invalidate();
     render.denoise.cancel.cancel();
+    if let Some(status) = render.denoise.frame_status.take() {
+        status.reject();
+    }
     render.denoise.worker = None;
     render.denoise.denoised = None;
     render.denoise.report = None;
@@ -1415,11 +1438,17 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
             Ok(pixels) => {
                 if let Some(capture) = render.capture.as_mut() {
                     match &pixels {
-                        DenoisedImage::Cpu(pixels) => capture
-                            .upload(pixels)
-                            .map_err(|e| error(Status::Error, e.to_string()))?,
+                        DenoisedImage::Cpu(pixels, _) => capture.upload(pixels),
                         DenoisedImage::Gpu { preview, .. } => capture.upload_gpu(preview),
+                        DenoisedImage::Resident(output) => capture.upload_gpu(&output.buffer),
                     }
+                    .map_err(|e| error(Status::Error, e.to_string()))?;
+                }
+                if let DenoisedImage::Resident(output) = &pixels {
+                    output.status.accept();
+                }
+                if let DenoisedImage::Cpu(_, Some(status)) = &pixels {
+                    status.accept();
                 }
                 render.output.invalidate();
                 render.denoise.denoised = Some((samples, pixels));
@@ -1493,20 +1522,96 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
         render.denoise.worker = Some((render.samples, receive));
         return Ok(());
     }
-    let (size, color, normal, albedo) = denoise_inputs(render.context)?;
     let filter = render.denoise.filter.clone();
     let custom = render.denoise.custom.0.clone();
     let gpu = state.gpu.clone();
     let cancel = CancelToken::new();
     render.denoise.cancel = cancel.clone();
+    let size = context_size(render.context)?;
+    // Freeze before releasing the engine lock: a cancelled callback may overlap
+    // a new render or scene publication. Only explicit custom filtering pays for
+    // these copies. OIDN retains its CPU path.
+    let resident = if let Some(custom) = &custom {
+        let buffers = render
+            .capture
+            .as_mut()
+            .ok_or_else(|| error(Status::InvalidState, "Missing custom denoiser capture"))?
+            .denoise_buffers()
+            .map_err(|e| error(Status::Error, e.to_string()))?;
+        Some(super::GpuDenoiseInput::new(
+            &gpu,
+            render.context,
+            render.input_generation,
+            size,
+            render.samples,
+            buffers,
+            custom.clone(),
+            cancel.clone(),
+        ))
+    } else {
+        None
+    };
+    render.denoise.frame_status = resident.as_ref().map(|input| input.status());
+    let cpu = if custom.is_none() {
+        Some(denoise_inputs(render.context)?)
+    } else {
+        None
+    };
     let (send, receive) = mpsc::channel();
     std::thread::Builder::new()
         .name("MuTracer denoising".into())
         .spawn(move || {
+            let retirement = resident.as_ref().map(|input| input.status());
             let result = if let Some(custom) = custom {
                 let started = Instant::now();
+                let status = resident.as_ref().unwrap().status();
+                let expected = resident.as_ref().unwrap().id;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let buffers = if custom.gpu_inputs() {
+                    let resident_mode = custom.input_mode() == super::DenoiseInputMode::ResidentGpu;
+                    let (color, normal, albedo, resident) = if resident_mode {
+                        let mut input = resident.unwrap();
+                        let pipeline = gpu
+                            .custom_snapshot_pipeline
+                            .get_or_init(|| super::custom_gpu::snapshot_pipeline(&gpu.device));
+                        input.buffers = super::custom_gpu::snapshot_buffers(
+                            &gpu,
+                            pipeline,
+                            [
+                                &input.buffers.color,
+                                &input.buffers.normal,
+                                &input.buffers.albedo,
+                            ],
+                            size,
+                            input.samples,
+                        )
+                        .map_err(|e| e.to_string())?;
+                        input.retain_buffers();
+                        (Vec::new(), Vec::new(), Vec::new(), Some(input))
+                    } else {
+                        let snapshot = resident.as_ref().unwrap();
+                        let read = |buffer| -> std::result::Result<Vec<f32>, String> {
+                            let bytes = crate::read_average(
+                                &gpu.device,
+                                &gpu.queue,
+                                buffer,
+                                size[0],
+                                size[1],
+                                snapshot.samples,
+                            )
+                            .map_err(|e| e.to_string())?;
+                            Ok(bytes
+                                .chunks_exact(4)
+                                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                                .collect())
+                        };
+                        (
+                            read(&snapshot.buffers.color)?,
+                            read(&snapshot.buffers.normal)?,
+                            read(&snapshot.buffers.albedo)?,
+                            None,
+                        )
+                    };
+                    let buffers = if !resident_mode && custom.gpu_inputs() {
                         use wgpu::util::DeviceExt;
                         let upload = |values: &[f32]| {
                             let bytes: Vec<u8> =
@@ -1527,6 +1632,10 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                     } else {
                         None
                     };
+                    let submission = resident
+                        .as_ref()
+                        .map(|input| input.gpu.duplicate())
+                        .unwrap_or_else(|| super::DenoiseGpu(gpu.queue.clone(), None));
                     let input = super::DenoiseInput {
                         size,
                         color,
@@ -1534,10 +1643,19 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                         albedo,
                         buffers,
                         device: gpu.device.clone(),
-                        gpu: super::DenoiseGpu(gpu.queue.clone()),
+                        gpu: submission,
+                        resident,
                     };
                     let pixels = match custom.denoise(input, cancel.clone())? {
                         super::DenoiseOutput::Cpu(pixels) => pixels,
+                        super::DenoiseOutput::Resident(output) => {
+                            if !resident_mode || output.id != expected || output.size != size {
+                                return Err(
+                                    "Custom GPU result belongs to another invocation".into()
+                                );
+                            }
+                            return Ok(DenoisedImage::Resident(output));
+                        }
                         super::DenoiseOutput::Gpu(buffer) => {
                             if buffer.size() < size[0] as u64 * size[1] as u64 * 16
                                 || !buffer.usage().contains(wgpu::BufferUsages::COPY_SRC)
@@ -1559,19 +1677,31 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                                 .collect()
                         }
                     };
-                    super::custom_denoise::validate(pixels, size)
+                    super::custom_denoise::validate(pixels, size).map(|pixels| {
+                        DenoisedImage::Cpu(pixels, resident_mode.then(|| status.clone()))
+                    })
                 }))
                 .unwrap_or_else(|_| Err("Custom denoiser panicked".into()));
+                // A returned callback cannot enqueue more work for this frame,
+                // even if it saved a submission handle or its owned input.
+                status.close();
+                if result.is_err() {
+                    status.reject();
+                }
                 (
-                    result.map(DenoisedImage::Cpu),
+                    result,
                     "custom".into(),
                     started.elapsed().as_secs_f64() * 1000.,
                 )
             } else {
+                let (_, color, normal, albedo) = cpu.unwrap();
                 run_oidn(&filter, &options, size, &color, &normal, &albedo)
             };
             if !cancel.is_cancelled() {
                 let _ = send.send(result);
+            }
+            if let Some(status) = retirement {
+                status.maintain_retirement(&gpu);
             }
         })
         .map_err(|e| error(Status::Error, format!("Starting denoising: {e}")))?;
@@ -1610,10 +1740,9 @@ fn run_oidn(
     let started = Instant::now();
     let result = filter
         .run(size, color, normal, albedo)
-        .map(DenoisedImage::Cpu)
         .map_err(|e| format!("{e:#}"));
     (
-        result,
+        result.map(|pixels| DenoisedImage::Cpu(pixels, None)),
         filter.backend.to_owned(),
         started.elapsed().as_secs_f64() * 1e3,
     )
@@ -1652,6 +1781,7 @@ impl Render {
                 context,
                 published: None,
                 generation: 0,
+                input_generation: 0,
                 failed: None,
                 job: None,
                 samples: 0,
@@ -1823,8 +1953,9 @@ impl Render {
     }
     /// Installs a user filter with the given schedule, replacing the built-in filter. None
     /// disables it. Callbacks own their data, run off-thread and may overlap after
-    /// cancellation. Readback happens before dispatch; GPU output is read back on
-    /// the worker. Replacement and destruction never wait for the callback.
+    /// cancellation. Cpu mode reads inputs on the worker. ResidentGpu mode keeps
+    /// input and result images on the device; explicit pixel reads still read back.
+    /// Replacement and destruction never wait for the callback or GPU retirement.
     pub fn set_custom_denoiser(
         &self,
         filter: Option<Arc<dyn super::CustomDenoiser>>,
@@ -2061,6 +2192,9 @@ impl Render {
                         let _ = self.with(|state, id| {
                             let r = state.renders.get_mut(&id).unwrap();
                             r.denoise.cancel.cancel();
+                            if let Some(status) = r.denoise.frame_status.take() {
+                                status.reject();
+                            }
                             r.denoise.worker = None;
                             Ok(())
                         });
@@ -2118,27 +2252,28 @@ impl Render {
                 if let Some((_, pixels)) = &render.denoise.denoised {
                     {
                         let [width, height] = context_size(render.context)?;
+                        let pixels = match pixels {
+                            DenoisedImage::Cpu(pixels, _) => pixels.clone(),
+                            DenoisedImage::Gpu { pixels: buffer, .. }
+                            | DenoisedImage::Resident(super::GpuDenoiseOutput { buffer, .. }) => {
+                                crate::read_average(
+                                    &state.gpu.device,
+                                    &state.gpu.queue,
+                                    buffer,
+                                    width,
+                                    height,
+                                    1,
+                                )
+                                .map_err(|e| error(Status::Error, e.to_string()))?
+                                .chunks_exact(4)
+                                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                                .collect()
+                            }
+                        };
                         return Ok(Image {
                             width,
                             height,
-                            data: {
-                                let data = match pixels {
-                                    DenoisedImage::Cpu(pixels) => pixels.clone(),
-                                    DenoisedImage::Gpu { pixels, .. } => crate::read_average(
-                                        &state.gpu.device,
-                                        &state.gpu.queue,
-                                        pixels,
-                                        width,
-                                        height,
-                                        1,
-                                    )
-                                    .map_err(|e| error(Status::Error, e.to_string()))?
-                                    .chunks_exact(4)
-                                    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                                    .collect(),
-                                };
-                                flip_rows(&data, width, height)
-                            },
+                            data: flip_rows(&pixels, width, height),
                         });
                     }
                 }

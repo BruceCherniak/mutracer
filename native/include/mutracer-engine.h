@@ -355,7 +355,7 @@ int32_t mt_render_set_denoiser(mt_render render, const mt_render_denoiser *denoi
  * alpha; normal/albedo are L0 guides. count is floats (width*height*4).
  * Fill every output float; return 0, or a nonzero error and a bounded UTF-8
  * message. Input, output, error and cancel pointers expire on callback return.
- * Input readback can block the API thread. C callbacks receive CPU memory;
+ * Inputs are copied on the GPU and read back on the worker. C callbacks receive CPU memory;
  * GPU filtering requires the host's own upload/readback. No C wgpu handles.
  * Cancellation is cooperative. Cancel/destroy/replacement do not wait for the
  * callback; stale outputs are discarded. Callbacks may overlap, may reenter

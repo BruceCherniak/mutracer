@@ -14,6 +14,7 @@ import {sameInstanceMembership} from '../../src/renderer/packedMeshInstances.js'
 import {hardwareOpaqueGeometryFlags} from './hwrt-eligibility.js';
 import {ERROR_CODE, VERSION, RESOURCE, KIND, FORMAT, HEADER as H, GEOMETRY as G, MESH as M, MATERIAL as MAT, TEXTURE as T, LIGHT as L, CAMERA as C, BATCH as B, SETTINGS as S, PACKET_HEADER as PH, PACKET_ENTRY as PE, WRITE_ENTRY as WE, WORD_BYTES, quantizeDisplacementRange} from './layout.js';
 import {nativePathIntersections} from './path-diagnostics.wgsl.js';
+import {nativeFrameInputHooks} from './frame-inputs.wgsl.js';
 import type IESProfile from '../../src/scene/IESProfile.js';
 import {computeDisplacementMinmax, computeTrianglesDisplacementRange} from '../../src/renderer/displacementPreparation.js';
 import {releaseNativeScene} from './scene-sync.js';
@@ -464,6 +465,12 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
       nativePathIntersections(features, nativeLayout.isEmpty, false), true));
     shader(RESOURCE.HWRT_PATH_SHADER, () => 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
       nativePathIntersections(features, nativeLayout.isEmpty, true, !!hardware, opaqueClosest), true));
+  }
+  if (configuration.variants & 16) {
+    shader(RESOURCE.SOFTWARE_FRAME_SHADER, () => wgpuShaderSource(constants, features, true,
+      '', false, nativeFrameInputHooks()));
+    shader(RESOURCE.HWRT_FRAME_SHADER, () => 'enable wgpu_ray_query;\n' + wgpuShaderSource(constants, features, true,
+      nativeIntersections(features, nativeLayout.isEmpty, false, false, !!hardware, opaqueClosest), false, nativeFrameInputHooks()));
   }
   // Both AS inputs remain explicitly indexed. Production retains source index
   // lookup; leaf-order regression diagnostics use sequence indices.

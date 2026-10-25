@@ -64,12 +64,18 @@ cancellation.
 
 - Inputs are the raw per-sample color, bottom row first. They are not
   normalized by surface hits like `MT_IMAGE_HDR` readback.
-- Reading the inputs can block the API call; the filter runs on a library
+- Each call copies its inputs on the GPU, 48 bytes per render pixel, so later
+  rendering cannot overwrite them. Readback and the filter run on a library
   thread. Cancellation, clearing, replacement and destruction never wait for it,
   and late results are discarded, so calls can overlap.
-- Rust filters can work on GPU buffers (`gpu_inputs`); this adds an upload after
-  readback and, for GPU output, a readback on the worker. C callbacks receive
-  CPU arrays.
+- Rust filters that return `DenoiseInputMode::ResidentGpu` from `input_mode`
+  receive the copies as GPU buffers and return a GPU result, with no CPU
+  transfer; the result keeps 16 more bytes per pixel. See
+  [custom-gpu-denoiser.rs](../host/examples/custom-gpu-denoiser.rs).
+  `gpu_inputs` instead uploads the CPU arrays again. C callbacks receive CPU
+  arrays.
+- The inputs are the accumulated color and guides; no depth, motion or other
+  temporal inputs are provided.
 - An error, invalid output or panic produces an engine error event and stops
   scheduled filtering until a filter is set again; `converge` returns an error.
   The unfiltered accumulation stays available.

@@ -291,7 +291,13 @@ fn retire_targets(registry: &mut Registry, owner: u64) -> Result<()> {
                 std::thread::yield_now();
             }
         }
-        context.link.as_mut().unwrap().current = false;
+        let link = context.link.as_mut().unwrap();
+        link.current = false;
+        if let Some(history) = &mut link.target.frame_inputs {
+            // Until stable scene correspondence is produced, a scene publication
+            // must not reuse temporal history from the retired publication.
+            history.invalidate(denoiser_inputs::ResetReason::TargetRebuilt);
+        }
     }
     Ok(())
 }
@@ -1818,6 +1824,13 @@ pub unsafe extern "C" fn mt_context_submit(
 /// `owner` is the scene a linked context renders; it is needed only to dispatch.
 fn advance_job(context: &mut Context, owner: Option<&GpuScene>, budget: u32) -> Result<()> {
     if let Err(error) = context.gpu.loss.check() {
+        if let Some(history) = context
+            .link
+            .as_mut()
+            .and_then(|l| l.target.frame_inputs.as_mut())
+        {
+            history.device_lost();
+        }
         context.failed = true;
         if let Some(job) = context.job.as_mut() {
             job.state = JobState::Failed;

@@ -17,8 +17,11 @@ export function prepareDxc() {
   if(!existsSync(archive))run('curl',['-LfsS','--retry','2',
     'https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.8.2505.1/dxc_2025_07_14.zip','-o',archive]);
   if(createHash('sha256').update(readFileSync(archive)).digest('hex')!=='9ad895a6b039e3a8f8c22a1009f866800b840a74b50db9218d13319e215ea8a4')throw new Error('DXC checksum mismatch');
-  if(!existsSync(resolve(cache,'bin/x64/dxcompiler.dll')))run(nativeTar,['-xf',archive,'-C',cache]);
-  for(const name of ['dxcompiler.dll','dxil.dll'])if(!existsSync(resolve(cache,'bin/x64',name)))throw new Error(`DXC missing ${name}`);
+  // A partial cache may have the compiler but lack the redistributable notices.
+  // Repair it from the verified archive before packaging any of its files.
+  const required=['bin/x64/dxcompiler.dll','bin/x64/dxil.dll','LICENSE-LLVM.txt','LICENSE-MS.txt','LICENSE-MIT.txt'];
+  if(required.some(name=>!existsSync(resolve(cache,name))))run(nativeTar,['-xf',archive,'-C',cache]);
+  for(const name of required)if(!existsSync(resolve(cache,name)))throw new Error(`DXC missing ${name}`);
   return cache;
 }
 if(process.argv[1]&&resolve(process.argv[1])===fileURLToPath(import.meta.url))console.log(resolve(prepareDxc(),'bin/x64'));

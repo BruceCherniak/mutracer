@@ -295,11 +295,45 @@ impl Display {
         self.uploads += 1;
         Ok(())
     }
-    /// Retains a result already on this device, with per-sample composition semantics.
-    pub(crate) fn upload_gpu(&mut self, source: &wgpu::Buffer) {
+    pub(crate) fn denoise_buffers(&mut self) -> Result<crate::api::DenoiseBuffers> {
+        if self.original_samples == 0 {
+            return Err("No completed denoiser input".into());
+        }
+        let copy = |source: &wgpu::Buffer, encoder: &mut wgpu::CommandEncoder| {
+            let buffer = self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Custom immutable raw guide snapshot"),
+                size: source.size(),
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            encoder.copy_buffer_to_buffer(source, 0, &buffer, 0, source.size());
+            buffer
+        };
+        let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
+        let buffers = crate::api::DenoiseBuffers {
+            color: copy(&self.raw, &mut encoder),
+            normal: copy(&self.normal, &mut encoder),
+            albedo: copy(&self.albedo, &mut encoder),
+        };
+        self.gpu.queue.submit([encoder.finish()]);
+        Ok(buffers)
+    }
+    /// A same-device GPU result follows the identical composition path as CPU
+    /// filtering. Raw accumulation and HDR exports continue using `raw`.
+    pub(crate) fn upload_gpu(&mut self, source: &wgpu::Buffer) -> Result<()> {
+        self.gpu.loss.check()?;
+        if source.size() < self.linear.size()
+            || !source.usage().contains(wgpu::BufferUsages::COPY_SRC)
+        {
+            return Err("Invalid display GPU image".into());
+        }
+        let size = self.linear.size();
         self.retain_denoised(|encoder, target| {
-            encoder.copy_buffer_to_buffer(source, 0, target, 0, target.size())
+            encoder.copy_buffer_to_buffer(source, 0, target, 0, size)
         });
+        Ok(())
     }
     fn retain_denoised(&mut self, write: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer)) {
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
