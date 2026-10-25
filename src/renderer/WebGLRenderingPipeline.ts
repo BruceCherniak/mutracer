@@ -279,8 +279,10 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
 
     rayTracePass.setCamera(camera);
     aovCamera=camera;
+    if (!rayTracePass.preparePrograms()) return true;
     const resetAccumulation = isFirstFrame;
     if(resetAccumulation) aov.reset();
+    if (execution?.aovs?.length && !rayTracePass.prepareAovs(aov,camera,renderWidth,renderHeight,execution.aovs)) return true;
     if (resetAccumulation) {
       tileTimingGeneration++;
       elapsedTileTime = undefined;
@@ -551,7 +553,10 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     async readAov(kind) {
       if(!execution?.aovs?.includes(kind) || !aovCamera || sampleCount<1) throw new Error('AOV output is not ready');
       rayTracePass.setCamera(aovCamera);
-      rayTracePass.renderAovs(aov,aovCamera,renderWidth,renderHeight,sampleCount,execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset);
+      while (!rayTracePass.renderAovs(aov,aovCamera,renderWidth,renderHeight,sampleCount,execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset)) {
+        if (disposed || renderer.gl.isContextLost()) throw new Error('AOV compilation was interrupted');
+        await new Promise<void>(resolve => scheduleFrame(() => resolve()));
+      }
       return aov.read(kind);
     },
     async readOutput(kind) {

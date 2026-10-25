@@ -182,6 +182,11 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     }
   }
 
+  isProgramReady(inputs?: Record<I, Texture2D>) {
+    if (inputs) this._bindings.setUniforms(inputs);
+    return this._renderer.isProgramCompiled(this._bindings.getProgram(this._renderer));
+  }
+
   createPass(
     inputs: Record<I, Texture2D>,
     explicitOutputs?: Partial<Record<O, Texture2D>>,
@@ -238,7 +243,10 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
       this.setUniform(`${name}RegionSize`, [region.width, region.height]);
     }
     this._bindings.setUniforms(inputs);
-    this._bindings.bind(renderer);
+    if (!this._bindings.bind(renderer)) {
+      gl.disable(gl.SCISSOR_TEST);
+      return false;
+    }
     gl.disable(gl.DEPTH_TEST);
     if (options.blend) {
       gl.enable(gl.BLEND);
@@ -249,6 +257,7 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     }
     gl.drawArrays(gl.TRIANGLES, 0, 3);
     gl.disable(gl.SCISSOR_TEST);
+    return true;
   }
 
   releaseTarget(target: object) {

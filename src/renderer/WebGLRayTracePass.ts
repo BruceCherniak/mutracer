@@ -314,6 +314,13 @@ class WebGLRayTracePass {
     this._aovPass.setUniform('openPbrEnergyLut', this._openPbrEnergyLut);
   }
 
+  preparePrograms() {
+    this.prepare();
+    const main = this._mainPass.isProgramReady();
+    const shadow = !this._hasShadowCatcher || this._shadowCatcherPass.isProgramReady();
+    return main && shadow;
+  }
+
   createPass(
     clear: boolean,
     tile: { x: number; y: number; width: number; height: number },
@@ -1066,15 +1073,24 @@ class WebGLRayTracePass {
   // WebGL has uniform per-pixel counts; setSampleCount already includes offset.
   setSampleSequenceOffset(_offset: number) {}
 
-  renderAovs(state: WebGLAov, camera: Camera, width: number, height: number, samples: number, cap: number, kinds: readonly AovKind[], sequenceOffset = 0) {
-    if (!kinds.length || !this._preparedMeshData || !this._tlas) return;
+  prepareAovs(state: WebGLAov, camera: Camera, width: number, height: number, kinds: readonly AovKind[]) {
+    if (!kinds.length || !this._preparedMeshData || !this._tlas) return true;
     const gl = this._renderer.gl;
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('AOV requires EXT_color_buffer_float');
     this.prepare(); state.resize(width,height);
     if (!state.frame) { const packed=packAovScene(this._preparedMeshData,this._tlas,camera,width,height,state.history); state.frame=packed.frame; state.setScene(packed.words); }
     this._aovCenter.setUniform('aovScene',state.scene); this._aovCenter.setUniform('previousId',state.previousCenter!.id);this._aovCenter.setUniform('previousMotion',state.previousCenter!.motion); this._aovPass.setUniform('aovScene',state.scene);
     this._aovCenter.setSize(width,height); this._aovPass.setSize(width,height);
-    if (!state.centerReady) {this._aovCenter.createPass({},state.center);state.centerReady=true;state.history.accept(state.frame);}
+    const previous=state.accumulation[(state.samples+1)%2];
+    const center=this._aovCenter.isProgramReady();
+    const accumulation=this._aovPass.isProgramReady({previousGeometry:previous.geometry,previousPosition:previous.position,previousDiffuse:previous.diffuse,previousSpecular:previous.specular});
+    return center && accumulation;
+  }
+
+  renderAovs(state: WebGLAov, camera: Camera, width: number, height: number, samples: number, cap: number, kinds: readonly AovKind[], sequenceOffset = 0) {
+    if (!kinds.length || !this._preparedMeshData || !this._tlas) return true;
+    if (!this.prepareAovs(state,camera,width,height,kinds)) return false;
+    if (!state.centerReady) {this._aovCenter.createPass({},state.center);state.centerReady=true;state.history.accept(state.frame!);}
     const target=Math.min(samples,cap);
     while(state.samples<target){
       const output=state.accumulation[state.samples%2], previous=state.accumulation[(state.samples+1)%2];
@@ -1084,6 +1100,7 @@ class WebGLRayTracePass {
       this._aovPass.createPass({previousGeometry:previous.geometry,previousPosition:previous.position,previousDiffuse:previous.diffuse,previousSpecular:previous.specular},output);
       state.samples++;
     }
+    return true;
   }
 
   async readDepthSamples(area: DepthSampleArea, aspect?: number): Promise<Float32Array | undefined> {
