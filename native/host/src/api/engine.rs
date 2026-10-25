@@ -350,6 +350,25 @@ impl Engine {
             .map_err(|e| error(Status::Unavailable, format!("GPU device unavailable: {e}")))?;
         Ok(Self::with_gpu(gpu, options, None))
     }
+    /// Available adapters in a deterministic order (backend, vendor, device, name).
+    /// Enumeration creates no devices and can return an empty list. Retain an
+    /// adapter and use [`Engine::on_adapter`] to select that exact device.
+    pub fn adapters() -> Vec<wgpu::Adapter> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        crate::GpuDevice::adapters(&instance)
+    }
+    /// Creates its own device on the selected adapter; failure returns Unavailable
+    /// and never selects a different adapter. `options.backend` controls traversal,
+    /// not the native graphics API. Use [`Engine::on_device`] to share a device.
+    pub fn on_adapter(adapter: &wgpu::Adapter, options: EngineOptions) -> Result<Self> {
+        let gpu = GpuDevice::for_adapter(adapter, options.backend.code()).map_err(|e| {
+            error(
+                Status::Unavailable,
+                format!("Selected GPU unavailable: {e}"),
+            )
+        })?;
+        Ok(Self::with_gpu(gpu, options, Some(adapter.clone())))
+    }
     /// Shares the caller's device and queue, for example an egui-wgpu render state.
     /// Request the adapter limits and the optional ray-query feature when creating
     /// the device. The optional gate coordinates submissions with surface configuration.

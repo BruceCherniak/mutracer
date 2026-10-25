@@ -21,6 +21,7 @@
 
 - Engine/Render/Display/RenderLoop object model, offline and interactive flows, `update` semantics, clearing: [engine](docs/engine.md).
 - Threads: engine objects one thread at a time, only `mt_render_cancel` concurrent; window engines stay on the window thread; [threads](docs/engine.md#threads-and-callbacks).
+- Select a GPU: `Engine::adapters` + `Engine::on_adapter`; C `mt_gpu_adapters` + `mt_engine_create_on_adapter`; [device selection](docs/engine.md#select-a-gpu).
 - Device loss is terminal; Rust `Engine::on_device` hosts must forward loss notifications; [device loss](docs/engine.md#device-loss).
 - HWRT is the default backend with software fallback; known Metal HWRT sample miss; [backends](README.md#ray-tracing-backends).
 - Browser differences: [table](docs/engine.md#differences-from-the-browser-library).

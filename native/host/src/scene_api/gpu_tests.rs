@@ -80,7 +80,7 @@ fn software_scene_object_incremental_matches_full() {
     engine.set_scene_object(&s).unwrap();
     engine.update().unwrap();
     render.converge(ConvergeOptions::new(8)).unwrap();
-    for edit in 0..16 {
+    for edit in 0..20 {
         match edit {
             0 => s.material_mut(mat).unwrap().values.roughness = 0.6,
             1 => {
@@ -153,6 +153,16 @@ fn software_scene_object_incremental_matches_full() {
                 .unwrap();
             }
             15 => s.material_mut(mat).unwrap().values.emission_strength = 2.,
+            16..=19 => {
+                let mut controls = s.environment_settings();
+                match edit {
+                    16 => controls.intensity = 2.5,
+                    17 => controls.rotation = 1.2,
+                    18 => controls.background_intensity = 0.25,
+                    _ => controls.background_rotation = -0.8,
+                }
+                s.set_environment_settings(controls).unwrap();
+            }
             _ => unreachable!(),
         }
         let expected = if edit == 15 {
@@ -276,4 +286,113 @@ fn software_displacement_map_edits_match_prediction() {
             );
         }
     }
+}
+
+#[test]
+#[ignore = "requires a real GPU; run separately"]
+fn selected_adapter_renders_4k_and_environment_controls() {
+    let adapters = Engine::adapters();
+    let adapter = adapters
+        .iter()
+        .find(|a| {
+            !matches!(
+                a.get_info().device_type,
+                wgpu::DeviceType::Cpu | wgpu::DeviceType::Other
+            )
+        })
+        .expect("hardware adapter");
+    println!(
+        "4K adapter: {:?}; limits: {:?}",
+        adapter.get_info(),
+        adapter.limits()
+    );
+    let engine = Engine::on_adapter(
+        adapter,
+        EngineOptions {
+            backend: Backend::Software,
+        },
+    )
+    .unwrap();
+    assert_eq!(engine.info().adapter_name, adapter.get_info().name);
+    let mut s = Scene::new();
+    let g = s
+        .add_geometry(Geometry::new(
+            vec![-1., -1., -2., 1., -1., -2., 0., 1., -2.],
+            vec![0, 1, 2],
+        ))
+        .unwrap();
+    let mat = s.add_material(OpenPbrMaterial::default()).unwrap();
+    let mut mesh = Mesh::new(g, mat);
+    mesh.transform = Mat4::from_translation(Vec3::new(100., 0., 0.)); // Every camera ray misses.
+    s.add_mesh(mesh).unwrap();
+    let hdr = s
+        .add_texture(Texture {
+            pixels: TexturePixels::Rgba32F(vec![0.25, 0.5, 1., 1.].into()),
+            ..Texture::rgba8(1, 1, vec![])
+        })
+        .unwrap();
+    s.set_environment(Environment {
+        texture: Some(hdr),
+        background: Some(hdr),
+        ..Default::default()
+    })
+    .unwrap();
+    s.set_environment_settings(EnvironmentSettings {
+        intensity: 3.,
+        rotation: 0.7,
+        background_intensity: 2.,
+        background_rotation: -0.4,
+    })
+    .unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 1,
+            bounces: 1,
+            bevel: false,
+            size: RenderSize::Fixed {
+                width: 3840,
+                height: 2160,
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    engine.set_scene_object(&s).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(1)).unwrap();
+    let image = render.read_pixels(PixelKind::Hdr).unwrap();
+    assert_eq!([image.width, image.height], [3840, 2160]);
+    assert_eq!(image.data.len(), 3840 * 2160 * 4);
+    for pixel in image.data.chunks_exact(4) {
+        assert_eq!(pixel, &[0.5, 1., 2., 1.]);
+    }
+    // Removing an explicit identity settings block preserves default fixed-seed pixels.
+    let original = s.descriptor().unwrap();
+    s.set_environment_settings(EnvironmentSettings::default())
+        .unwrap();
+    let with_default = s.descriptor().unwrap();
+    let mut omitted = with_default.as_ref().clone();
+    omitted[h::ENVIRONMENT_SETTINGS * 4..h::ENVIRONMENT_SETTINGS * 4 + 4].fill(0);
+    let small = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 1,
+            size: RenderSize::Fixed {
+                width: 8,
+                height: 6,
+            },
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    engine.set_scene(&with_default).unwrap();
+    engine.update().unwrap();
+    small.converge(ConvergeOptions::new(1)).unwrap();
+    let expected = small.read_pixels(PixelKind::Hdr).unwrap();
+    engine.set_scene(&omitted).unwrap();
+    engine.update().unwrap();
+    small.converge(ConvergeOptions::new(1)).unwrap();
+    assert_eq!(small.read_pixels(PixelKind::Hdr).unwrap(), expected);
+    assert_ne!(*original, *with_default);
 }

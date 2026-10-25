@@ -260,7 +260,8 @@ function decodeScene(bytes: Uint8Array, token = 0) {
     const texture = decodeTexture(bytes, u, f, u[H.TEXTURE_OFFSET] + i * T.WORDS);
     textures.push(texture); textureIds.set(texture, i);
   }
-  const environment = nativeFloatImage(u[H.ENVIRONMENT_TEXTURE] ? textures[u[H.ENVIRONMENT_TEXTURE] - 1] : undefined);
+  const environmentSettings = u[H.ENVIRONMENT_SETTINGS] ? f.slice(u[H.ENVIRONMENT_SETTINGS], u[H.ENVIRONMENT_SETTINGS] + 4) : new Float32Array([1, 0, 1, 0]);
+  const environment = scaleEnvironment(nativeFloatImage(u[H.ENVIRONMENT_TEXTURE] ? textures[u[H.ENVIRONMENT_TEXTURE] - 1] : undefined), environmentSettings[0]);
   const background = nativeFloatImage(u[H.BACKGROUND_TEXTURE] ? textures[u[H.BACKGROUND_TEXTURE] - 1] : undefined);
   const qualityFlags = u[H.QUALITY_FLAGS];
   const environmentDistribution = environment ? envMapDistribution(environment) : undefined;
@@ -288,7 +289,7 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   for (let i = 0; i < u[H.LIGHT_COUNT]; i++) {
     lights.push(decodeLight(bytes, u, f, u[H.LIGHT_OFFSET] + i * L.WORDS, textures, iesProfiles));
   }
-  return {width, height, environment, background, qualityFlags, environmentDistribution,
+  return {width, height, environment, background, environmentSettings, qualityFlags, environmentDistribution,
     materials, geometries, meshes, lights, textureIds, backgroundColor: f.slice(H.BACKGROUND_COLOR, H.BACKGROUND_COLOR + 4),
     cameraUniform: sceneCameraParameters(bytes.subarray(u[H.CAMERA_OFFSET] * WORD_BYTES, u[H.CAMERA_OFFSET] * WORD_BYTES + C.WORDS * WORD_BYTES), width, height)};
 }
@@ -374,7 +375,7 @@ function packAtlas(table: MaterialData): Uint8Array {
 }
 function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: FlattendBVH, token: number, hardware?: HardwareScene): Uint8Array {
   const {width, height, environment, background, qualityFlags, environmentDistribution,
-    materials, geometries, meshes, lights, backgroundColor, cameraUniform} = input;
+    materials, geometries, meshes, lights, backgroundColor, cameraUniform, environmentSettings} = input;
   const blases = prepared.blases;
   const blas = hardware ? new Uint8Array(hardware.records.buffer) : new Uint8Array(concatBLASBuffers(blases));
   const bvh = new Uint8Array(tlas.buffer.byteLength + blas.byteLength);
@@ -407,6 +408,7 @@ function composeScene(input: DecodedScene, prepared: PreparedScene, tlas: Flatte
   const {lightData, lightWidth, lightHeight, lightUniform, environmentPmf, choiceCount, totalWeight, emissiveTexels}
     = prepareNativeLightSampling(lights, table, emissive, estimateEnvironmentPower(environment));
   const rt = makeRayTraceUniform();
+  writeEnvironmentSettings(rt, environmentSettings);
   rt.views.lightsCount[0] = lights.length;
   if (!background && !(qualityFlags & 4)) rt.views.backgroundColor.set(backgroundColor);
   rt.views.backgroundFlags[0] = (qualityFlags & 4 ? 0 : 1) | (background ? 2 : 0); rt.views.blasOffset[0] = tlas.buffer.byteLength / 16;
@@ -727,14 +729,17 @@ export function sceneEnvironmentParameters(bytes: Uint8Array, token: number): Ui
     || u[3] !== Number(!!(state.qualityFlags & 4))) {
     return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
   }
+  const header = u[0] === 2 ? 16 : 12;
+  const settings = u[0] === 2 ? f.slice(12, 16) : new Float32Array([1, 0, 1, 0]);
   const envLength = u[1] * u[2] * 4;
-  const environment = envLength ? {width: u[1], height: u[2], data: f.slice(12, 12 + envLength)} : undefined;
-  const background = u[8] * u[9] ? {width: u[8], height: u[9], data: f.slice(12 + envLength)} : undefined;
+  const environment = scaleEnvironment(envLength ? {width: u[1], height: u[2], data: f.slice(header, header + envLength)} : undefined, settings[0]);
+  const background = u[8] * u[9] ? {width: u[8], height: u[9], data: f.slice(header + envLength)} : undefined;
   const distribution = environment ? envMapDistribution(environment) : undefined;
   const environmentPower = estimateEnvironmentPower(environment);
   const lighting = prepareNativeLightSampling(state.lights, state.table, state.emissive, environmentPower);
   const rt = makeRayTraceUniform();
   new Uint8Array(rt.buffer).set(new Uint8Array(state.rt));
+  writeEnvironmentSettings(rt, settings);
   if (!background && !u[3]) rt.views.backgroundColor.set(f.slice(4, 8));
   packLightingUniform(rt, lighting.environmentPmf, lighting.choiceCount, lighting.totalWeight, lighting.lightWidth, lighting.emissiveTexels);
   pendingLighting.set(token, {lights: state.lights, rt: rt.buffer, environmentPower,
@@ -1231,6 +1236,18 @@ function packGeometryUpdate(stage: GeometryStage, tlas: FlattendBVH, token: numb
   ], [bvh, packedInstances, new Uint8Array(attributes.buffer), new Uint8Array(rt.buffer), new Uint8Array(lighting.lightUniform.buffer), new Uint8Array(lighting.lightData.buffer), metadata, state.hardware ? new Uint8Array(hardwarePositions(merged).buffer) : new Uint8Array(0)]);
 }
 
+// Match the browser's environment intensity semantics; alpha is not radiance.
+function scaleEnvironment(image: {width: number; height: number; data: Float32Array} | undefined, intensity: number) {
+  if (!image || intensity === 1) return image;
+  const data = image.data.slice();
+  for (let i = 0; i < data.length; i += 4) for (let c = 0; c < 3; c++) data[i + c] *= intensity;
+  return {width: image.width, height: image.height, data};
+}
+function writeEnvironmentSettings(rt: ReturnType<typeof makeRayTraceUniform>, values: Float32Array) {
+  const c = Math.cos(values[1]), s = Math.sin(values[1]);
+  rt.views.environmentRotation.set([c, 0, s === 0 ? 0 : -s, 0, 0, 1, 0, 0, s, 0, c, 0, 0, 0, 0, 1]);
+  rt.views.backgroundMapTransform.set([Math.cos(values[3]), Math.sin(values[3]), values[2], 0]);
+}
 function nativeFloatImage(texture: PixelTexture | undefined): {width: number; height: number; data: Float32Array} | undefined {
   if (!texture) return undefined;
   const data = texture.pixels.data;

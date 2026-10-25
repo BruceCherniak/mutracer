@@ -1850,7 +1850,7 @@ fn full_preparation_with_a_batch_in_flight_keeps_reads_and_releases_the_context(
     render
         .set_settings(RenderSettings {
             size: RenderSize::Fixed {
-                width: 5000,
+                width: 9000,
                 height: 4,
             },
             ..settings.clone()

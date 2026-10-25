@@ -271,12 +271,7 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     if w.u(h::VERSION) != layout::version::SCENE || w.u(h::LENGTH) != w.len() {
         return Err("Scene descriptor version/length mismatch".into());
     }
-    if w.u(h::WIDTH) == 0
-        || w.u(h::HEIGHT) == 0
-        || w.u(h::WIDTH) > 4096
-        || w.u(h::HEIGHT) > 4096
-        || w.u(h::WIDTH) * w.u(h::HEIGHT) > 4_194_304
-    {
+    if !crate::image_limits::valid([w.u(h::WIDTH) as u32, w.u(h::HEIGHT) as u32]) {
         return Err("Scene image dimensions exceed probe limits".into());
     }
     if w.u(h::GEOMETRY_COUNT) == 0
@@ -301,7 +296,16 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     }
     w.reserved(h::RESERVED, 1)?;
 
-    w.reserved(h::RESERVED_TAIL, h::WORDS - h::RESERVED_TAIL)?;
+    w.reserved(h::RESERVED_TAIL, 2)?;
+    w.reserved(h::RESERVED_END, h::WORDS - h::RESERVED_END)?;
+    if w.u(h::ENVIRONMENT_SETTINGS) != 0 {
+        let at = w.u(h::ENVIRONMENT_SETTINGS);
+        w.span(at, 4)?;
+        w.finite(at, 4)?;
+        if w.f(at) < 0. || w.f(at + 2) < 0. {
+            return Err("Environment intensity must be nonnegative".into());
+        }
+    }
     if w.u(h::BATCH_OFFSET) != 0 {
         w.span(w.u(h::BATCH_OFFSET), w.u(h::MESH_COUNT) * b::WORDS)?;
     }
@@ -1077,7 +1081,7 @@ impl PreparedState {
             return Err("Invalid environment descriptor length".into());
         }
         let w = Words(bytes);
-        if w.u(0) != 1 || w.u(3) > 1 || w.u(10) != 0 || w.u(11) != 0 {
+        if ![1, 2].contains(&w.u(0)) || w.u(3) > 1 || w.u(10) != 0 || w.u(11) != 0 {
             return Err("Invalid environment version/visibility/reserved fields".into());
         }
         let mut pixels = 0;
@@ -1092,12 +1096,19 @@ impl PreparedState {
             }
             pixels += width * height;
         }
-        if w.len() != 12 + pixels * 4 {
+        let header = if w.u(0) == 2 { 16 } else { 12 };
+        if w.len() != header + pixels * 4 {
             return Err("Environment pixel length mismatch".into());
         }
         w.finite(4, 4)?;
-        w.finite(12, pixels * 4)?;
-        if (12..w.len()).any(|i| w.f(i) < 0.) {
+        if header == 16 {
+            w.finite(12, 4)?;
+            if w.f(12) < 0. || w.f(14) < 0. {
+                return Err("Environment intensity must be nonnegative".into());
+            }
+        }
+        w.finite(header, pixels * 4)?;
+        if (header..w.len()).any(|i| w.f(i) < 0.) {
             return Err("Environment pixels must be nonnegative".into());
         }
         let mut pointer = std::ptr::null();
@@ -1231,14 +1242,7 @@ impl PreparedState {
         }
         validate_camera(&Words(camera), 0)?;
         // The descriptor limits of a scene of this size.
-        if size[0] == 0
-            || size[1] == 0
-            || size[0] > 4096
-            || size[1] > 4096
-            || size[0] * size[1] > 4_194_304
-            || quality > 3
-            || alpha_blend_strategy > 1
-        {
+        if !crate::image_limits::valid(size) || quality > 3 || alpha_blend_strategy > 1 {
             return Err(fail(
                 Status::InvalidArgument,
                 "Invalid render target size, quality or alpha strategy",

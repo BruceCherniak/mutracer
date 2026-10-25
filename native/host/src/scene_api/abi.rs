@@ -101,6 +101,16 @@ pub struct EnvironmentDesc {
     background: u64,
     color: [f32; 4],
 }
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct EnvironmentSettingsDesc {
+    struct_size: u32,
+    reserved: u32,
+    intensity: f32,
+    rotation: f32,
+    background_intensity: f32,
+    background_rotation: f32,
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Resource {
     Geometry(GeometryId),
@@ -194,6 +204,7 @@ defaults! {
  mt_scene_mesh_desc_default,MeshDesc,MeshDesc{struct_size:size_of::<MeshDesc>() as u32,reserved:0,geometry:0,material:0,world_matrix:Mat4::IDENTITY.to_cols_array(),materials:std::ptr::null(),material_count:0};
  mt_scene_instances_desc_default,InstancesDesc,InstancesDesc{struct_size:size_of::<InstancesDesc>() as u32,count:0,transforms:std::ptr::null(),colors:std::ptr::null()};
  mt_scene_light_desc_default,LightDesc,LightDesc{struct_size:size_of::<LightDesc>() as u32,kind:0,color:[1.;3],intensity:1.,size:1.,height:1.,spread:1.,reserved:0,world_matrix:Mat4::IDENTITY.to_cols_array(),texture:0,ies:std::ptr::null(),ies_bytes:0};
+ mt_scene_environment_settings_default,EnvironmentSettingsDesc,EnvironmentSettingsDesc{struct_size:24,reserved:0,intensity:1.,rotation:0.,background_intensity:1.,background_rotation:0.};
  mt_scene_environment_desc_default,EnvironmentDesc,EnvironmentDesc{struct_size:40,reserved:0,environment:0,background:0,color:[0.,0.,0.,1.]};
 }
 macro_rules! resource_access {($($method:ident,$variant:ident,$ty:ty);*)=>{$(impl Entry {fn $method(&self,id:u64)->Result<$ty>{match self.resources.get(&id){Some(Resource::$variant(v))=>Ok(*v),_=>Err(invalid_handle())}}})*};}
@@ -712,6 +723,28 @@ pub unsafe extern "C" fn mt_scene_set_environment(
                 color: d.color,
             };
             e.scene.set_environment(env)
+        })
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_scene_set_environment_settings(
+    scene: u64,
+    desc: *const EnvironmentSettingsDesc,
+    error: *mut c_char,
+    cap: usize,
+) -> i32 {
+    call(error, cap, || {
+        let d = unsafe { record(desc) }?;
+        if d.reserved != 0 {
+            return Err(invalid("Reserved must be zero"));
+        }
+        with_scene(scene, |e| {
+            e.scene.set_environment_settings(EnvironmentSettings {
+                intensity: d.intensity,
+                rotation: d.rotation,
+                background_intensity: d.background_intensity,
+                background_rotation: d.background_rotation,
+            })
         })
     })
 }

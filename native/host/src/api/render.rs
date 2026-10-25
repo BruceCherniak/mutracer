@@ -45,10 +45,8 @@ pub enum AlphaBlendStrategy {
 pub enum RenderSize {
     /// Display-relative scale; the size follows [`super::Display::set_size`] at the next refine.
     Scale(f64),
-    Fixed {
-        width: u32,
-        height: u32,
-    },
+    /// Edges 1–8192, at most 16,777,216 pixels, also subject to GPU limits.
+    Fixed { width: u32, height: u32 },
 }
 impl Default for RenderSize {
     fn default() -> Self {
@@ -2652,7 +2650,7 @@ mod cancellation_tests {
             render
                 .set_settings(RenderSettings {
                     size: RenderSize::Fixed {
-                        width: 5000,
+                        width: 9000,
                         height: 4,
                     },
                     ..settings.clone()
@@ -2768,7 +2766,7 @@ mod cancellation_tests {
         render
             .set_settings(RenderSettings {
                 size: RenderSize::Fixed {
-                    width: 5000,
+                    width: 9000,
                     height: 4,
                 },
                 ..Default::default()

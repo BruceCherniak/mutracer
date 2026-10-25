@@ -31,6 +31,7 @@ mod hardware;
 mod hdr;
 pub mod hit_diagnostics;
 pub mod image_diagnostics;
+mod image_limits;
 pub mod picking;
 #[cfg(any(test, feature = "validation"))]
 mod sample_audit;
@@ -343,6 +344,19 @@ impl GpuDevice {
         }))?;
         Self::for_adapter(&adapter, mode)
     }
+    fn adapters(instance: &wgpu::Instance) -> Vec<wgpu::Adapter> {
+        let mut adapters = pollster::block_on(instance.enumerate_adapters(wgpu::Backends::all()));
+        adapters.sort_by_key(|adapter| {
+            let info = adapter.get_info();
+            (
+                format!("{:?}", info.backend),
+                info.vendor,
+                info.device,
+                info.name,
+            )
+        });
+        adapters
+    }
     fn for_adapter(adapter: &wgpu::Adapter, mode: u32) -> Result<Self> {
         let info = adapter.get_info();
         native_log!(
@@ -638,6 +652,22 @@ impl GpuScene {
         }
         let device = &gpu.device;
         let queue = &gpu.queue;
+        crate::image_limits::validate_target([scene.width, scene.height], &device.limits())?;
+        for buffer in &scene.buffers {
+            if buffer.size > device.limits().max_buffer_size
+                || buffer.usage & wgpu::BufferUsages::STORAGE.bits() != 0
+                    && buffer.size > u64::from(device.limits().max_storage_buffer_binding_size)
+            {
+                return Err("Scene buffer exceeds the selected GPU's buffer limits".into());
+            }
+        }
+        for texture in &scene.textures {
+            if texture.width.max(texture.height) > device.limits().max_texture_dimension_2d
+                || texture.depth > device.limits().max_texture_array_layers
+            {
+                return Err("Scene texture exceeds the selected GPU's texture limits".into());
+            }
+        }
         runtime::init();
         let mut buffers = HashMap::new();
         let mut reused_bytes = 0u64;
@@ -1030,6 +1060,7 @@ impl GpuScene {
         previous: Option<Target>,
     ) -> Result<Target> {
         use layout::resource as res;
+        crate::image_limits::validate_target(size, &self.gpu.device.limits())?;
         if self.scene.bind_groups[layout::group::OUTPUT].entries.len() != 4 {
             return Err("Render targets do not support instrumented scene outputs".into());
         }

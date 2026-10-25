@@ -36,7 +36,11 @@ typedef struct mt_scene_header_v4 {
   uint32_t environment_texture_plus_one, background_texture_plus_one; /* 0 = none. */
   uint32_t quality_flags; /* MT_QUALITY_* bits. */
   uint32_t batch_offset; /* 0, or mesh_count mt_batch_v4 records. */
-  uint32_t reserved[8];
+  uint32_t reserved[2];
+  uint32_t environment_settings_offset; /* 0 = defaults, or four floats: lighting intensity,
+    * lighting yaw, background intensity, background yaw. Yaw is radians about +Y;
+    * intensities are finite and nonnegative. Defaults 1,0,1,0. */
+  uint32_t reserved_end[5];
 } mt_scene_header_v4;
 
 typedef struct mt_geometry_v4 {

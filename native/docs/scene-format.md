@@ -85,6 +85,11 @@ the rules the validator enforces.
   linear RGBA32F equirectangular textures; their flip, wrap and UV transform
   fields are ignored. Lighting and the visible background are independent, but
   `MT_QUALITY_HIDE_BACKGROUND` cannot be combined with a background map.
+- `environment_settings_offset` is 0 for default controls, or points to four
+  finite floats: lighting intensity, lighting yaw, background intensity,
+  background yaw. Intensities are nonnegative, default 1; yaw is local-to-world
+  rotation about +Y in radians, default 0. The background controls apply only
+  to its map; lighting and background can use the same source texture.
 
 ### Geometry and meshes
 
@@ -152,8 +157,9 @@ changes only the camera is incremental.
 
 - At least one geometry, mesh and material; at most 4,096 geometries, 65,536
   meshes and materials, 64 analytic lights and 256 textures.
-- At most 512 MiB of input, 4,194,304 output pixels and 16,777,216 texture
-  pixels in total.
+- Output edges 1–8,192 with at most 16,777,216 pixels; actual output is also
+  limited by the selected GPU's storage-buffer, texture and dispatch limits.
+- At most 512 MiB of input and 16,777,216 texture pixels in total.
 - At most 4,000,000 vertices and 12,000,000 indices per geometry. Preparation
   has a conservative 1 GiB budget estimated from vertex and index counts,
   including material-related expansion.

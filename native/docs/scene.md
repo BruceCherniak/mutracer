@@ -28,6 +28,19 @@ Engines keep submitted snapshots, so a scene can be edited or destroyed after
 `set_scene_object` returns. Rust geometry, image and instance arrays are `Arc`s
 that scenes can share (`Arc::make_mut` edits one); C copies every input.
 
+## Environment lighting and background
+
+Set RGBA32F maps with `set_environment` / `mt_scene_set_environment`. Adjust
+lighting and background independently with `set_environment_settings` /
+`mt_scene_set_environment_settings`, then submit the scene and call `update`.
+The controls persist when a map is replaced; the source texture can be shared
+with materials without changing their appearance. Solid background colors are
+unaffected by the background-map controls.
+
+Updating these controls can process the full environment image, so larger HDRIs
+cost more to update. The background rotation is independent: change both
+rotations together when the visible background should follow the lighting.
+
 ## Edit a scene
 
 Edit the scene through its `*_mut` accessors (Rust) or `mt_scene_set_*` and
@@ -45,7 +58,8 @@ These edits commit incrementally:
   edit needs a new shader variant.
 - Texture sampling parameters and pixels, including environment and background
   map pixels and sizes, while the texture atlas still fits.
-- Adding, removing and changing lights; background color.
+- Adding, removing and changing lights; background color; environment/background
+  strength and rotation.
 
 These edits need full preparation, which runs on a library thread while the
 previous image stays visible ([engine updates](engine.md#updates)):

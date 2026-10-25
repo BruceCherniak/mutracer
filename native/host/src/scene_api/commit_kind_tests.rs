@@ -406,3 +406,42 @@ fn target_settings_are_outside_scene_prediction() {
         println!("CLASSIFICATION {name}: Full (target descriptor; outside Scene prediction)");
     }
 }
+
+#[test]
+fn environment_controls_are_validated_and_incremental() {
+    for field in 0..4 {
+        Fixture::new().check("environment controls", Incremental, |f| {
+            let mut settings = EnvironmentSettings::default();
+            match field {
+                0 => settings.intensity = 0.,
+                1 => settings.rotation = 1.,
+                2 => settings.background_intensity = 2.,
+                _ => settings.background_rotation = -2.,
+            }
+            f.scene.set_environment_settings(settings).unwrap();
+        });
+    }
+    let mut f = Fixture::new();
+    let old = f.scene.descriptor().unwrap();
+    for settings in [
+        EnvironmentSettings {
+            intensity: -1.,
+            ..Default::default()
+        },
+        EnvironmentSettings {
+            rotation: f32::NAN,
+            ..Default::default()
+        },
+        EnvironmentSettings {
+            background_intensity: -1.,
+            ..Default::default()
+        },
+        EnvironmentSettings {
+            background_rotation: f32::INFINITY,
+            ..Default::default()
+        },
+    ] {
+        assert!(f.scene.set_environment_settings(settings).is_err());
+        assert!(Arc::ptr_eq(&old, &f.scene.descriptor().unwrap()));
+    }
+}

@@ -213,6 +213,7 @@ impl Scene {
         let d = cached.as_mut().unwrap();
         d.words[h::ENVIRONMENT_TEXTURE] = r.environment_index;
         d.words[h::BACKGROUND_TEXTURE] = r.background_index;
+        self.environment_settings.encode(&mut d.words);
         Ok(d.bytes())
     }
 }

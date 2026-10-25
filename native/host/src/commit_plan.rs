@@ -387,9 +387,15 @@ fn environment_step(a: &Words, b: &Words) -> Option<Step> {
     };
     let (ew, eh, environment) = map(b.u(h::ENVIRONMENT_TEXTURE))?;
     let (bw, bh, background) = map(b.u(h::BACKGROUND_TEXTURE))?;
-    let mut bytes = record(&[1, ew, eh, u32::from(b.u(h::QUALITY_FLAGS) & 4 != 0)]);
+    let mut bytes = record(&[2, ew, eh, u32::from(b.u(h::QUALITY_FLAGS) & 4 != 0)]);
     bytes.extend_from_slice(b.span(h::BACKGROUND_COLOR, 4)?);
     bytes.extend_from_slice(&record(&[bw, bh, 0, 0]));
+    let settings = b.u(h::ENVIRONMENT_SETTINGS);
+    if settings == 0 {
+        bytes.extend_from_slice(&record(&[1f32.to_bits(), 0, 1f32.to_bits(), 0]));
+    } else {
+        bytes.extend_from_slice(b.span(settings, 4)?);
+    }
     bytes.extend_from_slice(environment);
     bytes.extend_from_slice(background);
     Some(Step::Environment(bytes))

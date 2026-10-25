@@ -79,33 +79,65 @@ pub unsafe extern "C" fn mt_engine_create_for_window(
     error_out: *mut c_char,
     capacity: usize,
 ) -> i32 {
-    call(error_out, capacity, || {
-        let options = unsafe { record(options)? };
-        let window = unsafe { record(window)? };
-        if output.is_null() {
-            return Err(invalid("Null engine output"));
+    call(error_out, capacity, || unsafe {
+        create_window_engine(options, window, None, output)
+    })
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_engine_create_for_window_on_adapter(
+    options: *const MtEngineOptions,
+    window: *const MtWindow,
+    adapter_index: u32,
+    output: *mut u64,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || unsafe {
+        create_window_engine(options, window, Some(adapter_index), output)
+    })
+}
+unsafe fn create_window_engine(
+    options: *const MtEngineOptions,
+    window: *const MtWindow,
+    adapter_index: Option<u32>,
+    output: *mut u64,
+) -> Result<()> {
+    let options = unsafe { record(options)? };
+    let window = unsafe { record(window)? };
+    if output.is_null() {
+        return Err(invalid("Null engine output"));
+    }
+    let backend = backend_from(options.backend)?;
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let surface = unsafe { window_surface(&instance, window)? };
+    let adapter = if let Some(index) = adapter_index {
+        let adapter = selected_adapter(&instance, index)?;
+        if !adapter.is_surface_supported(&surface) {
+            return Err(error(
+                Status::Unavailable,
+                "Selected adapter cannot present to this window",
+            ));
         }
-        let backend = backend_from(options.backend)?;
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
-        let surface = unsafe { window_surface(&instance, window)? };
-        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+        adapter
+    } else {
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             compatible_surface: Some(&surface),
             ..Default::default()
         }))
+        .map_err(|e| error(Status::Unavailable, e.to_string()))?
+    };
+    let gpu = crate::GpuDevice::for_adapter(&adapter, backend.code())
         .map_err(|e| error(Status::Unavailable, e.to_string()))?;
-        let gpu = crate::GpuDevice::for_adapter(&adapter, backend.code())
-            .map_err(|e| error(Status::Unavailable, e.to_string()))?;
-        let engine = Engine::with_gpu(gpu, EngineOptions { backend }, Some(adapter));
-        let display = engine.display();
-        display.attach_surface(surface, SurfaceOptions::default())?;
-        display.resize_surface(window.width, window.height)?;
-        let handle = register_engine(engine, Some(instance))?;
-        unsafe {
-            output.write(handle);
-        }
-        Ok(())
-    })
+    let engine = Engine::with_gpu(gpu, EngineOptions { backend }, Some(adapter));
+    let display = engine.display();
+    display.attach_surface(surface, SurfaceOptions::default())?;
+    display.resize_surface(window.width, window.height)?;
+    let handle = register_engine(engine, Some(instance))?;
+    unsafe {
+        output.write(handle);
+    }
+    Ok(())
 }
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_display_attach_window(

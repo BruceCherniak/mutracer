@@ -46,6 +46,8 @@ export const HEADER = {
   "QUALITY_FLAGS": 22,
   "BATCH_OFFSET": 23,
   "RESERVED_TAIL": 24,
+  "ENVIRONMENT_SETTINGS": 26,
+  "RESERVED_END": 27,
   "WORDS": 32
 } as const;
 export const GEOMETRY = {

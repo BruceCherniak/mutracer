@@ -26,6 +26,7 @@ export class NativeBackground {
   color = new Float32Array(4);
   texture: PixelTexture | undefined = undefined;
   hidden = false;
+  environmentSettings = new Float32Array([1, 0, 1, 0]);
 }
 
 class NativeLightSnapshot {
@@ -78,7 +79,7 @@ function captureLight(light: NativeLight): NativeLightSnapshot {
 function captureBackground(background: NativeBackground | undefined): NativeBackgroundSnapshot {
   if (!background) return new NativeBackgroundSnapshot([], undefined);
   const c = background.color;
-  return new NativeBackgroundSnapshot([c[0], c[1], c[2], c[3], background.hidden ? 1 : 0], background.texture);
+  return new NativeBackgroundSnapshot([c[0], c[1], c[2], c[3], background.hidden ? 1 : 0, background.environmentSettings[0], background.environmentSettings[1], background.environmentSettings[2], background.environmentSettings[3]], background.texture);
 }
 const nativeAdapter: SceneSnapshotAdapter<NativeLight, NativeBackground, NativeMaterialSnapshot, NativeLightSnapshot, NativeBackgroundSnapshot> = {
   validateMesh: (_mesh: MeshState) => {},
@@ -328,6 +329,8 @@ export class SyncedScene {
     for (let i = 0; i < 4; i++) if (!Object.is(background.color[i], f[H.BACKGROUND_COLOR + i])) background.color[i] = f[H.BACKGROUND_COLOR + i];
     background.texture = u[H.BACKGROUND_TEXTURE] ? this.textures[u[H.BACKGROUND_TEXTURE] - 1] : undefined;
     background.hidden = (u[H.QUALITY_FLAGS] & 4) !== 0;
+    const at = u[H.ENVIRONMENT_SETTINGS];
+    background.environmentSettings.set(at ? f.subarray(at, at + 4) : new Float32Array([1, 0, 1, 0]));
   }
 }
 

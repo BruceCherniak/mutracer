@@ -312,6 +312,57 @@ impl Default for Environment {
     }
 }
 
+/// Independent environment lighting and visible background controls. Settings
+/// persist when map handles change. They do not alter the source texture pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EnvironmentSettings {
+    /// Nonnegative lighting radiance multiplier. Default 1; 0 disables illumination.
+    pub intensity: f32,
+    /// Environment local-to-world yaw about +Y, in radians. Default 0.
+    pub rotation: f32,
+    /// Nonnegative background-map radiance multiplier. Default 1; ignored for colors.
+    pub background_intensity: f32,
+    /// Background-map yaw about +Y, in radians, independent of lighting. Default 0.
+    pub background_rotation: f32,
+}
+impl Default for EnvironmentSettings {
+    fn default() -> Self {
+        Self {
+            intensity: 1.,
+            rotation: 0.,
+            background_intensity: 1.,
+            background_rotation: 0.,
+        }
+    }
+}
+impl EnvironmentSettings {
+    fn values(self) -> [f32; 4] {
+        [
+            self.intensity,
+            self.rotation,
+            self.background_intensity,
+            self.background_rotation,
+        ]
+    }
+    fn encode(self, words: &mut Vec<u32>) {
+        if self == Self::default() && words[h::ENVIRONMENT_SETTINGS] == 0 {
+            return;
+        }
+        let at = if words[h::ENVIRONMENT_SETTINGS] == 0 {
+            let at = words.len();
+            words[h::ENVIRONMENT_SETTINGS] = at as u32;
+            words.resize(at + 4, 0);
+            at
+        } else {
+            words[h::ENVIRONMENT_SETTINGS] as usize
+        };
+        for (i, value) in self.values().into_iter().enumerate() {
+            words[at + i] = value.to_bits();
+        }
+        words[h::LENGTH] = words.len() as u32;
+    }
+}
+
 #[derive(Default)]
 struct Dirty {
     geometry: BTreeSet<Key>,
@@ -339,6 +390,7 @@ pub struct Scene {
     meshes: Arena<Mesh>,
     lights: Arena<Light>,
     environment: Environment,
+    environment_settings: EnvironmentSettings,
     camera: Option<Camera>,
     dirty: Mutex<Dirty>,
     revision: u64,
@@ -360,6 +412,7 @@ impl Scene {
             meshes: Arena::new(owner),
             lights: Arena::new(owner),
             environment: Environment::default(),
+            environment_settings: EnvironmentSettings::default(),
             camera: None,
             dirty: Mutex::new(Dirty {
                 structure: true,
@@ -385,6 +438,27 @@ impl Scene {
         self.dirty.get_mut().unwrap().environment = true;
         self.changed();
         Ok(())
+    }
+    /// Changes environment/background-map strength and yaw without replacing maps.
+    /// Values must be finite and intensities nonnegative; invalid settings leave
+    /// the scene unchanged. Existing maps update incrementally on the next commit.
+    pub fn set_environment_settings(&mut self, settings: EnvironmentSettings) -> Result<()> {
+        if settings.values().iter().any(|v| !v.is_finite())
+            || settings.intensity < 0.
+            || settings.background_intensity < 0.
+        {
+            return Err(invalid(
+                "Environment settings must be finite with nonnegative intensity",
+            ));
+        }
+        self.environment_settings = settings;
+        self.dirty.get_mut().unwrap().environment = true;
+        self.changed();
+        Ok(())
+    }
+    /// Current environment/background controls, initially [`EnvironmentSettings::default`].
+    pub fn environment_settings(&self) -> EnvironmentSettings {
+        self.environment_settings
     }
     /// Optional fallback camera, default the standard 45 degree perspective camera.
     pub fn set_default_camera(&mut self, camera: Option<Camera>) {
@@ -651,6 +725,7 @@ impl Scene {
         }
         words[h::ENVIRONMENT_TEXTURE] = r.environment_index;
         words[h::BACKGROUND_TEXTURE] = r.background_index;
+        self.environment_settings.encode(words);
         Ok(())
     }
     /// Encodes an immutable snapshot. Repeated calls without edits share one buffer.

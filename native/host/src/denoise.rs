@@ -157,11 +157,11 @@ impl Denoiser {
     ) -> Result<Vec<f32>> {
         let pixels = (size[0] as usize)
             .checked_mul(size[1] as usize)
-            .filter(|count| *count > 0 && *count <= 4_194_304)
+            .filter(|count| *count > 0 && *count <= 16_777_216)
             .context("Invalid OIDN image size")?;
         let count = pixels * 4;
         if !(count > 0
-            && count <= 4_194_304 * 4
+            && count <= 16_777_216 * 4
             && [color, normal, albedo]
                 .iter()
                 .all(|v| v.len() == count && v.iter().all(|x| x.is_finite())))

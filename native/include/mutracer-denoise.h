@@ -39,7 +39,7 @@ int32_t mt_denoiser_create(const char *library, uint32_t backend, mt_denoiser *o
 int32_t mt_denoiser_backend(mt_denoiser handle, uint32_t *output, char *error, size_t capacity);
 /* color,normal,albedo: finite linear RGBA f32, matching dimensions/row order;
  * output: same layout. count is floats per image, exactly width*height*4.
- * Dimensions must be nonzero and total pixels<=4194304. All three inputs are
+ * Dimensions must be nonzero and total pixels<=16777216. All three inputs are
  * required; normal/albedo are treated as noisy accumulated guides.
  * Filters HDR RGB, preserves color alpha exactly, and never modifies inputs
  * unless they alias output. Output may alias any input; no partial result is

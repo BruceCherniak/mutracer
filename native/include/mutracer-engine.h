@@ -60,6 +60,24 @@ int32_t mt_engine_options_default(mt_engine_options *output);
 /* Creates a device of its own. No usable GPU returns MT_ERROR_UNAVAILABLE. */
 int32_t mt_engine_create(const mt_engine_options *options, mt_engine *output, char *error, size_t capacity);
 int32_t mt_engine_destroy(mt_engine engine, char *error, size_t capacity);
+/* Enumeration creates no devices. NULL/0 queries required count; enough capacity
+ * writes all records (no initialization required). BUFFER_TOO_SMALL writes only
+ * required. Order: backend, vendor, device, name. Indices refer to this machine's
+ * current adapter list; re-enumerate after GPU hotplug. Empty list is valid. */
+typedef struct mt_gpu_adapter_info {
+  uint32_t struct_size, index;
+  uint32_t backend; /* 0 other, 1 Metal, 2 Vulkan, 3 DX12. */
+  uint32_t vendor, device; /* Native PCI identifiers when available; otherwise 0. */
+  uint32_t device_type; /* 0 other, 1 discrete, 2 integrated, 3 CPU, 4 virtual. */
+  uint32_t hardware_ray_query, reserved; /* Capability boolean; reserved=0. */
+  char name[256]; /* NUL-terminated UTF-8 adapter name, possibly truncated. */
+} mt_gpu_adapter_info;
+MT_ENGINE_LAYOUT(mt_gpu_adapter_info, 288);
+int32_t mt_gpu_adapters(mt_gpu_adapter_info *output, size_t capacity, size_t *required, char *error, size_t error_capacity);
+/* Creates on this enumerated adapter. Unavailable index/device returns UNAVAILABLE;
+ * never falls back to another adapter. options.backend still selects traversal. */
+int32_t mt_engine_create_on_adapter(const mt_engine_options *options, uint32_t adapter_index,
+  mt_engine *output, char *error, size_t capacity);
 /* Window engines own their adapter/device. External native GPU device handles
  * cannot be imported through C; use Rust Engine::on_device for device sharing.
  * All engine/display/render/loop calls (including destroy) stay on the creating
@@ -82,6 +100,10 @@ typedef struct mt_native_window {
 MT_ENGINE_LAYOUT(mt_native_window, 24 + 2 * sizeof(void *));
 int32_t mt_engine_create_for_window(const mt_engine_options *options, const mt_native_window *window,
   mt_engine *output, char *error, size_t capacity);
+/* Same window/thread/lifetime rules; selected adapter must support the surface,
+ * otherwise UNAVAILABLE. No fallback to another adapter. */
+int32_t mt_engine_create_for_window_on_adapter(const mt_engine_options *options, const mt_native_window *window,
+  uint32_t adapter_index, mt_engine *output, char *error, size_t capacity);
 int32_t mt_display_attach_window(mt_display display, const mt_native_window *window, char *error, size_t capacity);
 int32_t mt_display_detach_window(mt_display display, char *error, size_t capacity);
 int32_t mt_display_resize_window(mt_display display, uint32_t width, uint32_t height, char *error, size_t capacity);

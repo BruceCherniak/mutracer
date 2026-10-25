@@ -25,6 +25,18 @@ function in the header and the Rust source.
 
 The [quick start](../README.md#quick-start) shows the complete sequence.
 
+## Select a GPU
+
+C hosts enumerate with `mt_gpu_adapters` and pass the chosen index to
+`mt_engine_create_on_adapter` or `mt_engine_create_for_window_on_adapter`.
+Enumerate again after GPU hotplug; indices are local to the current machine and
+adapter list. Creation fails if the selected device is unavailable or cannot
+present to the window.
+
+Rust hosts retain an adapter from `Engine::adapters` and use
+`Engine::on_adapter`, or share their own wgpu device with `Engine::on_device`.
+The existing engine constructors continue to select a device automatically.
+
 ## Render interactively
 
 Create an engine, set the scene and create a render loop. Each frame, call
@@ -63,6 +75,10 @@ Render options default to the browser library's values; the
 
 ## Costs
 
+- Output size is bounded by the [scene limits](scene-format.md#limits) and the
+  selected GPU. Accumulation needs about 96 bytes per pixel (about 760 MiB at
+  3840×2160), before display, denoising, readback and scene resources. There is
+  no offline tiled output yet; lower the size if the device cannot allocate it.
 - The first use of a shader variant compiles a pipeline. Full scene compilation
   runs on the preparation thread; a variant needed by one render (another
   sampling pattern, bevel sample count or alpha blend strategy) compiles on the

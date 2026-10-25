@@ -695,6 +695,112 @@ fn register_render(engine: u64, render: Arc<Render>, owner: Option<u64>) -> Resu
 
 // ---- Engine ----
 
+#[repr(C)]
+pub struct MtGpuAdapterInfo {
+    struct_size: u32,
+    index: u32,
+    backend: u32,
+    vendor: u32,
+    device: u32,
+    device_type: u32,
+    hardware_ray_query: u32,
+    reserved: u32,
+    name: [c_char; 256],
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_gpu_adapters(
+    output: *mut MtGpuAdapterInfo,
+    capacity: usize,
+    required: *mut usize,
+    error_out: *mut c_char,
+    error_capacity: usize,
+) -> i32 {
+    call(error_out, error_capacity, || {
+        if required.is_null() || (output.is_null() && capacity != 0) {
+            return Err(invalid("Invalid adapter output pointers"));
+        }
+        let adapters = Engine::adapters();
+        unsafe { required.write(adapters.len()) };
+        if output.is_null() && capacity == 0 {
+            return Ok(());
+        }
+        if capacity < adapters.len() {
+            return Err(error(Status::BufferTooSmall, "Adapter array is too small"));
+        }
+        for (index, adapter) in adapters.iter().enumerate() {
+            let info = adapter.get_info();
+            let mut name = [0; 256];
+            let mut end = info.name.len().min(255);
+            while !info.name.is_char_boundary(end) {
+                end -= 1;
+            }
+            for (out, byte) in name.iter_mut().zip(info.name[..end].bytes()) {
+                *out = byte as c_char;
+            }
+            let record = MtGpuAdapterInfo {
+                struct_size: std::mem::size_of::<MtGpuAdapterInfo>() as u32,
+                index: index as u32,
+                backend: match info.backend {
+                    wgpu::Backend::Metal => 1,
+                    wgpu::Backend::Vulkan => 2,
+                    wgpu::Backend::Dx12 => 3,
+                    _ => 0,
+                },
+                vendor: info.vendor,
+                device: info.device,
+                device_type: match info.device_type {
+                    wgpu::DeviceType::DiscreteGpu => 1,
+                    wgpu::DeviceType::IntegratedGpu => 2,
+                    wgpu::DeviceType::Cpu => 3,
+                    wgpu::DeviceType::VirtualGpu => 4,
+                    _ => 0,
+                },
+                hardware_ray_query: u32::from(
+                    adapter
+                        .features()
+                        .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY),
+                ),
+                reserved: 0,
+                name,
+            };
+            unsafe { output.add(index).write(record) };
+        }
+        Ok(())
+    })
+}
+fn selected_adapter(instance: &wgpu::Instance, index: u32) -> Result<wgpu::Adapter> {
+    crate::GpuDevice::adapters(instance)
+        .into_iter()
+        .nth(index as usize)
+        .ok_or_else(|| error(Status::Unavailable, "Selected adapter index is unavailable"))
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mt_engine_create_on_adapter(
+    options: *const MtEngineOptions,
+    adapter_index: u32,
+    output: *mut u64,
+    error_out: *mut c_char,
+    capacity: usize,
+) -> i32 {
+    call(error_out, capacity, || {
+        let options = unsafe { record(options)? };
+        if output.is_null() {
+            return Err(invalid("Null output"));
+        }
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        let adapter = selected_adapter(&instance, adapter_index)?;
+        let engine = Engine::on_adapter(
+            &adapter,
+            EngineOptions {
+                backend: backend_from(options.backend)?,
+            },
+        )?;
+        let handle = register_engine(engine, None)?;
+        unsafe { output.write(handle) };
+        Ok(())
+    })
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mt_engine_options_default(output: *mut MtEngineOptions) -> i32 {
     if output.is_null() {
@@ -2128,6 +2234,8 @@ mod tests {
         use std::mem::{offset_of, size_of};
         let pointer = size_of::<*const u8>();
         assert_eq!(size_of::<MtEngineOptions>(), 8);
+        assert_eq!(size_of::<MtGpuAdapterInfo>(), 288);
+        assert_eq!(offset_of!(MtGpuAdapterInfo, name), 32);
         assert_eq!(size_of::<MtDepthSampleArea>(), 16);
         assert_eq!(offset_of!(MtDepthSampleArea, x), 4);
         assert_eq!(offset_of!(MtDepthSampleArea, size), 12);
@@ -2244,5 +2352,101 @@ mod tests {
                 Status::InvalidArgument
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod adapter_tests {
+    use super::*;
+    #[test]
+    #[ignore = "requires a real GPU; run separately"]
+    fn c_enumeration_selection_and_invalid_index() {
+        let mut count = 0;
+        let mut message = [0; 1024];
+        assert_eq!(
+            unsafe {
+                mt_gpu_adapters(
+                    std::ptr::null_mut(),
+                    0,
+                    &mut count,
+                    message.as_mut_ptr(),
+                    message.len(),
+                )
+            },
+            0
+        );
+        assert!(count > 0);
+        let mut adapters: Vec<MtGpuAdapterInfo> =
+            (0..count).map(|_| unsafe { std::mem::zeroed() }).collect();
+        assert_eq!(
+            unsafe {
+                mt_gpu_adapters(
+                    adapters.as_mut_ptr(),
+                    count - 1,
+                    &mut count,
+                    message.as_mut_ptr(),
+                    message.len(),
+                )
+            },
+            Status::BufferTooSmall as i32
+        );
+        assert!(adapters.iter().all(|a| a.struct_size == 0));
+        let capacity = adapters.len();
+        assert_eq!(
+            unsafe {
+                mt_gpu_adapters(
+                    adapters.as_mut_ptr(),
+                    capacity,
+                    &mut count,
+                    message.as_mut_ptr(),
+                    message.len(),
+                )
+            },
+            0
+        );
+        let options = MtEngineOptions {
+            struct_size: 8,
+            backend: 0,
+        };
+        let mut handle = 0;
+        assert_eq!(
+            unsafe {
+                mt_engine_create_on_adapter(
+                    &options,
+                    u32::MAX,
+                    &mut handle,
+                    message.as_mut_ptr(),
+                    message.len(),
+                )
+            },
+            Status::Unavailable as i32
+        );
+        assert_eq!(handle, 0);
+        let index = adapters
+            .iter()
+            .position(|a| a.device_type == 1 || a.device_type == 2)
+            .expect("hardware adapter");
+        assert_eq!(
+            unsafe {
+                mt_engine_create_on_adapter(
+                    &options,
+                    index as u32,
+                    &mut handle,
+                    message.as_mut_ptr(),
+                    message.len(),
+                )
+            },
+            0
+        );
+        let info = engine_of(handle).unwrap().info();
+        let name = unsafe { CStr::from_ptr(adapters[index].name.as_ptr()) }
+            .to_str()
+            .unwrap();
+        assert_eq!(info.adapter_name, name);
+        println!("C selected adapter {index}: {name}");
+        assert_eq!(
+            unsafe { mt_engine_destroy(handle, message.as_mut_ptr(), message.len()) },
+            0
+        );
     }
 }

@@ -235,3 +235,21 @@ describe('native scene sync', () => {
     expect(synced.sync(encode(spec)).scene.meshes).toBe('none');
   });
 });
+
+it('detects environment controls without treating them as topology changes', () => {
+  const original = encode(base()), scene = new SyncedScene();
+  scene.sync(original); scene.accept();
+  const bytes = new Uint8Array(original.byteLength + 16);
+  bytes.set(original);
+  const words = new Uint32Array(bytes.buffer), floats = new Float32Array(bytes.buffer);
+  words[H.ENVIRONMENT_SETTINGS] = original.byteLength / 4;
+  words[H.LENGTH] = words.length;
+  floats.set([2, 1.2, 0.5, -0.7], original.byteLength / 4);
+  const changes = scene.sync(bytes);
+  expect(changes.scene.meshes).toBe('none');
+  expect(changes.scene.background).toBe(true);
+  scene.accept();
+  expect(scene.sync(bytes).scene.background).toBe(false);
+  scene.accept();
+  expect(scene.sync(original).scene.background).toBe(true);
+});

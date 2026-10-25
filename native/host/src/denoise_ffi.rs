@@ -141,7 +141,7 @@ pub unsafe extern "C" fn mt_denoiser_run(
     action(error, capacity, || {
         let pixels = (width as usize)
             .checked_mul(height as usize)
-            .filter(|n| *n > 0 && *n <= 4_194_304)
+            .filter(|n| *n > 0 && *n <= 16_777_216)
             .ok_or_else(|| fail(Status::InvalidArgument, "Invalid OIDN image size"))?;
         if count != pixels * 4 {
             return Err(fail(

@@ -124,6 +124,20 @@ int32_t mt_scene_material_set_float(mt_scene scene, mt_scene_material_id id, uin
 int32_t mt_scene_material_set_uint(mt_scene scene, mt_scene_material_id id, uint32_t property, uint32_t value, char *error, size_t capacity);
 int32_t mt_scene_material_set_texture(mt_scene scene, mt_scene_material_id id, uint32_t property, mt_scene_texture_id texture, char *error, size_t capacity);
 int32_t mt_scene_set_environment(mt_scene scene, const mt_scene_environment_desc *desc, char *error, size_t capacity);
+typedef struct mt_scene_environment_settings {
+  uint32_t struct_size, reserved;
+  float intensity; /* Lighting radiance multiplier, finite >=0. Default 1. */
+  float rotation; /* Local-to-world yaw about +Y in radians, finite. Default 0. */
+  float background_intensity; /* Background-map multiplier, finite >=0. Default 1. */
+  float background_rotation; /* Independent background-map yaw, radians about +Y. Default 0. */
+} mt_scene_environment_settings;
+MT_SCENE_API_LAYOUT(mt_scene_environment_settings, 24);
+int32_t mt_scene_environment_settings_default(mt_scene_environment_settings *out);
+/* Copies controls; source pixels and solid background colors are unchanged.
+ * Settings persist across map changes. Nonfinite/negative intensity or nonzero
+ * reserved returns INVALID_ARGUMENT and leaves settings unchanged. Commit with
+ * set_scene_object + engine_update; existing maps can update incrementally. */
+int32_t mt_scene_set_environment_settings(mt_scene scene, const mt_scene_environment_settings *settings, char *error, size_t capacity);
 /* NULL camera uses the standard 45-degree perspective default. Engine camera
  * overrides this fallback. Output dimensions and quality remain per-render. */
 int32_t mt_scene_set_default_camera(mt_scene scene, const mt_camera_v4 *camera, char *error, size_t capacity);
