@@ -392,11 +392,9 @@ impl Engine {
         gpu.compilation
             .events_enabled
             .store(true, Ordering::Relaxed);
-        // Only shared-device engines can attach a surface. Keep the headless
-        // queue path unchanged; it has no surface configuration to coordinate.
-        if adapter.is_some() {
-            gpu.queue.ensure_gate();
-        }
+        // Surface configuration and native image borrows both require exclusive
+        // access to queue submission, including for library-owned devices.
+        gpu.queue.ensure_gate();
         Self {
             inner: Arc::new(Inner {
                 state: Mutex::new(State {

@@ -654,6 +654,7 @@ name = "mutracer-native-probe"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "ash",
  "base64 0.22.1",
  "cc",
  "glam",

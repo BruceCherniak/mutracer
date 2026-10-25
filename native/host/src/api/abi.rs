@@ -2,6 +2,8 @@
 //!
 //! Objects live in one registry. Each call clones what it needs out of the
 //! registry and runs without holding it, so callbacks may call back into the ABI.
+#[path = "abi_vulkan.rs"]
+mod vulkan;
 use super::*;
 use crate::status;
 use std::collections::HashMap;
@@ -86,6 +88,7 @@ fn invalid_handle() -> Error {
     error(Status::InvalidHandle, "Unknown or destroyed handle")
 }
 fn check_window_thread(e: &EngineEntry) -> Result<()> {
+    vulkan::check_engine_ref(&e.engine)?;
     if e.window
         .as_ref()
         .is_some_and(|(_, t)| *t != std::thread::current().id())
@@ -98,6 +101,7 @@ fn check_window_thread(e: &EngineEntry) -> Result<()> {
     Ok(())
 }
 fn check_owner_thread(r: &Registry, owner: u64) -> Result<()> {
+    vulkan::check_engine(owner)?;
     match r.objects.get(&owner) {
         Some(Object::Engine(e)) => check_window_thread(e),
         _ => Err(invalid_handle()),
@@ -120,6 +124,7 @@ fn register_engine(engine: Engine, window: Option<wgpu::Instance>) -> Result<u64
     Ok(handle)
 }
 pub(crate) fn engine_of(handle: u64) -> Result<Engine> {
+    vulkan::check_engine(handle)?;
     registry(|r| match r.objects.get(&handle) {
         Some(Object::Engine(e)) => {
             check_window_thread(e)?;
@@ -133,6 +138,7 @@ fn display_of(handle: u64) -> Result<Display> {
         let Some(Object::Display { engine }) = r.objects.get(&handle) else {
             return Err(invalid_handle());
         };
+        vulkan::check_engine(*engine)?;
         match r.objects.get(engine) {
             Some(Object::Engine(e)) => {
                 check_window_thread(e)?;
@@ -842,6 +848,7 @@ pub unsafe extern "C" fn mt_engine_destroy(
 ) -> i32 {
     call(error_out, capacity, || {
         engine_of(handle)?;
+        vulkan::engine_destroyed(handle);
         // Loops first, then renders, then the engine; dropped outside the registry.
         let mut removed = registry(|r| {
             if !matches!(r.objects.get(&handle), Some(Object::Engine(_))) {

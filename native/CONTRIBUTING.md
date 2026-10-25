@@ -103,6 +103,7 @@ need `xvfb-run`.
 | `MUTRACER_KERNEL_FIXTURES` | [Native kernel](#shared-source-and-typed-resources) byte comparisons |
 | `MUTRACER_NATIVE_PROFILE=1` | [Preparation profile](#performance) on stderr |
 | `MUTRACER_ANIMATION_EVIDENCE` | Animation test fixtures, poses, images and report |
+| `MUTRACER_TEST_VULKAN_LIBRARY` | Optional Vulkan driver/loader library for the interop GPU test |
 | `MUTRACER_VIEWER_METRICS` | [Real-window viewer metrics](#viewer) |
 | `MUTRACER_NATIVE_GUI_SMOKE=1` | Same as `native:viewer:package -- --gpu` |
 
@@ -600,3 +601,24 @@ install_name_tool plus ad-hoc signing on macOS and patchelf on Linux.
 After a direct Cargo shared-library build, call
 `finalizeHostLibrary(CARGO_TARGET_DIR)` from that module before linking C
 consumers. Rust rlib consumers and the statically linked viewer do not need it.
+
+
+## Vulkan C interop validation
+
+Linux/Windows include the Vulkan bridge in ordinary builds; the ignored interop
+GPU test is part of `native:ci:gpu`. On macOS, compile that same bridge explicitly
+with `--features vulkan-interop` and set `MUTRACER_TEST_VULKAN_LIBRARY` to a Vulkan
+portability driver's library, for example a local MoltenVK dylib. With the AOT
+archive and separate host Cargo target configured:
+
+```sh
+cargo test --locked --manifest-path native/host/Cargo.toml --features vulkan-interop \
+  --lib external_vulkan_device_images_and_native_post_process -- --ignored --nocapture
+```
+
+The test creates the host instance/device from the C requirements, imports them,
+checks queue/image leases, copies an image with host Vulkan commands across a
+render resize, and exercises native plus Rust display passes, failure rollback
+and retirement notifications. A portability-driver pass does not validate
+Linux/Windows drivers or Vulkan HWRT. C callers also need their Vulkan SDK headers
+when including `mutracer-vulkan.h`; the ordinary headers do not require them.

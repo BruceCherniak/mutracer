@@ -52,8 +52,8 @@ display.present(&render)?;
 Passes run in registration order on every presentation and export. A failing
 pass discards the whole chain for that composition and reports an engine error.
 `PostProcessContext` documents the borrowed images and encoder. Passes add two
-4-byte images per render pixel while they run. The C API offers CPU export
-only.
+4-byte images per render pixel while they run. C hosts can borrow images and
+record native passes through [Vulkan interop](vulkan.md).
 
 ## Window presentation
 
@@ -122,7 +122,8 @@ let info = display.surface_info().unwrap();
   `display_hdr_info()` reports the display's current headroom.
 - Only the window is HDR. `Display::texture()`, pixel and PNG export, and
   `add_post_process` passes stay SDR. HDR-window passes are registered
-  separately with `add_hdr_post_process` (Rust only).
+  separately with `add_hdr_post_process` (Rust), or through the
+  [Vulkan C API](vulkan.md#add-a-display-pass).
 - Cost: an extra composition and scale per presentation; 8 bytes per render
   pixel (16 more while HDR passes run) and 8 bytes per display pixel.
 - HDR10/PQ, HLG and wide-gamut output are not available.

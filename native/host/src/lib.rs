@@ -386,7 +386,12 @@ impl GpuDevice {
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("MuTracer native feasibility"),
-                required_limits: adapter.limits(),
+                required_limits: {
+                    let mut limits = adapter.limits();
+                    // wgpu 30 indirect validation addresses buffers with u32.
+                    limits.max_buffer_size = limits.max_buffer_size.min(u32::MAX as u64);
+                    limits
+                },
                 required_features: profile_features
                     | denoise_features
                     | cache_feature

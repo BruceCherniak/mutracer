@@ -22,6 +22,13 @@ pub struct PostProcessContext<'a> {
     pub device: &'a wgpu::Device,
     /// Record commands here; the library finishes and submits this encoder.
     pub encoder: &'a mut wgpu::CommandEncoder,
+    // Native passes split recording into ordered wgpu/raw command buffers. They
+    // stay unsubmitted until the entire display chain succeeds.
+    #[cfg_attr(
+        not(any(target_os = "linux", target_os = "windows", feature = "vulkan-interop")),
+        allow(dead_code)
+    )]
+    pub(crate) commands: &'a mut Vec<wgpu::CommandBuffer>,
     /// Straight-alpha RGBA8Unorm for SDR registrations; linear RGBA16Float
     /// for add_hdr_post_process. Check input.format() when sharing pass code.
     pub input: &'a wgpu::Texture,
@@ -228,6 +235,7 @@ impl Display {
         if let Some(targets) = targets {
             let view = Render::view(&self.engine, selected);
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            let mut commands = Vec::new();
             for (index, (_, pass)) in passes.iter().enumerate() {
                 let output = &targets[index % 2];
                 let mut pass = pass.lock().unwrap_or_else(|e| e.into_inner());
@@ -235,6 +243,7 @@ impl Display {
                     pass(PostProcessContext {
                         device: &gpu.device,
                         encoder: &mut encoder,
+                        commands: &mut commands,
                         input: &image,
                         output,
                         width: size[0],
@@ -264,7 +273,8 @@ impl Display {
             }
             drop(state);
             if failure.is_none() {
-                gpu.queue.submit([encoder.finish()]);
+                commands.push(encoder.finish());
+                gpu.queue.submit(commands);
             } else {
                 image = original;
             }

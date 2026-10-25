@@ -36,6 +36,7 @@ present to the window.
 Rust hosts retain an adapter from `Engine::adapters` and use
 `Engine::on_adapter`, or share their own wgpu device with `Engine::on_device`.
 The existing engine constructors continue to select a device automatically.
+C hosts can also [share a Vulkan device and queue](vulkan.md).
 
 ## Render interactively
 

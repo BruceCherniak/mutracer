@@ -78,8 +78,8 @@ int32_t mt_gpu_adapters(mt_gpu_adapter_info *output, size_t capacity, size_t *re
  * never falls back to another adapter. options.backend still selects traversal. */
 int32_t mt_engine_create_on_adapter(const mt_engine_options *options, uint32_t adapter_index,
   mt_engine *output, char *error, size_t capacity);
-/* Window engines own their adapter/device. External native GPU device handles
- * cannot be imported through C; use Rust Engine::on_device for device sharing.
+/* Window engines own their adapter/device. External Vulkan device/image access
+ * is available separately through mutracer-vulkan.h; Rust supports Engine::on_device.
  * All engine/display/render/loop calls (including destroy) stay on the creating
  * window thread for this engine's lifetime; mt_render_cancel may cross threads.
  * macOS: kind 1, window=NSView*, call on main thread. Windows: kind 2,

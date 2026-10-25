@@ -44,6 +44,12 @@ Copyright © 2015 Simonas Kazlauskas, ISC License
 ([text](./LICENSES/Libloading-ISC.txt)). The library caller supplies the OIDN
 runtime. The viewer uses the oidn-webgpu Rust runtime described below.
 
+## Vulkan host interop
+
+The Vulkan C bridge uses [ash 0.38.0](https://github.com/ash-rs/ash/tree/0.38.0%2B1.3.281),
+Copyright (c) 2016 ASH, under the MIT License
+([text](./LICENSES/Ash-MIT.txt)).
+
 ## Native glTF codecs
 
 The native SDK glTF feature uses [meshopt-rs 0.6.2](https://github.com/gwihlidal/meshopt-rs)

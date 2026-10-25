@@ -92,6 +92,10 @@ impl GpuQueue {
     pub(crate) fn readback_count(&self) -> u64 {
         self.readbacks.load(std::sync::atomic::Ordering::Relaxed)
     }
+    #[cfg(any(target_os = "linux", target_os = "windows", feature = "vulkan-interop"))]
+    pub(crate) fn gate(&self) -> Option<Arc<SubmissionGate>> {
+        self.gate.clone()
+    }
     pub(crate) fn ensure_gate(&mut self) {
         self.gate.get_or_insert_with(Default::default);
     }
