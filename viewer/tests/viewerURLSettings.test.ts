@@ -1,6 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { readURLSettings } from '../src/urlSettings';
 
+// Settings use only these real defaults. Avoid loading both renderer graphs on
+// every resetModules(), which can outlive a test and initialize the next store.
+vi.mock('@meimu/mutracer', async () => import('../../src/renderer/jnlm'));
+
 describe('viewer URL settings', () => {
   beforeEach(() => {
     vi.resetModules();
