@@ -1,4 +1,4 @@
-import {spawnNative as spawnSync, cCompiler} from '../scripts/platform.mjs';
+import {spawnNative as spawnSync, cCompiler, hostLibraryEnv, executable} from '../scripts/platform.mjs';
 import {mkdirSync,writeFileSync} from 'node:fs';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -9,11 +9,11 @@ const context=resolve(settings,'camera/jobs/context');
 mkdirSync(out,{recursive:true});
 // The settings chain builds the library and the scene fixtures; reused fixtures fix the sample count.
 const samples=process.env.MUTRACER_NATIVE_SCENE_OUTPUT?process.env.MUTRACER_NATIVE_SAMPLES??'8':'64';
-const env={...process.env,CARGO_TARGET_DIR:target,MUTRACER_NATIVE_OUTPUT:settings,MUTRACER_NATIVE_SAMPLES:samples};
+const env={...hostLibraryEnv(target),CARGO_TARGET_DIR:target,MUTRACER_NATIVE_OUTPUT:settings,MUTRACER_NATIVE_SAMPLES:samples};
 function run(name,cmd,args){const p=spawnSync(cmd,args,{cwd:root,env,encoding:'utf8',timeout:900000,maxBuffer:32*1024*1024});
  writeFileSync(resolve(out,name+'.log'),(p.stdout??'')+(p.stderr??''));if(p.error||p.status!==0)throw Error(name+': '+(p.error?.message??p.stderr));return p.stdout;}
 run('settings',process.execPath,['native/validation/settings-render.mjs']);
-const host=resolve(out,'engine-host');
+const host=resolve(out,executable('engine-host'));
 run('build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/engine-host.c','-L',resolve(target,'release'),'-lmutracer_native_probe','-Wl,-rpath,'+resolve(target,'release'),'-pthread','-o',host]);
 const results=[];
 // Software must match fresh contexts byte for byte; HWRT differences are recorded (known Metal limitation).

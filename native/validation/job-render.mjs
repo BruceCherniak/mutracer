@@ -1,4 +1,4 @@
-import {spawnNative as spawnSync, cCompiler} from '../scripts/platform.mjs';
+import {spawnNative as spawnSync, cCompiler, hostLibraryEnv, archiveName, executable} from '../scripts/platform.mjs';
 import {mkdirSync,readFileSync,writeFileSync,copyFileSync} from 'node:fs';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -8,7 +8,7 @@ const raw=resolve(out,'context'),target=resolve(process.env.CARGO_TARGET_DIR??re
 const samples=Number(process.env.MUTRACER_NATIVE_SAMPLES??256);
 if(!Number.isInteger(samples)||samples<8||samples>4096)throw new Error('Job validation samples must be 8..4096');
 mkdirSync(out,{recursive:true});
-const env={...process.env,CARGO_TARGET_DIR:target,MUTRACER_NATIVE_OUTPUT:raw,MUTRACER_NATIVE_SAMPLES:String(samples),MUTRACER_AOT_ARCHIVE:resolve(raw,'raw/render-core.lib.a')};
+const env={...hostLibraryEnv(target),CARGO_TARGET_DIR:target,MUTRACER_NATIVE_OUTPUT:raw,MUTRACER_NATIVE_SAMPLES:String(samples),MUTRACER_AOT_ARCHIVE:resolve(raw,'raw',archiveName('render-core'))};
 const checks=[];
 function run(name,command,args){
  console.log(`${name}...`);
@@ -22,7 +22,7 @@ function run(name,command,args){
 run('context-validation',process.execPath,['native/validation/context-render.mjs']);
 // native:ci:hosts already ran the host tests.
 if(!process.env.MUTRACER_NATIVE_SCENE_OUTPUT)run('rust-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml']);
-const host=resolve(out,'job-host');
+const host=resolve(out,executable('job-host'));
 run('job-host-build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/job-host.c','-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`,'-pthread','-o',host]);
 const fixtures=JSON.parse(readFileSync(resolve(raw,'raw/scene-verification.json'))).results;
 const results=[];

@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "host-time.h"
 #include "mutracer-context.h"
 #include "mutracer-engine.h"
 
@@ -23,7 +24,7 @@ static char error[1024];
   fprintf(stderr, "FAIL %s:%d %s (%s)\n", __FILE__, __LINE__, #call, error); exit(1); } } while (0)
 
 /* One host frame: about 1 ms, so a frame loop of 600000 lasts at least 10 minutes. */
-static void frame(void) { const struct timespec delay = {0, 1000000}; nanosleep(&delay, NULL); }
+static void frame(void) { mt_host_pause(); }
 static uint8_t *read_file(const char *path, size_t *length) {
   FILE *file = fopen(path, "rb");
   if (!file) return NULL;
@@ -370,7 +371,8 @@ int main(int argc, char **argv) {
   bad = options;
   bad.width = 0;
   STATUS(mt_render_set_options(render, &bad, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);
-  STATUS(mt_render_read_pixels(render, 9, NULL, 0, &written, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);
+  STATUS(mt_render_read_pixels(render, MT_IMAGE_ID, NULL, 0, &written, error, sizeof error), MT_ERROR_INVALID_STATE);
+  STATUS(mt_render_read_pixels(render, 11, NULL, 0, &written, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);
   STATUS(mt_render_denoise_current(render, NULL, error, sizeof error), MT_ERROR_INVALID_STATE);
   STATUS(mt_engine_set_scene(engine, scene, 12, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);
   STATUS(mt_render_set_fallback(render, render, error, sizeof error), MT_ERROR_INVALID_ARGUMENT);

@@ -1,4 +1,4 @@
-import {spawnNative as spawnSync, cCompiler} from '../scripts/platform.mjs';
+import {spawnNative as spawnSync, cCompiler, hostLibraryEnv, archiveName, executable} from '../scripts/platform.mjs';
 import {existsSync,mkdirSync,readFileSync,writeFileSync,copyFileSync,symlinkSync} from 'node:fs';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -12,7 +12,7 @@ mkdirSync(out,{recursive:true});
 // so the chained C host checks reuse it instead of rebuilding and rerendering.
 const reuse=process.env.MUTRACER_NATIVE_SCENE_OUTPUT;
 if(reuse&&!existsSync(raw))symlinkSync(resolve(reuse),raw,process.platform==='win32'?'junction':'dir');
-const env={...process.env,CARGO_TARGET_DIR:target,MUTRACER_NATIVE_OUTPUT:raw,MUTRACER_NATIVE_SAMPLES:String(samples),MUTRACER_AOT_ARCHIVE:resolve(raw,'render-core.lib.a')};
+const env={...hostLibraryEnv(target),CARGO_TARGET_DIR:target,MUTRACER_NATIVE_OUTPUT:raw,MUTRACER_NATIVE_SAMPLES:String(samples),MUTRACER_AOT_ARCHIVE:resolve(raw,archiveName('render-core'))};
 const checks=[];
 function run(name,command,args){
  console.log(`${name}...`);
@@ -27,7 +27,7 @@ if(!reuse){
  run('raw-scene-validation',process.execPath,['native/validation/scene-render.mjs']);
  run('rust-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml']);
 }
-const host=resolve(out,'context-host');
+const host=resolve(out,executable('context-host'));
 run('context-host-build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/context-host.c','-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`,'-pthread','-o',host]);
 const fixtures=JSON.parse(readFileSync(resolve(raw,'scene-verification.json'))).results;
 const results=[];

@@ -4,6 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "host-time.h"
 _Static_assert(sizeof(mt_render_settings)==48,"settings ABI");
 static char error[4096];
 static unsigned checks=0;
@@ -71,7 +72,7 @@ int main(int argc,char **argv) {
   mt_job_snapshot info={.struct_size=sizeof(info)};unsigned iteration=0;
   for(;iteration<60000;iteration++) {
    OK(mt_job_poll(job,3,error,sizeof(error)));OK(mt_job_info(job,&info,error,sizeof(error)));
-   if(info.state==MT_JOB_COMPLETE)break;REQUIRE(info.state<=MT_JOB_COMPLETE);const struct timespec delay={0,1000000};nanosleep(&delay,NULL);
+   if(info.state==MT_JOB_COMPLETE)break;REQUIRE(info.state<=MT_JOB_COMPLETE);mt_host_pause();
   }
   REQUIRE(iteration<60000&&info.completed_samples==8);
   for(unsigned kind=0;kind<3;kind++){OK(pixels(context,kind,image,size));REQUIRE(memcmp(image,reference+kind*size,size)==0);}

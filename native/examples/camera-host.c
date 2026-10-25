@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include "host-time.h"
 static char error[4096];static unsigned checks;
 #define REQUIRE(test) do{checks++;if(!(test)){fprintf(stderr,"line %d: %s; %s\n",__LINE__,#test,error);return 1;}}while(0)
 #define OK(call) REQUIRE((call)==0)
@@ -75,7 +76,7 @@ int main(int argc,char **argv){
   OK(mt_context_submit(a,samples,&job,error,sizeof(error)));
   unsigned iteration=0;for(;iteration<60000;iteration++){
    OK(mt_job_poll(job,8,error,sizeof(error)));OK(mt_job_info(job,&ji,error,sizeof(error)));
-   if(ji.state==MT_JOB_COMPLETE)break;REQUIRE(ji.state==MT_JOB_QUEUED||ji.state==MT_JOB_RUNNING);const struct timespec delay={0,1000000};nanosleep(&delay,NULL);
+   if(ji.state==MT_JOB_COMPLETE)break;REQUIRE(ji.state==MT_JOB_QUEUED||ji.state==MT_JOB_RUNNING);mt_host_pause();
   }REQUIRE(iteration<60000&&ji.completed_samples==samples&&ji.base_samples==0);
   OK(mt_context_render(b,samples,error,sizeof(error)));
   for(unsigned kind=0;kind<3;kind++){
