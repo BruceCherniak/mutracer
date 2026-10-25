@@ -47,7 +47,8 @@ fn resident_custom_early_failure_keeps_filter_until_retirement_without_future_ti
         .lock()
         .unwrap_or_else(|e| e.into_inner());
     let caller = std::thread::current().id();
-    let (engine, render) = super::custom_gpu_tests::fixture(wgpu::Backends::VULKAN);
+    let (engine, render) =
+        super::custom_gpu_tests::fixture(super::custom_gpu_tests::native_backend());
     let (dropped, receive) = mpsc::channel();
     render
         .set_custom_denoiser(
@@ -149,7 +150,8 @@ fn resident_custom_failures_reject_frames_and_keep_original_images() {
     let _lock = crate::ABI_TEST_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let (engine, render) = super::custom_gpu_tests::fixture(wgpu::Backends::VULKAN);
+    let (engine, render) =
+        super::custom_gpu_tests::fixture(super::custom_gpu_tests::native_backend());
     render.converge(ConvergeOptions::new(2)).unwrap();
     let original = render.read_pixels(PixelKind::Hdr).unwrap();
     for mode in 0..6 {
@@ -186,7 +188,7 @@ fn resident_custom_shared_filter_has_isolated_target_ids_and_resize_generations(
     let _lock = crate::ABI_TEST_LOCK
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    let (engine, a) = super::custom_gpu_tests::fixture(wgpu::Backends::VULKAN);
+    let (engine, a) = super::custom_gpu_tests::fixture(super::custom_gpu_tests::native_backend());
     let b = Render::new(
         &engine,
         RenderSettings {
