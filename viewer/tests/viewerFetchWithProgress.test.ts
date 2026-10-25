@@ -1,8 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fetchWithProgress } from '../src/engine/fetchWithProgress';
 
-const sample = 'https://cdn.jsdelivr.net/gh/pissang/mutracer-assets@main/assets/yamaha-mt-09/model.glb';
-const origin = 'https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/yamaha-mt-09/model.glb';
+const sample = 'https://raw.githubusercontent.com/pissang/mutracer-assets/main/assets/yamaha-mt-09/model.glb';
 
 describe('viewer downloads', () => {
   beforeEach(() => vi.useFakeTimers());
@@ -21,16 +20,17 @@ describe('viewer downloads', () => {
     expect(progress).toHaveBeenLastCalledWith(3, 3);
   });
 
-  it('uses the same repository path and ref on GitHub after repeated CDN failures', async () => {
+  it('retries the same GitHub path and ref after transient failures', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response(null, { status: 503 }))
       .mockRejectedValueOnce(new TypeError('Failed to fetch'))
       .mockResolvedValueOnce(new Response('model'));
     vi.stubGlobal('fetch', fetchMock);
-    const result = fetchWithProgress(sample.replace('@main', '@v0.1.0'));
+    const pinned = sample.replace('/main/', '/v0.1.0/');
+    const result = fetchWithProgress(pinned);
     await vi.runAllTimersAsync();
     expect(new TextDecoder().decode(await result)).toBe('model');
-    expect(fetchMock.mock.calls[2][0]).toBe(origin.replace('/main/', '/v0.1.0/'));
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([pinned, pinned, pinned]);
   });
 
   it('does not retry missing files', async () => {
@@ -85,7 +85,7 @@ describe('viewer downloads', () => {
     const failure = expect(fetchWithProgress(url)).rejects.toThrow('503');
     await vi.runAllTimersAsync();
     await failure;
-    expect(fetchMock.mock.calls.map(([address]) => address)).toEqual([url, url, url === sample ? origin : url]);
+    expect(fetchMock.mock.calls.map(([address]) => address)).toEqual([url, url, url]);
   });
 
   it('cancels a pending retry immediately when the caller aborts', async () => {

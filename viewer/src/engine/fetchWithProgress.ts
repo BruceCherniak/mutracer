@@ -4,16 +4,6 @@ class DownloadError extends Error {
   }
 }
 
-// Only our public sample repository has a known equivalent GitHub origin.
-function sampleOrigin(url: string): string | undefined {
-  try {
-    const parsed = new URL(url);
-    if (parsed.protocol !== 'https:' || parsed.host !== 'cdn.jsdelivr.net') return;
-    const match = parsed.pathname.match(/^\/gh\/pissang\/mutracer-assets@([^/]+)\/(.+)$/);
-    if (match) return `https://raw.githubusercontent.com/pissang/mutracer-assets/${match[1]}/${match[2]}${parsed.search}`;
-  } catch { /* Relative and non-HTTP URLs have no sample origin. */ }
-}
-
 function retryDelay(ms: number, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     signal?.throwIfAborted();
@@ -26,17 +16,16 @@ function retryDelay(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
-/** Fetches bytes with two retries for transient failures; samples can use GitHub as a final fallback. */
+/** Fetches bytes with two retries for transient failures. */
 export async function fetchWithProgress(
   url: string,
   onProgress?: (loaded: number, total: number) => void,
   signal?: AbortSignal
 ): Promise<ArrayBuffer> {
-  const fallback = sampleOrigin(url);
   let resource = url;
   for (let attempt = 0; ; attempt++) {
     signal?.throwIfAborted();
-    const address = attempt === 2 && fallback ? fallback : resource;
+    const address = resource;
     try {
       const bytes = await fetchOnce(address, onProgress, signal);
       // GitHub raw serves pointer text for LFS files. Keep the original URL
