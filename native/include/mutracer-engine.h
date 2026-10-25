@@ -366,10 +366,13 @@ int32_t mt_render_set_denoiser(mt_render render, const mt_render_denoiser *denoi
  * render fails during registration; invalid records/handles do not transfer it.
  * NULL disables filtering. Default none. */
 typedef struct mt_denoise_input {
-  uint32_t struct_size, width, height, reserved;
+  uint32_t struct_size, width, height, aovs; /* Supplied MT_AOV_* mask. */
   size_t count;
   const float *color, *normal, *albedo;
   const void *cancel;
+  /* Seven optional width*height*4 arrays, ordered by MT_AOV_* bit. ID is
+   * uint32_t RGBA, all other slots float RGBA. Null for unrequested slots. */
+  const void *aov_data[7];
 } mt_denoise_input;
 uint32_t mt_denoise_cancelled(const void *cancel);
 typedef int32_t (*mt_custom_denoise_callback)(const mt_denoise_input *input, float *output, char *error, size_t capacity, void *user);
@@ -379,9 +382,11 @@ typedef struct mt_custom_denoiser {
   mt_custom_denoise_callback callback;
   mt_custom_denoise_release release;
   void *user;
+  uint32_t aovs; /* Requested MT_AOV_* mask; default 0. */
+  uint32_t reserved; /* Must be 0. */
 } mt_custom_denoiser;
-MT_ENGINE_LAYOUT(mt_custom_denoiser, 8 + 3 * sizeof(void *));
-MT_ENGINE_LAYOUT(mt_denoise_input, 16 + 5 * sizeof(void *));
+MT_ENGINE_LAYOUT(mt_custom_denoiser, 16 + 3 * sizeof(void *));
+MT_ENGINE_LAYOUT(mt_denoise_input, 16 + 12 * sizeof(void *));
 int32_t mt_render_set_custom_denoiser(mt_render render, const mt_custom_denoiser *denoiser, char *error, size_t capacity);
 
 /* Collects a finished batch without waiting for it, submits the next one and

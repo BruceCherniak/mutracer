@@ -272,6 +272,33 @@ pub enum PixelKind {
     /// Previous minus current pixel position, x right, y down; alpha validity.
     Motion,
 }
+impl PixelKind {
+    pub(crate) fn from_aov_index(index: u32) -> Self {
+        match index {
+            0 => Self::Depth,
+            1 => Self::Position,
+            2 => Self::Roughness,
+            3 => Self::DiffuseAlbedo,
+            4 => Self::SpecularAlbedo,
+            5 => Self::Id,
+            6 => Self::Motion,
+            _ => unreachable!(),
+        }
+    }
+    /// Bit for RenderSettings::aovs; returns zero for beauty and OIDN guides.
+    pub fn aov_mask(self) -> u32 {
+        match self {
+            Self::Depth => 1,
+            Self::Position => 2,
+            Self::Roughness => 4,
+            Self::DiffuseAlbedo => 8,
+            Self::SpecularAlbedo => 16,
+            Self::Id => 32,
+            Self::Motion => 64,
+            _ => 0,
+        }
+    }
+}
 /// Linear RGBA f32 pixels or exact integer IDs, top row first.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Image {
@@ -564,6 +591,7 @@ impl Drop for DenoisedImage {
 struct Denoise {
     options: Option<DenoiserOptions>,
     custom: super::custom_denoise::Filter,
+    custom_aovs: u32,
     cancel: CancelToken,
     /// Kept across `set_denoiser` calls with the same library and backend.
     filter: Arc<Mutex<Option<crate::denoise::Denoiser>>>,
@@ -1265,7 +1293,8 @@ fn drain(render: &mut RenderState) -> Result<Vec<SampleEvent>> {
     Ok(events)
 }
 fn update_aovs(render: &mut RenderState) -> Result<()> {
-    if render.settings.aovs == 0 {
+    let mask = render.settings.aovs | render.denoise.custom_aovs;
+    if mask == 0 {
         render.aov = None;
         return Ok(());
     }
@@ -1294,7 +1323,7 @@ fn update_aovs(render: &mut RenderState) -> Result<()> {
         .render(
             &query,
             render.samples.min(render.settings.aov_samples),
-            render.settings.aovs,
+            mask,
         )
         .map_err(|e| error(Status::Error, e.to_string()))
 }
@@ -1595,6 +1624,9 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
     // Freeze before releasing the engine lock: a cancelled callback may overlap
     // a new render or scene publication. Only explicit custom filtering pays for
     // these copies. OIDN retains its CPU path.
+    if render.denoise.custom_aovs != 0 {
+        update_aovs(render)?;
+    }
     let resident = if let Some(custom) = &custom {
         let buffers = render
             .capture
@@ -1602,7 +1634,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
             .ok_or_else(|| error(Status::InvalidState, "Missing custom denoiser capture"))?
             .denoise_buffers()
             .map_err(|e| error(Status::Error, e.to_string()))?;
-        Some(super::GpuDenoiseInput::new(
+        let mut input = super::GpuDenoiseInput::new(
             &gpu,
             render.context,
             render.input_generation,
@@ -1611,7 +1643,17 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
             buffers,
             custom.clone(),
             cancel.clone(),
-        ))
+        );
+        if render.denoise.custom_aovs != 0 {
+            input.aovs = render
+                .aov
+                .as_ref()
+                .ok_or_else(|| error(Status::InvalidState, "Missing custom AOV input"))?
+                .snapshot(render.denoise.custom_aovs)
+                .map_err(|e| error(Status::Error, e.to_string()))?;
+            input.retain_buffers();
+        }
+        Some(input)
     } else {
         None
     };
@@ -1632,6 +1674,23 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                 let expected = resident.as_ref().unwrap().id;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let resident_mode = custom.input_mode() == super::DenoiseInputMode::ResidentGpu;
+                    let aovs = if resident_mode {
+                        Vec::new()
+                    } else {
+                        resident
+                            .as_ref()
+                            .unwrap()
+                            .aovs
+                            .iter()
+                            .map(|aov| crate::aov::read_denoise_aov(&gpu, aov))
+                            .collect::<crate::Result<Vec<_>>>()
+                            .map_err(|e| e.to_string())?
+                    };
+                    let aov_buffers = if !resident_mode && custom.gpu_inputs() {
+                        resident.as_ref().unwrap().aovs.clone()
+                    } else {
+                        Vec::new()
+                    };
                     let (color, normal, albedo, resident) = if resident_mode {
                         let mut input = resident.unwrap();
                         let pipeline = gpu
@@ -1701,6 +1760,8 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                         .map(|input| input.gpu.duplicate())
                         .unwrap_or_else(|| super::DenoiseGpu(gpu.queue.clone(), None));
                     let input = super::DenoiseInput {
+                        aovs,
+                        aov_buffers,
                         size,
                         color,
                         normal,
@@ -1938,7 +1999,8 @@ impl Render {
                 render.aov = None;
             }
             render.settings = settings;
-            if render.settings.aovs == 0 {
+            let mask = render.settings.aovs | render.denoise.custom_aovs;
+            if mask == 0 {
                 render.aov = None;
             }
             Ok(())
@@ -2035,17 +2097,25 @@ impl Render {
         filter: Option<Arc<dyn super::CustomDenoiser>>,
         schedule: DenoiseSchedule,
     ) -> Result<()> {
+        let requested_aovs = filter.as_ref().map_or(0, |f| f.aovs());
+        if requested_aovs & !127 != 0 {
+            return Err(error(Status::InvalidArgument, "Unknown custom AOV mask"));
+        }
         let filter = super::custom_denoise::Filter(filter);
         self.with(|state, id| {
             let render = state.renders.get_mut(&id).unwrap();
             cancel_denoise(render);
             render.denoiser_revision += 1;
+            if render.denoise.custom_aovs != requested_aovs {
+                render.aov = None;
+            }
             render.denoise = Denoise {
                 options: filter.0.as_ref().map(|_| DenoiserOptions {
                     schedule,
                     ..Default::default()
                 }),
                 custom: filter,
+                custom_aovs: requested_aovs,
                 ..Default::default()
             };
             Ok(())

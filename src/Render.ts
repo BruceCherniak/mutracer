@@ -30,6 +30,7 @@ export interface Denoiser {
 }
 /** Borrowed, tightly packed rgba32float buffers, top row first, width*height*16 bytes of image data. */
 export interface DenoiseInput {
+  /** Requested primary-surface buffers, top row first; id is rgba32uint, others rgba32float. Default undefined. Borrowed until denoise settles. */ aovs?: Readonly<Partial<Record<AovKind,GPUBuffer>>>;
   /** Engine WebGPU device; may change after device loss/recovery. */ device: GPUDevice;
   /** Actual internal width, including backend alignment. */ width: number;
   /** Actual internal height, including backend alignment. */ height: number;
@@ -40,6 +41,7 @@ export interface DenoiseInput {
 }
 /** Third-party WebGPU filter; ignored with one warning on WebGL. */
 export interface CustomDenoiserOptions {
+  /** Optional AOV inputs; automatically enables their passes for this render. Default []. */ aovs?: readonly AovKind[];
   /** Required implementation selector. */ type: 'custom';
   /** Required caller-owned instance, keyed by object identity; never serialized or released by Render/Engine. */ denoiser: Denoiser;
   /** When to filter complete samples. Default converged. */ schedule?: DenoiseSchedule;
@@ -136,12 +138,13 @@ function validateDenoiserOptions(options: DenoiserOptions) {
   if (!options || typeof options !== 'object' || (options.type !== 'jnlm' && options.type !== 'oidn' && options.type !== 'custom')) throw new Error('Denoiser type must be jnlm, oidn or custom.');
   const allowed = options.type === 'jnlm'
     ? ['type', 'schedule', ...Object.keys(DEFAULT_JNLM_OPTIONS)]
-    : options.type === 'custom' ? ['type', 'schedule', 'denoiser']
+    : options.type === 'custom' ? ['type', 'schedule', 'denoiser', 'aovs']
     : ['type', 'schedule', 'model', 'weightsBaseUrl', 'weightsUrl', 'aux', 'hdr', 'hdrTransfer', 'auxiliaryModelUrls', 'engine', 'precision', 'dynamicTile', 'maxTileSize', 'signal'];
   for (const key of Object.keys(options)) if (!allowed.includes(key)) throw new Error(`Denoiser field ${key} does not belong to ${options.type}.`);
   if (options.schedule !== undefined && !['converged', 'progressive', 'every-sample'].includes(options.schedule)) throw new Error('Unknown denoise schedule.');
   if (options.type === 'jnlm') createJNLMDenoiser(options);
   else if (options.type === 'custom') {
+    aovMask(options.aovs ?? []);
     if (!options.denoiser || typeof options.denoiser !== 'object' || typeof options.denoiser.denoise !== 'function' || (options.denoiser.prepare !== undefined && typeof options.denoiser.prepare !== 'function')) throw new Error('Custom denoiser must implement denoise and optional prepare.');
   } else {
     if (options.weightsUrl !== undefined) {
@@ -171,6 +174,7 @@ function isURL(value: unknown): value is string | URL { return (typeof value ===
 
 // Snapshot nested values too, so application edits cannot silently change a cache key.
 function snapshotDenoiserOptions(options: DenoiserOptions): Readonly<DenoiserOptions> {
+  if (options.type === 'custom') return Object.freeze({...options,aovs:Object.freeze([...(options.aovs ?? [])])});
   if (options.type !== 'oidn') return Object.freeze({...options});
   const next: OIDNDenoiserOptions = {...options};
   if (options.weightsBaseUrl !== undefined) next.weightsBaseUrl = String(options.weightsBaseUrl);
@@ -253,6 +257,7 @@ export default class Render {
     const current = this._denoiserOptions;
     if (current === null && next === null) return this._denoiserReady;
     if (next && current && denoiserKey(next) === denoiserKey(current)
+      && (next.type !== 'custom' || current.type === 'custom' && aovMask(next.aovs ?? [])===aovMask(current.aovs ?? []))
       && next.schedule === current.schedule && (next.type !== 'oidn' ||
         (current.type === 'oidn' && next.signal === current.signal))) return this._denoiserReady;
     this._denoiserOptions = next;
@@ -333,7 +338,9 @@ export default class Render {
     return {width: Math.max(1, Math.round(this._engine.display.canvas.width * scale)), height: Math.max(1, Math.round(this._engine.display.canvas.height * scale))};
   }
   private _settings(sampleCap = this.maxSamples): TraceSettings {
-    return collectTraceSettings(this, sampleCap);
+    const settings=collectTraceSettings(this,sampleCap);
+    if(this._denoiserOptions?.type==='custom') settings.aovs=[...new Set([...this.aovs,...(this._denoiserOptions.aovs ?? [])])];
+    return settings;
   }
   private _synchronize(sampleCap = this.maxSamples, offline = false) {
     this._validate();
@@ -468,7 +475,7 @@ export default class Render {
       await this._engine.init();
       if (this._engine.backend !== 'webgpu') { if (revision === this._filterRevision && !this._warnedWebGPUFilter) { this._warnedWebGPUFilter = true; console.warn('This denoiser requires WebGPU; denoising is disabled for this render.'); } return; }
       if (revision !== this._filterRevision || this._disposed) return;
-      if (options.type === 'custom') { this._filter = {kind: 'custom', denoiser: options.denoiser}; return; }
+      if (options.type === 'custom') { this._filter = {kind: 'custom', denoiser: options.denoiser, aovs: options.aovs}; return; }
       const {loadOIDNNetwork} = await loadOIDN();
       const filter = await this._engine._acquireDenoiser(key as string, async () => ({kind: 'oidn', denoiser: await loadOIDNNetwork(this._engine, options)}));
       if (revision !== this._filterRevision || this._disposed) { this._engine._releaseDenoiser(filter); return; }

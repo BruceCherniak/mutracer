@@ -1153,12 +1153,13 @@ pub struct MtDenoiseInput {
     struct_size: u32,
     width: u32,
     height: u32,
-    reserved: u32,
+    aovs: u32,
     count: usize,
     color: *const f32,
     normal: *const f32,
     albedo: *const f32,
     cancel: *const c_void,
+    aov_data: [*const c_void; 7],
 }
 type DenoiseCallback =
     unsafe extern "C" fn(*const MtDenoiseInput, *mut f32, *mut c_char, usize, *mut c_void) -> i32;
@@ -1170,8 +1171,11 @@ pub struct MtCustomDenoiser {
     callback: Option<DenoiseCallback>,
     release: Option<DenoiseRelease>,
     user: *mut c_void,
+    aovs: u32,
+    reserved: u32,
 }
 struct CFilter {
+    aovs: u32,
     callback: DenoiseCallback,
     release: Option<DenoiseRelease>,
     user: User,
@@ -1186,16 +1190,33 @@ impl Drop for CFilter {
     }
 }
 impl CustomDenoiser for CFilter {
+    fn aovs(&self) -> u32 {
+        self.aovs
+    }
     fn denoise(
         &self,
         input: DenoiseInput,
         cancel: CancelToken,
     ) -> std::result::Result<DenoiseOutput, String> {
+        let mut aov_data = [std::ptr::null(); 7];
+        let mut supplied = 0;
+        for aov in &input.aovs {
+            let mask = aov.kind.aov_mask();
+            let index = mask.trailing_zeros() as usize;
+            if index < 7 {
+                supplied |= mask;
+                aov_data[index] = aov
+                    .id_data
+                    .as_ref()
+                    .map_or(aov.data.as_ptr().cast(), |ids| ids.as_ptr().cast());
+            }
+        }
         let record = MtDenoiseInput {
             struct_size: std::mem::size_of::<MtDenoiseInput>() as u32,
             width: input.size[0],
             height: input.size[1],
-            reserved: 0,
+            aovs: supplied,
+            aov_data,
             count: input.color.len(),
             color: input.color.as_ptr(),
             normal: input.normal.as_ptr(),
@@ -1256,7 +1277,11 @@ pub unsafe extern "C" fn mt_render_set_custom_denoiser(
         let callback = options
             .callback
             .ok_or_else(|| invalid("Null denoiser callback"))?;
+        if options.aovs & !127 != 0 || options.reserved != 0 {
+            return Err(invalid("Invalid custom AOV mask or reserved field"));
+        }
         let filter = Arc::new(CFilter {
+            aovs: options.aovs,
             callback,
             release: options.release,
             user: User(options.user),

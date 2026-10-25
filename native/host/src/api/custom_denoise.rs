@@ -3,7 +3,23 @@ use super::CancelToken;
 /// Custom-filter inputs. Cpu mode supplies owned linear RGBA32F images, bottom
 /// row first: raw per-sample averaged color/background and coverage alpha, with
 /// existing L0 guides. ResidentGpu instead supplies `resident` and empty arrays.
+/// One requested AOV in CPU memory, bottom row first. IDs use `id_data`.
+pub struct DenoiseAov {
+    pub kind: super::PixelKind,
+    pub data: Vec<f32>,
+    pub id_data: Option<Vec<u32>>,
+}
+/// Normalized GPU AOV, bottom row first; ID uses RGBA32UI, other kinds RGBA32F.
+#[derive(Clone)]
+pub struct GpuAov {
+    pub kind: super::PixelKind,
+    pub buffer: wgpu::Buffer,
+}
 pub struct DenoiseInput {
+    /// Requested AOV images in Cpu mode; empty in ResidentGpu mode.
+    pub aovs: Vec<DenoiseAov>,
+    /// Normalized AOV buffers when Cpu mode requests `gpu_inputs`; otherwise empty.
+    pub aov_buffers: Vec<GpuAov>,
     /// Width and height in pixels.
     pub size: [u32; 2],
     /// RGBA color, `width * height * 4` floats.
@@ -70,6 +86,11 @@ pub enum DenoiseOutput {
 /// callback, and cancelled results are discarded. A stuck callback keeps its
 /// inputs and Arc alive; hosts must stop it before unloading callback code.
 pub trait CustomDenoiser: Send + Sync + 'static {
+    /// Required AOV bit mask, as in RenderSettings::aovs. Default 0.
+    fn aovs(&self) -> u32 {
+        0
+    }
+
     /// Default Cpu. ResidentGpu supplies GPU averages of existing accumulation
     /// guides; it does not opt into temporal sampling or RR-specific inputs.
     /// Called once per invocation on the worker.

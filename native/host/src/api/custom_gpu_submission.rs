@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 
 pub(super) struct SubmissionLease {
     pub status: DenoiseFrameStatus,
-    pub buffers: Mutex<[wgpu::Buffer; 3]>,
+    pub buffers: Mutex<Vec<wgpu::Buffer>>,
     loss: DeviceLossNotifier,
     _filter: super::custom_denoise::Filter,
 }
@@ -24,8 +24,8 @@ impl SubmissionLease {
             _filter: super::custom_denoise::Filter(Some(filter)),
         })
     }
-    pub fn copies(buffers: &DenoiseBuffers) -> [wgpu::Buffer; 3] {
-        [
+    pub fn copies(buffers: &DenoiseBuffers) -> Vec<wgpu::Buffer> {
+        vec![
             buffers.color.clone(),
             buffers.normal.clone(),
             buffers.albedo.clone(),

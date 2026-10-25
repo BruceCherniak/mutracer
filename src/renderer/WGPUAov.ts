@@ -1,3 +1,4 @@
+import resolveWGSL from './wgsl/aovResolve.wgsl.js';
 import {AovHistory, AOV_KINDS, AOV_LAYOUT, type AovKind, type AovFrameSnapshot} from './aov.js';
 /** One target's optional AOV allocations and accepted frame history. */
 export class WGPUAov {
@@ -5,6 +6,7 @@ export class WGPUAov {
   width = 0; height = 0; samples = 0; centerReady = false;
   accumulation?: GPUBuffer; center?: GPUBuffer; previousCenter?: GPUBuffer; scene?: GPUBuffer;
   frame?: AovFrameSnapshot;
+  private resolvePipeline?: GPUComputePipeline;
   constructor(readonly device: GPUDevice) {}
   reset() {
     if (this.centerReady && this.center && this.previousCenter) {
@@ -29,6 +31,21 @@ export class WGPUAov {
     this.device.queue.writeBuffer(this.scene, 0, words);
   }
   get bytes() { return (this.accumulation?.size ?? 0) + (this.center?.size ?? 0) + (this.previousCenter?.size ?? 0) + (this.scene?.size ?? 0); }
+  snapshot(kinds: readonly AovKind[]): Partial<Record<AovKind,GPUBuffer>> {
+    if(!this.accumulation || !this.center || !this.samples) throw new Error('AOV output is not ready');
+    const device=this.device;
+    this.resolvePipeline??=device.createComputePipeline({label:'AOV resolve',layout:'auto',compute:{module:device.createShaderModule({code:resolveWGSL}),entryPoint:'main'}});
+    const buffers: Partial<Record<AovKind,GPUBuffer>>={};
+    for(const kind of kinds){
+      if(buffers[kind])continue;
+      const output=device.createBuffer({label:`Custom ${kind} input`,size:this.width*this.height*16,usage:GPUBufferUsage.STORAGE|GPUBufferUsage.COPY_SRC|GPUBufferUsage.COPY_DST});
+      const parameters=device.createBuffer({size:16,usage:GPUBufferUsage.UNIFORM,mappedAtCreation:true});
+      new Uint32Array(parameters.getMappedRange()).set([this.width,this.height,this.samples,AOV_KINDS.indexOf(kind)|256]);parameters.unmap();
+      const group=device.createBindGroup({layout:this.resolvePipeline.getBindGroupLayout(0),entries:[this.accumulation,this.center,output,parameters].map((buffer,binding)=>({binding,resource:{buffer}}))});
+      const encoder=device.createCommandEncoder(),pass=encoder.beginComputePass();pass.setPipeline(this.resolvePipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width*this.height/64));pass.end();device.queue.submit([encoder.finish()]);parameters.destroy();buffers[kind]=output;
+    }
+    return buffers;
+  }
   async read(kind: AovKind) {
     const center = kind === 'id' || kind === 'motion';
     const source = center ? this.center! : this.accumulation!;

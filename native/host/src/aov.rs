@@ -45,6 +45,7 @@ pub(crate) struct Output {
     layout: wgpu::BindGroupLayout,
     trace: wgpu::ComputePipeline,
     center_trace: wgpu::ComputePipeline,
+    resolve: std::sync::OnceLock<wgpu::ComputePipeline>,
 }
 impl Output {
     pub(crate) fn new(
@@ -178,6 +179,7 @@ impl Output {
             layout,
             trace,
             center_trace,
+            resolve: Default::default(),
         })
     }
     pub(crate) fn render(&mut self, query: &Query, samples: u32, mask: u32) -> Result<()> {
@@ -228,6 +230,68 @@ impl Output {
             self.samples += 1;
         }
         Ok(())
+    }
+    pub(crate) fn snapshot(&self, mask: u32) -> Result<Vec<api::GpuAov>> {
+        let device = &self.gpu.device;
+        let pipeline = self.resolve.get_or_init(|| {
+            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+                label: Some("AOV resolve"),
+                layout: None,
+                module: &device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                    label: Some("AOV resolve"),
+                    source: wgpu::ShaderSource::Wgsl(include_str!("aov-resolve.wgsl").into()),
+                }),
+                entry_point: Some("main"),
+                compilation_options: Default::default(),
+                cache: None,
+            })
+        });
+        let mut result = Vec::new();
+        for index in 0..7 {
+            if mask & (1 << index) == 0 {
+                continue;
+            }
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Custom AOV input"),
+                size: self.size[0] as u64 * self.size[1] as u64 * 16,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let bytes: Vec<_> = [self.size[0], self.size[1], self.samples, index]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect();
+            let parameters = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: &bytes,
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: None,
+                layout: &pipeline.get_bind_group_layout(0),
+                entries: &[&self.accumulated, &self.center, &buffer, &parameters]
+                    .iter()
+                    .enumerate()
+                    .map(|(binding, buffer)| wgpu::BindGroupEntry {
+                        binding: binding as u32,
+                        resource: buffer.as_entire_binding(),
+                    })
+                    .collect::<Vec<_>>(),
+            });
+            let mut encoder = device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_compute_pass(&Default::default());
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(0, &group, &[]);
+                pass.dispatch_workgroups((self.size[0] * self.size[1]).div_ceil(64), 1, 1);
+            }
+            self.gpu.queue.submit([encoder.finish()]);
+            result.push(api::GpuAov {
+                kind: api::PixelKind::from_aov_index(index),
+                buffer,
+            });
+        }
+        Ok(result)
     }
     pub(crate) fn read(&self, kind: u32) -> Result<api::Image> {
         let center = kind >= 9;
@@ -333,4 +397,27 @@ fn read_bytes(gpu: &GpuDevice, source: &wgpu::Buffer) -> Result<Vec<u8>> {
     drop(view);
     staging.unmap();
     Ok(bytes)
+}
+
+pub(crate) fn read_denoise_aov(gpu: &GpuDevice, aov: &api::GpuAov) -> Result<api::DenoiseAov> {
+    let bytes = read_bytes(gpu, &aov.buffer)?;
+    let mut output = api::DenoiseAov {
+        kind: aov.kind,
+        data: Vec::new(),
+        id_data: None,
+    };
+    if aov.kind == api::PixelKind::Id {
+        output.id_data = Some(
+            bytes
+                .chunks_exact(4)
+                .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+                .collect(),
+        );
+    } else {
+        output.data = bytes
+            .chunks_exact(4)
+            .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+            .collect();
+    }
+    Ok(output)
 }

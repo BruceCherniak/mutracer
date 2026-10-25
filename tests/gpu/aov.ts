@@ -27,6 +27,22 @@ async function captureAovs() {
     check(diffuse.data.every(Number.isFinite)&&specular.data.every(Number.isFinite),'Nonfinite reflectance');
     check(diffuse.data[3]===1&&specular.data[3]===1&&diffuse.data[0]>0&&specular.data[0]>0,'Invalid reflectance coverage');
     const initialMotion=await render.readPixels('motion');check(initialMotion.data.every(v=>v===0),'First motion must be invalid');
+    let customCalls=0;
+    if(engine.backend==='webgpu'){
+      await render.setDenoiser({type:'custom',aovs:['depth','id'],denoiser:{async denoise(input){
+        check(!!input.aovs?.depth&&!!input.aovs.id,'Requested GPU AOV missing');
+        const bytes=input.width*input.height*16;
+        const staging=input.device.createBuffer({size:bytes*2,usage:GPUBufferUsage.MAP_READ|GPUBufferUsage.COPY_DST});
+        const encoder=input.device.createCommandEncoder();encoder.copyBufferToBuffer(input.color,0,input.output,0,bytes);
+        encoder.copyBufferToBuffer(input.aovs!.depth!,0,staging,0,bytes);encoder.copyBufferToBuffer(input.aovs!.id!,0,staging,bytes,bytes);input.device.queue.submit([encoder.finish()]);
+        await staging.mapAsync(GPUMapMode.READ);const mapped=staging.getMappedRange();
+        const actualDepth=new Float32Array(mapped,0,bytes/4),actualId=new Uint32Array(mapped,bytes,bytes/4);
+        check(actualDepth.every((v,i)=>Math.abs(v-depth.data[i])<.00001),'Custom depth differs from readback');
+        check(actualId.every((v,i)=>v===ids.data[i]),'Custom ID differs from readback');
+        staging.unmap();staging.destroy();customCalls++;
+      }}});
+      await render.converge({samples:4});check(customCalls>0,'Custom filter was not called');await render.setDenoiser(null);
+    }
     camera.position.x=.25;camera.updateMatrixWorld();engine.camera=fromTHREECamera(camera);engine.update();
     await render.converge({samples:4});const cameraMotion=await render.readPixels('motion');
     const focal=32*.5/Math.tan(Math.PI/8), expected=focal*.25/4;
@@ -53,7 +69,7 @@ async function captureAovs() {
     check(unsupportedRoughness.data.every((v,i)=>i%4!==2||v===1),'Unsupported coat flag missing');
     check(unsupportedDiffuse.data.every(v=>v===0),'Unsupported reflectance must have zero validity');
     if (errors.length) throw new Error(errors.join('\n'));
-    return {motion:{cameraExpected:expected,cameraValid:validCamera.length,objectValid:validObject.length},hdr: Array.from(after.data), backend: engine.backend, adapter: info.adapterName, hdrIdentical: true, depth: Array.from(depth.data.slice(0,4)), ids: Array.from(ids.data.slice(0,4)), roughness: Array.from(roughness.data.slice(0,4)), pixels: {diffuse:Array.from(diffuse.data),specular:Array.from(specular.data),id: Array.from(ids.data), depth: Array.from(depth.data), position: Array.from(position.data)}};
+    return {customCalls,motion:{cameraExpected:expected,cameraValid:validCamera.length,objectValid:validObject.length},hdr: Array.from(after.data), backend: engine.backend, adapter: info.adapterName, hdrIdentical: true, depth: Array.from(depth.data.slice(0,4)), ids: Array.from(ids.data.slice(0,4)), roughness: Array.from(roughness.data.slice(0,4)), pixels: {diffuse:Array.from(diffuse.data),specular:Array.from(specular.data),id: Array.from(ids.data), depth: Array.from(depth.data), position: Array.from(position.data)}};
   } finally {render.dispose(); engine.dispose(); sync.dispose();}
 }
 Object.assign(window, {captureAovs});

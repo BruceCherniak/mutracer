@@ -1151,7 +1151,8 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   function performCustomDenoise(
     denoiser: import('../Render.js').Denoiser,
     schedule: import('../Render.js').DenoiseSchedule,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    requestedAovs: readonly import('./aov.js').AovKind[] = []
   ): Promise<boolean> {
     const generation = denoiseGeneration;
     const controller = activeCustomController = new AbortController();
@@ -1165,7 +1166,9 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       const albedo = copyGuide('Custom albedo', getFrameInput('albedo'), true);
       const normal = copyGuide('Custom normal', getFrameInput('normal'), true);
       const output = scratch.get('Custom output', () => new WGPUScratchBuffer(device)).get(width * height * 16, true);
-      await denoiser.denoise({device, width, height, color, albedo, normal, output}, {signal: controller.signal, schedule});
+      const aovs=requestedAovs.length?aov.snapshot(requestedAovs):undefined;
+      try {await denoiser.denoise({device, width, height, color, albedo, normal, output, aovs}, {signal: controller.signal, schedule});}
+      finally {if(aovs)void device.queue.onSubmittedWorkDone().catch(()=>undefined).then(()=>Object.values(aovs).forEach(buffer=>buffer?.destroy()));}
       if (controller.signal.aborted || disposed || generation !== denoiseGeneration) return false;
       const coverage = scratch.get('custom coverage', () => new WGPUComputePass('Custom coverage', device, {
         inputs: ['filtered', 'original'], outputs: ['color'], uniforms: auxiliaryPassUniforms,
@@ -1197,7 +1200,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   ): Promise<boolean> {
     cancelDenoise();
     if (isFirstFrame || sampleCount < 1) return Promise.resolve(false);
-    if (attachedDenoiser.kind === 'custom') return performCustomDenoise(attachedDenoiser.denoiser, denoiseSchedule, signal);
+    if (attachedDenoiser.kind === 'custom') return performCustomDenoise(attachedDenoiser.denoiser, denoiseSchedule, signal, attachedDenoiser.aovs);
     denoisedHDR = false;
     if (attachedDenoiser.kind === 'jnlm') return performJNLMDenoise(attachedDenoiser.denoiser);
     const denoiser: OIDNWeb = attachedDenoiser.denoiser;

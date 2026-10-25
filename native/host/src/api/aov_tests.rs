@@ -144,3 +144,104 @@ fn independent_surface_aovs_preserve_beauty_and_exact_ids() {
         .unwrap();
     }
 }
+
+struct AovFilter {
+    resident: bool,
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+impl CustomDenoiser for AovFilter {
+    fn aovs(&self) -> u32 {
+        1 | 8 | 32
+    }
+    fn input_mode(&self) -> DenoiseInputMode {
+        if self.resident {
+            DenoiseInputMode::ResidentGpu
+        } else {
+            DenoiseInputMode::Cpu
+        }
+    }
+    fn denoise(
+        &self,
+        mut input: DenoiseInput,
+        _cancel: CancelToken,
+    ) -> std::result::Result<DenoiseOutput, String> {
+        self.calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        if self.resident {
+            assert!(input.aovs.is_empty());
+            let resident = input.resident.take().unwrap();
+            assert_eq!(resident.aovs.len(), 3);
+            for aov in &resident.aovs {
+                assert_eq!(
+                    aov.buffer.size(),
+                    (input.size[0] * input.size[1] * 16) as u64
+                );
+            }
+            let output = resident.buffers.color.clone();
+            Ok(DenoiseOutput::Resident(resident.submit([], output)?))
+        } else {
+            assert!(input.resident.is_none());
+            assert_eq!(input.aovs.len(), 3);
+            let depth = input
+                .aovs
+                .iter()
+                .find(|a| a.kind == PixelKind::Depth)
+                .unwrap();
+            assert!(depth.data.iter().any(|v| *v > 0.));
+            let id = input
+                .aovs
+                .iter()
+                .find(|a| a.kind == PixelKind::Id)
+                .unwrap()
+                .id_data
+                .as_ref()
+                .unwrap();
+            assert!(id.iter().any(|v| *v == 0));
+            Ok(DenoiseOutput::Cpu(input.color))
+        }
+    }
+}
+#[test]
+#[ignore = "requires real GPU"]
+fn custom_filters_receive_only_declared_aovs_in_cpu_and_resident_modes() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = Engine::new(EngineOptions {
+        backend: Backend::Software,
+    })
+    .unwrap();
+    engine.display().set_size(16, 12).unwrap();
+    engine.set_scene(&tests::lit_scene()).unwrap();
+    engine.update().unwrap();
+    for resident in [false, true] {
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let render = Render::new(
+            &engine,
+            RenderSettings {
+                max_samples: 2,
+                aovs: 0,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        render
+            .set_custom_denoiser(
+                Some(std::sync::Arc::new(AovFilter {
+                    resident,
+                    calls: calls.clone(),
+                })),
+                DenoiseSchedule::Converged,
+            )
+            .unwrap();
+        render.converge(ConvergeOptions::new(2)).unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
+        assert!(render.read_pixels(PixelKind::Depth).is_err());
+        assert!(
+            render
+                .read_pixels(PixelKind::Denoised)
+                .unwrap()
+                .data
+                .iter()
+                .all(|v| v.is_finite())
+        );
+    }
+}

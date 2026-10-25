@@ -122,6 +122,8 @@ impl DenoiseFrameStatus {
 /// immutable after publication; do not destroy or write through their handles.
 /// This mode has no camera jitter/depth/motion or optical-path claims.
 pub struct GpuDenoiseInput {
+    /// Declared normalized AOV snapshots; empty unless requested by the filter.
+    pub aovs: Vec<super::GpuAov>,
     pub id: DenoiseFrameId,
     pub size: [u32; 2],
     pub samples: u32,
@@ -154,6 +156,7 @@ impl GpuDenoiseInput {
         // Their lease is part of retirement even if the callback fails early.
         lease.producer_submitted(&gpu.queue);
         Self {
+            aovs: Vec::new(),
             id: DenoiseFrameId {
                 device: gpu.frame_device.id,
                 target,
@@ -174,8 +177,9 @@ impl GpuDenoiseInput {
         self.status.clone()
     }
     pub(super) fn retain_buffers(&self) {
-        *self.gpu.1.as_ref().unwrap().buffers.lock().unwrap() =
-            super::custom_gpu_submission::SubmissionLease::copies(&self.buffers);
+        let mut buffers = super::custom_gpu_submission::SubmissionLease::copies(&self.buffers);
+        buffers.extend(self.aovs.iter().map(|a| a.buffer.clone()));
+        *self.gpu.1.as_ref().unwrap().buffers.lock().unwrap() = buffers;
         // The averaging producer was submitted immediately before this call.
         self.gpu.1.as_ref().unwrap().producer_submitted(&self.gpu.0);
     }
