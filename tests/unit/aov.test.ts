@@ -1,3 +1,5 @@
+import {CommittedScene} from '../../src/renderer/committedScene.js';
+import {SceneChangeDetector} from '../../src/renderer/sceneChangeDetector.js';
 import {describe, expect, it} from 'vitest';
 import {AovHistory, AOV_KINDS, AOV_LAYOUT, aovMask, validateAovId, type AovFrameSnapshot} from '../../src/renderer/aov.js';
 import Mesh from '../../src/scene/Mesh.js';
@@ -22,6 +24,18 @@ describe('AOV contract', () => {
     expect(other.aovId).toBe(0);
     expect(validateAovId(0)).toBe(0);
     for (const id of [-1, 1.5, NaN, 0xffffffff, 0x100000000]) expect(() => validateAovId(id)).toThrow();
+  });
+  it('preserves stable identities through committed mirrors and detects ID edits', () => {
+    const material = new OpenPBRMaterial(), mesh = new Mesh(createPlaneGeometry(), material);
+    const scene = {meshes: [mesh], lights: []}, detector = new SceneChangeDetector(), committed = new CommittedScene();
+    const first = committed.capture(scene, detector.detect(scene)); detector.commit();
+    expect(first.meshes[0].aovId).toBe(mesh.aovId);
+    expect(first.meshes[0].materials[0].aovId).toBe(material.aovId);
+    mesh.aovId = 101; material.aovId = 202;
+    const changes = detector.detect(scene);
+    expect(changes.meshes).toBe('full'); expect(changes.materials).toEqual([material]);
+    committed.capture(scene, changes); detector.commit();
+    expect(first.meshes[0].aovId).toBe(101); expect(first.meshes[0].materials[0].aovId).toBe(202);
   });
   it('owns history snapshots and matches rigid motion by stable identity', () => {
     const history = new AovHistory();

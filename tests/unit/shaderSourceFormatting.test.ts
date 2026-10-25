@@ -32,7 +32,7 @@ describe('shader generation independent of source formatting', () => {
         expect(tokens(compact)).toEqual(tokens(source));
         expect(renameShaderIdentifiers(compact, shaderIdentifierMap)).toBe(compact);
         const parsed = makeShaderDataDefinitions(compact);
-        expect(Object.keys(parsed.entryPoints).sort()).toEqual(['depthQuery', 'main']);
+        expect(Object.keys(parsed.entryPoints).sort()).toEqual(['aovTrace', 'aovTraceCenter', 'depthQuery', 'main']);
         expect(parsed.uniforms.rtUniform.size).toBe(makeRayTraceUniform().buffer.byteLength);
       }
     }
@@ -49,7 +49,7 @@ describe('shader generation independent of source formatting', () => {
         // No selected name may be left behind by a dynamic code path.
         expect(renameShaderIdentifiers(compact, shaderIdentifierMap)).toBe(compact);
         const parsed = makeShaderDataDefinitions(compact);
-        expect(Object.keys(parsed.entryPoints).sort()).toEqual(['depthQuery', 'main']);
+        expect(Object.keys(parsed.entryPoints).sort()).toEqual(['aovTrace', 'aovTraceCenter', 'depthQuery', 'main']);
         const {buffer, views} = makeRayTraceUniform();
         expect(parsed.uniforms.rtUniform.size).toBe(buffer.byteLength);
         for (const [name, view] of Object.entries(views)) expect(parsed.structs.RayTraceUniform.fields[name]?.offset, name).toBe(view.byteOffset);

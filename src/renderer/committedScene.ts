@@ -1,3 +1,5 @@
+import MeshState from '../scene/MeshState.js';
+import MaterialState from '../scene/MaterialState.js';
 import {createCanvas} from '../util/canvas.js';
 import Geometry from '../scene/Geometry.js';
 import InstancedMesh from '../scene/InstancedMesh.js';
@@ -42,6 +44,7 @@ export class CommittedScene {
     if (value instanceof ArrayBuffer) return value.slice(0) as T;
     let cloned = this.copies.get(object);
     if (!cloned) { cloned = Array.isArray(value) ? [] : Object.create(Object.getPrototypeOf(value)); this.copies.set(object, cloned); }
+    if (value instanceof MeshState || value instanceof MaterialState) cloned.aovId = value.aovId;
     if (this.copying.has(object)) return cloned;
     this.copying.add(object);
     try {

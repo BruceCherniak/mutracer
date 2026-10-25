@@ -1,3 +1,4 @@
+import {WGPUAov} from './WGPUAov.js';
 import {DisplayPostProcess} from './DisplayPostProcess.js';
 import {customDenoiseLayersMain, customDenoiseCoverageMain} from './wgsl/customDenoise.wgsl.js';
 import { WGPUCanvasSurface } from './WGPUCanvasSurface.js';
@@ -144,6 +145,8 @@ function makeWGPUAccumulationTarget(
   let deferPostProcess = false;
   let sampleSequenceOffset = 0;
 
+  const aov = new WGPUAov(device);
+  let aovCamera: Camera | undefined;
   let sampleCount = 0;
   let elapsedFrameTime = 32;
   let elapsedTileTime: number | undefined;
@@ -800,7 +803,9 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
 
     // Update the camera before compiling and sampling.
     rayTracePass.setCamera(camera);
+    aovCamera = camera;
     const resetAccumulation = isFirstFrame;
+    if (resetAccumulation) aov.reset();
     if (resetAccumulation) {
       denoiseValid = false;
       tileTimingGeneration++;
@@ -912,6 +917,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       drawPostProcess(encoder, sampleCount >= renderSampleTarget, true);
     }
     if (sampleCount !== frameSampleCount) {
+      if (execution?.aovs?.length) rayTracePass.renderAovs(aov, camera, sampleCount, execution.aovSamples ?? 16, execution.aovs);
 
       sampleRenderedCallback(
         sampleCount,
@@ -1438,6 +1444,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       diagnosticsReadbackPromise
     ]).then(() => {
       rayTracePass.releaseTarget(targetKey);
+      aov.dispose();
       denoisedBuffer?.destroy();
       presentationTexture?.destroy();
       displayPostProcess.dispose();
@@ -1464,7 +1471,9 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     configure(settings: TraceSettings) {
       const timingKeys = ['bounces', 'bevel', 'bevelSamples', 'directLightCandidates', 'dispersionWavelengths', 'alphaBlendStrategy', 'samplingPattern', 'clamping', 'transmissiveOutputAlphaMin'] as const;
       if (!execution || timingKeys.some(key => execution![key] !== settings[key])) invalidateTilePrediction();
+      if (settings.aovs?.length && (!Number.isInteger(settings.aovSamples ?? 16) || (settings.aovSamples ?? 16) < 1)) throw new RangeError('aovSamples must be a positive integer');
       execution = { ...settings };
+      if (!settings.aovs?.length) { aov.dispose(); aov.history.clear(); aov.width = aov.height = 0; aov.reset(); }
       maxTimePerTile = Math.max(1, settings.timeBudgetMs);
       allowMultipleSamplesPerFrame = settings.allowMultipleSamplesPerFrame;
       tileRender.setDesiredMsPerTile(maxTimePerTile);
@@ -1490,7 +1499,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     getMemory() {
       return {
 width: renderWidth, height: renderHeight,
-        bytes: rayTracePass.getTargetMemoryBytes(targetKey) + rayTraceOutputPass.getMemoryBytes() + textureBytes(presentationTexture) + displayPostProcess.getMemoryBytes() + (denoisedBuffer?.size ?? 0)
+        bytes: aov.bytes + rayTracePass.getTargetMemoryBytes(targetKey) + rayTraceOutputPass.getMemoryBytes() + textureBytes(presentationTexture) + displayPostProcess.getMemoryBytes() + (denoisedBuffer?.size ?? 0)
 };
     },
     isFirstFrame() {
@@ -1498,6 +1507,7 @@ width: renderWidth, height: renderHeight,
     },
 
     restartSamples() {
+      aov.reset();
       // Input edits reset accumulation, not learned throughput. Re-arming a
       // hidden probe here starves continuously changing scenes of visible samples.
       tileTimingGeneration++;
@@ -1548,6 +1558,12 @@ width: renderWidth, height: renderHeight,
         for (let y = 0;y < height;y++) data.set(mapped.subarray(y * bytesPerRow / 4, y * bytesPerRow / 4 + width * 4), y * width * 4);
         return { width, height, data };
       } finally { buffer.unmap(); buffer.destroy(); }
+    },
+    async readAov(kind) {
+      if (!execution?.aovs?.includes(kind) || !aovCamera || sampleCount < 1) throw new Error('AOV output is not ready');
+      rayTracePass.setCamera(aovCamera);
+      rayTracePass.renderAovs(aov, aovCamera, sampleCount, execution.aovSamples ?? 16, execution.aovs);
+      return aov.read(kind);
     },
     async readOutput(kind) {
       rawOutputPass.setUniform('flatBackgroundColor', resolvedFlatBackground);

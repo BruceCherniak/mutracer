@@ -1,3 +1,5 @@
+import type {AovKind} from './renderer/aov.js';
+import {aovMask} from './renderer/aov.js';
 import { Events } from './util/events.js';
 import type Engine from './Engine.js';
 import type Camera from './scene/Camera.js';
@@ -78,6 +80,8 @@ export type DenoiserOptions = JNLMDenoiserOptions | OIDNDenoiserOptions | Custom
 
 /** Optional per-render execution and image-quality settings. */
 export interface RenderSettings {
+  /** Optional surface outputs. Default []; disabled outputs allocate no AOV resources. */ aovs?: readonly AovKind[];
+  /** Independent AOV sample cap, positive integer. Default 16. */ aovSamples?: number;
   /** Maximum complete samples. Default 2048. */ maxSamples?: number;
   /**
    * Maximum scattering depth, rounded and clamped to [1, 20] (NaN becomes 1).
@@ -193,6 +197,8 @@ function denoiserKey(options: Readonly<DenoiserOptions>): string | Denoiser {
 
 /** One independently configured image and its accumulation, owned by an engine. */
 export default class Render {
+  /** Enabled surface outputs. Default []; readPixels rejects outputs not enabled here. */ aovs: readonly AovKind[] = [];
+  /** Independent AOV sample cap. Default 16. */ aovSamples = 16;
   /** Maximum complete samples. Default 2048. */ maxSamples = 2048;
   /**
    * Maximum scattering depth, rounded and clamped to [1, 20] (NaN becomes 1).
@@ -533,15 +539,24 @@ export default class Render {
     });
   }
   /** Reads native RGBA float32, top row first. Default hdr. Custom denoised output is resolved linear HDR ray color before display background/catcher composition; built-ins retain their native display-space output. Unavailable denoised output falls back to hdr. */
-  async readPixels(kind: 'hdr' | 'denoised' | 'albedo' | 'normal' = 'hdr') {
+  readPixels(kind: 'id'): Promise<{width: number; height: number; data: Uint32Array}>;
+  readPixels(kind?: 'hdr' | 'denoised' | 'albedo' | 'normal' | Exclude<AovKind, 'id'>): Promise<{width: number; height: number; data: Float32Array}>;
+  async readPixels(kind: 'hdr' | 'denoised' | 'albedo' | 'normal' | AovKind = 'hdr'): Promise<{width: number; height: number; data: Float32Array | Uint32Array}> {
     if (this._disposed) throw new Error('Render is disposed.');
     const target = this._target;
+    if (['depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion'].includes(kind)) {
+      const aov = kind as AovKind;
+      aovMask(this.aovs);
+      if (!this.aovs.includes(aov)) throw new Error(`AOV ${aov} is not enabled`);
+      if (!target?.readAov) throw new Error('AOV output is not ready');
+      target.activate(); return target.readAov(aov);
+    }
     if (!target) return {width: 0, height: 0, data: new Float32Array(0)};
     if (kind === 'denoised' && this._denoisedSamples === 0) {
       if (!this._warnedDenoisedReadback) { this._warnedDenoisedReadback = true; console.warn('Denoised output is not ready; reading HDR samples instead.'); }
       kind = 'hdr';
     }
-    target.activate(); return target.readOutput(kind);
+    target.activate(); return target.readOutput(kind as 'hdr' | 'denoised' | 'albedo' | 'normal');
   }
   /** Borrows a read-only WebGPU texture; undefined on WebGL or before a complete sample. Kind is required. HDR is native resolved linear ray color before denoising/display composition, with DenoiseInput.color normalization and coverage. Display is the latest compose, including filters and display passes. Valid only until this render's next refine/converge, display present/setSize, restart/dispose or device loss; never retain, write or destroy it. */
   getOutputTexture(kind: 'hdr' | 'display'): GPUTexture | undefined {

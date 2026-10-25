@@ -257,6 +257,7 @@ export interface RenderPasses {
   ): void;
   setOutput(output: DisplayChannel): boolean;
   dispose(): void;
+  readAov?(kind: import('./aov.js').AovKind): Promise<{width: number; height: number; data: Float32Array | Uint32Array}>;
   readOutput(kind: 'hdr' | 'denoised' | 'albedo' | 'normal'): Promise<{
     data: Float32Array;
     width: number;
