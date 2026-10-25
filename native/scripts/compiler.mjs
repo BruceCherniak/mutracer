@@ -1,9 +1,10 @@
+import {normalizeWindowsArchive} from './windows-msvc-archive.mjs';
 import {auditNumericAccess} from './numeric-access-audit.mjs';
 import {specializeStorageLoops} from './storage-lowering.mjs';
 import {specializeVectorCalls} from './vector-lowering.mjs';
 import {lowerConcreteAccess} from './attribute-lowering.mjs';
 import {spawnSync} from 'node:child_process';
-import {cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync} from 'node:fs';
+import {cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
 import {basename, dirname, relative, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import ts from 'typescript';
@@ -14,8 +15,8 @@ let staged, nativeMatrices = false;
 const snapshots = new Map();
 const loweredGraphs = new Set();
 const originals = new Map();
-// scriptc 0.3.2 cannot index numeric storage unions. Lower these two access
-// adapters only in generated compiler inputs, keeping Web hot loops branch-free.
+// Make storage branches explicit only in generated native compiler inputs,
+// keeping Web hot loops branch-free.
 function narrowAccess(source, constructors, parameter = 'array', names) {
   const file = ts.createSourceFile('access.ts', source, ts.ScriptTarget.Latest, true);
   const factory = ts.factory;
@@ -137,19 +138,17 @@ export function spawnCompiler(compiler, args, options = {}, matrixPrecision) {
     auditNumericAccess(staged, compiledEntry, nativeMatrices);
     loweredGraphs.add(compiledEntry);
   }
+  // Always start Windows library emission from the compiler's original archive;
+  // the post-link MSVC bridge must not accumulate across unchanged rebuilds.
+  if(process.platform==='win32'&&args[0]==='build'&&args.includes('--lib')) {
+    const outputAt=args.findIndex(arg=>arg==='-o'||arg==='--out');
+    if(outputAt>=0)rmSync(resolve(options.cwd??process.cwd(),args[outputAt+1]),{force:true});
+  }
   let result = spawnSync(compiler, mapped, options);
   if(process.platform==='win32'&&args[0]==='build'&&args.includes('--lib')&&result.status===0) {
-    // The program uses MSVC's x64 probe name; the runtime pack uses MinGW's.
-    // Both preserve RSP and use the same RAX size argument. Normalize the name
-    // for GNU embedders without changing the probe or its guard-page behavior.
-    // The runtime also uses newer MinGW's unprefixed stat64i32 alias. Its layout
-    // matches the CRT's _stat64i32, which older MinGW import libraries expose.
     const outputAt=args.findIndex(arg=>arg==='-o'||arg==='--out');
     if(outputAt<0)throw new Error('Windows native libraries require an explicit output path');
-    const archive=resolve(options.cwd??process.cwd(),args[outputAt+1]);
-    const patched=spawnSync('objcopy',['--redefine-sym','__chkstk=___chkstk_ms',
-      '--redefine-sym','stat64i32=_stat64i32',archive],options);
-    if(patched.error||patched.status!==0)result=patched;
+    normalizeWindowsArchive(resolve(options.cwd??process.cwd(),args[outputAt+1]),options);
   }
   result.nativeMatrixPrecision = nativeMatrices ? 64 : 32;
   result.nativeSourceRoot = staged;

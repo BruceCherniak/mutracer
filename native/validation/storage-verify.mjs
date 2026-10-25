@@ -1,4 +1,4 @@
-import {spawnSync} from 'node:child_process';
+import {spawnNative as spawnSync} from '../scripts/platform.mjs';
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath, pathToFileURL} from 'node:url';

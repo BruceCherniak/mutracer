@@ -332,21 +332,25 @@ typedef enum mt_denoise_schedule {
   /* After every complete batch; sampling pauses while a filter runs. */
   MT_DENOISE_EVERY_SAMPLE = 2
 } mt_denoise_schedule;
-/* Open Image Denoise on a library thread; library loading follows
- * mutracer-denoise.h. */
+/* Render-only backend using the included oidn-webgpu Rust runtime.
+ * mt_denoiser_* continues to accept only mt_denoise_backend. */
+enum { MT_DENOISE_OIDN_WEBGPU = 5 };
+/* OIDN on a library thread, or oidn-webgpu on the rendering device. */
 typedef struct mt_render_denoiser {
   uint32_t struct_size;
-  uint32_t backend; /* mt_denoise_backend. Default MT_DENOISE_AUTO. */
+  uint32_t backend; /* mt_denoise_backend or MT_DENOISE_OIDN_WEBGPU. Default MT_DENOISE_AUTO. */
   uint32_t schedule; /* mt_denoise_schedule. Default MT_DENOISE_CONVERGED. */
   uint32_t reserved; /* Must be 0. */
-  const char *library; /* NULL uses the mutracer-denoise.h search. Default NULL. */
+  const char *library; /* OIDN library path; NULL uses the mutracer-denoise.h search.
+    * For MT_DENOISE_OIDN_WEBGPU, a TZA weights path; NULL uses rt_hdr_alb_nrm.
+    * Default NULL. */
 } mt_render_denoiser;
 MT_ENGINE_LAYOUT(mt_render_denoiser, 16 + sizeof(void *));
 int32_t mt_render_denoiser_default(mt_render_denoiser *output);
 /* Replaces the denoiser; NULL disables denoising. Default none. */
 int32_t mt_render_set_denoiser(mt_render render, const mt_render_denoiser *denoiser, char *error, size_t capacity);
 
-/* Custom filters replace OIDN. Worker inputs/output are linear RGBA32F,
+/* Custom filters replace built-in denoisers. Worker inputs/output are linear RGBA32F,
  * bottom row first, raw per-sample color (including background) + path coverage
  * alpha; normal/albedo are L0 guides. count is floats (width*height*4).
  * Fill every output float; return 0, or a nonzero error and a bounded UTF-8
@@ -388,8 +392,9 @@ int32_t mt_render_refine(mt_render render, uint32_t *status, char *error, size_t
 /* Filters the current complete samples now without tracing, like the end of
  * converge; for hosts that stop refining (for example when paused). Call again
  * to collect the result; done (optional) receives 1 when the denoised image is
- * of the current samples. Requires a denoiser. Input readback may block;
- * the call does not wait for the filter callback. */
+ * of the current samples. Requires a denoiser. CPU input readback or first-use
+ * GPU filter preparation may block; the call does not wait for filtering
+ * to complete. */
 int32_t mt_render_denoise_current(mt_render render, uint32_t *done, char *error, size_t capacity);
 /* Collects and captures a finished batch without submitting another, so a host
  * can present the last frame before committing new input. idle (optional)

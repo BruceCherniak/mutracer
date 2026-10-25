@@ -17,7 +17,7 @@ const run = args => {
 };
 const version = run(['--version']);
 if (version.status !== 0 || !/\b0\.3\.2\b/.test(version.stdout)) {
-  throw new Error(`This experiment requires scriptc 0.3.2: ${version.stdout} ${version.stderr}`);
+  throw new Error(`This experiment requires scriptc 0.4.4: ${version.stdout} ${version.stderr}`);
 }
 
 // Inventory both published entries, including type-only exports for context.

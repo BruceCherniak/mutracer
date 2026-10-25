@@ -6,8 +6,8 @@ use std::{path::Path, time::Instant};
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().collect();
     ensure!(
-        args.len() == 8,
-        "Usage: denoise-benchmark OIDN_LIBRARY INPUT_DIR WIDTH HEIGHT BACKEND ITERATIONS OUTPUT_DIR"
+        args.len() == 8 || args.len() == 9,
+        "Usage: denoise-benchmark OIDN_LIBRARY INPUT_DIR WIDTH HEIGHT BACKEND ITERATIONS OUTPUT_DIR [MAX_TILE_SIZE (backend 5)]"
     );
     let size = [args[3].parse::<u32>()?, args[4].parse::<u32>()?];
     let iterations: usize = args[6].parse()?;
@@ -30,25 +30,38 @@ fn main() -> Result<()> {
                 .collect())
         })
         .collect::<Result<_>>()?;
-    let started = Instant::now();
-    let mut denoiser = Denoiser::from_library(Path::new(&args[1]), args[5].parse()?)?;
-    denoiser.set_validation_input_scale(1.)?;
-    let create_ms = started.elapsed().as_secs_f64() * 1000.;
-    let mut warm_ms = vec![];
-    let mut first_ms = 0.;
-    let mut output = vec![];
-    // First execution plus two warmups are excluded from steady-state timing.
-    for iteration in 0..iterations + 3 {
+    let backend: u32 = args[5].parse()?;
+    let (output, report) = if backend == 5 {
+        mutracer_native_probe::benchmark_oidn_webgpu(
+            size,
+            &images,
+            iterations,
+            args.get(8).map(|v| v.parse()).transpose()?.unwrap_or(0),
+        )
+        .map_err(|error| anyhow::anyhow!(error.to_string()))?
+    } else {
         let started = Instant::now();
-        output = denoiser.run(size, &images[0], &images[1], &images[2])?;
-        let ms = started.elapsed().as_secs_f64() * 1000.;
-        if iteration == 0 {
-            first_ms = ms;
+        let mut denoiser = Denoiser::from_library(Path::new(&args[1]), args[5].parse()?)?;
+        denoiser.set_validation_input_scale(1.)?;
+        let create_ms = started.elapsed().as_secs_f64() * 1000.;
+        let mut warm_ms = vec![];
+        let mut first_ms = 0.;
+        let mut output = vec![];
+        // First execution plus two warmups are excluded from steady-state timing.
+        for iteration in 0..iterations + 3 {
+            let started = Instant::now();
+            output = denoiser.run(size, &images[0], &images[1], &images[2])?;
+            let ms = started.elapsed().as_secs_f64() * 1000.;
+            if iteration == 0 {
+                first_ms = ms;
+            }
+            if iteration >= 3 {
+                warm_ms.push(ms);
+            }
         }
-        if iteration >= 3 {
-            warm_ms.push(ms);
-        }
-    }
+        let report = serde_json::json!({"backend":denoiser.backend,"size":size,"createMs":create_ms,"firstMs":first_ms,"warmMs":warm_ms,"inputScale":1,"timing":"production adapter: validation, host copies, synchronous filter, result copies; excludes renderer readback"});
+        (output, report)
+    };
     ensure!(output != images[0], "Filter did not change input");
     ensure!(
         output
@@ -66,7 +79,6 @@ fn main() -> Result<()> {
             .flat_map(|v| v.to_le_bytes())
             .collect::<Vec<_>>(),
     )?;
-    let report = serde_json::json!({"backend":denoiser.backend,"size":size,"createMs":create_ms,"firstMs":first_ms,"warmMs":warm_ms,"inputScale":1,"timing":"production adapter: validation, host copies, synchronous filter, result copies; excludes renderer readback"});
     std::fs::write(out.join("result.json"), serde_json::to_vec_pretty(&report)?)?;
     println!("{report}");
     Ok(())

@@ -8,7 +8,11 @@ extern "C" void* mt_native_tiny_aabbs(const float*, uint32_t);
 extern "C" void* mt_native_tiny_blas(
   const float*, uint32_t, const float*, const uint32_t*, uint32_t, float, const float*);
 extern "C" void tinybvh_result_destroy(void*);
+#if defined(_WIN32)
+extern "C" void mt_test_shutdown_pool();
+#else
 namespace tinybvh { void tinybvh_shutdown_builtin_pool(); }
+#endif
 
 int main() {
   for (int round = 0; round < 3; ++round) {
@@ -41,6 +45,12 @@ int main() {
     caller.join();
     // Explicit shutdown must join workers safely, and the next build must
     // recreate the pool. Leave the last pool for upstream's process-exit hook.
-    if (round < 2) tinybvh::tinybvh_shutdown_builtin_pool();
+    if (round < 2) {
+#if defined(_WIN32)
+      mt_test_shutdown_pool();
+#else
+      tinybvh::tinybvh_shutdown_builtin_pool();
+#endif
+    }
   }
 }

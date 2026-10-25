@@ -871,7 +871,7 @@ mod tests {
                 egui::CentralPanel::default().show(root, |ui| {
                     ui.set_width(280.);
                     ui.add_enabled_ui(enabled, |ui| {
-                        response = Some(toggle(ui, "Native OIDN", value));
+                        response = Some(toggle(ui, "Denoise", value));
                     });
                 });
             },

@@ -289,6 +289,19 @@ impl Display {
         {
             return Err("Invalid display image".into());
         }
+        let bytes: Vec<_> = pixels.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let queue = self.gpu.queue.clone();
+        self.retain_denoised(|_, target| queue.write_buffer(target, 0, &bytes));
+        self.uploads += 1;
+        Ok(())
+    }
+    /// Retains a result already on this device, with per-sample composition semantics.
+    pub(crate) fn upload_gpu(&mut self, source: &wgpu::Buffer) {
+        self.retain_denoised(|encoder, target| {
+            encoder.copy_buffer_to_buffer(source, 0, target, 0, target.size())
+        });
+    }
+    fn retain_denoised(&mut self, write: impl FnOnce(&mut wgpu::CommandEncoder, &wgpu::Buffer)) {
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
         let allocate = |size| {
             self.gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -337,15 +350,12 @@ impl Display {
             metadata: self.metadata,
             revision: self.image_revision + 1,
         };
+        write(&mut encoder, &frozen.color);
         self.gpu.queue.submit([encoder.finish()]);
-        let bytes: Vec<_> = pixels.iter().flat_map(|v| v.to_le_bytes()).collect();
-        self.gpu.queue.write_buffer(&frozen.color, 0, &bytes);
         self.denoised = Some(frozen);
-        self.uploads += 1;
         self.denoise_revision += 1;
         self.image_revision += 1;
         self.show_denoised();
-        Ok(())
     }
     /// Shows the last uploaded denoised image again, for example after a capture
     /// replaced it with newer samples. Returns false when there is none.

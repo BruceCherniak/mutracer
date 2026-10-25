@@ -72,8 +72,7 @@ jobs:
             native/toolchain/package-lock.json
       - uses: dtolnay/rust-toolchain@stable
         with:
-          # scriptc 0.3.2's Windows archive requires MinGW CRT helpers.
-          toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-gnu' || 'stable' }}
+          toolchain: ${{ runner.os == 'Windows' && 'stable-x86_64-pc-windows-msvc' || 'stable' }}
       - uses: actions/cache/restore@v4
         id: native_cache
         with:
@@ -98,7 +97,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev libvulkan1 patchelf
+          sudo apt-get install -y libxkbcommon-dev libxkbcommon-x11-0 libwayland-dev libx11-dev libxrandr-dev libxi-dev libxcursor-dev libvulkan1
       - run: npm ci
       - name: Install pinned native compiler for this platform
         run: |
@@ -118,7 +117,7 @@ jobs:
           set -o pipefail
           mkdir -p "$MUTRACER_NATIVE_OUTPUT"
           npm run native:viewer:build 2>&1 | tee "$MUTRACER_NATIVE_OUTPUT/build.log"
-      - name: Package and verify relocated app, assets and CPU OIDN
+      - name: Package and verify relocated app and assets
         env:
           MUTRACER_NATIVE_OUTPUT: ${{ runner.temp }}/mutracer-native/viewer
           MUTRACER_NATIVE_DIST: ${{ runner.temp }}/native-dist

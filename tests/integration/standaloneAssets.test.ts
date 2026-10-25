@@ -38,7 +38,7 @@ it('keeps UMD exports without external runtime imports', () => {
   expect(fetch).not.toHaveBeenCalled();
   expect(main.imports).toEqual([]);
   expect(main.dynamicImports).toEqual([]);
-  expect(Object.keys(main.modules).some(id => /oidn-web/.test(id))).toBe(true);
+  expect(Object.keys(main.modules).some(id => /oidn-webgpu/.test(id))).toBe(true);
 });
 
 it('embeds the exact WASM bytes in both the library and worker', () => {

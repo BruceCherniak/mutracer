@@ -551,6 +551,45 @@ pub(crate) fn depth_query(handle: u64) -> Result<Option<crate::depth::Query>> {
     let scene = ready(current)?;
     Ok(Some(crate::depth::Query::snapshot(scene)))
 }
+/// Borrow the current target's accumulated images. GPU commands retain these
+/// buffers if a later publication replaces the target at the same dimensions.
+pub(crate) fn denoise_buffers(handle: u64) -> crate::Result<([wgpu::Buffer; 3], [u32; 2], bool)> {
+    let mut slot = REGISTRY.lock().unwrap();
+    let registry = slot.as_mut().ok_or("No context registry")?;
+    let (state, linked) = with_scene(registry, handle)?;
+    let (scene, buffers, size) = match linked {
+        Some(scene) => {
+            let target = &state.link.as_ref().unwrap().target;
+            (
+                scene,
+                [
+                    target.output(0)?.clone(),
+                    target.output(2)?.clone(),
+                    target.output(1)?.clone(),
+                ],
+                [target.width, target.height],
+            )
+        }
+        None => {
+            let scene = ready(state)?;
+            let buffers = [
+                scene.scene.color_output,
+                scene.scene.albedo_output.ok_or("No albedo output")?,
+                scene.scene.normal_output.ok_or("No normal output")?,
+            ]
+            .map(|id| scene.buffers[&id].clone());
+            let size = [scene.scene.width, scene.scene.height];
+            (&mut *scene, buffers, size)
+        }
+    };
+    scene.gpu.loss.check()?;
+    Ok((
+        buffers,
+        size,
+        crate::display::Metadata::from_trace(&scene.display_trace).opaque_background(),
+    ))
+}
+
 /// Capture the last completed accumulation without a CPU image readback.
 /// A busy publication returns false so the UI can retain its stable old frame.
 pub fn capture_display(

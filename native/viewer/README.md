@@ -11,8 +11,8 @@ without a browser, JavaScript engine or Node.
 | Linux x64 | `MuTracer-linux-x64.tar.gz` from [GitHub Releases](https://github.com/pissang/mutracer/releases) | `mutracer-viewer` |
 | Windows x64 | `MuTracer-windows-x64.zip` from the `native-windows-x64` artifact of a [CI run](https://github.com/pissang/mutracer/actions/workflows/ci.yml) | `mutracer-viewer.exe` |
 
-Extract the whole archive and keep its files together: the executable, sample,
-OIDN libraries and licenses. Each archive has a SHA-256 checksum file.
+Extract the whole archive and keep its files together: the executable, sample, bundled libraries and
+licenses. Each archive has a SHA-256 checksum file.
 
 - macOS: the app is ad-hoc signed and not notarized by Apple.
 - Linux: targets Ubuntu 24.04 and needs a Vulkan driver and an X11 or Wayland
@@ -20,8 +20,8 @@ OIDN libraries and licenses. Each archive has a SHA-256 checksum file.
 
 ## Build from source
 
-Install the [SDK build requirements](../README.md#build-and-link) and CMake.
-Linux also needs patchelf and the X11/Wayland development libraries; Windows
+Install the [SDK build requirements](../README.md#build-and-link).
+Linux also needs the X11/Wayland development libraries; Windows
 needs the [contributor setup](../CONTRIBUTING.md#windows). Then, from the
 repository root:
 
@@ -38,9 +38,8 @@ Add `-- /absolute/path/model.glb` to open a model at launch.
 on Windows and Linux (`MUTRACER_NATIVE_OUTPUT` changes the directory). The
 result runs without project files or build tools.
 
-The first build downloads the OIDN SDK, source and model weights (about
-80–95 MiB). The app includes the regular and small OIDN models and needs no
-download at runtime.
+The app includes the oidn-webgpu runtime and standard model. It needs no
+denoising download or OIDN SDK at runtime.
 
 ## Use
 
@@ -164,9 +163,9 @@ download at runtime.
   exposure (1 is unchanged), contrast, saturation, temperature and tint, for
   both preview and export. **Output** selects Final, Normal or Albedo; guide
   channels skip color controls and denoising.
-- **Native OIDN** is on by default. It denoises final samples after
-  interaction pauses, using the first available
-  [OIDN backend](../docs/denoising.md#oidn-runtime). Toggle it to compare;
+- **Denoise** is on by default. It denoises final samples after
+  interaction pauses, using [oidn-webgpu](../docs/denoising.md#oidn-webgpu)
+  on the rendering GPU. Toggle it to compare;
   export uses the latest denoised result when there is one.
 - **Ray tracing**: **HWRT** (default) or **Software**. The panel shows the path
   in use, any fallback reason and how many geometries use a software BVH.
@@ -212,5 +211,5 @@ download at runtime.
   output matters. Coplanar overlapping surfaces can differ between backends.
   See [ray tracing backends](../README.md#ray-tracing-backends).
 - Device-loss recovery is not implemented.
-- Native OIDN output can differ from browser OIDN. Custom OIDN weights are not
-  supported.
+- Denoising output can differ from browser OIDN. Custom weights are not exposed
+  in the viewer.

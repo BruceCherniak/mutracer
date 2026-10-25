@@ -15,18 +15,19 @@ if (!includes.length) throw new Error('Build the Windows native host before the 
 if (!readFileSync(resolve(includes[0], 'tiny_bvh_base.h'), 'utf8').includes('if (!::mt_native_process_terminating())'))
   throw new Error('Rebuild the Windows host to update the TinyBVH process-exit hook');
 mkdirSync(out, {recursive:true});
-const compiler = process.env.CXX ?? 'g++';
-const dll = resolve(out, 'tinybvh-exit.dll'), library = resolve(out, 'libtinybvh-exit.dll.a');
+const compiler = process.env.CXX ?? 'cl.exe';
+const dll = resolve(out, 'tinybvh-exit.dll'), library = resolve(out, 'tinybvh-exit.lib');
 const binary = resolve(out, 'tinybvh-thread-exit.exe');
 function run(name, command, args, timeout = 120000) {
   const result = spawnSync(command, args, {cwd:root, encoding:'utf8', timeout, maxBuffer:4 * 1024 * 1024});
   writeFileSync(resolve(out, name + '.log'), (result.stdout ?? '') + (result.stderr ?? ''));
   if (result.error || result.status !== 0) throw result.error ?? new Error(`${name} failed: ${result.status}`);
 }
-const flags = ['-std=c++20', '-O1', '-ffp-contract=off', '-static-libgcc', '-static-libstdc++'];
-run('dll-build', compiler, [...flags, '-shared', '-I', includes[0], 'native/host/tinybvh.cpp',
-  '-Wl,--export-all-symbols', '-Wl,--exclude-libs,ALL', `-Wl,--out-implib=${library}`, '-lntdll', '-o', dll]);
-run('host-build', compiler, [...flags, 'native/tests/tinybvh-thread-exit.cpp', library, '-o', binary]);
+const flags = ['/nologo','/std:c++20','/MD','/EHsc','/O1','/fp:strict'];
+run('dll-build', compiler, [...flags, '/LD', '/I'+includes[0], 'native/tests/tinybvh-exit-dll.cpp',
+  '/Fo'+resolve(out,'tinybvh-exit.obj'), '/Fe'+dll, '/link', '/IMPLIB:'+library, 'ntdll.lib']);
+run('host-build', compiler, [...flags, 'native/tests/tinybvh-thread-exit.cpp', library,
+  '/Fo'+resolve(out,'thread-exit.obj'), '/Fe'+binary]);
 // The fixture joins its calling thread, explicitly shuts down/restarts the pool
 // twice, and leaves the final pool for DLL process detach. A hang is a failure.
 run('process-exit', binary, [], 30000);

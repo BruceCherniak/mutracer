@@ -1,4 +1,4 @@
-import {spawnSync} from 'node:child_process';
+import {spawnNative as spawnSync, cCompiler} from '../scripts/platform.mjs';
 import {mkdirSync, readFileSync, writeFileSync} from 'node:fs';
 import {dirname, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -17,7 +17,7 @@ writeFileSync(resolve(out, 'build.log'), (built.stdout ?? '') + (built.stderr ??
 if (built.status !== 0) throw new Error('Concrete vector compilation failed; see build.log');
 const summary = JSON.parse(readFileSync(resolve(built.nativeSourceRoot, 'vector-specialization.json'), 'utf8'));
 if (!summary.functions) throw new Error('No concrete vector kernels exercised');
-const cc = spawnSync(process.env.CC ?? 'cc', ['-Wall', '-Wextra', '-Werror', resolve(root, 'native/tests/module-host.c'), archive, '-lm', '-o', host], {encoding:'utf8'});
+const cc = spawnSync(cCompiler, ['-Wall', '-Wextra', '-Werror', resolve(root, 'native/tests/module-host.c'), archive, '-lm', '-o', host], {encoding:'utf8'});
 if (cc.status !== 0) throw new Error(cc.stderr);
 let seed = 0x7521;
 function random() {seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 2 ** 32;}

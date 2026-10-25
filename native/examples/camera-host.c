@@ -1,7 +1,7 @@
 /* Compare incremental camera commits with complete scene preparation on real GPUs. */
 #include "mutracer-context.h"
 #include <math.h>
-#include <pthread.h>
+#include "host-thread.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,8 +85,8 @@ int main(int argc,char **argv){
    FILE *file=fopen(path,"wb");REQUIRE(file&&fwrite(a_pixels,1,size,file)==size);fclose(file);
   }
  }
- memcpy(source,original,128);pthread_t thread;void *thread_result=NULL;struct thread_args args={a,edited,length};
- REQUIRE(pthread_create(&thread,NULL,other_thread,&args)==0);REQUIRE(pthread_join(thread,&thread_result)==0);REQUIRE((uintptr_t)thread_result==1);
+ memcpy(source,original,128);mt_host_thread thread;void *thread_result=NULL;struct thread_args args={a,edited,length};
+ REQUIRE(mt_host_thread_start(&thread,other_thread,&args)==0);REQUIRE(mt_host_thread_join(&thread,&thread_result)==0);REQUIRE((uintptr_t)thread_result==1);
  OK(mt_context_render(a,samples,error,sizeof(error)));
  OK(read_image(a,0,a_pixels,size));REQUIRE(memcmp(a_pixels,initial,size)==0);
  OK(mt_context_commit(a,edited,length,error,sizeof(error)));OK(mt_context_info(a,&ci,error,sizeof(error)));REQUIRE(ci.samples==0);

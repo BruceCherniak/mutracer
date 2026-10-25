@@ -1,5 +1,6 @@
 // Reproducible native CI, with outputs isolated from the Web install/build.
 import {prepareTinyBvh} from '../../scripts/fetch-tinybvh.mjs';
+import {finalizeHostLibrary} from './finalize-host-library.mjs';
 import {spawn,spawnSync} from 'node:child_process';
 import {closeSync,mkdirSync,openSync,readFileSync,writeFileSync,mkdtempSync} from 'node:fs';
 import {tmpdir} from 'node:os';
@@ -52,10 +53,12 @@ async function run(name,command,args,extra={},{allowFailure=false,timeout=900000
  return {...result,check,output:readFileSync(log,'utf8')};
 }
 const version=runSync('compiler-version',compiler,['--version']);
-if(version.stdout.trim()!=='0.3.2')throw Error('Native CI requires scriptc0.3.2.');
+if(version.stdout.trim()!=='0.4.4')throw Error('Native CI requires scriptc0.4.4.');
+if(windows)runSync('windows-msvc-runtime',process.execPath,['native/validation/windows-msvc-runtime.mjs']);
 runSync('aot-build',compiler,['build','--lib','--profile','native/src/render-core-profile.json','-o',archive]);
 await prepareTinyBvh();
 await run('native-build','cargo',['build','--release','--locked','--manifest-path','native/host/Cargo.toml']);
+finalizeHostLibrary(hostTarget);
 if(windows)await run('windows-dll-exit',process.execPath,['native/validation/windows-dll-exit.mjs']);
 let gpu={validated:false,reason:'CPU-only CI; run native:ci:gpu on a real GPU'};
 if(gpuValidation){
@@ -126,7 +129,7 @@ if(gpuValidation){
 await joinLane(modulesLane);
 const totalSeconds=seconds(ciStarted);
 console.log(`Native CI: ${totalSeconds} s`);
-writeFileSync(resolve(out,'summary.json'),JSON.stringify({passed:true,scriptc:'0.3.2',gpu,hostGpuTests,requiredModules:14,totalSeconds,checks},null,2)+'\n');
+writeFileSync(resolve(out,'summary.json'),JSON.stringify({passed:true,scriptc:'0.4.4',gpu,hostGpuTests,requiredModules:14,totalSeconds,checks},null,2)+'\n');
 
 // Each ignored test runs in its own process, so a panic cannot poison the shared
 // test lock for the rest. The HWRT loop runs fewer iterations than its default.

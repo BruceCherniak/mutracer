@@ -1,13 +1,13 @@
 import {prepareTinyBvh} from '../../scripts/fetch-tinybvh.mjs';
 import {spawnCompiler} from './compiler.mjs';
 import {spawnSync} from 'node:child_process';
-import {mkdirSync,copyFileSync,cpSync,writeFileSync,renameSync,readFileSync} from 'node:fs';
+import {mkdirSync,copyFileSync,cpSync,writeFileSync,renameSync,readFileSync,rmSync,readdirSync} from 'node:fs';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {bundleOIDN} from './viewer-oidn.mjs';
 import {summarizeCoverage} from '../validation/diagnostics.mjs';
 import {archiveName,executable,nativeToolchainEnv,viewerPlatform} from './platform.mjs';
 import {prepareDxc} from './fetch-dxc.mjs';
+import {bundleWindowsRuntime} from './windows-redist.mjs';
 const root=resolve(dirname(fileURLToPath(import.meta.url)), '../..');
 const out=resolve(process.env.MUTRACER_NATIVE_OUTPUT??resolve(root,'.native-build/viewer'));
 const target=resolve(process.env.CARGO_TARGET_DIR??resolve(out,'cargo-target'));
@@ -18,7 +18,7 @@ mkdirSync(out,{recursive:true});
 const prebuilt=process.env.MUTRACER_AOT_PREBUILT;
 const env={...nativeToolchainEnv(),CARGO_TARGET_DIR:target,MUTRACER_AOT_ARCHIVE:resolve(prebuilt??resolve(out,archiveName('render-core')))};
 function run(command,args){const r=(command===compiler?spawnCompiler:spawnSync)(command,args,{cwd:root,env,stdio:'inherit'});if(r.error||r.status!==0)throw new Error(`${command} failed: ${r.error?.message??r.status}`);}
-const version=spawnCompiler(compiler,['--version'],{encoding:'utf8'});if(version.status!==0||version.stdout.trim()!=='0.3.2')throw new Error('Set MUTRACER_SCRIPTC to scriptc 0.3.2.');
+const version=spawnCompiler(compiler,['--version'],{encoding:'utf8'});if(version.status!==0||version.stdout.trim()!=='0.4.4')throw new Error('Set MUTRACER_SCRIPTC to scriptc 0.4.4.');
 const coverage=spawnCompiler(compiler,['coverage','native/src/render-core.ts','--print','diagnostics','--fail-on','blockers'],{cwd:root,encoding:'utf8',maxBuffer:32*1024*1024});
 writeFileSync(resolve(out,'coverage.json'),coverage.stdout??'');
 if(coverage.nativeMatrixPrecision!==64)throw new Error('Native viewer requires Float64 CPU matrix storage.');
@@ -53,10 +53,13 @@ if(mac) {
 <key>NSHighResolutionCapable</key><true/>
 </dict></plist>\n`);
 }
-bundleOIDN(out, contents);
+// Discard obsolete SDK files when rebuilding into an older app directory.
+if(mac)rmSync(resolve(contents,'Frameworks'),{recursive:true,force:true});
+else for(const name of readdirSync(contents))if(/^(?:lib)?OpenImageDenoise|^tbb|^libtbb/.test(name))rmSync(resolve(contents,name),{force:true});
 // Mirror component notice paths, including shared renderer attribution, in the
-// standalone package. OIDN's upstream runtime notices keep their existing folder.
+// standalone package.
 const licenses=resolve(resources,'licenses');
+rmSync(licenses,{recursive:true,force:true});
 for(const component of ['', 'native', 'native/viewer']) {
   const destination=resolve(licenses,component);mkdirSync(destination,{recursive:true});
   cpSync(resolve(root,component,'LICENSES'),resolve(destination,'LICENSES'),{recursive:true});
@@ -64,6 +67,7 @@ for(const component of ['', 'native', 'native/viewer']) {
 }
 copyFileSync(resolve(root,'LICENSE'),resolve(licenses,'LICENSE'));
 if(process.platform==='win32') {
+  bundleWindowsRuntime(bin,licenses);
   const dxc=prepareDxc(),notices=resolve(licenses,'DXC');mkdirSync(notices,{recursive:true});
   for(const name of ['dxcompiler.dll','dxil.dll'])copyFileSync(resolve(dxc,'bin/x64',name),resolve(bin,name));
   for(const name of ['LICENSE-LLVM.txt','LICENSE-MS.txt','LICENSE-MIT.txt'])copyFileSync(resolve(dxc,name),resolve(notices,name));

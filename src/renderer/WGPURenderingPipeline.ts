@@ -1215,7 +1215,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
         wholeImage: denoiseSchedule === 'every-sample'
       } : {}),
       // A preview frame is one whole-image pass. Settled images can take many
-      // tiles; oidn-web 0.5 runs those back to back by default, which starves
+      // tiles; oidn-webgpu runs those back to back by default, which starves
       // the page at 4K, so pace them to display frames instead.
       scheduling: denoiseSchedule === 'every-sample' ? 'event-loop' as const : 'animation-frame' as const
     };

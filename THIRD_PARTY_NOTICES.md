@@ -106,7 +106,7 @@ with standard/small included in mutracer. They are trained weights from
 
 Copyright Intel Corporation. Apache License 2.0
 ([`oidn/weights/LICENSE.txt`](./oidn/weights/LICENSE.txt)). Denoising runs
-through the [`oidn-web`](https://www.npmjs.com/package/oidn-web) package, which
+through the [`oidn-webgpu`](https://github.com/pissang/oidn-webgpu) package, which
 carries its own license.
 
 ## pbrt-v4 ZSobol
@@ -155,7 +155,7 @@ MIT-licensed dependencies. The `lib/` ESM modules keep npm dependency imports.
 - [webgpu-utils](https://github.com/greggman/webgpu-utils): Copyright (c) 2022
   Gregg Tavares.
   [`LICENSES/WebGPUUtils-MIT.txt`](./LICENSES/WebGPUUtils-MIT.txt).
-- [oidn-web](https://github.com/pissang/oidn-web): Copyright (c) 2024 pissang.
+- [oidn-webgpu](https://github.com/pissang/oidn-webgpu): Copyright (c) 2024 pissang.
   [`LICENSES/OIDNWeb-MIT.txt`](./LICENSES/OIDNWeb-MIT.txt).
 
 The optional TinyBVH wasm is inlined in the standalone build. Its copyright

@@ -5,7 +5,7 @@
 //! the host calls [`RenderLoop::tick`] each frame while [`RenderLoop::needs_tick`].
 //!
 //! An engine and its renders/display may be used from any thread, one thread at
-//! a time. Full scene preparation and denoising run on library threads.
+//! a time. Full scene preparation and CPU denoising run on library threads.
 //! Event/progress callbacks run synchronously on the calling
 //! thread inside `update`, `read_depth_samples`, `refine`, `converge` and loop
 //! `tick`, and may call back into the API.
@@ -36,9 +36,9 @@ pub use engine::{
 pub use post_process::{OutputKind, PostProcessContext, PostProcessSubscription};
 pub use render::{
     AdaptiveResolution, AlphaBlendStrategy, CancelToken, CommitKind, ConvergeOptions,
-    ConvergeProgress, ConvergeResult, ConvergeStage, DenoiseReport, DenoiseSchedule,
-    DenoiserOptions, Image, PixelKind, Render, RenderSettings, RenderSize, RenderStatus,
-    SampleEvent, SamplingPattern,
+    ConvergeProgress, ConvergeResult, ConvergeStage, DENOISE_OIDN_WEBGPU, DenoiseReport,
+    DenoiseSchedule, DenoiserOptions, Image, OIDN_WEBGPU_AVAILABLE, PixelKind, Render,
+    RenderSettings, RenderSize, RenderStatus, SampleEvent, SamplingPattern,
 };
 pub use render_loop::{
     LoopRender, LoopSubscription, LoopSync, RenderLoop, RenderLoopOptions, RenderLoopStatus,

@@ -10,31 +10,17 @@ pub fn run(model_path: &Path, out: &Path) -> Result<()> {
     std::fs::create_dir_all(out)?;
     let model = Model::load(model_path)?;
     let size = [32, 24];
-    let count = (size[0] * size[1]) as usize;
-    let mut hdr = Vec::with_capacity(count * 4);
-    for i in 0..count {
-        let value = if i % 3 == 0 { 2.0 } else { 0.1 };
-        hdr.extend_from_slice(&[value, value * 0.5, value * 0.25, (i % 7) as f32 / 7.0]);
-    }
-    let normal: Vec<f32> = [0.0, 0.0, 1.0, 1.0].repeat(count);
-    let albedo: Vec<f32> = [0.5, 0.5, 0.5, 1.0].repeat(count);
-    let mut denoiser = mutracer_native_probe::denoise::Denoiser::with_backend(1)?;
-    let denoised = denoiser.run(size, &hdr, &normal, &albedo)?;
     ensure!(
-        denoised.iter().all(|v| v.is_finite()),
-        "Non-finite bundled OIDN output"
+        mutracer_native_probe::api::OIDN_WEBGPU_AVAILABLE,
+        "Missing native denoiser"
     );
-    ensure!(denoised != hdr, "Bundled OIDN did not filter the input");
-    ensure!(
-        denoised
-            .chunks_exact(4)
-            .zip(hdr.chunks_exact(4))
-            .all(|(a, b)| a[3] == b[3]),
-        "OIDN changed alpha"
-    );
-
     let gpu = std::env::var("MUTRACER_NATIVE_GPU_VALIDATION").is_ok_and(|value| value == "1");
     if gpu {
+        let (denoised, _) = denoise_model(&model, size, 4)?;
+        ensure!(
+            denoised.iter().all(|v| v.is_finite()),
+            "Non-finite packaged denoising"
+        );
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
@@ -80,11 +66,69 @@ pub fn run(model_path: &Path, out: &Path) -> Result<()> {
         );
         crate::renderer::save(&out.join("render.png"), &pixels, size, 0.0)?;
     }
-    let summary = serde_json::json!({"passed":true,"gpu":gpu,"gpuValidation":if gpu {"passed"} else {"not-run (CPU-only)"},"oidn":denoiser.backend,"model":model_path});
+    let summary = serde_json::json!({"passed":true,"gpu":gpu,"gpuValidation":if gpu {"passed"} else {"not-run (CPU-only)"},"denoiser":"oidn-webgpu","denoisingValidation":if gpu {"passed"} else {"not-run (CPU-only)"},"model":model_path});
     std::fs::write(
         out.join("summary.json"),
         serde_json::to_vec_pretty(&summary)?,
     )?;
     println!("{summary}");
     Ok(())
+}
+
+// Exercise the configured built-in path, including packaged weights/runtime.
+pub(crate) fn denoise_model(
+    model: &Model,
+    size: [u32; 2],
+    samples: u32,
+) -> Result<(Vec<f32>, f64)> {
+    use mutracer_native_probe::api;
+    let engine = api::Engine::new(api::EngineOptions::default())?;
+    let camera = Camera::fit(model.0.center, model.0.radius);
+    engine.set_scene(&model.descriptor(&camera.bytes(size), size, &Environment::default()))?;
+    engine.update()?;
+    let render = api::Render::new(
+        &engine,
+        api::RenderSettings {
+            max_samples: samples,
+            size: api::RenderSize::Fixed {
+                width: size[0],
+                height: size[1],
+            },
+            ..Default::default()
+        },
+    )?;
+    render.set_denoiser(Some(api::DenoiserOptions {
+        max_tile_size: 512,
+        backend: api::DENOISE_OIDN_WEBGPU,
+        ..Default::default()
+    }))?;
+    render.converge(api::ConvergeOptions::new(samples))?;
+    let raw = render.read_pixels(api::PixelKind::Hdr)?.data;
+    let denoised = render.read_pixels(api::PixelKind::Denoised)?.data;
+    ensure!(
+        raw != denoised,
+        "Packaged denoiser did not change noisy pixels"
+    );
+    ensure!(
+        raw.chunks_exact(4)
+            .zip(denoised.chunks_exact(4))
+            .all(|(a, b)| a[3] == b[3]),
+        "Packaged denoiser changed alpha"
+    );
+    let report = render
+        .denoise_report()
+        .ok_or_else(|| anyhow::anyhow!("No packaged denoise report"))?;
+    ensure!(
+        report.backend == "oidn-webgpu" && report.error.is_none(),
+        "Wrong packaged denoiser: {report:?}"
+    );
+    // Direct L0 smokes/save() use bottom-row-first pixels.
+    let row = size[0] as usize * 4;
+    let bottom_first = denoised
+        .chunks_exact(row)
+        .rev()
+        .flatten()
+        .copied()
+        .collect();
+    Ok((bottom_first, report.milliseconds))
 }

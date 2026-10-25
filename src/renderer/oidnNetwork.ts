@@ -1,5 +1,5 @@
 /// <reference types="@webgpu/types" preserve="true" />
-import { initUNetFromBuffer, type UNet } from 'oidn-web';
+import { initUNetFromBuffer, type UNet } from 'oidn-webgpu';
 import type Engine from '../Engine.js';
 import type { OIDNDenoiserOptions } from '../Render.js';
 import {
@@ -20,7 +20,7 @@ export interface OIDNAuxiliaryDenoisers {
 export type OIDNDenoiser = UNet & {
   /** Optional RT auxiliary filters used before a clean-aux beauty model. */
   auxiliaryDenoisers?: OIDNAuxiliaryDenoisers;
-  /** Optional shape preparation supported by newer oidn-web runtimes. */
+  /** Optional shape preparation supported by newer oidn-webgpu runtimes. */
   prepareForImage?: (
     width: number,
     height: number,
@@ -29,7 +29,7 @@ export type OIDNDenoiser = UNet & {
 };
 
 interface OIDNLoadOptions {
-  /** Maximum OIDN tile size. By default oidn-web chooses the tile size. */
+  /** Maximum OIDN tile size. By default oidn-webgpu chooses the tile size. */
   maxTileSize?: number;
   /** Optional signal used while downloading the weights. */
   signal?: AbortSignal;

@@ -1299,6 +1299,7 @@ pub unsafe extern "C" fn mt_render_set_denoiser(
             Some(DenoiserOptions {
                 backend: d.backend,
                 library,
+                max_tile_size: 0,
                 schedule: match d.schedule {
                     0 => DenoiseSchedule::Converged,
                     1 => DenoiseSchedule::Progressive,
@@ -1872,6 +1873,60 @@ mod tests {
             .unwrap()
     }
     #[test]
+    fn render_backend_selection_keeps_the_standalone_oidn_contract() {
+        let _test = crate::ABI_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let Some(engine) = super::super::tests::software_engine(Backend::Software) else {
+            return;
+        };
+        let engine_handle = register_engine(engine.clone(), None).unwrap();
+        let render = Arc::new(Render::new(&engine, RenderSettings::default()).unwrap());
+        let render_handle = register_render(engine_handle, render.clone(), None).unwrap();
+        let mut desc = std::mem::MaybeUninit::<MtRenderDenoiser>::uninit();
+        assert_eq!(unsafe { mt_render_denoiser_default(desc.as_mut_ptr()) }, 0);
+        let mut desc = unsafe { desc.assume_init() };
+        desc.backend = DENOISE_OIDN_WEBGPU;
+        desc.schedule = 1;
+        let mut message = [0; 512];
+        let code = unsafe {
+            mt_render_set_denoiser(render_handle, &desc, message.as_mut_ptr(), message.len())
+        };
+        assert_eq!(
+            code,
+            if OIDN_WEBGPU_AVAILABLE {
+                0
+            } else {
+                Status::Unavailable as i32
+            }
+        );
+        if OIDN_WEBGPU_AVAILABLE {
+            assert_eq!(render.denoiser().unwrap().backend, DENOISE_OIDN_WEBGPU);
+            let previous = render.denoiser();
+            for max_tile_size in [1, 15, 16385, u32::MAX] {
+                assert_eq!(
+                    render
+                        .set_denoiser(Some(DenoiserOptions {
+                            backend: DENOISE_OIDN_WEBGPU,
+                            max_tile_size,
+                            ..Default::default()
+                        }))
+                        .unwrap_err()
+                        .status,
+                    Status::InvalidArgument
+                );
+                assert_eq!(render.denoiser(), previous);
+            }
+        }
+        // The render-only value must never select a different mt_denoiser_* backend.
+        assert!(crate::denoise::Denoiser::with_backend(DENOISE_OIDN_WEBGPU).is_err());
+        assert_eq!(
+            unsafe { mt_engine_destroy(engine_handle, message.as_mut_ptr(), message.len()) },
+            0
+        );
+    }
+
+    #[test]
     #[ignore = "requires a real GPU; run npm run native:ci:gpu"]
     fn device_loss_owned_device_delivers_c_event_once_and_keeps_failure_sticky() {
         let _test = crate::ABI_TEST_LOCK
@@ -2021,6 +2076,7 @@ mod tests {
         assert_eq!(value("MT_IMAGE_DENOISED"), 3);
         assert_eq!(value("MT_DISPLAY_PNG"), 1);
         assert_eq!(value("MT_DENOISE_EVERY_SAMPLE"), 2);
+        assert_eq!(value("MT_DENOISE_OIDN_WEBGPU"), 5);
         assert_eq!(value("MT_LOOP_SELECT_FINAL"), 1);
     }
     #[test]

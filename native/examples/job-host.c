@@ -1,6 +1,6 @@
 /* Real asynchronous GPU jobs: any-thread polling, draining cancellation and resume. */
 #include "mutracer-context.h"
-#include <pthread.h>
+#include "host-thread.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -46,8 +46,8 @@ int main(int argc,char **argv){
  size_t written=0;FAILS(MT_ERROR_INVALID_STATE,mt_context_read_pixels(a,MT_IMAGE_HDR,NULL,0,&written,error,sizeof(error)));
  FAILS(MT_ERROR_INVALID_STATE,mt_context_submit(a,1,&job_a,error,sizeof(error)));FAILS(MT_ERROR_INVALID_ARGUMENT,mt_job_poll(old,65,error,sizeof(error)));
  OK(mt_job_poll(old,0,error,sizeof(error)));OK(mt_job_info(old,&info,error,sizeof(error)));REQUIRE(info.submitted_samples==0);
- pthread_t thread;void *thread_result=NULL;REQUIRE(pthread_create(&thread,NULL,other_thread,&old)==0);
- REQUIRE(pthread_join(thread,&thread_result)==0);REQUIRE((uintptr_t)thread_result==1);
+ mt_host_thread thread;void *thread_result=NULL;REQUIRE(mt_host_thread_start(&thread,other_thread,&old)==0);
+ REQUIRE(mt_host_thread_join(&thread,&thread_result)==0);REQUIRE((uintptr_t)thread_result==1);
  OK(mt_job_cancel(old,error,sizeof(error)));OK(mt_job_cancel(old,error,sizeof(error)));
  OK(mt_job_info(old,&info,error,sizeof(error)));REQUIRE(info.state==MT_JOB_CANCELLED&&info.completed_samples==0);
  OK(mt_context_submit(a,samples,&job_a,error,sizeof(error)));REQUIRE(job_a!=old);FAILS(MT_ERROR_INVALID_HANDLE,mt_job_info(old,&info,error,sizeof(error)));

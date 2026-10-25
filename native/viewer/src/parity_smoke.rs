@@ -416,14 +416,14 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
                 "Background export mismatch"
             );
         }
-        // OIDN must preserve alpha, and AOVs bypass both denoising and color controls.
+        // Denoising must preserve alpha, and AOVs bypass both denoising and color controls.
         viewer.denoise = true;
         let deadline = Instant::now() + Duration::from_secs(30);
         while viewer.denoised()?.is_none() {
             viewer.tick(&ctx)?;
             ensure!(
                 Instant::now() < deadline,
-                "Transparent OIDN timed out: {}",
+                "Transparent denoising timed out: {}",
                 viewer.denoise_status
             );
             std::thread::sleep(Duration::from_millis(2));
@@ -449,7 +449,7 @@ pub fn run(path: &Path, out: &Path) -> Result<()> {
             "AOV affected by denoise or exposure"
         );
         println!(
-            "PASS display controls, HDR retention, alpha, OIDN, AOV and PNG export backend {}",
+            "PASS display controls, HDR retention, alpha, denoising, AOV and PNG export backend {}",
             1 - mode
         );
     }

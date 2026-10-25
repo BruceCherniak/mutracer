@@ -19,6 +19,9 @@ mod compilation;
 pub mod context;
 pub mod denoise;
 mod denoise_ffi;
+mod oidn_webgpu;
+#[cfg(feature = "validation")]
+pub use oidn_webgpu::benchmark as benchmark_oidn_webgpu;
 mod depth;
 mod device_loss;
 pub mod display;
@@ -291,6 +294,7 @@ struct GpuDevice {
     queue: GpuQueue,
     info: wgpu::AdapterInfo,
     hardware_ray_query: bool,
+    adapter: wgpu::Adapter,
     pipelines: Arc<Mutex<HashMap<PipelineKey, CachedPipeline>>>,
     pipeline_cache: Option<wgpu::PipelineCache>,
     compilation: Arc<compilation::Compilation>,
@@ -308,6 +312,7 @@ impl GpuDevice {
             device: device.clone(),
             queue: GpuQueue::new(queue.clone(), gate),
             info: adapter.get_info(),
+            adapter: adapter.clone(),
             hardware_ray_query: device
                 .features()
                 .contains(wgpu::Features::EXPERIMENTAL_RAY_QUERY),
@@ -353,18 +358,23 @@ impl GpuDevice {
         } else {
             wgpu::Features::empty()
         };
+        let denoise_features =
+            oidn_webgpu::required_features() | oidn_webgpu::recommended_features(adapter);
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
                 label: Some("MuTracer native feasibility"),
                 required_limits: adapter.limits(),
                 required_features: profile_features
+                    | denoise_features
                     | cache_feature
                     | if use_hwrt {
                         wgpu::Features::EXPERIMENTAL_RAY_QUERY
                     } else {
                         wgpu::Features::empty()
                     },
-                experimental_features: if use_hwrt {
+                experimental_features: if use_hwrt
+                    || denoise_features.contains(wgpu::Features::EXPERIMENTAL_COOPERATIVE_MATRIX)
+                {
                     unsafe { wgpu::ExperimentalFeatures::enabled() }
                 } else {
                     wgpu::ExperimentalFeatures::disabled()
@@ -399,6 +409,7 @@ impl GpuDevice {
             pipelines: Arc::new(Mutex::new(HashMap::new())),
             compilation: Default::default(),
             pipeline_cache,
+            adapter: adapter.clone(),
             device,
             queue: GpuQueue::new(queue, None),
             info,

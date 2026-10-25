@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type Engine from '../../src/Engine';
 
 const initUNetFromBuffer = vi.hoisted(() => vi.fn());
-vi.mock('oidn-web', () => ({ initUNetFromBuffer }));
+vi.mock('oidn-webgpu', () => ({ initUNetFromBuffer }));
 
 import {
   resolveOIDNAuxiliaryModelUrls,

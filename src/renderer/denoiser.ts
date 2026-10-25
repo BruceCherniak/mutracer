@@ -18,9 +18,9 @@ export interface OIDNWeb {
     albedo: OIDNWeb;
     normal: OIDNWeb;
   };
-  /** Optional serializable execution details exposed by native oidn-web. */
+  /** Optional serializable execution details exposed by native oidn-webgpu. */
   getRuntimeInfo?: () => unknown;
-  /** Optional shape preparation supported by newer oidn-web runtimes. */
+  /** Optional shape preparation supported by newer oidn-webgpu runtimes. */
   prepareForImage?: (
     width: number,
     height: number,

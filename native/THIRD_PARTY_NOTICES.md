@@ -7,12 +7,10 @@ Native-specific license texts are in [LICENSES/](./LICENSES).
 
 ## Windows toolchain runtime
 
-Windows native builds link the [MinGW-w64 runtime](https://www.mingw-w64.org/) and
-GCC's C++ runtime. MinGW-w64's runtime notices are included in
-[`LICENSES/MinGW-w64-runtime.txt`](./LICENSES/MinGW-w64-runtime.txt).
-The GCC runtime is covered by [GPL version 3](./LICENSES/GPL-3.0.txt) with the
-[GCC Runtime Library Exception 3.1](./LICENSES/GCC-RUNTIME-EXCEPTION-3.1.txt).
-These runtimes are included in the Windows native binaries, outside the npm library.
+Windows native builds use the Microsoft UCRT and MSVC C++ runtime. MuTracer's
+original UCRT/Win32 compatibility bridge provides the interfaces imported by the
+scriptc 0.4.4 runtime pack; it does not link MinGW CRT or GCC's C++ runtime.
+The separately licensed scriptc runtime remains covered by its upstream notices.
 
 ## wgpu native ray-query probe
 
@@ -44,8 +42,7 @@ The shared native library/viewer adapter loads Open Image Denoise through
 [libloading 0.8.9](https://github.com/nagisa/rust_libloading/tree/0.8.9),
 Copyright © 2015 Simonas Kazlauskas, ISC License
 ([text](./LICENSES/Libloading-ISC.txt)). The library caller supplies the OIDN
-runtime; the viewer bundles a runtime covered by its
-[separate notices](./viewer/THIRD_PARTY_NOTICES.md).
+runtime. The viewer uses the oidn-webgpu Rust runtime described below.
 
 ## Native glTF codecs
 
@@ -67,3 +64,18 @@ The importer and scene API also use these MIT-licensed Rust libraries:
 - base64 0.22.1: MIT ([license](./LICENSES/base64-0.22.1-MIT.txt)).
 - percent-encoding 2.3.2: MIT ([license](./LICENSES/percent-encoding-2.3.2-MIT.txt)).
 - glam 0.30.9: MIT ([license](./LICENSES/glam-0.30.9-MIT.txt)).
+
+## oidn-webgpu native runtime
+
+The native host links the published
+[oidn-webgpu-native 0.1.1](https://crates.io/crates/oidn-webgpu-native/0.1.1)
+Rust crate. Project-owned code is MIT, Copyright (c) 2024 pissang
+([text](./LICENSES/OIDNWeb-MIT.txt)). Its bundled core also contains the scriptc
+runtime (Apache-2.0), V8-derived radix conversion (BSD-3-Clause), and Ryū object
+code (BSL-1.0). The [upstream notice](./LICENSES/OIDNWebGPU-NOTICE.txt),
+[scriptc license](./LICENSES/OIDNWebGPU-scriptc-Apache-2.0.txt), and
+[V8 conversion license](./LICENSES/OIDNWebGPU-v8-BSD-3-Clause.txt) accompany the SDK
+and viewer. Ryū's license exempts object code from reproducing its text.
+The embedded `rt_hdr_alb_nrm` model is from
+[OIDN weights](../oidn/weights/README.md), Apache License 2.0
+([text](./LICENSES/OIDN-weights-Apache-2.0.txt)).

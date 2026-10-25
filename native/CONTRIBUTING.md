@@ -33,7 +33,7 @@ export MUTRACER_SCRIPTC="$(node native/toolchain/compiler.mjs)"
 export MUTRACER_NATIVE_OUTPUT=/absolute/evidence/directory
 ```
 
-- Use scriptc 0.3.2, Rust with locked dependencies and a C++20 compiler. Root
+- Use scriptc 0.4.4, Rust with locked dependencies and a C++20 compiler. Root
   Web dependencies do not include the compiler; `toolchain/compiler.mjs`
   resolves the platform package and restores its executable permissions.
 - Keep `MUTRACER_NATIVE_OUTPUT` outside the checkout.
@@ -47,16 +47,20 @@ export MUTRACER_NATIVE_OUTPUT=/absolute/evidence/directory
 
 ### Windows
 
-Windows builds need an x64 MSVC Developer environment (for OIDN), MinGW-w64
-GCC, Ninja, CMake and Zig 0.15.2 (scriptc's library archiver). Install Rust's
-`stable-x86_64-pc-windows-gnu` toolchain and select it with `RUSTUP_TOOLCHAIN`.
-The scriptc 0.3.2 Windows archive references MinGW CRT helpers despite its
-`msvc` package suffix, so the host, viewer and C harnesses use the GNU
-toolchain.
+Windows builds use the x64 MSVC Developer environment, Windows SDK, Rust's
+`stable-x86_64-pc-windows-msvc` toolchain and Zig 0.15.2 for scriptc's archiver.
+C/C++ consumers compile with `/MD`; no MinGW CRT or GCC C++ runtime is linked.
+
+The scriptc 0.4.4 runtime pack still imports several GNU-compatible interfaces.
+`windows-msvc-archive.mjs` edits only MuTracer's generated COFF archives: it
+maps constructor sections to `.CRT$XCU`, uses MSVC's stack probe, and prefixes
+runtime compatibility imports to avoid collisions with the independently linked
+OIDN core. An appended, MSVC-compiled `windows-msvc-compat.c` object implements
+those imports with UCRT and Win32. The installed runtime pack remains unchanged.
 
 ### Linux
 
-Linux builds need a C++20 compiler, CMake, patchelf and the X11/Wayland
+Linux builds need a C++20 compiler and the X11/Wayland
 development libraries installed by the CI workflow. GPU package checks also
 need `xvfb-run`.
 
@@ -73,7 +77,7 @@ need `xvfb-run`.
 | `npm run native:modules:verify`, `native:storage:verify` | No | AOT module and storage contracts |
 | `node native/validation/matrix-verify.mjs`, `vector-verify.mjs` | No | Precision checks |
 | `npm run native:viewer:build` | No | Full AOT graph and platform app |
-| `npm run native:viewer:package` | No | Archives the app, extracts it elsewhere and checks the sample and CPU OIDN |
+| `npm run native:viewer:package` | No | Archives the app, extracts it elsewhere and checks the sample and linked denoising runtime |
 | `npm run native:viewer:package -- --gpu` | Yes | Also checks rendering, all AOVs and real-window startup |
 | `npm run native:check` | No | Compiler capability probe; reports the incomplete browser API port and exits with status 1 |
 
@@ -88,13 +92,13 @@ need `xvfb-run`.
 
 | Variable | Purpose |
 | --- | --- |
-| `MUTRACER_SCRIPTC` | scriptc 0.3.2 executable |
+| `MUTRACER_SCRIPTC` | scriptc 0.4.4 executable |
 | `MUTRACER_NATIVE_OUTPUT` | Output and evidence directory |
 | `MUTRACER_AOT_ARCHIVE` | Archive for direct Cargo builds |
 | `MUTRACER_NATIVE_SAMPLES` | Fixture sample count; byte comparisons across stages need the same count and seed |
 | `MT_LOOP_ITERATIONS`, `MT_LOOP_BATCHED`, `MT_LOOP_L0`, `MT_LOOP_REAL_CAP` | [HWRT loop test](#metal-hwrt-sample-miss) |
 | `MUTRACER_TEST_CAPTURE` | Saves mismatching AOVs, descriptors and per-pixel audits |
-| `MUTRACER_OIDN_LIBRARY` | OIDN for Rust SDK tests |
+| `MUTRACER_OIDN_LIBRARY` | Optional external OIDN for Rust SDK tests |
 | `MUTRACER_TEST_OIDN_CUDA`, `_HIP`, `_NO_GPU` | [OIDN backend requirements](#oidn) |
 | `MUTRACER_KERNEL_FIXTURES` | [Native kernel](#shared-source-and-typed-resources) byte comparisons |
 | `MUTRACER_NATIVE_PROFILE=1` | [Preparation profile](#performance) on stderr |
@@ -137,7 +141,7 @@ support are errors. GitHub-hosted CI does not run it.
 
 The GitHub Actions `CI` workflow runs on pull requests, pushes to `main` and
 `dev`, and manual dispatch. It validates CPU and static contracts and builds the
-viewer for macOS arm64, Linux x64 and Windows x64, including OIDN and licenses.
+viewer for macOS arm64, Linux x64 and Windows x64, including oidn-webgpu and licenses.
 
 - Artifacts `native-macos-arm64`, `native-linux-x64` and `native-windows-x64`
   hold the app archive and SHA-256 checksum for 14 days;
@@ -310,8 +314,8 @@ dependencies. eframe/egui-wgpu and tracing share one adapter, device and queue.
 `src/display-shader.ts` generates the display WGSL through the Web generator;
 `scripts/generate-display.mjs --check` detects stale output.
 
-- Preview capture, tone mapping and presentation stay on the GPU; only OIDN and
-  export read pixels back.
+- Preview capture, tone mapping, denoising and presentation stay on the GPU;
+  export reads pixels back.
 - The viewer renders through `api::Engine::on_device`, a `RenderLoop` with its
   default preview, and the engine `Display`. Descriptor assembly and full
   preparation run off the UI thread.
@@ -322,10 +326,12 @@ dependencies. eframe/egui-wgpu and tracing share one adapter, device and queue.
   reconfigure the shared surface; CPU preparation continues.
 - The immutable picking BVH is built on a worker while a model loads. Autofocus
   uses it, with no GPU readback or alpha-texture inspection.
-- OIDN uses the library's `denoise.rs` for both the C ABI and the Rust render
-  denoiser. The build pins OIDN 2.5.1 source and weights with official
-  ABI-matched CPU modules (plus Metal on macOS and CUDA/HIP on Windows and
-  Linux), omits the three large models, and packages component notices.
+- The viewer uses the published `oidn-webgpu-native = 0.1.1` Rust crate on the
+  rendering device. Cargo verifies and links its bundled platform core; no
+  upstream checkout, planner build or private FFI is needed. The adapter follows
+  `native/README.md` upstream: load a Model, create a checked Denoiser, prepare
+  host buffers, then encode into the host's command encoder. `denoise.rs` and
+  `mt_denoiser_*` retain the optional caller-supplied OIDN SDK path. The Windows build uses the published MSVC core.
 
 ## Validation
 
@@ -361,10 +367,10 @@ HWRT where noted and compare against fresh contexts on Software and HWRT.
 | --- | --- |
 | `[MODEL] --package-smoke DIR` | Portable CPU package |
 | `--startup-smoke REPORT.json` | Opens a window, resizes it and presents frames; the report must confirm success |
-| `[MODEL] --smoke-out DIR` | Load and render, editing, cancellation, HDR environments, backend assertions and native OIDN (actual HWRT) |
-| `--interaction-smoke DIR` | Continuous camera and held edits, retained previews, resize, stale-OIDN rejection |
+| `[MODEL] --smoke-out DIR` | Load and render, editing, cancellation, HDR environments, backend assertions and native denoising (actual HWRT) |
+| `--interaction-smoke DIR` | Continuous camera and held edits, retained previews, resize, stale-denoise rejection |
 | `--material-smoke`, `--environment-smoke`, `--light-smoke`, `--transform-smoke`, `--geometry-smoke DIR` | Incremental commits against full preparation |
-| `--parity-smoke DIR` | Camera and render settings against fresh contexts, retention after edits and backend replacement, display controls, transparent PNG, OIDN alpha, guide channels (needs bundled OIDN) |
+| `--parity-smoke DIR` | Camera and render settings against fresh contexts, retention after edits and backend replacement, display controls, transparent PNG, denoising alpha and guide channels |
 | `--texture-smoke DIR` | All nine S/T wrap combinations and negative, zero and large repeats (needs an imported texture) |
 | `--texture-editor-smoke DIR` | Shared material presets; upload, replacement, removal and sampling of all nine slots, including displacement scale and bias |
 | `--studio-smoke DIR` | Rect lights against `node native/validation/viewer-studio-reference.mjs DIR` output; preset and parameter edits |
@@ -559,3 +565,35 @@ MT_LOOP_ITERATIONS=2000 MT_LOOP_BATCHED=1 cargo test \
   parameters. A stop-at-first-failure count is not a failure rate, and a
   zero-failure run does not establish a fix. Revisions from before incremental
   commits reject the later padded transform packet; record any adaptation.
+
+### oidn-webgpu release integration
+
+The Rust adapter uses only the published crate's documented Model, Denoiser,
+PreparedDenoise and wgpu APIs. Build with the ordinary host/viewer Cargo locks;
+Cargo handles the bundled core. To exercise the native GPU path with the linked
+AOT archive and host Cargo target configured:
+
+```sh
+cargo test --release --locked --manifest-path native/host/Cargo.toml --lib \
+  oidn_webgpu -- --include-ignored --nocapture
+```
+
+These checks compare accumulated GPU inputs with CPU HDR normalization followed
+by a direct Rust API call, preserve alpha and retained output, and exercise
+progressive/every-sample schedules, resizing, target replacement and device loss.
+The viewer's relocated `native:viewer:package -- --gpu` gate also runs denoising
+and real-window startup. Windows uses the same Rust runtime through its MSVC core. Hosted Windows CI
+checks compilation and CPU contracts; it does not establish GPU correctness.
+
+For the browser release, serve `tests/gpu/oidnNativeIntegration.html` and run
+`captureOIDNRelease()` in its console, then repeat with `?webgl`. It exercises
+Small, Standard and Clean Aux Large with local weights, checks GPU errors and
+confirms that filtering leaves fixed-seed raw HDR unchanged. It does not replace
+same-input output comparisons between runtimes.
+
+On macOS, the 0.1.1 dependency's Cargo build output propagates its dylib install
+name into downstream cdylibs. `finalize-host-library.mjs` restores MuTracer's
+identity and ad-hoc signature after the host build in the scene/CI drivers.
+After a direct Cargo shared-library build, call
+`finalizeHostLibrary(CARGO_TARGET_DIR)` from that module before linking C
+consumers. Rust rlib consumers and the statically linked viewer do not need it.

@@ -1,6 +1,7 @@
+import {spawnNative as spawnSync} from '../scripts/platform.mjs';
 import {prepareTinyBvh} from '../../scripts/fetch-tinybvh.mjs';
+import {finalizeHostLibrary} from '../scripts/finalize-host-library.mjs';
 import {spawnCompiler} from '../scripts/compiler.mjs';
-import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -30,8 +31,8 @@ function run(name, command, args, check = true) {
         throw new Error(`${name}: ${result.error?.message || result.stderr || result.stdout}`);
     return result;
 }
-if (run('compiler-version', compiler, ['--version']).stdout.trim() !== '0.3.2')
-    throw new Error('Requires scriptc 0.3.2');
+if (run('compiler-version', compiler, ['--version']).stdout.trim() !== '0.4.4')
+    throw new Error('Requires scriptc 0.4.4');
 run('material-property-contract', process.execPath, ['native/scripts/generate-material-properties.mjs', '--check']);
 const coverage = run('scene-coverage', compiler, ['coverage', 'native/src/scene-core.ts', '--print', 'diagnostics', '--fail-on', 'blockers'], false);
 const diagnostics = JSON.parse(coverage.stdout);
@@ -49,8 +50,9 @@ if (!prebuilt)
     run('aot-build', compiler, ['build', '--lib', '--profile', 'native/src/render-core-profile.json', '-o', env.MUTRACER_AOT_ARCHIVE]);
 await prepareTinyBvh();
 run('native-build', 'cargo', ['build', '--release', '--locked', '--manifest-path', 'native/host/Cargo.toml']);
+finalizeHostLibrary(target);
 const sceneHost=resolve(out,executable('scene-host')), minimalHost=resolve(out,executable('minimal-host'));
-const linkLibrary=windows?[resolve(target,'release/libmutracer_native_probe.dll.a')]:['-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`];
+const linkLibrary=windows?[resolve(target,'release/mutracer_native_probe.dll.lib')]:['-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`];
 run('scene-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-I', 'native/include', 'native/examples/scene-host.c', ...linkLibrary, ...cLinkFlags,'-o',sceneHost]);
 run('minimal-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-I', 'native/include', 'native/examples/minimal-host.c', ...linkLibrary, ...cLinkFlags,'-o',minimalHost]);
 run('core-host-build', cCompiler, ['-Wall', '-Wextra', '-Werror', '-Dmt_module_init=mt_core_init', '-Dmt_module_reset=mt_core_reset', '-Dmt_module_collect=mt_core_collect', '-Dmt_module_sink=mt_core_sink', '-Dmt_module_run=mt_core_scene', 'native/tests/module-host.c', env.MUTRACER_AOT_ARCHIVE, ...cLinkFlags, '-o', resolve(out, executable('core-host'))]);

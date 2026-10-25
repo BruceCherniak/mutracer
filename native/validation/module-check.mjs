@@ -42,7 +42,7 @@ function invoke(name, args) {
   return result;
 }
 const version = invoke('version', ['--version']);
-if (version.status !== 0 || version.stdout.trim() !== '0.3.2') throw new Error('Module probes require scriptc 0.3.2');
+if (version.status !== 0 || version.stdout.trim() !== '0.4.4') throw new Error('Module probes require scriptc 0.4.4');
 const results = [];
 for (const [name, source, wrapper, providedEntry, providedExport] of modules) {
   console.log(`Module ${name}: coverage...`);
@@ -73,7 +73,7 @@ for (const [name, source, wrapper, providedEntry, providedExport] of modules) {
   }
   record.status = coverage.passed && record.archive.passed ? 'archive-built' : 'blocked';
   results.push(record);
-  writeFileSync(resolve(output, 'summary.json'), JSON.stringify({ compiler: '0.3.2', results,
+  writeFileSync(resolve(output, 'summary.json'), JSON.stringify({ compiler: '0.4.4', results,
     scope: 'Coverage counts all error scopes in every listed source graph, including the portable material/light model entries. The browser MaterialTable remains a separate diagnostic target. Archives expose representative byte adapters; they do not certify every public API or runtime behavior.',
     wholeLibraryNative: false }, null, 2) + '\n');
   console.log(`Module ${name}: ${record.status}${coverage.errorSites !== undefined ? ` (${coverage.errorSites} error sites)` : ''}`);

@@ -2,7 +2,7 @@
 #include "mutracer-context.h"
 #include "mutracer-scene.h"
 #include <math.h>
-#include <pthread.h>
+#include "host-thread.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -121,9 +121,9 @@ int main(int argc,char **argv) {
   if(empty)for(uint32_t i=0;i<words[5];i++)if(words[words[23]+i*4]!=0)empty=0;
   if(!empty)REQUIRE(memcmp(other,reference,size)!=0);
   OK(read_image(a,0,pixels,size));REQUIRE(memcmp(pixels,reference,size)==0);
-  pthread_t thread;void *thread_result=NULL;struct thread_input thread_args={b,input,length};
-  REQUIRE(pthread_create(&thread,NULL,other_thread,&thread_args)==0);
-  REQUIRE(pthread_join(thread,&thread_result)==0);REQUIRE((uintptr_t)thread_result==1);
+  mt_host_thread thread;void *thread_result=NULL;struct thread_input thread_args={b,input,length};
+  REQUIRE(mt_host_thread_start(&thread,other_thread,&thread_args)==0);
+  REQUIRE(mt_host_thread_join(&thread,&thread_result)==0);REQUIRE((uintptr_t)thread_result==1);
   OK(read_image(b,0,pixels,size));REQUIRE(memcmp(pixels,other,size)==0);
   OK(mt_context_destroy(a,error,sizeof(error)));FAILS(MT_ERROR_INVALID_HANDLE,mt_context_destroy(a,error,sizeof(error)));
   FAILS(MT_ERROR_INVALID_HANDLE,mt_context_info(a,&info,error,sizeof(error)));OK(mt_context_create_with_backend(MT_BACKEND_SOFTWARE,&c,error,sizeof(error)));REQUIRE(c!=a&&c!=b);

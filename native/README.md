@@ -11,9 +11,10 @@ C ABI can change between versions.
 | --- | --- | --- |
 | macOS arm64 | Metal | Supported; GPU rendering verified |
 | Linux x64 | Vulkan | Supported; hardware-specific behavior and performance unverified |
-| Windows x64 | DX12 or Vulkan | Supported; GPU rendering verified; viewer from CI artifacts only |
+| Windows x64 | DX12 or Vulkan | MSVC build; GPU behavior unverified; viewer from CI artifacts only |
 
-Built-in denoising also needs the [OIDN runtime](docs/denoising.md#oidn-runtime).
+[Built-in denoising](docs/denoising.md) supports oidn-webgpu on the rendering GPU
+and optional OIDN with a caller-supplied runtime.
 
 ## Native viewer
 
@@ -40,8 +41,8 @@ and lifetime. The guides cover workflows and behavior across calls.
 ## Build and link
 
 Requirements: Node with the project's npm dependencies, stable Rust, a C++20
-compiler and scriptc 0.3.2 from `native/toolchain`. Windows also needs the
-[GNU toolchain setup](CONTRIBUTING.md#windows).
+compiler and scriptc 0.4.4 from `native/toolchain`. Windows also needs the
+[MSVC toolchain setup](CONTRIBUTING.md#windows).
 
 ```bash
 npm ci

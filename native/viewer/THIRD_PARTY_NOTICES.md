@@ -5,24 +5,11 @@ It links the native library; see its [notices](../THIRD_PARTY_NOTICES.md) and th
 [shared renderer notices](../../THIRD_PARTY_NOTICES.md). Viewer-specific license
 texts are in [LICENSES/](./LICENSES).
 
-## Native Open Image Denoise runtime
+## oidn-webgpu denoising
 
-The optional native viewer bundles [Open Image Denoise 2.5.1](https://github.com/RenderKit/oidn/releases/tag/v2.5.1)
-under the Apache License 2.0, including its regular/small model weights and
-native runtime dependencies. MuTracer rebuilds its core/API from the fixed
-2.5.1 source with three optional large weight sets omitted; CPU modules and the
-macOS Metal module and Windows/Linux CUDA/HIP modules remain from the matching
-official SDK. macOS/Linux loader
-paths are adjusted to the bundled libraries. Copyright 2018 Intel Corporation.
-The [license](./LICENSES/Apache-2.0.txt) and upstream bundled dependency notices
-([OIDN](./LICENSES/OIDN-third-party-programs.txt),
-[oneTBB](./LICENSES/OIDN-third-party-programs-oneTBB.txt),
-[DPC++](./LICENSES/OIDN-third-party-programs-DPCPP.txt)) accompany the app in
-`Contents/Resources/licenses/OIDN/` on macOS and `licenses/OIDN/` on Windows/Linux.
-This runtime is not part of the npm library.
-
-The shared native OIDN adapter and its loader attribution are covered by the
-[native library notices](../THIRD_PARTY_NOTICES.md).
+The viewer links the native library's oidn-webgpu Rust runtime and embeds its default
+OIDN model; see the [runtime and model notices](../THIRD_PARTY_NOTICES.md#oidn-webgpu-native-runtime).
+The viewer does not bundle the Open Image Denoise SDK or device modules.
 
 ## Windows DirectX Shader Compiler
 
@@ -44,3 +31,11 @@ Its native HTTPS client uses [ureq](https://github.com/algesten/ureq) (MIT/Apach
 dependencies. Their copyright notices and license texts are retained in
 [HTTP-TLS.txt](./LICENSES/HTTP-TLS.txt), which accompanies the native app.
 
+
+## Microsoft Visual C++ Runtime
+
+The Windows viewer ships app-local release CRT DLLs from the installed MSVC
+redistributable. Copyright Microsoft Corporation; Microsoft Software License
+Terms apply. The package records their component and files in
+`licenses/MSVC/RUNTIME.txt`; see the
+[Microsoft redistribution list](https://learn.microsoft.com/visualstudio/releases/2022/redistribution).

@@ -1,4 +1,4 @@
-import {spawnSync} from 'node:child_process';
+import {spawnNative as spawnSync, cCompiler} from '../scripts/platform.mjs';
 import {existsSync,mkdirSync,readFileSync,writeFileSync,copyFileSync,symlinkSync} from 'node:fs';
 import {dirname,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -28,7 +28,7 @@ if(!reuse){
  run('rust-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml']);
 }
 const host=resolve(out,'context-host');
-run('context-host-build',process.env.CC??'cc',['-Wall','-Wextra','-Werror','-I','native/include','native/examples/context-host.c','-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`,'-pthread','-o',host]);
+run('context-host-build',cCompiler,['-Wall','-Wextra','-Werror','-I','native/include','native/examples/context-host.c','-L',resolve(target,'release'),'-lmutracer_native_probe',`-Wl,-rpath,${resolve(target,'release')}`,'-pthread','-o',host]);
 const fixtures=JSON.parse(readFileSync(resolve(raw,'scene-verification.json'))).results;
 const results=[];
 for(const {variant} of fixtures){

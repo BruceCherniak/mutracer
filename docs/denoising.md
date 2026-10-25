@@ -6,7 +6,7 @@ albedo and normal guides.
 - **JNLM**: a built-in joint non-local means filter, on WebGPU and
   WebGL 2. It needs no weight download.
 - **OIDN**: [Intel Open Image Denoise](https://www.openimagedenoise.org/)
-  networks, run through [`oidn-web`](https://www.npmjs.com/package/oidn-web),
+  networks, run through [`oidn-webgpu`](https://github.com/pissang/oidn-webgpu),
   WebGPU only. They take longer and need weights, but are cleaner at one or
   two samples per pixel, for example for denoising while the camera moves.
 
@@ -67,7 +67,7 @@ network prewarm results are discarded.
 | `model` | OIDN network: `'standard'` (default), `'small'` or `'cleanAuxLarge'` |
 | `weightsBaseUrl` | Directory containing the OIDN `.tza` files |
 | `schedule` | `'converged'` (default), `'progressive'`, or `'every-sample'` |
-| `maxTileSize` | Maximum OIDN tile size; chosen by oidn-web by default |
+| `maxTileSize` | Maximum output tile edge in pixels; default `512` |
 | `signal` | `AbortSignal` for the OIDN weight download; default undefined |
 | `weightsUrl` | Explicit custom network; mutually exclusive with model/base directory |
 | `aux`, `hdr`, `hdrTransfer` | Custom network metadata only; defaults true, true, `'pu'` |
@@ -175,7 +175,7 @@ experimental WebNN path. `precision` defaults to `'auto'` (FP16 when
 shader-f16 is available), with `'fp32'` and `'fp16'` overrides. `dynamicTile`
 defaults to `true`; use `false` for fixed tiles or an object with
 `minTileSize` (256), `initialTileSize` (432), `targetTileTimeMs` (16) and
-`adjustmentStep` (16). Tile sizes are clamped/aligned by oidn-web.
+`adjustmentStep` (16).
 
 All implementation settings participate in the network cache key; `schedule`
 and download `signal` do not. Renders with different signals share a pending

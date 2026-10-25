@@ -282,9 +282,10 @@ pub enum CommitKind {
 pub struct DenoiseReport {
     /// Complete samples of the filtered image.
     pub samples: u32,
-    /// Filter backend: for example "OIDN Metal", "OIDN CPU" or "custom".
+    /// Filter backend: for example "OIDN Metal", "oidn-webgpu" or "custom".
     pub backend: String,
-    /// Filter wall time, excluding the input readback.
+    /// Filter wall time, excluding input readback. oidn-webgpu includes GPU
+    /// completion and first-use planning/pipeline creation.
     pub milliseconds: f64,
     /// Load or execution failure; denoising then stops until the denoiser is set again.
     pub error: Option<String>,
@@ -309,15 +310,27 @@ pub(super) fn sample_target(
         Some(DenoiseSchedule::Progressive) => max_samples.min(denoised.saturating_mul(2).max(4)),
     }
 }
-/// Open Image Denoise on a library thread.
+/// oidn-webgpu on the rendering device, without CPU image transfers.
+/// Requires a supported native target; see [`OIDN_WEBGPU_AVAILABLE`].
+pub const DENOISE_OIDN_WEBGPU: u32 = 5;
+/// Whether the oidn-webgpu native runtime is included. Always true.
+pub const OIDN_WEBGPU_AVAILABLE: bool = true;
+
+/// Built-in denoising backend and schedule.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct DenoiserOptions {
-    /// 0 GPU (Metal/CUDA/HIP) then CPU, 1 CPU, 2 Metal, 3 CUDA, 4 HIP. Default 0.
+    /// 0 GPU (Metal/CUDA/HIP) then CPU, 1 CPU, 2 Metal, 3 CUDA, 4 HIP,
+    /// 5 oidn-webgpu on the rendering device. Default 0.
     pub backend: u32,
-    /// OIDN library path. Default the bundled library or `MUTRACER_OIDN_LIBRARY`.
+    /// OIDN library path; default the bundled library or `MUTRACER_OIDN_LIBRARY`.
+    /// Backend 5 uses an HDR/PU color/albedo/normal TZA path; default `rt_hdr_alb_nrm`.
     pub library: Option<PathBuf>,
     /// Default [`DenoiseSchedule::Converged`].
     pub schedule: DenoiseSchedule,
+    /// oidn-webgpu maximum output tile edge. Default 0 (whole image).
+    /// 0 or 16..=16384; positive values round down to multiples of 16. Ignored by OIDN.
+    /// Smaller tiles reduce temporary GPU memory at extra work cost.
+    pub max_tile_size: u32,
 }
 /// Cross-thread cancellation for [`Render::converge`].
 #[derive(Clone, Debug, Default)]
@@ -503,7 +516,14 @@ pub(super) fn next_preview_scale(
     }
 }
 /// Pixels or an error, the OIDN device and the filter time in milliseconds.
-type DenoiseResult = (std::result::Result<Vec<f32>, String>, String, f64);
+enum DenoisedImage {
+    Cpu(Vec<f32>),
+    Gpu {
+        pixels: wgpu::Buffer,
+        preview: wgpu::Buffer,
+    },
+}
+type DenoiseResult = (std::result::Result<DenoisedImage, String>, String, f64);
 #[derive(Default)]
 struct Denoise {
     options: Option<DenoiserOptions>,
@@ -511,11 +531,12 @@ struct Denoise {
     cancel: CancelToken,
     /// Kept across `set_denoiser` calls with the same library and backend.
     filter: Arc<Mutex<Option<crate::denoise::Denoiser>>>,
+    gpu_filter: Option<crate::oidn_webgpu::Denoiser>,
     worker: Option<(u32, mpsc::Receiver<DenoiseResult>)>,
     last: Option<Instant>,
     report: Option<DenoiseReport>,
     /// Samples of the denoised image and its pixels, bottom row first like L0.
-    denoised: Option<(u32, Vec<f32>)>,
+    denoised: Option<(u32, DenoisedImage)>,
     failed: bool,
 }
 
@@ -572,6 +593,7 @@ impl RenderState {
         self.denoise.cancel.cancel();
         self.denoise.worker = None;
         self.denoise.denoised = None;
+        self.denoise.gpu_filter = None;
         self.denoise.failed = true;
     }
     /// Image size for a display size: the configured size, scaled down by
@@ -1364,6 +1386,13 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
     let Some(options) = render.denoise.options.clone() else {
         return Ok(());
     };
+    if options.backend == crate::oidn_webgpu::BACKEND {
+        state
+            .gpu
+            .device
+            .poll(wgpu::PollType::Poll)
+            .map_err(|e| error(Status::Unavailable, e.to_string()))?;
+    }
     if let Some((samples, worker)) = &render.denoise.worker {
         let samples = *samples;
         let (outcome, backend, milliseconds) = match worker.try_recv() {
@@ -1385,9 +1414,12 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
         match outcome {
             Ok(pixels) => {
                 if let Some(capture) = render.capture.as_mut() {
-                    capture
-                        .upload(&pixels)
-                        .map_err(|e| error(Status::Error, e.to_string()))?;
+                    match &pixels {
+                        DenoisedImage::Cpu(pixels) => capture
+                            .upload(pixels)
+                            .map_err(|e| error(Status::Error, e.to_string()))?,
+                        DenoisedImage::Gpu { preview, .. } => capture.upload_gpu(preview),
+                    }
                 }
                 render.output.invalidate();
                 render.denoise.denoised = Some((samples, pixels));
@@ -1413,6 +1445,52 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
         || render.needs_capture
         || denoised_samples(render) == render.samples
     {
+        return Ok(());
+    }
+    if options.backend == crate::oidn_webgpu::BACKEND && render.denoise.custom.0.is_none() {
+        let started = Instant::now();
+        let outcome = (|| -> std::result::Result<_, String> {
+            let (sources, size, flat) =
+                context::denoise_buffers(render.context).map_err(|e| e.to_string())?;
+            if render
+                .denoise
+                .gpu_filter
+                .as_ref()
+                .is_none_or(|f| f.size() != size)
+            {
+                render.denoise.gpu_filter = Some(
+                    crate::oidn_webgpu::Denoiser::new(
+                        &state.gpu,
+                        size,
+                        options.library.as_deref(),
+                        options.max_tile_size,
+                    )
+                    .map_err(|e| format!("{e:#}"))?,
+                );
+            }
+            let (pixels, preview) = render
+                .denoise
+                .gpu_filter
+                .as_mut()
+                .unwrap()
+                .submit(
+                    &state.gpu,
+                    [&sources[0], &sources[1], &sources[2]],
+                    render.samples,
+                    flat,
+                )
+                .map_err(|e| format!("{e:#}"))?;
+            Ok(DenoisedImage::Gpu { pixels, preview })
+        })();
+        let (send, receive) = mpsc::channel();
+        state.gpu.queue.on_submitted_work_done(move || {
+            let _ = send.send((
+                outcome,
+                "oidn-webgpu".into(),
+                started.elapsed().as_secs_f64() * 1e3,
+            ));
+        });
+        render.denoise.worker = Some((render.samples, receive));
         return Ok(());
     }
     let (size, color, normal, albedo) = denoise_inputs(render.context)?;
@@ -1485,7 +1563,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                 }))
                 .unwrap_or_else(|_| Err("Custom denoiser panicked".into()));
                 (
-                    result,
+                    result.map(DenoisedImage::Cpu),
                     "custom".into(),
                     started.elapsed().as_secs_f64() * 1000.,
                 )
@@ -1532,6 +1610,7 @@ fn run_oidn(
     let started = Instant::now();
     let result = filter
         .run(size, color, normal, albedo)
+        .map(DenoisedImage::Cpu)
         .map_err(|e| format!("{e:#}"));
     (
         result,
@@ -1696,11 +1775,21 @@ impl Render {
         })
     }
     /// Replaces the denoiser; `None` disables denoising. Default none. A loaded
-    /// OIDN device is kept while the library and backend stay the same.
+    /// OIDN device is kept while the library and backend stay the same;
+    /// oidn-webgpu reuses its resources while weights, tiling and size stay the same.
     pub fn set_denoiser(&self, options: Option<DenoiserOptions>) -> Result<()> {
         if let Some(options) = &options {
-            if options.backend > 4 {
-                return Err(error(Status::InvalidArgument, "Unknown OIDN backend"));
+            if options.backend > crate::oidn_webgpu::BACKEND {
+                return Err(error(Status::InvalidArgument, "Unknown denoising backend"));
+            }
+            if options.backend == DENOISE_OIDN_WEBGPU
+                && options.max_tile_size != 0
+                && !(16..=16384).contains(&options.max_tile_size)
+            {
+                return Err(error(
+                    Status::InvalidArgument,
+                    "OIDN tile edge must be 0 or 16..=16384",
+                ));
             }
         }
         self.with(|state, id| {
@@ -1714,16 +1803,25 @@ impl Render {
                 (Some(old), Some(new)) if device(old) != device(new) => Default::default(),
                 _ => render.denoise.filter.clone(),
             };
+            let gpu_filter = match (&render.denoise.options, &options) {
+                (Some(old), Some(new))
+                    if device(old) == device(new) && old.max_tile_size == new.max_tile_size =>
+                {
+                    render.denoise.gpu_filter.take()
+                }
+                _ => None,
+            };
             render.denoiser_revision += 1;
             render.denoise = Denoise {
                 options,
                 filter,
+                gpu_filter,
                 ..Default::default()
             };
             Ok(())
         })
     }
-    /// Installs a user filter with the given schedule, replacing OIDN. None
+    /// Installs a user filter with the given schedule, replacing the built-in filter. None
     /// disables it. Callbacks own their data, run off-thread and may overlap after
     /// cancellation. Readback happens before dispatch; GPU output is read back on
     /// the worker. Replacement and destruction never wait for the callback.
@@ -2023,7 +2121,24 @@ impl Render {
                         return Ok(Image {
                             width,
                             height,
-                            data: flip_rows(pixels, width, height),
+                            data: {
+                                let data = match pixels {
+                                    DenoisedImage::Cpu(pixels) => pixels.clone(),
+                                    DenoisedImage::Gpu { pixels, .. } => crate::read_average(
+                                        &state.gpu.device,
+                                        &state.gpu.queue,
+                                        pixels,
+                                        width,
+                                        height,
+                                        1,
+                                    )
+                                    .map_err(|e| error(Status::Error, e.to_string()))?
+                                    .chunks_exact(4)
+                                    .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
+                                    .collect(),
+                                };
+                                flip_rows(&data, width, height)
+                            },
                         });
                     }
                 }
@@ -2057,11 +2172,12 @@ impl Render {
     /// Filters the complete samples now without tracing, whatever the denoise
     /// schedule, like the browser's filter at the end of `converge`; a host calls
     /// it while it stops refining (for example when paused). Collects a finished
-    /// batch first. The filter runs on a library thread; call again to collect its
-    /// result, which is then presented like a scheduled one. Returns whether the
+    /// batch first. CPU filters run on a library thread; oidn-webgpu runs on the
+    /// rendering queue. Call again to collect the result and present it. Returns whether the
     /// denoised image is of the current samples. Needs a denoiser
-    /// ([`Render::set_denoiser`] or [`Render::set_custom_denoiser`]). Input
-    /// readback may block; the call does not wait for the filter callback.
+    /// ([`Render::set_denoiser`] or [`Render::set_custom_denoiser`]). CPU filter
+    /// input readback and first-use GPU filter preparation may block; the call
+    /// does not wait for filtering to complete.
     pub fn denoise_current(&self) -> Result<bool> {
         self.with(|state, id| {
             if state.renders[&id].denoise.options.is_none() || !collect(state, id)? {
@@ -2165,7 +2281,7 @@ impl Render {
     pub fn denoise_report(&self) -> Option<DenoiseReport> {
         self.get(|_, r| r.denoise.report.clone()).flatten()
     }
-    /// OIDN configuration; None for custom filtering or disabled denoising.
+    /// Built-in denoiser configuration; None for custom filtering or disabled denoising.
     pub fn denoiser(&self) -> Option<DenoiserOptions> {
         self.get(|_, r| {
             if r.denoise.custom.0.is_none() {
@@ -2176,7 +2292,7 @@ impl Render {
         })
         .flatten()
     }
-    /// Active schedule for either OIDN or custom filtering. Default None.
+    /// Active schedule for built-in or custom filtering. Default None.
     pub fn denoise_schedule(&self) -> Option<DenoiseSchedule> {
         self.get(|_, r| r.denoise.options.as_ref().map(|o| o.schedule))
             .flatten()
@@ -2231,7 +2347,7 @@ impl Render {
             })
         })
     }
-    /// Whether OIDN is running on this render's samples.
+    /// Whether a denoiser is running on this render's samples.
     pub fn denoising(&self) -> bool {
         self.get(|_, r| r.denoise.worker.is_some()).unwrap_or(false)
     }
@@ -2532,5 +2648,157 @@ mod cancellation_tests {
         assert_eq!(*events.lock().unwrap(), vec![5]);
         assert_eq!(render.refine().unwrap(), RenderStatus::Error);
         assert_eq!(*events.lock().unwrap(), vec![5]);
+    }
+}
+
+#[cfg(test)]
+mod oidn_webgpu_tests {
+    use super::*;
+    use crate::api::{Backend, PixelKind, tests::*};
+    #[test]
+    #[ignore = "requires real GPU inference with oidn-webgpu-native"]
+    fn gpu_schedules_reuse_program_resize_and_discard_lost_device_results() {
+        let _test = crate::ABI_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let engine = Engine::new(super::super::EngineOptions {
+            backend: Backend::Software,
+        })
+        .unwrap();
+        engine.set_scene(&lit_scene()).unwrap();
+        engine.update().unwrap();
+        for (schedule, expected) in [
+            (DenoiseSchedule::Progressive, vec![1, 4, 8]),
+            (DenoiseSchedule::EverySample, vec![1, 2, 3]),
+        ] {
+            let settings = RenderSettings {
+                max_samples: *expected.last().unwrap(),
+                size: RenderSize::Fixed {
+                    width: 17,
+                    height: 13,
+                },
+                ..Default::default()
+            };
+            let render = Render::new(&engine, settings.clone()).unwrap();
+            render
+                .set_denoiser(Some(DenoiserOptions {
+                    backend: 5,
+                    schedule,
+                    max_tile_size: 16,
+                    ..Default::default()
+                }))
+                .unwrap();
+            let mut seen = Vec::new();
+            let mut identity = None;
+            let deadline = Instant::now() + Duration::from_secs(60);
+            loop {
+                render.refine().unwrap();
+                if let Some(report) = render.denoise_report() {
+                    assert!(report.error.is_none(), "{report:?}");
+                    if seen.last() != Some(&report.samples) {
+                        seen.push(report.samples);
+                        let state = engine.lock();
+                        let r = &state.renders[&render.id()];
+                        let Some((_, DenoisedImage::Gpu { pixels, .. })) = &r.denoise.denoised
+                        else {
+                            panic!("CPU result");
+                        };
+                        let program = r.denoise.gpu_filter.as_ref().unwrap().program_identity();
+                        if let Some(previous) = &identity {
+                            assert_eq!(previous, &program, "same-size program was rebuilt");
+                        } else {
+                            identity = Some(program);
+                        }
+                        assert!(pixels.usage().contains(wgpu::BufferUsages::COPY_SRC));
+                        assert_eq!(r.display_uploads(), (0, true));
+                    }
+                }
+                if render.status() == RenderStatus::Finished {
+                    break;
+                }
+                assert!(Instant::now() < deadline, "GPU schedule timed out");
+                std::thread::yield_now();
+            }
+            assert_eq!(seen, expected);
+            let raw = render.read_pixels(PixelKind::Hdr).unwrap();
+            let filtered = render.read_pixels(PixelKind::Denoised).unwrap();
+            assert!(filtered.data.iter().all(|v| v.is_finite()));
+            assert_ne!(raw.data, filtered.data);
+            assert!(
+                raw.data
+                    .chunks_exact(4)
+                    .zip(filtered.data.chunks_exact(4))
+                    .all(|(a, b)| a[3] == b[3])
+            );
+            // New scene/camera publications can replace target buffers at the same
+            // dimensions. Normalization must rebind them without recording again.
+            render.restart().unwrap();
+            render.converge(ConvergeOptions::new(1)).unwrap();
+            let state = engine.lock();
+            let Some((_, DenoisedImage::Gpu { .. })) =
+                &state.renders[&render.id()].denoise.denoised
+            else {
+                panic!();
+            };
+            assert_eq!(
+                identity.as_ref().unwrap(),
+                &state.renders[&render.id()]
+                    .denoise
+                    .gpu_filter
+                    .as_ref()
+                    .unwrap()
+                    .program_identity()
+            );
+            drop(state);
+            render
+                .set_settings(RenderSettings {
+                    size: RenderSize::Fixed {
+                        width: 33,
+                        height: 19,
+                    },
+                    ..settings
+                })
+                .unwrap();
+            render.converge(ConvergeOptions::new(1)).unwrap();
+            let state = engine.lock();
+            let r = &state.renders[&render.id()];
+            assert_eq!(r.denoise.gpu_filter.as_ref().unwrap().size(), [33, 19]);
+            let Some((_, DenoisedImage::Gpu { .. })) = &r.denoise.denoised else {
+                panic!();
+            };
+            assert_ne!(
+                identity.as_ref().unwrap(),
+                &r.denoise.gpu_filter.as_ref().unwrap().program_identity()
+            );
+            drop(state);
+            // Lose the device with a denoise completion still uncollected.
+            if schedule == DenoiseSchedule::EverySample {
+                render.restart().unwrap();
+                render
+                    .with(|state, id| {
+                        advance(state, id, 1)?;
+                        let r = state.renders.get_mut(&id).unwrap();
+                        drain(r)?;
+                        capture(r)?;
+                        cancel_denoise(state.renders.get_mut(&id).unwrap());
+                        denoise(state, id, true)?;
+                        assert!(state.renders[&id].denoise.worker.is_some());
+                        Ok(())
+                    })
+                    .unwrap();
+                engine.device_loss_notifier().notify("denoiser test loss");
+                assert_eq!(
+                    render.denoise_current().unwrap_err().status,
+                    Status::Unavailable
+                );
+                let state = engine.lock();
+                let r = &state.renders[&render.id()];
+                assert!(
+                    r.denoise.denoised.is_none()
+                        && r.denoise.gpu_filter.is_none()
+                        && r.denoise.worker.is_none()
+                );
+            }
+        }
     }
 }

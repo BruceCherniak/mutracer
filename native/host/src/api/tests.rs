@@ -1637,11 +1637,12 @@ fn converged_oidn_matches_direct_filtering_of_the_same_inputs() {
         backend: 1,
         library: Some(library.clone().into()),
         schedule: DenoiseSchedule::Converged,
+        max_tile_size: 0,
     };
     assert_eq!(
         render
             .set_denoiser(Some(DenoiserOptions {
-                backend: 5,
+                backend: 6,
                 ..options.clone()
             }))
             .unwrap_err()
@@ -2050,6 +2051,7 @@ fn progressive_denoising_pauses_sampling_and_keeps_the_last_result() {
                 backend: 1,
                 library: Some(library.clone().into()),
                 schedule,
+                max_tile_size: 0,
             }))
             .unwrap();
         let mut denoised_at = Vec::new();
@@ -2148,6 +2150,7 @@ fn denoise_current_filters_paused_samples_and_progressive_resumes() {
             backend: 1,
             library: Some(library.clone().into()),
             schedule: DenoiseSchedule::Progressive,
+            max_tile_size: 0,
         }))
         .unwrap();
     let mut filter = crate::denoise::Denoiser::from_library(library.as_ref(), 1).unwrap();

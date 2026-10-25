@@ -729,6 +729,8 @@ impl Viewer {
         if self.applied_denoise != Some(denoise) {
             self.final_render()
                 .set_denoiser(denoise.then(|| api::DenoiserOptions {
+                    max_tile_size: 512,
+                    backend: api::DENOISE_OIDN_WEBGPU,
                     schedule: api::DenoiseSchedule::Progressive,
                     ..Default::default()
                 }))?;
@@ -1155,13 +1157,11 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
     let size = [320, 216];
     let mut renderer = Renderer::with_backend(0)?;
     renderer.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
-    let original = renderer.finish(16)?;
+    let original = renderer.finish_l1(16)?;
     renderer::save(&out.join("original.png"), &original, size, 0.)?;
-    let normal = renderer.image(1)?;
-    let albedo = renderer.image(2)?;
     let mut hardware = Renderer::with_backend(1)?;
     hardware.commit(&model.descriptor(&camera.bytes(size), size, &environment))?;
-    let hardware_pixels = hardware.finish(16)?;
+    let hardware_pixels = hardware.finish_l1(16)?;
     let (backend, reason) = hardware.backend()?;
     let mut max_diff = 0f32;
     for (a, b) in original.iter().zip(&hardware_pixels) {
@@ -1180,20 +1180,20 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
     )?;
     drop(hardware);
 
-    let mut oidn = mutracer_native_probe::denoise::Denoiser::new()?;
-    let start = std::time::Instant::now();
-    let denoised = oidn.run(size, &original, &normal, &albedo)?;
-    let denoise_ms = start.elapsed().as_secs_f64() * 1000.;
-    ensure!(denoised != original, "OIDN did not change noisy pixels");
+    let (denoised, denoise_ms) = package_smoke::denoise_model(&model, size, 16)?;
+    ensure!(
+        denoised != original,
+        "oidn-webgpu did not change noisy pixels"
+    );
     ensure!(
         denoised
             .chunks_exact(4)
             .zip(original.chunks_exact(4))
             .all(|(a, b)| a[3] == b[3]),
-        "OIDN changed alpha"
+        "oidn-webgpu changed alpha"
     );
     renderer::save(&out.join("denoised.png"), &denoised, size, 0.)?;
-    let reference = renderer.finish(240)?;
+    let reference = renderer.finish_l1(240)?;
     renderer::save(&out.join("reference.png"), &reference, size, 0.)?;
     let rmse = |pixels: &[f32]| {
         (pixels
@@ -1208,7 +1208,7 @@ fn smoke(path: &Path, out: &Path) -> Result<()> {
     };
     let report = format!(
         "{}: {:.2} ms; noisy RMSE {}; denoised RMSE {}\n",
-        oidn.backend,
+        "oidn-webgpu",
         denoise_ms,
         rmse(&original),
         rmse(&denoised)
@@ -1484,7 +1484,7 @@ fn interaction_backend_smoke(path: &Path, out: &Path, backend: u32) -> Result<()
         0.,
     )?;
     println!(
-        "PASS stale OIDN result ignored; resized preview retained; final native denoise completed"
+        "PASS stale denoised result ignored; resized preview retained; final native denoise completed"
     );
     viewer.denoise = false;
     viewer.settings.max_samples = 12;
@@ -2596,7 +2596,10 @@ fn main() -> Result<()> {
                         label: Some("MuTracer and egui"),
                         required_limits: adapter.limits(),
                         required_features: adapter.features()
-                            & wgpu::Features::EXPERIMENTAL_RAY_QUERY,
+                            & (wgpu::Features::EXPERIMENTAL_RAY_QUERY
+                                | wgpu::Features::SHADER_F16
+                                | wgpu::Features::SUBGROUP
+                                | wgpu::Features::EXPERIMENTAL_COOPERATIVE_MATRIX),
                         experimental_features: unsafe { wgpu::ExperimentalFeatures::enabled() },
                         ..Default::default()
                     }),

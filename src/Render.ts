@@ -55,7 +55,7 @@ interface OIDNSettings {
   /** Execution backend. Default auto (native WGSL unless WebNN is selected). */ engine?: OIDNEngine;
   /** WGSL precision. Default auto (fp16 when shader-f16 is available). */ precision?: OIDNPrecision;
   /** Adaptive tile controller. Default enabled with minTileSize 256, initialTileSize 432, targetTileTimeMs 16, adjustmentStep 16. */ dynamicTile?: OIDNDynamicTileSetting;
-  /** Maximum OIDN tile size. Default chosen by oidn-web. */ maxTileSize?: number;
+  /** Maximum OIDN output tile edge in pixels. Default `512`. */ maxTileSize?: number;
   /** Abort weight downloads. Default undefined; does not distinguish cached networks. */ signal?: AbortSignal;
 }
 /** OIDN configuration on WebGPU: choose a packaged model or an explicit network URL. */

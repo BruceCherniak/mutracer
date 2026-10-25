@@ -260,7 +260,7 @@ impl Viewer {
             controls::scalar(ui, "Tint", &mut self.display_settings.tint, -1.0..=1.0);
         });
         controls::section(ui, "Denoiser", |ui| {
-            controls::toggle(ui, "Native OIDN", &mut self.denoise);
+            controls::toggle(ui, "Denoise", &mut self.denoise);
             if self.denoise {
                 ui.weak(&self.denoise_status);
             }
