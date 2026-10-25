@@ -8,6 +8,8 @@
 #define CHECK(call) do { int32_t status=(call); if(status!=MT_OK){fprintf(stderr,"%s: %d %s\n",#call,status,error);exit(1);} } while(0)
 #define REQUIRE(test) do {if(!(test)){fprintf(stderr,"Failed: %s\n",#test);exit(1);}}while(0)
 static char error[4096];
+static uint32_t selected_adapter=UINT32_MAX;
+static char selected_name[256];
 static const float positions[]={-1,0,-1,-1,0,1,1,0,-1,1,0,1};
 static const uint32_t indices[]={0,1,2,2,1,3};
 
@@ -71,6 +73,13 @@ static void canonical_ids(void *bytes,size_t size) {
   }
 }
 typedef struct AovExpected {uint32_t width,height;float *depth;uint32_t *ids;} AovExpected;
+static void capture_aov_mismatch(const mt_denoise_input *input,const AovExpected *expected) {
+  const char *directory=getenv("MUTRACER_TEST_CAPTURE");if(!directory)return;
+  const char *names[]={"expected-top-depth.f32","actual-bottom-depth.f32","expected-top-id.u32","actual-bottom-id.u32"};
+  const void *data[]={expected->depth,input->aov_data[0],expected->ids,input->aov_data[5]};
+  for(unsigned i=0;i<4;i++){char path[4096];int count=snprintf(path,sizeof path,"%s/%s",directory,names[i]);REQUIRE(count>0&&(size_t)count<sizeof path);FILE *file=fopen(path,"wb");REQUIRE(file);REQUIRE(fwrite(data[i],sizeof(uint32_t),input->count,file)==input->count);fclose(file);}
+  char path[4096];int count=snprintf(path,sizeof path,"%s/size.json",directory);REQUIRE(count>0&&(size_t)count<sizeof path);FILE *file=fopen(path,"wb");REQUIRE(file);fprintf(file,"{\"width\":%u,\"height\":%u}\n",input->width,input->height);fclose(file);
+}
 static int32_t copy_aov_filter(const mt_denoise_input *input,float *output,char *message,size_t capacity,void *user) {
   (void)message;(void)capacity;
   const AovExpected *expected=(const AovExpected *)user;
@@ -83,6 +92,7 @@ static int32_t copy_aov_filter(const mt_denoise_input *input,float *output,char 
   size_t row=(size_t)input->width*4;
   for(uint32_t y=0;y<input->height;y++) {
     size_t previous=(size_t)(input->height-1-y)*row,current=(size_t)y*row;
+    if(memcmp((const float *)input->aov_data[0]+current,expected->depth+previous,row*sizeof(float))!=0)capture_aov_mismatch(input,expected);
     REQUIRE(memcmp((const uint32_t *)input->aov_data[5]+current,expected->ids+previous,row*sizeof(uint32_t))==0);
     REQUIRE(memcmp((const float *)input->aov_data[0]+current,expected->depth+previous,row*sizeof(float))==0);
   }
@@ -94,7 +104,9 @@ static void release_aov_filter(void *user) {
 }
 static float *render(uint32_t backend,mt_scene scene,const void *bytes,size_t len,uint32_t object_id,uint32_t material_id) {
   mt_engine_options eo;CHECK(mt_engine_options_default(&eo));eo.backend=backend;
-  mt_engine engine;CHECK(mt_engine_create(&eo,&engine,error,sizeof error));
+  mt_engine engine;
+  if(selected_adapter==UINT32_MAX)CHECK(mt_engine_create(&eo,&engine,error,sizeof error));
+  else CHECK(mt_engine_create_on_adapter(&eo,selected_adapter,&engine,error,sizeof error));
   mt_render_options ro;CHECK(mt_render_options_default(&ro));ro.width=64;ro.height=48;ro.max_samples=8;ro.bevel=0;ro.dispersion_wavelengths=1;
   mt_render r;CHECK(mt_render_create(engine,&ro,&r,error,sizeof error));
   if(scene) CHECK(mt_engine_set_scene_object(engine,scene,error,sizeof error));
@@ -103,6 +115,7 @@ static float *render(uint32_t backend,mt_scene scene,const void *bytes,size_t le
   mt_converge_options co;CHECK(mt_converge_options_default(8,&co));uint32_t samples=0;
   CHECK(mt_render_converge(r,&co,&samples,error,sizeof error));REQUIRE(samples==8);
   mt_engine_snapshot info={.struct_size=sizeof info};CHECK(mt_engine_info(engine,&info,error,sizeof error));REQUIRE(info.backend==backend);
+  if(selected_adapter!=UINT32_MAX)REQUIRE(strcmp(info.adapter_name,selected_name)==0);
   mt_render_snapshot active={.struct_size=sizeof active};CHECK(mt_render_info(r,&active,error,sizeof error));REQUIRE(active.backend==backend);
   size_t written=0,count=64*48*16;float *pixels=malloc(count);REQUIRE(pixels);
   CHECK(mt_render_read_pixels(r,MT_IMAGE_HDR,pixels,count,&written,error,sizeof error));REQUIRE(written==count);
@@ -127,6 +140,18 @@ static float *render(uint32_t backend,mt_scene scene,const void *bytes,size_t le
 }
 int main(int argc,char **argv) {
   uint32_t backend=argc>1?(uint32_t)atoi(argv[1]):0;REQUIRE(mt_abi_version()==MT_ABI_VERSION);
+  if(argc>3) {
+    selected_adapter=(uint32_t)strtoul(argv[3],NULL,10);
+    size_t count=0;CHECK(mt_gpu_adapters(NULL,0,&count,error,sizeof error));
+    mt_gpu_adapter_info *adapters=(mt_gpu_adapter_info *)calloc(count,sizeof *adapters);REQUIRE(adapters);
+    CHECK(mt_gpu_adapters(adapters,count,&count,error,sizeof error));REQUIRE(selected_adapter<count);
+    REQUIRE(adapters[selected_adapter].device_type==1||adapters[selected_adapter].device_type==2);
+    memcpy(selected_name,adapters[selected_adapter].name,sizeof selected_name);
+    printf("C selected adapter %u: %s; API %u; ray query %u\n",selected_adapter,adapters[selected_adapter].name,adapters[selected_adapter].backend,adapters[selected_adapter].hardware_ray_query);
+    mt_engine_options invalid_options;CHECK(mt_engine_options_default(&invalid_options));mt_engine unchanged=0x12345678u;
+    REQUIRE(mt_engine_create_on_adapter(&invalid_options,UINT32_MAX,&unchanged,error,sizeof error)==MT_ERROR_UNAVAILABLE);
+    REQUIRE(unchanged==0x12345678u);free(adapters);
+  }
   mt_scene s;CHECK(mt_scene_create(&s,error,sizeof error));
   mt_scene_geometry_desc gd;CHECK(mt_scene_geometry_desc_default(&gd));gd.vertex_count=4;gd.index_count=6;gd.positions=positions;gd.indices=indices;
   mt_scene_geometry_id g;CHECK(mt_scene_add_geometry(s,&gd,&g,error,sizeof error));

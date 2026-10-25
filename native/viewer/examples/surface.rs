@@ -75,9 +75,17 @@ impl Host {
                     .with_inner_size(PhysicalSize::new(96, 64)),
             )?,
         );
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle(
-            Box::new(event_loop.owned_display_handle()),
+        let mut descriptor = wgpu::InstanceDescriptor::new_with_display_handle(Box::new(
+            event_loop.owned_display_handle(),
         ));
+        if let Ok(api) = std::env::var("MUTRACER_TEST_GRAPHICS_API") {
+            descriptor.backends = match api.as_str() {
+                "vulkan" => wgpu::Backends::VULKAN,
+                "dx12" => wgpu::Backends::DX12,
+                _ => anyhow::bail!("MUTRACER_TEST_GRAPHICS_API must be vulkan or dx12"),
+            };
+        }
+        let instance = wgpu::Instance::new(descriptor);
         let surface = instance.create_surface(window.clone())?;
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             compatible_surface: Some(&surface),
@@ -275,7 +283,7 @@ impl Host {
                 );
                 let rgba = display.read_rgba8(render)?.2;
                 ensure!(rgba.iter().any(|v| *v > 0));
-                results.push(serde_json::json!({"backend":format!("{:?}", self.backend),"activeBackend":format!("{:?}",active_backend),"hardwareRayQuery":self.engine.info().hardware_ray_query,"format":format!("{:?}",info.format),"size":info.size,"samples":render.samples(),"suspendRestore":true,"detachReattach":true,"rawUnchanged":true,"hdr":self.hdr_report,"hdrResizeAndToggle":true}));
+                results.push(serde_json::json!({"graphicsApi":format!("{:?}",self.adapter.get_info().backend),"adapter":self.adapter.get_info().name,"backend":format!("{:?}", self.backend),"activeBackend":format!("{:?}",active_backend),"hardwareRayQuery":self.engine.info().hardware_ray_query,"format":format!("{:?}",info.format),"size":info.size,"samples":render.samples(),"suspendRestore":true,"detachReattach":true,"rawUnchanged":true,"hdr":self.hdr_report,"hdrResizeAndToggle":true}));
                 // A terminal device-loss notification must release the attachment,
                 // while the independent window remains owned by this host.
                 self.engine

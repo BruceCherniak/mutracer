@@ -74,6 +74,8 @@ need `xvfb-run`.
 | `npm run native:scene` | Yes | Builds the AOT archive and library; verifies preparation and rendering on 33 fixtures |
 | `npm run native:scene:static` | No | The same build with descriptor, packet, resource and WGSL contracts, without rendering |
 | `npm run native:context`, `native:jobs`, `native:camera`, `native:settings`, `native:engine` | Yes | One C host each: retained scenes, polling and cancellation, camera updates, render settings, engine API |
+| `node native/validation/scene-api-render.mjs` | Yes | C ABI, selected adapter, scene handles, exact AOV readback and custom-filter snapshots |
+| `node native/validation/vulkan-render.mjs` | Yes | C Vulkan device negotiation/import, queue/image leases, host copies, post-processing and retirement, on Software and HWRT |
 | `npm run native:modules:verify`, `native:storage:verify` | No | AOT module and storage contracts |
 | `node native/validation/matrix-verify.mjs`, `vector-verify.mjs` | No | Precision checks |
 | `npm run native:viewer:build` | No | Full AOT graph and platform app |
@@ -98,6 +100,8 @@ need `xvfb-run`.
 | `MUTRACER_NATIVE_SAMPLES` | Fixture sample count; byte comparisons across stages need the same count and seed |
 | `MT_LOOP_ITERATIONS`, `MT_LOOP_BATCHED`, `MT_LOOP_L0`, `MT_LOOP_REAL_CAP` | [HWRT loop test](#metal-hwrt-sample-miss) |
 | `MUTRACER_TEST_CAPTURE` | Saves mismatching AOVs, descriptors and per-pixel audits |
+| `MUTRACER_TEST_ADAPTER` | Explicit adapter index for `scene-api-render.mjs` and Rust AOV GPU tests; enumerate with the `adapter-validation` host example |
+| `MUTRACER_VULKAN_INCLUDE` | Vulkan SDK include directory for `vulkan-render.mjs`; otherwise uses `VULKAN_SDK/Include` |
 | `MUTRACER_OIDN_LIBRARY` | Optional external OIDN for Rust SDK tests |
 | `MUTRACER_TEST_OIDN_CUDA`, `_HIP`, `_NO_GPU` | [OIDN backend requirements](#oidn) |
 | `MUTRACER_KERNEL_FIXTURES` | [Native kernel](#shared-source-and-typed-resources) byte comparisons |
