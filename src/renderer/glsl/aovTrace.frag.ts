@@ -1,0 +1,82 @@
+import {FragmentShader, Shader} from '../shader.js';
+import common from './chunks/common.glsl.js';
+import core from './chunks/rayTraceCore.glsl.js';
+import materials from './chunks/materialBuffer.glsl.js';
+import intersect from './chunks/intersect.glsl.js';
+import uvProjection from './chunks/uvProjection.glsl.js';
+import random from './chunks/random.glsl.js';
+import cameraRay from './chunks/cameraRay.glsl.js';
+import rand from './chunks/rand.glsl.js';
+const surface = /* glsl */ `
+uint aovWord(int index) { ivec2 size = textureSize(aovScene,0); uvec4 v = texelFetch(aovScene, ivec2((index/4)%size.x, (index/4)/size.x),0); return v[index%4]; }
+mat4 aovMatrix(int offset) { mat4 m; for (int i=0;i<4;i++) for(int j=0;j<4;j++) m[i][j]=uintBitsToFloat(aovWord(offset+i*4+j)); return m; }
+Ray aovRay(vec2 uv) {
+  vec4 origin = viewProjectionInv*vec4(uv*2.0-1.0,-1.0,1.0);
+  vec4 target = viewProjectionInv*vec4(uv*2.0-1.0,1.0,1.0);
+  Ray ray; initRay(ray, origin.xyz/origin.w, normalize(target.xyz*origin.w-origin.xyz*target.w)); return ray;
+}
+bool aovSurface(Ray inputRay, out SurfaceInteraction si, out OpenPbrResolvedMaterial material) {
+  Ray ray=inputRay; si.triangleIndex=-1;
+  for(int layer=0;layer<32;layer++) {
+    intersectScene(ray,si,false); if(!si.hit) return false;
+    getMaterial(material,si.materialIndex,si.uv,si.uv1,si.instanceIndex,si.vertexColor);
+    if(material.materialType!=SHADOW_CATCHER && material.alpha>=0.5) return true;
+    ray.o=si.position+ray.d*(EPS*0.02);
+  }
+  return false;
+}
+`;
+export function aovTraceFragment(center: boolean) {
+  return new FragmentShader({name: center ? 'AOV center' : 'AOV accumulation',
+    outputs: center ? ['id','motion'] : ['geometry','position','diffuse','specular'],
+    outputTypes: center ? {id: 'uvec4'} : {}, defines: {DEPTH_QUERY_MODE: true},
+    includes: [core,materials,intersect,random],
+    uniforms: {viewProjectionInv: Shader.uniform('mat4'), viewInv: Shader.uniform('mat4'),
+      cameraApertureRadius: Shader.uniform('float',0), cameraFocusDistance: Shader.uniform('float',10),
+      viewportSize: Shader.uniform('vec2'), aovScene: Shader.uniform('usampler2D'),
+      previousGeometry: Shader.uniform('sampler2D'), previousPosition: Shader.uniform('sampler2D'),
+      previousDiffuse: Shader.uniform('sampler2D'), previousSpecular: Shader.uniform('sampler2D'),
+      aovSample: Shader.uniform('int',0)},
+    main: /* glsl */ `
+${common}
+${rand}
+${random.main}
+${core.main}
+${uvProjection}
+${materials.main}
+${intersect.main}
+${cameraRay}
+${surface}
+void main() {
+  ${center ? /* glsl */ `
+  out_id=uvec4(0xffffffffu); out_motion=vec4(0.0);
+  Ray ray=aovRay(v_Texcoord);
+  SurfaceInteraction si; OpenPbrResolvedMaterial material;
+  if(!aovSurface(ray,si,material)) return;
+  int offset=20+si.instanceIndex*24;
+  out_id=uvec4(aovWord(offset),aovWord(offset+1),aovWord(int(aovWord(16))+si.materialIndex),aovWord(int(aovWord(17))+si.triangleIndex));
+  ` : /* glsl */ `
+  ivec2 coord=ivec2(gl_FragCoord.xy);
+  out_geometry=aovSample==0 ? vec4(0.0) : texelFetch(previousGeometry,coord,0);
+  out_position=aovSample==0 ? vec4(0.0) : texelFetch(previousPosition,coord,0);
+  out_diffuse=aovSample==0 ? vec4(0.0) : texelFetch(previousDiffuse,coord,0);
+  out_specular=aovSample==0 ? vec4(0.0) : texelFetch(previousSpecular,coord,0);
+  initRandom(); pixelSampleIndex=uint(aovSample);
+  rng_initialize(floor(gl_FragCoord.xy),int(pixelSampleIndex ^ sampleHash(uint(sequenceSeed))));
+  Ray ray=aovRay((floor(gl_FragCoord.xy)+sample2D(CAMERA_PIXEL))/viewportSize);
+  if(cameraApertureRadius>0.0) {
+    vec3 eye=viewInv[3].xyz, forward=-normalize(viewInv[2].xyz);
+    vec3 focusPoint=eye+ray.d*(cameraFocusDistance/dot(ray.d,forward));
+    vec2 lens=cameraApertureRadius*sampleCircle(sample2D(CAMERA_LENS));
+    vec3 origin=(viewInv*vec4(lens,0.0,1.0)).xyz;
+    initRay(ray,origin,normalize(focusPoint-origin));
+  }
+  SurfaceInteraction si; OpenPbrResolvedMaterial material;
+  if(!aovSurface(ray,si,material)) return;
+  float depth=max(dot(si.position-viewInv[3].xyz,-normalize(viewInv[2].xyz)),0.0);
+  out_geometry+=vec4(depth,material.specularRoughness,material.baseMetalness,0.0);
+  out_position+=vec4(si.position,1.0);
+  `}
+}
+`});
+}

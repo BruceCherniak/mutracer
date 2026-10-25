@@ -1,3 +1,7 @@
+import {aovTraceFragment} from './glsl/aovTrace.frag.js';
+import {WebGLAov} from './WebGLAov.js';
+import {packAovScene} from './aovScene.js';
+import type {AovKind} from './aov.js';
 import { WebGLSkySource } from './WebGLSkySource.js';
 import { normalizeBounces } from './pathLimits.js';
 import { updateMeshInstanceColors } from './prepareMeshBVH.js';
@@ -240,6 +244,8 @@ class WebGLRayTracePass {
   private _apertureRadius = 0;
   private _focusDistance = 10;
 
+  private _aovPass: WebGLFullQuadPass<string, 'geometry' | 'position' | 'diffuse' | 'specular'>;
+  private _aovCenter: WebGLFullQuadPass<string, 'id' | 'motion'>;
   private _tracePasses: WebGLFullQuadPass<any, any>[];
   private readonly _depthPass: WebGLFullQuadPass<never, 'depth'>;
   private readonly _depthAbort = new AbortController();
@@ -294,7 +300,9 @@ class WebGLRayTracePass {
       shader: depthQueryFrag, outputs: ['depth'],
       outputParams: { depth: commonNearestFloatProps }
     });
-    this._tracePasses = [this._mainPass, this._shadowCatcherPass, this._depthPass];
+    this._aovPass = new WebGLFullQuadPass('AOV accumulation', renderer, {shader:aovTraceFragment(false), outputs:['geometry','position','diffuse','specular'], outputParams: Object.fromEntries(['geometry','position','diffuse','specular'].map(name=>[name,commonNearestFloatProps]))});
+    this._aovCenter = new WebGLFullQuadPass('AOV center',renderer,{shader:aovTraceFragment(true),outputs:['id','motion'],outputParams:{id:{...commonNearestFloatProps,type:5125},motion:commonNearestFloatProps}});
+    this._tracePasses = [this._aovPass, this._aovCenter, this._mainPass, this._shadowCatcherPass, this._depthPass];
     this._tracePasses.forEach((pass) => {
       pass.setDefines({
         OES_texture_float_linear: !!renderer.gl.getExtension(
@@ -1056,6 +1064,25 @@ class WebGLRayTracePass {
 
   // WebGL has uniform per-pixel counts; setSampleCount already includes offset.
   setSampleSequenceOffset(_offset: number) {}
+
+  renderAovs(state: WebGLAov, camera: Camera, width: number, height: number, samples: number, cap: number, kinds: readonly AovKind[]) {
+    if (!kinds.length || !this._preparedMeshData || !this._tlas) return;
+    const gl = this._renderer.gl;
+    if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('AOV requires EXT_color_buffer_float');
+    this.prepare(); state.resize(width,height);
+    if (!state.frame) { const packed=packAovScene(this._preparedMeshData,this._tlas,camera,width,height,state.history); state.frame=packed.frame; state.setScene(packed.words); }
+    this._aovCenter.setUniform('aovScene',state.scene); this._aovPass.setUniform('aovScene',state.scene);
+    this._aovCenter.setSize(width,height); this._aovPass.setSize(width,height);
+    if (!state.centerReady) {this._aovCenter.createPass({},state.center);state.centerReady=true;state.history.accept(state.frame);}
+    const target=Math.min(samples,cap);
+    while(state.samples<target){
+      const output=state.accumulation[state.samples%2], previous=state.accumulation[(state.samples+1)%2];
+      this._aovPass.setUniform('aovSample',state.samples);
+      this._aovPass.setUniform('sampleCount',state.samples);
+      this._aovPass.createPass({previousGeometry:previous.geometry,previousPosition:previous.position,previousDiffuse:previous.diffuse,previousSpecular:previous.specular},output);
+      state.samples++;
+    }
+  }
 
   async readDepthSamples(area: DepthSampleArea, aspect?: number): Promise<Float32Array | undefined> {
     if (this._depthAbort.signal.aborted || this._invalid || !this._preparedMeshData ||
