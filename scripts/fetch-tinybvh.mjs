@@ -35,7 +35,18 @@ export async function prepareTinyBvh({
       staging ??= await mkdtemp(join(includeDirectory, '.download-'));
       const temporary = join(staging, file);
       await writeFile(temporary, bytes);
-      await rename(temporary, target);
+      try {
+        await rename(temporary, target);
+      } catch (error) {
+        // Windows can refuse replacement while a concurrent preparer reads
+        // the published file. Accept its complete, checksum-verified winner;
+        // keep reporting real permissions errors or corrupt cache contents.
+        let published;
+        if (['EPERM', 'EACCES', 'EEXIST'].includes(error.code)) {
+          try { published = await readFile(target); } catch {}
+        }
+        if (!published || sha256(published) !== expected) throw error;
+      }
     }
   } finally {
     if (staging) await rm(staging, {recursive: true, force: true});
