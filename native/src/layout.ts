@@ -45,7 +45,9 @@ export const HEADER = {
   "BACKGROUND_TEXTURE": 21,
   "QUALITY_FLAGS": 22,
   "BATCH_OFFSET": 23,
-  "RESERVED_TAIL": 24,
+  "MESH_AOV_IDS": 24,
+  "MATERIAL_AOV_IDS": 25,
+  "RESERVED_TAIL": 26,
   "WORDS": 32
 } as const;
 export const GEOMETRY = {

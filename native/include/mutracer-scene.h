@@ -36,7 +36,9 @@ typedef struct mt_scene_header_v4 {
   uint32_t environment_texture_plus_one, background_texture_plus_one; /* 0 = none. */
   uint32_t quality_flags; /* MT_QUALITY_* bits. */
   uint32_t batch_offset; /* 0, or mesh_count mt_batch_v4 records. */
-  uint32_t reserved[8];
+  uint32_t mesh_aov_ids_offset; /* Optional mesh_count stable uint32_t object IDs; 0 uses descriptor indices. */
+  uint32_t material_aov_ids_offset; /* Optional material_count stable uint32_t material IDs; 0 uses descriptor indices. */
+  uint32_t reserved[6];
 } mt_scene_header_v4;
 
 typedef struct mt_geometry_v4 {

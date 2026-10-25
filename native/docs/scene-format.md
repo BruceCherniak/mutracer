@@ -86,6 +86,10 @@ the rules the validator enforces.
   fields are ignored. Lighting and the visible background are independent, but
   `MT_QUALITY_HIDE_BACKGROUND` cannot be combined with a background map.
 
+- `mesh_aov_ids_offset` and `material_aov_ids_offset` optionally point to one
+  uint32 ID per mesh or material. IDs in each table must be unique and must
+  exclude `UINT32_MAX` (the background ID). Omitted tables use descriptor indices.
+
 ### Geometry and meshes
 
 - Positions and indices are required; missing normals and tangents are

@@ -302,6 +302,22 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     w.reserved(h::RESERVED, 1)?;
 
     w.reserved(h::RESERVED_TAIL, h::WORDS - h::RESERVED_TAIL)?;
+    for (field, count) in [
+        (h::MESH_AOV_IDS, h::MESH_COUNT),
+        (h::MATERIAL_AOV_IDS, h::MATERIAL_COUNT),
+    ] {
+        let offset = w.u(field);
+        if offset != 0 {
+            w.span(offset, w.u(count))?;
+            let mut ids = std::collections::HashSet::new();
+            for i in 0..w.u(count) {
+                let id = w.u(offset + i);
+                if id == u32::MAX as usize || !ids.insert(id) {
+                    return Err("AOV IDs must be unique and cannot equal UINT32_MAX".into());
+                }
+            }
+        }
+    }
     if w.u(h::BATCH_OFFSET) != 0 {
         w.span(w.u(h::BATCH_OFFSET), w.u(h::MESH_COUNT) * b::WORDS)?;
     }
@@ -2074,6 +2090,23 @@ pub(crate) mod tests {
     use super::*;
     unsafe extern "C" {
         fn mt_core_shader_cache(output: *mut *const u8, size: *mut usize);
+    }
+    #[test]
+    fn aov_id_tables_validate_spans_and_background_sentinel() {
+        let original = small_fixture();
+        for field in [h::MESH_AOV_IDS, h::MATERIAL_AOV_IDS] {
+            let mut bytes = original.clone();
+            let offset = (bytes.len() / 4) as u32;
+            bytes.extend_from_slice(&42u32.to_le_bytes());
+            bytes[field * 4..field * 4 + 4].copy_from_slice(&offset.to_le_bytes());
+            let length = (bytes.len() / 4) as u32;
+            bytes[4..8].copy_from_slice(&length.to_le_bytes());
+            assert!(validate(&bytes).is_ok());
+            bytes[offset as usize * 4..].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(validate(&bytes).is_err());
+            bytes[field * 4..field * 4 + 4].copy_from_slice(&length.to_le_bytes());
+            assert!(validate(&bytes).is_err());
+        }
     }
     fn shader_stats() -> [u32; 3] {
         runtime::run(|| {

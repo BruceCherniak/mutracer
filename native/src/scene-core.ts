@@ -266,6 +266,7 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   const environmentDistribution = environment ? envMapDistribution(environment) : undefined;
   const materials: MaterialState[] = [];
   for (let i = 0; i < u[H.MATERIAL_COUNT]; i++) materials.push(decodeMaterial(u, f, u[H.MATERIAL_OFFSET] + i * MAT.WORDS, textures));
+  for (let i = 0; i < materials.length; i++) materials[i].aovId = u[H.MATERIAL_AOV_IDS] ? u[u[H.MATERIAL_AOV_IDS] + i] : i;
   if (kernelHints && kernelHints.length !== u[H.GEOMETRY_COUNT]) throw new Error('Kernel geometry count mismatch');
   const geometries: Geometry[] = [];
   for (let i = 0; i < u[H.GEOMETRY_COUNT]; i++) {
@@ -276,6 +277,7 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   for (let i = 0; i < u[H.MESH_COUNT]; i++) {
     const off = u[H.MESH_OFFSET] + i * M.WORDS;
     const mesh = new MeshState(geometries[u[off + M.GEOMETRY]], decodeMeshMaterials(u, off, materials));
+    mesh.aovId = u[H.MESH_AOV_IDS] ? u[u[H.MESH_AOV_IDS] + i] : i;
     if (u[H.BATCH_OFFSET]) {
       const instances = decodeInstances(u, f, u[H.BATCH_OFFSET] + i * B.WORDS);
       if (instances) mesh.setInstanceState(instances);
@@ -822,7 +824,7 @@ function prepareTransformUpdate(bytes: Uint8Array, token: number, native: boolea
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, 20), f = new Float32Array(bytes.buffer, bytes.byteOffset, 20);
   const previous = state?.meshes[u[1]];
   if (!state || !previous) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
-  const mesh = new MeshState(previous.geometry, previous.materials);
+  const mesh = new MeshState(previous.geometry, previous.materials); mesh.aovId = previous.aovId;
   const data = previous.instanceData;
   if (u[2] && (!data || u[2] > data.count)) return new Uint8Array(new Uint32Array([2, 3, 0, 0]).buffer);
   mesh.transform = u[2] ? new Float32Array(matrixStorage(previous.transform)) : f.slice(4, 20);
@@ -957,7 +959,7 @@ export function sceneInstanceColorParameters(bytes: Uint8Array, token: number): 
     return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
   try {
     const colors = new Float32Array(bytes.buffer, bytes.byteOffset + 16, data.count * 3).slice();
-    const mesh = new MeshState(previous.geometry, previous.materials);
+    const mesh = new MeshState(previous.geometry, previous.materials); mesh.aovId = previous.aovId;
     mesh.transform = new Float32Array(matrixStorage(previous.transform));
     mesh.setInstanceState(new InstanceState({count: data.count, transforms: data.transforms, colors}));
     const meshes = state.meshes.slice(); meshes[u[1]] = mesh;
@@ -1022,7 +1024,7 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
   markDeformedGeometry(geometry);
   const meshes = state.meshes.map(mesh => {
     if (mesh.geometry !== previous) return mesh;
-    const next = new MeshState(geometry, mesh.materials); next.transform = new Float32Array(matrixStorage(mesh.transform));
+    const next = new MeshState(geometry, mesh.materials); next.aovId = mesh.aovId; next.transform = new Float32Array(matrixStorage(mesh.transform));
     const data = mesh.instanceData; if (data) next.setInstanceState(new InstanceState({count: data.count, transforms: data.transforms, colors: data.colors}));
     return next;
   });
@@ -1155,7 +1157,7 @@ function prepareLegacyGeometryUpdate(bytes: Uint8Array, token: number, native: b
   const bindingsByMesh = new Map(state.bindings.map(b => [b.mesh, b]));
   const meshes = state.meshes.map(previousMesh => {
     if (previousMesh.geometry !== previous) return previousMesh;
-    const mesh = new MeshState(geometry, previousMesh.materials);
+    const mesh = new MeshState(geometry, previousMesh.materials); mesh.aovId = previousMesh.aovId;
     mesh.transform = new Float32Array(matrixStorage(previousMesh.transform));
     const data = previousMesh.instanceData;
     if (data) mesh.setInstanceState(new InstanceState({count: data.count, transforms: data.transforms, colors: data.colors}));

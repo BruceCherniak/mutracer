@@ -1,0 +1,53 @@
+/** Optional primary-surface outputs, separate from beauty and OIDN guides. */
+export type AovKind = 'depth' | 'position' | 'roughness' | 'diffuseAlbedo' | 'specularAlbedo' | 'id' | 'motion';
+export const AOV_KINDS: readonly AovKind[] = ['depth', 'position', 'roughness', 'diffuseAlbedo', 'specularAlbedo', 'id', 'motion'];
+export const AOV_BACKGROUND_ID = 0xffffffff;
+export const AOV_VALIDITY = {surface: 1, history: 2, reflectance: 4} as const;
+// Four vec4 lanes for accumulated geometry/reflectance; two for center ID/motion.
+// Depth and roughness share a lane; coverage is position.w.
+export const AOV_LAYOUT = {accumulatedBytes: 64, centerBytes: 32,
+  depthRoughness: 0, position: 4, diffuseAlbedo: 8, specularAlbedo: 12,
+  id: 0, motion: 4} as const;
+let nextId = 0;
+export function allocateAovId(): number {
+  if (nextId >= AOV_BACKGROUND_ID) throw new RangeError('AOV ID space exhausted');
+  return nextId++;
+}
+export function validateAovId(value: number): number {
+  if (!Number.isInteger(value) || value < 0 || value >= AOV_BACKGROUND_ID) throw new RangeError('AOV ID must be uint32 excluding 0xFFFFFFFF');
+  return value;
+}
+export function aovMask(kinds: readonly AovKind[]): number {
+  let mask = 0;
+  for (const kind of kinds) {
+    const index = AOV_KINDS.indexOf(kind);
+    if (index < 0) throw new RangeError(`Unknown AOV: ${kind}`);
+    mask |= 1 << index;
+  }
+  return mask;
+}
+export interface AovInstanceSnapshot {
+  object: number; instance: number; topology: number; vertices: number;
+  transform: Float32Array;
+}
+export interface AovFrameSnapshot {
+  width: number; height: number; projection: string;
+  viewProjection: Float32Array; instances: readonly AovInstanceSnapshot[];
+}
+/** Per-render history; camera pose and rigid transforms may change without resetting. */
+export class AovHistory {
+  private frame?: AovFrameSnapshot;
+  clear() { this.frame = undefined; }
+  previous(next: AovFrameSnapshot): AovFrameSnapshot | undefined {
+    const old = this.frame;
+    return old && old.width === next.width && old.height === next.height && old.projection === next.projection ? old : undefined;
+  }
+  match(next: AovFrameSnapshot, instance: AovInstanceSnapshot): AovInstanceSnapshot | undefined {
+    const old = this.previous(next)?.instances.find(i => i.object === instance.object && i.instance === instance.instance);
+    return old && old.topology === instance.topology && old.vertices === instance.vertices ? old : undefined;
+  }
+  accept(frame: AovFrameSnapshot) {
+    this.frame = {...frame, viewProjection: frame.viewProjection.slice(),
+      instances: frame.instances.map(i => ({...i, transform: i.transform.slice()}))};
+  }
+}
