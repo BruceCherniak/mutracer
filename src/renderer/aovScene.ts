@@ -3,7 +3,7 @@ import type Camera from '../scene/Camera.js';
 import type MeshState from '../scene/MeshState.js';
 import type MaterialState from '../scene/MaterialState.js';
 import type Geometry from '../scene/Geometry.js';
-import {AovHistory, validateAovId, type AovFrameSnapshot} from './aov.js';
+import {AovHistory, validateAovId, type AovFrameSnapshot, type AovInstanceSnapshot} from './aov.js';
 import {PackedMeshInstances, readMeshInstance, type MeshInstances} from './packedMeshInstances.js';
 import type {FlattendBVH, BLASInstance} from './bvhAccel.js';
 import type {PreparedMeshInstanceBinding} from './scenePreparation.js';
@@ -42,14 +42,15 @@ export function packAovScene(source: AovSceneSource, tlas: FlattendBVH, camera: 
     viewProjection: new Float32Array(16), instances: []};
   const view = mat4.create(); mat4.invert(view, camera.transform);
   mat4.mul(frame.viewProjection, camera.getProjectionMatrix(width / height), view);
-  const snapshots = order.map(index => index); // Keep typed instance indexing explicit.
-  const records = Array.from(snapshots, index => {
+  const records: AovInstanceSnapshot[] = [];
+  for (let gpuIndex = 0; gpuIndex < order.length; gpuIndex++) {
+    const index = order[gpuIndex];
     const binding = source.instanceBindings[instances instanceof PackedMeshInstances ? instances.bindingIndices[index] : index];
     const mesh = binding.mesh, geometry = mesh.geometry;
-    return {object: validateAovId(mesh.aovId), instance: instances instanceof PackedMeshInstances ? instances.localIndices[index] : 0,
+    records.push({object: validateAovId(mesh.aovId), instance: instances instanceof PackedMeshInstances ? instances.localIndices[index] : 0,
       topology: geometryId(geometry) + geometry.topologyVersion * 0x100000000,
-      vertices: geometry.version, transform: new Float32Array(readMeshInstance(instances, index).transform)};
-  });
+      vertices: geometry.version, transform: new Float32Array(readMeshInstance(instances, index).transform)});
+  }
   frame.instances = records;
   const materialOffset = 20 + order.length * 24;
   const primitiveOffset = materialOffset + source.materials.length;

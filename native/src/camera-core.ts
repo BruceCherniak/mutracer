@@ -8,7 +8,7 @@ import { cameraApertureRadius } from '../../src/renderer/cameraLens.js';
 // Decode the raw Camera[32] record. Full commits and partial camera updates use
 // exactly the same existing TS camera/lens/math/packing implementation. Keep
 // CPU matrix intermediates in Float64; the final GPU camera block stays Float32.
-export function sceneCameraParameters(bytes: Uint8Array, width: number, height: number): Uint8Array {
+export function decodeCamera(bytes: Uint8Array): Camera {
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, C.WORDS);
   const f = new Float32Array(bytes.buffer, bytes.byteOffset, C.WORDS);
   const camera = u[C.PROJECTION] === 0 ? new Camera({projection: 'perspective', fov: f[C.FOV], near: f[C.NEAR], far: f[C.FAR]})
@@ -16,6 +16,10 @@ export function sceneCameraParameters(bytes: Uint8Array, width: number, height: 
   camera.zoom = f[C.ZOOM]; camera.fStop = f[C.F_STOP]; camera.focusDistance = f[C.FOCUS_DISTANCE];
   camera.sensorHeight = f[C.SENSOR_HEIGHT]; camera.metersPerUnit = f[C.METERS_PER_UNIT];
   camera.transform = f.slice(C.TRANSFORM, C.TRANSFORM + 16);
+  return camera;
+}
+export function sceneCameraParameters(bytes: Uint8Array, width: number, height: number): Uint8Array {
+  const camera = decodeCamera(bytes);
   const inverse = new Float64Array(16); mat4.invert(inverse, matrixStorage(camera.getProjectionMatrix(width / height)));
   mat4.mul(inverse, matrixStorage(camera.transform), inverse);
   return new Uint8Array(packCameraUniform(new Float32Array(inverse), new Float32Array(camera.transform), cameraApertureRadius(camera), camera.focusDistance).buffer);

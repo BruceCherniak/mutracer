@@ -140,6 +140,13 @@ unsafe extern "C" {
         output: *mut *const u8,
         size: *mut usize,
     );
+    fn mt_core_scene_aov(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
     fn mt_core_scene_target(
         input: *const u8,
         length: usize,
@@ -1232,6 +1239,19 @@ impl PreparedState {
     }
     /// Camera and trace uniforms of a render target on this scene, plus the
     /// production shader when the target's sampling pattern or bevel samples differ.
+    pub(crate) fn aov_metadata(&self, camera: &[u8], size: [u32; 2]) -> Result<Vec<u32>> {
+        let mut input: Vec<u8> = size.into_iter().flat_map(u32::to_le_bytes).collect();
+        input.extend_from_slice(camera);
+        let state = self.clone();
+        let packet = runtime::call(move || native_step(mt_core_scene_aov, &input, state.token))?;
+        if packet.len() < 80 || packet.len() % 4 != 0 {
+            return Err("Invalid AOV metadata".into());
+        }
+        Ok(packet[16..]
+            .chunks_exact(4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .collect())
+    }
     pub(super) fn target(
         &self,
         settings: &settings::RenderSettings,

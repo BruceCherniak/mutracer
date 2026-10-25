@@ -289,7 +289,8 @@ typedef struct mt_render_options {
   /* Fixed size; 0x0 uses resolution_scale of the display size. Default 0x0. */
   uint32_t width, height;
   uint32_t seed; /* Default 12345. */
-  uint32_t reserved[2]; /* Must be 0. */
+  uint32_t aovs; /* MT_AOV_* mask; default 0 (no AOV resources or passes). */
+  uint32_t aov_samples; /* Independent positive AOV sample cap; 0 selects default 16. */
   double resolution_scale; /* Positive. Default 1. */
   double clamping; /* Per-sample radiance clamp, finite, 0 disables. Default 0. */
   double transmissive_output_alpha_min; /* Finite. Default 1. */

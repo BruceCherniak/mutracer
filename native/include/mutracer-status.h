@@ -47,7 +47,7 @@ enum {
  * incompatibly; the ABI stays experimental until a stable release. Compare it
  * with mt_abi_version() when loading the library dynamically. Scene descriptors
  * carry their own MT_VERSION_SCENE. */
-#define MT_ABI_VERSION 7u
+#define MT_ABI_VERSION 8u
 uint32_t mt_abi_version(void);
 
 /* Every struct passed to or filled by the library starts with uint32_t
@@ -62,8 +62,16 @@ typedef enum mt_backend { MT_BACKEND_SOFTWARE = 0, MT_BACKEND_HWRT = 1 } mt_back
 /* mt_context_read_pixels and mt_render_read_pixels image kind. DENOISED is
  * for renders only (mutracer-engine.h). */
 typedef enum mt_image_kind {
-  MT_IMAGE_HDR = 0, MT_IMAGE_NORMAL = 1, MT_IMAGE_ALBEDO = 2, MT_IMAGE_DENOISED = 3
+  MT_IMAGE_HDR = 0, MT_IMAGE_NORMAL = 1, MT_IMAGE_ALBEDO = 2, MT_IMAGE_DENOISED = 3,
+  MT_IMAGE_DEPTH = 4, MT_IMAGE_POSITION = 5, MT_IMAGE_ROUGHNESS = 6,
+  MT_IMAGE_DIFFUSE_ALBEDO = 7, MT_IMAGE_SPECULAR_ALBEDO = 8,
+  MT_IMAGE_ID = 9, MT_IMAGE_MOTION = 10
 } mt_image_kind;
+/* Explicit optional primary-surface outputs; geometry uses independent samples,
+ * IDs/motion use the unjittered pixel center. IDs are RGBA32UI, other AOVs RGBA32F. */
+enum { MT_AOV_DEPTH = 1u, MT_AOV_POSITION = 2u, MT_AOV_ROUGHNESS = 4u,
+  MT_AOV_DIFFUSE_ALBEDO = 8u, MT_AOV_SPECULAR_ALBEDO = 16u,
+  MT_AOV_ID = 32u, MT_AOV_MOTION = 64u, MT_AOV_ALL = 127u };
 /* mt_context_snapshot.state. */
 typedef enum mt_context_state {
   MT_CONTEXT_EMPTY = 0, MT_CONTEXT_COMMITTED = 1, MT_CONTEXT_FAILED = 2,

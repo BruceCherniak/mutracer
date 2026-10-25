@@ -1,0 +1,95 @@
+use super::*;
+#[test]
+fn aov_options_validate_without_a_device() {
+    let defaults = RenderSettings::default();
+    assert_eq!((defaults.aovs, defaults.aov_samples), (0, 16));
+    for options in [
+        RenderSettings {
+            aovs: 128,
+            ..defaults.clone()
+        },
+        RenderSettings {
+            aov_samples: 0,
+            ..defaults.clone()
+        },
+    ] {
+        assert_eq!(
+            options.validate().unwrap_err().status,
+            Status::InvalidArgument
+        );
+    }
+}
+#[test]
+#[ignore = "requires real GPU"]
+fn independent_surface_aovs_preserve_beauty_and_exact_ids() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = Engine::new(EngineOptions {
+        backend: Backend::Software,
+    })
+    .unwrap();
+    let mut descriptor = tests::lit_scene();
+    let mut words: Vec<_> = descriptor
+        .chunks_exact(4)
+        .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+        .collect();
+    words[24] = words.len() as u32;
+    words.extend([101, 102]);
+    words[25] = words.len() as u32;
+    words.extend([202, 203]);
+    words[1] = words.len() as u32;
+    descriptor = words.into_iter().flat_map(u32::to_le_bytes).collect();
+    engine.display().set_size(48, 32).unwrap();
+    engine.set_scene(&descriptor).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 4,
+            bounces: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    let before = render.read_pixels(PixelKind::Hdr).unwrap();
+    let mut settings = render.settings().unwrap();
+    settings.aovs = 127;
+    settings.aov_samples = 4;
+    render.set_settings(settings).unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    assert_eq!(before, render.read_pixels(PixelKind::Hdr).unwrap());
+    let depth = render.read_pixels(PixelKind::Depth).unwrap();
+    assert!(depth.data.iter().all(|v| v.is_finite()));
+    assert!(depth.data.chunks_exact(4).any(|v| v[0] > 0. && v[3] > 0.));
+    let ids = render.read_pixels(PixelKind::Id).unwrap().id_data.unwrap();
+    assert!(ids.chunks_exact(4).any(|v| v[0] == 101 && v[2] == 202));
+    assert!(
+        ids.chunks_exact(4)
+            .all(|v| v[0] == u32::MAX || [101, 102].contains(&v[0]))
+    );
+    assert!(
+        render
+            .read_pixels(PixelKind::Motion)
+            .unwrap()
+            .data
+            .iter()
+            .all(|v| *v == 0.)
+    );
+    if let Ok(directory) = std::env::var("MUTRACER_AOV_EVIDENCE") {
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(
+            format!("{directory}/native-ids.bin"),
+            ids.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>(),
+        )
+        .unwrap();
+        std::fs::write(
+            format!("{directory}/native-depth.bin"),
+            depth
+                .data
+                .iter()
+                .flat_map(|v| v.to_le_bytes())
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+    }
+}

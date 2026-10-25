@@ -1,3 +1,6 @@
+import {packAovScene} from '../../src/renderer/aovScene.js';
+import {AovHistory} from '../../src/renderer/aov.js';
+import {decodeCamera} from './camera-core.js';
 /// <reference lib="esnext" />
 /// <reference path="./browser-types.d.ts" />
 import {sceneErrorPacket} from './scene-errors.js';
@@ -1298,4 +1301,26 @@ export function geometryKernelReference(bytes: Uint8Array, withBounds: number): 
     hints.push({vertexCount:geometry.vertexCount,bounds:withBounds?packed:undefined,tangents:generated?geometry.tangent!.array:undefined});
   }
   return encodeGeometryKernelHints(hints,counts);
+}
+
+/** Snapshot current stable identities and transforms for an independent AOV target. */
+export function sceneAovParameters(bytes: Uint8Array, token: number): Uint8Array {
+  try {
+    const state=retainedScenes.get(token);
+    if(!state || bytes.byteLength!==136) throw new Error('Invalid AOV request');
+    const u=new Uint32Array(bytes.buffer,bytes.byteOffset,2);
+    const camera=decodeCamera(bytes.subarray(8));
+    const packed=packAovScene({...state.prepared, instances:state.instances, blases:state.blases},state.tlas,camera,u[0],u[1],new AovHistory());
+    const words=packed.words, floats=new Float32Array(words.buffer);
+    floats.set(packed.frame.viewProjection);
+    for(let i=0;i<packed.frame.instances.length;i++) {
+      const instance=packed.frame.instances[i],offset=20+i*24;
+      floats.set(instance.transform,offset+4);
+      words[offset+20]=instance.topology % 4294967296;
+      words[offset+21]=instance.vertices;
+      words[offset+22]=Math.floor(instance.topology/4294967296);
+    }
+    const result=new Uint32Array(4+words.length);result.set([1,words.length,0,0]);result.set(words,4);
+    return new Uint8Array(result.buffer);
+  }catch(error){return sceneErrorPacket(ERROR_CODE.CONFIGURE,error);}
 }

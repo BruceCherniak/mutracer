@@ -143,3 +143,6 @@ mod backlog_tests;
 
 #[cfg(test)]
 mod lifecycle_tests;
+
+#[cfg(test)]
+mod aov_tests;

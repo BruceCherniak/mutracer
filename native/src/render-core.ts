@@ -118,3 +118,6 @@ import {sceneInstanceColorParameters as prepareInstanceColors} from './scene-cor
 export function sceneInstanceColorParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareInstanceColors(bytes, token); }
 import {sceneAtlasParameters as prepareAtlas} from './scene-core.js';
 export function sceneAtlasParameters(bytes: Uint8Array, token: number): Uint8Array { return prepareAtlas(bytes, token); }
+
+import {sceneAovParameters as prepareAov} from './scene-core.js';
+export function sceneAovParameters(bytes: Uint8Array, token: number): Uint8Array {return prepareAov(bytes,token);}

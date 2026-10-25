@@ -58,6 +58,11 @@ impl Default for RenderSize {
 /// Per-render execution and image-quality settings. Defaults match the browser library.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderSettings {
+    /// Optional AOV bit mask; bit 0 depth, 1 position, 2 roughness, 3 diffuse
+    /// reflectance, 4 specular reflectance, 5 ID, 6 motion. Default 0.
+    pub aovs: u32,
+    /// Independent AOV sample cap, positive integer. Default 16.
+    pub aov_samples: u32,
     /// Maximum complete samples, 1–4096. Default 2048. Raising it continues the
     /// accumulation; with [`SamplingPattern::ZSobol`] a change restarts it.
     pub max_samples: u32,
@@ -104,6 +109,8 @@ pub struct AdaptiveResolution {
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
+            aovs: 0,
+            aov_samples: 16,
             max_samples: 2048,
             bounces: 3,
             clamping: 0.,
@@ -127,6 +134,9 @@ impl RenderSettings {
     /// call it and return its `InvalidArgument` error.
     pub fn validate(&self) -> Result<()> {
         let invalid = |message: &str| Err(error(Status::InvalidArgument, message));
+        if self.aovs & !127 != 0 || self.aov_samples == 0 {
+            return invalid("Invalid AOV mask or sample cap");
+        }
         if !(1..=MAX_TOTAL_SAMPLES).contains(&self.max_samples) {
             return invalid("max_samples must be 1..4096");
         }
@@ -247,13 +257,29 @@ pub enum PixelKind {
     Denoised,
     Albedo,
     Normal,
+    /// Linear forward depth and coverage in RGBA32F.
+    Depth,
+    /// World position and coverage in RGBA32F.
+    Position,
+    /// Specular roughness, metalness, unsupported-layer flag and coverage.
+    Roughness,
+    /// Directional diffuse reflectance; alpha is valid coverage.
+    DiffuseAlbedo,
+    /// Directional specular reflectance; alpha is valid coverage.
+    SpecularAlbedo,
+    /// Exact object, instance, material and source triangle IDs in `Image::id_data`.
+    Id,
+    /// Previous minus current pixel position, x right, y down; alpha validity.
+    Motion,
 }
-/// Linear RGBA f32 pixels, top row first.
+/// Linear RGBA f32 pixels or exact integer IDs, top row first.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Image {
     pub width: u32,
     pub height: u32,
     pub data: Vec<f32>,
+    /// Exact RGBA32UI ID pixels for `PixelKind::Id`; otherwise None.
+    pub id_data: Option<Vec<u32>>,
 }
 /// When a render filters its complete samples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -556,6 +582,8 @@ pub(super) struct RenderState {
     pub(super) fallback: Option<u64>,
     /// L0 context linked as a target to the engine's shared scene.
     context: u64,
+    aov: Option<crate::aov::Output>,
+    aov_camera: [u8; 128],
     published: Option<TargetKey>,
     /// `SharedScene::generation` of the published target.
     generation: u64,
@@ -1099,6 +1127,7 @@ fn target_step(
                 || render.published.as_ref().is_none_or(|k| k.size != key.size);
             render.generation = generation;
             render.publish(key.clone(), full);
+            render.aov_camera = camera;
             Ok(Step::Published)
         }
         Err(e) if e.status == Status::Busy => Ok(Step::Waiting),
@@ -1235,6 +1264,36 @@ fn drain(render: &mut RenderState) -> Result<Vec<SampleEvent>> {
     }
     Ok(events)
 }
+fn update_aovs(render: &mut RenderState) -> Result<()> {
+    if render.settings.aovs == 0 {
+        render.aov = None;
+        return Ok(());
+    }
+    if render.samples == 0 {
+        return Ok(());
+    }
+    let query =
+        context::aov_query(render.context).map_err(|e| error(Status::Error, e.to_string()))?;
+    if render
+        .aov
+        .as_ref()
+        .is_none_or(|a| a.generation != render.input_generation)
+    {
+        let words = query
+            .metadata(&render.aov_camera)
+            .map_err(|e| error(Status::Error, e.to_string()))?;
+        render.aov = Some(
+            crate::aov::Output::new(&query, render.input_generation, &words)
+                .map_err(|e| error(Status::Error, e.to_string()))?,
+        );
+    }
+    render
+        .aov
+        .as_mut()
+        .unwrap()
+        .render(&query, render.samples.min(render.settings.aov_samples))
+        .map_err(|e| error(Status::Error, e.to_string()))
+}
 /// Polls the batch and accounts completed samples.
 fn observe(render: &mut RenderState) -> Result<Option<SampleEvent>> {
     match poll_job(render)? {
@@ -1244,6 +1303,7 @@ fn observe(render: &mut RenderState) -> Result<Option<SampleEvent>> {
             render.samples = samples;
             render.sample_ms = Some(elapsed / count.max(1) as f64);
             render.needs_capture = true;
+            update_aovs(render)?;
             let event = SampleEvent {
                 samples: render.samples,
                 is_first_frame: render.first_frame,
@@ -1779,6 +1839,8 @@ impl Render {
                 settings,
                 fallback: None,
                 context,
+                aov: None,
+                aov_camera: [0; 128],
                 published: None,
                 generation: 0,
                 input_generation: 0,
@@ -1867,6 +1929,9 @@ impl Render {
                 render.adaptive.fast_frames = 0;
             }
             render.settings = settings;
+            if render.settings.aovs == 0 {
+                render.aov = None;
+            }
             Ok(())
         })
     }
@@ -2247,6 +2312,28 @@ impl Render {
             for event in drain(render)? {
                 state.sample_events.push((id, event));
             }
+            if let Some(code) = match kind {
+                PixelKind::Depth => Some(4),
+                PixelKind::Position => Some(5),
+                PixelKind::Roughness => Some(6),
+                PixelKind::DiffuseAlbedo => Some(7),
+                PixelKind::SpecularAlbedo => Some(8),
+                PixelKind::Id => Some(9),
+                PixelKind::Motion => Some(10),
+                _ => None,
+            } {
+                let render = state.renders.get_mut(&id).unwrap();
+                if render.settings.aovs & (1 << (code - 4)) == 0 {
+                    return Err(error(Status::InvalidState, "Requested AOV is not enabled"));
+                }
+                update_aovs(render)?;
+                return render
+                    .aov
+                    .as_ref()
+                    .ok_or_else(|| error(Status::InvalidState, "AOV output is not ready"))?
+                    .read(code)
+                    .map_err(|e| error(Status::Error, e.to_string()));
+            }
             let render = &state.renders[&id];
             if kind == PixelKind::Denoised {
                 if let Some((_, pixels)) = &render.denoise.denoised {
@@ -2274,6 +2361,7 @@ impl Render {
                             width,
                             height,
                             data: flip_rows(&pixels, width, height),
+                            id_data: None,
                         });
                     }
                 }
@@ -2282,6 +2370,7 @@ impl Render {
                 PixelKind::Hdr | PixelKind::Denoised => 0,
                 PixelKind::Normal => 1,
                 PixelKind::Albedo => 2,
+                _ => unreachable!(),
             };
             let [width, height] = context_size(render.context)?;
             let data = if code == 0 {
@@ -2295,6 +2384,7 @@ impl Render {
                 width,
                 height,
                 data: flip_rows(&data, width, height),
+                id_data: None,
             })
         })
     }

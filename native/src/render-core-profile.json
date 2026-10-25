@@ -348,6 +348,15 @@
         "u32"
       ],
       "returns": "bytes"
+    },
+    {
+      "export": "sceneAovParameters",
+      "symbol": "mt_core_scene_aov",
+      "params": [
+        "bytes",
+        "u32"
+      ],
+      "returns": "bytes"
     }
   ]
 }

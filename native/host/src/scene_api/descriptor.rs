@@ -213,6 +213,7 @@ impl Scene {
         let d = cached.as_mut().unwrap();
         d.words[h::ENVIRONMENT_TEXTURE] = r.environment_index;
         d.words[h::BACKGROUND_TEXTURE] = r.background_index;
+        self.write_aov_ids(&mut d.words);
         Ok(d.bytes())
     }
 }
