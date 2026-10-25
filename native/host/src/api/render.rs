@@ -246,7 +246,14 @@ pub struct SampleEvent {
     /// Wall time from submission to observed completion of the batch.
     pub frame_time_ms: f64,
 }
-/// Image read by [`Render::read_pixels`].
+/// Image read by [`Render::read_pixels`]. All optional AOVs require their bit in
+/// `RenderSettings::aovs`; otherwise reads return InvalidState. Geometry and
+/// reflectance average independent jittered/lens samples, capped by aov_samples.
+/// RGB is normalized by valid surface hits, alpha is coverage over AOV samples.
+/// Alpha traversal selects the first non-catcher surface with alpha >= 0.5,
+/// skipping at most 32 layers. ID/motion use the unjittered pinhole pixel center.
+/// Reflectance excludes coat, fuzz, anisotropy, subsurface/volume scattering,
+/// bevel, thin film, dispersion, partial alpha and nonstandard materials.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PixelKind {
     /// Resolved linear ray color and path coverage, matching TS WebGPU HDR readback.
@@ -257,7 +264,7 @@ pub enum PixelKind {
     Denoised,
     Albedo,
     Normal,
-    /// Linear forward depth and coverage in RGBA32F.
+    /// Camera-forward scene-unit distance, 0, 0, coverage in RGBA32F. Misses are zero.
     Depth,
     /// World position and coverage in RGBA32F.
     Position,
@@ -267,9 +274,14 @@ pub enum PixelKind {
     DiffuseAlbedo,
     /// Directional specular reflectance; alpha is valid coverage.
     SpecularAlbedo,
-    /// Exact object, instance, material and source triangle IDs in `Image::id_data`.
+    /// Exact object, local instance, material and source triangle IDs in
+    /// `Image::id_data`. Background is u32::MAX in all channels. Exact shared-edge
+    /// hits may select either adjacent triangle depending on host/GPU rounding.
     Id,
-    /// Previous minus current pixel position, x right, y down; alpha validity.
+    /// Previous minus current pixel position, x right, y down, z=0; alpha 3 for
+    /// visible camera/rigid correspondence, otherwise 0. History is per-render,
+    /// from its previous AOV frame. Size/projection changes, missing IDs, topology
+    /// or vertex edits and visibility failures invalidate it. Device loss clears it.
     Motion,
 }
 impl PixelKind {
@@ -304,6 +316,7 @@ impl PixelKind {
 pub struct Image {
     pub width: u32,
     pub height: u32,
+    /// RGBA floats; empty for Id.
     pub data: Vec<f32>,
     /// Exact RGBA32UI ID pixels for `PixelKind::Id`; otherwise None.
     pub id_data: Option<Vec<u32>>,
@@ -2436,8 +2449,8 @@ impl Render {
             }
         })
     }
-    /// Waits for the in-flight batch, then reads this render's linear RGBA f32
-    /// image, top row first. During preparation it reads the previous image.
+    /// Waits for the in-flight batch, then reads this render's RGBA image
+    /// (u32 for Id, f32 otherwise), top row first. During preparation it reads the previous image.
     /// HDR uses the TS WebGPU readback semantics of [`PixelKind::Hdr`]; L0 keeps
     /// raw per-sample averages. HDR temporarily reads 48 GPU bytes per pixel.
     pub fn read_pixels(&self, kind: PixelKind) -> Result<Image> {

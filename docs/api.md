@@ -127,6 +127,7 @@ other sequences retain their completed samples.
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `maxSamples` | `2048` | Complete sample budget |
+| `aovs` / `aovSamples` | `[]` / `16` | Optional [surface outputs](#surface-outputs) / independent positive integer sample cap |
 | `bounces` / `clamping` | `3` / `0` | Scattering depth / per-sample radiance clamp; 0 disables clamping |
 | `samplingPattern` | `'sobol'` | Sobol, ZSobol or random; see [sampling](./sampling.md) |
 | `directLightCandidates` | `4` | WebGPU light candidates, clamped 1–16; ignored on WebGL |
@@ -282,9 +283,11 @@ semantics are documented in [Custom denoisers](./denoising.md#custom-denoisers).
 
 ### Pixel outputs
 
-`readPixels(kind = 'hdr')` returns `{ width, height, data: Float32Array }`,
-RGBA with the top row first. Dimensions describe the internal render texture,
-which WebGPU rounds up to multiples of 16. Before a pipeline exists, it returns an empty image.
+`readPixels(kind = 'hdr')` returns `{ width, height, data }`. `data` is a
+`Uint32Array` for `id` and a `Float32Array` for every other kind.
+Pixels are RGBA with the top row first. Dimensions describe the internal render
+texture, which WebGPU rounds up to multiples of 16. Before a pipeline exists,
+beauty and OIDN-guide reads return an empty image; AOV reads reject.
 
 | Kind | Values |
 | --- | --- |
@@ -298,6 +301,69 @@ its final native output is also display encoded. Readback preserves these
 existing pipeline semantics. If no denoiser is attached or denoising has not
 completed, `denoised` returns `hdr` and warns once per render. The method
 makes a CPU copy and can be costly; avoid calling it every animation frame.
+
+### Surface outputs
+
+Enable AOVs on each render before sampling:
+
+```ts
+const render = new Render(engine, {
+  aovs: ['depth', 'position', 'id', 'motion'], aovSamples: 16
+});
+await render.converge({samples: 64});
+const depth = await render.readPixels('depth'); // Float32Array, RGBA
+const ids = await render.readPixels('id');      // Uint32Array, RGBA
+```
+
+| Kind | RGBA contents |
+| --- | --- |
+| `depth` | Camera-forward distance in scene units, 0, 0, coverage |
+| `position` | World position xyz, coverage |
+| `roughness` | Specular roughness, metalness, unsupported-reflectance fraction, coverage |
+| `diffuseAlbedo` | Directional-hemispherical diffuse reflectance RGB, valid coverage |
+| `specularAlbedo` | Directional-hemispherical specular reflectance RGB, valid coverage |
+| `id` | Object, local instance, material, source triangle index; background is `0xFFFFFFFF` in all channels |
+| `motion` | Previous position minus current position in pixels, x right and y down; z = 0, alpha = 3 for valid history or 0 otherwise |
+
+Depth, position, roughness and reflectance average independent jittered primary
+rays, including depth of field, up to `min(samples, aovSamples)`. RGB values use
+hit-count normalization; alpha is hit coverage over all AOV samples. Reflectance
+uses only supported hits for both normalization and valid coverage. A blank pixel
+is zero. These passes preserve beauty samples but do not sample the same paths.
+Alpha holes use the first surface with alpha ≥ 0.5, skipping shadow catchers,
+with at most 32 layers.
+
+ID and motion use the unjittered pixel center without depth of field. `Mesh.aovId`
+and `OpenPBRMaterial.aovId` default to process-unique integers. Explicit values
+must be integers from 0 through `0xFFFFFFFE`, unique among the scene's objects
+or materials respectively. Commit changes with `engine.update()`. Keep identities
+stable and avoid reusing an ID for a different object while history is live.
+Instance IDs are local indices; primitive IDs refer to the geometry's original
+triangle order. A ray exactly on a shared edge can select either adjacent
+triangle; host/GPU rounding can choose different IDs at that boundary.
+
+Motion history belongs to each render and advances when it produces an AOV
+frame. Camera pose and rigid object transforms can reproject across updates.
+The first frame, changed dimensions or projection, missing identities, changed
+topology or vertex positions, and failed visibility correspondence invalidate
+motion. Device recovery also clears history. Deformed vertices have no motion
+estimate; validity 0 must not be treated as a stationary surface.
+
+The new reflectance outputs are separate from the existing OIDN `albedo` guide.
+Coat, fuzz, anisotropy, subsurface/volume scattering, bevel, thin film,
+dispersion, partial alpha and nonstandard materials are unsupported by this
+reflectance estimate. Such hits contribute to `roughness.b` and have zero
+reflectance validity. Reflectance uses expensive BSDF quadrature; request it
+only when needed.
+
+Reading a kind absent from `render.aovs` rejects. A custom denoiser can request
+its own [AOV inputs](./denoising.md#custom-denoisers). With neither request there
+are no AOV allocations or passes. Enabling any kind costs about 128 GPU bytes
+per pixel on WebGPU or 192 on WebGL, plus scene identity/history data; each
+custom denoiser AOV snapshot adds 16 bytes per pixel. Readback adds a CPU copy.
+WebGPU dimensions remain subject to device buffer limits. A full-frame AOV
+sample runs independently of tile/adaptive sampling and may exceed the render's
+time budget at large resolutions. WebGL requires `EXT_color_buffer_float`.
 
 ### Depth sampling
 

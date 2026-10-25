@@ -382,7 +382,7 @@ typedef struct mt_custom_denoiser {
   mt_custom_denoise_callback callback;
   mt_custom_denoise_release release;
   void *user;
-  uint32_t aovs; /* Requested MT_AOV_* mask; default 0. */
+  uint32_t aovs; /* Requested MT_AOV_* mask; default 0. Unknown bits are invalid. */
   uint32_t reserved; /* Must be 0. */
 } mt_custom_denoiser;
 MT_ENGINE_LAYOUT(mt_custom_denoiser, 16 + 3 * sizeof(void *));
@@ -452,10 +452,11 @@ typedef struct mt_render_snapshot {
 MT_ENGINE_LAYOUT(mt_render_snapshot, 364);
 int32_t mt_render_info(mt_render render, mt_render_snapshot *output, char *error, size_t capacity);
 
-/* kind (mt_image_kind): HDR, NORMAL, ALBEDO or DENOISED (the denoised image when
- * one exists, otherwise HDR). Linear little-endian f32 RGBA, top row first,
- * width*height*16 bytes. Waits for the batch in flight. During preparation it
- * reads the previous image. HDR matches TS WebGPU readback: RGB is normalized
+/* kind: any mt_image_kind. DENOISED returns HDR when no filtered image exists.
+ * Little-endian RGBA, top row first, width*height*16 bytes: uint32_t for ID,
+ * float for all other kinds. AOV formats/validity are in mutracer-status.h;
+ * reads require the corresponding render aovs bit or return MT_ERROR_INVALID_STATE.
+ * Waits for the batch in flight. During preparation it reads the previous image. HDR matches TS WebGPU readback: RGB is normalized
  * by surface hits, restoring per-sample RGB for an opaque visible flat
  * background; alpha stays path coverage. Display settings do not affect HDR.
  * L0 mt_context_read_pixels keeps raw per-sample averages. HDR temporarily copies

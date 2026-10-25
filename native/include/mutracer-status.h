@@ -68,7 +68,22 @@ typedef enum mt_image_kind {
   MT_IMAGE_ID = 9, MT_IMAGE_MOTION = 10
 } mt_image_kind;
 /* Explicit optional primary-surface outputs; geometry uses independent samples,
- * IDs/motion use the unjittered pixel center. IDs are RGBA32UI, other AOVs RGBA32F. */
+ * IDs/motion use the unjittered pinhole pixel center. IDs are RGBA32UI, others
+ * RGBA32F. Enable corresponding MT_AOV_* bits before render readback, otherwise
+ * MT_ERROR_INVALID_STATE. Geometry RGB is normalized by surface hits, alpha is
+ * coverage over independent AOV samples; blank pixels are zero. Alpha traversal
+ * selects alpha >= 0.5, skips shadow catchers, and stops after 32 layers.
+ * DEPTH: camera-forward scene-unit distance,0,0,coverage. POSITION: world xyz,coverage.
+ * ROUGHNESS: specular roughness,metalness,unsupported-reflectance fraction,coverage.
+ * DIFFUSE/SPECULAR_ALBEDO: directional-hemispherical reflectance RGB,valid coverage.
+ * Coat, fuzz, anisotropy, subsurface/volume scattering, bevel, thin film, dispersion,
+ * partial alpha and nonstandard materials have zero reflectance validity.
+ * ID: stable object,local instance,material,source triangle; background UINT32_MAX.
+ * Exact shared-edge hits may select either adjacent triangle depending on rounding.
+ * MOTION: prev-current input pixels,x right,y down,z=0,alpha=3 valid or 0 invalid.
+ * History is per-render, from its previous AOV frame. Size/projection changes,
+ * missing IDs, topology/vertex edits, visibility failures and device loss invalidate
+ * correspondence. Never reuse an object/material ID for a different item in live history. */
 enum { MT_AOV_DEPTH = 1u, MT_AOV_POSITION = 2u, MT_AOV_ROUGHNESS = 4u,
   MT_AOV_DIFFUSE_ALBEDO = 8u, MT_AOV_SPECULAR_ALBEDO = 16u,
   MT_AOV_ID = 32u, MT_AOV_MOTION = 64u, MT_AOV_ALL = 127u };

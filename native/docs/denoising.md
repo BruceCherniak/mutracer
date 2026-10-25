@@ -74,11 +74,56 @@ cancellation.
   [custom-gpu-denoiser.rs](../host/examples/custom-gpu-denoiser.rs).
   `gpu_inputs` instead uploads the CPU arrays again. C callbacks receive CPU
   arrays.
-- The inputs are the accumulated color and guides; no depth, motion or other
-  temporal inputs are provided.
+- Request additional surface guides through `CustomDenoiser::aovs()` or
+  `mt_custom_denoiser.aovs`. They are supplied even when not requested for direct
+  render readback. `DenoiseInput::aovs`, `GpuDenoiseInput::aovs` and
+  `mt_denoise_input.aov_data` specify their layouts. Each requested snapshot adds
+  16 GPU bytes per render pixel, plus CPU memory for CPU callbacks.
 - An error, invalid output or panic produces an engine error event and stops
   scheduled filtering until a filter is set again; `converge` returns an error.
   The unfiltered accumulation stays available.
+
+## Surface outputs
+
+Set `RenderSettings::aovs` / `mt_render_options.aovs` before sampling, then read
+with `PixelKind` / `mt_image_kind`. `aov_samples` caps their independent sample
+count; beauty stays unchanged. The declarations specify formats and validity.
+Readback requires explicit enablement even if a custom filter requests the same
+kind. Disabled AOVs allocate nothing. Enabling any kind adds about 128 GPU bytes
+per pixel plus scene identity/history data; readback adds temporary GPU and CPU
+copies. Reflectance quadrature costs considerably more than geometric guides.
+
+Stable object/material IDs come from Scene handles, or the descriptor's optional
+ID tables. Preserve these identities across publications when reprojecting;
+reusing an ID for another object can associate the wrong history.
+
+## Temporal GPU filters (Rust)
+
+Return `DenoiseInputMode::TemporalGpu` from `CustomDenoiser::input_mode`. The
+resident input then includes a separate `TemporalFrame`, independent of the
+progressively averaged color and AOV snapshots. Use `guide`, `stable_ids`,
+`pixel_records`, `metadata` and `reset_reasons` to feed your temporal filter,
+then submit its output through `GpuDenoiseInput::submit`. This mode is available
+only in the Rust GPU interface; C callbacks receive CPU images.
+
+History advances only after a result is accepted for presentation. Failed,
+cancelled or replaced results do not become previous frames. Check
+`GpuDenoiseInput::status` if maintaining consumer history, and discard history
+when the next frame reports a reset. Use `Render::reset_temporal_history` for an
+application camera cut; it preserves beauty samples.
+
+The producer currently requires a pinhole camera, one sample per input frame
+and equal input/output dimensions. It supports camera and rigid-object motion;
+vertex deformation invalidates correspondence. Capability fields identify
+unverified optical and specular-distance inputs; this is not a complete DLSS-RR
+or NRD integration. Guides use top-row-first textures; raw records and stable
+IDs use bottom-row-first buffers.
+
+Each retained frame uses about 432 GPU bytes per pixel plus scene metadata,
+in addition to resident snapshots and output. The previous accepted frame and
+in-flight consumers also retain resources. The 240-byte pixel-record binding
+can limit resolution before the SDK's ordinary pixel limit; unsupported sizes
+return an error according to device storage limits.
 
 ## Denoise your own images
 
