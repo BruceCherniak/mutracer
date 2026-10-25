@@ -18,6 +18,7 @@ export function cCompilerArgs(args,platform=process.platform) {
   for(let i=0;i<args.length;i++) {
     const arg=args[i];
     if(['-Wall','-Wextra','-Werror','-std=c11','-lm','-pthread'].includes(arg))continue;
+    if(arg==='-O2'){result.push('/O2');continue;}
     if(arg==='-o') {const output=args[++i];result.push(`/Fe${output}`,`/Fo${dirname(output)}${process.platform==='win32'?'\\':'/'}`);continue;}
     if(arg==='-I'){result.push(`/I${args[++i]}`);continue;}
     if(arg.startsWith('-D')){result.push('/D'+arg.slice(2));continue;}

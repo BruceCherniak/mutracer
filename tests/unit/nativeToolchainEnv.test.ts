@@ -1,6 +1,6 @@
 import {expect, it} from 'vitest';
 import {delimiter, resolve} from 'node:path';
-import {nativeToolchainEnv, windows} from '../../native/scripts/platform.mjs';
+import {cCompilerArgs, nativeToolchainEnv, windows} from '../../native/scripts/platform.mjs';
 
 it('preserves compiler discovery when a Windows Path environment is copied and extended', () => {
   const source = {Path: 'zig;gcc;node', KEEP: 'value'};
@@ -13,6 +13,13 @@ it('preserves compiler discovery when a Windows Path environment is copied and e
   } else expect(env).toEqual(source);
   expect(env.KEEP).toBe('value');
   expect(source).toEqual({Path: 'zig;gcc;node', KEEP: 'value'});
+});
+
+it('keeps the SDK C consumer optimized when translating its flags to MSVC', () => {
+  const args = cCompilerArgs(['-O2', 'consumer.c', '-o', 'consumer.exe'], 'win32');
+  expect(args).toContain('/O2');
+  expect(args).not.toContain('-O2');
+  expect(args).toContain('/MD');
 });
 
 it('puts the MSVC linker ahead of Git Bash while retaining the supplied toolchain path', () => {

@@ -4,5 +4,6 @@ export const cCompiler: string;
 export const cLinkFlags: string[];
 export function executable(name: string): string;
 export function archiveName(name: string): string;
+export function cCompilerArgs(args: string[], platform?: string): string[];
 export function nativeToolchainEnv(environment?: NodeJS.ProcessEnv): NodeJS.ProcessEnv;
 export function viewerPlatform(): 'macos-arm64' | 'linux-x64' | 'windows-x64';

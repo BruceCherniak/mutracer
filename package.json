@@ -103,6 +103,7 @@
     "native:viewer": "node native/scripts/viewer-build.mjs",
     "native:viewer:build": "node native/scripts/viewer-build.mjs --build-only",
     "native:viewer:package": "node native/scripts/viewer-package.mjs",
+    "native:sdk:package": "node native/scripts/sdk-package.mjs",
     "native:settings": "node native/validation/settings-render.mjs",
     "native:engine": "node native/validation/engine-render.mjs",
     "native:ci": "node native/scripts/ci.mjs",

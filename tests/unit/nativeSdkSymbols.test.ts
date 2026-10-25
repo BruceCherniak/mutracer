@@ -1,0 +1,30 @@
+import {expect, it} from 'vitest';
+import {publicApiSymbols, checkSdkExports, nativeLinkArguments} from '../../native/scripts/sdk-symbols.mjs';
+
+it('uses declarations, excluding comments, callback types and inline helpers', () => {
+  expect(publicApiSymbols([`
+    /* int32_t mt_private(void); */
+    typedef void (*mt_callback)(int value);
+    static inline void mt_helper(void) { mt_ignored(); }
+    int32_t mt_create(const char *name,
+      void (*callback)(int), unsigned *output);
+    const char *mt_name(void);
+    // void mt_obsolete(void);
+  `, 'int32_t mt_create(const char *name, void (*callback)(int), unsigned *output);']))
+    .toEqual(['mt_create', 'mt_name']);
+});
+
+it('fails on both lost public symbols and leaked dependency symbols', () => {
+  expect(() => checkSdkExports(['mt_create', 'mt_destroy'], ['mt_create', 'oidnw_create']))
+    .toThrow('missing: mt_destroy; extra: oidnw_create');
+  expect(() => checkSdkExports(['mt_create'], ['mt_create'])).not.toThrow();
+  expect(() => publicApiSymbols(['/* empty */'])).toThrow();
+});
+
+it('preserves the order and duplication of the platform linker arguments', () => {
+  expect(nativeLinkArguments('note: native-static-libs: -lc++ -framework Metal -lc++\n'))
+    .toEqual(['-lc++', '-framework', 'Metal', '-lc++']);
+  expect(nativeLinkArguments('note: native-static-libs: kernel32.lib "C:\\SDK path\\runtime.lib"\r\n'))
+    .toEqual(['kernel32.lib', 'C:\\SDK path\\runtime.lib']);
+  expect(() => nativeLinkArguments('build failed')).toThrow();
+});

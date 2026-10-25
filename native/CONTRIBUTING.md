@@ -79,6 +79,7 @@ need `xvfb-run`.
 | `npm run native:viewer:build` | No | Full AOT graph and platform app |
 | `npm run native:viewer:package` | No | Archives the app, extracts it elsewhere and checks the sample and linked denoising runtime |
 | `npm run native:viewer:package -- --gpu` | Yes | Also checks rendering, all AOVs and real-window startup |
+| `npm run native:sdk:package` | No | Packages the SDK and checks C linking |
 | `npm run native:check` | No | Compiler capability probe; reports the incomplete browser API port and exits with status 1 |
 
 - The host commands build on `native:scene`, and `native:engine` chains the
@@ -143,21 +144,34 @@ support are errors. GitHub-hosted CI does not run it.
 
 The GitHub Actions `CI` workflow runs on pull requests, pushes to `main` and
 `dev`, and manual dispatch. It validates CPU and static contracts and builds the
-viewer for macOS arm64, Linux x64 and Windows x64, including oidn-webgpu and licenses.
+SDK and viewer for macOS arm64, Linux x64 and Windows x64, including oidn-webgpu
+and licenses.
 
 - Artifacts `native-macos-arm64`, `native-linux-x64` and `native-windows-x64`
-  hold the app archive and SHA-256 checksum for 14 days;
+  hold the app and SDK archives and SHA-256 checksums for 14 days;
+  `native-PLATFORM-symbols` holds the separate SDK debug material for 14 days;
   `native-PLATFORM-diagnostics` keeps logs and check summaries for 7 days,
   including failed runs.
 - Manual dispatch builds all three platforms by default (`release`);
   `native_platform` selects one for diagnosis and never publishes a release.
 - Pushing a `native-v*` tag (for example `native-v0.1.0`) runs the same checks
   and, after the Web and native jobs pass, publishes the macOS and Linux
-  archives and checksums to that tag's GitHub Release. Tags with a suffix such
-  as `-rc.1` create prereleases. Native releases never become the repository's
-  latest release, and rerunning a tag replaces matching assets. Publishing uses
+  app, SDK and separate symbol archives and checksums to that tag's GitHub
+  Release. Tags with a suffix such as `-rc.1` create prereleases. Native
+  releases never become the repository's latest release, and rerunning a tag
+  replaces matching assets. Publishing uses
   `GITHUB_TOKEN` with `contents: write`.
 - The macOS app is ad-hoc signed and not notarized.
+
+### SDK release artifacts
+
+After `native:ci`, run `native:sdk:package` with the same
+`MUTRACER_NATIVE_OUTPUT` and its `CARGO_TARGET_DIR=.../host-target`.
+For `native:scene:static` outputs, the default `.../cargo-target` applies.
+`MUTRACER_NATIVE_DIST` selects the archive destination. Packages contain C headers
+and shared/static libraries; debug symbols are archived separately in
+`sdk-symbols/`. Packaging checks API availability and C linking without a GPU;
+rendering still requires `native:ci:gpu` validation.
 
 ## Architecture
 

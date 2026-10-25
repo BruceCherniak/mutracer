@@ -109,6 +109,11 @@ jobs:
         run: node native/scripts/fetch-dxc.mjs >> "$GITHUB_PATH"
       - name: Build and validate CPU modules and static WGSL contracts
         run: npm run native:ci
+      - name: Package SDK with public exports and separate symbols
+        env:
+          CARGO_TARGET_DIR: ${{ runner.temp }}/mutracer-native/host-target
+          MUTRACER_NATIVE_DIST: ${{ runner.temp }}/native-dist
+        run: npm run native:sdk:package
       - name: Build standalone native app
         env:
           MUTRACER_NATIVE_OUTPUT: ${{ runner.temp }}/mutracer-native/viewer
@@ -142,6 +147,13 @@ jobs:
             ${{ runner.temp }}/mutracer-native/viewer/coverage.json
           if-no-files-found: ignore
           retention-days: 7
+      - name: Upload native SDK debug symbols
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-${{ matrix.platform }}-symbols
+          path: ${{ runner.temp }}/mutracer-native/sdk-symbols/*
+          if-no-files-found: error
+          retention-days: 14
       - uses: actions/cache/save@v4
         if: ${{ always() && steps.native_cache.outputs.cache-hit != 'true' }}
         with:
@@ -166,6 +178,14 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           name: native-linux-x64
+          path: native-dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-macos-arm64-symbols
+          path: native-dist
+      - uses: actions/download-artifact@v4
+        with:
+          name: native-linux-x64-symbols
           path: native-dist
       - name: Verify release assets
         working-directory: native-dist
