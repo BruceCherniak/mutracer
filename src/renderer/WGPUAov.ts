@@ -42,7 +42,7 @@ export class WGPUAov {
       const parameters=device.createBuffer({size:16,usage:GPUBufferUsage.UNIFORM,mappedAtCreation:true});
       new Uint32Array(parameters.getMappedRange()).set([this.width,this.height,this.samples,AOV_KINDS.indexOf(kind)|256]);parameters.unmap();
       const group=device.createBindGroup({layout:this.resolvePipeline.getBindGroupLayout(0),entries:[this.accumulation,this.center,output,parameters].map((buffer,binding)=>({binding,resource:{buffer}}))});
-      const encoder=device.createCommandEncoder(),pass=encoder.beginComputePass();pass.setPipeline(this.resolvePipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width*this.height/64));pass.end();device.queue.submit([encoder.finish()]);parameters.destroy();buffers[kind]=output;
+      const encoder=device.createCommandEncoder(),pass=encoder.beginComputePass();pass.setPipeline(this.resolvePipeline);pass.setBindGroup(0,group);pass.dispatchWorkgroups(Math.ceil(this.width/8),Math.ceil(this.height/8));pass.end();device.queue.submit([encoder.finish()]);parameters.destroy();buffers[kind]=output;
     }
     return buffers;
   }

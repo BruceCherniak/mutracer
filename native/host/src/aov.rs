@@ -258,7 +258,7 @@ impl Output {
                 let mut pass = encoder.begin_compute_pass(&Default::default());
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(0, &group, &[]);
-                pass.dispatch_workgroups((self.size[0] * self.size[1]).div_ceil(64), 1, 1);
+                pass.dispatch_workgroups(self.size[0].div_ceil(8), self.size[1].div_ceil(8), 1);
             }
             self.gpu.queue.submit([encoder.finish()]);
             result.push(api::GpuAov {
@@ -269,82 +269,35 @@ impl Output {
         Ok(result)
     }
     pub(crate) fn read(&self, kind: u32) -> Result<api::Image> {
-        let center = kind >= 9;
-        let source = if center {
-            &self.center
-        } else {
-            &self.accumulated
-        };
-        let bytes = read_bytes(&self.gpu, source)?;
-        let words: Vec<_> = bytes
-            .chunks_exact(4)
-            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
-            .collect();
-        let values: Vec<_> = words.iter().map(|v| f32::from_bits(*v)).collect();
+        if !(4..=10).contains(&kind) {
+            return Err("Unknown AOV kind".into());
+        }
+        // Use the same GPU resolve as immutable filter snapshots. Repeating the
+        // normalization on the CPU can differ from the device reciprocal by an
+        // ULP, even for two reads of the same accumulation on one adapter.
+        let snapshot = self.snapshot(1 << (kind - 4))?.pop().unwrap();
+        let bytes = read_bytes(&self.gpu, &snapshot.buffer)?;
         let [width, height] = self.size;
-        let pixels = (width * height) as usize;
-        let mut image = api::Image {
+        let mut words = Vec::with_capacity((width * height * 4) as usize);
+        let row = width as usize * 16;
+        // GPU accumulation/snapshots are bottom-first; public images are top-first.
+        for y in (0..height as usize).rev() {
+            words.extend(
+                bytes[y * row..(y + 1) * row]
+                    .chunks_exact(4)
+                    .map(|b| u32::from_le_bytes(b.try_into().unwrap())),
+            );
+        }
+        Ok(api::Image {
             width,
             height,
-            data: vec![],
-            id_data: None,
-        };
-        if kind == 9 {
-            let mut ids = vec![0; pixels * 4];
-            for y in 0..height as usize {
-                for x in 0..width as usize {
-                    let p = y * width as usize + x;
-                    let o = ((height as usize - 1 - y) * width as usize + x) * 8;
-                    ids[p * 4..p * 4 + 4].copy_from_slice(&words[o..o + 4]);
-                }
-            }
-            image.id_data = Some(ids);
-            return Ok(image);
-        }
-        image.data.resize(pixels * 4, 0.);
-        for y in 0..height as usize {
-            for x in 0..width as usize {
-                let p = y * width as usize + x;
-                let o =
-                    ((height as usize - 1 - y) * width as usize + x) * if center { 8 } else { 16 };
-                let result = if kind == 10 {
-                    [values[o + 4], values[o + 5], 0., values[o + 7]]
-                } else {
-                    let hits = values[o + 7];
-                    let inv = if hits > 0. { 1. / hits } else { 0. };
-                    let coverage = hits / self.samples.max(1) as f32;
-                    match kind {
-                        4 => [values[o] * inv, 0., 0., coverage],
-                        5 => [
-                            values[o + 4] * inv,
-                            values[o + 5] * inv,
-                            values[o + 6] * inv,
-                            coverage,
-                        ],
-                        6 => [
-                            values[o + 1] * inv,
-                            values[o + 2] * inv,
-                            values[o + 3] * inv,
-                            coverage,
-                        ],
-                        7 | 8 => {
-                            let a = o + if kind == 7 { 8 } else { 12 };
-                            let count = values[a + 3];
-                            let s = if count > 0. { 1. / count } else { 0. };
-                            [
-                                values[a] * s,
-                                values[a + 1] * s,
-                                values[a + 2] * s,
-                                count / self.samples.max(1) as f32,
-                            ]
-                        }
-                        _ => return Err("Unknown AOV kind".into()),
-                    }
-                };
-                image.data[p * 4..p * 4 + 4].copy_from_slice(&result);
-            }
-        }
-        Ok(image)
+            data: if kind == 9 {
+                Vec::new()
+            } else {
+                words.iter().map(|v| f32::from_bits(*v)).collect()
+            },
+            id_data: (kind == 9).then_some(words),
+        })
     }
 }
 fn read_bytes(gpu: &GpuDevice, source: &wgpu::Buffer) -> Result<Vec<u8>> {
