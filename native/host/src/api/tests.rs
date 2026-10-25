@@ -370,6 +370,11 @@ pub(super) fn lit_scene() -> Vec<u8> {
 // descriptor and settings, byte for byte (software; fixed seed).
 
 pub(super) fn software_engine(backend: Backend) -> Option<Engine> {
+    // Native CPU CI must not turn the presence of WARP/llvmpipe into an
+    // unplanned rendering run. native:ci:gpu executes these same image oracles.
+    if std::env::var("MUTRACER_TEST_CPU_ONLY").as_deref() == Ok("1") {
+        return None;
+    }
     Engine::new(EngineOptions { backend }).ok()
 }
 /// The descriptor a fresh L0 context commits to reproduce a render: the scene with

@@ -584,6 +584,8 @@ progressive/every-sample schedules, resizing, target replacement and device loss
 The viewer's relocated `native:viewer:package -- --gpu` gate also runs denoising
 and real-window startup. Windows uses the same Rust runtime through its MSVC core. Hosted Windows CI
 checks compilation and CPU contracts; it does not establish GPU correctness.
+CPU CI excludes the optional image oracles even when WARP/llvmpipe is available;
+`native:ci:gpu` runs them and requires a hardware adapter.
 
 For the browser release, serve `tests/gpu/oidnNativeIntegration.html` and run
 `captureOIDNRelease()` in its console, then repeat with `?webgl`. It exercises

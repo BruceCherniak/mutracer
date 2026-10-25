@@ -1,4 +1,4 @@
-//! Explicit GPU validation requires a hardware adapter; CPU CI never invokes this probe.
+//! Report the adapter without rendering; explicit GPU validation requires hardware.
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
@@ -28,16 +28,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             if args.iter().any(|arg| arg == "--require-ray-query") && !ray_query {
                 return Err("Full GPU validation requires hardware ray-query support".into());
             }
-            let (device, queue) =
-                pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-                    required_limits: adapter.limits(),
-                    ..Default::default()
-                }))?;
-            queue.submit([]);
-            device.poll(wgpu::PollType::Wait {
-                submission_index: None,
-                timeout: Some(std::time::Duration::from_secs(30)),
-            })?;
+            // CPU CI records which software adapter the runner exposes without
+            // creating a device or submitting GPU work.
+            if !args.iter().any(|arg| arg == "--adapter-only") {
+                let (device, queue) =
+                    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+                        required_limits: adapter.limits(),
+                        ..Default::default()
+                    }))?;
+                queue.submit([]);
+                device.poll(wgpu::PollType::Wait {
+                    submission_index: None,
+                    timeout: Some(std::time::Duration::from_secs(30)),
+                })?;
+            }
             println!(
                 "{}",
                 serde_json::json!({"available":true,"hardware":hardware,"adapter":info.name,"deviceType":format!("{:?}",info.device_type),"backend":format!("{:?}",info.backend),"rayQuery":ray_query})

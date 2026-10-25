@@ -60,13 +60,15 @@ await prepareTinyBvh();
 await run('native-build','cargo',['build','--release','--locked','--manifest-path','native/host/Cargo.toml']);
 finalizeHostLibrary(hostTarget);
 if(windows)await run('windows-dll-exit',process.execPath,['native/validation/windows-dll-exit.mjs']);
+await run('adapter-info',resolve(hostTarget,'release',executable('gpu-availability')),['--adapter-only']);
 let gpu={validated:false,reason:'CPU-only CI; run native:ci:gpu on a real GPU'};
 if(gpuValidation){
  const probe=runSync('gpu-availability',resolve(hostTarget,'release',executable('gpu-availability')),['--require-hardware','--require-ray-query']);
  gpu=JSON.parse(probe.stdout);
  if(!gpu.hardware||!gpu.rayQuery)throw Error('Full GPU validation requires a real GPU with ray-query support.');
 }
-await run('host-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml','--','--test-threads=1']);
+await run('host-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml','--','--test-threads=1'],
+ {MUTRACER_TEST_CPU_ONLY:gpuValidation?'0':'1'});
 // Separate target dirs avoid an unhashed multi-crate-type rlib being reused with
 // a different wgpu feature graph by the independent viewer manifest.
 await run('viewer-tests','cargo',['test','--locked','--manifest-path','native/viewer/Cargo.toml'],{CARGO_TARGET_DIR:viewerTarget});
