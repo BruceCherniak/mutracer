@@ -54,6 +54,15 @@ async function captureAovs() {
     const validObject=Array.from({length:objectMotion.width*objectMotion.height},(_,i)=>i*4).filter(o=>objectMotion.data[o+3]===3);
     check(validObject.length>100,'Rigid motion has no valid history');
     check(validObject.every(o=>Math.abs(objectMotion.data[o]+expected)<.001),'Rigid motion mismatch');
+    mesh.rotation.z+=.1;sync.update();engine.scene=sync.scene;engine.update();
+    await render.converge({samples:4});const rotationMotion=await render.readPixels('motion');let rotationValid=0;
+    for(let y=0;y<32;y++)for(let x=0;x<48;x++){
+      const o=(y*48+x)*4;if(rotationMotion.data[o+3]!==3)continue;
+      const wx=.25+(x+.5-24)*4/focal,wy=(16-y-.5)*4/focal,c=Math.cos(-.1),s=Math.sin(-.1);
+      const px=.25+c*(wx-.25)-s*wy,py=s*(wx-.25)+c*wy;
+      check(Math.abs(rotationMotion.data[o]-((px-.25)*focal/4+24-x-.5))<.001 && Math.abs(rotationMotion.data[o+1]-(16-py*focal/4-y-.5))<.001,'Rigid rotation motion mismatch');rotationValid++;
+    }
+    check(rotationValid>100,'Rigid rotation has no valid history');
     source.geometry.position.array[0]-=.1;source.geometry.markVerticesUpdated();engine.update();
     await render.converge({samples:4});check((await render.readPixels('motion')).data.every((v,i)=>i%4!==3||v===0),'Deformation history must be invalid');
     source.aovId=303;engine.update();await render.converge({samples:4});
@@ -91,7 +100,7 @@ async function captureAovs() {
     }
     check(disoccluded>0,'Far occlusion fixture did not cover disocclusion');
     if (errors.length) throw new Error(errors.join('\n'));
-    return {customCalls,disoccluded,motion:{cameraExpected:expected,cameraValid:validCamera.length,objectValid:validObject.length},hdr: Array.from(after.data), backend: engine.backend, adapter: info.adapterName, hdrIdentical: true, depth: Array.from(depth.data.slice(0,4)), ids: Array.from(ids.data.slice(0,4)), roughness: Array.from(roughness.data.slice(0,4)), pixels: {diffuse:Array.from(diffuse.data),specular:Array.from(specular.data),id: Array.from(ids.data), depth: Array.from(depth.data), position: Array.from(position.data)}};
+    return {customCalls,disoccluded,rotationValid,motion:{cameraExpected:expected,cameraValid:validCamera.length,objectValid:validObject.length},hdr: Array.from(after.data), backend: engine.backend, adapter: info.adapterName, hdrIdentical: true, depth: Array.from(depth.data.slice(0,4)), ids: Array.from(ids.data.slice(0,4)), roughness: Array.from(roughness.data.slice(0,4)), pixels: {diffuse:Array.from(diffuse.data),specular:Array.from(specular.data),id: Array.from(ids.data), depth: Array.from(depth.data), position: Array.from(position.data)}};
   } finally {render.dispose(); engine.dispose(); sync.dispose();}
 }
 Object.assign(window, {captureAovs});

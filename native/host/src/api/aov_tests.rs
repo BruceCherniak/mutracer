@@ -22,11 +22,11 @@ fn aov_options_validate_without_a_device() {
 #[test]
 #[ignore = "requires real GPU"]
 fn independent_surface_aovs_preserve_beauty_and_exact_ids() {
+    independent_surface_aovs(aov_test_backend());
+}
+fn independent_surface_aovs(backend: Backend) {
     let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
-    let engine = Engine::new(EngineOptions {
-        backend: aov_test_backend(),
-    })
-    .unwrap();
+    let engine = Engine::new(EngineOptions { backend }).unwrap();
     let mut descriptor = tests::lit_scene();
     let mut words: Vec<_> = descriptor
         .chunks_exact(4)
@@ -51,6 +51,9 @@ fn independent_surface_aovs_preserve_beauty_and_exact_ids() {
     )
     .unwrap();
     render.converge(ConvergeOptions::new(4)).unwrap();
+    if backend == Backend::Hardware {
+        assert_eq!(render.backend().unwrap().0, Backend::Hardware);
+    }
     let before = render.read_pixels(PixelKind::Hdr).unwrap();
     let mut settings = render.settings().unwrap();
     settings.aovs = 127;
@@ -62,6 +65,8 @@ fn independent_surface_aovs_preserve_beauty_and_exact_ids() {
     assert!(depth.data.iter().all(|v| v.is_finite()));
     assert!(depth.data.chunks_exact(4).any(|v| v[0] > 0. && v[3] > 0.));
     let ids = render.read_pixels(PixelKind::Id).unwrap().id_data.unwrap();
+    assert!(ids.chunks_exact(4).any(|v| v[0] == 102 && v[2] == 203));
+    assert!(ids.chunks_exact(4).all(|v| v[0] == u32::MAX || v[3] < 2));
     assert!(ids.chunks_exact(4).any(|v| v[0] == 101 && v[2] == 202));
     assert!(
         ids.chunks_exact(4)
@@ -114,6 +119,35 @@ fn independent_surface_aovs_preserve_beauty_and_exact_ids() {
         .collect();
     assert!(valid.len() > 40);
     assert!(valid.iter().all(|(m, _)| (m[0] + expected).abs() < 0.001));
+    let mut transform = glam::Mat4::from_rotation_z(0.1).to_cols_array();
+    transform[12] = 0.25;
+    for (i, v) in transform.iter().enumerate() {
+        descriptor[(48 + i) * 4..(49 + i) * 4].copy_from_slice(&v.to_le_bytes());
+    }
+    engine.set_scene(&descriptor).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    let rotated = render.read_pixels(PixelKind::Motion).unwrap();
+    let identity = render.read_pixels(PixelKind::Id).unwrap().id_data.unwrap();
+    let mut count = 0;
+    let focal = 16. / (std::f32::consts::PI / 8.).tan();
+    let (c, s) = (0.1f32.cos(), -0.1f32.sin());
+    for (y, row) in rotated.data.chunks_exact(48 * 4).enumerate() {
+        for (x, m) in row.chunks_exact(4).enumerate() {
+            if m[3] != 3. || identity[(y * 48 + x) * 4] != 101 {
+                continue;
+            }
+            let wx = camera.world_matrix[12] + (x as f32 + 0.5 - 24.) * 4. / focal;
+            let wy = camera.world_matrix[13] + (16. - y as f32 - 0.5) * 4. / focal;
+            let px = 0.25 + c * (wx - 0.25) - s * wy;
+            let py = s * (wx - 0.25) + c * wy;
+            let expected_x = (px - camera.world_matrix[12]) * focal / 4. + 24. - x as f32 - 0.5;
+            let expected_y = 16. - (py - camera.world_matrix[13]) * focal / 4. - y as f32 - 0.5;
+            assert!((m[0] - expected_x).abs() < 0.001 && (m[1] - expected_y).abs() < 0.001);
+            count += 1;
+        }
+    }
+    assert!(count > 40);
     descriptor[192 * 4..193 * 4].copy_from_slice(&(-1.2f32).to_le_bytes());
     engine.set_scene(&descriptor).unwrap();
     engine.update().unwrap();
@@ -315,11 +349,11 @@ impl CustomDenoiser for TemporalFilter {
 #[test]
 #[ignore = "requires real GPU"]
 fn temporal_resident_frames_advance_only_after_acceptance_and_support_rigid_motion() {
+    accepted_temporal_frames(aov_test_backend());
+}
+fn accepted_temporal_frames(backend: Backend) {
     let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
-    let engine = Engine::new(EngineOptions {
-        backend: aov_test_backend(),
-    })
-    .unwrap();
+    let engine = Engine::new(EngineOptions { backend }).unwrap();
     let mut scene = tests::lit_scene();
     engine.display().set_size(16, 12).unwrap();
     engine.set_scene(&scene).unwrap();
@@ -343,6 +377,9 @@ fn temporal_resident_frames_advance_only_after_acceptance_and_support_rigid_moti
         )
         .unwrap();
     render.converge(ConvergeOptions::new(2)).unwrap();
+    if backend == Backend::Hardware {
+        assert_eq!(render.backend().unwrap().0, Backend::Hardware);
+    }
     let mut camera = Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap();
     camera.world_matrix[12] += 0.25;
     engine.set_camera(Some(camera)).unwrap();
@@ -550,4 +587,15 @@ fn aov_test_backend() -> Backend {
     } else {
         Backend::Software
     }
+}
+
+#[test]
+#[ignore = "requires real hardware ray-query GPU"]
+fn hardware_surface_aovs_preserve_beauty_ids_and_motion() {
+    independent_surface_aovs(Backend::Hardware);
+}
+#[test]
+#[ignore = "requires real hardware ray-query GPU"]
+fn hardware_temporal_frames_support_rigid_motion_and_accepted_history() {
+    accepted_temporal_frames(Backend::Hardware);
 }

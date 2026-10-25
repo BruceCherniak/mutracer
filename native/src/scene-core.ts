@@ -1316,7 +1316,14 @@ export function sceneAovParameters(bytes: Uint8Array, token: number): Uint8Array
     if(!state || bytes.byteLength!==136) throw new Error('Invalid AOV request');
     const u=new Uint32Array(bytes.buffer,bytes.byteOffset,2);
     const camera=decodeCamera(bytes.subarray(8));
-    const packed=packAovScene({...state.prepared, instances:state.instances, blases:state.blases},state.tlas,camera,u[0],u[1],new AovHistory());
+    let primitiveIds: Uint32Array | undefined;
+    if(state.hardware){
+      primitiveIds=new Uint32Array(state.prepared.geometry.indexArray.length/3);
+      for(const geometry of state.hardware.geometries){
+        for(let t=0;t<geometry.indexCount/3;t++)primitiveIds[geometry.indexOffset/3+t]=t;
+      }
+    }
+    const packed=packAovScene({...state.prepared, instances:state.instances, blases:state.blases},state.tlas,camera,u[0],u[1],new AovHistory(),primitiveIds);
     const words=packed.words, floats=new Float32Array(words.buffer);
     floats.set(packed.frame.viewProjection);
     for(let i=0;i<packed.frame.instances.length;i++) {

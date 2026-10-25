@@ -25,6 +25,8 @@ export interface AovSceneSource {
 export function aovInstanceOrder(tlas: FlattendBVH): Uint32Array {
   const u = new Uint32Array(tlas.buffer), i = new Int32Array(tlas.buffer);
   const order = new Uint32Array((tlas.instancesBuffer?.byteLength ?? 0) / 160);
+  // Native indexed HWRT stores instances linearly and has no software TLAS.
+  if (!tlas.buffer.byteLength) { for(let i=0;i<order.length;i++)order[i]=i; return order; }
   function visit(node: number) {
     const o = node * 4, count = i[o + 3];
     if (count >= 0) { visit(node + 2); visit(count); }
@@ -34,7 +36,7 @@ export function aovInstanceOrder(tlas: FlattendBVH): Uint32Array {
   return order;
 }
 export function packAovScene(source: AovSceneSource, tlas: FlattendBVH, camera: Camera,
-  width: number, height: number, history: AovHistory): {words: Uint32Array; frame: AovFrameSnapshot} {
+  width: number, height: number, history: AovHistory, primitiveIds?: Uint32Array): {words: Uint32Array; frame: AovFrameSnapshot} {
   const order = aovInstanceOrder(tlas);
   const instances = source.instances;
   const frame: AovFrameSnapshot = {width, height,
@@ -58,7 +60,7 @@ export function packAovScene(source: AovSceneSource, tlas: FlattendBVH, camera: 
   frame.instances = records;
   const materialOffset = 52 + order.length * 24;
   const primitiveOffset = materialOffset + source.materials.length;
-  const primitiveCount = tlas.buffer.byteLength / 16 + source.blases.reduce((n, b) => n + b.bvh.buffer.byteLength / 16, 0);
+  const primitiveCount = primitiveIds?.length ?? tlas.buffer.byteLength / 16 + source.blases.reduce((n, b) => n + b.bvh.buffer.byteLength / 16, 0);
   const words = new Uint32Array(primitiveOffset + primitiveCount), floats = new Float32Array(words.buffer);
   const previous = history.previous(frame);
   if (previous) floats.set(previous.viewProjection);
@@ -92,6 +94,7 @@ export function packAovScene(source: AovSceneSource, tlas: FlattendBVH, camera: 
     materialIds.add(id); words[materialOffset + index] = id;
   });
   words.fill(0xffffffff, primitiveOffset);
+  if(primitiveIds){words.set(primitiveIds,primitiveOffset);return {words,frame};}
   let base = tlas.buffer.byteLength / 16;
   source.blases.forEach((blas, index) => {
     const bvh = new Uint32Array(blas.bvh.buffer), indices = source.geometries[index].indexArray;

@@ -1,3 +1,4 @@
+import {aovInstanceOrder} from '../../src/renderer/aovScene.js';
 import {CommittedScene} from '../../src/renderer/committedScene.js';
 import {SceneChangeDetector} from '../../src/renderer/sceneChangeDetector.js';
 import {describe, expect, it} from 'vitest';
@@ -15,6 +16,9 @@ describe('AOV contract', () => {
     expect(AOV_LAYOUT.centerBytes).toBe(8 * Uint32Array.BYTES_PER_ELEMENT);
     expect([HEADER.MESH_AOV_IDS, HEADER.MATERIAL_AOV_IDS, HEADER.WORDS]).toEqual([24, 25, 32]);
     expect(() => aovMask(['missing' as never])).toThrow();
+  });
+  it('keeps linear hardware instances in source order without a software TLAS', () => {
+    expect(Array.from(aovInstanceOrder({buffer:new ArrayBuffer(0),maxDepth:0,instancesBuffer:new ArrayBuffer(3*160)}))).toEqual([0,1,2]);
   });
   it('allocates distinct IDs across meshes and materials and accepts explicit zero', () => {
     const m = new OpenPBRMaterial();
