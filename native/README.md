@@ -42,7 +42,8 @@ and lifetime. The guides cover workflows and behavior across calls.
 
 Requirements: Node with the project's npm dependencies, stable Rust, a C++20
 compiler and scriptc 0.4.4 from `native/toolchain`. Windows also needs the
-[MSVC toolchain setup](CONTRIBUTING.md#windows).
+[MSVC toolchain setup](CONTRIBUTING.md#windows). Linux shared SDK builds also
+require patchelf.
 
 ```bash
 npm ci

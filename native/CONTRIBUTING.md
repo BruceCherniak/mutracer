@@ -60,7 +60,7 @@ those imports with UCRT and Win32. The installed runtime pack remains unchanged.
 
 ### Linux
 
-Linux builds need a C++20 compiler and the X11/Wayland
+Linux builds need a C++20 compiler, patchelf for the shared SDK, and the X11/Wayland
 development libraries installed by the CI workflow. GPU package checks also
 need `xvfb-run`.
 
@@ -591,9 +591,10 @@ Small, Standard and Clean Aux Large with local weights, checks GPU errors and
 confirms that filtering leaves fixed-seed raw HDR unchanged. It does not replace
 same-input output comparisons between runtimes.
 
-On macOS, the 0.1.1 dependency's Cargo build output propagates its dylib install
-name into downstream cdylibs. `finalize-host-library.mjs` restores MuTracer's
-identity and ad-hoc signature after the host build in the scene/CI drivers.
+On macOS and Linux, the 0.1.1 dependency's Cargo build output propagates its
+install name or ELF SONAME into downstream cdylibs. `finalize-host-library.mjs`
+restores MuTracer's identity after the host build in the scene/CI drivers, using
+install_name_tool plus ad-hoc signing on macOS and patchelf on Linux.
 After a direct Cargo shared-library build, call
 `finalizeHostLibrary(CARGO_TARGET_DIR)` from that module before linking C
 consumers. Rust rlib consumers and the statically linked viewer do not need it.
