@@ -93,7 +93,7 @@ fn mtFrameSurface(si: SurfaceInteraction, material: OpenPbrResolvedMaterial, ray
   // Publication-local scene indices only. A stable cross-publication identity
   // map is required before these can establish rigid/deformation motion.
   mtFramePixels[mtFrameIndex].identity = vec4u(u32(si.instanceIndex), u32(si.triangleIndex), u32(material.thinWalled), flags);
-  mtFramePixels[mtFrameIndex].barycentricsFace = vec4f(si.barycentrics, f32(dot(si.faceNormal, ray.d) < 0.0), 0.0);
+  mtFramePixels[mtFrameIndex].barycentricsFace = vec4f(si.barycentrics, f32(dot(si.faceNormal, ray.d) < 0.0), f32(si.materialIndex));
 }
 `
   };

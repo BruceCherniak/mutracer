@@ -1261,6 +1261,7 @@ impl PreparedState {
         hardware: bool,
         camera: &[u8],
         loss: &crate::device_loss::DeviceLossNotifier,
+        frame_inputs: bool,
     ) -> Result<TargetPacket> {
         if camera.len() != cam::WORDS * WORD_BYTES {
             return Err("Camera descriptor must contain exactly 128 bytes".into());
@@ -1280,7 +1281,7 @@ impl PreparedState {
                 "Invalid render target size, quality or alpha strategy",
             ));
         }
-        let mut input = settings.wire(15)?;
+        let mut input = settings.wire(if frame_inputs { 31 } else { 15 })?;
         let shader = if hardware {
             res::HWRT_SHADER
         } else {

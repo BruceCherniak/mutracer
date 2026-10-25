@@ -2,7 +2,7 @@
 use super::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GlassKind {
+pub enum GlassKind {
     Thin,
     Solid,
     Curved,
@@ -12,7 +12,7 @@ pub(crate) enum GlassKind {
     Dispersion,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GlassMotion {
+pub enum GlassMotion {
     Static,
     Camera,
     Interface,
@@ -21,7 +21,7 @@ pub(crate) enum GlassMotion {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct GlassCapability {
+pub struct GlassCapability {
     pub kind: GlassKind,
     pub motion: GlassMotion,
     pub data_ready: Support,
@@ -29,7 +29,7 @@ pub(crate) struct GlassCapability {
     pub rr_validated: Support,
 }
 #[derive(Clone, Debug, Default)]
-pub(crate) struct GlassCapabilities(pub Vec<GlassCapability>);
+pub struct GlassCapabilities(pub Vec<GlassCapability>);
 impl GlassCapabilities {
     /// Missing categories are unverified, never implicitly rejected or supported.
     pub fn get(&self, kind: GlassKind, motion: GlassMotion) -> GlassCapability {

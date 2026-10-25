@@ -347,6 +347,7 @@ pub(crate) fn set_target(
                 hardware,
                 camera,
                 &loss,
+                false,
             )
             .map_err(rejected)
     }));
@@ -2818,4 +2819,24 @@ pub(crate) fn aov_query(handle: u64) -> Result<crate::aov::Query> {
         }
         None => crate::aov::Query::snapshot(ready(state)?, None),
     }
+}
+
+pub(crate) fn temporal_query(
+    handle: u64,
+) -> Result<(denoiser_inputs::ProducerScene, scene::PreparedState)> {
+    let mut slot = REGISTRY.lock().unwrap();
+    let registry = slot.as_mut().ok_or("No context registry")?;
+    let (state, linked) = with_scene(registry, handle)?;
+    idle(state)?;
+    let scene = match linked {
+        Some(scene) => scene,
+        None => ready(state)?,
+    };
+    Ok((
+        denoiser_inputs::ProducerScene::snapshot(scene),
+        scene
+            .retained
+            .clone()
+            .ok_or("Temporal inputs require a retained scene")?,
+    ))
 }

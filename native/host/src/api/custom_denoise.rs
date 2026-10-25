@@ -1,8 +1,5 @@
 use super::CancelToken;
 
-/// Custom-filter inputs. Cpu mode supplies owned linear RGBA32F images, bottom
-/// row first: raw per-sample averaged color/background and coverage alpha, with
-/// existing L0 guides. ResidentGpu instead supplies `resident` and empty arrays.
 /// One requested AOV in CPU memory, bottom row first. IDs use `id_data`.
 pub struct DenoiseAov {
     pub kind: super::PixelKind,
@@ -15,6 +12,9 @@ pub struct GpuAov {
     pub kind: super::PixelKind,
     pub buffer: wgpu::Buffer,
 }
+/// Custom-filter inputs. Cpu mode supplies owned linear RGBA32F images, bottom
+/// row first: raw per-sample averaged color/background and coverage alpha, with
+/// existing L0 guides. GPU modes supply `resident` and empty arrays.
 pub struct DenoiseInput {
     /// Requested AOV images in Cpu mode; empty in ResidentGpu mode.
     pub aovs: Vec<DenoiseAov>,
@@ -91,9 +91,9 @@ pub trait CustomDenoiser: Send + Sync + 'static {
         0
     }
 
-    /// Default Cpu. ResidentGpu supplies GPU averages of existing accumulation
-    /// guides; it does not opt into temporal sampling or RR-specific inputs.
-    /// Called once per invocation on the worker.
+    /// Default Cpu. ResidentGpu supplies accumulation averages; TemporalGpu also
+    /// supplies an independent one-sample frame through `GpuDenoiseInput::temporal`.
+    /// Called during registration, outside the engine lock; re-register to change mode.
     fn input_mode(&self) -> super::DenoiseInputMode {
         super::DenoiseInputMode::Cpu
     }

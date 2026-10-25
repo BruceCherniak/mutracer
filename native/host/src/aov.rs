@@ -123,37 +123,12 @@ impl Output {
             })
         };
         let current_words = words.to_vec();
-        let mut words = words.to_vec();
-        words[..16].fill(0);
-        if let Some(previous) =
-            previous.filter(|p| p.size == query.size && p.current_words[18] == words[18])
-        {
-            words[..16].copy_from_slice(&previous.current_words[20..36]);
-            let old = &previous.current_words;
-            let mut records = HashMap::new();
-            for offset in (36..old[16] as usize).step_by(24) {
-                records.insert((old[offset], old[offset + 1]), offset);
-            }
-            for offset in (36..words[16] as usize).step_by(24) {
-                if let Some(&prior) = records.get(&(words[offset], words[offset + 1])) {
-                    if words[offset + 20..offset + 23] == old[prior + 20..prior + 23] {
-                        let matrix = glam::Mat4::from_cols_array(&std::array::from_fn(|i| {
-                            f32::from_bits(words[offset + 4 + i])
-                        }));
-                        let before = glam::Mat4::from_cols_array(&std::array::from_fn(|i| {
-                            f32::from_bits(old[prior + 4 + i])
-                        }));
-                        if matrix.determinant().abs() > 1e-20 {
-                            let transform = (before * matrix.inverse()).to_cols_array();
-                            for (i, value) in transform.iter().enumerate() {
-                                words[offset + 4 + i] = value.to_bits();
-                            }
-                            words[offset + 2] = 1;
-                        }
-                    }
-                }
-            }
-        }
+        let words = reproject_metadata(
+            words,
+            previous
+                .filter(|p| p.size == query.size)
+                .map(|p| p.current_words.as_slice()),
+        );
         let previous_center = buffer("Previous AOV center", pixels * 32);
         if let Some(previous) = previous.filter(|p| p.size == query.size) {
             let mut encoder = device.create_command_encoder(&Default::default());
@@ -420,4 +395,39 @@ pub(crate) fn read_denoise_aov(gpu: &GpuDevice, aov: &api::GpuAov) -> Result<api
             .collect();
     }
     Ok(output)
+}
+
+pub(crate) fn reproject_metadata(current: &[u32], previous: Option<&[u32]>) -> Vec<u32> {
+    let mut words = current.to_vec();
+    words[..16].fill(0);
+    if let Some(old) = previous.filter(|p| p.len() >= 36 && p[18] == words[18]) {
+        words[..16].copy_from_slice(&old[20..36]);
+        let mut records = HashMap::new();
+        for offset in (36..old[16] as usize).step_by(24) {
+            records.insert((old[offset], old[offset + 1]), offset);
+        }
+        for offset in (36..words[16] as usize).step_by(24) {
+            if let Some(&prior) = records.get(&(words[offset], words[offset + 1])) {
+                if words[offset + 20..offset + 23] == old[prior + 20..prior + 23] {
+                    let matrix = glam::Mat4::from_cols_array(&std::array::from_fn(|i| {
+                        f32::from_bits(words[offset + 4 + i])
+                    }));
+                    let before = glam::Mat4::from_cols_array(&std::array::from_fn(|i| {
+                        f32::from_bits(old[prior + 4 + i])
+                    }));
+                    if matrix.determinant().abs() > 1e-20 {
+                        for (i, value) in (before * matrix.inverse())
+                            .to_cols_array()
+                            .iter()
+                            .enumerate()
+                        {
+                            words[offset + 4 + i] = value.to_bits();
+                        }
+                        words[offset + 2] = 1;
+                    }
+                }
+            }
+        }
+    }
+    words
 }

@@ -148,3 +148,10 @@ mod lifecycle_tests;
 
 #[cfg(test)]
 mod aov_tests;
+
+mod temporal;
+pub use temporal::{
+    TemporalCamera, TemporalCapabilities, TemporalFrame, TemporalGlassCapabilities, TemporalGuide,
+    TemporalMetadata, TemporalPixelRecord, TemporalProjection, TemporalResetReason,
+    TemporalSupport,
+};

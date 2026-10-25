@@ -11,9 +11,11 @@ mod gpu;
 mod history;
 mod producer;
 
-pub(crate) use glass::*;
+pub use glass::*;
+pub use gpu::Guide;
 pub(crate) use gpu::*;
 pub(crate) use history::*;
+pub use producer::FramePixelRecord;
 pub(crate) use producer::*;
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -47,7 +49,7 @@ pub(crate) struct FrameKey {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ResetReason {
+pub enum ResetReason {
     FirstFrame,
     Explicit,
     CameraCut,
@@ -62,14 +64,14 @@ pub(crate) enum ResetReason {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Projection {
+pub enum Projection {
     Perspective,
     Orthographic,
 }
 
 /// Column-major, unjittered matrices. Native camera clip Z is [-1, 1].
 #[derive(Clone, Debug)]
-pub(crate) struct CameraSnapshot {
+pub struct CameraSnapshot {
     pub view: [f32; 16],
     pub projection: [f32; 16],
     pub view_inverse: [f32; 16],
@@ -119,7 +121,7 @@ impl CameraSnapshot {
 
 /// This describes a separate 1-spp frame, never a difference of accumulations.
 #[derive(Clone, Debug)]
-pub(crate) struct FrameMetadata {
+pub struct FrameMetadata {
     pub scene_revision: u64,
     pub camera_revision: u64,
     pub seed: u32,
@@ -159,14 +161,14 @@ impl FrameMetadata {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum Support {
+pub enum Support {
     Unverified,
     Ready,
     Unsupported(String),
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct InputCapabilities {
+pub struct InputCapabilities {
     pub noisy_color: Support,
     pub normal_roughness: Support,
     pub linear_depth: Support,

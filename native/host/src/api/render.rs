@@ -592,6 +592,7 @@ struct Denoise {
     options: Option<DenoiserOptions>,
     custom: super::custom_denoise::Filter,
     custom_aovs: u32,
+    custom_mode: super::DenoiseInputMode,
     cancel: CancelToken,
     /// Kept across `set_denoiser` calls with the same library and backend.
     filter: Arc<Mutex<Option<crate::denoise::Denoiser>>>,
@@ -611,6 +612,7 @@ pub(super) struct RenderState {
     /// L0 context linked as a target to the engine's shared scene.
     context: u64,
     aov: Option<crate::aov::Output>,
+    temporal: Option<super::temporal::State>,
     aov_camera: [u8; 128],
     published: Option<TargetKey>,
     /// `SharedScene::generation` of the published target.
@@ -767,6 +769,9 @@ impl RenderState {
     }
 }
 fn cancel_denoise(render: &mut RenderState) {
+    if let Some(temporal) = &mut render.temporal {
+        temporal.reject();
+    }
     render.output.invalidate();
     render.denoise.cancel.cancel();
     if let Some(status) = render.denoise.frame_status.take() {
@@ -1543,11 +1548,19 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                 if let DenoisedImage::Cpu(_, Some(status)) = &pixels {
                     status.accept();
                 }
+                if let Some(temporal) = &mut render.temporal {
+                    temporal
+                        .accept()
+                        .map_err(|e| error(Status::Error, e.to_string()))?;
+                }
                 render.output.invalidate();
                 render.denoise.denoised = Some((samples, pixels));
                 render.denoise.last = Some(Instant::now());
             }
             Err(message) => {
+                if let Some(temporal) = &mut render.temporal {
+                    temporal.reject();
+                }
                 render.denoise.failed = true;
                 state.report(message);
             }
@@ -1617,6 +1630,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
     }
     let filter = render.denoise.filter.clone();
     let custom = render.denoise.custom.0.clone();
+    let input_mode = render.denoise.custom_mode;
     let gpu = state.gpu.clone();
     let cancel = CancelToken::new();
     render.denoise.cancel = cancel.clone();
@@ -1653,6 +1667,30 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                 .map_err(|e| error(Status::Error, e.to_string()))?;
             input.retain_buffers();
         }
+        if input_mode == super::DenoiseInputMode::TemporalGpu {
+            let key = render
+                .published
+                .as_ref()
+                .ok_or_else(|| error(Status::InvalidState, "No temporal target"))?;
+            let temporal = render
+                .temporal
+                .get_or_insert_with(|| super::temporal::State::new(&gpu, size));
+            input.temporal = Some(
+                temporal
+                    .produce(super::temporal::Request {
+                        context: render.context,
+                        size,
+                        camera: &render.aov_camera,
+                        settings: &key.settings,
+                        quality: key.quality,
+                        alpha: key.alpha_blend_strategy as u32,
+                        scene_revision: key.scene,
+                        camera_revision: key.camera,
+                    })
+                    .map_err(|e| error(Status::Error, e.to_string()))?,
+            );
+            input.retain_buffers();
+        }
         Some(input)
     } else {
         None
@@ -1673,7 +1711,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                 let status = resident.as_ref().unwrap().status();
                 let expected = resident.as_ref().unwrap().id;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let resident_mode = custom.input_mode() == super::DenoiseInputMode::ResidentGpu;
+                    let resident_mode = input_mode != super::DenoiseInputMode::Cpu;
                     let aovs = if resident_mode {
                         Vec::new()
                     } else {
@@ -1905,6 +1943,7 @@ impl Render {
                 fallback: None,
                 context,
                 aov: None,
+                temporal: None,
                 aov_camera: [0; 128],
                 published: None,
                 generation: 0,
@@ -2097,11 +2136,26 @@ impl Render {
         filter: Option<Arc<dyn super::CustomDenoiser>>,
         schedule: DenoiseSchedule,
     ) -> Result<()> {
-        let requested_aovs = filter.as_ref().map_or(0, |f| f.aovs());
+        let filter = super::custom_denoise::Filter(filter);
+        let (requested_aovs, input_mode) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                (
+                    filter.0.as_ref().map_or(0, |f| f.aovs()),
+                    filter
+                        .0
+                        .as_ref()
+                        .map_or(super::DenoiseInputMode::Cpu, |f| f.input_mode()),
+                )
+            }))
+            .map_err(|_| {
+                error(
+                    Status::InvalidArgument,
+                    "Custom denoiser input declaration panicked",
+                )
+            })?;
         if requested_aovs & !127 != 0 {
             return Err(error(Status::InvalidArgument, "Unknown custom AOV mask"));
         }
-        let filter = super::custom_denoise::Filter(filter);
         self.with(|state, id| {
             let render = state.renders.get_mut(&id).unwrap();
             cancel_denoise(render);
@@ -2116,6 +2170,7 @@ impl Render {
                 }),
                 custom: filter,
                 custom_aovs: requested_aovs,
+                custom_mode: input_mode,
                 ..Default::default()
             };
             Ok(())
@@ -2508,6 +2563,15 @@ impl Render {
                 let key = render.published.clone().unwrap();
                 render.publish(key, false);
                 render.capture_key = None;
+            }
+            Ok(())
+        })
+    }
+    /// Discards temporal filter history at a camera cut; leaves beauty samples intact.
+    pub fn reset_temporal_history(&self) -> Result<()> {
+        self.with(|state, id| {
+            if let Some(temporal) = &mut state.renders.get_mut(&id).unwrap().temporal {
+                temporal.reset();
             }
             Ok(())
         })

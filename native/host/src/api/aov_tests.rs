@@ -245,3 +245,198 @@ fn custom_filters_receive_only_declared_aovs_in_cpu_and_resident_modes() {
         );
     }
 }
+
+struct TemporalFilter {
+    engine: Engine,
+    frames: std::sync::Arc<std::sync::Mutex<Vec<(u32, usize, Vec<TemporalResetReason>)>>>,
+}
+impl CustomDenoiser for TemporalFilter {
+    fn input_mode(&self) -> DenoiseInputMode {
+        DenoiseInputMode::TemporalGpu
+    }
+    fn denoise(
+        &self,
+        mut input: DenoiseInput,
+        _cancel: CancelToken,
+    ) -> std::result::Result<DenoiseOutput, String> {
+        let resident = input.resident.take().unwrap();
+        let frame = resident.temporal.as_ref().unwrap();
+        assert_eq!(frame.metadata().sample_count, 1);
+        assert_eq!(frame.metadata().pre_exposure, 1.);
+        assert_eq!(
+            frame.pixel_records().size(),
+            (input.size[0] * input.size[1] * 240) as u64
+        );
+        assert_eq!(
+            frame.stable_ids().size(),
+            (input.size[0] * input.size[1] * 16) as u64
+        );
+        let validity = super::gpu_output_tests::bytes(
+            &self.engine,
+            frame.guide(TemporalGuide::Validity).unwrap(),
+            4,
+        );
+        let motion = super::gpu_output_tests::bytes(
+            &self.engine,
+            frame.guide(TemporalGuide::Motion).unwrap(),
+            8,
+        );
+        let flags: Vec<_> = validity
+            .chunks_exact(4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .collect();
+        let valid = flags.iter().filter(|f| **f & 2 != 0).count();
+        if frame.metadata().sample_index == 0 {
+            assert_eq!(valid, 0);
+            assert!(frame.previous_metadata().is_none());
+        }
+        let motion_x: Vec<_> = motion
+            .chunks_exact(8)
+            .map(|b| f32::from_le_bytes(b[..4].try_into().unwrap()))
+            .collect();
+        if frame.metadata().sample_index == 1 {
+            assert!(valid > 10);
+            assert!(motion_x.iter().any(|x| *x > 0.5));
+            assert!(frame.previous_metadata().is_some());
+        }
+        if frame.metadata().sample_index == 2 {
+            assert!(valid > 10);
+            assert!(motion_x.iter().any(|x| *x < -0.5));
+        }
+        self.frames.lock().unwrap().push((
+            frame.metadata().sample_index,
+            valid,
+            frame.reset_reasons().to_vec(),
+        ));
+        let output = resident.buffers.color.clone();
+        Ok(DenoiseOutput::Resident(resident.submit([], output)?))
+    }
+}
+#[test]
+#[ignore = "requires real GPU"]
+fn temporal_resident_frames_advance_only_after_acceptance_and_support_rigid_motion() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = Engine::new(EngineOptions {
+        backend: Backend::Software,
+    })
+    .unwrap();
+    let mut scene = tests::lit_scene();
+    engine.display().set_size(16, 12).unwrap();
+    engine.set_scene(&scene).unwrap();
+    engine.update().unwrap();
+    let frames = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    render
+        .set_custom_denoiser(
+            Some(std::sync::Arc::new(TemporalFilter {
+                engine: engine.clone(),
+                frames: frames.clone(),
+            })),
+            DenoiseSchedule::Converged,
+        )
+        .unwrap();
+    render.converge(ConvergeOptions::new(2)).unwrap();
+    let mut camera = Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap();
+    camera.world_matrix[12] += 0.25;
+    engine.set_camera(Some(camera)).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(2)).unwrap();
+    scene[(44 + 4 + 12) * 4..(44 + 4 + 13) * 4].copy_from_slice(&0.25f32.to_le_bytes());
+    engine.set_scene(&scene).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(2)).unwrap();
+    assert_eq!(frames.lock().unwrap().len(), 3);
+    assert!(
+        frames.lock().unwrap()[0]
+            .2
+            .contains(&TemporalResetReason::FirstFrame)
+    );
+    assert!(frames.lock().unwrap()[1].2.is_empty());
+    render.reset_temporal_history().unwrap();
+    render.converge(ConvergeOptions::new(2)).unwrap();
+    assert!(
+        frames.lock().unwrap()[3]
+            .2
+            .contains(&TemporalResetReason::Explicit)
+    );
+}
+
+struct RejectTemporal {
+    calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    resets: std::sync::Arc<std::sync::Mutex<Vec<Vec<TemporalResetReason>>>>,
+}
+impl CustomDenoiser for RejectTemporal {
+    fn input_mode(&self) -> DenoiseInputMode {
+        DenoiseInputMode::TemporalGpu
+    }
+    fn denoise(
+        &self,
+        mut input: DenoiseInput,
+        _: CancelToken,
+    ) -> std::result::Result<DenoiseOutput, String> {
+        let n = self
+            .calls
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let resident = input.resident.take().unwrap();
+        self.resets
+            .lock()
+            .unwrap()
+            .push(resident.temporal.as_ref().unwrap().reset_reasons().to_vec());
+        if n == 1 {
+            return Err("deliberate temporal rejection".into());
+        }
+        let output = resident.buffers.color.clone();
+        Ok(DenoiseOutput::Resident(resident.submit([], output)?))
+    }
+}
+#[test]
+#[ignore = "requires real GPU"]
+fn temporal_rejection_resets_the_next_frame_and_pinhole_limits_are_enforced() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = Engine::new(EngineOptions {
+        backend: Backend::Software,
+    })
+    .unwrap();
+    let scene = tests::lit_scene();
+    engine.display().set_size(16, 12).unwrap();
+    engine.set_scene(&scene).unwrap();
+    engine.update().unwrap();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let resets = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let filter = std::sync::Arc::new(RejectTemporal {
+        calls: calls.clone(),
+        resets: resets.clone(),
+    });
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 2,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    render
+        .set_custom_denoiser(Some(filter.clone()), DenoiseSchedule::Converged)
+        .unwrap();
+    render.converge(ConvergeOptions::new(2)).unwrap();
+    let _ = render.converge(ConvergeOptions::new(2));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 2);
+    render
+        .set_custom_denoiser(Some(filter), DenoiseSchedule::Converged)
+        .unwrap();
+    render.converge(ConvergeOptions::new(2)).unwrap();
+    assert!(resets.lock().unwrap()[2].contains(&TemporalResetReason::ConsumerRejected));
+    let mut camera = Camera::from_bytes(&scene[160 * 4..192 * 4]).unwrap();
+    camera.f_stop = 2.;
+    engine.set_camera(Some(camera)).unwrap();
+    engine.update().unwrap();
+    let failure = render.converge(ConvergeOptions::new(2)).unwrap_err();
+    assert!(failure.message.contains("pinhole"));
+}

@@ -307,7 +307,9 @@ fn first_surface_record_and_resolve_have_matching_layouts() {
 }
 
 pub(super) fn test_gpu(backend: wgpu::Backends) -> Option<GpuDevice> {
-    if cfg!(target_os = "linux") && backend == wgpu::Backends::DX12 {
+    if cfg!(target_os = "macos") && backend != wgpu::Backends::METAL
+        || cfg!(target_os = "linux") && backend == wgpu::Backends::DX12
+    {
         return None;
     }
     let mut descriptor = wgpu::InstanceDescriptor {
