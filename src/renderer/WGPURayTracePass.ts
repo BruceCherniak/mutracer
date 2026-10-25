@@ -1077,7 +1077,8 @@ class WGPURayTracePass {
         {binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'storage'}},
         {binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'storage'}},
         {binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'read-only-storage'}},
-        {binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'uniform'}}
+        {binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'uniform'}},
+        {binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'read-only-storage'}}
       ]});
       const descriptor = {bindGroupLayouts: Array.from({length: groupIndex}, (_, i) => trace.getBindGroupLayout(i)).concat(output)};
       const layout = this._device.createPipelineLayout(textures ? resourceTableLayout(descriptor) : descriptor);
@@ -1099,7 +1100,7 @@ class WGPURayTracePass {
       new Uint32Array(parameters.getMappedRange()).set([state.width, state.height, sample, 0]); parameters.unmap();
       const output = device.createBindGroup({layout: pipeline.getBindGroupLayout(groupIndex), entries: [
         {binding: 5, resource: {buffer: state.accumulation!}}, {binding: 6, resource: {buffer: state.center!}},
-        {binding: 7, resource: {buffer: state.scene!}}, {binding: 8, resource: {buffer: parameters}}
+        {binding: 7, resource: {buffer: state.scene!}}, {binding: 8, resource: {buffer: parameters}}, {binding: 9, resource: {buffer: state.previousCenter!}}
       ]});
       const encoder = device.createCommandEncoder({label: 'AOV'}), pass = encoder.beginComputePass();
       if (textures?.table) setResourceTable(pass, textures.table);

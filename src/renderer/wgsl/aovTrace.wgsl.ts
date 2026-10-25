@@ -11,6 +11,7 @@ struct AovCenter { identity: vec4u, motion: vec4f, }
 @group(3) @binding(5) var<storage, read_write> aovAccum: array<AovAccumulation>;
 @group(3) @binding(6) var<storage, read_write> aovCenter: array<AovCenter>;
 @group(3) @binding(7) var<storage, read> aovScene: array<u32>;
+@group(3) @binding(9) var<storage, read> aovPrevious: array<AovCenter>;
 @group(3) @binding(8) var<uniform> aovParameters: vec4u;
 
 fn aovMatrix(offset: u32) -> mat4x4f {
@@ -67,10 +68,22 @@ fn aovTraceCenter(@builtin(global_invocation_id) id: vec3u) {
   let ray = initCameraRay(uv);
   var si: SurfaceInteraction; var material: OpenPbrResolvedMaterial;
   if (!aovSurface(ray, &si, &material)) { return; }
-  let offset = 20u + u32(si.instanceIndex) * 24u;
+  let offset = 36u + u32(si.instanceIndex) * 24u;
   let materialOffset = aovScene[16u];
   let primitiveOffset = aovScene[17u];
   aovCenter[index].identity = vec4u(aovScene[offset], aovScene[offset+1u],
     aovScene[materialOffset + u32(si.materialIndex)], aovScene[primitiveOffset + u32(si.triangleIndex)]);
+  let clip = aovMatrix(20u) * vec4f(si.position,1.0);
+  aovCenter[index].motion.z = clip.z / clip.w;
+  if (aovScene[offset+2u] == 0u) { return; }
+  let oldClip = aovMatrix(0u) * aovMatrix(offset+4u) * vec4f(si.position,1.0);
+  if (oldClip.w <= 0.0) { return; }
+  let oldNdc=oldClip.xyz/oldClip.w;
+  let oldPixel=(oldNdc.xy*0.5+0.5)*vec2f(size);
+  if (any(oldPixel < vec2f(0.0)) || any(oldPixel >= vec2f(size)) || abs(oldNdc.z)>1.0) { return; }
+  let previous=aovPrevious[u32(oldPixel.x)+u32(oldPixel.y)*size.x];
+  if (any(previous.identity.xy != aovCenter[index].identity.xy) || abs(previous.motion.z-oldNdc.z)>0.001) { return; }
+  let motion=(oldPixel-(vec2f(id.xy)+0.5))*vec2f(1.0,-1.0);
+  aovCenter[index].motion=vec4f(motion,aovCenter[index].motion.z,3.0);
 }
 `;

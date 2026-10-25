@@ -52,13 +52,18 @@ export function packAovScene(source: AovSceneSource, tlas: FlattendBVH, camera: 
       vertices: geometry.version, transform: new Float32Array(readMeshInstance(instances, index).transform)});
   }
   frame.instances = records;
-  const materialOffset = 20 + order.length * 24;
+  const materialOffset = 36 + order.length * 24;
   const primitiveOffset = materialOffset + source.materials.length;
   const primitiveCount = tlas.buffer.byteLength / 16 + source.blases.reduce((n, b) => n + b.bvh.buffer.byteLength / 16, 0);
   const words = new Uint32Array(primitiveOffset + primitiveCount), floats = new Float32Array(words.buffer);
   const previous = history.previous(frame);
   if (previous) floats.set(previous.viewProjection);
   words[16] = materialOffset; words[17] = primitiveOffset;
+  const projection = new Float32Array(Array.from(camera.getProjectionMatrix(width/height)));
+  let projectionHash=2166136261;
+  for (const word of new Uint32Array(projection.buffer)) projectionHash=Math.imul(projectionHash^word,16777619)>>>0;
+  words[18]=projectionHash;
+  floats.set(frame.viewProjection,20);
   const objectIds = new Set<number>();
   for (const binding of source.instanceBindings) {
     const id = validateAovId(binding.mesh.aovId);
@@ -66,7 +71,7 @@ export function packAovScene(source: AovSceneSource, tlas: FlattendBVH, camera: 
     objectIds.add(id);
   }
   records.forEach((record, index) => {
-    const o = 20 + index * 24;
+    const o = 36 + index * 24;
     words[o] = record.object; words[o + 1] = record.instance;
     const old = history.match(frame, record), inverse = mat4.create();
     if (old && mat4.invert(inverse, record.transform)) {

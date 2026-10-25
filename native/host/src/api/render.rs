@@ -1283,7 +1283,7 @@ fn update_aovs(render: &mut RenderState) -> Result<()> {
             .metadata(&render.aov_camera)
             .map_err(|e| error(Status::Error, e.to_string()))?;
         render.aov = Some(
-            crate::aov::Output::new(&query, render.input_generation, &words)
+            crate::aov::Output::new(&query, render.input_generation, &words, render.aov.as_ref())
                 .map_err(|e| error(Status::Error, e.to_string()))?,
         );
     }

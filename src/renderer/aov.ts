@@ -37,17 +37,20 @@ export interface AovFrameSnapshot {
 /** Per-render history; camera pose and rigid transforms may change without resetting. */
 export class AovHistory {
   private frame?: AovFrameSnapshot;
-  clear() { this.frame = undefined; }
+  private instances=new Map<string,AovInstanceSnapshot>();
+  clear() { this.frame = undefined; this.instances.clear(); }
   previous(next: AovFrameSnapshot): AovFrameSnapshot | undefined {
     const old = this.frame;
     return old && old.width === next.width && old.height === next.height && old.projection === next.projection ? old : undefined;
   }
   match(next: AovFrameSnapshot, instance: AovInstanceSnapshot): AovInstanceSnapshot | undefined {
-    const old = this.previous(next)?.instances.find(i => i.object === instance.object && i.instance === instance.instance);
+    const old = this.previous(next) ? this.instances.get(`${instance.object}:${instance.instance}`) : undefined;
     return old && old.topology === instance.topology && old.vertices === instance.vertices ? old : undefined;
   }
   accept(frame: AovFrameSnapshot) {
     this.frame = {...frame, viewProjection: frame.viewProjection.slice(),
       instances: frame.instances.map(i => ({...i, transform: i.transform.slice()}))};
+    this.instances.clear();
+    for (const instance of this.frame.instances) this.instances.set(`${instance.object}:${instance.instance}`,instance);
   }
 }

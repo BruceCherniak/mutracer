@@ -39,13 +39,20 @@ pub(crate) struct Output {
     gpu: GpuDevice,
     accumulated: wgpu::Buffer,
     center: wgpu::Buffer,
+    previous_center: wgpu::Buffer,
+    current_words: Vec<u32>,
     scene: wgpu::Buffer,
     layout: wgpu::BindGroupLayout,
     trace: wgpu::ComputePipeline,
     center_trace: wgpu::ComputePipeline,
 }
 impl Output {
-    pub(crate) fn new(query: &Query, generation: u64, words: &[u32]) -> Result<Self> {
+    pub(crate) fn new(
+        query: &Query,
+        generation: u64,
+        words: &[u32],
+        previous: Option<&Self>,
+    ) -> Result<Self> {
         let device = &query.gpu.device;
         query.gpu.loss.check()?;
         let pixels = u64::from(query.size[0]) * u64::from(query.size[1]);
@@ -63,6 +70,7 @@ impl Output {
                 (6, wgpu::BufferBindingType::Storage { read_only: false }),
                 (7, wgpu::BufferBindingType::Storage { read_only: true }),
                 (8, wgpu::BufferBindingType::Uniform),
+                (9, wgpu::BufferBindingType::Storage { read_only: true }),
             ]
             .map(|(binding, ty)| wgpu::BindGroupLayoutEntry {
                 binding,
@@ -113,6 +121,44 @@ impl Output {
                 mapped_at_creation: false,
             })
         };
+        let current_words = words.to_vec();
+        let mut words = words.to_vec();
+        words[..16].fill(0);
+        if let Some(previous) =
+            previous.filter(|p| p.size == query.size && p.current_words[18] == words[18])
+        {
+            words[..16].copy_from_slice(&previous.current_words[20..36]);
+            let old = &previous.current_words;
+            let mut records = HashMap::new();
+            for offset in (36..old[16] as usize).step_by(24) {
+                records.insert((old[offset], old[offset + 1]), offset);
+            }
+            for offset in (36..words[16] as usize).step_by(24) {
+                if let Some(&prior) = records.get(&(words[offset], words[offset + 1])) {
+                    if words[offset + 20..offset + 23] == old[prior + 20..prior + 23] {
+                        let matrix = glam::Mat4::from_cols_array(&std::array::from_fn(|i| {
+                            f32::from_bits(words[offset + 4 + i])
+                        }));
+                        let before = glam::Mat4::from_cols_array(&std::array::from_fn(|i| {
+                            f32::from_bits(old[prior + 4 + i])
+                        }));
+                        if matrix.determinant().abs() > 1e-20 {
+                            let transform = (before * matrix.inverse()).to_cols_array();
+                            for (i, value) in transform.iter().enumerate() {
+                                words[offset + 4 + i] = value.to_bits();
+                            }
+                            words[offset + 2] = 1;
+                        }
+                    }
+                }
+            }
+        }
+        let previous_center = buffer("Previous AOV center", pixels * 32);
+        if let Some(previous) = previous.filter(|p| p.size == query.size) {
+            let mut encoder = device.create_command_encoder(&Default::default());
+            encoder.copy_buffer_to_buffer(&previous.center, 0, &previous_center, 0, pixels * 32);
+            query.gpu.queue.submit([encoder.finish()]);
+        }
         let bytes: Vec<_> = words.iter().flat_map(|v| v.to_le_bytes()).collect();
         let scene = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("AOV identities/history"),
@@ -121,6 +167,8 @@ impl Output {
         });
         Ok(Self {
             generation,
+            previous_center,
+            current_words,
             samples: 0,
             size: query.size,
             gpu: query.gpu.clone(),
@@ -153,6 +201,7 @@ impl Output {
                     (6, &self.center),
                     (7, &self.scene),
                     (8, &parameters),
+                    (9, &self.previous_center),
                 ]
                 .map(|(binding, buffer)| wgpu::BindGroupEntry {
                     binding,
@@ -220,7 +269,7 @@ impl Output {
                 let o =
                     ((height as usize - 1 - y) * width as usize + x) * if center { 8 } else { 16 };
                 let result = if kind == 10 {
-                    [values[o + 4], values[o + 5], values[o + 6], values[o + 7]]
+                    [values[o + 4], values[o + 5], 0., values[o + 7]]
                 } else {
                     let hits = values[o + 7];
                     let inv = if hits > 0. { 1. / hits } else { 0. };

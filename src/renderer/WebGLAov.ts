@@ -6,15 +6,17 @@ export class WebGLAov {
   readonly history=new AovHistory();
   width=0; height=0; samples=0; centerReady=false; frame?: AovFrameSnapshot;
   readonly accumulation: Record<typeof names[number],Texture2D>[]=[];
+  previousCenter: {id:Texture2D; motion:Texture2D} | undefined;
   center: {id:Texture2D; motion:Texture2D} | undefined;
   scene = new Texture2D({type: 5125, minFilter:9728,magFilter:9728});
   constructor(readonly renderer: WebGLDevice) {}
-  reset(){this.samples=0;this.centerReady=false;this.frame=undefined;}
+  reset(){if(this.centerReady){const swap=this.previousCenter;this.previousCenter=this.center;this.center=swap;}this.samples=0;this.centerReady=false;this.frame=undefined;}
   resize(width:number,height:number){
     if(width===this.width && height===this.height)return;
     this.dispose();this.history.clear();this.reset();this.width=width;this.height=height;
     const options={width,height,type:5126,minFilter:9728,magFilter:9728};
     for(let i=0;i<2;i++)this.accumulation.push(Object.fromEntries(names.map(n=>[n,new Texture2D(options)])) as Record<typeof names[number],Texture2D>);
+    this.previousCenter={id:new Texture2D({...options,type:5125}),motion:new Texture2D(options)};
     this.center={id:new Texture2D({...options,type:5125}),motion:new Texture2D(options)};
   }
   setScene(words:Uint32Array){
@@ -35,7 +37,7 @@ export class WebGLAov {
         return {width,height,data};
       }
       const data=readRgbaPixels(gl,width,height,false);
-      if(kind==='motion')return {width,height,data};
+      if(kind==='motion'){for(let o=2;o<data.length;o+=4)data[o]=0;return {width,height,data};}
       framebuffer.bind(this.renderer,[accumulated.position]);const coverage=readRgbaPixels(gl,width,height,false);
       for(let p=0;p<width*height;p++){
         const o=p*4,hits=coverage[o+3],inv=hits>0?1/hits:0,alpha=hits/Math.max(1,this.samples);
@@ -47,6 +49,6 @@ export class WebGLAov {
       return {width,height,data};
     }finally{framebuffer.dispose(this.renderer);}
   }
-  get bytes(){return this.width*this.height*(2*64+32)+this.scene.width*this.scene.height*16;}
-  dispose(){const gl=this.renderer.gl;for(const set of this.accumulation)for(const texture of Object.values(set))texture.dispose(gl);this.accumulation.length=0;this.center?.id.dispose(gl);this.center?.motion.dispose(gl);this.center=undefined;this.scene.dispose(gl);}
+  get bytes(){return this.width*this.height*(2*64+64)+this.scene.width*this.scene.height*16;}
+  dispose(){const gl=this.renderer.gl;for(const set of this.accumulation)for(const texture of Object.values(set))texture.dispose(gl);this.accumulation.length=0;this.center?.id.dispose(gl);this.center?.motion.dispose(gl);this.center=undefined;this.previousCenter?.id.dispose(gl);this.previousCenter?.motion.dispose(gl);this.previousCenter=undefined;this.scene.dispose(gl);}
 }

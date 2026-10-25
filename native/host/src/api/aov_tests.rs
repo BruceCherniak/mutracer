@@ -75,6 +75,52 @@ fn independent_surface_aovs_preserve_beauty_and_exact_ids() {
             .iter()
             .all(|v| *v == 0.)
     );
+    let mut camera = Camera::from_bytes(&descriptor[160 * 4..192 * 4]).unwrap();
+    camera.world_matrix[12] += 0.25;
+    engine.set_camera(Some(camera)).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    let motion = render.read_pixels(PixelKind::Motion).unwrap();
+    let identity = render.read_pixels(PixelKind::Id).unwrap().id_data.unwrap();
+    let expected = 32. * 0.5 / (std::f32::consts::PI / 8.).tan() * 0.25 / 4.;
+    let valid: Vec<_> = motion
+        .data
+        .chunks_exact(4)
+        .zip(identity.chunks_exact(4))
+        .filter(|(m, id)| m[3] == 3. && id[0] == 101)
+        .collect();
+    assert!(valid.len() > 40);
+    assert!(
+        valid
+            .iter()
+            .all(|(m, _)| (m[0] - expected).abs() < 0.001 && m[1].abs() < 0.001)
+    );
+    descriptor[(44 + 4 + 12) * 4..(44 + 4 + 13) * 4].copy_from_slice(&0.25f32.to_le_bytes());
+    engine.set_scene(&descriptor).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    let motion = render.read_pixels(PixelKind::Motion).unwrap();
+    let identity = render.read_pixels(PixelKind::Id).unwrap().id_data.unwrap();
+    let valid: Vec<_> = motion
+        .data
+        .chunks_exact(4)
+        .zip(identity.chunks_exact(4))
+        .filter(|(m, id)| m[3] == 3. && id[0] == 101)
+        .collect();
+    assert!(valid.len() > 40);
+    assert!(valid.iter().all(|(m, _)| (m[0] + expected).abs() < 0.001));
+    descriptor[192 * 4..193 * 4].copy_from_slice(&(-1.2f32).to_le_bytes());
+    engine.set_scene(&descriptor).unwrap();
+    engine.update().unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    assert!(
+        render
+            .read_pixels(PixelKind::Motion)
+            .unwrap()
+            .data
+            .chunks_exact(4)
+            .all(|v| v[3] == 0.)
+    );
     if let Ok(directory) = std::env::var("MUTRACER_AOV_EVIDENCE") {
         std::fs::create_dir_all(&directory).unwrap();
         std::fs::write(

@@ -14,7 +14,7 @@ async function captureAovs() {
     engine.device?.addEventListener('uncapturederror', event => errors.push((event as GPUUncapturedErrorEvent).error.message));
     await render.converge({samples: 4}); const before = await render.readPixels('hdr');
     const source = sync.scene.meshes[0]; source.aovId = 101; source.materials[0].aovId = 202; engine.update();
-    render.aovs = ['depth', 'position', 'roughness', 'id'];
+    render.aovs = ['depth', 'position', 'roughness', 'id', 'motion'];
     await render.converge({samples: 4}); const after = await render.readPixels('hdr');
     const depth = await render.readPixels('depth'), position = await render.readPixels('position'), ids = await render.readPixels('id'), roughness = await render.readPixels('roughness');
     const check = (ok: boolean, message: string) => {if (!ok) throw new Error(message);};
@@ -23,8 +23,30 @@ async function captureAovs() {
     check(position.data.every((v,i) => i%4 !== 2 || Math.abs(v) < .001), 'Position mismatch');
     check(ids.data.every((v,i) => i%4 === 0 ? v === 101 : i%4 === 2 ? v === 202 : i%4 === 1 ? v === 0 : v < 2), 'ID mismatch');
     check(roughness.data.every((v,i) => i%4 !== 0 || Math.abs(v-.4) < .001), 'Roughness mismatch');
+    const initialMotion=await render.readPixels('motion');check(initialMotion.data.every(v=>v===0),'First motion must be invalid');
+    camera.position.x=.25;camera.updateMatrixWorld();engine.camera=fromTHREECamera(camera);engine.update();
+    await render.converge({samples:4});const cameraMotion=await render.readPixels('motion');
+    const focal=32*.5/Math.tan(Math.PI/8), expected=focal*.25/4;
+    const validCamera=Array.from({length:cameraMotion.width*cameraMotion.height},(_,i)=>i*4).filter(o=>cameraMotion.data[o+3]===3);
+    check(validCamera.length>100,'Camera motion has no valid history');
+    check(validCamera.every(o=>Math.abs(cameraMotion.data[o]-expected)<.001&&Math.abs(cameraMotion.data[o+1])<.001),'Camera motion mismatch');
+    mesh.position.x=.25;sync.update();engine.scene=sync.scene;engine.update();
+    await render.converge({samples:4});const objectMotion=await render.readPixels('motion');
+    const validObject=Array.from({length:objectMotion.width*objectMotion.height},(_,i)=>i*4).filter(o=>objectMotion.data[o+3]===3);
+    check(validObject.length>100,'Rigid motion has no valid history');
+    check(validObject.every(o=>Math.abs(objectMotion.data[o]+expected)<.001),'Rigid motion mismatch');
+    source.geometry.position.array[0]-=.1;source.geometry.markVerticesUpdated();engine.update();
+    await render.converge({samples:4});check((await render.readPixels('motion')).data.every((v,i)=>i%4!==3||v===0),'Deformation history must be invalid');
+    source.aovId=303;engine.update();await render.converge({samples:4});
+    check((await render.readPixels('motion')).data.every((v,i)=>i%4!==3||v===0),'New identity history must be invalid');
+    const ortho=new THREE.OrthographicCamera(-3,3,2,-2,.1,100);ortho.position.z=4;ortho.updateMatrixWorld();
+    engine.camera=fromTHREECamera(ortho);engine.update();await render.converge({samples:4});
+    check((await render.readPixels('motion')).data.every((v,i)=>i%4!==3||v===0),'Projection change history must be invalid');
+    ortho.position.x=.25;ortho.updateMatrixWorld();engine.camera=fromTHREECamera(ortho);engine.update();await render.converge({samples:4});
+    const orthoMotion=await render.readPixels('motion');const orthoValid=Array.from({length:orthoMotion.width*orthoMotion.height},(_,i)=>i*4).filter(o=>orthoMotion.data[o+3]===3);
+    check(orthoValid.length>100&&orthoValid.every(o=>Math.abs(orthoMotion.data[o]-2)<.001),'Orthographic motion mismatch');
     if (errors.length) throw new Error(errors.join('\n'));
-    return {hdr: Array.from(after.data), backend: engine.backend, adapter: info.adapterName, hdrIdentical: true, depth: Array.from(depth.data.slice(0,4)), ids: Array.from(ids.data.slice(0,4)), roughness: Array.from(roughness.data.slice(0,4)), pixels: {id: Array.from(ids.data), depth: Array.from(depth.data), position: Array.from(position.data)}};
+    return {motion:{cameraExpected:expected,cameraValid:validCamera.length,objectValid:validObject.length},hdr: Array.from(after.data), backend: engine.backend, adapter: info.adapterName, hdrIdentical: true, depth: Array.from(depth.data.slice(0,4)), ids: Array.from(ids.data.slice(0,4)), roughness: Array.from(roughness.data.slice(0,4)), pixels: {id: Array.from(ids.data), depth: Array.from(depth.data), position: Array.from(position.data)}};
   } finally {render.dispose(); engine.dispose(); sync.dispose();}
 }
 Object.assign(window, {captureAovs});

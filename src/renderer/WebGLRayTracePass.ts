@@ -1071,7 +1071,7 @@ class WebGLRayTracePass {
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('AOV requires EXT_color_buffer_float');
     this.prepare(); state.resize(width,height);
     if (!state.frame) { const packed=packAovScene(this._preparedMeshData,this._tlas,camera,width,height,state.history); state.frame=packed.frame; state.setScene(packed.words); }
-    this._aovCenter.setUniform('aovScene',state.scene); this._aovPass.setUniform('aovScene',state.scene);
+    this._aovCenter.setUniform('aovScene',state.scene); this._aovCenter.setUniform('previousId',state.previousCenter!.id);this._aovCenter.setUniform('previousMotion',state.previousCenter!.motion); this._aovPass.setUniform('aovScene',state.scene);
     this._aovCenter.setSize(width,height); this._aovPass.setSize(width,height);
     if (!state.centerReady) {this._aovCenter.createPass({},state.center);state.centerReady=true;state.history.accept(state.frame);}
     const target=Math.min(samples,cap);

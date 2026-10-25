@@ -1314,11 +1314,15 @@ export function sceneAovParameters(bytes: Uint8Array, token: number): Uint8Array
     const words=packed.words, floats=new Float32Array(words.buffer);
     floats.set(packed.frame.viewProjection);
     for(let i=0;i<packed.frame.instances.length;i++) {
-      const instance=packed.frame.instances[i],offset=20+i*24;
+      const instance=packed.frame.instances[i],offset=36+i*24;
       floats.set(instance.transform,offset+4);
-      words[offset+20]=instance.topology % 4294967296;
-      words[offset+21]=instance.vertices;
-      words[offset+22]=Math.floor(instance.topology/4294967296);
+      // Content revisions survive full publications and detect vertex edits.
+      const mesh=state.meshes.find(mesh=>mesh.aovId===instance.object)!;
+      let topology=2166136261, vertices=2166136261;
+      for(const value of mesh.geometry.indexArray) topology=Math.imul(topology^value,16777619)>>>0;
+      const position=new Float32Array(mesh.geometry.position.array);
+      for(const value of new Uint32Array(position.buffer)) vertices=Math.imul(vertices^value,16777619)>>>0;
+      words[offset+20]=topology; words[offset+21]=vertices; words[offset+22]=position.length;
     }
     const result=new Uint32Array(4+words.length);result.set([1,words.length,0,0]);result.set(words,4);
     return new Uint8Array(result.buffer);

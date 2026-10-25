@@ -34,6 +34,7 @@ export function aovTraceFragment(center: boolean) {
     uniforms: {viewProjectionInv: Shader.uniform('mat4'), viewInv: Shader.uniform('mat4'),
       cameraApertureRadius: Shader.uniform('float',0), cameraFocusDistance: Shader.uniform('float',10),
       viewportSize: Shader.uniform('vec2'), aovScene: Shader.uniform('usampler2D'),
+      previousId: Shader.uniform('usampler2D'), previousMotion: Shader.uniform('sampler2D'),
       previousGeometry: Shader.uniform('sampler2D'), previousPosition: Shader.uniform('sampler2D'),
       previousDiffuse: Shader.uniform('sampler2D'), previousSpecular: Shader.uniform('sampler2D'),
       aovSample: Shader.uniform('int',0)},
@@ -53,8 +54,17 @@ void main() {
   Ray ray=aovRay(v_Texcoord);
   SurfaceInteraction si; OpenPbrResolvedMaterial material;
   if(!aovSurface(ray,si,material)) return;
-  int offset=20+si.instanceIndex*24;
+  int offset=36+si.instanceIndex*24;
   out_id=uvec4(aovWord(offset),aovWord(offset+1),aovWord(int(aovWord(16))+si.materialIndex),aovWord(int(aovWord(17))+si.triangleIndex));
+  vec4 clip=aovMatrix(20)*vec4(si.position,1.0);out_motion.z=clip.z/clip.w;
+  if(aovWord(offset+2)==0u)return;
+  vec4 oldClip=aovMatrix(0)*aovMatrix(offset+4)*vec4(si.position,1.0);
+  if(oldClip.w<=0.0)return;
+  vec3 oldNdc=oldClip.xyz/oldClip.w;vec2 oldPixel=(oldNdc.xy*0.5+0.5)*viewportSize;
+  if(any(lessThan(oldPixel,vec2(0.0)))||any(greaterThanEqual(oldPixel,viewportSize))||abs(oldNdc.z)>1.0)return;
+  uvec4 identity=texelFetch(previousId,ivec2(oldPixel),0);float oldDepth=texelFetch(previousMotion,ivec2(oldPixel),0).z;
+  if(any(notEqual(identity.xy,out_id.xy))||abs(oldDepth-oldNdc.z)>0.001)return;
+  out_motion=vec4((oldPixel-gl_FragCoord.xy)*vec2(1.0,-1.0),out_motion.z,3.0);
   ` : /* glsl */ `
   ivec2 coord=ivec2(gl_FragCoord.xy);
   out_geometry=aovSample==0 ? vec4(0.0) : texelFetch(previousGeometry,coord,0);
