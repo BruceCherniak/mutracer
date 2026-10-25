@@ -102,6 +102,7 @@ need `xvfb-run`.
 | `MUTRACER_TEST_OIDN_CUDA`, `_HIP`, `_NO_GPU` | [OIDN backend requirements](#oidn) |
 | `MUTRACER_KERNEL_FIXTURES` | [Native kernel](#shared-source-and-typed-resources) byte comparisons |
 | `MUTRACER_NATIVE_PROFILE=1` | [Preparation profile](#performance) on stderr |
+| `MUTRACER_GLTF_EVIDENCE` | glTF material fixture and native values for `validation/gltf-material-reference.mjs` |
 | `MUTRACER_ANIMATION_EVIDENCE` | Animation test fixtures, poses, images and report |
 | `MUTRACER_TEST_VULKAN_LIBRARY` | Optional Vulkan driver/loader library for the interop GPU test |
 | `MUTRACER_VIEWER_METRICS` | [Real-window viewer metrics](#viewer) |
@@ -622,3 +623,15 @@ render resize, and exercises native plus Rust display passes, failure rollback
 and retirement notifications. A portability-driver pass does not validate
 Linux/Windows drivers or Vulkan HWRT. C callers also need their Vulkan SDK headers
 when including `mutracer-vulkan.h`; the ordinary headers do not require them.
+
+## glTF material comparison
+
+Set `MUTRACER_GLTF_EVIDENCE` outside the checkout and run the host CPU test
+`gltf_browser_reference_fixture`. After `npm run build:lib`, run
+`node native/validation/gltf-material-reference.mjs EVIDENCE_DIRECTORY` to compare
+24 scalar/color fields and ten texture bindings with GLTFLoader/THREESync.
+Node substitutes decoded pixels for the two known 1×1 PNGs; it still uses the
+actual loader extension handlers and browser material conversion. The comparison
+records the deliberate volume thin-wall difference separately. Run the ignored
+`gltf_layers_render_and_retained_texture_edit_match_full` test on a real GPU to
+compare HDR, normal and albedo after extension texture edits with full preparation.

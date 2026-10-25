@@ -61,7 +61,7 @@ impl Model {
             },
         };
         encoder::SceneData {
-            properties: &[],
+            properties: &self.properties,
             geometries: &self.geometries,
             materials: &self.materials,
             textures: &self.textures,

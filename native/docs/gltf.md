@@ -39,16 +39,24 @@ available until the import returns.
   unsupported.
 - Animation: node translation, rotation and scale, skeletal motion and morph
   weights, with STEP, LINEAR and CUBICSPLINE interpolation.
-- Materials: core metallic/roughness PBR, scalar transmission and IOR, unlit
-  materials and emissive strength.
+- Materials: core metallic/roughness PBR, IOR, transmission, emissive strength,
+  unlit, clearcoat, sheen, specular, volume, iridescence, anisotropy and dispersion.
+  Layer textures include clearcoat weight/roughness/normal, sheen color/roughness,
+  specular weight/color, transmission, iridescence thickness and anisotropy.
 - Textures: repeat, clamp-to-edge and mirrored-repeat per axis, and offset/scale
   UV transforms.
 
+Volume uses the geometry's actual thickness; `thicknessFactor` selects solid
+or thin-walled surfaces, and the baked `thicknessTexture` is unused. Iridescence
+IOR is limited to 2.5, film thickness to 20 μm, and dispersion to 1. Specular
+controls are exact for fully dielectric materials; mixed metal/dielectric
+surfaces use the same approximation as the browser conversion.
+
 Ignored: model cameras and lights; camera, light and material animation; vertex
-alpha; occlusion and transmission textures (transmission maps can be assigned
-after import); texture rotation; UV transforms on normal maps. Unsupported
-optional extensions produce Rust warnings (C ignores them); unsupported required
-extensions fail the import.
+alpha; occlusion textures; texture rotation; iridescence strength textures (the
+scalar factor still applies). Normal maps support offset, scale and UV-set
+selection. Unsupported optional extensions produce Rust warnings (C ignores
+them); unsupported required extensions fail the import.
 
 ## Errors and limits
 

@@ -82,12 +82,30 @@ impl Scene {
                     maps[slot] = Some(*textures.get(*id as usize).ok_or_else(invalid_handle)?);
                 }
             }
-            materials.push(scene.add_material(OpenPbrMaterial {
+            let mut material = OpenPbrMaterial {
                 values: m.clone(),
                 textures: maps,
-                properties: data.properties.get(i).cloned().unwrap_or_default(),
+                properties: BTreeMap::new(),
                 texture_properties: BTreeMap::new(),
-            })?);
+            };
+            for (&id, &value) in data.properties.get(i).into_iter().flatten() {
+                if crate::material_properties::MATERIAL_PROPERTIES
+                    .get(id as usize)
+                    .is_some_and(|p| p.0 == 5)
+                {
+                    material.set_texture(
+                        id,
+                        if value[0] == u32::MAX {
+                            None
+                        } else {
+                            Some(*textures.get(value[0] as usize).ok_or_else(invalid_handle)?)
+                        },
+                    )?;
+                } else {
+                    material.properties.insert(id, value);
+                }
+            }
+            materials.push(scene.add_material(material)?);
         }
         let mut geometries = Vec::new();
         for g in data.geometries {

@@ -2,6 +2,27 @@
 #[cfg_attr(not(feature = "viewer-support"), allow(dead_code))]
 mod animation;
 mod decode;
+#[cfg(test)]
+mod material_tests;
+mod materials;
+const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "KHR_materials_ior",
+    "KHR_materials_transmission",
+    "KHR_materials_emissive_strength",
+    "KHR_materials_unlit",
+    "KHR_materials_clearcoat",
+    "KHR_materials_sheen",
+    "KHR_materials_specular",
+    "KHR_materials_volume",
+    "KHR_materials_iridescence",
+    "KHR_materials_anisotropy",
+    "KHR_materials_dispersion",
+    "KHR_texture_transform",
+    "EXT_meshopt_compression",
+    "KHR_mesh_quantization",
+    "EXT_texture_webp",
+    "EXT_mesh_gpu_instancing",
+];
 #[cfg_attr(not(feature = "viewer-support"), allow(dead_code))]
 mod model;
 use super::*;
@@ -67,7 +88,7 @@ fn import(model: Model) -> anyhow::Result<ImportedScene> {
     };
     let scene = Scene::from_indexed(
         &encoder::SceneData {
-            properties: &[],
+            properties: &model.properties,
             geometries: &model.geometries,
             materials: &model.materials,
             textures: &model.textures,

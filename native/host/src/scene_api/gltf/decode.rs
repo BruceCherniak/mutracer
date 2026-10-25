@@ -12,6 +12,7 @@ type Import = (
     Vec<gltf::buffer::Data>,
     Vec<gltf::image::Data>,
     bool,
+    Vec<Value>,
 );
 const MAX_BUFFER: usize = 512 * 1024 * 1024;
 /// Texture pixels shared by all material textures: the descriptor allows 16M and
@@ -172,20 +173,9 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
     } else {
         (serde_json::from_slice(&bytes)?, None)
     };
-    let supported = [
-        "EXT_meshopt_compression",
-        "KHR_mesh_quantization",
-        "EXT_texture_webp",
-        "EXT_mesh_gpu_instancing",
-        "KHR_materials_ior",
-        "KHR_materials_transmission",
-        "KHR_materials_emissive_strength",
-        "KHR_materials_unlit",
-        "KHR_texture_transform",
-    ];
     for e in j["extensionsRequired"].as_array().into_iter().flatten() {
         ensure!(
-            supported.contains(&e.as_str().unwrap_or("")),
+            super::SUPPORTED_EXTENSIONS.contains(&e.as_str().unwrap_or("")),
             "Required glTF extension is unsupported: {e}"
         );
     }
@@ -347,15 +337,16 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
         .and_then(Value::as_array_mut)
     {
         required.retain(|e| {
-            !matches!(
-                e.as_str(),
-                Some(
-                    "EXT_meshopt_compression"
-                        | "KHR_mesh_quantization"
-                        | "EXT_texture_webp"
-                        | "EXT_mesh_gpu_instancing"
+            !super::materials::EXTENSIONS.contains(&e.as_str().unwrap_or(""))
+                && !matches!(
+                    e.as_str(),
+                    Some(
+                        "EXT_meshopt_compression"
+                            | "KHR_mesh_quantization"
+                            | "EXT_texture_webp"
+                            | "EXT_mesh_gpu_instancing"
+                    )
                 )
-            )
         });
     }
     let root = serde_json::from_value(j.clone()).context("Parsing decoded glTF")?;
@@ -394,7 +385,13 @@ pub fn load_bytes(bytes: &[u8], path: Option<&Path>) -> Result<Import> {
             pixels: rgba.into_raw(),
         });
     }
-    Ok((document, buffers, images, resized))
+    Ok((
+        document,
+        buffers,
+        images,
+        resized,
+        j["materials"].as_array().cloned().unwrap_or_default(),
+    ))
 }
 
 #[cfg(test)]
@@ -500,7 +497,7 @@ pub(super) mod tests {
             }),
             &bytes,
         );
-        let (_, _, images, _) = load_bytes(&std::fs::read(&path).unwrap(), Some(&path)).unwrap();
+        let (_, _, images, _, _) = load_bytes(&std::fs::read(&path).unwrap(), Some(&path)).unwrap();
         assert_eq!(images[0].pixels, [255, 10, 0, 255]);
         let model = crate::scene_api::gltf::Model::load(&path).unwrap();
         assert_eq!(
@@ -534,7 +531,7 @@ pub(super) mod tests {
             }),
             &bytes,
         );
-        let (_, _, images, resized) =
+        let (_, _, images, resized, _) =
             load_bytes(&std::fs::read(&path).unwrap(), Some(&path)).unwrap();
         std::fs::remove_file(path).unwrap();
         (

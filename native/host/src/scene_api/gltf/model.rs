@@ -2,14 +2,24 @@
 use crate::scene_api::encoder::{Geometry, Material, MaterialLayers, Mesh, Texture};
 use anyhow::{Context, Result, bail, ensure};
 use glam::{Mat4, Vec3};
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{
+    collections::{BTreeMap, HashMap},
+    path::Path,
+    sync::Arc,
+};
 
+pub(super) fn texture_property(id: u32) -> bool {
+    crate::material_properties::MATERIAL_PROPERTIES
+        .get(id as usize)
+        .is_some_and(|p| p.0 == 5)
+}
 const TEXTURE_BUDGET_WARNING: &str =
     "Material textures were reduced to share the 12M-pixel texture budget.";
 #[derive(Clone)]
 pub struct Model {
     pub name: String,
     pub materials: Vec<Material>,
+    pub properties: Vec<BTreeMap<u32, [u32; 3]>>,
     pub textures: Arc<Vec<Texture>>,
     pub geometries: Arc<Vec<Geometry>>,
     pub picking: Arc<Vec<Arc<crate::picking::PickBvh>>>,
@@ -35,30 +45,14 @@ impl Model {
             bytes.len() <= 128 * 1024 * 1024,
             "Model file exceeds 128 MiB"
         );
-        let (document, buffers, images, resized) = super::decode::load_bytes(bytes, path)
-            .context("Loading GLTF/GLB and its buffers/images")?;
+        let (document, buffers, images, resized, raw_materials) =
+            super::decode::load_bytes(bytes, path)
+                .context("Loading GLTF/GLB and its buffers/images")?;
         let path = path.unwrap_or(Path::new("memory.glb"));
         ensure!(
             buffers.iter().map(|b| b.len()).sum::<usize>() <= 512 * 1024 * 1024,
             "Model buffers exceed 512 MiB"
         );
-        let known = [
-            "KHR_materials_ior",
-            "KHR_materials_transmission",
-            "KHR_materials_emissive_strength",
-            "KHR_materials_unlit",
-            "KHR_texture_transform",
-            "EXT_meshopt_compression",
-            "KHR_mesh_quantization",
-            "EXT_texture_webp",
-            "EXT_mesh_gpu_instancing",
-        ];
-        for extension in document.extensions_required() {
-            ensure!(
-                known.contains(&extension),
-                "Required glTF extension is unsupported: {extension}"
-            );
-        }
         let mut model = Self {
             name: path
                 .file_name()
@@ -66,6 +60,7 @@ impl Model {
                 .to_string_lossy()
                 .into(),
             materials: vec![],
+            properties: vec![],
             textures: Arc::new(vec![]),
             geometries: Arc::new(vec![]),
             picking: Arc::new(vec![]),
@@ -81,13 +76,17 @@ impl Model {
         if resized {
             model.warnings.push(TEXTURE_BUDGET_WARNING.into());
         }
-        for extension in document.extensions_used().filter(|e| !known.contains(e)) {
+        for extension in document
+            .extensions_used()
+            .filter(|e| !super::SUPPORTED_EXTENSIONS.contains(e))
+        {
             model.warnings.push(format!(
                 "Unsupported optional extension is ignored: {extension}"
             ));
         }
         let rgba: Vec<Vec<u8>> = images.iter().map(image_rgba).collect::<Result<_>>()?;
         for material in document.materials() {
+            let raw = &raw_materials[material.index().unwrap()];
             let pbr = material.pbr_metallic_roughness();
             let base = pbr.base_color_factor();
             let mut maps = [u32::MAX; 9];
@@ -101,8 +100,8 @@ impl Model {
                     &rgba,
                 )?;
             }
-            if let Some(info) = material.normal_texture() {
-                maps[1] = model.add_map(info.texture(), info.tex_coord(), None, &images, &rgba)?;
+            if material.normal_texture().is_some() {
+                maps[1] = model.add_json_map(&raw["normalTexture"], &document, &images, &rgba)?;
             }
             if let Some(info) = pbr.metallic_roughness_texture() {
                 maps[2] = model.add_map(
@@ -129,16 +128,7 @@ impl Model {
                     .warnings
                     .push("Occlusion textures are ignored by this path-traced example.".into());
             }
-            if material
-                .transmission()
-                .and_then(|t| t.transmission_texture())
-                .is_some()
-            {
-                model
-                    .warnings
-                    .push("Transmission textures are ignored; using the scalar factor.".into());
-            }
-            model.materials.push(Material {
+            let mut converted = Material {
                 name: material.name().map(str::to_owned).unwrap_or_else(|| {
                     format!(
                         "Material {}",
@@ -174,8 +164,19 @@ impl Model {
                 normal_scale: material.normal_texture().map(|t| t.scale()).unwrap_or(1.),
                 unlit: material.unlit(),
                 layers: MaterialLayers::default(),
-            });
+            };
+            let properties = super::materials::apply(
+                &mut model,
+                &mut converted,
+                raw,
+                &document,
+                &images,
+                &rgba,
+            )?;
+            model.materials.push(converted);
+            model.properties.push(properties);
         }
+        model.properties.push(BTreeMap::new());
         model.materials.push(Material {
             name: "Default".into(),
             color: [1.; 3],
@@ -256,7 +257,7 @@ impl Model {
             "Invalid or degenerate model bounds"
         );
         for mesh in &model.meshes {
-            for id in model.materials[mesh.material].maps {
+            for id in model.texture_ids(mesh.material) {
                 if id != u32::MAX {
                     ensure!(
                         !model.geometries[mesh.geometry].uv
@@ -396,14 +397,19 @@ impl Model {
             }
         }
         self.materials = candidate.materials;
+        self.properties = candidate.properties;
         self.textures = candidate.textures;
         Ok(())
     }
     fn compact_textures(&mut self) {
         let mut ids = vec![u32::MAX; self.textures.len()];
         let mut textures = Vec::new();
-        for material in &mut self.materials {
-            for id in &mut material.maps {
+        for (i, material) in self.materials.iter_mut().enumerate() {
+            let extensions = self.properties[i]
+                .iter_mut()
+                .filter(|(id, _)| texture_property(**id))
+                .map(|(_, value)| &mut value[0]);
+            for id in material.maps.iter_mut().chain(extensions) {
                 if *id == u32::MAX {
                     continue;
                 }
@@ -416,6 +422,14 @@ impl Model {
             }
         }
         self.textures = Arc::new(textures);
+    }
+    fn texture_ids(&self, material: usize) -> impl Iterator<Item = u32> + '_ {
+        self.materials[material].maps.into_iter().chain(
+            self.properties[material]
+                .iter()
+                .filter(|(id, _)| texture_property(**id))
+                .map(|(_, v)| v[0]),
+        )
     }
     pub fn set_texture_sampling(
         &mut self,
@@ -441,7 +455,8 @@ impl Model {
         let shared = self
             .materials
             .iter()
-            .flat_map(|m| m.maps)
+            .enumerate()
+            .flat_map(|(i, _)| self.texture_ids(i))
             .filter(|map| *map == id)
             .count()
             > 1;
@@ -464,7 +479,7 @@ impl Model {
         texture.scale = scale;
         Ok(true)
     }
-    fn add_map(
+    pub(super) fn add_map(
         &mut self,
         texture: gltf::Texture<'_>,
         uv: u32,
@@ -502,6 +517,10 @@ impl Model {
         }) {
             return Ok(id as u32);
         }
+        ensure!(
+            self.textures.len() < 255,
+            "Material texture count exceeds 255"
+        );
         let id = self.textures.len() as u32;
         // Decoding shares the budget among source images; copies of one image
         // with different sampling can still exceed it.
