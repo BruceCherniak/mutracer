@@ -64,6 +64,9 @@ impl Output {
             ));
         }
         let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        // Driver pipeline failures are internal errors, outside validation's
+        // scope. Return them to the render without an uncaptured-error panic.
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("AOV output"),
             entries: &[
@@ -109,7 +112,12 @@ impl Output {
         };
         let trace = pipeline("aovTrace");
         let center_trace = pipeline("aovTraceCenter");
-        if let Some(error) = pollster::block_on(validation.pop()) {
+        let internal_error = pollster::block_on(internal.pop());
+        let validation_error = pollster::block_on(validation.pop());
+        if let Some(error) = internal_error {
+            return Err(format!("AOV pipeline creation failed: {error}").into());
+        }
+        if let Some(error) = validation_error {
             return Err(error.to_string().into());
         }
         let buffer = |label, size| {

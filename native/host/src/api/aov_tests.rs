@@ -1031,3 +1031,52 @@ fn unsupported_reflectance_layers_report_invalid_coverage() {
         println!("reflectance layer {name}: coverage and validity verified");
     }
 }
+
+#[test]
+#[ignore = "requires a real GPU; optional driver pipeline-error reproduction"]
+fn aov_pipeline_failure_returns_an_error_and_preserves_beauty() {
+    let _guard = crate::ABI_TEST_LOCK.lock().unwrap();
+    let engine = aov_engine(Backend::Software);
+    engine.display().set_size(48, 32).unwrap();
+    engine.set_scene(&tests::lit_scene()).unwrap();
+    engine.update().unwrap();
+    let render = Render::new(
+        &engine,
+        RenderSettings {
+            max_samples: 4,
+            bounces: 1,
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    let before = render.read_pixels(PixelKind::Hdr).unwrap().data;
+    let mut settings = render.settings().unwrap();
+    settings.aovs = 127;
+    render.set_settings(settings.clone()).unwrap();
+    let result = render.converge(ConvergeOptions::new(4));
+    if std::env::var_os("MUTRACER_TEST_REQUIRE_AOV_PIPELINE_ERROR").is_some() {
+        let error = result.unwrap_err();
+        assert_eq!(error.status, Status::Error);
+        assert!(
+            error.message.contains("AOV pipeline creation failed"),
+            "{error}"
+        );
+        println!("Driver rejected AOV pipeline without a panic: {error}");
+    } else {
+        result.unwrap();
+        assert!(
+            render
+                .read_pixels(PixelKind::DiffuseAlbedo)
+                .unwrap()
+                .data
+                .iter()
+                .all(|v| v.is_finite())
+        );
+    }
+    settings.aovs = 0;
+    render.set_settings(settings).unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    assert_eq!(before, render.read_pixels(PixelKind::Hdr).unwrap().data);
+    println!("Beauty remains byte-identical and usable after the AOV pipeline attempt");
+}
