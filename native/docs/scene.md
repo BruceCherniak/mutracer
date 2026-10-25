@@ -79,6 +79,37 @@ but cannot see shader-variant and atlas requirements; `mt_render_info` reports
 the actual one. Comparison scans the scene, so edit cost grows with scene size.
 Keep one Scene and edit it in place to reuse its encoding storage.
 
+## Pick scene objects
+
+Create a CPU snapshot with `Scene::picker()` / `mt_scene_picker_create`, then
+query a world-space ray with `raycast` / `mt_scene_picker_raycast`. Results
+identify the mesh, local instance, material and original triangle, with world
+position, distance, geometric normal and barycentric coordinates. No engine or
+GPU is needed.
+
+```rust
+let picker = scene.picker()?;
+let hit = picker.raycast(
+    mutracer_native_probe::scene_api::Ray {
+        origin: [0., 0., 3.],
+        direction: [0., 0., -1.],
+    },
+    Default::default(),
+)?;
+```
+
+Snapshot construction time and additional CPU memory grow with triangle and
+instance counts. Reuse a snapshot for repeated queries, including from several
+threads. Recreate it after geometry, mesh, instance or material-table edits.
+Snapshots outlive the source scene; returned handles describe that snapshot and
+may no longer be valid in an edited or destroyed source scene.
+
+Picking intersects both faces of the original triangles. Alpha masks,
+transparency, displacement, bevel and other shading do not affect the hit, so
+it can differ from the visible rendered surface. For screen clicks, the host
+converts its camera and viewport coordinates into a world ray. Large coordinates
+and extreme scales remain limited by Float32 geometry and intersection precision.
+
 ## Supported inputs
 
 - Indexed triangles with optional normals, tangents, two UV sets, vertex colors

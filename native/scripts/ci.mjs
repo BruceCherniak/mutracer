@@ -69,6 +69,8 @@ if(gpuValidation){
 }
 await run('host-tests','cargo',['test','--locked','--manifest-path','native/host/Cargo.toml','--','--test-threads=1'],
  {MUTRACER_TEST_CPU_ONLY:gpuValidation?'0':'1'});
+await run('scene-picking',process.execPath,['native/validation/scene-picking.mjs'],
+ {CARGO_TARGET_DIR:hostTarget,MUTRACER_NATIVE_OUTPUT:resolve(out,'picking')});
 // Separate target dirs avoid an unhashed multi-crate-type rlib being reused with
 // a different wgpu feature graph by the independent viewer manifest.
 await run('viewer-tests','cargo',['test','--locked','--manifest-path','native/viewer/Cargo.toml'],{CARGO_TARGET_DIR:viewerTarget});

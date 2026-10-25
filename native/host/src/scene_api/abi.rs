@@ -111,7 +111,7 @@ pub struct EnvironmentSettingsDesc {
     background_intensity: f32,
     background_rotation: f32,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Resource {
     Geometry(GeometryId),
     Material(MaterialId),
@@ -197,6 +197,8 @@ unsafe fn text<'a>(p: *const c_char) -> Result<&'a str> {
         .map_err(|_| invalid("Expected UTF-8"))
 }
 macro_rules! defaults {($($fn:ident,$ty:ty,$value:expr);*$(;)?)=>{$(#[unsafe(no_mangle)]pub unsafe extern "C" fn $fn(out:*mut $ty)->i32 {call(std::ptr::null_mut(),0,||unsafe{output(out,$value)})})*};}
+#[path = "abi_picking.rs"]
+mod picking;
 defaults! {
  mt_scene_geometry_desc_default,GeometryDesc,GeometryDesc{struct_size:size_of::<GeometryDesc>() as u32,vertex_count:0,index_count:0,reserved:0,positions:std::ptr::null(),indices:std::ptr::null(),normals:std::ptr::null(),uv:std::ptr::null(),uv1:std::ptr::null(),colors:std::ptr::null(),tangents:std::ptr::null(),material_indices:std::ptr::null()};
  mt_scene_material_desc_default,MaterialDesc,MaterialDesc{struct_size:80,double_sided:0,color:[0.8;3],roughness:0.3,metalness:0.,opacity:1.,transmission:0.,ior:1.5,emission:[1.;3],emission_strength:0.,thin_walled:0,alpha_mode:0,alpha_cutoff:0.5,normal_scale:1.,unlit:0,reserved:0};

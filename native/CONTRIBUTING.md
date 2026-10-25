@@ -68,7 +68,7 @@ need `xvfb-run`.
 
 | Command | GPU | Checks |
 | --- | --- | --- |
-| `npm run native:ci` | No | Rust CPU suites, AOT module/storage contracts and `native:scene:static` |
+| `npm run native:ci` | No | Rust CPU suites, C picking consumer, AOT module/storage contracts and `native:scene:static` |
 | `npm run native:ci:gpu` | Yes, with ray queries | `native:ci` plus GPU tests and packaged-app checks; run before a native release |
 | `npm run native:ci:hosts` | Yes, with ray queries | `native:ci:gpu` plus the C hosts at 8 samples |
 | `npm run native:scene` | Yes | Builds the AOT archive and library; verifies preparation and rendering on 33 fixtures |
@@ -635,3 +635,13 @@ actual loader extension handlers and browser material conversion. The comparison
 records the deliberate volume thin-wall difference separately. Run the ignored
 `gltf_layers_render_and_retained_texture_edit_match_full` test on a real GPU to
 compare HDR, normal and albedo after extension texture edits with full preparation.
+
+## Scene picking consumer
+
+`native:ci` builds and runs `native/examples/scene-picking.c` without a GPU. For a
+direct rerun, set `CARGO_TARGET_DIR` to the built host target and
+`MUTRACER_NATIVE_OUTPUT` outside the checkout, then run
+`node native/validation/scene-picking.mjs [PATH_TO_LAYERS_GLTF]`. The optional path
+uses the fixture from `gltf_browser_reference_fixture` to check glTF C import and
+picking together. Rust picking tests additionally compare 500 rays with an
+independent double-precision brute-force oracle over transformed triangles.

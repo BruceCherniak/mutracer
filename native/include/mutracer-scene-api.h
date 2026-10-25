@@ -157,6 +157,59 @@ int32_t mt_scene_import_gltf_bytes(const void *bytes, size_t byte_count, const c
 /* Duplicate names use zero-based occurrence in traversal order. Object kind:
  * geometry 1, material 2, mesh 4, node 6 (returns a mesh handle). */
 int32_t mt_scene_find(mt_scene scene, uint32_t kind, const char *name, size_t occurrence, uint64_t *out, char *error, size_t capacity);
+/* CPU scene picking. A picker is an immutable snapshot, independent of the
+ * source scene and any engine/GPU. Create again after edits. Queries on the same
+ * picker may overlap on arbitrary threads. Destroy invalidates the handle; a
+ * concurrent query either uses its retained snapshot or returns INVALID_HANDLE.
+ * Construction time and additional CPU memory grow with triangle and instance
+ * counts. Results carry source-scene handles: they can
+ * be stale after resources are deleted or the source scene is destroyed.
+ * Both triangle faces participate; alpha, shading, bevel and displacement are
+ * ignored. Equal-distance ties are unspecified. */
+typedef uint64_t mt_scene_picker;
+typedef struct mt_scene_ray {
+  uint32_t struct_size, reserved;
+  float origin[3]; /* Finite world position. Default (0,0,0). */
+  float direction[3]; /* Finite, nonzero; normalized internally. Default (0,0,-1). */
+} mt_scene_ray;
+MT_SCENE_API_LAYOUT(mt_scene_ray,32);
+typedef struct mt_scene_raycast_options {
+  uint32_t struct_size;
+  float min_distance; /* Finite >=0. Default 0, inclusive. */
+  float max_distance; /* Finite >min, <=1e30. Default 1e30, exclusive. */
+  uint32_t reserved;
+} mt_scene_raycast_options;
+MT_SCENE_API_LAYOUT(mt_scene_raycast_options,16);
+typedef struct mt_scene_pick_hit {
+  uint32_t struct_size;
+  uint32_t instance; /* Zero-based local instance; UINT32_MAX for ordinary mesh. */
+  uint32_t primitive; /* Original zero-based triangle in geometry index array. */
+  uint32_t reserved;
+  mt_scene_mesh_id mesh;
+  mt_scene_material_id material; /* Mesh table selected by triangle's first vertex. */
+  mt_scene_geometry_id geometry;
+  float distance; /* From original origin, in world/scene units. */
+  float position[3]; /* World-space hit position. */
+  float normal[3]; /* Unit geometric normal following transformed winding. */
+  float barycentric[3]; /* Three vertex weights, in index-array order. */
+} mt_scene_pick_hit;
+MT_SCENE_API_LAYOUT(mt_scene_pick_hit,80);
+int32_t mt_scene_ray_default(mt_scene_ray *out);
+int32_t mt_scene_raycast_options_default(mt_scene_raycast_options *out);
+/* Initializes struct_size, instance UINT32_MAX and all remaining fields 0. */
+int32_t mt_scene_pick_hit_default(mt_scene_pick_hit *out);
+/* out is required. Invalid references return INVALID_HANDLE; malformed geometry,
+ * material indices or noninvertible/nonaffine transforms return INVALID_ARGUMENT.
+ * Empty scenes are valid. On error out is unchanged. */
+int32_t mt_scene_picker_create(mt_scene scene, mt_scene_picker *out, char *error, size_t capacity);
+int32_t mt_scene_picker_destroy(mt_scene_picker picker, char *error, size_t capacity);
+/* ray, hit and found are required. NULL options uses defaults. Initialize hit
+ * with mt_scene_pick_hit_default. On success found is 0 or 1; a miss leaves hit
+ * unchanged. On error both outputs are unchanged. Invalid rays/intervals or
+ * nonzero reserved fields return INVALID_ARGUMENT; stale picker INVALID_HANDLE. */
+int32_t mt_scene_picker_raycast(mt_scene_picker picker, const mt_scene_ray *ray,
+  const mt_scene_raycast_options *options, mt_scene_pick_hit *hit, uint32_t *found,
+  char *error, size_t capacity);
 #undef MT_SCENE_API_LAYOUT
 #ifdef __cplusplus
 }

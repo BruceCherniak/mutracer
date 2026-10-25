@@ -85,3 +85,12 @@ extern "C" float mt_native_pick_query(const void* p,const float* o,const float* 
   static_cast<const NativePickBvh*>(p)->bvh.Intersect(ray);
   return ray.hit.t;
 }
+
+struct NativePickHit {float distance, u, v; uint32_t primitive;};
+extern "C" uint32_t mt_native_pick_hit(const void* p,const float* o,const float* d,float nearest,NativePickHit* out) noexcept {
+  tinybvh::Ray ray(tinybvh::bvhvec3(o[0],o[1],o[2]),tinybvh::bvhvec3(d[0],d[1],d[2]),nearest);
+  static_cast<const NativePickBvh*>(p)->bvh.Intersect(ray);
+  if (!(ray.hit.t >= 0 && ray.hit.t < nearest)) return 0;
+  *out = {ray.hit.t,ray.hit.u,ray.hit.v,ray.hit.prim};
+  return 1;
+}

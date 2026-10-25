@@ -15,6 +15,7 @@
 - Handles, defaults, ownership and threads: [build a scene](docs/scene.md#build-a-scene).
 - Edits: change the Scene, then `set_scene_object` + `update`; incremental vs full preparation and `pending_commit_kind`: [edit a scene](docs/scene.md#edit-a-scene).
 - glTF/GLB: `Scene::import_gltf` / `mt_scene_import_gltf`, names via `ImportedScene::names` / `mt_scene_find`; [support and limits](docs/gltf.md).
+- Picking: `Scene::picker().raycast` / `mt_scene_picker_create` + `mt_scene_picker_raycast`; immutable CPU snapshots with mesh/instance/material hits; [usage and limits](docs/scene.md#pick-scene-objects).
 - Binary v4 descriptors, record layouts and scene limits: [scene format](docs/scene-format.md).
 
 ## Rendering

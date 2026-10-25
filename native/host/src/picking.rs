@@ -8,12 +8,27 @@ unsafe extern "C" {
         ni: u32,
     ) -> *mut std::ffi::c_void;
     fn mt_native_pick_destroy(p: *mut std::ffi::c_void);
+    fn mt_native_pick_hit(
+        p: *const std::ffi::c_void,
+        o: *const f32,
+        d: *const f32,
+        nearest: f32,
+        out: *mut GeometryHit,
+    ) -> u32;
     fn mt_native_pick_query(
         p: *const std::ffi::c_void,
         o: *const f32,
         d: *const f32,
         nearest: f32,
     ) -> f32;
+}
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub(crate) struct GeometryHit {
+    pub distance: f32,
+    pub u: f32,
+    pub v: f32,
+    pub primitive: u32,
 }
 pub struct PickBvh(NonNull<std::ffi::c_void>);
 // C++ owns copied inputs and immutable BVH nodes. Queries mutate only a stack Ray.
@@ -41,6 +56,30 @@ impl PickBvh {
         })
         .map(Self)
         .ok_or("Picking BVH build failed".into())
+    }
+    pub(crate) fn intersect_hit(
+        &self,
+        origin: [f32; 3],
+        direction: [f32; 3],
+        nearest: f32,
+    ) -> Option<GeometryHit> {
+        if origin.iter().chain(&direction).any(|v| !v.is_finite())
+            || nearest.is_nan()
+            || nearest <= 0.
+        {
+            return None;
+        }
+        let mut hit = GeometryHit::default();
+        (unsafe {
+            mt_native_pick_hit(
+                self.0.as_ptr(),
+                origin.as_ptr(),
+                direction.as_ptr(),
+                nearest.min(1e30),
+                &mut hit,
+            )
+        } != 0)
+            .then_some(hit)
     }
     /// Direction is deliberately unnormalized: inverse transforms preserve world t.
     pub fn intersect(&self, origin: [f32; 3], direction: [f32; 3], nearest: f32) -> Option<f32> {

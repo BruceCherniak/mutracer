@@ -1,7 +1,9 @@
 //! Scene construction with checked, generational handles. Arrays are shared; edits
 //! take effect when the scene is passed to `Engine::set_scene_object` and updated.
 mod encoder;
+mod picking;
 mod types;
+pub use picking::{Ray, RaycastHit, RaycastOptions, ScenePicker};
 #[cfg(feature = "viewer-support")]
 #[doc(hidden)]
 pub mod viewer_support;
