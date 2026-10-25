@@ -1,6 +1,5 @@
 import type {RayTraceInputHooks} from '../../src/renderer/wgsl/rayTrace.compute.js';
 import {GROUP} from './layout.js';
-import frameReflectance from './frame-reflectance.wgsl.js';
 
 // Internal diagnostic record. It contains resolved first-surface data rather
 // than reusing OIDN's possibly downstream guides. BaseColor and directional
@@ -33,7 +32,7 @@ struct MtFramePixel {
 @group(${GROUP.OUTPUT}) @binding(4) var<storage, read_write> mtFramePixels: array<MtFramePixel>;
 var<private> mtFrameIndex: u32;
 var<private> mtFrameCaptured: bool;
-${frameReflectance}
+
 fn mtFrameBegin(index: u32) {
   mtFrameIndex = index;
   mtFrameCaptured = false;

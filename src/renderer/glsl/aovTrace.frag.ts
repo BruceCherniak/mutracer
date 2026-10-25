@@ -1,3 +1,6 @@
+import bsdf from './chunks/openPbrBsdf.glsl.js';
+import sampling from './chunks/sampling.glsl.js';
+import reflectance from './aovReflectance.glsl.js';
 import {FragmentShader, Shader} from '../shader.js';
 import common from './chunks/common.glsl.js';
 import core from './chunks/rayTraceCore.glsl.js';
@@ -37,6 +40,7 @@ export function aovTraceFragment(center: boolean) {
       previousId: Shader.uniform('usampler2D'), previousMotion: Shader.uniform('sampler2D'),
       previousGeometry: Shader.uniform('sampler2D'), previousPosition: Shader.uniform('sampler2D'),
       previousDiffuse: Shader.uniform('sampler2D'), previousSpecular: Shader.uniform('sampler2D'),
+      openPbrEnergyLut: Shader.uniform('sampler2D'), aovMask: Shader.uniform('int',0),
       aovSample: Shader.uniform('int',0)},
     main: /* glsl */ `
 ${common}
@@ -47,6 +51,7 @@ ${uvProjection}
 ${materials.main}
 ${intersect.main}
 ${cameraRay}
+${center ? '' : sampling+bsdf+reflectance}
 ${surface}
 void main() {
   ${center ? /* glsl */ `
@@ -84,7 +89,24 @@ void main() {
   SurfaceInteraction si; OpenPbrResolvedMaterial material;
   if(!aovSurface(ray,si,material)) return;
   float depth=max(dot(si.position-viewInv[3].xyz,-normalize(viewInv[2].xyz)),0.0);
-  out_geometry+=vec4(depth,material.specularRoughness,material.baseMetalness,0.0);
+  bool unsupported=material.materialType!=STANDARD || material.alpha<1.0 || material.coatWeight>0.0 || material.fuzzWeight>0.0 || material.specularAnisotropy>0.0 || material.subsurfaceWeight>0.0 || dot(material.mediumScattering,material.mediumScattering)>0.0 || material.bevel>0.0 || material.thinFilmWeight>0.0 || material.transmissionDispersionScale>0.0;
+  out_geometry+=vec4(depth,material.specularRoughness,material.baseMetalness,unsupported?1.0:0.0);
+  if((aovMask&24)!=0 && !unsupported){
+    vec3 normal=si.normal,face=si.faceNormal;float cosine=-dot(normal,ray.d),faceCosine=-dot(face,ray.d);
+    if(material.thinWalled&&(material.transmissionWeight>0.0||material.subsurfaceWeight>0.0)){
+      if(cosine<0.0){normal=-normal;cosine=-cosine;}if(faceCosine<0.0){face=-face;faceCosine=-faceCosine;}
+    }
+    if(faceCosine>=0.0&&cosine<0.0){normal=face;cosine=faceCosine;}
+    if(cosine<0.0)normal=-normal;
+    material.inside=cosine<=0.0&&!material.thinWalled;material.relativeIor=cosine>0.0?1.0/material.specularIor:material.specularIor;
+    vec3 tangent=vec3(0.0);
+#ifdef USE_TANGENT
+    tangent=si.tangent;
+#endif
+    OpenPbrPreparedBsdf prepared=openpbr_prepare(tangent,material,-ray.d,normal);
+    vec3 diffuse,specular;aovReflectance(prepared,diffuse,specular);
+    out_diffuse+=vec4(diffuse,1.0);out_specular+=vec4(specular,1.0);
+  }
   out_position+=vec4(si.position,1.0);
   `}
 }

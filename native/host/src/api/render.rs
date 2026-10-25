@@ -1291,7 +1291,11 @@ fn update_aovs(render: &mut RenderState) -> Result<()> {
         .aov
         .as_mut()
         .unwrap()
-        .render(&query, render.samples.min(render.settings.aov_samples))
+        .render(
+            &query,
+            render.samples.min(render.settings.aov_samples),
+            render.settings.aovs,
+        )
         .map_err(|e| error(Status::Error, e.to_string()))
 }
 /// Polls the batch and accounts completed samples.
@@ -1927,6 +1931,11 @@ impl Render {
             } else if settings.adaptive_resolution != render.settings.adaptive_resolution {
                 render.adaptive.frame = None;
                 render.adaptive.fast_frames = 0;
+            }
+            if settings.aovs != render.settings.aovs
+                || settings.aov_samples < render.settings.aov_samples
+            {
+                render.aov = None;
             }
             render.settings = settings;
             if render.settings.aovs == 0 {

@@ -55,7 +55,29 @@ fn aovTrace(@builtin(global_invocation_id) id: vec3u) {
   var si: SurfaceInteraction; var material: OpenPbrResolvedMaterial;
   if (!aovSurface(ray, &si, &material)) { return; }
   let depth = max(dot(si.position-cameraUniform.viewInv[3].xyz, -normalize(cameraUniform.viewInv[2].xyz)), 0.0);
-  aovAccum[index].depthRoughness += vec4f(depth, material.specularRoughness, material.baseMetalness, 0.0);
+  let unsupported = (material.materialType != STANDARD) | (material.alpha < 1.0) |
+      (material.coatWeight > 0.0) | (material.fuzzWeight > 0.0) |
+      (material.specularAnisotropy > 0.0) | (material.subsurfaceWeight > 0.0) |
+      (dot(material.mediumScattering, material.mediumScattering) > 0.0) |
+      (material.bevel > 0.0) | (material.thinFilmWeight > 0.0) |
+      (material.transmissionDispersionScale > 0.0);
+  aovAccum[index].depthRoughness += vec4f(depth, material.specularRoughness, material.baseMetalness, select(0.0,1.0,unsupported));
+  if ((aovParameters.w & 24u) != 0u && !unsupported) {
+    var normal=si.normal; var face=si.faceNormal;
+    var cosine=-dot(normal,ray.d); var faceCosine=-dot(face,ray.d);
+    if (material.thinWalled && (material.transmissionWeight>0.0 || material.subsurfaceWeight>0.0)) {
+      if(cosine<0.0){normal=-normal;cosine=-cosine;}
+      if(faceCosine<0.0){face=-face;faceCosine=-faceCosine;}
+    }
+    if(faceCosine>=0.0 && cosine<0.0){normal=face;cosine=faceCosine;}
+    normal=select(-normal,normal,cosine>=0.0);
+    material.inside=(cosine<=0.0) && !material.thinWalled;
+    material.relativeIor=select(material.specularIor,1.0/material.specularIor,cosine>0.0);
+    let prepared=openpbr_prepare(si.tangent,material,-ray.d,normal);
+    let reflectance=mtFrameReflectance(prepared);
+    aovAccum[index].diffuse+=vec4f(reflectance.diffuse,1.0);
+    aovAccum[index].specular+=vec4f(reflectance.specular,1.0);
+  }
   aovAccum[index].position += vec4f(si.position, 1.0);
 }
 @compute @workgroup_size(8, 8)

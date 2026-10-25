@@ -14,7 +14,7 @@ async function captureAovs() {
     engine.device?.addEventListener('uncapturederror', event => errors.push((event as GPUUncapturedErrorEvent).error.message));
     await render.converge({samples: 4}); const before = await render.readPixels('hdr');
     const source = sync.scene.meshes[0]; source.aovId = 101; source.materials[0].aovId = 202; engine.update();
-    render.aovs = ['depth', 'position', 'roughness', 'id', 'motion'];
+    render.aovs = ['depth', 'position', 'roughness', 'id', 'motion', 'diffuseAlbedo', 'specularAlbedo'];
     await render.converge({samples: 4}); const after = await render.readPixels('hdr');
     const depth = await render.readPixels('depth'), position = await render.readPixels('position'), ids = await render.readPixels('id'), roughness = await render.readPixels('roughness');
     const check = (ok: boolean, message: string) => {if (!ok) throw new Error(message);};
@@ -23,6 +23,9 @@ async function captureAovs() {
     check(position.data.every((v,i) => i%4 !== 2 || Math.abs(v) < .001), 'Position mismatch');
     check(ids.data.every((v,i) => i%4 === 0 ? v === 101 : i%4 === 2 ? v === 202 : i%4 === 1 ? v === 0 : v < 2), 'ID mismatch');
     check(roughness.data.every((v,i) => i%4 !== 0 || Math.abs(v-.4) < .001), 'Roughness mismatch');
+    const diffuse=await render.readPixels('diffuseAlbedo'),specular=await render.readPixels('specularAlbedo');
+    check(diffuse.data.every(Number.isFinite)&&specular.data.every(Number.isFinite),'Nonfinite reflectance');
+    check(diffuse.data[3]===1&&specular.data[3]===1&&diffuse.data[0]>0&&specular.data[0]>0,'Invalid reflectance coverage');
     const initialMotion=await render.readPixels('motion');check(initialMotion.data.every(v=>v===0),'First motion must be invalid');
     camera.position.x=.25;camera.updateMatrixWorld();engine.camera=fromTHREECamera(camera);engine.update();
     await render.converge({samples:4});const cameraMotion=await render.readPixels('motion');
@@ -45,8 +48,12 @@ async function captureAovs() {
     ortho.position.x=.25;ortho.updateMatrixWorld();engine.camera=fromTHREECamera(ortho);engine.update();await render.converge({samples:4});
     const orthoMotion=await render.readPixels('motion');const orthoValid=Array.from({length:orthoMotion.width*orthoMotion.height},(_,i)=>i*4).filter(o=>orthoMotion.data[o+3]===3);
     check(orthoValid.length>100&&orthoValid.every(o=>Math.abs(orthoMotion.data[o]-2)<.001),'Orthographic motion mismatch');
+    source.materials[0].coatWeight=.5;engine.update();await render.converge({samples:4});
+    const unsupportedRoughness=await render.readPixels('roughness'),unsupportedDiffuse=await render.readPixels('diffuseAlbedo');
+    check(unsupportedRoughness.data.every((v,i)=>i%4!==2||v===1),'Unsupported coat flag missing');
+    check(unsupportedDiffuse.data.every(v=>v===0),'Unsupported reflectance must have zero validity');
     if (errors.length) throw new Error(errors.join('\n'));
-    return {motion:{cameraExpected:expected,cameraValid:validCamera.length,objectValid:validObject.length},hdr: Array.from(after.data), backend: engine.backend, adapter: info.adapterName, hdrIdentical: true, depth: Array.from(depth.data.slice(0,4)), ids: Array.from(ids.data.slice(0,4)), roughness: Array.from(roughness.data.slice(0,4)), pixels: {id: Array.from(ids.data), depth: Array.from(depth.data), position: Array.from(position.data)}};
+    return {motion:{cameraExpected:expected,cameraValid:validCamera.length,objectValid:validObject.length},hdr: Array.from(after.data), backend: engine.backend, adapter: info.adapterName, hdrIdentical: true, depth: Array.from(depth.data.slice(0,4)), ids: Array.from(ids.data.slice(0,4)), roughness: Array.from(roughness.data.slice(0,4)), pixels: {diffuse:Array.from(diffuse.data),specular:Array.from(specular.data),id: Array.from(ids.data), depth: Array.from(depth.data), position: Array.from(position.data)}};
   } finally {render.dispose(); engine.dispose(); sync.dispose();}
 }
 Object.assign(window, {captureAovs});

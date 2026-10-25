@@ -180,11 +180,11 @@ impl Output {
             center_trace,
         })
     }
-    pub(crate) fn render(&mut self, query: &Query, samples: u32) -> Result<()> {
+    pub(crate) fn render(&mut self, query: &Query, samples: u32, mask: u32) -> Result<()> {
         self.gpu.loss.check()?;
         let device = &self.gpu.device;
         let run = |pipeline: &wgpu::ComputePipeline, sample: u32| {
-            let parameters: Vec<_> = [self.size[0], self.size[1], sample, 0]
+            let parameters: Vec<_> = [self.size[0], self.size[1], sample, mask]
                 .into_iter()
                 .flat_map(u32::to_le_bytes)
                 .collect();

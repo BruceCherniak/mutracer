@@ -1,7 +1,7 @@
 import {aovTraceFragment} from './glsl/aovTrace.frag.js';
 import {WebGLAov} from './WebGLAov.js';
 import {packAovScene} from './aovScene.js';
-import type {AovKind} from './aov.js';
+import {aovMask, type AovKind} from './aov.js';
 import { WebGLSkySource } from './WebGLSkySource.js';
 import { normalizeBounces } from './pathLimits.js';
 import { updateMeshInstanceColors } from './prepareMeshBVH.js';
@@ -311,6 +311,7 @@ class WebGLRayTracePass {
       });
     });
     this._mainPass.setUniform('openPbrEnergyLut', this._openPbrEnergyLut);
+    this._aovPass.setUniform('openPbrEnergyLut', this._openPbrEnergyLut);
   }
 
   createPass(
@@ -1077,6 +1078,7 @@ class WebGLRayTracePass {
     const target=Math.min(samples,cap);
     while(state.samples<target){
       const output=state.accumulation[state.samples%2], previous=state.accumulation[(state.samples+1)%2];
+      this._aovPass.setUniform('aovMask',aovMask(kinds));
       this._aovPass.setUniform('aovSample',state.samples);
       this._aovPass.setUniform('sampleCount',state.samples);
       this._aovPass.createPass({previousGeometry:previous.geometry,previousPosition:previous.position,previousDiffuse:previous.diffuse,previousSpecular:previous.specular},output);

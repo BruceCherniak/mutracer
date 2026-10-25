@@ -1,6 +1,6 @@
 import {WGPUAov} from './WGPUAov.js';
 import {packAovScene} from './aovScene.js';
-import type {AovKind} from './aov.js';
+import {aovMask, type AovKind} from './aov.js';
 import { proceduralEnvironmentPower } from './proceduralEnvironmentPower.js';
 import { WGPUSkyBaker } from './WGPUSkyBaker.js';
 import {initialSceneConstants, sceneAttributeLayout, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, traceSampling, writeTraceSampling} from './sceneAssembly.js';
@@ -1097,7 +1097,7 @@ class WGPURayTracePass {
     const run = (pipeline: GPUComputePipeline, sample: number) => {
       // A fresh uniform for each queued dispatch keeps batch samples independent.
       const parameters = device.createBuffer({size: 16, usage: GPUBufferUsage.UNIFORM, mappedAtCreation: true});
-      new Uint32Array(parameters.getMappedRange()).set([state.width, state.height, sample, 0]); parameters.unmap();
+      new Uint32Array(parameters.getMappedRange()).set([state.width, state.height, sample, aovMask(kinds)]); parameters.unmap();
       const output = device.createBindGroup({layout: pipeline.getBindGroupLayout(groupIndex), entries: [
         {binding: 5, resource: {buffer: state.accumulation!}}, {binding: 6, resource: {buffer: state.center!}},
         {binding: 7, resource: {buffer: state.scene!}}, {binding: 8, resource: {buffer: parameters}}, {binding: 9, resource: {buffer: state.previousCenter!}}

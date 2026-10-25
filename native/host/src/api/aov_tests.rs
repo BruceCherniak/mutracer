@@ -75,6 +75,11 @@ fn independent_surface_aovs_preserve_beauty_and_exact_ids() {
             .iter()
             .all(|v| *v == 0.)
     );
+    for kind in [PixelKind::DiffuseAlbedo, PixelKind::SpecularAlbedo] {
+        let values = render.read_pixels(kind).unwrap().data;
+        assert!(values.iter().all(|v| v.is_finite()));
+        assert!(values.chunks_exact(4).any(|v| v[3] > 0. && v[0] > 0.));
+    }
     let mut camera = Camera::from_bytes(&descriptor[160 * 4..192 * 4]).unwrap();
     camera.world_matrix[12] += 0.25;
     engine.set_camera(Some(camera)).unwrap();
