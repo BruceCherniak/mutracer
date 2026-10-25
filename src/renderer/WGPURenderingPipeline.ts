@@ -1,3 +1,4 @@
+import {WGPUAov} from './WGPUAov.js';
 import {DisplayPostProcess} from './DisplayPostProcess.js';
 import {customDenoiseLayersMain, customDenoiseCoverageMain} from './wgsl/customDenoise.wgsl.js';
 import { WGPUCanvasSurface } from './WGPUCanvasSurface.js';
@@ -144,6 +145,8 @@ function makeWGPUAccumulationTarget(
   let deferPostProcess = false;
   let sampleSequenceOffset = 0;
 
+  const aov = new WGPUAov(device);
+  let aovCamera: Camera | undefined;
   let sampleCount = 0;
   let elapsedFrameTime = 32;
   let elapsedTileTime: number | undefined;
@@ -800,7 +803,9 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
 
     // Update the camera before compiling and sampling.
     rayTracePass.setCamera(camera);
+    aovCamera = camera;
     const resetAccumulation = isFirstFrame;
+    if (resetAccumulation) aov.reset();
     if (resetAccumulation) {
       denoiseValid = false;
       tileTimingGeneration++;
@@ -912,6 +917,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       drawPostProcess(encoder, sampleCount >= renderSampleTarget, true);
     }
     if (sampleCount !== frameSampleCount) {
+      if (execution?.aovs?.length) rayTracePass.renderAovs(aov, camera, sampleCount, execution.aovSamples ?? 16, execution.aovs);
 
       sampleRenderedCallback(
         sampleCount,
@@ -1145,7 +1151,8 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   function performCustomDenoise(
     denoiser: import('../Render.js').Denoiser,
     schedule: import('../Render.js').DenoiseSchedule,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    requestedAovs: readonly import('./aov.js').AovKind[] = []
   ): Promise<boolean> {
     const generation = denoiseGeneration;
     const controller = activeCustomController = new AbortController();
@@ -1159,7 +1166,9 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       const albedo = copyGuide('Custom albedo', getFrameInput('albedo'), true);
       const normal = copyGuide('Custom normal', getFrameInput('normal'), true);
       const output = scratch.get('Custom output', () => new WGPUScratchBuffer(device)).get(width * height * 16, true);
-      await denoiser.denoise({device, width, height, color, albedo, normal, output}, {signal: controller.signal, schedule});
+      const aovs=requestedAovs.length?aov.snapshot(requestedAovs):undefined;
+      try {await denoiser.denoise({device, width, height, color, albedo, normal, output, aovs}, {signal: controller.signal, schedule});}
+      finally {if(aovs)void device.queue.onSubmittedWorkDone().catch(()=>undefined).then(()=>Object.values(aovs).forEach(buffer=>buffer?.destroy()));}
       if (controller.signal.aborted || disposed || generation !== denoiseGeneration) return false;
       const coverage = scratch.get('custom coverage', () => new WGPUComputePass('Custom coverage', device, {
         inputs: ['filtered', 'original'], outputs: ['color'], uniforms: auxiliaryPassUniforms,
@@ -1191,7 +1200,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
   ): Promise<boolean> {
     cancelDenoise();
     if (isFirstFrame || sampleCount < 1) return Promise.resolve(false);
-    if (attachedDenoiser.kind === 'custom') return performCustomDenoise(attachedDenoiser.denoiser, denoiseSchedule, signal);
+    if (attachedDenoiser.kind === 'custom') return performCustomDenoise(attachedDenoiser.denoiser, denoiseSchedule, signal, attachedDenoiser.aovs);
     denoisedHDR = false;
     if (attachedDenoiser.kind === 'jnlm') return performJNLMDenoise(attachedDenoiser.denoiser);
     const denoiser: OIDNWeb = attachedDenoiser.denoiser;
@@ -1438,6 +1447,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
       diagnosticsReadbackPromise
     ]).then(() => {
       rayTracePass.releaseTarget(targetKey);
+      aov.dispose();
       denoisedBuffer?.destroy();
       presentationTexture?.destroy();
       displayPostProcess.dispose();
@@ -1464,7 +1474,9 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     configure(settings: TraceSettings) {
       const timingKeys = ['bounces', 'bevel', 'bevelSamples', 'directLightCandidates', 'dispersionWavelengths', 'alphaBlendStrategy', 'samplingPattern', 'clamping', 'transmissiveOutputAlphaMin'] as const;
       if (!execution || timingKeys.some(key => execution![key] !== settings[key])) invalidateTilePrediction();
+      if (settings.aovs?.length && (!Number.isInteger(settings.aovSamples ?? 16) || (settings.aovSamples ?? 16) < 1)) throw new RangeError('aovSamples must be a positive integer');
       execution = { ...settings };
+      if (!settings.aovs?.length) { aov.dispose(); aov.history.clear(); aov.width = aov.height = 0; aov.reset(); }
       maxTimePerTile = Math.max(1, settings.timeBudgetMs);
       allowMultipleSamplesPerFrame = settings.allowMultipleSamplesPerFrame;
       tileRender.setDesiredMsPerTile(maxTimePerTile);
@@ -1490,7 +1502,7 @@ label: 'Render complete image', size: { width, height }, format: displayTexture.
     getMemory() {
       return {
 width: renderWidth, height: renderHeight,
-        bytes: rayTracePass.getTargetMemoryBytes(targetKey) + rayTraceOutputPass.getMemoryBytes() + textureBytes(presentationTexture) + displayPostProcess.getMemoryBytes() + (denoisedBuffer?.size ?? 0)
+        bytes: aov.bytes + rayTracePass.getTargetMemoryBytes(targetKey) + rayTraceOutputPass.getMemoryBytes() + textureBytes(presentationTexture) + displayPostProcess.getMemoryBytes() + (denoisedBuffer?.size ?? 0)
 };
     },
     isFirstFrame() {
@@ -1498,6 +1510,7 @@ width: renderWidth, height: renderHeight,
     },
 
     restartSamples() {
+      aov.reset();
       // Input edits reset accumulation, not learned throughput. Re-arming a
       // hidden probe here starves continuously changing scenes of visible samples.
       tileTimingGeneration++;
@@ -1548,6 +1561,12 @@ width: renderWidth, height: renderHeight,
         for (let y = 0;y < height;y++) data.set(mapped.subarray(y * bytesPerRow / 4, y * bytesPerRow / 4 + width * 4), y * width * 4);
         return { width, height, data };
       } finally { buffer.unmap(); buffer.destroy(); }
+    },
+    async readAov(kind) {
+      if (!execution?.aovs?.includes(kind) || !aovCamera || sampleCount < 1) throw new Error('AOV output is not ready');
+      rayTracePass.setCamera(aovCamera);
+      rayTracePass.renderAovs(aov, aovCamera, sampleCount, execution.aovSamples ?? 16, execution.aovs);
+      return aov.read(kind);
     },
     async readOutput(kind) {
       rawOutputPass.setUniform('flatBackgroundColor', resolvedFlatBackground);

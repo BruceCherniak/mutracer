@@ -1,3 +1,6 @@
+import {WGPUAov} from './WGPUAov.js';
+import {packAovScene} from './aovScene.js';
+import {aovMask, type AovKind} from './aov.js';
 import { proceduralEnvironmentPower } from './proceduralEnvironmentPower.js';
 import { WGPUSkyBaker } from './WGPUSkyBaker.js';
 import {initialSceneConstants, sceneAttributeLayout, sceneTraversalConstants, prepareSceneLightSampling, writeTraceLighting, packSceneAnalyticLights, writeTraceQuality, traceSampling, writeTraceSampling} from './sceneAssembly.js';
@@ -347,6 +350,9 @@ class WGPURayTracePass {
   private _needsUpdateBindGroups = true;
 
   private _computeShaderModule?: GPUShaderModule;
+  private _aovTrace?: GPUComputePipeline;
+  private _aovCenter?: GPUComputePipeline;
+  private _aovTraceSource?: GPUComputePipeline;
   private _depthCompute?: GPUProgrammableStage;
   private _depthTracePipeline?: GPUComputePipeline;
   private _depthPipeline?: Promise<GPUComputePipeline>;
@@ -1059,6 +1065,52 @@ class WGPURayTracePass {
     } finally {
       this._isCompilingShader = false;
     }
+  }
+
+  renderAovs(state: WGPUAov, camera: Camera, samples: number, cap: number, kinds: readonly AovKind[]) {
+    const trace = this._rayTracePipeline, groups = this._rayTraceBindGroups;
+    if (!trace || !groups || !this._depthCompute || !this._tlas || !this._preparedMeshData || !kinds.length) return;
+    state.resize(this._width, this._height);
+    const textures = this._bindless, groupIndex = textures ? 2 : 3;
+    if (this._aovTraceSource !== trace) {
+      const output = this._device.createBindGroupLayout({entries: [
+        {binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'storage'}},
+        {binding: 6, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'storage'}},
+        {binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'read-only-storage'}},
+        {binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'uniform'}},
+        {binding: 9, visibility: GPUShaderStage.COMPUTE, buffer: {type: 'read-only-storage'}}
+      ]});
+      const descriptor = {bindGroupLayouts: Array.from({length: groupIndex}, (_, i) => trace.getBindGroupLayout(i)).concat(output)};
+      const layout = this._device.createPipelineLayout(textures ? resourceTableLayout(descriptor) : descriptor);
+      const compute = {...this._depthCompute, constants: {...this._depthCompute.constants, DEPTH_QUERY_MODE: 1}};
+      this._aovTrace = this._device.createComputePipeline({label: 'AOV accumulation', layout, compute: {...compute, entryPoint: 'aovTrace'}});
+      this._aovCenter = this._device.createComputePipeline({label: 'AOV center', layout, compute: {...compute, entryPoint: 'aovTraceCenter'}});
+      this._aovTraceSource = trace;
+    }
+    if (!state.frame) {
+      const packed = packAovScene(this._preparedMeshData, this._tlas, camera, this._width, this._height, state.history);
+      state.frame = packed.frame; state.setScene(packed.words);
+    }
+    this._device.queue.writeBuffer(this._uniforms.rtUniform, 0, this._rtUniform.buffer);
+    this._device.queue.writeBuffer(this._uniforms.cameraUniform, 0, packCameraUniform(this._viewProjInv, this._cameraWorld, this._apertureRadius, this._focusDistance));
+    const device = this._device;
+    const run = (pipeline: GPUComputePipeline, sample: number) => {
+      // A fresh uniform for each queued dispatch keeps batch samples independent.
+      const parameters = device.createBuffer({size: 16, usage: GPUBufferUsage.UNIFORM, mappedAtCreation: true});
+      new Uint32Array(parameters.getMappedRange()).set([state.width, state.height, sample, aovMask(kinds)]); parameters.unmap();
+      const output = device.createBindGroup({layout: pipeline.getBindGroupLayout(groupIndex), entries: [
+        {binding: 5, resource: {buffer: state.accumulation!}}, {binding: 6, resource: {buffer: state.center!}},
+        {binding: 7, resource: {buffer: state.scene!}}, {binding: 8, resource: {buffer: parameters}}, {binding: 9, resource: {buffer: state.previousCenter!}}
+      ]});
+      const encoder = device.createCommandEncoder({label: 'AOV'}), pass = encoder.beginComputePass();
+      if (textures?.table) setResourceTable(pass, textures.table);
+      pass.setPipeline(pipeline); for (let i = 0; i < groupIndex; i++) pass.setBindGroup(i, groups[i]);
+      pass.setBindGroup(groupIndex, output); pass.dispatchWorkgroups(Math.ceil(state.width/8), Math.ceil(state.height/8)); pass.end();
+      device.queue.submit([encoder.finish()]); parameters.destroy();
+    };
+    if (!state.centerReady) { run(this._aovCenter!, 0); state.centerReady = true; state.history.accept(state.frame); }
+    const target = Math.min(samples, cap);
+    while (state.samples < target) { run(this._aovTrace!, state.samples); state.samples++; }
   }
 
   async readDepthSamples(area: DepthSampleArea, aspect?: number): Promise<Float32Array | undefined> {

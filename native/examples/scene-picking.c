@@ -1,5 +1,6 @@
 /* CPU-only C consumer: immutable snapshots and imported scene handles. */
 #include "mutracer-scene-api.h"
+#include "mutracer-scene.h"
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -19,6 +20,15 @@ int main(int argc,char **argv) {
   OK(mt_scene_add_mesh(scene,&object,&mesh,error,sizeof(error)));
   mt_scene_picker before=0,after=0;mt_scene_ray ray;mt_scene_pick_hit hit;mt_scene_raycast_options options;uint32_t found=99;
   OK(mt_scene_ray_default(&ray));OK(mt_scene_pick_hit_default(&hit));OK(mt_scene_raycast_options_default(&options));
+  size_t encoded_bytes=0;
+  OK(mt_scene_encode(scene,NULL,0,&encoded_bytes,error,sizeof(error)));
+  uint32_t *encoded=(uint32_t *)malloc(encoded_bytes);CHECK(encoded);
+  OK(mt_scene_encode(scene,encoded,encoded_bytes,&encoded_bytes,error,sizeof(error)));
+  const mt_scene_header_v4 *header=(const mt_scene_header_v4 *)encoded;
+  CHECK(header->mesh_aov_ids_offset && header->material_aov_ids_offset);
+  CHECK(encoded[header->mesh_aov_ids_offset]==(uint32_t)mesh);
+  CHECK(encoded[header->material_aov_ids_offset]==(uint32_t)material);
+  free(encoded);
   OK(mt_scene_picker_create(scene,&before,error,sizeof(error)));
   object.world_matrix[12]=10;
   OK(mt_scene_set_mesh(scene,mesh,&object,error,sizeof(error)));

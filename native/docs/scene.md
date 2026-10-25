@@ -104,6 +104,11 @@ threads. Recreate it after geometry, mesh, instance or material-table edits.
 Snapshots outlive the source scene; returned handles describe that snapshot and
 may no longer be valid in an edited or destroyed source scene.
 
+To match object and material hits with [surface-output IDs](denoising.md#surface-outputs),
+use the Rust handles' `aov_id()` values or the low 32 bits of C handles. An
+ordinary mesh has AOV instance ID 0; picking reports `None` in Rust or
+`UINT32_MAX` in C, so normalize that value when comparing them.
+
 Picking intersects both faces of the original triangles. Alpha masks,
 transparency, displacement, bevel and other shading do not affect the hit, so
 it can differ from the visible rendered surface. For screen clicks, the host

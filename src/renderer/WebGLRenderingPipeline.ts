@@ -1,3 +1,4 @@
+import {WebGLAov} from './WebGLAov.js';
 import {scheduleFrame} from '../util/frame.js';
 import type {DenoiserHandle} from './denoiser.js';
 import { WebGLScratchCopy } from './WebGLScratchCopy.js';
@@ -48,6 +49,8 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
   let offlineSamplesPerBatch = 0;
   let deferPostProcess = false;
   let sampleSequenceOffset = 0;
+  const aov=new WebGLAov(renderer);
+  let aovCamera: Camera | undefined;
   let sampleCount = 0;
   let elapsedFrameTime = 32;
   let elapsedTileTime: number | undefined;
@@ -275,7 +278,9 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     }
 
     rayTracePass.setCamera(camera);
+    aovCamera=camera;
     const resetAccumulation = isFirstFrame;
+    if(resetAccumulation) aov.reset();
     if (resetAccumulation) {
       tileTimingGeneration++;
       elapsedTileTime = undefined;
@@ -325,6 +330,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     }
 
     if (sampleCount !== frameSampleCount) {
+      if(execution?.aovs?.length) rayTracePass.renderAovs(aov,camera,renderWidth,renderHeight,sampleCount,execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset);
       sampleRenderedCallback(
         sampleCount,
         frameSampleCount === 0,
@@ -389,7 +395,9 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     invalidateDenoisedOutput() { pendingDenoiser = undefined; denoiseValid = false; preserveDenoisedOutput = false; },
     synchronizeBackground() { },
     configure(settings: TraceSettings) {
+      if(settings.aovs?.length && (!Number.isInteger(settings.aovSamples ?? 16) || (settings.aovSamples ?? 16)<1)) throw new RangeError('aovSamples must be a positive integer');
       execution = { ...settings };
+      if(!settings.aovs?.length){aov.dispose();aov.history.clear();aov.width=aov.height=0;aov.reset();}
       maxTimePerTile = Math.max(1, settings.timeBudgetMs);
       allowMultipleSamplesPerFrame = settings.allowMultipleSamplesPerFrame;
       tileRender.setDesiredMsPerTile(maxTimePerTile);
@@ -413,7 +421,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
     getMemory() {
       return {
         width: renderWidth, height: renderHeight,
-        bytes: rayTracePass.getTargetMemoryBytes(targetKey)
+        bytes: aov.bytes + rayTracePass.getTargetMemoryBytes(targetKey)
           + rayTraceOutputPass.getMemoryBytes() + (presentationTexture?.getMemoryBytes() ?? 0) + (denoisedTexture?.getMemoryBytes() ?? 0)
       };
     },
@@ -540,6 +548,12 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       const width = presentationTexture.width, height = presentationTexture.height;
       return { width, height, data: readRgbaPixels(renderer.gl, width, height, presentationTexture.isByteEncoded) };
     },
+    async readAov(kind) {
+      if(!execution?.aovs?.includes(kind) || !aovCamera || sampleCount<1) throw new Error('AOV output is not ready');
+      rayTracePass.setCamera(aovCamera);
+      rayTracePass.renderAovs(aov,aovCamera,renderWidth,renderHeight,sampleCount,execution.aovSamples ?? 16,execution.aovs,sampleSequenceOffset);
+      return aov.read(kind);
+    },
     async readOutput(kind) {
       if (kind === 'denoised' && (!denoisedTexture || !denoiseValid)) kind = 'hdr';
       const texture = kind === 'denoised' ? denoisedTexture! : rayTraceOutputPass.getOutput(kind === 'hdr' ? 'color' : kind);
@@ -550,6 +564,7 @@ function makeWebGLAccumulationTarget(renderer: WebGLDevice, rayTracePass: WebGLR
       if (disposed) return; disposed = true;
       if (typeof document !== 'undefined') document.removeEventListener('visibilitychange', onVisibilityChange);
 
+      aov.dispose();
       rayTracePass.releaseTarget(targetKey);
       rayTraceOutputPass.dispose();
       presentationTexture?.dispose(renderer.gl);

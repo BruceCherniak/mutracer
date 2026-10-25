@@ -311,7 +311,8 @@ typedef struct mt_render_options {
   /* Fixed size; 0x0 uses resolution_scale of the display size. Default 0x0. */
   uint32_t width, height;
   uint32_t seed; /* Default 12345. */
-  uint32_t reserved[2]; /* Must be 0. */
+  uint32_t aovs; /* MT_AOV_* mask; default 0 (no AOV resources or passes). */
+  uint32_t aov_samples; /* Independent positive AOV sample cap; 0 selects default 16. */
   double resolution_scale; /* Positive. Default 1. */
   double clamping; /* Per-sample radiance clamp, finite, 0 disables. Default 0. */
   double transmissive_output_alpha_min; /* Finite. Default 1. */
@@ -387,10 +388,13 @@ int32_t mt_render_set_denoiser(mt_render render, const mt_render_denoiser *denoi
  * render fails during registration; invalid records/handles do not transfer it.
  * NULL disables filtering. Default none. */
 typedef struct mt_denoise_input {
-  uint32_t struct_size, width, height, reserved;
+  uint32_t struct_size, width, height, aovs; /* Supplied MT_AOV_* mask. */
   size_t count;
   const float *color, *normal, *albedo;
   const void *cancel;
+  /* Seven optional width*height*4 arrays, ordered by MT_AOV_* bit. ID is
+   * uint32_t RGBA, all other slots float RGBA. Null for unrequested slots. */
+  const void *aov_data[7];
 } mt_denoise_input;
 uint32_t mt_denoise_cancelled(const void *cancel);
 typedef int32_t (*mt_custom_denoise_callback)(const mt_denoise_input *input, float *output, char *error, size_t capacity, void *user);
@@ -400,9 +404,11 @@ typedef struct mt_custom_denoiser {
   mt_custom_denoise_callback callback;
   mt_custom_denoise_release release;
   void *user;
+  uint32_t aovs; /* Requested MT_AOV_* mask; default 0. Unknown bits are invalid. */
+  uint32_t reserved; /* Must be 0. */
 } mt_custom_denoiser;
-MT_ENGINE_LAYOUT(mt_custom_denoiser, 8 + 3 * sizeof(void *));
-MT_ENGINE_LAYOUT(mt_denoise_input, 16 + 5 * sizeof(void *));
+MT_ENGINE_LAYOUT(mt_custom_denoiser, 16 + 3 * sizeof(void *));
+MT_ENGINE_LAYOUT(mt_denoise_input, 16 + 12 * sizeof(void *));
 int32_t mt_render_set_custom_denoiser(mt_render render, const mt_custom_denoiser *denoiser, char *error, size_t capacity);
 
 /* Collects a finished batch without waiting for it, submits the next one and
@@ -468,10 +474,11 @@ typedef struct mt_render_snapshot {
 MT_ENGINE_LAYOUT(mt_render_snapshot, 364);
 int32_t mt_render_info(mt_render render, mt_render_snapshot *output, char *error, size_t capacity);
 
-/* kind (mt_image_kind): HDR, NORMAL, ALBEDO or DENOISED (the denoised image when
- * one exists, otherwise HDR). Linear little-endian f32 RGBA, top row first,
- * width*height*16 bytes. Waits for the batch in flight. During preparation it
- * reads the previous image. HDR matches TS WebGPU readback: RGB is normalized
+/* kind: any mt_image_kind. DENOISED returns HDR when no filtered image exists.
+ * Little-endian RGBA, top row first, width*height*16 bytes: uint32_t for ID,
+ * float for all other kinds. AOV formats/validity are in mutracer-status.h;
+ * reads require the corresponding render aovs bit or return MT_ERROR_INVALID_STATE.
+ * Waits for the batch in flight. During preparation it reads the previous image. HDR matches TS WebGPU readback: RGB is normalized
  * by surface hits, restoring per-sample RGB for an opaque visible flat
  * background; alpha stays path coverage. Display settings do not affect HDR.
  * L0 mt_context_read_pixels keeps raw per-sample averages. HDR temporarily copies

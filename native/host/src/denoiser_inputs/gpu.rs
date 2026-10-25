@@ -6,14 +6,24 @@ use std::sync::{
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum Guide {
+/// Separate one-sample guide textures, top row first. Use the validity texture
+/// before consuming surface data; missing guides return None.
+pub enum Guide {
+    /// Linear HDR radiance, alpha 1, before display exposure.
     NoisyColor,
+    /// Oriented world shading normal xyz (not encoded), specular roughness w.
     NormalRoughness,
+    /// Directional diffuse reflectance RGB; validity is in the validity texture.
     DiffuseAlbedo,
+    /// Directional specular reflectance RGB; validity is in the validity texture.
     SpecularAlbedo,
+    /// Camera-forward distance in scene units, zero on miss.
     LinearDepth,
+    /// Previous-current unjittered input pixels, x right and y down.
     Motion,
+    /// Not currently produced; consult capabilities before requesting it.
     SpecularHitDistance,
+    /// `temporal_validity` bit flags, not an SDK-specific validity encoding.
     Validity,
 }
 impl Guide {
@@ -38,6 +48,7 @@ pub(crate) struct GuideTexture {
 pub(crate) struct GpuFrameResources {
     device: DeviceKey,
     pub extent: [u32; 2],
+    pub stable_ids: Option<wgpu::Buffer>,
     pub guides: Vec<GuideTexture>,
     /// Only allocated for explicitly requested optical records.
     pub glass: Option<wgpu::Buffer>,
@@ -128,6 +139,7 @@ impl GpuFrameResources {
         };
         Ok(Self {
             device: gpu.frame_device,
+            stable_ids: None,
             extent,
             guides,
             glass: buffer(glass_bytes),
@@ -224,6 +236,23 @@ impl GpuFrameHistory {
         producer: ProducerDependency,
         evaluate: impl FnOnce(&GpuFrame) -> Result<EvaluatedCommands>,
     ) -> Result<FrameSubmission<GpuFrameResources>> {
+        self.submit_with_acceptance(gpu, producer, evaluate, true)
+    }
+    pub fn submit_pending(
+        &mut self,
+        gpu: &GpuDevice,
+        producer: ProducerDependency,
+        evaluate: impl FnOnce(&GpuFrame) -> Result<EvaluatedCommands>,
+    ) -> Result<FrameSubmission<GpuFrameResources>> {
+        self.submit_with_acceptance(gpu, producer, evaluate, false)
+    }
+    fn submit_with_acceptance(
+        &mut self,
+        gpu: &GpuDevice,
+        producer: ProducerDependency,
+        evaluate: impl FnOnce(&GpuFrame) -> Result<EvaluatedCommands>,
+        accept: bool,
+    ) -> Result<FrameSubmission<GpuFrameResources>> {
         let frame = producer.frame().clone();
         let key = frame.key();
         self.pending(key)?;
@@ -258,7 +287,9 @@ impl GpuFrameHistory {
                     self.device_lost();
                     return Err(error);
                 }
-                self.accept(&receipt)?;
+                if accept {
+                    self.accept(&receipt)?;
+                }
                 Ok(receipt)
             }
             Err(error) => {

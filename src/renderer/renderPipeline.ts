@@ -7,6 +7,7 @@ import type { TargetPipeline } from './accumulationTarget.js';
 
 /** Immutable execution settings restored before every operation on a target. */
 export interface TraceSettings {
+  aovs?: readonly import('./aov.js').AovKind[]; aovSamples?: number;
   transmissiveOutputAlphaMin: number;
   bounces: number; clamping: number; bevel: boolean; bevelSamples: number;
   dispersionWavelengths: 1 | 3; directLightCandidates: number;

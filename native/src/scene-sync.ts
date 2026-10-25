@@ -208,6 +208,7 @@ export class SyncedScene {
       syncNativeMaterial(this.materials[i], decodeMaterial(u, f, off, this.textures));
     }
     this.materials.length = count;
+    for (let i = 0; i < count; i++) this.materials[i].aovId = u[H.MATERIAL_AOV_IDS] ? u[u[H.MATERIAL_AOV_IDS] + i] : i;
   }
 
   private syncGeometries(u: Uint32Array, f: Float32Array, old: Uint32Array, first: boolean, unchanged: Uint8Array | undefined) {
@@ -278,6 +279,7 @@ export class SyncedScene {
           if (!same) transform.set(f.subarray(off + M.TRANSFORM, off + M.TRANSFORM + 16));
         } else mesh.transform = f.slice(off + M.TRANSFORM, off + M.TRANSFORM + 16);
       }
+      mesh.aovId = u[H.MESH_AOV_IDS] ? u[u[H.MESH_AOV_IDS] + i] : i;
       this.syncInstances(mesh, u, f, first, i);
     }
     this.meshes.length = count;

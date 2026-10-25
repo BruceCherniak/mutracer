@@ -387,7 +387,8 @@ pub struct MtRenderOptions {
     width: u32,
     height: u32,
     seed: u32,
-    reserved: [u32; 2],
+    aovs: u32,
+    aov_samples: u32,
     resolution_scale: f64,
     clamping: f64,
     transmissive_output_alpha_min: f64,
@@ -496,7 +497,8 @@ fn render_options(settings: &RenderSettings) -> MtRenderOptions {
         width,
         height,
         seed: settings.seed,
-        reserved: [0; 2],
+        aovs: settings.aovs,
+        aov_samples: settings.aov_samples,
         resolution_scale: scale,
         clamping: settings.clamping,
         transmissive_output_alpha_min: settings.transmissive_output_alpha_min,
@@ -510,8 +512,7 @@ fn render_options(settings: &RenderSettings) -> MtRenderOptions {
     }
 }
 fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
-    if options.reserved != [0; 2]
-        || options.reserved_tail != 0
+    if options.reserved_tail != 0
         || options.bevel > 1
         || options.allow_multiple_samples_per_frame > 1
     {
@@ -523,6 +524,12 @@ fn render_settings(options: &MtRenderOptions) -> Result<RenderSettings> {
         (width, height) => RenderSize::Fixed { width, height },
     };
     let settings = RenderSettings {
+        aovs: options.aovs,
+        aov_samples: if options.aov_samples == 0 {
+            16
+        } else {
+            options.aov_samples
+        },
         max_samples: options.max_samples,
         bounces: options.bounces,
         clamping: options.clamping,
@@ -1259,12 +1266,13 @@ pub struct MtDenoiseInput {
     struct_size: u32,
     width: u32,
     height: u32,
-    reserved: u32,
+    aovs: u32,
     count: usize,
     color: *const f32,
     normal: *const f32,
     albedo: *const f32,
     cancel: *const c_void,
+    aov_data: [*const c_void; 7],
 }
 type DenoiseCallback =
     unsafe extern "C" fn(*const MtDenoiseInput, *mut f32, *mut c_char, usize, *mut c_void) -> i32;
@@ -1276,8 +1284,11 @@ pub struct MtCustomDenoiser {
     callback: Option<DenoiseCallback>,
     release: Option<DenoiseRelease>,
     user: *mut c_void,
+    aovs: u32,
+    reserved: u32,
 }
 struct CFilter {
+    aovs: u32,
     callback: DenoiseCallback,
     release: Option<DenoiseRelease>,
     user: User,
@@ -1292,16 +1303,33 @@ impl Drop for CFilter {
     }
 }
 impl CustomDenoiser for CFilter {
+    fn aovs(&self) -> u32 {
+        self.aovs
+    }
     fn denoise(
         &self,
         input: DenoiseInput,
         cancel: CancelToken,
     ) -> std::result::Result<DenoiseOutput, String> {
+        let mut aov_data = [std::ptr::null(); 7];
+        let mut supplied = 0;
+        for aov in &input.aovs {
+            let mask = aov.kind.aov_mask();
+            let index = mask.trailing_zeros() as usize;
+            if index < 7 {
+                supplied |= mask;
+                aov_data[index] = aov
+                    .id_data
+                    .as_ref()
+                    .map_or(aov.data.as_ptr().cast(), |ids| ids.as_ptr().cast());
+            }
+        }
         let record = MtDenoiseInput {
             struct_size: std::mem::size_of::<MtDenoiseInput>() as u32,
             width: input.size[0],
             height: input.size[1],
-            reserved: 0,
+            aovs: supplied,
+            aov_data,
             count: input.color.len(),
             color: input.color.as_ptr(),
             normal: input.normal.as_ptr(),
@@ -1362,7 +1390,11 @@ pub unsafe extern "C" fn mt_render_set_custom_denoiser(
         let callback = options
             .callback
             .ok_or_else(|| invalid("Null denoiser callback"))?;
+        if options.aovs & !127 != 0 || options.reserved != 0 {
+            return Err(invalid("Invalid custom AOV mask or reserved field"));
+        }
         let filter = Arc::new(CFilter {
+            aovs: options.aovs,
             callback,
             release: options.release,
             user: User(options.user),
@@ -1591,13 +1623,23 @@ pub unsafe extern "C" fn mt_render_read_pixels(
             1 => PixelKind::Normal,
             2 => PixelKind::Albedo,
             3 => PixelKind::Denoised,
+            4 => PixelKind::Depth,
+            5 => PixelKind::Position,
+            6 => PixelKind::Roughness,
+            7 => PixelKind::DiffuseAlbedo,
+            8 => PixelKind::SpecularAlbedo,
+            9 => PixelKind::Id,
+            10 => PixelKind::Motion,
             _ => return Err(invalid("Unknown image kind")),
         };
         if written.is_null() {
             return Err(invalid("Null written"));
         }
         let image = render_of(handle)?.read_pixels(kind)?;
-        let bytes: Vec<u8> = image.data.iter().flat_map(|v| v.to_le_bytes()).collect();
+        let bytes: Vec<u8> = match image.id_data {
+            Some(ids) => ids.iter().flat_map(|v| v.to_le_bytes()).collect(),
+            None => image.data.iter().flat_map(|v| v.to_le_bytes()).collect(),
+        };
         unsafe { copy_out(&bytes, pixels, size, written) }
     })
 }
@@ -2263,7 +2305,7 @@ mod tests {
         assert_eq!(offset_of!(MtRenderOptions, alpha_blend_strategy), 104);
         assert_eq!(offset_of!(MtRenderOptions, reserved_tail), 108);
         assert_eq!(offset_of!(MtRenderOptions, seed), 44);
-        assert_eq!(offset_of!(MtRenderOptions, reserved), 48);
+        assert_eq!(offset_of!(MtRenderOptions, aovs), 48);
         assert_eq!(offset_of!(MtRenderOptions, resolution_scale), 56);
         assert_eq!(offset_of!(MtRenderOptions, time_budget_ms), 80);
         assert_eq!(size_of::<MtRenderDenoiser>(), 16 + pointer);
@@ -2345,7 +2387,7 @@ mod tests {
         );
         for edit in [
             |o: &mut MtRenderOptions| o.width = 0,
-            |o: &mut MtRenderOptions| o.reserved[1] = 1,
+            |o: &mut MtRenderOptions| o.aovs = 128,
             |o: &mut MtRenderOptions| o.bevel = 2,
             |o: &mut MtRenderOptions| o.sampling_pattern = 3,
             |o: &mut MtRenderOptions| o.max_samples = 0,

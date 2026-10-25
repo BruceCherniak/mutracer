@@ -232,6 +232,7 @@ impl Scene {
         d.words[h::ENVIRONMENT_TEXTURE] = r.environment_index;
         d.words[h::BACKGROUND_TEXTURE] = r.background_index;
         self.environment_settings.encode(&mut d.words);
+        self.write_aov_ids(&mut d.words);
         Ok(d.bytes())
     }
 }
@@ -239,6 +240,23 @@ impl Scene {
 #[cfg(feature = "viewer-support")]
 impl encoder::SceneData<'_> {
     pub fn to_scene(&self, environment: &encoder::Environment) -> Result<Scene> {
-        Scene::from_indexed(self, environment)
+        let mut scene = Scene::from_indexed(self, environment)?;
+        // The indexed viewer adapter reconstructs handles for every publication.
+        // Its source indices, rather than those transient handles, carry identity.
+        let identities: Vec<_> = scene
+            .meshes
+            .iter()
+            .enumerate()
+            .map(|(i, (key, _))| (key, i as u32))
+            .chain(
+                scene
+                    .materials
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (key, _))| (key, i as u32)),
+            )
+            .collect();
+        scene.aov_handles.extend(identities);
+        Ok(scene)
     }
 }

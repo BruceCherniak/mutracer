@@ -1,3 +1,4 @@
+import { allocateAovId, validateAovId } from '../renderer/aov.js';
 import type { Vec2 } from '../types.js';
 import type { ColorRGB } from '../types.js';
 import type TextureState from './TextureState.js';
@@ -10,10 +11,16 @@ export type MaterialAlphaMode = 'auto' | 'opaque' | 'mask' | 'blend';
 export type { MaterialTextureName } from './materialTextureNames.js';
 
 // Shared material state; browser texture types are refined by the public facade.
+const aovIds = new WeakMap<MaterialState, number>();
 export default class MaterialState {
+  /** Stable unsigned material ID, excluding 0xFFFFFFFF. Default process-unique monotonic ID; assign before committing the scene. */
+  get aovId(): number { return aovIds.get(this)!; }
+  set aovId(value: number) { aovIds.set(this, validateAovId(value)); }
   /** Creates a material. Omitted properties use their documented defaults. */
   constructor(params: MaterialStateParams = {}) {
+    aovIds.set(this, allocateAovId());
     applyMaterialParams(this, params);
+    if (params.aovId !== undefined) this.aovId = validateAovId(params.aovId);
   }
 
   // Base

@@ -299,6 +299,54 @@ fn gltf_layers_render_and_retained_texture_edit_match_full() {
             .any(|v| v[2].abs() > 0.1),
         "no primary hits"
     );
+    let mesh = MeshId(imported.scene.meshes.iter().next().unwrap().0);
+    let material_id = imported.names.materials["test"][0];
+    let mut aov_settings = render.settings().unwrap();
+    aov_settings.aovs = PixelKind::Depth.aov_mask()
+        | PixelKind::Id.aov_mask()
+        | PixelKind::Roughness.aov_mask()
+        | PixelKind::DiffuseAlbedo.aov_mask()
+        | PixelKind::SpecularAlbedo.aov_mask();
+    aov_settings.aov_samples = 4;
+    render.set_settings(aov_settings).unwrap();
+    render.converge(ConvergeOptions::new(4)).unwrap();
+    assert_eq!(
+        before,
+        render.read_pixels(PixelKind::Hdr).unwrap(),
+        "AOV changed glTF beauty"
+    );
+    let ids = render.read_pixels(PixelKind::Id).unwrap().id_data.unwrap();
+    assert!(
+        ids.chunks_exact(4)
+            .any(|v| v[0] == mesh.aov_id() && v[2] == material_id.aov_id() && v[3] == 0)
+    );
+    assert!(
+        render
+            .read_pixels(PixelKind::Depth)
+            .unwrap()
+            .data
+            .chunks_exact(4)
+            .any(|v| v[0] > 0. && v[3] > 0.)
+    );
+    assert!(
+        render
+            .read_pixels(PixelKind::Roughness)
+            .unwrap()
+            .data
+            .chunks_exact(4)
+            .any(|p| p[2] > 0. && p[3] > 0.)
+    );
+    for kind in [PixelKind::DiffuseAlbedo, PixelKind::SpecularAlbedo] {
+        assert!(
+            render
+                .read_pixels(kind)
+                .unwrap()
+                .data
+                .chunks_exact(4)
+                .all(|p| p[3] == 0.),
+            "glTF unsupported layers must invalidate reflectance"
+        );
+    }
     let material = imported.names.materials["test"][0];
     let map = imported
         .scene
@@ -316,6 +364,11 @@ fn gltf_layers_render_and_retained_texture_edit_match_full() {
         edited.data, before.data,
         "extension texture edit has no effect"
     );
+    assert_eq!(
+        ids,
+        render.read_pixels(PixelKind::Id).unwrap().id_data.unwrap(),
+        "texture edit changed identities"
+    );
     let fresh = Engine::new(EngineOptions {
         backend: Backend::Software,
     })
@@ -328,6 +381,78 @@ fn gltf_layers_render_and_retained_texture_edit_match_full() {
         assert_eq!(
             render.read_pixels(kind).unwrap(),
             reference.read_pixels(kind).unwrap()
+        );
+    }
+}
+
+#[test]
+fn gltf_layer_maps_environment_and_aov_identity_tables_coexist_after_edits() {
+    let mut imported = Scene::import_gltf_bytes(&fixture(all()), None).unwrap();
+    let mesh = MeshId(imported.scene.meshes.iter().next().unwrap().0);
+    let material = imported.names.materials["test"][0];
+    for settings in [
+        EnvironmentSettings::default(),
+        EnvironmentSettings {
+            intensity: 2.,
+            rotation: 0.4,
+            background_intensity: 0.8,
+            background_rotation: -0.3,
+        },
+        EnvironmentSettings::default(),
+    ] {
+        imported.scene.set_environment_settings(settings).unwrap();
+        let bytes = imported.scene.descriptor().unwrap();
+        crate::scene::validate(&bytes).unwrap();
+        let words: Vec<_> = bytes
+            .chunks_exact(4)
+            .map(|v| u32::from_le_bytes(v.try_into().unwrap()))
+            .collect();
+        let objects = words[h::MESH_AOV_IDS] as usize;
+        let materials = words[h::MATERIAL_AOV_IDS] as usize;
+        assert_eq!(words[objects], mesh.aov_id());
+        assert_eq!(words[materials], material.aov_id());
+        let environment = words[h::ENVIRONMENT_SETTINGS] as usize;
+        if environment != 0 {
+            assert_eq!(
+                [
+                    words[environment],
+                    words[environment + 1],
+                    words[environment + 2],
+                    words[environment + 3]
+                ]
+                .map(f32::from_bits),
+                [
+                    settings.intensity,
+                    settings.rotation,
+                    settings.background_intensity,
+                    settings.background_rotation
+                ]
+            );
+            assert!(
+                environment + 4 <= objects
+                    || objects + words[h::MESH_COUNT] as usize <= environment
+            );
+            assert!(
+                environment + 4 <= materials
+                    || materials + words[h::MATERIAL_COUNT] as usize <= environment
+            );
+        }
+        let hit = imported
+            .scene
+            .picker()
+            .unwrap()
+            .raycast(Ray::default(), RaycastOptions::default())
+            .unwrap()
+            .unwrap();
+        assert_eq!((hit.mesh, hit.material, hit.primitive), (mesh, material, 0));
+        assert_eq!(
+            imported
+                .scene
+                .material(material)
+                .unwrap()
+                .texture_properties
+                .len(),
+            8
         );
     }
 }

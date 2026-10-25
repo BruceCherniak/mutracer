@@ -84,7 +84,7 @@ export class WebGLFullQuadPass<I extends string, O extends string> {
     const textures = Object.keys(shader.uniforms).filter(name => shader.uniforms[name].type === 'sampler2D');
     uniforms = {...uniforms};
     if (scratch) for (const name of textures) uniforms[`${name}RegionSize`] = {type: 'ivec2', value: [1, 1]};
-    const sampled = new FragmentShader({name: shader.name, outputs: shader.outputs, defines, uniforms,
+    const sampled = new FragmentShader({name: shader.name, outputs: shader.outputs, outputTypes: shader.outputTypes, defines, uniforms,
       includes: [{defines: {}, uniforms: {}, main: '', functions: [() => scratchGLSLFunctions(textures, scratch), ...shader.functions]}],
       main: shader.main});
     sampled.parallelCompile = shader.parallelCompile;

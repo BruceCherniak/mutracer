@@ -22,7 +22,9 @@ mod custom_gpu_failure_tests;
 mod custom_gpu_submission;
 #[cfg(test)]
 mod custom_gpu_tests;
-pub use custom_denoise::{CustomDenoiser, DenoiseBuffers, DenoiseGpu, DenoiseInput, DenoiseOutput};
+pub use custom_denoise::{
+    CustomDenoiser, DenoiseAov, DenoiseBuffers, DenoiseGpu, DenoiseInput, DenoiseOutput, GpuAov,
+};
 pub use custom_gpu::{
     DenoiseAcceptance, DenoiseFrameId, DenoiseFrameStatus, DenoiseInputMode, GpuDenoiseInput,
     GpuDenoiseOutput,
@@ -143,3 +145,14 @@ mod backlog_tests;
 
 #[cfg(test)]
 mod lifecycle_tests;
+
+#[cfg(test)]
+mod aov_tests;
+
+mod temporal;
+pub use temporal::{
+    TemporalCamera, TemporalCapabilities, TemporalFrame, TemporalGlassCapabilities,
+    TemporalGlassCapability, TemporalGlassKind, TemporalGlassMotion, TemporalGuide,
+    TemporalMetadata, TemporalPixelRecord, TemporalProjection, TemporalResetReason,
+    TemporalSupport, temporal_validity,
+};

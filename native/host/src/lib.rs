@@ -23,6 +23,7 @@ mod denoise_ffi;
 mod oidn_webgpu;
 #[cfg(feature = "validation")]
 pub use oidn_webgpu::benchmark as benchmark_oidn_webgpu;
+mod aov;
 mod denoiser_inputs;
 mod depth;
 mod device_loss;

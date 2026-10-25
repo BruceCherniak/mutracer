@@ -108,3 +108,5 @@ export { default as RenderLoop } from './RenderLoop.js';
 export type { RenderLoopOptions, RenderLoopStatus } from './RenderLoop.js';
 
 export {getRecommendedDeviceDescriptor} from './renderer/deviceRequirements.js';
+
+export type {AovKind} from './renderer/aov.js';

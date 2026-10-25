@@ -17,16 +17,17 @@ final.setDenoiser({type: 'oidn', model: 'standard'});
 final.setDenoiser(null); // disable
 ```
 
-`type` is required: use `jnlm` or `oidn`. `render.denoiser` returns a frozen
-copy of the configuration; call `setDenoiser` again to change it. Unknown types,
+`type` is required: use `jnlm`, `oidn`, or a [custom denoiser](#custom-denoisers).
+`render.denoiser` returns a frozen copy of the configuration; call `setDenoiser`
+again to change it. Unknown types,
 foreign fields and invalid JNLM settings throw synchronously, preserving the
-active network and output. Equal implementation settings share the network;
+active filter and output. Equal built-in settings reuse the loaded network;
 changing only `schedule` preserves active inference, and passing an identical
 configuration does nothing.
 Each render has its own configuration and scheduling. Converge waits for its
 configured filter; intermediate progressive inference reports converging and
-final inference reports denoising. Engine caches equal network configurations
-and weights, releasing the network after its last render lease is released.
+final inference reports denoising. Built-in networks and weights are shared
+within an engine and released when no render uses them.
 
 `setDenoiser` returns a promise that resolves when the filter is ready, which
 for OIDN means its weights have loaded, and rejects when loading fails. A
@@ -204,7 +205,10 @@ const copy: Denoiser = {
     device.queue.submit([encoder.finish()]);
   }
 };
-final.setDenoiser({type: 'custom', denoiser: copy, schedule: 'converged'});
+final.setDenoiser({
+  type: 'custom', denoiser: copy, schedule: 'converged',
+  aovs: ['depth', 'motion']
+});
 ```
 
 The required `type` and `denoiser` choose this branch; `schedule` defaults to
@@ -219,13 +223,21 @@ render sizes is prepared again. `DenoiseInput` contains these buffers:
 | `albedo` | Linear RGB albedo averaged over complete samples; alpha is primary-hit coverage |
 | `normal` | Resolved world-space normal averaged and encoded as `normal*.5+.5`, without renormalization; alpha 1 for valid surface data, otherwise zero RGBA |
 | `output` | Write all linear HDR RGB; output alpha is ignored and the input path coverage is preserved |
+| `aovs` | Optional map of the requested surface-output buffers, such as `input.aovs?.depth`; absent by default |
 
-All four are tightly packed RGBA float32, top row first, exactly
-`width * height * 16` bytes, with STORAGE, COPY_SRC and COPY_DST usages.
+Color, albedo, normal and output are tightly packed RGBA float32, top row first,
+exactly `width * height * 16` bytes, with STORAGE, COPY_SRC and COPY_DST usages.
 Dimensions describe the actual internal image (WebGPU rounds up to 16).
+`CustomDenoiserOptions.aovs` defaults to `[]`. Requests enable the corresponding
+passes automatically; `render.aovs` is needed only for direct pixel readback.
+Each AOV buffer is top row first, exactly `width * height * 16` bytes: `id` is
+RGBA uint32 and the others RGBA float32. Values, validity and sampling limits
+follow [surface outputs](./api.md#surface-outputs). These are immutable snapshots
+of this invocation and cost 16 additional GPU bytes per pixel per requested kind.
+
 Input buffers are read-only. Buffers are borrowed until the promise settles;
-do not retain or destroy them. Resolve after submitting every output write;
-MuTracer copies the result, waits for GPU work, then releases its queue lease.
+do not retain or destroy them. Resolve after submitting every output write.
+
 Custom `readPixels('denoised')` returns the filtered native HDR ray color,
 with input path coverage. Display settings then follow the ordinary compose
 path: flat backgrounds retain their display-space treatment and catcher

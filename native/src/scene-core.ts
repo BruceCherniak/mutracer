@@ -1,3 +1,6 @@
+import {packAovScene} from '../../src/renderer/aovScene.js';
+import {AovHistory} from '../../src/renderer/aov.js';
+import {decodeCamera} from './camera-core.js';
 /// <reference lib="esnext" />
 /// <reference path="./browser-types.d.ts" />
 import {sceneErrorPacket} from './scene-errors.js';
@@ -188,7 +191,13 @@ export function sceneTargetParameters(bytes: Uint8Array, token: number): Uint8Ar
     // with blend coverage. The shared scene retains the stochastic base shader.
     const hasAlpha = u[5] === 1 && Boolean(constants.HAS_ALPHA_BLEND);
     const variant = constants.SAMPLING_PATTERN !== configuration.sampling.code || constants.BEVEL_SAMPLES !== configuration.bevelSamples || hasAlpha !== state.shader.features.hasAlpha;
-    const shader = variant ? productionShader(shaderId, {...state.shader,
+    const frameInputs=(configuration.variants & 16)!==0;
+    const targetConstants: Record<string,boolean|number>={...constants, SAMPLING_PATTERN:configuration.sampling.code,BEVEL_SAMPLES:configuration.bevelSamples};
+    const frameFeatures: Parameters<typeof wgpuShaderSource>[1]={...state.shader.features,hasAlpha};
+    const frameShader=()=>nativeShaderVariant(shaderId===RESOURCE.HWRT_SHADER?RESOURCE.HWRT_FRAME_SHADER:RESOURCE.SOFTWARE_FRAME_SHADER,targetConstants,frameFeatures,configuration.variants,()=>
+      (shaderId===RESOURCE.HWRT_SHADER?'enable wgpu_ray_query;\n':'')+wgpuShaderSource(targetConstants,frameFeatures,true,
+        shaderId===RESOURCE.HWRT_SHADER?nativeIntersections(frameFeatures,state.shader.isEmpty,false,false,true,state.shader.opaqueClosest):'',false,nativeFrameInputHooks()));
+    const shader = frameInputs ? frameShader() : variant ? productionShader(shaderId, {...state.shader,
       features: {...state.shader.features, hasAlpha},
       constants: {...constants, SAMPLING_PATTERN: configuration.sampling.code, BEVEL_SAMPLES: configuration.bevelSamples}}) : new Uint8Array(0);
     const result = new Uint8Array(4 * WORD_BYTES + camera.byteLength + 256 + shader.byteLength);
@@ -267,6 +276,7 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   const environmentDistribution = environment ? envMapDistribution(environment) : undefined;
   const materials: MaterialState[] = [];
   for (let i = 0; i < u[H.MATERIAL_COUNT]; i++) materials.push(decodeMaterial(u, f, u[H.MATERIAL_OFFSET] + i * MAT.WORDS, textures));
+  for (let i = 0; i < materials.length; i++) materials[i].aovId = u[H.MATERIAL_AOV_IDS] ? u[u[H.MATERIAL_AOV_IDS] + i] : i;
   if (kernelHints && kernelHints.length !== u[H.GEOMETRY_COUNT]) throw new Error('Kernel geometry count mismatch');
   const geometries: Geometry[] = [];
   for (let i = 0; i < u[H.GEOMETRY_COUNT]; i++) {
@@ -277,6 +287,7 @@ function decodeScene(bytes: Uint8Array, token = 0) {
   for (let i = 0; i < u[H.MESH_COUNT]; i++) {
     const off = u[H.MESH_OFFSET] + i * M.WORDS;
     const mesh = new MeshState(geometries[u[off + M.GEOMETRY]], decodeMeshMaterials(u, off, materials));
+    mesh.aovId = u[H.MESH_AOV_IDS] ? u[u[H.MESH_AOV_IDS] + i] : i;
     if (u[H.BATCH_OFFSET]) {
       const instances = decodeInstances(u, f, u[H.BATCH_OFFSET] + i * B.WORDS);
       if (instances) mesh.setInstanceState(instances);
@@ -827,7 +838,7 @@ function prepareTransformUpdate(bytes: Uint8Array, token: number, native: boolea
   const u = new Uint32Array(bytes.buffer, bytes.byteOffset, 20), f = new Float32Array(bytes.buffer, bytes.byteOffset, 20);
   const previous = state?.meshes[u[1]];
   if (!state || !previous) return new Uint8Array(new Uint32Array([2, 1, 0, 0]).buffer);
-  const mesh = new MeshState(previous.geometry, previous.materials);
+  const mesh = new MeshState(previous.geometry, previous.materials); mesh.aovId = previous.aovId;
   const data = previous.instanceData;
   if (u[2] && (!data || u[2] > data.count)) return new Uint8Array(new Uint32Array([2, 3, 0, 0]).buffer);
   mesh.transform = u[2] ? new Float32Array(matrixStorage(previous.transform)) : f.slice(4, 20);
@@ -962,7 +973,7 @@ export function sceneInstanceColorParameters(bytes: Uint8Array, token: number): 
     return new Uint8Array(new Uint32Array([2, 2, 0, 0]).buffer);
   try {
     const colors = new Float32Array(bytes.buffer, bytes.byteOffset + 16, data.count * 3).slice();
-    const mesh = new MeshState(previous.geometry, previous.materials);
+    const mesh = new MeshState(previous.geometry, previous.materials); mesh.aovId = previous.aovId;
     mesh.transform = new Float32Array(matrixStorage(previous.transform));
     mesh.setInstanceState(new InstanceState({count: data.count, transforms: data.transforms, colors}));
     const meshes = state.meshes.slice(); meshes[u[1]] = mesh;
@@ -1027,7 +1038,7 @@ function prepareGeometryUpdate(bytes: Uint8Array, token: number, native: boolean
   markDeformedGeometry(geometry);
   const meshes = state.meshes.map(mesh => {
     if (mesh.geometry !== previous) return mesh;
-    const next = new MeshState(geometry, mesh.materials); next.transform = new Float32Array(matrixStorage(mesh.transform));
+    const next = new MeshState(geometry, mesh.materials); next.aovId = mesh.aovId; next.transform = new Float32Array(matrixStorage(mesh.transform));
     const data = mesh.instanceData; if (data) next.setInstanceState(new InstanceState({count: data.count, transforms: data.transforms, colors: data.colors}));
     return next;
   });
@@ -1160,7 +1171,7 @@ function prepareLegacyGeometryUpdate(bytes: Uint8Array, token: number, native: b
   const bindingsByMesh = new Map(state.bindings.map(b => [b.mesh, b]));
   const meshes = state.meshes.map(previousMesh => {
     if (previousMesh.geometry !== previous) return previousMesh;
-    const mesh = new MeshState(geometry, previousMesh.materials);
+    const mesh = new MeshState(geometry, previousMesh.materials); mesh.aovId = previousMesh.aovId;
     mesh.transform = new Float32Array(matrixStorage(previousMesh.transform));
     const data = previousMesh.instanceData;
     if (data) mesh.setInstanceState(new InstanceState({count: data.count, transforms: data.transforms, colors: data.colors}));
@@ -1313,4 +1324,47 @@ export function geometryKernelReference(bytes: Uint8Array, withBounds: number): 
     hints.push({vertexCount:geometry.vertexCount,bounds:withBounds?packed:undefined,tangents:generated?geometry.tangent!.array:undefined});
   }
   return encodeGeometryKernelHints(hints,counts);
+}
+
+/** Snapshot current stable identities and transforms for an independent AOV target. */
+export function sceneAovParameters(bytes: Uint8Array, token: number): Uint8Array {
+  try {
+    const state=retainedScenes.get(token);
+    if(!state || bytes.byteLength!==136) throw new Error('Invalid AOV request');
+    const u=new Uint32Array(bytes.buffer,bytes.byteOffset,2);
+    const camera=decodeCamera(bytes.subarray(8));
+    let primitiveIds: Uint32Array | undefined;
+    if(state.hardware){
+      primitiveIds=new Uint32Array(state.prepared.geometry.indexArray.length/3);
+      for(const geometry of state.hardware.geometries){
+        for(let t=0;t<geometry.indexCount/3;t++)primitiveIds[geometry.indexOffset/3+t]=t;
+      }
+    }
+    const packed=packAovScene({...state.prepared, instances:state.instances, blases:state.blases},state.tlas,camera,u[0],u[1],new AovHistory(),primitiveIds);
+    const words=packed.words, floats=new Float32Array(words.buffer);
+    floats.set(packed.frame.viewProjection);
+    // Content revisions survive full publications. Hash shared geometry once,
+    // even when one mesh contributes many linear or packed instances.
+    const geometrySignatures=new Map<Geometry,Uint32Array>();
+    const objectSignatures=new Map<number,Uint32Array>();
+    for(const mesh of state.meshes){
+      let signature=geometrySignatures.get(mesh.geometry);
+      if(!signature){
+        let topology=2166136261,vertices=2166136261;
+        for(const value of mesh.geometry.indexArray)topology=Math.imul(topology^value,16777619)>>>0;
+        const position=new Float32Array(mesh.geometry.position.array);
+        for(const value of new Uint32Array(position.buffer))vertices=Math.imul(vertices^value,16777619)>>>0;
+        signature=new Uint32Array([topology,vertices,position.length]);
+        geometrySignatures.set(mesh.geometry,signature);
+      }
+      objectSignatures.set(mesh.aovId,signature);
+    }
+    for(let i=0;i<packed.frame.instances.length;i++) {
+      const instance=packed.frame.instances[i],offset=52+i*24;
+      floats.set(instance.transform,offset+4);
+      words.set(objectSignatures.get(instance.object)!,offset+20);
+    }
+    const result=new Uint32Array(4+words.length);result.set([1,words.length,0,0]);result.set(words,4);
+    return new Uint8Array(result.buffer);
+  }catch(error){return sceneErrorPacket(ERROR_CODE.CONFIGURE,error);}
 }

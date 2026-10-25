@@ -19,9 +19,16 @@ use std::{
 };
 pub use types::{Geometry, MaterialLayers};
 
+static NEXT_AOV: AtomicU64 = AtomicU64::new(1);
+fn next_aov() -> u32 {
+    let id = NEXT_AOV.fetch_add(1, Ordering::Relaxed);
+    assert!(id < u32::MAX as u64, "AOV ID space exhausted");
+    id as u32
+}
 static NEXT_SCENE: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 struct Key {
+    aov: u32,
     owner: u64,
     index: u32,
     generation: u32,
@@ -31,10 +38,14 @@ macro_rules! ids { ($($id:ident),*) => {$ (
     /// other scenes reject it.
     #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
     pub struct $id(Key);
+    impl $id { /// Stable AOV identity, retained across descriptor publications.
+        pub fn aov_id(self)->u32 {self.0.aov}
+    }
 )*}; }
 ids!(GeometryId, MaterialId, TextureId, MeshId, LightId);
 #[derive(Clone)]
 struct Slot<T> {
+    aov: u32,
     generation: u32,
     value: Option<T>,
 }
@@ -57,18 +68,22 @@ impl<T> Arena<T> {
             .find(|(_, s)| s.value.is_none() && s.generation < u32::MAX)
         {
             s.value = Some(value);
+            s.aov = next_aov();
             return Key {
+                aov: s.aov,
                 owner: self.owner,
                 index: i as u32,
                 generation: s.generation,
             };
         }
         let k = Key {
+            aov: next_aov(),
             owner: self.owner,
             index: self.slots.len() as u32,
             generation: 1,
         };
         self.slots.push(Slot {
+            aov: k.aov,
             generation: 1,
             value: Some(value),
         });
@@ -100,6 +115,7 @@ impl<T> Arena<T> {
             s.value.as_ref().map(|v| {
                 (
                     Key {
+                        aov: s.aov,
                         owner: self.owner,
                         index: i as u32,
                         generation: s.generation,
@@ -386,6 +402,7 @@ struct Cache {
 /// A flat scene. Handles are scoped to this scene; removing referenced resources
 /// returns InvalidHandle until their users are edited or removed.
 pub struct Scene {
+    aov_handles: std::collections::HashMap<Key, u32>,
     geometries: Arena<Geometry>,
     materials: Arena<OpenPbrMaterial>,
     textures: Arena<Texture>,
@@ -408,6 +425,7 @@ impl Scene {
     pub fn new() -> Self {
         let owner = NEXT_SCENE.fetch_add(1, Ordering::Relaxed);
         Self {
+            aov_handles: Default::default(),
             geometries: Arena::new(owner),
             materials: Arena::new(owner),
             textures: Arena::new(owner),
@@ -693,6 +711,32 @@ impl Scene {
         self.encode_into(&mut words, None)?;
         Ok(words)
     }
+    fn write_aov_ids(&self, words: &mut Vec<u32>) {
+        for (field, ids) in [
+            (
+                h::MESH_AOV_IDS,
+                self.meshes
+                    .iter()
+                    .map(|(key, _)| self.aov_handles.get(&key).copied().unwrap_or(key.aov))
+                    .collect::<Vec<_>>(),
+            ),
+            (
+                h::MATERIAL_AOV_IDS,
+                self.materials
+                    .iter()
+                    .map(|(key, _)| self.aov_handles.get(&key).copied().unwrap_or(key.aov))
+                    .collect::<Vec<_>>(),
+            ),
+        ] {
+            if words[field] == 0 {
+                words[field] = words.len() as u32;
+                words.resize(words.len() + ids.len(), 0);
+            }
+            let offset = words[field] as usize;
+            words[offset..offset + ids.len()].copy_from_slice(&ids);
+        }
+        words[h::LENGTH] = words.len() as u32;
+    }
     fn encode_into(
         &self,
         words: &mut Vec<u32>,
@@ -728,6 +772,7 @@ impl Scene {
         words[h::ENVIRONMENT_TEXTURE] = r.environment_index;
         words[h::BACKGROUND_TEXTURE] = r.background_index;
         self.environment_settings.encode(words);
+        self.write_aov_ids(words);
         Ok(())
     }
     /// Encodes an immutable snapshot. Repeated calls without edits share one buffer.

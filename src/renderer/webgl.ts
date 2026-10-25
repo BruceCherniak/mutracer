@@ -212,6 +212,7 @@ export class Texture2D {
 
   protected _format(gl: WebGL2RenderingContext, channels = 4) {
     const type = this._options.type || gl.UNSIGNED_BYTE;
+    if (type === gl.UNSIGNED_INT) return {type, format: gl.RGBA_INTEGER, internalFormat: gl.RGBA32UI};
     const formats = [gl.RED, gl.RG, gl.RGB, gl.RGBA];
     const floatFormats = [gl.R32F, gl.RG32F, gl.RGB32F, gl.RGBA32F];
     const halfFloatFormats = [gl.R16F, gl.RG16F, gl.RGB16F, gl.RGBA16F];
@@ -569,13 +570,14 @@ function composeFragment(
     })
     .join('\n');
   const outputCode = shader.outputs
-    .map((name, index) => `layout(location=${index}) out highp vec4 out_${name};`)
+    .map((name, index) => `layout(location=${index}) out highp ${shader.outputTypes[name] ?? 'vec4'} out_${name};`)
     .join('\n');
   return /* glsl */ `#version 300 es
 precision highp float;
 precision highp int;
 precision highp sampler2D;
 precision highp sampler2DArray;
+precision highp usampler2D;
 ${defineCode}
 ${outputCode}
 ${uniformCode}

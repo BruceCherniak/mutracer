@@ -140,6 +140,13 @@ unsafe extern "C" {
         output: *mut *const u8,
         size: *mut usize,
     );
+    fn mt_core_scene_aov(
+        input: *const u8,
+        length: usize,
+        token: u32,
+        output: *mut *const u8,
+        size: *mut usize,
+    );
     fn mt_core_scene_target(
         input: *const u8,
         length: usize,
@@ -296,7 +303,6 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
     }
     w.reserved(h::RESERVED, 1)?;
 
-    w.reserved(h::RESERVED_TAIL, 2)?;
     w.reserved(h::RESERVED_END, h::WORDS - h::RESERVED_END)?;
     if w.u(h::ENVIRONMENT_SETTINGS) != 0 {
         let at = w.u(h::ENVIRONMENT_SETTINGS);
@@ -304,6 +310,22 @@ pub(super) fn validate_changed(bytes: &[u8], unchanged: &[u8]) -> Result<()> {
         w.finite(at, 4)?;
         if w.f(at) < 0. || w.f(at + 2) < 0. {
             return Err("Environment intensity must be nonnegative".into());
+        }
+    }
+    for (field, count) in [
+        (h::MESH_AOV_IDS, h::MESH_COUNT),
+        (h::MATERIAL_AOV_IDS, h::MATERIAL_COUNT),
+    ] {
+        let offset = w.u(field);
+        if offset != 0 {
+            w.span(offset, w.u(count))?;
+            let mut ids = std::collections::HashSet::new();
+            for i in 0..w.u(count) {
+                let id = w.u(offset + i);
+                if id == u32::MAX as usize || !ids.insert(id) {
+                    return Err("AOV IDs must be unique and cannot equal UINT32_MAX".into());
+                }
+            }
         }
     }
     if w.u(h::BATCH_OFFSET) != 0 {
@@ -1227,6 +1249,19 @@ impl PreparedState {
     }
     /// Camera and trace uniforms of a render target on this scene, plus the
     /// production shader when the target's sampling pattern or bevel samples differ.
+    pub(crate) fn aov_metadata(&self, camera: &[u8], size: [u32; 2]) -> Result<Vec<u32>> {
+        let mut input: Vec<u8> = size.into_iter().flat_map(u32::to_le_bytes).collect();
+        input.extend_from_slice(camera);
+        let state = self.clone();
+        let packet = runtime::call(move || native_step(mt_core_scene_aov, &input, state.token))?;
+        if packet.len() < 80 || packet.len() % 4 != 0 {
+            return Err("Invalid AOV metadata".into());
+        }
+        Ok(packet[16..]
+            .chunks_exact(4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+            .collect())
+    }
     pub(super) fn target(
         &self,
         settings: &settings::RenderSettings,
@@ -1236,6 +1271,7 @@ impl PreparedState {
         hardware: bool,
         camera: &[u8],
         loss: &crate::device_loss::DeviceLossNotifier,
+        frame_inputs: bool,
     ) -> Result<TargetPacket> {
         if camera.len() != cam::WORDS * WORD_BYTES {
             return Err("Camera descriptor must contain exactly 128 bytes".into());
@@ -1248,7 +1284,7 @@ impl PreparedState {
                 "Invalid render target size, quality or alpha strategy",
             ));
         }
-        let mut input = settings.wire(15)?;
+        let mut input = settings.wire(if frame_inputs { 31 } else { 15 })?;
         let shader = if hardware {
             res::HWRT_SHADER
         } else {
@@ -2078,6 +2114,23 @@ pub(crate) mod tests {
     use super::*;
     unsafe extern "C" {
         fn mt_core_shader_cache(output: *mut *const u8, size: *mut usize);
+    }
+    #[test]
+    fn aov_id_tables_validate_spans_and_background_sentinel() {
+        let original = small_fixture();
+        for field in [h::MESH_AOV_IDS, h::MATERIAL_AOV_IDS] {
+            let mut bytes = original.clone();
+            let offset = (bytes.len() / 4) as u32;
+            bytes.extend_from_slice(&42u32.to_le_bytes());
+            bytes[field * 4..field * 4 + 4].copy_from_slice(&offset.to_le_bytes());
+            let length = (bytes.len() / 4) as u32;
+            bytes[4..8].copy_from_slice(&length.to_le_bytes());
+            assert!(validate(&bytes).is_ok());
+            bytes[offset as usize * 4..].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(validate(&bytes).is_err());
+            bytes[field * 4..field * 4 + 4].copy_from_slice(&length.to_le_bytes());
+            assert!(validate(&bytes).is_err());
+        }
     }
     fn shader_stats() -> [u32; 3] {
         runtime::run(|| {

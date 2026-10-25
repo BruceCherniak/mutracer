@@ -118,7 +118,7 @@ fn every_record_matches_an_independent_v4_builder() {
         transforms: transforms.clone().into(),
         colors: Some(vec![1.; 6].into()),
     });
-    s.add_mesh(mesh).unwrap();
+    let mesh_id = s.add_mesh(mesh).unwrap();
     s.set_environment(Environment {
         texture: Some(env),
         background: Some(bg),
@@ -274,6 +274,8 @@ fn every_record_matches_an_independent_v4_builder() {
             .collect::<Vec<_>>(),
     );
     w[lo + 3 * l::WORDS + l::IES_BYTES] = ies.len() as u32;
+    w[h::MESH_AOV_IDS] = append(&mut w, &[mesh_id.aov_id()]);
+    w[h::MATERIAL_AOV_IDS] = append(&mut w, &[ma.aov_id(), mb.aov_id()]);
     w[h::LENGTH] = w.len() as u32;
     let expected = w.iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>();
     assert_eq!(*actual, expected);

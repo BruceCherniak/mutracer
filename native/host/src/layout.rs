@@ -45,7 +45,8 @@ pub mod header {
     pub const BACKGROUND_TEXTURE: usize = 21;
     pub const QUALITY_FLAGS: usize = 22;
     pub const BATCH_OFFSET: usize = 23;
-    pub const RESERVED_TAIL: usize = 24;
+    pub const MESH_AOV_IDS: usize = 24;
+    pub const MATERIAL_AOV_IDS: usize = 25;
     pub const ENVIRONMENT_SETTINGS: usize = 26;
     pub const RESERVED_END: usize = 27;
     pub const WORDS: usize = 32;

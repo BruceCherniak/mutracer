@@ -214,6 +214,15 @@ resource_access! {geometry,Geometry,GeometryId;material,Material,MaterialId;text
 impl Entry {
     fn insert(&mut self, r: Resource) -> u64 {
         let id = next();
+        match r {
+            Resource::Mesh(key) => {
+                self.scene.aov_handles.insert(key.0, id as u32);
+            }
+            Resource::Material(key) => {
+                self.scene.aov_handles.insert(key.0, id as u32);
+            }
+            _ => {}
+        }
         self.resources.insert(id, r);
         id
     }

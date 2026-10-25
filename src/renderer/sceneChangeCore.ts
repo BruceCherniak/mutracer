@@ -117,6 +117,7 @@ class GeometryStorage {
 }
 
 class MeshSnapshot {
+  aovId: number;
   mesh: MeshState;
   geometry: Geometry;
   version: number;
@@ -130,10 +131,12 @@ class MeshSnapshot {
   instanceTransforms: Float32Array | undefined = undefined;
   instanceColors: Float32Array | undefined = undefined;
   constructor(mesh: MeshState) {
+    this.aovId = mesh.aovId;
     this.mesh = mesh; this.geometry = mesh.geometry; this.version = mesh.geometry.version;
     this.dynamic = mesh.geometry.dynamic; this.storage = new GeometryStorage(mesh.geometry);
   }
   capture(mesh: MeshState) {
+    this.aovId = mesh.aovId;
     this.mesh = mesh; this.geometry = mesh.geometry; this.version = mesh.geometry.version;
     this.dynamic = mesh.geometry.dynamic; this.storage.capture(mesh.geometry);
     const instance = mesh.instanceData;
@@ -195,7 +198,7 @@ export class SceneChangeTracker<L, B, MaterialSnapshot, LightSnapshot, Backgroun
           transforms.push(mesh); instanceChanged = true;
         }
       }
-      if (prev === undefined || prev.mesh !== mesh || prev.geometry !== mesh.geometry || prev.dynamic !== mesh.geometry.dynamic ||
+      if (prev === undefined || prev.mesh !== mesh || prev.aovId !== mesh.aovId || prev.geometry !== mesh.geometry || prev.dynamic !== mesh.geometry.dynamic ||
         !prev.storage.matches(mesh.geometry) || prev.materials.length !== mesh.materials.length) full = true;
       else for (let k = 0; k < mesh.materials.length; k++) if (prev.materials[k] !== mesh.materials[k]) { full = true; break; }
       if (prev !== undefined && prev.geometry === mesh.geometry && prev.version !== mesh.geometry.version) geometries.add(mesh.geometry);

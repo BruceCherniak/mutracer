@@ -5,6 +5,7 @@ use std::sync::Arc;
 /// Stable IDs refer to scene objects, never to reordered BVH node/leaf indices.
 #[derive(Default)]
 pub(crate) struct GeometrySnapshot {
+    pub aov_words: Vec<u32>,
     pub instances: Vec<InstanceSnapshot>,
     pub deformations: Vec<DeformationSnapshot>,
     /// Retains the exact publication without copying an entire scene every frame.

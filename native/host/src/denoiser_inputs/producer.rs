@@ -1,32 +1,70 @@
 //! Initial real 1-spp producer. Directional reflectance uses an opt-in numerical
-//! baseline; motion and optical branch records are not yet advertised.
+//! baseline; optical branch records remain unverified.
 use super::*;
 use crate::{CachedPipeline, GpuScene, Result, compile_pipeline, layout, storage_layout};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
+/// Packed 240-byte primary-surface record, bottom row first. Read using byte
+/// copies or an aligned cast; never write the borrowed GPU buffer. Identity uses
+/// publication-local indices; use TemporalFrame::stable_ids for stable identity.
 #[repr(C, align(16))]
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct FramePixelRecord {
+pub struct FramePixelRecord {
+    /// Linear HDR radiance, alpha 1.
     pub noisy_color: [f32; 4],
+    /// Oriented world shading normal xyz, specular roughness w.
     pub normal_roughness: [f32; 4],
+    /// World position xyz, linear camera-forward depth w.
     pub position_depth: [f32; 4],
+    /// Original unflipped geometric normal xyz, zero w.
     pub geometric_normal: [f32; 4],
     /// Resolved base color; not a directional diffuse reflectance.
     pub base_color_metalness: [f32; 4],
+    /// Transmission color RGB, transmission weight w.
     pub transmission: [f32; 4],
+    /// Roughness xy, incident IOR z and transmitted IOR w.
     pub roughness_ior: [f32; 4],
+    /// Medium extinction RGB and medium type w.
     pub absorption: [f32; 4],
     /// Publication-local instance/primitive indices, thin-wall flag, validity.
     pub identity: [u32; 4],
+    /// Barycentrics xy, front-face boolean z, resolved material index w.
     pub barycentrics_face: [f32; 4],
+    /// Radiance before per-sample clamping, alpha 1.
     pub unclamped_radiance: [f32; 4],
+    /// Final RNG words for reproducibility, opaque to consumers.
     pub rng_state: [u32; 4],
+    /// Counter, bounce, sample index and seed.
     pub rng_dimensions: [u32; 4],
+    /// Directional reflectance RGB, zero w; REFLECTANCE validity is required.
     pub diffuse_albedo: [f32; 4],
+    /// Directional reflectance RGB, zero w; REFLECTANCE validity is required.
     pub specular_albedo: [f32; 4],
 }
 
+/// Immutable scene bindings captured before releasing the context registry.
+pub(crate) struct ProducerScene {
+    pub gpu: crate::GpuDevice,
+    pub scene: crate::Scene,
+    pub hwrt_shader: bool,
+    pub groups: Vec<wgpu::BindGroup>,
+    pub buffers: std::collections::HashMap<usize, wgpu::Buffer>,
+}
+impl ProducerScene {
+    pub fn snapshot(scene: &GpuScene) -> Self {
+        Self {
+            gpu: scene.gpu.clone(),
+            scene: scene.scene.clone(),
+            hwrt_shader: scene.hwrt_shader,
+            groups: scene.groups[..2].to_vec(),
+            buffers: std::collections::HashMap::from([(
+                layout::resource::LIGHT_UNIFORM,
+                scene.buffers[&layout::resource::LIGHT_UNIFORM].clone(),
+            )]),
+        }
+    }
+}
 pub(crate) struct FrameProducer {
     trace: CachedPipeline,
     resolve: wgpu::ComputePipeline,
@@ -34,6 +72,9 @@ pub(crate) struct FrameProducer {
 }
 impl FrameProducer {
     pub fn new(scene: &GpuScene, source: String) -> Result<Self> {
+        Self::new_snapshot(&ProducerScene::snapshot(scene), source)
+    }
+    pub fn new_snapshot(scene: &ProducerScene, source: String) -> Result<Self> {
         let mut description = scene.scene.clone();
         description.bind_groups[layout::group::OUTPUT]
             .layout
@@ -87,6 +128,24 @@ impl FrameProducer {
         &self,
         scene: &GpuScene,
         history: &mut GpuFrameHistory,
+        metadata: FrameMetadata,
+        geometry: GeometrySnapshot,
+        camera: &[u8],
+        trace: &[u8],
+    ) -> Result<(Arc<GpuFrame>, ProducerDependency)> {
+        self.produce_snapshot(
+            &ProducerScene::snapshot(scene),
+            history,
+            metadata,
+            geometry,
+            camera,
+            trace,
+        )
+    }
+    pub fn produce_snapshot(
+        &self,
+        scene: &ProducerScene,
+        history: &mut GpuFrameHistory,
         mut metadata: FrameMetadata,
         geometry: GeometrySnapshot,
         camera: &[u8],
@@ -124,7 +183,11 @@ impl FrameProducer {
         // missing motion/path data into a declaration of complete RR inputs.
         metadata.capabilities.first_surface = Support::Ready;
         metadata.capabilities.camera_motion = Support::Ready;
-        metadata.capabilities.rigid_motion = Support::Unverified;
+        metadata.capabilities.rigid_motion = if geometry.aov_words.is_empty() {
+            Support::Unverified
+        } else {
+            Support::Ready
+        };
         metadata.capabilities.deformation_motion = Support::Unverified;
         metadata.capabilities.specular_distance = Support::Unverified;
         metadata.capabilities.glass = GlassCapabilities::default();
@@ -239,14 +302,38 @@ impl FrameProducer {
             }
             pass.dispatch_workgroups(size[0].div_ceil(8), size[1].div_ceil(8), 1);
         }
-        // Camera-only correspondence is safe only on the exact same scene
-        // publication. Reordered/local IDs are never assumed stable across it.
+        let stable = !geometry.aov_words.is_empty();
         let previous = history.previous_snapshot().filter(|previous| {
-            previous.metadata.scene_revision == metadata.scene_revision
-                && previous.metadata.camera.same_projection(&metadata.camera)
+            previous.metadata.camera.same_projection(&metadata.camera)
                 && previous.metadata.input_extent == size
-                && Arc::ptr_eq(&previous.geometry.publication, &geometry.publication)
+                && (stable
+                    || (previous.metadata.scene_revision == metadata.scene_revision
+                        && Arc::ptr_eq(&previous.geometry.publication, &geometry.publication)))
         });
+        let metadata_words = if stable {
+            crate::aov::reproject_metadata(
+                &geometry.aov_words,
+                previous.map(|p| p.geometry.aov_words.as_slice()),
+            )
+        } else {
+            vec![0; 52]
+        };
+        let metadata_bytes: Vec<_> = metadata_words
+            .iter()
+            .flat_map(|v| v.to_le_bytes())
+            .collect();
+        let motion_metadata = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Frame stable transforms"),
+                contents: &metadata_bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+            });
+        let stable_ids = allocate(pixels * 16);
+        let empty_ids = allocate(16);
+        let previous_ids = previous
+            .and_then(|p| p.resources.stable_ids.as_ref())
+            .unwrap_or(&empty_ids);
         let view_projection = |camera: &CameraSnapshot| {
             (glam::Mat4::from_cols_array(&camera.projection)
                 * glam::Mat4::from_cols_array(&camera.view))
@@ -272,7 +359,7 @@ impl FrameProducer {
             .flat_map(|value| value.to_le_bytes())
             .collect();
         resolve_parameters.extend(
-            [u32::from(previous.is_some()), 0, 0, 0]
+            [u32::from(previous.is_some()), u32::from(stable), 0, 0]
                 .into_iter()
                 .flat_map(|v| v.to_le_bytes()),
         );
@@ -307,6 +394,16 @@ impl FrameProducer {
             binding: 9,
             resource: previous_pixels.as_entire_binding(),
         });
+        for (binding, buffer) in [
+            (10, &motion_metadata),
+            (11, previous_ids),
+            (12, &stable_ids),
+        ] {
+            resolve_entries.push(wgpu::BindGroupEntry {
+                binding,
+                resource: buffer.as_entire_binding(),
+            });
+        }
         let resolve_group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: None,
             layout: &self.resolve.get_bind_group_layout(0),
@@ -322,10 +419,16 @@ impl FrameProducer {
         resources.gpu_bytes += outputs.iter().map(|b| b.size()).sum::<u64>()
             + camera.size()
             + trace.size()
-            + resolve_parameters.size();
+            + resolve_parameters.size()
+            + motion_metadata.size()
+            + stable_ids.size()
+            + empty_ids.size();
         resources.producer_buffers.extend([camera, trace]);
         resources.producer_buffers.extend(outputs);
         resources.producer_buffers.push(resolve_parameters);
+        resources.producer_buffers.push(motion_metadata);
+        resources.producer_buffers.push(empty_ids);
+        resources.stable_ids = Some(stable_ids);
         let frame = history.prepare(metadata, geometry, resources)?;
         let dependency = ProducerDependency::Commands {
             frame: frame.clone(),

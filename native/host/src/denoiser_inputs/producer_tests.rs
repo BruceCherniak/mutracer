@@ -132,7 +132,11 @@ pub(super) fn read_texture(gpu: &GpuDevice, texture: &wgpu::Texture) -> Vec<u8> 
 #[ignore = "requires real Vulkan and DX12 GPUs; run npm run native:ci:gpu"]
 fn first_surface_reflectance_matches_independent_hemisphere_quadrature() {
     let _lock = ABI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    for backend in [wgpu::Backends::VULKAN, wgpu::Backends::DX12] {
+    for backend in if cfg!(target_os = "macos") {
+        vec![wgpu::Backends::METAL]
+    } else {
+        vec![wgpu::Backends::VULKAN, wgpu::Backends::DX12]
+    } {
         let Some(gpu) = test_gpu(backend) else {
             continue;
         };
@@ -303,7 +307,9 @@ fn first_surface_record_and_resolve_have_matching_layouts() {
 }
 
 pub(super) fn test_gpu(backend: wgpu::Backends) -> Option<GpuDevice> {
-    if cfg!(target_os = "macos") || (cfg!(target_os = "linux") && backend == wgpu::Backends::DX12) {
+    if cfg!(target_os = "macos") && backend != wgpu::Backends::METAL
+        || cfg!(target_os = "linux") && backend == wgpu::Backends::DX12
+    {
         return None;
     }
     let mut descriptor = wgpu::InstanceDescriptor {
@@ -335,7 +341,11 @@ pub(super) fn test_gpu(backend: wgpu::Backends) -> Option<GpuDevice> {
 #[ignore = "requires real Vulkan and DX12 GPUs; run npm run native:ci:gpu"]
 fn real_frame_inputs_match_plane_oracle_and_preserve_path_rng() {
     let _lock = ABI_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    for backend in [wgpu::Backends::VULKAN, wgpu::Backends::DX12] {
+    for backend in if cfg!(target_os = "macos") {
+        vec![wgpu::Backends::METAL]
+    } else {
+        vec![wgpu::Backends::VULKAN, wgpu::Backends::DX12]
+    } {
         let Some(gpu) = test_gpu(backend) else {
             continue;
         };

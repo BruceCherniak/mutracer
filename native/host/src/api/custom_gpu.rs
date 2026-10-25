@@ -15,6 +15,9 @@ pub enum DenoiseInputMode {
     /// GPU averages of the completed accumulation and its OIDN normal/albedo
     /// guides, bottom row first. These are not 1-spp temporal/RR guides.
     ResidentGpu,
+    /// Separate 1-spp guides and frame records in `GpuDenoiseInput::temporal`.
+    /// Requires a pinhole camera and equal input/output dimensions.
+    TemporalGpu,
 }
 
 /// Identity of an immutable custom-filter snapshot. Each invocation is unique,
@@ -122,6 +125,10 @@ impl DenoiseFrameStatus {
 /// immutable after publication; do not destroy or write through their handles.
 /// This mode has no camera jitter/depth/motion or optical-path claims.
 pub struct GpuDenoiseInput {
+    /// Present only in TemporalGpu mode. Guides describe a separate one-sample frame.
+    pub temporal: Option<super::TemporalFrame>,
+    /// Declared normalized AOV snapshots; empty unless requested by the filter.
+    pub aovs: Vec<super::GpuAov>,
     pub id: DenoiseFrameId,
     pub size: [u32; 2],
     pub samples: u32,
@@ -154,6 +161,8 @@ impl GpuDenoiseInput {
         // Their lease is part of retirement even if the callback fails early.
         lease.producer_submitted(&gpu.queue);
         Self {
+            aovs: Vec::new(),
+            temporal: None,
             id: DenoiseFrameId {
                 device: gpu.frame_device.id,
                 target,
@@ -174,8 +183,10 @@ impl GpuDenoiseInput {
         self.status.clone()
     }
     pub(super) fn retain_buffers(&self) {
-        *self.gpu.1.as_ref().unwrap().buffers.lock().unwrap() =
-            super::custom_gpu_submission::SubmissionLease::copies(&self.buffers);
+        let mut buffers = super::custom_gpu_submission::SubmissionLease::copies(&self.buffers);
+        buffers.extend(self.aovs.iter().map(|a| a.buffer.clone()));
+        *self.gpu.1.as_ref().unwrap().buffers.lock().unwrap() = buffers;
+        *self.gpu.1.as_ref().unwrap().temporal.lock().unwrap() = self.temporal.clone();
         // The averaging producer was submitted immediately before this call.
         self.gpu.1.as_ref().unwrap().producer_submitted(&self.gpu.0);
     }

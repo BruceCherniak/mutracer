@@ -645,3 +645,17 @@ direct rerun, set `CARGO_TARGET_DIR` to the built host target and
 uses the fixture from `gltf_browser_reference_fixture` to check glTF C import and
 picking together. Rust picking tests additionally compare 500 rays with an
 independent double-precision brute-force oracle over transformed triangles.
+
+## AOV integration checks
+
+The scene API C host in `native:ci:hosts` compares explicit descriptor IDs with
+scene-handle IDs, verifies AOV readback, and compares each C custom-filter depth
+and uint32 ID snapshot with vertically flipped engine readback. It asserts the
+actual render backend on both Software and HWRT. A direct rerun uses
+`node native/validation/scene-api-render.mjs` with the release host target and an
+external output directory configured.
+
+The ignored `gltf_layers_render_and_retained_texture_edit_match_full` test also
+checks AOV beauty preservation, stable imported IDs and reflectance invalidity
+for unsupported glTF layers. The Vulkan interop test enables depth/ID outputs,
+checks readback exclusion during an image lease, and reads them after release.

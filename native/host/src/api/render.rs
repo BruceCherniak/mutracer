@@ -56,6 +56,11 @@ impl Default for RenderSize {
 /// Per-render execution and image-quality settings. Defaults match the browser library.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RenderSettings {
+    /// Optional AOV bit mask; bit 0 depth, 1 position, 2 roughness, 3 diffuse
+    /// reflectance, 4 specular reflectance, 5 ID, 6 motion. Default 0.
+    pub aovs: u32,
+    /// Independent AOV sample cap, positive integer. Default 16.
+    pub aov_samples: u32,
     /// Maximum complete samples, 1–4096. Default 2048. Raising it continues the
     /// accumulation; with [`SamplingPattern::ZSobol`] a change restarts it.
     pub max_samples: u32,
@@ -102,6 +107,8 @@ pub struct AdaptiveResolution {
 impl Default for RenderSettings {
     fn default() -> Self {
         Self {
+            aovs: 0,
+            aov_samples: 16,
             max_samples: 2048,
             bounces: 3,
             clamping: 0.,
@@ -125,6 +132,9 @@ impl RenderSettings {
     /// call it and return its `InvalidArgument` error.
     pub fn validate(&self) -> Result<()> {
         let invalid = |message: &str| Err(error(Status::InvalidArgument, message));
+        if self.aovs & !127 != 0 || self.aov_samples == 0 {
+            return invalid("Invalid AOV mask or sample cap");
+        }
         if !(1..=MAX_TOTAL_SAMPLES).contains(&self.max_samples) {
             return invalid("max_samples must be 1..4096");
         }
@@ -234,7 +244,14 @@ pub struct SampleEvent {
     /// Wall time from submission to observed completion of the batch.
     pub frame_time_ms: f64,
 }
-/// Image read by [`Render::read_pixels`].
+/// Image read by [`Render::read_pixels`]. All optional AOVs require their bit in
+/// `RenderSettings::aovs`; otherwise reads return InvalidState. Geometry and
+/// reflectance average independent jittered/lens samples, capped by aov_samples.
+/// RGB is normalized by valid surface hits, alpha is coverage over AOV samples.
+/// Alpha traversal selects the first non-catcher surface with alpha >= 0.5,
+/// skipping at most 32 layers. ID/motion use the unjittered pinhole pixel center.
+/// Reflectance excludes coat, fuzz, anisotropy, subsurface/volume scattering,
+/// bevel, thin film, dispersion, partial alpha and nonstandard materials.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PixelKind {
     /// Resolved linear ray color and path coverage, matching TS WebGPU HDR readback.
@@ -245,13 +262,62 @@ pub enum PixelKind {
     Denoised,
     Albedo,
     Normal,
+    /// Camera-forward scene-unit distance, 0, 0, coverage in RGBA32F. Misses are zero.
+    Depth,
+    /// World position and coverage in RGBA32F.
+    Position,
+    /// Specular roughness, metalness, unsupported-layer flag and coverage.
+    Roughness,
+    /// Directional diffuse reflectance; alpha is valid coverage.
+    DiffuseAlbedo,
+    /// Directional specular reflectance; alpha is valid coverage.
+    SpecularAlbedo,
+    /// Exact object, local instance (0 for an ordinary mesh), material and source triangle IDs in
+    /// `Image::id_data`. Background is u32::MAX in all channels. Exact shared-edge
+    /// hits may select either adjacent triangle depending on host/GPU rounding.
+    Id,
+    /// Previous minus current pixel position, x right, y down, z=0; alpha 3 for
+    /// visible camera/rigid correspondence, otherwise 0. History is per-render,
+    /// from its previous AOV frame. Size/projection changes, missing IDs, topology
+    /// or vertex edits and visibility failures invalidate it. Device loss clears it.
+    Motion,
 }
-/// Linear RGBA f32 pixels, top row first.
+impl PixelKind {
+    pub(crate) fn from_aov_index(index: u32) -> Self {
+        match index {
+            0 => Self::Depth,
+            1 => Self::Position,
+            2 => Self::Roughness,
+            3 => Self::DiffuseAlbedo,
+            4 => Self::SpecularAlbedo,
+            5 => Self::Id,
+            6 => Self::Motion,
+            _ => unreachable!(),
+        }
+    }
+    /// Bit for RenderSettings::aovs; returns zero for beauty and OIDN guides.
+    pub fn aov_mask(self) -> u32 {
+        match self {
+            Self::Depth => 1,
+            Self::Position => 2,
+            Self::Roughness => 4,
+            Self::DiffuseAlbedo => 8,
+            Self::SpecularAlbedo => 16,
+            Self::Id => 32,
+            Self::Motion => 64,
+            _ => 0,
+        }
+    }
+}
+/// Linear RGBA f32 pixels or exact integer IDs, top row first.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Image {
     pub width: u32,
     pub height: u32,
+    /// RGBA floats; empty for Id.
     pub data: Vec<f32>,
+    /// Exact RGBA32UI ID pixels for `PixelKind::Id`; otherwise None.
+    pub id_data: Option<Vec<u32>>,
 }
 /// When a render filters its complete samples.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -536,6 +602,8 @@ impl Drop for DenoisedImage {
 struct Denoise {
     options: Option<DenoiserOptions>,
     custom: super::custom_denoise::Filter,
+    custom_aovs: u32,
+    custom_mode: super::DenoiseInputMode,
     cancel: CancelToken,
     /// Kept across `set_denoiser` calls with the same library and backend.
     filter: Arc<Mutex<Option<crate::denoise::Denoiser>>>,
@@ -554,6 +622,9 @@ pub(super) struct RenderState {
     pub(super) fallback: Option<u64>,
     /// L0 context linked as a target to the engine's shared scene.
     context: u64,
+    aov: Option<crate::aov::Output>,
+    temporal: Option<super::temporal::State>,
+    aov_camera: [u8; 128],
     published: Option<TargetKey>,
     /// `SharedScene::generation` of the published target.
     generation: u64,
@@ -709,6 +780,9 @@ impl RenderState {
     }
 }
 fn cancel_denoise(render: &mut RenderState) {
+    if let Some(temporal) = &mut render.temporal {
+        temporal.reject();
+    }
     render.output.invalidate();
     render.denoise.cancel.cancel();
     if let Some(status) = render.denoise.frame_status.take() {
@@ -1097,6 +1171,7 @@ fn target_step(
                 || render.published.as_ref().is_none_or(|k| k.size != key.size);
             render.generation = generation;
             render.publish(key.clone(), full);
+            render.aov_camera = camera;
             Ok(Step::Published)
         }
         Err(e) if e.status == Status::Busy => Ok(Step::Waiting),
@@ -1233,6 +1308,41 @@ fn drain(render: &mut RenderState) -> Result<Vec<SampleEvent>> {
     }
     Ok(events)
 }
+fn update_aovs(render: &mut RenderState) -> Result<()> {
+    let mask = render.settings.aovs | render.denoise.custom_aovs;
+    if mask == 0 {
+        render.aov = None;
+        return Ok(());
+    }
+    if render.samples == 0 {
+        return Ok(());
+    }
+    let query =
+        context::aov_query(render.context).map_err(|e| error(Status::Error, e.to_string()))?;
+    if render
+        .aov
+        .as_ref()
+        .is_none_or(|a| a.generation != render.input_generation)
+    {
+        let words = query
+            .metadata(&render.aov_camera)
+            .map_err(|e| error(Status::Error, e.to_string()))?;
+        render.aov = Some(
+            crate::aov::Output::new(&query, render.input_generation, &words, render.aov.as_ref())
+                .map_err(|e| error(Status::Error, e.to_string()))?,
+        );
+    }
+    render
+        .aov
+        .as_mut()
+        .unwrap()
+        .render(
+            &query,
+            render.samples.min(render.settings.aov_samples),
+            mask,
+        )
+        .map_err(|e| error(Status::Error, e.to_string()))
+}
 /// Polls the batch and accounts completed samples.
 fn observe(render: &mut RenderState) -> Result<Option<SampleEvent>> {
     match poll_job(render)? {
@@ -1242,6 +1352,7 @@ fn observe(render: &mut RenderState) -> Result<Option<SampleEvent>> {
             render.samples = samples;
             render.sample_ms = Some(elapsed / count.max(1) as f64);
             render.needs_capture = true;
+            update_aovs(render)?;
             let event = SampleEvent {
                 samples: render.samples,
                 is_first_frame: render.first_frame,
@@ -1448,11 +1559,19 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                 if let DenoisedImage::Cpu(_, Some(status)) = &pixels {
                     status.accept();
                 }
+                if let Some(temporal) = &mut render.temporal {
+                    temporal
+                        .accept()
+                        .map_err(|e| error(Status::Error, e.to_string()))?;
+                }
                 render.output.invalidate();
                 render.denoise.denoised = Some((samples, pixels));
                 render.denoise.last = Some(Instant::now());
             }
             Err(message) => {
+                if let Some(temporal) = &mut render.temporal {
+                    temporal.reject();
+                }
                 render.denoise.failed = true;
                 state.report(message);
             }
@@ -1522,6 +1641,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
     }
     let filter = render.denoise.filter.clone();
     let custom = render.denoise.custom.0.clone();
+    let input_mode = render.denoise.custom_mode;
     let gpu = state.gpu.clone();
     let cancel = CancelToken::new();
     render.denoise.cancel = cancel.clone();
@@ -1529,6 +1649,9 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
     // Freeze before releasing the engine lock: a cancelled callback may overlap
     // a new render or scene publication. Only explicit custom filtering pays for
     // these copies. OIDN retains its CPU path.
+    if render.denoise.custom_aovs != 0 {
+        update_aovs(render)?;
+    }
     let resident = if let Some(custom) = &custom {
         let buffers = render
             .capture
@@ -1536,7 +1659,7 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
             .ok_or_else(|| error(Status::InvalidState, "Missing custom denoiser capture"))?
             .denoise_buffers()
             .map_err(|e| error(Status::Error, e.to_string()))?;
-        Some(super::GpuDenoiseInput::new(
+        let mut input = super::GpuDenoiseInput::new(
             &gpu,
             render.context,
             render.input_generation,
@@ -1545,7 +1668,41 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
             buffers,
             custom.clone(),
             cancel.clone(),
-        ))
+        );
+        if render.denoise.custom_aovs != 0 {
+            input.aovs = render
+                .aov
+                .as_ref()
+                .ok_or_else(|| error(Status::InvalidState, "Missing custom AOV input"))?
+                .snapshot(render.denoise.custom_aovs)
+                .map_err(|e| error(Status::Error, e.to_string()))?;
+            input.retain_buffers();
+        }
+        if input_mode == super::DenoiseInputMode::TemporalGpu {
+            let key = render
+                .published
+                .as_ref()
+                .ok_or_else(|| error(Status::InvalidState, "No temporal target"))?;
+            let temporal = render
+                .temporal
+                .get_or_insert_with(|| super::temporal::State::new(&gpu, size));
+            input.temporal = Some(
+                temporal
+                    .produce(super::temporal::Request {
+                        context: render.context,
+                        size,
+                        camera: &render.aov_camera,
+                        settings: &key.settings,
+                        quality: key.quality,
+                        alpha: key.alpha_blend_strategy as u32,
+                        scene_revision: key.scene,
+                        camera_revision: key.camera,
+                    })
+                    .map_err(|e| error(Status::Error, e.to_string()))?,
+            );
+            input.retain_buffers();
+        }
+        Some(input)
     } else {
         None
     };
@@ -1565,7 +1722,24 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                 let status = resident.as_ref().unwrap().status();
                 let expected = resident.as_ref().unwrap().id;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let resident_mode = custom.input_mode() == super::DenoiseInputMode::ResidentGpu;
+                    let resident_mode = input_mode != super::DenoiseInputMode::Cpu;
+                    let aovs = if resident_mode {
+                        Vec::new()
+                    } else {
+                        resident
+                            .as_ref()
+                            .unwrap()
+                            .aovs
+                            .iter()
+                            .map(|aov| crate::aov::read_denoise_aov(&gpu, aov))
+                            .collect::<crate::Result<Vec<_>>>()
+                            .map_err(|e| e.to_string())?
+                    };
+                    let aov_buffers = if !resident_mode && custom.gpu_inputs() {
+                        resident.as_ref().unwrap().aovs.clone()
+                    } else {
+                        Vec::new()
+                    };
                     let (color, normal, albedo, resident) = if resident_mode {
                         let mut input = resident.unwrap();
                         let pipeline = gpu
@@ -1635,6 +1809,8 @@ fn denoise(state: &mut State, id: u64, force: bool) -> Result<()> {
                         .map(|input| input.gpu.duplicate())
                         .unwrap_or_else(|| super::DenoiseGpu(gpu.queue.clone(), None));
                     let input = super::DenoiseInput {
+                        aovs,
+                        aov_buffers,
                         size,
                         color,
                         normal,
@@ -1777,6 +1953,9 @@ impl Render {
                 settings,
                 fallback: None,
                 context,
+                aov: None,
+                temporal: None,
+                aov_camera: [0; 128],
                 published: None,
                 generation: 0,
                 input_generation: 0,
@@ -1864,7 +2043,16 @@ impl Render {
                 render.adaptive.frame = None;
                 render.adaptive.fast_frames = 0;
             }
+            if settings.aovs != render.settings.aovs
+                || settings.aov_samples < render.settings.aov_samples
+            {
+                render.aov = None;
+            }
             render.settings = settings;
+            let mask = render.settings.aovs | render.denoise.custom_aovs;
+            if mask == 0 {
+                render.aov = None;
+            }
             Ok(())
         })
     }
@@ -1960,16 +2148,40 @@ impl Render {
         schedule: DenoiseSchedule,
     ) -> Result<()> {
         let filter = super::custom_denoise::Filter(filter);
+        let (requested_aovs, input_mode) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                (
+                    filter.0.as_ref().map_or(0, |f| f.aovs()),
+                    filter
+                        .0
+                        .as_ref()
+                        .map_or(super::DenoiseInputMode::Cpu, |f| f.input_mode()),
+                )
+            }))
+            .map_err(|_| {
+                error(
+                    Status::InvalidArgument,
+                    "Custom denoiser input declaration panicked",
+                )
+            })?;
+        if requested_aovs & !127 != 0 {
+            return Err(error(Status::InvalidArgument, "Unknown custom AOV mask"));
+        }
         self.with(|state, id| {
             let render = state.renders.get_mut(&id).unwrap();
             cancel_denoise(render);
             render.denoiser_revision += 1;
+            if render.denoise.custom_aovs != requested_aovs {
+                render.aov = None;
+            }
             render.denoise = Denoise {
                 options: filter.0.as_ref().map(|_| DenoiserOptions {
                     schedule,
                     ..Default::default()
                 }),
                 custom: filter,
+                custom_aovs: requested_aovs,
+                custom_mode: input_mode,
                 ..Default::default()
             };
             Ok(())
@@ -2235,8 +2447,8 @@ impl Render {
             }
         })
     }
-    /// Waits for the in-flight batch, then reads this render's linear RGBA f32
-    /// image, top row first. During preparation it reads the previous image.
+    /// Waits for the in-flight batch, then reads this render's RGBA image
+    /// (u32 for Id, f32 otherwise), top row first. During preparation it reads the previous image.
     /// HDR uses the TS WebGPU readback semantics of [`PixelKind::Hdr`]; L0 keeps
     /// raw per-sample averages. HDR temporarily reads 48 GPU bytes per pixel.
     pub fn read_pixels(&self, kind: PixelKind) -> Result<Image> {
@@ -2244,6 +2456,28 @@ impl Render {
             let render = state.renders.get_mut(&id).unwrap();
             for event in drain(render)? {
                 state.sample_events.push((id, event));
+            }
+            if let Some(code) = match kind {
+                PixelKind::Depth => Some(4),
+                PixelKind::Position => Some(5),
+                PixelKind::Roughness => Some(6),
+                PixelKind::DiffuseAlbedo => Some(7),
+                PixelKind::SpecularAlbedo => Some(8),
+                PixelKind::Id => Some(9),
+                PixelKind::Motion => Some(10),
+                _ => None,
+            } {
+                let render = state.renders.get_mut(&id).unwrap();
+                if render.settings.aovs & (1 << (code - 4)) == 0 {
+                    return Err(error(Status::InvalidState, "Requested AOV is not enabled"));
+                }
+                update_aovs(render)?;
+                return render
+                    .aov
+                    .as_ref()
+                    .ok_or_else(|| error(Status::InvalidState, "AOV output is not ready"))?
+                    .read(code)
+                    .map_err(|e| error(Status::Error, e.to_string()));
             }
             let render = &state.renders[&id];
             if kind == PixelKind::Denoised {
@@ -2272,6 +2506,7 @@ impl Render {
                             width,
                             height,
                             data: flip_rows(&pixels, width, height),
+                            id_data: None,
                         });
                     }
                 }
@@ -2280,6 +2515,7 @@ impl Render {
                 PixelKind::Hdr | PixelKind::Denoised => 0,
                 PixelKind::Normal => 1,
                 PixelKind::Albedo => 2,
+                _ => unreachable!(),
             };
             let [width, height] = context_size(render.context)?;
             let data = if code == 0 {
@@ -2293,6 +2529,7 @@ impl Render {
                 width,
                 height,
                 data: flip_rows(&data, width, height),
+                id_data: None,
             })
         })
     }
@@ -2337,6 +2574,15 @@ impl Render {
                 let key = render.published.clone().unwrap();
                 render.publish(key, false);
                 render.capture_key = None;
+            }
+            Ok(())
+        })
+    }
+    /// Discards temporal filter history at a camera cut; leaves beauty samples intact.
+    pub fn reset_temporal_history(&self) -> Result<()> {
+        self.with(|state, id| {
+            if let Some(temporal) = &mut state.renders.get_mut(&id).unwrap().temporal {
+                temporal.reset();
             }
             Ok(())
         })

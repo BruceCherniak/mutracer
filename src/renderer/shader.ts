@@ -53,6 +53,7 @@ export class Shader {
 export interface FragmentShaderOptions {
   name?: string;
   outputs?: string[];
+  outputTypes?: Record<string, 'vec4' | 'uvec4'>;
   defines?: Record<string, ShaderDefineValue>;
   uniforms?: Record<string, ShaderUniform>;
   includes?: ShaderMixin[];
@@ -71,6 +72,7 @@ export class FragmentShader<
 > {
   readonly name: string;
   readonly outputs: string[];
+  readonly outputTypes: Record<string, 'vec4' | 'uvec4'>;
   readonly defines: TDefines;
   readonly uniforms: TUniforms;
   readonly functions: Array<(name?: string) => string>;
@@ -81,6 +83,7 @@ export class FragmentShader<
     const includes = options.includes || [];
     this.name = options.name || '';
     this.outputs = options.outputs || ['color'];
+    this.outputTypes = options.outputTypes ?? {};
     this.defines = Object.assign(
       {},
       ...includes.map((item) => item.defines),

@@ -280,6 +280,8 @@ fn external_vulkan_device_images_and_native_post_process() {
             &engine,
             RenderSettings {
                 max_samples: 1,
+                aovs: PixelKind::Depth.aov_mask() | PixelKind::Id.aov_mask(),
+                aov_samples: 1,
                 size: RenderSize::Fixed {
                     width: 8,
                     height: 6,
@@ -332,6 +334,23 @@ fn external_vulkan_device_images_and_native_post_process() {
         unsafe { mt_render_restart(render_handle, error.as_mut_ptr(), error.len()) },
         Status::InvalidState as i32
     );
+    let mut written = usize::MAX;
+    // MT_IMAGE_ID readback must obey the same submission exclusion as beauty.
+    assert_eq!(
+        unsafe {
+            mt_render_read_pixels(
+                render_handle,
+                9,
+                std::ptr::null_mut(),
+                0,
+                &mut written,
+                error.as_mut_ptr(),
+                error.len(),
+            )
+        },
+        Status::InvalidState as i32
+    );
+    assert_eq!(written, usize::MAX);
     let mut other = std::mem::MaybeUninit::uninit();
     assert_eq!(
         unsafe {
@@ -475,6 +494,16 @@ fn external_vulkan_device_images_and_native_post_process() {
         Status::InvalidHandle as i32
     );
     assert_eq!(engine.inner.gpu.queue.readback_count(), before);
+    let ids = render.read_pixels(PixelKind::Id).unwrap();
+    assert!(ids.id_data.unwrap().iter().all(|v| *v == u32::MAX));
+    assert!(
+        render
+            .read_pixels(PixelKind::Depth)
+            .unwrap()
+            .data
+            .iter()
+            .all(|v| *v == 0.)
+    );
     render
         .set_settings(RenderSettings {
             max_samples: 1,

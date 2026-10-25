@@ -137,10 +137,24 @@ mod tests {
         let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../viewer/assets/sample.glb");
         let a = Scene::import_gltf(&path).unwrap();
         let b = Scene::import_gltf_bytes(&std::fs::read(&path).unwrap(), None).unwrap();
-        assert_eq!(
-            *a.scene.descriptor().unwrap(),
-            *b.scene.descriptor().unwrap()
-        );
+        let canonical = |scene: &Scene| {
+            let bytes = scene.descriptor().unwrap();
+            let mut words: Vec<_> = bytes
+                .chunks_exact(4)
+                .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+                .collect();
+            for (offset, count) in [
+                (h::MESH_AOV_IDS, h::MESH_COUNT),
+                (h::MATERIAL_AOV_IDS, h::MATERIAL_COUNT),
+            ] {
+                let at = words[offset] as usize;
+                for i in 0..words[count] as usize {
+                    words[at + i] = i as u32;
+                }
+            }
+            words
+        };
+        assert_eq!(canonical(&a.scene), canonical(&b.scene));
         assert_eq!(
             a.names.materials.keys().collect::<Vec<_>>(),
             b.names.materials.keys().collect::<Vec<_>>()
