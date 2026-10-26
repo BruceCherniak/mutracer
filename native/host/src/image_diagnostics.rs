@@ -189,7 +189,39 @@ fn render(
         }
     }
     for (kind, name) in [(0, "hdr"), (1, "normal"), (2, "albedo")] {
-        let bytes = state.read_pixels(kind)?;
+        let bytes = match state.read_pixels(kind) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                // Public readback rejects non-finite values. Preserve the raw
+                // accumulators for diagnosis without making that check lenient.
+                if std::env::var_os("MUTRACER_TEST_CAPTURE").is_some() {
+                    fs::write(output.join("readback-failure-input.bin"), input)?;
+                    for (name, id) in [
+                        ("hdr", Some(state.scene.color_output)),
+                        ("normal", state.scene.normal_output),
+                        ("albedo", state.scene.albedo_output),
+                    ] {
+                        let Some(id) = id else { continue };
+                        fs::write(
+                            output.join(format!("readback-failure-{name}.bin")),
+                            hit_diagnostics::read_raw(&state.gpu, &state.buffers[&id])?,
+                        )?;
+                    }
+                    fs::write(
+                        output.join("readback-failure.json"),
+                        serde_json::to_vec_pretty(&serde_json::json!({
+                            "kind": name, "error": error.to_string(),
+                            "samples": samples, "seed": seed,
+                            "width": state.scene.width, "height": state.scene.height,
+                            "backend": actual, "adapter": state.gpu.info.name,
+                            "api": format!("{:?}", state.gpu.info.backend),
+                            "layout": "raw accumulation, bottom row first"
+                        }))?,
+                    )?;
+                }
+                return Err(error);
+            }
+        };
         if !bytes
             .chunks_exact(4)
             .all(|b| f32::from_le_bytes(b.try_into().unwrap()).is_finite())
