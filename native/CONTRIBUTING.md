@@ -370,12 +370,12 @@ dependencies. eframe/egui-wgpu and tracing share one adapter, device and queue.
   reconfigure the shared surface; CPU preparation continues.
 - The immutable picking BVH is built on a worker while a model loads. Autofocus
   uses it, with no GPU readback or alpha-texture inspection.
-- The viewer uses the published `oidn-webgpu-native = 0.1.1` Rust crate on the
+- The viewer uses the published `oidn-webgpu-native = 0.2.0` Rust crate on the
   rendering device. Cargo verifies and links its bundled platform core; no
   upstream checkout, planner build or private FFI is needed. The adapter follows
   `native/README.md` upstream: load a Model, create a checked Denoiser, prepare
   host buffers, then encode into the host's command encoder. `denoise.rs` and
-  `mt_denoiser_*` retain the optional caller-supplied OIDN SDK path. The Windows build uses the published MSVC core.
+  `mt_denoiser_*` retain the optional caller-supplied OIDN SDK path.
 
 ## Validation
 
@@ -612,7 +612,7 @@ MT_LOOP_ITERATIONS=2000 MT_LOOP_BATCHED=1 cargo test \
 
 ### oidn-webgpu release integration
 
-The Rust adapter uses only the published crate's documented Model, Denoiser,
+The Rust adapter uses only the crate's documented Model, Denoiser,
 PreparedDenoise and wgpu APIs. Build with the ordinary host/viewer Cargo locks;
 Cargo handles the bundled core. To exercise the native GPU path with the linked
 AOT archive and host Cargo target configured:
@@ -637,9 +637,10 @@ Small, Standard and Clean Aux Large with local weights, checks GPU errors and
 confirms that filtering leaves fixed-seed raw HDR unchanged. It does not replace
 same-input output comparisons between runtimes.
 
-On macOS and Linux, the 0.1.1 dependency's Cargo build output propagates its
-install name or ELF SONAME into downstream cdylibs. `finalize-host-library.mjs`
-restores MuTracer's identity after the host build in the scene/CI drivers, using
+The 0.1.1 dependency propagated its install name or ELF SONAME into downstream
+cdylibs; 0.2.0 scopes those linker arguments to its own cdylib.
+`finalize-host-library.mjs` still verifies and sets MuTracer's identity after
+the host build in the scene/CI drivers, using
 install_name_tool plus ad-hoc signing on macOS and patchelf on Linux.
 After a direct Cargo shared-library build, call
 `finalizeHostLibrary(CARGO_TARGET_DIR)` from that module before linking C

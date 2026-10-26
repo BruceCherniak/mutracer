@@ -1,5 +1,6 @@
 // Own the MuTracer SDK's dynamic-library identity after Cargo links dependencies.
-// oidn-webgpu-native 0.1.1 build output propagates its SONAME/install_name.
+// oidn-webgpu-native 0.1.1 propagated its SONAME/install_name; keep the SDK
+// identity explicit even though 0.2.0 scopes those flags to its own cdylib.
 import {spawnSync} from 'node:child_process';
 import {resolve} from 'node:path';
 export function finalizeHostLibrary(target) {

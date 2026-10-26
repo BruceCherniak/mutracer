@@ -199,7 +199,7 @@ impl Denoiser {
         };
         dispatch(&mut encoder, &self.normalize, &normalize);
         self.prepared
-            .encode(&mut encoder, DenoiseParams { input_scale: 1.0 })?;
+            .encode(&mut encoder, DenoiseParams::default().with_input_scale(1.0))?;
         dispatch(&mut encoder, &self.restore, &restore);
         encoder.copy_buffer_to_buffer(&self.output, 0, &pixels, 0, pixels.size());
         gpu.queue.submit([encoder.finish()]);
@@ -268,7 +268,7 @@ pub fn benchmark(
     for iteration in 0..iterations + 3 {
         let started = Instant::now();
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        prepared.encode(&mut encoder, DenoiseParams { input_scale: 1. })?;
+        prepared.encode(&mut encoder, DenoiseParams::default().with_input_scale(1.))?;
         gpu.queue.submit([encoder.finish()]);
         gpu.device.poll(wgpu::PollType::wait_indefinitely())?;
         let ms = started.elapsed().as_secs_f64() * 1000.;
@@ -414,7 +414,7 @@ mod tests {
                     .unwrap();
                 let mut encoder = gpu.device.create_command_encoder(&Default::default());
                 prepared
-                    .encode(&mut encoder, DenoiseParams { input_scale: 1. })
+                    .encode(&mut encoder, DenoiseParams::default().with_input_scale(1.))
                     .unwrap();
                 gpu.queue.submit([encoder.finish()]);
                 let read = |buffer: &wgpu::Buffer| {
